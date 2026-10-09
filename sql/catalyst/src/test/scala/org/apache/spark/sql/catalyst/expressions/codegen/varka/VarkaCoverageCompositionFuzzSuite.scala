@@ -23,6 +23,7 @@ import scala.util.Random
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, AttributeReference, Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, FusedOutput, KernelOutput, VarkaExpressionCompiler}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaCompositionCase.Entry
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType
 import org.apache.spark.sql.catalyst.util.{DateTimeConstants, DateTimeUtils}
 import org.apache.spark.sql.types.{DataType, DayTimeIntervalType, TimeType}
@@ -83,7 +84,7 @@ class VarkaCoverageCompositionFuzzSuite extends SparkFunSuite with VarkaMatrixTe
    * adding it left every composition the main stream draws, and the seeds that found past bugs,
    * as they were.
    */
-  private def options(rnd: Random, iteration: Int): VarkaEmitOptions = {
+  private def options(rnd: Random, seed: Long, iteration: Int): VarkaEmitOptions = {
     val lanes = if (rnd.nextBoolean()) VarkaMatrix.base
       else VarkaMatrix.base.withLanesOverride(4)
     lanes.withExactGrouping(new Random(~(seed * 1000003L + iteration)).nextBoolean())
@@ -99,57 +100,84 @@ class VarkaCoverageCompositionFuzzSuite extends SparkFunSuite with VarkaMatrixTe
   private def isCompositionDecline(reason: String): Boolean =
     reason.contains("budget") || reason.contains("one kernel holds one lane")
 
-  private def runProjection(iteration: Int): Unit = {
+  /**
+   * The finding of a failed check on a line of its own, and the case after it: the signature of a
+   * failure (VARKA-294) is that first line with its numbers taken out, so the case, whose size and
+   * options change as it shrinks, must not be on it.
+   */
+  private def finding(what: String, c: VarkaCompositionCase): String =
+    s"$what\n  on ${c.label}"
+
+  private def whereOf(seed: Long, iteration: Int, c: VarkaCompositionCase, noun: String,
+      picked: Seq[String]): String =
+    s"seed $seed iteration $iteration, ${picked.size} $noun, options " +
+      s"${c.options.canonical}:\n  ${picked.mkString("\n  ")}"
+
+  /** The case drawn for `iteration`, with its label naming the seed, the iteration and the rows. */
+  private def drawProjection(seed: Long, iteration: Int): VarkaCompositionCase = {
     val rnd = new Random(seed * 1000003L + iteration)
     val picked = Seq.fill(width(rnd, 300))(projections(rnd.nextInt(projections.size)))
-    val list: Seq[NamedExpression] = picked.zipWithIndex.map { case (row, i) =>
-      Alias(resolve(row.executable), s"c$i")()
+    val entries = picked.map(row => Entry(row.executable, resolve(row.executable))).toVector
+    val opts = options(rnd, seed, iteration)
+    val c = VarkaCompositionCase("projection", entries, opts, 0L, "")
+    c.copy(label = whereOf(seed, iteration, c, "entries", picked.map(_.executable)))
+  }
+
+  private def checkProjection(c: VarkaCompositionCase): Unit = {
+    val list: Seq[NamedExpression] = c.entries.zipWithIndex.map { case (e, i) =>
+      Alias(e.expr, s"c$i")()
     }
-    val opts = options(rnd, iteration)
-    val where = s"seed $seed iteration $iteration, ${picked.size} entries, options " +
-      s"${opts.canonical}:\n  ${picked.map(_.executable).mkString("\n  ")}"
     val (fused, declined) = try {
       // A further kernel's entry is fused too (VARKA-190's `severalKernels`, on by default).
-      val fused = VarkaExpressionCompiler.compilePartial(list, columns, opts)
+      val fused = VarkaExpressionCompiler.compilePartial(list, columns, c.options)
         .map(_.specs.zipWithIndex.collect {
           case (_: FusedOutput, i) => i
           case (_: KernelOutput, i) => i
         }.toSet)
         .getOrElse(Set.empty[Int])
-      (fused, VarkaExpressionCompiler.declines(list, columns, opts))
+      (fused, VarkaExpressionCompiler.declines(list, columns, c.options))
     } catch {
-      case e: Exception => fail(s"the compiler threw on $where", e)
+      case e: Exception => fail(finding(s"the compiler threw ${threw(e)}", c), e)
     }
     assert(fused.size + declined.size == list.size && (fused & declined.keySet).isEmpty,
-      s"entries neither fused nor declined, or both, on $where")
+      finding("entries neither fused nor declined, or both", c))
     declined.foreach { case (i, d) =>
-      assert(d.reason.nonEmpty, s"entry $i declined without a reason on $where")
+      assert(d.reason.nonEmpty, finding(s"entry $i declined without a reason", c))
       assert(isCompositionDecline(d.reason),
-        s"entry $i, which fuses alone, declined for '${d.reason}' on $where")
+        finding(s"entry $i, which fuses alone, declined for '${d.reason}'", c))
     }
   }
 
-  private def runPredicate(iteration: Int): Unit = {
+  /** The exception's class and first line, for the first line of a finding. */
+  private def threw(e: Throwable): String =
+    s"${e.getClass.getSimpleName}: ${Option(e.getMessage).flatMap(_.linesIterator.nextOption())
+      .getOrElse("")}"
+
+  private def drawPredicate(seed: Long, iteration: Int): VarkaCompositionCase = {
     val rnd = new Random(seed * 1000003L + 500000L + iteration)
     val picked = Seq.fill(width(rnd, 64))(predicates(rnd.nextInt(predicates.size)))
-    val condition = picked.map(row => resolve(row.executable)).reduceLeft(And)
-    val opts = options(rnd, iteration)
-    val where = s"seed $seed iteration $iteration, ${picked.size} conjuncts, options " +
-      s"${opts.canonical}:\n  ${picked.map(_.executable).mkString("\n  ")}"
+    val entries = picked.map(row => Entry(row.executable, resolve(row.executable))).toVector
+    val opts = options(rnd, seed, iteration)
+    val c = VarkaCompositionCase("predicate", entries, opts, 0L, "")
+    c.copy(label = whereOf(seed, iteration, c, "conjuncts", picked.map(_.executable)))
+  }
+
+  private def checkPredicate(c: VarkaCompositionCase): Unit = {
+    val condition = c.entries.map(_.expr).reduceLeft(And)
     val specs = try {
-      VarkaExpressionCompiler.explainPredicate(condition, columns, opts)
+      VarkaExpressionCompiler.explainPredicate(condition, columns, c.options)
     } catch {
-      case e: Exception => fail(s"the compiler threw on $where", e)
+      case e: Exception => fail(finding(s"the compiler threw ${threw(e)}", c), e)
     }
     // A row of the table may itself be a conjunction, which the compiler splits, so the specs
     // are at least as many as the rows picked.
-    assert(specs.size >= picked.size, s"${specs.size} conjunct specs for $where")
+    assert(specs.size >= c.entries.size, finding(s"${specs.size} conjunct specs", c))
     specs.zipWithIndex.foreach { case (spec, i) =>
       assert(spec.fused || spec.decline.exists(_.reason.nonEmpty),
-        s"conjunct $i neither fused nor declined with a reason on $where")
+        finding(s"conjunct $i neither fused nor declined with a reason", c))
       spec.decline.filterNot(_ => spec.fused).foreach { d =>
         assert(isCompositionDecline(d.reason),
-          s"conjunct $i, which fuses alone, declined for '${d.reason}' on $where")
+          finding(s"conjunct $i, which fuses alone, declined for '${d.reason}'", c))
       }
     }
   }
@@ -211,7 +239,7 @@ class VarkaCoverageCompositionFuzzSuite extends SparkFunSuite with VarkaMatrixTe
    * every kernel was compared.
    */
   private def checkKernel(plan: CompiledVarkaProjection, inputs: Seq[Attribute],
-      opts: VarkaEmitOptions, rnd: Random, where: String): Unit = {
+      opts: VarkaEmitOptions, rnd: Random): Unit = {
     val numInputs = plan.inputOrdinals.size
     kernelCounter += 1
     kernelsByLane(plan.lane) = kernelsByLane.getOrElse(plan.lane, 0) + 1
@@ -229,7 +257,7 @@ class VarkaCoverageCompositionFuzzSuite extends SparkFunSuite with VarkaMatrixTe
       }
     }
     val forceMasked = length > 1 && rnd.nextBoolean()
-    val context = s"$where, ${plan.lane} kernel of ${plan.outputs.size}"
+    val context = "kernel"
     def intValue(i: Int, scale: Int): Int = plan.derivedAt(i).map(_.kind) match {
       case Some(VarkaDerivedKind.TRUNC_LEVEL) =>
         DateTimeUtils.TRUNC_TO_WEEK +
@@ -271,6 +299,100 @@ class VarkaCoverageCompositionFuzzSuite extends SparkFunSuite with VarkaMatrixTe
     if (compared) comparedByLane(plan.lane) = comparedByLane.getOrElse(plan.lane, 0) + 1
   }
 
+  private def drawWide(seed: Long, iteration: Int): VarkaCompositionCase = {
+    val rnd = new Random(seed * 1000003L + 900000L + iteration)
+    val picked = Seq.fill(150 + rnd.nextInt(151))(projections(rnd.nextInt(projections.size)))
+    val entries = picked.map { row =>
+      Entry(row.executable, onCopy(resolve(row.executable), rnd.nextInt(copies.size)))
+    }.toVector
+    val opts = options(rnd, seed, iteration)
+    // The batches the kernels are checked on come from a stream of their own, so a shrunk case
+    // is checked on the batches the original was.
+    val c = VarkaCompositionCase("wide", entries, opts, rnd.nextLong(), "")
+    c.copy(label = whereOf(seed, iteration, c, "entries", picked.map(_.executable))
+      .replace(", options", " (wide), options"))
+  }
+
+  /** Whether the projection reached several kernels, and how many columns its first read. */
+  private def checkWide(c: VarkaCompositionCase): (Boolean, Int) = {
+    val list: Seq[NamedExpression] = c.entries.zipWithIndex.map { case (e, i) =>
+      Alias(e.expr, s"c$i")()
+    }
+    val wide = copies.flatten
+    val rnd = new Random(c.checkSeed)
+    val partial = try {
+      VarkaExpressionCompiler.compilePartial(list, wide, c.options)
+    } catch {
+      case e: Exception => fail(finding(s"the compiler threw ${threw(e)}", c), e)
+    }
+    val declined = VarkaExpressionCompiler.declines(list, wide, c.options)
+    val fused = partial.toSeq.flatMap(_.specs.zipWithIndex.collect {
+      case (_: FusedOutput, i) => i
+      case (_: KernelOutput, i) => i
+    }).toSet
+    assert(fused.size + declined.size == list.size && (fused & declined.keySet).isEmpty,
+      finding("entries neither fused nor declined, or both", c))
+    declined.foreach { case (i, d) =>
+      assert(isCompositionDecline(d.reason),
+        finding(s"entry $i, which fuses alone, declined for '${d.reason}'", c))
+    }
+    partial.foreach(p => p.kernels.foreach(checkKernel(_, wide, c.options, rnd)))
+    (partial.exists(_.kernels.size > 1), partial.map(_.fused.inputOrdinals.size).getOrElse(0))
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Failures, shrunk (VARKA-294).
+  // ---------------------------------------------------------------------------------------------
+
+  /** Off with `-Dvarka.fuzz.shrink=false`, which leaves a failure as the generator drew it. */
+  private val shrinkFailures = !sys.props.get("varka.fuzz.shrink").contains("false")
+
+  /** What `check(c)` threw as a signature; None when the case passes. */
+  private def outcomeOf(check: VarkaCompositionCase => Any)(
+      c: VarkaCompositionCase): Option[VarkaFailureSignature] =
+    try {
+      check(c)
+      None
+    } catch {
+      case e: VirtualMachineError => throw e
+      case e: InterruptedException => throw e
+      case t: Throwable => Some(VarkaFailureSignature.of(t, "kernel"))
+    }
+
+  /**
+   * Runs the case. A failure - any `Throwable`, a finding or a mismatch out of a kernel - is
+   * shrunk and rethrown as a test failure whose message has the original and the smaller case,
+   * unless its signature is on the known list, which is reported and returns None.
+   */
+  private def runChecked[T](c: VarkaCompositionCase,
+      known: Seq[VarkaKnownFailures.Entry] = VarkaKnownFailures.entries)(
+      check: VarkaCompositionCase => T): Option[T] = {
+    try Some(check(c)) catch {
+      case e: VirtualMachineError => throw e
+      case e: InterruptedException => throw e
+      case t: Throwable if shrinkFailures =>
+        val signature = VarkaFailureSignature.of(t, "kernel")
+        if (VarkaKnownFailures.isKnown(known, signature)) {
+          logWarning(s"known fuzz failure, not shrunk: $signature")
+          return None
+        }
+        val shrunk = VarkaCompositionShrinker.shrink(c, signature, outcomeOf(check))
+        val early = (if (shrunk.stoppedEarly) ", budget reached" else "") +
+          (if (shrunk.stable) "" else ", UNSTABLE: it did not fail the same way three times")
+        fail(Option(t.getMessage).getOrElse(t.getClass.getName) +
+          s"\n  shrunk to ${VarkaCompositionCase.describe(shrunk.small)}" +
+          s"\n  (${shrunk.runs} runs, ${shrunk.millis} ms$early); signature: $signature", t)
+    }
+  }
+
+  /** `c` with the planted-bug option `name` on. */
+  private def planted(c: VarkaCompositionCase, name: String): VarkaCompositionCase =
+    c.copy(options = VarkaEmitOption.named(name) match {
+      case flag: VarkaEmitOption.Flag => flag.`with`(c.options, true)
+      case count: VarkaEmitOption.Count => count.`with`(c.options, 1)
+      case other => fail(s"$name is not a planted-bug option: $other")
+    })
+
   test("random projections over more columns than a kernel reads are fused or declined, and " +
       "their kernels answer as the reference evaluator does") {
     var severalKernels = 0
@@ -279,37 +401,9 @@ class VarkaCoverageCompositionFuzzSuite extends SparkFunSuite with VarkaMatrixTe
     kernelsByLane.clear()
     redrawn = 0
     for (iteration <- 0 until wideIterations) {
-      val rnd = new Random(seed * 1000003L + 900000L + iteration)
-      val picked = Seq.fill(150 + rnd.nextInt(151))(projections(rnd.nextInt(projections.size)))
-      val list: Seq[NamedExpression] = picked.zipWithIndex.map { case (row, i) =>
-        Alias(onCopy(resolve(row.executable), rnd.nextInt(copies.size)), s"c$i")()
-      }
-      val wide = copies.flatten
-      val opts = options(rnd, iteration)
-      val where = s"seed $seed wide iteration $iteration, ${picked.size} entries, options " +
-        s"${opts.canonical}"
-      val partial = try {
-        VarkaExpressionCompiler.compilePartial(list, wide, opts)
-      } catch {
-        case e: Exception => fail(s"the compiler threw on $where", e)
-      }
-      val declined = VarkaExpressionCompiler.declines(list, wide, opts)
-      val fused = partial.toSeq.flatMap(_.specs.zipWithIndex.collect {
-        case (_: FusedOutput, i) => i
-        case (_: KernelOutput, i) => i
-      }).toSet
-      assert(fused.size + declined.size == list.size && (fused & declined.keySet).isEmpty,
-        s"entries neither fused nor declined, or both, on $where")
-      declined.foreach { case (i, d) =>
-        assert(isCompositionDecline(d.reason),
-          s"entry $i, which fuses alone, declined for '${d.reason}' on $where")
-      }
-      partial.foreach { p =>
-        widest = math.max(widest, p.fused.inputOrdinals.size)
-        if (p.kernels.size > 1) {
-          severalKernels += 1
-        }
-        p.kernels.foreach(checkKernel(_, wide, opts, rnd, where))
+      runChecked(drawWide(seed, iteration))(checkWide).foreach { case (several, first) =>
+        widest = math.max(widest, first)
+        if (several) severalKernels += 1
       }
     }
     def perLane(m: scala.collection.Map[LaneType, Int]): String =
@@ -331,15 +425,97 @@ class VarkaCoverageCompositionFuzzSuite extends SparkFunSuite with VarkaMatrixTe
 
   test("random projections of coverage rows are fused or declined in bytes, never thrown") {
     only match {
-      case Some(i) => runProjection(i)
-      case None => (0 until iterations).foreach(runProjection)
+      case Some(i) => runChecked(drawProjection(seed, i))(checkProjection)
+      case None => (0 until iterations).foreach(i =>
+        runChecked(drawProjection(seed, i))(checkProjection))
     }
   }
 
   test("random conjunctions of coverage predicates are fused or declined in bytes, never thrown") {
     only match {
-      case Some(i) => runPredicate(i)
-      case None => (0 until iterations).foreach(runPredicate)
+      case Some(i) => runChecked(drawPredicate(seed, i))(checkPredicate)
+      case None => (0 until iterations).foreach(i =>
+        runChecked(drawPredicate(seed, i))(checkPredicate))
     }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // The shrinker on this fuzzer's cases (VARKA-294).
+  // ---------------------------------------------------------------------------------------------
+
+  /** A planted-bug wide case's failure and its shrink: the first of ten draws that fails. */
+  private def shrunkPlanted(name: String): (VarkaCompositionCase, VarkaFailureSignature,
+      VarkaCompositionShrinker.Shrunk) = {
+    val found = (0 until 10).iterator.map(k => planted(drawWide(seed, k), name))
+      .map(c => (c, outcomeOf(checkWide)(c))).collectFirst { case (c, Some(sig)) => (c, sig) }
+    val (c, sig) = found.getOrElse(fail(s"$name: no failing wide case in 10 draws"))
+    (c, sig, VarkaCompositionShrinker.shrink(c, sig, outcomeOf(checkWide)))
+  }
+
+  test("a planted bug in a wide projection shrinks from hundreds of entries to a few") {
+    val (c, sig, shrunk) = shrunkPlanted("misdescribeAdd")
+    val small = shrunk.small
+    info(s"${c.entries.size} entries shrunk to ${small.entries.size} in ${shrunk.runs} runs, " +
+      s"${shrunk.millis} ms: ${VarkaCompositionCase.describe(small)}")
+    assert(c.entries.size >= 150)
+    assert(small.entries.size <= 3, VarkaCompositionCase.describe(small))
+    assert(small.entries.map(e => VarkaCompositionShrinker.size(e.expr)).sum <=
+      small.entries.map(e => VarkaCompositionShrinker.size(e.expr)).size * 8,
+      VarkaCompositionCase.describe(small))
+    assert(VarkaFuzzCase.optionDelta(small.options).contains("misdescribeAdd=true"))
+    assert(VarkaFuzzCase.optionDelta(small.options).size <= 3)
+    assert(sig.kind == "generated class: NoSuchMethodError", sig)
+    assert(shrunk.runs <= 300 && shrunk.millis < 30000L && !shrunk.stoppedEarly, shrunk.toString)
+    assert(shrunk.stable)
+  }
+
+  test("ddmin over the entries finds the pair a failure needs") {
+    val c = drawProjection(seed, 3)
+    val sixty = (0 until 60).map(i => c.entries(i % c.entries.size).copy(sql = s"row$i")).toVector
+    val base = c.copy(entries = sixty)
+    val sig = VarkaFailureSignature("test", "needs a pair")
+    def outcome(x: VarkaCompositionCase): Option[VarkaFailureSignature] =
+      if (Seq("row7", "row41").forall(r => x.entries.exists(_.sql == r))) Some(sig) else None
+    val shrunk = VarkaCompositionShrinker.shrink(base, sig, outcome)
+    assert(shrunk.small.entries.map(_.sql) == Vector("row7", "row41"), shrunk.small.entries)
+    assert(shrunk.stable && !shrunk.stoppedEarly)
+  }
+
+  test("an entry's expression shrinks to the node a failure needs") {
+    val nested = Entry("date_add(last_day(d), 3)", resolve("date_add(last_day(d), 3)"))
+    val base = VarkaCompositionCase("projection", Vector(nested), VarkaMatrix.base, 0L, "")
+    val sig = VarkaFailureSignature("test", "needs last_day")
+    def outcome(x: VarkaCompositionCase): Option[VarkaFailureSignature] =
+      if (x.entries.exists(_.expr.sql.contains("last_day"))) Some(sig) else None
+    val shrunk = VarkaCompositionShrinker.shrink(base, sig, outcome)
+    assert(VarkaCompositionShrinker.size(nested.expr) > 3)
+    assert(shrunk.small.entries.head.expr.sql.startsWith("last_day("), shrunk.small.entries)
+    assert(VarkaCompositionShrinker.size(shrunk.small.entries.head.expr) == 2)
+  }
+
+  test("a failure fails its test with the smaller case in the message") {
+    val (c, _, _) = shrunkPlanted("misdescribeAdd")
+    val e = intercept[org.scalatest.exceptions.TestFailedException](runChecked(c)(checkWide))
+    assert(e.getMessage.contains("shrunk to kind=wide"), e.getMessage)
+    assert(e.getMessage.contains("signature: generated class: NoSuchMethodError"), e.getMessage)
+  }
+
+  test("a failure with a listed signature is reported as known, not failed") {
+    val (c, sig, _) = shrunkPlanted("misdescribeAdd")
+    val known = Seq(VarkaKnownFailures.Entry("wide", seed, 0, sig, "test"))
+    assert(runChecked(c, known)(checkWide).isEmpty)
+  }
+
+  test("every known composition failure still reproduces") {
+    val replay = (e: VarkaKnownFailures.Entry) => e.lane match {
+      case "projection" => outcomeOf(checkProjection)(drawProjection(e.seed, e.iteration))
+      case "predicate" => outcomeOf(checkPredicate)(drawPredicate(e.seed, e.iteration))
+      case "wide" => outcomeOf(checkWide)(drawWide(e.seed, e.iteration))
+      // The IR fuzzer's entries are replayed by its own suite.
+      case _ => Some(e.signature)
+    }
+    val stale = VarkaKnownFailures.stale(VarkaKnownFailures.entries, replay)
+    assert(stale.isEmpty, "these known fuzz failures no longer reproduce; delete them from " +
+      s"${VarkaKnownFailures.PATH}: ${stale.mkString(", ")}")
   }
 }

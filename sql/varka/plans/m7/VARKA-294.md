@@ -140,4 +140,34 @@ time against the 600-run and 60-second budget of 277.
 
 ## 9. Outcome
 
-Filled in when the shrinker has run on the planted case.
+Done on 9 October 2026.
+
+**The planted bug shrinks as predicted.** `misdescribeAdd` on a drawn wide case: 214 entries shrink
+to 1 in 15 runs and 309 ms, with the option delta `misdescribeAdd=true` alone, the signature
+`generated class: NoSuchMethodError`, and a stable result (three further runs fail the same way).
+The ddmin test over 60 synthetic entries ends at exactly the two the failure needs, and a nested
+`date_add(last_day(d), 3)` reduces to `last_day(d)` by the tree moves.
+
+**The proof held.** The three existing tests pass unchanged on the default seed; the 47 Varka
+suites of `catalyst` pass (566 tests, 36 cancelled), scalastyle is clean. The IR fuzzer's suite
+passes with its known-failure replay now skipping the composition lanes, and the shared
+`shrinkOptionsOf` is the one copy of the option reduction.
+
+**Predictions scored.**
+
+1. **Held, with room.** At most three entries within 300 runs and 30 seconds: one entry, 15 runs,
+   0.3 s.
+2. **Held.** The three tests pass on seed 20260925 with no failure.
+3. **Held.** The option reduction ends at the planted option alone.
+
+**A finding while writing it, which the plan's 3.1 only half saw.** A failure's signature is the
+first line of its message with the numbers taken out, and the composition properties' messages
+put the whole case on that line (`... on seed 20260925 iteration 7, 12 entries, options {...}`),
+which changes as the case shrinks, so no reduction would ever have matched. The findings now put
+the case on the lines after the first, and the kernel check's context is the constant `kernel`.
+The planted-bug test is what showed it: a shrink that never reduced anything is the symptom.
+
+**What is not done.** No composition failure is known, so the known list holds none and its
+replay test is vacuous, as the IR fuzzer's was at 277. The wide test's batches now come from a
+seed taken after its picks, so a wide failure from before this row replays its picks and not its
+batches (the skill note says so).
