@@ -4646,6 +4646,43 @@ function with child facts. The storage spike needs neither jegg nor Central and 
 storage decision waits for its verdict, for jegg's cheaper speed items and for #92's gate. Done when
 step 1's table exists and item 11's decision is taken from it.
 
+### Item 86. Tighten the range analysis's `INT` answers
+
+*Moved here on 9 October 2026 from `m4/PLAN.md` section 9's debt register (VARKA-264).*
+
+`VarkaRangeAnalysis` answers every `INT` query with an interval symmetric about zero, so `+` and
+`-` bound as the sum of magnitudes even over operands of opposite sign, and `greatest`, `least`
+and `if` over ints answer unknown where a hull would be exact. VARKA-84 left it so on purpose: its
+contract was that every shape is admitted or declined as before. Closing it is a tightening with
+its own before and after: drop the symmetrisation (a literal becomes `[v, v]` under `INT`, a field
+`[1, 12]` and not `[-12, 12]`), let the hull nodes hull, and let the coverage table and the
+differential say which shapes newly fuse - `greatest(year(d), month(d)) * 5` under ANSI is the one
+to watch. The lattice already has the operations; only the transfer functions and the tests move.
+
+### Item 87. Why the week fold costs more than its op count
+
+*Moved here on 9 October 2026 from `m4/PLAN.md` section 9's debt register (VARKA-264).*
+
+`weekofyear` is 64 dense-loop calls against `year`'s prefix plus tail, yet ran at 0.41x of `year`'s
+rate at 256 bits and 0.38x at 128 (`VARKA-37.md` 9), a lower share than the extra ops account for.
+The same tail shape returns in `yearofweek`. The comparison to make is the dense loop's assembly
+(`dev/varka_emit.sh --asm`) for `weekofyear` beside `year`, to see whether the shift's `floorMod7`
+scratch or the fold's dependent chain is what the register count does not show. Item 11's
+argument for choosing lowerings by cost applies.
+
+### Item 88. The parity harness's streams and where they sit
+
+*Moved here on 9 October 2026 from `m4/PLAN.md` section 9's debt register (VARKA-264).*
+
+At 128 bits the parity file read `next_day(d, k)`'s masked mixed-null row 14.6% above its dense
+null-free row although the two loop methods are the same 257 bytes, and a one-buffer probe timed
+them within 1%. The likely cause is the harness: the dense arm streams `nfData` beside `kData`
+and the masked arm `mxData` beside `kData`, two 80 MB buffers whose relative placement differs.
+The experiment is to swap or pad the allocations and re-measure the pair; if the gap follows the
+placement, the harness allocates its streams with a fixed stride from then on. It was not re-run
+by the sweep that moved it here, and the band files (VARKA-77, 90) mark the rows whose spread
+exceeds a move in the meantime.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads

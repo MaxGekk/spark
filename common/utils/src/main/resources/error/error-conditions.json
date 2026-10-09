@@ -1047,6 +1047,12 @@
     },
     "sqlState" : "XX000"
   },
+  "CHAR_VARCHAR_NOT_SUPPORTED_IN_PYTHON" : {
+    "message" : [
+      "CHAR/VARCHAR is not supported in <feature>. Use STRING in the declaration. Data type: <data_type>."
+    ],
+    "sqlState" : "0A000"
+  },
   "CHECKPOINT_DIRECTORY_NOT_SET" : {
     "message" : [
       "Cannot checkpoint because no checkpoint directory is configured.",
@@ -8374,6 +8380,19 @@
       "Due to Scala's limited support of tuple, tuples with more than 22 elements are not supported."
     ],
     "sqlState" : "54011"
+  },
+  "UDF_LIMITS" : {
+    "message" : [
+      "A UDF resource limit was exceeded."
+    ],
+    "subClass" : {
+      "ROW_SIZE" : {
+        "message" : [
+          "The projected input row size <actualRowSize> bytes exceeds the maximum allowed size <maxRowSize> bytes."
+        ]
+      }
+    },
+    "sqlState" : "54000"
   },
   "UDTF_ALIAS_NUMBER_MISMATCH" : {
     "message" : [

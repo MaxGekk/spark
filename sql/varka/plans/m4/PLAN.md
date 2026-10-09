@@ -2239,6 +2239,12 @@ One bullet per debt: what it is, why it is a debt, and what closing it would
 take. Opened during VARKA-24, per `sql/varka/AGENTS.md` - a swept entry is
 rewritten in the past tense with what the sweep found, never deleted.
 
+*Swept 9 October 2026 (VARKA-264, `m7/PLAN.md` row 264): the twenty entries below were read
+against the plans and the code as they stand. Four were already closed or swept and are unchanged.
+Eight are closed, each by the task or commit that did it. Seven are moved to `m8/SCOPE.md`: items
+15 (three entries), 39, 86, 87 and 88, the last three new. One, the re-emit loop, stays as the
+record of a decision not to build it. No entry is left that no document owns.*
+
 * **The range analysis's `INT` answers are looser than interval arithmetic allows
   (VARKA-84).** `VarkaRangeAnalysis` answers every `INT` query with an interval
   symmetric about zero, so `+` and `-` bound as the sum of magnitudes even over
@@ -2252,6 +2258,8 @@ rewritten in the past tense with what the sweep found, never deleted.
   and the differential say which shapes newly fuse - `greatest(year(d), month(d))
   * 5` under ANSI is the shape to watch. The lattice already has the operations;
   only the transfer functions and the tests move.
+  **Swept 9 October 2026 (VARKA-264), moved.** Row 84 is Done (16 September 2026) and left the symmetrisation in place on purpose,
+  registering the tightening as this debt; no later row took it. It is `m8/SCOPE.md` item 86.
 
 * **`dev/varka_emit.sh` reports a crash as an empty success.** The script runs the
   dump into a log and prints the lines it greps out, so a run that throws produces
@@ -2264,6 +2272,10 @@ rewritten in the past tense with what the sweep found, never deleted.
   silence, which is the kind a hurried reader takes for a negative result. The same
   script's `--asm` path already swallows the exit code deliberately (`|| true`), so
   the fix has to distinguish the two.
+  **Swept 9 October 2026 (VARKA-264), closed.** `dev/varka_emit.sh` keeps the run's log and, when the filter finds no report,
+  says so, prints the first lines of the exception and exits 1 (commit `cfb52324110`); a crash no
+  longer reads as an empty success. The `--asm` path still swallows the exit code, as this entry
+  said it had to.
 
 * **A shift above a guarded day producer declined conservatively, including upward,
   where the lowering is still exact (VARKA-60's review). Adopted as VARKA-69, and SWEPT by it.**
@@ -2304,6 +2316,9 @@ rewritten in the past tense with what the sweep found, never deleted.
   `NARROW_MAX_DAYS`. What closes it is the other lever - VARKA-52's runtime guard comparing
   against a bound the compiler picks from the shift above the producer, one compare against
   a different immediate - which is `m5/PLAN.md` 2.22, VARKA-91.
+  **Swept 9 October 2026 (VARKA-264), moved.** The upward half was closed by VARKA-69, as written above. The
+  half that stayed (`weekofyear`/`yearofweek` over a column offset) is VARKA-91, moved from
+  milestone 5 to `m8/SCOPE.md` item 39 on 21 September 2026 and not scheduled since.
 
 * **The guard walk does not stop at a node that re-bases the day, so a producer whose
   value never reaches a decomposition is guarded on it anyway (VARKA-70's fuzz run).
@@ -2336,6 +2351,9 @@ rewritten in the past tense with what the sweep found, never deleted.
   Closing the emitter half means giving the walk a stopping rule: descend only through
   nodes that pass a day through to the decomposition, and stop at any node whose output
   is a bounded quantity of its own.
+  **Swept 9 October 2026 (VARKA-264), moved.** VARKA-73 moved from milestone 5 to milestone 6 and from there to
+  `m8/SCOPE.md` item 15 (15 September 2026); its plan (`m8/VARKA-73.md`) holds the admission check
+  that overturned this entry's premise, and the stopping rule is not built.
 
 * **The parity harness reads `next_day(d, k)`'s dense row below identical masked bytecode at
   128-bit, and an interleaved probe does not (VARKA-70).** With VARKA-70's pass on, the
@@ -2351,6 +2369,10 @@ rewritten in the past tense with what the sweep found, never deleted.
   relative placement differs between the arms and which a single-buffer probe cannot show.
   Closing it means swapping or padding the allocations and re-measuring the pair; if the gap
   follows the placement, the harness allocates its streams with a fixed stride from then on.
+  **Swept 9 October 2026 (VARKA-264), moved.** Nothing took the allocation-placement experiment, and this sweep did not
+  re-measure the pair; `dev/varka_bench_diff.py --band` (VARKA-77) now marks the rows whose
+  spread exceeds a move, which is the reading half of this entry. The harness half is
+  `m8/SCOPE.md` item 88.
 
 * **The 128-bit `fused, 64 ops` row collapsed 30x on master at `aef0b82260e`,
   and the reason is not in the emitted methods (VARKA-70's review).** The parity
@@ -2384,6 +2406,10 @@ rewritten in the past tense with what the sweep found, never deleted.
   **Adopted as VARKA-77** (section 2.39). The part VARKA-70 does not close travels
   with it - every unserved root still emits that OR ahead of the compute - but
   2.39's controlled pair now says the OR is not what makes a kernel recompile.
+  **Swept 9 October 2026 (VARKA-264), closed.** Adopted as VARKA-77, which is DONE (`VARKA-77.md` 10): its reading of the cliff
+  was counting the wrong element, and the collapse did not recur in the regenerations since. The
+  part VARKA-77 left (every unserved root emits the validity OR ahead of the compute) is a cost
+  of that lowering and not a fault.
 
 * **VARKA-46's width-named validity helpers are the right default for one shape
   and the wrong one for another (VARKA-70's review).** With VARKA-46's A/B arms
@@ -2433,6 +2459,8 @@ rewritten in the past tense with what the sweep found, never deleted.
   Either changes emitted bytes, so it wants a measurement rather than a quiet edit.
   `Greatest`/`Least` are unaffected: they are validity-driven, with no untaken arm.
   **Adopted as VARKA-79** (section 2.41).
+  **Swept 9 October 2026 (VARKA-264), closed.** Adopted as VARKA-79, DONE (`VARKA-79.md` 9): the arm's condition is part of the
+  guard's context, at under 3% cost at both widths and negative on both mixed-null rows.
 
 * **`GROUP_BUDGET` bounds one of the emitter's three method shapes.** **Adopted as VARKA-43 and VARKA-44 (see 2.16)**, both found by the review of VARKA-26 rather than planned.
   `groupOutputs` partitions between outputs and never inside one, so a single output root
@@ -2474,6 +2502,10 @@ rewritten in the past tense with what the sweep found, never deleted.
   `Year`; the shared column is unmoved at 44, since the epilogue holds every output and so
   every fragment in that shape has a month consumer. Third ladder, measured the same way, in
   `VARKA-32.md` section 7.1's second update.
+  **Swept 9 October 2026 (VARKA-264), moved.** VARKA-43 was measured and its decision waits on the emitter (`VARKA-43.md` 8:
+  no cliff in a 20-to-248-op loop method). VARKA-44's half, the epilogue no budget bounds, was
+  absorbed by VARKA-87 on 11 September 2026 and moved to `m8/SCOPE.md` item 15 on 15 September
+  2026, kept for a future fix at the owner's request.
 
 * **A calendar field is computed once per output, not once per date.** **CLOSED by VARKA-32
   step B2 (see 2.9 and `VARKA-32.md` 7.6)**: the loop methods now compute the
@@ -2519,6 +2551,8 @@ rewritten in the past tense with what the sweep found, never deleted.
   vector registers - VARKA-32 can remove outright at zero runtime cost. Revisit only for a
   kernel long-lived enough that one extra compilation amortises, and only with VARKA-50's
   numbers in hand to say how often the bad roll actually happens.
+  **Swept 9 October 2026 (VARKA-264), kept as a decision.** Nothing was scheduled and nothing has made the expected value
+  positive; the entry stays as the record of why not, so that it is not re-proposed.
 
 * **`DateVectorOpsBenchmark` measures a degraded JIT state.** CLOSED. The engine's JMH
   runs with `forks = 0`, in the surefire JVM, *after* the JUnit suites have
@@ -2557,6 +2591,7 @@ rewritten in the past tense with what the sweep found, never deleted.
   inline the Vector API - `vectorDateDiff` null-free at 10000 rows, 1276 against
   the in-process 435 - is what a plain forked JVM measures (1211): the flag was
   measuring the harness, as the entry above suspected.
+
 * **The parity harness carries a depressed-row cluster per regeneration.** Every
   regeneration of `VarkaEmitterParityBenchmark` since VARKA-52 has shown one cluster of
   unrelated rows 10-30% below the committed file (once a single row at -99%), a different
@@ -2575,6 +2610,9 @@ rewritten in the past tense with what the sweep found, never deleted.
   this entry no longer costs is a whole second regeneration per task. The fresh-JVM idea is
   withdrawn as a route: it was proposed against a polluted-profile mechanism that section
   2.39's correction removed.
+  **Swept 9 October 2026 (VARKA-264), closed.** VARKA-90 is Done (23 September 2026, `m5/PLAN.md` 2.21): the band programme
+  committed seven band files across five benchmark families, and the cluster is read through them.
+
 * **`VarkaFilterExec` compacts string columns through the generic on-heap pass (VARKA-59).** A derived int32 leaf reads its source through a `VarCharVector`, and a fused
   filter ahead of the projection hands it the compacted batch, whose string columns took
   the generic path - so a stacked `next_day(d, s)` over a Varka filter is refused per batch
@@ -2584,6 +2622,9 @@ rewritten in the past tense with what the sweep found, never deleted.
   for fixed-width columns is the pattern), measured on the VARKA-59 differential's fixture.
   **Adopted as VARKA-80** (section 2.42), before milestone 6's item 3 puts
   string columns under filters and group keys.
+  **Swept 9 October 2026 (VARKA-264), moved.** VARKA-80 moved to milestone 6 and then to `m8/SCOPE.md` item 15 (15 September
+  2026) with the other string work, and has not been built.
+
 * **The week fold costs more than its op count (VARKA-37).** `weekofyear` is 64
   dense-loop calls against `year`'s prefix-plus-tail, yet runs at 0.41x of `year`'s
   rate at 256 bits and 0.38x at 128 (`VARKA-37.md` section 9, prediction 2), a
@@ -2592,6 +2633,9 @@ rewritten in the past tense with what the sweep found, never deleted.
   (`dev/varka_emit.sh --asm`) for `weekofyear` beside `year`, to see whether the
   shift's `floorMod7` scratch or the fold's dependent chain is what the register
   does not count.
+  **Swept 9 October 2026 (VARKA-264), moved.** The assembly comparison this entry asks for was never made. It is
+  `m8/SCOPE.md` item 87.
+
 * **`GROUP_BUDGET`'s retuning evidence reversed, and nobody noticed for a regeneration.** The
   parity file's task-17 pair - "budget 16 (shipped): two loop methods, shared chain recomputed"
   against "budget 24: one loop method, cross-output CSE kept" - read the split ahead by ~1.4x
@@ -2607,12 +2651,19 @@ rewritten in the past tense with what the sweep found, never deleted.
   clause 2 was deliberately restricted to prefix reuse (`saved > 0`) rather than
   "the marginal cost fits", so widening it is part of the same question. **Adopted as VARKA-71
   (section 2.35)**; B2 did not act on it (`VARKA-32.md` 10.9).
+  **Swept 9 October 2026 (VARKA-264), closed.** Adopted as VARKA-71, DONE (`VARKA-71.md` 10): the budget was retuned on the
+  emitter as it is and the number did not move, it is still 16.
+
 * **Greedy grouping leaves `year(d), year(d2), month(d)` with a prefix it need not pay.**
   VARKA-32 step B2's `groupOutputs` is greedy in output order, so the month is offered to the
   group holding `year(d2)` and opens a third loop method rather than rejoining `year(d)`;
   adjacent, the same outputs take two. Pinned as a limitation in `VarkaLoopEmitterSuite`
   (`VARKA-32.md` 10.2, 7.6). **Adopted as VARKA-72 (section 2.36)**, whose admission check
   is whether any consumer of a group depends on contiguous output indices.
+  **Swept 9 October 2026 (VARKA-264), closed.** VARKA-72 went to `m8/SCOPE.md` item 15, but the problem it named was
+  closed by VARKA-200: the exact grouping (`withExactGrouping`, `m6/PLAN.md` row 200, Done
+  30 September 2026) chooses the partition by cost and not greedily in output order.
+
 * **Two calendar outputs over one shift share nothing in production (VARKA-58).** **CLOSED by
   VARKA-32 step B2**: the pair decomposes the same shifted day, so clause 2 of
   `groupOutputs` puts them in one loop method, and the parity row moved from
@@ -2622,6 +2673,7 @@ rewritten in the past tense with what the sweep found, never deleted.
   suite's sharing test holds only under a wide `GROUP_BUDGET`, and the shipped budget
   gives each calendar output its own loop method, so the pair shares only in the epilogue.
   Closing it is VARKA-44's decision (one loop method for the group) measured on this row.
+
 * **The parity harness's `dayofweek, chunk 64/63` rows are bimodal on branches after VARKA-37.** Two of five regenerations on branches carrying VARKA-37's emitter change read those
   three rows 23-38% under both master runs (VARKA-37's first run, VARKA-58's second); the
   other three, and every master run, agree within 6%. No code these rows execute changed.
@@ -2632,6 +2684,8 @@ rewritten in the past tense with what the sweep found, never deleted.
   `dev/varka_bench_diff.py --band`, and a reader is no longer asked to explain them. Why they
   are noisy is milestone 5's VARKA-90; that they cannot be read from a diff is now recorded
   rather than rediscovered.
+  **Swept 9 October 2026 (VARKA-264), closed.** The noise is recorded and classified (VARKA-77's band), and VARKA-90, which was
+  to say why the rows are noisy, is Done (`m5/PLAN.md` 2.21).
 
 * **A projection that only narrows a Varka filter's columns runs through rows.** Found by
   VARKA-62's laptop run (`VARKA-62.md` 9.1): `SELECT d FROM t WHERE d < d2` plans a Janino
@@ -2646,7 +2700,9 @@ rewritten in the past tense with what the sweep found, never deleted.
   the differential over `SELECT d ... WHERE d < d2` through a columnar consumer is the gate.
   **Adopted as VARKA-78** (section 2.40); it is the one entry here where Varka
   is slower than stock Spark end to end.
-
+  **Swept 9 October 2026 (VARKA-264), closed.** Adopted as VARKA-78, DONE (`VARKA-78.md` 9.6): measured at 1e9 rows, the
+  `WHERE d < d2` shape with a columnar consumer goes from 0.59x to 1.14x of stock, so the loss
+  became a win.
 ## 10. Scope catalogue
 
 The pre-plan catalogue, item numbers preserved. Items the plan above adopts

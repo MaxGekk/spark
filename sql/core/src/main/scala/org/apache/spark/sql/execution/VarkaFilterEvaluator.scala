@@ -36,13 +36,6 @@ import org.apache.spark.sql.types.{StructType}
 import org.apache.spark.sql.vectorized.{ArrowColumnVector, ColumnarBatch, ColumnVector}
 
 /**
- * One batch's selection: the bitmap the filter kernel wrote - valid until the
- * evaluator's next [[VarkaFilterEvaluator.filterMask]] call, since the buffer is reused - and
- * the number of selected rows. Read through `VarkaSelectionBitmap`.
- */
-private[sql] case class VarkaSelection(mask: MemorySegment, count: Int)
-
-/**
  * The kernel half of the Varka filter, for one partition: it runs the mask kernel -
  * a fused loop whose output roots are the predicate's condition, usually one root and several
  * when the predicate was split - over an Arrow-backed batch and hands back the selection
@@ -62,7 +55,7 @@ private[sql] class VarkaFilterEvaluator(
     offHeapColumnVectorEnabled: Boolean,
     operatorName: String,
     classDumpDirectory: Option[String] = None,
-    metrics: VarkaExecMetrics = VarkaExecMetrics(),
+    metrics: VarkaExecMetrics = VarkaExecMetrics.NONE,
     emitUseAVX: Int = VarkaEmitOptions.USE_AVX_UNKNOWN,
     warmupEnabled: Boolean = false)
     extends VarkaEvaluatorBase(childOutput, operatorName, classDumpDirectory, metrics,
@@ -171,7 +164,7 @@ private[sql] class VarkaFilterEvaluator(
         }
       }
       val mask = base.asSlice(0, (len + 7) / 8)
-      VarkaSelection(mask, VarkaSelectionBitmap.countSet(mask, len))
+      new VarkaSelection(mask, VarkaSelectionBitmap.countSet(mask, len))
     } finally {
       VarkaMemorySanitizer.end()
     }
