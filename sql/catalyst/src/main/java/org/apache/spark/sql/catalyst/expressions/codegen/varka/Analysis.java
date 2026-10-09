@@ -911,7 +911,10 @@ final class Analysis {
         // a guard that lets through more than the claim covers is the remaining way to state a
         // bound and not get it.
         if (n.child() instanceof GuardedRange g) {
-          long widest = Math.max(Math.abs(g.lo()), Math.abs(g.hi()));
+          // abs(Long.MIN_VALUE) is negative: a bound there is the widest a bound can be.
+          long widest = Math.max(
+              g.lo() == Long.MIN_VALUE ? Long.MAX_VALUE : Math.abs(g.lo()),
+              g.hi() == Long.MIN_VALUE ? Long.MAX_VALUE : Math.abs(g.hi()));
           if (widest >= n.dividendBound()) {
             throw new IllegalArgumentException("a constant division claims its dividend is "
                 + "under " + n.dividendBound() + " and the guard below it admits " + widest
