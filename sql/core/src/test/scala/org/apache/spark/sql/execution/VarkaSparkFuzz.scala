@@ -41,21 +41,27 @@ object VarkaSparkFuzz {
   /** One row of the coverage table. */
   final case class CoverageRow(sql: String, executable: String, form: String)
 
-  /** A conjunct of the `WHERE`, possibly negated. */
-  final case class Conjunct(sql: String, negated: Boolean) {
-    def text: String = if (negated) s"NOT ($sql)" else s"($sql)"
+  /**
+   * A conjunct of the `WHERE`, possibly negated, or - rectified against a pivot row whose value of
+   * it is NULL - tested `IS NULL`.
+   */
+  final case class Conjunct(sql: String, negated: Boolean, isNull: Boolean = false) {
+    def text: String =
+      if (isNull) s"($sql) IS NULL" else if (negated) s"NOT ($sql)" else s"($sql)"
   }
 
   /**
    * A case. `data` is a list of rows of twelve SQL literals, in the order of `columns`. `op` is
-   * `AND` or `OR`, joining the conjuncts.
+   * `AND` or `OR`, joining the conjuncts. A `pivot` is one of the rows `data` holds, which the
+   * conjuncts have been rectified to select (VARKA-297): the filtered query must return it.
    */
   final case class Case(
       outputs: Vector[String],
       conjuncts: Vector[Conjunct],
       op: String,
       data: Vector[Vector[String]],
-      ansi: Boolean) {
+      ansi: Boolean,
+      pivot: Option[Vector[String]] = None) {
 
     def select: String = outputs.zipWithIndex.map { case (o, k) => s"$o AS c$k" }.mkString(", ")
 
@@ -73,12 +79,19 @@ object VarkaSparkFuzz {
 
   /** The twelve columns, as the fixtures of `VarkaCoverageDifferentialSuite` build them. */
   def fixtureSql(data: Seq[Seq[String]]): String =
+    fixtureRows(data.map(_.mkString("(", ", ", ")")))
+
+  /** A row as the text of a `VALUES` row, which a reproducer stores its pivot as. */
+  def rowText(row: Seq[String]): String = row.mkString("(", ", ", ")")
+
+  /** The fixture over `VALUES` rows already written as text. */
+  def fixtureRows(valueRows: Seq[String]): String =
     s"""SELECT d, d2, i,
        |       CAST(m AS INTERVAL MONTH) AS ymm,
        |       CAST(y AS INTERVAL YEAR) AS ymy,
        |       make_ym_interval(y, mm) AS ym,
        |       l, l2, CAST(t AS TIME(6)) AS t, CAST(t2 AS TIME(6)) AS t2, dt, dt2
-       |FROM VALUES ${data.map(_.mkString("(", ", ", ")")).mkString(",\n  ")}
+       |FROM VALUES ${valueRows.mkString(",\n  ")}
        |AS v(d, d2, i, m, y, mm, l, l2, t, t2, dt, dt2)""".stripMargin
 
   /** The coverage table's rows. */
@@ -111,7 +124,8 @@ object VarkaSparkFuzz {
    * that was hostile throughout made 70% of the full cases fail on both engines, which compares
    * the class of an error and nothing about the other rows. The null rate is drawn per case.
    */
-  def drawData(rnd: Random, n: Int, safe: Boolean): Vector[Vector[String]] = {
+  def drawData(rnd: Random, n: Int, safe: Boolean,
+      wide: Option[Random] = None): Vector[Vector[String]] = {
     val nullRate = pick(rnd, Seq(0.0, 0.2, 0.2, 0.5, 1.0))
     // A null is typed, as the fixtures of `VarkaCoverageDifferentialSuite` type theirs: a bare
     // `NULL` in every row of a column makes it `VOID`, a type the relation can carry and the
@@ -143,13 +157,48 @@ object VarkaSparkFuzz {
       if (safe) Set.empty[Int] else rnd.shuffle((0 until n).toList).take(rnd.nextInt(3)).toSet
     Vector.tabulate(n) { row =>
       val cells = columns.map(_._1())
-      if (!hostile.contains(row)) cells
+      val drawn = if (!hostile.contains(row)) cells
       else {
         val spots = rnd.shuffle(columns.indices.toList).take(1 + rnd.nextInt(3)).toSet
         cells.zipWithIndex.map { case (cell, j) =>
           if (spots.contains(j)) columns(j)._2() else cell
         }
       }
+      // The wider pool (VARKA-297) replaces about half the safe cells, from a stream of its own
+      // so that the compositions the main stream draws are the ones it drew before; a cell that
+      // is NULL or hostile stays as it is.
+      wide.fold(drawn) { w =>
+        drawn.zipWithIndex.map { case (cell, j) =>
+          if (cell.startsWith("CAST(NULL") || hostile.contains(row) || w.nextBoolean()) cell
+          else wideCell(w, j)
+        }
+      }
+    }
+  }
+
+  /**
+   * A cell of column `j` from beyond the fixtures' lists, inside every guard and ANSI check: a
+   * date within about two centuries of the epoch day 0 either way, ints and months over a wider
+   * span, longs within 2^40, a time to the microsecond, an interval to the microsecond over
+   * thousands of days. The draw reaches values no list above holds, which is where a constant
+   * folded wrongly or a guard placed one off would be.
+   */
+  private def wideCell(w: Random, j: Int): String = {
+    def ranged(lo: Int, hi: Int): Int = lo + w.nextInt(hi - lo + 1)
+    j match {
+      case 0 | 1 => s"DATE'${java.time.LocalDate.ofEpochDay(ranged(-200000, 200000))}'"
+      case 2 => ranged(-5000, 5000).toString
+      case 3 => ranged(-1000, 1000).toString
+      case 4 => ranged(-100, 100).toString
+      case 5 => ranged(0, 11).toString
+      case 6 | 7 => s"CAST('${w.nextLong() % (1L << 40)}' AS BIGINT)"
+      case 8 | 9 =>
+        val micros = Math.floorMod(w.nextLong(), 86400L * 1000000L)
+        s"TIME'${java.time.LocalTime.ofNanoOfDay(micros * 1000)}'"
+      case _ =>
+        val micros = Math.floorMod(w.nextLong(), 86400L * 1000000L)
+        val time = java.time.LocalTime.ofNanoOfDay(micros * 1000)
+        s"INTERVAL '${ranged(-3000, 3000)} ${time}' DAY TO SECOND"
     }
   }
 
@@ -177,9 +226,18 @@ object VarkaSparkFuzz {
       (0 until more).foreach(_ =>
         conj += Conjunct(pick(rnd, predicates).executable, rnd.nextInt(4) == 0))
     }
-    Case(rnd.shuffle(outs.toVector), rnd.shuffle(conj.toVector),
-      if (rnd.nextBoolean()) "AND" else "OR", drawData(rnd, 12, safe = iteration % 2 == 0),
-      ansi = rnd.nextBoolean())
+    val outputs = rnd.shuffle(outs.toVector)
+    val conjuncts = rnd.shuffle(conj.toVector)
+    val op = if (rnd.nextBoolean()) "AND" else "OR"
+    // The wider pool on every other pair of compositions, from a stream of its own.
+    val wide = if ((iteration / 2) % 2 == 1) Some(new Random(~(seed * 1000003L + iteration)))
+      else None
+    val data = drawData(rnd, 12, safe = iteration % 2 == 0, wide)
+    val ansi = rnd.nextBoolean()
+    // A pivot (VARKA-297) on every third composition with a filter; the conjuncts are rectified
+    // against it by the suite, which has the row engine to ask.
+    val pivot = if (conjuncts.nonEmpty && iteration % 3 == 1) Some(pick(rnd, data)) else None
+    Case(outputs, conjuncts, op, data, ansi, pivot)
   }
 
   // ---- the comparison ---------------------------------------------------------------------
@@ -201,6 +259,22 @@ object VarkaSparkFuzz {
     case (Left(a), Right(_)) => Some(s"only the row engine throws: $a")
     case (Right(_), Left(b)) => Some(s"only Varka throws: $b")
   }
+
+  /**
+   * Whether the row engine and Varka returned the pivot row (VARKA-297): `pivotOut` is the
+   * outputs over the pivot row alone, and a filter rectified to select the pivot must return
+   * it from the whole table on each engine. None when it does, or when a side raised - an error
+   * on another row says nothing about the pivot.
+   */
+  def pivotMissing(off: Outcome, on: Outcome, pivotOut: Outcome): Option[String] =
+    pivotOut match {
+      case Right(Seq(expected)) =>
+        def lacks(o: Outcome): Boolean = o.exists(rows => !rows.contains(expected))
+        if (lacks(on)) Some("pivot row not selected by Varka")
+        else if (lacks(off)) Some("pivot row not selected by the row engine")
+        else None
+      case _ => None
+    }
 
   /**
    * The ternary partition of a filter: the rows of `WHERE p`, `WHERE NOT (p)` and
@@ -248,8 +322,9 @@ object VarkaSparkFuzz {
           still(best.copy(conjuncts = cs))))
       }
       if (best.data.size > 1) {
+        // The pivot row stays: a filter rectified against it selects nothing else for certain.
         best = best.copy(data = VarkaShrinker.ddmin(best.data)(ds =>
-          ds.nonEmpty && still(best.copy(data = ds))))
+          ds.nonEmpty && best.pivot.forall(ds.contains) && still(best.copy(data = ds))))
       }
       changed = best != before
     }
@@ -266,7 +341,8 @@ object VarkaSparkFuzz {
       kind: String,
       select: String,
       where: Option[String],
-      fixture: String)
+      fixture: String,
+      pivot: Option[String] = None)
 
   def render(r: Reproducer): String =
     s"""-- VARKA-262 reproducer
@@ -275,7 +351,7 @@ object VarkaSparkFuzz {
        |-- ansi: ${r.ansi}
        |-- kind: ${r.kind}
        |-- select: ${r.select}
-       |-- where: ${r.where.getOrElse("")}
+       |-- where: ${r.where.getOrElse("")}${r.pivot.map(p => s"\n-- pivot: $p").getOrElse("")}
        |-- fixture
        |${r.fixture}
        |-- query
@@ -292,8 +368,9 @@ object VarkaSparkFuzz {
     val q = lines.indexOf("-- query")
     require(f >= 0 && q > f, "a reproducer has a '-- fixture' and then a '-- query' section")
     val where = header("where")
+    val pivot = lines.collectFirst { case l if l.startsWith("-- pivot: ") => l.substring(10) }
     Reproducer(header("status"), header("note"), header("ansi").toBoolean, header("kind"),
       header("select"), if (where.isEmpty) None else Some(where),
-      lines.slice(f + 1, q).mkString("\n"))
+      lines.slice(f + 1, q).mkString("\n"), pivot)
   }
 }
