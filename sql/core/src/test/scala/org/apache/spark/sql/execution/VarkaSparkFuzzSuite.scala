@@ -41,11 +41,23 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
   private val seed = sys.props.get("varka.sparkfuzz.seed").map(_.toLong).getOrElse(20261008L)
   private val iterations = sys.props.get("varka.sparkfuzz.iterations").map(_.toInt).getOrElse(200)
   private val onlyIteration = sys.props.get("varka.sparkfuzz.only").map(_.toInt)
+  // Every output of a composition forced in turn, where the default forces one (VARKA-296).
+  private val forceAll = sys.props.get("varka.sparkfuzz.forceAll").contains("true")
   private val partitionEvery = 4
   private var firstFailure: Option[Int] = None
 
-  private def kindOf(c: Case, partitions: Boolean): Option[String] =
-    disagreement(c.fixture, c.select, c.where, c.ansi, partitions, c.pivot.map(rowText))
+  private def kindOf(c: Case, partitions: Boolean, forces: Seq[Int]): Option[String] =
+    disagreement(c.fixture, c.select, c.where, c.ansi, partitions, c.pivot.map(rowText), forces)
+
+  /**
+   * The outputs a composition forces: one, chosen by the iteration, or every one. A composition of
+   * one output forces none: with its only output declined the plan keeps no Varka node, so the
+   * plan cannot prove the force moved anything.
+   */
+  private def forcesOf(c: Case, it: Int): Seq[Int] =
+    if (c.outputs.size < 2) Nil
+    else if (forceAll) c.outputs.indices
+    else Seq(it % c.outputs.size)
 
   test(s"random compositions agree with the row engine (seed $seed, $iterations of them)") {
     val failures = scala.collection.mutable.ArrayBuffer.empty[String]
@@ -55,15 +67,20 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
       val c = rectify(draw(rows, seed, it))
       val partitions = it % partitionEvery == 0
       val errorsBefore = bothErrored
-      val result = kindOf(c, partitions)
+      val result = kindOf(c, partitions, forcesOf(c, it))
       val key = (if (it % 2 == 0) "safe" else "full") + (if (c.ansi) " ANSI on" else " ANSI off")
       pool(key) = pool.getOrElse(key, (0, 0)) match {
         case (n, e) => (n + 1, e + (if (bothErrored > errorsBefore) 1 else 0))
       }
-      result.foreach { kind =>
-        val small = shrink(c, kind, kindOf(_, partitions))
+      result.foreach { found =>
+        // A forced disagreement is shrunk with the one output that shows it forced, so the
+        // reproducer can name it; a forced kind that needs every force names none.
+        val forced = if (!found.startsWith("with an output forced")) c
+          else c.copy(force = forcesOf(c, it).find(k => kindOf(c, partitions, Seq(k)).isDefined))
+        val kind = kindOf(forced, partitions, forced.force.toSeq).getOrElse(found)
+        val small = shrink(forced, kind, x => kindOf(x, partitions, x.force.toSeq))
         val text = render(Reproducer("regression", s"seed $seed iteration $it", small.ansi, kind,
-          small.select, small.where, small.fixture, small.pivot.map(rowText)))
+          small.select, small.where, small.fixture, small.pivot.map(rowText), small.force))
         val dir = getWorkspaceFilePath("sql", "core", "target", "varka-sparkfuzz")
         Files.createDirectories(dir)
         val file = dir.resolve(s"$seed-$it.sql")
@@ -76,6 +93,14 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     pool.foreach { case (k, (n, e)) => info(s"  $k: $n compositions, $e errored on both sides") }
     info(s"filters returning a row: $filteredNonEmpty of $filtered, with a pivot " +
       s"$pivotFilteredNonEmpty of $pivotFiltered")
+    info(s"outputs forced to decline: $forcedRuns, of which $forcedApplied changed the plan")
+    // A force that silently stopped moving the plan would compare nothing. One that lands on an
+    // output already residual (the one-lane rule) or in a plan with no Varka project node moves
+    // nothing, which leaves well over a quarter that do.
+    if (forcedRuns >= 50) {
+      assert(forcedApplied * 4 >= forcedRuns,
+        s"only $forcedApplied of $forcedRuns forced outputs changed the plan")
+    }
     info(s"first disagreement at iteration ${firstFailure.getOrElse("none")}")
     assert(failures.isEmpty, failures.mkString("\n"))
   }
@@ -118,7 +143,7 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
       if (drawn.pivot.isDefined) {
         val c = rectify(drawn)
         if (c.conjuncts.nonEmpty) {
-          assert(kindOf(c, partitions = false).isEmpty, s"iteration $it: ${c.query}")
+          assert(kindOf(c, partitions = false, Nil).isEmpty, s"iteration $it: ${c.query}")
           checked += 1
         }
       }
@@ -166,6 +191,30 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     val withPivot = c.copy(data = data, pivot = Some(data(5)))
     val kept = shrink(withPivot, "values differ", _ => Some("values differ"))
     assert(kept.data.contains(data(5)) && kept.data.size == 1, kept.data)
+  }
+
+  test("a reproducer with a forced output parses back to what was rendered") {
+    val r = Reproducer("regression", "seed 1 iteration 4", ansi = false,
+      "with an output forced to decline, values differ", "year(d) AS c0, i + 1 AS c1", None,
+      fixtureSql(Seq(Seq("1", "2"))), None, Some(1))
+    assert(parse(render(r)) == r)
+  }
+
+  test("a forced output finds a rollback that truncates one input too far") {
+    // `misdescribeRollback` 3 makes a declining entry's rollback drop the input before its own,
+    // which changes answers; the unforced comparison meets that branch too rarely to see it
+    // (VARKA-296.md 2), and forcing every output of each composition does.
+    val previous = VarkaColumnarToRowExec.currentEmitOptions
+    VarkaColumnarToRowExec.setEmitOptionsForTesting(previous.withMisdescribeRollback(3))
+    try {
+      val found = (0 until 300).iterator.map { it =>
+        val c = rectify(draw(rows, seed, it))
+        kindOf(c, partitions = false, c.outputs.indices)
+      }.collectFirst { case Some(kind) => kind }
+      assert(found.exists(_.startsWith("with an output forced to decline")), found)
+    } finally {
+      VarkaColumnarToRowExec.setEmitOptionsForTesting(previous)
+    }
   }
 
   test("a reproducer with a pivot parses back to what was rendered") {
