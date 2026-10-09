@@ -135,3 +135,41 @@ big one; the Varka matrix's is too small to reach it.
 the deadline from now on is a kernel that did not compile or one the new rule did not accept, and
 the message says which. Its test caught that the code cache is one `CodeCache` pool below 240 MB,
 not `CodeHeap` segments; the state names both.
+
+### 9.1 Correction, 9 October 2026, after #683's CI
+
+**Section 9's diagnosis was wrong and its fix is withdrawn.** Section 9 read one CI failure
+(lastProbeBytes=20720 against a first block of 5858064, 283 times lower, over an allowance of
+9216) as a kernel that had compiled and missed the absolute allowance in a JVM shaped by earlier
+tests, and let a block 32 times below the first count as clean. #683's CI then failed
+`VarkaKernelWarmupSuite` "a warm-up claimed by a batch with no nulls compiles both of the kernel's
+drivers": the verdict was COMPILED with lastProbeBytes=38784 (152 times lower), and batches with
+nulls then allocated 300,928 bytes against a limit of 20,480. The test's own comment says why
+(VARKA-221 2): the light group's loop method compiles a compile or two after the heavy one, and
+while it is still interpreted a long call boxes *tens of kilobytes*. That is the size of the
+number I read as a compiled kernel's residue. A magnitude alone cannot tell the two apart, and the
+32x rule reintroduced the very case the allowance was written to refuse.
+
+**What the first failure most likely was, which section 9 had as risk 1 of the row's own text:**
+a loop method whose C2 compile had not landed after a minute on a loaded runner, two JVMs on four
+cores with the compile queue shared. Its 20 KB a block is an interpreted light loop, as in
+VARKA-221. The warm-up releasing at its deadline was the policy working.
+
+**The fix now:** the strict verdict is restored (the 32x rule and its unit test are removed); the
+deadline reads `-Dvarka.warmup.deadlineSeconds` (default 60, production unchanged); the tests whose
+subject is the verdict raise it, `VarkaWarmupEndToEndSuite` to 120 s with its waits at 150 s
+and the forked probe of `VarkaKernelWarmupSuite` to 120 s, ended from outside after 240 s. A release at the 60-second
+deadline is not asserted on by a test that cannot control the runner. The JIT-state diagnostic stays.
+
+**What is still not known:** that the compile queue was the cause is inferred, not read: the
+release path's diagnostic (the queue's head, the code cache) would show it and has not yet
+fired on a runner. If it fires with an empty queue and a kernel that never compiles, this
+correction is itself wrong, and the row reopens.
+
+**Review of #688** (`/code-review high`) found: the test property was removed instead of restored
+(restored now); the waits were stale in their messages (updated); the strict verdict had lost its
+unit test (`blockClean` is a seam again, with the VARKA-295 counterexample as a case); the probe's
+bound did not bound a hung child (a daemon thread ends it); the deadline property was not in the
+class doc (it is); and, the finding that stands, the row is marked Done on a cause that is inferred:
+production still releases at 60 s on a loaded host, and the row now reads "fix applied, cause
+unconfirmed" until the release-path diagnostic has fired on a runner.

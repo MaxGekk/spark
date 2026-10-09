@@ -57,13 +57,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmth
  * species-pollution check's allowance ({@link VarkaAllocationSampler}) and allocates at most a
  * quarter ({@link #COMPILED_DROP}) of what the first block did; {@link #CLEAN_PROBES} clean blocks
  * in a row are the verdict. The per-column term keeps a wide kernel's segments from reading as
- * boxing, and the drop keeps a narrow kernel's boxing from reading as segments. A block that falls
- * {@link #DRAMATIC_DROP} times or more below the first is clean whatever it allocates: nothing
- * short of C2 takes boxing down by that much (the interpreter and C1 box every operation), and a
- * compiled kernel in a JVM whose profiles other kernels have shaped can leave more calls out of
- * line than the allowance counts (VARKA-295: 20.7 KB a block after 5.9 MB, 283 times lower,
- * against an allowance of 9.2 KB, and the warm-up ran its sixty seconds for a kernel that had
- * compiled).
+ * boxing, and the drop keeps a narrow kernel's boxing from reading as segments.
  *
  * <p>The probe's calls are long - the whole snapshot, {@link #PROBE_ROWS} rows - where the spin's
  * are short, because boxing grows with the rows a call runs and segments with the calls. A
@@ -101,7 +95,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmth
  * <p><b>What it costs.</b> One thread's CPU while a kernel warms, plus the C2 compiles the kernel
  * needs in any case before it can run fast. After {@link #SPIN_CALLS} calls, past every threshold
  * at its default, the warm-up only probes, every {@link #PACE_MILLIS} milliseconds, while the
- * compile queue works. A shape without a verdict {@link #DEADLINE_SECONDS} seconds after its
+ * compile queue works. A shape without a verdict {@link #deadlineSeconds()} seconds after its
  * warm-up was queued is released, waiting included, and its tasks then run the kernel, which the
  * warm-up's calls have already profiled.
  *
@@ -160,25 +154,6 @@ public final class VarkaKernelWarmup {
   static final int COMPILED_DROP = 4;
 
   /**
-   * How far below the first probe block a block is clean whatever the allowance says; see the
-   * class doc. Far under the drops seen (283 times in the polluted JVM, thousands in a clean
-   * one) and far over what a partial compile gives.
-   */
-  static final int DRAMATIC_DROP = 32;
-
-  /**
-   * Whether a probe block of {@code allocated} bytes shows the kernel compiled, given the
-   * {@code allowance} for a block that size and the {@code first} block's bytes.
-   */
-  static boolean clean(long allocated, long allowance, long first) {
-    if (allocated > Long.MAX_VALUE / DRAMATIC_DROP) {
-      return false;
-    }
-    return allocated * DRAMATIC_DROP <= first
-        || (allocated <= allowance && allocated * COMPILED_DROP <= first);
-  }
-
-  /**
    * Calls after which the warm-up stops spinning: 8000 per driver, well past JDK 25's tier-4
    * invocation threshold (5000 calls) at its default scale, so both drivers' compiles have been
    * requested and only a busy compile queue stands between the kernel and its verdict.
@@ -195,6 +170,37 @@ public final class VarkaKernelWarmup {
    * seconds; the deadline is for a compile that never comes.
    */
   static final int DEADLINE_SECONDS = 60;
+
+  /**
+   * Whether a probe block of {@code allocated} bytes shows the kernel compiled, given the
+   * {@code allowance} for a block that size and the {@code first} block's bytes: within the
+   * allowance and at most a quarter ({@link #COMPILED_DROP}) of the first. A magnitude below the
+   * first is not enough on its own - a loop method still interpreted allocates tens of kilobytes
+   * a call, the size of a compiled kernel's residue in a busy JVM (VARKA-221, VARKA-295).
+   */
+  static boolean blockClean(long allocated, long allowance, long first) {
+    return allocated <= allowance
+        && allocated <= Long.MAX_VALUE / COMPILED_DROP
+        && allocated * COMPILED_DROP <= first;
+  }
+
+  /**
+   * A system property that replaces {@link #DEADLINE_SECONDS}: the tests whose subject is the
+   * verdict set it high, because on a loaded runner a loop method's C2 compile can wait in the
+   * queue longer than a minute (VARKA-295) and a release at the deadline is then the policy
+   * working, not a verdict to assert on. Production does not set it.
+   */
+  static final String DEADLINE_PROPERTY = "varka.warmup.deadlineSeconds";
+
+  /** The deadline in force: {@link #DEADLINE_PROPERTY} if it is a positive integer. */
+  static int deadlineSeconds() {
+    try {
+      int configured = Integer.parseInt(System.getProperty(DEADLINE_PROPERTY, ""));
+      return configured > 0 ? configured : DEADLINE_SECONDS;
+    } catch (NumberFormatException e) {
+      return DEADLINE_SECONDS;
+    }
+  }
 
   /**
    * Warm-ups waiting for the worker at most, besides the one it runs. A shape that finds the
@@ -311,7 +317,7 @@ public final class VarkaKernelWarmup {
   private static volatile String lastReleaseJitState = "";
 
   /**
-   * The JIT's state when the most recent warm-up ran out of its {@link #DEADLINE_SECONDS}, or
+   * The JIT's state when the most recent warm-up ran out of its {@link #deadlineSeconds()}, or
    * empty if none has: the compile queue, the compilers' total time and the code cache's use.
    * A release at the deadline means C2 never finished the kernel, and this is what says whether
    * the queue was backed up behind other methods, the compilers were off, or the cache was full
@@ -532,7 +538,8 @@ public final class VarkaKernelWarmup {
     /** Runs the warm-up to its verdict; see the class doc. */
     void run() {
       long started = System.nanoTime();
-      long deadline = queuedAt + TimeUnit.SECONDS.toNanos(DEADLINE_SECONDS);
+      int deadlineSeconds = deadlineSeconds();
+      long deadline = queuedAt + TimeUnit.SECONDS.toNanos(deadlineSeconds);
       VarkaKernelWarmupEvent event = new VarkaKernelWarmupEvent();
       event.begin();
       int calls = 0;
@@ -575,7 +582,7 @@ public final class VarkaKernelWarmup {
               why = "it allocates nothing to wait for";
               break;
             }
-          } else if (!clean(allocated, allowance, firstProbeBytes)) {
+          } else if (!blockClean(allocated, allowance, firstProbeBytes)) {
             clean = 0;
           } else if (++clean >= CLEAN_PROBES) {
             if (warmth.markCompiled()) {
@@ -588,7 +595,7 @@ public final class VarkaKernelWarmup {
           if (System.nanoTime() - deadline > 0) {
             warmth.release();
             lastReleaseJitState = jitState();
-            why = "no compile after " + DEADLINE_SECONDS + " seconds; " + lastReleaseJitState;
+            why = "no compile after " + deadlineSeconds + " seconds; " + lastReleaseJitState;
             break;
           }
         }
