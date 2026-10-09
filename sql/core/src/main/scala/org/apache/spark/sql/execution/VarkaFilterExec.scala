@@ -186,7 +186,7 @@ private[sql] class VarkaFilterEvaluatorFactory(
       extends PartitionEvaluator[ColumnarBatch, ColumnarBatch] {
 
     private val kernels = new VarkaFilterEvaluator(
-      condition, childOutput, offHeapColumnVectorEnabled, operatorName = "Filter",
+      condition, childOutput, offHeapColumnVectorEnabled, "Filter",
       classDumpDirectory, varkaMetrics, emitUseAVX, warmupEnabled)
 
     // The per-row predicate and converter behind the fallback. Lazy: a task the
@@ -247,13 +247,13 @@ private[sql] class VarkaFilterEvaluatorFactory(
     // The evaluator's serveBatch runs the shared per-batch dispatch and cause accounting
     // (task-21 review, both passes) and routes every degradation to the fallback.
     private def filterBatch(input: ColumnarBatch): ColumnarBatch = {
-      kernels.serveBatch(input) {
-        val batch = kernels.filterCompact(input)
-        VarkaExecMetrics.inc(varkaMetrics.varkaBatches)
-        batch
-      } {
-        fallback(input)
-      }
+      kernels.serveBatch[ColumnarBatch](input,
+        () => {
+          val batch = kernels.filterCompact(input)
+          VarkaExecMetrics.inc(varkaMetrics.varkaBatches)
+          batch
+        },
+        () => fallback(input))
     }
 
     /**
@@ -406,9 +406,8 @@ private[sql] class VarkaFilterToRowEvaluatorFactory(
     // The filter evaluator never compacts here, so the off-heap flag is moot; passing false
     // keeps the constructor honest about what this node allocates (nothing but the bitmap).
     private val kernels = new VarkaFilterEvaluator(
-      condition, childOutput, offHeapColumnVectorEnabled = false,
-      operatorName = "FilterToRow", classDumpDirectory, varkaMetrics, emitUseAVX,
-      warmupEnabled)
+      condition, childOutput, false, "FilterToRow", classDumpDirectory, varkaMetrics,
+      emitUseAVX, warmupEnabled)
 
     // The emitted rows hold their own bytes (an UnsafeProjection copy), so they outlive the
     // input batch exactly as VarkaColumnarToRowExec's rows do; the fallback predicate is the
@@ -439,13 +438,13 @@ private[sql] class VarkaFilterToRowEvaluatorFactory(
     // The evaluator's serveBatch runs the shared per-batch dispatch and cause accounting
     // (task-21 review, both passes) and routes every degradation to the fallback.
     private def process(input: ColumnarBatch): Iterator[InternalRow] = {
-      kernels.serveBatch(input) {
-        val selection = kernels.filterMask(input)
-        VarkaExecMetrics.inc(varkaMetrics.varkaBatches)
-        selectedRows(input, selection)
-      } {
-        fallback(input)
-      }
+      kernels.serveBatch[Iterator[InternalRow]](input,
+        () => {
+          val selection = kernels.filterMask(input)
+          VarkaExecMetrics.inc(varkaMetrics.varkaBatches)
+          selectedRows(input, selection)
+        },
+        () => fallback(input))
     }
 
     /**

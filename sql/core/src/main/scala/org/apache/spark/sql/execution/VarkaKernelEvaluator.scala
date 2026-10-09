@@ -17,16 +17,16 @@
 
 package org.apache.spark.sql.execution
 
-import scala.collection.mutable
+import scala.jdk.CollectionConverters._
 
-import org.apache.arrow.memory.{BufferAllocator}
+import org.apache.arrow.memory.BufferAllocator
 import org.apache.arrow.vector.{BaseFixedWidthVector, DateDayVector, IntervalYearVector, IntVector,
   ValueVector}
 
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.expressions.{Attribute, NamedExpression, UnsafeProjection}
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, ForwardedOutput, FusedOutput, KernelOutput, PartialVarkaProjection, ResidualOutput, VarkaExpressionCompiler}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAllocationSampler,
-  VarkaEmitOptions}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.execution.varka.{VarkaBatchDeclined, VarkaKernelFailure}
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
@@ -100,7 +100,7 @@ private[sql] class VarkaKernelEvaluator(
     emitUseAVX: Int = VarkaEmitOptions.USE_AVX_UNKNOWN,
     warmupEnabled: Boolean = false)
     extends VarkaEvaluatorBase(childOutput, operatorName, classDumpDirectory, metrics,
-      emitUseAVX, warmupEnabled) {
+      emitUseAVX, warmupEnabled) with Logging {
 
   // The projection classified entry by entry and its fused sub-projection compiled to vector
   // IR; None when no entry is Varka-eligible (should not happen given [[VarkaColumnarRule]],
@@ -115,7 +115,7 @@ private[sql] class VarkaKernelEvaluator(
     partial
   }
 
-  override protected def fusedPlan: Option[CompiledVarkaProjection] = compiled.map(_.fused)
+  override protected def fusedPlan(): Option[CompiledVarkaProjection] = compiled.map(_.fused)
 
   // The further kernels of a projection several kernels serve (`VarkaEmitOptions.severalKernels`,
   // `VARKA-190.md` 11), each an evaluator of its own for its runner, warm-up and scratch; this
@@ -172,10 +172,11 @@ private[sql] class VarkaKernelEvaluator(
     }
   }
 
-  override private[execution] def emissionFailed: Boolean =
-    super.emissionFailed || parts.exists(_.emissionFailed)
+  override private[execution] def emissionFailed(): Boolean =
+    super.emissionFailed() || parts.exists(_.emissionFailed())
 
-  override protected def identityEntries: Iterator[String] = projectList.iterator.map(_.toString)
+  override protected def identityEntries(): java.util.Iterator[String] =
+    projectList.iterator.map(_.toString).asJava
 
   // The residual entries and their per-row machinery. All lazy: a // kernel-only projection has no
   // residual entries, and even a mixed one pays the Janino
@@ -204,11 +205,11 @@ private[sql] class VarkaKernelEvaluator(
     // Everything allocated for this batch - kernel outputs, then residual columns - closed on
     // any failure here, and by release()/the listener once the batch is handed out. Forwarded
     // input vectors never join this list: they stay owned by the input batch.
-    val owned = mutable.ArrayBuffer.empty[ColumnVector]
+    val owned = new java.util.ArrayList[ColumnVector]()
     try {
       val fusedColumns = computeFused(input, len, owned)
       val residualColumns = projectResiduals(input, len)
-      owned ++= residualColumns
+      owned.addAll(residualColumns.asJava)
       var residual = 0
       val columns = partial.specs.map {
         case FusedOutput(index) => fusedColumns(0)(index)
@@ -220,7 +221,7 @@ private[sql] class VarkaKernelEvaluator(
       }.toArray
       val batch = new ColumnarBatch(columns)
       batch.setNumRows(len)
-      trackOwned(batch, owned.toArray)
+      trackOwned(batch, owned.toArray(new Array[ColumnVector](0)))
       batch
     } catch {
       case e: Throwable =>
@@ -238,12 +239,12 @@ private[sql] class VarkaKernelEvaluator(
    */
   def projectFused(input: ColumnarBatch): ColumnarBatch = {
     val len = input.numRows()
-    val owned = mutable.ArrayBuffer.empty[ColumnVector]
+    val owned = new java.util.ArrayList[ColumnVector]()
     try {
       val fusedColumns = computeFused(input, len, owned).flatten
       val batch = new ColumnarBatch(fusedColumns)
       batch.setNumRows(len)
-      trackOwned(batch, owned.toArray)
+      trackOwned(batch, owned.toArray(new Array[ColumnVector](0)))
       batch
     } catch {
       case e: Throwable =>
@@ -262,7 +263,7 @@ private[sql] class VarkaKernelEvaluator(
   private def computeFused(
       input: ColumnarBatch,
       len: Int,
-      owned: mutable.ArrayBuffer[ColumnVector]): Array[Array[ColumnVector]] = {
+      owned: java.util.List[ColumnVector]): Array[Array[ColumnVector]] = {
     val alloc = taskAllocator()
     (runKernel(input, len, owned, alloc, allocateVector) +:
       parts.map(part => blamed(part)(part.runKernel(input, len, owned, alloc, allocateVector))))
@@ -290,7 +291,8 @@ private[sql] class VarkaKernelEvaluator(
         }
       } catch {
         case e: Throwable =>
-          closeAllQuietly(vectors, "a Varka residual vector after a failed conversion")
+          closeAllQuietly(java.util.Arrays.asList(vectors: _*),
+            "a Varka residual vector after a failed conversion")
           throw e
       }
       vectors.toSeq
@@ -353,45 +355,4 @@ private[sql] class VarkaKernelEvaluator(
 private[execution] class VarkaOwnedArrowColumnVector(vector: ValueVector)
     extends ArrowColumnVector(vector) {
   override def closeIfFreeable(): Unit = {}
-}
-
-private[execution] object VarkaKernelEvaluator {
-
-  // The batches Varka nodes sent down their row path while a kernel warmed, held weakly by
-  // identity; see markWarmupBatch.
-  private val warmupBatches = java.util.Collections.synchronizedMap(
-    new java.util.WeakHashMap[ColumnarBatch, java.lang.Boolean]())
-
-  /**
-   * Remembers that `result` - a Varka node's row-path output - is on the row path because a
-   * kernel is warming, and returns it. A Varka node that consumes such a batch cannot run its
-   * kernel on it, which is not Arrow, and counts it as a warm-up batch rather than a non-Arrow
-   * fallback ([[VarkaEvaluatorBase.serveBatch]]): the format follows from the warm-up above it,
-   * not from the data. Only columnar results are remembered; a row iterator has no consumer that
-   * asks.
-   */
-  private[execution] def markWarmupBatch[T](result: T): T = {
-    result match {
-      case batch: ColumnarBatch => warmupBatches.put(batch, java.lang.Boolean.TRUE)
-      case _ =>
-    }
-    result
-  }
-
-  /** Whether `batch` came down a Varka node's row path while a kernel warmed. */
-  private[execution] def isWarmupBatch(batch: ColumnarBatch): Boolean =
-    warmupBatches.containsKey(batch)
-
-  // Which kernel batches the allocation sampler measures. The production schedule skips the
-  // JIT warm-up (see VarkaAllocationSampler); suites set a dense one so a short query samples,
-  // and restore the default in a finally. The decline statuses the evaluator itself reports
-  // are `VarkaKernelRunner.STATUS_INPUT_BOUND` and `STATUS_DERIVED_INPUT`.
-  @volatile private[execution] var allocationSchedule: VarkaAllocationSampler.Schedule =
-    VarkaAllocationSampler.Schedule.DEFAULT
-
-  // The emitter's size declines this JVM has logged, by reason, so a shape declined on every
-  // task logs one warning rather than one per task. A reason names the method and its bytes,
-  // so it is per shape; the set grows with the declined shapes a JVM sees, which are few.
-  private[execution] val loggedDeclines =
-    java.util.concurrent.ConcurrentHashMap.newKeySet[String]()
 }

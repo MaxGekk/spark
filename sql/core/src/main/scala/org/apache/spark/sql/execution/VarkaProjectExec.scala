@@ -239,13 +239,13 @@ private[sql] class VarkaProjectEvaluatorFactory(
         VarkaExecMetrics.inc(varkaMetrics.varkaBatches)
         batch
       case None =>
-        kernels.serveBatch(input) {
-          val batch = kernels.project(input)
-          VarkaExecMetrics.inc(varkaMetrics.varkaBatches)
-          batch
-        } {
-          fallback(input)
-        }
+        kernels.serveBatch[ColumnarBatch](input,
+          () => {
+            val batch = kernels.project(input)
+            VarkaExecMetrics.inc(varkaMetrics.varkaBatches)
+            batch
+          },
+          () => fallback(input))
     }
 
     /**
