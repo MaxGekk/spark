@@ -18,10 +18,10 @@
 # The checks that need volume or an idle machine, in one command that leaves a
 # dated log: the machine canary, the IR fuzzer at ten thousand iterations with
 # a fresh seed, the random differential against vanilla Spark (VARKA-262), the
-# exhaustive calendar sweeps, the deoptimization-cycle guard and the
-# inlining-cliff guard. Optionally the whole gate.
+# exhaustive calendar sweeps, the SMT proofs under both pinned solvers, the
+# deoptimization-cycle guard and the inlining-cliff guard. Optionally the whole gate.
 #
-#   dev/varka_nightly.sh                  # canary, fuzzer (10000, seed = today), Spark differential (50000), sweeps, deopt, cliff
+#   dev/varka_nightly.sh                  # canary, fuzzer (10000, seed = today), Spark differential (50000), sweeps, proofs, deopt, cliff
 #   dev/varka_nightly.sh --iterations 500 --seed 42 --skip-sweep --skip-deopt --skip-cliff   # a quick trial
 #   dev/varka_nightly.sh --gate           # the standing gate as well
 #   dev/varka_nightly.sh --sparkfuzz-iterations 5000 --skip-sweep --skip-deopt --skip-cliff
@@ -103,6 +103,11 @@ if [ "$sweep" -eq 1 ]; then
     'set Test/javaOptions += "-Dvarka.sweep=true"' \
     'testOnly *VarkaChronoSuite *VarkaEmitter*Suite -- -z opt-in'
 fi
+# The proofs under Z3 and cvc5, each held to every expectation, so the two agree (VARKA-240); the
+# lint job runs Z3 alone. Beside the sweep step, whose multiply-high sweep checks the statement of
+# int_mulhi_divide.smt2 by running Java's own arithmetic.
+run_step prove bash -c 'dev/varka_prove.sh --install both && dev/varka_prove.sh --self-test \
+  --solver both && dev/varka_prove.sh --solver both'
 if [ "$deopt" -eq 1 ]; then
   run_step deopt dev/varka_deopt_cycle.sh --forms group --forks 10 --fail-on-cycle
 fi
@@ -115,7 +120,7 @@ echo
 echo "fuzzer seed $seed, $iterations iterations; Spark differential $sparkfuzz compositions"
 printf '%-9s %-7s %6s  %s\n' step status secs log
 bad=0
-for s in canary fuzz forced sparkfuzz sweep deopt cliff gate; do
+for s in canary fuzz forced sparkfuzz sweep prove deopt cliff gate; do
   [ -n "${status[$s]:-}" ] || continue
   printf '%-9s %-7s %6d  %s\n' "$s" "${status[$s]}" "${secs[$s]}" "$logdir/$s.log"
   [ "${status[$s]}" = ok ] || bad=$((bad + 1))

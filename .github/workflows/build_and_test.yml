@@ -1062,6 +1062,14 @@ jobs:
     - name: Java linter
       if: fromJson(needs.precondition.outputs.required).lint-code != 'false'
       run: ./dev/lint-java
+    # The SMT proofs of Varka's arithmetic lowerings under the pinned Z3 (VARKA-240): the
+    # self-test first, so that a checker of verdicts that stopped failing cannot pass the proofs.
+    - name: Varka proofs
+      if: fromJson(needs.precondition.outputs.required).lint-code != 'false'
+      run: |
+        ./dev/varka_prove.sh --install z3
+        ./dev/varka_prove.sh --self-test
+        ./dev/varka_prove.sh
     - name: Spark connect jvm client mima check
       if: fromJson(needs.precondition.outputs.required).lint-spark != 'false'
       run: ./dev/connect-jvm-client-mima-check
