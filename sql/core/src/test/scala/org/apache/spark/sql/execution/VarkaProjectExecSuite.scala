@@ -332,7 +332,7 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession with Varka
         classDumpDirectory = None,
         SQLMetrics.createMetric(sparkContext, "rows"),
         SQLMetrics.createMetric(sparkContext, "batches"),
-        VarkaExecMetrics())
+        VarkaExecMetrics.NONE)
       // Before VARKA-15 this constructor compiled the fallback eagerly and threw.
       val evaluator = factory.createEvaluator()
       val column = new OnHeapColumnVector(1, IntegerType)
@@ -462,9 +462,10 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession with Varka
         classDumpDirectory = None,
         SQLMetrics.createMetric(sparkContext, "rows"),
         SQLMetrics.createMetric(sparkContext, "batches"),
-        VarkaExecMetrics(
-          fallbackBatchesKernel = Some(kernelFailures),
-          fallbackBatchesRowPath = Some(rowPath)))
+        VarkaExecMetrics.builder()
+          .fallbackBatchesKernel(kernelFailures)
+          .fallbackBatchesRowPath(rowPath)
+          .build())
       val allocator = ArrowUtils.rootAllocator.newChildAllocator("varka-test", 0, Long.MaxValue)
       val context = TaskContext.empty()
       TaskContext.setTaskContext(context)
@@ -581,7 +582,7 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession with Varka
       classDumpDirectory = None,
       SQLMetrics.createMetric(sparkContext, "rows"),
       SQLMetrics.createMetric(sparkContext, "batches"),
-      VarkaExecMetrics())
+      VarkaExecMetrics.NONE)
     factory.createEvaluator().eval(0, inputs)
   }
 }

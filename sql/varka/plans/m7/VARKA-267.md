@@ -128,4 +128,28 @@ added to `m7/PLAN.md` as they start.
 
 ## 9. Outcome
 
-Filled in as each step lands.
+### 9.1 Step 267a, the leaves
+
+Done on 9 October 2026. `VarkaExecMetrics` (a `Serializable` record with `NONE`, a builder, and
+the static `nodeMetrics`, `projectionMetrics`, `fromNode` and a null-safe `inc`), `VarkaSelection`
+(a record), `VarkaFusionReport` (static renderers over the Scala data model) and
+`VarkaVectorProjection` are Java; the four Scala files they replace are deleted. The nodes, the
+evaluators' call sites and nine suites are adapted: 13 `foreach(_ += 1)` sites became `inc`, the
+node metric maps convert with `asScala.toMap`, and the 11 construction sites in tests became
+`NONE` or the builder.
+
+**The proof held.** The 38 sql Varka suites pass (440 tests, 12 cancelled as before), scalastyle and
+checkstyle are clean; no emitter or compiler file changed, so `emitted_bytes.json` and
+`coverage.json` are untouched.
+
+**One thing the port broke and the suites caught.** The first run failed 302 tests with `Task not
+serializable: ... VarkaExecMetrics`: a Scala case class is `Serializable` and the exec nodes'
+evaluator factories carry the bundle to the executors, a property a Java record does not have until
+it says so. The record implements `Serializable` now, and says why.
+
+**Predictions scored.** 1 (no committed number moves): held by construction, no benchmark file
+changed, and not otherwise measured: the leaves are off the kernel path, and the vector
+projection's loop is the same call sequence as the Scala's (an input-rows copy, the mutable
+projection, a row id), which the per-batch benchmark of 267b and 267c does not exercise. The row
+path's cost is therefore *not measured here* and rests on that identity; `VarkaVectorProjectionSuite`
+pins its output.
