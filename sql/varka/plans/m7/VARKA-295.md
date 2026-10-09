@@ -99,4 +99,39 @@ job is rerun until it fails, and the failure's message is the measurement.
 
 ## 9. Outcome
 
-Filled in when the failure has been read.
+Done on 9 October 2026, from the failure the diagnostic's predecessor needed: #678's first CI run
+failed `Build modules: sql - other tests` (the whole `sql/test` in one JVM, 21,494 tests) with the
+test of this row, and its message carried the warm-up's own outcome:
+
+    state=RELEASED, calls=62724, rows=49487872, queuedNanos=36121608, runNanos=59968800886,
+    firstProbeBytes=5858064, lastProbeBytes=20720; the first run took 522 ms
+
+**The cause is the verdict's allowance, not the compile.** The warm-up was not starved (it waited
+36 ms in the queue and ran 62,724 calls in its sixty seconds), and the kernel did compile: a probe
+block allocated 5.86 MB when nothing was compiled and 20.7 KB at the end, 283 times lower, which
+nothing short of C2 does (the interpreter and C1 box every operation). But a block is clean only
+within `4096 + 1 byte a row + 256 a column per call` of allocation, 9,216 bytes for this kernel,
+and in this JVM the compiled kernel allocated 20,720: a JVM in which 20,000 earlier tests have
+shaped the Vector API templates' profiles leaves more calls out of line than the allowance counts.
+On an idle JVM the same kernel ends at 480 to 800 bytes. So the warm-up ran to its deadline and
+released a kernel that had been compiled for most of the minute, and its queries ran on the row path
+meanwhile: the failure is the test's, but the sixty seconds are a user-visible cost.
+
+**The fix.** A block is also clean when it falls `DRAMATIC_DROP` = 32 times below the first,
+whatever it allocates (`VarkaKernelWarmup.clean`, with a unit test over the observed numbers and
+the edges). 32 is far under the drops seen (283 in the polluted JVM, thousands in a clean one) and
+far over what a partial compile gives; the existing quarter-and-allowance rule is unchanged for
+every block that satisfies it.
+
+**Corrections to this plan** (a record, not rewritten): 3.2 says the verdict rule is unchanged,
+and it is now changed, by the above. Prediction 2 said the queue would be non-empty or the profile
+polluted with an empty queue; it was the second, but the pollution is of the allowance, not of the
+compile. Prediction 1 (it recurs within ten reruns) was wrong in the useful direction: the failure
+came from a job that already existed, and ninety local runs of the 36 Varka suites over two
+JVMs, pinned to four cores each (three at a time overnight), never failed. The failing JVM is the
+big one; the Varka matrix's is too small to reach it.
+
+**The diagnostic stays** (`lastReleaseJitState`, in the log and the test's message): a release at
+the deadline from now on is a kernel that did not compile or one the new rule did not accept, and
+the message says which. Its test caught that the code cache is one `CodeCache` pool below 240 MB,
+not `CodeHeap` segments; the state names both.
