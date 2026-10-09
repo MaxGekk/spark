@@ -106,11 +106,11 @@ private[sql] abstract class VarkaEvaluatorBase(
 
   private lazy val accounting = new VarkaFallbackAccounting(
     new VarkaFallbackAccounting.Counters(
-      metrics.fallbackBatchesKernel.orNull,
-      metrics.fallbackBatchesRowPath.orNull,
-      metrics.fallbackBatchesDeclined.orNull,
-      metrics.fallbackBatchesNonArrow.orNull,
-      metrics.suspectAllocationSamples.orNull),
+      metrics.fallbackBatchesKernel,
+      metrics.fallbackBatchesRowPath,
+      metrics.fallbackBatchesDeclined,
+      metrics.fallbackBatchesNonArrow,
+      metrics.suspectAllocationSamples),
     () => kernelIdentity)
 
   // The task-lifetime emitted fused loop and its reused argument arrays. None when emission
@@ -131,14 +131,14 @@ private[sql] abstract class VarkaEvaluatorBase(
             logWarning(s"The Varka emitter declined $kernelIdentity: ${d.getMessage}; " +
               "falling back to the per-row path.")
           }
-          metrics.emissionFailures.foreach(_ += 1)
+          VarkaExecMetrics.inc(metrics.emissionFailures)
           VarkaFallbackAccounting.fallbackEvent(VarkaFallbackEvent.EMISSION_FAILURE,
             () => kernelIdentity, d.getClass.getName)
           None
         case e if isCatchable(e) =>
           logWarning(s"Failed to emit the Varka fused kernel $kernelIdentity; falling back " +
             "to the per-row path.", e)
-          metrics.emissionFailures.foreach(_ += 1)
+          VarkaExecMetrics.inc(metrics.emissionFailures)
           VarkaFallbackAccounting.fallbackEvent(VarkaFallbackEvent.EMISSION_FAILURE,
             () => kernelIdentity, e.getClass.getName)
           None
@@ -158,7 +158,7 @@ private[sql] abstract class VarkaEvaluatorBase(
       throw new IllegalStateException("injected Varka emission failure")
     }
     val lookup = VarkaShapeCache.getOrEmit(shapeKey(plan), executionIdentity())
-    (if (lookup.hit) metrics.cacheHits else metrics.cacheMisses).foreach(_ += 1)
+    VarkaExecMetrics.inc(if (lookup.hit) metrics.cacheHits else metrics.cacheMisses)
     val entry = lookup.entry
     VarkaClassDump.dump(classDumpDirectory.orNull, entry.sourceFile, entry.classBytes)
     val n = plan.inputOrdinals.size
@@ -190,14 +190,14 @@ private[sql] abstract class VarkaEvaluatorBase(
   /**
    * The identity recorded in the cache's side table: the execution name, then as much of the
    * evaluator's entries as the table keeps
-   * ([[VarkaShapeCache.maxExecutionIdentityLength]]). Bounded while building: rendering all
+   * ([[VarkaShapeCache.MAX_EXECUTION_IDENTITY_LENGTH]]). Bounded while building: rendering all
    * of a wide projection on every task's setup path would be paid only to be truncated on
    * arrival, or discarded outright when the cache is disabled.
    */
   private def executionIdentity(): String = {
     val sb = new StringBuilder(executionName).append(": ")
     val it = identityEntries
-    while (it.hasNext && sb.length <= VarkaShapeCache.maxExecutionIdentityLength) {
+    while (it.hasNext && sb.length <= VarkaShapeCache.MAX_EXECUTION_IDENTITY_LENGTH) {
       sb.append(it.next())
       if (it.hasNext) sb.append(", ")
     }
@@ -351,7 +351,7 @@ private[sql] abstract class VarkaEvaluatorBase(
           accounting.declinedBatch(declined.status, declined.kernel)
           fallbackPath
         case Right(false) =>
-          metrics.warmupBatches.foreach(_ += 1)
+          VarkaExecMetrics.inc(metrics.warmupBatches)
           VarkaKernelEvaluator.markWarmupBatch(fallbackPath)
         case Right(true) =>
           try {
@@ -423,7 +423,7 @@ private[sql] abstract class VarkaEvaluatorBase(
   private def recordRefusedBatch(input: ColumnarBatch): Boolean = {
     if (!emissionFailed && fusedPlan.nonEmpty && input.numRows() > 0) {
       if (VarkaKernelEvaluator.isWarmupBatch(input)) {
-        metrics.warmupBatches.foreach(_ += 1)
+        VarkaExecMetrics.inc(metrics.warmupBatches)
         true
       } else {
         accounting.nonArrowBatch()

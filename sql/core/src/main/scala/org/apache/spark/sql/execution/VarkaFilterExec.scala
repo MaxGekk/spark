@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.execution
 
+import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 import org.apache.spark.{PartitionEvaluator, PartitionEvaluatorFactory, SparkException}
@@ -132,7 +133,7 @@ case class VarkaFilterExec(
   // The shared node vocabulary; no residual-entry metric - a filter's residual is a visible
   // row FilterExec above it - and numOutputRows counts selected rows.
   override lazy val metrics: Map[String, SQLMetric] =
-    VarkaExecMetrics.nodeMetrics(sparkContext)
+    VarkaExecMetrics.nodeMetrics(sparkContext).asScala.toMap
 
   // `supportsRowBased` is false because this node is columnar, so the transition rule never
   // asks it for rows: it inserts a to-row transition above instead, which the columnar rule
@@ -248,7 +249,7 @@ private[sql] class VarkaFilterEvaluatorFactory(
     private def filterBatch(input: ColumnarBatch): ColumnarBatch = {
       kernels.serveBatch(input) {
         val batch = kernels.filterCompact(input)
-        varkaMetrics.varkaBatches.foreach(_ += 1)
+        VarkaExecMetrics.inc(varkaMetrics.varkaBatches)
         batch
       } {
         fallback(input)
@@ -357,7 +358,7 @@ case class VarkaFilterColumnarToRowExec(
   // The shared node vocabulary; no residual-entry metric - a filter's residual is a visible
   // row FilterExec above it - and numOutputRows counts selected rows.
   override lazy val metrics: Map[String, SQLMetric] =
-    VarkaExecMetrics.nodeMetrics(sparkContext)
+    VarkaExecMetrics.nodeMetrics(sparkContext).asScala.toMap
 
   override def doExecute(): RDD[InternalRow] = {
     val evaluatorFactory = new VarkaFilterToRowEvaluatorFactory(
@@ -440,7 +441,7 @@ private[sql] class VarkaFilterToRowEvaluatorFactory(
     private def process(input: ColumnarBatch): Iterator[InternalRow] = {
       kernels.serveBatch(input) {
         val selection = kernels.filterMask(input)
-        varkaMetrics.varkaBatches.foreach(_ += 1)
+        VarkaExecMetrics.inc(varkaMetrics.varkaBatches)
         selectedRows(input, selection)
       } {
         fallback(input)
@@ -491,7 +492,6 @@ private[sql] class VarkaFilterToRowEvaluatorFactory(
     }
 
     private def fallback(input: ColumnarBatch): Iterator[InternalRow] = {
-      import scala.jdk.CollectionConverters._
       input.rowIterator().asScala.filter { row =>
         val selected = fallbackPredicate.eval(row)
         if (selected) numOutputRows += 1

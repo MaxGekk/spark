@@ -157,15 +157,15 @@ object VarkaEvaluatorOverheadBenchmark extends SqlBasedBenchmark {
             output = output)
           val cases = shapes.map { shape =>
             val inputs = (0 until batches).map(batch(shape.input, rows, _, allocator))
-            val metrics = VarkaExecMetrics(
-              varkaBatches = Some(SQLMetrics.createMetric(spark.sparkContext, "varka")))
+            val metrics = VarkaExecMetrics.builder()
+              .varkaBatches(SQLMetrics.createMetric(spark.sparkContext, "varka")).build()
             benchmark.addCase(shape.name) { _ => runTask(shape, inputs, metrics) }
             (shape, inputs, metrics)
           }
           try {
             benchmark.run()
             cases.foreach { case (shape, _, metrics) =>
-              val served = metrics.varkaBatches.get.value
+              val served = metrics.varkaBatches.value
               // Every iteration served every batch by the kernel, the warm-up iterations too.
               assert(served > 0 && served % batches == 0, s"${shape.name}: $served of its " +
                 s"batches took the kernel, not a multiple of $batches")

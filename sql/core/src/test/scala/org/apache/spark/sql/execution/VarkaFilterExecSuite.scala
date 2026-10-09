@@ -264,7 +264,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession with VarkaT
           .createMetric(sparkContext, "rows"),
         numInputBatches = org.apache.spark.sql.execution.metric.SQLMetrics
           .createMetric(sparkContext, "batches"),
-        varkaMetrics = VarkaExecMetrics())
+        varkaMetrics = VarkaExecMetrics.NONE)
       val batches = factory.createEvaluator().eval(0, inputs.iterator)
       var seen = 0
       var peak = 0L
@@ -319,7 +319,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession with VarkaT
           .createMetric(sparkContext, "rows"),
         numInputBatches = org.apache.spark.sql.execution.metric.SQLMetrics
           .createMetric(sparkContext, "batches"),
-        varkaMetrics = VarkaExecMetrics())
+        varkaMetrics = VarkaExecMetrics.NONE)
       val batches = factory.createEvaluator().eval(0, Iterator(input))
       val out = batches.next()
       assert(out.numRows() === 64)

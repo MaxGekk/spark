@@ -23,13 +23,17 @@ import java.nio.file.Files
 
 /**
  * The fuzz failures that are known (VARKA-277), `sql/varka/fuzz/known_failures.tsv`: tab
- * separated lane (`int` or `long`), seed, iteration, the signature's kind, its text, and the
+ * separated lane (`int` or `long`, or `projection`, `predicate` or `wide` for the composition
+ * fuzzer), seed, iteration, the signature's kind, its text, and the
  * reason, which names the plan row or ticket that owns the bug; `#` starts a comment line. A
  * fuzzer's failure with a listed signature is reported as known and does not fail the run, and a
  * listed entry that its (lane, seed, iteration) no longer reproduces is stale and fails, so the
  * list can only shrink once a bug is fixed - as `matrix/skips.tsv` does for the option matrix.
  */
 object VarkaKnownFailures {
+
+  /** The fuzzers a lane names: the IR fuzzer's two lanes and the composition fuzzer's three. */
+  val lanes = Set("int", "long", "projection", "predicate", "wide")
 
   /** The committed list, relative to `spark.test.home`. */
   val PATH = "sql/varka/fuzz/known_failures.tsv"
@@ -41,7 +45,7 @@ object VarkaKnownFailures {
     .map(_.stripTrailing()).filterNot(l => l.isBlank || l.startsWith("#")).map { line =>
       line.split("\t", -1) match {
         case Array(lane, seed, iteration, kind, message, reason)
-            if (lane == "int" || lane == "long") && reason.nonEmpty =>
+            if lanes.contains(lane) && reason.nonEmpty =>
           Entry(lane, seed.toLong, iteration.toInt, VarkaFailureSignature(kind, message), reason)
         case _ => throw new IllegalArgumentException(
           s"$PATH: expected lane<TAB>seed<TAB>iteration<TAB>kind<TAB>text<TAB>reason, got '$line'")

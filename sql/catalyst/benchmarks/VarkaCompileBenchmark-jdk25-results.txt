@@ -6,13 +6,13 @@ OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 one compile:                                                        Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 --------------------------------------------------------------------------------------------------------------------------------------------------
-calendar: year, month, make_date, add_months, last_day, weekofyear              2              3           0          0.1       12112.3       1.0X
-TIME: hour, minute, second                                                      2              2           0          0.1       10092.6       1.2X
-conditionals: IF, coalesce, greatest, CASE WHEN of 6 branches                   5              5           0          0.0       22525.7       0.5X
-a wide projection of 60 mixed outputs                                         106            108           1          0.0      531407.0       0.0X
-predicate: a range, IS NOT NULL and an int comparison                           1              1           0          0.3        3965.0       3.1X
-predicate: IN over eight dates                                                  0              1           0          0.4        2432.5       5.0X
-predicate: a set of three date ranges                                           0              0           0          0.4        2246.3       5.4X
-predicate: NOT, OR and IS NULL over two dates                                   0              0           0          0.5        2111.1       5.7X
+calendar: year, month, make_date, add_months, last_day, weekofyear              2              2           0          0.1        8762.9       1.0X
+TIME: hour, minute, second                                                      2              2           0          0.1        9019.2       1.0X
+conditionals: IF, coalesce, greatest, CASE WHEN of 6 branches                   3              3           0          0.1       16677.1       0.5X
+a wide projection of 60 mixed outputs                                          95             97           1          0.0      476224.6       0.0X
+predicate: a range, IS NOT NULL and an int comparison                           1              1           0          0.3        3353.4       2.6X
+predicate: IN over eight dates                                                  0              1           0          0.4        2359.9       3.7X
+predicate: a set of three date ranges                                           0              0           0          0.5        2121.0       4.1X
+predicate: NOT, OR and IS NULL over two dates                                   0              0           0          0.5        1874.1       4.7X
 
 

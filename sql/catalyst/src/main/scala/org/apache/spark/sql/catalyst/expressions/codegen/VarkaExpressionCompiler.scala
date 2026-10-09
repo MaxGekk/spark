@@ -18,26 +18,22 @@
 package org.apache.spark.sql.catalyst.expressions.codegen
 
 import java.util.concurrent.ConcurrentHashMap
-import java.util.function.IntUnaryOperator
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 import org.apache.spark.internal.Logging
-import org.apache.spark.sql.catalyst.expressions.{Add, Alias, And, Attribute, BindReferences,
-  BoundReference, Cast, EvalMode, Expression, Greatest, Least, Literal, Multiply, NamedExpression,
-  RuntimeReplaceable, Subtract, UnaryMinus}
+import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, BindReferences,
+  BoundReference, Expression, NamedExpression, RuntimeReplaceable}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaDerivedKind, VarkaEmitDeclined,
-  VarkaEmitOptions, VarkaKernelWarmup, VarkaLoopEmitter, VarkaRangeAnalysis, VarkaShapeCache,
-  VarkaShapeKey, VarkaVectorIR}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{ColumnRef, Cond,
-  Greatest => IRGreatest, IntArith, IntNeg, IntOp, LaneType, Least => IRLeast, LiteralSlot,
-  Or => IROr, Overflow}
+  VarkaEmitOptions, VarkaKernelWarmup, VarkaLoopEmitter, VarkaShapeCache, VarkaShapeKey,
+  VarkaVectorIR}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{Cond, LaneType,
+  Or => IROr}
 import org.apache.spark.sql.catalyst.expressions.objects.StaticInvoke
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.types.{BooleanType, DataType, DateType, DayTimeIntervalType,
-  IntegerType, LongType, TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{BooleanType, DataType}
 
 /**
  * A whole projection compiled to the Varka vector IR: the trees `VarkaLoopEmitter` turns into one
@@ -170,84 +166,6 @@ private[sql] case class VarkaDecline(reason: String, expr: String) {
 }
 
 /**
- * Collects what one entry's compilation leaves behind besides its IR: its decline, the input
- * bounds it asks the evaluator to check (see `VARKA-56.md`; keyed by child ordinal until the
- * entry is accepted, and dropped with a declining entry the way its columns and literals are), and
- * the long lane's literal table. The
- * recursion reports a decline at the point of failure and the first note wins, so the recorded
- * reason is the innermost cause rather than the outermost expression that inherited it; [[take]]
- * hands it over and resets for the next entry.
- *
- * The long literal table lives here rather than beside the int one in every signature because
- * every compile arm already carries the sink, and because it is the second half of one table
- * rather than a second table: a kernel is single-lane, so it reads the int slots or the long
- * slots and never both. It follows the bounds' rollback discipline - a mark before an entry, a
- * truncate when the entry declines.
- *
- * The recursion works on bound expressions, whose `BoundReference`s render as
- * `input[1, int, true]`; the child's attributes go back in before the text is kept, so a
- * reason reads in the query's own column names.
- *
- * It also carries the one compile option the condition arms read, `rangeSets`, for the same
- * reason as the long table: every arm already has the sink in hand.
- */
-private final class DeclineSink(childOutput: Seq[Attribute], val rangeSets: Boolean) {
-  private var first: Option[VarkaDecline] = None
-  private val bounds = mutable.ArrayBuffer.empty[(Int, Int, Int)]
-
-  /** Notes that child ordinal `ordinal` must lie in `[lo, hi]` for the entry being compiled. */
-  def bound(ordinal: Int, lo: Int, hi: Int): Unit = bounds += ((ordinal, lo, hi))
-
-  def boundsMark: Int = bounds.size
-
-  /** Drops the bounds noted since `mark` - a declining entry's. */
-  def truncateBounds(mark: Int): Unit = bounds.remove(mark, bounds.size - mark)
-
-  private val longLiterals = mutable.LinkedHashMap.empty[Long, Int]
-
-  /** Interns `value` in the long lane's per-distinct-value table and wraps it as its slot. */
-  def longSlot(value: Long): LiteralSlot =
-    new LiteralSlot(longLiterals.getOrElseUpdate(value, longLiterals.size), LaneType.LONG)
-
-  def longMark: Int = longLiterals.size
-
-  /** Drops the long literals interned since `mark` - a declining entry's. */
-  def truncateLong(mark: Int): Unit = {
-    if (longLiterals.size > mark) {
-      longLiterals.keys.drop(mark).toSeq.foreach(longLiterals.remove)
-    }
-  }
-
-  /** The long literal table in slot order, for the compiled plan. */
-  def longLiteralValues: Seq[Long] = longLiterals.keys.toSeq
-
-  /** The noted bounds in kernel-input terms, given the accepted entries' input table. */
-  def inputBounds(inputs: mutable.LinkedHashMap[Int, Int]): Seq[VarkaInputBound] =
-    bounds.toSeq.collect {
-      case (ordinal, lo, hi) if inputs.contains(ordinal) =>
-        VarkaInputBound(inputs(ordinal), lo, hi)
-    }.distinct
-
-  def note(reason: String, expr: Expression): Unit = {
-    if (first.isEmpty) {
-      val named = expr.transformUp {
-        case br: BoundReference if br.ordinal >= 0 && br.ordinal < childOutput.length =>
-          childOutput(br.ordinal)
-      }
-      val text = named.sql
-      val shown = if (text.length > 80) text.take(77) + "..." else text
-      first = Some(VarkaDecline(reason, shown))
-    }
-  }
-
-  def take(): Option[VarkaDecline] = {
-    val taken = first
-    first = None
-    taken
-  }
-}
-
-/**
  * A projection classified entry by entry: `specs` has one entry per projectList
  * position, in order, and `fused` is the sub-projection of just the [[FusedOutput]] entries -
  * their kernel-input and literal tables cover only what the fused trees reference, so a
@@ -326,8 +244,9 @@ private[sql] case class CompiledVarkaPredicate(
  * demanded bare attributes - `datediff(date_add(d, 7), d2)` compiles where milestone 1 saw nothing,
  * and so do `CASE WHEN`/`IF` (via interior comparisons and the three-valued connectives),
  * `greatest`/`least`, `dayofweek`/`weekday` and date literals. The conditions also take `IN` over
- * date literals (capped, see [[MaxInLiterals]]) and the validity predicates `IS [NOT] NULL` over
- * bare columns, and the values with `coalesce`/`nvl`/`nvl2` (lowered onto the validity condition)
+ * date literals (capped, see `VarkaNodeCompiler.MAX_IN_LITERALS`) and the validity predicates
+ * `IS [NOT] NULL` over bare columns, and the values with `coalesce`/`nvl`/`nvl2` (lowered onto
+ * the validity condition)
  * and the identity date cast. Used by both `VarkaColumnarRule` (is the projection eligible?) and
  * `VarkaKernelEvaluator` (what does the emitted loop compute?), so eligibility cannot drift from
  * execution: there is one compiler and the rule's question is `compilePartial(...).isDefined`.
@@ -352,21 +271,6 @@ private[sql] case class CompiledVarkaPredicate(
  * This is the only eligibility rule there is.
  */
 private[sql] object VarkaExpressionCompiler extends Logging {
-
-  /**
-   * The most literals an `IN` list may hold and still fuse, counted after dedup.
-   * The basis, recorded in `VARKA-20.md`: 16 is depth-safe under any fold shape
-   * (`MAX_CHAIN_DEPTH` = 16 while the balanced chain here is `ceil(log2 16) + 1` = 5
-   * levels), and its 31 op nodes left half the emitter's `MAX_FUSED_NODES` = 64 budget to
-   * the rest of the projection when that cap bounded every kernel; under the byte budget it
-   * bounds only the reference form, and the choice of 16 stands on the depth argument. (The
-   * emitter's broadcast hoist is NOT part of the basis: its gate counts the kernel's total
-   * literal slots, so a capped IN plus any other
-   * literal already re-broadcasts inline - the review pass corrected an earlier claim
-   * here.) Above the cap the entry declines with a reason instead of silently losing the
-   * whole kernel at emission.
-   */
-  private[codegen] val MaxInLiterals = 16
 
   /** The all-entries-fused special case of [[compilePartial]], kept for callers that need it. */
   def compile(
@@ -667,7 +571,7 @@ private[sql] object VarkaExpressionCompiler extends Logging {
       val (ordinals, derived) = VarkaDerivedInput.resolve(inputs)
       (Some(PartialVarkaProjection(specs, CompiledVarkaProjection(
         outputs.toSeq, outputTypes.result(), ordinals, literals.keys.toSeq,
-        sink.inputBounds(inputs), derived, sink.longLiteralValues),
+        sink.inputBounds(inputs), derived, sink.longLiteralValues.map(_.longValue)),
         reasons)), reasons, alone.result())
     } else {
       (None, reasons, alone.result())
@@ -737,11 +641,8 @@ private[sql] object VarkaExpressionCompiler extends Logging {
   private val loggedEmitterFailures = ConcurrentHashMap.newKeySet[String]()
 
   /** Drops the entries a failed compile appended after `mark` (insertion order). */
-  private[codegen] def truncate(table: mutable.LinkedHashMap[Int, Int], mark: Int): Unit = {
-    if (table.size > mark) {
-      table.keys.drop(mark).toSeq.foreach(table.remove)
-    }
-  }
+  private[codegen] def truncate(table: mutable.LinkedHashMap[Int, Int], mark: Int): Unit =
+    VarkaNodeCompiler.truncate(table, mark)
 
   /**
    * Compiles a filter predicate conjunct by conjunct. The condition splits on its
@@ -886,7 +787,7 @@ private[sql] object VarkaExpressionCompiler extends Logging {
     if (fusedConds.nonEmpty && inputs.nonEmpty) {
       val (ordinals, derived) = VarkaDerivedInput.resolve(inputs)
       val bounds = sink.inputBounds(inputs)
-      val longs = sink.longLiteralValues
+      val longs = sink.longLiteralValues.map(_.longValue)
       val build = (layout: Seq[Seq[Cond]]) => {
         val roots = layout.flatten
         val starts = layout.scanLeft(0)(_ + _.size)
@@ -989,19 +890,6 @@ private[sql] object VarkaExpressionCompiler extends Logging {
     }
     if (over(layout).isEmpty) Some(pass.build(layout)) else None
   }
-  /**
-   * The lane a Spark type's values occupy in a kernel, or `None` for a type no kernel reads.
-   * The int side is what the leaf arms below already admit - a date, an int and a year-month
-   * interval are all one 32-bit lane - and the long side is milestone 5's: `bigint`, `TIME`
-   * (nanoseconds of day) and a day-time interval (microseconds) are one 64-bit lane
-   * (`VARKA-29.md` 3.1). The two timestamp types are that lane physically and are
-   * deliberately absent: see `isTimestamp` and the arm that names them.
-   */
-  private[codegen] def laneOf(dataType: DataType): Option[LaneType] = dataType match {
-    case IntegerType | DateType | _: YearMonthIntervalType => Some(LaneType.INT)
-    case LongType | _: TimeType | _: DayTimeIntervalType => Some(LaneType.LONG)
-    case _ => None
-  }
 
   /**
    * The lowerings of the `TIME` expressions, keyed on the `DateTimeUtils` method each one's
@@ -1028,12 +916,14 @@ private[sql] object VarkaExpressionCompiler extends Logging {
    * choice for the date lane.
    */
   /**
-   * An output root: [[compileNode]], plus the one lowering only a root may take. The three
-   * `TIME` field extracts compute a 64-bit division and deliver an int, and the emitter narrows
-   * a lane at the kernel's store and nowhere else until VARKA-28 gives it a width conversion;
+   * An output root: `VarkaNodeCompiler.compileNode`, plus the one lowering only a root may take.
+   * The three `TIME` field extracts compute a 64-bit division and deliver an int, and the
+   * emitter narrows a lane at the kernel's store and nowhere else until VARKA-28 gives it a width
+   * conversion;
    * so `hour(t)` as an output fuses under a narrowing root, while `hour(t) + 1` and
    * `hour(t) = 12`, which put the narrowed value under another node, reach
-   * [[VarkaTimeCompiler.compileTime]] through [[compileNode]] and decline with that reason.
+   * [[VarkaTimeCompiler.compileTime]] through `VarkaNodeCompiler.compileNode` and decline with
+   * that reason.
    */
   private def compileRoot(
       expr: Expression,
@@ -1043,7 +933,7 @@ private[sql] object VarkaExpressionCompiler extends Logging {
     case r: RuntimeReplaceable => compileRoot(r.replacement, inputs, literals, sink)
     case si: StaticInvoke if VarkaTimeCompiler.isTimeTarget(si) =>
       VarkaTimeCompiler.compileTime(si, inputs, literals, sink, true)
-    case other => compileNode(other, inputs, literals, sink)
+    case other => VarkaNodeCompiler.compileNode(other, inputs, literals, sink)
   }
 
   /** The reason an entry of one lane records when the kernel is already on the other. */
@@ -1054,314 +944,5 @@ private[sql] object VarkaExpressionCompiler extends Logging {
   private def splitConjuncts(condition: Expression): Seq[Expression] = condition match {
     case And(left, right) => splitConjuncts(left) ++ splitConjuncts(right)
     case other => Seq(other)
-  }
-
-  /**
-   * The recursive node compiler. `None` anywhere fails the enclosing entry, whose caller rolls the
-   * tables back to their pre-entry state. Shapes that cannot be served stay unmatched by
-   * construction: a `date_add` over a `datediff` result only type-checks through a `Cast`, which
-   * compiles to nothing here. Integer arithmetic over a `datediff` result was in that list until
-   * the int32 lowering admitted it - a SIMD lane still cannot throw row-accurately, so an ANSI
-   * overflow condemns the batch and the row engine raises it instead.
-   */
-  private[codegen] def compileNode(
-      expr: Expression,
-      inputs: mutable.LinkedHashMap[Int, Int],
-      literals: mutable.LinkedHashMap[Int, Int],
-      sink: DeclineSink): Option[VarkaVectorIR] = {
-    val arms = familyChain(inputs, literals, sink).map(_._2).reduceLeft(_ orElse _)
-    arms.applyOrElse(expr, fallback(inputs, literals, sink))
-  }
-
-  /**
-   * The chain [[compileNode]] dispatches through, in order, each group named: the date leaves,
-   * the four families, then the int arithmetic and the picks. The order is not what decides a
-   * node's compiler - no expression matches arms of two groups, every arm being gated by the
-   * expression class or its data type - and `VarkaFamilyChainSuite` holds that as a fact over
-   * the coverage table, so a fifth family or a widened guard that broke it would fail there
-   * rather than win silently by coming first. The list is what that suite reads, so a group
-   * added here is checked the day it is added.
-   */
-  private[codegen] def familyChain(
-      inputs: mutable.LinkedHashMap[Int, Int],
-      literals: mutable.LinkedHashMap[Int, Int],
-      sink: DeclineSink): Seq[(String, PartialFunction[Expression, Option[VarkaVectorIR]])] = Seq(
-    "date leaves" -> leafArms(inputs, literals, sink),
-    "calendar" -> javaFamily(VarkaChronoCompiler.arm(_, inputs, literals, sink)),
-    "interval" -> javaFamily(VarkaIntervalCompiler.arm(_, inputs, literals, sink)),
-    "time" -> javaFamily(VarkaTimeCompiler.arm(_, inputs, literals, sink)),
-    "condition" -> javaFamily(VarkaConditionCompiler.arm(_, inputs, literals, sink)),
-    "int arithmetic" -> arithmeticArms(inputs, literals, sink))
-
-  /**
-   * A family written in Java as a chain entry. A Java family cannot return a Scala partial
-   * function, so it exposes `claim`, which returns the arm that matches a node or `null` when
-   * none does; the arm's `compile()` runs only once the chain has chosen it, which keeps the
-   * matching side-effect free the way a partial function's `isDefinedAt` is.
-   */
-  private def javaFamily(claim: Expression => VarkaFamilyArm)
-      : PartialFunction[Expression, Option[VarkaVectorIR]] =
-    Function.unlift((e: Expression) => Option(claim(e))).andThen(_.compile())
-
-  /**
-   * The date leaves: a date column, a date literal and the identity date cast. First in the chain,
-   * ahead of every family.
-   */
-  private def leafArms(
-      inputs: mutable.LinkedHashMap[Int, Int],
-      literals: mutable.LinkedHashMap[Int, Int],
-      sink: DeclineSink): PartialFunction[Expression, Option[VarkaVectorIR]] = {
-    case br: BoundReference if br.dataType == DateType =>
-      Some(columnRef(br, inputs))
-    // A date literal's value is already an epoch-day int, so it takes a slot in the shared
-    // per-distinct-value table like a folded day offset does - what makes
-    // `d < DATE'...'` and `greatest(d, DATE'...')` reachable at all. `days: Int` does not
-    // match a null-valued Literal, which falls through to the catch-all below; that is a
-    // safe blind spot, not a bug, since ConstantFolding removes a null date literal from any
-    // real query before it can reach here (unix_date/date_from_unix_date add two more
-    // recursive paths into this same match, both equally covered by that guarantee).
-    case Literal(days: Int, DateType) =>
-      Some(intSlot(days, literals))
-    // The identity cast: the corpus wraps date expressions in `CAST(... AS DATE)`
-    // 85 times, and after optimization the wrapper is a no-op over an already-date child -
-    // unwrap it. A `cast(<string literal> AS DATE)` never reaches here (constant-folded to a
-    // date literal by the optimizer); a string *column* cast is a per-row parse with no
-    // string lane and stays declined below.
-    case c: Cast if c.dataType == DateType && c.child.dataType == DateType =>
-      compileNode(c.child, inputs, literals, sink)
-  }
-
-  /**
-   * The int32 arithmetic over int-valued operands and the null-skipping picks, after the families:
-   * the `Add(WeekDay, 1)` shape keeps its dedicated calendar node because the calendar arms come
-   * first in the chain, and the guard below says so twice.
-   */
-  private def arithmeticArms(
-      inputs: mutable.LinkedHashMap[Int, Int],
-      literals: mutable.LinkedHashMap[Int, Int],
-      sink: DeclineSink): PartialFunction[Expression, Option[VarkaVectorIR]] = {
-    // Spark's greatest/least are n-ary; the null-skipping algebra is associative, so a left
-    // fold into the binary IR nodes is exact.
-    case Greatest(children) =>
-      VarkaConditionCompiler.foldPick(children, inputs, literals, sink, new IRGreatest(_, _))
-    case Least(children) =>
-      VarkaConditionCompiler.foldPick(children, inputs, literals, sink, new IRLeast(_, _))
-    // extract(DAYOFWEEK_ISO) / date_part('DOW_ISO'): the analyzer spells them Add(WeekDay(d), 1),
-    // and so does a hand-written weekday(d) + 1. One narrow arm, either operand order, and nothing
-    // else: integer arithmetic over an output is out of scope for this compiler. Int32 //
-    // arithmetic over int-valued operands - a fused field, an IntegerType column, an int literal,
-    // or nested arithmetic. Placed after the `Add(WeekDay, 1)` arm of the calendar family so that
-    // shape keeps its cheaper dedicated node.
-    case a: Add if a.dataType == IntegerType && !VarkaChronoCompiler.isDayOfWeekIso(a) =>
-      intArith(IntOp.ADD, a.evalMode, a.left, a.right, a, inputs, literals, sink)
-    case a: Subtract if a.dataType == IntegerType =>
-      intArith(IntOp.SUB, a.evalMode, a.left, a.right, a, inputs, literals, sink)
-    case a: Multiply if a.dataType == IntegerType =>
-      intArith(IntOp.MUL, a.evalMode, a.left, a.right, a, inputs, literals, sink)
-    case n @ UnaryMinus(c, failOnError) if n.dataType == IntegerType =>
-      // Spark has no try_negative, so the mode is only ever WRAP or FAIL here. Negation
-      // overflows on exactly one value, `Int.MinValue`, so any bound at all rules it out and
-      // the check comes off - the same reasoning the binary arms use, on a narrower fact.
-      intOperand(c, inputs, literals, sink).map { x =>
-        val checked = failOnError && !magnitude(x, literals).exists(_ <= Int.MaxValue.toLong)
-        new IntNeg(if (checked) Overflow.FAIL else Overflow.WRAP, x)
-      }
-  }
-
-  /**
-   * What no arm matched: a column of another type declines by its type, a `RuntimeReplaceable`
-   * compiles what would run, and anything else declines as unsupported.
-   */
-  private def fallback(
-      inputs: mutable.LinkedHashMap[Int, Int],
-      literals: mutable.LinkedHashMap[Int, Int],
-      sink: DeclineSink): Expression => Option[VarkaVectorIR] = {
-    // A column of any other type: eligible to be forwarded as a whole entry, never to be read
-    // by the int32 lanes of a kernel.
-    case br: BoundReference =>
-      sink.note(s"non-date column of type ${br.dataType.simpleString}", br)
-      None
-    // Defensive: a real query never carries an unreplaced RuntimeReplaceable this far (the
-    // optimizer's ReplaceExpressions runs long before physical planning), but hand-built
-    // expressions in tests and the plan-side fusion report can - compile what would run.
-    case r: RuntimeReplaceable =>
-      compileNode(r.replacement, inputs, literals, sink)
-    case other =>
-      sink.note("unsupported expression", other)
-      None
-  }
-
-  /** Spark's evaluation mode as the IR spells it. */
-  private[codegen] def overflowOf(mode: EvalMode.Value): Overflow = mode match {
-    case EvalMode.LEGACY => Overflow.WRAP
-    case EvalMode.ANSI => Overflow.FAIL
-    case EvalMode.TRY => Overflow.NULL
-  }
-
-  /**
-   * An operand of int arithmetic: an `IntegerType` column becomes the int column leaf, an int
-   * literal a slot, and everything else goes through `compileNode` - which yields the fused int
-   * fields (`datediff`, the extractions, the ISO weekday) and nested arithmetic. A `DateType`
-   * operand is refused here rather than silently treated as a day count: `date + 1` is `DateAdd`
-   * and has its own arm.
-   */
-  private[codegen] def intOperand(
-      e: Expression,
-      inputs: mutable.LinkedHashMap[Int, Int],
-      literals: mutable.LinkedHashMap[Int, Int],
-      sink: DeclineSink): Option[VarkaVectorIR] = e match {
-    case br: BoundReference if br.dataType == IntegerType => Some(columnRef(br, inputs))
-    case Literal(v: Int, IntegerType) =>
-      Some(intSlot(v, literals))
-    case _ if e.dataType != IntegerType =>
-      sink.note(s"int arithmetic operand of type ${e.dataType.simpleString}", e)
-      None
-    case _ => compileNode(e, inputs, literals, sink)
-  }
-
-  /**
-   * The literal table as [[VarkaRangeAnalysis]] reads it: slot index to value. The table is keyed
-   * by value in slot order, so a slot's value is its key's position; and it is read at call time,
-   * never snapshotted, because the table grows as compilation proceeds and is truncated on every
-   * decline.
-   */
-  private[codegen] def literalAt(literals: mutable.LinkedHashMap[Int, Int]): IntUnaryOperator =
-    slot => literals.keysIterator.drop(slot).next()
-
-  /**
-   * How large an int-valued node's result can be in absolute value, or `None` where nothing
-   * bounds it: [[VarkaRangeAnalysis]]'s `INT` query. This exists so a checked operation that
-   * provably cannot overflow needs no check - which is what makes `year(d) * 100 + month(d)`
-   * fuse under ANSI, the shape `VARKA-63.md` 6 measures. The compiler can do this and the
-   * emitter cannot: a `LiteralSlot` carries a slot index, and the value behind it only arrives in
-   * `scalarArgs` at run time. Conservative by construction: a `None` costs a check or a decline
-   * and never a wrong answer.
-   */
-  private[codegen] def magnitude(
-      node: VarkaVectorIR, literals: mutable.LinkedHashMap[Int, Int]): Option[Long] = {
-    val m = VarkaRangeAnalysis.magnitude(node, literalAt(literals))
-    if (m.isPresent) Some(m.getAsLong) else None
-  }
-
-  /**
-   * Whether the operation on operands of these bounds cannot leave the int32 range. Read
-   * through the analysis's own `IntArith` transfer function rather than re-dispatched here: the
-   * candidate node is never emitted, so building one to ask the question is free, and the two
-   * answers cannot drift apart the way two copies of "MUL multiplies, else adds" once could. A
-   * magnitude is non-negative by construction, so the only thing left to ask is whether it stays
-   * at or under `Int.MaxValue` - one past it, `2^31`, is the first magnitude that overflows.
-   */
-  private[codegen] def cannotOverflow(op: IntOp, l: VarkaVectorIR, r: VarkaVectorIR,
-      literals: mutable.LinkedHashMap[Int, Int]): Boolean =
-    magnitude(new IntArith(op, Overflow.WRAP, l, r), literals).exists(_ <= Int.MaxValue.toLong)
-
-  /**
-   * The shared body of the three binary arithmetic arms. A checked multiply declines unless
-   * the operands' bounds prove it cannot overflow: the overflow test for `*` needs the 64-bit
-   * product or a lane division, and the emitter has neither in int lanes, so an unprovable
-   * `ANSI` or `TRY` multiply stays on the row engine until milestone 5's long lanes arrive
-   * (`VARKA-63.md` 3.4).
-   */
-  private[codegen] def intArith(
-      op: IntOp,
-      mode: EvalMode.Value,
-      l: Expression,
-      r: Expression,
-      whole: Expression,
-      inputs: mutable.LinkedHashMap[Int, Int],
-      literals: mutable.LinkedHashMap[Int, Int],
-      sink: DeclineSink): Option[VarkaVectorIR] = {
-    val mark = literals.size
-    val operands = for {
-      x <- intOperand(l, inputs, literals, sink)
-      y <- intOperand(r, inputs, literals, sink)
-    } yield (x, y)
-    operands match {
-      case None => None
-      case Some((x, y)) =>
-        arithOver(op, overflowOf(mode), x, y, whole, literals, mark, sink)
-    }
-  }
-
-  /**
-   * The overflow decision, shared by the int arithmetic arms and the interval ones so that the
-   * bound rule and the checked-multiply refusal are stated once rather than in two places that can
-   * drift. A checked operation whose operands' bounds rule out overflow needs no check at all and
-   * emits as `WRAP` - fewer ops, and the only way a checked multiply fuses; an int lane has no
-   * cheap overflow test for `*`, so one that keeps its check declines and `literals` is rolled back
-   * to `mark` so a declining entry leaves no slot behind.
-   */
-  private[codegen] def arithOver(
-      op: IntOp,
-      declared: Overflow,
-      x: VarkaVectorIR,
-      y: VarkaVectorIR,
-      whole: Expression,
-      literals: mutable.LinkedHashMap[Int, Int],
-      mark: Int,
-      sink: DeclineSink): Option[VarkaVectorIR] = {
-    val overflow =
-      if (declared != Overflow.WRAP && cannotOverflow(op, x, y, literals)) Overflow.WRAP
-      else declared
-    if (op == IntOp.MUL && overflow != Overflow.WRAP) {
-      truncate(literals, mark)
-      sink.note("checked int multiply whose operands do not rule out overflow", whole)
-      None
-    } else {
-      Some(new IntArith(op, overflow, x, y))
-    }
-  }
-
-  /**
-   * Interns `value` into the per-distinct-value literal table and wraps it as a `LiteralSlot` on
-   * the int lane. Every folded constant the compiler admits is an int - a day count, a month
-   * count, a date's epoch day - so this is the one place a literal's lane is chosen, as
-   * `columnRef` is for a column's.
-   */
-  private[codegen] def intSlot(value: Int, literals: mutable.LinkedHashMap[Int, Int]): LiteralSlot =
-    new LiteralSlot(literals.getOrElseUpdate(value, literals.size), LaneType.INT)
-
-  /**
-   * Interns `br`'s ordinal into `inputs` and wraps it as a `ColumnRef` on `lane` - shared by
-   * `compileNode`'s date, interval and long leaves and `compileOffset`'s `IntegerType` one.
-   */
-  private[codegen] def columnRef(
-      br: BoundReference,
-      inputs: mutable.LinkedHashMap[Int, Int],
-      lane: LaneType = LaneType.INT): ColumnRef =
-    new ColumnRef(inputs.getOrElseUpdate(br.ordinal, inputs.size), lane)
-
-  /**
-   * `columnRef`'s twin for an input the evaluator derives from `br`: interned under
-   * `VarkaDerivedInput.key` beside the child ordinals, so it takes the next kernel input index
-   * and shares the table's rollback.
-   */
-  private[codegen] def derivedRef(br: BoundReference, kind: VarkaDerivedKind,
-      inputs: mutable.LinkedHashMap[Int, Int]): ColumnRef =
-    new ColumnRef(
-      inputs.getOrElseUpdate(VarkaDerivedInput.key(br.ordinal, kind), inputs.size), LaneType.INT)
-
-  /**
-   * An int operand of a node that is not a day: a foldable int literal as a slot, a bare
-   * `IntegerType` column as a column ref, and any other `IntegerType` expression through
-   * `compileNode`, which is where the fused int fields and the arithmetic arms live. So
-   * `make_date(y + 1, m, d)` fuses, and an operand of the wrong type still declines here with
-   * `position` in the reason rather than reaching an arm that would read it as an int.
-   * `compileNode`'s column leaf stays `DateType`-only, which is why the two leaves above cannot be
-   * left to it.
-   */
-  private[codegen] def compileIntOperand(
-      e: Expression,
-      position: String,
-      inputs: mutable.LinkedHashMap[Int, Int],
-      literals: mutable.LinkedHashMap[Int, Int],
-      sink: DeclineSink): Option[VarkaVectorIR] = e match {
-    case Literal(v: Int, IntegerType) =>
-      Some(intSlot(v, literals))
-    case br: BoundReference if br.dataType == IntegerType => Some(columnRef(br, inputs))
-    case other if other.dataType != IntegerType =>
-      sink.note(s"$position is not an int column or literal", other)
-      None
-    case other => compileNode(other, inputs, literals, sink)
   }
 }

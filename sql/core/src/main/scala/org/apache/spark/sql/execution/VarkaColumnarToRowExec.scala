@@ -108,7 +108,7 @@ case class VarkaColumnarToRowExec(
   }
 
   override lazy val metrics: Map[String, SQLMetric] =
-    VarkaExecMetrics.projectionMetrics(sparkContext)
+    VarkaExecMetrics.projectionMetrics(sparkContext).asScala.toMap
 
   // One driver-side compilation serves both EXPLAIN and the residual-entry count below
   // (task-21 review: the node used to re-run the same pure compile per consumer).
@@ -326,7 +326,7 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
     private def process(input: ColumnarBatch): Iterator[InternalRow] = {
       kernels.serveBatch(input) {
         val rows = runKernels(input)
-        varkaMetrics.varkaBatches.foreach(_ += 1)
+        VarkaExecMetrics.inc(varkaMetrics.varkaBatches)
         rows
       } {
         fallback(input)

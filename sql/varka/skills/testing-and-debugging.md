@@ -672,6 +672,17 @@ smallest tree that still fails the same way. Replay the drawn case with `-Dvarka
   fails when an entry stops reproducing. Prove a change to the shrinker on the planted bugs
   (`misdescribeWordLiveness`, `misdescribeAdd`), not on a bug that may be fixed next week.
 
+The composition fuzzer (`VarkaCoverageCompositionFuzzSuite`, VARKA-294) does the same for its
+three tests: a failure is shrunk to `shrunk to kind=wide options={...} entries=N:` with one
+expression per line, and the lane of a known-failure line is `projection`, `predicate` or `wide`.
+The moves are the entries (ddmin), each entry's expression (a node replaced by a child of its own
+data type) and the options. Two things to know when reading one. The first line of a finding is
+what groups it, so a finding's message puts the case on the lines after it. And the wide test
+draws its batches from a seed taken after the picks, so a case replays on the batches it failed
+on; a wide failure found before VARKA-294 replays its picks, copies and options but not its
+batches. Prove a change to this shrinker on `misdescribeAdd` through a wide case, which shrinks
+a draw of two hundred entries to one.
+
 ## A suite that needs another vector width runs in a JVM of its own, and a guard says when one does not
 
 One species per lane type is what keeps the Vector API's templates monomorphic in a JVM

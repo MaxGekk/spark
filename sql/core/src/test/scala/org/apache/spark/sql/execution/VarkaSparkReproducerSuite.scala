@@ -38,7 +38,7 @@ class VarkaSparkReproducerSuite extends VarkaSparkDifferential {
 
   /** Why the reproducer is not what its status says, or None when it is. */
   private def verdict(r: Reproducer): Option[String] = {
-    val now = disagreement(r.fixture, r.select, r.where, r.ansi, partitions = true)
+    val now = disagreement(r.fixture, r.select, r.where, r.ansi, partitions = true, r.pivot)
     if (r.status == "regression") {
       now.map(kind => s"a regression disagrees again: $kind")
     } else if (!r.status.startsWith("known ")) {
