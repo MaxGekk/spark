@@ -1,0 +1,156 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.spark.sql.catalyst.expressions.codegen.varka;
+
+import java.io.IOException;
+import java.lang.classfile.ClassFile;
+import java.lang.classfile.constantpool.FieldRefEntry;
+import java.lang.classfile.constantpool.PoolEntry;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import jdk.incubator.vector.VectorSpecies;
+
+/**
+ * Fails an in-process test that would put a second vector species of one lane type into the
+ * shared test JVM (VARKA-246, {@code m8/SCOPE.md} item 69).
+ *
+ * <p>Two species of one lane type in a JVM make the Vector API's shared templates inline
+ * bimorphically, and C2 then keeps a heap box per loop iteration in some shapes: a probe measured
+ * the same loops 2.7x to 12.8x slower once a second species had been touched
+ * ({@code sql/varka/skills/vector-api-and-width.md}). The cost lands on every kernel compiled
+ * after the second species ran, and on any test whose verdict is a JIT outcome, which then fails
+ * by the suites' order. Answers stay right, so nothing else notices.
+ *
+ * <p>A kernel emitted at a lanes override names
+ * {@code jdk/incubator/vector/<Lane>Vector.SPECIES_<bits>} ({@code Lane.speciesField}); one
+ * emitted for the JVM's own width names {@code SPECIES_PREFERRED}, or the {@code SPECIES_<bits>}
+ * that is the preferred species. So the bytes say it: a field reference to a
+ * {@code SPECIES_<bits>} whose bit size is not the preferred species' of that vector class is a
+ * second species, and {@link #check} throws on it where a test is about to define the class.
+ *
+ * <p>A test that needs the second width runs it in a JVM of its own (a forked probe, as the
+ * assembly and cliff suites do) or in the gate's {@code -XX:MaxVectorSize=16} JVM, where the
+ * override is the preferred width and so no second species. The class is Java because the
+ * {@code java.lang.classfile} API's types are cyclic in a way scalac rejects.
+ * {@code -Dvarka.speciesGuard=report} records the violations to the file
+ * {@code -Dvarka.speciesGuard.report} names (suite, class, species) and lets the test run, which
+ * is how the census was made; {@code off} disables the guard.
+ */
+public final class VarkaSpeciesGuard {
+
+  private static final Pattern SPECIES = Pattern.compile("SPECIES_(\\d+)");
+  private static final String VECTOR_PREFIX = "jdk/incubator/vector/";
+
+  /** The bit size of {@code owner.SPECIES_PREFERRED} on this JVM, read once per class. */
+  private static final ConcurrentHashMap<String, Integer> PREFERRED_BITS =
+      new ConcurrentHashMap<>();
+
+  private VarkaSpeciesGuard() {
+  }
+
+  /** A suite run in a JVM of its own ({@code VarkaOwnJvm}) may use any species. */
+  private static boolean ownJvm() {
+    return "true".equals(System.getProperty("varka.ownJvm"));
+  }
+
+  private static String mode() {
+    return System.getProperty("varka.speciesGuard", "fail");
+  }
+
+  private static int preferred(String owner) {
+    return PREFERRED_BITS.computeIfAbsent(owner, o -> {
+      try {
+        Object species = Class.forName(o.replace('/', '.')).getField("SPECIES_PREFERRED")
+            .get(null);
+        return ((VectorSpecies<?>) species).vectorBitSize();
+      } catch (ReflectiveOperationException e) {
+        throw new IllegalStateException(e);
+      }
+    });
+  }
+
+  /** The species constants {@code bytes} names that are not their vector class's preferred. */
+  public static List<String> secondSpecies(byte[] bytes) {
+    var found = new ArrayList<String>();
+    for (PoolEntry entry : ClassFile.of().parse(bytes).constantPool()) {
+      if (entry instanceof FieldRefEntry field
+          && field.owner().asInternalName().startsWith(VECTOR_PREFIX)) {
+        String owner = field.owner().asInternalName();
+        Matcher m = SPECIES.matcher(field.name().stringValue());
+        if (m.matches() && Integer.parseInt(m.group(1)) != preferred(owner)) {
+          String named = owner.substring(VECTOR_PREFIX.length()) + ".SPECIES_" + m.group(1)
+              + " (preferred " + preferred(owner) + ")";
+          if (!found.contains(named)) {
+            found.add(named);
+          }
+        }
+      }
+    }
+    return found;
+  }
+
+  /** The suite that is running: the first frame of the stack that is a {@code *Suite}. */
+  private static String suiteName() {
+    for (StackTraceElement frame : Thread.currentThread().getStackTrace()) {
+      String c = frame.getClassName();
+      if (c.endsWith("Suite") || c.contains("Suite$")) {
+        return c;
+      }
+    }
+    return "unknown";
+  }
+
+  /**
+   * Throws if {@code bytes} would define a second species in this JVM; in {@code report} mode
+   * appends the violation to the report file instead.
+   */
+  public static void check(String className, byte[] bytes) {
+    String mode = ownJvm() ? "off" : mode();
+    if (mode.equals("off")) {
+      return;
+    }
+    List<String> second = secondSpecies(bytes);
+    if (second.isEmpty()) {
+      return;
+    }
+    if (mode.equals("report")) {
+      String file = System.getProperty("varka.speciesGuard.report");
+      if (file != null) {
+        String line = suiteName() + "\t" + className + "\t" + String.join(", ", second) + "\n";
+        try {
+          Files.write(Paths.get(file), line.getBytes(StandardCharsets.UTF_8),
+              StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        } catch (IOException e) {
+          throw new IllegalStateException(e);
+        }
+      }
+      return;
+    }
+    throw new IllegalStateException(className + " would put a second vector species into this "
+        + "JVM: " + String.join(", ", second) + ". Run it in a forked JVM, or where "
+        + "-XX:MaxVectorSize makes this width the preferred one (VARKA-246); the shared test JVM "
+        + "keeps one species per lane type.");
+  }
+}

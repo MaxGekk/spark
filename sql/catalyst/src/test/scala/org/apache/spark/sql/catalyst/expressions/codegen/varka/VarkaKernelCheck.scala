@@ -100,6 +100,7 @@ object VarkaKernelCheck {
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Int], batch: Batch,
       declineAllowed: Boolean = false): Boolean = {
     val Batch(length, patterns, data, forceMasked) = batch
+    VarkaSpeciesGuard.check(className, bytes)
     val loader = new VarkaGeneratedClassLoader(getClass.getClassLoader)
     loader.defineGeneratedClass(className, bytes)
     val kernel = loader.loadClass(className).getConstructor().newInstance()
@@ -191,6 +192,7 @@ object VarkaKernelCheck {
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Long], batch: LongBatch,
       declineAllowed: Boolean = false): Boolean = {
     val LongBatch(length, patterns, data, forceMasked) = batch
+    VarkaSpeciesGuard.check(className, bytes)
     val loader = new VarkaGeneratedClassLoader(getClass.getClassLoader)
     loader.defineGeneratedClass(className, bytes)
     val kernel = loader.loadClass(className).getConstructor().newInstance()

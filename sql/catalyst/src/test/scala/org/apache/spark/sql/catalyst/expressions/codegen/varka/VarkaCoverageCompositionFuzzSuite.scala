@@ -59,7 +59,8 @@ import org.apache.spark.sql.types.{DataType, DayTimeIntervalType, TimeType}
  * fixed, shared with the IR fuzzer so a nightly varies both with one property). A failure names
  * the seed, the iteration and the rows, and `-Dvarka.fuzz.only=<iteration>` replays one.
  */
-class VarkaCoverageCompositionFuzzSuite extends SparkFunSuite with VarkaMatrixTests {
+class VarkaCoverageCompositionFuzzSuite
+    extends SparkFunSuite with VarkaMatrixTests with VarkaOwnJvm {
 
   private val seed = sys.props.get("varka.fuzz.seed").map(_.toLong).getOrElse(20260925L)
   private val iterations = sys.props.get("varka.fuzz.compositions").map(_.toInt).getOrElse(40)

@@ -29,7 +29,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
  * root that stores four bytes a row, and the range guard that makes an out-of-range lane a decline
  * rather than a wrap.
  */
-class VarkaEmitterLongLaneSuite extends VarkaEmitterTestBase {
+class VarkaEmitterLongLaneSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   test("the long lane computes what the reference says, at both its widths") {
     // VARKA-85 step 4's proof: the lane-generic subset of the IR emitted against LongVector and

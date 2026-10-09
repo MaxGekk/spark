@@ -78,7 +78,7 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils
  * 10 compositions, a few seconds); `-Dvarka.fuzz.seed` (default fixed, so the committed run is
  * reproducible and a nightly can vary it). The iterations and the seed apply to both lanes.
  */
-class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests {
+class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwnJvm {
 
   private val seed = sys.props.get("varka.fuzz.seed").map(_.toLong).getOrElse(fuzzSeed)
   private val longSeed = sys.props.get("varka.fuzz.seed").map(_.toLong).getOrElse(longFuzzSeed)

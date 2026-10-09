@@ -436,8 +436,14 @@ Varka suite shares, and any kernel compiled there afterwards can box every opera
 right, so only a test whose verdict is a JIT outcome notices, and such a test runs in a JVM of its
 own: the warm-up suite's compile tests failed one full run in three by the suites' order until
 they forked `VarkaKernelWarmupProbe`, as the assembly and cliff suites fork theirs
-(`VARKA-209.md` 13.2). Taking the second species out of the shared JVM is
-`m8/SCOPE.md` item 69.
+(`VARKA-209.md` 13.2). VARKA-246 took the second species out of the shared JVM: nine suites that
+run kernels at another lane count (a census by the emitted bytes, which name
+`<Lane>Vector.SPECIES_<bits>`, found seven where the item named four, and the 128- and 256-bit
+runs two more) mix in `VarkaOwnJvm`, which runs them in a child JVM when they are run in a shared
+one, and `VarkaSpeciesGuard` fails any suite that defines a second species where a test is about to
+load the class. A new suite that needs another width fails with a message that says so; mix
+`VarkaOwnJvm` in last, or run the arm in a forked probe. To run one test of such a suite from sbt,
+set `-Dvarka.ownJvm=true`.
 `VarkaMilestone4MeasurementsBenchmark` did exactly that with its half-width int species in a
 `forks = 0` JVM, which is one named cause of the engine harness's degraded state (the debt register
 in `m4/PLAN.md`). Two tells, either sufficient: an allocation inside a kernel loop body in

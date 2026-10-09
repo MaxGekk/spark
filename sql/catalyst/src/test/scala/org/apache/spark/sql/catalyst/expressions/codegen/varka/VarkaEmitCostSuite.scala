@@ -33,7 +33,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
  * `VarkaEmitCostAuditSuite`'s. The corpus, the fit and the audit are Java
  * (`VarkaEmitCostCorpus`, `VarkaEmitCostFit`, `VarkaEmitCostAudit`); this suite drives them.
  */
-class VarkaEmitCostSuite extends VarkaEmitterTestBase {
+class VarkaEmitCostSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   private def varkaDir(tree: String): Path = getWorkspaceFilePath("sql", "catalyst", "src", tree,
     "java", "org", "apache", "spark", "sql", "catalyst", "expressions", "codegen", "varka")
