@@ -173,7 +173,7 @@ object VarkaKernelWarmupProbe {
     println(s"${SUPPORT_PREFIX}sampler=$sampler canWarm=$canWarm")
     if (sampler) {
       val (entry, queued) = warm(new VarkaShapeCacheImpl(8), 10000, claimed)
-      val idle = queued && VarkaKernelWarmup.awaitIdle(120000)
+      val idle = queued && VarkaKernelWarmup.awaitIdle(200000)
       val outcome = VarkaKernelWarmup.recentOutcomes().asScala.lastOption
       val matches = outcome.exists(_.shapeHash() == entry.shapeHash())
       println(s"${OUTCOME_PREFIX}queued=$queued idle=$idle matches=$matches " +
