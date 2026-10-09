@@ -3635,6 +3635,10 @@ the layers answer differently.
 | the plan-level logic: shape keys, declines, budgets, the regroup's termination | invariants | properties, not machinery: the fuzzer's reflective option draw already covers the key's completeness, and termination is a two-line argument in each plan |
 | HotSpot | - | the trusted base; reading the JVM's own output is the method, and no proof reaches it |
 
+*Revisited on 10 October 2026 by item 90 for the emitter row: a model of the part of the Vector
+API that Varka emits, held to the real API and used to check each emitted kernel, starting with a
+spike.*
+
 **Why the narrow version pays.** Three reasons, none of them about assurance
 for its own sake.
 
@@ -4791,6 +4795,97 @@ Varka: where the reading quotes a speed, it is a source comment in Polars.*
 *Corrections made by this reading* (also noted under the items they correct): item 5's variance
 buffer is `(n, avg, m2)`, and item 33's `pmod` takes the divisor's sign only for a positive
 divisor.
+
+### Item 90. A model of the Vector API subset Varka emits, for proving its kernels
+
+*Added on 10 October 2026, from the owner's question after VARKA-240: item 58 left the emitter
+layer mostly outside a solver's reach because a proof there needs a model of the Vector API, so
+can such a model be built, at least for the part of the API Varka emits? A step becomes a row when
+a milestone takes the item.*
+
+**The answer, in short.** Yes, for that part, and as translation validation rather than a proof of
+the emitter: each emitted kernel checked against the IR it was emitted from, the way Alive2 checks
+each LLVM rewrite (`m7/READING.md` 11). Item 58's "mostly no" was about a general model of the
+Vector API and the memory layout. Varka needs a small fixed subset, almost all of it lane-wise, and
+can hold its model to the real API the way VARKA-240 holds its prelude to the JVM.
+
+**The subset**, counted from the emitter's call sites on 10 October 2026:
+
+| class | what the emitter calls |
+| :--- | :--- |
+| `IntVector` | `add`, `sub`, `mul`, `div`, `min`, `max`, `and`, `or`, `compare`, `blend`, `broadcast`, `lanewise`, `fromMemorySegment`, `intoMemorySegment` |
+| `LongVector` | `mul`, `and`, `or`, `compare`, `lanewise` |
+| `DoubleVector` | `add`, `sub`, `mul`, `div`, `compare`, `lanewise` |
+| `VectorMask` | `and`, `or`, `not`, `anyTrue`, `toLong`, `fromLong` |
+| `Vector` | `convertShape`, `reinterpretAsLongs`, `reinterpretAsDoubles` |
+| `VectorSpecies` | `length`, `loopBound`, `indexInRange` |
+| `VarkaVectorSupport`, Varka's own | `ofAddress`, `zero`, `validityBitsAt`, `orValidityBitsAt`, `putValidityWord`, `setValid`, `copyColumnValidity`, `prepareOutputValidity`, `everyOutputReadsAnAllNullColumn` |
+
+Thirty-seven API methods, nine helpers, and fourteen operators: `AND`, `XOR`, `SUB`, `NEG`, `ASHR`,
+`LSHR`, `I2L`, `L2I` and the comparisons `EQ`, `LT`, `LE`, `GT`, `GE`, `ULE`. The count is of
+literal call sites; the first step checks it against what the parsed classes actually invoke.
+
+**The model.**
+
+* *Lane-wise operations* - the arithmetic, `min`, `max`, the bitwise ones, `lanewise` with its
+  operators, `compare` and `blend` - are the scalar Java operator in each lane, which
+  `sql/varka/proofs/java.smt2` already states: a vector of N lanes is N terms, a mask N booleans,
+  `blend` a choice per lane.
+* *Cross-lane operations* are where plumbing bugs live, and get the care: `toLong` and `fromLong`
+  pack and unpack lane booleans as bits, `convertShape` takes a part number that selects which
+  lanes of the source fill the result, and `reinterpretAs*` re-reads bits. The API's documentation
+  specifies each exactly, with a scalar equivalent per operation, and the JDK's Java fallback, which
+  runs when C2 does not intrinsify (`m7/READING.md` 11), is an executable reading of the same.
+* *Memory* is the input and output buffers of one lane group, little-endian, addressed by the
+  group's index. `VarkaVectorSupport`'s helpers are modelled from their own source, over Arrow's
+  bit-packed, least-significant-bit-first validity.
+* *Doubles* need floating-point theory and are left out of the first steps; row 241's spike says
+  which solver takes them.
+
+**How a kernel is proven.** Read the emitted class back with the ClassFile API; execute its loop
+method symbolically for one lane group at a symbolic index, and its epilogue for a symbolic tail
+length; then ask whether, on every path that does not decline, the output data on valid lanes and
+the output validity equal the IR's reference semantics (`VarkaReferenceEvaluator`), data free under
+a null bit. That the groups cover the batch, each row once, is a property of the driver template,
+proven once. The corpus is the bytes oracle's - every coverage row and the fixed fuzz shapes at
+both widths, which `emitted_bytes.json` pins.
+
+**Holding the model to the API.** Every modelled method gets a JVM check, as `java_check.smt2` is
+for the prelude: the real operation, run on boundary and random lanes at each width, against what
+the model predicts. Item 58's worry, that the risk lives in the model, then rests on evidence.
+
+**What it would catch, and what not.** The emitter bugs on record are this layer's: a byte-per-lane
+read of a bit-packed validity buffer, two guarded shifts that did not compose until the guard was
+re-armed, and the all-null forced batch of length one (item 58). It proves the kernels it is run
+on, not the emitter, so an IR tree outside the corpus is still the fuzzers'; and C2's compilation of
+the API to instructions stays trusted, which rows 272 and 274 test.
+
+**The risk that decides it.** A kernel mixes multiplies by constants, which a solver proves over
+integers, with bitwise validity and mask work, which it proves over bit-vectors, and VARKA-240 met
+each encoding failing on the other's half. The multiply-high over bit-vectors ran past five minutes
+under Z3, cvc5 and Bitwuzla alike; the leap hash over integers ran past ten minutes under Z3, while
+over bit-vectors all three prove it in half a second and find 102500 as its first wrong year, as
+`VarkaChrono.LEAP_HASH_MAX_BIASED_YEAR` says. The plan is to split each kernel's proof - the data
+lanes over integers, the validity and masks over bit-vectors, joined only through the guards'
+comparisons - which is plausible and unmeasured. Hence a spike first.
+
+**What to build, and done when.**
+
+1. **A spike** on two kernels at one width: the int lane's `ConstDivide`, whose arithmetic VARKA-240
+   proved, so that the spike adds only the plumbing - the loads, the `convertShape` halves, the
+   `L2I` parts, the `or` that rejoins them, the stores - and one validity-heavy shape, a nullable
+   add. Model only their calls. Record the model's size, each proof's solve time, and whether two
+   historical bugs, replanted, are caught: the byte-per-lane validity read, and a `convertShape` with
+   the wrong part. Done when those numbers and verdicts are recorded and this item says go or no.
+2. **The subset**, if the spike says go: every method in the table modelled and checked against the
+   JVM, every shape in the bytes corpus proven at both widths or carrying a recorded reason it is
+   not, run nightly, and in the linters' job if it fits their minute.
+3. **The doubles**, under floating-point theory, after row 241.
+
+**What it does not do.** No proof of the emitter for every IR tree, no model of C2 or of the
+intrinsics, and no shape outside the corpus. Item 59's specification, rows 243 to 245, is what the
+reference semantics would be stated against once it lands; until then it is the reference
+evaluator, which row 276 holds to Spark's interpreter.
 
 ## 5. Ordering
 
