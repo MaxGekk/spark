@@ -487,7 +487,10 @@ final class VarkaTimeCompiler {
     Option<VarkaVectorIR> nanos;
     if (interval instanceof Literal literal && literal.value() instanceof Long micros
         && literal.dataType() instanceof DayTimeIntervalType) {
-      if (Math.abs(micros) > DateTimeConstants.MICROS_PER_DAY) {
+      // A range and not `Math.abs(micros) > day`: the absolute value of Long.MIN_VALUE is
+      // negative, so that guard let the one interval whose multiply by 1000 wraps to zero
+      // through to a kernel that then added nothing, where Spark's multiplyExact throws.
+      if (micros < -DateTimeConstants.MICROS_PER_DAY || micros > DateTimeConstants.MICROS_PER_DAY) {
         nanos = sink.decline(label + ": the interval is longer than a day, so every time crosses "
             + "midnight and the row engine raises the error", si);
       } else {
