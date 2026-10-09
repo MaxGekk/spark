@@ -64,7 +64,6 @@ class VarkaSpeciesGuardSuite extends VarkaEmitterTestBase {
     assert(conflicts.exists(_.startsWith("IntVector.SPECIES_")), conflicts)
     // A refusal registers nothing, so a kernel of the established width still passes.
     assert(registry.admit(bytesAt(VarkaMatrix.base)._2).isEmpty)
-    assert(!VarkaOwnJvm.inChild, "the guard is off in a suite's own JVM")
   }
 
   test("a JVM that runs every kernel at one other width is consistent, not a violation",

@@ -48,14 +48,18 @@ import jdk.incubator.vector.VectorSpecies;
  * <p>A kernel emitted at a lanes override names
  * {@code jdk/incubator/vector/<Lane>Vector.SPECIES_<bits>} ({@code Lane.speciesField}); one
  * emitted for the JVM's own width names {@code SPECIES_PREFERRED}, or the {@code SPECIES_<bits>}
- * that is the preferred species. So the bytes say it: a field reference to a
- * {@code SPECIES_<bits>} whose bit size is not the preferred species' of that vector class is a
- * second species, and {@link #check} throws on it where a test is about to define the class.
+ * that is the preferred species. So the bytes say which size a class uses, per vector class.
  *
- * <p>The check is against the species the JVM has already used, not against the preferred one,
- * because a matrix configuration that pins the lane count ({@code lanesOverride=4}) runs every
- * suite at one width that is not the preferred: one species per lane type is what keeps the
- * templates monomorphic, however it is spelled.
+ * <p>{@link #check} throws where a test is about to define a class that would add a second size
+ * to a vector class beside the ones the JVM has already used (the {@link Registry}); the check is
+ * against the species already used, not against the preferred one, because a matrix
+ * configuration that pins the lane count ({@code lanesOverride=4}) runs every suite at one width
+ * that is not the preferred: one species per lane type is what keeps the templates monomorphic,
+ * however it is spelled. The registry is first-come: the class that adds the second size is the
+ * one reported, with the size already established, so read the message for both. A class that
+ * names two sizes of one vector class by design (a configuration that stores an int species at
+ * the long lane's lane count) is reported as such; none of the four lane-related matrix
+ * configurations does.
  *
  * <p>A test that needs the second width runs it in a JVM of its own (a forked probe, as the
  * assembly and cliff suites do) or in the gate's {@code -XX:MaxVectorSize=16} JVM, where the
@@ -66,6 +70,9 @@ import jdk.incubator.vector.VectorSpecies;
  * is how the census was made; {@code off} disables the guard.
  */
 public final class VarkaSpeciesGuard {
+
+  /** Set in a suite's own JVM ({@code VarkaOwnJvm}), where any species may be used. */
+  public static final String OWN_JVM_PROPERTY = "varka.ownJvm";
 
   private static final Pattern SPECIES = Pattern.compile("SPECIES_(\\d+)");
   private static final String VECTOR_PREFIX = "jdk/incubator/vector/";
@@ -79,7 +86,7 @@ public final class VarkaSpeciesGuard {
 
   /** A suite run in a JVM of its own ({@code VarkaOwnJvm}) may use any species. */
   private static boolean ownJvm() {
-    return "true".equals(System.getProperty("varka.ownJvm"));
+    return "true".equals(System.getProperty(OWN_JVM_PROPERTY));
   }
 
   private static String mode() {
@@ -101,17 +108,12 @@ public final class VarkaSpeciesGuard {
   /** The species constants {@code bytes} names that are not their vector class's preferred. */
   public static List<String> secondSpecies(byte[] bytes) {
     var found = new ArrayList<String>();
-    for (PoolEntry entry : ClassFile.of().parse(bytes).constantPool()) {
-      if (entry instanceof FieldRefEntry field
-          && field.owner().asInternalName().startsWith(VECTOR_PREFIX)) {
-        String owner = field.owner().asInternalName();
-        Matcher m = SPECIES.matcher(field.name().stringValue());
-        if (m.matches() && Integer.parseInt(m.group(1)) != preferred(owner)) {
-          String named = owner.substring(VECTOR_PREFIX.length()) + ".SPECIES_" + m.group(1)
-              + " (preferred " + preferred(owner) + ")";
-          if (!found.contains(named)) {
-            found.add(named);
-          }
+    for (var e : sizesUsed(bytes).entrySet()) {
+      int preferred = preferred(e.getKey());
+      for (int bits : e.getValue()) {
+        if (bits != preferred) {
+          found.add(e.getKey().substring(VECTOR_PREFIX.length()) + ".SPECIES_" + bits
+              + " (preferred " + preferred + ")");
         }
       }
     }

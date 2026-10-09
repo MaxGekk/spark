@@ -672,6 +672,28 @@ smallest tree that still fails the same way. Replay the drawn case with `-Dvarka
   fails when an entry stops reproducing. Prove a change to the shrinker on the planted bugs
   (`misdescribeWordLiveness`, `misdescribeAdd`), not on a bug that may be fixed next week.
 
+## A suite that needs another vector width runs in a JVM of its own, and a guard says when one does not
+
+One species per lane type is what keeps the Vector API's templates monomorphic in a JVM
+(`vector-api-and-width.md`), so the shared test JVM must not define a kernel at a width beside the
+one it has used (VARKA-246). `VarkaSpeciesGuard` reads the emitted bytes and throws, at
+`VarkaEmitterTestBase.load` and `VarkaKernelCheck`'s runners, where a class would add a second size
+to a vector class; it compares with the sizes already used and not with the preferred one, so the
+option matrix's `lanesOverride=4` configuration (every kernel at 128 bits) is consistent. Two modes
+of the guard: `-Dvarka.speciesGuard=report -Dvarka.speciesGuard.report=<file>` appends every class
+that names a non-preferred species (suite, class, species) and lets the test run, which is how to
+take a census; `-Dvarka.speciesGuard=off` disables it.
+
+A suite that must run at another width mixes in `VarkaOwnJvm`, last. In a shared JVM its tests keep
+their names and tags, and the first to run starts a child JVM running the suite and reading its
+JUnit report; the others take their result from it. A name filter (`-z`) selects the tests it
+names, but the child runs the whole suite. To run one test directly, set
+`-Dvarka.ownJvm=true` (the guard is off there). The child is ended after the shortest per-test cap
+less a minute (`-Dvarka.ownJvm.timeoutMinutes` overrides), so a hung child is reported before a cap
+halts the parent. Run a new width-dependent test at all three widths a runner may have
+(`-XX:MaxVectorSize=64`, `32`, `16`): a 16-lane override is the preferred width at 512 bits and a
+second species at the others.
+
 ## The random differential against Spark: read the shrunk reproducer, check the pool, mind the fixture
 
 `VarkaSparkFuzzSuite` (VARKA-262) composes random outputs and filters from the rows of

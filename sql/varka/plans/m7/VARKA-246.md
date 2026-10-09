@@ -44,6 +44,8 @@ live in the product.
 
 ### 3.1 The guard: `VarkaSpeciesGuard` (test, Java)
 
+*Superseded in part by 9.1: the check is against the sizes the JVM has already used (a registry), not against `SPECIES_PREFERRED`; read 9.1 first.*
+
 Reads a class's constant pool with `java.lang.classfile` (Java because scalac rejects that API's
 cyclic types) and reports every `SPECIES_<bits>` field of a vector class whose size is not that
 class's `SPECIES_PREFERRED`. `check(className, bytes)` throws where a test is about to define
@@ -175,4 +177,19 @@ All four lane-related configurations (`lanesOverride=4`, `lanesOverride=16`,
 `narrowHalfSpecies=true`, `validityByWidth=false`) pass over every catalyst suite, as do the
 defaults. The prediction in section 6.1 that the guard finds no violation "at 512, 256 or 128
 bits" was about the defaults; it said nothing of the matrix, which is where it failed.
+
+### 9.2 Review of #685 (`/code-review high`), 9 October 2026
+
+Fixed in the PR: the child's timeout never fired (the read loop ends only when the child does; a
+daemon thread ends it now, and the child is destroyed on any exit, with a budget of the shortest
+per-test cap less a minute, so the parent reports a hang before a cap halts the JVM); the forked
+suites became one synthetic test, so a `-z` filter matched nothing and reported green (each suite
+keeps its tests by name and tags and takes each result from the child's JUnit report); a stray
+assertion in the guard's suite failed it under `-Dvarka.ownJvm=true`; the guard's class doc and
+plan 3.1 described the pre-correction rule; `testing-and-debugging.md` was in the files table and
+not in the PR (written); `secondSpecies` repeated `sizesUsed`'s walk (derived from it) and the
+property's name was written twice (one constant); the child classpath preferred
+`SPARK_DIST_CLASSPATH` over the parent's own (the parent's, when it holds ScalaTest). Not changed:
+the registry is first-come, so the class that adds the second size is the one blamed; the message
+now names the size already established, and the class doc says so.
 
