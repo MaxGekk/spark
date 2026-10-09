@@ -233,19 +233,24 @@ object VarkaShrinker {
 
   // ---- options --------------------------------------------------------------------------
 
-  private def shrinkOptions(c: VarkaFuzzCase, fails: VarkaFuzzCase => Boolean): VarkaFuzzCase = {
+  private def shrinkOptions(c: VarkaFuzzCase, fails: VarkaFuzzCase => Boolean): VarkaFuzzCase =
+    c.copy(options = shrinkOptionsOf(c.options)(o => fails(c.copy(options = o))))
+
+  /**
+   * `options` with as few of its differences from the defaults as still make `fails` true, by
+   * `ddmin` over the differing options. Shared with the composition shrinker (VARKA-294).
+   */
+  def shrinkOptionsOf(options: VarkaEmitOptions)(
+      fails: VarkaEmitOptions => Boolean): VarkaEmitOptions = {
     val changed = VarkaEmitOption.TABLE.asScala.toVector
-      .filter(o => o.text(c.options) != o.text(VarkaEmitOptions.DEFAULTS))
+      .filter(o => o.text(options) != o.text(VarkaEmitOptions.DEFAULTS))
     def with_(kept: Vector[VarkaEmitOption]): VarkaEmitOptions = {
-      val builder = c.options.toBuilder
+      val builder = options.toBuilder
       changed.filterNot(kept.contains).foreach(_.applyDefault(builder))
       builder.build()
     }
-    if (changed.isEmpty) c
-    else {
-      val kept = ddmin(changed) { subset => fails(c.copy(options = with_(subset))) }
-      c.copy(options = with_(kept))
-    }
+    if (changed.isEmpty) options
+    else with_(ddmin(changed) { subset => fails(with_(subset)) })
   }
 
   // ---- the batch ------------------------------------------------------------------------
