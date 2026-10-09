@@ -278,7 +278,7 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
     }
 
     private val kernels = new VarkaKernelEvaluator(
-      projectList, childOutput, offHeapColumnVectorEnabled, operatorName = "ProjectToRow",
+      projectList, childOutput, offHeapColumnVectorEnabled, "ProjectToRow",
       classDumpDirectory, varkaMetrics, emitUseAVX, warmupEnabled)
 
     // Merge-at-row (see 2.3): for a projection with forwarded or residual entries the

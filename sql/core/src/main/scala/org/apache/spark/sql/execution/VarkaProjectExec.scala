@@ -156,7 +156,7 @@ private[sql] class VarkaProjectEvaluatorFactory(
   private class VarkaProjectEvaluator extends PartitionEvaluator[ColumnarBatch, ColumnarBatch] {
 
     private val kernels = new VarkaKernelEvaluator(
-      projectList, childOutput, offHeapColumnVectorEnabled, operatorName = "Project",
+      projectList, childOutput, offHeapColumnVectorEnabled, "Project",
       classDumpDirectory, varkaMetrics, emitUseAVX, warmupEnabled)
 
     /**

@@ -29,7 +29,7 @@ import org.apache.arrow.vector.{BaseFixedWidthVector, DateDayVector, IntervalYea
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.catalyst.expressions.{Add, Alias, AttributeReference, CaseWhen, Coalesce, DateAdd, DateAddYMInterval, If, In, LessThan, Literal, NamedExpression, NextDay, Remainder, TruncDate, Year}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaDebugInfoReader, VarkaMatrix, VarkaShapeCache}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaDebugInfoReader, VarkaEmitOptions, VarkaMatrix, VarkaShapeCache}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
@@ -74,8 +74,8 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession with V
   private def evaluator(
       projectList: Seq[NamedExpression] = mixedList,
       classDumpDirectory: Option[String] = None): VarkaKernelEvaluator =
-    new VarkaKernelEvaluator(projectList, childOutput, offHeapColumnVectorEnabled = false,
-      operatorName = "Test", classDumpDirectory)
+    new VarkaKernelEvaluator(projectList, childOutput, false, "Test", classDumpDirectory,
+      VarkaExecMetrics.NONE, VarkaEmitOptions.USE_AVX_UNKNOWN, false)
 
   /** Runs `body` inside an empty task context with a private Arrow child allocator. */
   private def withTask(body: (ColumnarBatch, () => Unit) => Unit): Unit = {
@@ -231,9 +231,8 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession with V
     withTask { (input, _) =>
       val byDefault = evaluator()
       byDefault.release(byDefault.project(input))
-      val atTwo = new VarkaKernelEvaluator(mixedList, childOutput,
-        offHeapColumnVectorEnabled = false, operatorName = "Test", None, VarkaExecMetrics.NONE,
-        emitUseAVX = 2)
+      val atTwo = new VarkaKernelEvaluator(mixedList, childOutput, false, "Test", None,
+        VarkaExecMetrics.NONE, 2, false)
       atTwo.release(atTwo.project(input))
       val defaultBytes = byDefault.emittedClassBytes.get
       val level2Bytes = atTwo.emittedClassBytes.get
@@ -311,8 +310,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession with V
       val projectList: Seq[NamedExpression] = Seq(
         Alias(DateAddYMInterval(attrD, ymAttr), "a")(),
         Alias(Coalesce(Seq(ymAttr, Literal(0, ymAttr.dataType))), "b")())
-      val kernels = new VarkaKernelEvaluator(projectList, output,
-        offHeapColumnVectorEnabled = false, operatorName = "Test", None)
+      val kernels = new VarkaKernelEvaluator(projectList, output, false, "Test")
       assert(kernels.canRun(input), "an IntervalYearVector input should be servable")
       val out = kernels.project(input)
       assert(out.numCols() === 2)
@@ -370,8 +368,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession with V
       val buffers = Seq(asInt, asInterval).map { projectList =>
         val input = VarkaColumnarToRowExecSuite.buildBatch(
           BatchSpec("arrow", Seq(counts, counts)), output, allocator)
-        val kernels = new VarkaKernelEvaluator(projectList, output,
-          offHeapColumnVectorEnabled = false, operatorName = "Test", None)
+        val kernels = new VarkaKernelEvaluator(projectList, output, false, "Test")
         assert(kernels.canRun(input), "both spellings should be servable")
         val out = kernels.project(input)
         val vector = out.column(0).asInstanceOf[ArrowColumnVector].getValueVector()
@@ -459,7 +456,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession with V
 
   private def weekdayEvaluator(failOnError: Boolean): VarkaKernelEvaluator =
     new VarkaKernelEvaluator(Seq(Alias(NextDay(attrD, attrS, failOnError), "a")()),
-      Seq(attrD, attrS), offHeapColumnVectorEnabled = false, operatorName = "Test", None)
+      Seq(attrD, attrS), false, "Test")
 
   /** A date column beside a string column, the batch a cached table hands the evaluator. */
   private def weekdayBatch(
@@ -568,7 +565,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession with V
     try {
       val kernels = new VarkaKernelEvaluator(
         Seq(Alias(NextDay(attrD, attrS, failOnError = false), "a")()),
-        Seq(attrD, attrS), offHeapColumnVectorEnabled = false, operatorName = "Test", None) {
+        Seq(attrD, attrS), false, "Test") {
         override protected def taskAllocator(): BufferAllocator = {
           // Still register the completion listener the real one registers; only the allocator
           // it hands back differs.
@@ -659,7 +656,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession with V
 
   private def truncEvaluator(): VarkaKernelEvaluator =
     new VarkaKernelEvaluator(Seq(Alias(TruncDate(attrD, attrS), "a")()), Seq(attrD, attrS),
-      offHeapColumnVectorEnabled = false, operatorName = "Test", None)
+      false, "Test")
 
   /** The row engine's answer: null for a null date, a null format or a non-date level. */
   private def truncOf(d: java.lang.Integer, fmt: String): java.lang.Integer = {

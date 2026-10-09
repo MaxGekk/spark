@@ -241,3 +241,53 @@ in every round whichever side ran first. The first pair's median reading of 11.7
 drift it was said to be: the Scala's values there ranged 534 to 680 across rounds, the Java's 503
 to 679, and this run's spread is 19% on the Scala side. By medians in the second pair eleven of
 the twelve cases are faster by rate and one (1,024-row `trunc`) is 0.5% slower, inside its spread.
+
+### 9.5 Step 267c, the projection evaluator
+
+Done on 9 October 2026. `VarkaKernelEvaluator` and `VarkaOwnedArrowColumnVector` are Java; the Scala
+file is deleted. The two nodes pass `operatorName` positionally (Scala cannot name a Java
+parameter), the evaluator suite's seven construction sites were adapted, and a four-argument
+constructor keeps the defaults a suite or diagnostic builds with. What changed in shape: the output
+batch's layout (fused, kernel, forwarded or residual, and the index in each) is read once from the
+classification into three arrays that `project` walks per batch, where the Scala built a list of
+columns through `map` and `toArray` on every batch; the further kernels are an array of
+`VarkaKernelPart`, asked in a loop with the decline or failure of one rethrown naming it, where the
+Scala used a by-name `blamed`; and the functional object that hands the kernel its output vectors is
+made once. The Scala data model is still read through its accessors, with the one instanceof ladder
+(ending in a throw) that row 300 turns into a `switch`.
+
+**The proof held.** The 37 Varka suites of `sql` pass at the default width (526 tests, none
+failed, six cancelled as opt-in), `scalastyle` on main and test is clean, and no emitter or
+compiler file changed, so `emitted_bytes.json` and `coverage.json` are untouched. The 128-bit
+companion run is left to CI.
+
+**The measurement.** Five interleaved rounds of `VarkaEvaluatorOverheadBenchmark`, the Scala
+evaluator on `master` against the Java one, committed whole in
+`sql/core/benchmarks/VarkaEvaluatorOverheadBenchmark-jdk25-267c-pair-results.txt`. By the pair
+tool's medians, twelve cases: none slower by the tool's 10% (the worst is the 1-row filter, 3% slower),
+six faster by 10% or more. The projection cases moved most -
+`date_add` at 1, 16 and 1,024 rows by 20%, 22% and 14%, `least` at 1 and 16 rows by 22% and 18%, `trunc`
+at 1 row by 13% - and the filter cases, which 267b already moved, stayed within 3% of the Scala.
+
+**Predictions scored (6.1).** 2: *the time half held and was better than predicted, as in 267b*:
+no case is slower beyond 3%, and "within 5% either way" was refuted on the fast side. The allocation half is
+still unmeasured, so it stands unscored. 3: **refuted**: the Java files are 605 lines against the
+Scala's 358 (1.7 times, where the band was no more than half again); the Java carries the same
+documentation and a layout table, an explicit constructor pair, and the plumbing Scala hid in
+`lazy val` and pattern matches. Row 267 is done.
+
+**Review of #694 (`/code-review high`).** Fixed in the PR, none of it a wrong answer: the cold-path
+benchmark silenced a logger the emission warning no longer uses (it moved to the base in 267b);
+`project` allocated an owned list, a `List` view, a sized-zero `toArray` and the kernels' column
+array per batch, and now reuses the list and the array, so a batch allocates its output columns, its
+batch and the owned array its tracking keeps; the classification was walked three times with three
+copies of the spec test, and `layout` now reads it once with a pattern `switch` (its `default` the one
+row 300 removes) and hands the further kernels' entries and the residual entries to the two other
+readers; the four settings the subclass copied from the base to build a further kernel are now the
+base's own `kernelPart` factory, so the first kernel and the further ones cannot drift apart; a further
+kernel names itself in a decline or failure (`VarkaKernelPart` overrides `kernelReady` and
+`runKernel`) instead of every caller wrapping it; and the residual expressions are a local, so the
+unchecked cast helper is gone, which leaves the Java at 586 lines (1.6 times the Scala). The 37 suites pass
+again (526 tests). The benchmark pair above ran
+before these changes; the per-batch path only lost allocations, so it was not rerun.
+
