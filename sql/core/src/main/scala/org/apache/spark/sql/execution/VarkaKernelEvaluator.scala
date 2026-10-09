@@ -96,7 +96,7 @@ private[sql] class VarkaKernelEvaluator(
     offHeapColumnVectorEnabled: Boolean,
     operatorName: String,
     classDumpDirectory: Option[String] = None,
-    metrics: VarkaExecMetrics = VarkaExecMetrics(),
+    metrics: VarkaExecMetrics = VarkaExecMetrics.NONE,
     emitUseAVX: Int = VarkaEmitOptions.USE_AVX_UNKNOWN,
     warmupEnabled: Boolean = false)
     extends VarkaEvaluatorBase(childOutput, operatorName, classDumpDirectory, metrics,
