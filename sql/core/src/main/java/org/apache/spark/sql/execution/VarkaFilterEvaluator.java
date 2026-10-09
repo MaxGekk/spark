@@ -122,7 +122,6 @@ public class VarkaFilterEvaluator extends VarkaEvaluatorBase {
 
   private CompiledVarkaPredicate predicate() {
     if (!compiledResolved) {
-      compiledResolved = true;
       Option<CompiledVarkaPredicate> all = VarkaExpressionCompiler$.MODULE$
           .compilePredicate(condition, childAttributes(), emitOptions());
       if (all.isDefined() && all.get().residualConjuncts().isEmpty()) {
@@ -143,6 +142,7 @@ public class VarkaFilterEvaluator extends VarkaEvaluatorBase {
                   VarkaFusionReport.predicateLines(condition, childAttributes(), emitOptions()))));
         }
       }
+      compiledResolved = true;
     }
     return compiled;
   }

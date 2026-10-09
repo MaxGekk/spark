@@ -243,10 +243,6 @@ public abstract class VarkaEvaluatorBase {
     };
   }
 
-  protected final VarkaExecMetrics evaluatorMetrics() {
-    return metrics;
-  }
-
   protected final String evaluatorOperator() {
     return operatorName;
   }
@@ -264,6 +260,8 @@ public abstract class VarkaEvaluatorBase {
 
   private CompiledVarkaProjection plan() {
     if (!planResolved) {
+      // Marked resolved only once the subclass's compile has returned, so a throw (a compile that
+      // fails the task) is met again by the next call, as the Scala lazy val it replaces met it.
       Option<CompiledVarkaProjection> fused = fusedPlan();
       if (fused.isDefined()) {
         plan = fused.get();
@@ -271,7 +269,7 @@ public abstract class VarkaEvaluatorBase {
         inputOrdinals = new int[ordinals.size()];
         derivedInput = new boolean[ordinals.size()];
         for (int i = 0; i < inputOrdinals.length; i++) {
-          inputOrdinals[i] = (Integer) ordinals.get(i);
+          inputOrdinals[i] = ((Number) ordinals.get(i)).intValue();
           derivedInput[i] = plan.derivedAt(i).isDefined();
         }
         outputTypes = CollectionConverters.asJava(plan.outputTypes()).toArray(new DataType[0]);
@@ -279,11 +277,6 @@ public abstract class VarkaEvaluatorBase {
       planResolved = true;
     }
     return plan;
-  }
-
-  /** The compiled fused plan, or null where nothing is eligible. */
-  protected final CompiledVarkaProjection compiledPlan() {
-    return plan();
   }
 
   private VarkaKernelScratch scratch() {
@@ -309,10 +302,6 @@ public abstract class VarkaEvaluatorBase {
     return accounting;
   }
 
-  protected final VarkaFallbackAccounting fallbackAccounting() {
-    return accounting();
-  }
-
   /**
    * Whether this evaluator's kernels are warmed before they serve batches: the warm-up is on and
    * this JVM can warm. A warmed kernel is its own class, under the name the C1-exclusion directive
@@ -335,7 +324,6 @@ public abstract class VarkaEvaluatorBase {
    */
   protected final VarkaKernelRunner fusedRunner() {
     if (!runnerResolved) {
-      runnerResolved = true;
       CompiledVarkaProjection compiled = plan();
       if (compiled != null) {
         try {
@@ -360,6 +348,10 @@ public abstract class VarkaEvaluatorBase {
           emissionFailed(e);
         }
       }
+      // Marked resolved after a success or a failure the fallback answers, and not after one that
+      // propagates: a later call builds the runner again instead of reading a null as "emission
+      // failed" and falling back silently.
+      runnerResolved = true;
     }
     return runner;
   }
@@ -407,7 +399,7 @@ public abstract class VarkaEvaluatorBase {
     List<Object> list = CollectionConverters.asJava(values);
     int[] out = new int[list.size()];
     for (int i = 0; i < out.length; i++) {
-      out[i] = (Integer) list.get(i);
+      out[i] = ((Number) list.get(i)).intValue();
     }
     return out;
   }
@@ -416,7 +408,7 @@ public abstract class VarkaEvaluatorBase {
     List<Object> list = CollectionConverters.asJava(values);
     long[] out = new long[list.size()];
     for (int i = 0; i < out.length; i++) {
-      out[i] = (Long) list.get(i);
+      out[i] = ((Number) list.get(i)).longValue();
     }
     return out;
   }

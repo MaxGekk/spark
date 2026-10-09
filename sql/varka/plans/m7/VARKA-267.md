@@ -194,10 +194,35 @@ noise is minimums, which say the Java is faster everywhere, by most at one row (
 cost: the Scala asked a `Map` for each input's derived note and built an `Either` and a
 `Some` per batch).
 
-**Predictions scored (6.1).** 2: *held on the part that matters, refuted on the part that
-bounded it*: no case is slower by minimums (the bar was 7%), but the cases are not "within 5%
-either way": eight are faster by 5% or more, up to 20%. 3: the Java files total 1,466 lines
-(base 799 with its docs, filter evaluator 501, part 63, path 31, against 1,008 Scala), 1.45 times
-the Scala, outside the "no more than half again" band by a hair; the doc comments the Scala
-carried are kept.
+**Predictions scored (6.1), as corrected in 9.3.** 2: *the time half held and is better than
+predicted; the allocation half was not measured.* No case is slower by minimums (the bar was 7%),
+and eight are faster by 5% or more, up to 20%, so "within 5% either way" was refuted on the fast side;
+"per-batch allocation at or below the Scala's" has no reading (see 9.3). 3: the Java files total
+1,366 lines (base 807, filter evaluator 447, part 80, path 32), against the 1,001 Scala lines they
+replace (559, 382, 60): 1.36 times, inside the "no more than half again" band, so prediction 3
+held.
 
+### 9.3 Review of #689 (`/code-review high`), 9 October 2026
+
+Fixed in the PR: `fusedRunner()` and the filter evaluator's predicate marked themselves resolved
+before building, so a throw that is not answered by the fallback (an `InterruptedException`, an
+`Error` from the shape cache) left the evaluator with a permanent null that read as "emission
+failed" and fell back silently on every later batch, where the Scala `lazy val` retried; they mark
+after a success or a failure the fallback answers, and `plan()` after the compile returns. Three
+accessors nothing called (`compiledPlan`, `evaluatorMetrics`, `fallbackAccounting`) are deleted;
+the integer and long literal tables are read through `Number`, so a boxed type that is not
+exactly `Integer` or `Long` cannot throw `ClassCastException`; a doc comment named
+`VarkaKernelEvaluator.allocationSchedule`, which moved to the base. The line counts above replace
+the ones in 9.2, which did not match the files.
+
+Not fixed, said plainly. **The allocation claim is a reading, not a measurement:** that the Java
+allocates less than the Scala per batch (no `Either`, no `Some` from `derivedAt`, no `Map` lookup)
+comes from reading the code; the overhead benchmark reports time, and no reading of allocation was
+taken on either side, so prediction 2's allocation half stands unscored. **The two closures per batch
+move to the call site:** each `serveBatch` call builds two closures in the Scala nodes, as the
+by-name thunks it replaces were built, so the rule against allocation on the batch path is met by
+the Java and not by the path as a whole; a per-node serve method removes them and is a later step.
+**1-row `date_add` is not cleanly drift:** its five Scala runs (680, 545, 549, 534, 539 ns) and five
+Java runs (503, 556, 679, 617, 643) move in opposite directions across rounds, and the order
+alternates, which a real regression in the later rounds would also produce. The minimum says faster
+and the median says slower; a second run settles it and is recorded below when it has run.

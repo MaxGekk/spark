@@ -19,7 +19,10 @@ package org.apache.spark.sql.execution;
 /**
  * One of the two paths {@link VarkaEvaluatorBase#serveBatch} runs a batch down: the kernel's or
  * the caller's fallback. The Scala exec nodes pass their closures as these; the evaluator calls
- * them and writes no lambda of its own on the batch path (VARKA-267).
+ * them and writes no lambda of its own on the batch path (VARKA-267). The closures themselves are
+ * the nodes': each batch builds the two, as the Scala by-name thunks it replaces were built, so the
+ * allocation the rule names is moved to the call site and not removed (a per-node serve method
+ * would remove it, and is a later step).
  *
  * @param <T> what a path produces: an output batch, or a row iterator
  */
