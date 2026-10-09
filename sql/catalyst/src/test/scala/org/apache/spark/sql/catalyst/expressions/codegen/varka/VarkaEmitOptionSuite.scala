@@ -106,7 +106,8 @@ class VarkaEmitOptionSuite extends SparkFunSuite with VarkaTestWatchdog {
 
   test("the reasons the table records") {
     def reasonOf(name: String): Reason = VarkaEmitOption.named(name).reason
-    for (name <- Seq("misdescribeAdd", "misdescribeWordLiveness", "misdescribeDriverBytes")) {
+    for (name <- Seq("misdescribeAdd", "misdescribeWordLiveness", "misdescribeDriverBytes",
+        "forceResidualAt", "misdescribeRollback")) {
       assert(reasonOf(name) === Reason.FAULT_INJECTOR, name)
     }
     for (name <- Seq("division", "useAVX")) {

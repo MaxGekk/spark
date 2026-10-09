@@ -53,7 +53,8 @@ object VarkaSparkFuzz {
   /**
    * A case. `data` is a list of rows of twelve SQL literals, in the order of `columns`. `op` is
    * `AND` or `OR`, joining the conjuncts. A `pivot` is one of the rows `data` holds, which the
-   * conjuncts have been rectified to select (VARKA-297): the filtered query must return it.
+   * conjuncts have been rectified to select (VARKA-297): the filtered query must return it. A
+   * `force` is the output forced to decline in a third run on Varka (VARKA-296).
    */
   final case class Case(
       outputs: Vector[String],
@@ -61,7 +62,8 @@ object VarkaSparkFuzz {
       op: String,
       data: Vector[Vector[String]],
       ansi: Boolean,
-      pivot: Option[Vector[String]] = None) {
+      pivot: Option[Vector[String]] = None,
+      force: Option[Int] = None) {
 
     def select: String = outputs.zipWithIndex.map { case (o, k) => s"$o AS c$k" }.mkString(", ")
 
@@ -342,7 +344,8 @@ object VarkaSparkFuzz {
       select: String,
       where: Option[String],
       fixture: String,
-      pivot: Option[String] = None)
+      pivot: Option[String] = None,
+      force: Option[Int] = None)
 
   def render(r: Reproducer): String =
     s"""-- VARKA-262 reproducer
@@ -351,7 +354,8 @@ object VarkaSparkFuzz {
        |-- ansi: ${r.ansi}
        |-- kind: ${r.kind}
        |-- select: ${r.select}
-       |-- where: ${r.where.getOrElse("")}${r.pivot.map(p => s"\n-- pivot: $p").getOrElse("")}
+       |-- where: ${r.where.getOrElse("")}${r.pivot.map(p => s"\n-- pivot: $p").getOrElse("")}${
+      r.force.map(k => s"\n-- force: $k").getOrElse("")}
        |-- fixture
        |${r.fixture}
        |-- query
@@ -369,8 +373,11 @@ object VarkaSparkFuzz {
     require(f >= 0 && q > f, "a reproducer has a '-- fixture' and then a '-- query' section")
     val where = header("where")
     val pivot = lines.collectFirst { case l if l.startsWith("-- pivot: ") => l.substring(10) }
+    val force = lines.collectFirst {
+      case l if l.startsWith("-- force: ") => l.substring(10).trim.toInt
+    }
     Reproducer(header("status"), header("note"), header("ansi").toBoolean, header("kind"),
       header("select"), if (where.isEmpty) None else Some(where),
-      lines.slice(f + 1, q).mkString("\n"), pivot)
+      lines.slice(f + 1, q).mkString("\n"), pivot, force)
   }
 }

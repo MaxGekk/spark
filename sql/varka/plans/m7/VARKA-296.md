@@ -220,4 +220,49 @@ seconds of the PR-CI arm and of the nightly step before and after.
 
 ## 9. Outcome
 
-To be written when the measurement lands.
+Done on 9 October 2026.
+
+**What was built.** Two fault-injector options, `forceResidualAt` and `misdescribeRollback`, in
+`VarkaEmitOptions` and the option table; the forced branch in `classifyOnce`, which compiles the
+entry and then takes the over-budget branch's rollback; the structural check in
+`VarkaCoverageCompositionFuzzSuite` with a `forced` lane for the known-failure list and a test that
+plants each of the three faults; the forced run in `VarkaSparkDifferential`, gated on the executed
+plan's `numResidualEntries` rising by exactly one, with a floor on the share of forced outputs that
+move the plan, a `-- force:` line in a reproducer and a test that finds the planted over-truncation;
+a `forced` step in the nightly; and the lesson in `testing-and-debugging.md`.
+
+Two things changed from the design. `forceResidualAt` is a fault injector in the table and not a
+knob: the option suites hold every knob to fuzz draws and a matrix configuration, and a forced
+decline in the option matrix would decline an entry in every suite. And the PR arm forces nothing in
+a composition of one output, since the plan with its only output declined keeps no Varka node and
+cannot prove the force moved anything; that, and outputs already residual by the one-lane rule,
+leaves about half of the forced outputs changing the plan, and the floor is a quarter.
+
+**The measurement**, on the laptop, seed 20261008 unless said:
+
+| run | result | time |
+|---|---|---|
+| structural check, 100,000 projections (seed 20260925) | every one had an entry to force; no difference from the entry deleted | 5 min 31 s |
+| answer check, 5,000 compositions, every output forced | 16,101 outputs forced, 8,272 changed the plan, no disagreement | 2 h 3 min |
+| PR arm, 200 compositions, one output forced | 120 forced, 62 changed the plan, no disagreement | 35.5 s |
+| the same arm on `master` (`a62e7aef9a4`), no force | | 33.7 s |
+
+**Predictions scored (6.1).**
+
+1. **Held.** The structural check found nothing in 100,000 projections.
+2. **Held.** The answer check found nothing in 5,000 compositions; 51% of the forced outputs
+   changed the plan, "about half".
+3. **Held** for the structural check, whose planted-fault test sees all three faults on cases built
+   for each. The answer check found the planted over-truncation within the 300 compositions its test
+   allows; the iteration was not recorded, so "within 100" is not scored.
+4. **Held for the PR arm, refuted for the nightly.** One forced output per composition adds 5% to the
+   arm (35.5 s against 33.7 s), under the 50% predicted. Forcing every output is not "half as long
+   again": 5,000 compositions took two hours against the seven minutes of the unforced run
+   (`VARKA-297.md` 9), because every forced projection is a new shape with its own class to emit and
+   compile. So the nightly forces one output per composition, as the PR arm does, and
+   `-Dvarka.sparkfuzz.forceAll=true` is for an idle window.
+
+**Left for later.** The predicate side: `compilePredicate` classifies a filter's conjuncts with the
+same rollback and the same invariance holds, and the hook is in place for a row to force a conjunct.
+The four copies of the rollback in the facade could be one helper, so that one planted-fault test
+covers all of them; row 300's port of the classifier is the natural place.

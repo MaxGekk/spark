@@ -420,6 +420,15 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        plan admit a driver the build then finds over, and watch the correction. Zero in
  *        production; rides the shape key like every option, so a mispredicted plan's classes and
  *        declines are never served to an emission that did not ask for it.
+ * @param forceResidualAt a fault injector for the compiler (VARKA-296): 0 is off, {@code k + 1}
+ *        makes the projection entry at position {@code k} decline, after it compiled, through the
+ *        branch an over-budget entry takes, as if it could not fuse. It changes which entries a
+ *        kernel computes and never how a kernel is emitted, and it rides the shape key, so a forced
+ *        projection's kernel is cached under its own identity. Zero in production.
+ * @param misdescribeRollback a fault injector for the table rollback a declining entry runs, so
+ *        the forced-decline check can show that it sees a wrong rollback: 1 keeps the declined
+ *        entry's inputs, 2 keeps its bounds, 3 truncates the inputs one entry too far; any other
+ *        value is the exact rollback. Zero in production.
  */
 public record VarkaEmitOptions(
     int groupBudget,
@@ -461,7 +470,9 @@ public record VarkaEmitOptions(
     boolean severalKernels,
     boolean elideUnreadLocals,
     boolean planSize,
-    int misdescribeDriverBytes) {
+    int misdescribeDriverBytes,
+    int forceResidualAt,
+    int misdescribeRollback) {
 
   /**
    * The three mod-7 lowerings. {@link #MAGIC} is what ships: two 15-bit digit-sum folds followed
@@ -574,7 +585,7 @@ public record VarkaEmitOptions(
           VarkaEmitBudget.HUGE_METHOD_LIMIT,
           true, true, true, true,
           VarkaEmitBudget.CALL_SITE_BUDGET, VarkaEmitBudget.HEAVY_GROUP_OUTPUTS,
-          true, true, true, true, true, true, true, 0);
+          true, true, true, true, true, true, true, 0, 0, 0);
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {
@@ -611,6 +622,14 @@ public record VarkaEmitOptions(
     if (lanesOverride != 0 && (lanesOverride < 1 || Integer.bitCount(lanesOverride) != 1)) {
       throw new IllegalArgumentException(
           "lanesOverride must be 0 or a power of two: " + lanesOverride);
+    }
+    if (forceResidualAt < 0) {
+      throw new IllegalArgumentException(
+          "forceResidualAt must be 0 (off) or a position plus one: " + forceResidualAt);
+    }
+    if (misdescribeRollback < 0) {
+      throw new IllegalArgumentException(
+          "misdescribeRollback must be 0 (off) or a fault: " + misdescribeRollback);
     }
   }
 
@@ -661,6 +680,8 @@ public record VarkaEmitOptions(
       b.elideUnreadLocals = elideUnreadLocals;
       b.planSize = planSize;
       b.misdescribeDriverBytes = misdescribeDriverBytes;
+      b.forceResidualAt = forceResidualAt;
+      b.misdescribeRollback = misdescribeRollback;
     return b;
   }
 
@@ -706,6 +727,8 @@ public record VarkaEmitOptions(
     private boolean elideUnreadLocals;
     private boolean planSize;
     private int misdescribeDriverBytes;
+    private int forceResidualAt;
+    private int misdescribeRollback;
 
     private Builder() {
     }
@@ -910,6 +933,16 @@ public record VarkaEmitOptions(
       return this;
     }
 
+    public Builder forceResidualAt(int position) {
+      this.forceResidualAt = position;
+      return this;
+    }
+
+    public Builder misdescribeRollback(int fault) {
+      this.misdescribeRollback = fault;
+      return this;
+    }
+
     public VarkaEmitOptions build() {
       return new VarkaEmitOptions(
           groupBudget, fusedCeiling, cse, shareChronoPrefix, denseValidityOnce,
@@ -920,7 +953,8 @@ public record VarkaEmitOptions(
           mulHiDivide, narrowHalfSpecies, methodByteBudget, rangeSets, splitConditions,
           groupLocalSlots, materializeChronoPrefix, callSiteBudget, heavyGroupOutputs,
           predictGrouping, driverOutputTable, exactGrouping, splitDriver, severalKernels,
-          elideUnreadLocals, planSize, misdescribeDriverBytes);
+          elideUnreadLocals, planSize, misdescribeDriverBytes, forceResidualAt,
+          misdescribeRollback);
     }
   }
 
@@ -975,6 +1009,14 @@ public record VarkaEmitOptions(
 
   public VarkaEmitOptions withMisdescribeDriverBytes(int bytes) {
     return toBuilder().misdescribeDriverBytes(bytes).build();
+  }
+
+  public VarkaEmitOptions withForceResidualAt(int position) {
+    return toBuilder().forceResidualAt(position).build();
+  }
+
+  public VarkaEmitOptions withMisdescribeRollback(int fault) {
+    return toBuilder().misdescribeRollback(fault).build();
   }
 
   public VarkaEmitOptions withRangeSets(boolean enabled) {

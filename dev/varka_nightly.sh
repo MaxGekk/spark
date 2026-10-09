@@ -84,8 +84,15 @@ fuzz_opts="set Test/javaOptions ++= Seq(\"-Dvarka.fuzz.iterations=$iterations\",
 
 run_step canary dev/varka_bench_canary.sh
 run_step fuzz build/sbt -batch "project catalyst" "$fuzz_opts" 'testOnly *VarkaIrFuzzSuite'
+# One fused entry of each random projection forced to decline: the projection must equal the one
+# without the entry (VARKA-296). A hundred thousand compositions take a few minutes.
+run_step forced build/sbt -batch "project catalyst" \
+  "set Test/javaOptions ++= Seq(\"-Dvarka.fuzz.forcedCompositions=100000\", \"-Dvarka.fuzz.seed=$seed\")" \
+  'testOnly *VarkaCoverageCompositionFuzzSuite -- -z "forced decline leaves"'
 # Random compositions of the coverage rows over random data, Varka off against on (VARKA-262).
 # A disagreement leaves its shrunk reproducer under sql/core/target/varka-sparkfuzz/ and its text in the log.
+# One output of each composition is forced to decline as well (VARKA-296); forcing every one
+# (-Dvarka.sparkfuzz.forceAll=true) cost two hours for 5,000 compositions, so it is for idle windows.
 if [ "$sparkfuzz" -gt 0 ]; then
   run_step sparkfuzz build/sbt -batch "project sql" \
     "set Test/javaOptions ++= Seq(\"-Dvarka.sparkfuzz.iterations=$sparkfuzz\", \"-Dvarka.sparkfuzz.seed=$seed\", \"-Dspark.test.timeout=170\", \"-Dvarka.test.watchdog.minutes=170\")" \
@@ -108,7 +115,7 @@ echo
 echo "fuzzer seed $seed, $iterations iterations; Spark differential $sparkfuzz compositions"
 printf '%-9s %-7s %6s  %s\n' step status secs log
 bad=0
-for s in canary fuzz sparkfuzz sweep deopt cliff gate; do
+for s in canary fuzz forced sparkfuzz sweep deopt cliff gate; do
   [ -n "${status[$s]:-}" ] || continue
   printf '%-9s %-7s %6d  %s\n' "$s" "${status[$s]}" "${secs[$s]}" "$logdir/$s.log"
   [ "${status[$s]}" = ok ] || bad=$((bad + 1))

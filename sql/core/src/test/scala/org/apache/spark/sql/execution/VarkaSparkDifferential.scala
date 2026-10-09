@@ -19,7 +19,8 @@ package org.apache.spark.sql.execution
 
 import scala.util.Try
 
-import org.apache.spark.sql.QueryTest
+import org.apache.spark.SparkThrowable
+import org.apache.spark.sql.{QueryTest, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 
 /**
@@ -41,6 +42,50 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
   protected var filteredNonEmpty = 0
   protected var pivotFiltered = 0
   protected var pivotFilteredNonEmpty = 0
+
+  /**
+   * Forced runs (VARKA-296): outputs forced to decline, and those whose executed plan reported
+   * exactly one more residual entry than the unforced run's, the only ones compared.
+   */
+  protected var forcedRuns = 0
+  protected var forcedApplied = 0
+
+  /**
+   * `sql`'s outcome on `session`, as [[VarkaSparkFuzz.outcome]] gives it, and the residual
+   * entries the Varka nodes of the plan it ran with reported.
+   */
+  private def outcomeAndResidual(session: SparkSession, sql: String): (Outcome, Long) = {
+    val df = session.sql(sql)
+    val out: Outcome = Try(df.collect().map(_.toString).sorted.toSeq).toEither.left.map { e =>
+      val chain = Iterator.iterate[Throwable](e)(_.getCause).takeWhile(_ != null).toSeq
+      chain.collectFirst { case t: SparkThrowable if t.getCondition != null => t.getCondition }
+        .getOrElse(e.getClass.getName)
+    }
+    val residual = Try(collect(df.queryExecution.executedPlan) { case v if isVarkaNode(v) => v }
+      .flatMap(_.metrics.get("numResidualEntries")).map(_.value).sum).getOrElse(0L)
+    (out, residual)
+  }
+
+  /**
+   * The outcome of `query` with output `k` forced to decline (`forceResidualAt`), compared with
+   * the row engine's `off` when the plan proves the force moved execution: exactly one more
+   * residual entry than `residualOn`. A run whose plan did not change is counted, never passed.
+   */
+  private def forcedDifference(query: String, k: Int, off: Outcome, residualOn: Long)
+      : Option[String] = {
+    val previous = VarkaColumnarToRowExec.currentEmitOptions
+    VarkaColumnarToRowExec.setEmitOptionsForTesting(previous.withForceResidualAt(k + 1))
+    val (forced, residualForced) = try outcomeAndResidual(varkaSpark, query) finally {
+      VarkaColumnarToRowExec.setEmitOptionsForTesting(previous)
+    }
+    forcedRuns += 1
+    if (residualForced == residualOn + 1) {
+      forcedApplied += 1
+      difference(off, forced).map(why => s"with an output forced to decline, $why")
+    } else {
+      None
+    }
+  }
 
   /**
    * `c` with its conjuncts rectified against its pivot row (VARKA-297), as Pivoted Query
@@ -67,7 +112,8 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
 
   /**
    * The kind of disagreement `select` over `where` shows on `fixture` under `ansi`, or None.
-   * `partitions` also checks the ternary partition of the filter on both engines.
+   * `partitions` also checks the ternary partition of the filter on both engines, and each of
+   * `forces` is an output run once more on Varka forced to decline (VARKA-296).
    */
   protected def disagreement(
       fixture: String,
@@ -75,7 +121,8 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
       where: Option[String],
       ansi: Boolean,
       partitions: Boolean,
-      pivot: Option[String] = None): Option[String] = {
+      pivot: Option[String] = None,
+      forces: Seq[Int] = Nil): Option[String] = {
     for (session <- Seq(spark, varkaSpark)) {
       session.sql(fixture).createOrReplaceTempView("fz")
       session.catalog.cacheTable("fz")
@@ -83,7 +130,7 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
     try withAnsi(ansi) {
       val query = querySql(select, where)
       val off = outcome(spark, query)
-      val on = outcome(varkaSpark, query)
+      val (on, residualOn) = outcomeAndResidual(varkaSpark, query)
       compared += 1
       if (scala.util.Try(varkaSpark.sql(query).queryExecution.executedPlan).toOption
           .exists(p => find(p)(isVarkaNode).isDefined)) {
@@ -99,6 +146,8 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
         }
       }
       difference(off, on).orElse {
+        forces.iterator.flatMap(k => forcedDifference(query, k, off, residualOn)).nextOption()
+      }.orElse {
         pivot.filter(_ => where.isDefined).flatMap { row =>
           // The outputs over the pivot row alone, by the row engine.
           val alone = outcome(spark, s"SELECT $select FROM (${fixtureRows(Seq(row))}) AS fz")

@@ -22,7 +22,7 @@ import scala.util.Random
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, AttributeReference, Expression, NamedExpression}
-import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, FusedOutput, KernelOutput, VarkaExpressionCompiler}
+import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, FusedOutput, KernelOutput, PartialVarkaProjection, VarkaExpressionCompiler}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaCompositionCase.Entry
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType
 import org.apache.spark.sql.catalyst.util.{DateTimeConstants, DateTimeUtils}
@@ -342,6 +342,88 @@ class VarkaCoverageCompositionFuzzSuite
   }
 
   // ---------------------------------------------------------------------------------------------
+  // A forced decline is the entry deleted (VARKA-296).
+  // ---------------------------------------------------------------------------------------------
+
+  private val forcedIterations =
+    sys.props.get("varka.fuzz.forcedCompositions").map(_.toInt).getOrElse(300)
+
+  private def aliased(entries: Seq[Entry]): Seq[NamedExpression] =
+    entries.zipWithIndex.map { case (e, i) => Alias(e.expr, s"c$i")() }
+
+  private def fusedPositions(p: PartialVarkaProjection): Seq[Int] = p.specs.zipWithIndex.collect {
+    case (_: FusedOutput, i) => i
+    case (_: KernelOutput, i) => i
+  }
+
+  /**
+   * A projection of up to forty of the table's rows with one entry the compiler fuses forced to
+   * decline (`forceResidualAt`), or None when nothing fuses. The forced position rides the case's
+   * options, so a shrunk case keeps its force.
+   */
+  private def drawForced(seed: Long, iteration: Int): Option[VarkaCompositionCase] = {
+    val rnd = new Random(seed * 1000003L + 1300000L + iteration)
+    val picked = Seq.fill(width(rnd, 40))(projections(rnd.nextInt(projections.size)))
+    val entries = picked.map(row => Entry(row.executable, resolve(row.executable))).toVector
+    val opts = options(rnd, seed, iteration)
+    VarkaExpressionCompiler.compilePartial(aliased(entries), columns, opts)
+      .map(fusedPositions).filter(_.nonEmpty).map { fused =>
+        val k = fused(rnd.nextInt(fused.size))
+        val c = VarkaCompositionCase("forced", entries, opts.withForceResidualAt(k + 1), 0L, "")
+        c.copy(label = whereOf(seed, iteration, c, "entries", picked.map(_.executable)) +
+          s"\n  forced: entry $k")
+      }
+  }
+
+  /**
+   * What differs between the projection with entry `k` forced to decline and the projection
+   * without it, compiled with the same options otherwise: the fused sub-projection, the further
+   * kernels, the specs past `k` and the declines shifted past it. A decline that rolls the shared
+   * tables back exactly is the entry never having been seen.
+   */
+  private def forcedDifference(
+      forced: Option[PartialVarkaProjection],
+      deleted: Option[PartialVarkaProjection],
+      k: Int): Option[String] = (forced, deleted) match {
+    case (None, None) => None
+    case (Some(_), None) => Some("the forced projection fused, the one without the entry did not")
+    case (None, Some(_)) => Some("the projection without the entry fused, the forced one did not")
+    case (Some(f), Some(d)) =>
+      val a = f.fused
+      val b = d.fused
+      val parts = Seq(
+        "outputs" -> (a.outputs != b.outputs),
+        "outputTypes" -> (a.outputTypes != b.outputTypes),
+        "inputOrdinals" -> (a.inputOrdinals != b.inputOrdinals),
+        "literals" -> (a.literals != b.literals),
+        "inputBounds" -> (a.inputBounds != b.inputBounds),
+        "derivedInputs" -> (a.derivedInputs != b.derivedInputs),
+        "longLiterals" -> (a.longLiterals != b.longLiterals),
+        "further kernels" -> (f.more != d.more),
+        "specs" -> (f.specs.patch(k, Nil, 1) != d.specs),
+        "declines" -> (f.declines.collect {
+          case (p, v) if p != k => (if (p > k) p - 1 else p) -> v
+        } != d.declines)).collect { case (name, true) => name }
+      if (parts.isEmpty) None else Some(parts.mkString(", "))
+  }
+
+  private def checkForced(c: VarkaCompositionCase): Unit = {
+    val k = c.options.forceResidualAt - 1
+    if (k >= 0 && k < c.entries.size) {
+      val (forced, deleted) = try {
+        (VarkaExpressionCompiler.compilePartial(aliased(c.entries), columns, c.options),
+          VarkaExpressionCompiler.compilePartial(aliased(c.entries.patch(k, Nil, 1)), columns,
+            c.options.withForceResidualAt(0)))
+      } catch {
+        case e: Exception => fail(finding(s"the compiler threw ${threw(e)}", c), e)
+      }
+      forcedDifference(forced, deleted, k).foreach { what =>
+        fail(finding(s"a forced decline differs from the entry deleted on: $what", c))
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
   // Failures, shrunk (VARKA-294).
   // ---------------------------------------------------------------------------------------------
 
@@ -440,6 +522,38 @@ class VarkaCoverageCompositionFuzzSuite
     }
   }
 
+  test("a forced decline leaves the projection the entry was never in") {
+    var checked = 0
+    val range = only.map(i => i to i).getOrElse(0 until forcedIterations)
+    for (iteration <- range) {
+      drawForced(seed, iteration).foreach { c =>
+        runChecked(c)(checkForced)
+        checked += 1
+      }
+    }
+    info(s"$checked of ${range.size} projections had an entry to force")
+    // A draw with nothing to force checks nothing; most draws fuse something.
+    assert(checked * 2 > range.size, s"only $checked of ${range.size} draws had an entry to force")
+  }
+
+  test("the forced-decline check sees a wrong rollback") {
+    // One case a fault: the forced entry registers a column only it reads (1), a bound on a column
+    // another entry keeps in the table (2), and a column after one an earlier entry reads (3).
+    val cases = Seq(
+      1 -> (Seq("datediff(d2, d)", "d + CAST(i AS INTERVAL DAY)", "year(d)"), 2),
+      2 -> (Seq("d + CAST(i AS INTERVAL DAY)", "i + 1"), 1),
+      3 -> (Seq("datediff(d2, d)", "d + CAST(i AS INTERVAL DAY)", "i - 1"), 2))
+    for ((fault, (sqls, force)) <- cases) {
+      val c = VarkaCompositionCase("forced", sqls.map(sql => Entry(sql, resolve(sql))).toVector,
+        VarkaMatrix.base.withForceResidualAt(force), 0L, s"planted fault $fault")
+      checkForced(c)
+      val e = intercept[org.scalatest.exceptions.TestFailedException](
+        checkForced(c.copy(options = c.options.withMisdescribeRollback(fault))))
+      assert(e.getMessage.contains("a forced decline differs from the entry deleted"),
+        s"fault $fault: ${e.getMessage}")
+    }
+  }
+
   // ---------------------------------------------------------------------------------------------
   // The shrinker on this fuzzer's cases (VARKA-294).
   // ---------------------------------------------------------------------------------------------
@@ -512,6 +626,7 @@ class VarkaCoverageCompositionFuzzSuite
       case "projection" => outcomeOf(checkProjection)(drawProjection(e.seed, e.iteration))
       case "predicate" => outcomeOf(checkPredicate)(drawPredicate(e.seed, e.iteration))
       case "wide" => outcomeOf(checkWide)(drawWide(e.seed, e.iteration))
+      case "forced" => drawForced(e.seed, e.iteration).flatMap(outcomeOf(checkForced))
       // The IR fuzzer's entries are replayed by its own suite.
       case _ => Some(e.signature)
     }

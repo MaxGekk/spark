@@ -730,3 +730,28 @@ file first; it is the whole case.
 * **Stratify the draw.** A uniform draw over the 92 rows found a planted bug in one row after 254
   of 300 compositions; forcing row `k mod 92` into composition `k` finds it in the second pass.
 
+
+## A decline is the entry deleted, and only a forced decline reaches the branch that has to make it so
+
+A projection entry that declines after it compiled has to leave the compiler's shared tables -
+inputs, literals, the long table, the bounds - exactly as if it had never been compiled, because the
+kernel the other entries make is built from them. Most mistakes in that rollback change no answer:
+a stale input is a column read for nothing, a stale bound a batch declined for nothing. The answer
+differentials cannot see them, and VARKA-296's admission check found that natural declines never
+reach the branch that rolls back a compiled entry at all: every one of 21,726 at the compiler level
+was the one-lane rule, which has a rollback of its own.
+
+So VARKA-296 forces one (`VarkaEmitOptions.forceResidualAt`, a fault injector) and holds the
+compiler to a property no oracle is needed for: the projection with entry k forced to decline equals
+the projection with entry k deleted - the fused sub-projection, the further kernels, the specs past
+k and the declines shifted past it (`VarkaCoverageCompositionFuzzSuite`, "a forced decline leaves
+the projection the entry was never in"). The Spark differential forces an output too and compares
+the answer, counted only where the executed plan's `numResidualEntries` rose by exactly one, since a
+force that lands on an entry already residual, or leaves no Varka node, moves nothing.
+
+Two things to carry. When a failure is reported as "a forced decline differs from the entry deleted
+on: inputOrdinals", the rollback of `classifyOnce`'s last branch left a table behind; the planted
+faults of `misdescribeRollback` (1 keeps the inputs, 2 the bounds, 3 truncates one too far) are what
+the check looks like when it works. And a hand-built case for such a check has to give the fault
+somewhere to show: a stale input is invisible when a later entry reads the same column, and an
+over-truncation is invisible when the dropped column is registered again at the same slot.

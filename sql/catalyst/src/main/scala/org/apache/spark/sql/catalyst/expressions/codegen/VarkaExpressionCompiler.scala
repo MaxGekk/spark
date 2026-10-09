@@ -511,6 +511,10 @@ private[sql] object VarkaExpressionCompiler extends Logging {
           val literalsMark = literals.size
           val longMark = sink.longMark
           val boundsMark = sink.boundsMark
+          // A test's forced decline (`forceResidualAt`, VARKA-296): the entry compiles as any
+          // other and then takes the over-budget branch below, so the rollback it runs is the
+          // one a real decline runs.
+          val forced = options.forceResidualAt == position + 1
           compileRoot(e, inputs, literals, sink) match {
             // One kernel holds one lane: its loop, its epilogue and its stores are one species.
             // The first fused entry fixes the lane and an entry of the other lane is demoted to
@@ -535,23 +539,35 @@ private[sql] object VarkaExpressionCompiler extends Logging {
             // time, where a breach can only become a silent per-batch fallback - no decline reason,
             // and EXPLAIN still claims fusion. So the compiler mirrors them and demotes the
             // overflowing entry to residual.
-            case Some(ir)
-                if VarkaLoopEmitter.fitsBudgets((outputs :+ ir).asJava, inputs.size, options) =>
+            case Some(ir) if !forced &&
+                VarkaLoopEmitter.fitsBudgets((outputs :+ ir).asJava, inputs.size, options) =>
               sink.take()
               outputs += ir
               outputTypes += e.dataType
               fusedCount += 1
               FusedOutput(fusedCount - 1)
             case compiled =>
-              truncate(inputs, inputsMark)
+              // `misdescribeRollback` is a fault injector for the forced-decline check: zero in
+              // production, where this restores the four tables exactly.
+              options.misdescribeRollback match {
+                case 1 =>
+                case 3 => truncate(inputs, math.max(0, inputsMark - 1))
+                case _ => truncate(inputs, inputsMark)
+              }
               truncate(literals, literalsMark)
               sink.truncateLong(longMark)
-              sink.truncateBounds(boundsMark)
+              if (options.misdescribeRollback != 2) {
+                sink.truncateBounds(boundsMark)
+              }
               if (compiled.isDefined) {
-                sink.take() // an over-budget entry compiled clean; its reason is the budget
-                sink.note("exceeds the emitter's fused budget", e)
-                if (fitsAlone(e)) {
-                  alone += position
+                sink.take() // an entry that compiled clean; its reason is the budget, or the force
+                if (forced) {
+                  sink.note(s"forced residual (forceResidualAt=${options.forceResidualAt})", e)
+                } else {
+                  sink.note("exceeds the emitter's fused budget", e)
+                  if (fitsAlone(e)) {
+                    alone += position
+                  }
                 }
               }
               // A declining entry always leaves a reason: every `None` below notes one.
