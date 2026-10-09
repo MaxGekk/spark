@@ -72,16 +72,26 @@ class VarkaKernelWarmupSuite extends SparkFunSuite with VarkaTestWatchdog {
   private case class Forked(support: Map[String, String], outcome: Map[String, String],
       allocated: Map[String, Long])
 
+  /** The probe's budget: its warm-up deadline (120 s), its wait for the verdict, and slack. */
+  private val probeBudgetSeconds = 240L
+
   private def warmUpInFork(claimed: Nulls): Forked = {
     val javaBin = new File(new File(System.getProperty("java.home"), "bin"), "java")
     val command = Seq(javaBin.getAbsolutePath, "--add-modules", "jdk.incubator.vector",
-      "--enable-native-access=ALL-UNNAMED", "-Xmx1g", "-Dvarka.warmup.deadlineSeconds=180",
+      "--enable-native-access=ALL-UNNAMED", "-Xmx1g", "-Dvarka.warmup.deadlineSeconds=120",
       "-cp", testClasspath,
       VarkaKernelWarmupProbe.getClass.getName.stripSuffix("$"), claimed.word)
     val process = new ProcessBuilder(command.asJava).redirectErrorStream(true).start()
     val reader = new BufferedReader(
       new InputStreamReader(process.getInputStream, StandardCharsets.UTF_8))
     val lines = mutable.ArrayBuffer.empty[String]
+    // The read below ends only when the child exits, so a hung probe is ended from here: a daemon
+    // thread destroys it after the budget (the child's own deadline is 120 s).
+    val killer = new Thread(() => {
+      if (!process.waitFor(probeBudgetSeconds, TimeUnit.SECONDS)) process.destroyForcibly()
+    })
+    killer.setDaemon(true)
+    killer.start()
     try {
       var line = reader.readLine()
       while (line != null) {
@@ -91,7 +101,8 @@ class VarkaKernelWarmupSuite extends SparkFunSuite with VarkaTestWatchdog {
     } finally {
       reader.close()
     }
-    assert(process.waitFor(300, TimeUnit.SECONDS), "the warm-up probe did not finish")
+    assert(process.waitFor(probeBudgetSeconds, TimeUnit.SECONDS),
+      s"the warm-up probe did not finish in $probeBudgetSeconds seconds")
     val tail = lines.takeRight(40).mkString("\n")
     assert(process.exitValue() == 0, s"the probe failed (exit ${process.exitValue()}):\n$tail")
     assert(marked(lines.toSeq, DONE_PREFIX) == Seq("status=0"), tail)
@@ -128,7 +139,7 @@ class VarkaKernelWarmupSuite extends SparkFunSuite with VarkaTestWatchdog {
     assume(run.support("sampler") == "true", "thread allocation accounting unavailable")
     val o = run.outcome
     assert(o("queued") == "true", "the warm-up was not queued")
-    assert(o("idle") == "true", "the warm-up did not finish in two minutes")
+    assert(o("idle") == "true", "the warm-up did not finish within the probe's wait")
     assert(o("matches") == "true", o("outcome"))
     assert(o("state") == State.COMPILED.toString, o("outcome"))
     assert(o("entryState") == State.COMPILED.toString && o("ready") == "true", o)
@@ -183,7 +194,8 @@ class VarkaKernelWarmupSuite extends SparkFunSuite with VarkaTestWatchdog {
     val (entry, queued) = warm(cache, 1000)
     assert(queued, "the warm-up was not queued")
     cache.invalidateAll()
-    assert(VarkaKernelWarmup.awaitIdle(200000), "the warm-up did not finish in two minutes")
+    assert(VarkaKernelWarmup.awaitIdle(150000),
+      "the warm-up did not finish within the probe's wait")
     val outcome = VarkaKernelWarmup.recentOutcomes().asScala.last
     assert(outcome.shapeHash() === entry.shapeHash())
     // The eviction released the shape while its warm-up was queued or had barely begun, so the
@@ -242,5 +254,23 @@ class VarkaKernelWarmupSuite extends SparkFunSuite with VarkaTestWatchdog {
     assert(state.contains("compile time"), state)
     assert(state.contains("Code"), state)
     assert(state.contains("compile queue of"), state)
+  }
+
+  test("a block is clean only within the allowance and a quarter of the first") {
+    val allowance = 9216L
+    val first = 5858064L
+    // The uncompiled rate: boxing on every operation.
+    assert(!VarkaKernelWarmup.blockClean(first, allowance, first))
+    assert(!VarkaKernelWarmup.blockClean(first / 2, allowance, first))
+    // Within the allowance and a quarter of the first or less: a compiled kernel.
+    assert(VarkaKernelWarmup.blockClean(800L, allowance, first))
+    assert(VarkaKernelWarmup.blockClean(allowance, allowance, first))
+    // Over the allowance is not clean however far below the first: an interpreted light loop
+    // boxes tens of kilobytes (38784 bytes after 6.1 MB was VARKA-295's counterexample).
+    assert(!VarkaKernelWarmup.blockClean(38784L, allowance, 6104984L))
+    assert(!VarkaKernelWarmup.blockClean(20720L, allowance, first))
+    // Within the allowance but not a quarter below the first: a narrow kernel's boxing.
+    assert(!VarkaKernelWarmup.blockClean(2000L, allowance, 4000L))
+    assert(!VarkaKernelWarmup.blockClean(Long.MaxValue, Long.MaxValue, first))
   }
 }

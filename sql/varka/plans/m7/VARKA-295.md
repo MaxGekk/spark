@@ -157,8 +157,8 @@ VARKA-221. The warm-up releasing at its deadline was the policy working.
 
 **The fix now:** the strict verdict is restored (the 32x rule and its unit test are removed); the
 deadline reads `-Dvarka.warmup.deadlineSeconds` (default 60, production unchanged); the tests whose
-subject is the verdict raise it, `VarkaWarmupEndToEndSuite` to 180 s with its waits at four
-minutes and the forked probe of `VarkaKernelWarmupSuite` to 180 s. A release at the 60-second
+subject is the verdict raise it, `VarkaWarmupEndToEndSuite` to 120 s with its waits at 150 s
+and the forked probe of `VarkaKernelWarmupSuite` to 120 s, ended from outside after 240 s. A release at the 60-second
 deadline is not asserted on by a test that cannot control the runner. The JIT-state diagnostic stays.
 
 **What is still not known:** that the compile queue was the cause is inferred, not read: the
@@ -166,3 +166,10 @@ release path's diagnostic (the queue's head, the code cache) would show it and h
 fired on a runner. If it fires with an empty queue and a kernel that never compiles, this
 correction is itself wrong, and the row reopens.
 
+**Review of #688** (`/code-review high`) found: the test property was removed instead of restored
+(restored now); the waits were stale in their messages (updated); the strict verdict had lost its
+unit test (`blockClean` is a seam again, with the VARKA-295 counterexample as a case); the probe's
+bound did not bound a hung child (a daemon thread ends it); the deadline property was not in the
+class doc (it is); and, the finding that stands, the row is marked Done on a cause that is inferred:
+production still releases at 60 s on a loaded host, and the row now reads "fix applied, cause
+unconfirmed" until the release-path diagnostic has fired on a runner.

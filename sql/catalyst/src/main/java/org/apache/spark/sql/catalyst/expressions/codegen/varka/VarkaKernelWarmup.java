@@ -95,7 +95,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmth
  * <p><b>What it costs.</b> One thread's CPU while a kernel warms, plus the C2 compiles the kernel
  * needs in any case before it can run fast. After {@link #SPIN_CALLS} calls, past every threshold
  * at its default, the warm-up only probes, every {@link #PACE_MILLIS} milliseconds, while the
- * compile queue works. A shape without a verdict {@link #DEADLINE_SECONDS} seconds after its
+ * compile queue works. A shape without a verdict {@link #deadlineSeconds()} seconds after its
  * warm-up was queued is released, waiting included, and its tasks then run the kernel, which the
  * warm-up's calls have already profiled.
  *
@@ -170,6 +170,19 @@ public final class VarkaKernelWarmup {
    * seconds; the deadline is for a compile that never comes.
    */
   static final int DEADLINE_SECONDS = 60;
+
+  /**
+   * Whether a probe block of {@code allocated} bytes shows the kernel compiled, given the
+   * {@code allowance} for a block that size and the {@code first} block's bytes: within the
+   * allowance and at most a quarter ({@link #COMPILED_DROP}) of the first. A magnitude below the
+   * first is not enough on its own - a loop method still interpreted allocates tens of kilobytes
+   * a call, the size of a compiled kernel's residue in a busy JVM (VARKA-221, VARKA-295).
+   */
+  static boolean blockClean(long allocated, long allowance, long first) {
+    return allocated <= allowance
+        && allocated <= Long.MAX_VALUE / COMPILED_DROP
+        && allocated * COMPILED_DROP <= first;
+  }
 
   /**
    * A system property that replaces {@link #DEADLINE_SECONDS}: the tests whose subject is the
@@ -304,7 +317,7 @@ public final class VarkaKernelWarmup {
   private static volatile String lastReleaseJitState = "";
 
   /**
-   * The JIT's state when the most recent warm-up ran out of its {@link #DEADLINE_SECONDS}, or
+   * The JIT's state when the most recent warm-up ran out of its {@link #deadlineSeconds()}, or
    * empty if none has: the compile queue, the compilers' total time and the code cache's use.
    * A release at the deadline means C2 never finished the kernel, and this is what says whether
    * the queue was backed up behind other methods, the compilers were off, or the cache was full
@@ -569,7 +582,7 @@ public final class VarkaKernelWarmup {
               why = "it allocates nothing to wait for";
               break;
             }
-          } else if (allocated > allowance || allocated * COMPILED_DROP > firstProbeBytes) {
+          } else if (!blockClean(allocated, allowance, firstProbeBytes)) {
             clean = 0;
           } else if (++clean >= CLEAN_PROBES) {
             if (warmth.markCompiled()) {
