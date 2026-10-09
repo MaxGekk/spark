@@ -112,4 +112,28 @@ none in the nightly of 8 October.
 
 ## 9. Outcome
 
-Filled in when the 5,000 have run.
+Done on 9 October 2026. Five thousand compositions of the default seed (20261008) ran in 7
+minutes with no disagreement and no pivot miss.
+
+**Predictions scored.**
+
+1. **Held in shape, with a different base.** Every pivot filter returned a row: 1,164 of 1,164.
+   Of the 3,507 filtered compositions the row engine answered, 2,702 returned a row (77%); the
+   2,343 without a pivot returned one in 1,538 (65.6%). So the share comparing empty results is
+   34% without the pivot and 23% overall. The 71% of section 2 was the 200-composition run's and
+   was optimistic; the prediction's "29% to about 20%" is 34% to 23% on 5,000.
+2. **Held.** The safe pool's both-errored count is 0 of 1,250 with ANSI off and 15 of 1,250 with
+   it on (0.6% overall), well under 5%, with the wider pool in half of it. The full pool is 17%
+   as before.
+3. **Held.** No new disagreement in 5,000; the pivot check never fired on either engine, which also
+   means the rectification agrees with the multi-row evaluation (risk 1 did not materialise).
+
+**A correction to section 2.** The 71% was measured after the pivot and the pool were in, on the
+first 200; it is not a "before any change" figure, and the 5,000-composition 65.6% replaces it.
+
+**What it did not do.** It found no bug: the pivot makes the filter comparisons non-vacuous and
+the pool reaches values outside the lists, and Varka answers them as the row engine does. The
+value is the check that a filter returns a row it must (an independent oracle for a selection
+bug that both engines might share the evaluation of), and the pool is a reach that the nightly's
+50,000 will use. A bug planted in a filter kernel was not measured here; the pure check is tested
+on synthetic outcomes and the live one on sixty rectified cases.
