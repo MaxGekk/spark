@@ -153,3 +153,51 @@ projection's loop is the same call sequence as the Scala's (an input-rows copy, 
 projection, a row id), which the per-batch benchmark of 267b and 267c does not exercise. The row
 path's cost is therefore *not measured here* and rests on that identity; `VarkaVectorProjectionSuite`
 pins its output.
+
+### 9.2 Step 267b, the base, the filter evaluator and the kernel part
+
+Done on 9 October 2026. `VarkaEvaluatorBase` (abstract), `VarkaFilterEvaluator` and
+`VarkaKernelPart` are Java, with `VarkaBatchPath<T>` for `serveBatch`'s two paths; the three
+Scala files are deleted, the warm-up batch table, the allocation schedule and the logged declines
+moved into the base, and the Scala projection evaluator extends the Java base (owning its
+`java.util.ArrayList` of owned vectors now). The three nodes' four call sites pass closures as
+`VarkaBatchPath`, and two suites pass positional constructor arguments, since Scala cannot name a
+Java method's parameters. The 38 sql Varka suites pass (440 tests, 12 cancelled as before);
+scalastyle and checkstyle are clean.
+
+**The measurement.** `VarkaEvaluatorOverheadBenchmark`, five interleaved rounds of the Scala
+evaluators (master's) and the Java ones, each side's tree rebuilt, through `dev/varka_bench_pair.sh`
+(#683's tool, run from its branch), wide width, on the idle laptop. By minimums over the five
+runs the Java is faster in all twelve cases:
+
+| rows a batch | case | Scala min ns | Java min ns | change |
+|---|---|---:|---:|---:|
+| 1 | date_add | 534.3 | 503.3 | +6.2% |
+| 1 | least (long) | 542.6 | 517.0 | +5.0% |
+| 1 | filter | 139.9 | 116.5 | +20.1% |
+| 1 | trunc | 760.0 | 658.2 | +15.5% |
+| 16 | date_add | 559.7 | 513.8 | +8.9% |
+| 16 | least (long) | 584.8 | 558.2 | +4.8% |
+| 16 | filter | 504.6 | 459.8 | +9.7% |
+| 16 | trunc | 1300.0 | 1161.3 | +11.9% |
+| 1024 | date_add | 819.1 | 776.2 | +5.5% |
+| 1024 | least (long) | 1325.7 | 1292.3 | +2.6% |
+| 1024 | filter | 1215.7 | 1184.3 | +2.7% |
+| 1024 | trunc | 30972.4 | 30759.0 | +0.7% |
+
+The pair tool's own verdict by medians is one case slower by 10% (1 row, `date_add`, -11.7%) and
+three faster; that case has a spread over its five runs of 27% on the Scala side and 35% on the
+Java side, with the two sides' values trending in opposite directions across the rounds (the
+Scala 680, 545, 549, 534, 539 ns, the Java 503, 556, 679, 617, 643), which is a machine drifting
+between rounds and not a difference between the code. The repository's rule for ratios near the
+noise is minimums, which say the Java is faster everywhere, by most at one row (a batch's fixed
+cost: the Scala asked a `Map` for each input's derived note and built an `Either` and a
+`Some` per batch).
+
+**Predictions scored (6.1).** 2: *held on the part that matters, refuted on the part that
+bounded it*: no case is slower by minimums (the bar was 7%), but the cases are not "within 5%
+either way": eight are faster by 5% or more, up to 20%. 3: the Java files total 1,466 lines
+(base 799 with its docs, filter evaluator 501, part 63, path 31, against 1,008 Scala), 1.45 times
+the Scala, outside the "no more than half again" band by a hair; the doc comments the Scala
+carried are kept.
+
