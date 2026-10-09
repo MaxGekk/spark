@@ -16,6 +16,7 @@
  */
 package org.apache.spark.sql.execution;
 
+import java.util.List;
 import java.util.function.Supplier;
 
 import scala.Option;
@@ -26,6 +27,10 @@ import org.apache.arrow.memory.BufferAllocator;
 import org.apache.spark.sql.catalyst.expressions.Attribute;
 import org.apache.spark.sql.catalyst.expressions.NamedExpression;
 import org.apache.spark.sql.catalyst.expressions.codegen.CompiledVarkaProjection;
+import org.apache.spark.sql.execution.varka.VarkaBatchDeclined;
+import org.apache.spark.sql.execution.varka.VarkaKernelFailure;
+import org.apache.spark.sql.vectorized.ColumnVector;
+import org.apache.spark.sql.vectorized.ColumnarBatch;
 
 /**
  * One further kernel of a projection several kernels serve
@@ -76,5 +81,42 @@ final class VarkaKernelPart extends VarkaEvaluatorBase {
   @Override
   protected BufferAllocator taskAllocator() {
     return allocator.get();
+  }
+
+  // A decline or failure this kernel raises names it, so the projection's fallback log line and
+  // event name the kernel that declined rather than the first one, whichever entry point raised it.
+
+  @Override
+  boolean kernelReady(ColumnarBatch input) {
+    try {
+      return super.kernelReady(input);
+    } catch (VarkaBatchDeclined | VarkaKernelFailure e) {
+      throw blamed(e);
+    }
+  }
+
+  @Override
+  ColumnVector[] runKernel(
+      ColumnarBatch input,
+      int len,
+      List<ColumnVector> owned,
+      BufferAllocator allocator,
+      VectorAllocator allocate) {
+    try {
+      return super.runKernel(input, len, owned, allocator, allocate);
+    } catch (VarkaBatchDeclined | VarkaKernelFailure e) {
+      throw blamed(e);
+    }
+  }
+
+  /** {@code e} naming this kernel, if it names none; anything else as it is. */
+  private RuntimeException blamed(RuntimeException e) {
+    if (e instanceof VarkaBatchDeclined d && d.kernel == null) {
+      return new VarkaBatchDeclined(d.status, kernelIdentity());
+    }
+    if (e instanceof VarkaKernelFailure f && f.kernel == null) {
+      return new VarkaKernelFailure(f.getCause(), kernelIdentity());
+    }
+    return e;
   }
 }

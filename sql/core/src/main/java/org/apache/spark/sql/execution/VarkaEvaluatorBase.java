@@ -42,6 +42,7 @@ import org.apache.spark.TaskContext;
 import org.apache.spark.internal.SparkLogger;
 import org.apache.spark.internal.SparkLoggerFactory;
 import org.apache.spark.sql.catalyst.expressions.Attribute;
+import org.apache.spark.sql.catalyst.expressions.NamedExpression;
 import org.apache.spark.sql.catalyst.expressions.codegen.CompiledVarkaProjection;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaDerivedInput;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaInputBound;
@@ -249,6 +250,17 @@ public abstract class VarkaEvaluatorBase {
 
   protected final Seq<Attribute> childAttributes() {
     return childOutput;
+  }
+
+  /**
+   * A further kernel of this evaluator's projection, built with this evaluator's settings - the
+   * class dump, the metrics, the AVX level and the warm-up - and allocating from its allocator, so
+   * that the first kernel and the further ones cannot drift apart.
+   */
+  protected final VarkaKernelPart kernelPart(
+      CompiledVarkaProjection plan, Seq<NamedExpression> entries) {
+    return new VarkaKernelPart(plan, entries, childOutput, operatorName,
+        Option.apply(classDumpDirectory), metrics, emitUseAVX, warmupEnabled, this::taskAllocator);
   }
 
   /** The options this evaluator emits with, which its compiler call must use too. */

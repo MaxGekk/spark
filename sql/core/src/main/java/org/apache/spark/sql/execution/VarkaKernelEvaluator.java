@@ -50,8 +50,6 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.types.DataTypeUtils$;
-import org.apache.spark.sql.execution.varka.VarkaBatchDeclined;
-import org.apache.spark.sql.execution.varka.VarkaKernelFailure;
 import org.apache.spark.sql.execution.vectorized.OffHeapColumnVector;
 import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector;
 import org.apache.spark.sql.execution.vectorized.WritableColumnVector;
@@ -126,10 +124,6 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
 
   private final Seq<NamedExpression> projectList;
   private final boolean offHeapColumnVectorEnabled;
-  private final Option<String> classDumpDirectory;
-  private final VarkaExecMetrics metrics;
-  private final int emitUseAVX;
-  private final boolean warmupEnabled;
 
   // Made once, so that no batch allocates the functional object that hands the kernel its outputs.
   private final VectorAllocator vectorAllocator = this::allocateVector;
@@ -151,12 +145,20 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
   private Source[] sources;
   private int[] kernelOf;
   private int[] indexOf;
+  // The entries each further kernel computes and the residual entries, from the same pass, for the
+  // parts' identities and the residual projection; dropped once those are built.
+  private List<List<NamedExpression>> kernelEntries;
+  private List<NamedExpression> residualEntries;
+
+  // Per-batch scratch reused across batches: the vectors a batch allocates, closed if it fails and
+  // handed to the batch's tracking once it succeeds, and each kernel's columns.
+  private final ArrayList<ColumnVector> owned = new ArrayList<>();
+  private ColumnVector[][] fusedColumns;
 
   // The residual entries and their per-row machinery. A kernel-only projection has none, and even a
   // mixed one pays the Janino compile only when the first batch actually reaches projectResiduals.
   private boolean residualResolved;
   private int residualCount;
-  private Seq<NamedExpression> residualExprs;
   private StructType residualSchema;
   private UnsafeProjection residualProjection;
   private RowToColumnConverter residualConverter;
@@ -179,10 +181,6 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
     super(childOutput, operatorName, classDumpDirectory, metrics, emitUseAVX, warmupEnabled);
     this.projectList = projectList;
     this.offHeapColumnVectorEnabled = offHeapColumnVectorEnabled;
-    this.classDumpDirectory = classDumpDirectory;
-    this.metrics = metrics;
-    this.emitUseAVX = emitUseAVX;
-    this.warmupEnabled = warmupEnabled;
   }
 
   /** The defaults a suite or diagnostic builds with: no class dump, no metrics, no warm-up. */
@@ -231,25 +229,16 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
 
   private VarkaKernelPart[] parts() {
     if (parts == null) {
-      Option<PartialVarkaProjection> partial = compiled();
-      if (partial.isEmpty()) {
+      if (compiled().isEmpty()) {
         parts = new VarkaKernelPart[0];
       } else {
-        List<CompiledVarkaProjection> more = CollectionConverters.asJava(partial.get().more());
-        List<VarkaOutputSpec> specs = CollectionConverters.asJava(partial.get().specs());
-        List<NamedExpression> named = CollectionConverters.asJava(projectList);
+        layout();
+        List<CompiledVarkaProjection> more = CollectionConverters.asJava(compiled().get().more());
         var built = new VarkaKernelPart[more.size()];
         for (int k = 0; k < built.length; k++) {
           // Its identity renders the entries it computes, not the projection's first ones.
-          var entries = new ArrayList<NamedExpression>();
-          for (int i = 0; i < specs.size(); i++) {
-            if (specs.get(i) instanceof KernelOutput kernel && kernel.kernel() == k + 1) {
-              entries.add(named.get(i));
-            }
-          }
-          built[k] = new VarkaKernelPart(more.get(k), CollectionConverters.asScala(entries).toSeq(),
-              childAttributes(), evaluatorOperator(), classDumpDirectory, metrics, emitUseAVX,
-              warmupEnabled, this::taskAllocator);
+          built[k] = kernelPart(more.get(k),
+              CollectionConverters.asScala(kernelEntries.get(k)).toSeq());
         }
         parts = built;
       }
@@ -268,21 +257,6 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
     }
   }
 
-  /**
-   * The exception to throw for one a further kernel raised: a decline or failure that names no
-   * kernel is rethrown naming {@code part}, so the fallback's log line and event name the kernel
-   * that declined rather than the first one. Anything else is returned as it is.
-   */
-  private static RuntimeException blamed(RuntimeException e, VarkaKernelPart part) {
-    if (e instanceof VarkaBatchDeclined d && d.kernel == null) {
-      return new VarkaBatchDeclined(d.status, part.kernelIdentity());
-    }
-    if (e instanceof VarkaKernelFailure f && f.kernel == null) {
-      return new VarkaKernelFailure(f.getCause(), part.kernelIdentity());
-    }
-    return e;
-  }
-
   /** Every kernel can serve the batch: the first one, as ever, and each further one. */
   @Override
   public boolean canRun(ColumnarBatch input) {
@@ -299,18 +273,15 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
 
   /**
    * Every kernel is ready. Each one is asked, so each claims its own warm-up on the batch that
-   * finds it cold, and the batch takes the kernels only once all of them are compiled.
+   * finds it cold, and the batch takes the kernels only once all of them are compiled. A further
+   * kernel names itself in a decline or failure it raises ({@link VarkaKernelPart}).
    */
   @Override
   boolean kernelReady(ColumnarBatch input) {
     boolean first = super.kernelReady(input);
     boolean all = true;
     for (VarkaKernelPart part : parts()) {
-      try {
-        all &= part.kernelReady(input);
-      } catch (VarkaBatchDeclined | VarkaKernelFailure e) {
-        throw blamed(e, part);
-      }
+      all &= part.kernelReady(input);
     }
     return all && first;
   }
@@ -342,11 +313,13 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
     // Everything allocated for this batch - kernel outputs, then residual columns - is closed on
     // any failure here, and by release() or the listener once the batch is handed out. Forwarded
     // input vectors never join this list: they stay owned by the input batch.
-    var owned = new ArrayList<ColumnVector>();
+    owned.clear();
     try {
-      ColumnVector[][] fusedColumns = computeFused(input, len, owned);
+      computeFused(input, len);
       ColumnVector[] residualColumns = projectResiduals(input, len);
-      owned.addAll(Arrays.asList(residualColumns));
+      for (ColumnVector column : residualColumns) {
+        owned.add(column);
+      }
       var columns = new ColumnVector[sources.length];
       int residual = 0;
       for (int i = 0; i < columns.length; i++) {
@@ -357,14 +330,21 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
           case RESIDUAL -> residualColumns[residual++];
         };
       }
-      var batch = new ColumnarBatch(columns);
-      batch.setNumRows(len);
-      trackOwned(batch, owned.toArray(new ColumnVector[0]));
-      return batch;
+      return handOut(columns, len);
     } catch (Throwable e) {
       closeAllQuietly(owned, "a Varka output vector after a failed projection");
       throw e;
+    } finally {
+      owned.clear();
     }
+  }
+
+  /** The output batch over {@code columns}, tracked with the vectors this batch allocated. */
+  private ColumnarBatch handOut(ColumnVector[] columns, int len) {
+    var batch = new ColumnarBatch(columns);
+    batch.setNumRows(len);
+    trackOwned(batch, owned.toArray(new ColumnVector[owned.size()]));
+    return batch;
   }
 
   /**
@@ -376,9 +356,9 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
    */
   public ColumnarBatch projectFused(ColumnarBatch input) {
     int len = input.numRows();
-    var owned = new ArrayList<ColumnVector>();
+    owned.clear();
     try {
-      ColumnVector[][] fusedColumns = computeFused(input, len, owned);
+      computeFused(input, len);
       int total = 0;
       for (ColumnVector[] kernelColumns : fusedColumns) {
         total += kernelColumns.length;
@@ -389,47 +369,61 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
         System.arraycopy(kernelColumns, 0, all, at, kernelColumns.length);
         at += kernelColumns.length;
       }
-      var batch = new ColumnarBatch(all);
-      batch.setNumRows(len);
-      trackOwned(batch, owned.toArray(new ColumnVector[0]));
-      return batch;
+      return handOut(all, len);
     } catch (Throwable e) {
       closeAllQuietly(owned, "a Varka output vector after a failed projection");
       throw e;
+    } finally {
+      owned.clear();
     }
   }
 
   /**
-   * Reads the classification into the arrays {@link #project} walks per batch. The classes of the
-   * Scala data model are not sealed to Java, so the ladder ends in a throw; row 300 makes them
-   * records and this a {@code switch}.
+   * Reads the classification once: into the arrays {@link #project} walks per batch, and into the
+   * entries each further kernel computes and the residual entries. The Scala data model is not
+   * sealed to Java, so the {@code switch} ends in a {@code default} that throws; row 300 makes it
+   * sealed records and removes it.
    */
   private void layout() {
     if (sources == null) {
-      List<VarkaOutputSpec> specs = CollectionConverters.asJava(compiled().get().specs());
+      PartialVarkaProjection partial = compiled().get();
+      List<VarkaOutputSpec> specs = new ArrayList<>(CollectionConverters.asJava(partial.specs()));
+      List<NamedExpression> named = new ArrayList<>(CollectionConverters.asJava(projectList));
       var kinds = new Source[specs.size()];
       var kernels = new int[specs.size()];
       var indexes = new int[specs.size()];
+      var byKernel = new ArrayList<List<NamedExpression>>();
+      for (int k = 0; k < partial.more().size(); k++) {
+        byKernel.add(new ArrayList<>());
+      }
+      var residual = new ArrayList<NamedExpression>();
       for (int i = 0; i < kinds.length; i++) {
-        VarkaOutputSpec spec = specs.get(i);
-        if (spec instanceof FusedOutput fused) {
-          kinds[i] = Source.FUSED;
-          indexes[i] = fused.fusedIndex();
-        } else if (spec instanceof KernelOutput kernel) {
-          kinds[i] = Source.KERNEL;
-          kernels[i] = kernel.kernel();
-          indexes[i] = kernel.fusedIndex();
-        } else if (spec instanceof ForwardedOutput forwarded) {
-          kinds[i] = Source.FORWARDED;
-          indexes[i] = forwarded.childOrdinal();
-        } else if (spec == ResidualOutput$.MODULE$) {
-          kinds[i] = Source.RESIDUAL;
-        } else {
-          throw new IllegalStateException("unknown output spec " + spec);
+        switch (specs.get(i)) {
+          case FusedOutput fused -> {
+            kinds[i] = Source.FUSED;
+            indexes[i] = fused.fusedIndex();
+          }
+          case KernelOutput kernel -> {
+            kinds[i] = Source.KERNEL;
+            kernels[i] = kernel.kernel();
+            indexes[i] = kernel.fusedIndex();
+            byKernel.get(kernel.kernel() - 1).add(named.get(i));
+          }
+          case ForwardedOutput forwarded -> {
+            kinds[i] = Source.FORWARDED;
+            indexes[i] = forwarded.childOrdinal();
+          }
+          case ResidualOutput$ r -> {
+            kinds[i] = Source.RESIDUAL;
+            residual.add(named.get(i));
+          }
+          default -> throw new IllegalStateException("unknown output spec " + specs.get(i));
         }
       }
       kernelOf = kernels;
       indexOf = indexes;
+      kernelEntries = byKernel;
+      residualEntries = residual;
       sources = kinds;
     }
   }
@@ -437,57 +431,44 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
   /**
    * Runs every kernel over the input batch, in turn, into freshly allocated Arrow vectors from this
    * task's one allocator, appending them to {@code owned} as they are created (the caller closes
-   * {@code owned} on failure). Returns each kernel's columns by its fused index, the first kernel's
-   * first. A kernel that declines the batch throws, and the whole batch falls back, as it does with
-   * one kernel: the kernels are one projection, answered whole or not at all.
+   * {@code owned} on failure), and leaves each kernel's columns by its fused index in
+   * {@link #fusedColumns}, the first kernel's first. A kernel that declines the batch throws, and
+   * the whole batch falls back, as it does with one kernel: the kernels are one projection,
+   * answered whole or not at all.
    */
-  private ColumnVector[][] computeFused(ColumnarBatch input, int len, List<ColumnVector> owned) {
+  private void computeFused(ColumnarBatch input, int len) {
     BufferAllocator allocator = taskAllocator();
     VarkaKernelPart[] kernelParts = parts();
-    var columns = new ColumnVector[kernelParts.length + 1][];
-    columns[0] = runKernel(input, len, owned, allocator, vectorAllocator);
-    for (int k = 0; k < kernelParts.length; k++) {
-      try {
-        columns[k + 1] = kernelParts[k].runKernel(input, len, owned, allocator, vectorAllocator);
-      } catch (VarkaBatchDeclined | VarkaKernelFailure e) {
-        throw blamed(e, kernelParts[k]);
-      }
+    if (fusedColumns == null) {
+      fusedColumns = new ColumnVector[kernelParts.length + 1][];
     }
-    return columns;
+    fusedColumns[0] = runKernel(input, len, owned, allocator, vectorAllocator);
+    for (int k = 0; k < kernelParts.length; k++) {
+      fusedColumns[k + 1] = kernelParts[k].runKernel(input, len, owned, allocator, vectorAllocator);
+    }
   }
 
   // ---- the residual entries ------------------------------------------------------------------
 
   private void resolveResidual() {
     if (!residualResolved) {
-      List<VarkaOutputSpec> specs = CollectionConverters.asJava(compiled().get().specs());
-      List<NamedExpression> named = CollectionConverters.asJava(projectList);
-      var entries = new ArrayList<NamedExpression>();
-      for (int i = 0; i < specs.size(); i++) {
-        if (specs.get(i) == ResidualOutput$.MODULE$) {
-          entries.add(named.get(i));
-        }
-      }
-      residualCount = entries.size();
-      residualExprs = CollectionConverters.asScala(entries).toSeq();
+      layout();
+      residualCount = residualEntries.size();
       if (residualCount > 0) {
+        var expressions = new ArrayList<Expression>();
         var attributes = new ArrayList<Attribute>();
-        for (NamedExpression entry : entries) {
+        for (NamedExpression entry : residualEntries) {
+          expressions.add((Expression) entry);
           attributes.add(entry.toAttribute());
         }
         residualSchema = DataTypeUtils$.MODULE$.fromAttributes(
             CollectionConverters.asScala(attributes).toSeq());
         residualProjection = UnsafeProjection$.MODULE$.create(
-            expressions(residualExprs), childAttributes());
+            CollectionConverters.asScala(expressions).toSeq(), childAttributes());
         residualConverter = VarkaRowToColumn.apply(residualSchema);
       }
       residualResolved = true;
     }
-  }
-
-  @SuppressWarnings("unchecked")
-  private static Seq<Expression> expressions(Seq<?> items) {
-    return (Seq<Expression>) items;
   }
 
   /**

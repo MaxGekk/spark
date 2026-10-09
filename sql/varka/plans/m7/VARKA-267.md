@@ -276,3 +276,18 @@ Scala's 358 (1.7 times, where the band was no more than half again); the Java ca
 documentation and a layout table, an explicit constructor pair, and the plumbing Scala hid in
 `lazy val` and pattern matches. Row 267 is done.
 
+**Review of #694 (`/code-review high`).** Fixed in the PR, none of it a wrong answer: the cold-path
+benchmark silenced a logger the emission warning no longer uses (it moved to the base in 267b);
+`project` allocated an owned list, a `List` view, a sized-zero `toArray` and the kernels' column
+array per batch, and now reuses the list and the array, so a batch allocates its output columns, its
+batch and the owned array its tracking keeps; the classification was walked three times with three
+copies of the spec test, and `layout` now reads it once with a pattern `switch` (its `default` the one
+row 300 removes) and hands the further kernels' entries and the residual entries to the two other
+readers; the four settings the subclass copied from the base to build a further kernel are now the
+base's own `kernelPart` factory, so the first kernel and the further ones cannot drift apart; a further
+kernel names itself in a decline or failure (`VarkaKernelPart` overrides `kernelReady` and
+`runKernel`) instead of every caller wrapping it; and the residual expressions are a local, so the
+unchecked cast helper is gone, which leaves the Java at 586 lines (1.6 times the Scala). The 37 suites pass
+again (526 tests). The benchmark pair above ran
+before these changes; the per-batch path only lost allocations, so it was not rerun.
+
