@@ -360,17 +360,18 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     assert(firstRaised.get === 196611L)
   }
 
-  // The proof the emitted arithmetic rests on, run as the arithmetic: the unsigned multiplier,
-  // the one shift and the sign bit, against Java's `/`, for all 2^32 dividends and every divisor
-  // in `intDivisors`. Scalar, not the kernel - the kernel's parity over the extremes and the
-  // fuzzer's random dividends are above; this is the exhaustive half. One test per divisor, so a
-  // failure names its divisor and each stays well inside the test watchdog's cap; the comparison
-  // is a plain branch, since an assert with an interpolated clue builds a string on every one of
-  // the 2^32 iterations, which kept the single test of nine divisors running for hours
-  // (VARKA-283.md).
+  // The statement `sql/varka/proofs/int_mulhi_divide.smt2` proves (VARKA-240), run as Java's own
+  // arithmetic: the unsigned multiplier, the one shift and the sign bit, against Java's `/`, for
+  // all 2^32 dividends and every divisor in `intDivisors`. The proof is the solver's reading of a
+  // model of Java's operators; this is the JVM's, so the two are second implementations of each
+  // other and run side by side in the nightly. Scalar, not the kernel - the kernel's parity over
+  // the extremes and the fuzzer's random dividends are above. One test per divisor, so a failure
+  // names its divisor and each stays well inside the test watchdog's cap; the comparison is a
+  // plain branch, since an assert with an interpolated clue builds a string on every one of the
+  // 2^32 iterations, which kept the single test of nine divisors running for hours (VARKA-283.md).
   for (d <- intDivisors) {
     test(s"the multiply-high form is exact over every int32 dividend for divisor $d " +
-        "(opt-in: -Dvarka.sweep=true; VARKA-149)") {
+        "(opt-in: -Dvarka.sweep=true; VARKA-149; proven in int_mulhi_divide.smt2)") {
       assume(System.getProperty("varka.sweep") == "true",
         "set -Dvarka.sweep=true to sweep the multiply-high form")
       val magic = VarkaDivisionLowering.signedMagicForTest(math.abs(d.toLong))

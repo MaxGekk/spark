@@ -306,10 +306,88 @@ minute, the two solvers' agreement, and the proof against the sweep.
    recorded in section 9.
 7. The sweep cites the proof; the lesson; row 240, open question 1 and item 58 recorded.
 
-## 9. Outcome
+## 9. Outcome, 9 October 2026
 
-<!-- Filled in when the measurement lands: the numbers with the committed file
-     they trace to (dev/varka_quote_check.py holds you to this), 6.1's
-     predictions scored one by one, what moved that the plan did not list, and
-     what the task leaves for later - which goes to the milestone's debt
-     register or a scope document, never to a code comment. -->
+### 9.1 What was built
+
+* **`signedMagic` asserts Theorem 5.1.** It returns a `MulHiMagic` record whose constructor refuses
+  a pair that misses the theorem's inequality, a multiplier of 2^32 or more, or a shift over 62.
+  Where the book's smallest shift misses the theorem the shift is raised until it holds, and the
+  magnitude is a long up to 2^31, so `Integer.MIN_VALUE` derives `(0x80000001, 62)`.
+  `VarkaEmittedBytesSuite` passes unchanged: no emitted byte moved.
+* **`sql/varka/proofs/`.** The prelude `java.smt2`; `java_check.smt2`, 24 checks over 1,570
+  equations whose right-hand sides the JVM computed; `int_mulhi_divide.smt2`, 35 checks - the
+  domain's two extremes, and for each of the eleven divisors the form exact, the multiplier lowered
+  by one refuted and the shift raised by one refuted. Both checked files are rendered by
+  `VarkaProofFiles`, and `VarkaProofFilesSuite` holds them to the code.
+* **`dev/varka_prove.sh`**, its six-case self-test, the linters' step under Z3, and the nightly's
+  `prove` step under both solvers. On the laptop `--install both` takes under five seconds and is a
+  no-op once done, the self-test two and a half, and every proof under both solvers under one.
+
+### 9.2 The nightly cycle
+
+`dev/varka_nightly.sh --iterations 100 --sparkfuzz-iterations 0 --skip-deopt --skip-cliff` on
+commit `4151585adf1`, which carries the sweep step and the new `prove` step; the volume steps it
+skips have nothing to compare.
+
+| step | status | seconds | what it said |
+| :--- | :--- | ---: | :--- |
+| canary | failed | 31 | the machine off its baseline, straight after a cold build: the step that refuses benchmarks, not a check of this change |
+| fuzz | ok | 47 | 100 iterations, seed 20261009 |
+| forced | ok | 427 | VARKA-296's structural check, 100,000 projections |
+| sweep | ok | 219 | the eleven multiply-high sweeps exact; the census over all 2,147,483,647 magnitudes, 327,741,950 shifts raised, the first for 196611 |
+| prove | ok | 3 | the self-test under both solvers; both files hold under each, 59 checks apiece |
+
+So the sweep and the proof agree on every divisor, on one commit: the JVM running the form over all
+2^32 dividends, and two solvers proving the same statement over a model of Java's operators.
+
+### 9.3 The planted faults
+
+1. **In the code**: 12's multiplier lowered by one inside `signedMagic`. Nine tests fail, the
+   sweeps for 12 and -12, the rendering test, the constants test, the census and the kernel
+   matrix among them, and every one on the same line: "(715827882, 33) is not a multiply-high pair
+   for 12: it fails Theorem 5.1's inequality". The record refuses the pair before the sweep's
+   arithmetic or the renderer runs.
+2. **Past the record**: the same pair, stated in the proof - its "multiplier lowered by one" check.
+   Both solvers refute it, Z3 with n = -12 (the form gives 0, Java -1) and cvc5 with n = 2147483641
+   (178956969 against 178956970), and both counterexamples fail in the JVM under the sweep's own
+   arithmetic, whose first failing dividend is -2147483641.
+3. **In the prelude**: five definitions made wrong - `<<` masking its count to six bits, `/`
+   flooring, `Integer.MIN_VALUE / -1` left unwrapped, `>>>` as `>>`, and an `L2I` that saturates.
+   `java_check.smt2` fails each under both solvers. The multiply-high proof fails three and goes on
+   holding under the other two, whose difference its quotients never reach.
+
+### 9.4 The predictions scored
+
+1. **The linters' step under a minute on the CI runner.** Scored when this pull request's CI runs;
+   the laptop's whole step is under ten seconds.
+2. **Holds.** Z3 and cvc5 meet every expectation, 59 checks each.
+3. **Holds, with a correction to how.** The sweep and the proof agree on all eleven divisors. The
+   planted fault fails the sweep and the rendering test, but not through the arithmetic: the record
+   refuses the pair first, so a wrong constant in the code never reaches either. Past the record,
+   the proof refutes it with counterexamples the sweep's arithmetic confirms.
+4. **Holds.** 327,741,950 shifts raised below 2^31 (2^31 itself is not), the first for 196611,
+   none among the divisors in use, and no pair outside the lanes' two conditions.
+5. **Holds.** `emitted_bytes.json` is byte-identical.
+
+### 9.5 Corrections
+
+* **The sweep's cost.** Sections 1 and 3.6 quoted item 58's thirteen and a half minutes for the
+  sweep. Row 283 had already made it five seconds a divisor on 4 October (`VARKA-283.md` 9), and
+  the forked division suite now runs the eleven sweeps, the census and its other tests in about two
+  minutes (2 minutes 1 second in the cycle, and 2 minutes 0 and 15 seconds in two runs after). So
+  the proof saves the nightly little; what it adds is that every pull request runs it, in the
+  linters' job, that the theorem's assertion covers every divisor rather than eleven, and a second
+  implementation for the sweep to agree with.
+* **Prediction 3** assumed a wrong constant would reach the sweep; the assertion stops it first,
+  which is the stronger result.
+
+### 9.6 What this leaves
+
+* **Row 241**, the long lane's two double-dividing forms, in floating-point theory. Int-blasting does
+  not apply there; Bitwuzla's static build (section 2) is the first solver to try.
+* **The emitted bytecode.** The proof states the arithmetic `emitMulHiDivide` is written to emit,
+  restated by hand as `mulhi.divide`; what the emitter actually emits is checked by the kernel's
+  parity over the extremes and by the fuzzers, not by the proof. That is the emitter layer item 58
+  judged out of a solver's reach.
+* **`D2I` and `D2L` in the prelude**, with row 241.

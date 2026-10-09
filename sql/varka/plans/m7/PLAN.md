@@ -515,7 +515,7 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 
 | task | what it is | where it came from | size |
 | ---: | :--- | :--- | :--- |
-| 240 | The proof tooling, and the int32 multiply-high bound per divisor proven. **Planned** (`VARKA-240.md`): `sql/varka/proofs/`, `dev/varka_prove.sh` in the linters' job, compared with VARKA-149's sweep for one nightly cycle, then the sweep's opt-in test cites the proof; the prover's verdicts checked (unknown and timeouts fail, sanity queries must be `sat`, Z3 and cvc5 agree in the nightly), Java's operators stated in a prelude, the constants rendered from the code, and Theorem 5.1's inequality asserted in `signedMagic` for every divisor | item 58 step 1, `m7/READING.md` 11 | small |
+| 240 | **Done** (`VARKA-240.md` 9, 9 October 2026): `sql/varka/proofs/`, Java's int and long operators stated once over SMT-LIB integers and held to the JVM, and the multiply-high division proven exact for eleven divisors under Z3 and cvc5, which agree; `dev/varka_prove.sh` checks every verdict, with a self-test, in the linters' job under Z3 and the nightly under both, beside the sweep it duplicates, which now cites it. `signedMagic` asserts Theorem 5.1, raising the book's shift for the 327,741,950 divisors whose pair misses it, the first 196611, with no emitted byte moved. Over bit-vectors the proof timed out under every solver tried; over integers it takes under a second | item 58 step 1, `m7/READING.md` 11 | small |
 | 241 | The long-lane division forms proven at row 166's regions and at 2^52 - 1, the solver asked for the exact bound; the forms divide in doubles, so floating-point theory, starting with a spike that records the solve time | item 58 step 2, `m7/READING.md` 11 | medium |
 | 242 | The other bounded lowerings proven as met: `floorMod7`'s forms, the decomposition's constants over the covered years, the unsigned range compare (row 208); `sql/varka/AGENTS.md` says a new bounded lowering comes with its proof file; each calendar division site's range and theorem recorded, every quoted bound labelled sufficient or exact, the first failing input past it pinned; the unsigned compare is the leap hash's | item 58 step 3, `m7/READING.md` 11 | small to medium |
 | 243 | The specification fragment: one definition per operation the coverage table lowers that the standard fixes, every interpretation choice recorded; each operation says whether it truncates or floors | item 59 step 1, `m7/READING.md` 11 | medium |
@@ -656,6 +656,10 @@ anything rows 262, 263 and 269 find is weighed against the milestone's scope (se
 
 1. **Which solver gates the lint job?** SMT-LIB is neutral, and the nightly runs both (2.1); 240
    chooses the lint job's by install cost and solve time. Neither is on the laptop today.
+   *Answered, 9 October 2026 (`VARKA-240.md` 2.6): Z3 5.1.0, installed by `pip` in four
+   seconds, with cvc5 1.4.1 the nightly's second opinion. Both solve the first proof file in a third
+   of a second; Bitwuzla has no integer theory, in which the proofs are stated, and is left for
+   row 241's floating point.*
 2. **Does 254 retune the weights or retire them?** Item 63 leaves it to the task; VARKA-236's
    planner reads the same costs, so 254 takes its answer from 236's build.
 3. **Where 255's queue workflow lives on the fork.** A scheduled workflow runs from the default
