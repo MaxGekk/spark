@@ -38,7 +38,8 @@ class VarkaSpeciesGuardSuite extends VarkaEmitterTestBase {
   private def bytesAt(options: VarkaEmitOptions): (String, Array[Byte]) =
     emit(new VarkaVectorIR.AddDays(new ColumnRef(0), new LiteralSlot(0)), 1, options)
 
-  test("a kernel emitted for the JVM's own width names no second species") {
+  test("a kernel emitted for the JVM's own width names no second species",
+      VarkaMatrix.PinsDefaults) {
     val (_, bytes) = bytesAt(VarkaMatrix.base)
     assert(VarkaSpeciesGuard.secondSpecies(bytes).isEmpty)
     // The preferred width named explicitly is the same species object as SPECIES_PREFERRED.
@@ -46,16 +47,38 @@ class VarkaSpeciesGuardSuite extends VarkaEmitterTestBase {
     assert(VarkaSpeciesGuard.secondSpecies(same).isEmpty)
   }
 
-  test("a kernel emitted at another lane count names a second species, and the guard refuses it") {
+  test("a kernel emitted at another lane count names a second species",
+      VarkaMatrix.PinsDefaults) {
     val named = bytesAt(VarkaMatrix.base.withLanesOverride(otherIntLanes))
     val second = VarkaSpeciesGuard.secondSpecies(named._2).asScala.toSeq
     assert(second.exists(_.startsWith("IntVector.SPECIES_")), second)
-    assert(!VarkaOwnJvm.inChild, "the guard is off in a suite's own JVM")
-    val e = intercept[IllegalStateException](VarkaSpeciesGuard.check(named._1, named._2))
-    assert(e.getMessage.contains("second vector species"), e.getMessage)
   }
 
-  test("the long lane's second species is seen as well") {
+  test("the registry refuses a second width and keeps passing the established one",
+      VarkaMatrix.PinsDefaults) {
+    val registry = new VarkaSpeciesGuard.Registry
+    val own = bytesAt(VarkaMatrix.base)._2
+    val other = bytesAt(VarkaMatrix.base.withLanesOverride(otherIntLanes))._2
+    assert(registry.admit(own).isEmpty)
+    val conflicts = registry.admit(other).asScala.toSeq
+    assert(conflicts.exists(_.startsWith("IntVector.SPECIES_")), conflicts)
+    // A refusal registers nothing, so a kernel of the established width still passes.
+    assert(registry.admit(bytesAt(VarkaMatrix.base)._2).isEmpty)
+    assert(!VarkaOwnJvm.inChild, "the guard is off in a suite's own JVM")
+  }
+
+  test("a JVM that runs every kernel at one other width is consistent, not a violation",
+      VarkaMatrix.PinsDefaults) {
+    // The option matrix's `lanesOverride=4` configuration pins the lane count for every suite: a
+    // species that is not the preferred one, used by every kernel, is still one species.
+    val registry = new VarkaSpeciesGuard.Registry
+    val other = VarkaMatrix.base.withLanesOverride(otherIntLanes)
+    assert(registry.admit(bytesAt(other)._2).isEmpty)
+    assert(registry.admit(bytesAt(other)._2).isEmpty)
+    assert(registry.admit(bytesAt(VarkaMatrix.base)._2).asScala.nonEmpty)
+  }
+
+  test("the long lane's second species is seen as well", VarkaMatrix.PinsDefaults) {
     val otherLongLanes = if (preferredLongLanes == 2) 4 else 2
     val col = new ColumnRef(0, VarkaVectorIR.LaneType.LONG)
     val lit = new LiteralSlot(0, VarkaVectorIR.LaneType.LONG)

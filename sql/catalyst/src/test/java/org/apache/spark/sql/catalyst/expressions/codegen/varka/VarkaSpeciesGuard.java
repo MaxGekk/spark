@@ -25,7 +25,9 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -49,6 +51,11 @@ import jdk.incubator.vector.VectorSpecies;
  * that is the preferred species. So the bytes say it: a field reference to a
  * {@code SPECIES_<bits>} whose bit size is not the preferred species' of that vector class is a
  * second species, and {@link #check} throws on it where a test is about to define the class.
+ *
+ * <p>The check is against the species the JVM has already used, not against the preferred one,
+ * because a matrix configuration that pins the lane count ({@code lanesOverride=4}) runs every
+ * suite at one width that is not the preferred: one species per lane type is what keeps the
+ * templates monomorphic, however it is spelled.
  *
  * <p>A test that needs the second width runs it in a JVM of its own (a forked probe, as the
  * assembly and cliff suites do) or in the gate's {@code -XX:MaxVectorSize=16} JVM, where the
@@ -122,22 +129,87 @@ public final class VarkaSpeciesGuard {
     return "unknown";
   }
 
+  /** The species sizes, per vector class, a class's bytes use: the preferred one counts. */
+  private static Map<String, List<Integer>> sizesUsed(byte[] bytes) {
+    var used = new LinkedHashMap<String, List<Integer>>();
+    for (PoolEntry entry : ClassFile.of().parse(bytes).constantPool()) {
+      if (entry instanceof FieldRefEntry field
+          && field.owner().asInternalName().startsWith(VECTOR_PREFIX)) {
+        String owner = field.owner().asInternalName();
+        String name = field.name().stringValue();
+        Matcher m = SPECIES.matcher(name);
+        int bits;
+        if (name.equals("SPECIES_PREFERRED")) {
+          bits = preferred(owner);
+        } else if (m.matches()) {
+          bits = Integer.parseInt(m.group(1));
+        } else {
+          continue;
+        }
+        var sizes = used.computeIfAbsent(owner, o -> new ArrayList<>());
+        if (!sizes.contains(bits)) {
+          sizes.add(bits);
+        }
+      }
+    }
+    return used;
+  }
+
   /**
-   * Throws if {@code bytes} would define a second species in this JVM; in {@code report} mode
-   * appends the violation to the report file instead.
+   * The species sizes the classes defined in one JVM have used, per vector class. A JVM that runs
+   * every kernel at one width - the default, or a matrix configuration that pins the lane count
+   * for every suite - has one size per class however it spells it, and a class that would add a
+   * second size is the violation. {@link #SHARED} is the test JVM's.
+   */
+  public static final class Registry {
+    private final Map<String, Integer> seen = new LinkedHashMap<>();
+
+    /**
+     * The sizes {@code bytes} would add beside ones already seen, described, or none if it adds
+     * none; a class that conflicts registers nothing, so later kernels of the established width
+     * still pass.
+     */
+    public synchronized List<String> admit(byte[] bytes) {
+      var conflicts = new ArrayList<String>();
+      var fresh = new LinkedHashMap<String, Integer>();
+      for (var e : sizesUsed(bytes).entrySet()) {
+        String name = e.getKey().substring(VECTOR_PREFIX.length());
+        List<Integer> sizes = e.getValue();
+        if (sizes.size() > 1) {
+          conflicts.add(name + " at " + sizes + " bits in one class");
+          continue;
+        }
+        Integer established = seen.get(e.getKey());
+        if (established != null && !established.equals(sizes.get(0))) {
+          conflicts.add(name + ".SPECIES_" + sizes.get(0) + " beside the established "
+              + established);
+        } else {
+          fresh.put(e.getKey(), sizes.get(0));
+        }
+      }
+      if (conflicts.isEmpty()) {
+        seen.putAll(fresh);
+      }
+      return conflicts;
+    }
+  }
+
+  /** The test JVM's registry. */
+  static final Registry SHARED = new Registry();
+
+  /**
+   * Throws if {@code bytes} would put a second species into this JVM; in {@code report} mode
+   * appends the classes that name a non-preferred species to the report file instead.
    */
   public static void check(String className, byte[] bytes) {
     String mode = ownJvm() ? "off" : mode();
     if (mode.equals("off")) {
       return;
     }
-    List<String> second = secondSpecies(bytes);
-    if (second.isEmpty()) {
-      return;
-    }
     if (mode.equals("report")) {
+      List<String> second = secondSpecies(bytes);
       String file = System.getProperty("varka.speciesGuard.report");
-      if (file != null) {
+      if (!second.isEmpty() && file != null) {
         String line = suiteName() + "\t" + className + "\t" + String.join(", ", second) + "\n";
         try {
           Files.write(Paths.get(file), line.getBytes(StandardCharsets.UTF_8),
@@ -148,9 +220,12 @@ public final class VarkaSpeciesGuard {
       }
       return;
     }
-    throw new IllegalStateException(className + " would put a second vector species into this "
-        + "JVM: " + String.join(", ", second) + ". Run it in a forked JVM, or where "
-        + "-XX:MaxVectorSize makes this width the preferred one (VARKA-246); the shared test JVM "
-        + "keeps one species per lane type.");
+    List<String> conflicts = SHARED.admit(bytes);
+    if (!conflicts.isEmpty()) {
+      throw new IllegalStateException(className + " would put a second vector species into this "
+          + "JVM: " + String.join(", ", conflicts) + ". Run it in a forked JVM, or where "
+          + "-XX:MaxVectorSize makes this width the preferred one (VARKA-246); the shared test "
+          + "JVM keeps one species per lane type.");
+    }
   }
 }

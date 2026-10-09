@@ -128,7 +128,9 @@ class VarkaMemorySanitizerSuite extends SparkFunSuite {
       VarkaVectorIR.Overflow.WRAP, new VarkaVectorIR.ColumnRef(0, VarkaVectorIR.LaneType.INT),
       new VarkaVectorIR.LiteralSlot(0, VarkaVectorIR.LaneType.INT)))
     val className = "org.apache.spark.sql.varka.execution.VarkaSanitizerHarnessProbe"
-    val bytes = VarkaLoopEmitter.emit(className, roots.asJava, 1, 1)
+    // Under the option matrix's options, as every other kernel of the JVM is: a configuration
+    // that pins the lane count would otherwise mix the preferred width into the JVM (VARKA-246).
+    val bytes = VarkaLoopEmitter.emit(className, roots.asJava, 1, 1, null, null, VarkaMatrix.base)
     val length = 100
     val before = VarkaMemorySanitizer.checked()
     VarkaKernelCheck.runAndCompare("sanitizer harness probe", className, bytes, roots, 1,

@@ -155,3 +155,24 @@ width-audit suites, the benchmarks) are untouched. The guard sits where the emit
 and `VarkaSpeciesGuard.check` is the one line to add there. `sql/core` runs the production loader
 at the session's width and sets no lanes override, which the census at 512 bits could not show for
 a width it was not run at; no `sql/core` run was made at 128 bits here.
+
+### 9.1 Correction after #685's CI, 9 October 2026
+
+The first CI run of #685 failed `Varka suites: catalyst` on a runner whose preferred width is 256
+bits, in the option matrix's `lanesOverride=4` configuration: that configuration pins the lane
+count to 4 for every suite, so every kernel the JVM defines is at 128 bits, and a guard that
+compared with `SPECIES_PREFERRED` called every one of them a second species. The guard was
+wrong in kind: the thing to keep is one species per lane type in a JVM, however it is spelled.
+`VarkaSpeciesGuard.Registry` now records the size each vector class has used (the preferred one
+counts as its size), refuses a class that would add a second size, and registers nothing when it
+refuses, so later kernels of the established width pass. The pure `secondSpecies` (against the
+preferred) stays for the census. Running the configuration over all catalyst suites then found one
+real mix: `VarkaMemorySanitizerSuite`'s harness probe emitted with the emitter's default options,
+beside kernels at the configuration's width; it emits with `VarkaMatrix.base` now. The guard's own
+tests are tagged `PinsDefaults`, since a configuration changes what "the JVM's own width" means.
+
+All four lane-related configurations (`lanesOverride=4`, `lanesOverride=16`,
+`narrowHalfSpecies=true`, `validityByWidth=false`) pass over every catalyst suite, as do the
+defaults. The prediction in section 6.1 that the guard finds no violation "at 512, 256 or 128
+bits" was about the defaults; it said nothing of the matrix, which is where it failed.
+
