@@ -225,4 +225,19 @@ the Java and not by the path as a whole; a per-node serve method removes them an
 **1-row `date_add` is not cleanly drift:** its five Scala runs (680, 545, 549, 534, 539 ns) and five
 Java runs (503, 556, 679, 617, 643) move in opposite directions across rounds, and the order
 alternates, which a real regression in the later rounds would also produce. The minimum says faster
-and the median says slower; a second run settles it and is recorded below when it has run.
+and the median says slower; a second run settles it, recorded in 9.4.
+
+### 9.4 The second pair run, 9 October 2026
+
+Five more interleaved rounds on the same machine, committed whole in
+`sql/core/benchmarks/VarkaEvaluatorOverheadBenchmark-jdk25-267b-pair2-results.txt`. The pair
+tool's verdict by medians: twelve cases, none slower, two faster by 10% or more (the 1-row filter
+by 15.6% and the 1-row `least` by 16.1%).
+
+**1-row `date_add` is settled: the Java is faster.** Its five runs, in nanoseconds a row, were
+544, 638, 567, 562, 538 for the Scala and 515, 611, 514, 471, 479 for the Java: median 562 against
+514 (the Java 9.5% faster by rate) and minimum 538 against 471 (12% faster), with the Java ahead
+in every round whichever side ran first. The first pair's median reading of 11.7% slower was the
+drift it was said to be: the Scala's values there ranged 534 to 680 across rounds, the Java's 503
+to 679, and this run's spread is 19% on the Scala side. By medians in the second pair eleven of
+the twelve cases are faster by rate and one (1,024-row `trunc`) is 0.5% slower, inside its spread.
