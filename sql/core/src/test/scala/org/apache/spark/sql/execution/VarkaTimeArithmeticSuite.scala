@@ -196,6 +196,18 @@ class VarkaTimeArithmeticSuite extends QueryTest with VarkaSharedSessions with V
     assert(actual.getMessage === expected.getMessage)
   }
 
+  test("t + the interval of Long.MinValue microseconds raises Spark's error, not t unchanged") {
+    // The smallest day-time interval is -106751991 days 04:00:54.775808, Long.MIN_VALUE
+    // microseconds. The multiply by 1000 wraps to 0 in a lane, so a kernel that admitted it
+    // answered every time unchanged, where Spark's multiplyExact throws on every row (VARKA-293).
+    val query = s"SELECT t + INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND AS v " +
+      s"FROM $crossing"
+    val expected = intercept[SparkArithmeticException](spark.sql(query).collect())
+    val actual = intercept[SparkArithmeticException](varkaSpark.sql(query).collect())
+    assert(actual.getCondition === expected.getCondition)
+    assert(actual.getMessage === expected.getMessage)
+  }
+
   test("a guard under a CASE arm fires only for the lanes the arm is taken for") {
     // The emitter confines a guard under a CASE arm to the lanes the arm is selected for
     // (VarkaEmitOptions.guardUnderArm), so a crossing row in the untaken arm neither throws on

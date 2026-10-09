@@ -973,6 +973,24 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     assert(reason.contains("longer than a day"), reason)
   }
 
+  test("t + a literal interval of Long.MinValue microseconds declines, like any beyond a day") {
+    // `Math.abs(Long.MIN_VALUE)` is negative, so a guard written `abs(micros) > day` let this one
+    // through to `micros * 1000`, which wraps to 0 and made the kernel add nothing, where Spark's
+    // multiplyExact throws on every row (VARKA-293). The bounds are compared as a range.
+    Seq(Long.MinValue, Long.MinValue + 1, -86400000001L, 86400000001L, Long.MaxValue).foreach {
+      micros =>
+        val interval = Literal(micros, DayTimeIntervalType(DayTimeIntervalType.DAY))
+        val reason = declineReason(TimeAddInterval(t6, interval), withLong)
+        assert(reason.contains("longer than a day"), s"$micros: $reason")
+    }
+    // The day itself, either way, is inside the guard: the sum is checked against the day.
+    Seq(-86400000000L, 86400000000L).foreach { micros =>
+      val interval = Literal(micros, DayTimeIntervalType(DayTimeIntervalType.DAY))
+      assert(VarkaExpressionCompiler.compile(
+        Seq(out(TimeAddInterval(t6, interval))), withLong).isDefined, micros)
+    }
+  }
+
   test("a comparison over t + dt fuses whole, with the guard inside the predicate") {
     // The comparison's operand rule falls through to `compileNode`, so a lowered TIME
     // expression is an operand like a column is; the guard rides inside the predicate, where

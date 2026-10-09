@@ -103,6 +103,7 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
   protected def load(
       named: (String, Array[Byte])): (VarkaFusedKernel, VarkaGeneratedClassLoader) = {
     val (className, bytes) = named
+    VarkaSpeciesGuard.check(className, bytes)
     val loader = new VarkaGeneratedClassLoader(getClass.getClassLoader)
     loader.defineGeneratedClass(className, bytes)
     val kernel = loader.loadClass(className).getConstructor()

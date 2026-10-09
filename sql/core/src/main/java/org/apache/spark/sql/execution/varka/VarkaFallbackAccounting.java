@@ -127,7 +127,7 @@ public final class VarkaFallbackAccounting {
 
   /**
    * Counts one kernel batch and says whether the allocation sampler measures it, on the schedule
-   * suites can set ({@code VarkaKernelEvaluator.allocationSchedule}).
+   * suites can set ({@code VarkaEvaluatorBase.allocationSchedule}).
    */
   public boolean sampleDue(VarkaAllocationSampler.Schedule schedule) {
     kernelBatches++;
