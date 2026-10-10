@@ -553,6 +553,7 @@ public abstract class VarkaEvaluatorBase {
         columns[o] = new VarkaOwnedArrowColumnVector(vector);
         owned.add(columns[o]);
         kernel.dstData[o] = vector.getDataBuffer().memoryAddress();
+        kernel.dstWidth[o] = vector.getTypeWidth();
         kernel.dstValidity[o] = vector.getValidityBuffer().memoryAddress();
         if (VarkaMemorySanitizer.ENABLED) {
           // The kernel's own bytes: len values, and the validity bitmap to its last whole word.

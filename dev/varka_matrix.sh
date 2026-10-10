@@ -153,6 +153,8 @@ fi
 CP=$(cat "$BUILD/classpath")
 mapfile -t OPTS < "$BUILD/jvm.opts"
 [ "$sanitize" = 1 ] && jvm_args+=("-Dvarka.sanitizeMemory=true")
+# Each batch a kernel serves also runs through its other body, and the two must agree (VARKA-303).
+jvm_args+=("-Dvarka.checkBothBodies=true")
 OPTS+=("${jvm_args[@]}")
 
 # The configurations, from VarkaMatrix itself so that the table stays their one source. The gate
