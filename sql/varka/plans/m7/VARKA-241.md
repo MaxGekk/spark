@@ -290,3 +290,6 @@ takes 8.5 s and installing both solvers from nothing 4 s.
 **Prediction, registered before the run:** the "Varka proofs" step takes under 30 seconds on the
 runner. The estimate is cvc5's 8 s doubled, as VARKA-240 measured the runner, plus the cvc5 download
 and its self-test.
+
+**Holds** (scored from #701's CI, run 38032625580): the step took 26 seconds, installing both
+solvers, self-testing both and running `--lint`, against 66 under Z3 alone.
