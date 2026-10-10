@@ -699,7 +699,9 @@ A suite that must run at another width mixes in `VarkaOwnJvm`, last. In a shared
 their names and tags, and the first to run starts a child JVM running the suite and reading its
 JUnit report; the others take their result from it. A name filter (`-z`) selects the tests it
 names, but the child runs the whole suite. To run one test directly, set
-`-Dvarka.ownJvm=true` (the guard is off there). The child is ended after the shortest per-test cap
+`-Dvarka.ownJvm=true` (the guard is off there). That is also the only way to time one: in the
+replay every test reads a millisecond or so and the first carries the child's whole run, which put
+VARKA-240's eleven exhaustive sweeps at a millisecond each in the nightly's log. The child is ended after the shortest per-test cap
 less a minute (`-Dvarka.ownJvm.timeoutMinutes` overrides), so a hung child is reported before a cap
 halts the parent. Run a new width-dependent test at all three widths a runner may have
 (`-XX:MaxVectorSize=64`, `32`, `16`): a 16-lane override is the preferred width at 512 bits and a
@@ -755,3 +757,36 @@ faults of `misdescribeRollback` (1 keeps the inputs, 2 the bounds, 3 truncates o
 the check looks like when it works. And a hand-built case for such a check has to give the fault
 somewhere to show: a stale input is invisible when a later entry reads the same column, and an
 over-truncation is invisible when the dropped column is registered again at the same slot.
+
+## A solver proves an arithmetic lowering in integers, and its verdicts are checked like output
+
+VARKA-240 proves the int lane's multiply-high division exact with SMT solvers
+(`sql/varka/proofs/`, run by `dev/varka_prove.sh`). Four things the next proof needs:
+
+* **State Java's arithmetic over integers, not bit-vectors.** "For every int n, the lanes compute
+  n / 12" over bit-vectors ran past five minutes under Z3, cvc5 and Bitwuzla alike, with Java's `/`
+  as `bvsdiv` or by its JLS definition, and under Z3's `intblast` and `polysat` engines too:
+  bit-blasting makes it the equivalence of two multiplier circuits, which a CDCL solver does not
+  prove. Over integers, with Java's wrapping stated by `mod` in the prelude `java.smt2`, every
+  product has a constant factor and the statement is linear, and both solvers prove it in under a
+  second. cvc5's `--solve-bv-as-int=sum` decides the bit-vector form as well, but Z3 has nothing
+  that does, and two solvers agreeing is the point. A counterexample, when there is one, every
+  encoding finds in milliseconds, so a fast `sat` says nothing about how hard the `unsat` will be.
+* **Hold the model to the JVM.** A prelude definition with Java's name and another meaning makes a
+  proof prove the wrong thing. `java_check.smt2` evaluates each definition over boundary operands
+  against values Java computed while rendering, and it caught all five faults planted in the
+  prelude, two of which - an `L2I` that saturates, and `Integer.MIN_VALUE / -1` left unwrapped - the
+  multiply-high proof alone went on proving.
+* **A verdict is output, and has to meet an expectation.** Z3 reports an error, drops the assertion
+  it could not read and goes on answering: declared `QF_LIA`, it rejected the prelude's multiplying
+  definition and then answered `sat`, which a check expecting `sat` would have taken. So every check
+  carries its expectation in an `(echo ...)`, and the script fails on any line that is neither an
+  expectation nor a verdict, on `unknown` (which a check past its limit answers), and on a missing
+  verdict; `--self-test` plants each failure and fails unless every one is caught. cvc5 needs
+  `--incremental` for `push`, while Z3 answers `(set-option :incremental true)` with an error, so
+  the option goes on the command line; Z3 prints an echo bare and cvc5 quoted.
+* **Count before asserting "for every".** Granlund and Montgomery's Theorem 5.1 inequality fails for
+  327,741,950 of the multipliers Hacker's Delight's `magic` derives, the first for 196611, although
+  each is exact by the book's own sharper condition: the theorem's hypothesis is sufficient, not
+  necessary. Deriving all 2^31 divisors, a minute on 24 threads, is what found it; `signedMagic`
+  now raises the shift until the theorem holds, which moved no divisor in use.

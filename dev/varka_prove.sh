@@ -1,0 +1,367 @@
+#!/usr/bin/env bash
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# The SMT proofs under sql/varka/proofs/ (VARKA-240), run by a solver with every verdict checked.
+#
+#   dev/varka_prove.sh                          # every proof under Z3, as the linters' job runs it
+#   dev/varka_prove.sh --solver both            # under Z3 and cvc5, each held to every expectation
+#   dev/varka_prove.sh --solver cvc5 int_mulhi_divide.smt2
+#   dev/varka_prove.sh --install z3|cvc5|both   # the pinned solvers, into target/varka-solvers/
+#   dev/varka_prove.sh --self-test              # one planted failure of each kind, every one caught
+#
+# A proof opens with its (set-logic ...) line, and java.smt2, Java's operators, is inserted after
+# it, since SMT-LIB has no include. Each check is an (echo "<what it shows>: expect sat|unsat")
+# followed by its (check-sat), so every verdict is held to the expectation before it. A run fails
+# on a verdict other than the expected one; on unknown, which is also what a check past its time
+# limit answers; on any output line that is neither an expectation nor a verdict, since Z3 goes on
+# answering after an error, and an assertion it dropped can turn a refutation into sat
+# (VARKA-240.md 2.5); on fewer verdicts than the file has checks; and on a solver that is asked for
+# and is missing or not at its pinned version. Under --solver both every check must meet its
+# expectation under each solver, so the two agree.
+#
+# A solver is taken from $VARKA_Z3 or $VARKA_CVC5, else from target/varka-solvers/, else from
+# PATH. VARKA_PROVE_LIMIT_MS bounds each check (default 10000) and VARKA_PROVE_RUN_LIMIT each
+# file's run under one solver, in seconds (default 300). Exit status 0 when every proof holds.
+set -uo pipefail
+# Usage text is found rather than numbered (see dev/varka_nightly.sh): from the line after the
+# license to the first line that is not a comment.
+usage() { sed -n '18,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+proofs="$root/sql/varka/proofs"
+solvers="$root/target/varka-solvers"
+# The pinned solvers (VARKA-240.md 2). Z3 from PyPI, whose wheel ships the z3 binary; cvc5 from
+# its release archive, since its wheel has the Python bindings only.
+Z3_VERSION=5.1.0
+CVC5_VERSION=1.4.1
+CVC5_ZIP=cvc5-Linux-x86_64-static.zip
+CVC5_SHA256=2f8efe58fe27ba7bccbb504533f690b9312d69da14192712460e4a19231f02a1
+limit_ms="${VARKA_PROVE_LIMIT_MS:-10000}"
+run_limit="${VARKA_PROVE_RUN_LIMIT:-300}"
+
+# ---------------------------------------------------------------------------------------------
+# The solvers.
+# ---------------------------------------------------------------------------------------------
+
+find_solver() {
+  local name="$1" given pinned
+  case "$name" in
+    z3) given="${VARKA_Z3:-}"; pinned="$solvers/z3-$Z3_VERSION/bin/z3" ;;
+    cvc5) given="${VARKA_CVC5:-}"; pinned="$solvers/cvc5-$CVC5_VERSION/bin/cvc5" ;;
+  esac
+  if [ -n "$given" ]; then
+    [ -x "$given" ] && echo "$given"
+    return 0
+  fi
+  if [ -x "$pinned" ]; then
+    echo "$pinned"
+    return 0
+  fi
+  command -v "$name" || true
+}
+
+# Prints the solver's path, or says why there is none and fails.
+require_solver() {
+  local name="$1" path version want
+  path="$(find_solver "$name")"
+  if [ -z "$path" ]; then
+    echo "varka_prove: $name is not installed; run dev/varka_prove.sh --install $name," \
+      "or point VARKA_${name^^} at one" >&2
+    return 1
+  fi
+  case "$name" in
+    z3) version="$("$path" --version | awk '{print $3}')"; want="$Z3_VERSION" ;;
+    cvc5) version="$("$path" --version | awk 'NR == 1 {print $2}')"; want="$CVC5_VERSION" ;;
+  esac
+  if [ "$version" != "$want" ]; then
+    echo "varka_prove: $path is $name $version, and the proofs are pinned to $want;" \
+      "run dev/varka_prove.sh --install $name" >&2
+    return 1
+  fi
+  echo "$path"
+}
+
+install_z3() {
+  local dir="$solvers/z3-$Z3_VERSION"
+  [ -x "$dir/bin/z3" ] && return 0
+  python3 -m venv "$dir" \
+    && "$dir/bin/pip" install --quiet --disable-pip-version-check "z3-solver==$Z3_VERSION.0"
+}
+
+install_cvc5() {
+  local dir="$solvers/cvc5-$CVC5_VERSION" tmp status
+  [ -x "$dir/bin/cvc5" ] && return 0
+  if [ "$(uname -s)-$(uname -m)" != Linux-x86_64 ]; then
+    echo "varka_prove: the pinned cvc5 build is Linux x86_64's; install cvc5 $CVC5_VERSION" \
+      "and point VARKA_CVC5 at it" >&2
+    return 1
+  fi
+  tmp="$(mktemp -d)"
+  curl -sSfL -o "$tmp/$CVC5_ZIP" \
+      "https://github.com/cvc5/cvc5/releases/download/cvc5-$CVC5_VERSION/$CVC5_ZIP" \
+    && echo "$CVC5_SHA256  $tmp/$CVC5_ZIP" | sha256sum -c --quiet \
+    && unzip -q "$tmp/$CVC5_ZIP" -d "$tmp" \
+    && mkdir -p "$dir/bin" && mv "$tmp/${CVC5_ZIP%.zip}/bin/cvc5" "$dir/bin/cvc5"
+  status=$?
+  rm -rf "$tmp"
+  return "$status"
+}
+
+# ---------------------------------------------------------------------------------------------
+# One file under one solver.
+# ---------------------------------------------------------------------------------------------
+
+# The verdicts against the expectations. Reads the solver's output; prints one line per failure
+# and then "checks <n>"; fails when anything failed.
+read_verdicts() {
+  awk -v expected="$1" -v status="$2" '
+    BEGIN { checks = 0; bad = 0; pending = "" }
+    {
+      line = $0
+      if (line == "") next
+      # cvc5 prints an echo in quotes, Z3 bare.
+      if (line ~ /^".*"$/) line = substr(line, 2, length(line) - 2)
+      if (line ~ /: expect (sat|unsat)$/) {
+        if (pending != "") { print "    no verdict for \"" pending "\""; bad++ }
+        pending = line
+        next
+      }
+      if (line == "sat" || line == "unsat") {
+        if (pending == "") {
+          print "    a verdict with no expectation before it: " line
+          bad++
+          next
+        }
+        want = pending
+        sub(/.*: expect /, "", want)
+        checks++
+        if (line != want) {
+          print "    " line " where " want " was expected: \"" pending "\""
+          bad++
+        }
+        pending = ""
+        next
+      }
+      # unknown, a timeout, an error, a warning: none of them is a verdict.
+      print "    " (pending != "" ? "at \"" pending "\": " : "") $0
+      bad++
+      if (line == "unknown" || line == "timeout") { checks++; pending = "" }
+    }
+    END {
+      if (pending != "") { print "    no verdict for \"" pending "\""; bad++ }
+      if (checks != expected) { print "    " checks " verdicts for " expected " checks"; bad++ }
+      if (status != 0) {
+        print "    the solver exited with status " status \
+          (status == 124 ? ", past the run limit" : "")
+        bad++
+      }
+      print "checks " checks
+      exit (bad > 0)
+    }'
+}
+
+# run_file SOLVER PATH FILE [PRELUDE]: runs FILE, with PRELUDE (java.smt2 unless given, none when
+# empty) inserted after its set-logic line, prints a line for it, and fails if anything failed.
+run_file() {
+  local name="$1" solver="$2" file="$3" prelude="${4-$proofs/java.smt2}"
+  local input expected start out status report rc ms checks
+  input="$(mktemp --suffix=.smt2)"
+  if ! awk -v prelude="$prelude" '
+      { print }
+      /^\(set-logic / && !done {
+        if (prelude != "") { while ((getline l < prelude) > 0) print l }
+        done = 1
+      }
+      END { exit !done }' "$file" > "$input"; then
+    printf '%-5s %-28s no (set-logic ...) line to insert the prelude after\n' \
+      "$name" "$(basename "$file")"
+    rm -f "$input"
+    return 1
+  fi
+  expected="$(grep -c -E '^\(echo ".*: expect (sat|unsat)"\)$' "$file")"
+  local -a args
+  case "$name" in
+    z3) args=(-smt2 "-t:$limit_ms" "$input") ;;
+    cvc5) args=(--lang=smt2 --incremental "--tlimit-per=$limit_ms" "$input") ;;
+  esac
+  start="$(date +%s%N)"
+  out="$(timeout "$run_limit" "$solver" "${args[@]}" 2>&1)"
+  status=$?
+  ms=$((($(date +%s%N) - start) / 1000000))
+  rm -f "$input"
+  report="$(printf '%s\n' "$out" | read_verdicts "$expected" "$status")"
+  rc=$?
+  checks="$(printf '%s\n' "$report" | tail -1 | awk '{print $2}')"
+  printf '%-5s %-28s %4s checks %4d.%02d s  %s\n' "$name" "$(basename "$file")" "$checks" \
+    $((ms / 1000)) $((ms % 1000 / 10)) "$([ "$rc" -eq 0 ] && echo holds || echo FAILED)"
+  printf '%s\n' "$report" | sed '$d'
+  return "$rc"
+}
+
+# ---------------------------------------------------------------------------------------------
+# The self-test: the checker of verdicts, checked.
+# ---------------------------------------------------------------------------------------------
+
+self_test() {
+  local name="$1" solver="$2" dir bad=0
+  dir="$(mktemp -d)"
+  cat > "$dir/control.smt2" <<'EOF'
+(set-logic QF_NIA)
+(echo "int addition wraps at the top of the range: expect unsat")
+(push 1)
+(assert (not (= (jint.add jint.MAX 1) jint.MIN)))
+(check-sat)
+(pop 1)
+(echo "an int can be zero: expect sat")
+(push 1)
+(declare-const x Int)
+(assert (and (jint.in x) (= x 0)))
+(check-sat)
+(pop 1)
+EOF
+  cat > "$dir/wrong.smt2" <<'EOF'
+(set-logic QF_NIA)
+(declare-const x Int)
+(echo "a satisfiable check, expected to be refuted: expect unsat")
+(push 1)
+(assert (= x 1))
+(check-sat)
+(pop 1)
+EOF
+  # An undeclared symbol: Z3 reports the error, drops the assertion and answers sat - which
+  # meets the expectation, so only the error line can fail this run.
+  cat > "$dir/error.smt2" <<'EOF'
+(set-logic QF_NIA)
+(declare-const x Int)
+(echo "an assertion the solver rejects: expect sat")
+(push 1)
+(assert (= y 1))
+(check-sat)
+(pop 1)
+EOF
+  # The bit-vector form of the multiply-high proof for 12, which no solver tried finishes in five
+  # minutes (VARKA-240.md 2.1), under a one-second limit: the solver answers unknown.
+  cat > "$dir/limit.smt2" <<'EOF'
+(set-logic QF_BV)
+(declare-const n (_ BitVec 32))
+(echo "a check no solver finishes inside the limit: expect unsat")
+(push 1)
+(assert (not (= (bvadd ((_ extract 31 0) (bvashr (bvmul ((_ sign_extend 32) n)
+  #x000000002aaaaaab) #x0000000000000021)) (bvlshr n #x0000001f)) (bvsdiv n #x0000000c))))
+(check-sat)
+(pop 1)
+EOF
+  cat > "$dir/missing.smt2" <<'EOF'
+(set-logic QF_NIA)
+(echo "a check whose verdict never comes: expect sat")
+EOF
+  expect_run() {
+    local what="$1" want="$2"
+    shift 2
+    if "$@" > "$dir/out" 2>&1; then got=holds; else got=fails; fi
+    if [ "$got" = "$want" ]; then
+      printf '%-5s ok    %s\n' "$name" "$what"
+    else
+      printf '%-5s WRONG %s: the run %s\n' "$name" "$what" "$got"
+      sed 's/^/      /' "$dir/out"
+      bad=$((bad + 1))
+    fi
+  }
+  expect_run "a file whose checks hold, holds" holds run_file "$name" "$solver" "$dir/control.smt2"
+  expect_run "a verdict against its expectation fails" fails \
+    run_file "$name" "$solver" "$dir/wrong.smt2"
+  expect_run "a solver error fails, whatever verdict follows it" fails \
+    run_file "$name" "$solver" "$dir/error.smt2"
+  # Without the prelude, whose integers a QF_BV file cannot declare.
+  past_limit() {
+    local limit_ms=1000
+    run_file "$name" "$solver" "$dir/limit.smt2" ""
+  }
+  expect_run "a check past its time limit fails" fails past_limit
+  expect_run "an expectation with no verdict fails" fails \
+    run_file "$name" "$solver" "$dir/missing.smt2"
+  expect_run "a missing solver fails" fails \
+    env "VARKA_${name^^}=$dir/no-such-solver" "$root/dev/varka_prove.sh" --solver "$name" \
+    "$dir/control.smt2"
+  rm -rf "$dir"
+  return "$bad"
+}
+
+# ---------------------------------------------------------------------------------------------
+# The command line.
+# ---------------------------------------------------------------------------------------------
+
+mode=prove
+which=z3
+files=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage 0 ;;
+    --solver) which="${2:-}"; shift 2 || usage ;;
+    --install) mode=install; which="${2:-}"; shift 2 || usage ;;
+    --self-test) mode=self-test; shift ;;
+    -*) usage ;;
+    *) files+=("$1"); shift ;;
+  esac
+done
+case "$which" in
+  z3|cvc5) names=("$which") ;;
+  both) names=(z3 cvc5) ;;
+  *) usage ;;
+esac
+
+if [ "$mode" = install ]; then
+  for name in "${names[@]}"; do
+    "install_$name" || { echo "varka_prove: installing $name failed" >&2; exit 1; }
+    path="$(require_solver "$name")" || exit 1
+    echo "$name $("$path" --version | head -1 | tr -s ' ') at $path"
+  done
+  exit 0
+fi
+
+declare -A paths
+for name in "${names[@]}"; do
+  paths[$name]="$(require_solver "$name")" || exit 1
+done
+
+if [ "$mode" = self-test ]; then
+  failed=0
+  for name in "${names[@]}"; do
+    self_test "$name" "${paths[$name]}" || failed=$((failed + 1))
+  done
+  [ "$failed" -eq 0 ] && echo "varka_prove: the self-test caught every planted failure"
+  exit "$failed"
+fi
+
+if [ "${#files[@]}" -eq 0 ]; then
+  for f in "$proofs"/*.smt2; do
+    [ "$(basename "$f")" = java.smt2 ] || files+=("$f")
+  done
+fi
+failed=0
+for name in "${names[@]}"; do
+  for f in "${files[@]}"; do
+    [ -f "$f" ] || f="$proofs/$f"
+    run_file "$name" "${paths[$name]}" "$f" || failed=$((failed + 1))
+  done
+done
+if [ "$failed" -eq 0 ]; then
+  echo "varka_prove: every proof holds under ${names[*]}"
+else
+  echo "varka_prove: $failed run(s) failed"
+fi
+exit "$((failed > 0))"

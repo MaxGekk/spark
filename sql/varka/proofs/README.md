@@ -1,0 +1,62 @@
+# `sql/varka/proofs`
+
+Machine-checked proofs of Varka's arithmetic lowerings, in SMT-LIB. `dev/varka_prove.sh` runs them
+under Z3 in the linters' job and under Z3 and cvc5 in the nightly, and fails on any verdict other
+than the one each check expects. They began with VARKA-240 (`sql/varka/plans/m7/VARKA-240.md`);
+rows 241 and 242 of `m7/PLAN.md` add the long lane's division forms and the other bounded
+lowerings.
+
+| file | what it holds | written by |
+| :--- | :--- | :--- |
+| `java.smt2` | the prelude: Java's `int` and `long` operators over SMT-LIB's integers, each defined as the JLS defines it | hand |
+| `java_check.smt2` | the prelude against the JVM: each operator over boundary operands, the expected values computed by Java | `VarkaProofFiles` |
+| `int_mulhi_divide.smt2` | the int lane's multiply-high division (VARKA-149) exact for every divisor in use, with `signedMagic`'s constants | `VarkaProofFiles` |
+
+## Running them
+
+    dev/varka_prove.sh --install z3      # once: Z3 5.1.0 into target/varka-solvers/
+    dev/varka_prove.sh                   # every proof under Z3
+    dev/varka_prove.sh --install both && dev/varka_prove.sh --solver both   # and under cvc5 1.4.1
+    dev/varka_prove.sh --self-test       # the checker of verdicts, checked
+
+By hand, the prelude goes after the file's `set-logic` line:
+`sed '/^(set-logic/r sql/varka/proofs/java.smt2' sql/varka/proofs/int_mulhi_divide.smt2 | z3 -in`.
+A solver's line numbers count the inserted prelude.
+
+## What a proof looks like
+
+A file opens with `(set-logic QF_NIA)` and a header naming the Java it encodes. Every check is
+an `(echo "<what it shows>: expect sat|unsat")` followed by its `(check-sat)` between `push` and
+`pop`. An `unsat` check is a proof: the negation of the claim has no model. A `sat` check shows the
+statement is not vacuous: the domain admits its boundary inputs, and a constant changed by one is
+refuted. The script holds every verdict to the expectation before it, and fails on `unknown`, on a
+check past its time limit, and on any other output, since Z3 goes on answering after an error.
+
+Constants that live in the code are rendered from it: `VarkaProofFiles` (catalyst tests) writes the
+file, and `VarkaProofFilesSuite` fails when the committed file differs;
+`VARKA_PROOFS_REGEN=true build/sbt 'catalyst/testOnly *VarkaProofFilesSuite'` rewrites it.
+
+## Why integers, not bit-vectors
+
+The multiply-high division stated over bit-vectors times out under Z3, cvc5 and Bitwuzla, while the
+same statement over integers takes each solver a fraction of a second (`VARKA-240.md` 2.1).
+Bit-blasting turns it into the equivalence of two multiplier circuits; in integers every product has
+a constant factor and the statement is linear. So the prelude states Java's wrapping with `mod`
+instead of leaning on bit-vector operators, which would also have the wrong meaning in places: a
+bit-vector shift does not mask its count. A proof that multiplies two unknowns is nonlinear, and a
+solver may answer `unknown`, which fails the run: such a proof needs its own design.
+
+## Adding a proof
+
+1. One file per lowering, its header naming the Java it encodes. Constants that live in the code
+   are rendered: a method in `VarkaProofFiles`, and the file in its `render()`.
+2. The claim as `unsat` checks, and `sat` checks that its domain admits its boundary inputs and
+   that a constant changed by one is refuted.
+3. `dev/varka_prove.sh --solver both` holds, in seconds: the linters' job allows a minute for all of
+   them.
+
+## The solvers
+
+Z3 5.1.0 (MIT) from PyPI's `z3-solver`, whose wheel ships the binary, and cvc5 1.4.1 (BSD-3-Clause)
+from its GitHub release archive, its SHA-256 checked. `dev/varka_prove.sh` pins both and refuses
+other versions. They are development tools: nothing here is compiled, packaged or shipped.

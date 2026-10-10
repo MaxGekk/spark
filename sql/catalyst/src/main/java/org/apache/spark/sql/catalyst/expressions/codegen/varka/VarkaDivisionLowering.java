@@ -161,27 +161,61 @@ final class VarkaDivisionLowering {
   }
 
   /**
-   * The multiplier and shift of a signed 32-bit division by a constant, Granlund and
-   * Montgomery's, in the derivation Hacker's Delight (10-6, {@code magic}) gives: for a
-   * divisor {@code d >= 2}, the smallest shift {@code s} and the multiplier {@code M} such
-   * that {@code mulhi(n, M) (+ n where M < 0 as int32) >> s}, plus one where {@code n} is
-   * negative, is {@code n / d} for every int32 {@code n}. It is what C2 itself emits for a
-   * scalar {@code n / 12}.
-   *
-   * <p>Returned as the form the lanes compute rather than the form the book states. The
-   * "{@code + n} where {@code M < 0}" term is the multiplier's missing {@code 2^32}: with a
-   * 64-bit product the multiplier can simply be taken unsigned, {@code Mu = M mod 2^32}, and
-   * {@code (n * Mu) >> (32 + s)} is the book's quotient before its sign correction in one
-   * multiply and one shift. The product fits: {@code |n| <= 2^31} and {@code Mu < 2^32}. So
-   * the pair is {@code (Mu, 32 + s)}, and the caller adds the dividend's sign bit.
-   *
-   * <p>Exactness over all 2^32 dividends is not argued from the book; {@code
-   * VarkaEmitterDivisionSuite}'s opt-in sweep computes this form for every dividend and every
-   * divisor the emitter and the fuzz grammar divide by, and compares against Java's {@code /}.
+   * The constants of a multiply-high division by the magnitude {@code divisor}: the unsigned
+   * {@code multiplier} and the {@code shift}, which is {@code 32 + s}. One that exists meets
+   * Granlund and Montgomery's Theorem 5.1 and fits the lanes
+   * ({@link VarkaDivisionLowering#signedMagic}), so a pair that would be merely nearly exact
+   * cannot reach the emitter.
    */
-  static long[] signedMagic(int d) {
-    if (d < 2) {
-      throw new IllegalArgumentException("the signed magic is derived for divisors >= 2, not " + d);
+  record MulHiMagic(long divisor, long multiplier, int shift) {
+    MulHiMagic {
+      // The ranges first, so that the theorem's product below is exact in a long.
+      if (divisor < 2 || divisor > 1L << 31 || multiplier < 1 || multiplier >= 1L << 32
+          || shift < 32 || shift > 62 || !meetsTheorem51(divisor, multiplier, shift)) {
+        throw new IllegalArgumentException("(" + multiplier + ", " + shift + ") is not a "
+            + "multiply-high pair for " + divisor + ": it fails Theorem 5.1's inequality or "
+            + "does not fit the lanes");
+      }
+    }
+  }
+
+  /**
+   * The multiplier and shift of a signed 32-bit division by a constant: for a divisor of
+   * magnitude {@code 2 <= d <= 2^31}, the pair {@code (Mu, 32 + s)} such that
+   * {@code (n * Mu) >> (32 + s)}, plus one where {@code n} is negative, is {@code n / d} for
+   * every int32 {@code n}. The caller adds the dividend's sign bit, and negates for a negative
+   * divisor.
+   *
+   * <p>Exactness is Granlund and Montgomery's Theorem 5.1 ("Division by Invariant Integers
+   * using Multiplication", PLDI 1994, p. 5), with {@code N = 32} and {@code l = s + 1}: if
+   * {@code 0 < Mu * d - 2^(32 + s) <= 2^(s + 1)}, then {@code floor(n * Mu / 2^(32 + s))}, plus
+   * one for a negative {@code n}, is {@code n / d} truncated, for every int32 {@code n}. The
+   * {@link MulHiMagic} returned refuses a pair that misses the inequality, so every divisor this
+   * derives for is one the theorem covers. Beside the theorem,
+   * {@code sql/varka/proofs/int_mulhi_divide.smt2} proves the lanes' own arithmetic exact for
+   * the divisors the emitter and the fuzz grammar use, and {@code VarkaEmitterDivisionSuite}'s
+   * opt-in sweep runs it over every dividend for them.
+   *
+   * <p>The pair starts as Hacker's Delight's (10-6, {@code magic}): the smallest shift the
+   * book's own condition admits, which is what C2 emits for a scalar {@code n / 12}. That
+   * condition bounds the dividend by the largest one congruent to {@code d - 1}, where the
+   * theorem bounds it by 2^31, so it admits more: for 327,741,950 divisors, the first 196611,
+   * the book's smallest shift misses the theorem's inequality while still being exact by the
+   * book's argument. There the shift is raised until the inequality holds, which it does by
+   * the paper's own choice {@code l = ceil(log2 d)} at the latest. So the pair is the book's
+   * below 196611 and may not be above it (VARKA-240.md 2.3).
+   *
+   * <p>Returned as the form the lanes compute rather than the form the book states. The book's
+   * multiplier is a 32-bit pattern, and adds the dividend where that pattern is negative as an
+   * int; with a 64-bit product the multiplier is simply taken unsigned, and
+   * {@code (n * Mu) >> (32 + s)} is the quotient before its sign correction in one multiply and
+   * one shift. That needs {@code Mu < 2^32}, so that with {@code |n| <= 2^31} the product fits a
+   * long, and a shift of at most 62, inside the count a long shift keeps; the record checks both.
+   */
+  static MulHiMagic signedMagic(long d) {
+    if (d < 2 || d > 1L << 31) {
+      throw new IllegalArgumentException(
+          "the signed magic is derived for divisor magnitudes from 2 to 2^31, not " + d);
     }
     long two31 = 1L << 31;
     long anc = two31 - 1 - two31 % d;
@@ -207,13 +241,35 @@ final class VarkaDivisionLowering {
       }
       delta = d - r2;
     } while (q1 < delta || (q1 == delta && r1 == 0));
-    // q2 + 1 is the book's M as a 32-bit pattern; taken unsigned, the "+ n" case folds in.
-    long mu = (q2 + 1) & 0xFFFFFFFFL;
-    return new long[] {mu, 32 + (p - 32)};
+    // q2 + 1 is the book's M taken unsigned: in 64-bit arithmetic it already is the multiplier
+    // the 32-bit pattern stands for, the "+ n" case folded in.
+    long mu = q2 + 1;
+    while (!meetsTheorem51(d, mu, p) && p < 62) {
+      p++;
+      mu = (1L << p) / d + 1;
+    }
+    // The record refuses a pair that misses the theorem or the lanes. Neither happens for a
+    // magnitude in range - VARKA-240's census derives every one of them - but this is where the
+    // pair is made, so this is where it is held to them.
+    return new MulHiMagic(d, mu, p);
   }
 
-  /** {@link #signedMagic}, for the suite that pins the constants and sweeps the form. */
-  static long[] signedMagicForTest(int d) {
+  /**
+   * Granlund and Montgomery's Theorem 5.1 hypothesis for a 32-bit division by the magnitude
+   * {@code d}, with multiplier {@code mu} and shift {@code p = 32 + s}:
+   * {@code 0 < mu * d - 2^p <= 2^(p - 31)}. Exact in a long for the pairs it is asked about:
+   * {@code mu < 2^32} and {@code d <= 2^31}, and {@code p} is at most 62.
+   */
+  private static boolean meetsTheorem51(long d, long mu, int p) {
+    long excess = mu * d - (1L << p);
+    return excess > 0 && excess <= 1L << (p - 31);
+  }
+
+  /**
+   * {@link #signedMagic}, for the suites that pin the constants and sweep the form, and for the
+   * renderer of its proof.
+   */
+  static MulHiMagic signedMagicForTest(long d) {
     return signedMagic(d);
   }
 
@@ -229,14 +285,16 @@ final class VarkaDivisionLowering {
    * That is the truncated quotient for a non-negative dividend and one below it for a
    * negative one, so the dividend's sign bit is added, which is the book's {@code q + (n >>>
    * 31)}. A negative divisor divides by its magnitude and negates, which is exact for every
-   * divisor this node admits (it refuses -1, the one case where the negation could overflow).
+   * divisor the analysis admits (it refuses -1, the one case where the negation could
+   * overflow); {@code Integer.MIN_VALUE} divides by the magnitude 2^31, which
+   * {@link #signedMagic} takes as a long.
    * Eleven lane operations at most, and no divide: two widenings, two multiplies, two shifts,
    * two narrowings, an or, a shift and an add, plus a multiply for a negative divisor.
    */
   private static void emitMulHiDivide(CodeBuilder cb, Analysis analysis, ConstDivide n,
       Slots s) {
     int dividend = s.constDivideTmp.get(n)[0];
-    long[] magic = signedMagic((int) Math.abs(n.divisor()));
+    MulHiMagic magic = signedMagic(Math.abs(n.divisor()));
     String species = analysis.divider.species();
     cb.astore(dividend);                                        // []
     for (int half = 0; half < 2; half++) {
@@ -246,11 +304,11 @@ final class VarkaDivisionLowering {
       cb.loadConstant(half);
       cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
       cb.checkcast(LONG_VECTOR);                                // [.., (long) half]
-      cb.loadConstant(magic[0]);
+      cb.loadConstant(magic.multiplier());
       cb.invokevirtual(LONG_VECTOR, "mul", Lane.LONG.lanewiseVI);   // [.., half * Mu]
       cb.getstatic(VECTOR_OPERATORS, "ASHR", VO_BINARY);
       // The long lane's shift count is a long, as every scalar convenience of that lane is.
-      cb.loadConstant(magic[1]);
+      cb.loadConstant((long) magic.shift());
       cb.invokevirtual(LONG_VECTOR, "lanewise", Lane.LONG.lanewiseBinaryI); // [.., q']
       cb.getstatic(VECTOR_OPERATORS, "L2I", VO_CONVERSION);
       cb.getstatic(INT_VECTOR, species, VECTOR_SPECIES);

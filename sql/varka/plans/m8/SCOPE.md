@@ -3689,6 +3689,14 @@ already are that transcription, executed. No verified emitter in the
 CompCert sense: out of proportion for a research fork, and it would not reach
 the parts that fail.
 
+*Correction, 9 October 2026 (VARKA-240): "bit-vector SMT decides these in
+seconds" does not hold for the multiply-high division. Stated over
+bit-vectors, its proof ran past five minutes under Z3, cvc5 and Bitwuzla
+alike, since bit-blasting makes it the equivalence of two multiplier
+circuits; stated over integers, with Java's wrapping written out, Z3 and cvc5
+both prove it in under a second. The proofs are integer proofs
+(`sql/varka/proofs/`, `VARKA-240.md` 2.1).*
+
 ### Item 59. Verification against the SQL standard, with Spark as named deltas
 
 *Added on 27 September 2026, from the owner's question after item 58: not

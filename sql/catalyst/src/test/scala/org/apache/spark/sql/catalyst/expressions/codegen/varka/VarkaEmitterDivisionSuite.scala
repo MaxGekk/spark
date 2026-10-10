@@ -19,6 +19,8 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import java.lang.foreign.{Arena, ValueLayout}
 
+import scala.jdk.CollectionConverters._
+
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 
@@ -269,44 +271,112 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
   }
 
   /**
-   * The int-lane constant divisors in use: `extract(YEAR FROM ym)`'s twelve, the fuzz
-   * grammar's list (`VarkaIrGrammar.ConstDivideDivisors`), and the `TIME` split form's two.
-   * The sweep below proves the multiply-high form over all 2^32 dividends for each of them.
+   * The int-lane constant divisors in use - `extract(YEAR FROM ym)`'s twelve, the fuzz grammar's
+   * list (`VarkaIrGrammar.ConstDivideDivisors`), the `TIME` split form's two - and two edges of
+   * the derivation, 196611 and `Integer.MIN_VALUE`. The list is the proof's
+   * (`VarkaProofFiles.INT_DIVISORS`), so the sweep below and `int_mulhi_divide.smt2` cover the
+   * same divisors.
    */
-  private val intDivisors = Seq(12, 2, 3, 7, 100, -3, -12, 60, 3600)
+  private val intDivisors = VarkaProofFiles.INT_DIVISORS.asScala.map(_.intValue).toSeq
 
-  test("the multiply-high form's constants are Hacker's Delight's") {
+  private def magic(d: Long): (Long, Long) = {
+    val m = VarkaDivisionLowering.signedMagicForTest(d)
+    (m.multiplier, m.shift.toLong)
+  }
+
+  test("the multiply-high form's constants are Hacker's Delight's where they meet Theorem 5.1") {
     // The derivation is the book's; the constants it must produce for the divisors the book
     // works are known, and a derivation that drifted would produce a form that is merely
     // nearly exact - which the sweep would catch, at a price this catches for free.
-    def magic(d: Int): (Long, Long) = {
-      val m = VarkaDivisionLowering.signedMagicForTest(d)
-      (m(0), m(1))
-    }
     assert(magic(12) === (0x2AAAAAABL, 32 + 1))
     assert(magic(7) === (0x92492493L, 32 + 2))
     assert(magic(3) === (0x55555556L, 32 + 0))
     assert(magic(2) === (0x80000001L, 32 + 0))
     assert(magic(100) === (0x51EB851FL, 32 + 5))
+    // 196611 is the first divisor whose book pair, (0x55550001, 48), misses Granlund and
+    // Montgomery's inequality - by 131075 against 131072 - so its shift is raised by one
+    // (VARKA-240.md 2.3), and the record refuses the book's pair outright.
+    assert(magic(196611) === (0xAAAA0001L, 49))
+    intercept[IllegalArgumentException](
+      new VarkaDivisionLowering.MulHiMagic(196611, 0x55550001L, 48))
+    // The magnitude of Integer.MIN_VALUE, which the int lane admits as a divisor.
+    assert(magic(1L << 31) === (0x80000001L, 62))
     intercept[IllegalArgumentException](VarkaDivisionLowering.signedMagicForTest(1))
+    intercept[IllegalArgumentException](VarkaDivisionLowering.signedMagicForTest((1L << 31) + 1))
   }
 
-  // The proof the emitted arithmetic rests on, run as the arithmetic: the unsigned multiplier,
-  // the one shift and the sign bit, against Java's `/`, for all 2^32 dividends and every divisor
-  // in `intDivisors`. Scalar, not the kernel - the kernel's parity over the extremes and the
-  // fuzzer's random dividends are above; this is the exhaustive half. One test per divisor, so a
-  // failure names its divisor and each stays well inside the test watchdog's cap; the comparison
-  // is a plain branch, since an assert with an interpolated clue builds a string on every one of
-  // the 2^32 iterations, which kept the single test of nine divisors running for hours
-  // (VARKA-283.md).
+  /**
+   * Whether `(mu, shift)` meets Theorem 5.1's hypothesis for the magnitude `d` and fits the
+   * lanes, restated in `BigInteger` so that the check shares no arithmetic with the code.
+   */
+  private def meetsTheorem51(d: Long, mu: Long, shift: Int): Boolean = {
+    val excess = BigInt(mu) * d - (BigInt(1) << shift)
+    excess > 0 && excess <= (BigInt(1) << (shift - 31)) && mu < (1L << 32) && shift <= 62
+  }
+
+  test("every multiply-high pair meets Theorem 5.1 and fits the lanes") {
+    // The record checks this where the pair is made; restated here independently, over every
+    // magnitude up to 2^17, the edges, and a seeded sample above, where the raise begins. The
+    // whole range is the census below.
+    val rnd = new java.util.Random(240)
+    val sample = (2L to (1L << 17)) ++ Seq(196611L, (1L << 30) - 1, 1L << 30, (1L << 31) - 1,
+      1L << 31) ++ Seq.fill(20000)((1L << 17) + (rnd.nextLong() >>> 1) % ((1L << 31) - (1L << 17)))
+    for (d <- sample) {
+      val (mu, shift) = magic(d)
+      assert(meetsTheorem51(d, mu, shift.toInt), s"d=$d: ($mu, $shift)")
+    }
+  }
+
+  test("every divisor magnitude has a multiply-high pair that meets Theorem 5.1 " +
+      "(opt-in: -Dvarka.sweep=true; VARKA-240)") {
+    // The census behind VARKA-240.md 2.3: every magnitude from 2 to 2^31 derives, the pair meets
+    // the theorem and fits the lanes, and the count of shifts raised past the book's smallest
+    // one, which is recomputed here from the book's own condition, 2^p > anc * (d - 2^p mod d).
+    // Parallel, since it is 2^31 derivations: about a minute on 24 threads.
+    assume(System.getProperty("varka.sweep") == "true",
+      "set -Dvarka.sweep=true to derive the pair for every divisor")
+    val raised = new java.util.concurrent.atomic.LongAdder
+    val firstRaised = new java.util.concurrent.atomic.AtomicLong(Long.MaxValue)
+    val failures = new java.util.concurrent.ConcurrentLinkedQueue[String]
+    java.util.stream.LongStream.rangeClosed(2, 1L << 31).parallel().forEach { d =>
+      val m = VarkaDivisionLowering.signedMagicForTest(d)
+      val excess = Math.multiplyExact(m.multiplier, d) - (1L << m.shift)
+      if (excess <= 0 || excess > (1L << (m.shift - 31)) || m.multiplier >= (1L << 32) ||
+          m.shift > 62 || m.multiplier != (1L << m.shift) / d + 1) {
+        failures.add(s"d=$d: (${m.multiplier}, ${m.shift})")
+      }
+      val anc = (1L << 31) - 1 - (1L << 31) % d
+      var p = 32
+      while (p < 62 && (1L << p) <= anc * (d - (1L << p) % d)) p += 1
+      if (m.shift > p) {
+        raised.increment()
+        firstRaised.accumulateAndGet(d, (a, b) => math.min(a, b))
+      }
+    }
+    assert(failures.isEmpty, failures.asScala.take(10).mkString("; "))
+    info(s"${(1L << 31) - 1} magnitudes; ${raised.sum} shifts raised past the book's, the " +
+      s"first for ${firstRaised.get}")
+    assert(raised.sum === 327741950L)
+    assert(firstRaised.get === 196611L)
+  }
+
+  // The statement `sql/varka/proofs/int_mulhi_divide.smt2` proves (VARKA-240), run as Java's own
+  // arithmetic: the unsigned multiplier, the one shift and the sign bit, against Java's `/`, for
+  // all 2^32 dividends and every divisor in `intDivisors`. The proof is the solver's reading of a
+  // model of Java's operators; this is the JVM's, so the two are second implementations of each
+  // other and run side by side in the nightly. Scalar, not the kernel - the kernel's parity over
+  // the extremes and the fuzzer's random dividends are above. One test per divisor, so a failure
+  // names its divisor and each stays well inside the test watchdog's cap; the comparison is a
+  // plain branch, since an assert with an interpolated clue builds a string on every one of the
+  // 2^32 iterations, which kept the single test of nine divisors running for hours (VARKA-283.md).
   for (d <- intDivisors) {
     test(s"the multiply-high form is exact over every int32 dividend for divisor $d " +
-        "(opt-in: -Dvarka.sweep=true; VARKA-149)") {
+        "(opt-in: -Dvarka.sweep=true; VARKA-149; proven in int_mulhi_divide.smt2)") {
       assume(System.getProperty("varka.sweep") == "true",
         "set -Dvarka.sweep=true to sweep the multiply-high form")
-      val magic = VarkaDivisionLowering.signedMagicForTest(math.abs(d))
-      val mu = magic(0)
-      val shift = magic(1).toInt
+      val magic = VarkaDivisionLowering.signedMagicForTest(math.abs(d.toLong))
+      val mu = magic.multiplier
+      val shift = magic.shift
       val sign = if (d < 0) -1 else 1
       var n = Int.MinValue
       var done = false
