@@ -260,6 +260,10 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
    * reference evaluator. With `forceMasked` a null-free column reports one null over a
    * full-set bitmap, which sends the batch down `runMasked` - the dispatcher tests only
    * `nullCount != 0` - so the masked body is exercised on the same data the dense body serves.
+   *
+   * Both bodies meet the oracle whatever the cases select (VARKA-284): if no case took one of
+   * them, it runs once more - the masked body forced on the first case longer than a row (a forced
+   * batch of one row is all-null by contract), or the dense one on the first length with no nulls.
    */
   protected def checkMatrix(
       roots: Seq[VarkaVectorIR],
@@ -272,8 +276,11 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
       ctx: String = "",
       options: VarkaEmitOptions = VarkaMatrix.base): Unit = {
     val (kernel, loader) = load(emitMulti(roots, numInputs, lits.length, options))
-    try {
-      for (length <- caseLengths; (combo, comboId) <- patternCombos.zipWithIndex) {
+    var tookDense = false
+    var tookMasked = false
+    // One case; returns whether it took the masked body.
+    def runCase(length: Int, combo: Seq[Int => Boolean], comboId: Any,
+        forceMasked: Boolean): Boolean = {
         val arena = Arena.ofConfined()
         try {
           val cols = (0 until numInputs).map { c =>
@@ -284,6 +291,7 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
           val nullCounts = cols.map { col =>
             if (forceMasked && col.nullCount == 0) 1 else col.nullCount
           }
+          val masked = nullCounts.exists(_ != 0)
           val validityAddrs = cols.zip(nullCounts).map { case (col, nc) =>
             if (nc == 0 || nc == length) col.validityAddress(length) else col.validity.address()
           }
@@ -327,8 +335,23 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
               }
             }
           }
+          masked
         } finally {
           arena.close()
+        }
+    }
+    try {
+      for (length <- caseLengths; (combo, comboId) <- patternCombos.zipWithIndex) {
+        if (runCase(length, combo, comboId, forceMasked)) tookMasked = true else tookDense = true
+      }
+      if (numInputs > 0 && caseLengths.nonEmpty) {
+        if (!tookMasked) {
+          runCase(caseLengths.find(_ > 1).getOrElse(17), patternCombos.head, "masked (forced)",
+            forceMasked = true)
+        }
+        if (!tookDense) {
+          runCase(caseLengths.head, Seq.fill(numInputs)((_: Int) => false), "dense (no nulls)",
+            forceMasked = false)
         }
       }
     } finally {

@@ -121,13 +121,46 @@ object VarkaKernelCheck {
   /**
    * Runs one emitted int-lane kernel over the drawn columns and checks every row and validity bit
    * against [[VarkaReferenceEvaluator]]. Null lanes are poisoned; `forceMasked` reports a null over
-   * a full bitmap so the masked body runs. Returns whether the rows were compared: false only
-   * where `declineAllowed` and the kernel declined the batch, which a kernel over columns drawn
-   * without its domains may do.
+   * a full bitmap so the masked body runs. A batch that is compared is then run again through the
+   * body it did not take ([[otherBody]]), so both of the kernel's bodies meet the oracle. Returns
+   * whether the rows were compared: false only where `declineAllowed` and the kernel declined the
+   * batch, which a kernel over columns drawn without its domains may do.
    */
   def runAndCompare(context: String, className: String, bytes: Array[Byte],
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Int], batch: Batch,
       declineAllowed: Boolean = false, spark: Option[VarkaSparkOracle] = None): Boolean = {
+    val compared = runBatch(context, className, bytes, roots, numInputs, lits, batch,
+      declineAllowed, spark)
+    if (compared) otherBody(numInputs, batch.length, batch.patterns, batch.forceMasked).foreach {
+      case (patterns, forced) =>
+        runBatch(s"$context (the other body)", className, bytes, roots, numInputs, lits,
+          batch.copy(patterns = patterns, forceMasked = forced), declineAllowed, spark)
+    }
+    compared
+  }
+
+  /**
+   * The same values through the body the drawn batch did not take (VARKA-284): a kernel has a
+   * dense body for a batch with no nulls and a masked one for every other, and a shape run on one
+   * kind of batch has only that body compared. A batch that took the masked body goes again with
+   * no nulls; one that took the dense body goes again with the masked one forced - a null count
+   * over a full bitmap, or for one row every column null, a forced batch of one row being all-null
+   * by contract and a null in a column the kernel does not read selecting nothing. None for a
+   * kernel that reads no column, which has no masked body to choose.
+   */
+  private def otherBody(numInputs: Int, length: Int, patterns: Seq[Int => Boolean],
+      forceMasked: Boolean): Option[(Seq[Int => Boolean], Boolean)] = {
+    if (numInputs == 0 || length == 0) return None
+    val masked = forceMasked || patterns.exists(p => (0 until length).exists(p))
+    if (masked) Some((Seq.fill(numInputs)((_: Int) => false), false))
+    else if (length > 1) Some((patterns, true))
+    else Some((Seq.fill(numInputs)((_: Int) => true), false))
+  }
+
+  /** One batch through [[runAndCompare]]'s check, whichever body its null counts select. */
+  private def runBatch(context: String, className: String, bytes: Array[Byte],
+      roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Int], batch: Batch,
+      declineAllowed: Boolean, spark: Option[VarkaSparkOracle]): Boolean = {
     val Batch(length, patterns, data, forceMasked) = batch
     VarkaSpeciesGuard.check(className, bytes)
     val loader = new VarkaGeneratedClassLoader(getClass.getClassLoader)
@@ -228,6 +261,20 @@ object VarkaKernelCheck {
   def runAndCompareLong(context: String, className: String, bytes: Array[Byte],
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Long], batch: LongBatch,
       declineAllowed: Boolean = false, spark: Option[VarkaSparkOracle] = None): Boolean = {
+    val compared = runLongBatch(context, className, bytes, roots, numInputs, lits, batch,
+      declineAllowed, spark)
+    if (compared) otherBody(numInputs, batch.length, batch.patterns, batch.forceMasked).foreach {
+      case (patterns, forced) =>
+        runLongBatch(s"$context (the other body)", className, bytes, roots, numInputs, lits,
+          batch.copy(patterns = patterns, forceMasked = forced), declineAllowed, spark)
+    }
+    compared
+  }
+
+  /** One batch through [[runAndCompareLong]]'s check. */
+  private def runLongBatch(context: String, className: String, bytes: Array[Byte],
+      roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Long], batch: LongBatch,
+      declineAllowed: Boolean, spark: Option[VarkaSparkOracle]): Boolean = {
     val LongBatch(length, patterns, data, forceMasked) = batch
     VarkaSpeciesGuard.check(className, bytes)
     val loader = new VarkaGeneratedClassLoader(getClass.getClassLoader)
