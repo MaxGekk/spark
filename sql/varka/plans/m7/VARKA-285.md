@@ -90,3 +90,41 @@ One run on the laptop at the default width.
 ## 8. Sequencing
 
 1. This plan. 2. The script, the analyser, the run, the report and the records.
+
+## 9. Outcome, 10 October 2026
+
+### 9.1 What was built
+
+`dev/varka_gen_coverage.sh` and `VarkaGenCoverage.java` as section 3 describes, and the report,
+`sql/varka/coverage/generated.md`. Three things the first run showed, each fixed before the
+committed one:
+
+* **The suites in their own JVM went unmeasured.** `VarkaOwnJvm` drops every `-javaagent` from
+  the child's command line, so the ten suites it runs - both fuzzers, the validity, division and
+  long-lane suites among them - emitted kernels JaCoCo never saw. The child now keeps JaCoCo's
+  agent, which appends to its file under a lock. With it, 2,803 classes ran where the first run
+  counted 907.
+* **A wide kernel's line map is cut** to fit one constant (`VarkaDebugInfo.TRUNCATED`); the cut
+  entry read as an operation of its own. The analyser drops it and counts the lines past the cut
+  as `(line map cut)`: five classes, which own 844,662 instructions.
+* **"Ran" meant "constructed".** The hand check of the smallest class with a dense side never
+  entered found one whose only covered method was its constructor: a test that builds a kernel and
+  calls the wrong overload. A class now ran when a kernel method was entered; 34 fell out.
+
+### 9.2 The predictions scored
+
+1. **Holds.** 2,803 classes ran, against the spike's 1,555; 733 of them entered both drivers, 399
+   only the dense one, 1,607 only the masked one and 64 neither. Under half entered both, so row
+   284 is not done.
+2. **Not scored cleanly.** The run's suites took 390 s; the gate's wide step took 465 to 882 s
+   on this laptop today with other work beside it, so the agent's cost hides inside that spread,
+   as the spike found (841 s against 837 s).
+
+### 9.3 What this leaves
+
+* **Row 284** reads the class table; **row 265** the missed branches in executed loops, where
+  `makeDate:ANSI` (528), `if` (206) and the checked arithmetic lead: largely the decline paths,
+  which a loop reaches and a test rarely takes.
+* **Per-operation sums are by line mark**: a node owns the instructions after its mark until the
+  next, so a leaf owns the stores that follow it. Finer attribution would need the emitter to mark
+  where a node's code ends.

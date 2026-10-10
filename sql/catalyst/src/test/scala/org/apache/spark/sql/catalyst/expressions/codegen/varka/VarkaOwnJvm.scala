@@ -122,9 +122,14 @@ object VarkaOwnJvm {
     command.add(javaBin.getAbsolutePath)
     // The parent's own command-line arguments: heap, the incubator module, native access, every
     // -D the run was given. A -javaagent or -agentlib would start twice, and the child needs
-    // neither. Properties the parent set programmatically are not copied.
+    // neither - except JaCoCo's, which dev/varka_gen_coverage.sh puts on every test JVM and which
+    // must reach the suites run here too, or their kernels go unmeasured (VARKA-285); it appends
+    // to its file under a lock, so a second JVM writing it is what it is built for. Properties the
+    // parent set programmatically are not copied.
     ManagementFactory.getRuntimeMXBean.getInputArguments.asScala
-      .filterNot(a => a.startsWith("-javaagent") || a.startsWith("-agentlib")).foreach(command.add)
+      .filterNot(a => (a.startsWith("-javaagent") && !a.contains("org.jacoco.agent"))
+        || a.startsWith("-agentlib"))
+      .foreach(command.add)
     command.add(s"-D$PROPERTY=true")
     command.add("-cp")
     command.add(classpath)

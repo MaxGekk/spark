@@ -784,6 +784,21 @@ cause, which is the kernel's own exception. Before the rule, two tests caused fa
 hook and passed by accident, one because its `intercept[Throwable]` caught whatever was thrown;
 `intercept` the specific outcome you mean.
 
+## The coverage of emitted classes: one JaCoCo builder per class, and the agent into own-JVM suites
+
+`dev/varka_gen_coverage.sh` (VARKA-285) runs the Varka suites under the JaCoCo agent and writes
+`sql/varka/coverage/generated.md`. Four things it took to make the numbers mean what they say:
+
+* **`inclnolocationclasses=true` and `classdumpdir`**: an emitted class has no code source, and
+  its bytes exist nowhere but in the dump.
+* **One `CoverageBuilder` per class**: the suites emit one name with different bytes, which
+  JaCoCo's own report refuses.
+* **JaCoCo's agent must reach `VarkaOwnJvm`'s children.** The child drops every `-javaagent` from
+  its command line but JaCoCo's; without that, both fuzzers and eight other suites are missing,
+  and the first run counted 907 classes run where there were 2,803.
+* **"Ran" is a kernel method entered**, not any covered instruction: a test that builds a kernel
+  and calls the wrong overload covers only the constructor.
+
 ## A solver proves an arithmetic lowering in integers, and its verdicts are checked like output
 
 VARKA-240 proves the int lane's multiply-high division exact with SMT solvers
