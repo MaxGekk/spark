@@ -103,6 +103,14 @@ Each step either pins the fault or narrows it.
   CASE branches evaluated the ELSE first and registered input ordinals right-to-left.
   Where side effects assign identities (ordinals, slots), compile in source order
   explicitly, then fold the already-compiled pieces.
+- The reference is held to Spark in turn (VARKA-276): `VarkaKernelCheck` asks a
+  `VarkaSparkOracle` for Catalyst's `eval` of each output's own expression on every row before it
+  compares the kernel, so a disagreement says whose it is - the reference's when it and Spark
+  differ, the kernel's when the kernel differs from both. Two things it needs: the analysed
+  expression's `RuntimeReplaceable` nodes swapped for their replacements (`extract` has no
+  `eval`), and inputs inside each type's domain. The one disagreement it found was a `TIME(6)`
+  drawn to the nanosecond, which Spark truncates on its first arithmetic: a harness drawing values
+  a column cannot hold tests nothing about the engine.
 
 ## A second lane gets a second fuzz corpus, and its reach set comes from the constructors
 
