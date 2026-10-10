@@ -211,3 +211,6 @@
 ; disjoint. A proof that uses jlong.or.disjoint asserts its precondition.
 (define-fun jlong.and.low ((x Int) (k2 Int)) Int (mod x k2))
 (define-fun jlong.or.disjoint ((x Int) (c Int)) Int (+ x c))
+
+; The int counterpart, for floorMod7's folds (VARKA-242): x & (2^k - 1) for any int x, k2 = 2^k.
+(define-fun jint.and.low ((x Int) (k2 Int)) Int (mod x k2))

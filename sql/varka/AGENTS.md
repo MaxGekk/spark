@@ -291,6 +291,13 @@ opens with what its conversion lost. See `papers/README.md` before adding one.
   (VARKA-32, 2.15x on four fields). Nothing else widens a method: two plain
   chains over a shared subchain stay split, and whether they still should is VARKA-43's open question (VARKA-17 measured the merge as a loss; the parity file has read
   it as a win since VARKA-46 moved the validity OR ahead of the vector work).
+* **A new bounded lowering comes with its proof file** (VARKA-242). A lowering exact only over a
+  bound - a magic multiply over a range, a fold, a perfect hash, a form that rounds - ships with a
+  file under `sql/varka/proofs/` that proves it over that bound and finds where it first fails,
+  rendered from the code's own constants by `VarkaProofFiles`, as `sql/varka/proofs/README.md`
+  describes; a calendar division joins `ChronoDivide`'s table, whose rows are proven as they are
+  added. A sweep of the whole decomposition is not the same check: it cannot see a constant whose
+  site has stopped being exact while a later step still absorbs the error (`VARKA-242.md` 9).
 * **The suites run with the memory sanitizer on** (VARKA-263): `dev/varka_matrix.sh` passes
   `-Dvarka.sanitizeMemory=true`, so every mapping a kernel makes is checked against the buffers the
   evaluator handed it, and a suite that leaves Arrow memory allocated is aborted. A buffer given to

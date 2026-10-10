@@ -21,7 +21,8 @@ import org.apache.spark.{SparkArithmeticException, TaskContext}
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.catalyst.expressions.{AddMonths, Alias, Attribute, AttributeReference, Cast, DateAdd, DateDiff, DateSub, Expression, ExtractANSIIntervalDays, Greatest, Literal, NamedExpression, Remainder}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAllocationSampler,
-  VarkaChrono, VarkaFallbackEvent, VarkaJfrTestSupport, VarkaKernelAllocationEvent}
+  VarkaChrono, VarkaEmitOption, VarkaFallbackEvent, VarkaJfrTestSupport,
+  VarkaKernelAllocationEvent}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.execution.metric.SQLMetrics
@@ -450,7 +451,10 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession with Varka
     // Under CODEGEN_ONLY the residual projection's Janino compile throws inside the kernel
     // try; the VarkaKernelFailure marker keeps it out of the kernel-failure metric and it
     // lands under row-path-failure - once - before the fallback re-throws the same failure.
-    withSQLConf(SQLConf.CODEGEN_FACTORY_MODE.key -> "CODEGEN_ONLY") {
+    // The test causes that failure, so it declares the fallback (VARKA-275); undeclared, the
+    // evaluator would refuse it before the fallback ran.
+    VarkaColumnarToRowExec.setFailureFallbackExpectedForTesting(true)
+    try withSQLConf(SQLConf.CODEGEN_FACTORY_MODE.key -> "CODEGEN_ONLY") {
       val rowPath = SQLMetrics.createMetric(sparkContext, "rowPath")
       val kernelFailures = SQLMetrics.createMetric(sparkContext, "kernel")
       val factory = new VarkaProjectEvaluatorFactory(
@@ -486,6 +490,8 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession with Varka
         TaskContext.unset()
         allocator.close()
       }
+    } finally {
+      VarkaColumnarToRowExec.setFailureFallbackExpectedForTesting(false)
     }
   }
 
@@ -514,6 +520,56 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession with Varka
       .filter(_.getString("kernelIdentity").contains("Varka_Project_"))
       .map(_.getString("cause"))
     assert(causes.contains(VarkaFallbackEvent.EMISSION_FAILURE), causes.mkString("; "))
+  }
+
+  test("under test, a failure fallback is refused until a test declares one (VARKA-275)") {
+    // The rule each declaration lifts, read where the evaluator reads it.
+    assert(VarkaColumnarToRowExec.failureFallbackForbidden)
+    for ((name, set) <- Seq[(String, Boolean => Unit)](
+        "failKernel" -> VarkaColumnarToRowExec.setFailKernelForTesting,
+        "failEmission" -> VarkaColumnarToRowExec.setFailEmissionForTesting,
+        "expected" -> VarkaColumnarToRowExec.setFailureFallbackExpectedForTesting)) {
+      set(true)
+      try {
+        assert(!VarkaColumnarToRowExec.failureFallbackForbidden, name)
+      } finally {
+        set(false)
+      }
+    }
+    assert(VarkaColumnarToRowExec.failureFallbackForbidden)
+  }
+
+  test("an undeclared kernel failure fails the query; declared, the row path answers it " +
+      "(VARKA-275)") {
+    // `misdescribeAdd` emits date_add against a wrong method descriptor, so the kernel throws
+    // NoSuchMethodError when it runs: a kernel failure no hook injected, which the ghost
+    // fallback would answer correctly and so hide.
+    val previous = VarkaColumnarToRowExec.currentEmitOptions
+    val broken = VarkaEmitOption.named("misdescribeAdd") match {
+      case flag: VarkaEmitOption.Flag => flag.`with`(previous, true)
+      case other => fail(s"misdescribeAdd is not a flag: $other")
+    }
+    def plan(): VarkaProjectExec = node(
+      project(Alias(DateAdd(attrD, Literal(3)), "add")()),
+      Seq(BatchSpec("arrow", Seq(Seq(Int.box(1), null, Int.box(5))))),
+      Seq(attrD))
+    VarkaColumnarToRowExec.setEmitOptionsForTesting(broken)
+    try {
+      val e = intercept[Exception](values(plan()))
+      val chain = Iterator.iterate[Throwable](e)(_.getCause).takeWhile(_ != null).take(10).toSeq
+      assert(chain.exists(t => Option(t.getMessage).exists(_.contains("VARKA-275"))), e)
+      assert(chain.exists(_.isInstanceOf[NoSuchMethodError]), e)
+      VarkaColumnarToRowExec.setFailureFallbackExpectedForTesting(true)
+      try {
+        val declared = plan()
+        assert(values(declared) === Seq(4, null, 8))
+        assert(declared.metrics("numFallbackBatchesKernel").value === 1)
+      } finally {
+        VarkaColumnarToRowExec.setFailureFallbackExpectedForTesting(false)
+      }
+    } finally {
+      VarkaColumnarToRowExec.setEmitOptionsForTesting(previous)
+    }
   }
 
   test("the allocation sampler events every sampled batch, and the samples go clean once C2 " +

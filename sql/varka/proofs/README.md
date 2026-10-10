@@ -3,8 +3,8 @@
 Machine-checked proofs of Varka's arithmetic lowerings, in SMT-LIB. `dev/varka_prove.sh` runs them
 in the linters' job, each under one solver, and under Z3 and cvc5 in the nightly, and fails on any
 verdict other than the one each check expects. They began with VARKA-240 (`sql/varka/plans/m7/VARKA-240.md`);
-VARKA-241 added the long lane's division forms, and row 242 of `m7/PLAN.md` adds the other bounded
-lowerings.
+VARKA-241 added the long lane's division forms, and VARKA-242 the calendar's divisions,
+`floorMod7` and the leap hash.
 
 | file | what it holds | written by |
 | :--- | :--- | :--- |
@@ -12,6 +12,9 @@ lowerings.
 | `java_check.smt2` | the prelude against the JVM: each operator over boundary operands, the expected values computed by Java | `VarkaProofFiles` |
 | `int_mulhi_divide.smt2` | the int lane's multiply-high division (VARKA-149) exact for every divisor in use, with `signedMagic`'s constants | `VarkaProofFiles` |
 | `long_divide.smt2` | the long lane's two division forms exact under `ConstDivide.EXACT_DIVIDEND_BOUND` for every divisor in use, and the conversion form's exact bound past it (VARKA-241) | `VarkaProofFiles` |
+| `chrono_divide.smt2` | every calendar division site (`ChronoDivide`): the magic form with its carry exact over the site's dividends and first failing where the table says, and both double forms exact over the range (VARKA-242) | `VarkaProofFiles` |
+| `floor_mod7.smt2` | `emitFloorMod7`'s three forms, `Math.floorMod(v, 7)` for every int, by lemmas over each fold's digits (VARKA-242) | `VarkaProofFiles` |
+| `leap_hash.smt2` | the leap flag's perfect hash and its unsigned compare exact over every biased year to `LEAP_HASH_MAX_BIASED_YEAR`, over bit-vectors (VARKA-242) | `VarkaProofFiles` |
 
 ## Running them
 
@@ -27,7 +30,8 @@ A solver's line numbers count the inserted prelude.
 
 ## What a proof looks like
 
-A file opens with `(set-logic QF_NIA)` and a header naming the Java it encodes. Every check is
+A file opens with a header naming the Java it encodes and its `set-logic` line: `QF_NIA`, or `ALL`
+where cvc5 decides the checks only under it or the file reasons over bit-vectors. Every check is
 an `(echo "<what it shows>: expect sat|unsat")` followed by its `(check-sat)` between `push` and
 `pop`. An `unsat` check is a proof: the negation of the claim has no model. A `sat` check shows the
 statement is not vacuous: the domain admits its boundary inputs, and a constant changed by one is
@@ -56,6 +60,10 @@ it rounds to in a binade the proof names. A proof that rounds a value it cannot 
 per binade the value can fall in, and a check that those binades cover every value its domain gives,
 without which a check could pass by leaving a value out.
 
+The leap hash is the exception (`leap_hash.smt2`): a mask of scattered bits over a wrapped product.
+Over integers it ran past ten minutes under Z3; over bit-vectors, whose operators are Java's int
+operators exactly for a multiply, a mask and an unsigned compare, both solvers take under a second.
+
 ## Adding a proof
 
 1. One file per lowering, its header naming the Java it encodes. Constants that live in the code
@@ -66,6 +74,12 @@ without which a check could pass by leaving a value out.
    them. The runner is about twice the laptop. `--lint` runs a file under Z3 unless the script's
    `CVC5_IN_LINT` names it, which it does for a file one solver proves much faster than the other:
    `long_divide.smt2` takes Z3 28 s on the laptop and cvc5 8 s (VARKA-241.md 9.5).
+4. cvc5 is the fragile one (`VARKA-242.md` 2.2 and 9). Where it answers `unknown`, try in order:
+   `(set-logic ALL)` in place of `QF_NIA`; one lemma per step over named digits or quotients, so
+   each check is linear arithmetic over a few small variables; a residue written as 7 times a
+   declared integer rather than through `mod`; and fewer wrapping operations per check. A check
+   that holds alone can still come back `unknown` after other checks in the same run, so a new file
+   is run whole, and each of its checks alone, under both solvers.
 
 ## The solvers
 

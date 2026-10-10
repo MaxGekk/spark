@@ -92,7 +92,8 @@ public final class VarkaChrono {
    * {@code floor(2^24 / 146097)}, rounded down so the quotient is never overestimated. The
    * shortfall is {@code w * (2^24 - M * d) / (d * 2^24) < 1} for every {@code w < 2^24}, so one
    * correction step recovers the exact quotient - and {@code M * w <= 114 * (2^24 - 1)} is
-   * comfortably inside {@code 2^31}.
+   * comfortably inside {@code 2^31}. Sufficient: with its carry the form is exact to
+   * {@code w = 20161385} and first fails at 20161386 ({@code chrono_divide.smt2}, VARKA-242).
    */
   public static final int NARROW_ERA_M = 114;
 
@@ -118,7 +119,8 @@ public final class VarkaChrono {
    * absorb: it adds one era when the magic undershoots, so the split stays exact past the
    * point the multiply wraps, and ends only where the undershoot reaches <i>two</i> eras. That
    * is {@code w = 20161385}, giving about 9,266 years of headroom over the shipped ceiling
-   * rather than the ~5,600 the multiply bound alone would suggest.
+   * rather than the ~5,600 the multiply bound alone would suggest. Exact: proven to it, and wrong
+   * one past it, in {@code chrono_divide.smt2} (VARKA-242).
    *
    * <p>Why two constants rather than a wider one: {@link #NARROW_MAX_DAYS} is what a
    * <i>value</i> may be, and it is the emitter's guard bound and the column contract's
@@ -194,7 +196,10 @@ public final class VarkaChrono {
 
   // --- Day of era to the five fields ---------------------------------------
 
-  /** {@code floor(2^28 / 36524)}, round-down; one correction, dividend at most 146096. */
+  /**
+   * {@code floor(2^28 / 36524)}, round-down; one correction, dividend at most 146096. Sufficient:
+   * with its carry the form first fails at 584429 ({@code chrono_divide.smt2}, VARKA-242).
+   */
   public static final int CENTURY_M = 7349;
 
   /** The shift paired with {@link #CENTURY_M}. */
@@ -203,36 +208,41 @@ public final class VarkaChrono {
   /**
    * The magic for {@code / 365}, one above the round-up form: {@code ceil(2^24 / 365)} is
    * 45965 (with {@code e = 9}), and this is 45966 (with {@code e = 374}). Both are exact over
-   * the dividend this sees; 45965 would be exact far further, to 1864135 against 45966's
-   * 44858, and either would do. The number is what it is because that is what was derived,
-   * swept and committed - do not "fix" it to the tighter ceil without re-running the sweep,
-   * and do not copy 45966 as though it were {@code ceil}, because for another divisor the
+   * the dividend this sees; 45965 would be exact further, and either would do. (The 1864135 once
+   * quoted for 45965 is its bound in unbounded arithmetic; in a 32-bit lane it first fails at
+   * 93440, where the multiply passes 2^32.) The number is what it is because that is what was
+   * derived, swept and committed - do not "fix" it to the tighter ceil without re-running the
+   * sweep, and do not copy 45966 as though it were {@code ceil}, because for another divisor the
    * extra one may put {@code e} past the bound.
    *
    * <p>What matters is the bound: {@code v * e < 2^k} is strict, so this is exact for every
-   * dividend up to 44858. The dividend here is the day of century, at most 36524 - the era's
-   * spilling last day, one past a plain century's 36523 - so this division needs no correction
-   * at all. It is the split into centuries that buys that: on the day of era, 146096 wide, no
-   * exact magic for 365 exists at any k.
+   * dividend up to 44858. Sufficient: the form is exact to 44893 and first fails at 44894
+   * ({@code chrono_divide.smt2}, VARKA-242). The dividend here is the day of century, at most
+   * 36524 - the era's spilling last day, one past a plain century's 36523 - so this division
+   * needs no correction at all. It is the split into centuries that buys that: on the day of
+   * era, 146096 wide, no exact magic for 365 exists at any k.
    */
   public static final int YEAR_M = 45966;
 
   /** The shift paired with {@link #YEAR_M}. */
   public static final int YEAR_K = 24;
 
-  /** Exact magic for {@code / 153} over a dividend of at most {@code 5 * 365 + 2}. */
+  /** Exact magic for {@code / 153} over a dividend of at most {@code 5 * 365 + 2}; first fails at
+   * 4896 ({@code chrono_divide.smt2}, VARKA-242). */
   public static final int MONTH_M = 877241;
 
   /** The shift paired with {@link #MONTH_M}. */
   public static final int MONTH_K = 27;
 
-  /** Exact magic for {@code / 5} over a dividend of at most {@code 153 * 11 + 2}. */
+  /** Exact magic for {@code / 5} over a dividend of at most {@code 153 * 11 + 2}; first fails at
+   * 5120 ({@code chrono_divide.smt2}, VARKA-242). */
   public static final int DAY_M = 838861;
 
   /** The shift paired with {@link #DAY_M}. */
   public static final int DAY_K = 22;
 
-  /** Exact magic for {@code / 3} over a dividend of at most 14. */
+  /** Exact magic for {@code / 3} over a dividend of at most 14; first fails at 48
+   * ({@code chrono_divide.smt2}, VARKA-242). */
   public static final int QUARTER_M = 89478486;
 
   /** The shift paired with {@link #QUARTER_M}. */
@@ -290,7 +300,8 @@ public final class VarkaChrono {
    * Exact magic for {@code / 2141} over the numerator's low half, which turns the remainder
    * into the zero-based day of month. Exact at every one of the 65536 values a 16-bit
    * remainder can take - checked at all of them, not sampled - with a maximum product of
-   * 2054194575, under {@code 2^31 - 1} with room to spare.
+   * 2054194575, under {@code 2^31 - 1} with room to spare. Sufficient: it first fails at 87780
+   * ({@code chrono_divide.smt2}, VARKA-242).
    */
   public static final int DOM_M = 31345;
 
@@ -300,7 +311,8 @@ public final class VarkaChrono {
   /**
    * Exact magic for {@code / 7} over {@code 0..684}, the domain of {@code dayOfYear - 1}:
    * {@code (x * WEEK_M) >>> WEEK_K} is {@code x / 7} for every {@code x} up to 684
-   * and wrong at 685, with a maximum in-domain product of 200,412, nowhere near {@code 2^31}.
+   * and wrong at 685 (exact; {@code chrono_divide.smt2}, VARKA-242), with a maximum in-domain
+   * product of 200,412, nowhere near {@code 2^31}.
    * The ISO week of a Thursday is {@code (januaryDayOfYear - 1) / 7 + 1}, so this is the
    * whole of {@code weekofyear}'s arithmetic past the day of year: no correction step, no
    * floorMod, because the dividend is never negative. Checked over the whole domain and one
@@ -362,7 +374,9 @@ public final class VarkaChrono {
    * The dividend is at most {@code 4 * 146096 + 3 = 584387}, and {@code 584387 * 1837} is
    * 1073518919, inside {@code 2^31}; the shortfall is under one for every dividend in range,
    * so one carry recovers the exact quotient. Checked over all 146097 days of an era rather
-   * than argued: 46 of them need the carry, none needs two.
+   * than argued: 46 of them need the carry, none needs two. Sufficient: over dividends
+   * {@code 3 mod 4}, the form with its carry first fails at 2338035 ({@code chrono_divide.smt2},
+   * VARKA-242).
    */
   public static final int JULIAN_CENTURY_M = 1837;
   /** The shift paired with {@link #JULIAN_CENTURY_M}. */
@@ -376,7 +390,8 @@ public final class VarkaChrono {
    * mapped count is at most {@code 584387 + 4 * 3 = 584399}, and {@code 584399 * 2870} is
    * 1677225130, inside {@code 2^31}; the shortfall is under one over the whole range, so one
    * carry recovers the exact quotient. Checked over all 146097 days of an era: 8627 of them
-   * need the carry, none needs two.
+   * need the carry, none needs two. Sufficient: over dividends {@code 3 mod 4}, the form with its
+   * carry first fails at 1496507 ({@code chrono_divide.smt2}, VARKA-242).
    *
    * <p>Why this replaces two steps rather than one. In the mapped count every fourth year is
    * leap without exception, so the remainder of this division, shifted right by two, is the
@@ -418,7 +433,10 @@ public final class VarkaChrono {
    * findable only by testing the actual range this class has to cover, not a plausible-looking
    * subrange of it. One correction step (the same shape {@link #CENTURY_M} already uses) fixes
    * it: {@code floor(v / d)} from this magic is short by at most one for both divisors over
-   * every dividend the callers below feed it.
+   * every dividend the callers below feed it. Proven for both shifts: with the carry each is
+   * exact to biased year 102400 and first fails at 102401 ({@code chrono_divide.smt2},
+   * VARKA-242) - a hundred years short of {@link #LEAP_HASH_MAX_BIASED_YEAR}, and far past the
+   * years the callers reach.
    */
   public static final int YEAR_CENTURY_M = 41943;
 
@@ -459,7 +477,8 @@ public final class VarkaChrono {
 
   /**
    * The largest biased year {@link #LEAP_HASH_M} is exact for, and the bound is tight: 102500
-   * is the first year the hash gets wrong. {@link #isLeapYear} biases by {@link #YEAR_BIAS},
+   * is the first year the hash gets wrong. Exact, proven over bit-vectors in
+   * {@code leap_hash.smt2} (VARKA-242). {@link #isLeapYear} biases by {@link #YEAR_BIAS},
    * so the covered reported years are {@code -YEAR_BIAS ..
    * LEAP_HASH_MAX_BIASED_YEAR - YEAR_BIAS}, that is -15200..87299 - wider than the roughly
    * -14848..35181 that {@code add_months} and the interval arithmetic can reach, which is the
@@ -492,7 +511,8 @@ public final class VarkaChrono {
   public static final int MONTH_ARITH_M = 43691;
 
   /** The shift paired with {@link #MONTH_ARITH_M}; exact far past what {@link #MONTH_ARITH_M}
-   * needs to stay inside {@code 2^31} for, which is the tighter of the two bounds. */
+   * needs to stay inside {@code 2^31} for, which is the tighter of the two bounds. The form is
+   * exact to 98303 and first fails at 98304 ({@code chrono_divide.smt2}, VARKA-242). */
   public static final int MONTH_ARITH_K = 19;
 
   /** Whole years of headroom the month-arithmetic dividend is biased by, so it stays
@@ -504,7 +524,9 @@ public final class VarkaChrono {
    * derived from {@code v * MONTH_ARITH_M < 2^31}: the dividend is
    * {@code (month - 1) + months + MONTH_ARITH_BIAS} with {@code month - 1} up to 11, so
    * {@code months} up to {@code floor((2^31 - 1) / MONTH_ARITH_M) - MONTH_ARITH_BIAS - 11}.
-   * About 2000 years; a literal past this is declined rather than computed wrongly.
+   * About 2000 years; a literal past this is declined rather than computed wrongly. Sufficient:
+   * the shift is unsigned, so the multiply may run to {@code 2^32}, and the magic is exact to a
+   * dividend of 98303, about twice what this admits (VARKA-242.md 2.1).
    */
   public static final int MONTH_ARITH_MAX_MONTHS = 24564;
 
