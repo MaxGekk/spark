@@ -86,6 +86,7 @@ None move.
 | `Slots.java` | one slot rule; `Guard`, the flags and their arguments go |
 | `VarkaLoopEmitter.java` | calls `collectRefusals` |
 | `sql/varka/skills/emitter-and-ir.md` | the set names it cites |
+| `VarkaEmitterChronoSuite.scala` | the test in 5 |
 
 ## 5. Tests, and what each is for
 
@@ -115,3 +116,20 @@ None: nothing emitted changes, so there is nothing to time.
 
 1. This plan.
 2. The refactor, the test, the skills note and the row marked Done, in one commit.
+
+## 9. Outcome
+
+Done as 3.1 describes, in one commit after this plan.
+
+* **The admission check held.** `VarkaEmittedBytesSuite` passes against the committed
+  `emitted_bytes.json` with no regeneration, as it did on the base, so no emitted method moved in
+  any coverage row, fuzz shape or option arm at either width.
+* **Risk 1 did not happen.** The clean rule - a scratch local for any node whose reason parks
+  its value - gave the same slots as the per-body families did, so the families did not survive
+  as a field.
+* **What went:** the three sets, the `Guard` enum, the four per-body flags, and the three flag
+  arguments `liveWords` and `WordWalk` took. A seventh reason is now one enum constant and one
+  arm in `collectRefusals`; `refuse` throws if two rules ever give one node two reasons.
+* **The test in 5** checks eleven shapes with both options on and both off, and the two reasons
+  that park nothing.
+* **Left for later:** a status bit per reason, row 304 (3.2).

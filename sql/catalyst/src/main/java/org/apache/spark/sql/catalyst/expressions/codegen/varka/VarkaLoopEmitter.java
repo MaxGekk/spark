@@ -207,18 +207,18 @@ public final class VarkaLoopEmitter {
 
   /**
    * The analysis of {@code outputs} every emission starts from, in the one order its passes
-   * run: the roots, the arm contexts, the guarded producers, the word algebra and the bitmap
-   * pass. What depends on the grouping, the materialized prefixes, is planned by the caller once
-   * it has one.
+   * run: the roots, the arm contexts, the refusals, the word algebra and the bitmap pass. What
+   * depends on the grouping, the materialized prefixes, is planned by the caller once it has
+   * one. Package-private for the test that reads {@link Analysis#refusals}.
    */
-  private static Analysis analyze(List<VarkaVectorIR> outputs, int numInputs, int numLiterals,
+  static Analysis analyze(List<VarkaVectorIR> outputs, int numInputs, int numLiterals,
       VarkaEmitOptions options) {
     Analysis analysis = new Analysis(numInputs, numLiterals, options, laneOf(outputs));
     for (VarkaVectorIR root : outputs) {
       analysis.analyzeRoot(root);
     }
     analysis.collectArmContexts(outputs);
-    analysis.collectGuardedProducers();
+    analysis.collectRefusals();
     analysis.planWordAlgebra();
     analysis.planBitmapPass(outputs);
     return analysis;
