@@ -19,12 +19,14 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.function.ObjIntConsumer;
 import java.util.function.Predicate;
 import java.util.function.ToIntFunction;
 import java.util.function.UnaryOperator;
+import java.util.stream.Collectors;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions.Builder;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions.Division;
@@ -91,6 +93,37 @@ public sealed interface VarkaEmitOption
   /** One arm of the bytes suite's inventory: its label and the change it makes to a value. */
   record Arm(String name, UnaryOperator<VarkaEmitOptions> apply) {}
 
+  /**
+   * The options under which an option has anything to do, for an option the defaults never reach
+   * (VARKA-247). {@code validityOrFirst} orders the per-group validity OR, which the defaults do
+   * not emit for any value root: a dense body fills validity once, and a masked one writes it by
+   * the bitmap pass or computes the word inside the root. The bytes suite applies its arms over
+   * the reference arms that do emit that OR - its audit and its pinned digests - and the test
+   * matrix runs its non-default arm there; {@link #arms()} itself stays one option flipped from
+   * the defaults.
+   */
+  record Subject(UnaryOperator<VarkaEmitOptions> apply) {
+    /** The defaults: an option whose two values differ there. */
+    static final Subject DEFAULTS = new Subject(UnaryOperator.identity());
+
+    public Subject {
+      Objects.requireNonNull(apply, "apply");
+    }
+
+    /**
+     * The options this subject changes, as {@code name=value} in table order and comma-separated,
+     * which {@code VarkaMatrix.parse} reads back; empty for {@link #DEFAULTS}. Derived from what
+     * {@code apply} does, so it cannot describe a different base from the one it names.
+     */
+    public String label() {
+      VarkaEmitOptions base = apply.apply(VarkaEmitOptions.DEFAULTS);
+      return TABLE.stream()
+          .filter(o -> !o.text(base).equals(o.text(VarkaEmitOptions.DEFAULTS)))
+          .map(o -> o.name() + "=" + o.text(base))
+          .collect(Collectors.joining(","));
+    }
+  }
+
   Rendering POSITIONAL = new Positional();
 
   String name();
@@ -113,12 +146,20 @@ public sealed interface VarkaEmitOption
 
   /** A boolean option. */
   record Flag(String name, Reason reason, boolean defaultValue, Predicate<VarkaEmitOptions> get,
-      BiConsumer<Builder, Boolean> set, Rendering rendering) implements VarkaEmitOption {
+      BiConsumer<Builder, Boolean> set, Rendering rendering, Subject subject)
+      implements VarkaEmitOption {
 
     public Flag {
       if (rendering instanceof CountTag) {
         throw new IllegalArgumentException(name + ": a flag renders by position or as a flag tag");
       }
+      Objects.requireNonNull(subject, "subject");
+    }
+
+    /** A flag whose two values differ at the defaults. */
+    public Flag(String name, Reason reason, boolean defaultValue, Predicate<VarkaEmitOptions> get,
+        BiConsumer<Builder, Boolean> set, Rendering rendering) {
+      this(name, reason, defaultValue, get, set, rendering, Subject.DEFAULTS);
     }
 
     public boolean value(VarkaEmitOptions options) {
@@ -311,7 +352,9 @@ public sealed interface VarkaEmitOption
       new Flag("validityByWidth", Reason.REFERENCE, true,
           VarkaEmitOptions::validityByWidth, Builder::validityByWidth, POSITIONAL),
       new Flag("validityOrFirst", Reason.REFERENCE, true,
-          VarkaEmitOptions::validityOrFirst, Builder::validityOrFirst, POSITIONAL),
+          VarkaEmitOptions::validityOrFirst, Builder::validityOrFirst, POSITIONAL,
+          new Subject(
+              o -> o.toBuilder().validityByBitmap(false).denseValidityOnce(false).build())),
       new Flag("validityByBitmap", Reason.REFERENCE, true,
           VarkaEmitOptions::validityByBitmap, Builder::validityByBitmap, POSITIONAL),
       new Flag("checkIntOverflow", Reason.PRICED_CHECK, true,

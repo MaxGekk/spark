@@ -89,6 +89,11 @@ object VarkaMatrix {
    * Every configuration, in table order: each non-default arm of each option but the fault
    * injectors - a flag's other value, an enum's other constants, a count's audit values - and
    * the lane counts above. Derived from the table, so a new option joins with its entry.
+   *
+   * A flag whose `VarkaEmitOption.Subject` is not the defaults runs its other value over that
+   * subject, `denseValidityOnce=false,validityByBitmap=false,validityOrFirst=false`: at the
+   * defaults the value emits the defaults' bytes, and the configuration would test nothing
+   * (VARKA-247).
    */
   def configurations: Seq[String] = {
     val defaults = VarkaEmitOptions.DEFAULTS
@@ -98,7 +103,12 @@ object VarkaMatrix {
         val arms = option.arms.asScala.toSeq
           .filter(arm => arm.apply.apply(defaults) != defaults)
           .map(_.name)
-        if (option.name == "lanesOverride") LANE_COUNTS.map(n => s"lanesOverride=$n") else arms
+        option match {
+          case _ if option.name == "lanesOverride" => LANE_COUNTS.map(n => s"lanesOverride=$n")
+          case f: VarkaEmitOption.Flag if f.subject() != VarkaEmitOption.Subject.DEFAULTS =>
+            arms.map(arm => s"${f.subject().label()},$arm")
+          case _ => arms
+        }
       }
   }
 

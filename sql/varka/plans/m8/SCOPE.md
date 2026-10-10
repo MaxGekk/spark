@@ -3304,6 +3304,12 @@ not the reason. **Done when** the field's subject is named - the shape that
 would distinguish its two values, added to the oracle's set, or the field
 removed with the tests that set it - so that the oracle's silence about it
 means something.
+
+*Done on 10 October 2026 by VARKA-247: the field is alive, on the per-group validity write that
+the defaults never emit - a dense body fills validity once, a masked one writes it by the bitmap
+pass or computes the word inside the root. Over `validityByBitmap=false` and
+`denseValidityOnce=false` its two values differ on 65 of the 92 coverage rows; the bytes oracle
+pins them there, and the option table names that base as the option's subject.*
 ### Item 49. The two band measurements milestone 5 did not take
 
 Milestone row 90 closed on its census and its decision, and left two
