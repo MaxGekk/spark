@@ -33,7 +33,7 @@ class VarkaMatrixSuite extends SparkFunSuite with VarkaTestWatchdog {
   test("every configuration parses, and changes exactly the option it names") {
     val configurations = VarkaMatrix.configurations
     assert(configurations.distinct === configurations)
-    for (config <- configurations) {
+    for (config <- configurations.filterNot(_.startsWith(VarkaMatrix.ARROW_BATCH_SIZE))) {
       // A flag with a subject runs over it (VARKA-247), so its configuration names those options
       // too, before its own.
       val names = config.split(",").map(_.takeWhile(_ != '=')).toSet
@@ -47,12 +47,22 @@ class VarkaMatrixSuite extends SparkFunSuite with VarkaTestWatchdog {
   }
 
   test("the configurations cover every option but the fault injectors") {
-    val named = VarkaMatrix.configurations.map(_.split(",").last.takeWhile(_ != '=')).toSet
+    val named = VarkaMatrix.configurations.filterNot(_.startsWith(VarkaMatrix.ARROW_BATCH_SIZE))
+      .map(_.split(",").last.takeWhile(_ != '=')).toSet
     val expected = VarkaEmitOption.TABLE.asScala
       .filter(_.reason != VarkaEmitOption.Reason.FAULT_INJECTOR).map(_.name).toSet
     assert(named === expected)
     assert(VarkaMatrix.configurations.contains("lanesOverride=4"))
     assert(VarkaMatrix.configurations.contains("division=DOUBLE_DIV"))
+  }
+
+  test("the batch-size axis changes no emit option and names its rows (VARKA-301)") {
+    for (rows <- VarkaMatrix.ARROW_BATCH_SIZES) {
+      val config = s"${VarkaMatrix.ARROW_BATCH_SIZE}=$rows"
+      assert(VarkaMatrix.configurations.contains(config))
+      assert(VarkaMatrix.parse(config) === VarkaEmitOptions.DEFAULTS, config)
+    }
+    intercept[IllegalArgumentException](VarkaMatrix.parse(s"${VarkaMatrix.ARROW_BATCH_SIZE}=0"))
   }
 
   test("a malformed configuration is refused") {

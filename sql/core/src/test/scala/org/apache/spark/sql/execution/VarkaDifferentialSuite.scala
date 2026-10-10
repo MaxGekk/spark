@@ -2160,10 +2160,14 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions with Var
   }
 
   test("filters over multiple batches and tasks share one mask kernel class") {
-    val batchSize = "32"
+    // The Arrow cache's own knob (VARKA-301): it ignores COLUMN_BATCH_SIZE, which an earlier
+    // version set here and whose assertion held only through the second partition. Restored to
+    // what it was, so the batch-size axis's setting survives the test.
+    val key = SQLConf.ARROW_EXECUTION_MAX_RECORDS_PER_BATCH.key
+    val before = Seq(spark, varkaSpark).map(_.conf.getOption(key))
     try {
-      spark.conf.set(SQLConf.COLUMN_BATCH_SIZE.key, batchSize)
-      varkaSpark.conf.set(SQLConf.COLUMN_BATCH_SIZE.key, batchSize)
+      spark.conf.set(key, "32")
+      varkaSpark.conf.set(key, "32")
       cacheDatesBig(spark, 1024, parts = 4)
       cacheDatesBig(varkaSpark, 1024, parts = 4)
       val plan = checkDifferential(spark, varkaSpark,
@@ -2173,16 +2177,22 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions with Var
         .flatMap(_.metrics.get("numVarkaBatches")).map(_.value).getOrElse(0L)
       assert(batches > 1L, s"expected more than one kernel batch, got $batches")
     } finally {
-      spark.conf.unset(SQLConf.COLUMN_BATCH_SIZE.key)
-      varkaSpark.conf.unset(SQLConf.COLUMN_BATCH_SIZE.key)
+      Seq(spark, varkaSpark).zip(before).foreach {
+        case (session, Some(value)) => session.conf.set(key, value)
+        case (session, None) => session.conf.unset(key)
+      }
     }
   }
 
   test("multi-batch: every cached Arrow batch is processed by the kernels") {
-    val batchSize = "32"
+    // The Arrow cache's own knob (VARKA-301): it ignores COLUMN_BATCH_SIZE, which an earlier
+    // version set here and whose assertion held only through the second partition. Restored to
+    // what it was, so the batch-size axis's setting survives the test.
+    val key = SQLConf.ARROW_EXECUTION_MAX_RECORDS_PER_BATCH.key
+    val before = Seq(spark, varkaSpark).map(_.conf.getOption(key))
     try {
-      spark.conf.set(SQLConf.COLUMN_BATCH_SIZE.key, batchSize)
-      varkaSpark.conf.set(SQLConf.COLUMN_BATCH_SIZE.key, batchSize)
+      spark.conf.set(key, "32")
+      varkaSpark.conf.set(key, "32")
       cacheDatesBig(spark, 1024)
       cacheDatesBig(varkaSpark, 1024)
       val plan = checkDifferential(spark, varkaSpark,
@@ -2192,8 +2202,28 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions with Var
         .flatMap(_.metrics.get("numVarkaBatches")).map(_.value).getOrElse(0L)
       assert(batches > 1L, s"expected more than one kernel batch, got $batches")
     } finally {
-      spark.conf.unset(SQLConf.COLUMN_BATCH_SIZE.key)
-      varkaSpark.conf.unset(SQLConf.COLUMN_BATCH_SIZE.key)
+      Seq(spark, varkaSpark).zip(before).foreach {
+        case (session, Some(value)) => session.conf.set(key, value)
+        case (session, None) => session.conf.unset(key)
+      }
+    }
+  }
+
+  test("the cached batches hold the rows the batch-size axis names (VARKA-301)") {
+    // The axis cannot pass vacuously: under arrowBatchSize=<rows> every cached batch holds at most
+    // that many rows and a table of 100 is split, and under the defaults no batch exceeds the
+    // default. Read off the cache itself, which is what the kernels are handed.
+    cacheDatesBig(varkaSpark, 100)
+    val relation = varkaSpark.table("varka_dates_big").queryExecution.withCachedData
+      .collectFirst { case r: columnar.InMemoryRelation => r }
+      .getOrElse(fail("expected varka_dates_big to be cached"))
+    val rows = relation.cacheBuilder.cachedColumnBuffers.map(_.numRows).collect().toSeq
+    assert(rows.sum === 100)
+    val limit = VarkaMatrix.arrowBatchSize
+      .getOrElse(SQLConf.ARROW_EXECUTION_MAX_RECORDS_PER_BATCH.defaultValue.get)
+    assert(rows.max <= limit, s"a cached batch of ${rows.max} rows past the limit $limit")
+    VarkaMatrix.arrowBatchSize.foreach { size =>
+      assert(rows.size >= 100 / size, s"$size rows a batch gave ${rows.size} batches: $rows")
     }
   }
 
