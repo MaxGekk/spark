@@ -27,6 +27,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaBodyEmitter.
 import static org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitBudget.*;
 
 import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -568,7 +569,16 @@ final class Slots {
     // the caller acts on the batch, not the lane, and a body with nothing to guard keeps the slot
     // numbering - and so the bytes - unchanged, whichever way the options are set. The driver
     // guards nothing.
-    if (mode != BodyMode.DRIVER && body.stream().anyMatch(analysis.refusals::containsKey)) {
+    var families = EnumSet.noneOf(Analysis.Refusal.Family.class);
+    if (mode != BodyMode.DRIVER && !analysis.refusals.isEmpty()) {
+      for (VarkaVectorIR node : body) {
+        Analysis.Refusal reason = analysis.refusals.get(node);
+        if (reason != null) {
+          families.add(reason.family);
+        }
+      }
+    }
+    if (!families.isEmpty()) {
       s.guardAcc = slot++;
     }
     // one accumulator per output this body writes a word at a time. Allocated after guardAcc and
@@ -683,7 +693,7 @@ final class Slots {
           // Only a reason that parks its value takes one (see Analysis.Refusal): MakeDate guards
           // out of makeDateTmp, and allocating one for it would shift every later local and
           // move the pinned bytes.
-          if (guardScratch(analysis, node)) {
+          if (guardScratch(analysis, node, families)) {
             s.guardTmp.put(node, slot++);
           }
           if (node instanceof MakeDate) {
@@ -881,16 +891,20 @@ final class Slots {
 
   /**
    * Whether {@code node} needs {@link Slots#guardTmp}, the scratch local a guard parks its value in
-   * before testing it: a refusing node whose reason {@link Analysis.Refusal#parksValue parks}.
-   * A subset of {@link #guardedWord}, and deliberately not the same question: a guarded day
-   * producer's value is on the stack when the guard runs, and {@code AddMonths} guards its count
-   * the same way, but the checked int arithmetic already parks its operands and result in
+   * before testing it: a refusing node whose reason {@link Analysis.Refusal#parksValue parks}, in a
+   * body its {@link Analysis.Refusal.Family family} allows - every body for a re-armed range
+   * check, otherwise one whose emitted nodes, {@code families}, include the family. A subset of
+   * {@link #guardedWord}, and deliberately not the same question: a guarded day producer's value
+   * is on the stack when the guard runs, and {@code AddMonths} guards its count the same way, but
+   * the checked int arithmetic already parks its operands and result in
    * {@link Slots#intArithTmp}, and {@code emitIntNeg} reads its operand back with {@code dup}, so
    * neither ever loads this slot.
    */
-  private static boolean guardScratch(Analysis analysis, VarkaVectorIR node) {
+  private static boolean guardScratch(Analysis analysis, VarkaVectorIR node,
+      Set<Analysis.Refusal.Family> families) {
     Analysis.Refusal reason = analysis.refusals.get(node);
-    return reason != null && reason.parksValue;
+    return reason != null && reason.parksValue
+        && (reason.family == Analysis.Refusal.Family.REARMED || families.contains(reason.family));
   }
 
   /**

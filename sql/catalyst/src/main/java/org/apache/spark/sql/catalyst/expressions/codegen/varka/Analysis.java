@@ -256,10 +256,12 @@ final class Analysis {
    * {@code VarkaVectorWalk.emitGuardCollect}, and a non-empty accumulator sends the batch to the
    * row engine. Every reason today reports {@link VarkaFusedKernel#STATUS_CHRONO_RANGE}.
    *
-   * <p>{@code parksValue} is the one thing the slot planner needs from a reason: whether its guard
-   * stores the value it tests in {@link Slots#guardTmp} while the value stays on the operand stack
-   * for the parent. A reason that does not park reads its value from locals it already owns, and
-   * giving it a scratch local would reserve one nothing loads and shift every later local.
+   * <p>A reason carries the two things the slot planner needs from it. {@code parksValue}: whether
+   * its guard stores the value it tests in {@link Slots#guardTmp} while the value stays on the
+   * operand stack for the parent. A reason that does not park reads its value from locals it
+   * already owns, and giving it a scratch local would reserve one nothing loads and shift every
+   * later local. And its {@link Family}, which says in which bodies a parking node takes its
+   * scratch local.
    */
   enum Refusal {
     /**
@@ -270,18 +272,18 @@ final class Analysis {
      * {@code compileMonths} bound every other producer at compile time and decline a node they do
      * not know, so a future column-driven producer fails safe until it is taught to both sides.
      */
-    DAY_PRODUCER(true),
+    DAY_PRODUCER(Family.PRODUCER, true),
     /**
      * A column-count {@link AddMonths}: its month count, against the range its magic multiply is
      * exact over, wherever it sits - a bare {@code add_months(d, m)} needs it too. The node's own
-     * correctness, so never behind an option (see {@link #collectRefusals}).
+     * correctness, so never behind an option (see {@link Analysis#collectRefusals}).
      */
-    MONTH_COUNT(true),
+    MONTH_COUNT(Family.SELF, true),
     /**
      * {@link MakeDate}: a year outside its limits, and in ANSI mode an invalid date. The node's own
      * correctness. It guards out of {@link Slots#makeDateTmp}, so it parks nothing.
      */
-    MAKE_DATE(false),
+    MAKE_DATE(Family.SELF, false),
     /**
      * A FAIL-mode {@link IntArith} (not {@code MUL}) or {@link IntNeg}: a lane that overflows,
      * behind {@link VarkaEmitOptions#checkIntOverflow}. The arithmetic parks its operands and
@@ -289,20 +291,33 @@ final class Analysis {
      * {@code dup}, so it parks nothing here. A NULL-mode node checks too, but narrows its own word
      * instead of refusing the batch, so it has no reason.
      */
-    INT_OVERFLOW(false),
+    INT_OVERFLOW(Family.CHECKED, false),
     /**
      * {@link GuardedDay}: the day range, re-armed by the compiler. Unconditional, because the
      * compiler admits the expression on the strength of this check ({@code VARKA-93.md} 3.4).
      */
-    DAY_RANGE(true),
+    DAY_RANGE(Family.REARMED, true),
     /** {@link GuardedRange}: the day guard's twin at either lane, with the bounds it carries. */
-    VALUE_RANGE(true);
+    VALUE_RANGE(Family.REARMED, true);
 
+    final Family family;
     final boolean parksValue;
 
-    Refusal(boolean parksValue) {
+    Refusal(Family family, boolean parksValue) {
+      this.family = family;
       this.parksValue = parksValue;
     }
+
+    /**
+     * Which bodies give a parking node its scratch local. A {@link #REARMED} node takes one in
+     * every body; a node of another family takes one in a body that emits some refusing node of
+     * the same family, and in no driver. The rule is per family rather than per node because a
+     * body's slot loop can visit nodes it does not emit - the whole kernel's, where frames are
+     * not group-local ({@code groupLocalSlots} off, or the byte budget off) - and those arms'
+     * bytes are what they are because the planner allocated by family before this enum existed.
+     * Allocating per node there moves them; VARKA-83's review measured it.
+     */
+    enum Family { PRODUCER, SELF, CHECKED, REARMED }
   }
 
   /**
@@ -484,7 +499,8 @@ final class Analysis {
   }
 
   /**
-   * Fills {@link #refusals} over the topological order. A column-count {@link AddMonths} is a
+   * Fills {@link #refusals} over the topological order, one exhaustive switch deciding every kind,
+   * so that a new node type has to say whether it refuses. A column-count {@link AddMonths} is a
    * {@link Refusal#MONTH_COUNT}, not a {@link Refusal#DAY_PRODUCER}: its check is on its own month
    * count, which its own magic multiply is exact only over, so it is the node's correctness rather
    * than a consumer's insurance - the {@link MakeDate} criterion exactly. It also has to be
@@ -495,40 +511,91 @@ final class Analysis {
    * than a slower one.
    */
   void collectRefusals() {
-    for (VarkaVectorIR node : topoOrder) {
-      if (options.guardDayProducers() && isChrono(node)) {
-        collectColumnOffsetProducers(chronoChild(node));
+    // The nodes some calendar node reads, directly or through further arithmetic: where a
+    // column-offset day producer is one a consumer relies on. Each node is walked once.
+    Set<VarkaVectorIR> underChrono = new HashSet<>();
+    if (options.guardDayProducers()) {
+      for (VarkaVectorIR node : topoOrder) {
+        if (isChrono(node)) {
+          collectReached(chronoChild(node), underChrono);
+        }
       }
+    }
+    for (VarkaVectorIR node : topoOrder) {
       switch (node) {
-        case AddMonths n when !(n.months() instanceof LiteralSlot) ->
+        case AddDays n -> {
+          if (underChrono.contains(node) && !(n.offset() instanceof LiteralSlot)) {
+            refuse(node, Refusal.DAY_PRODUCER);
+          }
+        }
+        case SubDays n -> {
+          if (underChrono.contains(node) && !(n.offset() instanceof LiteralSlot)) {
+            refuse(node, Refusal.DAY_PRODUCER);
+          }
+        }
+        case AddMonths n -> {
+          if (!(n.months() instanceof LiteralSlot)) {
             refuse(node, Refusal.MONTH_COUNT);
+          }
+        }
         case MakeDate n -> refuse(node, Refusal.MAKE_DATE);
         // MUL is excluded for a different reason than NULL: a checked one never reaches here at
         // all, because the compiler declines it and emitIntArith throws if it ever did - so this
         // guard is defensive rather than load-bearing; the invariant is stated in three places
         // (here, the throw, and the compiler's decline) and all three must move together if it
         // is ever widened.
-        case IntArith n when options.checkIntOverflow() && n.mode() == Overflow.FAIL
-            && n.op() != IntOp.MUL -> refuse(node, Refusal.INT_OVERFLOW);
-        case IntNeg n when options.checkIntOverflow() && n.mode() == Overflow.FAIL ->
+        case IntArith n -> {
+          if (options.checkIntOverflow() && n.mode() == Overflow.FAIL && n.op() != IntOp.MUL) {
             refuse(node, Refusal.INT_OVERFLOW);
+          }
+        }
+        case IntNeg n -> {
+          if (options.checkIntOverflow() && n.mode() == Overflow.FAIL) {
+            refuse(node, Refusal.INT_OVERFLOW);
+          }
+        }
         case GuardedDay n -> refuse(node, Refusal.DAY_RANGE);
         case GuardedRange n -> refuse(node, Refusal.VALUE_RANGE);
-        default -> { }
+        // Everything else computes every lane it is given. Written out rather than defaulted.
+        case ColumnRef n -> { }
+        case LiteralSlot n -> { }
+        case NarrowLane n -> { }
+        case NextDay n -> { }
+        case TruncDateDynamic n -> { }
+        case DateDiff n -> { }
+        case Greatest n -> { }
+        case Least n -> { }
+        case IfElse n -> { }
+        case DayOfWeek n -> { }
+        case WeekDay n -> { }
+        case DayOfWeekIso n -> { }
+        case ThursdayOf n -> { }
+        case Year n -> { }
+        case Month n -> { }
+        case DayOfMonth n -> { }
+        case Quarter n -> { }
+        case DayOfYear n -> { }
+        case LastDay n -> { }
+        case TruncDate n -> { }
+        case WeekOfYear n -> { }
+        case ConstDivide n -> { }
+        case BoundedDivide n -> { }
+        case Compare n -> { }
+        case And n -> { }
+        case Or n -> { }
+        case Not n -> { }
+        case IsNotNull n -> { }
+        case InRanges n -> { }
       }
     }
   }
 
-  private void collectColumnOffsetProducers(VarkaVectorIR node) {
-    switch (node) {
-      case AddDays n when !(n.offset() instanceof LiteralSlot) ->
-          refuse(node, Refusal.DAY_PRODUCER);
-      case SubDays n when !(n.offset() instanceof LiteralSlot) ->
-          refuse(node, Refusal.DAY_PRODUCER);
-      default -> { }
-    }
-    for (VarkaVectorIR child : childrenOf(node)) {
-      collectColumnOffsetProducers(child);
+  /** Adds {@code node} and everything under it to {@code into}, each node once. */
+  private static void collectReached(VarkaVectorIR node, Set<VarkaVectorIR> into) {
+    if (into.add(node)) {
+      for (VarkaVectorIR child : childrenOf(node)) {
+        collectReached(child, into);
+      }
     }
   }
 

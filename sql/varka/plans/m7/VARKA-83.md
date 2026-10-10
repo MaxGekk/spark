@@ -133,3 +133,28 @@ Done as 3.1 describes, in one commit after this plan.
 * **The test in 5** checks eleven shapes with both options on and both off, and the two reasons
   that park nothing.
 * **Left for later:** a status bit per reason, row 304 (3.2).
+
+### 9.1 Review of #712 (`/code-review high`), 10 October 2026
+
+* **Risk 1 did happen, and section 9 above is wrong about it.** The per-node scratch rule moved
+  bytes in the arms whose frames walk the whole kernel, `groupLocalSlots=false` and a byte budget
+  of 0: a group's method gave another group's day producer or month count a scratch local it
+  never loads. A probe of eight multi-group shapes, each with refusing
+  nodes in some groups only, under eight option sets (the default, a group budget of one, both
+  reference arms, and each with one option off), changed the class bytes of 23 of the 64 cases
+  against master. `VarkaEmittedBytesSuite` could not see it: its option arms are the settings a
+  session can select (`useAVX`, `validityOrFirst`), not the reference arms, so 2's "every option
+  arm" holds for those and not for these. The family is back, as the plan's fallback said, as
+  `Refusal.Family`: a parking node takes its scratch local in a body that emits a node of its
+  family, or in every body for a re-armed range check. After it, all 64 cases are byte-identical
+  to master. Pinning the reference arms is row 306.
+* **`collectRefusals` is one exhaustive switch** over the IR, without a `default`, so a new node
+  type has to say whether it refuses (`sql/varka/AGENTS.md`, Java code). The walk under the
+  calendar nodes visits each node once, where it had revisited shared subtrees.
+* **The emitted overflow check reads the map.** `emitIntNeg` checks exactly when the map says
+  `INT_OVERFLOW`, and the FAIL collect refuses by name a node the map does not declare, so the
+  emission and the planner's accumulator cannot disagree.
+* **The test checks each optional reason against its own option**, with the two options set
+  differently, where it had only set both together.
+* `analyze` is private again, and the test reads the map through `refusalsForTest`; the
+  accumulator test skips the body walk when the map is empty; a broken `{@link}` is fixed.

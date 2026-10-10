@@ -1945,7 +1945,7 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
         : Map[VarkaVectorIR, Analysis.Refusal] = {
       val options = VarkaMatrix.base.toBuilder()
         .guardDayProducers(guardDays).checkIntOverflow(checkInts).build()
-      VarkaLoopEmitter.analyze(java.util.List.of(root), 3, 1, options).refusals.asScala.toMap
+      VarkaLoopEmitter.refusalsForTest(java.util.List.of(root), 3, 1, options).asScala.toMap
     }
     val producer = new AddDays(c0, c1)
     val months = new AddMonths(c0, c1)
@@ -1956,7 +1956,8 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
     val range = new GuardedRange(c0, -10L, 10L)
     // Each row: the root, the map with both options on, and the map with both off. A producer
     // refuses only under a calendar node and only behind its option; the overflow check only
-    // behind its; the rest are the nodes' own correctness and never optional.
+    // behind its; the rest are the nodes' own correctness and never optional. The mixed settings
+    // below check each optional reason against its own option and not the other's.
     val cases = Seq[(VarkaVectorIR, Map[VarkaVectorIR, Analysis.Refusal],
         Map[VarkaVectorIR, Analysis.Refusal])](
       (new Year(producer), Map(producer -> DAY_PRODUCER), Map.empty),
@@ -1974,6 +1975,14 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
       assert(refusals(root, guardDays = true, checkInts = true) === on, root)
       assert(refusals(root, guardDays = false, checkInts = false) === off, root)
     }
+    val dayProducer = new Year(producer)
+    assert(refusals(dayProducer, guardDays = true, checkInts = false) ===
+      Map(producer -> DAY_PRODUCER))
+    assert(refusals(dayProducer, guardDays = false, checkInts = true) === Map.empty)
+    assert(refusals(add, guardDays = false, checkInts = true) === Map(add -> INT_OVERFLOW))
+    assert(refusals(add, guardDays = true, checkInts = false) === Map.empty)
+    assert(refusals(neg, guardDays = false, checkInts = true) === Map(neg -> INT_OVERFLOW))
+    assert(refusals(neg, guardDays = true, checkInts = false) === Map.empty)
     // The slot planner's one fact per reason: the guards that park their value in a scratch
     // local, and the two that read it from locals they already own.
     assert(Analysis.Refusal.values().filterNot(_.parksValue).toSet === Set(MAKE_DATE, INT_OVERFLOW))

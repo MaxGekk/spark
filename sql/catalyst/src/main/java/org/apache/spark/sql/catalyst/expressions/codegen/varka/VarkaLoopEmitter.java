@@ -190,6 +190,12 @@ public final class VarkaLoopEmitter {
     return emitLanes(options, lane);
   }
 
+  /** The refusals {@link #analyze} declares for {@code outputs}, for the suite that checks them. */
+  static Map<VarkaVectorIR, Analysis.Refusal> refusalsForTest(List<VarkaVectorIR> outputs,
+      int numInputs, int numLiterals, VarkaEmitOptions options) {
+    return Map.copyOf(analyze(List.copyOf(outputs), numInputs, numLiterals, options).refusals);
+  }
+
   /**
    * The plan's reading of the drivers under {@code planSize}: the two drivers built by
    * themselves over the first grouping of {@code outputs} and measured ({@link #driverAlone}),
@@ -209,9 +215,9 @@ public final class VarkaLoopEmitter {
    * The analysis of {@code outputs} every emission starts from, in the one order its passes
    * run: the roots, the arm contexts, the refusals, the word algebra and the bitmap pass. What
    * depends on the grouping, the materialized prefixes, is planned by the caller once it has
-   * one. Package-private for the test that reads {@link Analysis#refusals}.
+   * one.
    */
-  static Analysis analyze(List<VarkaVectorIR> outputs, int numInputs, int numLiterals,
+  private static Analysis analyze(List<VarkaVectorIR> outputs, int numInputs, int numLiterals,
       VarkaEmitOptions options) {
     Analysis analysis = new Analysis(numInputs, numLiterals, options, laneOf(outputs));
     for (VarkaVectorIR root : outputs) {
