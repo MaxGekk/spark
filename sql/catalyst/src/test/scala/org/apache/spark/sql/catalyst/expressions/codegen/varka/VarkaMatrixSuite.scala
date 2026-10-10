@@ -34,18 +34,20 @@ class VarkaMatrixSuite extends SparkFunSuite with VarkaTestWatchdog {
     val configurations = VarkaMatrix.configurations
     assert(configurations.distinct === configurations)
     for (config <- configurations) {
-      val name = config.takeWhile(_ != '=')
+      // A flag with a subject runs over it (VARKA-247), so its configuration names those options
+      // too, before its own.
+      val names = config.split(",").map(_.takeWhile(_ != '=')).toSet
       val options = VarkaMatrix.parse(config)
       assert(options != VarkaEmitOptions.DEFAULTS, config)
       val moved = VarkaEmitOptions.DEFAULTS.getClass.getRecordComponents.toSeq.filter { c =>
         c.getAccessor.invoke(options) != c.getAccessor.invoke(VarkaEmitOptions.DEFAULTS)
-      }.map(_.getName)
-      assert(moved === Seq(name), config)
+      }.map(_.getName).toSet
+      assert(moved === names, config)
     }
   }
 
   test("the configurations cover every option but the fault injectors") {
-    val named = VarkaMatrix.configurations.map(_.takeWhile(_ != '=')).toSet
+    val named = VarkaMatrix.configurations.map(_.split(",").last.takeWhile(_ != '=')).toSet
     val expected = VarkaEmitOption.TABLE.asScala
       .filter(_.reason != VarkaEmitOption.Reason.FAULT_INJECTOR).map(_.name).toSet
     assert(named === expected)

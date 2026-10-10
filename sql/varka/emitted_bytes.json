@@ -2081,11 +2081,11 @@
       "4" : "0ce618c356eb4460",
       "16" : "59ee81feb6099fa0"
     },
-    "validityOrFirst=true over validityByBitmap=false,denseValidityOnce=false" : {
+    "validityOrFirst=true over denseValidityOnce=false,validityByBitmap=false" : {
       "4" : "0d27ac5ac22f0b2a",
       "16" : "bdae4798d65cc327"
     },
-    "validityOrFirst=false over validityByBitmap=false,denseValidityOnce=false" : {
+    "validityOrFirst=false over denseValidityOnce=false,validityByBitmap=false" : {
       "4" : "038c8117c9ef29d8",
       "16" : "51507dc72686fdc6"
     }

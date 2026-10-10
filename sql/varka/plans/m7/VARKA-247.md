@@ -116,7 +116,14 @@ the subject: 65 of the 92 coverage rows at the test's width.
 reads them as "one option flipped from the defaults", the configurations the suites run under,
 and an arm carrying its base broke that. The bytes suite applies the subject to the arms itself,
 for its audit and its pinned digests, and the audit compares such an arm against the subject
-rather than the defaults.
+rather than the defaults. Section 4's "the arms over it" is corrected by the same sentence.
+
+*After review (#704):* the test matrix ran `validityOrFirst=false` over the defaults, where it emits
+the defaults' bytes, so it tested nothing; it now runs over the subject,
+`denseValidityOnce=false,validityByBitmap=false,validityOrFirst=false`. The subject's label is
+derived from what it changes, in table order, so the pinned key reads
+`denseValidityOnce=false,validityByBitmap=false`, and cannot drift from the base it names. The test
+covers the coverage rows and 200 fuzz shapes per lane at both widths, and is tied to the flag.
 
 ### 9.2 The predictions scored
 
