@@ -815,11 +815,12 @@ VARKA-242 the calendar's divisions, `floorMod7` and the leap hash. What the next
   encoding with no divider circuit did not help, because the arithmetic, not the divider, is what
   CDCL cannot do. In integers, a double as `M * 2^E` and rounding to nearest stated by the
   midpoints to its neighbours (`jdouble.rne`), one check per binade so each is linear, both forms
-  for seven divisors take 28 s under Z3 and 8 s under cvc5. Two things this needs: a check that the
-  binades listed cover every value of the domain, without which a check passes by leaving a value
-  out; and the JVM check refusing a double's neighbours across a binade's edge as well as inside it
-  - the neighbour inside the binade alone let a wrong midpoint at the bottom of a binade through
-  every check until that was added.
+  for seven divisors take 28 s under Z3 and 8 s under cvc5, and 59 s under Z3 on the CI runner,
+  so the linters' job proves that file under cvc5 (`dev/varka_prove.sh --lint`). Two things this
+  needs: a check that the binades listed cover every value of the domain, without which a check
+  passes by leaving a value out; and the JVM check refusing a double's neighbours across a binade's
+  edge as well as inside it - the neighbour inside the binade alone let a wrong midpoint at the
+  bottom of a binade through every check until that was added.
 * **cvc5's `unknown` depends on the declared logic, the encoding, and what ran before**
   (VARKA-242). `floorMod7`'s shipped form, stated directly over the prelude, takes Z3 3 s and cvc5
   past 300 s, over bit-vectors both past 300 s. Stated by lemmas over each fold's digits

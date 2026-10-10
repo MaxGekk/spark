@@ -254,8 +254,11 @@ sit at that edge, `2^54 - 2` and the tie `2^54 - 1`.
 
 ### 9.3 The predictions scored
 
-1. **The linters' step under a minute on the CI runner.** Scored when this pull request's CI runs;
-   the laptop's whole Z3 run is 28 seconds.
+1. **Missed** (scored from #699's CI, run 38025914635). The "Varka proofs" step took 66 seconds:
+   `long_divide.smt2` 59 s under Z3 on the runner against 28 s on the laptop, 2.1 times, the
+   ratio VARKA-240 measured, and the other two files and the install the rest. Item 58's minute
+   for the whole step is past by six seconds, and the step has no margin left for row 242.
+   Section 9.5 answers it.
 2. **Holds.** Z3 and cvc5 meet every expectation on every check of the three files.
 3. **Holds in part.** Every fault fails a check, but the tie rule's fails `long_divide.smt2` as
    well, at exactly the fourteen bound witnesses: section 2.3's reason for the bound is a tie,
@@ -270,3 +273,23 @@ sit at that edge, `2^54 - 2` and the tie `2^54 - 1`.
   site), with row 242: the same prelude states them.
 * **The emitted bytecode**, as for VARKA-240: row 166's suite case holds the kernels to the
   arithmetic this proves; item 90 is the model that would prove the bytecode itself.
+
+### 9.5 The miss answered: `long_divide.smt2` under cvc5 in the linters' job
+
+Prediction 1's miss leaves two ways back inside the minute: raise the budget, which row 242 would
+then push past again, or run the file under the solver that proves it fastest. cvc5 takes 8 s on
+the laptop against Z3's 28 s. On the other two files the solvers are within a fraction of a second
+of each other, so those stay with Z3, and the job still runs both solvers. Decided 10 October
+2026: `dev/varka_prove.sh --lint` runs each file under Z3 unless the script's `CVC5_IN_LINT` names
+it, and that list holds `long_divide.smt2`. A new proof file runs under Z3 with no change to the
+workflow, and goes on the list only if Z3 is the slow one. The step installs both solvers and runs
+the self-test under both, since the job now depends on cvc5's verdicts, whose quoted echoes the
+reader of verdicts strips. The nightly still runs every file under both. On the laptop the lint run
+takes 8.5 s and installing both solvers from nothing 4 s.
+
+**Prediction, registered before the run:** the "Varka proofs" step takes under 30 seconds on the
+runner. The estimate is cvc5's 8 s doubled, as VARKA-240 measured the runner, plus the cvc5 download
+and its self-test.
+
+**Holds** (scored from #701's CI, run 38032625580): the step took 26 seconds, installing both
+solvers, self-testing both and running `--lint`, against 66 under Z3 alone.
