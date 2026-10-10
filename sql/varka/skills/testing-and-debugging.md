@@ -761,7 +761,8 @@ over-truncation is invisible when the dropped column is registered again at the 
 ## A solver proves an arithmetic lowering in integers, and its verdicts are checked like output
 
 VARKA-240 proves the int lane's multiply-high division exact with SMT solvers
-(`sql/varka/proofs/`, run by `dev/varka_prove.sh`). Four things the next proof needs:
+(`sql/varka/proofs/`, run by `dev/varka_prove.sh`), and VARKA-241 the long lane's two forms. Five
+things the next proof needs:
 
 * **State Java's arithmetic over integers, not bit-vectors.** "For every int n, the lanes compute
   n / 12" over bit-vectors ran past five minutes under Z3, cvc5 and Bitwuzla alike, with Java's `/`
@@ -790,3 +791,14 @@ VARKA-240 proves the int lane's multiply-high division exact with SMT solvers
   each is exact by the book's own sharper condition: the theorem's hypothesis is sufficient, not
   necessary. Deriving all 2^31 divisors, a minute on 24 threads, is what found it; `signedMagic`
   now raises the shift until the theorem holds, which moved no divisor in use.
+* **Doubles too: state the rounding, not the floating-point theory** (VARKA-241). The long lane's
+  division forms in SMT-LIB's floating-point theory took Bitwuzla eight minutes for divisor 1000
+  and past 25 for 10^9, and Z3 and cvc5 longer; slicing the dividend, Bitwuzla's options and an
+  encoding with no divider circuit did not help, because the arithmetic, not the divider, is what
+  CDCL cannot do. In integers, a double as `M * 2^E` and rounding to nearest stated by the
+  midpoints to its neighbours (`jdouble.rne`), one check per binade so each is linear, both forms
+  for seven divisors take 28 s under Z3 and 8 s under cvc5. Two things this needs: a check that the
+  binades listed cover every value of the domain, without which a check passes by leaving a value
+  out; and the JVM check refusing a double's neighbours across a binade's edge as well as inside it
+  - the neighbour inside the binade alone let a wrong midpoint at the bottom of a binade through
+  every check until that was added.

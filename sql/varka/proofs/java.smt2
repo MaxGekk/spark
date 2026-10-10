@@ -33,8 +33,9 @@
 ; no include. It declares no logic, asserts nothing and checks nothing.
 ;
 ; Not here: a zero divisor, which throws in Java and has no value to define - a proof that
-; divides states its divisor non-zero - and the saturating D2I and D2L, which need floating-point
-; theory and are row 241's.
+; divides states its divisor non-zero. The doubles at the end are VARKA-241's, stated over integers
+; for the reason above: in floating-point theory a solver bit-blasts the division, and the long
+; lane's division by 1000 took eight minutes where the integer statement takes milliseconds.
 
 ; The ranges (JLS 4.2.1).
 (define-fun jint.MIN () Int (- 2147483648))
@@ -164,3 +165,49 @@
 (define-fun jlong.shr ((x Int) (s Int)) Int (div x (pow2 (mod s 64))))
 (define-fun jlong.ushr ((x Int) (s Int)) Int
   (ite (>= x 0) (jlong.shr x s) (jlong.add (jlong.shr x s) (jlong.shl 2 (jlong.not s)))))
+
+; Doubles (JLS 4.2.3, 4.2.4), for the long lane's division forms (VARKA-241). A positive normal
+; double is M * 2^E with 2^52 <= M < 2^53. Nothing below returns a double, because 2^E for an
+; unknown E is not linear: a proof names the binade instead, passing 2^E as sn / sd - sn = 2^E and
+; sd = 1 for E >= 0, sn = 1 and sd = 2^-E below - with constants at every use, so what the solvers
+; reason about stays linear. A proof that rounds a value it cannot place lists the binades the
+; value can fall in, and checks that the list covers them.
+(define-fun jdouble.M.in ((M Int)) Bool
+  (and (<= 4503599627370496 M) (< M 9007199254740992)))
+
+; Round to nearest (JLS 4.2.4: "the value nearest to the infinitely precise result; if the two
+; nearest representable values are equally near, the one with its least significant bit zero is
+; chosen"; IEEE 754 4.3.1's roundTiesToEven): M * sn / sd is the double a positive exact a / b
+; rounds to. The doubles next to M * 2^E are (M + 1) * 2^E above and (M - 1) * 2^E below, except at
+; M = 2^52, where the next one down is (2^53 - 1) * 2^(E - 1), a quarter of a step nearer. So,
+; scaled by 4 * b * sd / sn, a / b lies between the midpoints (4M - 2) and (4M + 2), or (4M - 1) at
+; the bottom of a binade, inclusive on a side only when M is even. Zero, the subnormals and the
+; infinities are not here: a proof that can meet one states its own case.
+(define-fun jdouble.rne ((a Int) (b Int) (M Int) (sn Int) (sd Int)) Bool
+  (let ((A (* 4 a sd))
+        (lo (* (- (* 4 M) (ite (= M 4503599627370496) 1 2)) b sn))
+        (up (* (+ (* 4 M) 2) b sn)))
+    (and (jdouble.M.in M)
+         (ite (= (mod M 2) 0) (and (<= lo A) (<= A up)) (and (< lo A) (< A up))))))
+
+; D2L (JLS 5.1.3): "rounded to an integer value V, rounding toward zero", for a double inside the
+; long range; NaN and the saturation at both ends do not arise below 2^63, so they are left out.
+; The magnitude: r = floor(M * sn / sd).
+(define-fun jdouble.d2l.mag ((r Int) (M Int) (sn Int) (sd Int)) Bool
+  (and (<= (* r sd) (* M sn)) (< (* M sn) (* (+ r 1) sd))))
+
+; A positive normal double's bits (Double.doubleToRawLongBits, JLS 4.2.3's binary64 format): the
+; biased exponent E + 1075 above the 52 stored bits of M - 2^52. And the bits read back
+; (Double.longBitsToDouble, DoubleVector's reinterpretation): M is 2^52 plus the low 52 bits, E is
+; the bits above them less 1075.
+(define-fun jdouble.bits ((M Int) (E Int)) Int
+  (+ (* (+ E 1075) 4503599627370496) (- M 4503599627370496)))
+(define-fun jdouble.fromBits.M ((b Int)) Int (+ 4503599627370496 (mod b 4503599627370496)))
+(define-fun jdouble.fromBits.E ((b Int)) Int (- (div b 4503599627370496) 1075))
+
+; Two bitwise operations the magic form uses, in the cases it uses them. x & (2^k - 1) keeps the
+; low k bits of a two's-complement x, which for any long is x modulo 2^k, the non-negative
+; residue. x | c, where c has no bit below 2^k set and 0 <= x < 2^k, is x + c: the bits are
+; disjoint. A proof that uses jlong.or.disjoint asserts its precondition.
+(define-fun jlong.and.low ((x Int) (k2 Int)) Int (mod x k2))
+(define-fun jlong.or.disjoint ((x Int) (c Int)) Int (+ x c))

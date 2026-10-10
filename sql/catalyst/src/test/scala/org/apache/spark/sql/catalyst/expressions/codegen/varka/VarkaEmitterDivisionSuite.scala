@@ -573,7 +573,9 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // fuzzer's columns stop at 2^46. This drives the emitted kernels themselves over the bits
     // no test had visited, against Java's `/`, and asserts not only where each form is right
     // but the *shape* of how it is wrong past its bound - a failure of another shape would
-    // mean the model is wrong, which is the thing worth finding.
+    // mean the model is wrong, which is the thing worth finding. `long_divide.smt2` proves both
+    // forms' arithmetic for every dividend under the bound (VARKA-241); this case is what holds
+    // the emitted bytecode to it.
     //
     // The shapes, from `VarkaDivisionLowering`'s own account. The conversion form divides in
     // doubles: exact while the dividend is under 2^53, where a correctly rounded quotient
