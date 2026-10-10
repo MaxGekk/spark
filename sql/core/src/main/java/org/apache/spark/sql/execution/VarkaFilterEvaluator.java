@@ -211,6 +211,7 @@ public class VarkaFilterEvaluator extends VarkaEvaluatorBase {
       }
       for (int o = 0; o < outputs; o++) {
         runner.dstData[o] = 0L;
+        runner.dstWidth[o] = 0;
         runner.dstValidity[o] = buf.memoryAddress() + o * stride;
       }
       runner.invoke(len);

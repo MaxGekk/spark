@@ -18,6 +18,11 @@
 
 package org.apache.spark.sql.execution.varka;
 
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+import java.util.Arrays;
+
 import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.vector.BaseFixedWidthVector;
 
@@ -29,6 +34,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFusedKernel;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmth;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemorySanitizer;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemoryViolation;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSegments;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeEntry;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.WeekdayLeaf;
@@ -61,6 +67,15 @@ public final class VarkaKernelRunner {
   public static final int STATUS_DERIVED_INPUT = 4;
 
   /**
+   * Whether each batch a kernel serves is run again through its other body and the two compared
+   * (VARKA-303): {@code -Dvarka.checkBothBodies=true}, which {@code dev/varka_matrix.sh} puts on
+   * every test JVM. A kernel has a dense body for a batch with no nulls and a masked one for every
+   * other, and a query's data decides which a batch takes, so an end-to-end suite compares one of
+   * them with the row engine; this holds the other to it. Off in production.
+   */
+  public static final boolean CHECK_BOTH_BODIES = Boolean.getBoolean("varka.checkBothBodies");
+
+  /**
    * A kernel input the compiler bounded: its position among the kernel's inputs and the closed
    * interval every live value must lie in.
    */
@@ -85,6 +100,11 @@ public final class VarkaKernelRunner {
   public final int[] srcNullCount;
   public final long[] dstData;
   public final long[] dstValidity;
+  /**
+   * Bytes per value of each output, set with {@link #dstData}: the vector's width for a value
+   * output, zero for a selection bitmap, whose data slot is unused. Read by the both-bodies check.
+   */
+  public final int[] dstWidth;
   public final int[] scalarArgs;
   public final long[] longArgs;
 
@@ -122,6 +142,7 @@ public final class VarkaKernelRunner {
     this.srcNullCount = new int[inputOrdinals.length];
     this.dstData = new long[numOutputs];
     this.dstValidity = new long[numOutputs];
+    this.dstWidth = new int[numOutputs];
     this.scalarArgs = scalarArgs;
     this.longArgs = longArgs;
     this.scratch = scratch;
@@ -267,6 +288,128 @@ public final class VarkaKernelRunner {
     if (status != 0 || hooks.declineKernel()) {
       throw new VarkaBatchDeclined(status != 0 ? status : 1);
     }
+    if (CHECK_BOTH_BODIES) {
+      checkOtherBody(len, scratchAddress);
+    }
+  }
+
+  /**
+   * The batch just served, through the body it did not take, into buffers of its own, compared
+   * with what it wrote (VARKA-303). A batch with no nulls goes through the masked body forced - a
+   * null count of one over a full bitmap per input - and every row must agree. A batch with nulls
+   * goes through the dense body, which reads every lane as valid, and the rows where every input
+   * is valid must agree; that run may decline, since a null lane holds whatever value a guard
+   * then reads, and a declined run compares nothing. A disagreement, or a throw from the other
+   * body, fails the task: under test, the kernel's two answers to one batch are one answer.
+   */
+  private void checkOtherBody(int len, long scratchAddress) {
+    int inputs = srcData.length;
+    int outputs = dstValidity.length;
+    if (len == 0 || inputs == 0) {
+      return;
+    }
+    boolean dense = Arrays.stream(srcNullCount).allMatch(n -> n == 0);
+    if (dense && len == 1) {
+      // A null count equal to the length is the all-null column by contract, so one row cannot
+      // be forced down the masked body with its value kept.
+      return;
+    }
+    long words = ((len + 63) / 64) * 8L;
+    try (Arena arena = Arena.ofConfined()) {
+      long[] validity = srcValidity.clone();
+      int[] nulls = srcNullCount.clone();
+      if (dense) {
+        for (int i = 0; i < inputs; i++) {
+          MemorySegment ones = arena.allocate(words, 8);
+          ones.fill((byte) 0xFF);
+          validity[i] = ones.address();
+          nulls[i] = 1;
+          VarkaMemorySanitizer.register("other body: input validity", i, ones.address(), words);
+        }
+      } else {
+        Arrays.fill(nulls, 0);
+      }
+      long[] data = new long[outputs];
+      long[] valid = new long[outputs];
+      for (int o = 0; o < outputs; o++) {
+        if (dstData[o] != 0L) {
+          long bytes = Math.max((long) len * dstWidth[o], 8L);
+          data[o] = arena.allocate(bytes, 8).address();
+          VarkaMemorySanitizer.register("other body: output data", o, data[o], bytes);
+        }
+        valid[o] = arena.allocate(words, 8).address();
+        VarkaMemorySanitizer.register("other body: output validity", o, valid[o], words);
+      }
+      int status;
+      try {
+        status = lane == LaneType.LONG
+            ? kernel.run(srcData, validity, nulls, data, valid, scalarArgs, longArgs, len,
+                scratchAddress)
+            : kernel.run(srcData, validity, nulls, data, valid, scalarArgs, len, scratchAddress);
+      } catch (Throwable e) {
+        if (e instanceof VarkaMemoryViolation || !isCatchable(e)) {
+          throw e;
+        }
+        throw new IllegalStateException(shapeHash + "'s " + (dense ? "masked" : "dense")
+            + " body threw on a batch its other body served (VARKA-303)", e);
+      }
+      if (status != 0) {
+        if (dense) {
+          throw new IllegalStateException(shapeHash + "'s masked body declined a null-free batch "
+              + "its dense body served, status " + status + " (VARKA-303)");
+        }
+        return;
+      }
+      compare(len, dense, data, valid);
+    }
+  }
+
+  /** Each output's rows against the other body's, where both are defined; see above. */
+  private void compare(int len, boolean dense, long[] data, long[] valid) {
+    long bitmapBytes = (len + 7) / 8;
+    MemorySegment[] inputValidity = new MemorySegment[srcData.length];
+    for (int i = 0; i < srcData.length; i++) {
+      if (srcNullCount[i] != 0 && srcValidity[i] != 0L) {
+        inputValidity[i] = VarkaSegments.map(srcValidity[i], bitmapBytes);
+      }
+    }
+    for (int o = 0; o < dstValidity.length; o++) {
+      MemorySegment servedBits = VarkaSegments.map(dstValidity[o], bitmapBytes);
+      MemorySegment otherBits = VarkaSegments.map(valid[o], bitmapBytes);
+      int w = dstWidth[o];
+      MemorySegment served =
+          dstData[o] == 0L ? null : VarkaSegments.map(dstData[o], (long) len * w);
+      MemorySegment other = dstData[o] == 0L ? null : VarkaSegments.map(data[o], (long) len * w);
+      for (int r = 0; r < len; r++) {
+        if (!dense && !allInputsValid(inputValidity, r)) {
+          continue;
+        }
+        boolean bit = bit(servedBits, r);
+        boolean same = bit == bit(otherBits, r) && (served == null || !bit
+            || served.asSlice((long) r * w, w).mismatch(other.asSlice((long) r * w, w)) < 0);
+        if (!same) {
+          throw new IllegalStateException(shapeHash + "'s dense and masked bodies disagree on "
+              + "output " + o + " at row " + r + " of a " + (dense ? "null-free" : "nullable")
+              + " batch of " + len + " (VARKA-303)");
+        }
+      }
+    }
+  }
+
+  private boolean allInputsValid(MemorySegment[] inputValidity, int r) {
+    for (int i = 0; i < srcData.length; i++) {
+      if (srcNullCount[i] == 0) {
+        continue;
+      }
+      if (inputValidity[i] == null || !bit(inputValidity[i], r)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static boolean bit(MemorySegment bitmap, int r) {
+    return (bitmap.get(ValueLayout.JAVA_BYTE, r >>> 3) & (1 << (r & 7))) != 0;
   }
 
   /**

@@ -215,9 +215,10 @@ public final class VarkaGenCoverage {
 
   /** Why a family's classes may run one body only, for the families that may (VARKA-284). */
   static final Map<String, String> ONE_BODY_REASONS = new TreeMap<>(Map.of(
-      "VarkaFusedProjection", "the evaluator in the end-to-end suites, which hand it the batches "
-          + "their tables hold: which body a batch takes is the evaluator's decision on the data, "
-          + "and a test there is about a query, not a body",
+      "VarkaFusedProjection", "the evaluator in the end-to-end suites, which runs each batch it "
+          + "serves through the other body as well under test (VARKA-303), except a null-free "
+          + "batch of one row, which the masked body reads as all-null, and a batch with nulls "
+          + "whose dense run declines; the classes left are attributed to those, not traced",
       "VarkaFusedTest", "the emitter suites' tests that call a kernel directly for one property - "
           + "a status, the scratch contract, one body's behaviour - rather than through "
           + "checkMatrix, which runs whichever body its cases miss",
