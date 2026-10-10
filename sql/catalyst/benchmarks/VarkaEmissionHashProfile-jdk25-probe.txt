@@ -1,0 +1,50 @@
+The IR's structural hashing during emission (VARKA-222.md 2): VarkaEmissionBenchmark's wide
+four-op shape - greatest(greatest(add_months(d, k), date_add(d, k)), last_day(d)) for k = 1..n
+over one date column - compiled and emitted repeatedly by VarkaEmitDump --repeat under a JFR
+recording (settings=profile), as VarkaEmissionProfile-jdk25-probe.txt records it, and each
+execution sample counted by dev/varka_jfr_ir_hash.py as inside a VarkaVectorIR record's
+hashCode or equals when any frame of its stack is one. The time per emission is the probe's
+reading on a laptop, one fork; the shares are what this file is for.
+
+Reproduce (each width):
+  java -XX:StartFlightRecording=filename=emit.jfr,settings=profile ... VarkaEmitDump <n exprs> \
+    --columns d:date --options methodByteBudget=1048576 --repeat <20000 / n>
+  jfr print --events jdk.ExecutionSample --stack-depth 128 emit.jfr | dev/varka_jfr_ir_hash.py
+
+commit:  6fa0c863a5f (master, before any change)
+date:    2026-10-10T13:44:59+00:00
+jdk:     openjdk version "25.0.4.1" 2026-08-18
+cpu:     AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+load:    0.15 0.50 1.69 at the end
+
+## 1. Samples inside an IR node's hashCode or equals, at three widths
+
+== 100 outputs, repeat 200, budget out of reach
+272 samples; inside an IR hashCode 10 (3.7%), inside an IR equals 4 (1.5%)
+     2  Slots.emittedNodes
+     2  VarkaVectorWalk.emitPick
+     2  Analysis.analyzeOp
+     2  Slots.assertWordAlgebraAgrees
+
+== 200 outputs, repeat 100, budget out of reach
+312 samples; inside an IR hashCode 7 (2.2%), inside an IR equals 3 (1.0%)
+     4  Slots.plan
+     2  VarkaLoopEmitter.budgetWalk
+     1  VarkaLoopEmitter$GroupOps.copy
+     1  VarkaVectorWalk.emitValue
+
+== 400 outputs, repeat 50, budget out of reach
+341 samples; inside an IR hashCode 17 (5.0%), inside an IR equals 1 (0.3%)
+     8  Slots.plan
+     3  VarkaLoopEmitter$GroupOps.walk
+     1  VarkaBodyEmitter.emitLaneGroup
+     1  VarkaBodyEmitter.renderLineMap
+
+The medians per emission of the same runs: 12.0 ms at 100 outputs, 25.9 ms at 200, 40.4 ms at
+400 (VarkaEmitDump's report; the second halves' medians 9.1, 24.9 and 38.1 ms).
+
+## 2. Why no deeper shape reaches the emitter
+
+A chain of year(date_add(greatest(... d ...))) nested to depth 8 fuses; nested to depth 16 the
+compiler declines it for the fused budget, which caps the operations in one output. So every
+subtree the emitter hashes is bounded by that budget, and a lookup's cost with it.
