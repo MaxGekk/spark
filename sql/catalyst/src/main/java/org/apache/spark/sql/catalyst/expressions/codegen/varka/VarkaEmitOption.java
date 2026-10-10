@@ -91,6 +91,20 @@ public sealed interface VarkaEmitOption
   /** One arm of the bytes suite's inventory: its label and the change it makes to a value. */
   record Arm(String name, UnaryOperator<VarkaEmitOptions> apply) {}
 
+  /**
+   * The options under which an option has anything to do, for an option the defaults never reach
+   * (VARKA-247). {@code validityOrFirst} orders the per-group validity OR, which the defaults do
+   * not emit for any value root: a dense body fills validity once, and a masked one writes it by
+   * the bitmap pass or computes the word inside the root. The bytes suite therefore applies its
+   * arms over the reference arms that do emit that OR - its audit and its pinned digests - while
+   * {@link #arms()} stays one option flipped from the defaults, which is what the test matrix
+   * runs. {@code label} names the base; empty for {@link #DEFAULTS}.
+   */
+  record Subject(String label, UnaryOperator<VarkaEmitOptions> apply) {
+    /** The defaults: an option whose two values differ there. */
+    static final Subject DEFAULTS = new Subject("", UnaryOperator.identity());
+  }
+
   Rendering POSITIONAL = new Positional();
 
   String name();
@@ -113,12 +127,19 @@ public sealed interface VarkaEmitOption
 
   /** A boolean option. */
   record Flag(String name, Reason reason, boolean defaultValue, Predicate<VarkaEmitOptions> get,
-      BiConsumer<Builder, Boolean> set, Rendering rendering) implements VarkaEmitOption {
+      BiConsumer<Builder, Boolean> set, Rendering rendering, Subject subject)
+      implements VarkaEmitOption {
 
     public Flag {
       if (rendering instanceof CountTag) {
         throw new IllegalArgumentException(name + ": a flag renders by position or as a flag tag");
       }
+    }
+
+    /** A flag whose two values differ at the defaults. */
+    public Flag(String name, Reason reason, boolean defaultValue, Predicate<VarkaEmitOptions> get,
+        BiConsumer<Builder, Boolean> set, Rendering rendering) {
+      this(name, reason, defaultValue, get, set, rendering, Subject.DEFAULTS);
     }
 
     public boolean value(VarkaEmitOptions options) {
@@ -311,7 +332,9 @@ public sealed interface VarkaEmitOption
       new Flag("validityByWidth", Reason.REFERENCE, true,
           VarkaEmitOptions::validityByWidth, Builder::validityByWidth, POSITIONAL),
       new Flag("validityOrFirst", Reason.REFERENCE, true,
-          VarkaEmitOptions::validityOrFirst, Builder::validityOrFirst, POSITIONAL),
+          VarkaEmitOptions::validityOrFirst, Builder::validityOrFirst, POSITIONAL,
+          new Subject("validityByBitmap=false,denseValidityOnce=false",
+              o -> o.toBuilder().validityByBitmap(false).denseValidityOnce(false).build())),
       new Flag("validityByBitmap", Reason.REFERENCE, true,
           VarkaEmitOptions::validityByBitmap, Builder::validityByBitmap, POSITIONAL),
       new Flag("checkIntOverflow", Reason.PRICED_CHECK, true,

@@ -269,11 +269,44 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
    *
    * A level the emitter treats as the default is pinned anyway. It costs a line and it is the
    * only way the file can show that `useAVX=3` and an unstated level really do emit alike.
+   *
+   * Beside them, both values of each option the defaults never reach, over the options under
+   * which it acts (`VarkaEmitOption.Subject`, VARKA-247): `validityOrFirst` orders a per-group
+   * validity OR the defaults do not emit, so at the defaults its two values are one emission and
+   * a pin there would say nothing.
    */
   private def pinnedArms: Seq[(String, VarkaEmitOptions => VarkaEmitOptions)] =
     Seq(VarkaEmitOptions.USE_AVX_UNKNOWN, 0, 1, 2, 3).map { level =>
       s"useAVX=$level" -> ((o: VarkaEmitOptions) => o.withUseAVX(level))
+    } ++ subjectArms
+
+  /** The arms of every flag whose subject is not the defaults, applied over that subject. */
+  private def subjectArms: Seq[(String, VarkaEmitOptions => VarkaEmitOptions)] =
+    auditArms.collect { case AuditArm(name, arm, Some(_)) => name -> arm }
+
+  /**
+   * An arm as the audit and the pinned digests use it: the table's arm, applied over its option's
+   * subject where that is not the defaults, with the base it is compared against - the subject,
+   * so that the option's default is the arm that moves nothing (VARKA-247).
+   */
+  private case class AuditArm(name: String, arm: VarkaEmitOptions => VarkaEmitOptions,
+      subject: Option[VarkaEmitOptions => VarkaEmitOptions])
+
+  private def auditArms: Seq[AuditArm] = VarkaEmitOption.TABLE.asScala.toSeq.flatMap { option =>
+    val subject = option match {
+      case f: VarkaEmitOption.Flag if f.subject() != VarkaEmitOption.Subject.DEFAULTS =>
+        Some(f.subject())
+      case _ => None
     }
+    option.arms.asScala.map { a =>
+      subject match {
+        case Some(s) => AuditArm(s"${a.name} over ${s.label}",
+          (o: VarkaEmitOptions) => a.apply.apply(s.apply.apply(o)),
+          Some((o: VarkaEmitOptions) => s.apply.apply(o)))
+        case None => AuditArm(a.name, (o: VarkaEmitOptions) => a.apply.apply(o), None)
+      }
+    }
+  }
 
   /** One hash over every shape the oracle holds, emitted under `arm` at `lanes`. */
   private def armDigest(arm: VarkaEmitOptions => VarkaEmitOptions, lanes: Int): String = {
@@ -334,7 +367,9 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
         "change in what an emitted method does. `option_arms` covers the emissions a session " +
         "can select rather than only the defaults: one digest over every shape at each width " +
         "per value of spark.sql.codegen.varka.emit.useAVX, the only emit option a " +
-        "configuration reaches. The rest of VarkaEmitOptions is test-only."),
+        "configuration reaches, and per value of each option the defaults never reach, over " +
+        "the options under which it acts (validityOrFirst). The rest of VarkaEmitOptions is " +
+        "test-only."),
       "coverage_rows_skipped" -> skipped.asJava,
       "lanes" -> ordered(perWidth: _*),
       "option_arms" -> armHashes)
@@ -429,6 +464,28 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
     }
   }
 
+  test("validityOrFirst moves nothing at the defaults and moves the bytes over its subject " +
+      "(VARKA-247)") {
+    // Over the coverage rows only, at one width: enough to tell the two values apart, and a
+    // fraction of the pinned digests' cost. At the defaults no value root keeps a per-group
+    // validity OR, so the option has nothing to order; if that changes, the subject is wrong.
+    val (rows, _) = coverage
+    val flag = VarkaEmitOption.TABLE.asScala.collectFirst {
+      case f: VarkaEmitOption.Flag if f.name == "validityOrFirst" => f
+    }.get
+    def hashes(arm: VarkaEmitOptions => VarkaEmitOptions): Seq[Seq[(String, String)]] =
+      rows.map(r => methodHashes(r.roots, r.numInputs, r.numLiterals, widths.head, arm))
+    def moved(on: VarkaEmitOptions => VarkaEmitOptions,
+        off: VarkaEmitOptions => VarkaEmitOptions): Int =
+      hashes(on).zip(hashes(off)).count { case (a, b) => a != b }
+    assert(moved(flag.`with`(_, true), flag.`with`(_, false)) == 0,
+      "validityOrFirst now moves the bytes at the defaults, so its subject is not needed")
+    val Seq(on, off) = subjectArms.map(_._2)
+    val overSubject = moved(on, off)
+    assert(overSubject > 0, "validityOrFirst moves nothing over its subject either")
+    info(s"validityOrFirst moves $overSubject of ${rows.size} coverage rows over its subject")
+  }
+
   test("the two widths differ where the lane count is baked in, so the oracle sees width") {
     // A single shape emitted at 4 and 16 lanes must render differently somewhere: the species
     // constant is baked into the class, and a width that left every method identical would
@@ -463,10 +520,7 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
    * and `lanesOverride` not at all, because the oracle already emits every shape at two widths.
    * Being read off the table, the list holds every option the table has.
    */
-  private def optionArms: Seq[(String, VarkaEmitOptions => VarkaEmitOptions)] =
-    VarkaEmitOption.TABLE.asScala.toSeq.flatMap(_.arms.asScala).map { arm =>
-      arm.name -> ((o: VarkaEmitOptions) => arm.apply.apply(o))
-    }
+  private def optionArms: Seq[AuditArm] = auditArms
 
   /**
    * What each option arm does to the emitted bytes, over the oracle's own shapes.
@@ -506,11 +560,19 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
       (cover, ints, longs)
     }
 
-    val base = widths.map(w => w -> hashesFor(identity, w)).toMap
-    assert(base(widths.head)._1.nonEmpty && base(widths.head)._2.size == sampled,
+    val defaults = widths.map(w => w -> hashesFor(identity, w)).toMap
+    assert(defaults(widths.head)._1.nonEmpty && defaults(widths.head)._2.size == sampled,
       "the audit emitted no shapes; a report from this run would mean nothing")
+    // An arm with a subject (VARKA-247) is compared against that subject, emitted once per arm
+    // pair; every other arm against the defaults.
+    val subjects = scala.collection.mutable.Map.empty[(String, Int), Hashes]
 
-    optionArms.foreach { case (name, arm) =>
+    optionArms.foreach { case AuditArm(name, arm, subject) =>
+      def base(w: Int): Hashes = subject match {
+        case None => defaults(w)
+        case Some(s) => subjects.getOrElseUpdate((name.substring(name.indexOf(" over ")), w),
+          hashesFor(s, w))
+      }
       var cover, ints, longs = 0
       // An arm is allowed to make emission fail, and two of them exist for exactly that: the
       // `misdescribe*` pair feeds the emitter a wrong descriptor or an inverted liveness

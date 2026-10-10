@@ -100,3 +100,33 @@ The bytes suite's time before and after, since each pinned arm emits every shape
 ## 8. Sequencing
 
 1. This plan. 2. The table, the oracle, the test and the file; the records.
+
+## 9. Outcome, 10 October 2026
+
+### 9.1 What was built
+
+`validityOrFirst` stays, and its subject is named: `VarkaEmitOption.Subject`, a flag's base
+where its two values differ, the defaults for every flag but this one, whose subject is
+`validityByBitmap=false` and `denseValidityOnce=false`. `emitted_bytes.json` pins both of its
+values over that subject, one digest per width beside the `useAVX` arms, and
+`VarkaEmittedBytesSuite` asserts that the two values emit alike at the defaults and differ over
+the subject: 65 of the 92 coverage rows at the test's width.
+
+*Correction to 3.1:* the table's arms do not apply the subject. `VarkaMatrix.configurations`
+reads them as "one option flipped from the defaults", the configurations the suites run under,
+and an arm carrying its base broke that. The bytes suite applies the subject to the arms itself,
+for its audit and its pinned digests, and the audit compares such an arm against the subject
+rather than the defaults.
+
+### 9.2 The predictions scored
+
+1. **Holds.** The audit, re-run, reports `validityOrFirst=false` over its subject moving 130
+   coverage hashes, 65 at each width, 294 int fuzz and 228 long fuzz; `=true`, the default,
+   moves none.
+2. **Holds.** The oracle test took 104 s against 79 s before, under half again.
+
+### 9.3 What this leaves
+
+The audit now answers "moves nothing" for an option only over the base that reaches it; a
+future option with the same kind of dependence gets a subject in its table entry, and the
+oracle and the audit follow.

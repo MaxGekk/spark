@@ -1,6 +1,6 @@
 {
   "generated_by" : "VarkaEmittedBytesSuite; regenerate with VARKA_BYTES_REGEN=true build/sbt 'catalyst/testOnly *VarkaEmittedBytesSuite'",
-  "description" : "Hashes of every emitted method body, rendered symbolically, for every coverage row and for a fixed sequence of fuzz shapes at each lane, at 128 and 512 bits (lanesOverride 4 and 16 at the int lane, 2 and 8 at the long one). A difference is a change in what an emitted method does. `option_arms` covers the emissions a session can select rather than only the defaults: one digest over every shape at each width per value of spark.sql.codegen.varka.emit.useAVX, the only emit option a configuration reaches. The rest of VarkaEmitOptions is test-only.",
+  "description" : "Hashes of every emitted method body, rendered symbolically, for every coverage row and for a fixed sequence of fuzz shapes at each lane, at 128 and 512 bits (lanesOverride 4 and 16 at the int lane, 2 and 8 at the long one). A difference is a change in what an emitted method does. `option_arms` covers the emissions a session can select rather than only the defaults: one digest over every shape at each width per value of spark.sql.codegen.varka.emit.useAVX, the only emit option a configuration reaches, and per value of each option the defaults never reach, over the options under which it acts (validityOrFirst). The rest of VarkaEmitOptions is test-only.",
   "coverage_rows_skipped" : [ ],
   "lanes" : {
     "4" : {
@@ -2080,6 +2080,14 @@
     "useAVX=3" : {
       "4" : "0ce618c356eb4460",
       "16" : "59ee81feb6099fa0"
+    },
+    "validityOrFirst=true over validityByBitmap=false,denseValidityOnce=false" : {
+      "4" : "0d27ac5ac22f0b2a",
+      "16" : "bdae4798d65cc327"
+    },
+    "validityOrFirst=false over validityByBitmap=false,denseValidityOnce=false" : {
+      "4" : "038c8117c9ef29d8",
+      "16" : "51507dc72686fdc6"
     }
   }
 }
