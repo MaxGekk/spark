@@ -17,9 +17,11 @@
 package org.apache.spark.sql.catalyst.expressions.codegen;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
+import java.util.TreeMap;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.ForwardedOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.FusedOutput;
@@ -50,7 +52,9 @@ public record PartialVarkaProjection(
   public PartialVarkaProjection {
     specs = List.copyOf(specs);
     java.util.Objects.requireNonNull(fused, "fused");
-    declines = Map.copyOf(declines);
+    // Ordered by position, so a rendering that lists them is the same on every run, as the
+    // Scala map it replaces was; Map.copyOf's order varies between JVMs.
+    declines = Collections.unmodifiableMap(new TreeMap<>(declines));
     more = List.copyOf(more);
   }
 

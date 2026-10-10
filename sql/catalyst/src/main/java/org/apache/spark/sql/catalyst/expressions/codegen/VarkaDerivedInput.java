@@ -29,11 +29,11 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDerivedKind;
  * <p>Internal to Spark SQL; public for {@code sql/core}.
  */
 public record VarkaDerivedInput(int inputIndex, int sourceOrdinal, VarkaDerivedKind kind) {
+  private static final VarkaDerivedKind[] KINDS = VarkaDerivedKind.values();
+
   public VarkaDerivedInput {
     java.util.Objects.requireNonNull(kind, "kind");
   }
-
-  private static final VarkaDerivedKind[] KINDS = VarkaDerivedKind.values();
 
   /**
    * The key a derived input is interned under in the compiler's input table beside the child
@@ -51,12 +51,12 @@ public record VarkaDerivedInput(int inputIndex, int sourceOrdinal, VarkaDerivedK
   }
 
   /** The child ordinal a derived key was made from. */
-  public static int sourceOrdinal(int key) {
+  public static int keySourceOrdinal(int key) {
     return (-1 - key) / KINDS.length;
   }
 
   /** The kind a derived key was made from. */
-  public static VarkaDerivedKind kind(int key) {
+  public static VarkaDerivedKind keyKind(int key) {
     return KINDS[(-1 - key) % KINDS.length];
   }
 }

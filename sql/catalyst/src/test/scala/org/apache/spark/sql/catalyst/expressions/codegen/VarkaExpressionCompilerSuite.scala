@@ -251,8 +251,8 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
       "next_day with a weekday that is neither a literal nor a column")
     assert(VarkaDerivedInput.key(5, VarkaDerivedKind.WEEKDAY) !==
       VarkaDerivedInput.key(5, VarkaDerivedKind.WEEKDAY_ANSI))
-    assert(VarkaDerivedInput.sourceOrdinal(VarkaDerivedInput.key(7, VarkaDerivedKind.WEEKDAY_ANSI))
-      === 7)
+    assert(VarkaDerivedInput.keySourceOrdinal(
+      VarkaDerivedInput.key(7, VarkaDerivedKind.WEEKDAY_ANSI)) === 7)
   }
 
   test("next_day's weekday range is [-1, 5], not [0, 6] - THURSDAY is the negative") {
@@ -2399,8 +2399,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
   private def largestMethod(fused: CompiledVarkaProjection, budget: Int): Int = {
     val bytes = VarkaLoopEmitter.emit(
       s"org.apache.spark.sql.varka.execution.VarkaCompilerSizeProbe${System.nanoTime()}",
-      fused.outputs,
-      fused.inputOrdinals.size, fused.numLiterals, null, null,
+      fused.outputs, fused.inputOrdinals.size, fused.numLiterals, null, null,
       VarkaMatrix.base.withMethodByteBudget(budget))
     val methods = VarkaEmitterTestSupport.methodNames(bytes).asScala.filter(_ != "<init>")
     methods.map(VarkaEmitterTestSupport.codeSize(bytes, _)).max

@@ -386,7 +386,7 @@ private[sql] object VarkaExpressionCompiler extends Logging {
     }
     val reasons = declines.result()
     if (fusedCount > 0 && inputs.nonEmpty) {
-      val fused = projection(outputs.toSeq, outputTypes.result(), inputs, literals, sink)
+      val fused = tables(inputs, literals, sink).projection(outputs.toSeq, outputTypes.result())
       (Some(new PartialVarkaProjection(specs.asJava, fused, javaDeclines(reasons),
         java.util.List.of())), reasons, alone.result())
     } else {
@@ -601,14 +601,13 @@ private[sql] object VarkaExpressionCompiler extends Logging {
       }
     }
     if (fusedConds.nonEmpty && inputs.nonEmpty) {
-      val tables = projection(Seq.empty, Seq.empty, inputs, literals, sink)
+      val accepted = tables(inputs, literals, sink)
       val build = (layout: Seq[Seq[Cond]]) => {
         val roots: Seq[VarkaVectorIR] = layout.flatten
         val starts = layout.scanLeft(0)(_ + _.size)
         val clauses = layout.indices.map(c => (starts(c) until starts(c + 1)).map(Int.box).asJava)
-        new CompiledVarkaPredicate(specs.asJava, new CompiledVarkaProjection(roots.asJava,
-          roots.map(_ => BooleanType: DataType).asJava, tables.inputOrdinals, tables.literals,
-          tables.inputBounds, tables.derivedInputs, tables.longLiterals), clauses.asJava)
+        new CompiledVarkaPredicate(specs.asJava,
+          accepted.projection(roots, roots.map(_ => BooleanType)), clauses.asJava)
       }
       val conds = fusedConds.toSeq
       PredicatePass(specs, Some(build(Seq(Seq(VarkaConditionCompiler.andFold(conds))))), conds,
@@ -752,28 +751,41 @@ private[sql] object VarkaExpressionCompiler extends Logging {
   }
 
   /**
-   * The fused projection over the accepted entries' tables: `inputOrdinals` and `derivedInputs`
-   * from the input table (a derived input is interned under a negative key beside the child
-   * ordinals, see `VarkaDerivedInput.key`), the literal slots, and the sink's bounds and 64-bit
-   * literals.
+   * The accepted entries' tables, in the form a compiled projection holds them, for any outputs
+   * over them: one predicate pass lays the same tables under several layouts of its roots.
    */
-  private def projection(
-      outputs: Seq[VarkaVectorIR],
-      outputTypes: Seq[DataType],
+  private case class Tables(
+      inputOrdinals: java.util.List[Integer],
+      literals: java.util.List[Integer],
+      inputBounds: java.util.List[VarkaInputBound],
+      derivedInputs: java.util.List[VarkaDerivedInput],
+      longLiterals: java.util.List[java.lang.Long]) {
+    def projection(outputs: Seq[VarkaVectorIR], outputTypes: Seq[DataType])
+        : CompiledVarkaProjection =
+      new CompiledVarkaProjection(outputs.asJava, outputTypes.asJava, inputOrdinals, literals,
+        inputBounds, derivedInputs, longLiterals)
+  }
+
+  /**
+   * [[Tables]] from the compile's own: `inputOrdinals` and `derivedInputs` from the input table (a
+   * derived input is interned under a negative key beside the child ordinals, see
+   * `VarkaDerivedInput.key`), the literal slots, and the sink's bounds and 64-bit literals.
+   */
+  private def tables(
       inputs: mutable.LinkedHashMap[Int, Int],
       literals: mutable.LinkedHashMap[Int, Int],
-      sink: DeclineSink): CompiledVarkaProjection = {
+      sink: DeclineSink): Tables = {
     val keys = inputs.keys.toSeq
     val ordinals = keys.map { k =>
-      Int.box(if (VarkaDerivedInput.isKey(k)) VarkaDerivedInput.sourceOrdinal(k) else k)
+      Int.box(if (VarkaDerivedInput.isKey(k)) VarkaDerivedInput.keySourceOrdinal(k) else k)
     }
     val derived = keys.zipWithIndex.collect {
       case (k, i) if VarkaDerivedInput.isKey(k) =>
-        new VarkaDerivedInput(i, VarkaDerivedInput.sourceOrdinal(k), VarkaDerivedInput.kind(k))
+        new VarkaDerivedInput(i, VarkaDerivedInput.keySourceOrdinal(k),
+          VarkaDerivedInput.keyKind(k))
     }
-    new CompiledVarkaProjection(outputs.asJava, outputTypes.asJava, ordinals.asJava,
-      literals.keys.toSeq.map(Int.box).asJava, sink.inputBounds(inputs), derived.asJava,
-      sink.longLiteralValues)
+    Tables(ordinals.asJava, literals.keys.toSeq.map(Int.box).asJava, sink.inputBounds(inputs),
+      derived.asJava, sink.longLiteralValues)
   }
 
   private def javaDeclines(declines: Map[Int, VarkaDecline]): java.util.Map[Integer, VarkaDecline] =

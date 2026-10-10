@@ -66,12 +66,12 @@ public final class VarkaFusionReport {
       Seq<Attribute> childOutput) {
     var out = new ArrayList<String>();
     List<VarkaOutputSpec> specs = partial.specs();
+    int kernels = 1 + partial.more().size();
     for (int position = 0; position < specs.size(); position++) {
       String name = projectList.apply(position).name();
       out.add(name + ": " + switch (specs.get(position)) {
         case FusedOutput f -> "fused";
-        case KernelOutput k -> "fused, kernel " + (k.kernel() + 1) + " of "
-            + partial.kernels().size();
+        case KernelOutput k -> "fused, kernel " + (k.kernel() + 1) + " of " + kernels;
         case ForwardedOutput f -> "forwarded from " + childOutput.apply(f.childOrdinal()).name();
         case ResidualOutput r -> {
           VarkaDecline decline = partial.declines().get(position);

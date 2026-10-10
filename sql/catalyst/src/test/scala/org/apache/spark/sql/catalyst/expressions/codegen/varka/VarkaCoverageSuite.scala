@@ -630,6 +630,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       case k: KernelOutput => s"K${k.kernel}.${k.fusedIndex}"
       case w: ForwardedOutput => s"W${w.childOrdinal}"
       case _: ResidualOutput => "R"
+      // scalac cannot check a match over a Java sealed interface; a new spec type fails here.
+      case other => fail(s"unknown output spec $other")
     }
     def declines(m: Map[Int, VarkaDecline]): String = m.toSeq.sortBy(_._1).mkString("|")
     def partial(o: Option[PartialVarkaProjection]): String = o.fold("None") { x =>

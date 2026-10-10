@@ -101,8 +101,7 @@ object VarkaSharedPrefixBenchmark extends BenchmarkBase {
     val name = s"org.apache.spark.sql.varka.execution.VarkaSharedPrefixBench$id"
     val roots = new java.util.ArrayList[VarkaVectorIR]()
     fused.outputs.asScala.foreach(roots.add)
-    val bytes = VarkaLoopEmitter.emit(name, roots, fused.inputOrdinals.size,
-        fused.numLiterals,
+    val bytes = VarkaLoopEmitter.emit(name, roots, fused.inputOrdinals.size, fused.numLiterals,
       null, null, options)
     val groups = VarkaEmitterTestSupport.methodNames(bytes).toArray
       .count(e => isLoop(e.toString, true))

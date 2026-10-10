@@ -121,8 +121,7 @@ object VarkaDeoptCycleProbe {
     if (path == "warmup" || path == "c1off") {
       excludeC1()
     }
-    val bytes = VarkaLoopEmitter.emit(name, fused.outputs,
-        fused.inputOrdinals.size,
+    val bytes = VarkaLoopEmitter.emit(name, fused.outputs, fused.inputOrdinals.size,
       fused.numLiterals, null, null, options)
     sys.env.get("VARKA_DEOPT_DUMP").foreach { dir =>
       Files.write(java.nio.file.Paths.get(dir, name + ".class"), bytes)

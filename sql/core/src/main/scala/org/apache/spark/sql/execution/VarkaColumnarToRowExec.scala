@@ -330,6 +330,9 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
               fusedAttrs(partial.columnIndex(spec).getAsInt)
             case (f: ForwardedOutput, _) => childOutput(f.childOrdinal)
             case (_: ResidualOutput, named) => named
+            // scalac cannot check a match over a Java sealed interface for exhaustiveness, so a
+            // new spec type is refused here by name rather than met as a MatchError.
+            case (other, _) => throw new IllegalStateException(s"unknown output spec $other")
           }
           Some(UnsafeProjection.create(merged, childOutput ++ fusedAttrs))
         }

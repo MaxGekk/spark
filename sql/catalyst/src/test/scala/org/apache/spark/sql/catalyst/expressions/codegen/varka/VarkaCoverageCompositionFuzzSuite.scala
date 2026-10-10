@@ -380,8 +380,7 @@ class VarkaCoverageCompositionFuzzSuite
         checkKernel(kernel, wide, c.options, rnd, sparkOracle(kernel, wide, outputsOf(p, k, c)))
       }
     }
-    (partial.exists(_.kernels.size > 1),
-        partial.map(_.fused.inputOrdinals.size).getOrElse(0))
+    (partial.exists(_.kernels.size > 1), partial.map(_.fused.inputOrdinals.size).getOrElse(0))
   }
 
   // ---------------------------------------------------------------------------------------------

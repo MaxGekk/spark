@@ -182,3 +182,19 @@ convenience constructors standing for the Scala defaults are not there, since ev
 every component; `VarkaKernelPart` and `VarkaProjectExec` did not change, since neither reads a
 model collection, and `VarkaColumnarRule`, `VarkaSplitConditionFusionSuite` and
 `VarkaCoverageSuite` did.
+
+**Review of #713 (`/code-review high`), 10 October 2026.** No wrong answer; fixed in the pull
+request, with the fusion dump byte-identical to the base's after each:
+
+* `PartialVarkaProjection.declines` keeps the declines ordered by position, where
+  `Map.copyOf`'s order varied between JVMs; nothing iterates it today, but a rendering that lists
+  them would have changed from run to run.
+* The Scala matches over the specs end in a refusal by name, since scalac cannot check a Java
+  sealed interface for exhaustiveness: a new spec type fails there rather than as a MatchError.
+* The predicate pass carried its tables in a `CompiledVarkaProjection` with no outputs, whose
+  `lane()` throws; they are a small `Tables` record in the classifier now, which 300b's table type
+  replaces.
+* `VarkaDerivedInput`'s key decoders are `keySourceOrdinal` and `keyKind`, apart from the record's
+  accessors of the same names; `VarkaEmitDump` prints the specs as it always has; the fusion report
+  counts the kernels once; and the call sites the mechanical rewrite had broken across lines are
+  back on one or two.

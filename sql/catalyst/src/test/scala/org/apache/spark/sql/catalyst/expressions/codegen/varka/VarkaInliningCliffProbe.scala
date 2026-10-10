@@ -169,8 +169,7 @@ object VarkaInliningCliffProbe {
       addDirective(excludeC1 = c1 == "off", inline = directive == "inline")
     }
     val fused = shape(kind, outputs)
-    val bytes = VarkaLoopEmitter.emit(name, fused.outputs,
-        fused.inputOrdinals.size,
+    val bytes = VarkaLoopEmitter.emit(name, fused.outputs, fused.inputOrdinals.size,
       fused.numLiterals, null, null,
       // The budget is read against the measured split, not the predicted one (VARKA-236).
       VarkaEmitOptions.DEFAULTS.withFusedCeiling(ceiling).withCallSiteBudget(budget)
