@@ -234,6 +234,55 @@ tests on known statements. 4. The harvest over `date.sql` alone, the corpus file
 regenerated, prediction 1 scored. 5. The remaining files; predictions 2 to 4
 scored. 6. Section 9, row 81, the docs, and a row per finding.
 
-## 9. Outcome
+## 9. Outcome, 10 October 2026
 
-*To be written from the corpus file.*
+### 9.1 What changed from the plan, since milestone 5
+
+* **More lanes.** Varka has read `bigint`, `TIME` and day-time intervals since milestone 5, so the
+  rewrite turns literals of those types into columns too, beside dates, ints and year-month
+  intervals.
+* **Each statement also as a filter** (milestone 7's refinement of the row, from NoREC and TLP):
+  every item where it is boolean, `IS NOT NULL` of it otherwise, conjoined, over the same fixture.
+* **The rewrite renders back to SQL**, as section 3.1 says; a statement whose rendering fails to
+  run is recorded as `rewrite failed`, and none was.
+* **A declined batch reached its kernel.** The check that a Varka plan ran counts the batches a
+  kernel declined (`numFallbackBatchesDeclined`) as well as those it served: `make_date(999999,
+  3, 18)` in `datetime-special.sql` is fused, and its kernel declines the year by design.
+
+### 9.2 The corpus
+
+`sql/varka/golden_corpus.json`, from 731 statements in the seven files:
+
+| file | statements | rewritten | projection fused | filter fused | filter partial | errors |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `date.sql` | 102 | 50 | 14 | 1 | 31 | 20 |
+| `interval.sql` | 286 | 218 | 5 | 84 | 52 | 67 |
+| `extract.sql` | 129 | 26 | 3 | 0 | 19 | 5 |
+| `timestamp.sql` | 142 | 56 | 0 | 0 | 31 | 30 |
+| `datetime-formatting.sql` | 36 | 3 | 0 | 0 | 3 | 0 |
+| `datetime-parsing.sql` | 32 | 0 | 0 | 0 | 0 | 0 |
+| `datetime-special.sql` | 4 | 3 | 1 | 1 | 2 | 0 |
+
+Of the rest, 152 read a relation and are not rewritten, 150 have nothing to rewrite, 66 do not
+parse and 7 are not selects. `interval.sql`'s 84 fused filters are mostly a bare interval literal
+become a column, whose projection is a column copy (`PLAIN`) and whose `IS NOT NULL` filter fuses:
+fused, but shallow.
+
+### 9.3 The predictions scored
+
+1. **Missed.** 14 of `date.sql`'s statements read `FUSED`, not 40 or more. What keeps them out is
+   what section 2 listed and more of it than predicted: a string or `NULL` operand
+   (`date_add(NULL, c0)` folds), `date_from_unix_date` over an int and date minus date, which the
+   compiler does not admit, `to_date` and the timestamp operands, and twenty error entries.
+2. **Holds.** `interval.sql` fuses 5 of its 285 selects' projections, under a fifth; `extract.sql`
+   3 of 128, 102 of them reading its view of a string, a timestamp and intervals.
+3. **Holds.** No statement disagrees with the row engine on either form, and each of the 122
+   error entries raises the same condition on both.
+4. **Holds.** The suite runs in 74 s.
+
+### 9.4 What this leaves
+
+The verdicts that read `PLAIN` are each a candidate gap: `date_from_unix_date` over an int column,
+date minus date, the timestamp operands. Milestone 7's coverage work reads them from the corpus
+file rather than this section, since the file regenerates as upstream's inputs and Varka's arms
+change.

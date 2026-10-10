@@ -1060,6 +1060,13 @@ exist.
   `checkAnswer` equality over a query matrix - re-run warm so a cache hit is
   differentially checked too - `numVarkaBatches > 0` on fused plans,
   Metaspace bounds, and config-driven activation.
+* **Spark's own date tests** (`VarkaGoldenCorpusSuite`) run the `select`
+  statements of the golden-file inputs (`date.sql`, `interval.sql`,
+  `extract.sql`, the timestamp and datetime files) on both engines, each
+  literal of a type Varka reads turned into a column of an Arrow-cached
+  fixture, as a projection and as a filter. `sql/varka/golden_corpus.json`
+  records every statement's rewrite, plan verdict and outcome, and the counts
+  of what fuses per file.
 * **Metaspace proof** (`VarkaGeneratedClassLoaderSuite`,
   `VarkaShapeCacheSuite`) verifies with weak references that a released
   loader is collected, that a batch of 1000 loaders is fully collected, and -
