@@ -758,6 +758,24 @@ the check looks like when it works. And a hand-built case for such a check has t
 somewhere to show: a stale input is invisible when a later entry reads the same column, and an
 over-truncation is invisible when the dropped column is registered again at the same slot.
 
+## Under test a failure fallback fails its task, unless the test declared it
+
+The ghost fallback answers a kernel failure, a failure of the row machinery beside the kernel and
+an emission failure with the row engine's right answers, so a test that checks answers cannot see
+a broken kernel. Since VARKA-275, under test (`Utils.isTesting`) each of those three throws an
+`IllegalStateException` naming VARKA-275 instead, with the failure as its cause, after it has been
+counted and logged as before. A test that causes one on purpose declares it: the failure hooks
+`setFailKernelForTesting` and `setFailEmissionForTesting` do so by being set, and anything else - a
+planted emitter option, an expression made to throw - sets
+`VarkaColumnarToRowExec.setFailureFallbackExpectedForTesting(true)` and resets it in a `finally`.
+Declines, non-Arrow batches, warm-up batches, the emitter's over-budget decline and failures in a
+task already being killed are not failures and need nothing.
+
+If a test you did not expect fails with that message, the fallback was hiding something: read the
+cause, which is the kernel's own exception. Before the rule, two tests caused failures without a
+hook and passed by accident, one because its `intercept[Throwable]` caught whatever was thrown;
+`intercept` the specific outcome you mean.
+
 ## A solver proves an arithmetic lowering in integers, and its verdicts are checked like output
 
 VARKA-240 proves the int lane's multiply-high division exact with SMT solvers

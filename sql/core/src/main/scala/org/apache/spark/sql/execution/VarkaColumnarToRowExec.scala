@@ -28,7 +28,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.{ForwardedOutput, Fused
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.vectorized.ColumnarBatch
-import org.apache.spark.util.CompletionIterator
+import org.apache.spark.util.{CompletionIterator, Utils}
 
 /**
  * A Varka node wearing the [[ColumnarToRowTransition]] tag while carrying fused work inside it
@@ -207,6 +207,28 @@ private[sql] object VarkaColumnarToRowExec {
   }
 
   private[sql] def isFailEmissionForTesting: Boolean = failEmissionForTesting
+
+  // Whether a test has declared that a failure fallback may happen (VARKA-275). Under test, a
+  // kernel failure, a failure of the per-row machinery beside the kernel, or an emission failure
+  // that nobody declared fails the task with the failure as its cause, rather than being caught
+  // and answered by the row path: the fallback's answers are right, so a test that only checks
+  // answers would pass over a broken kernel, which is the reason Spark's own suites turn the
+  // codegen fallback off. A test declares one by setting either failure hook above, which can
+  // only be set to cause one, or this switch, for a failure it causes another way - a planted
+  // emitter bug, say. Designed outcomes are never failures and need no declaration: a declined
+  // batch, a batch that is not Arrow, a warm-up batch, and the emitter declining a shape over its
+  // budget. Same discipline as the hooks: static, because Spark runs tasks on other threads, and
+  // reset in a finally block. Outside tests the fallback is always taken.
+  @volatile private var failureFallbackExpectedForTesting = false
+
+  private[sql] def setFailureFallbackExpectedForTesting(expected: Boolean): Unit = {
+    failureFallbackExpectedForTesting = expected
+  }
+
+  /** Whether a failure fallback here has to fail its task instead: under test, undeclared. */
+  private[sql] def failureFallbackForbidden: Boolean =
+    Utils.isTesting && !failureFallbackExpectedForTesting && !failKernelForTesting &&
+      !failEmissionForTesting
 
   // Test-only hook that emits every kernel with these options instead of the defaults, so an
   // end-to-end suite can drive a reference variant - the guard-off bytes, whose only

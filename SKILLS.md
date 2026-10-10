@@ -125,6 +125,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A suite that needs another vector width runs in a JVM of its own, and a guard says when one does not](sql/varka/skills/testing-and-debugging.md#a-suite-that-needs-another-vector-width-runs-in-a-jvm-of-its-own-and-a-guard-says-when-one-does-not)
 * [The random differential against Spark: read the shrunk reproducer, check the pool, mind the fixture](sql/varka/skills/testing-and-debugging.md#the-random-differential-against-spark-read-the-shrunk-reproducer-check-the-pool-mind-the-fixture)
 * [A decline is the entry deleted, and only a forced decline reaches the branch that has to make it so](sql/varka/skills/testing-and-debugging.md#a-decline-is-the-entry-deleted-and-only-a-forced-decline-reaches-the-branch-that-has-to-make-it-so)
+* [Under test a failure fallback fails its task, unless the test declared it](sql/varka/skills/testing-and-debugging.md#under-test-a-failure-fallback-fails-its-task-unless-the-test-declared-it)
 * [A solver proves an arithmetic lowering in integers, and its verdicts are checked like output](sql/varka/skills/testing-and-debugging.md#a-solver-proves-an-arithmetic-lowering-in-integers-and-its-verdicts-are-checked-like-output)
 
 #### [What C2 does with these loops](sql/varka/skills/the-jit.md)
