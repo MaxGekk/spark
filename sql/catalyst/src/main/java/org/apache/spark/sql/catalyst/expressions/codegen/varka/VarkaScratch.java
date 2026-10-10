@@ -20,6 +20,8 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 
+import org.apache.spark.TaskContext;
+
 /**
  * The scratch a kernel with a materialized calendar prefix takes when its caller passes none:
  * the seven-argument {@code run} of such a kernel asks here for a buffer of its rows and calls
@@ -32,13 +34,31 @@ import java.lang.foreign.MemorySegment;
  * their own scratch and never come here; the suites, the probes and the tools that drive a
  * kernel as a function of its arguments do, and are right to, since a buffer per test would be
  * the same allocation written forty times.
+ *
+ * <p><b>Not inside a Spark task</b> (VARKA-253). A task runs kernels for a living, so a caller
+ * there owes the kernel its scratch, from the task's allocator; a task thread from an executor's
+ * pool would otherwise keep the largest buffer it ever asked for, unseen, for the JVM's life.
+ * {@link #forRows} refuses on a thread with a {@link TaskContext}, so a production path that took
+ * the forms without the address fails on its first batch - in the end-to-end suites too, which
+ * run their kernels in tasks - instead of inheriting the buffer. The suites, the probes and the
+ * tools call kernels on threads of their own and are served as before.
  */
 public final class VarkaScratch {
 
   private static final ThreadLocal<MemorySegment> BUFFER = new ThreadLocal<>();
 
-  /** The address of this thread's buffer, of at least {@code bytesPerRow * rows} bytes. */
+  /**
+   * The address of this thread's buffer, of at least {@code bytesPerRow * rows} bytes.
+   *
+   * @throws IllegalStateException on a thread running a Spark task, whose caller must pass its
+   *         own scratch through the forms of {@code run} that take an address
+   */
   public static long forRows(int bytesPerRow, int rows) {
+    if (TaskContext.get() != null) {
+      throw new IllegalStateException("a kernel with " + bytesPerRow + " bytes of scratch per "
+          + "row was run inside a Spark task without a scratch address; a task passes its own, "
+          + "through the forms of run that take one (VarkaFusedKernel, VARKA-253)");
+    }
     long needed = (long) bytesPerRow * Math.max(rows, 1);
     MemorySegment buffer = BUFFER.get();
     if (buffer == null || buffer.byteSize() < needed) {

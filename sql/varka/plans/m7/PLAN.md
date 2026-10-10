@@ -577,7 +577,7 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 | 264 | **Done** (`VARKA-264.md` 9, 9 October 2026): all twenty entries owned - eight closed by the task or commit that did it, seven moved to `m8/SCOPE.md` (items 15, 39 and the new 86 to 88), one kept as a decision, four already swept. Milestone 4's debt register swept: each entry of `m4/PLAN.md` section 9 still open closed in the past tense, made a row, or moved to `m8/SCOPE.md` | the plan review (2.3) | small |
 | 83 | One refusal, instead of four. Proof: `emitted_bytes.json` unchanged | item 39 | medium |
 | 86 | One operand admission, stated once | item 39 | medium |
-| 253 | The fallback scratch's contract stated in `VarkaFusedKernel`'s doc and enforced by a test | item 68 | small |
+| 253 | **Done** (`VARKA-253.md` 9, 10 October 2026): the forms of `run` without a scratch address are for callers outside a Spark task; inside one `VarkaScratch` refuses a kernel with scratch, so a production path cannot come to rely on the per-thread buffer; stated in `VarkaFusedKernel`'s doc and tested in `VarkaEmitterChronoSuite` | item 68 | small |
 | 222 | Structural hashing of IR nodes cached rather than recomputed on every map lookup. Proof: compile time measured before and after | item 81 | small |
 | 254 | The grouping weights against the emitted counts: each pinned by a test, or the register retired | item 63 | small to medium |
 | 255 | The CI queue off the laptop with no stored credential: the queue on the fork with its own `GITHUB_TOKEN`, the check sync on the base repository with its own; master's head run after each merge; a PR's new tests rerun several times, and a fix's new test required to fail on the base | item 76, redesigned (2.4), `m7/READING.md` 9 | medium |

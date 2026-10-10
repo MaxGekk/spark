@@ -105,10 +105,14 @@ public interface VarkaFusedKernel {
    * How many bytes of scratch a call must pass per row: zero for every kernel that materializes
    * no calendar prefix (VARKA-198), which ignores the address. A caller allocates
    * {@code scratchBytesPerRow() * length} bytes and passes their address to the two overloads
-   * below; a kernel with scratch owns none of it, so a call still allocates nothing. A caller
-   * that uses the forms without the address on such a kernel gets the thread's fallback buffer
-   * ({@link VarkaScratch}), which is for the suites and the tools; the evaluator and the warm-up
-   * pass their own.
+   * below; a kernel with scratch owns none of it, so a call still allocates nothing.
+   *
+   * <p><b>The contract</b> (VARKA-253): a caller inside a Spark task passes its own scratch,
+   * through the forms that take an address, as the evaluator and the warm-up do. The forms
+   * without one are for callers outside a task - the suites, the probes and the tools - which on
+   * a kernel with scratch get the thread's fallback buffer ({@link VarkaScratch}), kept for the
+   * thread's life; inside a task {@link VarkaScratch} refuses them, so a production path cannot
+   * come to rely on that buffer unseen.
    */
   default int scratchBytesPerRow() {
     return 0;

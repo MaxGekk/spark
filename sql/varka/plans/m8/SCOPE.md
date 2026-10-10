@@ -4031,6 +4031,11 @@ with the thread through a cleaner. Small either way.
 **Done when** the form's contract is stated in `VarkaFusedKernel`'s doc and enforced by a test,
 one way or the other.
 
+*Done on 10 October 2026 by VARKA-253: neither of the two, but the line between them. A test-code
+rule would be blind in the end-to-end suites, which run with `Utils.isTesting` set; so the
+fallback refuses on a thread with a `TaskContext`, where production runs kernels, and serves the
+suites, probes and tools, which call kernels on threads of their own.*
+
 ### Item 69. One species per lane type in the shared test JVM
 
 *Added 29 September 2026 from the diagnosis of the warm-up suite's order-dependent failure

@@ -1890,4 +1890,48 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
       plainLoader.release()
     }
   }
+
+  test("inside a Spark task, the forms without a scratch address refuse a kernel with scratch " +
+      "(VARKA-253)") {
+    // A task runs kernels for a living and owes them their scratch; a pool thread served from
+    // the per-thread fallback would keep its largest buffer for the JVM's life. The form with an
+    // address runs there as anywhere, and a kernel without scratch never asks.
+    val on = VarkaMatrix.base.withMaterializeChronoPrefix(true)
+      .withGroupBudget(1).withFusedCeiling(1)
+    val col = new ColumnRef(0)
+    val roots = Seq[VarkaVectorIR](new Year(col), new Month(col))
+    val (kernel, loader) = load(emitMulti(roots, 1, 0, on))
+    val (plain, plainLoader) = load(emitMulti(roots, 1, 0,
+      VarkaMatrix.base.withMaterializeChronoPrefix(false)))
+    val arena = Arena.ofConfined()
+    try {
+      val length = 100
+      val data = arena.allocate(length * 4L, 64)
+      for (i <- 0 until length) data.setAtIndex(ValueLayout.JAVA_INT, i, 19000 + i)
+      val dst = roots.map(_ => arena.allocate(length * 4L, 64).address()).toArray
+      val dstValidity = roots.map(_ => arena.allocate(16L, 64).address()).toArray
+      val scratch = arena.allocate(kernel.scratchBytesPerRow().toLong * length, 64)
+      def run(k: VarkaFusedKernel): Int =
+        k.run(Array(data.address()), Array(0L), Array(0), dst, dstValidity, Array.empty[Int],
+          length)
+      assert(kernel.scratchBytesPerRow() > 0 && plain.scratchBytesPerRow() === 0)
+      org.apache.spark.TaskContext.setTaskContext(org.apache.spark.TaskContext.empty())
+      try {
+        val refused = intercept[IllegalStateException](run(kernel))
+        assert(refused.getMessage.contains("inside a Spark task without a scratch address"),
+          refused.getMessage)
+        assert(kernel.run(Array(data.address()), Array(0L), Array(0), dst, dstValidity,
+          Array.empty[Int], length, scratch.address()) === 0)
+        assert(run(plain) === 0)
+      } finally {
+        org.apache.spark.TaskContext.unset()
+      }
+      // Off the task, the suites' and the tools' way, as before.
+      assert(run(kernel) === 0)
+    } finally {
+      arena.close()
+      loader.release()
+      plainLoader.release()
+    }
+  }
 }
