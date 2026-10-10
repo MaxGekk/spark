@@ -209,15 +209,20 @@ class VarkaCoverageCompositionFuzzSuite
 
   /**
    * The value of a long-lane input of `dataType` at `scale`, the attempt's step towards zero: a
-   * `TIME` inside the day in nanoseconds, the domain every long-lane guard assumes; a day-time
+   * `TIME` inside the day in nanoseconds, the domain every long-lane guard assumes, and in whole
+   * units of its precision, the only values a `TIME(p)` column holds (VARKA-276: drawn to the
+   * nanosecond, a `TIME(6)` value was one Spark truncates on its first arithmetic); a day-time
    * interval and a `BIGINT` within 2^45 and 2^40 of zero, then nearer at each step.
    */
   private def drawLong(rnd: Random, dataType: DataType, scale: Int): Long = {
     def within(bound: Long): Long = Math.floorMod(rnd.nextLong(), 2 * bound + 1) - bound
+    def timeUnit(t: TimeType): Long = math.pow(10, 9 - t.precision).toLong
     (dataType, scale) match {
+      case (t: TimeType, 2) => (1 + rnd.nextInt(3)) * timeUnit(t)
       case (_, 2) => 1 + rnd.nextInt(3)
-      case (_: TimeType, 0) => Math.floorMod(rnd.nextLong(), DateTimeConstants.NANOS_PER_DAY)
-      case (_: TimeType, _) => Math.floorMod(rnd.nextLong(), 1000000L)
+      case (t: TimeType, 0) =>
+        Math.floorMod(rnd.nextLong(), DateTimeConstants.NANOS_PER_DAY / timeUnit(t)) * timeUnit(t)
+      case (t: TimeType, _) => Math.floorMod(rnd.nextLong(), 1000000L / timeUnit(t)) * timeUnit(t)
       case (_: DayTimeIntervalType, 0) => within(1L << 45)
       case (_, 0) => within(1L << 40)
       case _ => within(30000)
@@ -240,7 +245,7 @@ class VarkaCoverageCompositionFuzzSuite
    * every kernel was compared.
    */
   private def checkKernel(plan: CompiledVarkaProjection, inputs: Seq[Attribute],
-      opts: VarkaEmitOptions, rnd: Random): Unit = {
+      opts: VarkaEmitOptions, rnd: Random, spark: Option[VarkaSparkOracle] = None): Unit = {
     val numInputs = plan.inputOrdinals.size
     kernelCounter += 1
     kernelsByLane(plan.lane) = kernelsByLane.getOrElse(plan.lane, 0) + 1
@@ -286,12 +291,13 @@ class VarkaCoverageCompositionFuzzSuite
       }
       VarkaKernelCheck.runAndCompareLong(context, className, bytes, plan.outputs, numInputs,
         plan.longLiterals.toArray,
-        VarkaKernelCheck.LongBatch(length, patterns, data, forceMasked), declineAllowed = true)
+        VarkaKernelCheck.LongBatch(length, patterns, data, forceMasked), declineAllowed = true,
+        spark = spark)
     } else {
       val data = Array.tabulate(numInputs)(i => Array.fill(length)(intValue(i, scale)))
       VarkaKernelCheck.runAndCompare(context, className, bytes, plan.outputs, numInputs,
         plan.literals.toArray, VarkaKernelCheck.Batch(length, patterns, data, forceMasked),
-        declineAllowed = true)
+        declineAllowed = true, spark = spark)
     }
     val compared = (0 until 3).exists { scale =>
       if (scale > 0) redrawn += 1
@@ -299,6 +305,33 @@ class VarkaCoverageCompositionFuzzSuite
     }
     if (compared) comparedByLane(plan.lane) = comparedByLane.getOrElse(plan.lane, 0) + 1
   }
+
+  /**
+   * The expression behind each output of kernel `k` of `p`: the entry whose spec names that
+   * kernel and output. Kernel 0's outputs are [[FusedOutput]]s, every later kernel's
+   * [[KernelOutput]]s.
+   */
+  private def outputsOf(p: PartialVarkaProjection, k: Int,
+      c: VarkaCompositionCase): Seq[Expression] = {
+    val exprs = new Array[Expression](p.kernels(k).outputs.size)
+    p.specs.zipWithIndex.foreach {
+      case (FusedOutput(o), i) if k == 0 => exprs(o) = c.entries(i).expr
+      case (KernelOutput(kk, o), i) if kk == k => exprs(o) = c.entries(i).expr
+      case _ =>
+    }
+    assert(!exprs.contains(null), finding(s"kernel $k has an output no entry names", c))
+    exprs.toSeq
+  }
+
+  /**
+   * Spark's answers for a kernel's outputs (VARKA-276), over the attributes its inputs read; none
+   * for a kernel that derives an input, whose source column Spark would read in place of the code
+   * the kernel is handed. The coverage table has no column a derivation reads.
+   */
+  private def sparkOracle(plan: CompiledVarkaProjection, columns: Seq[Attribute],
+      outputs: Seq[Expression]): Option[VarkaSparkOracle] =
+    if (plan.derivedInputs.nonEmpty) None
+    else Some(new VarkaSparkOracle(outputs, plan.inputOrdinals.map(columns)))
 
   private def drawWide(seed: Long, iteration: Int): VarkaCompositionCase = {
     val rnd = new Random(seed * 1000003L + 900000L + iteration)
@@ -337,7 +370,11 @@ class VarkaCoverageCompositionFuzzSuite
       assert(isCompositionDecline(d.reason),
         finding(s"entry $i, which fuses alone, declined for '${d.reason}'", c))
     }
-    partial.foreach(p => p.kernels.foreach(checkKernel(_, wide, c.options, rnd)))
+    partial.foreach { p =>
+      p.kernels.zipWithIndex.foreach { case (kernel, k) =>
+        checkKernel(kernel, wide, c.options, rnd, sparkOracle(kernel, wide, outputsOf(p, k, c)))
+      }
+    }
     (partial.exists(_.kernels.size > 1), partial.map(_.fused.inputOrdinals.size).getOrElse(0))
   }
 
@@ -478,6 +515,7 @@ class VarkaCoverageCompositionFuzzSuite
 
   test("random projections over more columns than a kernel reads are fused or declined, and " +
       "their kernels answer as the reference evaluator does") {
+    val heldBefore = VarkaKernelCheck.sparkComparisons.get()
     var severalKernels = 0
     var widest = 0
     comparedByLane.clear()
@@ -494,7 +532,7 @@ class VarkaCoverageCompositionFuzzSuite
     info(s"$severalKernels of $wideIterations projections served by several kernels, " +
       s"kernels compared row by row: ${perLane(comparedByLane)} of ${perLane(kernelsByLane)}, " +
       s"$redrawn batches drawn again after a decline, the widest first kernel reading $widest " +
-      "columns")
+      s"columns, ${VarkaKernelCheck.sparkComparisons.get() - heldBefore} answers held to Spark")
     // Every lane that has kernels has comparisons, since a declined batch is drawn again until
     // no guard declines it; the draw decides only how many kernels each lane gets.
     assert(severalKernels > 0, s"no projection reached several kernels; the widest first " +
@@ -504,6 +542,44 @@ class VarkaCoverageCompositionFuzzSuite
         s"${comparedByLane.getOrElse(lane, 0)} of ${kernelsByLane(lane)} $lane kernels were " +
           "compared row by row")
     }
+  }
+
+  test("every coverage row's kernel agrees with the reference evaluator, and the reference " +
+      "with Spark's eval (VARKA-276)") {
+    // Each row alone, as the coverage suite compiles it, at both widths the emitted-bytes oracle
+    // pins, on batches drawn as the wide test draws them: the kernel, the reference evaluator and
+    // Catalyst's interpreted eval of the row's own expression, three ways on every row.
+    val rnd = new Random(seed ^ 276L)
+    val before = VarkaKernelCheck.sparkComparisons.get()
+    var checked = 0
+    for (opts <- Seq(VarkaMatrix.base, VarkaMatrix.base.withLanesOverride(4))) {
+      for (row <- projections) {
+        val expr = resolve(row.executable)
+        val plan = VarkaExpressionCompiler.compile(Seq(Alias(expr, "c")()), columns, opts)
+          .getOrElse(fail(s"${row.executable} did not fuse alone"))
+        val spark = sparkOracle(plan, columns, Seq(expr))
+        assert(spark.isDefined, s"${row.executable} derives an input")
+        (0 until 4).foreach(_ => withClue(row.executable + ": ") {
+          checkKernel(plan, columns, opts, rnd, spark)
+        })
+        checked += 1
+      }
+      for (row <- predicates) {
+        val predicate = VarkaExpressionCompiler.compilePredicate(resolve(row.executable), columns,
+          opts).getOrElse(fail(s"${row.executable} did not fuse alone"))
+        val mask = predicate.fusedConjuncts.reduce(And)
+        val spark = sparkOracle(predicate.fused, columns, Seq(mask))
+        assert(spark.isDefined, s"${row.executable} derives an input")
+        (0 until 4).foreach(_ => withClue(row.executable + ": ") {
+          checkKernel(predicate.fused, columns, opts, rnd, spark)
+        })
+        checked += 1
+      }
+    }
+    assert(checked == 2 * (projections.size + predicates.size))
+    val compared = VarkaKernelCheck.sparkComparisons.get() - before
+    assert(compared > 100000, s"only $compared answers were held to Spark")
+    info(s"$checked kernels, $compared answers held to Spark")
   }
 
   test("random projections of coverage rows are fused or declined in bytes, never thrown") {

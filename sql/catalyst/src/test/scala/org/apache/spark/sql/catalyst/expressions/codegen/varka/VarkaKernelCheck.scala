@@ -89,6 +89,35 @@ object VarkaKernelCheck {
     }
   }
 
+  /** Answers the reference evaluator has been held to Spark on, so a suite can see it was. */
+  val sparkComparisons = new java.util.concurrent.atomic.AtomicLong()
+
+  /**
+   * The reference evaluator's answer for output `o` on row `i` against Spark's (VARKA-276): equal
+   * values or both null, a predicate's answers being 1, 0 or null. A difference is the reference's
+   * to fix, or a named delta (row 244), before the kernel is held to it. Spark raising is a row the
+   * kernel must decline the batch over, and this is called only for a batch the kernel answered.
+   */
+  private def agreeWithSpark(context: String, spark: VarkaSparkOracle, o: Int, i: Int,
+      row: Seq[Option[Long]], reference: Option[Long]): Unit = {
+    sparkComparisons.incrementAndGet()
+    val answer = spark.answer(o, row)
+    answer match {
+      case VarkaSparkOracle.Raised(e) => fail(s"$context: Spark raises on output $o " +
+        s"(${spark.sql(o)}) at row $i, inputs ${row.mkString("(", ", ", ")")}, and the kernel " +
+        s"answered the batch instead of declining it: ${e.getMessage}")
+      case _ =>
+    }
+    val agree = (answer, reference) match {
+      case (VarkaSparkOracle.Value(v), Some(r)) => v == r
+      case (VarkaSparkOracle.Null, None) => true
+      case _ => false
+    }
+    assert(agree, s"$context: the reference evaluator and Spark disagree on output $o " +
+      s"(${spark.sql(o)}) at row $i, inputs ${row.mkString("(", ", ", ")")}: reference " +
+      s"$reference, Spark $answer")
+  }
+
   /**
    * Runs one emitted int-lane kernel over the drawn columns and checks every row and validity bit
    * against [[VarkaReferenceEvaluator]]. Null lanes are poisoned; `forceMasked` reports a null over
@@ -98,7 +127,7 @@ object VarkaKernelCheck {
    */
   def runAndCompare(context: String, className: String, bytes: Array[Byte],
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Int], batch: Batch,
-      declineAllowed: Boolean = false): Boolean = {
+      declineAllowed: Boolean = false, spark: Option[VarkaSparkOracle] = None): Boolean = {
     val Batch(length, patterns, data, forceMasked) = batch
     VarkaSpeciesGuard.check(className, bytes)
     val loader = new VarkaGeneratedClassLoader(getClass.getClassLoader)
@@ -159,6 +188,14 @@ object VarkaKernelCheck {
         val row = (0 until numInputs).map(c => if (patterns(c)(i)) None else Some(data(c)(i)))
         for ((root, o) <- roots.zipWithIndex) {
           val bit = (outs(o)._3.get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) != 0
+          spark.foreach { s =>
+            val reference = root match {
+              case c: Cond =>
+                VarkaReferenceEvaluator.evalCond(c, row, lits).map(b => if (b) 1L else 0L)
+              case _ => VarkaReferenceEvaluator.evalValue(root, row, lits).map(_.toLong)
+            }
+            agreeWithSpark(context, s, o, i, row.map(_.map(_.toLong)), reference)
+          }
           root match {
             case c: Cond =>
               val want = VarkaReferenceEvaluator.evalCond(c, row, lits).contains(true)
@@ -190,7 +227,7 @@ object VarkaKernelCheck {
    */
   def runAndCompareLong(context: String, className: String, bytes: Array[Byte],
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Long], batch: LongBatch,
-      declineAllowed: Boolean = false): Boolean = {
+      declineAllowed: Boolean = false, spark: Option[VarkaSparkOracle] = None): Boolean = {
     val LongBatch(length, patterns, data, forceMasked) = batch
     VarkaSpeciesGuard.check(className, bytes)
     val loader = new VarkaGeneratedClassLoader(getClass.getClassLoader)
@@ -245,6 +282,14 @@ object VarkaKernelCheck {
         val row = (0 until numInputs).map(c => if (patterns(c)(i)) None else Some(data(c)(i)))
         for ((root, o) <- roots.zipWithIndex) {
           val bit = (outs(o)._3.get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) != 0
+          spark.foreach { s =>
+            val reference = root match {
+              case c: Cond =>
+                VarkaReferenceEvaluator.evalCondLong(c, row, lits).map(b => if (b) 1L else 0L)
+              case _ => VarkaReferenceEvaluator.evalLong(root, row, lits)
+            }
+            agreeWithSpark(context, s, o, i, row, reference)
+          }
           root match {
             case c: Cond =>
               val want = VarkaReferenceEvaluator.evalCondLong(c, row, lits).contains(true)
