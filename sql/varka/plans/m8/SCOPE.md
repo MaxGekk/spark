@@ -3643,6 +3643,13 @@ spike.*
 dividend bound for every divisor in use, and the conversion form's exact bound found, over integers
 rather than floating-point theory, which did not decide them (`VARKA-241.md` 2).*
 
+*Step 3 done on 10 October 2026 by VARKA-242: every calendar division site (`ChronoDivide`, with
+its range, shape and carry in the table) proven with its first failing dividend, both double forms
+over each range, `floorMod7`'s three forms for every int, and the leap hash's unsigned compare -
+the one built, rather than row 208's - over bit-vectors; and `sql/varka/AGENTS.md` now says a new
+bounded lowering comes with its proof file. With it the item is done once the linters' minute holds
+(`VARKA-241.md` 9.5).*
+
 **Why the narrow version pays.** Three reasons, none of them about assurance
 for its own sake.
 
