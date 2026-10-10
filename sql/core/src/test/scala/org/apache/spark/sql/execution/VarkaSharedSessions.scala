@@ -55,10 +55,14 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
   protected var disabledSpark: SparkSession = _
 
   override protected def sparkConf = {
-    super.sparkConf
+    val conf = super.sparkConf
       .set(StaticSQLConf.SPARK_CACHE_SERIALIZER.key,
         classOf[ArrowCachedBatchSerializer].getName)
       .set(SQLConf.CACHE_VECTORIZED_READER_ENABLED.key, "true")
+    // The batch-size axis (VARKA-301): this JVM's rows per Arrow cached batch, in every session.
+    VarkaMatrix.arrowBatchSize.foreach(rows =>
+      conf.set(SQLConf.ARROW_EXECUTION_MAX_RECORDS_PER_BATCH.key, rows.toString))
+    conf
   }
 
   override protected def beforeAll(): Unit = {
@@ -93,6 +97,9 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
 
   private def newSession(varkaEnabled: Boolean): SparkSession = SparkSession.builder()
     .sparkContext(spark.sparkContext)
+    .config(SQLConf.ARROW_EXECUTION_MAX_RECORDS_PER_BATCH.key,
+      VarkaMatrix.arrowBatchSize.getOrElse(SQLConf.ARROW_EXECUTION_MAX_RECORDS_PER_BATCH
+        .defaultValue.get).toString)
     .config(StaticSQLConf.SPARK_CACHE_SERIALIZER.key,
       classOf[ArrowCachedBatchSerializer].getName)
     .config(SQLConf.CACHE_VECTORIZED_READER_ENABLED.key, "true")

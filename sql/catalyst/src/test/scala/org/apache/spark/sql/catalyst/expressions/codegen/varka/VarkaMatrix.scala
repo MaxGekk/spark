@@ -49,7 +49,29 @@ object VarkaMatrix {
   /** This JVM's configuration, `""` for the defaults. */
   val config: String = sys.props.getOrElse(PROPERTY, "").trim
 
-  /** The options every test starts from: the defaults with this JVM's configuration applied. */
+  /**
+   * The name of the batch-size axis (VARKA-301): `arrowBatchSize=<rows>` sets the rows per Arrow
+   * cached batch (`spark.sql.execution.arrow.maxRecordsPerBatch`; the Arrow cache ignores
+   * `spark.sql.inMemoryColumnarStorage.batchSize`) in the SQL suites' sessions. It is not an emit
+   * option: [[parse]] passes over it, and the sessions read [[arrowBatchSize]].
+   */
+  final val ARROW_BATCH_SIZE = "arrowBatchSize"
+
+  /**
+   * The batch sizes the axis runs: one row; three, a batch that is all epilogue at any width;
+   * and seventeen, just past two lane groups of eight.
+   */
+  val ARROW_BATCH_SIZES = Seq(1, 3, 17)
+
+  /** This JVM's rows per Arrow cached batch, when its configuration names one. */
+  val arrowBatchSize: Option[Int] = config.split(",").map(_.trim.split("=", 2)).collectFirst {
+    case Array(ARROW_BATCH_SIZE, rows) => rows.trim.toInt
+  }
+
+  /**
+   * The options every test starts from: the defaults with this JVM's configuration applied.
+   * Declared after the axis's names, which `parse` reads while this object initialises.
+   */
   val base: VarkaEmitOptions = parse(config)
 
   /**
@@ -61,6 +83,7 @@ object VarkaMatrix {
     if (spec.isEmpty) return VarkaEmitOptions.DEFAULTS
     spec.split(",").foldLeft(VarkaEmitOptions.DEFAULTS) { (options, pair) =>
       pair.trim.split("=", 2) match {
+        case Array(ARROW_BATCH_SIZE, rows) if rows.trim.toInt > 0 => options
         case Array(name, value) =>
           VarkaEmitOption.named(name.trim) match {
             case count: VarkaEmitOption.Count => count.`with`(options, value.trim.toInt)
@@ -88,7 +111,8 @@ object VarkaMatrix {
   /**
    * Every configuration, in table order: each non-default arm of each option but the fault
    * injectors - a flag's other value, an enum's other constants, a count's audit values - and
-   * the lane counts above. Derived from the table, so a new option joins with its entry.
+   * the lane counts above. Derived from the table, so a new option joins with its entry. Then
+   * the batch-size axis, which changes the sessions' cached batches rather than an option.
    *
    * A flag whose `VarkaEmitOption.Subject` is not the defaults runs its other value over that
    * subject, `denseValidityOnce=false,validityByBitmap=false,validityOrFirst=false`: at the
@@ -109,7 +133,7 @@ object VarkaMatrix {
             arms.map(arm => s"${f.subject().label()},$arm")
           case _ => arms
         }
-      }
+      } ++ ARROW_BATCH_SIZES.map(rows => s"$ARROW_BATCH_SIZE=$rows")
   }
 
   /**
