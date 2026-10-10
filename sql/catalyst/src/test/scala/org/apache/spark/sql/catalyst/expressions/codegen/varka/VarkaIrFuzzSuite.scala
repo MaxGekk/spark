@@ -325,12 +325,20 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
       case other => fail(s"$name is not a planted-bug option: $other")
     })
 
+  /**
+   * The first of the first 200 draws that fails with the planted-bug option `name` on, and its
+   * signature. Which draws a planted bug reaches depends on the seed, so a test that needs a
+   * failing case searches for one rather than naming a draw (VARKA-302).
+   */
+  private def firstPlantedFailure(name: String): (VarkaFuzzCase, VarkaFailureSignature) =
+    (0 until 200).iterator.map(k => planted(drawInt(k), name))
+      .map(c => (c, outcomeOf(c))).collectFirst { case (c, Some(sig)) => (c, sig) }
+      .getOrElse(fail(s"$name: no failing case in 200 draws (seed $seed)"))
+
   /** A planted-bug case's failure, shrunk: the first of the first 200 draws that fails. */
   private def shrunkPlanted(name: String): (VarkaFuzzCase, VarkaFailureSignature,
       VarkaShrinker.Shrunk) = {
-    val found = (0 until 200).iterator.map(k => planted(drawInt(k), name))
-      .map(c => (c, outcomeOf(c))).collectFirst { case (c, Some(sig)) => (c, sig) }
-    val (c, sig) = found.getOrElse(fail(s"$name: no failing case in 200 draws"))
+    val (c, sig) = firstPlantedFailure(name)
     (c, sig, VarkaShrinker.shrink(c, sig, x => outcomeOf(x.copy(label = "case"))))
   }
 
@@ -362,7 +370,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   }
 
   test("a failure of the generated class fails its test with the smaller case in the message") {
-    val c = planted(drawInt(0), "misdescribeWordLiveness")
+    val (c, _) = firstPlantedFailure("misdescribeWordLiveness")
     val e = intercept[org.scalatest.exceptions.TestFailedException](runChecked(c))
     assert(e.getMessage.contains("shrunk to lane=int"), e.getMessage)
     assert(e.getMessage.contains("signature: emitter rejection"), e.getMessage)

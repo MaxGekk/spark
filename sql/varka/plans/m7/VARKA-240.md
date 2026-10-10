@@ -359,8 +359,9 @@ So the sweep and the proof agree on every divisor, on one commit: the JVM runnin
 
 ### 9.4 The predictions scored
 
-1. **The linters' step under a minute on the CI runner.** Scored when this pull request's CI runs;
-   the laptop's whole step is under ten seconds.
+1. **Holds** (scored after the merge, by VARKA-302). The "Varka proofs" step of #696's linters job
+   took 7 seconds on the runner, installing Z3 included, and 0.8 of them solving: 0.78 s for
+   `int_mulhi_divide.smt2` and 0.02 s for `java_check.smt2` (run 37990897708, attempt 2).
 2. **Holds.** Z3 and cvc5 meet every expectation, 59 checks each.
 3. **Holds, with a correction to how.** The sweep and the proof agree on all eleven divisors. The
    planted fault fails the sweep and the rendering test, but not through the arithmetic: the record
