@@ -106,8 +106,16 @@ final class VarkaDivisionLowering {
      * be one short and needs it; a double one is exact over the site's range, so the correction
      * is dead code rather than a redundant safety net, and emitting it would price the double
      * forms with an operation they do not need.
+     *
+     * <p>Only a site {@link ChronoDivide}'s table marks {@code carried} may ask: the proof of each
+     * site's magic form (VARKA-242) is rendered from that table, so a carry emitted at a site the
+     * table says has none would be a form the proof never stated.
      */
     boolean carries(ChronoDivide div) {
+      if (!div.carried) {
+        throw new IllegalStateException(div + " carries its quotient, but ChronoDivide's table "
+            + "says it does not, so chrono_divide.smt2 proves a different form");
+      }
       return formFor(div) == VarkaEmitOptions.Division.MAGIC;
     }
   }

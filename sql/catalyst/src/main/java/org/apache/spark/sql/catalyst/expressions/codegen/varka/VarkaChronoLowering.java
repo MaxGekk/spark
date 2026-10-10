@@ -25,6 +25,7 @@ import static org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitB
 import static org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorWalk.*;
 
 import java.lang.classfile.CodeBuilder;
+import java.util.List;
 import java.util.Set;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDivisionLowering.Divider;
@@ -191,19 +192,49 @@ final class VarkaChronoLowering {
     }
   }
 
+  /** One digit-sum fold of {@link #emitFloorMod7}: {@code (v & mask) + (v >>> shift)}. */
+  record Fold(int mask, int shift) {}
+
+  /**
+   * The shipped form's folds, two of 15 bits: {@code 2^15 = 1 mod 7}, so each keeps the residue,
+   * and they leave at most 32770 for any int read unsigned (sufficient: the comment below quotes
+   * 32771). {@code sql/varka/proofs/floor_mod7.smt2} is rendered from these constants.
+   */
+  static final List<Fold> FLOOR_MOD7_FOLDS = List.of(new Fold(0x7FFF, 15), new Fold(0x7FFF, 15));
+
+  /**
+   * {@link VarkaEmitOptions.FloorMod7#DIGIT_SUM}'s folds, down to at most 8, since {@code 2^15},
+   * {@code 2^6} and {@code 2^3} are all 1 mod 7.
+   */
+  static final List<Fold> DIGIT_SUM_FOLDS = List.of(new Fold(0x7FFF, 15), new Fold(0x7FFF, 15),
+      new Fold(63, 6), new Fold(7, 3), new Fold(7, 3), new Fold(7, 3));
+
+  /**
+   * Added where the value was negative: the folds read it unsigned, {@code v + 2^32}, and
+   * {@code 2^32 = 4 mod 7}, so adding 3 restores {@code v}'s residue.
+   */
+  static final int FLOOR_MOD7_SIGN_FIX = 3;
+
+  /** {@code ceil(2^18 / 7)}, the shipped form's exact magic over the folds' [0, 32774]. */
+  static final int FLOOR_MOD7_M = 37450;
+
+  /** The shift paired with {@link #FLOOR_MOD7_M}. */
+  static final int FLOOR_MOD7_K = 18;
+
   /**
    * Consumes the child's {@code IntVector} on the stack and leaves {@code floorMod(v, 7)}, full
    * range. The shipped variant (the follow-up) is two 15-bit digit-sum folds (
    * {@code 2^15 = 1 mod 7} ) followed by Granlund-Montgomery magic division: the folds leave
-   * {@code v <= 32771} (unsigned reading), the +3-where-negative fixup ( {@code 2^32 = 4 mod 7} )
-   * raises that to at most 32774, and in that range the magic is exact in the <i>low</i> 32 bits -
-   * with {@code M = ceil(2^18 / 7) = 37450} and {@code e = 7 * M - 2^18 = 6}, {@code v * e < 2^18}
-   * makes {@code q = (v * M) >>> 18} exactly {@code v / 7}, and {@code v * M < 2^31} keeps the
-   * low-half multiply from overflowing, so {@code r = v - q * 7} needs no final fixup at all. The
-   * multiply-high the classic trick wants is not expressible in the Vector API; pre-folding makes
-   * the low half sufficient. Measured 1.6-1.8x the digit sum at buffer level and a ~10-op-smaller
-   * loop method, which also shortens the per-task JIT warm-up (VARKA-14.md 7.5). The full digit
-   * sum behind {@link VarkaEmitOptions.FloorMod7#DIGIT_SUM} and the lanewise DIV behind
+   * {@code v <= 32771} (unsigned reading; sufficient, the most is 32770), the +3-where-negative
+   * fixup ( {@code 2^32 = 4 mod 7} ) raises that to at most 32774, and in that range the magic is
+   * exact in the <i>low</i> 32 bits - with {@code M = ceil(2^18 / 7) = 37450} and
+   * {@code e = 7 * M - 2^18 = 6}, {@code v * e < 2^18} makes {@code q = (v * M) >>> 18} exactly
+   * {@code v / 7}, and {@code v * M < 2^31} keeps the low-half multiply from overflowing, so
+   * {@code r = v - q * 7} needs no final fixup at all. The multiply-high the classic trick wants is
+   * not expressible in the Vector API; pre-folding makes the low half sufficient. Measured 1.6-1.8x
+   * the digit sum at buffer level and a ~10-op-smaller loop method, which also shortens the
+   * per-task JIT warm-up (VARKA-14.md 7.5). The full digit sum behind
+   * {@link VarkaEmitOptions.FloorMod7#DIGIT_SUM} and the lanewise DIV behind
    * {@link VarkaEmitOptions.FloorMod7#DIV} are the reference variants the parity benchmark prices
    * this one against.
    *
@@ -240,15 +271,10 @@ final class VarkaChronoLowering {
     }
     if (analysis.options.floorMod7() == VarkaEmitOptions.FloorMod7.DIGIT_SUM) {
       // The shipped variant: folds of two 15-bit halves, one 6-bit, three 3-bit.
-      emitFold(cb, orig, fold, 0x7FFF, 15);
-      emitFold(cb, fold, fold, 0x7FFF, 15);
-      emitFold(cb, fold, fold, 63, 6);
-      emitFold(cb, fold, fold, 7, 3);
-      emitFold(cb, fold, fold, 7, 3);
-      emitFold(cb, fold, fold, 7, 3);
+      emitFolds(cb, orig, fold, DIGIT_SUM_FOLDS);
       // s += 3 where the original value was negative.
       cb.aload(fold);
-      cb.loadConstant(3);
+      cb.loadConstant(FLOOR_MOD7_SIGN_FIX);
       cb.aload(orig);
       cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
       cb.loadConstant(0);
@@ -259,10 +285,9 @@ final class VarkaChronoLowering {
       return;
     }
     // Two folds, the sign fixup, then the exact magic (the method comment has the bounds).
-    emitFold(cb, orig, fold, 0x7FFF, 15);
-    emitFold(cb, fold, fold, 0x7FFF, 15);
+    emitFolds(cb, orig, fold, FLOOR_MOD7_FOLDS);
     cb.aload(fold);
-    cb.loadConstant(3);
+    cb.loadConstant(FLOOR_MOD7_SIGN_FIX);
     cb.aload(orig);
     cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
     cb.loadConstant(0);
@@ -272,14 +297,21 @@ final class VarkaChronoLowering {
     // r = v - ((v * 37450) >>> 18) * 7.
     cb.aload(fold);
     cb.aload(fold);
-    cb.loadConstant(37450);
+    cb.loadConstant(FLOOR_MOD7_M);
     cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
     cb.getstatic(VECTOR_OPERATORS, "LSHR", VO_BINARY);
-    cb.loadConstant(18);
+    cb.loadConstant(FLOOR_MOD7_K);
     cb.invokevirtual(INT_VECTOR, "lanewise", LANEWISE_BINARY_I);
     cb.loadConstant(7);
     cb.invokevirtual(INT_VECTOR, "mul", LANEWISE_VI);
     cb.invokevirtual(INT_VECTOR, "sub", LANEWISE_VV);
+  }
+
+  /** The folds in order: the first from {@code orig}, every later one in place in {@code fold}. */
+  private static void emitFolds(CodeBuilder cb, int orig, int fold, List<Fold> folds) {
+    for (int i = 0; i < folds.size(); i++) {
+      emitFold(cb, i == 0 ? orig : fold, fold, folds.get(i).mask(), folds.get(i).shift());
+    }
   }
 
   /** {@code dst = src.and(mask).add(src >>> shift)}, all through locals. */
@@ -1549,14 +1581,23 @@ final class VarkaChronoLowering {
 
   /**
    * Every constant division the calendar prefix performs, one constant per site: the divisor, the
-   * Granlund-Montgomery pair that stands in for it, and whether the double lane's reciprocal form
-   * is exact over the dividends that site can produce.
+   * Granlund-Montgomery pair that stands in for it, whether the double lane's reciprocal form is
+   * exact over the dividends that site can produce, and those dividends and whether the site
+   * corrects its quotient with a carry.
    *
    * <p>The table exists so that a division site names a division rather than a pair of magic
    * numbers. Two sites can share a multiplier and differ only in the shift -
    * {@link #YEAR_OF_ERA_400} and {@link #YEAR_OF_ERA_100} both use {@code YEAR_CENTURY_M} - so the
    * divisor is not recoverable from the constants at the call site, and neither is the range the
    * dividend stays in.
+   *
+   * <p><b>Each site's theorem is proven</b> in {@code sql/varka/proofs/chrono_divide.smt2},
+   * rendered from this table (VARKA-242): the magic form, with its carry where {@code carried}
+   * says so, is {@code v / divisor} for every dividend of the site's shape up to one below the
+   * first that fails, and fails there; the site's {@code maxDividend} lies below that; and both
+   * double forms are exact over the site's dividends where {@code recipExact} says so. The first
+   * failing dividend of each site is pinned in {@code VarkaChronoSuite}. Where a constant's comment
+   * in {@link VarkaChrono} quotes a bound, it says whether the bound is exact or sufficient.
    *
    * <p>{@code recipExact} is transcribed from {@code sql/varka/plans/verify_double_division.py},
    * which decides it per (divisor, range) by exhaustive probe rather than by the size of the
@@ -1567,31 +1608,74 @@ final class VarkaChronoLowering {
    * default would do; it is never emitted with a form that would compute a wrong quotient.
    */
   enum ChronoDivide {
-    QUARTER(3, VarkaChrono.QUARTER_M, VarkaChrono.QUARTER_K, true),
-    CENTURY(36524, VarkaChrono.CENTURY_M, VarkaChrono.CENTURY_K, true),
-    YEAR_OF_CENTURY(365, VarkaChrono.YEAR_M, VarkaChrono.YEAR_K, true),
-    MONTH(153, VarkaChrono.MONTH_M, VarkaChrono.MONTH_K, true),
+    /** {@code (month + 2) / 3}. */
+    QUARTER(3, VarkaChrono.QUARTER_M, VarkaChrono.QUARTER_K, true, 12 + 2, 1, 0, false),
+    /** The century of the day of era, {@code [0, ERA_DAYS - 1]}. */
+    CENTURY(36524, VarkaChrono.CENTURY_M, VarkaChrono.CENTURY_K, true,
+        VarkaChrono.ERA_DAYS - 1, 1, 0, true),
+    /** The year of the day of century, at most {@code CENTURY_DAYS} after the era's fold. */
+    YEAR_OF_CENTURY(365, VarkaChrono.YEAR_M, VarkaChrono.YEAR_K, true,
+        VarkaChrono.CENTURY_DAYS, 1, 0, false),
+    /** {@code (5 * dayOfYear + 2) / 153}, the March-based day of year at most 365. */
+    MONTH(153, VarkaChrono.MONTH_M, VarkaChrono.MONTH_K, true, 5 * 365 + 2, 1, 0, false),
+    /** The century of the scaled day of era, {@code 4 * dayOfEra + 3}. */
     JULIAN_CENTURY(VarkaChrono.ERA_DAYS,
-        VarkaChrono.JULIAN_CENTURY_M, VarkaChrono.JULIAN_CENTURY_K, true),
-    JULIAN_YEAR(1461, VarkaChrono.JULIAN_YEAR_M, VarkaChrono.JULIAN_YEAR_K, true),
-    DAY_OF_MONTH(2141, VarkaChrono.DOM_M, VarkaChrono.DOM_K, true),
-    MONTH_START(5, VarkaChrono.DAY_M, VarkaChrono.DAY_K, true),
-    MONTH_ARITH(12, VarkaChrono.MONTH_ARITH_M, VarkaChrono.MONTH_ARITH_K, true),
-    YEAR_OF_ERA_400(400, VarkaChrono.YEAR_CENTURY_M, VarkaChrono.YEAR_QUATERCENTENNIAL_K, true),
-    YEAR_OF_ERA_100(100, VarkaChrono.YEAR_CENTURY_M, VarkaChrono.YEAR_CENTURY_K, true),
-    WEEK(7, VarkaChrono.WEEK_M, VarkaChrono.WEEK_K, true),
-    ERA_NARROW(VarkaChrono.ERA_DAYS, VarkaChrono.NARROW_ERA_M, VarkaChrono.NARROW_ERA_K, false);
+        VarkaChrono.JULIAN_CENTURY_M, VarkaChrono.JULIAN_CENTURY_K, true,
+        4 * (VarkaChrono.ERA_DAYS - 1) + VarkaChrono.QUAD_DAY_ADD, 4, VarkaChrono.QUAD_DAY_ADD,
+        true),
+    /** The year of era of the mapped count, the scaled day plus four per century, centuries 0-3. */
+    JULIAN_YEAR(1461, VarkaChrono.JULIAN_YEAR_M, VarkaChrono.JULIAN_YEAR_K, true,
+        4 * (VarkaChrono.ERA_DAYS - 1) + VarkaChrono.QUAD_DAY_ADD + 4 * 3, 4,
+        VarkaChrono.QUAD_DAY_ADD, true),
+    /** The zero-based day of month out of the numerator's low 16 bits. */
+    DAY_OF_MONTH(2141, VarkaChrono.DOM_M, VarkaChrono.DOM_K, true, 0xFFFF, 1, 0, false),
+    /** {@code (153 * marchMonth + 2) / 5}, the March-based month 0-11. */
+    MONTH_START(5, VarkaChrono.DAY_M, VarkaChrono.DAY_K, true, 153 * 11 + 2, 1, 0, false),
+    /** {@code ((month - 1) + months + MONTH_ARITH_BIAS) / 12}, the months the guard admits. */
+    MONTH_ARITH(12, VarkaChrono.MONTH_ARITH_M, VarkaChrono.MONTH_ARITH_K, true,
+        11 + VarkaChrono.MONTH_ARITH_MAX_MONTHS + VarkaChrono.MONTH_ARITH_BIAS, 1, 0, false),
+    /**
+     * The era of a biased March-based year. The widest year the inverse direction receives is
+     * taken conservatively: the largest year the calendar lowering decomposes,
+     * {@code YEAR_FIELD_MAGNITUDE}, plus the most whole years the month arithmetic adds.
+     */
+    YEAR_OF_ERA_400(400, VarkaChrono.YEAR_CENTURY_M, VarkaChrono.YEAR_QUATERCENTENNIAL_K, true,
+        VarkaChrono.YEAR_FIELD_MAGNITUDE + (11 + VarkaChrono.MONTH_ARITH_MAX_MONTHS) / 12
+            + VarkaChrono.YEAR_BIAS, 1, 0, true),
+    /** The century of the year of era. */
+    YEAR_OF_ERA_100(100, VarkaChrono.YEAR_CENTURY_M, VarkaChrono.YEAR_CENTURY_K, true, 399, 1, 0,
+        true),
+    /** {@code (januaryDayOfYear - 1) / 7}, the day of year at most 366. */
+    WEEK(7, VarkaChrono.WEEK_M, VarkaChrono.WEEK_K, true, 365, 1, 0, false),
+    /** The era of the biased day, to the last day the decomposition is exact for. */
+    ERA_NARROW(VarkaChrono.ERA_DAYS, VarkaChrono.NARROW_ERA_M, VarkaChrono.NARROW_ERA_K, false,
+        VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS + VarkaChrono.NARROW_BIAS, 1, 0, true);
 
     final int divisor;
     final int m;
     final int k;
     final boolean recipExact;
+    /** The largest dividend the site sees; every dividend is non-negative. */
+    final int maxDividend;
+    /** The dividends are {@code stride * x + residue}: 4 and 3 at the Julian sites, else 1, 0. */
+    final int stride;
+    final int residue;
+    /**
+     * Whether the magic quotient is followed by one round-down carry. {@link Divider#carries}
+     * refuses a site marked false, so the proof cannot state a carry the emitter does not emit.
+     */
+    final boolean carried;
 
-    ChronoDivide(int divisor, int m, int k, boolean recipExact) {
+    ChronoDivide(int divisor, int m, int k, boolean recipExact, int maxDividend, int stride,
+        int residue, boolean carried) {
       this.divisor = divisor;
       this.m = m;
       this.k = k;
       this.recipExact = recipExact;
+      this.maxDividend = maxDividend;
+      this.stride = stride;
+      this.residue = residue;
+      this.carried = carried;
     }
   }
 

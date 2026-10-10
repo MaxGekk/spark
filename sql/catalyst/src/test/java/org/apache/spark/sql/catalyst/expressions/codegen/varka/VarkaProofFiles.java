@@ -60,6 +60,9 @@ final class VarkaProofFiles {
     files.put("java_check.smt2", javaCheck());
     files.put("int_mulhi_divide.smt2", intMulHiDivide());
     files.put("long_divide.smt2", longDivide());
+    files.put("chrono_divide.smt2", chronoDivide());
+    files.put("floor_mod7.smt2", floorMod7());
+    files.put("leap_hash.smt2", leapHash());
     return files;
   }
 
@@ -81,14 +84,23 @@ final class VarkaProofFiles {
 
       """;
 
-  private static final String RENDERED = """
-      ;
-      ; Rendered by VarkaProofFiles. VarkaProofFilesSuite fails when this file differs from its
-      ; rendering, and VARKA_PROOFS_REGEN=true build/sbt 'catalyst/testOnly *VarkaProofFilesSuite'
-      ; rewrites it. Run by dev/varka_prove.sh, which inserts java.smt2 after the set-logic line.
+  private static final String RENDERED = rendered("QF_NIA");
 
-      (set-logic QF_NIA)
-      """;
+  /**
+   * The lines every rendered file shares after its own header, ending in its logic. A file
+   * declares {@code ALL} where cvc5 decides its checks only under it (VARKA-242.md 2.2) or where
+   * it reasons over bit-vectors, which {@code QF_NIA} does not admit.
+   */
+  private static String rendered(String logic) {
+    return """
+        ;
+        ; Rendered by VarkaProofFiles. VarkaProofFilesSuite fails when this file differs from its
+        ; rendering, and VARKA_PROOFS_REGEN=true build/sbt 'catalyst/testOnly *VarkaProofFilesSuite'
+        ; rewrites it. Run by dev/varka_prove.sh, which inserts java.smt2 after the set-logic line.
+
+        (set-logic %s)
+        """.formatted(logic);
+  }
 
   // -----------------------------------------------------------------------------------------
   // The multiply-high division (VARKA-149), proven per divisor.
@@ -404,6 +416,452 @@ final class VarkaProofFiles {
   }
 
   // -----------------------------------------------------------------------------------------
+  // The calendar's constant divisions (VARKA-242), proven per site.
+  // -----------------------------------------------------------------------------------------
+
+  /**
+   * {@code chrono_divide.smt2}: for every {@link VarkaChronoLowering.ChronoDivide} site, the
+   * magic form with its carry where the table says so is {@code v / d} over the site's dividends
+   * up to one below the first that fails, and fails there; without its carry it fails inside the
+   * site's range; and the two double forms, {@code DOUBLE_DIV} and {@code DOUBLE_RECIP}, are exact
+   * over the range, or for a reciprocal the table marks inexact, wrong inside it.
+   */
+  static String chronoDivide() {
+    var out = new StringBuilder(LICENSE);
+    out.append("""
+        ; The calendar's constant divisions (VarkaChronoLowering.ChronoDivide) are exact over the
+        ; dividends each site sees (VARKA-242). Per lane, at the int lane, with (m, k) the site's
+        ; magic pair and d its divisor:
+        ;
+        ;   the magic form, emitDivide and emitCarry:
+        ;     int q = (v * m) >>> k;           IntVector.mul, LSHR
+        ;     if (v - q * d >= d) q = q + 1;   the carry, at the sites the table marks carried
+        ;
+        ;   the double forms, emitDoubleDivide under DOUBLE_DIV and DOUBLE_RECIP:
+        ;     int q = (int) ((double) v / d);           I2D, DoubleVector.div, D2I
+        ;     int q = (int) ((double) v * (1.0 / d));   I2D, DoubleVector.mul, D2I
+        ;
+        ; A site's dividends are stride * x + residue, non-negative, up to its maxDividend: the
+        ; Julian sites divide 4 * dayOfEra + 3 and what the map adds to it in fours, every other
+        ; site an interval from 0. For each site the magic form is shown exact to one below the
+        ; first dividend of that shape where it fails, which VarkaProofFiles found by scanning
+        ; while rendering, and wrong there, so the solver confirms the scan; the rendering refuses
+        ; a maxDividend at or past it. A carried site is shown wrong without its carry inside its
+        ; range, so no site is marked carried for nothing. The double forms are stated per
+        ; quotient binade, as in long_divide.smt2, with a check that the binades cover the range.
+        """);
+    out.append(RENDERED);
+    out.append("""
+
+        ; Lemma: an integer n with 0 < n < 2^31 rounds to itself, so I2D of a dividend is exact and
+        ; the checks below write it without its rounding.
+        """);
+    for (int j = 0; j <= 30; j++) {
+      long[] s = {1, 1L << (52 - j)};
+      check(out, "an integer in [2^" + j + ", 2^" + (j + 1) + ") rounds to itself", "unsat",
+          List.of("(declare-const n Int)", "(declare-const M Int)",
+              "(assert (and (<= " + (1L << j) + " n) (< n " + (1L << (j + 1)) + ")))",
+              "(assert (jdouble.rne n 1 M " + s[0] + " " + s[1] + "))",
+              "(assert (not (= (* M " + s[0] + ") (* n " + s[1] + "))))"));
+    }
+    out.append("""
+
+        (define-fun chrono.magic ((v Int) (m Int) (k Int) (d Int) (carry Bool)) Int
+          (let ((q (jint.ushr (jint.mul v m) k)))
+            (ite (and carry (>= (jint.sub v (jint.mul q d)) d)) (jint.add q 1) q)))
+        """);
+    for (VarkaChronoLowering.ChronoDivide site : VarkaChronoLowering.ChronoDivide.values()) {
+      chronoMagic(out, site);
+      chronoDouble(out, site, false);
+      chronoDouble(out, site, true);
+    }
+    return out.toString();
+  }
+
+  /**
+   * The first dividend of the site's shape where the scalar magic form, with its carry where the
+   * table says so, is not {@code v / d}: {@code (v * m) >>> k} in Java's own int arithmetic.
+   */
+  static int chronoFirstWrong(VarkaChronoLowering.ChronoDivide site) {
+    for (int v = site.residue; v >= 0; v += site.stride) {
+      if (chronoMagicScalar(site, v, site.carried) != v / site.divisor) {
+        return v;
+      }
+    }
+    throw new IllegalStateException(site + "'s magic form is exact over every int of its shape");
+  }
+
+  private static int chronoMagicScalar(VarkaChronoLowering.ChronoDivide site, int v,
+      boolean carry) {
+    int q = (v * site.m) >>> site.k;
+    if (carry && v - q * site.divisor >= site.divisor) {
+      q++;
+    }
+    return q;
+  }
+
+  /** The first dividend of the site's shape where the reciprocal form is wrong, or -1. */
+  private static int chronoRecipFirstWrong(VarkaChronoLowering.ChronoDivide site) {
+    double recip = 1.0 / site.divisor;
+    for (int v = site.residue; v >= 0 && v <= site.maxDividend; v += site.stride) {
+      if ((int) ((double) v * recip) != v / site.divisor) {
+        return v;
+      }
+    }
+    return -1;
+  }
+
+  /** That {@code v} is of the site's shape: {@code stride * x + residue}, from 0 to {@code max}. */
+  private static String chronoShape(VarkaChronoLowering.ChronoDivide site, long lo, long max) {
+    String range = "(<= " + lo + " v) (<= v " + max + ")";
+    return site.stride == 1 ? "(assert (and " + range + "))"
+        : "(assert (and " + range + " (= (mod v " + site.stride + ") " + site.residue + ")))";
+  }
+
+  private static void chronoMagic(StringBuilder out, VarkaChronoLowering.ChronoDivide site) {
+    int d = site.divisor;
+    int first = chronoFirstWrong(site);
+    if (site.maxDividend > first - site.stride) {
+      throw new IllegalStateException(site + "'s dividends reach " + site.maxDividend
+          + ", and its magic form first fails at " + first);
+    }
+    out.append("\n; ").append(site).append(": d = ").append(d).append(", (m, k) = (")
+        .append(site.m).append(", ").append(site.k).append(")")
+        .append(site.carried ? " and a carry" : "").append(", dividends ")
+        .append(site.stride == 1 ? "0" : site.stride + "x + " + site.residue).append(" to ")
+        .append(site.maxDividend).append(", first wrong ").append(first).append("\n");
+    String form = "(chrono.magic v " + site.m + " " + site.k + " " + d + " " + site.carried + ")";
+    check(out, site + ": the magic form is v / " + d + " for every dividend of its shape to "
+        + (first - site.stride) + ", past its " + site.maxDividend, "unsat", List.of(
+        "(declare-const v Int)", chronoShape(site, 0, first - site.stride),
+        "(assert (not (= " + form + " (div v " + d + "))))"));
+    check(out, site + ": and it is not at " + first, "sat", List.of("(declare-const v Int)",
+        "(assert (= v " + first + "))", "(assert (not (= " + form + " (div v " + d + "))))"));
+    if (site.carried) {
+      check(out, site + ": without the carry it is not, inside the range", "sat", List.of(
+          "(declare-const v Int)", chronoShape(site, 0, site.maxDividend),
+          "(assert (not (= (chrono.magic v " + site.m + " " + site.k + " " + d + " false) (div v "
+              + d + "))))"));
+    }
+  }
+
+  /**
+   * {@code DOUBLE_DIV} or {@code DOUBLE_RECIP} over the site's range: the exact quotient is
+   * {@code (v * num) / den}, with {@code num / den} either {@code 1 / d} or the double nearest
+   * {@code 1 / d}, and it rounds in a named binade.
+   */
+  private static void chronoDouble(StringBuilder out, VarkaChronoLowering.ChronoDivide site,
+      boolean recip) {
+    int d = site.divisor;
+    String name = recip ? "DOUBLE_RECIP" : "DOUBLE_DIV";
+    BigInteger num = BigInteger.ONE;
+    BigInteger den = BigInteger.valueOf(d);
+    String a = "v";
+    if (recip) {
+      double r = 1.0 / d;
+      long raw = Double.doubleToRawLongBits(r);
+      num = BigInteger.valueOf((raw & VarkaDivisionLowering.MANTISSA_52) | P52);
+      den = BigInteger.ONE.shiftLeft(52 - Math.getExponent(r));
+      a = "(* v " + num + ")";
+      out.append("; ").append(site).append(": 1.0 / ").append(d).append(" is ").append(num)
+          .append(" * 2^-").append(52 - Math.getExponent(r)).append("\n");
+    }
+    BigInteger lowest = BigInteger.valueOf(site.residue == 0 ? site.stride : site.residue);
+    BigInteger max = BigInteger.valueOf(site.maxDividend);
+    // The exact quotients lie in binades kLo to kHi; a rounding at the top of one lands on the
+    // bottom of the next one up, so the rounded quotient can also be in kLo - 1.
+    int kLo = binade(max.multiply(num), den);
+    int kHi = binade(lowest.multiply(num), den);
+    if (!recip || site.recipExact) {
+      check(out, site + ": " + name + "'s quotients over its range lie in binades 2^-" + kLo
+          + " to 2^-" + kHi, "unsat", List.of("(declare-const v Int)",
+          chronoShape(site, lowest.longValue(), site.maxDividend),
+          "(assert (not (and " + scaledAtLeast(a, den, kHi, 52) + " (not "
+              + scaledAtLeast(a, den, kLo, 53) + "))))"));
+      for (int k = kLo - 1; k <= kHi; k++) {
+        String[] s = scale(-k);
+        check(out, site + ": " + name + " is v / " + d + " over its range, quotient in binade 2^-"
+            + k, "unsat", List.of("(declare-const v Int)", "(declare-const M Int)",
+            "(declare-const r Int)", chronoShape(site, lowest.longValue(), site.maxDividend),
+            "(assert (jdouble.rne " + a + " " + den + " M " + s[0] + " " + s[1] + "))",
+            "(assert (jdouble.d2l.mag r M " + s[0] + " " + s[1] + "))",
+            "(assert (not (= r (div v " + d + "))))"));
+      }
+      if (site.residue == 0) {
+        check(out, site + ": " + name + " takes 0 to 0", "unsat",
+            List.of("(assert (not (= 0 (div 0 " + d + "))))"));
+      }
+      return;
+    }
+    int wrong = chronoRecipFirstWrong(site);
+    if (wrong < 0) {
+      throw new IllegalStateException(site + " is marked recipExact = false, and the reciprocal "
+          + "is exact over its range");
+    }
+    // The product rounds in the exact quotient's binade or, at its top, onto the next one up.
+    int k = binade(BigInteger.valueOf(wrong).multiply(num), den);
+    String[] s = scale(-k);
+    String[] up = scale(-(k - 1));
+    check(out, site + ": recipExact is false: " + name + " is not v / " + d + " at " + wrong
+        + ", inside the range", "sat", List.of("(declare-const v Int)", "(declare-const M Int)",
+        "(declare-const r Int)", "(assert (= v " + wrong + "))",
+        "(assert (or (and (jdouble.rne " + a + " " + den + " M " + s[0] + " " + s[1]
+            + ") (jdouble.d2l.mag r M " + s[0] + " " + s[1] + "))",
+        "            (and (jdouble.rne " + a + " " + den + " M " + up[0] + " " + up[1]
+            + ") (jdouble.d2l.mag r M " + up[0] + " " + up[1] + "))))",
+        "(assert (not (= r (div v " + d + "))))"));
+  }
+
+  /** {@code (a / b) * 2^k >= 2^e} for an expression {@code a}, as a linear inequality. */
+  private static String scaledAtLeast(String a, BigInteger b, int k, int e) {
+    BigInteger left = BigInteger.ONE.shiftLeft(Math.max(k, 0));
+    BigInteger right = b.shiftLeft(k >= 0 ? e : e - k);
+    return "(>= (* " + a + " " + left + ") " + right + ")";
+  }
+
+  // -----------------------------------------------------------------------------------------
+  // floorMod(v, 7) (VARKA-242), its three forms.
+  // -----------------------------------------------------------------------------------------
+
+  private static final long P32 = 1L << 32;
+
+  /**
+   * {@code floor_mod7.smt2}: each of {@code emitFloorMod7}'s three forms is
+   * {@code Math.floorMod(v, 7)} for every int {@code v}, stated as lemmas over the digits each
+   * fold splits its input into (VARKA-242.md 2.2), and a check per form that the lemmas compose.
+   */
+  static String floorMod7() {
+    var folds = new ArrayList<VarkaChronoLowering.Fold>(VarkaChronoLowering.FLOOR_MOD7_FOLDS);
+    folds.addAll(VarkaChronoLowering.DIGIT_SUM_FOLDS);
+    for (VarkaChronoLowering.Fold f : folds) {
+      if (f.mask() != (1 << f.shift()) - 1) {
+        throw new IllegalStateException("floor_mod7.smt2 states a fold whose mask is its shift's "
+            + "low bits, and " + f + " is not one");
+      }
+    }
+    int fix = VarkaChronoLowering.FLOOR_MOD7_SIGN_FIX;
+    var out = new StringBuilder(LICENSE);
+    out.append("""
+        ; floorMod(v, 7) is what VarkaChronoLowering.emitFloorMod7 computes, in each of its three
+        ; forms, for every int v (VARKA-242). Per lane:
+        ;
+        ;   a fold, VarkaChronoLowering.Fold:     y = (x & (2^k - 1)) + (x >>> k)
+        ;   the shipped form (FloorMod7.MAGIC):   two folds of 15 bits; + 3 where v < 0;
+        ;                                         r = g - ((g * 37450) >>> 18) * 7
+        ;   FloorMod7.DIGIT_SUM:                  folds of 15, 15, 6, 3, 3 and 3 bits; + 3 where
+        ;                                         v < 0; - 7 where that is at least 7
+        ;   FloorMod7.DIV:                        r = v - (v / 7) * 7; + 7 where r < 0
+        ;
+        ; The folds read v unsigned, as u = v or v + 2^32. Each is stated by the digits of its
+        ; input, u = 2^k * a + b with 0 <= b < 2^k, so every check is linear arithmetic over a few
+        ; small variables: a lemma that the prelude's & and >>> give b and a, at both signs; a
+        ; lemma per fold that a + b keeps the residue mod 7, since 2^k is 1 mod 7 for k = 15, 6
+        ; and 3, and is at most the bound written; that + 3 restores a negative v's residue, since
+        ; 2^32 is 4 mod 7; and the last step over the small value the folds leave. A check per
+        ; form then takes the lemmas' conclusions as its premises and shows the result is v's
+        ; residue. A residue kept is written as a difference that is a multiple of 7, and in the
+        ; composition as 7 times a declared integer, with no mod at all: cvc5 decides each of
+        ; these checks alone in milliseconds, but within the file its earlier checks left the mod
+        ; forms of two of them unknown. The file declares ALL: under QF_NIA cvc5 leaves six of
+        ; these checks unknown, under ALL it decides every one (VARKA-242.md 2.2).
+        """);
+    out.append(rendered("ALL"));
+    out.append("""
+
+        (define-fun fm7.unsigned ((x Int)) Int (ite (< x 0) (+ x 4294967296) x))
+        """);
+    out.append("\n; The prelude's & and >>> give a fold's digits.\n");
+    var seen = new java.util.LinkedHashSet<VarkaChronoLowering.Fold>(folds);
+    for (VarkaChronoLowering.Fold f : seen) {
+      long base = 1L << f.shift();
+      for (boolean negative : new boolean[] {false, true}) {
+        String sign = negative ? "(< x 0)" : "(>= x 0)";
+        String digits = "(assert (and (= (fm7.unsigned x) (+ (* " + base + " a) b)) (<= 0 b) (< b "
+            + base + ")))";
+        var decl = List.of("(declare-const x Int)", "(declare-const a Int)",
+            "(declare-const b Int)", "(assert (and (jint.in x) " + sign + "))", digits);
+        String which = negative ? "a negative" : "a non-negative";
+        var mask = new ArrayList<>(decl);
+        mask.add("(assert (not (= (jint.and.low x " + base + ") b)))");
+        check(out, "x & " + f.mask() + " is the low digit b of " + which + " int's unsigned "
+            + "reading", "unsat", mask);
+        var shift = new ArrayList<>(decl);
+        shift.add("(assert (not (= (jint.ushr x " + f.shift() + ") a)))");
+        check(out, "x >>> " + f.shift() + " is the high digit a of " + which + " int's unsigned "
+            + "reading", "unsat", shift);
+      }
+    }
+    long shippedMax = foldResidues(out, "the shipped form", VarkaChronoLowering.FLOOR_MOD7_FOLDS);
+    long digitMax = foldResidues(out, "DIGIT_SUM", VarkaChronoLowering.DIGIT_SUM_FOLDS);
+    out.append("\n; The sign fixup, and the last steps.\n");
+    check(out, "+ " + fix + " restores a negative int's residue from its unsigned reading", "unsat",
+        List.of("(declare-const x Int)", "(assert (and (jint.in x) (< x 0)))",
+            "(assert (not (= (mod (- (+ (fm7.unsigned x) " + fix + ") x) 7) 0)))"));
+    for (long max : new long[] {shippedMax, digitMax}) {
+      check(out, "+ " + fix + " does not wrap over [0, " + max + "]", "unsat",
+          List.of("(declare-const y Int)", "(assert (and (<= 0 y) (<= y " + max + ")))",
+              "(assert (not (= (jint.add y " + fix + ") (+ y " + fix + "))))"));
+    }
+    long g = shippedMax + fix;
+    int m = VarkaChronoLowering.FLOOR_MOD7_M;
+    int k = VarkaChronoLowering.FLOOR_MOD7_K;
+    check(out, "the shipped form: (g * " + m + ") >>> " + k + " is g / 7 over [0, " + g + "]",
+        "unsat", List.of("(declare-const g Int)", "(assert (and (<= 0 g) (<= g " + g + ")))",
+            "(assert (not (= (jint.ushr (jint.mul g " + m + ") " + k + ") (div g 7))))"));
+    check(out, "the shipped form: g - (g / 7) * 7 is g's residue over [0, " + g + "]", "unsat",
+        List.of("(declare-const g Int)", "(assert (and (<= 0 g) (<= g " + g + ")))",
+            "(assert (not (= (jint.sub g (jint.mul (div g 7) 7)) (mod g 7))))"));
+    long h = digitMax + fix;
+    check(out, "DIGIT_SUM: one subtract of 7 where at least 7 is the residue over [0, " + h + "]",
+        "unsat", List.of("(declare-const g Int)", "(assert (and (<= 0 g) (<= g " + h + ")))",
+            "(assert (not (= (ite (>= g 7) (jint.sub g 7) g) (mod g 7))))"));
+    out.append("\n; Each form composed: the lemmas' conclusions as premises.\n");
+    foldComposition(out, "the shipped form", VarkaChronoLowering.FLOOR_MOD7_FOLDS, fix);
+    foldComposition(out, "DIGIT_SUM", VarkaChronoLowering.DIGIT_SUM_FOLDS, fix);
+    // DIV through the truncated quotient q, named: stated in one check, cvc5 cannot decide it.
+    for (boolean negative : new boolean[] {false, true}) {
+      String which = negative ? "a negative" : "a non-negative";
+      var decl = List.of("(declare-const x Int) (declare-const q Int) (declare-const t Int)",
+          "(assert (and (jint.in x) " + (negative ? "(< x 0)" : "(>= x 0)") + "))",
+          "(assert (and (= x (+ (* 7 q) t)) "
+              + (negative ? "(< (- 7) t) (<= t 0)" : "(<= 0 t) (< t 7)") + "))");
+      var quotient = new ArrayList<>(decl);
+      quotient.add("(assert (not (= (jint.div x 7) q)))");
+      check(out, "DIV: v / 7 is the quotient truncated toward zero, for " + which + " int",
+          "unsat", quotient);
+      var rem = new ArrayList<>(decl);
+      rem.add("(assert (not (= (jint.sub x (jint.mul q 7)) t)))");
+      check(out, "DIV: v - (v / 7) * 7 is the remainder t, without wrapping, for " + which
+          + " int", "unsat", rem);
+      var rest = new ArrayList<>(decl);
+      rest.add(RESIDUE_OF_X);
+      rest.add("(assert (not (= (ite (< t 0) (jint.add t 7) t) sx)))");
+      check(out, "DIV: t, + 7 where negative, is the residue, for " + which + " int", "unsat",
+          rest);
+    }
+    check(out, "Math.floorMod(v, 7) is v's non-negative residue for every int", "unsat",
+        List.of("(declare-const x Int)", "(assert (jint.in x))", RESIDUE_OF_X,
+            "(assert (not (= (jint.floorMod x 7) sx)))"));
+    return out.toString();
+  }
+
+  /** {@code sx}, the residue of {@code x} mod 7, by its own quotient rather than by {@code mod}. */
+  private static final String RESIDUE_OF_X = "(declare-const qx Int) (declare-const sx Int)\n"
+      + "(assert (and (= x (+ (* 7 qx) sx)) (<= 0 sx) (< sx 7)))";
+
+  /** The largest {@code (y >>> shift) + (y & (2^shift - 1))} over {@code 0 <= y <= max}. */
+  private static long foldMax(long max, int shift) {
+    long mask = (1L << shift) - 1;
+    long q = max >>> shift;
+    return Math.max(q + (max & mask), q >= 1 ? q - 1 + mask : 0);
+  }
+
+  /** A lemma per fold of the chain: the residue kept, the sum bounded. Returns the last bound. */
+  private static long foldResidues(StringBuilder out, String form,
+      List<VarkaChronoLowering.Fold> chain) {
+    out.append("\n; ").append(form).append("'s folds keep the residue mod 7.\n");
+    long max = P32 - 1;
+    for (VarkaChronoLowering.Fold f : chain) {
+      long next = foldMax(max, f.shift());
+      long base = 1L << f.shift();
+      check(out, form + ": a fold of " + f.shift() + " bits over [0, " + max + "] is at most "
+          + next + " and keeps the residue", "unsat", List.of("(declare-const y Int)",
+          "(declare-const a Int)", "(declare-const b Int)",
+          "(assert (and (<= 0 y) (<= y " + max + ") (= y (+ (* " + base + " a) b)) (<= 0 b) (< b "
+              + base + ")))",
+          "(assert (not (and (<= (+ a b) " + next + ") (= (mod (- y (+ a b)) 7) 0))))"));
+      max = next;
+    }
+    return max;
+  }
+
+  /**
+   * That the lemmas compose: from each fold's residue and bound, the sign fixup and the last
+   * step's equation, the form's result is {@code mod(v, 7)}.
+   */
+  private static void foldComposition(StringBuilder out, String form,
+      List<VarkaChronoLowering.Fold> chain, int fix) {
+    var body = new ArrayList<String>();
+    body.add("(declare-const x Int)");
+    body.add("(assert (jint.in x))");
+    String prev = "(fm7.unsigned x)";
+    long max = P32 - 1;
+    for (int i = 0; i < chain.size(); i++) {
+      max = foldMax(max, chain.get(i).shift());
+      body.add("(declare-const y" + i + " Int) (declare-const c" + i + " Int)");
+      body.add("(assert (and (<= 0 y" + i + ") (<= y" + i + " " + max + ") (= (- " + prev + " y"
+          + i + ") (* 7 c" + i + "))))");
+      prev = "y" + i;
+    }
+    body.add("(define-fun g () Int (ite (< x 0) (+ " + prev + " " + fix + ") " + prev + "))");
+    body.add("(declare-const cf Int)");
+    body.add("(assert (=> (< x 0) (= (- (+ (fm7.unsigned x) " + fix + ") x) (* 7 cf))))");
+    body.add("; mod g 7 and mod x 7, as the residues sg and sx of their own quotients");
+    body.add("(declare-const qg Int) (declare-const sg Int)");
+    body.add("(assert (and (= g (+ (* 7 qg) sg)) (<= 0 sg) (< sg 7)))");
+    body.add(RESIDUE_OF_X);
+    body.add("(assert (not (= sg sx)))");
+    check(out, form + ": the folds, the fixup and the last step give v's residue", "unsat", body);
+  }
+
+  // -----------------------------------------------------------------------------------------
+  // The leap hash's unsigned compare (VARKA-242).
+  // -----------------------------------------------------------------------------------------
+
+  /**
+   * {@code leap_hash.smt2}: {@link VarkaChrono#isLeapYear}'s hash, which
+   * {@code VarkaChronoLowering}'s leap flag emits, is the Gregorian rule over every biased year to
+   * {@link VarkaChrono#LEAP_HASH_MAX_BIASED_YEAR}, is not one year past it, and would not be with a
+   * signed compare.
+   */
+  static String leapHash() {
+    int max = VarkaChrono.LEAP_HASH_MAX_BIASED_YEAR;
+    var out = new StringBuilder(LICENSE);
+    out.append("""
+        ; The leap flag's perfect hash (VarkaChrono.isLeapYear, VarkaChronoLowering's leap flag) is
+        ; the Gregorian rule over its whole domain (VARKA-242). Per lane, y the year biased by
+        ; YEAR_BIAS, a multiple of 400, so leapness is unchanged and y is non-negative:
+        ;
+        ;   leap = Integer.compareUnsigned((y * LEAP_HASH_M) & LEAP_HASH_MASK, LEAP_HASH_MAX) <= 0
+        ;                                   IntVector.mul, and, compare ULE
+        ;
+        ; Over 32-bit vectors, whose bvmul, bvand and bvule are Java's int *, & and the unsigned
+        ; compare exactly: the hash is the rule (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)) for
+        ; every biased year up to LEAP_HASH_MAX_BIASED_YEAR, is not one year past it, so the bound
+        ; is exact, and a signed compare would be wrong inside the range. Over integers this ran
+        ; past ten minutes under Z3 (VARKA-240); over bit-vectors it takes under a second. The file
+        ; declares ALL so that the prelude, which it does not use, can be inserted.
+        """);
+    out.append(rendered("ALL"));
+    out.append("\n(define-fun leap.hash ((y (_ BitVec 32))) (_ BitVec 32)\n  (bvand (bvmul y ")
+        .append(bv(VarkaChrono.LEAP_HASH_M)).append(") ").append(bv(VarkaChrono.LEAP_HASH_MASK))
+        .append("))\n");
+    out.append("""
+        (define-fun leap.gregorian ((y (_ BitVec 32))) Bool
+          (and (= (bvurem y #x00000004) #x00000000)
+               (or (not (= (bvurem y #x00000064) #x00000000))
+                   (= (bvurem y #x00000190) #x00000000))))
+        """);
+    String unsigned = "(bvule (leap.hash y) " + bv(VarkaChrono.LEAP_HASH_MAX) + ")";
+    String signed = "(bvsle (leap.hash y) " + bv(VarkaChrono.LEAP_HASH_MAX) + ")";
+    check(out, "the hash, compared unsigned, is the Gregorian rule for every biased year to " + max,
+        "unsat", List.of("(declare-const y (_ BitVec 32))", "(assert (bvule y " + bv(max) + "))",
+            "(assert (not (= " + unsigned + " (leap.gregorian y))))"));
+    check(out, "and it is not at " + (max + 1), "sat", List.of("(declare-const y (_ BitVec 32))",
+        "(assert (= y " + bv(max + 1) + "))",
+        "(assert (not (= " + unsigned + " (leap.gregorian y))))"));
+    check(out, "compared signed, it is not the rule inside the range", "sat", List.of(
+        "(declare-const y (_ BitVec 32))", "(assert (bvule y " + bv(max) + "))",
+        "(assert (not (= " + signed + " (leap.gregorian y))))"));
+    return out.toString();
+  }
+
+  /** An int as a 32-bit SMT-LIB bit-vector literal. */
+  private static String bv(int v) {
+    return String.format("#x%08x", v);
+  }
+
+  // -----------------------------------------------------------------------------------------
   // The prelude against the JVM.
   // -----------------------------------------------------------------------------------------
 
@@ -461,6 +919,13 @@ final class VarkaProofFiles {
       intUnary.add(eq("i2l", lit(a), lit((long) a)));
     }
     equations(out, "jint.neg, jint.not and i2l are Java's int -, int ~ and (long)", intUnary);
+    var intMask = new ArrayList<String>();
+    for (int a : INTS) {
+      for (int k : new int[] {3, 6, 15, 16}) {
+        intMask.add(eq("jint.and.low", lit(a) + " " + (1 << k), lit(a & ((1 << k) - 1))));
+      }
+    }
+    equations(out, "jint.and.low is Java's int & with a low mask, at both signs", intMask);
     longs(out, "jlong.add", "long +", LONGS, (a, b) -> a + b);
     longs(out, "jlong.sub", "long -", LONGS, (a, b) -> a - b);
     longs(out, "jlong.mul", "long *", LONGS, (a, b) -> a * b);
@@ -512,6 +977,18 @@ final class VarkaProofFiles {
       }
     }
     equations(out, "jdouble.rne is Java's / of two exact doubles", div);
+    // The calendar's reciprocal form (VARKA-242): an int dividend times the double nearest 1 / d.
+    var mul = new ArrayList<String>();
+    for (long d : new long[] {3, 7, 12, 100, 365, 1461, 146097}) {
+      double r = 1.0 / d;
+      long raw = Double.doubleToRawLongBits(r);
+      BigInteger mr = BigInteger.valueOf((raw & VarkaDivisionLowering.MANTISSA_52) | P52);
+      BigInteger den = BigInteger.ONE.shiftLeft(52 - Math.getExponent(r));
+      for (long v : new long[] {1, d - 1, d, d + 1, 3 * d, 584399, 20161385}) {
+        rounded(mul, BigInteger.valueOf(v).multiply(mr), den, (double) v * r);
+      }
+    }
+    equations(out, "jdouble.rne is Java's * of an int and the double nearest 1 / d", mul);
     // The magic form's q + 2^52 at a quotient ending in a half: the sum is a tie, and Java rounds
     // it to the even neighbour. As a rational, (2n + 1 + 2^53) / 2.
     var ties = new ArrayList<String>();

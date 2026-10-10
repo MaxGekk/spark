@@ -402,6 +402,32 @@ class VarkaChronoSuite extends SparkFunSuite with VarkaTestWatchdog {
     assert(684L * VarkaChrono.WEEK_M < Int.MaxValue.toLong)
   }
 
+  test("each calendar division site's magic first fails where its proof says (VARKA-242)") {
+    import VarkaChronoLowering.ChronoDivide
+    import VarkaChronoLowering.ChronoDivide._
+    // The first dividend of each site's shape where its magic form, with its carry where the
+    // site has one, is not v / d. chrono_divide.smt2 proves the form exact to the dividend below
+    // and wrong here; pinned in the JVM so that a changed constant shows in this diff as well.
+    val firstWrong = Map(
+      QUARTER -> 48, CENTURY -> 584429, YEAR_OF_CENTURY -> 44894, MONTH -> 4896,
+      JULIAN_CENTURY -> 2338035, JULIAN_YEAR -> 1496507, DAY_OF_MONTH -> 87780,
+      MONTH_START -> 5120, MONTH_ARITH -> 98304, YEAR_OF_ERA_400 -> 102401,
+      YEAR_OF_ERA_100 -> 102401, WEEK -> 685, ERA_NARROW -> 20161386)
+    assert(firstWrong.keySet === ChronoDivide.values().toSet)
+    def magic(site: ChronoDivide, v: Int): Int = {
+      val q = (v * site.m) >>> site.k
+      if (site.carried && v - q * site.divisor >= site.divisor) q + 1 else q
+    }
+    for ((site, first) <- firstWrong) {
+      val below = first - site.stride
+      assert(first % site.stride === site.residue, s"$site: $first is not of the site's shape")
+      assert(magic(site, below) === below / site.divisor, s"$site: wrong already at $below")
+      assert(magic(site, first) !== first / site.divisor, s"$site: right at $first")
+      assert(site.maxDividend <= below, s"$site: dividends reach past its exact bound")
+      assert(VarkaProofFiles.chronoFirstWrong(site) === first, s"$site: the proof's scan moved")
+    }
+  }
+
   test("the scalar weekOfYear is DateTimeUtils.getWeekOfYear at the ISO corners") {
     val days = Seq(
       LocalDate.of(2015, 12, 28), LocalDate.of(2016, 1, 1), LocalDate.of(2019, 12, 30),

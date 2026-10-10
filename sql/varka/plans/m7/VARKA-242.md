@@ -237,3 +237,78 @@ The proofs' solve times under both solvers, on the laptop and from this PR's CI.
 2. The prelude's `jint.and.low` with its JVM checks; the named constants and the table's fields,
    byte-identical; the three files rendered and proven; the pinned test; the labels.
 3. The records, and section 9.
+
+## 9. Outcome, 10 October 2026
+
+### 9.1 What was built
+
+Three rendered files, all holding under Z3 5.1.0 and cvc5 1.4.1, and each of their checks holding
+alone as well as in the file:
+
+| file | checks | Z3 | cvc5 |
+| :--- | ---: | ---: | ---: |
+| `chrono_divide.smt2` | 496 | 0.27 s | 0.65 s |
+| `floor_mod7.smt2` | 35 | 0.03 s | 0.06 s |
+| `leap_hash.smt2` | 3 | 0.24 s | 0.93 s |
+
+`ChronoDivide` carries each site's range, shape and carry, derived from `VarkaChrono`'s constants;
+`YEAR_OF_ERA_400`'s range comes to biased year 59647. `Divider.carries` refuses a site the table
+marks uncarried. `emitFloorMod7` loads its constants from `FLOOR_MOD7_FOLDS`, `DIGIT_SUM_FOLDS`,
+`FLOOR_MOD7_SIGN_FIX`, `FLOOR_MOD7_M` and `FLOOR_MOD7_K`. `java.smt2` gains `jint.and.low`, held to
+the JVM at both signs, and `java_check.smt2` holds `jdouble.rne` to Java's `*` of an int and the
+double nearest `1 / d`. Every bound `VarkaChrono` quotes is labelled exact or sufficient.
+`VarkaChronoSuite` pins each site's first failing dividend. `sql/varka/AGENTS.md` carries the rule.
+
+### 9.2 What the plan did not foresee
+
+* **cvc5 needed more than `ALL`.** Section 2.2's eighteen checks held, but the file as rendered
+  did not: two checks came back unknown, then after a rewrite one other, then another again. Each
+  of them held alone. The `+3` lemma and the composition, written with `mod`, failed only after
+  the file's earlier checks; the `DIV` form, one check over `jint.div`, failed alone too, though the
+  spike had passed it - after other checks. Three cvc5 options (`--simplification=none`,
+  `--arith-rewrite-equalities`, `--no-arith-brab`) each made the file hold, and each failed one of
+  the earlier variants, so none went into `dev/varka_prove.sh`. What made every check hold, alone
+  and in the file, was the encoding: a residue as 7 times a declared integer, never `mod`, in the
+  composition; the truncated quotient named, with a lemma that `jint.div` gives it; and one
+  wrapping operation per check. Hence 35 checks where section 3.2 counted fewer.
+* **A comment's bound was wrong, not merely loose.** `YEAR_M`'s javadoc said 45965 "would be exact
+  far further, to 1864135": in a 32-bit lane it first fails at 93440, where the multiply passes
+  2^32. Corrected in the comment.
+* **A site's theorem is not the decomposition's.** With `YEAR_M` raised by one (planted, 9.3), the
+  divide by 365 first fails at 22994, inside its range, and `VarkaChronoSuite`'s sweep of both
+  prefix forms over a whole era still passes: the step after it gives a day back when the year
+  overshoots and absorbs the error. Only the site's proof and the pinned dividend saw it.
+
+### 9.3 The planted faults
+
+Each in a copy; every one fails, under both solvers where a solver is what catches it.
+
+| fault | caught by |
+| :--- | :--- |
+| `CENTURY`'s carry removed from its check | the exactness check, `sat` |
+| `YEAR_OF_CENTURY`'s multiplier raised by one in its check | the exactness check |
+| `ERA_NARROW`'s shift raised by one in its check | the exactness check |
+| the stride dropped from `JULIAN_CENTURY`'s reciprocal checks | two binade checks, `sat` at 146097's neighbourhood |
+| a fold's mask one bit narrow in a digit lemma | the mask lemma |
+| the sign fixup 4 for 3 | the `+3` lemma |
+| the leap compare signed | the exactness check |
+| `jint.and.low` wrong for negative `x`, in the prelude | `java_check.smt2` and three mask lemmas |
+| `CENTURY` marked uncarried in the table (source) | the rendering refuses its range, and `Divider.carries` throws in the emitter suites |
+| `YEAR_M` raised by one (source) | the rendering refuses the range (first fails at 22994), and the pinned dividend |
+| a 14-bit fold in the shipped form (source) | the fold's residue lemma |
+
+### 9.4 The predictions scored
+
+1. **Holds, for the files as committed.** Z3 and cvc5 meet every expectation on every check of the
+   three files. The first rendering of `floor_mod7.smt2` did not under cvc5 (9.2).
+2. **Holds.** Every planted fault fails a check or the rendering (9.3), and the solver confirms each
+   site's first failing dividend both ways, at the value the Java scan found.
+3. **Holds.** The three files take 0.54 s under Z3 and 1.6 s under cvc5 on the laptop.
+
+### 9.5 What this leaves
+
+* **`MONTH_ARITH_MAX_MONTHS` could double**, to the magic's exact bound (2.1): a guard change, with
+  emitted bytes and declines moving, so a decision of its own, not taken here.
+* **The inverse direction's `/ 400` is exact to biased year 102400**, a hundred years short of the
+  leap hash; recorded in `YEAR_CENTURY_M`'s comment. No caller reaches past 59647.
+* **The emitted bytecode** stays the scalar twin's by the suites, not by these proofs: item 90.

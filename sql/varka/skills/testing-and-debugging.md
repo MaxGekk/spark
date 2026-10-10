@@ -779,8 +779,8 @@ hook and passed by accident, one because its `intercept[Throwable]` caught whate
 ## A solver proves an arithmetic lowering in integers, and its verdicts are checked like output
 
 VARKA-240 proves the int lane's multiply-high division exact with SMT solvers
-(`sql/varka/proofs/`, run by `dev/varka_prove.sh`), and VARKA-241 the long lane's two forms. Five
-things the next proof needs:
+(`sql/varka/proofs/`, run by `dev/varka_prove.sh`), VARKA-241 the long lane's two forms, and
+VARKA-242 the calendar's divisions, `floorMod7` and the leap hash. What the next proof needs:
 
 * **State Java's arithmetic over integers, not bit-vectors.** "For every int n, the lanes compute
   n / 12" over bit-vectors ran past five minutes under Z3, cvc5 and Bitwuzla alike, with Java's `/`
@@ -820,3 +820,20 @@ things the next proof needs:
   out; and the JVM check refusing a double's neighbours across a binade's edge as well as inside it
   - the neighbour inside the binade alone let a wrong midpoint at the bottom of a binade through
   every check until that was added.
+* **cvc5's `unknown` depends on the declared logic, the encoding, and what ran before**
+  (VARKA-242). `floorMod7`'s shipped form, stated directly over the prelude, takes Z3 3 s and cvc5
+  past 300 s, over bit-vectors both past 300 s. Stated by lemmas over each fold's digits
+  (`u = 2^k * a + b`), every step is linear over a few small variables, and both solvers decide it
+  in milliseconds - but cvc5 only under `(set-logic ALL)`: under `QF_NIA` it left six of the same
+  checks unknown after 60 s. And a check that holds alone can come back unknown after the file's
+  earlier checks: three times a rewrite fixed one check and moved the `unknown` to another. What
+  made the file hold whole and check by check was writing residues as 7 times a declared integer
+  instead of through `mod`, naming the truncated quotient instead of asking for `jint.div`, and one
+  wrapping operation per check. No cvc5 option was reliable: three fixed the file and each failed
+  an earlier variant. So a new proof file is run whole and each check alone, under both solvers.
+* **A site's theorem is not the decomposition's** (VARKA-242). With `YEAR_M` raised by one, the
+  divide by 365 first fails at 22994, inside its range of 36524, and still every sweep of the
+  century-then-year form agrees with `LocalDate` over a whole era: the step after it, which gives a
+  day back when the year overshoots, absorbs the error. The proof of each `ChronoDivide` site and
+  the pinned first failing dividends see it; an end-to-end sweep cannot. So a constant's comment
+  states its site's bound, and the proof holds the site to it.
