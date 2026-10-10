@@ -346,10 +346,14 @@ final class VarkaDivisionLowering {
         && analysis.options.convertsFallBack();
   }
 
-  /** {@code 2^52} as a double, and its bit pattern: the constants the magic form is built on. */
+  /**
+   * {@code 2^52} as a double, and its bit pattern: the constants the magic form is built on. The
+   * two bit patterns are package-private for {@code VarkaProofFiles}, which renders them into the
+   * form's proof (VARKA-241).
+   */
   private static final double TWO_52 = 4503599627370496.0;
-  private static final long TWO_52_BITS = 0x4330000000000000L;
-  private static final long MANTISSA_52 = 0x000FFFFFFFFFFFFFL;
+  static final long TWO_52_BITS = 0x4330000000000000L;
+  static final long MANTISSA_52 = 0x000FFFFFFFFFFFFFL;
 
   /**
    * {@code [v] -> [v / d]} at the long lane with no conversion instruction at all.

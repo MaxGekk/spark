@@ -3639,6 +3639,10 @@ the layers answer differently.
 API that Varka emits, held to the real API and used to check each emitted kernel, starting with a
 spike.*
 
+*Step 2 done on 10 October 2026 by VARKA-241: the long lane's two division forms proven under the
+dividend bound for every divisor in use, and the conversion form's exact bound found, over integers
+rather than floating-point theory, which did not decide them (`VARKA-241.md` 2).*
+
 **Why the narrow version pays.** Three reasons, none of them about assurance
 for its own sake.
 
@@ -4847,8 +4851,10 @@ literal call sites; the first step checks it against what the parsed classes act
 * *Memory* is the input and output buffers of one lane group, little-endian, addressed by the
   group's index. `VarkaVectorSupport`'s helpers are modelled from their own source, over Arrow's
   bit-packed, least-significant-bit-first validity.
-* *Doubles* need floating-point theory and are left out of the first steps; row 241's spike says
-  which solver takes them.
+* *Doubles* are left out of the first steps. Row 241's spike found that floating-point theory does
+  not decide even one division in reasonable time, and stated them over integers instead, rounding
+  by the midpoints to a double's neighbours in a named binade (`VARKA-241.md` 2, `jdouble.rne` in
+  `java.smt2`); the model's double lanes would take the same route.
 
 **How a kernel is proven.** Read the emitted class back with the ClassFile API; execute its loop
 method symbolically for one lane group at a symbolic index, and its epilogue for a symbolic tail

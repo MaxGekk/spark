@@ -3,14 +3,15 @@
 Machine-checked proofs of Varka's arithmetic lowerings, in SMT-LIB. `dev/varka_prove.sh` runs them
 under Z3 in the linters' job and under Z3 and cvc5 in the nightly, and fails on any verdict other
 than the one each check expects. They began with VARKA-240 (`sql/varka/plans/m7/VARKA-240.md`);
-rows 241 and 242 of `m7/PLAN.md` add the long lane's division forms and the other bounded
+VARKA-241 added the long lane's division forms, and row 242 of `m7/PLAN.md` adds the other bounded
 lowerings.
 
 | file | what it holds | written by |
 | :--- | :--- | :--- |
-| `java.smt2` | the prelude: Java's `int` and `long` operators over SMT-LIB's integers, each defined as the JLS defines it | hand |
+| `java.smt2` | the prelude: Java's `int` and `long` operators over SMT-LIB's integers, each defined as the JLS defines it, and doubles by their rounding | hand |
 | `java_check.smt2` | the prelude against the JVM: each operator over boundary operands, the expected values computed by Java | `VarkaProofFiles` |
 | `int_mulhi_divide.smt2` | the int lane's multiply-high division (VARKA-149) exact for every divisor in use, with `signedMagic`'s constants | `VarkaProofFiles` |
+| `long_divide.smt2` | the long lane's two division forms exact under `ConstDivide.EXACT_DIVIDEND_BOUND` for every divisor in use, and the conversion form's exact bound past it (VARKA-241) | `VarkaProofFiles` |
 
 ## Running them
 
@@ -45,6 +46,14 @@ a constant factor and the statement is linear. So the prelude states Java's wrap
 instead of leaning on bit-vector operators, which would also have the wrong meaning in places: a
 bit-vector shift does not mask its count. A proof that multiplies two unknowns is nonlinear, and a
 solver may answer `unknown`, which fails the run: such a proof needs its own design.
+
+Doubles are integers too (`VARKA-241.md` 2). In SMT-LIB's floating-point theory a solver bit-blasts
+the division, and the long lane's division by 1000 took Bitwuzla eight minutes alone on the machine;
+stated over integers it takes milliseconds. A double is `M * 2^E`, and since `2^E` for an unknown `E`
+is not linear, the prelude returns no double: `jdouble.rne` relates an exact rational to the double
+it rounds to in a binade the proof names. A proof that rounds a value it cannot place has one check
+per binade the value can fall in, and a check that those binades cover every value its domain gives,
+without which a check could pass by leaving a value out.
 
 ## Adding a proof
 
