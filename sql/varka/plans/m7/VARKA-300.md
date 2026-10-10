@@ -137,3 +137,48 @@ reruns `VarkaCompileBenchmark` as 217 did and commits the pair.
 
 1. This plan; row 300 narrowed to 300a and row 305 filed for 300b.
 2. The records, the consumers and the tests, in one commit.
+
+## 9. Outcome (300a)
+
+Done on 10 October 2026, as 3.1 and 3.2 describe.
+
+* **Every fusion decision is unchanged.** The dump in 5 rendered, through one renderer that does
+  not depend on how either model prints, every coverage row as a projection, as `compile`, and,
+  for the predicate rows, as a predicate; all the projection rows together, with the child columns
+  forwarded, with a nondeterministic entry, and twice over; all the predicate rows as one
+  conjunction; and a 200- and 400-entry ladder and a 70-column projection under several kernels.
+  Each ran under seventeen option sets: the defaults; four method budgets, each alone, with several
+  kernels and with condition splitting; two fused ceilings with several kernels and one without;
+  and a forced residual. The 4,436 lines are byte-identical on the base
+  and on the branch. They hold 206 further-kernel columns, 47 method-budget declines, 6 split
+  predicates, 17 nondeterministic declines, 3 forced residuals, input bounds and 64-bit literal
+  tables. No coverage row has a derived input, so `derivedAt` is checked by the compiler suite's
+  own test of it.
+* **`coverage.json` and `emitted_bytes.json` are unchanged**: neither file is modified, and
+  `VarkaCoverageSuite` and `VarkaEmittedBytesSuite`, which fail when the files they pin move, pass
+  in the gate, which passes as a whole: every Varka suite at both widths, and lint.
+* **What went from the consumers:** the converters on the model in the evaluators,
+  `VarkaFusionReport` and `DeclineSink`; `ResidualOutput$.MODULE$`; the
+  `default` in `VarkaKernelEvaluator.layout`, now an exhaustive switch; and
+  `VarkaFusionReport`'s `instanceof` ladder, now one too.
+
+**Predictions scored (6.1).**
+
+1. **Held.**
+2. **Held at the low end of "about twice".** The eight records are 492 lines against the Scala
+   model's 204, 2.4 times, of which 136 are the license header each file carries and the Scala
+   types shared; without the headers 356, 1.7 times, 267's ratio again.
+
+**What the tests cost.** The Scala tests read the model through `asScala`, which is most of the
+diff; a Scala `Seq` is never `==` to a Java `List`, so every comparison converts first. No
+inequality on a model field was left comparing a Java collection (7.1).
+
+**The dump is kept**, as an opt-in test in `VarkaCoverageSuite` beside the bytes suite's option
+audit: with `VARKA_FUSION_DUMP` set to a file it writes the 4,436 lines, byte-identical to the
+base's, and without it it cancels. 300b's admission check is running it on both sides.
+
+**Corrections to sections 3.1, 3.2 and 4**, which are a record and are not rewritten: the
+convenience constructors standing for the Scala defaults are not there, since every caller passes
+every component; `VarkaKernelPart` and `VarkaProjectExec` did not change, since neither reads a
+model collection, and `VarkaColumnarRule`, `VarkaSplitConditionFusionSuite` and
+`VarkaCoverageSuite` did.
