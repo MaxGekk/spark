@@ -358,6 +358,7 @@ public abstract class VarkaEvaluatorBase {
           LOG.warn("Failed to emit the Varka fused kernel " + kernelIdentity()
               + "; falling back to the per-row path.", e);
           emissionFailed(e);
+          refuseUndeclaredFallback("emission of " + kernelIdentity(), e);
         }
       }
       // Marked resolved after a success or a failure the fallback answers, and not after one that
@@ -625,13 +626,37 @@ public abstract class VarkaEvaluatorBase {
       // A genuine kernel error is told apart from a failure in the per-row machinery sharing the
       // try by the marker the runner wraps it in.
       accounting().kernelFailure(e.getCause(), e.kernel);
+      refuseUndeclaredFallback("the kernel " + (e.kernel != null ? e.kernel : kernelIdentity()),
+          e.getCause());
     } catch (Throwable e) {
       if (!isCatchable(e)) {
         throw e;
       }
       accounting().rowPathFailure(e);
+      refuseUndeclaredFallback("the per-row machinery beside " + kernelIdentity(), e);
     }
     return fallbackPath.run();
+  }
+
+  /**
+   * Under test, fails the task over a failure fallback no test declared (VARKA-275), after it has
+   * been counted, evented and logged as any fallback is; see
+   * {@code VarkaColumnarToRowExec.failureFallbackForbidden}. A task already being killed is left
+   * alone: when one task's error cancels its stage, a sibling interrupted while it compiles its
+   * row machinery fails with a class-loading error that is the kill's, not the kernel's
+   * ({@code VARKA-275.md} 2).
+   */
+  private static void refuseUndeclaredFallback(String what, Throwable cause) {
+    TaskContext task = TaskContext.get();
+    if (task != null && task.isInterrupted()) {
+      return;
+    }
+    if (VarkaColumnarToRowExec$.MODULE$.failureFallbackForbidden()) {
+      throw new IllegalStateException("A failure of " + what + " was about to be answered by the "
+          + "per-row path, and no test declared one; a test that causes it on purpose sets a "
+          + "failure hook or VarkaColumnarToRowExec.setFailureFallbackExpectedForTesting "
+          + "(VARKA-275)", cause);
+    }
   }
 
   /** Whether this batch goes to the kernel; see {@link VarkaWarmupGate}. */

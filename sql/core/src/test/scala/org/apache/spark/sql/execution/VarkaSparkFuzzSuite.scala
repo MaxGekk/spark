@@ -203,9 +203,12 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
   test("a forced output finds a rollback that truncates one input too far") {
     // `misdescribeRollback` 3 makes a declining entry's rollback drop the input before its own,
     // which changes answers; the unforced comparison meets that branch too rarely to see it
-    // (VARKA-296.md 2), and forcing every output of each composition does.
+    // (VARKA-296.md 2), and forcing every output of each composition does. Some compositions
+    // fail to emit under the planted rollback instead, and the row path answers them: a failure
+    // fallback this test causes, so it declares one (VARKA-275).
     val previous = VarkaColumnarToRowExec.currentEmitOptions
     VarkaColumnarToRowExec.setEmitOptionsForTesting(previous.withMisdescribeRollback(3))
+    VarkaColumnarToRowExec.setFailureFallbackExpectedForTesting(true)
     try {
       val found = (0 until 300).iterator.map { it =>
         val c = rectify(draw(rows, seed, it))
@@ -213,6 +216,7 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
       }.collectFirst { case Some(kind) => kind }
       assert(found.exists(_.startsWith("with an output forced to decline")), found)
     } finally {
+      VarkaColumnarToRowExec.setFailureFallbackExpectedForTesting(false)
       VarkaColumnarToRowExec.setEmitOptionsForTesting(previous)
     }
   }
