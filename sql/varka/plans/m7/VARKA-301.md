@@ -60,7 +60,7 @@ None move.
 ## 5. Tests, and what each is for
 
 The matrix at each of the three sizes over every Varka suite of both modules, with the memory
-sanitizer and row 303's both-bodies check on, as every matrix run has them.
+sanitizer on, as every matrix run has it.
 
 ## 6. The measurement
 
@@ -87,8 +87,9 @@ The axis as section 3 describes, with one fix the first run asked for: `VarkaMat
 computed while the object initialises, so the axis's name is declared before it - the first run at
 each size aborted on "no emit option arrowBatchSize", having read the name as null.
 
-Every Varka suite of both modules at each size, with the memory sanitizer and row 303's
-both-bodies check on (the defaults: 1,022 passed):
+Every Varka suite of both modules at each size, with the memory sanitizer on (the defaults: 1,022
+passed). Row 303's both-bodies check was not yet on master when this ran; once both are in, a
+matrix run at these sizes holds every small batch to both bodies too.
 
 | size | passed | failed before the skip list | cancelled |
 | ---: | ---: | ---: | ---: |
