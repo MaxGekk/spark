@@ -86,3 +86,41 @@ is the measure.
 ## 8. Sequencing
 
 1. This plan. 2. The harness, the report's table, the run, the records.
+
+## 9. Outcome, 10 October 2026
+
+### 9.1 What was built, and the report after it
+
+As section 3 describes, with two refinements the first run asked for: the report counts a class
+that has one driver by construction - a kernel whose nulls come from valid inputs has no dense
+body, one that reads no column no masked body - as having entered all it has (213 classes), and
+the forced masked run of a one-row batch makes every column null, since a null in a column the
+kernel does not read selects nothing.
+
+`sql/varka/coverage/generated.md`, regenerated: of 2,803 classes that ran, 2,029 entered both
+drivers (733 before), 213 their only driver, 177 only the dense one, 320 only the masked one and
+64 neither. By family, the one-body classes left are:
+
+* `VarkaFusedProjection`, the evaluator in the end-to-end suites: 111 and 306. The named
+  exception: the data a query reads decides the body.
+* `VarkaFusedTest`, the emitter suites: 50 and 10, the tests that call a kernel directly for one
+  property rather than through `checkMatrix`.
+* `VarkaFusedFuzz` and `...Long`, the IR fuzzer: 16 and 4. A case whose first comparison throws
+  stops there; these are attributed to the planted-failure tests and their shrinking, which throw
+  on purpose with a class per candidate, and are not traced to them.
+* `VarkaCompositionWide`, the composition fuzzer and row 276's per-row test: none.
+
+Every suite passed with both bodies compared: no second body disagreed with the oracle.
+
+### 9.2 The predictions scored
+
+1. **Holds in part.** Every composition-fuzzer class that ran entered both drivers; 20 IR-fuzzer
+   classes did not, for the reason above.
+2. **Holds.** The suites took 387 s, against 390 s for row 285's run on the same machine.
+
+### 9.3 What this leaves
+
+The end-to-end suites' one-body classes would need the evaluator to run a batch through both
+bodies under test - a null-free batch through the masked body too - which is a change to the
+evaluator, not to a harness. Whether that is a row of its own or the named exception stands is
+left to the owner.

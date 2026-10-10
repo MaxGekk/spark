@@ -102,8 +102,10 @@ public final class VarkaGenCoverage {
     long ran = 0;
     long cut = 0;
     long bothDrivers = 0;
+    long oneDriverOnly = 0;
     long onlyDense = 0;
     long onlyMasked = 0;
+    Map<String, long[]> families = new TreeMap<>();
     Map<String, Kind> kinds = new TreeMap<>();
     Map<String, Counts> operations = new TreeMap<>();
     Map<String, Long> missedInRunLoops = new TreeMap<>();
@@ -172,17 +174,57 @@ public final class VarkaGenCoverage {
           }
         }
       }
+      // A class may have one driver only: a kernel whose nulls come from valid inputs has no
+      // dense body, and one that reads no column no masked body. One body is all it has to enter.
+      boolean hasDense = cls.getMethods().stream()
+          .anyMatch(m -> m.getName().equals(VarkaMethodNames.driver(true)));
+      boolean hasMasked = cls.getMethods().stream()
+          .anyMatch(m -> m.getName().equals(VarkaMethodNames.driver(false)));
+      long[] family = families.computeIfAbsent(family(cls.getName()), x -> new long[5]);
       if (dense && masked) {
         bothDrivers++;
+        family[0]++;
+      } else if ((dense && !hasMasked) || (masked && !hasDense)) {
+        oneDriverOnly++;
+        family[1]++;
       } else if (dense) {
         onlyDense++;
+        family[2]++;
       } else if (masked) {
         onlyMasked++;
+        family[3]++;
+      } else {
+        family[4]++;
       }
     }
-    Files.writeString(Path.of(args[2]), render(emitted, ran, cut, bothDrivers, onlyDense,
-        onlyMasked, kinds, operations, missedInRunLoops), StandardCharsets.UTF_8);
+    Files.writeString(Path.of(args[2]), render(emitted, ran, cut, bothDrivers, oneDriverOnly,
+        onlyDense, onlyMasked, families, kinds, operations, missedInRunLoops),
+        StandardCharsets.UTF_8);
   }
+
+  /**
+   * A class's family: its simple name without the counter or the shape hash that makes it unique,
+   * which says who emitted it - {@code VarkaFusedProjection} the evaluator, {@code VarkaFusedTest}
+   * the emitter suites, {@code VarkaFusedFuzz} the IR fuzzer, {@code VarkaCompositionWide} the
+   * composition fuzzer.
+   */
+  static String family(String internalName) {
+    String simple = internalName.substring(internalName.lastIndexOf('/') + 1);
+    return simple.replaceAll("_[0-9a-f]+$", "").replaceAll("[0-9]+$", "");
+  }
+
+  /** Why a family's classes may run one body only, for the families that may (VARKA-284). */
+  static final Map<String, String> ONE_BODY_REASONS = new TreeMap<>(Map.of(
+      "VarkaFusedProjection", "the evaluator in the end-to-end suites, which hand it the batches "
+          + "their tables hold: which body a batch takes is the evaluator's decision on the data, "
+          + "and a test there is about a query, not a body",
+      "VarkaFusedTest", "the emitter suites' tests that call a kernel directly for one property - "
+          + "a status, the scratch contract, one body's behaviour - rather than through "
+          + "checkMatrix, which runs whichever body its cases miss",
+      "VarkaFusedFuzz", "a case whose first comparison throws stops there, and the IR fuzzer's "
+          + "planted-failure tests and their shrinking throw on purpose, each failing candidate "
+          + "a class of its own; these classes are attributed to them, not traced",
+      "VarkaFusedFuzzLong", "as for VarkaFusedFuzz, at the long lane"));
 
   /** A line map node's operation: the word after its parenthesis, or a leaf's kind. */
   static String operation(String node) {
@@ -217,8 +259,8 @@ public final class VarkaGenCoverage {
     return method.equals(VarkaMethodNames.DISPATCH) ? "dispatch" : "other (" + method + ")";
   }
 
-  static String render(long emitted, long ran, long cut, long both, long onlyDense,
-      long onlyMasked,
+  static String render(long emitted, long ran, long cut, long both, long oneDriver,
+      long onlyDense, long onlyMasked, Map<String, long[]> families,
       Map<String, Kind> kinds, Map<String, Counts> operations, Map<String, Long> missed) {
     List<String> out = new ArrayList<>();
     out.add("# Coverage of the generated code");
@@ -229,18 +271,28 @@ public final class VarkaGenCoverage {
     out.add("");
     out.add("## Classes");
     out.add("");
-    out.add("| emitted | ran | both drivers | only the dense one | only the masked one "
-        + "| neither |");
-    out.add("| ---: | ---: | ---: | ---: | ---: | ---: |");
-    out.add("| " + emitted + " | " + ran + " | " + both + " | " + onlyDense + " | " + onlyMasked
-        + " | " + (ran - both - onlyDense - onlyMasked) + " |");
+    out.add("| emitted | ran | both drivers | its only driver | only the dense one "
+        + "| only the masked one | neither |");
+    out.add("| ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+    out.add("| " + emitted + " | " + ran + " | " + both + " | " + oneDriver + " | " + onlyDense
+        + " | " + onlyMasked + " | " + (ran - both - oneDriver - onlyDense - onlyMasked) + " |");
     out.add("");
-    out.add("A class ran when a kernel method was entered, not only its constructor. One that "
+    out.add("A class with one driver - a kernel whose nulls come from valid inputs has no dense "
+        + "body, one that reads no column no masked body - entered all it has. A class ran when "
+        + "a kernel method was entered, not only its constructor. One that "
         + "entered the dispatch and neither driver left it before choosing a side: an empty "
         + "batch returns there, and a zero scratch address is refused there (VARKA-198).");
     out.add("");
-    out.add("Row 284 is done when every class that ran entered both drivers, or each exception "
-        + "is named with its reason.");
+    out.add("By family - who emitted the class (VARKA-284: every class that ran enters both "
+        + "drivers, or its family is named below with the reason it may not):");
+    out.add("");
+    out.add("| family | both drivers | its only driver | only the dense one "
+        + "| only the masked one | neither |");
+    out.add("| :--- | ---: | ---: | ---: | ---: | ---: |");
+    families.forEach((f, v) -> out.add("| " + f + " | " + v[0] + " | " + v[1] + " | " + v[2]
+        + " | " + v[3] + " | " + v[4] + " |"));
+    out.add("");
+    ONE_BODY_REASONS.forEach((f, why) -> out.add("* `" + f + "`: " + why + "."));
     out.add("");
     out.add("## Methods of the classes that ran, by kind");
     out.add("");
