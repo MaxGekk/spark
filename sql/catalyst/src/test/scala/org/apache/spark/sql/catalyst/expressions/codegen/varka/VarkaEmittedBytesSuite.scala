@@ -300,7 +300,8 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
   }
 
   /** `a` over `subject`: the subject's options first, then the arm's own change. */
-  private def over(a: VarkaEmitOption.Arm, subject: VarkaEmitOption.Subject) =
+  private def over(a: VarkaEmitOption.Arm,
+      subject: VarkaEmitOption.Subject): VarkaEmitOptions => VarkaEmitOptions =
     (o: VarkaEmitOptions) => a.apply.apply(subject.apply.apply(o))
 
   /** One hash over every shape the oracle holds, emitted under `arm` at `lanes`. */
@@ -479,7 +480,8 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
     def moved(on: VarkaEmitOptions => VarkaEmitOptions,
         off: VarkaEmitOptions => VarkaEmitOptions): Int =
       widths.map(w => hashes(on, w).zip(hashes(off, w)).count { case (a, b) => a != b }).sum
-    def value(v: Boolean) = (o: VarkaEmitOptions) => flag.`with`(o, v)
+    def value(v: Boolean): VarkaEmitOptions => VarkaEmitOptions =
+      (o: VarkaEmitOptions) => flag.`with`(o, v)
     assert(moved(value(true), value(false)) == 0,
       "validityOrFirst now moves the bytes at the defaults, so its subject is not needed")
     val overSubject = moved(o => value(true)(subject.apply.apply(o)),
