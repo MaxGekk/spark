@@ -1,8 +1,8 @@
 # `sql/varka/proofs`
 
 Machine-checked proofs of Varka's arithmetic lowerings, in SMT-LIB. `dev/varka_prove.sh` runs them
-under Z3 in the linters' job and under Z3 and cvc5 in the nightly, and fails on any verdict other
-than the one each check expects. They began with VARKA-240 (`sql/varka/plans/m7/VARKA-240.md`);
+in the linters' job, each under one solver, and under Z3 and cvc5 in the nightly, and fails on any
+verdict other than the one each check expects. They began with VARKA-240 (`sql/varka/plans/m7/VARKA-240.md`);
 VARKA-241 added the long lane's division forms, and row 242 of `m7/PLAN.md` adds the other bounded
 lowerings.
 
@@ -19,6 +19,7 @@ lowerings.
     dev/varka_prove.sh                   # every proof under Z3
     dev/varka_prove.sh --install both && dev/varka_prove.sh --solver both   # and under cvc5 1.4.1
     dev/varka_prove.sh --self-test       # the checker of verdicts, checked
+    dev/varka_prove.sh --lint            # as the linters' job runs them
 
 By hand, the prelude goes after the file's `set-logic` line:
 `sed '/^(set-logic/r sql/varka/proofs/java.smt2' sql/varka/proofs/int_mulhi_divide.smt2 | z3 -in`.
@@ -62,7 +63,9 @@ without which a check could pass by leaving a value out.
 2. The claim as `unsat` checks, and `sat` checks that its domain admits its boundary inputs and
    that a constant changed by one is refuted.
 3. `dev/varka_prove.sh --solver both` holds, in seconds: the linters' job allows a minute for all of
-   them.
+   them. The runner is about twice the laptop. `--lint` runs a file under Z3 unless the script's
+   `CVC5_IN_LINT` names it, which it does for a file one solver proves much faster than the other:
+   `long_divide.smt2` takes Z3 28 s on the laptop and cvc5 8 s (VARKA-241.md 9.5).
 
 ## The solvers
 

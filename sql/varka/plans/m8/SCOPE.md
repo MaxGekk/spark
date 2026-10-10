@@ -3680,7 +3680,9 @@ for its own sake.
 **Done when** the three proofs exist, `dev/varka_prove.sh` runs them in the
 linters' CI job in under a minute, the 149 sweep names the proof it
 duplicates, and `sql/varka/AGENTS.md` says that a new bounded lowering comes
-with its proof file. Neither Z3 nor cvc5 is on the laptop today; SMT-LIB is
+with its proof file. *VARKA-241, 10 October 2026: the minute is kept by running each
+file under one solver, `long_divide.smt2` under cvc5, since Z3 took 59 s for it on the
+runner (`VARKA-241.md` 9.5).* Neither Z3 nor cvc5 is on the laptop today; SMT-LIB is
 independent of which one CI installs. Item 59 gives these proofs a better
 specification to be stated against; the tooling here comes first.
 

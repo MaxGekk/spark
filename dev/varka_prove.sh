@@ -17,7 +17,9 @@
 #
 # The SMT proofs under sql/varka/proofs/ (VARKA-240), run by a solver with every verdict checked.
 #
-#   dev/varka_prove.sh                          # every proof under Z3, as the linters' job runs it
+#   dev/varka_prove.sh                          # every proof under Z3
+#   dev/varka_prove.sh --lint                   # as the linters' job runs them: CVC5_IN_LINT's under
+#                                               # cvc5, every other under Z3
 #   dev/varka_prove.sh --solver both            # under Z3 and cvc5, each held to every expectation
 #   dev/varka_prove.sh --solver cvc5 int_mulhi_divide.smt2
 #   dev/varka_prove.sh --install z3|cvc5|both   # the pinned solvers, into target/varka-solvers/
@@ -50,6 +52,9 @@ Z3_VERSION=5.1.0
 CVC5_VERSION=1.4.1
 CVC5_ZIP=cvc5-Linux-x86_64-static.zip
 CVC5_SHA256=2f8efe58fe27ba7bccbb504533f690b9312d69da14192712460e4a19231f02a1
+# The proofs the linters' job runs under cvc5 rather than Z3, to keep the step inside its minute:
+# long_divide.smt2 takes Z3 59 s on the runner and cvc5 a third of that (VARKA-241.md 9.5).
+CVC5_IN_LINT=(long_divide.smt2)
 limit_ms="${VARKA_PROVE_LIMIT_MS:-10000}"
 run_limit="${VARKA_PROVE_RUN_LIMIT:-300}"
 
@@ -314,6 +319,7 @@ while [ "$#" -gt 0 ]; do
     --solver) which="${2:-}"; shift 2 || usage ;;
     --install) mode=install; which="${2:-}"; shift 2 || usage ;;
     --self-test) mode=self-test; shift ;;
+    --lint) mode=lint; which=both; shift ;;
     -*) usage ;;
     *) files+=("$1"); shift ;;
   esac
@@ -353,12 +359,21 @@ if [ "${#files[@]}" -eq 0 ]; then
   done
 fi
 failed=0
-for name in "${names[@]}"; do
+if [ "$mode" = lint ]; then
   for f in "${files[@]}"; do
     [ -f "$f" ] || f="$proofs/$f"
+    name=z3
+    for c in "${CVC5_IN_LINT[@]}"; do [ "$(basename "$f")" = "$c" ] && name=cvc5; done
     run_file "$name" "${paths[$name]}" "$f" || failed=$((failed + 1))
   done
-done
+else
+  for name in "${names[@]}"; do
+    for f in "${files[@]}"; do
+      [ -f "$f" ] || f="$proofs/$f"
+      run_file "$name" "${paths[$name]}" "$f" || failed=$((failed + 1))
+    done
+  done
+fi
 if [ "$failed" -eq 0 ]; then
   echo "varka_prove: every proof holds under ${names[*]}"
 else
