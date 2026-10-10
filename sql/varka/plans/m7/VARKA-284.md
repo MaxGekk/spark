@@ -122,5 +122,4 @@ Every suite passed with both bodies compared: no second body disagreed with the 
 
 The end-to-end suites' one-body classes would need the evaluator to run a batch through both
 bodies under test - a null-free batch through the masked body too - which is a change to the
-evaluator, not to a harness. Whether that is a row of its own or the named exception stands is
-left to the owner.
+evaluator, not to a harness. The owner made it a task of its own: row 303.
