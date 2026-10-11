@@ -193,7 +193,7 @@ private[sql] object VarkaExpressionCompiler extends Logging {
       val sink = new DeclineSink(childOutput, options.rangeSets)
       return (None, projectList.zipWithIndex.flatMap { case (named, position) =>
         sink.note(why, BindReferences.bindReference[Expression](named, childOutput))
-        sink.take().map(position -> _)
+        sink.take().toScala.map(position -> _)
       }.toMap, Set.empty)
     }
     // The projection positions of a partial's fused entries, in the order the kernel numbers
@@ -267,8 +267,8 @@ private[sql] object VarkaExpressionCompiler extends Logging {
       : (Option[PartialVarkaProjection], Map[Int, VarkaDecline], Set[Int]) = {
     // Both tables assign dense indices in first-occurrence order, which makes the compiled
     // shape deterministic in the projection alone.
-    val inputs = mutable.LinkedHashMap.empty[Int, Int]
-    val literals = mutable.LinkedHashMap.empty[Int, Int]
+    val inputs = new VarkaSlotTable
+    val literals = new VarkaSlotTable
     val outputs = mutable.ArrayBuffer.empty[VarkaVectorIR]
     val outputTypes = Seq.newBuilder[DataType]
     val sink = new DeclineSink(childOutput, options.rangeSets)
@@ -279,9 +279,9 @@ private[sql] object VarkaExpressionCompiler extends Logging {
     // Whether an entry over the budgets beside the others fits them by itself, counted with its
     // own columns: compiled alone into tables of its own, which the shared ones never see.
     def fitsAlone(e: Expression): Boolean = {
-      val own = mutable.LinkedHashMap.empty[Int, Int]
-      compileRoot(e, own, mutable.LinkedHashMap.empty[Int, Int],
-        new DeclineSink(childOutput, options.rangeSets))
+      val own = new VarkaSlotTable
+      compileRoot(e, own, new VarkaSlotTable,
+        new DeclineSink(childOutput, options.rangeSets)).toScala
         .exists(ir => VarkaLoopEmitter.fitsBudgets(java.util.List.of(ir), own.size, options))
     }
     def classifyEntry(named: NamedExpression, position: Int): VarkaOutputSpec = {
@@ -301,7 +301,7 @@ private[sql] object VarkaExpressionCompiler extends Logging {
         // reason, and compiled not at all, so it registers nothing in the shared tables.
         case e if demoted.contains(position) =>
           sink.note(demoted(position), e)
-          sink.take().foreach(decline => declines += position -> decline)
+          sink.take().toScala.foreach(decline => declines += position -> decline)
           VarkaOutputSpec.RESIDUAL
         case e =>
           // The tables are shared across entries (CSE across outputs depends on it), so a
@@ -317,7 +317,7 @@ private[sql] object VarkaExpressionCompiler extends Logging {
           // other and then takes the over-budget branch below, so the rollback it runs is the
           // one a real decline runs.
           val forced = options.forceResidualAt == position + 1
-          compileRoot(e, inputs, literals, sink) match {
+          compileRoot(e, inputs, literals, sink).toScala match {
             // One kernel holds one lane: its loop, its epilogue and its stores are one species.
             // The first fused entry fixes the lane and an entry of the other lane is demoted to
             // residual with a reason that says so - checked here, before the budgets, because
@@ -327,14 +327,14 @@ private[sql] object VarkaExpressionCompiler extends Logging {
             // tree; until then the mixed projection fuses one lane and leaves the other.
             case Some(ir) if outputs.nonEmpty &&
                 VarkaVectorIR.emissionLane(ir) != VarkaVectorIR.emissionLane(outputs.head) =>
-              truncate(inputs, inputsMark)
-              truncate(literals, literalsMark)
+              inputs.truncate(inputsMark)
+              literals.truncate(literalsMark)
               sink.truncateLong(longMark)
               sink.truncateBounds(boundsMark)
               sink.take()
               sink.note(laneMismatch(VarkaVectorIR.emissionLane(ir),
                 VarkaVectorIR.emissionLane(outputs.head)), e)
-              sink.take().foreach(decline => declines += position -> decline)
+              sink.take().toScala.foreach(decline => declines += position -> decline)
               VarkaOutputSpec.RESIDUAL
             // An accepted entry must also fit the emitter's structural budgets together with the
             // entries accepted before it. The emitter enforces the same limits, but at emission
@@ -353,10 +353,10 @@ private[sql] object VarkaExpressionCompiler extends Logging {
               // production, where this restores the four tables exactly.
               options.misdescribeRollback match {
                 case 1 =>
-                case 3 => truncate(inputs, math.max(0, inputsMark - 1))
-                case _ => truncate(inputs, inputsMark)
+                case 3 => inputs.truncate(math.max(0, inputsMark - 1))
+                case _ => inputs.truncate(inputsMark)
               }
-              truncate(literals, literalsMark)
+              literals.truncate(literalsMark)
               sink.truncateLong(longMark)
               if (options.misdescribeRollback != 2) {
                 sink.truncateBounds(boundsMark)
@@ -373,7 +373,7 @@ private[sql] object VarkaExpressionCompiler extends Logging {
                 }
               }
               // A declining entry always leaves a reason: every `None` below notes one.
-              sink.take().foreach(decline => declines += position -> decline)
+              sink.take().toScala.foreach(decline => declines += position -> decline)
               VarkaOutputSpec.RESIDUAL
           }
       }
@@ -385,7 +385,7 @@ private[sql] object VarkaExpressionCompiler extends Logging {
       else classifyEntry(named, position)
     }
     val reasons = declines.result()
-    if (fusedCount > 0 && inputs.nonEmpty) {
+    if (fusedCount > 0 && inputs.size > 0) {
       val fused = tables(inputs, literals, sink).projection(outputs.toSeq, outputTypes.result())
       (Some(new PartialVarkaProjection(specs.asJava, fused, javaDeclines(reasons),
         java.util.List.of())), reasons, alone.result())
@@ -456,10 +456,6 @@ private[sql] object VarkaExpressionCompiler extends Logging {
    */
   private val loggedEmitterFailures = ConcurrentHashMap.newKeySet[String]()
 
-  /** Drops the entries a failed compile appended after `mark` (insertion order). */
-  private[codegen] def truncate(table: mutable.LinkedHashMap[Int, Int], mark: Int): Unit =
-    VarkaNodeCompiler.truncate(table, mark)
-
   /**
    * Compiles a filter predicate conjunct by conjunct. The condition splits on its
    * `AND` spine - Kleene AND is associative, so the split changes nothing - and each conjunct
@@ -509,7 +505,7 @@ private[sql] object VarkaExpressionCompiler extends Logging {
       val sink = new DeclineSink(childOutput, options.rangeSets)
       return (splitConjuncts(condition).map { conjunct =>
         sink.note(why, BindReferences.bindReference[Expression](conjunct, childOutput))
-        new VarkaConjunctSpec(conjunct, false, sink.take().toJava)
+        new VarkaConjunctSpec(conjunct, false, sink.take())
       }, None)
     }
     // The size admission of [[classify]], for conjuncts. The fused conjuncts fold into one
@@ -555,31 +551,31 @@ private[sql] object VarkaExpressionCompiler extends Logging {
       childOutput: Seq[Attribute],
       demoted: Map[Int, String],
       options: VarkaEmitOptions): PredicatePass = {
-    val inputs = mutable.LinkedHashMap.empty[Int, Int]
-    val literals = mutable.LinkedHashMap.empty[Int, Int]
+    val inputs = new VarkaSlotTable
+    val literals = new VarkaSlotTable
     val sink = new DeclineSink(childOutput, options.rangeSets)
     val fusedConds = mutable.ArrayBuffer.empty[Cond]
     val specs = splitConjuncts(condition).zipWithIndex.map { case (conjunct, index) =>
       val bound = BindReferences.bindReference[Expression](conjunct, childOutput)
       if (demoted.contains(index)) {
         sink.note(demoted(index), bound)
-        new VarkaConjunctSpec(conjunct, false, sink.take().toJava)
+        new VarkaConjunctSpec(conjunct, false, sink.take())
       } else {
         val inputsMark = inputs.size
         val literalsMark = literals.size
         val longMark = sink.longMark
         val boundsMark = sink.boundsMark
-        VarkaConditionCompiler.compileCond(bound, inputs, literals, sink) match {
+        VarkaConditionCompiler.compileCond(bound, inputs, literals, sink).toScala match {
           // The lane rule of `compilePartial`, for conjuncts: the AND fold below would refuse a
           // mix by construction, so it is asked here first and answered with the lane's reason.
           case Some(cond) if fusedConds.nonEmpty && cond.laneType() != fusedConds.head.laneType() =>
-            truncate(inputs, inputsMark)
-            truncate(literals, literalsMark)
+            inputs.truncate(inputsMark)
+            literals.truncate(literalsMark)
             sink.truncateLong(longMark)
             sink.truncateBounds(boundsMark)
             sink.take()
             sink.note(laneMismatch(cond.laneType(), fusedConds.head.laneType()), bound)
-            new VarkaConjunctSpec(conjunct, false, sink.take().toJava)
+            new VarkaConjunctSpec(conjunct, false, sink.take())
           case Some(cond) if VarkaLoopEmitter.fitsBudgets(
               java.util.List.of(VarkaConditionCompiler.andFold(fusedConds.toSeq :+ cond)),
               inputs.size, options) =>
@@ -587,8 +583,8 @@ private[sql] object VarkaExpressionCompiler extends Logging {
             fusedConds += cond
             new VarkaConjunctSpec(conjunct, true, java.util.Optional.empty[VarkaDecline]())
           case compiled =>
-            truncate(inputs, inputsMark)
-            truncate(literals, literalsMark)
+            inputs.truncate(inputsMark)
+            literals.truncate(literalsMark)
             sink.truncateLong(longMark)
             sink.truncateBounds(boundsMark)
             if (compiled.isDefined) {
@@ -596,11 +592,11 @@ private[sql] object VarkaExpressionCompiler extends Logging {
               sink.note("exceeds the emitter's fused budget", bound)
             }
             // A declining conjunct always leaves a reason: every `None` in compileCond notes one.
-            new VarkaConjunctSpec(conjunct, false, sink.take().toJava)
+            new VarkaConjunctSpec(conjunct, false, sink.take())
         }
       }
     }
-    if (fusedConds.nonEmpty && inputs.nonEmpty) {
+    if (fusedConds.nonEmpty && inputs.size > 0) {
       val accepted = tables(inputs, literals, sink)
       val build = (layout: Seq[Seq[Cond]]) => {
         val roots: Seq[VarkaVectorIR] = layout.flatten
@@ -741,9 +737,9 @@ private[sql] object VarkaExpressionCompiler extends Logging {
    */
   private def compileRoot(
       expr: Expression,
-      inputs: mutable.LinkedHashMap[Int, Int],
-      literals: mutable.LinkedHashMap[Int, Int],
-      sink: DeclineSink): Option[VarkaVectorIR] = expr match {
+      inputs: VarkaSlotTable,
+      literals: VarkaSlotTable,
+      sink: DeclineSink): java.util.Optional[VarkaVectorIR] = expr match {
     case r: RuntimeReplaceable => compileRoot(r.replacement, inputs, literals, sink)
     case si: StaticInvoke if VarkaTimeCompiler.isTimeTarget(si) =>
       VarkaTimeCompiler.compileTime(si, inputs, literals, sink, true)
@@ -772,10 +768,10 @@ private[sql] object VarkaExpressionCompiler extends Logging {
    * `VarkaDerivedInput.key`), the literal slots, and the sink's bounds and 64-bit literals.
    */
   private def tables(
-      inputs: mutable.LinkedHashMap[Int, Int],
-      literals: mutable.LinkedHashMap[Int, Int],
+      inputs: VarkaSlotTable,
+      literals: VarkaSlotTable,
       sink: DeclineSink): Tables = {
-    val keys = inputs.keys.toSeq
+    val keys = inputs.keys.asScala.toSeq.map(_.intValue)
     val ordinals = keys.map { k =>
       Int.box(if (VarkaDerivedInput.isKey(k)) VarkaDerivedInput.keySourceOrdinal(k) else k)
     }
@@ -784,7 +780,7 @@ private[sql] object VarkaExpressionCompiler extends Logging {
         new VarkaDerivedInput(i, VarkaDerivedInput.keySourceOrdinal(k),
           VarkaDerivedInput.keyKind(k))
     }
-    Tables(ordinals.asJava, literals.keys.toSeq.map(Int.box).asJava, sink.inputBounds(inputs),
+    Tables(ordinals.asJava, literals.keys, sink.inputBounds(inputs),
       derived.asJava, sink.longLiteralValues)
   }
 

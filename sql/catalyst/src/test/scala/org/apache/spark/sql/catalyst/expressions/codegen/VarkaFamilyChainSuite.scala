@@ -99,8 +99,8 @@ class VarkaFamilyChainSuite extends SparkFunSuite with VarkaTestWatchdog {
       : (Seq[(String, Expression, Seq[String])], Map[String, Int]) = {
     val counts = mutable.LinkedHashMap(chain.map(_.name() -> 0): _*)
     val doubles = Seq.newBuilder[(String, Expression, Seq[String])]
-    val inputs = mutable.LinkedHashMap.empty[Int, Int]
-    val literals = mutable.LinkedHashMap.empty[Int, Int]
+    val inputs = new VarkaSlotTable
+    val literals = new VarkaSlotTable
     val sink = new DeclineSink(columns, true)
     for (sql <- sqls; node <- nodes(bound(sql))) {
       val claimants = VarkaNodeCompiler.claimants(chain.asJava, node, inputs, literals, sink)

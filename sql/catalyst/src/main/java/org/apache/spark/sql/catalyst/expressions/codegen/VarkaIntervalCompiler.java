@@ -17,8 +17,7 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen;
 
-import scala.Option;
-import scala.collection.mutable.LinkedHashMap;
+import java.util.Optional;
 
 import org.apache.spark.sql.catalyst.expressions.Abs;
 import org.apache.spark.sql.catalyst.expressions.Add;
@@ -60,11 +59,7 @@ import org.apache.spark.sql.types.YearMonthIntervalType;
  * guard is written once. The shared operand helpers and the recursion are
  * {@code VarkaNodeCompiler}'s.
  *
- * <p>The literal and input tables are the classifier's {@code mutable.LinkedHashMap[Int, Int]}.
- * Java sees their type arguments erased to {@code Object}, and Scala does not pass an
- * {@code [Int, Int]} map where an {@code [Object, Object]} one is declared, so the methods Scala
- * calls take them as {@code LinkedHashMap<?, ?>} and {@link VarkaNodeCompiler#table} restores the
- * declared type once, for {@code VarkaNodeCompiler}'s own methods.
+ * <p>The literal and input tables are the classifier's {@link VarkaSlotTable}s.
  */
 final class VarkaIntervalCompiler {
 
@@ -86,11 +81,9 @@ final class VarkaIntervalCompiler {
    */
   static VarkaFamilyArm arm(
       Expression e,
-      LinkedHashMap<?, ?> inputTable,
-      LinkedHashMap<?, ?> literalTable,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    LinkedHashMap<Object, Object> inputs = VarkaNodeCompiler.table(inputTable);
-    LinkedHashMap<Object, Object> literals = VarkaNodeCompiler.table(literalTable);
     return switch (e) {
       // A year-month interval column, on the same lane. Its value is a count of months in every
       // unit, so nothing about the lowering changes; what makes widening the leaf safe rather
@@ -101,13 +94,13 @@ final class VarkaIntervalCompiler {
       // DateType or IntegerType. So an interval in a date position is a type error the analyzer
       // rejected before the compiler ran, and the leaf cannot put one there.
       case BoundReference br when br.dataType() instanceof YearMonthIntervalType ->
-          () -> Option.apply(VarkaNodeCompiler.columnRef(br, inputs, LaneType.INT));
+          () -> Optional.of(VarkaNodeCompiler.columnRef(br, inputs, LaneType.INT));
       // The interval literal, beside the date literal and for the same reason: the value is
       // already the int the lane holds, so `ym > INTERVAL '6' MONTH` and
       // `coalesce(ym, INTERVAL '0' MONTH)` become a slot rather than a decline.
       case Literal l when l.value() instanceof Integer
           && l.dataType() instanceof YearMonthIntervalType ->
-          () -> Option.apply(VarkaNodeCompiler.intSlot((Integer) l.value(), literals));
+          () -> Optional.of(VarkaNodeCompiler.intSlot((Integer) l.value(), literals));
       // The interval relabels, on `unix_date`'s pattern: a cast that returns its operand
       // unchanged is the child alone, with no node emitted. `intToYearMonthInterval` returns `v`
       // for a MONTH end field and `yearMonthIntervalToInt` returns `v` for a MONTH-ended
@@ -195,42 +188,40 @@ final class VarkaIntervalCompiler {
    * interval counterpart of {@code intOperand}, and separate for the same reason the arms are
    * separate rather than the int arms' type gate being widened.
    */
-  static Option<VarkaVectorIR> intervalOperand(
+  static Optional<VarkaVectorIR> intervalOperand(
       Expression e,
       String position,
-      LinkedHashMap<?, ?> inputs,
-      LinkedHashMap<?, ?> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     if (!(e.dataType() instanceof YearMonthIntervalType)) {
       return sink.decline(position + " of type " + e.dataType().simpleString()
           + " is not a year-month interval", e);
     }
     return VarkaNodeCompiler.compileNode(
-        e, VarkaNodeCompiler.table(inputs), VarkaNodeCompiler.table(literals), sink);
+        e, inputs, literals, sink);
   }
 
   /**
    * The slot holding {@code 12}, the months in a year - {@code make_ym_interval} and the YEAR
    * casts.
    */
-  static LiteralSlot twelve(LinkedHashMap<?, ?> literals) {
-    return VarkaNodeCompiler.intSlot(12, VarkaNodeCompiler.table(literals));
+  static LiteralSlot twelve(VarkaSlotTable literals) {
+    return VarkaNodeCompiler.intSlot(12, literals);
   }
 
   /**
    * {@code 12 * i}, checked, for {@code CAST(i AS INTERVAL YEAR)}: this family's arm, and the
    * calendar family's in {@code add_months}' month-count position.
    */
-  static Option<VarkaVectorIR> yearsToMonths(
+  static Optional<VarkaVectorIR> yearsToMonths(
       Cast c,
-      LinkedHashMap<?, ?> inputTable,
-      LinkedHashMap<?, ?> literalTable,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    LinkedHashMap<Object, Object> inputs = VarkaNodeCompiler.table(inputTable);
-    LinkedHashMap<Object, Object> literals = VarkaNodeCompiler.table(literalTable);
     int mark = literals.size();
-    Option<VarkaVectorIR> built = VarkaNodeCompiler.intOperand(c.child(), inputs, literals, sink);
-    if (built.isDefined()) {
+    Optional<VarkaVectorIR> built = VarkaNodeCompiler.intOperand(c.child(), inputs, literals, sink);
+    if (built.isPresent()) {
       built = VarkaNodeCompiler.arithOver(
           IntOp.MUL, Overflow.FAIL, built.get(), twelve(literals), c, literals, mark, sink);
     }
@@ -241,10 +232,10 @@ final class VarkaIntervalCompiler {
    * {@code IntervalMathUtils.negateExact}, which throws on {@code Int.MinValue} alone, so any
    * bound at all rules it out - {@code IntNeg}'s reasoning over an interval operand.
    */
-  private static Option<VarkaVectorIR> negate(
+  private static Optional<VarkaVectorIR> negate(
       Expression child,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     return intervalOperand(child, "the negated interval", inputs, literals, sink)
         .map(x -> (VarkaVectorIR) new IntNeg(negationMode(x, literals), x));
@@ -258,10 +249,10 @@ final class VarkaIntervalCompiler {
    * puts a checked node under a {@code CASE} arm, and that is deliberate: the guard is qualified
    * by the arm, so only the lanes that actually negate can condemn the batch.
    */
-  private static Option<VarkaVectorIR> absolute(
+  private static Optional<VarkaVectorIR> absolute(
       Expression child,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     return intervalOperand(child, "the absolute interval", inputs, literals, sink).map(x -> {
       LiteralSlot zero = VarkaNodeCompiler.intSlot(0, literals);
@@ -275,8 +266,8 @@ final class VarkaIntervalCompiler {
    * {@code Int.MaxValue}, the one value whose negation overflows may be there. This family's
    * negate and {@code abs}, and the calendar family's negated month count.
    */
-  static Overflow negationMode(VarkaVectorIR x, LinkedHashMap<?, ?> literals) {
-    boolean bounded = VarkaNodeCompiler.boundedByIntMax(x, VarkaNodeCompiler.table(literals));
+  static Overflow negationMode(VarkaVectorIR x, VarkaSlotTable literals) {
+    boolean bounded = VarkaNodeCompiler.boundedByIntMax(x, literals);
     return bounded ? Overflow.WRAP : Overflow.FAIL;
   }
 
@@ -286,23 +277,23 @@ final class VarkaIntervalCompiler {
    * what makes {@code make_ym_interval(year(d), month(d))} fuse with none; over an unbounded int
    * column the multiply keeps its check and declines, as every checked multiply does.
    */
-  private static Option<VarkaVectorIR> makeInterval(
+  private static Optional<VarkaVectorIR> makeInterval(
       MakeYMInterval m,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     int mark = literals.size();
-    Option<VarkaVectorIR> years =
+    Optional<VarkaVectorIR> years =
         VarkaNodeCompiler.intOperand(m.years(), inputs, literals, sink);
     if (years.isEmpty()) {
       return rolledBack(years, literals, mark);
     }
-    Option<VarkaVectorIR> months =
+    Optional<VarkaVectorIR> months =
         VarkaNodeCompiler.intOperand(m.months(), inputs, literals, sink);
     if (months.isEmpty()) {
       return rolledBack(months, literals, mark);
     }
-    Option<VarkaVectorIR> scaled = VarkaNodeCompiler.arithOver(
+    Optional<VarkaVectorIR> scaled = VarkaNodeCompiler.arithOver(
         IntOp.MUL, Overflow.FAIL, years.get(), twelve(literals), m, literals, mark, sink);
     if (scaled.isEmpty()) {
       return rolledBack(scaled, literals, mark);
@@ -321,22 +312,22 @@ final class VarkaIntervalCompiler {
    * rather than reaching {@code intOperand}, which would report them as "not an int column or
    * literal" and hide which of the two is wrong.
    */
-  private static Option<VarkaVectorIR> multiply(
+  private static Optional<VarkaVectorIR> multiply(
       MultiplyYMInterval m,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     if (!m.num().dataType().equals(DataTypes.IntegerType)) {
       return sink.decline("interval multiplier of type " + m.num().dataType().simpleString()
           + " is not an int32 lane", m);
     }
     int mark = literals.size();
-    Option<VarkaVectorIR> x =
+    Optional<VarkaVectorIR> x =
         intervalOperand(m.interval(), "the multiplied interval", inputs, literals, sink);
     if (x.isEmpty()) {
       return rolledBack(x, literals, mark);
     }
-    Option<VarkaVectorIR> k = VarkaNodeCompiler.intOperand(m.num(), inputs, literals, sink);
+    Optional<VarkaVectorIR> k = VarkaNodeCompiler.intOperand(m.num(), inputs, literals, sink);
     if (k.isEmpty()) {
       return rolledBack(k, literals, mark);
     }
@@ -352,21 +343,21 @@ final class VarkaIntervalCompiler {
    * off {@code evalMode}, and {@code arithOver}'s bound is the only thing that takes the check
    * off.
    */
-  private static Option<VarkaVectorIR> intervalArith(
+  private static Optional<VarkaVectorIR> intervalArith(
       IntOp op,
       Expression l,
       Expression r,
       Expression whole,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     int mark = literals.size();
-    Option<VarkaVectorIR> x =
+    Optional<VarkaVectorIR> x =
         intervalOperand(l, "the left interval operand", inputs, literals, sink);
     if (x.isEmpty()) {
       return rolledBack(x, literals, mark);
     }
-    Option<VarkaVectorIR> y =
+    Optional<VarkaVectorIR> y =
         intervalOperand(r, "the right interval operand", inputs, literals, sink);
     if (y.isEmpty()) {
       return rolledBack(y, literals, mark);
@@ -384,10 +375,10 @@ final class VarkaIntervalCompiler {
    * {@code built}, after dropping the literals a failed lowering appended past {@code mark}: a
    * declining arm leaves the table as it found it.
    */
-  private static Option<VarkaVectorIR> rolledBack(
-      Option<VarkaVectorIR> built, LinkedHashMap<Object, Object> literals, int mark) {
+  private static Optional<VarkaVectorIR> rolledBack(
+      Optional<VarkaVectorIR> built, VarkaSlotTable literals, int mark) {
     if (built.isEmpty()) {
-      VarkaNodeCompiler.truncate(literals, mark);
+      literals.truncate(mark);
     }
     return built;
   }

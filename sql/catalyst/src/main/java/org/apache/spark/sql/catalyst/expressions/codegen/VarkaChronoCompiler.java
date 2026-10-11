@@ -19,8 +19,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen;
 
 import java.util.Optional;
 
-import scala.Option;
-import scala.collection.mutable.LinkedHashMap;
+import scala.jdk.javaapi.OptionConverters;
 import scala.util.control.NonFatal;
 
 import org.apache.spark.SparkIllegalArgumentException;
@@ -91,9 +90,7 @@ import org.apache.spark.unsafe.types.UTF8String;
  * the family does not claim. The helpers below it are this family's alone; the shared operand
  * helpers and the recursion are {@code VarkaNodeCompiler}'s.
  *
- * <p>The literal and input tables are the classifier's {@code mutable.LinkedHashMap[Int, Int]},
- * taken as {@code LinkedHashMap<?, ?>} at the boundary and cast once by
- * {@link VarkaNodeCompiler#table}; see {@code VarkaNodeCompiler}.
+ * <p>The literal and input tables are the classifier's {@link VarkaSlotTable}s.
  */
 final class VarkaChronoCompiler {
 
@@ -107,11 +104,9 @@ final class VarkaChronoCompiler {
    */
   static VarkaFamilyArm arm(
       Expression e,
-      LinkedHashMap<?, ?> inputTable,
-      LinkedHashMap<?, ?> literalTable,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    LinkedHashMap<Object, Object> inputs = VarkaNodeCompiler.table(inputTable);
-    LinkedHashMap<Object, Object> literals = VarkaNodeCompiler.table(literalTable);
     return switch (e) {
       // unix_date/date_from_unix_date are Spark's own `input.asInstanceOf[Int]` in full - a date IS
       // a day count, so both are a pure type relabel with nothing to compute. Unwrapping to the
@@ -130,7 +125,7 @@ final class VarkaChronoCompiler {
           return node;
         }
         var offset = compileOffset(n.days(), inputs, literals, sink);
-        return offset.isEmpty() ? offset : some(new SubDays(node.get(), offset.get()));
+        return offset.map(v -> new SubDays(node.get(), v));
       };
       case DateDiff n -> () -> {
         var end = VarkaNodeCompiler.compileNode(n.endDate(), inputs, literals, sink);
@@ -139,7 +134,7 @@ final class VarkaChronoCompiler {
         }
         var start = VarkaNodeCompiler.compileNode(n.startDate(), inputs, literals, sink);
         return start.isEmpty()
-            ? start : some(new VarkaVectorIR.DateDiff(end.get(), start.get()));
+            ? start : Optional.of(new VarkaVectorIR.DateDiff(end.get(), start.get()));
       };
       case DayOfWeek n ->
           () -> over(n.child(), VarkaVectorIR.DayOfWeek::new, inputs, literals, sink);
@@ -156,12 +151,11 @@ final class VarkaChronoCompiler {
       case NextDay n when n.dayOfWeek().foldable() -> () -> {
         var k = foldWeekday(n.dayOfWeek(), sink);
         if (k.isEmpty()) {
-          return Option.empty();
+          return Optional.empty();
         }
         var d = VarkaNodeCompiler.compileNode(n.startDate(), inputs, literals, sink);
-        return d.isEmpty() ? d
-            : some(new VarkaVectorIR.NextDay(
-                d.get(), VarkaNodeCompiler.intSlot(k.getAsInt(), literals)));
+        return d.map(v -> new VarkaVectorIR.NextDay(
+            v, VarkaNodeCompiler.intSlot(k.getAsInt(), literals)));
       };
       // A weekday column: the kernel reads an int32 column the evaluator derives
       // from the names, per batch, by the row engine's own parser (WeekdayLeaf), so the node
@@ -173,9 +167,8 @@ final class VarkaChronoCompiler {
           && br.dataType() instanceof StringType -> () -> {
         var kind = n.failOnError() ? VarkaDerivedKind.WEEKDAY_ANSI : VarkaDerivedKind.WEEKDAY;
         var d = VarkaNodeCompiler.compileNode(n.startDate(), inputs, literals, sink);
-        return d.isEmpty() ? d
-            : some(new VarkaVectorIR.NextDay(
-                d.get(), VarkaNodeCompiler.derivedRef(br, kind, inputs)));
+        return d.map(v -> new VarkaVectorIR.NextDay(
+            v, VarkaNodeCompiler.derivedRef(br, kind, inputs)));
       };
       case NextDay n ->
           () -> sink.decline("next_day with a weekday that is neither a literal nor a column", n);
@@ -209,8 +202,8 @@ final class VarkaChronoCompiler {
         }
         var dd = VarkaNodeCompiler.compileIntOperand(
             n.day(), "make_date's day", inputs, literals, sink);
-        return dd.isEmpty() ? dd : some(
-            new VarkaVectorIR.MakeDate(yy.get(), mm.get(), dd.get(), n.failOnError()));
+        return dd.map(v ->
+            new VarkaVectorIR.MakeDate(yy.get(), mm.get(), v, n.failOnError()));
       };
       case LastDay n ->
           () -> calendarOver(n.startDate(), n, VarkaVectorIR.LastDay::new, inputs, literals, sink);
@@ -243,8 +236,8 @@ final class VarkaChronoCompiler {
       case TruncDate n when n.format() instanceof BoundReference br
           && br.dataType() instanceof StringType -> () -> {
         var date = calendarInput(n.date(), n, inputs, literals, sink);
-        return date.isEmpty() ? date : some(new VarkaVectorIR.TruncDateDynamic(
-            date.get(), VarkaNodeCompiler.derivedRef(br, VarkaDerivedKind.TRUNC_LEVEL, inputs)));
+        return date.map(v -> new VarkaVectorIR.TruncDateDynamic(
+            v, VarkaNodeCompiler.derivedRef(br, VarkaDerivedKind.TRUNC_LEVEL, inputs)));
       };
       case TruncDate n -> () -> sink.decline("trunc with a non-foldable format", n);
       // Month arithmetic: add_months(d, n) and d +- INTERVAL n MONTH/YEAR are the same
@@ -262,70 +255,65 @@ final class VarkaChronoCompiler {
     };
   }
 
-  private static <T> Option<T> some(T value) {
-    return Option.apply(value);
-  }
-
   /** {@code build} over the compiled child, or the decline if the child declined. */
-  private static Option<VarkaVectorIR> over(
+  private static Optional<VarkaVectorIR> over(
       Expression child,
       java.util.function.Function<VarkaVectorIR, VarkaVectorIR> build,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    Option<VarkaVectorIR> node = VarkaNodeCompiler.compileNode(child, inputs, literals, sink);
-    return node.isEmpty() ? node : some(build.apply(node.get()));
+    Optional<VarkaVectorIR> node = VarkaNodeCompiler.compileNode(child, inputs, literals, sink);
+    return node.map(build);
   }
 
   /** {@code build} over the child admitted under a calendar node. */
-  private static Option<VarkaVectorIR> calendarOver(
+  private static Optional<VarkaVectorIR> calendarOver(
       Expression child,
       Expression calendar,
       java.util.function.Function<VarkaVectorIR, VarkaVectorIR> build,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    Option<VarkaVectorIR> node = calendarInput(child, calendar, inputs, literals, sink);
-    return node.isEmpty() ? node : some(build.apply(node.get()));
+    Optional<VarkaVectorIR> node = calendarInput(child, calendar, inputs, literals, sink);
+    return node.map(build);
   }
 
   /** {@code build} over the Thursday of the compiled child's week, admitted as one shift. */
-  private static Option<VarkaVectorIR> thursdayOver(
+  private static Optional<VarkaVectorIR> thursdayOver(
       Expression child,
       Expression calendar,
       java.util.function.Function<VarkaVectorIR, VarkaVectorIR> build,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    Option<VarkaVectorIR> node = VarkaNodeCompiler.compileNode(child, inputs, literals, sink);
+    Optional<VarkaVectorIR> node = VarkaNodeCompiler.compileNode(child, inputs, literals, sink);
     if (node.isEmpty()) {
       return node;
     }
-    Option<VarkaVectorIR> admitted =
+    Optional<VarkaVectorIR> admitted =
         admitCalendar(new ThursdayOf(node.get()), calendar, literals, sink);
-    return admitted.isEmpty() ? admitted : some(build.apply(admitted.get()));
+    return admitted.map(build);
   }
 
-  private static Option<VarkaVectorIR> addMonths(
+  private static Optional<VarkaVectorIR> addMonths(
       Expression whole,
       Expression date,
       Expression months,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    Option<VarkaVectorIR> node = calendarInput(date, whole, inputs, literals, sink);
+    Optional<VarkaVectorIR> node = calendarInput(date, whole, inputs, literals, sink);
     if (node.isEmpty()) {
       return node;
     }
-    Option<VarkaVectorIR> count = compileMonths(months, inputs, literals, sink);
-    return count.isEmpty() ? count
-        : some(new VarkaVectorIR.AddMonths(node.get(), count.get()));
+    Optional<VarkaVectorIR> count = compileMonths(months, inputs, literals, sink);
+    return count.map(v -> new VarkaVectorIR.AddMonths(node.get(), v));
   }
 
-  private static Option<VarkaVectorIR> dateAdd(
+  private static Optional<VarkaVectorIR> dateAdd(
       DateAdd n,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     // The date child compiles before the offset, matching CaseWhen's rule a few cases below:
     // ordinals and literal slots register in reading order. A foldable literal offset registers
@@ -336,7 +324,7 @@ final class VarkaChronoCompiler {
     Expression days = n.days();
     Optional<BoundReference> negated = days instanceof UnaryMinus u
         ? dayIntervalOffset(u.child()) : Optional.empty();
-    Option<VarkaVectorIR> node = VarkaNodeCompiler.compileNode(
+    Optional<VarkaVectorIR> node = VarkaNodeCompiler.compileNode(
         n.startDate(), inputs, literals, sink);
     if (node.isEmpty()) {
       return node;
@@ -347,10 +335,10 @@ final class VarkaChronoCompiler {
       // own bound the negation cannot overflow, so it is absorbed into SubDays - no
       // UnaryMinus node exists and none is needed. The offset is the same bounded column
       // `compileOffset` makes of the cast form.
-      return some(new SubDays(node.get(), dayIntervalColumn(negated.get(), inputs, sink)));
+      return Optional.of(new SubDays(node.get(), dayIntervalColumn(negated.get(), inputs, sink)));
     }
-    Option<VarkaVectorIR> offset = compileOffset(days, inputs, literals, sink);
-    return offset.isEmpty() ? offset : some(new AddDays(node.get(), offset.get()));
+    Optional<VarkaVectorIR> offset = compileOffset(days, inputs, literals, sink);
+    return offset.map(v -> new AddDays(node.get(), v));
   }
 
   /**
@@ -384,7 +372,7 @@ final class VarkaChronoCompiler {
    */
   static VarkaValueRange.Range dayRange(
       VarkaVectorIR node,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable literals,
       VarkaRangeAnalysis.GuardPolicy policy) {
     return VarkaRangeAnalysis.range(
         node, VarkaRangeAnalysis.Kind.DAY, policy, VarkaNodeCompiler.literalAt(literals));
@@ -415,18 +403,19 @@ final class VarkaChronoCompiler {
    * predicates that were never part of this task's scope ("do not open it wider",
    * {@code VARKA-38.md} 6).
    */
-  static Option<VarkaVectorIR> compileOffset(
+  static Optional<VarkaVectorIR> compileOffset(
       Expression days,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    Option<Object> folded = DateVarkaSupport$.MODULE$.foldDaysOffset(days);
-    if (folded.isDefined()) {
-      return some(VarkaNodeCompiler.intSlot((Integer) folded.get(), literals));
+    Optional<Object> folded =
+        OptionConverters.toJava(DateVarkaSupport$.MODULE$.foldDaysOffset(days));
+    if (folded.isPresent()) {
+      return Optional.of(VarkaNodeCompiler.intSlot((Integer) folded.get(), literals));
     }
     if (days instanceof BoundReference br) {
       if (br.dataType().equals(DataTypes.IntegerType)) {
-        return some(VarkaNodeCompiler.columnRef(br, inputs, LaneType.INT));
+        return Optional.of(VarkaNodeCompiler.columnRef(br, inputs, LaneType.INT));
       }
       return sink.decline("non-integer day offset column of type " + br.dataType().simpleString(),
           br);
@@ -439,7 +428,7 @@ final class VarkaChronoCompiler {
     // the row engine when a live lane is outside.
     Optional<BoundReference> interval = dayIntervalOffset(days);
     if (interval.isPresent()) {
-      return some(dayIntervalColumn(interval.get(), inputs, sink));
+      return Optional.of(dayIntervalColumn(interval.get(), inputs, sink));
     }
     if (days instanceof ExtractANSIIntervalDays e) {
       // A stored INTERVAL DAY column is int64 microseconds, which no int32 lane can read;
@@ -463,7 +452,8 @@ final class VarkaChronoCompiler {
       // EXPLAIN still claims fusion - the ghost fallback `sql/varka/AGENTS.md` forbids. The
       // test is the emitter's own predicate rather than a copy of its list, so the two cannot
       // drift apart again.
-      Option<VarkaVectorIR> compiled = VarkaNodeCompiler.compileNode(days, inputs, literals, sink);
+      Optional<VarkaVectorIR> compiled =
+          VarkaNodeCompiler.compileNode(days, inputs, literals, sink);
       if (compiled.isEmpty()) {
         return compiled;
       }
@@ -479,7 +469,7 @@ final class VarkaChronoCompiler {
 
   /** The bounded int column a {@code CAST(i AS INTERVAL DAY)} offset reads. */
   private static VarkaVectorIR.ColumnRef dayIntervalColumn(
-      BoundReference br, LinkedHashMap<Object, Object> inputs, DeclineSink sink) {
+      BoundReference br, VarkaSlotTable inputs, DeclineSink sink) {
     sink.bound(br.ordinal(), -VarkaChrono.INTERVAL_DAY_LIMIT_DAYS,
         VarkaChrono.INTERVAL_DAY_LIMIT_DAYS);
     return VarkaNodeCompiler.columnRef(br, inputs, LaneType.INT);
@@ -542,26 +532,27 @@ final class VarkaChronoCompiler {
    * every batch. {@code d - INTERVAL m MONTH} arrives as {@code UnaryMinus} over the cast and is
    * not matched here; it declines until the int negate node composes with it.
    */
-  static Option<VarkaVectorIR> compileMonths(
+  static Optional<VarkaVectorIR> compileMonths(
       Expression months,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    Option<Object> folded = DateVarkaSupport$.MODULE$.foldDaysOffset(months);
-    if (folded.isDefined()) {
+    Optional<Object> folded =
+        OptionConverters.toJava(DateVarkaSupport$.MODULE$.foldDaysOffset(months));
+    if (folded.isPresent()) {
       int m = (Integer) folded.get();
       if (m < VarkaChrono.MONTH_ARITH_MIN_MONTHS || m > VarkaChrono.MONTH_ARITH_MAX_MONTHS) {
         return sink.decline("month count outside the range the emitter's magic multiply covers",
             months);
       }
-      return some(VarkaNodeCompiler.intSlot(m, literals));
+      return Optional.of(VarkaNodeCompiler.intSlot(m, literals));
     }
     if (months instanceof BoundReference br && br.dataType().equals(DataTypes.IntegerType)) {
-      return some(VarkaNodeCompiler.columnRef(br, inputs, LaneType.INT));
+      return Optional.of(VarkaNodeCompiler.columnRef(br, inputs, LaneType.INT));
     }
     Optional<BoundReference> interval = monthIntervalOffset(months);
     if (interval.isPresent()) {
-      return some(VarkaNodeCompiler.columnRef(interval.get(), inputs, LaneType.INT));
+      return Optional.of(VarkaNodeCompiler.columnRef(interval.get(), inputs, LaneType.INT));
     }
     // `Cast.intToYearMonthInterval` returns `12 * v` for a YEAR end field, so the value
     // under this cast is a count of years and the node needs months - unlike the MONTH-end
@@ -587,10 +578,10 @@ final class VarkaChronoCompiler {
     // its check and is guarded on the count's value at run time exactly as a plain column
     // count is.
     if (months instanceof UnaryMinus u && u.child().dataType() instanceof YearMonthIntervalType) {
-      Option<VarkaVectorIR> x = VarkaIntervalCompiler.intervalOperand(
+      Optional<VarkaVectorIR> x = VarkaIntervalCompiler.intervalOperand(
           u.child(), "the negated month count", inputs, literals, sink);
-      return x.isEmpty() ? x : some(
-          new IntNeg(VarkaIntervalCompiler.negationMode(x.get(), literals), x.get()));
+      return x.map(v ->
+          new IntNeg(VarkaIntervalCompiler.negationMode(v, literals), v));
     }
     // `d + ym_col`. The stored value is the month count in every unit, so this is the
     // column-count `AddMonths` exactly, with the same runtime guard on the count's lanes -
@@ -599,7 +590,7 @@ final class VarkaChronoCompiler {
     // because no arm asked.
     if (months instanceof BoundReference br
         && br.dataType() instanceof YearMonthIntervalType) {
-      return some(VarkaNodeCompiler.columnRef(br, inputs, LaneType.INT));
+      return Optional.of(VarkaNodeCompiler.columnRef(br, inputs, LaneType.INT));
     }
     // AddMonths.inputTypes is Seq(DateType, IntegerType) exactly - unlike DateAdd, which
     // accepts a TypeCollection - so the analyzer widens a Short/Byte count with a cast and
@@ -628,14 +619,14 @@ final class VarkaChronoCompiler {
    * like any other. An unknown producer declines, so a node this analysis has not been taught
    * fails safe as a residual entry rather than as a wrong answer.
    */
-  private static Option<VarkaVectorIR> calendarInput(
+  private static Optional<VarkaVectorIR> calendarInput(
       Expression child,
       Expression calendar,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    Option<VarkaVectorIR> node = VarkaNodeCompiler.compileNode(child, inputs, literals, sink);
-    return node.isEmpty() ? node : admitCalendar(node.get(), calendar, literals, sink);
+    Optional<VarkaVectorIR> node = VarkaNodeCompiler.compileNode(child, inputs, literals, sink);
+    return node.flatMap(v -> admitCalendar(v, calendar, literals, sink));
   }
 
   /**
@@ -680,7 +671,7 @@ final class VarkaChronoCompiler {
    * {@link #dayRange}'s own set; anything else is returned untouched and its interval speaks for
    * itself.
    */
-  private static Rearmed rearm(VarkaVectorIR node, LinkedHashMap<Object, Object> literals) {
+  private static Rearmed rearm(VarkaVectorIR node, VarkaSlotTable literals) {
     Rebuilt rebuilt = switch (node) {
       case AddDays n -> {
         Rearmed d = rearm(n.days(), literals);
@@ -765,14 +756,14 @@ final class VarkaChronoCompiler {
    * node whose child is not the compiled expression itself - the week tail runs over the Thursday
    * shift the compiler wraps around the date, so the shift is what the analysis bounds.
    */
-  private static Option<VarkaVectorIR> admitCalendar(
+  private static Optional<VarkaVectorIR> admitCalendar(
       VarkaVectorIR node,
       Expression calendar,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     VarkaValueRange.Range range = dayRange(node, literals, VarkaRangeAnalysis.GuardPolicy.ARMED);
     return switch (range) {
-      case VarkaValueRange.Bounded b when decomposesExactly(b) -> some(node);
+      case VarkaValueRange.Bounded b when decomposesExactly(b) -> Optional.of(node);
       case VarkaValueRange.Bounded b -> {
         // The interval ran out, but if a runtime-valued shift is what carried it out then a check
         // can spend it again. `rearm` rewrites the subtree with the checks in it and answers the
@@ -780,7 +771,7 @@ final class VarkaChronoCompiler {
         // declines.
         Rearmed fixed = rearm(node, literals);
         if (fixed.range() instanceof VarkaValueRange.Bounded f && decomposesExactly(f)) {
-          yield some(fixed.node());
+          yield Optional.of(fixed.node());
         }
         yield sink.decline("day range [" + b.lo() + ", " + b.hi()
             + "] leaves the calendar lowering's range", calendar);
@@ -836,22 +827,22 @@ final class VarkaChronoCompiler {
    * The lowering of {@code trunc} with a foldable format: the level is resolved first, then the
    * date; WEEK is Spark's own definition, {@code next_day(d - 7, 'MONDAY')}.
    */
-  private static Option<VarkaVectorIR> truncFolded(
+  private static Optional<VarkaVectorIR> truncFolded(
       TruncDate n,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     Optional<TruncTarget> target = foldTruncLevel(n.format(), sink);
     if (target.isEmpty()) {
-      return Option.empty();
+      return Optional.empty();
     }
     return switch (target.get()) {
       case ToLevel l -> {
-        Option<VarkaVectorIR> date = calendarInput(n.date(), n, inputs, literals, sink);
-        yield date.isEmpty() ? date : some(new VarkaVectorIR.TruncDate(date.get(), l.level()));
+        Optional<VarkaVectorIR> date = calendarInput(n.date(), n, inputs, literals, sink);
+        yield date.map(v -> new VarkaVectorIR.TruncDate(v, l.level()));
       }
       case ToWeek w -> {
-        Option<VarkaVectorIR> date = VarkaNodeCompiler.compileNode(
+        Optional<VarkaVectorIR> date = VarkaNodeCompiler.compileNode(
             n.date(), inputs, literals, sink);
         if (date.isEmpty()) {
           yield date;
@@ -861,7 +852,7 @@ final class VarkaChronoCompiler {
         // foldWeekday uses, so the constant is the definition's, not a retyped 3.
         LiteralSlot monday = VarkaNodeCompiler.intSlot(
             DateTimeUtils.getDayOfWeekFromString(UTF8String.fromString("MONDAY")) - 1, literals);
-        yield some(new VarkaVectorIR.NextDay(new SubDays(date.get(), week), monday));
+        yield Optional.of(new VarkaVectorIR.NextDay(new SubDays(date.get(), week), monday));
       }
     };
   }

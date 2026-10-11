@@ -26,9 +26,7 @@ import java.util.OptionalLong;
 import java.util.TreeSet;
 import java.util.function.BinaryOperator;
 
-import scala.Option;
 import scala.Tuple2;
-import scala.collection.mutable.LinkedHashMap;
 import scala.jdk.javaapi.CollectionConverters;
 
 import org.apache.spark.sql.catalyst.expressions.And;
@@ -74,9 +72,7 @@ import org.apache.spark.sql.types.YearMonthIntervalType;
  * the family does not claim. {@code compilePredicate} reaches {@link #compileCond} and the
  * balanced {@link #andFold} directly.
  *
- * <p>The literal and input tables are the classifier's {@code mutable.LinkedHashMap[Int, Int]},
- * taken as {@code LinkedHashMap<?, ?>} at the boundary and cast once by
- * {@link VarkaNodeCompiler#table}; see {@code VarkaNodeCompiler}.
+ * <p>The literal and input tables are the classifier's {@link VarkaSlotTable}s.
  */
 final class VarkaConditionCompiler {
 
@@ -90,11 +86,9 @@ final class VarkaConditionCompiler {
    */
   static VarkaFamilyArm arm(
       Expression e,
-      LinkedHashMap<?, ?> inputTable,
-      LinkedHashMap<?, ?> literalTable,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    LinkedHashMap<Object, Object> inputs = VarkaNodeCompiler.table(inputTable);
-    LinkedHashMap<Object, Object> literals = VarkaNodeCompiler.table(literalTable);
     return switch (e) {
       case If expr -> () -> ifElse(expr, inputs, literals, sink);
       // With no ELSE the missing branch is a null literal, which would break the dense body's
@@ -123,29 +117,29 @@ final class VarkaConditionCompiler {
    * The lowering of {@code IF}: the condition, the two branches and, only then, whether they
    * share a lane.
    */
-  private static Option<VarkaVectorIR> ifElse(
+  private static Optional<VarkaVectorIR> ifElse(
       If expr,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    Option<Cond> cond = compileCond(expr.predicate(), inputs, literals, sink);
+    Optional<Cond> cond = compileCond(expr.predicate(), inputs, literals, sink);
     if (cond.isEmpty()) {
-      return Option.empty();
+      return Optional.empty();
     }
-    Option<VarkaVectorIR> thenNode = VarkaNodeCompiler.compileNode(
+    Optional<VarkaVectorIR> thenNode = VarkaNodeCompiler.compileNode(
         expr.trueValue(), inputs, literals, sink);
     if (thenNode.isEmpty()) {
-      return Option.empty();
+      return Optional.empty();
     }
-    Option<VarkaVectorIR> elseNode = VarkaNodeCompiler.compileNode(
+    Optional<VarkaVectorIR> elseNode = VarkaNodeCompiler.compileNode(
         expr.falseValue(), inputs, literals, sink);
     if (elseNode.isEmpty()) {
-      return Option.empty();
+      return Optional.empty();
     }
     if (!sameLane(expr, sink, cond.get(), thenNode.get(), elseNode.get())) {
-      return Option.empty();
+      return Optional.empty();
     }
-    return Option.apply(new IfElse(cond.get(), thenNode.get(), elseNode.get()));
+    return Optional.of(new IfElse(cond.get(), thenNode.get(), elseNode.get()));
   }
 
   /**
@@ -153,26 +147,26 @@ final class VarkaConditionCompiler {
    * after one declines, as the entry's input and literal tables are rolled back by the caller;
    * the lanes are then checked, and the fold runs from the last branch.
    */
-  private static Option<VarkaVectorIR> caseWhen(
+  private static Optional<VarkaVectorIR> caseWhen(
       CaseWhen expr,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     List<Tuple2<Expression, Expression>> branches = CollectionConverters.asJava(expr.branches());
-    List<Option<Cond>> conds = new ArrayList<>();
-    List<Option<VarkaVectorIR>> values = new ArrayList<>();
+    List<Optional<Cond>> conds = new ArrayList<>();
+    List<Optional<VarkaVectorIR>> values = new ArrayList<>();
     for (Tuple2<Expression, Expression> branch : branches) {
       conds.add(compileCond(branch._1(), inputs, literals, sink));
       values.add(VarkaNodeCompiler.compileNode(branch._2(), inputs, literals, sink));
     }
-    Option<VarkaVectorIR> compiledElse =
+    Optional<VarkaVectorIR> compiledElse =
         VarkaNodeCompiler.compileNode(expr.elseValue().get(), inputs, literals, sink);
-    boolean all = compiledElse.isDefined();
+    boolean all = compiledElse.isPresent();
     for (int i = 0; i < branches.size(); i++) {
-      all &= conds.get(i).isDefined() && values.get(i).isDefined();
+      all &= conds.get(i).isPresent() && values.get(i).isPresent();
     }
     if (!all) {
-      return Option.empty();
+      return Optional.empty();
     }
     List<VarkaVectorIR> nodes = new ArrayList<>();
     for (int i = 0; i < branches.size(); i++) {
@@ -181,13 +175,13 @@ final class VarkaConditionCompiler {
     }
     nodes.add(compiledElse.get());
     if (!sameLane(expr, sink, nodes.toArray(new VarkaVectorIR[0]))) {
-      return Option.empty();
+      return Optional.empty();
     }
     VarkaVectorIR rest = compiledElse.get();
     for (int i = branches.size() - 1; i >= 0; i--) {
       rest = new IfElse(conds.get(i).get(), values.get(i).get(), rest);
     }
-    return Option.apply(rest);
+    return Optional.of(rest);
   }
 
   /**
@@ -253,59 +247,57 @@ final class VarkaConditionCompiler {
    * ({@code unix_date}/{@code date_from_unix_date} and the identity date {@code Cast}) - a future
    * relabel that changes nullability or value would silently break this guard.
    */
-  private static Option<VarkaVectorIR> compileCoalesce(
+  private static Optional<VarkaVectorIR> compileCoalesce(
       List<Expression> children,
       int from,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     if (from == children.size() - 1) {
       return VarkaNodeCompiler.compileNode(children.get(from), inputs, literals, sink);
     }
     Expression head = children.get(from);
-    Option<VarkaVectorIR> compiled = VarkaNodeCompiler.compileNode(head, inputs, literals, sink);
+    Optional<VarkaVectorIR> compiled = VarkaNodeCompiler.compileNode(head, inputs, literals, sink);
     if (compiled.isEmpty()) {
       return compiled;
     }
     if (compiled.get() instanceof ColumnRef ref) {
-      Option<VarkaVectorIR> rest = compileCoalesce(children, from + 1, inputs, literals, sink);
+      Optional<VarkaVectorIR> rest = compileCoalesce(children, from + 1, inputs, literals, sink);
       if (rest.isEmpty()) {
         return rest;
       }
-      return Option.apply(new IfElse(new VarkaVectorIR.IsNotNull(ref), ref, rest.get()));
+      return Optional.of(new IfElse(new VarkaVectorIR.IsNotNull(ref), ref, rest.get()));
     }
     return sink.decline("coalesce operand before the last is not a bare date column", head);
   }
 
   /** {@code greatest} and {@code least}: every operand compiled, then folded from the left. */
-  static Option<VarkaVectorIR> foldPick(
+  static Optional<VarkaVectorIR> foldPick(
       scala.collection.immutable.Seq<Expression> children,
-      LinkedHashMap<?, ?> inputTable,
-      LinkedHashMap<?, ?> literalTable,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink,
       scala.Function2<VarkaVectorIR, VarkaVectorIR, VarkaVectorIR> combine) {
-    LinkedHashMap<Object, Object> inputs = VarkaNodeCompiler.table(inputTable);
-    LinkedHashMap<Object, Object> literals = VarkaNodeCompiler.table(literalTable);
     // Every operand is compiled, in order, even after one declines: the tables are rolled back by
     // the caller, and a declined entry leaves them as it found them.
     List<VarkaVectorIR> compiled = new ArrayList<>();
     boolean all = true;
     for (Expression child : CollectionConverters.asJava(children)) {
-      Option<VarkaVectorIR> node = VarkaNodeCompiler.compileNode(child, inputs, literals, sink);
-      if (node.isDefined()) {
+      Optional<VarkaVectorIR> node = VarkaNodeCompiler.compileNode(child, inputs, literals, sink);
+      if (node.isPresent()) {
         compiled.add(node.get());
       } else {
         all = false;
       }
     }
     if (!all || compiled.isEmpty()) {
-      return Option.empty();
+      return Optional.empty();
     }
     VarkaVectorIR folded = compiled.get(0);
     for (int i = 1; i < compiled.size(); i++) {
       folded = combine.apply(folded, compiled.get(i));
     }
-    return Option.apply(folded);
+    return Optional.of(folded);
   }
 
   /**
@@ -314,13 +306,11 @@ final class VarkaConditionCompiler {
    * its both-null-is-true case breaks the null-intolerant comparison rule and earns its own
    * algebra entry or nothing (plan section 4).
    */
-  static Option<Cond> compileCond(
+  static Optional<Cond> compileCond(
       Expression expr,
-      LinkedHashMap<?, ?> inputTable,
-      LinkedHashMap<?, ?> literalTable,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    LinkedHashMap<Object, Object> inputs = VarkaNodeCompiler.table(inputTable);
-    LinkedHashMap<Object, Object> literals = VarkaNodeCompiler.table(literalTable);
     // A chain of `instanceof` tests: Catalyst's expressions are not a sealed set, so there is
     // nothing for a pattern `switch` to be exhaustive over. The classes are disjoint, so the
     // order only matters where a guard falls through.
@@ -360,18 +350,18 @@ final class VarkaConditionCompiler {
       return compileInList(inSet.child(), elements, inSet, inputs, literals, sink);
     }
     if (expr instanceof And and) {
-      Option<Cond> left = compileCond(and.left(), inputs, literals, sink);
+      Optional<Cond> left = compileCond(and.left(), inputs, literals, sink);
       if (left.isEmpty()) {
         return left;
       }
-      Option<Cond> right = compileCond(and.right(), inputs, literals, sink);
+      Optional<Cond> right = compileCond(and.right(), inputs, literals, sink);
       if (right.isEmpty()) {
         return right;
       }
       if (!sameLane(expr, sink, left.get(), right.get())) {
-        return Option.empty();
+        return Optional.empty();
       }
-      return Option.apply(new VarkaVectorIR.And(left.get(), right.get()));
+      return Optional.of(new VarkaVectorIR.And(left.get(), right.get()));
     }
     if (expr instanceof Or or) {
       // A disjunction of ranges over one int or date column - the partition-key filter a BI
@@ -380,27 +370,27 @@ final class VarkaConditionCompiler {
       if (sink.rangeSets()) {
         Optional<RangeSet> set = rangeSet(or);
         if (set.isPresent()) {
-          return Option.apply(new InRanges(
+          return Optional.of(new InRanges(
               VarkaNodeCompiler.columnRef(set.get().column(), inputs, LaneType.INT),
               set.get().bounds()));
         }
       }
-      Option<Cond> left = compileCond(or.left(), inputs, literals, sink);
+      Optional<Cond> left = compileCond(or.left(), inputs, literals, sink);
       if (left.isEmpty()) {
         return left;
       }
-      Option<Cond> right = compileCond(or.right(), inputs, literals, sink);
+      Optional<Cond> right = compileCond(or.right(), inputs, literals, sink);
       if (right.isEmpty()) {
         return right;
       }
       if (!sameLane(expr, sink, left.get(), right.get())) {
-        return Option.empty();
+        return Optional.empty();
       }
-      return Option.apply(new VarkaVectorIR.Or(left.get(), right.get()));
+      return Optional.of(new VarkaVectorIR.Or(left.get(), right.get()));
     }
     if (expr instanceof Not not) {
-      Option<Cond> child = compileCond(not.child(), inputs, literals, sink);
-      return child.isEmpty() ? child : Option.apply(new VarkaVectorIR.Not(child.get()));
+      Optional<Cond> child = compileCond(not.child(), inputs, literals, sink);
+      return child.map(v -> new VarkaVectorIR.Not(v));
     }
     // The validity predicates: IS NOT NULL is the IR's first total condition
     // (never unknown), and IS NULL is its NOT - a slot swap in the emitter, no code.
@@ -408,8 +398,8 @@ final class VarkaConditionCompiler {
       return compileValidity(n.child(), expr, inputs, literals, sink);
     }
     if (expr instanceof IsNull n) {
-      Option<Cond> validity = compileValidity(n.child(), expr, inputs, literals, sink);
-      return validity.isEmpty() ? validity : Option.apply(new VarkaVectorIR.Not(validity.get()));
+      Optional<Cond> validity = compileValidity(n.child(), expr, inputs, literals, sink);
+      return validity.map(v -> new VarkaVectorIR.Not(v));
     }
     // Defensive, mirroring compileNode: hand-built Nvl/Nvl2 in tests and the fusion report
     // arrive unreplaced; real queries never do.
@@ -447,40 +437,40 @@ final class VarkaConditionCompiler {
    * {@code 2n - 1} op nodes; a right-nested fold would hit the emitter's depth cap at 15. Above
    * the cap, or with any non-literal or null element, the entry declines with its reason.
    */
-  private static Option<Cond> compileInList(
+  private static Optional<Cond> compileInList(
       Expression value,
       List<OptionalInt> elements,
       Expression whole,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     TreeSet<Integer> days = new TreeSet<>();
     for (OptionalInt element : elements) {
       if (element.isEmpty()) {
         sink.note("IN list has a null or non-literal element", whole);
-        return Option.empty();
+        return Optional.empty();
       }
       days.add(element.getAsInt());
     }
     if (days.isEmpty()) {
       sink.note("IN list has a null or non-literal element", whole);
-      return Option.empty();
+      return Optional.empty();
     }
     if (days.size() > VarkaNodeCompiler.MAX_IN_LITERALS) {
       sink.note("IN list longer than the fused cap of " + VarkaNodeCompiler.MAX_IN_LITERALS, whole);
-      return Option.empty();
+      return Optional.empty();
     }
-    Option<VarkaVectorIR> compiledValue = VarkaNodeCompiler.compileNode(
+    Optional<VarkaVectorIR> compiledValue = VarkaNodeCompiler.compileNode(
         value, inputs, literals, sink);
     if (compiledValue.isEmpty()) {
-      return Option.empty();
+      return Optional.empty();
     }
     List<Cond> leaves = new ArrayList<>();
     for (int d : days) {
       leaves.add(new Compare(
           CompareOp.EQ, compiledValue.get(), VarkaNodeCompiler.intSlot(d, literals)));
     }
-    return Option.apply(balancedOr(leaves));
+    return Optional.of(balancedOr(leaves));
   }
 
   /** Pairwise-reduces conditions into a balanced OR tree; the base of the cap arithmetic. */
@@ -522,23 +512,23 @@ final class VarkaConditionCompiler {
    * leave a residual row filter above every fused int comparison (VARKA-122) - the kernel would do
    * the comparison and the row engine would still visit every row to check the null.
    */
-  private static Option<Cond> compileValidity(
+  private static Optional<Cond> compileValidity(
       Expression child,
       Expression whole,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    Option<VarkaVectorIR> compiled;
+    Optional<VarkaVectorIR> compiled;
     if (child instanceof BoundReference br && br.dataType().equals(DataTypes.IntegerType)) {
-      compiled = Option.apply(VarkaNodeCompiler.columnRef(br, inputs, LaneType.INT));
+      compiled = Optional.of(VarkaNodeCompiler.columnRef(br, inputs, LaneType.INT));
     } else {
       compiled = VarkaNodeCompiler.compileNode(child, inputs, literals, sink);
     }
     if (compiled.isEmpty()) {
-      return Option.empty();
+      return Optional.empty();
     }
     if (compiled.get() instanceof ColumnRef ref) {
-      return Option.apply(new VarkaVectorIR.IsNotNull(ref));
+      return Optional.of(new VarkaVectorIR.IsNotNull(ref));
     }
     return sink.decline("validity predicate over a non-column operand", whole);
   }
@@ -726,22 +716,22 @@ final class VarkaConditionCompiler {
     return Optional.empty();
   }
 
-  private static Option<Cond> compare(
+  private static Optional<Cond> compare(
       CompareOp op,
       Expression l,
       Expression r,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    Option<VarkaVectorIR> left = operand(l, inputs, literals, sink);
+    Optional<VarkaVectorIR> left = operand(l, inputs, literals, sink);
     if (left.isEmpty()) {
-      return Option.empty();
+      return Optional.empty();
     }
-    Option<VarkaVectorIR> right = operand(r, inputs, literals, sink);
+    Optional<VarkaVectorIR> right = operand(r, inputs, literals, sink);
     if (right.isEmpty()) {
-      return Option.empty();
+      return Optional.empty();
     }
-    return Option.apply(new Compare(op, left.get(), right.get()));
+    return Optional.of(new Compare(op, left.get(), right.get()));
   }
 
   /**
@@ -759,17 +749,17 @@ final class VarkaConditionCompiler {
    * leave the int range - which is why this takes one rule where VARKA-63's arithmetic needed an
    * overflow mode.
    */
-  private static Option<VarkaVectorIR> operand(
+  private static Optional<VarkaVectorIR> operand(
       Expression e,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     if (e instanceof Literal l && l.value() instanceof Integer v
         && l.dataType().equals(DataTypes.IntegerType)) {
-      return Option.apply(VarkaNodeCompiler.intSlot(v, literals));
+      return Optional.of(VarkaNodeCompiler.intSlot(v, literals));
     }
     if (e instanceof BoundReference br && br.dataType().equals(DataTypes.IntegerType)) {
-      return Option.apply(VarkaNodeCompiler.columnRef(br, inputs, LaneType.INT));
+      return Optional.of(VarkaNodeCompiler.columnRef(br, inputs, LaneType.INT));
     }
     return VarkaNodeCompiler.compileNode(e, inputs, literals, sink);
   }

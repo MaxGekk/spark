@@ -22,10 +22,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.OptionalLong;
 
-import scala.Option;
-import scala.collection.mutable.LinkedHashMap;
 import scala.jdk.javaapi.CollectionConverters;
 
 import org.apache.spark.sql.catalyst.expressions.BoundReference;
@@ -79,9 +78,7 @@ import org.apache.spark.unsafe.types.UTF8String;
  * the family does not claim, so that asking is side-effect free. {@code compileRoot} calls
  * {@link #compileTime} directly for the functions whose int result only an output can take.
  *
- * <p>The literal and input tables are the classifier's {@code mutable.LinkedHashMap[Int, Int]},
- * taken as {@code LinkedHashMap<?, ?>} at the boundary and cast once by
- * {@link VarkaNodeCompiler#table}; see {@code VarkaNodeCompiler}.
+ * <p>The literal and input tables are the classifier's {@link VarkaSlotTable}s.
  */
 final class VarkaTimeCompiler {
 
@@ -151,11 +148,9 @@ final class VarkaTimeCompiler {
    */
   static VarkaFamilyArm arm(
       Expression e,
-      LinkedHashMap<?, ?> inputTable,
-      LinkedHashMap<?, ?> literalTable,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    LinkedHashMap<Object, Object> inputs = VarkaNodeCompiler.table(inputTable);
-    LinkedHashMap<Object, Object> literals = VarkaNodeCompiler.table(literalTable);
     return switch (e) {
       // The long lane's column leaf: a `bigint`, a `TIME(p)` and a day-time interval are one
       // eight-byte lane, holding the value, nanoseconds of day and microseconds respectively (task
@@ -163,7 +158,7 @@ final class VarkaTimeCompiler {
       // appear - never in a date or an int position - so the leaf cannot put one there, and the
       // IR's constructors refuse a tree that mixes it with the int lane anyway.
       case BoundReference br when VarkaNodeCompiler.onLongLane(br.dataType()) ->
-          () -> Option.apply(VarkaNodeCompiler.columnRef(br, inputs, LaneType.LONG));
+          () -> Optional.of(VarkaNodeCompiler.columnRef(br, inputs, LaneType.LONG));
       // Ahead of the generic "non-date column" decline, so the reason is the decision.
       case BoundReference br when isTimestamp(br.dataType()) ->
           () -> sink.decline(TIMESTAMP_OUT_OF_MILESTONE, br);
@@ -171,7 +166,7 @@ final class VarkaTimeCompiler {
       // holds, so `l > 5000000000`, `t < TIME'12:00'` and `dt > INTERVAL '1' DAY` take a slot.
       case Literal l when l.value() instanceof Long
           && VarkaNodeCompiler.onLongLane(l.dataType()) ->
-          () -> Option.apply(sink.longSlot((Long) l.value()));
+          () -> Optional.of(sink.longSlot((Long) l.value()));
       // TIME's precision cast. A `TIME(p)` value is stored truncated to `p` digits and
       // `Cast.castToTime` truncates again to the target precision, so a cast to an equal or wider
       // precision - the one type coercion inserts when two precisions meet in a comparison -
@@ -300,14 +295,12 @@ final class VarkaTimeCompiler {
    * root, the one position that can take the three field extracts, whose result is an int
    * computed in the long lane (see {@code compileRoot}).
    */
-  static Option<VarkaVectorIR> compileTime(
+  static Optional<VarkaVectorIR> compileTime(
       StaticInvoke si,
-      LinkedHashMap<?, ?> inputTable,
-      LinkedHashMap<?, ?> literalTable,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink,
       boolean atRoot) {
-    LinkedHashMap<Object, Object> inputs = VarkaNodeCompiler.table(inputTable);
-    LinkedHashMap<Object, Object> literals = VarkaNodeCompiler.table(literalTable);
     // A node outside the table fails here, as the Scala `timeTargets(key)` did, rather than
     // reaching a decline text as "null".
     String label = Objects.requireNonNull(
@@ -317,15 +310,15 @@ final class VarkaTimeCompiler {
     switch (si.functionName()) {
       case "subtractTimes" -> {
         if (args.size() == 2) {
-          Option<VarkaVectorIR> end = longOperand(args.get(0), inputs, literals, sink);
+          Optional<VarkaVectorIR> end = longOperand(args.get(0), inputs, literals, sink);
           if (end.isEmpty()) {
             return end;
           }
-          Option<VarkaVectorIR> start = longOperand(args.get(1), inputs, literals, sink);
+          Optional<VarkaVectorIR> start = longOperand(args.get(1), inputs, literals, sink);
           if (start.isEmpty()) {
             return start;
           }
-          return Option.apply(new ConstDivide(
+          return Optional.of(new ConstDivide(
               new IntArith(IntOp.SUB, Overflow.WRAP, end.get(), start.get()),
               DateTimeConstants.NANOS_PER_MICROS, DAY_OF_NANOS));
         }
@@ -335,17 +328,17 @@ final class VarkaTimeCompiler {
           OptionalLong nanos = literalUnit(
               args.get(0), NANOS_PER_TIME_UNIT, "unit", label, si, sink);
           if (nanos.isEmpty()) {
-            return Option.empty();
+            return Optional.empty();
           }
-          Option<VarkaVectorIR> end = longOperand(args.get(2), inputs, literals, sink);
+          Optional<VarkaVectorIR> end = longOperand(args.get(2), inputs, literals, sink);
           if (end.isEmpty()) {
             return end;
           }
-          Option<VarkaVectorIR> start = longOperand(args.get(1), inputs, literals, sink);
+          Optional<VarkaVectorIR> start = longOperand(args.get(1), inputs, literals, sink);
           if (start.isEmpty()) {
             return start;
           }
-          return Option.apply(new ConstDivide(
+          return Optional.of(new ConstDivide(
               new IntArith(IntOp.SUB, Overflow.WRAP, end.get(), start.get()),
               nanos.getAsLong(), DAY_OF_NANOS));
         }
@@ -355,13 +348,13 @@ final class VarkaTimeCompiler {
           OptionalLong unit = literalUnit(
               args.get(0), NANOS_PER_TIME_UNIT, "level", label, si, sink);
           if (unit.isEmpty()) {
-            return Option.empty();
+            return Optional.empty();
           }
-          Option<VarkaVectorIR> t = longOperand(args.get(1), inputs, literals, sink);
+          Optional<VarkaVectorIR> t = longOperand(args.get(1), inputs, literals, sink);
           if (t.isEmpty()) {
             return t;
           }
-          return Option.apply(new IntArith(IntOp.MUL, Overflow.WRAP,
+          return Optional.of(new IntArith(IntOp.MUL, Overflow.WRAP,
               new ConstDivide(t.get(), unit.getAsLong(), DAY_OF_NANOS),
               sink.longSlot(unit.getAsLong())));
         }
@@ -375,26 +368,26 @@ final class VarkaTimeCompiler {
       // and every result is under 86400, so nothing overflows and nothing is guarded.
       case "getHoursOfTime" -> {
         if (args.size() == 1) {
-          Option<VarkaVectorIR> t = narrowedOperand(
+          Optional<VarkaVectorIR> t = narrowedOperand(
               args.get(0), atRoot, label, si, inputs, literals, sink);
-          return t.isEmpty() ? t : Option.apply(new NarrowLane(
-              new ConstDivide(t.get(), NANOS_PER_TIME_UNIT.get("HOUR"), DAY_OF_NANOS)));
+          return t.map(v -> new NarrowLane(
+              new ConstDivide(v, NANOS_PER_TIME_UNIT.get("HOUR"), DAY_OF_NANOS)));
         }
       }
       case "getMinutesOfTime" -> {
         if (args.size() == 1) {
-          Option<VarkaVectorIR> t = narrowedOperand(
+          Optional<VarkaVectorIR> t = narrowedOperand(
               args.get(0), atRoot, label, si, inputs, literals, sink);
-          return t.isEmpty() ? t : Option.apply(new NarrowLane(remainderOfSixty(
-              new ConstDivide(t.get(), NANOS_PER_TIME_UNIT.get("MINUTE"), DAY_OF_NANOS), sink)));
+          return t.map(v -> new NarrowLane(remainderOfSixty(
+              new ConstDivide(v, NANOS_PER_TIME_UNIT.get("MINUTE"), DAY_OF_NANOS), sink)));
         }
       }
       case "getSecondsOfTime" -> {
         if (args.size() == 1) {
-          Option<VarkaVectorIR> t = narrowedOperand(
+          Optional<VarkaVectorIR> t = narrowedOperand(
               args.get(0), atRoot, label, si, inputs, literals, sink);
-          return t.isEmpty() ? t : Option.apply(new NarrowLane(remainderOfSixty(
-              new ConstDivide(t.get(), NANOS_PER_TIME_UNIT.get("SECOND"), DAY_OF_NANOS), sink)));
+          return t.map(v -> new NarrowLane(remainderOfSixty(
+              new ConstDivide(v, NANOS_PER_TIME_UNIT.get("SECOND"), DAY_OF_NANOS), sink)));
         }
       }
       // timeAddInterval(t, p, dt, endField, target): addExact(t, multiplyExact(dt, 1000)),
@@ -472,14 +465,14 @@ final class VarkaTimeCompiler {
    * compiled first, so the inputs keep the expression's argument order, as every other lowering's
    * do.
    */
-  private static Option<VarkaVectorIR> timeAddInterval(
+  private static Optional<VarkaVectorIR> timeAddInterval(
       StaticInvoke si,
       String label,
       Expression time,
       Expression interval,
       int target,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     if (timeAddIntervalTruncates(time.dataType(), interval.dataType(), target)) {
       // Not reachable for any type Spark admits today; a decline rather than a wrong
@@ -487,11 +480,11 @@ final class VarkaTimeCompiler {
       return sink.decline(label + ": the precision truncation is not the identity for these types",
           si);
     }
-    Option<VarkaVectorIR> t = longOperand(time, inputs, literals, sink);
+    Optional<VarkaVectorIR> t = longOperand(time, inputs, literals, sink);
     if (t.isEmpty()) {
       return t;
     }
-    Option<VarkaVectorIR> nanos;
+    Optional<VarkaVectorIR> nanos;
     if (interval instanceof Literal literal && literal.value() instanceof Long micros
         && literal.dataType() instanceof DayTimeIntervalType) {
       // A range and not `Math.abs(micros) > day`: the absolute value of Long.MIN_VALUE is
@@ -501,22 +494,22 @@ final class VarkaTimeCompiler {
         nanos = sink.decline(label + ": the interval is longer than a day, so every time crosses "
             + "midnight and the row engine raises the error", si);
       } else {
-        nanos = Option.apply(sink.longSlot(micros * DateTimeConstants.NANOS_PER_MICROS));
+        nanos = Optional.of(sink.longSlot(micros * DateTimeConstants.NANOS_PER_MICROS));
       }
     } else {
-      Option<VarkaVectorIR> dt = longOperand(interval, inputs, literals, sink);
+      Optional<VarkaVectorIR> dt = longOperand(interval, inputs, literals, sink);
       if (dt.isEmpty()) {
         nanos = dt;
       } else {
         var guarded = new GuardedRange(dt.get(), -ONE_DAY_MICROS, ONE_DAY_MICROS);
-        nanos = Option.apply(new IntArith(IntOp.MUL, Overflow.WRAP, guarded,
+        nanos = Optional.of(new IntArith(IntOp.MUL, Overflow.WRAP, guarded,
             sink.longSlot(DateTimeConstants.NANOS_PER_MICROS)));
       }
     }
     if (nanos.isEmpty()) {
       return nanos;
     }
-    return Option.apply(new GuardedRange(
+    return Optional.of(new GuardedRange(
         new IntArith(IntOp.ADD, Overflow.WRAP, t.get(), nanos.get()), 0L,
         DateTimeConstants.NANOS_PER_DAY - 1));
   }
@@ -526,14 +519,14 @@ final class VarkaTimeCompiler {
    * widening casts, all of which the leaf arms above put on the long lane; anything else declined
    * already, and one on another lane is dropped here without a note of its own.
    */
-  private static Option<VarkaVectorIR> longOperand(
+  private static Optional<VarkaVectorIR> longOperand(
       Expression e,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    Option<VarkaVectorIR> compiled = VarkaNodeCompiler.compileNode(e, inputs, literals, sink);
-    if (compiled.isDefined() && compiled.get().laneType() != LaneType.LONG) {
-      return Option.empty();
+    Optional<VarkaVectorIR> compiled = VarkaNodeCompiler.compileNode(e, inputs, literals, sink);
+    if (compiled.isPresent() && compiled.get().laneType() != LaneType.LONG) {
+      return Optional.empty();
     }
     return compiled;
   }
@@ -543,13 +536,13 @@ final class VarkaTimeCompiler {
    * {@code compileRoot}): the narrowing is the kernel's store, so under another node the entry
    * declines and says why.
    */
-  private static Option<VarkaVectorIR> narrowedOperand(
+  private static Optional<VarkaVectorIR> narrowedOperand(
       Expression time,
       boolean atRoot,
       String label,
       StaticInvoke si,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     if (atRoot) {
       return longOperand(time, inputs, literals, sink);
@@ -580,17 +573,17 @@ final class VarkaTimeCompiler {
   }
 
   /** {@code time_to_millis} and {@code time_to_micros}: a truncating division of the TIME. */
-  private static Option<VarkaVectorIR> timeToUnit(
+  private static Optional<VarkaVectorIR> timeToUnit(
       Expression time,
       long nanosPerUnit,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    Option<VarkaVectorIR> t = longOperand(time, inputs, literals, sink);
+    Optional<VarkaVectorIR> t = longOperand(time, inputs, literals, sink);
     if (t.isEmpty()) {
       return t;
     }
-    return Option.apply(new ConstDivide(t.get(), nanosPerUnit, DAY_OF_NANOS));
+    return Optional.of(new ConstDivide(t.get(), nanosPerUnit, DAY_OF_NANOS));
   }
 
   /**
@@ -599,19 +592,19 @@ final class VarkaTimeCompiler {
    * result is inside the day, so the guard is the conversion's own range check and its decline is
    * the row engine's error.
    */
-  private static Option<VarkaVectorIR> timeFromUnits(
+  private static Optional<VarkaVectorIR> timeFromUnits(
       Expression count,
       long nanosPerUnit,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    Option<VarkaVectorIR> n = longOperand(count, inputs, literals, sink);
+    Optional<VarkaVectorIR> n = longOperand(count, inputs, literals, sink);
     if (n.isEmpty()) {
       return n;
     }
     var guarded = new GuardedRange(
         n.get(), 0L, (DateTimeConstants.NANOS_PER_DAY - 1) / nanosPerUnit);
-    return Option.apply(new IntArith(
+    return Optional.of(new IntArith(
         IntOp.MUL, Overflow.WRAP, guarded, sink.longSlot(nanosPerUnit)));
   }
 
