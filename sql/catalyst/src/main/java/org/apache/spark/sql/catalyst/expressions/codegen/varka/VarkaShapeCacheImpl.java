@@ -590,6 +590,8 @@ public final class VarkaShapeCacheImpl {
    * decides whether the task falls back or dies from the exception's own type. Wrapping would
    * turn an {@code OutOfMemoryError} or an interrupt into an ordinary kernel failure.
    */
+  // The sneaky-throw idiom: E is inferred as an unchecked type at each call, so the cast checks
+  // nothing and the throwable leaves with its own type.
   @SuppressWarnings("unchecked")
   static <E extends Throwable> RuntimeException sneakyThrow(Throwable t) throws E {
     throw (E) t;

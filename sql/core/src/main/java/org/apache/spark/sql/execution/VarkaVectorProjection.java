@@ -88,6 +88,7 @@ final class VarkaVectorProjection {
 
   /** The projection list as the expressions Catalyst's factories take; Scala's {@code Seq} is
    * covariant and Java's view of it is not. */
+  // Safe: Scala's immutable Seq is covariant, so a Seq of NamedExpression is a Seq of Expression.
   @SuppressWarnings("unchecked")
   private Seq<Expression> expressions() {
     return (Seq<Expression>) (Seq<?>) projectList;

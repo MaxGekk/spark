@@ -17,6 +17,8 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import javax.annotation.Nullable;
+
 import jdk.jfr.Category;
 import jdk.jfr.Event;
 import jdk.jfr.Label;
@@ -42,10 +44,10 @@ import jdk.jfr.Name;
 public final class VarkaCompilationDivergenceEvent extends Event {
 
   @Label("Shape Hash")
-  public String shapeHash;
+  public @Nullable String shapeHash;
 
   @Label("Method Name")
-  public String methodName;
+  public @Nullable String methodName;
 
   @Label("Compile Level")
   public int compileLevel;

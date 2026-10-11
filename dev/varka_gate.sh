@@ -44,7 +44,8 @@
 #             -DskipTests, so the invariants ChainsTest and SurfaceTest hold (every
 #             entry fuses, carries all three types and clears MIN_OPS) are enforced
 #             here or nowhere. About ten seconds.
-#   lint      dev/lint-java and dev/scalastyle
+#   lint      dev/lint-java, dev/scalastyle and dev/varka_errorprone.sh (Error Prone and
+#             NullAway over Varka's Java, on the compile step's classpath when there is one)
 #   quotes    dev/varka_quote_check.py: every number the documents quote traces to a
 #             committed results file (or the allowlist)
 #
@@ -157,7 +158,10 @@ lane_suites() {
 }
 lane_sbt() {
   if selected_has doc; then run_step doc build/sbt -batch catalyst/doc; fi
-  if selected_has lint; then run_step lint bash -c 'dev/lint-java && dev/scalastyle'; fi
+  if selected_has lint; then
+    run_step lint bash -c 'dev/lint-java && dev/scalastyle && dev/varka_errorprone.sh '"$(
+      [ -s "$suites_build/classpath" ] && echo "--classpath-file $suites_build/classpath")"
+  fi
   if selected_has sweep; then
     run_step sweep build/sbt -batch "project catalyst" \
       'set Test/javaOptions += "-Dvarka.sweep=true"' \

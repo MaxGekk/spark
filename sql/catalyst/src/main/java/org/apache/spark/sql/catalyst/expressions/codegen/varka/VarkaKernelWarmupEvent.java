@@ -17,6 +17,8 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import javax.annotation.Nullable;
+
 import jdk.jfr.Category;
 import jdk.jfr.Event;
 import jdk.jfr.Label;
@@ -33,11 +35,11 @@ import jdk.jfr.Name;
 public final class VarkaKernelWarmupEvent extends Event {
 
   @Label("Shape Hash")
-  public String shapeHash;
+  public @Nullable String shapeHash;
 
   /** {@code COMPILED}, or {@code RELEASED} when the warm-up stopped without seeing the compile. */
   @Label("Outcome")
-  public String outcome;
+  public @Nullable String outcome;
 
   @Label("Kernel Calls")
   public int calls;

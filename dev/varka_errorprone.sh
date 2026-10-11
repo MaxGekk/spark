@@ -90,9 +90,10 @@ execution=sql/core/src/main/java/org/apache/spark/sql/execution
 ls "$codegen"/*Varka*.java "$codegen"/DeclineSink.java "$codegen"/varka/*.java \
   "$execution"/Varka*.java "$execution"/varka/*.java > "$OUT/sources" || exit 1
 
-# Every suppression says why: a comment on the annotation's line or the line above it.
+# Every suppression says why: a // comment on the annotation's line, or a line comment directly
+# above it. The end of a Javadoc block above is not a reason.
 while IFS= read -r src; do
-  awk -v f="$src" '/@SuppressWarnings/ && $0 !~ /\/\/|\/\*/ && prev !~ /\/\/|\*\// {
+  awk -v f="$src" '/@SuppressWarnings/ && $0 !~ /\/\// && prev !~ /^[[:space:]]*\/\// {
       print f ":" FNR ": a @SuppressWarnings without a reason" } { prev = $0 }' "$src"
 done < "$OUT/sources" > "$OUT/suppressions"
 if [ -s "$OUT/suppressions" ]; then
