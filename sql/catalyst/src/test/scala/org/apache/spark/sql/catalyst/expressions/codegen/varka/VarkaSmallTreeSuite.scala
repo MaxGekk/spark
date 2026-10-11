@@ -34,11 +34,13 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils
  * runs each one, at the int lane and the long, through `VarkaKernelCheck`, which compares every
  * row with `VarkaReferenceEvaluator` and runs the body the batch did not take as well.
  *
- * The size is `-Dvarka.series.size`, 4 by default, which is the pull request's: about a hundred
- * thousand int trees in a minute or so. The nightly fuzz job runs size 5 and an idle window size
- * 6 (`dev/varka_series.sh`), each spread across JVMs with `-Dvarka.series.slice=k/n`, a JVM
- * taking every n-th tree from the k-th - across JVMs and not threads, because the emitter is not
- * shown safe to call from several threads (row 307). Options come from `VarkaMatrix.base`, so
+ * The size is `-Dvarka.series.size`, 3 by default, which is the pull request's: about three
+ * thousand int trees, every one meeting all four batches, in seconds. Size 4 cost the gate
+ * nearly two minutes at each width, so it runs only inside the nightly fuzz job's size 5, which
+ * holds every smaller tree; an idle window runs size 6 (`dev/varka_series.sh`). Both are spread
+ * across JVMs with `-Dvarka.series.slice=k/n`, a JVM taking every n-th tree from the k-th -
+ * across JVMs and not threads, because the emitter is not shown safe to call from several
+ * threads (row 307). Options come from `VarkaMatrix.base`, so
  * the option matrix's configurations reach this suite as they reach every other.
  *
  * A tree up to size 3 meets all four batches of [[intBatches]]; a larger one meets the one its
@@ -49,7 +51,7 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils
  */
 class VarkaSmallTreeSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwnJvm {
 
-  private val size = sys.props.get("varka.series.size").map(_.toInt).getOrElse(4)
+  private val size = sys.props.get("varka.series.size").map(_.toInt).getOrElse(3)
   private val (slice, slices) = sys.props.get("varka.series.slice").map { s =>
     val Array(k, n) = s.split("/").map(_.toInt)
     (k, n)

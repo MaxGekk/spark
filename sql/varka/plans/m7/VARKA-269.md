@@ -223,3 +223,12 @@ both lanes.
 * 3.6 names `dev/varka_series.sh` for the idle window; `dev/varka_nightly.sh` runs it at size 5 as
   a step, with `--series-size 6` for the larger window. Size 6 has not been run.
 * 3.4 says the test logs the third category's trees; it logs the first five and the count.
+
+**The tier moved (11 October 2026).** At the owner's choice the pull request's tier is size 3,
+not 4 (3.6): the gate ran the size-4 series in about a minute and three quarters at each width,
+and the nightly job's size 5 already holds every tree to size 4, so the gate kept the cost and
+added no tree the night does not run. Size 3 keeps what the gate needs from the suite: every tree
+meets all four batches, the planted liveness bug fails by size 3, and the reach test still
+enumerates to size 4, being generation only. `dev/varka_series.sh 4` runs the old tier by hand.
+The cost is `IfElse`, which first appears at size 4: the gate's series emits no `IfElse` tree now,
+and in the gate only `VarkaIrFuzzSuite`'s random draws reach it.
