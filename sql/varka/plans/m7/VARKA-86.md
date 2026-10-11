@@ -141,3 +141,31 @@ None: nothing emitted changes.
 1. This plan; row 86 marked Planned.
 2. The positions, the gate, the leaf rule and the tests.
 3. The outcome.
+
+## 9. Outcome
+
+Done on 11 October 2026, in one commit after the plan.
+
+**The oracles.** The fusion dump over the coverage table, seventeen option sets and every entry
+point is byte-identical to master's (4,436 lines, the md5 row 305 recorded), so no decision and no
+decline reason moved; `emitted_bytes.json` is unchanged (the gate's bytes suite). The compiler,
+coverage, chrono and family suites pass unedited in what they assert, 212 tests.
+
+**The new tests.** Over every coverage row, every operand the compiler builds in a day-offset,
+month-count or weekday position is one its position admits, and each position is reached by the
+table; the emitter refuses a date as a day offset, a calendar field as a month count and int
+arithmetic as a weekday, naming the operand.
+
+**Predictions scored.**
+
+1. **Held.** The dump is byte-identical.
+2. **Held.** The bytes are unchanged.
+3. **Held.** No asserted decline reason changed.
+
+**Corrections to this plan, which is a record and is not rewritten:** 3.2 says `next_day`'s
+weekday finishes through `admitted`. It does not and needs not: its arms build the slot with
+`intSlot` and the derived column with `derivedRef`, whose static types are a `LiteralSlot` and a
+`ColumnRef`, so a runtime gate there could never decline. The emitter's check stays as the defence
+against another producer. And 3.3's single int operand method is one private method behind the
+two names, `intOperand` and `compileIntOperand`, each passing its own decline reason, built only
+when it declines.
