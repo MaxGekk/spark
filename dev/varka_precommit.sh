@@ -36,6 +36,9 @@
 #     nothing can wrap it and neither Python linter asks: ruff's E501 skips such a
 #     line, and Spark's config does not select E501 at all, so `ruff format` is the
 #     only Python authority on width and it cannot split a token either;
+#   * no merge-conflict marker (a line starting `<<<<<<< ` or `>>>>>>> `) in any text file,
+#     on any line, the commit's or not: a marker is never meant, and one a merge carried in
+#     from master spreads to every branch that merges master next;
 #   * no TODO or FIXME marker under sql/varka or in a Varka source directory
 #     (sql/varka/AGENTS.md: open work is recorded in a plan, never left as a
 #     marker);
@@ -236,6 +239,13 @@ for f in "${files[@]}"; do
     while IFS= read -r hit; do
       wrote_line "$f" "${hit%%:*}" && note "$f:$hit: line over 100 columns"
     done < <(awk -v single_ok="$single_ok" 'length > 100 && $0 !~ /^[[:space:]]*(import|package) / && $0 !~ /https?:\/\// && !(single_ok && NF < 2) { print FNR ": " length " chars" }' "$f")
+  fi
+  if is_text "$f"; then
+    # Every line, not only the commit's: see the header. `=======` alone is left out, since a
+    # Markdown setext heading underlines with it.
+    while IFS= read -r hit; do
+      note "$f:$hit: merge-conflict marker"
+    done < <(grep -n -E '^(<<<<<<<|>>>>>>>) ' "$f" | cut -d: -f1)
   fi
   if is_varka "$f" && is_text "$f"; then
     # In code any mention is a marker; in Markdown only the marker form is, since the notes
