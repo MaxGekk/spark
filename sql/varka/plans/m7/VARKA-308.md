@@ -105,3 +105,25 @@ None: no emitted byte changes under the defaults.
 1. This plan; row 308 marked Planned.
 2. The conf, the record, the threading and the tests.
 3. The outcome.
+
+## 9. Outcome
+
+Done on 11 October 2026, in one commit after the plan.
+
+**End to end.** `year(date_add(d, i + i))` under ANSI holds an overflow guard on the sum and a
+guard on the day `year` reads, in one method. With `i` at `Int.MaxValue` the sum wraps to -2,
+which keeps the day in range, so only the overflow guard fires. The declined batch's status, read
+off the JFR `Fallback` event, is 9 (`DAY_PRODUCER | INT_OVERFLOW`) with the conf off and 8
+(`INT_OVERFLOW`) with it on.
+
+**Predictions scored.**
+
+1. **Held.** No committed bytes or benchmark file moves: at the defaults `VarkaSessionEmit.apply`
+   returns the base options themselves, which a test asserts.
+2. **Held**, after the test's data was corrected. Its first version overflowed `i + 1`, which
+   wraps to `Int.MinValue` and takes the day out of range as well, so both guards fired and the
+   option correctly reported both: 9 either way. `i + i` fires the overflow alone.
+
+**The checks.** `SparkConfigBindingPolicySuite` passes with the new conf. The gate passes; its
+first lint run caught two imports of `VarkaEmitOptions` the threading left unused in the
+evaluators.
