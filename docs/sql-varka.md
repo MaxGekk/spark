@@ -1294,7 +1294,8 @@ remembered.
 | `varka_bench_band.py` | How far apart do repeated runs of one benchmark land, per case? `--split-half` asks whether that spread itself reproduces. Use it before believing a small win. |
 | `varka_bench_repeat.sh` | Runs one benchmark N times so `varka_bench_band.py` has something to read. |
 | `varka_bench_ids.sh` | Which benchmark case ids are taken and which is the next free one - the ids must be unique per file and picking one by eye gets it wrong. |
-| `varka_nightly.sh` | The checks that need volume or an idle machine, into a dated log: the canary, the IR fuzzer at ten thousand iterations, the exhaustive sweeps, the deoptimization-cycle guard (ten forks per width of the default twelve-output kernel), optionally the full gate. |
+| `varka_nightly.sh` | The checks that need volume or an idle machine, into a dated log: the canary, the IR fuzzer at ten thousand iterations, the exhaustive sweeps, every small IR tree to size 5, the deoptimization-cycle guard (ten forks per width of the default twelve-output kernel), optionally the full gate. |
+| `varka_series.sh` | Every IR tree the fuzzer's grammar could draw up to a size, counted in grammar productions, through the emitter against the reference evaluator, one JVM per core (VARKA-269): size 5 is 3.76 million trees at both lanes, about twelve minutes on the laptop; the gate runs size 4. |
 
 ### The cross-distribution surface benchmark
 
