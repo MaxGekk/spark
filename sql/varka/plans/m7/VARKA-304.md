@@ -175,3 +175,38 @@ production path selects. The check is the bytes.
 1. This plan; row 304 marked Planned, and the session conf filed as its own row.
 2. The bits, the default's union, the option, the accounting, the tests and the regenerated file.
 3. The outcome.
+
+## 9. Outcome
+
+Done on 11 October 2026, in one commit after the plan.
+
+**The bytes.** Under the defaults, `emitted_bytes.json` moves in loop and epilogue methods only,
+never a driver. That only the status constant moved is checked rather than read off the diff:
+with the old constant 1 written back in `emitStatusReturn`, the regenerated file is
+byte-identical to master's, on every pinned arm and both widths. `VarkaEmittedBytesSuite`'s
+option audit (`VARKA_OPTION_AUDIT=true`) has `exactRefusalStatus` moving 2 coverage shape-widths,
+56 of the int fuzz shapes and 114 of the long ones, against none for the default.
+
+**Predictions scored.**
+
+1. **Held.** Every moved method holds a reason other than `DAY_PRODUCER`, by the check above:
+   with the old constant restored, nothing moves.
+2. **Held, after a fix made before the commit.** The first build gave every guarded method under
+   the option the per-reason status return, one mask or several, and the audit showed it moving
+   28 coverage shape-widths and 220 and 280 fuzz shapes. 3.3 says a one-reason method emits what
+   the default does; it now takes the default's path, and the counts fell to the ones above.
+3. **Held.** No op count asserted by the emitter suites moved; the gate's suites pass.
+
+**Corrections to this plan, which is a record and is not rewritten:**
+
+* Section 4 missed a consumer of the bytes. A status constant above 5 is a `bipush`, one byte
+  longer than the `iconst_1` it replaces, and the emitter's price tables
+  (`VarkaEmitCostTable.java`, fitted to the emitted methods' sizes) and their audit
+  (`emit_cost_audit.json`, with the test-side `VarkaEmitCostRegister.java`) are regenerated from
+  those sizes; the gate failed on them until they were. They move in the third decimal: the
+  audit's median error goes from 8.5 to 8.4% in its first bucket and from 3.5 to 3.6% in another,
+  and a handful of methods cross a bucket's edge. The prices steer the grouping, so the bytes pin
+  was rerun against the new tables without regenerating it, and it holds: no grouping decision
+  moved on a pinned shape.
+* 3.4's `declinedByReason` counts in the evaluator's accounting, which a test reads; the
+  production surfaces are the debug line and the `Fallback` event's status word, as 3.4 says.
