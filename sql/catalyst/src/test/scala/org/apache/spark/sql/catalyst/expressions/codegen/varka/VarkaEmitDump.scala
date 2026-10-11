@@ -25,6 +25,7 @@ import scala.jdk.CollectionConverters._
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference, Expression}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 import org.apache.spark.sql.types.{ByteType, DataType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, TimeType, YearMonthIntervalType}
 
@@ -132,26 +133,27 @@ object VarkaEmitDump {
       System.exit(1)
       throw new IllegalStateException()
     }
-    exprs.zip(partial.specs).zipWithIndex.foreach { case ((text, spec), position) =>
-      val decline = partial.declines.get(position).map(d => s" - $d").getOrElse("")
-      report(f"entry $position%2d  $text%-40s  $spec$decline")
+    exprs.zip(partial.specs.asScala.toSeq).zipWithIndex.foreach { case ((text, spec), position) =>
+      val decline = partial.declines.asScala.get(position).map(d => s" - $d").getOrElse("")
+      report(f"entry $position%2d  $text%-40s  ${render(spec)}$decline")
     }
     val fused = partial.fused
     report("")
-    report(s"inputs (child ordinals, in kernel order): ${fused.inputOrdinals.mkString(", ")}")
-    report(s"literals (scalarArgs, in slot order):    ${fused.literals.mkString(", ")}")
-    fused.outputs.zipWithIndex.foreach { case (o, k) =>
+    report("inputs (child ordinals, in kernel order): " +
+      fused.inputOrdinals.asScala.mkString(", "))
+    report("literals (scalarArgs, in slot order):    " + fused.literals.asScala.mkString(", "))
+    fused.outputs.asScala.toSeq.zipWithIndex.foreach { case (o, k) =>
       report(s"output $k IR: ${VarkaVectorIR.canonical(o)}")
     }
     // The literal count is both arrays': a long-lane shape keeps its literals in longArgs.
-    val key = new VarkaShapeKey(fused.outputs.asJava, fused.inputOrdinals.size,
-      fused.numLiterals, options)
+    val key = new VarkaShapeKey(fused.outputs, fused.inputOrdinals.size, fused.numLiterals,
+      options)
     report(s"shape hash: ${VarkaShapeCacheImpl.shapeHash(key)}  options: " +
       (if (options.isDefault) "(defaults)" else options.canonical()))
 
     val bytes =
       try {
-        VarkaLoopEmitter.emit(className, fused.outputs.asJava, fused.inputOrdinals.size,
+        VarkaLoopEmitter.emit(className, fused.outputs, fused.inputOrdinals.size,
           fused.numLiterals, null, null, options)
       } catch {
         case d: VarkaEmitDeclined =>
@@ -166,7 +168,7 @@ object VarkaEmitDump {
       var r = 0
       while (r < repeat) {
         val t = System.nanoTime()
-        VarkaLoopEmitter.emit(className, fused.outputs.asJava, fused.inputOrdinals.size,
+        VarkaLoopEmitter.emit(className, fused.outputs, fused.inputOrdinals.size,
           fused.numLiterals, null, null, options)
         times(r) = System.nanoTime() - t
         r += 1
@@ -246,7 +248,8 @@ object VarkaEmitDump {
     }
 
     if (rounds > 0) {
-      runHot(bytes, fused, fused.inputOrdinals.map(childOutput), rounds, nulls, rows)
+      runHot(bytes, fused, fused.inputOrdinals.asScala.toSeq.map(childOutput(_)), rounds, nulls,
+          rows)
     }
   }
 
@@ -284,7 +287,7 @@ object VarkaEmitDump {
             // The literal count is both arrays': a long-lane shape keeps its literals in
             // longArgs, which `f.literals` does not count.
             try {
-              val bytes = VarkaLoopEmitter.emit(className, f.outputs.asJava,
+              val bytes = VarkaLoopEmitter.emit(className, f.outputs,
                 f.inputOrdinals.size, f.numLiterals, null, null, opts)
               Some(laneOps(bytes))
             } catch {
@@ -302,6 +305,15 @@ object VarkaEmitDump {
             deltas.map(d => s" | $d").mkString + " |")
       }
     }
+  }
+
+  /** An entry's spec as the dump has always printed it: `FusedOutput(0)`, `ResidualOutput`. */
+  private def render(spec: VarkaOutputSpec): String = spec match {
+    case f: VarkaOutputSpec.FusedOutput => s"FusedOutput(${f.fusedIndex})"
+    case k: VarkaOutputSpec.KernelOutput => s"KernelOutput(${k.kernel}, ${k.fusedIndex})"
+    case w: VarkaOutputSpec.ForwardedOutput => s"ForwardedOutput(${w.childOrdinal})"
+    case _: VarkaOutputSpec.ResidualOutput => "ResidualOutput"
+    case other => throw new IllegalStateException(s"unknown output spec $other")
   }
 
   private def report(s: String): Unit = {
@@ -402,7 +414,7 @@ object VarkaEmitDump {
     }
     val numInputs = fused.inputOrdinals.size
     val outputs = fused.outputs.size
-    val literals = fused.literals.toArray
+    val literals = fused.literals.asScala.map(_.intValue).toArray
     val long = fused.lane == VarkaVectorIR.LaneType.LONG
     val inputBytes = if (long) 8L else 4L
     val loader = new VarkaGeneratedClassLoader(getClass.getClassLoader)
@@ -435,11 +447,11 @@ object VarkaEmitDump {
           r += stride
         }
       }
-      val dst = fused.outputTypes.map { t =>
+      val dst = fused.outputTypes.asScala.toSeq.map { t =>
         buffer(rows * (if (t.defaultSize >= 8) 8L else 4L)).address()
       }.toArray
       val dstValidity = Array.fill(outputs)(buffer((rows + 7) / 8L).address())
-      val longArgs = fused.longLiterals.toArray
+      val longArgs = fused.longLiterals.asScala.map(_.longValue).toArray
       var status = 0
       val scratch = VarkaEmitterTestSupport.scratch(kernel, rows)
       // The second half of the rounds is timed, so the figure is after tiering has had the
