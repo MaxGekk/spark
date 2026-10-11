@@ -861,3 +861,47 @@ VARKA-242 the calendar's divisions, `floorMod7` and the leap hash. What the next
   day back when the year overshoots, absorbs the error. The proof of each `ChronoDivide` site and
   the pinned first failing dividends see it; an end-to-end sweep cannot. So a constant's comment
   states its site's bound, and the proof holds the site to it.
+
+## Every small tree, counted in grammar productions, beside the random fuzzer
+
+VARKA-269. `VarkaIrSeries` enumerates every tree `VarkaIrGrammar` could draw up to a size, arm by
+arm with the grammar's own `boundsOf` for its gates, and `VarkaSmallTreeSuite` runs each through
+the emitter against the reference evaluator. Three things decided how it is built.
+
+- **Size is grammar productions, not IR nodes or depth.** `make_date` over a date's fields is one
+  arm whose IR repeats the date three times; counted in nodes it never appears at a size that
+  runs. And the condition leaf matters: with `IsNotNull` over a column counted as two, no
+  `IfElse` exists below size 5, which a pull request cannot afford; as one, it appears at 4.
+- **The counts grow about thirty-fold a size** (3,203 trees to size 3, 101,422 to 4, 3.26
+  million to 5 at the int lane), so each tier is one size: 4 in the gate, 5 nightly, 6 in an
+  idle window, sliced across JVMs (`-Dvarka.series.slice=k/n`, `dev/varka_series.sh`) because the
+  emitter is not shown thread-safe. A larger tree costs more to emit, so a size's time is not
+  its count times the smaller size's rate: size 5 took three times the estimate.
+- **The gates are checked from the other side.** The same arms without the magnitude gates give
+  a series whose extra trees are each either guarded by `Analysis` (a decline the reference
+  cannot spell) or outside the contract (a calendar node over a product of columns, which the
+  compiler never builds); one the emitter refused would be a tree the gates hide from every
+  fuzzer.
+
+To size 5 nothing failed, at either lane. A planted bug (`misdescribeWordLiveness`) fails it by
+size 3, which is what shows a green run means something.
+
+## The emitter is called from several threads, so a test holds it to that
+
+VARKA-307. `VarkaEmittedBytesSuite` hashes every shape twenty times, once per pinned arm and
+width, and every hash is a function of the shape and the options alone, so the passes split by
+shape over a pool and join in index order: the pinning test went from 2 minutes to 21 seconds on
+the laptop, `emitted_bytes.json` unchanged, and `-Dvarka.bytes.threads=1` gives the serial suite.
+
+The split rests on the emit path keeping no state between emissions: no static field that is not
+final and no static collection filled after class initialization; the mutable statics in the
+package are the runtime's (the shape cache, the compile directive, the warmup worker). That is
+not only the suite's concern: the compiler emits at planning on the Spark driver, where
+concurrent queries plan on several threads. So a test emits the coverage rows and two thousand
+fuzz shapes on every thread at once and compares each with the shape emitted alone. A planted
+static scratch list shared between emissions failed it at once, with another emission's outputs
+in the shape; a test that never saw a race would say nothing about one.
+
+Two things to keep when adding to the suite: a task must not wait on the pool it runs in (the map
+is called from the test's thread only), and ScalaTest evaluates `assert`'s message even when the
+assertion holds, so a message that indexes into an empty result throws on success.

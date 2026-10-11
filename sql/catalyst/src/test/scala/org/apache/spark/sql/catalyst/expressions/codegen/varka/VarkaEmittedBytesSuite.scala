@@ -20,6 +20,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.security.MessageDigest
+import java.util.concurrent.{Callable, ExecutionException, Executors, ExecutorService}
 
 import scala.jdk.CollectionConverters._
 import scala.jdk.OptionConverters._
@@ -107,6 +108,19 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
    * refactor could drop the `VarkaFusedKernel` interface or the telemetry attribute and every
    * body would still render identically.
    */
+  /**
+   * The options a shape is emitted with at `lanes`, the int lane's count: a long-lane shape at
+   * the same width, which is half the lanes. The arm is applied over the width, not under it:
+   * every arm leaves the lane count alone, and the oracle's two widths are what the arm is
+   * compared across.
+   */
+  private def emitOptions(roots: Seq[VarkaVectorIR], lanes: Int,
+      arm: VarkaEmitOptions => VarkaEmitOptions): VarkaEmitOptions = {
+    val laneCount =
+      if (VarkaVectorIR.emissionLane(roots.head) == LaneType.LONG) lanes / 2 else lanes
+    arm(VarkaMatrix.base.withLanesOverride(laneCount))
+  }
+
   private def methodHashes(roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int,
       lanes: Int,
       arm: VarkaEmitOptions => VarkaEmitOptions = identity): Seq[(String, String)] = {
@@ -116,11 +130,7 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
     // back to SPECIES_PREFERRED and pin nothing about width. The lane asked for is the
     // emission's, which for a narrowing root (an int output computed in the long lane) is the
     // long lane.
-    val laneCount =
-      if (VarkaVectorIR.emissionLane(roots.head) == LaneType.LONG) lanes / 2 else lanes
-    // The arm is applied over the width, not under it: every arm below leaves the lane count
-    // alone, and the oracle's two widths are what the arm is being compared across.
-    val options = arm(VarkaMatrix.base.withLanesOverride(laneCount))
+    val options = emitOptions(roots, lanes, arm)
     val bytes =
       try {
         VarkaLoopEmitter.emit(className, roots.asJava, numInputs, numLiterals, null, null, options)
@@ -231,7 +241,10 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
    * Copies of the draw, the seed or the generator in each suite would let them part company
    * with no test noticing, which is why none of the three lives here.
    */
-  private def fuzzShape(k: Int): FuzzShape = {
+  private def fuzzShape(k: Int): FuzzShape = intShapes(k)
+
+  /** The int sequence, drawn once per JVM: every pass reads it, twenty of them (VARKA-307). */
+  private lazy val intShapes: IndexedSeq[FuzzShape] = (0 until shapes).map { k =>
     val drawn = drawShape(shapeRandom(seed, k))
     FuzzShape(drawn.roots, drawn.numInputs, drawn.numLiterals)
   }
@@ -240,7 +253,9 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
    * Shape `k` of the long-lane sequence, the same way: `VarkaIrGrammar`'s long draw from its
    * long seed, which `VarkaIrFuzzSuite` runs against `evalLong`.
    */
-  private def longFuzzShape(k: Int): FuzzShape = {
+  private def longFuzzShape(k: Int): FuzzShape = longShapes(k)
+
+  private lazy val longShapes: IndexedSeq[FuzzShape] = (0 until shapes).map { k =>
     val drawn = drawLongShape(shapeRandom(longFuzzSeed, k))
     FuzzShape(drawn.roots, drawn.numInputs, drawn.numLiterals)
   }
@@ -257,6 +272,55 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
       sb.append('\n')
     }
     sha(sb.toString)
+  }
+
+  // ---------------------------------------------------------------------------------------
+  // In parallel
+  // ---------------------------------------------------------------------------------------
+
+  /**
+   * The threads the passes hash on: one per available processor, or `-Dvarka.bytes.threads`; at
+   * 1 the suite is serial. Every shape's hashes are a function of the shape and the options, so
+   * the passes split by shape, and the emitter holds no mutable state between emissions - which
+   * the race test below would see if it stopped being true (VARKA-307).
+   */
+  private val threads =
+    sys.props.get("varka.bytes.threads").map(_.toInt).getOrElse(availableProcessors)
+
+  private def availableProcessors: Int = Runtime.getRuntime.availableProcessors
+
+  private def newPool(size: Int): ExecutorService = Executors.newFixedThreadPool(size, r => {
+    val t = new Thread(r, "varka-bytes-oracle")
+    t.setDaemon(true)
+    t
+  })
+
+  private lazy val pool = newPool(threads)
+
+  /** `f` over `0 until n` on the suite's pool, in index order; serial at one thread. */
+  private def inOrder[T](n: Int)(f: Int => T): IndexedSeq[T] =
+    if (threads <= 1) (0 until n).map(f) else runOn(pool, n)(f)
+
+  /**
+   * `f` over `0 until n` on `executor`'s threads, the results in index order: a digest built
+   * from them is the digest a serial loop builds. Called from the test's thread only, never from
+   * a task, so no task waits on the pool it runs in. A task's failure is rethrown as its own
+   * exception, so a contract violation fails the suite with the message it always had.
+   */
+  private def runOn[T](executor: ExecutorService, n: Int)(f: Int => T): IndexedSeq[T] = {
+    val chunk = math.max(1, n / (availableProcessors * 8))
+    val futures = (0 until n by chunk).map { from =>
+      executor.submit(new Callable[IndexedSeq[T]] {
+        override def call(): IndexedSeq[T] = (from until math.min(n, from + chunk)).map(f)
+      })
+    }
+    futures.flatMap { future =>
+      try future.get() catch { case e: ExecutionException => throw e.getCause }
+    }
+  }
+
+  override def afterAll(): Unit = {
+    try pool.shutdownNow() finally super.afterAll()
   }
 
   // ---------------------------------------------------------------------------------------
@@ -333,26 +397,26 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
 
   /** One hash over every shape the oracle holds, emitted under `arm` at `lanes`. */
   private def armDigest(arm: VarkaEmitOptions => VarkaEmitOptions, lanes: Int): String = {
-    val sb = new StringBuilder
-    val (rows, _) = coverage
-    rows.foreach { r =>
-      sb.append(r.sql)
-      methodHashes(r.roots, r.numInputs, r.numLiterals, lanes, arm).foreach { case (m, h) =>
+    // One line per shape, each computed on the pool and joined in the order they were before.
+    def line(label: String, roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int) = {
+      val sb = new StringBuilder(label)
+      methodHashes(roots, numInputs, numLiterals, lanes, arm).foreach { case (m, h) =>
         sb.append(' ').append(m).append('=').append(h)
       }
-      sb.append('\n')
+      sb.append('\n').toString
     }
-    Seq(fuzzShape _, longFuzzShape _).foreach { shapeAt =>
-      for (k <- 0 until shapes) {
-        val sh = shapeAt(k)
-        sb.append(k)
-        methodHashes(sh.roots, sh.numInputs, sh.numLiterals, lanes, arm).foreach {
-          case (m, h) => sb.append(' ').append(m).append('=').append(h)
-        }
-        sb.append('\n')
+    val (rows, _) = coverage
+    val rowLines = inOrder(rows.size) { i =>
+      val r = rows(i)
+      line(r.sql, r.roots, r.numInputs, r.numLiterals)
+    }
+    val shapeLines = Seq(intShapes, longShapes).flatMap { sequence =>
+      inOrder(shapes) { k =>
+        val sh = sequence(k)
+        line(k.toString, sh.roots, sh.numInputs, sh.numLiterals)
       }
     }
-    sha(sb.toString)
+    sha((rowLines ++ shapeLines).mkString)
   }
 
   private def render(): String = {
@@ -363,12 +427,13 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
     }
     val (rows, skipped) = coverage
     val perWidth = widths.map { lanes =>
-      val coverageHashes = ordered(rows.map { r =>
+      val coverageHashes = ordered(inOrder(rows.size) { i =>
+        val r = rows(i)
         r.sql -> ordered(methodHashes(r.roots, r.numInputs, r.numLiterals, lanes): _*)
       }: _*)
       val blockCount = (shapes + blockSize - 1) / blockSize
-      val blocks = (0 until blockCount).map(blockDigest(fuzzShape, _, lanes))
-      val longBlocks = (0 until blockCount).map(blockDigest(longFuzzShape, _, lanes))
+      val blocks = inOrder(blockCount)(blockDigest(fuzzShape, _, lanes))
+      val longBlocks = inOrder(blockCount)(blockDigest(longFuzzShape, _, lanes))
       lanes.toString -> ordered(
         "coverage" -> coverageHashes,
         "fuzz" -> ordered(
@@ -402,6 +467,44 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
   }
 
   private def regenerate: Boolean = sys.env.get("VARKA_BYTES_REGEN").contains("true")
+
+  test("the emitter gives every shape the same bytes from many threads at once as alone") {
+    // VARKA-307. The coverage rows and the first two thousand int fuzz shapes, emitted on every
+    // thread of a pool at once and compared byte for byte with each shape emitted alone on the
+    // test's thread, at both widths. The suite hashes in parallel on the strength of the emitter
+    // keeping no mutable state between emissions, and the compiler emits at planning on the
+    // Spark driver, where concurrent queries plan on several threads: a structure shared between
+    // emissions would show here as a shape whose bytes depend on its neighbours.
+    val (rows, _) = coverage
+    val corpus = rows.map(r => (r.roots, r.numInputs, r.numLiterals)) ++
+      intShapes.take(2000).map(s => (s.roots, s.numInputs, s.numLiterals))
+    val racing = newPool(math.max(4, availableProcessors))
+    try {
+      for (lanes <- widths) {
+        def emitted(i: Int): Either[String, Array[Byte]] = {
+          val (roots, numInputs, numLiterals) = corpus(i)
+          try {
+            Right(VarkaLoopEmitter.emit(className, roots.asJava, numInputs, numLiterals, null,
+              null, emitOptions(roots, lanes, identity)))
+          } catch {
+            case d: VarkaEmitDeclined => Left(d.getMessage)
+          }
+        }
+        val alone = corpus.indices.map(emitted)
+        val together = runOn(racing, corpus.size)(emitted)
+        val differing = corpus.indices.filter { i =>
+          (alone(i), together(i)) match {
+            case (Right(a), Right(b)) => !java.util.Arrays.equals(a, b)
+            case (a, b) => a != b
+          }
+        }
+        assert(differing.isEmpty, s"lanes $lanes: ${differing.size} of ${corpus.size} shapes " +
+          s"emitted differently on several threads, the first at index ${differing.headOption}")
+      }
+    } finally {
+      racing.shutdownNow()
+    }
+  }
 
   test("sql/varka/emitted_bytes.json pins what the emitter produces for every shape") {
     val path = getWorkspaceFilePath("sql", "varka", "emitted_bytes.json")
