@@ -27,6 +27,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaBodyEmitter.
 import static org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitBudget.*;
 
 import java.util.Arrays;
+import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -208,6 +209,18 @@ final class Slots {
    * It is non-null exactly when this body emits a node in {@link Analysis#refusals}.
    */
   Integer guardAcc;
+  /**
+   * The status the method returns when {@link #guardAcc} is non-empty: the bits of every refusal
+   * reason this body's nodes hold (VARKA-304). Exact when they hold one reason; otherwise the
+   * candidates the one mask cannot tell apart. Zero when {@link #guardAcc} is null.
+   */
+  int guardStatus;
+  /**
+   * Under {@link VarkaEmitOptions#exactRefusalStatus}, in a body of more than one reason, each
+   * reason's own mask, in enum order, the first in {@link #guardAcc}'s slot and the rest after
+   * it; null otherwise, which is what keeps every other body's slot numbering the one mask's.
+   */
+  EnumMap<Analysis.Refusal, Integer> guardAccByReason;
   /**
    * one {@code long} accumulator per output whose validity this body writes a word at a time, or
    * {@code -1} for an output that keeps the per-lane-group read-modify-write. Null in every body
@@ -569,17 +582,33 @@ final class Slots {
     // the caller acts on the batch, not the lane, and a body with nothing to guard keeps the slot
     // numbering - and so the bytes - unchanged, whichever way the options are set. The driver
     // guards nothing.
-    var families = EnumSet.noneOf(Analysis.Refusal.Family.class);
+    var reasons = EnumSet.noneOf(Analysis.Refusal.class);
     if (mode != BodyMode.DRIVER && !analysis.refusals.isEmpty()) {
       for (VarkaVectorIR node : body) {
         Analysis.Refusal reason = analysis.refusals.get(node);
         if (reason != null) {
-          families.add(reason.family);
+          reasons.add(reason);
         }
       }
     }
-    if (!families.isEmpty()) {
-      s.guardAcc = slot++;
+    if (!reasons.isEmpty()) {
+      s.guardAcc = slot;
+      // A body of one reason reports it exactly with one mask, so it emits what the default does.
+      if (analysis.options.exactRefusalStatus() && reasons.size() > 1) {
+        s.guardAccByReason = new EnumMap<>(Analysis.Refusal.class);
+        for (Analysis.Refusal reason : reasons) {
+          s.guardAccByReason.put(reason, slot++);
+        }
+      } else {
+        slot++;
+      }
+      for (Analysis.Refusal reason : reasons) {
+        s.guardStatus |= reason.status;
+      }
+    }
+    var families = EnumSet.noneOf(Analysis.Refusal.Family.class);
+    for (Analysis.Refusal reason : reasons) {
+      families.add(reason.family);
     }
     // one accumulator per output this body writes a word at a time. Allocated after guardAcc and
     // before epilogueMask, and only in a loop body that word-writes at all, so every other emission

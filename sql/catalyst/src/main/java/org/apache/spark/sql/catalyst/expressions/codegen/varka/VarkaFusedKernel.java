@@ -44,17 +44,39 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  * range, and nothing at compile time can bound a column's values. Such a kernel detects the
  * lanes it cannot compute and reports them, rather than publishing an answer it does not have.
  * A non-zero return means <b>this batch's outputs are not valid and the caller must recompute
- * the batch on the row engine</b>; zero means they are. It is a bitmask so a later lowering can
- * add its own reason without inventing a second channel - bit 0 is
- * {@link #STATUS_CHRONO_RANGE}. A kernel with nothing to report returns zero unconditionally,
- * which costs it one constant.
+ * the batch on the row engine</b>; zero means they are. It is a bitmask with a bit per reason a
+ * kernel refuses a batch for, one per {@code Analysis.Refusal} (VARKA-304), so a declined batch
+ * says which guard fired. A method whose guards all share one reason returns exactly that bit;
+ * one that folds guards of several reasons into one mask returns all of their bits, a candidate
+ * set, unless {@code VarkaEmitOptions.exactRefusalStatus} gives each reason its own mask. The
+ * bits above the reasons' are the evaluator's own ({@code VarkaKernelRunner}), never emitted. A
+ * kernel with nothing to report returns zero unconditionally, which costs it one constant.
  *
  * @see VarkaVectorIR
  */
 public interface VarkaFusedKernel {
 
-  /** {@code run} saw a day outside the range its calendar lowering is defined over. */
-  int STATUS_CHRONO_RANGE = 1;
+  /**
+   * A column-offset day producer's result fell outside the range the calendar lowering reading
+   * it is defined over ({@code Refusal.DAY_PRODUCER}). Bit 0, the bit every reason reported before
+   * VARKA-304 and the one {@code ChronoVectorOps}' hand-written kernels mirror.
+   */
+  int STATUS_DAY_PRODUCER = 1;
+
+  /** An {@code add_months} month count outside its magic multiply's range. */
+  int STATUS_MONTH_COUNT = 1 << 1;
+
+  /** A {@code make_date} year outside its limits, or under ANSI an invalid date. */
+  int STATUS_MAKE_DATE = 1 << 2;
+
+  /** An int lane that overflowed under the FAIL overflow mode. */
+  int STATUS_INT_OVERFLOW = 1 << 3;
+
+  /** A {@code GuardedDay}'s day outside the range the compiler re-armed. */
+  int STATUS_DAY_RANGE = 1 << 4;
+
+  /** A {@code GuardedRange}'s value outside the bounds it carries. */
+  int STATUS_VALUE_RANGE = 1 << 5;
 
   /**
    * Runs the fused loop over one batch.

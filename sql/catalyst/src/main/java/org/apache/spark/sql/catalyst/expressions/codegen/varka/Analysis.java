@@ -254,7 +254,7 @@ final class Analysis {
    * Why a node refuses a batch at run time. A refusing node computes a mask of the lanes its
    * lowering cannot answer and folds it into the body's accumulator through
    * {@code VarkaVectorWalk.emitGuardCollect}, and a non-empty accumulator sends the batch to the
-   * row engine. Every reason today reports {@link VarkaFusedKernel#STATUS_CHRONO_RANGE}.
+   * row engine with the reason's {@link #status} bit in the method's status.
    *
    * <p>A reason carries the two things the slot planner needs from it. {@code parksValue}: whether
    * its guard stores the value it tests in {@link Slots#guardTmp} while the value stays on the
@@ -272,18 +272,18 @@ final class Analysis {
      * {@code compileMonths} bound every other producer at compile time and decline a node they do
      * not know, so a future column-driven producer fails safe until it is taught to both sides.
      */
-    DAY_PRODUCER(Family.PRODUCER, true),
+    DAY_PRODUCER(Family.PRODUCER, true, VarkaFusedKernel.STATUS_DAY_PRODUCER),
     /**
      * A column-count {@link AddMonths}: its month count, against the range its magic multiply is
      * exact over, wherever it sits - a bare {@code add_months(d, m)} needs it too. The node's own
      * correctness, so never behind an option (see {@link Analysis#collectRefusals}).
      */
-    MONTH_COUNT(Family.SELF, true),
+    MONTH_COUNT(Family.SELF, true, VarkaFusedKernel.STATUS_MONTH_COUNT),
     /**
      * {@link MakeDate}: a year outside its limits, and in ANSI mode an invalid date. The node's own
      * correctness. It guards out of {@link Slots#makeDateTmp}, so it parks nothing.
      */
-    MAKE_DATE(Family.SELF, false),
+    MAKE_DATE(Family.SELF, false, VarkaFusedKernel.STATUS_MAKE_DATE),
     /**
      * A FAIL-mode {@link IntArith} (not {@code MUL}) or {@link IntNeg}: a lane that overflows,
      * behind {@link VarkaEmitOptions#checkIntOverflow}. The arithmetic parks its operands and
@@ -291,21 +291,27 @@ final class Analysis {
      * {@code dup}, so it parks nothing here. A NULL-mode node checks too, but narrows its own word
      * instead of refusing the batch, so it has no reason.
      */
-    INT_OVERFLOW(Family.CHECKED, false),
+    INT_OVERFLOW(Family.CHECKED, false, VarkaFusedKernel.STATUS_INT_OVERFLOW),
     /**
      * {@link GuardedDay}: the day range, re-armed by the compiler. Unconditional, because the
      * compiler admits the expression on the strength of this check ({@code VARKA-93.md} 3.4).
      */
-    DAY_RANGE(Family.REARMED, true),
+    DAY_RANGE(Family.REARMED, true, VarkaFusedKernel.STATUS_DAY_RANGE),
     /** {@link GuardedRange}: the day guard's twin at either lane, with the bounds it carries. */
-    VALUE_RANGE(Family.REARMED, true);
+    VALUE_RANGE(Family.REARMED, true, VarkaFusedKernel.STATUS_VALUE_RANGE);
 
     final Family family;
     final boolean parksValue;
+    /**
+     * The status bit a method returns when this reason's guard fires. Stated per reason rather
+     * than derived from the ordinal, so reordering the enum moves no emitted constant.
+     */
+    final int status;
 
-    Refusal(Family family, boolean parksValue) {
+    Refusal(Family family, boolean parksValue, int status) {
       this.family = family;
       this.parksValue = parksValue;
+      this.status = status;
     }
 
     /**

@@ -21,13 +21,15 @@ import java.io.File
 import java.nio.file.Files
 
 import scala.collection.mutable
+import scala.jdk.CollectionConverters._
 
 import org.mockito.Mockito.{doAnswer, doThrow, mock, never, verify}
 
 import org.apache.spark.{SparkFunSuite, TaskContext}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFusedKernel
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.varka.{VarkaBatchLedger, VarkaClassDump,
-  VarkaFallbackAccounting}
+  VarkaFallbackAccounting, VarkaKernelRunner}
 import org.apache.spark.sql.util.ArrowUtils
 import org.apache.spark.sql.vectorized.{ColumnarBatch, ColumnVector}
 
@@ -145,6 +147,36 @@ class VarkaEvaluatorComponentsSuite extends SparkFunSuite {
     counted.nonArrowBatch()
     counted.allocationSample(1L << 30, 1)
     assert(Seq(kernel, rowPath, declined, nonArrow, suspect).map(_.value) === Seq(1, 1, 2, 1, 1))
+  }
+
+  test("a declined batch counts against each reason its status names, and the status bits are " +
+      "distinct, the kernels' below the evaluator's") {
+    // VARKA-304. Catches: a reason's bit shared with another or with the evaluator's own (a log
+    // line and a count could not tell them apart), and a count that misses a bit of a status
+    // naming several reasons, which a method of two reasons returns by default.
+    val kernelBits = Seq(VarkaFusedKernel.STATUS_DAY_PRODUCER, VarkaFusedKernel.STATUS_MONTH_COUNT,
+      VarkaFusedKernel.STATUS_MAKE_DATE, VarkaFusedKernel.STATUS_INT_OVERFLOW,
+      VarkaFusedKernel.STATUS_DAY_RANGE, VarkaFusedKernel.STATUS_VALUE_RANGE)
+    val evaluatorBits = Seq(VarkaKernelRunner.STATUS_INPUT_BOUND,
+      VarkaKernelRunner.STATUS_DERIVED_INPUT, VarkaKernelRunner.STATUS_FORCED)
+    val bits = kernelBits ++ evaluatorBits
+    assert(bits.forall(b => Integer.bitCount(b) == 1), bits)
+    assert(bits.distinct.size === bits.size, bits)
+    assert(kernelBits.max < evaluatorBits.min, bits)
+
+    val accounting = new VarkaFallbackAccounting(
+      new VarkaFallbackAccounting.Counters(null, null, null, null, null), () => "kernel")
+    accounting.declinedBatch(
+      VarkaFusedKernel.STATUS_MAKE_DATE | VarkaFusedKernel.STATUS_INT_OVERFLOW, null)
+    accounting.declinedBatch(VarkaFusedKernel.STATUS_MAKE_DATE, null)
+    accounting.declinedBatch(VarkaKernelRunner.STATUS_INPUT_BOUND, null)
+    val counts = accounting.declinedByReason().asScala.map { case (k, v) => k -> v.longValue }
+    assert(counts.filter(_._2 > 0) ===
+      Map("make-date" -> 2L, "int-overflow" -> 1L, "input-bound" -> 1L))
+    assert(counts.size === bits.size)
+    assert(VarkaFallbackAccounting.describeStatus(
+      VarkaFusedKernel.STATUS_DAY_RANGE | VarkaFusedKernel.STATUS_VALUE_RANGE | (1 << 20)) ===
+      "day-range|value-range|0x100000")
   }
 
   test("the class dump writes a shape once, and a failed write is neither thrown nor remembered") {

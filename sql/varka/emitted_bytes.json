@@ -219,11 +219,11 @@
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "f09c0a347f43e9ec",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "f5bcfabf73a8ddba",
-          "epilogueDense0([J[J[I[J[J[II)I" : "67a929c39972fa09",
+          "loopDense0([J[J[I[J[J[II)I" : "7bf5e2510e6e722f",
+          "epilogueDense0([J[J[I[J[J[II)I" : "20ca5bc0bbd8e379",
           "runMasked([J[J[I[J[J[II)I" : "35ab1e6049f33a3a",
-          "loopMasked0([J[J[I[J[J[II)I" : "abf0bad429cbe091",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "f9149cb160aac9b0"
+          "loopMasked0([J[J[I[J[J[II)I" : "1f9cea6ee1070c5f",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "5cda1e0e64f5f545"
         },
         "trunc(d, 'YEAR')" : {
           "<class>" : "2a53295ac2cde372",
@@ -285,11 +285,11 @@
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "83196a9e8290088d",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "b00ac5bc266a3151",
-          "epilogueDense0([J[J[I[J[J[II)I" : "cf29d95d270e1033",
+          "loopDense0([J[J[I[J[J[II)I" : "ac345196836ddda5",
+          "epilogueDense0([J[J[I[J[J[II)I" : "808ddb77d9ab531d",
           "runMasked([J[J[I[J[J[II)I" : "451a11e4c7a99230",
-          "loopMasked0([J[J[I[J[J[II)I" : "b3b9276894abd76a",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "5e4f2eb8a6c5f141"
+          "loopMasked0([J[J[I[J[J[II)I" : "6ef682bb57578b08",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "ff5b32d27a2b889d"
         },
         "d + INTERVAL 3 MONTH" : {
           "<class>" : "2a53295ac2cde372",
@@ -307,22 +307,22 @@
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "83196a9e8290088d",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "b00ac5bc266a3151",
-          "epilogueDense0([J[J[I[J[J[II)I" : "cf29d95d270e1033",
+          "loopDense0([J[J[I[J[J[II)I" : "ac345196836ddda5",
+          "epilogueDense0([J[J[I[J[J[II)I" : "808ddb77d9ab531d",
           "runMasked([J[J[I[J[J[II)I" : "451a11e4c7a99230",
-          "loopMasked0([J[J[I[J[J[II)I" : "b3b9276894abd76a",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "5e4f2eb8a6c5f141"
+          "loopMasked0([J[J[I[J[J[II)I" : "6ef682bb57578b08",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "ff5b32d27a2b889d"
         },
         "d - ym" : {
           "<class>" : "2a53295ac2cde372",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "83196a9e8290088d",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "4fa9b54105e28cc7",
-          "epilogueDense0([J[J[I[J[J[II)I" : "7fe10f8a59d85d78",
+          "loopDense0([J[J[I[J[J[II)I" : "923f7574558e8f4f",
+          "epilogueDense0([J[J[I[J[J[II)I" : "471a63d3316b57eb",
           "runMasked([J[J[I[J[J[II)I" : "451a11e4c7a99230",
-          "loopMasked0([J[J[I[J[J[II)I" : "2e1ac9208297a81d",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "d52c864e3dbb2af0"
+          "loopMasked0([J[J[I[J[J[II)I" : "842f243f268d03ac",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "97ae31d5507aff2b"
         },
         "make_ym_interval(year(d), month(d))" : {
           "<class>" : "2a53295ac2cde372",
@@ -351,22 +351,22 @@
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "f09c0a347f43e9ec",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "336db0422bfa88ea",
-          "epilogueDense0([J[J[I[J[J[II)I" : "3840d9cbb1e087ee",
+          "loopDense0([J[J[I[J[J[II)I" : "d8cc082f01f2b5d0",
+          "epilogueDense0([J[J[I[J[J[II)I" : "13258c38059662ef",
           "runMasked([J[J[I[J[J[II)I" : "de0cd7b0a0788246",
-          "loopMasked0([J[J[I[J[J[II)I" : "486122c171ebcd19",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "cd71e8f81570ffa4"
+          "loopMasked0([J[J[I[J[J[II)I" : "5c1c0f06a8c02f92",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "0c0e24f7086a208f"
         },
         "ym - ymm" : {
           "<class>" : "2a53295ac2cde372",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "83196a9e8290088d",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "2496bf32f1c4ebf5",
-          "epilogueDense0([J[J[I[J[J[II)I" : "42f0cf8e3a67f400",
+          "loopDense0([J[J[I[J[J[II)I" : "0f7355eb0752c265",
+          "epilogueDense0([J[J[I[J[J[II)I" : "1d0341ea5c68ed79",
           "runMasked([J[J[I[J[J[II)I" : "451a11e4c7a99230",
-          "loopMasked0([J[J[I[J[J[II)I" : "c7a1ac0b19552e19",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "486177e512068bbc"
+          "loopMasked0([J[J[I[J[J[II)I" : "6937f5347bd30b7c",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "4b283f5202f884fe"
         },
         "CAST(ymy AS INTERVAL MONTH)" : {
           "<class>" : "2a53295ac2cde372",
@@ -395,33 +395,33 @@
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "f09c0a347f43e9ec",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "4229b86ebe690391",
-          "epilogueDense0([J[J[I[J[J[II)I" : "c32313ad9ae979b9",
+          "loopDense0([J[J[I[J[J[II)I" : "b84e4c77d6ecdc3b",
+          "epilogueDense0([J[J[I[J[J[II)I" : "79e5052d8de943d6",
           "runMasked([J[J[I[J[J[II)I" : "93d2163235838083",
-          "loopMasked0([J[J[I[J[J[II)I" : "489fe64d08208c80",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "153658d0593985d2"
+          "loopMasked0([J[J[I[J[J[II)I" : "d28f34e3ed80bb7a",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "c74a37e606c93445"
         },
         "i + 1" : {
           "<class>" : "2a53295ac2cde372",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "f09c0a347f43e9ec",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "398307e580f29e82",
-          "epilogueDense0([J[J[I[J[J[II)I" : "21c92876093c6c1d",
+          "loopDense0([J[J[I[J[J[II)I" : "6ca57be3f5becda6",
+          "epilogueDense0([J[J[I[J[J[II)I" : "a3a54933174c68c9",
           "runMasked([J[J[I[J[J[II)I" : "93d2163235838083",
-          "loopMasked0([J[J[I[J[J[II)I" : "ca6c927e99197ad6",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "8e958e7f590e41f1"
+          "loopMasked0([J[J[I[J[J[II)I" : "5af2bc0246f47ab7",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "88b211f7f8711aa0"
         },
         "i - 1" : {
           "<class>" : "2a53295ac2cde372",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "f09c0a347f43e9ec",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "d54d0f09a56dbc7b",
-          "epilogueDense0([J[J[I[J[J[II)I" : "27f8aea094d29075",
+          "loopDense0([J[J[I[J[J[II)I" : "e01be33dc262e1d1",
+          "epilogueDense0([J[J[I[J[J[II)I" : "5d979e09d4f4447d",
           "runMasked([J[J[I[J[J[II)I" : "93d2163235838083",
-          "loopMasked0([J[J[I[J[J[II)I" : "b488b3bf86e58437",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "619c191d2ca6abf7"
+          "loopMasked0([J[J[I[J[J[II)I" : "be7894dd7aa71125",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "cc21fc21ddae56cd"
         },
         "year(d) * 2" : {
           "<class>" : "2a53295ac2cde372",
@@ -439,22 +439,22 @@
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "f09c0a347f43e9ec",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "d35a028a4a6a46eb",
-          "epilogueDense0([J[J[I[J[J[II)I" : "93d5cb218034a689",
+          "loopDense0([J[J[I[J[J[II)I" : "ffc79e58bf32f2db",
+          "epilogueDense0([J[J[I[J[J[II)I" : "acf3e775f00b8cac",
           "runMasked([J[J[I[J[J[II)I" : "93d2163235838083",
-          "loopMasked0([J[J[I[J[J[II)I" : "594f2133d9df6e5a",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "a26bd6693fddbcd6"
+          "loopMasked0([J[J[I[J[J[II)I" : "0519d892da851dea",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "3607232ed81dd958"
         },
         "year(d) + i" : {
           "<class>" : "2a53295ac2cde372",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "83196a9e8290088d",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "7dfb252d176eb496",
-          "epilogueDense0([J[J[I[J[J[II)I" : "7b83879d86af0d1c",
+          "loopDense0([J[J[I[J[J[II)I" : "069303365b7c8c65",
+          "epilogueDense0([J[J[I[J[J[II)I" : "16a4fd09692782a3",
           "runMasked([J[J[I[J[J[II)I" : "451a11e4c7a99230",
-          "loopMasked0([J[J[I[J[J[II)I" : "687d69369764f313",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "db27417e0d3ea81a"
+          "loopMasked0([J[J[I[J[J[II)I" : "812936c1986d9c55",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "b09fbc5d9245c5f4"
         },
         "if(d < d2, d, d2)" : {
           "<class>" : "2a53295ac2cde372",
@@ -989,46 +989,46 @@
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[I[JI)I" : "d5145bab352f2868",
           "runDense([J[J[I[J[J[I[JI)I" : "7b15a2415c2410d7",
-          "loopDense0([J[J[I[J[J[I[JI)I" : "8ca79c03beaa2dd5",
-          "epilogueDense0([J[J[I[J[J[I[JI)I" : "8885e7171634e9d1",
+          "loopDense0([J[J[I[J[J[I[JI)I" : "65d94caf5bc0280f",
+          "epilogueDense0([J[J[I[J[J[I[JI)I" : "a16e5722b1a8b171",
           "runMasked([J[J[I[J[J[I[JI)I" : "a037dfc254629f23",
-          "loopMasked0([J[J[I[J[J[I[JI)I" : "48be16913a28c536",
-          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "03332967e7637a68"
+          "loopMasked0([J[J[I[J[J[I[JI)I" : "257a0498876dc5ff",
+          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "adbcdfb7355d9764"
         },
         "time_from_micros(time_to_micros(t))" : {
           "<class>" : "1a6be0d5ae87cd3c",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[I[JI)I" : "d5145bab352f2868",
           "runDense([J[J[I[J[J[I[JI)I" : "7b15a2415c2410d7",
-          "loopDense0([J[J[I[J[J[I[JI)I" : "e76bbc44ebefd10f",
-          "epilogueDense0([J[J[I[J[J[I[JI)I" : "7b58f69968062c39",
+          "loopDense0([J[J[I[J[J[I[JI)I" : "e5bc92fb29f636bf",
+          "epilogueDense0([J[J[I[J[J[I[JI)I" : "039ddac83c6a4569",
           "runMasked([J[J[I[J[J[I[JI)I" : "a037dfc254629f23",
-          "loopMasked0([J[J[I[J[J[I[JI)I" : "c2794c4bbdea7b5f",
-          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "c96161b1780b1a6d"
+          "loopMasked0([J[J[I[J[J[I[JI)I" : "ad02040f3d2f90a3",
+          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "a14db9a5e213b6e5"
         },
         "t + INTERVAL '0 00:00:00' DAY TO SECOND" : {
           "<class>" : "1a6be0d5ae87cd3c",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[I[JI)I" : "d5145bab352f2868",
           "runDense([J[J[I[J[J[I[JI)I" : "7b15a2415c2410d7",
-          "loopDense0([J[J[I[J[J[I[JI)I" : "0e23ea42322b9ffb",
-          "epilogueDense0([J[J[I[J[J[I[JI)I" : "c990060411c8d210",
+          "loopDense0([J[J[I[J[J[I[JI)I" : "901813cc8036d7e2",
+          "epilogueDense0([J[J[I[J[J[I[JI)I" : "6e69a32e9de5765e",
           "runMasked([J[J[I[J[J[I[JI)I" : "a037dfc254629f23",
-          "loopMasked0([J[J[I[J[J[I[JI)I" : "d381638096c78582",
-          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "1aaf69ee1fff0530"
+          "loopMasked0([J[J[I[J[J[I[JI)I" : "a141c89804ab9eb7",
+          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "6694cecde6838f11"
         }
       },
       "fuzz" : {
         "seed" : 20260903,
         "shapes" : 10000,
         "block_size" : 100,
-        "blocks" : [ "62e992dd79853170", "f1205f7b2a7b3fd6", "a1f0af0dfb1d24e8", "401e382b89566e20", "9c7730452bc2e059", "bf2680c526b74131", "1d20f2a4a74ac6ce", "68043e5355ba896a", "cb24186e03d135ee", "897759217417f801", "eb521723d37b8d27", "9f27f45de67891b0", "e6b3cc5c0f912860", "dffc08f43431dceb", "6d191be2956635c6", "10eac1e30323556e", "ce0190e5b7ecd2e4", "31234cef33ca8478", "4dd1fd64dd595a10", "714020355f7a23ab", "6ba5ac52bf897540", "5699f4a3bd5a00a8", "d7218fab05c941ae", "f28cf8c82d947206", "b7596ad4bd0bb233", "b3f8941804db48b1", "37c7ce3b293c42ee", "23cf4db81f3c8c87", "0f9ee56eb2284dbd", "d1fe48151a842991", "f1453e5ed364d3a0", "b54072e81e978e7b", "5d0f899f256ec47d", "081d5153fdb1498c", "ceed65f7fad88c8f", "f42f6171a557de20", "b0946952f915b252", "ade28b7bd44680f7", "4ee7a326584145c5", "d53be5541e8d4d75", "974307804a53ea7f", "c952815fd8c9a650", "b2cfd7f565b0d228", "6a9e787f9e7ad6cc", "69498ed2e5dc863c", "2722290ce646c57a", "3099f11a7b906efb", "cc9830c265b8622f", "eb678478b0326871", "a989c51456f0d91f", "3d3c6e7de05e1505", "341fe8239b17bb9e", "1aafbf3aa5f10101", "a1260ca36f3354b3", "305b4d50773e7d7c", "d6866860a2fd9e5d", "267d63c29367e174", "a5a95c2e972af7bc", "821acc83f15f3734", "f6fc31328edceaef", "66ca8d9bc5fef8c4", "984ee7cd8c878c2b", "73af90c25d7716d7", "507d0295c6ef24b3", "41ba6b45b81146c8", "1dcae3871418f3d7", "e1e0bef581de47d3", "0732fb32df682c02", "503fce76f2e436b1", "cfc7f5492a8c8e8e", "01971aab0ee0bb96", "1f3d447541827b40", "99333921ec338d46", "b58c0fb008489a37", "1c3a356da6f69b4d", "5bc92b0aab2da40e", "b6ff19451b39bed2", "6fd7130d0d114595", "6b30775552ba9147", "f65c75536c5bd384", "6693d864a2b8ef62", "f2462baf2e533321", "f9eb8bac4a70220b", "097c53a61129cb05", "7afc810dbca3b914", "3054a1d4878eb319", "0b5f382248d83843", "7db123896c331e8f", "843a91f1c882e560", "decb6b29f6082474", "4db217bcae7dbf28", "96f010a82a3595dc", "caf79bde096ad585", "d8edf5e92b4a07d4", "df3be329183b6916", "74c6f2225f552522", "22be177545c9939d", "c5099687508613a6", "7afb20c10f49b96c", "18cf78290180cad4" ]
+        "blocks" : [ "7a59fa01373209f3", "e4ae1bf43d8f2b46", "92035f63949264ea", "2949baea91308875", "1756cb955e368e4f", "a84d2b6aaa404f72", "1b374a3dd7c5f9ae", "2f7664b28f412e6f", "c1c2b21098fd9236", "5eab924b097cfdbf", "ec81889a60e2474c", "14d407ce990e0c86", "6c55ad46a0c0d64a", "340b9b590070a5d2", "2f88c710856f09a8", "adf6b35868a81ea7", "aab24d30411789cc", "619131143b807eed", "370d7747f3c36e50", "81835de784254eb3", "c91aba509c94d505", "b20128dff83372d8", "81c10685117b575d", "82c4e5f563857a8e", "055e1923bf1f0c00", "1bf6180f9d83c566", "41ea2b48a9eecd61", "e2f0c2062692699f", "4af80eb0e6eca720", "34e7fae71550cd4a", "2e6d37cb9eff37a5", "97cb543eff109eb8", "b17df017816b7529", "f0acae5a88033215", "3e50c221a48f6ba5", "fc9e718d383a73d7", "9334009015d42461", "1a2f2a4f8afd501e", "72613d599355c9d2", "38b6ff44333b98aa", "9d392102149604b2", "85f8c416bdc81bbc", "5e290316af646d02", "3f80610404fa61e3", "f9aea07211d7e875", "6b5e29cc04be01a9", "10daa42896634b80", "fec6c89aa7930fdc", "a85c9f09a3c7dc01", "d3d5c7f618a74a40", "b5fc07bf6f4f7b21", "e636051cf77f130a", "fe91f3d8ea20d513", "144bc888d7e23f7a", "39b1ab1c94a50172", "c29bee1f00a59f5a", "ef3fee9f6d1a1b35", "3ee5a77c3ebba988", "5b2d84c975ffb001", "3ff1dfcc292788e9", "10e1070804c9c474", "46e0eaf3ada8a0c9", "59a06ecbefbe075f", "6b0b146e5b5bafe2", "d72ae07cd2902562", "8c4017f17de3a46e", "bfdd287f2094e620", "af2b3d28672f834d", "2079250a128b7514", "785c79eda677a016", "23638b0d08dd56ab", "002886030cc42fb5", "e98ba922b1b4d4d5", "fefefa60d22a9d83", "52a8c5e5b3d1d2d1", "f0c0bad6c8a26656", "702cb56cb8e8f861", "f84f8e00d20dfeda", "433b9da2978d242f", "3eef25edd95d83bb", "3a47b1a8060df19c", "3ae7b66491dad6f0", "493226a15515615e", "5f77fc3273004e2c", "4af2186dfc374bc4", "e087d7ba829348f6", "903a9baf83c0cac3", "8ba0c5279ce447ff", "a0c678bc60278572", "8de7d4c57ef89dcb", "5c7da17b446297e1", "9d52a486e9494c01", "925ae4d913ee802e", "b40f177c686d27b7", "0f7da84a08aaa1d9", "6c8fe24a50dc4272", "ecea780450d6c86b", "4f6668fdf918f7f7", "8a3757b37e0b87f1", "fe043e66b4ad13a5" ]
       },
       "fuzz_long" : {
         "seed" : 20260919,
         "shapes" : 10000,
         "block_size" : 100,
-        "blocks" : [ "98ecc12b18fa478a", "bf12251d73b1caec", "70b41a0a619c080a", "6be0c47250abc17a", "ea125fb61e18cb17", "ffc398637a5be357", "45e9c9f6d4115a6b", "54400e0ba2fb39c7", "c4e3bc5a8f3c189b", "b9eecd78bfc5fa8a", "aa929ecce0c360f5", "a5e8aa190be08d87", "479702d7ba142a37", "baa2b055844bc476", "00a6c3dc236b205d", "c52c0c753dd578e4", "5a96e80f86606a56", "b4c287e4610dbadd", "af25d0015eaf9fa8", "1f4357f28031a97a", "0d78184dd0084181", "6866df065572abe8", "315a8a1b79378007", "17570c7fded260ba", "45c06f256e5c2f30", "e0c8b3386881d840", "13fb0e5ff3cdecf4", "ffe91b45f6ff0236", "9406c23bd9888b2d", "e6f3c200cd3dff3a", "0754e116d700bf8e", "54ab25f6812cfac6", "6fcc4d628df6468a", "9a08255c5abade22", "2ca51131b2bd2106", "3b67aab0c405ab43", "4299ed003a8d3bbd", "1f02693e52d5969b", "f2c979329e920bf0", "d3df0ba64208dc03", "8d9be03c92b21968", "468a35c18e862f31", "b3dde86ecd00a3bf", "bb624359286fc6d7", "38e36cbdbec75ada", "7510bbbc1261564f", "a03b7ef4d3899a90", "3b40224ff9ed5535", "4d62badcccf7451e", "1d1f8b5f93e2e893", "2be2d464adbb86f0", "e4c66080434ea311", "4b87c3ab59bb1708", "3d5279fb3e873597", "422d090f5862c059", "e9707250e2c25207", "b9aaf3a26330d0c8", "82bcdc6cb3cc6362", "6eb7e7df1058f052", "eab756561a19fd22", "027e607360bdf230", "c6d4062d9339d647", "010dc82b6a3f24e6", "8ba4d7261b6fcb37", "f69c8b4a846c8be3", "30bf866aceb11c54", "918e9be0bfe12197", "32a08db9e62d69b2", "f9753f760c5f41a9", "c7b4515188e95aec", "eff5aca67e19d759", "d44c0fa354897f2e", "4936c903a8f5adc7", "12fce66331ecf2ce", "ec4eb03dd2f4b38b", "fccef21d5d39c526", "8bdfa3f6fbee9d42", "dbdafe035e0c4723", "b06bfe8fd1329a05", "eb4539a65750cd10", "498881adcf4c5f1c", "9b31557e38668c91", "4f3f5ec22fd73c98", "b8f27549a6dc500a", "01ed6e3e56179dd2", "5d66ac87fd531c41", "4cf35381f0513fe4", "eaff06ce87dbde12", "d5ce656c3eb7064e", "5181738c5a8f31f5", "59213a17ff008b9c", "497dfb29fcc966cd", "308c4f01d086f9f2", "54e44e327de7fe01", "08f0f66efcff2be6", "72552af55fd2e9fa", "3c70941626117a7e", "b4f7bdb26989f788", "f769853f2ec501f5", "0dde9ea681aabadb" ]
+        "blocks" : [ "43432d62f02b48d7", "c83239a6833319ff", "13e73ad37c49990c", "83e2d019f9871a69", "0f7b953e85a6ce66", "63b53ceaac5bfc22", "4527b95ec72f6c95", "c865f19d12a2db1c", "5b8014fa5a45c311", "a4c9a0ab1cd32f99", "5a9d67719dac2c60", "3cb31a452bc79174", "5d3d5bbc35a173bc", "1bc62327210091d5", "c5ef8fb3cf63603c", "f4fc116198ee776b", "3275c0f1ea529c1a", "9bcd5923a112ac40", "07ae6580edf6cd97", "1b467e6089bddc9b", "b813a92a87f7ba54", "d90c0ca1ade1345d", "9b681d09d7cc237b", "1a5a5940fcfc7ac0", "a54855e307b77670", "1fd027933be24f89", "dc79ed2972377f4a", "65ca59c97786429f", "e02a6855796a2711", "8434418e9d11f0ad", "eb60446eb7539d28", "d3127d458428e1ff", "0d941de8cea6517c", "65940329a1e293b6", "5bdb38dd3ea79851", "395bc49603ed77a9", "00d3ffb8fb5c48ef", "f76c4f81853d24e4", "bedb460ea038bb3d", "05c299fd2412d9ce", "08c5bb80e7b29bb5", "7b5f968feac4f78a", "c93c217eb0ba59ff", "ac36114553518ff3", "af33cdeff16b0a0f", "cbefa8ba21e35699", "7de36bf8423ddc3d", "8c327c2f500bedd8", "3b93227e161bbdc6", "96b6ac1671a057a3", "27e99a0ab9cbb390", "5227ee4a1be8cddc", "a11def585a563f69", "f62490973b1e82c9", "b0ffe368bcf636a2", "757e35077cb7b72a", "0b449c73e45f39f0", "b0919c1ef04a7b8f", "385e10f5e13a18d9", "019515e6305ff673", "8471499bd515d5f5", "1c0961ffaef74907", "21dcd5883810aa90", "af77a848652a6d63", "7c14d3e42403af97", "be6cf0fb0e92897b", "b8e5e30ae0b2a1eb", "82e4720fa020f9ef", "fbaae5a52322944a", "3eaa7d730aad263f", "39edd564f235fd83", "3daac78f33049a4d", "e862b5dd5d5c8f76", "47acd778980b1880", "4b08014f80340a37", "1e193ae96111eca7", "ed1cddfc77fbacfd", "a3fbd21ae0372b8d", "872eadd4651b5cc6", "21500a8f414026d0", "d31242dc151a4035", "adea9e76558fe3eb", "7f6115639a401780", "e38b5074f5881859", "3d129f68fe67fcdb", "5c909a7a2006f245", "fdbacb36ee949073", "29aa05d63c8055fb", "cb329f103b3c9f79", "4dc1821064849db1", "1775c7c015a18d50", "2f4a9945a87d2fa5", "d9edc03bf300d316", "04e4a8895fe6748a", "e442f4dd6c9a09c5", "d9b0653179379106", "7392c1c5e585810e", "5847b95c2acc9536", "e38baa140b7ef24b", "dd8ef06dec3aec06" ]
       }
     },
     "16" : {
@@ -1247,11 +1247,11 @@
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "f09c0a347f43e9ec",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "447b6f10cac26f31",
-          "epilogueDense0([J[J[I[J[J[II)I" : "c49f83a9af68258a",
+          "loopDense0([J[J[I[J[J[II)I" : "aa5b13c90972daf5",
+          "epilogueDense0([J[J[I[J[J[II)I" : "3d2edefa06afd994",
           "runMasked([J[J[I[J[J[II)I" : "35ab1e6049f33a3a",
-          "loopMasked0([J[J[I[J[J[II)I" : "959d10097f2e4756",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "504557b9ec8b34f2"
+          "loopMasked0([J[J[I[J[J[II)I" : "7c47b2b470d86a79",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "44d76848d2abb532"
         },
         "trunc(d, 'YEAR')" : {
           "<class>" : "2a53295ac2cde372",
@@ -1313,11 +1313,11 @@
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "83196a9e8290088d",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "acbf083a0d97d8f3",
-          "epilogueDense0([J[J[I[J[J[II)I" : "2776e6a46f4a2592",
+          "loopDense0([J[J[I[J[J[II)I" : "8ecbcf16c39fcb95",
+          "epilogueDense0([J[J[I[J[J[II)I" : "b6c10c8d37b6aa21",
           "runMasked([J[J[I[J[J[II)I" : "451a11e4c7a99230",
-          "loopMasked0([J[J[I[J[J[II)I" : "e81acb3441c93d02",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "5f494abf46474943"
+          "loopMasked0([J[J[I[J[J[II)I" : "51438909e244f6bc",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "760811a78c80a7d1"
         },
         "d + INTERVAL 3 MONTH" : {
           "<class>" : "2a53295ac2cde372",
@@ -1335,22 +1335,22 @@
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "83196a9e8290088d",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "acbf083a0d97d8f3",
-          "epilogueDense0([J[J[I[J[J[II)I" : "2776e6a46f4a2592",
+          "loopDense0([J[J[I[J[J[II)I" : "8ecbcf16c39fcb95",
+          "epilogueDense0([J[J[I[J[J[II)I" : "b6c10c8d37b6aa21",
           "runMasked([J[J[I[J[J[II)I" : "451a11e4c7a99230",
-          "loopMasked0([J[J[I[J[J[II)I" : "e81acb3441c93d02",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "5f494abf46474943"
+          "loopMasked0([J[J[I[J[J[II)I" : "51438909e244f6bc",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "760811a78c80a7d1"
         },
         "d - ym" : {
           "<class>" : "2a53295ac2cde372",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "83196a9e8290088d",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "907cd73e744a5919",
-          "epilogueDense0([J[J[I[J[J[II)I" : "ae95be0b30decd3a",
+          "loopDense0([J[J[I[J[J[II)I" : "32dd0ded24d0f981",
+          "epilogueDense0([J[J[I[J[J[II)I" : "295f29f36d041118",
           "runMasked([J[J[I[J[J[II)I" : "451a11e4c7a99230",
-          "loopMasked0([J[J[I[J[J[II)I" : "1c068c201ed5c4f8",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "f784ef43f42e84e4"
+          "loopMasked0([J[J[I[J[J[II)I" : "99793b9e562843a0",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "84a25b5e312b5448"
         },
         "make_ym_interval(year(d), month(d))" : {
           "<class>" : "2a53295ac2cde372",
@@ -1379,22 +1379,22 @@
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "f09c0a347f43e9ec",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "148a73521d636240",
-          "epilogueDense0([J[J[I[J[J[II)I" : "64efea9c9a8eff10",
+          "loopDense0([J[J[I[J[J[II)I" : "47e77dcc200ded98",
+          "epilogueDense0([J[J[I[J[J[II)I" : "5dffc643fee489ce",
           "runMasked([J[J[I[J[J[II)I" : "de0cd7b0a0788246",
-          "loopMasked0([J[J[I[J[J[II)I" : "f4d65fe85354bc11",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "85ac86a92d288ab1"
+          "loopMasked0([J[J[I[J[J[II)I" : "996655c3afaac4f0",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "f6eb37b7a1eb0b66"
         },
         "ym - ymm" : {
           "<class>" : "2a53295ac2cde372",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "83196a9e8290088d",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "250c582bcc841898",
-          "epilogueDense0([J[J[I[J[J[II)I" : "fb73addf474e8163",
+          "loopDense0([J[J[I[J[J[II)I" : "ca50651064f57973",
+          "epilogueDense0([J[J[I[J[J[II)I" : "cf13308173310c97",
           "runMasked([J[J[I[J[J[II)I" : "451a11e4c7a99230",
-          "loopMasked0([J[J[I[J[J[II)I" : "eba1ac8a9881ef27",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "ec837eb12dfaf6f7"
+          "loopMasked0([J[J[I[J[J[II)I" : "f6c5870643a7354e",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "dab0c8793e6166c7"
         },
         "CAST(ymy AS INTERVAL MONTH)" : {
           "<class>" : "2a53295ac2cde372",
@@ -1423,33 +1423,33 @@
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "f09c0a347f43e9ec",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "151a7bbad70f0607",
-          "epilogueDense0([J[J[I[J[J[II)I" : "e00fcfa072ddcb0d",
+          "loopDense0([J[J[I[J[J[II)I" : "d1540500b37058b4",
+          "epilogueDense0([J[J[I[J[J[II)I" : "05234fdc97c65e43",
           "runMasked([J[J[I[J[J[II)I" : "93d2163235838083",
-          "loopMasked0([J[J[I[J[J[II)I" : "225c5f1effcf8c38",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "660b0efaf74639a1"
+          "loopMasked0([J[J[I[J[J[II)I" : "2f9b9e5f8e50c264",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "8306eaced40daf8f"
         },
         "i + 1" : {
           "<class>" : "2a53295ac2cde372",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "f09c0a347f43e9ec",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "ce6ea34211e7ee22",
-          "epilogueDense0([J[J[I[J[J[II)I" : "33ebcd105fa87e36",
+          "loopDense0([J[J[I[J[J[II)I" : "89b392b81d987f21",
+          "epilogueDense0([J[J[I[J[J[II)I" : "31976acc81a3cd46",
           "runMasked([J[J[I[J[J[II)I" : "93d2163235838083",
-          "loopMasked0([J[J[I[J[J[II)I" : "295e094a4458a579",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "eae458ad0a0cade1"
+          "loopMasked0([J[J[I[J[J[II)I" : "b8aac3ae7776e008",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "42a56513068447a1"
         },
         "i - 1" : {
           "<class>" : "2a53295ac2cde372",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "f09c0a347f43e9ec",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "7ce63e39106cd765",
-          "epilogueDense0([J[J[I[J[J[II)I" : "3e90ca635e149909",
+          "loopDense0([J[J[I[J[J[II)I" : "57927496718ec6ea",
+          "epilogueDense0([J[J[I[J[J[II)I" : "52323171bef2bd5a",
           "runMasked([J[J[I[J[J[II)I" : "93d2163235838083",
-          "loopMasked0([J[J[I[J[J[II)I" : "f76b9eeb71c62af0",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "9b25dcf0f1e908c7"
+          "loopMasked0([J[J[I[J[J[II)I" : "48e99f5616f4d43e",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "368f2ed118b03747"
         },
         "year(d) * 2" : {
           "<class>" : "2a53295ac2cde372",
@@ -1467,22 +1467,22 @@
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "f09c0a347f43e9ec",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "6d1d4764135559b1",
-          "epilogueDense0([J[J[I[J[J[II)I" : "a8dc43d0433d5b4e",
+          "loopDense0([J[J[I[J[J[II)I" : "e145d5d55f44d38a",
+          "epilogueDense0([J[J[I[J[J[II)I" : "2b021e3a3963dd62",
           "runMasked([J[J[I[J[J[II)I" : "93d2163235838083",
-          "loopMasked0([J[J[I[J[J[II)I" : "805aa8b524987fbc",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "3aa9befdbda09e0d"
+          "loopMasked0([J[J[I[J[J[II)I" : "29d0aed6d27c0293",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "7ea0d53b1d37bc71"
         },
         "year(d) + i" : {
           "<class>" : "2a53295ac2cde372",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[II)I" : "83196a9e8290088d",
           "runDense([J[J[I[J[J[II)I" : "4d2af451952dc222",
-          "loopDense0([J[J[I[J[J[II)I" : "4be0a47d2a666692",
-          "epilogueDense0([J[J[I[J[J[II)I" : "1b1384b80218a1e7",
+          "loopDense0([J[J[I[J[J[II)I" : "b540214871389b2d",
+          "epilogueDense0([J[J[I[J[J[II)I" : "39afd44157c3b044",
           "runMasked([J[J[I[J[J[II)I" : "451a11e4c7a99230",
-          "loopMasked0([J[J[I[J[J[II)I" : "572b0da9a9746385",
-          "epilogueMasked0([J[J[I[J[J[II)I" : "251e5e8c4f0af2aa"
+          "loopMasked0([J[J[I[J[J[II)I" : "1f905880db3d3ab0",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "3c09cec36889276a"
         },
         "if(d < d2, d, d2)" : {
           "<class>" : "2a53295ac2cde372",
@@ -2017,85 +2017,85 @@
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[I[JI)I" : "d5145bab352f2868",
           "runDense([J[J[I[J[J[I[JI)I" : "7b15a2415c2410d7",
-          "loopDense0([J[J[I[J[J[I[JI)I" : "fb64d0e20fbebc43",
-          "epilogueDense0([J[J[I[J[J[I[JI)I" : "ec46eb770952ec89",
+          "loopDense0([J[J[I[J[J[I[JI)I" : "b61f32c9ed123d99",
+          "epilogueDense0([J[J[I[J[J[I[JI)I" : "21f2e52093a1938f",
           "runMasked([J[J[I[J[J[I[JI)I" : "a037dfc254629f23",
-          "loopMasked0([J[J[I[J[J[I[JI)I" : "ff22f73af0f7c2c9",
-          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "baf0e3c29298bd41"
+          "loopMasked0([J[J[I[J[J[I[JI)I" : "bc1da399b73f8245",
+          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "afec448349664f23"
         },
         "time_from_micros(time_to_micros(t))" : {
           "<class>" : "1a6be0d5ae87cd3c",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[I[JI)I" : "d5145bab352f2868",
           "runDense([J[J[I[J[J[I[JI)I" : "7b15a2415c2410d7",
-          "loopDense0([J[J[I[J[J[I[JI)I" : "f752d926aac521f5",
-          "epilogueDense0([J[J[I[J[J[I[JI)I" : "a0ffb8e52c004970",
+          "loopDense0([J[J[I[J[J[I[JI)I" : "ce8a11928332ecbf",
+          "epilogueDense0([J[J[I[J[J[I[JI)I" : "f448fd7714da721a",
           "runMasked([J[J[I[J[J[I[JI)I" : "a037dfc254629f23",
-          "loopMasked0([J[J[I[J[J[I[JI)I" : "e6e5114add27a831",
-          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "eb75cfbbc353c961"
+          "loopMasked0([J[J[I[J[J[I[JI)I" : "52102d4b48414e75",
+          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "ea98d79a86b46e71"
         },
         "t + INTERVAL '0 00:00:00' DAY TO SECOND" : {
           "<class>" : "1a6be0d5ae87cd3c",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[I[JI)I" : "d5145bab352f2868",
           "runDense([J[J[I[J[J[I[JI)I" : "7b15a2415c2410d7",
-          "loopDense0([J[J[I[J[J[I[JI)I" : "71186460ac575b14",
-          "epilogueDense0([J[J[I[J[J[I[JI)I" : "242db1f8f421de24",
+          "loopDense0([J[J[I[J[J[I[JI)I" : "d19aa8241af1b15c",
+          "epilogueDense0([J[J[I[J[J[I[JI)I" : "a5dba44fa6c6699a",
           "runMasked([J[J[I[J[J[I[JI)I" : "a037dfc254629f23",
-          "loopMasked0([J[J[I[J[J[I[JI)I" : "f3ac740500f14a5c",
-          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "57acd651f85bb3d3"
+          "loopMasked0([J[J[I[J[J[I[JI)I" : "4447f70c4f7a70b4",
+          "epilogueMasked0([J[J[I[J[J[I[JI)I" : "6fc17d56a701e92c"
         }
       },
       "fuzz" : {
         "seed" : 20260903,
         "shapes" : 10000,
         "block_size" : 100,
-        "blocks" : [ "653aae456264e78e", "8a3ccdc5996bcb18", "7566d94883e6181f", "ef89611c1540758f", "43591bbf721aefde", "88a3bdd25f9a4e60", "657ca280287c5eb4", "3c5765d5446efd0a", "671a4751eb1171b2", "1d43d0729bf28a59", "2a4bd0cfef74c16f", "b567d0adc0569c24", "4f28315f6b23a727", "d8a9f52c6abb8c32", "f0583f071073c4c6", "98a14f2fe0472f5a", "024d40988faaf465", "bbcdb7fdcba388f1", "29d24d349956c5f2", "767a11f80de6e270", "9689314995917faf", "7e815d25ba08a42b", "b4537f90d8a70fa8", "a9464389a6b2e78a", "3d2b85cd3ef319d4", "0ab6d6cac9e9e89c", "58d719772565b404", "b90e944402ecd4c2", "50ae5f09e622adb3", "315d197de5178a77", "9b21f561c8cd2557", "2ed3206785512399", "7b09c1761e352542", "f0fb09a8b66e48eb", "299f123ea660a114", "4e1030ddd79d8ca2", "405a833d2485d863", "0b248c55bbe94bbd", "6c6feac9d4ed04bc", "cf8684e2a2565f70", "441ac245dc6a2ba4", "396024de2ccc315d", "d3dee33fd2bf50b0", "e3832a53a4ad39eb", "bfa99c5142ac7b10", "810b9f21a015994a", "cd1a02d7b1b8fefb", "53db6d773542101b", "ff0d465091a2c8c6", "0315a9cd0d4ee03d", "8a825c16fb599fc1", "4b18b7492b626081", "b999197255d2b657", "ae6b410d52c2db75", "0d5edd3a6272f77c", "baeff3ab8bd1d981", "11fad8cc52d02a2b", "63ca0289d29603b0", "e39ae0aa082cfd35", "e1b24ca72921073e", "13a79637d38677e5", "42a495221a4ccb84", "2aae001a527cbab1", "674ecb2a2c1cc3f9", "84bb5b3ffbbdb5c5", "e7aaacee290f9acb", "03f5811cd312514d", "49b32de68148bc38", "f436d391ced5d146", "b8e5002b13777685", "04eea51c461845a6", "4c2dac3324b6fb62", "16e6ade888a51237", "cb1cfbaa09523e3a", "aee032d2180240dc", "19df3e710f30d8fe", "f510bcebb012a5d5", "f82e8a8a1ec6c574", "8a322c116940d980", "7f0c441085d06962", "8bfa40e0ba2d0220", "f23b65cbc47cacbc", "2be7651e81d5f869", "30627eaea1804bc0", "3a00e42ac81e3284", "cd46f7195a2394eb", "0a9e69d37f95c1b5", "9c78144217356716", "ac1e9afaba748c14", "ad0086249890b703", "501902827575c5f4", "bcded9ac860a7aa1", "f9526a1be4bbc137", "ea11d0a4bef5a2b1", "4824a7aad10096fe", "5a3e085190941312", "1927241e5a3b7c4d", "7549117eed98450c", "7f23c2ac442421ea", "f7b513588a2660d3" ]
+        "blocks" : [ "fb2f3582aa7b08a9", "8a2a768f2a1edbfe", "639c79ecfab6655c", "9b142f2594530bc2", "1f9dbeae42db2f33", "b2386527560c0b09", "ae209daf0f00bf21", "293b324ed7d119cb", "add146642220e930", "b9822413c0880ff9", "6d97da5ff5292b00", "c400d55e01f811bd", "a181b2f9bb4069b1", "175d847bbb30d281", "96225f24e877916c", "ff35223840d3a21b", "73ecae5762f277e9", "01d969ca9090ad6d", "fdd5e2bd91029863", "4a73ecb5ac91f7e6", "d7e71bebfe61c2eb", "70243493694bad48", "bda0bf5f8ad63c8e", "2a9ea0f50af335db", "efd11311aae01076", "165ba1d64b554883", "9ba732aca09cbac4", "bca139b7d62cee19", "53a7a972a38ec389", "0be9f4bc8dff7ce3", "e0b373e29f9ca817", "0e8ff51416d27235", "ef299e7adefd9cce", "4e902c993905865c", "dab7a281a2d09e58", "e612f2cedc8fb2f3", "3f4c94823a31a795", "8663d784a5b37529", "020836aa1214dab9", "43821f4aec0941dd", "3770ea13066d3221", "7361a104aab072e7", "1a2a199bc753792a", "c8800dc8d5806863", "a5322dfc797582e9", "4e72e3349261f39d", "e30fd1027b2dfb5d", "9efc7cf1d9aa4893", "0b2c22c159818153", "ade99bb99a6d70ac", "bd174895ab6ddafd", "9435ab52af99d4f7", "d005891246cbf61f", "5502ab9f7fd230ac", "9eeb5a28090f5a8c", "1d096339b6afdd1c", "293d0b23cf9ae195", "ede559d73d62c90c", "e4a31af39fef8be2", "0f0899596dae6fc6", "87c23ac8241c0c2a", "4d837a23afe6e6b0", "03b25de9aa679e3e", "3ceb5b7dd0f2ca40", "3273b0a7edb3b067", "c7df7bb8e336e4a1", "1c9637085dfc94cc", "cc741a91c4bef805", "711611d929e8d170", "8f6b7a92f008c42e", "2374002e96055259", "3e43c393dda32d58", "44b41688560a794a", "6ab9e10e826bc5b1", "e961c4bbf4fa0f69", "eca2298401367e17", "46c8e757a310ba75", "cbcb1c841a67ed39", "9d946334fcd86c21", "ec3b0e613a25959a", "ffdd4a14fbd11132", "ffab1ebcd64e5ef2", "95423cd594c4b710", "1eb68e3cbded91a2", "82e73b2cc26a44b0", "5e32aa19aac914ba", "db128bff5ee6b2eb", "b9d60272df2e1da8", "69f7bce5b915180b", "f1e64b591c0857e4", "e6bb8ed87d62b85c", "85e43106e8a95261", "cb0b32dca25563bf", "9cb270242c42b0a2", "a4da3c7ca1291ae4", "e5dca9239a9da4d6", "ae9a763c8f10d8b9", "c2f0bb0e87294fda", "5c577cf69cf545c0", "49ceec58bcef0d59" ]
       },
       "fuzz_long" : {
         "seed" : 20260919,
         "shapes" : 10000,
         "block_size" : 100,
-        "blocks" : [ "27b9974a6829d559", "c097e3b4d90c85eb", "17f0d8473972413f", "477769ecd48762a3", "ed47443e533893ac", "609605e920d25976", "bdfa1fcecd8f4076", "4fc31c803b897007", "08f797dc20e6a418", "ca783a24c1e5606b", "1a864f22bde62923", "a543092cfcb22942", "4b4f8fb680c81c43", "6e27fabdede7b918", "2de6e737a27ec063", "b84dd545863b85b5", "d4a9143fa10c72aa", "b79f7fce54d603de", "41184e1f409e91be", "27f7c8ed9a276422", "781855f5088f8c90", "8e750180c5baa9d2", "bfcae7cb9fdea143", "774f28cc757a69ef", "8f30e0f9778d43bd", "d27c176f8aab6bda", "05ee0d2ed0e9fcd7", "a4e20d18eb18e32d", "7d4bed595a2e984c", "cd70342723e2a9f6", "76fa02d6774fd338", "7aafb7d5fe6eee91", "ac5b06029315b230", "99d4f0a598d4e40b", "926b08f7d84f8067", "c3802c3c56b8cace", "a6bcfc33051a2215", "57f5c72adc20d7be", "030f67896edff8c0", "60fc161141ef648d", "baa2ffb047909d95", "9aaa098c59aaa762", "4c62cc3d792c8adb", "9d37c79072cc46c5", "169bfd5460cc1917", "dbee291da4336bdd", "03370e97d207538a", "e87c220a1dd8f789", "78490e3adad9875f", "63e62140893dfcd5", "128a0f06c5e59eb4", "846216f89b3b7858", "6f64abb63f11a79d", "268727e07739923e", "cb0afd284ec163ad", "bcb0a859ab7520a0", "6c9520b7769cc0c0", "859da4d9e8cda832", "711a665b94f69bcc", "8a464bc9a4aa434e", "6497a47a9efca41a", "937785e955002882", "dd2bccb882c12a9d", "e02074eb69160878", "6bd4c40fcc1a13b7", "92abdd38c978b373", "c808894df8ce88f6", "ac9d3b4209c79117", "0db46aa63bbaa7d0", "7a3c75314729275c", "c219b6fe1bddc9e1", "7704c63ca068fbf2", "b8dbb6d9e9e5d6af", "60082e2c7806d79d", "bc4258fc7d802f97", "a49de63fdb08f7a8", "197c07f8ad67e789", "80230ac15de496f9", "c20807098ac700ee", "990dca4e8a516731", "3dec22ab6fdd3f7f", "0621c8b3bc1dc3e3", "9af01205f6002ef1", "ae40d110374c6da7", "645f6d4033d48797", "a45e2d6d7715649c", "c602ec7f5abb08c7", "30b0af546a2c2a4b", "7e101500d4aaf7e9", "5915d4f9a07364ce", "9d992cdbfb4e7a84", "6a2893627320dff6", "1bc47de0cf842c07", "622ff8e81c947452", "44f398590b58f5d0", "df6455b2dbbd628e", "d1124ce645447a4c", "8c4498161ef90179", "5917010f3587bd02", "839d68c712c3b2c3" ]
+        "blocks" : [ "67f39b47e3cca8ce", "a9684261321a82f9", "26103fe6651ee6ff", "929205e64c07cf14", "b3c8220797fee5aa", "179d077c34ce3b38", "28a9430da5cfc8ce", "7a222f35220d4919", "edb6fd0648214d0d", "3f4977d24e774040", "714e53d1b852d151", "4b7b681ff8ad6352", "6246691f086f6eb9", "6117647c781c0063", "50ca21ad48570f91", "916dc074c851d9ac", "6cb1328958f4dfe4", "7f235e3a29ddf3ae", "5324175dc1188cd3", "a3ce6250b1ec7939", "40707ad2f60db2ab", "14115b26a827dda7", "873f8082e0a33a50", "27868c752bd37d8b", "16a334590a1b2e06", "55a6e7aac1319690", "9f70a73f8b867785", "d766135e94d4ff8b", "13394c4ac5bc89f1", "196372fddda74923", "d2f3357b950fa657", "6789666ce0e07a55", "5131fd41a70b28e4", "7b2c8aab440bc7eb", "9abd4ea93e10ff58", "24dff25f227d3803", "c941d64d436e4513", "fda410f099c9a88c", "931d5b892326452b", "bed34b3b0f7e3e40", "feb718e5725d6dc7", "b638484721d6f666", "e2d7775b2540edd0", "756ea1b0b0d6c6df", "3522278c6cae0b5f", "c2e472f478fa70f8", "45549a4205c655de", "e24fd67ac65b09ea", "071b8b90cbafce0a", "db2feb445a9ea236", "ada169d53311647b", "a7a4a2fca5c39df6", "dee52a5d45ac4182", "25c1a138bc9a9c18", "bebcc331ee3a30f1", "3019295ec84d1be6", "c7250467ab5e23b7", "63ea35595692d7f1", "3de82b5e4826e34d", "f16fb14016773628", "679f83d5590d4ca2", "2e5e4957b2757b66", "a40ca277782e49e7", "2d491c612d8ad12b", "0d354e483fb7f1cf", "d47931d3939874b4", "c58e90a014601f92", "64834b6ffa348e5d", "6f0d3336597864df", "534e43190e829e27", "b06b4c048f64534e", "4b425bc1928303a2", "02ba93f6176b6813", "f498fc4a41bc847b", "ba69797a2d9bc07c", "b22bb36e5c7dbc02", "afd7046be69d3863", "e7bcc5a32a7cefc5", "1ada66fccb3cac3f", "fcdc21c0f28869bc", "3803becb5e424857", "4e02025cf79149b5", "d6a9ed96de6426e8", "a277768bd260506f", "d149497fe8fcff56", "6c476638cb44bfb6", "3297e93d8b2c78ef", "1a68aeb35f39531a", "95205f2eec306bd5", "b69d79109dbb5228", "8dbd14f458b27fbb", "511b31a53e1d49a5", "fd081809cd4c1ff6", "1d4a9fcf155d0828", "008ffe9af669ec0f", "bf12d6eb3ce61d1d", "325b0f5186f9add8", "f96306a39d8c6cf1", "18b85c68961b508b", "7b934a3fff424c3c" ]
       }
     }
   },
   "option_arms" : {
     "useAVX=-1" : {
-      "4" : "0ce618c356eb4460",
-      "16" : "59ee81feb6099fa0"
+      "4" : "39ee707c96b152e9",
+      "16" : "98cdbe2085598e81"
     },
     "useAVX=0" : {
-      "4" : "5dad5ab5baade12b",
-      "16" : "a4dbdd614d4784ac"
+      "4" : "55fd412965a3c009",
+      "16" : "a353c20a58ab25c4"
     },
     "useAVX=1" : {
-      "4" : "5dad5ab5baade12b",
-      "16" : "a4dbdd614d4784ac"
+      "4" : "55fd412965a3c009",
+      "16" : "a353c20a58ab25c4"
     },
     "useAVX=2" : {
-      "4" : "5dad5ab5baade12b",
-      "16" : "a4dbdd614d4784ac"
+      "4" : "55fd412965a3c009",
+      "16" : "a353c20a58ab25c4"
     },
     "useAVX=3" : {
-      "4" : "0ce618c356eb4460",
-      "16" : "59ee81feb6099fa0"
+      "4" : "39ee707c96b152e9",
+      "16" : "98cdbe2085598e81"
     },
     "validityOrFirst=true over denseValidityOnce=false,validityByBitmap=false" : {
-      "4" : "0d27ac5ac22f0b2a",
-      "16" : "bdae4798d65cc327"
+      "4" : "25af906135ea499b",
+      "16" : "c8cc7c0f7559b9df"
     },
     "validityOrFirst=false over denseValidityOnce=false,validityByBitmap=false" : {
-      "4" : "038c8117c9ef29d8",
-      "16" : "51507dc72686fdc6"
+      "4" : "d89bb8e17f849e47",
+      "16" : "8431585b7c5d1ae5"
     },
     "groupLocalSlots=false" : {
-      "4" : "a4cbf39836537743",
-      "16" : "7c3a9538b9e00f32"
+      "4" : "d867d4085562b6aa",
+      "16" : "3752fca018e9dbfc"
     },
     "methodByteBudget=0" : {
-      "4" : "357f3e64715a231a",
-      "16" : "d9fd71eb0dc970a0"
+      "4" : "46db2d5253d4af7f",
+      "16" : "9ce740ef2d3ed5a1"
     }
   }
 }

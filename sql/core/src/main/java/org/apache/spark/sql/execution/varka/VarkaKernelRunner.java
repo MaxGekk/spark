@@ -54,17 +54,21 @@ public final class VarkaKernelRunner {
 
   /**
    * The decline status the evaluator itself reports when an input lane lies outside a bound the
-   * compiler recorded - bit 1, beside the kernels' {@code STATUS_CHRONO_RANGE} (bit 0), so a log
-   * line tells the two apart. Never returned by an emitted kernel.
+   * compiler recorded - bit 8, above the kernels' refusal bits ({@code VarkaFusedKernel}, bits 0
+   * to 5), so a log line and the counts by reason tell them apart. Never returned by an emitted
+   * kernel.
    */
-  public static final int STATUS_INPUT_BOUND = 2;
+  public static final int STATUS_INPUT_BOUND = 1 << 8;
 
   /**
    * The decline status the evaluator reports when a derived input met a value its row-engine
-   * definition raises on under ANSI - an unrecognised weekday name - bit 2. The row engine
+   * definition raises on under ANSI - an unrecognised weekday name - bit 9. The row engine
    * recomputes the batch and raises where a non-null date sits beside the name.
    */
-  public static final int STATUS_DERIVED_INPUT = 4;
+  public static final int STATUS_DERIVED_INPUT = 1 << 9;
+
+  /** The decline status of a batch a test declined through the hooks, bit 10. */
+  public static final int STATUS_FORCED = 1 << 10;
 
   /**
    * Whether each batch a kernel serves is run again through its other body and the two compared
@@ -286,7 +290,7 @@ public final class VarkaKernelRunner {
       accounting.allocationSample(VarkaAllocationSampler.allocatedBytes() - before, len);
     }
     if (status != 0 || hooks.declineKernel()) {
-      throw new VarkaBatchDeclined(status != 0 ? status : 1);
+      throw new VarkaBatchDeclined(status != 0 ? status : STATUS_FORCED);
     }
     if (CHECK_BOTH_BODIES) {
       checkOtherBody(len, scratchAddress);

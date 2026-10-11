@@ -593,7 +593,7 @@ final class VarkaVectorWalk {
   /**
    * The runtime range guard on a column-driven producer's own result: lanes outside
    * {@code [lo, hi]} are ORed into {@link Slots#guardAcc}, and {@code emitStatusReturn} turns a
-   * non-empty accumulator into {@code STATUS_CHRONO_RANGE}, which the evaluator answers by
+   * non-empty accumulator into the guard's refusal bit, which the evaluator answers by
    * recomputing the batch on the row engine. The producer guard calls this on the result of a
    * column-offset {@code AddDays} / {@code SubDays} some calendar node reads, with {@code lo} /
    * {@code hi} = {@link VarkaChrono#NARROW_MIN_DAYS} / {@link VarkaChrono#NARROW_MAX_DAYS}; task
@@ -677,9 +677,28 @@ final class VarkaVectorWalk {
       cb.aload(s.epilogueMask());
       cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
     }
-    cb.aload(s.guardAcc);
+    int acc = guardAcc(node, analysis, s);
+    cb.aload(acc);
     cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
-    cb.astore(s.guardAcc);
+    cb.astore(acc);
+  }
+
+  /**
+   * The mask {@code node}'s guard folds into: the body's one mask, or under
+   * {@code exactRefusalStatus} its reason's own (VARKA-304).
+   */
+  private static int guardAcc(VarkaVectorIR node, Analysis analysis, Slots s) {
+    if (s.guardAccByReason == null) {
+      return s.guardAcc;
+    }
+    Integer acc = s.guardAccByReason.get(analysis.refusals.get(node));
+    if (acc == null) {
+      // The planner gives a mask to every reason among the body's nodes, so a guard with none is
+      // a node the planner did not count as this body's; refused by name, not met as a null slot.
+      throw new IllegalStateException("a guard collect with no mask planned for its reason: "
+          + node);
+    }
+    return acc;
   }
 
   /**
