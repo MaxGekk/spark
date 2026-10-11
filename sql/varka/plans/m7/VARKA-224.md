@@ -150,3 +150,49 @@ port reproduces the merge base's numbers, the committed file stands for both.
 2. The adapter, `VarkaCompileBenchmark` on it, `VarkaEmitDump` in Java, the rule and the
    references, in one commit, with the corpus compared.
 3. The pair measurement and section 9.
+
+## 9. Outcome
+
+Done on 11 October 2026, in three commits after the plan: the adapter with the two ports, the
+benchmark scripts' class lookup, and this section.
+
+**The dump is unchanged.** All fourteen cases of 5 print the same bytes and exit codes on the
+port as on master, the two timing fields masked; the corpus was run again after the lint fix to
+the argument parser, with the same result.
+
+**The benchmark reproduces the Scala one.** `dev/varka_bench_pair.sh catalyst
+VarkaCompileBenchmark`, five interleaved rounds of the Scala class at master `03a3178e1f8` and the
+Java class on the adapter (`sql/catalyst/benchmarks/VarkaCompileBenchmark-jdk25-224-pair-results.txt`):
+no row slower or faster by 10 per cent or more by the median, every row within 5 per cent, and six
+of the eight within 3, the Java side reading slightly slower on all eight. The power profile was
+`performance` before and after.
+
+**And its committed results.** The pair's per-call times sit beside
+`VarkaCompileBenchmark-jdk25-results.txt` as master commits it: the calendar projection at 4,107
+to 4,360 ns over the ten runs against the file's 4,247, the TIME one at 4,541 to 4,689 against
+4,597. So the Java benchmark reproduces its committed file, which is what 1 asked of a port, and
+the file stands for it unchanged.
+
+**Predictions scored.**
+
+1. **Held.** Every row within the pair runner's 10 per cent, and most within 3 (six of eight); the
+   two outside it, the sixty-output projection and the range predicate, are within 5. No row is
+   faster, so 7's second risk, a sink the JIT could drop, did not show.
+2. **Held.** The corpus is byte-identical.
+3. **Wrong.** The Java dump is 573 lines against the Scala's 466. The difference is spelling, not
+   the boundary with Scala, which shrank to three `Seq` conversions: Scala's format strings, its
+   `zip` and `map` chains and its pattern-matched `foreach` become explicit loops and
+   `String.format` calls in Java, and the arguments a record and a parse method.
+
+**Corrections to this plan, which is a record and is not rewritten:**
+
+* 3.2 says the port keeps its name, "so `dev/varka_bench_regen.sh` and the pair runner take it
+  unchanged". They did not: both that script and `dev/varka_bench_repeat.sh` resolved a bare class
+  name from its `.scala` file, and the first pair run stopped on the Java side. They now look for
+  a `.java` file too and read its package line without the semicolon.
+* 3.3 says `VarkaSqlResolve` stays Scala. It does, but gains three entries for Java: a
+  parse-and-resolve, since `CatalystSqlParser.parseExpression` is an instance method Java cannot
+  reach through a static forwarder, and a column and an alias, whose case classes keep their
+  expression ids in a second parameter list Java cannot default.
+* The gate's lint failed once: Spark's checkstyle allows one statement per line, and the argument
+  parser's switch arms had two. Fixed before the pull request opened.
