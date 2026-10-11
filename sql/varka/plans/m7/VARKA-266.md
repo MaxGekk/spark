@@ -190,3 +190,32 @@ laptop).
 * 3.5's boundary needed less than it planned: Scala passes the evaluators `Option`s, not nulls,
   and the facade returns `Optional`; what it took was `VarkaExecMetrics`' nullable metrics and the
   facade's own class out of the pending list.
+
+**Review (11 October 2026).** A `/code-review` of the pull request found no production bug and
+fifteen points in the script, the gate's wiring and the cleanups, all taken:
+
+* The shrink check compared the list with the merge base while NullAway read the branch's own
+  list, so a class master took off the list after the branch began stayed unchecked on the branch
+  and failed master's lint after the merge. Those classes are now checked on the branch too.
+* The list could never take a new name, so a renamed or moved pending class had to be clean at
+  once, and a class-wide `@SuppressWarnings("NullAway")` would have been the way round it. A new
+  name may now replace a removed one, the list may not grow, and a class-wide NullAway
+  suppression is refused.
+* A missing `origin/master` made the base `HEAD` and passed silently; it now stops with a
+  message, and a base without the list says that the check is skipped.
+* The gate passed the compile step's classpath file whenever it existed, and that file outlives a
+  run; it is now passed only when the compile step passed in the same run.
+* Only bracketed diagnostics were shown, so a plain javac error was reported as an Error Prone
+  finding with nothing on screen; javac's own output is now shown.
+* `ImmutableEnumChecker` was off for the whole pass; it is suppressed on `Lane` alone.
+* The suppression scan missed `@java.lang.SuppressWarnings`, took a rule of dashes above for a
+  reason, and flagged a Javadoc line that only mentions the annotation; all three are fixed.
+* The JDK guard read `java`'s version but the pass runs `javac`; both are checked. The jars are
+  taken from the local Maven repository when they are there and match, and the classpath export
+  strips carriage returns as `dev/varka_matrix.sh` does.
+* The explicit `VarkaDerivedKind` code is reverted. A key lives only inside one compilation, so
+  reordering the kinds moves nothing stored; the ordinal stays, with the suppression saying so.
+  This corrects the reason 9 gave above.
+* A switch kept a `default` against `sql/varka/AGENTS.md`; an unused parameter was suppressed
+  rather than removed; equality on Spark's type objects was suppressed rather than written as
+  `equals`; and four method-wide identity suppressions in `Slots` are now one helper.

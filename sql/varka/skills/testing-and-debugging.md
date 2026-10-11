@@ -924,5 +924,9 @@ step runs it. Four things cost a run each to learn:
 
 NullAway is staged by class: the classes in `dev/varka_nullaway_pending.txt` are treated as
 unannotated and every other Varka class is checked; a class leaves the list when its nullness is
-stated (`javax.annotation.Nullable`, already on Spark's classpath) and the pass is green, and the
-script fails a line the merge base's list does not have.
+stated (`javax.annotation.Nullable`, already on Spark's classpath) and the pass is green. The
+script fails a list longer than the merge base's, or a new name that does not replace a removed
+one (a rename keeps its place; a split does not), and a NullAway suppression over a whole class.
+It also checks a class master has taken off the list since the branch began, so a branch behind
+master fails before the merge does. An intended finding is suppressed at its site with a `//`
+reason; no check is turned off for the whole pass.

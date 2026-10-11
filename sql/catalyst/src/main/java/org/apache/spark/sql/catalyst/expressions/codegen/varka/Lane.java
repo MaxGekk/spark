@@ -51,6 +51,8 @@ import java.lang.constant.MethodTypeDesc;
  * fixed {@code CD_int}, which would name a method {@code LongVector} does not have, nor a
  * fixed {@code CD_long}, which would silently select {@code IntVector}'s other overload.
  */
+// Its fields are ClassDesc and MethodTypeDesc, immutable JDK values the checker cannot tell are.
+@SuppressWarnings("ImmutableEnumChecker")
 enum Lane {
   /** 32-bit lanes: dates, ints, year-month intervals - every shape the compiler admits today. */
   INT(VarkaVectorIR.LaneType.INT, "jdk.incubator.vector.IntVector", Integer.SIZE,

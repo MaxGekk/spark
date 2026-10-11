@@ -145,7 +145,7 @@ final class VarkaDivisionLowering {
       return;
     }
     if (takesMagicDivide(analysis, n)) {
-      emitMagicDivide(cb, analysis, n, s);
+      emitMagicDivide(cb, n, s);
       return;
     }
     if (takesMulHiDivide(analysis, n)) {
@@ -395,10 +395,7 @@ final class VarkaDivisionLowering {
    * This is what lets the form serve a signed dividend rather than only {@code TIME}, and it is
    * the choice {@code VARKA-88.md} 3.1 left open between sign correction and declining.
    */
-  // analysis is unread: this takes the same arguments as emitMulHiDivide, its sibling at the one
-  // dispatch in emitConstDivide.
-  @SuppressWarnings("UnusedVariable")
-  private static void emitMagicDivide(CodeBuilder cb, Analysis analysis, ConstDivide n, Slots s) {
+  private static void emitMagicDivide(CodeBuilder cb, ConstDivide n, Slots s) {
     int[] t = s.constDivideTmp.get(n);
     int quotient = t[0];
     int rounded = t[1];

@@ -109,7 +109,7 @@ public final class VarkaKernelCompileDirective {
     return switch (compilers()) {
       case C2_ONLY -> true;
       case NO_C2 -> false;
-      default -> {
+      case TIERED -> {
         if (!attempted) {
           synchronized (VarkaKernelCompileDirective.class) {
             if (!attempted) {

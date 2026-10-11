@@ -1,6 +1,8 @@
 # The Varka classes NullAway treats as unannotated (VARKA-266): every other Varka class it checks.
-# The list only shrinks - dev/varka_errorprone.sh fails a line its merge base's list does not
-# have - and a class leaves it when its nullness is stated and NullAway passes it.
+# The list only shrinks - dev/varka_errorprone.sh fails it if it grows past its merge base's, or
+# gains a name that does not replace one it lost (a renamed or moved class keeps its place; a
+# class split out of a pending one does not) - and a class leaves it when its nullness is stated
+# and NullAway passes it. Suppressing NullAway over a whole class is refused instead of a line.
 org.apache.spark.sql.catalyst.expressions.codegen.DeclineSink
 org.apache.spark.sql.catalyst.expressions.codegen.varka.Analysis
 org.apache.spark.sql.catalyst.expressions.codegen.VarkaChronoCompiler

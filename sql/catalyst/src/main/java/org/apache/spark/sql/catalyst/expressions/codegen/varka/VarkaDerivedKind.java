@@ -33,24 +33,16 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  */
 public enum VarkaDerivedKind {
   /** {@code getDayOfWeekFromString(name) - 1}; an unrecognised name is a null lane. */
-  WEEKDAY(0, false),
+  WEEKDAY(false),
   /** The same map; an unrecognised name declines the batch so the row engine raises. */
-  WEEKDAY_ANSI(1, true),
+  WEEKDAY_ANSI(true),
   /** {@code parseTruncLevel(format)} where that is a date level; anything else is a null lane. */
-  TRUNC_LEVEL(2, false);
-
-  /**
-   * This kind's part of a derived input's key ({@code VarkaDerivedInput.key}): dense from 0, and
-   * stated here rather than taken from {@code ordinal()} so that reordering the constants moves no
-   * key. A new kind takes the next code.
-   */
-  public final int code;
+  TRUNC_LEVEL(false);
 
   /** Whether an unrecognised value declines the batch instead of nulling the lane. */
   public final boolean failOnError;
 
-  VarkaDerivedKind(int code, boolean failOnError) {
-    this.code = code;
+  VarkaDerivedKind(boolean failOnError) {
     this.failOnError = failOnError;
   }
 }

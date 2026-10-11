@@ -159,8 +159,11 @@ lane_suites() {
 lane_sbt() {
   if selected_has doc; then run_step doc build/sbt -batch catalyst/doc; fi
   if selected_has lint; then
+    # The compile step's classpath only when that step passed in this run: the file outlives a
+    # run, and a failed build leaves the previous run's classpath in place.
     run_step lint bash -c 'dev/lint-java && dev/scalastyle && dev/varka_errorprone.sh '"$(
-      [ -s "$suites_build/classpath" ] && echo "--classpath-file $suites_build/classpath")"
+      [ "$(cat "$logdir/compile.status" 2>/dev/null)" = ok ] && [ -s "$suites_build/classpath" ] \
+        && echo "--classpath-file $suites_build/classpath")"
   fi
   if selected_has sweep; then
     run_step sweep build/sbt -batch "project catalyst" \

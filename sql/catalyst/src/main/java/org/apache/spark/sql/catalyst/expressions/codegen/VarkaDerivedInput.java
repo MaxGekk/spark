@@ -29,8 +29,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDerivedKind;
  * <p>Internal to Spark SQL; public for {@code sql/core}.
  */
 public record VarkaDerivedInput(int inputIndex, int sourceOrdinal, VarkaDerivedKind kind) {
-  /** The kinds indexed by {@link VarkaDerivedKind#code}, which is how a key names its kind. */
-  private static final VarkaDerivedKind[] KINDS = byCode();
+  private static final VarkaDerivedKind[] KINDS = VarkaDerivedKind.values();
 
   public VarkaDerivedInput {
     java.util.Objects.requireNonNull(kind, "kind");
@@ -40,12 +39,13 @@ public record VarkaDerivedInput(int inputIndex, int sourceOrdinal, VarkaDerivedK
    * The key a derived input is interned under in the compiler's input table beside the child
    * ordinals: negative, so it can collide with no ordinal, and one per (column, kind), so two
    * {@code next_day} over the same weekday column share one leaf. The table's mark-and-truncate
-   * discipline rolls it back with the plain columns when its entry declines. The kind enters by
-   * its {@link VarkaDerivedKind#code} rather than its ordinal, so reordering the kinds moves no
-   * key.
+   * discipline rolls it back with the plain columns when its entry declines.
    */
+  // The ordinal is safe here: a key lives only inside one compilation, which interns it and
+  // resolves it back to a kind before the plan exists, so no stored key outlives a reordering.
+  @SuppressWarnings("EnumOrdinal")
   public static int key(int sourceOrdinal, VarkaDerivedKind kind) {
-    return -1 - (sourceOrdinal * KINDS.length + kind.code);
+    return -1 - (sourceOrdinal * KINDS.length + kind.ordinal());
   }
 
   /** Whether an input-table key names a derived input rather than a child ordinal. */
@@ -61,13 +61,5 @@ public record VarkaDerivedInput(int inputIndex, int sourceOrdinal, VarkaDerivedK
   /** The kind a derived key was made from. */
   public static VarkaDerivedKind keyKind(int key) {
     return KINDS[(-1 - key) % KINDS.length];
-  }
-
-  private static VarkaDerivedKind[] byCode() {
-    VarkaDerivedKind[] kinds = new VarkaDerivedKind[VarkaDerivedKind.values().length];
-    for (VarkaDerivedKind kind : VarkaDerivedKind.values()) {
-      kinds[kind.code] = kind;
-    }
-    return kinds;
   }
 }
