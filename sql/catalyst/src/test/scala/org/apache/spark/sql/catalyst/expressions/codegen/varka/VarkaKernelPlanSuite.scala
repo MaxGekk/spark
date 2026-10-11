@@ -159,6 +159,18 @@ class VarkaKernelPlanSuite extends VarkaEmitterTestBase {
     assert(VarkaEmitBudget.overLimits(VarkaEmittedClass.measure(bytes)).isEmpty)
   }
 
+  test("a trace shared across emissions names each emission's correction (VARKA-290)") {
+    // The fuzzers add up one trace over a run, so whether a build is the plan's is the
+    // emission's own count, not the trace's: the second emission's correction is named too.
+    val trace = new VarkaEmitTrace
+    for (_ <- 1 to 2) {
+      VarkaLoopEmitter.emitTraced("org.apache.spark.sql.varka.execution.VarkaKernelPlanTest",
+        dateAdds(300).asJava, 1, 300, oneEach(planned).withMisdescribeDriverBytes(100000), trace)
+    }
+    assert(trace.builds === 4 && trace.stageSplits === 2)
+    assert(trace.corrections.size === 2, trace.corrections)
+  }
+
   test("under the plan no shape of the audit's corpus builds a third time") {
     // The audit file names the shapes the plan corrects; here, over the same shapes, the loop
     // never has to run past the correction (`VARKA-236.md` 3.2).

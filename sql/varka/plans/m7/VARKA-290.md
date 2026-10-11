@@ -172,3 +172,22 @@ in `fallBack`.
 
 **The dump is kept**, as an opt-in test in `VarkaIrFuzzSuite` beside the coverage suite's fusion
 dump, for the next change to the size loop to diff.
+
+**Review of #715 (`/code-review high`), 11 October 2026.** No behaviour change in the
+restructure. One older bug, fixed here because `SizeLoop` now holds the state it needed:
+
+* **Whether a build is the plan's read the caller's trace.** `planned && trace.builds == 1`
+  holds only for the first emission of a trace, and the fuzzers add up one trace over a run, so
+  every correction after a run's first went unnamed. No answer or byte depends on it: production
+  and the cost audit pass a fresh trace per emission. `SizeLoop` counts its own builds now. A new
+  `VarkaKernelPlanSuite` test emits twice into one trace and expects two corrections; on the base
+  it finds one.
+
+And cleanups, with the dump byte-identical to the base's after them:
+
+* `split` returns its stuck outputs in a small `Split` record, where `run` passed it a list to
+  fill; a class built without a byte budget returns on `budget == 0`, not on a null measurement;
+  and a dropped grouping switch restores the caller's call-site budget in one `regroupFrom`.
+* The notes that pointed at the loop "above" or in `emit` point at `SizeLoop`'s steps.
+* The dump's first line names the seeds and the options drawn from, and it cancels under a
+  matrix config, where the variants named planned may not be.

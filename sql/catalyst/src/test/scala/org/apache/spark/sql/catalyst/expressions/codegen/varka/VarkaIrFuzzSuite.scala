@@ -644,7 +644,8 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   /**
    * What the size control decided for every emission of a fixed corpus, one line each, for a
    * refactor of the size loop to diff against its base (VARKA-290), like the coverage suite's
-   * fusion dump: set `VARKA_SIZE_TRACE_DUMP` to a file and run this test on both sides. A line
+   * fusion dump: set `VARKA_SIZE_TRACE_DUMP` to a file and run this test on both sides, under
+   * the defaults. After a first line naming the seeds and the options drawn from, a line
    * holds the emission's outcome - the class's SHA-256, or the decline's reason, outputs and
    * planned cut - every `VarkaEmitTrace` counter, and the plan's corrections, so a changed
    * decision shows even where it builds the same bytes. The corpus is the first 1500 drawn shapes
@@ -655,6 +656,8 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
       "(opt-in: VARKA_SIZE_TRACE_DUMP=<file>; VARKA-290)") {
     val target = sys.env.get("VARKA_SIZE_TRACE_DUMP")
     assume(target.isDefined, "opt-in: set VARKA_SIZE_TRACE_DUMP to a file")
+    // Under a matrix config the variants named planned may not be: the dump is of the defaults.
+    assume(VarkaMatrix.config.isEmpty, "the dump runs under the defaults only")
     val className = "org.apache.spark.sql.varka.execution.VarkaFusedSizeTraceDump"
     val sha = java.security.MessageDigest.getInstance("SHA-256")
     def line(label: String, roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int,
@@ -672,7 +675,11 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
         s"plannedStages=${trace.plannedStages} ${trace.reactions.asScala.mkString(" ")} " +
         s"corrections=${trace.corrections.asScala.mkString("; ")}"
     }
-    val lines = scala.collection.mutable.ArrayBuffer.empty[String]
+    // The seeds and the options the corpus is drawn under, so two dumps of different runs
+    // differ on their first line rather than on every line.
+    val lines = scala.collection.mutable.ArrayBuffer(
+      s"seed=$seed longSeed=$longSeed base=" +
+        (if (VarkaMatrix.base.isDefault) "(defaults)" else VarkaMatrix.base.canonical()))
     for (k <- 0 until 1500; c <- Seq(drawInt(k), drawLong(k))) {
       lines += line(s"${c.lane} $k ${c.options.canonical()}", c.roots, c.numInputs,
         c.lits.length, c.options)
