@@ -506,6 +506,9 @@ reader is the project owner's work (milestone 3, item 11), and until it exists
 the honest framing of every benchmark result in this milestone is "on an
 Arrow-cached copy of the benchmark table", stated in the docs, not buried.
 
+*Read on 11 October 2026: `READING_LAYOUTS.md` sections 2 and 4 (FastLanes, BtrBlocks and ALP
+on the cache's layout).*
+
 What this milestone owes the dependency: the benchmark work (item 8) should
 be written so the same query runs against both sources, so the day the reader
 lands the numbers can be regenerated rather than redesigned.
@@ -4835,6 +4838,9 @@ layer mostly outside a solver's reach because a proof there needs a model of the
 can such a model be built, at least for the part of the API Varka emits? A step becomes a row when
 a milestone takes the item.*
 
+*Read on 11 October 2026: `READING_LAYOUTS.md` sections 3 and 4 (Necula's translation
+validation, against this item's spike).*
+
 **The answer, in short.** Yes, for that part, and as translation validation rather than a proof of
 the emitter: each emitted kernel checked against the IR it was emitted from, the way Alive2 checks
 each LLVM rewrite (`m7/READING.md` 11). Item 58's "mostly no" was about a general model of the
@@ -4926,6 +4932,9 @@ evaluator, which row 276 holds to Spark's interpreter.
 *Added on 11 October 2026 from the owner's reading of Mathiyazhagan, "Direct-Operable SIMD
 Bit-Slicing: A Framework for Memory-Efficient Predicate Evaluation" (arXiv 2608.26368v1, 2026). A
 step becomes a row when a milestone takes the item.*
+
+*Read on 11 October 2026: `READING_LAYOUTS.md` sections 1 and 4 (BitWeaving, against this
+item's measurement).*
 
 **The idea.** A column stored as bit-planes - plane *j* holds bit *j* of every value, the width
 chosen per block after subtracting the block's minimum - and `=`, `<`, `>`, `BETWEEN` and `IN`
