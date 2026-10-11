@@ -291,24 +291,20 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   }
 
   test("every operand the compiler builds in a restricted position is one the position admits") {
-    // VARKA-86. The compiler and the emitter ask one rule, VarkaOperandPosition, so their sets
-    // agree by construction; what this checks is that the compiler asks it - that no arm builds
-    // a day offset, a month count or a weekday the emitter would refuse at emit time, which the
-    // evaluator turns into a silent per-batch fallback while EXPLAIN claims fusion. Each
-    // position must be reached by the table, or the check would pass on nothing.
+    // VARKA-86. The emitter refuses an operand its position does not take, and a refusal at emit
+    // time is a per-batch fallback while EXPLAIN claims fusion. So over every documented
+    // expression, each operand the compiler built in a restricted position must be one the
+    // position admits. The positions come from VarkaOperandPosition.restrictedOperands, the same
+    // exhaustive function the emitter checks through, so this walk has no list of its own to go
+    // stale. It checks what the compiler builds over the table, not that every arm asks the rule:
+    // an arm that builds an admitted kind passes with or without its gate. Each position must be
+    // reached, or the check would pass on nothing.
     val reached = scala.collection.mutable.Map.empty[VarkaOperandPosition, Int].withDefaultValue(0)
     val wrong = scala.collection.mutable.ArrayBuffer.empty[String]
     def walk(node: VarkaVectorIR, sql: String): Unit = {
-      val operand = node match {
-        case n: VarkaVectorIR.AddDays => Some(VarkaOperandPosition.DAY_OFFSET -> n.offset)
-        case n: VarkaVectorIR.SubDays => Some(VarkaOperandPosition.DAY_OFFSET -> n.offset)
-        case n: VarkaVectorIR.AddMonths => Some(VarkaOperandPosition.MONTH_COUNT -> n.months)
-        case n: VarkaVectorIR.NextDay => Some(VarkaOperandPosition.WEEKDAY -> n.offset)
-        case _ => None
-      }
-      operand.foreach { case (position, o) =>
-        reached(position) += 1
-        if (!position.admits(o)) wrong += s"$sql: $position got $o"
+      VarkaOperandPosition.restrictedOperands(node).asScala.foreach { r =>
+        reached(r.position) += 1
+        if (!r.position.admits(r.operand)) wrong += s"$sql: ${r.name} got ${r.operand}"
       }
       VarkaVectorIR.childrenOf(node).foreach(walk(_, sql))
     }
@@ -327,8 +323,11 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       }
     }
     assert(wrong.isEmpty, wrong.mkString("\n"))
-    VarkaOperandPosition.values().foreach { position =>
-      assert(reached(position) > 0, s"no coverage row builds a $position operand")
+    // The trunc level is the exception: no documented expression truncates by a level column
+    // (the table's trunc rows take literal levels), and its compiler arm builds the column with
+    // the admitted Java type, so there is no built operand of that position to check here.
+    VarkaOperandPosition.values().filter(_ != VarkaOperandPosition.TRUNC_LEVEL).foreach {
+      position => assert(reached(position) > 0, s"no coverage row builds a $position operand")
     }
   }
 

@@ -282,9 +282,10 @@ offset may be, in two languages, and they drifted: `date_add(d, weekday(d2) +
 1)` was admitted by one and refused by the other, and the refusal fired only
 at emit time, as a silent per-batch fallback under an EXPLAIN that still
 claimed fusion. If a rule must be checked on both sides of the compiler/emitter
-boundary, put it in one shared predicate both call (`isDayOffsetShape` is what
-that looked like here), or write a test that enumerates the positions and
-asserts the two accepted sets are the same set.
+boundary, put it in one rule both call - here `VarkaOperandPosition` (VARKA-86),
+an exhaustive switch over the positions and the node kinds, which replaced the
+shared predicate `isDayOffsetShape` - or write a test that enumerates the
+positions and asserts the two accepted sets are the same set.
 
 **3. Before extending a predicate with more than one reader, list the readers
 and their exact question.** `guardedWord` was read by `planSlots` for "does

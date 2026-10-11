@@ -16,11 +16,11 @@ Surveyed on 11 October 2026 at `fc056778159`.
 
 **What 2.17 asked for that has landed since.** Two of its items:
 
-* The day offset's two statements became one predicate. Task 63's review (`576792b8bed`, 8
+* The day offset's two statements became one predicate. VARKA-63's review (`576792b8bed`, 8
   September 2026) moved the emitter's list into `VarkaVectorIR.isDayOffsetShape` and gated
   `compileOffset`'s arithmetic arm on it, so the compiler builds only what the emitter takes.
 * The widening 2.17 said this row would carry - an `IntegerType` column as a comparison
-  operand - landed as task 122 (`cd7900fde2a`, 17 September 2026): `i > 0` compares in the
+  operand - landed as VARKA-122 (`cd7900fde2a`, 17 September 2026): `i > 0` compares in the
   kernel.
 
 So the exception 2.17 allowed (one shape moving from residual to fused) has been taken, and this
@@ -169,3 +169,36 @@ weekday finishes through `admitted`. It does not and needs not: its arms build t
 against another producer. And 3.3's single int operand method is one private method behind the
 two names, `intOperand` and `compileIntOperand`, each passing its own decline reason, built only
 when it declines.
+
+**Review of the PR** (`/code-review xhigh`) found no change of behaviour, and these, fixed in the
+PR:
+
+* **The enum was exhaustive over node kinds but not over positions.** `admits` sent a new
+  position to the permissive branch and `takes` restated it with a ternary. Both now switch over
+  the positions with no default.
+* **A third copy of which operand is in which position** lived in the new coverage test, with a
+  default case. `VarkaOperandPosition.restrictedOperands(node)`, an exhaustive switch over the
+  node kinds, now names each node's restricted operand; `Analysis` checks through it and the test
+  walks through it.
+* **A fourth position the enum's doc said did not exist**: `TruncDateDynamic`'s level, which the
+  emitter restricted to a column with a local `instanceof`. It is `TRUNC_LEVEL`. No documented
+  expression builds one, so the coverage test exempts it, saying why.
+* **The doc overclaimed.** Widening a position widens the emitter, but the compiler's day-offset
+  arm filters Catalyst expressions before it asks; and a position checks its operand's own kind,
+  not the subtree under it. The enum's doc now says both.
+* **A null operand** threw a bare `NullPointerException` from the pattern switch; `requireOperand`
+  refuses it by name, as the old checks did.
+* Stale text: a half-sentence left above `requireOperand`, `compileOffset`'s "matched pair"
+  comment, `compileMonths`' claim that a negated interval declines (it builds an `IntNeg`),
+  comments and skills naming the deleted predicates, and "task 122" and "task 63" for VARKA-122
+  and VARKA-63.
+
+**Corrections to this plan, which is a record and is not rewritten:** 9 says the emitter refuses
+a date as a day offset in a new test. That test duplicated two existing ones in the chrono suite
+(the refusal by name for `date_add`, `date_sub`, `add_months` and `next_day`, and the weekday
+refusing int arithmetic) and is removed. And 3.3's "one leaf rule" is the literal-or-column rule
+of the three int operand helpers; `compileOffset`, `buildMonths` and the validity condition still
+read a bare int column themselves, around their own literal folding or none.
+
+The fusion dump is byte-identical to master's after these fixes too, and `emitted_bytes.json`
+unchanged.

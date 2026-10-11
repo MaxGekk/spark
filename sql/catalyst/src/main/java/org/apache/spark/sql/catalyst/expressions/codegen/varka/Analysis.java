@@ -891,6 +891,9 @@ final class Analysis {
       // A repeated node: its subtree is already analyzed.
       return;
     }
+    for (VarkaOperandPosition.Restricted r : VarkaOperandPosition.restrictedOperands(node)) {
+      requireOperand(r.position(), r.operand(), r.name());
+    }
     switch (node) {
       case ColumnRef c -> {
         if (c.ordinal() < 0 || c.ordinal() >= numInputs) {
@@ -913,11 +916,9 @@ final class Analysis {
         skipping.put(node, false);
       }
       case AddDays n -> {
-        requireOperand(VarkaOperandPosition.DAY_OFFSET, n.offset(), "date_add's day offset");
         analyzeOp(node, false, n.days(), n.offset());
       }
       case SubDays n -> {
-        requireOperand(VarkaOperandPosition.DAY_OFFSET, n.offset(), "date_sub's day offset");
         analyzeOp(node, false, n.days(), n.offset());
       }
       case DateDiff n -> analyzeOp(node, false, n.end(), n.start());
@@ -926,7 +927,6 @@ final class Analysis {
       case DayOfWeekIso n -> analyzeOp(node, false, n.days());
       case NextDay n -> {
         // A literal slot or a column (the derived weekday leaf).
-        requireOperand(VarkaOperandPosition.WEEKDAY, n.offset(), "next_day's weekday");
         analyzeOp(node, false, n.days(), n.offset());
       }
       case ThursdayOf n -> analyzeOp(node, false, n.days());
@@ -952,12 +952,6 @@ final class Analysis {
       case LastDay n -> analyzeOp(node, false, n.days());
       case TruncDate n -> analyzeOp(node, false, n.days());
       case TruncDateDynamic n -> {
-        // The level is the evaluator's derived int32 column; a literal level is
-        // the literal TruncDate node, which the compiler builds instead.
-        if (!(n.level() instanceof ColumnRef)) {
-          throw new IllegalArgumentException(
-              "trunc's level must be a column, got " + n.level());
-        }
         analyzeOp(node, false, n.days(), n.level());
       }
       case WeekOfYear n -> {
@@ -965,7 +959,6 @@ final class Analysis {
         analyzeOp(node, false, n.days());
       }
       case AddMonths n -> {
-        requireOperand(VarkaOperandPosition.MONTH_COUNT, n.months(), "add_months' month count");
         analyzeOp(node, false, n.days(), n.months());
       }
       case MakeDate n -> {
@@ -1095,7 +1088,6 @@ final class Analysis {
     skipping.put(node, skips || childSkips);
   }
 
-  // The offset may be a literal or a column, but it is still not an arbitrary subtree -
   /**
    * Refuses {@code operand} where {@code position} does not take it: the emitter's statement of
    * the rule the compiler builds by ({@link VarkaOperandPosition}), kept because a tree from any
@@ -1106,7 +1098,7 @@ final class Analysis {
    */
   private static void requireOperand(VarkaOperandPosition position, VarkaVectorIR operand,
       String name) {
-    if (!position.admits(operand)) {
+    if (operand == null || !position.admits(operand)) {
       throw new IllegalArgumentException(
           name + " must be " + position.takes() + ", got " + operand);
     }

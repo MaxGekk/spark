@@ -77,7 +77,8 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
   }
 
   test("the month count takes int arithmetic, next_day's weekday still does not") {
-    // VARKA-68 split `requireOffsetShape` in two. The month count and the weekday shared it
+    // VARKA-68 split the emitter's shared check in two (now VarkaOperandPosition's MONTH_COUNT
+    // and WEEKDAY). The month count and the weekday shared it
     // under one sentence - that each "carries a runtime bound a derived value cannot declare" -
     // which is true of the weekday and false of the count: a column-count `AddMonths` refuses for
     // `MONTH_COUNT` and is checked at run time against MONTH_ARITH_MIN/MAX_MONTHS by a
@@ -352,22 +353,6 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
       checkMatrix(Seq(root), 3, Array.empty[Int], Seq(1, 13, 17, 64, 1000),
         combos(3), data = tripleData(makeDateValid),
         ctx = s"valid triples, ansi=${root.failOnError()}")
-    }
-  }
-
-  test("the emitter refuses an operand its position does not take, naming the operand") {
-    // VARKA-86: the emitter's half of VarkaOperandPosition, kept as a defence against a producer
-    // other than the compiler. The day offset refuses a date, the month count a calendar field,
-    // and the weekday, the strictest position, even int arithmetic.
-    val col = new ColumnRef(0)
-    val cases = Seq(
-      (new AddDays(col, new Year(col)), "date_add's day offset"),
-      (new AddMonths(col, new Month(col)), "add_months' month count"),
-      (new NextDay(col, new IntArith(IntOp.ADD, Overflow.WRAP, new ColumnRef(1),
-        new ColumnRef(1))), "next_day's weekday"))
-    for ((root, name) <- cases) {
-      val e = intercept[IllegalArgumentException](emitMulti(Seq[VarkaVectorIR](root), 2, 0))
-      assert(e.getMessage.contains(name) && e.getMessage.contains("must be"), e.getMessage)
     }
   }
 

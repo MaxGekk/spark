@@ -110,7 +110,7 @@ object VarkaIrGrammar {
     def g(ns: VarkaVectorIR*): Long = ns.foldLeft(0L)((m, n) => math.max(m, boundsOf(n)._2))
     def shift(days: VarkaVectorIR, offset: VarkaVectorIR): (Long, Long) = {
       val own = satAdd(v(days), v(offset))
-      // A literal offset is folded at compile time and never guarded (requireOffsetShape);
+      // A literal offset is folded at compile time and never guarded;
       // a column offset is exactly what collectRefusals collects.
       val guarded = if (offset.isInstanceOf[LiteralSlot]) 0L else own
       (own, math.max(g(days, offset), guarded))

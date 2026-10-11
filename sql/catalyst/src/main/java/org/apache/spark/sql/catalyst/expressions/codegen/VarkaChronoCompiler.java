@@ -440,9 +440,8 @@ final class VarkaChronoCompiler {
     // above rather than only here is `dayRange`, which reads any non-literal offset as a
     // column shift: a calendar node over such a producer still gets the runtime range guard,
     // exactly as it does for a bare column offset. Only the four arithmetic shapes, not every
-    // `IntegerType` expression - the emitter's own check on this operand admits the same
-    // three node kinds and nothing else, so the two stay a matched pair rather than one
-    // silently outgrowing the other.
+    // `IntegerType` expression, enter this arm, and what they compile to must be a kind
+    // `VarkaOperandPosition.DAY_OFFSET` admits - the rule the emitter checks too.
     if ((days instanceof Add || days instanceof Subtract || days instanceof Multiply
         || days instanceof UnaryMinus) && days.dataType().equals(DataTypes.IntegerType)) {
       // The compiled root has to be a shape the offset position takes, not merely something
@@ -524,8 +523,10 @@ final class VarkaChronoCompiler {
    * alone, {@code VARKA-60.md} section 2). A {@code YearMonthIntervalType} column with no such
    * cast declines by name: the Arrow cache holds it as an {@code IntervalYearVector}, which
    * {@code isArrowBacked} does not read, so admitting it would fuse at plan time and then refuse
-   * every batch. {@code d - INTERVAL m MONTH} arrives as {@code UnaryMinus} over the cast and is
-   * not matched here; it declines until the int negate node composes with it.
+   * every batch. A negated interval ({@code d - ym_col}, {@code d - INTERVAL m MONTH}) arrives as
+   * {@code UnaryMinus} over it and builds an {@code IntNeg} over its count. Whatever an arm
+   * builds must be a kind {@code VarkaOperandPosition.MONTH_COUNT} admits, which the emitter
+   * checks too; the arms are {@code buildMonths}.
    */
   static Optional<VarkaVectorIR> compileMonths(
       Expression months,

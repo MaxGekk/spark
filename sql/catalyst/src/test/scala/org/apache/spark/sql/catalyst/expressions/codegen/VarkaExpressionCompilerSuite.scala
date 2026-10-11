@@ -1136,7 +1136,8 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
 
     // The same expression in `add_months`' month-count position, which VARKA-68's emitter split
     // opened. VARKA-67 pinned this as declining; that it now fuses is the evidence group C
-    // landed, and the emitter's `requireMonthCountShape` is what has to agree.
+    // landed, and `VarkaOperandPosition.MONTH_COUNT`, which the emitter checks, is what has to
+    // agree.
     val inCount = VarkaExpressionCompiler.compile(
       Seq(out(DateAddYMInterval(d, Cast(Year(d), ymy.dataType)))), withIntervals).get
     assert(inCount.outputs.asScala.toSeq === Seq(new IRAddMonths(new ColumnRef(0),
