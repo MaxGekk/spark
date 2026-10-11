@@ -117,7 +117,7 @@ case class VarkaColumnarToRowExec(
   // (task-21 review: the node used to re-run the same pure compile per consumer).
   @transient private lazy val classification =
     VarkaExpressionCompiler.compilePartial(projectList, child.output,
-      VarkaColumnarToRowExec.emitOptions(conf.varkaEmitUseAVX))
+      VarkaColumnarToRowExec.emitOptions(VarkaSessionEmit.of(conf)))
 
   // verbose EXPLAIN answers "why didn't my projection fuse?" - every entry's
   // classification, and for a residual entry the reason the compiler declined it.
@@ -150,7 +150,7 @@ case class VarkaColumnarToRowExec(
       longMetric("numOutputRows"),
       longMetric("numInputBatches"),
       varkaMetrics,
-      emitUseAVX = conf.varkaEmitUseAVX,
+      sessionEmit = VarkaSessionEmit.of(conf),
       warmupEnabled = conf.varkaWarmupEnabled)
     if (conf.usePartitionEvaluator) {
       child.executeColumnar().mapPartitionsWithEvaluator(evaluatorFactory)
@@ -249,17 +249,15 @@ private[sql] object VarkaColumnarToRowExec {
   private[sql] def currentEmitOptions: VarkaEmitOptions = emitOptionsForTesting
 
   /**
-   * The emit options a kernel is emitted with, given the session's
-   * `spark.sql.codegen.varka.emit.useAVX`: the test hook's options, with the level applied over
-   * them unless it is the default. The one place they are derived, because they are asked
-   * twice for every kernel - by the compiler, which admits entries by whether the emitter
-   * serves them in bytes, and by the evaluator, which emits them - and the two must agree, or
-   * the plan and the task could classify one projection differently.
+   * The emit options a kernel is emitted with, given the session's emit settings
+   * ([[VarkaSessionEmit]]): the test hook's options, with the session's laid over them. The one
+   * place they are derived, because they are asked twice for every kernel - by the compiler,
+   * which admits entries by whether the emitter serves them in bytes, and by the evaluator,
+   * which emits them - and the two must agree, or the plan and the task could classify one
+   * projection differently.
    */
-  private[sql] def emitOptions(useAVX: Int): VarkaEmitOptions = {
-    val base = currentEmitOptions
-    if (useAVX == VarkaEmitOptions.USE_AVX_UNKNOWN) base else base.withUseAVX(useAVX)
-  }
+  private[sql] def emitOptions(session: VarkaSessionEmit): VarkaEmitOptions =
+    session.apply(currentEmitOptions)
 }
 
 private[sql] class VarkaColumnarToRowEvaluatorFactory(
@@ -270,7 +268,7 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
     numOutputRows: SQLMetric,
     numInputBatches: SQLMetric,
     varkaMetrics: VarkaExecMetrics,
-    emitUseAVX: Int = VarkaEmitOptions.USE_AVX_UNKNOWN,
+    sessionEmit: VarkaSessionEmit = VarkaSessionEmit.DEFAULTS,
     warmupEnabled: Boolean = false)
     extends PartitionEvaluatorFactory[ColumnarBatch, InternalRow] with Logging {
 
@@ -304,7 +302,7 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
 
     private val kernels = new VarkaKernelEvaluator(
       projectList, childOutput, offHeapColumnVectorEnabled, "ProjectToRow",
-      classDumpDirectory, varkaMetrics, emitUseAVX, warmupEnabled)
+      classDumpDirectory, varkaMetrics, sessionEmit, warmupEnabled)
 
     // Merge-at-row (see 2.3): for a projection with forwarded or residual entries the
     // kernels produce only the fused columns, and this projection - over the input row joined

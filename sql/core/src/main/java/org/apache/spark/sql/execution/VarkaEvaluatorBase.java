@@ -172,7 +172,7 @@ public abstract class VarkaEvaluatorBase {
   private final String operatorName;
   private final String classDumpDirectory;
   private final VarkaExecMetrics metrics;
-  private final int emitUseAVX;
+  private final VarkaSessionEmit sessionEmit;
   private final boolean warmupEnabled;
   private final VarkaBatchLedger ledger = new VarkaBatchLedger();
 
@@ -205,13 +205,13 @@ public abstract class VarkaEvaluatorBase {
       String operatorName,
       Option<String> classDumpDirectory,
       VarkaExecMetrics metrics,
-      int emitUseAVX,
+      VarkaSessionEmit sessionEmit,
       boolean warmupEnabled) {
     this.childOutput = childOutput;
     this.operatorName = operatorName;
     this.classDumpDirectory = classDumpDirectory.isDefined() ? classDumpDirectory.get() : null;
     this.metrics = metrics;
-    this.emitUseAVX = emitUseAVX;
+    this.sessionEmit = sessionEmit;
     this.warmupEnabled = warmupEnabled;
     // The task-completion listener closes the open batches, then runs these in order, each
     // guarded on its own, then closes the allocator.
@@ -261,12 +261,12 @@ public abstract class VarkaEvaluatorBase {
   protected final VarkaKernelPart kernelPart(
       CompiledVarkaProjection plan, Seq<NamedExpression> entries) {
     return new VarkaKernelPart(plan, entries, childOutput, operatorName,
-        Option.apply(classDumpDirectory), metrics, emitUseAVX, warmupEnabled, this::taskAllocator);
+        Option.apply(classDumpDirectory), metrics, sessionEmit, warmupEnabled, this::taskAllocator);
   }
 
   /** The options this evaluator emits with, which its compiler call must use too. */
   protected VarkaEmitOptions emitOptions() {
-    return VarkaColumnarToRowExec$.MODULE$.emitOptions(emitUseAVX);
+    return VarkaColumnarToRowExec$.MODULE$.emitOptions(sessionEmit);
   }
 
   // ---- the plan ------------------------------------------------------------------------------

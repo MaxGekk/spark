@@ -59,10 +59,10 @@ final class VarkaKernelPart extends VarkaEvaluatorBase {
       String operatorName,
       Option<String> classDumpDirectory,
       VarkaExecMetrics metrics,
-      int emitUseAVX,
+      VarkaSessionEmit sessionEmit,
       boolean warmupEnabled,
       Supplier<BufferAllocator> allocator) {
-    super(childOutput, operatorName, classDumpDirectory, metrics, emitUseAVX, warmupEnabled);
+    super(childOutput, operatorName, classDumpDirectory, metrics, sessionEmit, warmupEnabled);
     this.plan = plan;
     this.entries = entries;
     this.allocator = allocator;

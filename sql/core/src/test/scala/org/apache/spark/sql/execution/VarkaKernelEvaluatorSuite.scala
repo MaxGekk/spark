@@ -29,7 +29,7 @@ import org.apache.arrow.vector.{BaseFixedWidthVector, DateDayVector, IntervalYea
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.catalyst.expressions.{Add, Alias, AttributeReference, CaseWhen, Coalesce, DateAdd, DateAddYMInterval, If, In, LessThan, Literal, NamedExpression, NextDay, Remainder, TruncDate, Year}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaDebugInfoReader, VarkaEmitOptions, VarkaMatrix, VarkaShapeCache}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaDebugInfoReader, VarkaMatrix, VarkaShapeCache}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
@@ -75,7 +75,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession with V
       projectList: Seq[NamedExpression] = mixedList,
       classDumpDirectory: Option[String] = None): VarkaKernelEvaluator =
     new VarkaKernelEvaluator(projectList, childOutput, false, "Test", classDumpDirectory,
-      VarkaExecMetrics.NONE, VarkaEmitOptions.USE_AVX_UNKNOWN, false)
+      VarkaExecMetrics.NONE, VarkaSessionEmit.DEFAULTS, false)
 
   /** Runs `body` inside an empty task context with a private Arrow child allocator. */
   private def withTask(body: (ColumnarBatch, () => Unit) => Unit): Unit = {
@@ -232,7 +232,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession with V
       val byDefault = evaluator()
       byDefault.release(byDefault.project(input))
       val atTwo = new VarkaKernelEvaluator(mixedList, childOutput, false, "Test", None,
-        VarkaExecMetrics.NONE, 2, false)
+        VarkaExecMetrics.NONE, new VarkaSessionEmit(2, false), false)
       atTwo.release(atTwo.project(input))
       val defaultBytes = byDefault.emittedClassBytes.get
       val level2Bytes = atTwo.emittedClassBytes.get

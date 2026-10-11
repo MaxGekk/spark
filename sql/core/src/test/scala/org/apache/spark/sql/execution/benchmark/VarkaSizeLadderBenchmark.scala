@@ -30,7 +30,7 @@ import org.apache.spark.sql.catalyst.expressions.NamedExpression
 import org.apache.spark.sql.catalyst.expressions.codegen.{CodeGenerator, VarkaExpressionCompiler}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.FusedOutput
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmup
-import org.apache.spark.sql.execution.{SparkPlan, VarkaColumnarToRowExec, VarkaProjectExec}
+import org.apache.spark.sql.execution.{SparkPlan, VarkaColumnarToRowExec, VarkaProjectExec, VarkaSessionEmit}
 
 /**
  * The size ladder's rungs, data and query, shared by [[VarkaSizeLadderBenchmark]],
@@ -96,7 +96,7 @@ object VarkaSizeLadder {
     val df = varka.sql(query)
     df.queryExecution.toRdd.count()
     val plan = df.queryExecution.executedPlan
-    val options = VarkaColumnarToRowExec.emitOptions(varka.sessionState.conf.varkaEmitUseAVX)
+    val options = VarkaColumnarToRowExec.emitOptions(VarkaSessionEmit.of(varka.sessionState.conf))
     val fallbackMetrics = Seq("numFallbackBatchesNonArrow", "numFallbackBatchesKernel",
       "numFallbackBatchesRowPath", "numFallbackBatchesDeclined")
     def outcome(node: SparkPlan, projectList: Seq[NamedExpression]) =

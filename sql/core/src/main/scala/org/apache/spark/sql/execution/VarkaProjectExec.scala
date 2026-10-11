@@ -27,7 +27,6 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, NamedExpression, SortOrder}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
 import org.apache.spark.sql.vectorized.ColumnarBatch
@@ -85,7 +84,7 @@ case class VarkaProjectExec(
   // (task-21 review: the node used to re-run the same pure compile per consumer).
   @transient private lazy val classification =
     VarkaExpressionCompiler.compilePartial(projectList, child.output,
-      VarkaColumnarToRowExec.emitOptions(conf.varkaEmitUseAVX))
+      VarkaColumnarToRowExec.emitOptions(VarkaSessionEmit.of(conf)))
 
   // verbose EXPLAIN answers "why didn't my projection fuse?" - every entry's
   // classification, and for a residual entry the reason the compiler declined it.
@@ -125,7 +124,7 @@ case class VarkaProjectExec(
       longMetric("numOutputRows"),
       longMetric("numInputBatches"),
       varkaMetrics,
-      emitUseAVX = conf.varkaEmitUseAVX,
+      sessionEmit = VarkaSessionEmit.of(conf),
       warmupEnabled = conf.varkaWarmupEnabled)
     if (conf.usePartitionEvaluator) {
       child.executeColumnar().mapPartitionsWithEvaluator(evaluatorFactory)
@@ -146,7 +145,7 @@ private[sql] class VarkaProjectEvaluatorFactory(
     numOutputRows: SQLMetric,
     numInputBatches: SQLMetric,
     varkaMetrics: VarkaExecMetrics,
-    emitUseAVX: Int = VarkaEmitOptions.USE_AVX_UNKNOWN,
+    sessionEmit: VarkaSessionEmit = VarkaSessionEmit.DEFAULTS,
     warmupEnabled: Boolean = false)
     extends PartitionEvaluatorFactory[ColumnarBatch, ColumnarBatch] with Logging {
 
@@ -158,7 +157,7 @@ private[sql] class VarkaProjectEvaluatorFactory(
 
     private val kernels = new VarkaKernelEvaluator(
       projectList, childOutput, offHeapColumnVectorEnabled, "Project",
-      classDumpDirectory, varkaMetrics, emitUseAVX, warmupEnabled)
+      classDumpDirectory, varkaMetrics, sessionEmit, warmupEnabled)
 
     /**
      * The input ordinals this projection is, when it only forwards columns and computes

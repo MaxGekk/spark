@@ -49,7 +49,6 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.Forward
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.FusedOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.KernelOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.ResidualOutput;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.types.DataTypeUtils$;
 import org.apache.spark.sql.execution.vectorized.OffHeapColumnVector;
 import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector;
@@ -177,9 +176,9 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
       String operatorName,
       Option<String> classDumpDirectory,
       VarkaExecMetrics metrics,
-      int emitUseAVX,
+      VarkaSessionEmit sessionEmit,
       boolean warmupEnabled) {
-    super(childOutput, operatorName, classDumpDirectory, metrics, emitUseAVX, warmupEnabled);
+    super(childOutput, operatorName, classDumpDirectory, metrics, sessionEmit, warmupEnabled);
     this.projectList = projectList;
     this.offHeapColumnVectorEnabled = offHeapColumnVectorEnabled;
   }
@@ -191,7 +190,7 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
       boolean offHeapColumnVectorEnabled,
       String operatorName) {
     this(projectList, childOutput, offHeapColumnVectorEnabled, operatorName, Option.empty(),
-        VarkaExecMetrics.NONE, VarkaEmitOptions.USE_AVX_UNKNOWN, false);
+        VarkaExecMetrics.NONE, VarkaSessionEmit.DEFAULTS, false);
   }
 
   private Optional<PartialVarkaProjection> compiled() {

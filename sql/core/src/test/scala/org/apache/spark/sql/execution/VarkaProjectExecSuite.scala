@@ -19,13 +19,14 @@ package org.apache.spark.sql.execution
 
 import org.apache.spark.{SparkArithmeticException, TaskContext}
 import org.apache.spark.sql.QueryTest
-import org.apache.spark.sql.catalyst.expressions.{AddMonths, Alias, Attribute, AttributeReference, Cast, DateAdd, DateDiff, DateSub, Expression, ExtractANSIIntervalDays, Greatest, Literal, NamedExpression, Remainder}
+import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, Attribute, AttributeReference, Cast, DateAdd, DateDiff, DateSub, EvalMode, Expression, ExtractANSIIntervalDays, Greatest, Literal, NamedExpression, Remainder, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAllocationSampler,
-  VarkaChrono, VarkaEmitOption, VarkaFallbackEvent, VarkaJfrTestSupport,
+  VarkaChrono, VarkaEmitOption, VarkaFallbackEvent, VarkaFusedKernel, VarkaJfrTestSupport,
   VarkaKernelAllocationEvent}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.execution.metric.SQLMetrics
+import org.apache.spark.sql.execution.varka.VarkaFallbackAccounting
 import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
@@ -280,6 +281,38 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession with Varka
       .filter(_.getString("kernelIdentity").contains("Varka_Project_"))
       .map(_.getString("cause"))
     assert(causes === Seq(VarkaFallbackEvent.RANGE_DECLINED), causes.mkString("; "))
+  }
+
+  test("spark.sql.codegen.varka.emit.exactRefusalStatus reaches the executor's kernel: a " +
+      "declined batch names every reason its method holds without it, the one that fired with it") {
+    // VARKA-308. year(date_add(d, i + i)) under ANSI holds an overflow guard on the sum and a
+    // guard on the day the calendar node reads, in one method. Int.MaxValue twice overflows and
+    // wraps to -2, which leaves the day in range, so only the overflow guard fires; the row
+    // engine raises, and the declined batch's status is read off the JFR fallback event the
+    // evaluator emits first, as the interval test above reads its cause.
+    def status(exact: Boolean): Int = {
+      val (_, recorded) = VarkaJfrTestSupport.withJfrRecording(classOf[VarkaFallbackEvent]) {
+        withSQLConf(SQLConf.VARKA_EMIT_EXACT_REFUSAL_STATUS.key -> exact.toString) {
+          val plan = node(
+            project(Alias(Year(DateAdd(attrD, Add(intAttr, intAttr, EvalMode.ANSI))), "y")()),
+            Seq(BatchSpec("arrow", Seq(Seq(Int.box(1), Int.box(2)),
+              Seq(Int.box(Int.MaxValue), Int.box(3))))),
+            Seq(attrD, intAttr))
+          intercept[SparkArithmeticException](values(plan))
+        }
+      }
+      val statuses = recorded
+        .filter(VarkaJfrTestSupport.isEvent(_, classOf[VarkaFallbackEvent]))
+        .filter(_.getString("cause") == VarkaFallbackEvent.RANGE_DECLINED)
+        .map(_.getInt("status"))
+      assert(statuses.size === 1, statuses.mkString(", "))
+      statuses.head
+    }
+    val overflow = VarkaFusedKernel.STATUS_INT_OVERFLOW
+    val candidates = status(exact = false)
+    assert((candidates & overflow) != 0 && Integer.bitCount(candidates) > 1,
+      s"status ${VarkaFallbackAccounting.describeStatus(candidates)}")
+    assert(status(exact = true) === overflow)
   }
 
   test("verbose EXPLAIN accounts for every entry, with the residual entry's reason") {

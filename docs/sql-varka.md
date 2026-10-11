@@ -875,7 +875,9 @@ VARKA-22 extends the account to the SQL UI and to JDK Flight Recorder:
   them into one mask and reports all of their bits, a candidate set, since a
   mask per reason would hold another vector register in the loop. The emit
   option `exactRefusalStatus` gives each reason its own mask, for exact
-  attribution when diagnosing.
+  attribution when diagnosing; a session sets it with
+  `spark.sql.codegen.varka.emit.exactRefusalStatus=true` (internal, off by
+  default), and the kernels it emits are cached apart from the default ones.
 
 All of it is metadata or diagnostics: the emitted methods are byte-identical
 with and without the attributes, which the JVM ignores by specification.
