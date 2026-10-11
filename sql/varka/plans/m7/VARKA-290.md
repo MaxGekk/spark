@@ -144,3 +144,31 @@ so `VarkaCompileBenchmark` is not rerun.
 
 1. This plan; row 290 marked Planned.
 2. The restructure and the dump, in one commit.
+
+## 9. Outcome
+
+Done on 11 October 2026, as 3.1 describes: `emit` checks its arguments, analyzes, and runs a
+`SizeLoop`, whose pass is six steps (`group`, `plan`, `buildAndMeasure`, `split`,
+`resizeStages`, `fallBack`), and whose resets are one `startAfresh` beside the changes of grouping
+in `fallBack`.
+
+* **Every decision is unchanged.** The dump of 2 on the branch is byte-identical to the base's:
+  3,312 lines, every outcome, counter and correction.
+* **`emitted_bytes.json` is unchanged**, and `VarkaEmittedBytesSuite` passes in the gate.
+* **The branches the dump does not reach** pass on their own: `VarkaEmitterBudgetSuite`, with the
+  cap refusal and the pool decline, and `VarkaKernelPlanSuite` and
+  `VarkaEmitterSplitDriverSuite`, 66 tests.
+* **The gate passes**: every Varka suite at both widths, and lint.
+* **The fallback order is stated once**, in `fallBack`'s doc and body; the note in `emit` points
+  at it.
+
+**Predictions scored (6.1).**
+
+1. **Held.**
+2. **Missed.** The 282 lines are 389, 1.38 times, not under 1.2. The code is 215 lines against
+   161; the rest is the steps' doc comments, which say what the one comment said about each
+   branch, beside the branch. Most of the added code is the state's fields and constructor, 45
+   lines where the locals were declared in 22.
+
+**The dump is kept**, as an opt-in test in `VarkaIrFuzzSuite` beside the coverage suite's fusion
+dump, for the next change to the size loop to diff.

@@ -534,6 +534,15 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   private var wideDeclines = 0
   private var wideChecked = 0
 
+  /** `drawWideShape`'s draws, until they hold at least 250 value roots or there are twelve. */
+  private def wideDraws(rnd: Random): Seq[Drawn] = {
+    val draws = scala.collection.mutable.ArrayBuffer.empty[Drawn]
+    while (draws.map(_.roots.size).sum < 250 && draws.size < 12) {
+      draws += drawWideShape(rnd)
+    }
+    draws.toSeq
+  }
+
   /**
    * One wide composition: `drawWideShape`'s value roots, drawn until there are at least 250, over
    * the draws' shared column layout. A column keeps the narrowest domain any draw gives it - trunc
@@ -543,10 +552,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   private def runWide(iteration: Int, trace: VarkaEmitTrace): Unit = {
     val rnd = shapeRandom(seed ^ 0x57494445L, iteration)
     val (label, options) = wideVariants(iteration % wideVariants.size)
-    val draws = scala.collection.mutable.ArrayBuffer.empty[Drawn]
-    while (draws.map(_.roots.size).sum < 250 && draws.size < 12) {
-      draws += drawWideShape(rnd)
-    }
+    val draws = wideDraws(rnd)
     val roots = draws.flatMap(_.roots).distinct.toSeq
     val numInputs = draws.map(_.numInputs).max
     val numLiterals = draws.map(_.numLiterals).max
@@ -633,6 +639,61 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     } else {
       reached.foreach { case (mechanism, n) => info(s"$mechanism: $n") }
     }
+  }
+
+  /**
+   * What the size control decided for every emission of a fixed corpus, one line each, for a
+   * refactor of the size loop to diff against its base (VARKA-290), like the coverage suite's
+   * fusion dump: set `VARKA_SIZE_TRACE_DUMP` to a file and run this test on both sides. A line
+   * holds the emission's outcome - the class's SHA-256, or the decline's reason, outputs and
+   * planned cut - every `VarkaEmitTrace` counter, and the plan's corrections, so a changed
+   * decision shows even where it builds the same bytes. The corpus is the first 1500 drawn shapes
+   * of each lane under their drawn options, and 24 wide compositions under the wide variants and
+   * planned variants that reach the plan's declines, stages and corrections.
+   */
+  test("the size control's decisions over a fixed corpus, dumped for a refactor to diff " +
+      "(opt-in: VARKA_SIZE_TRACE_DUMP=<file>; VARKA-290)") {
+    val target = sys.env.get("VARKA_SIZE_TRACE_DUMP")
+    assume(target.isDefined, "opt-in: set VARKA_SIZE_TRACE_DUMP to a file")
+    val className = "org.apache.spark.sql.varka.execution.VarkaFusedSizeTraceDump"
+    val sha = java.security.MessageDigest.getInstance("SHA-256")
+    def line(label: String, roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int,
+        o: VarkaEmitOptions): String = {
+      val trace = new VarkaEmitTrace
+      val outcome = try {
+        val bytes = VarkaLoopEmitter.emitTraced(className, roots.asJava, numInputs,
+          numLiterals, o, trace)
+        "class " + sha.digest(bytes).map("%02x".format(_)).mkString
+      } catch {
+        case d: VarkaEmitDeclined =>
+          s"declined ${d.getMessage} outputs=${d.outputs} cut=${d.plannedCut}"
+      }
+      s"$label | $outcome | builds=${trace.builds} plannedDeclines=${trace.plannedDeclines} " +
+        s"plannedStages=${trace.plannedStages} ${trace.reactions.asScala.mkString(" ")} " +
+        s"corrections=${trace.corrections.asScala.mkString("; ")}"
+    }
+    val lines = scala.collection.mutable.ArrayBuffer.empty[String]
+    for (k <- 0 until 1500; c <- Seq(drawInt(k), drawLong(k))) {
+      lines += line(s"${c.lane} $k ${c.options.canonical()}", c.roots, c.numInputs,
+        c.lits.length, c.options)
+    }
+    val d = VarkaMatrix.base
+    val planned = Seq(
+      "planned, whole driver" -> d.withSplitDriver(false),
+      "planned, driver misread" -> d.withMisdescribeDriverBytes(4000),
+      "planned, 2000-byte budget" -> d.withMethodByteBudget(2000),
+      "planned, call sites split" -> d.withCallSiteBudget(8).withHeavyGroupOutputs(2),
+      "planned, no exact grouping" -> d.withExactGrouping(false),
+      "planned, no prediction" -> d.withPredictGrouping(false),
+      "planned, whole driver misread" ->
+        d.withSplitDriver(false).withMisdescribeDriverBytes(4000))
+    for (k <- 0 until 24; (label, o) <- wideVariants ++ planned) {
+      val draws = wideDraws(shapeRandom(seed ^ 0x57494445L, k))
+      lines += line(s"wide $k ($label)", draws.flatMap(_.roots).distinct,
+        draws.map(_.numInputs).max, draws.map(_.numLiterals).max, o)
+    }
+    java.nio.file.Files.write(java.nio.file.Paths.get(target.get), lines.asJava)
+    info(s"${lines.size} emissions to ${target.get}")
   }
 
   test(s"random IR trees match the reference evaluator (seed $seed, $iterations iterations)") {
