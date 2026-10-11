@@ -20,6 +20,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka
 import java.io.File
 
 import scala.jdk.CollectionConverters._
+import scala.jdk.OptionConverters._
 
 import com.fasterxml.jackson.databind.ObjectMapper
 
@@ -96,9 +97,9 @@ object VarkaWidthAuditShapes {
         VarkaSqlResolve.resolve(CatalystSqlParser.parseExpression(executable), columns), catalyst)
       val compiled =
         if (form == "predicate") {
-          VarkaExpressionCompiler.compilePredicate(resolved, columns).map(_.fused)
+          VarkaExpressionCompiler.compilePredicate(resolved, columns).toScala.map(_.fused)
         } else {
-          VarkaExpressionCompiler.compile(Seq(Alias(resolved, "c")()), columns)
+          VarkaExpressionCompiler.compile(Seq(Alias(resolved, "c")()), columns).toScala
         }
       val c = compiled.getOrElse(
         throw new IllegalStateException(

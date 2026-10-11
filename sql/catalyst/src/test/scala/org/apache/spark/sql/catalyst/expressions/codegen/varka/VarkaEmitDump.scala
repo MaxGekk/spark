@@ -21,6 +21,7 @@ import java.lang.foreign.{Arena, MemorySegment, ValueLayout}
 import java.util.Locale
 
 import scala.jdk.CollectionConverters._
+import scala.jdk.OptionConverters._
 
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference, Expression}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
@@ -125,14 +126,16 @@ object VarkaEmitDump {
       return
     }
 
-    val partial = VarkaExpressionCompiler.compilePartial(named, childOutput, options).getOrElse {
-      report("nothing fused: every entry declined or no column is referenced")
-      VarkaExpressionCompiler.declines(named, childOutput).toSeq.sortBy(_._1).foreach {
-        case (position, decline) => report(f"entry $position%2d  ${exprs(position)}%-40s  $decline")
+    val partial =
+      VarkaExpressionCompiler.compilePartial(named, childOutput, options).toScala.getOrElse {
+        report("nothing fused: every entry declined or no column is referenced")
+        VarkaExpressionCompiler.declines(named, childOutput).asScala.foreach {
+          case (position, decline) =>
+            report(f"entry ${position.intValue}%2d  ${exprs(position)}%-40s  $decline")
+        }
+        System.exit(1)
+        throw new IllegalStateException()
       }
-      System.exit(1)
-      throw new IllegalStateException()
-    }
     exprs.zip(partial.specs.asScala.toSeq).zipWithIndex.foreach { case ((text, spec), position) =>
       val decline = partial.declines.asScala.get(position).map(d => s" - $d").getOrElse("")
       report(f"entry $position%2d  $text%-40s  ${render(spec)}$decline")
@@ -276,10 +279,10 @@ object VarkaEmitDump {
     report(header)
     report("|---|" + columns.map(_ => "---|").mkString + variants.map(_ => "---|").mkString)
     exprs.zip(named).foreach { case (text, one) =>
-      val fused = VarkaExpressionCompiler.compilePartial(Seq(one), childOutput).map(_.fused)
+      val fused = VarkaExpressionCompiler.compilePartial(Seq(one), childOutput).toScala.map(_.fused)
       fused match {
         case None =>
-          val why = VarkaExpressionCompiler.declines(Seq(one), childOutput).get(0)
+          val why = Option(VarkaExpressionCompiler.declines(Seq(one), childOutput).get(0))
             .map(d => s"declined: $d").getOrElse("declined")
           report(s"| `$text` | $why |")
         case Some(f) =>

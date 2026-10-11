@@ -18,6 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import scala.jdk.CollectionConverters._
+import scala.jdk.OptionConverters._
 import scala.util.Random
 
 import org.apache.spark.sql.catalyst.expressions.Alias
@@ -59,7 +60,7 @@ class VarkaGroupingBoundSuite extends VarkaEmitterTestBase {
       val list = picked.zipWithIndex.map { case (row, k) =>
         Alias(VarkaCoverageRows.resolve(row.executable, table.columns), s"c$k")()
       }
-      VarkaExpressionCompiler.compilePartial(list, table.columns, options).map { partial =>
+      VarkaExpressionCompiler.compilePartial(list, table.columns, options).toScala.map { partial =>
         val fused = partial.fused
         new VarkaEmitCostCorpus.Shape("coverage compositions", i, fused.outputs,
           fused.inputOrdinals.size, math.max(fused.literals.size, fused.longLiterals.size))

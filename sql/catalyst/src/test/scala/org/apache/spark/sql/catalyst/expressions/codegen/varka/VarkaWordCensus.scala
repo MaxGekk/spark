@@ -21,6 +21,7 @@ import java.util.Locale
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
+import scala.jdk.OptionConverters._
 import scala.util.Random
 
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference, Expression}
@@ -181,7 +182,7 @@ object VarkaWordCensus {
   /** The fused roots of a projection given as SQL, or None if nothing fused. */
   private def fuse(exprs: Seq[String]): Option[Fused] = {
     val named = exprs.map(e => Alias(resolve(CatalystSqlParser.parseExpression(e)), "c")())
-    VarkaExpressionCompiler.compilePartial(named, columns).map { p =>
+    VarkaExpressionCompiler.compilePartial(named, columns).toScala.map { p =>
       Fused(p.fused.outputs.asScala.toSeq, p.fused.inputOrdinals.size,
           p.fused.literals.size)
     }

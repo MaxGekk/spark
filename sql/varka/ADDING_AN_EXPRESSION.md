@@ -23,7 +23,7 @@ time, and the rest are conditional on what the expression needs.
 
 | | Nearly always | |
 | :--- | :--- | :--- |
-| `VarkaExpressionCompiler.scala` | 9/10 | the Catalyst translation |
+| the family that claims it (`VarkaNodeCompiler.java` or a `Varka*Compiler.java` it chains) | 9/10 | the Catalyst translation |
 | `VarkaExpressionCompilerSuite.scala` | 9/10 | what compiles, and what declines and why |
 | `VarkaIrFuzzSuite.scala` | 9/10 | the generator must be able to produce the node |
 | `VarkaDifferentialSuite.scala` | 9/10 | end-to-end against the row engine |

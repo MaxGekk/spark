@@ -340,7 +340,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
       new IntArith(IntOp.ADD, Overflow.WRAP, new ColumnRef(0), new LiteralSlot(0)),
       new ColumnRef(1), new ColumnRef(2), false)))
     // Under the range analysis the node is a bounded producer: a calendar node over it fuses.
-    assert(VarkaExpressionCompiler.compile(Seq(out(Year(MakeDate(y, m, dd, false)))), ints)
+    assert(VarkaExpressionCompiler.compile(Seq(out(Year(MakeDate(y, m, dd, false)))), ints).toScala
       .isDefined)
   }
 
@@ -366,11 +366,11 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
   test("a fused int field compared with an int literal is a predicate, and an int " +
       "literal is still not a value operand") {
     val week53 = VarkaExpressionCompiler.compilePredicate(
-      EqualTo(WeekOfYear(d), Literal(53)), childOutput)
+      EqualTo(WeekOfYear(d), Literal(53)), childOutput).toScala
     assert(week53.isDefined, "weekofyear(d) = 53 should compile")
     assert(week53.get.specs.asScala.forall(_.fused))
     val month = VarkaExpressionCompiler.compilePredicate(
-      GreaterThan(Literal(6), Month(d)), childOutput)
+      GreaterThan(Literal(6), Month(d)), childOutput).toScala
     assert(month.isDefined && month.get.specs.asScala.forall(_.fused))
     // The value side is unchanged: an int literal where a date is expected declines.
     assert(VarkaExpressionCompiler.compile(Seq(out(DateAdd(Literal(5), Literal(3)))),
@@ -391,13 +391,13 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
         "0 < i" -> LessThan(Literal(0), i),
         "month(d) > i" -> GreaterThan(Month(d), i),
         "i <= month(d)" -> LessThanOrEqual(i, Month(d)))) {
-      val compiled = VarkaExpressionCompiler.compilePredicate(predicate, intPairOutput)
+      val compiled = VarkaExpressionCompiler.compilePredicate(predicate, intPairOutput).toScala
       assert(compiled.isDefined, s"$name should compile")
       assert(compiled.get.specs.asScala.forall(_.fused), s"$name should fuse")
     }
     // The whole conjunct fuses now, so nothing is left for a row filter above the kernel.
     val conjunct = VarkaExpressionCompiler.compilePredicate(
-      And(EqualTo(Year(d), Literal(2021)), GreaterThan(i, Literal(0))), intPairOutput)
+      And(EqualTo(Year(d), Literal(2021)), GreaterThan(i, Literal(0))), intPairOutput).toScala
     assert(conjunct.isDefined && conjunct.get.specs.asScala.forall(_.fused),
       "year(d) = 2021 AND i > 0 should fuse whole")
     assert(conjunct.get.specs.size === 2 &&
@@ -412,11 +412,11 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // on `i`, so admitting the comparison without admitting this would leave a row filter over
     // every fused int comparison - the kernel doing the compare and the row engine still
     // visiting every row for the null. The word is the same one a date column's validity reads.
-    val alone = VarkaExpressionCompiler.compilePredicate(IsNotNull(i), childOutput)
+    val alone = VarkaExpressionCompiler.compilePredicate(IsNotNull(i), childOutput).toScala
     assert(alone.isDefined && alone.get.specs.asScala.forall(_.fused),
         "i IS NOT NULL should fuse")
     val inferred = VarkaExpressionCompiler.compilePredicate(
-      And(IsNotNull(i), GreaterThan(i, Literal(0))), childOutput)
+      And(IsNotNull(i), GreaterThan(i, Literal(0))), childOutput).toScala
     assert(inferred.isDefined && inferred.get.specs.asScala.forall(_.fused),
       "the shape the optimizer actually produces should fuse whole")
     // Still a bare column only: a validity predicate over a computed node declines as before.
@@ -447,7 +447,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // The same admission as weekofyear's: three days short of a bare date's last shift.
     val shiftHiWeek = VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS - VarkaChrono.CONTRACT_MAX_DAYS - 3
     assert(VarkaExpressionCompiler.compile(
-      Seq(out(YearOfWeek(DateAdd(d, Literal(shiftHiWeek))))), childOutput).isDefined)
+      Seq(out(YearOfWeek(DateAdd(d, Literal(shiftHiWeek))))), childOutput).isPresent)
     assert(VarkaExpressionCompiler.compile(
       Seq(out(YearOfWeek(DateAdd(d, Literal(shiftHiWeek + 1))))), childOutput).isEmpty)
   }
@@ -457,7 +457,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // day and the Thursday of the shifted day can leave the calendar range, so it declines.
     val shiftHiWeek = VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS - VarkaChrono.CONTRACT_MAX_DAYS - 3
     assert(VarkaExpressionCompiler.compile(
-      Seq(out(WeekOfYear(DateAdd(d, Literal(shiftHiWeek))))), childOutput).isDefined)
+      Seq(out(WeekOfYear(DateAdd(d, Literal(shiftHiWeek))))), childOutput).isPresent)
     assert(VarkaExpressionCompiler.compile(
       Seq(out(WeekOfYear(DateAdd(d, Literal(shiftHiWeek + 1))))), childOutput).isEmpty)
   }
@@ -512,7 +512,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // The bound itself still compiles - it is the largest literal covered, not the smallest
     // one declined.
     assert(VarkaExpressionCompiler.compile(
-      Seq(out(AddMonths(d, Literal(VarkaChrono.MONTH_ARITH_MAX_MONTHS)))), childOutput).isDefined)
+      Seq(out(AddMonths(d, Literal(VarkaChrono.MONTH_ARITH_MAX_MONTHS)))), childOutput).isPresent)
   }
 
   // VARKA-60: add_months' month count widened to a column, the way VARKA-38 widened date_add's
@@ -719,11 +719,11 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
   private val shiftLo = VarkaChrono.NARROW_MIN_DAYS - VarkaChrono.CONTRACT_MIN_DAYS
 
   private def fuses(e: Expression, output: Seq[Attribute] = childOutput): Boolean =
-    VarkaExpressionCompiler.compile(Seq(out(e)), output).isDefined
+    VarkaExpressionCompiler.compile(Seq(out(e)), output).isPresent
 
   /** The compiled IR of a single output, rendered canonically - for asserting what is in it. */
   private def ir(e: Expression, output: Seq[Attribute] = childOutput): String = {
-    val compiled = VarkaExpressionCompiler.compile(Seq(out(e)), output)
+    val compiled = VarkaExpressionCompiler.compile(Seq(out(e)), output).toScala
     assert(compiled.isDefined, s"$e declined; expected it to fuse")
     VarkaVectorIR.canonical(compiled.get.outputs.asScala.head)
   }
@@ -1002,7 +1002,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     Seq(-86400000000L, 86400000000L).foreach { micros =>
       val interval = Literal(micros, DayTimeIntervalType(DayTimeIntervalType.DAY))
       assert(VarkaExpressionCompiler.compile(
-        Seq(out(TimeAddInterval(t6, interval))), withLong).isDefined, micros)
+        Seq(out(TimeAddInterval(t6, interval))), withLong).isPresent, micros)
     }
   }
 
@@ -1606,7 +1606,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
   test("the IN cap - 16 literals fuse, 17 decline with the recorded reason") {
     def inIf(n: Int): NamedExpression =
       out(If(In(d, (1 to n).map(k => Literal(k * 3, DateType))), d, d2))
-    assert(VarkaExpressionCompiler.compile(Seq(inIf(16)), childOutput).isDefined)
+    assert(VarkaExpressionCompiler.compile(Seq(inIf(16)), childOutput).isPresent)
     val partial = VarkaExpressionCompiler.compilePartial(
       Seq(inIf(17), out(DateAdd(d, Literal(1)))), childOutput).get
     assert(partial.specs.asScala.toSeq === Seq(VarkaOutputSpec.RESIDUAL, new FusedOutput(0)))
@@ -1723,11 +1723,11 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     assert(VarkaExpressionCompiler.compile(
       Seq(out(DateAdd(d, Literal(1))), out(i)), childOutput).isEmpty)
     assert(VarkaExpressionCompiler.compilePartial(
-      Seq(out(DateAdd(d, Literal(1))), out(i)), childOutput).isDefined)
+      Seq(out(DateAdd(d, Literal(1))), out(i)), childOutput).isPresent)
     // An IntegerType column offset now compiles (VARKA-38); a ShortType one still declines,
     // so `compile` still declines the whole projection over it.
     assert(VarkaExpressionCompiler.compile(
-      Seq(out(DateAdd(d, i))), childOutput).isDefined)
+      Seq(out(DateAdd(d, i))), childOutput).isPresent)
     assert(VarkaExpressionCompiler.compile(
       Seq(out(DateAdd(d, sh))), childOutput).isEmpty)
     // A cast in the tree (how `date_add` over a `datediff` result reaches the planner).
@@ -1981,7 +1981,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
       "checked int multiply whose operands do not rule out overflow")
     // The same tree under LEGACY has nothing to check and fuses.
     assert(VarkaExpressionCompiler.compile(
-      Seq(out(Multiply(i, Literal(3), EvalMode.LEGACY))), childOutput).isDefined)
+      Seq(out(Multiply(i, Literal(3), EvalMode.LEGACY))), childOutput).isPresent)
   }
 
   test("the bound is refused where it would be a fiction, not merely large") {
@@ -1998,7 +1998,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
       "a bound of 4 * 2^29 = 2^31 overflows and must not prove the multiply safe")
     // One below it still fuses, so the boundary is where it should be and not merely moved.
     assert(VarkaExpressionCompiler.compile(
-      Seq(out(Multiply(Quarter(d), Literal(536870911), EvalMode.ANSI))), childOutput).isDefined)
+      Seq(out(Multiply(Quarter(d), Literal(536870911), EvalMode.ANSI))), childOutput).isPresent)
 
     // (2) `datediff` is bounded by the date contract only when its operands are. A literal
     // shift big enough to wrap an int32 lane makes the difference anything at all, and the
@@ -2017,7 +2017,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // A column offset is not bounded here either: VARKA-52's guard is armed by a calendar
     // consumer, and `datediff` is not one, so nothing keeps its operand in range.
     assert(VarkaExpressionCompiler.compile(
-      Seq(out(Add(DateDiff(DateAdd(d, i), d2), Literal(1), EvalMode.ANSI))), childOutput)
+      Seq(out(Add(DateDiff(DateAdd(d, i), d2), Literal(1), EvalMode.ANSI))), childOutput).toScala
       .get.outputs.asScala.head.asInstanceOf[IntArith].mode() === Overflow.FAIL,
       "an unguarded column-shifted operand leaves the datediff unbounded")
     // But a calendar node *inside* the operand does arm that guard on the producer below it,
@@ -2038,6 +2038,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
       Literal(2143831591), EvalMode.LEGACY)
     assert(VarkaExpressionCompiler.compilePartial(
       Seq(out(Multiply(wide, wide, EvalMode.ANSI)), out(DateAdd(d, Literal(1)))), childOutput)
+      .toScala
       .get.declines.asScala(0).reason ===
       "checked int multiply whose operands do not rule out overflow",
       "a bound that wraps Long must not prove a multiply safe")
@@ -2074,7 +2075,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     }
     // The arithmetic that does lower to an arithmetic node is unaffected.
     assert(VarkaExpressionCompiler.compile(
-      Seq(out(DateAdd(d, Multiply(i, Literal(7), EvalMode.LEGACY)))), childOutput).isDefined)
+      Seq(out(DateAdd(d, Multiply(i, Literal(7), EvalMode.LEGACY)))), childOutput).isPresent)
   }
 
   test("declines a long add, a short column, a divide, a modulo and a mixed operand") {
@@ -2114,7 +2115,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // non-literal offset as a column shift, so the emitter guards the producer's own result at
     // run time instead of the compiler declining the shape.
     assert(VarkaExpressionCompiler.compile(
-      Seq(out(Year(DateAdd(d, Multiply(i, Literal(7), EvalMode.LEGACY))))), childOutput)
+      Seq(out(Year(DateAdd(d, Multiply(i, Literal(7), EvalMode.LEGACY))))), childOutput).toScala
       .isDefined)
     // date_sub takes the same route.
     assert(VarkaExpressionCompiler.compile(
@@ -2287,10 +2288,10 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     assert(widened.longLiterals.asScala.toSeq === Seq(nanos))
     assert(widened.inputOrdinals.asScala.toSeq === Seq(7))
     val narrowed = VarkaExpressionCompiler.compilePredicate(
-      LessThan(Cast(t6, TimeType(3)), Literal(nanos, TimeType(3))), withLong)
+      LessThan(Cast(t6, TimeType(3)), Literal(nanos, TimeType(3))), withLong).toScala
     assert(narrowed.isEmpty)
     val partial = VarkaExpressionCompiler.compilePartial(
-      Seq(out(Greatest(Seq(Cast(t6, TimeType(3)), t3)))), withLong)
+      Seq(out(Greatest(Seq(Cast(t6, TimeType(3)), t3)))), withLong).toScala
     assert(partial.isEmpty)
     // The reason is visible through the projection path, where the decline map is kept.
     val mixed = VarkaExpressionCompiler.compilePartial(
@@ -2373,7 +2374,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     assert(partial.declines.asScala(1).reason ===
       "one kernel holds one lane, and this mixes the LONG and INT lanes")
     val orMix = VarkaExpressionCompiler.compilePredicate(
-      Or(GreaterThan(l, Literal(0L)), GreaterThan(d, d2)), withLong)
+      Or(GreaterThan(l, Literal(0L)), GreaterThan(d, d2)), withLong).toScala
     assert(orMix.isEmpty)
   }
 
@@ -2432,7 +2433,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // The heavy output alone: nothing is left to fuse, so the projection does not fuse at all,
     // and the tools still say why.
     assert(VarkaExpressionCompiler.compilePartial(Seq(out(heavy(1, 32))), childOutput).isEmpty)
-    assert(VarkaExpressionCompiler.declines(Seq(out(heavy(1, 32))), childOutput)(0).reason
+    assert(VarkaExpressionCompiler.declines(Seq(out(heavy(1, 32))), childOutput).get(0).reason
       .startsWith("over the emitter's method budget ("))
   }
 
@@ -2519,10 +2520,10 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // VARKA-169.md 2.3: the compiler runs at planning, for EXPLAIN and once per task on the
     // executor, so the question goes through the shape cache with the key the evaluator builds.
     val list = Seq(out(Year(d)), out(DayOfMonth(DateAdd(d, Literal(4321)))))
-    VarkaExpressionCompiler.compilePartial(list, childOutput)
+    VarkaExpressionCompiler.compilePartial(list, childOutput).toScala
     val builds = VarkaShapeCache.buildCount
-    VarkaExpressionCompiler.compilePartial(list, childOutput)
-    VarkaExpressionCompiler.compilePartial(list, childOutput)
+    VarkaExpressionCompiler.compilePartial(list, childOutput).toScala
+    VarkaExpressionCompiler.compilePartial(list, childOutput).toScala
     assert(VarkaShapeCache.buildCount === builds, "a repeated compile built again")
   }
 
@@ -2573,8 +2574,8 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // A projection one kernel serves is classified exactly as without the option.
     val hundred = (1 to 100).map(entry)
     assert(VarkaExpressionCompiler.compilePartial(hundred, childOutput,
-      unrolled.withSeveralKernels(true)) ===
-      VarkaExpressionCompiler.compilePartial(hundred, childOutput, unrolled))
+      unrolled.withSeveralKernels(true)).toScala ===
+      VarkaExpressionCompiler.compilePartial(hundred, childOutput, unrolled).toScala)
   }
 
   test("under severalKernels a projection over more columns than a kernel reads is served by " +
@@ -2712,7 +2713,8 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // partition; so the projection runs as vanilla's, fusible siblings included.
     val projectList = Seq(out(DateAdd(d, Literal(1))), out(Rand(Literal(7L))))
     assert(VarkaExpressionCompiler.compilePartial(projectList, childOutput).isEmpty)
-    val declines = VarkaExpressionCompiler.declines(projectList, childOutput)
+    val declines = VarkaExpressionCompiler.declines(projectList, childOutput).asScala
+      .map { case (k, v) => k.intValue -> v }.toMap
     assert(declines.keySet === Set(0, 1))
     assert(declines.values.forall(_.reason.startsWith("the projection has a nondeterministic")))
   }

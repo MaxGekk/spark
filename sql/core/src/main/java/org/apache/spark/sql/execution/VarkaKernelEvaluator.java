@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Optional;
 
 import scala.Option;
 import scala.collection.immutable.Seq;
@@ -42,7 +43,7 @@ import org.apache.spark.sql.catalyst.expressions.UnsafeProjection;
 import org.apache.spark.sql.catalyst.expressions.UnsafeProjection$;
 import org.apache.spark.sql.catalyst.expressions.codegen.CompiledVarkaProjection;
 import org.apache.spark.sql.catalyst.expressions.codegen.PartialVarkaProjection;
-import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler$;
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.ForwardedOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.FusedOutput;
@@ -132,7 +133,7 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
   // None when no entry is Varka-eligible (which the columnar rule rules out, but a suite may ask).
   // Marked resolved only once the compile has returned, so a throw is met again by the next call.
   private boolean compiledResolved;
-  private Option<PartialVarkaProjection> compiled;
+  private Optional<PartialVarkaProjection> compiled;
 
   // The further kernels of a projection several kernels serve ({@code
   // VarkaEmitOptions.severalKernels}, {@code VARKA-190.md} 11), each an evaluator of its own for
@@ -193,12 +194,12 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
         VarkaExecMetrics.NONE, VarkaEmitOptions.USE_AVX_UNKNOWN, false);
   }
 
-  private Option<PartialVarkaProjection> compiled() {
+  private Optional<PartialVarkaProjection> compiled() {
     if (!compiledResolved) {
-      Option<PartialVarkaProjection> partial = VarkaExpressionCompiler$.MODULE$
-          .compilePartial(projectList, childAttributes(), emitOptions());
+      Optional<PartialVarkaProjection> partial =
+          VarkaExpressionCompiler.compilePartial(projectList, childAttributes(), emitOptions());
       // The same per-entry account verbose EXPLAIN prints, once per task at debug level.
-      if (partial.isDefined() && LOG.isDebugEnabled()) {
+      if (partial.isPresent() && LOG.isDebugEnabled()) {
         LOG.debug("Varka " + evaluatorOperator() + " fusion: "
             + String.join("; ", CollectionConverters.asJava(
                 VarkaFusionReport.lines(partial.get(), projectList, childAttributes()))));
@@ -210,9 +211,8 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
   }
 
   @Override
-  protected Option<CompiledVarkaProjection> fusedPlan() {
-    Option<PartialVarkaProjection> partial = compiled();
-    return partial.isDefined() ? Option.apply(partial.get().fused()) : Option.empty();
+  protected Optional<CompiledVarkaProjection> fusedPlan() {
+    return compiled().map(PartialVarkaProjection::fused);
   }
 
   @Override
@@ -221,7 +221,7 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
   }
 
   /** The classified projection, for the row node's merge-at-row read-back. */
-  Option<PartialVarkaProjection> partialPlan() {
+  Optional<PartialVarkaProjection> partialPlan() {
     return compiled();
   }
 

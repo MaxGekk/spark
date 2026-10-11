@@ -17,6 +17,7 @@
 package org.apache.spark.sql.execution;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Supplier;
 
 import scala.Option;
@@ -68,8 +69,8 @@ final class VarkaKernelPart extends VarkaEvaluatorBase {
   }
 
   @Override
-  protected Option<CompiledVarkaProjection> fusedPlan() {
-    return Option.apply(plan);
+  protected Optional<CompiledVarkaProjection> fusedPlan() {
+    return Optional.ofNullable(plan);
   }
 
   /** The entries this kernel computes, so its side-table identity names them. */

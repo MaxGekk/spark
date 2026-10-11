@@ -19,6 +19,7 @@ package org.apache.spark.sql.execution;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
@@ -219,7 +220,7 @@ public abstract class VarkaEvaluatorBase {
   }
 
   /** The fused sub-plan the kernel computes; None when nothing is Varka-eligible. */
-  protected abstract Option<CompiledVarkaProjection> fusedPlan();
+  protected abstract Optional<CompiledVarkaProjection> fusedPlan();
 
   /**
    * The entries rendered into the shape cache's side-table identity, in order - a projection's
@@ -274,8 +275,8 @@ public abstract class VarkaEvaluatorBase {
     if (!planResolved) {
       // Marked resolved only once the subclass's compile has returned, so a throw (a compile that
       // fails the task) is met again by the next call, as the Scala lazy val it replaces met it.
-      Option<CompiledVarkaProjection> fused = fusedPlan();
-      if (fused.isDefined()) {
+      Optional<CompiledVarkaProjection> fused = fusedPlan();
+      if (fused.isPresent()) {
         plan = fused.get();
         List<Integer> ordinals = plan.inputOrdinals();
         inputOrdinals = new int[ordinals.size()];

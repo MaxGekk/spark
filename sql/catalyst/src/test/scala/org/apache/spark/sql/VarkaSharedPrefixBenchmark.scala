@@ -21,6 +21,7 @@ import java.lang.foreign.{Arena, ValueLayout}
 
 import scala.concurrent.duration._
 import scala.jdk.CollectionConverters._
+import scala.jdk.OptionConverters._
 
 import org.apache.spark.benchmark.{Benchmark, BenchmarkBase}
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference}
@@ -78,7 +79,7 @@ object VarkaSharedPrefixBenchmark extends BenchmarkBase {
     val exprs = sqls.zipWithIndex.map { case (sql, k) =>
       Alias(VarkaSqlResolve.resolve(CatalystSqlParser.parseExpression(sql), columns), s"c$k")()
     }
-    VarkaExpressionCompiler.compile(exprs, columns).getOrElse(
+    VarkaExpressionCompiler.compile(exprs, columns).toScala.getOrElse(
       throw new IllegalStateException(s"the projection did not fuse: ${sqls.head}, ..."))
   }
 

@@ -63,7 +63,7 @@ class VarkaSplitConditionFusionSuite extends SparkFunSuite with VarkaTestWatchdo
 
   private def predicate(condition: Expression, splitOn: Boolean): Option[CompiledVarkaPredicate] =
     VarkaExpressionCompiler.compilePredicate(
-      condition, Seq(s, t), if (splitOn) split else comparisons)
+      condition, Seq(s, t), if (splitOn) split else comparisons).toScala
 
   private def fullyFused(p: Option[CompiledVarkaPredicate]): Boolean =
     p.exists(_.specs.asScala.forall(_.fused))
@@ -78,7 +78,7 @@ class VarkaSplitConditionFusionSuite extends SparkFunSuite with VarkaTestWatchdo
 
   test("without the split, the comparisons fuse up to 48 ranges and decline from 49") {
     assert(fullyFused(predicate(q3(48), splitOn = false)))
-    val at49 = VarkaExpressionCompiler.explainPredicate(q3(49), Seq(s, t), comparisons)
+    val at49 = VarkaExpressionCompiler.explainPredicate(q3(49), Seq(s, t), comparisons).asScala
     assert(!at49.forall(_.fused))
     assert(at49.flatMap(_.decline.toScala).exists(_.reason.contains("method budget")), at49)
   }
@@ -133,7 +133,7 @@ class VarkaSplitConditionFusionSuite extends SparkFunSuite with VarkaTestWatchdo
 
   test("a conjunct too large alone that is not a disjunction still declines with the reason") {
     val condition = parse(s"not (${VarkaQ3Ranges.comparisons(200, "ss_sold_date_sk")})")
-    val specs = VarkaExpressionCompiler.explainPredicate(condition, Seq(s, t), split)
+    val specs = VarkaExpressionCompiler.explainPredicate(condition, Seq(s, t), split).asScala
     assert(!specs.forall(_.fused))
     assert(specs.flatMap(_.decline.toScala).exists(_.reason.contains("method budget")), specs)
   }

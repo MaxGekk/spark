@@ -22,6 +22,7 @@ import java.nio.file.Files
 import java.security.MessageDigest
 
 import scala.jdk.CollectionConverters._
+import scala.jdk.OptionConverters._
 
 import com.fasterxml.jackson.databind.{JsonNode, ObjectMapper}
 
@@ -196,9 +197,9 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
       val resolved = parsed.map(asCatalystClaims(_, catalyst))
       val compiled = resolved.flatMap { expr =>
         if (form == "predicate") {
-          VarkaExpressionCompiler.compilePredicate(expr, columns).map(_.fused)
+          VarkaExpressionCompiler.compilePredicate(expr, columns).toScala.map(_.fused)
         } else {
-          VarkaExpressionCompiler.compile(Seq(Alias(expr, "c")()), columns)
+          VarkaExpressionCompiler.compile(Seq(Alias(expr, "c")()), columns).toScala
         }
       }
       compiled match {

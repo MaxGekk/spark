@@ -224,17 +224,16 @@ final class VarkaConditionCompiler {
    * trip {@code MAX_CHAIN_DEPTH} for no semantic reason, where the balanced fold stays
    * logarithmic.
    */
-  static Cond andFold(scala.collection.immutable.Seq<Cond> conds) {
-    return balancedFold(
-        new ArrayList<>(CollectionConverters.asJava(conds)), VarkaVectorIR.And::new);
+  static Cond andFold(List<Cond> conds) {
+    return balancedFold(new ArrayList<>(conds), VarkaVectorIR.And::new);
   }
 
   /**
    * The disjunction of {@code conds} as a balanced tree, as {@link #andFold} is of a
    * conjunction; the partial roots of a split predicate are folded with it.
    */
-  static Cond orFold(scala.collection.immutable.Seq<Cond> conds) {
-    return balancedOr(new ArrayList<>(CollectionConverters.asJava(conds)));
+  static Cond orFold(List<Cond> conds) {
+    return balancedOr(new ArrayList<>(conds));
   }
 
   /**
