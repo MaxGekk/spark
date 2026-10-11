@@ -122,3 +122,25 @@ Done on 11 October 2026, as 3.1 describes, and one change the plan did not list.
    43 seconds without them, 21 seconds more. The gate's own report is no measure of it: the
    suite ran in a different shard beside different suites from the last gate's.
 2. **Held**: both new arms at both widths, and no existing pin.
+
+### 9.1 Review of #716 (`/code-review high`), 11 October 2026
+
+No wrong answer. Fixed in the pull request:
+
+* **A shape over the legacy op cap would have broken the oracle.** The byte budget of 0 rejects a
+  shape of more than `MAX_FUSED_NODES` distinct ops with an `IllegalArgumentException`, which
+  `methodHashes` did not catch, so a coverage row or a grammar change past the cap would have
+  failed the suite and its regeneration alike. That rejection is now the arm's answer, as a
+  decline is; any other rejection still fails the suite.
+* **The failure report names any differing value.** Where no walker sees a difference, it walks
+  both files and names each differing value by its path, so a section added later is not
+  invisible the way `option_arms` was. Checked by editing a fuzz seed in the committed file: the
+  report names `/lanes/4/fuzz/seed`.
+* **The two arms come from the options table by name**, so the pin and the audit name one
+  emission; the suite's doc and the file's description say what `option_arms` holds now; and
+  `skills/emitter-and-ir.md` says why the two reference forms are pinned.
+
+Not fixed here: the suite runs its eighteen full passes one after another and draws the fuzz
+shapes again for each. Running them in parallel needs the emitter shown safe across threads
+first, which is row 307. A marker in the options table for the arms to pin is not added: 3.2
+gives the reason for pinning these two only.

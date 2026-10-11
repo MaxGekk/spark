@@ -642,6 +642,16 @@ because five arms of ten thousand shapes would multiply the file to say the
 same thing. The defaults keep the per-shape detail that says *which* shape
 moved; an arm's digest only has to say that the arm moved.
 
+The selectable arms are not the only blind spot. VARKA-83's first scratch rule
+held within each body and still moved 23 of 64 multi-group guarded cases under
+`groupLocalSlots=false` and a byte budget of 0, whose frames span the kernel
+rather than one group, and the oracle passed (`VARKA-83.md` 9.1). VARKA-306
+pins those two reference forms as arms too, read from the options table by
+name; the oracle's own int fuzz shapes catch that rule in both. So a change to
+slot planning or liveness that is right per body is checked against a frame
+that is not, and a new reference form whose frames span the kernel belongs
+beside them. A failure names each moved arm and width.
+
 Two things the audit that produced it is worth reusing for. It emits **both**
 values of every boolean, so the report names the default in its own numbers -
 the arm that moves nothing - instead of resting on a reader's memory of the

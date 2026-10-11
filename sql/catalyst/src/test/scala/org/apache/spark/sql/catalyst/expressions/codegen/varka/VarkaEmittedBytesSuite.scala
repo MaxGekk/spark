@@ -127,6 +127,12 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
         // An arm may decline a shape the defaults emit (VARKA-87's byte budget on a heavy single
         // output); the audit records that as the arm's answer rather than failing on it.
         case d: VarkaEmitDeclined => return Seq("<declined>" -> sha(d.getMessage))
+        // The form without a byte budget, a pinned reference arm, caps a shape's distinct ops
+        // (MAX_FUSED_NODES) and rejects one over it, which the defaults emit: the arm's answer
+        // too. Any other rejection is a contract violation and fails the suite (VARKA-306).
+        case e: IllegalArgumentException if options.methodByteBudget == 0 &&
+            String.valueOf(e.getMessage).contains("MAX_FUSED_NODES") =>
+          return Seq("<rejected>" -> sha(e.getMessage))
       }
     ("<class>" -> sha(VarkaEmitterTestSupport.classSummary(bytes))) +:
       VarkaEmitterTestSupport.methodBodies(bytes).asScala.toSeq.map { case (m, body) =>
@@ -256,7 +262,8 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
   // ---------------------------------------------------------------------------------------
 
   /**
-   * The emit options a session can select, and so the emissions the oracle has to pin.
+   * The emissions the oracle pins beyond the defaults: those a session can select, and two
+   * reference forms whose frames span the kernel.
    *
    * Only one field of `VarkaEmitOptions` has a configuration in front of it -
    * `spark.sql.codegen.varka.emit.useAVX`, which VARKA-121 added so that a machine whose
@@ -264,8 +271,8 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
    * record reaches the emitter through a test hook alone, and the audit test below records
    * which of those move bytes. The oracle therefore pins the defaults in full, shape by
    * shape, and each of these arms as one digest per width: a digest is enough to catch a
-   * change, and pinning five arms shape by shape would multiply a large file by five to say
-   * the same thing.
+   * change, and pinning every arm shape by shape would multiply a large file by the arms to
+   * say the same thing.
    *
    * A level the emitter treats as the default is pinned anyway. It costs a line and it is the
    * only way the file can show that `useAVX=3` and an unstated level really do emit alike.
@@ -287,11 +294,16 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
       s"useAVX=$level" -> ((o: VarkaEmitOptions) => o.withUseAVX(level))
     } ++ subjectArms ++ referenceArms
 
-  /** The reference forms whose frames span the kernel, pinned beside the selectable arms. */
-  private def referenceArms: Seq[(String, VarkaEmitOptions => VarkaEmitOptions)] = Seq(
-    "groupLocalSlots=false" -> ((o: VarkaEmitOptions) =>
-      o.toBuilder().groupLocalSlots(false).build()),
-    "methodByteBudget=0" -> ((o: VarkaEmitOptions) => o.withMethodByteBudget(0)))
+  /**
+   * The reference forms whose frames span the kernel, pinned beside the selectable arms: the
+   * options table's own arms, by name, so the pin and the audit name the same emission.
+   */
+  private def referenceArms: Seq[(String, VarkaEmitOptions => VarkaEmitOptions)] =
+    Seq("groupLocalSlots=false", "methodByteBudget=0").map { name =>
+      val arm = optionArms.find(_.name == name).getOrElse(
+        fail(s"the options table has no arm $name to pin"))
+      arm.name -> arm.arm
+    }
 
   /** The arms of every flag whose subject is not the defaults, applied over that subject. */
   private def subjectArms: Seq[(String, VarkaEmitOptions => VarkaEmitOptions)] =
@@ -373,8 +385,8 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
       "description" -> ("Hashes of every emitted method body, rendered symbolically, for every " +
         "coverage row and for a fixed sequence of fuzz shapes at each lane, at 128 and 512 bits " +
         "(lanesOverride 4 and 16 at the int lane, 2 and 8 at the long one). A difference is a " +
-        "change in what an emitted method does. `option_arms` covers the emissions a session " +
-        "can select rather than only the defaults: one digest over every shape at each width " +
+        "change in what an emitted method does. `option_arms` covers emissions beyond the " +
+        "defaults: one digest over every shape at each width " +
         "per value of spark.sql.codegen.varka.emit.useAVX, the only emit option a " +
         "configuration reaches, and per value of each option the defaults never reach, over " +
         "the options under which it acts (validityOrFirst); and per reference form whose " +
@@ -477,9 +489,24 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
           }
         }
         if (moved.result().isEmpty) {
-          // Every hash matched, so the difference is in the file around them: the preamble,
-          // the fuzz parameters, or the formatting. Say so rather than printing nothing.
-          moved += "no hash differs; the file's other content or its formatting changed"
+          // No walker above saw a difference, so it is in a part none of them reads: name every
+          // value that differs by its path, so a section added later is not invisible
+          // (VARKA-306). Only formatting is left when even that finds nothing.
+          def leaves(node: JsonNode, path: String): Map[String, String] =
+            if (node.isContainerNode) {
+              val children = if (node.isObject) node.fields().asScala.map(e => e.getKey ->
+                e.getValue) else node.elements().asScala.zipWithIndex.map { case (n, k) =>
+                k.toString -> n }
+              children.flatMap { case (k, n) => leaves(n, s"$path/$k") }.toMap
+            } else {
+              Map(path -> node.asText())
+            }
+          val (b, a) = (leaves(before, ""), leaves(after, ""))
+          (b.keySet ++ a.keySet).toSeq.sorted.filter(k => b.get(k) != a.get(k))
+            .foreach(k => moved += s"differs at $k")
+          if (moved.result().isEmpty) {
+            moved += "no value differs; the file's formatting changed"
+          }
         }
         fail("sql/varka/emitted_bytes.json does not match what the emitter produces. If the " +
           "emitted code was meant to change, regenerate with\n" +
