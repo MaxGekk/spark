@@ -181,3 +181,45 @@ in 9.
 1. This plan; row 269 marked Planned.
 2. The series, the suite, the script and the nightly step.
 3. The outcome.
+
+## 9. Outcome
+
+Done on 11 October 2026, in one commit after the plan.
+
+**The series to size 4**, the pull request's tier, under the defaults: 101,422 int trees and
+25,816 long trees, every one emitted and compared with the reference evaluator on its batches and
+both bodies, and 2,919 trees beside their first value child as two outputs; nothing failed, and
+nothing was past the class-file cap. The suite's child JVM took 1 minute 46 seconds.
+
+**To size 5**, through `dev/varka_series.sh 5 --jvms 12` on the laptop: 3,263,681 int trees and
+501,396 long trees, every slice passed, in 688 seconds of wall time with the build.
+
+**The other direction**, to size 4: the ungated series has 152 trees the series leaves out, none
+refused by the emitter, 35 guarded (18 `MAKE_DATE`, 9 `DAY_RANGE`, 8 `INT_OVERFLOW`), 117 outside
+the contract, each a calendar node over a product of two columns.
+
+**Reach**: to size 4 the int series reaches 787 (parent, position, child) triples of the 1,010 in
+20,000 of the grammar's draws, the long series 90 of 156; every node type the grammar draws, at
+both lanes.
+
+**Predictions scored.**
+
+1. **Held.** No failure to size 4 at either width (the gate's wide and narrow runs), nor to size
+   5 at the wide one.
+2. **Wrong.** Alone on the laptop the pull request's tier took 1 minute 46 seconds in its own
+   JVM, but in the gate, beside the other suites' JVMs, it took 395 seconds at the wide width and
+   418 at the narrow (its JUnit times), and the gate's wide and narrow steps 853 and 863 seconds,
+   against 601 and 612 on row 304's branch the same afternoon. Risk 1's remedy, one batch for
+   every size-4 tree, is already the rotation; the cheaper tier is size 3 in the gate with size 4
+   nightly, which is the owner's call.
+3. **Held.** The planted liveness bug fails the series by size 3, with the tree in the message.
+
+**Corrections to this plan, which is a record and is not rewritten:**
+
+* 3.6's nightly and idle costs were the size-4 rate times the count, and a larger tree costs more
+  to emit: size 5 over 12 JVMs took 688 seconds, about 2.3 CPU-hours where 3.6 says 40
+  CPU-minutes. The nightly job's 150 minutes and its slices' caps of 140 hold that on a
+  four-core runner at the laptop's rate; the first nightly run says whether a runner keeps it.
+* 3.6 names `dev/varka_series.sh` for the idle window; `dev/varka_nightly.sh` runs it at size 5 as
+  a step, with `--series-size 6` for the larger window. Size 6 has not been run.
+* 3.4 says the test logs the third category's trees; it logs the first five and the count.
