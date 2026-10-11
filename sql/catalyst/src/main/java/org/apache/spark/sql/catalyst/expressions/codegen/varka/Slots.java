@@ -1026,6 +1026,9 @@ final class Slots {
    * and none visits a date whose materialized prefix the body loads, unless
    * {@link #visitsLoadedDate} says the body visits it all the same.
    */
+  // Identity on purpose: the edge skipped is the one to the very child object the emission
+  // skips, not every edge to an equal node.
+  @SuppressWarnings("ReferenceEquality")
   private static Map<VarkaVectorIR, Integer> bodyUses(Set<VarkaVectorIR> body,
       List<VarkaVectorIR> outputs, List<Integer> outputIdx, Analysis analysis, int group,
       boolean dense, Slots s) {
@@ -1114,6 +1117,9 @@ final class Slots {
    * says the lowering visits it. Only the date's own position is skipped, and another path into
    * the same date still reaches it, as the emission does.
    */
+  // Identity on purpose: the edge skipped is the one to the very child object the emission
+  // skips, not every edge to an equal node.
+  @SuppressWarnings("ReferenceEquality")
   private static Set<VarkaVectorIR> emittedNodes(List<VarkaVectorIR> outputs,
       List<Integer> outputIdx, Analysis analysis, int group,
       java.util.function.Predicate<VarkaVectorIR> visits) {
@@ -1184,6 +1190,9 @@ final class Slots {
       }
     }
 
+    // Identity on purpose: the edge deferred is the one to the very child object the emission
+    // skips, not every edge to an equal node.
+    @SuppressWarnings("ReferenceEquality")
     private void visit(VarkaVectorIR n) {
       if (!reached.add(n)) {
         return;
@@ -1389,6 +1398,9 @@ final class Slots {
    * body's whole output list would be too wide - and it precedes every emission in the group,
    * so no sibling's order can change what it decides.
    */
+  // Identity on purpose: the edge skipped is the one to the very child object the emission
+  // skips, not every edge to an equal node.
+  @SuppressWarnings("ReferenceEquality")
   static void planFragmentsReadingMonth(List<VarkaVectorIR> outputs,
       List<Integer> outputIdx, boolean dense, Slots s, Analysis analysis) {
     s.fragmentReads.clear();

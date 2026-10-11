@@ -259,7 +259,7 @@ final class VarkaBodyEmitter {
     }
     cb.lload(analysis.scratchParam());
     cb.lload(s.dataBytes);
-    cb.loadConstant((long) (analysis.materialized.size() * Analysis.SCRATCH_VECTORS));
+    cb.loadConstant((long) analysis.materialized.size() * Analysis.SCRATCH_VECTORS);
     cb.lmul();
     cb.invokestatic(SUPPORT, "ofAddress", OF_ADDRESS);
     cb.astore(s.scratchSeg);
@@ -1114,9 +1114,9 @@ final class VarkaBodyEmitter {
   }
 
   /*
-   * The steps of the plan below, as {@code VarkaVectorSupport} names them. Catalyst reaches the
-   * engine only by class name at run time, so they are restated here, and
-   * {@code VarkaEmitterDriverTableSuite} pins the two sets equal.
+   * The steps of the plan below, as VarkaVectorSupport names them. Catalyst reaches the engine
+   * only by class name at run time, so they are restated here, and VarkaEmitterDriverTableSuite
+   * pins the two sets equal.
    */
   static final char PLAN_ZERO = 'z';
   static final char PLAN_ZERO_WORDS = 'Z';

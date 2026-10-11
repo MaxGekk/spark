@@ -395,6 +395,9 @@ final class VarkaDivisionLowering {
    * This is what lets the form serve a signed dividend rather than only {@code TIME}, and it is
    * the choice {@code VARKA-88.md} 3.1 left open between sign correction and declining.
    */
+  // analysis is unread: this takes the same arguments as emitMulHiDivide, its sibling at the one
+  // dispatch in emitConstDivide.
+  @SuppressWarnings("UnusedVariable")
   private static void emitMagicDivide(CodeBuilder cb, Analysis analysis, ConstDivide n, Slots s) {
     int[] t = s.constDivideTmp.get(n);
     int quotient = t[0];
@@ -483,7 +486,7 @@ final class VarkaDivisionLowering {
    *
    * <p>The quotient this leaves is exact over the range the site's dividend stays in, so the
    * round-down carry that follows a magic division is dead here rather than merely redundant;
-   * {@link Divider#carries()} is what each site asks before emitting it.
+   * {@link Divider#carries(ChronoDivide)} is what each site asks before emitting it.
    */
   static void emitDoubleDivide(CodeBuilder cb, Lane lane, Divider divider,
       long divisor) {

@@ -223,7 +223,10 @@ public final class VarkaBatchLedger {
     }
   }
 
-  @SuppressWarnings("unchecked")
+  // The sneaky throw: E is erased, so the cast checks nothing and e is rethrown as it is, and
+  // the caller picks RuntimeException for E so javac asks for no throws clause. E appearing only
+  // in the result and the throws clause is the point of the idiom.
+  @SuppressWarnings({"unchecked", "TypeParameterUnusedInFormals"})
   private static <E extends Throwable> E sneaky(Throwable e) throws E {
     throw (E) e;
   }

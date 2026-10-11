@@ -504,6 +504,9 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
    * write have their validity zeroed by the driver first. Null lanes of the data buffer are
    * undefined either way, matching the engine contract.
    */
+  // Identity on purpose: DateType, IntegerType and LongType are Scala case objects, one
+  // instance each.
+  @SuppressWarnings("ReferenceEquality")
   private BaseFixedWidthVector allocateVector(
       DataType dataType, int ordinal, int len, BufferAllocator allocator) {
     String name = "varka" + ordinal;

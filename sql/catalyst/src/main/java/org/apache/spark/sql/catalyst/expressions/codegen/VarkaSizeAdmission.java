@@ -97,8 +97,11 @@ final class VarkaSizeAdmission {
       VarkaShapeCache.admit(key);
       return Optional.empty();
     } catch (VarkaEmitDeclined d) {
-      String reason =
-          "over the emitter's method budget (" + d.getMessage().split("; ")[0] + ")";
+      // The message's first clause, up to its first "; ".
+      String message = d.getMessage();
+      int cut = message.indexOf("; ");
+      String reason = "over the emitter's method budget ("
+          + (cut < 0 ? message : message.substring(0, cut)) + ")";
       return Optional.of(new Decline(d.outputs(), reason, d.plannedCut()));
     } catch (Throwable t) {
       if (!NonFatal.apply(t)) {

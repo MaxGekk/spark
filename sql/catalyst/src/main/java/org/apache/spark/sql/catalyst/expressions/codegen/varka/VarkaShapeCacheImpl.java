@@ -532,7 +532,6 @@ public final class VarkaShapeCacheImpl {
     VarkaShapeKey key = loaderKey.shape();
     String hash = shapeHash(key);
     String className = classNameFor(hash);
-    String sourceFile = sourceFileFor(hash);
     // the emission event times the define, and the Class-File walk where this builds the bytes
     // rather than defining an admitted shape's - identified by shape only (the class is shared).
     VarkaEmissionEvent emissionEvent = new VarkaEmissionEvent();

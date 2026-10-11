@@ -91,11 +91,11 @@ final class Analysis {
   /**
    * Which word a value node's validity <i>is</i>, stated before any slot exists: one input's bitmap
    * word, the all-true constant a literal-only subtree has, or a word the node computes into a slot
-   * of its own. This is {@link #planWordRef} in symbolic form - the same aliasing rules over names
-   * instead of slot numbers - and {@link #planSlots} asserts the two agree on every node it plans,
-   * so the algebra {@link WordExpr} states cannot drift from the emission it describes. The bitmap
-   * pass and the word-liveness rule both read this map rather than the slot numbers, because they
-   * have to decide things before the slots are assigned.
+   * of its own. This is {@code Slots.planWordRef} in symbolic form - the same aliasing rules over
+   * names instead of slot numbers - and {@link Slots#plan} asserts the two agree on every node it
+   * plans, so the algebra {@link WordExpr} states cannot drift from the emission it describes.
+   * The bitmap pass and the word-liveness rule both read this map rather than the slot numbers,
+   * because they have to decide things before the slots are assigned.
    */
   sealed interface WordOwner {
     record Input(int ordinal) implements WordOwner {}
@@ -110,8 +110,8 @@ final class Analysis {
    * node whose word is computed from something other than input bitmaps - {@code IfElse}'s blend by
    * the known-true mask, {@code make_date}'s validity test, a {@code Cond} - has no expression
    * here. Folded as it is built: all-true is the identity of AND and the annihilator of OR, and
-   * equal operands collapse, which is exactly the folding {@link #andRef} does on slots, so the two
-   * views name the same thing.
+   * equal operands collapse, which is exactly the folding {@code Slots.andRef} does on slots, so
+   * the two views name the same thing.
    */
   sealed interface WordExpr {
     record Input(int ordinal) implements WordExpr {}
@@ -126,6 +126,9 @@ final class Analysis {
    * (the root is valid on every row, {@code setValid}); one ordinal is a copy; more is a chain
    * of the operator. {@code op} is meaningless below two ordinals.
    */
+  // An array on purpose: no pass is ever compared or used as a key, so the identity equality an
+  // array component gives the record is never observed.
+  @SuppressWarnings("ArrayRecordComponent")
   record BitmapPass(boolean and, int[] ordinals) {
     /** Null where the expression mixes AND and OR - see {@link Analysis#planBitmapPass}. */
     static BitmapPass of(WordExpr pure) {
@@ -191,7 +194,7 @@ final class Analysis {
   final VarkaEmitOptions options;
   /**
    * The lane count baked into this emission, or 0 to read {@code SPECIES_PREFERRED} at run
-   * time and call the general validity helpers; see {@link VarkaLoopEmitter#emitLanes}.
+   * time and call the general validity helpers; see {@link Lane#emitLanes}.
    */
   final int lanes;
   /**
@@ -623,7 +626,7 @@ final class Analysis {
   /**
    * Fills {@link #wordOwner} and {@link #pureWord} over the topological order, children
    * first, so every node sees its children's entries. The owner rules are
-   * {@link #planWordRef}'s, case for case; the purity rules are the word algebra each
+   * {@code Slots.planWordRef}'s, case for case; the purity rules are the word algebra each
    * emission arm implements - AND for the null-intolerant nodes, OR for the null-skipping
    * pick, an alias for every unary node, and nothing for a node that computes its word.
    */
@@ -786,7 +789,7 @@ final class Analysis {
     };
   }
 
-  /** {@link #andRef}'s folding over owners: all-true drops out, equal operands collapse. */
+  /** {@code Slots.andRef}'s folding over owners: all-true drops out, equal operands collapse. */
   private WordOwner andOwner(VarkaVectorIR node, VarkaVectorIR a, VarkaVectorIR b) {
     WordOwner wa = wordOwner.get(a);
     WordOwner wb = wordOwner.get(b);

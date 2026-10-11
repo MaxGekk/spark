@@ -254,6 +254,8 @@ public class VarkaFilterEvaluator extends VarkaEvaluatorBase {
     }
   }
 
+  // Safe: Scala's Seq is covariant and immutable, so a Seq of a subtype already is a
+  // Seq<Expression>; only Java's view of its type parameter needs the cast.
   @SuppressWarnings("unchecked")
   private static Seq<Expression> expressions(Seq<? extends Expression> items) {
     return (Seq<Expression>) (Seq<?>) items;
