@@ -55,6 +55,7 @@ import org.apache.spark.sql.catalyst.expressions.Year;
 import org.apache.spark.sql.catalyst.expressions.YearOfWeek;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaChrono;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDerivedKind;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaOperandPosition;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaRangeAnalysis;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaValueRange;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
@@ -452,16 +453,10 @@ final class VarkaChronoCompiler {
       // EXPLAIN still claims fusion - the ghost fallback `sql/varka/AGENTS.md` forbids. The
       // test is the emitter's own predicate rather than a copy of its list, so the two cannot
       // drift apart again.
-      Optional<VarkaVectorIR> compiled =
-          VarkaNodeCompiler.compileNode(days, inputs, literals, sink);
-      if (compiled.isEmpty()) {
-        return compiled;
-      }
-      if (VarkaVectorIR.isDayOffsetShape(compiled.get())) {
-        return compiled;
-      }
-      return sink.decline("day offset arithmetic that lowers to a node the offset "
-          + "position does not take", days);
+      return VarkaNodeCompiler.compileNode(days, inputs, literals, sink).flatMap(v ->
+          VarkaNodeCompiler.admitted(VarkaOperandPosition.DAY_OFFSET, v, days,
+              "day offset arithmetic that lowers to a node the offset position does not take",
+              sink));
     }
     return sink.decline("day offset is not a foldable literal, an integer column or int arithmetic",
         days);
@@ -537,6 +532,18 @@ final class VarkaChronoCompiler {
       VarkaSlotTable inputs,
       VarkaSlotTable literals,
       DeclineSink sink) {
+    // Every arm below builds a kind the position takes; the gate is what keeps a future arm
+    // from fusing a count the emitter would refuse (VARKA-86), as compileOffset's does.
+    return buildMonths(months, inputs, literals, sink).flatMap(v ->
+        VarkaNodeCompiler.admitted(VarkaOperandPosition.MONTH_COUNT, v, months,
+            "month count that lowers to a node the month-count position does not take", sink));
+  }
+
+  private static Optional<VarkaVectorIR> buildMonths(
+      Expression months,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
+      DeclineSink sink) {
     Optional<Object> folded =
         OptionConverters.toJava(DateVarkaSupport$.MODULE$.foldDaysOffset(months));
     if (folded.isPresent()) {
@@ -558,8 +565,8 @@ final class VarkaChronoCompiler {
     // under this cast is a count of years and the node needs months - unlike the MONTH-end
     // cast monthIntervalOffset matches, which returns `v` unchanged.
     //
-    // The emitter's month-count check accepts int arithmetic once `requireMonthCountShape`
-    // has split it from `next_day`'s weekday, which shares no guard with it. So this is that
+    // The month-count position takes int arithmetic (`VarkaOperandPosition.MONTH_COUNT`),
+    // unlike `next_day`'s weekday, which shares no guard with it. So this is that
     // multiply, always checked because `IntervalUtils.intToYearMonthInterval` uses
     // `Math.multiplyExact` whatever the session's ANSI mode, and `arithOver`'s bound is what
     // removes the check - `CAST(year(d) AS INTERVAL YEAR)` fuses on its 40000 bound while a

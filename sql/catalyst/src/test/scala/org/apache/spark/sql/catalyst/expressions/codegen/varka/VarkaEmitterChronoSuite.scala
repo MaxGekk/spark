@@ -355,6 +355,22 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
     }
   }
 
+  test("the emitter refuses an operand its position does not take, naming the operand") {
+    // VARKA-86: the emitter's half of VarkaOperandPosition, kept as a defence against a producer
+    // other than the compiler. The day offset refuses a date, the month count a calendar field,
+    // and the weekday, the strictest position, even int arithmetic.
+    val col = new ColumnRef(0)
+    val cases = Seq(
+      (new AddDays(col, new Year(col)), "date_add's day offset"),
+      (new AddMonths(col, new Month(col)), "add_months' month count"),
+      (new NextDay(col, new IntArith(IntOp.ADD, Overflow.WRAP, new ColumnRef(1),
+        new ColumnRef(1))), "next_day's weekday"))
+    for ((root, name) <- cases) {
+      val e = intercept[IllegalArgumentException](emitMulti(Seq[VarkaVectorIR](root), 2, 0))
+      assert(e.getMessage.contains(name) && e.getMessage.contains("must be"), e.getMessage)
+    }
+  }
+
   test("an invalid date under the ANSI form declines the batch, in a loop lane and " +
       "an epilogue lane, and not under a null input; a year past the limit declines under " +
       "both forms and is not confused with an invalid date") {

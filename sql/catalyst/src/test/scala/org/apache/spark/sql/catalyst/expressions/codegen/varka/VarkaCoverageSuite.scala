@@ -290,6 +290,48 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       "documented as covered, but the compiler declines:\n  " + failures.mkString("\n  "))
   }
 
+  test("every operand the compiler builds in a restricted position is one the position admits") {
+    // VARKA-86. The compiler and the emitter ask one rule, VarkaOperandPosition, so their sets
+    // agree by construction; what this checks is that the compiler asks it - that no arm builds
+    // a day offset, a month count or a weekday the emitter would refuse at emit time, which the
+    // evaluator turns into a silent per-batch fallback while EXPLAIN claims fusion. Each
+    // position must be reached by the table, or the check would pass on nothing.
+    val reached = scala.collection.mutable.Map.empty[VarkaOperandPosition, Int].withDefaultValue(0)
+    val wrong = scala.collection.mutable.ArrayBuffer.empty[String]
+    def walk(node: VarkaVectorIR, sql: String): Unit = {
+      val operand = node match {
+        case n: VarkaVectorIR.AddDays => Some(VarkaOperandPosition.DAY_OFFSET -> n.offset)
+        case n: VarkaVectorIR.SubDays => Some(VarkaOperandPosition.DAY_OFFSET -> n.offset)
+        case n: VarkaVectorIR.AddMonths => Some(VarkaOperandPosition.MONTH_COUNT -> n.months)
+        case n: VarkaVectorIR.NextDay => Some(VarkaOperandPosition.WEEKDAY -> n.offset)
+        case _ => None
+      }
+      operand.foreach { case (position, o) =>
+        reached(position) += 1
+        if (!position.admits(o)) wrong += s"$sql: $position got $o"
+      }
+      VarkaVectorIR.childrenOf(node).foreach(walk(_, sql))
+    }
+    families.foreach { family =>
+      family.rows.foreach { row =>
+        val expr = expressionOf(row)
+        val outputs =
+          if (family.predicates) {
+            VarkaExpressionCompiler.compilePredicate(expr, columns).toScala.toSeq
+              .flatMap(_.fused.outputs.asScala)
+          } else {
+            VarkaExpressionCompiler.compilePartial(Seq(out(expr)), columns).toScala.toSeq
+              .flatMap(p => (p.fused +: p.more.asScala.toSeq).flatMap(_.outputs.asScala))
+          }
+        outputs.foreach(walk(_, row.sql))
+      }
+    }
+    assert(wrong.isEmpty, wrong.mkString("\n"))
+    VarkaOperandPosition.values().foreach { position =>
+      assert(reached(position) > 0, s"no coverage row builds a $position operand")
+    }
+  }
+
   test("an expression matched only to decline really does decline") {
     // The exemption above is the only way a class the compiler matches can stay out of the
     // table, so it has to be self-policing: an entry that starts fusing is coverage and belongs

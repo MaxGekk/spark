@@ -753,13 +753,7 @@ final class VarkaConditionCompiler {
       VarkaSlotTable inputs,
       VarkaSlotTable literals,
       DeclineSink sink) {
-    if (e instanceof Literal l && l.value() instanceof Integer v
-        && l.dataType().equals(DataTypes.IntegerType)) {
-      return Optional.of(VarkaNodeCompiler.intSlot(v, literals));
-    }
-    if (e instanceof BoundReference br && br.dataType().equals(DataTypes.IntegerType)) {
-      return Optional.of(VarkaNodeCompiler.columnRef(br, inputs, LaneType.INT));
-    }
-    return VarkaNodeCompiler.compileNode(e, inputs, literals, sink);
+    Optional<VarkaVectorIR> leaf = VarkaNodeCompiler.intLeaf(e, inputs, literals);
+    return leaf.isPresent() ? leaf : VarkaNodeCompiler.compileNode(e, inputs, literals, sink);
   }
 }
