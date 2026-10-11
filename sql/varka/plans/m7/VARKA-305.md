@@ -232,6 +232,31 @@ these, fixed in the PR:
 
 The fusion dump is byte-identical to the base's after these fixes as well.
 
+**Compile time after the review.** Classifying an admitted projection once instead of twice
+halves its compile: the benchmark's shape cache is warm, so the size admission is a lookup and
+the classification is most of the time. The pair rerun on the review commit against
+`bc8c96fc871`, five interleaved rounds a side, medians in ns per compile, with each side's spread
+(slowest less fastest, over the median) across its five runs:
+
+| shape (one compile) | base | head | change | spread base / head |
+|---|---:|---:|---:|---:|
+| calendar: year, month, make_date, add_months, last_day, weekofyear | 10824 | 4223 | -61.0% | 6.7 / 9.6% |
+| TIME: hour, minute, second | 10022 | 4621 | -53.9% | 2.6 / 2.7% |
+| conditionals: IF, coalesce, greatest, CASE WHEN of 6 branches | 18760 | 8518 | -54.6% | 5.8 / 5.1% |
+| a wide projection of 60 mixed outputs | 528565 | 237126 | -55.1% | 13.4 / 12.8% |
+| predicate: a range, IS NOT NULL and an int comparison | 3774 | 2620 | -30.6% | 2.8 / 5.5% |
+| predicate: IN over eight dates | 2676 | 2265 | -15.4% | 4.7 / 7.8% |
+| predicate: a set of three date ranges | 2433 | 2141 | -12.0% | 1.3 / 3.2% |
+| predicate: NOT, OR and IS NULL over two dates | 2170 | 1802 | -16.9% | 2.7 / 9.9% |
+
+The predicates gain what they gained before the review: `compilePredicate` never classified twice,
+only the EXPLAIN of one did, and the benchmark does not explain. The committed files are
+regenerated again from the review commit, and agree: the four projections take 4,217 to 237,269
+ns at 128 bits against 8,987 to 462,008 before the review, and the same at full width. The base
+medians here are 11 to 24% above the committed files' base-era single runs; the pair compares the
+two sides within one session, which is what it is for, and the earlier table in 9 stands as the
+measurement of the port alone.
+
 **Corrections to this plan, which is a record and is not rewritten:** risk 3 says the size
 admission catches `RuntimeException`; it catches every `Throwable` that `NonFatal` accepts and
 rethrows the rest, as the Scala did, so an `AssertionError` from the emitter is logged and the
