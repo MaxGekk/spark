@@ -885,3 +885,23 @@ the emitter against the reference evaluator. Three things decided how it is buil
 
 To size 5 nothing failed, at either lane. A planted bug (`misdescribeWordLiveness`) fails it by
 size 3, which is what shows a green run means something.
+
+## The emitter is called from several threads, so a test holds it to that
+
+VARKA-307. `VarkaEmittedBytesSuite` hashes every shape twenty times, once per pinned arm and
+width, and every hash is a function of the shape and the options alone, so the passes split by
+shape over a pool and join in index order: the pinning test went from 2 minutes to 21 seconds on
+the laptop, `emitted_bytes.json` unchanged, and `-Dvarka.bytes.threads=1` gives the serial suite.
+
+The split rests on the emit path keeping no state between emissions: no static field that is not
+final and no static collection filled after class initialization; the mutable statics in the
+package are the runtime's (the shape cache, the compile directive, the warmup worker). That is
+not only the suite's concern: the compiler emits at planning on the Spark driver, where
+concurrent queries plan on several threads. So a test emits the coverage rows and two thousand
+fuzz shapes on every thread at once and compares each with the shape emitted alone. A planted
+static scratch list shared between emissions failed it at once, with another emission's outputs
+in the shape; a test that never saw a race would say nothing about one.
+
+Two things to keep when adding to the suite: a task must not wait on the pool it runs in (the map
+is called from the test's thread only), and ScalaTest evaluates `assert`'s message even when the
+assertion holds, so a message that indexes into an empty result throws on success.
