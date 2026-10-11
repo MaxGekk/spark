@@ -201,3 +201,38 @@ likely reading, not a verified one.
 
 **What the port is.** The facade has no Scala left: every Varka compile entry point is a static
 method of a Java class, and its results are `Optional`, records, `List` and `Map`.
+
+**Review of the PR** (`/code-review xhigh`) found the port faithful, with no wrong answer, and
+these, fixed in the PR:
+
+* **A wide projection compiled in quadratic time.** The entry points wrapped the projection list
+  without copying it, and the parser and the optimizer build it as a Scala `List`, whose wrapped
+  `get(i)` walks from the head; every pass over the entries was quadratic in their number, where
+  the Scala's `zipWithIndex` was linear. The entries are now copied once into a Java list.
+* **An admitted kernel was classified twice**: once to ask the size admission and again to build
+  it. The Scala did the same; the classification now comes back with the answer. Likewise the
+  verbose EXPLAIN of a filter compiled its predicate twice, once for the conjunct lines and once
+  for the split line; `explainAndCompilePredicate` returns both from one classification.
+* **A binding per entry built its own lookup** over the child's columns. One binder per pass now
+  builds it once.
+* **`explainPredicate` returned a mutable list**, where the Scala `Seq` was immutable; it is
+  copied.
+* The four-table rollback, written out at four sites, is a `Marks` record at three; the fourth is
+  the fault injector's (`misdescribeRollback`), which has to restore the tables wrongly and so
+  stays written out.
+* Stale descriptions of the classifier as Scala and as the one file that knows Spark's expression
+  classes: the README's tour, the `varka` package overview and step 3 of
+  `ADDING_AN_EXPRESSION.md`, which now name the families. A Javadoc link to a `LinkedHashMap`
+  overload that no longer exists.
+* `VarkaSlotTable` is package-private: its only test caller is in its package. `foldPick` takes a
+  `BinaryOperator` rather than a Scala `Function2`. The size admission's once-per-JVM warning logs
+  under the classifier's logger name, as it did, so a logging configuration naming it still
+  applies. `dev/varka_emit.sh`'s "nothing fused" lines ask for the declines under the options
+  given, not the defaults.
+
+The fusion dump is byte-identical to the base's after these fixes as well.
+
+**Corrections to this plan, which is a record and is not rewritten:** risk 3 says the size
+admission catches `RuntimeException`; it catches every `Throwable` that `NonFatal` accepts and
+rethrows the rest, as the Scala did, so an `AssertionError` from the emitter is logged and the
+shape admitted, while a `VirtualMachineError` or `LinkageError` propagates.

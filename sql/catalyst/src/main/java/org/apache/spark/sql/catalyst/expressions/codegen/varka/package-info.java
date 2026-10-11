@@ -37,10 +37,10 @@
  * </ol>
  *
  * <p>What feeds this package is
- * {@code org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler} (Scala,
- * one package up), which translates Catalyst expressions into the IR and is where an
- * unsupported expression is declined. What consumes it are the {@code Varka*Exec} nodes in
- * {@code sql/core}.
+ * {@code org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler} (one
+ * package up, with the expression families it calls), which translates Catalyst expressions
+ * into the IR and is where an unsupported expression is declined. What consumes it are the
+ * {@code Varka*Exec} nodes in {@code sql/core}.
  *
  * <p><b>The rest, by role</b>, so a reader can skip it on a first pass:
  *

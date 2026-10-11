@@ -129,7 +129,7 @@ object VarkaEmitDump {
     val partial =
       VarkaExpressionCompiler.compilePartial(named, childOutput, options).toScala.getOrElse {
         report("nothing fused: every entry declined or no column is referenced")
-        VarkaExpressionCompiler.declines(named, childOutput).asScala.foreach {
+        VarkaExpressionCompiler.declines(named, childOutput, options).asScala.foreach {
           case (position, decline) =>
             report(f"entry ${position.intValue}%2d  ${exprs(position)}%-40s  $decline")
         }

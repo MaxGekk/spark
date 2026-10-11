@@ -31,6 +31,7 @@ import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.function.IntPredicate;
+import java.util.function.UnaryOperator;
 
 import scala.collection.immutable.Seq;
 import scala.jdk.javaapi.CollectionConverters;
@@ -273,8 +274,11 @@ public final class VarkaExpressionCompiler {
         declines, Set.of());
   }
 
-  /** A kernel the size admission declined: the partial asked about, and the decline. */
-  private record Asked(PartialVarkaProjection partial, VarkaSizeAdmission.Decline decline) {
+  /**
+   * One classification and the size admission's answer on its kernel: empty when the emitter
+   * serves it, or when nothing fused and there is nothing to ask.
+   */
+  private record Asked(Classified once, Optional<VarkaSizeAdmission.Decline> decline) {
   }
 
   /**
@@ -306,9 +310,10 @@ public final class VarkaExpressionCompiler {
       String why = "the projection has a nondeterministic entry, whose values would depend on "
           + "the path each batch took";
       DeclineSink sink = new DeclineSink(childOutput, options.rangeSets());
+      UnaryOperator<Expression> bind = binder(childOutput);
       SortedMap<Integer, VarkaDecline> declines = new TreeMap<>();
       for (int at = 0; at < entries.size(); at++) {
-        sink.note(why, bind((Expression) entries.get(at), childOutput));
+        sink.note(why, bind.apply((Expression) entries.get(at)));
         int position = at;
         sink.take().ifPresent(d -> declines.put(position, d));
       }
@@ -321,15 +326,15 @@ public final class VarkaExpressionCompiler {
     // two the bisection has the last word (VARKA-236.md 3.4).
     int plannedCuts = 0;
     while (true) {
-      Optional<Asked> asked = ask(entries, childOutput, demoted, options);
-      if (asked.isEmpty()) {
-        Classified once = classifyOnce(entries, childOutput, demoted, options);
+      Asked asked = ask(entries, childOutput, demoted, options);
+      if (asked.decline().isEmpty()) {
+        Classified once = asked.once();
         Set<Integer> aside = new HashSet<>(bisected);
         aside.addAll(once.aside());
         return new Classified(once.partial(), once.declines(), aside);
       }
-      List<Integer> at = positions(asked.get().partial());
-      VarkaSizeAdmission.Decline decline = asked.get().decline();
+      List<Integer> at = positions(asked.once().partial().get());
+      VarkaSizeAdmission.Decline decline = asked.decline().get();
       int cut = decline.plannedCut();
       if (!decline.outputs().isEmpty()) {
         for (int output : decline.outputs()) {
@@ -357,10 +362,11 @@ public final class VarkaExpressionCompiler {
           for (int position : at.subList(mid, at.size())) {
             probe.put(position, reasonAtHi);
           }
-          Optional<Asked> answer = ask(entries, childOutput, probe, options);
-          if (answer.isPresent() && answer.get().decline().outputs().isEmpty()) {
+          Optional<VarkaSizeAdmission.Decline> answer =
+              ask(entries, childOutput, probe, options).decline();
+          if (answer.isPresent() && answer.get().outputs().isEmpty()) {
             hi = mid;
-            reasonAtHi = answer.get().decline().reason();
+            reasonAtHi = answer.get().reason();
           } else {
             lo = mid;
           }
@@ -373,14 +379,19 @@ public final class VarkaExpressionCompiler {
     }
   }
 
-  /** The kernel {@code demoted} leaves, if the size admission declines it. */
-  private static Optional<Asked> ask(
+  /**
+   * The classification {@code demoted} leaves, and the size admission's answer on its kernel. The
+   * classification is returned with the answer so that an admitted kernel is not classified a
+   * second time to be built.
+   */
+  private static Asked ask(
       List<NamedExpression> entries,
       Seq<Attribute> childOutput,
       Map<Integer, String> demoted,
       VarkaEmitOptions options) {
-    return classifyOnce(entries, childOutput, demoted, options).partial().flatMap(partial ->
-        VarkaSizeAdmission.admit(partial.fused(), options).map(d -> new Asked(partial, d)));
+    Classified once = classifyOnce(entries, childOutput, demoted, options);
+    return new Asked(once,
+        once.partial().flatMap(partial -> VarkaSizeAdmission.admit(partial.fused(), options)));
   }
 
   /**
@@ -420,6 +431,7 @@ public final class VarkaExpressionCompiler {
     private final List<VarkaVectorIR> outputs = new ArrayList<>();
     private final List<DataType> outputTypes = new ArrayList<>();
     private final DeclineSink sink;
+    private final UnaryOperator<Expression> bind;
     private final SortedMap<Integer, VarkaDecline> declines = new TreeMap<>();
     // Entries over the budgets beside the others that fit them alone: another kernel's.
     private final Set<Integer> alone = new HashSet<>();
@@ -430,6 +442,7 @@ public final class VarkaExpressionCompiler {
       this.demoted = demoted;
       this.options = options;
       this.sink = new DeclineSink(childOutput, options.rangeSets());
+      this.bind = binder(childOutput);
     }
 
     Classified run(List<NamedExpression> entries) {
@@ -455,7 +468,7 @@ public final class VarkaExpressionCompiler {
       // Bound at Expression, not NamedExpression: a bare column entry binds to a BoundReference,
       // which is not a NamedExpression. (Every NamedExpression is an Expression; Java does not
       // see the Scala trait's superclass, hence the casts.)
-      Expression bound = bind((Expression) named, childOutput);
+      Expression bound = bind.apply((Expression) named);
       Expression e = bound instanceof Alias alias ? alias.child() : bound;
       // A bare column is compilable as a node but never emitted as an output: emitting it would
       // be a copy loop, while forwarding the input's vector is zero-copy.
@@ -474,10 +487,7 @@ public final class VarkaExpressionCompiler {
       // would widen the kernel's input set - and `canRun`'s Arrow check - for no output. Entries
       // are appended in table order, so truncating to the pre-entry size restores the exact
       // prior state.
-      int inputsMark = inputs.size();
-      int literalsMark = literals.size();
-      int longMark = sink.longMark();
-      int boundsMark = sink.boundsMark();
+      Marks marks = Marks.of(inputs, literals, sink);
       // A test's forced decline (`forceResidualAt`, VARKA-296): the entry compiles as any other
       // and then takes the over-budget branch below, so the rollback it runs is the one a real
       // decline runs.
@@ -494,10 +504,7 @@ public final class VarkaExpressionCompiler {
         // mixed projection fuses one lane and leaves the other.
         LaneType lane = VarkaVectorIR.emissionLane(ir);
         if (!outputs.isEmpty() && lane != VarkaVectorIR.emissionLane(outputs.get(0))) {
-          inputs.truncate(inputsMark);
-          literals.truncate(literalsMark);
-          sink.truncateLong(longMark);
-          sink.truncateBounds(boundsMark);
+          marks.restore(inputs, literals, sink);
           sink.take();
           sink.note(laneMismatch(lane, VarkaVectorIR.emissionLane(outputs.get(0))), e);
           return residual(position);
@@ -520,13 +527,13 @@ public final class VarkaExpressionCompiler {
       // production, where this restores the four tables exactly.
       switch (options.misdescribeRollback()) {
         case 1 -> { }
-        case 3 -> inputs.truncate(Math.max(0, inputsMark - 1));
-        default -> inputs.truncate(inputsMark);
+        case 3 -> inputs.truncate(Math.max(0, marks.inputs() - 1));
+        default -> inputs.truncate(marks.inputs());
       }
-      literals.truncate(literalsMark);
-      sink.truncateLong(longMark);
+      literals.truncate(marks.literals());
+      sink.truncateLong(marks.longs());
       if (options.misdescribeRollback() != 2) {
-        sink.truncateBounds(boundsMark);
+        sink.truncateBounds(marks.bounds());
       }
       if (compiled.isPresent()) {
         sink.take(); // an entry that compiled clean; its reason is the budget, or the force
@@ -567,8 +574,20 @@ public final class VarkaExpressionCompiler {
   // ---------------------------------------------------------------------------------------------
 
   /** Every conjunct with what the compiler did with it, and the predicate if any fused. */
-  private record Explained(
+  public record Explained(
       List<VarkaConjunctSpec> specs, Optional<CompiledVarkaPredicate> compiled) {
+    public Explained {
+      specs = List.copyOf(specs);
+    }
+  }
+
+  /**
+   * {@link #explainPredicate} and {@link #compilePredicate} from one classification, for a caller
+   * that reports both, such as EXPLAIN.
+   */
+  public static Explained explainAndCompilePredicate(
+      Expression condition, Seq<Attribute> childOutput, VarkaEmitOptions options) {
+    return predicate(condition, childOutput, options);
   }
 
   private static Explained predicate(
@@ -583,9 +602,10 @@ public final class VarkaExpressionCompiler {
       String why = "the condition is nondeterministic: a fused conjunct would run ahead of a "
           + "nondeterministic one and change the rows it sees";
       DeclineSink sink = new DeclineSink(childOutput, options.rangeSets());
+      UnaryOperator<Expression> bind = binder(childOutput);
       List<VarkaConjunctSpec> specs = new ArrayList<>();
       for (Expression conjunct : conjuncts(condition)) {
-        sink.note(why, bind(conjunct, childOutput));
+        sink.note(why, bind.apply(conjunct));
         specs.add(new VarkaConjunctSpec(conjunct, false, sink.take()));
       }
       return new Explained(specs, Optional.empty());
@@ -673,30 +693,25 @@ public final class VarkaExpressionCompiler {
     DeclineSink sink = new DeclineSink(childOutput, options.rangeSets());
     List<Cond> fused = new ArrayList<>();
     List<VarkaConjunctSpec> specs = new ArrayList<>();
+    UnaryOperator<Expression> bind = binder(childOutput);
     List<Expression> conjuncts = conjuncts(condition);
     for (int index = 0; index < conjuncts.size(); index++) {
       Expression conjunct = conjuncts.get(index);
-      Expression bound = bind(conjunct, childOutput);
+      Expression bound = bind.apply(conjunct);
       String demotedWhy = demoted.get(index);
       if (demotedWhy != null) {
         sink.note(demotedWhy, bound);
         specs.add(new VarkaConjunctSpec(conjunct, false, sink.take()));
         continue;
       }
-      int inputsMark = inputs.size();
-      int literalsMark = literals.size();
-      int longMark = sink.longMark();
-      int boundsMark = sink.boundsMark();
+      Marks marks = Marks.of(inputs, literals, sink);
       Optional<Cond> compiled = VarkaConditionCompiler.compileCond(bound, inputs, literals, sink);
       if (compiled.isPresent()) {
         Cond cond = compiled.get();
         // The lane rule of `compilePartial`, for conjuncts: the AND fold below would refuse a mix
         // by construction, so it is asked here first and answered with the lane's reason.
         if (!fused.isEmpty() && cond.laneType() != fused.get(0).laneType()) {
-          inputs.truncate(inputsMark);
-          literals.truncate(literalsMark);
-          sink.truncateLong(longMark);
-          sink.truncateBounds(boundsMark);
+          marks.restore(inputs, literals, sink);
           sink.take();
           sink.note(laneMismatch(cond.laneType(), fused.get(0).laneType()), bound);
           specs.add(new VarkaConjunctSpec(conjunct, false, sink.take()));
@@ -712,10 +727,7 @@ public final class VarkaExpressionCompiler {
           continue;
         }
       }
-      inputs.truncate(inputsMark);
-      literals.truncate(literalsMark);
-      sink.truncateLong(longMark);
-      sink.truncateBounds(boundsMark);
+      marks.restore(inputs, literals, sink);
       if (compiled.isPresent()) {
         sink.take();
         sink.note("exceeds the emitter's fused budget", bound);
@@ -948,13 +960,42 @@ public final class VarkaExpressionCompiler {
         sink.longLiteralValues());
   }
 
-  /** {@code expr} with its attributes bound to their ordinals in {@code childOutput}. */
-  private static Expression bind(Expression expr, Seq<Attribute> childOutput) {
-    return BindReferences.bindReference(expr, package$.MODULE$.AttributeSeq(childOutput), false);
+  /**
+   * The sizes of a pass's four tables before an entry or conjunct: the tables are shared across
+   * the entries and append in order, so truncating to these restores the state before it, and a
+   * declining entry leaves no column or literal behind to widen the kernel's input set.
+   */
+  private record Marks(int inputs, int literals, int longs, int bounds) {
+
+    static Marks of(VarkaSlotTable inputs, VarkaSlotTable literals, DeclineSink sink) {
+      return new Marks(inputs.size(), literals.size(), sink.longMark(), sink.boundsMark());
+    }
+
+    void restore(VarkaSlotTable inputs, VarkaSlotTable literals, DeclineSink sink) {
+      inputs.truncate(this.inputs);
+      literals.truncate(this.literals);
+      sink.truncateLong(longs);
+      sink.truncateBounds(bounds);
+    }
   }
 
+  /**
+   * Binds an expression's attributes to their ordinals in {@code childOutput}. One per pass: the
+   * attribute sequence builds its lookup by expression id on first use, so a sequence per bind
+   * would build it once per entry.
+   */
+  private static UnaryOperator<Expression> binder(Seq<Attribute> childOutput) {
+    var attributes = package$.MODULE$.AttributeSeq(childOutput);
+    return expr -> BindReferences.bindReference(expr, attributes, false);
+  }
+
+  /**
+   * The projection's entries as a random-access copy: the parser and the optimizer build a
+   * projection list as a Scala {@code List}, where a wrapped {@code get(i)} walks from the head
+   * and every pass over the entries would be quadratic in their number.
+   */
   private static List<NamedExpression> entries(Seq<NamedExpression> projectList) {
-    return CollectionConverters.asJava(projectList);
+    return List.copyOf(CollectionConverters.asJava(projectList));
   }
 
   /** The reason an entry of one lane records when the kernel is already on the other. */

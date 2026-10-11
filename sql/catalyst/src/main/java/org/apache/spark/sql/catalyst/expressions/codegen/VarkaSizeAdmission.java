@@ -58,7 +58,10 @@ import org.apache.spark.sql.internal.SQLConf;
  */
 final class VarkaSizeAdmission {
 
-  private static final SparkLogger LOG = SparkLoggerFactory.getLogger(VarkaSizeAdmission.class);
+  // Under the classifier's name, as when this was a part of it, so that a logging configuration
+  // that names the classifier still governs the warning.
+  private static final SparkLogger LOG =
+      SparkLoggerFactory.getLogger(VarkaExpressionCompiler.class);
 
   /**
    * The plan-time emitter failures already logged in this JVM, by exception class and the frame

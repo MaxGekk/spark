@@ -119,8 +119,9 @@ public final class VarkaFusionReport {
   public static Seq<String> predicateLines(
       Expression condition, Seq<Attribute> childOutput, VarkaEmitOptions options) {
     var out = new ArrayList<String>();
-    for (VarkaConjunctSpec spec
-        : VarkaExpressionCompiler.explainPredicate(condition, childOutput, options)) {
+    VarkaExpressionCompiler.Explained explained =
+        VarkaExpressionCompiler.explainAndCompilePredicate(condition, childOutput, options);
+    for (VarkaConjunctSpec spec : explained.specs()) {
       if (spec.fused()) {
         out.add(render(spec.conjunct()) + ": fused");
       } else {
@@ -128,8 +129,7 @@ public final class VarkaFusionReport {
         out.add(render(spec.conjunct()) + ": residual (" + why + ")");
       }
     }
-    Optional<CompiledVarkaPredicate> predicate =
-        VarkaExpressionCompiler.compilePredicate(condition, childOutput, options);
+    Optional<CompiledVarkaPredicate> predicate = explained.compiled();
     if (predicate.isPresent() && predicate.get().fused().outputs().size() > 1) {
       CompiledVarkaPredicate p = predicate.get();
       out.add("split across " + p.fused().outputs().size() + " selection outputs in "

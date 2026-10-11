@@ -276,7 +276,7 @@ final class VarkaConditionCompiler {
       VarkaSlotTable inputs,
       VarkaSlotTable literals,
       DeclineSink sink,
-      scala.Function2<VarkaVectorIR, VarkaVectorIR, VarkaVectorIR> combine) {
+      BinaryOperator<VarkaVectorIR> combine) {
     // Every operand is compiled, in order, even after one declines: the tables are rolled back by
     // the caller, and a declined entry leaves them as it found them.
     List<VarkaVectorIR> compiled = new ArrayList<>();

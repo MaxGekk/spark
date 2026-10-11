@@ -30,17 +30,14 @@ import java.util.OptionalInt;
  * the order keys first occur, never on their values. A declining entry rolls the table back with
  * {@link #truncate} to the size it had before the entry, which drops exactly what the entry
  * interned, since slots are handed out in order.
- *
- * <p>Internal to Varka: public only because the tests in other packages build one to call a
- * family directly.
  */
-public final class VarkaSlotTable {
+final class VarkaSlotTable {
 
   private final Map<Integer, Integer> slots = new HashMap<>();
   private final List<Integer> keys = new ArrayList<>();
 
   /** {@code key}'s slot, appending it as the next slot if it is new. */
-  public int intern(int key) {
+  int intern(int key) {
     Integer slot = slots.get(key);
     if (slot != null) {
       return slot;
@@ -52,28 +49,28 @@ public final class VarkaSlotTable {
   }
 
   /** {@code key}'s slot, or empty if it has none. */
-  public OptionalInt slot(int key) {
+  OptionalInt slot(int key) {
     Integer slot = slots.get(key);
     return slot == null ? OptionalInt.empty() : OptionalInt.of(slot);
   }
 
   /** How many slots are taken: the mark a later {@link #truncate} rolls back to. */
-  public int size() {
+  int size() {
     return keys.size();
   }
 
   /** The key in {@code slot}. */
-  public int keyAt(int slot) {
+  int keyAt(int slot) {
     return keys.get(slot);
   }
 
   /** The keys in slot order. */
-  public List<Integer> keys() {
+  List<Integer> keys() {
     return List.copyOf(keys);
   }
 
   /** Drops the slots from {@code mark} on: what was interned after the table had that size. */
-  public void truncate(int mark) {
+  void truncate(int mark) {
     while (keys.size() > mark) {
       slots.remove(keys.remove(keys.size() - 1));
     }

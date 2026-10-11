@@ -480,7 +480,7 @@ final class VarkaNodeCompiler {
     return columnRef(br, inputs, LaneType.INT);
   }
 
-  /** {@link #columnRef(BoundReference, LinkedHashMap)} on {@code lane}. */
+  /** {@link #columnRef(BoundReference, VarkaSlotTable)} on {@code lane}. */
   static ColumnRef columnRef(
       BoundReference br, VarkaSlotTable inputs, LaneType lane) {
     return new ColumnRef(inputs.intern(br.ordinal()), lane);
