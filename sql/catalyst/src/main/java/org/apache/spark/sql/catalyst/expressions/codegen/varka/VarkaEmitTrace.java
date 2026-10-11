@@ -23,7 +23,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  * halved on bytes, a group split on call sites, the call-site splits rolled back, a driver split
  * into stages, and the exact grouping or the prediction dropped because the class it made would
  * decline. The fuzzers add these up over a run so that a run which never reaches a mechanism is
- * seen rather than passing on shapes too small to test it. See {@code VarkaLoopEmitter.emit}.
+ * seen rather than passing on shapes too small to test it. See {@code VarkaLoopEmitter.SizeLoop}.
  *
  * <p>Under {@code VarkaEmitOptions.planSize} the first build is the plan's, and a reaction to
  * its measurement is a <i>correction</i> of the plan (VARKA-236): counted in the reaction's own

@@ -385,50 +385,143 @@ public final class VarkaLoopEmitter {
     // regroup shrinks and the one whose bytes are known before the class exists: from a table it
     // is its calls alone, a fixed number of bytes a group, so it is built by itself over the
     // first grouping and measured. A driver over the budget is split into stages sized off that
-    // measurement in the first build, where the loop above would build the class whole, measure
+    // measurement in the first build, where the size loop would build the class whole, measure
     // it and build it again; without the split driver it declines before any build, naming the
     // largest prefix of the outputs one class serves, which the compiler cuts the projection at
     // in one step rather than by bisection. The prediction closes each group under the budgets
     // less the fit's margins (VarkaEmitCostTable), so a method it under-predicts still measures
     // within them. The measurement keeps the last word: a reaction to the planned build is a
-    // correction, counted and named in the trace, and anything still over after it runs the loop
-    // above as the last resort, unchanged (`VARKA-236.md` 3).
-    ClassDesc classDesc = ClassDesc.of(className);
-    String source = sourceFile != null
-        ? sourceFile : className.substring(className.lastIndexOf('.') + 1) + ".java";
-    VarkaDebugInfo debugInfo = new VarkaDebugInfo(
-        "outputs=" + VarkaBodyEmitter.renderOutputs(outputs) + ", numInputs=" + numInputs
-            + ", numLiterals=" + numLiterals,
-        planFragment != null ? planFragment : "",
-        VarkaBodyEmitter.renderLineMap(analysis));
-    int budget = options.methodByteBudget();
-    // The call-site budget in force: the option's, until a class its splits produced declines.
-    int siteBudget = options.callSiteBudget();
-    int narrowest = Math.max(1, options.heavyGroupOutputs());
-    boolean siteSplit = false;
-    Set<Integer> forcedStarts = new HashSet<>();
-    // The options the grouping reads: the caller's, with the call-site budget dropped when the
-    // loop drops it, and without the prediction once a class the predicted grouping produced
-    // would decline (see `VARKA-199.md`).
-    VarkaEmitOptions grouping = options;
-    // The exact grouping's runs, priced once per grouping options: between rebuilds only the
-    // forced starts change, and they cut the runs rather than change them.
-    ExactRuns exactRuns = new ExactRuns();
-    // Groups per stage under `splitDriver`, 0 until a build's drivers alone are over the budget.
-    int stageGroups = 0;
-    boolean planned = options.planSize() && budget > 0;
+    // correction, counted and named in the trace, and anything still over after it runs the size
+    // loop as the last resort, unchanged (`VARKA-236.md` 3).
+    //
+    // The loop's state and its steps are SizeLoop's, and the order of its fallbacks is
+    // SizeLoop.fallBack's.
+    return new SizeLoop(className, sourceFile, planFragment, outputs, numInputs, numLiterals,
+        analysis, options, trace).run();
+  }
+
+  /**
+   * One emission's size loop (see the note in {@link #emit}): the class built, measured and built
+   * again until every method fits or the shape declines. A pass groups the outputs, plans the
+   * driver under {@code planSize} ({@link #plan}), builds and measures the class
+   * ({@link #buildAndMeasure}), splits the groups over a limit ({@link #split}), resizes the
+   * driver's stages ({@link #resizeStages}), and otherwise falls back ({@link #fallBack}) or
+   * declines.
+   */
+  private static final class SizeLoop {
+    private final ClassDesc classDesc;
+    private final String source;
+    private final VarkaDebugInfo debugInfo;
+    private final List<VarkaVectorIR> outputs;
+    private final Analysis analysis;
+    private final int numLiterals;
+    private final VarkaEmitOptions options;
+    private final VarkaEmitTrace trace;
+    private final int budget;
+    private final int narrowest;
+    private final boolean planned;
     // Under the plan with the prediction, each group's prediction, so a correction can say what
     // the plan expected of the method it corrects.
-    TallyRecord predictions = planned && options.predictGrouping()
-        ? new TallyRecord(VarkaEmitCostTable.PRICES, new ArrayList<>(), false) : null;
+    private final TallyRecord predictions;
+    // The exact grouping's runs, priced once per grouping options: between rebuilds only the
+    // forced starts change, and they cut the runs rather than change them. Keyed on the identity
+    // of `outputs`, which is why the loop keeps the one list.
+    private final ExactRuns exactRuns = new ExactRuns();
+    // Outputs that begin a group whatever the grouping's rule says: the splits' cuts.
+    private final Set<Integer> forcedStarts = new HashSet<>();
+
+    // The options the grouping reads: the caller's, with the call-site budget dropped when the
+    // loop drops it, and without a grouping switch once a class it produced would decline.
+    private VarkaEmitOptions grouping;
+    // The call-site budget in force: the option's, until a class its splits produced declines.
+    private int siteBudget;
+    // Whether a group has been split on call sites since the grouping last started afresh.
+    private boolean siteSplit;
+    // Groups per stage under `splitDriver`, 0 until a build's drivers alone are over the budget.
+    private int stageGroups;
     // Whether the next grouping starts afresh - the first, and one a rollback or a fallback
     // makes - which is when the plan reads its driver. A regroup adds groups to a driver the plan
     // has read, so the reading is repeated only where those groups could take it over the
-    // budget, by the bytes a group cost in the last reading.
-    boolean afresh = true;
-    int readGroups = 0;
-    int readWidest = 0;
-    while (true) {
+    // budget, by the bytes a group cost in the last reading. The reading survives a fallback.
+    private boolean afresh = true;
+    private int readGroups;
+    private int readWidest;
+    // This emission's builds. The trace's count is the caller's and may span emissions: the
+    // fuzzers add up one trace over a run.
+    private int builds;
+
+    SizeLoop(String className, String sourceFile, String planFragment,
+        List<VarkaVectorIR> outputs, int numInputs, int numLiterals, Analysis analysis,
+        VarkaEmitOptions options, VarkaEmitTrace trace) {
+      this.classDesc = ClassDesc.of(className);
+      this.source = sourceFile != null
+          ? sourceFile : className.substring(className.lastIndexOf('.') + 1) + ".java";
+      this.debugInfo = new VarkaDebugInfo(
+          "outputs=" + VarkaBodyEmitter.renderOutputs(outputs) + ", numInputs=" + numInputs
+              + ", numLiterals=" + numLiterals,
+          planFragment != null ? planFragment : "",
+          VarkaBodyEmitter.renderLineMap(analysis));
+      this.outputs = outputs;
+      this.analysis = analysis;
+      this.numLiterals = numLiterals;
+      this.options = options;
+      this.trace = trace;
+      this.budget = options.methodByteBudget();
+      this.narrowest = Math.max(1, options.heavyGroupOutputs());
+      this.planned = options.planSize() && budget > 0;
+      this.predictions = planned && options.predictGrouping()
+          ? new TallyRecord(VarkaEmitCostTable.PRICES, new ArrayList<>(), false) : null;
+      this.grouping = options;
+      this.siteBudget = options.callSiteBudget();
+    }
+
+    /**
+     * One build: its bytes, null where the Class-File API refused a method; its measurement,
+     * null for a class built without a byte budget; and the limit the measurement is judged
+     * against, the budget or, for a refusal, the cap on a method's code.
+     */
+    private record Build(byte[] bytes, VarkaEmittedClass measured, int limit) {}
+
+    /**
+     * What {@link #split} did: whether it split any group, and the outputs over the limit that
+     * no split shrinks, which close the stage sizes and the grouping switches.
+     */
+    private record Split(boolean any, List<Integer> stuck) {}
+
+    byte[] run() {
+      while (true) {
+        List<List<Integer>> groups = group();
+        plan(groups);
+        Build build = buildAndMeasure(groups);
+        if (budget == 0 && build.bytes() != null) {
+          // Without a byte budget a built class is the answer, unmeasured.
+          return build.bytes();
+        }
+        Split split = split(build, groups);
+        if (split.any()) {
+          continue;
+        }
+        List<Integer> stuck = split.stuck();
+        List<String> findings = overLimits(build.measured(), build.limit());
+        if (findings.isEmpty()) {
+          // Only a built class reaches here: a refusal's one method is over the cap by
+          // construction, so it always has a finding.
+          return build.bytes();
+        }
+        if (stuck.isEmpty() && resizeStages(build, findings, groups.size())) {
+          continue;
+        }
+        if (!fallBack(stuck)) {
+          throw new VarkaEmitDeclined(String.join("; ", findings)
+              + (stuck.isEmpty() ? "" : "; output" + (stuck.size() == 1 ? " " : "s ") + stuck
+                  + " cannot be regrouped smaller"), stuck,
+              planned && stuck.isEmpty()
+                  ? plannedCutOf(build.measured(), build.limit(), budget, groups) : -1);
+        }
+      }
+    }
+
+    private List<List<Integer>> group() {
       if (predictions != null) {
         predictions.tallies().clear();
       }
@@ -438,12 +531,20 @@ public final class VarkaLoopEmitter {
       // unless the option is on and a prefix crosses one, and then the class takes the scratch
       // address as an eighth argument (VARKA-198).
       analysis.planMaterialized(outputs, groups);
+      return groups;
+    }
+
+    /**
+     * The plan: the drivers built alone over {@code groups}, and stages or a cut read off them,
+     * so no build is spent finding a driver over. Read where the grouping starts afresh, or where
+     * the groups a regroup added could take the last reading over the budget.
+     */
+    private void plan(List<List<Integer>> groups) {
       boolean nearBudget = readGroups > 0 && groups.size() > readGroups
           && readWidest + (long) (groups.size() - readGroups) * readWidest / readGroups > budget;
       if (planned && stageGroups == 0 && (afresh || nearBudget) && options.driverOutputTable()) {
-        // The plan: the drivers built alone over this grouping, and stages or a cut read off
-        // them, so no build is spent finding a driver over. `misdescribeDriverBytes` takes bytes
-        // off the reading, for the test of a plan the build corrects.
+        // `misdescribeDriverBytes` takes bytes off the reading, for the test of a plan the build
+        // corrects.
         analysis.stageGroups = 0;
         VarkaEmittedClass driver = driverAlone(classDesc, outputs, analysis, numLiterals, groups);
         int widest = widestDriver(driver) - options.misdescribeDriverBytes();
@@ -466,27 +567,28 @@ public final class VarkaLoopEmitter {
         }
       }
       afresh = false;
+    }
+
+    /** Whether the last build was the plan's, whose reactions are corrections of it. */
+    private boolean correcting() {
+      return planned && builds == 1;
+    }
+
+    private Build buildAndMeasure(List<List<Integer>> groups) {
+      builds++;
       trace.builds++;
-      // Whether this build is the plan's, whose reactions are corrections of it.
-      boolean correcting = planned && trace.builds == 1;
       analysis.stageGroups = stageGroups;
-      byte[] bytes;
-      VarkaEmittedClass measured;
-      int limit = budget;
       try {
-        bytes = build(classDesc, source, debugInfo, outputs, analysis, numLiterals, groups,
-            budget > 0);
-        if (budget == 0) {
-          return bytes;
-        }
-        measured = VarkaEmittedClass.measure(bytes);
+        byte[] bytes = build(classDesc, source, debugInfo, outputs, analysis, numLiterals,
+            groups, budget > 0);
+        return new Build(bytes, budget == 0 ? null : VarkaEmittedClass.measure(bytes), budget);
       } catch (IllegalArgumentException e) {
         // The class-file cap on a method's code is the one limit no measurement of the class
         // can see: the Class-File API enforces it while the class is assembled, after every
         // body is built, so a method over it leaves no class to measure. The refusal is read
         // as the measurement of that one method and judged against the cap - whatever the
         // budget, since the cap is the JVM's and binds the legacy form as well - and the loop
-        // below splits its group or declines exactly as for a measured method over a limit
+        // splits its group or declines exactly as for a measured method over a limit
         // (VARKA-219.md 3.1). The constant pool's cap is enforced the same way and read
         // here too, but no regroup shrinks a pool, so it declines class-wide at once. Any other
         // refusal of the build is not a size and is rethrown.
@@ -498,92 +600,113 @@ public final class VarkaLoopEmitter {
           }
           throw e;
         }
-        measured = refusal.get();
-        bytes = null;
-        limit = METHOD_CODE_CAP;
+        return new Build(null, refusal.get(), METHOD_CODE_CAP);
       }
+    }
+
+    /**
+     * Splits the groups with a method over the build's limit, then those over the call-site
+     * budget. A group over the limit that is a single output is stuck, which closes the
+     * call-site splits too.
+     */
+    private Split split(Build build, List<List<Integer>> groups) {
       List<Integer> stuck = new ArrayList<>();
-      SortedMap<Integer, Map.Entry<String, Integer>> overBytes = groupsOver(measured, limit);
+      SortedMap<Integer, Map.Entry<String, Integer>> overBytes =
+          groupsOver(build.measured(), build.limit());
       boolean split = halveGroups(overBytes.keySet(), groups, 1, forcedStarts, stuck);
       if (split) {
         trace.byteRegroups++;
-        if (correcting) {
-          noteCorrections(trace, overBytes, predictions, limit, true);
+        if (correcting()) {
+          noteCorrections(trace, overBytes, predictions, build.limit(), true);
         }
       }
       // Only a built class has call-site counts: a refusal's measurement is one method's bytes.
-      if (bytes != null && siteBudget > 0 && stuck.isEmpty()) {
+      if (build.bytes() != null && siteBudget > 0 && stuck.isEmpty()) {
         SortedMap<Integer, Map.Entry<String, Integer>> overSites =
-            groupsOverCallSites(measured, siteBudget);
+            groupsOverCallSites(build.measured(), siteBudget);
         if (halveGroups(overSites.keySet(), groups, narrowest, forcedStarts, null)) {
           siteSplit = true;
           split = true;
           trace.siteSplits++;
-          if (correcting) {
+          if (correcting()) {
             noteCorrections(trace, overSites, predictions, siteBudget, false);
           }
         }
       }
-      if (split) {
-        continue;
+      return new Split(split, stuck);
+    }
+
+    /**
+     * Under `splitDriver`, a class whose only methods over the limit are its drivers - the
+     * driver from a table is 20 bytes and 44 a group, so past about 180 groups - is built again
+     * with the calls to its groups moved into stages. The stage size is read off the measured
+     * driver, so one rebuild settles it, and a stage still over is resized off its own
+     * measurement. Stages are sized for the byte budget even where the refusal of a driver past
+     * the class-file cap is what found them over, so the next build fits the budget. Says
+     * whether the stages were resized.
+     */
+    private boolean resizeStages(Build build, List<String> findings, int groupCount) {
+      if (budget == 0 || !options.splitDriver() || !options.driverOutputTable()) {
+        return false;
       }
-      List<String> findings = overLimits(measured, limit);
-      if (findings.isEmpty()) {
-        // Only a built class reaches here: a refusal's one method is over the cap by
-        // construction, so it always has a finding.
-        return bytes;
+      int next = stageSize(build.measured(), build.limit(), budget, findings.size(), groupCount,
+          stageGroups);
+      if (next <= 0) {
+        return false;
       }
-      // Under `splitDriver` a class whose only methods over the limit are its drivers - the
-      // driver from a table is 20 bytes and 44 a group, so past about 180 groups - is built again
-      // with the calls to its groups moved into stages. The stage size is read off the measured
-      // driver, so one rebuild settles it, and a stage still over is resized off its own
-      // measurement. Stages are sized for the byte budget even where the refusal of a driver
-      // past the class-file cap is what found them over, so the next build fits the budget.
-      if (stuck.isEmpty() && budget > 0 && options.splitDriver() && options.driverOutputTable()) {
-        int next = stageSize(measured, limit, budget, findings.size(), groups.size(),
-            stageGroups);
-        if (next > 0) {
-          stageGroups = next;
-          trace.stageSplits++;
-          if (correcting) {
-            trace.corrections.add("the stages: " + String.join("; ", findings) + "; resized to "
-                + next + " groups a stage");
-          }
-          continue;
-        }
+      stageGroups = next;
+      trace.stageSplits++;
+      if (correcting()) {
+        trace.corrections.add("the stages: " + String.join("; ", findings) + "; resized to "
+            + next + " groups a stage");
       }
+      return true;
+    }
+
+    /**
+     * The fallbacks, in their order, for a class still over a limit that no split and no stage
+     * size fixes; false where none is left and the class declines. None may cost a kernel, so
+     * each undoes something that only closes groups, and every group is a call more in the
+     * driver, so each can be what pushed the driver past the byte budget:
+     *
+     * <ol>
+     *   <li>the call-site splits rolled back, the grouping kept without the call-site budget;
+     *   <li>the exact grouping dropped, keeping the prediction's grouping;
+     *   <li>the prediction dropped, which leaves the emission the switches-off emitter makes.
+     * </ol>
+     *
+     * A grouping switch is not dropped for outputs no regroup shrinks ({@code stuck}): no
+     * grouping changes that decline. A switch dropped starts from the caller's options, so the
+     * call-site budget is back and a later grouping may split on it and roll back again.
+     */
+    private boolean fallBack(List<Integer> stuck) {
       if (siteSplit) {
         trace.siteRollbacks++;
-        siteBudget = 0;
-        siteSplit = false;
-        forcedStarts.clear();
-        // A new grouping: its stages are sized again from its own driver.
-        stageGroups = 0;
-        afresh = true;
         // The prediction closes groups on call sites too, so it drops the budget with the loop.
         grouping = grouping.withCallSiteBudget(0);
-        continue;
-      }
-      // The grouping switches close groups the greedy weights would not: the exact grouping may
-      // take a group more where that saves ops, and the prediction closes groups on its budgets.
-      // Every group is a call more in the driver, so either can push the driver past the byte
-      // budget. Like the call-site splits above, neither may cost a kernel, so each is dropped in
-      // turn - the exact grouping first, keeping the prediction's grouping, then the prediction,
-      // which leaves the emission the switches-off emitter makes, decline or not. A decline that
-      // names a single output over the budget is left alone: no grouping changes it.
-      if (grouping.exactGrouping() && stuck.isEmpty()) {
-        grouping = options.withExactGrouping(false);
+        siteBudget = 0;
+      } else if (stuck.isEmpty() && grouping.exactGrouping()) {
         trace.exactFallbacks++;
-      } else if (grouping.predictGrouping() && stuck.isEmpty()) {
-        grouping = options.withPredictGrouping(false).withExactGrouping(false);
+        regroupFrom(options.withExactGrouping(false));
+      } else if (stuck.isEmpty() && grouping.predictGrouping()) {
         trace.predictFallbacks++;
+        regroupFrom(options.withPredictGrouping(false).withExactGrouping(false));
       } else {
-        throw new VarkaEmitDeclined(String.join("; ", findings)
-            + (stuck.isEmpty() ? "" : "; output" + (stuck.size() == 1 ? " " : "s ") + stuck
-                + " cannot be regrouped smaller"), stuck,
-            planned && stuck.isEmpty() ? plannedCutOf(measured, limit, budget, groups) : -1);
+        return false;
       }
+      startAfresh();
+      return true;
+    }
+
+    /** A grouping switch dropped: {@code next}, the caller's options, call-site budget and all. */
+    private void regroupFrom(VarkaEmitOptions next) {
+      grouping = next;
       siteBudget = options.callSiteBudget();
+    }
+
+    /** A new grouping: no splits yet, and its stages sized again from its own driver. */
+    private void startAfresh() {
+      siteSplit = false;
       forcedStarts.clear();
       stageGroups = 0;
       afresh = true;
@@ -667,7 +790,8 @@ public final class VarkaLoopEmitter {
    * under {@code planSize}: the two driver methods and nothing else, so their calls name methods
    * the class does not have, which the Class-File API does not mind. From a table the driver's
    * code is its calls, so what is measured here is what the full class's driver measures, and
-   * a driver past the class-file cap is read from the refusal as {@link #emit} reads one.
+   * a driver past the class-file cap is read from the refusal as
+   * {@link SizeLoop#buildAndMeasure} reads one.
    */
   private static VarkaEmittedClass driverAlone(ClassDesc classDesc, List<VarkaVectorIR> outputs,
       Analysis analysis, int numLiterals, List<List<Integer>> groups) {
@@ -1037,7 +1161,7 @@ public final class VarkaLoopEmitter {
 
   /**
    * As above, with {@code forcedStarts}: outputs that begin a new group whatever the weights
-   * say. The byte-budget regroup in {@link #emit} adds the middle output of a group whose
+   * say. The byte-budget regroup ({@link SizeLoop#split}) adds the middle output of a group whose
    * methods measured over the budget, so the split halves a group and never reorders one.
    * {@code record}, null but in the suites, collects each group's tally; {@code exactRuns}
    * keeps the exact grouping's runs between calls with the same options.
