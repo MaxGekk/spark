@@ -274,11 +274,24 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
    * which it acts (`VarkaEmitOption.Subject`, VARKA-247): `validityOrFirst` orders a per-group
    * validity OR the defaults do not emit, so at the defaults its two values are one emission and
    * a pin there would say nothing.
+   *
+   * And two reference forms no session selects, whose frames span the kernel rather than one
+   * group (VARKA-306): `groupLocalSlots=false`, which plans every method's slots over the whole
+   * kernel, and a byte budget of 0, whose single epilogue serves every output. A slot rule that
+   * holds per body can still move their bytes, and once did unseen: VARKA-83's first scratch rule
+   * moved 23 of 64 multi-group guarded cases in exactly these two (`VARKA-83.md` 9.1). The int
+   * fuzz shapes below catch that rule in both arms at both widths.
    */
   private def pinnedArms: Seq[(String, VarkaEmitOptions => VarkaEmitOptions)] =
     Seq(VarkaEmitOptions.USE_AVX_UNKNOWN, 0, 1, 2, 3).map { level =>
       s"useAVX=$level" -> ((o: VarkaEmitOptions) => o.withUseAVX(level))
-    } ++ subjectArms
+    } ++ subjectArms ++ referenceArms
+
+  /** The reference forms whose frames span the kernel, pinned beside the selectable arms. */
+  private def referenceArms: Seq[(String, VarkaEmitOptions => VarkaEmitOptions)] = Seq(
+    "groupLocalSlots=false" -> ((o: VarkaEmitOptions) =>
+      o.toBuilder().groupLocalSlots(false).build()),
+    "methodByteBudget=0" -> ((o: VarkaEmitOptions) => o.withMethodByteBudget(0)))
 
   /** The arms of every flag whose subject is not the defaults, applied over that subject. */
   private def subjectArms: Seq[(String, VarkaEmitOptions => VarkaEmitOptions)] =
@@ -364,8 +377,10 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
         "can select rather than only the defaults: one digest over every shape at each width " +
         "per value of spark.sql.codegen.varka.emit.useAVX, the only emit option a " +
         "configuration reaches, and per value of each option the defaults never reach, over " +
-        "the options under which it acts (validityOrFirst). The rest of VarkaEmitOptions is " +
-        "test-only."),
+        "the options under which it acts (validityOrFirst); and per reference form whose " +
+        "frames span the kernel (groupLocalSlots=false, methodByteBudget=0), which no session " +
+        "selects but where a per-body slot rule can move bytes unseen. The rest of " +
+        "VarkaEmitOptions is test-only."),
       "coverage_rows_skipped" -> skipped.asJava,
       "lanes" -> ordered(perWidth: _*),
       "option_arms" -> armHashes)
@@ -444,6 +459,20 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
               if (bb != null && bb.size > ab.size) {
                 moved += s"lanes $lanes: ${bb.size - ab.size} committed $sequence block(s) gone"
               }
+            }
+          }
+        }
+        // The option arms: one digest per arm and width, so what moved is the arm's name. An
+        // arm's digest covers every shape, so the fuzz blocks above say which shapes only for
+        // the defaults (VARKA-306).
+        val bArms = before.get("option_arms")
+        val aArms = after.get("option_arms")
+        (keysOf(bArms) -- keysOf(aArms)).foreach(arm => moved += s"option arm gone $arm")
+        (keysOf(aArms) -- keysOf(bArms)).foreach(arm => moved += s"new option arm $arm")
+        (keysOf(aArms) intersect keysOf(bArms)).foreach { arm =>
+          widths.foreach { lanes =>
+            if (hashOf(bArms.get(arm), lanes.toString) != hashOf(aArms.get(arm), lanes.toString)) {
+              moved += s"lanes $lanes: option arm $arm"
             }
           }
         }

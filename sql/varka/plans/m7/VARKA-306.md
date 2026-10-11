@@ -100,3 +100,25 @@ The suite's time, from the gate's report before and after. No benchmark.
 
 1. This plan; row 306 marked Planned.
 2. The arms and the regenerated file, in one commit.
+
+## 9. Outcome
+
+Done on 11 October 2026, as 3.1 describes, and one change the plan did not list.
+
+* **The 9.1 regression, reintroduced, fails the suite.** With the first version's rule in
+  `Slots.guardScratch`, the suite reports `option arm groupLocalSlots=false` and
+  `option arm methodByteBudget=0`, each at both widths, and nothing else. Reverted, it passes.
+* **The failure names a moved arm.** Not in the plan: the suite's failure report compared the
+  coverage hashes and the fuzz blocks but never `option_arms`, so the first run of the proof
+  failed with "no hash differs; the file's other content or its formatting changed". The report
+  now walks the arms, by name and width, gone and new included.
+* **`emitted_bytes.json` changed by the four digests and its description's sentence**, nothing
+  else.
+* **The gate passes**: every Varka suite at both widths, and lint.
+
+**Predictions scored (6.1).**
+
+1. **Held.** Run alone, the pinning test took 2 minutes 4 seconds with the two arms and 1 minute
+   43 seconds without them, 21 seconds more. The gate's own report is no measure of it: the
+   suite ran in a different shard beside different suites from the last gate's.
+2. **Held**: both new arms at both widths, and no existing pin.
