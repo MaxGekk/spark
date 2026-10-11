@@ -4921,6 +4921,45 @@ intrinsics, and no shape outside the corpus. Item 59's specification, rows 243 t
 reference semantics would be stated against once it lands; until then it is the reference
 evaluator, which row 276 holds to Spark's interpreter.
 
+### Item 91. Bit-sliced columns in the Arrow cache, for filters, measured against Varka's own scan
+
+*Added on 11 October 2026 from the owner's reading of Mathiyazhagan, "Direct-Operable SIMD
+Bit-Slicing: A Framework for Memory-Efficient Predicate Evaluation" (arXiv 2608.26368v1, 2026). A
+step becomes a row when a milestone takes the item.*
+
+**The idea.** A column stored as bit-planes - plane *j* holds bit *j* of every value, the width
+chosen per block after subtracting the block's minimum - and `=`, `<`, `>`, `BETWEEN` and `IN`
+evaluated on the planes with Vector API `and`, `or` and `not`, most significant plane first, into a
+selection bitmap, without decoding a value (O'Neil and Quass's bit-sliced index as the stored form).
+The paper reports 3 to 11 times a scalar scan on narrow integer columns and memory in proportion to
+the bit width.
+
+**What the record already has.** Subtracting the bias from the constant rather than the data and
+folding an out-of-range literal to a constant mask (SIMD-Scan, 2.64 C); frame-of-reference with
+bit-packing for date columns in the cache, unpacked straight into lanes (item 7); dictionary codes
+compared as ints (item 89 and 2.64); a selection bitmap as the filter's output, which Varka's filter
+kernels already write. The bit-plane layout itself is the new part.
+
+**Why it is not a speedup on the record's terms yet.** Every number in the paper is against a
+branchy scalar loop over `int[]`, never against a vector compare over `int[]`, which is what a Varka
+kernel is. A vertical compare covers W/32 values an instruction and a bit-sliced `>` about three
+operations a plane over W values, so on compute alone the planes lead below about ten bits a value,
+and past that only on memory bandwidth; the paper's own 26-bit column is 3.4 times its scalar loop,
+and its long equality 0.5 times. Encoding, excluded from its timings, is recovered after 7 to 25
+scans, so the layout pays only where a batch is scanned repeatedly: the Arrow cache
+(`ArrowCachedBatchSerializer`), not a Parquet read. And it serves filters only: a projection needs
+the value, which costs a load a plane to rebuild, the byte-slicing verdict of 2.64 C at its extreme.
+The paper's IEEE 754 order-preserving transform for doubles orders -0.0 below 0.0 and NaNs by
+payload, so a column would have to be normalized when it is encoded for `x = 0.0` and NaN to compare
+as SQL and Spark say.
+
+**What to do, and done when.** A measurement before any design: Varka's vector compare and a
+bit-sliced `>` and `BETWEEN` (planes held in registers, an early stop on an all-zero running equal
+word) over a cached-size date column spanning five years, about 11 bits after the bias, at both
+vector widths and at two working sets, one in the last-level cache and one past it. Done when the
+numbers are committed and this item says whether a bit-sliced cache form for filter-only columns
+is worth a design beside item 7's bit-packing.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
