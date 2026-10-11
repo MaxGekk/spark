@@ -152,3 +152,52 @@ on the idle laptop.
 1. This plan; row 305 marked Planned.
 2. The families off the Scala types.
 3. The classifier to Java, with the measurement and the outcome.
+
+## 9. Outcome
+
+Done on 11 October 2026, in the two commits of 2. The second touches 31 files, under 300a's 35,
+so the pull request was not cut again.
+
+**The oracle.** The fusion dump is byte-identical to the base's (4,436 lines) after each commit,
+and `coverage.json` and `emitted_bytes.json` do not move.
+
+**Compile time.** `dev/varka_bench_pair.sh catalyst VarkaCompileBenchmark` against
+`bc8c96fc871`, five interleaved rounds a side, medians; the change is in time per compile, less
+is faster:
+
+| shape (one compile) | change |
+|---|---:|
+| a wide projection of 60 mixed outputs | -4.3% |
+| conditionals: IF, coalesce, greatest, CASE WHEN of 6 branches | -7.6% |
+| TIME: hour, minute, second | -10.8% |
+| calendar: year, month, make_date, add_months, last_day, weekofyear | -12.7% |
+| predicate: a set of three date ranges | -13.8% |
+| predicate: NOT, OR and IS NULL over two dates | -14.6% |
+| predicate: IN over eight dates | -15.0% |
+| predicate: a range, IS NOT NULL and an int comparison | -25.4% |
+
+The committed files are regenerated from the port (`VarkaCompileBenchmark-jdk25-results.txt`
+and its 128-bit companion). Against the files they replace, which 217's port wrote, the single
+runs agree at 128 bits, where every shape takes 4.7 to 22.0% less. At full width six shapes take
+1.0 to 17.3% less, and calendar and TIME read 4.6 and 3.8% slower (8763 to 9162 ns, 9019 to
+9366 ns): single-run differences against an older build, which the interleaved pair, at the
+same moment on the same machine, reads as 12.7 and 10.8% faster. The pair is the measurement.
+
+Why the small shapes gain more than the wide one was not measured. The port removes the
+classifier's `Option`, tuple and closure allocations per entry and the tables' walks, and a small
+shape spends a larger share of its compile in the classifier than in the emitter; that is the
+likely reading, not a verified one.
+
+**Predictions scored.**
+
+1. **Held.** The dump is byte-identical after each commit.
+2. **Wrong, in the favourable direction.** The 60-output projection is no slower (4.3% faster),
+   but "within 5% on every shape" does not hold: six of the eight take 10 to 25% less. The
+   prediction located the gain in the slot table's walks, which only the wide shape has enough
+   entries to show; the largest gains are on the smallest shapes instead.
+3. **Held.** The Java classifier, `VarkaSizeAdmission` and `VarkaSlotTable` are 1,131 lines
+   without license headers against the Scala classifier's 787 at `bc8c96fc871` (803 with it),
+   1.44 times.
+
+**What the port is.** The facade has no Scala left: every Varka compile entry point is a static
+method of a Java class, and its results are `Optional`, records, `List` and `Map`.
