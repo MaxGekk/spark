@@ -147,3 +147,46 @@ The gate's lint step's time before and after.
 3. The fixes: Error Prone clean, the small classes out of the pending list, the boundary
    annotated; and the gate's lint step.
 4. The outcome.
+
+## 9. Outcome
+
+Done on 11 October 2026, in two commits after the plan.
+
+**Error Prone, clean.** The pass is green with `-Werror` over the 89 files. Of the 50 findings left
+with `ImmutableEnumChecker` off, the mechanical ones are fixed (links, unused locals and
+parameters, the casts, `removeLast`, the switch), and the intended ones suppressed at the site
+with a reason: nine `ReferenceEquality` identities, three records holding arrays on purpose,
+`BadImport` on the options table's `Builder`, the sneaky-throw idiom. `VarkaDerivedInput.key`
+reads an explicit code per `VarkaDerivedKind` instead of its ordinal. The fusion dump is
+byte-identical to master's and `emitted_bytes.json` is unchanged.
+
+**NullAway, staged.** 37 classes pending, from 45: `VarkaExecMetrics`, the six JFR events and
+`VarkaExpressionCompiler` state their nullable fields with `javax.annotation.Nullable` and are
+checked.
+
+**The checks bite.** A class added to the pending list, a `@SuppressWarnings` without a reason
+and a null dereference in a checked class each fail the pass.
+
+**In the gate.** The lint step took 240 seconds, the pass 25 of them (7 alone on the idle
+laptop).
+
+**Predictions scored.**
+
+1. **Held.** Green with `-Werror`.
+2. **Wrong.** The pending list started at 45 classes, not 25 or fewer, and this row takes it to
+   37; the check that fails an added class holds.
+3. **Held.** The pass adds 25 seconds to the lint step.
+
+**Corrections to this plan, which is a record and is not rewritten:**
+
+* 2 says NullAway's 336 warnings fall in 28 classes; they fall in 45. The count was read off a
+  listing cut at twenty lines.
+* 8 puts the pass and its fixes in separate commits, the first green by listing alone. It could
+  not be: under `-Werror` javac stops at the first warning, and an Error Prone finding cannot be
+  listed the way a NullAway class can, so the pass and the fixes are one commit.
+* 3.4's check first accepted the `*/` of a Javadoc above an annotation as its reason, and passed a
+  planted bare suppression. It now requires a `//` line comment, which caught two real
+  suppressions whose reasons sat only in Javadoc.
+* 3.5's boundary needed less than it planned: Scala passes the evaluators `Option`s, not nulls,
+  and the facade returns `Optional`; what it took was `VarkaExecMetrics`' nullable metrics and the
+  facade's own class out of the pending list.
