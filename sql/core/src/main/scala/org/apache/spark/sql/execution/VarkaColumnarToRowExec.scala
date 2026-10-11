@@ -30,6 +30,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.{Forwar
   FusedOutput, KernelOutput, ResidualOutput}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.util.{CompletionIterator, Utils}
 
@@ -88,7 +89,8 @@ private[sql] trait VarkaFusedTransition extends ColumnarToRowTransition {
  */
 case class VarkaColumnarToRowExec(
     projectList: Seq[NamedExpression],
-    child: SparkPlan)
+    child: SparkPlan,
+    sessionEmit: VarkaSessionEmit = VarkaSessionEmit.of(SQLConf.get))
     extends VarkaFusedTransition
     with SafeForKWayMerge
     with PartitioningPreservingUnaryExecNode
@@ -96,7 +98,14 @@ case class VarkaColumnarToRowExec(
 
   override def output: Seq[Attribute] = projectList.map(_.toAttribute)
 
-  override def columnarSibling: SparkPlan = VarkaProjectExec(projectList, child)
+  // The session's emit settings are a constructor field so that Spark's copies keep them: bound
+  // when the rule built the node, used by the planning-time classification and by the tasks
+  // alike, and never re-read from the conf as it stands when the plan runs. Not shown in the
+  // plan string, where they would be noise.
+  override protected def stringArgs: Iterator[Any] =
+    super.stringArgs.filterNot(_.isInstanceOf[VarkaSessionEmit])
+
+  override def columnarSibling: SparkPlan = VarkaProjectExec(projectList, child, sessionEmit)
 
   // This node is a projection: it renames and drops columns, so it cannot report the child's
   // partitioning and ordering verbatim the way `ColumnarToRowExec` does. The two alias-aware
@@ -117,7 +126,7 @@ case class VarkaColumnarToRowExec(
   // (task-21 review: the node used to re-run the same pure compile per consumer).
   @transient private lazy val classification =
     VarkaExpressionCompiler.compilePartial(projectList, child.output,
-      VarkaColumnarToRowExec.emitOptions(VarkaSessionEmit.of(conf)))
+      VarkaColumnarToRowExec.emitOptions(sessionEmit))
 
   // verbose EXPLAIN answers "why didn't my projection fuse?" - every entry's
   // classification, and for a residual entry the reason the compiler declined it.
@@ -150,7 +159,7 @@ case class VarkaColumnarToRowExec(
       longMetric("numOutputRows"),
       longMetric("numInputBatches"),
       varkaMetrics,
-      sessionEmit = VarkaSessionEmit.of(conf),
+      sessionEmit = sessionEmit,
       warmupEnabled = conf.varkaWarmupEnabled)
     if (conf.usePartitionEvaluator) {
       child.executeColumnar().mapPartitionsWithEvaluator(evaluatorFactory)
@@ -238,8 +247,8 @@ private[sql] object VarkaColumnarToRowExec {
   // observable difference is a metric - through the real evaluator. The options ride the shape
   // key, so a variant is cached under its own identity and nothing has to be flushed
   // when the hook is reset. Same discipline as the three above: static because Spark runs
-  // tasks on other threads, reset in a finally block, and here rather than a SQLConf entry so
-  // the production configuration surface stays free of emitter knobs.
+  // tasks on other threads, and reset in a finally block. It reaches every option; the few a
+  // session may set are SQLConf entries laid over it (VarkaSessionEmit), so the two compose.
   @volatile private var emitOptionsForTesting: VarkaEmitOptions = VarkaEmitOptions.DEFAULTS
 
   private[sql] def setEmitOptionsForTesting(options: VarkaEmitOptions): Unit = {

@@ -30,6 +30,7 @@ import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.util.ArrayImplicits._
@@ -58,6 +59,17 @@ private[sql] trait VarkaFilterExecBase extends UnaryExecNode with PredicateHelpe
   /** The filter's whole condition when the rule split residual conjuncts off it. */
   def wholeCondition: Option[Expression]
 
+  /**
+   * The session's emit settings, bound when the rule built the node (a constructor field, so
+   * Spark's copies keep it): the planning-time classification and the tasks both use these, never
+   * the conf as it stands when the plan runs, so the two cannot split the condition differently.
+   */
+  def sessionEmit: VarkaSessionEmit
+
+  // The settings are an implementation detail of the node, not an argument a plan reader needs.
+  override protected def stringArgs: Iterator[Any] =
+    super.stringArgs.filterNot(_.isInstanceOf[VarkaSessionEmit])
+
   // Split out all the IsNotNulls from condition, exactly as FilterExec does.
   private lazy val notNullPreds = splitConjunctivePredicates(condition).filter {
     case IsNotNull(a) => isNullIntolerant(a) && a.references.subsetOf(child.outputSet)
@@ -82,7 +94,7 @@ private[sql] trait VarkaFilterExecBase extends UnaryExecNode with PredicateHelpe
   // parity with the projection nodes' memoized classification).
   @transient private lazy val fusionLines =
     VarkaFusionReport.predicateLines(condition, child.output,
-      VarkaColumnarToRowExec.emitOptions(VarkaSessionEmit.of(conf)))
+      VarkaColumnarToRowExec.emitOptions(sessionEmit))
 
   // The question for a filter is "why didn't my predicate fuse?", answered per conjunct.
   // The condition renders as FilterExec renders its own - a plain line, because
@@ -119,7 +131,8 @@ private[sql] trait VarkaFilterExecBase extends UnaryExecNode with PredicateHelpe
 case class VarkaFilterExec(
     condition: Expression,
     child: SparkPlan,
-    wholeCondition: Option[Expression] = None)
+    wholeCondition: Option[Expression] = None,
+    sessionEmit: VarkaSessionEmit = VarkaSessionEmit.of(SQLConf.get))
     extends VarkaFilterExecBase
     with SafeForKWayMerge {
 
@@ -150,7 +163,7 @@ case class VarkaFilterExec(
       longMetric("numOutputRows"),
       longMetric("numInputBatches"),
       VarkaExecMetrics.fromNode(longMetric),
-      sessionEmit = VarkaSessionEmit.of(conf),
+      sessionEmit = sessionEmit,
       warmupEnabled = conf.varkaWarmupEnabled,
       wholeCondition = wholeCondition)
     if (conf.usePartitionEvaluator) {
@@ -329,7 +342,8 @@ case class VarkaFilterColumnarToRowExec(
     condition: Expression,
     child: SparkPlan,
     narrowing: Option[Seq[NamedExpression]] = None,
-    wholeCondition: Option[Expression] = None)
+    wholeCondition: Option[Expression] = None,
+    sessionEmit: VarkaSessionEmit = VarkaSessionEmit.of(SQLConf.get))
     extends VarkaFilterExecBase
     with VarkaFusedTransition
     with SafeForKWayMerge {
@@ -346,8 +360,8 @@ case class VarkaFilterColumnarToRowExec(
    * computes" rather than "the kernels this transition runs".
    */
   override def columnarSibling: SparkPlan = {
-    val filter = VarkaFilterExec(condition, child, wholeCondition)
-    narrowing.map(VarkaProjectExec(_, filter)).getOrElse(filter)
+    val filter = VarkaFilterExec(condition, child, wholeCondition, sessionEmit)
+    narrowing.map(VarkaProjectExec(_, filter, sessionEmit)).getOrElse(filter)
   }
 
   override protected def withNewChildInternal(newChild: SparkPlan): VarkaFilterColumnarToRowExec = {
@@ -368,7 +382,7 @@ case class VarkaFilterColumnarToRowExec(
       longMetric("numOutputRows"),
       longMetric("numInputBatches"),
       VarkaExecMetrics.fromNode(longMetric),
-      sessionEmit = VarkaSessionEmit.of(conf),
+      sessionEmit = sessionEmit,
       warmupEnabled = conf.varkaWarmupEnabled,
       wholeCondition = wholeCondition)
     if (conf.usePartitionEvaluator) {

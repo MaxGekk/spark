@@ -3087,15 +3087,18 @@ object SQLConf {
       .doc("Whether a Varka kernel method that holds guards of several refusal reasons gives each" +
         " reason its own mask, so that a batch it declines reports exactly the reasons that" +
         " fired. Off, such a method reports every reason it holds, a candidate set, and keeps" +
-        " one mask in its loop. A diagnostic: it never changes an answer or whether a batch is" +
-        " declined. The setting is part of the shape hash, so a session that sets it emits and" +
+        " one mask in its loop. Unset, the emitter's own setting, which is off. A diagnostic:" +
+        " it never changes an answer, but the extra masks add bytes to a method, so in a" +
+        " projection near the emitter's byte budget an entry can fall back to the row engine" +
+        " that fuses with the setting off, and its guards with it; the verbose EXPLAIN says" +
+        " which. The setting is part of the shape hash, so a session that sets it emits and" +
         " caches its own classes.")
       .version("5.0.0")
       // A diagnostic of the emitted code: it changes what a declined batch reports, never what
       // a view body resolves to.
       .withBindingPolicy(ConfigBindingPolicy.NOT_APPLICABLE)
       .booleanConf
-      .createWithDefault(false)
+      .createOptional
 
   val VARKA_WARMUP_ENABLED = buildConf("spark.sql.codegen.varka.warmup.enabled")
     .internal()
@@ -9442,7 +9445,7 @@ class SQLConf extends Serializable with Logging with SqlApiConf {
 
   def varkaEmitUseAVX: Int = getConf(VARKA_EMIT_USE_AVX)
 
-  def varkaEmitExactRefusalStatus: Boolean = getConf(VARKA_EMIT_EXACT_REFUSAL_STATUS)
+  def varkaEmitExactRefusalStatus: Option[Boolean] = getConf(VARKA_EMIT_EXACT_REFUSAL_STATUS)
 
   def varkaWarmupEnabled: Boolean = getConf(VARKA_WARMUP_ENABLED)
 

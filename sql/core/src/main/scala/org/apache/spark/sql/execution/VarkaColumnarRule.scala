@@ -102,15 +102,15 @@ object VarkaColumnarRule extends ColumnarRule with Logging {
         // boundary without compacting first - so the pre-stage case above adds a columnar
         // route and changes no row-consumer plan. It runs before the general arm below,
         // which would otherwise leave the compacting filter in the tree.
-        case ColumnarToRowExec(VarkaProjectExec(projectList, filter: VarkaFilterExec))
+        case ColumnarToRowExec(VarkaProjectExec(projectList, filter: VarkaFilterExec, _))
             if isForwardedNarrowing(projectList, filter.output) =>
           VarkaFilterColumnarToRowExec(filter.condition, filter.child, Some(projectList),
-            filter.wholeCondition)
+            filter.wholeCondition, filter.sessionEmit)
         case ColumnarToRowExec(varka: VarkaProjectExec) =>
-          VarkaColumnarToRowExec(varka.projectList, varka.child)
+          VarkaColumnarToRowExec(varka.projectList, varka.child, varka.sessionEmit)
         case ColumnarToRowExec(varka: VarkaFilterExec) =>
           VarkaFilterColumnarToRowExec(varka.condition, varka.child,
-            wholeCondition = varka.wholeCondition)
+            wholeCondition = varka.wholeCondition, sessionEmit = varka.sessionEmit)
         case project @ ProjectExec(projectList, child)
             if isVarkaEligible(projectList, child.output) =>
           val columnarChild = child match {

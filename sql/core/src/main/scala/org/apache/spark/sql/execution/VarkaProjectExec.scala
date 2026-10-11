@@ -29,6 +29,7 @@ import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, NamedExpress
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.util.ArrayImplicits._
 
@@ -57,13 +58,21 @@ import org.apache.spark.util.ArrayImplicits._
  */
 case class VarkaProjectExec(
     projectList: Seq[NamedExpression],
-    child: SparkPlan)
+    child: SparkPlan,
+    sessionEmit: VarkaSessionEmit = VarkaSessionEmit.of(SQLConf.get))
     extends UnaryExecNode
     with SafeForKWayMerge
     with PartitioningPreservingUnaryExecNode
     with OrderPreservingUnaryExecNode {
 
   override def output: Seq[Attribute] = projectList.map(_.toAttribute)
+
+  // The session's emit settings are a constructor field so that Spark's copies keep them: bound
+  // when the rule built the node, used by the planning-time classification and by the tasks
+  // alike, and never re-read from the conf as it stands when the plan runs. Not shown in the
+  // plan string, where they would be noise.
+  override protected def stringArgs: Iterator[Any] =
+    super.stringArgs.filterNot(_.isInstanceOf[VarkaSessionEmit])
 
   override def supportsColumnar: Boolean = true
 
@@ -84,7 +93,7 @@ case class VarkaProjectExec(
   // (task-21 review: the node used to re-run the same pure compile per consumer).
   @transient private lazy val classification =
     VarkaExpressionCompiler.compilePartial(projectList, child.output,
-      VarkaColumnarToRowExec.emitOptions(VarkaSessionEmit.of(conf)))
+      VarkaColumnarToRowExec.emitOptions(sessionEmit))
 
   // verbose EXPLAIN answers "why didn't my projection fuse?" - every entry's
   // classification, and for a residual entry the reason the compiler declined it.
@@ -124,7 +133,7 @@ case class VarkaProjectExec(
       longMetric("numOutputRows"),
       longMetric("numInputBatches"),
       varkaMetrics,
-      sessionEmit = VarkaSessionEmit.of(conf),
+      sessionEmit = sessionEmit,
       warmupEnabled = conf.varkaWarmupEnabled)
     if (conf.usePartitionEvaluator) {
       child.executeColumnar().mapPartitionsWithEvaluator(evaluatorFactory)

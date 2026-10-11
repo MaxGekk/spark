@@ -290,16 +290,16 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession with Varka
     // wraps to -2, which leaves the day in range, so only the overflow guard fires; the row
     // engine raises, and the declined batch's status is read off the JFR fallback event the
     // evaluator emits first, as the interval test above reads its cause.
-    def status(exact: Boolean): Int = {
+    def build(): VarkaProjectExec = node(
+      project(Alias(Year(DateAdd(attrD, Add(intAttr, intAttr, EvalMode.ANSI))), "y")()),
+      Seq(BatchSpec("arrow", Seq(Seq(Int.box(1), Int.box(2)),
+        Seq(Int.box(Int.MaxValue), Int.box(3))))),
+      Seq(attrD, intAttr))
+    def withExact[T](exact: Boolean)(body: => T): T =
+      withSQLConf(SQLConf.VARKA_EMIT_EXACT_REFUSAL_STATUS.key -> exact.toString)(body)
+    def run(plan: VarkaProjectExec): Int = {
       val (_, recorded) = VarkaJfrTestSupport.withJfrRecording(classOf[VarkaFallbackEvent]) {
-        withSQLConf(SQLConf.VARKA_EMIT_EXACT_REFUSAL_STATUS.key -> exact.toString) {
-          val plan = node(
-            project(Alias(Year(DateAdd(attrD, Add(intAttr, intAttr, EvalMode.ANSI))), "y")()),
-            Seq(BatchSpec("arrow", Seq(Seq(Int.box(1), Int.box(2)),
-              Seq(Int.box(Int.MaxValue), Int.box(3))))),
-            Seq(attrD, intAttr))
-          intercept[SparkArithmeticException](values(plan))
-        }
+        intercept[SparkArithmeticException](values(plan))
       }
       val statuses = recorded
         .filter(VarkaJfrTestSupport.isEvent(_, classOf[VarkaFallbackEvent]))
@@ -309,10 +309,15 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession with Varka
       statuses.head
     }
     val overflow = VarkaFusedKernel.STATUS_INT_OVERFLOW
-    val candidates = status(exact = false)
+    // An explicit false, so a test hook that a suite earlier in this JVM left on cannot decide it.
+    val candidates = withExact(exact = false)(run(build()))
     assert((candidates & overflow) != 0 && Integer.bitCount(candidates) > 1,
       s"status ${VarkaFallbackAccounting.describeStatus(candidates)}")
-    assert(status(exact = true) === overflow)
+    assert(withExact(exact = true)(run(build())) === overflow)
+    // The setting is bound when the node is built: a plan built with it on and run after the conf
+    // is gone still emits the exact masks, as a plan the session executes again would.
+    val planned = withExact(exact = true)(build())
+    assert(withExact(exact = false)(run(planned)) === overflow)
   }
 
   test("verbose EXPLAIN accounts for every entry, with the residual entry's reason") {

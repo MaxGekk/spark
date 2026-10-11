@@ -127,3 +127,29 @@ off the JFR `Fallback` event, is 9 (`DAY_PRODUCER | INT_OVERFLOW`) with the conf
 **The checks.** `SparkConfigBindingPolicySuite` passes with the new conf. The gate passes; its
 first lint run caught two imports of `VarkaEmitOptions` the threading left unused in the
 evaluators.
+
+**Review (11 October 2026).** A `/code-review` found nine points, all taken:
+
+* The settings were not bound once, as the record's documentation and section 3 said:
+  `doExecute` read the session's conf again, so a plan executed again after the conf changed
+  could classify the projection with one set of options at planning and emit it with another in
+  the task. Each Varka exec node now holds its `VarkaSessionEmit` as a constructor field, read
+  from the conf when the columnar rule builds the node and kept by Spark's copies, and both the
+  planning-time classification and the tasks read that field. The end-to-end test checks it: a
+  node built with the conf on and run with it off still emits the exact masks.
+* `apply` could only turn a setting on, so a session's `false` could not override a test hook left
+  on by a suite earlier in the same JVM, and the new test failed under the option matrix's
+  `exactRefusalStatus=true` configuration depending on suite order. The conf is now optional:
+  unset leaves the base options, set (`false` included) overrides them, and the test sets `false`
+  explicitly.
+* The conf's documentation said the option never changes whether a batch is declined; its extra
+  masks add bytes, so near the byte budget an entry can fall back where it fused without them. The
+  documentation now says so.
+* The record checks `useAVX >= -1` in its compact constructor; the evaluator derives its options
+  once in its constructor and `apply` uses one builder; two comments that called `useAVX` the one
+  production knob, and the hook the alternative to a SQLConf entry, are corrected.
+
+Corrections to this plan, which is a record and is not rewritten: 5 says the end-to-end test
+covers the rule's path from plan to task; it builds the exec node directly, so the rule's own
+eligibility and filter rewrite are not run under the conf. 4's files table puts the record test in
+`VarkaKernelEvaluatorSuite`; it is in `VarkaEvaluatorComponentsSuite`.
