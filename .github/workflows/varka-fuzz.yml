@@ -162,11 +162,12 @@ jobs:
   series:
     name: Every small tree, size 5
     # VARKA-269: every IR tree of five grammar productions through the emitter against the
-    # reference evaluator, 3.16 million int trees and the long lane's; the pull request's gate
-    # runs sizes to 4. A job of its own, so its time is not the fuzzer's.
+    # reference evaluator, 3.16 million int trees and the long lane's, then size 4 at the narrow
+    # width; the pull request's gate runs sizes to 3. A job of its own, so its time is not the
+    # fuzzer's. The size-4 step takes minutes, hence 165 against size 5's 140-minute caps.
     if: github.repository != 'apache/spark'
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 165
     steps:
     - name: Checkout
       uses: actions/checkout@v6
@@ -237,10 +238,46 @@ jobs:
           grep -h -E "Tests: succeeded|FAILED" target/series/slice-*.log | sort | uniq -c
         } | tee -a "$GITHUB_STEP_SUMMARY"
         exit $failed
+    # Size 4 at the narrow width: pull requests ran it at both widths until VARKA-269 9 moved it
+    # here, and size 5 above runs at the runner's own width only.
+    - name: Run every tree to size 4 at the 128-bit width, one JVM per core
+      if: always()
+      run: |
+        set -uo pipefail
+        CP="$(cat target/catalyst-test-classpath.txt)"
+        cores="$(nproc)"
+        mkdir -p target/series-narrow
+        pids=()
+        for k in $(seq 0 $((cores - 1))); do
+          java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
+            -Dspark.testing=1 -Dspark.test.home="$GITHUB_WORKSPACE" -Dvarka.ownJvm=true \
+            -Dspark.test.timeout=140 -Dvarka.test.watchdog.minutes=140 \
+            -XX:MaxVectorSize=16 -Dvarka.series.size=4 -Dvarka.series.slice="$k/$cores" \
+            -cp "$CP" org.scalatest.tools.Runner -oW \
+            -s org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSmallTreeSuite \
+            -z "matches the reference evaluator" \
+            > "target/series-narrow/slice-$k.log" 2>&1 &
+          pids+=($!)
+        done
+        failed=0
+        for k in "${!pids[@]}"; do
+          if wait "${pids[$k]}"; then
+            echo "slice $k: passed"
+          else
+            echo "slice $k: FAILED"; failed=1
+          fi
+        done
+        {
+          echo "## Every small tree to size 4 at 128 bits: $cores JVMs"
+          grep -h -E "Tests: succeeded|FAILED" target/series-narrow/slice-*.log | sort | uniq -c
+        } | tee -a "$GITHUB_STEP_SUMMARY"
+        exit $failed
     - name: Keep the logs
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: varka-series-logs
-        path: target/series/
+        path: |
+          target/series/
+          target/series-narrow/
         retention-days: 30

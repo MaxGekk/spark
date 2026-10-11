@@ -224,11 +224,20 @@ both lanes.
   a step, with `--series-size 6` for the larger window. Size 6 has not been run.
 * 3.4 says the test logs the third category's trees; it logs the first five and the count.
 
-**The tier moved (11 October 2026).** At the owner's choice the pull request's tier is size 3,
-not 4 (3.6): the gate ran the size-4 series in about a minute and three quarters at each width,
-and the nightly job's size 5 already holds every tree to size 4, so the gate kept the cost and
-added no tree the night does not run. Size 3 keeps what the gate needs from the suite: every tree
-meets all four batches, the planted liveness bug fails by size 3, and the reach test still
-enumerates to size 4, being generation only. `dev/varka_series.sh 4` runs the old tier by hand.
-The cost is `IfElse`, which first appears at size 4: the gate's series emits no `IfElse` tree now,
-and in the gate only `VarkaIrFuzzSuite`'s random draws reach it.
+**The tier moved (11 October 2026).** At the owner's choice the pull request's tier is size 3, not 4
+(3.6): the gate ran the size-4 series in 395 seconds at the wide width and 418 at the narrow (the
+JUnit times above; 1 minute 46 seconds is the suite alone in its own JVM), and the nightly job's
+size 5 already holds every tree to size 4. Size 3 keeps what the gate needs from the suite: every
+tree meets all four batches, the planted liveness bug fails by size 3, and the reach test still
+enumerates to size 4, being generation only. `dev/varka_series.sh 4` runs the old tier by hand. The
+cost is `IfElse`, which first appears at size 4: the gate's series emits no `IfElse` tree now, and
+in the gate only `VarkaIrFuzzSuite`'s random draws reach it.
+
+A review of that change found three places where size 4 then ran nowhere, against the claim that
+nothing was lost: the magnitude-gate test (`upTo = min(size, 4)`, which the nightly jobs filter
+out), the narrow width (the nightly series runs at the runner's width only), and the option
+matrix's configurations (the weekly matrix runs the suite at its default size). The magnitude-gate
+test now runs to size 4 at any size, being generation and analysis only; the nightly job gains a
+size-4 step at the 128-bit width; and the weekly option matrix passes `-Dvarka.series.size=4`.
+What stays: a size-4 regression is found at night, not before a merge, and the rotation of batches
+past size 3 runs only at night.

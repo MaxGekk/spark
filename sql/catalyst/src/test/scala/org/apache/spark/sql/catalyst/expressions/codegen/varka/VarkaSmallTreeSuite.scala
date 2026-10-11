@@ -35,13 +35,14 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils
  * row with `VarkaReferenceEvaluator` and runs the body the batch did not take as well.
  *
  * The size is `-Dvarka.series.size`, 3 by default, which is the pull request's: about three
- * thousand int trees, every one meeting all four batches, in seconds. Size 4 cost the gate
- * nearly two minutes at each width, so it runs only inside the nightly fuzz job's size 5, which
- * holds every smaller tree; an idle window runs size 6 (`dev/varka_series.sh`). Both are spread
- * across JVMs with `-Dvarka.series.slice=k/n`, a JVM taking every n-th tree from the k-th -
- * across JVMs and not threads, because the emitter is not shown safe to call from several
- * threads (row 307). Options come from `VarkaMatrix.base`, so
- * the option matrix's configurations reach this suite as they reach every other.
+ * thousand int trees, every one meeting all four batches, in seconds. Size 4 cost the gate about
+ * 400 seconds at each width, so it runs at night instead: inside the nightly fuzz job's size 5,
+ * which holds every smaller tree, at the narrow width in the same job, and under every emitter
+ * configuration in the weekly option matrix. An idle window runs size 6 (`dev/varka_series.sh`).
+ * The larger sizes are spread across JVMs with `-Dvarka.series.slice=k/n`, a JVM taking every
+ * n-th tree from the k-th - across JVMs and not threads, because the emitter is not shown safe
+ * to call from several threads (row 307). Options come from `VarkaMatrix.base`, so the option
+ * matrix's configurations reach this suite as they reach every other.
  *
  * A tree up to size 3 meets all four batches of [[intBatches]]; a larger one meets the one its
  * index picks, so each batch meets a quarter of them, unless `-Dvarka.series.allBatches=true`.
@@ -279,7 +280,9 @@ class VarkaSmallTreeSuite extends SparkFunSuite with VarkaMatrixTests with Varka
     // decline and the reference evaluator has no spelling for it; or a calendar node over a
     // subtree that leaves the narrowed range with no guard to report it, which the compiler
     // never builds and only the gate keeps out.
-    val upTo = math.min(size, 4)
+    // Size 4 at any series size: the test generates and analyses, emitting nothing, so it costs
+    // little, and the nightly series jobs filter it out, so the pull request's run is its only one.
+    val upTo = 4
     def canonical(s: VarkaIrSeries.Series): Iterator[(VarkaVectorIR, String)] =
       s.upTo(upTo).map { case (_, root) => root -> VarkaVectorIR.canonical(root) }
     val gated = canonical(new VarkaIrSeries.IntSeries).map(_._2).toSet

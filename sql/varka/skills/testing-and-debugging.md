@@ -869,16 +869,17 @@ arm with the grammar's own `boundsOf` for its gates, and `VarkaSmallTreeSuite` r
 the emitter against the reference evaluator. Three things decided how it is built.
 
 - **Size is grammar productions, not IR nodes or depth.** `make_date` over a date's fields is one
-  arm whose IR repeats the date three times; counted in nodes it never appears at a size that
-  runs. And the condition leaf matters: with `IsNotNull` over a column counted as two, no
-  `IfElse` exists below size 5, which a pull request cannot afford; as one, it appears at 4.
-- **The counts grow about thirty-fold a size** (3,203 trees to size 3, 101,422 to 4, 3.26
-  million to 5 at the int lane), so each tier is one size: 3 in the gate (4 until it cost the
-  gate nearly two minutes a width for no tree the night does not run; no `IfElse` exists below 4,
-  so the gate's series has none and `VarkaIrFuzzSuite`'s draws carry it), 5 nightly, 6 in an
-  idle window, sliced across JVMs (`-Dvarka.series.slice=k/n`, `dev/varka_series.sh`) because the
-  emitter is not shown thread-safe. A larger tree costs more to emit, so a size's time is not
-  its count times the smaller size's rate: size 5 took three times the estimate.
+  arm whose IR repeats the date three times; counted in nodes it never appears at a size that runs.
+  And the condition leaf matters: with `IsNotNull` over a column counted as two, no `IfElse` exists
+  below size 5; as one, it appears at 4, the size the nightly jobs and the weekly option matrix run.
+- **The counts grow about thirty-fold a size** (3,203 trees to size 3, 101,422 to 4, 3.26 million to
+  5 at the int lane), so each tier is one size: 3 in the gate (4 until it cost the gate about 400
+  seconds a width; no `IfElse` exists below 4, so the gate's series has none and
+  `VarkaIrFuzzSuite`'s draws carry it), 4 at the narrow width nightly and under every emitter
+  configuration weekly, 5 nightly, 6 in an idle window, sliced across JVMs
+  (`-Dvarka.series.slice=k/n`, `dev/varka_series.sh`) because the emitter is not shown thread-safe.
+  A larger tree costs more to emit, so a size's time is not its count times the smaller size's rate:
+  size 5 took three times the estimate.
 - **The gates are checked from the other side.** The same arms without the magnitude gates give
   a series whose extra trees are each either guarded by `Analysis` (a decline the reference
   cannot spell) or outside the contract (a calendar node over a product of columns, which the
