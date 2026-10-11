@@ -19,6 +19,7 @@ package org.apache.spark.sql
 
 import scala.concurrent.duration._
 import scala.jdk.CollectionConverters._
+import scala.jdk.OptionConverters._
 
 import org.apache.spark.benchmark.{Benchmark, BenchmarkBase}
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference,
@@ -113,28 +114,28 @@ object VarkaCompileBenchmark extends BenchmarkBase {
       for ((title, exprs) <- projections) {
         val projectList = named(exprs)
         for (e <- exprs) {
-          require(VarkaExpressionCompiler.compile(named(Seq(e)), columns).isDefined,
+          require(VarkaExpressionCompiler.compile(named(Seq(e)), columns).isPresent,
             s"the shape does not fuse, so it would time a decline: $title: ${e.sql}: " +
               VarkaExpressionCompiler.compilePartial(named(Seq(e)),
-                  columns).map(_.declines.asScala))
+                  columns).toScala.map(_.declines.asScala))
         }
-        require(VarkaExpressionCompiler.compile(projectList, columns).isDefined,
+        require(VarkaExpressionCompiler.compile(projectList, columns).isPresent,
           s"the shape does not fuse, so it would time a decline: $title")
         benchmark.addCase(title) { _ =>
           var k = 0
           while (k < callsPerIteration) {
-            sink += VarkaExpressionCompiler.compile(projectList, columns).size
+            sink += VarkaExpressionCompiler.compile(projectList, columns).toScala.size
             k += 1
           }
         }
       }
       for ((title, condition) <- predicates) {
-        require(VarkaExpressionCompiler.compilePredicate(condition, columns).isDefined,
+        require(VarkaExpressionCompiler.compilePredicate(condition, columns).isPresent,
           s"the shape does not fuse, so it would time a decline: $title")
         benchmark.addCase(title) { _ =>
           var k = 0
           while (k < callsPerIteration) {
-            sink += VarkaExpressionCompiler.compilePredicate(condition, columns).size
+            sink += VarkaExpressionCompiler.compilePredicate(condition, columns).toScala.size
             k += 1
           }
         }

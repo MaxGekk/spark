@@ -18,6 +18,7 @@
 package org.apache.spark.sql.execution
 
 import scala.jdk.CollectionConverters._
+import scala.jdk.OptionConverters._
 import scala.util.control.NonFatal
 
 import org.apache.spark.{PartitionEvaluator, PartitionEvaluatorFactory, SparkException}
@@ -112,7 +113,7 @@ case class VarkaProjectExec(
     // posted driver updates only, so without the post the UI would always read 0 while the
     // driver-local accumulator - the one tests read - carried the count.
     val residualMetric = longMetric("numResidualEntries")
-    residualMetric += classification.map(_.declines.size.toLong).getOrElse(0L)
+    residualMetric += classification.toScala.map(_.declines.size.toLong).getOrElse(0L)
     SQLMetrics.postDriverMetricUpdates(sparkContext,
       sparkContext.getLocalProperty(SQLExecution.EXECUTION_ID_KEY), Seq(residualMetric))
     val varkaMetrics = VarkaExecMetrics.fromNode(longMetric)
@@ -176,7 +177,7 @@ private[sql] class VarkaProjectEvaluatorFactory(
         case Alias(a: Attribute, _) => ordinalOf.get(a.exprId)
         case _ => None
       }
-      if (kernels.partialPlan.isDefined || projectList.isEmpty) {
+      if (kernels.partialPlan.isPresent || projectList.isEmpty) {
         None
       } else {
         val ordinals = projectList.map(ordinal)

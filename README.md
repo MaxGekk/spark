@@ -473,12 +473,14 @@ assembly it compiles to, read
    where needed. Eligibility is *partial*: a projection qualifies when at least
    one entry compiles, and the rest is forwarded or left to stock Spark. Start
    here, because everything else is reached from this decision.
-2. [`VarkaExpressionCompiler`](sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/codegen/VarkaExpressionCompiler.scala)
-   (Scala, `sql/catalyst`) answers that question by trying to translate the
-   Catalyst expression trees into Varka's own IR. It is the only file that
-   knows about Spark's expression classes, and the one to extend when adding an
-   expression. It is also where a translation is *declined*, which matters as
-   much as where one succeeds - a decline is how correctness is preserved.
+2. [`VarkaExpressionCompiler`](sql/catalyst/src/main/java/org/apache/spark/sql/catalyst/expressions/codegen/VarkaExpressionCompiler.java)
+   (Java, `sql/catalyst`) answers that question by trying to translate the
+   Catalyst expression trees into Varka's own IR, entry by entry, through the
+   expression families beside it (`VarkaNodeCompiler` and the `Varka*Compiler`
+   classes it chains), which are what know Spark's expression classes and what
+   to extend when adding an expression. It is also where a translation is
+   *declined*, which matters as much as where one succeeds - a decline is how
+   correctness is preserved.
 3. [`VarkaVectorIR`](sql/catalyst/src/main/java/org/apache/spark/sql/catalyst/expressions/codegen/varka/VarkaVectorIR.java)
    (Java) is that IR: a sealed interface whose records are values over int32
    lanes. It is deliberately much smaller than Catalyst's expression tree, and

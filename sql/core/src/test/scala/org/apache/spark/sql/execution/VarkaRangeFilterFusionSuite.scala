@@ -18,6 +18,7 @@
 package org.apache.spark.sql.execution
 
 import scala.jdk.CollectionConverters._
+import scala.jdk.OptionConverters._
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.analysis.UnresolvedAttribute
@@ -62,7 +63,7 @@ class VarkaRangeFilterFusionSuite extends SparkFunSuite with VarkaTestWatchdog {
 
   test("the filter fuses at every number of ranges, the whole query's 200 included") {
     for (n <- Seq(2, 10, 48, 49, 100, 200)) {
-      val compiled = VarkaExpressionCompiler.compilePredicate(condition(n), Seq(s), options)
+      val compiled = VarkaExpressionCompiler.compilePredicate(condition(n), Seq(s), options).toScala
       assert(compiled.exists(_.specs.asScala.forall(_.fused)),
           s"$n ranges: ${compiled.map(_.specs.asScala.toSeq)}")
     }

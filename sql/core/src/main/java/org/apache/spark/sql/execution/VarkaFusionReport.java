@@ -18,8 +18,8 @@ package org.apache.spark.sql.execution;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
-import scala.Option;
 import scala.collection.immutable.Seq;
 import scala.jdk.javaapi.CollectionConverters;
 
@@ -30,7 +30,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.CompiledVarkaPredicate;
 import org.apache.spark.sql.catalyst.expressions.codegen.PartialVarkaProjection;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaConjunctSpec;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaDecline;
-import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler$;
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.ForwardedOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.FusedOutput;
@@ -87,10 +87,10 @@ public final class VarkaFusionReport {
    * serves {@code EXPLAIN} and the driver-side residual count).
    */
   public static Seq<String> lines(
-      Option<PartialVarkaProjection> partial,
+      Optional<PartialVarkaProjection> partial,
       Seq<NamedExpression> projectList,
       Seq<Attribute> childOutput) {
-    if (partial.isDefined()) {
+    if (partial.isPresent()) {
       return lines(partial.get(), projectList, childOutput);
     }
     return CollectionConverters.asScala(List.of("no entry is Varka-eligible")).toSeq();
@@ -99,7 +99,7 @@ public final class VarkaFusionReport {
   /** The same, compiling the projection first - the plan-side entry point. */
   public static Seq<String> lines(
       Seq<NamedExpression> projectList, Seq<Attribute> childOutput, VarkaEmitOptions options) {
-    return lines(VarkaExpressionCompiler$.MODULE$.compilePartial(projectList, childOutput, options),
+    return lines(VarkaExpressionCompiler.compilePartial(projectList, childOutput, options),
         projectList, childOutput);
   }
 
@@ -119,9 +119,9 @@ public final class VarkaFusionReport {
   public static Seq<String> predicateLines(
       Expression condition, Seq<Attribute> childOutput, VarkaEmitOptions options) {
     var out = new ArrayList<String>();
-    var compiler = VarkaExpressionCompiler$.MODULE$;
-    for (VarkaConjunctSpec spec
-        : CollectionConverters.asJava(compiler.explainPredicate(condition, childOutput, options))) {
+    VarkaExpressionCompiler.Explained explained =
+        VarkaExpressionCompiler.explainAndCompilePredicate(condition, childOutput, options);
+    for (VarkaConjunctSpec spec : explained.specs()) {
       if (spec.fused()) {
         out.add(render(spec.conjunct()) + ": fused");
       } else {
@@ -129,9 +129,8 @@ public final class VarkaFusionReport {
         out.add(render(spec.conjunct()) + ": residual (" + why + ")");
       }
     }
-    Option<CompiledVarkaPredicate> predicate =
-        compiler.compilePredicate(condition, childOutput, options);
-    if (predicate.isDefined() && predicate.get().fused().outputs().size() > 1) {
+    Optional<CompiledVarkaPredicate> predicate = explained.compiled();
+    if (predicate.isPresent() && predicate.get().fused().outputs().size() > 1) {
       CompiledVarkaPredicate p = predicate.get();
       out.add("split across " + p.fused().outputs().size() + " selection outputs in "
           + p.clauses().size() + " clauses, each within the method budget");

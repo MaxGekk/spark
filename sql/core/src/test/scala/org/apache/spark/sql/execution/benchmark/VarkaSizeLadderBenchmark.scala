@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets
 
 import scala.concurrent.duration._
 import scala.jdk.CollectionConverters._
+import scala.jdk.OptionConverters._
 
 import org.apache.spark.benchmark.Benchmark
 import org.apache.spark.sql.SparkSession
@@ -99,7 +100,8 @@ object VarkaSizeLadder {
     val fallbackMetrics = Seq("numFallbackBatchesNonArrow", "numFallbackBatchesKernel",
       "numFallbackBatchesRowPath", "numFallbackBatchesDeclined")
     def outcome(node: SparkPlan, projectList: Seq[NamedExpression]) =
-      (VarkaExpressionCompiler.compilePartial(projectList, node.children.head.output, options),
+      (VarkaExpressionCompiler.compilePartial(projectList, node.children.head.output, options)
+        .toScala,
         node.metrics("numVarkaBatches").value,
         fallbackMetrics.flatMap(node.metrics.get).map(_.value).sum)
     val (fused, batches, fallbacks) = plan.collectFirst {

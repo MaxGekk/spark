@@ -111,10 +111,11 @@ class VarkaCodegenGiveUpSuite extends QueryTest with VarkaSharedSessions with Va
     val project = df.queryExecution.optimizedPlan.collectFirst { case p: Project => p }.get
     val list: Seq[NamedExpression] = project.projectList
     val output: Seq[Attribute] = project.child.output
-    val fused = VarkaExpressionCompiler.compilePartial(list, output)
+    val fused = VarkaExpressionCompiler.compilePartial(list, output).toScala
       .map(_.specs.asScala.toSeq.zipWithIndex.collect { case (_: FusedOutput, i) => i }.toSet)
       .getOrElse(Set.empty)
-    val declined = VarkaExpressionCompiler.declines(list, output)
+    val declined = VarkaExpressionCompiler.declines(list, output).asScala
+      .map { case (k, v) => k.intValue -> v }.toMap
     assert(fused.size + declined.size == list.size && (fused & declined.keySet).isEmpty,
       s"fused $fused, declined ${declined.keySet}")
     assert(declined.values.forall(_.reason.nonEmpty), declined)
@@ -218,6 +219,7 @@ class VarkaCodegenGiveUpSuite extends QueryTest with VarkaSharedSessions with Va
     val d = AttributeReference("d", DateType)()
     val specs = VarkaExpressionCompiler.explainPredicate(
       GreaterThan(GiveUpFallbackIdentity(d), Literal.create(0, DateType)), Seq[Attribute](d))
+      .asScala
     assert(specs.size == 1 && !specs.head.fused)
     assert(specs.head.decline.toScala.exists(_.reason.startsWith("unsupported")), specs)
   }

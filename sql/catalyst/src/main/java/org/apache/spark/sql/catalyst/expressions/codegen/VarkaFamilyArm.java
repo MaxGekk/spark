@@ -17,7 +17,7 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen;
 
-import scala.Option;
+import java.util.Optional;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 
@@ -29,5 +29,5 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
  */
 @FunctionalInterface
 interface VarkaFamilyArm {
-  Option<VarkaVectorIR> compile();
+  Optional<VarkaVectorIR> compile();
 }

@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Optional;
 
 import scala.Option;
 import scala.collection.immutable.Seq;
@@ -38,7 +39,7 @@ import org.apache.spark.sql.catalyst.expressions.UnsafeProjection;
 import org.apache.spark.sql.catalyst.expressions.UnsafeProjection$;
 import org.apache.spark.sql.catalyst.expressions.codegen.CompiledVarkaPredicate;
 import org.apache.spark.sql.catalyst.expressions.codegen.CompiledVarkaProjection;
-import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler$;
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.SelectionVectorOps;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemorySanitizer;
@@ -122,9 +123,9 @@ public class VarkaFilterEvaluator extends VarkaEvaluatorBase {
 
   private CompiledVarkaPredicate predicate() {
     if (!compiledResolved) {
-      Option<CompiledVarkaPredicate> all = VarkaExpressionCompiler$.MODULE$
-          .compilePredicate(condition, childAttributes(), emitOptions());
-      if (all.isDefined() && all.get().residualConjuncts().isEmpty()) {
+      Optional<CompiledVarkaPredicate> all =
+          VarkaExpressionCompiler.compilePredicate(condition, childAttributes(), emitOptions());
+      if (all.isPresent() && all.get().residualConjuncts().isEmpty()) {
         compiled = all.get();
         List<List<Integer>> byClause = compiled.clauses();
         clauses = new int[byClause.size()][];
@@ -148,9 +149,8 @@ public class VarkaFilterEvaluator extends VarkaEvaluatorBase {
   }
 
   @Override
-  protected Option<CompiledVarkaProjection> fusedPlan() {
-    CompiledVarkaPredicate p = predicate();
-    return p == null ? Option.empty() : Option.apply(p.fused());
+  protected Optional<CompiledVarkaProjection> fusedPlan() {
+    return Optional.ofNullable(predicate()).map(CompiledVarkaPredicate::fused);
   }
 
   @Override

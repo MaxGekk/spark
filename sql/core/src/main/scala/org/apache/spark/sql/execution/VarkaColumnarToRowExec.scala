@@ -18,6 +18,7 @@
 package org.apache.spark.sql.execution
 
 import scala.jdk.CollectionConverters._
+import scala.jdk.OptionConverters._
 
 import org.apache.spark.{PartitionEvaluator, PartitionEvaluatorFactory}
 import org.apache.spark.internal.Logging
@@ -137,7 +138,7 @@ case class VarkaColumnarToRowExec(
     // posted driver updates only, so without the post the UI would always read 0 while the
     // driver-local accumulator - the one tests read - carried the count.
     val residualMetric = longMetric("numResidualEntries")
-    residualMetric += classification.map(_.declines.size.toLong).getOrElse(0L)
+    residualMetric += classification.toScala.map(_.declines.size.toLong).getOrElse(0L)
     SQLMetrics.postDriverMetricUpdates(sparkContext,
       sparkContext.getLocalProperty(SQLExecution.EXECUTION_ID_KEY), Seq(residualMetric))
     val varkaMetrics = VarkaExecMetrics.fromNode(longMetric)
@@ -313,8 +314,8 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
     // residual columns into vectors for nothing; the head-to-head in `VARKA-12.md` 5
     // measured it at 0.5x-0.7x Janino end to end, which this shape recovers.
     // None when every entry fuses: the fused batch is then the output and `toRow` suffices.
-    private lazy val mergeProjection: Option[UnsafeProjection] = kernels.partialPlan.flatMap {
-      partial =>
+    private lazy val mergeProjection: Option[UnsafeProjection] =
+      kernels.partialPlan.toScala.flatMap { partial =>
         // Every entry the one kernel's, in order: the fused batch is the output. Several kernels
         // lay their columns end to end, kernel by kernel, which is not the projection's order, so
         // they always merge.

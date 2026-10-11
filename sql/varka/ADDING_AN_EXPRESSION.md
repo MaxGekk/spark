@@ -23,7 +23,7 @@ time, and the rest are conditional on what the expression needs.
 
 | | Nearly always | |
 | :--- | :--- | :--- |
-| `VarkaExpressionCompiler.scala` | 9/10 | the Catalyst translation |
+| the family that claims it (`VarkaNodeCompiler.java` or a `Varka*Compiler.java` it chains) | 9/10 | the Catalyst translation |
 | `VarkaExpressionCompilerSuite.scala` | 9/10 | what compiles, and what declines and why |
 | `VarkaIrFuzzSuite.scala` | 9/10 | the generator must be able to produce the node |
 | `VarkaDifferentialSuite.scala` | 9/10 | end-to-end against the row engine |
@@ -72,10 +72,11 @@ queries differing only in their constants share one emitted class.
 > `switch` that does not yet handle the node. That list is the work of steps 3 and
 > 4, and it is the intended way to find all of them - do not go looking by hand.
 
-**3. Teach the compiler to build it** in `VarkaExpressionCompiler`. This is the only
-file that knows Spark's expression classes. Match the Catalyst tree, compile the
-children, and return the node - or decline with a reason, which the driver surfaces
-and the tests assert on. Take the decline path seriously: a wrong decline costs
+**3. Teach the compiler to build it** in the family that claims the node:
+`VarkaNodeCompiler.java`, or the `Varka*Compiler.java` it chains for the node's kind
+(`VarkaExpressionCompiler` only classifies entries and calls them). Match the Catalyst
+tree, compile the children, and return the node - or decline with a reason, which the
+driver surfaces and the tests assert on. Take the decline path seriously: a wrong decline costs
 performance, but a wrong *acceptance* costs correctness.
 
 > *Check:* `dev/varka_emit.sh "<your expression>"`. The entry must read

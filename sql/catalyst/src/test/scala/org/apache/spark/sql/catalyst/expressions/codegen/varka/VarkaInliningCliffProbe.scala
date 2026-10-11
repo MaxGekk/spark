@@ -23,6 +23,7 @@ import java.nio.file.Files
 import javax.management.ObjectName
 
 import scala.jdk.CollectionConverters._
+import scala.jdk.OptionConverters._
 
 import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference}
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection,
@@ -130,7 +131,7 @@ object VarkaInliningCliffProbe {
       }
       Alias(VarkaSqlResolve.resolve(CatalystSqlParser.parseExpression(sql), columns), s"c$k")()
     }
-    VarkaExpressionCompiler.compile(exprs, columns).getOrElse(
+    VarkaExpressionCompiler.compile(exprs, columns).toScala.getOrElse(
       throw new IllegalStateException(s"the $n-output $kind projection did not fuse"))
   }
 

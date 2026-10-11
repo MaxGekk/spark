@@ -268,19 +268,19 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
           if (family.predicates) {
             // Every conjunct has to fuse, not just one: the table documents the predicate as
             // written, and a residual conjunct runs in a row filter above the Varka node.
-            VarkaExpressionCompiler.compilePredicate(expr, columns) match {
+            VarkaExpressionCompiler.compilePredicate(expr, columns).toScala match {
               case Some(p) if p.specs.asScala.forall(_.fused) => None
               case Some(p) =>
                 Some(p.specs.asScala.flatMap(_.decline.toScala).map(_.reason).mkString("; "))
               case None => Some("the predicate compiled to nothing")
             }
           } else {
-            VarkaExpressionCompiler.compile(Seq(out(expr)), columns) match {
+            VarkaExpressionCompiler.compile(Seq(out(expr)), columns).toScala match {
               case Some(_) => None
               case None =>
                 val partial = VarkaExpressionCompiler.compilePartial(Seq(out(expr)), columns)
                 Some(partial.map(_.declines.asScala.values.map(_.reason).mkString("; "))
-                  .getOrElse("no entry fused"))
+                  .orElse("no entry fused"))
             }
           }
         reason.map(r => s"${family.title}: ${row.sql}  ->  $r")
@@ -299,7 +299,7 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
         case "ExtractANSIIntervalMonths" => ExtractANSIIntervalMonths(ym)
         case other => fail(s"no expression built for $other")
       }
-      VarkaExpressionCompiler.compile(Seq(out(expr)), columns).isDefined
+      VarkaExpressionCompiler.compile(Seq(out(expr)), columns).isPresent
     }
     assert(stillDeclining.isEmpty,
       "listed as matched-only-to-decline, but it fuses now - move it into the table:\n  " +
@@ -378,9 +378,9 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
    * The Catalyst expression classes the compiler matches on, read from its source because there
    * is no runtime list to ask: the arms are a `match`, not a registry. The arms live in
    * `VarkaExpressionCompiler`, in `VarkaNodeCompiler` (the date leaves and the int arithmetic)
-   * and in the four families it chains, so all six files are read, each in its own language: a
-   * file ported to Java matches in a `switch`, whose type patterns (`case Add a`) and
-   * `instanceof` tests are what name its classes there.
+   * and in the four families it chains, so all six files are read. All six are Java: each
+   * matches in a `switch`, whose type patterns (`case Add a`) and `instanceof` tests are what
+   * name its classes.
    *
    * Every pattern naming a capitalised type is collected, then kept only if it names a real
    * class in `org.apache.spark.sql.catalyst.expressions`. That filter is what removes the IR
@@ -392,33 +392,27 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
    * as one Varka admits.
    */
   private lazy val admittedByCompiler: Set[String] = {
-    val scalaFiles = Seq("VarkaExpressionCompiler")
-    val javaFiles = Seq("VarkaNodeCompiler", "VarkaIntervalCompiler", "VarkaTimeCompiler",
-      "VarkaConditionCompiler", "VarkaChronoCompiler")
-    def read(language: String, name: String): String =
+    val javaFiles = Seq("VarkaExpressionCompiler", "VarkaNodeCompiler", "VarkaIntervalCompiler",
+      "VarkaTimeCompiler", "VarkaConditionCompiler", "VarkaChronoCompiler")
+    def read(name: String): String =
       withoutComments(Files.readString(
-        getWorkspaceFilePath("sql", "catalyst", "src", "main", language,
+        getWorkspaceFilePath("sql", "catalyst", "src", "main", "java",
           "org", "apache", "spark", "sql", "catalyst", "expressions", "codegen",
-          s"$name.$language")))
-    val scalaPatterns = Seq(
-      """case\s+([A-Z]\w*)\s*\(""".r,
-      """case\s+\w+\s*@\s*([A-Z]\w*)\s*\(""".r,
-      """case\s+\w+\s*:\s*([A-Z]\w*)""".r,
-      """_\s*:\s*([A-Z]\w*)""".r)
+          s"$name.java")))
     val javaPatterns = Seq(
       """case\s+([A-Z]\w*)\s+\w+\s*(?:when\b|->)""".r,
       """instanceof\s+([A-Z]\w*)""".r)
     def scan(sources: Seq[String], patterns: Seq[scala.util.matching.Regex]): Seq[String] =
       patterns.flatMap(p => sources.flatMap(p.findAllMatchIn(_).map(_.group(1))))
-    // A Java file the Java patterns do not recognise would drop its family from the scan while
-    // the Scala files kept the total above the floor below, so each is checked on its own.
+    // A file the patterns do not recognise would drop its family from the scan while the
+    // others kept the total above the floor below, so each is checked on its own.
     val javaNames = javaFiles.map { f =>
-      val found = scan(Seq(read("java", f)), javaPatterns)
+      val found = scan(Seq(read(f)), javaPatterns)
       assert(found.nonEmpty, s"the Java pattern scan found no names in $f.java; do the " +
         "patterns still match how that file switches on expression classes?")
       found
     }
-    val names = (scan(scalaFiles.map(read("scala", _)), scalaPatterns) ++ javaNames.flatten).toSet
+    val names = javaNames.flatten.toSet
     assert(names.size > 40, s"the pattern scan found only ${names.size} names; has the " +
       "compiler been restructured? This check is worthless if it silently matches nothing.")
     names.filter { n =>
@@ -613,6 +607,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   test("the fusion decisions over the table, dumped for a refactor to diff " +
       "(opt-in: VARKA_FUSION_DUMP=<file>; VARKA-300)") {
     val target = sys.env.get("VARKA_FUSION_DUMP")
+    import VarkaExpressionCompiler.{compile => compileAll, compilePartial, compilePredicate,
+      declines => declinesOf, explainPredicate}
     assume(target.isDefined, "opt-in: set VARKA_FUSION_DUMP to a file")
     def projection(p: CompiledVarkaProjection): String = {
       val bounds = p.inputBounds.asScala.map(b => (b.inputIndex, b.lo, b.hi))
@@ -633,18 +629,22 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       // scalac cannot check a match over a Java sealed interface; a new spec type fails here.
       case other => fail(s"unknown output spec $other")
     }
-    def declines(m: Map[Int, VarkaDecline]): String = m.toSeq.sortBy(_._1).mkString("|")
-    def partial(o: Option[PartialVarkaProjection]): String = o.fold("None") { x =>
+    // Both maps iterate in position order: the compiler returns a sorted one.
+    def declines(m: java.util.Map[Integer, VarkaDecline]): String =
+      m.asScala.toSeq.map { case (k, v) => (k.intValue, v) }.mkString("|")
+    def partial(o: java.util.Optional[PartialVarkaProjection]): String =
+      o.toScala.fold("None") { x =>
       val specs = x.specs.asScala
       s"specs=${specs.map(spec).mkString(",")} " +
         s"cols=${specs.map(x.columnIndex(_).orElse(-1)).mkString(",")} " +
-        s"declines=${declines(x.declines.asScala.map { case (k, v) => k.intValue -> v }.toMap)} " +
+        s"declines=${declines(x.declines)} " +
         s"fused=${projection(x.fused)} more=${x.more.asScala.map(projection).mkString(" || ")} " +
         s"kernels=${x.kernels.size}"
     }
     def conjunct(s: VarkaConjunctSpec): String =
       s"(${s.conjunct}, ${s.fused}, ${s.decline.toScala.getOrElse("-")})"
-    def predicate(o: Option[CompiledVarkaPredicate]): String = o.fold("None") { x =>
+    def predicate(o: java.util.Optional[CompiledVarkaPredicate]): String =
+      o.toScala.fold("None") { x =>
       s"specs=${x.specs.asScala.map(conjunct).mkString(",")} " +
         s"clauses=${x.clauses.asScala.map(_.asScala.mkString(",")).mkString(";")} " +
         s"fused=${projection(x.fused)} fc=${x.fusedConjuncts.asScala.mkString("|")} " +
@@ -662,30 +662,29 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       "force" -> base.toBuilder().forceResidualAt(2).build())
     val projections = families.filterNot(_.predicates).flatMap(_.rows).map(expressionOf)
     val predicates = families.filter(_.predicates).flatMap(_.rows).map(expressionOf)
-    val compiler = VarkaExpressionCompiler
     val sb = new StringBuilder
     for ((name, o) <- optionSets) {
       projections.foreach { e =>
-        sb ++= s"$name P1 $e\n  ${partial(compiler.compilePartial(Seq(out(e)), columns, o))}\n"
-        sb ++= s"  C ${compiler.compile(Seq(out(e)), columns, o).map(projection)}\n"
+        sb ++= s"$name P1 $e\n  ${partial(compilePartial(Seq(out(e)), columns, o))}\n"
+        sb ++= s"  C ${compileAll(Seq(out(e)), columns, o).toScala.map(projection)}\n"
       }
       val all = projections.zipWithIndex.map { case (e, k) => Alias(e, s"c$k")(): NamedExpression }
       val withColumns = all ++ columns
-      sb ++= s"$name PALL\n  ${partial(compiler.compilePartial(withColumns, columns, o))}\n"
-      sb ++= s"  D ${declines(compiler.declines(withColumns, columns, o))}\n"
+      sb ++= s"$name PALL\n  ${partial(compilePartial(withColumns, columns, o))}\n"
+      sb ++= s"  D ${declines(declinesOf(withColumns, columns, o))}\n"
       val random = withColumns :+ (Alias(Rand(Literal(1L)), "r")(): NamedExpression)
-      sb ++= s"$name PRAND\n  ${partial(compiler.compilePartial(random, columns, o))}\n"
-      sb ++= s"  D ${declines(compiler.declines(random, columns, o))}\n"
+      sb ++= s"$name PRAND\n  ${partial(compilePartial(random, columns, o))}\n"
+      sb ++= s"  D ${declines(declinesOf(random, columns, o))}\n"
       val twice = (all ++ all).zipWithIndex.map { case (n, k) =>
         Alias(n.children.head, s"d$k")(): NamedExpression
       }
-      sb ++= s"$name PDUP\n  ${partial(compiler.compilePartial(twice, columns, o))}\n"
+      sb ++= s"$name PDUP\n  ${partial(compilePartial(twice, columns, o))}\n"
       predicates.foreach { e =>
-        sb ++= s"$name Q1 $e\n  ${predicate(compiler.compilePredicate(e, columns, o))}\n"
+        sb ++= s"$name Q1 $e\n  ${predicate(compilePredicate(e, columns, o))}\n"
       }
       val conjunction = predicates.reduce(And(_, _))
-      sb ++= s"$name QALL\n  ${predicate(compiler.compilePredicate(conjunction, columns, o))}\n"
-      val explained = compiler.explainPredicate(conjunction, columns, o)
+      sb ++= s"$name QALL\n  ${predicate(compilePredicate(conjunction, columns, o))}\n"
+      val explained = explainPredicate(conjunction, columns, o).asScala
       sb ++= s"  E ${explained.map(conjunct).mkString(",")}\n"
     }
     def ladder(k: Int): NamedExpression =
@@ -693,7 +692,7 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     val unrolled = VarkaMatrix.base.withDriverOutputTable(false)
     for (several <- Seq(false, true); n <- Seq(100, 200, 400)) {
       val o = unrolled.withSeveralKernels(several)
-      val compiled = compiler.compilePartial((1 to n).map(ladder), columns, o)
+      val compiled = compilePartial((1 to n).map(ladder), columns, o)
       sb ++= s"LADDER $several $n\n  ${partial(compiled)}\n"
     }
     val dates = (0 until 70).map(c => AttributeReference(s"c$c", DateType)())
@@ -702,7 +701,7 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       (Alias(Add(long, Literal(1L)), "o")(): NamedExpression)
     for (several <- Seq(false, true)) {
       val o = VarkaMatrix.base.withSeveralKernels(several)
-      sb ++= s"WIDE $several\n  ${partial(compiler.compilePartial(wide, dates :+ long, o))}\n"
+      sb ++= s"WIDE $several\n  ${partial(compilePartial(wide, dates :+ long, o))}\n"
     }
     Files.writeString(java.nio.file.Path.of(target.get), sb.toString)
   }

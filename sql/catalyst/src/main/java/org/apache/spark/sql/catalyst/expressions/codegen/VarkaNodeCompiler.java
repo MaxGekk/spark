@@ -22,10 +22,6 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.function.IntUnaryOperator;
 
-import scala.Option;
-import scala.collection.Iterator;
-import scala.collection.mutable.LinkedHashMap;
-
 import org.apache.spark.sql.catalyst.expressions.Add;
 import org.apache.spark.sql.catalyst.expressions.BoundReference;
 import org.apache.spark.sql.catalyst.expressions.Cast;
@@ -66,15 +62,11 @@ import org.apache.spark.sql.types.YearMonthIntervalType;
  * compiler: no expression is claimed by two families, every arm being gated by the expression
  * class or its data type, and {@code VarkaFamilyChainSuite} holds that as a fact over the
  * coverage table, so a family added here or a widened guard that broke it fails there rather than
- * winning silently by coming first. {@code None} anywhere fails the enclosing entry, whose
+ * winning silently by coming first. An empty result anywhere fails the enclosing entry, whose
  * caller rolls the tables back to their pre-entry state.
  *
- * <p>The input and literal tables are the classifier's {@code mutable.LinkedHashMap[Int, Int]}:
- * the key is a child ordinal (or a literal value), the value its dense slot. Java sees the type
- * arguments erased to {@code Object}, and Scala does not pass an {@code [Int, Int]} map where an
- * {@code [Object, Object]} one is declared, so the methods Scala calls take
- * {@code LinkedHashMap<?, ?>} and {@link #table} restores the declared type once.
- * {@code scala.Option} is what the families return, until the classifier is Java too.
+ * <p>The input and literal tables are the classifier's {@link VarkaSlotTable}s: the key is a
+ * child ordinal (or a literal value), the slot its dense index.
  */
 final class VarkaNodeCompiler {
 
@@ -97,8 +89,8 @@ final class VarkaNodeCompiler {
   interface Claim {
     VarkaFamilyArm of(
         Expression e,
-        LinkedHashMap<?, ?> inputs,
-        LinkedHashMap<?, ?> literals,
+        VarkaSlotTable inputs,
+        VarkaSlotTable literals,
         DeclineSink sink);
   }
 
@@ -129,10 +121,10 @@ final class VarkaNodeCompiler {
    * admitted by the int32 lowering; a SIMD lane still cannot throw row-accurately, so an ANSI
    * overflow condemns the batch and the row engine raises it instead.
    */
-  static Option<VarkaVectorIR> compileNode(
+  static Optional<VarkaVectorIR> compileNode(
       Expression expr,
-      LinkedHashMap<?, ?> inputs,
-      LinkedHashMap<?, ?> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     for (Family family : FAMILIES) {
       VarkaFamilyArm arm = family.claim().of(expr, inputs, literals, sink);
@@ -140,7 +132,7 @@ final class VarkaNodeCompiler {
         return arm.compile();
       }
     }
-    return fallback(expr, table(inputs), table(literals), sink);
+    return fallback(expr, inputs, literals, sink);
   }
 
   /** The chain, for the suite that holds no node is claimed twice. */
@@ -152,8 +144,8 @@ final class VarkaNodeCompiler {
   static List<String> claimants(
       List<Family> chain,
       Expression expr,
-      LinkedHashMap<?, ?> inputs,
-      LinkedHashMap<?, ?> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     var names = new ArrayList<String>();
     for (Family family : chain) {
@@ -170,14 +162,12 @@ final class VarkaNodeCompiler {
    */
   private static VarkaFamilyArm leafArm(
       Expression e,
-      LinkedHashMap<?, ?> inputTable,
-      LinkedHashMap<?, ?> literalTable,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    LinkedHashMap<Object, Object> inputs = table(inputTable);
-    LinkedHashMap<Object, Object> literals = table(literalTable);
     return switch (e) {
       case BoundReference br when DataTypes.DateType.equals(br.dataType()) ->
-          () -> Option.apply(columnRef(br, inputs));
+          () -> Optional.of(columnRef(br, inputs));
       // A date literal's value is already an epoch-day int, so it takes a slot in the shared
       // per-distinct-value table like a folded day offset does - what makes
       // `d < DATE'...'` and `greatest(d, DATE'...')` reachable at all. A null-valued Literal is
@@ -187,7 +177,7 @@ final class VarkaNodeCompiler {
       // guarantee).
       case Literal l when l.value() instanceof Integer days
           && DataTypes.DateType.equals(l.dataType()) ->
-          () -> Option.apply(intSlot(days, literals));
+          () -> Optional.of(intSlot(days, literals));
       // The identity cast: the corpus wraps date expressions in `CAST(... AS DATE)`
       // 85 times, and after optimization the wrapper is a no-op over an already-date child -
       // unwrap it. A `cast(<string literal> AS DATE)` never reaches here (constant-folded to a
@@ -207,11 +197,9 @@ final class VarkaNodeCompiler {
    */
   private static VarkaFamilyArm arithmeticArm(
       Expression e,
-      LinkedHashMap<?, ?> inputTable,
-      LinkedHashMap<?, ?> literalTable,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
-    LinkedHashMap<Object, Object> inputs = table(inputTable);
-    LinkedHashMap<Object, Object> literals = table(literalTable);
     return switch (e) {
       // Spark's greatest/least are n-ary; the null-skipping algebra is associative, so a left
       // fold into the binary IR nodes is exact.
@@ -260,10 +248,10 @@ final class VarkaNodeCompiler {
    * {@code RuntimeReplaceable} compiles what would run, and anything else declines as
    * unsupported.
    */
-  private static Option<VarkaVectorIR> fallback(
+  private static Optional<VarkaVectorIR> fallback(
       Expression e,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     // A column of any other type: eligible to be forwarded as a whole entry, never to be read by
     // the int32 lanes of a kernel.
@@ -329,17 +317,17 @@ final class VarkaNodeCompiler {
    * A {@code DateType} operand is refused here rather than silently treated as a day count:
    * {@code date + 1} is {@code DateAdd} and has its own arm.
    */
-  static Option<VarkaVectorIR> intOperand(
+  static Optional<VarkaVectorIR> intOperand(
       Expression e,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     if (e instanceof BoundReference br && DataTypes.IntegerType.equals(br.dataType())) {
-      return Option.apply(columnRef(br, inputs));
+      return Optional.of(columnRef(br, inputs));
     }
     if (e instanceof Literal l && l.value() instanceof Integer v
         && DataTypes.IntegerType.equals(l.dataType())) {
-      return Option.apply(intSlot(v, literals));
+      return Optional.of(intSlot(v, literals));
     }
     if (!DataTypes.IntegerType.equals(e.dataType())) {
       return sink.decline("int arithmetic operand of type " + e.dataType().simpleString(), e);
@@ -356,18 +344,18 @@ final class VarkaNodeCompiler {
    * it as an int. The date column leaf of {@link #compileNode} is {@code DateType}-only, which is
    * why the two leaves here cannot be left to it.
    */
-  static Option<VarkaVectorIR> compileIntOperand(
+  static Optional<VarkaVectorIR> compileIntOperand(
       Expression e,
       String position,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     if (e instanceof Literal l && l.value() instanceof Integer v
         && DataTypes.IntegerType.equals(l.dataType())) {
-      return Option.apply(intSlot(v, literals));
+      return Optional.of(intSlot(v, literals));
     }
     if (e instanceof BoundReference br && DataTypes.IntegerType.equals(br.dataType())) {
-      return Option.apply(columnRef(br, inputs));
+      return Optional.of(columnRef(br, inputs));
     }
     if (!DataTypes.IntegerType.equals(e.dataType())) {
       return sink.decline(position + " is not an int column or literal", e);
@@ -381,14 +369,8 @@ final class VarkaNodeCompiler {
    * time, never snapshotted, because the table grows as compilation proceeds and is truncated on
    * every decline.
    */
-  static IntUnaryOperator literalAt(LinkedHashMap<Object, Object> literals) {
-    return slot -> {
-      Iterator<Object> keys = literals.keysIterator();
-      for (int i = 0; i < slot; i++) {
-        keys.next();
-      }
-      return (Integer) keys.next();
-    };
+  static IntUnaryOperator literalAt(VarkaSlotTable literals) {
+    return literals::keyAt;
   }
 
   /**
@@ -400,12 +382,12 @@ final class VarkaNodeCompiler {
    * and the value behind it only arrives in {@code scalarArgs} at run time. Conservative by
    * construction: an empty answer costs a check or a decline and never a wrong answer.
    */
-  static OptionalLong magnitude(VarkaVectorIR node, LinkedHashMap<Object, Object> literals) {
+  static OptionalLong magnitude(VarkaVectorIR node, VarkaSlotTable literals) {
     return VarkaRangeAnalysis.magnitude(node, literalAt(literals));
   }
 
   /** Whether {@code node}'s magnitude is known and at most {@code Int.MaxValue}. */
-  static boolean boundedByIntMax(VarkaVectorIR node, LinkedHashMap<Object, Object> literals) {
+  static boolean boundedByIntMax(VarkaVectorIR node, VarkaSlotTable literals) {
     OptionalLong m = magnitude(node, literals);
     return m.isPresent() && m.getAsLong() <= Integer.MAX_VALUE;
   }
@@ -420,7 +402,7 @@ final class VarkaNodeCompiler {
    * overflows.
    */
   private static boolean cannotOverflow(
-      IntOp op, VarkaVectorIR l, VarkaVectorIR r, LinkedHashMap<Object, Object> literals) {
+      IntOp op, VarkaVectorIR l, VarkaVectorIR r, VarkaSlotTable literals) {
     return boundedByIntMax(new IntArith(op, Overflow.WRAP, l, r), literals);
   }
 
@@ -431,21 +413,21 @@ final class VarkaNodeCompiler {
    * {@code ANSI} or {@code TRY} multiply stays on the row engine until milestone 5's long lanes
    * arrive ({@code VARKA-63.md} 3.4).
    */
-  private static Option<VarkaVectorIR> intArith(
+  private static Optional<VarkaVectorIR> intArith(
       IntOp op,
       Object mode,
       Expression l,
       Expression r,
       Expression whole,
-      LinkedHashMap<Object, Object> inputs,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
       DeclineSink sink) {
     int mark = literals.size();
-    Option<VarkaVectorIR> x = intOperand(l, inputs, literals, sink);
+    Optional<VarkaVectorIR> x = intOperand(l, inputs, literals, sink);
     if (x.isEmpty()) {
       return x;
     }
-    Option<VarkaVectorIR> y = intOperand(r, inputs, literals, sink);
+    Optional<VarkaVectorIR> y = intOperand(r, inputs, literals, sink);
     if (y.isEmpty()) {
       return y;
     }
@@ -460,23 +442,23 @@ final class VarkaNodeCompiler {
    * has no cheap overflow test for {@code *}, so one that keeps its check declines and
    * {@code literals} is rolled back to {@code mark} so a declining entry leaves no slot behind.
    */
-  static Option<VarkaVectorIR> arithOver(
+  static Optional<VarkaVectorIR> arithOver(
       IntOp op,
       Overflow declared,
       VarkaVectorIR x,
       VarkaVectorIR y,
       Expression whole,
-      LinkedHashMap<Object, Object> literals,
+      VarkaSlotTable literals,
       int mark,
       DeclineSink sink) {
     Overflow overflow = declared != Overflow.WRAP && cannotOverflow(op, x, y, literals)
         ? Overflow.WRAP
         : declared;
     if (op == IntOp.MUL && overflow != Overflow.WRAP) {
-      truncate(literals, mark);
+      literals.truncate(mark);
       return sink.decline("checked int multiply whose operands do not rule out overflow", whole);
     }
-    return Option.apply(new IntArith(op, overflow, x, y));
+    return Optional.of(new IntArith(op, overflow, x, y));
   }
 
   /**
@@ -485,8 +467,8 @@ final class VarkaNodeCompiler {
    * day count, a month count, a date's epoch day - so this is the one place a literal's lane is
    * chosen, as {@link #columnRef} is for a column's.
    */
-  static LiteralSlot intSlot(int value, LinkedHashMap<Object, Object> literals) {
-    return new LiteralSlot(intern(literals, value), LaneType.INT);
+  static LiteralSlot intSlot(int value, VarkaSlotTable literals) {
+    return new LiteralSlot(literals.intern(value), LaneType.INT);
   }
 
   /**
@@ -494,14 +476,14 @@ final class VarkaNodeCompiler {
    * int lane; shared by the date, interval and long leaves and the offset's {@code IntegerType}
    * one.
    */
-  static ColumnRef columnRef(BoundReference br, LinkedHashMap<Object, Object> inputs) {
+  static ColumnRef columnRef(BoundReference br, VarkaSlotTable inputs) {
     return columnRef(br, inputs, LaneType.INT);
   }
 
-  /** {@link #columnRef(BoundReference, LinkedHashMap)} on {@code lane}. */
+  /** {@link #columnRef(BoundReference, VarkaSlotTable)} on {@code lane}. */
   static ColumnRef columnRef(
-      BoundReference br, LinkedHashMap<Object, Object> inputs, LaneType lane) {
-    return new ColumnRef(intern(inputs, br.ordinal()), lane);
+      BoundReference br, VarkaSlotTable inputs, LaneType lane) {
+    return new ColumnRef(inputs.intern(br.ordinal()), lane);
   }
 
   /**
@@ -510,42 +492,7 @@ final class VarkaNodeCompiler {
    * index and shares the table's rollback.
    */
   static ColumnRef derivedRef(
-      BoundReference br, VarkaDerivedKind kind, LinkedHashMap<Object, Object> inputs) {
-    return new ColumnRef(intern(inputs, VarkaDerivedInput.key(br.ordinal(), kind)), LaneType.INT);
-  }
-
-  /** Drops the entries a failed compile appended after {@code mark} (insertion order). */
-  static void truncate(LinkedHashMap<?, ?> table, int mark) {
-    LinkedHashMap<Object, Object> entries = table(table);
-    if (entries.size() > mark) {
-      var dropped = new ArrayList<Object>();
-      Iterator<Object> keys = entries.keysIterator();
-      for (int i = 0; keys.hasNext(); i++) {
-        Object key = keys.next();
-        if (i >= mark) {
-          dropped.add(key);
-        }
-      }
-      for (Object key : dropped) {
-        entries.remove(key);
-      }
-    }
-  }
-
-  /** The slot of {@code key} in {@code table}, appending it as the next slot if it is new. */
-  private static int intern(LinkedHashMap<Object, Object> table, Object key) {
-    Option<Object> slot = table.get(key);
-    if (slot.isDefined()) {
-      return (Integer) slot.get();
-    }
-    int next = table.size();
-    table.put(key, next);
-    return next;
-  }
-
-  /** A table as the classifier declares it; see the class doc. */
-  @SuppressWarnings("unchecked")
-  static LinkedHashMap<Object, Object> table(LinkedHashMap<?, ?> table) {
-    return (LinkedHashMap<Object, Object>) table;
+      BoundReference br, VarkaDerivedKind kind, VarkaSlotTable inputs) {
+    return new ColumnRef(inputs.intern(VarkaDerivedInput.key(br.ordinal(), kind)), LaneType.INT);
   }
 }

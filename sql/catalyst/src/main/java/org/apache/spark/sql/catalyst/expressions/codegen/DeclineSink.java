@@ -20,8 +20,9 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Optional;
+import java.util.OptionalInt;
 
-import scala.Option;
 import scala.collection.immutable.Seq;
 import scala.runtime.AbstractPartialFunction;
 
@@ -123,13 +124,12 @@ final class DeclineSink {
   }
 
   /** The noted bounds in kernel-input terms, given the accepted entries' input table. */
-  List<VarkaInputBound> inputBounds(scala.collection.mutable.LinkedHashMap<?, ?> inputs) {
-    var table = VarkaNodeCompiler.table(inputs);
+  List<VarkaInputBound> inputBounds(VarkaSlotTable inputs) {
     var distinct = new LinkedHashSet<VarkaInputBound>();
     for (Bound b : bounds) {
-      Option<?> index = table.get(b.ordinal());
-      if (index.isDefined()) {
-        distinct.add(new VarkaInputBound((Integer) index.get(), b.lo(), b.hi()));
+      OptionalInt index = inputs.slot(b.ordinal());
+      if (index.isPresent()) {
+        distinct.add(new VarkaInputBound(index.getAsInt(), b.lo(), b.hi()));
       }
     }
     return List.copyOf(distinct);
@@ -157,14 +157,14 @@ final class DeclineSink {
   }
 
   /** Notes {@code reason} against {@code e} and declines it. */
-  <T> Option<T> decline(String reason, Expression e) {
+  <T> Optional<T> decline(String reason, Expression e) {
     note(reason, e);
-    return Option.empty();
+    return Optional.empty();
   }
 
   /** The first note, cleared. */
-  Option<VarkaDecline> take() {
-    Option<VarkaDecline> taken = Option.apply(first);
+  Optional<VarkaDecline> take() {
+    Optional<VarkaDecline> taken = Optional.ofNullable(first);
     first = null;
     return taken;
   }
