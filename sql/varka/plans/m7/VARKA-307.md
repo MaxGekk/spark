@@ -108,3 +108,34 @@ The suite's time alone on the idle laptop and in the gate, before (2) and after.
 1. This plan; row 307 marked Planned.
 2. The held shapes, the parallel map, the race test and the skills note.
 3. The outcome.
+
+## 9. Outcome
+
+Done on 11 October 2026, in one commit after the plan.
+
+**Alone on the laptop.** The pinning test took 21 seconds with the pool (24 hardware threads) and
+1 minute 58 seconds with `-Dvarka.bytes.threads=1`, against 2 minutes before: drawing once saves
+little, the threads save the rest. `emitted_bytes.json` is unchanged either way.
+
+**In the gate.** The suite took 72 seconds at the wide width and 73 at the narrow (its JUnit
+times), against 325 and 316 in row 308's gate. The wide step took 685 seconds against 795, the
+narrow 692 against 794. The three catalyst JVMs' suites totalled 581, 438 and 623 seconds
+against 254, 791 and 170: the critical path moved to another JVM, and the three together took
+1,642 seconds against 1,216.
+
+**The race test** passes, at both widths. A planted race - a static scratch list the emitter
+filled with each call's outputs and then read back - failed it at once, with another emission's
+outputs in the shape (`column ordinal 1 outside [0, 1)`). The plant is not committed.
+
+**Predictions scored.**
+
+1. **Held.** The oracle is unchanged with the pool and with one thread.
+2. **Held.** 21 seconds alone, under 40.
+3. **Half held.** The suite took 72 seconds in the gate, under 120; but the wide step fell by 110
+   seconds, not two minutes. Risk 2 is the likeliest reason: the other JVMs' suites took 426
+   seconds more together, the suite's threads competing with five other JVMs on 24 hardware
+   threads. The gate's split balances JVMs by the previous run's times, which a later gate will
+   have.
+
+**The checks.** The gate's first lint run caught the import order in the suite (`Executors`
+before `ExecutorService`); the rerun passes.
