@@ -18,12 +18,16 @@
 
 package org.apache.spark.sql.execution.varka;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.StringJoiner;
 import java.util.function.Supplier;
 
 import org.apache.spark.internal.SparkLogger;
 import org.apache.spark.internal.SparkLoggerFactory;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaAllocationSampler;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFallbackEvent;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFusedKernel;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelAllocationEvent;
 import org.apache.spark.sql.execution.metric.SQLMetric;
 
@@ -58,6 +62,23 @@ public final class VarkaFallbackAccounting {
       new VarkaAllocationSampler.Tracker();
   private final boolean allocationSampling = VarkaAllocationSampler.supported();
   private long kernelBatches;
+  /** Declined batches by status bit, {@link #STATUS_NAMES}' order; see {@link #declinedBatch}. */
+  private final long[] declinedByBit = new long[STATUS_BITS.length];
+
+  /**
+   * The decline status bits, the kernels' refusal reasons ({@code VarkaFusedKernel}, VARKA-304)
+   * and then the evaluator's own ({@link VarkaKernelRunner}), with the name a log line and a
+   * count give each.
+   */
+  private static final int[] STATUS_BITS = {
+      VarkaFusedKernel.STATUS_DAY_PRODUCER, VarkaFusedKernel.STATUS_MONTH_COUNT,
+      VarkaFusedKernel.STATUS_MAKE_DATE, VarkaFusedKernel.STATUS_INT_OVERFLOW,
+      VarkaFusedKernel.STATUS_DAY_RANGE, VarkaFusedKernel.STATUS_VALUE_RANGE,
+      VarkaKernelRunner.STATUS_INPUT_BOUND, VarkaKernelRunner.STATUS_DERIVED_INPUT,
+      VarkaKernelRunner.STATUS_FORCED};
+  private static final String[] STATUS_NAMES = {
+      "day-producer", "month-count", "make-date", "int-overflow", "day-range", "value-range",
+      "input-bound", "derived-input", "forced"};
 
   public VarkaFallbackAccounting(Counters counters, Supplier<String> kernelIdentity) {
     this.counters = counters;
@@ -109,14 +130,46 @@ public final class VarkaFallbackAccounting {
     if (LOG.isDebugEnabled()) {
       String identity = kernel != null ? kernel : kernelIdentity.get();
       LOG.debug("The Varka SIMD kernels " + identity + " declined this batch (status " + status
-          + "); falling back to the per-row path.");
+          + ": " + describeStatus(status) + "); falling back to the per-row path.");
     }
     add(counters.declined());
-    if (kernel != null) {
-      fallbackEvent(VarkaFallbackEvent.RANGE_DECLINED, () -> kernel, "");
-    } else {
-      fallbackEvent(VarkaFallbackEvent.RANGE_DECLINED, kernelIdentity, "");
+    for (int i = 0; i < STATUS_BITS.length; i++) {
+      if ((status & STATUS_BITS[i]) != 0) {
+        declinedByBit[i]++;
+      }
     }
+    fallbackEvent(VarkaFallbackEvent.RANGE_DECLINED, kernel != null ? () -> kernel : kernelIdentity,
+        "", status);
+  }
+
+  /**
+   * How many declined batches carried each status bit, by its name: a batch counts once against
+   * every bit its status sets. A method that folds guards of several reasons into one mask
+   * reports them all, so under the default emit options a count is an upper bound for a reason
+   * that shares a method with another, and exact under {@code exactRefusalStatus}.
+   */
+  public Map<String, Long> declinedByReason() {
+    var counts = new LinkedHashMap<String, Long>();
+    for (int i = 0; i < STATUS_BITS.length; i++) {
+      counts.put(STATUS_NAMES[i], declinedByBit[i]);
+    }
+    return counts;
+  }
+
+  /** The names of the bits {@code status} sets, joined by {@code |}; unknown bits in hex. */
+  public static String describeStatus(int status) {
+    var names = new StringJoiner("|");
+    int rest = status;
+    for (int i = 0; i < STATUS_BITS.length; i++) {
+      if ((status & STATUS_BITS[i]) != 0) {
+        names.add(STATUS_NAMES[i]);
+        rest &= ~STATUS_BITS[i];
+      }
+    }
+    if (rest != 0) {
+      names.add("0x" + Integer.toHexString(rest));
+    }
+    return names.toString();
   }
 
   /** A non-empty batch whose referenced columns are not Arrow vectors the kernels read. */
@@ -160,11 +213,18 @@ public final class VarkaFallbackAccounting {
    */
   public static void fallbackEvent(String cause, Supplier<String> kernelIdentity,
       String exceptionClass) {
+    fallbackEvent(cause, kernelIdentity, exceptionClass, 0);
+  }
+
+  /** The fallback event with a declined batch's status word; zero for every other cause. */
+  public static void fallbackEvent(String cause, Supplier<String> kernelIdentity,
+      String exceptionClass, int status) {
     var event = new VarkaFallbackEvent();
     if (event.isEnabled()) {
       event.cause = cause;
       event.kernelIdentity = kernelIdentity.get();
       event.exceptionClass = exceptionClass;
+      event.status = status;
       event.commit();
     }
   }

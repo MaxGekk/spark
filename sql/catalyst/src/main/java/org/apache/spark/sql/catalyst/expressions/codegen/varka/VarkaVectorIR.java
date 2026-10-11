@@ -264,7 +264,7 @@ public sealed interface VarkaVectorIR
 
   /**
    * {@code days}, checked at runtime to lie in the range the calendar lowering decomposes
-   * exactly, and reported through {@code STATUS_CHRONO_RANGE} where it does not.
+   * exactly, and reported through {@code STATUS_DAY_RANGE} where it does not.
    *
    * <p><b>Why the compiler inserts a node instead of the emitter finding the place.</b> The
    * range analysis lives in {@code VarkaChronoCompiler.dayRange}, and it needs literal

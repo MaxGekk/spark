@@ -167,10 +167,10 @@ class VarkaEmitterLongLaneSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
         assert(status(kernel, 64, -1, none, none) === 0, "nothing overflows")
         // A loop lane, the same lane in the masked body, then a lane only the epilogue covers
         // whatever this host's long lane count turns out to be.
-        assert(status(kernel, 64, 3, none, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
-        assert(status(kernel, 64, 3, _ == 40, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
-        assert(status(kernel, 17, 16, none, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
-        assert(status(kernel, 17, 16, _ == 2, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        assert(status(kernel, 64, 3, none, none) === VarkaFusedKernel.STATUS_INT_OVERFLOW)
+        assert(status(kernel, 64, 3, _ == 40, none) === VarkaFusedKernel.STATUS_INT_OVERFLOW)
+        assert(status(kernel, 17, 16, none, none) === VarkaFusedKernel.STATUS_INT_OVERFLOW)
+        assert(status(kernel, 17, 16, _ == 2, none) === VarkaFusedKernel.STATUS_INT_OVERFLOW)
         // The overflowing lane under a null operand: the row is null, its data lane is
         // undefined, and a batch must not be condemned for arithmetic nobody asked for.
         assert(status(kernel, 64, 3, none, _ == 3) === 0)
@@ -279,7 +279,7 @@ class VarkaEmitterLongLaneSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       "outside its bounds, in the loop and in the epilogue") {
     // GuardedDay's twin at 64 bits, with bounds the node carries. Three things are checked
     // and fail differently: the value is unchanged where the guard holds; a single lane out of
-    // range reports STATUS_CHRONO_RANGE, in a full lane group and in the masked tail; and a
+    // range reports STATUS_VALUE_RANGE, in a full lane group and in the masked tail; and a
     // null lane outside the bounds does not fire, since a null has no value to be out of range.
     val root = Seq[VarkaVectorIR](new GuardedRange(new ColumnRef(0, LaneType.LONG), 0L,
       86399999999999L))
@@ -310,10 +310,10 @@ class VarkaEmitterLongLaneSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
         assert(status(64, i => i.toLong * 1000000007L % 86400000000000L, none) === 0)
         // One lane at the top of the day plus one nanosecond: the loop body's guard.
         assert(status(64, i => if (i == 5) 86400000000000L else 1L, none) ===
-          VarkaFusedKernel.STATUS_CHRONO_RANGE, "a loop lane")
+          VarkaFusedKernel.STATUS_VALUE_RANGE, "a loop lane")
         // The same lane in the masked tail of a 17-row batch.
         assert(status(17, i => if (i == 16) -1L else 1L, none) ===
-          VarkaFusedKernel.STATUS_CHRONO_RANGE, "an epilogue lane")
+          VarkaFusedKernel.STATUS_VALUE_RANGE, "an epilogue lane")
         // A null lane holding an out-of-range payload does not fire the guard.
         assert(status(64, i => if (i == 5) -1L else 1L, i => i == 5) === 0, "a null lane")
       } finally {
@@ -363,9 +363,9 @@ class VarkaEmitterLongLaneSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
           s"$name lanes=$lanes in range")
         // One lane past it, in a full lane group and in the masked tail.
         assert(status(64, i => if (i == 5) bound else 1L) ===
-          VarkaFusedKernel.STATUS_CHRONO_RANGE, s"$name lanes=$lanes a loop lane")
+          VarkaFusedKernel.STATUS_VALUE_RANGE, s"$name lanes=$lanes a loop lane")
         assert(status(17, i => if (i == 16) -bound else 1L) ===
-          VarkaFusedKernel.STATUS_CHRONO_RANGE, s"$name lanes=$lanes an epilogue lane")
+          VarkaFusedKernel.STATUS_VALUE_RANGE, s"$name lanes=$lanes an epilogue lane")
       } finally {
         loader.release()
       }

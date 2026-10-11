@@ -62,4 +62,13 @@ public final class VarkaFallbackEvent extends Event {
 
   @Label("Exception Class")
   public String exceptionClass;
+
+  /**
+   * A declined batch's status word, zero for every other cause: the refusal reasons' bits
+   * ({@code VarkaFusedKernel}, VARKA-304) and the evaluator's own above them, so a recording can
+   * filter declines by reason. A method that folds guards of several reasons into one mask sets
+   * all of their bits unless the kernel was emitted under {@code exactRefusalStatus}.
+   */
+  @Label("Status")
+  public int status;
 }

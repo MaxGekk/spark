@@ -98,7 +98,8 @@ public final class ChronoVectorOps {
   public static final int QUARTER = 3;
 
   /**
-   * Mirrors {@code VarkaFusedKernel.STATUS_CHRONO_RANGE} (bit 0), which this module cannot
+   * Mirrors {@code VarkaFusedKernel.STATUS_DAY_PRODUCER} (bit 0), the emitted kernels' bit for a
+   * day outside the range the narrowed lowering is defined over, which this module cannot
    * reference; a non-zero return means the batch must be recomputed on the row engine.
    */
   public static final int STATUS_CHRONO_RANGE = 1;

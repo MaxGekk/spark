@@ -832,7 +832,8 @@ VARKA-22 extends the account to the SQL UI and to JDK Flight Recorder:
   `row-path-failure` cause instead), batches a kernel declined because a
   value fell outside the range one of its lowerings is defined over (the
   `range-declined` cause - a designed outcome rather than a defect, which is
-  why it is not counted as a kernel failure and is logged at debug), tasks
+  why it is not counted as a kernel failure and is logged at debug, with the
+  guard that fired named by its status bit, below), tasks
   that could not emit or define their kernel class, and - on the projection
   nodes - the residual-entry
   count (a static plan property, added once driver-side and posted to the
@@ -859,11 +860,22 @@ VARKA-22 extends the account to the SQL UI and to JDK Flight Recorder:
   class define; shape hash, class name, IR sizes, byte count),
   `ShapeCacheLookup` (shape hash, hit, the per-execution identity - the
   join a profile needs), `Fallback` (cause, kernel identity, exception
-  class; the cause vocabulary is the constants on `VarkaFallbackEvent`), and
+  class, and for a declined batch its status word; the cause vocabulary is
+  the constants on `VarkaFallbackEvent`), and
   `KernelAllocation` (one per allocation sample, suspect or not: kernel
   identity, batch index, rows, allocated bytes, verdict).
   Record with a programmatic `jdk.jfr.Recording`, `jcmd JFR.start`, or
   `-XX:StartFlightRecording`.
+* **A declined batch names its guard.** Each runtime refusal reason has its
+  own status bit (`VarkaFusedKernel`: day producer, month count,
+  `make_date`, int overflow, re-armed day range, value range), above them
+  the evaluator's own (input bound, derived input), and the debug line and
+  the `Fallback` event carry the word. A loop method whose guards share one
+  reason reports exactly it; one that holds guards of several reasons folds
+  them into one mask and reports all of their bits, a candidate set, since a
+  mask per reason would hold another vector register in the loop. The emit
+  option `exactRefusalStatus` gives each reason its own mask, for exact
+  attribution when diagnosing.
 
 All of it is metadata or diagnostics: the emitted methods are byte-identical
 with and without the attributes, which the JVM ignores by specification.

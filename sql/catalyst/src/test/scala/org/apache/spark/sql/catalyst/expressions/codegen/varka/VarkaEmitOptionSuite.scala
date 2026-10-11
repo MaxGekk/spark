@@ -119,6 +119,7 @@ class VarkaEmitOptionSuite extends SparkFunSuite with VarkaTestWatchdog {
     assert(table.filter(_.reason == Reason.KNOB).map(_.name) ===
       Seq("groupBudget", "fusedCeiling", "lanesOverride", "methodByteBudget", "callSiteBudget",
         "heavyGroupOutputs"))
+    assert(table.filter(_.reason == Reason.DIAGNOSTIC).map(_.name) === Seq("exactRefusalStatus"))
   }
 
   test("an option is found by name, and an enum constant by its name or not at all") {

@@ -429,6 +429,13 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        the forced-decline check can show that it sees a wrong rollback: 1 keeps the declined
  *        entry's inputs, 2 keeps its bounds, 3 truncates the inputs one entry too far; any other
  *        value is the exact rollback. Zero in production.
+ * @param exactRefusalStatus whether a loop or epilogue method gives each refusal reason its own
+ *        guard mask (VARKA-304), so that a declined batch's status names exactly the reasons that
+ *        fired. Off, a method folds every guard into one mask and a declined batch reports every
+ *        reason the method holds, which is exact for a method of one reason and a candidate set
+ *        for the quarter of guarded methods that hold more; one mask keeps the loop's register
+ *        pressure what it was. A diagnostic: it never changes an answer or whether a batch
+ *        declines.
  */
 public record VarkaEmitOptions(
     int groupBudget,
@@ -472,7 +479,8 @@ public record VarkaEmitOptions(
     boolean planSize,
     int misdescribeDriverBytes,
     int forceResidualAt,
-    int misdescribeRollback) {
+    int misdescribeRollback,
+    boolean exactRefusalStatus) {
 
   /**
    * The three mod-7 lowerings. {@link #MAGIC} is what ships: two 15-bit digit-sum folds followed
@@ -585,7 +593,7 @@ public record VarkaEmitOptions(
           VarkaEmitBudget.HUGE_METHOD_LIMIT,
           true, true, true, true,
           VarkaEmitBudget.CALL_SITE_BUDGET, VarkaEmitBudget.HEAVY_GROUP_OUTPUTS,
-          true, true, true, true, true, true, true, 0, 0, 0);
+          true, true, true, true, true, true, true, 0, 0, 0, false);
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {
@@ -682,6 +690,7 @@ public record VarkaEmitOptions(
       b.misdescribeDriverBytes = misdescribeDriverBytes;
       b.forceResidualAt = forceResidualAt;
       b.misdescribeRollback = misdescribeRollback;
+      b.exactRefusalStatus = exactRefusalStatus;
     return b;
   }
 
@@ -729,6 +738,7 @@ public record VarkaEmitOptions(
     private int misdescribeDriverBytes;
     private int forceResidualAt;
     private int misdescribeRollback;
+    private boolean exactRefusalStatus;
 
     private Builder() {
     }
@@ -943,6 +953,11 @@ public record VarkaEmitOptions(
       return this;
     }
 
+    public Builder exactRefusalStatus(boolean exact) {
+      this.exactRefusalStatus = exact;
+      return this;
+    }
+
     public VarkaEmitOptions build() {
       return new VarkaEmitOptions(
           groupBudget, fusedCeiling, cse, shareChronoPrefix, denseValidityOnce,
@@ -954,7 +969,7 @@ public record VarkaEmitOptions(
           groupLocalSlots, materializeChronoPrefix, callSiteBudget, heavyGroupOutputs,
           predictGrouping, driverOutputTable, exactGrouping, splitDriver, severalKernels,
           elideUnreadLocals, planSize, misdescribeDriverBytes, forceResidualAt,
-          misdescribeRollback);
+          misdescribeRollback, exactRefusalStatus);
     }
   }
 
@@ -1017,6 +1032,10 @@ public record VarkaEmitOptions(
 
   public VarkaEmitOptions withMisdescribeRollback(int fault) {
     return toBuilder().misdescribeRollback(fault).build();
+  }
+
+  public VarkaEmitOptions withExactRefusalStatus(boolean exact) {
+    return toBuilder().exactRefusalStatus(exact).build();
   }
 
   public VarkaEmitOptions withRangeSets(boolean enabled) {

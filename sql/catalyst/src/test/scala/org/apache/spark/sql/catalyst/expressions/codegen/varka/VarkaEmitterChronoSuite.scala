@@ -127,19 +127,20 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
         // the top of the guarded range: the composed day leaves the range and the batch is
         // condemned. In a loop lane...
         val far = (i: Int) => if (i == 5) VarkaChrono.MONTH_ARITH_MAX_MONTHS else 0
-        assert(status(64, _ => VarkaChrono.NARROW_MAX_DAYS, _ => 0, far, none) ===
-          VarkaFusedKernel.STATUS_CHRONO_RANGE, "a loop lane")
+        // The body also holds the month count's and the producer's guards, so by default the
+        // status names all three (VARKA-304); the re-armed check's bit is the one asserted.
+        def fired(st: Int): Boolean = (st & VarkaFusedKernel.STATUS_DAY_RANGE) != 0
+        assert(fired(status(64, _ => VarkaChrono.NARROW_MAX_DAYS, _ => 0, far, none)),
+          "a loop lane")
         // ... and in an epilogue lane, where the bounds mask has to let it through.
-        assert(status(17, _ => VarkaChrono.NARROW_MAX_DAYS, _ => 0,
-          i => if (i == 16) VarkaChrono.MONTH_ARITH_MAX_MONTHS else 0, none) ===
-          VarkaFusedKernel.STATUS_CHRONO_RANGE, "an epilogue lane")
+        assert(fired(status(17, _ => VarkaChrono.NARROW_MAX_DAYS, _ => 0,
+          i => if (i == 16) VarkaChrono.MONTH_ARITH_MAX_MONTHS else 0, none)), "an epilogue lane")
         // The same lane under a null date does not condemn: the word masks it out.
         assert(status(64, _ => VarkaChrono.NARROW_MAX_DAYS, _ => 0, far, _ == 5) === 0,
           "a null lane must not condemn the batch")
         // Downward too, which is the direction the lowering is not exact in at all.
-        assert(status(64, _ => VarkaChrono.NARROW_MIN_DAYS, _ => 0,
-          i => if (i == 7) VarkaChrono.MONTH_ARITH_MIN_MONTHS else 0, none) ===
-          VarkaFusedKernel.STATUS_CHRONO_RANGE, "below the floor")
+        assert(fired(status(64, _ => VarkaChrono.NARROW_MIN_DAYS, _ => 0,
+          i => if (i == 7) VarkaChrono.MONTH_ARITH_MIN_MONTHS else 0, none)), "below the floor")
       } finally {
         arena.close()
       }
@@ -168,7 +169,7 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
         // Lane 3 negates to one month past MONTH_ARITH_MAX_MONTHS, so the guard must fire -
         // and the input itself, -24565, is inside the range, so only the derived value is out.
         assert(status(i => if (i == 3) -(VarkaChrono.MONTH_ARITH_MAX_MONTHS + 1) else 0, 64) ===
-          VarkaFusedKernel.STATUS_CHRONO_RANGE)
+          VarkaFusedKernel.STATUS_MONTH_COUNT)
       } finally {
         arena.close()
       }
@@ -384,7 +385,7 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
         assert(run(ansi, 64, -1, feb30, none, none, none) === 0)
         assert(run(nul, 64, -1, feb30, none, none, none) === 0)
         // An invalid date: the ANSI form declines (dense body, then masked, then epilogue).
-        val declined = VarkaFusedKernel.STATUS_CHRONO_RANGE
+        val declined = VarkaFusedKernel.STATUS_MAKE_DATE
         assert(run(ansi, 64, 3, feb30, none, none, none) === declined)
         assert(run(ansi, 64, 3, feb30, _ == 40, none, none) === declined)
         assert(run(ansi, 17, 16, feb30, none, none, none) === declined)
@@ -397,15 +398,15 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
         assert(run(nul, 17, 16, feb30, none, none, none) === 0)
         // A year past either limit declines under both forms, and a null there does not.
         for ((k, name) <- Seq((ansi, "ansi"), (nul, "null")); bad <- Seq(farYear, earlyYear)) {
-          assert(run(k, 64, 5, bad, none, none, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE,
+          assert(run(k, 64, 5, bad, none, none, none) === VarkaFusedKernel.STATUS_MAKE_DATE,
             s"$name $bad in a loop lane")
-          assert(run(k, 17, 16, bad, none, none, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE,
+          assert(run(k, 17, 16, bad, none, none, none) === VarkaFusedKernel.STATUS_MAKE_DATE,
             s"$name $bad in an epilogue lane")
           assert(run(k, 64, 5, bad, _ == 5, none, none) === 0, s"$name $bad under a null year")
         }
         // Out of range with an invalid month is a decline, not a null, under the NULL form too.
         assert(run(nul, 64, 5, farAndInvalid, none, none, none) ===
-          VarkaFusedKernel.STATUS_CHRONO_RANGE)
+          VarkaFusedKernel.STATUS_MAKE_DATE)
       } finally {
         arena.close()
       }
@@ -1035,7 +1036,7 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
     // needed no change here: there was never a second, sharing-specific copy of the guard to
     // find and delete. This test now exists to keep it that way - if a future change gives
     // the shared path its own inlined guard logic instead of routing through emitEra, this is
-    // where that would first show up as a mistaken STATUS_CHRONO_RANGE. VARKA-52's guard lives
+    // where that would first show up as a mistaken STATUS_DAY_PRODUCER. VARKA-52's guard lives
     // at a column-offset producer, never in the prefix, so this stays true after it too.
     val col = new ColumnRef(0)
     val roots = Seq[VarkaVectorIR](new Year(col), new Month(col), new Quarter(col))
@@ -1115,7 +1116,7 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
         /** What the guard must do for an out-of-range lane at `at`: fire iff that lane's own
          *  condition takes the arm the producer is in. Derived, not restated. */
         def expected(at: Int): Int =
-          if (at >= 0 && takesThen(at)) VarkaFusedKernel.STATUS_CHRONO_RANGE else 0
+          if (at >= 0 && takesThen(at)) VarkaFusedKernel.STATUS_DAY_PRODUCER else 0
         // A loop lane in each arm, and a lane only the epilogue covers in each arm - four
         // cases whose arm and whose body are now chosen independently.
         for ((length, at) <- Seq((64, 3), (64, 4), (17, 15), (17, 16))) {
@@ -1123,7 +1124,7 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
             s"length $length lane $at: takesThen=${takesThen(at)}")
           // Off, the arm is ignored and every out-of-range lane condemns: the cliff, and the
           // reference arm the A/B prices against.
-          assert(status(kernelOff, length, at) === VarkaFusedKernel.STATUS_CHRONO_RANGE,
+          assert(status(kernelOff, length, at) === VarkaFusedKernel.STATUS_DAY_PRODUCER,
             s"length $length lane $at: with the context off this must decline either way")
         }
         // Nothing out of range: 0 under both settings.
@@ -1167,7 +1168,7 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
           Array(d.validityAddress(length), o.validityAddress(length), c.validityAddress(length)),
           Array(d.nullCount, o.nullCount, c.nullCount),
           Array(out._1.address()), Array(out._2.address()), Array(1), length)
-        assert(status === VarkaFusedKernel.STATUS_CHRONO_RANGE,
+        assert(status === VarkaFusedKernel.STATUS_DAY_PRODUCER,
           "an unknown condition takes ELSE, so the guard in the ELSE arm must condemn")
       } finally {
         arena.close()
@@ -1219,7 +1220,7 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
             Array(d.nullCount, o.nullCount),
             outs.map(_._1.address()).toArray, outs.map(_._2.address()).toArray,
             Array(cut), length)
-          assert(status === VarkaFusedKernel.STATUS_CHRONO_RANGE,
+          assert(status === VarkaFusedKernel.STATUS_DAY_PRODUCER,
             s"$name: the guard must stay unqualified, and lane $at must decline the batch")
         } finally {
           arena.close()
@@ -1307,12 +1308,12 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
           assert(status(kernel, 64, -1, none, none) === 0)
           assert(status(kernelOff, 64, -1, none, none) === 0)
           // A loop lane past the range (dense body: no nulls anywhere).
-          assert(status(kernel, 64, 3, none, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+          assert(status(kernel, 64, 3, none, none) === VarkaFusedKernel.STATUS_DAY_PRODUCER)
           // The same lane in the masked body, with an unrelated null elsewhere.
-          assert(status(kernel, 64, 3, _ == 40, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+          assert(status(kernel, 64, 3, _ == 40, none) === VarkaFusedKernel.STATUS_DAY_PRODUCER)
           // A lane only the epilogue covers, whatever the host's lane count.
-          assert(status(kernel, 17, 16, none, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
-          assert(status(kernel, 17, 16, _ == 2, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+          assert(status(kernel, 17, 16, none, none) === VarkaFusedKernel.STATUS_DAY_PRODUCER)
+          assert(status(kernel, 17, 16, _ == 2, none) === VarkaFusedKernel.STATUS_DAY_PRODUCER)
           // The out-of-range lane under a null offset, then under a null date: the row is
           // null, its data lanes are undefined, and the batch must not be condemned.
           assert(status(kernel, 64, 3, none, _ == 3) === 0)
@@ -1386,7 +1387,7 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
         val status = kernel.run(Array(d.data.address(), o.data.address()), Array(0L, 0L),
           Array(0, 0), outs.map(_._1.address()).toArray, outs.map(_._2.address()).toArray,
           Array.empty[Int], 64)
-        assert(status === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        assert(status === VarkaFusedKernel.STATUS_DAY_PRODUCER)
       } finally {
         arena.close()
       }
@@ -1428,23 +1429,23 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
         assert(status(kernel, 64, 3, hi, none, none) === 0)
         assert(status(kernel, 64, 3, lo, none, none) === 0)
         // One past each bound, in a loop lane (dense body: no nulls anywhere).
-        assert(status(kernel, 64, 3, hi + 1, none, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
-        assert(status(kernel, 64, 3, lo - 1, none, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        assert(status(kernel, 64, 3, hi + 1, none, none) === VarkaFusedKernel.STATUS_MONTH_COUNT)
+        assert(status(kernel, 64, 3, lo - 1, none, none) === VarkaFusedKernel.STATUS_MONTH_COUNT)
         // The same lane in the masked body, with an unrelated null elsewhere.
         assert(status(kernel, 64, 3, hi + 1, _ == 40, none) ===
-          VarkaFusedKernel.STATUS_CHRONO_RANGE)
+          VarkaFusedKernel.STATUS_MONTH_COUNT)
         // A lane only the epilogue covers, whatever the host's lane count.
         assert(status(kernel, 17, 16, hi + 1, none, none) ===
-          VarkaFusedKernel.STATUS_CHRONO_RANGE)
+          VarkaFusedKernel.STATUS_MONTH_COUNT)
         assert(status(kernel, 17, 16, lo - 1, none, none) ===
-          VarkaFusedKernel.STATUS_CHRONO_RANGE)
+          VarkaFusedKernel.STATUS_MONTH_COUNT)
         // A live violation in the masked epilogue - the one body where the guard mask is ANDed
         // with both the node's word and the epilogue mask, and the body whose ordering produced
         // this task's VerifyError. The other epilogue cases above are null-free, so the dense
         // driver runs them and only epilogueDense is exercised; the null here is on a lane other
         // than the violating one, so the violation stays live and the guard must still see it.
         assert(status(kernel, 17, 16, hi + 1, _ == 2, none) ===
-          VarkaFusedKernel.STATUS_CHRONO_RANGE)
+          VarkaFusedKernel.STATUS_MONTH_COUNT)
         // The out-of-range lane under a null count, then under a null date: the row is null,
         // its data lanes are undefined, and the batch must not be condemned.
         assert(status(kernel, 64, 3, hi + 1, none, _ == 3) === 0)
@@ -1456,9 +1457,9 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
         // variant declines exactly as the default does. Only VARKA-52's day-producer guard,
         // which insures a consumer rather than the producer itself, is a reference variant.
         assert(status(kernelOff, 64, 3, hi + 1, none, none) ===
-          VarkaFusedKernel.STATUS_CHRONO_RANGE)
+          VarkaFusedKernel.STATUS_MONTH_COUNT)
         assert(status(kernelOff, 17, 16, lo - 1, none, none) ===
-          VarkaFusedKernel.STATUS_CHRONO_RANGE)
+          VarkaFusedKernel.STATUS_MONTH_COUNT)
         assert(status(kernelOff, 64, -1, 0, none, none) === 0)
       } finally {
         arena.close()
@@ -1494,8 +1495,8 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
         }
         val none = (_: Int) => false
         assert(status(64, -1, 0, none) === 0)
-        assert(status(64, 3, hi + 1, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
-        assert(status(17, 16, hi + 1, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        assert(status(64, 3, hi + 1, none) === VarkaFusedKernel.STATUS_MONTH_COUNT)
+        assert(status(17, 16, hi + 1, none) === VarkaFusedKernel.STATUS_MONTH_COUNT)
         // Null count on the violating lane: undefined data, and the batch stands.
         assert(status(64, 3, hi + 1, _ == 3) === 0)
       } finally {

@@ -75,7 +75,13 @@ public sealed interface VarkaEmitOption
      * A fault injector: it feeds the emitter a wrong input so a test can show that the emitter's
      * own self-checks fire. The fuzzer never draws one.
      */
-    FAULT_INJECTOR
+    FAULT_INJECTOR,
+    /**
+     * A diagnostic: it changes what the emitted code reports about a batch - which refusal
+     * reason fired - and never an answer or whether a batch is declined. Off by default, because
+     * the report costs the loop something production need not pay.
+     */
+    DIAGNOSTIC
   }
 
   /** How an option reaches {@code canonical()}. */
@@ -434,7 +440,10 @@ public sealed interface VarkaEmitOption
           new CountTag("forceResidualAt="), List.of(), List.of()),
       new Count("misdescribeRollback", Reason.FAULT_INJECTOR, 0,
           VarkaEmitOptions::misdescribeRollback, Builder::misdescribeRollback,
-          new CountTag("misdescribeRollback="), List.of(), List.of()));
+          new CountTag("misdescribeRollback="), List.of(), List.of()),
+      new Flag("exactRefusalStatus", Reason.DIAGNOSTIC, false,
+          VarkaEmitOptions::exactRefusalStatus, Builder::exactRefusalStatus,
+          new FlagTag("exactRefusalStatus", true)));
 
   /** The option with this name. */
   static VarkaEmitOption named(String name) {

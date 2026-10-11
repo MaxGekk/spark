@@ -565,6 +565,23 @@ also lossy, because the stricter side's reason travels with the *predicate*
 rather than with each *call site*, and a reason that is only sometimes true
 gets applied everywhere the name appears.
 
+## A status bit per reason is free only while a method keeps one guard mask
+
+VARKA-304 gave each runtime refusal reason (`Analysis.Refusal`) its own status bit. A method
+ORs every guard into one mask and reduces it once, so the cheap form returns a constant chosen at
+emission: the bits of every reason the method holds. That is exact only for a method of one
+reason, and a count over the bytes suite's shapes found two or three reasons in 25.8% of guarded
+loop and epilogue methods (`VARKA-304.md` 2). Telling them apart needs a mask per reason, which
+is another live vector register in the loop for a rare event, so it is an option
+(`exactRefusalStatus`) and the default reports the candidate set.
+
+Two checks made the claim "only the constant moved" a fact rather than a reading of the diff:
+regenerating `emitted_bytes.json` with the old constant written back gave a file byte-identical
+to master's, and the option audit moved only shapes with a multi-reason method once a
+one-reason method under the option was made to take the default's path. Before that, the option
+rewrote every guarded method's status return: the audit counted 28 coverage shape-widths moved,
+and 2 after the fix.
+
 ## Adding an IR node moves the bytes oracle's fuzz digests, not its shapes - prove it by diffing keys
 
 `VarkaEmittedBytesSuite` pins two shape sets: every coverage row, keyed by name,

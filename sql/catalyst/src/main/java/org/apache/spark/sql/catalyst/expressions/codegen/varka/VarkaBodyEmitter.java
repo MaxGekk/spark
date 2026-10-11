@@ -27,8 +27,10 @@ import java.lang.classfile.Label;
 import java.lang.constant.ClassDesc;
 import java.lang.constant.ConstantDescs;
 import java.lang.constant.MethodTypeDesc;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.Analysis.BitmapPass;
@@ -185,11 +187,14 @@ final class VarkaBodyEmitter {
     emitSpecies(cb, analysis, s);
     emitLiterals(cb, analysis, numLiterals, s);
     if (s.guardAcc != null) {
-      // An empty mask: no lane has been found out of range yet.
-      cb.aload(s.species);
-      cb.loadConstant(0L);
-      cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
-      cb.astore(s.guardAcc);
+      // An empty mask: no lane has been found out of range yet. One per reason under
+      // `exactRefusalStatus`.
+      for (int acc : guardAccs(s)) {
+        cb.aload(s.species);
+        cb.loadConstant(0L);
+        cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+        cb.astore(acc);
+      }
     }
     switch (mode) {
       case LOOP -> emitVectorLoop(cb, dense, outputs, bodyOutputs, analysis, s);
@@ -525,9 +530,11 @@ final class VarkaBodyEmitter {
 
   /**
    * Ends a loop or epilogue method with its status: a constant zero where nothing is guarded,
-   * and otherwise whether any lane the body saw fell outside the lowering's range. The
-   * reduction is once per method, not once per lane group - the accumulator is a mask OR in
-   * the loop, which is one op.
+   * and otherwise the refusal bits of the guards that fired (VARKA-304). With one mask, a
+   * non-empty mask returns {@link Slots#guardStatus}, every reason the body holds; under
+   * {@code exactRefusalStatus} each reason's mask contributes its own bit. The reduction is once
+   * per method, not once per lane group - the accumulator is a mask OR in the loop, which is one
+   * op.
    */
   private static void emitStatusReturn(CodeBuilder cb, Slots s) {
     if (s.guardAcc == null) {
@@ -535,15 +542,35 @@ final class VarkaBodyEmitter {
       cb.ireturn();
       return;
     }
+    if (s.guardAccByReason != null) {
+      // status = (anyTrue(acc_r) ? bit_r : 0) | ... over the body's reasons, in enum order.
+      cb.loadConstant(0);
+      for (Map.Entry<Analysis.Refusal, Integer> e : s.guardAccByReason.entrySet()) {
+        Label clean = cb.newLabel();
+        cb.aload(e.getValue());
+        cb.invokevirtual(VECTOR_MASK, "anyTrue", ANY_TRUE);
+        cb.ifeq(clean);
+        cb.loadConstant(e.getKey().status);
+        cb.ior();
+        cb.labelBinding(clean);
+      }
+      cb.ireturn();
+      return;
+    }
     Label clean = cb.newLabel();
     cb.aload(s.guardAcc);
     cb.invokevirtual(VECTOR_MASK, "anyTrue", ANY_TRUE);
     cb.ifeq(clean);
-    cb.loadConstant(VarkaFusedKernel.STATUS_CHRONO_RANGE);
+    cb.loadConstant(s.guardStatus);
     cb.ireturn();
     cb.labelBinding(clean);
     cb.loadConstant(0);
     cb.ireturn();
+  }
+
+  /** The body's guard masks: the one mask, or each reason's under {@code exactRefusalStatus}. */
+  private static Collection<Integer> guardAccs(Slots s) {
+    return s.guardAccByReason != null ? s.guardAccByReason.values() : List.of(s.guardAcc);
   }
 
   private static void emitVectorLoop(CodeBuilder cb, boolean dense,

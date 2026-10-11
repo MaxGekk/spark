@@ -457,6 +457,50 @@ class VarkaEmitterArithmeticSuite extends VarkaEmitterTestBase {
       ctx = "year(d) * 100 + month(d)")
   }
 
+  test("a method holding two refusal reasons reports both bits by default and the one that " +
+      "fired under exactRefusalStatus") {
+    // VARKA-304. A range guard over a FAIL-mode addition, the commonest pair of reasons in one
+    // method (VARKA-304.md 2): by default both guards fold into one mask and the status names
+    // both whichever fired, a candidate set; the option gives each reason its own mask. At lane
+    // `overflow` the sum overflows and wraps to -2, inside the guard's bounds, so only the
+    // overflow fires; at lane `outside` it lands outside them without overflowing.
+    val root = new GuardedRange(
+      new IntArith(IntOp.ADD, Overflow.FAIL, new ColumnRef(0), new ColumnRef(1)), -1000L, 1000L)
+    val both = VarkaFusedKernel.STATUS_INT_OVERFLOW | VarkaFusedKernel.STATUS_VALUE_RANGE
+    for (exact <- Seq(false, true)) {
+      val name = if (exact) "exact" else "default"
+      val (kernel, loader) = load(emitMulti(Seq[VarkaVectorIR](root), 2, 0,
+        VarkaMatrix.base.withExactRefusalStatus(exact)))
+      try {
+        val arena = Arena.ofConfined()
+        try {
+          val none = (_: Int) => false
+          def status(length: Int, overflow: Int, outside: Int): Int = {
+            def left(i: Int): Int =
+              if (i == overflow) Int.MaxValue else if (i == outside) 5000 else i % 5
+            def right(i: Int): Int = if (i == overflow) Int.MaxValue else i % 3
+            val l = makeInputData(arena, length, none, left, poisonNulls = false)
+            val r = makeInputData(arena, length, none, right, poisonNulls = false)
+            runKernel2(kernel, l, r, makeOutput(arena, length), length)
+          }
+          val sum = if (exact) VarkaFusedKernel.STATUS_INT_OVERFLOW else both
+          val range = if (exact) VarkaFusedKernel.STATUS_VALUE_RANGE else both
+          assert(status(64, -1, -1) === 0, s"$name: nothing fires")
+          // A loop lane, then a lane only the epilogue covers, for each guard alone and both.
+          assert(status(64, 3, -1) === sum, s"$name: the overflow in a loop lane")
+          assert(status(64, -1, 3) === range, s"$name: the range in a loop lane")
+          assert(status(64, 3, 5) === both, s"$name: both in loop lanes")
+          assert(status(17, 16, -1) === sum, s"$name: the overflow in an epilogue lane")
+          assert(status(17, -1, 16) === range, s"$name: the range in an epilogue lane")
+        } finally {
+          arena.close()
+        }
+      } finally {
+        loader.release()
+      }
+    }
+  }
+
   test("a FAIL lane that overflows condemns the batch - in a loop lane, in an " +
       "epilogue lane, not under a null, and not with the check off") {
     val root = new IntArith(IntOp.ADD, Overflow.FAIL, new ColumnRef(0), new ColumnRef(1))
@@ -479,10 +523,10 @@ class VarkaEmitterArithmeticSuite extends VarkaEmitterTestBase {
         assert(status(kernel, 64, -1, none, none) === 0, "nothing overflows")
         // A loop lane, then the same lane in the masked body, then a lane only the epilogue
         // covers whatever the host's lane count is.
-        assert(status(kernel, 64, 3, none, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
-        assert(status(kernel, 64, 3, _ == 40, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
-        assert(status(kernel, 17, 16, none, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
-        assert(status(kernel, 17, 16, _ == 2, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE)
+        assert(status(kernel, 64, 3, none, none) === VarkaFusedKernel.STATUS_INT_OVERFLOW)
+        assert(status(kernel, 64, 3, _ == 40, none) === VarkaFusedKernel.STATUS_INT_OVERFLOW)
+        assert(status(kernel, 17, 16, none, none) === VarkaFusedKernel.STATUS_INT_OVERFLOW)
+        assert(status(kernel, 17, 16, _ == 2, none) === VarkaFusedKernel.STATUS_INT_OVERFLOW)
         // The overflowing lane under a null operand: the row is null, its data lanes are
         // undefined, and a batch must not be condemned for arithmetic nobody asked for.
         assert(status(kernel, 64, 3, none, _ == 3) === 0)
@@ -540,8 +584,8 @@ class VarkaEmitterArithmeticSuite extends VarkaEmitterTestBase {
         }
         val none = (_: Int) => false
         assert(status(64, -1, none) === 0, "no lane holds Int.MinValue")
-        assert(status(64, 3, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE, "a loop lane")
-        assert(status(17, 16, none) === VarkaFusedKernel.STATUS_CHRONO_RANGE, "an epilogue lane")
+        assert(status(64, 3, none) === VarkaFusedKernel.STATUS_INT_OVERFLOW, "a loop lane")
+        assert(status(17, 16, none) === VarkaFusedKernel.STATUS_INT_OVERFLOW, "an epilogue lane")
         assert(status(64, 3, _ == 3) === 0, "the overflowing lane is null")
         assert(status(17, 16, _ == 16) === 0, "the overflowing epilogue lane is null")
       } finally {
