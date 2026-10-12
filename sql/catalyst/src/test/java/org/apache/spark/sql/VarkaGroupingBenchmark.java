@@ -63,17 +63,18 @@ import org.apache.spark.sql.types.DataTypes;
  * in the run costs. A difference between arms counts only where it clears both, and against the
  * committed band.
  *
- * <p>The shapes. With today's weights only the forty mixed outputs over two dates and two
- * integers split differently under the two budgets. The other three build one class under both
- * and are controls here: {@code dayofweek} and {@code weekday} over two dates beside four
- * {@code date_add}, which VARKA-254's corrected weights (about 16 each, not 1) would split; 24
- * {@code date_add}, which the cost model's plan splits by call sites first; and eight checked sums
- * {@code i + j + k}, whose shared {@code i + j} lets each join its group up to the ceiling.
- * Null-free batches of 1024 rows, which every lane count divides, so the loop methods are what is
- * measured.
+ * <p>The shapes. {@code dayofweek} and {@code weekday} over two dates beside four
+ * {@code date_add}, which the budget splits into five loop methods since VARKA-254 weighed the
+ * two at what they emit, and the prediction keeps in two; forty mixed outputs over two dates and
+ * two integers, which the budget splits into sixteen; VARKA-200's mixed family over one date, the
+ * one corpus family where the prediction builds more loop methods than the budget; and two
+ * controls that build one class under every arm: 24 {@code date_add}, which the cost model's plan
+ * splits by call sites, and eight checked sums {@code i + j + k}, whose shared {@code i + j} lets
+ * each join its group up to the ceiling. Null-free batches of 1024 rows, which every lane count
+ * divides, so the loop methods are what is measured.
  *
- * <p>Committed before VARKA-254 recounts the weights, so that its results file shows the change
- * as a diff against these rows.
+ * <p>Committed before VARKA-254 recounted the weights, so that its results show the change as a
+ * diff against the rows measured on the code before it.
  *
  * <p>To run this benchmark:
  * <pre>

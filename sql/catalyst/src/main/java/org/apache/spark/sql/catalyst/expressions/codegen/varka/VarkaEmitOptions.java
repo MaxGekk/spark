@@ -443,9 +443,10 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        sites of each output the prediction admits past the budget checked whatever the group's
  *        width, since {@link #heavyGroupOutputs}' exemption assumes a narrow heavy group forms
  *        only by sharing a prefix. On is the budget binding as it did, kept as the reference.
- *        Off became the default on 12 October 2026, when the grouping benchmark read the
- *        weekday shape within 2.4% of the budget's and the mixed one 14% and 24% faster at 256 and
- *        128 bits, and the cost audit's corpus took 42% fewer loop methods
+ *        Off became the default on 12 October 2026: with the weights recounted, the budget split
+ *        a weekday shape into five loop methods and ran it 31 to 33% slower, where the prediction
+ *        kept two and ran within 2% of the old grouping; a mixed shape ran 15 and 26% faster than
+ *        before at 256 and 128 bits; and the cost audit's corpus took 42% fewer loop methods
  *        ({@code VARKA-254.md} 9). Outside those conditions the budget binds either way.
  */
 public record VarkaEmitOptions(

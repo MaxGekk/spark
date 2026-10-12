@@ -1,12 +1,12 @@
 benchmark:   org.apache.spark.sql.VarkaGroupingBenchmark
-commit:      cdf6fdd66b7
-date:        2026-10-12T14:57:46Z
+commit:      1e33134afca
+date:        2026-10-12T17:18:38Z
 jdk:         OpenJDK Runtime Environment (build 25.0.4.1+1-1-26.04.4-Ubuntu)
 kernel:      7.0.0-34-generic
 cpu:         AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 power:       governor=performance epp=performance profile=performance
 pinned to:   taskset -c 0,12,13,14,15,1,2,3
-load at start: 0.70
-canary:      ok (compute -1.5% cache -1.5% memory -1.1% )
+load at start: 0.62
+canary:      ok (compute +0.1% cache -1.8% memory -2.0% )
 wide run:    SPARK_GENERATE_BENCHMARK_FILES=1 taskset -c 0,12,13,14,15,1,2,3 build/sbt catalyst/Test/runMain org.apache.spark.sql.VarkaGroupingBenchmark
 narrow run:  taskset -c 0,12,13,14,15,1,2,3 build/sbt "project catalyst" 'set Test/javaOptions += "-XX:MaxVectorSize=16"' "Test/runMain org.apache.spark.sql.VarkaGroupingBenchmark"
