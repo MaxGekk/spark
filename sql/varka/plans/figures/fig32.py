@@ -136,7 +136,7 @@ for i, g in enumerate(refused):
 r.text(
     545,
     600,
-    "%d calls a row, refused: %s" % (len(refused), refused[0][3]),
+    "%d groups called, not inlined: %s" % (len(refused), refused[0][3]),
     size=18,
     anchor="middle",
     color=RED,

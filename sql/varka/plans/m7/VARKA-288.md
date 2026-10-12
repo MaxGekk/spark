@@ -197,3 +197,9 @@ spine (how to see the fix in `explain("codegen")` and in 4.4.0's warning, the tw
 the per-run literal edge, what to drop after upgrading). The owner chose the users' version; it
 is the one to publish, at the length 4 set plus the practical sections, with both figures.
 The other two were then dropped from the repository; their text is in the branch's history.
+
+**A correction to 9.1, from reviewing the post.** "Three calls a row into separately compiled
+groups" overstates it: a `CASE WHEN` stops at the first branch that matches, so a row calls a
+refused group only when its branch lies past the first two, up to three calls, against the one
+call every row makes when the method is kept whole. And the workaround is within 3% of
+whole-stage off past the line, not 2%: 322 against 315 ms at 96 branches is 2.2%.
