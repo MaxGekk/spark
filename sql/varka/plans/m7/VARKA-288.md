@@ -203,3 +203,13 @@ groups" overstates it: a `CASE WHEN` stops at the first branch that matches, so 
 refused group only when its branch lies past the first two, up to three calls, against the one
 call every row makes when the method is kept whole. And the workaround is within 3% of
 whole-stage off past the line, not 2%: 322 against 315 ms at 96 branches is 2.2%.
+
+### 9.3 Published, 12 October 2026
+
+"A large CASE WHEN, split only where it has to be" is published at
+https://vecbricks.github.io/split-only-where-it-has-to-be/, built from `POST_CASE_WHEN_USERS.md`
+with `dev/varka_post_page.py` (vecbricks.github.io `a1ff506`), its link card Figure 1 at 1200 by
+630, and its two figures beside it. With 5.1 to 5.4 met - #59225 merged and the release named,
+3.1 and 3.2 measured and committed with their predictions scored, the post published with every
+number from a committed file, and the three earlier posts' links pointing at #59225 - the row is
+done.
