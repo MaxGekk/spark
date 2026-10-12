@@ -1,0 +1,42 @@
+C2's inlining decisions for the 64-branch CASE WHEN of CaseWhenCodegenBenchmark (VARKA-288.md 3.2)
+
+probe:     org.apache.spark.sql.execution.benchmark.CaseWhenInliningProbe always|asNeeded
+           (the rung's query, 2,000,000 rows, twenty runs in one fresh JVM, local[1])
+flags:     -XX:+UnlockDiagnosticVMOptions -XX:+LogCompilation (and, for a readable cross-check,
+           -XX:+PrintInlining -XX:+PrintCompilation, which agree)
+read:      every C2 task (no level attribute) of a GeneratedIteratorForCodegenStage1 method; for
+           each, every <call> of a stage method and the inline_success or inline_fail after it
+commit:    29716286906 (varka-288-measure, on Varka master with apache/spark#59225 merged)
+jdk:       OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu
+cpu:       AMD Ryzen AI 9 HX PRO 370 (the laptop)
+date:      2026-10-12
+
+The stage's methods (bytecode bytes, from the same log):
+
+  split as needed  processNext 238, project_doConsume_0 6049 (the whole CASE WHEN, under 8000
+                   bytes, so the split leaves it in one method)
+  split always     processNext 238, project_doConsume_0 151, five group methods
+                   project_caseWhen_0_group0_0..4 (146, 146, 146, 146, 21), and one method per
+                   branch block project_caseWhen_0_k (15 to 198 bytes)
+
+split as needed, C2 task of processNext:
+  project_doConsume_0 (6049 bytes)      inline_fail: hot method too big
+C2 task of project_doConsume_0: no call to a stage method; the CASE WHEN is compiled whole.
+
+split always, first C2 task of processNext (compile id 9047):
+  project_doConsume_0 (151 bytes)       inline_success: inline (hot)
+  project_caseWhen_0_group0_0 (146)     inline_success: inline (hot)
+  project_caseWhen_0_group0_1 (146)     inline_success: inline (hot)
+    their 16 branch methods             inline_success: inline (hot)
+  project_caseWhen_0_group0_2 (146)     inline_fail: size > DesiredMethodLimit
+  project_caseWhen_0_group0_3 (146)     inline_fail: size > DesiredMethodLimit
+  project_caseWhen_0_group0_4 (21)      inline_fail: size > DesiredMethodLimit
+split always, second C2 task of processNext (compile id 9886):
+  project_doConsume_0 (151 bytes)       inline_fail: already compiled into a big method
+C2 task of project_doConsume_0: the same decisions as the first processNext task, groups 0 and
+1 inlined with their branches, groups 2 to 4 refused with size > DesiredMethodLimit.
+C2 tasks of the group methods: each inlines its branch methods, eight each and one in group 4.
+
+So under split always the row loop runs the first two fifths of the chain inline and calls out
+for the other three, each group a compiled method of its own; under split as needed it makes one
+call per row, to a method that holds the whole chain with no call inside it.

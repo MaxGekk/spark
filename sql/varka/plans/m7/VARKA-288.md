@@ -141,3 +141,47 @@ way `fig19.py` is.
    conf's version.
 
 ## 9. Outcome
+
+### 9.1 The measurements (6.2), 12 October 2026
+
+apache/spark#59225 merged to `master` (`912c7077003`) and `branch-4.x` (`a1b272afa39`), so the
+fix ships in Spark 4.4.0, which its conf's version already said (3.3). The link fix of 5.4 had
+landed before (`d70883baac3`).
+
+**3.1, the cliff post's workaround against the fix.** `CaseWhenCodegenBenchmark` gained the arm
+"not split, hugeMethodLimit 8000" in every rung and ran on a GitHub runner's AMD EPYC 7763, the
+CPU of the cliff post's current numbers, on JDK 25
+(`sql/core/benchmarks/CaseWhenCodegenBenchmark-jdk25-288-results.txt`, its provenance beside it).
+Best times:
+
+| shape | split as needed | workaround | whole-stage off | not split |
+|---|---|---|---|---|
+| 64 branches | 92 ms | 90 ms | 212 ms | 92 ms |
+| 96 branches | 121 ms | 322 ms | 315 ms | 3815 ms |
+| 300 branches | 217 ms | 982 ms | 963 ms | 11570 ms |
+| keyed aggregate, 300 | 255 ms | 2297 ms | 2274 ms | 11858 ms |
+
+**3.2, the inlining at 64 branches.** `CaseWhenInliningProbe` ran the rung in a fresh JVM per mode
+under `-XX:+LogCompilation` on the laptop's JDK 25
+(`sql/core/benchmarks/CaseWhenInlining-jdk25-288-results.txt`). Split as needed, the stage's
+`processNext` calls one 6049-byte `project_doConsume_0`, which C2 refuses to inline ("hot method
+too big") and compiles whole, with no call inside it. Split always, `processNext` inlines the
+151-byte `project_doConsume_0`, the first two of its five group methods and their sixteen branch
+methods, and refuses the other three groups with `size > DesiredMethodLimit`; each refused group
+is compiled on its own, its branch methods inlined.
+
+**Predictions scored.**
+
+1. **Held.** The workaround is within 2% of whole-stage off at 96 and 300 branches (322 against
+   315 ms, 982 against 963) and in the keyed aggregate (2297 against 2274), and split as needed is
+   4.5 times faster than it at 300 branches, 9 times in the keyed aggregate.
+2. **Held.** At 64 branches the workaround changes nothing: 90 ms against 92 for split as needed
+   and not split alike, the method being under 8000 bytes.
+3. **Half held.** Under split always `processNext` does inline the first split calls and refuse
+   the rest on size, but by `size > DesiredMethodLimit`, none of the three reasons named. And under
+   split as needed there is a call to refuse: the whole CASE WHEN's method, too big to inline,
+   called once per row. So the cost of splitting always below the line is not a call where there
+   was none; it is three calls a row into separately compiled groups, against one, on this rung
+   about 5% (97 ms against 92 on the runner).
+
+The draft (6.3) is next.
