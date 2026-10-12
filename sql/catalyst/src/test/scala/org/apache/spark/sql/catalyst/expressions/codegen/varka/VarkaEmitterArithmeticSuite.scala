@@ -302,6 +302,8 @@ class VarkaEmitterArithmeticSuite extends VarkaEmitterTestBase {
   }
 
   test("a node shared across groups gets no slot in a body that uses it once", PinsDefaults) {
+    // The budget's rule, which is what this pins: since VARKA-254 the prediction bounds groups by
+    // default, and the budget binds where it cannot and under groupBudgetUnderPrediction.
     // VARKA-223: a shared slot is decided by the body's own use count, not the kernel's. Two
     // outputs over one column, each a chain of 12 ops - two would pass the group budget of 16,
     // and the chain depth stays under its limit - take a group each, and use the
@@ -315,7 +317,8 @@ class VarkaEmitterArithmeticSuite extends VarkaEmitterTestBase {
       }
     // Per loop or epilogue method: the slots a `DUP; ASTORE` pair parks a value in, split into
     // those the method reads back and those it never does.
-    val heavy = emitMulti(Seq(chain(12, 0), chain(12, 1)), 1, 2)
+    val heavy = emitMulti(Seq(chain(12, 0), chain(12, 1)), 1, 2,
+      VarkaMatrix.base.withGroupBudgetUnderPrediction(true))
     assert(methodNames(heavy).count(isLoop(_, true)) >= 2,
       "the two chains share a group, so the case is not exercised")
     val unread = VarkaUnreadLocals.unreadSharedSlots(heavy._2).asScala

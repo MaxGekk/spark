@@ -248,7 +248,8 @@ class VarkaCoverageCompositionFuzzSuite
    * every kernel was compared.
    */
   private def checkKernel(plan: CompiledVarkaProjection, inputs: Seq[Attribute],
-      opts: VarkaEmitOptions, rnd: Random, spark: Option[VarkaSparkOracle] = None): Unit = {
+      opts: VarkaEmitOptions, rnd: Random, spark: Option[VarkaSparkOracle] = None,
+      context: String = "kernel"): Unit = {
     val numInputs = plan.inputOrdinals.size
     kernelCounter += 1
     kernelsByLane(plan.lane) = kernelsByLane.getOrElse(plan.lane, 0) + 1
@@ -266,7 +267,6 @@ class VarkaCoverageCompositionFuzzSuite
       }
     }
     val forceMasked = length > 1 && rnd.nextBoolean()
-    val context = "kernel"
     def intValue(i: Int, scale: Int): Int = plan.derivedAt(i).toScala.map(_.kind) match {
       case Some(VarkaDerivedKind.TRUNC_LEVEL) =>
         DateTimeUtils.TRUNC_TO_WEEK +
@@ -567,9 +567,10 @@ class VarkaCoverageCompositionFuzzSuite
           .getOrElse(fail(s"${row.executable} did not fuse alone"))
         val spark = sparkOracle(plan, columns, Seq(expr))
         assert(spark.isDefined, s"${row.executable} derives an input")
-        (0 until 4).foreach(_ => withClue(row.executable + ": ") {
-          checkKernel(plan, columns, opts, rnd, spark)
-        })
+        // The row's expression is the check's context, which a failure's message starts with:
+        // the checks fail with an IllegalStateException, which `withClue` would pass through.
+        (0 until 4).foreach(_ => checkKernel(plan, columns, opts, rnd, spark,
+          context = s"kernel of ${row.executable}"))
         checked += 1
       }
       for (row <- predicates) {
@@ -578,9 +579,8 @@ class VarkaCoverageCompositionFuzzSuite
         val mask = predicate.fusedConjuncts.asScala.toSeq.reduce(And)
         val spark = sparkOracle(predicate.fused, columns, Seq(mask))
         assert(spark.isDefined, s"${row.executable} derives an input")
-        (0 until 4).foreach(_ => withClue(row.executable + ": ") {
-          checkKernel(predicate.fused, columns, opts, rnd, spark)
-        })
+        (0 until 4).foreach(_ => checkKernel(predicate.fused, columns, opts, rnd, spark,
+          context = s"kernel of ${row.executable}"))
         checked += 1
       }
     }

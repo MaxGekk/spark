@@ -204,13 +204,13 @@ class VarkaEmitCostSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
           assert(on.isEmpty, s"$where declines under the weights and emits predicted")
       }
     }
-    // The int-lane entry is that greedy close: the weights' class is built twice. The two
-    // long-lane entries are a second way to gain one, found when VARKA-235 moved the long-lane
-    // corpus (VARKA-235.md 9): the weights build once, so the measurement never splits a
-    // group, and the prediction still closes one a method early - a prediction near the budget
-    // erring high, where the greedy close is one erring low.
-    assert(gained.result() === Seq("wide int 120: 31 -> 32", "wide long 59: 55 -> 56",
-      "wide long 78: 14 -> 15"))
+    // The int-lane entry is that greedy close: the weights' class is built twice. The long-lane
+    // entry is a second way to gain one, found when VARKA-235 moved the long-lane corpus
+    // (VARKA-235.md 9): the weights build once, so the measurement never splits a group, and the
+    // prediction still closes one a method early - a prediction near the budget erring high,
+    // where the greedy close is one erring low. A second long-lane entry, shape 59, left the list
+    // when VARKA-254 recounted the weights, and shape 120 moved a method up on both sides.
+    assert(gained.result() === Seq("wide int 120: 32 -> 33", "wide long 78: 14 -> 15"))
   }
 
   test("a decline no grouping can avoid is not built again under the weights") {

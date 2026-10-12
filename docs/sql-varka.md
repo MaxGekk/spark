@@ -577,11 +577,15 @@ class has a deliberate method anatomy:
   than the calendar shapes do. A tree that mixes the two operators, such as
   `datediff(greatest(d, d2), greatest(d3, d4))`, is not served at all and
   keeps its per-group write.
-* The vector walk is split into sibling loop methods of at most
-  `GROUP_BUDGET` (16) IR nodes each - or up to `FUSED_CEILING` (400) vector
-  ops where the outputs in a method share a calendar prefix (VARKA-32) - one
-  output group per method, plus a shared *epilogue* method for the remainder
-  rows. Separate methods, not one big loop: each gets its own C2 compilation,
+* The vector walk is split into sibling loop methods, one output group per
+  method, plus a shared *epilogue* method for the remainder rows. A group's
+  outputs are priced by the vector ops their nodes emit, and a group grows up
+  to `FUSED_CEILING` (400) while the emit cost model predicts its methods
+  within the byte and call-site budgets, with the plan's margins (VARKA-254);
+  where the model cannot bound it, the older rule binds - `GROUP_BUDGET` (16)
+  ops a method, or up to the ceiling where the outputs share a calendar prefix
+  (VARKA-32). The built class is then measured, and a method over a limit has
+  its group split. Separate methods, not one big loop: each gets its own C2 compilation,
   so no method's inlining budget can starve another's intrinsics - VARKA-10
   measured 3-4x on exactly that cliff, and VARKA-24 measured the same cliff
   from the other side when it tried leaving the epilogue inline in a kernel's
@@ -602,12 +606,11 @@ class has a deliberate method anatomy:
 * Below the node level, the calendar extractions share their civil-from-days
   decomposition: `year(d)`, `month(d)`, `dayofmonth(d)`, `quarter(d)` and
   `add_months(d, n)` are distinct IR nodes, but a method that emits several of
-  them over one date runs the 31-op decomposition once and gives each output
-  only its own tail (VARKA-32). The grouping puts such outputs in one loop
-  method for exactly that reason - an output joins a method past
-  `GROUP_BUDGET` only when it reuses a prefix the method already computes,
-  and never past `FUSED_CEILING` - so the hot loop pays the decomposition
-  once: the four-field projection runs at 1762.6 M rows/s against 818.0 with
+  them over one date runs the 29-op decomposition once and gives each output
+  only its own tail (VARKA-32). The grouping keeps such outputs in one loop
+  method for exactly that reason - an output that reuses a prefix the method
+  already computes may join it up to `FUSED_CEILING` whichever rule bounds the
+  group - so the hot loop pays the decomposition once: the four-field projection runs at 1762.6 M rows/s against 818.0 with
   a method per field (2.15x at AVX-512, 2.51x at 128-bit; the parity file).
   The epilogue, the one method every output shares, decomposes once per date
   as well, which is what keeps a wide date projection's epilogue small enough
