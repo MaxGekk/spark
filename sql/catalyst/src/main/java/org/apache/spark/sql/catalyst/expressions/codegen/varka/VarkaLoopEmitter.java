@@ -662,7 +662,8 @@ public final class VarkaLoopEmitter {
         boolean halved = halveGroups(widenedOver, groups, 1, forcedStarts, null);
         Set<Integer> rest = new HashSet<>(overSites.keySet());
         rest.removeAll(widenedOver);
-        if (halveGroups(rest, groups, narrowest, forcedStarts, null) | halved) {
+        boolean restHalved = halveGroups(rest, groups, narrowest, forcedStarts, null);
+        if (halved || restHalved) {
           siteSplit = true;
           split = true;
           trace.siteSplits++;
