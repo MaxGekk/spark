@@ -60,6 +60,8 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   test("calendar siblings over one date share a loop method; plain chains, other " +
       "dates and the ceiling keep them apart", PinsDefaults) {
+    // The budget's rule, which is what this pins: since VARKA-254 the prediction bounds groups by
+    // default, and the budget binds where it cannot and under groupBudgetUnderPrediction.
     // VARKA-32.md 10.2's table, pinned by loop-method count. Before B2 this test asserted
     // the opposite for the four fields - one method each, "whatever GROUP_BUDGET would say" -
     // because a method of ~180 ops was believed to be a compile cliff. 7.5 measured that away
@@ -72,27 +74,28 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     val fields = Seq[VarkaVectorIR](
       new Year(col), new Month(col), new DayOfMonth(col), new Quarter(col))
     def loops(roots: Seq[VarkaVectorIR], inputs: Int, lits: Int,
-        options: VarkaEmitOptions = VarkaMatrix.base): Int =
+        options: VarkaEmitOptions = VarkaMatrix.base.withGroupBudgetUnderPrediction(true)): Int =
       methodNames(emitMulti(roots, inputs, lits, options)).count(isLoop(_, true))
-    // Four fields over one date: one prefix, four tails, 52 ops in one method.
+    // Four fields over one date: one prefix, four tails, 50 ops in one method.
     assert(loops(fields, 1, 0) === 1)
     // With sharing off there is no prefix to reuse, clause 2 never fires, and each field
     // outweighs GROUP_BUDGET on its own: the four methods of before B2, kept as the reference
     // variant the parity benchmark's "separate" rows are emitted with.
-    assert(loops(fields, 1, 0, unshared) === 4)
-    // Two dates: the second year reuses nothing (saved = 0) and 38 + 38 > 16.
+    assert(loops(fields, 1, 0, unshared.withGroupBudgetUnderPrediction(true)) === 4)
+    // Two dates: the second year reuses nothing (saved = 0) and 34 + 34 > 16.
     assert(loops(Seq(new Year(col), new Year(new ColumnRef(1))), 2, 0) === 2)
     // A plain chain is untouched: add_days and sub_days fit the budget together as they did.
     assert(loops(Seq(new AddDays(col, new LiteralSlot(0)), new SubDays(col, new LiteralSlot(0))),
       1, 1) === 1)
-    // A plain output ahead of the siblings: year reuses nothing against [x + 1] and 1 + 38 > 16,
+    // A plain output ahead of the siblings: year reuses nothing against [x + 1] and 1 + 34 > 16,
     // so it opens a group of its own, which month then joins.
     assert(loops(Seq(new AddDays(col, new LiteralSlot(0)), new Year(col), new Month(col)),
       1, 1) === 2)
-    // The ceiling bounds clause 2: at prefix + two tails the third sibling opens a new group,
-    // which the fourth joins - two methods of two.
-    val tight = VarkaMatrix.base.withFusedCeiling(
-      VarkaEmitBudget.CHRONO_PREFIX_WEIGHT + 2 * VarkaEmitBudget.CHRONO_FIELD_TAIL_WEIGHT)
+    // The ceiling bounds clause 2: at the prefix and the two widest tails the third sibling opens
+    // a new group, which the fourth joins - two methods of two.
+    val tight = VarkaMatrix.base.withGroupBudgetUnderPrediction(true)
+      .withFusedCeiling(VarkaEmitBudget.CHRONO_PREFIX_WEIGHT
+      + VarkaEmitBudget.DAY_OF_MONTH_TAIL_WEIGHT + VarkaEmitBudget.QUARTER_TAIL_WEIGHT)
     assert(loops(fields, 1, 0, tight) === 2)
     // Greedy in output order, pinned as the limitation 10.2 names rather than fixed: month(d)
     // is offered to the group holding year(d2), whose prefix it cannot reuse, so it forms a
@@ -106,6 +109,8 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
   }
 
   test("whole-node reuse groups what a wider budget would, and nothing else", PinsDefaults) {
+    // The budget's rule, which is what this pins: since VARKA-254 the prediction bounds groups by
+    // default, and the budget binds where it cannot and under groupBudgetUnderPrediction.
     // Clause 2 lets an output join a group past the budget when joining lets it skip work the
     // group already does. B2 wrote that for a civil-from-days prefix; `shareWholeNodes`
     // generalises it to any node the group holds, which is the same argument - a reused prefix
@@ -130,9 +135,9 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     }
     val shared8 = chain(8)
     val da1 = new AddDays(c0, new LiteralSlot(0))
-    val rule = VarkaMatrix.base.withShareWholeNodes(true)
-    val wider = VarkaMatrix.base.withGroupBudget(24)
-    val shipped = VarkaMatrix.base.withShareWholeNodes(false)
+    val rule = VarkaMatrix.base.withGroupBudgetUnderPrediction(true).withShareWholeNodes(true)
+    val wider = VarkaMatrix.base.withGroupBudgetUnderPrediction(true).withGroupBudget(24)
+    val shipped = VarkaMatrix.base.withGroupBudgetUnderPrediction(true).withShareWholeNodes(false)
 
     // Shapes that share nodes but no prefix, and whose merged weight straddles the budget:
     // the rule must emit what the wider budget emits.
@@ -272,65 +277,275 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     }
   }
 
-  test("every calendar weight is the prefix plus the tail the emitter emits", PinsDefaults) {
-    // The register VARKA-32.md 10.3 asked for, asserted off the class file the way the
-    // VARKA-53 and VARKA-54 registers are. Each calendar node alone emits its prefix plus its tail,
-    // and beside month(d) in one loop method it adds exactly its tail - which is the
-    // arithmetic clause 2 of groupOutputs sums against FUSED_CEILING. A lowering change that
-    // moves a count fails here and names the constant to recount, rather than leaving a
-    // weight to drift the way CHRONO_WEIGHT drifted from 50 to 40 without anything noticing.
+  /**
+   * The lane calls a shape's loop body makes - `IntVector`, `LongVector`, `DoubleVector` and
+   * `Vector`, not `VectorMask` - which is what a weight counts. The dense body where there is
+   * one; a shape that builds only a masked body (an output that can null a lane) is read there.
+   */
+  private def laneCalls(bytes: Array[Byte]): Int =
+    vectorOps(bytes, if (VarkaEmitterTestSupport.methodNames(bytes).contains("loopDense0")) {
+      "loopDense0"
+    } else {
+      "loopMasked0"
+    })
+
+  test("every weight is what its node emits alone, over every node the IR permits (VARKA-254)",
+      PinsDefaults) {
+    // The register: each row is a shape emitted alone, and its lane calls, less the columns'
+    // loads, the literals' broadcasts and the output's store, equal the summed weights of its
+    // nodes. Three kinds of node are read differently:
+    //  - a calendar node whose own tail does not read the month emits its prefix without the
+    //    month step (VARKA-48), so it emits its weight less that step;
+    //  - a connective emits only mask calls, so it emits nothing a weight counts, and its weight
+    //    is the floor of 1, asserted as such;
+    //  - a leaf weighs 0, its load or broadcast being the overhead.
+    // Every record the sealed IR permits needs a row, so a node added to the IR without one fails
+    // here, and a lowering change that moves a count fails here naming the node to recount.
+    val c = new ColumnRef(0)
+    val c1 = new ColumnRef(1)
+    val c2 = new ColumnRef(2)
+    val l = new LiteralSlot(0)
+    val lc = new ColumnRef(0, LaneType.LONG)
+    val lc1 = new ColumnRef(1, LaneType.LONG)
+    val lt = new Compare(CompareOp.LT, c, c1)
+    val monthStep = monthStepOps(VarkaMatrix.base)
+    // The long lane's division weighs its larger form, the magic one AVX2 hosts emit.
+    val avx2 = VarkaMatrix.base.withUseAVX(2)
+    // (node, inputs, literals, options); every input and literal the shape takes is read.
+    val rows = Seq[(VarkaVectorIR, Int, Int, VarkaEmitOptions)](
+      (new AddDays(c, l), 1, 1, VarkaMatrix.base),
+      (new SubDays(c, l), 1, 1, VarkaMatrix.base),
+      (new DateDiff(c, c1), 2, 0, VarkaMatrix.base),
+      (new IntArith(IntOp.ADD, Overflow.WRAP, c, c1), 2, 0, VarkaMatrix.base),
+      (new IntArith(IntOp.SUB, Overflow.FAIL, c, c1), 2, 0, VarkaMatrix.base),
+      (new IntArith(IntOp.ADD, Overflow.NULL, c, c1), 2, 0, VarkaMatrix.base),
+      (new IntArith(IntOp.ADD, Overflow.FAIL, lc, lc1), 2, 0, VarkaMatrix.base),
+      (new IntNeg(Overflow.WRAP, c), 1, 0, VarkaMatrix.base),
+      (new IntNeg(Overflow.FAIL, lc), 1, 0, VarkaMatrix.base),
+      (new ConstDivide(c, 7), 1, 0, VarkaMatrix.base),
+      (new ConstDivide(lc, 60, ConstDivide.EXACT_DIVIDEND_BOUND), 1, 0, avx2),
+      (BoundedDivide.of(c, 3600, 86400), 1, 0, VarkaMatrix.base),
+      (lt, 2, 0, VarkaMatrix.base),
+      (new And(lt, new Compare(CompareOp.GT, c, l)), 2, 1, VarkaMatrix.base),
+      (new Or(lt, new Compare(CompareOp.GT, c, l)), 2, 1, VarkaMatrix.base),
+      (new Not(lt), 2, 0, VarkaMatrix.base),
+      (new IsNotNull(c), 1, 0, VarkaMatrix.base),
+      (new InRanges(c, java.util.List.of[Integer](1, 5, 9, 12)), 1, 0, VarkaMatrix.base),
+      (new IfElse(lt, c, c1), 2, 0, VarkaMatrix.base),
+      (new Greatest(c, c1), 2, 0, VarkaMatrix.base),
+      (new Least(c, c1), 2, 0, VarkaMatrix.base),
+      (new DayOfWeek(c), 1, 0, VarkaMatrix.base),
+      (new WeekDay(c), 1, 0, VarkaMatrix.base),
+      (new DayOfWeekIso(c), 1, 0, VarkaMatrix.base),
+      (new NextDay(c, l), 1, 1, VarkaMatrix.base),
+      (new ThursdayOf(c), 1, 0, VarkaMatrix.base),
+      (new Year(c), 1, 0, VarkaMatrix.base),
+      (new Month(c), 1, 0, VarkaMatrix.base),
+      (new DayOfMonth(c), 1, 0, VarkaMatrix.base),
+      (new Quarter(c), 1, 0, VarkaMatrix.base),
+      (new DayOfYear(c), 1, 0, VarkaMatrix.base),
+      (new LastDay(c), 1, 0, VarkaMatrix.base),
+      (new WeekOfYear(new ThursdayOf(c)), 1, 0, VarkaMatrix.base),
+      (new TruncDate(c, TruncLevel.YEAR), 1, 0, VarkaMatrix.base),
+      (new TruncDate(c, TruncLevel.MONTH), 1, 0, VarkaMatrix.base),
+      (new TruncDate(c, TruncLevel.QUARTER), 1, 0, VarkaMatrix.base),
+      (new TruncDateDynamic(c, c1), 2, 0, VarkaMatrix.base),
+      (new AddMonths(c, l), 1, 1, VarkaMatrix.base),
+      (new MakeDate(c, c1, c2, true), 3, 0, VarkaMatrix.base),
+      // The null form builds only a masked body, read there; one weight serves both forms.
+      (new MakeDate(c, c1, c2, false), 3, 0, VarkaMatrix.base),
+      (new GuardedDay(new IntArith(IntOp.ADD, Overflow.WRAP, c, c1)), 2, 0, VarkaMatrix.base),
+      (new ConstDivide(new GuardedRange(c, -999L, 999L), 60, 1000L), 1, 0, VarkaMatrix.base),
+      (new NarrowLane(new IntNeg(Overflow.WRAP, lc)), 1, 0, VarkaMatrix.base))
+    // The calendar nodes whose own tail reads no month, so their prefix elides the month step.
+    def elidesMonthStep(n: VarkaVectorIR): Boolean =
+      VarkaEmitBudget.isChrono(n) && !VarkaChronoLowering.tailReadsMarchMonth(n)
+    def isConnective(n: VarkaVectorIR): Boolean = n match {
+      case _: And | _: Or | _: Not | _: IsNotNull => true
+      case _ => false
+    }
+    // What a node is expected to emit of a shape's lane calls.
+    def emits(n: VarkaVectorIR): Int = n match {
+      case _: ColumnRef | _: LiteralSlot => 0
+      case _ if isConnective(n) => 0
+      case _ if elidesMonthStep(n) => VarkaEmitBudget.weightOf(n) - monthStep
+      case _ => VarkaEmitBudget.weightOf(n)
+    }
+    def nodes(n: VarkaVectorIR): Set[VarkaVectorIR] =
+      Set(n) ++ VarkaVectorIR.childrenOf(n).toSeq.flatMap(nodes)
+    val covered = scala.collection.mutable.Set.empty[Class[_]]
+    for ((root, inputs, lits, options) <- rows) {
+      val all = nodes(root)
+      all.foreach(n => covered += n.getClass)
+      // A condition's store is a mask call, and IS NOT NULL reads its column's validity, never
+      // its values, so neither pays a lane call there.
+      val store = if (root.isInstanceOf[Cond]) 0 else 1
+      val loads = if (root.isInstanceOf[IsNotNull]) 0 else inputs
+      val overhead = loads + lits + store
+      val expected = all.toSeq.map(emits).sum
+      val emitted = laneCalls(emitMulti(Seq(root), inputs, lits, options)._2) - overhead
+      assert(emitted === expected,
+        s"${VarkaVectorIR.canonical(root)} emits $emitted lane calls past its loads and store, " +
+          s"and its nodes weigh $expected: recount " +
+          all.filterNot(n => n.isInstanceOf[ColumnRef] || n.isInstanceOf[LiteralSlot])
+            .map(n => s"${n.getClass.getSimpleName}=${VarkaEmitBudget.weightOf(n)}")
+            .mkString(", "))
+    }
+    for (n <- rows.flatMap(r => nodes(r._1)).filter(isConnective)) {
+      assert(VarkaEmitBudget.weightOf(n) === 1, s"$n is a connective, whose weight is the floor 1")
+    }
+    assert(VarkaEmitBudget.weightOf(c) === 0 && VarkaEmitBudget.weightOf(l) === 0)
+    // Every record the IR permits, through its sealed sub-interfaces, has a row.
+    def leaves(k: Class[_]): Seq[Class[_]] =
+      Option(k.getPermittedSubclasses).map(_.toSeq.flatMap(leaves)).getOrElse(Seq(k))
+    val missing = leaves(classOf[VarkaVectorIR]).filterNot(covered.contains)
+    assert(missing.isEmpty, s"no register row for ${missing.map(_.getSimpleName).mkString(", ")}")
+  }
+
+  test("each calendar tail is what its node adds beside month(d) in one method", PinsDefaults) {
+    // The other half of the calendar register: beside month(d), whose prefix keeps the month
+    // step, a node adds exactly its tail, which is the arithmetic clause 2 of groupOutputs sums
+    // against FUSED_CEILING. Wide enough that clause 1 alone puts the two in one method.
     val col = new ColumnRef(0)
-    def ops(roots: Seq[VarkaVectorIR], inputs: Int = 1, lits: Int = 0,
-        options: VarkaEmitOptions = VarkaMatrix.base): Int =
+    def ops(roots: Seq[VarkaVectorIR], inputs: Int, lits: Int, options: VarkaEmitOptions): Int =
       laneOps(emitMulti(roots, inputs, lits, options)._2, "loopDense0")
-    val prefix = VarkaEmitBudget.CHRONO_PREFIX_WEIGHT
-    // A prefix no tail in the group reads the month out of elides the month step (VARKA-48).
-    val prefixNoMonth = prefix - monthStepOps(VarkaMatrix.base)
-    val month = new Month(col)
-    val monthAlone = ops(Seq(month))
-    assert(monthAlone === prefix + 4, "month(d), the partner every tail is measured beside")
-    // Wide enough that clause 1 alone puts month(d) and the node in one method, so the pair
-    // measures the fragment's arithmetic whether or not clause 2 exists yet.
     val wide = VarkaMatrix.base.withGroupBudget(400)
-    // (name, node, its tail, whether its own prefix keeps the month step, literals, inputs)
-    val register = Seq(
-      ("year", new Year(col), 5, false, 0, 1),
-      ("dayofmonth", new DayOfMonth(col), 5, true, 0, 1),
-      ("quarter", new Quarter(col), 7, true, 0, 1),
-      ("dayofyear", new DayOfYear(col), VarkaEmitBudget.DAY_OF_YEAR_TAIL_WEIGHT, false, 0, 1),
-      ("last_day", new LastDay(col), VarkaEmitBudget.LAST_DAY_TAIL_WEIGHT, true, 0, 1),
-      ("add_months", new AddMonths(col, new LiteralSlot(0)),
-        VarkaEmitBudget.ADD_MONTHS_TAIL_WEIGHT, true, 1, 1),
-      ("trunc YEAR", new TruncDate(col, TruncLevel.YEAR),
-        VarkaEmitBudget.TRUNC_YEAR_TAIL_WEIGHT, false, 0, 1),
+    val month = new Month(col)
+    val monthAlone = ops(Seq(month), 1, 0, VarkaMatrix.base)
+    val tails = Seq[(String, VarkaVectorIR, Int, Int, Int)](
+      ("year", new Year(col), VarkaEmitBudget.YEAR_TAIL_WEIGHT, 0, 1),
+      ("dayofmonth", new DayOfMonth(col), VarkaEmitBudget.DAY_OF_MONTH_TAIL_WEIGHT, 0, 1),
+      ("quarter", new Quarter(col), VarkaEmitBudget.QUARTER_TAIL_WEIGHT, 0, 1),
+      ("dayofyear", new DayOfYear(col), VarkaEmitBudget.DAY_OF_YEAR_TAIL_WEIGHT, 0, 1),
+      ("last_day", new LastDay(col), VarkaEmitBudget.LAST_DAY_TAIL_WEIGHT, 0, 1),
+      ("trunc YEAR", new TruncDate(col, TruncLevel.YEAR), VarkaEmitBudget.TRUNC_YEAR_TAIL_WEIGHT,
+        0, 1),
       ("trunc MONTH", new TruncDate(col, TruncLevel.MONTH),
-        VarkaEmitBudget.TRUNC_MONTH_TAIL_WEIGHT, true, 0, 1),
+        VarkaEmitBudget.TRUNC_MONTH_TAIL_WEIGHT, 0, 1),
       ("trunc QUARTER", new TruncDate(col, TruncLevel.QUARTER),
-        VarkaEmitBudget.TRUNC_QUARTER_TAIL_WEIGHT, true, 0, 1),
-      ("trunc dynamic", new TruncDateDynamic(col, new ColumnRef(1)),
-        VarkaEmitBudget.TRUNC_DYNAMIC_TAIL_WEIGHT, true, 0, 2))
-    for ((name, node, tail, readsMonth, lits, inputs) <- register) {
-      val alone = ops(Seq(node), inputs, lits)
-      val own = if (readsMonth) prefix else prefixNoMonth
-      assert(alone === own + tail,
-        s"$name alone emits $alone lane ops, not prefix $own + tail $tail - recount the constant")
+        VarkaEmitBudget.TRUNC_QUARTER_TAIL_WEIGHT, 0, 1))
+    for ((name, node, tail, lits, inputs) <- tails) {
       val paired = ops(Seq(month, node), inputs, lits, wide)
       assert(paired === monthAlone + tail,
         s"month(d) beside $name emits $paired lane ops, not month's $monthAlone + tail $tail")
     }
-    // weekofyear decomposes the Thursday-shifted day, so its prefix is keyed on ThursdayOf(d)
-    // and shares nothing with month(d)'s; the shift's own ops are the ThursdayOf node's weight.
-    val shift = new ThursdayOf(col)
-    assert(ops(Seq(new WeekOfYear(shift))) ===
-      ops(Seq(shift)) + prefixNoMonth + VarkaEmitBudget.WEEK_OF_YEAR_TAIL_WEIGHT)
-    // The four fields share one tail constant, at the widest of the four.
-    assert(VarkaEmitBudget.CHRONO_FIELD_TAIL_WEIGHT === 7)
+    // The tails beside month(d) whose operands add a column or a literal of their own: the pair
+    // reads that operand once more than month(d) alone, which the tail does not count.
+    val addMonths = ops(Seq(month, new AddMonths(col, new LiteralSlot(0))), 1, 1, wide)
+    assert(addMonths === monthAlone + 1 + VarkaEmitBudget.ADD_MONTHS_TAIL_WEIGHT,
+      s"month(d) beside add_months emits $addMonths lane ops")
+    val dynamic = ops(Seq(month, new TruncDateDynamic(col, new ColumnRef(1))), 2, 0, wide)
+    assert(dynamic === monthAlone + 1 + VarkaEmitBudget.TRUNC_DYNAMIC_TAIL_WEIGHT,
+      s"month(d) beside a dynamic trunc emits $dynamic lane ops")
+  }
+
+  test("with the prediction bounding groups, heavy outputs that share nothing stay within the " +
+      "call-site budget, and the budget binds wherever the prediction cannot (VARKA-254)",
+      PinsDefaults) {
+    // Arm B lifts the group budget to the fused ceiling while the prediction runs with the plan's
+    // margins and a call-site budget. Heavy outputs over separate columns share no prefix, so the
+    // heavy-group exemption from the call-site check was never meant for them; a group B widens is
+    // checked on predicted call sites whatever its width, so B packs none of them together. One
+    // add_months alone is already past the budget (112 sites), which no grouping can help, so the
+    // assertion is that B builds arm A's groups here, and that a group of several fits.
+    val b = VarkaMatrix.base.withGroupBudgetUnderPrediction(false)
+    val budget = VarkaEmitBudget.CALL_SITE_BUDGET
+    def loops(roots: Seq[VarkaVectorIR], inputs: Int, lits: Int, o: VarkaEmitOptions): Int =
+      methodNames(emitMulti(roots, inputs, lits, o)).count(isLoop(_, true))
+    val makeDates: Seq[VarkaVectorIR] = (0 until 6).map { k =>
+      val col = new ColumnRef(k)
+      new MakeDate(new Year(col), new Month(col), new LiteralSlot(k), true)
+    }
+    val addMonths: Seq[VarkaVectorIR] =
+      (0 until 3).map(k => new AddMonths(new ColumnRef(k), new LiteralSlot(k)))
+    for ((name, roots, inputs) <- Seq(("six make_date", makeDates, 6),
+        ("three add_months", addMonths, 3))) {
+      assert(loops(roots, inputs, roots.size, b) === loops(roots, inputs, roots.size,
+        VarkaMatrix.base.withGroupBudgetUnderPrediction(true)),
+        s"$name: arm B packed outputs arm A keeps apart")
+    }
+    // A widened group stays checked when a later output joins it by reuse: year(d) and two cheap
+    // outputs join by the prediction, and add_months(d) reuses year's prefix but alone is past
+    // the budget, so it may not join them. Every method that holds more than one output fits.
+    val d = new ColumnRef(0)
+    val mixedHeavy: Seq[VarkaVectorIR] = Seq(new Year(d), new AddDays(d, new LiteralSlot(0)),
+      new AddDays(d, new LiteralSlot(1)), new AddMonths(d, new LiteralSlot(2)))
+    val planned = VarkaLoopEmitter.groupsForTest(mixedHeavy.asJava, b).asScala.map(_.size)
+    val sites = groupSites(emitMulti(mixedHeavy, 1, 3, b)._2)
+    assert(sites.size === 4 * planned.size, s"the build regrouped the plan: $planned, $sites")
+    for ((size, g) <- planned.zipWithIndex if size > 1) {
+      val over = sites.filter { case (m, n) => VarkaMethodNames.groupOf(m) == g && n > budget }
+      assert(over.isEmpty, s"group $g of $size outputs is over the call-site budget: $over")
+    }
+    // Where the prediction cannot bound a group the budget binds as in arm A, byte for byte:
+    // without the plan's margins, and without a call-site budget. The day of week twice over
+    // two dates beside four cheap outputs: dayofweek and weekday weigh 16 and 15, so arm A gives
+    // each its own group, while their call sites are few enough that the prediction admits them
+    // together. (Cheap outputs alone would not show it: the prediction prices one at about 4.6
+    // call sites against the 3 it emits, so with its margin it closes at sixteen, where the budget
+    // does.)
+    val d0 = new ColumnRef(0)
+    val d1 = new ColumnRef(1)
+    val cheap: Seq[VarkaVectorIR] = Seq(new DayOfWeek(d0), new WeekDay(d0), new DayOfWeek(d1),
+      new WeekDay(d1)) ++ (0 until 4).map(k => new AddDays(d0, new LiteralSlot(k)))
+    val a = VarkaMatrix.base.withGroupBudgetUnderPrediction(true)
+    assert(loops(cheap, 2, 4, b) < loops(cheap, 2, 4, a),
+      "arm B should widen the cheap group where it applies")
+    for ((label, f) <- Seq[(String, VarkaEmitOptions => VarkaEmitOptions)](
+        ("without the plan's margins", _.withPlanSize(false)),
+        ("without a call-site budget", _.withCallSiteBudget(0)),
+        ("without the prediction", _.withPredictGrouping(false)))) {
+      assert(bodies(emitMulti(cheap, 2, 4, f(b))._2) === bodies(emitMulti(cheap, 2, 4, f(a))._2),
+        s"$label, arm B must emit arm A's class")
+    }
+  }
+
+  test("the shared-prefix ladder's groups at each fused ceiling are the ones its built class " +
+      "keeps (VARKA-254)", PinsDefaults) {
+    // m8/SCOPE.md item 63's second clause: the weights' first grouping of the ladder
+    // VarkaSharedPrefixBenchmark measures - 64 cheap tails year(d) + k, and 60 make_date over
+    // year(d) and month(d) - is the grouping the built class keeps, at every ceiling the benchmark
+    // sweeps and with the prefix recomputed or materialized: one build, no reaction to a
+    // measurement. The counts are pinned, so a weight that moves them is seen here.
+    val col = new ColumnRef(0)
+    val tails: Seq[VarkaVectorIR] = (0 until 64).map { k =>
+      new IntArith(IntOp.ADD, Overflow.WRAP, new Year(col), new LiteralSlot(k))
+    }
+    val makeDates = VarkaHugeMethodProbe.ladder(60)
+    val counts = for {
+      (name, roots) <- Seq(("tails", tails), ("make_date", makeDates))
+      ceiling <- Seq(400, 200, 100, 50)
+      materialized <- Seq(false, true)
+    } yield {
+      val options = VarkaMatrix.base.withFusedCeiling(ceiling)
+        .withMaterializeChronoPrefix(materialized)
+      val trace = new VarkaEmitTrace
+      val bytes = VarkaLoopEmitter.emitTraced(s"org.apache.spark.sql.varka.execution.Ladder" +
+        s"$name$ceiling$materialized", roots.asJava, 1, roots.size, options, trace)
+      assert(trace.builds === 1, s"$name at ceiling $ceiling, materialized $materialized: " +
+        s"${trace.builds} builds, ${trace.reactions()}")
+      (name, ceiling, materialized) ->
+        VarkaEmitterTestSupport.methodNames(bytes).asScala.count(isLoop(_, true))
+    }
+    // Under the defaults the ceilings below 400 do not move the cheap tails: their groups are the
+    // call-site budget's, the prefix recomputed taking six and materialized four. The make_date
+    // rungs are heavy enough that the ceiling decides, down to one a method at 100.
+    for (((name, ceiling, materialized), loops) <- counts) {
+      val want = (name, ceiling, materialized) match {
+        case ("tails", _, false) => 6
+        case ("tails", _, true) => 4
+        case (_, 400, _) => 10
+        case (_, 200, _) => 20
+        case _ => 60
+      }
+      assert(loops === want, s"$name at ceiling $ceiling, materialized $materialized")
+    }
   }
 
   /** Every lane op `loopDense0` runs, on whichever vector type it runs it: what a weight counts. */
-  private def vectorOps(bytes: Array[Byte]): Int =
+  private def vectorOps(bytes: Array[Byte], method: String = "loopDense0"): Int =
     Seq("IntVector", "LongVector", "DoubleVector", "Vector").map { owner =>
-      VarkaEmitterTestSupport.invocationCount(bytes, "loopDense0", s"jdk.incubator.vector.$owner")
+      VarkaEmitterTestSupport.invocationCount(bytes, method, s"jdk.incubator.vector.$owner")
     }.sum
 
   test("a constant division weighs the larger of its two forms, counted over every vector type",
@@ -373,6 +588,8 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   test("int-lane divisions over four columns take a loop method each, and a subtraction from " +
       "one joins its division", PinsDefaults) {
+    // The budget's rule, which is what this pins: since VARKA-254 the prediction bounds groups by
+    // default, and the budget binds where it cannot and under groupBudgetUnderPrediction.
     // extract(YEAR FROM ym) over four year-month interval columns: the shape a single output
     // cannot show, since one division alone forms one group whatever it weighs. Two divisions
     // weigh 22 against GROUP_BUDGET's 16, so no two share a loop method.
@@ -380,11 +597,12 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     val four = (0 until 4).map(years)
     def loops(bytes: Array[Byte]): Seq[String] =
       VarkaEmitterTestSupport.methodNames(bytes).asScala.toSeq.filter(isLoop(_, true))
-    assert(loops(emitMulti(four, 4, 0)._2) === (0 until 4).map(g => s"loopDense$g"))
+    val budget = VarkaMatrix.base.withGroupBudgetUnderPrediction(true)
+    assert(loops(emitMulti(four, 4, 0, budget)._2) === (0 until 4).map(g => s"loopDense$g"))
     // extract(YEAR FROM ym) - 1 beside extract(YEAR FROM ym): only the checked subtraction is
     // new to the division's group, and 11 + 5 is the budget exactly.
     val minusOne = new IntArith(IntOp.SUB, Overflow.FAIL, years(0), new LiteralSlot(0))
-    assert(loops(emitMulti(Seq(years(0), minusOne), 1, 1)._2) === Seq("loopDense0"))
+    assert(loops(emitMulti(Seq(years(0), minusOne), 1, 1, budget)._2) === Seq("loopDense0"))
     // The four answer as the reference evaluator does at both widths, over dividends of both
     // signs and on either side of the multiples of twelve.
     val data = (c: Int, i: Int) => (i - 500) * (c + 7) + i % 12
@@ -394,7 +612,7 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     for (lanes <- Seq(4, 16)) {
       checkMatrix(four, 4, Array.empty[Int], Seq(1, 17, 1031), patterns, data = data,
         ctx = s"four divisions at $lanes lanes",
-        options = VarkaMatrix.base.withLanesOverride(lanes))
+        options = VarkaMatrix.base.withGroupBudgetUnderPrediction(true).withLanesOverride(lanes))
     }
   }
 
@@ -671,27 +889,28 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       "split kernel answers the same (VARKA-87, step 5)", PinsDefaults) {
     // VARKA-87.md 3.1 step 2: weight groups first, bytes decide. Under a budget no
     // make_date group of two fits (a single output's methods read about 1200 bytes, a pair's
-    // about 1700, the driver about 1400), the sixteen-output ladder regroups past weight's
-    // four groups until every method reads under the budget - down to single outputs at this
+    // about 1700, the driver about 1400), the sixteen-output ladder regroups past the weights'
+    // three groups until every method reads under the budget - down to single outputs at this
     // one. The regroup is inside emit, so emitting twice is byte-identical, and the shape
     // cache sees one emission like any other.
     val roots = VarkaHugeMethodProbe.ladder(16)
-    // The recomputing arm: with the prefix materialized (VARKA-198) the consumers pack more
-    // outputs per group and the four groups this test counts become three.
+    // The recomputing arm, so the weights alone decide the first grouping. It was four groups
+    // until VARKA-254 recounted make_date (60 to 53) and the field tails, which fit a fifth rung
+    // under the fused ceiling.
     val recompute = VarkaMatrix.base.withMaterializeChronoPrefix(false)
-    val four = recompute.withMethodByteBudget(VarkaEmitBudget.HUGE_METHOD_LIMIT)
+    val atLimit = recompute.withMethodByteBudget(VarkaEmitBudget.HUGE_METHOD_LIMIT)
     val split = recompute.withMethodByteBudget(1500)
     val bytes = emitMulti(roots, 1, 16, split)._2
     val names = VarkaEmitterTestSupport.methodNames(bytes).asScala.filter(_ != "<init>")
     val loops = names.count(isLoop(_, false))
-    assert(loops > 4 && names.count(isEpilogue(_, false)) === loops,
+    assert(loops > 3 && names.count(isEpilogue(_, false)) === loops,
       names.sorted.mkString(", "))
     for (m <- names) {
       val size = VarkaEmitterTestSupport.codeSize(bytes, m)
       assert(size <= 1500, s"$m is $size bytes over a budget of 1500 ($loops groups)")
     }
-    assert(VarkaEmitterTestSupport.methodNames(emitMulti(roots, 1, 16, four)._2).asScala
-      .count(isLoop(_, false)) === 4, "at HugeMethodLimit weight's four groups stand")
+    assert(VarkaEmitterTestSupport.methodNames(emitMulti(roots, 1, 16, atLimit)._2).asScala
+      .count(isLoop(_, false)) === 3, "at HugeMethodLimit the weights' three groups stand")
     // Method by method with the class name normalised: each emission carries its own name,
     // and the drivers call their siblings through it.
     def bodies(b: Array[Byte]): Map[String, String] = VarkaEmitterTestSupport.methodBodies(b)
@@ -1193,6 +1412,8 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   test("the call-site budget regroups only the corpus shapes with a wide group method over it, " +
       "and leaves every other shape's bytes unchanged, at both lanes (VARKA-209)", PinsDefaults) {
+    // The budget's rule, which is what this pins: since VARKA-254 the prediction bounds groups by
+    // default, and the budget binds where it cannot and under groupBudgetUnderPrediction.
     // Prediction 2 of VARKA-209.md 6.1, read as bytes rather than time: a shape whose group
     // methods are all under the budget with it off emits byte for byte the same with it on,
     // since the budget only ever adds a forced start once a method measures over it - and so
@@ -1202,7 +1423,7 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // outputs are read as its stores, one `intoMemorySegment` per value output at either lane
     // plus the six of a prefix it materializes. Over the fuzzer's own shapes at both lanes,
     // as the VARKA-198 test above and the bytes oracle read them.
-    val on = VarkaMatrix.base
+    val on = VarkaMatrix.base.withGroupBudgetUnderPrediction(true)
     val off = on.withCallSiteBudget(0)
     val budget = on.callSiteBudget()
     val mostStores = VarkaEmitBudget.HEAVY_GROUP_OUTPUTS + Analysis.SCRATCH_VECTORS

@@ -33,7 +33,10 @@ class VarkaExactGroupingSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   // Pinned to sixteen lanes: the lane count changes the prefix's ops, and with them where the
   // groups close, so the counts below hold on every machine only at one lane count.
+  // And under the budget's rule: the counts were read with the group budget binding, and the
+  // partition search is the same under either rule (VARKA-254 made the prediction the default).
   private val greedy = VarkaMatrix.base.withLanesOverride(16).withExactGrouping(false)
+    .withGroupBudgetUnderPrediction(true)
   private val exact = greedy.withExactGrouping(true)
 
   private def mixed(n: Int): Seq[VarkaVectorIR] = VarkaGroupingBound.mixed(n).asScala.toSeq
@@ -67,6 +70,28 @@ class VarkaExactGroupingSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       if (n == 40) {
         assert((greedyPartition.groups, best.groups) === (20, 11))
       }
+    }
+  }
+
+  test("under the default, where the prediction bounds groups, the exact grouping finds the best " +
+      "partition and every shape emits (VARKA-254)", PinsDefaults) {
+    // The suite's other tests read the budget's rule; this one holds the shipped default to the
+    // same agreement. Runs are longer under it and gated on predicted call sites, and a walk that
+    // judged a step apart from the partition search would throw inside the emitter and send a
+    // kernel to the row engine instead of failing here.
+    val shipped = VarkaMatrix.base.withLanesOverride(16)
+    assert(!shipped.groupBudgetUnderPrediction() && shipped.exactGrouping())
+    val shapes = Seq(40, 200).map(n => (s"mixed $n", mixed(n), 1, n)) ++
+      VarkaEmitCostCorpus.wide().asScala.take(20).map { s =>
+        (s"${s.family} ${s.index}", s.roots.asScala.toSeq, s.numInputs, s.numLiterals)
+      }
+    for ((name, roots, inputs, lits) <- shapes) {
+      val runs = VarkaGroupingBound.runs(roots.asJava, shipped)
+      val best = VarkaGroupingBound.optimal(runs)
+      val exactPartition = VarkaGroupingBound.of(runs,
+        VarkaLoopEmitter.groupsForTest(roots.asJava, shipped))
+      assert(exactPartition.ops === best.ops && exactPartition.groups === best.groups, name)
+      emitMulti(roots, inputs, lits, shipped)
     }
   }
 
