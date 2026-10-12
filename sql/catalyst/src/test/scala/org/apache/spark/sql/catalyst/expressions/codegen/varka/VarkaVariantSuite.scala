@@ -108,9 +108,12 @@ class VarkaVariantSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOw
   // Running and counting
   // ---------------------------------------------------------------------------------------------
 
-  /** What a run checked, declined and skipped, per variant, and its first twenty failures. */
+  /**
+   * What a run compared and declined per variant - a declined variant compares no row, so it is
+   * not counted as compared - what it skipped, and its first twenty failures.
+   */
   private final class Tally {
-    val checked = mutable.LinkedHashMap(Kind.values.toSeq.map(_ -> 0): _*)
+    val compared = mutable.LinkedHashMap(Kind.values.toSeq.map(_ -> 0): _*)
     val declined = mutable.LinkedHashMap(Kind.values.toSeq.map(_ -> 0): _*)
     var skipped = 0
     var trees = 0
@@ -125,7 +128,7 @@ class VarkaVariantSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOw
     def report(what: String): Unit = {
       logInfo(s"$what: $trees trees, $skipped variants past the class-file cap, $failed failed")
       for (k <- Kind.values) {
-        logInfo(f"  ${k.label}%-22s checked ${checked(k)}%8d  declined ${declined(k)}%6d")
+        logInfo(f"  ${k.label}%-22s compared ${compared(k)}%8d  declined ${declined(k)}%6d")
       }
     }
 
@@ -163,19 +166,27 @@ class VarkaVariantSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOw
       plain = VarkaVariantCheck.checkPlain(c, VarkaVariantCheck.retryWithoutBudget)
     }
     if (!passed || plain == VarkaVariantCheck.Skipped) return
-    for ((kind, variant) <- VarkaVariantCheck.variants(c, lane.stranger(c.roots.head, index),
-        lane.replacements, index) if kinds(kind); v <- variant) {
-      recording(tally, c.label) {
+    // Building the variants runs the reference evaluator and the rewrites' typing, so it is
+    // recorded like a check rather than left to abort the lane.
+    var variants = Seq.empty[(Kind, Option[Variant])]
+    val built = recording(tally, c.label) {
+      variants = VarkaVariantCheck.variants(c, lane.stranger(c.roots.head, index),
+        lane.replacements, index)
+    }
+    if (!built) return
+    for ((kind, variant) <- variants if kinds(kind); v <- variant) {
+      // The check's messages start with the variant's own label, which is what the
+      // known-failures signature strips.
+      recording(tally, VarkaVariantCheck.caseOf(c, v).label) {
         VarkaVariantCheck.check(c, v, VarkaVariantCheck.retryWithoutBudget) match {
-          case VarkaVariantCheck.Compared => tally.checked(kind) += 1
-          case VarkaVariantCheck.Declined(_) =>
-            tally.checked(kind) += 1
-            tally.declined(kind) += 1
+          case VarkaVariantCheck.Compared => tally.compared(kind) += 1
+          case VarkaVariantCheck.Declined(_) => tally.declined(kind) += 1
           case VarkaVariantCheck.Skipped => tally.skipped += 1
         }
       }
     }
   }
+
 
   /** Every root of `lane` up to `upTo`, this JVM's slice, each with its variants. */
   private def runLane(lane: Lane, upTo: Int, options: VarkaEmitOptions,
@@ -218,7 +229,7 @@ class VarkaVariantSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOw
       // Over the whole series only; a slice may hold no tree a variant applies to.
       if (slices == 1) {
         for (k <- expected(size)) {
-          assert(tally.checked(k) > 0, s"${k.label} applied to no $laneName tree to size $size")
+          assert(tally.compared(k) > 0, s"${k.label} compared no $laneName tree to size $size")
         }
       }
     }
@@ -242,7 +253,7 @@ class VarkaVariantSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOw
         index += 1
       }
       tally.assertNone(s"${lane.name} conditional trees of size 4 with an untaken arm replaced")
-      assert(tally.checked(Kind.UNTAKEN_ARM) > 0,
+      assert(tally.compared(Kind.UNTAKEN_ARM) > 0,
         s"no ${lane.name} conditional tree of size 4 had an untaken arm on any batch")
     }
   }
@@ -329,11 +340,20 @@ class VarkaVariantSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOw
     // decline, and then only with that guard's bit.
     val t = new AddMonths(new ColumnRef(0), new LiteralSlot(0))
     val moved = VarkaVariants.literalToColumn(Seq[VarkaVectorIR](t).asJava, 4).get
-    assert(VarkaVariants.addedRefusalBits(Seq[VarkaVectorIR](t).asJava, moved.roots, 5, 1,
+    assert(VarkaVariants.addedRefusalBits(Seq[VarkaVectorIR](t).asJava, 4, moved.roots, 5, 1,
       VarkaMatrix.base) == VarkaFusedKernel.STATUS_MONTH_COUNT)
-    val guarded = Seq[VarkaVectorIR](new AddMonths(new ColumnRef(0), new ColumnRef(2))).asJava
-    assert(VarkaVariants.addedRefusalBits(guarded, VarkaVariants.duplicated(guarded, 4).roots, 4,
-      1, VarkaMatrix.base) == 0, "duplicating a guarded tree adds no node, so no guard")
+    // A guard the original already had on the rewritten path is not one the variant adds,
+    // though the rewrite rebuilt its node: the range guard over a sum whose literal moved.
+    val ranged = Seq[VarkaVectorIR](new GuardedRange(new IntArith(IntOp.ADD, Overflow.WRAP,
+      new ColumnRef(0), new LiteralSlot(0)), -10000000L, 10000000L)).asJava
+    assert(VarkaVariants.addedRefusalBits(ranged, 4,
+      VarkaVariants.literalToColumn(ranged, 4).get.roots, 5, 1, VarkaMatrix.base) == 0,
+      "the range guard above a moved literal counted as added")
+    // A stranger's own guards are added.
+    val guarded = new AddMonths(new ColumnRef(0), new ColumnRef(2))
+    assert(VarkaVariants.addedRefusalBits(Seq[VarkaVectorIR](t).asJava, 4,
+      VarkaVariants.besideAStranger(Seq[VarkaVectorIR](t).asJava, 4, guarded).roots, 8, 1,
+      VarkaMatrix.base) == VarkaFusedKernel.STATUS_MONTH_COUNT)
 
     // A literal one past the month-count range, moved into a column: the kernel declines with
     // the month-count bit, which the variant brought, so the check accepts the decline.

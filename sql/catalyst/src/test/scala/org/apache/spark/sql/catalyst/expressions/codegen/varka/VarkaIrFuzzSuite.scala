@@ -339,37 +339,61 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   private def variantsDue(iteration: Int): Boolean =
     variantsEvery > 0 && iteration % variantsEvery == 0
 
-  /** How many variants of passing draws were checked, by variant, reported after each run. */
+  /** What the variants of passing draws came to, by variant and outcome, reported after a run. */
   private val variantCounts = new java.util.concurrent.ConcurrentHashMap[String, AtomicInteger]
 
+  private def countVariant(kind: VarkaVariants.Kind, outcome: String): Unit =
+    variantCounts.computeIfAbsent(s"${kind.label} $outcome", _ => new AtomicInteger)
+      .incrementAndGet()
+
   /**
-   * The variants of a draw that passed (VARKA-278), each emitted and compared through
-   * `VarkaVariantCheck`. The stranger is the draw's next root, or its only one, over copies of
-   * the columns; an untaken arm's replacement is one of the draw's own value subtrees.
+   * The variants of a draw that passed (VARKA-278), each emitted as the draw was - through
+   * `emitOrSkip`, its checks on a decline's reason, its count of shapes past the cap and the size
+   * trace - and compared through `VarkaVariantCheck`. The stranger is the draw's next root, or
+   * its only one, over copies of the columns; an untaken arm's replacement is one of the draw's
+   * own value subtrees. A failure, building the variants included, fails the test with the draw
+   * to replay.
    */
   private def runVariants(c: VarkaFuzzCase, iteration: Int): Unit = {
-    val stranger = c.roots((iteration + 1) % c.roots.size)
-    val pool = VarkaVariants.valueSubtrees(c.roots.asJava).asScala.toSeq
-    for ((kind, variant) <- VarkaVariantCheck.variants(c, stranger, pool, iteration);
-        v <- variant) {
+    val emit: VarkaVariantCheck.Emit = (roots, numInputs, numLiterals, options, className) =>
+      emitOrSkip(s"${c.label} (a variant)", options)(o => VarkaLoopEmitter.emitTraced(
+        className, roots.asJava, numInputs, numLiterals, o, randomTrace))
+    def failed(what: String, label: String, t: Throwable): Unit = {
+      val signature = VarkaFailureSignature.of(t, label)
+      if (VarkaKnownFailures.isKnown(VarkaKnownFailures.entries, signature)) {
+        logWarning(s"known fuzz failure in a variant, not counted: $signature")
+      } else {
+        fail(s"$what of a passing draw failed: " +
+          Option(t.getMessage).getOrElse(t.getClass.getName) +
+          s"\n  draw: ${VarkaFuzzCase.describe(c)}", t)
+      }
+    }
+    val variants = try {
+      val pool = VarkaVariants.valueSubtrees(c.roots.asJava).asScala.toSeq
+      VarkaVariantCheck.variants(c, c.roots((iteration + 1) % c.roots.size), pool, iteration)
+    } catch {
+      case e: VirtualMachineError => throw e
+      case e: InterruptedException => throw e
+      case t: Throwable =>
+        failed("building the variants", c.label, t)
+        Seq.empty
+    }
+    for ((kind, variant) <- variants; v <- variant) {
       try {
-        VarkaVariantCheck.check(c, v, VarkaVariantCheck.retryWithoutBudget)
-        variantCounts.computeIfAbsent(kind.label, _ => new AtomicInteger).incrementAndGet()
+        VarkaVariantCheck.check(c, v, emit) match {
+          case VarkaVariantCheck.Compared => countVariant(kind, "compared")
+          case VarkaVariantCheck.Declined(_) => countVariant(kind, "declined")
+          case VarkaVariantCheck.Skipped => countVariant(kind, "skipped")
+        }
       } catch {
         case e: VirtualMachineError => throw e
         case e: InterruptedException => throw e
         case t: Throwable =>
-          val signature = VarkaFailureSignature.of(t, c.label)
-          if (VarkaKnownFailures.isKnown(VarkaKnownFailures.entries, signature)) {
-            logWarning(s"known fuzz failure in a variant, not counted: $signature")
-          } else {
-            fail(s"the ${kind.label} variant of a passing draw failed: " +
-              Option(t.getMessage).getOrElse(t.getClass.getName) +
-              s"\n  draw: ${VarkaFuzzCase.describe(c)}", t)
-          }
+          failed(s"the ${kind.label} variant", VarkaVariantCheck.caseOf(c, v).label, t)
       }
     }
   }
+
 
   /** `c` with the planted-bug option `name` on. */
   private def planted(c: VarkaFuzzCase, name: String): VarkaFuzzCase =
@@ -786,9 +810,12 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
       s"splits, ${randomTrace.siteRollbacks} rolled back, ${randomTrace.stageSplits} stage " +
       s"splits, ${randomTrace.fallbacks()} grouping switches dropped")
     if (!variantCounts.isEmpty) {
-      info("variants of passing draws checked: " + VarkaVariants.Kind.values.toSeq
-        .map(k => s"${k.label} ${Option(variantCounts.get(k.label)).map(_.get).getOrElse(0)}")
-        .mkString(", "))
+      info("variants of passing draws (compared/declined/skipped): " +
+        VarkaVariants.Kind.values.toSeq.map { k =>
+          val n = Seq("compared", "declined", "skipped")
+            .map(o => Option(variantCounts.get(s"${k.label} $o")).map(_.get).getOrElse(0))
+          s"${k.label} ${n.mkString("/")}"
+        }.mkString(", "))
       variantCounts.clear()
     }
     val skipped = skippedPastTheCap.getAndSet(0)

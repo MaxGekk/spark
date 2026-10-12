@@ -228,3 +228,33 @@ seconds to 4.2 and 2.8.
   in the fuzz job, which took 12 of its 90 minutes.
 * **The count check holds over a whole series only.** A slice of a sliced run can hold no
   conditional tree; the conditional test holds the untaken arm to its count instead.
+
+**Review** (`/code-review` on #734). Nine of ten findings fixed:
+
+* **The other-body fix above was incomplete.** At one row, a batch with no nulls has as its other
+  body every column null, which flips a condition over a validity just as clearing nulls does.
+  Rather than skip the other body, the arm oracle now reads each condition over both batches the
+  check runs, the batch's own nulls and its other body's, and an arm counts as untaken only if
+  neither takes it; the `bothBodies` parameter is gone, and every untaken-arm variant meets both
+  bodies again. The fuzzer's 300 draws a lane now give 29 int and 67 long untaken-arm variants.
+* **`addedRefusalBits` let an emitter bug through.** By identity, every rebuilt ancestor of a
+  moved literal counted as added, so a guard the original already had there - a range guard over
+  a sum, say - became an allowed reason to decline. It now pairs the variant's nodes with the
+  original's by position and counts a refusal only where the original's node carries none or
+  another; a test holds the range guard over a moved literal to adding nothing.
+* **A variant's failure could never match the known-failures list**, being signed with the
+  original's label while its message starts with the variant's; both suites now sign with the
+  variant's own label.
+* **A declined or skipped variant counted as checked**, which the count guard is there to catch;
+  only compared variants count now, declined and skipped beside them.
+* **Building the variants** (the reference evaluator, the rewrites' typing) now sits inside the
+  failure handling in both suites, so a throw there is recorded with the draw to replay.
+* **The fuzzer's variants are emitted through its own `emitOrSkip`**, with its checks on a
+  decline's reason, its count of shapes past the cap and its size trace, as the `Emit` contract
+  had claimed and the first version did not do.
+* `VarkaKernelCheck`'s four entry points share one two-body driver; the nightly script's variants
+  step reuses the series step's build.
+
+Not taken: dropping "copied" until the emitter has an identity-keyed map. It is one variant in
+eight, the plan's own, and the cheaper of the two to keep is the one that will notice the day the
+emitter starts telling one object twice from two equal ones.

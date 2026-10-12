@@ -121,9 +121,11 @@ if [ "$series" -gt 0 ]; then
   run_step series dev/varka_series.sh "$series"
 fi
 # Every tree to the size in each of the eight variants (VARKA-278), one JVM per core; size 4 is a
-# few minutes. 0 skips it.
+# few minutes. 0 skips it. It reuses the series step's build when that step ran.
 if [ "$variants" -gt 0 ]; then
-  run_step variants dev/varka_series.sh "$variants" --variants
+  reuse=()
+  [ "$series" -gt 0 ] && [ "${status[series]:-}" = ok ] && reuse=(--skip-build)
+  run_step variants dev/varka_series.sh "$variants" --variants "${reuse[@]}"
 fi
 if [ "$deopt" -eq 1 ]; then
   run_step deopt dev/varka_deopt_cycle.sh --forms group --forks 10 --fail-on-cycle

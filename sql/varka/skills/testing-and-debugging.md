@@ -903,15 +903,17 @@ output. What building them taught:
   batch again through the other body, which for a batch with nulls clears every null - and a
   condition such as `isNotNull(c0)` over an all-null column turns true, the replaced arm is
   taken, and its values leave the range an enclosing `GuardedRange` was drawn for, so the kernel
-  rightly declines. The fuzzer's first run found it. The variant now meets the other body only on
-  a batch with no nulls (`runAndCompareStatus(..., bothBodies)`).
+  rightly declines. The fuzzer's first run found it, and review found the same at one row, where
+  a null-free batch's other body is every column null. So the arm oracle reads each condition
+  over both batches the check runs, and an arm counts as untaken only if neither takes it.
 - **"Duplicated" and "copied" reach the same sharing today.** The IR nodes are records and the
   emitter keys every map on equality, with no `IdentityHashMap`, so one node object twice and two
   equal objects look alike to it. Both stay, so that a future identity-keyed map meets both.
-- **A decline is allowed only by the guards a variant adds, found by identity.** The rewrites keep
-  every subtree they do not change as the same object, so the nodes a variant adds are those not
-  in the original, and `addedRefusalBits` reads their guards from `refusalsForTest`; the kernel is
-  emitted again under `exactRefusalStatus` to read which guards fired. Moving a literal month
+- **A decline is allowed only by the guards a variant adds, found by position, not identity.** A
+  rewrite rebuilds every ancestor of what it changes, so by identity a guard the original already
+  had on that path looks new; `addedRefusalBits` pairs the variant's nodes with the original's
+  and counts a refusal only where the original's node lacks it. The kernel is emitted again
+  under `exactRefusalStatus` to read which guards fired. Moving a literal month
   count into a column is the case that needs it: the column count carries the month-count guard.
 - **The cost is about four draws' worth a draw.** The gate's size 3 is about 20 seconds a width
   at one batch per tree by rotation; size 4 is under four minutes over 24 JVMs on the laptop; the

@@ -18,13 +18,10 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
@@ -52,9 +49,9 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Nar
  * the original's: a literal moves into a column holding that same literal, columns move with
  * their data, and a replaced arm is one no compared row takes.
  *
- * <p>A rewrite keeps every node it does not change, by identity, so the nodes a variant adds are
- * exactly those not in the original. {@link #addedRefusalBits} reads the guards on those, which
- * is what a variant that may decline must name.
+ * <p>A rewrite keeps every subtree it does not change as the same object. {@link #addedRefusalBits}
+ * reads the guards a variant adds, by position against the original, which is what a variant
+ * that may decline must name.
  */
 final class VarkaVariants {
 
@@ -279,23 +276,43 @@ final class VarkaVariants {
   }
 
   /**
-   * The status bits of the guards on the nodes {@code variant} adds to {@code original}: nodes
-   * present in the variant and not, by identity, in the original. A variant that may decline
-   * must decline with these bits and no others, read under {@code exactRefusalStatus}, which
-   * gives each reason its own (VARKA-304).
+   * The status bits of the guards {@code variant} adds to {@code original}: a refusal on a
+   * variant node where the original's node at the same position carries no refusal or another,
+   * and every refusal on a variant root past the original's roots. Positions pair root with root
+   * and child with child while the two trees agree on a node's type, which they do for the two
+   * variants that may decline: literal to column changes only leaves, and beside a stranger only
+   * adds a root. By position and not by identity, because a rewrite rebuilds every ancestor of
+   * what it changes, and an ancestor's guard the original already had is no reason the variant
+   * may give. A variant that may decline must decline with these bits and no others, read under
+   * {@code exactRefusalStatus}, which gives each reason its own (VARKA-304).
    */
-  static int addedRefusalBits(List<VarkaVectorIR> original, List<VarkaVectorIR> variant,
-      int numInputs, int numLiterals, VarkaEmitOptions options) {
-    Set<VarkaVectorIR> old = Collections.newSetFromMap(new IdentityHashMap<>());
-    for (VarkaVectorIR r : original) {
-      walk(r, old::add);
-    }
+  static int addedRefusalBits(List<VarkaVectorIR> original, int originalInputs,
+      List<VarkaVectorIR> variant, int variantInputs, int numLiterals,
+      VarkaEmitOptions options) {
+    Map<VarkaVectorIR, Analysis.Refusal> before =
+        VarkaLoopEmitter.refusalsForTest(original, originalInputs, numLiterals, options);
+    Map<VarkaVectorIR, Analysis.Refusal> after =
+        VarkaLoopEmitter.refusalsForTest(variant, variantInputs, numLiterals, options);
     int bits = 0;
-    for (Map.Entry<VarkaVectorIR, Analysis.Refusal> e : VarkaLoopEmitter.refusalsForTest(
-        variant, numInputs, numLiterals, options).entrySet()) {
-      if (!old.contains(e.getKey())) {
-        bits |= e.getValue().status;
-      }
+    for (int r = 0; r < variant.size(); r++) {
+      bits |= added(r < original.size() ? original.get(r) : null, variant.get(r), before, after);
+    }
+    return bits;
+  }
+
+  /** {@link #addedRefusalBits} under one pair of nodes; {@code o} null where none pairs. */
+  private static int added(VarkaVectorIR o, VarkaVectorIR v,
+      Map<VarkaVectorIR, Analysis.Refusal> before, Map<VarkaVectorIR, Analysis.Refusal> after) {
+    int bits = 0;
+    Analysis.Refusal mine = after.get(v);
+    if (mine != null && (o == null || before.get(o) != mine)) {
+      bits |= mine.status;
+    }
+    VarkaVectorIR[] vs = VarkaVectorIR.childrenOf(v);
+    VarkaVectorIR[] os = o != null && o.getClass() == v.getClass()
+        ? VarkaVectorIR.childrenOf(o) : new VarkaVectorIR[0];
+    for (int i = 0; i < vs.length; i++) {
+      bits |= added(i < os.length ? os[i] : null, vs[i], before, after);
     }
     return bits;
   }

@@ -128,35 +128,43 @@ object VarkaKernelCheck {
    */
   def runAndCompare(context: String, className: String, bytes: Array[Byte],
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Int], batch: Batch,
-      declineAllowed: Boolean = false, spark: Option[VarkaSparkOracle] = None): Boolean = {
-    val compared = runBatch(context, className, bytes, roots, numInputs, lits, batch,
-      declineAllowed, spark) == 0
-    if (compared) otherBody(numInputs, batch.length, batch.patterns, batch.forceMasked).foreach {
-      case (patterns, forced) =>
-        runBatch(s"$context (the other body)", className, bytes, roots, numInputs, lits,
-          batch.copy(patterns = patterns, forceMasked = forced), declineAllowed, spark)
-    }
-    compared
-  }
+      declineAllowed: Boolean = false, spark: Option[VarkaSparkOracle] = None): Boolean =
+    bodies(context, numInputs, batch.length, batch.patterns, batch.forceMasked) {
+      (label, patterns, forced) => runBatch(label, className, bytes, roots, numInputs, lits,
+        batch.copy(patterns = patterns, forceMasked = forced), declineAllowed, spark)
+    }._1 == 0
 
   /**
    * [[runAndCompare]] for a caller that must know why a batch declined (VARKA-278's variants):
    * the status of the first body that declined, or 0 where every body run was compared. A
    * decline fails the check unless `declineAllowed`, as there; the bits are each reason's own
-   * only for a kernel emitted under `exactRefusalStatus`. Without `bothBodies` only the batch's
-   * own body runs, for a shape that holds only for the batch's own nulls.
+   * only for a kernel emitted under `exactRefusalStatus`.
    */
   def runAndCompareStatus(context: String, className: String, bytes: Array[Byte],
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Int], batch: Batch,
-      declineAllowed: Boolean, bothBodies: Boolean = true): Int = {
-    val status = runBatch(context, className, bytes, roots, numInputs, lits, batch,
-      declineAllowed, None)
-    if (status != 0 || !bothBodies) return status
-    otherBody(numInputs, batch.length, batch.patterns, batch.forceMasked).map {
-      case (patterns, forced) =>
-        runBatch(s"$context (the other body)", className, bytes, roots, numInputs, lits,
-          batch.copy(patterns = patterns, forceMasked = forced), declineAllowed, None)
-    }.getOrElse(0)
+      declineAllowed: Boolean): Int = {
+    val (first, other) = bodies(context, numInputs, batch.length, batch.patterns,
+        batch.forceMasked) { (label, patterns, forced) =>
+      runBatch(label, className, bytes, roots, numInputs, lits,
+        batch.copy(patterns = patterns, forceMasked = forced), declineAllowed, None)
+    }
+    if (first != 0) first else other
+  }
+
+  /**
+   * The batch through `run` - its own body - and, once that compared, the same values through
+   * [[otherBody]], so both of a kernel's bodies meet the oracle: each run's status, the second 0
+   * where it did not run. `run` takes the context, the null patterns and whether the masked body
+   * is forced.
+   */
+  private def bodies(context: String, numInputs: Int, length: Int,
+      patterns: Seq[Int => Boolean], forceMasked: Boolean)(
+      run: (String, Seq[Int => Boolean], Boolean) => Int): (Int, Int) = {
+    val first = run(context, patterns, forceMasked)
+    if (first != 0) return (first, 0)
+    (first, otherBody(numInputs, length, patterns, forceMasked).map {
+      case (p, forced) => run(s"$context (the other body)", p, forced)
+    }.getOrElse(0))
   }
 
   /**
@@ -168,7 +176,7 @@ object VarkaKernelCheck {
    * by contract and a null in a column the kernel does not read selecting nothing. None for a
    * kernel that reads no column, which has no masked body to choose.
    */
-  private def otherBody(numInputs: Int, length: Int, patterns: Seq[Int => Boolean],
+  private[varka] def otherBody(numInputs: Int, length: Int, patterns: Seq[Int => Boolean],
       forceMasked: Boolean): Option[(Seq[Int => Boolean], Boolean)] = {
     if (numInputs == 0 || length == 0) return None
     val masked = forceMasked || patterns.exists(p => (0 until length).exists(p))
@@ -283,29 +291,22 @@ object VarkaKernelCheck {
    */
   def runAndCompareLong(context: String, className: String, bytes: Array[Byte],
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Long], batch: LongBatch,
-      declineAllowed: Boolean = false, spark: Option[VarkaSparkOracle] = None): Boolean = {
-    val compared = runLongBatch(context, className, bytes, roots, numInputs, lits, batch,
-      declineAllowed, spark) == 0
-    if (compared) otherBody(numInputs, batch.length, batch.patterns, batch.forceMasked).foreach {
-      case (patterns, forced) =>
-        runLongBatch(s"$context (the other body)", className, bytes, roots, numInputs, lits,
-          batch.copy(patterns = patterns, forceMasked = forced), declineAllowed, spark)
-    }
-    compared
-  }
+      declineAllowed: Boolean = false, spark: Option[VarkaSparkOracle] = None): Boolean =
+    bodies(context, numInputs, batch.length, batch.patterns, batch.forceMasked) {
+      (label, patterns, forced) => runLongBatch(label, className, bytes, roots, numInputs, lits,
+        batch.copy(patterns = patterns, forceMasked = forced), declineAllowed, spark)
+    }._1 == 0
 
   /** [[runAndCompareStatus]] at the long lane. */
   def runAndCompareLongStatus(context: String, className: String, bytes: Array[Byte],
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Long], batch: LongBatch,
-      declineAllowed: Boolean, bothBodies: Boolean = true): Int = {
-    val status = runLongBatch(context, className, bytes, roots, numInputs, lits, batch,
-      declineAllowed, None)
-    if (status != 0 || !bothBodies) return status
-    otherBody(numInputs, batch.length, batch.patterns, batch.forceMasked).map {
-      case (patterns, forced) =>
-        runLongBatch(s"$context (the other body)", className, bytes, roots, numInputs, lits,
-          batch.copy(patterns = patterns, forceMasked = forced), declineAllowed, None)
-    }.getOrElse(0)
+      declineAllowed: Boolean): Int = {
+    val (first, other) = bodies(context, numInputs, batch.length, batch.patterns,
+        batch.forceMasked) { (label, patterns, forced) =>
+      runLongBatch(label, className, bytes, roots, numInputs, lits,
+        batch.copy(patterns = patterns, forceMasked = forced), declineAllowed, None)
+    }
+    if (first != 0) first else other
   }
 
   /** One batch through [[runAndCompareLong]]'s check: the status, 0 once compared. */

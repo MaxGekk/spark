@@ -52,8 +52,9 @@ object VarkaVariantCheck {
 
   /**
    * How a suite emits: the roots, the column and literal counts, the options and the class name
-   * to give the class; None for a shape past the class-file cap. Each suite passes its own, so
-   * the fuzzer's trace and budget retry apply to its variants as to its draws.
+   * to give the class; None for a shape past the class-file cap. The series passes
+   * [[retryWithoutBudget]]; the fuzzer passes its own, so its checks on a decline's reason, its
+   * count of shapes past the cap and its size trace apply to its variants as to its draws.
    */
   type Emit = (Seq[VarkaVectorIR], Int, Int, VarkaEmitOptions, String) => Option[Array[Byte]]
 
@@ -100,15 +101,20 @@ object VarkaVariantCheck {
   }
 
   /**
-   * Which arm of `cond` the rows of `c`'s batch take, by the reference evaluator: the then arm
-   * where the condition is true, the else arm where it is false or null.
+   * Which arm of `cond` the rows of `c` take, by the reference evaluator: the then arm where the
+   * condition is true, the else arm where it is false or null. Read over both batches the check
+   * runs - `c`'s own nulls and its other body's ([[VarkaKernelCheck.otherBody]]: no nulls, or at
+   * one row every column null) - since a condition over a column's validity can turn there, and
+   * an arm untaken on one is taken on the other.
    */
   def armOracle(c: VarkaFuzzCase): VarkaVariants.ArmOracle = cond => {
+    val own = (0 until c.numInputs).map(col => (i: Int) => c.nulls(col)(i))
+    val other = VarkaKernelCheck.otherBody(c.numInputs, c.length, own, c.forceMasked).map(_._1)
     var anyThen = false
     var anyElse = false
-    for (i <- 0 until c.length) {
+    for (patterns <- own +: other.toSeq; i <- 0 until c.length) {
       val row = (0 until c.numInputs).map { col =>
-        if (c.nulls(col)(i)) None else Some(c.data(col)(i))
+        if (patterns(col)(i)) None else Some(c.data(col)(i))
       }
       val taken = if (c.lane == LaneType.LONG) {
         VarkaReferenceEvaluator.evalCondLong(cond, row, c.lits).contains(true)
@@ -149,7 +155,7 @@ object VarkaVariantCheck {
     emit(c.roots, c.numInputs, c.lits.length, c.options, name) match {
       case None => Skipped
       case Some(bytes) =>
-        status(c, name, bytes, declineAllowed = false, bothBodies = true)
+        status(c, name, bytes, declineAllowed = false)
         Compared
     }
   }
@@ -160,21 +166,18 @@ object VarkaVariantCheck {
    */
   def check(c: VarkaFuzzCase, v: Variant, emit: Emit): Outcome = {
     val vc = caseOf(c, v)
-    // The other body clears the nulls, which can turn a condition the batch never took true;
-    // so an untaken arm meets the other body only where the batch has no null to clear.
-    val bothBodies = v.kind != Kind.UNTAKEN_ARM || !vc.nulls.exists(_.contains(true))
     def run(options: VarkaEmitOptions): Option[Int] = {
       val name = className(vc)
       emit(vc.roots, vc.numInputs, vc.lits.length, options, name)
-        .map(bytes => status(vc, name, bytes, v.kind.mayDecline, bothBodies))
+        .map(bytes => status(vc, name, bytes, v.kind.mayDecline))
     }
     run(vc.options) match {
       case None => Skipped
       case Some(0) => Compared
       case Some(first) =>
         val exactOptions = vc.options.withExactRefusalStatus(true)
-        val allowed = VarkaVariants.addedRefusalBits(c.roots.asJava, v.roots, vc.numInputs,
-          vc.lits.length, exactOptions)
+        val allowed = VarkaVariants.addedRefusalBits(c.roots.asJava, c.numInputs, v.roots,
+          vc.numInputs, vc.lits.length, exactOptions)
         val exact = run(exactOptions).getOrElse(
           fail(s"${vc.label}: declined (status $first), then past the class-file cap under " +
             "exactRefusalStatus"))
@@ -188,16 +191,16 @@ object VarkaVariantCheck {
 
   /** `c`'s kernel run over `c`'s batch: the status, 0 once every row is compared. */
   private def status(c: VarkaFuzzCase, name: String, bytes: Array[Byte],
-      declineAllowed: Boolean, bothBodies: Boolean): Int = {
+      declineAllowed: Boolean): Int = {
     val patterns = (0 until c.numInputs).map(col => (i: Int) => c.nulls(col)(i))
     if (c.lane == LaneType.LONG) {
       VarkaKernelCheck.runAndCompareLongStatus(c.label, name, bytes, c.roots, c.numInputs,
         c.lits, VarkaKernelCheck.LongBatch(c.length, patterns, c.data, c.forceMasked),
-        declineAllowed, bothBodies)
+        declineAllowed)
     } else {
       VarkaKernelCheck.runAndCompareStatus(c.label, name, bytes, c.roots, c.numInputs,
         c.lits.map(_.toInt), VarkaKernelCheck.Batch(c.length, patterns,
-          c.data.map(_.map(_.toInt)), c.forceMasked), declineAllowed, bothBodies)
+          c.data.map(_.map(_.toInt)), c.forceMasked), declineAllowed)
     }
   }
 }
