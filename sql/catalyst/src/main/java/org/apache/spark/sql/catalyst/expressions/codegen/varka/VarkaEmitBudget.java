@@ -297,6 +297,12 @@ final class VarkaEmitBudget {
    * saving; and under {@link VarkaEmitOptions#shareWholeNodes} an output that reuses whole
    * nodes may join too. {@code groupOutputs} implements both.
    *
+   * <p><b>Where the budget does not bind.</b> Since VARKA-254 the emit cost model's prediction
+   * bounds a group in this budget's place, up to {@link #FUSED_CEILING}, wherever it can: with
+   * the plan's margins, a call-site budget, and a group it prices
+   * ({@link VarkaEmitOptions#groupBudgetUnderPrediction}). The budget binds everywhere else, and
+   * under that option.
+   *
    * <p><b>What this bound is not.</b> It is not a compile-time bound. C2's compile time is
    * roughly linear in op count - about 1.1 ms per op at AVX-512, measured on a ladder from 20
    * to 248 ops - so even the widest method compiles in a few hundred milliseconds. A loop that
@@ -592,54 +598,44 @@ final class VarkaEmitBudget {
    */
   static int weightOf(VarkaVectorIR node) {
     return switch (node) {
-      case ColumnRef c -> 0;
-      case LiteralSlot l -> 0;
+      // The leaves' loads and broadcasts are paid once per column and literal, not per node.
+      case ColumnRef _, LiteralSlot _ -> 0;
       // One lanewise op, plus the four the sign test costs where there is one.
       case IntArith n -> n.mode() == Overflow.WRAP ? 1 : 5;
       // The multiply by -1, plus one compare where the mode checks.
       case IntNeg n -> n.mode() == Overflow.WRAP ? 1 : 2;
-      case AddDays n -> 1;
-      case SubDays n -> 1;
-      case DateDiff n -> 1;
-      case Greatest n -> 1;
-      case Least n -> 1;
-      // The blend; its condition is a node of its own.
-      case IfElse n -> 1;
-      // The narrowing conversion.
-      case NarrowLane n -> 1;
-      case Compare n -> 1;
+      // One lanewise op each: the add or subtract, the min or max, the blend (its condition is a
+      // node of its own), the narrowing conversion, the compare.
+      case AddDays _, SubDays _, DateDiff _, Greatest _, Least _, IfElse _, NarrowLane _,
+          Compare _ -> 1;
       // The connectives emit only mask calls, which no weight counts; 1 is a floor, so that a
       // connective is never free to join any group.
-      case And n -> 1;
-      case Or n -> 1;
-      case Not n -> 1;
-      case IsNotNull n -> 1;
+      case And _, Or _, Not _, IsNotNull _ -> 1;
       // Emitted as one loop whatever the number of ranges: a start mask and a body of scalar
       // compares, three lane calls past the column's load. Its time grows with the ranges; its
       // code does not.
-      case InRanges n -> 3;
-      case GuardedDay n -> GUARD_WEIGHT;
-      case GuardedRange n -> GUARD_WEIGHT;
-      case DayOfWeek n -> DAY_OF_WEEK_WEIGHT;
-      case WeekDay n -> WEEK_DAY_WEIGHT;
-      case DayOfWeekIso n -> DAY_OF_WEEK_ISO_WEIGHT;
-      case NextDay n -> NEXT_DAY_WEIGHT;
-      case ThursdayOf n -> THURSDAY_OF_WEIGHT;
-      case MakeDate n -> MAKE_DATE_WEIGHT;
-      case AddMonths n -> ADD_MONTHS_WEIGHT;
-      case Year n -> CHRONO_PREFIX_WEIGHT + YEAR_TAIL_WEIGHT;
-      case Month n -> CHRONO_PREFIX_WEIGHT + MONTH_TAIL_WEIGHT;
-      case DayOfMonth n -> CHRONO_PREFIX_WEIGHT + DAY_OF_MONTH_TAIL_WEIGHT;
-      case Quarter n -> CHRONO_PREFIX_WEIGHT + QUARTER_TAIL_WEIGHT;
-      case DayOfYear n -> DAY_OF_YEAR_WEIGHT;
-      case LastDay n -> LAST_DAY_WEIGHT;
-      case WeekOfYear n -> WEEK_OF_YEAR_WEIGHT;
+      case InRanges _ -> 3;
+      case GuardedDay _, GuardedRange _ -> GUARD_WEIGHT;
+      case DayOfWeek _ -> DAY_OF_WEEK_WEIGHT;
+      case WeekDay _ -> WEEK_DAY_WEIGHT;
+      case DayOfWeekIso _ -> DAY_OF_WEEK_ISO_WEIGHT;
+      case NextDay _ -> NEXT_DAY_WEIGHT;
+      case ThursdayOf _ -> THURSDAY_OF_WEIGHT;
+      case MakeDate _ -> MAKE_DATE_WEIGHT;
+      case AddMonths _ -> ADD_MONTHS_WEIGHT;
+      case Year _ -> CHRONO_PREFIX_WEIGHT + YEAR_TAIL_WEIGHT;
+      case Month _ -> CHRONO_PREFIX_WEIGHT + MONTH_TAIL_WEIGHT;
+      case DayOfMonth _ -> CHRONO_PREFIX_WEIGHT + DAY_OF_MONTH_TAIL_WEIGHT;
+      case Quarter _ -> CHRONO_PREFIX_WEIGHT + QUARTER_TAIL_WEIGHT;
+      case DayOfYear _ -> DAY_OF_YEAR_WEIGHT;
+      case LastDay _ -> LAST_DAY_WEIGHT;
+      case WeekOfYear _ -> WEEK_OF_YEAR_WEIGHT;
       case TruncDate n -> switch (n.level()) {
         case MONTH -> TRUNC_MONTH_WEIGHT;
         case YEAR -> TRUNC_YEAR_WEIGHT;
         case QUARTER -> TRUNC_QUARTER_WEIGHT;
       };
-      case TruncDateDynamic n -> TRUNC_DYNAMIC_WEIGHT;
+      case TruncDateDynamic _ -> TRUNC_DYNAMIC_WEIGHT;
       // Weight approximates lane ops, as every entry above does, counted over every vector type
       // the lowering touches. Each lane has two forms, and which one emits cannot be asked here -
       // `weightOf` runs while the groups are formed, before an `Analysis` exists - so the larger
@@ -650,7 +646,7 @@ final class VarkaEmitBudget {
           ? LONG_CONST_DIVIDE_WEIGHT
           : INT_CONST_DIVIDE_WEIGHT + (n.divisor() < 0 ? 1 : 0);
       // The single multiply-high and its shift.
-      case BoundedDivide n -> 2;
+      case BoundedDivide _ -> 2;
     };
   }
 

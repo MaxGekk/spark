@@ -73,6 +73,28 @@ class VarkaExactGroupingSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     }
   }
 
+  test("under the default, where the prediction bounds groups, the exact grouping finds the best " +
+      "partition and every shape emits (VARKA-254)", PinsDefaults) {
+    // The suite's other tests read the budget's rule; this one holds the shipped default to the
+    // same agreement. Runs are longer under it and gated on predicted call sites, and a walk that
+    // judged a step apart from the partition search would throw inside the emitter and send a
+    // kernel to the row engine instead of failing here.
+    val shipped = VarkaMatrix.base.withLanesOverride(16)
+    assert(!shipped.groupBudgetUnderPrediction() && shipped.exactGrouping())
+    val shapes = Seq(40, 200).map(n => (s"mixed $n", mixed(n), 1, n)) ++
+      VarkaEmitCostCorpus.wide().asScala.take(20).map { s =>
+        (s"${s.family} ${s.index}", s.roots.asScala.toSeq, s.numInputs, s.numLiterals)
+      }
+    for ((name, roots, inputs, lits) <- shapes) {
+      val runs = VarkaGroupingBound.runs(roots.asJava, shipped)
+      val best = VarkaGroupingBound.optimal(runs)
+      val exactPartition = VarkaGroupingBound.of(runs,
+        VarkaLoopEmitter.groupsForTest(roots.asJava, shipped))
+      assert(exactPartition.ops === best.ops && exactPartition.groups === best.groups, name)
+      emitMulti(roots, inputs, lits, shipped)
+    }
+  }
+
   test("where the greedy partition is already the best the exact grouping emits the same class, " +
       "byte for byte") {
     // The ladders are each one entry repeated, and the greedy walk fills every group as far as

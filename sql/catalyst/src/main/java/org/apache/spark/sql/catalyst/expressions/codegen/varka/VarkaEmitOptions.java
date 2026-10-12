@@ -327,8 +327,11 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        the count past which C1 refuses such a method and it runs interpreted until C2
  *        compiles it ({@code VARKA-209.md} 10.1). Read off the built class beside the bytes,
  *        under the byte budget only: a wide group with a method over it is split as one over
- *        the byte budget is, a narrow group over it stands, and the budget is dropped for a
- *        class its splits would make decline, so it never costs a kernel. {@code 0} is off, the
+ *        the byte budget is, a narrow group over it stands unless the prediction widened it
+ *        ({@link #groupBudgetUnderPrediction}), and the budget is dropped for a class its splits
+ *        would make decline, so it never costs a kernel. Where the prediction bounds groups, the
+ *        grouping that drops it is bounded at the fused ceiling, so the drop closes no group the
+ *        budget of sixteen would. {@code 0} is off, the
  *        arm the cliff's probe and the ladders measure the budget against; a small value is how
  *        a test sees the split on a shape of a few outputs.
  * @param heavyGroupOutputs the most outputs a group may hold and still keep a method over
@@ -338,19 +341,21 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        output for good if split (see the constant). {@code 0} and {@code 1} alike split every
  *        group over the budget down to single outputs, the arm the exemption is measured
  *        against.
- * @param predictGrouping whether the first grouping also closes a group where the emit cost
- *        model ({@code VarkaEmitCost}) predicts that adding the next output would put one of the
- *        group's methods over {@link #methodByteBudget}, or, for a group of more than
- *        {@link #heavyGroupOutputs} outputs, over {@link #callSiteBudget} - so a group the
- *        measurement would split is split before the class is built, and the common case builds
- *        once. The weights still close groups as before; the prediction only adds closes, and the
- *        measurement of the built class stays the last word. On by default since 3 October 2026,
- *        under the plan ({@link #planSize}), whose margins it closes groups with: planned, the
- *        families it regroups ran within the control's spread of the weights' on a runner and on
- *        the laptop, where the prediction without the margins filled a method of sixty-four
- *        cheap tails to the budget and ran thirteen times slower on the runner
- *        ({@code VARKA-236.md} 9.3); off is the weights alone, kept as the reference arm.
- *        With {@link #methodByteBudget} 0 it changes nothing ({@code VARKA-199.md}).
+ * @param predictGrouping whether the first grouping also closes a group where the emit cost model
+ *        ({@code VarkaEmitCost}) predicts that adding the next output would put one of the group's
+ *        methods over {@link #methodByteBudget}, or, for a group of more than {@link
+ *        #heavyGroupOutputs} outputs, over {@link #callSiteBudget} - so a group the measurement
+ *        would split is split before the class is built, and the common case builds once. With
+ *        {@link #groupBudgetUnderPrediction} on, the weights still close groups as before and the
+ *        prediction only adds closes; off, the default since VARKA-254, the prediction bounds a
+ *        group in the group budget's place where it can, so it can also widen one. The measurement
+ *        of the built class stays the last word. On by default since 3 October 2026, under the plan
+ *        ({@link #planSize}), whose margins it closes groups with: planned, the families it
+ *        regroups ran within the control's spread of the weights' on a runner and on the laptop,
+ *        where the prediction without the margins filled a method of sixty-four cheap tails to the
+ *        budget and ran thirteen times slower on the runner ({@code VARKA-236.md} 9.3); off is the
+ *        weights alone, kept as the reference arm. With {@link #methodByteBudget} 0 it changes
+ *        nothing ({@code VARKA-199.md}).
  * @param driverOutputTable whether the driver's per-output work - each output's validity
  *        zeroed, filled or written by the bitmap pass, and the all-null shortcut's test - is one
  *        call reading a table baked into the class, rather than unrolled once per output. Unrolled
@@ -362,7 +367,7 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  * @param exactGrouping whether the first grouping is the best partition of the outputs in their
  *        order rather than the greedy walk's: of the partitions whose every group the greedy
  *        rule admits, the one with the fewest ops, then the fewest loop methods. The rule is the
- *        same - the weights' two clauses, and the prediction under {@link #predictGrouping} -
+ *        same - the weights' clauses, and the prediction under {@link #predictGrouping} -
  *        so every group it forms is one the greedy walk could have formed, and where the greedy
  *        partition is already the best it is the partition chosen. What it changes is where the
  *        greedy walk strands a cheap output that shares nothing in a loop method of its own

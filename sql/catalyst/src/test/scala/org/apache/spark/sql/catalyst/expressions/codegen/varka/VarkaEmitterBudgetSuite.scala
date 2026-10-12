@@ -282,13 +282,12 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
    * `Vector`, not `VectorMask` - which is what a weight counts. The dense body where there is
    * one; a shape that builds only a masked body (an output that can null a lane) is read there.
    */
-  private def laneCalls(bytes: Array[Byte]): Int = {
-    val method = if (VarkaEmitterTestSupport.methodNames(bytes).contains("loopDense0")) "loopDense0"
-      else "loopMasked0"
-    Seq("IntVector", "LongVector", "DoubleVector", "Vector").map { owner =>
-      VarkaEmitterTestSupport.invocationCount(bytes, method, s"jdk.incubator.vector.$owner")
-    }.sum
-  }
+  private def laneCalls(bytes: Array[Byte]): Int =
+    vectorOps(bytes, if (VarkaEmitterTestSupport.methodNames(bytes).contains("loopDense0")) {
+      "loopDense0"
+    } else {
+      "loopMasked0"
+    })
 
   test("every weight is what its node emits alone, over every node the IR permits (VARKA-254)",
       PinsDefaults) {
@@ -353,15 +352,14 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       (new TruncDateDynamic(c, c1), 2, 0, VarkaMatrix.base),
       (new AddMonths(c, l), 1, 1, VarkaMatrix.base),
       (new MakeDate(c, c1, c2, true), 3, 0, VarkaMatrix.base),
+      // The null form builds only a masked body, read there; one weight serves both forms.
+      (new MakeDate(c, c1, c2, false), 3, 0, VarkaMatrix.base),
       (new GuardedDay(new IntArith(IntOp.ADD, Overflow.WRAP, c, c1)), 2, 0, VarkaMatrix.base),
       (new ConstDivide(new GuardedRange(c, -999L, 999L), 60, 1000L), 1, 0, VarkaMatrix.base),
       (new NarrowLane(new IntNeg(Overflow.WRAP, lc)), 1, 0, VarkaMatrix.base))
     // The calendar nodes whose own tail reads no month, so their prefix elides the month step.
-    def elidesMonthStep(n: VarkaVectorIR): Boolean = n match {
-      case _: Year | _: DayOfYear | _: WeekOfYear => true
-      case t: TruncDate => t.level() == TruncLevel.YEAR
-      case _ => false
-    }
+    def elidesMonthStep(n: VarkaVectorIR): Boolean =
+      VarkaEmitBudget.isChrono(n) && !VarkaChronoLowering.tailReadsMarchMonth(n)
     def isConnective(n: VarkaVectorIR): Boolean = n match {
       case _: And | _: Or | _: Not | _: IsNotNull => true
       case _ => false
@@ -465,10 +463,19 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       assert(loops(roots, inputs, roots.size, b) === loops(roots, inputs, roots.size,
         VarkaMatrix.base.withGroupBudgetUnderPrediction(true)),
         s"$name: arm B packed outputs arm A keeps apart")
-      if (loops(roots, inputs, roots.size, b) < roots.size) {
-        val sites = groupSites(emitMulti(roots, inputs, roots.size, b)._2)
-        assert(sites.values.forall(_ <= budget), s"$name under arm B: $sites")
-      }
+    }
+    // A widened group stays checked when a later output joins it by reuse: year(d) and two cheap
+    // outputs join by the prediction, and add_months(d) reuses year's prefix but alone is past
+    // the budget, so it may not join them. Every method that holds more than one output fits.
+    val d = new ColumnRef(0)
+    val mixedHeavy: Seq[VarkaVectorIR] = Seq(new Year(d), new AddDays(d, new LiteralSlot(0)),
+      new AddDays(d, new LiteralSlot(1)), new AddMonths(d, new LiteralSlot(2)))
+    val planned = VarkaLoopEmitter.groupsForTest(mixedHeavy.asJava, b).asScala.map(_.size)
+    val sites = groupSites(emitMulti(mixedHeavy, 1, 3, b)._2)
+    assert(sites.size === 4 * planned.size, s"the build regrouped the plan: $planned, $sites")
+    for ((size, g) <- planned.zipWithIndex if size > 1) {
+      val over = sites.filter { case (m, n) => VarkaMethodNames.groupOf(m) == g && n > budget }
+      assert(over.isEmpty, s"group $g of $size outputs is over the call-site budget: $over")
     }
     // Where the prediction cannot bound a group the budget binds as in arm A, byte for byte:
     // without the plan's margins, and without a call-site budget. The day of week twice over
@@ -482,10 +489,6 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     val cheap: Seq[VarkaVectorIR] = Seq(new DayOfWeek(d0), new WeekDay(d0), new DayOfWeek(d1),
       new WeekDay(d1)) ++ (0 until 4).map(k => new AddDays(d0, new LiteralSlot(k)))
     val a = VarkaMatrix.base.withGroupBudgetUnderPrediction(true)
-    // Method by method with the class name normalised: each emission carries its own name.
-    def bodies(bytes: Array[Byte]): Map[String, String] =
-      VarkaEmitterTestSupport.methodBodies(bytes).asScala.toMap
-        .map { case (m, body) => m -> body.replaceAll("VarkaFusedTest\\d+", "K") }
     assert(loops(cheap, 2, 4, b) < loops(cheap, 2, 4, a),
       "arm B should widen the cheap group where it applies")
     for ((label, f) <- Seq[(String, VarkaEmitOptions => VarkaEmitOptions)](
@@ -527,11 +530,12 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // Under the defaults the ceilings below 400 do not move the cheap tails: their groups are the
     // call-site budget's, the prefix recomputed taking six and materialized four. The make_date
     // rungs are heavy enough that the ceiling decides, down to one a method at 100.
-    val expected = Map("tails" -> Map(false -> 6, true -> 4)).withDefaultValue(Map.empty)
     for (((name, ceiling, materialized), loops) <- counts) {
-      val want = if (name == "tails") expected(name)(materialized) else ceiling match {
-        case 400 => 10
-        case 200 => 20
+      val want = (name, ceiling, materialized) match {
+        case ("tails", _, false) => 6
+        case ("tails", _, true) => 4
+        case (_, 400, _) => 10
+        case (_, 200, _) => 20
         case _ => 60
       }
       assert(loops === want, s"$name at ceiling $ceiling, materialized $materialized")
@@ -539,9 +543,9 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
   }
 
   /** Every lane op `loopDense0` runs, on whichever vector type it runs it: what a weight counts. */
-  private def vectorOps(bytes: Array[Byte]): Int =
+  private def vectorOps(bytes: Array[Byte], method: String = "loopDense0"): Int =
     Seq("IntVector", "LongVector", "DoubleVector", "Vector").map { owner =>
-      VarkaEmitterTestSupport.invocationCount(bytes, "loopDense0", s"jdk.incubator.vector.$owner")
+      VarkaEmitterTestSupport.invocationCount(bytes, method, s"jdk.incubator.vector.$owner")
     }.sum
 
   test("a constant division weighs the larger of its two forms, counted over every vector type",

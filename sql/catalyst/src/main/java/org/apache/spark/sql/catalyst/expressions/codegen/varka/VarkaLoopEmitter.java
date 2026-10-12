@@ -450,6 +450,9 @@ public final class VarkaLoopEmitter {
     private final ExactRuns exactRuns = new ExactRuns();
     // Outputs that begin a group whatever the grouping's rule says: the splits' cuts.
     private final Set<Integer> forcedStarts = new HashSet<>();
+    /** The first output of each group of the current grouping the prediction widened; see
+     *  {@link #admit}. The call-site split halves such a group however narrow. */
+    private final Set<Integer> widenedStarts = new HashSet<>();
 
     // The options the grouping reads: the caller's, with the call-site budget dropped when the
     // loop drops it, and without a grouping switch once a class it produced would decline.
@@ -548,8 +551,9 @@ public final class VarkaLoopEmitter {
       if (predictions != null) {
         predictions.tallies().clear();
       }
+      widenedStarts.clear();
       List<List<Integer>> groups = groupOutputs(outputs, grouping, forcedStarts, predictions,
-          exactRuns);
+          exactRuns, widenedStarts);
       // Decided per grouping, since a regroup can move a prefix across a group boundary; empty
       // unless the option is on and a prefix crosses one, and then the class takes the scratch
       // address as an eighth argument (VARKA-198).
@@ -647,7 +651,18 @@ public final class VarkaLoopEmitter {
       if (build.bytes() != null && siteBudget > 0 && stuck.isEmpty()) {
         SortedMap<Integer, Map.Entry<String, Integer>> overSites =
             groupsOverCallSites(build.measured(), siteBudget);
-        if (halveGroups(overSites.keySet(), groups, narrowest, forcedStarts, null)) {
+        // A group the prediction widened is halved however narrow: the exemption below the heavy
+        // width is for outputs that share a prefix, which a widened group's need not.
+        Set<Integer> widenedOver = new HashSet<>();
+        for (int g : overSites.keySet()) {
+          if (widenedStarts.contains(groups.get(g).get(0))) {
+            widenedOver.add(g);
+          }
+        }
+        boolean halved = halveGroups(widenedOver, groups, 1, forcedStarts, null);
+        Set<Integer> rest = new HashSet<>(overSites.keySet());
+        rest.removeAll(widenedOver);
+        if (halveGroups(rest, groups, narrowest, forcedStarts, null) | halved) {
           siteSplit = true;
           split = true;
           trace.siteSplits++;
@@ -706,19 +721,31 @@ public final class VarkaLoopEmitter {
       if (siteSplit) {
         trace.siteRollbacks++;
         // The prediction closes groups on call sites too, so it drops the budget with the loop.
-        grouping = grouping.withCallSiteBudget(0);
+        // Where the prediction bounds groups, dropping the call-site budget would hand the bound
+        // back to the group budget and close more groups, so the ceiling bounds them instead.
+        grouping = widened(grouping.withCallSiteBudget(0), grouping);
         siteBudget = 0;
       } else if (stuck.isEmpty() && grouping.exactGrouping()) {
         trace.exactFallbacks++;
         regroupFrom(options.withExactGrouping(false));
       } else if (stuck.isEmpty() && grouping.predictGrouping()) {
         trace.predictFallbacks++;
-        regroupFrom(options.withPredictGrouping(false).withExactGrouping(false));
+        regroupFrom(widened(options.withPredictGrouping(false).withExactGrouping(false), options));
       } else {
         return false;
       }
       startAfresh();
       return true;
+    }
+
+    /**
+     * {@code next}, a grouping with something dropped, bounded at the fused ceiling where
+     * {@code from} let the prediction bound groups: without the prediction or the call-site budget
+     * the group budget would bind again and close more groups, where a fallback may only close
+     * fewer.
+     */
+    private static VarkaEmitOptions widened(VarkaEmitOptions next, VarkaEmitOptions from) {
+      return predictionBounds(from) ? next.withGroupBudget(from.fusedCeiling()) : next;
     }
 
     /** A grouping switch dropped: {@code next}, the caller's options, call-site budget and all. */
@@ -1192,6 +1219,14 @@ public final class VarkaLoopEmitter {
   private static List<List<Integer>> groupOutputs(List<VarkaVectorIR> outputs,
       VarkaEmitOptions options, Set<Integer> forcedStarts, TallyRecord record,
       ExactRuns exactRuns) {
+    return groupOutputs(outputs, options, forcedStarts, record, exactRuns, new HashSet<>());
+  }
+
+  /** As above, leaving in {@code widenedStarts} the first output of each group the prediction
+   *  widened past the group budget. */
+  private static List<List<Integer>> groupOutputs(List<VarkaVectorIR> outputs,
+      VarkaEmitOptions options, Set<Integer> forcedStarts, TallyRecord record,
+      ExactRuns exactRuns, Set<Integer> widenedStarts) {
     Set<Integer> exactStarts = null;
     if (options.exactGrouping()) {
       // The best partition's group starts, forced on the walk below. Every group of that
@@ -1231,6 +1266,9 @@ public final class VarkaLoopEmitter {
       // its own: after one calendar output `ops` already exceeds it, so without this test
       // `SELECT year(d) AS a, year(d) AS b` would emit the decomposition twice.
       if (!current.isEmpty() && (closes(step, options) || forcedStarts.contains(o))) {
+        if (group.widenedByPrediction) {
+          widenedStarts.add(current.get(0));
+        }
         groups.add(current);
         if (record != null) {
           record.tallies().add(group.tally);
@@ -1242,6 +1280,9 @@ public final class VarkaLoopEmitter {
       }
       current.add(o);
       group = withNext;
+    }
+    if (group.widenedByPrediction) {
+      widenedStarts.add(current.get(0));
     }
     groups.add(current);
     if (record != null) {
@@ -1372,11 +1413,12 @@ public final class VarkaLoopEmitter {
 
   /**
    * One step of the grouping: the group with {@code output} added, how many ops the output
-   * added, whether the weights' two clauses of {@link #groupOutputs} admit it
-   * ({@code fitsWeights}), and whether the rule as a whole does ({@code fits}: the weights, and
-   * under {@code predict} the cost model's prediction as well). The one place the rule is
-   * written, so the greedy walk, the best partition ({@link #bestPartitionStarts}) and the test
-   * that holds the one to the other ({@link #runsForTest}) decide admission alike.
+   * added, whether the weights' clauses admit it ({@code fitsWeights}: within the group budget,
+   * within the fused ceiling by reuse, or within the ceiling because the prediction bounds the
+   * group - see {@link #predictionBounds}), and whether the rule as a whole does ({@code fits}:
+   * the weights, and under {@code predict} the cost model's prediction as well). The one place the
+   * rule is written, so the greedy walk, the best partition ({@link #bestPartitionStarts}) and the
+   * test that holds the one to the other ({@link #runsForTest}) decide admission alike.
    */
   private record Admission(GroupOps withNext, int marginal, boolean fitsWeights, boolean fits) {}
 
@@ -1429,17 +1471,22 @@ public final class VarkaLoopEmitter {
     boolean byReuse = reuse > 0 && before + marginal <= options.fusedCeiling();
     // Under `groupBudgetUnderPrediction` off (VARKA-254), the prediction bounds the group in the
     // budget's place, up to the fused ceiling - but only where it can: with the plan's margins, a
-    // call-site budget, and a group the model prices. The step the prediction admits is judged on
-    // its predicted call sites whatever the group's width: the heavy-group exemption assumes a
-    // narrow heavy group forms only by sharing a prefix, and six unrelated make_date would
-    // otherwise share a method past C1's limit with nothing to split it. An output that joins by
-    // reuse keeps the exemption it has under the budget, which is what the prefix-sharing ladders
-    // rely on.
+    // call-site budget, and a group the model prices. The heavy-group exemption assumes a narrow
+    // heavy group forms only by sharing a prefix, and six unrelated make_date would otherwise
+    // share a method past C1's limit with nothing to split it.
     boolean byPrediction = !byBudget && !byReuse && before + marginal <= options.fusedCeiling()
         && predictionBoundsGroup(withNext, options, predict);
+    // Only a join widens a group: a first output heavier than the budget is a group of its own
+    // under either rule, and flagging it would strip the exemption from every prefix-sharing
+    // ladder whose rungs start over the budget. Once widened, a group is judged on predicted call
+    // sites at every later step, a join by reuse included, and the build's call-site split
+    // halves it however narrow (`SizeLoop.split`): its heavy members need not share anything.
+    if (byPrediction && groupSize > 0) {
+      withNext.widenedByPrediction = true;
+    }
     boolean fitsWeights = byBudget || byReuse || byPrediction;
     boolean fits = fitsWeights && (!predict || withNext.predictedWithin(options, groupSize + 1))
-        && (!byPrediction || withNext.predictedSitesWithin(options));
+        && (!withNext.widenedByPrediction || withNext.predictedSitesWithin(options));
     return new Admission(withNext, marginal, fitsWeights, fits);
   }
 
@@ -1450,9 +1497,19 @@ public final class VarkaLoopEmitter {
    */
   private static boolean predictionBoundsGroup(GroupOps group, VarkaEmitOptions options,
       boolean predict) {
-    return !options.groupBudgetUnderPrediction() && predict && options.planSize()
-        && options.callSiteBudget() > 0 && group.tally != null
+    return predictionBounds(options) && predict && group.tally != null
         && group.tally.predicted() != null;
+  }
+
+  /**
+   * Whether {@code options} let the prediction bound groups in the group budget's place: the
+   * option asks for it, and the prediction runs under the byte budget with the plan's margins and
+   * a call-site budget. The size loop's fallbacks ask it of the caller's options, so dropping the
+   * call-site budget or the prediction keeps the widening rather than closing at the budget.
+   */
+  static boolean predictionBounds(VarkaEmitOptions options) {
+    return !options.groupBudgetUnderPrediction() && options.predictGrouping()
+        && options.methodByteBudget() > 0 && options.planSize() && options.callSiteBudget() > 0;
   }
 
   /**
@@ -1468,8 +1525,9 @@ public final class VarkaLoopEmitter {
    * {@link #admit} as the grouping under {@code options}, so a test that prices every
    * contiguous run to find the best partition, and holds the greedy grouping to it
    * ({@code VarkaGroupingBoundSuite}), searches a space the greedy partition is in. The runs
-   * stop where the weights' clauses alone stop admitting outputs, so every group the grouping
-   * forms with or without the prediction is among them; the first run, one output, is always
+   * stop where the weights' clauses stop admitting outputs - the third of which, where the
+   * prediction bounds groups, is the prediction's own - so every group the grouping forms is
+   * among them; the first run, one output, is always
    * reported. The groups before {@code from} are taken to have decomposed every date the
    * outputs before it decompose, which is so under any partition of them.
    */
@@ -1541,6 +1599,9 @@ public final class VarkaLoopEmitter {
     int saved;
     /** The group's features for the emit cost model, or null when no prediction is asked. */
     final VarkaEmitCost.Tally tally;
+    /** Whether an output joined this group past the group budget because the prediction bounds
+     *  it, not by reuse (`groupBudgetUnderPrediction` off); see {@link #admit}. */
+    boolean widenedByPrediction;
 
     GroupOps(boolean sharePrefix, boolean materialize, Set<VarkaVectorIR> earlier,
         VarkaVectorIR.LaneType lane, VarkaEmitCost.Tally tally) {
@@ -1561,8 +1622,10 @@ public final class VarkaLoopEmitter {
     }
 
     GroupOps copy() {
-      return new GroupOps(sharePrefix, materialize, earlier, lane, new HashSet<>(nodes),
+      var copy = new GroupOps(sharePrefix, materialize, earlier, lane, new HashSet<>(nodes),
           new HashSet<>(prefixes), ops, tally == null ? null : tally.copy());
+      copy.widenedByPrediction = widenedByPrediction;
+      return copy;
     }
 
     /**

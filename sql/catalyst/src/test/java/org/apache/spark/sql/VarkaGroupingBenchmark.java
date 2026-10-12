@@ -45,12 +45,14 @@ import org.apache.spark.sql.types.DataTypes;
 /**
  * What it costs to split a projection's outputs into more loop methods.
  *
- * <p>The emitter puts a projection's outputs into groups, one loop method each. A group closes
- * when the weights of its nodes - a hand-kept register of the vector operations each node emits,
- * in {@code VarkaEmitBudget.weightOf} - would pass the group budget of 16, unless the next output
- * reuses what the group already computes (a calendar prefix, or whole nodes under the default
- * {@code shareWholeNodes}), which lets it join up to the fused ceiling of 400. The cost model's
- * prediction and the measured byte and call-site limits can close a group earlier, never later.
+ * <p>The emitter puts a projection's outputs into groups, one loop method each. Under the
+ * budget's rule a group closes when the weights of its nodes - the vector operations each node
+ * emits, in {@code VarkaEmitBudget.weightOf} - would pass the group budget of 16, unless the next
+ * output reuses what the group already computes (a calendar prefix, or whole nodes under the
+ * default {@code shareWholeNodes}), which lets it join up to the fused ceiling of 400. Since
+ * VARKA-254 the cost model's prediction bounds a group in the budget's place by default, up to
+ * the ceiling; under either rule the measured byte and call-site limits split a group after the
+ * build.
  * Each extra loop method costs a call per batch and reloads the input columns it reads; a wider
  * one holds more live vectors, which can spill registers. This benchmark prices that trade at the
  * default budget, with the prediction bounding groups in the budget's place (VARKA-254), and with
