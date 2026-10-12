@@ -29,6 +29,12 @@
 # target/varka-scoped, which the job caches so the next run balances its JVMs by this run's JUnit
 # times. The run records each test's fused batches too, which the option matrix's step
 # (dev/varka_matrix_ci.sh) takes instead of running the defaults again.
+#
+# The module's suite that measures the JIT rather than answers - VarkaAssemblySuite in catalyst,
+# VarkaWarmupEndToEndSuite in sql - runs after the others, alone and without the memory sanitizer,
+# in target/varka-scoped-quiet, as the gate's quiet step runs them: beside the other JVM's suites
+# the warm-up test's kernel can wait past its two minutes for C2 while the compile queue is full,
+# and a rerun, restoring the same cached times, puts it beside the same suites again.
 
 set -euo pipefail
 
@@ -36,10 +42,13 @@ cd "$(dirname "$0")/.."
 module=${1:?usage: dev/varka_scoped_suites.sh catalyst|sql}
 extra=()
 case "$module" in
-  catalyst) ;;
-  sql) extra=(--extra-suite
+  catalyst) timing=VarkaAssemblySuite ;;
+  sql) timing=VarkaWarmupEndToEndSuite
+       extra=(--extra-suite
          sql:org.apache.spark.sql.execution.columnar.ArrowCachedBatchSerializerSuite) ;;
   *) echo "unknown module: $module" >&2; exit 2 ;;
 esac
 dev/varka_matrix.sh --defaults --module "$module" --split 2 -j 2 --sbt-arg -Phive \
-  --out target/varka-scoped "${extra[@]}"
+  --out target/varka-scoped --skip-suites "$timing" "${extra[@]}"
+dev/varka_matrix.sh --defaults --module "$module" --skip-build --build-dir target/varka-scoped \
+  --out target/varka-scoped-quiet --suites "$timing" -j 1 --no-sanitizer
