@@ -22,9 +22,7 @@ import java.lang.foreign.ValueLayout;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 import scala.collection.immutable.Seq;
 import scala.jdk.javaapi.CollectionConverters;
@@ -43,8 +41,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSqlResolve;
 import org.apache.spark.sql.types.DataTypes;
 
 /**
- * What it costs to split a projection's outputs into more loop methods, on the shapes where the
- * grouping's first rule decides the split.
+ * What it costs to split a projection's outputs into more loop methods.
  *
  * <p>The emitter puts a projection's outputs into groups, one loop method each. A group closes
  * when the weights of its nodes - a hand-kept register of the vector operations each node emits,
@@ -53,19 +50,24 @@ import org.apache.spark.sql.types.DataTypes;
  * {@code shareWholeNodes}), which lets it join up to the fused ceiling of 400. The cost model's
  * prediction and the measured byte and call-site limits can close a group earlier, never later.
  * Each extra loop method costs a call per batch and reloads the input columns it reads; a wider
- * one holds more live vectors, which can spill registers. This benchmark prices that trade on
- * four shapes, at the default budget and with the budget raised to 400, where the prediction and
- * the measured limits alone bound a group. Each row names its loop-method count, read from the
- * emitted class, and arms that build the same class share one row.
+ * one holds more live vectors, which can spill registers. This benchmark prices that trade at the
+ * default budget and with the budget raised to 400, where the prediction and the measured limits
+ * alone bound a group. Each row names its loop-method count, read from the emitted class.
  *
- * <p>The shapes. {@code dayofweek} and {@code weekday} over two dates beside cheap date outputs,
- * whose weights (1 each) are far under what they emit (about 16), and a mixed projection of forty
- * outputs over two dates and two integers: the two where the weights and the budget decide the
- * split. And two controls, which the budget does not split today: 24 {@code date_add} outputs,
- * which the cost model's plan splits by call sites before the budget would, and eight checked
- * sums {@code i + j + k}, whose shared {@code i + j} lets each join its group up to the fused
- * ceiling. Null-free batches of 1024 rows, which every lane count divides, so the loop methods are
- * what is measured.
+ * <p>Each table has three rows: the default, the raised budget, and the default timed again last.
+ * An arm whose class is byte for byte the default's is labelled a control: the gap between two
+ * copies of one class is where the JIT and the allocator put them, and the gap between the two
+ * default rows is what position in the run costs. A difference between arms counts only where it
+ * clears both, and against the committed band.
+ *
+ * <p>The shapes. With today's weights only the forty mixed outputs over two dates and two
+ * integers split differently under the two budgets. The other three build one class under both
+ * and are controls here: {@code dayofweek} and {@code weekday} over two dates beside four
+ * {@code date_add}, which VARKA-254's corrected weights (about 16 each, not 1) would split; 24
+ * {@code date_add}, which the cost model's plan splits by call sites first; and eight checked sums
+ * {@code i + j + k}, whose shared {@code i + j} lets each join its group up to the ceiling.
+ * Null-free batches of 1024 rows, which every lane count divides, so the loop methods are what is
+ * measured.
  *
  * <p>Committed before VARKA-254 recounts the weights, so that its results file shows the change
  * as a diff against these rows.
@@ -77,7 +79,7 @@ import org.apache.spark.sql.types.DataTypes;
  */
 public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
 
-  private static final int NUM_ROWS = 10_000_000;
+  private static final int NUM_ROWS = 10_240_000;
   private static final int CHUNK = 1024;
 
   private static final Attribute D = VarkaSqlResolve.column("d", DataTypes.DateType);
@@ -93,15 +95,11 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
   private record Arm(String label, VarkaEmitOptions options) { }
 
   /**
-   * One emitted kernel, with the loop-method count the row's name reports and the class emitted
-   * again under one fixed name, so that two arms' classes can be compared byte for byte.
+   * One emitted kernel, with the loop-method count the row's name reports and the class as emitted
+   * under one fixed name, so that two arms' classes can be compared byte for byte.
    */
   private record Emitted(VarkaFusedKernel kernel, int loops, byte[] probe) { }
 
-  /** One timed row: the labels of the arms that build its class, and the kernel they build. */
-  private record Row(List<String> labels, Emitted emitted) { }
-
-  private final Set<String> usedIds = new HashSet<>();
   private volatile int blackhole;
 
   private static <T> Seq<T> seq(List<T> list) {
@@ -160,25 +158,29 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
     return fused;
   }
 
-  private Emitted emit(CompiledVarkaProjection fused, VarkaGeneratedClassLoader loader, String id,
-      VarkaEmitOptions options) throws ReflectiveOperationException {
-    if (!usedIds.add(id)) {
-      throw new IllegalStateException("case id " + id + " is already in use");
+  /**
+   * Emits the shape under {@code options}: first under one fixed name, which is what two arms'
+   * classes are compared by and what the loop methods are counted in, then under the arm's own
+   * name, which is what is loaded and timed.
+   */
+  private static Emitted emit(CompiledVarkaProjection fused, VarkaGeneratedClassLoader loader,
+      String id, VarkaEmitOptions options) throws ReflectiveOperationException {
+    byte[] probe = VarkaLoopEmitter.emit("org.apache.spark.sql.varka.execution.VarkaGroupingProbe",
+        fused.outputs(), fused.inputOrdinals().size(), fused.numLiterals(), null, null, options);
+    // The dense and the masked side group alike; the larger count is the class's, as the
+    // grouping suites count it.
+    int dense = 0;
+    int masked = 0;
+    for (String method : VarkaEmitterTestSupport.methodNames(probe)) {
+      dense += VarkaMethodNames.isLoop(method, true) ? 1 : 0;
+      masked += VarkaMethodNames.isLoop(method, false) ? 1 : 0;
     }
     String name = "org.apache.spark.sql.varka.execution.VarkaGroupingBench" + id;
     byte[] bytes = VarkaLoopEmitter.emit(name, fused.outputs(), fused.inputOrdinals().size(),
         fused.numLiterals(), null, null, options);
-    int loops = 0;
-    for (String method : VarkaEmitterTestSupport.methodNames(bytes)) {
-      if (VarkaMethodNames.isLoop(method, true)) {
-        loops++;
-      }
-    }
-    byte[] probe = VarkaLoopEmitter.emit("org.apache.spark.sql.varka.execution.VarkaGroupingProbe",
-        fused.outputs(), fused.inputOrdinals().size(), fused.numLiterals(), null, null, options);
     loader.defineGeneratedClass(name, bytes);
     var kernel = (VarkaFusedKernel) loader.loadClass(name).getConstructor().newInstance();
-    return new Emitted(kernel, loops, probe);
+    return new Emitted(kernel, Math.max(dense, masked), probe);
   }
 
   @Override
@@ -220,53 +222,50 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
           var benchmark = benchmark(shape.title() + " over " + NUM_ROWS + " rows", NUM_ROWS)
               .minIterations(5).warmup(Duration.ofSeconds(2)).minTime(Duration.ofSeconds(2))
               .build();
-          // An arm that builds the class an earlier arm built is not timed again: its row would
-          // measure the same bytes, and two timings of one class differ by where the JIT and the
-          // allocator happen to put it - up to 17% on this file's first run, enough to read as an
-          // effect of the option. Its label joins the earlier arm's row instead.
-          var rows = new ArrayList<Row>();
           var armList = arms();
+          var emitted = new ArrayList<Emitted>();
           for (int a = 0; a < armList.size(); a++) {
-            var arm = armList.get(a);
-            Emitted emitted;
             try {
-              emitted = emit(fused, loader, s + "_" + a, arm.options());
+              emitted.add(emit(fused, loader, s + "_" + a, armList.get(a).options()));
             } catch (ReflectiveOperationException e) {
               throw new IllegalStateException(e);
             }
-            Row same = null;
-            for (var row : rows) {
-              if (Arrays.equals(row.emitted().probe(), emitted.probe())) {
-                same = row;
-              }
-            }
-            if (same != null) {
-              same.labels().add(arm.label());
-            } else {
-              rows.add(new Row(new ArrayList<>(List.of(arm.label())), emitted));
-            }
           }
-          for (var row : rows) {
-            var kernel = row.emitted().kernel();
+          // The rows, in order: each arm, then the default again. An arm that builds the
+          // default's class is still timed, as a control: its gap from the default is where the
+          // JIT and the allocator placed two copies of one class, which every other gap in the
+          // table has to clear. The default timed last shows what position in the run costs.
+          var order = new ArrayList<Integer>();
+          for (int a = 0; a < armList.size(); a++) {
+            order.add(a);
+          }
+          order.add(0);
+          for (int k = 0; k < order.size(); k++) {
+            int a = order.get(k);
+            var arm = armList.get(a);
+            var kernel = emitted.get(a).kernel();
             long scratch = VarkaEmitterTestSupport.scratch(kernel, CHUNK);
             Runnable drive = () -> {
               int status = 0;
               for (int done = 0; done < NUM_ROWS; done += CHUNK) {
                 status |= kernel.run(src, srcValidity, srcNullCount, dst, dstValidity, literals,
-                    Math.min(CHUNK, NUM_ROWS - done), scratch);
+                    CHUNK, scratch);
               }
               blackhole = status;
             };
-            String labels = String.join(" and ", row.labels());
             drive.run();
             if (blackhole != 0) {
-              throw new IllegalStateException(shape.title() + " under " + labels
-                  + " declined a batch");
+              throw new IllegalStateException(
+                  shape.title() + " under " + arm.label() + " declined a batch");
             }
-            int count = row.emitted().loops();
-            String loops = count + " loop method" + (count == 1 ? "" : "s");
-            String same = row.labels().size() > 1 ? ", one class" : "";
-            benchmark.addCase(labels + ": " + loops + same, iteration -> drive.run());
+            int count = emitted.get(a).loops();
+            String label = arm.label() + ": " + count + " loop method" + (count == 1 ? "" : "s");
+            if (k == order.size() - 1) {
+              label += ", timed again last";
+            } else if (a > 0 && Arrays.equals(emitted.get(a).probe(), emitted.get(0).probe())) {
+              label += ", the default's class (a control)";
+            }
+            benchmark.addCase(label, iteration -> drive.run());
           }
           benchmark.run();
         }
