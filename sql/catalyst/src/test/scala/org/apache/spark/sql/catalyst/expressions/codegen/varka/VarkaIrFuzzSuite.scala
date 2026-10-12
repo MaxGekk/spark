@@ -74,9 +74,20 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils
  * declines. A mechanism the drawn compositions miss is drawn for, up to six more cycles of the
  * variants, and a run that still reaches no instance of it fails (`VarkaEmitTrace`, VARKA-289).
  *
+ * Variants (VARKA-278): a draw that passes is emitted again in the variants of
+ * `VarkaVariants` - beside a child, permuted, duplicated, copied, beside a stranger, its literals
+ * in columns, its columns renumbered, an untaken arm replaced - each compared with the reference
+ * evaluator through `VarkaVariantCheck`, so random trees larger than the small-tree series' meet
+ * the variants too. The stranger is the draw's next root over copies of its columns, and an
+ * untaken arm is replaced by one of the draw's own value subtrees, so every tree a variant adds
+ * is one the draw's columns were drawn for. A variant's failure is reported with the variant and
+ * the draw's replay, not shrunk.
+ *
  * Budget: `-Dvarka.fuzz.iterations` (default 300, a few seconds); `-Dvarka.fuzz.wide` (default
  * 10 compositions, a few seconds); `-Dvarka.fuzz.seed` (default fixed, so the committed run is
  * reproducible and a nightly can vary it). The iterations and the seed apply to both lanes.
+ * `-Dvarka.fuzz.variantsEvery=n` takes the variants of every n-th draw (default 1, every draw;
+ * 0 none), which is how the nightly's forty thousand draws a lane stay inside the test's cap.
  */
 class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwnJvm {
 
@@ -84,6 +95,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   private val longSeed = sys.props.get("varka.fuzz.seed").map(_.toLong).getOrElse(longFuzzSeed)
   private val iterations = sys.props.get("varka.fuzz.iterations").map(_.toInt).getOrElse(300)
   private val only = sys.props.get("varka.fuzz.only").map(_.toInt)
+  private val variantsEvery = sys.props.get("varka.fuzz.variantsEvery").map(_.toInt).getOrElse(1)
   private val classCounter = new AtomicInteger(0)
   private val skippedPastTheCap = new AtomicInteger(0)
   // What the random shapes' emissions did about size, reported after each run (VARKA-238).
@@ -251,10 +263,10 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
 
   /**
    * Emits the case's kernel and compares it with the reference evaluator, row by row. Throws
-   * what the check throws; returns quietly for a shape past the class-file cap, which
-   * `emitOrSkip` counts and skips.
+   * what the check throws; returns false for a shape past the class-file cap, which
+   * `emitOrSkip` counts and skips, and true once the rows are compared.
    */
-  private def run(c: VarkaFuzzCase): Unit = {
+  private def run(c: VarkaFuzzCase): Boolean = {
     val long = c.lane == LaneType.LONG
     val className = "org.apache.spark.sql.varka.execution.VarkaFusedFuzz" +
       s"${if (long) "Long" else ""}${classCounter.addAndGet(1)}"
@@ -262,7 +274,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
       className, c.roots.asJava, c.numInputs, c.lits.length, o, randomTrace)
     val bytes = emitOrSkip(c.label, c.options)(emitWith) match {
       case Some(b) => b
-      case None => return
+      case None => return false
     }
     val patterns = (0 until c.numInputs).map(col => (i: Int) => c.nulls(col)(i))
     if (long) {
@@ -273,6 +285,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
         c.lits.map(_.toInt),
         VarkaKernelCheck.Batch(c.length, patterns, c.data.map(_.map(_.toInt)), c.forceMasked))
     }
+    true
   }
 
   /** What `run(c)` threw as a signature; None when the case passes or is skipped. */
@@ -292,9 +305,9 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   /**
    * Runs the case. A failure - any `Throwable`, a mismatch or an error out of the generated
    * class - is shrunk (VARKA-277) and rethrown as a test failure whose message has the original
-   * and the smaller case.
+   * and the smaller case. True when the case was compared and passed.
    */
-  private def runChecked(c: VarkaFuzzCase): Unit = {
+  private def runChecked(c: VarkaFuzzCase): Boolean = {
     try run(c) catch {
       case e: VirtualMachineError => throw e
       case e: InterruptedException => throw e
@@ -302,7 +315,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
         val signature = VarkaFailureSignature.of(t, c.label)
         if (VarkaKnownFailures.isKnown(VarkaKnownFailures.entries, signature)) {
           logWarning(s"known fuzz failure, not shrunk: $signature")
-          return
+          return false
         }
         val shrunk = VarkaShrinker.shrink(c, signature, x => outcomeOf(x.copy(label = "case")))
         val early = (if (shrunk.stoppedEarly) ", budget reached" else "") +
@@ -313,9 +326,50 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     }
   }
 
-  private def runOne(iteration: Int): Unit = runChecked(drawInt(iteration))
+  private def runOne(iteration: Int): Unit = {
+    val c = drawInt(iteration)
+    if (runChecked(c) && variantsDue(iteration)) runVariants(c, iteration)
+  }
 
-  private def runOneLong(iteration: Int): Unit = runChecked(drawLong(iteration))
+  private def runOneLong(iteration: Int): Unit = {
+    val c = drawLong(iteration)
+    if (runChecked(c) && variantsDue(iteration)) runVariants(c, iteration)
+  }
+
+  private def variantsDue(iteration: Int): Boolean =
+    variantsEvery > 0 && iteration % variantsEvery == 0
+
+  /** How many variants of passing draws were checked, by variant, reported after each run. */
+  private val variantCounts = new java.util.concurrent.ConcurrentHashMap[String, AtomicInteger]
+
+  /**
+   * The variants of a draw that passed (VARKA-278), each emitted and compared through
+   * `VarkaVariantCheck`. The stranger is the draw's next root, or its only one, over copies of
+   * the columns; an untaken arm's replacement is one of the draw's own value subtrees.
+   */
+  private def runVariants(c: VarkaFuzzCase, iteration: Int): Unit = {
+    val stranger = c.roots((iteration + 1) % c.roots.size)
+    val pool = VarkaVariants.valueSubtrees(c.roots.asJava).asScala.toSeq
+    for ((kind, variant) <- VarkaVariantCheck.variants(c, stranger, pool, iteration);
+        v <- variant) {
+      try {
+        VarkaVariantCheck.check(c, v, VarkaVariantCheck.retryWithoutBudget)
+        variantCounts.computeIfAbsent(kind.label, _ => new AtomicInteger).incrementAndGet()
+      } catch {
+        case e: VirtualMachineError => throw e
+        case e: InterruptedException => throw e
+        case t: Throwable =>
+          val signature = VarkaFailureSignature.of(t, c.label)
+          if (VarkaKnownFailures.isKnown(VarkaKnownFailures.entries, signature)) {
+            logWarning(s"known fuzz failure in a variant, not counted: $signature")
+          } else {
+            fail(s"the ${kind.label} variant of a passing draw failed: " +
+              Option(t.getMessage).getOrElse(t.getClass.getName) +
+              s"\n  draw: ${VarkaFuzzCase.describe(c)}", t)
+          }
+      }
+    }
+  }
 
   /** `c` with the planted-bug option `name` on. */
   private def planted(c: VarkaFuzzCase, name: String): VarkaFuzzCase =
@@ -731,6 +785,12 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
       s"${randomTrace.byteRegroups} regroups on bytes, ${randomTrace.siteSplits} call-site " +
       s"splits, ${randomTrace.siteRollbacks} rolled back, ${randomTrace.stageSplits} stage " +
       s"splits, ${randomTrace.fallbacks()} grouping switches dropped")
+    if (!variantCounts.isEmpty) {
+      info("variants of passing draws checked: " + VarkaVariants.Kind.values.toSeq
+        .map(k => s"${k.label} ${Option(variantCounts.get(k.label)).map(_.get).getOrElse(0)}")
+        .mkString(", "))
+      variantCounts.clear()
+    }
     val skipped = skippedPastTheCap.getAndSet(0)
     if (skipped > 0) {
       info(s"$skipped shape(s) past the class-file cap on a method in every form the emitter " +

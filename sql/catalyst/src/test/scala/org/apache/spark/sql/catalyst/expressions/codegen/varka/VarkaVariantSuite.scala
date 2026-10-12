@@ -215,8 +215,11 @@ class VarkaVariantSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOw
       val tally = runLane(new Lane(long), size, VarkaMatrix.base)
       tally.assertNone(s"$laneName trees to size $size and their variants")
       // Counted, not assumed: a variant that silently stopped applying would pass everything.
-      for (k <- expected(size)) {
-        assert(tally.checked(k) > 0, s"${k.label} applied to no $laneName tree to size $size")
+      // Over the whole series only; a slice may hold no tree a variant applies to.
+      if (slices == 1) {
+        for (k <- expected(size)) {
+          assert(tally.checked(k) > 0, s"${k.label} applied to no $laneName tree to size $size")
+        }
       }
     }
   }

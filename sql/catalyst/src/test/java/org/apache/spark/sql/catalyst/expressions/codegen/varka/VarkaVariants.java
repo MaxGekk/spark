@@ -243,7 +243,8 @@ final class VarkaVariants {
    * {@code NarrowLane} (a root-only node), and printing differently from the arm. The pool is
    * scanned from {@code rotation}, so successive trees meet different replacements. Empty where
    * no arm is untaken or no replacement fits. Defined for that batch only: on another the arm
-   * may be taken, and the comparison still holds, since the reference evaluates the variant.
+   * may be taken, and the replacement may then leave a range an enclosing guard was drawn for,
+   * which the guard rightly declines - so the variant is run on that batch's nulls alone.
    */
   static Optional<Variant> untakenArm(List<VarkaVectorIR> roots, int numInputs,
       ArmOracle oracle, List<VarkaVectorIR> pool, int rotation) {

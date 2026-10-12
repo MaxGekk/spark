@@ -143,14 +143,15 @@ object VarkaKernelCheck {
    * [[runAndCompare]] for a caller that must know why a batch declined (VARKA-278's variants):
    * the status of the first body that declined, or 0 where every body run was compared. A
    * decline fails the check unless `declineAllowed`, as there; the bits are each reason's own
-   * only for a kernel emitted under `exactRefusalStatus`.
+   * only for a kernel emitted under `exactRefusalStatus`. Without `bothBodies` only the batch's
+   * own body runs, for a shape that holds only for the batch's own nulls.
    */
   def runAndCompareStatus(context: String, className: String, bytes: Array[Byte],
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Int], batch: Batch,
-      declineAllowed: Boolean): Int = {
+      declineAllowed: Boolean, bothBodies: Boolean = true): Int = {
     val status = runBatch(context, className, bytes, roots, numInputs, lits, batch,
       declineAllowed, None)
-    if (status != 0) return status
+    if (status != 0 || !bothBodies) return status
     otherBody(numInputs, batch.length, batch.patterns, batch.forceMasked).map {
       case (patterns, forced) =>
         runBatch(s"$context (the other body)", className, bytes, roots, numInputs, lits,
@@ -296,10 +297,10 @@ object VarkaKernelCheck {
   /** [[runAndCompareStatus]] at the long lane. */
   def runAndCompareLongStatus(context: String, className: String, bytes: Array[Byte],
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Long], batch: LongBatch,
-      declineAllowed: Boolean): Int = {
+      declineAllowed: Boolean, bothBodies: Boolean = true): Int = {
     val status = runLongBatch(context, className, bytes, roots, numInputs, lits, batch,
       declineAllowed, None)
-    if (status != 0) return status
+    if (status != 0 || !bothBodies) return status
     otherBody(numInputs, batch.length, batch.patterns, batch.forceMasked).map {
       case (patterns, forced) =>
         runLongBatch(s"$context (the other body)", className, bytes, roots, numInputs, lits,

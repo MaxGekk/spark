@@ -19,13 +19,14 @@
 # dated log: the machine canary, the IR fuzzer at ten thousand iterations with
 # a fresh seed, the random differential against vanilla Spark (VARKA-262), the
 # exhaustive calendar sweeps, the SMT proofs under both pinned solvers, every small IR
-# tree to size 5 (VARKA-269), the deoptimization-cycle guard and the inlining-cliff guard.
-# Optionally the whole gate.
+# tree to size 5 (VARKA-269) and to size 4 in each of its variants (VARKA-278), the
+# deoptimization-cycle guard and the inlining-cliff guard. Optionally the whole gate.
 #
 #   dev/varka_nightly.sh                  # canary, fuzzer (10000, seed = today), Spark differential (50000), sweeps, proofs, deopt, cliff
 #   dev/varka_nightly.sh --iterations 500 --seed 42 --skip-sweep --skip-deopt --skip-cliff   # a quick trial
 #   dev/varka_nightly.sh --gate           # the standing gate as well
 #   dev/varka_nightly.sh --series-size 6  # every small tree to size 6, hours over every core
+#   dev/varka_nightly.sh --variants-size 0  # without the variants of the small trees
 #   dev/varka_nightly.sh --sparkfuzz-iterations 5000 --skip-sweep --skip-deopt --skip-cliff
 #
 # The deopt step forks ten fresh JVMs per vector width of the default emission's twelve-output
@@ -53,6 +54,7 @@ root="$(git rev-parse --show-toplevel)"; cd "$root"
 iterations=10000; seed="$(date +%Y%m%d)"; sweep=1; deopt=1; cliff=1; gate=0
 sparkfuzz=50000
 series=5
+variants=4
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h|--help) usage 0 ;;
@@ -60,6 +62,7 @@ while [ "$#" -gt 0 ]; do
     --seed) seed="$2"; shift 2 ;;
     --sparkfuzz-iterations) sparkfuzz="$2"; shift 2 ;;
     --series-size) series="$2"; shift 2 ;;
+    --variants-size) variants="$2"; shift 2 ;;
     --skip-sweep) sweep=0; shift ;;
     --skip-deopt) deopt=0; shift ;;
     --skip-cliff) cliff=0; shift ;;
@@ -117,6 +120,11 @@ run_step prove bash -c 'dev/varka_prove.sh --install both && dev/varka_prove.sh 
 if [ "$series" -gt 0 ]; then
   run_step series dev/varka_series.sh "$series"
 fi
+# Every tree to the size in each of the eight variants (VARKA-278), one JVM per core; size 4 is a
+# few minutes. 0 skips it.
+if [ "$variants" -gt 0 ]; then
+  run_step variants dev/varka_series.sh "$variants" --variants
+fi
 if [ "$deopt" -eq 1 ]; then
   run_step deopt dev/varka_deopt_cycle.sh --forms group --forks 10 --fail-on-cycle
 fi
@@ -129,7 +137,7 @@ echo
 echo "fuzzer seed $seed, $iterations iterations; Spark differential $sparkfuzz compositions"
 printf '%-9s %-7s %6s  %s\n' step status secs log
 bad=0
-for s in canary fuzz forced sparkfuzz sweep prove series deopt cliff gate; do
+for s in canary fuzz forced sparkfuzz sweep prove series variants deopt cliff gate; do
   [ -n "${status[$s]:-}" ] || continue
   printf '%-9s %-7s %6d  %s\n' "$s" "${status[$s]}" "${secs[$s]}" "$logdir/$s.log"
   [ "${status[$s]}" = ok ] || bad=$((bad + 1))

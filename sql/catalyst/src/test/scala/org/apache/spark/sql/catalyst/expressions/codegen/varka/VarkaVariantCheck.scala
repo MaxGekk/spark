@@ -149,7 +149,7 @@ object VarkaVariantCheck {
     emit(c.roots, c.numInputs, c.lits.length, c.options, name) match {
       case None => Skipped
       case Some(bytes) =>
-        status(c, name, bytes, declineAllowed = false)
+        status(c, name, bytes, declineAllowed = false, bothBodies = true)
         Compared
     }
   }
@@ -160,10 +160,13 @@ object VarkaVariantCheck {
    */
   def check(c: VarkaFuzzCase, v: Variant, emit: Emit): Outcome = {
     val vc = caseOf(c, v)
+    // The other body clears the nulls, which can turn a condition the batch never took true;
+    // so an untaken arm meets the other body only where the batch has no null to clear.
+    val bothBodies = v.kind != Kind.UNTAKEN_ARM || !vc.nulls.exists(_.contains(true))
     def run(options: VarkaEmitOptions): Option[Int] = {
       val name = className(vc)
       emit(vc.roots, vc.numInputs, vc.lits.length, options, name)
-        .map(bytes => status(vc, name, bytes, v.kind.mayDecline))
+        .map(bytes => status(vc, name, bytes, v.kind.mayDecline, bothBodies))
     }
     run(vc.options) match {
       case None => Skipped
@@ -185,16 +188,16 @@ object VarkaVariantCheck {
 
   /** `c`'s kernel run over `c`'s batch: the status, 0 once every row is compared. */
   private def status(c: VarkaFuzzCase, name: String, bytes: Array[Byte],
-      declineAllowed: Boolean): Int = {
+      declineAllowed: Boolean, bothBodies: Boolean): Int = {
     val patterns = (0 until c.numInputs).map(col => (i: Int) => c.nulls(col)(i))
     if (c.lane == LaneType.LONG) {
       VarkaKernelCheck.runAndCompareLongStatus(c.label, name, bytes, c.roots, c.numInputs,
         c.lits, VarkaKernelCheck.LongBatch(c.length, patterns, c.data, c.forceMasked),
-        declineAllowed)
+        declineAllowed, bothBodies)
     } else {
       VarkaKernelCheck.runAndCompareStatus(c.label, name, bytes, c.roots, c.numInputs,
         c.lits.map(_.toInt), VarkaKernelCheck.Batch(c.length, patterns,
-          c.data.map(_.map(_.toInt)), c.forceMasked), declineAllowed)
+          c.data.map(_.map(_.toInt)), c.forceMasked), declineAllowed, bothBodies)
     }
   }
 }
