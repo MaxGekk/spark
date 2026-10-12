@@ -357,7 +357,8 @@ final class VarkaChronoLowering {
    * division is a magic multiply: the three small ones are exact, and the two large ones
    * ({@code / 146097} and {@code / 36524}) use a round-down magic that never overestimates,
    * followed by carries that are one compare and two masked adjustments each. That is the
-   * whole reason this node weighs {@link VarkaEmitBudget#CHRONO_WEIGHT} rather than 1.
+   * whole reason this node weighs {@link VarkaEmitBudget#CHRONO_PREFIX_WEIGHT} and a tail rather
+   * than 1.
    *
    * <p>The temporaries are locals rather than operand-stack juggling because six values stay live
    * across the tail - era, century, year of century, day of year, the March month, and two masks -

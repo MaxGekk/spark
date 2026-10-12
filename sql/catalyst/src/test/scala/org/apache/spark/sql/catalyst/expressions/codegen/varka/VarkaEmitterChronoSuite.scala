@@ -1592,8 +1592,10 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
     // the thing that would have moved had the two prefixes collapsed into one.
     assert(singleEpilogueSize(roots, 2, sharing) === singleEpilogueSize(roots, 2, unshared),
       "the epilogue moved for two outputs that have nothing to share")
-    // And clause 2 does not put them in one loop method: the second reuses no prefix.
-    assert(methodNames(emitMulti(roots, 2, 0, sharing)).count(isLoop(_, true)) === 2,
+    // And clause 2 does not put them in one loop method: the second reuses no prefix. Under the
+    // budget's rule, since the prediction, the default since VARKA-254, may join them anyway.
+    assert(methodNames(emitMulti(roots, 2, 0, sharing.withGroupBudgetUnderPrediction(true)))
+      .count(isLoop(_, true)) === 2,
       "two dates with nothing to share landed in one loop method")
     checkMatrix(roots, 2, Array.empty[Int], remainderLengths,
       // The second date is the first walked from a different index rather than shifted by a

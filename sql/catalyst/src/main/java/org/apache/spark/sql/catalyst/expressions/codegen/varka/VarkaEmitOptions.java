@@ -327,8 +327,11 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        the count past which C1 refuses such a method and it runs interpreted until C2
  *        compiles it ({@code VARKA-209.md} 10.1). Read off the built class beside the bytes,
  *        under the byte budget only: a wide group with a method over it is split as one over
- *        the byte budget is, a narrow group over it stands, and the budget is dropped for a
- *        class its splits would make decline, so it never costs a kernel. {@code 0} is off, the
+ *        the byte budget is, a narrow group over it stands unless the prediction widened it
+ *        ({@link #groupBudgetUnderPrediction}), and the budget is dropped for a class its splits
+ *        would make decline, so it never costs a kernel. Where the prediction bounds groups, the
+ *        grouping that drops it is bounded at the fused ceiling, so the drop closes no group the
+ *        budget of sixteen would. {@code 0} is off, the
  *        arm the cliff's probe and the ladders measure the budget against; a small value is how
  *        a test sees the split on a shape of a few outputs.
  * @param heavyGroupOutputs the most outputs a group may hold and still keep a method over
@@ -338,19 +341,21 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        output for good if split (see the constant). {@code 0} and {@code 1} alike split every
  *        group over the budget down to single outputs, the arm the exemption is measured
  *        against.
- * @param predictGrouping whether the first grouping also closes a group where the emit cost
- *        model ({@code VarkaEmitCost}) predicts that adding the next output would put one of the
- *        group's methods over {@link #methodByteBudget}, or, for a group of more than
- *        {@link #heavyGroupOutputs} outputs, over {@link #callSiteBudget} - so a group the
- *        measurement would split is split before the class is built, and the common case builds
- *        once. The weights still close groups as before; the prediction only adds closes, and the
- *        measurement of the built class stays the last word. On by default since 3 October 2026,
- *        under the plan ({@link #planSize}), whose margins it closes groups with: planned, the
- *        families it regroups ran within the control's spread of the weights' on a runner and on
- *        the laptop, where the prediction without the margins filled a method of sixty-four
- *        cheap tails to the budget and ran thirteen times slower on the runner
- *        ({@code VARKA-236.md} 9.3); off is the weights alone, kept as the reference arm.
- *        With {@link #methodByteBudget} 0 it changes nothing ({@code VARKA-199.md}).
+ * @param predictGrouping whether the first grouping also closes a group where the emit cost model
+ *        ({@code VarkaEmitCost}) predicts that adding the next output would put one of the group's
+ *        methods over {@link #methodByteBudget}, or, for a group of more than {@link
+ *        #heavyGroupOutputs} outputs, over {@link #callSiteBudget} - so a group the measurement
+ *        would split is split before the class is built, and the common case builds once. With
+ *        {@link #groupBudgetUnderPrediction} on, the weights still close groups as before and the
+ *        prediction only adds closes; off, the default since VARKA-254, the prediction bounds a
+ *        group in the group budget's place where it can, so it can also widen one. The measurement
+ *        of the built class stays the last word. On by default since 3 October 2026, under the plan
+ *        ({@link #planSize}), whose margins it closes groups with: planned, the families it
+ *        regroups ran within the control's spread of the weights' on a runner and on the laptop,
+ *        where the prediction without the margins filled a method of sixty-four cheap tails to the
+ *        budget and ran thirteen times slower on the runner ({@code VARKA-236.md} 9.3); off is the
+ *        weights alone, kept as the reference arm. With {@link #methodByteBudget} 0 it changes
+ *        nothing ({@code VARKA-199.md}).
  * @param driverOutputTable whether the driver's per-output work - each output's validity
  *        zeroed, filled or written by the bitmap pass, and the all-null shortcut's test - is one
  *        call reading a table baked into the class, rather than unrolled once per output. Unrolled
@@ -362,7 +367,7 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  * @param exactGrouping whether the first grouping is the best partition of the outputs in their
  *        order rather than the greedy walk's: of the partitions whose every group the greedy
  *        rule admits, the one with the fewest ops, then the fewest loop methods. The rule is the
- *        same - the weights' two clauses, and the prediction under {@link #predictGrouping} -
+ *        same - the weights' clauses, and the prediction under {@link #predictGrouping} -
  *        so every group it forms is one the greedy walk could have formed, and where the greedy
  *        partition is already the best it is the partition chosen. What it changes is where the
  *        greedy walk strands a cheap output that shares nothing in a loop method of its own
@@ -436,6 +441,18 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        for the quarter of guarded methods that hold more; one mask keeps the loop's register
  *        pressure what it was. A diagnostic: it never changes an answer or whether a batch
  *        declines.
+ * @param groupBudgetUnderPrediction whether {@link #groupBudget} bounds a group while the cost
+ *        model's prediction runs with the plan's margins and a call-site budget (VARKA-254). Off
+ *        by default: the first rule's bound is {@link #fusedCeiling} there, so the prediction and
+ *        the measured limits bound the group - only while the model prices it, and with the call
+ *        sites of each output the prediction admits past the budget checked whatever the group's
+ *        width, since {@link #heavyGroupOutputs}' exemption assumes a narrow heavy group forms
+ *        only by sharing a prefix. On is the budget binding as it did, kept as the reference.
+ *        Off became the default on 12 October 2026: with the weights recounted, the budget split
+ *        a weekday shape into five loop methods and ran it 31 to 33% slower, where the prediction
+ *        kept two and ran within 3% of the old grouping; a mixed shape ran 14 and 25% faster than
+ *        before at 256 and 128 bits; and the cost audit's corpus took 39% fewer loop methods
+ *        ({@code VARKA-254.md} 9). Outside those conditions the budget binds either way.
  */
 public record VarkaEmitOptions(
     int groupBudget,
@@ -480,7 +497,8 @@ public record VarkaEmitOptions(
     int misdescribeDriverBytes,
     int forceResidualAt,
     int misdescribeRollback,
-    boolean exactRefusalStatus) {
+    boolean exactRefusalStatus,
+    boolean groupBudgetUnderPrediction) {
 
   /**
    * The three mod-7 lowerings. {@link #MAGIC} is what ships: two 15-bit digit-sum folds followed
@@ -593,7 +611,7 @@ public record VarkaEmitOptions(
           VarkaEmitBudget.HUGE_METHOD_LIMIT,
           true, true, true, true,
           VarkaEmitBudget.CALL_SITE_BUDGET, VarkaEmitBudget.HEAVY_GROUP_OUTPUTS,
-          true, true, true, true, true, true, true, 0, 0, 0, false);
+          true, true, true, true, true, true, true, 0, 0, 0, false, false);
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {
@@ -691,6 +709,7 @@ public record VarkaEmitOptions(
       b.forceResidualAt = forceResidualAt;
       b.misdescribeRollback = misdescribeRollback;
       b.exactRefusalStatus = exactRefusalStatus;
+      b.groupBudgetUnderPrediction = groupBudgetUnderPrediction;
     return b;
   }
 
@@ -739,6 +758,7 @@ public record VarkaEmitOptions(
     private int forceResidualAt;
     private int misdescribeRollback;
     private boolean exactRefusalStatus;
+    private boolean groupBudgetUnderPrediction;
 
     private Builder() {
     }
@@ -958,6 +978,11 @@ public record VarkaEmitOptions(
       return this;
     }
 
+    public Builder groupBudgetUnderPrediction(boolean binds) {
+      this.groupBudgetUnderPrediction = binds;
+      return this;
+    }
+
     public VarkaEmitOptions build() {
       return new VarkaEmitOptions(
           groupBudget, fusedCeiling, cse, shareChronoPrefix, denseValidityOnce,
@@ -969,7 +994,7 @@ public record VarkaEmitOptions(
           groupLocalSlots, materializeChronoPrefix, callSiteBudget, heavyGroupOutputs,
           predictGrouping, driverOutputTable, exactGrouping, splitDriver, severalKernels,
           elideUnreadLocals, planSize, misdescribeDriverBytes, forceResidualAt,
-          misdescribeRollback, exactRefusalStatus);
+          misdescribeRollback, exactRefusalStatus, groupBudgetUnderPrediction);
     }
   }
 
@@ -1020,6 +1045,10 @@ public record VarkaEmitOptions(
 
   public VarkaEmitOptions withPlanSize(boolean enabled) {
     return toBuilder().planSize(enabled).build();
+  }
+
+  public VarkaEmitOptions withGroupBudgetUnderPrediction(boolean binds) {
+    return toBuilder().groupBudgetUnderPrediction(binds).build();
   }
 
   public VarkaEmitOptions withMisdescribeDriverBytes(int bytes) {

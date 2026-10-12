@@ -308,6 +308,8 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   test("a group that loads a materialized prefix keeps no word for a guard it does not emit",
       PinsDefaults) {
+    // The budget's rule, which is what this pins: since VARKA-254 the prediction bounds groups by
+    // default, and the budget binds where it cannot and under groupBudgetUnderPrediction.
     // Two outputs that decompose one guarded date in different loop-method groups: the first
     // computes the prefix and stores it for the second, which loads it and emits neither the date
     // nor the range check of the guard over it - the first group ran that check over the same
@@ -323,7 +325,8 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     val sum = new GuardedDay(new AddDays(c1, new ColumnRef(2)))
     // Set rather than inherited, so that a change of the default cannot leave this test passing
     // without a loaded prefix to test.
-    val defaults = VarkaMatrix.base.withMaterializeChronoPrefix(true)
+    val defaults = VarkaMatrix.base.withGroupBudgetUnderPrediction(true)
+      .withMaterializeChronoPrefix(true)
     val shapes = Seq(
       // Under every default: last_day(c0) between the two keeps them in different groups.
       ("year, last_day and month of a guarded column",

@@ -239,3 +239,144 @@ methods; otherwise A, with B kept as an option.
 5. Arm B's option, its bounds and their test; the benchmark's arms on the option.
 6. Section 6 at both widths, the default chosen, the oracles and results files regenerated.
 7. Section 9.
+
+## 9. Outcome
+
+Done on 12 October 2026: `VarkaGroupingBenchmark` on unchanged code first (#746), then the
+weights, the register, arm B and the default in one pull request.
+
+### 9.1 The weights
+
+Every weight equals the lane calls its node emits alone, net of the operands' loads, the
+literals' broadcasts and the output's store (3.1). Beyond the census in 2, the holes 8.3 read:
+
+| weight | was | now | why |
+|---|---:|---:|---|
+| `DayOfWeek`, `WeekDay` | 1 (the default) | 16, 15 | never named; the flat default |
+| `CHRONO_PREFIX_WEIGHT` | 31 | 29 | the load and store were counted in |
+| the four field tails | 7 each | 5, 4, 5, 7 | one constant at the widest |
+| `WEEK_OF_YEAR_TAIL_WEIGHT` | 16 | 18 | the shift's load and store counted twice |
+| `ADD_MONTHS_TAIL_WEIGHT` | 81 | 80 | the month literal's broadcast counted in |
+| `TRUNC_DYNAMIC_TAIL_WEIGHT` | 60 | 59 | the level column's load counted in |
+| `MAKE_DATE_WEIGHT` | 60 | 53 | read off the dense body under `failOnError` |
+| `THURSDAY_OF_WEIGHT`, `DAY_OF_WEEK_ISO_WEIGHT` | 19, 18 | 17, 16 | gross counts |
+| `GuardedDay`, `GuardedRange`, `BoundedDivide` | 1 | 2 | two compares, or a multiply and a shift |
+| `InRanges` | 6 | 3 | its mask calls were counted |
+
+`weightOf` is an exhaustive switch over the sealed IR, so a node added to it has no weight until it
+is given one; `DayOfWeek` and `WeekDay` reached 1 by falling to a default. The register test covers
+every record the IR permits and fails for one without a row; the calendar tails beside `month(d)`
+are a second test. The ladder test pins item 63's second clause: at every ceiling the benchmark
+sweeps, recomputed or materialized, the first grouping is the one the built class keeps - one build.
+
+### 9.2 Arm B, and a bug its corpus count found
+
+The first build of arm B checked call sites at any width for every later output of a group the
+prediction had widened, including those that joined by reusing a prefix. The corpus counts showed
+it at once: the size ladder took 770 loop methods against 193, the `make_date` ladder 72 against
+12. The check now applies to the step the prediction admits, which still catches six unrelated
+`make_date` (a planted removal of the check packs them into two groups, and the test fails), and an
+output that joins by reuse keeps the heavy-group exemption the ladders rely on.
+
+The unpriced branch of 3.4 is guarded in code and not tested: `VarkaEmitCostSuite` asserts that
+every feature the corpus reaches has a price, so no default emission reaches it.
+
+### 9.3 The review, 12 October 2026
+
+A code review of the pull request found thirteen problems, all fixed in it:
+
+1. **A widened group's later joins by reuse skipped the call-site check.** `year(d)`, two
+   `date_add` and `add_months(d)` planned as one group of about 127 call sites, under the six
+   outputs the after-build split exempts. Section 9.2's step-only check was too narrow; its first
+   form was too wide because it flagged a group's *first* output, which is heavier than the budget
+   on every ladder rung. A group is now flagged at its first join past the budget that is not by
+   reuse, and checked on call sites at every later join. The test plants the step-only check back
+   and fails ("the build regrouped the plan").
+2. **The size loop's fallbacks closed more groups.** Rolling back the call-site budget or dropping
+   the prediction turned the rule off and the budget of sixteen bound again; a fallback may only
+   close fewer. Where the caller's options let the prediction bound groups, the fallback grouping
+   is bounded at the fused ceiling instead.
+3. **The after-build split never touched a narrow widened group.** Groups the prediction widened
+   are recorded, and the call-site split halves them however narrow. The same planted run as 1
+   shows it: with 1's check removed and this one kept, the build split the four-output group in
+   three.
+4. **The shipped default had no test holding the exact grouping to the best partition**; one now
+   does, on the mixed family and twenty corpus wide shapes, each emitted.
+5. and 6. **Docs and javadocs** stated the budget's rule as the only one; `docs/sql-varka.md`,
+   `sql/varka/AGENTS.md`, the IR diagram (regenerated) and five javadocs now state both.
+7. **A dead assertion** in arm B's test, replaced by 1's test.
+8. **`make_date`'s null form** has a register row of its own.
+9. to 13. Test-helper duplicates and `weightOf`'s unused bindings, removed.
+
+Its effect on the corpus: arm B takes 17,583 loop methods (it took 16,779 before the fixes), the
+mixed family over one date 88 (127), the same as arm A, and the ladders are unchanged.
+
+### 9.4 The measurement
+
+`VarkaGroupingBenchmark` at both widths on `a93cb83e706` (load 0.67, canary within 1.1%), against
+#746's rows on unchanged code, in M rows/s at 256 and 128 bits:
+
+| shape | before | arm B, the default | arm A, the budget binds |
+|---|---|---|---|
+| weekday | 2 methods, 2887.5 / 1330.9 | 2, 2815.2 / 1318.2 | 5, 1937.0 / 922.5 |
+| 40 mixed | 10 methods, 505.5 / 207.3 | 8, 574.8 / 258.3 | 16, 468.4 / 201.6 |
+| mixed families (new) | - | 11, 72.2 / 27.8 | the same class |
+| 24 `date_add` | 2 methods, 1573.7 / 739.8 | 2, 1611.0 / 739.6 | the same class |
+| checked sums | 1 method, 3113.0 / 1080.8 | 1, 2960.7 / 1071.4 | the same class |
+
+The regeneration before this one read the checked sums under the default at 1038.9 at 256 bits,
+against 2938 for its two controls, the same class loaded twice more: one loaded copy of a class
+compiled to a third of the others' speed, timed twice. A regeneration on the same commit did not
+repeat it, and the file is that one's.
+
+Over the cost audit's corpus, arm B takes 17,583 loop methods where arm A takes 29,037 (-39%), and
+master took 28,404 on its own weights. By family the wide long shapes take 2,226 against 6,689 and
+two dates interleaved 71 against 204; the ladders and the mixed family over one date are arm A's.
+
+`VarkaSharedPrefixBenchmark` regenerated on the same commit: the recomputed cheap tails take six
+groups at every ceiling (four before), the `make_date` ladder ten at ceiling 400 (eleven or
+twelve) and twenty at 200 (twenty-six or thirty). Its committed file predates other merged
+changes, so its times are not read as this change's; the grouping benchmark is the controlled
+comparison.
+
+### 9.5 Predictions scored
+
+1. **Held.** Arm A's weekday shape takes five methods and runs 33% and 31% slower than before; the
+   mixed shape takes sixteen and runs 7% and 3% slower.
+2. **Held.** Arm B's weekday shape runs within 3% of before (-2.5%, -1.0%) with two methods; the
+   mixed shape runs 14% and 25% faster with eight.
+3. **Held.** Arm A builds 1 to 3% more loop methods on the families that move; arm B builds 39%
+   fewer over the corpus, inside the 30 to 75% predicted, and more on no family once the review's
+   first fix was in (before it, the mixed family over one date took 44% more).
+4. **Wrong.** The ladder's cheap tails do not move with the ceiling at all under the defaults: the
+   call-site budget and the exact grouping decide them, at six groups recomputed and four
+   materialized from ceiling 400 down to 50. The `make_date` ladder moved, but with `MakeDate`'s
+   weight, which 8.3's census changed.
+
+**The default.** Section 6's rule asked that no row be slower than before by more than 3% at either
+width. The checked sums are, at 256 bits: 4.9% below before. They build the same class under every
+arm, and their two control rows in the same run read 2920.4 and 2942.2, as low; #746's band puts
+that row's run-to-run spread at about 10%. The rule is read against the band, which is what it was
+committed for, and arm B is the default.
+
+### 9.6 The tests
+
+Nine tests pinned a grouping the budget made; each now names the budget's rule
+(`groupBudgetUnderPrediction` on), since its subject is that rule or a mechanism that needs two
+groups to exist: the calendar siblings, whole-node reuse, the int-lane divisions and the
+call-site regroup in `VarkaEmitterBudgetSuite`, the shared node's slot in
+`VarkaEmitterArithmeticSuite`, the materialized prefix's guard word in `VarkaEmitterValiditySuite`,
+the two dates in `VarkaEmitterChronoSuite`, `VarkaExactGroupingSuite`'s counts, and arm B's own
+test, which compared B with a default that is now B. The make_date split test counts the weights'
+three groups (four before). The price tables were refitted on the recounted weights (margins 20.9%
+and 18.2%, from 21.1% and 17.7%), and the wide-shape list lost shape 59.
+
+### 9.7 Corrections to the plan
+
+* 3.4's "from then on" was the bug of 9.2.
+* 3.3's register needed a fourth kind of row: `IsNotNull` reads its column's validity and no value,
+  so it pays no load.
+* `ADD_MONTHS_TAIL_WEIGHT` and `TRUNC_DYNAMIC_TAIL_WEIGHT` moved too; 3.2 did not list them.
+* Arm B's test needed the weekday shape: twenty cheap outputs do not separate the arms, since the
+  prediction prices one at about 4.6 call sites against the 3 it emits and closes at sixteen, where
+  the budget does.

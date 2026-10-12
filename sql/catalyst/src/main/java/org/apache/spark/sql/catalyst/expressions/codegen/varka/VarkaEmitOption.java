@@ -446,7 +446,10 @@ public sealed interface VarkaEmitOption
           new CountTag("misdescribeRollback="), List.of(), List.of()),
       new Flag("exactRefusalStatus", Reason.DIAGNOSTIC, false,
           VarkaEmitOptions::exactRefusalStatus, Builder::exactRefusalStatus,
-          new FlagTag("exactRefusalStatus", true)));
+          new FlagTag("exactRefusalStatus", true)),
+      new Flag("groupBudgetUnderPrediction", Reason.REFERENCE, false,
+          VarkaEmitOptions::groupBudgetUnderPrediction, Builder::groupBudgetUnderPrediction,
+          new FlagTag("budgetBoundsGroups", true)));
 
   /** The option with this name. */
   static VarkaEmitOption named(String name) {

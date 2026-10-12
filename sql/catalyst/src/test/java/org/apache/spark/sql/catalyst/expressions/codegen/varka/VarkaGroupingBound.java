@@ -52,7 +52,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Yea
  * ({@code VarkaEmitOptions.exactGrouping}) to this partition; the measurement that set the
  * bound is {@code VARKA-200.md} 2.
  */
-final class VarkaGroupingBound {
+public final class VarkaGroupingBound {
 
   private VarkaGroupingBound() {}
 
@@ -289,7 +289,7 @@ final class VarkaGroupingBound {
    * literal slot of its own index. The greedy walk leaves every {@code date_add} in a loop method
    * of its own here, which the best partition does not ({@code VARKA-200.md} 2).
    */
-  static List<VarkaVectorIR> mixed(int n) {
+  public static List<VarkaVectorIR> mixed(int n) {
     ColumnRef d = new ColumnRef(0);
     List<VarkaVectorIR> roots = new ArrayList<>();
     for (int k = 0; k < n; k++) {

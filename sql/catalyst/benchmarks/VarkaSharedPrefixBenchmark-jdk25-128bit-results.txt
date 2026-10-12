@@ -1,85 +1,85 @@
 Narrow-width companion of VarkaSharedPrefixBenchmark-jdk25-results.txt: the same benchmark under
 -XX:MaxVectorSize=16 (128-bit lanes), written by dev/varka_bench_regen.sh.
   benchmark:   org.apache.spark.sql.VarkaSharedPrefixBenchmark
-  commit:      dd003bdd80f (working tree dirty)
-  date:        2026-09-29T13:17:11Z
+  commit:      a93cb83e706
+  date:        2026-10-12T18:50:37Z
   jdk:         OpenJDK Runtime Environment (build 25.0.4.1+1-1-26.04.4-Ubuntu)
-  kernel:      7.0.0-31-generic
+  kernel:      7.0.0-34-generic
   cpu:         AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
   power:       governor=performance epp=performance profile=performance
   pinned to:   taskset -c 0,12,13,14,15,1,2,3
-  load at start: 0.93
-  canary:      ok (compute +0.2% cache -0.5% memory -1.4% )
+  load at start: 0.72
+  canary:      ok (compute +0.2% cache -3.7% memory -0.7% )
   wide run:    SPARK_GENERATE_BENCHMARK_FILES=1 taskset -c 0,12,13,14,15,1,2,3 build/sbt catalyst/Test/runMain org.apache.spark.sql.VarkaSharedPrefixBenchmark
   narrow run:  taskset -c 0,12,13,14,15,1,2,3 build/sbt "project catalyst" 'set Test/javaOptions += "-XX:MaxVectorSize=16"' "Test/runMain org.apache.spark.sql.VarkaSharedPrefixBenchmark"
 
 Running benchmark: 64 cheap tails over one date: year(d) + k over 1000000 rows
-  Running case: fused ceiling 400: 4 groups, prefix per group
-  Stopped after 261 iterations, 2002 ms
+  Running case: fused ceiling 400: 6 groups, prefix per group
+  Stopped after 254 iterations, 2000 ms
   Running case: fused ceiling 400: 4 groups, prefix computed once
-  Stopped after 8 iterations, 2136 ms
-  Running case: fused ceiling 200: 4 groups, prefix per group
-  Stopped after 261 iterations, 2001 ms
+  Stopped after 302 iterations, 2001 ms
+  Running case: fused ceiling 200: 6 groups, prefix per group
+  Stopped after 254 iterations, 2007 ms
   Running case: fused ceiling 200: 4 groups, prefix computed once
-  Stopped after 331 iterations, 2001 ms
-  Running case: fused ceiling 100: 4 groups, prefix per group
-  Stopped after 260 iterations, 2004 ms
+  Stopped after 396 iterations, 2002 ms
+  Running case: fused ceiling 100: 6 groups, prefix per group
+  Stopped after 255 iterations, 2006 ms
   Running case: fused ceiling 100: 4 groups, prefix computed once
-  Stopped after 335 iterations, 2001 ms
+  Stopped after 397 iterations, 2001 ms
   Running case: fused ceiling 50: 6 groups, prefix per group
-  Stopped after 201 iterations, 2006 ms
+  Stopped after 256 iterations, 2006 ms
   Running case: fused ceiling 50: 4 groups, prefix computed once
-  Stopped after 338 iterations, 2005 ms
+  Stopped after 398 iterations, 2000 ms
   Running case: fused ceiling 400, call-site budget off: 1 group, prefix computed once
-  Stopped after 5 iterations, 4623 ms
+  Stopped after 5 iterations, 4604 ms
   Running case: fused ceiling 400, every group split: 4 groups, prefix computed once
-  Stopped after 334 iterations, 2004 ms
-OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-31-generic
+  Stopped after 396 iterations, 2003 ms
+OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 64 cheap tails over one date: year(d) + k over 1000000 rows:            Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 ------------------------------------------------------------------------------------------------------------------------------------------------------
-fused ceiling 400: 4 groups, prefix per group                                       8              8           0        133.2           7.5       1.0X
-fused ceiling 400: 4 groups, prefix computed once                                 266            267           1          3.8         265.8       0.0X
-fused ceiling 200: 4 groups, prefix per group                                       7              8           0        133.3           7.5       1.0X
-fused ceiling 200: 4 groups, prefix computed once                                   6              6           0        168.7           5.9       1.3X
-fused ceiling 100: 4 groups, prefix per group                                       8              8           0        131.7           7.6       1.0X
-fused ceiling 100: 4 groups, prefix computed once                                   6              6           0        170.7           5.9       1.3X
-fused ceiling 50: 6 groups, prefix per group                                       10             10           0        100.9           9.9       0.8X
-fused ceiling 50: 4 groups, prefix computed once                                    6              6           0        170.5           5.9       1.3X
-fused ceiling 400, call-site budget off: 1 group, prefix computed once            906            925          15          1.1         905.9       0.0X
-fused ceiling 400, every group split: 4 groups, prefix computed once                6              6           0        169.2           5.9       1.3X
+fused ceiling 400: 6 groups, prefix per group                                       8              8           0        127.3           7.9       1.0X
+fused ceiling 400: 4 groups, prefix computed once                                   5              7          16        198.1           5.0       1.6X
+fused ceiling 200: 6 groups, prefix per group                                       8              8           0        126.9           7.9       1.0X
+fused ceiling 200: 4 groups, prefix computed once                                   5              5           0        199.8           5.0       1.6X
+fused ceiling 100: 6 groups, prefix per group                                       8              8           0        127.3           7.9       1.0X
+fused ceiling 100: 4 groups, prefix computed once                                   5              5           0        201.4           5.0       1.6X
+fused ceiling 50: 6 groups, prefix per group                                        8              8           0        127.7           7.8       1.0X
+fused ceiling 50: 4 groups, prefix computed once                                    5              5           0        204.1           4.9       1.6X
+fused ceiling 400, call-site budget off: 1 group, prefix computed once            914            921          10          1.1         913.6       0.0X
+fused ceiling 400, every group split: 4 groups, prefix computed once                5              5           0        199.9           5.0       1.6X
 Running benchmark: 60 make_date(year(d), month(d), k) outputs over 1000000 rows
-  Running case: fused ceiling 400: 12 groups, prefix per group
-  Stopped after 24 iterations, 2080 ms
-  Running case: fused ceiling 400: 11 groups, prefix computed once
-  Stopped after 41 iterations, 2031 ms
-  Running case: fused ceiling 200: 30 groups, prefix per group
-  Stopped after 16 iterations, 2028 ms
-  Running case: fused ceiling 200: 26 groups, prefix computed once
-  Stopped after 32 iterations, 2010 ms
+  Running case: fused ceiling 400: 10 groups, prefix per group
+  Stopped after 28 iterations, 2073 ms
+  Running case: fused ceiling 400: 10 groups, prefix computed once
+  Stopped after 44 iterations, 2036 ms
+  Running case: fused ceiling 200: 20 groups, prefix per group
+  Stopped after 23 iterations, 2046 ms
+  Running case: fused ceiling 200: 20 groups, prefix computed once
+  Stopped after 36 iterations, 2022 ms
   Running case: fused ceiling 100: 60 groups, prefix per group
-  Stopped after 9 iterations, 2008 ms
+  Stopped after 10 iterations, 2116 ms
   Running case: fused ceiling 100: 60 groups, prefix computed once
-  Stopped after 18 iterations, 2078 ms
+  Stopped after 18 iterations, 2056 ms
   Running case: fused ceiling 50: 60 groups, prefix per group
-  Stopped after 9 iterations, 2005 ms
+  Stopped after 10 iterations, 2186 ms
   Running case: fused ceiling 50: 60 groups, prefix computed once
-  Stopped after 18 iterations, 2076 ms
-  Running case: fused ceiling 400, call-site budget off: 11 groups, prefix computed once
-  Stopped after 41 iterations, 2033 ms
+  Stopped after 18 iterations, 2066 ms
+  Running case: fused ceiling 400, call-site budget off: 9 groups, prefix computed once
+  Stopped after 46 iterations, 2013 ms
   Running case: fused ceiling 400, every group split: 60 groups, prefix computed once
-  Stopped after 18 iterations, 2080 ms
-OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-31-generic
+  Stopped after 18 iterations, 2065 ms
+OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
-60 make_date(year(d), month(d), k) outputs over 1000000 rows:             Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
---------------------------------------------------------------------------------------------------------------------------------------------------------
-fused ceiling 400: 12 groups, prefix per group                                       75             87           5         13.4          74.6       1.0X
-fused ceiling 400: 11 groups, prefix computed once                                   48             50           0         20.6          48.5       1.5X
-fused ceiling 200: 30 groups, prefix per group                                      125            127           4          8.0         124.7       0.6X
-fused ceiling 200: 26 groups, prefix computed once                                   61             63           0         16.4          61.1       1.2X
-fused ceiling 100: 60 groups, prefix per group                                      214            223           7          4.7         214.3       0.3X
-fused ceiling 100: 60 groups, prefix computed once                                  113            115           4          8.8         113.2       0.7X
-fused ceiling 50: 60 groups, prefix per group                                       214            223           6          4.7         214.5       0.3X
-fused ceiling 50: 60 groups, prefix computed once                                   113            115           4          8.8         113.2       0.7X
-fused ceiling 400, call-site budget off: 11 groups, prefix computed once             49             50           0         20.2          49.4       1.5X
-fused ceiling 400, every group split: 60 groups, prefix computed once               113            116           4          8.8         113.2       0.7X
+60 make_date(year(d), month(d), k) outputs over 1000000 rows:            Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+fused ceiling 400: 10 groups, prefix per group                                      74             74           0         13.5          74.0       1.0X
+fused ceiling 400: 10 groups, prefix computed once                                  46             46           0         21.8          45.9       1.6X
+fused ceiling 200: 20 groups, prefix per group                                      89             89           0         11.3          88.9       0.8X
+fused ceiling 200: 20 groups, prefix computed once                                  56             56           0         17.8          56.1       1.3X
+fused ceiling 100: 60 groups, prefix per group                                     211            212           2          4.7         210.7       0.4X
+fused ceiling 100: 60 groups, prefix computed once                                 111            114           1          9.0         111.4       0.7X
+fused ceiling 50: 60 groups, prefix per group                                      211            219           5          4.7         211.3       0.4X
+fused ceiling 50: 60 groups, prefix computed once                                  114            115           1          8.7         114.5       0.6X
+fused ceiling 400, call-site budget off: 9 groups, prefix computed once             44             44           0         22.9          43.7       1.7X
+fused ceiling 400, every group split: 60 groups, prefix computed once              114            115           1          8.8         114.3       0.6X

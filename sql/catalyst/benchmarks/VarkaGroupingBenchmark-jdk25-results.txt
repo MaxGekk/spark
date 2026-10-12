@@ -6,32 +6,45 @@ OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
 dayofweek and weekday over two dates, beside four date_add over 10240000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
 -------------------------------------------------------------------------------------------------------------------------------------------------------------
-group budget 16 (the default): 2 loop methods                                              4              4           0       2887.5           0.3       1.0X
-group budget 400: 2 loop methods, the default's class (a control)                          4              4           0       2840.7           0.4       1.0X
-group budget 16 (the default): 2 loop methods, timed again last                            4              4           0       2889.5           0.3       1.0X
+the prediction bounds groups (the default): 2 loop methods                                 4              4           0       2815.2           0.4       1.0X
+group budget 16 binds: 5 loop methods                                                      5              5           0       1937.0           0.5       0.7X
+group budget 400: 2 loop methods                                                           4              4           0       2826.0           0.4       1.0X
+the prediction bounds groups (the default): 2 loop methods, timed again last               4              4           0       2764.8           0.4       1.0X
 
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
-24 date_add outputs over one date over 10240000 rows:              Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
--------------------------------------------------------------------------------------------------------------------------------------------------
-group budget 16 (the default): 2 loop methods                                  7              7           0       1573.7           0.6       1.0X
-group budget 400: 2 loop methods, the default's class (a control)              6              7           0       1608.8           0.6       1.0X
-group budget 16 (the default): 2 loop methods, timed again last                7              7           0       1522.4           0.7       1.0X
+24 date_add outputs over one date over 10240000 rows:                         Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+the prediction bounds groups (the default): 2 loop methods                                6              7           0       1611.0           0.6       1.0X
+group budget 16 binds: 2 loop methods, the default's class (a control)                    7              7           0       1574.7           0.6       1.0X
+group budget 400: 2 loop methods, the default's class (a control)                         7              7           0       1481.8           0.7       0.9X
+the prediction bounds groups (the default): 2 loop methods, timed again last              7              7           0       1448.9           0.7       0.9X
 
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
-8 checked sums i + j + k over 10240000 rows:                      Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
-------------------------------------------------------------------------------------------------------------------------------------------------
-group budget 16 (the default): 1 loop method                                  3              3           0       3113.0           0.3       1.0X
-group budget 400: 1 loop method, the default's class (a control)              3              4           0       2950.1           0.3       0.9X
-group budget 16 (the default): 1 loop method, timed again last                4              4           0       2924.6           0.3       0.9X
+8 checked sums i + j + k over 10240000 rows:                                 Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+the prediction bounds groups (the default): 1 loop method                                3              3           0       2960.7           0.3       1.0X
+group budget 16 binds: 1 loop method, the default's class (a control)                    4              4           0       2920.4           0.3       1.0X
+group budget 400: 1 loop method, the default's class (a control)                         3              3           0       2942.2           0.3       1.0X
+the prediction bounds groups (the default): 1 loop method, timed again last              3              4           0       2954.8           0.3       1.0X
 
 OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
 AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
-40 mixed outputs over two dates and two integers over 10240000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
----------------------------------------------------------------------------------------------------------------------------------------------------
-group budget 16 (the default): 10 loop methods                                  20             20           0        505.5           2.0       1.0X
-group budget 400: 8 loop methods                                                18             18           0        577.5           1.7       1.1X
-group budget 16 (the default): 10 loop methods, timed again last                20             20           0        505.9           2.0       1.0X
+40 mixed outputs over two dates and two integers over 10240000 rows:          Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+the prediction bounds groups (the default): 8 loop methods                               18             18           0        574.8           1.7       1.0X
+group budget 16 binds: 16 loop methods                                                   22             22           0        468.4           2.1       0.8X
+group budget 400: 8 loop methods, the default's class (a control)                        18             18           0        582.0           1.7       1.0X
+the prediction bounds groups (the default): 8 loop methods, timed again last             18             18           0        569.4           1.8       1.0X
+
+OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+40 mixed families over one date (VarkaGroupingBound) over 10240000 rows:       Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+the prediction bounds groups (the default): 11 loop methods                              142            142           1         72.2          13.8       1.0X
+group budget 16 binds: 11 loop methods, the default's class (a control)                  142            142           0         72.2          13.8       1.0X
+group budget 400: 10 loop methods                                                        112            113           0         91.3          11.0       1.3X
+the prediction bounds groups (the default): 11 loop methods, timed again last            142            142           0         72.3          13.8       1.0X
 
 

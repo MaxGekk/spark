@@ -290,9 +290,13 @@ opens with what its conversion lost. See `papers/README.md` before adding one.
   amortizes it and the measured win at the cap is 4.0x; and calendar outputs over
   one date share a method up to `FUSED_CEILING` (400 ops), because the
   shared civil-from-days prefix makes the wider method less work rather than more
-  (VARKA-32, 2.15x on four fields). Nothing else widens a method: two plain
-  chains over a shared subchain stay split, and whether they still should is VARKA-43's open question (VARKA-17 measured the merge as a loss; the parity file has read
-  it as a win since VARKA-46 moved the validity OR ahead of the vector work).
+  (VARKA-32, 2.15x on four fields). Beyond that, the emit cost model's prediction bounds a group
+  in `GROUP_BUDGET`'s place where it can (VARKA-254: with the plan's margins, a call-site budget
+  and a group it prices), and the budget binds everywhere else; a group the prediction widens is
+  checked on call sites at every later join and split after the build however narrow. Whether two
+  plain chains over a shared subchain should share a method under the budget's rule is VARKA-43's
+  open question (VARKA-17 measured the merge as a loss; the parity file has read it as a win since
+  VARKA-46 moved the validity OR ahead of the vector work).
 * **A new bounded lowering comes with its proof file** (VARKA-242). A lowering exact only over a
   bound - a magic multiply over a range, a fold, a perfect hash, a form that rounds - ships with a
   file under `sql/varka/proofs/` that proves it over that bound and finds where it first fails,

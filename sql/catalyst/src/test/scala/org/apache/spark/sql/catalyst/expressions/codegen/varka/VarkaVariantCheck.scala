@@ -17,27 +17,16 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
-import java.util.concurrent.atomic.AtomicInteger
-
 import scala.jdk.CollectionConverters._
 import scala.jdk.OptionConverters._
 
-import org.scalatest.Assertions._
-
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVariants.{Kind, Variant}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 
 /**
- * Runs the variants of a passing case ([[VarkaVariants]], VARKA-278) through the emitter and
- * [[VarkaKernelCheck]], for `VarkaVariantSuite` over the small-tree series and `VarkaIrFuzzSuite`
- * over its draws. A case is a [[VarkaFuzzCase]] - roots, columns, literals and one batch - and a
- * variant becomes a case of its own, its columns built from the original's by the variant's
- * plan. Scala because the check and the reference evaluator it drives are.
- *
- * Every output of a variant is compared with the reference evaluator, row for row. A variant may
- * decline only where [[VarkaVariants.Kind.mayDecline]] says, and then the kernel is emitted again
- * under `exactRefusalStatus` and run on the same batch: the bits it declines with must be bits of
- * guards the variant adds ([[VarkaVariants.addedRefusalBits]]). Anywhere else a decline fails.
+ * The variant check's Scala face: [[VarkaVariantChecks]], the Java class that runs a case's
+ * variants (VARKA-278) through the emitter and the kernel check (VARKA-311), over the suites'
+ * [[VarkaFuzzCase]]. Each method converts the case, the suite's emit function and the outcome;
+ * nothing is checked here.
  */
 object VarkaVariantCheck {
 
@@ -50,157 +39,50 @@ object VarkaVariantCheck {
   /** No form of the emitter holds the shape: past the class-file cap. */
   case object Skipped extends Outcome
 
-  /**
-   * How a suite emits: the roots, the column and literal counts, the options and the class name
-   * to give the class; None for a shape past the class-file cap. The series passes
-   * [[retryWithoutBudget]]; the fuzzer passes its own, so its checks on a decline's reason, its
-   * count of shapes past the cap and its size trace apply to its variants as to its draws.
-   */
+  /** How a suite emits, as [[VarkaVariantChecks.Emit]]. */
   type Emit = (Seq[VarkaVectorIR], Int, Int, VarkaEmitOptions, String) => Option[Array[Byte]]
 
-  /**
-   * The series' way of emitting: a size decline under the byte budget is retried without it, as
-   * the fuzzer does, and a decline without one is the class-file cap's.
-   */
-  val retryWithoutBudget: Emit = (roots, numInputs, numLiterals, options, className) => {
-    def emitWith(o: VarkaEmitOptions): Array[Byte] =
-      VarkaLoopEmitter.emit(className, roots.asJava, numInputs, numLiterals, null, null, o)
-    try Some(emitWith(options)) catch {
-      case _: VarkaEmitDeclined if options.methodByteBudget() > 0 =>
-        try Some(emitWith(options.withMethodByteBudget(0))) catch {
-          case _: VarkaEmitDeclined => None
-        }
-      case _: VarkaEmitDeclined => None
-    }
+  /** [[VarkaVariantChecks.RETRY_WITHOUT_BUDGET]]. */
+  val retryWithoutBudget: Emit = (roots, numInputs, numLiterals, options, className) =>
+    VarkaVariantChecks.RETRY_WITHOUT_BUDGET.emit(roots.asJava, numInputs, numLiterals, options,
+      className).toScala
+
+  private def toJava(c: VarkaFuzzCase): VarkaVariantChecks.Case =
+    new VarkaVariantChecks.Case(c.lane, c.roots.asJava, c.numInputs, c.lits, c.length, c.nulls,
+      c.data, c.forceMasked, c.options, c.smallOrdinal, c.levelOrdinal, c.label)
+
+  private def toJava(emit: Emit): VarkaVariantChecks.Emit =
+    (roots, numInputs, numLiterals, options, className) =>
+      emit(roots.asScala.toSeq, numInputs, numLiterals, options, className).toJava
+
+  private def outcome(o: VarkaVariantChecks.Outcome): Outcome = o match {
+    case _: VarkaVariantChecks.Outcome.Compared => Compared
+    case d: VarkaVariantChecks.Outcome.Declined => Declined(d.status())
+    case _: VarkaVariantChecks.Outcome.Skipped => Skipped
   }
 
-  private val classCounter = new AtomicInteger(0)
-
-  private def className(c: VarkaFuzzCase): String = "org.apache.spark.sql.varka.execution." +
-    s"VarkaVariant${if (c.lane == LaneType.LONG) "Long" else ""}${classCounter.addAndGet(1)}"
-
-  /**
-   * The variants of `c`, in [[Kind]]'s order, each None where it does not apply to `c`.
-   * `stranger` is a tree that passes over `c`'s columns, and `pool` the trees an untaken arm may
-   * be replaced by, scanned from `rotation`.
-   */
+  /** [[VarkaVariantChecks.variants]]: each kind, and its variant where it applies to `c`. */
   def variants(c: VarkaFuzzCase, stranger: VarkaVectorIR, pool: Seq[VarkaVectorIR],
-      rotation: Int): Seq[(Kind, Option[Variant])] = {
-    val roots = c.roots.asJava
-    val n = c.numInputs
-    Seq(
-      Kind.BESIDE_A_CHILD -> VarkaVariants.besideAChild(roots, n).toScala,
-      Kind.PERMUTED -> VarkaVariants.permuted(roots, n).toScala,
-      Kind.DUPLICATED -> Some(VarkaVariants.duplicated(roots, n)),
-      Kind.COPIED -> Some(VarkaVariants.copied(roots, n)),
-      Kind.BESIDE_A_STRANGER -> Some(VarkaVariants.besideAStranger(roots, n, stranger)),
-      Kind.LITERAL_TO_COLUMN -> VarkaVariants.literalToColumn(roots, n).toScala,
-      Kind.COLUMNS_RENUMBERED -> VarkaVariants.columnsRenumbered(roots, n).toScala,
-      Kind.UNTAKEN_ARM ->
-        VarkaVariants.untakenArm(roots, n, armOracle(c), pool.asJava, rotation).toScala)
-  }
+      rotation: Int): Seq[(Kind, Option[Variant])] =
+    VarkaVariantChecks.variants(toJava(c), stranger, pool.asJava, rotation).asScala.toSeq
+      .map(kv => kv.kind() -> kv.variant().toScala)
 
-  /**
-   * Which arm of `cond` the rows of `c` take, by the reference evaluator: the then arm where the
-   * condition is true, the else arm where it is false or null. Read over both batches the check
-   * runs - `c`'s own nulls and its other body's ([[VarkaKernelCheck.otherBody]]: no nulls, or at
-   * one row every column null) - since a condition over a column's validity can turn there, and
-   * an arm untaken on one is taken on the other.
-   */
-  def armOracle(c: VarkaFuzzCase): VarkaVariants.ArmOracle = cond => {
-    val own = (0 until c.numInputs).map(col => (i: Int) => c.nulls(col)(i))
-    val other = VarkaKernelCheck.otherBody(c.numInputs, c.length, own, c.forceMasked).map(_._1)
-    var anyThen = false
-    var anyElse = false
-    for (patterns <- own +: other.toSeq; i <- 0 until c.length) {
-      val row = (0 until c.numInputs).map { col =>
-        if (patterns(col)(i)) None else Some(c.data(col)(i))
-      }
-      val taken = if (c.lane == LaneType.LONG) {
-        VarkaReferenceEvaluator.evalCondLong(cond, row, c.lits).contains(true)
-      } else {
-        VarkaReferenceEvaluator.evalCond(cond, row.map(_.map(_.toInt)), c.lits.map(_.toInt))
-          .contains(true)
-      }
-      if (taken) anyThen = true else anyElse = true
-    }
-    if (!anyThen) VarkaVariants.Taken.ELSE_ONLY
-    else if (!anyElse) VarkaVariants.Taken.THEN_ONLY
-    else VarkaVariants.Taken.BOTH
-  }
+  /** [[VarkaVariantChecks.armOracle]]. */
+  def armOracle(c: VarkaFuzzCase): VarkaVariants.ArmOracle = VarkaVariantChecks.armOracle(toJava(c))
 
-  /** `c` as `v` sees it: `v`'s roots over the columns its plan builds from `c`'s. */
+  /** [[VarkaVariantChecks.caseOf]], as a [[VarkaFuzzCase]]. */
   def caseOf(c: VarkaFuzzCase, v: Variant): VarkaFuzzCase = {
-    val sources = v.columns.asScala.toSeq
-    val data = sources.map {
-      case f: VarkaVariants.FromColumn => c.data(f.ordinal)
-      case l: VarkaVariants.FromLiteral => Array.fill(c.length)(c.lits(l.slot))
-    }.toArray
-    val nulls = sources.map {
-      case f: VarkaVariants.FromColumn => c.nulls(f.ordinal)
-      case _: VarkaVariants.FromLiteral => Array.fill(c.length)(false)
-    }.toArray
-    def moved(ordinal: Int): Int =
-      if (ordinal < 0) -1 else sources.indexOf(new VarkaVariants.FromColumn(ordinal))
-    val roots = v.roots.asScala.toSeq
-    c.copy(roots = roots, numInputs = sources.size, nulls = nulls, data = data,
-      smallOrdinal = moved(c.smallOrdinal), levelOrdinal = moved(c.levelOrdinal),
-      label = s"${c.label} variant=${v.kind.label} " +
-        s"roots=${roots.map(r => VarkaVectorIR.canonical(r)).mkString("[", ", ", "]")}")
+    val vc = VarkaVariantChecks.caseOf(toJava(c), v)
+    c.copy(roots = vc.roots().asScala.toSeq, numInputs = vc.numInputs(), nulls = vc.nulls(),
+      data = vc.data(), smallOrdinal = vc.smallOrdinal(), levelOrdinal = vc.levelOrdinal(),
+      label = vc.label())
   }
 
-  /** `c` itself, emitted and compared; a decline fails. */
-  def checkPlain(c: VarkaFuzzCase, emit: Emit): Outcome = {
-    val name = className(c)
-    emit(c.roots, c.numInputs, c.lits.length, c.options, name) match {
-      case None => Skipped
-      case Some(bytes) =>
-        status(c, name, bytes, declineAllowed = false)
-        Compared
-    }
-  }
+  /** [[VarkaVariantChecks.checkPlain]]. */
+  def checkPlain(c: VarkaFuzzCase, emit: Emit): Outcome =
+    outcome(VarkaVariantChecks.checkPlain(toJava(c), toJava(emit)))
 
-  /**
-   * Variant `v` of `c`, emitted and compared; throws on a mismatch, on a decline the variant may
-   * not make, and on one whose exact bits are not all the guards' it adds.
-   */
-  def check(c: VarkaFuzzCase, v: Variant, emit: Emit): Outcome = {
-    val vc = caseOf(c, v)
-    def run(options: VarkaEmitOptions): Option[Int] = {
-      val name = className(vc)
-      emit(vc.roots, vc.numInputs, vc.lits.length, options, name)
-        .map(bytes => status(vc, name, bytes, v.kind.mayDecline))
-    }
-    run(vc.options) match {
-      case None => Skipped
-      case Some(0) => Compared
-      case Some(first) =>
-        val exactOptions = vc.options.withExactRefusalStatus(true)
-        val allowed = VarkaVariants.addedRefusalBits(c.roots.asJava, c.numInputs, v.roots,
-          vc.numInputs, vc.lits.length, exactOptions)
-        val exact = run(exactOptions).getOrElse(
-          fail(s"${vc.label}: declined (status $first), then past the class-file cap under " +
-            "exactRefusalStatus"))
-        assert(exact != 0, s"${vc.label}: declined (status $first) under its options and " +
-          "answered under exactRefusalStatus")
-        assert((exact & ~allowed) == 0, s"${vc.label}: declined with status $exact; the guards " +
-          s"the variant adds give only $allowed")
-        Declined(exact)
-    }
-  }
-
-  /** `c`'s kernel run over `c`'s batch: the status, 0 once every row is compared. */
-  private def status(c: VarkaFuzzCase, name: String, bytes: Array[Byte],
-      declineAllowed: Boolean): Int = {
-    val patterns = (0 until c.numInputs).map(col => (i: Int) => c.nulls(col)(i))
-    if (c.lane == LaneType.LONG) {
-      VarkaKernelCheck.runAndCompareLongStatus(c.label, name, bytes, c.roots, c.numInputs,
-        c.lits, VarkaKernelCheck.LongBatch(c.length, patterns, c.data, c.forceMasked),
-        declineAllowed)
-    } else {
-      VarkaKernelCheck.runAndCompareStatus(c.label, name, bytes, c.roots, c.numInputs,
-        c.lits.map(_.toInt), VarkaKernelCheck.Batch(c.length, patterns,
-          c.data.map(_.map(_.toInt)), c.forceMasked), declineAllowed)
-    }
-  }
+  /** [[VarkaVariantChecks.check]]. */
+  def check(c: VarkaFuzzCase, v: Variant, emit: Emit): Outcome =
+    outcome(VarkaVariantChecks.check(toJava(c), v, toJava(emit)))
 }

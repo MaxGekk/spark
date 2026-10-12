@@ -35,42 +35,48 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoad
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitterTestSupport;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFusedKernel;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaGroupingBound;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaLoopEmitter;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMethodNames;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSqlResolve;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.types.DataTypes;
 
 /**
  * What it costs to split a projection's outputs into more loop methods.
  *
- * <p>The emitter puts a projection's outputs into groups, one loop method each. A group closes
- * when the weights of its nodes - a hand-kept register of the vector operations each node emits,
- * in {@code VarkaEmitBudget.weightOf} - would pass the group budget of 16, unless the next output
- * reuses what the group already computes (a calendar prefix, or whole nodes under the default
- * {@code shareWholeNodes}), which lets it join up to the fused ceiling of 400. The cost model's
- * prediction and the measured byte and call-site limits can close a group earlier, never later.
+ * <p>The emitter puts a projection's outputs into groups, one loop method each. Under the
+ * budget's rule a group closes when the weights of its nodes - the vector operations each node
+ * emits, in {@code VarkaEmitBudget.weightOf} - would pass the group budget of 16, unless the next
+ * output reuses what the group already computes (a calendar prefix, or whole nodes under the
+ * default {@code shareWholeNodes}), which lets it join up to the fused ceiling of 400. Since
+ * VARKA-254 the cost model's prediction bounds a group in the budget's place by default, up to
+ * the ceiling; under either rule the measured byte and call-site limits split a group after the
+ * build.
  * Each extra loop method costs a call per batch and reloads the input columns it reads; a wider
  * one holds more live vectors, which can spill registers. This benchmark prices that trade at the
- * default budget and with the budget raised to 400, where the prediction and the measured limits
- * alone bound a group. Each row names its loop-method count, read from the emitted class.
+ * default budget, with the prediction bounding groups in the budget's place (VARKA-254), and with
+ * the budget raised to 400, where the prediction and the measured limits alone bound a group.
+ * Each row names its loop-method count, read from the emitted class.
  *
- * <p>Each table has three rows: the default, the raised budget, and the default timed again last.
- * An arm whose class is byte for byte the default's is labelled a control: the gap between two
- * copies of one class is where the JIT and the allocator put them, and the gap between the two
- * default rows is what position in the run costs. A difference between arms counts only where it
- * clears both, and against the committed band.
+ * <p>Each table has a row per arm and the default timed again last. An arm whose class is byte
+ * for byte the default's is labelled a control: the gap between two copies of one class is where
+ * the JIT and the allocator put them, and the gap between the two default rows is what position
+ * in the run costs. A difference between arms counts only where it clears both, and against the
+ * committed band.
  *
- * <p>The shapes. With today's weights only the forty mixed outputs over two dates and two
- * integers split differently under the two budgets. The other three build one class under both
- * and are controls here: {@code dayofweek} and {@code weekday} over two dates beside four
- * {@code date_add}, which VARKA-254's corrected weights (about 16 each, not 1) would split; 24
- * {@code date_add}, which the cost model's plan splits by call sites first; and eight checked sums
- * {@code i + j + k}, whose shared {@code i + j} lets each join its group up to the ceiling.
- * Null-free batches of 1024 rows, which every lane count divides, so the loop methods are what is
- * measured.
+ * <p>The shapes. {@code dayofweek} and {@code weekday} over two dates beside four
+ * {@code date_add}, which the budget splits into five loop methods since VARKA-254 weighed the
+ * two at what they emit, and the prediction keeps in two; forty mixed outputs over two dates and
+ * two integers, which the budget splits into sixteen; VARKA-200's mixed family over one date, the
+ * one corpus family where the prediction builds more loop methods than the budget; and two
+ * controls that build one class under every arm: 24 {@code date_add}, which the cost model's plan
+ * splits by call sites, and eight checked sums {@code i + j + k}, whose shared {@code i + j} lets
+ * each join its group up to the ceiling. Null-free batches of 1024 rows, which every lane count
+ * divides, so the loop methods are what is measured.
  *
- * <p>Committed before VARKA-254 recounts the weights, so that its results file shows the change
- * as a diff against these rows.
+ * <p>Committed before VARKA-254 recounted the weights, so that its results show the change as a
+ * diff against the rows measured on the code before it.
  *
  * <p>To run this benchmark:
  * <pre>
@@ -90,6 +96,13 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
 
   /** A shape: its title and its outputs as SQL over {@code d}, {@code d2}, {@code i}, {@code j}. */
   private record Shape(String title, List<String> sqls) { }
+
+  /**
+   * A shape ready to emit: its outputs, the column each kernel input reads (0 and 1 the dates, 2
+   * and 3 the integers) and the literals' values.
+   */
+  private record Prepared(String title, List<VarkaVectorIR> outputs, int[] inputColumns,
+      int[] literals) { }
 
   /** An arm: its label and the options it emits under. */
   private record Arm(String label, VarkaEmitOptions options) { }
@@ -137,10 +150,43 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
         new Shape("40 mixed outputs over two dates and two integers", mixed));
   }
 
+  /**
+   * Every shape, prepared: the SQL ones compiled, then VARKA-200's mixed family over one date at
+   * forty entries ({@code VarkaGroupingBound.mixed}) - a size-ladder entry, a {@code make_date},
+   * a cheap tail and a {@code date_add} in rotation, each reading the literal of its index - where
+   * the prediction bounding groups builds more loop methods than the budget. Literal {@code k} is
+   * {@code k % 28 + 1}, a day every month has, so no {@code make_date} declines.
+   */
+  private static List<Prepared> prepared() {
+    var out = new ArrayList<Prepared>();
+    for (var shape : shapes()) {
+      var fused = compile(shape);
+      out.add(new Prepared(shape.title(), fused.outputs(),
+          fused.inputOrdinals().stream().mapToInt(Integer::intValue).toArray(),
+          fused.literals().stream().mapToInt(Integer::intValue).toArray()));
+    }
+    int n = 40;
+    int[] literals = new int[n];
+    for (int k = 0; k < n; k++) {
+      literals[k] = k % 28 + 1;
+    }
+    out.add(new Prepared("40 mixed families over one date (VarkaGroupingBound)",
+        VarkaGroupingBound.mixed(n), new int[] {0}, literals));
+    return out;
+  }
+
+  /**
+   * The default first - the prediction bounding groups in the budget's place, since VARKA-254 -
+   * then the group budget binding as it did before ({@code groupBudgetUnderPrediction} on), and
+   * the budget raised to 400, kept from the file's first rows so the three stay comparable.
+   */
   private static List<Arm> arms() {
     return List.of(
-        new Arm("group budget 16 (the default)", VarkaEmitOptions.DEFAULTS),
-        new Arm("group budget 400", VarkaEmitOptions.DEFAULTS.withGroupBudget(400)));
+        new Arm("the prediction bounds groups (the default)", VarkaEmitOptions.DEFAULTS),
+        new Arm("group budget 16 binds",
+            VarkaEmitOptions.DEFAULTS.withGroupBudgetUnderPrediction(true)),
+        new Arm("group budget 400",
+            VarkaEmitOptions.DEFAULTS.withGroupBudgetUnderPrediction(true).withGroupBudget(400)));
   }
 
   private static CompiledVarkaProjection compile(Shape shape) {
@@ -163,10 +209,12 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
    * classes are compared by and what the loop methods are counted in, then under the arm's own
    * name, which is what is loaded and timed.
    */
-  private static Emitted emit(CompiledVarkaProjection fused, VarkaGeneratedClassLoader loader,
-      String id, VarkaEmitOptions options) throws ReflectiveOperationException {
+  private static Emitted emit(Prepared shape, VarkaGeneratedClassLoader loader, String id,
+      VarkaEmitOptions options) throws ReflectiveOperationException {
+    int numInputs = shape.inputColumns().length;
+    int numLiterals = shape.literals().length;
     byte[] probe = VarkaLoopEmitter.emit("org.apache.spark.sql.varka.execution.VarkaGroupingProbe",
-        fused.outputs(), fused.inputOrdinals().size(), fused.numLiterals(), null, null, options);
+        shape.outputs(), numInputs, numLiterals, null, null, options);
     // The dense and the masked side group alike; the larger count is the class's, as the
     // grouping suites count it.
     int dense = 0;
@@ -176,8 +224,8 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
       masked += VarkaMethodNames.isLoop(method, false) ? 1 : 0;
     }
     String name = "org.apache.spark.sql.varka.execution.VarkaGroupingBench" + id;
-    byte[] bytes = VarkaLoopEmitter.emit(name, fused.outputs(), fused.inputOrdinals().size(),
-        fused.numLiterals(), null, null, options);
+    byte[] bytes = VarkaLoopEmitter.emit(name, shape.outputs(), numInputs, numLiterals, null,
+        null, options);
     loader.defineGeneratedClass(name, bytes);
     var kernel = (VarkaFusedKernel) loader.loadClass(name).getConstructor().newInstance();
     return new Emitted(kernel, Math.max(dense, masked), probe);
@@ -200,19 +248,18 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
           ints2.set(ValueLayout.JAVA_INT, r * 4L, r * 3 % 1000 - 500);
         }
         long[] columns = {dates.address(), dates2.address(), ints.address(), ints2.address()};
-        var shapes = shapes();
+        var shapes = prepared();
         for (int s = 0; s < shapes.size(); s++) {
           var shape = shapes.get(s);
-          var fused = compile(shape);
-          int n = fused.outputs().size();
-          int numInputs = fused.inputOrdinals().size();
+          int n = shape.outputs().size();
+          int numInputs = shape.inputColumns().length;
           long[] src = new long[numInputs];
           for (int c = 0; c < numInputs; c++) {
-            src[c] = columns[fused.inputOrdinals().get(c)];
+            src[c] = columns[shape.inputColumns()[c]];
           }
           long[] srcValidity = new long[numInputs];
           int[] srcNullCount = new int[numInputs];
-          int[] literals = fused.literals().stream().mapToInt(Integer::intValue).toArray();
+          int[] literals = shape.literals();
           long[] dst = new long[n];
           long[] dstValidity = new long[n];
           for (int o = 0; o < n; o++) {
@@ -226,7 +273,7 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
           var emitted = new ArrayList<Emitted>();
           for (int a = 0; a < armList.size(); a++) {
             try {
-              emitted.add(emit(fused, loader, s + "_" + a, armList.get(a).options()));
+              emitted.add(emit(shape, loader, s + "_" + a, armList.get(a).options()));
             } catch (ReflectiveOperationException e) {
               throw new IllegalStateException(e);
             }
