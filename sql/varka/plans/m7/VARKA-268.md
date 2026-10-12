@@ -54,7 +54,7 @@ it is:
   `makeInputData(arena, length, IntPredicate isNull, IntUnaryOperator value, boolean poisonNulls)`,
   `poison(nullOrdinal)`, `makeOutput`, `makeLongInput`, `makeLongOutput`, `outputValidityBytes`,
   `assertSameOutput`, `runKernel2`;
-* the sweeps, failing with an `AssertionError` that names the first days that differ;
+* the sweeps, failing with an exception that names the first day that differs;
 * the data: `LENGTHS`, `OFFSETS`, `CALENDAR_BOUNDARY_DAYS`, `ISO_WEEK_DAYS`, `MAKE_DATE_ALL` as a
   record `Triple(int year, int month, int day)`, `extreme`, `small`, `calendarDays`,
   `defaultData`, `laneOps`, `monthStepOps`, `singleEpilogueSize`.
@@ -121,3 +121,41 @@ The sweeps' times, as 2 measured them, after the port.
 1. This plan, and the row marked Planned.
 2. `VarkaEmitterFixtures`, the trait over it, and the equality check run, in one commit.
 3. Section 9.
+
+## 9. Outcome
+
+Done on 12 October 2026, in one commit after the plan.
+
+**What was built.** `VarkaEmitterFixtures` (Java, 600 lines) holds the helpers: the emitted class
+built and loaded (`Emitted`, `Loaded`), the IR chains, the columns and outputs (`Col`, `Output`),
+the data tables and generators, the cost readings, and the three sweeps, which share one chunk
+loop and fail on the first day that differs. `VarkaEmitterTestBase` is down from 787 lines to 465:
+every member keeps its name and Scala signature and forwards to the Java class, adapting a tuple,
+a Scala function or a default argument; `checkMatrix`, `checkLongMatrix` and `combos` stay whole,
+as do `tripleData` (over the suites' Scala triples) and the three option values, which read
+`VarkaMatrix.base`. No suite changed.
+
+**The data equal.** Before the trait's bodies were replaced, a throwaway suite compared every
+table and generator, Scala against Java, over indices 0 to 4999 and every column, and the
+columns' bytes for every null pattern, length and poisoning: 152,870 comparisons, all equal.
+
+**The suites.** The 17 suites that mix the trait in, on this branch and on master the same
+hour: the same 249 test names with the same outcomes, 232 passed and 17 cancelled (the opt-in
+ones).
+
+**Predictions scored.**
+
+1. **Held.** Every suite passes with the same test count (the gate's two widths recorded below).
+2. **Wrong.** The trait is 465 lines, not under 350: the forwarders kept their documentation, and
+   the long-lane matrix and the type adaptations add more than estimated.
+3. **Held.** The sweeps take the same time: trunc 8.1 seconds against 9.1, calendar 29.5 against
+   30.5, last day 1.2 against 1.2, and the division suite's sweep of all three under both division
+   forms 114 against 117, each suite in its own JVM on the laptop.
+
+**Corrections to the plan.** 3.1 put the trunc levels through `DateTimeUtils`; they are
+`private[sql]` Scala values, read from Java through `DateTimeUtils$.MODULE$`, as
+`VarkaChronoCompiler` does. `makeDateNull` keeps its `MakeDate` type, which a suite reads. The
+suites that mix the trait in are 17, not 18: the eighteenth file named in 1 only mentions it.
+The Java helpers fail with an `IllegalStateException`, not 7.3's `AssertionError`: Spark's
+checkstyle refuses a thrown `Error`, as the other Java test helpers already follow, and ScalaTest
+reports either as a failure with its message. The first gate's lint step caught it.
