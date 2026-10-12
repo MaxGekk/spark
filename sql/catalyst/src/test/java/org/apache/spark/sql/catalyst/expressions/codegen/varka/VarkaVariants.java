@@ -76,14 +76,19 @@ final class VarkaVariants {
     LITERAL_TO_COLUMN("literal to column", true),
     /** The columns in reverse order, the batch alike: input ordinals in slots and words. */
     COLUMNS_RENUMBERED("columns renumbered", false),
-    /** An arm no row of the batch takes, replaced by another tree: code that must not run. */
-    UNTAKEN_ARM("untaken arm replaced", false);
+    /**
+     * An arm no row of the batch takes, replaced by another tree: code that must not run. It may
+     * decline, by a guard the replacement brings: one of its own, unqualified where the arm does
+     * not mask it, or one a node gains by its new place - a producer the replacement puts under a
+     * calendar node - which, the emitter keying nodes by structure, guards every use of it.
+     */
+    UNTAKEN_ARM("untaken arm replaced", true);
 
     /** The name in a failure and in the counts. */
     final String label;
     /**
      * Whether the variant may decline a batch the original answered: only where it changes what
-     * the emitter knows, and then only by a guard the new part brings.
+     * the emitter knows or guards, and then only by a guard the new part brings.
      */
     final boolean mayDecline;
 

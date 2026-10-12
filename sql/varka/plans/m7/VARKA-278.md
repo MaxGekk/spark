@@ -258,3 +258,20 @@ seconds to 4.2 and 2.8.
 Not taken: dropping "copied" until the emitter has an identity-keyed map. It is one variant in
 eight, the plan's own, and the cheaper of the two to keep is the one that will notice the day the
 emitter starts telling one object twice from two equal ones.
+
+**After the merge: an idle hour's run** (12 October 2026). Two findings, both the tests', not the
+emitter's:
+
+* **The untaken-arm variant may decline after all.** A campaign of 24 fuzzer seeds, 30,000 draws
+  a lane each with the variants of every passing draw, failed three seeds, each on an untaken-arm
+  variant that declined. VARKA-279's verdict, replayed on one, said the kernel had to: the
+  replacement, a producer taken from another root of the draw, sat under a calendar node in the
+  replaced arm, gained the producer guard there, and the emitter, keying nodes by structure,
+  guards every use of it, including the live one in the other root. The other two ran with
+  `guardUnderArm` off, where a guard in the replaced arm is not masked by it. So the variant
+  declines by the rule the other two that may decline follow: only with bits of guards it adds.
+* **The planted-bug test depends on the bitmap validity pass.** Under the option matrix, with
+  `validityByBitmap=false` the planted word-liveness bug reaches a different set of words and
+  beside a stranger then fails no tree the plain series passes; the skip list says so for that
+  configuration and the one that turns off the three validity passes. Every other test of the
+  suite passed under all 50 configurations.
