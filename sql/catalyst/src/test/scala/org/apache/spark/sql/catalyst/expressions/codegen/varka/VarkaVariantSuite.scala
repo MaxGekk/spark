@@ -313,7 +313,7 @@ class VarkaVariantSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOw
     val cond = new IsNotNull(new ColumnRef(1))
     val f = new IfElse(cond, t, new ColumnRef(0))
     val pool = Seq[VarkaVectorIR](t, new ColumnRef(1)).asJava
-    def armed(taken: VarkaVariants.Taken) =
+    def armed(taken: VarkaVariants.Taken): java.util.Optional[Variant] =
       VarkaVariants.untakenArm(Seq[VarkaVectorIR](f).asJava, 4, _ => taken, pool, 0)
     val elseOnly = armed(VarkaVariants.Taken.ELSE_ONLY).get.roots.get(0).asInstanceOf[IfElse]
     assert((elseOnly.cond() eq cond) && (elseOnly.elseNode() eq f.elseNode()))

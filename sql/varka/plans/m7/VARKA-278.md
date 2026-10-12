@@ -154,3 +154,77 @@ again in 9.
 2. The variants and the suite at the gate tier, in one commit.
 3. The nightly tier and the fuzzer hook.
 4. Section 9.
+
+## 9. Outcome
+
+Done on 12 October 2026, in two commits after the plan: the variants and the suite at the gate
+tier, then the nightly tier and the fuzzer hook.
+
+**What was built.** `VarkaVariants` (Java) builds the eight variants of 3.1, each a list of roots
+and a plan for its columns (an original column, or a literal slot's value on every row);
+`VarkaVariantCheck` turns a passing case into each variant's case, emits it and compares every
+output with the reference evaluator; `VarkaVariantSuite` runs the int and long series in each
+variant, and `VarkaIrFuzzSuite` the variants of its passing draws. The stranger reads copies of
+the columns at ordinals shifted past the original's, so it shares no column read with the tree
+and still carries its own guards; in the series it is a root of size 1 or 2 by a fixed stride, in
+the fuzzer the draw's next root. An untaken arm's replacement comes from the series' value trees
+to size 2, or the draw's own value subtrees.
+
+**The gate tier**, size 3 under the defaults, one batch per tree by rotation: 3,203 int trees and
+1,382 long, every variant that applies checked (int: beside a child and permuted 3,154, literal
+to column 1,093, the other four 3,203), nothing failed, nothing declined, nothing past the
+class-file cap; 15 seconds for the int lane and 4 for the long in the suite's own JVM. Every
+conditional tree of size 4 (36 int, 18 long) with its untaken arm replaced, on all four batches:
+90 and 45 variants, in under a second, so the untaken arm runs in the gate after all.
+
+**Size 4**, through `dev/varka_series.sh 4 --variants` over 24 JVMs on the laptop: 101,422 int
+trees and 25,816 long, every variant that applies checked (int: beside a child 100,946, literal
+to column 36,424, untaken arm 22; long: 25,730, 10,788 and 13), nothing failed and nothing
+declined, in 226 seconds of wall time.
+
+**The gate**: every step passed, the wide and narrow suites in 827 and 831 seconds, against 853
+and 863 on VARKA-269's branch when it ran size 4 (lint failed once, on a local method's missing
+return type in the shape test, and passed when rerun).
+
+**The fuzzer**: its 300 draws a lane gave 1,845 int variants and 1,900 long, every kind
+represented (untaken arm 40 and 85), all passing; the two random tests went from 0.8 and 0.7
+seconds to 4.2 and 2.8.
+
+**Predictions scored.**
+
+1. **Wrong, cheaper.** In the gate the suite took 134 seconds at each width beside the other
+   suites' JVMs (15 and 4 seconds for its two lanes alone), against 91 and 89 for the series
+   itself: about one and a half times the series, not eight, because a variant meets one batch
+   where the series meets four. In the fuzzer, which gives each variant the draw's own batch,
+   a draw's variants cost about four draws.
+2. **Held.** No failure under the defaults to size 4, at either lane (the admission check had run
+   the int lane only).
+3. **Wrong**, as 2 already found: both answer-changing injectors are caught by the plain series.
+   What the variants add is reach under an injector, not an injector of their own: under
+   `misdescribeWordLiveness` beside a stranger and literal to column fail trees the plain series
+   passes, and the suite holds them to it.
+
+**Corrections to the plan.**
+
+* **3.1's untaken arm was wrong about the other body.** It said the arm stays untaken on the other
+  bodies a batch runs, "since the condition is per row". The other body of a batch with nulls
+  clears them, which can make a condition true that the batch never took: the fuzzer's first run
+  found a draw where `isNotNull(c0)` over an all-null column turned true there, the replaced arm
+  (a bare column) was taken, and its values left the range an enclosing `GuardedRange` was drawn
+  for, which the kernel rightly declined. The variant meets the other body only on a batch with no
+  nulls, where the values and so the conditions are the same.
+* **3.3 said `VarkaKernelCheck` would not change.** The decline rule needs the status, which
+  `runAndCompare` does not return; `runAndCompareStatus` and its long twin return it, beside the
+  existing entry points, which are unchanged for their callers.
+* **"Duplicated" and "copied" meet the same sharing.** The IR nodes are records and the emitter
+  keys its maps on equality, with no identity map, so one object twice and two equal objects look
+  alike to it. Both stay, for a future identity-keyed map.
+* **The nightly takes every tenth fuzzer draw, not each.** At four draws' worth a draw, forty
+  thousand draws a lane would pass the test's twenty-minute cap; `-Dvarka.fuzz.variantsEvery`
+  sets the stride, 1 by default.
+* **Files beyond 4's table:** `VarkaVariantCheck.scala`, the runner both suites share; the series'
+  four batches moved from `VarkaSmallTreeSuite` to `VarkaIrSeries`, unchanged; and
+  `dev/varka_series.sh --variants`, which the nightly script and workflow run. The nightly step is
+  in the fuzz job, which took 12 of its 90 minutes.
+* **The count check holds over a whole series only.** A slice of a sliced run can hold no
+  conditional tree; the conditional test holds the untaken arm to its count instead.
