@@ -915,6 +915,10 @@ output. What building them taught:
   and counts a refusal only where the original's node lacks it. The kernel is emitted again
   under `exactRefusalStatus` to read which guards fired. Moving a literal month
   count into a column is the case that needs it: the column count carries the month-count guard.
+  The untaken-arm variant needs the rule too, though no row takes the replaced arm: the
+  replacement can bring a guard of its own, unqualified where the arm does not mask it, and a
+  node it puts under a calendar node gains the producer guard, which then covers every use of the
+  node, including a live one elsewhere. A fuzz campaign of 24 seeds found all three cases.
 - **The cost is about four draws' worth a draw.** The gate's size 3 is about 20 seconds a width
   at one batch per tree by rotation; size 4 is under four minutes over 24 JVMs on the laptop; the
   fuzzer's 300 draws a lane go from about a second to about four, so the nightly's forty thousand
