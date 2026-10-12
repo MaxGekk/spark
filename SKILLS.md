@@ -41,6 +41,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A drawing of an emitted class is a measurement at a commit, and the timing beside it has one too](sql/varka/skills/benchmarking.md#a-drawing-of-an-emitted-class-is-a-measurement-at-a-commit-and-the-timing-beside-it-has-one-too)
 * [A full-load night flips the power profile, and a regeneration after it measures the profile](sql/varka/skills/benchmarking.md#a-full-load-night-flips-the-power-profile-and-a-regeneration-after-it-measures-the-profile)
 * [A cold comparison prices two things, and a baseline that hashes its subtree flatters whatever replaces it](sql/varka/skills/benchmarking.md#a-cold-comparison-prices-two-things-and-a-baseline-that-hashes-its-subtree-flatters-whatever-replaces-it)
+* [A Java benchmark extends `BenchmarkBase` and declares no `main`](sql/varka/skills/benchmarking.md#a-java-benchmark-extends-benchmarkbase-and-declares-no-main)
 
 #### [Build and environment](sql/varka/skills/build-and-environment.md)
 * [Classpath Shadowing (the stub trap)](sql/varka/skills/build-and-environment.md#classpath-shadowing-the-stub-trap)
