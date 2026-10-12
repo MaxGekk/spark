@@ -232,3 +232,28 @@ still promises a bound its kernel does not carry.
   a configuration without them still tests the guard.
 * **A guard's count is by guard, not by kernel**: `make_date`'s NULL form answers an invalid day
   with a null and never declines.
+
+**Review** (`/code-review` on #735). Seven of eight findings fixed:
+
+* **No valid edge past a bound met the masked body.** A valid edge ran the dense body, and when that
+  declined the check stopped, so the masked body saw past a bound only a null edge. Each valid edge
+  now runs a third way, with the masked body forced.
+* **A status did not say which body returned it**, so a decline the first body must not make
+  passed whenever the second body's verdict required that bit - the rule that a null is never a
+  reason to decline went unchecked for the checked sums. `VarkaKernelCheck.runEachBodyStatus` runs
+  both bodies whatever the first returned and returns each status; each body is held to its own
+  verdict. With the third way, 372 batches, 174 declining in some body, all agreeing.
+* **No kernel took an arm-qualified guard's arm.** The arm test now runs the kernel on the taken
+  arm, which must decline qualified or not, and holds the kernel to what it does on the untaken
+  one: silent when qualified, declining when not - which 9.1 reported but nothing asserted.
+* **The input bound's planted shift moved both ends together**; each end now moves on its own.
+* **One analysis per kernel**: `refusalArmsForTest` becomes `guardsForTest`, returning each guard's
+  reason with its arm chain, read once per kernel (`VarkaGuardSpec.Guards`).
+* **The input bound's harness** is `IntRangeOpsSuite`'s, moved to its companion object, not a copy.
+* **9.1's reason the emitter's bounds cannot move was half wrong.** They are `static final` fields;
+  the narrow range and the month limits are constants javac inlines, but the `make_date` years and
+  the interval limit are computed when `VarkaChrono` loads. Either way a test cannot move them
+  without changing the emitter, so the verdict-side shift stands.
+
+Not taken: `VarkaGuardSpec` in Java. It drives the Scala reference evaluator, for which
+`VarkaKernelCheck` stays Scala; 9.1 records the deviation.

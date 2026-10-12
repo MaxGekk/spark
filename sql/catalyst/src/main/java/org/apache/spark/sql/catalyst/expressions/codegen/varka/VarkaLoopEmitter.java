@@ -198,19 +198,23 @@ public final class VarkaLoopEmitter {
     return Map.copyOf(analyze(List.copyOf(outputs), numInputs, numLiterals, options).refusals);
   }
 
+  /** One guard {@link #guardsForTest} reports: its reason, and the arm chain qualifying it. */
+  record GuardForTest(Analysis.Refusal reason, List<Analysis.ArmStep> arms) {}
+
   /**
-   * For each node {@link #refusalsForTest} reports, the arm chain its guard is qualified by - the
-   * lanes it condemns are those the chain selects, and every lane where the chain is empty - for
-   * the verdict that says which batches a kernel must decline (VARKA-279).
+   * Every node {@link #analyze} guards for {@code outputs}, with its reason and the arm chain
+   * {@link Analysis#armChainOf} qualifies it by - the lanes it condemns are those the chain
+   * selects, and every lane where the chain is empty - from one analysis, for the verdict that
+   * says which batches a kernel must decline (VARKA-279).
    */
-  static Map<VarkaVectorIR, List<Analysis.ArmStep>> refusalArmsForTest(
-      List<VarkaVectorIR> outputs, int numInputs, int numLiterals, VarkaEmitOptions options) {
+  static Map<VarkaVectorIR, GuardForTest> guardsForTest(List<VarkaVectorIR> outputs,
+      int numInputs, int numLiterals, VarkaEmitOptions options) {
     Analysis analysis = analyze(List.copyOf(outputs), numInputs, numLiterals, options);
-    var arms = new HashMap<VarkaVectorIR, List<Analysis.ArmStep>>();
-    for (VarkaVectorIR node : analysis.refusals.keySet()) {
-      arms.put(node, analysis.armChainOf(node));
+    var guards = new HashMap<VarkaVectorIR, GuardForTest>();
+    for (Map.Entry<VarkaVectorIR, Analysis.Refusal> e : analysis.refusals.entrySet()) {
+      guards.put(e.getKey(), new GuardForTest(e.getValue(), analysis.armChainOf(e.getKey())));
     }
-    return Map.copyOf(arms);
+    return Map.copyOf(guards);
   }
 
   /**

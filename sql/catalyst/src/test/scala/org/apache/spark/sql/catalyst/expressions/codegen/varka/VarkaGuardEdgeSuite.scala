@@ -17,7 +17,6 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
-import java.lang.foreign.{Arena, ValueLayout}
 import java.util.concurrent.atomic.AtomicInteger
 
 import scala.jdk.CollectionConverters._
@@ -39,10 +38,12 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
  * node: it is `IntRangeOps.allWithin` in the evaluator, and is driven there.
  *
  * The hand-written edge tests stay as the readable examples; this suite is what makes every guard
- * have them. A planted wrong bound - each end of each guard moved by one, on the verdict's side,
- * since the emitter's bounds are constants javac inlines - must make the suite fail, so it cannot
- * pass vacuously: the edge inputs land exactly on each bound and one past it, so an emitter whose
- * bound were off by one would disagree with the verdict on the same rows.
+ * have them. A planted wrong bound - each end of each guard moved by one, on the verdict's side -
+ * must make the suite fail, so it cannot pass vacuously: the edge inputs land exactly on each
+ * bound and one past it, so an emitter whose bound were off by one would disagree with the
+ * verdict on the same rows. The emitter's side cannot be moved from a test: its bounds are
+ * `static final` fields, the narrow range and the month limits constants javac inlines into the
+ * emitter, the `make_date` years computed when `VarkaChrono` loads.
  */
 class VarkaGuardEdgeSuite extends SparkFunSuite with VarkaMatrixTests {
 
@@ -69,6 +70,8 @@ class VarkaGuardEdgeSuite extends SparkFunSuite with VarkaMatrixTests {
       long: Boolean, filler: Seq[Long], edges: Seq[(String, Seq[Long])], column: Int,
       lits: Array[Long] = Array.empty) {
     def numInputs: Int = filler.size
+    /** The kernel's guards, read once. */
+    lazy val spec = new VarkaGuardSpec.Guards(roots, numInputs, lits.length, options, long)
   }
 
   private val narrowLo = VarkaChrono.NARROW_MIN_DAYS.toLong
@@ -160,9 +163,15 @@ class VarkaGuardEdgeSuite extends SparkFunSuite with VarkaMatrixTests {
   // Running one edge
   // ---------------------------------------------------------------------------------------------
 
-  /** One batch of one guard's edge, the status its kernel returned, and the bodies' rows. */
-  private case class Ran(g: Guarded, label: String, status: Int,
-      bodies: Seq[Seq[Seq[Option[Long]]]])
+  /**
+   * One batch of one guard's edge: each body's status, in the order the check runs them (the
+   * batch's own body, then the other), and each body's rows.
+   */
+  private case class Ran(g: Guarded, label: String, statuses: Seq[Int],
+      bodies: Seq[Seq[Seq[Option[Long]]]]) {
+    def declined: Boolean = statuses.exists(_ != 0)
+    def answered: Boolean = statuses.contains(0)
+  }
 
   private def rowsOf(data: Array[Array[Long]],
       patterns: Seq[Int => Boolean]): Seq[Seq[Option[Long]]] =
@@ -170,48 +179,45 @@ class VarkaGuardEdgeSuite extends SparkFunSuite with VarkaMatrixTests {
       data.indices.map(c => if (patterns(c)(i)) None else Some(data(c)(i)))
     }
 
-  /**
-   * The expected outcome over the bodies the check runs, in order: the first body whose verdict
-   * declines decides, as `runAndCompareStatus` returns the first status that is not 0; a body
-   * that may decline and answered passes on to the next.
-   */
-  private def agrees(status: Int, verdicts: Seq[Verdict]): Boolean = verdicts match {
-    case Seq() => status == 0
-    case v +: rest =>
-      if (v.must != 0) v.admits(status)
-      else if (status != 0 && v.may != 0 && v.admits(status)) true
-      else agrees(status, rest)
-  }
+  /** Whether every body's status is one its own verdict admits. */
+  private def agrees(statuses: Seq[Int], verdicts: Seq[Verdict]): Boolean =
+    statuses.size == verdicts.size && statuses.zip(verdicts).forall { case (s, v) => v.admits(s) }
 
   private def verdicts(r: Ran, shifts: Seq[Shift] = Nil): Seq[Verdict] =
-    r.bodies.map(rows => VarkaGuardSpec.verdict(r.g.roots, r.g.numInputs, r.g.lits, options,
-      r.g.long, rows, shifts))
+    r.bodies.map(rows => VarkaGuardSpec.verdict(r.g.spec, r.g.lits, rows, shifts))
 
-  /** Every edge of `g`, at every position, valid and null, through the emitted kernel. */
+  /**
+   * Every edge of `g`, at every position, three ways: valid in the dense body, valid with the
+   * masked body forced (a null count over a full bitmap), and null in the column that carries it.
+   * Each runs through both bodies, the second whatever the first returned, so the masked body meets
+   * a valid out-of-range edge and the dense one a null edge made valid.
+   */
   private def run(g: Guarded): Seq[Ran] = {
     val className =
       s"org.apache.spark.sql.varka.execution.VarkaGuardEdge${classCounter.incrementAndGet()}"
     val bytes = VarkaLoopEmitter.emit(className, g.roots.asJava, g.numInputs, g.lits.length,
       null, null, options)
-    for ((edge, values) <- g.edges; (at, where) <- positions; nulled <- Seq(false, true)) yield {
+    val ways =
+      Seq((false, false, ""), (false, true, ", masked body forced"), (true, false, ", null"))
+    for ((edge, values) <- g.edges; (at, where) <- positions; (nulled, forced, how) <- ways)
+        yield {
       val data = Array.tabulate(g.numInputs, length) { (c, i) =>
         if (i == at) values(c) else g.filler(c)
       }
       val patterns: Seq[Int => Boolean] = (0 until g.numInputs).map { c =>
         (i: Int) => nulled && c == g.column && i == at
       }
-      val label = s"${g.name} at $edge in $where${if (nulled) ", null" else ""}"
-      val status = if (g.long) {
-        VarkaKernelCheck.runAndCompareLongStatus(label, className, bytes, g.roots, g.numInputs,
-          g.lits, VarkaKernelCheck.LongBatch(length, patterns, data, forceMasked = false),
-          declineAllowed = true)
+      val label = s"${g.name} at $edge in $where$how"
+      val statuses = if (g.long) {
+        VarkaKernelCheck.runEachBodyLongStatus(label, className, bytes, g.roots, g.numInputs,
+          g.lits, VarkaKernelCheck.LongBatch(length, patterns, data, forceMasked = forced))
       } else {
-        VarkaKernelCheck.runAndCompareStatus(label, className, bytes, g.roots, g.numInputs,
+        VarkaKernelCheck.runEachBodyStatus(label, className, bytes, g.roots, g.numInputs,
           g.lits.map(_.toInt), VarkaKernelCheck.Batch(length, patterns,
-            data.map(_.map(_.toInt)), forceMasked = false), declineAllowed = true)
+            data.map(_.map(_.toInt)), forceMasked = forced))
       }
-      val other = VarkaKernelCheck.otherBody(g.numInputs, length, patterns, false).map(_._1)
-      Ran(g, label, status, (patterns +: other.toSeq).map(p => rowsOf(data, p)))
+      val other = VarkaKernelCheck.otherBody(g.numInputs, length, patterns, forced).map(_._1)
+      Ran(g, label, statuses, (patterns +: other.toSeq).map(p => rowsOf(data, p)))
     }
   }
 
@@ -223,18 +229,19 @@ class VarkaGuardEdgeSuite extends SparkFunSuite with VarkaMatrixTests {
 
   test("every guard declines one past its bound and answers at it, in a full vector lane and " +
       "the epilogue lane, valid and null, through both bodies") {
-    val wrong = ran.filterNot(r => agrees(r.status, verdicts(r)))
+    val wrong = ran.filterNot(r => agrees(r.statuses, verdicts(r)))
     assert(wrong.isEmpty, s"${wrong.size} of ${ran.size} edge batches disagree with the " +
       "verdict:\n" + wrong.take(20).map(r =>
-        s"${r.label}: status ${r.status}, verdicts ${verdicts(r).mkString(", ")}").mkString("\n"))
+        s"${r.label}: statuses ${r.statuses.mkString(", ")}, verdicts " +
+          verdicts(r).mkString(", ")).mkString("\n"))
     // Counted, not assumed: every guard both declined and answered somewhere. By guard, not by
     // kernel: make_date's NULL form answers an invalid day with a null and never declines it.
     for ((reason, rs) <- ran.groupBy(_.g.reason)) {
-      assert(rs.exists(_.status != 0), s"$reason: no edge declined")
-      assert(rs.exists(_.status == 0), s"$reason: no edge was answered")
+      assert(rs.exists(_.declined), s"$reason: no edge declined")
+      assert(rs.exists(_.answered), s"$reason: no edge was answered")
     }
     logInfo(s"${ran.size} edge batches over ${guarded.size} guarded kernels, " +
-      s"${ran.count(_.status != 0)} declined")
+      s"${ran.count(_.declined)} declined in some body")
   }
 
   test("a bound moved by one on the verdict's side fails the edges, at each end of each guard") {
@@ -246,7 +253,7 @@ class VarkaGuardEdgeSuite extends SparkFunSuite with VarkaMatrixTests {
     for (reason <- reasons; (lo, hi) <- Seq((1L, 0L), (-1L, 0L), (0L, 1L), (0L, -1L))) {
       val shifted = Seq(Shift(reason, lo, hi))
       val caught = ran.filter(_.g.reason == reason)
-        .exists(r => !agrees(r.status, verdicts(r, shifted)))
+        .exists(r => !agrees(r.statuses, verdicts(r, shifted)))
       assert(caught, s"$reason with its bound moved by ($lo, $hi) still agrees with every edge")
       shifts += 1
     }
@@ -259,9 +266,11 @@ class VarkaGuardEdgeSuite extends SparkFunSuite with VarkaMatrixTests {
 
   test("a guard under an arm no row takes is masked when qualified, and may decline when not") {
     // if (c0 > c2) guardedRange(c1, -1000, 1000) else c2, on a batch with no nulls, so both
-    // bodies see the same values: row 3 takes the else arm with c1 out of range, row 5 the then
-    // arm in range. Qualified by its arm, the guard must not fire on row 3; unqualified
-    // (guardUnderArm off) it fires there, which the verdict allows and does not require.
+    // bodies see the same values: row 3 takes the else arm with c1 out of range, every other row
+    // the then arm in range. Qualified by its arm, the guard must not fire on row 3; unqualified
+    // (guardUnderArm off) it fires there, which the verdict allows and does not require - and the
+    // kernel is held to what it does, so neither case passes vacuously. Taking the then arm out
+    // of range must decline, qualified or not.
     val g = new GuardedRange(new ColumnRef(1), -1000L, 1000L)
     val root = new IfElse(new Compare(CompareOp.GT, new ColumnRef(0), new ColumnRef(2)), g,
       new ColumnRef(2))
@@ -270,27 +279,40 @@ class VarkaGuardEdgeSuite extends SparkFunSuite with VarkaMatrixTests {
       case 1 => if (i == 3) 5000L else i.toLong
       case _ => 2L
     }
-    val data = Array.tabulate(3, length)((c, i) => value(c)(i))
+    val untaken = Array.tabulate(3, length)((c, i) => value(c)(i))
+    val taken = Array.tabulate(3, length)((c, i) => if (c == 1 && i == 5) 5000L else value(c)(i))
     val none: Seq[Int => Boolean] = Seq.fill(3)((_: Int) => false)
-    val rows = rowsOf(data, none)
-    for ((under, expected) <- Seq(true -> VarkaGuardSpec.Answer,
-        false -> Verdict(0, VarkaFusedKernel.STATUS_VALUE_RANGE))) {
-      val o = options.withGuardUnderArm(under)
-      val verdict = VarkaGuardSpec.verdict(Seq(root), 3, Array.empty, o, long = false, rows)
-      assert(verdict == expected, s"guardUnderArm=$under: verdict $verdict")
+    val bit = VarkaFusedKernel.STATUS_VALUE_RANGE
+    def statuses(o: VarkaEmitOptions, data: Array[Array[Long]], label: String): Seq[Int] = {
       val name =
         s"org.apache.spark.sql.varka.execution.VarkaGuardArm${classCounter.incrementAndGet()}"
       val bytes = VarkaLoopEmitter.emit(name, Seq[VarkaVectorIR](root).asJava, 3, 0, null, null, o)
-      val status = VarkaKernelCheck.runAndCompareStatus(s"guardUnderArm=$under", name, bytes,
-        Seq(root), 3, Array.empty, VarkaKernelCheck.Batch(length, none, data.map(_.map(_.toInt)),
-          forceMasked = false), declineAllowed = true)
-      assert(verdict.admits(status), s"guardUnderArm=$under: status $status, verdict $verdict")
+      VarkaKernelCheck.runEachBodyStatus(label, name, bytes, Seq(root), 3, Array.empty,
+        VarkaKernelCheck.Batch(length, none, data.map(_.map(_.toInt)), forceMasked = false))
     }
-    // The then arm taken out of range must decline, qualified or not.
-    val taken = rowsOf(Array.tabulate(3, length)((c, i) =>
-      if (c == 1 && i == 5) 5000L else value(c)(i)), none)
-    assert(VarkaGuardSpec.verdict(Seq(root), 3, Array.empty, options, long = false, taken) ==
-      Verdict(VarkaFusedKernel.STATUS_VALUE_RANGE, 0))
+    for ((under, expected, kernelBits) <- Seq((true, VarkaGuardSpec.Answer, 0),
+        (false, Verdict(0, bit), bit))) {
+      val o = options.withGuardUnderArm(under)
+      val label = s"guardUnderArm=$under, the arm untaken"
+      val verdict = VarkaGuardSpec.verdict(Seq(root), 3, Array.empty, o, long = false,
+        rowsOf(untaken, none))
+      assert(verdict == expected, s"$label: verdict $verdict")
+      val st = statuses(o, untaken, label)
+      assert(st.forall(verdict.admits), s"$label: statuses $st, verdict $verdict")
+      assert(st.forall(_ == kernelBits),
+        s"$label: statuses $st, the kernel should give $kernelBits")
+    }
+    for (under <- Seq(true, false)) {
+      val o = options.withGuardUnderArm(under)
+      val label = s"guardUnderArm=$under, the arm taken"
+      // Row 5 takes the then arm out of range, so the bit is a must; with the guard unqualified,
+      // row 3's untaken value adds it as a may as well.
+      val verdict = VarkaGuardSpec.verdict(Seq(root), 3, Array.empty, o, long = false,
+        rowsOf(taken, none))
+      assert(verdict.must == bit, s"$label: verdict $verdict")
+      val st = statuses(o, taken, label)
+      assert(st.forall(_ == bit), s"$label: statuses $st")
+    }
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -302,36 +324,23 @@ class VarkaGuardEdgeSuite extends SparkFunSuite with VarkaMatrixTests {
     // CAST(i AS INTERVAL DAY)'s bound, as VarkaChronoCompiler records it: the evaluator declines
     // a batch with a live lane outside it before the kernel runs (IntRangeOps.allWithin).
     val limit = VarkaChrono.INTERVAL_DAY_LIMIT_DAYS
-    def within(at: Int, value: Long, nulled: Boolean): Boolean = {
-      val arena = Arena.ofConfined()
-      try {
-        val data = arena.allocate(length * 4L, 8)
-        val validity = arena.allocate(((length + 63) / 64) * 8L, 8)
-        validity.fill(0.toByte)
-        for (i <- 0 until length) {
-          data.set(ValueLayout.JAVA_INT, i * 4L, if (i == at) value.toInt else 7)
-          if (!(nulled && i == at)) {
-            val b = validity.get(ValueLayout.JAVA_BYTE, i / 8L)
-            validity.set(ValueLayout.JAVA_BYTE, i / 8L, (b | (1 << (i % 8))).toByte)
-          }
-        }
-        IntRangeOps.allWithin(data.address(), if (nulled) validity.address() else 0L,
-          if (nulled) 1 else 0, length, -limit, limit)
-      } finally {
-        arena.close()
-      }
-    }
-    for (shift <- Seq(0L, 1L, -1L)) {
+    def within(at: Int, value: Long, nulled: Boolean): Boolean =
+      IntRangeOpsSuite.allWithin(Array.tabulate(length)(i => if (i == at) value.toInt else 7),
+        i => nulled && i == at, -limit, limit)
+    // The bound as written, then each end moved by one each way on the expectation's side: every
+    // move must turn some edge against it, so neither end is checked vacuously.
+    for ((dLo, dHi) <- Seq((0L, 0L), (1L, 0L), (-1L, 0L), (0L, 1L), (0L, -1L))) {
       val cases = for ((label, v) <- around(-limit.toLong, limit.toLong);
           (at, where) <- positions; nulled <- Seq(false, true)) yield {
-        val expected = nulled || (v >= -limit - shift && v <= limit + shift)
+        val expected = nulled || (v >= -limit + dLo && v <= limit + dHi)
         (s"$label in $where${if (nulled) ", null" else ""}", within(at, v, nulled) == expected)
       }
-      if (shift == 0) {
+      if (dLo == 0 && dHi == 0) {
         val wrong = cases.filterNot(_._2)
         assert(wrong.isEmpty, s"the input bound disagrees at: ${wrong.map(_._1).mkString("; ")}")
       } else {
-        assert(cases.exists(!_._2), s"the input bound moved by $shift agrees with every edge")
+        assert(cases.exists(!_._2),
+          s"the input bound moved by ($dLo, $dHi) agrees with every edge")
       }
     }
   }

@@ -32,11 +32,11 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
  * outside it the batch must go to Spark. The reference evaluator has no notion of a declined
  * batch; this is its counterpart, and the suites hold a kernel's status to it.
  *
- * Per row, for every node the emitter guards (`VarkaLoopEmitter.refusalsForTest`, under the
- * options the kernel is emitted with), the guard fires when the node's operands are valid and its
- * checked value is outside the bound. A fired guard is then read by the rule `Analysis` applies:
+ * Per row, for every node the emitter guards (`VarkaLoopEmitter.guardsForTest`, under the options
+ * the kernel is emitted with), the guard fires when the node's operands are valid and its checked
+ * value is outside the bound. A fired guard is then read by the rule `Analysis` applies:
  *
- *  - qualified by an arm chain (`refusalArmsForTest`, non-empty): it condemns the row only where
+ *  - qualified by an arm chain (non-empty): it condemns the row only where
  *    the chain selects it, and then the row **must** be declined; elsewhere the arm masks it and
  *    the row must be answered;
  *  - unqualified: where the row reaches the node through arms it takes, it **must** be declined;
@@ -82,19 +82,28 @@ object VarkaGuardSpec {
   final case class Shift(reason: Analysis.Refusal, lo: Long, hi: Long)
 
   /**
-   * The verdict on a batch of `rows` (each a value or None per column) for the kernel `roots`
-   * emitted under `options`, at the long lane where `long`.
+   * A kernel's guards, read once: `roots` emitted under `options`, at the long lane where `long`,
+   * and each guarded node's reason and arm chain.
    */
+  final class Guards(val roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int,
+      options: VarkaEmitOptions, val long: Boolean) {
+    val guards: Seq[(VarkaVectorIR, Analysis.Refusal, Seq[Analysis.ArmStep])] =
+      VarkaLoopEmitter.guardsForTest(roots.asJava, numInputs, numLiterals, options).asScala.toSeq
+        .map { case (node, g) => (node, g.reason(), g.arms().asScala.toSeq) }
+  }
+
+  /** The verdict on a batch of `rows` (each a value or None per column) for the kernel `g`. */
+  def verdict(g: Guards, lits: Array[Long], rows: Seq[Seq[Option[Long]]],
+      shifts: Seq[Shift]): Verdict =
+    rows.foldLeft(Answer) { (v, row) =>
+      v | rowVerdict(g, new Values(row, lits, g.long), shifts)
+    }
+
+  /** [[verdict]] for a kernel whose guards are read for this one call. */
   def verdict(roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Long],
       options: VarkaEmitOptions, long: Boolean, rows: Seq[Seq[Option[Long]]],
-      shifts: Seq[Shift] = Nil): Verdict = {
-    val guards = VarkaLoopEmitter.refusalsForTest(roots.asJava, numInputs, lits.length, options)
-      .asScala.toSeq
-    val arms = VarkaLoopEmitter.refusalArmsForTest(roots.asJava, numInputs, lits.length, options)
-    rows.foldLeft(Answer) { (v, row) =>
-      v | rowVerdict(roots, guards, arms.asScala, new Values(row, lits, long), long, shifts)
-    }
-  }
+      shifts: Seq[Shift] = Nil): Verdict =
+    verdict(new Guards(roots, numInputs, lits.length, options, long), lits, rows, shifts)
 
   /** The reference evaluator's values and conditions on one row, at one lane. */
   private final class Values(row: Seq[Option[Long]], lits: Array[Long], long: Boolean) {
@@ -110,15 +119,12 @@ object VarkaGuardSpec {
       else VarkaReferenceEvaluator.evalCond(cond, ints, intLits).contains(true)
   }
 
-  private def rowVerdict(roots: Seq[VarkaVectorIR], guards: Seq[(VarkaVectorIR, Analysis.Refusal)],
-      arms: scala.collection.Map[VarkaVectorIR, java.util.List[Analysis.ArmStep]], values: Values,
-      long: Boolean, shifts: Seq[Shift]): Verdict = {
-    lazy val live = reached(roots, values)
-    guards.foldLeft(Answer) { case (v, (node, reason)) =>
-      if (!fires(node, reason, values, long, shifts)) {
+  private def rowVerdict(g: Guards, values: Values, shifts: Seq[Shift]): Verdict = {
+    lazy val live = reached(g.roots, values)
+    g.guards.foldLeft(Answer) { case (v, (node, reason, chain)) =>
+      if (!fires(node, reason, values, g.long, shifts)) {
         v
       } else {
-        val chain = arms.get(node).map(_.asScala.toSeq).getOrElse(Nil)
         if (chain.nonEmpty) {
           val selected = chain.forall(s => values.holds(s.node().cond()) == s.thenBranch())
           if (selected) v | Verdict(reason.status, 0) else v

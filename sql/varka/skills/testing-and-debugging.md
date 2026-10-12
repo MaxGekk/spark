@@ -932,14 +932,19 @@ guard at `lo - 1`, `lo`, `hi` and `hi + 1`. What it took:
 
 - **Read the qualification from `Analysis`, do not reconstruct it.** Under an `IfElse` arm a
   guard is masked by the arm only where every use of its node agrees on one arm chain; a node also
-  used outside the arm, or inside a condition, condemns every lane. `refusalArmsForTest` returns
-  `armChainOf` for each refusing node, so the verdict applies exactly the rule the emitter does.
-- **A bound in a `static final` constant cannot be moved from a test.** javac inlines it into the
-  emitter's bytecode. The planted wrong bound therefore moves the verdict's bound by one instead,
-  which proves the same thing: the edge inputs sit exactly on each bound and one past it.
+  used outside the arm, or inside a condition, condemns every lane. `guardsForTest` returns each
+  refusing node's reason with its `armChainOf`, so the verdict applies exactly the rule the emitter does.
+- **A bound in a `static final` field cannot be moved from a test.** The narrow range and the
+  month limits are constants javac inlines into the emitter; the `make_date` years are computed
+  when `VarkaChrono` loads; neither can change under a running suite. The planted wrong bound
+  therefore moves the verdict's bound by one instead, which proves the same thing: the edge
+  inputs sit exactly on each bound and one past it.
+- **Hold each body to its own verdict.** A status from `runAndCompareStatus` does not say which
+  body returned it, so a decline the first body must not make can hide behind one the second
+  must; `runEachBodyStatus` runs both and returns both. And force the masked body on a valid edge,
+  or a decline in the dense body stops the check before the masked body sees past the bound.
 - **One batch covers the null edge and the valid edge.** `VarkaKernelCheck` poisons a null lane,
-  and the other body clears the nulls, so the same data then makes the edge row valid; the
-  expected status is the first body's verdict if it declines, else the other body's.
+  and the other body clears the nulls, so the same data then makes the edge row valid.
 - **Force the guards a configuration can switch off.** Under the option matrix a configuration may
   turn off `checkIntOverflow` or `guardDayProducers`, and the kernel would lose the very guard
   under test; the suite sets both on over the matrix's options.

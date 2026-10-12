@@ -152,6 +152,35 @@ object VarkaKernelCheck {
   }
 
   /**
+   * The batch through each of the kernel's bodies, its own and then [[otherBody]]'s, whatever the
+   * first returned: each body's status, its rows compared where the status is 0. For a caller that
+   * holds each body to its own expectation, as the guard verdict does (VARKA-279): a status from
+   * [[runAndCompareStatus]] does not say which body returned it.
+   */
+  def runEachBodyStatus(context: String, className: String, bytes: Array[Byte],
+      roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Int], batch: Batch): Seq[Int] =
+    each(context, numInputs, batch.length, batch.patterns, batch.forceMasked) {
+      (label, patterns, forced) => runBatch(label, className, bytes, roots, numInputs, lits,
+        batch.copy(patterns = patterns, forceMasked = forced), declineAllowed = true, None)
+    }
+
+  /** [[runEachBodyStatus]] at the long lane. */
+  def runEachBodyLongStatus(context: String, className: String, bytes: Array[Byte],
+      roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Long], batch: LongBatch): Seq[Int] =
+    each(context, numInputs, batch.length, batch.patterns, batch.forceMasked) {
+      (label, patterns, forced) => runLongBatch(label, className, bytes, roots, numInputs, lits,
+        batch.copy(patterns = patterns, forceMasked = forced), declineAllowed = true, None)
+    }
+
+  /** `run` over the batch's own body and then [[otherBody]]'s, each status in that order. */
+  private def each(context: String, numInputs: Int, length: Int, patterns: Seq[Int => Boolean],
+      forceMasked: Boolean)(run: (String, Seq[Int => Boolean], Boolean) => Int): Seq[Int] =
+    run(context, patterns, forceMasked) +:
+      otherBody(numInputs, length, patterns, forceMasked).toSeq.map {
+        case (p, forced) => run(s"$context (the other body)", p, forced)
+      }
+
+  /**
    * The batch through `run` - its own body - and, once that compared, the same values through
    * [[otherBody]], so both of a kernel's bodies meet the oracle: each run's status, the second 0
    * where it did not run. `run` takes the context, the null patterns and whether the masked body
