@@ -21,9 +21,11 @@
 # hand and the larger ones: size 5, 3.76 million trees at both lanes, eleven and a half minutes
 # over 12 JVMs on the laptop (VARKA-269.md 9), and size 6, about thirty times as many, in an idle
 # window. JVMs and not threads, because the emitter is not shown safe to call from several threads
-# (row 307).
+# (row 307). --variants runs VarkaVariantSuite instead, each tree in the eight variants of
+# VARKA-278 (-Dvarka.variants.size), which the nightly takes to size 4.
 #
 #   dev/varka_series.sh 5                    # size 5 over one JVM per core
+#   dev/varka_series.sh 4 --variants         # every tree to size 4 in each variant
 #   dev/varka_series.sh 5 --jvms 12          # over 12
 #   dev/varka_series.sh 5 --all-batches      # every tree meets all four batches
 #   dev/varka_series.sh 6 --skip-build       # reuse the last build's classpath
@@ -44,9 +46,16 @@ size=$1; shift
 jvms=$(nproc)
 build=1
 batches=false
+suite=VarkaSmallTreeSuite
+prefix=series
+logs=slice
+filter="matches the reference evaluator"
 while [ $# -gt 0 ]; do
   case "$1" in
     --jvms) jvms=$2; shift 2 ;;
+    --variants)
+      suite=VarkaVariantSuite; prefix=variants; logs=variants-slice
+      filter="in each variant"; shift ;;
     --all-batches) batches=true; shift ;;
     --skip-build) build=0; shift ;;
     -h|--help) usage ;;
@@ -67,7 +76,7 @@ fi
 grep -q scalatest "$OUT/classpath" 2>/dev/null || { echo "no classpath in $OUT" >&2; exit 1; }
 CP=$(cat "$OUT/classpath")
 
-echo "== size $size over $jvms JVMs, all batches: $batches"
+echo "== $suite, size $size over $jvms JVMs, all batches: $batches"
 pids=()
 for k in $(seq 0 $((jvms - 1))); do
   # A slice of size 6 runs for hours: past SparkFunSuite's twenty-minute cap on a test body and
@@ -76,12 +85,12 @@ for k in $(seq 0 $((jvms - 1))); do
   java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED -Xmx4g \
     -Dspark.testing=1 -Dspark.test.home="$ROOT" -Dvarka.ownJvm=true \
     -Dspark.test.timeout=1440 -Dvarka.test.watchdog.minutes=1440 \
-    -Dvarka.series.size="$size" -Dvarka.series.slice="$k/$jvms" \
-    -Dvarka.series.allBatches="$batches" \
+    -D"varka.$prefix.size=$size" -Dvarka.series.slice="$k/$jvms" \
+    -D"varka.$prefix.allBatches=$batches" \
     -cp "$CP" org.scalatest.tools.Runner -oW \
-    -s org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSmallTreeSuite \
-    -z "matches the reference evaluator" \
-    > "$OUT/slice-$k.log" 2>&1 &
+    -s "org.apache.spark.sql.catalyst.expressions.codegen.varka.$suite" \
+    -z "$filter" \
+    > "$OUT/$logs-$k.log" 2>&1 &
   pids+=($!)
 done
 
@@ -91,8 +100,8 @@ for k in "${!pids[@]}"; do
   if wait "${pids[$k]}"; then
     echo "slice $k: passed"
   else
-    echo "slice $k: FAILED ($OUT/slice-$k.log)"; failed=1
+    echo "slice $k: FAILED ($OUT/$logs-$k.log)"; failed=1
   fi
 done
-grep -h -E "Tests: succeeded|FAILED \*\*\*" "$OUT"/slice-*.log | sort | uniq -c
+grep -h -E "Tests: succeeded|FAILED \*\*\*" "$OUT/$logs"-*.log | sort | uniq -c
 exit $failed

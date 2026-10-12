@@ -890,6 +890,40 @@ the emitter against the reference evaluator. Three things decided how it is buil
 To size 5 nothing failed, at either lane. A planted bug (`misdescribeWordLiveness`) fails it by
 size 3, which is what shows a green run means something.
 
+## A tree in other company: variants whose answers follow from its own
+
+VARKA-278. `VarkaVariantSuite` emits every small tree that passes alone again in eight variants
+(`VarkaVariants`: beside a child, permuted, duplicated, copied, beside a stranger, literal to
+column, columns renumbered, untaken arm replaced), and `VarkaIrFuzzSuite` does the same with its
+passing draws; each variant is compared with the reference evaluator, never with the original's
+output. What building them taught:
+
+- **A variant that holds for one batch's nulls must not meet the other body.** The untaken-arm
+  variant replaces an `IfElse` arm no row of the batch takes. `VarkaKernelCheck` then runs the
+  batch again through the other body, which for a batch with nulls clears every null - and a
+  condition such as `isNotNull(c0)` over an all-null column turns true, the replaced arm is
+  taken, and its values leave the range an enclosing `GuardedRange` was drawn for, so the kernel
+  rightly declines. The fuzzer's first run found it, and review found the same at one row, where
+  a null-free batch's other body is every column null. So the arm oracle reads each condition
+  over both batches the check runs, and an arm counts as untaken only if neither takes it.
+- **"Duplicated" and "copied" reach the same sharing today.** The IR nodes are records and the
+  emitter keys every map on equality, with no `IdentityHashMap`, so one node object twice and two
+  equal objects look alike to it. Both stay, so that a future identity-keyed map meets both.
+- **A decline is allowed only by the guards a variant adds, found by position, not identity.** A
+  rewrite rebuilds every ancestor of what it changes, so by identity a guard the original already
+  had on that path looks new; `addedRefusalBits` pairs the variant's nodes with the original's
+  and counts a refusal only where the original's node lacks it. The kernel is emitted again
+  under `exactRefusalStatus` to read which guards fired. Moving a literal month
+  count into a column is the case that needs it: the column count carries the month-count guard.
+- **The cost is about four draws' worth a draw.** The gate's size 3 is about 20 seconds a width
+  at one batch per tree by rotation; size 4 is under four minutes over 24 JVMs on the laptop; the
+  fuzzer's 300 draws a lane go from about a second to about four, so the nightly's forty thousand
+  take the variants of every tenth.
+
+To size 4 nothing failed and nothing declined, at either lane. Under the planted
+`misdescribeWordLiveness`, beside a stranger and literal to column fail trees the plain series
+passes, which is what shows the variants reach something the series alone does not.
+
 ## The emitter is called from several threads, so a test holds it to that
 
 VARKA-307. `VarkaEmittedBytesSuite` hashes every shape twenty times, once per pinned arm and

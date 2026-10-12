@@ -131,6 +131,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [The coverage of emitted classes: one JaCoCo builder per class, and the agent into own-JVM suites](sql/varka/skills/testing-and-debugging.md#the-coverage-of-emitted-classes-one-jacoco-builder-per-class-and-the-agent-into-own-jvm-suites)
 * [A solver proves an arithmetic lowering in integers, and its verdicts are checked like output](sql/varka/skills/testing-and-debugging.md#a-solver-proves-an-arithmetic-lowering-in-integers-and-its-verdicts-are-checked-like-output)
 * [Every small tree, counted in grammar productions, beside the random fuzzer](sql/varka/skills/testing-and-debugging.md#every-small-tree-counted-in-grammar-productions-beside-the-random-fuzzer)
+* [A tree in other company: variants whose answers follow from its own](sql/varka/skills/testing-and-debugging.md#a-tree-in-other-company-variants-whose-answers-follow-from-its-own)
 * [The emitter is called from several threads, so a test holds it to that](sql/varka/skills/testing-and-debugging.md#the-emitter-is-called-from-several-threads-so-a-test-holds-it-to-that)
 * [Error Prone and NullAway run beside the build, and the pending list only shrinks](sql/varka/skills/testing-and-debugging.md#error-prone-and-nullaway-run-beside-the-build-and-the-pending-list-only-shrinks)
 
