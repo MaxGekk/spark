@@ -19,9 +19,11 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
+import scala.util.Random
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaIrGrammar._
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
+import org.apache.spark.sql.catalyst.util.DateTimeUtils
 
 /**
  * Every well-typed IR tree up to a size, by sort (VARKA-269): the series `VarkaSmallTreeSuite`
@@ -347,5 +349,67 @@ object VarkaIrSeries {
       values(n).flatMap { g =>
         if (g.bound <= Int.MaxValue) Iterator(g.node, new NarrowLane(g.node)) else Iterator(g.node)
       } ++ conds(n)
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // The batches
+  // ---------------------------------------------------------------------------------------------
+
+  /** One batch: its name in a failure, the batch and the literal slot's value. */
+  final case class IntBatch(name: String, batch: VarkaKernelCheck.Batch, lits: Array[Int])
+  final case class LongBatch(name: String, batch: VarkaKernelCheck.LongBatch, lits: Array[Long])
+
+  private val none: Int => Boolean = _ => false
+  private val all: Int => Boolean = _ => true
+  private val every5th: Int => Boolean = i => i % 5 == 0
+  private val alternating: Int => Boolean = i => i % 2 == 1
+
+  /**
+   * The four batches the series runs on (`VarkaSmallTreeSuite`, `VarkaVariantSuite`), drawn
+   * once from a fixed seed inside each column's bounds: every fifth row null at length 17, no
+   * null at 64 (the check adds its forced-masked twin), a pattern per column at 33, and every
+   * row null at 7.
+   */
+  lazy val intBatches: Seq[IntBatch] = {
+    val rnd = new Random(20261011L)
+    def column(c: Int, length: Int): Array[Int] = Array.fill(length) {
+      if (c == LevelColumn) {
+        DateTimeUtils.TRUNC_TO_WEEK +
+          rnd.nextInt(DateTimeUtils.TRUNC_TO_YEAR - DateTimeUtils.TRUNC_TO_WEEK + 1)
+      } else {
+        val bound = if (c == SmallColumn) VarkaChrono.MONTH_ARITH_MAX_MONTHS
+          else VarkaIrGrammar.columnBound.toInt
+        rnd.nextInt(2 * bound + 1) - bound
+      }
+    }
+    def batch(name: String, length: Int, patterns: Seq[Int => Boolean]): IntBatch = {
+      val data = Array.tabulate(NumInputs)(column(_, length))
+      val bound = VarkaIrGrammar.literalBound
+      IntBatch(name, VarkaKernelCheck.Batch(length, patterns, data, forceMasked = false),
+        Array.fill(Literals)(rnd.nextInt(2 * bound + 1) - bound))
+    }
+    val cols = NumInputs
+    Seq(
+      batch("17 every-5th", 17, Seq.fill(cols)(every5th)),
+      batch("64 null-free", 64, Seq.fill(cols)(none)),
+      batch("33 per-column", 33, Seq(alternating, every5th, none, all)),
+      batch("7 all-null", 7, Seq.fill(cols)(all)))
+  }
+
+  lazy val longBatches: Seq[LongBatch] = {
+    val rnd = new Random(20261012L)
+    def draw(bound: Long): Long = Math.floorMod(rnd.nextLong(), 2 * bound + 1) - bound
+    def batch(name: String, length: Int, patterns: Seq[Int => Boolean]): LongBatch = {
+      val data = Array.fill(LongNumInputs, length)(
+        draw(VarkaIrGrammar.longColumnBound))
+      LongBatch(name, VarkaKernelCheck.LongBatch(length, patterns, data, forceMasked = false),
+        Array.fill(Literals)(draw(VarkaIrGrammar.longLiteralBound)))
+    }
+    val cols = LongNumInputs
+    Seq(
+      batch("17 every-5th", 17, Seq.fill(cols)(every5th)),
+      batch("64 null-free", 64, Seq.fill(cols)(none)),
+      batch("33 per-column", 33, Seq(alternating, all)),
+      batch("7 all-null", 7, Seq.fill(cols)(all)))
   }
 }

@@ -93,7 +93,9 @@ jobs:
     # One JVM per core, each with its own seed and log, waited on by process id, which exits
     # on every path (sql/varka/skills/testing-and-debugging.md, "A fuzz campaign is sixteen
     # JVMs, not one sbt"). The iteration count keeps each lane well under the suite's
-    # twenty-minute cap per test at a runner's rate of about a hundred trees a second.
+    # twenty-minute cap per test at a runner's rate of about a hundred trees a second. Every
+    # tenth passing draw is also run in each of its variants (VARKA-278), which costs about four
+    # draws' worth each, so the variants add about half to the step.
     - name: Run the IR fuzzer, one JVM per core
       env:
         ITERATIONS: ${{ inputs.iterations || '40000' }}
@@ -110,6 +112,7 @@ jobs:
           java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
             -Dspark.testing=1 -Dspark.test.home="$GITHUB_WORKSPACE" \
             -Dvarka.fuzz.iterations="$ITERATIONS" -Dvarka.fuzz.seed="$seed" \
+            -Dvarka.fuzz.variantsEvery=10 \
             -cp "$CP" org.scalatest.tools.Runner -oW \
             -s org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaIrFuzzSuite \
             > "target/fuzz/ir-$seed.log" 2>&1 &
@@ -151,6 +154,39 @@ jobs:
           grep -E "Tests: succeeded|FAILED" "target/fuzz/compositions-$seed.log" || true
         } | tee -a "$GITHUB_STEP_SUMMARY"
         exit "$status"
+    # Every small tree to size 4 in each of the eight variants of VARKA-278, one JVM per core,
+    # each taking every n-th tree. Size 3 runs in pull requests; size 4 is a few minutes here.
+    - name: Run every tree's variants to size 4, one JVM per core
+      run: |
+        set -uo pipefail
+        CP="$(cat target/catalyst-test-classpath.txt)"
+        cores="$(nproc)"
+        mkdir -p target/fuzz/variants
+        pids=()
+        for k in $(seq 0 $((cores - 1))); do
+          java --add-modules jdk.incubator.vector --enable-native-access=ALL-UNNAMED \
+            -Dspark.testing=1 -Dspark.test.home="$GITHUB_WORKSPACE" -Dvarka.ownJvm=true \
+            -Dspark.test.timeout=60 -Dvarka.test.watchdog.minutes=60 \
+            -Dvarka.variants.size=4 -Dvarka.series.slice="$k/$cores" \
+            -cp "$CP" org.scalatest.tools.Runner -oW \
+            -s org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVariantSuite \
+            -z "in each variant" \
+            > "target/fuzz/variants/slice-$k.log" 2>&1 &
+          pids+=($!)
+        done
+        failed=0
+        for k in "${!pids[@]}"; do
+          if wait "${pids[$k]}"; then
+            echo "slice $k: passed"
+          else
+            echo "slice $k: FAILED"; failed=1
+          fi
+        done
+        {
+          echo "## Every small tree to size 4 in each variant: $cores JVMs"
+          grep -h -E "Tests: succeeded|FAILED" target/fuzz/variants/slice-*.log | sort | uniq -c
+        } | tee -a "$GITHUB_STEP_SUMMARY"
+        exit $failed
     - name: Keep the logs
       if: always()
       uses: actions/upload-artifact@v4
