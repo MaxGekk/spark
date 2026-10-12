@@ -1,0 +1,71 @@
+Narrow-width companion of VarkaGroupingBenchmark-jdk25-results.txt: the same benchmark under
+-XX:MaxVectorSize=16 (128-bit lanes), written by dev/varka_bench_regen.sh.
+  benchmark:   org.apache.spark.sql.VarkaGroupingBenchmark
+  commit:      cdf6fdd66b7
+  date:        2026-10-12T14:57:46Z
+  jdk:         OpenJDK Runtime Environment (build 25.0.4.1+1-1-26.04.4-Ubuntu)
+  kernel:      7.0.0-34-generic
+  cpu:         AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+  power:       governor=performance epp=performance profile=performance
+  pinned to:   taskset -c 0,12,13,14,15,1,2,3
+  load at start: 0.70
+  canary:      ok (compute -1.5% cache -1.5% memory -1.1% )
+  wide run:    SPARK_GENERATE_BENCHMARK_FILES=1 taskset -c 0,12,13,14,15,1,2,3 build/sbt catalyst/Test/runMain org.apache.spark.sql.VarkaGroupingBenchmark
+  narrow run:  taskset -c 0,12,13,14,15,1,2,3 build/sbt "project catalyst" 'set Test/javaOptions += "-XX:MaxVectorSize=16"' "Test/runMain org.apache.spark.sql.VarkaGroupingBenchmark"
+
+Running benchmark: dayofweek and weekday over two dates, beside four date_add over 10240000 rows
+  Running case: group budget 16 (the default): 2 loop methods
+  Stopped after 254 iterations, 2003 ms
+  Running case: group budget 400: 2 loop methods, the default's class (a control)
+  Stopped after 258 iterations, 2001 ms
+  Running case: group budget 16 (the default): 2 loop methods, timed again last
+  Stopped after 260 iterations, 2002 ms
+OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+dayofweek and weekday over two dates, beside four date_add over 10240000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+group budget 16 (the default): 2 loop methods                                              8              8           0       1330.9           0.8       1.0X
+group budget 400: 2 loop methods, the default's class (a control)                          8              8           0       1322.5           0.8       1.0X
+group budget 16 (the default): 2 loop methods, timed again last                            8              8           0       1345.5           0.7       1.0X
+Running benchmark: 24 date_add outputs over one date over 10240000 rows
+  Running case: group budget 16 (the default): 2 loop methods
+  Stopped after 141 iterations, 2001 ms
+  Running case: group budget 400: 2 loop methods, the default's class (a control)
+  Stopped after 139 iterations, 2010 ms
+  Running case: group budget 16 (the default): 2 loop methods, timed again last
+  Stopped after 140 iterations, 2000 ms
+OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+24 date_add outputs over one date over 10240000 rows:              Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------
+group budget 16 (the default): 2 loop methods                                 14             14           0        739.8           1.4       1.0X
+group budget 400: 2 loop methods, the default's class (a control)             14             14           1        734.8           1.4       1.0X
+group budget 16 (the default): 2 loop methods, timed again last               14             14           0        734.2           1.4       1.0X
+Running benchmark: 8 checked sums i + j + k over 10240000 rows
+  Running case: group budget 16 (the default): 1 loop method
+  Stopped after 207 iterations, 2009 ms
+  Running case: group budget 400: 1 loop method, the default's class (a control)
+  Stopped after 175 iterations, 2006 ms
+  Running case: group budget 16 (the default): 1 loop method, timed again last
+  Stopped after 209 iterations, 2008 ms
+OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+8 checked sums i + j + k over 10240000 rows:                      Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------
+group budget 16 (the default): 1 loop method                                  9             10           0       1080.8           0.9       1.0X
+group budget 400: 1 loop method, the default's class (a control)             11             11           0        896.7           1.1       0.8X
+group budget 16 (the default): 1 loop method, timed again last               10             10           0       1067.7           0.9       1.0X
+Running benchmark: 40 mixed outputs over two dates and two integers over 10240000 rows
+  Running case: group budget 16 (the default): 10 loop methods
+  Stopped after 41 iterations, 2028 ms
+  Running case: group budget 400: 8 loop methods
+  Stopped after 51 iterations, 2035 ms
+  Running case: group budget 16 (the default): 10 loop methods, timed again last
+  Stopped after 41 iterations, 2042 ms
+OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+40 mixed outputs over two dates and two integers over 10240000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------
+group budget 16 (the default): 10 loop methods                                  49             49           0        207.3           4.8       1.0X
+group budget 400: 8 loop methods                                                40             40           0        256.9           3.9       1.2X
+group budget 16 (the default): 10 loop methods, timed again last                49             50           0        207.4           4.8       1.0X
