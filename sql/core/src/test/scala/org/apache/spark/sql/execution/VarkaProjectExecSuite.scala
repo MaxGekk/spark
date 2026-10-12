@@ -22,7 +22,7 @@ import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, Attribute, AttributeReference, Cast, DateAdd, DateDiff, DateSub, EvalMode, Expression, ExtractANSIIntervalDays, Greatest, Literal, NamedExpression, Remainder, Year}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAllocationSampler,
   VarkaChrono, VarkaEmitOption, VarkaFallbackEvent, VarkaFusedKernel, VarkaJfrTestSupport,
-  VarkaKernelAllocationEvent}
+  VarkaKernelAllocationEvent, VarkaMatrix}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.execution.metric.SQLMetrics
@@ -290,6 +290,12 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession with Varka
     // wraps to -2, which leaves the day in range, so only the overflow guard fires; the row
     // engine raises, and the declined batch's status is read off the JFR fallback event the
     // evaluator emits first, as the interval test above reads its cause.
+    // The overflow guard is the test's subject. Under an option configuration that turns the
+    // check off the sum wraps and nothing raises, and whether this suite sees that configuration
+    // depends on whether a suite earlier in the JVM set the emit options to it, so the test is
+    // cancelled there rather than listed as a failure that run alone it would not have.
+    assume(VarkaMatrix.base.checkIntOverflow(),
+      "the overflow check is off by design under this configuration")
     def build(): VarkaProjectExec = node(
       project(Alias(Year(DateAdd(attrD, Add(intAttr, intAttr, EvalMode.ANSI))), "y")()),
       Seq(BatchSpec("arrow", Seq(Seq(Int.box(1), Int.box(2)),
