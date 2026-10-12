@@ -450,8 +450,8 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        only by sharing a prefix. On is the budget binding as it did, kept as the reference.
  *        Off became the default on 12 October 2026: with the weights recounted, the budget split
  *        a weekday shape into five loop methods and ran it 31 to 33% slower, where the prediction
- *        kept two and ran within 2% of the old grouping; a mixed shape ran 15 and 26% faster than
- *        before at 256 and 128 bits; and the cost audit's corpus took 42% fewer loop methods
+ *        kept two and ran within 3% of the old grouping; a mixed shape ran 14 and 25% faster than
+ *        before at 256 and 128 bits; and the cost audit's corpus took 39% fewer loop methods
  *        ({@code VARKA-254.md} 9). Outside those conditions the budget binds either way.
  */
 public record VarkaEmitOptions(
