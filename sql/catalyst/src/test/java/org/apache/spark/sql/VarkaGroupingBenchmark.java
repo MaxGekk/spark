@@ -21,6 +21,7 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.ValueLayout;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -55,7 +56,7 @@ import org.apache.spark.sql.types.DataTypes;
  * one holds more live vectors, which can spill registers. This benchmark prices that trade on
  * four shapes, at the default budget and with the budget raised to 400, where the prediction and
  * the measured limits alone bound a group. Each row names its loop-method count, read from the
- * emitted class.
+ * emitted class, and arms that build the same class share one row.
  *
  * <p>The shapes. {@code dayofweek} and {@code weekday} over two dates beside cheap date outputs,
  * whose weights (1 each) are far under what they emit (about 16), and a mixed projection of forty
@@ -91,8 +92,14 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
   /** An arm: its label and the options it emits under. */
   private record Arm(String label, VarkaEmitOptions options) { }
 
-  /** One emitted kernel, with the loop-method count the row's name reports. */
-  private record Emitted(VarkaFusedKernel kernel, int loops) { }
+  /**
+   * One emitted kernel, with the loop-method count the row's name reports and the class emitted
+   * again under one fixed name, so that two arms' classes can be compared byte for byte.
+   */
+  private record Emitted(VarkaFusedKernel kernel, int loops, byte[] probe) { }
+
+  /** One timed row: the labels of the arms that build its class, and the kernel they build. */
+  private record Row(List<String> labels, Emitted emitted) { }
 
   private final Set<String> usedIds = new HashSet<>();
   private volatile int blackhole;
@@ -167,9 +174,11 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
         loops++;
       }
     }
+    byte[] probe = VarkaLoopEmitter.emit("org.apache.spark.sql.varka.execution.VarkaGroupingProbe",
+        fused.outputs(), fused.inputOrdinals().size(), fused.numLiterals(), null, null, options);
     loader.defineGeneratedClass(name, bytes);
     var kernel = (VarkaFusedKernel) loader.loadClass(name).getConstructor().newInstance();
-    return new Emitted(kernel, loops);
+    return new Emitted(kernel, loops, probe);
   }
 
   @Override
@@ -211,6 +220,11 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
           var benchmark = benchmark(shape.title() + " over " + NUM_ROWS + " rows", NUM_ROWS)
               .minIterations(5).warmup(Duration.ofSeconds(2)).minTime(Duration.ofSeconds(2))
               .build();
+          // An arm that builds the class an earlier arm built is not timed again: its row would
+          // measure the same bytes, and two timings of one class differ by where the JIT and the
+          // allocator happen to put it - up to 17% on this file's first run, enough to read as an
+          // effect of the option. Its label joins the earlier arm's row instead.
+          var rows = new ArrayList<Row>();
           var armList = arms();
           for (int a = 0; a < armList.size(); a++) {
             var arm = armList.get(a);
@@ -220,7 +234,20 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
             } catch (ReflectiveOperationException e) {
               throw new IllegalStateException(e);
             }
-            var kernel = emitted.kernel();
+            Row same = null;
+            for (var row : rows) {
+              if (Arrays.equals(row.emitted().probe(), emitted.probe())) {
+                same = row;
+              }
+            }
+            if (same != null) {
+              same.labels().add(arm.label());
+            } else {
+              rows.add(new Row(new ArrayList<>(List.of(arm.label())), emitted));
+            }
+          }
+          for (var row : rows) {
+            var kernel = row.emitted().kernel();
             long scratch = VarkaEmitterTestSupport.scratch(kernel, CHUNK);
             Runnable drive = () -> {
               int status = 0;
@@ -230,13 +257,16 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
               }
               blackhole = status;
             };
+            String labels = String.join(" and ", row.labels());
             drive.run();
             if (blackhole != 0) {
-              throw new IllegalStateException(
-                  shape.title() + " under " + arm.label() + " declined a batch");
+              throw new IllegalStateException(shape.title() + " under " + labels
+                  + " declined a batch");
             }
-            String loops = emitted.loops() + " loop method" + (emitted.loops() == 1 ? "" : "s");
-            benchmark.addCase(arm.label() + ": " + loops, iteration -> drive.run());
+            int count = row.emitted().loops();
+            String loops = count + " loop method" + (count == 1 ? "" : "s");
+            String same = row.labels().size() > 1 ? ", one class" : "";
+            benchmark.addCase(labels + ": " + loops + same, iteration -> drive.run());
           }
           benchmark.run();
         }
