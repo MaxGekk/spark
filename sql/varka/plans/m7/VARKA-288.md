@@ -196,3 +196,4 @@ beside `HugeMethodLimit`, the decision machinery, the filed follow-ups); and
 spine (how to see the fix in `explain("codegen")` and in 4.4.0's warning, the two new settings,
 the per-run literal edge, what to drop after upgrading). The owner chose the users' version; it
 is the one to publish, at the length 4 set plus the practical sections, with both figures.
+The other two were then dropped from the repository; their text is in the branch's history.
