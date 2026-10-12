@@ -17,10 +17,11 @@
 #
 # Every small IR tree to a size, across JVMs (VARKA-269): VarkaSmallTreeSuite with
 # -Dvarka.series.size, one ScalaTest runner JVM per slice, each taking every n-th tree. The pull
-# request's size 4 runs in the gate; this is for the larger ones: size 5, 3.76 million trees at
-# both lanes, eleven and a half minutes over 12 JVMs on the laptop (VARKA-269.md 9), and size 6,
-# about thirty times as many, in an idle window. JVMs and not threads, because the emitter is not shown safe to call from several
-# threads (row 307).
+# request's size 3 runs in the gate, and size 4 at night (VARKA-269 9); this is for size 4 by
+# hand and the larger ones: size 5, 3.76 million trees at both lanes, eleven and a half minutes
+# over 12 JVMs on the laptop (VARKA-269.md 9), and size 6, about thirty times as many, in an idle
+# window. JVMs and not threads, because the emitter is not shown safe to call from several threads
+# (row 307).
 #
 #   dev/varka_series.sh 5                    # size 5 over one JVM per core
 #   dev/varka_series.sh 5 --jvms 12          # over 12
