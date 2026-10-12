@@ -44,6 +44,7 @@ import java.lang.constant.MethodTypeDesc;
 import java.lang.reflect.AccessFlag;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -195,6 +196,21 @@ public final class VarkaLoopEmitter {
   static Map<VarkaVectorIR, Analysis.Refusal> refusalsForTest(List<VarkaVectorIR> outputs,
       int numInputs, int numLiterals, VarkaEmitOptions options) {
     return Map.copyOf(analyze(List.copyOf(outputs), numInputs, numLiterals, options).refusals);
+  }
+
+  /**
+   * For each node {@link #refusalsForTest} reports, the arm chain its guard is qualified by - the
+   * lanes it condemns are those the chain selects, and every lane where the chain is empty - for
+   * the verdict that says which batches a kernel must decline (VARKA-279).
+   */
+  static Map<VarkaVectorIR, List<Analysis.ArmStep>> refusalArmsForTest(
+      List<VarkaVectorIR> outputs, int numInputs, int numLiterals, VarkaEmitOptions options) {
+    Analysis analysis = analyze(List.copyOf(outputs), numInputs, numLiterals, options);
+    var arms = new HashMap<VarkaVectorIR, List<Analysis.ArmStep>>();
+    for (VarkaVectorIR node : analysis.refusals.keySet()) {
+      arms.put(node, analysis.armChainOf(node));
+    }
+    return Map.copyOf(arms);
   }
 
   /**

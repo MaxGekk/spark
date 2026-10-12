@@ -176,3 +176,59 @@ guard), the partitions are three runs per guarded row.
 2. The verdict and the edge suite (3.1, 3.2), with the planted wrong bound.
 3. The domain column and the partitions (3.3), after row 138.
 4. Section 9.
+
+## 9. Outcome
+
+### 9.1 The verdict and the edges (8.2), 12 October 2026
+
+Steps 3.1 and 3.2 landed; 3.3, the coverage rows' domains and their three partitions, waits for
+row 138 as 7.3 and 8 said, so the row stays Planned.
+
+**What was built.** `VarkaGuardSpec` gives the verdict on a batch from its rows and the kernel's
+own guards: `VarkaLoopEmitter.refusalsForTest` for which nodes refuse, and a new
+`refusalArmsForTest` for the arm chain `Analysis.armChainOf` qualifies each by, so the verdict
+applies the emitter's own rule rather than a reconstruction of it. A fired guard qualified by an
+arm chain must decline where the chain selects the row and must not elsewhere; an unqualified one
+must decline where the row reaches the node through arms it takes, and may where it reaches it
+only through arms it does not. Its bounds are `VarkaChrono`'s constants, the lane's range and a
+`GuardedRange`'s own `lo` and `hi`; its values the reference evaluator's.
+`VarkaGuardEdgeSuite` holds sixteen small kernels, which carry the six guards between them, to it.
+
+**The edges.** 248 batches: every guard at `lo - 1`, `lo`, `hi` and `hi + 1` (for `make_date`'s
+date, either side of February's last day in a leap year and not, and month 12 against 13), at row 0
+of 17 (a full vector) and row 16 (the epilogue), the edge row valid and, in a second batch, null in
+the column that carries it, each through both bodies. 116 declined; every status agreed with the
+verdict for its body under `exactRefusalStatus`, and every answered batch matched the reference
+evaluator row for row. Moving each end of each guard's bound by one in either direction on the
+verdict's side turned some edge against it, all 24 shifts. Under an arm no row takes, the guard
+qualified by it stayed silent, and with `guardUnderArm` off it declined, which the verdict allows.
+The input bound admitted `-INTERVAL_DAY_LIMIT_DAYS` to `INTERVAL_DAY_LIMIT_DAYS` and refused one
+past, never on a null, and its own shifted bound was caught. The verdict agreed with the sixteen
+cases the hand-written edge tests pin. The suite runs in about half a second, and the gate passed
+(lint on a rerun, after one scalastyle fix in the verdict).
+
+**Prediction scored.** 1, **held**: every guard's edges hold, at both lanes. Predictions 2 and 3
+are about the coverage rows and wait for 3.3, as does 2's open question: `date_add(d, i)`'s note
+still promises a bound its kernel does not carry.
+
+**Corrections to the plan.**
+
+* **The planted wrong bound moves the verdict's bound, not the emitter's.** The emitter reads its
+  bounds as `static final` constants, which javac inlines into its bytecode, so a test hook there
+  would be a change to the emitter the plan did not price. Moving the verdict's bound proves the
+  same thing: the edge inputs land exactly on each bound and one past it, so an emitter off by one
+  would disagree with the verdict on the same rows.
+* **`VarkaGuardSpec` is Scala**, beside the reference evaluator it drives, as `VarkaKernelCheck`
+  is; 4's table had it Java.
+* **`VarkaKernelCheck` needed no verdict entry point.** VARKA-278 added `runAndCompareStatus`,
+  which returns the status; the suite holds it to the verdict itself.
+* **The fourth verdict, outside the contract, is not computed.** The IR does not say which columns
+  are dates, so the edge suite keeps every input inside the contract by construction instead.
+* **The input bound is tested at its check.** It has no IR node: the evaluator declines the batch
+  through `IntRangeOps.allWithin` before the kernel runs, and the suite drives that.
+* **2 was wrong that the defaults leave the producer guard off.** `guardDayProducers` is on by
+  default; the coverage rows carry none because no row puts a column-offset producer under a
+  calendar node. The suite turns both optional guards on over whatever the option matrix sets, so
+  a configuration without them still tests the guard.
+* **A guard's count is by guard, not by kernel**: `make_date`'s NULL form answers an invalid day
+  with a null and never declines.
