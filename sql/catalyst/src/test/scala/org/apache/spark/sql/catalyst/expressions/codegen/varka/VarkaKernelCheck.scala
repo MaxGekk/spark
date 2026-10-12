@@ -34,14 +34,14 @@ object VarkaKernelCheck {
    */
   case class Batch(length: Int, patterns: Seq[Int => Boolean], data: Array[Array[Int]],
       forceMasked: Boolean) {
-    private[varka] def java: VarkaKernelChecks.Batch =
+    private[varka] def toJava: VarkaKernelChecks.Batch =
       new VarkaKernelChecks.Batch(length, flags(patterns, length), data, forceMasked)
   }
 
   /** [[Batch]] at the long lane: the same, with 64-bit column values. */
   case class LongBatch(length: Int, patterns: Seq[Int => Boolean], data: Array[Array[Long]],
       forceMasked: Boolean) {
-    private[varka] def java: VarkaKernelChecks.LongBatch =
+    private[varka] def toJava: VarkaKernelChecks.LongBatch =
       new VarkaKernelChecks.LongBatch(length, flags(patterns, length), data, forceMasked)
   }
 
@@ -74,40 +74,40 @@ object VarkaKernelCheck {
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Int], batch: Batch,
       declineAllowed: Boolean = false, spark: Option[VarkaSparkOracle] = None): Boolean =
     VarkaKernelChecks.runAndCompare(context, className, bytes, roots.asJava, numInputs, lits,
-      batch.java, declineAllowed, answers(spark))
+      batch.toJava, declineAllowed, answers(spark))
 
   /** [[VarkaKernelChecks.runAndCompareStatus]]. */
   def runAndCompareStatus(context: String, className: String, bytes: Array[Byte],
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Int], batch: Batch,
       declineAllowed: Boolean): Int =
     VarkaKernelChecks.runAndCompareStatus(context, className, bytes, roots.asJava, numInputs,
-      lits, batch.java, declineAllowed)
+      lits, batch.toJava, declineAllowed)
 
   /** [[VarkaKernelChecks.runEachBodyStatus]]. */
   def runEachBodyStatus(context: String, className: String, bytes: Array[Byte],
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Int], batch: Batch): Seq[Int] =
     VarkaKernelChecks.runEachBodyStatus(context, className, bytes, roots.asJava, numInputs, lits,
-      batch.java).asScala.map(_.intValue).toSeq
+      batch.toJava).asScala.map(_.intValue).toSeq
 
   /** [[VarkaKernelChecks.runEachBodyLongStatus]]. */
   def runEachBodyLongStatus(context: String, className: String, bytes: Array[Byte],
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Long], batch: LongBatch): Seq[Int] =
     VarkaKernelChecks.runEachBodyLongStatus(context, className, bytes, roots.asJava, numInputs,
-      lits, batch.java).asScala.map(_.intValue).toSeq
+      lits, batch.toJava).asScala.map(_.intValue).toSeq
 
   /** [[VarkaKernelChecks.runAndCompareLong]]. */
   def runAndCompareLong(context: String, className: String, bytes: Array[Byte],
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Long], batch: LongBatch,
       declineAllowed: Boolean = false, spark: Option[VarkaSparkOracle] = None): Boolean =
     VarkaKernelChecks.runAndCompareLong(context, className, bytes, roots.asJava, numInputs, lits,
-      batch.java, declineAllowed, answers(spark))
+      batch.toJava, declineAllowed, answers(spark))
 
   /** [[VarkaKernelChecks.runAndCompareLongStatus]]. */
   def runAndCompareLongStatus(context: String, className: String, bytes: Array[Byte],
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Long], batch: LongBatch,
       declineAllowed: Boolean): Int =
     VarkaKernelChecks.runAndCompareLongStatus(context, className, bytes, roots.asJava,
-      numInputs, lits, batch.java, declineAllowed)
+      numInputs, lits, batch.toJava, declineAllowed)
 
   /** [[VarkaKernelChecks.otherBody]], with the null flags as patterns. */
   private[varka] def otherBody(numInputs: Int, length: Int, patterns: Seq[Int => Boolean],

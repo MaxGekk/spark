@@ -36,12 +36,16 @@ object VarkaFailureSignature {
   /**
    * The signature of what a run threw. `label` is the context a failure's message starts with
    * (`VarkaFuzzCase.label`), which carries the seed and the whole drawn case and so is not part of
-   * what the failure is.
+   * what the failure is. Whatever a check appends to the label before its `": "` - the other
+   * body's " (the other body)", a coverage row's expression - is part of the context too and is
+   * taken off with it, so a decorated context still classifies (VARKA-311).
    */
   def of(t: Throwable, label: String): VarkaFailureSignature = {
     val message = Option(t.getMessage).getOrElse("")
-    val bare = if (label.nonEmpty && message.startsWith(label + ": ")) {
-      message.substring(label.length + 2)
+    val bare = if (label.nonEmpty && message.startsWith(label)) {
+      val rest = message.substring(label.length)
+      val colon = rest.indexOf(": ")
+      if (colon >= 0) rest.substring(colon + 2) else rest
     } else {
       message
     }

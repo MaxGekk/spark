@@ -120,6 +120,15 @@ class VarkaShrinkerSuite extends SparkFunSuite {
     assert(sig("selection row 7 differs (want true)").kind == "selection mismatch")
     assert(sig("the kernel declined the batch (status 2)").kind == "declined batch")
     assert(sig("x") != sig("output 0 row 7 differs (want 12)"))
+    // A context the check decorates still classifies, and the decoration leaves the signature:
+    // the other body's suffix, and the coverage row's expression the composition fuzzer adds.
+    def decorated(m: String): VarkaFailureSignature =
+      VarkaFailureSignature.of(new IllegalStateException(m), label)
+    assert(decorated(s"$label (the other body): output 0 row 7 differs (want 12)") ==
+      sig("output 0 row 7 differs (want 12)"))
+    assert(VarkaFailureSignature.of(new IllegalStateException(
+      "kernel of year(d) + 1: selection row 3 differs (want true, got false)"), "kernel").kind ==
+      "selection mismatch")
     val linkage = new NoSuchMethodError("IntVector.add(IntVector)")
     assert(VarkaFailureSignature.of(linkage, label).kind == "generated class: NoSuchMethodError")
   }

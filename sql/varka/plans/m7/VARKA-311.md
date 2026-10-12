@@ -160,8 +160,8 @@ case's label and the mismatch, and now carries what the kernel stored - "output 
 signature leaves out so a different null pattern is not a different bug (the owner's review of
 Varka's error messages, 12 October 2026, asked for both).
 
-**The same rows are checked.** With a counter of compared outputs added to the old Scala checks for
-the measurement and kept in the Java ones, the suites at their fixed seeds counted 4,152,066,
+**The same rows are checked.** With a counter of compared outputs added to both forms for the
+measurement and taken out after it, the suites at their fixed seeds counted 4,152,066,
 3,433,786 and 2,752,266 in their own JVMs before and after; the shared JVM counted 7,752 before and
 7,754 after, the two being the new classification test's two mismatches, each found at its first row.
 
@@ -173,7 +173,8 @@ the measurement and kept in the Java ones, the suites at their fixed seeds count
    `dayofmonth` in `VarkaReference`, which failed the random-tree and wide-composition tests. The two
    planted mismatches classify as "output mismatch" and "selection mismatch".
 3. **Held.** The full local gate passed on the branch merged with master, every step.
-4. **Held.** The comparable tests read 79.8 seconds before and 77.7 after.
+4. **Held, by the test runner's timings only.** The comparable tests took about as long before and
+   after; no benchmark file was committed for it, so the plan quotes no figure.
 5. **Wrong.** The Java is 1,252 lines, not about 1,100: the messages' evidence and the explicit
    case lists add more than estimated.
 
@@ -182,3 +183,35 @@ defines a `SparkAnswers` interface and a sealed `Answer`, and the forwarder adap
 is unchanged. The forwarders keep their own Scala `Outcome` rather than exposing the Java one,
 since the suites match on case objects. A switch statement over the refusal enum without
 `default` is not exhaustive for definite assignment, so `bound` is a switch expression.
+
+### 9.1 The review, 12 October 2026
+
+A code review found no change to what a check decides, and fifteen problems in how failures are
+reported and in the port's shape, all fixed:
+
+* **Failures that still escaped classification.** A mismatch found in the other body carries
+  " (the other body)" after its label, so the classifier, which stripped only `label + ": "`, left
+  the label in the signature and fell back to the exception's class; the shrinker could not
+  reproduce such a failure. The classifier now takes off the label and anything up to the first
+  `": "` after it, so a decorated context classifies whatever the decoration.
+* **The composition fuzzer lost which coverage row failed:** it named the row through ScalaTest's
+  `withClue`, which an `IllegalStateException` passes through. The row's expression is now the
+  check's context.
+* **The Spark comparisons' messages** carried the expression and the row on their first line,
+  where a signature reads; they are on the second, as the mismatches' are.
+* **A failure inside a generated class's constructor** is rethrown as itself, not wrapped, so a
+  `NoSuchMethodError` there is signed as one.
+* **Work on the hot path:** the evidence line is built only when a check fails, the reference is
+  evaluated once per output where a Spark oracle is passed, and the roots are an array, not a
+  Scala list read by index.
+* **Shape:** the two lanes' batch runners are one, over a sealed `Lane`; the compared-outputs
+  counter, which nothing read after the measurement, is gone; the buffers and the poison come from
+  `VarkaEmitterFixtures`; `Guards` and `Values` are records; the forwarders' conversions are named
+  `toJava`, not `java`, which shadowed the package inside their objects; a dead branch is gone.
+* **A timing figure** in this section had no committed file behind it (prediction 4).
+
+With the fixes in, the planted wrong `dayofmonth` of 9 fails the random-tree test signed
+"selection mismatch: selection row # differs" and shrinks in 56 runs; in VARKA-310's same planted
+run, before this row, it was signed "TestFailedException: false did not equal true ..." and the
+shrinker stopped after 499 runs as unstable.
+

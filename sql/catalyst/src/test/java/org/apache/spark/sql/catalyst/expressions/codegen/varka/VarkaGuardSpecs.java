@@ -98,28 +98,32 @@ public final class VarkaGuardSpecs {
   public record Shift(Analysis.Refusal reason, long lo, long hi) { }
 
   /** One guarded node: the reason its guard refuses for and the arm chain that qualifies it. */
-  private record Guarded(VarkaVectorIR node, Analysis.Refusal reason,
-      List<Analysis.ArmStep> chain) { }
+  record Guarded(VarkaVectorIR node, Analysis.Refusal reason, List<Analysis.ArmStep> chain) { }
 
   /**
    * A kernel's guards, read once: {@code roots} emitted under {@code options}, at the long lane
    * where {@code isLong}, and each guarded node's reason and arm chain.
    */
-  public static final class Guards {
-    final List<VarkaVectorIR> roots;
-    final boolean isLong;
-    final List<Guarded> guards;
+  public record Guards(List<VarkaVectorIR> roots, boolean isLong, List<Guarded> guards) {
+    public Guards {
+      roots = List.copyOf(roots);
+      guards = List.copyOf(guards);
+    }
 
+    /** The guards {@code roots} carry when emitted under {@code options}. */
     public Guards(List<VarkaVectorIR> roots, int numInputs, int numLiterals,
         VarkaEmitOptions options, boolean isLong) {
-      this.roots = List.copyOf(roots);
-      this.isLong = isLong;
+      this(roots, isLong, read(roots, numInputs, numLiterals, options));
+    }
+
+    private static List<Guarded> read(List<VarkaVectorIR> roots, int numInputs, int numLiterals,
+        VarkaEmitOptions options) {
       var read = new ArrayList<Guarded>();
       for (Map.Entry<VarkaVectorIR, VarkaLoopEmitter.GuardForTest> e
           : VarkaLoopEmitter.guardsForTest(roots, numInputs, numLiterals, options).entrySet()) {
         read.add(new Guarded(e.getKey(), e.getValue().reason(), e.getValue().arms()));
       }
-      this.guards = List.copyOf(read);
+      return read;
     }
   }
 
@@ -131,7 +135,7 @@ public final class VarkaGuardSpecs {
       List<Shift> shifts) {
     var v = Verdict.ANSWER;
     for (int r = 0; r < values.length; r++) {
-      v = v.or(rowVerdict(g, new Values(values[r], isNull[r], lits, g.isLong), shifts));
+      v = v.or(rowVerdict(g, Values.of(values[r], isNull[r], lits, g.isLong()), shifts));
     }
     return v;
   }
@@ -144,28 +148,22 @@ public final class VarkaGuardSpecs {
         isNull, shifts);
   }
 
-  /** The reference evaluator's values and conditions on one row, at one lane. */
-  private static final class Values {
-    private final long[] row;
-    private final boolean[] isNull;
-    private final long[] lits;
-    private final boolean isLong;
-    private final int[] ints;
-    private final int[] intLits;
-
-    Values(long[] row, boolean[] isNull, long[] lits, boolean isLong) {
-      this.row = row;
-      this.isNull = isNull;
-      this.lits = lits;
-      this.isLong = isLong;
-      this.ints = new int[row.length];
+  /**
+   * The reference evaluator's values and conditions on one row, at one lane: the row at 64 bits,
+   * and at 32 for the int lane's reference.
+   */
+  private record Values(long[] row, boolean[] isNull, long[] lits, boolean isLong, int[] ints,
+      int[] intLits) {
+    static Values of(long[] row, boolean[] isNull, long[] lits, boolean isLong) {
+      int[] ints = new int[row.length];
       for (int c = 0; c < row.length; c++) {
         ints[c] = (int) row[c];
       }
-      this.intLits = new int[lits.length];
+      int[] intLits = new int[lits.length];
       for (int l = 0; l < lits.length; l++) {
         intLits[l] = (int) lits[l];
       }
+      return new Values(row, isNull, lits, isLong, ints, intLits);
     }
 
     /** The node's value, or null where it is null. */
@@ -187,8 +185,8 @@ public final class VarkaGuardSpecs {
   private static Verdict rowVerdict(Guards g, Values values, List<Shift> shifts) {
     var v = Verdict.ANSWER;
     Set<VarkaVectorIR> live = null;
-    for (var guarded : g.guards) {
-      if (!fires(guarded.node(), guarded.reason(), values, g.isLong, shifts)) {
+    for (var guarded : g.guards()) {
+      if (!fires(guarded.node(), guarded.reason(), values, g.isLong(), shifts)) {
         continue;
       }
       int bit = guarded.reason().status;
@@ -202,7 +200,7 @@ public final class VarkaGuardSpecs {
         }
       } else {
         if (live == null) {
-          live = reached(g.roots, values);
+          live = reached(g.roots(), values);
         }
         v = v.or(live.contains(guarded.node()) ? new Verdict(bit, 0) : new Verdict(0, bit));
       }

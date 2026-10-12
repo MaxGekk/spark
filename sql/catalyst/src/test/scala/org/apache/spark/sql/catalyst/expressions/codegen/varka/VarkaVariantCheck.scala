@@ -47,11 +47,11 @@ object VarkaVariantCheck {
     VarkaVariantChecks.RETRY_WITHOUT_BUDGET.emit(roots.asJava, numInputs, numLiterals, options,
       className).toScala
 
-  private def java(c: VarkaFuzzCase): VarkaVariantChecks.Case =
+  private def toJava(c: VarkaFuzzCase): VarkaVariantChecks.Case =
     new VarkaVariantChecks.Case(c.lane, c.roots.asJava, c.numInputs, c.lits, c.length, c.nulls,
       c.data, c.forceMasked, c.options, c.smallOrdinal, c.levelOrdinal, c.label)
 
-  private def java(emit: Emit): VarkaVariantChecks.Emit =
+  private def toJava(emit: Emit): VarkaVariantChecks.Emit =
     (roots, numInputs, numLiterals, options, className) =>
       emit(roots.asScala.toSeq, numInputs, numLiterals, options, className).toJava
 
@@ -64,15 +64,15 @@ object VarkaVariantCheck {
   /** [[VarkaVariantChecks.variants]]: each kind, and its variant where it applies to `c`. */
   def variants(c: VarkaFuzzCase, stranger: VarkaVectorIR, pool: Seq[VarkaVectorIR],
       rotation: Int): Seq[(Kind, Option[Variant])] =
-    VarkaVariantChecks.variants(java(c), stranger, pool.asJava, rotation).asScala.toSeq
+    VarkaVariantChecks.variants(toJava(c), stranger, pool.asJava, rotation).asScala.toSeq
       .map(kv => kv.kind() -> kv.variant().toScala)
 
   /** [[VarkaVariantChecks.armOracle]]. */
-  def armOracle(c: VarkaFuzzCase): VarkaVariants.ArmOracle = VarkaVariantChecks.armOracle(java(c))
+  def armOracle(c: VarkaFuzzCase): VarkaVariants.ArmOracle = VarkaVariantChecks.armOracle(toJava(c))
 
   /** [[VarkaVariantChecks.caseOf]], as a [[VarkaFuzzCase]]. */
   def caseOf(c: VarkaFuzzCase, v: Variant): VarkaFuzzCase = {
-    val vc = VarkaVariantChecks.caseOf(java(c), v)
+    val vc = VarkaVariantChecks.caseOf(toJava(c), v)
     c.copy(roots = vc.roots().asScala.toSeq, numInputs = vc.numInputs(), nulls = vc.nulls(),
       data = vc.data(), smallOrdinal = vc.smallOrdinal(), levelOrdinal = vc.levelOrdinal(),
       label = vc.label())
@@ -80,9 +80,9 @@ object VarkaVariantCheck {
 
   /** [[VarkaVariantChecks.checkPlain]]. */
   def checkPlain(c: VarkaFuzzCase, emit: Emit): Outcome =
-    outcome(VarkaVariantChecks.checkPlain(java(c), java(emit)))
+    outcome(VarkaVariantChecks.checkPlain(toJava(c), toJava(emit)))
 
   /** [[VarkaVariantChecks.check]]. */
   def check(c: VarkaFuzzCase, v: Variant, emit: Emit): Outcome =
-    outcome(VarkaVariantChecks.check(java(c), v, java(emit)))
+    outcome(VarkaVariantChecks.check(toJava(c), v, toJava(emit)))
 }

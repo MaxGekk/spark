@@ -40,7 +40,7 @@ object VarkaGuardSpec {
   /** A kernel's guards, read once, as [[VarkaGuardSpecs.Guards]]. */
   final class Guards(val roots: Seq[VarkaVectorIR], numInputs: Int, numLiterals: Int,
       options: VarkaEmitOptions, val long: Boolean) {
-    private[varka] val java =
+    private[varka] val toJava =
       new VarkaGuardSpecs.Guards(roots.asJava, numInputs, numLiterals, options, long)
   }
 
@@ -48,7 +48,7 @@ object VarkaGuardSpec {
   def verdict(g: Guards, lits: Array[Long], rows: Seq[Seq[Option[Long]]],
       shifts: Seq[Shift]): Verdict = {
     val (values, isNull) = columns(rows)
-    VarkaGuardSpecs.verdict(g.java, lits, values, isNull, shifts.asJava)
+    VarkaGuardSpecs.verdict(g.toJava, lits, values, isNull, shifts.asJava)
   }
 
   /** [[verdict]] for a kernel whose guards are read for this one call. */

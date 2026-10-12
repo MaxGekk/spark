@@ -20,6 +20,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -95,16 +96,6 @@ public final class VarkaKernelChecks {
   public static final AtomicLong SPARK_COMPARISONS = new AtomicLong();
 
   /**
-   * Outputs compared on rows the kernel answered: one per output per row of every body run, so two
-   * runs of one suite at one seed that read the same count compared the same things (VARKA-311).
-   */
-  public static final AtomicLong ROW_COMPARISONS = new AtomicLong();
-
-  private static MemorySegment alloc(Arena arena, long bytes) {
-    return arena.allocate(Math.max(bytes, 1L), 8);
-  }
-
-  /**
    * A validity bitmap's size as Arrow Java's {@code allocateNew} gives it, in whole 64-bit words:
    * the kernels write and read a word at a time, so a buffer of the nominal
    * {@code (length + 7) / 8} bytes would be one a kernel is not entitled to, and the memory
@@ -167,6 +158,14 @@ public final class VarkaKernelChecks {
     };
   }
 
+  private static String row(long[] values, boolean[] isNull) {
+    var parts = new ArrayList<String>();
+    for (int c = 0; c < values.length; c++) {
+      parts.add(isNull[c] ? "None" : "Some(" + values[c] + ")");
+    }
+    return "(" + String.join(", ", parts) + ")";
+  }
+
   /** Which of the kernel's bodies a batch ran: the masked one wherever a column reports a null. */
   private static String body(int[] nullCounts) {
     for (int n : nullCounts) {
@@ -177,12 +176,12 @@ public final class VarkaKernelChecks {
     return "dense body";
   }
 
-  private static String row(long[] values, boolean[] isNull) {
-    var parts = new ArrayList<String>();
-    for (int c = 0; c < values.length; c++) {
-      parts.add(isNull[c] ? "None" : "Some(" + values[c] + ")");
-    }
-    return "(" + String.join(", ", parts) + ")";
+  /**
+   * A failure's second line: the row's inputs and the body that ran. Built only when a check
+   * fails, and kept off the first line, which is the only one a signature reads.
+   */
+  private static String evidence(long[] values, boolean[] isNull, int[] nullCounts) {
+    return "\n  inputs " + row(values, isNull) + "; " + body(nullCounts);
   }
 
   /**
@@ -190,26 +189,24 @@ public final class VarkaKernelChecks {
    * (VARKA-276): equal values or both null, a predicate's answers being 1, 0 or null. A difference
    * is the reference's to fix, or a named delta (row 244), before the kernel is held to it. Spark
    * raising is a row the kernel must decline the batch over, and this is called only for a batch
-   * the kernel answered.
+   * the kernel answered. The expression and the row are on the message's second line.
    */
   private static void agreeWithSpark(String context, SparkAnswers spark, int o, int i,
       long[] values, boolean[] isNull, OptionalLong reference) {
     SPARK_COMPARISONS.incrementAndGet();
     Answer answer = spark.answer(o, values, isNull);
-    if (answer instanceof Answer.Raised raised) {
-      throw new IllegalStateException(context + ": Spark raises on output " + o + " ("
-          + spark.sql(o) + ") at row " + i + ", inputs " + row(values, isNull) + ", and the "
-          + "kernel answered the batch instead of declining it: " + raised.e().getMessage());
-    }
+    String where = "\n  " + spark.sql(o) + ", inputs " + row(values, isNull);
     boolean agree = switch (answer) {
+      case Answer.Raised raised -> throw new IllegalStateException(context + ": Spark raises on "
+          + "output " + o + " at row " + i + ", and the kernel answered the batch instead of "
+          + "declining it" + where + ": " + raised.e().getMessage());
       case Answer.Value v -> reference.isPresent() && reference.getAsLong() == v.v();
       case Answer.Null n -> reference.isEmpty();
-      case Answer.Raised r -> false;
     };
     if (!agree) {
       throw new IllegalStateException(context + ": the reference evaluator and Spark disagree on "
-          + "output " + o + " (" + spark.sql(o) + ") at row " + i + ", inputs "
-          + row(values, isNull) + ": reference " + shown(reference) + ", Spark " + shown(answer));
+          + "output " + o + " at row " + i + ": reference " + shown(reference) + ", Spark "
+          + shown(answer) + where);
     }
   }
 
@@ -235,8 +232,8 @@ public final class VarkaKernelChecks {
       List<VarkaVectorIR> roots, int numInputs, int[] lits, Batch batch, boolean declineAllowed,
       SparkAnswers spark) {
     return bodies(context, numInputs, batch.length(), batch.nulls(), batch.forceMasked(),
-        (label, nulls, forced) -> runBatch(label, className, bytes, roots, numInputs, lits,
-            batch.withNulls(nulls, forced), declineAllowed, spark))[0] == 0;
+        (label, nulls, forced) -> runOne(label, className, bytes, roots, numInputs,
+            new IntLane(batch.withNulls(nulls, forced), lits), declineAllowed, spark))[0] == 0;
   }
 
   /**
@@ -249,8 +246,8 @@ public final class VarkaKernelChecks {
       List<VarkaVectorIR> roots, int numInputs, int[] lits, Batch batch,
       boolean declineAllowed) {
     int[] statuses = bodies(context, numInputs, batch.length(), batch.nulls(),
-        batch.forceMasked(), (label, nulls, forced) -> runBatch(label, className, bytes, roots,
-            numInputs, lits, batch.withNulls(nulls, forced), declineAllowed, null));
+        batch.forceMasked(), (label, nulls, forced) -> runOne(label, className, bytes, roots,
+            numInputs, new IntLane(batch.withNulls(nulls, forced), lits), declineAllowed, null));
     return statuses[0] != 0 ? statuses[0] : statuses[1];
   }
 
@@ -263,17 +260,23 @@ public final class VarkaKernelChecks {
   public static List<Integer> runEachBodyStatus(String context, String className, byte[] bytes,
       List<VarkaVectorIR> roots, int numInputs, int[] lits, Batch batch) {
     return each(context, numInputs, batch.length(), batch.nulls(), batch.forceMasked(),
-        (label, nulls, forced) -> runBatch(label, className, bytes, roots, numInputs, lits,
-            batch.withNulls(nulls, forced), true, null));
+        (label, nulls, forced) -> runOne(label, className, bytes, roots, numInputs,
+            new IntLane(batch.withNulls(nulls, forced), lits), true, null));
   }
 
-  /** {@link #runAndCompare} at the long lane, with {@code lits} as the long literal table. */
+  /**
+   * {@link #runAndCompare} at the long lane: 64-bit buffers, the eight-argument {@code run} with
+   * {@code lits} as the long literal table, and the long-lane reference. A narrowing root stores
+   * four bytes a row, so its output is read at that width and sign-extended: a value that did not
+   * fit 32 bits then differs from the evaluator's 64-bit answer instead of being truncated on both
+   * sides.
+   */
   public static boolean runAndCompareLong(String context, String className, byte[] bytes,
       List<VarkaVectorIR> roots, int numInputs, long[] lits, LongBatch batch,
       boolean declineAllowed, SparkAnswers spark) {
     return bodies(context, numInputs, batch.length(), batch.nulls(), batch.forceMasked(),
-        (label, nulls, forced) -> runLongBatch(label, className, bytes, roots, numInputs, lits,
-            batch.withNulls(nulls, forced), declineAllowed, spark))[0] == 0;
+        (label, nulls, forced) -> runOne(label, className, bytes, roots, numInputs,
+            new LongLane(batch.withNulls(nulls, forced), lits), declineAllowed, spark))[0] == 0;
   }
 
   /** {@link #runAndCompareStatus} at the long lane. */
@@ -281,8 +284,8 @@ public final class VarkaKernelChecks {
       List<VarkaVectorIR> roots, int numInputs, long[] lits, LongBatch batch,
       boolean declineAllowed) {
     int[] statuses = bodies(context, numInputs, batch.length(), batch.nulls(),
-        batch.forceMasked(), (label, nulls, forced) -> runLongBatch(label, className, bytes,
-            roots, numInputs, lits, batch.withNulls(nulls, forced), declineAllowed, null));
+        batch.forceMasked(), (label, nulls, forced) -> runOne(label, className, bytes, roots,
+            numInputs, new LongLane(batch.withNulls(nulls, forced), lits), declineAllowed, null));
     return statuses[0] != 0 ? statuses[0] : statuses[1];
   }
 
@@ -290,8 +293,8 @@ public final class VarkaKernelChecks {
   public static List<Integer> runEachBodyLongStatus(String context, String className,
       byte[] bytes, List<VarkaVectorIR> roots, int numInputs, long[] lits, LongBatch batch) {
     return each(context, numInputs, batch.length(), batch.nulls(), batch.forceMasked(),
-        (label, nulls, forced) -> runLongBatch(label, className, bytes, roots, numInputs, lits,
-            batch.withNulls(nulls, forced), true, null));
+        (label, nulls, forced) -> runOne(label, className, bytes, roots, numInputs,
+            new LongLane(batch.withNulls(nulls, forced), lits), true, null));
   }
 
   /** {@code run} over the batch's own body and then {@link #otherBody}'s, each status in order. */
@@ -358,196 +361,252 @@ public final class VarkaKernelChecks {
   }
 
   // ---------------------------------------------------------------------------------------------
-  // One batch through one body.
+  // One batch through one body, at either lane.
   // ---------------------------------------------------------------------------------------------
 
+  /**
+   * What differs between the two lanes in one batch's run: the value's width, its poison and the
+   * sentinel an unwritten output keeps, the {@code run} overload, the reference's overload, and
+   * how an output is read back. {@link #runOne} is the one harness both lanes go through.
+   */
+  private sealed interface Lane permits IntLane, LongLane {
+    int length();
+
+    boolean[][] nulls();
+
+    boolean forceMasked();
+
+    /** A value's bytes in the lane. */
+    long stride();
+
+    /** Column {@code c}'s drawn value at row {@code i}, widened. */
+    long value(int c, int i);
+
+    /** Writes {@code v} at row {@code i} of a column or output buffer at the lane's width. */
+    void put(MemorySegment d, int i, long v);
+
+    /**
+     * Poison for the {@code nullOrdinal}-th null of a column (VARKA-70's harness rule): the lane's
+     * extremes in turn, so each sits on both sides of every bound whatever the null pattern.
+     */
+    long poison(int nullOrdinal);
+
+    /** What an output buffer holds before the kernel writes, so an unwritten lane shows. */
+    long sentinel();
+
+    int run(VarkaFusedKernel kernel, long[] srcData, long[] srcValidity, int[] nullCounts,
+        long[] outData, long[] outValidity, long scratch);
+
+    /** The reference's value of {@code root} on the row {@code values}, {@code isNull}. */
+    OptionalLong reference(VarkaVectorIR root, long[] values, boolean[] isNull);
+
+    VarkaReference.Truth reference(Cond cond, long[] values, boolean[] isNull);
+
+    /** Output {@code o}'s stored value at row {@code i}. */
+    long got(MemorySegment out, int i, VarkaVectorIR root);
+  }
+
+  /** The 32-bit lane; {@code rowInts} is its reusable row for the reference. */
+  private record IntLane(Batch batch, int[] lits, int[] rowInts) implements Lane {
+    IntLane(Batch batch, int[] lits) {
+      this(batch, lits, new int[batch.data().length]);
+    }
+
+    @Override public int length() {
+      return batch.length();
+    }
+
+    @Override public boolean[][] nulls() {
+      return batch.nulls();
+    }
+
+    @Override public boolean forceMasked() {
+      return batch.forceMasked();
+    }
+
+    @Override public long stride() {
+      return 4L;
+    }
+
+    @Override public long value(int c, int i) {
+      return batch.data()[c][i];
+    }
+
+    @Override public void put(MemorySegment d, int i, long v) {
+      d.set(ValueLayout.JAVA_INT, i * 4L, (int) v);
+    }
+
+    @Override public long poison(int nullOrdinal) {
+      return VarkaEmitterFixtures.poison(nullOrdinal);
+    }
+
+    @Override public long sentinel() {
+      return 0xDEADBEEF;
+    }
+
+    @Override public int run(VarkaFusedKernel kernel, long[] srcData, long[] srcValidity,
+        int[] nullCounts, long[] outData, long[] outValidity, long scratch) {
+      return kernel.run(srcData, srcValidity, nullCounts, outData, outValidity, lits, length(),
+          scratch);
+    }
+
+    @Override public OptionalLong reference(VarkaVectorIR root, long[] values, boolean[] isNull) {
+      for (int c = 0; c < values.length; c++) {
+        rowInts[c] = (int) values[c];
+      }
+      OptionalInt v = VarkaReference.value(root, rowInts, isNull, lits);
+      return v.isPresent() ? OptionalLong.of(v.getAsInt()) : OptionalLong.empty();
+    }
+
+    @Override public VarkaReference.Truth reference(Cond cond, long[] values, boolean[] isNull) {
+      for (int c = 0; c < values.length; c++) {
+        rowInts[c] = (int) values[c];
+      }
+      return VarkaReference.cond(cond, rowInts, isNull, lits);
+    }
+
+    @Override public long got(MemorySegment out, int i, VarkaVectorIR root) {
+      return out.get(ValueLayout.JAVA_INT, i * 4L);
+    }
+  }
+
+  /** The 64-bit lane, whose narrowing roots store four bytes a row. */
+  private record LongLane(LongBatch batch, long[] lits) implements Lane {
+    @Override public int length() {
+      return batch.length();
+    }
+
+    @Override public boolean[][] nulls() {
+      return batch.nulls();
+    }
+
+    @Override public boolean forceMasked() {
+      return batch.forceMasked();
+    }
+
+    @Override public long stride() {
+      return 8L;
+    }
+
+    @Override public long value(int c, int i) {
+      return batch.data()[c][i];
+    }
+
+    @Override public void put(MemorySegment d, int i, long v) {
+      d.set(ValueLayout.JAVA_LONG, i * 8L, v);
+    }
+
+    @Override public long poison(int nullOrdinal) {
+      return (nullOrdinal & 1) == 0 ? Long.MIN_VALUE : Long.MAX_VALUE;
+    }
+
+    @Override public long sentinel() {
+      return 0xDEADBEEFCAFEBABEL;
+    }
+
+    @Override public int run(VarkaFusedKernel kernel, long[] srcData, long[] srcValidity,
+        int[] nullCounts, long[] outData, long[] outValidity, long scratch) {
+      return kernel.run(srcData, srcValidity, nullCounts, outData, outValidity, new int[0], lits,
+          length(), scratch);
+    }
+
+    @Override public OptionalLong reference(VarkaVectorIR root, long[] values, boolean[] isNull) {
+      return VarkaReference.longValue(root, values, isNull, lits);
+    }
+
+    @Override public VarkaReference.Truth reference(Cond cond, long[] values, boolean[] isNull) {
+      return VarkaReference.longCond(cond, values, isNull, lits);
+    }
+
+    @Override public long got(MemorySegment out, int i, VarkaVectorIR root) {
+      return root instanceof NarrowLane ? out.get(ValueLayout.JAVA_INT, i * 4L)
+          : out.get(ValueLayout.JAVA_LONG, i * 8L);
+    }
+  }
+
+  /**
+   * Loads the generated class. A failure the class's own construction throws is rethrown as it is
+   * - a {@code NoSuchMethodError} from a misdescribed helper call stays one - so the failure
+   * classifier names it, instead of reading the reflection that carried it.
+   */
   private static VarkaFusedKernel load(VarkaGeneratedClassLoader loader, String className,
       byte[] bytes) {
     VarkaSpeciesGuard.check(className, bytes);
     loader.defineGeneratedClass(className, bytes);
     try {
       return (VarkaFusedKernel) loader.loadClass(className).getConstructor().newInstance();
+    } catch (InvocationTargetException e) {
+      if (e.getCause() instanceof Error error) {
+        throw error;
+      }
+      if (e.getCause() instanceof RuntimeException runtime) {
+        throw runtime;
+      }
+      throw new IllegalStateException(e.getCause());
     } catch (ReflectiveOperationException e) {
       throw new IllegalStateException(e);
     }
   }
 
   /**
-   * One batch through {@link #runAndCompare}'s check, whichever body its null counts select: the
-   * kernel's status, 0 once the rows are compared.
+   * One batch through the check, whichever body its null counts select: the kernel's status, 0
+   * once the rows are compared. Null lanes are poisoned; every output buffer starts at the lane's
+   * sentinel and every validity bit set, so a lane or bit the kernel fails to write shows.
    */
-  private static int runBatch(String context, String className, byte[] bytes,
-      List<VarkaVectorIR> roots, int numInputs, int[] lits, Batch batch, boolean declineAllowed,
+  private static int runOne(String context, String className, byte[] bytes,
+      List<VarkaVectorIR> rootList, int numInputs, Lane lane, boolean declineAllowed,
       SparkAnswers spark) {
-    int length = batch.length();
+    int length = lane.length();
+    var roots = rootList.toArray(new VarkaVectorIR[0]);
     var loader = new VarkaGeneratedClassLoader(VarkaKernelChecks.class.getClassLoader());
     var kernel = load(loader, className, bytes);
     try (var arena = Arena.ofConfined()) {
+      long stride = lane.stride();
       long[] srcData = new long[numInputs];
       long[] srcValidity = new long[numInputs];
       int[] nullCounts = new int[numInputs];
       for (int c = 0; c < numInputs; c++) {
-        var d = alloc(arena, length * 4L);
-        var v = alloc(arena, wordBytes(length));
+        var d = VarkaEmitterFixtures.alloc(arena, length * stride);
+        var v = VarkaEmitterFixtures.alloc(arena, wordBytes(length));
         v.fill((byte) 0);
         int nulls = 0;
         for (int i = 0; i < length; i++) {
-          if (batch.nulls()[c][i]) {
-            // Poisoned, not left at the drawn value (VARKA-70's harness rule, the same one
-            // VarkaEmitterFixtures.poison states). The data is drawn inside `columnBound` and
+          if (lane.nulls()[c][i]) {
+            // Poisoned, not left at the drawn value. The data is drawn inside `columnBound` and
             // `MONTH_ARITH_MAX_MONTHS`, so a null lane holding its drawn value is in range by
             // construction and can never reach a guard's condemning comparison - which is the
-            // one thing the fuzzer is here to reach. Alternating on the null ordinal puts each
-            // extreme on both sides of every bound whatever the null pattern is.
-            d.set(ValueLayout.JAVA_INT, i * 4L,
-                (nulls & 1) == 0 ? Integer.MIN_VALUE : Integer.MAX_VALUE);
+            // one thing the fuzzer is here to reach.
+            lane.put(d, i, lane.poison(nulls));
             nulls++;
           } else {
-            d.set(ValueLayout.JAVA_INT, i * 4L, batch.data()[c][i]);
+            lane.put(d, i, lane.value(c, i));
             long off = i / 8L;
             v.set(ValueLayout.JAVA_BYTE, off,
                 (byte) (v.get(ValueLayout.JAVA_BYTE, off) | (1 << (i % 8))));
           }
         }
         srcData[c] = d.address();
-        nullCounts[c] = batch.forceMasked() && nulls == 0 ? 1 : nulls;
+        nullCounts[c] = lane.forceMasked() && nulls == 0 ? 1 : nulls;
         srcValidity[c] = nullCounts[c] == 0 || nulls == length ? 0L : v.address();
       }
-      int n = roots.size();
+      int n = roots.length;
       var outValues = new MemorySegment[n];
       var outBits = new MemorySegment[n];
       long[] outData = new long[n];
       long[] outValidity = new long[n];
       for (int o = 0; o < n; o++) {
-        outValues[o] = alloc(arena, length * 4L);
+        outValues[o] = VarkaEmitterFixtures.alloc(arena, length * stride);
         for (int i = 0; i < length; i++) {
-          outValues[o].set(ValueLayout.JAVA_INT, i * 4L, 0xDEADBEEF);
+          lane.put(outValues[o], i, lane.sentinel());
         }
-        outBits[o] = alloc(arena, wordBytes(length));
+        outBits[o] = VarkaEmitterFixtures.alloc(arena, wordBytes(length));
         outBits[o].fill((byte) 0xFF);
-        outData[o] = roots.get(o) instanceof Cond ? 0L : outValues[o].address();
+        outData[o] = roots[o] instanceof Cond ? 0L : outValues[o].address();
         outValidity[o] = outBits[o].address();
       }
-      int status = sanitized(kernel, length, 4L, srcData, srcValidity, outData, outValidity,
-          scratch -> kernel.run(srcData, srcValidity, nullCounts, outData, outValidity, lits,
-              length, scratch));
-      if (status != 0 && declineAllowed) {
-        return status;
-      }
-      if (status != 0) {
-        throw new IllegalStateException(
-            context + ": the kernel declined the batch (status " + status + ")");
-      }
-      int[] values = new int[numInputs];
-      long[] wide = new long[numInputs];
-      boolean[] isNull = new boolean[numInputs];
-      for (int i = 0; i < length; i++) {
-        for (int c = 0; c < numInputs; c++) {
-          isNull[c] = batch.nulls()[c][i];
-          values[c] = batch.data()[c][i];
-          wide[c] = values[c];
-        }
-        for (int o = 0; o < n; o++) {
-          ROW_COMPARISONS.incrementAndGet();
-          var root = roots.get(o);
-          boolean bit = (outBits[o].get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) != 0;
-          if (spark != null) {
-            OptionalLong reference;
-            if (root instanceof Cond c) {
-              var t = VarkaReference.cond(c, values, isNull, lits);
-              reference = t == VarkaReference.Truth.UNKNOWN ? OptionalLong.empty()
-                  : OptionalLong.of(t.isTrue() ? 1L : 0L);
-            } else {
-              var v = VarkaReference.value(root, values, isNull, lits);
-              reference = v.isPresent() ? OptionalLong.of(v.getAsInt()) : OptionalLong.empty();
-            }
-            agreeWithSpark(context, spark, o, i, wide, isNull, reference);
-          }
-          String evidence = "inputs " + row(wide, isNull) + "; " + body(nullCounts);
-          if (root instanceof Cond c) {
-            boolean want = VarkaReference.cond(c, values, isNull, lits).isTrue();
-            if (bit != want) {
-              throw new IllegalStateException(context + ": selection row " + i + " differs (want "
-                  + want + ", got " + bit + ")\n  " + evidence);
-            }
-          } else {
-            OptionalInt want = VarkaReference.value(root, values, isNull, lits);
-            int got = outValues[o].get(ValueLayout.JAVA_INT, i * 4L);
-            if (bit != want.isPresent()) {
-              throw new IllegalStateException(context + ": validity of output " + o + " row " + i
-                  + " differs (want " + (want.isPresent() ? "Some(" + want.getAsInt() + ")"
-                  : "None") + ", got " + (bit ? "Some(" + got + ")" : "None") + ")\n  "
-                  + evidence);
-            }
-            if (want.isPresent() && got != want.getAsInt()) {
-              throw new IllegalStateException(context + ": output " + o + " row " + i
-                  + " differs (want " + want.getAsInt() + ", got " + got + ")\n  " + evidence);
-            }
-          }
-        }
-      }
-      return 0;
-    } finally {
-      loader.release();
-    }
-  }
-
-  /**
-   * One batch through {@link #runAndCompareLong}'s check: 64-bit buffers, the eight-argument
-   * {@code run} with {@code lits} as the long literal table, and the long-lane reference. Null
-   * lanes are poisoned with the lane's own extremes. A narrowing root stores four bytes a row, so
-   * its output is read at that width and sign-extended: a value that did not fit 32 bits then
-   * differs from the evaluator's 64-bit answer instead of being truncated on both sides.
-   */
-  private static int runLongBatch(String context, String className, byte[] bytes,
-      List<VarkaVectorIR> roots, int numInputs, long[] lits, LongBatch batch,
-      boolean declineAllowed, SparkAnswers spark) {
-    int length = batch.length();
-    var loader = new VarkaGeneratedClassLoader(VarkaKernelChecks.class.getClassLoader());
-    var kernel = load(loader, className, bytes);
-    try (var arena = Arena.ofConfined()) {
-      long[] srcData = new long[numInputs];
-      long[] srcValidity = new long[numInputs];
-      int[] nullCounts = new int[numInputs];
-      for (int c = 0; c < numInputs; c++) {
-        var d = alloc(arena, length * 8L);
-        var v = alloc(arena, wordBytes(length));
-        v.fill((byte) 0);
-        int nulls = 0;
-        for (int i = 0; i < length; i++) {
-          if (batch.nulls()[c][i]) {
-            d.set(ValueLayout.JAVA_LONG, i * 8L,
-                (nulls & 1) == 0 ? Long.MIN_VALUE : Long.MAX_VALUE);
-            nulls++;
-          } else {
-            d.set(ValueLayout.JAVA_LONG, i * 8L, batch.data()[c][i]);
-            long off = i / 8L;
-            v.set(ValueLayout.JAVA_BYTE, off,
-                (byte) (v.get(ValueLayout.JAVA_BYTE, off) | (1 << (i % 8))));
-          }
-        }
-        srcData[c] = d.address();
-        nullCounts[c] = batch.forceMasked() && nulls == 0 ? 1 : nulls;
-        srcValidity[c] = nullCounts[c] == 0 || nulls == length ? 0L : v.address();
-      }
-      int n = roots.size();
-      var outValues = new MemorySegment[n];
-      var outBits = new MemorySegment[n];
-      long[] outData = new long[n];
-      long[] outValidity = new long[n];
-      for (int o = 0; o < n; o++) {
-        outValues[o] = alloc(arena, length * 8L);
-        for (int i = 0; i < length; i++) {
-          outValues[o].set(ValueLayout.JAVA_LONG, i * 8L, 0xDEADBEEFCAFEBABEL);
-        }
-        outBits[o] = alloc(arena, wordBytes(length));
-        outBits[o].fill((byte) 0xFF);
-        outData[o] = roots.get(o) instanceof Cond ? 0L : outValues[o].address();
-        outValidity[o] = outBits[o].address();
-      }
-      int status = sanitized(kernel, length, 8L, srcData, srcValidity, outData, outValidity,
-          scratch -> kernel.run(srcData, srcValidity, nullCounts, outData, outValidity,
-              new int[0], lits, length, scratch));
+      int status = sanitized(kernel, length, stride, srcData, srcValidity, outData, outValidity,
+          scratch -> lane.run(kernel, srcData, srcValidity, nullCounts, outData, outValidity,
+              scratch));
       if (status != 0 && declineAllowed) {
         return status;
       }
@@ -559,44 +618,39 @@ public final class VarkaKernelChecks {
       boolean[] isNull = new boolean[numInputs];
       for (int i = 0; i < length; i++) {
         for (int c = 0; c < numInputs; c++) {
-          isNull[c] = batch.nulls()[c][i];
-          values[c] = batch.data()[c][i];
+          isNull[c] = lane.nulls()[c][i];
+          values[c] = lane.value(c, i);
         }
         for (int o = 0; o < n; o++) {
-          ROW_COMPARISONS.incrementAndGet();
-          var root = roots.get(o);
+          var root = roots[o];
           boolean bit = (outBits[o].get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) != 0;
-          if (spark != null) {
-            OptionalLong reference;
-            if (root instanceof Cond c) {
-              var t = VarkaReference.longCond(c, values, isNull, lits);
-              reference = t == VarkaReference.Truth.UNKNOWN ? OptionalLong.empty()
-                  : OptionalLong.of(t.isTrue() ? 1L : 0L);
-            } else {
-              reference = VarkaReference.longValue(root, values, isNull, lits);
-            }
-            agreeWithSpark(context, spark, o, i, values, isNull, reference);
-          }
-          String evidence = "inputs " + row(values, isNull) + "; " + body(nullCounts);
           if (root instanceof Cond c) {
-            boolean want = VarkaReference.longCond(c, values, isNull, lits).isTrue();
-            if (bit != want) {
+            var truth = lane.reference(c, values, isNull);
+            if (spark != null) {
+              agreeWithSpark(context, spark, o, i, values, isNull,
+                  truth == VarkaReference.Truth.UNKNOWN ? OptionalLong.empty()
+                      : OptionalLong.of(truth.isTrue() ? 1L : 0L));
+            }
+            if (bit != truth.isTrue()) {
               throw new IllegalStateException(context + ": selection row " + i + " differs (want "
-                  + want + ", got " + bit + ")\n  " + evidence);
+                  + truth.isTrue() + ", got " + bit + ")" + evidence(values, isNull, nullCounts));
             }
           } else {
-            OptionalLong want = VarkaReference.longValue(root, values, isNull, lits);
-            long got = root instanceof NarrowLane
-                ? outValues[o].get(ValueLayout.JAVA_INT, i * 4L)
-                : outValues[o].get(ValueLayout.JAVA_LONG, i * 8L);
+            OptionalLong want = lane.reference(root, values, isNull);
+            if (spark != null) {
+              agreeWithSpark(context, spark, o, i, values, isNull, want);
+            }
+            long got = lane.got(outValues[o], i, root);
             if (bit != want.isPresent()) {
               throw new IllegalStateException(context + ": validity of output " + o + " row " + i
                   + " differs (want " + shown(want) + ", got "
-                  + (bit ? "Some(" + got + ")" : "None") + ")\n  " + evidence);
+                  + (bit ? "Some(" + got + ")" : "None") + ")"
+                  + evidence(values, isNull, nullCounts));
             }
             if (want.isPresent() && got != want.getAsLong()) {
               throw new IllegalStateException(context + ": output " + o + " row " + i
-                  + " differs (want " + want.getAsLong() + ", got " + got + ")\n  " + evidence);
+                  + " differs (want " + want.getAsLong() + ", got " + got + ")"
+                  + evidence(values, isNull, nullCounts));
             }
           }
         }
