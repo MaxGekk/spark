@@ -185,3 +185,14 @@ is compiled on its own, its branch methods inlined.
    about 5% (97 ms against 92 on the runner).
 
 The draft (6.3) is next.
+
+### 9.2 The draft, 12 October 2026
+
+Three versions were drafted: `POST_CASE_WHEN_SHORT.md`, about 1200 words on 4's outline;
+`POST_CASE_WHEN.md`, about 2000 words for people who work on Spark's code generation (why the
+existing split did nothing inside a stage, the generated code, C2's `DesiredMethodLimit` of 8000
+beside `HugeMethodLimit`, the decision machinery, the filed follow-ups); and
+`POST_CASE_WHEN_USERS.md`, about 1750 words for experienced Spark users on the short version's
+spine (how to see the fix in `explain("codegen")` and in 4.4.0's warning, the two new settings,
+the per-run literal edge, what to drop after upgrading). The owner chose the users' version; it
+is the one to publish, at the length 4 set plus the practical sections, with both figures.
