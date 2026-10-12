@@ -30,10 +30,18 @@ regenerations read 8 to 32% of unchanged rows as moved, VARKA-77); alternating t
 cancels what drifts between batches, and the median of each side's runs discards the batch that
 a neighbour on the runner disturbed.
 
-`compare` matches rows by (table, case, occurrence) as `dev/varka_bench_diff.py` does, takes each
-side's median rate over its files, and prints the change in percent (+ is faster, - is slower, the
-sign of the diff tool). A row is *slower* when its median change is at most -threshold and *faster*
-at least +threshold; the exit status is 1 if any row is slower, which is the gate. `settled` says
+`compare` matches rows by (table, case, occurrence) as `dev/varka_bench_diff.py` does, and prints
+each row's change in percent twice (+ is faster, - is slower, the sign of the diff tool): from
+each side's median rate over its files, and from each side's best, its fastest run. The two answer
+different questions - the median the typical run, the best what the code can do when nothing
+disturbs it - and `sql/varka/AGENTS.md` asks a ratio under about 1.3x to be compared by minimum
+times. A row is *slower* when both changes are at most -threshold and *faster* when both are at
+least +threshold; a row whose median moves past the threshold while its best does not is marked
+as the median's alone, which is how drift shared by every row of a run reads (VARKA-224's pair:
+all eight rows slower by median, seven equal or faster by best). The exit status is 1 if any row
+is slower, which is the gate. The last line gives the widest change either way, which on an A/A
+pair - the head against itself, `dev/varka_bench_pair.sh --base HEAD` - is the runner's own
+spread for that class. `settled` says
 whether the rounds so far already show every row within `--within` percent either way, in which
 case more rounds would not change the verdict; the driver stops early on it, after at least three.
 """
@@ -63,14 +71,24 @@ def medians(runs, which):
     return {k: statistics.median([r[which][k] for r in runs if k in r[which]]) for k in keys}
 
 
-def changes(base_runs, head_runs):
-    """{key: percent change of the head against the base, + faster}, from the medians.
+def bests(runs, which):
+    """{key: the best of column `which` over the runs with the row}: the highest rate (0), the
+    fewest ns a row (1)."""
+    keys = dict.fromkeys(k for r in runs for k in r[which])
+    pick = max if which == 0 else min
+    return {k: pick([r[which][k] for r in runs if k in r[which]]) for k in keys}
+
+
+def changes(base_runs, head_runs, best=False):
+    """{key: percent change of the head against the base, + faster}, from the medians, or from each
+    side's best run where `best`.
 
     A cold case prints its rate as 0.0 and only its time a row carries the digits, so the change
     is read the way the diff tool reads it, from whichever printed figure has more of them.
     """
-    br, bn = medians(base_runs, 0), medians(base_runs, 1)
-    hr, hn = medians(head_runs, 0), medians(head_runs, 1)
+    of = bests if best else medians
+    br, bn = of(base_runs, 0), of(base_runs, 1)
+    hr, hn = of(head_runs, 0), of(head_runs, 1)
     out = {}
     for k in br:
         if k in hr:
@@ -80,9 +98,12 @@ def changes(base_runs, head_runs):
     return out
 
 
-def verdicts(ch, threshold):
-    slower = [k for k, c in ch.items() if c <= -threshold]
-    faster = [k for k, c in ch.items() if c >= threshold]
+def verdicts(ch, threshold, best=None):
+    """The rows slower and faster by `threshold`: by the median change, and by the best change too
+    where `best` is given."""
+    both = best if best is not None else ch
+    slower = [k for k, c in ch.items() if c <= -threshold and both.get(k, c) <= -threshold]
+    faster = [k for k, c in ch.items() if c >= threshold and both.get(k, c) >= threshold]
     return slower, faster
 
 
@@ -113,6 +134,14 @@ def selftest():
         [],
         [],
     )
+    # Drift shared by a whole run moves the median and not the best: the head's runs are all a
+    # little slow but one is as fast as the base's best, so no row is slower by both.
+    base2 = [run(100.0), run(100.0), run(100.0)]
+    head2 = [run(85.0), run(85.0), run(100.0)]
+    m, b = changes(base2, head2), changes(base2, head2, best=True)
+    assert m[("t", "a", 1)] < -10.0 and abs(b[("t", "a", 1)]) < 1e-6, (m, b)
+    assert verdicts(m, 10.0, b) == ([], [])
+    assert verdicts(m, 10.0) == ([("t", "a", 1)], [])
     # A row on one side only is not compared.
     only_x = ({("t", "x", 1): 1.0}, {("t", "x", 1): 1.0})
     only_y = ({("t", "y", 1): 1.0}, {("t", "y", 1): 1.0})
@@ -131,7 +160,8 @@ def main():
     ap.add_argument("--threshold", type=float, default=10.0)
     ap.add_argument("--within", type=float, default=3.0)
     args = ap.parse_args()
-    ch = changes(rates(args.base), rates(args.head))
+    base_runs, head_runs = rates(args.base), rates(args.head)
+    ch = changes(base_runs, head_runs)
     if args.cmd == "settled":
         print("settled" if settled(ch, args.within) else "open")
         return
@@ -141,13 +171,27 @@ def main():
     only = len(medians(rates(args.base), 0).keys() ^ medians(rates(args.head), 0).keys())
     if only:
         print(f"warning: {only} rows are on one side only and were not compared", file=sys.stderr)
-    slower, faster = verdicts(ch, args.threshold)
+    best = changes(base_runs, head_runs, best=True)
+    slower, faster = verdicts(ch, args.threshold, best)
+    print(" median     best  row")
     for key, c in sorted(ch.items(), key=lambda kv: kv[1]):
-        mark = "  <-- slower" if key in slower else ("  <-- faster" if key in faster else "")
-        print(f"{c:+7.1f}%  {label(key)}{mark}")
+        b = best.get(key, float("nan"))
+        if key in slower:
+            mark = "  <-- slower"
+        elif key in faster:
+            mark = "  <-- faster"
+        elif abs(c) >= args.threshold:
+            mark = "  <-- the median's alone"
+        else:
+            mark = ""
+        print(f"{c:+7.1f}%  {b:+6.1f}%  {label(key)}{mark}")
+    widest = max(abs(c) for c in ch.values())
+    widest_best = max((abs(c) for c in best.values()), default=float("nan"))
     print(
         f"\n{len(ch)} rows, {len(slower)} slower and {len(faster)} faster by {args.threshold:g}% "
-        f"or more, medians of {len(args.base)} base and {len(args.head)} head runs"
+        f"or more by both the median and the best, of {len(args.base)} base and "
+        f"{len(args.head)} head runs; the widest change either way is {widest:.1f}% by median "
+        f"and {widest_best:.1f}% by best"
     )
     sys.exit(1 if slower else 0)
 
