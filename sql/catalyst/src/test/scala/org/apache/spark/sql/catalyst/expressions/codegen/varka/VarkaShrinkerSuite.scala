@@ -120,7 +120,48 @@ class VarkaShrinkerSuite extends SparkFunSuite {
     assert(sig("selection row 7 differs (want true)").kind == "selection mismatch")
     assert(sig("the kernel declined the batch (status 2)").kind == "declined batch")
     assert(sig("x") != sig("output 0 row 7 differs (want 12)"))
+    // A context the check decorates still classifies, and the decoration leaves the signature:
+    // the other body's suffix, and the coverage row's expression the composition fuzzer adds.
+    def decorated(m: String): VarkaFailureSignature =
+      VarkaFailureSignature.of(new IllegalStateException(m), label)
+    assert(decorated(s"$label (the other body): output 0 row 7 differs (want 12)") ==
+      sig("output 0 row 7 differs (want 12)"))
+    assert(VarkaFailureSignature.of(new IllegalStateException(
+      "kernel of year(d) + 1: selection row 3 differs (want true, got false)"), "kernel").kind ==
+      "selection mismatch")
     val linkage = new NoSuchMethodError("IntVector.add(IntVector)")
     assert(VarkaFailureSignature.of(linkage, label).kind == "generated class: NoSuchMethodError")
+  }
+
+  test("a mismatch the kernel check finds is signed by its kind, not by the exception's class " +
+      "(VARKA-311)") {
+    // The test above signs messages written to the classifier's taste. This one signs what a real
+    // check throws: a kernel emitted for one tree, checked against another. Until VARKA-311 the
+    // check failed through ScalaTest's assertions, whose comparison text came before the label,
+    // so these were signed "TestFailedException" and grouped by nothing.
+    val col = new ColumnRef(0)
+    val lit = new LiteralSlot(0)
+    val label = "seed=1 iteration=2 roots=[x]"
+    def signOf(emitted: VarkaVectorIR, checked: VarkaVectorIR, inputs: Int): String = {
+      val name = s"org.apache.spark.sql.varka.execution.VarkaSignedMismatch${inputs}" +
+        s"${emitted.getClass.getSimpleName}"
+      val bytes = VarkaLoopEmitter.emit(name, java.util.List.of(emitted), inputs, 1, null, null,
+        VarkaEmitOptions.DEFAULTS)
+      val batch = VarkaKernelCheck.Batch(16, Seq.fill(inputs)((_: Int) => false),
+        Array.tabulate(inputs, 16)((c, i) => i * 3 + c), forceMasked = false)
+      val thrown = intercept[IllegalStateException] {
+        VarkaKernelCheck.runAndCompare(label, name, bytes, Seq(checked), inputs, Array(5), batch)
+      }
+      // What the kernel stored, and on a second line the row and the body, which the signature
+      // leaves out so that a different null pattern is not a different bug.
+      val lines = thrown.getMessage.linesIterator.toSeq
+      assert(lines.head.contains(", got ") && lines(1).trim.startsWith("inputs ("), lines)
+      assert(!VarkaFailureSignature.of(thrown, label).text.contains("inputs"))
+      VarkaFailureSignature.of(thrown, label).kind
+    }
+    assert(signOf(new AddDays(col, lit), new SubDays(col, lit), 1) === "output mismatch")
+    val c1 = new ColumnRef(1)
+    assert(signOf(new Compare(CompareOp.LT, col, c1), new Compare(CompareOp.GT, col, c1), 2) ===
+      "selection mismatch")
   }
 }
