@@ -1429,18 +1429,17 @@ public final class VarkaLoopEmitter {
     boolean byReuse = reuse > 0 && before + marginal <= options.fusedCeiling();
     // Under `groupBudgetUnderPrediction` off (VARKA-254), the prediction bounds the group in the
     // budget's place, up to the fused ceiling - but only where it can: with the plan's margins, a
-    // call-site budget, and a group the model prices. A group widened this way is judged on its
-    // predicted call sites whatever its width, from then on: the heavy-group exemption assumes a
+    // call-site budget, and a group the model prices. The step the prediction admits is judged on
+    // its predicted call sites whatever the group's width: the heavy-group exemption assumes a
     // narrow heavy group forms only by sharing a prefix, and six unrelated make_date would
-    // otherwise share a method past C1's limit with nothing to split it.
+    // otherwise share a method past C1's limit with nothing to split it. An output that joins by
+    // reuse keeps the exemption it has under the budget, which is what the prefix-sharing ladders
+    // rely on.
     boolean byPrediction = !byBudget && !byReuse && before + marginal <= options.fusedCeiling()
         && predictionBoundsGroup(withNext, options, predict);
-    if (byPrediction) {
-      withNext.widenedByPrediction = true;
-    }
     boolean fitsWeights = byBudget || byReuse || byPrediction;
     boolean fits = fitsWeights && (!predict || withNext.predictedWithin(options, groupSize + 1))
-        && (!withNext.widenedByPrediction || withNext.predictedSitesWithin(options));
+        && (!byPrediction || withNext.predictedSitesWithin(options));
     return new Admission(withNext, marginal, fitsWeights, fits);
   }
 
@@ -1542,9 +1541,6 @@ public final class VarkaLoopEmitter {
     int saved;
     /** The group's features for the emit cost model, or null when no prediction is asked. */
     final VarkaEmitCost.Tally tally;
-    /** Whether an output joined past the group budget because the prediction bounds the group
-     *  (`groupBudgetUnderPrediction` off), which keeps its call sites checked at any width. */
-    boolean widenedByPrediction;
 
     GroupOps(boolean sharePrefix, boolean materialize, Set<VarkaVectorIR> earlier,
         VarkaVectorIR.LaneType lane, VarkaEmitCost.Tally tally) {
@@ -1565,10 +1561,8 @@ public final class VarkaLoopEmitter {
     }
 
     GroupOps copy() {
-      var copy = new GroupOps(sharePrefix, materialize, earlier, lane, new HashSet<>(nodes),
+      return new GroupOps(sharePrefix, materialize, earlier, lane, new HashSet<>(nodes),
           new HashSet<>(prefixes), ops, tally == null ? null : tally.copy());
-      copy.widenedByPrediction = widenedByPrediction;
-      return copy;
     }
 
     /**

@@ -447,9 +447,9 @@ public sealed interface VarkaEmitOption
       new Flag("exactRefusalStatus", Reason.DIAGNOSTIC, false,
           VarkaEmitOptions::exactRefusalStatus, Builder::exactRefusalStatus,
           new FlagTag("exactRefusalStatus", true)),
-      new Flag("groupBudgetUnderPrediction", Reason.REFERENCE, true,
+      new Flag("groupBudgetUnderPrediction", Reason.REFERENCE, false,
           VarkaEmitOptions::groupBudgetUnderPrediction, Builder::groupBudgetUnderPrediction,
-          new FlagTag("predictionBoundsGroups", false)));
+          new FlagTag("budgetBoundsGroups", true)));
 
   /** The option with this name. */
   static VarkaEmitOption named(String name) {

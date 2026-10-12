@@ -437,12 +437,16 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        pressure what it was. A diagnostic: it never changes an answer or whether a batch
  *        declines.
  * @param groupBudgetUnderPrediction whether {@link #groupBudget} bounds a group while the cost
- *        model's prediction runs with the plan's margins and a call-site budget (VARKA-254). True
- *        is today's rule. False lifts the first rule's bound to {@link #fusedCeiling} there, so
- *        the prediction and the measured limits bound the group: only while the model prices it,
- *        and with the call sites of a group widened past the budget checked whatever its width,
- *        since {@link #heavyGroupOutputs}' exemption assumes a narrow heavy group forms only by
- *        sharing a prefix. Outside those conditions the budget binds either way.
+ *        model's prediction runs with the plan's margins and a call-site budget (VARKA-254). Off
+ *        by default: the first rule's bound is {@link #fusedCeiling} there, so the prediction and
+ *        the measured limits bound the group - only while the model prices it, and with the call
+ *        sites of each output the prediction admits past the budget checked whatever the group's
+ *        width, since {@link #heavyGroupOutputs}' exemption assumes a narrow heavy group forms
+ *        only by sharing a prefix. On is the budget binding as it did, kept as the reference.
+ *        Off became the default on 12 October 2026, when the grouping benchmark read the
+ *        weekday shape within 2.4% of the budget's and the mixed one 14% and 24% faster at 256 and
+ *        128 bits, and the cost audit's corpus took 42% fewer loop methods
+ *        ({@code VARKA-254.md} 9). Outside those conditions the budget binds either way.
  */
 public record VarkaEmitOptions(
     int groupBudget,
@@ -601,7 +605,7 @@ public record VarkaEmitOptions(
           VarkaEmitBudget.HUGE_METHOD_LIMIT,
           true, true, true, true,
           VarkaEmitBudget.CALL_SITE_BUDGET, VarkaEmitBudget.HEAVY_GROUP_OUTPUTS,
-          true, true, true, true, true, true, true, 0, 0, 0, false, true);
+          true, true, true, true, true, true, true, 0, 0, 0, false, false);
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {

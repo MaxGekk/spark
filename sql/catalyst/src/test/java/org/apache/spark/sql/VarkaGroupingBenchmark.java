@@ -35,9 +35,11 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoad
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitterTestSupport;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFusedKernel;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaGroupingBound;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaLoopEmitter;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMethodNames;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSqlResolve;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.types.DataTypes;
 
 /**
@@ -92,6 +94,13 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
   /** A shape: its title and its outputs as SQL over {@code d}, {@code d2}, {@code i}, {@code j}. */
   private record Shape(String title, List<String> sqls) { }
 
+  /**
+   * A shape ready to emit: its outputs, the column each kernel input reads (0 and 1 the dates, 2
+   * and 3 the integers) and the literals' values.
+   */
+  private record Prepared(String title, List<VarkaVectorIR> outputs, int[] inputColumns,
+      int[] literals) { }
+
   /** An arm: its label and the options it emits under. */
   private record Arm(String label, VarkaEmitOptions options) { }
 
@@ -139,16 +148,42 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
   }
 
   /**
-   * The default first, then the arms VARKA-254 compares: the prediction bounding groups in the
-   * budget's place ({@code groupBudgetUnderPrediction} off), and the budget raised to 400, kept
-   * from the file's first rows so the two stay comparable.
+   * Every shape, prepared: the SQL ones compiled, then VARKA-200's mixed family over one date at
+   * forty entries ({@code VarkaGroupingBound.mixed}) - a size-ladder entry, a {@code make_date},
+   * a cheap tail and a {@code date_add} in rotation, each reading the literal of its index - where
+   * the prediction bounding groups builds more loop methods than the budget. Literal {@code k} is
+   * {@code k % 28 + 1}, a day every month has, so no {@code make_date} declines.
+   */
+  private static List<Prepared> prepared() {
+    var out = new ArrayList<Prepared>();
+    for (var shape : shapes()) {
+      var fused = compile(shape);
+      out.add(new Prepared(shape.title(), fused.outputs(),
+          fused.inputOrdinals().stream().mapToInt(Integer::intValue).toArray(),
+          fused.literals().stream().mapToInt(Integer::intValue).toArray()));
+    }
+    int n = 40;
+    int[] literals = new int[n];
+    for (int k = 0; k < n; k++) {
+      literals[k] = k % 28 + 1;
+    }
+    out.add(new Prepared("40 mixed families over one date (VarkaGroupingBound)",
+        VarkaGroupingBound.mixed(n), new int[] {0}, literals));
+    return out;
+  }
+
+  /**
+   * The default first - the prediction bounding groups in the budget's place, since VARKA-254 -
+   * then the group budget binding as it did before ({@code groupBudgetUnderPrediction} on), and
+   * the budget raised to 400, kept from the file's first rows so the three stay comparable.
    */
   private static List<Arm> arms() {
     return List.of(
-        new Arm("group budget 16 (the default)", VarkaEmitOptions.DEFAULTS),
-        new Arm("the prediction bounds groups",
-            VarkaEmitOptions.DEFAULTS.withGroupBudgetUnderPrediction(false)),
-        new Arm("group budget 400", VarkaEmitOptions.DEFAULTS.withGroupBudget(400)));
+        new Arm("the prediction bounds groups (the default)", VarkaEmitOptions.DEFAULTS),
+        new Arm("group budget 16 binds",
+            VarkaEmitOptions.DEFAULTS.withGroupBudgetUnderPrediction(true)),
+        new Arm("group budget 400",
+            VarkaEmitOptions.DEFAULTS.withGroupBudgetUnderPrediction(true).withGroupBudget(400)));
   }
 
   private static CompiledVarkaProjection compile(Shape shape) {
@@ -171,10 +206,12 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
    * classes are compared by and what the loop methods are counted in, then under the arm's own
    * name, which is what is loaded and timed.
    */
-  private static Emitted emit(CompiledVarkaProjection fused, VarkaGeneratedClassLoader loader,
-      String id, VarkaEmitOptions options) throws ReflectiveOperationException {
+  private static Emitted emit(Prepared shape, VarkaGeneratedClassLoader loader, String id,
+      VarkaEmitOptions options) throws ReflectiveOperationException {
+    int numInputs = shape.inputColumns().length;
+    int numLiterals = shape.literals().length;
     byte[] probe = VarkaLoopEmitter.emit("org.apache.spark.sql.varka.execution.VarkaGroupingProbe",
-        fused.outputs(), fused.inputOrdinals().size(), fused.numLiterals(), null, null, options);
+        shape.outputs(), numInputs, numLiterals, null, null, options);
     // The dense and the masked side group alike; the larger count is the class's, as the
     // grouping suites count it.
     int dense = 0;
@@ -184,8 +221,8 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
       masked += VarkaMethodNames.isLoop(method, false) ? 1 : 0;
     }
     String name = "org.apache.spark.sql.varka.execution.VarkaGroupingBench" + id;
-    byte[] bytes = VarkaLoopEmitter.emit(name, fused.outputs(), fused.inputOrdinals().size(),
-        fused.numLiterals(), null, null, options);
+    byte[] bytes = VarkaLoopEmitter.emit(name, shape.outputs(), numInputs, numLiterals, null,
+        null, options);
     loader.defineGeneratedClass(name, bytes);
     var kernel = (VarkaFusedKernel) loader.loadClass(name).getConstructor().newInstance();
     return new Emitted(kernel, Math.max(dense, masked), probe);
@@ -208,19 +245,18 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
           ints2.set(ValueLayout.JAVA_INT, r * 4L, r * 3 % 1000 - 500);
         }
         long[] columns = {dates.address(), dates2.address(), ints.address(), ints2.address()};
-        var shapes = shapes();
+        var shapes = prepared();
         for (int s = 0; s < shapes.size(); s++) {
           var shape = shapes.get(s);
-          var fused = compile(shape);
-          int n = fused.outputs().size();
-          int numInputs = fused.inputOrdinals().size();
+          int n = shape.outputs().size();
+          int numInputs = shape.inputColumns().length;
           long[] src = new long[numInputs];
           for (int c = 0; c < numInputs; c++) {
-            src[c] = columns[fused.inputOrdinals().get(c)];
+            src[c] = columns[shape.inputColumns()[c]];
           }
           long[] srcValidity = new long[numInputs];
           int[] srcNullCount = new int[numInputs];
-          int[] literals = fused.literals().stream().mapToInt(Integer::intValue).toArray();
+          int[] literals = shape.literals();
           long[] dst = new long[n];
           long[] dstValidity = new long[n];
           for (int o = 0; o < n; o++) {
@@ -234,7 +270,7 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
           var emitted = new ArrayList<Emitted>();
           for (int a = 0; a < armList.size(); a++) {
             try {
-              emitted.add(emit(fused, loader, s + "_" + a, armList.get(a).options()));
+              emitted.add(emit(shape, loader, s + "_" + a, armList.get(a).options()));
             } catch (ReflectiveOperationException e) {
               throw new IllegalStateException(e);
             }

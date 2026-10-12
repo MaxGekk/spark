@@ -60,6 +60,8 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   test("calendar siblings over one date share a loop method; plain chains, other " +
       "dates and the ceiling keep them apart", PinsDefaults) {
+    // The budget's rule, which is what this pins: since VARKA-254 the prediction bounds groups by
+    // default, and the budget binds where it cannot and under groupBudgetUnderPrediction.
     // VARKA-32.md 10.2's table, pinned by loop-method count. Before B2 this test asserted
     // the opposite for the four fields - one method each, "whatever GROUP_BUDGET would say" -
     // because a method of ~180 ops was believed to be a compile cliff. 7.5 measured that away
@@ -72,14 +74,14 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     val fields = Seq[VarkaVectorIR](
       new Year(col), new Month(col), new DayOfMonth(col), new Quarter(col))
     def loops(roots: Seq[VarkaVectorIR], inputs: Int, lits: Int,
-        options: VarkaEmitOptions = VarkaMatrix.base): Int =
+        options: VarkaEmitOptions = VarkaMatrix.base.withGroupBudgetUnderPrediction(true)): Int =
       methodNames(emitMulti(roots, inputs, lits, options)).count(isLoop(_, true))
     // Four fields over one date: one prefix, four tails, 50 ops in one method.
     assert(loops(fields, 1, 0) === 1)
     // With sharing off there is no prefix to reuse, clause 2 never fires, and each field
     // outweighs GROUP_BUDGET on its own: the four methods of before B2, kept as the reference
     // variant the parity benchmark's "separate" rows are emitted with.
-    assert(loops(fields, 1, 0, unshared) === 4)
+    assert(loops(fields, 1, 0, unshared.withGroupBudgetUnderPrediction(true)) === 4)
     // Two dates: the second year reuses nothing (saved = 0) and 34 + 34 > 16.
     assert(loops(Seq(new Year(col), new Year(new ColumnRef(1))), 2, 0) === 2)
     // A plain chain is untouched: add_days and sub_days fit the budget together as they did.
@@ -91,7 +93,8 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       1, 1) === 2)
     // The ceiling bounds clause 2: at the prefix and the two widest tails the third sibling opens
     // a new group, which the fourth joins - two methods of two.
-    val tight = VarkaMatrix.base.withFusedCeiling(VarkaEmitBudget.CHRONO_PREFIX_WEIGHT
+    val tight = VarkaMatrix.base.withGroupBudgetUnderPrediction(true)
+      .withFusedCeiling(VarkaEmitBudget.CHRONO_PREFIX_WEIGHT
       + VarkaEmitBudget.DAY_OF_MONTH_TAIL_WEIGHT + VarkaEmitBudget.QUARTER_TAIL_WEIGHT)
     assert(loops(fields, 1, 0, tight) === 2)
     // Greedy in output order, pinned as the limitation 10.2 names rather than fixed: month(d)
@@ -106,6 +109,8 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
   }
 
   test("whole-node reuse groups what a wider budget would, and nothing else", PinsDefaults) {
+    // The budget's rule, which is what this pins: since VARKA-254 the prediction bounds groups by
+    // default, and the budget binds where it cannot and under groupBudgetUnderPrediction.
     // Clause 2 lets an output join a group past the budget when joining lets it skip work the
     // group already does. B2 wrote that for a civil-from-days prefix; `shareWholeNodes`
     // generalises it to any node the group holds, which is the same argument - a reused prefix
@@ -130,9 +135,9 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     }
     val shared8 = chain(8)
     val da1 = new AddDays(c0, new LiteralSlot(0))
-    val rule = VarkaMatrix.base.withShareWholeNodes(true)
-    val wider = VarkaMatrix.base.withGroupBudget(24)
-    val shipped = VarkaMatrix.base.withShareWholeNodes(false)
+    val rule = VarkaMatrix.base.withGroupBudgetUnderPrediction(true).withShareWholeNodes(true)
+    val wider = VarkaMatrix.base.withGroupBudgetUnderPrediction(true).withGroupBudget(24)
+    val shipped = VarkaMatrix.base.withGroupBudgetUnderPrediction(true).withShareWholeNodes(false)
 
     // Shapes that share nodes but no prefix, and whose merged weight straddles the budget:
     // the rule must emit what the wider budget emits.
@@ -458,7 +463,8 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     for ((name, roots, inputs) <- Seq(("six make_date", makeDates, 6),
         ("three add_months", addMonths, 3))) {
       assert(loops(roots, inputs, roots.size, b) === loops(roots, inputs, roots.size,
-        VarkaMatrix.base), s"$name: arm B packed outputs arm A keeps apart")
+        VarkaMatrix.base.withGroupBudgetUnderPrediction(true)),
+        s"$name: arm B packed outputs arm A keeps apart")
       if (loops(roots, inputs, roots.size, b) < roots.size) {
         val sites = groupSites(emitMulti(roots, inputs, roots.size, b)._2)
         assert(sites.values.forall(_ <= budget), s"$name under arm B: $sites")
@@ -475,7 +481,7 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     val d1 = new ColumnRef(1)
     val cheap: Seq[VarkaVectorIR] = Seq(new DayOfWeek(d0), new WeekDay(d0), new DayOfWeek(d1),
       new WeekDay(d1)) ++ (0 until 4).map(k => new AddDays(d0, new LiteralSlot(k)))
-    val a = VarkaMatrix.base
+    val a = VarkaMatrix.base.withGroupBudgetUnderPrediction(true)
     // Method by method with the class name normalised: each emission carries its own name.
     def bodies(bytes: Array[Byte]): Map[String, String] =
       VarkaEmitterTestSupport.methodBodies(bytes).asScala.toMap
@@ -578,6 +584,8 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   test("int-lane divisions over four columns take a loop method each, and a subtraction from " +
       "one joins its division", PinsDefaults) {
+    // The budget's rule, which is what this pins: since VARKA-254 the prediction bounds groups by
+    // default, and the budget binds where it cannot and under groupBudgetUnderPrediction.
     // extract(YEAR FROM ym) over four year-month interval columns: the shape a single output
     // cannot show, since one division alone forms one group whatever it weighs. Two divisions
     // weigh 22 against GROUP_BUDGET's 16, so no two share a loop method.
@@ -585,11 +593,12 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     val four = (0 until 4).map(years)
     def loops(bytes: Array[Byte]): Seq[String] =
       VarkaEmitterTestSupport.methodNames(bytes).asScala.toSeq.filter(isLoop(_, true))
-    assert(loops(emitMulti(four, 4, 0)._2) === (0 until 4).map(g => s"loopDense$g"))
+    val budget = VarkaMatrix.base.withGroupBudgetUnderPrediction(true)
+    assert(loops(emitMulti(four, 4, 0, budget)._2) === (0 until 4).map(g => s"loopDense$g"))
     // extract(YEAR FROM ym) - 1 beside extract(YEAR FROM ym): only the checked subtraction is
     // new to the division's group, and 11 + 5 is the budget exactly.
     val minusOne = new IntArith(IntOp.SUB, Overflow.FAIL, years(0), new LiteralSlot(0))
-    assert(loops(emitMulti(Seq(years(0), minusOne), 1, 1)._2) === Seq("loopDense0"))
+    assert(loops(emitMulti(Seq(years(0), minusOne), 1, 1, budget)._2) === Seq("loopDense0"))
     // The four answer as the reference evaluator does at both widths, over dividends of both
     // signs and on either side of the multiples of twelve.
     val data = (c: Int, i: Int) => (i - 500) * (c + 7) + i % 12
@@ -599,7 +608,7 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     for (lanes <- Seq(4, 16)) {
       checkMatrix(four, 4, Array.empty[Int], Seq(1, 17, 1031), patterns, data = data,
         ctx = s"four divisions at $lanes lanes",
-        options = VarkaMatrix.base.withLanesOverride(lanes))
+        options = VarkaMatrix.base.withGroupBudgetUnderPrediction(true).withLanesOverride(lanes))
     }
   }
 
@@ -1399,6 +1408,8 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   test("the call-site budget regroups only the corpus shapes with a wide group method over it, " +
       "and leaves every other shape's bytes unchanged, at both lanes (VARKA-209)", PinsDefaults) {
+    // The budget's rule, which is what this pins: since VARKA-254 the prediction bounds groups by
+    // default, and the budget binds where it cannot and under groupBudgetUnderPrediction.
     // Prediction 2 of VARKA-209.md 6.1, read as bytes rather than time: a shape whose group
     // methods are all under the budget with it off emits byte for byte the same with it on,
     // since the budget only ever adds a forced start once a method measures over it - and so
@@ -1408,7 +1419,7 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // outputs are read as its stores, one `intoMemorySegment` per value output at either lane
     // plus the six of a prefix it materializes. Over the fuzzer's own shapes at both lanes,
     // as the VARKA-198 test above and the bytes oracle read them.
-    val on = VarkaMatrix.base
+    val on = VarkaMatrix.base.withGroupBudgetUnderPrediction(true)
     val off = on.withCallSiteBudget(0)
     val budget = on.callSiteBudget()
     val mostStores = VarkaEmitBudget.HEAVY_GROUP_OUTPUTS + Analysis.SCRATCH_VECTORS
