@@ -172,7 +172,7 @@ the measurement and kept in the Java ones, the suites at their fixed seeds count
    bugs, the guard shifts, the variants under the planted liveness bug), and a planted wrong
    `dayofmonth` in `VarkaReference`, which failed the random-tree and wide-composition tests. The two
    planted mismatches classify as "output mismatch" and "selection mismatch".
-3. **Held.** The gate passed (recorded below).
+3. **Held.** The full local gate passed on the branch merged with master, every step.
 4. **Held.** The comparable tests read 79.8 seconds before and 77.7 after.
 5. **Wrong.** The Java is 1,252 lines, not about 1,100: the messages' evidence and the explicit
    case lists add more than estimated.
