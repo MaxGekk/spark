@@ -1,0 +1,233 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.spark.sql.catalyst.expressions.codegen.varka;
+
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+import java.util.List;
+
+import org.apache.spark.util.Utils;
+
+/**
+ * One kernel warm-up in a JVM of its own, for {@code VarkaKernelWarmupSuite}'s compile tests, and
+ * the shape and batches that suite warms.
+ *
+ * <p>A warm-up's verdict is a JIT outcome: the kernel's methods compiled by C2 with every vector
+ * operation intrinsified, so that a call no longer allocates. The shared test JVM cannot promise
+ * that outcome to a kernel it compiles late. Once an int kernel of a second species has run there
+ * - the suites that check their answers at a lanes override do - the Vector API's shared templates
+ * carry two receiver classes, C2 inlines both, and every vector the warmed kernel computes is
+ * boxed where the two paths merge. The kernel then never stops allocating, and the warm-up rightly
+ * never calls it compiled ({@code vector-api-and-width.md}, "two species in one JVM is a box per
+ * iteration"; see {@code VARKA-209.md} 13.2). A fresh JVM per case is the clean JVM the verdict
+ * assumes.
+ *
+ * <p>{@code main(<none|some|all>)} warms {@link #shape} on a batch of 10000 dates whose nulls the
+ * argument names, waits for the warm-up to finish, then measures sixteen calls of 1024 rows on a
+ * batch with no nulls and on one with some, and prints:
+ * <ul>
+ *   <li>{@code VARKA_WARMUP_SUPPORT=sampler=<bool> canWarm=<bool>};</li>
+ *   <li>where the sampler works, {@code VARKA_WARMUP_OUTCOME=queued=<bool> idle=<bool>
+ *       matches=<bool> state=<state> entryState=<state> ready=<bool> first=<bytes> last=<bytes>
+ *       outcome=<the outcome record>}, {@code matches} saying the outcome is this shape's;</li>
+ *   <li>where the warm-up was queued, {@code VARKA_WARMUP_ALLOC=served=<none|some> bytes=<bytes>}
+ *       for each of the two batches;</li>
+ *   <li>{@code VARKA_WARMUP_DONE=status=0}.</li>
+ * </ul>
+ * Java since VARKA-321.
+ */
+public final class VarkaKernelWarmupProbe {
+
+  private VarkaKernelWarmupProbe() {
+  }
+
+  public static final String SUPPORT_PREFIX = "VARKA_WARMUP_SUPPORT=";
+  public static final String OUTCOME_PREFIX = "VARKA_WARMUP_OUTCOME=";
+  public static final String ALLOC_PREFIX = "VARKA_WARMUP_ALLOC=";
+  public static final String DONE_PREFIX = "VARKA_WARMUP_DONE=";
+
+  /**
+   * A shape with enough calendar work that its uncompiled calls allocate unmistakably, emitted
+   * to be warmed, so that the C1-exclusion directive reaches its class. Its outputs fall in two
+   * groups whose loop methods compile one after the other, so a verdict has to wait for both.
+   */
+  public static VarkaShapeKey shape() {
+    var d = new VarkaVectorIR.ColumnRef(0);
+    var k = new VarkaVectorIR.LiteralSlot(0);
+    List<VarkaVectorIR> roots = List.of(new VarkaVectorIR.AddMonths(d, k),
+        new VarkaVectorIR.LastDay(d), new VarkaVectorIR.AddDays(d, k));
+    return new VarkaShapeKey(roots, 1, 1, VarkaEmitOptions.DEFAULTS, true);
+  }
+
+  public static final int NUM_OUTPUTS = 3;
+
+  /** Where a batch of {@link #dates} has its nulls; {@code word} is how {@link #main} is told. */
+  public enum Nulls {
+    NO_NULLS("no nulls", "none"),
+    SOME_NULLS("some nulls", "some"),
+    ALL_NULL("only nulls", "all");
+
+    public final String label;
+    public final String word;
+
+    Nulls(String label, String word) {
+      this.label = label;
+      this.word = word;
+    }
+
+    @Override public String toString() {
+      return label;
+    }
+
+    boolean isNull(int row) {
+      return switch (this) {
+        case NO_NULLS -> false;
+        case SOME_NULLS -> row % 7 == 3;
+        case ALL_NULL -> true;
+      };
+    }
+  }
+
+  /** A batch of dates: its values, its validity bitmap and its null count. */
+  public record Dates(MemorySegment data, MemorySegment validity, int nullCount) { }
+
+  /**
+   * {@code rows} dates around 2020 in memory the arena owns, with nulls as {@code nulls} says -
+   * for some nulls, every seventh row - and the batch's null count.
+   */
+  public static Dates dates(Arena arena, int rows, Nulls nulls) {
+    var data = arena.allocate(rows * 4L, 64);
+    var validity = arena.allocate(((rows + 63) / 64) * 8L, 64);
+    int nullCount = 0;
+    for (int r = 0; r < rows; r++) {
+      data.setAtIndex(ValueLayout.JAVA_INT, r, 18262 + r % 1460);
+      if (nulls.isNull(r)) {
+        nullCount++;
+      } else {
+        int b = r / 8;
+        validity.set(ValueLayout.JAVA_BYTE, b,
+            (byte) (validity.get(ValueLayout.JAVA_BYTE, b) | (1 << (r % 8))));
+      }
+    }
+    return new Dates(data, validity, nullCount);
+  }
+
+  /** A queued warm-up: the cache's entry, and whether the warm-up was queued. */
+  public record Warmed(VarkaShapeEntry entry, boolean queued) { }
+
+  /**
+   * Queues a warm-up of the cache's kernel for {@link #shape} on a batch of {@code rows} dates with
+   * nulls as {@code nulls} says, its one input declared nullable. The claim is the caller's first,
+   * so it cannot fail on a fresh cache.
+   */
+  public static Warmed warm(VarkaShapeCacheImpl cache, int rows, Nulls nulls) {
+    var entry = cache.getOrEmit(Utils.getContextOrSparkClassLoader(), shape(), "warmup-suite")
+        .entry();
+    if (!entry.warmth().tryClaim()) {
+      throw new IllegalArgumentException(
+          "requirement failed: the shape's warm-up was already claimed");
+    }
+    try (var arena = Arena.ofConfined()) {
+      var batch = dates(arena, rows, nulls);
+      long validityAddress = batch.nullCount() == 0 ? 0L : batch.validity().address();
+      boolean queued = VarkaKernelWarmup.start(entry.warmth(), entry.shapeHash(),
+          entry.newKernel(), false, new long[] {batch.data().address()},
+          new long[] {validityAddress}, new int[] {batch.nullCount()}, new int[] {4}, true, rows,
+          NUM_OUTPUTS, new int[] {2}, new long[0]);
+      // The warm-up copies the batch before start returns, so the batch can go at once.
+      return new Warmed(entry, queued);
+    }
+  }
+
+  /**
+   * What the kernel allocates over sixteen calls of 1024 rows with nulls as {@code nulls} says,
+   * after fifty calls to settle: the evidence of which of its drivers runs compiled code.
+   */
+  public static long allocationOfCalls(VarkaFusedKernel kernel, Nulls nulls) {
+    int rows = 1024;
+    try (var arena = Arena.ofConfined()) {
+      var batch = dates(arena, rows, nulls);
+      long[] src = {batch.data().address()};
+      long[] validity = {batch.nullCount() == 0 ? 0L : batch.validity().address()};
+      int[] nullCounts = {batch.nullCount()};
+      long[] dstData = new long[NUM_OUTPUTS];
+      long[] dstValidity = new long[NUM_OUTPUTS];
+      for (int o = 0; o < NUM_OUTPUTS; o++) {
+        dstData[o] = arena.allocate(rows * 4L, 64).address();
+      }
+      for (int o = 0; o < NUM_OUTPUTS; o++) {
+        dstValidity[o] = arena.allocate(rows / 8L + 8, 64).address();
+      }
+      int[] literals = {2};
+      for (int k = 0; k < 50; k++) {
+        kernel.run(src, validity, nullCounts, dstData, dstValidity, literals, rows);
+      }
+      // A plain loop: a lambda first created inside the window would count its own bootstrap,
+      // tens of kilobytes, against the kernel.
+      long before = VarkaAllocationSampler.allocatedBytes();
+      for (int k = 0; k < 16; k++) {
+        kernel.run(src, validity, nullCounts, dstData, dstValidity, literals, rows);
+      }
+      return VarkaAllocationSampler.allocatedBytes() - before;
+    }
+  }
+
+  public static void main(String[] args) throws InterruptedException {
+    if (args.length != 1) {
+      throw new IllegalArgumentException(
+          "requirement failed: usage: VarkaKernelWarmupProbe <none|some|all>");
+    }
+    Nulls claimed = null;
+    for (var n : Nulls.values()) {
+      if (n.word.equals(args[0])) {
+        claimed = n;
+      }
+    }
+    if (claimed == null) {
+      throw new IllegalArgumentException("the claiming batch has none, some or all nulls, not "
+          + args[0]);
+    }
+    boolean sampler = VarkaAllocationSampler.supported();
+    boolean canWarm = VarkaKernelWarmup.canWarm();
+    System.out.println(SUPPORT_PREFIX + "sampler=" + sampler + " canWarm=" + canWarm);
+    if (sampler) {
+      var warmed = warm(new VarkaShapeCacheImpl(8), 10000, claimed);
+      var entry = warmed.entry();
+      boolean queued = warmed.queued();
+      boolean idle = queued && VarkaKernelWarmup.awaitIdle(200000);
+      var outcomes = VarkaKernelWarmup.recentOutcomes();
+      var outcome = outcomes.isEmpty() ? null : outcomes.get(outcomes.size() - 1);
+      boolean matches = outcome != null && outcome.shapeHash().equals(entry.shapeHash());
+      System.out.println(OUTCOME_PREFIX + "queued=" + queued + " idle=" + idle + " matches="
+          + matches + " state=" + (outcome == null ? "none" : outcome.state().toString())
+          + " entryState=" + entry.warmth().state() + " ready=" + entry.warmth().ready()
+          + " first=" + (outcome == null ? -1L : outcome.firstProbeBytes())
+          + " last=" + (outcome == null ? -1L : outcome.lastProbeBytes())
+          + " outcome=" + (outcome == null ? "none" : outcome.toString()));
+      if (queued) {
+        var kernel = entry.newKernel();
+        for (var served : List.of(Nulls.NO_NULLS, Nulls.SOME_NULLS)) {
+          System.out.println(ALLOC_PREFIX + "served=" + served.word + " bytes="
+              + allocationOfCalls(kernel, served));
+        }
+      }
+    }
+    System.out.println(DONE_PREFIX + "status=0");
+  }
+}

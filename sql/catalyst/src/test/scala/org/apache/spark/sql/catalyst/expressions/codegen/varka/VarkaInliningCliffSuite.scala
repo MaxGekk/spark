@@ -51,7 +51,7 @@ class VarkaInliningCliffSuite extends SparkFunSuite with VarkaTestWatchdog {
       "--enable-native-access=ALL-UNNAMED", "-Xmx1g", "-XX:+UnlockDiagnosticVMOptions",
       "-XX:CompileCommand=quiet", s"-XX:CompileCommand=PrintInlining,$pattern",
       s"-XX:CompileCommand=PrintIntrinsics,$pattern", "-cp", testClasspath,
-      VarkaInliningCliffProbe.getClass.getName.stripSuffix("$"),
+      classOf[VarkaInliningCliffProbe].getName,
       outputs.toString, ceiling.toString, seconds.toString) ++
       budget.toSeq.flatMap(b => Seq("1024", "c1on", "cheap", "none", b.toString)))
       .foreach(command.add)
