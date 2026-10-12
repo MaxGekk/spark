@@ -140,3 +140,45 @@ The IR fuzz suite's random-tree test and the guard edge suite, before and after,
    after; then `VarkaVariantChecks` - each a commit with its forwarder.
 3. The classification test and the planted faults.
 4. Section 9.
+
+## 9. Outcome
+
+Done on 12 October 2026, in one pull request.
+
+**What was built.** `VarkaGuardSpecs` (355 lines), `VarkaKernelChecks` (609) and
+`VarkaVariantChecks` (288) hold the three checks in Java, over `VarkaReference`. Each Scala object
+is a forwarder with its members' names and signatures - `VarkaGuardSpec` 62 lines, from 226;
+`VarkaKernelCheck` 117, from 431; `VarkaVariantCheck` 88, from 206 - converting predicates to null
+flags, a `VarkaFuzzCase` to the Java `Case` and back, a Scala function to the Java `Emit`, and an
+outcome to the Scala one the suites match on. No suite changed. The switches over the sealed IR and
+the refusal enum have no `default`: the nodes no guard is placed on are named, with Java 22's
+unnamed patterns.
+
+**What a failure says.** Every mismatch is an `IllegalStateException` whose message starts with the
+case's label and the mismatch, and now carries what the kernel stored - "output 188 row 0 differs
+(want 4, got 3)" - with the row's inputs and the body that ran on a second line, which the
+signature leaves out so a different null pattern is not a different bug (the owner's review of
+Varka's error messages, 12 October 2026, asked for both).
+
+**The same rows are checked.** With a counter of compared outputs added to the old Scala checks for
+the measurement and kept in the Java ones, the suites at their fixed seeds counted 4,152,066,
+3,433,786 and 2,752,266 in their own JVMs before and after; the shared JVM counted 7,752 before and
+7,754 after, the two being the new classification test's two mismatches, each found at its first row.
+
+**Predictions scored.**
+
+1. **Held.** The counts agree exactly.
+2. **Held.** Every planted fault fails: the suites' own (the planted liveness and generated-class
+   bugs, the guard shifts, the variants under the planted liveness bug), and a planted wrong
+   `dayofmonth` in `VarkaReference`, which failed the random-tree and wide-composition tests. The two
+   planted mismatches classify as "output mismatch" and "selection mismatch".
+3. **Held.** The gate passed (recorded below).
+4. **Held.** The comparable tests read 79.8 seconds before and 77.7 after.
+5. **Wrong.** The Java is 1,252 lines, not about 1,100: the messages' evidence and the explicit
+   case lists add more than estimated.
+
+**Corrections to the plan.** `VarkaSparkOracle` did not need a Java-facing method: `VarkaKernelChecks`
+defines a `SparkAnswers` interface and a sealed `Answer`, and the forwarder adapts the oracle, which
+is unchanged. The forwarders keep their own Scala `Outcome` rather than exposing the Java one,
+since the suites match on case objects. A switch statement over the refusal enum without
+`default` is not exhaustive for definite assignment, so `bound` is a switch expression.
