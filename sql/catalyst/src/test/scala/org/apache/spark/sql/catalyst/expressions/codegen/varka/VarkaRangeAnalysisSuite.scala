@@ -496,13 +496,13 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite with VarkaTestWatchdog {
       val numLiterals = rnd.nextInt(3)
       val smallOrdinal = if (numInputs > 1) numInputs - 1 else -1
       val levelOrdinal = if (numInputs > 2) numInputs - 2 else -1
-      val shapes = new Shapes(rnd, numInputs, numLiterals, smallOrdinal, levelOrdinal)
+      val shapes = new Shapes(rnd.self, numInputs, numLiterals, smallOrdinal, levelOrdinal)
       val root = shapes.value(1 + rnd.nextInt(4)).node
       // Distinct literal values: the compiler's table is keyed by value, and the legacy oracle
       // reads it the way the compiler does.
       val literals = {
         val drawn = mutable.LinkedHashSet.empty[Int]
-        while (drawn.size < numLiterals) drawn += rnd.nextInt(2 * literalBound + 1) - literalBound
+        while (drawn.size < numLiterals) drawn += rnd.nextInt(2 * LITERAL_BOUND + 1) - LITERAL_BOUND
         drawn.toArray
       }
       val (asked, roles) = walk(root)
@@ -513,7 +513,7 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite with VarkaTestWatchdog {
           VarkaChrono.MONTH_ARITH_MAX_MONTHS - VarkaChrono.MONTH_ARITH_MIN_MONTHS + 1)
         case Role.Day => VarkaChrono.CONTRACT_MIN_DAYS + rnd.nextInt(
           VarkaChrono.CONTRACT_MAX_DAYS - VarkaChrono.CONTRACT_MIN_DAYS + 1)
-        case Role.Offset => (rnd.nextLong() % (2 * columnBound + 1) - columnBound).toInt
+        case Role.Offset => (rnd.nextLong() % (2 * COLUMN_BOUND + 1) - COLUMN_BOUND).toInt
         case Role.Int => rnd.nextInt()
       }
       val rows = Seq.fill(8)((0 until numInputs).map(c =>

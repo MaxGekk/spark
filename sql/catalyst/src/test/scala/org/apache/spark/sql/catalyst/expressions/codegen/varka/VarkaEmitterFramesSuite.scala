@@ -20,7 +20,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka
 import scala.jdk.CollectionConverters._
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaIrGrammar.{drawShape,
-  fuzzSeed, shapeRandom}
+  shapeRandom, FUZZ_SEED}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMethodNames.isGroupMethod
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
@@ -165,8 +165,8 @@ class VarkaEmitterFramesSuite extends VarkaEmitterTestBase {
       }
     }
     (0 until 300).foreach { k =>
-      val drawn = drawShape(shapeRandom(fuzzSeed, k))
-      check(s"fuzz shape $k", drawn.roots, drawn.numInputs, drawn.numLiterals)
+      val drawn = drawShape(shapeRandom(FUZZ_SEED, k))
+      check(s"fuzz shape $k", drawn.roots.asScala.toSeq, drawn.numInputs, drawn.numLiterals)
     }
     Seq(25, 100).foreach(n => check(s"$n outputs", wide(n), 1, n))
     assert(oneGroup > 100 && several > 5,

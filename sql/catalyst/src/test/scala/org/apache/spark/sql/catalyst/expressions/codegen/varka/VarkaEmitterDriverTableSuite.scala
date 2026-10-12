@@ -123,11 +123,11 @@ class VarkaEmitterDriverTableSuite extends VarkaEmitterTestBase with VarkaOwnJvm
       }
     var compared = 0
     for (k <- 0 until 400) {
-      val d = VarkaIrGrammar.drawShape(VarkaIrGrammar.shapeRandom(VarkaIrGrammar.fuzzSeed, k))
+      val d = VarkaIrGrammar.drawShape(VarkaIrGrammar.shapeRandom(VarkaIrGrammar.FUZZ_SEED, k))
       val l = VarkaIrGrammar.drawLongShape(
-        VarkaIrGrammar.shapeRandom(VarkaIrGrammar.longFuzzSeed, k))
-      for ((roots, inputs, lits) <- Seq((d.roots, d.numInputs, d.numLiterals),
-          (l.roots, l.numInputs, l.numLiterals))) {
+        VarkaIrGrammar.shapeRandom(VarkaIrGrammar.LONG_FUZZ_SEED, k))
+      for ((roots, inputs, lits) <- Seq((d.roots.asScala.toSeq, d.numInputs, d.numLiterals),
+          (l.roots.asScala.toSeq, l.numInputs, l.numLiterals))) {
         (emitted(roots, inputs, lits, VarkaMatrix.base),
           emitted(roots, inputs, lits, table)) match {
           case (Some(a), Some(b)) =>

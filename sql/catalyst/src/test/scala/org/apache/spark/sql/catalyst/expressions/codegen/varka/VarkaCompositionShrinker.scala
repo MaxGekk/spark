@@ -16,13 +16,17 @@
  */
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
+import scala.jdk.CollectionConverters._
+
 import org.apache.spark.sql.catalyst.expressions.Expression
 
 /**
  * Reduces a failing composition case to a small one that fails the same way (VARKA-294): the
  * entries by delta debugging, each entry's expression by replacing a node with a child of its
  * own data type, then the emit options, repeated until a pass changes nothing. The core is
- * [[VarkaShrinker]]'s: `ddmin`, the failure signature, and the options reduction.
+ * [[VarkaShrinker]]'s: `ddmin`, the failure signature, and the options reduction. It stays Scala
+ * while the IR's shrinker is Java (VARKA-320) because it rewrites Catalyst expressions - their
+ * children, data types and `withNewChildren` - which is Spark's interop surface.
  *
  * A candidate is kept only if it fails with the original's [[VarkaFailureSignature]]; a run that
  * passes, is skipped or fails differently is "not smaller".
@@ -62,8 +66,9 @@ object VarkaCompositionShrinker {
       val before = best
       best = shrinkEntries(best, stillFails)
       best = shrinkTrees(best, stillFails)
-      best = best.copy(options = VarkaShrinker.shrinkOptionsOf(best.options)(o =>
-        stillFails(best.copy(options = o))))
+      val current = best
+      best = best.copy(options = VarkaShrinker.shrinkOptionsOf(best.options,
+        (o: VarkaEmitOptions) => stillFails(current.copy(options = o))))
       changed = before.entries != best.entries || before.options != best.options
     }
     // A failure that depends on the JIT may not repeat: the result is run three times more, and
@@ -76,8 +81,10 @@ object VarkaCompositionShrinker {
       c: VarkaCompositionCase, fails: VarkaCompositionCase => Boolean): VarkaCompositionCase = {
     if (c.entries.size < 2) c
     else {
-      val kept = VarkaShrinker.ddmin(c.entries)(es => es.nonEmpty && fails(c.copy(entries = es)))
-      c.copy(entries = kept)
+      val kept = VarkaShrinker.ddmin(c.entries.asJava,
+        (es: java.util.List[VarkaCompositionCase.Entry]) =>
+          !es.isEmpty && fails(c.copy(entries = es.asScala.toVector)))
+      c.copy(entries = kept.asScala.toVector)
     }
   }
 

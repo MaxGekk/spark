@@ -1215,7 +1215,8 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     val off = on.withMaterializeChronoPrefix(false)
     def loops(drawn: VarkaIrGrammar.Drawn, options: VarkaEmitOptions): Option[Int] = {
       try {
-        val names = methodNames(emitMulti(drawn.roots, drawn.numInputs, drawn.numLiterals, options))
+        val names = methodNames(emitMulti(drawn.roots.asScala.toSeq, drawn.numInputs,
+          drawn.numLiterals, options))
         Some(math.max(names.count(isLoop(_, true)),
           names.count(isLoop(_, false))))
       } catch {
@@ -1225,7 +1226,7 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     var counted = 0
     var fewer = 0
     for (k <- 0 until 400) {
-      val drawn = VarkaIrGrammar.drawShape(VarkaIrGrammar.shapeRandom(VarkaIrGrammar.fuzzSeed, k))
+      val drawn = VarkaIrGrammar.drawShape(VarkaIrGrammar.shapeRandom(VarkaIrGrammar.FUZZ_SEED, k))
       (loops(drawn, on), loops(drawn, off)) match {
         case (Some(a), Some(b)) =>
           counted += 1
@@ -1441,12 +1442,12 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       }
     }
     val shapes = (0 until 400).map { k =>
-      val d = VarkaIrGrammar.drawShape(VarkaIrGrammar.shapeRandom(VarkaIrGrammar.fuzzSeed, k))
-      ("int", k, d.roots, d.numInputs, d.numLiterals)
+      val d = VarkaIrGrammar.drawShape(VarkaIrGrammar.shapeRandom(VarkaIrGrammar.FUZZ_SEED, k))
+      ("int", k, d.roots.asScala.toSeq, d.numInputs, d.numLiterals)
     } ++ (0 until 400).map { k =>
       val d = VarkaIrGrammar.drawLongShape(
-        VarkaIrGrammar.shapeRandom(VarkaIrGrammar.longFuzzSeed, k))
-      ("long", k, d.roots, d.numInputs, d.numLiterals)
+        VarkaIrGrammar.shapeRandom(VarkaIrGrammar.LONG_FUZZ_SEED, k))
+      ("long", k, d.roots.asScala.toSeq, d.numInputs, d.numLiterals)
     }
     val counted = scala.collection.mutable.Map("int" -> 0, "long" -> 0)
     var regrouped = 0
