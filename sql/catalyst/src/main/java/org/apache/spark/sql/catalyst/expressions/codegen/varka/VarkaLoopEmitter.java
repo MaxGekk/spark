@@ -147,9 +147,10 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Lit
  *
  * <p>Out-of-shape IR - unknown lane types, a condition in a value position, out-of-range
  * ordinals or slots, a day offset that is neither a literal slot nor a column, trees past
- * {@link #MAX_CHAIN_DEPTH} or {@link #MAX_FUSED_NODES} - is rejected with
- * {@link IllegalArgumentException}, which the evaluator wiring treats as "fall back". Refusing
- * to emit is a normal outcome here, not an error path: the query still runs, on stock Spark.
+ * {@link VarkaEmitBudget#MAX_CHAIN_DEPTH} or {@link VarkaEmitBudget#MAX_FUSED_NODES} - is
+ * rejected with {@link IllegalArgumentException}, which the evaluator wiring treats as "fall
+ * back". Refusing to emit is a normal outcome here, not an error path: the query still runs, on
+ * stock Spark.
  *
  * <p><b>Telemetry.</b> Every emitted class carries a {@code SourceFile} attribute - the
  * caller-supplied name, meant to identify the operator and stage
@@ -185,7 +186,7 @@ public final class VarkaLoopEmitter {
     return lane;
   }
 
-  /** {@link #emitLanes}, for the suite that checks a baked width against what the JVM has. */
+  /** {@link Lane#emitLanes}, for the suite that checks a baked width against what the JVM has. */
   static int emitLanesForTest(VarkaEmitOptions options, Lane lane) {
     return emitLanes(options, lane);
   }
@@ -480,6 +481,8 @@ public final class VarkaLoopEmitter {
      * null for a class built without a byte budget; and the limit the measurement is judged
      * against, the budget or, for a refusal, the cap on a method's code.
      */
+    // An array on purpose: a build is a return value read once, never compared or used as a key.
+    @SuppressWarnings("ArrayRecordComponent")
     private record Build(byte[] bytes, VarkaEmittedClass measured, int limit) {}
 
     /**
@@ -1176,7 +1179,7 @@ public final class VarkaLoopEmitter {
       // at no other output, and so forms exactly that partition - which is checked at the end.
       // The runs are priced as the walk prices them, so the two cannot judge a step apart.
       Map<String, double[]> prices = record != null ? record.prices() : VarkaEmitCostTable.PRICES;
-      exactStarts = bestPartitionStarts(outputs, options, forcedStarts,
+      exactStarts = bestPartitionStarts(outputs, forcedStarts,
           exactRuns.of(outputs, options, prices));
       forcedStarts = exactStarts;
     }
@@ -1247,7 +1250,7 @@ public final class VarkaLoopEmitter {
    * {@code VARKA-200.md}.
    */
   private static Set<Integer> bestPartitionStarts(List<VarkaVectorIR> outputs,
-      VarkaEmitOptions options, Set<Integer> forcedStarts, int[][] runs) {
+      Set<Integer> forcedStarts, int[][] runs) {
     int n = outputs.size();
     long[] bestOps = new long[n + 1];
     int[] bestGroups = new int[n + 1];
@@ -1299,6 +1302,9 @@ public final class VarkaLoopEmitter {
     private Map<String, double[]> prices;
     private int[][] runs;
 
+    // Identity on purpose: the runs are kept for the very output list and price table they were
+    // priced from, which stay the same objects across the regroups of one emission.
+    @SuppressWarnings("ReferenceEquality")
     int[][] of(List<VarkaVectorIR> outputs, VarkaEmitOptions options,
         Map<String, double[]> prices) {
       if (runs == null || outputs != this.outputs || !options.equals(this.options)
@@ -1466,12 +1472,13 @@ public final class VarkaLoopEmitter {
    * model's {@link VarkaEmitCost.Tally} from the same walk, so the weights and the prediction
    * see one account of what the group shares.
    *
-   * <p>The prefix is identified by the date it decomposes ({@link #chronoChild}), which is the
-   * dense body's {@link FragmentKey}; the masked body's key also carries the node's validity word,
-   * so a group may hold two calendar outputs whose masked bodies do not share (the column-count
-   * {@code add_months} beside {@code month(d)}) while the dense body and the epilogue do. Grouping
-   * on the child alone is the conservative side of that: the shape is correct either way, and a
-   * share the masked body misses is a missed win, never a wrong grouping.
+   * <p>The prefix is identified by the date it decomposes
+   * ({@link VarkaChronoLowering#chronoChild}), which is the dense body's {@link FragmentKey}; the
+   * masked body's key also carries the node's validity word, so a group may hold two calendar
+   * outputs whose masked bodies do not share (the column-count {@code add_months} beside
+   * {@code month(d)}) while the dense body and the epilogue do. Grouping on the child alone is the
+   * conservative side of that: the shape is correct either way, and a share the masked body misses
+   * is a missed win, never a wrong grouping.
    */
   private static final class GroupOps {
     private final boolean sharePrefix;
@@ -1609,14 +1616,14 @@ public final class VarkaLoopEmitter {
 
   /**
    * Whether {@code outputs} over {@code numInputs} kernel columns fit this emitter's
-   * structural budgets ({@link #MAX_CHAIN_DEPTH} height per output, {@link #MAX_INPUTS} columns,
-   * and {@link #MAX_FUSED_NODES} distinct ops across all outputs where {@code options} have no
-   * byte budget), counted exactly as {@link Analysis} and {@link #emit} count them. The
-   * compiler mirrors the budgets with this before accepting an entry: an over-budget shape that
-   * reaches {@link #emit} fails there with an {@code IllegalArgumentException} the evaluator can
-   * only turn into a silent per-batch fallback - no task-16 decline reason, and EXPLAIN still
-   * claims fusion. Checked here instead, the offending entry is demoted to residual with a
-   * recorded reason.
+   * structural budgets ({@link VarkaEmitBudget#MAX_CHAIN_DEPTH} height per output,
+   * {@link VarkaEmitBudget#MAX_INPUTS} columns, and {@link VarkaEmitBudget#MAX_FUSED_NODES}
+   * distinct ops across all outputs where {@code options} have no byte budget), counted exactly as
+   * {@link Analysis} and {@link #emit} count them. The compiler mirrors the budgets with this
+   * before accepting an entry: an over-budget shape that reaches {@link #emit} fails there with an
+   * {@code IllegalArgumentException} the evaluator can only turn into a silent per-batch fallback
+   * - no task-16 decline reason, and EXPLAIN still claims fusion. Checked here instead, the
+   * offending entry is demoted to residual with a recorded reason.
    *
    * <p>The lane agreement {@link #laneOf} demands is checked on the same terms and for the
    * same reason: one class holds one species, so outputs on different lanes are two kernels,
@@ -1676,7 +1683,7 @@ public final class VarkaLoopEmitter {
 
   /** The height of {@code node}, memoized per distinct node like {@code Analysis.height}. */
   private static int budgetWalk(VarkaVectorIR node,
-      java.util.HashMap<VarkaVectorIR, Integer> heights, int[] opNodes) {
+      Map<VarkaVectorIR, Integer> heights, int[] opNodes) {
     Integer memo = heights.get(node);
     if (memo != null) {
       return memo;

@@ -712,3 +712,16 @@ measurement.
   After 3,000 rounds every flat layout beat records, and between 30 and 300 rounds the FFM layouts
   were mostly 1.2 to 1.7 times slower than records. Measure the warm-up the production path
   actually gets, not "cold" and "warm" alone (`VARKA-291.md` 9.6, 9.7).
+
+## A Java benchmark extends `BenchmarkBase` and declares no `main`
+
+VARKA-224. Spark's `BenchmarkBase.main` is an instance method, so a Java subclass cannot add the
+static `main` a Scala `object` gets for free: javac refuses a static method that hides an instance
+one. It needs none. JDK 25's launcher calls an inherited instance `main(String[])` when a class
+declares no static one (JEP 512), and `build/sbt "<module>/Test/runMain <class>"` forks through
+the launcher (`fork := true` in the test settings), so Spark's own `main` runs and names the
+results file from the Java class's simple name as it does for a Scala benchmark. Restating that
+`main` in Java would have put the file-name rule, which the regeneration scripts depend on, in two
+places. Only an unforked sbt `run` misses the method. `VarkaBenchmarkBase` in the catalyst test
+tree is the adapter: `section(title, Runnable)` and a builder for Spark's `Benchmark` whose cases
+are `IntConsumer`s, with Spark's class still timing them and writing the table.

@@ -532,7 +532,6 @@ public final class VarkaShapeCacheImpl {
     VarkaShapeKey key = loaderKey.shape();
     String hash = shapeHash(key);
     String className = classNameFor(hash);
-    String sourceFile = sourceFileFor(hash);
     // the emission event times the define, and the Class-File walk where this builds the bytes
     // rather than defining an admitted shape's - identified by shape only (the class is shared).
     VarkaEmissionEvent emissionEvent = new VarkaEmissionEvent();
@@ -591,6 +590,8 @@ public final class VarkaShapeCacheImpl {
    * decides whether the task falls back or dies from the exception's own type. Wrapping would
    * turn an {@code OutOfMemoryError} or an interrupt into an ordinary kernel failure.
    */
+  // The sneaky-throw idiom: E is inferred as an unchecked type at each call, so the cast checks
+  // nothing and the throwable leaves with its own type.
   @SuppressWarnings("unchecked")
   static <E extends Throwable> RuntimeException sneakyThrow(Throwable t) throws E {
     throw (E) t;

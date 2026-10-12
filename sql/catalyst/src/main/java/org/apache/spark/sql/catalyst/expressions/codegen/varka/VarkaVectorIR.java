@@ -1199,7 +1199,7 @@ public sealed interface VarkaVectorIR
 
   /**
    * {@code node} rebuilt over {@code children}, in the order {@link #childrenOf} lists them, with
-   * every other field kept: the inverse of {@code childrenOf}, which a shrinker uses to put a
+   * every other field kept: the inverse of {@link #childrenOf}, which a shrinker uses to put a
    * smaller subtree in a node's place. A leaf takes none.
    *
    * <p>The constructors check what they always check, so a tree that does not type - a calendar
@@ -1264,17 +1264,5 @@ public sealed interface VarkaVectorIR
     }
     throw new IllegalArgumentException(
         "a condition goes here, not a " + node.getClass().getSimpleName());
-  }
-
-  /**
-   * The node kinds a {@code date_add}/{@code date_sub} day offset may be. Public because
-   * `VarkaExpressionCompiler` gates its offset arm on exactly this: the compiler deciding what
-   * to build and the emitter deciding what to accept are one rule, and stating it twice is how
-   * `date_add(d, weekday(d2) + 1)` came to be fused in EXPLAIN and refused at emit time, which
-   * the evaluator turns into a silent per-batch fallback. Widen this and both move together.
-   */
-  static boolean isDayOffsetShape(VarkaVectorIR offset) {
-    return offset instanceof LiteralSlot || offset instanceof ColumnRef
-        || offset instanceof IntArith || offset instanceof IntNeg;
   }
 }

@@ -282,9 +282,10 @@ offset may be, in two languages, and they drifted: `date_add(d, weekday(d2) +
 1)` was admitted by one and refused by the other, and the refusal fired only
 at emit time, as a silent per-batch fallback under an EXPLAIN that still
 claimed fusion. If a rule must be checked on both sides of the compiler/emitter
-boundary, put it in one shared predicate both call (`isDayOffsetShape` is what
-that looked like here), or write a test that enumerates the positions and
-asserts the two accepted sets are the same set.
+boundary, put it in one rule both call - here `VarkaOperandPosition` (VARKA-86),
+an exhaustive switch over the positions and the node kinds, which replaced the
+shared predicate `isDayOffsetShape` - or write a test that enumerates the
+positions and asserts the two accepted sets are the same set.
 
 **3. Before extending a predicate with more than one reader, list the readers
 and their exact question.** `guardedWord` was read by `planSlots` for "does
@@ -869,14 +870,17 @@ arm with the grammar's own `boundsOf` for its gates, and `VarkaSmallTreeSuite` r
 the emitter against the reference evaluator. Three things decided how it is built.
 
 - **Size is grammar productions, not IR nodes or depth.** `make_date` over a date's fields is one
-  arm whose IR repeats the date three times; counted in nodes it never appears at a size that
-  runs. And the condition leaf matters: with `IsNotNull` over a column counted as two, no
-  `IfElse` exists below size 5, which a pull request cannot afford; as one, it appears at 4.
-- **The counts grow about thirty-fold a size** (3,203 trees to size 3, 101,422 to 4, 3.26
-  million to 5 at the int lane), so each tier is one size: 4 in the gate, 5 nightly, 6 in an
-  idle window, sliced across JVMs (`-Dvarka.series.slice=k/n`, `dev/varka_series.sh`) because the
-  emitter is not shown thread-safe. A larger tree costs more to emit, so a size's time is not
-  its count times the smaller size's rate: size 5 took three times the estimate.
+  arm whose IR repeats the date three times; counted in nodes it never appears at a size that runs.
+  And the condition leaf matters: with `IsNotNull` over a column counted as two, no `IfElse` exists
+  below size 5; as one, it appears at 4, the size the nightly jobs and the weekly option matrix run.
+- **The counts grow about thirty-fold a size** (3,203 trees to size 3, 101,422 to 4, 3.26 million to
+  5 at the int lane), so each tier is one size: 3 in the gate (4 until it cost the gate about 400
+  seconds a width; no `IfElse` exists below 4, so the gate's series has none and
+  `VarkaIrFuzzSuite`'s draws carry it), 4 at the narrow width nightly and under every emitter
+  configuration weekly, 5 nightly, 6 in an idle window, sliced across JVMs
+  (`-Dvarka.series.slice=k/n`, `dev/varka_series.sh`) because the emitter is not shown thread-safe.
+  A larger tree costs more to emit, so a size's time is not its count times the smaller size's rate:
+  size 5 took three times the estimate.
 - **The gates are checked from the other side.** The same arms without the magnitude gates give
   a series whose extra trees are each either guarded by `Analysis` (a decline the reference
   cannot spell) or outside the contract (a calendar node over a product of columns, which the
@@ -905,3 +909,28 @@ in the shape; a test that never saw a race would say nothing about one.
 Two things to keep when adding to the suite: a task must not wait on the pool it runs in (the map
 is called from the test's thread only), and ScalaTest evaluates `assert`'s message even when the
 assertion holds, so a message that indexes into an empty result throws on success.
+
+## Error Prone and NullAway run beside the build, and the pending list only shrinks
+
+VARKA-266. `dev/varka_errorprone.sh` runs Error Prone and NullAway as a javac plugin over Varka's
+Java alone, against sbt's exported classpath, writing class files nothing reads; the gate's lint
+step runs it. Four things cost a run each to learn:
+
+- Error Prone's with-dependencies jar does not bundle the Checker Framework dataflow its analyses
+  load (`io.github.eisop:dataflow-errorprone`); without it the plugin dies on
+  `NoClassDefFoundError` mid-run. NullAway refuses to start without `AnnotatedPackages`.
+- The plugin needs ten `--add-exports` and two `--add-opens` of `jdk.compiler`, as `-J` flags,
+  and they follow javac's internals: the script refuses any JDK but 25 by name.
+- Under `-Werror` javac stops at the first warning, so to read every finding at once run without
+  it. The incubating-module notice is a warning too (`-Xlint:-incubating`).
+- A check that "a suppression has a comment above it" passes on the `*/` of the Javadoc above
+  every annotated method; the reason has to be a `//` line comment.
+
+NullAway is staged by class: the classes in `dev/varka_nullaway_pending.txt` are treated as
+unannotated and every other Varka class is checked; a class leaves the list when its nullness is
+stated (`javax.annotation.Nullable`, already on Spark's classpath) and the pass is green. The
+script fails a list longer than the merge base's, or a new name that does not replace a removed
+one (a rename keeps its place; a split does not), and a NullAway suppression over a whole class.
+It also checks a class master has taken off the list since the branch began, so a branch behind
+master fails before the merge does. An intended finding is suppressed at its site with a `//`
+reason; no check is turned off for the whole pass.

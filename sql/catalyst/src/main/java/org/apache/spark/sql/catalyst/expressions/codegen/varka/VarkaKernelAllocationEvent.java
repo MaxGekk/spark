@@ -17,6 +17,8 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import javax.annotation.Nullable;
+
 import jdk.jfr.Category;
 import jdk.jfr.Event;
 import jdk.jfr.Label;
@@ -42,7 +44,7 @@ import jdk.jfr.Name;
 public final class VarkaKernelAllocationEvent extends Event {
 
   @Label("Kernel Identity")
-  public String kernelIdentity;
+  public @Nullable String kernelIdentity;
 
   @Label("Batch Index")
   public long batchIndex;

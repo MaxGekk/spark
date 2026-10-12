@@ -224,7 +224,9 @@ every Scala-to-Java port; existing Java that a change does not touch is not swep
 
 **What stays as it is.** Spark's interop surface stays Scala - the `SparkPlan` subclasses, the
 Catalyst rules, the ScalaTest suites - as the migration rule below says. Test helpers are Java and
-the suites thin Scala wrappers over them; the engine module's tests are JUnit 5 as they are, and no
+the suites thin Scala wrappers over them. A new benchmark is Java on `VarkaBenchmarkBase`, the
+catalyst test tree's adapter over Spark's harness (VARKA-224), and a Scala benchmark is ported
+when a task touches it, the port proving itself by reproducing its committed results; the engine module's tests are JUnit 5 as they are, and no
 new assertion library comes in. A refactor is proven by `emitted_bytes.json` byte-identical, a
 port by the coverage and family-chain oracles. Lines stay within 100 columns, and `dev/lint-java`
 passes; Error Prone and NullAway join the checks when VARKA-266 lands.

@@ -33,6 +33,8 @@ import java.util.TreeSet;
 import java.util.function.IntPredicate;
 import java.util.function.UnaryOperator;
 
+import javax.annotation.Nullable;
+
 import scala.collection.immutable.Seq;
 import scala.jdk.javaapi.CollectionConverters;
 
@@ -651,7 +653,7 @@ public final class VarkaExpressionCompiler {
   private record PredicatePass(
       List<VarkaConjunctSpec> specs,
       List<Cond> conds,
-      Tables tables,
+      @Nullable Tables tables,
       Optional<CompiledVarkaPredicate> compiled) {
 
     /** The predicate of {@code layout} over this pass's tables; see the static form. */

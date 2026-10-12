@@ -370,7 +370,7 @@ public final class VarkaKernelRunner {
 
   /** Each output's rows against the other body's, where both are defined; see above. */
   private void compare(int len, boolean dense, long[] data, long[] valid) {
-    long bitmapBytes = (len + 7) / 8;
+    long bitmapBytes = ((long) len + 7) / 8;
     MemorySegment[] inputValidity = new MemorySegment[srcData.length];
     for (int i = 0; i < srcData.length; i++) {
       if (srcNullCount[i] != 0 && srcValidity[i] != 0L) {

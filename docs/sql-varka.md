@@ -1245,6 +1245,7 @@ Every one answers `--help` with its own usage; what follows is what each is
 | `varka_precommit.sh` | The house rules that slip most often - a non-ASCII byte outside a string, a source line over 100 columns, a `TODO` marker under a Varka directory, the quote check when a document changed, `SKILLS.md`'s generated index, `ruff` on Python - over the files about to be committed. Install once with `--install-hook`. |
 | `varka_gate.sh` | The full standing gate in one command: everything a task plan's "Verification" section lists, in order, each step logged. Run before proposing a change. |
 | `varka_toc.py` | Regenerates `SKILLS.md`, the index over the lesson files under `sql/varka/skills/`, from their headings; `--check` reports a stale one and the pre-commit hook runs it whenever either side changes. Without `--from` it lists a single document's own headings instead. |
+| `varka_errorprone.sh` | Error Prone and NullAway over Varka's Java, in their own javac pass apart from the build, `-Werror` (VARKA-266). NullAway checks every Varka class but those listed in `dev/varka_nullaway_pending.txt`, a list the script lets only shrink; every `@SuppressWarnings` must say why on its line or the line above. The gate's lint step runs it; the jars are pinned by sha256 and fetched into `build/` on first use. |
 | `varka_quote_check.py` | Does every performance number quoted in the plans, the lesson files, the docs and the README trace to a committed results file? Numbers that predate the tool live in `varka_quote_allowlist.txt` with a reason each, and that list only shrinks. |
 | `varka_worktree.sh` | Lists the task worktrees this repository accumulates and removes the merged ones (`list`, `gc`). |
 | `varka_pr_sweep.sh` | Dry-merges every open pull request against master, and every pair of open pull requests against each other, without touching the working tree - so a conflict between two in-flight branches is found before one of them merges. |
@@ -1295,7 +1296,7 @@ remembered.
 | `varka_bench_repeat.sh` | Runs one benchmark N times so `varka_bench_band.py` has something to read. |
 | `varka_bench_ids.sh` | Which benchmark case ids are taken and which is the next free one - the ids must be unique per file and picking one by eye gets it wrong. |
 | `varka_nightly.sh` | The checks that need volume or an idle machine, into a dated log: the canary, the IR fuzzer at ten thousand iterations, the exhaustive sweeps, every small IR tree to size 5, the deoptimization-cycle guard (ten forks per width of the default twelve-output kernel), optionally the full gate. |
-| `varka_series.sh` | Every IR tree the fuzzer's grammar could draw up to a size, counted in grammar productions, through the emitter against the reference evaluator, one JVM per core (VARKA-269): size 5 is 3.76 million trees at both lanes, about twelve minutes on the laptop; the gate runs size 4. |
+| `varka_series.sh` | Every IR tree the fuzzer's grammar could draw up to a size, counted in grammar productions, through the emitter against the reference evaluator, one JVM per core (VARKA-269): size 5 is 3.76 million trees at both lanes, about twelve minutes on the laptop; the gate runs size 3, and size 4 runs at night: at the narrow width in the nightly fuzz job and under every emitter configuration in the weekly option matrix. |
 
 ### The cross-distribution surface benchmark
 

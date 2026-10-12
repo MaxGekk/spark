@@ -21,7 +21,6 @@ import static org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVecto
 import static org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaChronoLowering.chronoChild;
 import static org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaChronoLowering.tailReadsMarchMonth;
 import static org.apache.spark.sql.catalyst.expressions.codegen.varka.Lane.emitLanes;
-import static org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.isDayOffsetShape;
 import static org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitBudget.*;
 
 import java.util.ArrayList;
@@ -91,11 +90,11 @@ final class Analysis {
   /**
    * Which word a value node's validity <i>is</i>, stated before any slot exists: one input's bitmap
    * word, the all-true constant a literal-only subtree has, or a word the node computes into a slot
-   * of its own. This is {@link #planWordRef} in symbolic form - the same aliasing rules over names
-   * instead of slot numbers - and {@link #planSlots} asserts the two agree on every node it plans,
-   * so the algebra {@link WordExpr} states cannot drift from the emission it describes. The bitmap
-   * pass and the word-liveness rule both read this map rather than the slot numbers, because they
-   * have to decide things before the slots are assigned.
+   * of its own. This is {@code Slots.planWordRef} in symbolic form - the same aliasing rules over
+   * names instead of slot numbers - and {@link Slots#plan} asserts the two agree on every node it
+   * plans, so the algebra {@link WordExpr} states cannot drift from the emission it describes.
+   * The bitmap pass and the word-liveness rule both read this map rather than the slot numbers,
+   * because they have to decide things before the slots are assigned.
    */
   sealed interface WordOwner {
     record Input(int ordinal) implements WordOwner {}
@@ -110,8 +109,8 @@ final class Analysis {
    * node whose word is computed from something other than input bitmaps - {@code IfElse}'s blend by
    * the known-true mask, {@code make_date}'s validity test, a {@code Cond} - has no expression
    * here. Folded as it is built: all-true is the identity of AND and the annihilator of OR, and
-   * equal operands collapse, which is exactly the folding {@link #andRef} does on slots, so the two
-   * views name the same thing.
+   * equal operands collapse, which is exactly the folding {@code Slots.andRef} does on slots, so
+   * the two views name the same thing.
    */
   sealed interface WordExpr {
     record Input(int ordinal) implements WordExpr {}
@@ -126,6 +125,9 @@ final class Analysis {
    * (the root is valid on every row, {@code setValid}); one ordinal is a copy; more is a chain
    * of the operator. {@code op} is meaningless below two ordinals.
    */
+  // An array on purpose: no pass is ever compared or used as a key, so the identity equality an
+  // array component gives the record is never observed.
+  @SuppressWarnings("ArrayRecordComponent")
   record BitmapPass(boolean and, int[] ordinals) {
     /** Null where the expression mixes AND and OR - see {@link Analysis#planBitmapPass}. */
     static BitmapPass of(WordExpr pure) {
@@ -191,7 +193,7 @@ final class Analysis {
   final VarkaEmitOptions options;
   /**
    * The lane count baked into this emission, or 0 to read {@code SPECIES_PREFERRED} at run
-   * time and call the general validity helpers; see {@link VarkaLoopEmitter#emitLanes}.
+   * time and call the general validity helpers; see {@link Lane#emitLanes}.
    */
   final int lanes;
   /**
@@ -623,7 +625,7 @@ final class Analysis {
   /**
    * Fills {@link #wordOwner} and {@link #pureWord} over the topological order, children
    * first, so every node sees its children's entries. The owner rules are
-   * {@link #planWordRef}'s, case for case; the purity rules are the word algebra each
+   * {@code Slots.planWordRef}'s, case for case; the purity rules are the word algebra each
    * emission arm implements - AND for the null-intolerant nodes, OR for the null-skipping
    * pick, an alias for every unary node, and nothing for a node that computes its word.
    */
@@ -786,7 +788,7 @@ final class Analysis {
     };
   }
 
-  /** {@link #andRef}'s folding over owners: all-true drops out, equal operands collapse. */
+  /** {@code Slots.andRef}'s folding over owners: all-true drops out, equal operands collapse. */
   private WordOwner andOwner(VarkaVectorIR node, VarkaVectorIR a, VarkaVectorIR b) {
     WordOwner wa = wordOwner.get(a);
     WordOwner wb = wordOwner.get(b);
@@ -892,6 +894,9 @@ final class Analysis {
       // A repeated node: its subtree is already analyzed.
       return;
     }
+    for (VarkaOperandPosition.Restricted r : VarkaOperandPosition.restrictedOperands(node)) {
+      requireOperand(r.position(), r.operand(), r.name());
+    }
     switch (node) {
       case ColumnRef c -> {
         if (c.ordinal() < 0 || c.ordinal() >= numInputs) {
@@ -914,11 +919,9 @@ final class Analysis {
         skipping.put(node, false);
       }
       case AddDays n -> {
-        requireDayOffsetShape(n.offset(), "date_add's day offset");
         analyzeOp(node, false, n.days(), n.offset());
       }
       case SubDays n -> {
-        requireDayOffsetShape(n.offset(), "date_sub's day offset");
         analyzeOp(node, false, n.days(), n.offset());
       }
       case DateDiff n -> analyzeOp(node, false, n.end(), n.start());
@@ -927,7 +930,6 @@ final class Analysis {
       case DayOfWeekIso n -> analyzeOp(node, false, n.days());
       case NextDay n -> {
         // A literal slot or a column (the derived weekday leaf).
-        requireOffsetShape(n.offset(), "next_day's weekday");
         analyzeOp(node, false, n.days(), n.offset());
       }
       case ThursdayOf n -> analyzeOp(node, false, n.days());
@@ -953,12 +955,6 @@ final class Analysis {
       case LastDay n -> analyzeOp(node, false, n.days());
       case TruncDate n -> analyzeOp(node, false, n.days());
       case TruncDateDynamic n -> {
-        // The level is the evaluator's derived int32 column; a literal level is
-        // the literal TruncDate node, which the compiler builds instead.
-        if (!(n.level() instanceof ColumnRef)) {
-          throw new IllegalArgumentException(
-              "trunc's level must be a column, got " + n.level());
-        }
         analyzeOp(node, false, n.days(), n.level());
       }
       case WeekOfYear n -> {
@@ -966,7 +962,6 @@ final class Analysis {
         analyzeOp(node, false, n.days());
       }
       case AddMonths n -> {
-        requireMonthCountShape(n.months(), "add_months' month count");
         analyzeOp(node, false, n.days(), n.months());
       }
       case MakeDate n -> {
@@ -1096,76 +1091,19 @@ final class Analysis {
     skipping.put(node, skips || childSkips);
   }
 
-  // The offset may be a literal or a column, but it is still not an arbitrary subtree -
-  // VarkaExpressionCompiler only ever emits one of these two shapes, and this check fails fast if
-  // a future IR producer emits anything else. It guards NextDay's weekday, the stricter
-  // requireLiteralOffset that used to cover it having no caller left; the day offset and
-  // AddMonths' month count each // took a third kind and moved to requireDayOffsetShape and
-  // requireMonthCountShape. {@code position} names the operand that failed, because one message
-  // shared across operands is exactly what sent the IR fuzzer's first failure (#110) hunting for
-  // a next_day the shape did not contain - the reason the check requireLiteralOffset replaced
-  // carried the name too.
-  //
-  // This one stays a local instanceof pair rather than moving to a shared predicate the way
-  // requireDayOffsetShape moved to isDayOffsetShape, and the difference is which of the two
-  // has a compiler-side counterpart to drift from. The day offset does: `compileOffset` runs
-  // an admission test over a compiled subtree, so the rule was stated twice, in two languages,
-  // and the copies did drift. This operand is not admitted by a test at all - the NextDay arm
-  // *constructs* a LiteralSlot or a derived column and can build nothing else - so there is no
-  // second copy here, only a defence against a future producer.
-  //
-  // It once served AddMonths' month count too, on a reason true of only one of them: see
-  // requireMonthCountShape.
-  private static void requireOffsetShape(VarkaVectorIR offset, String position) {
-    if (!(offset instanceof LiteralSlot) && !(offset instanceof ColumnRef)) {
-      throw new IllegalArgumentException(
-          position + " must be a literal slot or a column, got " + offset);
-    }
-  }
-
   /**
-   * The month count of {@code AddMonths}, which accepts: a literal slot, a column, or int
-   * arithmetic over those - {@code d - ym_col}, whose count is an {@link IntNeg} over the
-   * interval column, and {@code CAST(i AS INTERVAL YEAR)}, whose count is that column times
-   * twelve.
-   *
-   * <p>This position and {@code next_day} 's weekday once shared {@link #requireOffsetShape},
-   * under one sentence covering both - that each "carries a runtime bound a derived value cannot
-   * declare". That is true of the weekday and false here, which {@code VARKA-67.md} 2.1
-   * recorded and this split acts on. A column-count {@code AddMonths} is in
-   * {@link Refusal#MONTH_COUNT} and is checked at run time against
-   * {@link VarkaChrono#MONTH_ARITH_MIN_MONTHS} / {@code MAX_MONTHS} by a lanewise test on the
-   * count's own <i>value</i>, which cares nothing about what produced it - so a derived count is
-   * covered by exactly the guard a column count is. {@code next_day} 's weekday has no such
-   * guard: its range is established by a compile-time fold or by the derived weekday leaf, and a
-   * derived value there would reach {@code emitFloorMod7} unchecked.
-   *
-   * <p>The two therefore share no rule any more. {@code VarkaChronoCompiler.compileMonths}
-   * admits exactly these three kinds; the two are meant to be read together, and an enumeration
-   * test over the kinds is what would keep them together mechanically.
+   * Refuses {@code operand} where {@code position} does not take it: the emitter's statement of
+   * the rule the compiler builds by ({@link VarkaOperandPosition}), kept because a tree from any
+   * other producer - a test, a future arm - would otherwise be emitted as a plausible wrong
+   * value. {@code name} says which operand failed, because one message shared across operands
+   * once sent the IR fuzzer's first failure (#110) hunting for a {@code next_day} the shape did
+   * not contain.
    */
-  private static void requireMonthCountShape(VarkaVectorIR months, String position) {
-    if (!isDayOffsetShape(months)) {
+  private static void requireOperand(VarkaOperandPosition position, VarkaVectorIR operand,
+      String name) {
+    if (operand == null || !position.admits(operand)) {
       throw new IllegalArgumentException(
-          position + " must be a literal slot, a column or int arithmetic, got " + months);
-    }
-  }
-
-  /**
-   * The day offset of {@code AddDays}/{@code SubDays}, which accepts: a literal slot, a column,
-   * or int arithmetic over those - {@code date_add(d, i * 7)}. Not every node, which is the point
-   * of keeping a check here at all: a date-valued subtree in this position would be read as a day
-   * count and produce a plausible wrong date, and {@code next_day}'s weekday next door still
-   * takes the stricter {@link #requireOffsetShape}, because its range comes from a compile-time
-   * fold with no runtime guard behind it - unlike {@code add_months}' month count, which takes
-   * this same shape for the reason {@link #requireMonthCountShape} gives.
-   * `VarkaChronoCompiler.compileOffset` admits exactly these three kinds; the two are meant
-   * to be read together.
-   */
-  private static void requireDayOffsetShape(VarkaVectorIR offset, String position) {
-    if (!isDayOffsetShape(offset)) {
-      throw new IllegalArgumentException(
-          position + " must be a literal slot, a column or int arithmetic, got " + offset);
+          name + " must be " + position.takes() + ", got " + operand);
     }
   }
 

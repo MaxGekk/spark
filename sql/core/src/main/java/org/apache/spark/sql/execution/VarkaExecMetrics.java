@@ -21,6 +21,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Function;
 
+import javax.annotation.Nullable;
+
 import org.apache.spark.SparkContext;
 import org.apache.spark.sql.execution.metric.SQLMetric;
 import org.apache.spark.sql.execution.metric.SQLMetrics;
@@ -46,16 +48,16 @@ import org.apache.spark.sql.execution.metric.SQLMetrics;
  * @param warmupBatches batches on the per-row path while a new kernel was compiled
  */
 public record VarkaExecMetrics(
-    SQLMetric varkaBatches,
-    SQLMetric cacheHits,
-    SQLMetric cacheMisses,
-    SQLMetric fallbackBatchesNonArrow,
-    SQLMetric fallbackBatchesKernel,
-    SQLMetric fallbackBatchesRowPath,
-    SQLMetric fallbackBatchesDeclined,
-    SQLMetric emissionFailures,
-    SQLMetric suspectAllocationSamples,
-    SQLMetric warmupBatches) implements Serializable {
+    @Nullable SQLMetric varkaBatches,
+    @Nullable SQLMetric cacheHits,
+    @Nullable SQLMetric cacheMisses,
+    @Nullable SQLMetric fallbackBatchesNonArrow,
+    @Nullable SQLMetric fallbackBatchesKernel,
+    @Nullable SQLMetric fallbackBatchesRowPath,
+    @Nullable SQLMetric fallbackBatchesDeclined,
+    @Nullable SQLMetric emissionFailures,
+    @Nullable SQLMetric suspectAllocationSamples,
+    @Nullable SQLMetric warmupBatches) implements Serializable {
 
   private static final long serialVersionUID = 1L;
 
@@ -64,7 +66,7 @@ public record VarkaExecMetrics(
       null, null, null, null, null, null, null, null, null, null);
 
   /** Adds one to {@code metric}, or does nothing for an absent one. */
-  public static void inc(SQLMetric metric) {
+  public static void inc(@Nullable SQLMetric metric) {
     if (metric != null) {
       metric.add(1L);
     }
@@ -135,66 +137,66 @@ public record VarkaExecMetrics(
 
   /** Sets the metrics a suite cares about; every other stays absent. */
   public static final class Builder {
-    private SQLMetric varkaBatches;
-    private SQLMetric cacheHits;
-    private SQLMetric cacheMisses;
-    private SQLMetric fallbackBatchesNonArrow;
-    private SQLMetric fallbackBatchesKernel;
-    private SQLMetric fallbackBatchesRowPath;
-    private SQLMetric fallbackBatchesDeclined;
-    private SQLMetric emissionFailures;
-    private SQLMetric suspectAllocationSamples;
-    private SQLMetric warmupBatches;
+    private @Nullable SQLMetric varkaBatches;
+    private @Nullable SQLMetric cacheHits;
+    private @Nullable SQLMetric cacheMisses;
+    private @Nullable SQLMetric fallbackBatchesNonArrow;
+    private @Nullable SQLMetric fallbackBatchesKernel;
+    private @Nullable SQLMetric fallbackBatchesRowPath;
+    private @Nullable SQLMetric fallbackBatchesDeclined;
+    private @Nullable SQLMetric emissionFailures;
+    private @Nullable SQLMetric suspectAllocationSamples;
+    private @Nullable SQLMetric warmupBatches;
 
     private Builder() {
     }
 
-    public Builder varkaBatches(SQLMetric m) {
+    public Builder varkaBatches(@Nullable SQLMetric m) {
       varkaBatches = m;
       return this;
     }
 
-    public Builder cacheHits(SQLMetric m) {
+    public Builder cacheHits(@Nullable SQLMetric m) {
       cacheHits = m;
       return this;
     }
 
-    public Builder cacheMisses(SQLMetric m) {
+    public Builder cacheMisses(@Nullable SQLMetric m) {
       cacheMisses = m;
       return this;
     }
 
-    public Builder fallbackBatchesNonArrow(SQLMetric m) {
+    public Builder fallbackBatchesNonArrow(@Nullable SQLMetric m) {
       fallbackBatchesNonArrow = m;
       return this;
     }
 
-    public Builder fallbackBatchesKernel(SQLMetric m) {
+    public Builder fallbackBatchesKernel(@Nullable SQLMetric m) {
       fallbackBatchesKernel = m;
       return this;
     }
 
-    public Builder fallbackBatchesRowPath(SQLMetric m) {
+    public Builder fallbackBatchesRowPath(@Nullable SQLMetric m) {
       fallbackBatchesRowPath = m;
       return this;
     }
 
-    public Builder fallbackBatchesDeclined(SQLMetric m) {
+    public Builder fallbackBatchesDeclined(@Nullable SQLMetric m) {
       fallbackBatchesDeclined = m;
       return this;
     }
 
-    public Builder emissionFailures(SQLMetric m) {
+    public Builder emissionFailures(@Nullable SQLMetric m) {
       emissionFailures = m;
       return this;
     }
 
-    public Builder suspectAllocationSamples(SQLMetric m) {
+    public Builder suspectAllocationSamples(@Nullable SQLMetric m) {
       suspectAllocationSamples = m;
       return this;
     }
 
-    public Builder warmupBatches(SQLMetric m) {
+    public Builder warmupBatches(@Nullable SQLMetric m) {
       warmupBatches = m;
       return this;
     }

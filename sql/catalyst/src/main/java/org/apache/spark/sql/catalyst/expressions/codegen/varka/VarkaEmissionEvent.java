@@ -17,6 +17,8 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import javax.annotation.Nullable;
+
 import jdk.jfr.Category;
 import jdk.jfr.Description;
 import jdk.jfr.Event;
@@ -39,10 +41,10 @@ import jdk.jfr.Name;
 public final class VarkaEmissionEvent extends Event {
 
   @Label("Shape Hash")
-  public String shapeHash;
+  public @Nullable String shapeHash;
 
   @Label("Class Name")
-  public String className;
+  public @Nullable String className;
 
   @Label("Fused Outputs")
   public int numOutputs;

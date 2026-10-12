@@ -18,8 +18,11 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import org.apache.spark.sql.catalyst.analysis.{SimpleAnalyzer, UnresolvedAttribute}
-import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, Expression}
+import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference, Expression,
+  NamedExpression}
+import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 import org.apache.spark.sql.catalyst.plans.logical.{LocalRelation, Project}
+import org.apache.spark.sql.types.DataType
 
 /**
  * One resolver for the SQL-to-expression tools in this package, because there were two and only
@@ -39,6 +42,20 @@ import org.apache.spark.sql.catalyst.plans.logical.{LocalRelation, Project}
  * why this is a shared object rather than a second patch.
  */
 object VarkaSqlResolve {
+
+  /**
+   * A column the tools declare, for the Java tools: `AttributeReference`'s expression id and
+   * qualifier sit in a second parameter list whose defaults Java cannot reach.
+   */
+  def column(name: String, dataType: DataType): AttributeReference =
+    AttributeReference(name, dataType)()
+
+  /** `text` parsed by Catalyst's parser and resolved against `columns`, as [[resolve]] does. */
+  def parse(text: String, columns: Seq[Attribute]): Expression =
+    resolve(CatalystSqlParser.parseExpression(text), columns)
+
+  /** `e` as a projection entry named `name`, for the Java tools, as [[column]] is. */
+  def named(e: Expression, name: String): NamedExpression = Alias(e, name)()
 
   /**
    * Bind `e` against `columns` and run the analyzer over the result, so operators get the type

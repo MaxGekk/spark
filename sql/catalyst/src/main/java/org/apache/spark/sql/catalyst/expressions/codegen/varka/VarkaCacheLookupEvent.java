@@ -17,6 +17,8 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import javax.annotation.Nullable;
+
 import jdk.jfr.Category;
 import jdk.jfr.Event;
 import jdk.jfr.Label;
@@ -35,11 +37,11 @@ import jdk.jfr.Name;
 public final class VarkaCacheLookupEvent extends Event {
 
   @Label("Shape Hash")
-  public String shapeHash;
+  public @Nullable String shapeHash;
 
   @Label("Cache Hit")
   public boolean hit;
 
   @Label("Execution")
-  public String execution;
+  public @Nullable String execution;
 }

@@ -483,16 +483,16 @@ final class VarkaChronoLowering {
       int reads = analysis.options.elideUnreadLocals()
           ? s.fragmentReads.getOrDefault(key, ALL_PREFIX_VECTORS) & ALL_PREFIX_VECTORS
           : ALL_PREFIX_VECTORS;
-      emitPrefixTransfer(cb, analysis, s, t, mat, false,
+      emitPrefixTransfer(cb, s, t, mat, false,
           reads | (ownMonth ? Slots.READS_MONTH : 0));
       return;
     }
     emitValue(cb, date, dense, analysis, s, computed);
     line(cb, analysis, node);
     boolean emitMonth = ownMonth || (mat != null && mat.needsMonth());
-    emitChronoPrefix(cb, node, dense, analysis, s, t, emitMonth);
+    emitChronoPrefix(cb, analysis, t, emitMonth);
     if (mat != null && s.storedPrefixes.add(date)) {
-      emitPrefixTransfer(cb, analysis, s, t, mat, true,
+      emitPrefixTransfer(cb, s, t, mat, true,
           ALL_PREFIX_VECTORS | (mat.needsMonth() ? Slots.READS_MONTH : 0));
     }
   }
@@ -509,7 +509,7 @@ final class VarkaChronoLowering {
    * segment, with the same mask as a column's load at this point of the body, so the epilogue's
    * partial lane group stays inside its region.
    */
-  private static void emitPrefixTransfer(CodeBuilder cb, Analysis analysis, Slots s, int[] t,
+  private static void emitPrefixTransfer(CodeBuilder cb, Slots s, int[] t,
       Analysis.Materialized mat, boolean store, int vectors) {
     for (int k = 0; k < Analysis.SCRATCH_VECTORS; k++) {
       if ((vectors >>> k & 1) == 0) {
@@ -577,8 +577,8 @@ final class VarkaChronoLowering {
    * that contract - {@link #emitAddMonths} reuses {@code t[6]} for its compares once the prefix
    * is done, which is sound precisely because no tail reads it.
    */
-  private static void emitChronoPrefix(CodeBuilder cb, VarkaVectorIR node, boolean dense,
-      Analysis analysis, Slots s, int[] t, boolean emitMonth) {
+  private static void emitChronoPrefix(CodeBuilder cb, Analysis analysis, int[] t,
+      boolean emitMonth) {
     int days = t[0];
     int era = t[1];
     int rem = t[2];
@@ -1449,7 +1449,6 @@ final class VarkaChronoLowering {
     int century = t[3];
     int yearOfCentury = t[4];
     int marchMonth = t[5];
-    int mask = t[6];
     int year = t[8];
     int dayOfMonth = t[9];
     int monthStart = t[10];

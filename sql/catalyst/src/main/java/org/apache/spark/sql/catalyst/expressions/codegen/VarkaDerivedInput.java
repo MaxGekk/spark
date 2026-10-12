@@ -41,6 +41,9 @@ public record VarkaDerivedInput(int inputIndex, int sourceOrdinal, VarkaDerivedK
    * {@code next_day} over the same weekday column share one leaf. The table's mark-and-truncate
    * discipline rolls it back with the plain columns when its entry declines.
    */
+  // The ordinal is safe here: a key lives only inside one compilation, which interns it and
+  // resolves it back to a kind before the plan exists, so no stored key outlives a reordering.
+  @SuppressWarnings("EnumOrdinal")
   public static int key(int sourceOrdinal, VarkaDerivedKind kind) {
     return -1 - (sourceOrdinal * KINDS.length + kind.ordinal());
   }

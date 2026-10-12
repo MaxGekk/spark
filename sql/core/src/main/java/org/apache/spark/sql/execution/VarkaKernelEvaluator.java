@@ -508,15 +508,15 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
       DataType dataType, int ordinal, int len, BufferAllocator allocator) {
     String name = "varka" + ordinal;
     ValueVector vector;
-    if (dataType == DataTypes.DateType) {
+    if (dataType.equals(DataTypes.DateType)) {
       vector = new DateDayVector(name, allocator);
-    } else if (dataType == DataTypes.IntegerType) {
+    } else if (dataType.equals(DataTypes.IntegerType)) {
       vector = new IntVector(name, allocator);
     } else if (dataType instanceof YearMonthIntervalType) {
       // The unit rides on the Spark type and never on the buffer, so every year-month unit writes
       // one vector class; the row path reads it back through the accessor ArrowColumnVector has.
       vector = new IntervalYearVector(name, allocator);
-    } else if (dataType == DataTypes.LongType || dataType instanceof TimeType
+    } else if (dataType.equals(DataTypes.LongType) || dataType instanceof TimeType
         || dataType instanceof DayTimeIntervalType) {
       // The long lane's destinations, built from the same Arrow field Spark's own writer would
       // build for the type - BigIntVector, TimeNanoVector with the precision in its field metadata,

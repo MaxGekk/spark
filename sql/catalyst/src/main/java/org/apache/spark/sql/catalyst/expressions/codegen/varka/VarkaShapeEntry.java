@@ -48,6 +48,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoad
  * but a record <i>looks</i> like it has value equality, so: it does not, and nothing may start
  * relying on it having it.
  */
+// An array on purpose: as the doc above says, nothing relies on this record's equality.
+@SuppressWarnings("ArrayRecordComponent")
 public record VarkaShapeEntry(
     VarkaGeneratedClassLoader loader,
     Class<?> klass,

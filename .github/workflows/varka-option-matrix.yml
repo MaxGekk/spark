@@ -74,8 +74,10 @@ jobs:
       run: |
         set -o pipefail
         mkdir -p target
+        # The small-tree series at size 4, which pull requests no longer run (VARKA-269 9): every
+        # configuration meets every tree to size 4, IfElse included.
         ./dev/varka_matrix.sh --all --shard ${{ matrix.shard }}/12 -j 2 --sbt-arg -Phive \
-          | tee target/varka-matrix-report.txt
+          --jvm-arg -Dvarka.series.size=4 | tee target/varka-matrix-report.txt
     - name: Summary
       if: always()
       run: |

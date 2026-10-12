@@ -1014,6 +1014,17 @@ final class Slots {
   }
 
   /**
+   * Whether {@code child} is the very node object {@code skipped}, not merely an equal one. The
+   * walks below skip one edge, to the child object an emission skips; an equal node reached by
+   * another edge is still followed.
+   */
+  // Identity is the point: equals() would also skip edges to equal nodes elsewhere in the tree.
+  @SuppressWarnings("ReferenceEquality")
+  private static boolean sameNode(VarkaVectorIR child, VarkaVectorIR skipped) {
+    return child == skipped;
+  }
+
+  /**
    * How often a body visits each node it emits, which decides the node's shared slot (VARKA-223):
    * a node visited twice is computed once into its slot and loaded after, and a node visited once
    * is computed in place, where a slot would cost a {@code dup} and a store nothing reads. Once per
@@ -1046,7 +1057,7 @@ final class Slots {
         }
       }
       for (VarkaVectorIR child : childrenOf(node)) {
-        if (child == skipped) {
+        if (sameNode(child, skipped)) {
           skipped = null;
         } else {
           uses.merge(child, 1, Integer::sum);
@@ -1132,7 +1143,7 @@ final class Slots {
         loaded = null;
       }
       for (VarkaVectorIR child : childrenOf(n)) {
-        if (child == loaded) {
+        if (sameNode(child, loaded)) {
           loaded = null;
         } else {
           walk.add(child);
@@ -1192,7 +1203,7 @@ final class Slots {
       // add_months whose count is its date - is emitted by the lowering, so it is walked.
       VarkaVectorIR loaded = loadedPrefixDate(analysis, group, n);
       for (VarkaVectorIR child : childrenOf(n)) {
-        if (child == loaded) {
+        if (sameNode(child, loaded)) {
           deferred.add(child);
           loaded = null;
         } else {
@@ -1417,7 +1428,7 @@ final class Slots {
         skipped = null;
       }
       for (VarkaVectorIR child : childrenOf(node)) {
-        if (child == skipped) {
+        if (sameNode(child, skipped)) {
           skipped = null;
         } else {
           pending.add(child);

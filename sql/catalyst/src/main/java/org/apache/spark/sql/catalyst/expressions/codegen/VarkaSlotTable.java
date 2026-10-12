@@ -72,7 +72,7 @@ final class VarkaSlotTable {
   /** Drops the slots from {@code mark} on: what was interned after the table had that size. */
   void truncate(int mark) {
     while (keys.size() > mark) {
-      slots.remove(keys.remove(keys.size() - 1));
+      slots.remove(keys.removeLast());
     }
   }
 }

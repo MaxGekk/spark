@@ -290,6 +290,47 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       "documented as covered, but the compiler declines:\n  " + failures.mkString("\n  "))
   }
 
+  test("every operand the compiler builds in a restricted position is one the position admits") {
+    // VARKA-86. The emitter refuses an operand its position does not take, and a refusal at emit
+    // time is a per-batch fallback while EXPLAIN claims fusion. So over every documented
+    // expression, each operand the compiler built in a restricted position must be one the
+    // position admits. The positions come from VarkaOperandPosition.restrictedOperands, the same
+    // exhaustive function the emitter checks through, so this walk has no list of its own to go
+    // stale. It checks what the compiler builds over the table, not that every arm asks the rule:
+    // an arm that builds an admitted kind passes with or without its gate. Each position must be
+    // reached, or the check would pass on nothing.
+    val reached = scala.collection.mutable.Map.empty[VarkaOperandPosition, Int].withDefaultValue(0)
+    val wrong = scala.collection.mutable.ArrayBuffer.empty[String]
+    def walk(node: VarkaVectorIR, sql: String): Unit = {
+      VarkaOperandPosition.restrictedOperands(node).asScala.foreach { r =>
+        reached(r.position) += 1
+        if (!r.position.admits(r.operand)) wrong += s"$sql: ${r.name} got ${r.operand}"
+      }
+      VarkaVectorIR.childrenOf(node).foreach(walk(_, sql))
+    }
+    families.foreach { family =>
+      family.rows.foreach { row =>
+        val expr = expressionOf(row)
+        val outputs =
+          if (family.predicates) {
+            VarkaExpressionCompiler.compilePredicate(expr, columns).toScala.toSeq
+              .flatMap(_.fused.outputs.asScala)
+          } else {
+            VarkaExpressionCompiler.compilePartial(Seq(out(expr)), columns).toScala.toSeq
+              .flatMap(p => (p.fused +: p.more.asScala.toSeq).flatMap(_.outputs.asScala))
+          }
+        outputs.foreach(walk(_, row.sql))
+      }
+    }
+    assert(wrong.isEmpty, wrong.mkString("\n"))
+    // The trunc level is the exception: no documented expression truncates by a level column
+    // (the table's trunc rows take literal levels), and its compiler arm builds the column with
+    // the admitted Java type, so there is no built operand of that position to check here.
+    VarkaOperandPosition.values().filter(_ != VarkaOperandPosition.TRUNC_LEVEL).foreach {
+      position => assert(reached(position) > 0, s"no coverage row builds a $position operand")
+    }
+  }
+
   test("an expression matched only to decline really does decline") {
     // The exemption above is the only way a class the compiler matches can stay out of the
     // table, so it has to be self-policing: an entry that starts fusing is coverage and belongs

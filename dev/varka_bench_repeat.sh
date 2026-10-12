@@ -94,9 +94,9 @@ case "$klass" in
   *.*) fqcn="$klass"; klass="${klass##*.}" ;;
   *)
     case "$src_module" in catalyst) src="sql/catalyst/src/test" ;; *) src="sql/core/src/test" ;; esac
-    file="$(find "$src" -name "$klass.scala" | head -1)"
-    [ -n "$file" ] || { echo "no $klass.scala under $src" >&2; exit 2; }
-    fqcn="$(sed -n 's/^package \(.*\)$/\1/p' "$file" | head -1).$klass" ;;
+    file="$(find "$src" \( -name "$klass.scala" -o -name "$klass.java" \) | head -1)"
+    [ -n "$file" ] || { echo "no $klass.scala or $klass.java under $src" >&2; exit 2; }
+    fqcn="$(sed -n 's/^package \([^;]*\);\{0,1\}$/\1/p' "$file" | head -1).$klass" ;;
 esac
 
 if [ "$band" = "default" ]; then
