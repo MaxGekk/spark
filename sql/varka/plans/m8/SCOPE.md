@@ -3957,7 +3957,7 @@ rendering of every one.
 
 ### Item 65. What a query reports: fallback counts as SQL metrics
 
-*Added 29 September 2026 from the review of VARKA-209's build.*
+*Added 29 September 2026 from the review of VARKA-209's build.* *Taken into milestone 7 as row 313 on 12 October 2026, with the cost of exact refusal status beside it.*
 
 A query's plan says which entries fused (`VarkaFusionReport`, the decline reasons of VARKA-16),
 and the evaluator falls back to the row path per batch when a kernel declines one at run time.
