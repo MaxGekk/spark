@@ -25,12 +25,12 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, BasePredicate, Expression, IsNotNull, NamedExpression, Predicate, PredicateHelper, SortOrder, UnsafeProjection}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSelectionBitmap
 import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.vectorized.{OffHeapColumnVector, OnHeapColumnVector, WritableColumnVector}
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.util.ArrayImplicits._
@@ -59,6 +59,17 @@ private[sql] trait VarkaFilterExecBase extends UnaryExecNode with PredicateHelpe
   /** The filter's whole condition when the rule split residual conjuncts off it. */
   def wholeCondition: Option[Expression]
 
+  /**
+   * The session's emit settings, bound when the rule built the node (a constructor field, so
+   * Spark's copies keep it): the planning-time classification and the tasks both use these, never
+   * the conf as it stands when the plan runs, so the two cannot split the condition differently.
+   */
+  def sessionEmit: VarkaSessionEmit
+
+  // The settings are an implementation detail of the node, not an argument a plan reader needs.
+  override protected def stringArgs: Iterator[Any] =
+    super.stringArgs.filterNot(_.isInstanceOf[VarkaSessionEmit])
+
   // Split out all the IsNotNulls from condition, exactly as FilterExec does.
   private lazy val notNullPreds = splitConjunctivePredicates(condition).filter {
     case IsNotNull(a) => isNullIntolerant(a) && a.references.subsetOf(child.outputSet)
@@ -83,7 +94,7 @@ private[sql] trait VarkaFilterExecBase extends UnaryExecNode with PredicateHelpe
   // parity with the projection nodes' memoized classification).
   @transient private lazy val fusionLines =
     VarkaFusionReport.predicateLines(condition, child.output,
-      VarkaColumnarToRowExec.emitOptions(conf.varkaEmitUseAVX))
+      VarkaColumnarToRowExec.emitOptions(sessionEmit))
 
   // The question for a filter is "why didn't my predicate fuse?", answered per conjunct.
   // The condition renders as FilterExec renders its own - a plain line, because
@@ -120,7 +131,8 @@ private[sql] trait VarkaFilterExecBase extends UnaryExecNode with PredicateHelpe
 case class VarkaFilterExec(
     condition: Expression,
     child: SparkPlan,
-    wholeCondition: Option[Expression] = None)
+    wholeCondition: Option[Expression] = None,
+    sessionEmit: VarkaSessionEmit = VarkaSessionEmit.of(SQLConf.get))
     extends VarkaFilterExecBase
     with SafeForKWayMerge {
 
@@ -151,7 +163,7 @@ case class VarkaFilterExec(
       longMetric("numOutputRows"),
       longMetric("numInputBatches"),
       VarkaExecMetrics.fromNode(longMetric),
-      emitUseAVX = conf.varkaEmitUseAVX,
+      sessionEmit = sessionEmit,
       warmupEnabled = conf.varkaWarmupEnabled,
       wholeCondition = wholeCondition)
     if (conf.usePartitionEvaluator) {
@@ -173,7 +185,7 @@ private[sql] class VarkaFilterEvaluatorFactory(
     numOutputRows: SQLMetric,
     numInputBatches: SQLMetric,
     varkaMetrics: VarkaExecMetrics,
-    emitUseAVX: Int = VarkaEmitOptions.USE_AVX_UNKNOWN,
+    sessionEmit: VarkaSessionEmit = VarkaSessionEmit.DEFAULTS,
     warmupEnabled: Boolean = false,
     wholeCondition: Option[Expression] = None)
     extends PartitionEvaluatorFactory[ColumnarBatch, ColumnarBatch] with Logging {
@@ -187,7 +199,7 @@ private[sql] class VarkaFilterEvaluatorFactory(
 
     private val kernels = new VarkaFilterEvaluator(
       condition, childOutput, offHeapColumnVectorEnabled, "Filter",
-      classDumpDirectory, varkaMetrics, emitUseAVX, warmupEnabled)
+      classDumpDirectory, varkaMetrics, sessionEmit, warmupEnabled)
 
     // The per-row predicate and converter behind the fallback. Lazy: a task the
     // kernel serves end to end never pays the Janino compile.
@@ -330,7 +342,8 @@ case class VarkaFilterColumnarToRowExec(
     condition: Expression,
     child: SparkPlan,
     narrowing: Option[Seq[NamedExpression]] = None,
-    wholeCondition: Option[Expression] = None)
+    wholeCondition: Option[Expression] = None,
+    sessionEmit: VarkaSessionEmit = VarkaSessionEmit.of(SQLConf.get))
     extends VarkaFilterExecBase
     with VarkaFusedTransition
     with SafeForKWayMerge {
@@ -347,8 +360,8 @@ case class VarkaFilterColumnarToRowExec(
    * computes" rather than "the kernels this transition runs".
    */
   override def columnarSibling: SparkPlan = {
-    val filter = VarkaFilterExec(condition, child, wholeCondition)
-    narrowing.map(VarkaProjectExec(_, filter)).getOrElse(filter)
+    val filter = VarkaFilterExec(condition, child, wholeCondition, sessionEmit)
+    narrowing.map(VarkaProjectExec(_, filter, sessionEmit)).getOrElse(filter)
   }
 
   override protected def withNewChildInternal(newChild: SparkPlan): VarkaFilterColumnarToRowExec = {
@@ -369,7 +382,7 @@ case class VarkaFilterColumnarToRowExec(
       longMetric("numOutputRows"),
       longMetric("numInputBatches"),
       VarkaExecMetrics.fromNode(longMetric),
-      emitUseAVX = conf.varkaEmitUseAVX,
+      sessionEmit = sessionEmit,
       warmupEnabled = conf.varkaWarmupEnabled,
       wholeCondition = wholeCondition)
     if (conf.usePartitionEvaluator) {
@@ -391,7 +404,7 @@ private[sql] class VarkaFilterToRowEvaluatorFactory(
     numOutputRows: SQLMetric,
     numInputBatches: SQLMetric,
     varkaMetrics: VarkaExecMetrics,
-    emitUseAVX: Int = VarkaEmitOptions.USE_AVX_UNKNOWN,
+    sessionEmit: VarkaSessionEmit = VarkaSessionEmit.DEFAULTS,
     warmupEnabled: Boolean = false,
     wholeCondition: Option[Expression] = None)
     extends PartitionEvaluatorFactory[ColumnarBatch, InternalRow] with Logging {
@@ -407,7 +420,7 @@ private[sql] class VarkaFilterToRowEvaluatorFactory(
     // keeps the constructor honest about what this node allocates (nothing but the bitmap).
     private val kernels = new VarkaFilterEvaluator(
       condition, childOutput, false, "FilterToRow", classDumpDirectory, varkaMetrics,
-      emitUseAVX, warmupEnabled)
+      sessionEmit, warmupEnabled)
 
     // The emitted rows hold their own bytes (an UnsafeProjection copy), so they outlive the
     // input batch exactly as VarkaColumnarToRowExec's rows do; the fallback predicate is the

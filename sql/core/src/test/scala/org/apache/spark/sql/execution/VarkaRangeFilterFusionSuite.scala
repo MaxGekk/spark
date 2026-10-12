@@ -55,7 +55,7 @@ class VarkaRangeFilterFusionSuite extends SparkFunSuite with VarkaTestWatchdog {
     And(GreaterThanOrEqual(s, Literal(0)), chain)
   }
 
-  private val options = VarkaColumnarToRowExec.emitOptions(SQLConf.get.varkaEmitUseAVX)
+  private val options = VarkaColumnarToRowExec.emitOptions(VarkaSessionEmit.of(SQLConf.get))
 
   test("modified-q3 has 200 ranges") {
     assert(VarkaQ3Ranges.ranges.size == 200)

@@ -172,7 +172,8 @@ public abstract class VarkaEvaluatorBase {
   private final String operatorName;
   private final String classDumpDirectory;
   private final VarkaExecMetrics metrics;
-  private final int emitUseAVX;
+  private final VarkaSessionEmit sessionEmit;
+  private final VarkaEmitOptions emitOptions;
   private final boolean warmupEnabled;
   private final VarkaBatchLedger ledger = new VarkaBatchLedger();
 
@@ -205,13 +206,16 @@ public abstract class VarkaEvaluatorBase {
       String operatorName,
       Option<String> classDumpDirectory,
       VarkaExecMetrics metrics,
-      int emitUseAVX,
+      VarkaSessionEmit sessionEmit,
       boolean warmupEnabled) {
     this.childOutput = childOutput;
     this.operatorName = operatorName;
     this.classDumpDirectory = classDumpDirectory.isDefined() ? classDumpDirectory.get() : null;
     this.metrics = metrics;
-    this.emitUseAVX = emitUseAVX;
+    this.sessionEmit = sessionEmit;
+    // Derived once: the compile, every shape key and the fusion lines of one task then read the
+    // same options, whatever the test hook does meanwhile.
+    this.emitOptions = VarkaColumnarToRowExec$.MODULE$.emitOptions(sessionEmit);
     this.warmupEnabled = warmupEnabled;
     // The task-completion listener closes the open batches, then runs these in order, each
     // guarded on its own, then closes the allocator.
@@ -261,12 +265,12 @@ public abstract class VarkaEvaluatorBase {
   protected final VarkaKernelPart kernelPart(
       CompiledVarkaProjection plan, Seq<NamedExpression> entries) {
     return new VarkaKernelPart(plan, entries, childOutput, operatorName,
-        Option.apply(classDumpDirectory), metrics, emitUseAVX, warmupEnabled, this::taskAllocator);
+        Option.apply(classDumpDirectory), metrics, sessionEmit, warmupEnabled, this::taskAllocator);
   }
 
   /** The options this evaluator emits with, which its compiler call must use too. */
   protected VarkaEmitOptions emitOptions() {
-    return VarkaColumnarToRowExec$.MODULE$.emitOptions(emitUseAVX);
+    return emitOptions;
   }
 
   // ---- the plan ------------------------------------------------------------------------------
@@ -465,10 +469,11 @@ public abstract class VarkaEvaluatorBase {
 
   /**
    * The cache key of the fused sub-plan: exactly the emitter inputs the bytes follow. The
-   * session's {@code spark.sql.codegen.varka.emit.useAVX}, read on the driver and carried here,
-   * is the one production knob on the options; it is applied over the test hook's options rather
-   * than instead of them, so a suite that drives a variant and sets the level gets both, and it
-   * is left alone at the default so that the hook's own level survives.
+   * session's emit settings ({@link VarkaSessionEmit}: {@code useAVX} and
+   * {@code exactRefusalStatus}), read on the driver and carried here, are the production knobs on
+   * the options; they are applied over the test hook's options rather than instead of them, so a
+   * suite that drives a variant and sets one gets both, and each is left alone when unset so that
+   * the hook's own value survives.
    */
   protected VarkaShapeKey shapeKey(CompiledVarkaProjection compiled) {
     return new VarkaShapeKey(compiled.outputs(),

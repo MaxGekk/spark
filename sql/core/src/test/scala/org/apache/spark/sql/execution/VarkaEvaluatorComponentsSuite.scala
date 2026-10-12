@@ -26,10 +26,11 @@ import scala.jdk.CollectionConverters._
 import org.mockito.Mockito.{doAnswer, doThrow, mock, never, verify}
 
 import org.apache.spark.{SparkFunSuite, TaskContext}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFusedKernel
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaEmitOptions, VarkaFusedKernel}
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.varka.{VarkaBatchLedger, VarkaClassDump,
   VarkaFallbackAccounting, VarkaKernelRunner}
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.util.ArrowUtils
 import org.apache.spark.sql.vectorized.{ColumnarBatch, ColumnVector}
 
@@ -177,6 +178,27 @@ class VarkaEvaluatorComponentsSuite extends SparkFunSuite {
     assert(VarkaFallbackAccounting.describeStatus(
       VarkaFusedKernel.STATUS_DAY_RANGE | VarkaFusedKernel.STATUS_VALUE_RANGE | (1 << 20)) ===
       "day-range|value-range|0x100000")
+  }
+
+  test("a session's emit settings are bound from its conf once, and lay nothing over the base " +
+      "options at the defaults") {
+    // VARKA-308. Catches: a setting the binding forgets to read, a default session that changes
+    // the options - which would move every shape key and emitted class - and an explicit false
+    // that cannot override a base with the setting on.
+    val conf = new SQLConf
+    assert(VarkaSessionEmit.of(conf) === VarkaSessionEmit.DEFAULTS)
+    val base = VarkaEmitOptions.DEFAULTS
+    assert(VarkaSessionEmit.DEFAULTS.apply(base) eq base)
+    conf.setConf(SQLConf.VARKA_EMIT_USE_AVX, 2)
+    conf.setConfString(SQLConf.VARKA_EMIT_EXACT_REFUSAL_STATUS.key, "true")
+    val session = VarkaSessionEmit.of(conf)
+    assert(session === new VarkaSessionEmit(2, java.lang.Boolean.TRUE))
+    assert(session.apply(base) === base.withUseAVX(2).withExactRefusalStatus(true))
+    conf.setConfString(SQLConf.VARKA_EMIT_EXACT_REFUSAL_STATUS.key, "false")
+    val exactBase = base.withExactRefusalStatus(true)
+    assert(VarkaSessionEmit.of(conf).apply(exactBase) === exactBase.withExactRefusalStatus(false)
+      .withUseAVX(2))
+    intercept[IllegalArgumentException](new VarkaSessionEmit(-2, null))
   }
 
   test("the class dump writes a shape once, and a failed write is neither thrown nor remembered") {

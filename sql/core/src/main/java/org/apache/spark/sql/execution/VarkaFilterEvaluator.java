@@ -41,7 +41,6 @@ import org.apache.spark.sql.catalyst.expressions.codegen.CompiledVarkaPredicate;
 import org.apache.spark.sql.catalyst.expressions.codegen.CompiledVarkaProjection;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.SelectionVectorOps;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemorySanitizer;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSegments;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSelectionBitmap;
@@ -106,9 +105,9 @@ public class VarkaFilterEvaluator extends VarkaEvaluatorBase {
       String operatorName,
       Option<String> classDumpDirectory,
       VarkaExecMetrics metrics,
-      int emitUseAVX,
+      VarkaSessionEmit sessionEmit,
       boolean warmupEnabled) {
-    super(childOutput, operatorName, classDumpDirectory, metrics, emitUseAVX, warmupEnabled);
+    super(childOutput, operatorName, classDumpDirectory, metrics, sessionEmit, warmupEnabled);
     this.condition = condition;
     this.offHeapColumnVectorEnabled = offHeapColumnVectorEnabled;
   }
@@ -118,7 +117,7 @@ public class VarkaFilterEvaluator extends VarkaEvaluatorBase {
       Expression condition, Seq<Attribute> childOutput, boolean offHeapColumnVectorEnabled,
       String operatorName) {
     this(condition, childOutput, offHeapColumnVectorEnabled, operatorName, Option.empty(),
-        VarkaExecMetrics.NONE, VarkaEmitOptions.USE_AVX_UNKNOWN, false);
+        VarkaExecMetrics.NONE, VarkaSessionEmit.DEFAULTS, false);
   }
 
   private CompiledVarkaPredicate predicate() {

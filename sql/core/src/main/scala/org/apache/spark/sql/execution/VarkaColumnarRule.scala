@@ -102,15 +102,15 @@ object VarkaColumnarRule extends ColumnarRule with Logging {
         // boundary without compacting first - so the pre-stage case above adds a columnar
         // route and changes no row-consumer plan. It runs before the general arm below,
         // which would otherwise leave the compacting filter in the tree.
-        case ColumnarToRowExec(VarkaProjectExec(projectList, filter: VarkaFilterExec))
+        case ColumnarToRowExec(VarkaProjectExec(projectList, filter: VarkaFilterExec, _))
             if isForwardedNarrowing(projectList, filter.output) =>
           VarkaFilterColumnarToRowExec(filter.condition, filter.child, Some(projectList),
-            filter.wholeCondition)
+            filter.wholeCondition, filter.sessionEmit)
         case ColumnarToRowExec(varka: VarkaProjectExec) =>
-          VarkaColumnarToRowExec(varka.projectList, varka.child)
+          VarkaColumnarToRowExec(varka.projectList, varka.child, varka.sessionEmit)
         case ColumnarToRowExec(varka: VarkaFilterExec) =>
           VarkaFilterColumnarToRowExec(varka.condition, varka.child,
-            wholeCondition = varka.wholeCondition)
+            wholeCondition = varka.wholeCondition, sessionEmit = varka.sessionEmit)
         case project @ ProjectExec(projectList, child)
             if isVarkaEligible(projectList, child.output) =>
           val columnarChild = child match {
@@ -197,7 +197,7 @@ object VarkaColumnarRule extends ColumnarRule with Logging {
   private def isVarkaEligible(
       projectList: Seq[NamedExpression], childOutput: Seq[Attribute]): Boolean = {
     VarkaExpressionCompiler.compilePartial(projectList, childOutput,
-      VarkaColumnarToRowExec.emitOptions(SQLConf.get.varkaEmitUseAVX)).isPresent
+      VarkaColumnarToRowExec.emitOptions(VarkaSessionEmit.of(SQLConf.get))).isPresent
   }
 
   /**
@@ -257,8 +257,9 @@ object VarkaColumnarRule extends ColumnarRule with Logging {
       condition: Expression,
       child: SparkPlan,
       mkVarka: (Expression, SparkPlan, Option[Expression]) => SparkPlan): Option[SparkPlan] = {
-    VarkaExpressionCompiler.compilePredicate(condition, child.output,
-        VarkaColumnarToRowExec.emitOptions(SQLConf.get.varkaEmitUseAVX)).toScala.map { predicate =>
+    val options = VarkaColumnarToRowExec.emitOptions(VarkaSessionEmit.of(SQLConf.get))
+    val compiled = VarkaExpressionCompiler.compilePredicate(condition, child.output, options)
+    compiled.toScala.map { predicate =>
       val residual = predicate.residualConjuncts.asScala.reduceLeftOption(And(_, _))
       // With residual conjuncts split off, a batch the kernel cannot serve is refiltered with
       // the whole condition, in Spark's order (see VarkaFilterExecBase).
