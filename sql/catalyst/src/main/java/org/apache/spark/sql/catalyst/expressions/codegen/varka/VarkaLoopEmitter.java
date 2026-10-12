@@ -44,6 +44,7 @@ import java.lang.constant.MethodTypeDesc;
 import java.lang.reflect.AccessFlag;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -195,6 +196,25 @@ public final class VarkaLoopEmitter {
   static Map<VarkaVectorIR, Analysis.Refusal> refusalsForTest(List<VarkaVectorIR> outputs,
       int numInputs, int numLiterals, VarkaEmitOptions options) {
     return Map.copyOf(analyze(List.copyOf(outputs), numInputs, numLiterals, options).refusals);
+  }
+
+  /** One guard {@link #guardsForTest} reports: its reason, and the arm chain qualifying it. */
+  record GuardForTest(Analysis.Refusal reason, List<Analysis.ArmStep> arms) {}
+
+  /**
+   * Every node {@link #analyze} guards for {@code outputs}, with its reason and the arm chain
+   * {@link Analysis#armChainOf} qualifies it by - the lanes it condemns are those the chain
+   * selects, and every lane where the chain is empty - from one analysis, for the verdict that
+   * says which batches a kernel must decline (VARKA-279).
+   */
+  static Map<VarkaVectorIR, GuardForTest> guardsForTest(List<VarkaVectorIR> outputs,
+      int numInputs, int numLiterals, VarkaEmitOptions options) {
+    Analysis analysis = analyze(List.copyOf(outputs), numInputs, numLiterals, options);
+    var guards = new HashMap<VarkaVectorIR, GuardForTest>();
+    for (Map.Entry<VarkaVectorIR, Analysis.Refusal> e : analysis.refusals.entrySet()) {
+      guards.put(e.getKey(), new GuardForTest(e.getValue(), analysis.armChainOf(e.getKey())));
+    }
+    return Map.copyOf(guards);
   }
 
   /**

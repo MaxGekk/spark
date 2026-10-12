@@ -37,31 +37,9 @@ class IntRangeOpsSuite extends SparkFunSuite {
   private def oracle(values: Array[Int], isNull: Int => Boolean, lo: Int, hi: Int): Boolean =
     values.indices.forall(i => isNull(i) || (values(i) >= lo && values(i) <= hi))
 
-  private def kernel(values: Array[Int], isNull: Int => Boolean, lo: Int, hi: Int): Boolean = {
-    val n = values.length
-    val arena = Arena.ofConfined()
-    try {
-      val data = arena.allocate(math.max(n * 4L, 1L), 8)
-      val validity = arena.allocate(math.max((n + 7) / 8L, 1L), 8)
-      validity.fill(0.toByte)
-      var nulls = 0
-      for (i <- 0 until n) {
-        data.set(ValueLayout.JAVA_INT, i * 4L, values(i))
-        if (isNull(i)) {
-          nulls += 1
-        } else {
-          val off = i / 8L
-          val old = validity.get(ValueLayout.JAVA_BYTE, off)
-          validity.set(ValueLayout.JAVA_BYTE, off, (old | (1 << (i % 8))).toByte)
-        }
-      }
-      // Per the contract a null-free or all-null column may pass 0L for the bitmap.
-      val validityAddress = if (nulls == 0 || nulls == n) 0L else validity.address()
-      IntRangeOps.allWithin(data.address(), validityAddress, nulls, n, lo, hi)
-    } finally {
-      arena.close()
-    }
-  }
+  private def kernel(values: Array[Int], isNull: Int => Boolean, lo: Int, hi: Int): Boolean =
+    IntRangeOpsSuite.allWithin(values, isNull, lo, hi)
+
 
   private def inRange(n: Int): Array[Int] = Array.tabulate(n)(i => (i * 37) % 2001 - 1000)
 
@@ -106,3 +84,35 @@ class IntRangeOpsSuite extends SparkFunSuite {
     assert(kernel(Array.empty[Int], _ => false, lo, hi))
   }
 }
+
+object IntRangeOpsSuite {
+
+  /**
+   * `IntRangeOps.allWithin` over `values` laid out as an Arrow column, `isNull` choosing the null
+   * lanes; shared with `VarkaGuardEdgeSuite`, which drives the per-batch input bound through it.
+   */
+  def allWithin(values: Array[Int], isNull: Int => Boolean, lo: Int, hi: Int): Boolean = {
+    val n = values.length
+    val arena = Arena.ofConfined()
+    try {
+      val data = arena.allocate(math.max(n * 4L, 1L), 8)
+      val validity = arena.allocate(math.max((n + 7) / 8L, 1L), 8)
+      validity.fill(0.toByte)
+      var nulls = 0
+      for (i <- 0 until n) {
+        data.set(ValueLayout.JAVA_INT, i * 4L, values(i))
+        if (isNull(i)) {
+          nulls += 1
+        } else {
+          val off = i / 8L
+          val old = validity.get(ValueLayout.JAVA_BYTE, off)
+          validity.set(ValueLayout.JAVA_BYTE, off, (old | (1 << (i % 8))).toByte)
+        }
+      }
+      // Per the contract a null-free or all-null column may pass 0L for the bitmap.
+      val validityAddress = if (nulls == 0 || nulls == n) 0L else validity.address()
+      IntRangeOps.allWithin(data.address(), validityAddress, nulls, n, lo, hi)
+    } finally {
+      arena.close()
+    }
+  }}

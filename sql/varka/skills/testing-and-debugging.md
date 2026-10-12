@@ -928,6 +928,34 @@ To size 4 nothing failed and nothing declined, at either lane. Under the planted
 `misdescribeWordLiveness`, beside a stranger and literal to column fail trees the plain series
 passes, which is what shows the variants reach something the series alone does not.
 
+## Every guard at its bound: a verdict from the emitter's own rule
+
+VARKA-279. `VarkaGuardSpec` says per batch which guard bits a kernel must decline with, which it
+may, or that it must answer, and `VarkaGuardEdgeSuite` holds sixteen small kernels to it, every
+guard at `lo - 1`, `lo`, `hi` and `hi + 1`. What it took:
+
+- **Read the qualification from `Analysis`, do not reconstruct it.** Under an `IfElse` arm a
+  guard is masked by the arm only where every use of its node agrees on one arm chain; a node also
+  used outside the arm, or inside a condition, condemns every lane. `guardsForTest` returns each
+  refusing node's reason with its `armChainOf`, so the verdict applies exactly the rule the emitter does.
+- **A bound in a `static final` field cannot be moved from a test.** The narrow range and the
+  month limits are constants javac inlines into the emitter; the `make_date` years are computed
+  when `VarkaChrono` loads; neither can change under a running suite. The planted wrong bound
+  therefore moves the verdict's bound by one instead, which proves the same thing: the edge
+  inputs sit exactly on each bound and one past it.
+- **Hold each body to its own verdict.** A status from `runAndCompareStatus` does not say which
+  body returned it, so a decline the first body must not make can hide behind one the second
+  must; `runEachBodyStatus` runs both and returns both. And force the masked body on a valid edge,
+  or a decline in the dense body stops the check before the masked body sees past the bound.
+- **One batch covers the null edge and the valid edge.** `VarkaKernelCheck` poisons a null lane,
+  and the other body clears the nulls, so the same data then makes the edge row valid.
+- **Force the guards a configuration can switch off.** Under the option matrix a configuration may
+  turn off `checkIntOverflow` or `guardDayProducers`, and the kernel would lose the very guard
+  under test; the suite sets both on over the matrix's options.
+
+To date every guard's edges hold at both lanes, in a full vector and the epilogue, through both
+bodies.
+
 ## The emitter is called from several threads, so a test holds it to that
 
 VARKA-307. `VarkaEmittedBytesSuite` hashes every shape twenty times, once per pinned arm and
