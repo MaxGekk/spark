@@ -21,11 +21,9 @@ import java.util.concurrent.atomic.AtomicInteger
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
-import scala.util.Random
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
-import org.apache.spark.sql.catalyst.util.DateTimeUtils
 
 /**
  * Every small IR tree through the emitter, compared with the reference evaluator (VARKA-269).
@@ -44,8 +42,9 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils
  * to call from several threads (row 307). Options come from `VarkaMatrix.base`, so the option
  * matrix's configurations reach this suite as they reach every other.
  *
- * A tree up to size 3 meets all four batches of [[intBatches]]; a larger one meets the one its
- * index picks, so each batch meets a quarter of them, unless `-Dvarka.series.allBatches=true`.
+ * A tree up to size 3 meets all four batches of [[VarkaIrSeries.intBatches]]; a larger one meets
+ * the one its index picks, so each batch meets a quarter of them, unless
+ * `-Dvarka.series.allBatches=true`.
  * The suite runs the whole series and then fails with the first twenty failures; the series is
  * ordered by size, so the first is a smallest one. A failure on the committed known-failures
  * list (`VarkaKnownFailures`) is logged and not counted, as the fuzzer treats it.
@@ -65,63 +64,6 @@ class VarkaSmallTreeSuite extends SparkFunSuite with VarkaMatrixTests with Varka
   // ---------------------------------------------------------------------------------------------
   // The batches
   // ---------------------------------------------------------------------------------------------
-
-  /** One batch: its name in a failure, the batch and the literal slot's value. */
-  private case class IntBatch(name: String, batch: VarkaKernelCheck.Batch, lits: Array[Int])
-  private case class LongBatch(name: String, batch: VarkaKernelCheck.LongBatch, lits: Array[Long])
-
-  private val none: Int => Boolean = _ => false
-  private val all: Int => Boolean = _ => true
-  private val every5th: Int => Boolean = i => i % 5 == 0
-  private val alternating: Int => Boolean = i => i % 2 == 1
-
-  /**
-   * The four batches, drawn once from a fixed seed inside each column's bounds: every fifth row
-   * null at length 17, no null at 64 (the check adds its forced-masked twin), a pattern per
-   * column at 33, and every row null at 7.
-   */
-  private val intBatches: Seq[IntBatch] = {
-    val rnd = new Random(20261011L)
-    def column(c: Int, length: Int): Array[Int] = Array.fill(length) {
-      if (c == VarkaIrSeries.LevelColumn) {
-        DateTimeUtils.TRUNC_TO_WEEK +
-          rnd.nextInt(DateTimeUtils.TRUNC_TO_YEAR - DateTimeUtils.TRUNC_TO_WEEK + 1)
-      } else {
-        val bound = if (c == VarkaIrSeries.SmallColumn) VarkaChrono.MONTH_ARITH_MAX_MONTHS
-          else VarkaIrGrammar.columnBound.toInt
-        rnd.nextInt(2 * bound + 1) - bound
-      }
-    }
-    def batch(name: String, length: Int, patterns: Seq[Int => Boolean]): IntBatch = {
-      val data = Array.tabulate(VarkaIrSeries.NumInputs)(column(_, length))
-      val bound = VarkaIrGrammar.literalBound
-      IntBatch(name, VarkaKernelCheck.Batch(length, patterns, data, forceMasked = false),
-        Array.fill(VarkaIrSeries.Literals)(rnd.nextInt(2 * bound + 1) - bound))
-    }
-    val cols = VarkaIrSeries.NumInputs
-    Seq(
-      batch("17 every-5th", 17, Seq.fill(cols)(every5th)),
-      batch("64 null-free", 64, Seq.fill(cols)(none)),
-      batch("33 per-column", 33, Seq(alternating, every5th, none, all)),
-      batch("7 all-null", 7, Seq.fill(cols)(all)))
-  }
-
-  private val longBatches: Seq[LongBatch] = {
-    val rnd = new Random(20261012L)
-    def draw(bound: Long): Long = Math.floorMod(rnd.nextLong(), 2 * bound + 1) - bound
-    def batch(name: String, length: Int, patterns: Seq[Int => Boolean]): LongBatch = {
-      val data = Array.fill(VarkaIrSeries.LongNumInputs, length)(
-        draw(VarkaIrGrammar.longColumnBound))
-      LongBatch(name, VarkaKernelCheck.LongBatch(length, patterns, data, forceMasked = false),
-        Array.fill(VarkaIrSeries.Literals)(draw(VarkaIrGrammar.longLiteralBound)))
-    }
-    val cols = VarkaIrSeries.LongNumInputs
-    Seq(
-      batch("17 every-5th", 17, Seq.fill(cols)(every5th)),
-      batch("64 null-free", 64, Seq.fill(cols)(none)),
-      batch("33 per-column", 33, Seq(alternating, all)),
-      batch("7 all-null", 7, Seq.fill(cols)(all)))
-  }
 
   /** The batches a tree meets: all four up to [[fullBelow]], else the one its index picks. */
   private def pick[B](batches: Seq[B], index: Int, treeSize: Int): Seq[B] =
@@ -187,12 +129,12 @@ class VarkaSmallTreeSuite extends SparkFunSuite with VarkaMatrixTests with Varka
         case Some(bytes) =>
           failures.checked += 1
           if (long) {
-            for (b <- pick(longBatches, index, treeSize)) {
+            for (b <- pick(VarkaIrSeries.longBatches, index, treeSize)) {
               VarkaKernelCheck.runAndCompareLong(s"$label batch=${b.name}", className, bytes,
                 roots, numInputs, b.lits, b.batch)
             }
           } else {
-            for (b <- pick(intBatches, index, treeSize)) {
+            for (b <- pick(VarkaIrSeries.intBatches, index, treeSize)) {
               VarkaKernelCheck.runAndCompare(s"$label batch=${b.name}", className, bytes, roots,
                 numInputs, b.lits, b.batch)
             }

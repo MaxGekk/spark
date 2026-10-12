@@ -1,0 +1,391 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.spark.sql.catalyst.expressions.codegen.varka
+
+import java.util.{Collections, IdentityHashMap}
+
+import scala.collection.mutable
+import scala.jdk.CollectionConverters._
+
+import org.apache.spark.SparkFunSuite
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVariants.{Kind, Variant}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
+
+/**
+ * Every small IR tree in eight variants whose answers follow from its own (VARKA-278). The
+ * series of [[VarkaSmallTreeSuite]] meets the emitter one tree at a time, as drawn; but much of
+ * what the emitter decides depends on a tree's company - which outputs share a subtree and so a
+ * slot, how outputs group into methods, which literal is folded and which column read - so a
+ * bug there shows only when the same tree is emitted beside something else. Each tree that
+ * passes alone is emitted again as each variant of [[VarkaVariants]] and compared with the
+ * reference evaluator through [[VarkaVariantCheck]].
+ *
+ * The size is `-Dvarka.variants.size`, 3 by default, the pull request's; the nightly runs size 4
+ * across JVMs with `-Dvarka.series.slice=k/n`, as the series does. Its own property rather than
+ * the series', so a configuration that raises the series (the weekly option matrix) does not
+ * raise this one with it. Each tree meets the series' batches by rotation, one each, and all
+ * four under `-Dvarka.variants.allBatches=true`: the variants are eight emissions a tree, and the
+ * series itself already gives every tree up to size 3 all four. An `IfElse` first appears at
+ * size 4, so the untaken-arm variant has a test of its own that enumerates size 4's conditional
+ * trees, every one on every batch. A failure on the committed known-failures list
+ * (`VarkaKnownFailures`) is logged and not counted, as in the series.
+ */
+class VarkaVariantSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwnJvm {
+
+  private val size = sys.props.get("varka.variants.size").map(_.toInt).getOrElse(3)
+  private val (slice, slices) = sys.props.get("varka.series.slice").map { s =>
+    val Array(k, n) = s.split("/").map(_.toInt)
+    (k, n)
+  }.getOrElse((0, 1))
+  private val allBatches = sys.props.get("varka.variants.allBatches").contains("true")
+
+  // ---------------------------------------------------------------------------------------------
+  // The cases
+  // ---------------------------------------------------------------------------------------------
+
+  /** A series batch in a case's terms: its rows, nulls, columns and literal, and its name. */
+  private final class SeriesBatch(val name: String, val length: Int,
+      val nulls: Array[Array[Boolean]], val data: Array[Array[Long]], val lits: Array[Long])
+
+  private def nullsOf(patterns: Seq[Int => Boolean], length: Int): Array[Array[Boolean]] =
+    patterns.map(p => Array.tabulate(length)(p)).toArray
+
+  private lazy val intBatches: Seq[SeriesBatch] = VarkaIrSeries.intBatches.map { b =>
+    new SeriesBatch(b.name, b.batch.length, nullsOf(b.batch.patterns, b.batch.length),
+      b.batch.data.map(_.map(_.toLong)), b.lits.map(_.toLong))
+  }
+
+  private lazy val longBatches: Seq[SeriesBatch] = VarkaIrSeries.longBatches.map { b =>
+    new SeriesBatch(b.name, b.batch.length, nullsOf(b.batch.patterns, b.batch.length),
+      b.batch.data, b.lits)
+  }
+
+  private def caseOf(root: VarkaVectorIR, long: Boolean, b: SeriesBatch, label: String,
+      options: VarkaEmitOptions): VarkaFuzzCase =
+    VarkaFuzzCase(if (long) LaneType.LONG else LaneType.INT, Seq(root),
+      if (long) VarkaIrSeries.LongNumInputs else VarkaIrSeries.NumInputs, b.lits, b.length,
+      b.nulls, b.data, forceMasked = false, options,
+      if (long) -1 else VarkaIrSeries.SmallColumn, if (long) -1 else VarkaIrSeries.LevelColumn,
+      s"$label batch=${b.name}")
+
+  /** A lane's series, its batches, and the trees a stranger and a replacement come from. */
+  private final class Lane(val long: Boolean) {
+    val series: VarkaIrSeries.Series =
+      if (long) new VarkaIrSeries.LongSeries else new VarkaIrSeries.IntSeries
+    val batches: Seq[SeriesBatch] = if (long) longBatches else intBatches
+    val name: String = if (long) "long" else "int"
+    /** The roots to size 2, every one of which the series passes: strangers. */
+    lazy val strangers: IndexedSeq[VarkaVectorIR] =
+      (series.roots(1) ++ series.roots(2)).toIndexedSeq
+    /** The value trees to size 2: replacements for an untaken arm. */
+    lazy val replacements: Seq[VarkaVectorIR] = (1 to 2).flatMap(series.value(_)).map(_.node)
+
+    /** The `index`-th tree's stranger: a different tree from the pool, by a fixed stride. */
+    def stranger(root: VarkaVectorIR, index: Int): VarkaVectorIR = {
+      val text = VarkaVectorIR.canonical(root)
+      (0 until strangers.size).iterator
+        .map(k => strangers((index * 7 + 3 + k) % strangers.size))
+        .find(s => VarkaVectorIR.canonical(s) != text).get
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Running and counting
+  // ---------------------------------------------------------------------------------------------
+
+  /** What a run checked, declined and skipped, per variant, and its first twenty failures. */
+  private final class Tally {
+    val checked = mutable.LinkedHashMap(Kind.values.toSeq.map(_ -> 0): _*)
+    val declined = mutable.LinkedHashMap(Kind.values.toSeq.map(_ -> 0): _*)
+    var skipped = 0
+    var trees = 0
+    val first = mutable.ArrayBuffer.empty[String]
+    var failed = 0
+
+    def fail(message: String): Unit = {
+      failed += 1
+      if (first.size < 20) first += message
+    }
+
+    def report(what: String): Unit = {
+      logInfo(s"$what: $trees trees, $skipped variants past the class-file cap, $failed failed")
+      for (k <- Kind.values) {
+        logInfo(f"  ${k.label}%-22s checked ${checked(k)}%8d  declined ${declined(k)}%6d")
+      }
+    }
+
+    def assertNone(what: String): Unit = {
+      report(what)
+      assert(failed == 0, s"$failed of the $what failed; the first ${first.size}:\n" +
+        first.mkString("\n"))
+    }
+  }
+
+  /** Runs `body`, recording a failure in `tally` unless it is on the known-failures list. */
+  private def recording(tally: Tally, label: String)(body: => Unit): Boolean = {
+    try {
+      body
+      true
+    } catch {
+      case e: VirtualMachineError => throw e
+      case e: InterruptedException => throw e
+      case t: Throwable =>
+        val signature = VarkaFailureSignature.of(t, label)
+        if (VarkaKnownFailures.isKnown(VarkaKnownFailures.entries, signature)) {
+          logWarning(s"known failure, not counted: $signature")
+        } else {
+          tally.fail(Option(t.getMessage).getOrElse(t.getClass.getName))
+        }
+        false
+    }
+  }
+
+  /** Checks `c` alone and, where it passes, each variant in `kinds` that applies to it. */
+  private def checkCase(lane: Lane, c: VarkaFuzzCase, index: Int, tally: Tally,
+      kinds: Set[Kind] = Kind.values.toSet): Unit = {
+    var plain: VarkaVariantCheck.Outcome = VarkaVariantCheck.Skipped
+    val passed = recording(tally, c.label) {
+      plain = VarkaVariantCheck.checkPlain(c, VarkaVariantCheck.retryWithoutBudget)
+    }
+    if (!passed || plain == VarkaVariantCheck.Skipped) return
+    for ((kind, variant) <- VarkaVariantCheck.variants(c, lane.stranger(c.roots.head, index),
+        lane.replacements, index) if kinds(kind); v <- variant) {
+      recording(tally, c.label) {
+        VarkaVariantCheck.check(c, v, VarkaVariantCheck.retryWithoutBudget) match {
+          case VarkaVariantCheck.Compared => tally.checked(kind) += 1
+          case VarkaVariantCheck.Declined(_) =>
+            tally.checked(kind) += 1
+            tally.declined(kind) += 1
+          case VarkaVariantCheck.Skipped => tally.skipped += 1
+        }
+      }
+    }
+  }
+
+  /** Every root of `lane` up to `upTo`, this JVM's slice, each with its variants. */
+  private def runLane(lane: Lane, upTo: Int, options: VarkaEmitOptions,
+      kinds: Set[Kind] = Kind.values.toSet): Tally = {
+    val tally = new Tally
+    var index = 0
+    for ((treeSize, root) <- lane.series.upTo(upTo)) {
+      if (index % slices == slice) {
+        tally.trees += 1
+        val batches = if (allBatches) lane.batches
+          else Seq(lane.batches(index % lane.batches.size))
+        val label = s"lane=${lane.name} size=$treeSize index=$index " +
+          s"options=${if (options.isDefault) "(defaults)" else options.canonical()}"
+        for (b <- batches) checkCase(lane, caseOf(root, lane.long, b, label, options), index,
+          tally, kinds)
+      }
+      index += 1
+    }
+    tally
+  }
+
+  /**
+   * The variants every tree to `size` is expected to give at least once. The untaken arm needs
+   * an `IfElse`, which size 3 has not; the conditional test below holds it to its count.
+   */
+  private def expected(upTo: Int): Seq[Kind] =
+    Kind.values.toSeq.filter(k => k != Kind.UNTAKEN_ARM || upTo >= 4)
+
+  // ---------------------------------------------------------------------------------------------
+  // The series in variants
+  // ---------------------------------------------------------------------------------------------
+
+  for (long <- Seq(false, true)) {
+    val laneName = if (long) "long" else "int"
+    test(s"every $laneName tree to size $size, in each variant, matches the reference " +
+        s"evaluator (slice $slice of $slices)") {
+      val tally = runLane(new Lane(long), size, VarkaMatrix.base)
+      tally.assertNone(s"$laneName trees to size $size and their variants")
+      // Counted, not assumed: a variant that silently stopped applying would pass everything.
+      for (k <- expected(size)) {
+        assert(tally.checked(k) > 0, s"${k.label} applied to no $laneName tree to size $size")
+      }
+    }
+  }
+
+  test("every conditional tree of size 4, with an untaken arm replaced, matches the reference " +
+      "evaluator on every batch") {
+    // Size 4 is the first that holds an IfElse; the batches decide which arm is untaken, the
+    // all-null batch taking every condition's else arm. Generation is cheap at size 4, and only
+    // the conditional trees are emitted, so the pull request runs this whatever its size.
+    for (long <- Seq(false, true)) {
+      val lane = new Lane(long)
+      val tally = new Tally
+      var index = 0
+      for (root <- lane.series.roots(4) if root.isInstanceOf[IfElse]) {
+        tally.trees += 1
+        for (b <- lane.batches) {
+          checkCase(lane, caseOf(root, long, b, s"lane=${lane.name} size=4 index=$index",
+            VarkaMatrix.base), index, tally, Set(Kind.UNTAKEN_ARM))
+        }
+        index += 1
+      }
+      tally.assertNone(s"${lane.name} conditional trees of size 4 with an untaken arm replaced")
+      assert(tally.checked(Kind.UNTAKEN_ARM) > 0,
+        s"no ${lane.name} conditional tree of size 4 had an untaken arm on any batch")
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Each variant is what it says
+  // ---------------------------------------------------------------------------------------------
+
+  /** Every node object under `roots`, by identity. */
+  private def nodes(roots: Seq[VarkaVectorIR]): java.util.Set[VarkaVectorIR] = {
+    val out = Collections.newSetFromMap(new IdentityHashMap[VarkaVectorIR, java.lang.Boolean])
+    roots.foreach(r => VarkaVariants.walk(r, n => { out.add(n); () }))
+    out
+  }
+
+  private def canon(v: Variant): Seq[String] =
+    v.roots.asScala.toSeq.map(r => VarkaVectorIR.canonical(r))
+
+  test("each variant builds the shape it names") {
+    // A variant that degraded into the plain tree would pass every check vacuously, so each one
+    // is held to its shape on a hand-written tree: greatest(add_months(c0, lit0), c1), and a
+    // conditional over it.
+    val inner = new AddMonths(new ColumnRef(0), new LiteralSlot(0))
+    val t = new Greatest(inner, new ColumnRef(1))
+    val roots = Seq[VarkaVectorIR](t).asJava
+    val text = VarkaVectorIR.canonical(t)
+
+    val child = VarkaVariants.besideAChild(roots, 4).get
+    assert(child.roots.get(0) eq t)
+    assert(child.roots.get(1) eq inner)
+    val permuted = VarkaVariants.permuted(roots, 4).get
+    assert((permuted.roots.get(0) eq inner) && (permuted.roots.get(1) eq t))
+
+    val duplicated = VarkaVariants.duplicated(roots, 4)
+    assert((duplicated.roots.get(0) eq t) && (duplicated.roots.get(1) eq t))
+
+    val copied = VarkaVariants.copied(roots, 4)
+    assert(copied.roots.get(1) == t && !(copied.roots.get(1) eq t))
+    val shared = nodes(Seq(t))
+    shared.retainAll(nodes(Seq(copied.roots.get(1))))
+    assert(shared.isEmpty, s"the copy shares ${shared.size} node objects with the original")
+
+    val stranger = VarkaVariants.besideAStranger(roots, 4, new IntArith(IntOp.ADD, Overflow.WRAP,
+      new ColumnRef(0), new LiteralSlot(0)))
+    assert(stranger.numInputs == 8)
+    assert(canon(stranger)(1) == VarkaVectorIR.canonical(new IntArith(IntOp.ADD, Overflow.WRAP,
+      new ColumnRef(4), new LiteralSlot(0))))
+    assert(stranger.columns.asScala.drop(4) == stranger.columns.asScala.take(4))
+
+    val literal = VarkaVariants.literalToColumn(roots, 4).get
+    assert(literal.numInputs == 5)
+    assert(literal.columns.get(4) == new VarkaVariants.FromLiteral(0))
+    val reads = nodes(literal.roots.asScala.toSeq).asScala
+    assert(!reads.exists(_.isInstanceOf[LiteralSlot]), "a literal slot survived")
+    assert(reads.exists { case c: ColumnRef => c.ordinal == 4; case _ => false })
+    // The column's sibling keeps its identity: only the path to the literal is rebuilt.
+    assert(literal.roots.get(0).asInstanceOf[Greatest].right() eq t.right())
+    assert(VarkaVariants.literalToColumn(Seq[VarkaVectorIR](new ColumnRef(0)).asJava, 4).isEmpty)
+
+    val renumbered = VarkaVariants.columnsRenumbered(roots, 4).get
+    assert(canon(renumbered).head == VarkaVectorIR.canonical(new Greatest(
+      new AddMonths(new ColumnRef(3), new LiteralSlot(0)), new ColumnRef(2))))
+    assert(renumbered.columns.asScala.map {
+      case f: VarkaVariants.FromColumn => f.ordinal
+      case other => fail(s"not a column: $other")
+    } == Seq(3, 2, 1, 0))
+
+    val cond = new IsNotNull(new ColumnRef(1))
+    val f = new IfElse(cond, t, new ColumnRef(0))
+    val pool = Seq[VarkaVectorIR](t, new ColumnRef(1)).asJava
+    def armed(taken: VarkaVariants.Taken) =
+      VarkaVariants.untakenArm(Seq[VarkaVectorIR](f).asJava, 4, _ => taken, pool, 0)
+    val elseOnly = armed(VarkaVariants.Taken.ELSE_ONLY).get.roots.get(0).asInstanceOf[IfElse]
+    assert((elseOnly.cond() eq cond) && (elseOnly.elseNode() eq f.elseNode()))
+    assert(VarkaVectorIR.canonical(elseOnly.thenNode()) != text, "the untaken arm was kept")
+    val thenOnly = armed(VarkaVariants.Taken.THEN_ONLY).get.roots.get(0).asInstanceOf[IfElse]
+    assert((thenOnly.thenNode() eq t) && thenOnly.elseNode() != f.elseNode())
+    assert(armed(VarkaVariants.Taken.BOTH).isEmpty)
+  }
+
+  test("a decline by a guard the variant adds is allowed, and by any other guard fails") {
+    // add_months over a column count carries the month-count guard, over a literal count none.
+    // So moving the literal into a column adds the guard, which is what lets that variant
+    // decline, and then only with that guard's bit.
+    val t = new AddMonths(new ColumnRef(0), new LiteralSlot(0))
+    val moved = VarkaVariants.literalToColumn(Seq[VarkaVectorIR](t).asJava, 4).get
+    assert(VarkaVariants.addedRefusalBits(Seq[VarkaVectorIR](t).asJava, moved.roots, 5, 1,
+      VarkaMatrix.base) == VarkaFusedKernel.STATUS_MONTH_COUNT)
+    val guarded = Seq[VarkaVectorIR](new AddMonths(new ColumnRef(0), new ColumnRef(2))).asJava
+    assert(VarkaVariants.addedRefusalBits(guarded, VarkaVariants.duplicated(guarded, 4).roots, 4,
+      1, VarkaMatrix.base) == 0, "duplicating a guarded tree adds no node, so no guard")
+
+    // A literal one past the month-count range, moved into a column: the kernel declines with
+    // the month-count bit, which the variant brought, so the check accepts the decline.
+    val far = VarkaChrono.MONTH_ARITH_MAX_MONTHS.toLong + 1
+    val c = caseOf(t, long = false, intBatches(1), "planted", VarkaMatrix.base)
+      .copy(lits = Array(far))
+    assert(VarkaVariantCheck.check(c, moved, VarkaVariantCheck.retryWithoutBudget) ==
+      VarkaVariantCheck.Declined(VarkaFusedKernel.STATUS_MONTH_COUNT))
+    // The same guard firing in a variant that may not decline fails it: the moved case's
+    // columns renumbered put the far count in column 0.
+    val movedCase = VarkaVariantCheck.caseOf(c, moved)
+    val renumbered = VarkaVariants.columnsRenumbered(moved.roots, 5).get
+    val e = intercept[Throwable] {
+      VarkaVariantCheck.check(movedCase, renumbered, VarkaVariantCheck.retryWithoutBudget)
+    }
+    assert(e.getMessage.contains("declined the batch"), e.getMessage)
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // What the variants catch
+  // ---------------------------------------------------------------------------------------------
+
+  test("under the planted liveness bug, a stranger and a literal in a column fail trees the " +
+      "plain series passes") {
+    // The admission check (VARKA-278.md 2): under `misdescribeWordLiveness` the plain series
+    // fails 2,253 of the 3,203 trees to size 3, and these two variants fail 950 of the trees it
+    // passes. A planted bug that shows only when an output keeps company is what the variants
+    // are for, so each of the two must keep catching one. The walk stops once both have.
+    val planted = VarkaEmitOption.named("misdescribeWordLiveness") match {
+      case flag: VarkaEmitOption.Flag => flag.`with`(VarkaMatrix.base, true)
+      case other => fail(s"not a flag: $other")
+    }
+    val lane = new Lane(false)
+    val caught = mutable.LinkedHashMap(Kind.BESIDE_A_STRANGER -> 0, Kind.LITERAL_TO_COLUMN -> 0)
+    var index = 0
+    val trees = lane.series.upTo(3)
+    while (trees.hasNext && caught.values.exists(_ == 0)) {
+      val (treeSize, root) = trees.next()
+      val c = caseOf(root, long = false, lane.batches(index % lane.batches.size),
+        s"planted size=$treeSize index=$index", planted)
+      val plain = scala.util.Try(VarkaVariantCheck.checkPlain(c,
+        VarkaVariantCheck.retryWithoutBudget))
+      if (plain.isSuccess) {
+        for ((kind, variant) <- VarkaVariantCheck.variants(c, lane.stranger(root, index),
+            lane.replacements, index) if caught.contains(kind); v <- variant) {
+          val failed = scala.util.Try(
+            VarkaVariantCheck.check(c, v, VarkaVariantCheck.retryWithoutBudget)).isFailure
+          if (failed) caught(kind) += 1
+        }
+      }
+      index += 1
+    }
+    for ((kind, n) <- caught) {
+      assert(n > 0, s"${kind.label} caught no tree to size 3 that the plain series passes " +
+        "under misdescribeWordLiveness")
+    }
+  }
+}

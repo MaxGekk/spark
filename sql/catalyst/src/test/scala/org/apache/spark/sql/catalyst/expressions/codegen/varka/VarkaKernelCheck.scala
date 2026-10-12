@@ -130,13 +130,32 @@ object VarkaKernelCheck {
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Int], batch: Batch,
       declineAllowed: Boolean = false, spark: Option[VarkaSparkOracle] = None): Boolean = {
     val compared = runBatch(context, className, bytes, roots, numInputs, lits, batch,
-      declineAllowed, spark)
+      declineAllowed, spark) == 0
     if (compared) otherBody(numInputs, batch.length, batch.patterns, batch.forceMasked).foreach {
       case (patterns, forced) =>
         runBatch(s"$context (the other body)", className, bytes, roots, numInputs, lits,
           batch.copy(patterns = patterns, forceMasked = forced), declineAllowed, spark)
     }
     compared
+  }
+
+  /**
+   * [[runAndCompare]] for a caller that must know why a batch declined (VARKA-278's variants):
+   * the status of the first body that declined, or 0 where every body run was compared. A
+   * decline fails the check unless `declineAllowed`, as there; the bits are each reason's own
+   * only for a kernel emitted under `exactRefusalStatus`.
+   */
+  def runAndCompareStatus(context: String, className: String, bytes: Array[Byte],
+      roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Int], batch: Batch,
+      declineAllowed: Boolean): Int = {
+    val status = runBatch(context, className, bytes, roots, numInputs, lits, batch,
+      declineAllowed, None)
+    if (status != 0) return status
+    otherBody(numInputs, batch.length, batch.patterns, batch.forceMasked).map {
+      case (patterns, forced) =>
+        runBatch(s"$context (the other body)", className, bytes, roots, numInputs, lits,
+          batch.copy(patterns = patterns, forceMasked = forced), declineAllowed, None)
+    }.getOrElse(0)
   }
 
   /**
@@ -157,10 +176,13 @@ object VarkaKernelCheck {
     else Some((Seq.fill(numInputs)((_: Int) => true), false))
   }
 
-  /** One batch through [[runAndCompare]]'s check, whichever body its null counts select. */
+  /**
+   * One batch through [[runAndCompare]]'s check, whichever body its null counts select: the
+   * kernel's status, 0 once the rows are compared.
+   */
   private def runBatch(context: String, className: String, bytes: Array[Byte],
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Int], batch: Batch,
-      declineAllowed: Boolean, spark: Option[VarkaSparkOracle]): Boolean = {
+      declineAllowed: Boolean, spark: Option[VarkaSparkOracle]): Int = {
     val Batch(length, patterns, data, forceMasked) = batch
     VarkaSpeciesGuard.check(className, bytes)
     val loader = new VarkaGeneratedClassLoader(getClass.getClassLoader)
@@ -214,7 +236,7 @@ object VarkaKernelCheck {
           scratch)
       }
       if (status != 0 && declineAllowed) {
-        return false
+        return status
       }
       assert(status === 0, s"$context: the kernel declined the batch (status $status)")
       for (i <- 0 until length) {
@@ -244,7 +266,7 @@ object VarkaKernelCheck {
           }
         }
       }
-      true
+      0
     } finally {
       arena.close()
       loader.release()
@@ -262,7 +284,7 @@ object VarkaKernelCheck {
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Long], batch: LongBatch,
       declineAllowed: Boolean = false, spark: Option[VarkaSparkOracle] = None): Boolean = {
     val compared = runLongBatch(context, className, bytes, roots, numInputs, lits, batch,
-      declineAllowed, spark)
+      declineAllowed, spark) == 0
     if (compared) otherBody(numInputs, batch.length, batch.patterns, batch.forceMasked).foreach {
       case (patterns, forced) =>
         runLongBatch(s"$context (the other body)", className, bytes, roots, numInputs, lits,
@@ -271,10 +293,24 @@ object VarkaKernelCheck {
     compared
   }
 
-  /** One batch through [[runAndCompareLong]]'s check. */
+  /** [[runAndCompareStatus]] at the long lane. */
+  def runAndCompareLongStatus(context: String, className: String, bytes: Array[Byte],
+      roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Long], batch: LongBatch,
+      declineAllowed: Boolean): Int = {
+    val status = runLongBatch(context, className, bytes, roots, numInputs, lits, batch,
+      declineAllowed, None)
+    if (status != 0) return status
+    otherBody(numInputs, batch.length, batch.patterns, batch.forceMasked).map {
+      case (patterns, forced) =>
+        runLongBatch(s"$context (the other body)", className, bytes, roots, numInputs, lits,
+          batch.copy(patterns = patterns, forceMasked = forced), declineAllowed, None)
+    }.getOrElse(0)
+  }
+
+  /** One batch through [[runAndCompareLong]]'s check: the status, 0 once compared. */
   private def runLongBatch(context: String, className: String, bytes: Array[Byte],
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Long], batch: LongBatch,
-      declineAllowed: Boolean, spark: Option[VarkaSparkOracle]): Boolean = {
+      declineAllowed: Boolean, spark: Option[VarkaSparkOracle]): Int = {
     val LongBatch(length, patterns, data, forceMasked) = batch
     VarkaSpeciesGuard.check(className, bytes)
     val loader = new VarkaGeneratedClassLoader(getClass.getClassLoader)
@@ -322,7 +358,7 @@ object VarkaKernelCheck {
           Array.empty[Int], lits, length, scratch)
       }
       if (status != 0 && declineAllowed) {
-        return false
+        return status
       }
       assert(status === 0, s"$context: the kernel declined the batch (status $status)")
       for (i <- 0 until length) {
@@ -355,7 +391,7 @@ object VarkaKernelCheck {
           }
         }
       }
-      true
+      0
     } finally {
       arena.close()
       loader.release()
