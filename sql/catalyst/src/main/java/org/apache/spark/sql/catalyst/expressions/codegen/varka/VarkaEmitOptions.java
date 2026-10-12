@@ -436,6 +436,13 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        for the quarter of guarded methods that hold more; one mask keeps the loop's register
  *        pressure what it was. A diagnostic: it never changes an answer or whether a batch
  *        declines.
+ * @param groupBudgetUnderPrediction whether {@link #groupBudget} bounds a group while the cost
+ *        model's prediction runs with the plan's margins and a call-site budget (VARKA-254). True
+ *        is today's rule. False lifts the first rule's bound to {@link #fusedCeiling} there, so
+ *        the prediction and the measured limits bound the group: only while the model prices it,
+ *        and with the call sites of a group widened past the budget checked whatever its width,
+ *        since {@link #heavyGroupOutputs}' exemption assumes a narrow heavy group forms only by
+ *        sharing a prefix. Outside those conditions the budget binds either way.
  */
 public record VarkaEmitOptions(
     int groupBudget,
@@ -480,7 +487,8 @@ public record VarkaEmitOptions(
     int misdescribeDriverBytes,
     int forceResidualAt,
     int misdescribeRollback,
-    boolean exactRefusalStatus) {
+    boolean exactRefusalStatus,
+    boolean groupBudgetUnderPrediction) {
 
   /**
    * The three mod-7 lowerings. {@link #MAGIC} is what ships: two 15-bit digit-sum folds followed
@@ -593,7 +601,7 @@ public record VarkaEmitOptions(
           VarkaEmitBudget.HUGE_METHOD_LIMIT,
           true, true, true, true,
           VarkaEmitBudget.CALL_SITE_BUDGET, VarkaEmitBudget.HEAVY_GROUP_OUTPUTS,
-          true, true, true, true, true, true, true, 0, 0, 0, false);
+          true, true, true, true, true, true, true, 0, 0, 0, false, true);
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {
@@ -691,6 +699,7 @@ public record VarkaEmitOptions(
       b.forceResidualAt = forceResidualAt;
       b.misdescribeRollback = misdescribeRollback;
       b.exactRefusalStatus = exactRefusalStatus;
+      b.groupBudgetUnderPrediction = groupBudgetUnderPrediction;
     return b;
   }
 
@@ -739,6 +748,7 @@ public record VarkaEmitOptions(
     private int forceResidualAt;
     private int misdescribeRollback;
     private boolean exactRefusalStatus;
+    private boolean groupBudgetUnderPrediction;
 
     private Builder() {
     }
@@ -958,6 +968,11 @@ public record VarkaEmitOptions(
       return this;
     }
 
+    public Builder groupBudgetUnderPrediction(boolean binds) {
+      this.groupBudgetUnderPrediction = binds;
+      return this;
+    }
+
     public VarkaEmitOptions build() {
       return new VarkaEmitOptions(
           groupBudget, fusedCeiling, cse, shareChronoPrefix, denseValidityOnce,
@@ -969,7 +984,7 @@ public record VarkaEmitOptions(
           groupLocalSlots, materializeChronoPrefix, callSiteBudget, heavyGroupOutputs,
           predictGrouping, driverOutputTable, exactGrouping, splitDriver, severalKernels,
           elideUnreadLocals, planSize, misdescribeDriverBytes, forceResidualAt,
-          misdescribeRollback, exactRefusalStatus);
+          misdescribeRollback, exactRefusalStatus, groupBudgetUnderPrediction);
     }
   }
 
@@ -1020,6 +1035,10 @@ public record VarkaEmitOptions(
 
   public VarkaEmitOptions withPlanSize(boolean enabled) {
     return toBuilder().planSize(enabled).build();
+  }
+
+  public VarkaEmitOptions withGroupBudgetUnderPrediction(boolean binds) {
+    return toBuilder().groupBudgetUnderPrediction(binds).build();
   }
 
   public VarkaEmitOptions withMisdescribeDriverBytes(int bytes) {

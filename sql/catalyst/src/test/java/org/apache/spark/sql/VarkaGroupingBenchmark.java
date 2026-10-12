@@ -51,14 +51,15 @@ import org.apache.spark.sql.types.DataTypes;
  * prediction and the measured byte and call-site limits can close a group earlier, never later.
  * Each extra loop method costs a call per batch and reloads the input columns it reads; a wider
  * one holds more live vectors, which can spill registers. This benchmark prices that trade at the
- * default budget and with the budget raised to 400, where the prediction and the measured limits
- * alone bound a group. Each row names its loop-method count, read from the emitted class.
+ * default budget, with the prediction bounding groups in the budget's place (VARKA-254), and with
+ * the budget raised to 400, where the prediction and the measured limits alone bound a group.
+ * Each row names its loop-method count, read from the emitted class.
  *
- * <p>Each table has three rows: the default, the raised budget, and the default timed again last.
- * An arm whose class is byte for byte the default's is labelled a control: the gap between two
- * copies of one class is where the JIT and the allocator put them, and the gap between the two
- * default rows is what position in the run costs. A difference between arms counts only where it
- * clears both, and against the committed band.
+ * <p>Each table has a row per arm and the default timed again last. An arm whose class is byte
+ * for byte the default's is labelled a control: the gap between two copies of one class is where
+ * the JIT and the allocator put them, and the gap between the two default rows is what position
+ * in the run costs. A difference between arms counts only where it clears both, and against the
+ * committed band.
  *
  * <p>The shapes. With today's weights only the forty mixed outputs over two dates and two
  * integers split differently under the two budgets. The other three build one class under both
@@ -137,9 +138,16 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
         new Shape("40 mixed outputs over two dates and two integers", mixed));
   }
 
+  /**
+   * The default first, then the arms VARKA-254 compares: the prediction bounding groups in the
+   * budget's place ({@code groupBudgetUnderPrediction} off), and the budget raised to 400, kept
+   * from the file's first rows so the two stay comparable.
+   */
   private static List<Arm> arms() {
     return List.of(
         new Arm("group budget 16 (the default)", VarkaEmitOptions.DEFAULTS),
+        new Arm("the prediction bounds groups",
+            VarkaEmitOptions.DEFAULTS.withGroupBudgetUnderPrediction(false)),
         new Arm("group budget 400", VarkaEmitOptions.DEFAULTS.withGroupBudget(400)));
   }
 

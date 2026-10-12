@@ -23,24 +23,7 @@ import java.util.Map;
 import java.util.SortedMap;
 import java.util.TreeMap;
 
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.AddMonths;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Chrono;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfWeekIso;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfYear;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.InRanges;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntNeg;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LastDay;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MakeDate;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NextDay;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Overflow;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ThursdayOf;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.TruncDate;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.TruncDateDynamic;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WeekOfYear;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.*;
 
 /**
  * What an emitted loop method may carry and what each node costs against it: the group budget
@@ -351,8 +334,12 @@ final class VarkaEmitBudget {
 
   /**
    * What the civil-from-days prefix costs: the {@code IntVector} ops {@code emitChronoPrefix}
-   * emits for one date - 31 with the March-month step, 29 where the month step is elided because no
+   * emits for one date - 29 with the March-month step, 27 where the month step is elided because no
    * tail in the group reads the month. The weight is a shape property, so it takes the full form.
+   *
+   * <p>Like every weight, it is counted net of the operands' loads, the literals' broadcasts and
+   * the output's store, which a group pays once per column and per output whatever it computes.
+   * It was 31 until VARKA-254, the column's load and the output's store counted in.
    *
    * <p>This is the part of a calendar node's weight that a loop method pays <i>once</i>, however
    * many calendar outputs over the same date it holds (see {@code groupOutputs}); each node's
@@ -360,46 +347,43 @@ final class VarkaEmitBudget {
    * sum of the two, so the split {@code addOps} counts with and the total {@link #weightOf}
    * reports cannot drift apart.
    *
-   * <p>How the register was taken, so the next recount does it the same way: every node was
-   * emitted alone and beside {@code month(d)} in one loop method ({@code dev/varka_emit.sh
-   * "month(d)" "<node>" --options groupBudget=200}), and the pair's {@code loopDense0} count
-   * minus {@code month(d)}'s own (35) is the node's tail; {@code dayofmonth(d)} alone (36)
-   * minus its tail (5) is the prefix. {@code VarkaEmitterBudgetSuite} pins every line of the
-   * register against the emitted bytes, so a lowering change that moves a count fails there
+   * <p>How the register was taken, so the next recount does it the same way: every node was emitted
+   * alone and beside {@code month(d)} in one loop method ({@code dev/varka_emit.sh "month(d)"
+   * "<node>" --options groupBudget=200}), and the pair's {@code loopDense0} count minus {@code
+   * month(d)}'s own (35) is the node's tail; {@code dayofmonth(d)} alone (36) less its load and
+   * store (2) and its tail (5) is the prefix. {@code VarkaEmitterBudgetSuite} pins every line of
+   * the register against the emitted bytes, so a lowering change that moves a count fails there
    * rather than leaving a weight to drift.
    */
-  static final int CHRONO_PREFIX_WEIGHT = 31;
+  static final int CHRONO_PREFIX_WEIGHT = 29;
 
   /**
    * What a calendar node weighs in place of {@link #CHRONO_PREFIX_WEIGHT} when its prefix is
    * materialized by an earlier group (VARKA-198): the loads of the prefix's six vectors from the
-   * scratch region, one operation each, where the prefix itself is thirty-one.
+   * scratch region, one operation each, where the prefix itself is twenty-nine.
    */
   static final int CHRONO_PREFIX_LOAD_WEIGHT = 6;
 
   /**
-   * The four task-26 fields' tails - {@code year} 5, {@code month} 4, {@code dayofmonth} 5,
-   * {@code quarter} 7 - as one constant at the widest, since the four share
-   * {@link #CHRONO_WEIGHT} and a two-op difference decides no grouping.
-   */
-  static final int CHRONO_FIELD_TAIL_WEIGHT = 7;
-
-  /**
-   * What {@code Year}/{@code Month}/{@code DayOfMonth}/{@code Quarter} weigh against
-   * {@link #GROUP_BUDGET}: the prefix plus the field's own short tail. It exceeds the budget,
-   * so a calendar output never joins a group under clause 1 of {@code groupOutputs} - it joins
-   * one under clause 2, by reusing the prefix, or forms its own.
+   * The four task-26 fields' tails, each what its field adds past the prefix. They shared one
+   * constant at the widest (7) until VARKA-254 pinned every weight to its node's count; the
+   * shared constant over-counted {@code month} by three, which a cheap tail like
+   * {@code year(d) + k} - the shape the fused ceiling is read on - repeats per output.
    *
-   * <p>History, because the number has moved with the lowering and will again: 50 (rounded to the
-   * nearest ten, when it only had to exceed the budget), then 40, and the exact 38 since the
-   * shared-prefix rule made the tails bound a method against {@link #FUSED_CEILING}.
+   * <p>A field weighs more than {@link #GROUP_BUDGET}, so a calendar output never joins a group
+   * under clause 1 of {@code groupOutputs}: it joins one under clause 2, by reusing the prefix, or
+   * forms its own. History, because the number has moved with the lowering and will again: the
+   * whole field weighed 50 (rounded, when it only had to exceed the budget), then 40, then 38.
    */
-  static final int CHRONO_WEIGHT = CHRONO_PREFIX_WEIGHT + CHRONO_FIELD_TAIL_WEIGHT;
+  static final int YEAR_TAIL_WEIGHT = 5;
+  static final int MONTH_TAIL_WEIGHT = 4;
+  static final int DAY_OF_MONTH_TAIL_WEIGHT = 5;
+  static final int QUARTER_TAIL_WEIGHT = 7;
 
   /**
    * {@code DayOfYear}'s tail: {@code emitChronoYear} (6), {@code emitLeapFlag} (4)
    * and the January-based blend, 14 in all. Its prefix elides the month step, which is why the
-   * node alone emits 43 rather than 45.
+   * node alone emits 41 past its load and store rather than 43.
    *
    * <p>This tail has been 73, then 55, then 51 as a whole-node weight, and twice out of three times
    * the leap flag was the reason: the task first shipped its own leap test (19 ops), replaced it
@@ -417,11 +401,11 @@ final class VarkaEmitBudget {
    * {@code AddMonths}'s tail: the month arithmetic, the day clamp and
    * {@code emitDaysFromCivil}'s recompose. By far the heaviest tail, which is what makes it
    * the node that decides how many outputs {@link #FUSED_CEILING} admits - the four fields
-   * together weigh less than one of these. It used to borrow {@link #CHRONO_WEIGHT} on the
-   * argument that both only had to exceed the budget; under B2 the tail is summed against the
-   * ceiling, so it is counted.
+   * together weigh less than one of these. It used to borrow a field's weight on the argument
+   * that both only had to exceed the budget; under B2 the tail is summed against the ceiling, so
+   * it is counted. 81 until VARKA-254, which took out the month literal's broadcast.
    */
-  static final int ADD_MONTHS_TAIL_WEIGHT = 81;
+  static final int ADD_MONTHS_TAIL_WEIGHT = 80;
   static final int ADD_MONTHS_WEIGHT = CHRONO_PREFIX_WEIGHT + ADD_MONTHS_TAIL_WEIGHT;
 
   /**
@@ -483,10 +467,10 @@ final class VarkaEmitBudget {
    * {@link TruncDateDynamic}'s tail: the row picks its period after the fact, so the
    * tail computes all four results - the {@code QUARTER} tail, which contains the
    * {@code YEAR}'s; the {@code MONTH}'s two ops; the week's {@code emitFloorMod7} and
-   * subtract; and the three compare-and-blend pairs of the select - 60 past the prefix, 91
-   * for the node alone.
+   * subtract; and the three compare-and-blend pairs of the select - 59 past the prefix. 60 until
+   * VARKA-254, which took out the level column's load.
    */
-  static final int TRUNC_DYNAMIC_TAIL_WEIGHT = 60;
+  static final int TRUNC_DYNAMIC_TAIL_WEIGHT = 59;
   static final int TRUNC_DYNAMIC_WEIGHT = CHRONO_PREFIX_WEIGHT + TRUNC_DYNAMIC_TAIL_WEIGHT;
 
   /**
@@ -502,10 +486,11 @@ final class VarkaEmitBudget {
   /**
    * What {@link VarkaVectorIR.MakeDate} weighs against {@link #GROUP_BUDGET}, counted
    * the way {@link #DAY_OF_YEAR_WEIGHT} is: the validity arithmetic (the clamp, the month length
-   * with its leap flag, four compares) and {@code emitDaysFromCivil}'s recompose. Read off the
-   * emitted bytes by the register in {@code VarkaEmitterBudgetSuite}, not estimated.
+   * with its leap flag, four compares) and {@code emitDaysFromCivil}'s recompose, 53 lane calls in
+   * the dense body under {@code failOnError}. Read off the emitted bytes by the register in
+   * {@code VarkaEmitterBudgetSuite}, not estimated; it read 60 until VARKA-254 recounted it.
    */
-  static final int MAKE_DATE_WEIGHT = 60;
+  static final int MAKE_DATE_WEIGHT = 53;
 
   /**
    * {@code MakeDate}'s locals: the three inputs, the clamped month, the month length, the two
@@ -515,33 +500,51 @@ final class VarkaEmitBudget {
   static final int MAKE_DATE_TMP_COUNT = 18;
 
   /**
-   * What {@link VarkaVectorIR.ThursdayOf} weighs against {@link #GROUP_BUDGET},
-   * counted the way {@link #NEXT_DAY_WEIGHT} is and read off the emitted bytes: the shift's
-   * dense loop carries 19 {@code IntVector} calls ({@code weekday}'s 17 plus its add and
-   * subtract). It is a plain node, not a calendar one: {@code WeekOfYear} decomposes the
-   * shifted day, so the shift is the child its prefix is keyed on.
+   * What {@link VarkaVectorIR.ThursdayOf} weighs against {@link #GROUP_BUDGET}, counted the way
+   * {@link #NEXT_DAY_WEIGHT} is and read off the emitted bytes: the shift's dense loop carries 17
+   * {@code IntVector} calls past its load and store ({@code weekday}'s 15 plus its add and
+   * subtract). It is a plain node, not a calendar one: {@code WeekOfYear} decomposes the shifted
+   * day, so the shift is the child its prefix is keyed on.
    */
-  static final int THURSDAY_OF_WEIGHT = 19;
+  static final int THURSDAY_OF_WEIGHT = 17;
 
   /**
    * {@code WeekOfYear}'s tail: the day-of-year tail and {@code (doy - 1) / 7 + 1} by
-   * {@link VarkaChrono#WEEK_M}, 16 past a prefix that elides the month step - so
-   * {@code weekofyear(d)} as a whole emits 64: the shift's 19, the prefix's 29 and this.
+   * {@link VarkaChrono#WEEK_M}, 18 past a prefix that elides the month step - so
+   * {@code weekofyear(d)} as a whole emits 64: the load and store, the shift's 17, the prefix's 27
+   * and this. 16 until VARKA-254, when the shift's load and store were counted twice.
    */
-  static final int WEEK_OF_YEAR_TAIL_WEIGHT = 16;
+  static final int WEEK_OF_YEAR_TAIL_WEIGHT = 18;
   static final int WEEK_OF_YEAR_WEIGHT = CHRONO_PREFIX_WEIGHT + WEEK_OF_YEAR_TAIL_WEIGHT;
 
   /**
    * What {@link VarkaVectorIR.DayOfWeekIso} weighs against {@link #GROUP_BUDGET},
-   * counted the way {@link #NEXT_DAY_WEIGHT} is: {@code WeekDay}'s mod-7 tail (17 dense-loop
-   * {@code IntVector} calls under the shipped lowering, per the register in
-   * {@code VarkaEmitterBudgetSuite}) plus one add.
+   * counted the way {@link #NEXT_DAY_WEIGHT} is: {@link #WEEK_DAY_WEIGHT} plus one add.
    */
-  static final int DAY_OF_WEEK_ISO_WEIGHT = 18;
+  static final int DAY_OF_WEEK_ISO_WEIGHT = 16;
+
+  /**
+   * What {@link VarkaVectorIR.WeekDay} weighs: {@code emitFloorMod7}'s twelve vector ops under the
+   * shipped {@link VarkaEmitOptions.FloorMod7#MAGIC} lowering and the shift around it. It weighed
+   * the flat default of 1 until VARKA-254, a sixteenth of what it emits, so a group of weekday
+   * outputs passed the group budget unseen.
+   */
+  static final int WEEK_DAY_WEIGHT = 15;
+
+  /** What {@link VarkaVectorIR.DayOfWeek} weighs: {@link #WEEK_DAY_WEIGHT}'s floor modulus with a
+   * Sunday-based shift, one op more. The flat 1 until VARKA-254, as for {@code WeekDay}. */
+  static final int DAY_OF_WEEK_WEIGHT = 16;
+
+  /**
+   * What a guard weighs: {@link VarkaVectorIR.GuardedDay}'s and
+   * {@link VarkaVectorIR.GuardedRange}'s two range compares, whose masks fold into the status.
+   * Their mask calls are not lane calls, so the two are what a weight counts.
+   */
+  static final int GUARD_WEIGHT = 2;
 
   /**
    * What {@link VarkaVectorIR.NextDay} weighs against {@link #GROUP_BUDGET}, counted the same
-   * way as {@link #CHRONO_WEIGHT}: its own {@code w = k - d} subtract and the final
+   * way as a calendar node: its own {@code w = k - d} subtract and the final
    * {@code d + r + 1} (two ops) plus {@code emitFloorMod7}'s twelve vector ops under the
    * shipped {@link VarkaEmitOptions.FloorMod7#MAGIC} lowering - fifteen real vector ops, not
    * the flat default weight of 1 the emitter used to give it. Re-count it if the lowering
@@ -578,79 +581,83 @@ final class VarkaEmitBudget {
    * is written as {@link #CHRONO_PREFIX_WEIGHT} plus a tail: {@code GroupOps} counts the prefix
    * once.
    *
+   * <p>Every node is named in the switch, so a node added to the IR has no weight until it is
+   * given one: {@code DayOfWeek} and {@code WeekDay} fell to a default of 1 while emitting about
+   * sixteen until VARKA-254 named them. {@code VarkaEmitterBudgetSuite}'s register holds each
+   * weight to its node's count.
+   *
    * <p>This is deliberately only about <i>grouping</i>: whether outputs share a loop method is
    * {@code groupOutputs}' question, and how many a kernel may fuse is the byte budget's, with
    * {@link #MAX_FUSED_NODES} counting nodes only where that budget is off.
    */
   static int weightOf(VarkaVectorIR node) {
-    if (node instanceof ColumnRef || node instanceof LiteralSlot) {
-      return 0;
-    }
-    if (node instanceof DayOfYear) {
-      return DAY_OF_YEAR_WEIGHT;
-    }
-    if (node instanceof IntArith n) {
+    return switch (node) {
+      case ColumnRef c -> 0;
+      case LiteralSlot l -> 0;
       // One lanewise op, plus the four the sign test costs where there is one.
-      return n.mode() == Overflow.WRAP ? 1 : 5;
-    }
-    if (node instanceof IntNeg n) {
+      case IntArith n -> n.mode() == Overflow.WRAP ? 1 : 5;
       // The multiply by -1, plus one compare where the mode checks.
-      return n.mode() == Overflow.WRAP ? 1 : 2;
-    }
-    if (node instanceof WeekOfYear) {
-      return WEEK_OF_YEAR_WEIGHT;
-    }
-    if (node instanceof TruncDate n) {
-      return switch (n.level()) {
+      case IntNeg n -> n.mode() == Overflow.WRAP ? 1 : 2;
+      case AddDays n -> 1;
+      case SubDays n -> 1;
+      case DateDiff n -> 1;
+      case Greatest n -> 1;
+      case Least n -> 1;
+      // The blend; its condition is a node of its own.
+      case IfElse n -> 1;
+      // The narrowing conversion.
+      case NarrowLane n -> 1;
+      case Compare n -> 1;
+      // The connectives emit only mask calls, which no weight counts; 1 is a floor, so that a
+      // connective is never free to join any group.
+      case And n -> 1;
+      case Or n -> 1;
+      case Not n -> 1;
+      case IsNotNull n -> 1;
+      // Emitted as one loop whatever the number of ranges: a start mask and a body of scalar
+      // compares, three lane calls past the column's load. Its time grows with the ranges; its
+      // code does not.
+      case InRanges n -> 3;
+      case GuardedDay n -> GUARD_WEIGHT;
+      case GuardedRange n -> GUARD_WEIGHT;
+      case DayOfWeek n -> DAY_OF_WEEK_WEIGHT;
+      case WeekDay n -> WEEK_DAY_WEIGHT;
+      case DayOfWeekIso n -> DAY_OF_WEEK_ISO_WEIGHT;
+      case NextDay n -> NEXT_DAY_WEIGHT;
+      case ThursdayOf n -> THURSDAY_OF_WEIGHT;
+      case MakeDate n -> MAKE_DATE_WEIGHT;
+      case AddMonths n -> ADD_MONTHS_WEIGHT;
+      case Year n -> CHRONO_PREFIX_WEIGHT + YEAR_TAIL_WEIGHT;
+      case Month n -> CHRONO_PREFIX_WEIGHT + MONTH_TAIL_WEIGHT;
+      case DayOfMonth n -> CHRONO_PREFIX_WEIGHT + DAY_OF_MONTH_TAIL_WEIGHT;
+      case Quarter n -> CHRONO_PREFIX_WEIGHT + QUARTER_TAIL_WEIGHT;
+      case DayOfYear n -> DAY_OF_YEAR_WEIGHT;
+      case LastDay n -> LAST_DAY_WEIGHT;
+      case WeekOfYear n -> WEEK_OF_YEAR_WEIGHT;
+      case TruncDate n -> switch (n.level()) {
         case MONTH -> TRUNC_MONTH_WEIGHT;
         case YEAR -> TRUNC_YEAR_WEIGHT;
         case QUARTER -> TRUNC_QUARTER_WEIGHT;
       };
-    }
-    if (node instanceof TruncDateDynamic) {
-      return TRUNC_DYNAMIC_WEIGHT;
-    }
-    if (node instanceof LastDay) {
-      return LAST_DAY_WEIGHT;
-    }
-    if (node instanceof AddMonths) {
-      return ADD_MONTHS_WEIGHT;
-    }
-    if (isChrono(node)) {
-      return CHRONO_WEIGHT;
-    }
-    if (node instanceof MakeDate) {
-      return MAKE_DATE_WEIGHT;
-    }
-    if (node instanceof ThursdayOf) {
-      return THURSDAY_OF_WEIGHT;
-    }
-    if (node instanceof DayOfWeekIso) {
-      return DAY_OF_WEEK_ISO_WEIGHT;
-    }
-    if (node instanceof ConstDivide n) {
+      case TruncDateDynamic n -> TRUNC_DYNAMIC_WEIGHT;
       // Weight approximates lane ops, as every entry above does, counted over every vector type
       // the lowering touches. Each lane has two forms, and which one emits cannot be asked here -
       // `weightOf` runs while the groups are formed, before an `Analysis` exists - so the larger
       // is used. Over-weighing costs an extra loop method on a host that did not need one;
       // under-weighing puts more work in a method than the budget means, which the byte and
       // call-site budgets correct only when the built class measures over them.
-      return n.laneType() == VarkaVectorIR.LaneType.LONG
+      case ConstDivide n -> n.laneType() == VarkaVectorIR.LaneType.LONG
           ? LONG_CONST_DIVIDE_WEIGHT
           : INT_CONST_DIVIDE_WEIGHT + (n.divisor() < 0 ? 1 : 0);
-    }
-    if (node instanceof InRanges) {
-      // Emitted as one loop whatever the number of ranges: a start mask, and a body of two scalar
-      // compares, an AND and an OR. Its time grows with the ranges; its code does not.
-      return 6;
-    }
-    return node instanceof NextDay ? NEXT_DAY_WEIGHT : 1;
+      // The single multiply-high and its shift.
+      case BoundedDivide n -> 2;
+    };
   }
 
-  /** Whether {@code node} runs a civil-from-days decomposition and so needs
-   * {@link #CHRONO_WEIGHT}: one of the extractions in the IR's sealed {@link Chrono} family,
-   * whose membership makes weighing a new extraction total without touching this method - or
-   * {@link AddMonths}, which decomposes and recomposes but is not itself an
+  /** Whether {@code node} runs a civil-from-days decomposition, and so weighs
+   * {@link #CHRONO_PREFIX_WEIGHT} plus a tail: one of the extractions in the IR's sealed
+   * {@link Chrono} family, whose membership makes weighing a new extraction total without touching
+   * this method - or {@link AddMonths}, which decomposes and recomposes but is not itself an
    * extraction, so it stays outside {@link Chrono} and is checked for by hand here instead. */
   static boolean isChrono(VarkaVectorIR node) {
     return node instanceof Chrono || node instanceof AddMonths;
