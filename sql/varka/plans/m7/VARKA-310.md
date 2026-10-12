@@ -137,3 +137,40 @@ The IR fuzz suite's time at its default iteration count, before and after, in it
 2. `VarkaReference`, the agreement check run against the Scala body, the planted fault, then the
    forwarder - in one commit.
 3. Section 9.
+
+## 9. Outcome
+
+Done on 12 October 2026, in one commit after the plan.
+
+**What was built.** `VarkaReference` (Java, 492 lines) holds the reference semantics: `value`,
+`cond`, `longValue` and `longCond`, each one exhaustive `switch` over the sealed IR with no
+`default`, the calendar cases in a second switch over `Chrono`, and Kleene logic as the enum
+`Truth`. Every long-lane refusal is a named case. `VarkaReferenceEvaluator` is a 54-line forwarder
+with its four Scala signatures, converting the row once and the answer back. No caller changed.
+
+**The two forms agree.** Before the Scala body went, a throwaway suite drew 10,000 shapes per lane
+from `VarkaIrGrammar` (one in ten a wide shape), 48 rows each, values as the fuzzer draws them with
+every eighth row at the lane's edges and a quarter of the inputs null, and compared every output:
+5,836,752 answers at the int lane, 4,851 of them a throw in both forms with the same exception
+class, and 5,714,544 at the long lane, all equal.
+
+**The planted fault.** `dayofmonth` one day late in the Java form failed the random-tree fuzz test
+(a selection row differs, iteration 6) and the wide compositions test (output 188 differs), so the
+forwarder is on the path.
+
+**Predictions scored.**
+
+1. **Held.** No disagreement on 11.5 million answers.
+2. **Held.** The gate passed: 1,198 tests succeeded, none failed and 46 were cancelled (the opt-in
+   ones) at each width, the counts the same day's gate gave on a branch with no test change.
+3. **Held.** The int-lane random-tree test reads 22.8 and 22.6 seconds over the Java form against
+   21.9 and 22.8 over the Scala one, in alternating runs of the same build. The long-lane test
+   reports 1 millisecond in both, so it says nothing either way.
+4. **Half wrong.** The forwarder is 54 lines, under 60; the evaluator is 492, not about 300. The
+   switches name every case the Scala form's default swallowed - fourteen long-lane refusals - and
+   each short-circuit is a statement where Scala had a `for` comprehension.
+
+**Corrections to the plan.** None of substance. The translation's two slips were caught before
+the first compile by reading against the Scala form: an unused import, and the range set's loop,
+which bound its pairs differently from the Scala form; it now indexes them as the Scala form did,
+and the node's constructor keeps them in pairs.
