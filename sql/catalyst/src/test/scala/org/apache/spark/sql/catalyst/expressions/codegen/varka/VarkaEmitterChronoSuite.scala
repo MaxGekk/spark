@@ -77,7 +77,8 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
   }
 
   test("the month count takes int arithmetic, next_day's weekday still does not") {
-    // VARKA-68 split `requireOffsetShape` in two. The month count and the weekday shared it
+    // VARKA-68 split the emitter's shared check in two (now VarkaOperandPosition's MONTH_COUNT
+    // and WEEKDAY). The month count and the weekday shared it
     // under one sentence - that each "carries a runtime bound a derived value cannot declare" -
     // which is true of the weekday and false of the count: a column-count `AddMonths` refuses for
     // `MONTH_COUNT` and is checked at run time against MONTH_ARITH_MIN/MAX_MONTHS by a

@@ -544,7 +544,8 @@ about a predicate with more than one reader:
 - **When one predicate serves two positions, its reason has to hold for each
   position separately, and the javadoc has to say which position it is talking
   about.** The fix here was not new logic: `isDayOffsetShape` stayed exactly as
-  it was and gained a second, laxer caller, `requireMonthCountShape`. What
+  it was and gained a second, laxer caller, `requireMonthCountShape` (both
+  became `VarkaOperandPosition` in VARKA-86). What
   changed was that each caller now states its own reason, so the next reader is
   not told that a guarded position is unguarded.
 - **A runtime guard on a value is what buys a position its derived inputs.** A

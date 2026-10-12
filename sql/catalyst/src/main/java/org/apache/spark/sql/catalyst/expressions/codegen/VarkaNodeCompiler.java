@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.function.IntUnaryOperator;
+import java.util.function.Supplier;
 
 import org.apache.spark.sql.catalyst.expressions.Add;
 import org.apache.spark.sql.catalyst.expressions.BoundReference;
@@ -36,6 +37,7 @@ import org.apache.spark.sql.catalyst.expressions.Subtract;
 import org.apache.spark.sql.catalyst.expressions.UnaryMinus;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDerivedKind;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaRangeAnalysis;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaOperandPosition;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
@@ -322,17 +324,8 @@ final class VarkaNodeCompiler {
       VarkaSlotTable inputs,
       VarkaSlotTable literals,
       DeclineSink sink) {
-    if (e instanceof BoundReference br && DataTypes.IntegerType.equals(br.dataType())) {
-      return Optional.of(columnRef(br, inputs));
-    }
-    if (e instanceof Literal l && l.value() instanceof Integer v
-        && DataTypes.IntegerType.equals(l.dataType())) {
-      return Optional.of(intSlot(v, literals));
-    }
-    if (!DataTypes.IntegerType.equals(e.dataType())) {
-      return sink.decline("int arithmetic operand of type " + e.dataType().simpleString(), e);
-    }
-    return compileNode(e, inputs, literals, sink);
+    return intOperand(e, () -> "int arithmetic operand of type " + e.dataType().simpleString(),
+        inputs, literals, sink);
   }
 
   /**
@@ -350,6 +343,39 @@ final class VarkaNodeCompiler {
       VarkaSlotTable inputs,
       VarkaSlotTable literals,
       DeclineSink sink) {
+    return intOperand(e, () -> position + " is not an int column or literal", inputs, literals,
+        sink);
+  }
+
+  /**
+   * The rule both int operand forms share (VARKA-86): the int leaf, and any other
+   * {@code IntegerType} expression through {@link #compileNode}; {@code notInt} is the position's
+   * own reason for an operand of another type, built only when it declines.
+   */
+  private static Optional<VarkaVectorIR> intOperand(
+      Expression e,
+      Supplier<String> notInt,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
+      DeclineSink sink) {
+    Optional<VarkaVectorIR> leaf = intLeaf(e, inputs, literals);
+    if (leaf.isPresent()) {
+      return leaf;
+    }
+    if (!DataTypes.IntegerType.equals(e.dataType())) {
+      return sink.decline(notInt.get(), e);
+    }
+    return compileNode(e, inputs, literals, sink);
+  }
+
+  /**
+   * The int leaf, the one rule every int operand position starts from: an int literal as a slot,
+   * a bare {@code IntegerType} column as an int column ref; empty for anything else. It is not
+   * {@link #compileNode}'s leaf, which is {@code DateType}: a bare int has no meaning as a date
+   * operand, and widening that leaf would admit {@code date_add(d, i)}'s offset as a date.
+   */
+  static Optional<VarkaVectorIR> intLeaf(
+      Expression e, VarkaSlotTable inputs, VarkaSlotTable literals) {
     if (e instanceof Literal l && l.value() instanceof Integer v
         && DataTypes.IntegerType.equals(l.dataType())) {
       return Optional.of(intSlot(v, literals));
@@ -357,10 +383,18 @@ final class VarkaNodeCompiler {
     if (e instanceof BoundReference br && DataTypes.IntegerType.equals(br.dataType())) {
       return Optional.of(columnRef(br, inputs));
     }
-    if (!DataTypes.IntegerType.equals(e.dataType())) {
-      return sink.decline(position + " is not an int column or literal", e);
-    }
-    return compileNode(e, inputs, literals, sink);
+    return Optional.empty();
+  }
+
+  /**
+   * {@code built} where {@code position} takes it, and otherwise a decline with {@code reason}:
+   * the compiler's half of the rule the emitter's {@code Analysis.requireOperand} checks, so an
+   * operand the emitter would refuse never leaves the compiler as fused (VARKA-86).
+   */
+  static Optional<VarkaVectorIR> admitted(
+      VarkaOperandPosition position, VarkaVectorIR built, Expression e, String reason,
+      DeclineSink sink) {
+    return position.admits(built) ? Optional.of(built) : sink.decline(reason, e);
   }
 
   /**

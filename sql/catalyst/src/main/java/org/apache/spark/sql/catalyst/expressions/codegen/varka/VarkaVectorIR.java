@@ -1265,16 +1265,4 @@ public sealed interface VarkaVectorIR
     throw new IllegalArgumentException(
         "a condition goes here, not a " + node.getClass().getSimpleName());
   }
-
-  /**
-   * The node kinds a {@code date_add}/{@code date_sub} day offset may be. Public because
-   * `VarkaExpressionCompiler` gates its offset arm on exactly this: the compiler deciding what
-   * to build and the emitter deciding what to accept are one rule, and stating it twice is how
-   * `date_add(d, weekday(d2) + 1)` came to be fused in EXPLAIN and refused at emit time, which
-   * the evaluator turns into a silent per-batch fallback. Widen this and both move together.
-   */
-  static boolean isDayOffsetShape(VarkaVectorIR offset) {
-    return offset instanceof LiteralSlot || offset instanceof ColumnRef
-        || offset instanceof IntArith || offset instanceof IntNeg;
-  }
 }
