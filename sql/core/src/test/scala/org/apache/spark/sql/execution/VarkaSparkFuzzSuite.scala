@@ -31,7 +31,8 @@ import org.apache.spark.sql.execution.VarkaSparkFuzz._
  * Budget: `-Dvarka.sparkfuzz.iterations` (default 200, about ten seconds) and
  * `-Dvarka.sparkfuzz.seed`; `-Dvarka.sparkfuzz.only=<iteration>` replays one. Every
  * `partitionEvery`th composition with a filter also checks the
- * ternary partition on both engines.
+ * ternary partition on both engines. The planted-rollback test draws from a seed of its own,
+ * `-Dvarka.sparkfuzz.plantedSeed`, so a run at another seed does not move it (VARKA-309).
  */
 class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
 
@@ -44,6 +45,14 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
   // Every output of a composition forced in turn, where the default forces one (VARKA-296).
   private val forceAll = sys.props.get("varka.sparkfuzz.forceAll").contains("true")
   private val partitionEvery = 4
+  /**
+   * The planted-rollback test's own seed. A planted bug fails only a composition whose shape
+   * reaches the code it breaks, so a run's seed decides whether the first three hundred
+   * compositions hold one; at seed 1 none did (VARKA-309). A check that a planted bug is caught
+   * needs one composition that reaches it, not the run's variety, so it keeps one seed.
+   */
+  private val plantedSeed =
+    sys.props.get("varka.sparkfuzz.plantedSeed").map(_.toLong).getOrElse(20261008L)
   private var firstFailure: Option[Int] = None
 
   private def kindOf(c: Case, partitions: Boolean, forces: Seq[Int]): Option[String] =
@@ -211,10 +220,12 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     VarkaColumnarToRowExec.setFailureFallbackExpectedForTesting(true)
     try {
       val found = (0 until 300).iterator.map { it =>
-        val c = rectify(draw(rows, seed, it))
-        kindOf(c, partitions = false, c.outputs.indices)
-      }.collectFirst { case Some(kind) => kind }
-      assert(found.exists(_.startsWith("with an output forced to decline")), found)
+        val c = rectify(draw(rows, plantedSeed, it))
+        (it, kindOf(c, partitions = false, c.outputs.indices))
+      }.collectFirst { case (it, Some(kind)) => (it, kind) }
+      info(s"seed $plantedSeed: the planted rollback first changes an answer at composition " +
+        found.map(_._1).getOrElse("none of 300"))
+      assert(found.exists(_._2.startsWith("with an output forced to decline")), found)
     } finally {
       VarkaColumnarToRowExec.setFailureFallbackExpectedForTesting(false)
       VarkaColumnarToRowExec.setEmitOptionsForTesting(previous)
