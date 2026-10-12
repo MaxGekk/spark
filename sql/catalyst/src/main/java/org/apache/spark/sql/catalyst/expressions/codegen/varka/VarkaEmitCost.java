@@ -201,7 +201,7 @@ final class VarkaEmitCost {
     }
 
     /** The counts by feature, in feature order; empty unless the tally keeps them. */
-    TreeMap<String, Integer> counts() {
+    Map<String, Integer> counts() {
       return counts == null ? new TreeMap<>() : new TreeMap<>(counts);
     }
 

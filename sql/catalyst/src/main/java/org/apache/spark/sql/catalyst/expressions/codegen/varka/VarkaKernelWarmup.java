@@ -344,7 +344,8 @@ public final class VarkaKernelWarmup {
       Object queue = ManagementFactory.getPlatformMBeanServer().invoke(
           new ObjectName("com.sun.management:type=DiagnosticCommand"), "compilerQueue",
           new Object[] {null}, new String[] {String[].class.getName()});
-      String[] lines = String.valueOf(queue).split("\\R");
+      // Limit 0, the one-argument split's own: trailing empty lines are dropped.
+      String[] lines = String.valueOf(queue).split("\\R", 0);
       state.append("compile queue of ").append(lines.length).append(" lines: ");
       for (int i = 0; i < Math.min(lines.length, 12); i++) {
         state.append(lines[i].strip()).append(" | ");
@@ -719,7 +720,7 @@ public final class VarkaKernelWarmup {
     for (int r = 0; r < SNAPSHOT_ROWS; r++) {
       int s = r % length;
       if (((src.get(ValueLayout.JAVA_BYTE, s >>> 3) >>> (s & 7)) & 1) != 0) {
-        long b = r >>> 3;
+        long b = (long) r >>> 3;
         byte bits = dst.get(ValueLayout.JAVA_BYTE, b);
         dst.set(ValueLayout.JAVA_BYTE, b, (byte) (bits | (1 << (r & 7))));
       }

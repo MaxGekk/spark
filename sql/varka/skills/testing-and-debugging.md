@@ -905,3 +905,28 @@ in the shape; a test that never saw a race would say nothing about one.
 Two things to keep when adding to the suite: a task must not wait on the pool it runs in (the map
 is called from the test's thread only), and ScalaTest evaluates `assert`'s message even when the
 assertion holds, so a message that indexes into an empty result throws on success.
+
+## Error Prone and NullAway run beside the build, and the pending list only shrinks
+
+VARKA-266. `dev/varka_errorprone.sh` runs Error Prone and NullAway as a javac plugin over Varka's
+Java alone, against sbt's exported classpath, writing class files nothing reads; the gate's lint
+step runs it. Four things cost a run each to learn:
+
+- Error Prone's with-dependencies jar does not bundle the Checker Framework dataflow its analyses
+  load (`io.github.eisop:dataflow-errorprone`); without it the plugin dies on
+  `NoClassDefFoundError` mid-run. NullAway refuses to start without `AnnotatedPackages`.
+- The plugin needs ten `--add-exports` and two `--add-opens` of `jdk.compiler`, as `-J` flags,
+  and they follow javac's internals: the script refuses any JDK but 25 by name.
+- Under `-Werror` javac stops at the first warning, so to read every finding at once run without
+  it. The incubating-module notice is a warning too (`-Xlint:-incubating`).
+- A check that "a suppression has a comment above it" passes on the `*/` of the Javadoc above
+  every annotated method; the reason has to be a `//` line comment.
+
+NullAway is staged by class: the classes in `dev/varka_nullaway_pending.txt` are treated as
+unannotated and every other Varka class is checked; a class leaves the list when its nullness is
+stated (`javax.annotation.Nullable`, already on Spark's classpath) and the pass is green. The
+script fails a list longer than the merge base's, or a new name that does not replace a removed
+one (a rename keeps its place; a split does not), and a NullAway suppression over a whole class.
+It also checks a class master has taken off the list since the branch began, so a branch behind
+master fails before the merge does. An intended finding is suppressed at its site with a `//`
+reason; no check is turned off for the whole pass.

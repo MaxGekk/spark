@@ -45,6 +45,9 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions.
  * parser walk it. Adding an option is the record component, its builder setter and {@code with*}
  * method, its javadoc, its value in {@link VarkaEmitOptions#DEFAULTS}, and one entry here.
  */
+// Builder is VarkaEmitOptions.Builder everywhere here, the one builder an option sets;
+// qualifying each of its uses would only lengthen the options table's lines.
+@SuppressWarnings("BadImport")
 public sealed interface VarkaEmitOption
     permits VarkaEmitOption.Flag, VarkaEmitOption.Count, VarkaEmitOption.Choice {
 

@@ -405,10 +405,11 @@ public final class VarkaChrono {
   // --- The inverse direction, and the month arithmetic built on it ------------------
 
   /**
-   * A year bias making a reported year non-negative over the range {@link #emitDaysFromCivil}
-   * actually has to cover, so a division by 100 or 400 can use a magic multiply. That range is
-   * wider than the narrow day range: {@code add_months}/{@code date +- INTERVAL n
-   * MONTH/YEAR} can push a year up to {@code MONTH_ARITH_MAX_MONTHS}/12 (about 2047 years)
+   * A year bias making a reported year non-negative over the range
+   * {@code VarkaChronoLowering.emitDaysFromCivil} actually has to cover, so a division by 100 or
+   * 400 can use a magic multiply. That range is wider than the narrow day range:
+   * {@code add_months}/{@code date +- INTERVAL n MONTH/YEAR} can push a year up to
+   * {@code MONTH_ARITH_MAX_MONTHS}/12 (about 2047 years)
    * past either end of it, so the covered year range is roughly -14848..35181, and 15200 - a
    * multiple of 400, so it changes neither leapness nor which 400-year cycle a year falls in -
    * is the smallest such multiple that keeps the biased value non-negative throughout.
@@ -662,7 +663,7 @@ public final class VarkaChrono {
   private static Fields fields(int era, int yearOfEra, int dayOfYear) {
     int monthNumerator = MONTH_NUM_M * dayOfYear + MONTH_NUM_ADD;
     int monthIndex3 = monthNumerator >>> MONTH_NUM_K;
-    int dayOfMonth = ((((monthNumerator & 0xFFFF) * DOM_M) >>> DOM_K)) + 1;
+    int dayOfMonth = (((monthNumerator & 0xFFFF) * DOM_M) >>> DOM_K) + 1;
     int month = monthIndex3 < MONTH3_JANUARY ? monthIndex3 : monthIndex3 - 12;
     int year = 400 * era + yearOfEra + (dayOfYear >= MARCH_TO_JANUARY_DAYS ? 1 : 0);
     int quarter = ((month + 2) * QUARTER_M) >>> QUARTER_K;

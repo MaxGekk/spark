@@ -17,6 +17,8 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import javax.annotation.Nullable;
+
 import jdk.jfr.Category;
 import jdk.jfr.Event;
 import jdk.jfr.Label;
@@ -55,13 +57,13 @@ public final class VarkaFallbackEvent extends Event {
   public static final String RANGE_DECLINED = "range-declined";
 
   @Label("Cause")
-  public String cause;
+  public @Nullable String cause;
 
   @Label("Kernel Identity")
-  public String kernelIdentity;
+  public @Nullable String kernelIdentity;
 
   @Label("Exception Class")
-  public String exceptionClass;
+  public @Nullable String exceptionClass;
 
   /**
    * A declined batch's status word, zero for every other cause: the refusal reasons' bits

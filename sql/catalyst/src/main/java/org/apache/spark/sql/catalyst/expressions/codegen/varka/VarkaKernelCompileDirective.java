@@ -106,12 +106,10 @@ public final class VarkaKernelCompileDirective {
    * its kernels unwarmed, as it would with the warm-up off.
    */
   public static boolean readyForWarmup() {
-    switch (compilers()) {
-      case C2_ONLY:
-        return true;
-      case NO_C2:
-        return false;
-      default:
+    return switch (compilers()) {
+      case C2_ONLY -> true;
+      case NO_C2 -> false;
+      case TIERED -> {
         if (!attempted) {
           synchronized (VarkaKernelCompileDirective.class) {
             if (!attempted) {
@@ -120,8 +118,9 @@ public final class VarkaKernelCompileDirective {
             }
           }
         }
-        return installed;
-    }
+        yield installed;
+      }
+    };
   }
 
   /** Whether this JVM has the directive: added, and not skipped or failed. */

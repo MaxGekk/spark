@@ -1199,7 +1199,7 @@ public sealed interface VarkaVectorIR
 
   /**
    * {@code node} rebuilt over {@code children}, in the order {@link #childrenOf} lists them, with
-   * every other field kept: the inverse of {@code childrenOf}, which a shrinker uses to put a
+   * every other field kept: the inverse of {@link #childrenOf}, which a shrinker uses to put a
    * smaller subtree in a node's place. A leaf takes none.
    *
    * <p>The constructors check what they always check, so a tree that does not type - a calendar
