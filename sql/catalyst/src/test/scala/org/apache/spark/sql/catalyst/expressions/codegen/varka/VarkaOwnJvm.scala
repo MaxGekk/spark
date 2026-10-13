@@ -16,20 +16,17 @@
  */
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
-import java.io.{BufferedReader, File, InputStreamReader}
-import java.lang.management.ManagementFactory
-import java.nio.charset.StandardCharsets
-import java.nio.file.Files
-import java.util.concurrent.{ConcurrentHashMap, TimeUnit}
-import javax.xml.parsers.DocumentBuilderFactory
+import java.util.{List => JList}
+import java.util.concurrent.ConcurrentHashMap
 
-import scala.collection.mutable
-import scala.jdk.CollectionConverters._
+import scala.jdk.OptionConverters._
 
 import org.scalactic.source.Position
 import org.scalatest.Tag
 
 import org.apache.spark.SparkFunSuite
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSuiteReport.{Failed, Passed,
+  Skipped}
 
 /**
  * A suite that runs its tests in a JVM of its own when it is run in a shared one (VARKA-246,
@@ -53,10 +50,9 @@ import org.apache.spark.SparkFunSuite
  * are where they were. `-Dvarka.ownJvm=true` runs the tests directly in the JVM at hand with the
  * guard off, which is how the child runs.
  *
- * The child is ended from outside when it outlasts its budget, which is the shortest of the
- * suites' per-test caps (`varka.test.watchdog.minutes`, `spark.test.timeout`) less a minute, so the
- * parent reports the child's hang before a cap halts the JVM; `-Dvarka.ownJvm.timeoutMinutes`
- * overrides it. The first test carries the suite's whole time against that cap.
+ * The child, its budget and its report are [[VarkaChildJvm]]'s, which this trait runs with
+ * ScalaTest's Runner (VARKA-312). The first test carries the suite's whole time against the
+ * child's budget.
  */
 trait VarkaOwnJvm extends SparkFunSuite {
 
@@ -66,10 +62,10 @@ trait VarkaOwnJvm extends SparkFunSuite {
       super.test(testName, testTags: _*)(testBody)
     } else {
       super.test(testName, testTags: _*) {
-        VarkaOwnJvm.resultsOf(getClass.getName).get(testName) match {
-          case Some(VarkaOwnJvm.Passed) =>
-          case Some(VarkaOwnJvm.Skipped(reason)) => cancel(reason)
-          case Some(VarkaOwnJvm.Failed(message)) => fail(message)
+        VarkaOwnJvm.resultsOf(getClass.getName).of(testName).toScala match {
+          case Some(_: Passed) =>
+          case Some(s: Skipped) => cancel(s.reason)
+          case Some(f: Failed) => fail(f.message)
           case None => fail(s"the child JVM reported no result for '$testName'")
         }
       }
@@ -79,135 +75,15 @@ trait VarkaOwnJvm extends SparkFunSuite {
 
 object VarkaOwnJvm {
 
-  /** Set for the child, and by hand to run such a suite's tests in the JVM at hand. */
-  val PROPERTY: String = VarkaSpeciesGuard.OWN_JVM_PROPERTY
+  /** [[VarkaChildJvm.PROPERTY]]. */
+  val PROPERTY: String = VarkaChildJvm.PROPERTY
 
-  sealed trait Result
-  case object Passed extends Result
-  final case class Skipped(reason: String) extends Result
-  final case class Failed(message: String) extends Result
-
-  def inChild: Boolean = sys.props.get(PROPERTY).contains("true")
+  def inChild: Boolean = VarkaChildJvm.inChild()
 
   // One child per suite per parent JVM; the first test to ask runs it.
-  private val children = new ConcurrentHashMap[String, Map[String, Result]]()
+  private val children = new ConcurrentHashMap[String, VarkaChildJvm.Results]()
 
-  private def resultsOf(suite: String): Map[String, Result] =
-    children.computeIfAbsent(suite, runInChild)
-
-  /** The minutes a child may run: the shortest per-test cap less one, or the override. */
-  private def budgetMinutes: Long = sys.props.get("varka.ownJvm.timeoutMinutes").map(_.toLong)
-    .getOrElse {
-      val watchdog = sys.props.get("varka.test.watchdog.minutes").map(_.toLong).getOrElse(10L)
-      val sparkCap = sys.props.get("spark.test.timeout").map(_.toLong).getOrElse(20L)
-      math.max(1L, math.min(watchdog, sparkCap) - 1L)
-    }
-
-  /**
-   * The parent's classpath. `java.class.path` is what the parent runs with; the
-   * `SPARK_DIST_CLASSPATH` environment variable is what the other forking suites prefer, for a
-   * launcher whose own classpath is a stub, so it is taken only when the parent's does not hold
-   * ScalaTest.
-   */
-  private def classpath: String = {
-    val own = System.getProperty("java.class.path")
-    if (own.contains("scalatest")) own
-    else Option(System.getenv("SPARK_DIST_CLASSPATH")).filter(_.nonEmpty).getOrElse(own)
-  }
-
-  private def runInChild(suite: String): Map[String, Result] = {
-    val report = Files.createTempDirectory("varka-own-jvm")
-    val javaBin = new File(new File(System.getProperty("java.home"), "bin"), "java")
-    val command = new java.util.ArrayList[String]()
-    command.add(javaBin.getAbsolutePath)
-    // The parent's own command-line arguments: heap, the incubator module, native access, every
-    // -D the run was given. A -javaagent or -agentlib would start twice, and the child needs
-    // neither - except JaCoCo's, which dev/varka_gen_coverage.sh puts on every test JVM and which
-    // must reach the suites run here too, or their kernels go unmeasured (VARKA-285); it appends
-    // to its file under a lock, so a second JVM writing it is what it is built for. Properties the
-    // parent set programmatically are not copied.
-    ManagementFactory.getRuntimeMXBean.getInputArguments.asScala
-      .filterNot(a => (a.startsWith("-javaagent") && !a.contains("org.jacoco.agent"))
-        || a.startsWith("-agentlib"))
-      .foreach(command.add)
-    command.add(s"-D$PROPERTY=true")
-    command.add("-cp")
-    command.add(classpath)
-    command.add("org.scalatest.tools.Runner")
-    command.addAll(java.util.List.of("-oW", "-u", report.toString, "-s", suite))
-    val builder = new ProcessBuilder(command)
-    builder.redirectErrorStream(true)
-    builder.environment().put("SPARK_TESTING", "1")
-    val process = builder.start()
-    // The read below ends only when the child exits, so a hung child is ended from here.
-    var timedOut = false
-    val killer = new Thread(() => {
-      if (!process.waitFor(budgetMinutes, TimeUnit.MINUTES)) {
-        timedOut = true
-        process.destroyForcibly()
-      }
-    })
-    killer.setDaemon(true)
-    killer.start()
-    val tail = mutable.Queue.empty[String]
-    try {
-      val reader = new BufferedReader(
-        new InputStreamReader(process.getInputStream, StandardCharsets.UTF_8))
-      try {
-        var line = reader.readLine()
-        while (line != null) {
-          // scalastyle:off println
-          println(line)
-          // scalastyle:on println
-          tail.enqueue(line)
-          if (tail.size > 30) tail.dequeue()
-          line = reader.readLine()
-        }
-      } finally {
-        reader.close()
-      }
-      process.waitFor()
-    } finally {
-      if (process.isAlive) process.destroyForcibly()
-    }
-    val parsed = parseReport(report.toFile, suite)
-    val exit = process.exitValue()
-    if (timedOut) {
-      failAll(parsed, s"$suite did not finish in $budgetMinutes minutes in its own JVM")
-    } else if (parsed.isEmpty) {
-      failAll(parsed, s"$suite left no report in its own JVM (exit $exit):\n${tail.mkString("\n")}")
-    } else {
-      parsed
-    }
-  }
-
-  private def failAll(parsed: Map[String, Result], message: String): Map[String, Result] =
-    parsed.map { case (name, result) => name -> (result match {
-      case Passed => Failed(message)
-      case other => other
-    }) }.withDefaultValue(Failed(message))
-
-  /** The child's JUnit report: each test case passed, skipped (cancelled) or failed. */
-  private def parseReport(dir: File, suite: String): Map[String, Result] = {
-    val files = Option(dir.listFiles()).getOrElse(Array.empty[File])
-      .filter(_.getName.endsWith(".xml"))
-    val results = mutable.LinkedHashMap.empty[String, Result]
-    val builder = DocumentBuilderFactory.newInstance().newDocumentBuilder()
-    files.foreach { file =>
-      val cases = builder.parse(file).getElementsByTagName("testcase")
-      for (i <- 0 until cases.getLength) {
-        val node = cases.item(i).asInstanceOf[org.w3c.dom.Element]
-        val name = node.getAttribute("name")
-        def child(tag: String) = node.getElementsByTagName(tag)
-        def messageOf(tag: String) = child(tag).item(0).asInstanceOf[org.w3c.dom.Element]
-          .getAttribute("message")
-        results(name) =
-          if (child("failure").getLength > 0) Failed(s"in its own JVM: ${messageOf("failure")}")
-          else if (child("error").getLength > 0) Failed(s"in its own JVM: ${messageOf("error")}")
-          else if (child("skipped").getLength > 0) Skipped(s"cancelled in its own JVM")
-          else Passed
-      }
-    }
-    results.toMap
-  }
+  private def resultsOf(suite: String): VarkaChildJvm.Results =
+    children.computeIfAbsent(suite, s => VarkaChildJvm.run(s,
+      "org.scalatest.tools.Runner", JList.of("-oW", "-s", s), "-u"))
 }
