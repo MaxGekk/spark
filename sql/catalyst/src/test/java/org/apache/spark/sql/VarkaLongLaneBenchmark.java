@@ -186,7 +186,8 @@ public class VarkaLongLaneBenchmark extends VarkaBenchmarkBase {
               new int[] {0, 0}, new long[] {dst}, new long[] {dstValidity.address()}, intLits,
               numRows);
           if (status != 0) {
-            throw new AssertionError("assertion failed: the kernel declined a batch: " + status);
+            throw new IllegalStateException(
+                "assertion failed: the kernel declined a batch: " + status);
           }
         });
         benchmark.addCase(intShape.name() + ", int64 lanes", iteration -> {
@@ -195,7 +196,8 @@ public class VarkaLongLaneBenchmark extends VarkaBenchmarkBase {
               new long[] {0L, 0L}, new int[] {0, 0}, new long[] {dst},
               new long[] {dstValidity.address()}, new int[0], longLits, numRows);
           if (status != 0) {
-            throw new AssertionError("assertion failed: the kernel declined a batch: " + status);
+            throw new IllegalStateException(
+                "assertion failed: the kernel declined a batch: " + status);
           }
         });
       }

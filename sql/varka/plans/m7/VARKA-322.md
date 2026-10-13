@@ -87,7 +87,8 @@ of its own, and runs the head, where it is the Java class, here, both under one 
 **The pair runner already reads best times and runs A/A.** The row asks for two changes before
 322a's first pair: the verdict comparing best times as well as medians, and a Java-against-Java
 pair measuring the runner's own spread. Both landed on 12 October 2026 (#769, "The pair runner
-reads best runs too, and its own spread"): `dev/varka_bench_pair.py compare` prints each row's change by the median and by the best run and
+reads best runs too, and its own spread"): `dev/varka_bench_pair.py compare` prints each
+row's change by the median and by the best run and
 marks a row slower only when both are, and `dev/varka_bench_pair.sh --base HEAD` pairs the head
 with itself. Nothing is to build for them; 6 uses them.
 
@@ -118,9 +119,9 @@ Each class becomes a Java class of the same name in the same package, extending
 core (whose test classpath has catalyst's test classes). A port is statement for statement:
 
 * **The same work in every timed body.** The data, the emitted kernels and the per-batch calls are
-  the Scala's, and so is the harness work inside a timed loop, the arrays `VarkaWideKernelBenchmark`'s
-  `scan` builds per batch included. Removing it would make a faster Java row that is not a port;
-  it is a separate change for a later task.
+  the Scala's, and so is the harness work inside a timed loop, the arrays
+  `VarkaWideKernelBenchmark`'s `scan` builds per batch included. Removing it would make a faster
+  Java row that is not a port; it is a separate change for a later task.
 * **The same names.** Section titles, benchmark names and case names, including their computed
   parts (a loop-method count, a group count, a byte count, `sizes.mkString(" + ")`), are formatted
   exactly as the Scala formats them, and the emitted kernels keep their class names
@@ -144,8 +145,9 @@ three benchmarks that use it, as in the Scala, about fifteen lines each.
 `VarkaSqlBenchmarkBase` in core's test tree, extending `VarkaBenchmarkBase`: the session built
 lazily with `SqlBasedBenchmark`'s defaults and stopped in `afterAll`,
 `withConf(SparkSession, Map<String, String>, Runnable)` restoring every value it set (unset where
-none was) so no case leaks into the next, `noop(Dataset)`, and the wrapper's `addTimerCase`. Proved on
-`VarkaSizeLadderParallelBenchmark` with `VarkaSizeLadder`, as 224 proved the first adapter.
+none was) so no case leaks into the next, `noop(Dataset)`, and the wrapper's `addTimerCase`.
+Proved on `VarkaSizeLadderParallelBenchmark` with `VarkaSizeLadder`, as 224 proved the first
+adapter.
 
 ### 3.3 322c: the other fourteen
 
@@ -248,3 +250,67 @@ The pair runner restores the committed files after each round, so no results fil
 6. Section 9 as each lands; the row Done when 322c's pairs are in.
 
 ## 9. Outcome
+
+**322a implemented, pairs pending** (13 October 2026). The row stays Planned.
+
+**What was built.** 322a-1 as 8.2 says, in one commit after this plan: the ten classes of 4.1 are
+Java under their names and packages, their `.scala` files deleted, 2,510 lines of Scala to 3,137
+of Java (a quarter more), the parity benchmark left for 322a-2. The adapter gained more than 2 listed:
+`VarkaBenchmark.retainCases` and `hasCases` as planned, and in `VarkaBenchmarkBase` three static
+helpers every port needed, `require` and `requirementFailed` (Scala's message prefix, and a form
+that keeps a timed loop free of string building) and `defineKernel` (define an emitted class and
+instantiate it).
+
+**The ids are identical.** `dev/varka_bench_ids.sh VarkaArithmeticBenchmark VarkaTimeBenchmark` on
+the Java forms prints what 2 recorded from the Scala forms: 16 ids, 960 to 985, next 986; 31 ids,
+0 to 30, next 31.
+
+**Every port run once, against its committed file's names** (5), on the busy machine, with
+`SPARK_GENERATE_BENCHMARK_FILES=1` and each file put back after: section titles, benchmark names
+and case names, in order, identical to the committed file for `VarkaCodegenBenchmark` (2 cases),
+`VarkaArithmeticBenchmark` (19), `VarkaLongLaneBenchmark` (64), `VarkaSharedPrefixBenchmark` (20),
+`VarkaMethodSizeBenchmark` (64), `VarkaTimeBenchmark` (140) and `VarkaUnreadLocalsBenchmark` (32,
+its allocation block's labels included); `VarkaVectorApiProbeBenchmark`, which commits no file, ran
+its 12 cases to the end. Two differ, both for reasons in the committed files, not the ports:
+
+* `VarkaEmissionBenchmark`: the run has a fourth section, "grouping by prediction", that the
+  committed file lacks. The section was added on 30 September (`b8d6187d22a`) and the file was last
+  regenerated on 29 September; its first three sections match.
+* `VarkaWideKernelBenchmark`: the first five sections match (the loop-method counts in the labels
+  included); the sixth stops at its own `require`: "sixty-four dates by field, 256 outputs fits one
+  kernel: nothing to compare". The committed file, of 3 October, splits that shape 181 + 75. The
+  Scala form fails the same way on today's emitter: its own `datesByField` and planning call, run as
+  a throwaway Scala object on this branch's catalyst, print that the 256 outputs fit one kernel. So
+  master's Scala class cannot finish a run since an emitter change after 3 October (VARKA-254's
+  grouping change of 12 October is the likely one), and the class's pair cannot finish on either
+  side until the shape is fixed. That is a change to the benchmark's subject, not to its language,
+  and goes to a row of its own; the port keeps the Scala's shape and `require`.
+
+**What the run said about the harness.** `VarkaUnreadLocalsBenchmark`'s allocation block reads 0.0
+bytes a batch past each kernel's own where the committed file reads 0.1 to 0.2, so the Java
+harness allocates nothing per batch where the Scala's allocated a little; and its "as emitted" rows
+now equal its "stripped" ones (24,000 bytes a batch at 400 ladder entries, null-free), since the
+elision became the default after the file was committed.
+
+**Correction to 3.1.** Scala's `assert` in `VarkaLongLaneBenchmark` became an
+`IllegalStateException` with Scala's "assertion failed: " message, not an `AssertionError`: Spark's
+checkstyle refuses `throw new ...Error(`.
+
+**Pending: the pairs** (6), on the quiet machine, none run yet:
+
+```
+dev/varka_bench_pair.sh catalyst VarkaEmissionBenchmark --base HEAD
+dev/varka_bench_pair.sh core VarkaCodegenBenchmark
+dev/varka_bench_pair.sh catalyst VarkaUnreadLocalsBenchmark
+dev/varka_bench_pair.sh catalyst VarkaSharedPrefixBenchmark
+dev/varka_bench_pair.sh catalyst VarkaLongLaneBenchmark
+dev/varka_bench_pair.sh catalyst VarkaEmissionBenchmark
+dev/varka_bench_pair.sh catalyst VarkaVectorApiProbeBenchmark
+dev/varka_bench_pair.sh catalyst VarkaMethodSizeBenchmark
+dev/varka_bench_pair.sh catalyst VarkaArithmeticBenchmark
+dev/varka_bench_pair.sh catalyst VarkaTimeBenchmark
+dev/varka_bench_pair.sh catalyst VarkaWideKernelBenchmark
+```
+
+The last stops on both sides at the sixth section, as above, until that shape is fixed. 6.1 is
+scored when the pairs are in.
