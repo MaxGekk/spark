@@ -1048,6 +1048,26 @@ Java is one (`sql/varka/AGENTS.md`). What to know when writing and running one:
   of its own with the `META-INF/services` listeners off, so the fixtures' lines and counts do not
   reach the JVM's own.
 
+## A Varka node in the plan is not a kernel evaluating the expression
+
+*Added on 13 October 2026 from VARKA-138b (`m7/VARKA-138.md` 10.3 and 10.4).* A test that means
+to check what a kernel does with an expression has to show the kernel evaluated it. Three weaker
+signs each passed a check that compared Spark with itself:
+
+- **A Varka node in the plan.** The node can decline every batch, at run time, to the row path.
+- **`numVarkaBatches > 0`.** The rule splits a filter's conjuncts: in
+  `WHERE rid < 0 AND (year(d)) IS NOT NULL` the Varka filter held `rid < 0`, served its batch, and a
+  row `FilterExec` above it evaluated `isnotnull(year(d))` - Varka fuses no `IS NOT NULL` over a
+  computed value. 61 of 65 coverage rows looked served that way. A projection's equivalent is an
+  entry in `numResidualEntries`.
+- **A guard over a cached fixture.** `WHERE rid < 0` over an Arrow-cached view lets the in-memory
+  scan drop every batch on its column statistics before any Varka node runs, so the guarded side
+  meets no kernel; set `spark.sql.inMemoryColumnarStorage.partitionPruning=false` on both sessions.
+
+`VarkaCoverageDifferentialSuite.kernelServed` is the check: batches served, no residual projection
+entry, no row `FilterExec` in the plan. And `EXPLAIN`'s first line above the Varka node says at a
+glance whether Spark kept part of the query.
+
 ## Cost predictions run optimistic: the calibration table
 
 *Added on 13 October 2026 from milestone 7's halfway review (`m7/PLAN.md` 9.2 and 9.5).* A plan
@@ -1059,6 +1079,7 @@ predicted. Add the line when the prediction is scored, whichever way it went.
 | task | predicted | measured | ratio | note |
 | --- | --- | --- | ---: | --- |
 | VARKA-138a (6.1 #2) | per-row coverage check at most 25% slower | +38% by minimums, +27% after the review dropped a redundant dense run | 1.5, then 1.1 | the fixed poisoned batch alone added about 27% of the work |
+| VARKA-138b (6.1 #3) | the coverage differential at most twice as long | +47% by minimums, +55% after the review's fixes | 0.5 | 122 short tests, about 0.2 to 0.5 s each |
 | VARKA-274a (6.1 #2) | under 3 s per case for all histories | 3,623 ms median at the int lane, 1,356 ms at the long lane | 1.2 | long lane faster than predicted |
 | VARKA-274a (6.1 #8) | the tier witness adds under 5% | +19% (int) and +25% (long) per case; +6% on the whole test | 3.8 to 5.0 | one code-list read per call, about 3.5 ms, is most of it |
 | VARKA-271a (6.1 #6) | the Varka arm under 70 minutes in one JVM | 33 minutes beside the cache-only arm | 0.5 | the one pessimistic line so far |

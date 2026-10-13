@@ -478,7 +478,10 @@ passed every outcome by never running.
    60.2 s (+47%), medians 47.9 and 66.8 s (+39%). In the `cse=false` configuration of the matrix,
    one run each: master 54 s, this change 90 s (+67%), though this change's ran beside the
    `checkIntOverflow=false` JVM and master's alone. The 122 new tests are short: the
-   partition tests about 0.5 s each, the ANSI tests about 0.2 s.
+   partition tests about 0.5 s each, the ANSI tests about 0.2 s. Those pairs predate the
+   review's fixes (10.4), so three more ran on the suite as merged, 22:23 to 22:36 CEST on a
+   busier machine, load 5.4 to 7.9: master 64.1, 62.1, 61.3 s; this change 97.4, 95.1, 103.1 s.
+   Minimums 61.3 and 95.1 s (+55%), medians 62.1 and 97.4 s (+57%): still within twice.
 4. **Failed for the COALESCE, held for the CASE.** Of the 65 projection rows, a kernel served the
    untaken CASE arm for 61 and the later COALESCE argument for 42, against at least 50 in both
    predicted; 42 rows reach both. The 23 the COALESCE misses are the int-valued rows (item 55), the
