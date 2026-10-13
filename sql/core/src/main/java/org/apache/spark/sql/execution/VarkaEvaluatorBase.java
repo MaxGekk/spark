@@ -199,6 +199,7 @@ public abstract class VarkaEvaluatorBase {
   private VarkaKernelRunner runner;
   private Boolean warmed;
   private String kernelIdentity;
+  private String kernelShapeHash;
   private String renderedOptions;
 
   /**
@@ -367,14 +368,13 @@ public abstract class VarkaEvaluatorBase {
           if (!isCatchable(e)) {
             throw e;
           }
-          // No runner exists, so the shape hash is computed here, as kernelIdentity() computes it.
+          // No runner exists, so the shape hash is the one kernelIdentity() computed from the IR.
           VarkaErrorContext ctx = errorContext(VarkaFallbackEvent.EMISSION_FAILURE, e, null,
-              VarkaErrorContext.safely(() -> VarkaShapeCache.shapeHash(shapeKey(compiled))),
-              null);
-          LOG.warn("Failed to emit the Varka fused kernel " + kernelIdentity()
+              VarkaErrorContext.safely(this::kernelShapeHash), null, false);
+          LOG.warn("Failed to emit the Varka fused kernel " + ctx.identity()
               + "; falling back to the per-row path." + VarkaFallbackAccounting.block(ctx), e);
           emissionFailed(e);
-          refuseUndeclaredFallback("emission of " + kernelIdentity(), ctx);
+          refuseUndeclaredFallback("emission of " + ctx.identity(), ctx);
         }
       }
       // Marked resolved after a success or a failure the fallback answers, and not after one that
@@ -516,6 +516,7 @@ public abstract class VarkaEvaluatorBase {
           ir.append(VarkaVectorIR.canonical(output));
         }
         String hash = VarkaShapeCache.shapeHash(shapeKey(compiled));
+        kernelShapeHash = hash;
         kernelIdentity = VarkaShapeCache.sourceFileFor(hash) + " [" + ir + "] ("
             + executionName() + ")";
       }
@@ -641,7 +642,7 @@ public abstract class VarkaEvaluatorBase {
       // A genuine kernel error is told apart from a failure in the per-row machinery sharing the
       // try by the marker the runner wraps it in.
       VarkaErrorContext ctx = errorContext(VarkaFallbackEvent.KERNEL_FAILURE, e.getCause(),
-          e.kernel, e.shapeHash, input);
+          e.kernel, e.shapeHash, input, e.kernel == null);
       accounting().kernelFailure(e.getCause(), e.kernel, ctx);
       refuseUndeclaredFallback("the kernel " + (e.kernel != null ? e.kernel : kernelIdentity()),
           ctx);
@@ -650,7 +651,7 @@ public abstract class VarkaEvaluatorBase {
         throw e;
       }
       VarkaErrorContext ctx = errorContext(VarkaFallbackEvent.ROW_PATH_FAILURE, e, null,
-          runner != null ? runner.shapeHash : null, input);
+          runner != null ? runner.shapeHash : null, input, true);
       accounting().rowPathFailure(e, ctx);
       refuseUndeclaredFallback("the per-row machinery beside " + kernelIdentity(), ctx);
     }
@@ -686,32 +687,45 @@ public abstract class VarkaEvaluatorBase {
    * path is added for it. Every field is built defensively, since an exception here would
    * replace the failure being reported.
    *
+   * <p>It allocates, on a failed batch only: that batch then runs the row path, which costs far
+   * more, and a batch that does not fail never reaches it.
+   *
    * @param identity the further kernel that failed, as it names itself; null for this one
    * @param shapeHash the failing kernel's shape hash, or null where none is known
    * @param input the batch it failed on; null for a failure outside a batch
+   * @param ownInputs whether the failing kernel reads this evaluator's inputs, so that their null
+   *                  counts describe it; a further kernel of the projection reads others
    */
   private VarkaErrorContext errorContext(String kind, Throwable cause, @Nullable String identity,
-      @Nullable String shapeHash, @Nullable ColumnarBatch input) {
+      @Nullable String shapeHash, @Nullable ColumnarBatch input, boolean ownInputs) {
     return new VarkaErrorContext(kind,
         identity != null ? identity : VarkaErrorContext.safely(this::kernelIdentity),
         shapeHash,
         VarkaErrorContext.safely(this::renderedOptions),
-        batchFacts(input),
+        batchFacts(input, ownInputs),
         cause);
   }
 
+  /** The shape hash {@link #kernelIdentity} computed from the IR; null without a plan. */
+  private String kernelShapeHash() {
+    kernelIdentity();
+    return kernelShapeHash;
+  }
+
   /**
-   * The batch's row count and the null count of each of this kernel's inputs, read from the
-   * columns at the catch; null when there is no batch or a column cannot say.
+   * The batch's row count and, for {@code ownInputs}, the null count of the column each of this
+   * kernel's inputs reads, read at the catch; null when there is no batch or a column cannot say.
    */
-  private VarkaErrorContext.Batch batchFacts(@Nullable ColumnarBatch input) {
-    if (input == null || inputOrdinals == null) {
+  private VarkaErrorContext.Batch batchFacts(@Nullable ColumnarBatch input, boolean ownInputs) {
+    if (input == null) {
       return null;
     }
     try {
-      var nulls = new ArrayList<Integer>(inputOrdinals.length);
-      for (int ordinal : inputOrdinals) {
-        nulls.add(input.column(ordinal).numNulls());
+      var nulls = new ArrayList<Integer>();
+      if (ownInputs && inputOrdinals != null) {
+        for (int ordinal : inputOrdinals) {
+          nulls.add(input.column(ordinal).numNulls());
+        }
       }
       return new VarkaErrorContext.Batch(input.numRows(), nulls);
     } catch (VirtualMachineError e) {

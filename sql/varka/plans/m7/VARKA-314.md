@@ -342,7 +342,8 @@ reading as unavailable.
    `IllegalArgumentException` and is control flow.
 4. **Options render by name.** 3.2 said "as the shape hash renders them"; `canonical()` renders
    the first 26 options by position, unreadable without the table. The record writes each differing
-   option as `name=value`, as `VarkaEmitOption.Subject.label` does, empty (shown as "the defaults")
+   option as `name=value`, comma-separated, through `VarkaEmitOption.Subject.label` - the option
+   matrix's own label, which `VarkaMatrix.parse` reads back - and empty (shown as "the defaults")
    at the defaults. The event's `options` is the same string.
 5. **A further kernel's shape hash travels on its failure.** In a projection served by several
    kernels the failing one may be a `VarkaKernelPart`, whose runner the evaluator catching the
@@ -350,10 +351,18 @@ reading as unavailable.
    threw it and kept when `VarkaKernelPart` names itself on it; its two unused constructors went.
 6. **The batch's null counts are read from its columns at the catch** (`ColumnVector.numNulls` over
    the kernel's inputs), not from the runner's `srcNullCount`, which a failure inside `fill` leaves
-   holding the previous batch's counts.
+   holding the previous batch's counts. For a further kernel's failure the record has the row count
+   only: the catching evaluator's input ordinals are not that kernel's.
 7. **`VarkaFallbackAccounting` takes the options as a second supplier**, memoized per evaluator,
    so the declined and non-Arrow events carry them too, rendered only when a recording has the
    event enabled.
+8. **The planning error's sentence does not repeat the original message.** 3.1 put the original
+   text first; at planning the original is the record's cause, whose line already prints it, so the
+   sentence is "Varka's compiler failed while planning." and the message says it once.
+9. **The message escapes `${`.** Spark fills an error template with commons-text's
+   `StringSubstitutor`, which also substitutes inside a parameter's value; a projection's string
+   literal rendered into the record could hold `${message}` and make building the error loop and
+   throw while the failure is reported. `VarkaErrors` escapes it, so it renders as written.
 
 **Predictions (6.1) that 314a scores.** Scored after the suites run; see the pull request's test
 results.

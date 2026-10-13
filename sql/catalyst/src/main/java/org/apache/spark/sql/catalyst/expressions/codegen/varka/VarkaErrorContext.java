@@ -17,7 +17,6 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import java.util.List;
-import java.util.StringJoiner;
 import java.util.function.Supplier;
 
 import javax.annotation.Nullable;
@@ -66,10 +65,12 @@ public record VarkaErrorContext(
   public static final int MAX_IDENTITY_LENGTH = 4000;
 
   /**
-   * The failing batch: its rows, and the null count of each kernel input in kernel-input order.
+   * The failing batch: its rows, and the null count of the column each kernel input reads, in
+   * kernel-input order.
    *
    * @param rows the batch's row count
-   * @param nullCounts each kernel input's null count over the batch
+   * @param nullCounts each kernel input's column's null count over the batch; empty where the
+   *        catch could not tell which columns the failing kernel reads
    */
   public record Batch(int rows, List<Integer> nullCounts) {
     public Batch {
@@ -103,19 +104,14 @@ public record VarkaErrorContext(
 
   /**
    * The emit options that differ from {@link VarkaEmitOptions#DEFAULTS}, each as
-   * {@code name=value} in {@link VarkaEmitOption#TABLE}'s order; empty at the defaults. The
-   * shape hash folds the same options into its key ({@link VarkaEmitOptions#canonical()}), but
-   * by position, which a reader cannot decode without the table; this names them.
+   * {@code name=value} in {@link VarkaEmitOption#TABLE}'s order and comma-separated, as the option
+   * matrix labels a configuration ({@link VarkaEmitOption.Subject#label}), so a reader can rerun
+   * a suite under exactly these options; empty at the defaults. The shape hash folds the same
+   * options into its key ({@link VarkaEmitOptions#canonical()}), but by position, which a reader
+   * cannot decode without the table; this names them.
    */
   public static String renderOptions(VarkaEmitOptions options) {
-    var differing = new StringJoiner(", ");
-    for (VarkaEmitOption option : VarkaEmitOption.TABLE) {
-      String value = option.text(options);
-      if (!value.equals(option.text(VarkaEmitOptions.DEFAULTS))) {
-        differing.add(option.name() + "=" + value);
-      }
-    }
-    return differing.toString();
+    return new VarkaEmitOption.Subject(ignored -> options).label();
   }
 
   /** {@code text} cut to {@link #MAX_IDENTITY_LENGTH}, saying how much was cut. */
@@ -147,12 +143,15 @@ public record VarkaErrorContext(
     sb.append("\n  shape hash: ").append(shapeHash == null ? "none" : shapeHash);
     sb.append("\n  options: ").append(options.isEmpty() ? "the defaults" : options);
     if (batch != null) {
-      sb.append("\n  batch: ").append(batch.rows()).append(" rows, nulls per input ")
-          .append(batch.nullCounts());
+      sb.append("\n  batch: ").append(batch.rows()).append(" rows");
+      if (!batch.nullCounts().isEmpty()) {
+        sb.append(", nulls per input ").append(batch.nullCounts());
+      }
     }
     if (cause != null) {
-      // A cause's toString runs its getMessage, which a Throwable may override.
-      sb.append("\n  cause: ").append(safely(cause::toString));
+      // A cause's toString runs its getMessage, which a Throwable may override, and may be as
+      // long as an IR dump.
+      sb.append("\n  cause: ").append(bounded(safely(cause::toString)));
     }
     return sb.toString();
   }

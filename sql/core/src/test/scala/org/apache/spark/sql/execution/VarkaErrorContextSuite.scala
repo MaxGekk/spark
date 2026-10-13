@@ -93,7 +93,7 @@ class VarkaErrorContextSuite extends QueryTest with VarkaSharedSessions with Var
     checkError(e,
       condition = "INTERNAL_ERROR",
       parameters = Map("message" ->
-        ("(?s)injected Varka compiler failure\nVarka context:\n" +
+        ("(?s)Varka's compiler failed while planning\\.\nVarka context:\n" +
           "  kind: planning\n" +
           "  identity: projection \\[date_add\\(d#\\d+, 3\\) AS a#\\d+\\] over \\[d#\\d+.*\\]\n" +
           "  shape hash: none\n" +
@@ -244,5 +244,9 @@ class VarkaErrorContextSuite extends QueryTest with VarkaSharedSessions with Var
     assert(error.getCondition === "INTERNAL_ERROR")
     assert(error.getCause eq hostile)
     assert(error.getMessageParameters.get("message").startsWith("an invariant\nVarka context:"))
+    // A string literal of the user's, rendered into the record, may hold a placeholder; Spark's
+    // template filling must neither replace it nor loop on it.
+    val literal = VarkaErrors.illegalArgument("concat(s, '${message}')", null)
+    assert(literal.getMessage.contains("concat(s, '${message}')"), literal.getMessage)
   }
 }

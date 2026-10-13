@@ -40,7 +40,7 @@ import org.apache.spark.SparkThrowable;
  * block when the site has one ({@link VarkaErrorContext}), then the request to report it:
  *
  * <pre>
- * [INTERNAL_ERROR] injected Varka compiler failure
+ * [INTERNAL_ERROR] Varka's compiler failed while planning.
  * Varka context:
  *   kind: planning
  *   identity: projection [date_add(d#1, 3) AS a#4] over [d#1, i#2]
@@ -96,11 +96,8 @@ public final class VarkaErrors {
     var ctx = new VarkaErrorContext(VarkaErrorContext.PLANNING,
         VarkaErrorContext.safely(identity), null,
         VarkaErrorContext.safely(() -> VarkaErrorContext.renderOptions(options)), null, e);
-    // A bug such as a NullPointerException may carry no message; its class then says what it is.
-    String what = VarkaErrorContext.safely(() -> {
-      String message = e.getMessage();
-      return message != null ? message : e.getClass().getName();
-    });
+    // The original's message is the record's cause line; the sentence does not repeat it.
+    String what = "Varka's compiler failed while planning.";
     return e instanceof IllegalArgumentException
         ? illegalArgument(what, ctx)
         : illegalState(what, ctx);
@@ -111,7 +108,11 @@ public final class VarkaErrors {
     String message = (what == null ? VarkaErrorContext.UNAVAILABLE : what)
         + (ctx == null ? "" : "\n" + ctx.render())
         + "\n" + REPORT;
-    return new scala.collection.immutable.Map.Map1<>("message", message);
+    // Spark fills the template through commons-text's StringSubstitutor, which also substitutes a
+    // ${...} inside a value - and a projection's string literal, rendered into the record, may
+    // hold one. Escaped, it renders as written instead of being replaced, or looping on itself
+    // and throwing while the failure is reported.
+    return new scala.collection.immutable.Map.Map1<>("message", message.replace("${", "$${"));
   }
 
   private static @Nullable Throwable cause(@Nullable VarkaErrorContext ctx) {
