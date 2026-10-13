@@ -2,7 +2,8 @@
 
 *Row 314 of `m7/PLAN.md`, added by the owner on 12 October 2026 with rows 313 and 315 to 319
 (`m7/PLAN.md` 2.4, "Errors and troubleshooting"). Planned on 13 October 2026. The admission check
-changed what the row can deliver; section 3.0 is a decision for the owner before any code.*
+changed what the row can deliver; section 3.0's decision, taken by the owner the same day, is (B):
+no new error names.*
 
 ## 1. Where this came from
 
@@ -97,6 +98,9 @@ raises Spark's condition. Two ways forward:
   that a failure that ever escapes - under test, or on a future path with no fallback - is Spark's
   `INTERNAL_ERROR` with a request to report it; and give the fallback's warning and event the
   context record. The "what to do" list moves to row 316's runbook, which reads the same causes.
+
+*Decided by the owner on 13 October 2026: (B), no new error names.* Section 3.4's documentation
+and test 1 to 5 stand; test 6 and option A's family are not built.
 
 **Recommendation: (B).** It delivers all of the row's substance - the user/internal decision for
 every site, the context record row 315 needs, `checkError` on every condition a user can reach -
