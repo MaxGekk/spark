@@ -150,3 +150,50 @@ None to benchmark. The measurement is the admission test of section 2 run again 
 
 One pull request: the plan, then the helper, the seed fix and the spread test, then section 9
 with the admission test rerun and the suites.
+
+## 9. Outcome
+
+Done on 13 October 2026, as section 3 designed it. `drawInt` and `runWide` draw an int-lane column
+value through one helper, `intColumnValue`, a floor modulus with no clamp; the reach test draws
+each lane's corpus from that lane's seed; and a new test holds the int draw's spread.
+`emitted_bytes.json` did not move: `VarkaEmittedBytesSuite` passes with no regeneration and
+`git diff --quiet origin/master -- sql/varka/emitted_bytes.json` holds.
+
+**The admission test, rerun.** The same throwaway count over the first 2000 int-lane draws at the
+default seed, before and after the change (removed again before the commit):
+
+| | values | at `-bound` | at `+bound` | negative | positive | month-column values at `-bound` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| before | 434,669 | 217,652 | 5 | 326,065 | 108,604 | 87,651 |
+| after | 434,669 | 5 | 6 | 217,556 | 217,113 | 5 |
+
+The value count is the same, as it must be when the shapes, lengths and column layouts are. The
+five values left at `-bound` are all in the month column, where a uniform draw expects about 3.5
+over its 174,853 values.
+
+**Predictions.**
+
+1. Right: 5 values at `-bound` (under 20), and 217,556 negative and 217,113 positive, both within
+   0.1% of 217,300.
+2. Right: the reach test passes from `LONG_FUZZ_SEED` with nothing missing.
+3. Right: both planted-bug searches pick draw 0, before and after, and shrink to the same case
+   (the liveness bug to 2 nodes at length 1 in 14 runs; the misdescribed add to 5 nodes at
+   length 1 in 35 runs).
+4. Right: `VarkaEmittedBytesSuite` passes and the file is unchanged.
+
+**What moved that the plan did not list.** At the suite's 300 iterations, the int lane's untaken-arm
+variants went from 29 compared to 27, since which arm no row takes depends on the data; every
+other variant count is unchanged on both lanes, and the long lane's are identical. A run at 5000
+iterations on each lane at the default seeds passes with every variant compared and none declined
+or skipped, so the spread data surfaced no emitter or evaluator bug at that volume (section 7's
+first risk).
+
+**Suites.** `VarkaIrFuzzSuite` 10 passed and 1 cancelled (the opt-in size-trace dump),
+`VarkaSmallTreeSuite` 6, `VarkaVariantSuite` 6, `VarkaShrinkerSuite` 7, `VarkaKnownFailuresSuite` 5,
+`VarkaEmittedBytesSuite` 4 passed and 1 cancelled (the opt-in option audit). `dev/lint-java` and
+`dev/scalastyle` pass. The known-failures file holds no entries at this master, so "every known
+failure still reproduces" passes without replaying a draw: the done-when's replay holds vacuously.
+
+**What this does not settle.** `VarkaRangeAnalysisSuite` draws its `Role.Offset` column values with
+a signed remainder and no clamp, over about `[-3 * bound, bound]` (3.3). Whether that suite should
+draw over `[-bound, bound]` is left to its owner and reported with this task.

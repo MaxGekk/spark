@@ -198,6 +198,14 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     }
   }
 
+  /**
+   * An int-lane column value, uniform over `[-bound, bound]`. A floor modulus, so a negative
+   * `nextLong` lands inside the bound too: a signed `%` would put half the values below
+   * `-bound`. One `nextLong` a value, so the draws after the data do not depend on the bound.
+   */
+  private def intColumnValue(rnd: Random, bound: Long): Int =
+    (Math.floorMod(rnd.nextLong(), 2 * bound + 1) - bound).toInt
+
   private def drawInt(iteration: Int, drawSeed: Long = seed): VarkaFuzzCase = {
     val rnd = VarkaIrGrammar.shapeRandom(drawSeed, iteration)
     // The shape itself comes from the shared draw, so this suite and the emitted-bytes oracle
@@ -216,8 +224,6 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     // every one at length 1) before it found anything about the kernel.
     val forceMasked = length > 1 && rnd.nextInt(4) == 0
     val options = randomOptions(rnd)
-    def draw(bound: Long): Int =
-      (rnd.nextLong() % (2 * bound + 1) - bound).toInt.max(-bound.toInt).min(bound.toInt)
     val data = Array.tabulate(numInputs, length) { (c, _) =>
       if (c == levelOrdinal) {
         // Exactly the codes TruncLevelLeaf produces; a value outside them is a lane the
@@ -225,7 +231,8 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
         DateTimeUtils.TRUNC_TO_WEEK + rnd.nextInt(
           DateTimeUtils.TRUNC_TO_YEAR - DateTimeUtils.TRUNC_TO_WEEK + 1)
       } else {
-        draw(if (c == smallOrdinal) VarkaChrono.MONTH_ARITH_MAX_MONTHS.toLong else columnBound)
+        intColumnValue(rnd,
+          if (c == smallOrdinal) VarkaChrono.MONTH_ARITH_MAX_MONTHS.toLong else columnBound)
       }
     }
 
@@ -604,6 +611,35 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
         "arm to LongShapes, or state here why the node type is deliberately out of its reach")
   }
 
+  test("the int-lane draw spreads its column values over their range") {
+    // A draw that piles its values on one point checks little else: a signed remainder once put
+    // half of every int-lane column at exactly -bound. Over the first 2000 draws, each day or
+    // month column's values must lie in [-bound, bound], no one value may hold more than 1% of
+    // them, and each half of the range must hold over 40%. The trunc-level column is left out,
+    // since it draws one of five codes on purpose.
+    val byBound =
+      scala.collection.mutable.Map.empty[Long, scala.collection.mutable.ArrayBuffer[Long]]
+    for (k <- 0 until 2000) {
+      val c = drawInt(k)
+      for (col <- 0 until c.numInputs() if col != c.levelOrdinal()) {
+        val bound =
+          if (col == c.smallOrdinal()) VarkaChrono.MONTH_ARITH_MAX_MONTHS.toLong else columnBound
+        byBound.getOrElseUpdate(bound, scala.collection.mutable.ArrayBuffer.empty) ++=
+          c.data()(col)
+      }
+    }
+    assert(byBound.keySet == Set(columnBound, VarkaChrono.MONTH_ARITH_MAX_MONTHS.toLong))
+    for ((bound, values) <- byBound) {
+      val n = values.size.toDouble
+      assert(values.forall(v => -bound <= v && v <= bound), s"bound $bound: a value outside it")
+      val (top, count) = values.groupBy(identity).view.mapValues(_.size).maxBy(_._2)
+      assert(count / n <= 0.01, s"bound $bound: $count of ${values.size} values are $top")
+      assert(values.count(_ < 0) / n > 0.4 && values.count(_ > 0) / n > 0.4,
+        s"bound $bound: ${values.count(_ < 0)} negative and ${values.count(_ > 0)} positive " +
+          s"of ${values.size}")
+    }
+  }
+
   // ---------------------------------------------------------------------------------------------
   // Wide compositions: past the ceilings the one-to-three-root draw never reaches (VARKA-238).
   // ---------------------------------------------------------------------------------------------
@@ -663,14 +699,13 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     val patternIds = Seq.fill(numInputs)(rnd.nextInt(patternNames.length))
     val patterns = patternIds.map(pattern(rnd, _, length))
     val forceMasked = length > 1 && rnd.nextInt(4) == 0
-    def draw(bound: Long): Int =
-      (rnd.nextLong() % (2 * bound + 1) - bound).toInt.max(-bound.toInt).min(bound.toInt)
     val data = Array.tabulate(numInputs, length) { (c, _) =>
       if (levels(c)) {
         DateTimeUtils.TRUNC_TO_WEEK + rnd.nextInt(
           DateTimeUtils.TRUNC_TO_YEAR - DateTimeUtils.TRUNC_TO_WEEK + 1)
       } else {
-        draw(if (small(c)) VarkaChrono.MONTH_ARITH_MAX_MONTHS.toLong else columnBound)
+        intColumnValue(rnd,
+          if (small(c)) VarkaChrono.MONTH_ARITH_MAX_MONTHS.toLong else columnBound)
       }
     }
     val context = s"wide seed=$seed iteration=$iteration ($label) roots=${roots.size} " +
