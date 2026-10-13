@@ -344,4 +344,154 @@ Two pull requests.
    JVMs, and the skills section. Proved by predictions 1, 6 and 9 from the first nightly. Then
    section 9.
 
-## 9. Outcome
+## 9. Outcome (274a)
+
+Done on 13 October 2026, as 3.1 to 3.4 describe for `VarkaIrFuzzSuite`, with the changes below;
+the coverage rows' histories, the nightly step and the skills section are 274b's.
+
+### 9.1 What was built
+
+* **`VarkaKernelChecks`** gained `runLoaded` and `runLoadedLong`: one batch through one body on a
+  kernel the caller loaded, with a `CallHook` told just before and after the kernel's call.
+  `runOne` became the load and release around the same body, so today's entry points and their
+  messages are unchanged. A package-private flag plants a wrong answer for test 5.
+* **`VarkaTierWitness`** holds one `RecordingStream` per JVM on `jdk.Compilation` (threshold 0),
+  `jdk.Deoptimization`, `jdk.CompilerInlining` and the test event `VarkaCheckedCallEvent`, reads
+  `compilerCodelist` at each compared call's edges, and gives the sealed verdict of 3.2. It
+  settles on a marker event and one further flush, never on a sleep.
+* **`VarkaCompiledCheck`** runs a case over the eight histories, each on a class of its own, with
+  its own warm-up (`VarkaKernelWarmup`'s call shape, buffers built once, the code list read every
+  256 calls, a 10 s deadline), and a `Tally` that prints the counts per lane and history and the
+  unsettled cases with their trap reasons and method levels.
+* **`VarkaIrFuzzSuite`** registers the compiled test first, so that no lanes-override draw of the
+  later tests has put a second species in the JVM; its own override draws run `cold` only, after
+  every other draw (12 of 40 at the default seeds). It fails on a wrong answer, and as "history not
+  reached" when a `cold` call was not interpreted, when no settled `warm-same` or `warm-other` case
+  of a lane ran every call as C2 code, or when no `released` case of a lane was served by an OSR.
+  `-Dvarka.fuzz.compiled`, `-Dvarka.fuzz.history`, `-Dvarka.fuzz.settleMillis`,
+  `-Dvarka.fuzz.releasedBatches`/`releasedRows` and `-Dvarka.fuzz.witness` size it.
+* **`VarkaTierWitnessSuite`**, seven tests, joins `VarkaAssemblySuite` in the quiet phase of
+  `dev/varka_gate.sh` and `dev/varka_scoped_suites.sh` and in `dev/varka_matrix.sh`'s exclusions.
+
+### 9.2 Where the design changed, and why
+
+1. **A loop inlined into its caller is C2 code.** The first 4-draw run left a kernel unsettled in
+   every warmed history with no trap: `loopDense1` and `epilogueDense1` stayed at level 0 while
+   every masked method was at 4, and a one-root `isNotNull` kernel had all four methods at 0. C2
+   had inlined them into `runDense` or `run` and compiled that, after which their own invocation
+   counters stopped. 2(b) said the loop and epilogue methods are "never inlined into a driver";
+   that holds for the probe's kernels, not for small ones. The witness now reads
+   `jdk.CompilerInlining` and counts a method inlined into a caller's level-4 version in use as
+   level 4; with it every warm-up of that run settled. The settle times have a floor of about a
+   second when a verdict waits for the inlining events, which JFR delivers once a second.
+2. **An OSR serves the call after the one it was compiled in.** Read as "an OSR compile finished
+   inside the call", `released` showed a tier-3 OSR on no case and tier 4 on 2 of 4: the compiles
+   finish while the harness compares the previous batch. An OSR version is entered at the next
+   back edge of the next call, so the verdict is now `Osr` where a method has an OSR version in
+   use at the call's start (or finishing inside it) at a level above its standard version's.
+3. **The code list is read once per call, not twice.** With two reads a call, the witness cost
+   `released` 2.9 to 3.7 times its time (the read is about 3.5 ms and `released` makes 200
+   calls). The opening read of a call now reuses the previous call's closing read on the same
+   class, unless the kernel ran in between (a warm-up); a compile installed in that gap makes a
+   call look a level lower than it ran, never higher, and an OSR installed there is found from
+   the compile events and the closing read. It still costs what prediction 8 records.
+4. **The all-null trap is the driver's, so the witness's trap test uses the remainder.** Running
+   candidate shapes through `quiet-null` showed the all-null trap is `unstable_if` in
+   `runMasked`, the all-null shortcut, and only where C2 compiled the driver, which it often does
+   not: the same `year(c)` kernel trapped in one test and not in the next. Test 1's trap is
+   therefore `quiet-remainder`'s, an `unstable_if` in an epilogue, which every settled warm-up has
+   compiled. `quiet-null` and `quiet-remainder` each open with a batch shaped like the warm-up's
+   calls, so a trap is seen to fall in the next call's window and not that one's (test 3).
+5. **`quiet-guard` reaches a guard through one column.** `VarkaGuardSpecs` gives verdicts, not
+   batches. The history bisects one column of the drawn first row between its drawn value and the
+   column's bound for the last value the guards' verdict answers and the first it declines,
+   keeping the answer side inside the drawn bound (outside it neither side's answer is specified,
+   rejected item 4) and letting only the decline side step one past it. The decline side is held
+   to the verdict's status, the answer side compared. 6 of the 28 cases have such a guard.
+6. **A body with no loop or epilogue method is not counted.** A kernel whose outputs read no
+   column has no masked group methods; a call through that body read as C2 vacuously, which made a
+   `cold` call fail as "not interpreted" on the first 20-draw run. Such a call is now `Mixed` and
+   left out of the counts.
+7. **The recording stays on with `-Dvarka.fuzz.witness=false`.** The warm-up needs the OSR and
+   inlining events to know it is done, so the switch turns off the per-call code-list reads and
+   events only, which is what prediction 8 prices.
+
+### 9.3 The tests
+
+All seven of section 5 pass, at the host's width (three runs) and at `-XX:MaxVectorSize=16` (two
+runs, after test 3 was relaxed as its item says), each suite run in a JVM of its own:
+
+1. A `cold` call is `Mixed` with every method at level 0; `warm-same` settles and every call is
+   `C2`; `quiet-remainder` traps with `unstable_if` in an epilogue (9.2.4 says why not the all-null
+   input).
+2. `released` on a fixed shape is served by a tier-3 OSR from batch 97 or 98 and a tier-4 OSR from
+   batch 164 or 165 at the host's width.
+3. `quiet-remainder`'s first call is `C2` and the trap falls in a later call, in the epilogue of
+   that call's own body. At 128 bits only the dense body's call trapped, so the test asks for one.
+4. The code list parser over captured lines: level 4 in use counts, not entrant does not, an
+   OSR-only level 4 does not, a missing method is 0, an inlined callee counts.
+5. The planted wrong answer fails each of the eight histories with the history in the message.
+6. A 1 ms deadline leaves `warm-same` unsettled with both bodies' batches compared.
+7. The failure names `seed=7 iteration=3` and the history with the replay properties, and
+   `-Dvarka.fuzz.history=quiet-null` runs that history alone.
+
+The compiled test passes at its default, 20 draws a lane, in its own JVM at both widths (145 s at
+the host's, 196 s at 128 bits), and under the memory sanitizer in the catalyst suites at the
+defaults (`dev/varka_matrix.sh --defaults --module catalyst --split 3 -j 3`): 617 passed, 0 failed,
+26 cancelled, in 370 s. No compiled history found a wrong answer.
+
+### 9.4 The predictions
+
+Measured on the laptop at 18:13 to 18:23 CEST, load average 0.4 to 2.5, each arm a JVM of its own
+(`dev/varka_matrix.sh --suites VarkaIrFuzzSuite --no-sanitizer`), 14 cases a lane over the
+compiled histories after the 6 lanes-override draws a lane ran `cold` only.
+
+| | prediction | measured | |
+| --- | --- | --- | --- |
+| 2 | a kernel's seven compiled histories under 3 s; the default arm adds under two minutes | median 3,623 ms a case at the int lane, 1,356 ms at the long; the test takes 145 s | missed |
+| 3 | `warm-same`, `warm-other` `C2` on at least 95% of settled draws | 11 of 13 and 11 of 13 at the int lane, 12 of 14 and 12 of 14 at the long (85% and 86%) | missed |
+| 4 | `quiet-null` traps on at least half, `quiet-remainder` on at least a sixth | `quiet-null` 9 of 14 and 13 of 14; `quiet-remainder` 13 of 14 and 14 of 14 | held |
+| 5 | `released` tier-4 OSR on at least 90% within 200 batches | 13 of 14 and 14 of 14 | held |
+| 7 | the long lane settles within a factor of two of the int lane at the median | 132 ms against 412 ms, the long lane three times faster | missed |
+| 8 | the recording and code-list reads add under 5% to a history | +19% a case at the int lane (3,623 against 3,055 ms), +25% at the long; `released` 2.3 times; the whole test +6% (145 against 137 s) | missed |
+
+* **2.** `released` is the largest share (median 1,268 ms at the int lane, 561 ms of it without
+  the witness), then the warm-ups, whose median of 412 ms is mostly the wait for JFR's next
+  delivery (9.2.1). The unsettled kernel holds its 10 s deadline in each of five warmed
+  histories and the recompile, 46 s on its own. At these medians, 274b's nightly of 2,000 draws a
+  lane over eight JVMs is about (2,000 x 3.6 s + 2,000 x 1.4 s) / 8, 21 minutes, before the
+  unsettled cases' deadlines and if the JVMs do not slow each other.
+* **3.** The two settled int-lane cases that were not all C2 trapped on their own drawn batch
+  after a warm-up on its own values (the third, `Mixed`, is the unsettled kernel); the long
+  lane's two did the same. A
+  warm-up on 32-row slices of a 1,024-row copy does not give a batch of the drawn length's shape,
+  and C2 traps on what it was not shown. The same holds for production's warm-up, which has the
+  same call shape (candidate 4).
+* **7.** Missed in the direction nobody registered: the long lane's kernels settle faster. Why was
+  not investigated. Under load (two A/B runs at load 2 to 7) the ratio was 1.9 and 2.0.
+* **8.** The per-call code-list read is about 3.5 ms and `released` makes 200 calls, so the read
+  is most of what the witness costs; candidate 1.
+
+Prediction 6 is 274b's; this run's data for it: 1 of 14 int-lane cases (seed 20260903, iteration
+8) unsettled in every warmed history, 35 to 70 `profile_predicate` traps each, the cycle row 326
+censuses. Predictions 1 and 9 are 274b's.
+
+### 9.5 Candidate rows (listed, not fixed)
+
+1. **A cheaper tier read.** The code list costs about 3.5 ms a read and dominates the witness's
+   cost (prediction 8). Reading it only at a history's edges and placing each call from the JFR
+   compile, inlining and deoptimization events would make a call's verdict nearly free, at the
+   price of a code change between two calls with no event, which the edge reads would still
+   catch per history. Wanted before 274b multiplies the draws by a hundred.
+2. **Guard edges behind a subtree.** `quiet-guard` reached 6 of 28 cases: a guard whose checked
+   value is a column's. A guard over an expression of columns needs the edge solved through the
+   subtree, by the reference's own arithmetic or by drawing guard-adjacent shapes.
+3. **The all-null shortcut traps in the driver.** `quiet-null`'s traps are `runMasked`'s
+   all-null branch where C2 compiled the driver, so the history tests the driver more than the
+   loops; a history that nulls one column of a batch where the others have values in every
+   lane would reach the loops' null paths.
+4. **Production's warm-up and the first real batch.** 2 of 14 kernels a lane trapped on their own
+   drawn batch right after a settled warm-up on its own values (9.4, prediction 3). Whether a
+   user's warmed kernel takes a `reinterpret` on its first real batch, and what that costs, is a
+   measurement of `VarkaKernelWarmup` on production's batch shapes.
+
