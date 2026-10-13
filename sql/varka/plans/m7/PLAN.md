@@ -642,7 +642,7 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 | 286 | The gate in parallel: after one build, the suites wide and narrow at once, each module's suites over several JVMs weighted by their last times, sbt's steps in a lane of their own, the JIT-measuring suites in a quiet phase at the end; and the narrow step really narrow, `-XX:MaxVectorSize=16` on each test JVM's command line where `JAVA_OPTS` had never reached them. **Done** (`VARKA-286.md` 9.1, 5 October 2026): 682 s from 2,074, the narrow step passing at 128 bits | the owner, 5 October 2026 | small |
 | 287 | **Done** (`VARKA-287.md` 9.2, 6 October 2026): the suites run through the runner over two JVMs with their JUnit times cached, and the matrix step reuses their defaults' fused batches; the catalyst job takes 14 minutes from 22 to 25, the SQL job 22 to 24 from 22 and 33, where the runner's recording of fused batches spends what the reused defaults save. Planned in two pull requests: the step as a script with a times cache, then the runner behind it. The same split in CI: the `varka-scoped` jobs run their module's Varka suites through the runner over two or three JVMs instead of one sbt test JVM, on the four-core runners; measured on the runners against the jobs' times today | VARKA-286 | small |
 | 180 | Promotion, continuously | item 81 | a cadence |
-| 258 | A post for Spark users: how Spark compiles a query, and why it compiles it again | item 78 | medium |
+| 258 | **Outlined** (`VARKA-258.md`, 13 October 2026; the measurements and the draft open). A post for Spark users: how Spark compiles a query, and why it compiles it again | item 78 | medium |
 | 259 | Its companion for Spark and JVM developers: bytecode without source | item 79 | medium |
 | 260 | A reference post: Spark's code generator by the numbers | item 80 | small |
 | 270 | The milestone's own post, for JVM and database engineers: how Varka knows its answers are right, and where that stops | the plan review (2.5), item 58 | medium |
@@ -842,7 +842,8 @@ serves no point of 1.1 is an item in `m8/SCOPE.md` (as items 93 to 95 were on 13
    2026: all seven kept, in 9.3's order, 315 after 314 and 316 last of them.*
 4. **The promotion track.** 258 to 260 have not started and 180 has no commit; the recommendation
    is to outline 258 now, as milestone 6's review did for its post, so the posts stop losing the
-   comparison with the next measurable row.
+   comparison with the next measurable row. *Decided by the owner on 13 October 2026: outlined the same day
+   (`VARKA-258.md`), its measurements in 9.3's order.*
 
 ### 9.5 Practices this review changes
 
