@@ -1,0 +1,11 @@
+# The golden-file suite's exclusion list (VARKA-271; see VarkaSQLQueryTestSuite and VarkaGoldenExclusions).
+# Tab separated: test name as ScalaTest prints it, arm (varka, cacheOnly or both), kind (harness or
+# environment), reason. A listed test that fails is cancelled with the reason; a harness entry whose test
+# passes is stale and fails until its line is removed. An environment entry may pass where the machine has
+# what the test needs.
+explain-aqe.sql	both	harness	the golden file holds printed physical plans, and the Arrow source adds an InMemoryRelation under every relation
+explain-cbo.sql	both	harness	the golden file holds printed physical plans, and the Arrow source adds an InMemoryRelation under every relation
+explain.sql	both	harness	the golden file holds printed physical plans, and the Arrow source adds an InMemoryRelation under every relation
+hints.sql	both	harness	the golden file holds printed plans, and the Arrow source adds an InMemoryRelation under every relation
+join-nearest-by.sql	both	harness	the golden file holds printed plans, and the Arrow source adds an InMemoryRelation under every relation
+udtf/udtf.sql - Python UDTFs	both	environment	needs a Python with pyspark; fails the same way in Spark's own SQLQueryTestSuite on a machine without one

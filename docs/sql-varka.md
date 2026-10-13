@@ -1084,6 +1084,18 @@ exist.
   fixture, as a projection and as a filter. `sql/varka/golden_corpus.json`
   records every statement's rewrite, plan verdict and outcome, and the counts
   of what fuses per file.
+* **Spark's whole golden-file suite** (`VarkaSQLQueryTestSuite`,
+  `dev/varka_golden_suite.sh`) runs every `SQLQueryTestSuite` file with
+  Varka on, Spark's committed `.sql.out` files the oracle. A test-only
+  extension puts an Arrow-cached copy under every relation with a column
+  Varka reads, except under a command or a hidden metadata column, so the
+  queries reach the kernels; a second arm runs the same cache with Varka off,
+  so a failure in both is the harness's and one only with Varka on is
+  Varka's. `sql/varka/spark_suites/excluded.tsv` lists the tests that may
+  fail and why (a harness entry whose test passes fails as stale), and
+  `served.json` records per test how many query executions Varka served a
+  batch in. It needs a JVM of its own, since it fixes the process-wide cache
+  serializer, and runs in `dev/varka_nightly.sh`.
 * **Metaspace proof** (`VarkaGeneratedClassLoaderSuite`,
   `VarkaShapeCacheSuite`) verifies with weak references that a released
   loader is collected, that a batch of 1000 loaders is fully collected, and -

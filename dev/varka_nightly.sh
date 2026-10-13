@@ -20,7 +20,8 @@
 # a fresh seed, the random differential against vanilla Spark (VARKA-262), the
 # exhaustive calendar sweeps, the SMT proofs under both pinned solvers, every small IR
 # tree to size 5 (VARKA-269) and to size 4 in each of its variants (VARKA-278), the
-# deoptimization-cycle guard and the inlining-cliff guard. Optionally the whole gate.
+# deoptimization-cycle guard, the inlining-cliff guard, and Spark's golden-file suite with
+# Varka on (VARKA-271). Optionally the whole gate.
 #
 #   dev/varka_nightly.sh                  # canary, fuzzer (10000, seed = today), Spark differential (50000), sweeps, proofs, deopt, cliff
 #   dev/varka_nightly.sh --iterations 500 --seed 42 --skip-sweep --skip-deopt --skip-cliff   # a quick trial
@@ -28,6 +29,7 @@
 #   dev/varka_nightly.sh --series-size 6  # every small tree to size 6, hours over every core
 #   dev/varka_nightly.sh --variants-size 0  # without the variants of the small trees
 #   dev/varka_nightly.sh --sparkfuzz-iterations 5000 --skip-sweep --skip-deopt --skip-cliff
+#   dev/varka_nightly.sh --skip-golden    # without the golden-file suite, about an hour
 #
 # The deopt step forks ten fresh JVMs per vector width of the default emission's twelve-output
 # make_date kernel and fails if any of them enters the C2 deoptimization cycle, reading the
@@ -35,7 +37,9 @@
 # step forks ten fresh JVMs of the cheap-tail shape at 24 and 40 outputs under the production
 # emitter and fails if any of them is slow at the end of twelve seconds - the loop method past
 # C1's limit, which the call-site budget is there to prevent (dev/varka_inlining_cliff.sh,
-# VARKA-209.md 11).
+# VARKA-209.md 11). The golden step runs Spark's SQLQueryTestSuite files through an Arrow cache
+# with Varka on, Spark's committed answers the oracle, and reruns the tests it fails with Varka
+# off, naming each failure Varka's or the harness's (dev/varka_golden_suite.sh, VARKA-271.md 3.2).
 #
 # Every step runs under dev/varka_deadline.sh, VARKA_STEP_DEADLINE seconds (default 10800, the
 # ten-thousand-iteration fuzzer's room with margin), so a hung step fails instead of holding
@@ -51,7 +55,7 @@ set -uo pipefail
 usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
 
 root="$(git rev-parse --show-toplevel)"; cd "$root"
-iterations=10000; seed="$(date +%Y%m%d)"; sweep=1; deopt=1; cliff=1; gate=0
+iterations=10000; seed="$(date +%Y%m%d)"; sweep=1; deopt=1; cliff=1; gate=0; golden=1
 sparkfuzz=50000
 series=5
 variants=4
@@ -66,6 +70,7 @@ while [ "$#" -gt 0 ]; do
     --skip-sweep) sweep=0; shift ;;
     --skip-deopt) deopt=0; shift ;;
     --skip-cliff) cliff=0; shift ;;
+    --skip-golden) golden=0; shift ;;
     --gate) gate=1; shift ;;
     *) usage ;;
   esac
@@ -84,7 +89,7 @@ run_step() {
     status[$name]=FAILED
   fi
   secs[$name]=$((SECONDS - start))
-  grep -h -E "Tests: succeeded|FAILED \*\*\*|verdict|[[:space:]]OFF$|seed=|^\[info\] - " "$logdir/$name.log" \
+  grep -h -E "Tests: succeeded|FAILED \*\*\*|^failed \(|verdict|[[:space:]]OFF$|seed=|^\[info\] - " "$logdir/$name.log" \
     | sed 's/^\[info\] //' | head -6 | sed 's/^/   /'
 }
 fuzz_opts="set Test/javaOptions ++= Seq(\"-Dvarka.fuzz.iterations=$iterations\", \"-Dvarka.fuzz.seed=$seed\")"
@@ -104,6 +109,11 @@ if [ "$sparkfuzz" -gt 0 ]; then
   run_step sparkfuzz build/sbt -batch "project sql" \
     "set Test/javaOptions ++= Seq(\"-Dvarka.sparkfuzz.iterations=$sparkfuzz\", \"-Dvarka.sparkfuzz.seed=$seed\", \"-Dspark.test.timeout=170\", \"-Dvarka.test.watchdog.minutes=170\")" \
     'testOnly *VarkaSparkFuzzSuite *VarkaSparkReproducerSuite'
+fi
+# Spark's golden files through the Arrow source with Varka on, in a JVM of its own; a failure not
+# on sql/varka/spark_suites/excluded.tsv is rerun with Varka off and named Varka's or the harness's.
+if [ "$golden" -eq 1 ]; then
+  run_step golden dev/varka_golden_suite.sh --attribute --out "$logdir/golden"
 fi
 if [ "$sweep" -eq 1 ]; then
   run_step sweep build/sbt -batch "project catalyst" \
