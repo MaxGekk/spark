@@ -828,7 +828,8 @@ serves no point of 1.1 is an item in `m8/SCOPE.md` (as items 93 to 95 were on 13
 ### 9.4 Decisions for the owner
 
 1. **245 stays or moves.** Risk 3 names it as the row to cut if 243 and 244 run long. The
-   recommendation: keep it, and decide when 244 lands, from what 243 and 244 cost.
+   recommendation: keep it, and decide when 244 lands, from what 243 and 244 cost. *Decided by
+   the owner on 13 October 2026: kept, to be decided again when 244 lands.*
 2. **298 stays or moves.** A Catalyst-level grammar with casts is test strength, but 262 and 271
    now reach the analyzer's casts through Spark itself. The recommendation: move it to
    `m8/SCOPE.md` unless 271b's full run shows cast shapes the golden files do not reach.
