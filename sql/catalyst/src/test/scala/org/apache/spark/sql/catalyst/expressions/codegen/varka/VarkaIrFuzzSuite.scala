@@ -24,7 +24,7 @@ import scala.jdk.CollectionConverters._
 import scala.jdk.OptionConverters._
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaIrGrammar.{Drawn, LongShapes, Shapes}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaIrGrammar.Drawn
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 
@@ -94,6 +94,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
 
   // The grammar's bounds and seeds, by the names this suite has always used.
   private val columnBound = VarkaIrGrammar.COLUMN_BOUND
+  private val intColumnBound = Math.toIntExact(columnBound)
   private val literalBound = VarkaIrGrammar.LITERAL_BOUND
   private val longColumnBound = VarkaIrGrammar.LONG_COLUMN_BOUND
   private val longLiteralBound = VarkaIrGrammar.LONG_LITERAL_BOUND
@@ -198,14 +199,6 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     }
   }
 
-  /**
-   * An int-lane column value, uniform over `[-bound, bound]`. A floor modulus, so a negative
-   * `nextLong` lands inside the bound too: a signed `%` would put half the values below
-   * `-bound`. One `nextLong` a value, so the draws after the data do not depend on the bound.
-   */
-  private def intColumnValue(rnd: Random, bound: Long): Int =
-    (Math.floorMod(rnd.nextLong(), 2 * bound + 1) - bound).toInt
-
   private def drawInt(iteration: Int, drawSeed: Long = seed): VarkaFuzzCase = {
     val rnd = VarkaIrGrammar.shapeRandom(drawSeed, iteration)
     // The shape itself comes from the shared draw, so this suite and the emitted-bytes oracle
@@ -231,8 +224,9 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
         DateTimeUtils.TRUNC_TO_WEEK + rnd.nextInt(
           DateTimeUtils.TRUNC_TO_YEAR - DateTimeUtils.TRUNC_TO_WEEK + 1)
       } else {
-        intColumnValue(rnd,
-          if (c == smallOrdinal) VarkaChrono.MONTH_ARITH_MAX_MONTHS.toLong else columnBound)
+        // Uniform over the column's bound, the draw `VarkaIrGrammar.within` documents.
+        VarkaIrGrammar.intWithin(rnd,
+          if (c == smallOrdinal) VarkaChrono.MONTH_ARITH_MAX_MONTHS else intColumnBound)
       }
     }
 
@@ -260,16 +254,14 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     val drawn = VarkaIrGrammar.drawLongShape(rnd)
     val roots = drawn.roots
     val (numInputs, numLiterals) = (drawn.numInputs, drawn.numLiterals)
-    // A floor modulus, so a negative draw lands inside the bound too: a signed `%` would put
-    // it as far as three bounds below zero, outside every guard the grammar drew.
-    def draw(bound: Long): Long = Math.floorMod(rnd.nextLong(), 2 * bound + 1) - bound
-    val lits = Array.fill(numLiterals)(draw(longLiteralBound))
+    val lits = Array.fill(numLiterals)(VarkaIrGrammar.within(rnd, longLiteralBound))
     val length = lengths(rnd.nextInt(lengths.length))
     val patternIds = Seq.fill(numInputs)(rnd.nextInt(patternNames.length))
     val patterns = patternIds.map(pattern(rnd, _, length))
     val forceMasked = length > 1 && rnd.nextInt(4) == 0
     val options = randomOptions(rnd)
-    val data = Array.tabulate(numInputs, length)((_, _) => draw(longColumnBound))
+    val data =
+      Array.tabulate(numInputs, length)((_, _) => VarkaIrGrammar.within(rnd, longColumnBound))
 
     val context = s"lane=long seed=$drawSeed iteration=$iteration " +
       s"roots=${roots.asScala.map(r => VarkaVectorIR.canonical(r)).mkString("[", ", ", "]")} " +
@@ -562,16 +554,12 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     // shapes than the differential test does.
     val permitted = recordNodeTypes.map(_.getSimpleName)
     val seen = scala.collection.mutable.Set.empty[String]
-    val rnd = new Random(seed)
-    for (_ <- 0 until 20000) {
-      val numInputs = 1 + rnd.nextInt(3)
-      val numLiterals = rnd.nextInt(3)
-      val smallOrdinal = if (numInputs > 1) numInputs - 1 else -1
-      val levelOrdinal = if (numInputs > 2) numInputs - 2 else -1
-      val shapes = new Shapes(rnd, numInputs, numLiterals, smallOrdinal, levelOrdinal)
-      val depth = 1 + rnd.nextInt(4)
-      val root: AnyRef = if (rnd.nextInt(5) == 0) shapes.cond(depth) else shapes.value(depth).node
-      collectNodeTypes(root, seen)
+    //
+    // The shapes are the ones the fuzzer runs and the emitted-bytes oracle pins: draw k of the
+    // shared corpus, every root of it.
+    for (k <- 0 until 20000) {
+      VarkaIrGrammar.drawShape(VarkaIrGrammar.shapeRandom(seed, k)).roots.asScala
+        .foreach(collectNodeTypes(_, seen))
     }
     // Deliberately out of this generator's reach: `NarrowLane` takes a long child, nothing in
     // the IR widens an int lane, and this grammar builds int trees only, so no int shape can
@@ -594,16 +582,12 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     assert(intOnly.map(_.getSimpleName).contains("Year"))
     assert(laneGeneric.map(_.getSimpleName).contains("ConstDivide"))
     val seen = scala.collection.mutable.Set.empty[String]
-    val rnd = new Random(longSeed)
-    for (_ <- 0 until 20000) {
-      val numInputs = 1 + rnd.nextInt(3)
-      val numLiterals = rnd.nextInt(3)
-      val shapes = new LongShapes(rnd, numInputs, numLiterals)
-      val depth = 1 + rnd.nextInt(4)
-      // Through `root`, as `drawLongShape` draws, so the narrowing an output root may carry is
-      // asked for with the rest: it constructs over long leaves, so it counts as lane-generic.
-      val root: AnyRef = if (rnd.nextInt(5) == 0) shapes.cond(depth) else shapes.root(depth)
-      collectNodeTypes(root, seen)
+    // Over the long corpus the fuzzer runs and the oracle pins, every root of each draw. Its
+    // roots come through `LongShapes.root`, so the narrowing an output root may carry is asked
+    // for with the rest: it constructs over long leaves, so it counts as lane-generic.
+    for (k <- 0 until 20000) {
+      VarkaIrGrammar.drawLongShape(VarkaIrGrammar.shapeRandom(longSeed, k)).roots.asScala
+        .foreach(collectNodeTypes(_, seen))
     }
     val missing = laneGeneric.map(_.getSimpleName) -- seen
     assert(missing.isEmpty,
@@ -612,32 +596,50 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   }
 
   test("the int-lane draw spreads its column values over their range") {
-    // A draw that piles its values on one point checks little else: a signed remainder would put
-    // half of every int-lane column at exactly -bound. Over the first 2000 draws, each day or
-    // month column's values must lie in [-bound, bound], no one value may hold more than 1% of
-    // them, and each half of the range must hold over 40%. The trunc-level column is left out,
-    // since it draws one of five codes on purpose.
-    val byBound =
-      scala.collection.mutable.Map.empty[Long, scala.collection.mutable.ArrayBuffer[Long]]
+    // A draw that piles its values on one point checks little else. A signed remainder is
+    // negative half the time: with a clamp to the bound it put half of every int-lane column at
+    // exactly -bound, and without one half the values land below -bound. Over the first 2000
+    // draws, each column is read by the role its case gives it, and checked against the
+    // grammar's constants rather than against a bound chosen the way the draw chooses it, so a
+    // wrong bound handed to the draw fails here too. A day column's values lie within
+    // COLUMN_BOUND and reach past half of it, fifty times the month bound; the month
+    // column's lie within MONTH_ARITH_MAX_MONTHS. In both, no one value holds more than 1% of
+    // them and each half of the range holds over 40%. The trunc-level column is left out, since
+    // it draws one of five codes on purpose.
+    val monthBound = VarkaChrono.MONTH_ARITH_MAX_MONTHS.toLong
+    val days = scala.collection.mutable.ArrayBuilder.make[Long]
+    val months = scala.collection.mutable.ArrayBuilder.make[Long]
     for (k <- 0 until 2000) {
       val c = drawInt(k)
       for (col <- 0 until c.numInputs() if col != c.levelOrdinal()) {
-        val bound =
-          if (col == c.smallOrdinal()) VarkaChrono.MONTH_ARITH_MAX_MONTHS.toLong else columnBound
-        byBound.getOrElseUpdate(bound, scala.collection.mutable.ArrayBuffer.empty) ++=
-          c.data()(col)
+        (if (col == c.smallOrdinal()) months else days) ++= c.data()(col)
       }
     }
-    assert(byBound.keySet == Set(columnBound, VarkaChrono.MONTH_ARITH_MAX_MONTHS.toLong))
-    for ((bound, values) <- byBound) {
-      val n = values.size.toDouble
-      assert(values.forall(v => -bound <= v && v <= bound), s"bound $bound: a value outside it")
-      val (top, count) = values.groupBy(identity).view.mapValues(_.size).maxBy(_._2)
-      assert(count / n <= 0.01, s"bound $bound: $count of ${values.size} values are $top")
-      assert(values.count(_ < 0) / n > 0.4 && values.count(_ > 0) / n > 0.4,
-        s"bound $bound: ${values.count(_ < 0)} negative and ${values.count(_ > 0)} positive " +
-          s"of ${values.size}")
+    def spread(name: String, values: Array[Long], bound: Long): Unit = {
+      val n = values.length.toDouble
+      assert(values.nonEmpty, s"$name: no values drawn")
+      assert(values.forall(v => -bound <= v && v <= bound), s"$name: a value outside +-$bound")
+      // The most frequent value, by a scan of the sorted values.
+      val sorted = values.sorted
+      var (top, count, run) = (sorted(0), 1, 1)
+      for (i <- 1 until sorted.length) {
+        run = if (sorted(i) == sorted(i - 1)) run + 1 else 1
+        if (run > count) {
+          top = sorted(i)
+          count = run
+        }
+      }
+      assert(count / n <= 0.01, s"$name: $count of ${values.length} values are $top")
+      val (negative, positive) = (values.count(_ < 0), values.count(_ > 0))
+      assert(negative / n > 0.4 && positive / n > 0.4,
+        s"$name: $negative negative and $positive positive of ${values.length}")
     }
+    val dayValues = days.result()
+    spread("day columns", dayValues, VarkaIrGrammar.COLUMN_BOUND)
+    spread("month column", months.result(), monthBound)
+    val widest = dayValues.iterator.map(math.abs).max
+    assert(widest > VarkaIrGrammar.COLUMN_BOUND / 2,
+      s"day columns: the widest value is $widest, drawn as if within a narrower bound")
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -704,8 +706,8 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
         DateTimeUtils.TRUNC_TO_WEEK + rnd.nextInt(
           DateTimeUtils.TRUNC_TO_YEAR - DateTimeUtils.TRUNC_TO_WEEK + 1)
       } else {
-        intColumnValue(rnd,
-          if (small(c)) VarkaChrono.MONTH_ARITH_MAX_MONTHS.toLong else columnBound)
+        VarkaIrGrammar.intWithin(rnd,
+          if (small(c)) VarkaChrono.MONTH_ARITH_MAX_MONTHS else intColumnBound)
       }
     }
     val context = s"wide seed=$seed iteration=$iteration ($label) roots=${roots.size} " +

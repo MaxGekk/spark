@@ -197,3 +197,88 @@ failure still reproduces" passes without replaying a draw: the done-when's repla
 **What this does not settle.** `VarkaRangeAnalysisSuite` draws its `Role.Offset` column values with
 a signed remainder and no clamp, over about `[-3 * bound, bound]` (3.3). Whether that suite should
 draw over `[-bound, bound]` is left to its owner and reported with this task.
+
+**Review of #777.** The code review of the pull request on 13 October 2026 raised ten findings;
+each led to the following.
+
+1. *`VarkaRangeAnalysisSuite`'s offsets.* Changed here after all, on the owner's approval: its
+   `Role.Offset` column values are drawn with the shared helper of finding 3 over
+   `[-COLUMN_BOUND, COLUMN_BOUND]`, where the signed remainder put them over about
+   `[-3 * COLUMN_BOUND, COLUMN_BOUND]`. The draw still takes one `nextLong` a value, so the suite's
+   trees, literals and null choices are what they were and only the offsets move. The suite passes,
+   20 tests; its range-soundness test checked 556,444 values against a bounded interval before and
+   556,689 after, with 44,178 queries answered unknown both times (the analysis reads the tree, not
+   the rows).
+2. *The two reach tests in `VarkaIrFuzzSuite`* drew one sequential generator and built `Shapes` and
+   `LongShapes` directly. They now walk every root of draw `k` of the corpus the fuzzer and the
+   emitted-bytes oracle draw, `drawShape(shapeRandom(seed, k))` and
+   `drawLongShape(shapeRandom(longSeed, k))`, over the same 20,000 draws. A throwaway test, removed
+   before the commit, collected the node types each corpus reaches at the default seeds:
+
+   | draws | int, sequential | int, corpus | long, sequential | long, corpus |
+   | ---: | ---: | ---: | ---: | ---: |
+   | 2,000 | 36 of 37 | 36 of 37 | 15 of 15 | 15 of 15 |
+   | 5,000 | 36 of 37 | 36 of 37 | 15 of 15 | 15 of 15 |
+   | 20,000 | 36 of 37 | 36 of 37 | 15 of 15 | 15 of 15 |
+   | 50,000 | 36 of 37 | 36 of 37 | 15 of 15 | 15 of 15 |
+
+   The type sets are identical at every count; the int lane's one missing type is `NarrowLane`,
+   out of the int grammar's reach by design and excluded by the test with its reason. The corpus
+   reaches its last new int type (`TruncDateDynamic`) at draw 47 and its last new long type
+   (`NarrowLane`) at draw 14, so 20,000 draws keep a wide margin and the draw count stays.
+3. *One shared value draw.* `VarkaIrGrammar.within(Random, long)` draws a value uniform over
+   `[-bound, bound]` as `Math.floorMod(rnd.nextLong(), 2 * bound + 1) - bound`, and
+   `intWithin(Random, int)` is its int form. They replace `intColumnValue` and `drawLong`'s local
+   `draw` in `VarkaIrFuzzSuite`, `VarkaIrSeries.draw`, `VarkaCoverageCompositionFuzzSuite`'s local
+   `within` and the range suite's offset draw. The composition suite draws from a
+   `scala.util.Random`, whose `nextLong` is its wrapped `java.util.Random`'s, so it passes
+   `rnd.self`, as the grammar's class comment says a Scala caller does, and its stream is the same.
+   The draws left alone use another formula: the int literals of `VarkaIrSeries` and
+   `VarkaIrFuzzSuite` and the range suite's literals take `nextInt(2 * bound + 1) - bound`. No
+   stream moved: `VarkaEmittedBytesSuite` passes with no regeneration and
+   `git diff --quiet origin/master -- sql/varka/emitted_bytes.json` holds, `VarkaSmallTreeSuite`
+   passes over the series' batches, and the admission count of the first 2000 int-lane draws, run
+   again after the switch, gives the numbers of the table above exactly: 434,669 values, 5 at
+   `-bound`, 6 at `+bound`, 217,556 negative, 217,113 positive, 5 month-column values at `-bound`.
+4. *The helper in Scala, in a suite.* Resolved by 3.
+5. *The spread test chose each column's bound the way `drawInt` does*, so a wrong bound handed to
+   the draw would pass. It now sorts the values by the role the case gives each column and checks
+   them against the grammar's constants: day values within `COLUMN_BOUND` with the widest past
+   `COLUMN_BOUND / 2` (it is 2,499,987), month values within `MONTH_ARITH_MAX_MONTHS`, and in both
+   no value over 1% of them and each half of the range over 40%.
+6. *`runWide`'s draw has no distribution test.* Its kernels are emitted and run, so a distribution
+   over its data is not cheap to collect. It now draws through the same `intWithin` the spread test
+   checks through `drawInt`; what is left at its own site is which of two bounds a column gets, the
+   narrowest domain any of its draws gives the column.
+7. *The most frequent value* is found by a scan of the sorted values instead of a `groupBy` over
+   430,000 boxed values.
+8. *The int form's bound.* `intWithin` takes an `int` bound, so every value in its range fits an
+   `int` and no guard is needed for the narrowing; the modulus is computed in `long`, so a bound up
+   to `Integer.MAX_VALUE` is fine. `within` rejects a negative bound and one past 2^62 - 1, where
+   `2 * bound + 1` overflows.
+9. *The reason for one `nextLong` a value.* See the corrections below; the helper's comment now
+   says where it matters.
+10. *The spread test's comment* said a signed remainder "would put half of every int-lane column at
+    exactly -bound", which holds only with the old clamp. It now says a signed remainder is
+    negative half the time: with the clamp half the values piled at `-bound`, without it (as in the
+    range suite) half land below `-bound`.
+
+The suites after the review: `VarkaIrFuzzSuite` 10 passed and 1 cancelled (the opt-in size-trace
+dump), `VarkaSmallTreeSuite` 6, `VarkaKnownFailuresSuite` 5, `VarkaEmittedBytesSuite` 4 passed and
+1 cancelled (the opt-in option audit), `VarkaShrinkerSuite` 7, `VarkaVariantSuite` 6,
+`VarkaRangeAnalysisSuite` 20, `VarkaCoverageCompositionFuzzSuite` 12.
+
+**Corrections.** Two sentences above are wrong, and one decision was reversed.
+
+- Section 2's "What the check would have rejected" says a draw taking another count of random
+  numbers "would shift every later draw of the case", and section 3.1 says that with one `nextLong`
+  a value "the stream after the data is where it was". In `drawInt` and `runWide` the column data
+  is the last thing drawn from the case's generator, and every case has a generator of its own, so
+  nothing is drawn after it: a `nextInt` draw would have changed the data and nothing else. The
+  shapes, literals, lengths, null patterns, masking and options are unchanged because they are drawn
+  before the data. One `nextLong` a value matters where values are drawn mid-stream, which this
+  review's shared helper serves: the long lane draws its literals before its length and null
+  patterns, `VarkaIrSeries` draws its batches one after another, the range suite draws offsets
+  between null choices and other columns, and the composition suite draws more after a value.
+- Section 3.3 and "What this does not settle" leave `VarkaRangeAnalysisSuite`'s offset draw to its
+  owner; the owner approved the change, and finding 1 above made it.
