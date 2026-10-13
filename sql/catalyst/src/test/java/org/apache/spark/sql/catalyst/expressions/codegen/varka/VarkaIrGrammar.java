@@ -86,7 +86,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Yea
  * {@link #CHRONO_BOUND} is the magnitude a calendar node's subtree must stay under. The suites
  * draw the actual lane values themselves, inside these bounds, because how a row is drawn is the
  * suite's question (the fuzzer poisons null lanes, the range suite widens int-only columns to the
- * whole of int32).
+ * whole of int32); a value inside a symmetric bound is drawn with {@link #within} or
+ * {@link #intWithin}.
  *
  * <p>Every draw is from a {@code java.util.Random}, the generator a {@code scala.util.Random}
  * wraps: a Scala caller passes its generator's {@code self}, and the draws after the shape - the
@@ -319,6 +320,33 @@ public final class VarkaIrGrammar {
    */
   public static Random shapeRandom(long seed, int k) {
     return new Random(seed * 1000003L + k);
+  }
+
+  /**
+   * A lane value uniform over {@code [-bound, bound]}, the draw every suite uses for a column or
+   * literal value inside a symmetric bound.
+   *
+   * <p>A floor modulus rather than {@code %}: a signed remainder takes the sign of the dividend, so
+   * for the half of {@code nextLong} values that are negative it lands in
+   * {@code (-(2 * bound + 1), 0]} and the value below {@code -bound}, outside every guard the
+   * grammar drew. Exactly one {@code nextLong} a value, whatever the bound, and no rejection loop:
+   * some callers draw more after the values from the same generator (the long lane's literals come
+   * before its length and null patterns, and the series draws its batches one after another), and
+   * what they draw next must not depend on the bound or on the values drawn.
+   */
+  public static long within(Random rnd, long bound) {
+    if (bound < 0 || bound > (Long.MAX_VALUE - 1) / 2) {
+      throw new IllegalArgumentException("bound " + bound + " is outside [0, 2^62)");
+    }
+    return Math.floorMod(rnd.nextLong(), 2 * bound + 1) - bound;
+  }
+
+  /**
+   * {@link #within} for an int lane: the bound is an {@code int}, so every value in
+   * {@code [-bound, bound]} fits and the narrowing is exact.
+   */
+  public static int intWithin(Random rnd, int bound) {
+    return (int) within(rnd, bound);
   }
 
   /** {@code roots} without repeats, each kept where it first appears. */
