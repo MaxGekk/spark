@@ -162,3 +162,41 @@ One pull request: the plan, then the building and reading changes with their tes
 9 with the replays and the counts.
 
 ## 9. Outcome
+
+Done on 13 October 2026, as section 3 designed it. No pinned fixture moved and no draw changed.
+
+**The five draws replay passing.** Each was run as the night ran it, at its seed with
+`-Dvarka.fuzz.only` set to its iteration. The untaken-arm variant is the one over the cap in four
+draws and the stranger in one:
+
+| seed, iteration | what the variant came to |
+| --- | --- |
+| 2026101307001, 47340 | untaken arm rebuilt within the cap, compared |
+| 2026101306003, 44588 | untaken arm with no replacement within the cap, skipped past the op cap |
+| 2026101303005, 29063 | stranger over the other root, within the cap, compared |
+| 2026101308007, 26463 | untaken arm with no replacement within the cap, skipped past the op cap |
+| 2026101305008, 57488 | untaken arm rebuilt within the cap, compared |
+
+Without the change, the two new tests in `VarkaIrFuzzSuite` fail with the night's message
+("the emitter rejected the shape without the budget: more than MAX_FUSED_NODES=64 distinct ops").
+With it they pass. One test covers the skip at 2026101306003, and the other covers both rebuilds at
+2026101307001 and 2026101303005. `VarkaVariantSuite`'s new test holds the untaken-arm choice on a
+hand-written tree: the first replacement that fits is taken, and the first one when none fits.
+
+**Predictions.**
+
+1. Right: all five pass, the two named skip, and the other three compare.
+2. Right: at the suite's default seed and 300 iterations, the variant counts per kind and outcome
+   are identical with and without the change on both lanes (for example, untaken arm 67 compared
+   on the int lane and 29 on the long).
+3. Not decidable at this resolution. Two runs of 10,000 int-lane iterations each way took 181 s
+   and 165 s with the change and 180 s and 177 s without. The runs differ among themselves by up
+   to 9%, far more than the change could cost. The change is not slower by anything these runs
+   can see.
+
+**Suites.** `VarkaIrFuzzSuite`, `VarkaVariantSuite`, `VarkaSmallTreeSuite` and
+`VarkaEmitterBudgetSuite` pass. `dev/lint-java` and `dev/scalastyle` pass.
+
+**What this does not settle.** A variant that is skipped past the op cap is checked only in the
+budget form, and only when that form answers it rather than declining on size. Both skipped draws
+declined. The grammar's draws never take this path.

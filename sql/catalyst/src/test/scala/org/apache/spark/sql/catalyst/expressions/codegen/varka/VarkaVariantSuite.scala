@@ -334,6 +334,23 @@ class VarkaVariantSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOw
     assert(armed(VarkaVariants.Taken.BOTH).isEmpty)
   }
 
+  test("an untaken arm takes the first replacement that fits, else the first") {
+    // VARKA-323: a replacement can grow the tree past what the emitter's form without a budget
+    // holds. With a predicate, the pool is scanned from each next start until a variant fits.
+    val big = new Greatest(new AddMonths(new ColumnRef(0), new LiteralSlot(0)), new ColumnRef(1))
+    val small = new ColumnRef(1)
+    val f = new IfElse(new IsNotNull(new ColumnRef(1)), new ColumnRef(2), new ColumnRef(0))
+    val pool = Seq[VarkaVectorIR](big, small).asJava
+    def thenOf(fits: Variant => Boolean): String = VarkaVectorIR.canonical(
+      VarkaVariants.untakenArm(Seq[VarkaVectorIR](f).asJava, 4, _ => VarkaVariants.Taken.ELSE_ONLY,
+        pool, 0, (v: Variant) => fits(v)).get.roots.get(0).asInstanceOf[IfElse].thenNode())
+    def isSmall(v: Variant): Boolean =
+      v.roots.get(0).asInstanceOf[IfElse].thenNode().isInstanceOf[ColumnRef]
+    assert(thenOf(_ => true) == VarkaVectorIR.canonical(big), "the first replacement fits")
+    assert(thenOf(isSmall) == VarkaVectorIR.canonical(small), "the one that fits is taken")
+    assert(thenOf(_ => false) == VarkaVectorIR.canonical(big), "none fits: the first")
+  }
+
   test("a decline by a guard the variant adds is allowed, and by any other guard fails") {
     // add_months over a column count carries the month-count guard, over a literal count none.
     // So moving the literal into a column adds the guard, which is what lets that variant

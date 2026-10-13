@@ -98,6 +98,8 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   private val variantsEvery = sys.props.get("varka.fuzz.variantsEvery").map(_.toInt).getOrElse(1)
   private val classCounter = new AtomicInteger(0)
   private val skippedPastTheCap = new AtomicInteger(0)
+  /** Variants over the op cap of the form without a budget, skipped (VARKA-323). */
+  private val skippedPastTheOpCap = new AtomicInteger(0)
   // What the random shapes' emissions did about size, reported after each run (VARKA-238).
   private val randomTrace = new VarkaEmitTrace
   private val lengths = Seq(1, 3, 7, 15, 16, 17, 33, 64, 65, 100, 257, 1000)
@@ -154,9 +156,22 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
    * the legacy form has: the JVM holds no method the emitter could make of the shape, the
    * decline is the emitter's answer (VARKA-219), and the shape is counted and skipped. Anything
    * else the emitter throws is a failure - it rejected a shape the grammar builds.
+   *
+   * `overTheOpCap` says the form without the budget cannot hold the shape, by `fitsBudgets`: a
+   * variant that grew a draw past `MAX_FUSED_NODES` or `MAX_CHAIN_DEPTH`, which the grammar's own
+   * shapes never are. Such a shape that the form without the budget rejects is counted and
+   * skipped, not failed; the budget form, which has no op cap, still ran it first (VARKA-323).
    */
-  private def emitOrSkip(context: String, options: VarkaEmitOptions)(
+  private def emitOrSkip(context: String, options: VarkaEmitOptions,
+      overTheOpCap: Boolean = false)(
       emitWith: VarkaEmitOptions => Array[Byte]): Option[Array[Byte]] = {
+    def pastTheOpCap(e: IllegalArgumentException): Option[Array[Byte]] = {
+      if (!overTheOpCap) {
+        fail(s"$context: the emitter rejected the shape without the budget: " + e.getMessage, e)
+      }
+      skippedPastTheOpCap.incrementAndGet()
+      None
+    }
     def pastTheCap(d: VarkaEmitDeclined): Option[Array[Byte]] = {
       assert(d.getMessage.contains("over the class-file cap of"),
         s"$context: declined with no budget to decline on: ${d.getMessage}")
@@ -172,14 +187,13 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
           Some(emitWith(options.withMethodByteBudget(0)))
         } catch {
           case again: VarkaEmitDeclined => pastTheCap(again)
-          case e: IllegalArgumentException =>
-            fail(s"$context: the emitter rejected the shape without the budget: " +
-              e.getMessage, e)
+          case e: IllegalArgumentException => pastTheOpCap(e)
           case e: IllegalStateException =>
             fail(s"$context: the emitter failed its own check without the budget: " +
               e.getMessage, e)
         }
       case d: VarkaEmitDeclined => pastTheCap(d)
+      case e: IllegalArgumentException if overTheOpCap => pastTheOpCap(e)
       case e: IllegalArgumentException =>
         fail(s"$context: the emitter rejected the shape: ${e.getMessage}", e)
       // One of the emitter's own invariants, such as the word check: named with the shape, so
@@ -355,9 +369,14 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
    * to replay.
    */
   private def runVariants(c: VarkaFuzzCase, iteration: Int): Unit = {
+    // Whether the emitter's form without a byte budget holds a shape, as it holds every draw.
+    def fits(roots: java.util.List[VarkaVectorIR], numInputs: Int,
+        options: VarkaEmitOptions = c.options): Boolean =
+      VarkaLoopEmitter.fitsBudgets(roots, numInputs, options.withMethodByteBudget(0))
     val emit: VarkaVariantCheck.Emit = (roots, numInputs, numLiterals, options, className) =>
-      emitOrSkip(s"${c.label} (a variant)", options)(o => VarkaLoopEmitter.emitTraced(
-        className, roots.asJava, numInputs, numLiterals, o, randomTrace))
+      emitOrSkip(s"${c.label} (a variant)", options, !fits(roots.asJava, numInputs, options))(o =>
+        VarkaLoopEmitter.emitTraced(className, roots.asJava, numInputs, numLiterals, o,
+          randomTrace))
     def failed(what: String, label: String, t: Throwable): Unit = {
       val signature = VarkaFailureSignature.of(t, label)
       if (VarkaKnownFailures.isKnown(VarkaKnownFailures.entries, signature)) {
@@ -370,7 +389,10 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     }
     val variants = try {
       val pool = VarkaVariants.valueSubtrees(c.roots.asJava).asScala.toSeq
-      VarkaVariantCheck.variants(c, c.roots((iteration + 1) % c.roots.size), pool, iteration)
+      // The draw's roots as strangers, from the next one round: the first whose variant the
+      // form without a budget holds, as the grammar's draws are held.
+      val strangers = c.roots.indices.map(i => c.roots((iteration + 1 + i) % c.roots.size))
+      VarkaVariantCheck.variants(c, strangers, pool, iteration, v => fits(v.roots, v.numInputs))
     } catch {
       case e: VirtualMachineError => throw e
       case e: InterruptedException => throw e
@@ -394,6 +416,33 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     }
   }
 
+
+  /**
+   * The variants of draw `iteration` at `drawSeed`, run as the fuzzer runs them, and how many
+   * were skipped past the op cap of the form without a budget. The draw must pass.
+   */
+  private def variantsOf(drawSeed: Long, iteration: Int): Int = {
+    val c = drawInt(iteration, drawSeed)
+    assert(runChecked(c), s"draw $iteration at seed $drawSeed did not pass")
+    skippedPastTheOpCap.set(0)
+    runVariants(c, iteration)
+    variantCounts.clear()
+    skippedPastTheOpCap.getAndSet(0)
+  }
+
+  // VARKA-323: five draws of the night of 12 October 2026 whose variants grew past the op cap
+  // and failed as shapes the emitter rejected. A variant that fits is preferred, and a variant
+  // with no form that fits is skipped, counted.
+  test("a variant grown past the op cap with no smaller form is skipped, not failed") {
+    // Every one of the untaken-arm variant's 16 replacements puts it over the cap.
+    assert(variantsOf(2026101306003L, 44588) >= 1)
+  }
+
+  test("a variant grown past the op cap is rebuilt within it where it can be") {
+    // An untaken-arm replacement that fits (7 of 29), and a stranger that fits (1 of 2).
+    assert(variantsOf(2026101307001L, 47340) == 0)
+    assert(variantsOf(2026101303005L, 29063) == 0)
+  }
 
   /** `c` with the planted-bug option `name` on. */
   private def planted(c: VarkaFuzzCase, name: String): VarkaFuzzCase =
@@ -817,6 +866,12 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
           s"${k.label} ${n.mkString("/")}"
         }.mkString(", "))
       variantCounts.clear()
+    }
+    val pastTheOpCap = skippedPastTheOpCap.getAndSet(0)
+    if (pastTheOpCap > 0) {
+      info(s"$pastTheOpCap variant(s) grown past the cap of the emitter's form without a " +
+        "budget, with no smaller form of the variant to take, and declined by that form: " +
+        "skipped (VARKA-323)")
     }
     val skipped = skippedPastTheCap.getAndSet(0)
     if (skipped > 0) {

@@ -22,6 +22,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVariants.Kind;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVariants.Variant;
@@ -116,19 +117,35 @@ public final class VarkaVariantChecks {
    */
   public static List<KindVariant> variants(Case c, VarkaVectorIR stranger,
       List<VarkaVectorIR> pool, int rotation) {
+    return variants(c, List.of(stranger), pool, rotation, v -> true);
+  }
+
+  /**
+   * {@link #variants} that keeps the two variants which can grow the tree within {@code fits}
+   * where it can (VARKA-323): beside a stranger takes the first of {@code strangers} whose variant
+   * fits, else the first; the untaken arm is replaced as {@link VarkaVariants#untakenArm} with
+   * {@code fits} chooses. The fuzzer passes whether the emitter's form without a byte budget holds
+   * the variant, which a draw always satisfies and a grown variant may not.
+   */
+  public static List<KindVariant> variants(Case c, List<VarkaVectorIR> strangers,
+      List<VarkaVectorIR> pool, int rotation, Predicate<Variant> fits) {
     var roots = c.roots();
     int n = c.numInputs();
+    Variant stranger = strangers.stream()
+        .map(s -> VarkaVariants.besideAStranger(roots, n, s))
+        .filter(fits)
+        .findFirst()
+        .orElseGet(() -> VarkaVariants.besideAStranger(roots, n, strangers.get(0)));
     return List.of(
         new KindVariant(Kind.BESIDE_A_CHILD, VarkaVariants.besideAChild(roots, n)),
         new KindVariant(Kind.PERMUTED, VarkaVariants.permuted(roots, n)),
         new KindVariant(Kind.DUPLICATED, Optional.of(VarkaVariants.duplicated(roots, n))),
         new KindVariant(Kind.COPIED, Optional.of(VarkaVariants.copied(roots, n))),
-        new KindVariant(Kind.BESIDE_A_STRANGER,
-            Optional.of(VarkaVariants.besideAStranger(roots, n, stranger))),
+        new KindVariant(Kind.BESIDE_A_STRANGER, Optional.of(stranger)),
         new KindVariant(Kind.LITERAL_TO_COLUMN, VarkaVariants.literalToColumn(roots, n)),
         new KindVariant(Kind.COLUMNS_RENUMBERED, VarkaVariants.columnsRenumbered(roots, n)),
         new KindVariant(Kind.UNTAKEN_ARM,
-            VarkaVariants.untakenArm(roots, n, armOracle(c), pool, rotation)));
+            VarkaVariants.untakenArm(roots, n, armOracle(c), pool, rotation, fits)));
   }
 
   /**
