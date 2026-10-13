@@ -269,9 +269,9 @@ Done on 13 October 2026, as 3.1, 3.2, 3.4 and 3.5 describe, without the lift (27
   files' execution tests, as many analyzer tests, and the parent's two own tests), 784 passed,
   6 cancelled by `excluded.tsv`, 59 ignored by Spark itself (Python and pandas UDF variants with no
   pyspark, `ignored.sql`), none failed. The Varka arm took 1,995 s and the cache-only arm 1,979 s.
-* **What Varka served.** 47,323 query executions, 1,583 of them with a batch Varka served, 5,841
-  batches, in 108 tests (106 of them execution tests). Counting the execution tests alone, as the
-  admission check did: 36,280 executions, 1,520 served, 5,597 batches, against 32,429, 1,423 and
+* **What Varka served**, in the first run. 47,323 query executions, 1,583 of them with a batch
+  Varka served, 5,841 batches, in 108 tests (106 of them execution tests). Counting the
+  execution tests alone, as the admission check did: 36,280 executions, 1,520 served, 5,597 batches, against 32,429, 1,423 and
   5,323. The rise is the cache rule asking the compiler which column types a kernel reads
   (`VarkaExpressionCompiler.readsColumnOf`, new), which adds the long lane's bigint, TIME and
   day-time interval columns to the probe's date, int and year-month set. The tests serving most
@@ -299,7 +299,8 @@ Done on 13 October 2026, as 3.1, 3.2, 3.4 and 3.5 describe, without the lift (27
    for byte, in the weakest form that still answers 3.5's question: a test that served a batch
    in `served.json` fails when it passes and serves none ("the suite no longer reaches Varka for
    it"). Shown by setting `date.sql`'s committed served count to 5 and running it, which failed
-   with that message; the committed report is the second run's. The second run took 983 s alone
+   with that message. The report committed with this section was the second run's; the one
+   committed after the review (9.1) is a third run's. The second run took 983 s alone
    on the machine.
 5. **Not testable in 271a as written.** The planted `misdescribeAdd` fault failed no test over the
    fourteen files whose statements call `date_add`: none of their served executions calls it,
@@ -326,3 +327,40 @@ Done on 13 October 2026, as 3.1, 3.2, 3.4 and 3.5 describe, without the lift (27
 * The served report counts every test that runs through the golden-file path, analyzer tests
   included, since an analyzer test of a scripting file executes its statements too
   (`scripting/randomly_generated_scripts.sql_analyzer_test` serves 62).
+
+### 9.1 The review's fixes
+
+A review of the pull request found ten issues; all are fixed, each shown by a run.
+
+* **The suite never writes golden files.** With `SPARK_GENERATE_GOLDEN_FILES=1` set, the parent
+  rewrites every `.sql.out` from the answers it gets, which here are Varka's. The suite now refuses
+  to start: a run with the variable set aborted in 3 s with that message, and no golden file
+  changed.
+* **The served report is rewritten only from a run that can set the floor**: the Varka arm, no
+  fault planted, and every registered test run, which the suite reads from the tests ScalaTest
+  selected. A rewrite over one file aborted with "left 788 tests out" and left the file alone.
+* **A plan-printing file compares everything but its plans.** The five whole-file `harness`
+  entries cancelled a file on any failure, so a wrong answer in one of its other statements would
+  have been cancelled too. They are now of a new kind, `plans`: the file's `EXPLAIN` statements
+  whose output differs are left uncompared and counted, every other statement is compared, and the
+  entry is stale once none differs. All five files now pass in both arms; the list keeps one
+  cancelling entry, the Python UDTF file.
+* **The listener releases only the caches the rule built**, tracked by identity, so the caches a
+  golden file makes itself (`CACHE TABLE` in `identifier-clause.sql`, `parse-sql.sql`) are left to
+  it; both files pass in both arms.
+* **A nested deadline stops its command.** `dev/varka_deadline.sh` put the command in a session of
+  its own, so an outer deadline's TERM reached the script and not the command, and the golden
+  step's 6 GB test JVM would have outlived the nightly's step. It now forwards TERM and INT to the
+  command's group: under an outer deadline of 3 s around an inner one of 100 s, the inner command
+  was gone after the outer fired, where master's script left it running. The nightly also gives
+  each arm 4,800 s, so the build and two arms fit the step's 10,800.
+* **Smaller:** fatal errors are no longer caught as test failures (`NonFatal`); the listener bus
+  is drained for up to two minutes, and a drain timeout no longer replaces the test's own failure
+  or skips its counts; the served report is written and read with Jackson; the docs name
+  `misdescribeWordLiveness` as the fault that shows the suite reaching Varka before the lift; and
+  the numbers above say which run they come from.
+
+**Both arms again, every golden file**, side by side, 13 October 2026: 790 tests each, 789 passed,
+the Python UDTF test cancelled, 59 ignored by Spark, none failed, the two arms identical test for
+test, 1,256 s and 1,251 s. The Varka arm served 1,584 of 47,323 query executions and 5,843
+batches, in 108 tests; that run's report is the committed `served.json`.

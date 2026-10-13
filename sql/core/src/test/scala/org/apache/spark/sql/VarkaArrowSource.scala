@@ -17,8 +17,9 @@
 
 package org.apache.spark.sql
 
-import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.{Collections, IdentityHashMap}
 
+import scala.jdk.CollectionConverters._
 import scala.util.Try
 
 import org.apache.spark.SparkConf
@@ -75,8 +76,16 @@ object VarkaArrowSource {
   // optimizer too, and the rule must not wrap the relation inside its own copy.
   private val building: ThreadLocal[java.lang.Boolean] = ThreadLocal.withInitial(() => false)
 
-  // Every cache the rule built, released after each test whatever happened to its query.
-  private val built = new ConcurrentLinkedQueue[CachedRDDBuilder]()
+  // Every cache the rule built and has not released: the listener releases a query's own after
+  // it runs, and the suite whatever is left after each test. Caches a golden file makes itself
+  // (`CACHE TABLE`) are not in it and are left to the file. By identity: a builder is a case
+  // class whose equality compares plans, which a user's cache over the same relation can share.
+  private val built = Collections.synchronizedSet(
+    Collections.newSetFromMap(new IdentityHashMap[CachedRDDBuilder, java.lang.Boolean]()))
+
+  /** Releases a cache the rule built; any other cache is left alone. */
+  private[sql] def release(builder: CachedRDDBuilder): Unit =
+    if (built.remove(builder)) builder.clearCache()
 
   private def cached(session: SparkSession, leaf: LogicalPlan): LogicalPlan = {
     building.set(true)
@@ -124,11 +133,8 @@ object VarkaArrowSource {
       counts = Served(0, 0, 0)
       c
     }
-    var builder = built.poll()
-    while (builder != null) {
-      builder.clearCache()
-      builder = built.poll()
-    }
+    val left = built.synchronized(built.asScala.toList)
+    left.foreach(release)
     taken
   }
 }
@@ -141,8 +147,8 @@ class VarkaArrowSourceExtension extends (SparkSessionExtensions => Unit) {
 
 /**
  * Records, after each query execution, the batches Varka served in it (the `numVarkaBatches`
- * metric of its Varka nodes, subqueries included), and releases the execution's caches so a
- * golden file of hundreds of queries does not hold them all.
+ * metric of its Varka nodes, subqueries included), and releases the caches the cache rule built
+ * for it, so a golden file of hundreds of queries does not hold them all.
  */
 class VarkaArrowSourceListener extends QueryExecutionListener with AdaptiveSparkPlanHelper {
   private def record(qe: QueryExecution): Unit = {
@@ -150,7 +156,7 @@ class VarkaArrowSourceListener extends QueryExecutionListener with AdaptiveSpark
     // batch served, and the rule's own list releases whatever it cached.
     val batches = Try(qe.executedPlan).toOption.map { plan =>
       collectWithSubqueries(plan) { case s: InMemoryTableScanExec => s }
-        .foreach(_.relation.cacheBuilder.clearCache())
+        .foreach(s => VarkaArrowSource.release(s.relation.cacheBuilder))
       collectWithSubqueries(plan) {
         case n if n.nodeName.startsWith("Varka") => n.metrics.get("numVarkaBatches").map(_.value)
       }.flatten.sum

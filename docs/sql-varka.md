@@ -1091,11 +1091,14 @@ exist.
   Varka reads, except under a command or a hidden metadata column, so the
   queries reach the kernels; a second arm runs the same cache with Varka off,
   so a failure in both is the harness's and one only with Varka on is
-  Varka's. `sql/varka/spark_suites/excluded.tsv` lists the tests that may
-  fail and why (a harness entry whose test passes fails as stale), and
-  `served.json` records per test how many query executions Varka served a
-  batch in. It needs a JVM of its own, since it fixes the process-wide cache
-  serializer, and runs in `dev/varka_nightly.sh`.
+  Varka's. `sql/varka/spark_suites/excluded.tsv` says what the cache itself
+  changes: the files whose `EXPLAIN` output prints plans, which then compare
+  every other statement, and the tests that may fail and why; an entry that
+  no longer applies fails as stale. `served.json` records per test how many
+  query executions Varka served a batch in, and a test that served one when
+  it was written must still serve one. It needs a JVM of its own, since it
+  fixes the process-wide cache serializer, never writes golden files, and
+  runs in `dev/varka_nightly.sh`.
 * **Metaspace proof** (`VarkaGeneratedClassLoaderSuite`,
   `VarkaShapeCacheSuite`) verifies with weak references that a released
   loader is collected, that a batch of 1000 loaders is fully collected, and -

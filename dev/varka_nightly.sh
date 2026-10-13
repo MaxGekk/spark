@@ -113,7 +113,8 @@ fi
 # Spark's golden files through the Arrow source with Varka on, in a JVM of its own; a failure not
 # on sql/varka/spark_suites/excluded.tsv is rerun with Varka off and named Varka's or the harness's.
 if [ "$golden" -eq 1 ]; then
-  run_step golden dev/varka_golden_suite.sh --attribute --out "$logdir/golden"
+  # Each arm's own deadline keeps both arms and the build inside the step's.
+  run_step golden dev/varka_golden_suite.sh --attribute --deadline 4800 --out "$logdir/golden"
 fi
 if [ "$sweep" -eq 1 ]; then
   run_step sweep build/sbt -batch "project catalyst" \

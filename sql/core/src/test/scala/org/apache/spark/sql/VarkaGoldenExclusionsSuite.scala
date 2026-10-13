@@ -22,7 +22,7 @@ import java.util.Optional
 import scala.jdk.CollectionConverters._
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.VarkaGoldenExclusions.{Arm, Verdict}
+import org.apache.spark.sql.VarkaGoldenExclusions.{Arm, Kind, Verdict}
 
 /**
  * The golden-file suite's exclusion list - its parse, and what it makes of each outcome - and its
@@ -36,18 +36,19 @@ class VarkaGoldenExclusionsSuite extends SparkFunSuite {
   private val list = parse(
     "# a comment, and a blank line after it",
     "",
-    "printed.sql\tboth\tharness\tprints a plan",
+    "printed.sql\tboth\tplans\tprints a plan",
+    "harnessed.sql\tboth\tharness\tchanges the answer",
     "python.sql\tvarka\tenvironment\tneeds Python")
 
   private val failure: Optional[Throwable] = Optional.of(new RuntimeException("wrong answer"))
   private val passed: Optional[Throwable] = Optional.empty()
 
-  test("the committed list parses, and lists only harness and environment tests") {
+  test("the committed list parses, its plan-printing files under the plans kind") {
     val committed = VarkaGoldenExclusions.read(
       getWorkspaceFilePath("sql", "varka", "spark_suites", "excluded.tsv"))
     assert(committed.entries.size == 6)
     assert(committed.lookup("explain.sql", Arm.VARKA).isPresent)
-    assert(committed.lookup("explain.sql", Arm.CACHE_ONLY).isPresent)
+    assert(committed.lookup("explain.sql", Arm.CACHE_ONLY).get.kind == Kind.PLANS)
   }
 
   test("an entry applies only to the arms it names") {
@@ -70,28 +71,42 @@ class VarkaGoldenExclusionsSuite extends SparkFunSuite {
   }
 
   test("a listed failure is cancelled with its reason, an unlisted one keeps its cause") {
-    VarkaGoldenExclusions.decide(list.lookup("printed.sql", Arm.VARKA), failure) match {
+    VarkaGoldenExclusions.decide(list.lookup("harnessed.sql", Arm.VARKA), failure, 0) match {
       case c: Verdict.Cancel =>
-        assert(c.reason == "listed in excluded.tsv (harness): prints a plan")
+        assert(c.reason == "listed in excluded.tsv (harness): changes the answer")
       case other => fail(s"expected a cancel, got $other")
     }
-    VarkaGoldenExclusions.decide(list.lookup("other.sql", Arm.VARKA), failure) match {
+    VarkaGoldenExclusions.decide(list.lookup("other.sql", Arm.VARKA), failure, 0) match {
       case f: Verdict.Fail => assert(f.cause.get eq failure.get)
       case other => fail(s"expected a failure, got $other")
     }
-    assert(VarkaGoldenExclusions.decide(list.lookup("other.sql", Arm.VARKA), passed)
+    assert(VarkaGoldenExclusions.decide(list.lookup("other.sql", Arm.VARKA), passed, 0)
       .isInstanceOf[Verdict.Pass])
   }
 
   test("a listed harness test that passes is a stale entry; an environment one is not") {
-    VarkaGoldenExclusions.decide(list.lookup("printed.sql", Arm.CACHE_ONLY), passed) match {
+    VarkaGoldenExclusions.decide(list.lookup("harnessed.sql", Arm.CACHE_ONLY), passed, 0) match {
       case f: Verdict.Fail =>
-        assert(f.message.startsWith("stale entry: 'printed.sql' passes"))
+        assert(f.message.startsWith("stale entry: 'harnessed.sql' passes"))
         assert(f.cause.isEmpty)
       case other => fail(s"expected a stale entry, got $other")
     }
-    assert(VarkaGoldenExclusions.decide(list.lookup("python.sql", Arm.VARKA), passed)
+    assert(VarkaGoldenExclusions.decide(list.lookup("python.sql", Arm.VARKA), passed, 0)
       .isInstanceOf[Verdict.Pass])
+  }
+
+  test("a plans entry keeps every compared statement's failure, and is stale once no plan " +
+      "differs") {
+    val entry = list.lookup("printed.sql", Arm.VARKA)
+    VarkaGoldenExclusions.decide(entry, failure, 2) match {
+      case f: Verdict.Fail => assert(f.cause.get eq failure.get)
+      case other => fail(s"a failure outside the plans must fail, got $other")
+    }
+    assert(VarkaGoldenExclusions.decide(entry, passed, 2).isInstanceOf[Verdict.Pass])
+    VarkaGoldenExclusions.decide(entry, passed, 0) match {
+      case f: Verdict.Fail => assert(f.message.startsWith("stale entry: no EXPLAIN output"))
+      case other => fail(s"expected a stale entry, got $other")
+    }
   }
 
   test("the served report reads back what it writes, odd test names included") {

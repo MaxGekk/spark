@@ -39,11 +39,16 @@ import java.util.Set;
  * lines starting with {@code #} are comments. The kind decides what a pass means:
  *
  * <ul>
- *   <li>{@code harness}: the Arrow source itself changes the answer (a printed plan shows the
- *       cache, say). The test must fail; once it passes, the entry is stale and the test fails
- *       until the line is removed, so the list cannot outlive the reason it was written for.
+ *   <li>{@code plans}: the file prints physical plans, which show the Arrow source's cache. Its
+ *       {@code EXPLAIN} statements are not compared and every other statement is, so a wrong
+ *       answer elsewhere in the file still fails the test. Once no {@code EXPLAIN} output differs
+ *       any more, the entry is stale and the test fails until the line is removed.
+ *   <li>{@code harness}: the Arrow source itself changes the answer in a way the suite cannot
+ *       narrow to statements. The test must fail and is cancelled; once it passes, the entry is
+ *       stale and the test fails, so the list cannot outlive the reason it was written for.
  *   <li>{@code environment}: the test needs something this machine may lack (Python for a
- *       Python UDTF). It may pass where that is installed, so a pass is not stale.
+ *       Python UDTF). It is cancelled when it fails and may pass where that is installed, so a
+ *       pass is not stale.
  * </ul>
  *
  * <p>{@code SQLQueryTestSuite.ignoreList} is not used for this, because an ignored test never
@@ -79,8 +84,9 @@ public record VarkaGoldenExclusions(List<Entry> entries) {
     }
   }
 
-  /** Whether a failure is the Arrow source's own (held to staleness) or the machine's (not). */
+  /** What an entry excuses: printed plans, a whole file's failure, or a missing environment. */
   public enum Kind {
+    PLANS,
     HARNESS,
     ENVIRONMENT
   }
@@ -144,10 +150,11 @@ public record VarkaGoldenExclusions(List<Entry> entries) {
             where + "unknown arm '" + fields[1] + "': expected varka, cacheOnly or both");
       };
       Kind kind = switch (fields[2]) {
+        case "plans" -> Kind.PLANS;
         case "harness" -> Kind.HARNESS;
         case "environment" -> Kind.ENVIRONMENT;
         default -> throw new IllegalArgumentException(
-            where + "unknown kind '" + fields[2] + "': expected harness or environment");
+            where + "unknown kind '" + fields[2] + "': expected plans, harness or environment");
       };
       if (fields[0].isBlank() || fields[3].isBlank()) {
         throw new IllegalArgumentException(where + "the test name and the reason are required");
@@ -170,23 +177,36 @@ public record VarkaGoldenExclusions(List<Entry> entries) {
   }
 
   /**
-   * The verdict on a test's outcome: {@code failure} is empty when the test passed. An unlisted
-   * test keeps its outcome; a listed failure is cancelled; a listed harness test that passed is
-   * a stale entry.
+   * The verdict on a test's outcome: {@code failure} is empty when the test passed, and
+   * {@code differingPlans} counts the {@code EXPLAIN} statements whose output differed from the
+   * golden file and so were not compared. An unlisted test keeps its outcome. A {@code plans}
+   * entry keeps the outcome of everything compared, and is stale once no plan differs. A listed
+   * {@code harness} or {@code environment} failure is cancelled, and a listed {@code harness}
+   * test that passed is stale.
    */
-  public static Verdict decide(Optional<Entry> entry, Optional<Throwable> failure) {
+  public static Verdict decide(Optional<Entry> entry, Optional<Throwable> failure,
+      int differingPlans) {
+    Verdict asRun = failure.<Verdict>map(f -> new Verdict.Fail(String.valueOf(f.getMessage()),
+        Optional.of(f))).orElseGet(Verdict.Pass::new);
     if (entry.isEmpty()) {
-      return failure.<Verdict>map(f -> new Verdict.Fail(String.valueOf(f.getMessage()),
-          Optional.of(f))).orElseGet(Verdict.Pass::new);
+      return asRun;
     }
     Entry e = entry.get();
+    if (e.kind() == Kind.PLANS) {
+      if (failure.isPresent() || differingPlans > 0) {
+        return asRun;
+      }
+      return new Verdict.Fail("stale entry: no EXPLAIN output of '" + e.test() + "' differs " +
+          "from its golden file any more, so its line in sql/varka/spark_suites/excluded.tsv " +
+          "has to be removed", Optional.empty());
+    }
     if (failure.isPresent()) {
       return new Verdict.Cancel(
           "listed in excluded.tsv (" + e.kind().name().toLowerCase(Locale.ROOT) + "): " +
               e.reason());
     }
     return switch (e.kind()) {
-      case ENVIRONMENT -> new Verdict.Pass();
+      case PLANS, ENVIRONMENT -> new Verdict.Pass();
       case HARNESS -> new Verdict.Fail("stale entry: '" + e.test() + "' passes, so its line in " +
           "sql/varka/spark_suites/excluded.tsv has to be removed", Optional.empty());
     };

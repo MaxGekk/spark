@@ -1,795 +1,3952 @@
 {
-  "generated_by": "VarkaSQLQueryTestSuite (VARKA-271); regenerate with VARKA_GOLDEN_SUITE_REGEN=true dev/varka_golden_suite.sh",
-  "arm": "varka",
-  "total": {"tests": 788, "executions": 47323, "served": 1583, "batches": 5836},
-  "tests": {
-    "alias-resolution-edge-cases.sql": {"executions": 14, "served": 0, "batches": 0},
-    "alias-resolution-edge-cases.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "array.sql": {"executions": 104, "served": 0, "batches": 0},
-    "array.sql_analyzer_test": {"executions": 16, "served": 0, "batches": 0},
-    "bin-by.sql": {"executions": 11, "served": 0, "batches": 0},
-    "bin-by.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "binary.sql": {"executions": 9, "served": 0, "batches": 0},
-    "binary.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "binary_base64.sql": {"executions": 9, "served": 0, "batches": 0},
-    "binary_base64.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "binary_basic.sql": {"executions": 9, "served": 0, "batches": 0},
-    "binary_basic.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "binary_hex.sql": {"executions": 9, "served": 0, "batches": 0},
-    "binary_hex.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "binary_hex_discrete.sql": {"executions": 9, "served": 0, "batches": 0},
-    "binary_hex_discrete.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "bitwise.sql": {"executions": 42, "served": 1, "batches": 1},
-    "bitwise.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "cast.sql": {"executions": 270, "served": 0, "batches": 0},
-    "cast.sql_analyzer_test": {"executions": 19, "served": 0, "batches": 0},
-    "ceil-floor-with-scale-param.sql": {"executions": 28, "served": 0, "batches": 0},
-    "ceil-floor-with-scale-param.sql_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "change-column.sql": {"executions": 47, "served": 0, "batches": 0},
-    "change-column.sql_analyzer_test": {"executions": 27, "served": 0, "batches": 0},
-    "charvarchar-standard-semantics.sql": {"executions": 136, "served": 0, "batches": 0},
-    "charvarchar-standard-semantics.sql_analyzer_test": {"executions": 14, "served": 0, "batches": 0},
-    "charvarchar.sql": {"executions": 143, "served": 0, "batches": 0},
-    "charvarchar.sql_analyzer_test": {"executions": 55, "served": 0, "batches": 0},
-    "collations-aliases.sql": {"executions": 51, "served": 0, "batches": 0},
-    "collations-aliases.sql_analyzer_test": {"executions": 19, "served": 0, "batches": 0},
-    "collations-basic.sql": {"executions": 311, "served": 0, "batches": 0},
-    "collations-basic.sql_analyzer_test": {"executions": 74, "served": 0, "batches": 0},
-    "collations-padding-trim.sql": {"executions": 93, "served": 0, "batches": 0},
-    "collations-padding-trim.sql_analyzer_test": {"executions": 31, "served": 0, "batches": 0},
-    "collations-string-functions.sql": {"executions": 182, "served": 0, "batches": 0},
-    "collations-string-functions.sql_analyzer_test": {"executions": 56, "served": 0, "batches": 0},
-    "column-resolution-aggregate.sql": {"executions": 13, "served": 0, "batches": 0},
-    "column-resolution-aggregate.sql_analyzer_test": {"executions": 8, "served": 0, "batches": 0},
-    "column-resolution-sort.sql": {"executions": 8, "served": 0, "batches": 0},
-    "column-resolution-sort.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "columnresolution-negative.sql": {"executions": 64, "served": 0, "batches": 0},
-    "columnresolution-negative.sql_analyzer_test": {"executions": 42, "served": 0, "batches": 0},
-    "columnresolution-views.sql": {"executions": 21, "served": 0, "batches": 0},
-    "columnresolution-views.sql_analyzer_test": {"executions": 4, "served": 0, "batches": 0},
-    "columnresolution.sql": {"executions": 81, "served": 0, "batches": 0},
-    "columnresolution.sql_analyzer_test": {"executions": 26, "served": 0, "batches": 0},
-    "comments.sql": {"executions": 12, "served": 0, "batches": 0},
-    "comments.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "comparator.sql": {"executions": 10, "served": 0, "batches": 0},
-    "comparator.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "conditional-functions.sql": {"executions": 21, "served": 0, "batches": 0},
-    "conditional-functions.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "count.sql": {"executions": 26, "served": 0, "batches": 0},
-    "count.sql_analyzer_test": {"executions": 7, "served": 0, "batches": 0},
-    "counter-diff.sql": {"executions": 51, "served": 0, "batches": 0},
-    "counter-diff.sql_analyzer_test": {"executions": 11, "served": 0, "batches": 0},
-    "cross-join.sql": {"executions": 19, "served": 2, "batches": 4},
-    "cross-join.sql_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "csv-functions.sql": {"executions": 41, "served": 0, "batches": 0},
-    "csv-functions.sql_analyzer_test": {"executions": 13, "served": 0, "batches": 0},
-    "cte-command.sql": {"executions": 31, "served": 0, "batches": 0},
-    "cte-command.sql_analyzer_test": {"executions": 12, "served": 0, "batches": 0},
-    "cte-legacy.sql": {"executions": 25, "served": 0, "batches": 0},
-    "cte-legacy.sql_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "cte-nested.sql": {"executions": 24, "served": 0, "batches": 0},
-    "cte-nested.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "cte-nonlegacy.sql": {"executions": 25, "served": 0, "batches": 0},
-    "cte-nonlegacy.sql_analyzer_test": {"executions": 12, "served": 0, "batches": 0},
-    "cte-recursion.sql": {"executions": 1144, "served": 2, "batches": 2},
-    "cte-recursion.sql_analyzer_test": {"executions": 79, "served": 0, "batches": 0},
-    "cte-with-multi-children-operators.sql": {"executions": 20, "served": 0, "batches": 0},
-    "cte-with-multi-children-operators.sql_analyzer_test": {"executions": 4, "served": 0, "batches": 0},
-    "cte.sql": {"executions": 182, "served": 0, "batches": 0},
-    "cte.sql_analyzer_test": {"executions": 28, "served": 0, "batches": 0},
-    "current_database_catalog.sql": {"executions": 1, "served": 0, "batches": 0},
-    "current_database_catalog.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "date.sql": {"executions": 96, "served": 0, "batches": 0},
-    "date.sql_analyzer_test": {"executions": 11, "served": 0, "batches": 0},
-    "datetime-formatting-invalid.sql": {"executions": 37, "served": 0, "batches": 0},
-    "datetime-formatting-invalid.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "datetime-formatting-legacy.sql": {"executions": 38, "served": 0, "batches": 0},
-    "datetime-formatting-legacy.sql_analyzer_test": {"executions": 2, "served": 0, "batches": 0},
-    "datetime-formatting.sql": {"executions": 37, "served": 0, "batches": 0},
-    "datetime-formatting.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "datetime-legacy.sql": {"executions": 233, "served": 0, "batches": 0},
-    "datetime-legacy.sql_analyzer_test": {"executions": 23, "served": 0, "batches": 0},
-    "datetime-parsing-invalid.sql": {"executions": 34, "served": 0, "batches": 0},
-    "datetime-parsing-invalid.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "datetime-parsing-legacy.sql": {"executions": 33, "served": 0, "batches": 0},
-    "datetime-parsing-legacy.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "datetime-parsing.sql": {"executions": 32, "served": 0, "batches": 0},
-    "datetime-parsing.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "datetime-special.sql": {"executions": 4, "served": 0, "batches": 0},
-    "datetime-special.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "decimalArithmeticOperations.sql": {"executions": 60, "served": 0, "batches": 0},
-    "decimalArithmeticOperations.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "describe-part-after-analyze.sql": {"executions": 33, "served": 1, "batches": 2},
-    "describe-part-after-analyze.sql_analyzer_test": {"executions": 18, "served": 1, "batches": 2},
-    "describe-query.sql": {"executions": 32, "served": 0, "batches": 0},
-    "describe-query.sql_analyzer_test": {"executions": 16, "served": 0, "batches": 0},
-    "describe-table-after-alter-table.sql": {"executions": 24, "served": 0, "batches": 0},
-    "describe-table-after-alter-table.sql_analyzer_test": {"executions": 12, "served": 0, "batches": 0},
-    "describe.sql": {"executions": 127, "served": 0, "batches": 0},
-    "describe.sql_analyzer_test": {"executions": 66, "served": 0, "batches": 0},
-    "distinct-map-aggregates.sql": {"executions": 29, "served": 2, "batches": 4},
-    "distinct-map-aggregates.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "double-quoted-identifiers-enabled.sql": {"executions": 35, "served": 0, "batches": 0},
-    "double-quoted-identifiers-enabled.sql_analyzer_test": {"executions": 26, "served": 0, "batches": 0},
-    "double-quoted-identifiers.sql": {"executions": 20, "served": 0, "batches": 0},
-    "double-quoted-identifiers.sql_analyzer_test": {"executions": 12, "served": 0, "batches": 0},
-    "except-all.sql": {"executions": 35, "served": 1, "batches": 2},
-    "except-all.sql_analyzer_test": {"executions": 10, "served": 0, "batches": 0},
-    "except.sql": {"executions": 21, "served": 3, "batches": 8},
-    "except.sql_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "execute-immediate.sql": {"executions": 156, "served": 3, "batches": 3},
-    "execute-immediate.sql_analyzer_test": {"executions": 68, "served": 0, "batches": 0},
-    "explain-aqe.sql": {"executions": 66, "served": 0, "batches": 0},
-    "explain-aqe.sql_analyzer_test": {"executions": 34, "served": 0, "batches": 0},
-    "explain-cbo.sql": {"executions": 16, "served": 0, "batches": 0},
-    "explain-cbo.sql_analyzer_test": {"executions": 9, "served": 0, "batches": 0},
-    "explain.sql": {"executions": 67, "served": 0, "batches": 0},
-    "explain.sql_analyzer_test": {"executions": 35, "served": 0, "batches": 0},
-    "extract-value-nulltype-single-pass.sql": {"executions": 2, "served": 0, "batches": 0},
-    "extract-value-nulltype-single-pass.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "extract-value-resolution-edge-cases.sql": {"executions": 10, "served": 0, "batches": 0},
-    "extract-value-resolution-edge-cases.sql_analyzer_test": {"executions": 2, "served": 0, "batches": 0},
-    "extract.sql": {"executions": 130, "served": 0, "batches": 0},
-    "extract.sql_analyzer_test": {"executions": 12, "served": 0, "batches": 0},
-    "generators-resolution-edge-cases.sql": {"executions": 55, "served": 2, "batches": 4},
-    "generators-resolution-edge-cases.sql_analyzer_test": {"executions": 16, "served": 0, "batches": 0},
-    "generators.sql": {"executions": 62, "served": 0, "batches": 0},
-    "generators.sql_analyzer_test": {"executions": 31, "served": 0, "batches": 0},
-    "group-analytics.sql": {"executions": 207, "served": 7, "batches": 13},
-    "group-analytics.sql_analyzer_test": {"executions": 59, "served": 0, "batches": 0},
-    "group-by-alias.sql": {"executions": 38, "served": 1, "batches": 2},
-    "group-by-alias.sql_analyzer_test": {"executions": 11, "served": 0, "batches": 0},
-    "group-by-all-duckdb.sql": {"executions": 11, "served": 0, "batches": 0},
-    "group-by-all-duckdb.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "group-by-all-mosha.sql": {"executions": 12, "served": 2, "batches": 4},
-    "group-by-all-mosha.sql_analyzer_test": {"executions": 4, "served": 0, "batches": 0},
-    "group-by-all.sql": {"executions": 30, "served": 0, "batches": 0},
-    "group-by-all.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "group-by-filter.sql": {"executions": 432, "served": 10, "batches": 20},
-    "group-by-filter.sql_analyzer_test": {"executions": 62, "served": 0, "batches": 0},
-    "group-by-ordinal.sql": {"executions": 37, "served": 2, "batches": 4},
-    "group-by-ordinal.sql_analyzer_test": {"executions": 12, "served": 0, "batches": 0},
-    "group-by.sql": {"executions": 338, "served": 15, "batches": 24},
-    "group-by.sql_analyzer_test": {"executions": 80, "served": 0, "batches": 0},
-    "grouping_set.sql": {"executions": 47, "served": 3, "batches": 6},
-    "grouping_set.sql_analyzer_test": {"executions": 12, "served": 0, "batches": 0},
-    "grouping_set_grand_total_disabled.sql": {"executions": 9, "served": 0, "batches": 0},
-    "grouping_set_grand_total_disabled.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "having-and-order-by-recursive-type-name-resolution.sql": {"executions": 47, "served": 0, "batches": 0},
-    "having-and-order-by-recursive-type-name-resolution.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "having.sql": {"executions": 51, "served": 12, "batches": 18},
-    "having.sql_analyzer_test": {"executions": 2, "served": 0, "batches": 0},
-    "higher-order-functions.sql": {"executions": 260, "served": 0, "batches": 0},
-    "higher-order-functions.sql_analyzer_test": {"executions": 89, "served": 0, "batches": 0},
-    "hints.sql": {"executions": 52, "served": 0, "batches": 0},
-    "hints.sql_analyzer_test": {"executions": 9, "served": 0, "batches": 0},
-    "hll.sql": {"executions": 51, "served": 0, "batches": 0},
-    "hll.sql_analyzer_test": {"executions": 15, "served": 0, "batches": 0},
-    "identifier-clause-legacy.sql": {"executions": 589, "served": 3, "batches": 9},
-    "identifier-clause-legacy.sql_analyzer_test": {"executions": 311, "served": 0, "batches": 0},
-    "identifier-clause.sql": {"executions": 638, "served": 4, "batches": 15},
-    "identifier-clause.sql_analyzer_test": {"executions": 319, "served": 0, "batches": 0},
-    "ilike-all.sql": {"executions": 14, "served": 0, "batches": 0},
-    "ilike-all.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "ilike-any.sql": {"executions": 14, "served": 0, "batches": 0},
-    "ilike-any.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "ilike.sql": {"executions": 26, "served": 0, "batches": 0},
-    "ilike.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "inline-table.sql": {"executions": 25, "served": 0, "batches": 0},
-    "inline-table.sql_analyzer_test": {"executions": 4, "served": 0, "batches": 0},
-    "inner-join.sql": {"executions": 147, "served": 0, "batches": 0},
-    "inner-join.sql_analyzer_test": {"executions": 84, "served": 0, "batches": 0},
-    "intersect-all.sql": {"executions": 34, "served": 3, "batches": 18},
-    "intersect-all.sql_analyzer_test": {"executions": 10, "served": 0, "batches": 0},
-    "interval.sql": {"executions": 237, "served": 0, "batches": 0},
-    "interval.sql_analyzer_test": {"executions": 40, "served": 0, "batches": 0},
-    "join-asof-containers.sql": {"executions": 54, "served": 0, "batches": 0},
-    "join-asof-containers.sql_analyzer_test": {"executions": 27, "served": 0, "batches": 0},
-    "join-asof-context.sql": {"executions": 28, "served": 0, "batches": 0},
-    "join-asof-context.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "join-asof-corners.sql": {"executions": 26, "served": 0, "batches": 0},
-    "join-asof-corners.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "join-asof-crossfeature.sql": {"executions": 19, "served": 1, "batches": 1},
-    "join-asof-crossfeature.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "join-asof-datatypes.sql": {"executions": 40, "served": 0, "batches": 0},
-    "join-asof-datatypes.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "join-asof-errors.sql": {"executions": 30, "served": 0, "batches": 0},
-    "join-asof-errors.sql_analyzer_test": {"executions": 28, "served": 0, "batches": 0},
-    "join-asof-expressions.sql": {"executions": 17, "served": 0, "batches": 0},
-    "join-asof-expressions.sql_analyzer_test": {"executions": 7, "served": 0, "batches": 0},
-    "join-asof-gating.sql": {"executions": 1, "served": 0, "batches": 0},
-    "join-asof-gating.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "join-asof-grammar.sql": {"executions": 24, "served": 0, "batches": 0},
-    "join-asof-grammar.sql_analyzer_test": {"executions": 7, "served": 0, "batches": 0},
-    "join-asof-semantics.sql": {"executions": 40, "served": 0, "batches": 0},
-    "join-asof-semantics.sql_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "join-empty-relation.sql": {"executions": 27, "served": 0, "batches": 0},
-    "join-empty-relation.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "join-lateral.sql": {"executions": 168, "served": 9, "batches": 17},
-    "join-lateral.sql_analyzer_test": {"executions": 25, "served": 0, "batches": 0},
-    "join-nearest-by.sql": {"executions": 37, "served": 0, "batches": 0},
-    "join-nearest-by.sql_analyzer_test": {"executions": 13, "served": 0, "batches": 0},
-    "join-resolution-edge-cases.sql": {"executions": 19, "served": 0, "batches": 0},
-    "join-resolution-edge-cases.sql_analyzer_test": {"executions": 7, "served": 0, "batches": 0},
-    "json-functions.sql": {"executions": 212, "served": 0, "batches": 0},
-    "json-functions.sql_analyzer_test": {"executions": 29, "served": 0, "batches": 0},
-    "keywords-enforced.sql": {"executions": 3, "served": 0, "batches": 0},
-    "keywords-enforced.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "keywords.sql": {"executions": 2, "served": 0, "batches": 0},
-    "keywords.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "kllquantiles.sql": {"executions": 132, "served": 0, "batches": 0},
-    "kllquantiles.sql_analyzer_test": {"executions": 60, "served": 0, "batches": 0},
-    "like-all.sql": {"executions": 14, "served": 0, "batches": 0},
-    "like-all.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "like-any.sql": {"executions": 14, "served": 0, "batches": 0},
-    "like-any.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "limit.sql": {"executions": 14, "served": 1, "batches": 1},
-    "limit.sql_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "linear-regression.sql": {"executions": 43, "served": 15, "batches": 30},
-    "linear-regression.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "listagg-collations.sql": {"executions": 15, "served": 0, "batches": 0},
-    "listagg-collations.sql_analyzer_test": {"executions": 4, "served": 0, "batches": 0},
-    "listagg.sql": {"executions": 60, "served": 0, "batches": 0},
-    "listagg.sql_analyzer_test": {"executions": 15, "served": 0, "batches": 0},
-    "literals.sql": {"executions": 50, "served": 0, "batches": 0},
-    "literals.sql_analyzer_test": {"executions": 10, "served": 0, "batches": 0},
-    "map.sql": {"executions": 10, "served": 0, "batches": 0},
-    "map.sql_analyzer_test": {"executions": 2, "served": 0, "batches": 0},
-    "mask-functions.sql": {"executions": 57, "served": 0, "batches": 0},
-    "mask-functions.sql_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "math.sql": {"executions": 116, "served": 0, "batches": 0},
-    "math.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "max-min-by-k.sql": {"executions": 44, "served": 0, "batches": 0},
-    "max-min-by-k.sql_analyzer_test": {"executions": 15, "served": 0, "batches": 0},
-    "metadata_column_resolution.sql": {"executions": 67, "served": 0, "batches": 0},
-    "metadata_column_resolution.sql_analyzer_test": {"executions": 10, "served": 0, "batches": 0},
-    "misc-functions.sql": {"executions": 44, "served": 0, "batches": 0},
-    "misc-functions.sql_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "mode.sql": {"executions": 30, "served": 1, "batches": 2},
-    "mode.sql_analyzer_test": {"executions": 9, "served": 0, "batches": 0},
-    "name-precedence-in-order-by-and-having-with-conflicting-attributes.sql": {"executions": 50, "served": 3, "batches": 6},
-    "name-precedence-in-order-by-and-having-with-conflicting-attributes.sql_analyzer_test": {"executions": 14, "served": 0, "batches": 0},
-    "named-function-arguments.sql": {"executions": 36, "served": 0, "batches": 0},
-    "named-function-arguments.sql_analyzer_test": {"executions": 12, "served": 0, "batches": 0},
-    "named-window.sql": {"executions": 26, "served": 0, "batches": 0},
-    "named-window.sql_analyzer_test": {"executions": 7, "served": 0, "batches": 0},
-    "natural-join.sql": {"executions": 38, "served": 0, "batches": 0},
-    "natural-join.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "non-excludable-rule.sql": {"executions": 9, "served": 0, "batches": 0},
-    "non-excludable-rule.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "nonansi/array.sql": {"executions": 104, "served": 0, "batches": 0},
-    "nonansi/array.sql_analyzer_test": {"executions": 16, "served": 0, "batches": 0},
-    "nonansi/cast.sql": {"executions": 270, "served": 0, "batches": 0},
-    "nonansi/cast.sql_analyzer_test": {"executions": 10, "served": 0, "batches": 0},
-    "nonansi/conditional-functions.sql": {"executions": 21, "served": 0, "batches": 0},
-    "nonansi/conditional-functions.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "nonansi/date.sql": {"executions": 96, "served": 0, "batches": 0},
-    "nonansi/date.sql_analyzer_test": {"executions": 17, "served": 0, "batches": 0},
-    "nonansi/datetime-parsing-invalid.sql": {"executions": 34, "served": 0, "batches": 0},
-    "nonansi/datetime-parsing-invalid.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "nonansi/datetime-special.sql": {"executions": 4, "served": 0, "batches": 0},
-    "nonansi/datetime-special.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "nonansi/decimalArithmeticOperations.sql": {"executions": 60, "served": 0, "batches": 0},
-    "nonansi/decimalArithmeticOperations.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "nonansi/double-quoted-identifiers.sql": {"executions": 20, "served": 0, "batches": 0},
-    "nonansi/double-quoted-identifiers.sql_analyzer_test": {"executions": 12, "served": 0, "batches": 0},
-    "nonansi/higher-order-functions.sql": {"executions": 85, "served": 0, "batches": 0},
-    "nonansi/higher-order-functions.sql_analyzer_test": {"executions": 28, "served": 0, "batches": 0},
-    "nonansi/interval.sql": {"executions": 237, "served": 0, "batches": 0},
-    "nonansi/interval.sql_analyzer_test": {"executions": 40, "served": 0, "batches": 0},
-    "nonansi/keywords.sql": {"executions": 2, "served": 0, "batches": 0},
-    "nonansi/keywords.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "nonansi/literals.sql": {"executions": 50, "served": 0, "batches": 0},
-    "nonansi/literals.sql_analyzer_test": {"executions": 10, "served": 0, "batches": 0},
-    "nonansi/map.sql": {"executions": 10, "served": 0, "batches": 0},
-    "nonansi/map.sql_analyzer_test": {"executions": 2, "served": 0, "batches": 0},
-    "nonansi/math.sql": {"executions": 116, "served": 0, "batches": 0},
-    "nonansi/math.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "nonansi/parse-schema-string.sql": {"executions": 4, "served": 0, "batches": 0},
-    "nonansi/parse-schema-string.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "nonansi/string-functions.sql": {"executions": 310, "served": 0, "batches": 0},
-    "nonansi/string-functions.sql_analyzer_test": {"executions": 17, "served": 0, "batches": 0},
-    "nonansi/timestamp.sql": {"executions": 136, "served": 0, "batches": 0},
-    "nonansi/timestamp.sql_analyzer_test": {"executions": 15, "served": 0, "batches": 0},
-    "nonansi/try_aggregates.sql": {"executions": 32, "served": 0, "batches": 0},
-    "nonansi/try_aggregates.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "nonansi/try_arithmetic.sql": {"executions": 86, "served": 0, "batches": 0},
-    "nonansi/try_arithmetic.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "nonansi/try_datetime_functions.sql": {"executions": 11, "served": 0, "batches": 0},
-    "nonansi/try_datetime_functions.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "nonansi/try_element_at.sql": {"executions": 10, "served": 0, "batches": 0},
-    "nonansi/try_element_at.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "null-handling.sql": {"executions": 40, "served": 18, "batches": 122},
-    "null-handling.sql_analyzer_test": {"executions": 9, "served": 0, "batches": 0},
-    "null-propagation.sql": {"executions": 4, "served": 0, "batches": 0},
-    "null-propagation.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "operators.sql": {"executions": 77, "served": 4, "batches": 8},
-    "operators.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "order-by-alias.sql": {"executions": 19, "served": 0, "batches": 0},
-    "order-by-alias.sql_analyzer_test": {"executions": 4, "served": 0, "batches": 0},
-    "order-by-all.sql": {"executions": 19, "served": 0, "batches": 0},
-    "order-by-all.sql_analyzer_test": {"executions": 2, "served": 0, "batches": 0},
-    "order-by-and-having-on-top-of-aggregate-with-join.sql": {"executions": 154, "served": 14, "batches": 56},
-    "order-by-and-having-on-top-of-aggregate-with-join.sql_analyzer_test": {"executions": 78, "served": 0, "batches": 0},
-    "order-by-nulls-ordering.sql": {"executions": 74, "served": 12, "batches": 24},
-    "order-by-nulls-ordering.sql_analyzer_test": {"executions": 23, "served": 0, "batches": 0},
-    "order-by-ordinal.sql": {"executions": 32, "served": 1, "batches": 4},
-    "order-by-ordinal.sql_analyzer_test": {"executions": 17, "served": 0, "batches": 0},
-    "order-by.sql": {"executions": 39, "served": 3, "batches": 6},
-    "order-by.sql_analyzer_test": {"executions": 13, "served": 0, "batches": 0},
-    "outer-join.sql": {"executions": 120, "served": 0, "batches": 0},
-    "outer-join.sql_analyzer_test": {"executions": 66, "served": 0, "batches": 0},
-    "parameterless-function-name-precedence-legacy.sql": {"executions": 23, "served": 0, "batches": 0},
-    "parameterless-function-name-precedence-legacy.sql_analyzer_test": {"executions": 7, "served": 0, "batches": 0},
-    "parameterless-function-name-precedence.sql": {"executions": 22, "served": 0, "batches": 0},
-    "parameterless-function-name-precedence.sql_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "parse-query-correctness-old-behavior.sql": {"executions": 97, "served": 0, "batches": 0},
-    "parse-query-correctness-old-behavior.sql_analyzer_test": {"executions": 45, "served": 0, "batches": 0},
-    "parse-query-correctness.sql": {"executions": 96, "served": 0, "batches": 0},
-    "parse-query-correctness.sql_analyzer_test": {"executions": 35, "served": 0, "batches": 0},
-    "parse-schema-string.sql": {"executions": 4, "served": 0, "batches": 0},
-    "parse-schema-string.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "parse-sql-gating.sql": {"executions": 2, "served": 0, "batches": 0},
-    "parse-sql-gating.sql_analyzer_test": {"executions": 2, "served": 0, "batches": 0},
-    "parse-sql.sql": {"executions": 53, "served": 0, "batches": 0},
-    "parse-sql.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "percentiles.sql": {"executions": 62, "served": 1, "batches": 2},
-    "percentiles.sql_analyzer_test": {"executions": 31, "served": 0, "batches": 0},
-    "pipe-operators.sql": {"executions": 388, "served": 25, "batches": 50},
-    "pipe-operators.sql_analyzer_test": {"executions": 85, "served": 0, "batches": 0},
-    "pivot.sql": {"executions": 37, "served": 0, "batches": 0},
-    "pivot.sql_analyzer_test": {"executions": 12, "served": 0, "batches": 0},
-    "postgreSQL/aggregates_part1.sql": {"executions": 182, "served": 3, "batches": 3},
-    "postgreSQL/aggregates_part1.sql_analyzer_test": {"executions": 17, "served": 0, "batches": 0},
-    "postgreSQL/aggregates_part2.sql": {"executions": 101, "served": 15, "batches": 23},
-    "postgreSQL/aggregates_part2.sql_analyzer_test": {"executions": 14, "served": 0, "batches": 0},
-    "postgreSQL/aggregates_part3.sql": {"executions": 20, "served": 0, "batches": 0},
-    "postgreSQL/aggregates_part3.sql_analyzer_test": {"executions": 8, "served": 0, "batches": 0},
-    "postgreSQL/aggregates_part4.sql": {"executions": 17, "served": 0, "batches": 0},
-    "postgreSQL/aggregates_part4.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "postgreSQL/boolean.sql": {"executions": 112, "served": 0, "batches": 0},
-    "postgreSQL/boolean.sql_analyzer_test": {"executions": 21, "served": 0, "batches": 0},
-    "postgreSQL/case.sql": {"executions": 49, "served": 0, "batches": 0},
-    "postgreSQL/case.sql_analyzer_test": {"executions": 14, "served": 0, "batches": 0},
-    "postgreSQL/comments.sql": {"executions": 6, "served": 0, "batches": 0},
-    "postgreSQL/comments.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "postgreSQL/create_view.sql": {"executions": 368, "served": 2, "batches": 5},
-    "postgreSQL/create_view.sql_analyzer_test": {"executions": 191, "served": 0, "batches": 0},
-    "postgreSQL/date.sql": {"executions": 65, "served": 2, "batches": 12},
-    "postgreSQL/date.sql_analyzer_test": {"executions": 17, "served": 0, "batches": 0},
-    "postgreSQL/float4.sql": {"executions": 50, "served": 0, "batches": 0},
-    "postgreSQL/float4.sql_analyzer_test": {"executions": 7, "served": 0, "batches": 0},
-    "postgreSQL/float8.sql": {"executions": 109, "served": 0, "batches": 0},
-    "postgreSQL/float8.sql_analyzer_test": {"executions": 14, "served": 0, "batches": 0},
-    "postgreSQL/groupingsets.sql": {"executions": 70, "served": 3, "batches": 6},
-    "postgreSQL/groupingsets.sql_analyzer_test": {"executions": 15, "served": 0, "batches": 0},
-    "postgreSQL/insert.sql": {"executions": 16, "served": 0, "batches": 0},
-    "postgreSQL/insert.sql_analyzer_test": {"executions": 7, "served": 0, "batches": 0},
-    "postgreSQL/int2.sql": {"executions": 42, "served": 0, "batches": 0},
-    "postgreSQL/int2.sql_analyzer_test": {"executions": 7, "served": 0, "batches": 0},
-    "postgreSQL/int4.sql": {"executions": 60, "served": 24, "batches": 92},
-    "postgreSQL/int4.sql_analyzer_test": {"executions": 7, "served": 0, "batches": 0},
-    "postgreSQL/int8.sql": {"executions": 98, "served": 30, "batches": 88},
-    "postgreSQL/int8.sql_analyzer_test": {"executions": 8, "served": 0, "batches": 0},
-    "postgreSQL/interval.sql": {"executions": 14, "served": 0, "batches": 0},
-    "postgreSQL/interval.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "postgreSQL/join.sql": {"executions": 2514, "served": 441, "batches": 1625},
-    "postgreSQL/join.sql_analyzer_test": {"executions": 813, "served": 0, "batches": 0},
-    "postgreSQL/limit.sql": {"executions": 15, "served": 6, "batches": 6},
-    "postgreSQL/limit.sql_analyzer_test": {"executions": 4, "served": 0, "batches": 0},
-    "postgreSQL/numeric.sql": {"executions": 1124, "served": 11, "batches": 735},
-    "postgreSQL/numeric.sql_analyzer_test": {"executions": 522, "served": 0, "batches": 0},
-    "postgreSQL/select.sql": {"executions": 43, "served": 20, "batches": 32},
-    "postgreSQL/select.sql_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "postgreSQL/select_distinct.sql": {"executions": 21, "served": 0, "batches": 0},
-    "postgreSQL/select_distinct.sql_analyzer_test": {"executions": 2, "served": 0, "batches": 0},
-    "postgreSQL/select_having.sql": {"executions": 34, "served": 1, "batches": 3},
-    "postgreSQL/select_having.sql_analyzer_test": {"executions": 14, "served": 0, "batches": 0},
-    "postgreSQL/select_implicit.sql": {"executions": 50, "served": 3, "batches": 60},
-    "postgreSQL/select_implicit.sql_analyzer_test": {"executions": 18, "served": 0, "batches": 0},
-    "postgreSQL/strings.sql": {"executions": 130, "served": 0, "batches": 0},
-    "postgreSQL/strings.sql_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "postgreSQL/text.sql": {"executions": 46, "served": 0, "batches": 0},
-    "postgreSQL/text.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "postgreSQL/timestamp.sql": {"executions": 45, "served": 0, "batches": 0},
-    "postgreSQL/timestamp.sql_analyzer_test": {"executions": 15, "served": 0, "batches": 0},
-    "postgreSQL/union.sql": {"executions": 75, "served": 4, "batches": 10},
-    "postgreSQL/union.sql_analyzer_test": {"executions": 4, "served": 0, "batches": 0},
-    "postgreSQL/window_part1.sql": {"executions": 152, "served": 78, "batches": 96},
-    "postgreSQL/window_part1.sql_analyzer_test": {"executions": 23, "served": 0, "batches": 0},
-    "postgreSQL/window_part2.sql": {"executions": 113, "served": 9, "batches": 15},
-    "postgreSQL/window_part2.sql_analyzer_test": {"executions": 23, "served": 0, "batches": 0},
-    "postgreSQL/window_part3.sql": {"executions": 116, "served": 9, "batches": 18},
-    "postgreSQL/window_part3.sql_analyzer_test": {"executions": 62, "served": 0, "batches": 0},
-    "postgreSQL/window_part4.sql": {"executions": 119, "served": 0, "batches": 0},
-    "postgreSQL/window_part4.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "postgreSQL/with.sql": {"executions": 1069, "served": 56, "batches": 192},
-    "postgreSQL/with.sql_analyzer_test": {"executions": 64, "served": 0, "batches": 0},
-    "pred-pushdown.sql": {"executions": 6, "served": 0, "batches": 0},
-    "pred-pushdown.sql_analyzer_test": {"executions": 2, "served": 0, "batches": 0},
-    "predicate-functions.sql": {"executions": 95, "served": 0, "batches": 0},
-    "predicate-functions.sql_analyzer_test": {"executions": 2, "served": 0, "batches": 0},
-    "qualify.sql": {"executions": 11, "served": 0, "batches": 0},
-    "qualify.sql_analyzer_test": {"executions": 4, "served": 0, "batches": 0},
-    "query_regex_column.sql": {"executions": 40, "served": 12, "batches": 20},
-    "query_regex_column.sql_analyzer_test": {"executions": 14, "served": 0, "batches": 0},
-    "random.sql": {"executions": 74, "served": 0, "batches": 0},
-    "random.sql_analyzer_test": {"executions": 19, "served": 0, "batches": 0},
-    "regexp-functions.sql": {"executions": 69, "served": 0, "batches": 0},
-    "regexp-functions.sql_analyzer_test": {"executions": 2, "served": 0, "batches": 0},
-    "replacing-missing-expression-with-alias.sql": {"executions": 36, "served": 18, "batches": 20},
-    "replacing-missing-expression-with-alias.sql_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "runtime-replaceable-edge-cases.sql": {"executions": 0, "served": 0, "batches": 0},
-    "runtime-replaceable-edge-cases.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "scripting/randomly_generated_scripts.sql": {"executions": 1837, "served": 62, "batches": 242},
-    "scripting/randomly_generated_scripts.sql_analyzer_test": {"executions": 1712, "served": 62, "batches": 242},
-    "selectExcept.sql": {"executions": 45, "served": 1, "batches": 1},
-    "selectExcept.sql_analyzer_test": {"executions": 9, "served": 0, "batches": 0},
-    "session-variable-precedence.sql": {"executions": 16, "served": 0, "batches": 0},
-    "session-variable-precedence.sql_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "set-operations-unsupported-types.sql": {"executions": 15, "served": 0, "batches": 0},
-    "set-operations-unsupported-types.sql_analyzer_test": {"executions": 13, "served": 0, "batches": 0},
-    "show-create-table.sql": {"executions": 101, "served": 0, "batches": 0},
-    "show-create-table.sql_analyzer_test": {"executions": 51, "served": 0, "batches": 0},
-    "show-tables.sql": {"executions": 46, "served": 0, "batches": 0},
-    "show-tables.sql_analyzer_test": {"executions": 25, "served": 0, "batches": 0},
-    "show-tblproperties.sql": {"executions": 26, "served": 0, "batches": 0},
-    "show-tblproperties.sql_analyzer_test": {"executions": 13, "served": 0, "batches": 0},
-    "show-views.sql": {"executions": 39, "served": 0, "batches": 0},
-    "show-views.sql_analyzer_test": {"executions": 20, "served": 0, "batches": 0},
-    "show_columns.sql": {"executions": 45, "served": 0, "batches": 0},
-    "show_columns.sql_analyzer_test": {"executions": 25, "served": 0, "batches": 0},
-    "sql-compatibility-functions.sql": {"executions": 16, "served": 0, "batches": 0},
-    "sql-compatibility-functions.sql_analyzer_test": {"executions": 2, "served": 0, "batches": 0},
-    "sql-on-files.sql": {"executions": 39, "served": 0, "batches": 0},
-    "sql-on-files.sql_analyzer_test": {"executions": 25, "served": 0, "batches": 0},
-    "sql-path.sql": {"executions": 245, "served": 0, "batches": 0},
-    "sql-path.sql_analyzer_test": {"executions": 118, "served": 0, "batches": 0},
-    "sql-session-variables.sql": {"executions": 455, "served": 3, "batches": 3},
-    "sql-session-variables.sql_analyzer_test": {"executions": 215, "served": 0, "batches": 0},
-    "sql-udf-name-precedence-legacy.sql": {"executions": 69, "served": 0, "batches": 0},
-    "sql-udf-name-precedence-legacy.sql_analyzer_test": {"executions": 29, "served": 0, "batches": 0},
-    "sql-udf-name-precedence.sql": {"executions": 66, "served": 0, "batches": 0},
-    "sql-udf-name-precedence.sql_analyzer_test": {"executions": 29, "served": 0, "batches": 0},
-    "sql-udf.sql": {"executions": 861, "served": 7, "batches": 15},
-    "sql-udf.sql_analyzer_test": {"executions": 370, "served": 0, "batches": 0},
-    "st-functions.sql": {"executions": 104, "served": 0, "batches": 0},
-    "st-functions.sql_analyzer_test": {"executions": 10, "served": 0, "batches": 0},
-    "string-functions.sql": {"executions": 310, "served": 0, "batches": 0},
-    "string-functions.sql_analyzer_test": {"executions": 17, "served": 0, "batches": 0},
-    "struct.sql": {"executions": 15, "served": 0, "batches": 0},
-    "struct.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "subexp-elimination.sql": {"executions": 128, "served": 0, "batches": 0},
-    "subexp-elimination.sql_analyzer_test": {"executions": 48, "served": 0, "batches": 0},
-    "subquery/exists-subquery/exists-aggregate.sql": {"executions": 68, "served": 3, "batches": 6},
-    "subquery/exists-subquery/exists-aggregate.sql_analyzer_test": {"executions": 14, "served": 0, "batches": 0},
-    "subquery/exists-subquery/exists-basic.sql": {"executions": 16, "served": 3, "batches": 5},
-    "subquery/exists-subquery/exists-basic.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "subquery/exists-subquery/exists-count-bug.sql": {"executions": 23, "served": 0, "batches": 0},
-    "subquery/exists-subquery/exists-count-bug.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "subquery/exists-subquery/exists-cte.sql": {"executions": 11, "served": 3, "batches": 7},
-    "subquery/exists-subquery/exists-cte.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "subquery/exists-subquery/exists-having.sql": {"executions": 11, "served": 0, "batches": 0},
-    "subquery/exists-subquery/exists-having.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "subquery/exists-subquery/exists-in-join-condition.sql": {"executions": 52, "served": 0, "batches": 0},
-    "subquery/exists-subquery/exists-in-join-condition.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "subquery/exists-subquery/exists-joins-and-set-ops.sql": {"executions": 282, "served": 162, "batches": 495},
-    "subquery/exists-subquery/exists-joins-and-set-ops.sql_analyzer_test": {"executions": 57, "served": 0, "batches": 0},
-    "subquery/exists-subquery/exists-orderby-limit.sql": {"executions": 104, "served": 18, "batches": 36},
-    "subquery/exists-subquery/exists-orderby-limit.sql_analyzer_test": {"executions": 14, "served": 0, "batches": 0},
-    "subquery/exists-subquery/exists-outside-filter.sql": {"executions": 18, "served": 4, "batches": 5},
-    "subquery/exists-subquery/exists-outside-filter.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "subquery/exists-subquery/exists-within-and-or.sql": {"executions": 11, "served": 1, "batches": 2},
-    "subquery/exists-subquery/exists-within-and-or.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-basic.sql": {"executions": 22, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-basic.sql_analyzer_test": {"executions": 10, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-count-bug.sql": {"executions": 26, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-count-bug.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-group-by.sql": {"executions": 95, "served": 9, "batches": 24},
-    "subquery/in-subquery/in-group-by.sql_analyzer_test": {"executions": 14, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-having.sql": {"executions": 32, "served": 16, "batches": 44},
-    "subquery/in-subquery/in-having.sql_analyzer_test": {"executions": 8, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-joins.sql": {"executions": 942, "served": 54, "batches": 216},
-    "subquery/in-subquery/in-joins.sql_analyzer_test": {"executions": 276, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-limit.sql": {"executions": 88, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-limit.sql_analyzer_test": {"executions": 12, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-multiple-columns.sql": {"executions": 24, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-multiple-columns.sql_analyzer_test": {"executions": 8, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-null-semantics.sql": {"executions": 50, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-null-semantics.sql_analyzer_test": {"executions": 16, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-nullability.sql": {"executions": 12, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-nullability.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-order-by.sql": {"executions": 148, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-order-by.sql_analyzer_test": {"executions": 40, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-set-operations.sql": {"executions": 32, "served": 20, "batches": 82},
-    "subquery/in-subquery/in-set-operations.sql_analyzer_test": {"executions": 4, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-subquery-in-join-condition.sql": {"executions": 48, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-subquery-in-join-condition.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "subquery/in-subquery/in-with-cte.sql": {"executions": 34, "served": 14, "batches": 114},
-    "subquery/in-subquery/in-with-cte.sql_analyzer_test": {"executions": 8, "served": 0, "batches": 0},
-    "subquery/in-subquery/nested-not-in.sql": {"executions": 56, "served": 13, "batches": 23},
-    "subquery/in-subquery/nested-not-in.sql_analyzer_test": {"executions": 14, "served": 0, "batches": 0},
-    "subquery/in-subquery/not-in-group-by.sql": {"executions": 38, "served": 3, "batches": 6},
-    "subquery/in-subquery/not-in-group-by.sql_analyzer_test": {"executions": 14, "served": 0, "batches": 0},
-    "subquery/in-subquery/not-in-joins.sql": {"executions": 26, "served": 12, "batches": 48},
-    "subquery/in-subquery/not-in-joins.sql_analyzer_test": {"executions": 8, "served": 0, "batches": 0},
-    "subquery/in-subquery/not-in-unit-tests-multi-column-literal.sql": {"executions": 12, "served": 0, "batches": 0},
-    "subquery/in-subquery/not-in-unit-tests-multi-column-literal.sql_analyzer_test": {"executions": 4, "served": 0, "batches": 0},
-    "subquery/in-subquery/not-in-unit-tests-multi-column.sql": {"executions": 24, "served": 12, "batches": 24},
-    "subquery/in-subquery/not-in-unit-tests-multi-column.sql_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "subquery/in-subquery/not-in-unit-tests-single-column-literal.sql": {"executions": 14, "served": 4, "batches": 4},
-    "subquery/in-subquery/not-in-unit-tests-single-column-literal.sql_analyzer_test": {"executions": 4, "served": 0, "batches": 0},
-    "subquery/in-subquery/not-in-unit-tests-single-column.sql": {"executions": 26, "served": 0, "batches": 0},
-    "subquery/in-subquery/not-in-unit-tests-single-column.sql_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "subquery/in-subquery/simple-in.sql": {"executions": 40, "served": 4, "batches": 8},
-    "subquery/in-subquery/simple-in.sql_analyzer_test": {"executions": 12, "served": 0, "batches": 0},
-    "subquery/negative-cases/invalid-correlation.sql": {"executions": 14, "served": 0, "batches": 0},
-    "subquery/negative-cases/invalid-correlation.sql_analyzer_test": {"executions": 10, "served": 0, "batches": 0},
-    "subquery/negative-cases/subq-input-typecheck.sql": {"executions": 15, "served": 0, "batches": 0},
-    "subquery/negative-cases/subq-input-typecheck.sql_analyzer_test": {"executions": 10, "served": 0, "batches": 0},
-    "subquery/resolution-edge-cases.sql": {"executions": 19, "served": 0, "batches": 0},
-    "subquery/resolution-edge-cases.sql_analyzer_test": {"executions": 8, "served": 0, "batches": 0},
-    "subquery/scalar-subquery/nested-scalar-subquery-count-bug.sql": {"executions": 24, "served": 0, "batches": 0},
-    "subquery/scalar-subquery/nested-scalar-subquery-count-bug.sql_analyzer_test": {"executions": 10, "served": 0, "batches": 0},
-    "subquery/scalar-subquery/scalar-subquery-count-bug.sql": {"executions": 54, "served": 20, "batches": 42},
-    "subquery/scalar-subquery/scalar-subquery-count-bug.sql_analyzer_test": {"executions": 12, "served": 0, "batches": 0},
-    "subquery/scalar-subquery/scalar-subquery-group-by.sql": {"executions": 32, "served": 0, "batches": 0},
-    "subquery/scalar-subquery/scalar-subquery-group-by.sql_analyzer_test": {"executions": 14, "served": 0, "batches": 0},
-    "subquery/scalar-subquery/scalar-subquery-predicate.sql": {"executions": 68, "served": 18, "batches": 72},
-    "subquery/scalar-subquery/scalar-subquery-predicate.sql_analyzer_test": {"executions": 9, "served": 0, "batches": 0},
-    "subquery/scalar-subquery/scalar-subquery-select.sql": {"executions": 60, "served": 3, "batches": 8},
-    "subquery/scalar-subquery/scalar-subquery-select.sql_analyzer_test": {"executions": 11, "served": 0, "batches": 0},
-    "subquery/scalar-subquery/scalar-subquery-set-op.sql": {"executions": 62, "served": 0, "batches": 0},
-    "subquery/scalar-subquery/scalar-subquery-set-op.sql_analyzer_test": {"executions": 9, "served": 0, "batches": 0},
-    "subquery/subquery-in-from.sql": {"executions": 6, "served": 6, "batches": 6},
-    "subquery/subquery-in-from.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "subquery/subquery-nested-data.sql": {"executions": 40, "served": 0, "batches": 0},
-    "subquery/subquery-nested-data.sql_analyzer_test": {"executions": 11, "served": 0, "batches": 0},
-    "subquery/subquery-offset.sql": {"executions": 32, "served": 4, "batches": 12},
-    "subquery/subquery-offset.sql_analyzer_test": {"executions": 10, "served": 0, "batches": 0},
-    "table-aliases.sql": {"executions": 19, "served": 2, "batches": 3},
-    "table-aliases.sql_analyzer_test": {"executions": 8, "served": 0, "batches": 0},
-    "table-valued-functions.sql": {"executions": 73, "served": 0, "batches": 0},
-    "table-valued-functions.sql_analyzer_test": {"executions": 28, "served": 0, "batches": 0},
-    "tablesample-negative.sql": {"executions": 9, "served": 0, "batches": 0},
-    "tablesample-negative.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "thetasketch.sql": {"executions": 152, "served": 0, "batches": 0},
-    "thetasketch.sql_analyzer_test": {"executions": 42, "served": 0, "batches": 0},
-    "time-bucket.sql": {"executions": 88, "served": 0, "batches": 0},
-    "time-bucket.sql_analyzer_test": {"executions": 30, "served": 0, "batches": 0},
-    "time-window.sql": {"executions": 97, "served": 0, "batches": 0},
-    "time-window.sql_analyzer_test": {"executions": 34, "served": 0, "batches": 0},
-    "time.sql": {"executions": 313, "served": 0, "batches": 0},
-    "time.sql_analyzer_test": {"executions": 15, "served": 0, "batches": 0},
-    "timestamp-ltz-nanos.sql": {"executions": 209, "served": 0, "batches": 0},
-    "timestamp-ltz-nanos.sql_analyzer_test": {"executions": 9, "served": 0, "batches": 0},
-    "timestamp-ltz.sql": {"executions": 24, "served": 0, "batches": 0},
-    "timestamp-ltz.sql_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "timestamp-ntz-nanos.sql": {"executions": 199, "served": 0, "batches": 0},
-    "timestamp-ntz-nanos.sql_analyzer_test": {"executions": 7, "served": 0, "batches": 0},
-    "timestamp-ntz.sql": {"executions": 40, "served": 0, "batches": 0},
-    "timestamp-ntz.sql_analyzer_test": {"executions": 11, "served": 0, "batches": 0},
-    "timestamp.sql": {"executions": 136, "served": 0, "batches": 0},
-    "timestamp.sql_analyzer_test": {"executions": 11, "served": 0, "batches": 0},
-    "timestampNTZ/datetime-special-ansi.sql": {"executions": 5, "served": 0, "batches": 0},
-    "timestampNTZ/datetime-special-ansi.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "timestampNTZ/datetime-special.sql": {"executions": 5, "served": 0, "batches": 0},
-    "timestampNTZ/datetime-special.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "timestampNTZ/timestamp-ansi.sql": {"executions": 137, "served": 0, "batches": 0},
-    "timestampNTZ/timestamp-ansi.sql_analyzer_test": {"executions": 12, "served": 0, "batches": 0},
-    "timestampNTZ/timestamp.sql": {"executions": 137, "served": 0, "batches": 0},
-    "timestampNTZ/timestamp.sql_analyzer_test": {"executions": 16, "served": 0, "batches": 0},
-    "timezone.sql": {"executions": 16, "served": 0, "batches": 0},
-    "timezone.sql_analyzer_test": {"executions": 8, "served": 0, "batches": 0},
-    "to_from_avro.sql": {"executions": 16, "served": 0, "batches": 0},
-    "to_from_avro.sql_analyzer_test": {"executions": 11, "served": 0, "batches": 0},
-    "transform.sql": {"executions": 51, "served": 12, "batches": 25},
-    "transform.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "try-string-functions.sql": {"executions": 35, "served": 0, "batches": 0},
-    "try-string-functions.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "try_aggregates.sql": {"executions": 32, "served": 0, "batches": 0},
-    "try_aggregates.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "try_arithmetic.sql": {"executions": 86, "served": 0, "batches": 0},
-    "try_arithmetic.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "try_cast.sql": {"executions": 33, "served": 0, "batches": 0},
-    "try_cast.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "try_datetime_functions.sql": {"executions": 11, "served": 0, "batches": 0},
-    "try_datetime_functions.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "try_element_at.sql": {"executions": 10, "served": 0, "batches": 0},
-    "try_element_at.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "try_reflect.sql": {"executions": 12, "served": 0, "batches": 0},
-    "try_reflect.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "tuplesketch.sql": {"executions": 340, "served": 0, "batches": 0},
-    "tuplesketch.sql_analyzer_test": {"executions": 61, "served": 0, "batches": 0},
-    "type-coercion-edge-cases.sql": {"executions": 7, "served": 0, "batches": 0},
-    "type-coercion-edge-cases.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "typeCoercion/native/arrayJoin.sql": {"executions": 11, "served": 0, "batches": 0},
-    "typeCoercion/native/arrayJoin.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "typeCoercion/native/binaryComparison.sql": {"executions": 266, "served": 0, "batches": 0},
-    "typeCoercion/native/binaryComparison.sql_analyzer_test": {"executions": 25, "served": 0, "batches": 0},
-    "typeCoercion/native/booleanEquality.sql": {"executions": 98, "served": 0, "batches": 0},
-    "typeCoercion/native/booleanEquality.sql_analyzer_test": {"executions": 81, "served": 0, "batches": 0},
-    "typeCoercion/native/caseWhenCoercion.sql": {"executions": 146, "served": 0, "batches": 0},
-    "typeCoercion/native/caseWhenCoercion.sql_analyzer_test": {"executions": 67, "served": 0, "batches": 0},
-    "typeCoercion/native/concat.sql": {"executions": 17, "served": 0, "batches": 0},
-    "typeCoercion/native/concat.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "typeCoercion/native/dateTimeOperations.sql": {"executions": 45, "served": 0, "batches": 0},
-    "typeCoercion/native/dateTimeOperations.sql_analyzer_test": {"executions": 28, "served": 0, "batches": 0},
-    "typeCoercion/native/decimalPrecision.sql": {"executions": 1146, "served": 0, "batches": 0},
-    "typeCoercion/native/decimalPrecision.sql_analyzer_test": {"executions": 365, "served": 0, "batches": 0},
-    "typeCoercion/native/division.sql": {"executions": 146, "served": 0, "batches": 0},
-    "typeCoercion/native/division.sql_analyzer_test": {"executions": 82, "served": 0, "batches": 0},
-    "typeCoercion/native/elt.sql": {"executions": 8, "served": 0, "batches": 0},
-    "typeCoercion/native/elt.sql_analyzer_test": {"executions": 2, "served": 0, "batches": 0},
-    "typeCoercion/native/ifCoercion.sql": {"executions": 146, "served": 0, "batches": 0},
-    "typeCoercion/native/ifCoercion.sql_analyzer_test": {"executions": 67, "served": 0, "batches": 0},
-    "typeCoercion/native/implicitTypeCasts.sql": {"executions": 48, "served": 0, "batches": 0},
-    "typeCoercion/native/implicitTypeCasts.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "typeCoercion/native/inConversion.sql": {"executions": 290, "served": 0, "batches": 0},
-    "typeCoercion/native/inConversion.sql_analyzer_test": {"executions": 133, "served": 0, "batches": 0},
-    "typeCoercion/native/mapZipWith.sql": {"executions": 20, "served": 0, "batches": 0},
-    "typeCoercion/native/mapZipWith.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "typeCoercion/native/mapconcat.sql": {"executions": 9, "served": 0, "batches": 0},
-    "typeCoercion/native/mapconcat.sql_analyzer_test": {"executions": 7, "served": 0, "batches": 0},
-    "typeCoercion/native/promoteStrings.sql": {"executions": 317, "served": 0, "batches": 0},
-    "typeCoercion/native/promoteStrings.sql_analyzer_test": {"executions": 51, "served": 0, "batches": 0},
-    "typeCoercion/native/stringCastAndExpressions.sql": {"executions": 33, "served": 0, "batches": 0},
-    "typeCoercion/native/stringCastAndExpressions.sql_analyzer_test": {"executions": 4, "served": 0, "batches": 0},
-    "typeCoercion/native/widenSetOperationTypes.sql": {"executions": 146, "served": 0, "batches": 0},
-    "typeCoercion/native/widenSetOperationTypes.sql_analyzer_test": {"executions": 67, "served": 0, "batches": 0},
-    "typeCoercion/native/windowFrameCoercion.sql": {"executions": 26, "served": 0, "batches": 0},
-    "typeCoercion/native/windowFrameCoercion.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-aggregates_part1.sql - Regular Python UDF": {"executions": 58, "served": 1, "batches": 1},
-    "udf/postgreSQL/udf-aggregates_part1.sql - Regular Python UDF_analyzer_test": {"executions": 4, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-aggregates_part1.sql - Scala UDF": {"executions": 58, "served": 1, "batches": 1},
-    "udf/postgreSQL/udf-aggregates_part1.sql - Scala UDF_analyzer_test": {"executions": 4, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-aggregates_part2.sql - Regular Python UDF": {"executions": 28, "served": 2, "batches": 4},
-    "udf/postgreSQL/udf-aggregates_part2.sql - Regular Python UDF_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-aggregates_part2.sql - Scala UDF": {"executions": 28, "served": 2, "batches": 4},
-    "udf/postgreSQL/udf-aggregates_part2.sql - Scala UDF_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-aggregates_part3.sql - Regular Python UDF": {"executions": 2, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-aggregates_part3.sql - Regular Python UDF_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-aggregates_part3.sql - Scala UDF": {"executions": 2, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-aggregates_part3.sql - Scala UDF_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-aggregates_part4.sql - Regular Python UDF": {"executions": 4, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-aggregates_part4.sql - Regular Python UDF_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-aggregates_part4.sql - Scala UDF": {"executions": 4, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-aggregates_part4.sql - Scala UDF_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-case.sql - Regular Python UDF": {"executions": 48, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-case.sql - Regular Python UDF_analyzer_test": {"executions": 14, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-case.sql - Scala UDF": {"executions": 48, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-case.sql - Scala UDF_analyzer_test": {"executions": 14, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-join.sql - Regular Python UDF": {"executions": 279, "served": 24, "batches": 191},
-    "udf/postgreSQL/udf-join.sql - Regular Python UDF_analyzer_test": {"executions": 92, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-join.sql - Scala UDF": {"executions": 279, "served": 24, "batches": 186},
-    "udf/postgreSQL/udf-join.sql - Scala UDF_analyzer_test": {"executions": 92, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-select_having.sql - Regular Python UDF": {"executions": 34, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-select_having.sql - Regular Python UDF_analyzer_test": {"executions": 14, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-select_having.sql - Scala UDF": {"executions": 34, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-select_having.sql - Scala UDF_analyzer_test": {"executions": 14, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-select_implicit.sql - Regular Python UDF": {"executions": 50, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-select_implicit.sql - Regular Python UDF_analyzer_test": {"executions": 18, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-select_implicit.sql - Scala UDF": {"executions": 50, "served": 0, "batches": 0},
-    "udf/postgreSQL/udf-select_implicit.sql - Scala UDF_analyzer_test": {"executions": 18, "served": 0, "batches": 0},
-    "udf/udf-count.sql - Regular Python UDF": {"executions": 6, "served": 0, "batches": 0},
-    "udf/udf-count.sql - Regular Python UDF_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "udf/udf-count.sql - Scala UDF": {"executions": 6, "served": 0, "batches": 0},
-    "udf/udf-count.sql - Scala UDF_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "udf/udf-cross-join.sql - Regular Python UDF": {"executions": 19, "served": 1, "batches": 2},
-    "udf/udf-cross-join.sql - Regular Python UDF_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "udf/udf-cross-join.sql - Scala UDF": {"executions": 19, "served": 1, "batches": 2},
-    "udf/udf-cross-join.sql - Scala UDF_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "udf/udf-except-all.sql - Regular Python UDF": {"executions": 35, "served": 0, "batches": 0},
-    "udf/udf-except-all.sql - Regular Python UDF_analyzer_test": {"executions": 10, "served": 0, "batches": 0},
-    "udf/udf-except-all.sql - Scala UDF": {"executions": 35, "served": 0, "batches": 0},
-    "udf/udf-except-all.sql - Scala UDF_analyzer_test": {"executions": 10, "served": 0, "batches": 0},
-    "udf/udf-except.sql - Regular Python UDF": {"executions": 11, "served": 3, "batches": 6},
-    "udf/udf-except.sql - Regular Python UDF_analyzer_test": {"executions": 2, "served": 0, "batches": 0},
-    "udf/udf-except.sql - Scala UDF": {"executions": 11, "served": 3, "batches": 6},
-    "udf/udf-except.sql - Scala UDF_analyzer_test": {"executions": 2, "served": 0, "batches": 0},
-    "udf/udf-group-analytics.sql - Regular Python UDF": {"executions": 31, "served": 1, "batches": 2},
-    "udf/udf-group-analytics.sql - Regular Python UDF_analyzer_test": {"executions": 8, "served": 0, "batches": 0},
-    "udf/udf-group-analytics.sql - Scala UDF": {"executions": 31, "served": 1, "batches": 2},
-    "udf/udf-group-analytics.sql - Scala UDF_analyzer_test": {"executions": 8, "served": 0, "batches": 0},
-    "udf/udf-group-by.sql - Regular Python UDF": {"executions": 56, "served": 5, "batches": 8},
-    "udf/udf-group-by.sql - Regular Python UDF_analyzer_test": {"executions": 17, "served": 0, "batches": 0},
-    "udf/udf-group-by.sql - Scala UDF": {"executions": 56, "served": 5, "batches": 8},
-    "udf/udf-group-by.sql - Scala UDF_analyzer_test": {"executions": 17, "served": 0, "batches": 0},
-    "udf/udf-having.sql - Regular Python UDF": {"executions": 6, "served": 1, "batches": 2},
-    "udf/udf-having.sql - Regular Python UDF_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "udf/udf-having.sql - Scala UDF": {"executions": 6, "served": 1, "batches": 2},
-    "udf/udf-having.sql - Scala UDF_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "udf/udf-inline-table.sql - Regular Python UDF": {"executions": 15, "served": 0, "batches": 0},
-    "udf/udf-inline-table.sql - Regular Python UDF_analyzer_test": {"executions": 4, "served": 0, "batches": 0},
-    "udf/udf-inline-table.sql - Scala UDF": {"executions": 15, "served": 0, "batches": 0},
-    "udf/udf-inline-table.sql - Scala UDF_analyzer_test": {"executions": 4, "served": 0, "batches": 0},
-    "udf/udf-inner-join.sql - Regular Python UDF": {"executions": 13, "served": 0, "batches": 0},
-    "udf/udf-inner-join.sql - Regular Python UDF_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "udf/udf-inner-join.sql - Scala UDF": {"executions": 13, "served": 0, "batches": 0},
-    "udf/udf-inner-join.sql - Scala UDF_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "udf/udf-intersect-all.sql - Regular Python UDF": {"executions": 28, "served": 3, "batches": 6},
-    "udf/udf-intersect-all.sql - Regular Python UDF_analyzer_test": {"executions": 8, "served": 0, "batches": 0},
-    "udf/udf-intersect-all.sql - Scala UDF": {"executions": 28, "served": 3, "batches": 6},
-    "udf/udf-intersect-all.sql - Scala UDF_analyzer_test": {"executions": 8, "served": 0, "batches": 0},
-    "udf/udf-join-empty-relation.sql - Regular Python UDF": {"executions": 27, "served": 0, "batches": 0},
-    "udf/udf-join-empty-relation.sql - Regular Python UDF_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "udf/udf-join-empty-relation.sql - Scala UDF": {"executions": 27, "served": 0, "batches": 0},
-    "udf/udf-join-empty-relation.sql - Scala UDF_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "udf/udf-natural-join.sql - Regular Python UDF": {"executions": 8, "served": 0, "batches": 0},
-    "udf/udf-natural-join.sql - Regular Python UDF_analyzer_test": {"executions": 2, "served": 0, "batches": 0},
-    "udf/udf-natural-join.sql - Scala UDF": {"executions": 8, "served": 0, "batches": 0},
-    "udf/udf-natural-join.sql - Scala UDF_analyzer_test": {"executions": 2, "served": 0, "batches": 0},
-    "udf/udf-outer-join.sql - Regular Python UDF": {"executions": 14, "served": 0, "batches": 0},
-    "udf/udf-outer-join.sql - Regular Python UDF_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "udf/udf-outer-join.sql - Scala UDF": {"executions": 14, "served": 0, "batches": 0},
-    "udf/udf-outer-join.sql - Scala UDF_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "udf/udf-pivot.sql - Regular Python UDF": {"executions": 33, "served": 0, "batches": 0},
-    "udf/udf-pivot.sql - Regular Python UDF_analyzer_test": {"executions": 12, "served": 0, "batches": 0},
-    "udf/udf-pivot.sql - Scala UDF": {"executions": 33, "served": 0, "batches": 0},
-    "udf/udf-pivot.sql - Scala UDF_analyzer_test": {"executions": 12, "served": 0, "batches": 0},
-    "udf/udf-special-values.sql - Regular Python UDF": {"executions": 6, "served": 0, "batches": 0},
-    "udf/udf-special-values.sql - Regular Python UDF_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "udf/udf-special-values.sql - Scala UDF": {"executions": 6, "served": 0, "batches": 0},
-    "udf/udf-special-values.sql - Scala UDF_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "udf/udf-udaf.sql - Regular Python UDF": {"executions": 13, "served": 0, "batches": 0},
-    "udf/udf-udaf.sql - Regular Python UDF_analyzer_test": {"executions": 7, "served": 0, "batches": 0},
-    "udf/udf-udaf.sql - Scala UDF": {"executions": 13, "served": 0, "batches": 0},
-    "udf/udf-udaf.sql - Scala UDF_analyzer_test": {"executions": 7, "served": 0, "batches": 0},
-    "udf/udf-union.sql - Regular Python UDF": {"executions": 26, "served": 0, "batches": 0},
-    "udf/udf-union.sql - Regular Python UDF_analyzer_test": {"executions": 10, "served": 0, "batches": 0},
-    "udf/udf-union.sql - Scala UDF": {"executions": 26, "served": 0, "batches": 0},
-    "udf/udf-union.sql - Scala UDF_analyzer_test": {"executions": 10, "served": 0, "batches": 0},
-    "udf/udf-window.sql - Regular Python UDF": {"executions": 23, "served": 1, "batches": 2},
-    "udf/udf-window.sql - Regular Python UDF_analyzer_test": {"executions": 8, "served": 0, "batches": 0},
-    "udf/udf-window.sql - Scala UDF": {"executions": 23, "served": 1, "batches": 2},
-    "udf/udf-window.sql - Scala UDF_analyzer_test": {"executions": 8, "served": 0, "batches": 0},
-    "udtf/udtf.sql - Python UDTFs": {"executions": 79, "served": 2, "batches": 4},
-    "udtf/udtf.sql - Python UDTFs_analyzer_test": {"executions": 39, "served": 0, "batches": 0},
-    "union-per-child-output-deduplication.sql": {"executions": 20, "served": 0, "batches": 0},
-    "union-per-child-output-deduplication.sql_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "union-resolution-edge-cases.sql": {"executions": 16, "served": 0, "batches": 0},
-    "union-resolution-edge-cases.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "union.sql": {"executions": 37, "served": 0, "batches": 0},
-    "union.sql_analyzer_test": {"executions": 14, "served": 0, "batches": 0},
-    "unnest.sql": {"executions": 21, "served": 0, "batches": 0},
-    "unnest.sql_analyzer_test": {"executions": 5, "served": 0, "batches": 0},
-    "unpivot.sql": {"executions": 14, "served": 0, "batches": 0},
-    "unpivot.sql_analyzer_test": {"executions": 3, "served": 0, "batches": 0},
-    "url-functions.sql": {"executions": 19, "served": 0, "batches": 0},
-    "url-functions.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "using-join.sql": {"executions": 44, "served": 0, "batches": 0},
-    "using-join.sql_analyzer_test": {"executions": 2, "served": 0, "batches": 0},
-    "variant-field-extractions.sql": {"executions": 40, "served": 0, "batches": 0},
-    "variant-field-extractions.sql_analyzer_test": {"executions": 1, "served": 0, "batches": 0},
-    "variant/named-function-arguments.sql": {"executions": 5, "served": 0, "batches": 0},
-    "variant/named-function-arguments.sql_analyzer_test": {"executions": 0, "served": 0, "batches": 0},
-    "variant/variant-from-arrays-entries.sql": {"executions": 21, "served": 0, "batches": 0},
-    "variant/variant-from-arrays-entries.sql_analyzer_test": {"executions": 6, "served": 0, "batches": 0},
-    "vector-agg.sql": {"executions": 16, "served": 0, "batches": 0},
-    "vector-agg.sql_analyzer_test": {"executions": 4, "served": 0, "batches": 0},
-    "vector-distance.sql": {"executions": 51, "served": 0, "batches": 0},
-    "vector-distance.sql_analyzer_test": {"executions": 21, "served": 0, "batches": 0},
-    "vector-norm.sql": {"executions": 65, "served": 0, "batches": 0},
-    "vector-norm.sql_analyzer_test": {"executions": 14, "served": 0, "batches": 0},
-    "view-conf.sql": {"executions": 20, "served": 0, "batches": 0},
-    "view-conf.sql_analyzer_test": {"executions": 9, "served": 0, "batches": 0},
-    "view-schema-binding-config.sql": {"executions": 184, "served": 0, "batches": 0},
-    "view-schema-binding-config.sql_analyzer_test": {"executions": 90, "served": 0, "batches": 0},
-    "view-schema-binding.sql": {"executions": 59, "served": 0, "batches": 0},
-    "view-schema-binding.sql_analyzer_test": {"executions": 30, "served": 0, "batches": 0},
-    "view-schema-compensation.sql": {"executions": 90, "served": 0, "batches": 0},
-    "view-schema-compensation.sql_analyzer_test": {"executions": 44, "served": 0, "batches": 0},
-    "view-schema-evolution.sql": {"executions": 183, "served": 0, "batches": 0},
-    "view-schema-evolution.sql_analyzer_test": {"executions": 86, "served": 0, "batches": 0},
-    "view-schema-type-evolution.sql": {"executions": 106, "served": 0, "batches": 0},
-    "view-schema-type-evolution.sql_analyzer_test": {"executions": 50, "served": 0, "batches": 0},
-    "view-with-default-collation.sql": {"executions": 192, "served": 0, "batches": 0},
-    "view-with-default-collation.sql_analyzer_test": {"executions": 72, "served": 0, "batches": 0},
-    "window-with-aggregates.sql": {"executions": 22, "served": 1, "batches": 2},
-    "window-with-aggregates.sql_analyzer_test": {"executions": 13, "served": 0, "batches": 0},
-    "window.sql": {"executions": 454, "served": 6, "batches": 12},
-    "window.sql_analyzer_test": {"executions": 118, "served": 0, "batches": 0},
-    "xml-functions.sql": {"executions": 59, "served": 0, "batches": 0},
-    "xml-functions.sql_analyzer_test": {"executions": 16, "served": 0, "batches": 0}
+  "generated_by" : "VarkaSQLQueryTestSuite (VARKA-271); regenerate with VARKA_GOLDEN_SUITE_REGEN=true dev/varka_golden_suite.sh",
+  "arm" : "varka",
+  "total" : {
+    "tests" : 788,
+    "executions" : 47323,
+    "served" : 1584,
+    "batches" : 5843
+  },
+  "tests" : {
+    "alias-resolution-edge-cases.sql" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "alias-resolution-edge-cases.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "array.sql" : {
+      "executions" : 104,
+      "served" : 0,
+      "batches" : 0
+    },
+    "array.sql_analyzer_test" : {
+      "executions" : 16,
+      "served" : 0,
+      "batches" : 0
+    },
+    "bin-by.sql" : {
+      "executions" : 11,
+      "served" : 0,
+      "batches" : 0
+    },
+    "bin-by.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "binary.sql" : {
+      "executions" : 9,
+      "served" : 0,
+      "batches" : 0
+    },
+    "binary.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "binary_base64.sql" : {
+      "executions" : 9,
+      "served" : 0,
+      "batches" : 0
+    },
+    "binary_base64.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "binary_basic.sql" : {
+      "executions" : 9,
+      "served" : 0,
+      "batches" : 0
+    },
+    "binary_basic.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "binary_hex.sql" : {
+      "executions" : 9,
+      "served" : 0,
+      "batches" : 0
+    },
+    "binary_hex.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "binary_hex_discrete.sql" : {
+      "executions" : 9,
+      "served" : 0,
+      "batches" : 0
+    },
+    "binary_hex_discrete.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "bitwise.sql" : {
+      "executions" : 42,
+      "served" : 1,
+      "batches" : 1
+    },
+    "bitwise.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "cast.sql" : {
+      "executions" : 270,
+      "served" : 0,
+      "batches" : 0
+    },
+    "cast.sql_analyzer_test" : {
+      "executions" : 19,
+      "served" : 0,
+      "batches" : 0
+    },
+    "ceil-floor-with-scale-param.sql" : {
+      "executions" : 28,
+      "served" : 0,
+      "batches" : 0
+    },
+    "ceil-floor-with-scale-param.sql_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "change-column.sql" : {
+      "executions" : 47,
+      "served" : 0,
+      "batches" : 0
+    },
+    "change-column.sql_analyzer_test" : {
+      "executions" : 27,
+      "served" : 0,
+      "batches" : 0
+    },
+    "charvarchar-standard-semantics.sql" : {
+      "executions" : 136,
+      "served" : 0,
+      "batches" : 0
+    },
+    "charvarchar-standard-semantics.sql_analyzer_test" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "charvarchar.sql" : {
+      "executions" : 143,
+      "served" : 0,
+      "batches" : 0
+    },
+    "charvarchar.sql_analyzer_test" : {
+      "executions" : 55,
+      "served" : 0,
+      "batches" : 0
+    },
+    "collations-aliases.sql" : {
+      "executions" : 51,
+      "served" : 0,
+      "batches" : 0
+    },
+    "collations-aliases.sql_analyzer_test" : {
+      "executions" : 19,
+      "served" : 0,
+      "batches" : 0
+    },
+    "collations-basic.sql" : {
+      "executions" : 311,
+      "served" : 0,
+      "batches" : 0
+    },
+    "collations-basic.sql_analyzer_test" : {
+      "executions" : 74,
+      "served" : 0,
+      "batches" : 0
+    },
+    "collations-padding-trim.sql" : {
+      "executions" : 93,
+      "served" : 0,
+      "batches" : 0
+    },
+    "collations-padding-trim.sql_analyzer_test" : {
+      "executions" : 31,
+      "served" : 0,
+      "batches" : 0
+    },
+    "collations-string-functions.sql" : {
+      "executions" : 182,
+      "served" : 0,
+      "batches" : 0
+    },
+    "collations-string-functions.sql_analyzer_test" : {
+      "executions" : 56,
+      "served" : 0,
+      "batches" : 0
+    },
+    "column-resolution-aggregate.sql" : {
+      "executions" : 13,
+      "served" : 0,
+      "batches" : 0
+    },
+    "column-resolution-aggregate.sql_analyzer_test" : {
+      "executions" : 8,
+      "served" : 0,
+      "batches" : 0
+    },
+    "column-resolution-sort.sql" : {
+      "executions" : 8,
+      "served" : 0,
+      "batches" : 0
+    },
+    "column-resolution-sort.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "columnresolution-negative.sql" : {
+      "executions" : 64,
+      "served" : 0,
+      "batches" : 0
+    },
+    "columnresolution-negative.sql_analyzer_test" : {
+      "executions" : 42,
+      "served" : 0,
+      "batches" : 0
+    },
+    "columnresolution-views.sql" : {
+      "executions" : 21,
+      "served" : 0,
+      "batches" : 0
+    },
+    "columnresolution-views.sql_analyzer_test" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "columnresolution.sql" : {
+      "executions" : 81,
+      "served" : 0,
+      "batches" : 0
+    },
+    "columnresolution.sql_analyzer_test" : {
+      "executions" : 26,
+      "served" : 0,
+      "batches" : 0
+    },
+    "comments.sql" : {
+      "executions" : 12,
+      "served" : 0,
+      "batches" : 0
+    },
+    "comments.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "comparator.sql" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "comparator.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "conditional-functions.sql" : {
+      "executions" : 21,
+      "served" : 0,
+      "batches" : 0
+    },
+    "conditional-functions.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "count.sql" : {
+      "executions" : 26,
+      "served" : 0,
+      "batches" : 0
+    },
+    "count.sql_analyzer_test" : {
+      "executions" : 7,
+      "served" : 0,
+      "batches" : 0
+    },
+    "counter-diff.sql" : {
+      "executions" : 51,
+      "served" : 0,
+      "batches" : 0
+    },
+    "counter-diff.sql_analyzer_test" : {
+      "executions" : 11,
+      "served" : 0,
+      "batches" : 0
+    },
+    "cross-join.sql" : {
+      "executions" : 19,
+      "served" : 2,
+      "batches" : 4
+    },
+    "cross-join.sql_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "csv-functions.sql" : {
+      "executions" : 41,
+      "served" : 0,
+      "batches" : 0
+    },
+    "csv-functions.sql_analyzer_test" : {
+      "executions" : 13,
+      "served" : 0,
+      "batches" : 0
+    },
+    "cte-command.sql" : {
+      "executions" : 31,
+      "served" : 0,
+      "batches" : 0
+    },
+    "cte-command.sql_analyzer_test" : {
+      "executions" : 12,
+      "served" : 0,
+      "batches" : 0
+    },
+    "cte-legacy.sql" : {
+      "executions" : 25,
+      "served" : 0,
+      "batches" : 0
+    },
+    "cte-legacy.sql_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "cte-nested.sql" : {
+      "executions" : 24,
+      "served" : 0,
+      "batches" : 0
+    },
+    "cte-nested.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "cte-nonlegacy.sql" : {
+      "executions" : 25,
+      "served" : 0,
+      "batches" : 0
+    },
+    "cte-nonlegacy.sql_analyzer_test" : {
+      "executions" : 12,
+      "served" : 0,
+      "batches" : 0
+    },
+    "cte-recursion.sql" : {
+      "executions" : 1144,
+      "served" : 2,
+      "batches" : 2
+    },
+    "cte-recursion.sql_analyzer_test" : {
+      "executions" : 79,
+      "served" : 0,
+      "batches" : 0
+    },
+    "cte-with-multi-children-operators.sql" : {
+      "executions" : 20,
+      "served" : 0,
+      "batches" : 0
+    },
+    "cte-with-multi-children-operators.sql_analyzer_test" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "cte.sql" : {
+      "executions" : 182,
+      "served" : 0,
+      "batches" : 0
+    },
+    "cte.sql_analyzer_test" : {
+      "executions" : 28,
+      "served" : 0,
+      "batches" : 0
+    },
+    "current_database_catalog.sql" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "current_database_catalog.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "date.sql" : {
+      "executions" : 96,
+      "served" : 0,
+      "batches" : 0
+    },
+    "date.sql_analyzer_test" : {
+      "executions" : 11,
+      "served" : 0,
+      "batches" : 0
+    },
+    "datetime-formatting-invalid.sql" : {
+      "executions" : 37,
+      "served" : 0,
+      "batches" : 0
+    },
+    "datetime-formatting-invalid.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "datetime-formatting-legacy.sql" : {
+      "executions" : 38,
+      "served" : 0,
+      "batches" : 0
+    },
+    "datetime-formatting-legacy.sql_analyzer_test" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "datetime-formatting.sql" : {
+      "executions" : 37,
+      "served" : 0,
+      "batches" : 0
+    },
+    "datetime-formatting.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "datetime-legacy.sql" : {
+      "executions" : 233,
+      "served" : 0,
+      "batches" : 0
+    },
+    "datetime-legacy.sql_analyzer_test" : {
+      "executions" : 23,
+      "served" : 0,
+      "batches" : 0
+    },
+    "datetime-parsing-invalid.sql" : {
+      "executions" : 34,
+      "served" : 0,
+      "batches" : 0
+    },
+    "datetime-parsing-invalid.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "datetime-parsing-legacy.sql" : {
+      "executions" : 33,
+      "served" : 0,
+      "batches" : 0
+    },
+    "datetime-parsing-legacy.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "datetime-parsing.sql" : {
+      "executions" : 32,
+      "served" : 0,
+      "batches" : 0
+    },
+    "datetime-parsing.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "datetime-special.sql" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "datetime-special.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "decimalArithmeticOperations.sql" : {
+      "executions" : 60,
+      "served" : 0,
+      "batches" : 0
+    },
+    "decimalArithmeticOperations.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "describe-part-after-analyze.sql" : {
+      "executions" : 33,
+      "served" : 1,
+      "batches" : 2
+    },
+    "describe-part-after-analyze.sql_analyzer_test" : {
+      "executions" : 18,
+      "served" : 1,
+      "batches" : 2
+    },
+    "describe-query.sql" : {
+      "executions" : 32,
+      "served" : 0,
+      "batches" : 0
+    },
+    "describe-query.sql_analyzer_test" : {
+      "executions" : 16,
+      "served" : 0,
+      "batches" : 0
+    },
+    "describe-table-after-alter-table.sql" : {
+      "executions" : 24,
+      "served" : 0,
+      "batches" : 0
+    },
+    "describe-table-after-alter-table.sql_analyzer_test" : {
+      "executions" : 12,
+      "served" : 0,
+      "batches" : 0
+    },
+    "describe.sql" : {
+      "executions" : 127,
+      "served" : 0,
+      "batches" : 0
+    },
+    "describe.sql_analyzer_test" : {
+      "executions" : 66,
+      "served" : 0,
+      "batches" : 0
+    },
+    "distinct-map-aggregates.sql" : {
+      "executions" : 29,
+      "served" : 2,
+      "batches" : 4
+    },
+    "distinct-map-aggregates.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "double-quoted-identifiers-enabled.sql" : {
+      "executions" : 35,
+      "served" : 0,
+      "batches" : 0
+    },
+    "double-quoted-identifiers-enabled.sql_analyzer_test" : {
+      "executions" : 26,
+      "served" : 0,
+      "batches" : 0
+    },
+    "double-quoted-identifiers.sql" : {
+      "executions" : 20,
+      "served" : 0,
+      "batches" : 0
+    },
+    "double-quoted-identifiers.sql_analyzer_test" : {
+      "executions" : 12,
+      "served" : 0,
+      "batches" : 0
+    },
+    "except-all.sql" : {
+      "executions" : 35,
+      "served" : 1,
+      "batches" : 2
+    },
+    "except-all.sql_analyzer_test" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "except.sql" : {
+      "executions" : 21,
+      "served" : 3,
+      "batches" : 8
+    },
+    "except.sql_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "execute-immediate.sql" : {
+      "executions" : 156,
+      "served" : 3,
+      "batches" : 3
+    },
+    "execute-immediate.sql_analyzer_test" : {
+      "executions" : 68,
+      "served" : 0,
+      "batches" : 0
+    },
+    "explain-aqe.sql" : {
+      "executions" : 66,
+      "served" : 0,
+      "batches" : 0
+    },
+    "explain-aqe.sql_analyzer_test" : {
+      "executions" : 34,
+      "served" : 0,
+      "batches" : 0
+    },
+    "explain-cbo.sql" : {
+      "executions" : 16,
+      "served" : 0,
+      "batches" : 0
+    },
+    "explain-cbo.sql_analyzer_test" : {
+      "executions" : 9,
+      "served" : 0,
+      "batches" : 0
+    },
+    "explain.sql" : {
+      "executions" : 67,
+      "served" : 0,
+      "batches" : 0
+    },
+    "explain.sql_analyzer_test" : {
+      "executions" : 35,
+      "served" : 0,
+      "batches" : 0
+    },
+    "extract-value-nulltype-single-pass.sql" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "extract-value-nulltype-single-pass.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "extract-value-resolution-edge-cases.sql" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "extract-value-resolution-edge-cases.sql_analyzer_test" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "extract.sql" : {
+      "executions" : 130,
+      "served" : 0,
+      "batches" : 0
+    },
+    "extract.sql_analyzer_test" : {
+      "executions" : 12,
+      "served" : 0,
+      "batches" : 0
+    },
+    "generators-resolution-edge-cases.sql" : {
+      "executions" : 55,
+      "served" : 2,
+      "batches" : 4
+    },
+    "generators-resolution-edge-cases.sql_analyzer_test" : {
+      "executions" : 16,
+      "served" : 0,
+      "batches" : 0
+    },
+    "generators.sql" : {
+      "executions" : 62,
+      "served" : 0,
+      "batches" : 0
+    },
+    "generators.sql_analyzer_test" : {
+      "executions" : 31,
+      "served" : 0,
+      "batches" : 0
+    },
+    "group-analytics.sql" : {
+      "executions" : 207,
+      "served" : 7,
+      "batches" : 13
+    },
+    "group-analytics.sql_analyzer_test" : {
+      "executions" : 59,
+      "served" : 0,
+      "batches" : 0
+    },
+    "group-by-alias.sql" : {
+      "executions" : 38,
+      "served" : 1,
+      "batches" : 2
+    },
+    "group-by-alias.sql_analyzer_test" : {
+      "executions" : 11,
+      "served" : 0,
+      "batches" : 0
+    },
+    "group-by-all-duckdb.sql" : {
+      "executions" : 11,
+      "served" : 0,
+      "batches" : 0
+    },
+    "group-by-all-duckdb.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "group-by-all-mosha.sql" : {
+      "executions" : 12,
+      "served" : 2,
+      "batches" : 4
+    },
+    "group-by-all-mosha.sql_analyzer_test" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "group-by-all.sql" : {
+      "executions" : 30,
+      "served" : 0,
+      "batches" : 0
+    },
+    "group-by-all.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "group-by-filter.sql" : {
+      "executions" : 432,
+      "served" : 10,
+      "batches" : 20
+    },
+    "group-by-filter.sql_analyzer_test" : {
+      "executions" : 62,
+      "served" : 0,
+      "batches" : 0
+    },
+    "group-by-ordinal.sql" : {
+      "executions" : 37,
+      "served" : 2,
+      "batches" : 4
+    },
+    "group-by-ordinal.sql_analyzer_test" : {
+      "executions" : 12,
+      "served" : 0,
+      "batches" : 0
+    },
+    "group-by.sql" : {
+      "executions" : 338,
+      "served" : 15,
+      "batches" : 24
+    },
+    "group-by.sql_analyzer_test" : {
+      "executions" : 80,
+      "served" : 0,
+      "batches" : 0
+    },
+    "grouping_set.sql" : {
+      "executions" : 47,
+      "served" : 3,
+      "batches" : 6
+    },
+    "grouping_set.sql_analyzer_test" : {
+      "executions" : 12,
+      "served" : 0,
+      "batches" : 0
+    },
+    "grouping_set_grand_total_disabled.sql" : {
+      "executions" : 9,
+      "served" : 0,
+      "batches" : 0
+    },
+    "grouping_set_grand_total_disabled.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "having-and-order-by-recursive-type-name-resolution.sql" : {
+      "executions" : 47,
+      "served" : 0,
+      "batches" : 0
+    },
+    "having-and-order-by-recursive-type-name-resolution.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "having.sql" : {
+      "executions" : 51,
+      "served" : 12,
+      "batches" : 18
+    },
+    "having.sql_analyzer_test" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "higher-order-functions.sql" : {
+      "executions" : 260,
+      "served" : 0,
+      "batches" : 0
+    },
+    "higher-order-functions.sql_analyzer_test" : {
+      "executions" : 89,
+      "served" : 0,
+      "batches" : 0
+    },
+    "hints.sql" : {
+      "executions" : 52,
+      "served" : 0,
+      "batches" : 0
+    },
+    "hints.sql_analyzer_test" : {
+      "executions" : 9,
+      "served" : 0,
+      "batches" : 0
+    },
+    "hll.sql" : {
+      "executions" : 51,
+      "served" : 0,
+      "batches" : 0
+    },
+    "hll.sql_analyzer_test" : {
+      "executions" : 15,
+      "served" : 0,
+      "batches" : 0
+    },
+    "identifier-clause-legacy.sql" : {
+      "executions" : 589,
+      "served" : 3,
+      "batches" : 9
+    },
+    "identifier-clause-legacy.sql_analyzer_test" : {
+      "executions" : 311,
+      "served" : 0,
+      "batches" : 0
+    },
+    "identifier-clause.sql" : {
+      "executions" : 638,
+      "served" : 4,
+      "batches" : 15
+    },
+    "identifier-clause.sql_analyzer_test" : {
+      "executions" : 319,
+      "served" : 0,
+      "batches" : 0
+    },
+    "ilike-all.sql" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "ilike-all.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "ilike-any.sql" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "ilike-any.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "ilike.sql" : {
+      "executions" : 26,
+      "served" : 0,
+      "batches" : 0
+    },
+    "ilike.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "inline-table.sql" : {
+      "executions" : 25,
+      "served" : 0,
+      "batches" : 0
+    },
+    "inline-table.sql_analyzer_test" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "inner-join.sql" : {
+      "executions" : 147,
+      "served" : 0,
+      "batches" : 0
+    },
+    "inner-join.sql_analyzer_test" : {
+      "executions" : 84,
+      "served" : 0,
+      "batches" : 0
+    },
+    "intersect-all.sql" : {
+      "executions" : 34,
+      "served" : 3,
+      "batches" : 18
+    },
+    "intersect-all.sql_analyzer_test" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "interval.sql" : {
+      "executions" : 237,
+      "served" : 0,
+      "batches" : 0
+    },
+    "interval.sql_analyzer_test" : {
+      "executions" : 40,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-asof-containers.sql" : {
+      "executions" : 54,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-asof-containers.sql_analyzer_test" : {
+      "executions" : 27,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-asof-context.sql" : {
+      "executions" : 28,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-asof-context.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-asof-corners.sql" : {
+      "executions" : 26,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-asof-corners.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-asof-crossfeature.sql" : {
+      "executions" : 19,
+      "served" : 1,
+      "batches" : 1
+    },
+    "join-asof-crossfeature.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-asof-datatypes.sql" : {
+      "executions" : 40,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-asof-datatypes.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-asof-errors.sql" : {
+      "executions" : 30,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-asof-errors.sql_analyzer_test" : {
+      "executions" : 28,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-asof-expressions.sql" : {
+      "executions" : 17,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-asof-expressions.sql_analyzer_test" : {
+      "executions" : 7,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-asof-gating.sql" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-asof-gating.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-asof-grammar.sql" : {
+      "executions" : 24,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-asof-grammar.sql_analyzer_test" : {
+      "executions" : 7,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-asof-semantics.sql" : {
+      "executions" : 40,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-asof-semantics.sql_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-empty-relation.sql" : {
+      "executions" : 27,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-empty-relation.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-lateral.sql" : {
+      "executions" : 168,
+      "served" : 9,
+      "batches" : 17
+    },
+    "join-lateral.sql_analyzer_test" : {
+      "executions" : 25,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-nearest-by.sql" : {
+      "executions" : 37,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-nearest-by.sql_analyzer_test" : {
+      "executions" : 13,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-resolution-edge-cases.sql" : {
+      "executions" : 19,
+      "served" : 0,
+      "batches" : 0
+    },
+    "join-resolution-edge-cases.sql_analyzer_test" : {
+      "executions" : 7,
+      "served" : 0,
+      "batches" : 0
+    },
+    "json-functions.sql" : {
+      "executions" : 212,
+      "served" : 0,
+      "batches" : 0
+    },
+    "json-functions.sql_analyzer_test" : {
+      "executions" : 29,
+      "served" : 0,
+      "batches" : 0
+    },
+    "keywords-enforced.sql" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "keywords-enforced.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "keywords.sql" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "keywords.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "kllquantiles.sql" : {
+      "executions" : 132,
+      "served" : 0,
+      "batches" : 0
+    },
+    "kllquantiles.sql_analyzer_test" : {
+      "executions" : 60,
+      "served" : 0,
+      "batches" : 0
+    },
+    "like-all.sql" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "like-all.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "like-any.sql" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "like-any.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "limit.sql" : {
+      "executions" : 14,
+      "served" : 1,
+      "batches" : 1
+    },
+    "limit.sql_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "linear-regression.sql" : {
+      "executions" : 43,
+      "served" : 15,
+      "batches" : 30
+    },
+    "linear-regression.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "listagg-collations.sql" : {
+      "executions" : 15,
+      "served" : 0,
+      "batches" : 0
+    },
+    "listagg-collations.sql_analyzer_test" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "listagg.sql" : {
+      "executions" : 60,
+      "served" : 0,
+      "batches" : 0
+    },
+    "listagg.sql_analyzer_test" : {
+      "executions" : 15,
+      "served" : 0,
+      "batches" : 0
+    },
+    "literals.sql" : {
+      "executions" : 50,
+      "served" : 0,
+      "batches" : 0
+    },
+    "literals.sql_analyzer_test" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "map.sql" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "map.sql_analyzer_test" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "mask-functions.sql" : {
+      "executions" : 57,
+      "served" : 0,
+      "batches" : 0
+    },
+    "mask-functions.sql_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "math.sql" : {
+      "executions" : 116,
+      "served" : 0,
+      "batches" : 0
+    },
+    "math.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "max-min-by-k.sql" : {
+      "executions" : 44,
+      "served" : 0,
+      "batches" : 0
+    },
+    "max-min-by-k.sql_analyzer_test" : {
+      "executions" : 15,
+      "served" : 0,
+      "batches" : 0
+    },
+    "metadata_column_resolution.sql" : {
+      "executions" : 67,
+      "served" : 0,
+      "batches" : 0
+    },
+    "metadata_column_resolution.sql_analyzer_test" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "misc-functions.sql" : {
+      "executions" : 44,
+      "served" : 0,
+      "batches" : 0
+    },
+    "misc-functions.sql_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "mode.sql" : {
+      "executions" : 30,
+      "served" : 1,
+      "batches" : 2
+    },
+    "mode.sql_analyzer_test" : {
+      "executions" : 9,
+      "served" : 0,
+      "batches" : 0
+    },
+    "name-precedence-in-order-by-and-having-with-conflicting-attributes.sql" : {
+      "executions" : 50,
+      "served" : 3,
+      "batches" : 6
+    },
+    "name-precedence-in-order-by-and-having-with-conflicting-attributes.sql_analyzer_test" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "named-function-arguments.sql" : {
+      "executions" : 36,
+      "served" : 0,
+      "batches" : 0
+    },
+    "named-function-arguments.sql_analyzer_test" : {
+      "executions" : 12,
+      "served" : 0,
+      "batches" : 0
+    },
+    "named-window.sql" : {
+      "executions" : 26,
+      "served" : 0,
+      "batches" : 0
+    },
+    "named-window.sql_analyzer_test" : {
+      "executions" : 7,
+      "served" : 0,
+      "batches" : 0
+    },
+    "natural-join.sql" : {
+      "executions" : 38,
+      "served" : 0,
+      "batches" : 0
+    },
+    "natural-join.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "non-excludable-rule.sql" : {
+      "executions" : 9,
+      "served" : 0,
+      "batches" : 0
+    },
+    "non-excludable-rule.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/array.sql" : {
+      "executions" : 104,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/array.sql_analyzer_test" : {
+      "executions" : 16,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/cast.sql" : {
+      "executions" : 270,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/cast.sql_analyzer_test" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/conditional-functions.sql" : {
+      "executions" : 21,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/conditional-functions.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/date.sql" : {
+      "executions" : 96,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/date.sql_analyzer_test" : {
+      "executions" : 17,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/datetime-parsing-invalid.sql" : {
+      "executions" : 34,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/datetime-parsing-invalid.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/datetime-special.sql" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/datetime-special.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/decimalArithmeticOperations.sql" : {
+      "executions" : 60,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/decimalArithmeticOperations.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/double-quoted-identifiers.sql" : {
+      "executions" : 20,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/double-quoted-identifiers.sql_analyzer_test" : {
+      "executions" : 12,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/higher-order-functions.sql" : {
+      "executions" : 85,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/higher-order-functions.sql_analyzer_test" : {
+      "executions" : 28,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/interval.sql" : {
+      "executions" : 237,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/interval.sql_analyzer_test" : {
+      "executions" : 40,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/keywords.sql" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/keywords.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/literals.sql" : {
+      "executions" : 50,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/literals.sql_analyzer_test" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/map.sql" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/map.sql_analyzer_test" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/math.sql" : {
+      "executions" : 116,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/math.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/parse-schema-string.sql" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/parse-schema-string.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/string-functions.sql" : {
+      "executions" : 310,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/string-functions.sql_analyzer_test" : {
+      "executions" : 17,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/timestamp.sql" : {
+      "executions" : 136,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/timestamp.sql_analyzer_test" : {
+      "executions" : 15,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/try_aggregates.sql" : {
+      "executions" : 32,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/try_aggregates.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/try_arithmetic.sql" : {
+      "executions" : 86,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/try_arithmetic.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/try_datetime_functions.sql" : {
+      "executions" : 11,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/try_datetime_functions.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/try_element_at.sql" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "nonansi/try_element_at.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "null-handling.sql" : {
+      "executions" : 40,
+      "served" : 18,
+      "batches" : 122
+    },
+    "null-handling.sql_analyzer_test" : {
+      "executions" : 9,
+      "served" : 0,
+      "batches" : 0
+    },
+    "null-propagation.sql" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "null-propagation.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "operators.sql" : {
+      "executions" : 77,
+      "served" : 4,
+      "batches" : 8
+    },
+    "operators.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "order-by-alias.sql" : {
+      "executions" : 19,
+      "served" : 0,
+      "batches" : 0
+    },
+    "order-by-alias.sql_analyzer_test" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "order-by-all.sql" : {
+      "executions" : 19,
+      "served" : 0,
+      "batches" : 0
+    },
+    "order-by-all.sql_analyzer_test" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "order-by-and-having-on-top-of-aggregate-with-join.sql" : {
+      "executions" : 154,
+      "served" : 14,
+      "batches" : 56
+    },
+    "order-by-and-having-on-top-of-aggregate-with-join.sql_analyzer_test" : {
+      "executions" : 78,
+      "served" : 0,
+      "batches" : 0
+    },
+    "order-by-nulls-ordering.sql" : {
+      "executions" : 74,
+      "served" : 12,
+      "batches" : 24
+    },
+    "order-by-nulls-ordering.sql_analyzer_test" : {
+      "executions" : 23,
+      "served" : 0,
+      "batches" : 0
+    },
+    "order-by-ordinal.sql" : {
+      "executions" : 32,
+      "served" : 1,
+      "batches" : 4
+    },
+    "order-by-ordinal.sql_analyzer_test" : {
+      "executions" : 17,
+      "served" : 0,
+      "batches" : 0
+    },
+    "order-by.sql" : {
+      "executions" : 39,
+      "served" : 3,
+      "batches" : 6
+    },
+    "order-by.sql_analyzer_test" : {
+      "executions" : 13,
+      "served" : 0,
+      "batches" : 0
+    },
+    "outer-join.sql" : {
+      "executions" : 120,
+      "served" : 0,
+      "batches" : 0
+    },
+    "outer-join.sql_analyzer_test" : {
+      "executions" : 66,
+      "served" : 0,
+      "batches" : 0
+    },
+    "parameterless-function-name-precedence-legacy.sql" : {
+      "executions" : 23,
+      "served" : 0,
+      "batches" : 0
+    },
+    "parameterless-function-name-precedence-legacy.sql_analyzer_test" : {
+      "executions" : 7,
+      "served" : 0,
+      "batches" : 0
+    },
+    "parameterless-function-name-precedence.sql" : {
+      "executions" : 22,
+      "served" : 0,
+      "batches" : 0
+    },
+    "parameterless-function-name-precedence.sql_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "parse-query-correctness-old-behavior.sql" : {
+      "executions" : 97,
+      "served" : 0,
+      "batches" : 0
+    },
+    "parse-query-correctness-old-behavior.sql_analyzer_test" : {
+      "executions" : 45,
+      "served" : 0,
+      "batches" : 0
+    },
+    "parse-query-correctness.sql" : {
+      "executions" : 96,
+      "served" : 0,
+      "batches" : 0
+    },
+    "parse-query-correctness.sql_analyzer_test" : {
+      "executions" : 35,
+      "served" : 0,
+      "batches" : 0
+    },
+    "parse-schema-string.sql" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "parse-schema-string.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "parse-sql-gating.sql" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "parse-sql-gating.sql_analyzer_test" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "parse-sql.sql" : {
+      "executions" : 53,
+      "served" : 0,
+      "batches" : 0
+    },
+    "parse-sql.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "percentiles.sql" : {
+      "executions" : 62,
+      "served" : 1,
+      "batches" : 2
+    },
+    "percentiles.sql_analyzer_test" : {
+      "executions" : 31,
+      "served" : 0,
+      "batches" : 0
+    },
+    "pipe-operators.sql" : {
+      "executions" : 388,
+      "served" : 25,
+      "batches" : 50
+    },
+    "pipe-operators.sql_analyzer_test" : {
+      "executions" : 85,
+      "served" : 0,
+      "batches" : 0
+    },
+    "pivot.sql" : {
+      "executions" : 37,
+      "served" : 0,
+      "batches" : 0
+    },
+    "pivot.sql_analyzer_test" : {
+      "executions" : 12,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/aggregates_part1.sql" : {
+      "executions" : 182,
+      "served" : 3,
+      "batches" : 3
+    },
+    "postgreSQL/aggregates_part1.sql_analyzer_test" : {
+      "executions" : 17,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/aggregates_part2.sql" : {
+      "executions" : 101,
+      "served" : 15,
+      "batches" : 23
+    },
+    "postgreSQL/aggregates_part2.sql_analyzer_test" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/aggregates_part3.sql" : {
+      "executions" : 20,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/aggregates_part3.sql_analyzer_test" : {
+      "executions" : 8,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/aggregates_part4.sql" : {
+      "executions" : 17,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/aggregates_part4.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/boolean.sql" : {
+      "executions" : 112,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/boolean.sql_analyzer_test" : {
+      "executions" : 21,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/case.sql" : {
+      "executions" : 49,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/case.sql_analyzer_test" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/comments.sql" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/comments.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/create_view.sql" : {
+      "executions" : 368,
+      "served" : 2,
+      "batches" : 5
+    },
+    "postgreSQL/create_view.sql_analyzer_test" : {
+      "executions" : 191,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/date.sql" : {
+      "executions" : 65,
+      "served" : 2,
+      "batches" : 12
+    },
+    "postgreSQL/date.sql_analyzer_test" : {
+      "executions" : 17,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/float4.sql" : {
+      "executions" : 50,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/float4.sql_analyzer_test" : {
+      "executions" : 7,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/float8.sql" : {
+      "executions" : 109,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/float8.sql_analyzer_test" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/groupingsets.sql" : {
+      "executions" : 70,
+      "served" : 3,
+      "batches" : 6
+    },
+    "postgreSQL/groupingsets.sql_analyzer_test" : {
+      "executions" : 15,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/insert.sql" : {
+      "executions" : 16,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/insert.sql_analyzer_test" : {
+      "executions" : 7,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/int2.sql" : {
+      "executions" : 42,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/int2.sql_analyzer_test" : {
+      "executions" : 7,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/int4.sql" : {
+      "executions" : 60,
+      "served" : 24,
+      "batches" : 94
+    },
+    "postgreSQL/int4.sql_analyzer_test" : {
+      "executions" : 7,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/int8.sql" : {
+      "executions" : 98,
+      "served" : 30,
+      "batches" : 88
+    },
+    "postgreSQL/int8.sql_analyzer_test" : {
+      "executions" : 8,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/interval.sql" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/interval.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/join.sql" : {
+      "executions" : 2514,
+      "served" : 441,
+      "batches" : 1625
+    },
+    "postgreSQL/join.sql_analyzer_test" : {
+      "executions" : 813,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/limit.sql" : {
+      "executions" : 15,
+      "served" : 6,
+      "batches" : 6
+    },
+    "postgreSQL/limit.sql_analyzer_test" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/numeric.sql" : {
+      "executions" : 1124,
+      "served" : 11,
+      "batches" : 735
+    },
+    "postgreSQL/numeric.sql_analyzer_test" : {
+      "executions" : 522,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/select.sql" : {
+      "executions" : 43,
+      "served" : 20,
+      "batches" : 32
+    },
+    "postgreSQL/select.sql_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/select_distinct.sql" : {
+      "executions" : 21,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/select_distinct.sql_analyzer_test" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/select_having.sql" : {
+      "executions" : 34,
+      "served" : 2,
+      "batches" : 8
+    },
+    "postgreSQL/select_having.sql_analyzer_test" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/select_implicit.sql" : {
+      "executions" : 50,
+      "served" : 3,
+      "batches" : 60
+    },
+    "postgreSQL/select_implicit.sql_analyzer_test" : {
+      "executions" : 18,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/strings.sql" : {
+      "executions" : 130,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/strings.sql_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/text.sql" : {
+      "executions" : 46,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/text.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/timestamp.sql" : {
+      "executions" : 45,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/timestamp.sql_analyzer_test" : {
+      "executions" : 15,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/union.sql" : {
+      "executions" : 75,
+      "served" : 4,
+      "batches" : 10
+    },
+    "postgreSQL/union.sql_analyzer_test" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/window_part1.sql" : {
+      "executions" : 152,
+      "served" : 78,
+      "batches" : 96
+    },
+    "postgreSQL/window_part1.sql_analyzer_test" : {
+      "executions" : 23,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/window_part2.sql" : {
+      "executions" : 113,
+      "served" : 9,
+      "batches" : 15
+    },
+    "postgreSQL/window_part2.sql_analyzer_test" : {
+      "executions" : 23,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/window_part3.sql" : {
+      "executions" : 116,
+      "served" : 9,
+      "batches" : 18
+    },
+    "postgreSQL/window_part3.sql_analyzer_test" : {
+      "executions" : 62,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/window_part4.sql" : {
+      "executions" : 119,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/window_part4.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "postgreSQL/with.sql" : {
+      "executions" : 1069,
+      "served" : 56,
+      "batches" : 192
+    },
+    "postgreSQL/with.sql_analyzer_test" : {
+      "executions" : 64,
+      "served" : 0,
+      "batches" : 0
+    },
+    "pred-pushdown.sql" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "pred-pushdown.sql_analyzer_test" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "predicate-functions.sql" : {
+      "executions" : 95,
+      "served" : 0,
+      "batches" : 0
+    },
+    "predicate-functions.sql_analyzer_test" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "qualify.sql" : {
+      "executions" : 11,
+      "served" : 0,
+      "batches" : 0
+    },
+    "qualify.sql_analyzer_test" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "query_regex_column.sql" : {
+      "executions" : 40,
+      "served" : 12,
+      "batches" : 20
+    },
+    "query_regex_column.sql_analyzer_test" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "random.sql" : {
+      "executions" : 74,
+      "served" : 0,
+      "batches" : 0
+    },
+    "random.sql_analyzer_test" : {
+      "executions" : 19,
+      "served" : 0,
+      "batches" : 0
+    },
+    "regexp-functions.sql" : {
+      "executions" : 69,
+      "served" : 0,
+      "batches" : 0
+    },
+    "regexp-functions.sql_analyzer_test" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "replacing-missing-expression-with-alias.sql" : {
+      "executions" : 36,
+      "served" : 18,
+      "batches" : 20
+    },
+    "replacing-missing-expression-with-alias.sql_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "runtime-replaceable-edge-cases.sql" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "runtime-replaceable-edge-cases.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "scripting/randomly_generated_scripts.sql" : {
+      "executions" : 1837,
+      "served" : 62,
+      "batches" : 242
+    },
+    "scripting/randomly_generated_scripts.sql_analyzer_test" : {
+      "executions" : 1712,
+      "served" : 62,
+      "batches" : 242
+    },
+    "selectExcept.sql" : {
+      "executions" : 45,
+      "served" : 1,
+      "batches" : 1
+    },
+    "selectExcept.sql_analyzer_test" : {
+      "executions" : 9,
+      "served" : 0,
+      "batches" : 0
+    },
+    "session-variable-precedence.sql" : {
+      "executions" : 16,
+      "served" : 0,
+      "batches" : 0
+    },
+    "session-variable-precedence.sql_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "set-operations-unsupported-types.sql" : {
+      "executions" : 15,
+      "served" : 0,
+      "batches" : 0
+    },
+    "set-operations-unsupported-types.sql_analyzer_test" : {
+      "executions" : 13,
+      "served" : 0,
+      "batches" : 0
+    },
+    "show-create-table.sql" : {
+      "executions" : 101,
+      "served" : 0,
+      "batches" : 0
+    },
+    "show-create-table.sql_analyzer_test" : {
+      "executions" : 51,
+      "served" : 0,
+      "batches" : 0
+    },
+    "show-tables.sql" : {
+      "executions" : 46,
+      "served" : 0,
+      "batches" : 0
+    },
+    "show-tables.sql_analyzer_test" : {
+      "executions" : 25,
+      "served" : 0,
+      "batches" : 0
+    },
+    "show-tblproperties.sql" : {
+      "executions" : 26,
+      "served" : 0,
+      "batches" : 0
+    },
+    "show-tblproperties.sql_analyzer_test" : {
+      "executions" : 13,
+      "served" : 0,
+      "batches" : 0
+    },
+    "show-views.sql" : {
+      "executions" : 39,
+      "served" : 0,
+      "batches" : 0
+    },
+    "show-views.sql_analyzer_test" : {
+      "executions" : 20,
+      "served" : 0,
+      "batches" : 0
+    },
+    "show_columns.sql" : {
+      "executions" : 45,
+      "served" : 0,
+      "batches" : 0
+    },
+    "show_columns.sql_analyzer_test" : {
+      "executions" : 25,
+      "served" : 0,
+      "batches" : 0
+    },
+    "sql-compatibility-functions.sql" : {
+      "executions" : 16,
+      "served" : 0,
+      "batches" : 0
+    },
+    "sql-compatibility-functions.sql_analyzer_test" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "sql-on-files.sql" : {
+      "executions" : 39,
+      "served" : 0,
+      "batches" : 0
+    },
+    "sql-on-files.sql_analyzer_test" : {
+      "executions" : 25,
+      "served" : 0,
+      "batches" : 0
+    },
+    "sql-path.sql" : {
+      "executions" : 245,
+      "served" : 0,
+      "batches" : 0
+    },
+    "sql-path.sql_analyzer_test" : {
+      "executions" : 118,
+      "served" : 0,
+      "batches" : 0
+    },
+    "sql-session-variables.sql" : {
+      "executions" : 455,
+      "served" : 3,
+      "batches" : 3
+    },
+    "sql-session-variables.sql_analyzer_test" : {
+      "executions" : 215,
+      "served" : 0,
+      "batches" : 0
+    },
+    "sql-udf-name-precedence-legacy.sql" : {
+      "executions" : 69,
+      "served" : 0,
+      "batches" : 0
+    },
+    "sql-udf-name-precedence-legacy.sql_analyzer_test" : {
+      "executions" : 29,
+      "served" : 0,
+      "batches" : 0
+    },
+    "sql-udf-name-precedence.sql" : {
+      "executions" : 66,
+      "served" : 0,
+      "batches" : 0
+    },
+    "sql-udf-name-precedence.sql_analyzer_test" : {
+      "executions" : 29,
+      "served" : 0,
+      "batches" : 0
+    },
+    "sql-udf.sql" : {
+      "executions" : 861,
+      "served" : 7,
+      "batches" : 15
+    },
+    "sql-udf.sql_analyzer_test" : {
+      "executions" : 370,
+      "served" : 0,
+      "batches" : 0
+    },
+    "st-functions.sql" : {
+      "executions" : 104,
+      "served" : 0,
+      "batches" : 0
+    },
+    "st-functions.sql_analyzer_test" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "string-functions.sql" : {
+      "executions" : 310,
+      "served" : 0,
+      "batches" : 0
+    },
+    "string-functions.sql_analyzer_test" : {
+      "executions" : 17,
+      "served" : 0,
+      "batches" : 0
+    },
+    "struct.sql" : {
+      "executions" : 15,
+      "served" : 0,
+      "batches" : 0
+    },
+    "struct.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subexp-elimination.sql" : {
+      "executions" : 128,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subexp-elimination.sql_analyzer_test" : {
+      "executions" : 48,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/exists-subquery/exists-aggregate.sql" : {
+      "executions" : 68,
+      "served" : 3,
+      "batches" : 6
+    },
+    "subquery/exists-subquery/exists-aggregate.sql_analyzer_test" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/exists-subquery/exists-basic.sql" : {
+      "executions" : 16,
+      "served" : 3,
+      "batches" : 5
+    },
+    "subquery/exists-subquery/exists-basic.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/exists-subquery/exists-count-bug.sql" : {
+      "executions" : 23,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/exists-subquery/exists-count-bug.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/exists-subquery/exists-cte.sql" : {
+      "executions" : 11,
+      "served" : 3,
+      "batches" : 7
+    },
+    "subquery/exists-subquery/exists-cte.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/exists-subquery/exists-having.sql" : {
+      "executions" : 11,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/exists-subquery/exists-having.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/exists-subquery/exists-in-join-condition.sql" : {
+      "executions" : 52,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/exists-subquery/exists-in-join-condition.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/exists-subquery/exists-joins-and-set-ops.sql" : {
+      "executions" : 282,
+      "served" : 162,
+      "batches" : 495
+    },
+    "subquery/exists-subquery/exists-joins-and-set-ops.sql_analyzer_test" : {
+      "executions" : 57,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/exists-subquery/exists-orderby-limit.sql" : {
+      "executions" : 104,
+      "served" : 18,
+      "batches" : 36
+    },
+    "subquery/exists-subquery/exists-orderby-limit.sql_analyzer_test" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/exists-subquery/exists-outside-filter.sql" : {
+      "executions" : 18,
+      "served" : 4,
+      "batches" : 5
+    },
+    "subquery/exists-subquery/exists-outside-filter.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/exists-subquery/exists-within-and-or.sql" : {
+      "executions" : 11,
+      "served" : 1,
+      "batches" : 2
+    },
+    "subquery/exists-subquery/exists-within-and-or.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-basic.sql" : {
+      "executions" : 22,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-basic.sql_analyzer_test" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-count-bug.sql" : {
+      "executions" : 26,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-count-bug.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-group-by.sql" : {
+      "executions" : 95,
+      "served" : 9,
+      "batches" : 24
+    },
+    "subquery/in-subquery/in-group-by.sql_analyzer_test" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-having.sql" : {
+      "executions" : 32,
+      "served" : 16,
+      "batches" : 44
+    },
+    "subquery/in-subquery/in-having.sql_analyzer_test" : {
+      "executions" : 8,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-joins.sql" : {
+      "executions" : 942,
+      "served" : 54,
+      "batches" : 216
+    },
+    "subquery/in-subquery/in-joins.sql_analyzer_test" : {
+      "executions" : 276,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-limit.sql" : {
+      "executions" : 88,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-limit.sql_analyzer_test" : {
+      "executions" : 12,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-multiple-columns.sql" : {
+      "executions" : 24,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-multiple-columns.sql_analyzer_test" : {
+      "executions" : 8,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-null-semantics.sql" : {
+      "executions" : 50,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-null-semantics.sql_analyzer_test" : {
+      "executions" : 16,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-nullability.sql" : {
+      "executions" : 12,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-nullability.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-order-by.sql" : {
+      "executions" : 148,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-order-by.sql_analyzer_test" : {
+      "executions" : 40,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-set-operations.sql" : {
+      "executions" : 32,
+      "served" : 20,
+      "batches" : 82
+    },
+    "subquery/in-subquery/in-set-operations.sql_analyzer_test" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-subquery-in-join-condition.sql" : {
+      "executions" : 48,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-subquery-in-join-condition.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/in-with-cte.sql" : {
+      "executions" : 34,
+      "served" : 14,
+      "batches" : 114
+    },
+    "subquery/in-subquery/in-with-cte.sql_analyzer_test" : {
+      "executions" : 8,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/nested-not-in.sql" : {
+      "executions" : 56,
+      "served" : 13,
+      "batches" : 23
+    },
+    "subquery/in-subquery/nested-not-in.sql_analyzer_test" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/not-in-group-by.sql" : {
+      "executions" : 38,
+      "served" : 3,
+      "batches" : 6
+    },
+    "subquery/in-subquery/not-in-group-by.sql_analyzer_test" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/not-in-joins.sql" : {
+      "executions" : 26,
+      "served" : 12,
+      "batches" : 48
+    },
+    "subquery/in-subquery/not-in-joins.sql_analyzer_test" : {
+      "executions" : 8,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/not-in-unit-tests-multi-column-literal.sql" : {
+      "executions" : 12,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/not-in-unit-tests-multi-column-literal.sql_analyzer_test" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/not-in-unit-tests-multi-column.sql" : {
+      "executions" : 24,
+      "served" : 12,
+      "batches" : 24
+    },
+    "subquery/in-subquery/not-in-unit-tests-multi-column.sql_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/not-in-unit-tests-single-column-literal.sql" : {
+      "executions" : 14,
+      "served" : 4,
+      "batches" : 4
+    },
+    "subquery/in-subquery/not-in-unit-tests-single-column-literal.sql_analyzer_test" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/not-in-unit-tests-single-column.sql" : {
+      "executions" : 26,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/not-in-unit-tests-single-column.sql_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/in-subquery/simple-in.sql" : {
+      "executions" : 40,
+      "served" : 4,
+      "batches" : 8
+    },
+    "subquery/in-subquery/simple-in.sql_analyzer_test" : {
+      "executions" : 12,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/negative-cases/invalid-correlation.sql" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/negative-cases/invalid-correlation.sql_analyzer_test" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/negative-cases/subq-input-typecheck.sql" : {
+      "executions" : 15,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/negative-cases/subq-input-typecheck.sql_analyzer_test" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/resolution-edge-cases.sql" : {
+      "executions" : 19,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/resolution-edge-cases.sql_analyzer_test" : {
+      "executions" : 8,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/scalar-subquery/nested-scalar-subquery-count-bug.sql" : {
+      "executions" : 24,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/scalar-subquery/nested-scalar-subquery-count-bug.sql_analyzer_test" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/scalar-subquery/scalar-subquery-count-bug.sql" : {
+      "executions" : 54,
+      "served" : 20,
+      "batches" : 42
+    },
+    "subquery/scalar-subquery/scalar-subquery-count-bug.sql_analyzer_test" : {
+      "executions" : 12,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/scalar-subquery/scalar-subquery-group-by.sql" : {
+      "executions" : 32,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/scalar-subquery/scalar-subquery-group-by.sql_analyzer_test" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/scalar-subquery/scalar-subquery-predicate.sql" : {
+      "executions" : 68,
+      "served" : 18,
+      "batches" : 72
+    },
+    "subquery/scalar-subquery/scalar-subquery-predicate.sql_analyzer_test" : {
+      "executions" : 9,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/scalar-subquery/scalar-subquery-select.sql" : {
+      "executions" : 60,
+      "served" : 3,
+      "batches" : 8
+    },
+    "subquery/scalar-subquery/scalar-subquery-select.sql_analyzer_test" : {
+      "executions" : 11,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/scalar-subquery/scalar-subquery-set-op.sql" : {
+      "executions" : 62,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/scalar-subquery/scalar-subquery-set-op.sql_analyzer_test" : {
+      "executions" : 9,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/subquery-in-from.sql" : {
+      "executions" : 6,
+      "served" : 6,
+      "batches" : 6
+    },
+    "subquery/subquery-in-from.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/subquery-nested-data.sql" : {
+      "executions" : 40,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/subquery-nested-data.sql_analyzer_test" : {
+      "executions" : 11,
+      "served" : 0,
+      "batches" : 0
+    },
+    "subquery/subquery-offset.sql" : {
+      "executions" : 32,
+      "served" : 4,
+      "batches" : 12
+    },
+    "subquery/subquery-offset.sql_analyzer_test" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "table-aliases.sql" : {
+      "executions" : 19,
+      "served" : 2,
+      "batches" : 3
+    },
+    "table-aliases.sql_analyzer_test" : {
+      "executions" : 8,
+      "served" : 0,
+      "batches" : 0
+    },
+    "table-valued-functions.sql" : {
+      "executions" : 73,
+      "served" : 0,
+      "batches" : 0
+    },
+    "table-valued-functions.sql_analyzer_test" : {
+      "executions" : 28,
+      "served" : 0,
+      "batches" : 0
+    },
+    "tablesample-negative.sql" : {
+      "executions" : 9,
+      "served" : 0,
+      "batches" : 0
+    },
+    "tablesample-negative.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "thetasketch.sql" : {
+      "executions" : 152,
+      "served" : 0,
+      "batches" : 0
+    },
+    "thetasketch.sql_analyzer_test" : {
+      "executions" : 42,
+      "served" : 0,
+      "batches" : 0
+    },
+    "time-bucket.sql" : {
+      "executions" : 88,
+      "served" : 0,
+      "batches" : 0
+    },
+    "time-bucket.sql_analyzer_test" : {
+      "executions" : 30,
+      "served" : 0,
+      "batches" : 0
+    },
+    "time-window.sql" : {
+      "executions" : 97,
+      "served" : 0,
+      "batches" : 0
+    },
+    "time-window.sql_analyzer_test" : {
+      "executions" : 34,
+      "served" : 0,
+      "batches" : 0
+    },
+    "time.sql" : {
+      "executions" : 313,
+      "served" : 0,
+      "batches" : 0
+    },
+    "time.sql_analyzer_test" : {
+      "executions" : 15,
+      "served" : 0,
+      "batches" : 0
+    },
+    "timestamp-ltz-nanos.sql" : {
+      "executions" : 209,
+      "served" : 0,
+      "batches" : 0
+    },
+    "timestamp-ltz-nanos.sql_analyzer_test" : {
+      "executions" : 9,
+      "served" : 0,
+      "batches" : 0
+    },
+    "timestamp-ltz.sql" : {
+      "executions" : 24,
+      "served" : 0,
+      "batches" : 0
+    },
+    "timestamp-ltz.sql_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "timestamp-ntz-nanos.sql" : {
+      "executions" : 199,
+      "served" : 0,
+      "batches" : 0
+    },
+    "timestamp-ntz-nanos.sql_analyzer_test" : {
+      "executions" : 7,
+      "served" : 0,
+      "batches" : 0
+    },
+    "timestamp-ntz.sql" : {
+      "executions" : 40,
+      "served" : 0,
+      "batches" : 0
+    },
+    "timestamp-ntz.sql_analyzer_test" : {
+      "executions" : 11,
+      "served" : 0,
+      "batches" : 0
+    },
+    "timestamp.sql" : {
+      "executions" : 136,
+      "served" : 0,
+      "batches" : 0
+    },
+    "timestamp.sql_analyzer_test" : {
+      "executions" : 11,
+      "served" : 0,
+      "batches" : 0
+    },
+    "timestampNTZ/datetime-special-ansi.sql" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "timestampNTZ/datetime-special-ansi.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "timestampNTZ/datetime-special.sql" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "timestampNTZ/datetime-special.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "timestampNTZ/timestamp-ansi.sql" : {
+      "executions" : 137,
+      "served" : 0,
+      "batches" : 0
+    },
+    "timestampNTZ/timestamp-ansi.sql_analyzer_test" : {
+      "executions" : 12,
+      "served" : 0,
+      "batches" : 0
+    },
+    "timestampNTZ/timestamp.sql" : {
+      "executions" : 137,
+      "served" : 0,
+      "batches" : 0
+    },
+    "timestampNTZ/timestamp.sql_analyzer_test" : {
+      "executions" : 16,
+      "served" : 0,
+      "batches" : 0
+    },
+    "timezone.sql" : {
+      "executions" : 16,
+      "served" : 0,
+      "batches" : 0
+    },
+    "timezone.sql_analyzer_test" : {
+      "executions" : 8,
+      "served" : 0,
+      "batches" : 0
+    },
+    "to_from_avro.sql" : {
+      "executions" : 16,
+      "served" : 0,
+      "batches" : 0
+    },
+    "to_from_avro.sql_analyzer_test" : {
+      "executions" : 11,
+      "served" : 0,
+      "batches" : 0
+    },
+    "transform.sql" : {
+      "executions" : 51,
+      "served" : 12,
+      "batches" : 25
+    },
+    "transform.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "try-string-functions.sql" : {
+      "executions" : 35,
+      "served" : 0,
+      "batches" : 0
+    },
+    "try-string-functions.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "try_aggregates.sql" : {
+      "executions" : 32,
+      "served" : 0,
+      "batches" : 0
+    },
+    "try_aggregates.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "try_arithmetic.sql" : {
+      "executions" : 86,
+      "served" : 0,
+      "batches" : 0
+    },
+    "try_arithmetic.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "try_cast.sql" : {
+      "executions" : 33,
+      "served" : 0,
+      "batches" : 0
+    },
+    "try_cast.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "try_datetime_functions.sql" : {
+      "executions" : 11,
+      "served" : 0,
+      "batches" : 0
+    },
+    "try_datetime_functions.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "try_element_at.sql" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "try_element_at.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "try_reflect.sql" : {
+      "executions" : 12,
+      "served" : 0,
+      "batches" : 0
+    },
+    "try_reflect.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "tuplesketch.sql" : {
+      "executions" : 340,
+      "served" : 0,
+      "batches" : 0
+    },
+    "tuplesketch.sql_analyzer_test" : {
+      "executions" : 61,
+      "served" : 0,
+      "batches" : 0
+    },
+    "type-coercion-edge-cases.sql" : {
+      "executions" : 7,
+      "served" : 0,
+      "batches" : 0
+    },
+    "type-coercion-edge-cases.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/arrayJoin.sql" : {
+      "executions" : 11,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/arrayJoin.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/binaryComparison.sql" : {
+      "executions" : 266,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/binaryComparison.sql_analyzer_test" : {
+      "executions" : 25,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/booleanEquality.sql" : {
+      "executions" : 98,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/booleanEquality.sql_analyzer_test" : {
+      "executions" : 81,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/caseWhenCoercion.sql" : {
+      "executions" : 146,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/caseWhenCoercion.sql_analyzer_test" : {
+      "executions" : 67,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/concat.sql" : {
+      "executions" : 17,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/concat.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/dateTimeOperations.sql" : {
+      "executions" : 45,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/dateTimeOperations.sql_analyzer_test" : {
+      "executions" : 28,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/decimalPrecision.sql" : {
+      "executions" : 1146,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/decimalPrecision.sql_analyzer_test" : {
+      "executions" : 365,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/division.sql" : {
+      "executions" : 146,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/division.sql_analyzer_test" : {
+      "executions" : 82,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/elt.sql" : {
+      "executions" : 8,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/elt.sql_analyzer_test" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/ifCoercion.sql" : {
+      "executions" : 146,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/ifCoercion.sql_analyzer_test" : {
+      "executions" : 67,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/implicitTypeCasts.sql" : {
+      "executions" : 48,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/implicitTypeCasts.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/inConversion.sql" : {
+      "executions" : 290,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/inConversion.sql_analyzer_test" : {
+      "executions" : 133,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/mapZipWith.sql" : {
+      "executions" : 20,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/mapZipWith.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/mapconcat.sql" : {
+      "executions" : 9,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/mapconcat.sql_analyzer_test" : {
+      "executions" : 7,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/promoteStrings.sql" : {
+      "executions" : 317,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/promoteStrings.sql_analyzer_test" : {
+      "executions" : 51,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/stringCastAndExpressions.sql" : {
+      "executions" : 33,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/stringCastAndExpressions.sql_analyzer_test" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/widenSetOperationTypes.sql" : {
+      "executions" : 146,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/widenSetOperationTypes.sql_analyzer_test" : {
+      "executions" : 67,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/windowFrameCoercion.sql" : {
+      "executions" : 26,
+      "served" : 0,
+      "batches" : 0
+    },
+    "typeCoercion/native/windowFrameCoercion.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-aggregates_part1.sql - Regular Python UDF" : {
+      "executions" : 58,
+      "served" : 1,
+      "batches" : 1
+    },
+    "udf/postgreSQL/udf-aggregates_part1.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-aggregates_part1.sql - Scala UDF" : {
+      "executions" : 58,
+      "served" : 1,
+      "batches" : 1
+    },
+    "udf/postgreSQL/udf-aggregates_part1.sql - Scala UDF_analyzer_test" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-aggregates_part2.sql - Regular Python UDF" : {
+      "executions" : 28,
+      "served" : 2,
+      "batches" : 4
+    },
+    "udf/postgreSQL/udf-aggregates_part2.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-aggregates_part2.sql - Scala UDF" : {
+      "executions" : 28,
+      "served" : 2,
+      "batches" : 4
+    },
+    "udf/postgreSQL/udf-aggregates_part2.sql - Scala UDF_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-aggregates_part3.sql - Regular Python UDF" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-aggregates_part3.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-aggregates_part3.sql - Scala UDF" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-aggregates_part3.sql - Scala UDF_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-aggregates_part4.sql - Regular Python UDF" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-aggregates_part4.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-aggregates_part4.sql - Scala UDF" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-aggregates_part4.sql - Scala UDF_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-case.sql - Regular Python UDF" : {
+      "executions" : 48,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-case.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-case.sql - Scala UDF" : {
+      "executions" : 48,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-case.sql - Scala UDF_analyzer_test" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-join.sql - Regular Python UDF" : {
+      "executions" : 279,
+      "served" : 24,
+      "batches" : 191
+    },
+    "udf/postgreSQL/udf-join.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 92,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-join.sql - Scala UDF" : {
+      "executions" : 279,
+      "served" : 24,
+      "batches" : 186
+    },
+    "udf/postgreSQL/udf-join.sql - Scala UDF_analyzer_test" : {
+      "executions" : 92,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-select_having.sql - Regular Python UDF" : {
+      "executions" : 34,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-select_having.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-select_having.sql - Scala UDF" : {
+      "executions" : 34,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-select_having.sql - Scala UDF_analyzer_test" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-select_implicit.sql - Regular Python UDF" : {
+      "executions" : 50,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-select_implicit.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 18,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-select_implicit.sql - Scala UDF" : {
+      "executions" : 50,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/postgreSQL/udf-select_implicit.sql - Scala UDF_analyzer_test" : {
+      "executions" : 18,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-count.sql - Regular Python UDF" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-count.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-count.sql - Scala UDF" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-count.sql - Scala UDF_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-cross-join.sql - Regular Python UDF" : {
+      "executions" : 19,
+      "served" : 1,
+      "batches" : 2
+    },
+    "udf/udf-cross-join.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-cross-join.sql - Scala UDF" : {
+      "executions" : 19,
+      "served" : 1,
+      "batches" : 2
+    },
+    "udf/udf-cross-join.sql - Scala UDF_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-except-all.sql - Regular Python UDF" : {
+      "executions" : 35,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-except-all.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-except-all.sql - Scala UDF" : {
+      "executions" : 35,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-except-all.sql - Scala UDF_analyzer_test" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-except.sql - Regular Python UDF" : {
+      "executions" : 11,
+      "served" : 3,
+      "batches" : 6
+    },
+    "udf/udf-except.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-except.sql - Scala UDF" : {
+      "executions" : 11,
+      "served" : 3,
+      "batches" : 6
+    },
+    "udf/udf-except.sql - Scala UDF_analyzer_test" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-group-analytics.sql - Regular Python UDF" : {
+      "executions" : 31,
+      "served" : 1,
+      "batches" : 2
+    },
+    "udf/udf-group-analytics.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 8,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-group-analytics.sql - Scala UDF" : {
+      "executions" : 31,
+      "served" : 1,
+      "batches" : 2
+    },
+    "udf/udf-group-analytics.sql - Scala UDF_analyzer_test" : {
+      "executions" : 8,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-group-by.sql - Regular Python UDF" : {
+      "executions" : 56,
+      "served" : 5,
+      "batches" : 8
+    },
+    "udf/udf-group-by.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 17,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-group-by.sql - Scala UDF" : {
+      "executions" : 56,
+      "served" : 5,
+      "batches" : 8
+    },
+    "udf/udf-group-by.sql - Scala UDF_analyzer_test" : {
+      "executions" : 17,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-having.sql - Regular Python UDF" : {
+      "executions" : 6,
+      "served" : 1,
+      "batches" : 2
+    },
+    "udf/udf-having.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-having.sql - Scala UDF" : {
+      "executions" : 6,
+      "served" : 1,
+      "batches" : 2
+    },
+    "udf/udf-having.sql - Scala UDF_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-inline-table.sql - Regular Python UDF" : {
+      "executions" : 15,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-inline-table.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-inline-table.sql - Scala UDF" : {
+      "executions" : 15,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-inline-table.sql - Scala UDF_analyzer_test" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-inner-join.sql - Regular Python UDF" : {
+      "executions" : 13,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-inner-join.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-inner-join.sql - Scala UDF" : {
+      "executions" : 13,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-inner-join.sql - Scala UDF_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-intersect-all.sql - Regular Python UDF" : {
+      "executions" : 28,
+      "served" : 3,
+      "batches" : 6
+    },
+    "udf/udf-intersect-all.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 8,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-intersect-all.sql - Scala UDF" : {
+      "executions" : 28,
+      "served" : 3,
+      "batches" : 6
+    },
+    "udf/udf-intersect-all.sql - Scala UDF_analyzer_test" : {
+      "executions" : 8,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-join-empty-relation.sql - Regular Python UDF" : {
+      "executions" : 27,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-join-empty-relation.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-join-empty-relation.sql - Scala UDF" : {
+      "executions" : 27,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-join-empty-relation.sql - Scala UDF_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-natural-join.sql - Regular Python UDF" : {
+      "executions" : 8,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-natural-join.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-natural-join.sql - Scala UDF" : {
+      "executions" : 8,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-natural-join.sql - Scala UDF_analyzer_test" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-outer-join.sql - Regular Python UDF" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-outer-join.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-outer-join.sql - Scala UDF" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-outer-join.sql - Scala UDF_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-pivot.sql - Regular Python UDF" : {
+      "executions" : 33,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-pivot.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 12,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-pivot.sql - Scala UDF" : {
+      "executions" : 33,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-pivot.sql - Scala UDF_analyzer_test" : {
+      "executions" : 12,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-special-values.sql - Regular Python UDF" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-special-values.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-special-values.sql - Scala UDF" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-special-values.sql - Scala UDF_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-udaf.sql - Regular Python UDF" : {
+      "executions" : 13,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-udaf.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 7,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-udaf.sql - Scala UDF" : {
+      "executions" : 13,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-udaf.sql - Scala UDF_analyzer_test" : {
+      "executions" : 7,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-union.sql - Regular Python UDF" : {
+      "executions" : 26,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-union.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-union.sql - Scala UDF" : {
+      "executions" : 26,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-union.sql - Scala UDF_analyzer_test" : {
+      "executions" : 10,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-window.sql - Regular Python UDF" : {
+      "executions" : 23,
+      "served" : 1,
+      "batches" : 2
+    },
+    "udf/udf-window.sql - Regular Python UDF_analyzer_test" : {
+      "executions" : 8,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udf/udf-window.sql - Scala UDF" : {
+      "executions" : 23,
+      "served" : 1,
+      "batches" : 2
+    },
+    "udf/udf-window.sql - Scala UDF_analyzer_test" : {
+      "executions" : 8,
+      "served" : 0,
+      "batches" : 0
+    },
+    "udtf/udtf.sql - Python UDTFs" : {
+      "executions" : 79,
+      "served" : 2,
+      "batches" : 4
+    },
+    "udtf/udtf.sql - Python UDTFs_analyzer_test" : {
+      "executions" : 39,
+      "served" : 0,
+      "batches" : 0
+    },
+    "union-per-child-output-deduplication.sql" : {
+      "executions" : 20,
+      "served" : 0,
+      "batches" : 0
+    },
+    "union-per-child-output-deduplication.sql_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "union-resolution-edge-cases.sql" : {
+      "executions" : 16,
+      "served" : 0,
+      "batches" : 0
+    },
+    "union-resolution-edge-cases.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "union.sql" : {
+      "executions" : 37,
+      "served" : 0,
+      "batches" : 0
+    },
+    "union.sql_analyzer_test" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "unnest.sql" : {
+      "executions" : 21,
+      "served" : 0,
+      "batches" : 0
+    },
+    "unnest.sql_analyzer_test" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "unpivot.sql" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "unpivot.sql_analyzer_test" : {
+      "executions" : 3,
+      "served" : 0,
+      "batches" : 0
+    },
+    "url-functions.sql" : {
+      "executions" : 19,
+      "served" : 0,
+      "batches" : 0
+    },
+    "url-functions.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "using-join.sql" : {
+      "executions" : 44,
+      "served" : 0,
+      "batches" : 0
+    },
+    "using-join.sql_analyzer_test" : {
+      "executions" : 2,
+      "served" : 0,
+      "batches" : 0
+    },
+    "variant-field-extractions.sql" : {
+      "executions" : 40,
+      "served" : 0,
+      "batches" : 0
+    },
+    "variant-field-extractions.sql_analyzer_test" : {
+      "executions" : 1,
+      "served" : 0,
+      "batches" : 0
+    },
+    "variant/named-function-arguments.sql" : {
+      "executions" : 5,
+      "served" : 0,
+      "batches" : 0
+    },
+    "variant/named-function-arguments.sql_analyzer_test" : {
+      "executions" : 0,
+      "served" : 0,
+      "batches" : 0
+    },
+    "variant/variant-from-arrays-entries.sql" : {
+      "executions" : 21,
+      "served" : 0,
+      "batches" : 0
+    },
+    "variant/variant-from-arrays-entries.sql_analyzer_test" : {
+      "executions" : 6,
+      "served" : 0,
+      "batches" : 0
+    },
+    "vector-agg.sql" : {
+      "executions" : 16,
+      "served" : 0,
+      "batches" : 0
+    },
+    "vector-agg.sql_analyzer_test" : {
+      "executions" : 4,
+      "served" : 0,
+      "batches" : 0
+    },
+    "vector-distance.sql" : {
+      "executions" : 51,
+      "served" : 0,
+      "batches" : 0
+    },
+    "vector-distance.sql_analyzer_test" : {
+      "executions" : 21,
+      "served" : 0,
+      "batches" : 0
+    },
+    "vector-norm.sql" : {
+      "executions" : 65,
+      "served" : 0,
+      "batches" : 0
+    },
+    "vector-norm.sql_analyzer_test" : {
+      "executions" : 14,
+      "served" : 0,
+      "batches" : 0
+    },
+    "view-conf.sql" : {
+      "executions" : 20,
+      "served" : 0,
+      "batches" : 0
+    },
+    "view-conf.sql_analyzer_test" : {
+      "executions" : 9,
+      "served" : 0,
+      "batches" : 0
+    },
+    "view-schema-binding-config.sql" : {
+      "executions" : 184,
+      "served" : 0,
+      "batches" : 0
+    },
+    "view-schema-binding-config.sql_analyzer_test" : {
+      "executions" : 90,
+      "served" : 0,
+      "batches" : 0
+    },
+    "view-schema-binding.sql" : {
+      "executions" : 59,
+      "served" : 0,
+      "batches" : 0
+    },
+    "view-schema-binding.sql_analyzer_test" : {
+      "executions" : 30,
+      "served" : 0,
+      "batches" : 0
+    },
+    "view-schema-compensation.sql" : {
+      "executions" : 90,
+      "served" : 0,
+      "batches" : 0
+    },
+    "view-schema-compensation.sql_analyzer_test" : {
+      "executions" : 44,
+      "served" : 0,
+      "batches" : 0
+    },
+    "view-schema-evolution.sql" : {
+      "executions" : 183,
+      "served" : 0,
+      "batches" : 0
+    },
+    "view-schema-evolution.sql_analyzer_test" : {
+      "executions" : 86,
+      "served" : 0,
+      "batches" : 0
+    },
+    "view-schema-type-evolution.sql" : {
+      "executions" : 106,
+      "served" : 0,
+      "batches" : 0
+    },
+    "view-schema-type-evolution.sql_analyzer_test" : {
+      "executions" : 50,
+      "served" : 0,
+      "batches" : 0
+    },
+    "view-with-default-collation.sql" : {
+      "executions" : 192,
+      "served" : 0,
+      "batches" : 0
+    },
+    "view-with-default-collation.sql_analyzer_test" : {
+      "executions" : 72,
+      "served" : 0,
+      "batches" : 0
+    },
+    "window-with-aggregates.sql" : {
+      "executions" : 22,
+      "served" : 1,
+      "batches" : 2
+    },
+    "window-with-aggregates.sql_analyzer_test" : {
+      "executions" : 13,
+      "served" : 0,
+      "batches" : 0
+    },
+    "window.sql" : {
+      "executions" : 454,
+      "served" : 6,
+      "batches" : 12
+    },
+    "window.sql_analyzer_test" : {
+      "executions" : 118,
+      "served" : 0,
+      "batches" : 0
+    },
+    "xml-functions.sql" : {
+      "executions" : 59,
+      "served" : 0,
+      "batches" : 0
+    },
+    "xml-functions.sql_analyzer_test" : {
+      "executions" : 16,
+      "served" : 0,
+      "batches" : 0
+    }
   }
 }

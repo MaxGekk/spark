@@ -22,14 +22,17 @@
 #   dev/varka_golden_suite.sh --attribute              # and the cache-only arm over its failures
 #   dev/varka_golden_suite.sh --arm cacheOnly          # the Arrow source with Varka off
 #   dev/varka_golden_suite.sh --file date.sql --file interval.sql   # a few files only
-#   dev/varka_golden_suite.sh --fault misdescribeAdd --file date.sql   # the planted fault
+#   dev/varka_golden_suite.sh --fault misdescribeWordLiveness --file postgreSQL/date.sql
+#                                                      # the planted fault: served tests fail
 #   dev/varka_golden_suite.sh --skip-build --out DIR   # reuse the last build's classpath
 #
 # --file is a substring of the test name, ScalaTest's -z, and may repeat. --deadline SECS stops
 # each arm past that many seconds (default 7200). --attribute reruns the cache-only arm over the
 # tests the Varka arm failed: a test failing in both is the harness's, one failing only with
 # Varka on is Varka's. VARKA_GOLDEN_SUITE_REGEN=true in the environment rewrites
-# sql/varka/spark_suites/served.json from the run, which must then cover every file.
+# sql/varka/spark_suites/served.json from the run; the suite refuses unless it is the Varka arm
+# over every file with no fault planted. Until literals are lifted (271b) the fault that shows the
+# suite reaching Varka is misdescribeWordLiveness, under which every emission raises.
 #
 # The suite needs its own JVM: it sets the Arrow cache serializer, a process-wide field fixed at
 # first use. sbt builds once and exports the test classpath and JVM options, as
