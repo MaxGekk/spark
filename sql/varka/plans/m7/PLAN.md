@@ -815,7 +815,7 @@ yet read them.
 | 2 | 255 | Takes the laptop out of CI's path and, with the benchmark pairs on GitHub-hosted runners, out of the benchmark queue; every later row's CI and every pair benefit | medium |
 | 3 | 243, then 244 | 1.1 point 1 is the one done-when point with nothing in flight; 243 bounds the specification to the coverage table's operations (risk 3), and 244 names Spark's departures with a test each | medium each |
 | 4 | 274b, 272, 279, 326, 327, 298 | The rest of point 2's compiled-kernel and guard checks; 272 reuses 274a's witness, 279 reads 138's domains; 298 last of them, the analyzer's casts at random | small to medium each |
-| 5 | 313, 314, 316, 317, 318, 319, 315 | The errors rows, in the order section 2.4 gives them; 317 and 319 are test strength as well | small to medium each |
+| 5 | 313, 314, 315, 317, 318, 319, 316 | The errors rows, in the order section 4 gives them, 315 after 314 and 316 last; 317 and 319 are test strength as well | small to medium each |
 | 6 | 322b, 322c | The last test code to Java; their pairs run where 255 leaves the benchmarks | medium to large |
 | 7 | 281, 245 | The analyses proven and the refinement proofs, after 243 and 244 show what they cost | medium each |
 | 8 | 258, 259, 260 | The posts, 258 first; 260 between them and the next long post | medium, small |
