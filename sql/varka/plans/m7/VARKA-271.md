@@ -269,15 +269,15 @@ Done on 13 October 2026, as 3.1, 3.2, 3.4 and 3.5 describe, without the lift (27
   files' execution tests, as many analyzer tests, and the parent's two own tests), 784 passed,
   6 cancelled by `excluded.tsv`, 59 ignored by Spark itself (Python and pandas UDF variants with no
   pyspark, `ignored.sql`), none failed. The Varka arm took 1,995 s and the cache-only arm 1,979 s.
-* **What Varka served**, in the first run. 47,323 query executions, 1,583 of them with a batch
-  Varka served, 5,841 batches, in 108 tests (106 of them execution tests). Counting the
-  execution tests alone, as the admission check did: 36,280 executions, 1,520 served, 5,597 batches, against 32,429, 1,423 and
-  5,323. The rise is the cache rule asking the compiler which column types a kernel reads
+* **What Varka served**, in the first run. 47,323 query executions, 1,583 of them with a batch Varka
+  served, 5,841 batches, in 108 tests (106 of them execution tests). Counting the execution tests
+  alone, as the admission check did: 36,280 executions, 1,520 served, 5,597 batches, against 32,429,
+  1,423 and 5,323. The rise is the cache rule asking the compiler which column types a kernel reads
   (`VarkaExpressionCompiler.readsColumnOf`, new), which adds the long lane's bigint, TIME and
-  day-time interval columns to the probe's date, int and year-month set. The tests serving most
-  are joins and subqueries over the `postgreSQL` and `subquery` fixtures (`postgreSQL/join.sql`
-  441 served executions); the date files serve almost nothing, since their statements have no
-  `FROM`, which is 271b's case.
+  day-time interval columns to the probe's date, int and year-month set. The tests serving most are
+  joins and subqueries over the `postgreSQL` and `subquery` fixtures (`postgreSQL/join.sql` 441
+  served executions); the date files serve almost nothing, since their statements have no `FROM`,
+  which is 271b's case.
 * **The two limits.** No cached relation under a command, and none whose output holds a hidden
   metadata column: the four `identifier-clause` tests and `metadata_column_resolution.sql`, which
   failed in both arms of the admission check, pass in both (test 5).
