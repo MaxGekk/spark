@@ -42,7 +42,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
  *
  * <p>A class named {@code Varka...Suite} under this annotation is found by
  * {@code dev/varka_matrix.sh} beside the Scala suites, so the gate, the matrix and CI's scoped
- * jobs run it with no change of their own.
+ * jobs run it with no change of their own. The script reads the annotation in the class's own
+ * source file, so the annotation goes on the class itself: it is {@code @Inherited} only so that a
+ * subclass relying on its base class's fails loudly under sbt instead of running as a plain JUnit
+ * class. The extension also fails a class whose tests are not plain {@code @Test} methods
+ * (parameterized, repeated or dynamic tests) or that holds {@code @Nested} classes, which the
+ * harness cannot wrap or name.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
@@ -65,14 +70,17 @@ public @interface VarkaSuite {
    * Minutes a test may run before the watchdog acts: by default the JVM's cap
    * ({@code varka.test.watchdog.minutes}, ten unless set), {@code 0} for no watchdog - a suite
    * whose tests are meant to outlast any cap, as a fuzzer that mixes in {@code VarkaMatrixTests}
-   * alone does in Scala.
+   * alone does in Scala. An {@link #ownJvm} class's child JVM is limited to this less a minute,
+   * and not at all for {@code 0}.
    */
   long watchdogMinutes() default JVM_CAP;
 
   /**
    * Whether the class runs in a JVM of its own when it is run in a shared one, as a Scala suite
    * mixing in {@code VarkaOwnJvm} does: the first test to run starts a child JVM that runs the
-   * whole class, and every test takes its result from the child's report.
+   * whole class, and every test takes its result from the child's report: passed, failed with
+   * the child's message, or cancelled with the child's reason. The skip list and the watchdog act
+   * in the child only, so the parent never reinterprets the child's verdict.
    */
   boolean ownJvm() default false;
 }

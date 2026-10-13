@@ -138,7 +138,8 @@ public final class VarkaSuiteReport {
   /**
    * Every test case of the reports in {@code dir}, in file and document order: failed where it
    * has a {@code failure} or {@code error} element (with that element's message, prefixed as a
-   * failure in another JVM), cancelled where it has a {@code skipped} one, passed otherwise.
+   * failure in another JVM), cancelled where it has a {@code skipped} one (with its message as the
+   * reason, when it has one), passed otherwise. A suite-level abort is {@link #abortOf}'s.
    * Empty when the directory holds no report.
    */
   public static Map<String, Result> read(File dir) throws Exception {
@@ -160,7 +161,10 @@ public final class VarkaSuiteReport {
         } else if (node.getElementsByTagName("error").getLength() > 0) {
           result = new Failed("in its own JVM: " + messageOf(node, "error"));
         } else if (node.getElementsByTagName("skipped").getLength() > 0) {
-          result = new Skipped("cancelled in its own JVM");
+          // The child's own reason where the report holds one (ours does; ScalaTest's
+          // <skipped/> carries none).
+          String reason = messageOf(node, "skipped");
+          result = new Skipped(reason.isEmpty() ? "cancelled in its own JVM" : reason);
         } else {
           result = new Passed();
         }
@@ -168,6 +172,30 @@ public final class VarkaSuiteReport {
       }
     }
     return results;
+  }
+
+  /**
+   * Why a suite in {@code dir}'s reports aborted as a whole, when one did: the message of an
+   * {@code error} element directly under its {@code testsuite}, which {@link #write} adds for a
+   * class-level hook that threw. {@link #read} sees only test cases, and such a suite's cases may
+   * all have passed before the hook threw, or never have run.
+   */
+  public static Optional<String> abortOf(File dir) throws Exception {
+    File[] files = dir.listFiles((d, name) -> name.endsWith(".xml"));
+    if (files == null) {
+      return Optional.empty();
+    }
+    Arrays.sort(files);
+    DocumentBuilder builder = DocumentBuilderFactory.newInstance().newDocumentBuilder();
+    for (File file : files) {
+      NodeList children = builder.parse(file).getDocumentElement().getChildNodes();
+      for (int i = 0; i < children.getLength(); i++) {
+        if (children.item(i) instanceof Element e && e.getTagName().equals("error")) {
+          return Optional.of(e.getAttribute("message"));
+        }
+      }
+    }
+    return Optional.empty();
   }
 
   private static String messageOf(Element testCase, String tag) {

@@ -182,15 +182,22 @@ public final class VarkaSuiteListener implements TestExecutionListener {
     run.cases().add(new Case(name, outcome, seconds));
   }
 
-  /** A class has ended: an aborted suite when a class-level hook failed, a completed one else. */
+  /**
+   * A class has ended: a completed suite when its container succeeded, an aborted one when a
+   * class-level hook failed (FAILED) or a class-level assumption failed (ABORTED, which JUnit
+   * gives a container whose tests it then never starts). ScalaTest reports both kinds as an
+   * aborted suite, and an aborted class must not pass as a completed one with no tests.
+   */
   private void finishClass(ClassRun run, TestExecutionResult result) {
-    Optional<String> aborted = Optional.empty();
-    if (result.getStatus() == TestExecutionResult.Status.FAILED) {
-      String message = result.getThrowable().map(VarkaSuiteListener::messageOf).orElse("");
+    Optional<String> aborted = switch (result.getStatus()) {
+      case SUCCESSFUL -> Optional.empty();
+      case FAILED, ABORTED ->
+          Optional.of(result.getThrowable().map(VarkaSuiteListener::messageOf).orElse(""));
+    };
+    if (aborted.isPresent()) {
       out.println("Exception encountered when attempting to run a suite with class name: "
           + run.className() + " *** ABORTED ***");
-      printIndented(message);
-      aborted = Optional.of(message);
+      printIndented(aborted.get());
       counts = counts.plus(new Counts(0, 0, 0, 0, 0, 0, 1));
     } else {
       counts = counts.plus(new Counts(0, 0, 0, 0, 0, 1, 0));

@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -30,7 +31,10 @@ import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestFactory;
+import org.junit.jupiter.api.TestTemplate;
 import org.junit.jupiter.api.extension.AfterAllCallback;
 import org.junit.jupiter.api.extension.BeforeAllCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
@@ -38,6 +42,7 @@ import org.junit.jupiter.api.extension.InvocationInterceptor;
 import org.junit.jupiter.api.extension.ReflectiveInvocationContext;
 import org.junit.platform.commons.support.AnnotationSupport;
 import org.junit.platform.commons.support.HierarchyTraversalMode;
+import org.junit.platform.commons.support.ReflectionSupport;
 import org.opentest4j.AssertionFailedError;
 import org.opentest4j.TestAbortedException;
 
@@ -63,16 +68,19 @@ import org.apache.spark.sql.util.ArrowUtils;
  *       expects to fail is cancelled when it fails and fails as a stale entry when it passes -
  *       and records its fused batches;</li>
  *   <li>inside that, {@link VarkaWatchdog#guard} caps it;</li>
- *   <li>inside that, the body: the test method itself, or, for an {@code ownJvm} class in the
- *       shared JVM, the result the child JVM reported for it.</li>
+ *   <li>inside that, the test method itself.</li>
  * </ol>
- * A cancel is opentest4j's {@link TestAbortedException}, which JUnit reports as aborted and the
+ * An {@code ownJvm} class in the shared JVM skips all three: the child JVM ran the class under
+ * them, and each test only takes the child's result, as it is.
+ *
+ * <p>A cancel is opentest4j's {@link TestAbortedException}, which JUnit reports as aborted and the
  * listener prints {@code !!! CANCELED !!!}. It is thrown from the interceptor rather than decided
  * by an {@code ExecutionCondition}, because a condition would report the test disabled, which is
  * ScalaTest's "ignored", not its "canceled".
  *
- * <p>Around the class: before it, the extension fails a class two of whose tests share a display
- * name, since the skip list and the fused-batch report key a test by its suite and name; and under
+ * <p>Around the class: before it, the extension fails a class whose shape it cannot hold
+ * ({@link #checkShape}: two tests with one name, a test that is not a plain {@code @Test}, a
+ * {@code @Nested} class, the annotation only inherited); and under
  * the memory sanitizer it holds the class to leave Arrow's root allocator where it found it, as
  * {@code VarkaMatrixTests.run} does.
  */
@@ -97,12 +105,7 @@ public final class VarkaSuiteExtension
 
   @Override
   public void beforeAll(ExtensionContext context) {
-    Class<?> testClass = context.getRequiredTestClass();
-    List<String> repeated = repeatedNames(displayNames(testClass));
-    if (!repeated.isEmpty()) {
-      throw new IllegalStateException(testClass.getSimpleName() + " names more than one test "
-          + repeated + "; a Varka suite's test names are its skip-list keys and must be unique");
-    }
+    checkShape(context.getRequiredTestClass());
     if (VarkaMemorySanitizer.ENABLED) {
       context.getStore(NAMESPACE).put(ARROW_BEFORE,
           ArrowUtils.rootAllocator().getAllocatedMemory());
@@ -124,6 +127,54 @@ public final class VarkaSuiteExtension
       throw new IllegalStateException(context.getRequiredTestClass().getSimpleName() + " left "
           + leaked + " bytes of Arrow memory allocated (the memory sanitizer's every-byte-back"
           + " check): a buffer was not closed");
+    }
+  }
+
+  /**
+   * Fails a class whose shape the harness cannot hold, before any of its tests runs, so the class
+   * is reported aborted rather than its tests run outside the harness:
+   * <ul>
+   *   <li>two tests with one display name, since the skip list and the fused-batch report key a
+   *       test by its suite and name;</li>
+   *   <li>a {@code @ParameterizedTest}, {@code @RepeatedTest} or {@code @TestFactory} test: JUnit
+   *       runs those through other interceptor methods than {@link #interceptTestMethod}, so they
+   *       would bypass the skip list, {@code PinsDefaults} and the watchdog, and their
+   *       invocations' names ({@code [1] ...}) make poor skip-list keys;</li>
+   *   <li>a {@code @Nested} class, which inherits this extension but not the annotation, and
+   *       whose tests the listener and the reports would put under the outer class's name;</li>
+   *   <li>{@code @VarkaSuite} inherited from a superclass only: {@code dev/varka_matrix.sh} finds
+   *       a Java suite by the annotation in its own source file, so the matrix, the gate and CI's
+   *       scoped jobs would never run such a class.</li>
+   * </ul>
+   */
+  static void checkShape(Class<?> testClass) {
+    String name = testClass.getSimpleName();
+    List<String> repeated = repeatedNames(displayNames(testClass));
+    if (!repeated.isEmpty()) {
+      throw new IllegalStateException(name + " names more than one test " + repeated
+          + "; a Varka suite's test names are its skip-list keys and must be unique");
+    }
+    var templates = new ArrayList<String>();
+    for (Class<? extends Annotation> kind : List.of(TestTemplate.class, TestFactory.class)) {
+      for (Method m : AnnotationSupport.findAnnotatedMethods(testClass, kind,
+          HierarchyTraversalMode.TOP_DOWN)) {
+        templates.add(m.getName());
+      }
+    }
+    if (!templates.isEmpty()) {
+      throw new IllegalStateException(name + " has parameterized, repeated or dynamic tests "
+          + templates + "; a @VarkaSuite test must be a plain @Test, which the harness wraps");
+    }
+    List<Class<?>> nested = ReflectionSupport.findNestedClasses(testClass,
+        c -> c.isAnnotationPresent(Nested.class));
+    if (!nested.isEmpty()) {
+      throw new IllegalStateException(name + " holds @Nested classes "
+          + nested.stream().map(Class::getSimpleName).toList()
+          + "; a @VarkaSuite class keeps its tests in the class itself");
+    }
+    if (testClass.getDeclaredAnnotation(VarkaSuite.class) == null) {
+      throw new IllegalStateException(name + " takes @VarkaSuite from a superclass; declare it"
+          + " on the class itself, where dev/varka_matrix.sh finds a Java suite");
     }
   }
 
@@ -167,20 +218,20 @@ public final class VarkaSuiteExtension
     VarkaSuite suite = AnnotationSupport.findAnnotation(testClass, VarkaSuite.class)
         .orElseThrow(() -> new IllegalStateException(
             testClass.getName() + " registers VarkaSuiteExtension without @VarkaSuite"));
-    long minutes = suite.watchdogMinutes() == VarkaSuite.JVM_CAP
-        ? VarkaWatchdog.defaultMinutes() : suite.watchdogMinutes();
+    long minutes = capMinutes(suite);
     Guard guard = minutes == 0 ? Guard.NONE
         : (s, t, body) -> VarkaWatchdog.guard(s, t, minutes, body);
     String test = context.getDisplayName();
+    boolean answeredByChild = suite.ownJvm() && !VarkaChildJvm.inChild();
     // Jupiter requires an intercepted invocation to be proceeded or skipped exactly once; a test
     // cancelled before its body, or answered from the child JVM, skips it.
     var invoked = new boolean[1];
     Body<Object> body;
-    if (suite.ownJvm() && !VarkaChildJvm.inChild()) {
+    if (answeredByChild) {
       body = () -> {
         invoked[0] = true;
         invocation.skip();
-        return answerFromChild(childResults(testClass.getName()), test);
+        return answerFromChild(childResults(testClass.getName(), minutes), test);
       };
     } else {
       body = () -> {
@@ -192,12 +243,18 @@ public final class VarkaSuiteExtension
     try {
       runTest(VarkaMatrixRuns.CONFIG, VarkaMatrixRuns.skips(),
           Optional.ofNullable(System.getProperty(VarkaMatrixRuns.REPORT_PROPERTY)), guard,
-          testClass.getSimpleName(), test, context.getTags(), body);
+          testClass.getSimpleName(), test, context.getTags(), answeredByChild, body);
     } finally {
       if (!invoked[0]) {
         invocation.skip();
       }
     }
+  }
+
+  /** The minutes the watchdog gives each of {@code suite}'s tests: 0 for no watchdog. */
+  static long capMinutes(VarkaSuite suite) {
+    return suite.watchdogMinutes() == VarkaSuite.JVM_CAP
+        ? VarkaWatchdog.defaultMinutes() : suite.watchdogMinutes();
   }
 
   /** What caps one test's body: the watchdog, or nothing. */
@@ -212,9 +269,19 @@ public final class VarkaSuiteExtension
    * One test under the harness, with this JVM's configuration, skip list, report file and cap
    * as parameters: the seam {@code VarkaSuiteHarnessSuite} tests the composition through, as
    * {@code VarkaMatrixSuite} tests the Scala face through {@code VarkaMatrix.around}'s.
+   *
+   * <p>{@code answeredByChild} is set for an {@code ownJvm} class in the shared JVM, whose
+   * {@code body} only reads the child's result. The child already ran the test under the same
+   * configuration, skip list and watchdog, so the body runs bare: the matrix applied a second
+   * time would read the child's stale-entry failure as the listed failure and cancel it, and
+   * would append its own fused-batch line over the child's. The child's budget caps the wait.
    */
   static Object runTest(String config, List<Skip> entries, Optional<String> report, Guard guard,
-      String suite, String test, Set<String> tags, Body<Object> body) throws Throwable {
+      String suite, String test, Set<String> tags, boolean answeredByChild, Body<Object> body)
+      throws Throwable {
+    if (answeredByChild) {
+      return body.run();
+    }
     if (!config.isEmpty() && tags.contains(VarkaSuite.PINS_DEFAULTS)) {
       throw new TestAbortedException(VarkaMatrixRuns.pinsDefaultsMessage(config));
     }
@@ -226,12 +293,16 @@ public final class VarkaSuiteExtension
   // A class in a JVM of its own
   // ---------------------------------------------------------------------------------------------
 
-  /** The child JVM's results for {@code className}, running the child on the first call. */
-  private static VarkaChildJvm.Results childResults(String className) {
+  /**
+   * The child JVM's results for {@code className}, running the child on the first call. The
+   * child may run for the class's per-test cap less a minute ({@code capMinutes}, 0 for no cap),
+   * the same cap its tests have in the child.
+   */
+  private static VarkaChildJvm.Results childResults(String className, long capMinutes) {
     return CHILDREN.computeIfAbsent(className, c -> {
       try {
         return VarkaChildJvm.run(c, VarkaSuiteRunner.class.getName(), List.of("-oW", "-s", c),
-            "-u");
+            "-u", VarkaChildJvm.budgetMinutes(capMinutes));
       } catch (Exception e) {
         throw new IllegalStateException("could not run " + c + " in a JVM of its own", e);
       }

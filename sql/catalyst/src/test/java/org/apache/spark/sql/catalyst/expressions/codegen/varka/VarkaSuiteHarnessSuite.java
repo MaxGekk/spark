@@ -32,15 +32,21 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.DynamicTest;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestFactory;
 import org.junit.jupiter.api.TestInfo;
 import org.junit.jupiter.api.condition.DisabledIf;
 import org.junit.jupiter.api.io.TempDir;
@@ -83,7 +89,7 @@ public final class VarkaSuiteHarnessSuite {
   private static Object run(String config, List<Skip> entries, Set<String> tags,
       VarkaMatrixRuns.Body<Object> body) throws Throwable {
     return VarkaSuiteExtension.runTest(config, entries, Optional.empty(),
-        VarkaSuiteExtension.Guard.NONE, SUITE, "t", tags, body);
+        VarkaSuiteExtension.Guard.NONE, SUITE, "t", tags, false, body);
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -140,7 +146,8 @@ public final class VarkaSuiteHarnessSuite {
   void fusedReport(TestInfo info, @TempDir Path dir) throws Throwable {
     Path report = dir.resolve("fused.tsv");
     VarkaSuiteExtension.runTest("", List.of(), Optional.of(report.toString()),
-        VarkaSuiteExtension.Guard.NONE, SUITE, info.getDisplayName(), Set.of(), () -> null);
+        VarkaSuiteExtension.Guard.NONE, SUITE, info.getDisplayName(), Set.of(), false,
+        () -> null);
     // Nothing counts batches in catalyst's tests, so the count is -1, "not counted".
     long fused = VarkaMatrixRuns.fusedBatches().getAsLong() < 0 ? -1 : 0;
     assertEquals(SUITE + "\t" + info.getDisplayName() + "\t" + fused + "\n",
@@ -164,7 +171,7 @@ public final class VarkaSuiteHarnessSuite {
         }, halted::set, body);
     try {
       assertThrows(InterruptedException.class, () -> VarkaSuiteExtension.runTest("", List.of(),
-          Optional.empty(), guard, SUITE, "blocks", Set.of(), () -> {
+          Optional.empty(), guard, SUITE, "blocks", Set.of(), false, () -> {
             Thread.sleep(60000);
             return null;
           }));
@@ -197,7 +204,7 @@ public final class VarkaSuiteHarnessSuite {
         }, body);
     try {
       VarkaSuiteExtension.runTest("", List.of(), Optional.empty(), guard, SUITE, "spins",
-          Set.of(), () -> {
+          Set.of(), false, () -> {
             long spins = 0;
             while (!stop.get()) {
               spins++;
@@ -252,11 +259,68 @@ public final class VarkaSuiteHarnessSuite {
     var failure = assertThrows(AssertionFailedError.class,
         () -> VarkaSuiteExtension.answerFromChild(results, "fails <&> \"quoted\""));
     assertEquals("in its own JVM: output 0 row 7 differs", failure.getMessage());
-    assertThrows(TestAbortedException.class,
+    var cancel = assertThrows(TestAbortedException.class,
         () -> VarkaSuiteExtension.answerFromChild(results, "cancelled"));
+    // The child's own reason, which names the configuration and the skip-list entry.
+    assertEquals("not run here", cancel.getMessage());
     var missing = assertThrows(AssertionFailedError.class,
         () -> VarkaSuiteExtension.answerFromChild(results, "absent"));
     assertTrue(missing.getMessage().contains("no result for 'absent'"), missing.getMessage());
+  }
+
+  @Test
+  @DisplayName("the parent takes the child's verdict as it is, without the matrix again")
+  void parentKeepsChildVerdict(@TempDir Path dir) throws Throwable {
+    // The child applied the skip list: a stale entry failed there, and a listed failure was
+    // cancelled there. The parent must neither turn the stale failure into a cancel nor write a
+    // fused-batch line of its own over the child's.
+    var entries = List.of(new Skip("cse=false", SUITE, "t", Kind.FAILS, "a planted reason"));
+    Path report = dir.resolve("fused.tsv");
+    var stale = assertThrows(AssertionFailedError.class, () -> VarkaSuiteExtension.runTest(
+        "cse=false", entries, Optional.of(report.toString()), VarkaSuiteExtension.Guard.NONE,
+        SUITE, "t", Set.of(), true, () -> Assertions.fail("in its own JVM: stale entry ...")));
+    assertEquals("in its own JVM: stale entry ...", stale.getMessage());
+    var cancel = assertThrows(TestAbortedException.class, () -> VarkaSuiteExtension.runTest(
+        "cse=false", entries, Optional.of(report.toString()), VarkaSuiteExtension.Guard.NONE,
+        SUITE, "t", Set.of(), true, () -> {
+          throw new TestAbortedException("the child's reason");
+        }));
+    assertEquals("the child's reason", cancel.getMessage());
+    assertTrue(Files.notExists(report), () -> "the parent wrote " + report);
+  }
+
+  @Test
+  @DisplayName("the child's budget follows the class's watchdog minutes, and 0 means none")
+  void childBudget() {
+    assertEquals(OptionalLong.empty(), VarkaChildJvm.budgetMinutes(0));
+    assertEquals(OptionalLong.of(1), VarkaChildJvm.budgetMinutes(2));
+    assertEquals(OptionalLong.of(29), VarkaChildJvm.budgetMinutes(30));
+  }
+
+  /**
+   * A stand-in for a child's runner: writes one passing test to the report directory it is given
+   * ({@code -u <dir>}), with a class-level abort when told {@code abort}, and exits 1.
+   */
+  public static final class ExitingChild {
+    public static void main(String[] args) throws Exception {
+      VarkaSuiteReport.write(new File(args[1]), "p.Fixture", 0.1,
+          List.of(new Case("passes", new Passed(), 0.1)),
+          args[2].equals("abort") ? Optional.of("a planted abort") : Optional.empty());
+      System.exit(1);
+    }
+  }
+
+  @Test
+  @DisplayName("a child whose class aborted, or that exited non-zero, fails its passed tests")
+  void childAbortFailsParent() throws Exception {
+    var aborted = VarkaChildJvm.run("p.Fixture", ExitingChild.class.getName(),
+        List.of("abort"), "-u");
+    assertTrue(aborted.of("passes").orElseThrow() instanceof Failed f
+        && f.message().contains("a planted abort"), aborted.toString());
+    var exited = VarkaChildJvm.run("p.Fixture", ExitingChild.class.getName(),
+        List.of("exit"), "-u");
+    assertTrue(exited.of("passes").orElseThrow() instanceof Failed f
+        && f.message().contains("exit 1"), exited.toString());
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -286,6 +350,55 @@ public final class VarkaSuiteHarnessSuite {
     assertEquals(List.of("one name"), VarkaSuiteExtension.repeatedNames(names));
     assertEquals(List.of(),
         VarkaSuiteExtension.repeatedNames(VarkaSuiteExtension.displayNames(getClass())));
+  }
+
+  /** A parameterized and a dynamic test: never run, only read. */
+  abstract static class TemplateTests {
+    @RepeatedTest(2)
+    @DisplayName("repeated")
+    void repeated() {}
+
+    @TestFactory
+    Stream<DynamicTest> dynamic() {
+      return Stream.of(DynamicTest.dynamicTest("one", () -> { }));
+    }
+  }
+
+  /** A class grouping tests in a nested class: never run, only read. */
+  abstract static class NestedTests {
+    @Nested
+    class Inner {
+      @Test
+      @DisplayName("inside")
+      void inside() {}
+    }
+  }
+
+  /** The annotation on a base class only, which dev/varka_matrix.sh cannot see. */
+  @VarkaSuite
+  abstract static class AnnotatedBase {}
+
+  abstract static class InheritsOnly extends AnnotatedBase {
+    @Test
+    @DisplayName("inherited")
+    void inherited() {}
+  }
+
+  @Test
+  @DisplayName("a template or dynamic test, a nested class and an inherited annotation are refused")
+  void shapesRefused() {
+    var template = assertThrows(IllegalStateException.class,
+        () -> VarkaSuiteExtension.checkShape(TemplateTests.class));
+    assertTrue(template.getMessage().contains("must be a plain @Test")
+        && template.getMessage().contains("repeated")
+        && template.getMessage().contains("dynamic"), template.getMessage());
+    var nested = assertThrows(IllegalStateException.class,
+        () -> VarkaSuiteExtension.checkShape(NestedTests.class));
+    assertTrue(nested.getMessage().contains("@Nested"), nested.getMessage());
+    var inherited = assertThrows(IllegalStateException.class,
+        () -> VarkaSuiteExtension.checkShape(InheritsOnly.class));
+    assertTrue(inherited.getMessage().contains("on the class itself"), inherited.getMessage());
+    VarkaSuiteExtension.checkShape(getClass());
   }
 
   /** One test of each outcome while planted; four passing tests when sbt runs it alone. */
@@ -382,6 +495,66 @@ public final class VarkaSuiteHarnessSuite {
     String aborted = Files.readString(
         dir.toPath().resolve("TEST-" + AbortingFixture.class.getName() + ".xml"));
     assertTrue(aborted.contains("errors=\"1\"") && aborted.contains("a planted abort"), aborted);
+  }
+
+  /** A class whose class-level assumption fails, while planted: JUnit aborts the class. */
+  @VarkaSuite
+  static final class AssumingFixture {
+    @BeforeAll
+    static void setUp() {
+      Assumptions.assumeFalse(planted, "not here");
+    }
+
+    @Test
+    @DisplayName("never runs when planted")
+    void never() {}
+  }
+
+  @Test
+  @DisplayName("a class aborted by an assumption is an aborted suite, not an empty completed one")
+  void assumptionAbortsClass(@TempDir File dir) throws Exception {
+    var bytes = new ByteArrayOutputStream();
+    var listener = new VarkaSuiteListener(Optional.of(dir),
+        new PrintStream(bytes, true, StandardCharsets.UTF_8));
+    planted = true;
+    try {
+      launch(AssumingFixture.class, Optional.of(listener));
+    } finally {
+      planted = false;
+    }
+    assertEquals(List.of("AssumingFixture:",
+        "Exception encountered when attempting to run a suite with class name: "
+            + AssumingFixture.class.getName() + " *** ABORTED ***",
+        "  Assumption failed: not here"),
+        bytes.toString(StandardCharsets.UTF_8).lines().toList());
+    assertEquals(new VarkaSuiteListener.Counts(0, 0, 0, 0, 0, 0, 1), listener.counts());
+    String xml = Files.readString(
+        dir.toPath().resolve("TEST-" + AssumingFixture.class.getName() + ".xml"));
+    assertTrue(xml.contains("errors=\"1\""), xml);
+  }
+
+  @Test
+  @DisplayName("the runner keeps -z and -t with their -s, for a ScalaTest suite and a JUnit class")
+  void runnerFilters(@TempDir File dir) throws Exception {
+    String watchdog = VarkaSuiteHarnessSuite.class.getPackageName() + ".VarkaTestWatchdogSuite";
+    // The runner prints its summary lines to standard output; they are kept out of this JVM's
+    // log, where they would read as a second run's.
+    PrintStream out = System.out;
+    System.setOut(new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8));
+    try {
+      VarkaSuiteRunner.run(new String[] {"-u", dir.toString(),
+          "-s", watchdog, "-z", "finishes in time",
+          "-s", ListenerFixture.class.getName(), "-z", "passes",
+          "-t", "a test that is disabled, when planted"});
+    } finally {
+      System.setOut(out);
+    }
+    String scala = Files.readString(dir.toPath().resolve("TEST-" + watchdog + ".xml"));
+    assertTrue(scala.contains("tests=\"1\"") && scala.contains("finishes in time"), scala);
+    String junit = Files.readString(
+        dir.toPath().resolve("TEST-" + ListenerFixture.class.getName() + ".xml"));
+    assertTrue(junit.contains("tests=\"2\"") && junit.contains("a test that passes")
+        && junit.contains("a test that is disabled, when planted"), junit);
   }
 
   @Test

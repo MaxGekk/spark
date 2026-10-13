@@ -424,15 +424,72 @@ example among them, under the runner), `quiet`, `sweep`, `doc`, `bench`, `lint` 
 
 Left open, outside this row:
 
-- **The fused-batch report of an own-JVM suite holds the parent's lines.** The child writes each
-  test's real count to the same `fused.tsv` (the property is copied to it), and then the parent's
-  test, which only reads the child's result, appends its own line for the same key, -1 or 0, which
-  the report reads last. Both faces do it, since the matrix wraps the child's answer in the parent
-  as `VarkaMatrixTests` wraps `VarkaOwnJvm`'s. Harmless today, since no own-JVM suite is in
-  sql/core, where batches are counted; a candidate row if one moves there.
+- **The Scala face still applies the matrix to an own-JVM child's answer in the parent.**
+  `VarkaMatrixTests` wraps `VarkaOwnJvm`'s answer, so a stale skip-list entry that the child fails
+  is cancelled again in the parent, and the parent appends its own `fused.tsv` line (-1 or 0) over
+  the child's real count for the same key. 9.6 fixed both for the JUnit face; the Scala face is a
+  candidate row (no own-JVM suite is in sql/core, where batches are counted, so only the stale
+  entry matters today).
 - **An own-JVM child's report directory is left under the JVM's temporary directory**, inside the
   matrix's run directory, so `dev/varka_suite_shards.py` also reads it (a weight under
   `VarkaSuiteHarnessSuite$OwnJvmFixture`, the max of two times for a Scala suite's own name). It
   predates this row; deleting the directory after the parse would close it.
 - **A sql/core suite cannot be JUnit yet**: no extension gives a JUnit class Spark's shared
   session (3.2), and the gate's sweep step selects ScalaTest's `opt-in` tests by name only.
+
+### 9.6 The code review's fixes
+
+A review of the pull request (13 October 2026) found nine faults by reading; each was confirmed
+against the code, none was a false positive, and each was fixed in this row with a test in
+`VarkaSuiteHarnessSuite` (now 17 tests) that failed on the code before the fix and passes after.
+Where the test needs a new seam, the seam was added first with the old behaviour, so the "before"
+run is the old code through it.
+
+1. **A class-level abort in an own-JVM child passed in the parent.** The listener writes the abort
+   as an `error` directly under `testsuite`, which `read()` never looked at, and `VarkaChildJvm`
+   ignored the child's exit status once the report held any test. Now
+   `VarkaSuiteReport.abortOf` reads that element and the parent fails every test with it, and a
+   child that exits non-zero though its report holds no failure fails every test too (both also
+   turn cancels into failures, so an all-cancelled class cannot hide an abort). Test: a stand-in
+   child main writes one passing test, with and without an abort, and exits 1; before, both came
+   back `Passed`.
+2. **The parent re-applied the skip list to the child's verdict.** A stale entry the child failed
+   came back to the parent as a failure of a listed test, which `around` cancelled. The parent of
+   an own-JVM class now takes the child's answer bare: no `PinsDefaults`, no `around`, no
+   watchdog; it also no longer writes its own `fused.tsv` line. Test: through `runTest`'s new
+   `answeredByChild` flag, a child's stale failure stays an `AssertionFailedError`, a child's
+   cancel keeps its message and no report line is written; before, a `TestAbortedException`.
+3. **`@ParameterizedTest`, `@RepeatedTest` and `@TestFactory` bypassed the harness**, since
+   Jupiter runs them through interceptor methods the extension does not override. Refused, not
+   wrapped: their invocations are named `[1] ...`, poor skip-list keys, and a dynamic test has no
+   method for the duplicate-name check to see. `checkShape`, called from `beforeAll`, fails the
+   class ("a @VarkaSuite test must be a plain @Test"), which the listener reports as an aborted
+   suite.
+4. **The child's budget ignored `@VarkaSuite(watchdogMinutes)`.** `VarkaChildJvm.run` takes a
+   budget; a JUnit class passes its own cap less a minute, none for 0, and the Scala face keeps
+   the JVM-wide rule. Test: `budgetMinutes(0)` is empty, `(2)` is 1, `(30)` is 29; before, 9 for
+   all. No behavioural test, which would need a child running for minutes.
+5. **A `@Nested` class failed every test** ("registers VarkaSuiteExtension without @VarkaSuite"),
+   and would have been keyed by the inner class's name. Refused by `checkShape` on the outer class.
+6. **The runner moved every `-s` after the other flags**, so ScalaTest applied a `-z` to no suite
+   (all three of `VarkaTestWatchdogSuite`'s tests ran), and it ignored `-z`/`-t` for JUnit
+   classes. ScalaTest now gets argv in its order less the JUnit classes' `-s` and their filters,
+   which a `PostDiscoveryFilter` applies to the display names. Test: `-s VarkaTestWatchdogSuite
+   -z ... -s ListenerFixture -z ... -t ...` gives XML with 1 and 2 tests; before, 3 and 4.
+7. **The child's cancel reason was replaced by "cancelled in its own JVM".** `read()` now keeps the
+   `skipped` element's message, falling back to that text for ScalaTest's `<skipped/>`, which has
+   none. Test: the existing child-report test asserts the reason.
+8. **A `Varka...Suite` taking `@VarkaSuite` from a base class was never found by
+   `dev/varka_matrix.sh`**, which greps each file for the annotation. `checkShape` requires the
+   annotation on the class itself, so such a class aborts loudly under sbt instead of silently
+   missing the matrix; `@Inherited` stays so that the extension still reaches it to say so.
+9. **A class container JUnit reported ABORTED** (an assumption in `@BeforeAll`) counted as a
+   completed suite with no tests. The listener now treats FAILED and ABORTED alike, as ScalaTest
+   treats an exception in `beforeAll`: `*** ABORTED ***`, `Suites: aborted 1`, `errors="1"`. Test:
+   a fixture whose `@BeforeAll` assumption fails while planted; before, `completed 1`.
+
+Tests 3, 5 and 8 are one test of `checkShape` over three abstract fixtures; before, the first
+assertion failed. After the fixes the four harness and example suites pass under sbt (32 tests),
+and one matrix JVM at the defaults over `VarkaMatrixSuite`, `VarkaTestWatchdogSuite`,
+`VarkaMethodNamesSuite` and `VarkaSuiteHarnessSuite` printed `Suites: completed 4, aborted 0` and
+`Tests: succeeded 32` last, which the report read (32 passed, exit 0).

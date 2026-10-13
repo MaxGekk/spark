@@ -19,14 +19,19 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.platform.commons.support.AnnotationSupport;
 import org.junit.platform.engine.DiscoverySelector;
+import org.junit.platform.engine.FilterResult;
 import org.junit.platform.engine.discovery.DiscoverySelectors;
+import org.junit.platform.engine.support.descriptor.MethodSource;
 import org.junit.platform.launcher.LauncherDiscoveryRequest;
+import org.junit.platform.launcher.PostDiscoveryFilter;
 import org.junit.platform.launcher.core.LauncherConfig;
 import org.junit.platform.launcher.core.LauncherDiscoveryRequestBuilder;
 import org.junit.platform.launcher.core.LauncherFactory;
@@ -42,11 +47,13 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSuiteListene
  * Runs ScalaTest suites and {@link VarkaSuite} JUnit classes in one JVM, as the matrix's and the
  * gate's JVMs do (VARKA-312): {@code dev/varka_matrix.sh} starts this main where it started
  * ScalaTest's {@code org.scalatest.tools.Runner}, with the same arguments - {@code -u <dir>},
- * {@code -s <class>} per suite, and ScalaTest's output flags such as {@code -oW}.
+ * {@code -s <class>} per suite, each optionally followed by {@code -z <text>} and
+ * {@code -t <name>} test filters, and ScalaTest's output flags such as {@code -oW}.
  *
  * <p>It sorts the named classes by reflection, without initialising them: an
- * {@code org.scalatest.Suite} goes to ScalaTest's Runner with every flag as given, a
- * {@code @VarkaSuite} class to the JUnit Platform Launcher with a {@link VarkaSuiteListener},
+ * {@code org.scalatest.Suite} goes to ScalaTest's Runner with every flag as given and where it
+ * was given, a {@code @VarkaSuite} class to the JUnit Platform Launcher, with its filters
+ * matched against each test's display name, and with a {@link VarkaSuiteListener},
  * which prints its tests as ScalaTest would and writes its {@code TEST-<class>.xml} into the same
  * {@code -u} directory. ScalaTest's suites run first, and its Runner prints its own summary; then
  * the JUnit classes; then one combined {@code Suites:} line and one {@code Tests:} line over both,
@@ -66,42 +73,76 @@ public final class VarkaSuiteRunner {
     System.exit(run(args) ? 0 : 1);
   }
 
+  /**
+   * A ScalaTest test-name filter, which applies to the {@code -s} it follows: {@code -z} keeps
+   * the tests whose name contains the text, {@code -t} the test with exactly that name.
+   */
+  sealed interface NameFilter permits Containing, Named {
+    boolean matches(String testName);
+  }
+
+  /** {@code -z <text>}. */
+  record Containing(String text) implements NameFilter {
+    @Override
+    public boolean matches(String testName) {
+      return testName.contains(text);
+    }
+  }
+
+  /** {@code -t <name>}. */
+  record Named(String name) implements NameFilter {
+    @Override
+    public boolean matches(String testName) {
+      return testName.equals(name);
+    }
+  }
+
   /** The named suites run as described above; true when nothing failed or aborted. */
   public static boolean run(String[] args) throws Exception {
+    // ScalaTest's arguments are argv as given, less the JUnit classes' -s and the filters that
+    // follow them: its -z and -t apply to the -s they follow, so every position is kept.
     var scalaArgs = new ArrayList<String>();
     var scalaSuites = new ArrayList<String>();
-    var junitClasses = new ArrayList<Class<?>>();
+    // Each JUnit class with its -z and -t filters, none meaning every test.
+    var junitClasses = new LinkedHashMap<Class<?>, List<NameFilter>>();
     Optional<File> reportDir = Optional.empty();
     ClassLoader loader = Thread.currentThread().getContextClassLoader();
+    // The JUnit class whose -s came last, which a -z or -t right after it belongs to.
+    Class<?> junitAt = null;
     for (int i = 0; i < args.length; i++) {
-      if (args[i].equals("-s") && i + 1 < args.length) {
+      String arg = args[i];
+      boolean hasValue = i + 1 < args.length;
+      if (arg.equals("-s") && hasValue) {
         String name = args[++i];
         Class<?> c = Class.forName(name, false, loader);
         if (org.scalatest.Suite.class.isAssignableFrom(c)) {
           scalaSuites.add(name);
+          scalaArgs.add(arg);
+          scalaArgs.add(name);
+          junitAt = null;
         } else if (AnnotationSupport.isAnnotated(c, VarkaSuite.class)) {
-          junitClasses.add(c);
+          junitClasses.putIfAbsent(c, new ArrayList<>());
+          junitAt = c;
         } else {
           throw new IllegalArgumentException(
               name + " is neither a ScalaTest suite nor a @VarkaSuite JUnit class");
         }
+      } else if ((arg.equals("-z") || arg.equals("-t")) && hasValue && junitAt != null) {
+        String text = args[++i];
+        junitClasses.get(junitAt).add(arg.equals("-z") ? new Containing(text) : new Named(text));
       } else {
-        if (args[i].equals("-u") && i + 1 < args.length) {
+        if (arg.equals("-u") && hasValue) {
           reportDir = Optional.of(new File(args[i + 1]));
         }
-        scalaArgs.add(args[i]);
+        scalaArgs.add(arg);
+        junitAt = null;
       }
     }
 
     Counts scala = Counts.ZERO;
     boolean scalaPassed = true;
     if (!scalaSuites.isEmpty()) {
-      scalaArgs.add("-C");
-      scalaArgs.add(SummaryReporter.class.getName());
-      for (String suite : scalaSuites) {
-        scalaArgs.add("-s");
-        scalaArgs.add(suite);
-      }
+      scalaArgs.addAll(0, List.of("-C", SummaryReporter.class.getName()));
       SummaryReporter.LAST.set(null);
       scalaPassed = org.scalatest.tools.Runner.run(scalaArgs.toArray(new String[0]));
       Counts reported = SummaryReporter.LAST.get();
@@ -117,10 +158,24 @@ public final class VarkaSuiteRunner {
           .enableTestExecutionListenerAutoRegistration(false)
           .addTestExecutionListeners(listener)
           .build();
-      List<DiscoverySelector> selectors = junitClasses.stream()
+      List<DiscoverySelector> selectors = junitClasses.keySet().stream()
           .<DiscoverySelector>map(DiscoverySelectors::selectClass).toList();
-      LauncherDiscoveryRequest request =
-          LauncherDiscoveryRequestBuilder.request().selectors(selectors).build();
+      var filters = new HashMap<String, List<NameFilter>>();
+      junitClasses.forEach((c, f) -> filters.put(c.getName(), f));
+      // A test of a class with filters runs when one of them matches its display name, the
+      // name ScalaTest's filters match; the Launcher drops the containers left with no test.
+      PostDiscoveryFilter byName = descriptor -> {
+        if (descriptor.isTest() && descriptor.getSource().orElse(null) instanceof MethodSource m) {
+          List<NameFilter> own = filters.getOrDefault(m.getClassName(), List.of());
+          String name = descriptor.getDisplayName();
+          if (!own.isEmpty() && own.stream().noneMatch(f -> f.matches(name))) {
+            return FilterResult.excluded("not selected by -z or -t");
+          }
+        }
+        return FilterResult.included("selected");
+      };
+      LauncherDiscoveryRequest request = LauncherDiscoveryRequestBuilder.request()
+          .selectors(selectors).filters(byName).build();
       LauncherFactory.create(config).execute(request);
       junit = listener.counts();
     }

@@ -1012,9 +1012,18 @@ Java is one (`sql/varka/AGENTS.md`). What to know when writing and running one:
   the class. `@Tag(VarkaSuite.PINS_DEFAULTS)` is `PinsDefaults`; `@VarkaSuite(watchdogMinutes = 0)`
   runs with no watchdog and `@VarkaSuite(ownJvm = true)` is `VarkaOwnJvm`. The sentence is the
   test's name in the printed lines, the JUnit XML, `skips.tsv` and `fused.tsv`, and the suite is
-  the class's simple name, so a skip-list line is written as for a ScalaTest test. Two tests with
-  one name fail the class, as ScalaTest refuses them. A parameterized test's invocations are named
-  `[1] ...`, which makes a poor key; prefer plain `@Test` methods.
+  the class's simple name, so a skip-list line is written as for a ScalaTest test. The extension
+  fails the class before its tests run (an aborted suite) when two tests share one name, as
+  ScalaTest refuses them; when a test is not a plain `@Test` (`@ParameterizedTest`,
+  `@RepeatedTest`, `@TestFactory`: JUnit runs those past the interceptor that applies the skip list
+  and the watchdog, and names their invocations `[1] ...`); when the class holds `@Nested` classes;
+  and when it takes `@VarkaSuite` from a superclass only, since `dev/varka_matrix.sh` finds a Java
+  suite by the annotation in its own file.
+- **An own-JVM class.** In the shared JVM each test takes the child's result as it is: the skip
+  list, `PinsDefaults` and the watchdog act in the child only, a child's cancel keeps the child's
+  reason, and a class-level abort in the child (or a non-zero exit with no failure in its report)
+  fails the parent's tests. The child is limited to the class's `watchdogMinutes` less one, and
+  not at all for `0`.
 - **What prints the lines.** `VarkaSuiteListener`, registered in catalyst's test resources under
   `META-INF/services`, prints `- <sentence>`, `*** FAILED ***`, `!!! CANCELED !!!` and
   `!!! IGNORED !!!` for `@VarkaSuite` classes only and nothing for any other JUnit class. Under sbt
@@ -1024,8 +1033,10 @@ Java is one (`sql/varka/AGENTS.md`). What to know when writing and running one:
 - **How it runs outside sbt.** `dev/varka_matrix.sh` (so the gate and CI's scoped jobs) finds a
   `@VarkaSuite` class named `Varka...Suite` in `src/test/java` and starts `VarkaSuiteRunner`: it
   runs the ScalaTest suites through ScalaTest's Runner, then the JUnit classes through the Launcher,
-  writes `TEST-<class>.xml` for both, and prints one `Suites:` and one `Tests:` line over both, last.
-  The matrix's report reads the last of each, so a line printed after them would be read instead.
+  writes `TEST-<class>.xml` for both, and prints one `Suites:` and one `Tests:` line over both,
+  last. The matrix's report reads the last of each, so a line printed after them would be read
+  instead. A `-z <text>` or `-t <name>` after a `-s` filters that suite's tests, as ScalaTest's
+  Runner does; for a JUnit class it is matched against the display names.
 - **A cancel is thrown, not decided.** The extension cancels by throwing opentest4j's
   `TestAbortedException` from its interceptor; an `ExecutionCondition` would report the test
   disabled, which is ScalaTest's "ignored". JUnit's failure, `AssertionFailedError`, is an `Error`,
