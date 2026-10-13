@@ -76,6 +76,20 @@ object VarkaKernelCheck {
     VarkaKernelChecks.runAndCompare(context, className, bytes, roots.asJava, numInputs, lits,
       batch.toJava, declineAllowed, answers(spark))
 
+  /** [[VarkaKernelChecks.runOwnBodyAt]]. */
+  def runOwnBodyAt(context: String, className: String, bytes: Array[Byte],
+      roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Int], batch: Batch,
+      fill: VarkaKernelChecks.ValidityFill): Unit =
+    VarkaKernelChecks.runOwnBodyAt(context, className, bytes, roots.asJava, numInputs, lits,
+      batch.toJava, fill)
+
+  /** [[VarkaKernelChecks.runOwnBodyLongAt]]. */
+  def runOwnBodyLongAt(context: String, className: String, bytes: Array[Byte],
+      roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Long], batch: LongBatch,
+      fill: VarkaKernelChecks.ValidityFill): Unit =
+    VarkaKernelChecks.runOwnBodyLongAt(context, className, bytes, roots.asJava, numInputs, lits,
+      batch.toJava, fill)
+
   /** [[VarkaKernelChecks.runAndCompareStatus]]. */
   def runAndCompareStatus(context: String, className: String, bytes: Array[Byte],
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Int], batch: Batch,

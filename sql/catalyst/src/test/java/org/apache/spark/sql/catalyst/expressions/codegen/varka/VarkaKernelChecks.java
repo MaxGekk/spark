@@ -96,6 +96,34 @@ public final class VarkaKernelChecks {
   public static final AtomicLong SPARK_COMPARISONS = new AtomicLong();
 
   /**
+   * What every byte of an output's validity bitmap holds before the kernel runs (VARKA-138).
+   * A kernel must not depend on it: the driver zeroes or fills every output's bits before
+   * anything can return, and the loop ORs the rest in. Each fill catches what the other cannot.
+   * Under {@link #ONES} a bit the kernel fails to clear reads as valid and shows; under
+   * {@link #ZERO} a bit it fails to set reads as null and shows - and zero is what production
+   * hands a kernel, since Arrow's {@code allocateNew} zeroes the validity buffer it allocates.
+   */
+  public enum ValidityFill {
+    ZERO((byte) 0x00),
+    ONES((byte) 0xFF);
+
+    private final byte value;
+
+    ValidityFill(byte value) {
+      this.value = value;
+    }
+
+    /** What a failure's context gains, so the message says which fill the kernel failed. */
+    String suffix() {
+      return String.format(" (output validity pre-filled 0x%02X)", value & 0xFF);
+    }
+  }
+
+  /** The fills every compared batch runs at: production's first, then the old harness's. */
+  private static final List<ValidityFill> BOTH_FILLS =
+      List.of(ValidityFill.ZERO, ValidityFill.ONES);
+
+  /**
    * A validity bitmap's size as Arrow Java's {@code allocateNew} gives it, in whole 64-bit words:
    * the kernels write and read a word at a time, so a buffer of the nominal
    * {@code (length + 7) / 8} bytes would be one a kernel is not entitled to, and the memory
@@ -224,6 +252,7 @@ public final class VarkaKernelChecks {
    * against {@link VarkaReference}. Null lanes are poisoned; {@code forceMasked} reports a null
    * over a full bitmap so the masked body runs. A batch that is compared is then run again through
    * the body it did not take ({@link #otherBody}), so both of the kernel's bodies meet the oracle.
+   * Each body runs the kernel once per {@link ValidityFill}, and every run must agree.
    * Returns whether the rows were compared: false only where {@code declineAllowed} and the kernel
    * declined the batch, which a kernel over columns drawn without its domains may do.
    * {@code spark} is null where the suite holds no Spark answers.
@@ -233,7 +262,27 @@ public final class VarkaKernelChecks {
       SparkAnswers spark) {
     return bodies(context, numInputs, batch.length(), batch.nulls(), batch.forceMasked(),
         (label, nulls, forced) -> runOne(label, className, bytes, roots, numInputs,
-            new IntLane(batch.withNulls(nulls, forced), lits), declineAllowed, spark))[0] == 0;
+            new IntLane(batch.withNulls(nulls, forced), lits), declineAllowed, spark,
+            BOTH_FILLS))[0] == 0;
+  }
+
+  /**
+   * The batch through its own body only, at the one validity fill {@code fill}, compared as
+   * {@link #runAndCompare} compares it; a decline fails. For the test that shows each fill catches
+   * a planted fault the other misses (VARKA-138), which must not run the other body: a batch
+   * whose rows are all null, for one, goes on to a dense body whose rows are all valid.
+   */
+  public static void runOwnBodyAt(String context, String className, byte[] bytes,
+      List<VarkaVectorIR> roots, int numInputs, int[] lits, Batch batch, ValidityFill fill) {
+    runOne(context, className, bytes, roots, numInputs, new IntLane(batch, lits), false, null,
+        List.of(fill));
+  }
+
+  /** {@link #runOwnBodyAt} at the long lane. */
+  public static void runOwnBodyLongAt(String context, String className, byte[] bytes,
+      List<VarkaVectorIR> roots, int numInputs, long[] lits, LongBatch batch, ValidityFill fill) {
+    runOne(context, className, bytes, roots, numInputs, new LongLane(batch, lits), false, null,
+        List.of(fill));
   }
 
   /**
@@ -247,7 +296,8 @@ public final class VarkaKernelChecks {
       boolean declineAllowed) {
     int[] statuses = bodies(context, numInputs, batch.length(), batch.nulls(),
         batch.forceMasked(), (label, nulls, forced) -> runOne(label, className, bytes, roots,
-            numInputs, new IntLane(batch.withNulls(nulls, forced), lits), declineAllowed, null));
+            numInputs, new IntLane(batch.withNulls(nulls, forced), lits), declineAllowed, null,
+            BOTH_FILLS));
     return statuses[0] != 0 ? statuses[0] : statuses[1];
   }
 
@@ -261,7 +311,7 @@ public final class VarkaKernelChecks {
       List<VarkaVectorIR> roots, int numInputs, int[] lits, Batch batch) {
     return each(context, numInputs, batch.length(), batch.nulls(), batch.forceMasked(),
         (label, nulls, forced) -> runOne(label, className, bytes, roots, numInputs,
-            new IntLane(batch.withNulls(nulls, forced), lits), true, null));
+            new IntLane(batch.withNulls(nulls, forced), lits), true, null, BOTH_FILLS));
   }
 
   /**
@@ -276,7 +326,8 @@ public final class VarkaKernelChecks {
       boolean declineAllowed, SparkAnswers spark) {
     return bodies(context, numInputs, batch.length(), batch.nulls(), batch.forceMasked(),
         (label, nulls, forced) -> runOne(label, className, bytes, roots, numInputs,
-            new LongLane(batch.withNulls(nulls, forced), lits), declineAllowed, spark))[0] == 0;
+            new LongLane(batch.withNulls(nulls, forced), lits), declineAllowed, spark,
+            BOTH_FILLS))[0] == 0;
   }
 
   /** {@link #runAndCompareStatus} at the long lane. */
@@ -285,7 +336,8 @@ public final class VarkaKernelChecks {
       boolean declineAllowed) {
     int[] statuses = bodies(context, numInputs, batch.length(), batch.nulls(),
         batch.forceMasked(), (label, nulls, forced) -> runOne(label, className, bytes, roots,
-            numInputs, new LongLane(batch.withNulls(nulls, forced), lits), declineAllowed, null));
+            numInputs, new LongLane(batch.withNulls(nulls, forced), lits), declineAllowed, null,
+            BOTH_FILLS));
     return statuses[0] != 0 ? statuses[0] : statuses[1];
   }
 
@@ -294,7 +346,7 @@ public final class VarkaKernelChecks {
       byte[] bytes, List<VarkaVectorIR> roots, int numInputs, long[] lits, LongBatch batch) {
     return each(context, numInputs, batch.length(), batch.nulls(), batch.forceMasked(),
         (label, nulls, forced) -> runOne(label, className, bytes, roots, numInputs,
-            new LongLane(batch.withNulls(nulls, forced), lits), true, null));
+            new LongLane(batch.withNulls(nulls, forced), lits), true, null, BOTH_FILLS));
   }
 
   /** {@code run} over the batch's own body and then {@link #otherBody}'s, each status in order. */
@@ -551,11 +603,16 @@ public final class VarkaKernelChecks {
   /**
    * One batch through the check, whichever body its null counts select: the kernel's status, 0
    * once the rows are compared. Null lanes are poisoned; every output buffer starts at the lane's
-   * sentinel and every validity bit set, so a lane or bit the kernel fails to write shows.
+   * sentinel, so a lane the kernel fails to write shows. The kernel runs once per fill in
+   * {@code fills}, each run into output buffers of its own whose validity bytes all hold that
+   * fill (VARKA-138), so a bit the kernel fails to set shows at one fill and a bit it fails to
+   * clear at the other. The class is loaded once and the reference evaluated once per row for all
+   * the runs; the runs must return the same status, since a kernel's decline reads its inputs and
+   * never its outputs.
    */
   private static int runOne(String context, String className, byte[] bytes,
       List<VarkaVectorIR> rootList, int numInputs, Lane lane, boolean declineAllowed,
-      SparkAnswers spark) {
+      SparkAnswers spark, List<ValidityFill> fills) {
     int length = lane.length();
     var roots = rootList.toArray(new VarkaVectorIR[0]);
     var loader = new VarkaGeneratedClassLoader(VarkaKernelChecks.class.getClassLoader());
@@ -590,23 +647,34 @@ public final class VarkaKernelChecks {
         srcValidity[c] = nullCounts[c] == 0 || nulls == length ? 0L : v.address();
       }
       int n = roots.length;
-      var outValues = new MemorySegment[n];
-      var outBits = new MemorySegment[n];
-      long[] outData = new long[n];
-      long[] outValidity = new long[n];
-      for (int o = 0; o < n; o++) {
-        outValues[o] = VarkaEmitterFixtures.alloc(arena, length * stride);
-        for (int i = 0; i < length; i++) {
-          lane.put(outValues[o], i, lane.sentinel());
+      int runs = fills.size();
+      // Per run f and output o: the values and the validity bits the kernel wrote.
+      var outValues = new MemorySegment[runs][n];
+      var outBits = new MemorySegment[runs][n];
+      int status = 0;
+      for (int f = 0; f < runs; f++) {
+        long[] outData = new long[n];
+        long[] outValidity = new long[n];
+        for (int o = 0; o < n; o++) {
+          outValues[f][o] = VarkaEmitterFixtures.alloc(arena, length * stride);
+          for (int i = 0; i < length; i++) {
+            lane.put(outValues[f][o], i, lane.sentinel());
+          }
+          outBits[f][o] = VarkaEmitterFixtures.alloc(arena, wordBytes(length));
+          outBits[f][o].fill(fills.get(f).value);
+          outData[o] = roots[o] instanceof Cond ? 0L : outValues[f][o].address();
+          outValidity[o] = outBits[f][o].address();
         }
-        outBits[o] = VarkaEmitterFixtures.alloc(arena, wordBytes(length));
-        outBits[o].fill((byte) 0xFF);
-        outData[o] = roots[o] instanceof Cond ? 0L : outValues[o].address();
-        outValidity[o] = outBits[o].address();
+        int got = sanitized(kernel, length, stride, srcData, srcValidity, outData, outValidity,
+            scratch -> lane.run(kernel, srcData, srcValidity, nullCounts, outData, outValidity,
+                scratch));
+        if (f > 0 && got != status) {
+          throw new IllegalStateException(context + ": the kernel's status depends on the output "
+              + "validity fill (" + status + fills.get(0).suffix() + ", " + got
+              + fills.get(f).suffix() + ")");
+        }
+        status = got;
       }
-      int status = sanitized(kernel, length, stride, srcData, srcValidity, outData, outValidity,
-          scratch -> lane.run(kernel, srcData, srcValidity, nullCounts, outData, outValidity,
-              scratch));
       if (status != 0 && declineAllowed) {
         return status;
       }
@@ -623,7 +691,6 @@ public final class VarkaKernelChecks {
         }
         for (int o = 0; o < n; o++) {
           var root = roots[o];
-          boolean bit = (outBits[o].get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) != 0;
           if (root instanceof Cond c) {
             var truth = lane.reference(c, values, isNull);
             if (spark != null) {
@@ -631,26 +698,34 @@ public final class VarkaKernelChecks {
                   truth == VarkaReference.Truth.UNKNOWN ? OptionalLong.empty()
                       : OptionalLong.of(truth.isTrue() ? 1L : 0L));
             }
-            if (bit != truth.isTrue()) {
-              throw new IllegalStateException(context + ": selection row " + i + " differs (want "
-                  + truth.isTrue() + ", got " + bit + ")" + evidence(values, isNull, nullCounts));
+            for (int f = 0; f < runs; f++) {
+              boolean bit = bit(outBits[f][o], i);
+              if (bit != truth.isTrue()) {
+                throw new IllegalStateException(context + fills.get(f).suffix() + ": selection row "
+                    + i + " differs (want " + truth.isTrue() + ", got " + bit + ")"
+                    + evidence(values, isNull, nullCounts));
+              }
             }
           } else {
             OptionalLong want = lane.reference(root, values, isNull);
             if (spark != null) {
               agreeWithSpark(context, spark, o, i, values, isNull, want);
             }
-            long got = lane.got(outValues[o], i, root);
-            if (bit != want.isPresent()) {
-              throw new IllegalStateException(context + ": validity of output " + o + " row " + i
-                  + " differs (want " + shown(want) + ", got "
-                  + (bit ? "Some(" + got + ")" : "None") + ")"
-                  + evidence(values, isNull, nullCounts));
-            }
-            if (want.isPresent() && got != want.getAsLong()) {
-              throw new IllegalStateException(context + ": output " + o + " row " + i
-                  + " differs (want " + want.getAsLong() + ", got " + got + ")"
-                  + evidence(values, isNull, nullCounts));
+            for (int f = 0; f < runs; f++) {
+              String at = context + fills.get(f).suffix();
+              boolean bit = bit(outBits[f][o], i);
+              long got = lane.got(outValues[f][o], i, root);
+              if (bit != want.isPresent()) {
+                throw new IllegalStateException(at + ": validity of output " + o + " row " + i
+                    + " differs (want " + shown(want) + ", got "
+                    + (bit ? "Some(" + got + ")" : "None") + ")"
+                    + evidence(values, isNull, nullCounts));
+              }
+              if (want.isPresent() && got != want.getAsLong()) {
+                throw new IllegalStateException(at + ": output " + o + " row " + i
+                    + " differs (want " + want.getAsLong() + ", got " + got + ")"
+                    + evidence(values, isNull, nullCounts));
+              }
             }
           }
         }
@@ -659,5 +734,10 @@ public final class VarkaKernelChecks {
     } finally {
       loader.release();
     }
+  }
+
+  /** Bit {@code i} of a validity or selection bitmap, LSB first as Arrow lays it out. */
+  private static boolean bit(MemorySegment bits, int i) {
+    return (bits.get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) != 0;
   }
 }

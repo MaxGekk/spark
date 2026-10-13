@@ -244,20 +244,27 @@ class VarkaCoverageCompositionFuzzSuite
    * declines is drawn again twice, nearer zero each time and a bounded input clamped into its
    * bound, the last within one to three, which no guard declines; each attempt keeps the length
    * and null patterns. The test then asserts that
-   * every kernel was compared.
+   * every kernel was compared. Returns whether the kernel was.
+   *
+   * With `poisoned`, the batch's shape is not drawn but fixed (VARKA-138): 257 rows, every input
+   * null on every third row and so poisoned there, which puts a poisoned lane in front of the
+   * masked body by construction rather than by the draw. 257 rows are whole lane groups at every
+   * width plus one row for the epilogue, and the nulls fall on rows 1, 4, ..., 256, so the first
+   * lane group and the epilogue's one row both hold one. Only the values come from `rnd`.
    */
   private def checkKernel(plan: CompiledVarkaProjection, inputs: Seq[Attribute],
       opts: VarkaEmitOptions, rnd: Random, spark: Option[VarkaSparkOracle] = None,
-      context: String = "kernel"): Unit = {
+      context: String = "kernel", poisoned: Boolean = false): Boolean = {
     val numInputs = plan.inputOrdinals.size
     kernelCounter += 1
     kernelsByLane(plan.lane) = kernelsByLane.getOrElse(plan.lane, 0) + 1
     val className = s"org.apache.spark.sql.varka.execution.VarkaCompositionWide$kernelCounter"
     val bytes = VarkaLoopEmitter.emit(className, plan.outputs, numInputs,
       plan.numLiterals, null, null, opts)
-    val length = Seq(1, 7, 64, 100, 257, 1000)(rnd.nextInt(6))
+    val length = if (poisoned) PoisonedLength else Seq(1, 7, 64, 100, 257, 1000)(rnd.nextInt(6))
     val patterns: Seq[Int => Boolean] = Seq.fill(numInputs) {
-      rnd.nextInt(3) match {
+      if (poisoned) (i: Int) => i % 3 == 1
+      else rnd.nextInt(3) match {
         case 0 => (_: Int) => false
         case 1 => (i: Int) => i % 5 == 0
         case _ =>
@@ -265,7 +272,7 @@ class VarkaCoverageCompositionFuzzSuite
           (i: Int) => bits(i)
       }
     }
-    val forceMasked = length > 1 && rnd.nextBoolean()
+    val forceMasked = !poisoned && length > 1 && rnd.nextBoolean()
     def intValue(i: Int, scale: Int): Int = plan.derivedAt(i).toScala.map(_.kind) match {
       case Some(VarkaDerivedKind.TRUNC_LEVEL) =>
         DateTimeUtils.TRUNC_TO_WEEK +
@@ -309,7 +316,11 @@ class VarkaCoverageCompositionFuzzSuite
       attempt(scale)
     }
     if (compared) comparedByLane(plan.lane) = comparedByLane.getOrElse(plan.lane, 0) + 1
+    compared
   }
+
+  /** The fixed poisoned batch's rows (VARKA-138): see `checkKernel`. */
+  private val PoisonedLength = 257
 
   /**
    * The expression behind each output of kernel `k` of `p`: the entry whose spec names that
@@ -555,10 +566,15 @@ class VarkaCoverageCompositionFuzzSuite
       "with Spark's eval (VARKA-276)") {
     // Each row alone, as the coverage suite compiles it, at both widths the emitted-bytes oracle
     // pins, on batches drawn as the wide test draws them: the kernel, the reference evaluator and
-    // Catalyst's interpreted eval of the row's own expression, three ways on every row.
+    // Catalyst's interpreted eval of the row's own expression, three ways on every row. Then one
+    // fixed batch per row and width with a poisoned null lane in the loop and in the epilogue
+    // (VARKA-138), whose values come from a stream of their own, so that the drawn batches, and
+    // the seeds that replay them, are what they were before it.
     val rnd = new Random(seed ^ 276L)
+    val poisonedRnd = new Random(seed ^ 138L)
     val before = VarkaKernelCheck.sparkComparisons.get()
     var checked = 0
+    var poisoned = 0
     for (opts <- Seq(VarkaMatrix.base, VarkaMatrix.base.withLanesOverride(4))) {
       for (row <- projections) {
         val expr = resolve(row.executable)
@@ -570,6 +586,10 @@ class VarkaCoverageCompositionFuzzSuite
         // the checks fail with an IllegalStateException, which `withClue` would pass through.
         (0 until 4).foreach(_ => checkKernel(plan, columns, opts, rnd, spark,
           context = s"kernel of ${row.executable}"))
+        if (checkKernel(plan, columns, opts, poisonedRnd, spark,
+            context = s"kernel of ${row.executable} (poisoned batch)", poisoned = true)) {
+          poisoned += 1
+        }
         checked += 1
       }
       for (row <- predicates) {
@@ -580,13 +600,97 @@ class VarkaCoverageCompositionFuzzSuite
         assert(spark.isDefined, s"${row.executable} derives an input")
         (0 until 4).foreach(_ => checkKernel(predicate.fused, columns, opts, rnd, spark,
           context = s"kernel of ${row.executable}"))
+        if (checkKernel(predicate.fused, columns, opts, poisonedRnd, spark,
+            context = s"kernel of ${row.executable} (poisoned batch)", poisoned = true)) {
+          poisoned += 1
+        }
         checked += 1
       }
     }
     assert(checked == 2 * (projections.size + predicates.size))
+    // One poisoned batch per row and width, and each compared row by row: a batch every attempt
+    // of which a guard declined would have put no poisoned lane in front of the kernel.
+    assert(poisoned == checked, s"$poisoned of $checked kernels compared on a poisoned batch")
     val compared = VarkaKernelCheck.sparkComparisons.get() - before
     assert(compared > 100000, s"only $compared answers were held to Spark")
-    info(s"$checked kernels, $compared answers held to Spark")
+    info(s"$checked kernels, $poisoned of them on a poisoned batch, $compared answers held to " +
+      "Spark")
+  }
+
+  test("a kernel that writes no validity fails at one fill and passes at the other (VARKA-138)") {
+    // The planted fault: a coverage row's kernel with every write to its output validity taken
+    // out of its bytes, so each bitmap keeps what the harness filled it with. On a batch with no
+    // nulls every row is valid: the ones fill reads right and only the zero fill - which is what
+    // production's Arrow buffers hold - shows the bits the kernel never set. On a batch of nulls
+    // it is the other way round: only the ones fill shows the bits the kernel never cleared. So
+    // each fill catches what the other cannot, and the check reaches the kernel at both. Each
+    // batch runs through its own body only: the all-null batch's other body is a dense one.
+    import VarkaKernelChecks.ValidityFill.{ONES, ZERO}
+    val rows = Seq("year(d)", "greatest(l, l2)")
+    val widths = Seq(VarkaMatrix.base -> "the default width",
+      VarkaMatrix.base.withLanesOverride(4) -> "four lanes")
+    for ((opts, width) <- widths; sql <- rows) {
+      val plan = VarkaExpressionCompiler.compile(Seq(Alias(resolve(sql), "c")()), columns, opts)
+        .toScala.getOrElse(fail(s"$sql did not fuse alone"))
+      val numInputs = plan.inputOrdinals.size
+      val roots = plan.outputs.asScala.toSeq
+      kernelCounter += 1
+      val className = s"org.apache.spark.sql.varka.execution.VarkaValidityFault$kernelCounter"
+      val bytes = VarkaLoopEmitter.emit(className, plan.outputs, numInputs, plan.numLiterals,
+        null, null, opts)
+      val faulty = VarkaValidityFault.withoutValidityWrites(bytes)
+      assert(VarkaValidityFault.validityWrites(bytes) > 0, s"$sql writes no validity")
+      assert(VarkaValidityFault.validityWrites(faulty) == 0, s"$sql kept a validity write")
+      val rnd = new Random(seed ^ 1380L)
+      val length = PoisonedLength
+      // `fill` None is the check every fuzzer runs: both bodies, each at both fills.
+      def run(code: Array[Byte], allNull: Boolean, fill: Option[VarkaKernelChecks.ValidityFill])
+          : Unit = {
+        val context = s"kernel of $sql at $width, ${if (allNull) "every row null" else "no nulls"}"
+        val patterns = Seq.fill(numInputs)((_: Int) => allNull)
+        if (plan.lane == LaneType.LONG) {
+          val data = Array.fill(numInputs, length)(VarkaIrGrammar.within(rnd.self, 1L << 40))
+          val lits = plan.longLiterals.asScala.map(_.longValue).toArray
+          val batch = VarkaKernelCheck.LongBatch(length, patterns, data, forceMasked = false)
+          fill match {
+            case Some(f) => VarkaKernelCheck.runOwnBodyLongAt(context, className, code, roots,
+              numInputs, lits, batch, f)
+            case None => VarkaKernelCheck.runAndCompareLong(context, className, code, roots,
+              numInputs, lits, batch)
+          }
+        } else {
+          val data = Array.fill(numInputs, length)(rnd.nextInt(60001) - 30000)
+          val lits = plan.literals.asScala.map(_.intValue).toArray
+          val batch = VarkaKernelCheck.Batch(length, patterns, data, forceMasked = false)
+          fill match {
+            case Some(f) => VarkaKernelCheck.runOwnBodyAt(context, className, code, roots,
+              numInputs, lits, batch, f)
+            case None => VarkaKernelCheck.runAndCompare(context, className, code, roots,
+              numInputs, lits, batch)
+          }
+        }
+      }
+      def fails(allNull: Boolean, fill: Option[VarkaKernelChecks.ValidityFill]): String =
+        intercept[IllegalStateException](run(faulty, allNull, fill)).getMessage
+      // The kernel as emitted passes every way it is run.
+      for (allNull <- Seq(false, true); fill <- Seq(None, Some(ZERO), Some(ONES))) {
+        run(bytes, allNull, fill)
+      }
+      // The faulty one: the zero fill alone catches the bits it never sets...
+      run(faulty, allNull = false, Some(ONES))
+      val unset = fails(allNull = false, Some(ZERO))
+      assert(unset.contains("(output validity pre-filled 0x00): validity of output 0 row 0 " +
+        "differs (want Some("), unset)
+      // ...the ones fill alone the bits it never clears...
+      run(faulty, allNull = true, Some(ZERO))
+      val uncleared = fails(allNull = true, Some(ONES))
+      assert(uncleared.contains("(output validity pre-filled 0xFF): validity of output 0 row 0 " +
+        "differs (want None, got Some("), uncleared)
+      // ...and the check the fuzzers run, at both fills, catches both.
+      Seq(false, true).foreach(allNull => fails(allNull, None))
+      info(s"${VarkaValidityFault.validityWrites(bytes)} validity writes removed; " +
+        s"${unset.linesIterator.next()}; ${uncleared.linesIterator.next()}")
+    }
   }
 
   test("random projections of coverage rows are fused or declined in bytes, never thrown") {
