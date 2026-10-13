@@ -108,11 +108,10 @@ public final class VarkaErrors {
     String message = (what == null ? VarkaErrorContext.UNAVAILABLE : what)
         + (ctx == null ? "" : "\n" + ctx.render())
         + "\n" + REPORT;
-    // Spark fills the template through commons-text's StringSubstitutor, which also substitutes a
-    // ${...} inside a value - and a projection's string literal, rendered into the record, may
-    // hold one. Escaped, it renders as written instead of being replaced, or looping on itself
-    // and throwing while the failure is reported.
-    return new scala.collection.immutable.Map.Map1<>("message", message.replace("${", "$${"));
+    // A ${...} in the text - a projection's string literal, rendered into the record - needs no
+    // escape: Spark's own StringSubstitutor does not substitute inside a parameter's value, and
+    // it preserves escapes, so an escape would show.
+    return new scala.collection.immutable.Map.Map1<>("message", message);
   }
 
   private static @Nullable Throwable cause(@Nullable VarkaErrorContext ctx) {

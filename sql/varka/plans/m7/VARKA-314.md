@@ -359,10 +359,13 @@ reading as unavailable.
 8. **The planning error's sentence does not repeat the original message.** 3.1 put the original
    text first; at planning the original is the record's cause, whose line already prints it, so the
    sentence is "Varka's compiler failed while planning." and the message says it once.
-9. **The message escapes `${`.** Spark fills an error template with commons-text's
-   `StringSubstitutor`, which also substitutes inside a parameter's value; a projection's string
-   literal rendered into the record could hold `${message}` and make building the error loop and
-   throw while the failure is reported. `VarkaErrors` escapes it, so it renders as written.
+9. **A `${` in the message needs no escape**, though the self-review said it did. The review read
+   the template filling as commons-text's `StringSubstitutor`, which substitutes inside a value, so
+   that a projection's literal `'${message}'` rendered into the record would loop and throw. Spark
+   fills templates with its own `org.apache.spark.StringSubstitutor`, which does not substitute
+   inside values and preserves escapes: the first fix, escaping `${` as `$${`, showed in the
+   message, and fork CI caught it. The escape is gone, and the test that caught it now checks that
+   such a literal renders as written.
 
 **Predictions (6.1) that 314a scores.** Scored after the suites run; see the pull request's test
 results.

@@ -60,11 +60,18 @@ class VarkaErrorContextSuite extends QueryTest with VarkaSharedSessions with Var
   private def causes(e: Throwable): Seq[Throwable] =
     Iterator.iterate(e)(_.getCause).takeWhile(_ != null).take(20).toSeq
 
-  /** The warnings `logger` writes while `body` runs. */
+  /**
+   * The warnings `logger` writes while `body` runs. Captured on the root logger and filtered by
+   * name: an appender on a named logger makes log4j create a config of that logger's own, which
+   * outlives the test with the level it had then and so stops a later suite's root appender from
+   * seeing that logger's warnings.
+   */
   private def warnings(logger: Class[_])(body: => Unit): Seq[String] = {
     val appender = new LogAppender("varka failure warnings")
-    withLogAppender(appender, loggerNames = Seq(logger.getName), level = Some(Level.WARN))(body)
-    appender.loggingEvents.toSeq.map(_.getMessage.getFormattedMessage)
+    appender.setThreshold(Level.WARN)
+    withLogAppender(appender)(body)
+    appender.loggingEvents.toSeq.filter(_.getLoggerName == logger.getName)
+      .map(_.getMessage.getFormattedMessage)
   }
 
   test("the one user setting out of range raises INVALID_CONF_VALUE.REQUIREMENT") {
