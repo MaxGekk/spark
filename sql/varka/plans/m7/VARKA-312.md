@@ -263,3 +263,176 @@ Two pull requests.
    Proved by tests 2 to 6 and the gate, and section 9 written.
 
 ## 9. Outcome
+
+Two pull requests, as section 8 planned: 312a (#778, 13 October 2026) moved the harness's logic to
+the Java core; 312b, this section's subject, added the JUnit face. Everything below 9.1 is 312b's,
+measured on the laptop on 13 October 2026.
+
+### 9.1 What 312a recorded
+
+312a's pull request carried its proof: the matrix on master and on the branch, the defaults plus
+`cse=false`, `division=DOUBLE_DIV` and `arrowBatchSize=3` over both modules' 83 Varka suites, gave
+identical counts per configuration (1,051 passed and 31 cancelled at the defaults) and identical
+per-test outcomes from the JUnit reports (9,329 lines each side). The fused-batch reports were
+identical except for 8 counts in `VarkaGoldenCorpusSuite`, by one to three batches either way,
+which that suite's counts do between two runs of the same code. One behaviour changed on purpose:
+a test of an own-JVM suite whose child timed out or left no report now fails with that reason,
+where a Scala `Map` default that `get` never reads had made it "reported no result".
+
+### 9.2 What was built
+
+- `VarkaSuite` (the annotation, 78 lines), `VarkaSuiteExtension` (256), `VarkaSuiteListener`
+  (257), `VarkaSuiteRunner` (165), `VarkaSuiteReport.write` (+86), the `META-INF/services`
+  registration, `VarkaSuiteHarnessSuite` (429, 11 tests), and `VarkaMethodNamesSuite` in Java
+  (154 lines from 100 of Scala). `dev/varka_matrix.sh` starts the runner and finds
+  `@VarkaSuite` classes in `src/test/java`.
+- One change to the core: `VarkaMatrixRuns.Outcomes`'s factories return `Throwable`, not
+  `RuntimeException`, because JUnit's failure, opentest4j's `AssertionFailedError`, is an `Error`.
+  The ScalaTest face's lambdas compile unchanged.
+- Where the plan was silent:
+  - The extension's per-test logic has a seam, `runTest(config, entries, report, guard, ...)`,
+    because `VarkaMatrixRuns.CONFIG` is read once at class load; the harness suite tests the
+    composition through it, as `VarkaMatrixSuite` tests `around`'s.
+  - The runner attaches a listener of its own with the report directory and turns the
+    `META-INF/services` registration off for its Launcher; otherwise every line would print twice
+    and the service-loaded instance would have no directory for the XML.
+  - A class-level failure (a repeated name, Arrow memory left) is a failed class container, which
+    the listener prints `Exception encountered when attempting to run a suite with class name: X
+    *** ABORTED ***` and counts in `Suites: aborted`; its XML carries `errors="1"`.
+  - sbt discovers nested static classes with `@Test` methods and Spark's catalyst job would run
+    the harness's fixtures alone, so each fixture passes alone and its failures are planted by a
+    flag only while a harness test runs it.
+  - `VarkaSuiteHarnessSuite` joins `VarkaMatrixSuite` in the matrix's exclusions; the gate's
+    defaults run includes it.
+
+### 9.3 The tests
+
+**Test 2, `VarkaSuiteHarnessSuite`:** 11 tests pass under sbt and in the matrix's runner: a `fails`
+entry cancels with its reason (and not under another configuration), a stale entry fails while the
+body's own cancel passes through, `PinsDefaults` cancels under `cse=false` without running the body
+and runs at the defaults, the fused-batch report line is `VarkaSuiteHarnessSuite<TAB><display
+name><TAB>-1`, the watchdog's interrupt ends a sleeping test and its halt stub fires on a spinning
+one (the dump naming the suite), an own-JVM fixture's test runs in a child started through the
+runner, a failure, a cancel and a missing name in a child's XML become an `AssertionFailedError`
+with the child's message, a cancel and a failure in the parent, repeated display names are found
+(a method without one counted by JUnit's default name), and the listener prints, counts
+(`succeeded 1, failed 1, canceled 1, ignored 1`, one suite completed, one aborted) and writes XML
+for planted outcomes, and prints nothing for a class not under the annotation.
+
+**Test 3, the example.** sbt's `catalyst/testOnly *VarkaMethodNamesSuite`, the Scala form on
+master:
+
+    [info] VarkaMethodNamesSuite:
+    [info] - the builders give the names the emitted classes have (23 milliseconds)
+    [info] - the readers tell every kind of method apart, on both sides (3 milliseconds)
+    [info] - a group's methods by column are the cost table's four kinds (2 milliseconds)
+    [info] - a group method's group is read off its name, and every other method has none (2 ms)
+    [info] - the scripts outside Java that mirror the names still name what the builders produce
+             (2 milliseconds)
+    [info] Run completed in 11 seconds, 20 milliseconds.
+    [info] Total number of tests run: 5
+    [info] Suites: completed 1, aborted 0
+    [info] Tests: succeeded 5, failed 0, canceled 0, ignored 0, pending 0
+    [info] All tests passed.
+
+The Java form on the branch (the listener's lines reach sbt's output before `jupiter-interface`'s,
+which sbt logs through its own channel):
+
+    VarkaMethodNamesSuite:
+    - the builders give the names the emitted classes have
+    - a group's methods by column are the cost table's four kinds
+    - a group method's group is read off its name, and every other method has none
+    - the scripts outside Java that mirror the names still name what the builders produce
+    - the readers tell every kind of method apart, on both sides
+    [info] Test run started (JUnit Jupiter)
+    [info] Test org.apache.spark...varka.VarkaMethodNamesSuite#builders() started
+    [info] Test org.apache.spark...varka.VarkaMethodNamesSuite#groupMethodsByColumn() started
+    [info] Test org.apache.spark...varka.VarkaMethodNamesSuite#groupOfName() started
+    [info] Test org.apache.spark...varka.VarkaMethodNamesSuite#mirrors() started
+    [info] Test org.apache.spark...varka.VarkaMethodNamesSuite#readers() started
+    [info] Test run finished: 0 failed, 0 ignored, 5 total, 0.009s
+    [info] Passed: Total 5, Failed 0, Errors 0, Passed 5
+
+The matrix's run log and report, with a planted `fails` entry for the third test under `cse=false`
+(the test passes, so the entry is stale and fails it; the committed list was restored after):
+
+    Scala: - a group's methods by column are the cost table's four kinds *** FAILED ***
+             stale entry in sql/varka/matrix/skips.tsv: 'a group's methods by column are the cost
+             table's four kinds' of VarkaMethodNamesSuite passes under cse=false; remove the line
+             (VarkaMatrix.scala:101)
+    Java:  - a group's methods by column are the cost table's four kinds *** FAILED ***
+             stale entry in sql/varka/matrix/skips.tsv: (the same message, without the source
+             position)
+
+The report's lines (`cse=false: - a group's ... *** FAILED ***` and the indented message) and the
+five `fused.tsv` keys are the same strings in both forms, and the JUnit XML names the same five
+test cases. Under every configuration (`--all`: the defaults and 50) both forms pass 5 of 5; the
+two reports' rows are identical but for the seconds, 11 to 16 per JVM for the Scala form and 2 to
+4 for the Java one, which starts no `SparkFunSuite`.
+
+**Test 4, a mixed shard.** One matrix JVM at the defaults with `VarkaMatrixSuite` and
+`VarkaTestWatchdogSuite` (ScalaTest) beside `VarkaMethodNamesSuite` and `VarkaSuiteHarnessSuite`
+(JUnit): ScalaTest's Runner printed `Suites: completed 2` and `Tests: succeeded 10`; the own-JVM
+fixture's child printed its own `Suites: completed 1` and `Tests: succeeded 1` copied into the log;
+the runner's lines came last, `Suites: completed 4, aborted 0` and `Tests: succeeded 26, failed 0,
+canceled 0, ignored 0, pending 0`, which the report read (26 passed, exit 0). Four
+`TEST-<class>.xml` files, and `dev/varka_suite_shards.py 2` read weights from both kinds
+(`VarkaMatrixSuite` 10.3 s, `VarkaSuiteHarnessSuite` 1.3 s, `VarkaTestWatchdogSuite` 0.33 s,
+`VarkaMethodNamesSuite` 0.025 s) and put the first alone on one JVM.
+
+**Test 5, silence for others.** `catalyst/testOnly XXH64Suite HiveHasherSuite` (Spark's own JUnit
+suites) printed the same 18 lines on master and on the branch, timings aside, and no line the
+listener would print.
+
+**The full catalyst run.** `dev/varka_matrix.sh --defaults --module catalyst --split 3 -j 3`, 52
+suites, on master and on the branch (the harness suite skipped on the branch, so the shards held
+the same names): 616 passed and 40 cancelled on both, and the 811 test-case outcomes in the JUnit
+XML identical, name for name.
+
+### 9.4 The predictions
+
+1. **312a moves no test outcome: right** (9.1), with the fused-batch counts of one suite that
+   varies between runs of the same code.
+2. **The example's sbt lines read as the ScalaTest form's: right on the sentences and the `- `,
+   wrong on the order, and the plan undercounted the differences.** The five sentences are the
+   same strings. JUnit runs a class's methods in its own order, here by method name, not in
+   declaration order as ScalaTest does, so the second test printed last. The listener's lines go
+   to standard output and are not sbt's log lines, so they carry no `[info]` prefix and no
+   duration; and sbt's JUnit summary (`Test run finished`, `Passed: Total 5`) replaces ScalaTest's
+   four summary lines, besides the five `started` lines the plan named. The skills note says the
+   order is JUnit's; no `@Order` was added, since the order is no key anywhere.
+3. **The runner adds under two seconds per JVM: right.** Seven interleaved rounds of one JVM per
+   arm over the same classpath, the JVM's wall time less ScalaTest's own `Run completed in` time
+   (the suite's body varies by seconds): ScalaTest's Runner alone a median 443 ms outside its run,
+   `VarkaSuiteRunner` over the same suite 469 ms (+26 ms, within the rounds' spread of 376 to
+   663), and the runner with one JUnit class added, the Launcher's start and five tests, 852 ms
+   (+383 ms). The full catalyst run could not measure it: master's ran on an idle machine (load
+   0.4) in 134, 177 and 471 s per JVM, the branch's beside Spark's golden-file suite from another
+   worktree (load 5 to 9) in 221, 244 and 467 s; the longest JVM, which sets the run's time, moved
+   by 4 s, and the shorter two by the load.
+4. **The core smaller than the code it replaced: wrong.** The four Scala files were 653 lines and
+   are 354; the Java core is 759 (with 312b's `write`, 845). The Scala layers kept their doc
+   comments and every forwarder the suites call, and the Java carries the doc the Scala had.
+
+### 9.5 The gate, and what is left
+
+The whole gate (`dev/varka_gate.sh`, 13 October 2026, 14:40 to 15:01 CEST, beside Spark's
+golden-file suite from another worktree, the load average up to 38) passed every step in 1,258 s:
+`wide` and `narrow` 1,087 passed and 32 cancelled over both modules (the harness and the Java
+example among them, under the runner), `quiet`, `sweep`, `doc`, `bench`, `lint` (`dev/lint-java`,
+`dev/scalastyle`, `dev/varka_errorprone.sh`) and `quotes`.
+
+Left open, outside this row:
+
+- **The fused-batch report of an own-JVM suite holds the parent's lines.** The child writes each
+  test's real count to the same `fused.tsv` (the property is copied to it), and then the parent's
+  test, which only reads the child's result, appends its own line for the same key, -1 or 0, which
+  the report reads last. Both faces do it, since the matrix wraps the child's answer in the parent
+  as `VarkaMatrixTests` wraps `VarkaOwnJvm`'s. Harmless today, since no own-JVM suite is in
+  sql/core, where batches are counted; a candidate row if one moves there.
+- **An own-JVM child's report directory is left under the JVM's temporary directory**, inside the
+  matrix's run directory, so `dev/varka_suite_shards.py` also reads it (a weight under
+  `VarkaSuiteHarnessSuite$OwnJvmFixture`, the max of two times for a Scala suite's own name). It
+  predates this row; deleting the directory after the parse would close it.
+- **A sql/core suite cannot be JUnit yet**: no extension gives a JUnit class Spark's shared
+  session (3.2), and the gate's sweep step selects ScalaTest's `opt-in` tests by name only.
