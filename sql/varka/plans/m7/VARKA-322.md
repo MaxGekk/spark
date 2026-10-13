@@ -255,7 +255,8 @@ The pair runner restores the committed files after each round, so no results fil
 
 **What was built.** 322a-1 as 8.2 says, in one commit after this plan: the ten classes of 4.1 are
 Java under their names and packages, their `.scala` files deleted, 2,510 lines of Scala to 3,137
-of Java (a quarter more), the parity benchmark left for 322a-2. The adapter gained more than 2 listed:
+of Java (a quarter more), the parity benchmark left for 322a-2. The adapter gained more than 2
+listed:
 `VarkaBenchmark.retainCases` and `hasCases` as planned, and in `VarkaBenchmarkBase` three static
 helpers every port needed, `require` and `requirementFailed` (Scala's message prefix, and a form
 that keeps a timed loop free of string building) and `defineKernel` (define an emitted class and
@@ -284,13 +285,19 @@ its 12 cases to the end. Two differ, both for reasons in the committed files, no
   master's Scala class cannot finish a run since an emitter change after 3 October (VARKA-254's
   grouping change of 12 October is the likely one), and the class's pair cannot finish on either
   side until the shape is fixed. That is a change to the benchmark's subject, not to its language,
-  and goes to a row of its own; the port keeps the Scala's shape and `require`.
+  and goes to a row of its own; the port keeps the Scala's shape and `require`. The seventh
+  section (32 cases, loop-method counts in their labels) was not reached, so its labels are
+  unchecked until then.
 
 **What the run said about the harness.** `VarkaUnreadLocalsBenchmark`'s allocation block reads 0.0
-bytes a batch past each kernel's own where the committed file reads 0.1 to 0.2, so the Java
-harness allocates nothing per batch where the Scala's allocated a little; and its "as emitted" rows
+bytes a batch past each kernel's own where the committed file reads 0.1 to 0.2, one run, which the
+pair will confirm or not; and its "as emitted" rows
 now equal its "stripped" ones (24,000 bytes a batch at 400 ladder entries, null-free), since the
 elision became the default after the file was committed.
+
+**Also by the "only" filter**: `-Dvarka.bench.only="-i, ANSI"` on `VarkaArithmeticBenchmark` ran its
+two unary-minus cases and skipped the two sections it emptied, which exercises `retainCases` and
+`hasCases`.
 
 **Correction to 3.1.** Scala's `assert` in `VarkaLongLaneBenchmark` became an
 `IllegalStateException` with Scala's "assertion failed: " message, not an `AssertionError`: Spark's
