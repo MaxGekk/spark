@@ -18,12 +18,14 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.TreeSet;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
@@ -249,6 +251,37 @@ final class VarkaVariants {
    * which the guard rightly declines - so the variant is run on that batch's nulls alone.
    */
   static Optional<Variant> untakenArm(List<VarkaVectorIR> roots, int numInputs,
+      ArmOracle oracle, List<VarkaVectorIR> pool, int rotation) {
+    return untakenArm(roots, numInputs, oracle, pool, rotation, v -> true);
+  }
+
+  /**
+   * {@link #untakenArm} whose replacements keep the variant within {@code fits} where any do: the
+   * pool scanned from {@code rotation}, then from each next start once round the pool, and the
+   * first variant that fits taken; where none fits, the one from {@code rotation}. A replacement
+   * can be larger than the arm it replaces, and the fuzzer's {@code fits} is whether the emitter's
+   * form without a byte budget still holds the tree (VARKA-323).
+   */
+  static Optional<Variant> untakenArm(List<VarkaVectorIR> roots, int numInputs,
+      ArmOracle oracle, List<VarkaVectorIR> pool, int rotation, Predicate<Variant> fits) {
+    // Which arm the batch takes depends on the condition alone, so each is read once, not once
+    // per start: the oracle evaluates the condition over the whole batch.
+    var taken = new IdentityHashMap<Cond, Taken>();
+    ArmOracle once = cond -> taken.computeIfAbsent(cond, oracle::taken);
+    Optional<Variant> first = untakenArmFrom(roots, numInputs, once, pool, rotation);
+    if (first.isEmpty() || fits.test(first.get())) {
+      return first;
+    }
+    for (int k = 1; k < pool.size(); k++) {
+      Optional<Variant> other = untakenArmFrom(roots, numInputs, once, pool, rotation + k);
+      if (other.isPresent() && fits.test(other.get())) {
+        return other;
+      }
+    }
+    return first;
+  }
+
+  private static Optional<Variant> untakenArmFrom(List<VarkaVectorIR> roots, int numInputs,
       ArmOracle oracle, List<VarkaVectorIR> pool, int rotation) {
     var replaced = new int[1];
     var moved = new ArrayList<VarkaVectorIR>();
