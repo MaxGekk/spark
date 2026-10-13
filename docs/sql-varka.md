@@ -1070,6 +1070,10 @@ exist.
   `Integer.MAX_VALUE`.
 * **Catalyst tests** check bytecode shape by disassembly, the loader
   define/release lifecycle, and ghost-fallback injection.
+  They are ScalaTest suites or, for a suite whose helpers are Java,
+  JUnit 5 classes under `@VarkaSuite`; both run under the same option
+  matrix, skip list and per-test watchdog, and a JUnit test is printed and
+  matched by its `@DisplayName` sentence as a ScalaTest test is by its name.
 * **Random kernels, in the code users run** (`VarkaIrFuzzSuite`,
   `VarkaTierWitnessSuite`): the IR fuzzer compares random trees with a reference
   evaluator row by row, each kernel once in the interpreter and the first 20

@@ -29,12 +29,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSuiteReport.Failed;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSuiteReport.Passed;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSuiteReport.Result;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSuiteReport.Skipped;
 
 /**
  * Runs one suite in a JVM of its own and returns each test's result (VARKA-246, {@code m8/SCOPE.md}
@@ -50,8 +52,9 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSuiteReport.
  *
  * <p>The child is ended from outside when it outlasts its budget, which is the shortest of the
  * suites' per-test caps ({@code varka.test.watchdog.minutes}, {@code spark.test.timeout}) less a
- * minute, so the parent reports the child's hang before a cap halts the JVM;
- * {@code -Dvarka.ownJvm.timeoutMinutes} overrides it.
+ * minute, so the parent reports the child's hang before a cap halts the JVM; a JUnit suite passes
+ * its own cap ({@code @VarkaSuite(watchdogMinutes)}, none for 0) instead, and
+ * {@code -Dvarka.ownJvm.timeoutMinutes} overrides either.
  */
 public final class VarkaChildJvm {
 
@@ -74,6 +77,20 @@ public final class VarkaChildJvm {
     long watchdog = VarkaWatchdog.defaultMinutes();
     long sparkCap = Long.parseLong(System.getProperty("spark.test.timeout", "20"));
     return Math.max(1L, Math.min(watchdog, sparkCap) - 1L);
+  }
+
+  /**
+   * The minutes a child may run when its suite's per-test cap is {@code capMinutes}, as a JUnit
+   * suite under {@code @VarkaSuite} sets it: that cap less one, empty for no limit when the cap
+   * is 0 (no watchdog), or the override. No {@code spark.test.timeout} term, since that is
+   * {@code SparkFunSuite}'s and caps no JUnit test.
+   */
+  static OptionalLong budgetMinutes(long capMinutes) {
+    String override = System.getProperty("varka.ownJvm.timeoutMinutes");
+    if (override != null) {
+      return OptionalLong.of(Long.parseLong(override));
+    }
+    return capMinutes == 0 ? OptionalLong.empty() : OptionalLong.of(Math.max(1L, capMinutes - 1L));
   }
 
   /**
@@ -110,11 +127,22 @@ public final class VarkaChildJvm {
   /**
    * Runs {@code suite} in a child JVM through {@code mainClass}, given the report directory's
    * path as {@code reportFlag}'s value and then {@code arguments}, and returns each test's result
-   * by name. Every test the report holds as passed fails instead when the child timed out, and a
-   * child that left no report fails every test asked about, with its last lines.
+   * by name, the child limited to {@link #budgetMinutes()}.
    */
   public static Results run(String suite, String mainClass, List<String> arguments,
       String reportFlag) throws Exception {
+    return run(suite, mainClass, arguments, reportFlag, OptionalLong.of(budgetMinutes()));
+  }
+
+  /**
+   * {@link #run(String, String, List, String)} with the child limited to {@code budget} minutes,
+   * or not at all when it is empty. Every test the report holds as passed fails instead when the
+   * child timed out, when the report says the suite as a whole aborted (a class-level hook threw
+   * after the tests ran), or when the child exited non-zero though its report holds no failure;
+   * and a child that left no report fails every test asked about, with its last lines.
+   */
+  public static Results run(String suite, String mainClass, List<String> arguments,
+      String reportFlag, OptionalLong budget) throws Exception {
     File report = Files.createTempDirectory("varka-own-jvm").toFile();
     File javaBin = new File(new File(System.getProperty("java.home"), "bin"), "java");
     var command = new ArrayList<String>();
@@ -142,12 +170,11 @@ public final class VarkaChildJvm {
     builder.redirectErrorStream(true);
     builder.environment().put("SPARK_TESTING", "1");
     Process process = builder.start();
-    long budget = budgetMinutes();
     // The read below ends only when the child exits, so a hung child is ended from here.
     var timedOut = new AtomicBoolean(false);
     var killer = new Thread(() -> {
       try {
-        if (!process.waitFor(budget, TimeUnit.MINUTES)) {
+        if (budget.isPresent() && !process.waitFor(budget.getAsLong(), TimeUnit.MINUTES)) {
           timedOut.set(true);
           process.destroyForcibly();
         }
@@ -175,22 +202,38 @@ public final class VarkaChildJvm {
       }
     }
     Map<String, Result> parsed = VarkaSuiteReport.read(report);
+    Optional<String> aborted = VarkaSuiteReport.abortOf(report);
+    int exit = process.exitValue();
     if (timedOut.get()) {
       return failAll(parsed,
-          suite + " did not finish in " + budget + " minutes in its own JVM");
+          suite + " did not finish in " + budget.getAsLong() + " minutes in its own JVM", false);
+    } else if (aborted.isPresent()) {
+      return failAll(parsed, "in its own JVM, " + suite + " aborted: " + aborted.get(), true);
     } else if (parsed.isEmpty()) {
-      return failAll(parsed, suite + " left no report in its own JVM (exit "
-          + process.exitValue() + "):\n" + String.join("\n", tail));
+      return failAll(parsed, suite + " left no report in its own JVM (exit " + exit + "):\n"
+          + String.join("\n", tail), false);
+    } else if (exit != 0 && parsed.values().stream().noneMatch(r -> r instanceof Failed)) {
+      // A runner exits non-zero only for a failed test or an aborted suite; with neither in the
+      // report, something the report could not hold went wrong, and no test may pass over it.
+      return failAll(parsed, suite + " exited with exit " + exit + " in its own JVM, though its"
+          + " report holds no failure:\n" + String.join("\n", tail), true);
     }
     return new Results(parsed, Optional.empty());
   }
 
-  /** {@code parsed} with every pass turned into a failure with {@code message}, which also
-   *  answers for any test it does not hold. */
-  private static Results failAll(Map<String, Result> parsed, String message) {
+  /**
+   * {@code parsed} with every pass turned into a failure with {@code message}, and every cancel
+   * too when {@code cancels} is set, so that a whole-suite failure reaches the parent even when
+   * no test passed; the failure also answers for any test {@code parsed} does not hold.
+   */
+  private static Results failAll(Map<String, Result> parsed, String message, boolean cancels) {
     var failure = new Failed(message);
     var failed = new LinkedHashMap<String, Result>();
-    parsed.forEach((name, result) -> failed.put(name, result instanceof Passed ? failure : result));
+    parsed.forEach((name, result) -> failed.put(name, switch (result) {
+      case Passed p -> failure;
+      case Skipped s -> cancels ? failure : s;
+      case Failed f -> f;
+    }));
     return new Results(failed, Optional.of(failure));
   }
 }
