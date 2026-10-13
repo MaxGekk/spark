@@ -18,10 +18,10 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import java.time.LocalDate
+import java.util.Random
 import java.util.function.IntUnaryOperator
 
 import scala.collection.mutable
-import scala.util.Random
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaIrGrammar._
@@ -496,7 +496,7 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite with VarkaTestWatchdog {
       val numLiterals = rnd.nextInt(3)
       val smallOrdinal = if (numInputs > 1) numInputs - 1 else -1
       val levelOrdinal = if (numInputs > 2) numInputs - 2 else -1
-      val shapes = new Shapes(rnd.self, numInputs, numLiterals, smallOrdinal, levelOrdinal)
+      val shapes = new Shapes(rnd, numInputs, numLiterals, smallOrdinal, levelOrdinal)
       val root = shapes.value(1 + rnd.nextInt(4)).node
       // Distinct literal values: the compiler's table is keyed by value, and the legacy oracle
       // reads it the way the compiler does.

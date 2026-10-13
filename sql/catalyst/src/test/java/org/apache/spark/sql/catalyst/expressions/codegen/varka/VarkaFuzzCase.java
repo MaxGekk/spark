@@ -40,8 +40,9 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Lan
  * a failure message starts with: the seed, the iteration and the parts of the case, written once
  * at the draw.
  *
- * <p>The arrays are shared, not copied: a case is never changed in place, and the {@code with}
- * methods return a new case over new arrays where they change one.
+ * <p>The arrays are shared, not copied: a case is never changed in place, and a {@code with}
+ * method returns a new case holding the array it is given, so its caller passes an array it will
+ * not change afterwards - as the shrinker does, building each candidate's arrays new.
  */
 public record VarkaFuzzCase(
     LaneType lane,

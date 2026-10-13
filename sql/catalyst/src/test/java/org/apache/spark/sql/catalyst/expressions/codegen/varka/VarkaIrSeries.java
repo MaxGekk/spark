@@ -168,7 +168,17 @@ public final class VarkaIrSeries {
   }
 
   private static <A, B> Iterator<B> map(Iterator<A> it, Function<? super A, ? extends B> f) {
-    return flatMap(it, a -> List.<B>of(f.apply(a)).iterator());
+    return new Iterator<B>() {
+      @Override
+      public boolean hasNext() {
+        return it.hasNext();
+      }
+
+      @Override
+      public B next() {
+        return f.apply(it.next());
+      }
+    };
   }
 
   /** The parts in order, each started only when the one before it is spent. */
@@ -218,7 +228,7 @@ public final class VarkaIrSeries {
     private static <A> List<A> drain(Iterator<A> it) {
       var out = new ArrayList<A>();
       it.forEachRemaining(out::add);
-      return List.copyOf(out);
+      return Collections.unmodifiableList(out);
     }
 
     /** Every value tree of exactly {@code n} productions, held. */
@@ -576,18 +586,29 @@ public final class VarkaIrSeries {
    * no null at 64 (the check adds its forced-masked twin), a pattern per column at 33, and every
    * row null at 7.
    */
-  public static List<IntBatch> intBatches() {
-    return Batches.INT;
+  public static synchronized List<IntBatch> intBatches() {
+    if (intBatches == null) {
+      intBatches = Batches.drawInt();
+    }
+    return intBatches;
   }
 
-  public static List<LongBatch> longBatches() {
-    return Batches.LONG;
+  public static synchronized List<LongBatch> longBatches() {
+    if (longBatches == null) {
+      longBatches = Batches.drawLong();
+    }
+    return longBatches;
   }
 
-  /** The batches, drawn on first use, in this order, from these seeds. */
+  // Each lane's batches, drawn on its first use and apart from the other's: a draw that throws -
+  // the long lane's under a bad -Dvarka.fuzz.longColumnBound - fails that call alone, as a Scala
+  // lazy val does, and leaves the int lane untouched, where a holder class's static initializer
+  // would make both an ExceptionInInitializerError and every later use NoClassDefFoundError.
+  private static List<IntBatch> intBatches;
+  private static List<LongBatch> longBatches;
+
+  /** How the batches are drawn, in this order, from these seeds. */
   private static final class Batches {
-    static final List<IntBatch> INT = drawInt();
-    static final List<LongBatch> LONG = drawLong();
 
     private static List<IntBatch> drawInt() {
       var rnd = new Random(20261011L);

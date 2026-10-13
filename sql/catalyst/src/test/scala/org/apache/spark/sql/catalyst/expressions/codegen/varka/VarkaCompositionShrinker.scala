@@ -17,6 +17,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import scala.jdk.CollectionConverters._
+import scala.jdk.OptionConverters._
 
 import org.apache.spark.sql.catalyst.expressions.Expression
 
@@ -46,23 +47,13 @@ object VarkaCompositionShrinker {
       outcome: VarkaCompositionCase => Option[VarkaFailureSignature],
       maxRuns: Int = 600,
       maxMillis: Long = 60000L): Shrunk = {
-    val start = System.nanoTime()
-    var runs = 0
-    var stopped = false
-    def elapsed: Long = (System.nanoTime() - start) / 1000000L
-    def stillFails(c: VarkaCompositionCase): Boolean = {
-      if (runs >= maxRuns || elapsed >= maxMillis) {
-        stopped = true
-        false
-      } else {
-        runs += 1
-        outcome(c).contains(signature)
-      }
-    }
+    val budget = new VarkaShrinker.Budget[VarkaCompositionCase](
+      signature, c => outcome(c).toJava, maxRuns, maxMillis)
+    val stillFails: VarkaCompositionCase => Boolean = budget.stillFails
 
     var best = original
     var changed = true
-    while (changed && !stopped) {
+    while (changed && !budget.stopped) {
       val before = best
       best = shrinkEntries(best, stillFails)
       best = shrinkTrees(best, stillFails)
@@ -71,10 +62,9 @@ object VarkaCompositionShrinker {
         (o: VarkaEmitOptions) => stillFails(current.copy(options = o))))
       changed = before.entries != best.entries || before.options != best.options
     }
-    // A failure that depends on the JIT may not repeat: the result is run three times more, and
-    // is reported as unstable unless every run fails the same way.
-    val stable = (0 until 3).forall(_ => outcome(best).contains(signature))
-    Shrunk(best, runs, elapsed, stopped, stable)
+    // The stability runs first, so that the time reported counts them.
+    val stable = budget.stable(best)
+    Shrunk(best, budget.runs, budget.elapsed, budget.stopped, stable)
   }
 
   private def shrinkEntries(

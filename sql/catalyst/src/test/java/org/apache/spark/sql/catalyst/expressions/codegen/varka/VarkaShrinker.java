@@ -142,13 +142,14 @@ public final class VarkaShrinker {
       best = shrinkBatch(best, budget::stillFails);
       changed = !sameCase(before, best);
     }
-    return new Shrunk(best, budget.runs, budget.elapsed(), budget.stopped,
-        budget.stable(best));
+    // The stability runs first, so that the time reported counts them.
+    boolean stable = budget.stable(best);
+    return new Shrunk(best, budget.runs, budget.elapsed(), budget.stopped, stable);
   }
 
   /**
-   * The runs a shrink may spend, and whether a candidate still fails the original's way. Shared
-   * with the composition shrinker (VARKA-294).
+   * The runs a shrink may spend, and whether a candidate still fails the original's way. The
+   * composition shrinker (VARKA-294) spends its runs through it too.
    */
   public static final class Budget<C> {
     private final VarkaFailureSignature signature;

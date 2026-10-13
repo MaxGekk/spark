@@ -71,24 +71,37 @@ public final class VarkaKnownFailures {
         new VarkaFailureSignature(f[3], f[4]), f[5]);
   }
 
+  // The committed list once read; null until a read succeeds. A read that fails throws its own
+  // exception to that caller and leaves the next to read again, as a Scala lazy val does - a
+  // holder class's static initializer would turn a malformed row into an
+  // ExceptionInInitializerError, which aborts the suite and hides the row's message from later
+  // callers behind NoClassDefFoundError.
+  private static volatile List<Entry> committed;
+
   /** The committed list, read once. */
   public static List<Entry> entries() {
-    return Committed.ENTRIES;
+    List<Entry> list = committed;
+    if (list == null) {
+      synchronized (VarkaKnownFailures.class) {
+        list = committed;
+        if (list == null) {
+          list = read();
+          committed = list;
+        }
+      }
+    }
+    return list;
   }
 
-  private static final class Committed {
-    static final List<Entry> ENTRIES = read();
-
-    private static List<Entry> read() {
-      Path file = Path.of(System.getProperty("spark.test.home", "."), PATH);
-      if (!Files.exists(file)) {
-        return List.of();
-      }
-      try {
-        return parse(Files.readString(file, StandardCharsets.UTF_8));
-      } catch (IOException e) {
-        throw new UncheckedIOException(e);
-      }
+  private static List<Entry> read() {
+    Path file = Path.of(System.getProperty("spark.test.home", "."), PATH);
+    if (!Files.exists(file)) {
+      return List.of();
+    }
+    try {
+      return parse(Files.readString(file, StandardCharsets.UTF_8));
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
     }
   }
 

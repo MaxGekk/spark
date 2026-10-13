@@ -27,7 +27,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.stream.IntStream;
 
-
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.AddDays;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.AddMonths;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;

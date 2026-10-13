@@ -297,16 +297,16 @@ object VarkaSparkFuzz {
 
   // ---- the shrinker -----------------------------------------------------------------------
 
-  /**
-   * `c` reduced while `kind` still shows: the outputs, the conjuncts and the rows of data, each by
-   * ddmin, repeated until a pass changes nothing, within `maxRuns` checks. `check` returns the
-   * kind of disagreement a case shows, or None.
-   */
   /** [[VarkaShrinker.ddmin]] over a Scala vector. */
   private def ddmin[A](items: Vector[A])(fails: Vector[A] => Boolean): Vector[A] =
     VarkaShrinker.ddmin(items.asJava, (xs: java.util.List[A]) => fails(xs.asScala.toVector))
       .asScala.toVector
 
+  /**
+   * `c` reduced while `kind` still shows: the outputs, the conjuncts and the rows of data, each by
+   * ddmin, repeated until a pass changes nothing, within `maxRuns` checks. `check` returns the
+   * kind of disagreement a case shows, or None.
+   */
   def shrink(c: Case, kind: String, check: Case => Option[String], maxRuns: Int = 400): Case = {
     var runs = 0
     def still(x: Case): Boolean = {

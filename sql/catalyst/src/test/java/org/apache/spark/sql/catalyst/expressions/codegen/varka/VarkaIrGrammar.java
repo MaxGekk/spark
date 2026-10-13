@@ -150,9 +150,9 @@ public final class VarkaIrGrammar {
    */
   public record Bounds(long value, long guarded) { }
 
-  private static long value(VarkaVectorIR n) {
-    return boundsOf(n).value();
-  }
+  // Each child's bounds are computed once and both its fields read from them: reading a child's
+  // value and its guard through two calls would walk its subtree twice at every level, 2^depth
+  // walks of the deepest node.
 
   private static long guard(VarkaVectorIR... ns) {
     long m = 0L;
@@ -162,12 +162,36 @@ public final class VarkaIrGrammar {
     return m;
   }
 
+  private static long guard(Bounds... bs) {
+    long m = 0L;
+    for (Bounds b : bs) {
+      m = Math.max(m, b.guarded());
+    }
+    return m;
+  }
+
+  /** A node whose value is {@code f} of its one child's and whose guard is the child's. */
+  private static Bounds over(VarkaVectorIR child, java.util.function.LongUnaryOperator f) {
+    Bounds b = boundsOf(child);
+    return new Bounds(f.applyAsLong(b.value()), b.guarded());
+  }
+
+  /** A node whose value is {@code f} of its two children's and whose guard is theirs. */
+  private static Bounds over(VarkaVectorIR left, VarkaVectorIR right,
+      java.util.function.LongBinaryOperator f) {
+    Bounds l = boundsOf(left);
+    Bounds r = boundsOf(right);
+    return new Bounds(f.applyAsLong(l.value(), r.value()), guard(l, r));
+  }
+
   private static Bounds shift(VarkaVectorIR days, VarkaVectorIR offset) {
-    long own = satAdd(value(days), value(offset));
+    Bounds d = boundsOf(days);
+    Bounds o = boundsOf(offset);
+    long own = satAdd(d.value(), o.value());
     // A literal offset is folded at compile time and never guarded;
     // a column offset is exactly what collectRefusals collects.
     long guarded = offset instanceof LiteralSlot ? 0L : own;
-    return new Bounds(own, Math.max(guard(days, offset), guarded));
+    return new Bounds(own, Math.max(guard(d, o), guarded));
   }
 
   /**
@@ -203,14 +227,13 @@ public final class VarkaIrGrammar {
       case LiteralSlot _ -> new Bounds(LITERAL_BOUND, 0L);
       case AddDays n -> shift(n.days(), n.offset());
       case SubDays n -> shift(n.days(), n.offset());
-      case DateDiff n ->
-          new Bounds(satAdd(value(n.end()), value(n.start())), guard(n.end(), n.start()));
-      case Greatest n ->
-          new Bounds(Math.max(value(n.left()), value(n.right())), guard(n.left(), n.right()));
-      case Least n ->
-          new Bounds(Math.max(value(n.left()), value(n.right())), guard(n.left(), n.right()));
-      case IfElse n -> new Bounds(Math.max(value(n.thenNode()), value(n.elseNode())),
-          guard(n.cond(), n.thenNode(), n.elseNode()));
+      case DateDiff n -> over(n.end(), n.start(), VarkaIrGrammar::satAdd);
+      case Greatest n -> over(n.left(), n.right(), Math::max);
+      case Least n -> over(n.left(), n.right(), Math::max);
+      case IfElse n -> {
+        Bounds arms = over(n.thenNode(), n.elseNode(), Math::max);
+        yield new Bounds(arms.value(), Math.max(arms.guarded(), guard(n.cond())));
+      }
       // Conditions carry no day value of their own, but their operands hold producers.
       case Compare n -> new Bounds(0L, guard(n.left(), n.right()));
       case And n -> new Bounds(0L, guard(n.left(), n.right()));
@@ -223,42 +246,46 @@ public final class VarkaIrGrammar {
       case DayOfWeek n -> new Bounds(7L, guard(n.days()));
       case WeekDay n -> new Bounds(6L, guard(n.days()));
       case DayOfWeekIso n -> new Bounds(7L, guard(n.days()));
-      case NextDay n -> new Bounds(satAdd(value(n.days()), 8), guard(n.days(), n.offset()));
-      case ThursdayOf n -> new Bounds(satAdd(value(n.days()), 3), guard(n.days()));
+      case NextDay n -> {
+        Bounds days = over(n.days(), v -> satAdd(v, 8));
+        yield new Bounds(days.value(), Math.max(days.guarded(), guard(n.offset())));
+      }
+      case ThursdayOf n -> over(n.days(), v -> satAdd(v, 3));
       // VARKA-93: a range check beside the value, which the value itself does not feel. The
       // bound is the child's, so a subtree that would leave the range still shows as one -
       // the guard reports such a batch rather than making it representable.
-      case GuardedDay n -> new Bounds(value(n.days()), guard(n.days()));
-      case GuardedRange n -> new Bounds(value(n.child()), guard(n.child()));
+      case GuardedDay n -> boundsOf(n.days());
+      case GuardedRange n -> boundsOf(n.child());
       case WeekOfYear n -> new Bounds(53L, guard(n.days()));
       case Year n -> new Bounds(40000L, guard(n.days()));
       case Month n -> new Bounds(12L, guard(n.days()));
       case DayOfMonth n -> new Bounds(31L, guard(n.days()));
       case Quarter n -> new Bounds(4L, guard(n.days()));
       case DayOfYear n -> new Bounds(366L, guard(n.days()));
-      case AddMonths n -> new Bounds(satAdd(value(n.days()), satMul(value(n.months()), 31)),
-          guard(n.days(), n.months()));
+      case AddMonths n -> over(n.days(), n.months(), (d, m) -> satAdd(d, satMul(m, 31)));
       // trunc moves a date down by up to a year, so the truncated value's magnitude can exceed
       // the child's by that much: the bound is the child's plus 366, not the child's. The
       // difference is invisible to the calendar placement, which checks with slack, and
       // decisive for the range guard's arm, which takes the bound as a guard the value must
       // not leave.
-      case TruncDate n -> new Bounds(satAdd(value(n.days()), 366), guard(n.days()));
+      case TruncDate n -> over(n.days(), v -> satAdd(v, 366));
       // VARKA-63: wrapping arithmetic can leave the day range entirely, which is what the
       // bound is for - a calendar node over such a subtree is refused by fitsUnderChrono.
       case IntArith n -> n.op() == IntOp.MUL
-          ? new Bounds(satMul(value(n.left()), value(n.right())), guard(n.left(), n.right()))
-          : new Bounds(satAdd(value(n.left()), value(n.right())), guard(n.left(), n.right()));
-      case IntNeg n -> new Bounds(value(n.child()), guard(n.child()));
-      case ConstDivide n -> new Bounds(value(n.child()) / Math.abs(n.divisor()), guard(n.child()));
+          ? over(n.left(), n.right(), VarkaIrGrammar::satMul)
+          : over(n.left(), n.right(), VarkaIrGrammar::satAdd);
+      case IntNeg n -> boundsOf(n.child());
+      case ConstDivide n -> over(n.child(), v -> v / Math.abs(n.divisor()));
       case BoundedDivide n ->
           new Bounds((long) ((n.bound() - 1) / n.divisor()), guard(n.child()));
       // The dynamic form moves the date down like the literal one, whatever the level; the
       // level column contributes no day magnitude of its own, only whatever guarded producer
       // might sit under it, which `guard` picks up.
-      case TruncDateDynamic n ->
-          new Bounds(satAdd(value(n.days()), 366), guard(n.days(), n.level()));
-      case LastDay n -> new Bounds(satAdd(value(n.days()), 31), guard(n.days()));
+      case TruncDateDynamic n -> {
+        Bounds days = over(n.days(), v -> satAdd(v, 366));
+        yield new Bounds(days.value(), Math.max(days.guarded(), guard(n.level())));
+      }
+      case LastDay n -> over(n.days(), v -> satAdd(v, 31));
       // make_date guards its own year, so its output is a date inside the column contract.
       case MakeDate n ->
           new Bounds(VarkaChrono.CONTRACT_MAX_DAYS, guard(n.year(), n.month(), n.day()));
