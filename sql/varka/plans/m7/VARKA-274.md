@@ -499,3 +499,73 @@ censuses. Predictions 1 and 9 are 274b's.
    user's warmed kernel takes a `reinterpret` on its first real batch, and what that costs, is a
    measurement of `VarkaKernelWarmup` on production's batch shapes.
 
+
+### 9.6 The review's fixes
+
+A code review of the pull request found ten things, all fixed in it on 13 October 2026 after each
+was checked; none was a false positive. Where this changes 9.1 to 9.4, this section is the
+correction. Measured on the laptop at load average 3 to 10 (another agent's runs beside), so the
+times here are not comparable to 9.4's quiet ones.
+
+1. **A trap inside inlined code was lost.** `jdk.Deoptimization`'s `method` is the method the trap
+   was taken in; its `compileId` names the compiled code thrown away. The witness read the first,
+   so a trap inside a Vector API method or a runtime helper C2 had inlined into a kernel method was
+   dropped. It now attributes a trap by the compile id of a watched class's compile. Shown from
+   recorded events: every 20-draw run since finds 4 such traps, the same 4 at both widths - `run`
+   trapping inside `jdk.internal.foreign.SegmentBulkOperations.fill` (twice), `runMasked` inside
+   `VarkaVectorSupport.everyOutputReadsAnAllNullColumn`, and `run` inside a helper of
+   `org.apache.spark.sql.varka.vector`, each `unstable_if`. The report prints the count and examples.
+2. **C2 at both edges did not mean the same code.** The verdict asked for level 4 at both edges;
+   it now asks, per method, for one compiled version (its own, or a caller's it was inlined into)
+   in use at both, so code thrown away and recompiled inside a call reads `Mixed`. Test 4 checks
+   it on captured lines (1751 at one edge, a recompiled 1790 at the other).
+3. **`recompiled` looked for the trap in the loops only**, where 9.2.4 had found it in the masked
+   driver. It now compares the class's versions in use before and after the all-null batch over
+   every method, drivers and `run` included, and waits for every thrown-away method as well as the
+   loops. "Trapped and then C2 on the last batch" read 10 and 13 of 14 before and after; why the
+   loops' reading had already caught these kernels was not investigated.
+4. **The warm-up decided ahead of the recording.** The code list is current, the JFR stream about
+   a second behind, so an OSR version could be read as a standard one before its compile event
+   arrived. Counting only versions the stream has delivered fixed that, and doubled the cost: the
+   median settle went from 412 ms to about 1,000 ms (JFR's delivery interval) and the test from
+   145 s to 295 s. So the warm-up now decides quickly, records the code list it decided on, and
+   each decision is confirmed after the test's final settle against everything delivered; the
+   report gives settled and confirmed counts, and a confirmed warm-up is what the not-reached
+   check and prediction 3 count. The finding was real: at the host's width every decision was
+   confirmed, but at 128 bits 2 of 14 int-lane `recompiled` decisions and up to 4 of 14 long-lane
+   decisions per warmed history were not, and the long lane's `warm-same`, with 4 unconfirmed,
+   shows `osr4` on 4 cases.
+5. **The compiled test skipped the known failures and the shrinker.** A failure now carries the
+   history (`VarkaCompiledCheck.HistoryFailure`) and the check's own failure as its cause, which
+   the signature classifies; a known one is logged and left, a new one is shrunk against the
+   history that failed, since a failure of compiled code need not show in the interpreter.
+6. **"History not reached" failed the suite on a loaded machine.** Of the two choices offered -
+   count it in the shared runs, or move the compiled test to the quiet phase - it is counted: the
+   test prints how many and why, and fails on them only under `-Dvarka.fuzz.requireTiers=true`.
+   The compiled test's job is to find wrong answers on new draws, and the nightly fuzz job, which
+   draws them, runs one JVM per core; moving the test to the quiet phase would take it out of the
+   nightly. The tier facts are held hard where the machine is quiet, by `VarkaTierWitnessSuite` on
+   fixed shapes. A wrong answer fails everywhere.
+7. **The recording outlived the test.** `VarkaTierWitness.close()` stops it when the compiled test
+   ends. The later tests of the suite took 9.6 s before (load 0.4) and 9.2 s after (load 1 to 2):
+   no difference that this machine's noise can show.
+8. **Verdicts were recomputed at every count.** Each call's verdict is computed once, after a
+   settle that covers the call, and kept; reading it earlier throws.
+9. **The warm-up's sizes were copies.** It uses `VarkaKernelWarmup.SNAPSHOT_ROWS` and
+   `SLICE_ROWS`.
+10. **The compiled test's section header split the variants helpers.** It has no header now and
+    sits with the other draw tests, before the first of them, so it still runs first.
+
+**And master's output validity fills.** Merging master brought the check that runs every compared
+batch twice, once with the output validity pre-filled with zeros and once with ones. The loaded
+form does the same, and the witness's window holds both runs. So each history's kernel runs twice
+per compared batch: `released`'s OSRs come at half the batch numbers they did (tier 3 at batch 49
+and tier 4 at 84 at the int lane, host width).
+
+After the fixes and the merge: `VarkaTierWitnessSuite` passes at both widths; the compiled test
+passes in its own JVM at both widths (142 s and 227 s) with no wrong answer and 0 histories not
+reached; the catalyst suites at the defaults (`dev/varka_matrix.sh --defaults --module catalyst
+--split 3 -j 3`) pass, 636 passed and 0 failed, in 575 s at load 9. Prediction 3 at the host's
+width now reads 10 of 14 and 12 of 14 at the int lane, 12 of 14 and 12 of 14 at the long, still
+missed; prediction 8 was not re-measured on a quiet machine, and at load 5 the A/B read +11% at
+the int lane and -17% at the long, which is that load's noise.
