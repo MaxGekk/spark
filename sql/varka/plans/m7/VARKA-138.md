@@ -371,3 +371,122 @@ fill of the emitter matrices costs less than the run's noise.
   a 2.8 s test. The child's JUnit report holds each test's time; the parent test could report it
   (an `info` line, or the parent's own duration), so a measurement does not need the temporary
   directory.
+
+### 10.3 Outcome (138b)
+
+Done on 13 October 2026, as 3.3 and 3.4 describe, in `VarkaCoverageDifferentialSuite`.
+
+* **`rid`.** Every fixture's view gains `rid`, the row's position in its VALUES, through one
+  shared builder (`fixtureView`). No coverage row names it, and no query of the suite or of any
+  other suite selects `*` from these fixtures (the per-row queries name their columns, and the
+  fixtures are referenced nowhere else), so the per-row tests ran unchanged: 93 of 93 passed
+  before and after.
+* **The partition oracle (3.3, test 4).** One test per predicate row: on each of the three
+  fixtures, under the default optimizer and with `BooleanSimplification`, `NullDownPropagation`
+  and `InferFiltersFromConstraints` in `spark.sql.optimizer.excludedRules` of both sessions,
+  `WHERE p` and `WHERE NOT (p)` run on Varka with a Varka filter asserted in each plan, each is
+  compared on rows with Spark's, the two share no `rid`, and the rows in neither are Spark's
+  `WHERE (p) IS NULL` on ids and values. 27 rows, 162 cases, 324 Varka filters: all agree. The
+  comparison is a function of the six answers (`partitionFindings`), so the planted test feeds it
+  real answers with Spark's unknown rows standing in for `NOT (p)`, which is what a filter that
+  swapped known-false and unknown would return: on the mixed fixture under `d < d2` it names both
+  the wrong false rows and the wrong rest, and passes the true answers. No option or hook breaks a
+  kernel that way, so this shows the assertions see the swap, not that a kernel can make one; the
+  probe of 2 is the evidence that `NOT (p)` reaches Varka as written with the rules excluded, which
+  the per-row test, comparing `WHERE p` alone under the default optimizer, never runs. Given
+  `WHERE p` and `WHERE NOT (p)` equal to Spark's, the disjointness and the rest hold Spark's three
+  filters to each other: both engines share the optimizer, so a rewrite of `NOT (p)` both get wrong
+  passes a differential and still breaks the partition.
+* **The ANSI form (3.4, test 5).** `varka_coverage_extremes`: all twelve columns at their types'
+  extremes (`9999-12-31` beside `0001-01-01`, `Int.MaxValue`, `Long.MaxValue` beside
+  `Long.MinValue`, the largest year-month interval beside the smallest month count, the largest
+  and smallest day-time intervals, `23:59:59.999999`) and one ordinary row, a third row of nulls
+  filtered out by `rid` so every column stays nullable, one partition. One test per row, under
+  ANSI and with the in-memory scan's batch pruning off on both sessions, since `rid < 0` rules out
+  every batch by its statistics and a pruned batch meets no kernel. Outcomes compare as rows, or
+  as condition, SQLSTATE and message parameters; one engine raising alone fails. A skipped
+  position Varka does not serve with a kernel (`numVarkaBatches > 0`, stronger than a node in the
+  plan, since a node can decline every batch) must be on the declined list with its reason, and a
+  listed one that is served fails as stale, under the defaults; under a configuration of the option
+  matrix only the outcomes are compared. A further test checks every declined entry names a row and
+  a position.
+
+**Two corrections to 3.4's shapes.** As first written - `CASE WHEN rid < 0 THEN e ELSE <column>`
+with the column of `e`'s type - the CASE reached a kernel for 26 of 65 rows, not the 61 it reaches
+now, for two reasons the probe's date and int fixture did not meet:
+
+1. *Varka compiles no bare int column as a value* (`non-date column of type int`, m8/SCOPE.md item
+   55), so `ELSE i` declines every int-valued CASE. The int CASE's other arm is now `year(d2)`, an
+   int the kernel computes that cannot raise; the int COALESCE keeps `coalesce(i, e)`, which stays
+   on the declined list for the same reason.
+2. *One kernel holds one lane*, so the int guard `rid < 0` over a long-lane value mixes lanes and
+   declines; so does `rid >= 0 OR p` for a long-lane predicate (the AND was served, as a filter's
+   conjuncts are fused apart). The extremes fixture carries `lrid`, `rid` as a BIGINT, and a
+   long-lane CASE or predicate is guarded by it.
+
+**The declined list, 27 entries.** 19 int-valued rows in the COALESCE (item 55); `hour(t)`,
+`minute(t2)` and `second(t)` in the CASE and the COALESCE, an int computed on the long lane, which
+is narrowed only at a kernel's store (VARKA-28); and `d + CAST(i AS INTERVAL DAY)` in both, whose
+column bound declines the batch whichever arm reads the column (item 96, below).
+
+**The form bites.** Under the matrix configuration `checkIntOverflow=false`, which emits ANSI
+arithmetic without its overflow check, three rows fail alone, each "only Spark raises": `i + 1`
+(Spark `ARITHMETIC_OVERFLOW`, SQLSTATE 22003, Varka the wrapped `-2147483648`), `year(d) + i`
+(Varka `-2147473650`) and `ym - ymm` (Spark `INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION`, Varka
+`P-1M`); they are in `sql/varka/matrix/skips.tsv` now, as the configuration breaks them by design.
+That is Varka not raising where Spark does, from a real kernel. Varka raising where Spark skips has
+no fault option: no kernel raises, it declines, and the row path evaluates what Spark evaluates. A
+planted test feeds the comparison real outcomes - `i + 1` alone, `ARITHMETIC_OVERFLOW` on the
+extremes row, standing in for the untaken arm's - and it fails as "only Varka raises", and the
+reverse as "only Spark raises", and an error with one parameter changed as "errors differ".
+
+**Runs.** At the defaults: 215 tests passed (93 before), and `dev/varka_matrix.sh --defaults
+--module sql --suites VarkaCoverageDifferentialSuite`, sanitizer on, 215 passed in 74 s. The
+configurations `cse=false` (215 passed) and `checkIntOverflow=false` (212 passed, the 3 above
+failed). Then every configuration of the matrix, `--all -j 8`, 21:10 to 21:30 CEST: the defaults and
+all 50 configurations passed, `checkIntOverflow=false` with its three tests cancelled by the new
+skip lines.
+
+**Batch pruning had to go.** With `spark.sql.inMemoryColumnarStorage.partitionPruning` left on,
+all 92 tests failed: behind `rid < 0`, the false AND, no kernel served a batch for any row, since
+the scan dropped the one batch on its statistics before the Varka node saw it. The check would have
+passed every outcome by never running.
+
+**Predictions scored (6.1), 138b's.**
+
+3. **Held.** The suite took at most twice as long: three interleaved pairs of master's test file
+   and this one on the same build, 20:49 to 20:59 CEST, load 2.8 to 5.3, by the JUnit report's
+   suite time: master 48.8, 47.9, 40.9 s; this change 76.1, 66.8, 60.2 s. Minimums 40.9 and
+   60.2 s (+47%), medians 47.9 and 66.8 s (+39%). In the `cse=false` configuration of the matrix,
+   one run each: master 54 s, this change 90 s (+67%), though this change's ran beside the
+   `checkIntOverflow=false` JVM and master's alone. The 122 new tests are short: the
+   partition tests about 0.5 s each, the ANSI tests about 0.2 s.
+4. **Failed for the COALESCE, held for the CASE.** Of the 65 projection rows, a kernel served the
+   untaken CASE arm for 61 and the later COALESCE argument for 42, against at least 50 in both
+   predicted; 42 rows reach both. The 23 the COALESCE misses are the int-valued rows (item 55), the
+   three TIME fields (VARKA-28) and the column bound (item 96). Behind the false AND all 65 were
+   served, and of the predicate rows all 27 behind the false AND and all 27 behind the true OR
+   once the long-lane ones are guarded on their lane. Alone, 57 of 65 were served; the other 8
+   raise on the extremes row on both engines alike - `d + CAST(i AS INTERVAL DAY)`,
+   `make_date(2021, i, 1)`, `add_months(d, i)`, `d + ym`, `d - ym`, `ym - ymm`, `i + 1` and
+   `year(d) + i` - where the kernel declines the batch and the row path raises, and no skipped
+   position raised on either engine.
+5. **Held.** The partition oracle and the ANSI form found no disagreement at the defaults or in
+   any of the 50 configurations but `checkIntOverflow=false`, whose three are that option's design
+   and not a finding. What the forms did find is reach: positions Spark skips that Varka hands to
+   the row path. None is a wrong answer, so none serves milestone 7's done-when list (`PLAN.md`
+   1.1, which asks the tests to reach these forms, as they now do), and each goes to the scope
+   catalogue or is already there.
+
+**Candidate rows found (138b).**
+
+- **A column's bound qualified by the arm that reads it** - `m8/SCOPE.md` item 96, added: `d +
+  CAST(i AS INTERVAL DAY)` declines its batch from an untaken CASE arm or a later COALESCE argument,
+  because the bound on `i` is checked per batch before the kernel, whatever arm reads `i`.
+- **Int values as CASE and COALESCE operands** - already `m8/SCOPE.md` item 55; the ANSI form now
+  measures it: 19 int-valued rows unserved in the COALESCE, and the CASE served only through
+  `year(d2)` standing in for a bare int column.
+- **An int computed on the long lane under a CASE or COALESCE** - already VARKA-28's lane
+  conversion: `hour(t)`, `minute(t2)` and `second(t)`.
+- **An int guard over a long-lane value** - the same lane rule; the form guards on `lrid` rather
+  than record a gap that VARKA-28 already owns.

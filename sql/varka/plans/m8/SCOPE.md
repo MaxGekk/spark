@@ -5068,6 +5068,22 @@ interpreted epilogue methods, so the first batches after the switch may run thei
 interpreted. **Done when** what an interpreted epilogue costs per batch on production's paths is
 measured, and, if it shows, the verdict waits for the epilogues through the JIT's code list.
 
+### Item 96. A column's bound under an untaken arm
+
+*Added on 13 October 2026 from VARKA-138b's ANSI form (`m7/VARKA-138.md` 10.3), as coverage: no
+answer was wrong.*
+
+`d + CAST(i AS INTERVAL DAY)` puts a bound on the column `i`, since the cast throws past
+`INTERVAL_DAY_LIMIT_DAYS` where a kernel would wrap, and the evaluator checks it per batch before
+the kernel runs (`VarkaChronoCompiler.dayIntervalColumn`). The bound belongs to the column, not to
+the expression reading it, so `CASE WHEN rid < 0 THEN d + CAST(i AS INTERVAL DAY) ELSE d2 END` and
+`coalesce(d2, d + CAST(i AS INTERVAL DAY))` decline a batch holding `i = Int.MaxValue` although no
+row takes that arm: the row path answers it, correctly, and the kernel serves nothing.
+`guardUnderArm` already qualifies a guard on a node by its arm's condition; a column bound has no
+such qualification. **Done when** a bound read only under one arm chain condemns only the lanes that
+take it, as a guard under an arm does, with the ANSI form's two declined entries for this row gone
+stale and removed, or the record says why a bound must stay whole-batch.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads

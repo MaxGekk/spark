@@ -1081,6 +1081,24 @@ exist.
   `checkAnswer` equality over a query matrix - re-run warm so a cache hit is
   differentially checked too - `numVarkaBatches > 0` on fused plans,
   Metaspace bounds, and config-driven activation.
+* **Three stronger forms over every coverage row.** The kernel checks
+  poison every null lane, put a fixed batch with a poisoned lane in the loop
+  and the epilogue in front of each row's masked body, and run every
+  compared batch with the output validity pre-filled with zeros, as
+  production's Arrow buffers are, and with ones, so a kernel that fails to
+  set a bit fails as surely as one that fails to clear it.
+  `VarkaCoverageDifferentialSuite` checks each predicate row's three
+  partitions: `WHERE p` and `WHERE NOT (p)` on Varka share no row, and the
+  rows in neither are Spark's `WHERE (p) IS NULL`, compared as rows, under
+  the default optimizer and with `BooleanSimplification`,
+  `NullDownPropagation` and `InferFiltersFromConstraints` excluded so
+  `NOT (p)` reaches Varka as written. And under ANSI, on a fixture of the
+  types' extremes, each row runs alone and where Spark skips it - the
+  untaken arm of a CASE, a later COALESCE argument, the right side of a false
+  AND or a true OR: both engines raise the same error, compared by condition,
+  SQLSTATE and message parameters, or both answer the same rows. A skipped
+  position must be served by a kernel or be on the suite's declined list
+  with its reason.
 * **Spark's own date tests** (`VarkaGoldenCorpusSuite`) run the `select`
   statements of the golden-file inputs (`date.sql`, `interval.sql`,
   `extract.sql`, the timestamp and datetime files) on both engines, each
