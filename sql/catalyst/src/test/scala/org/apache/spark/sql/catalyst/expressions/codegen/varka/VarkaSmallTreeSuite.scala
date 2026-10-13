@@ -294,7 +294,9 @@ class VarkaSmallTreeSuite extends SparkFunSuite with VarkaMatrixTests with Varka
         types ++= ty
       }
       val drawn = reach((0 until 20000).iterator.flatMap { k =>
-        val rnd = VarkaIrGrammar.shapeRandom(VarkaIrGrammar.FUZZ_SEED, k)
+        // Each lane's corpus from its own seed, the one its fuzzer and the bytes oracle draw.
+        val rnd = VarkaIrGrammar.shapeRandom(
+          if (long) VarkaIrGrammar.LONG_FUZZ_SEED else VarkaIrGrammar.FUZZ_SEED, k)
         (if (long) VarkaIrGrammar.drawLongShape(rnd).roots else VarkaIrGrammar.drawShape(rnd).roots)
           .asScala
       })

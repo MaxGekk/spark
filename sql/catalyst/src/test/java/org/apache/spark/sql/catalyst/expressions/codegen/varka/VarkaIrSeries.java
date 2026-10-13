@@ -655,21 +655,17 @@ public final class VarkaIrSeries {
           longBatch(rnd, "7 all-null", 7, each(ALL, cols)));
     }
 
-    private static long draw(Random rnd, long bound) {
-      return Math.floorMod(rnd.nextLong(), 2 * bound + 1) - bound;
-    }
-
     private static LongBatch longBatch(Random rnd, String name, int length,
         IntPredicate... patterns) {
       long[][] data = new long[LONG_NUM_INPUTS][length];
       for (int c = 0; c < LONG_NUM_INPUTS; c++) {
         for (int i = 0; i < length; i++) {
-          data[c][i] = draw(rnd, VarkaIrGrammar.LONG_COLUMN_BOUND);
+          data[c][i] = VarkaIrGrammar.within(rnd, VarkaIrGrammar.LONG_COLUMN_BOUND);
         }
       }
       long[] lits = new long[LITERALS];
       for (int j = 0; j < LITERALS; j++) {
-        lits[j] = draw(rnd, VarkaIrGrammar.LONG_LITERAL_BOUND);
+        lits[j] = VarkaIrGrammar.within(rnd, VarkaIrGrammar.LONG_LITERAL_BOUND);
       }
       return new LongBatch(name,
           new VarkaKernelChecks.LongBatch(length, nulls(length, patterns), data, false), lits);

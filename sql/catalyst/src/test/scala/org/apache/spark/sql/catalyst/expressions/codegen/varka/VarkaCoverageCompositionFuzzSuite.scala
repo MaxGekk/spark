@@ -218,7 +218,6 @@ class VarkaCoverageCompositionFuzzSuite
    * interval and a `BIGINT` within 2^45 and 2^40 of zero, then nearer at each step.
    */
   private def drawLong(rnd: Random, dataType: DataType, scale: Int): Long = {
-    def within(bound: Long): Long = Math.floorMod(rnd.nextLong(), 2 * bound + 1) - bound
     def timeUnit(t: TimeType): Long = math.pow(10, 9 - t.precision).toLong
     (dataType, scale) match {
       case (t: TimeType, 2) => (1 + rnd.nextInt(3)) * timeUnit(t)
@@ -226,9 +225,9 @@ class VarkaCoverageCompositionFuzzSuite
       case (t: TimeType, 0) =>
         Math.floorMod(rnd.nextLong(), DateTimeConstants.NANOS_PER_DAY / timeUnit(t)) * timeUnit(t)
       case (t: TimeType, _) => Math.floorMod(rnd.nextLong(), 1000000L / timeUnit(t)) * timeUnit(t)
-      case (_: DayTimeIntervalType, 0) => within(1L << 45)
-      case (_, 0) => within(1L << 40)
-      case _ => within(30000)
+      case (_: DayTimeIntervalType, 0) => VarkaIrGrammar.within(rnd.self, 1L << 45)
+      case (_, 0) => VarkaIrGrammar.within(rnd.self, 1L << 40)
+      case _ => VarkaIrGrammar.within(rnd.self, 30000)
     }
   }
 
