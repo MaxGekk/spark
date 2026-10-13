@@ -311,6 +311,9 @@ dumps, the JFR case).
    master for a test that took 2.4 to 2.9 s of it. The per-test times are in the child's JUnit
    report under `target/tmp/varka-own-jvm*` (10.1's candidate).
 
+`docs/sql-varka.md`, which section 4 lists, is unchanged: its "Testing and benchmarks" does not
+describe the harness's fill, and the three forms go in there together with 138b.
+
 ### 10.1 Candidate rows found
 
 - **An own-JVM suite reports its tests' own times.** `VarkaOwnJvm` reruns a suite in a child JVM
