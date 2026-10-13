@@ -100,7 +100,7 @@ raises Spark's condition. Two ways forward:
   context record. The "what to do" list moves to row 316's runbook, which reads the same causes.
 
 *Decided by the owner on 13 October 2026: (B), no new error names.* Section 3.4's documentation
-and test 1 to 5 stand; test 6 and option A's family are not built.
+and tests 1 to 5 stand; test 6 and option A's family are not built.
 
 **Recommendation: (B).** It delivers all of the row's substance - the user/internal decision for
 every site, the context record row 315 needs, `checkError` on every condition a user can reach -
