@@ -137,8 +137,10 @@ core (whose test classpath has catalyst's test classes). A port is statement for
   rung), streams and lambdas in setup only. No `default` on a switch over a sealed type.
 
 The adapter's addition, in `VarkaBenchmark`: `retainCases(String)`, which keeps the cases whose
-name contains the string, and `hasCases()`. The dry-run and `only` logic stays in each of the
-three benchmarks that use it, as in the Scala, about fifteen lines each.
+name contains the string, and `hasCases()`. The dry-run and `only` logic was planned to stay in
+each of the three benchmarks that use it, as in the Scala; the review of 322a-1 moved it into
+`VarkaBenchmarkBase` instead (9, "The review's fixes"), so the parity benchmark's port calls it
+rather than adding a third copy.
 
 ### 3.2 322b: a Java counterpart of `SqlBasedBenchmark`
 
@@ -159,6 +161,16 @@ written in a section 10 of this plan when 322b's pair is in.
 * **The committed results files.** No file is regenerated; a port reproduces its file.
 * **The scripts.** `dev/varka_bench_regen.sh`, `dev/varka_bench_pair.sh`, `dev/varka_bench_ids.sh`
   and `dev/varka_bench_repeat.sh` take a class by its name and run it through `runMain`.
+* **`spark-submit`.** The scripts are not the only entry point: `.github/workflows/benchmark.yml`
+  runs `bin/spark-submit --class org.apache.spark.benchmark.Benchmarks`, and Spark's `Benchmarks`
+  runner finds each class's `main` by reflection and called it as a static method, which a Java
+  benchmark's inherited instance `main` is not (a `NullPointerException` from `invoke(null,
+  ...)`). That one runner changes, in core's test tree: a `main` that is not static is invoked on
+  an instance made with the class's no-arg constructor, and a static one as before (9, "The
+  review's fixes"). `spark-submit` itself is left as it is: `--class` naming a Java benchmark
+  directly still fails, since `JavaMainApplication` requires a static `main`, so a Java benchmark
+  is run through `Benchmarks`, as the workflow does, or through `runMain`. Changing core's
+  launcher for a test-tree convenience is out of proportion.
 * **Spark's own Scala benchmarks**, and `sql/varka/bench`'s surface harness.
 
 ### 3.5 Registered op counts
@@ -169,7 +181,10 @@ None move; no emitter code changes.
 
 | file | what |
 |---|---|
-| `sql/catalyst/src/test/java/org/apache/spark/sql/VarkaBenchmark.java` | `retainCases`, `hasCases` |
+| `sql/catalyst/src/test/java/org/apache/spark/sql/VarkaBenchmark.java` | `retainCases`, `hasCases`, `Builder.timed()` |
+| `sql/catalyst/src/test/java/org/apache/spark/sql/VarkaBenchmarkBase.java` | the dry run, case filter, case ids and their results-file guard; `require`, `defineKernel`, `roots`, `seq` |
+| `core/src/test/scala/org/apache/spark/benchmark/Benchmarks.scala` | an instance `main` invoked on a new instance |
+| `sql/catalyst/src/test/java/.../sql/Varka{Compile,Grouping}Benchmark.java` | their private `seq`, which the base's now clashes with, removed |
 | `sql/catalyst/src/test/java/.../sql/Varka{SharedPrefix,LongLane,Emission,VectorApiProbe,MethodSize,Arithmetic,Time,WideKernel}Benchmark.java` | 322a-1's catalyst ports |
 | `sql/catalyst/src/test/java/.../codegen/varka/VarkaUnreadLocalsBenchmark.java` | 322a-1 |
 | `sql/core/src/test/java/.../execution/benchmark/VarkaCodegenBenchmark.java` | 322a-1 |
@@ -292,8 +307,8 @@ its 12 cases to the end. Two differ, both for reasons in the committed files, no
 **What the run said about the harness.** `VarkaUnreadLocalsBenchmark`'s allocation block reads 0.0
 bytes a batch past each kernel's own where the committed file reads 0.1 to 0.2, one run, which the
 pair will confirm or not; and its "as emitted" rows
-now equal its "stripped" ones (24,000 bytes a batch at 400 ladder entries, null-free), since the
-elision became the default after the file was committed.
+equalled its "stripped" ones (24,000 bytes a batch at 400 ladder entries, null-free), since the
+elision became the default after the file was committed. The review fixed that (below).
 
 **Also by the "only" filter**: `-Dvarka.bench.only="-i, ANSI"` on `VarkaArithmeticBenchmark` ran its
 two unary-minus cases and skipped the two sections it emptied, which exercises `retainCases` and
@@ -302,6 +317,63 @@ two unary-minus cases and skipped the two sections it emptied, which exercises `
 **Correction to 3.1.** Scala's `assert` in `VarkaLongLaneBenchmark` became an
 `IllegalStateException` with Scala's "assertion failed: " message, not an `AssertionError`: Spark's
 checkstyle refuses `throw new ...Error(`.
+
+**The review's fixes** (13 October 2026). A review of the pull request found fourteen things;
+thirteen are fixed here, and the fourteenth, the wide-kernel benchmark's sixth section, is row
+325's.
+
+* **Spark's `Benchmarks` runner runs a Java benchmark.** It invoked every `main` it found as a
+  static method, and a Java benchmark's is the instance method it inherits, so
+  `.github/workflows/benchmark.yml` could not run any of the ported classes (3.4). It now makes
+  an instance with the no-arg constructor when the `main` is not static. Proved by running
+  `org.apache.spark.benchmark.Benchmarks org.apache.spark.sql.VarkaArithmeticBenchmark` under
+  `-Dvarka.bench.dryRun=true` through catalyst's `Test/runMain`, the workflow's reflective path
+  without the assembly `spark-submit` needs: before, `NullPointerException: Cannot invoke
+  "Object.getClass()" because "obj" is null` at `Benchmarks.scala:128`; after, `Running
+  org.apache.spark.sql.VarkaArithmeticBenchmark:` and the 16 ids, next 986.
+* **The dry run and the case filter live in `VarkaBenchmarkBase`**: `dryRun()`, `only()`,
+  `runCases`, `claimCaseId` and `reportCaseIds`, in place of the copies in the arithmetic and time
+  benchmarks. `-Dvarka.bench.dryRun` accepts only `true` or `false`, in any case, as Scala's
+  `toBoolean` did; `Boolean.parseBoolean` had read `1` as false and started the full run. And
+  the base's `main` refuses either property while `SPARK_GENERATE_BENCHMARK_FILES=1`, before
+  Spark's `main` opens, and so empties, the committed results file; the check had to precede
+  that, so it is in `main`, not in `runCases`. The time benchmark's dry run returns after its
+  ids, rather than filling and checking every rung of up to 8.4 million rows first. The ids are
+  unchanged: 16, 960 to 985, next 986; 31, 0 to 30, next 31.
+* **Helpers shared**: the timing settings most benchmarks use (five iterations, two-second
+  warm-up, two-second minimum) are `VarkaBenchmark.Builder.timed()`, and `roots(n, entry)` and
+  `seq(list)` are in the base; `VarkaCompileBenchmark` and `VarkaGroupingBenchmark` lose their own
+  `seq`, which the base's now clashes with. `defineKernel` instantiates the class
+  `defineGeneratedClass` returns instead of looking it up by name again. Smaller clarity fixes:
+  the wide-kernel benchmark's destination count is `maxOutputs` (1,200, not `WIDEST`'s 400) and
+  its first section's kernels are `(label, kernel)` records; the method-size benchmark's column
+  is a record, not a two-element array read by position.
+
+**Timed bodies that changed**, each because the work it timed was wrong, not to make it faster:
+
+* **`VarkaUnreadLocalsBenchmark`, every arm.** The class prices the locals a loop method stores
+  and never reads, by timing a kernel as emitted against the same kernel stripped of them. It
+  emitted under `VarkaEmitOptions.DEFAULTS`, and elision has been the default since the file was
+  committed, so the emitted class had nothing left to strip and every arm timed one class. Every
+  arm now emits with `withElideUnreadLocals(false)`, the emitter as it was when the benchmark was
+  written. The class bytes, emitted and then stripped of every kind: under the defaults, 1,739,686
+  and 1,739,686 at 400 ladder entries (436,452 and 436,452 at 100; mixed family 276,435 at 100,
+  548,375 at 200, unchanged by the strip); pinned, 1,784,262 and 1,744,886 at 400 (447,240 and
+  437,752 at 100; mixed 286,390 and 277,624 at 100, 568,682 and 550,764 at 200). One full run
+  of the class (busy machine, not written to a file) shows the arms apart again in the
+  allocation block, as the committed file has them: at 400 ladder entries, null-free, 44,000
+  bytes a batch as emitted against 24,000 stripped (committed: 40,084 and 24,000); with nulls
+  52,040 against 28,000; the mixed family's eight lines equal the committed ones to the byte.
+* **`VarkaVectorApiProbeBenchmark`, the six counting probes** of its second and third sections.
+  Each returns a row count that the timed lambda threw away, so the JIT could drop the counting
+  as dead code (the Scala's `() => Unit` did the same). The count is now added to a plain `long`
+  field, published once to a volatile field after each benchmark runs, as in
+  `VarkaCompileBenchmark`. The array-writing probes of the first section are unchanged: the array
+  is their effect.
+* **`VarkaCodegenBenchmark`, both cases.** The port made the sink a volatile field written every
+  iteration; it is a plain field again, as the Scala's captured `var` was, published once after
+  the run. The Varka case now calls `defineKernel`, which drops the `loadClass` lookup after the
+  definition; the case keeps its committed name, "fused emit + define + load + instantiate".
 
 **Pending: the pairs** (6), on the quiet machine, none run yet:
 

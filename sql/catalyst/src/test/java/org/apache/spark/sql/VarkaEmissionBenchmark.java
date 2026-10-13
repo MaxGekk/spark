@@ -17,8 +17,6 @@
 
 package org.apache.spark.sql;
 
-import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader;
@@ -125,21 +123,12 @@ public class VarkaEmissionBenchmark extends VarkaBenchmarkBase {
     return new IntArith(IntOp.ADD, Overflow.WRAP, new Year(COL), new LiteralSlot(k));
   }
 
-  private static List<VarkaVectorIR> roots(int n, java.util.function.IntFunction<VarkaVectorIR> f) {
-    var out = new ArrayList<VarkaVectorIR>(n);
-    for (int k = 0; k < n; k++) {
-      out.add(f.apply(k));
-    }
-    return out;
-  }
-
   @Override
   public void runBenchmarkSuite(String[] mainArgs) {
     VarkaEmitOptions options = VarkaEmitOptions.DEFAULTS;
 
     section("emitting a fused kernel: bytes only", () -> {
-      var benchmark = benchmark("one emission", EMISSIONS_PER_ITERATION)
-          .minIterations(5).warmup(Duration.ofSeconds(2)).minTime(Duration.ofSeconds(2)).build();
+      var benchmark = benchmark("one emission", EMISSIONS_PER_ITERATION).timed().build();
       for (Shape shape : SHAPES) {
         VarkaVectorIR[] roots = shape.roots().toArray(new VarkaVectorIR[0]);
         benchmark.addCase(shape.name(), iteration -> {
@@ -158,7 +147,7 @@ public class VarkaEmissionBenchmark extends VarkaBenchmarkBase {
 
     section("emitting a fused kernel: bytes and a defined class", () -> {
       var benchmark = benchmark("one emission and definition", EMISSIONS_PER_ITERATION)
-          .minIterations(5).warmup(Duration.ofSeconds(2)).minTime(Duration.ofSeconds(2)).build();
+          .timed().build();
       for (Shape shape : SHAPES) {
         VarkaVectorIR[] roots = shape.roots().toArray(new VarkaVectorIR[0]);
         benchmark.addCase(shape.name(), iteration -> {
@@ -188,8 +177,7 @@ public class VarkaEmissionBenchmark extends VarkaBenchmarkBase {
     // against frames planned over each group's own nodes; both named, so the labels survive
     // the default changing.
     section("emitting a wide kernel: four-op outputs (VARKA-190)", () -> {
-      var benchmark = benchmark("one emission", 1)
-          .minIterations(5).warmup(Duration.ofSeconds(2)).minTime(Duration.ofSeconds(2)).build();
+      var benchmark = benchmark("one emission", 1).timed().build();
       for (int n : new int[] {25, 50, 100, 200, 400}) {
         List<VarkaVectorIR> roots = List.copyOf(roots(n, VarkaEmissionBenchmark::entry));
         VarkaEmitOptions wide = n <= 100 ? options : options.withMethodByteBudget(1 << 20);
@@ -211,8 +199,7 @@ public class VarkaEmissionBenchmark extends VarkaBenchmarkBase {
     // never acts on it, which is the model's own cost; the cheap tails are the shape the
     // call-site budget rebuilds under the weights and the prediction builds once.
     section("grouping by prediction", () -> {
-      var benchmark = benchmark("one emission", 1)
-          .minIterations(5).warmup(Duration.ofSeconds(2)).minTime(Duration.ofSeconds(2)).build();
+      var benchmark = benchmark("one emission", 1).timed().build();
       var cases = List.of(
           new Predicted("400-entry ladder, budget out of reach",
               roots(400, VarkaEmissionBenchmark::entry), options.withMethodByteBudget(1 << 20)),

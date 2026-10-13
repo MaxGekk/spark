@@ -20,14 +20,12 @@ package org.apache.spark.sql;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
 import scala.collection.immutable.Seq;
-import scala.jdk.javaapi.CollectionConverters;
 
 import org.apache.spark.sql.catalyst.expressions.Attribute;
 import org.apache.spark.sql.catalyst.expressions.NamedExpression;
@@ -98,10 +96,6 @@ public class VarkaSharedPrefixBenchmark extends VarkaBenchmarkBase {
   /** One arm of a shape: its label, whether the prefix is materialized, and its kernel. */
   private record Arm(
       String label, boolean materialized, int groups, VarkaFusedKernel kernel, long scratch) { }
-
-  private static <T> Seq<T> seq(List<T> list) {
-    return CollectionConverters.asScala(list).toSeq();
-  }
 
   private static CompiledVarkaProjection compile(List<String> sqls) {
     var exprs = new ArrayList<NamedExpression>();
@@ -204,8 +198,7 @@ public class VarkaSharedPrefixBenchmark extends VarkaBenchmarkBase {
                     + ", declined a batch");
           }
           var benchmark = benchmark(title + " over " + NUM_ROWS + " rows", NUM_ROWS)
-              .minIterations(5).warmup(Duration.ofSeconds(2)).minTime(Duration.ofSeconds(2))
-              .build();
+              .timed().build();
           for (Arm arm : arms) {
             String name = arm.label() + ": " + arm.groups() + " group"
                 + (arm.groups() == 1 ? "" : "s")

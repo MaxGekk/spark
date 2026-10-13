@@ -21,7 +21,6 @@ import java.time.Duration;
 import java.util.List;
 
 import scala.collection.immutable.Seq;
-import scala.jdk.javaapi.CollectionConverters;
 
 import org.apache.spark.sql.VarkaBenchmarkBase;
 import org.apache.spark.sql.catalyst.expressions.Attribute;
@@ -68,12 +67,14 @@ public class VarkaCodegenBenchmark extends VarkaBenchmarkBase {
   private static final List<VarkaVectorIR> FUSED_OUTPUTS = List.of(
       SHARED_CHAIN, new VarkaVectorIR.DateDiff(SHARED_CHAIN, new VarkaVectorIR.ColumnRef(1)));
 
-  /** Keeps the compiled result alive so the compile work cannot be elided. */
-  private volatile Object sink;
+  /**
+   * Keeps the compiled result alive so the compile work cannot be elided: a plain field written
+   * each iteration, as the Scala form's captured {@code var} was, and published once to {@link
+   * #blackhole} after the run.
+   */
+  private Object sink;
 
-  private static <T> Seq<T> seq(List<T> list) {
-    return CollectionConverters.asScala(list).toSeq();
-  }
+  private volatile Object blackhole;
 
   @Override
   public void runBenchmarkSuite(String[] mainArgs) {
@@ -93,16 +94,12 @@ public class VarkaCodegenBenchmark extends VarkaBenchmarkBase {
         String className = "org.apache.spark.sql.varka.execution.VarkaFusedProjectionBench" + i;
         byte[] bytes = VarkaLoopEmitter.emit(className, FUSED_OUTPUTS, 2, 1);
         var loader = new VarkaGeneratedClassLoader(Thread.currentThread().getContextClassLoader());
-        loader.defineGeneratedClass(className, bytes);
-        try {
-          sink = loader.loadClass(className).getConstructor().newInstance();
-        } catch (ReflectiveOperationException e) {
-          throw new IllegalStateException(e);
-        }
+        sink = defineKernel(loader, className, bytes);
         loader.release();
       });
 
       benchmark.run();
+      blackhole = sink;
     });
   }
 }

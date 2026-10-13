@@ -21,12 +21,10 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.reflect.Method;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.function.BiFunction;
-import java.util.function.IntFunction;
 import java.util.stream.Collectors;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader;
@@ -112,6 +110,9 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
   /** A shape: its label and its roots. */
   private record Shape(String label, List<VarkaVectorIR> roots) { }
 
+  /** A kernel emitted under one form, and the form's label. */
+  private record FormKernel(String label, VarkaFusedKernel kernel) { }
+
   /** A kernel emitted for a shape under one form. */
   private record ShapeKernel(String shape, List<VarkaVectorIR> roots, String label,
       VarkaFusedKernel kernel) { }
@@ -158,14 +159,6 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
     return new IntArith(IntOp.ADD, Overflow.WRAP, new Year(new ColumnRef(0)), new LiteralSlot(k));
   }
 
-  private static List<VarkaVectorIR> entries(int n, IntFunction<VarkaVectorIR> f) {
-    var out = new ArrayList<VarkaVectorIR>(n);
-    for (int k = 0; k < n; k++) {
-      out.add(f.apply(k));
-    }
-    return out;
-  }
-
   private int nextId = 0;
 
   /** Keeps the emitted bytes live. */
@@ -206,7 +199,7 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
 
   /** {@code n} ladder entries numbered from literal slot 0: one kernel's roots. */
   private static List<VarkaVectorIR> ladder(int n) {
-    return entries(n, VarkaWideKernelBenchmark::entry);
+    return roots(n, VarkaWideKernelBenchmark::entry);
   }
 
   private static boolean fits(int k, VarkaEmitOptions options) {
@@ -303,10 +296,6 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
     return withNulls ? "every seventh row null" : "null-free";
   }
 
-  private static VarkaBenchmark.Builder timed(VarkaBenchmark.Builder builder) {
-    return builder.minIterations(5).warmup(Duration.ofSeconds(2)).minTime(Duration.ofSeconds(2));
-  }
-
   /** The date column, its bitmap, and the destinations every scan writes. */
   private record Column(MemorySegment data, MemorySegment validity, int[] batchNulls,
       MemorySegment[] dsts, MemorySegment[] dstValidities) {
@@ -370,13 +359,15 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
       }
       batchNulls.add(count);
     }
-    int widest = PAST.stream().mapToInt(Integer::intValue).max().orElseThrow();
-    MemorySegment[] dsts = new MemorySegment[widest];
-    for (int k = 0; k < widest; k++) {
+    // Destinations for the widest kernel any section scans, the 1200 entries past the driver's
+    // ceiling, which is more than WIDEST, the widest one driver from a table serves.
+    int maxOutputs = PAST.stream().mapToInt(Integer::intValue).max().orElseThrow();
+    MemorySegment[] dsts = new MemorySegment[maxOutputs];
+    for (int k = 0; k < maxOutputs; k++) {
       dsts[k] = arena.allocate(CHUNK * 4L, 8);
     }
-    MemorySegment[] dstValidities = new MemorySegment[widest];
-    for (int k = 0; k < widest; k++) {
+    MemorySegment[] dstValidities = new MemorySegment[maxOutputs];
+    for (int k = 0; k < maxOutputs; k++) {
       dstValidities[k] = arena.allocate(CHUNK / 8L, 8);
     }
     return new Column(data, validity, batchNulls.stream().mapToInt(Integer::intValue).toArray(),
@@ -390,17 +381,17 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
       Column column = column(arena);
 
       section("the driver from a table against the driver unrolled", () -> {
-        var benchmark = timed(benchmark(NUM_ROWS + " rows in " + CHUNK + "-row batches",
-            NUM_ROWS)).build();
+        var benchmark = benchmark(NUM_ROWS + " rows in " + CHUNK + "-row batches",
+            NUM_ROWS).timed().build();
         // Both forms named: the table is the default since this section's measurement.
         var unrolled = VarkaEmitOptions.DEFAULTS.withDriverOutputTable(false);
         var table = VarkaEmitOptions.DEFAULTS.withDriverOutputTable(true);
         var hundred = ladder(100);
         var forms = List.of(
-            new ShapeKernel("", hundred, "unrolled driver", emit(hundred, unrolled, loader)),
-            new ShapeKernel("", hundred, "driver from a table", emit(hundred, table, loader)));
+            new FormKernel("unrolled driver", emit(hundred, unrolled, loader)),
+            new FormKernel("driver from a table", emit(hundred, table, loader)));
         for (boolean withNulls : NULL_ARMS) {
-          for (ShapeKernel form : forms) {
+          for (FormKernel form : forms) {
             benchmark.addCase("100 entries, " + form.label() + ", " + nullsLabel(withNulls),
                 iteration -> column.scan(form.kernel(), 100, withNulls));
           }
@@ -414,11 +405,11 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
       });
 
       section("the exact grouping against the greedy walk", () -> {
-        var benchmark = timed(benchmark(NUM_ROWS + " rows in " + CHUNK + "-row batches",
-            NUM_ROWS)).build();
+        var benchmark = benchmark(NUM_ROWS + " rows in " + CHUNK + "-row batches",
+            NUM_ROWS).timed().build();
         var shapes = List.of(
-            new Shape("100 mixed entries", entries(100, VarkaWideKernelBenchmark::mixedEntry)),
-            new Shape("200 mixed entries", entries(200, VarkaWideKernelBenchmark::mixedEntry)),
+            new Shape("100 mixed entries", roots(100, VarkaWideKernelBenchmark::mixedEntry)),
+            new Shape("200 mixed entries", roots(200, VarkaWideKernelBenchmark::mixedEntry)),
             new Shape(WIDEST + " ladder entries", ladder(WIDEST)));
         // Each kernel is emitted once and scanned with nulls and without.
         var kernels = new ArrayList<ShapeKernel>();
@@ -439,16 +430,16 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
       });
 
       section("the locals nothing reads, built and elided", () -> {
-        var benchmark = timed(benchmark(NUM_ROWS + " rows in " + CHUNK + "-row batches",
-            NUM_ROWS)).build();
+        var benchmark = benchmark(NUM_ROWS + " rows in " + CHUNK + "-row batches",
+            NUM_ROWS).timed().build();
         // Both forms named: the elision is the default since this section's measurement.
         var built = VarkaEmitOptions.DEFAULTS.withElideUnreadLocals(false);
         var elided = VarkaEmitOptions.DEFAULTS.withElideUnreadLocals(true);
         var shapes = List.of(
             new Shape("100 ladder entries", ladder(100)),
             new Shape(WIDEST + " ladder entries", ladder(WIDEST)),
-            new Shape("100 mixed entries", entries(100, VarkaWideKernelBenchmark::mixedEntry)),
-            new Shape("200 mixed entries", entries(200, VarkaWideKernelBenchmark::mixedEntry)));
+            new Shape("100 mixed entries", roots(100, VarkaWideKernelBenchmark::mixedEntry)),
+            new Shape("200 mixed entries", roots(200, VarkaWideKernelBenchmark::mixedEntry)));
         // The built form runs again last, a control for the order of the cases.
         var forms = List.of(new Form("locals built", built), new Form("locals elided", elided),
             new Form("locals built, again", built));
@@ -467,8 +458,8 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
 
       section("emitting the mixed family: the exact grouping's cost at plan time", () -> {
         // One emission per iteration, the class built and measured but not defined.
-        var benchmark = timed(benchmark("one emission", 1)).build();
-        var roots = List.copyOf(entries(200, VarkaWideKernelBenchmark::mixedEntry));
+        var benchmark = benchmark("one emission", 1).timed().build();
+        var roots = List.copyOf(roots(200, VarkaWideKernelBenchmark::mixedEntry));
         for (Form form : GROUPINGS) {
           benchmark.addCase("200 mixed entries, " + form.label(), iteration -> {
             sink += VarkaLoopEmitter.emit("VarkaWideBenchEmission", roots, 1, 200, null, null,
@@ -506,7 +497,7 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
         // kernel. The loop's arms are the reference: the split driver's two builds, several
         // kernels' classes alone with their split given, and the same with the compiler's
         // search for it, which asks the emitter for halving prefixes the shape cache then holds.
-        var benchmark = timed(benchmark("one emission", 1)).build();
+        var benchmark = benchmark("one emission", 1).timed().build();
         for (Past past : pastForms) {
           int n = past.n();
           List<Integer> sizes = past.sizes();
@@ -552,8 +543,8 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
       // the case order 11.6 did not control. Both forms plan their size, as they do by default.
       section("past the driver's ceiling: a split driver against several kernels, "
           + "the split driver first and again last", () -> {
-            var benchmark = timed(benchmark(NUM_ROWS + " rows in " + CHUNK + "-row batches",
-                NUM_ROWS)).build();
+            var benchmark = benchmark(NUM_ROWS + " rows in " + CHUNK + "-row batches",
+                NUM_ROWS).timed().build();
             var shapes = new ArrayList<PastShape>();
             for (int n : PAST) {
               shapes.add(new PastShape(n + " ladder entries", ladder(n), 1,
@@ -600,17 +591,17 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
       // with the fit's margins, on the families the prediction closes groups on. The weights
       // run first and again last as the control.
       section("the predicted grouping against the weights, and planned with the margins", () -> {
-        var benchmark = timed(benchmark(NUM_ROWS + " rows in " + CHUNK + "-row batches",
-            NUM_ROWS)).build();
+        var benchmark = benchmark(NUM_ROWS + " rows in " + CHUNK + "-row batches",
+            NUM_ROWS).timed().build();
         // Planned is the default since VARKA-236; the weights alone and the prediction without
         // the plan's margins are its reference arms.
         var planned = VarkaEmitOptions.DEFAULTS;
         var predicted = planned.withPlanSize(false);
         var weights = predicted.withPredictGrouping(false);
         var shapes = List.of(
-            new Shape("22 cheap tails", entries(22, VarkaWideKernelBenchmark::tailEntry)),
-            new Shape("64 cheap tails", entries(64, VarkaWideKernelBenchmark::tailEntry)),
-            new Shape("200 mixed entries", entries(200, VarkaWideKernelBenchmark::mixedEntry)),
+            new Shape("22 cheap tails", roots(22, VarkaWideKernelBenchmark::tailEntry)),
+            new Shape("64 cheap tails", roots(64, VarkaWideKernelBenchmark::tailEntry)),
+            new Shape("200 mixed entries", roots(200, VarkaWideKernelBenchmark::mixedEntry)),
             new Shape(WIDEST + " ladder entries", ladder(WIDEST)));
         var forms = List.of(new Form("weights", weights), new Form("predicted", predicted),
             new Form("planned", planned), new Form("weights, again", weights));

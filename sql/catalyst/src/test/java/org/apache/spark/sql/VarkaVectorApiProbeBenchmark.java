@@ -20,9 +20,9 @@ package org.apache.spark.sql;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.time.Duration;
 import java.time.LocalDate;
 import java.util.Random;
+import java.util.function.LongSupplier;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaGatherProbe;
 
@@ -67,10 +67,29 @@ public class VarkaVectorApiProbeBenchmark extends VarkaBenchmarkBase {
 
   private static final int TARGET = 1998;
 
+  /**
+   * The fused probes' row counts, summed, so the JIT cannot treat a count as dead and drop the
+   * loop that computes it. A plain field, written in the timed loop; {@link #blackhole} publishes
+   * it once after each benchmark's run.
+   */
+  private long sink;
+
+  private volatile long blackhole;
+
+  /** {@code body} {@link #REPEATS} times: a probe whose effect is the array it writes. */
   private static void passes(Runnable body) {
     int i = 0;
     while (i < REPEATS) {
       body.run();
+      i += 1;
+    }
+  }
+
+  /** {@code probe} {@link #REPEATS} times, each count it returns added to {@link #sink}. */
+  private void countedPasses(LongSupplier probe) {
+    int i = 0;
+    while (i < REPEATS) {
+      sink += probe.getAsLong();
       i += 1;
     }
   }
@@ -99,10 +118,6 @@ public class VarkaVectorApiProbeBenchmark extends VarkaBenchmarkBase {
     return count;
   }
 
-  private static VarkaBenchmark.Builder timed(VarkaBenchmark.Builder builder) {
-    return builder.minIterations(5).warmup(Duration.ofSeconds(2)).minTime(Duration.ofSeconds(2));
-  }
-
   @Override
   public void runBenchmarkSuite(String[] mainArgs) {
     section("year: a gather against the arithmetic (design input for item 9)", () -> {
@@ -127,8 +142,8 @@ public class VarkaVectorApiProbeBenchmark extends VarkaBenchmarkBase {
       }
 
       long values = (long) NUM_ROWS * REPEATS;
-      var benchmark = timed(benchmark(
-          values + " dates, " + VarkaGatherProbe.lanes() + " lanes", values)).build();
+      var benchmark = benchmark(
+          values + " dates, " + VarkaGatherProbe.lanes() + " lanes", values).timed().build();
       benchmark.addCase("gather from a 143 KB table, dates over the whole 100 years",
           iteration -> passes(() -> VarkaGatherProbe.yearByLookup(wholeTable, out, indexScratch)));
       benchmark.addCase("arithmetic, dates over the whole 100 years",
@@ -166,18 +181,19 @@ public class VarkaVectorApiProbeBenchmark extends VarkaBenchmarkBase {
           "scalar inside a vector kernel", "");
 
       long values = (long) NUM_ROWS * REPEATS;
-      var fused = timed(benchmark(
-          values + " dates, " + VarkaGatherProbe.lanes() + " lanes", values)).build();
+      var fused = benchmark(
+          values + " dates, " + VarkaGatherProbe.lanes() + " lanes", values).timed().build();
       fused.addCase("arithmetic in lanes, compared in lanes",
-          iteration -> passes(() -> VarkaGatherProbe.fusedArithmetic(sevenYears, TARGET)));
+          iteration -> countedPasses(() -> VarkaGatherProbe.fusedArithmetic(sevenYears, TARGET)));
       fused.addCase("gathered from the table, compared in lanes", iteration ->
-          passes(() -> VarkaGatherProbe.fusedGather(sevenYears, TARGET, indexScratch)));
+          countedPasses(() -> VarkaGatherProbe.fusedGather(sevenYears, TARGET, indexScratch)));
       fused.addCase("scalar loop end to end, no lanes anywhere",
-          iteration -> passes(() -> VarkaGatherProbe.fusedScalarLookup(sevenYears, TARGET)));
+          iteration -> countedPasses(() -> VarkaGatherProbe.fusedScalarLookup(sevenYears, TARGET)));
       fused.addCase("scalar lookup inside a vector kernel (spill and reload)", iteration ->
-          passes(() -> VarkaGatherProbe.fusedScalarInsideVector(
+          countedPasses(() -> VarkaGatherProbe.fusedScalarInsideVector(
               sevenYears, TARGET, daysScratch, yearScratch)));
       fused.run();
+      blackhole = sink;
     });
 
     section("year(d) = 1998 over an off-heap column: an era table against the arithmetic", () -> {
@@ -201,14 +217,17 @@ public class VarkaVectorApiProbeBenchmark extends VarkaBenchmarkBase {
             column, NUM_ROWS, TARGET, indexScratch), expected, "era table", " over a segment");
 
         long values = (long) NUM_ROWS * REPEATS;
-        var offHeap = timed(benchmark(
-            values + " dates off-heap, " + VarkaGatherProbe.lanes() + " lanes", values)).build();
+        var offHeap = benchmark(
+            values + " dates off-heap, " + VarkaGatherProbe.lanes() + " lanes", values)
+            .timed().build();
         offHeap.addCase("arithmetic in lanes, off-heap column", iteration ->
-            passes(() -> VarkaGatherProbe.fusedArithmeticFromSegment(column, NUM_ROWS, TARGET)));
+            countedPasses(() ->
+                VarkaGatherProbe.fusedArithmeticFromSegment(column, NUM_ROWS, TARGET)));
         offHeap.addCase("era-table gather (571 KB, no fallback), off-heap column", iteration ->
-            passes(() ->
+            countedPasses(() ->
                 VarkaGatherProbe.fusedEraTableFromSegment(column, NUM_ROWS, TARGET, indexScratch)));
         offHeap.run();
+        blackhole = sink;
       }
     });
   }

@@ -20,12 +20,8 @@ package org.apache.spark.sql;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.time.Duration;
 import java.util.List;
-import java.util.Optional;
-import java.util.TreeSet;
 import java.util.function.IntPredicate;
-import java.util.stream.Collectors;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
@@ -94,35 +90,6 @@ public class VarkaArithmeticBenchmark extends VarkaBenchmarkBase {
 
   private static final int NUM_ROWS = 1_000_000;
 
-  /** Every case id handed to {@link #emit}, so a reused one is named here, not deep in a run. */
-  private final TreeSet<Integer> usedIds = new TreeSet<>();
-
-  /**
-   * Structural dry run: with {@code -Dvarka.bench.dryRun=true} every case is emitted and
-   * registered but none is timed, so the whole file's case ids are checked in about as long as it
-   * takes to start a JVM instead of the twenty minutes a full run takes to reach the case that
-   * collides.
-   *
-   * <p>It exists because picking a free id by reading the file is unreliable and the emitter's own
-   * {@code require} is the only authority: not every id here is a literal - the trunc block
-   * computes {@code id} and {@code id + 1} from a tuple list - so a grep answers a question this
-   * method answers exactly. {@code dev/varka_bench_ids.sh} is the front end, and it prints the
-   * next free id.
-   *
-   * <p>A dry run measures nothing and proves nothing about the numbers. It is a check on the
-   * file's structure, and it is never a substitute for a regeneration.
-   */
-  private static final boolean DRY_RUN = Boolean.parseBoolean(
-      System.getProperty("varka.bench.dryRun", "false"));
-
-  /**
-   * A case-name substring from {@code -Dvarka.bench.only}, for investigating one block without
-   * paying for the whole file. Diagnostic only: a filtered run must never be written to a results
-   * file, since the committed file is the whole surface.
-   */
-  private static final Optional<String> ONLY =
-      Optional.ofNullable(System.getProperty("varka.bench.only")).filter(s -> !s.isEmpty());
-
   /** The A/B's reference arm: the same IR with VARKA-63's overflow check switched off. */
   private static final VarkaEmitOptions UNCHECKED_ARM =
       VarkaEmitOptions.DEFAULTS.withCheckIntOverflow(false);
@@ -132,26 +99,13 @@ public class VarkaArithmeticBenchmark extends VarkaBenchmarkBase {
   /** A column: its data, its validity and its null count. */
   private record Column(MemorySegment data, MemorySegment validity, int nulls) { }
 
-  /** Times {@code b}, unless this is a dry run, and only the cases {@link #ONLY} keeps. */
-  private static void runCases(VarkaBenchmark b) {
-    if (!DRY_RUN) {
-      ONLY.ifPresent(b::retainCases);
-      if (b.hasCases()) {
-        b.run();
-      }
-    }
-  }
-
-  /** What a dry run prints instead of timings: every id in use, and the first one that is not. */
-  private void reportIds() {
-    if (DRY_RUN) {
-      String ids = usedIds.stream().map(String::valueOf).collect(Collectors.joining(","));
-      int next = usedIds.isEmpty() ? 0 : usedIds.last() + 1;
-      System.out.println("varka-bench-ids: " + usedIds.size() + " cases, ids " + ids);
-      System.out.println("varka-bench-next-free-id: " + next);
-    }
-  }
-
+  // Each kernel is named by its case id n, claimed so that a reused one fails at once. A dry run
+  // (-Dvarka.bench.dryRun=true, VarkaBenchmarkBase.dryRun) emits every case and claims its id but
+  // times none, so the whole file's ids are checked in about as long as it takes to start a JVM
+  // instead of the twenty minutes a full run takes to reach the case that collides. Picking a
+  // free id by reading the file is unreliable: not every id here is a literal, so a grep answers
+  // a question the dry run answers exactly. dev/varka_bench_ids.sh is its front end, and prints
+  // the next free id.
   private VarkaFusedKernel emit(List<VarkaVectorIR> roots, int numInputs, int numLiterals,
       VarkaGeneratedClassLoader loader, int n) {
     return emit(roots, numInputs, numLiterals, loader, n, VarkaEmitOptions.DEFAULTS);
@@ -159,11 +113,7 @@ public class VarkaArithmeticBenchmark extends VarkaBenchmarkBase {
 
   private VarkaFusedKernel emit(List<VarkaVectorIR> roots, int numInputs, int numLiterals,
       VarkaGeneratedClassLoader loader, int n, VarkaEmitOptions options) {
-    // A duplicate id is otherwise a LinkageError from the class loader, well into a
-    // regeneration and pointing at the loader rather than at the two cases that chose the
-    // same number.
-    require(usedIds.add(n), "case id " + n + " is already in use by another emit in this "
-        + "benchmark");
+    claimCaseId(n);
     String name = "org.apache.spark.sql.varka.execution.VarkaArithBench" + n;
     return defineKernel(loader, name,
         VarkaLoopEmitter.emit(name, roots, numInputs, numLiterals, null, null, options));
@@ -244,10 +194,6 @@ public class VarkaArithmeticBenchmark extends VarkaBenchmarkBase {
     }
   }
 
-  private static VarkaBenchmark.Builder timed(VarkaBenchmark.Builder builder) {
-    return builder.minIterations(5).warmup(Duration.ofSeconds(2)).minTime(Duration.ofSeconds(2));
-  }
-
   private static List<VarkaVectorIR> binary(IntOp op, Overflow mode, VarkaVectorIR col,
       VarkaVectorIR lit) {
     return List.of(new IntArith(op, mode, col, lit));
@@ -287,7 +233,7 @@ public class VarkaArithmeticBenchmark extends VarkaBenchmarkBase {
       int[] one = {1};
 
       section("int arithmetic over a column, and what the ANSI check adds", () -> {
-        var benchmark = timed(benchmark("one output over " + NUM_ROWS + " rows", NUM_ROWS))
+        var benchmark = benchmark("one output over " + NUM_ROWS + " rows", NUM_ROWS).timed()
             .build();
         var addChecked = emit(binary(IntOp.ADD, Overflow.FAIL, col, lit), 1, 1, loader, 960);
         var addUnchecked =
@@ -315,7 +261,7 @@ public class VarkaArithmeticBenchmark extends VarkaBenchmarkBase {
       });
 
       section("where the overflow mask goes: condemn the batch, or null the lane", () -> {
-        var benchmark = timed(benchmark("one output over " + NUM_ROWS + " rows", NUM_ROWS))
+        var benchmark = benchmark("one output over " + NUM_ROWS + " rows", NUM_ROWS).timed()
             .build();
         var failAdd = emit(binary(IntOp.ADD, Overflow.FAIL, col, lit), 1, 1, loader, 970);
         var tryAdd = emit(binary(IntOp.ADD, Overflow.NULL, col, lit), 1, 1, loader, 971);
@@ -333,7 +279,7 @@ public class VarkaArithmeticBenchmark extends VarkaBenchmarkBase {
       });
 
       section("arithmetic over calendar fields, where the bound removes the check", () -> {
-        var benchmark = timed(benchmark("one output over " + NUM_ROWS + " rows", NUM_ROWS))
+        var benchmark = benchmark("one output over " + NUM_ROWS + " rows", NUM_ROWS).timed()
             .build();
         int[] hundred = {100};
 
@@ -364,6 +310,6 @@ public class VarkaArithmeticBenchmark extends VarkaBenchmarkBase {
     } finally {
       loader.release();
     }
-    reportIds();
+    reportCaseIds();
   }
 }

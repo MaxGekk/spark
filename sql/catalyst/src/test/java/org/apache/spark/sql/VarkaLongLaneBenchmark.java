@@ -20,7 +20,6 @@ package org.apache.spark.sql;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -171,8 +170,7 @@ public class VarkaLongLaneBenchmark extends VarkaBenchmarkBase {
       int[] intLits = {3};
       long[] longLits = {3L << 32};
 
-      var benchmark = benchmark(numRows + " rows - " + level, numRows)
-          .minIterations(5).warmup(Duration.ofSeconds(2)).minTime(Duration.ofSeconds(2)).build();
+      var benchmark = benchmark(numRows + " rows - " + level, numRows).timed().build();
       List<Shape> intShapes = shapes(LaneType.INT);
       List<Shape> longShapes = shapes(LaneType.LONG);
       for (int s = 0; s < intShapes.size(); s++) {

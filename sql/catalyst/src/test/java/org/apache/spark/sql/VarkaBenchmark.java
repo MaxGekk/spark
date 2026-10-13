@@ -59,7 +59,8 @@ public final class VarkaBenchmark {
 
   /**
    * Keeps only the cases whose name contains {@code substring}: how a benchmark serves {@code
-   * -Dvarka.bench.only}, a diagnostic run of one block that is never written to a results file.
+   * -Dvarka.bench.only}, a diagnostic run of one block that {@link VarkaBenchmarkBase#main}
+   * refuses to write to a results file.
    */
   public void retainCases(String substring) {
     benchmark.benchmarks().filterInPlace(c -> c.name().contains(substring));
@@ -89,6 +90,15 @@ public final class VarkaBenchmark {
       this.name = name;
       this.valuesPerIteration = valuesPerIteration;
       this.output = output;
+    }
+
+    /**
+     * The settings most Varka benchmarks time with: at least five iterations, each case warmed
+     * for two seconds and timed for at least two, so a row is a best of several runs long enough
+     * for the JIT to settle.
+     */
+    public Builder timed() {
+      return minIterations(5).warmup(Duration.ofSeconds(2)).minTime(Duration.ofSeconds(2));
     }
 
     /** The fewest iterations per case, after the warm-up. */

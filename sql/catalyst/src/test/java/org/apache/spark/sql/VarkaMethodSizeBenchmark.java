@@ -20,7 +20,6 @@ package org.apache.spark.sql;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -28,7 +27,6 @@ import java.util.List;
 import java.util.Set;
 
 import scala.collection.immutable.Seq;
-import scala.jdk.javaapi.CollectionConverters;
 
 import org.apache.spark.sql.catalyst.expressions.Attribute;
 import org.apache.spark.sql.catalyst.expressions.NamedExpression;
@@ -145,8 +143,7 @@ public class VarkaMethodSizeBenchmark extends VarkaBenchmarkBase {
   private static final List<NullArm> NULL_ARMS = nullArms();
 
   private static final Attribute D = VarkaSqlResolve.column("d", DataTypes.DateType);
-  private static final Seq<Attribute> COLUMNS =
-      CollectionConverters.asScala(List.of(D)).toSeq();
+  private static final Seq<Attribute> COLUMNS = seq(List.of(D));
 
   /** The two forms, by label; the label is also the class name's suffix. */
   private static final List<Form> FORMS = List.of(
@@ -188,7 +185,7 @@ public class VarkaMethodSizeBenchmark extends VarkaBenchmarkBase {
       String sql = "make_date(" + year + ", month(d), " + day + ")";
       exprs.add(VarkaSqlResolve.named(VarkaSqlResolve.parse(sql, COLUMNS), "c" + k));
     }
-    return VarkaExpressionCompiler.compile(CollectionConverters.asScala(exprs).toSeq(), COLUMNS)
+    return VarkaExpressionCompiler.compile(seq(exprs), COLUMNS)
         .orElseThrow(() -> new IllegalStateException(
             "the " + n + "-output make_date projection did not fuse"));
   }
@@ -205,11 +202,14 @@ public class VarkaMethodSizeBenchmark extends VarkaBenchmarkBase {
         fused.inputOrdinals().size(), fused.numLiterals(), null, null, form.options()));
   }
 
+  /** A column: its data and its validity bitmap, a set bit for a valid row. */
+  private record Column(MemorySegment data, MemorySegment validity) { }
+
   /**
    * A date column of {@code BUFFER_ROWS} days in [-10000, 10000), every seventh row null when
    * {@code nulls} is set. Every year and month it yields makes a valid date with any day up to 28.
    */
-  private static MemorySegment[] fill(Arena arena, boolean nulls) {
+  private static Column fill(Arena arena, boolean nulls) {
     MemorySegment data = arena.allocate(BUFFER_ROWS * 4L, 64);
     MemorySegment validity = arena.allocate(BUFFER_ROWS / 8L, 64);
     validity.fill((byte) 0);
@@ -221,7 +221,7 @@ public class VarkaMethodSizeBenchmark extends VarkaBenchmarkBase {
         validity.set(ValueLayout.JAVA_BYTE, off, (byte) (old | (1 << (i % 8))));
       }
     }
-    return new MemorySegment[] {data, validity};
+    return new Column(data, validity);
   }
 
   /** Nulls in the prefix [0, n) of the mixed arm, where rows 0, 7, 14, ... are null. */
@@ -233,11 +233,12 @@ public class VarkaMethodSizeBenchmark extends VarkaBenchmarkBase {
   public void runBenchmarkSuite(String[] mainArgs) {
     var loader = new VarkaGeneratedClassLoader(getClass().getClassLoader());
     try (Arena arena = Arena.ofConfined()) {
-      MemorySegment[] nf = fill(arena, false);
-      MemorySegment[] mx = fill(arena, true);
-      MemorySegment nfData = nf[0];
-      MemorySegment mxData = mx[0];
-      MemorySegment mxValidity = mx[1];
+      // The null-free arm passes no bitmap (the kernel's dense body reads none), so only its
+      // data is used.
+      MemorySegment nfData = fill(arena, false).data();
+      Column mx = fill(arena, true);
+      MemorySegment mxData = mx.data();
+      MemorySegment mxValidity = mx.validity();
 
       section("the epilogue past HugeMethodLimit: a make_date ladder (VARKA-87)", () -> {
         for (int n : RUNGS) {
@@ -272,8 +273,7 @@ public class VarkaMethodSizeBenchmark extends VarkaBenchmarkBase {
           }
 
           var benchmark = benchmark(n + " make_date outputs over " + NUM_ROWS + " rows in chunks",
-              NUM_ROWS).minIterations(5).warmup(Duration.ofSeconds(2))
-              .minTime(Duration.ofSeconds(2)).build();
+              NUM_ROWS).timed().build();
           for (Kernel k : kernels) {
             for (Chunk chunk : CHUNKS) {
               for (NullArm arm : NULL_ARMS) {

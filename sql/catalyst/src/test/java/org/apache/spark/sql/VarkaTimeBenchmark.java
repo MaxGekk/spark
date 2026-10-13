@@ -21,13 +21,9 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.ByteOrder;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
-import java.util.TreeSet;
-import java.util.stream.Collectors;
 
 import jdk.incubator.vector.IntVector;
 import jdk.incubator.vector.LongVector;
@@ -138,43 +134,10 @@ public class VarkaTimeBenchmark extends VarkaBenchmarkBase {
       new Rung(1000000, "the long form leaves L3"),
       new Rung(8388608, "both forms past L3"));
 
-  /** Every case id handed to {@link #emit}, so a reused one is named here, not deep in a run. */
-  private final TreeSet<Integer> usedIds = new TreeSet<>();
-
-  /**
-   * Structural dry run: with {@code -Dvarka.bench.dryRun=true} every kernel is emitted and
-   * registered but nothing is timed, so {@code dev/varka_bench_ids.sh} can check this file's ids
-   * in the time a JVM takes to start. A dry run measures nothing.
-   */
-  private static final boolean DRY_RUN = Boolean.parseBoolean(
-      System.getProperty("varka.bench.dryRun", "false"));
-
-  /**
-   * A case-name substring from {@code -Dvarka.bench.only}, for investigating one arm without
-   * paying for the whole ladder. Diagnostic only: a filtered run is never written to a results
-   * file.
-   */
-  private static final Optional<String> ONLY =
-      Optional.ofNullable(System.getProperty("varka.bench.only")).filter(s -> !s.isEmpty());
-
-  private static void runCases(VarkaBenchmark b) {
-    if (!DRY_RUN) {
-      ONLY.ifPresent(b::retainCases);
-      if (b.hasCases()) {
-        b.run();
-      }
-    }
-  }
-
-  private void reportIds() {
-    if (DRY_RUN) {
-      String ids = usedIds.stream().map(String::valueOf).collect(Collectors.joining(","));
-      int next = usedIds.isEmpty() ? 0 : usedIds.last() + 1;
-      System.out.println("varka-bench-ids: " + usedIds.size() + " cases, ids " + ids);
-      System.out.println("varka-bench-next-free-id: " + next);
-    }
-  }
-
+  // Each kernel is named by its case id n, claimed so that a reused one fails at once. A dry run
+  // (-Dvarka.bench.dryRun=true, VarkaBenchmarkBase.dryRun) emits every kernel and claims its id
+  // but fills no rung and times nothing, so dev/varka_bench_ids.sh checks this file's ids in the
+  // time a JVM takes to start; -Dvarka.bench.only times only the arms whose name contains it.
   private VarkaFusedKernel emit(List<VarkaVectorIR> roots, int numInputs, int numLiterals,
       VarkaGeneratedClassLoader loader, int n) {
     return emit(roots, numInputs, numLiterals, loader, n, VarkaEmitOptions.DEFAULTS);
@@ -182,8 +145,7 @@ public class VarkaTimeBenchmark extends VarkaBenchmarkBase {
 
   private VarkaFusedKernel emit(List<VarkaVectorIR> roots, int numInputs, int numLiterals,
       VarkaGeneratedClassLoader loader, int n, VarkaEmitOptions options) {
-    require(usedIds.add(n), "case id " + n + " is already in use by another emit in this "
-        + "benchmark");
+    claimCaseId(n);
     String name = "org.apache.spark.sql.varka.execution.VarkaTimeBench" + n;
     return defineKernel(loader, name,
         VarkaLoopEmitter.emit(name, roots, numInputs, numLiterals, null, null, options));
@@ -451,7 +413,11 @@ public class VarkaTimeBenchmark extends VarkaBenchmarkBase {
       VarkaFusedKernel copyLong = emit(List.of(t), 1, 0, loader, kernelId());
       VarkaFusedKernel copyInt =
           emit(List.of(new ColumnRef(0, LaneType.INT)), 1, 0, loader, kernelId());
-      reportIds();
+      reportCaseIds();
+      if (dryRun()) {
+        // The ids are all a dry run is for; the rungs would fill and check up to 8.4M rows.
+        return;
+      }
       for (Rung rung : LADDER) {
         runRung(rung.numRows(), rung.level(), emitted, split, copyLong, copyInt);
       }
@@ -500,7 +466,7 @@ public class VarkaTimeBenchmark extends VarkaBenchmarkBase {
 
       var buffers = new Buffers(nanos, secs, longDsts, intDsts, validities, numRows);
       var benchmark = benchmark("TIME extracts over " + numRows + " rows - " + level, numRows)
-          .minIterations(5).warmup(Duration.ofSeconds(2)).minTime(Duration.ofSeconds(2)).build();
+          .timed().build();
       for (int s = 0; s < SHAPES.size(); s++) {
         Shape shape = SHAPES.get(s);
         int outputs = shape.fields().size();

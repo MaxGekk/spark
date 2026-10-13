@@ -22,7 +22,6 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -54,6 +53,16 @@ public class VarkaUnreadLocalsBenchmark extends VarkaBenchmarkBase {
   private static final int CHUNK = 4096;
   private static final List<String> ALL_KINDS =
       List.of("segment", "vector", "mask", "shared slot", "other");
+
+  /**
+   * How every arm is emitted: with the unread locals built, as the emitter built them when this
+   * benchmark was written. Elision has been the default since, and a class emitted with it has
+   * nothing left for {@code VarkaUnreadLocalsTrim} to strip, so under the defaults "as emitted"
+   * and "stripped" would time the same class. Pinned, "as emitted" is the class with the locals
+   * and "stripped" the same class with them removed, which is the difference this prices.
+   */
+  private static final VarkaEmitOptions LOCALS_BUILT =
+      VarkaEmitOptions.DEFAULTS.withElideUnreadLocals(false);
 
   private int nextId = 0;
 
@@ -162,17 +171,13 @@ public class VarkaUnreadLocalsBenchmark extends VarkaBenchmarkBase {
     nextId += 1;
     String name = "org.apache.spark.sql.varka.execution.VarkaUnreadLocalsBench" + nextId;
     byte[] emitted = VarkaLoopEmitter.emit(name, roots, 1, roots.size(), null, null,
-        VarkaEmitOptions.DEFAULTS);
+        LOCALS_BUILT);
     byte[] bytes = kinds.isEmpty() ? emitted : VarkaUnreadLocalsTrim.trim(emitted, kinds);
     return defineKernel(loader, name, bytes);
   }
 
   private static List<VarkaVectorIR> ladder(int n) {
-    var roots = new ArrayList<VarkaVectorIR>(n);
-    for (int k = 0; k < n; k++) {
-      roots.add(VarkaEmitCostCorpus.ladderEntry(k));
-    }
-    return roots;
+    return roots(n, VarkaEmitCostCorpus::ladderEntry);
   }
 
   @Override
@@ -189,8 +194,7 @@ public class VarkaUnreadLocalsBenchmark extends VarkaBenchmarkBase {
         var reported = new ArrayList<Reported>();
         section(family.title() + ", as emitted and stripped of the locals nothing reads", () -> {
           var benchmark = benchmark(NUM_ROWS + " rows in " + CHUNK + "-row batches", NUM_ROWS)
-              .minIterations(5).warmup(Duration.ofSeconds(2)).minTime(Duration.ofSeconds(2))
-              .build();
+              .timed().build();
           for (boolean withNulls : new boolean[] {false, true}) {
             for (int n : family.sizes()) {
               String label = withNulls ? "every seventh row null" : "null-free";
