@@ -1089,7 +1089,9 @@ exist.
   Varka on, Spark's committed `.sql.out` files the oracle. A test-only
   extension puts an Arrow-cached copy under every relation with a column
   Varka reads, except under a command or a hidden metadata column, so the
-  queries reach the kernels; a second arm runs the same cache with Varka off,
+  queries reach the kernels, and lifts a `SELECT` with no `FROM` into a
+  relation of seventeen equal rows where the compiler fuses its literals as
+  columns; a second arm runs the same source with Varka off,
   so a failure in both is the harness's and one only with Varka on is
   Varka's. `sql/varka/spark_suites/excluded.tsv` says what the cache itself
   changes: the files whose `EXPLAIN` output prints plans, which then compare

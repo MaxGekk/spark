@@ -66,8 +66,8 @@ import org.apache.spark.sql.execution.VarkaColumnarToRowExec
  *
  * `varka.goldenSuite.fault=<flag>` plants one of the emitter's fault injectors in every kernel:
  * the check that the suite does reach Varka (test 1 of the plan), to be run over a few files
- * only. Until literals are lifted (271b) the fault that shows it is `misdescribeWordLiveness`,
- * under which every emission raises; `misdescribeAdd` reaches no served query yet.
+ * only: `misdescribeAdd` fails the date files, whose lifted statements call `date_add`, and
+ * `misdescribeWordLiveness`, under which every emission raises, fails every test Varka serves.
  */
 class VarkaSQLQueryTestSuite extends SQLQueryTestSuite {
 
