@@ -30,6 +30,7 @@ import scala.jdk.CollectionConverters._
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmth.State
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmupProbe._
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmupProbe.Nulls
 
 /**
  * The kernel warm-up (`VARKA-212.md` 10): the copy of a batch it runs on, its verdict on a
@@ -80,7 +81,7 @@ class VarkaKernelWarmupSuite extends SparkFunSuite with VarkaTestWatchdog {
     val command = Seq(javaBin.getAbsolutePath, "--add-modules", "jdk.incubator.vector",
       "--enable-native-access=ALL-UNNAMED", "-Xmx1g", "-Dvarka.warmup.deadlineSeconds=120",
       "-cp", testClasspath,
-      VarkaKernelWarmupProbe.getClass.getName.stripSuffix("$"), claimed.word)
+      classOf[VarkaKernelWarmupProbe].getName, claimed.word)
     val process = new ProcessBuilder(command.asJava).redirectErrorStream(true).start()
     val reader = new BufferedReader(
       new InputStreamReader(process.getInputStream, StandardCharsets.UTF_8))
@@ -117,7 +118,8 @@ class VarkaKernelWarmupSuite extends SparkFunSuite with VarkaTestWatchdog {
     val arena = Arena.ofConfined()
     try {
       val rows = 5
-      val (data, validity, _) = dates(arena, rows)
+      val batch = dates(arena, rows, Nulls.SOME_NULLS)
+      val (data, validity) = (batch.data, batch.validity)
       val dataCopy = arena.allocate(VarkaKernelWarmup.SNAPSHOT_ROWS * 4L)
       val validityCopy = arena.allocate(VarkaKernelWarmup.SNAPSHOT_ROWS / 8L)
       VarkaKernelWarmup.tileData(data.address(), 4, rows, dataCopy)
@@ -135,7 +137,7 @@ class VarkaKernelWarmupSuite extends SparkFunSuite with VarkaTestWatchdog {
   }
 
   test("a warm-up runs a new kernel until it no longer allocates, and says it is compiled") {
-    val run = warmUpInFork(SomeNulls)
+    val run = warmUpInFork(Nulls.SOME_NULLS)
     assume(run.support("sampler") == "true", "thread allocation accounting unavailable")
     val o = run.outcome
     assert(o("queued") == "true", "the warm-up was not queued")
@@ -147,7 +149,7 @@ class VarkaKernelWarmupSuite extends SparkFunSuite with VarkaTestWatchdog {
     assert(o("last").toLong * VarkaKernelWarmup.COMPILED_DROP <= o("first").toLong, o("outcome"))
   }
 
-  Seq(NoNulls, SomeNulls, AllNull).foreach { claimed =>
+  Seq(Nulls.NO_NULLS, Nulls.SOME_NULLS, Nulls.ALL_NULL).foreach { claimed =>
     // The shape has two groups whose loop methods compile one after the other, and the verdict
     // must wait for both: on a starved machine a verdict read from short calls came while the
     // light group's loop was still interpreted, and these calls, 1024 rows each, boxed in it
@@ -162,9 +164,9 @@ class VarkaKernelWarmupSuite extends SparkFunSuite with VarkaTestWatchdog {
       assert(o("state") == State.COMPILED.toString, o("outcome"))
       // A compiled call allocates only its driver's memory segments, a few hundred bytes a
       // column; an interpreted one boxes every vector operation, tens of kilobytes a call.
-      val limit = 16L * VarkaKernelWarmup.SEGMENT_BYTES_PER_COLUMN * (1 + numOutputs) +
+      val limit = 16L * VarkaKernelWarmup.SEGMENT_BYTES_PER_COLUMN * (1 + NUM_OUTPUTS) +
         VarkaAllocationSampler.FIXED_ALLOWANCE_BYTES
-      Seq(NoNulls, SomeNulls).foreach { served =>
+      Seq(Nulls.NO_NULLS, Nulls.SOME_NULLS).foreach { served =>
         val allocated = run.allocated(served.word)
         assert(allocated <= limit,
           s"batches with $served allocated $allocated bytes after a warm-up claimed by a batch " +
@@ -177,7 +179,8 @@ class VarkaKernelWarmupSuite extends SparkFunSuite with VarkaTestWatchdog {
     val arena = Arena.ofConfined()
     try {
       val rows = VarkaKernelWarmup.SNAPSHOT_ROWS
-      val (data, validity, _) = dates(arena, rows)
+      val batch = dates(arena, rows, Nulls.SOME_NULLS)
+      val (data, validity) = (batch.data, batch.validity)
       VarkaKernelWarmup.fillNullRows(data, 4, validity)
       (0 until rows).foreach { r =>
         val expected = if (r % 7 == 3) 18262 else 18262 + r % 1460
@@ -191,7 +194,8 @@ class VarkaKernelWarmupSuite extends SparkFunSuite with VarkaTestWatchdog {
   test("a shape that leaves the cache stops its warm-up and is ready for its tasks") {
     assume(VarkaAllocationSampler.supported(), "thread allocation accounting unavailable")
     val cache = new VarkaShapeCacheImpl(8)
-    val (entry, queued) = warm(cache, 1000)
+    val warmed = warm(cache, 1000, Nulls.SOME_NULLS)
+    val (entry, queued) = (warmed.entry, warmed.queued)
     assert(queued, "the warm-up was not queued")
     cache.invalidateAll()
     assert(VarkaKernelWarmup.awaitIdle(150000),

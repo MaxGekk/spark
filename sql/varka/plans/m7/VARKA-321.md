@@ -95,3 +95,49 @@ None beyond 5's comparisons: the row changes no kernel and no timing a benchmark
 2. The three standalone programs, then the two censuses with their suites, each with its
    comparison.
 3. Section 9.
+
+## 9. Outcome
+
+Done on 12 October 2026, in one commit after the plan, for three of the five programs.
+
+**What was built.** `VarkaWordCensus` (Java, 649 lines, from 403), `VarkaInliningCliffProbe` (264,
+from 230) and `VarkaKernelWarmupProbe` (233, from 196) are Java classes with the Scala objects'
+names, arguments and output, so `dev/varka_word_census.sh` and `dev/varka_inlining_cliff.sh` run
+them unchanged. The census's word algebra and kinds are sealed interfaces of records over exhaustive
+switches, their text forms the Scala case classes' (`Chain(true,2)`, a pair as `(1,500)`); the
+warm-up probe's null patterns are an enum and its two tuples records.
+
+**The census, byte for byte.** `dev/varka_word_census.sh` at its defaults (20,000 shapes, seed 7)
+and at `--fuzz 5000 --seed 11`, on the Scala form at master and on the Java one the same hour:
+the same 57 lines at both seeds, the emitter cross-check included (6,640 single-root shapes
+checked at seed 7, no disagreement).
+
+**The probes, by verdict.** `VarkaInliningCliffSuite` and `VarkaKernelWarmupSuite` pass, 14 tests,
+the forked probes included. `dev/varka_inlining_cliff.sh --outputs 64 --ceilings 400 --budgets
+93,0 --forks 2 --seconds 6`: the budget's arm fast in both forks (2.5 ns a row, four loop
+methods), the arm without it slow in both (252 and 280 ns a row, one method of 225 call sites,
+C1 out of virtual registers), the committed file's verdicts for the same arms.
+
+**Predictions scored.**
+
+1. **Held** for the word census, the one deterministic program left in the row (see the
+   corrections).
+2. **Held.** The same verdicts, and the suites pass.
+3. **Wrong in its basis**: the row ported three programs, not five, and their Java is
+   1,146 lines against 829 of Scala - two fifths more, the census most (649 against 403), whose
+   Scala pattern matches became switches and its case classes records with their own text forms.
+
+**Corrections to the plan.**
+
+* **The two codegen censuses stay Scala.** Reading them for the port showed what 2 missed: beyond
+  being suites, both drive Spark's own ScalaTest suites programmatically (`Args`, a `Reporter`),
+  and `VarkaCodegenGiveUpCensus` walks Spark's physical plans by pattern matching on some twenty
+  of Spark's plan and expression classes. That is the interop surface `sql/varka/AGENTS.md` keeps
+  Scala, and a Java form would be `instanceof` chains over Spark's Scala classes for nothing. The
+  row closes with them where they are.
+* **Two suites changed by a few lines**, where 3 said none would: both launched their probe as
+  `<object>.getClass.getName.stripSuffix("$")`, which names a Scala object, and the warm-up suite
+  destructured the probe's tuples and named its `Nulls` case objects.
+* Two slips were caught before the first compile by reading against the Scala form: the census's
+  `leaves` of no word is empty in Scala, by its catch-all, and would have thrown in a Java
+  switch; and the warm-up probe compared two shape hashes, `String`s, with `==`.
