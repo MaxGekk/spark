@@ -513,7 +513,7 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite with VarkaTestWatchdog {
           VarkaChrono.MONTH_ARITH_MAX_MONTHS - VarkaChrono.MONTH_ARITH_MIN_MONTHS + 1)
         case Role.Day => VarkaChrono.CONTRACT_MIN_DAYS + rnd.nextInt(
           VarkaChrono.CONTRACT_MAX_DAYS - VarkaChrono.CONTRACT_MIN_DAYS + 1)
-        case Role.Offset => (rnd.nextLong() % (2 * COLUMN_BOUND + 1) - COLUMN_BOUND).toInt
+        case Role.Offset => intWithin(rnd, Math.toIntExact(COLUMN_BOUND))
         case Role.Int => rnd.nextInt()
       }
       val rows = Seq.fill(8)((0 until numInputs).map(c =>
