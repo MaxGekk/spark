@@ -261,8 +261,8 @@ in high when a check added work per batch; this change adds none, so the predict
 2. **The record's rendering itself throws** while a failure is handled. It is built defensively: a
    field that cannot render is written as unavailable, and the original cause is always kept.
 3. **`SparkIllegalArgumentException` and `SparkIllegalStateException` are `private[spark]`.**
-   Varka's code is in `org.apache.spark` packages, and Java sees a Scala `private[spark]` class as public;
-   the plan uses them from there only.
+   Varka's code is in `org.apache.spark` packages, and Java sees a Scala `private[spark]` class as
+   public; the plan uses them from there only.
 
 ## 8. Sequencing
 
