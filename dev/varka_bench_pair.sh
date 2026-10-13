@@ -43,9 +43,9 @@
 #   --threshold P     a row slower by P percent fails (default 10).
 #   --within P        the early stop's band (default 3).
 #   --force, --no-pin passed to dev/varka_bench_regen.sh. With --force the wait for the load
-#                     to settle before each side gives up after ten minutes with a warning, not
-#                     an error: a GitHub-hosted runner may never read idle, and the pair's
-#                     alternation, not the idle check, is its control there.
+#                     to settle before each side gives up after two minutes with a warning, not
+#                     ten with an error: a GitHub-hosted runner may never read idle, and the
+#                     pair's alternation, not the idle check, is its control there.
 #   --out DIR         write each round's results file, provenance and log to DIR, kept
 #                     afterwards (the benchmark workflow uploads it); default a temporary
 #                     directory, removed unless --keep.
@@ -118,10 +118,8 @@ if [ -z "$base_dir" ]; then
   # The merge base is read from a fresh origin/master, or the pair compares with an older commit
   # than the pull request's real base. A caller whose origin is not the project's repository (a
   # fork's checkout, as on the fork's runners) computes the base itself and passes --base.
-  if [ -z "$base_ref" ]; then
-    git fetch -q origin master 2> /dev/null || echo "warning: could not fetch origin/master" >&2
-    base_ref="$(git merge-base HEAD origin/master)"
-  fi
+  git fetch -q origin master 2> /dev/null || echo "warning: could not fetch origin/master" >&2
+  [ -n "$base_ref" ] || base_ref="$(git merge-base HEAD origin/master)"
   base_dir="/tmp/varka-pair-base-$$"
   git worktree add --detach "$base_dir" "$base_ref" > /dev/null
   made_worktree=1
@@ -140,11 +138,12 @@ done
 # load behind for a minute, so each side waits for the one-minute average to fall (ten minutes at
 # most) rather than failing on the previous side's tail.
 wait_idle() {
-  local waited=0
+  local waited=0 limit=600
+  [ "$force" -eq 0 ] || limit=120
   until awk -v l="$(cut -d' ' -f1 /proc/loadavg)" 'BEGIN { exit !(l < 0.8) }'; do
-    if [ "$waited" -ge 600 ]; then
+    if [ "$waited" -ge "$limit" ]; then
       if [ "$force" -eq 1 ]; then
-        echo "warning: the load did not settle in ten minutes; running anyway (--force)" >&2
+        echo "warning: the load did not settle in two minutes; running anyway (--force)" >&2
         return 0
       fi
       echo "the machine did not settle in ten minutes" >&2; exit 1

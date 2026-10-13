@@ -24,7 +24,8 @@
 #   dev/varka_bench_regen.sh core VarkaLongLaneThroughputBenchmark --width=32
 #   dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark --no-pin
 #   dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark --pin=0-3
-#   dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark --sections "single op: emitted loop vs hand-written kernel|datediff: emitted loop vs hand-written kernel"
+#   dev/varka_bench_regen.sh catalyst VarkaEmitterParityBenchmark --sections \
+#     "single op: emitted loop vs hand-written kernel|datediff: emitted loop vs hand-written kernel"
 #
 # Writes three files beside each other under sql/<module>/benchmarks/:
 #   <Class>-jdk25-results.txt          the wide run, exactly as Spark's harness
@@ -68,10 +69,11 @@ done
 set -- "${args[@]}"
 for a in "$@"; do
   case "$a" in
-    # Only these sections (titles separated by `|`, since titles hold commas) of the wide file are replaced by the run;
-    # every other section stays the committed bytes, each on the machine that measured it
-    # (VARKA-256, m8/SCOPE.md item 72). The whole class still runs. The narrow companion has no
-    # section rules to splice on, so it is not regenerated with this option.
+    # Only these sections (titles separated by `|`, since titles hold commas) of the wide file
+    # are replaced by the run; every other section stays the committed bytes, each on the
+    # machine that measured it (VARKA-256, m8/SCOPE.md item 72). The whole class still runs. The
+    # narrow companion has no section rules to splice on, so it is not regenerated with this
+    # option.
     --sections=*) sections="${a#--sections=}"; narrow=0 ;;
     --no-narrow) narrow=0 ;;
     --narrow-only) wide_run=0 ;;
@@ -94,14 +96,18 @@ done
 #
 # `auto` picks the cores sharing cpu0's L3 whose max frequency equals the package maximum, so it
 # is right on a uniform machine too (every core qualifies, and the pin is a no-op in effect).
+# A VM with no cpufreq directory (a GitHub-hosted runner) matches no glob; the loops then see
+# nothing and the pin is none, where an unmatched glob would hand taskset its own text.
 if [ "$pin" = auto ]; then
   maxf=0
   for d in /sys/devices/system/cpu/cpu[0-9]*/cpufreq; do
+    [ -d "$d" ] || continue
     f=$(cat "$d/cpuinfo_max_freq" 2>/dev/null || echo 0)
     [ "$f" -gt "$maxf" ] && maxf=$f
   done
   fast=""
   for d in /sys/devices/system/cpu/cpu[0-9]*/cpufreq; do
+    [ -d "$d" ] || continue
     c=$(basename "$(dirname "$d")"); c=${c#cpu}
     f=$(cat "$d/cpuinfo_max_freq" 2>/dev/null || echo 0)
     [ "$f" = "$maxf" ] && fast="${fast:+$fast,}$c"

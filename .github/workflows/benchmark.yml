@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       class:
-        description: 'Benchmark class (a glob). Several, separated by commas or spaces, run as one job each, six at a time.'
+        description: 'Benchmark class: a glob over the fully qualified name, or a bare class name. Several, separated by commas or spaces, run as one job each, six at a time.'
         required: true
         default: '*'
       jdk:
@@ -88,14 +88,19 @@ on:
         default: false
       rounds:
         type: string
-        description: 'Pair mode: at most this many rounds (stops early after three when every row is within 3%).'
+        description: 'Pair mode: at most this many rounds. Above three, the pair stops early once every row is within 3% after the third.'
         required: false
         default: '3'
       base:
         type: string
-        description: 'Pair mode: the base commit or ref. Blank for the merge base of the head with vecbricks/varka master; HEAD pairs the head with itself (an A/A run, the runner''s own spread).'
+        description: 'Pair mode: the base. Blank for the merge base of the head with vecbricks/varka master; HEAD pairs the head with itself (an A/A run, the runner''s own spread); a commit SHA; or a branch of vecbricks/varka.'
         required: false
         default: ''
+
+# Read-only by default: with `pr` the jobs build and run a pull request's code. Only the harness
+# job, whose create-commit pushes the results to the dispatched branch, may write.
+permissions:
+  contents: read
 
 env:
   # The repository whose pull requests `pr` names and whose master a pair's merge base is taken
@@ -153,11 +158,16 @@ jobs:
                 fail(f"pair mode takes bare class names, not {bad}")
             if not re.fullmatch(r"[1-9][0-9]*", os.environ["ROUNDS"]):
                 fail(f"rounds must be a positive number, not '{os.environ['ROUNDS']}'")
-        # Each class's artifact needs a name of its own, without the glob's characters.
-        entries = [
-            {"name": c, "slug": f"{i + 1}-" + (re.sub(r"[^A-Za-z0-9._-]+", "_", c).strip("_") or "all")}
-            for i, c in enumerate(classes)
-        ]
+        # Each class's artifact needs a name of its own, without the glob's characters. The
+        # harness matches its glob against the fully qualified name, so a bare class name, which
+        # the pair takes, becomes `*.<Name>`: that class in any package, and no class ending in it.
+        def glob(c):
+            return f"*.{c}" if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", c) else c
+
+        def slug(i, c):
+            return f"{i + 1}-" + (re.sub(r"[^A-Za-z0-9._-]+", "_", c).strip("_") or "all")
+
+        entries = [{"name": c, "glob": glob(c), "slug": slug(i, c)} for i, c in enumerate(classes)]
         splits = list(range(1, int(os.environ["SPARK_BENCHMARK_NUM_SPLITS"]) + 1))
         # Six classes at a time leave the account's other runner slots to everything else; the
         # splits of one class keep the twenty they always had.
@@ -178,9 +188,13 @@ jobs:
     steps:
       - name: Checkout Spark repository
         uses: actions/checkout@v7
-        # In order to get diff files
+        # In order to get diff files. The same tree as the benchmark job's, so that the cache key,
+        # a hash of two of its files, is the one that job looks up.
         with:
           fetch-depth: 0
+          repository: ${{ inputs.pr != '' && env.VARKA_BASE_REPO || github.repository }}
+          ref: ${{ inputs.pr != '' && format('refs/pull/{0}/head', inputs.pr) || '' }}
+          persist-credentials: false
       - name: Setup build environment
         uses: ./.github/actions/setup-build-env
         with:
@@ -220,6 +234,8 @@ jobs:
     if: always() && !inputs.pair && needs.matrix-gen.result == 'success'
     needs: [matrix-gen, tpcds-1g-gen]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       max-parallel: ${{ fromJSON(needs.matrix-gen.outputs.parallel) }}
@@ -227,7 +243,10 @@ jobs:
         class: ${{ fromJSON(needs.matrix-gen.outputs.classes) }}
         split: ${{fromJSON(needs.matrix-gen.outputs.matrix)}}
     env:
-      BENCHMARK_CLASS: ${{ matrix.class.name }}
+      BENCHMARK_CLASS: ${{ matrix.class.glob }}
+      # Where the Varka scripts come from: with `pr`, this workflow's own commit (checked out
+      # beside the tree), since a pull request opened before a script changed carries the old one.
+      TOOLS: ${{ inputs.pr != '' && '.varka-tooling' || '.' }}
       SPARK_BENCHMARK_FAILFAST: ${{ inputs.failfast }}
       SPARK_BENCHMARK_NUM_SPLITS: ${{ inputs.num-splits }}
       SPARK_BENCHMARK_CUR_SPLIT: ${{ matrix.split }}
@@ -248,6 +267,15 @@ jobs:
         fetch-depth: 0
         repository: ${{ inputs.pr != '' && env.VARKA_BASE_REPO || github.repository }}
         ref: ${{ inputs.pr != '' && format('refs/pull/{0}/head', inputs.pr) || '' }}
+        # create-commit pushes with the checkout's credentials; a pull request's code gets none.
+        persist-credentials: ${{ inputs.pr == '' }}
+    - name: Checkout this workflow's scripts
+      if: inputs.pr != ''
+      uses: actions/checkout@v7
+      with:
+        path: .varka-tooling
+        sparse-checkout: dev
+        persist-credentials: false
     - name: Setup build environment
       uses: ./.github/actions/setup-build-env
       with:
@@ -259,9 +287,12 @@ jobs:
     # expected-cpu names another CPU. The CPU and the 512:256 ratio go into the provenance below.
     - name: Probe the machine's CPU and vector datapath
       id: probe
+      # The probe also fails when its own 256:128 control cannot see a width doubling; that stops
+      # a run only when expected-cpu asked for a machine, and is recorded otherwise.
+      continue-on-error: ${{ inputs.expected-cpu == '' }}
       env:
         EXPECTED_CPU: ${{ inputs.expected-cpu }}
-      run: dev/varka_datapath.sh --require any --expected-cpu "$EXPECTED_CPU" --github
+      run: '"$TOOLS/dev/varka_datapath.sh" --require any --expected-cpu "$EXPECTED_CPU" --github'
     - name: Cache TPC-DS generated data
       if: inputs.generate-tpcds
       id: cache-tpcds-sf-1
@@ -276,7 +307,6 @@ jobs:
         PR: ${{ inputs.pr }}
         JDK: ${{ inputs.jdk }}
         SCALA: ${{ inputs.scala }}
-        PROBE_CPU: ${{ steps.probe.outputs.cpu }}
         PROBE_LANES: ${{ steps.probe.outputs.lanes }}
         PROBE_CONTROL: ${{ steps.probe.outputs.control }}
         PROBE_RATIO: ${{ steps.probe.outputs.ratio }}
@@ -315,7 +345,7 @@ jobs:
         # Keep the committed sections the run was not asked to replace (VARKA-256): a run on
         # whichever CPU the pool assigns would otherwise rewrite every section of the file.
         if [ -n "$BENCHMARK_SECTIONS" ]; then
-          python3 dev/varka_bench_sections.py restore --sections "$BENCHMARK_SECTIONS"
+          python3 "$TOOLS/dev/varka_bench_sections.py" restore --sections "$BENCHMARK_SECTIONS"
         fi
         # Provenance beside each results file the run wrote, as dev/varka_bench_regen.sh writes it
         # on the laptop: which runner, which CPU and datapath, which commit. Not for the class `*`,
@@ -327,7 +357,7 @@ jobs:
           else
             commit="$commit (${GITHUB_REF_NAME} of ${GITHUB_REPOSITORY})"
           fi
-          { git diff --name-only; git ls-files --others --exclude-standard; } \
+          { git diff --name-only; git ls-files --others --exclude-standard --exclude=.varka-tooling; } \
             | { grep -E '/benchmarks/[^/]*-results\.txt$' || true; } | while read -r results; do
             {
               echo "benchmark:   $BENCHMARK_CLASS"
@@ -339,10 +369,14 @@ jobs:
                 "extra-java-options=${EXTRA_JAVA_OPTIONS:-<none>}"
               echo "jdk:         $(java -version 2>&1 | sed -n 2p)"
               echo "kernel:      $(uname -r)"
-              echo "cpu:         $PROBE_CPU"
-              echo "datapath:    $PROBE_LANES lane-ops/ns at 128 / 256 / 512 bits;" \
-                "256:128 = $PROBE_CONTROL (control), 512:256 = $PROBE_RATIO" \
-                "(dev/varka_datapath.sh)"
+              echo "cpu:         $(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //')"
+              if [ -n "$PROBE_RATIO" ]; then
+                echo "datapath:    $PROBE_LANES lane-ops/ns at 128 / 256 / 512 bits;" \
+                  "256:128 = $PROBE_CONTROL (control), 512:256 = $PROBE_RATIO" \
+                  "(dev/varka_datapath.sh)"
+              else
+                echo "datapath:    not measured (the probe failed; see the job's log)"
+              fi
               echo "pinned to:   none (the runner is not pinned)"
               if [ -n "$BENCHMARK_SECTIONS" ]; then
                 echo "sections:    $BENCHMARK_SECTIONS (the rest of the file is as committed)"
@@ -354,7 +388,7 @@ jobs:
         # To keep the directory structure and file permissions, tar them
         # See also https://github.com/actions/upload-artifact#maintaining-file-permissions-and-case-sensitive-files
         echo "Preparing the benchmark results:"
-        tar -cvf target/benchmark-results-${{ inputs.jdk }}-${{ inputs.scala }}.tar `git diff --name-only` `git ls-files --others --exclude=tpcds-sf-1 --exclude=tpcds-sf-1-text --exclude-standard`
+        tar -cvf target/benchmark-results-${{ inputs.jdk }}-${{ inputs.scala }}.tar `git diff --name-only` `git ls-files --others --exclude=tpcds-sf-1 --exclude=tpcds-sf-1-text --exclude=.varka-tooling --exclude-standard`
     - name: Create a pull request with the results
       # A pull request's head lives on the base repository, which cannot push to the fork the
       # branch came from without a stored credential, so with `pr` the artifact is the result.
@@ -397,11 +431,12 @@ jobs:
     timeout-minutes: 355
     strategy:
       fail-fast: false
-      max-parallel: 6
+      max-parallel: ${{ fromJSON(needs.matrix-gen.outputs.parallel) }}
       matrix:
         class: ${{ fromJSON(needs.matrix-gen.outputs.classes) }}
     env:
       BENCHMARK_CLASS: ${{ matrix.class.name }}
+      TOOLS: ${{ inputs.pr != '' && '.varka-tooling' || '.' }}
       SPARK_LOCAL_IP: localhost
       SPARK_HOME: ${{ github.workspace }}
     steps:
@@ -413,6 +448,14 @@ jobs:
         fetch-depth: 0
         repository: ${{ inputs.pr != '' && env.VARKA_BASE_REPO || github.repository }}
         ref: ${{ inputs.pr != '' && format('refs/pull/{0}/head', inputs.pr) || '' }}
+        persist-credentials: false
+    - name: Checkout this workflow's scripts
+      if: inputs.pr != ''
+      uses: actions/checkout@v7
+      with:
+        path: .varka-tooling
+        sparse-checkout: dev
+        persist-credentials: false
     # JDK 25 whatever `jdk` says: dev/varka_bench_regen.sh reads the -jdk25-results.txt file the
     # harness writes under it. Two trees are compiled on this one runner, hence the disk.
     - name: Setup build environment
@@ -423,9 +466,12 @@ jobs:
         free-disk-space: host
     - name: Probe the machine's CPU and vector datapath
       id: probe
+      # The probe also fails when its own 256:128 control cannot see a width doubling; that stops
+      # a run only when expected-cpu asked for a machine, and is recorded otherwise.
+      continue-on-error: ${{ inputs.expected-cpu == '' }}
       env:
         EXPECTED_CPU: ${{ inputs.expected-cpu }}
-      run: dev/varka_datapath.sh --require any --expected-cpu "$EXPECTED_CPU" --github
+      run: '"$TOOLS/dev/varka_datapath.sh" --require any --expected-cpu "$EXPECTED_CPU" --github'
     - name: Resolve the module and the base
       id: resolve
       env:
@@ -440,14 +486,22 @@ jobs:
              exit 1 ;;
         esac
         # The merge base against the base repository's master, fetched here: the checkout's
-        # origin is the fork on the fork's runs, whose master is apache/spark's.
+        # origin is the fork on the fork's runs, whose master is apache/spark's. A named base is
+        # HEAD or a commit of the checkout, or else a branch or commit of the base repository,
+        # fetched from it, never the checkout's own origin.
+        url="https://github.com/$VARKA_BASE_REPO.git"
         if [ -z "$BASE" ]; then
-          git fetch --no-tags -q "https://github.com/$VARKA_BASE_REPO.git" master
+          git fetch --no-tags -q "$url" master
           base="$(git merge-base HEAD FETCH_HEAD)"
           how="the merge base with $VARKA_BASE_REPO master"
-        else
+        elif [ "$BASE" = HEAD ] || { [[ "$BASE" =~ ^[0-9a-f]{7,40}$ ]] \
+            && git rev-parse -q --verify "$BASE^{commit}" > /dev/null; }; then
           base="$(git rev-parse --verify "$BASE^{commit}")"
           how="the base input '$BASE'"
+        else
+          git fetch --no-tags -q "$url" "$BASE"
+          base="$(git rev-parse --verify 'FETCH_HEAD^{commit}')"
+          how="the base input '$BASE' of $VARKA_BASE_REPO"
         fi
         [ "$base" != "$(git rev-parse HEAD)" ] || how="$how, the head itself (an A/A pair)"
         { echo "module=$module"; echo "base=$base"; echo "how=$how"; } >> "$GITHUB_OUTPUT"
@@ -460,10 +514,11 @@ jobs:
         ROUNDS: ${{ inputs.rounds }}
       # --force: a runner has no canary baseline and need not read idle; the alternation is the
       # control here. The exit status is the verdict: 1 when a row is slower by 10% by both the
-      # median and the best.
+      # median and the best. `shell: bash` runs with pipefail, so `tee` does not hide it.
+      shell: bash
       run: |
         mkdir -p target/pair
-        dev/varka_bench_pair.sh "$MODULE" "$BENCHMARK_CLASS" --base "$BASE_SHA" \
+        "$TOOLS/dev/varka_bench_pair.sh" "$MODULE" "$BENCHMARK_CLASS" --base "$BASE_SHA" \
           --rounds "$ROUNDS" --force --out target/pair 2>&1 | tee target/pair/pair.log
     - name: Write the verdict to the summary
       if: always() && steps.resolve.outcome == 'success'
@@ -472,7 +527,6 @@ jobs:
         HOW: ${{ steps.resolve.outputs.how }}
         BASE_SHA: ${{ steps.resolve.outputs.base }}
         ROUNDS: ${{ inputs.rounds }}
-        PROBE_CPU: ${{ steps.probe.outputs.cpu }}
         PROBE_LANES: ${{ steps.probe.outputs.lanes }}
         PROBE_CONTROL: ${{ steps.probe.outputs.control }}
         PROBE_RATIO: ${{ steps.probe.outputs.ratio }}
@@ -495,9 +549,13 @@ jobs:
           echo "| base | \`$BASE_SHA\`, $HOW |"
           echo "| head | \`$(git rev-parse HEAD)\` |"
           echo "| rounds | at most $ROUNDS |"
-          echo "| runner CPU | $PROBE_CPU |"
-          echo "| datapath | $PROBE_LANES lane-ops/ns at 128 / 256 / 512 bits;" \
-            "256:128 = $PROBE_CONTROL (control), 512:256 = $PROBE_RATIO |"
+          echo "| runner CPU | $(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //') |"
+          if [ -n "$PROBE_RATIO" ]; then
+            echo "| datapath | $PROBE_LANES lane-ops/ns at 128 / 256 / 512 bits;" \
+              "256:128 = $PROBE_CONTROL (control), 512:256 = $PROBE_RATIO |"
+          else
+            echo "| datapath | not measured: the probe failed (see the job's log) |"
+          fi
           echo
           echo "Each row's change of the head against the base, + faster and - slower, from each"
           echo "side's median over its rounds and from each side's best round. The files of every"
