@@ -57,7 +57,10 @@ are written *as the work happens*: a task file states what was planned, then wha
 built, what was measured and where the plan turned out wrong. Predictions written
 before a measurement stay in the file after it, scored honestly - the project
 keeps count. Do not retro-edit a task file to look prescient; add the correction
-and say what it corrects.
+and say what it corrects. A cost prediction - a test's or a suite's added time, a
+check's overhead - reads the calibration table in `skills/testing-and-debugging.md` first and is
+stated at the ratio the table has observed unless the plan says why not; once scored, its line
+joins the table.
 
 A milestone's file is named for the stage it is in. While it is a scope
 catalogue - numbered items with design input, no task numbers assigned yet - it
@@ -222,9 +225,24 @@ every Scala-to-Java port; existing Java that a change does not touch is not swep
 * **Explicit imports.** No `import module`: it hides what a file depends on, and Spark's
   checkstyle expects imports by name.
 
+**The suites.**
+
+* **A new catalyst suite whose helpers are Java is a JUnit 5 class under `@VarkaSuite`**
+  (VARKA-312), each `@Test` carrying its sentence as a `@DisplayName`, the way a ScalaTest test is
+  named: `@DisplayName("a reduction that fails differently is not smaller")`, not a method name
+  standing in for one. The sentence is the test's name in sbt's output, the matrix's report, the
+  JUnit XML and `sql/varka/matrix/skips.tsv`. `@Tag(VarkaSuite.PINS_DEFAULTS)` is `PinsDefaults`,
+  and the annotation's `watchdogMinutes` and `ownJvm` are the ScalaTest traits' parameters;
+  `dev/varka_matrix.sh` finds a `Varka...Suite` under it beside the Scala suites, so the gate and
+  CI run it with no change. `sql/varka/skills/testing-and-debugging.md` says how to write and run
+  one.
+* **An existing ScalaTest suite moves only when a task touches it**, as for other code, and the
+  sql/core suites stay ScalaTest: their base is Spark's `SharedSparkSession`, which no JUnit
+  extension provides yet.
+
 **What stays as it is.** Spark's interop surface stays Scala - the `SparkPlan` subclasses, the
-Catalyst rules, the ScalaTest suites - as the migration rule below says. Test helpers are Java and
-the suites thin Scala wrappers over them. A new benchmark is Java on `VarkaBenchmarkBase`, the
+Catalyst rules, the ScalaTest suites over Spark's sessions - as the migration rule below says.
+Test helpers are Java, and an existing ScalaTest suite is a thin Scala layer over them. A new benchmark is Java on `VarkaBenchmarkBase`, the
 catalyst test tree's adapter over Spark's harness (VARKA-224), and a Scala benchmark is ported
 when a task touches it, the port proving itself by reproducing its committed results; the engine module's tests are JUnit 5 as they are, and no
 new assertion library comes in. A refactor is proven by `emitted_bytes.json` byte-identical, a
@@ -260,6 +278,30 @@ loads, benchmarks. So:
   `target/bg/`. A script that runs long steps writes each step's exit status to a file, as
   `dev/varka_matrix.sh` does, and a waiter reads that file.
 * When you hand a long job to another agent, say this in the brief.
+* **Never `git stash`.** The stash list is one per repository, shared by every worktree, so a stash
+  can be popped by another agent's work, or left behind under a name nobody owns. To set changes
+  aside, commit them on your branch, or save `git diff > <file>` in your scratch area.
+* **Write only inside your own worktree and scratch area.** Another agent's worktree, the main
+  checkout and other agents' `target/` directories are theirs.
+* **Name the files you will edit** in your first progress message. Two tasks that both edit one
+  file run one after the other, not side by side: on 13 October 2026 two agents edited
+  `VarkaKernelChecks` at once, and the second to merge had to rebuild the first's changes inside
+  its own. Whoever launches agents in parallel lists, in each brief, the files that agent owns.
+
+## Pull requests: reviewed by their author before they open
+
+* **Review your own diff before opening the pull request**, with the review the owner runs
+  (`/code-review high` on the diff), fix every finding you verify, and say in the description
+  what the review found and what you changed. On 13 October 2026 six pull requests were reviewed
+  after their CI, and every one had seven to ten findings - a suite that could overwrite Spark's
+  golden files, a circular fault check, a benchmark that split shapes unlike the compiler, a tier
+  witness that dropped traps - each costing a second CI round and a second agent run. The owner's
+  review after CI is then the second look, not the first.
+* **A benchmark port merges with its pair** (`dev/varka_bench_pair.sh` against the merge base), or
+  its description says why not and names the row that owes the pair.
+* **A change that adds test time says so**: the gate's and the nightly's affected steps, their
+  time before and after, in the description; once row 255's CI records step times, against the
+  committed budget it keeps.
 
 ## House rules that bite here specifically
 

@@ -43,10 +43,11 @@
 # balances the JVMs by its JUnit times.
 #
 # sbt builds once and exports the test classpath and JVM options; each configuration then runs
-# as its own ScalaTest runner JVM in its own directory under target/varka-matrix/, so parallel
-# runs share no sbt lock, warehouse or temporary directory. The defaults always run too, as
-# configuration zero: a test that fused under the defaults and fuses nothing under a
-# configuration fails, unless sql/varka/matrix/skips.tsv marks it "declines" (see VarkaMatrix).
+# as its own runner JVM (VarkaSuiteRunner: ScalaTest's Runner, then the JUnit suites) in its own
+# directory under target/varka-matrix/, so parallel runs share no sbt lock, warehouse or temporary
+# directory. The defaults always run too, as configuration zero: a test that fused under the
+# defaults and fuses nothing under a configuration fails, unless sql/varka/matrix/skips.tsv marks
+# it "declines" (see VarkaMatrix).
 #
 # On a laptop the runner also waits before each launch while the battery discharges below 30%,
 # so an unattended run does not drain it (a charger can supply less than ten JVMs draw).
@@ -121,8 +122,10 @@ EXCLUDED=(
   "VarkaEmitCostAuditSuite:compares the cost audit with the defaults' committed oracle"
   "VarkaEmitOptionSuite:checks the defaults themselves"
   "VarkaMatrixSuite:checks the matrix's own machinery, not an answer"
+  "VarkaSuiteHarnessSuite:checks the JUnit face of the matrix's machinery, not an answer"
   "VarkaAssemblySuite:reads the JIT's output, not an answer"
   "VarkaWarmupEndToEndSuite:times a kernel's compilation, which a loaded machine moves"
+  "VarkaTierWitnessSuite:asserts which JIT tier ran a call, which a loaded machine moves"
 )
 
 # The gate runs every suite; the matrix leaves out the ones above.
@@ -181,29 +184,35 @@ if [ -n "$shard" ]; then
 fi
 
 # Every concrete Varka suite of a module, by its source file, minus the exclusions and the
-# --suites / --skip-suites filters, one fully qualified name a line. Each module runs in JVMs of
-# its own, as sbt runs it: a shape a catalyst suite compiled must not already be warm when a SQL
-# suite asks for its first query.
+# --suites / --skip-suites filters, one fully qualified name a line: the ScalaTest classes named
+# Varka...Suite under src/test/scala, and the JUnit classes named Varka...Suite under @VarkaSuite
+# in src/test/java (VARKA-312). Each module runs in JVMs of its own, as sbt runs it: a shape a
+# catalyst suite compiled must not already be warm when a SQL suite asks for its first query.
 module_suites() {
-  local file pkg cls entry skip
+  local root=$1 class_re=$2 marker=$3 file pkg cls entry skip
+  [ -d "$root" ] || return 0
   while IFS= read -r file; do
-    pkg=$(sed -n 's/^package \(.*\)$/\1/p' "$file" | head -1)
-    for cls in $(grep -oE '^class Varka[A-Za-z0-9]*Suite\b' "$file" | awk '{print $2}'); do
+    [ -n "$marker" ] && ! grep -qE "$marker" "$file" && continue
+    pkg=$(sed -n 's/^package \([^;]*\);\{0,1\}$/\1/p' "$file" | head -1)
+    for cls in $(grep -oE "$class_re" "$file" | awk '{print $NF}'); do
       skip=0
       for entry in "${EXCLUDED[@]}"; do [ "${entry%%:*}" = "$cls" ] && skip=1; done
       [ -n "$only_suites" ] && ! [[ ",$only_suites," == *",$cls,"* ]] && skip=1
       [ -n "$skip_suites" ] && [[ ",$skip_suites," == *",$cls,"* ]] && skip=1
       [ "$skip" = 0 ] && echo "$pkg.$cls"
     done
-  done < <(grep -rlE '^class Varka[A-Za-z0-9]*Suite\b' "$1" | sort)
+  done < <(grep -rlE "$class_re" "$root" | sort)
 }
-declare -A module_root=([catalyst]=sql/catalyst/src/test/scala [sql]=sql/core/src/test/scala)
+SCALA_SUITE='^class Varka[A-Za-z0-9]*Suite\b'
+JAVA_SUITE='^(public )?(final )?class Varka[A-Za-z0-9]*Suite\b'
+declare -A module_root=([catalyst]=sql/catalyst/src/test [sql]=sql/core/src/test)
 # Each module's suites over --split JVMs, longest first by the previous run's JUnit times: one
 # line of space-separated suites per JVM, in shards/<module>.
 mkdir -p "$OUT/shards"
 total=0
 for module in "${modules[@]}"; do
-  mapfile -t found < <(module_suites "${module_root[$module]}")
+  mapfile -t found < <(module_suites "${module_root[$module]}/scala" "$SCALA_SUITE" "";
+    module_suites "${module_root[$module]}/java" "$JAVA_SUITE" '^@VarkaSuite\b')
   for extra in "${extra_suites[@]}"; do
     [ "${extra%%:*}" = "$module" ] && found+=("${extra#*:}")
   done
@@ -218,7 +227,10 @@ done
 echo "== ${#configs[@]} configuration(s) and the defaults, $total suites," \
   "$split JVM(s) a module, $jobs JVMs at a time"
 
-# One JVM's suites under one configuration, in runs/<configuration>/<module>[-<k>]/.
+# One JVM's suites under one configuration, in runs/<configuration>/<module>[-<k>]/. The runner
+# takes ScalaTest's Runner's arguments and runs the JUnit suites after the ScalaTest ones, then
+# prints one Suites: and one Tests: line over both, which the report reads (VARKA-312).
+RUNNER=org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSuiteRunner
 run_one() {
   local config=$1 module=$2 part=$3 name=${1:-defaults}
   local leaf=$module
@@ -232,7 +244,7 @@ run_one() {
   (cd "$dir" && SPARK_TESTING=1 SPARK_SCALA_VERSION=2.13 java "${OPTS[@]}" \
     -Djava.io.tmpdir="$dir/tmp" -Dvarka.matrix.config="$config" \
     -Dvarka.matrix.report="$dir/fused.tsv" \
-    -cp "$CP" org.scalatest.tools.Runner -oW -u "$dir/junit" "${suites[@]}" > "$dir/run.log" 2>&1)
+    -cp "$CP" "$RUNNER" -oW -u "$dir/junit" "${suites[@]}" > "$dir/run.log" 2>&1)
   echo "$?" > "$dir/exit"
   echo "$(( $(date +%s) - start ))" > "$dir/seconds"
   echo "$name" > "$dir/../name"

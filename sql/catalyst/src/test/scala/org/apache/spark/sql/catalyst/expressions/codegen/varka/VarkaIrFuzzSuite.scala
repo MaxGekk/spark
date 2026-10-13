@@ -510,6 +510,132 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     first.exists(v => !fitsWithoutBudget(v.roots, v.numInputs))
   }
 
+  /** A kernel's bytes under a class name, as the compiled histories take it. */
+  private type Emit = java.util.function.Function[String, Array[Byte]]
+
+  /** Draws a lane for the compiled histories: `-Dvarka.fuzz.compiled` (VARKA-274). */
+  private val compiledDraws = sys.props.get("varka.fuzz.compiled").map(_.toInt).getOrElse(20)
+
+  /** Whether a history not reached fails the compiled test: only on a quiet machine. */
+  private val requireTiers = sys.props.get("varka.fuzz.requireTiers").contains("true")
+
+  /**
+   * The case as the compiled histories run it, and its kernel under any class name: the options
+   * `emitOrSkip` settled on, the budget's own or the form without it, so every history emits what
+   * the main test checks. None for a shape past the class-file cap.
+   */
+  private def compiledForm(c: VarkaFuzzCase): Option[(VarkaFuzzCase, Emit)] = {
+    var used = c.options
+    def emitWith(o: VarkaEmitOptions)(name: String): Array[Byte] = VarkaLoopEmitter.emitTraced(
+      name, c.roots, c.numInputs, c.lits.length, o, randomTrace)
+    emitOrSkip(c.label, c.options) { o =>
+      val bytes = emitWith(o)("org.apache.spark.sql.varka.execution.VarkaFusedFuzzProbe")
+      used = o
+      bytes
+    }.map(_ => (c.withOptions(used), (name: String) => emitWith(used)(name)))
+  }
+
+  /**
+   * What one history of `c` throws, as the failure signature of the check's own failure; None
+   * when it passes. The shrinker holds a smaller case to the history that failed, not to `cold`,
+   * since a failure of compiled code need not show in the interpreter.
+   */
+  private def historyOutcome(c: VarkaFuzzCase, h: VarkaCompiledCheck.History,
+      settings: VarkaCompiledCheck.Settings): Option[VarkaFailureSignature] =
+    compiledForm(c).flatMap { case (form, emit) =>
+      try {
+        VarkaCompiledCheck.run(form, emit, settings.withOnly(h), "")
+        None
+      } catch {
+        case f: VarkaCompiledCheck.HistoryFailure =>
+          Some(VarkaFailureSignature.of(f.getCause, c.label))
+      }
+    }
+
+  /**
+   * One case over the histories, a failure handled as `runChecked` handles one: a known failure
+   * is logged and the case left; a new one is shrunk against the history that failed and fails
+   * the test with the original, the smaller case and its signature. Returns the case's result,
+   * None where it was left or past the cap.
+   */
+  private def runCompiled(c: VarkaFuzzCase, settings: VarkaCompiledCheck.Settings,
+      replay: String): Option[VarkaCompiledCheck.Result] = compiledForm(c).flatMap {
+    case (form, emit) =>
+      try Some(VarkaCompiledCheck.run(form, emit, settings, replay)) catch {
+        case f: VarkaCompiledCheck.HistoryFailure =>
+          val signature = VarkaFailureSignature.of(f.getCause, c.label)
+          if (VarkaKnownFailures.isKnown(VarkaKnownFailures.entries, signature)) {
+            logWarning(s"known fuzz failure in history ${f.history.label}, not shrunk: $signature")
+            None
+          } else if (!shrinkFailures) {
+            throw f
+          } else {
+            val shrunk = VarkaShrinker.shrink(c, signature, (x: VarkaFuzzCase) =>
+              historyOutcome(x.withLabel("case"), f.history, settings).toJava)
+            val early = (if (shrunk.stoppedEarly) ", budget reached" else "") +
+              (if (shrunk.stable) "" else ", UNSTABLE: it did not fail the same way three times")
+            fail(f.getMessage + s"\n  shrunk to ${VarkaFuzzCase.describe(shrunk.small)} in " +
+              s"history ${f.history.label}\n  (${shrunk.runs} runs, ${shrunk.millis} ms$early); " +
+              s"signature: $signature", f)
+          }
+      }
+  }
+
+  /**
+   * The first `compiledDraws` draws of each lane, each run over the eight histories of
+   * `VarkaCompiledCheck` - its answers compared in the interpreter, in C2's code after a warm-up,
+   * across a trap and a recompile, and on the way up the tiers with C1 on - and the tier that
+   * served each compared call read by `VarkaTierWitness`. A draw whose options set a lanes
+   * override runs `cold` only, after every other draw: a second vector species in the JVM makes
+   * every later kernel's C2 code box its vectors, which no user's JVM runs. Registered first, so
+   * that the other tests' override draws have not run yet.
+   *
+   * A wrong answer fails, wherever the suite runs. A history whose tier never showed is counted
+   * and printed, and fails only under `-Dvarka.fuzz.requireTiers=true`: the suite runs beside other
+   * JVMs in the gate, in CI and one JVM per core at night, where C2 compiles late, and the tier
+   * facts are held hard by `VarkaTierWitnessSuite` on fixed shapes in the quiet phase. The
+   * recording is stopped when the test ends, so the later tests do not pay for it.
+   */
+  test(s"random IR trees compiled by C2 match the reference evaluator over eight batch " +
+      s"histories ($compiledDraws draws a lane)") {
+    val settings = VarkaCompiledCheck.Settings.fromProperties()
+    val tally = new VarkaCompiledCheck.Tally
+    val overrides = scala.collection.mutable.ArrayBuffer[(VarkaFuzzCase, String)]()
+    val draws: Seq[(Int => VarkaFuzzCase, Long)] =
+      Seq((k => drawInt(k), seed), (k => drawLong(k), longSeed))
+    try {
+      for ((draw, drawSeed) <- draws; k <- only.map(Seq(_)).getOrElse(0 until compiledDraws)) {
+        val c = draw(k)
+        val replay = s"-Dvarka.fuzz.seed=$drawSeed -Dvarka.fuzz.only=$k"
+        if (c.options.lanesOverride() != 0) {
+          overrides += ((c, replay))
+        } else {
+          runCompiled(c, settings, replay).foreach(tally.add)
+        }
+      }
+      if (settings.runs(VarkaCompiledCheck.History.COLD)) {
+        for ((c, replay) <- overrides) {
+          runCompiled(c, settings.withOnly(VarkaCompiledCheck.History.COLD), replay).foreach {
+            r => tally.add(r); tally.addColdOnly()
+          }
+        }
+      }
+      // The draws are the main tests' first ones; their skips are counted there.
+      skippedPastTheCap.set(0)
+      skippedPastTheOpCap.set(0)
+      if (settings.witnessed) VarkaTierWitness.get().settle()
+      tally.report(settings.witnessed).asScala.foreach(info(_))
+      if (settings.witnessed) {
+        val notReached = VarkaCompiledCheck.notReached(tally).asScala
+        info(s"${notReached.size} history(ies) not reached" +
+          (if (requireTiers) "" else " (counted; -Dvarka.fuzz.requireTiers=true fails on them)"))
+        notReached.foreach(why => if (requireTiers) fail(why) else info(why))
+      }
+    } finally {
+      VarkaTierWitness.close()
+    }
+  }
+
   // VARKA-323: five draws of the night of 12 October 2026 whose variants grew past the op cap
   // and failed as shapes the emitter rejected. A variant that fits is preferred, and a variant
   // with no form that fits is skipped, counted. Each test first checks that its draw still grows
