@@ -243,6 +243,24 @@ typography carries part of every formula - so **when a constant, an exponent or
 an inequality decides something, read the PDF, not the transcription**. Each file
 opens with what its conversion lost. See `papers/README.md` before adding one.
 
+## Processes: started, waited on and stopped by PID, never by pattern
+
+Several agents and long jobs share this machine at once: test JVMs of other worktrees, night
+loads, benchmarks. So:
+
+* **Never kill by name pattern** - no `pkill`, `killall`, `kill $(pgrep ...)` or
+  `pgrep ... | xargs kill`. A pattern matches whole command lines, and every JVM's flags hold
+  common words: on 13 October 2026 `pkill -f` with a pattern holding `error` stopped three test
+  JVMs of other worktrees an hour into their runs. Kill only a PID recorded when the process
+  started (`pid=$!` right after `&`), and a `setsid` job by its group (`kill -- -"$pid"`).
+* **Never wait in a `pgrep` loop.** It matches its own shell and never ends, or matches another
+  job and ends too early. Start a job you want to hear the end of as the agent tool's background
+  command, which reports its exit; or use `dev/varka_bg.sh start NAME CMD...`, then
+  `wait NAME` and `stop NAME`, which keep the PID, its start time and the exit status under
+  `target/bg/`. A script that runs long steps writes each step's exit status to a file, as
+  `dev/varka_matrix.sh` does, and a waiter reads that file.
+* When you hand a long job to another agent, say this in the brief.
+
 ## House rules that bite here specifically
 
 * Java in a non-core module cannot pass a Guava type to a `core` API. Maven shades
