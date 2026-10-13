@@ -24,7 +24,6 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import scala.collection.immutable.Seq;
-import scala.jdk.javaapi.CollectionConverters;
 
 import org.apache.spark.sql.catalyst.expressions.Attribute;
 import org.apache.spark.sql.catalyst.expressions.Expression;
@@ -80,10 +79,6 @@ public class VarkaCompileBenchmark extends VarkaBenchmarkBase {
   /** Keeps the compiler's results live. */
   private volatile int blackhole;
   private int sink;
-
-  private static <T> Seq<T> seq(List<T> list) {
-    return CollectionConverters.asScala(list).toSeq();
-  }
 
   private static Expression sql(String text) {
     return VarkaSqlResolve.parse(text, COLUMNS);
