@@ -26,7 +26,7 @@ import scala.util.Try
 import org.apache.spark.SparkConf
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Alias, AttributeReference, Expression, Literal,
-  NamedExpression, RuntimeReplaceable, TryEval}
+  NamedExpression, TryEval}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.plans.logical.{Command, Limit, LocalRelation, LogicalPlan,
   OneRowRelation, Project}
@@ -37,7 +37,6 @@ import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanHelper
 import org.apache.spark.sql.execution.columnar.{ArrowCachedBatchSerializer, CachedRDDBuilder,
   InMemoryRelation, InMemoryTableScanExec}
 import org.apache.spark.sql.execution.datasources.{HadoopFsRelation, LogicalRelation}
-import org.apache.spark.sql.types.BooleanType
 import org.apache.spark.sql.util.QueryExecutionListener
 import org.apache.spark.storage.StorageLevel
 
@@ -126,49 +125,51 @@ object VarkaArrowSource {
   def liftEnabled: Boolean = !sys.props.get("varka.goldenSuite.lift").contains("false")
 
   /**
-   * The rows of the relation a lifted `SELECT` reads: seventeen, so a kernel runs its loop over
+   * The rows of each partition of the relation a lifted `SELECT` reads: seventeen, so a kernel
+   * runs its loop over
    * at least one lane group at every vector width (4, 8 or 16 int lanes at 128, 256 or 512 bits)
    * and then its epilogue, where one row would run the epilogue alone.
    */
   val LiftedRows = 17
 
   /**
-   * Whether a Varka kernel fuses `parent` with its `index`-th child read from a column of that
-   * child's type: as a projection, or, for a predicate, as a filter. Asked of the compiler, so the
-   * lift cannot reach a position Varka would not fuse, where a column can change what the
-   * expression means (`map(1, ...)`'s key, a format string).
+   * Whether a Varka kernel fuses `parent` as a projection with its `index`-th child read from a
+   * column of that child's type. Asked of the compiler, so the lift cannot reach a position Varka
+   * would not fuse, where a column can change what the expression means (`map(1, ...)`'s key, a
+   * format string). A lifted entry always runs in a projection, so a position only a filter fuses
+   * does not count.
    */
   private def fusesAsColumn(parent: Expression, index: Int): Boolean = {
     val child = parent.children(index)
     val column = AttributeReference("lifted", child.dataType, nullable = false)()
     val asColumn = parent.withNewChildren(parent.children.updated(index, column))
-    asColumn.resolved && (
-      VarkaExpressionCompiler.compile(Seq(Alias(asColumn, "c")()), Seq(column)).isPresent ||
-      (asColumn.dataType == BooleanType &&
-        VarkaExpressionCompiler.compilePredicate(asColumn, Seq(column)).isPresent))
+    asColumn.resolved &&
+      VarkaExpressionCompiler.compile(Seq(Alias(asColumn, "c")()), Seq(column)).isPresent
   }
 
   /**
    * The lift (`VARKA-271.md` 3.3): in each `SELECT` with no `FROM`, each non-null literal of a type
    * a kernel reads, in a position the compiler fuses as a column, becomes a column of a relation
-   * of [[LiftedRows]] equal rows holding its value, and a `LIMIT 1` keeps one row. A plan
-   * normalization rule, so it runs on the analyzed plan before the optimizer folds the constants;
-   * analysis has fixed every output's name, and the rows are equal, so the query answers its own
-   * schema and row, and the golden file still applies.
+   * of [[LiftedRows]] equal rows a scan partition holding its value, and a `LIMIT 1` keeps one
+   * row; the lifted entry is kept only if the compiler fuses it whole. A plan normalization rule,
+   * so it runs on the analyzed plan before the optimizer folds the constants; analysis has fixed
+   * every output's name, and the rows are equal, so the query answers its own schema and row, and
+   * the golden file still applies.
    */
-  object LiftRule extends Rule[LogicalPlan] {
+  class LiftRule(slices: () => Int) extends Rule[LogicalPlan] {
     override def apply(plan: LogicalPlan): LogicalPlan = plan transformUp {
       case p @ Project(list, _: OneRowRelation) if list.exists(_.exists(liftable)) =>
         val columns = mutable.LinkedHashMap.empty[Literal, AttributeReference]
         val lifted = list.map { entry =>
-          // Each entry is lifted on a copy of the columns, kept only if every node of the
-          // lifted entry still passes Spark's own type check: a function that needs a constant
-          // argument (time_bucket's width) checks it there, and the compiler's answer for the
-          // literal's parent says nothing about the ancestors above it.
+          // Each entry is lifted on a copy of the columns and kept only if the lifted entry is
+          // still resolved - a function that needs a constant argument (time_bucket's width)
+          // fails its type check there, which resolution includes - and the compiler fuses the
+          // whole lifted entry: each literal's position was asked alone, and the combination is
+          // what runs.
           val tried = columns.clone()
           val candidate = lift(entry, tried)
-          if (candidate.resolved &&
-              !candidate.exists(!_.checkInputDataTypes().isSuccess)) {
+          if (candidate.resolved && VarkaExpressionCompiler.compile(
+              Seq(candidate.asInstanceOf[NamedExpression]), tried.values.toSeq).isPresent) {
             columns.clear()
             columns ++= tried
             candidate.asInstanceOf[NamedExpression]
@@ -183,8 +184,10 @@ object VarkaArrowSource {
           // same value (`INTERVAL '-13' MONTH` and `INTERVAL '-1-1' YEAR TO MONTH`), and a set
           // would keep one of them.
           val row = InternalRow.fromSeq(columns.keys.toSeq.map(_.value))
-          Limit(Literal(1),
-            Project(lifted, LocalRelation(columns.values.toSeq, Seq.fill(LiftedRows)(row))))
+          // A local relation is scanned in `slices` partitions and `LIMIT 1` reads the first,
+          // so every partition holds LiftedRows rows: the batch a kernel sees is LiftedRows long.
+          Limit(Literal(1), Project(lifted,
+            LocalRelation(columns.values.toSeq, Seq.fill(LiftedRows * slices())(row))))
         }
     }
 
@@ -198,10 +201,10 @@ object VarkaArrowSource {
         e: Expression,
         columns: mutable.LinkedHashMap[Literal, AttributeReference]): Expression = e match {
       case t: TryEval => t
-      // try_add, try_multiply and their kin are runtime-replaceable: the analyzed plan holds the
-      // function, and its replacement is a TryEval or, over numbers, the operation in TRY mode
-      // with no TryEval at all; the SQL name is what they share.
-      case r: RuntimeReplaceable if r.prettyName.startsWith("try_") => e
+      // try_add, try_multiply and their kin are runtime-replaceable with a TryEval or a TRY-mode
+      // operation as their replacement, and try_cast is a Cast in TRY mode: the SQL name is what
+      // they share.
+      case _ if e.prettyName.startsWith("try_") => e
       case _ => e.withNewChildren(e.children.zipWithIndex.map {
         case (l: Literal, i) if liftable(l) && fusesAsColumn(e, i) =>
           columns.getOrElseUpdate(l,
@@ -215,6 +218,9 @@ object VarkaArrowSource {
       case _ => false
     }
   }
+
+  /** The lift over one scan partition, for a plan built without a session. */
+  object LiftRule extends LiftRule(() => 1)
 
   // ----------------------------------------------------------------------------------------------
   // What the listener records
@@ -252,7 +258,10 @@ class VarkaArrowSourceExtension extends (SparkSessionExtensions => Unit) {
   override def apply(extensions: SparkSessionExtensions): Unit = {
     extensions.injectOptimizerRule(session => new VarkaArrowSource.CacheRule(session))
     if (VarkaArrowSource.liftEnabled) {
-      extensions.injectPlanNormalizationRule(_ => VarkaArrowSource.LiftRule)
+      // The parallelism is read when the rule runs: the builder is called while the session's
+      // state is built, and reading the session's settings there would build that state again.
+      extensions.injectPlanNormalizationRule(session => new VarkaArrowSource.LiftRule(
+        () => session.asInstanceOf[classic.SparkSession].leafNodeDefaultParallelism))
     }
   }
 }

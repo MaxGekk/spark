@@ -388,11 +388,12 @@ Done as 3.3 describes, with two guards the first full run added.
   still passes Spark's own `checkInputDataTypes`, where a constant-argument rule lives; and nothing
   under a `try_` function is lifted, neither a `TryEval` nor the runtime-replaceable `try_add`
   family, whose replacement over numbers is the operation in TRY mode with no `TryEval` at all.
-* **Tests.** `VarkaLiteralLiftSuite`, six: a fused expression over literals reads them from 17
+* **Tests.** `VarkaLiteralLiftSuite`, seven: a fused expression over literals reads them from 17
   equal rows with one kept and the output's name unchanged; one literal used twice is one column;
   two literals of different types holding one value are two columns of one row; a literal in a
   map key or of a type no kernel reads stays; nothing under `try_` is lifted, as `TryEval` or as
-  `try_multiply`; a query with a `FROM` is left to the cache rule.
+  `try_multiply`; each scan partition holds 17 rows, so the kernel's batch is 17 long; a query
+  with a `FROM` is left to the cache rule.
 
 **Predictions scored (6.1), 271b's.**
 
@@ -411,7 +412,10 @@ and the lifted cache-only arm did; served executions there rose from 24 to 72.
 
 **Both arms with the lift, every golden file**, side by side on 13 October 2026: 790 tests each,
 789 passed, the Python UDTF test cancelled, 59 ignored by Spark, none failed, the two arms
-identical test for test, 1,314 s and 1,303 s; that run's report is the committed `served.json`.
+identical test for test, 1,353 s and 1,357 s. The Varka arm served 1,761 of 47,323 query
+executions and 6,018 batches, in 117 tests; that run's report is the committed `served.json`.
+This run is the reviewed version: the 17 rows are split across the scan's partitions, so each
+batch is 17 long, and a lifted entry is kept only if the whole entry still compiles.
 Prediction 1 holds with the lift as well: the cache-only arm fails only the listed environment
 test.
 

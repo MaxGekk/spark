@@ -21,11 +21,11 @@ import java.time.LocalDate
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.{Add, Alias, Attribute, Cast, CreateMap,
-  DateAdd, DateFormatClass, EqualTo, Literal, TryEval, TryMultiply}
+  DateAdd, DateFormatClass, EvalMode, Literal, TryEval, TryMultiply}
 import org.apache.spark.sql.catalyst.plans.logical.{Limit, LocalRelation, LogicalPlan,
   OneRowRelation, Project}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
-import org.apache.spark.sql.types.{IntegerType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{IntegerType, StringType, YearMonthIntervalType}
 
 /**
  * The golden-file suite's literal lift (`VarkaArrowSource.LiftRule`): which literals of a
@@ -63,10 +63,11 @@ class VarkaLiteralLiftSuite extends SparkFunSuite {
   }
 
   test("two literals of different types holding one value are two columns of one row") {
-    // INTERVAL '-1-1' YEAR TO MONTH = INTERVAL '-13' MONTH as the analyzer leaves it: the same
-    // month count in two types, the second cast to the first.
+    // INTERVAL '-1-1' YEAR TO MONTH + INTERVAL '-13' MONTH as the analyzer leaves it: the same
+    // month count in two types, the second cast to the first. (The comparison of the two, a
+    // boolean projection, is no kernel's, and the lift leaves it alone.)
     val yearToMonth = YearMonthIntervalType(0, 1)
-    val relation = liftedRelation(VarkaArrowSource.LiftRule(select("e" -> EqualTo(
+    val relation = liftedRelation(VarkaArrowSource.LiftRule(select("e" -> Add(
       Literal(-13, yearToMonth),
       Cast(Literal(-13, YearMonthIntervalType(1, 1)), yearToMonth, Some("UTC"))))))
     assert(relation.output.size == 2)
@@ -90,12 +91,22 @@ class VarkaLiteralLiftSuite extends SparkFunSuite {
     // between constant folding and running the plan.
     for (plan <- Seq(
         select("t" -> TryEval(Add(Literal(2147483647), Literal(1)))),
-        // As the analyzer leaves try_multiply(1, 2147483647 + 1): the function, its arguments
-        // as children, the TryEval only in its replacement.
-        select("m" -> new TryMultiply(Literal(1), Add(Literal(2147483647), Literal(1)))))) {
+        // As the analyzer leaves try_multiply(1, 2147483647 + 1): a runtime-replaceable whose one
+        // child is its replacement, Multiply in TRY mode over numbers, with no TryEval.
+        select("m" -> new TryMultiply(Literal(1), Add(Literal(2147483647), Literal(1)))),
+        // try_cast is a Cast in TRY mode, neither of the two above.
+        select("c" -> Cast(DateAdd(date, Literal(1)), StringType, Some("UTC"), EvalMode.TRY)))) {
       assert(VarkaArrowSource.LiftRule(plan).collectFirst { case l: LocalRelation => l }.isEmpty,
         plan)
     }
+  }
+
+  test("each scan partition holds seventeen rows, so the kernel's batch is seventeen long") {
+    // A local relation is scanned in the session's leaf parallelism, and LIMIT 1 reads the first
+    // partition: with two, thirty-four rows give each partition seventeen.
+    val relation = liftedRelation(new VarkaArrowSource.LiftRule(() => 2)(
+      select("d" -> DateAdd(date, Literal(1)))))
+    assert(relation.data.size == 2 * VarkaArrowSource.LiftedRows)
   }
 
   test("a query with a FROM is left to the cache rule") {

@@ -5,7 +5,7 @@
     "tests" : 788,
     "executions" : 47323,
     "served" : 1761,
-    "batches" : 6021
+    "batches" : 6018
   },
   "tests" : {
     "alias-resolution-edge-cases.sql" : {
@@ -1831,7 +1831,7 @@
     "postgreSQL/int4.sql" : {
       "executions" : 60,
       "served" : 29,
-      "batches" : 99
+      "batches" : 97
     },
     "postgreSQL/int4.sql_analyzer_test" : {
       "executions" : 7,
@@ -1861,7 +1861,7 @@
     "postgreSQL/join.sql" : {
       "executions" : 2514,
       "served" : 441,
-      "batches" : 1626
+      "batches" : 1625
     },
     "postgreSQL/join.sql_analyzer_test" : {
       "executions" : 813,
