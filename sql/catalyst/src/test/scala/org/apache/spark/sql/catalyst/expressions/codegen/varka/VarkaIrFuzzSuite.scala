@@ -612,7 +612,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   }
 
   test("the int-lane draw spreads its column values over their range") {
-    // A draw that piles its values on one point checks little else: a signed remainder once put
+    // A draw that piles its values on one point checks little else: a signed remainder would put
     // half of every int-lane column at exactly -bound. Over the first 2000 draws, each day or
     // month column's values must lie in [-bound, bound], no one value may hold more than 1% of
     // them, and each half of the range must hold over 40%. The trunc-level column is left out,

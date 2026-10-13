@@ -173,8 +173,8 @@ over its 174,853 values.
 
 **Predictions.**
 
-1. Right: 5 values at `-bound` (under 20), and 217,556 negative and 217,113 positive, both within
-   0.1% of 217,300.
+1. Right: 5 values at `-bound` (under 20), and 217,556 negative and 217,113 positive, within 0.12%
+   and 0.09% of 217,300.
 2. Right: the reach test passes from `LONG_FUZZ_SEED` with nothing missing.
 3. Right: both planted-bug searches pick draw 0, before and after, and shrink to the same case
    (the liveness bug to 2 nodes at length 1 in 14 runs; the misdescribed add to 5 nodes at
