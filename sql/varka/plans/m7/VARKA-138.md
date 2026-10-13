@@ -219,4 +219,103 @@ Two pull requests.
   (2), while the same CASE with an ELSE is the coverage table's own shape; the missing ELSE is a
   null literal of `e`'s type.
 
-## 10. Outcome
+## 10. Outcome (138a)
+
+Done on 13 October 2026, as 3.1 and 3.2 describe, without the SQL side (138b).
+
+* **Both fills (3.2).** `VarkaKernelChecks.runOne` takes the fills to run as a parameter, a list
+  of the new `ValidityFill` (`ZERO`, `ONES`). It loads the class once, runs the kernel once per
+  fill into output buffers of its own, then walks the rows once: the reference and Spark's answer
+  are computed once a row, and every fill's bits and values are held to them. The runs must
+  return the same status, since a kernel declines on its inputs, never its outputs; a status that
+  differs fails as a finding of its own. A failure names its fill in the context, before the
+  `": "` - `kernel of year(d) (output validity pre-filled 0x00): validity of output 0 row 0
+  differs` - which `VarkaFailureSignature` takes off with the context, so no signature changed.
+  Every entry point that compares rows runs both fills: `runAndCompare`, `runAndCompareStatus`
+  and `runEachBodyStatus`, at either lane (3.2 named the first and the last; the status forms
+  go through the same `runOne`). `runOwnBodyAt` and its long-lane form run a batch through its
+  own body at one fill, which test 1 needs.
+* **The planted fault.** `VarkaValidityFault` rewrites an emitted class's bytes with the Class-File
+  API, as `VarkaUnreadLocalsTrim` does, replacing every call that writes an output's validity -
+  the `VarkaVectorSupport` helpers `prepareOutputValidity`, `zero`, `setValid`,
+  `copyColumnValidity`, `orValidityBitsAt*`, `orPartialValidityBitsAt`, `putValidityWord` - by
+  pops of its arguments. A rewrite in the test, not an emit option: it needs no seam in the
+  emitter, so nothing in production can reach it, and it is the same fault whichever form the
+  options emitted (each of the four kernels below had two such calls).
+* **The poisoned batch (3.1).** `checkKernel` takes `poisoned`: 257 rows, every input null on
+  rows 1, 4, ..., 256 (`i % 3 == 1`), values from a stream of their own (`seed ^ 138`), so the
+  four drawn batches, and every seed that replays them, are unchanged. The plan said "every third
+  row"; the phase is chosen so that row 256, the epilogue's one row at every width, is a null
+  lane, and row 1 is one in the first lane group. A batch a guard declines is drawn again nearer
+  zero, as the drawn ones are, with the same null pattern.
+
+**A correction to 3.1.** The plan says both bodies meet a poisoned lane, "the dense one by
+`otherBody`". They do not, and cannot: the other body of a batch with nulls is the same values
+with no nulls, and the harness poisons only a null lane, so the dense body is compared on the
+batch's values unpoisoned. A poisoned lane is something only the masked body can meet; the fixed
+batch puts one in front of it for every row, which is what form 1 asks.
+
+**Why the zero fill passed the admission check.** The driver writes every output's validity
+before anything can return - zeroes it, fills it on a dense batch, or copies and combines the
+inputs' bitmaps - and the loop ORs the rest in (`VarkaBodyEmitter.emitOutputSegments`, "the
+emitter invariant"). So the fill reaches an answer only through a missing write, and a kernel
+that misses none answers the same at any fill. Test 1 shows the check sees it when one is
+missing.
+
+**Tests (5).**
+
+1. **A kernel that never sets a validity bit fails at 0x00 only.** For `year(d)` (int lane) and
+   `greatest(l, l2)` (long lane), at the default width and at four lanes, the faulty kernel on a
+   257-row batch with no nulls passes at 0xFF and fails at 0x00:
+   `kernel of year(d) at the default width, no nulls (output validity pre-filled 0x00): validity
+   of output 0 row 0 differs (want Some(1946), got None)`, and for `greatest(l, l2)`
+   `(want Some(560545912292), got None)`. The kernel as emitted passes at either fill and through
+   the fuzzers' own check, and that check, both bodies at both fills, fails the faulty one.
+2. **A kernel that never clears a bit fails at 0xFF only.** The same fault on a batch whose every
+   row is null: passes at 0x00, fails at 0xFF with `validity of output 0 row 0 differs (want None,
+   got Some(-559038737))` (the int sentinel `0xDEADBEEF`), and for `greatest(l, l2)`
+   `got Some(-9223372036854775808)`, the poison carried through. So each fill catches what the
+   other cannot, in one test (`VarkaCoverageCompositionFuzzSuite`, "a kernel that writes no
+   validity fails at one fill and passes at the other").
+3. **Every row's masked body meets a poisoned lane.** The per-row test counts the poisoned batches
+   compared row by row: 184 of 184 kernels (92 rows at two widths), and asserts one per row and
+   width.
+
+Runs at the defaults, on the laptop, beside other agents' test JVMs:
+`VarkaCoverageCompositionFuzzSuite` (13 tests), `VarkaIrFuzzSuite`, `VarkaSmallTreeSuite`,
+`VarkaGuardEdgeSuite`, `VarkaMemorySanitizerSuite`, `VarkaShrinkerSuite` and `VarkaVariantSuite`,
+the seven suites that reach `VarkaKernelChecks`: 61 passed, 2 cancelled as on master (an opt-in
+dump, and the sanitizer test that needs `-Dvarka.sanitizeMemory=true`), none failed. And the gate's
+catalyst step, `dev/varka_matrix.sh --defaults --module catalyst --split 3 -j 3`, every Varka suite
+of the module with the memory sanitizer on: 52 suites in 421 s, 617 tests passed, none failed, 40
+cancelled, each an opt-in (the exhaustive sweeps, the assembly tests with no disassembler, the
+dumps, the JFR case).
+
+**Predictions scored (6.1), 138a's.**
+
+1. **Held.** No kernel failed at the zero fill, in the seven suites or the catalyst matrix run;
+   the planted fault did, at the zero fill alone on a batch with no nulls (test 1).
+2. **Failed.** The per-row test took 38% longer by minimums, against at most 25% predicted. Five
+   interleaved pairs, master's test code and this change's on the same build, 17:00 to 17:09 CEST
+   with the load average rising from 1.3 to 6.9: before 1.218, 1.539, 1.480, 1.888, 2.014 s;
+   after 1.816, 1.682, 1.734, 2.228, 2.394 s. Minimums 1.218 and 1.682 s (+38%); the median pair
+   +18%. The prediction assumed emission and the reference dominate and the kernel's second run
+   is cheap; the second half held, the first did not, because the fixed batch alone adds more
+   than a fifth of the reference's work: 257 rows against the drawn batches' mean of 238 (lengths
+   1, 7, 64, 100, 257 and 1,000, uniform), and the answers held to Spark rose from 347,552 to
+   442,128 (+27.2%). At about 1.5 s for 184 kernels the per-row work, not emission, is what the
+   test spends.
+
+   The times are the child JVM's: the suite runs in a JVM of its own (`VarkaOwnJvm`), and the
+   time sbt prints for the test it asks first is the whole child run's - 42.8, 32.7 and 32.0 s on
+   master for a test that took 2.4 to 2.9 s of it. The per-test times are in the child's JUnit
+   report under `target/tmp/varka-own-jvm*` (10.1's candidate).
+
+### 10.1 Candidate rows found
+
+- **An own-JVM suite reports its tests' own times.** `VarkaOwnJvm` reruns a suite in a child JVM
+  and passes or fails each parent test from the child's report, so sbt's per-test time is the
+  child's whole run for the first test asked and about zero for the rest: here 42.8 s printed for
+  a 2.8 s test. The child's JUnit report holds each test's time; the parent test could report it
+  (an `info` line, or the parent's own duration), so a measurement does not need the temporary
+  directory.
