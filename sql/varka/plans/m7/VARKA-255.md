@@ -69,24 +69,28 @@ by not needing it.
 ### 2.2 The fork's runner slots on 13 October: full only while a full-matrix run held them
 
 `build_main.yml` runs on the fork for every push; 48 Build runs were created on 13 October, and
-the 36 that ran to success or failure were read job by job (`actions/runs/<id>/jobs`).
+the 36 that ran to success or failure were read job by job (`actions/runs/<id>/jobs`, and for the
+one run with two attempts `actions/runs/<id>/attempts/<n>/jobs`, since the first form returns the
+latest attempt's list with the earlier attempt's times on the jobs it carried over).
 
 * **Most runs are small.** A Varka-scoped change runs 6 to 14 jobs (precondition, linters, docs
   checks, the Varka suites of catalyst and sql, the engine on two architectures, the assembly
-  gate); two runs, `varka-322` from 14:25 and `varka-312b`'s rerun from 18:56, ran Spark's full
-  module matrix, 35 jobs each, 136 and 73 minutes, their longest job (`Build modules: sql - slow
-  tests`) 118 and 128 minutes.
-* **The slots were saturated for 48 minutes of the day.** Minutes at each count of running jobs,
-  from every job's start and end: 0 jobs for 257 minutes, 1 to 5 jobs for 432, 6 to 10 for 102,
-  11 to 19 for 33, and 20 (the account's limit, GitHub Actions limits: "Free: 20 jobs running at
-  once") for 48, all of them between 14:44 and 15:38, inside `varka-322`'s run.
-* **Job waits came from that one run.** Of 365 jobs, the median waited 2 s from creation to
-  start and the 90th percentile 4.5 min; the long waits, up to 49 minutes (`varka-bg-processes`'
-  `Precompile Spark`), were scoped and small runs queued behind `varka-322`'s 35 jobs. This is
+  gate); two runs ran Spark's full module matrix, 35 jobs each: `varka-322` from 14:25 to 16:42
+  (136 minutes) and `varka-312b` from 16:25 to 18:56 (151 minutes, failing two jobs, which were
+  rerun from 18:56 to 20:10). Their longest job, `Build modules: sql - slow tests`, took 118 and
+  128 minutes, and the two runs overlapped for 17 minutes.
+* **The slots were saturated for 79 minutes of the day.** Minutes at each count of running jobs,
+  from every job's start and end: 0 jobs for 225 minutes, 1 to 5 jobs for 370, 6 to 10 for 110,
+  11 to 19 for 89, and 20 (the account's limit, GitHub Actions limits: "Free: 20 jobs running at
+  once") for 79, all of them between 14:44 and 17:16, while one or both full-matrix runs held
+  the slots.
+* **Job waits came from those runs.** Of 367 jobs, the median waited 2 s from creation to start
+  and the 90th percentile 6 min; the long waits, up to 49 minutes (`varka-bg-processes`'
+  `Precompile Spark`), were smaller runs queued behind `varka-322`'s 35 jobs. This is
   the "queue sat for up to fifty minutes" of `m7/PLAN.md` 9.2.
-* **One Build at a time would have cost the day six hours.** The 36 runs took 1,132 run-minutes
-  between 06:54 and 21:27. Run strictly one after another, in the order they started, the last
-  would have finished at 03:41 the next morning.
+* **One Build at a time would have cost the day almost nine hours.** The 36 runs, 37 attempts,
+  took 1,283 run-minutes between 06:54 and 21:27. Run strictly one after another, in the order
+  they started, the last would have finished at 06:12 the next morning.
 * **`ubuntu-slim` counts against the twenty.** During the saturated window the `Run Spark UI
   tests` jobs, which run on `ubuntu-slim`, waited 19 and 27 minutes. So a job that only waits
   still holds a slot.
@@ -99,13 +103,13 @@ run should leave slots for the small runs beside it.**
 ### 2.3 The laptop queue has not run a rerun since 3 October
 
 `dev/varka_ci_queue.sh run` dispatches `update_build_status.yml` after every rerun it completes
-(`VARKA-227.md` 2). The base repository's dispatch history: 69 dispatches from 29 September to
-3 October, the last at 22:04 on 3 October, none since. The queue file in the clone's git
-directory is empty and the runner's lock was last taken at 23:43 on 3 October. The one rerun on
-13 October, `varka-312b`'s, was started under the owner's account at 18:56, two and a half hours
-after its run was created at 16:25 and cancelled, and no sync dispatch followed it, so it was not
-the queue's `run`. So for ten days the fork's CI has run without a queue, the checks have been
-synced only by the late cron (2.1), and 2.2's numbers are what no queue looks like.
+(`VARKA-227.md` 2). The base repository's dispatch history: 69 dispatches from 29 September to 3
+October, the last at 22:04 on 3 October, none since. The queue file in the clone's git directory is
+empty and the runner's lock was last taken at 23:43 on 3 October. The one rerun on 13 October,
+`varka-312b`'s at 18:56, reran the two jobs its first attempt had failed, the minute that attempt
+ended, and no sync dispatch followed it, so it was not the queue's `run`. So for ten days the fork's
+CI has run without a queue, the checks have been synced only by the late cron (2.1), and 2.2's
+numbers are what no queue looks like.
 
 ### 2.4 Each repository can read the other without a credential, and write only itself
 
@@ -222,7 +226,7 @@ flag can only name a step beyond the spread.
 ### 2.8 What the check rejected
 
 1. **A cron-driven queue** (`m7/PLAN.md` 2.4): the cron runs hours late (2.1).
-2. **One Build at a time** (227): six hours on 13 October's load (2.2).
+2. **One Build at a time** (227): almost nine hours on 13 October's load (2.2).
 3. **A dispatcher that cancels and reruns.** It needs a waiter that hears the rerun end, which
    with a `GITHUB_TOKEN` rerun is either an undocumented `workflow_run` or a job holding a slot;
    and a cancelled attempt is what made the PR's check misleading in 227's first friction.
@@ -237,77 +241,94 @@ flag can only name a step beyond the spread.
 
 ## 3. The design
 
-### 3.1 The queue becomes an admission step inside the Build
+### 3.1 The queue becomes an admission job inside the Build
 
 The Build itself decides whether it may fan out, so nothing outside it has to cancel, rerun or
-wait for it. One step is appended to the `precondition` job of `build_and_test.yml`, after
-`Check all modules` has written `required`, and runs only on a repository other than apache/spark
-and vecbricks/varka, on a `push`:
+wait for it. `build_and_test.yml` gains one job, `admit`, on `ubuntu-slim`:
 
-* **A scoped or documents-only run passes at once.** "Full-matrix" here means a run whose
-  `Precompile Spark` job runs: the step evaluates that job's own condition on `required`
-  (`build_and_test.yml` 646-655: `build`, `pyspark`, `pyspark-pandas`, `pyspark-periodic` or
-  `sparkr` true), which both Varka scopes set false (230-245), so a scoped or documents-only run
-  ends the step in under a second. A run that precompiles without the module matrix, as
-  `varka-bg-processes` did on 13 October (13 jobs), counts as full: it is the precompile and its
-  dependants that take the slots.
-* **A full-matrix run waits for older full-matrix runs.** The step lists the fork's Build runs that
-  are `queued` or `in_progress` and were created before its own, and reads each one's jobs. An older
-  run blocks while its `Check changes` job (`Run / Check changes` in the jobs API, matched by
-  suffix) is still running, since that job either is still choosing (about a minute) or is waiting
-  at this same step, which only a full-matrix run does; and while its `Precompile Spark` job exists
-  and is not `skipped`, which marks a run that passed the step as full-matrix; a run with no job
-  started yet blocks too. The step polls every 120 seconds until no older run blocks. Nothing
-  depends on reading another run's annotations or outputs. Order is first come, first served by run
-  creation, the order GitHub's own queue keeps; 227's pull-request-number order assumed merges in
-  number order, which 23 merges in a day out of order do not keep.
-* **`ci-hold` takes a pull request out.** The step finds its pull request on the base
-  (`pulls?head=MaxGekk:<branch>`) and, when it carries the label, fails with "held by ci-hold".
-  The run stops at its first job; removing the label and rerunning the run resumes it.
+* **Which runs it gates.** `admit` needs `precondition` and carries `Precompile Spark`'s own
+  condition (`build_and_test.yml` 648-658: `build`, `pyspark`, `pyspark-pandas`, `pyspark-periodic`,
+  `sparkr`, `docker-integration-tests`, `k8s-integration-tests`, `oidc-e2e` or `tpcds-1g` true), and
+  `precompile` gains `needs: admit` and `needs.admit.result != 'failure'` in its condition. So
+  "full-matrix" means exactly the runs that precompile Spark and fan out behind it, the two
+  conditions sit side by side in one file, and a run whose `admit` is skipped - every Varka-scoped
+  and documents-only run, whose scopes set `build` and the Python and Docker gates false (230-245),
+  and whose 13 October runs read here skipped `Precompile Spark` - is not touched; its light jobs
+  never needed `precompile`. A run that precompiles without the module matrix, as
+  `varka-bg-processes` did on 13 October (13 jobs), counts as full: the precompile and its
+  dependants are what take the slots. On apache/spark and on vecbricks/varka the job passes at once.
+* **The marker is the job itself.** An `admit` job that is `in_progress` is a full run waiting;
+  one that succeeded, in a run still in progress, is a full run that has fanned out. No
+  annotation, output or copy of the condition is read from another run.
+* **The rule.** `admit` lists the fork's Build runs that are `queued` or `in_progress` and reads
+  each one's jobs (`per_page=100`, matched by the `admit` job's name as a suffix, since the API
+  prefixes the caller's job name). It waits while any other run has a succeeded `admit`, and while
+  any other run's `admit` started waiting before its own; otherwise it ends and the fan-out
+  starts. The order is the `admit` jobs' own `started_at`, which a rerun renews, so a rerun of an
+  old run queues behind the full runs already waiting or running instead of passing them on its
+  first attempt's creation time. It polls every 120 seconds. A run whose precondition is still
+  choosing has no `admit` job yet and takes its place when it has one. First come, first served
+  is the order GitHub's own queue keeps; 227's pull-request-number order assumed merges in number
+  order, which 13 October's 23 merges did not keep.
+* **`ci-hold` takes a pull request out.** `admit` finds its pull request on the base
+  (`pulls?head=MaxGekk:<branch>`) and, when it carries the label, fails with "held by ci-hold",
+  so `precompile` and everything behind it skip. Removing the label and rerunning the failed jobs
+  resumes it, and the rerun's `admit` waits its turn by the rule above.
 * **A re-push needs nothing.** `build_and_test.yml`'s concurrency group per ref with
   `cancel-in-progress: true` (lines 75-77) cancels the waiting run when the branch moves, as it
   does today.
-* **The wait has a deadline**: 330 minutes, inside the 360-minute job cap, after which the step
+* **The wait has a deadline**: 330 minutes, inside the 360-minute job cap, after which `admit`
   fails with the run it waited on named.
 * **A full-matrix run leaves room.** The `Build modules` matrix's `max-parallel` (line 412) is
   20, so one full run can take every slot (2.2). On a fork it becomes 12, keeping eight slots for
-  the small runs beside it; on apache/spark it stays 20. `strategy` may read the `github`
-  context (Contexts, availability table), so this is one expression on the repository name.
+  the small runs beside it; on apache/spark it stays 20. `strategy` may read the `github` context
+  (Contexts, availability table), so this is one expression on the repository name.
 
-What this costs and gains, against the laptop queue: a waiting full-matrix run holds one
-`ubuntu-slim` slot while it waits (2.2), and a run waits only behind another full-matrix run,
-which happened twice on 13 October; nothing runs on the laptop; the run is `in_progress` while it
-waits, so the pull request's check says "in progress" rather than "cancelled", which removes 227's
-first friction; and 211's docs-only verdict keeping is unnecessary, since a documents-only push
-already runs only six short jobs (13 October's documents-only runs, 2.2; VARKA-160). The step's
-token needs `actions: read`, added beside `packages: write` in `build_main.yml`'s job, the only
-change to that file. The logic is a stdlib Python script, `dev/varka_ci_admit.py`, so it can be
-run and tested off CI.
+What this costs and gains, against the laptop queue: a waiting full run holds one `ubuntu-slim`
+slot while it waits (2.2), and a run waits only behind another full run, which on 13 October would
+have been `varka-312b` for the 17 minutes it overlapped `varka-322`; nothing runs on the laptop;
+the run is `in_progress` while it waits, so the pull request's check says "in progress" rather
+than "cancelled", which removes 227's first friction; and 211's docs-only verdict keeping is
+unnecessary, since a documents-only push already runs only six short jobs (13 October's
+documents-only runs, 2.2; VARKA-160). The job's token needs `actions: read`, added beside
+`packages: write` in `build_main.yml`'s job, the only change to that file. The logic is a stdlib
+Python script, `dev/varka_ci_admit.py`, so it can be run and tested off CI.
 
-The step polls with the fork's token, which every job of the fork shares at 1,000 requests an
-hour: one run listing and one job listing per older run in flight per poll, under 200 requests
-an hour per waiting run with five runs in flight.
+The job polls with the fork's token, which every job of the fork shares at 1,000 requests an hour:
+one run listing and one job listing per run in flight per poll, under 200 requests an hour per
+waiting run with five runs in flight.
 
-### 3.2 The check sync: on the base, hung on the pull request's push
+### 3.2 The check sync: on the base, after the check exists
 
-`update_build_status.yml` keeps its pass as it is and gains a loop and a trigger:
+`update_build_status.yml` keeps its pass and gains a loop and a trigger:
 
-* **Trigger**: `pull_request_target` on `opened`, `reopened` and `synchronize`, the event
-  `notify_test_workflow.yml` already takes (2.4 above), beside the cron (kept as a backstop) and
-  `workflow_dispatch`.
-* **Loop**: the pass repeats every 120 seconds while any open pull request's `Build` check is not
-  completed, and ends when all are, or at 345 minutes. A pass patches a check only when its
-  status or conclusion differs from the fork run's, and skips pull requests whose check is already
-  completed at the current head; today's pass patches every completed check on every pass.
-* **One loop at a time**: `concurrency: {group: update-build-status, cancel-in-progress: false}`.
-  A push during a loop leaves one run pending, which starts when the loop ends and finds nothing
-  or the new head; a loop already running reads every open pull request on each pass, so a new
-  push is synced by it within one interval.
+* **Trigger**: `workflow_run` on the completion of `notify_test_workflow.yml` ("On pull request
+  update"), which runs on every push to a pull request (2.4) and creates the `Build` check; the
+  sync then starts with the check in place, rather than racing notify on the same
+  `pull_request_target` event and finding no check (which its backfill would answer with a second
+  one). `workflow_run` needs the file on the base's default branch, where it is, and notify is
+  started by a person's push, not by a token, so the event fires. The cron stays as a backstop, and
+  `workflow_dispatch` stays.
+* **Loop**: the pass repeats every 120 seconds while any open pull request's fork run is not
+  completed, read from the run itself rather than from the check, so a rerun that reopens a
+  completed run keeps or restarts the loop's work. A pass reads every open pull request's run as
+  today's does and patches a check only when its status or conclusion differs from the run's;
+  today's pass patches every completed check on every pass.
+* **One loop at a time, and no gap at the cap**: `concurrency: {group: update-build-status,
+  cancel-in-progress: false}`, so a trigger during a loop leaves one run pending, and a loop
+  already running reads every open pull request on each pass. At 345 minutes, if any run is still
+  in flight, the loop dispatches the workflow again before it ends (`workflow_dispatch` is the
+  exception to the rule that a `GITHUB_TOKEN`'s events start nothing, 2.4), so a full run that
+  waited and then ran past the cap keeps its sync.
+* **A rerun with no push**: rerunning a fork run fires nothing on the base. While a loop is alive
+  it sees the rerun; when none is, the person who reruns dispatches the sync
+  (`gh workflow run update_build_status.yml -R vecbricks/varka`), as the laptop script did after
+  its reruns (`VARKA-227.md` 2); the backstop cron catches the rest, hours late.
 
 Requests: one pull-request listing per pass plus about three per pull request with a run in
 flight; with four in flight, about 400 an hour against the base's 1,000. The sync no longer
-depends on anything dispatching it, so `dev/varka_ci_queue.sh`'s dispatch goes with the script
-(3.7).
+depends on anything dispatching it after a push, so `dev/varka_ci_queue.sh`'s dispatch goes with
+the script (3.7).
 
 ### 3.3 Master's head after each merge, on the base
 
@@ -329,8 +350,12 @@ the merge base is the head itself, so 255b reads what `dev/varka_scoped_suites.s
 inputs on `master` and gives the master run a fixed choice - the defaults, or a rotation by date -
 before its first run rather than after its first red one.
 
-`varka-weekly-matrix.yml` passes an explicit `jobs` JSON too, Spark's full module set as
-`build_java25.yml` names it, so that it runs the matrix its comment promises; and the
+`varka-weekly-matrix.yml` passes an explicit `jobs` JSON too, so that it runs the matrix its
+comment promises: Spark's module set as `build_java25.yml` names it, but with
+`k8s-integration-tests` and `oidc-e2e` false (this fork switches the Kubernetes job off because it
+cannot build its image, `build_and_test.yml` 288-296, and an explicit JSON is taken as it is,
+bypassing that line), and with `lint`, `java25`, `docs` and the five `varka-*` keys added, which
+`build_java25.yml`'s JSON lacks; and the
 `InvalidJavadocPosition` finding that has failed it three Sundays is fixed in the same pull
 request, since the master run's linter would fail on it as well.
 
@@ -346,10 +371,15 @@ Both in the Varka suite jobs of a pull request's Build, after the suites:
   input. A new test that is already a fuzz or sweep under a seed is rerun with five other seeds,
   which is what a rerun is for there.
 * **A fix's test fails on the base.** For a pull request labelled `fix`, the step builds the merge
-  base's main sources with the pull request's test sources over them (`git checkout <base> --`
-  every path outside `src/test`) and runs the new tests; it passes when each fails or does not
-  compile, and fails, naming the test, when one passes on the base. A fix whose test passes before
-  the fix has not shown the bug.
+  base's main sources with the pull request's test sources over them: `git checkout <base> --`
+  every changed path outside `src/test`, and deletes the main files the pull request adds (`git
+  diff --diff-filter=A`), which a checkout of the base cannot remove and which may hold the fix.
+  It then runs the new tests and passes when each fails, and fails, naming the test, when one
+  passes on the base. A fix whose test passes before the fix has not shown the bug. When the
+  overlay does not compile - a test helper using an API the fix adds - nothing is shown either
+  way, so the step reports "not shown: the tests need the fix's main code" as a notice and passes;
+  the count of such pull requests is part of section 6, and if it is most of them the check needs
+  a finer overlay or is dropped.
 
 These two are the most likely to outgrow the row: the test listing has edge cases (a renamed test,
 a test moved between files, a parameterized title), and the base build adds a compile. If either
@@ -382,8 +412,11 @@ so.
   keeps `benchmark.yml` as it is, dispatchable at a branch's ref.
 * **What does not fit**: a class whose single run exceeds about 50 minutes on a runner cannot pair
   at three rounds inside six hours. `VarkaWideKernelBenchmark` (88 to 189 minutes, 2.6) is the
-  one known; its pair runs on a case subset per job through `VarkaBenchmarkBase`'s case filter
-  (VARKA-322) or stays a laptop pair, and section 9 records which.
+  one known. A case subset per job is not available as things stand: `VarkaBenchmarkBase`
+  refuses to run part of a benchmark while results files are written
+  (`VarkaBenchmarkBase.java:64-70`), and the pair reads the results file each round writes
+  (`dev/varka_bench_regen.sh:198`). So its pair stays a laptop pair unless 255a teaches the pair to
+  read the harness's printed table for a subset, and section 9 records which it did.
 
 The three waiting jobs are the first users: 322a's ten pairs, 325's two results files and 322a-2's
 pair, each dispatched with `pr` set.
@@ -411,13 +444,13 @@ pair, each dispatched with `pr` set.
 
 ### 3.7 The laptop queue retires
 
-`dev/varka_ci_queue.sh` is deleted in the pull request after the admission step has been proven
+`dev/varka_ci_queue.sh` is deleted in the pull request after the admission job has been proven
 (section 8), with `sql/varka/skills/working-in-this-repo.md`'s two queue sections rewritten in
 the past tense, and its `update_build_status.yml` dispatch comment removed.
 
 ### 3.8 Deliberately unchanged
 
-* **The precondition's scope rules** (`dev/varka_scope.py`, VARKA-160): the admission step reads
+* **The precondition's scope rules** (`dev/varka_scope.py`, VARKA-160): the admission job reads
   their verdict and does not change it.
 * **The checkout-and-sync merge with apache/spark** before every build
   (`working-in-this-repo.md`, "A red Build here may be failing on code this repository does not
@@ -446,10 +479,10 @@ None: no emitted code changes.
 
 | file | what |
 | --- | --- |
-| `.github/workflows/build_and_test.yml` | the admission step in `precondition`; `max-parallel` 12 on forks for `Build modules` |
+| `.github/workflows/build_and_test.yml` | the `admit` job and `precompile`'s need of it; `max-parallel` 12 on forks for `Build modules` |
 | `.github/workflows/build_main.yml` | `actions: read` beside `packages: write` |
 | `dev/varka_ci_admit.py` | the admission decision: scoped or full, older full runs in flight, `ci-hold` |
-| `.github/workflows/update_build_status.yml` | `pull_request_target`, the loop, one loop at a time, patch only on change, the step-time summary |
+| `.github/workflows/update_build_status.yml` | `workflow_run` on notify, the loop, one loop at a time, the re-dispatch at the cap, patch only on change, the step-time summary |
 | `.github/workflows/varka-master.yml` | new: master's head after each merge, explicit `jobs` |
 | `.github/workflows/varka-weekly-matrix.yml` | explicit `jobs` |
 | the file the Java linter names | the `InvalidJavadocPosition` fix |
@@ -466,12 +499,12 @@ None: no emitted code changes.
 ## 5. Tests, and what each is for
 
 1. **`dev/varka_ci_admit.py` over recorded API responses** (unit tests in Python, run by the docs
-   job): a scoped run passes; a run with only `pyspark` true counts as full; a full run with an
-   older full run in flight waits and with only younger ones passes; a full run behind an older run
-   still in its `Check changes` job waits; a held pull request fails; a finished first job with
-   neither name fails loudly; a run listing with a completed older run passes. Without these, the
-   only test of the step is a live day of CI.
-2. **The step on the fork, live**: a scoped push passes the step in under a second; two
+   job): a full run with another run's `admit` succeeded and that run in flight waits; a full run
+   whose `admit` started first passes ahead of one that started later; a rerun of an old run
+   (renewed `admit` start) waits behind a run already waiting; a run with no `admit` job yet does
+   not block; a held pull request fails; a completed run blocks nothing; a job listing over one
+   page is read whole. Without these, the only test of the job is a live day of CI.
+2. **The job on the fork, live**: a scoped push skips `admit` and `precompile`; two
    full-matrix pushes (a workflow-file change each) a minute apart: the second's log says it
    waited on the first's run id and its fan-out starts within one poll of the first's end.
 3. **`max-parallel` on the fork**: the full run's job list never shows more than 12 `Build
@@ -501,7 +534,8 @@ No pinned fixture moves.
 After each pull request lands: the fork's job waits and run times on the next working day with at
 least one full-matrix run, read the way 2.2 read 13 October; the lag from a fork run's end to its
 check's update; master runs per day and their times; the three waiting benchmark jobs' times and
-CPUs; the budget's spread per step after two weeks of master runs.
+CPUs; the budget's spread per step after two weeks of master runs; and, over the first ten
+pull requests labelled `fix`, how many the base overlay could not compile.
 
 ### 6.1 Predictions, registered before the run
 
@@ -511,7 +545,7 @@ overhead being what plans missed, so the estimates below carry a factor of 1.5 o
 arithmetic unless they come from a measured run.
 
 1. On a day with a full-matrix run, no scoped run's job waits more than 10 minutes, against 49 on
-   13 October; the 90th percentile job wait stays under 5 minutes (4.5 measured with no queue).
+   13 October; the 90th percentile job wait stays under 6 minutes (6 measured with no queue).
 2. A full-matrix run capped at 12 parallel `Build modules` jobs takes at most 20% longer than an
    uncapped one on a quiet fork, since its critical path is the 118 to 128 minute `sql - slow
    tests` job (2.2's two runs).
@@ -534,19 +568,20 @@ arithmetic unless they come from a measured run.
 
 ## 7. Risks
 
-1. **The admission step holds a slot.** A full run waiting behind another holds an `ubuntu-slim`
+1. **The admission job holds a slot.** A full run waiting behind another holds an `ubuntu-slim`
    slot for up to two hours; two waiting hold two. Test 2 and prediction 1 measure it; if waits
-   pile up, the step can cancel its own run instead of waiting, which is 227's cancellation
+   pile up, the job can cancel its own run instead of waiting, which is 227's cancellation
    brought back for full runs only.
-2. **The job names as the full-run marker.** The step recognizes a full-matrix run by its
-   `Check changes` and `Precompile Spark` jobs (3.1); a rename upstream would blind it. Test 1
-   runs over recorded job listings, and the step fails loudly, not open, when a run whose first
-   job has ended carries neither name.
+2. **The `admit` job's name and condition.** Another run is recognized by its `admit` job (3.1),
+   and `admit` copies `Precompile Spark`'s condition; an upstream edit to that condition must be
+   copied too. The two sit side by side in `build_and_test.yml`, and a test in
+   `dev/varka_ci_admit.py`'s suite reads the file and fails when the two conditions differ.
 3. **The sync loop's slot on the base.** One `ubuntu-slim` job for as long as a run is in flight,
    on the base's own slots, beside master runs (about ten jobs) and up to six benchmark jobs: 17 of
    20 at the busiest. A benchmark list larger than that waits in GitHub's queue, which costs time
    and nothing else.
-4. **`pull_request_target` runs with a write token.** The loop must never check out or execute the
+4. **The base's workflows run with a write token.** The loop, started from notify's
+   `pull_request_target` run, must never check out or execute the
    pull request's code; it reads the API only, as `notify_test_workflow.yml` does. The review of
    the PR checks that the file contains no `actions/checkout`.
 5. **Runner pairs on a CPU nobody chose.** A pair's verdict is read on its own machine, with the
@@ -556,8 +591,8 @@ arithmetic unless they come from a measured run.
 6. **The master run's first runs fail on what nothing has run since September**, the Javadoc
    position first. That is the point of the run; the second PR of section 8 fixes what its own
    first run shows before it merges.
-7. **GitHub changes a limit.** Every limit the design leans on is quoted in section 2 with its
-   page; the step and the loop log their request counts, so a change shows as a failure with a
+7. **GitHub changes a limit.** Every limit the design leans on is quoted in section 2 with its page;
+   the admission job and the loop log their request counts, so a change shows as a failure with a
    number rather than as silence.
 
 ## 8. Sequencing
@@ -571,7 +606,7 @@ on it and it touches nothing the others do.
 2. **255b, master after each merge**: `varka-master.yml`, the weekly matrix's explicit `jobs`, the
    Javadoc fix and whatever else its first run shows; test 5; predictions 5. Confirms 2.5's reading
    of the weekly run's skip before relying on it.
-3. **255c, the admission step and the check sync**: 3.1 and 3.2, `dev/varka_ci_admit.py` and its
+3. **255c, the admission job and the check sync**: 3.1 and 3.2, `dev/varka_ci_admit.py` and its
    tests; tests 1 to 4; predictions 1 to 4 over the next working day with a full-matrix run.
 4. **255d, the budget**: `step-budget.tsv` seeded from 2.7, `dev/varka_ci_times.py`, the nightly's
    `.secs`, the check summary; `dev/varka_ci_queue.sh` deleted and the skills rewritten; test 9;
