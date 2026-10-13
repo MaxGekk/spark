@@ -384,8 +384,9 @@ Done on 13 October 2026, as 3.3 and 3.4 describe, in `VarkaCoverageDifferentialS
 * **The partition oracle (3.3, test 4).** One test per predicate row: on each of the three
   fixtures, under the default optimizer and with `BooleanSimplification`, `NullDownPropagation`
   and `InferFiltersFromConstraints` in `spark.sql.optimizer.excludedRules` of both sessions,
-  `WHERE p` and `WHERE NOT (p)` run on Varka with a Varka filter asserted in each plan, each is
-  compared on rows with Spark's, the two share no `rid`, and the rows in neither are Spark's
+  `WHERE p` and `WHERE NOT (p)` run on Varka with a Varka filter in each plan whose kernel served
+  the batches and left no conjunct to a row `FilterExec`, with batch pruning off on both sessions,
+  each is compared on rows with Spark's, the two share no `rid`, and the rows in neither are Spark's
   `WHERE (p) IS NULL` on ids and values. 27 rows, 162 cases, 324 Varka filters: all agree. The
   comparison is a function of the six answers (`partitionFindings`), so the planted test feeds it
   real answers with Spark's unknown rows standing in for `NOT (p)`, which is what a filter that
@@ -405,13 +406,15 @@ Done on 13 October 2026, as 3.3 and 3.4 describe, in `VarkaCoverageDifferentialS
   ANSI and with the in-memory scan's batch pruning off on both sessions, since `rid < 0` rules out
   every batch by its statistics and a pruned batch meets no kernel. Outcomes compare as rows, or
   as condition, SQLSTATE and message parameters; one engine raising alone fails. A skipped
-  position Varka does not serve with a kernel (`numVarkaBatches > 0`, stronger than a node in the
-  plan, since a node can decline every batch) must be on the declined list with its reason, and a
+  position Varka does not serve with a kernel must be on the declined list with its reason, and a
   listed one that is served fails as stale, under the defaults; under a configuration of the option
-  matrix only the outcomes are compared. A further test checks every declined entry names a row and
-  a position.
+  matrix only the outcomes are compared. Served means the kernels served a batch
+  (`numVarkaBatches > 0`) and left nothing to the row engine - no projection entry in the residual,
+  no row `FilterExec` above the Varka filter - since a node in the plan can decline every batch or
+  fuse only the guard. A further test checks that every declined entry is one the reach check
+  reads: a row the table has, a position its form runs, and not the lone position.
 
-**Two corrections to 3.4's shapes.** As first written - `CASE WHEN rid < 0 THEN e ELSE <column>`
+**Three corrections to 3.4's shapes.** As first written - `CASE WHEN rid < 0 THEN e ELSE <column>`
 with the column of `e`'s type - the CASE reached a kernel for 26 of 65 rows, not the 61 it reaches
 now, for two reasons the probe's date and int fixture did not meet:
 
@@ -422,12 +425,22 @@ now, for two reasons the probe's date and int fixture did not meet:
 2. *One kernel holds one lane*, so the int guard `rid < 0` over a long-lane value mixes lanes and
    declines; so does `rid >= 0 OR p` for a long-lane predicate (the AND was served, as a filter's
    conjuncts are fused apart). The extremes fixture carries `lrid`, `rid` as a BIGINT, and a
-   long-lane CASE or predicate is guarded by it.
+   long-lane CASE, AND or predicate is guarded by it.
+3. *Varka fuses no `IS NOT NULL` over a computed value*, so position 4 as planned,
+   `WHERE rid < 0 AND e IS NOT NULL`, put `isnotnull(e)` in a row `FilterExec` above a Varka filter
+   that held only `rid < 0`: Spark evaluated `e`, not the kernel, in 61 of 65 rows (the other four
+   the optimizer had rewritten onto columns). The probe of 2 counted those as fused, and so did the
+   first version of this test, which asked only for a served batch; the review found it (10.4).
+   Position 4 is now `WHERE <guard> < 0 AND e = <column of e's type>`, a comparison the kernel
+   evaluates.
 
-**The declined list, 27 entries.** 19 int-valued rows in the COALESCE (item 55); `hour(t)`,
-`minute(t2)` and `second(t)` in the CASE and the COALESCE, an int computed on the long lane, which
-is narrowed only at a kernel's store (VARKA-28); and `d + CAST(i AS INTERVAL DAY)` in both, whose
-column bound declines the batch whichever arm reads the column (item 96, below).
+**The declined list, 38 entries.** 19 int-valued rows in the COALESCE (item 55); `hour(t)`,
+`minute(t2)` and `second(t)` in the CASE, the COALESCE and the false AND, an int computed on the
+long lane, which is narrowed only at a kernel's store (VARKA-28); `d + CAST(i AS INTERVAL DAY)` in
+the same three, whose column bound declines the batch whichever side reads the column; and seven
+rows behind the false AND whose check condemns the batch from the extremes row's lane although
+`rid < 0` rejected it - `make_date(2021, i, 1)`, `add_months(d, i)`, `d + ym`, `d - ym`,
+`ym - ymm`, `i + 1`, `year(d) + i` (item 96, below, for both).
 
 **The form bites.** Under the matrix configuration `checkIntOverflow=false`, which emits ANSI
 arithmetic without its overflow check, three rows fail alone, each "only Spark raises": `i + 1`
@@ -445,7 +458,12 @@ reverse as "only Spark raises", and an error with one parameter changed as "erro
 configurations `cse=false` (215 passed) and `checkIntOverflow=false` (212 passed, the 3 above
 failed). Then every configuration of the matrix, `--all -j 8`, 21:10 to 21:30 CEST: the defaults and
 all 50 configurations passed, `checkIntOverflow=false` with its three tests cancelled by the new
-skip lines.
+skip lines. After the review's fixes (10.4), again, 21:55 to 22:20 CEST: every configuration's tests
+passed, and the runner failed `guardUnderArm=false` for seven tests that fused under the defaults
+and fuse nothing there - the rows whose CASE and COALESCE positions a kernel served only because
+the arm qualifies their guard, and whose other positions raise or decline on the extremes row.
+That is the configuration's design, as for three of its existing skip lines, so the seven are
+`declines` lines in `skips.tsv`, and `--config guardUnderArm=false` passed with them.
 
 **Batch pruning had to go.** With `spark.sql.inMemoryColumnarStorage.partitionPruning` left on,
 all 92 tests failed: behind `rid < 0`, the false AND, no kernel served a batch for any row, since
@@ -464,8 +482,9 @@ passed every outcome by never running.
 4. **Failed for the COALESCE, held for the CASE.** Of the 65 projection rows, a kernel served the
    untaken CASE arm for 61 and the later COALESCE argument for 42, against at least 50 in both
    predicted; 42 rows reach both. The 23 the COALESCE misses are the int-valued rows (item 55), the
-   three TIME fields (VARKA-28) and the column bound (item 96). Behind the false AND all 65 were
-   served, and of the predicate rows all 27 behind the false AND and all 27 behind the true OR
+   three TIME fields (VARKA-28) and the column bound (item 96). Behind the false AND 54 of 65 were
+   served (the eleven: the seven unqualified checks and the column bound of item 96, and the three
+   TIME fields), and of the predicate rows all 27 behind the false AND and all 27 behind the true OR
    once the long-lane ones are guarded on their lane. Alone, 57 of 65 were served; the other 8
    raise on the extremes row on both engines alike - `d + CAST(i AS INTERVAL DAY)`,
    `make_date(2021, i, 1)`, `add_months(d, i)`, `d + ym`, `d - ym`, `ym - ymm`, `i + 1` and
@@ -480,9 +499,11 @@ passed every outcome by never running.
 
 **Candidate rows found (138b).**
 
-- **A column's bound qualified by the arm that reads it** - `m8/SCOPE.md` item 96, added: `d +
-  CAST(i AS INTERVAL DAY)` declines its batch from an untaken CASE arm or a later COALESCE argument,
-  because the bound on `i` is checked per batch before the kernel, whatever arm reads `i`.
+- **A check or a column bound qualified by the side that reads it** - `m8/SCOPE.md` item 96,
+  added: seven rows' checks condemn the batch from the right side of a false AND, which
+  `guardUnderArm` qualifies under a CASE arm but not there; and `d + CAST(i AS INTERVAL DAY)`
+  declines its batch from every skipped position, because the bound on `i` is checked per batch
+  before the kernel, whatever reads `i`.
 - **Int values as CASE and COALESCE operands** - already `m8/SCOPE.md` item 55; the ANSI form now
   measures it: 19 int-valued rows unserved in the COALESCE, and the CASE served only through
   `year(d2)` standing in for a bare int column.
@@ -490,3 +511,35 @@ passed every outcome by never running.
   conversion: `hour(t)`, `minute(t2)` and `second(t)`.
 - **An int guard over a long-lane value** - the same lane rule; the form guards on `lrid` rather
   than record a gap that VARKA-28 already owns.
+
+### 10.4 The author's review (138b)
+
+A `/code-review high` of the diff before the pull request opened (`sql/varka/AGENTS.md`, "Pull
+requests: reviewed by their author before they open") found nine things; eight are fixed here.
+
+1. **"Served" meant any Varka node served any batch.** True for the false AND whose kernel held
+   only `rid < 0` while a row `FilterExec` above it evaluated `isnotnull(e)`. Served now also means
+   no residual projection entry and no row `FilterExec` in the plan (`kernelServed`), and position 4
+   compares `e` with a column (correction 3 above). That moved seven rows' checks and three more
+   entries onto the declined list and found the first half of item 96.
+2. **The partition oracle asked only for a Varka filter in the plan,** with batch pruning on, so a
+   pruned or declined batch would have compared Spark with itself. It now asks `kernelServed` of
+   both of Varka's queries, with pruning off; all 162 cases still agree, every one served.
+3. **An error with no condition was kept as the job failure's class and message**, whose stage and
+   task numbers differ between runs; it is the root cause's now.
+4. **Varka's planning ran outside the outcome's `Try`**, so an error raised while planning would
+   have aborted the test instead of comparing; analysis, planning and execution run inside now
+   (`run`), for both engines.
+5. **The stand-in can widen the expression's type** (`t - t2`, HOUR TO SECOND, beside `dt2`): kept,
+   since the widening cast is evaluated only where `e` is, and the scaladoc no longer claims the
+   type is unchanged.
+6. **The predicate's lane was read from every filter of the analyzed plan**, the fixture view's
+   `WHERE rid < 2` among them; it is read from the predicate analyzed as a projection now.
+7. **Not changed: the outcome model duplicates `VarkaSparkFuzz.outcome`.** The fuzzer's outcome is a
+   string signature its shrinker and failure records key on, comparing the condition alone; making
+   it carry SQLSTATE and parameters changes what every recorded fuzz failure looks like, a change of
+   its own rather than a by-product of this one.
+8. **`withBothConf` duplicated `withAnsi`.** It moved into `VarkaSharedSessions` beside `withAnsi`,
+   which is now written with it.
+9. **The declined list's check accepted entries no reach check reads** (the lone position, a
+   position the row's form never runs); it rejects them now.

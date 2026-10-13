@@ -5068,21 +5068,30 @@ interpreted epilogue methods, so the first batches after the switch may run thei
 interpreted. **Done when** what an interpreted epilogue costs per batch on production's paths is
 measured, and, if it shows, the verdict waits for the epilogues through the JIT's code list.
 
-### Item 96. A column's bound under an untaken arm
+### Item 96. A check or a column bound qualified by the side that reads it
 
 *Added on 13 October 2026 from VARKA-138b's ANSI form (`m7/VARKA-138.md` 10.3), as coverage: no
 answer was wrong.*
 
-`d + CAST(i AS INTERVAL DAY)` puts a bound on the column `i`, since the cast throws past
-`INTERVAL_DAY_LIMIT_DAYS` where a kernel would wrap, and the evaluator checks it per batch before
-the kernel runs (`VarkaChronoCompiler.dayIntervalColumn`). The bound belongs to the column, not to
-the expression reading it, so `CASE WHEN rid < 0 THEN d + CAST(i AS INTERVAL DAY) ELSE d2 END` and
-`coalesce(d2, d + CAST(i AS INTERVAL DAY))` decline a batch holding `i = Int.MaxValue` although no
-row takes that arm: the row path answers it, correctly, and the kernel serves nothing.
-`guardUnderArm` already qualifies a guard on a node by its arm's condition; a column bound has no
-such qualification. **Done when** a bound read only under one arm chain condemns only the lanes that
-take it, as a guard under an arm does, with the ANSI form's two declined entries for this row gone
-stale and removed, or the record says why a bound must stay whole-batch.
+A kernel computes every lane of every operand and declines the whole batch when a check fires - an
+overflow, a field out of range, a date leaving the range the calendar lowering is exact over. Under
+a CASE arm, `guardUnderArm` qualifies a guard by the arm's condition, so a lane the arm is not taken
+for cannot condemn the batch. Two places have no such qualification, and the ANSI form's extremes
+row finds both:
+
+- **The right side of an AND.** `WHERE rid < 0 AND (i + 1) = i` declines its batch on the lane
+  holding `Int.MaxValue` although `rid < 0` already rejected that row: the same for `year(d) + i`,
+  `ym - ymm`, `make_date(2021, i, 1)`, `add_months(d, i)`, `d + ym` and `d - ym`, seven of the 65
+  projection rows. The row path answers, correctly, and the kernel serves nothing.
+- **A column's bound.** `d + CAST(i AS INTERVAL DAY)` puts a bound on the column `i`, since the cast
+  throws past `INTERVAL_DAY_LIMIT_DAYS` where a kernel would wrap, and the evaluator checks it per
+  batch before the kernel runs (`VarkaChronoCompiler.dayIntervalColumn`). The bound belongs to the
+  column, not to the expression reading it, so the untaken CASE arm, the later COALESCE argument
+  and the false AND all decline a batch holding `i = Int.MaxValue`.
+
+**Done when** a check or bound read only on the right side of an AND, or only under one arm chain,
+condemns only the lanes the left side or the arm lets through, with the ANSI form's declined
+entries for these rows gone stale and removed, or the record says why one must stay whole-batch.
 
 ## 5. Ordering
 

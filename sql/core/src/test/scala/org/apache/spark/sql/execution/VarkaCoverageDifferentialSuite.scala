@@ -23,10 +23,10 @@ import scala.util.{Failure, Success, Try}
 import com.fasterxml.jackson.databind.ObjectMapper
 
 import org.apache.spark.SparkThrowable
-import org.apache.spark.sql.{DataFrame, QueryTest, Row, SparkSession}
+import org.apache.spark.sql.{QueryTest, Row, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaMatrix, VarkaTestWatchdog}
 import org.apache.spark.sql.catalyst.optimizer.{BooleanSimplification, InferFiltersFromConstraints, NullDownPropagation}
-import org.apache.spark.sql.catalyst.plans.logical.Filter
+import org.apache.spark.sql.catalyst.plans.logical.Project
 import org.apache.spark.sql.execution.columnar.InMemoryTableScanExec
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.{DataType, DateType, DayTimeIntervalType, IntegerType, LongType, TimeType, YearMonthIntervalType}
@@ -223,6 +223,19 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
     case _ => false
   }
 
+  /**
+   * Whether Varka's kernels evaluated the whole of a plan that ran: they served a batch, and
+   * nothing was left to the row engine - no projection entry declined to the residual, and no
+   * row `FilterExec` holding a conjunct the rule split off. A Varka node in the plan is not
+   * enough: it can decline every batch, or fuse a guard while Spark evaluates the rest.
+   */
+  private def kernelServed(plan: SparkPlan): Boolean = {
+    val nodes = collect(plan) { case v if isVarkaNode(v) => v }
+    def sum(metric: String): Long = nodes.flatMap(_.metrics.get(metric)).map(_.value).sum
+    sum("numVarkaBatches") > 0 && sum("numResidualEntries") == 0 &&
+      find(plan) { case _: FilterExec => true; case _ => false }.isEmpty
+  }
+
   private def queryFor(row: CoverageRow, fixture: String): String = row.form match {
     case "predicate" => s"SELECT d, d2, i FROM $fixture WHERE ${row.executable}"
     case _ => s"SELECT ${row.executable} AS v FROM $fixture"
@@ -313,17 +326,6 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
   private val partitionRewrites = Seq(BooleanSimplification, NullDownPropagation,
     InferFiltersFromConstraints).map(_.ruleName).mkString(",")
 
-  /** Runs `body` with `key` set to `value` on both sessions, restoring what was there after. */
-  private def withBothConf[T](key: String, value: String)(body: => T): T = {
-    val sessions = Seq(spark, varkaSpark)
-    val before = sessions.map(_.conf.getOption(key))
-    sessions.foreach(_.conf.set(key, value))
-    try body finally sessions.zip(before).foreach {
-      case (session, Some(v)) => session.conf.set(key, v)
-      case (session, None) => session.conf.unset(key)
-    }
-  }
-
   private def isVarkaFilter(plan: SparkPlan): Boolean = plan match {
     case _: VarkaFilterExec | _: VarkaFilterColumnarToRowExec => true
     case _ => false
@@ -369,13 +371,18 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
     val p = row.executable
     def query(where: String): String = s"SELECT $allColumns FROM $fixture WHERE $where"
     def onSpark(where: String): Seq[Row] = spark.sql(query(where)).collect().toSeq
-    // Varka's answer, with a Varka filter in the plan: a filter the rule left to Spark would
-    // make the comparison Spark against itself.
+    // Varka's answer, from a Varka filter whose kernel served the batches: a filter the rule
+    // left to Spark, or one that declined, would make the comparison Spark against itself.
     def onVarka(where: String): Either[String, Seq[Row]] = {
       val df = varkaSpark.sql(query(where))
       val plan = df.queryExecution.executedPlan
-      if (find(plan)(isVarkaFilter).isDefined) Right(df.collect().toSeq)
-      else Left(s"no Varka filter for WHERE $where:\n${plan.treeString}")
+      if (find(plan)(isVarkaFilter).isEmpty) {
+        Left(s"no Varka filter for WHERE $where:\n${plan.treeString}")
+      } else {
+        val rows = df.collect().toSeq
+        if (kernelServed(plan)) Right(rows)
+        else Left(s"no kernel served all of WHERE $where:\n${plan.treeString}")
+      }
     }
     (onVarka(p), onVarka(s"NOT ($p)")) match {
       case (Right(t), Right(f)) =>
@@ -389,16 +396,20 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
     test(s"${row.family}: ${row.sql} splits every fixture into true, false and unknown rows") {
       val settings =
         Seq("default optimizer" -> None, "rewrites excluded" -> Some(partitionRewrites))
-      val findings = for {
-        (setting, excluded) <- settings
-        (fixture, _) <- fixtures
-        finding <- excluded match {
-          case Some(rules) => withBothConf(SQLConf.OPTIMIZER_EXCLUDED_RULES.key, rules) {
-            partitionCheck(row, fixture)
+      // The in-memory scan prunes a batch its statistics rule out - an all-null batch under a
+      // predicate that rejects nulls - and a pruned batch meets no kernel, so pruning is off.
+      val findings = withBothConf(SQLConf.IN_MEMORY_PARTITION_PRUNING.key, "false") {
+        for {
+          (setting, excluded) <- settings
+          (fixture, _) <- fixtures
+          finding <- excluded match {
+            case Some(rules) => withBothConf(SQLConf.OPTIMIZER_EXCLUDED_RULES.key, rules) {
+              partitionCheck(row, fixture)
+            }
+            case None => partitionCheck(row, fixture)
           }
-          case None => partitionCheck(row, fixture)
-        }
-      } yield s"$fixture, $setting: $finding"
+        } yield s"$fixture, $setting: $finding"
+      }
       assert(findings.isEmpty, findings.mkString("\n"))
     }
   }
@@ -433,18 +444,33 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
     extends Outcome
 
   /**
-   * The outcome of running `df`. An error is the first `SparkThrowable` with a condition on its
-   * cause chain: a task's error reaches the driver wrapped in the job's failure. An error with
-   * no condition at all is kept by class and message, so two such still compare.
+   * The outcome of `query` on `session`, and the plan it ran with unless it raised before
+   * running. Analysis, planning and execution are all inside, so an error raised at any stage
+   * is an outcome on either engine. An error is the first `SparkThrowable` with a condition on
+   * its cause chain: a task's error reaches the driver wrapped in the job's failure. An error
+   * with no condition anywhere is kept by its root cause's class and message, not the job
+   * failure's, whose text names stage and task numbers that differ between any two runs.
    */
-  private def outcome(df: DataFrame): Outcome = Try(df.collect().toSeq) match {
-    case Success(rows) => Answered(rows)
-    case Failure(e) =>
-      val chain = Iterator.iterate[Throwable](e)(_.getCause).takeWhile(_ != null).toSeq
-      chain.collectFirst { case t: SparkThrowable if t.getCondition != null =>
-        Raised(t.getCondition, t.getSqlState, t.getMessageParameters.asScala.toMap)
-      }.getOrElse(Raised(e.getClass.getName, null, Map("message" -> String.valueOf(e.getMessage))))
+  private def run(session: SparkSession, query: String): (Outcome, Option[SparkPlan]) = {
+    var plan: Option[SparkPlan] = None
+    val result = Try {
+      val df = session.sql(query)
+      plan = Some(df.queryExecution.executedPlan)
+      df.collect().toSeq
+    }
+    val out = result match {
+      case Success(rows) => Answered(rows)
+      case Failure(e) =>
+        val chain = Iterator.iterate[Throwable](e)(_.getCause).takeWhile(_ != null).toSeq
+        chain.collectFirst { case t: SparkThrowable if t.getCondition != null =>
+          Raised(t.getCondition, t.getSqlState, t.getMessageParameters.asScala.toMap)
+        }.getOrElse(Raised(chain.last.getClass.getName, null,
+          Map("message" -> String.valueOf(chain.last.getMessage))))
+    }
+    (out, plan)
   }
+
+  private def outcome(session: SparkSession, query: String): Outcome = run(session, query)._1
 
   /** How Varka's outcome differs from Spark's, or nothing. */
   private def outcomeDifference(onSpark: Outcome, onVarka: Outcome): Option[String] =
@@ -472,11 +498,15 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
 
   /**
    * A value of the extremes fixture of `t`'s type that never raises, to stand beside an
-   * expression of that type in a CASE (`caseArm`) or ahead of it in a COALESCE without changing
-   * its type: a column, which is non-null on both rows, so a COALESCE that starts with one never
-   * needs its second argument. Varka compiles a bare int column as no value, so the int CASE's
-   * other arm is `year(d2)`, an int the kernel computes and that cannot raise; the int
-   * COALESCE keeps the bare column, and the declined list says why it is not fused.
+   * expression of that type in a CASE (`caseArm`) or ahead of it in a COALESCE: a column, which
+   * is non-null on both rows, so a COALESCE that starts with one never needs its second
+   * argument. Where the fixture has the type's family but not its exact fields or precision -
+   * `t - t2` is an HOUR TO SECOND interval beside `dt2`'s DAY TO SECOND - Spark widens the
+   * expression to the common type with a cast, which is still evaluated only where `e` is.
+   * Varka compiles a bare int column as no value, so the int CASE's other arm is `year(d2)`, an
+   * int the kernel computes and that cannot raise; the int COALESCE keeps the bare column, and
+   * the declined list says why it is not fused. The same column is what the false AND's right
+   * side compares `e` with (`caseArm` false), where a bare int column is an operand Varka takes.
    */
   private def standIn(t: DataType, caseArm: Boolean): Option[String] = t match {
     case DateType => Some("d2")
@@ -493,7 +523,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
   /**
    * The ANSI form's queries for a row: each position and its query, or None where the position
    * cannot be written for the row. A projection `e` runs alone, in the untaken arm of
-   * `CASE WHEN rid < 0`, after a column in a COALESCE, and as `e IS NOT NULL` behind `rid < 0`;
+   * `CASE WHEN rid < 0`, after a column in a COALESCE, and compared with a column behind
+   * `rid < 0`;
    * a predicate `p` behind `rid < 0 AND` and `rid >= 0 OR`. `rid` is 0 and 1, so each guard
    * decides every row, and Spark never evaluates the guarded side. Where the guard and the
    * guarded side form one Varka expression - the CASE, the OR, the AND of a predicate - the
@@ -504,10 +535,13 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
     val from = s"FROM $extremesTable"
     row.form match {
       case "predicate" =>
-        val filter = spark.sql(s"SELECT rid $from WHERE $e").queryExecution.analyzed.collect {
-          case f: Filter => f.condition.references.toSeq
-        }.flatten
-        val guard = if (filter.exists(a => onLongLane(a.dataType))) "lrid" else "rid"
+        // The predicate's own columns, analyzed as a projection so no filter of the fixture's
+        // view joins them.
+        val read = spark.sql(s"SELECT ($e) AS v $from").queryExecution.analyzed match {
+          case Project(list, _) => list.flatMap(_.references.toSeq)
+          case other => fail(s"expected a projection, got\n$other")
+        }
+        val guard = if (read.exists(a => onLongLane(a.dataType))) "lrid" else "rid"
         Seq(
           FalseAnd -> Some(s"SELECT rid $from WHERE $guard < 0 AND ($e)"),
           TrueOr -> Some(s"SELECT rid $from WHERE $guard >= 0 OR ($e)"))
@@ -520,7 +554,10 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
             s"SELECT CASE WHEN $guard < 0 THEN $e ELSE $c END AS v $from"),
           CoalesceTail -> standIn(t, caseArm = false).map(c =>
             s"SELECT coalesce($c, $e) AS v $from"),
-          FalseAnd -> Some(s"SELECT rid $from WHERE rid < 0 AND ($e) IS NOT NULL"))
+          // `e = <column>`, not `e IS NOT NULL`: Varka fuses no IS NOT NULL over a computed
+          // value, so Spark's own filter would evaluate `e` above the kernel.
+          FalseAnd -> standIn(t, caseArm = false).map(c =>
+            s"SELECT rid $from WHERE $guard < 0 AND ($e) = $c"))
     }
   }
 
@@ -535,7 +572,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
     val intCoalesce = "Varka's COALESCE takes only a bare date column before its last operand, " +
       "and compiles no bare int column as a value (m8/SCOPE.md item 55)"
     val narrowed = "an int computed on the long lane is narrowed only at a kernel's store, so " +
-      "it cannot sit under a CASE or a COALESCE (VARKA-28)"
+      "it cannot sit under a CASE, a COALESCE or a comparison with an int (VARKA-28)"
     val intValued = Seq("datediff(d2, d)", "unix_date(d)", "year(d)", "month(d)", "day(d)",
       "quarter(d)", "dayofyear(d)", "dayofweek(d)", "weekday(d)",
       "extract(DAYOFWEEK_ISO FROM d)", "weekofyear(d)", "extract(YEAROFWEEK FROM d)",
@@ -549,15 +586,21 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
     val dayCast = "d + CAST(i AS INTERVAL DAY)"
     val columnBound = "the offset column's bound is checked per batch whichever arm reads it, " +
       "and Int.MaxValue is past it, so the batch declines (m8/SCOPE.md item 96)"
+    // A check that condemns the batch - an overflow, a field out of range, a date leaving the
+    // range the calendar lowering is exact over - is qualified by the condition of a CASE arm
+    // it sits under (`guardUnderArm`), but not by the left side of an AND: the kernel computes
+    // the right side on every lane, and the extremes row's lane condemns the batch although
+    // `rid < 0` already rejected it (m8/SCOPE.md item 96).
+    val unqualified = "a check on the right side of an AND condemns the batch from a lane the " +
+      "left side rejected (m8/SCOPE.md item 96)"
+    val checkedRight = Seq("make_date(2021, i, 1)", "add_months(d, i)", "d + ym", "d - ym",
+      "ym - ymm", "i + 1", "year(d) + i")
     intValued.map(sql => (sql, CoalesceTail) -> intCoalesce).toMap ++
-      timeFields.flatMap(sql => Seq((sql, CaseArm) -> narrowed, (sql, CoalesceTail) -> narrowed)) ++
-      Map((dayCast, CaseArm) -> columnBound, (dayCast, CoalesceTail) -> columnBound)
+      timeFields.flatMap(sql =>
+        Seq(CaseArm, CoalesceTail, FalseAnd).map(p => (sql, p) -> narrowed)) ++
+      Seq(CaseArm, CoalesceTail, FalseAnd).map(p => (dayCast, p) -> columnBound) ++
+      checkedRight.map(sql => (sql, FalseAnd) -> unqualified)
   }
-
-  /** The batches Varka's kernels served in a plan that ran. */
-  private def kernelBatches(plan: SparkPlan): Long =
-    collect(plan) { case v if isVarkaNode(v) => v }
-      .flatMap(_.metrics.get("numVarkaBatches")).map(_.value).sum
 
   /** What the ANSI form found for one row, and where a kernel served it or both engines raised. */
   private case class AnsiResult(findings: Seq[String], served: Seq[String], raised: Seq[String])
@@ -573,19 +616,20 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
             s"$position: no column of the expression's type, and not on the declined list")
           (finding.toSeq, None, None)
         case Some(q) =>
-          val df = varkaSpark.sql(q)
-          val plan = df.queryExecution.executedPlan
-          val varka = outcome(df)
-          val served = varka.isInstanceOf[Answered] && kernelBatches(plan) > 0
-          val difference = outcomeDifference(outcome(spark.sql(q)), varka)
+          val (varka, plan) = run(varkaSpark, q)
+          val served = varka.isInstanceOf[Answered] && plan.exists(kernelServed)
+          val difference = outcomeDifference(outcome(spark, q), varka)
           val reach = if (position == Alone || !strict) None
           else if (served && declined.isDefined) {
             Some("served by a kernel, but on the declined list: remove the stale entry")
           } else if (!served && declined.isEmpty) {
-            val node = if (find(plan)(isVarkaNode).isDefined) "a Varka node that served no batch"
-            else "no Varka node"
+            val node = if (plan.exists(find(_)(isVarkaNode).isDefined)) {
+              "a Varka node that served no batch, or left part of the query to the row engine"
+            } else {
+              "no Varka node"
+            }
             Some(s"not served by a kernel ($node), and not on the declined list:\n" +
-              plan.treeString)
+              plan.map(_.treeString).getOrElse("(no plan)"))
           } else {
             None
           }
@@ -613,12 +657,14 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
     }
   }
 
-  test("the ANSI form's declined list names rows and positions that exist") {
-    val positions = Seq(Alone, CaseArm, CoalesceTail, FalseAnd, TrueOr)
-    val unknown = ansiDeclined.keys.filterNot { case (sql, position) =>
-      rows.exists(_.sql == sql) && positions.contains(position)
+  test("the ANSI form's declined list names only positions its reach check reads") {
+    // An entry for a row the table lacks, for a position the row's form never runs, or for the
+    // lone position, which has no reach check, could never go stale.
+    val unread = ansiDeclined.keys.filterNot { case (sql, position) =>
+      position != Alone && rows.find(_.sql == sql).exists(row =>
+        ansiQueries(row).exists { case (p, q) => p == position && q.isDefined })
     }
-    assert(unknown.isEmpty, s"declined entries naming no row or position: $unknown")
+    assert(unread.isEmpty, s"declined entries no reach check reads: $unread")
   }
 
   test("the ANSI form fails a raise where the row engine skips, and a missing one") {
@@ -628,9 +674,9 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
     // wrapped instead of raising would give the lone query rows.
     withAnsi(enabled = true) {
       withBothConf(SQLConf.IN_MEMORY_PARTITION_PRUNING.key, "false") {
-        val alone = outcome(spark.sql(s"SELECT i + 1 AS v FROM $extremesTable"))
-        val skipped = outcome(spark.sql(
-          s"SELECT CASE WHEN rid < 0 THEN i + 1 ELSE i END AS v FROM $extremesTable"))
+        val alone = outcome(spark, s"SELECT i + 1 AS v FROM $extremesTable")
+        val skipped = outcome(spark,
+          s"SELECT CASE WHEN rid < 0 THEN i + 1 ELSE i END AS v FROM $extremesTable")
         val raised = alone match {
           case r: Raised => r
           case other => fail(s"expected i + 1 to overflow on the extremes row, got $other")
