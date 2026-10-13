@@ -48,6 +48,10 @@ rm -f "$expired"
   kill -KILL -- "-$pid" 2>/dev/null
 ) &
 watcher=$!
+# The command runs in a session of its own, outside the caller's process group, so a TERM meant
+# for the caller's group - an outer deadline stopping the step this runs inside - would reach this
+# script and not the command. Forward it, so a deadline nested in another stops everything.
+trap 'kill -TERM -- "-$pid" 2>/dev/null; kill "$watcher" 2>/dev/null; exit 143' TERM INT
 wait "$pid"
 status=$?
 if [ -e "$expired" ]; then
