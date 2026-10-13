@@ -91,6 +91,11 @@ on:
         description: 'Pair mode: at most this many rounds. Above three, the pair stops early once every row is within 3% after the third.'
         required: false
         default: '3'
+      threshold:
+        type: string
+        description: 'Pair mode: a row slower by this many percent by both the median and the best fails the pair. A class whose runner A/A pair exceeds 10% on a row needs more, with that A/A as the reason.'
+        required: false
+        default: '10'
       base:
         type: string
         description: 'Pair mode: the base. Blank for the merge base of the head with vecbricks/varka master; HEAD pairs the head with itself (an A/A run, the runner''s own spread); a commit SHA; or a branch of vecbricks/varka.'
@@ -122,6 +127,7 @@ jobs:
       PAIR: ${{ inputs.pair }}
       PR: ${{ inputs.pr }}
       ROUNDS: ${{ inputs.rounds }}
+      THRESHOLD: ${{ inputs.threshold }}
     steps:
     - name: Generate matrix
       id: set-matrix
@@ -158,6 +164,8 @@ jobs:
                 fail(f"pair mode takes bare class names, not {bad}")
             if not re.fullmatch(r"[1-9][0-9]*", os.environ["ROUNDS"]):
                 fail(f"rounds must be a positive number, not '{os.environ['ROUNDS']}'")
+            if not re.fullmatch(r"[0-9]+(\.[0-9]+)?", os.environ["THRESHOLD"]):
+                fail(f"threshold must be a number of percent, not '{os.environ['THRESHOLD']}'")
         # Each class's artifact needs a name of its own, without the glob's characters. The
         # harness matches its glob against the fully qualified name, so a bare class name, which
         # the pair takes, becomes `*.<Name>`: that class in any package, and no class ending in it.
@@ -512,14 +520,16 @@ jobs:
         MODULE: ${{ steps.resolve.outputs.module }}
         BASE_SHA: ${{ steps.resolve.outputs.base }}
         ROUNDS: ${{ inputs.rounds }}
+        THRESHOLD: ${{ inputs.threshold }}
       # --force: a runner has no canary baseline and need not read idle; the alternation is the
-      # control here. The exit status is the verdict: 1 when a row is slower by 10% by both the
-      # median and the best. `shell: bash` runs with pipefail, so `tee` does not hide it.
+      # control here. The exit status is the verdict: 1 when a row is slower by the threshold by
+      # both the median and the best. `shell: bash` runs with pipefail, so `tee` does not hide it.
       shell: bash
       run: |
         mkdir -p target/pair
         "$TOOLS/dev/varka_bench_pair.sh" "$MODULE" "$BENCHMARK_CLASS" --base "$BASE_SHA" \
-          --rounds "$ROUNDS" --force --out target/pair 2>&1 | tee target/pair/pair.log
+          --rounds "$ROUNDS" --threshold "$THRESHOLD" --force --out target/pair 2>&1 \
+          | tee target/pair/pair.log
     - name: Write the verdict to the summary
       if: always() && steps.resolve.outcome == 'success'
       env:
@@ -527,13 +537,14 @@ jobs:
         HOW: ${{ steps.resolve.outputs.how }}
         BASE_SHA: ${{ steps.resolve.outputs.base }}
         ROUNDS: ${{ inputs.rounds }}
+        THRESHOLD: ${{ inputs.threshold }}
         PROBE_LANES: ${{ steps.probe.outputs.lanes }}
         PROBE_CONTROL: ${{ steps.probe.outputs.control }}
         PROBE_RATIO: ${{ steps.probe.outputs.ratio }}
       run: |
         mkdir -p target/pair
         case "$OUTCOME" in
-          success) verdict="pass: no row slower by 10% by both the median and the best" ;;
+          success) verdict="pass: no row slower by $THRESHOLD% by both the median and the best" ;;
           failure) verdict="FAIL: a row is slower, or the pair did not finish (see the log)" ;;
           *) verdict="$OUTCOME" ;;
         esac

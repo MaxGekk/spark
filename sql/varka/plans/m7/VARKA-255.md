@@ -628,9 +628,10 @@ on it and it touches nothing the others do.
 
 ### 9.1 255a: benchmark pairs and results files on GitHub-hosted runners (14 October 2026)
 
-**What landed.** `benchmark.yml` gains four inputs (`pr`, `pair`, `rounds`, and `base`, which
-test 8 needed for an A/A run and which also takes a commit or a branch of `vecbricks/varka`),
-fourteen in all; GitHub accepted the dispatch, so the old limit of ten no longer binds. A list in
+**What landed.** `benchmark.yml` gains five inputs (`pr`, `pair`, `rounds`; `base`, which test
+8 needed for an A/A run and which also takes a commit or a branch of `vecbricks/varka`; and
+`threshold`, which the second A/A below asked for), fifteen in all; GitHub accepted the dispatch
+with fourteen, so the old limit of ten no longer binds. A list in
 `class` is one job per class, six at a time (the splits of one class keep twenty). Every
 measuring job runs `dev/varka_datapath.sh --require any` first; it stops the job only when
 `expected-cpu` names another machine. In pair mode the job resolves the module from the class's
@@ -664,6 +665,17 @@ median's alone") are the A/A's noise, and the verdict, which needs both measures
 The job took 67 minutes: 5 minutes of setup, then 61 for the base's build, the head's and six
 class runs.
 
+**Test 8, second draw, with `pr`.** The same A/A on #799's head (`pr=799`, `2724cc8a924`), run
+[38476690417](https://github.com/MaxGekk/spark/actions/runs/38476690417), the path the waiting
+jobs take: the scripts from `.varka-tooling`, the pull request's tree, a `/tmp` base worktree,
+six class runs, 59 minutes. An AMD EPYC 9V45 (Zen 5), 512:256 = 1.99. Verdict **FAIL**: one row
+slower by both measures, `10 ranges ... Varka`, -18.2% by median and -16.0% by best, on identical
+code. The row is about 20 ms an iteration and bimodal across forks: the base drew two forks at a
+best of 18 ms and one at 21, the head three at 21 to 22, and the harness's integer milliseconds
+leave nothing between. The other 17 rows are within 10.0% by median and 6.1% by best. The job
+failing on that verdict is also the first demonstration that the `shell: bash` fix carries the
+pair's exit status.
+
 A first dispatch ([38465858064](https://github.com/MaxGekk/spark/actions/runs/38465858064))
 "passed" in five minutes having measured nothing: its pair step piped through `tee` without
 `pipefail` (GitHub's default `bash -e`), and the regeneration script failed its first round on
@@ -684,18 +696,23 @@ whose verdicts are then merged. That is a row's work, not a step of this one, an
 not repay it. Its *results file* fits a runner as a single harness run (88 to 189 minutes, 2.6);
 only its pair does not.
 
-**Predictions.** 7 is half scored: a fourteen-minute class paired at three rounds in 67 minutes,
-so a twenty-minute one is on course for well under four hours; the three waiting jobs are
-dispatched after this merges. 8 is open: one CPU model so far, under 10% by best on all but one
-bimodal row and not by median.
+**Predictions.** 7 is half scored: a fourteen-minute class paired at three rounds in 59 and 67
+minutes, so a twenty-minute one is on course for well under four hours; the three waiting jobs are
+dispatched after this merges. **8 failed** on both CPU models drawn: the Xeon 6973P-C's widest
+change is 110.0% by best on one bimodal row (7.3% without it), the EPYC 9V45's 16.0% by best on a
+20 ms row, which failed the pair. As 8 provided, the threshold is now an input, raised per class
+with its runner A/A as the reason; and on a runner **a row a pair flags is read against that
+class's own runner A/A, or rerun, before it is called a regression**. Each class's spread is its
+own, so the waiting jobs below run at five rounds, where one side must draw three slow forks
+to move its median.
 
 **After the merge**, the three waiting jobs, on `vecbricks/varka`:
 
 ```
 # 322a: the A/A on the Java side, then the nine ported classes against their Scala form
-gh workflow run benchmark.yml -R vecbricks/varka -f pr=780 -f pair=true \
+gh workflow run benchmark.yml -R vecbricks/varka -f pr=780 -f pair=true -f rounds=5 \
   -f class=VarkaEmissionBenchmark -f base=HEAD
-gh workflow run benchmark.yml -R vecbricks/varka -f pr=780 -f pair=true -f rounds=3 \
+gh workflow run benchmark.yml -R vecbricks/varka -f pr=780 -f pair=true -f rounds=5 \
   -f class="VarkaCodegenBenchmark,VarkaUnreadLocalsBenchmark,VarkaSharedPrefixBenchmark,\
 VarkaLongLaneBenchmark,VarkaEmissionBenchmark,VarkaVectorApiProbeBenchmark,\
 VarkaMethodSizeBenchmark,VarkaArithmeticBenchmark,VarkaTimeBenchmark"
@@ -703,7 +720,7 @@ VarkaMethodSizeBenchmark,VarkaArithmeticBenchmark,VarkaTimeBenchmark"
 gh workflow run benchmark.yml -R vecbricks/varka -f pr=789 -f jdk=25 -f generate-tpcds=false \
   -f class="VarkaWideKernelBenchmark,VarkaEmissionBenchmark" \
   -f extra-java-options="--add-modules jdk.incubator.vector"
-gh workflow run benchmark.yml -R vecbricks/varka -f pr=789 -f pair=true \
+gh workflow run benchmark.yml -R vecbricks/varka -f pr=789 -f pair=true -f rounds=5 \
   -f class=VarkaEmissionBenchmark
 # 322a-2 (#791)
 gh workflow run benchmark.yml -R vecbricks/varka -f pr=791 -f pair=true -f rounds=5 \

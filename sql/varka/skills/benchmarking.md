@@ -217,7 +217,12 @@ Two tools (VARKA-256):
   as the artifact with a provenance file beside it, for the author to commit; `create-commit`
   only pushes to the dispatched branch. A class whose single run takes over about fifty minutes
   on a runner (`VarkaWideKernelBenchmark`) cannot pair inside the six-hour job cap and stays a
-  laptop pair.
+  laptop pair. **A runner's own spread is wider than the pair's 10%**: two A/A pairs of
+  `VarkaRangeFilterBenchmark` on identical code read 110% by best on one row (Xeon 6973P-C) and
+  failed on another, a 20 ms row slower by 16% by best (EPYC 9V45), both rows bimodal across JVM
+  forks. So a row a runner pair flags is read against that class's own runner A/A, or rerun,
+  before it is called a regression; run at five rounds where time allows, and raise `threshold`
+  for a class with its A/A as the reason.
 
 ## A runner pair that fails can still report a pass: three traps of the first one
 
