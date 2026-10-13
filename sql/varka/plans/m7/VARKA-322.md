@@ -266,7 +266,8 @@ The pair runner restores the committed files after each round, so no results fil
 
 ## 9. Outcome
 
-**322a implemented, pairs pending** (13 October 2026). The row stays Planned.
+**322a implemented, pairs pending** (13 October 2026; 322a-2 the same day). The row stays
+Planned.
 
 **What was built.** 322a-1 as 8.2 says, in one commit after this plan: the ten classes of 4.1 are
 Java under their names and packages, their `.scala` files deleted, 2,510 lines of Scala to 3,137
@@ -375,6 +376,56 @@ thirteen are fixed here, and the fourteenth, the wide-kernel benchmark's sixth s
   the run. The Varka case now calls `defineKernel`, which drops the `loadClass` lookup after the
   definition; the case keeps its committed name, "fused emit + define + load + instantiate".
 
+**322a-2: the parity benchmark** (13 October 2026), its own pull request as 8.3 says, one commit
+after 322a-1's merge (`25a1bae6893`). `VarkaEmitterParityBenchmark` is Java under its name and
+package and its `.scala` is deleted: 2,191 lines of Scala to 2,464 of Java, an eighth more. It
+uses 322a-1's helpers and adds none to the adapter: `timed()` on all seventeen benchmarks,
+`runCases` on every one (no section called `run()` directly, so the dry run already reached every
+section's setup), `claimCaseId` and `reportCaseIds` for its ids, `defineKernel` for every kernel,
+the width ladder's included, `requirementFailed` for the status checks inside timed loops and
+`roots` for the widest shape. One method per section over a record of the shared buffers,
+rather than one 2,000-line `runBenchmarkSuite`; the per-section chunk walks are records'
+methods or local lambdas, the tuples records (`Rung`, `TruncArms`, `Setting`, `LadderPoint`,
+`DivisionShape`). Oddities kept as they were: "weekofyear (VARKA-37), null-free" is a case
+twice in its section, the next_day section's name vectors are built under a guarded close and
+the trunc section's are not, and `nf2Data` is filled exactly as `nfData` is.
+
+**The evidence, without a timed run** (the machine was busy). Both sides were run as a dry run,
+`-Dvarka.bench.dryRun=true` through `catalyst/Test/runMain`, with core's `Benchmark` and
+`BenchmarkBase` temporarily instrumented, uncommitted, to print every section title, every
+benchmark's name with its rate denominator, minimum iterations, warm-up and minimum time, and
+every case's name with its fixed iteration count, in order: the Scala form at `25a1bae6893` before
+its deletion, the Java form on the branch. The two outputs are identical, 271 lines: 17 sections,
+17 benchmarks (all 5 iterations, 2 s and 2 s), 235 cases, and the ids line, 125 ids, 0 to 984,
+next free 985; `dev/varka_bench_ids.sh VarkaEmitterParityBenchmark` on the clean branch prints
+the same. Labels with computed parts match too: the B2 ladder's loop-method counts read off the
+emitted classes and the width ladder's op counts and loop-method bytecode sizes. The one check
+the benchmark makes at setup, that each of the width ladder's six points emits its registered
+number of `IntVector` ops (`require(ops == expectedOps)`), ran and passed on both sides, since
+the dry run emits every kernel; the rest of its checks are the per-batch status checks inside the
+timed loops, which only a timed run reaches. The hand-written kernels (`DateVectorOps`,
+`ChronoVectorOps`, `ChronoScalarOps`) are engine code the benchmark calls, unchanged.
+
+Against the committed `-jdk25-results.txt` (last regenerated 20 September, `ee290a476f0`, its
+labels renamed on 4 October): the same 17 section titles and 235 case names in the same order,
+except twelve computed labels, identical between the two dry runs, that the emitter has moved
+since the file was written. The B2 ladder's unshared and one-method arms now report fewer loop
+methods (6 outputs unshared: 4 for 6; 8 outputs unshared: 6 for 8, one method: 2 for 1, ceiling
+400: 2 for 1; 12 outputs unshared: 10 for 12, one method: 2 for 1, ceiling 400: 3 for 2), and the
+width ladder's six loop methods are 11 bytes smaller each (258 to 1,960 bytes for 269 to 1,971).
+So the next regeneration changes those twelve labels whichever language runs it, and the band
+file, keyed by the old labels, does not cover those cases; the pair reads them within 5%.
+
+**The timed work.** Every timed body makes the Scala's calls with the same arguments and builds
+the same per-batch arrays, the `take`-then-`map` destination arrays as two arrays where the
+Scala built two. What changes is the language's own glue: the chunk walks call a Java
+functional interface of primitive parameters where the Scala called an unspecialised `Function3`
+or `Function4`, which boxes its `Long` arguments unless escape analysis removes it; an empty
+literal array is one shared constant where `Array.empty[Int]` made one per call, as the
+arithmetic port did; and the sequential chain's two locals replace a tuple per level. If a
+chunked row reads faster than the A/A spread, that glue is read first, as 6.1's prediction 3
+reads the wide-kernel harness.
+
 **Pending: the pairs** (6), on the quiet machine, none run yet:
 
 ```
@@ -389,7 +440,10 @@ dev/varka_bench_pair.sh catalyst VarkaMethodSizeBenchmark
 dev/varka_bench_pair.sh catalyst VarkaArithmeticBenchmark
 dev/varka_bench_pair.sh catalyst VarkaTimeBenchmark
 dev/varka_bench_pair.sh catalyst VarkaWideKernelBenchmark
+dev/varka_bench_pair.sh catalyst VarkaEmitterParityBenchmark
 ```
 
-The last stops on both sides at the sixth section, as above, until that shape is fixed. 6.1 is
-scored when the pairs are in.
+The wide-kernel pair stops on both sides at the sixth section, as above, until that shape is
+fixed. The parity pair is the longest: a full run of the class takes about twenty minutes a side,
+so its five rounds take over three hours of the idle window. 6.1 is scored when the pairs are
+in.
