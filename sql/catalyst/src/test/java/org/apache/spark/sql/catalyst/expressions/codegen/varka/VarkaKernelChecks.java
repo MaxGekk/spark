@@ -297,6 +297,61 @@ public final class VarkaKernelChecks {
             new LongLane(batch.withNulls(nulls, forced), lits), true, null));
   }
 
+  /**
+   * What a caller does around the one kernel call of a compared batch (VARKA-274). The tier
+   * witness reads the code cache and opens its JFR event in {@code before} and closes both in
+   * {@code after}, so that its window holds the kernel's call and not the buffers' setup or the
+   * row-by-row comparison after it.
+   */
+  public interface CallHook {
+    void before();
+
+    void after(int status);
+
+    /** A hook that does nothing, for the entry points that load a class per batch. */
+    CallHook NONE = new CallHook() {
+      @Override public void before() {
+      }
+
+      @Override public void after(int status) {
+      }
+    };
+  }
+
+  /**
+   * One batch, through the body its null counts select, on a kernel the caller has loaded and
+   * keeps (VARKA-274's histories, which run many batches on one class): the status, 0 once every
+   * row and validity bit is compared with {@link VarkaReference}. A decline fails the check unless
+   * {@code declineAllowed}. Unlike {@link #runAndCompare} it runs one body only; the caller asks
+   * {@link #otherBody} for the other.
+   */
+  public static int runLoaded(String context, VarkaFusedKernel kernel,
+      List<VarkaVectorIR> roots, int numInputs, int[] lits, Batch batch, boolean declineAllowed,
+      CallHook hook) {
+    return runLoaded(context, kernel, roots, numInputs, new IntLane(batch, lits), declineAllowed,
+        null, hook);
+  }
+
+  /** {@link #runLoaded} at the long lane. */
+  public static int runLoadedLong(String context, VarkaFusedKernel kernel,
+      List<VarkaVectorIR> roots, int numInputs, long[] lits, LongBatch batch,
+      boolean declineAllowed, CallHook hook) {
+    return runLoaded(context, kernel, roots, numInputs, new LongLane(batch, lits),
+        declineAllowed, null, hook);
+  }
+
+  /**
+   * A planted wrong answer, for the test that a check which compares nothing cannot pass
+   * (VARKA-274's test 5): while set, output 0's reference value on row 0 is one more than the
+   * evaluator says. Set only by that test, in a JVM of its own.
+   */
+  static volatile boolean plantWrongAnswer;
+
+  private static OptionalLong planted(OptionalLong want, int output, int row) {
+    return plantWrongAnswer && output == 0 && row == 0 && want.isPresent()
+        ? OptionalLong.of(want.getAsLong() + 1) : want;
+  }
+
   /** {@code run} over the batch's own body and then {@link #otherBody}'s, each status in order. */
   private static List<Integer> each(String context, int numInputs, int length,
       boolean[][] nulls, boolean forceMasked, BodyRun run) {
@@ -529,7 +584,7 @@ public final class VarkaKernelChecks {
    * - a {@code NoSuchMethodError} from a misdescribed helper call stays one - so the failure
    * classifier names it, instead of reading the reflection that carried it.
    */
-  private static VarkaFusedKernel load(VarkaGeneratedClassLoader loader, String className,
+  static VarkaFusedKernel load(VarkaGeneratedClassLoader loader, String className,
       byte[] bytes) {
     VarkaSpeciesGuard.check(className, bytes);
     loader.defineGeneratedClass(className, bytes);
@@ -556,10 +611,25 @@ public final class VarkaKernelChecks {
   private static int runOne(String context, String className, byte[] bytes,
       List<VarkaVectorIR> rootList, int numInputs, Lane lane, boolean declineAllowed,
       SparkAnswers spark) {
-    int length = lane.length();
-    var roots = rootList.toArray(new VarkaVectorIR[0]);
     var loader = new VarkaGeneratedClassLoader(VarkaKernelChecks.class.getClassLoader());
     var kernel = load(loader, className, bytes);
+    try {
+      return runLoaded(context, kernel, rootList, numInputs, lane, declineAllowed, spark,
+          CallHook.NONE);
+    } finally {
+      loader.release();
+    }
+  }
+
+  /**
+   * {@link #runOne} on a kernel already loaded, so that a caller can run many batches on one
+   * class (VARKA-274): {@code hook} is told just before and just after the kernel's one call.
+   */
+  private static int runLoaded(String context, VarkaFusedKernel kernel,
+      List<VarkaVectorIR> rootList, int numInputs, Lane lane, boolean declineAllowed,
+      SparkAnswers spark, CallHook hook) {
+    int length = lane.length();
+    var roots = rootList.toArray(new VarkaVectorIR[0]);
     try (var arena = Arena.ofConfined()) {
       long stride = lane.stride();
       long[] srcData = new long[numInputs];
@@ -604,9 +674,11 @@ public final class VarkaKernelChecks {
         outData[o] = roots[o] instanceof Cond ? 0L : outValues[o].address();
         outValidity[o] = outBits[o].address();
       }
+      hook.before();
       int status = sanitized(kernel, length, stride, srcData, srcValidity, outData, outValidity,
           scratch -> lane.run(kernel, srcData, srcValidity, nullCounts, outData, outValidity,
               scratch));
+      hook.after(status);
       if (status != 0 && declineAllowed) {
         return status;
       }
@@ -636,7 +708,7 @@ public final class VarkaKernelChecks {
                   + truth.isTrue() + ", got " + bit + ")" + evidence(values, isNull, nullCounts));
             }
           } else {
-            OptionalLong want = lane.reference(root, values, isNull);
+            OptionalLong want = planted(lane.reference(root, values, isNull), o, i);
             if (spark != null) {
               agreeWithSpark(context, spark, o, i, values, isNull, want);
             }
@@ -656,8 +728,6 @@ public final class VarkaKernelChecks {
         }
       }
       return 0;
-    } finally {
-      loader.release();
     }
   }
 }

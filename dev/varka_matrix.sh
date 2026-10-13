@@ -123,6 +123,7 @@ EXCLUDED=(
   "VarkaMatrixSuite:checks the matrix's own machinery, not an answer"
   "VarkaAssemblySuite:reads the JIT's output, not an answer"
   "VarkaWarmupEndToEndSuite:times a kernel's compilation, which a loaded machine moves"
+  "VarkaTierWitnessSuite:asserts which JIT tier ran a call, which a loaded machine moves"
 )
 
 # The gate runs every suite; the matrix leaves out the ones above.
