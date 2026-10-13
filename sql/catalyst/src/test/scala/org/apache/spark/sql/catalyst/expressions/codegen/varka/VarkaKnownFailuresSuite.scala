@@ -17,6 +17,10 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
+import java.util.Optional
+
+import scala.jdk.CollectionConverters._
+
 import org.apache.spark.SparkFunSuite
 
 class VarkaKnownFailuresSuite extends SparkFunSuite {
@@ -27,10 +31,10 @@ class VarkaKnownFailuresSuite extends SparkFunSuite {
       "long\t20260919\t4\tdeclined batch\tthe kernel declined the batch (status #)\tVARKA-998\n"
 
   test("the list parses, comments and blank lines skipped") {
-    val entries = VarkaKnownFailures.parse(text)
+    val entries = VarkaKnownFailures.parse(text).asScala
     assert(entries.map(_.iteration) == Seq(0, 4))
     assert(entries.head.signature ==
-      VarkaFailureSignature("output mismatch", "output # row # differs (want #)"))
+      new VarkaFailureSignature("output mismatch", "output # row # differs (want #)"))
     assert(entries(1).lane == "long" && entries(1).reason == "VARKA-998")
   }
 
@@ -42,18 +46,18 @@ class VarkaKnownFailuresSuite extends SparkFunSuite {
 
   test("a signature on the list is known and one off it is not") {
     val entries = VarkaKnownFailures.parse(text)
-    assert(VarkaKnownFailures.isKnown(entries, entries.head.signature))
-    assert(!VarkaKnownFailures.isKnown(entries, VarkaFailureSignature("output mismatch", "x")))
+    assert(VarkaKnownFailures.isKnown(entries, entries.get(0).signature))
+    assert(!VarkaKnownFailures.isKnown(entries, new VarkaFailureSignature("output mismatch", "x")))
   }
 
   test("an entry its case no longer reproduces is stale") {
     val entries = VarkaKnownFailures.parse(text)
     val replay = (e: VarkaKnownFailures.Entry) =>
-      if (e.lane == "int") Some(e.signature) else None
-    assert(VarkaKnownFailures.stale(entries, replay) == Seq(entries(1)))
+      if (e.lane == "int") Optional.of(e.signature) else Optional.empty[VarkaFailureSignature]()
+    assert(VarkaKnownFailures.stale(entries, replay(_)).asScala == Seq(entries.get(1)))
     // A case that now fails differently is stale as well, not still known.
-    val other = (_: VarkaKnownFailures.Entry) => Some(VarkaFailureSignature("a", "b"))
-    assert(VarkaKnownFailures.stale(entries, other) == entries)
+    val other = (_: VarkaKnownFailures.Entry) => Optional.of(new VarkaFailureSignature("a", "b"))
+    assert(VarkaKnownFailures.stale(entries, other(_)) == entries)
   }
 
   test("the committed list is well formed") {

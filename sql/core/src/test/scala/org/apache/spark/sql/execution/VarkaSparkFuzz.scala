@@ -297,6 +297,11 @@ object VarkaSparkFuzz {
 
   // ---- the shrinker -----------------------------------------------------------------------
 
+  /** [[VarkaShrinker.ddmin]] over a Scala vector. */
+  private def ddmin[A](items: Vector[A])(fails: Vector[A] => Boolean): Vector[A] =
+    VarkaShrinker.ddmin(items.asJava, (xs: java.util.List[A]) => fails(xs.asScala.toVector))
+      .asScala.toVector
+
   /**
    * `c` reduced while `kind` still shows: the outputs, the conjuncts and the rows of data, each by
    * ddmin, repeated until a pass changes nothing, within `maxRuns` checks. `check` returns the
@@ -316,16 +321,16 @@ object VarkaSparkFuzz {
     while (changed && runs < maxRuns) {
       val before = best
       if (best.outputs.size > 1) {
-        best = best.copy(outputs = VarkaShrinker.ddmin(best.outputs)(os =>
+        best = best.copy(outputs = ddmin(best.outputs)(os =>
           os.nonEmpty && still(best.copy(outputs = os))))
       }
       if (best.conjuncts.nonEmpty) {
-        best = best.copy(conjuncts = VarkaShrinker.ddmin(best.conjuncts)(cs =>
+        best = best.copy(conjuncts = ddmin(best.conjuncts)(cs =>
           still(best.copy(conjuncts = cs))))
       }
       if (best.data.size > 1) {
         // The pivot row stays: a filter rectified against it selects nothing else for certain.
-        best = best.copy(data = VarkaShrinker.ddmin(best.data)(ds =>
+        best = best.copy(data = ddmin(best.data)(ds =>
           ds.nonEmpty && best.pivot.forall(ds.contains) && still(best.copy(data = ds))))
       }
       changed = best != before

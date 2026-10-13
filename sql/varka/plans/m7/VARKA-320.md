@@ -117,3 +117,61 @@ None beyond 5: the row changes no kernel and no benchmark.
 2. `VarkaFuzzCase`, `VarkaFailureSignature` and the `copy` calls; then the grammar and the series
    with their checks; then the shrinkers and the known failures.
 3. Section 9.
+
+## 9. Outcome
+
+Done on 12 October 2026, in one commit after the plan.
+
+**What was built.** `VarkaIrGrammar` (956 lines of Java, from 707 of Scala), `VarkaIrSeries` (657,
+from 415), `VarkaShrinker` (510, from 306), `VarkaFuzzCase` (130, from 78), `VarkaFailureSignature`
+(75, from 70) and `VarkaKnownFailures` (106, from 69) are Java classes in catalyst's test tree, and
+the six Scala files are gone. The case and the signature are records, the grammar's `boundsOf` an
+exhaustive switch over the sealed IR whose one node the int grammar never builds, `NarrowLane`,
+throws by name. The suites, `VarkaSparkFuzz` and the two Java classes that drew from the Scala
+grammar call the Java classes directly: a Scala caller wraps the grammar's `java.util.Random` in a
+`scala.util.Random` and passes `self` back, so the draws after a shape continue from the same
+generator, and reads the roots with `asScala`.
+
+**The draws, byte for byte.** `VarkaEmittedBytesSuite` passes with `sql/varka/emitted_bytes.json`
+untouched. A throwaway dump, run on master and on the port in the same hour, wrote the first 3,000
+cases `VarkaIrFuzzSuite` draws at each lane - their trees, options, literals, special columns,
+labels and a hash of every row's data and nulls - and the first 40 wide compositions: 6,040 lines,
+byte-identical.
+
+**The series, in order.** The same dump wrote every tree the int series, the ungated int series and
+the long series yield to size 4, in order, and a count and a running hash of every tree to size 5
+(3,263,681, 3,280,611 and 501,396 trees), and the four batches of each lane: 228,823 lines,
+byte-identical.
+
+**The suites.** The bytes oracle, the shrinker, known-failures, IR fuzz, small-tree, variant,
+children, range-analysis, frames, driver-table, composition fuzz, budget and cost suites pass, 119
+tests, the two cancelled being the opt-in dumps; the planted bugs shrink within their tests' bounds
+(one small root and the option alone for the liveness bug, a few entries for the wide composition).
+
+**Predictions scored.**
+
+1. **Held.** `emitted_bytes.json` byte-identical, no regeneration.
+2. **Held**, and more directly than planned: the drawn cases themselves compared, not a count of
+   compared outputs.
+3. **Held as far as checked**: every planted bug's test passes at its bounds; the exact shrunk
+   cases were not diffed against the Scala shrinker's.
+4. **Wrong**: the Java is half as long again (2,434 lines against 1,645), not a third - the
+   grammar's arms as switch statements with blocks, and the series' lazy iterators.
+
+**Corrections to the plan.**
+
+* **No forwarders.** A Scala object cannot share a name with a Java class in its package, so the
+  plan's same-named forwarders could not exist; a renamed one would be a layer for nothing. The
+  callers changed instead, by `rnd.self`, `asScala` and the constants' Java names.
+* **The composition shrinker and its case stay Scala.** Reading them for the port showed what 2
+  missed: they rewrite Catalyst expressions by their children, data types and `withNewChildren`,
+  the interop surface `sql/varka/AGENTS.md` keeps Scala, as row 321 found for the codegen censuses.
+  They now call the Java `ddmin` and options reduction.
+* **One duplicate gone.** `VarkaVariantChecks.Case`, row 311's Java mirror of the Scala case, is
+  replaced by `VarkaFuzzCase` itself, and the variant check's forwarder converts no case.
+* **The series iterates lazily without streams.** The size asked for is generated as it is read;
+  a Java stream's `flatMap` read through `iterator()` would have buffered each part of it, so the
+  series uses a small lazy `flatMap` and `concat` of its own.
+* A Scala call that names a Java constructor's argument compiles in a mixed compilation, where
+  scalac reads the Java source, and fails in an incremental one against the class file;
+  `new IntSeries(gated = false)` became `new IntSeries(false)`.

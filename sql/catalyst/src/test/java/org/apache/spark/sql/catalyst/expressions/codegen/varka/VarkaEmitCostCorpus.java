@@ -22,10 +22,10 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Random;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Function;
 import java.util.stream.IntStream;
-
-import scala.jdk.javaapi.CollectionConverters;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.AddDays;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.AddMonths;
@@ -190,10 +190,6 @@ final class VarkaEmitCostCorpus {
     return shapes;
   }
 
-  private static List<VarkaVectorIR> roots(scala.collection.Seq<VarkaVectorIR> roots) {
-    return List.copyOf(CollectionConverters.asJava(roots));
-  }
-
   /** The fuzz sequences' first shapes, both lanes. */
   static List<Shape> fuzz() {
     return fuzz(FUZZ_SHAPES);
@@ -204,13 +200,13 @@ final class VarkaEmitCostCorpus {
     List<Shape> shapes = new ArrayList<>();
     for (int k = 0; k < n; k++) {
       VarkaIrGrammar.Drawn d = VarkaIrGrammar.drawShape(
-          VarkaIrGrammar.shapeRandom(VarkaIrGrammar.fuzzSeed(), k));
-      shapes.add(new Shape("fuzz int", k, roots(d.roots()), d.numInputs(), d.numLiterals()));
+          VarkaIrGrammar.shapeRandom(VarkaIrGrammar.FUZZ_SEED, k));
+      shapes.add(new Shape("fuzz int", k, d.roots(), d.numInputs(), d.numLiterals()));
     }
     for (int k = 0; k < n; k++) {
       VarkaIrGrammar.DrawnLong d = VarkaIrGrammar.drawLongShape(
-          VarkaIrGrammar.shapeRandom(VarkaIrGrammar.longFuzzSeed(), k));
-      shapes.add(new Shape("fuzz long", k, roots(d.roots()), d.numInputs(), d.numLiterals()));
+          VarkaIrGrammar.shapeRandom(VarkaIrGrammar.LONG_FUZZ_SEED, k));
+      shapes.add(new Shape("fuzz long", k, d.roots(), d.numInputs(), d.numLiterals()));
     }
     return shapes;
   }
@@ -221,12 +217,12 @@ final class VarkaEmitCostCorpus {
     for (int k = 0; k < WIDE_SHAPES; k++) {
       VarkaIrGrammar.Drawn d = VarkaIrGrammar.drawWideShape(
           VarkaIrGrammar.shapeRandom(WIDE_SEED, k));
-      shapes.add(new Shape("wide int", k, roots(d.roots()), d.numInputs(), d.numLiterals()));
+      shapes.add(new Shape("wide int", k, d.roots(), d.numInputs(), d.numLiterals()));
     }
     for (int k = 0; k < WIDE_SHAPES; k++) {
       VarkaIrGrammar.DrawnLong d = VarkaIrGrammar.drawWideLongShape(
           VarkaIrGrammar.shapeRandom(WIDE_LONG_SEED, k));
-      shapes.add(new Shape("wide long", k, roots(d.roots()), d.numInputs(), d.numLiterals()));
+      shapes.add(new Shape("wide long", k, d.roots(), d.numInputs(), d.numLiterals()));
     }
     return shapes;
   }
@@ -256,22 +252,22 @@ final class VarkaEmitCostCorpus {
       shapes.add(composition("wide compositions, int", k,
           VarkaIrGrammar.shapeRandom(COMPOSITION_SEED, k), rnd -> {
             VarkaIrGrammar.Drawn d = VarkaIrGrammar.drawWideShape(rnd);
-            return new Shape("", 0, roots(d.roots()), d.numInputs(), d.numLiterals());
+            return new Shape("", 0, d.roots(), d.numInputs(), d.numLiterals());
           }));
     }
     for (int k = 0; k < COMPOSITIONS; k++) {
       shapes.add(composition("wide compositions, long", k,
           VarkaIrGrammar.shapeRandom(COMPOSITION_LONG_SEED, k), rnd -> {
             VarkaIrGrammar.DrawnLong d = VarkaIrGrammar.drawWideLongShape(rnd);
-            return new Shape("", 0, roots(d.roots()), d.numInputs(), d.numLiterals());
+            return new Shape("", 0, d.roots(), d.numInputs(), d.numLiterals());
           }));
     }
     return shapes;
   }
 
   /** Draws from {@code draw} until 250 roots or twelve draws, then keeps each root once. */
-  private static Shape composition(String family, int index, scala.util.Random rnd,
-      java.util.function.Function<scala.util.Random, Shape> draw) {
+  private static Shape composition(String family, int index, Random rnd,
+      Function<Random, Shape> draw) {
     LinkedHashSet<VarkaVectorIR> roots = new LinkedHashSet<>();
     int drawn = 0;
     int inputs = 0;

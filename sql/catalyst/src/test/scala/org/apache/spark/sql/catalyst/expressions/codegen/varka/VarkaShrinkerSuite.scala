@@ -17,6 +17,9 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
+import scala.jdk.CollectionConverters._
+import scala.jdk.OptionConverters._
+
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 
@@ -26,8 +29,14 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
  */
 class VarkaShrinkerSuite extends SparkFunSuite {
 
-  private val sigA = VarkaFailureSignature("output mismatch", "output # row # differs (want #)")
-  private val sigB = VarkaFailureSignature("declined batch", "the kernel declined the batch")
+  private val sigA =
+    new VarkaFailureSignature("output mismatch", "output # row # differs (want #)")
+  private val sigB = new VarkaFailureSignature("declined batch", "the kernel declined the batch")
+
+  private def shrink(c: VarkaFuzzCase, sig: VarkaFailureSignature,
+      fails: VarkaFuzzCase => Option[VarkaFailureSignature],
+      maxRuns: Int = 600): VarkaShrinker.Shrunk =
+    VarkaShrinker.shrink(c, sig, (x: VarkaFuzzCase) => fails(x).toJava, maxRuns, 60000L)
 
   private def contains(node: VarkaVectorIR, cls: Class[_]): Boolean =
     cls.isInstance(node) || VarkaVectorIR.childrenOf(node).exists(contains(_, cls))
@@ -37,20 +46,20 @@ class VarkaShrinkerSuite extends SparkFunSuite {
       length: Int = 20,
       options: VarkaEmitOptions = VarkaEmitOptions.DEFAULTS,
       numInputs: Int = 2,
-      smallOrdinal: Int = -1): VarkaFuzzCase = VarkaFuzzCase(
-    LaneType.INT, roots, numInputs, Array(3L, 4L), length,
+      smallOrdinal: Int = -1): VarkaFuzzCase = new VarkaFuzzCase(
+    LaneType.INT, roots.asJava, numInputs, Array(3L, 4L), length,
     Array.tabulate(numInputs, length)((c, i) => i % (c + 3) == 0),
     Array.tabulate(numInputs, length)((c, i) => (i * 7 + c).toLong),
-    forceMasked = true, options, smallOrdinal, -1, "case")
+    true, options, smallOrdinal, -1, "case")
 
   test("ddmin finds the culprits and no more, in about 2 log2 n runs for one") {
-    val items = (0 until 100).toVector
+    val items = (0 until 100).map(Int.box).asJava
     for (culprits <- Seq(Set(17), Set(3, 80), Set(5, 6, 7), Set(0), Set(99))) {
       var runs = 0
-      val found = VarkaShrinker.ddmin(items) { xs =>
+      val found = VarkaShrinker.ddmin(items, (xs: java.util.List[Integer]) => {
         runs += 1
-        culprits.forall(xs.contains)
-      }
+        culprits.forall(c => xs.contains(c))
+      }).asScala.map(_.intValue)
       assert(found.toSet == culprits, s"culprits $culprits, found $found")
       if (culprits.size == 1) {
         assert(runs <= 2 * 7 + 6, s"one culprit among 100 took $runs runs")
@@ -66,11 +75,12 @@ class VarkaShrinkerSuite extends SparkFunSuite {
     val opts = VarkaEmitOptions.DEFAULTS.toBuilder.cse(false).groupBudget(7).build()
     val c = makeCase(Seq(tree, new Year(col1)), length = 40, options = opts)
     val fails = (x: VarkaFuzzCase) =>
-      if (x.roots.exists(contains(_, classOf[LastDay])) && !x.options.cse()) Some(sigA) else None
-    val shrunk = VarkaShrinker.shrink(c, sigA, fails)
+      if (x.roots.asScala.exists(contains(_, classOf[LastDay])) && !x.options.cse()) Some(sigA)
+      else None
+    val shrunk = shrink(c, sigA, fails)
     assert(shrunk.small.roots.size == 1)
-    assert(shrunk.small.roots.head == new LastDay(col0), shrunk.small.roots.head)
-    assert(VarkaFuzzCase.optionDelta(shrunk.small.options) == Seq("cse=false"),
+    assert(shrunk.small.roots.get(0) == new LastDay(col0), shrunk.small.roots.get(0))
+    assert(VarkaFuzzCase.optionDelta(shrunk.small.options).asScala == Seq("cse=false"),
       VarkaFuzzCase.optionDelta(shrunk.small.options))
     assert(shrunk.small.length == 1)
     assert(!shrunk.small.forceMasked)
@@ -83,29 +93,29 @@ class VarkaShrinkerSuite extends SparkFunSuite {
     val col0 = new ColumnRef(0)
     val tree = new LastDay(new AddDays(col0, new IntNeg(Overflow.WRAP, new LiteralSlot(0))))
     // Below four nodes the case fails as a different bug: the shrinker has to stop at four.
-    val fails = (x: VarkaFuzzCase) => x.roots.headOption.map(VarkaShrinker.size) match {
-      case Some(n) if n >= 4 && contains(x.roots.head, classOf[LastDay]) => Some(sigA)
-      case Some(_) if contains(x.roots.head, classOf[LastDay]) => Some(sigB)
+    val fails = (x: VarkaFuzzCase) => x.roots.asScala.headOption.map(VarkaShrinker.size) match {
+      case Some(n) if n >= 4 && contains(x.roots.get(0), classOf[LastDay]) => Some(sigA)
+      case Some(_) if contains(x.roots.get(0), classOf[LastDay]) => Some(sigB)
       case _ => None
     }
-    val shrunk = VarkaShrinker.shrink(makeCase(Seq(tree)), sigA, fails)
-    assert(VarkaShrinker.size(shrunk.small.roots.head) == 4, shrunk.small.roots.head)
+    val shrunk = shrink(makeCase(Seq(tree)), sigA, fails)
+    assert(VarkaShrinker.size(shrunk.small.roots.get(0)) == 4, shrunk.small.roots.get(0))
   }
 
   test("an operand whose domain the grammar constrains is left alone") {
     val months = new ColumnRef(1)
     val tree = new AddMonths(new ColumnRef(0), months)
     val fails = (x: VarkaFuzzCase) =>
-      if (x.roots.exists(contains(_, classOf[AddMonths]))) Some(sigA) else None
-    val shrunk = VarkaShrinker.shrink(makeCase(Seq(tree), smallOrdinal = 1), sigA, fails)
-    assert(shrunk.small.roots.head == tree, shrunk.small.roots.head)
+      if (x.roots.asScala.exists(contains(_, classOf[AddMonths]))) Some(sigA) else None
+    val shrunk = shrink(makeCase(Seq(tree), smallOrdinal = 1), sigA, fails)
+    assert(shrunk.small.roots.get(0) == tree, shrunk.small.roots.get(0))
   }
 
   test("the run and time budgets stop a shrink and it returns what it has") {
     val tree = new LastDay(new AddDays(new ColumnRef(0), new LiteralSlot(0)))
     val fails = (x: VarkaFuzzCase) =>
-      if (x.roots.exists(contains(_, classOf[LastDay]))) Some(sigA) else None
-    val shrunk = VarkaShrinker.shrink(makeCase(Seq(tree)), sigA, fails, maxRuns = 2)
+      if (x.roots.asScala.exists(contains(_, classOf[LastDay]))) Some(sigA) else None
+    val shrunk = shrink(makeCase(Seq(tree)), sigA, fails, maxRuns = 2)
     assert(shrunk.stoppedEarly)
     assert(shrunk.runs <= 2)
   }

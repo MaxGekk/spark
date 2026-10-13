@@ -101,7 +101,7 @@ class VarkaSmallTreeSuite extends SparkFunSuite with VarkaMatrixTests with Varka
   private def emit(roots: Seq[VarkaVectorIR], numInputs: Int, options: VarkaEmitOptions,
       className: String): Option[Array[Byte]] = {
     def emitWith(o: VarkaEmitOptions): Array[Byte] = VarkaLoopEmitter.emit(className,
-      roots.asJava, numInputs, VarkaIrSeries.Literals, null, null, o)
+      roots.asJava, numInputs, VarkaIrSeries.LITERALS, null, null, o)
     try Some(emitWith(options)) catch {
       case _: VarkaEmitDeclined if options.methodByteBudget() > 0 =>
         try Some(emitWith(options.withMethodByteBudget(0))) catch {
@@ -119,7 +119,7 @@ class VarkaSmallTreeSuite extends SparkFunSuite with VarkaMatrixTests with Varka
       options: VarkaEmitOptions, failures: Failures): Unit = {
     val className = "org.apache.spark.sql.varka.execution.VarkaSmallTree" +
       s"${if (long) "Long" else ""}${classCounter.addAndGet(1)}"
-    val numInputs = if (long) VarkaIrSeries.LongNumInputs else VarkaIrSeries.NumInputs
+    val numInputs = if (long) VarkaIrSeries.LONG_NUM_INPUTS else VarkaIrSeries.NUM_INPUTS
     val label = s"lane=${if (long) "long" else "int"} size=$treeSize index=$index " +
       s"roots=${roots.map(r => VarkaVectorIR.canonical(r)).mkString("[", ", ", "]")} " +
       s"options=${if (options.isDefault) "(defaults)" else options.canonical()}"
@@ -129,14 +129,14 @@ class VarkaSmallTreeSuite extends SparkFunSuite with VarkaMatrixTests with Varka
         case Some(bytes) =>
           failures.checked += 1
           if (long) {
-            for (b <- pick(VarkaIrSeries.longBatches, index, treeSize)) {
-              VarkaKernelCheck.runAndCompareLong(s"$label batch=${b.name}", className, bytes,
-                roots, numInputs, b.lits, b.batch)
+            for (b <- pick(VarkaIrSeries.longBatches.asScala.toSeq, index, treeSize)) {
+              VarkaKernelChecks.runAndCompareLong(s"$label batch=${b.name}", className, bytes,
+                roots.asJava, numInputs, b.lits, b.batch, false, null)
             }
           } else {
-            for (b <- pick(VarkaIrSeries.intBatches, index, treeSize)) {
-              VarkaKernelCheck.runAndCompare(s"$label batch=${b.name}", className, bytes, roots,
-                numInputs, b.lits, b.batch)
+            for (b <- pick(VarkaIrSeries.intBatches.asScala.toSeq, index, treeSize)) {
+              VarkaKernelChecks.runAndCompare(s"$label batch=${b.name}", className, bytes,
+                roots.asJava, numInputs, b.lits, b.batch, false, null)
             }
           }
       }
@@ -158,8 +158,10 @@ class VarkaSmallTreeSuite extends SparkFunSuite with VarkaMatrixTests with Varka
       options: VarkaEmitOptions): Failures = {
     val failures = new Failures
     var index = 0
-    for ((treeSize, root) <- series.upTo(upTo)) {
-      if (index % slices == slice) check(Seq(root), long, index, treeSize, options, failures)
+    for (sized <- series.upTo(upTo).asScala) {
+      if (index % slices == slice) {
+        check(Seq(sized.root), long, index, sized.size, options, failures)
+      }
       index += 1
     }
     failures
@@ -187,7 +189,7 @@ class VarkaSmallTreeSuite extends SparkFunSuite with VarkaMatrixTests with Varka
     val failures = new Failures
     val series = new VarkaIrSeries.IntSeries
     var index = 0
-    for (treeSize <- 2 to math.min(size, fullBelow); g <- series.value(treeSize)) {
+    for (treeSize <- 2 to math.min(size, fullBelow); g <- series.value(treeSize).asScala) {
       VarkaVectorIR.childrenOf(g.node).find(!_.isInstanceOf[Cond]).foreach { child =>
         if (index % slices == slice) {
           check(Seq(g.node, child), long = false, index, treeSize, VarkaMatrix.base, failures)
@@ -226,18 +228,18 @@ class VarkaSmallTreeSuite extends SparkFunSuite with VarkaMatrixTests with Varka
     // little, and the nightly series jobs filter it out, so the pull request's run is its only one.
     val upTo = 4
     def canonical(s: VarkaIrSeries.Series): Iterator[(VarkaVectorIR, String)] =
-      s.upTo(upTo).map { case (_, root) => root -> VarkaVectorIR.canonical(root) }
+      s.upTo(upTo).asScala.map(sized => sized.root -> VarkaVectorIR.canonical(sized.root))
     val gated = canonical(new VarkaIrSeries.IntSeries).map(_._2).toSet
     var refused = 0
     var outside = 0
     val guardedBy = mutable.Map.empty[String, Int].withDefaultValue(0)
     var omitted = 0
-    for ((root, text) <- canonical(new VarkaIrSeries.IntSeries(gated = false))
+    for ((root, text) <- canonical(new VarkaIrSeries.IntSeries(false))
         if !gated.contains(text)) {
       omitted += 1
       try {
         val refusals = VarkaLoopEmitter.refusalsForTest(Seq(root).asJava,
-          VarkaIrSeries.NumInputs, VarkaIrSeries.Literals, VarkaMatrix.base).values().asScala
+          VarkaIrSeries.NUM_INPUTS, VarkaIrSeries.LITERALS, VarkaMatrix.base).values().asScala
         if (refusals.isEmpty) {
           outside += 1
           if (outside <= 5) logInfo(s"outside the contract: $text")
@@ -286,14 +288,15 @@ class VarkaSmallTreeSuite extends SparkFunSuite with VarkaMatrixTests with Varka
       var seen = Set.empty[String]
       var types = Set.empty[String]
       for (k <- 1 to reachSize) {
-        val (t, ty) = reach(series.roots(k))
+        val (t, ty) = reach(series.roots(k).asScala)
         logInfo(s"$lane size $k reaches ${(t -- seen).size} new triples, ${t.size} in all")
         seen ++= t
         types ++= ty
       }
       val drawn = reach((0 until 20000).iterator.flatMap { k =>
-        val rnd = VarkaIrGrammar.shapeRandom(VarkaIrGrammar.fuzzSeed, k)
-        if (long) VarkaIrGrammar.drawLongShape(rnd).roots else VarkaIrGrammar.drawShape(rnd).roots
+        val rnd = VarkaIrGrammar.shapeRandom(VarkaIrGrammar.FUZZ_SEED, k)
+        (if (long) VarkaIrGrammar.drawLongShape(rnd).roots else VarkaIrGrammar.drawShape(rnd).roots)
+          .asScala
       })
       logInfo(s"$lane: the grammar's draws hold ${drawn._1.size} triples, " +
         s"${(drawn._1 -- seen).size} past size $reachSize")

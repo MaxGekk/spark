@@ -16,6 +16,8 @@
  */
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
+import scala.jdk.CollectionConverters._
+
 import org.apache.spark.sql.catalyst.expressions.Expression
 
 /**
@@ -43,7 +45,8 @@ object VarkaCompositionCase {
 
   /** The case for a person: kind, the delta from the defaults, one entry per line. */
   def describe(c: VarkaCompositionCase): String =
-    s"kind=${c.kind} options=${VarkaFuzzCase.optionDelta(c.options).mkString("{", ", ", "}")} " +
+    s"kind=${c.kind} " +
+      s"options=${VarkaFuzzCase.optionDelta(c.options).asScala.mkString("{", ", ", "}")} " +
       s"entries=${c.entries.size}:" +
       c.entries.map(e => s"\n    ${e.expr.sql}").mkString
 }

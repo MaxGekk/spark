@@ -47,7 +47,8 @@ final class VarkaProofFiles {
   /**
    * The int-lane constant divisors the multiply-high proof and {@code VarkaEmitterDivisionSuite}'s
    * sweep and matrix cover: {@code extract(YEAR FROM ym)}'s 12, the fuzz grammar's list
-   * ({@code VarkaIrGrammar.ConstDivideDivisors}), the {@code TIME} split form's 60 and 3600, and
+   * ({@code VarkaIrGrammar.Shapes.CONST_DIVIDE_DIVISORS}), the {@code TIME} split form's 60 and
+   * 3600, and
    * two edges of {@link VarkaDivisionLowering#signedMagic}: 196611, the first divisor whose shift
    * Theorem 5.1 raises past the book's, and {@code Integer.MIN_VALUE}, the magnitude 2^31.
    */

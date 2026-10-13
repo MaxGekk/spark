@@ -493,7 +493,7 @@ class VarkaCoverageCompositionFuzzSuite
    * unless its signature is on the known list, which is reported and returns None.
    */
   private def runChecked[T](c: VarkaCompositionCase,
-      known: Seq[VarkaKnownFailures.Entry] = VarkaKnownFailures.entries)(
+      known: java.util.List[VarkaKnownFailures.Entry] = VarkaKnownFailures.entries)(
       check: VarkaCompositionCase => T): Option[T] = {
     try Some(check(c)) catch {
       case e: VirtualMachineError => throw e
@@ -672,7 +672,7 @@ class VarkaCoverageCompositionFuzzSuite
     val c = drawProjection(seed, 3)
     val sixty = (0 until 60).map(i => c.entries(i % c.entries.size).copy(sql = s"row$i")).toVector
     val base = c.copy(entries = sixty)
-    val sig = VarkaFailureSignature("test", "needs a pair")
+    val sig = new VarkaFailureSignature("test", "needs a pair")
     def outcome(x: VarkaCompositionCase): Option[VarkaFailureSignature] =
       if (Seq("row7", "row41").forall(r => x.entries.exists(_.sql == r))) Some(sig) else None
     val shrunk = VarkaCompositionShrinker.shrink(base, sig, outcome)
@@ -683,7 +683,7 @@ class VarkaCoverageCompositionFuzzSuite
   test("an entry's expression shrinks to the node a failure needs") {
     val nested = Entry("date_add(last_day(d), 3)", resolve("date_add(last_day(d), 3)"))
     val base = VarkaCompositionCase("projection", Vector(nested), VarkaMatrix.base, 0L, "")
-    val sig = VarkaFailureSignature("test", "needs last_day")
+    val sig = new VarkaFailureSignature("test", "needs last_day")
     def outcome(x: VarkaCompositionCase): Option[VarkaFailureSignature] =
       if (x.entries.exists(_.expr.sql.contains("last_day"))) Some(sig) else None
     val shrunk = VarkaCompositionShrinker.shrink(base, sig, outcome)
@@ -701,7 +701,7 @@ class VarkaCoverageCompositionFuzzSuite
 
   test("a failure with a listed signature is reported as known, not failed") {
     val (c, sig, _) = shrunkPlanted("misdescribeAdd")
-    val known = Seq(VarkaKnownFailures.Entry("wide", seed, 0, sig, "test"))
+    val known = java.util.List.of(new VarkaKnownFailures.Entry("wide", seed, 0, sig, "test"))
     assert(runChecked(c, known)(checkWide).isEmpty)
   }
 
@@ -714,7 +714,8 @@ class VarkaCoverageCompositionFuzzSuite
       // The IR fuzzer's entries are replayed by its own suite.
       case _ => Some(e.signature)
     }
-    val stale = VarkaKnownFailures.stale(VarkaKnownFailures.entries, replay)
+    val stale = VarkaKnownFailures.stale(VarkaKnownFailures.entries,
+      (e: VarkaKnownFailures.Entry) => replay(e).toJava).asScala
     assert(stale.isEmpty, "these known fuzz failures no longer reproduce; delete them from " +
       s"${VarkaKnownFailures.PATH}: ${stale.mkString(", ")}")
   }

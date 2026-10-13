@@ -272,7 +272,8 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   /**
    * The int-lane constant divisors in use - `extract(YEAR FROM ym)`'s twelve, the fuzz grammar's
-   * list (`VarkaIrGrammar.ConstDivideDivisors`), the `TIME` split form's two - and two edges of
+   * list (`VarkaIrGrammar.Shapes.CONST_DIVIDE_DIVISORS`), the `TIME` split form's two - and two
+   * edges of
    * the derivation, 196611 and `Integer.MIN_VALUE`. The list is the proof's
    * (`VarkaProofFiles.INT_DIVISORS`), so the sweep below and `int_mulhi_divide.smt2` cover the
    * same divisors.
