@@ -33,7 +33,7 @@
 # The module's suite that measures the JIT rather than answers - VarkaAssemblySuite in catalyst,
 # VarkaWarmupEndToEndSuite in sql - runs after the others, alone and without the memory sanitizer,
 # in target/varka-scoped-quiet, as the gate's quiet step runs them: beside the other JVM's suites
-# the warm-up test's kernel can wait past its two minutes for C2 while the compile queue is full,
+# the warm-up test's kernel has stayed mostly uncompiled past its two minutes (VARKA-295.md 9.2),
 # and a rerun, restoring the same cached times, puts it beside the same suites again.
 
 set -euo pipefail
