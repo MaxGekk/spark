@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader;
@@ -38,6 +39,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Add
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.AddMonths;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfMonth;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfWeek;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfYear;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Greatest;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntOp;
@@ -47,6 +50,9 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Mak
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Month;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Overflow;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Quarter;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ThursdayOf;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WeekDay;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WeekOfYear;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Year;
 
 /**
@@ -83,7 +89,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Yea
  * input again and recomputing the prefix it shares. First one emission of each, with the bytes of
  * the classes, each form as the plan builds it ({@code VarkaEmitOptions.planSize}, the default)
  * and as the size loop did; then the two forms at run time, on the ladder and on sixty-four dates
- * listed by field, with A' first and again last. See {@code VARKA-190.md} 11 and {@code
+ * listed by field, as many fields as the emitter needs to split them, with A' first and again
+ * last. See {@code VARKA-190.md} 11 and {@code
  * VARKA-236.md} 6 and 9.3.
  *
  * <p>The last section is item 71's ({@code m8/SCOPE.md}): the planned grouping, the prediction
@@ -102,6 +109,9 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
   private static final int CHUNK = 4096;
   private static final int WIDEST = 400;
   private static final List<Integer> PAST = List.of(800, 1200);
+  /** The widest kernel any section scans, which sizes the scans' destinations. */
+  private static final int MAX_OUTPUTS =
+      PAST.stream().mapToInt(Integer::intValue).max().orElseThrow();
   private static final boolean[] NULL_ARMS = {false, true};
 
   /** A labelled set of emit options: one form a section compares. */
@@ -178,22 +188,32 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
   }
 
   /**
-   * Sixty-four dates, four fields of each, listed by field: every {@code year}, then every {@code
-   * month}, {@code quarter} and {@code dayofmonth}. The shape of {@code VARKA-236.md} 2.4, where
-   * several kernels' cut in projection order parts the fields of a date, so the second kernel
-   * decomposes every date again where the one class computes each prefix once and loads it
-   * (VARKA-198).
+   * The calendar fields a date is listed by, in order: each decomposes the date through the same
+   * civil-from-days prefix, which one class computes once and several kernels compute again.
    */
-  private static List<VarkaVectorIR> datesByField() {
+  private static final List<Function<VarkaVectorIR, VarkaVectorIR>> FIELDS = List.of(
+      Year::new, Month::new, Quarter::new, DayOfMonth::new, DayOfYear::new, LastDay::new,
+      d -> new WeekOfYear(new ThursdayOf(d)), DayOfWeek::new, WeekDay::new);
+
+  /** The emitter's limit on a kernel's inputs, and so the dates a shape can read. */
+  private static final int DATES = 64;
+
+  /**
+   * Sixty-four dates, the first {@code fields} of {@link #FIELDS} of each, listed by field: every
+   * {@code year}, then every {@code month}, and so on. The shape of {@code VARKA-236.md} 2.4,
+   * where several kernels' cut in projection order parts the fields of a date, so the second
+   * kernel decomposes every date again where the one class computes each prefix once and loads
+   * it (VARKA-198).
+   */
+  private static List<VarkaVectorIR> datesByField(int fields) {
     var cols = new ArrayList<ColumnRef>();
-    for (int c = 0; c < 64; c++) {
+    for (int c = 0; c < DATES; c++) {
       cols.add(new ColumnRef(c));
     }
     var out = new ArrayList<VarkaVectorIR>();
-    cols.forEach(c -> out.add(new Year(c)));
-    cols.forEach(c -> out.add(new Month(c)));
-    cols.forEach(c -> out.add(new Quarter(c)));
-    cols.forEach(c -> out.add(new DayOfMonth(c)));
+    for (var field : FIELDS.subList(0, fields)) {
+      cols.forEach(c -> out.add(field.apply(c)));
+    }
     return out;
   }
 
@@ -242,33 +262,90 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
   }
 
   /**
-   * How the compiler splits {@code roots} under {@code severalKernels} with {@code planSize} on:
-   * the emitter declines a shape whose driver is over the budget before building it, naming the
-   * largest prefix one class serves ({@code VarkaEmitDeclined.plannedCut()}), and the rest is asked
-   * again. The kernels' roots: {@code rest} gives the roots after a cut, since the ladder's
-   * entries are numbered from each kernel's own literal slot 0 as {@code kernelSizes} numbers
-   * them, where the dates by field have no literals and are sliced as they are.
+   * How the compiler splits {@code roots} under {@code severalKernels} with {@code planSize} on,
+   * as {@code VarkaExpressionCompiler.classify} does it: the emitter declines a shape whose driver
+   * is over the budget before building it, naming the largest prefix one class serves by the plan
+   * ({@code VarkaEmitDeclined.plannedCut()}); that prefix is asked again, since its own grouping
+   * can still be over, and cut at most twice in all, after which the largest prefix that builds
+   * is found by halving. Then the same for the rest. The kernels' roots: {@code rest} gives the
+   * roots after a cut, since the ladder's entries are numbered from each kernel's own literal slot
+   * 0 as {@code kernelSizes} numbers them, where the dates by field have no literals and are
+   * sliced as they are.
    */
   private static List<List<VarkaVectorIR>> plannedKernels(List<VarkaVectorIR> roots,
       int numInputs, VarkaEmitOptions options,
       BiFunction<List<VarkaVectorIR>, Integer, List<VarkaVectorIR>> rest) {
+    VarkaEmitOptions planned = options.withPlanSize(true);
     var kernels = new ArrayList<List<VarkaVectorIR>>();
     List<VarkaVectorIR> left = roots;
     while (!left.isEmpty()) {
-      try {
-        VarkaLoopEmitter.emit("VarkaWideBenchPlan", List.copyOf(left), numInputs, left.size(),
-            null, null, options.withPlanSize(true));
-        kernels.add(left);
-        break;
-      } catch (VarkaEmitDeclined d) {
-        if (d.plannedCut() <= 0) {
-          throw d;
+      int size = left.size();
+      int cuts = 0;
+      while (true) {
+        Integer cut = plannedCut(left.subList(0, size), numInputs, planned);
+        if (cut == null) {
+          break;
         }
-        kernels.add(left.subList(0, d.plannedCut()));
-        left = rest.apply(left, d.plannedCut());
+        if (cut > 0 && cut < size && cuts < 2) {
+          size = cut;
+          cuts++;
+        } else {
+          size = largestThatBuilds(left, size, numInputs, planned);
+          break;
+        }
       }
+      kernels.add(left.subList(0, size));
+      left = size == left.size() ? List.of() : rest.apply(left, size);
     }
     return kernels;
+  }
+
+  /** Null when {@code roots} build as one class, else the emitter's planned cut (0 if none). */
+  private static Integer plannedCut(List<VarkaVectorIR> roots, int numInputs,
+      VarkaEmitOptions options) {
+    try {
+      VarkaLoopEmitter.emit("VarkaWideBenchPlan", List.copyOf(roots), numInputs, roots.size(),
+          null, null, options);
+      return null;
+    } catch (VarkaEmitDeclined d) {
+      return d.plannedCut();
+    }
+  }
+
+  /** The largest prefix of {@code roots}, below {@code over} entries, that builds as one class. */
+  private static int largestThatBuilds(List<VarkaVectorIR> roots, int over, int numInputs,
+      VarkaEmitOptions options) {
+    int lo = 0;
+    int hi = over;
+    while (hi - lo > 1) {
+      int mid = (lo + hi) / 2;
+      if (plannedCut(roots.subList(0, mid), numInputs, options) == null) {
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+    require(lo > 0, "not even one entry builds as a class");
+    return lo;
+  }
+
+  /**
+   * The fewest fields, from four up, for which {@code options} plans sixty-four dates by field
+   * into more than one kernel. Asked of the emitter rather than fixed: four fields, 256 outputs,
+   * split 181 + 75 when the section was written and fit one kernel once the grouping began to
+   * close groups on predicted bytes (VARKA-254), which left the section nothing to compare
+   * (VARKA-325). The shape grows by fields, not dates, since a kernel reads at most sixty-four
+   * inputs.
+   */
+  private static int splittingFields(VarkaEmitOptions options) {
+    for (int fields = 4; fields <= FIELDS.size(); fields++) {
+      if (plannedKernels(datesByField(fields), DATES, options,
+          VarkaWideKernelBenchmark::restOfFields).size() > 1) {
+        return fields;
+      }
+    }
+    throw new IllegalStateException("sixty-four dates by all " + FIELDS.size()
+        + " fields fit one kernel: nothing to compare");
   }
 
   /** The ladder's roots after a cut: the rest, numbered from literal slot 0 again. */
@@ -361,13 +438,12 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
     }
     // Destinations for the widest kernel any section scans, the 1200 entries past the driver's
     // ceiling, which is more than WIDEST, the widest one driver from a table serves.
-    int maxOutputs = PAST.stream().mapToInt(Integer::intValue).max().orElseThrow();
-    MemorySegment[] dsts = new MemorySegment[maxOutputs];
-    for (int k = 0; k < maxOutputs; k++) {
+    MemorySegment[] dsts = new MemorySegment[MAX_OUTPUTS];
+    for (int k = 0; k < MAX_OUTPUTS; k++) {
       dsts[k] = arena.allocate(CHUNK * 4L, 8);
     }
-    MemorySegment[] dstValidities = new MemorySegment[maxOutputs];
-    for (int k = 0; k < maxOutputs; k++) {
+    MemorySegment[] dstValidities = new MemorySegment[MAX_OUTPUTS];
+    for (int k = 0; k < MAX_OUTPUTS; k++) {
       dstValidities[k] = arena.allocate(CHUNK / 8L, 8);
     }
     return new Column(data, validity, batchNulls.stream().mapToInt(Integer::intValue).toArray(),
@@ -401,7 +477,7 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
           benchmark.addCase(WIDEST + " entries, driver from a table, " + nullsLabel(withNulls),
               iteration -> column.scan(wide, WIDEST, withNulls));
         }
-        benchmark.run();
+        runCases(benchmark);
       });
 
       section("the exact grouping against the greedy walk", () -> {
@@ -426,7 +502,7 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
                 iteration -> column.scan(k.kernel(), k.roots().size(), withNulls));
           }
         }
-        benchmark.run();
+        runCases(benchmark);
       });
 
       section("the locals nothing reads, built and elided", () -> {
@@ -453,7 +529,7 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
             }
           }
         }
-        benchmark.run();
+        runCases(benchmark);
       });
 
       section("emitting the mixed family: the exact grouping's cost at plan time", () -> {
@@ -466,7 +542,7 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
                 form.options()).length;
           });
         }
-        benchmark.run();
+        runCases(benchmark);
         require(sink != Integer.MIN_VALUE, "");
       });
 
@@ -533,14 +609,15 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
                 }
               });
         }
-        benchmark.run();
+        runCases(benchmark);
         require(sink != Integer.MIN_VALUE, "");
       });
 
       // VARKA-190's question (VARKA-236.md 3.6): the split driver (A') against several
       // kernels (B) on the ladder, B's best case, and on sixty-four dates by field, its worst,
-      // where its cut parts the fields of a date. A' runs first and again last, a control for
-      // the case order 11.6 did not control. Both forms plan their size, as they do by default.
+      // where its cut parts the fields of a date, with the fewest fields the emitter splits.
+      // A' runs first and again last, a control for the case order 11.6 did not control. Both
+      // forms plan their size, as they do by default.
       section("past the driver's ceiling: a split driver against several kernels, "
           + "the split driver first and again last", () -> {
             var benchmark = benchmark(NUM_ROWS + " rows in " + CHUNK + "-row batches",
@@ -550,8 +627,10 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
               shapes.add(new PastShape(n + " ladder entries", ladder(n), 1,
                   VarkaWideKernelBenchmark::restOfLadder));
             }
-            shapes.add(new PastShape("sixty-four dates by field, 256 outputs", datesByField(),
-                64, VarkaWideKernelBenchmark::restOfFields));
+            int fields = splittingFields(oneKernel);
+            shapes.add(new PastShape("sixty-four dates by " + fields + " fields, "
+                + DATES * fields + " outputs", datesByField(fields), DATES,
+                VarkaWideKernelBenchmark::restOfFields));
             var forms = new ArrayList<PastForms>();
             for (PastShape shape : shapes) {
               var planned = plannedKernels(shape.roots(), shape.inputs(), oneKernel,
@@ -583,7 +662,7 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
                     iteration -> column.scan(f.staged(), f.n(), withNulls, f.inputs()));
               }
             }
-            benchmark.run();
+            runCases(benchmark);
           });
 
       // Item 71 of m8/SCOPE.md, brought into VARKA-236 (VARKA-236.md 3.5): what the
@@ -615,7 +694,7 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
             }
           }
         }
-        benchmark.run();
+        runCases(benchmark);
       });
     }
   }

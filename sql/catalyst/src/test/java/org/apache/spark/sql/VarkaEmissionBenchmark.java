@@ -142,7 +142,7 @@ public class VarkaEmissionBenchmark extends VarkaBenchmarkBase {
           }
         });
       }
-      benchmark.run();
+      runCases(benchmark);
     });
 
     section("emitting a fused kernel: bytes and a defined class", () -> {
@@ -165,7 +165,7 @@ public class VarkaEmissionBenchmark extends VarkaBenchmarkBase {
           }
         });
       }
-      benchmark.run();
+      runCases(benchmark);
     });
 
     // VARKA-190: kernels as wide as a real projection gets once the op cap no longer bounds
@@ -191,7 +191,7 @@ public class VarkaEmissionBenchmark extends VarkaBenchmarkBase {
           });
         }
       }
-      benchmark.run();
+      runCases(benchmark);
     });
 
     // The first grouping priced by the emit cost model against the weights alone. The
@@ -215,7 +215,7 @@ public class VarkaEmissionBenchmark extends VarkaBenchmarkBase {
           });
         }
       }
-      benchmark.run();
+      runCases(benchmark);
     });
 
     // Keeps the emitted bytes and the defined classes live to the end of the run.
