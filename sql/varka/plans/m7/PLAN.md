@@ -814,12 +814,12 @@ yet read them.
 | 1 | 271b, 138b, 274a; 325's files and 322a-2's pair in the next idle window | In flight; each closes its row or its step, and three of them close 1.1 point 2's named rows | small each |
 | 2 | 255 | Takes the laptop out of CI's path and, with the benchmark pairs on GitHub-hosted runners, out of the benchmark queue; every later row's CI and every pair benefit | medium |
 | 3 | 243, then 244 | 1.1 point 1 is the one done-when point with nothing in flight; 243 bounds the specification to the coverage table's operations (risk 3), and 244 names Spark's departures with a test each | medium each |
-| 4 | 274b, 272, 279, 326, 327 | The rest of point 2's compiled-kernel and guard checks; 272 reuses 274a's witness, 279 reads 138's domains | small to medium each |
+| 4 | 274b, 272, 279, 326, 327, 298 | The rest of point 2's compiled-kernel and guard checks; 272 reuses 274a's witness, 279 reads 138's domains; 298 last of them, the analyzer's casts at random | small to medium each |
 | 5 | 313, 314, 316, 317, 318, 319, 315 | The errors rows, in the order section 2.4 gives them; 317 and 319 are test strength as well | small to medium each |
 | 6 | 322b, 322c | The last test code to Java; their pairs run where 255 leaves the benchmarks | medium to large |
 | 7 | 281, 245 | The analyses proven and the refinement proofs, after 243 and 244 show what they cost | medium each |
 | 8 | 258, 259, 260 | The posts, 258 first; 260 between them and the next long post | medium, small |
-| 9 | 280, 298, 257, 252, 265 | Measurement and legibility once the structure has settled; 265 last by design | small to medium each |
+| 9 | 280, 257, 252, 265 | Measurement and legibility once the structure has settled; 265 last by design | small to medium each |
 | 10 | 270, 261 | The milestone's post and its close | medium, small |
 
 New rows join this table only with a reason in 1.1 to do them in this milestone; a finding that
@@ -830,9 +830,13 @@ serves no point of 1.1 is an item in `m8/SCOPE.md` (as items 93 to 95 were on 13
 1. **245 stays or moves.** Risk 3 names it as the row to cut if 243 and 244 run long. The
    recommendation: keep it, and decide when 244 lands, from what 243 and 244 cost. *Decided by
    the owner on 13 October 2026: kept, to be decided again when 244 lands.*
-2. **298 stays or moves.** A Catalyst-level grammar with casts is test strength, but 262 and 271
-   now reach the analyzer's casts through Spark itself. The recommendation: move it to
-   `m8/SCOPE.md` unless 271b's full run shows cast shapes the golden files do not reach.
+2. **298 stays or moves.** A Catalyst-level grammar with casts is test strength, and the first
+   reading was that 262 and 271 reach the analyzer's casts through Spark itself. They do not:
+   262's fuzzer composes whole coverage rows over columns of exactly the types each row expects,
+   so the analyzer inserts no cast, and in 271b's run with literals lifted, Spark's 18
+   type-coercion golden files (`typeCoercion/native/*`) gave Varka no served execution, since
+   their casts are between types Varka does not read. *Decided by the owner on 13 October 2026:
+   kept, ordered with the rest of point 2 after 272 and 279.*
 3. **The errors rows (313 to 319) stay whole.** Added by the owner on 12 October; the
    recommendation is to keep all seven, after 255 and 243.
 4. **The promotion track.** 258 to 260 have not started and 180 has no commit; the recommendation
