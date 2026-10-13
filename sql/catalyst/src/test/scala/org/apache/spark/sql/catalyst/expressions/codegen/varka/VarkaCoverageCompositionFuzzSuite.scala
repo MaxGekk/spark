@@ -246,30 +246,34 @@ class VarkaCoverageCompositionFuzzSuite
    * and null patterns. The test then asserts that
    * every kernel was compared. Returns whether the kernel was.
    *
-   * With `poisoned`, the batch's shape is not drawn but fixed (VARKA-138): 257 rows, every input
-   * null on every third row and so poisoned there, which puts a poisoned lane in front of the
-   * masked body by construction rather than by the draw. 257 rows are whole lane groups at every
-   * width plus one row for the epilogue, and the nulls fall on rows 1, 4, ..., 256, so the first
-   * lane group and the epilogue's one row both hold one. Only the values come from `rnd`.
+   * With `poisoned`, the batch's shape is not drawn but fixed (VARKA-138), `poisonedPatterns`,
+   * and it runs through the masked body alone, at both fills: its other body would be the same
+   * values with no nulls, which meet no poisoned lane and which the drawn batches cover.
+   * `kernelBytes` replaces the emitted kernel, for a test that plants a wrong one.
    */
   private def checkKernel(plan: CompiledVarkaProjection, inputs: Seq[Attribute],
       opts: VarkaEmitOptions, rnd: Random, spark: Option[VarkaSparkOracle] = None,
-      context: String = "kernel", poisoned: Boolean = false): Boolean = {
+      context: String = "kernel", poisoned: Boolean = false,
+      kernelBytes: Option[Array[Byte]] = None,
+      patternsOf: Int => Seq[Int => Boolean] = poisonedPatterns): Boolean = {
     val numInputs = plan.inputOrdinals.size
     kernelCounter += 1
     kernelsByLane(plan.lane) = kernelsByLane.getOrElse(plan.lane, 0) + 1
     val className = s"org.apache.spark.sql.varka.execution.VarkaCompositionWide$kernelCounter"
-    val bytes = VarkaLoopEmitter.emit(className, plan.outputs, numInputs,
-      plan.numLiterals, null, null, opts)
+    val bytes = kernelBytes.getOrElse(VarkaLoopEmitter.emit(className, plan.outputs, numInputs,
+      plan.numLiterals, null, null, opts))
     val length = if (poisoned) PoisonedLength else Seq(1, 7, 64, 100, 257, 1000)(rnd.nextInt(6))
-    val patterns: Seq[Int => Boolean] = Seq.fill(numInputs) {
-      if (poisoned) (i: Int) => i % 3 == 1
-      else rnd.nextInt(3) match {
-        case 0 => (_: Int) => false
-        case 1 => (i: Int) => i % 5 == 0
-        case _ =>
-          val bits = Array.fill(length)(rnd.nextInt(3) == 0)
-          (i: Int) => bits(i)
+    val patterns: Seq[Int => Boolean] = if (poisoned) {
+      patternsOf(numInputs)
+    } else {
+      Seq.fill(numInputs) {
+        rnd.nextInt(3) match {
+          case 0 => (_: Int) => false
+          case 1 => (i: Int) => i % 5 == 0
+          case _ =>
+            val bits = Array.fill(length)(rnd.nextInt(3) == 0)
+            (i: Int) => bits(i)
+        }
       }
     }
     val forceMasked = !poisoned && length > 1 && rnd.nextBoolean()
@@ -293,23 +297,32 @@ class VarkaCoverageCompositionFuzzSuite
           case None => unbounded
         }
     }
+    val roots = plan.outputs.asScala.toSeq
     def attempt(scale: Int): Boolean = if (plan.lane == LaneType.LONG) {
       val data = Array.tabulate(numInputs) { i =>
         val dataType = inputs(plan.inputOrdinals.get(i)).dataType
         Array.fill(length)(drawLong(rnd, dataType, scale))
       }
-      VarkaKernelCheck.runAndCompareLong(context, className, bytes, plan.outputs.asScala.toSeq,
-          numInputs,
-        plan.longLiterals.asScala.map(_.longValue).toArray,
-        VarkaKernelCheck.LongBatch(length, patterns, data, forceMasked), declineAllowed = true,
-        spark = spark)
+      val lits = plan.longLiterals.asScala.map(_.longValue).toArray
+      val batch = VarkaKernelCheck.LongBatch(length, patterns, data, forceMasked)
+      if (poisoned) {
+        VarkaKernelCheck.runOwnBodyLong(context, className, bytes, roots, numInputs, lits, batch,
+          declineAllowed = true, spark = spark)
+      } else {
+        VarkaKernelCheck.runAndCompareLong(context, className, bytes, roots, numInputs, lits,
+          batch, declineAllowed = true, spark = spark)
+      }
     } else {
       val data = Array.tabulate(numInputs)(i => Array.fill(length)(intValue(i, scale)))
-      VarkaKernelCheck.runAndCompare(context, className, bytes, plan.outputs.asScala.toSeq,
-          numInputs,
-        plan.literals.asScala.map(_.intValue).toArray, VarkaKernelCheck.Batch(length, patterns,
-            data, forceMasked),
-        declineAllowed = true, spark = spark)
+      val lits = plan.literals.asScala.map(_.intValue).toArray
+      val batch = VarkaKernelCheck.Batch(length, patterns, data, forceMasked)
+      if (poisoned) {
+        VarkaKernelCheck.runOwnBody(context, className, bytes, roots, numInputs, lits, batch,
+          declineAllowed = true, spark = spark)
+      } else {
+        VarkaKernelCheck.runAndCompare(context, className, bytes, roots, numInputs, lits, batch,
+          declineAllowed = true, spark = spark)
+      }
     }
     val compared = (0 until 3).exists { scale =>
       if (scale > 0) redrawn += 1
@@ -319,8 +332,33 @@ class VarkaCoverageCompositionFuzzSuite
     compared
   }
 
-  /** The fixed poisoned batch's rows (VARKA-138): see `checkKernel`. */
+  /** The fixed poisoned batch's rows (VARKA-138): see `poisonedPatterns`. */
   private val PoisonedLength = 257
+
+  /**
+   * The fixed poisoned batch's null patterns (VARKA-138): 257 rows, input `c` null where
+   * `i % 3 == (c + 1) % 3`, and every input null where `i % 9 == 0`. Each input has its own
+   * phase, so a poisoned lane sits beside a valid one in another input - the case a null-skipping
+   * `greatest` or `coalesce` must not take the poison from - and inputs null together carry
+   * different poisons; the rows divisible by nine are null in every input. 257 rows are whole
+   * lane groups at every width plus one row for the epilogue: input 0 is null on row 1, in the
+   * first lane group, and on row 256, the epilogue's one row.
+   */
+  private def poisonedPatterns(numInputs: Int): Seq[Int => Boolean] =
+    (0 until numInputs).map(c => (i: Int) => i % 3 == (c + 1) % 3 || i % 9 == 0)
+
+  /** The shape the poisoned batch had first: every input null together, on rows 1, 4, ... */
+  private def samePhasePatterns(numInputs: Int): Seq[Int => Boolean] =
+    Seq.fill(numInputs)((i: Int) => i % 3 == 1)
+
+  /** Rows of the poisoned batch where a null input sits beside a valid one. */
+  private def mixedRows(numInputs: Int): Int = {
+    val patterns = poisonedPatterns(numInputs)
+    (0 until PoisonedLength).count { i =>
+      val nulls = patterns.count(_(i))
+      nulls > 0 && nulls < numInputs
+    }
+  }
 
   /**
    * The expression behind each output of kernel `k` of `p`: the entry whose spec names that
@@ -575,6 +613,7 @@ class VarkaCoverageCompositionFuzzSuite
     val before = VarkaKernelCheck.sparkComparisons.get()
     var checked = 0
     var poisoned = 0
+    var mixed = 0
     for (opts <- Seq(VarkaMatrix.base, VarkaMatrix.base.withLanesOverride(4))) {
       for (row <- projections) {
         val expr = resolve(row.executable)
@@ -589,6 +628,7 @@ class VarkaCoverageCompositionFuzzSuite
         if (checkKernel(plan, columns, opts, poisonedRnd, spark,
             context = s"kernel of ${row.executable} (poisoned batch)", poisoned = true)) {
           poisoned += 1
+          if (plan.inputOrdinals.size > 1) mixed += 1
         }
         checked += 1
       }
@@ -603,6 +643,7 @@ class VarkaCoverageCompositionFuzzSuite
         if (checkKernel(predicate.fused, columns, opts, poisonedRnd, spark,
             context = s"kernel of ${row.executable} (poisoned batch)", poisoned = true)) {
           poisoned += 1
+          if (predicate.fused.inputOrdinals.size > 1) mixed += 1
         }
         checked += 1
       }
@@ -611,10 +652,12 @@ class VarkaCoverageCompositionFuzzSuite
     // One poisoned batch per row and width, and each compared row by row: a batch every attempt
     // of which a guard declined would have put no poisoned lane in front of the kernel.
     assert(poisoned == checked, s"$poisoned of $checked kernels compared on a poisoned batch")
+    // Every kernel of two or more inputs met a null beside a valid input on rows of its own.
+    (2 to 4).foreach(n => assert(mixedRows(n) > 100, s"${mixedRows(n)} mixed rows at $n inputs"))
     val compared = VarkaKernelCheck.sparkComparisons.get() - before
     assert(compared > 100000, s"only $compared answers were held to Spark")
-    info(s"$checked kernels, $poisoned of them on a poisoned batch, $compared answers held to " +
-      "Spark")
+    info(s"$checked kernels, $poisoned of them on a poisoned batch ($mixed with a null beside a " +
+      s"valid input on ${mixedRows(2)} of its rows at two inputs), $compared answers held to Spark")
   }
 
   test("a kernel that writes no validity fails at one fill and passes at the other (VARKA-138)") {
@@ -639,37 +682,59 @@ class VarkaCoverageCompositionFuzzSuite
       val bytes = VarkaLoopEmitter.emit(className, plan.outputs, numInputs, plan.numLiterals,
         null, null, opts)
       val faulty = VarkaValidityFault.withoutValidityWrites(bytes)
-      assert(VarkaValidityFault.validityWrites(bytes) > 0, s"$sql writes no validity")
-      assert(VarkaValidityFault.validityWrites(faulty) == 0, s"$sql kept a validity write")
       val rnd = new Random(seed ^ 1380L)
-      val length = PoisonedLength
+      // A whole number of bytes, so the check of the bits past the last row (which this fault
+      // fails at the ones fill, see the end) does not decide the row-bit assertions.
+      var length = 256
+      val intLits = plan.literals.asScala.map(_.intValue).toArray
+      val longLits = plan.longLiterals.asScala.map(_.longValue).toArray
+      def intBatch(allNull: Boolean): VarkaKernelCheck.Batch = VarkaKernelCheck.Batch(length,
+        Seq.fill(numInputs)((_: Int) => allNull),
+        Array.fill(numInputs, length)(rnd.nextInt(60001) - 30000), forceMasked = false)
+      def longBatch(allNull: Boolean): VarkaKernelCheck.LongBatch =
+        VarkaKernelCheck.LongBatch(length, Seq.fill(numInputs)((_: Int) => allNull),
+        Array.fill(numInputs, length)(VarkaIrGrammar.within(rnd.self, 1L << 40)),
+        forceMasked = false)
       // `fill` None is the check every fuzzer runs: both bodies, each at both fills.
       def run(code: Array[Byte], allNull: Boolean, fill: Option[VarkaKernelChecks.ValidityFill])
           : Unit = {
         val context = s"kernel of $sql at $width, ${if (allNull) "every row null" else "no nulls"}"
-        val patterns = Seq.fill(numInputs)((_: Int) => allNull)
         if (plan.lane == LaneType.LONG) {
-          val data = Array.fill(numInputs, length)(VarkaIrGrammar.within(rnd.self, 1L << 40))
-          val lits = plan.longLiterals.asScala.map(_.longValue).toArray
-          val batch = VarkaKernelCheck.LongBatch(length, patterns, data, forceMasked = false)
+          val batch = longBatch(allNull)
           fill match {
-            case Some(f) => VarkaKernelCheck.runOwnBodyLongAt(context, className, code, roots,
-              numInputs, lits, batch, f)
+            case Some(f) => VarkaKernelCheck.runOwnBodyLong(context, className, code, roots,
+              numInputs, longLits, batch, fills = Seq(f))
             case None => VarkaKernelCheck.runAndCompareLong(context, className, code, roots,
-              numInputs, lits, batch)
+              numInputs, longLits, batch)
           }
         } else {
-          val data = Array.fill(numInputs, length)(rnd.nextInt(60001) - 30000)
-          val lits = plan.literals.asScala.map(_.intValue).toArray
-          val batch = VarkaKernelCheck.Batch(length, patterns, data, forceMasked = false)
+          val batch = intBatch(allNull)
           fill match {
-            case Some(f) => VarkaKernelCheck.runOwnBodyAt(context, className, code, roots,
-              numInputs, lits, batch, f)
+            case Some(f) => VarkaKernelCheck.runOwnBody(context, className, code, roots,
+              numInputs, intLits, batch, fills = Seq(f))
             case None => VarkaKernelCheck.runAndCompare(context, className, code, roots,
-              numInputs, lits, batch)
+              numInputs, intLits, batch)
           }
         }
       }
+      // The validity bytes a kernel changed from the fill, read off its buffers rather than off
+      // the rewrite's own list of writers, so a writer the rewrite misses shows here.
+      def written(code: Array[Byte], allNull: Boolean, fill: VarkaKernelChecks.ValidityFill)
+          : Int =
+        if (plan.lane == LaneType.LONG) {
+          VarkaKernelCheck.validityBytesWrittenLong(className, code, roots, numInputs, longLits,
+            longBatch(allNull), fill)
+        } else {
+          VarkaKernelCheck.validityBytesWritten(className, code, roots, numInputs, intLits,
+            intBatch(allNull), fill)
+        }
+      for (allNull <- Seq(false, true); fill <- Seq(ZERO, ONES)) {
+        assert(written(faulty, allNull, fill) == 0,
+          s"$sql at $width: the faulty kernel still writes validity (all null: $allNull, $fill)")
+      }
+      // The emitted kernel writes the bits each batch's answer needs, at whichever fill hid them.
+      assert(written(bytes, allNull = false, ZERO) > 0 && written(bytes, allNull = true, ONES) > 0,
+        s"$sql at $width writes no validity")
       def fails(allNull: Boolean, fill: Option[VarkaKernelChecks.ValidityFill]): String =
         intercept[IllegalStateException](run(faulty, allNull, fill)).getMessage
       // The kernel as emitted passes every way it is run.
@@ -688,8 +753,53 @@ class VarkaCoverageCompositionFuzzSuite
         "differs (want None, got Some("), uncleared)
       // ...and the check the fuzzers run, at both fills, catches both.
       Seq(false, true).foreach(allNull => fails(allNull, None))
+      // At 257 rows the faulty kernel leaves the ones fill in the last byte's seven bits past
+      // the last row, which every writer clears (`setValid`'s contract), and fails there too.
+      length = PoisonedLength
+      run(bytes, allNull = false, Some(ONES))
+      val tail = fails(allNull = false, Some(ONES))
+      assert(tail.contains("has bits set past row 256 in its last byte (0xff)"), tail)
       info(s"${VarkaValidityFault.validityWrites(bytes)} validity writes removed; " +
         s"${unset.linesIterator.next()}; ${uncleared.linesIterator.next()}")
+    }
+  }
+
+  test("the poisoned batch puts a null beside a valid input, which a wrong kernel fails on " +
+      "(VARKA-138)") {
+    // A planted wrong kernel for greatest(l, l2): `CASE WHEN l > l2 THEN l ELSE l2 END`, which
+    // agrees with greatest wherever both inputs are valid or both null, and answers null where
+    // only l2 is - where greatest skips the null and answers l. The poisoned batch as first built
+    // made every input null together, so this kernel passed it; with each input on its own null
+    // phase it fails, on the first row where l2 alone is null.
+    val sql = "greatest(l, l2)"
+    for (opts <- Seq(VarkaMatrix.base, VarkaMatrix.base.withLanesOverride(4))) {
+      val expr = resolve(sql)
+      val plan = VarkaExpressionCompiler.compile(Seq(Alias(expr, "c")()), columns, opts).toScala
+        .getOrElse(fail(s"$sql did not fuse alone"))
+      val wrong = plan.outputs.get(0) match {
+        case g: VarkaVectorIR.Greatest =>
+          new VarkaVectorIR.IfElse(
+            new VarkaVectorIR.Compare(VarkaVectorIR.CompareOp.GT, g.left, g.right),
+            g.left, g.right)
+        case other => fail(s"$sql compiled to $other, not a Greatest")
+      }
+      val spark = sparkOracle(plan, columns, Seq(expr))
+      def check(patternsOf: Int => Seq[Int => Boolean]): Boolean = {
+        // Emitted under the class name checkKernel is about to give its kernel.
+        val className =
+          s"org.apache.spark.sql.varka.execution.VarkaCompositionWide${kernelCounter + 1}"
+        val bytes = VarkaLoopEmitter.emit(className, java.util.List.of(wrong),
+          plan.inputOrdinals.size, plan.numLiterals, null, null, opts)
+        checkKernel(plan, columns, opts, new Random(seed ^ 138L), spark,
+          context = s"wrong kernel of $sql", poisoned = true, kernelBytes = Some(bytes),
+          patternsOf = patternsOf)
+      }
+      assert(check(samePhasePatterns), "the wrong kernel should pass the same-phase batch")
+      val e = intercept[IllegalStateException](check(poisonedPatterns))
+      assert(e.getMessage.contains("wrong kernel of greatest(l, l2)") &&
+        e.getMessage.contains("differs (want Some(") && e.getMessage.contains("got None)"),
+        e.getMessage)
+      info(e.getMessage.linesIterator.next())
     }
   }
 

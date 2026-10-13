@@ -128,11 +128,14 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
       poisonNulls: Boolean = true): Col =
     F.makeInputData(arena, length, i => isNull(i), i => value(i), poisonNulls)
 
+  /** See [[VarkaEmitterFixtures.makeOutput]]: validity starts at `fill`, all ones by default. */
   protected def makeOutput(
       arena: Arena,
       length: Int,
-      validityBytes: Long = -1L): (MemorySegment, MemorySegment) = {
-    val out = F.makeOutput(arena, length, validityBytes)
+      validityBytes: Long = -1L,
+      fill: VarkaKernelChecks.ValidityFill = VarkaKernelChecks.ValidityFill.ONES)
+      : (MemorySegment, MemorySegment) = {
+    val out = F.makeOutput(arena, length, validityBytes, fill)
     (out.data, out.validity)
   }
 
@@ -211,8 +214,6 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
           val cols = (0 until numInputs).map { c =>
             makeInputData(arena, length, combo(c), i => data(c, i))
           }
-          val outs = roots.map(_ =>
-            makeOutput(arena, length, outputValidityBytes(options, length)))
           val nullCounts = cols.map { col =>
             if (forceMasked && col.nullCount == 0) 1 else col.nullCount
           }
@@ -223,40 +224,46 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
           // A Cond root is a selection output (VARKA-21): its data address is 0L per the
           // kernel contract - exactly what the filter evaluator passes - so a regression
           // that touches it faults instead of writing somewhere silently.
-          val dstData = roots.zip(outs).map { case (root, out) =>
-            if (root.isInstanceOf[Cond]) 0L else out._1.address()
-          }
-          // The status is asserted, not discarded: a guard that declines every batch
-          // leaves the destination values correct - the arithmetic does not depend on it -
-          // so without this the matrix stays green while the kernel computes nothing in
-          // production. Every shape this harness drives is one the kernel must answer.
-          val status = kernel.run(cols.map(_.data.address()).toArray, validityAddrs.toArray,
-            nullCounts.toArray, dstData.toArray,
-            outs.map(_._2.address()).toArray, lits, length,
-            VarkaEmitterTestSupport.scratch(kernel, length))
-          assert(status === 0,
-            s"$ctx: the kernel declined a batch it should have computed " +
-              s"(length $length, combo $comboId, status $status)")
-          for (i <- 0 until length) {
-            val row = (0 until numInputs).map { c =>
-              if (combo(c)(i)) None else Some(data(c, i))
+          // Each case at both validity fills (VARKA-138): ones shows a bit the kernel fails to
+          // clear, zero - what production's Arrow buffers hold - one it fails to set.
+          for (fill <- VarkaKernelCheck.bothFills) {
+            val outs = roots.map(_ =>
+              makeOutput(arena, length, outputValidityBytes(options, length), fill))
+            val dstData = roots.zip(outs).map { case (root, out) =>
+              if (root.isInstanceOf[Cond]) 0L else out._1.address()
             }
-            for ((root, o) <- roots.zipWithIndex) {
-              val bit = (outs(o)._2.get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) != 0
-              val where = s"$ctx len=$length combo=$comboId out=$o row=$i"
-              root match {
-                case c: Cond =>
-                  // The selection rule: a bit is set exactly where the condition is known
-                  // true - unknown reads as false (the mask-root null rule).
-                  val expected = evalCond(c, row, lits).contains(true)
-                  assert(bit === expected, s"$where: selection differs (want $expected)")
-                case _ =>
-                  val expected = evalValue(root, row, lits)
-                  assert(bit === expected.isDefined,
-                    s"$where: validity differs (want $expected)")
-                  expected.foreach { v =>
-                    assert(outs(o)._1.get(ValueLayout.JAVA_INT, i * 4L) === v, s"$where: value")
-                  }
+            // The status is asserted, not discarded: a guard that declines every batch
+            // leaves the destination values correct - the arithmetic does not depend on it -
+            // so without this the matrix stays green while the kernel computes nothing in
+            // production. Every shape this harness drives is one the kernel must answer.
+            val status = kernel.run(cols.map(_.data.address()).toArray, validityAddrs.toArray,
+              nullCounts.toArray, dstData.toArray,
+              outs.map(_._2.address()).toArray, lits, length,
+              VarkaEmitterTestSupport.scratch(kernel, length))
+            assert(status === 0,
+              s"$ctx: the kernel declined a batch it should have computed " +
+                s"(length $length, combo $comboId, $fill, status $status)")
+            for (i <- 0 until length) {
+              val row = (0 until numInputs).map { c =>
+                if (combo(c)(i)) None else Some(data(c, i))
+              }
+              for ((root, o) <- roots.zipWithIndex) {
+                val bit = (outs(o)._2.get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) != 0
+                val where = s"$ctx len=$length combo=$comboId out=$o row=$i fill=$fill"
+                root match {
+                  case c: Cond =>
+                    // The selection rule: a bit is set exactly where the condition is known
+                    // true - unknown reads as false (the mask-root null rule).
+                    val expected = evalCond(c, row, lits).contains(true)
+                    assert(bit === expected, s"$where: selection differs (want $expected)")
+                  case _ =>
+                    val expected = evalValue(root, row, lits)
+                    assert(bit === expected.isDefined,
+                      s"$where: validity differs (want $expected)")
+                    expected.foreach { v =>
+                      assert(outs(o)._1.get(ValueLayout.JAVA_INT, i * 4L) === v, s"$where: value")
+                    }
+                }
               }
             }
           }
@@ -298,8 +305,12 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
     F.makeLongInput(arena, length, i => isNull(i), i => value(i), poisonNulls)
 
   /** `makeOutput`'s twin at 64-bit lanes. */
-  protected def makeLongOutput(arena: Arena, length: Int): (MemorySegment, MemorySegment) = {
-    val out = F.makeLongOutput(arena, length)
+  protected def makeLongOutput(
+      arena: Arena,
+      length: Int,
+      fill: VarkaKernelChecks.ValidityFill = VarkaKernelChecks.ValidityFill.ONES)
+      : (MemorySegment, MemorySegment) = {
+    val out = F.makeLongOutput(arena, length, fill)
     (out.data, out.validity)
   }
 
@@ -329,35 +340,39 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
           val cols = (0 until numInputs).map { c =>
             makeLongInput(arena, length, combo(c), i => data(c, i))
           }
-          val outs = roots.map(_ => makeLongOutput(arena, length))
-          val dstData = roots.zip(outs).map { case (root, out) =>
-            if (root.isInstanceOf[Cond]) 0L else out._1.address()
-          }
-          val status = kernel.run(cols.map(_.data.address()).toArray,
-            cols.map(_.validityAddress(length)).toArray, cols.map(_.nullCount).toArray,
-            dstData.toArray, outs.map(_._2.address()).toArray,
-            Array.empty[Int], lits, length, VarkaEmitterTestSupport.scratch(kernel, length))
-          assert(status === 0,
-            s"$ctx at $lanes lanes: the kernel declined a batch it should have computed " +
-              s"(length $length, combo $comboId, status $status)")
-          for (i <- 0 until length) {
-            val row = (0 until numInputs).map { c =>
-              if (combo(c)(i)) None else Some(data(c, i))
+          // Each case at both validity fills (VARKA-138), as the int matrix runs them.
+          for (fill <- VarkaKernelCheck.bothFills) {
+            val outs = roots.map(_ => makeLongOutput(arena, length, fill))
+            val dstData = roots.zip(outs).map { case (root, out) =>
+              if (root.isInstanceOf[Cond]) 0L else out._1.address()
             }
-            for ((root, o) <- roots.zipWithIndex) {
-              val bit = (outs(o)._2.get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) != 0
-              val where = s"$ctx at $lanes lanes, len=$length combo=$comboId out=$o row=$i"
-              root match {
-                case c: Cond =>
-                  val expected = evalCondLong(c, row, lits).contains(true)
-                  assert(bit === expected, s"$where: selection differs (want $expected)")
-                case _ =>
-                  val expected = evalLong(root, row, lits)
-                  assert(bit === expected.isDefined,
-                    s"$where: validity differs (want $expected)")
-                  expected.foreach { v =>
-                    assert(outs(o)._1.get(ValueLayout.JAVA_LONG, i * 8L) === v, s"$where: value")
-                  }
+            val status = kernel.run(cols.map(_.data.address()).toArray,
+              cols.map(_.validityAddress(length)).toArray, cols.map(_.nullCount).toArray,
+              dstData.toArray, outs.map(_._2.address()).toArray,
+              Array.empty[Int], lits, length, VarkaEmitterTestSupport.scratch(kernel, length))
+            assert(status === 0,
+              s"$ctx at $lanes lanes: the kernel declined a batch it should have computed " +
+                s"(length $length, combo $comboId, $fill, status $status)")
+            for (i <- 0 until length) {
+              val row = (0 until numInputs).map { c =>
+                if (combo(c)(i)) None else Some(data(c, i))
+              }
+              for ((root, o) <- roots.zipWithIndex) {
+                val bit = (outs(o)._2.get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) != 0
+                val where =
+                  s"$ctx at $lanes lanes, len=$length combo=$comboId out=$o row=$i fill=$fill"
+                root match {
+                  case c: Cond =>
+                    val expected = evalCondLong(c, row, lits).contains(true)
+                    assert(bit === expected, s"$where: selection differs (want $expected)")
+                  case _ =>
+                    val expected = evalLong(root, row, lits)
+                    assert(bit === expected.isDefined,
+                      s"$where: validity differs (want $expected)")
+                    expected.foreach { v =>
+                      assert(outs(o)._1.get(ValueLayout.JAVA_LONG, i * 8L) === v, s"$where: value")
+                    }
+                }
               }
             }
           }

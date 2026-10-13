@@ -46,6 +46,12 @@ import java.lang.constant.MethodTypeDesc;
  * the emitter and so cannot be reached from production, and it is the same rewrite whatever the
  * options chose to emit. No Class-File API type appears in a signature here, because the Scala
  * suites call this class and scalac cannot load that API's sealed builders.
+ *
+ * <p>Which calls write is this class's own judgement, so the test does not take the rewrite's
+ * word for its result: it runs the faulty kernel and counts the validity bytes it changed from
+ * the fill ({@code VarkaKernelChecks.validityBytesWritten}), which must be none at either fill.
+ * A writer this predicate misses - renamed, returning a value, or a store inlined into the
+ * kernel - changes a byte there and fails the test.
  */
 final class VarkaValidityFault {
 
@@ -68,7 +74,7 @@ final class VarkaValidityFault {
         || name.equals("zero");
   }
 
-  /** How many validity writes {@code bytes} calls, over all of its methods. */
+  /** How many validity writes {@code bytes} calls, by this class's predicate: for a message. */
   static int validityWrites(byte[] bytes) {
     int count = 0;
     for (MethodModel mm : ClassFile.of().parse(bytes).methods()) {
