@@ -113,6 +113,19 @@ public class VarkaEmissionBenchmark extends VarkaBenchmarkBase {
   /** Keeps the emitted bytes and the defined classes live to the end of the run. */
   private int sink = 0;
 
+  /**
+   * In a dry run, emits a case's shape once before the case is added: every emission here is
+   * the timed work itself, which a dry run skips, so without this a dry run would check none of
+   * the shapes builds. A timed run does nothing here, so its cases are as they were.
+   */
+  private void checkInDryRun(List<VarkaVectorIR> roots, int inputs, int literals,
+      VarkaEmitOptions options) {
+    if (dryRun()) {
+      sink += VarkaLoopEmitter.emit("VarkaEmissionBenchmarkCheck", List.copyOf(roots), inputs,
+          literals, null, null, options).length;
+    }
+  }
+
   private static VarkaVectorIR entry(int k) {
     return new Greatest(new Greatest(
         new AddMonths(COL, new LiteralSlot(k)), new AddDays(COL, new LiteralSlot(k))),
@@ -131,6 +144,7 @@ public class VarkaEmissionBenchmark extends VarkaBenchmarkBase {
       var benchmark = benchmark("one emission", EMISSIONS_PER_ITERATION).timed().build();
       for (Shape shape : SHAPES) {
         VarkaVectorIR[] roots = shape.roots().toArray(new VarkaVectorIR[0]);
+        checkInDryRun(shape.roots(), shape.inputs(), shape.literals(), options);
         benchmark.addCase(shape.name(), iteration -> {
           int i = 0;
           while (i < EMISSIONS_PER_ITERATION) {
@@ -150,6 +164,7 @@ public class VarkaEmissionBenchmark extends VarkaBenchmarkBase {
           .timed().build();
       for (Shape shape : SHAPES) {
         VarkaVectorIR[] roots = shape.roots().toArray(new VarkaVectorIR[0]);
+        checkInDryRun(shape.roots(), shape.inputs(), shape.literals(), options);
         benchmark.addCase(shape.name(), iteration -> {
           int i = 0;
           while (i < EMISSIONS_PER_ITERATION) {
@@ -185,6 +200,7 @@ public class VarkaEmissionBenchmark extends VarkaBenchmarkBase {
         for (boolean groupLocal : new boolean[] {false, true}) {
           String frames = groupLocal ? "group-local frames" : "kernel-wide frames";
           VarkaEmitOptions arm = wide.withGroupLocalSlots(groupLocal);
+          checkInDryRun(roots, 1, n, arm);
           benchmark.addCase(n + " outputs, " + frames + budget, iteration -> {
             sink += VarkaLoopEmitter.emit("VarkaEmissionBenchmarkWide", roots, 1, n, null,
                 null, arm).length;
@@ -209,6 +225,7 @@ public class VarkaEmissionBenchmark extends VarkaBenchmarkBase {
           VarkaEmitOptions arm = c.base().withPredictGrouping(predict);
           List<VarkaVectorIR> rootList = List.copyOf(c.roots());
           int size = c.roots().size();
+          checkInDryRun(rootList, 1, size, arm);
           benchmark.addCase(c.name() + ", " + (predict ? "predicted" : "weights"), iteration -> {
             sink += VarkaLoopEmitter.emit("VarkaEmissionBenchmarkPredicted", rootList, 1,
                 size, null, null, arm).length;
