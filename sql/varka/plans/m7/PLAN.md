@@ -838,7 +838,8 @@ serves no point of 1.1 is an item in `m8/SCOPE.md` (as items 93 to 95 were on 13
    their casts are between types Varka does not read. *Decided by the owner on 13 October 2026:
    kept, ordered with the rest of point 2 after 272 and 279.*
 3. **The errors rows (313 to 319) stay whole.** Added by the owner on 12 October; the
-   recommendation is to keep all seven, after 255 and 243.
+   recommendation is to keep all seven, after 255 and 243. *Decided by the owner on 13 October
+   2026: all seven kept, in 9.3's order, 315 after 314 and 316 last of them.*
 4. **The promotion track.** 258 to 260 have not started and 180 has no commit; the recommendation
    is to outline 258 now, as milestone 6's review did for its post, so the posts stop losing the
    comparison with the next measurable row.
