@@ -1047,3 +1047,24 @@ Java is one (`sql/varka/AGENTS.md`). What to know when writing and running one:
   when run alone and plant their failures only while a harness test runs them, through a Launcher
   of its own with the `META-INF/services` listeners off, so the fixtures' lines and counts do not
   reach the JVM's own.
+
+## Cost predictions run optimistic: the calibration table
+
+*Added on 13 October 2026 from milestone 7's halfway review (`m7/PLAN.md` 9.2 and 9.5).* A plan
+predicts what its own checks will cost before it builds them, and the predictions scored so far
+in milestone 7 mostly came in low. One line per scored cost prediction, so the next plan can state
+its estimate at the ratio observed rather than at its hope; a ratio above 1 means it cost more than
+predicted. Add the line when the prediction is scored, whichever way it went.
+
+| task | predicted | measured | ratio | note |
+| --- | --- | --- | ---: | --- |
+| VARKA-138a (6.1 #2) | per-row coverage check at most 25% slower | +38% by minimums, +27% after the review dropped a redundant dense run | 1.5, then 1.1 | the fixed poisoned batch alone added about 27% of the work |
+| VARKA-274a (6.1 #2) | under 3 s per case for all histories | 3,623 ms median at the int lane, 1,356 ms at the long lane | 1.2 | long lane faster than predicted |
+| VARKA-274a (6.1 #8) | the tier witness adds under 5% | +19% (int) and +25% (long) per case; +6% on the whole test | 3.8 to 5.0 | one code-list read per call, about 3.5 ms, is most of it |
+| VARKA-271a (6.1 #6) | the Varka arm under 70 minutes in one JVM | 33 minutes beside the cache-only arm | 0.5 | the one pessimistic line so far |
+
+What the table says so far: a check that adds a run per batch or a read per call costs more than
+the plan's arithmetic, because the arithmetic counts the kernel's work and not the harness's
+(loading, copying, reading the JIT's state); predict that overhead from a probe, not from the
+kernel's share.
+
