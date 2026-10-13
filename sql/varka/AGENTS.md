@@ -57,7 +57,10 @@ are written *as the work happens*: a task file states what was planned, then wha
 built, what was measured and where the plan turned out wrong. Predictions written
 before a measurement stay in the file after it, scored honestly - the project
 keeps count. Do not retro-edit a task file to look prescient; add the correction
-and say what it corrects.
+and say what it corrects. A cost prediction - a test's or a suite's added time, a
+check's overhead - reads the calibration table in `skills/testing-and-debugging.md` first and is
+stated at the ratio the table has observed unless the plan says why not; once scored, its line
+joins the table.
 
 A milestone's file is named for the stage it is in. While it is a scope
 catalogue - numbered items with design input, no task numbers assigned yet - it
@@ -275,6 +278,30 @@ loads, benchmarks. So:
   `target/bg/`. A script that runs long steps writes each step's exit status to a file, as
   `dev/varka_matrix.sh` does, and a waiter reads that file.
 * When you hand a long job to another agent, say this in the brief.
+* **Never `git stash`.** The stash list is one per repository, shared by every worktree, so a stash
+  can be popped by another agent's work, or left behind under a name nobody owns. To set changes
+  aside, commit them on your branch, or save `git diff > <file>` in your scratch area.
+* **Write only inside your own worktree and scratch area.** Another agent's worktree, the main
+  checkout and other agents' `target/` directories are theirs.
+* **Name the files you will edit** in your first progress message. Two tasks that both edit one
+  file run one after the other, not side by side: on 13 October 2026 two agents edited
+  `VarkaKernelChecks` at once, and the second to merge had to rebuild the first's changes inside
+  its own. Whoever launches agents in parallel lists, in each brief, the files that agent owns.
+
+## Pull requests: reviewed by their author before they open
+
+* **Review your own diff before opening the pull request**, with the review the owner runs
+  (`/code-review high` on the diff), fix every finding you verify, and say in the description
+  what the review found and what you changed. On 13 October 2026 six pull requests were reviewed
+  after their CI, and every one had seven to ten findings - a suite that could overwrite Spark's
+  golden files, a circular fault check, a benchmark that split shapes unlike the compiler, a tier
+  witness that dropped traps - each costing a second CI round and a second agent run. The owner's
+  review after CI is then the second look, not the first.
+* **A benchmark port merges with its pair** (`dev/varka_bench_pair.sh` against the merge base), or
+  its description says why not and names the row that owes the pair.
+* **A change that adds test time says so**: the gate's and the nightly's affected steps, their
+  time before and after, in the description; once row 255's CI records step times, against the
+  committed budget it keeps.
 
 ## House rules that bite here specifically
 
