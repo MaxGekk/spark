@@ -496,3 +496,38 @@ The wide-kernel pair stops on both sides at the sixth section, as above, until t
 fixed. The parity pair is the longest: a full run of the class takes about twenty minutes a side,
 so its five rounds take over three hours of the idle window. 6.1 is scored when the pairs are
 in.
+
+**322a-2's pair, run** (13 to 14 October 2026, 22:55 to 01:55 CEST, the owner away and no other
+JVM on the machine; load 1.2 to 1.4 from the pair's own builds). `dev/varka_bench_pair.sh catalyst
+VarkaEmitterParityBenchmark`, base `25a1bae6893` (the Scala form) against head `e17f656210a`, five
+rounds a side, no early stop. Of 235 rows, 225 moved less than 10% by the median or the best;
+2 are slower and 8 faster by 10% or more by both.
+
+* **The two slower rows are hand-written per-row loops, not emitted kernels**: "per-row
+  `LocalDate.of` make_date" at -15.1% by the median and -15.3% by the best, and "per-row
+  `DateTimeUtils.truncDate` YEAR" at -10.4% and -11.1%. Both are the benchmark's references for the
+  path Spark takes today, each a `while` loop around a call into `java.time` or `DateTimeUtils`.
+  The Java loop makes the Scala's calls with the same arguments, and reads its destination (and,
+  for truncDate, its input) through the shared buffers record's accessor where the Scala read a
+  captured local (item 6 above). That alone does not explain them: the per-row `getWeekOfYear`
+  and `LocalDate` year rows have the same shape and moved -4.1% and -1.8%. The cause is not
+  established; the check that would settle it is the two loops' inlining and compiled code on both
+  sides (`-XX:+PrintCompilation -XX:+UnlockDiagnosticVMOptions -XX:+PrintInlining`), on a quiet
+  machine. No emitted kernel's row is among them, so no number the benchmark reports for Varka
+  moves; what moves is two of its references to Spark's own path.
+* **The eight faster rows are the small-chunk shapes**: the 63- and 64-row chunk arms with mixed
+  nulls (dayofweek +11.4% and +16.6%, the depth-4 chain at 63 rows +14.7%, the 20-output epilogue
+  ladder +14.0% to +30.8%, by the median). At 63 or 64 rows a chunk, the harness's per-chunk work
+  is a large share of each call, and that is where items 1 to 3 differ: the Scala boxed its
+  `Long` arguments through an unspecialised `Function3`, allocated a `require` message thunk and
+  an empty literal array on every chunk, and the Java does none of these. The same arms at 4096
+  rows, where the per-chunk work is a small share, moved under 2%. As prediction 3 said for the
+  wide-kernel harness, these rows read the harness, not the kernel, and the dry run's identical
+  names and ids (above) rule out a dropped body.
+
+**6.1, for this class.** Prediction 4 **failed** for two rows: two rows are slower by 10% by both
+the median and the best, the pair runner's gate. Prediction 2 held in the form it was written:
+the rows that moved past 5% slower are the benchmark's own hand-written code, read here before
+being called a port's penalty. No A/A run of this class exists yet to read the spread against; it
+and the inlining check are owed, and either can run on a GitHub-hosted runner once the runner
+pair lands.
