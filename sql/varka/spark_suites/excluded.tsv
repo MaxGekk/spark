@@ -1,0 +1,11 @@
+# The golden-file suite's exclusion list (VARKA-271; see VarkaSQLQueryTestSuite and VarkaGoldenExclusions).
+# Tab separated: test name as ScalaTest prints it, arm (varka, cacheOnly or both), kind, reason. Kinds:
+# plans - the file's EXPLAIN statements are not compared, every other statement is; stale once no plan differs.
+# harness - a failure is cancelled with the reason; stale, and failing, once the test passes.
+# environment - a failure is cancelled; the test may pass where the machine has what it needs.
+explain-aqe.sql	both	plans	its EXPLAIN statements print physical plans, which show the InMemoryRelation the Arrow source adds under every relation
+explain-cbo.sql	both	plans	its EXPLAIN statements print physical plans, which show the InMemoryRelation the Arrow source adds under every relation
+explain.sql	both	plans	its EXPLAIN statements print physical plans, which show the InMemoryRelation the Arrow source adds under every relation
+hints.sql	both	plans	its EXPLAIN statements print physical plans, which show the InMemoryRelation the Arrow source adds under every relation
+join-nearest-by.sql	both	plans	its EXPLAIN statements print physical plans, which show the InMemoryRelation the Arrow source adds under every relation
+udtf/udtf.sql - Python UDTFs	both	environment	needs a Python with pyspark; fails the same way in Spark's own SQLQueryTestSuite on a machine without one
