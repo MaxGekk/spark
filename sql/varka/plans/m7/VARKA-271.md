@@ -26,18 +26,21 @@ probe code was a test-only session extension, a query listener and a subclass of
 `SQLQueryTestSuite`, all removed afterwards.
 
 **Varka on alone reaches nothing.** Varka serves only Arrow batches (`docs/sql-varka.md`,
-"Execution integration": "non-Arrow batches fall back entirely"). The golden files read
-`VALUES` lists, temporary views over them, and Parquet tables. A query with no `FROM` folds to
-a literal before any operator exists. Measured on nine test files (`date.sql`, `interval.sql`,
-`extract.sql` and `int4.sql`, in their default, `nonansi/` and `postgreSQL/` forms where they
-exist): 781 query executions, 4 with a Varka node in the plan, 0 batches served. The four nodes
-sat over vectorized Parquet batches, which are not Arrow.
+"Configuration", `spark.sql.codegen.varka.enabled`: "non-Arrow batches fall back entirely"). The
+golden files read `VALUES` lists, temporary views over them, and Parquet tables. A query with no
+`FROM` folds to a literal before any operator exists. Measured on nine test files (`date.sql`,
+`interval.sql`, `extract.sql` and `int4.sql`, in their default, `nonansi/` and `postgreSQL/` forms
+where they exist): 781 query executions, 4 with a Varka node in the plan, 0 batches served. The four
+nodes sat over vectorized Parquet batches, which are not Arrow.
 
 **An Arrow source puts Varka under 1,423 query executions.** The probe placed an Arrow-cached
 copy of every relation that has a Varka-typed column (`DATE`, `INT` or a year-month interval)
 under the query that reads it. This is the same plan node `.cache()` makes with the Arrow
-serializer. The whole suite ran in two arms, each in one JVM. Each arm took 56 minutes: 790 tests,
-779 passed, 11 failed, 59 ignored. The listener recorded every query execution, setup statements
+serializer. The whole suite ran in two arms, each in one JVM. Each arm took 56 minutes and ran
+790 tests: 779 passed and 11 failed. A further 59 tests are ignored by the suite itself. Under test
+(`SPARK_TESTING`), a kernel that fails fails its task instead of falling back to the row path
+(`VarkaColumnarToRowExec.failureFallbackForbidden`), so a failing kernel shows in the golden
+comparison too. The listener recorded every query execution, setup statements
 and commands included. In the 390 execution tests (the analyzer-only variants aside):
 
 | step | query executions |
@@ -112,7 +115,9 @@ arm:
 - the **cache-only arm**: the Arrow source and Varka off.
 
 A test that fails in the Varka arm and passes in the cache-only arm is a Varka failure. A test
-that fails in both is the harness's.
+that fails in both is the harness's. A test that passes in both shows no difference; whether it
+tested Varka at all is the served report's question (3.5). A test that passes in the Varka arm
+and fails in the cache-only arm is a harness failure that Varka hides, and is listed as one.
 
 The suite runs in a JVM of its own. `InMemoryRelation` keeps its cache serializer in one
 process-wide field, set at first use, so the suite cannot share a JVM with suites that cache
@@ -132,8 +137,9 @@ can read as a column with a column of a relation of 17 equal rows, and keeps one
   fuses with that child as a column. The rule asks `VarkaExpressionCompiler` with the child
   replaced by a column of the same type, so the set cannot drift from what Varka fuses. This
   keeps the `map(...)` key and every other position where a column changes the meaning.
-- **Why 17 rows.** One row runs only the kernel's epilogue. Seventeen rows run the dense loop
-  over two lane groups of eight and then the epilogue.
+- **Why 17 rows.** One row runs only the kernel's epilogue. A lane group is the machine's vector
+  width in int lanes, 4, 8 or 16 rows at 128, 256 or 512 bits (`docs/sql-varka.md`, Glossary).
+  Seventeen rows run the dense loop at least once at every width, and then the epilogue.
 - **Why the golden file still applies.** Analysis fixes every output column's name before the
   rule runs, and the 17 rows are equal, so `LIMIT 1` returns the query's own schema and row.
 
@@ -190,10 +196,14 @@ None: no emitted code changes.
 
 ## 5. Tests, and what each is for
 
-1. **A planted fault fails golden tests.** With the fault injector `misdescribeAdd` on, through
-   the emit-options test hook the SQL suites use, the Varka arm fails the golden tests whose
-   served queries add, and the cache-only arm does not. Without it, a suite that never fails
-   could mean the harness does not reach Varka.
+1. **A planted fault fails golden tests.** The fault injector `misdescribeAdd` emits `AddDays`
+   (`date_add`) against a wrong method descriptor, so the kernel throws `NoSuchMethodError` on its
+   first run. Turned on through the emit-options test hook the SQL suites use, with the fallback
+   after a kernel failure forbidden as it is under test, it fails the golden tests whose served
+   queries call `date_add` in the Varka arm, and none in the cache-only arm. Without it, a suite
+   that never fails could mean the harness does not reach Varka. The fault raises an error rather
+   than computing a wrong answer; no injector today plants a wrong value, and one is not added
+   here.
 2. **A stale entry fails.** An entry for a test that passes fails that test with "stale entry".
 3. **The exclusion list parses**, and a malformed line fails.
 4. **The lift keeps the golden answer.** On the nine probe files, the lifted Varka arm passes the
@@ -216,7 +226,8 @@ each. The Varka arm run twice, to compare the served report.
 3. With the lift, the query executions with a served batch rise from 1,423 to at least 2,000.
    The nine probe files rose from 26 to 88, but most files have few date or int literals.
 4. With the warm-up off, the served report is the same in two runs of the Varka arm.
-5. The planted fault of test 1 fails at least ten golden tests.
+5. The planted fault of test 1 fails at least one golden test, and every test it fails has a
+   served query that calls `date_add`.
 6. The Varka arm takes under 70 minutes in one JVM.
 
 ## 7. Risks
