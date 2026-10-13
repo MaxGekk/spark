@@ -862,8 +862,9 @@ VARKA-22 extends the account to the SQL UI and to JDK Flight Recorder:
   `org.apache.spark.sql.varka`: `KernelEmission` (timed over emit plus
   class define; shape hash, class name, IR sizes, byte count),
   `ShapeCacheLookup` (shape hash, hit, the per-execution identity - the
-  join a profile needs), `Fallback` (cause, kernel identity, exception
-  class, and for a declined batch its status word; the cause vocabulary is
+  join a profile needs), `Fallback` (cause, kernel identity, the emit
+  options that differ from the defaults, exception class, and for a
+  declined batch its status word; the cause vocabulary is
   the constants on `VarkaFallbackEvent`), and
   `KernelAllocation` (one per allocation sample, suspect or not: kernel
   identity, batch index, rows, allocated bytes, verdict).

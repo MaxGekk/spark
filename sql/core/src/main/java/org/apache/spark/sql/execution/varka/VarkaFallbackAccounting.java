@@ -23,9 +23,12 @@ import java.util.Map;
 import java.util.StringJoiner;
 import java.util.function.Supplier;
 
+import javax.annotation.Nullable;
+
 import org.apache.spark.internal.SparkLogger;
 import org.apache.spark.internal.SparkLoggerFactory;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaAllocationSampler;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrorContext;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFallbackEvent;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFusedKernel;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelAllocationEvent;
@@ -41,7 +44,11 @@ import org.apache.spark.sql.execution.metric.SQLMetric;
  *
  * <p>The kernel's identity is rendered only when a line or an event needs it: rendering hashes the
  * canonical IR, which the metered-but-uneventful path must not pay. So it arrives as a supplier,
- * built once per evaluator.
+ * built once per evaluator, and so do the emit options the event names.
+ *
+ * <p>A failure's warning ends with the context record's block ({@link VarkaErrorContext},
+ * VARKA-314), which the evaluator builds in its catch and passes in: the options the kernel was
+ * built under and the batch it failed on, beside the identity the sentence already names.
  */
 public final class VarkaFallbackAccounting {
 
@@ -58,6 +65,7 @@ public final class VarkaFallbackAccounting {
 
   private final Counters counters;
   private final Supplier<String> kernelIdentity;
+  private final Supplier<String> options;
   private final VarkaAllocationSampler.Tracker allocationTracker =
       new VarkaAllocationSampler.Tracker();
   private final boolean allocationSampling = VarkaAllocationSampler.supported();
@@ -80,9 +88,15 @@ public final class VarkaFallbackAccounting {
       "day-producer", "month-count", "make-date", "int-overflow", "day-range", "value-range",
       "input-bound", "derived-input", "forced"};
 
-  public VarkaFallbackAccounting(Counters counters, Supplier<String> kernelIdentity) {
+  /**
+   * @param options the emit options that differ from the defaults, rendered as
+   *                {@link VarkaErrorContext#renderOptions} renders them, for the event
+   */
+  public VarkaFallbackAccounting(
+      Counters counters, Supplier<String> kernelIdentity, Supplier<String> options) {
     this.counters = counters;
     this.kernelIdentity = kernelIdentity;
+    this.options = options;
   }
 
   private static void add(SQLMetric metric) {
@@ -94,14 +108,16 @@ public final class VarkaFallbackAccounting {
   /**
    * The ghost fallback's bookkeeping: an error from the emitted kernel itself. {@code kernel}
    * names a further kernel of the projection when that is the one that failed, and is null for
-   * the evaluator's own.
+   * the evaluator's own. {@code ctx} is the failure's context record, logged after the sentence;
+   * null logs the sentence alone.
    */
-  public void kernelFailure(Throwable e, String kernel) {
+  public void kernelFailure(Throwable e, String kernel, @Nullable VarkaErrorContext ctx) {
     String identity = kernel != null ? kernel : kernelIdentity.get();
     LOG.warn("The Varka SIMD kernels " + identity
-        + " failed on this batch; falling back to the per-row path.", e);
+        + " failed on this batch; falling back to the per-row path." + block(ctx), e);
     add(counters.kernelFailures());
-    fallbackEvent(VarkaFallbackEvent.KERNEL_FAILURE, () -> identity, e.getClass().getName());
+    fallbackEvent(VarkaFallbackEvent.KERNEL_FAILURE, () -> identity, options,
+        e.getClass().getName());
   }
 
   /**
@@ -109,13 +125,20 @@ public final class VarkaFallbackAccounting {
    * merge projection's compile or evaluation - which the VARKA-21 review split out of the kernel
    * metric: it is not the kernel's failure, and a throwing lazy re-runs its initializer, so
    * counting it there would inflate the ghost-fallback metric on every batch. Counted under its
-   * own bounded cause metric, evented and logged.
+   * own bounded cause metric, evented and logged, with {@code ctx} as {@link #kernelFailure}
+   * logs it.
    */
-  public void rowPathFailure(Throwable e) {
+  public void rowPathFailure(Throwable e, @Nullable VarkaErrorContext ctx) {
     LOG.warn("The per-row machinery beside the Varka kernel " + kernelIdentity.get()
-        + " failed on this batch; falling back to the per-row path.", e);
+        + " failed on this batch; falling back to the per-row path." + block(ctx), e);
     add(counters.rowPathFailures());
-    fallbackEvent(VarkaFallbackEvent.ROW_PATH_FAILURE, kernelIdentity, e.getClass().getName());
+    fallbackEvent(VarkaFallbackEvent.ROW_PATH_FAILURE, kernelIdentity, options,
+        e.getClass().getName());
+  }
+
+  /** The context record's block on lines of its own after a warning's sentence; empty for none. */
+  public static String block(@Nullable VarkaErrorContext ctx) {
+    return ctx == null ? "" : "\n" + ctx.render();
   }
 
   /**
@@ -139,7 +162,7 @@ public final class VarkaFallbackAccounting {
       }
     }
     fallbackEvent(VarkaFallbackEvent.RANGE_DECLINED, kernel != null ? () -> kernel : kernelIdentity,
-        "", status);
+        options, "", status);
   }
 
   /**
@@ -175,7 +198,7 @@ public final class VarkaFallbackAccounting {
   /** A non-empty batch whose referenced columns are not Arrow vectors the kernels read. */
   public void nonArrowBatch() {
     add(counters.nonArrow());
-    fallbackEvent(VarkaFallbackEvent.NON_ARROW_BATCH, kernelIdentity, "");
+    fallbackEvent(VarkaFallbackEvent.NON_ARROW_BATCH, kernelIdentity, options, "");
   }
 
   /**
@@ -212,17 +235,18 @@ public final class VarkaFallbackAccounting {
    * {@code exceptionClass} is empty for the non-Arrow and declined causes, which are not errors.
    */
   public static void fallbackEvent(String cause, Supplier<String> kernelIdentity,
-      String exceptionClass) {
-    fallbackEvent(cause, kernelIdentity, exceptionClass, 0);
+      Supplier<String> options, String exceptionClass) {
+    fallbackEvent(cause, kernelIdentity, options, exceptionClass, 0);
   }
 
   /** The fallback event with a declined batch's status word; zero for every other cause. */
   public static void fallbackEvent(String cause, Supplier<String> kernelIdentity,
-      String exceptionClass, int status) {
+      Supplier<String> options, String exceptionClass, int status) {
     var event = new VarkaFallbackEvent();
     if (event.isEnabled()) {
       event.cause = cause;
       event.kernelIdentity = kernelIdentity.get();
+      event.options = options.get();
       event.exceptionClass = exceptionClass;
       event.status = status;
       event.commit();

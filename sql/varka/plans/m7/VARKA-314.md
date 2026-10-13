@@ -303,3 +303,68 @@ in high when a check added work per batch; this change adds none, so the predict
    `VarkaFallbackAccounting`; row 315 follows 314, writing the record as its file.
 
 ## 9. Outcome
+
+### 9.1 314a, 13 October 2026
+
+**What was built.** `VarkaErrorContext`, the record of 3.2 with its block rendering and the
+helpers that keep building it from throwing (`safely`, a constructor that replaces a null field
+instead of rejecting it), and `VarkaErrors`, whose `illegalArgument` and `illegalState` return
+`SparkIllegalArgumentException` and `SparkIllegalStateException` with condition `INTERNAL_ERROR`,
+the site's text, the record's block and a request to report the bug as the one message parameter,
+and the record's cause as the exception's cause. The planning-time catch is in
+`VarkaExpressionCompiler`, around the two funnels every caller reaches (`classifyKernels` behind
+`compilePartial` and `declines`, `predicate` behind `explainAndCompilePredicate`, which
+`compilePredicate` and `explainPredicate` now call), so it covers `VarkaColumnarRule` on the driver,
+the evaluators' own compiles in a task, the exec nodes' and EXPLAIN's. `VarkaEvaluatorBase` builds
+the record in its three catches (emission, kernel, row path); the emission warning and
+`VarkaFallbackAccounting.kernelFailure` and `rowPathFailure` log its block after their sentence; the
+three refusals under test raise `VarkaErrors.illegalState` with it; and `VarkaFallbackEvent` has
+`options`, which every cause's event fills. A test hook, `VarkaExpressionCompiler.setFailForTesting`,
+throws inside the planning catch. `VarkaErrorContextSuite` holds tests 1 to 5 of section 5, test 4
+as two (the kernel warning and event, and the emission warning), and one more for risk 2: a record
+whose cause's `toString` throws and whose options could not render still renders, those fields
+reading as unavailable.
+
+**Where the code corrected the plan.**
+
+1. **The planning record names Catalyst entries, not IR.** When the compiler throws, the IR is what
+   it was building; there is none to render. The record's identity is the projection's entries and
+   their input attributes (`projection [date_add(d#1, 3) AS a#4] over [d#1, i#2]`), or the filter's
+   condition, and its shape hash reads `none`.
+2. **The catch is per call, not per entry.** Entries are classified together - one slot table, one
+   size admission over the fused set, rollbacks when one declines - so there is no per-entry seam to
+   catch at without restructuring `classify`; the record names the whole projection or condition.
+3. **The planning catch keeps the type of an `IllegalArgumentException` and an
+   `IllegalStateException` only.** Any other runtime exception from the compiler (a
+   `NullPointerException`, a `ClassCastException`, an `UnsupportedOperationException`) has no Spark
+   carrier of its type and becomes `SparkIllegalStateException`, its original as the cause. A
+   `SparkThrowable` passes unchanged, and so does `VarkaEmitDeclined`, which extends
+   `IllegalArgumentException` and is control flow.
+4. **Options render by name.** 3.2 said "as the shape hash renders them"; `canonical()` renders
+   the first 26 options by position, unreadable without the table. The record writes each differing
+   option as `name=value`, as `VarkaEmitOption.Subject.label` does, empty (shown as "the defaults")
+   at the defaults. The event's `options` is the same string.
+5. **A further kernel's shape hash travels on its failure.** In a projection served by several
+   kernels the failing one may be a `VarkaKernelPart`, whose runner the evaluator catching the
+   failure does not hold. `VarkaKernelFailure` gained a `shapeHash` field, set by the runner that
+   threw it and kept when `VarkaKernelPart` names itself on it; its two unused constructors went.
+6. **The batch's null counts are read from its columns at the catch** (`ColumnVector.numNulls` over
+   the kernel's inputs), not from the runner's `srcNullCount`, which a failure inside `fill` leaves
+   holding the previous batch's counts.
+7. **`VarkaFallbackAccounting` takes the options as a second supplier**, memoized per evaluator,
+   so the declined and non-Arrow events carry them too, rendered only when a recording has the
+   event enabled.
+
+**Predictions (6.1) that 314a scores.** Scored after the suites run; see the pull request's test
+results.
+
+1. No new per-batch allocation: test 5.
+2. **Owed.** The pair needs an idle laptop; the class is `VarkaEvaluatorOverheadBenchmark`
+   (`dev/varka_bench_pair.sh core VarkaEvaluatorOverheadBenchmark`), whose cases are the
+   evaluator's per-batch path that the change leaves untouched outside its catches.
+3. `emitted_bytes.json` unchanged: nothing in the emitter changed.
+4. Belongs to 314b.
+
+**Left for 314b.** The remaining invariant sites of 3.1 and the docs section of 3.4, as section 8
+says.
+

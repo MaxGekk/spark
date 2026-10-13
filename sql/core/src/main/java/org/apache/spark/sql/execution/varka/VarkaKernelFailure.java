@@ -28,12 +28,15 @@ public final class VarkaKernelFailure extends RuntimeException {
   /** The further kernel of a projection that failed; null for the evaluator's own. */
   public final String kernel;
 
-  public VarkaKernelFailure(Throwable cause, String kernel) {
+  /**
+   * The shape hash of the kernel that failed, which the failure's context record names
+   * (VARKA-314).
+   */
+  public final String shapeHash;
+
+  public VarkaKernelFailure(Throwable cause, String kernel, String shapeHash) {
     super(cause);
     this.kernel = kernel;
-  }
-
-  public VarkaKernelFailure(Throwable cause) {
-    this(cause, null);
+    this.shapeHash = shapeHash;
   }
 }

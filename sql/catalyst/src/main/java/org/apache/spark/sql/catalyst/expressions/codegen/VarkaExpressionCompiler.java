@@ -31,6 +31,7 @@ import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.function.IntPredicate;
+import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 
 import javax.annotation.Nullable;
@@ -50,6 +51,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.Forward
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.FusedOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.KernelOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaLoopEmitter;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
@@ -138,7 +140,8 @@ public final class VarkaExpressionCompiler {
    */
   public static Optional<PartialVarkaProjection> compilePartial(
       Seq<NamedExpression> projectList, Seq<Attribute> childOutput, VarkaEmitOptions options) {
-    return classifyKernels(entries(projectList), childOutput, options).partial();
+    return planning(() -> classifyKernels(entries(projectList), childOutput, options).partial(),
+        () -> projectionIdentity(projectList, childOutput), options);
   }
 
   /** {@link #declines(Seq, Seq, VarkaEmitOptions)} under the default options. */
@@ -154,8 +157,9 @@ public final class VarkaExpressionCompiler {
    */
   public static SortedMap<Integer, VarkaDecline> declines(
       Seq<NamedExpression> projectList, Seq<Attribute> childOutput, VarkaEmitOptions options) {
-    return Collections.unmodifiableSortedMap(
-        classifyKernels(entries(projectList), childOutput, options).declines());
+    return planning(() -> Collections.unmodifiableSortedMap(
+        classifyKernels(entries(projectList), childOutput, options).declines()),
+        () -> projectionIdentity(projectList, childOutput), options);
   }
 
   /** {@link #compilePredicate(Expression, Seq, VarkaEmitOptions)} under the default options. */
@@ -181,7 +185,7 @@ public final class VarkaExpressionCompiler {
    */
   public static Optional<CompiledVarkaPredicate> compilePredicate(
       Expression condition, Seq<Attribute> childOutput, VarkaEmitOptions options) {
-    return predicate(condition, childOutput, options).compiled();
+    return explainAndCompilePredicate(condition, childOutput, options).compiled();
   }
 
   /** {@link #explainPredicate(Expression, Seq, VarkaEmitOptions)} under the default options. */
@@ -197,7 +201,7 @@ public final class VarkaExpressionCompiler {
    */
   public static List<VarkaConjunctSpec> explainPredicate(
       Expression condition, Seq<Attribute> childOutput, VarkaEmitOptions options) {
-    return predicate(condition, childOutput, options).specs();
+    return explainAndCompilePredicate(condition, childOutput, options).specs();
   }
 
   /**
@@ -207,6 +211,50 @@ public final class VarkaExpressionCompiler {
    */
   public static boolean readsColumnOf(DataType dataType) {
     return VarkaNodeCompiler.laneOf(dataType).isPresent();
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // The planning-time catch
+  // ---------------------------------------------------------------------------------------------
+
+  // Test-only hook that makes every compile throw inside the catch below, as a broken invariant
+  // of the compiler would, so a suite can show what such a bug reaches the user as (VARKA-314).
+  // Static because Spark plans on one thread and runs tasks on others; reset in a finally block.
+  private static volatile boolean failForTesting = false;
+
+  /** Sets the test-only hook that fails every compile; see {@code failForTesting}. */
+  public static void setFailForTesting(boolean fail) {
+    failForTesting = fail;
+  }
+
+  /**
+   * {@code compile}'s result, or the internal error a throw out of it becomes (VARKA-314). The
+   * compiler runs at planning time - on the driver for {@code VarkaColumnarRule}, in a task for
+   * an evaluator's own compile - and nothing above it catches: a broken invariant fails the
+   * query. This catch changes what the failure says, not that it fails: Spark's
+   * {@code INTERNAL_ERROR}, of the original's Java type where a carrier exists, with the
+   * context record naming the entries being compiled and the options they compiled under
+   * ({@link VarkaErrors#planningFailure}). The entries render only here, in the catch.
+   */
+  private static <T> T planning(
+      Supplier<T> compile,
+      Supplier<String> identity,
+      VarkaEmitOptions options) {
+    try {
+      if (failForTesting) {
+        throw new IllegalArgumentException("injected Varka compiler failure");
+      }
+      return compile.get();
+    } catch (RuntimeException e) {
+      throw VarkaErrors.planningFailure(e, identity, options);
+    }
+  }
+
+  /** A projection as the context record names it at planning: its entries and their input. */
+  private static String projectionIdentity(
+      Seq<NamedExpression> projectList, Seq<Attribute> childOutput) {
+    return "projection " + projectList.mkString("[", ", ", "]") + " over "
+        + childOutput.mkString("[", ", ", "]");
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -598,7 +646,9 @@ public final class VarkaExpressionCompiler {
    */
   public static Explained explainAndCompilePredicate(
       Expression condition, Seq<Attribute> childOutput, VarkaEmitOptions options) {
-    return predicate(condition, childOutput, options);
+    return planning(() -> predicate(condition, childOutput, options),
+        () -> "condition " + condition + " over " + childOutput.mkString("[", ", ", "]"),
+        options);
   }
 
   private static Explained predicate(
