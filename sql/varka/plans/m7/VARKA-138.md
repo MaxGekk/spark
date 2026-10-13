@@ -309,12 +309,61 @@ dumps, the JFR case).
    The times are the child JVM's: the suite runs in a JVM of its own (`VarkaOwnJvm`), and the
    time sbt prints for the test it asks first is the whole child run's - 42.8, 32.7 and 32.0 s on
    master for a test that took 2.4 to 2.9 s of it. The per-test times are in the child's JUnit
-   report under `target/tmp/varka-own-jvm*` (10.1's candidate).
+   report under `target/tmp/varka-own-jvm*` (10.2's candidate).
 
 `docs/sql-varka.md`, which section 4 lists, is unchanged: its "Testing and benchmarks" does not
 describe the harness's fill, and the three forms go in there together with 138b.
 
-### 10.1 Candidate rows found
+### 10.1 The review's fixes
+
+A code review of the pull request found seven things, all fixed in it; none was a false positive,
+though the "line-508 sweep" of the fourth fills the sweep's *input* bitmap, every row valid,
+and the sweep's outputs came from `makeOutput`, so the fix there is the output's fill.
+
+1. **The poisoned batch made every input null together.** Poison is chosen per column by the
+   null's ordinal, so every poisoned row had all inputs null and equal poisons, and a null never
+   sat beside a valid input. Now input `c` is null where `i % 3 == (c + 1) % 3`, and every input
+   where `i % 9 == 0`: at two inputs, 171 of the 257 rows hold a null beside a valid input, and
+   input 0 is still null on row 256, the epilogue's. Shown by a planted wrong kernel: for
+   `greatest(l, l2)`, the IR of `CASE WHEN l > l2 THEN l ELSE l2 END`, which answers null where
+   only `l2` is null. It passes the first batch's same-phase pattern and fails the new one at
+   both widths: `wrong kernel of greatest(l, l2) (output validity pre-filled 0x00): validity of
+   output 0 row 2 differs (want Some(-274643580971), got None)`.
+2. **The fault's check was circular.** The test asserted the rewritten kernel called no writer by
+   the same predicate that chose the calls to remove. Now it runs the faulty kernel and counts the
+   validity bytes, every byte of the whole-word buffers, that differ from the fill
+   (`VarkaKernelChecks.validityBytesWritten`): none, at both fills, on both batches, for both rows
+   at both widths; the emitted kernel changes bytes at the fill that hid its answer. A writer the
+   predicate missed would change a byte.
+3. **The bits past the last row were never compared.** `setValid` and `copyValidity` promise
+   "exactly the low `rows` bits ... and zero past them in the final byte", so `runOne` now
+   requires those bits zero in every run. The bytes past the nominal `(length + 7) / 8` are not
+   checked, since a byte-wise output maps only those (`VarkaBodyEmitter.emitOutputSegments`).
+   No kernel of any suite fails it; the planted fault does, at the ones fill on 257 rows (`has
+   bits set past row 256 in its last byte (0xff)`), which is why the fault test's row assertions
+   now run on 256 rows.
+4. **The fill reached only the kernel checks.** `VarkaEmitterFixtures.makeOutput` and
+   `makeLongOutput` take the fill (ones where a suite's own case names none, as before);
+   `VarkaEmitterTestBase.checkMatrix` and `checkLongMatrix`, the matrices behind most emitter
+   suites, run every case at both fills; and the chrono sweeps fill the outputs again before each
+   chunk, the two fills in turn, and now require every row valid, which they did not check at all.
+5. **The poisoned batch's dense run was redundant.** It runs through the masked body alone now,
+   at both fills with Spark's answers (`runOwnBody`), since its other body meets no poisoned lane.
+6. **The status message named run 0's fill** for the previous run's status; it names run `f - 1`.
+7. **`runOwnBodyLong`** (formerly `runOwnBodyLongAt`) and its Scala face moved to the long-lane
+   group of each file.
+
+**Prediction 2, measured again.** Ten interleaved pairs, master's test files against these, 18:57
+to 19:13 CEST, load 1.6 to 3.7: master 1.271 s best (median 1.373), this change 1.615 s best
+(median 1.811), +27% by minimums, +32% by medians. Still over the 25% predicted, so still failed,
+by less: the dense run gone takes the answers held to Spark from 442,128 to 394,840 (master
+347,552, +13.6%), and what is left is the fixed batch's rows and each run's second fill. The
+catalyst matrix run (`--defaults --module catalyst --split 3 -j 3`, sanitizer on), which every
+suite here and the emitter matrices' second fill reach, passed 618 tests, none failed, 40
+cancelled opt-ins as before, in 393 s against 421 s before, on a quieter machine: the second
+fill of the emitter matrices costs less than the run's noise.
+
+### 10.2 Candidate rows found
 
 - **An own-JVM suite reports its tests' own times.** `VarkaOwnJvm` reruns a suite in a child JVM
   and passes or fails each parent test from the child's report, so sbt's per-test time is the
