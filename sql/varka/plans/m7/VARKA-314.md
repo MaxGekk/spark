@@ -54,7 +54,7 @@ files, and the buckets, not the exact number, decide the design), by when they f
   emission failure (lines 348 and 359): it logs a warning inline (line 363), events it
   (`emissionFailed`, lines 377 to 381), refuses it under test (`refuseUndeclaredFallback`, line
   366) and answers on the row path.
-- **Each batch falls back.** `VarkaEvaluatorBase.run` catches `VarkaBatchDeclined`,
+- **Each batch falls back.** `VarkaEvaluatorBase.serveBatch` catches `VarkaBatchDeclined`,
   `VarkaKernelFailure` and any other catchable `Throwable` (lines 616 to 642) and runs the
   fallback path it was given; the projection's columnar path, which the Arrow cache builder
   takes, passes its own (`VarkaProjectExec.scala:257`). The filter evaluator's own `catch` blocks
@@ -78,8 +78,13 @@ files, and the buckets, not the exact number, decide the design), by when they f
 "The Varka SIMD kernels `<identity>` failed on this batch; falling back to the per-row path." with
 the exception (`VarkaFallbackAccounting.java:101`), adds to `kernelFailures`, and commits a
 `VarkaFallbackEvent` with a cause tag (`kernel-failure`, `emission-failure`, `row-path-failure`,
-`range-declined`, `non-arrow-batch`), the kernel's identity and the exception's class name. None
-carries the IR, the options that differ from the defaults, or the batch.
+`range-declined`, `non-arrow-batch`), the kernel's identity and the exception's class name. The
+identity is `VarkaEvaluatorBase.kernelIdentity()` (line 494), memoized per evaluator: the kernel's
+source file, named by its shape hash, the canonical IR of each output (`VarkaVectorIR.canonical`)
+and the operator and stage. Every fallback warning (kernel, row-path and emission failures, and the
+emitter's decline) and the event's `kernelIdentity` field carry it. So today's warning and event
+already name the shape hash, the IR and the operator; what none carries is the options that differ
+from the defaults, and the batch.
 
 **The carrier must be unchecked.** `SparkException.internalError` returns a `SparkException`,
 which extends `java.lang.Exception`: a checked exception, so Java code cannot throw it without a
@@ -96,8 +101,9 @@ carriers are subclasses, those intercepts keep passing.
 **A task-side internal error is wrapped.** `DAGScheduler.abortStage` passes a task's
 `SparkThrowable` through to the driver unwrapped only when its condition is not an internal error
 (`DAGScheduler.scala:4963`); an `INTERNAL_ERROR` from a task arrives inside a plain "Job aborted due
-to stage failure" `SparkException`. A planning-time error is raised on the driver and is not
-wrapped.
+to stage failure" `SparkException`. Of the two planning-time compiles, only `VarkaColumnarRule`'s
+runs on the driver and raises unwrapped; the evaluator's `plan()`, reached from `canRun()`, runs in
+the task, so its error arrives wrapped like any task-side one.
 
 **Spark's registry.** `common/utils/src/main/resources/error/error-conditions.json` holds no
 `VARKA` condition, and under (B) none is added.
@@ -112,6 +118,24 @@ the two existing internal errors among the sites to convert; expected a task-sid
 reach the driver unwrapped; said the runner holds the shape key (it holds the `VarkaShapeEntry`; the
 key is a local of `newRunner`); and placed `VarkaFallbackEvent` in `sql/core`. Each is corrected
 below.
+
+A second review, of the page that presents this plan, checked it against the code and found four
+more:
+
+1. It said no fallback leaves the IR. `kernelIdentity()` already puts the shape hash, the IR and
+   the operator in every fallback warning and in the event's `kernelIdentity` field. The record
+   now reuses that identity and the runner's own `shapeHash` field (`VarkaKernelRunner.java:99`)
+   instead of a lookup through `VarkaShapeEntry`, and the event gains only `options`.
+2. It said a planning-time error is raised on the driver unwrapped. That holds for
+   `VarkaColumnarRule`'s compile only; the evaluator's `plan()` compile runs in the task (2, last
+   paragraphs; 3.3 and test 2 now say which path each covers).
+3. It called `NoSuchElementException` a loader's. It is the `Iterator` contract of the filter's
+   exhausted selection iterator (`VarkaFilterExec.scala:493`).
+4. Smaller: the per-batch catch is in `serveBatch`, not `run`; the injected
+   `NoClassDefFoundError`'s message is "injected Varka kernel failure"
+   (`VarkaKernelRunner.java:265`); and the injected emission `IllegalStateException`
+   (`VarkaEvaluatorBase.java:393`, in `newRunner`) is counted in the per-batch bucket although it
+   fires during code generation, which leaves the 106 unchanged.
 
 ## 3. The design
 
@@ -140,14 +164,16 @@ meets is `INTERNAL_ERROR` with a request to report it. Option A's family is not 
   `IllegalStateException`: 106 sites. The other 15 are below.
 - **Not converted**, since they are control flow or already conditioned:
   - the designed declines `VarkaEmitDeclined` (4) and `VarkaBatchDeclined` (3);
-  - `VarkaKernelFailure`, which `run`'s `catch (VarkaKernelFailure)` reads, and
+  - `VarkaKernelFailure`, which `serveBatch`'s `catch (VarkaKernelFailure)` reads, and
     `VarkaMemoryViolation`, which `isCatchable` excludes so a sanitizer violation is never answered
     by the fallback;
-  - the test-injection throws (the "injected Varka emission failure", the injected
-    `NoClassDefFoundError`), which simulate a kind of failure on purpose;
+  - the test-injection throws (the "injected Varka emission failure" `IllegalStateException`,
+    and the `NoClassDefFoundError` "injected Varka kernel failure"), which simulate a kind of
+    failure on purpose;
   - the two sites already `SparkException.internalError` (`VarkaFilterExec.scala:154`,
-    `VarkaProjectExec.scala:114`), and the JDK types a loader contract requires
-    (`ClassNotFoundException`, `NoSuchElementException`).
+    `VarkaProjectExec.scala:114`), and the JDK types a Java contract requires: the class
+    loader's `ClassNotFoundException` (`VarkaGeneratedClassLoader.java:95`) and the iterator's
+    `NoSuchElementException` (`VarkaFilterExec.scala:493`).
 - **The one user setting** keeps `INVALID_CONF_VALUE.REQUIREMENT`; a test checks it.
 - **The class dump**: a warning, as today, now naming the setting the user can fix.
 
@@ -158,9 +184,8 @@ meets is `INTERNAL_ERROR` with a request to report it. Option A's family is not 
 | field | what | built |
 | --- | --- | --- |
 | `kind` | `VarkaFallbackEvent`'s cause tag, or `planning` for a compile at planning time | at the catch |
-| `operator` | the plan node and the stage, as `kernelIdentity()` gives them | at the catch |
-| `shapeHash` | the shape cache's hash of the kernel | from the `VarkaShapeEntry` the runner holds; for an emission failure, which has no runner, computed from the compiled projection at the catch |
-| `ir` | the canonical IR of the kernel's roots (`VarkaVectorIR.canonical`) | rendered at the catch from the compiled projection the evaluator holds |
+| `identity` | the kernel's source file (named by its shape hash), the canonical IR of each output and the operator and stage: `kernelIdentity()`, as today's warnings carry it | already memoized per evaluator; read at the catch |
+| `shapeHash` | the shape cache's hash of the kernel | the runner's `shapeHash` field; for an emission failure, which has no runner, computed from the compiled projection at the catch, as `kernelIdentity()` does |
 | `options` | the emit options that differ from `VarkaEmitOptions.DEFAULTS`, rendered as the shape hash renders them | rendered at the catch |
 | `batch` | the failing batch's row count and null count per input; the batch itself only for row 315 | at the catch |
 | `cause` | the original exception | at the catch |
@@ -169,23 +194,26 @@ Every field is read or computed inside the `catch`, from what the evaluator and 
 nothing is added to the per-batch path (AGENTS.md's Java rule of no per-batch allocation). At
 planning time the compiler's exception has no evaluator: there the record is built in the compiler's
 own catch, around the entry it was compiling, with the IR of that entry and the options it compiled
-under. The record renders as one message block for the warning and the internal error, and as
-fields of `VarkaFallbackEvent` (new fields `shapeHash` and `options`; the IR stays in the warning
-only, since JFR strings are bounded).
+under. The record renders as one message block for the warning and the internal error. On
+`VarkaFallbackEvent` the identity is already in `kernelIdentity`, so the event gains one field,
+`options`.
 
 **Row 315 writes this record as its file**: `kind` heads it, as `VarkaFailureSignature`'s kind does
-in the test tree, then `operator`, `shapeHash`, `options`, `ir`, and the batch where there is one.
+in the test tree, then `identity`, `shapeHash`, `options`, and the batch where there is one.
 
 ### 3.3 Where the record goes
 
 - **Planning:** the compiler's entry points catch a throw from compiling one entry and rethrow it
   as the internal error with the record, so the query fails with `INTERNAL_ERROR` naming the
-  expression and the options instead of a bare `IllegalArgumentException`. The query still fails;
-  making a planning-time bug decline the projection instead is a design question for row 313.
+  expression and the options instead of a bare `IllegalArgumentException`. The same catch covers
+  both callers: from `VarkaColumnarRule` the error reaches the user on the driver as it is; from
+  the evaluator's `plan()` in a task it reaches the driver inside "Job aborted". The query still
+  fails; making a planning-time bug decline the projection instead is a design question for row
+  313.
 - **The fallback's warning:** `VarkaFallbackAccounting.kernelFailure` and `rowPathFailure`, and the
   emission failure's warning, which `VarkaEvaluatorBase.fusedRunner` logs inline, log the record's
   block after today's sentence.
-- **The fallback's JFR event:** `shapeHash` and `options`, beside today's cause tag and identity.
+- **The fallback's JFR event:** `options`, beside today's cause tag and identity.
 - **Under test:** the three refusal sites (emission, kernel, row path) raise the internal error with
   the record, so a test failure over a broken kernel shows the IR and options.
 
@@ -215,7 +243,7 @@ None: no emitted code changes. `emitted_bytes.json` must be unchanged.
 | `sql/catalyst/.../codegen/varka/VarkaErrors.java` (new) | `illegalArgument` and `illegalState`, the internal-error carriers |
 | the invariant sites of 3.1 | rethrown through `VarkaErrors`, the Java type kept |
 | `sql/catalyst/.../codegen/VarkaExpressionCompiler.java` | the planning-time catch that adds the record |
-| `sql/catalyst/.../codegen/varka/VarkaFallbackEvent.java` | `shapeHash` and `options` |
+| `sql/catalyst/.../codegen/varka/VarkaFallbackEvent.java` | `options` |
 | `sql/core/.../execution/varka/VarkaFallbackAccounting.java` | the record in the kernel and row-path warnings |
 | `sql/core/.../execution/VarkaEvaluatorBase.java` | the record built at the catches; the emission warning and event; the three refusals raise the internal error |
 | `docs/sql-varka.md` | "When Varka falls back" |
@@ -224,14 +252,15 @@ None: no emitted code changes. `emitted_bytes.json` must be unchanged.
 
 1. **The one user setting:** `spark.sql.codegen.varka.emit.useAVX=-2` raises
    `INVALID_CONF_VALUE.REQUIREMENT`, checked with `checkError`.
-2. **A planning-time bug carries the record:** a compiler invariant broken through a test hook
-   fails the query on the driver with `INTERNAL_ERROR`, checked with `checkError`, its message
-   holding the IR and options.
+2. **A planning-time bug carries the record:** a compiler invariant broken through a test hook,
+   reached through `VarkaColumnarRule`, fails the query on the driver with `INTERNAL_ERROR`,
+   checked with `checkError`, its message holding the IR and options. (The evaluator's `plan()`
+   path raises the same error inside "Job aborted", as test 3 unwraps.)
 3. **A task-side refusal carries the record:** a kernel failure injected under test and not
    declared fails the job; the test unwraps the "Job aborted" `SparkException` to its cause, as
    `DAGScheduler` wraps an internal error, and checks `INTERNAL_ERROR` and the record there.
 4. **The warning carries the record:** with the failure declared, the fallback's warning holds the
-   block (`withLogAppender`), and the JFR event holds the shape hash and options.
+   block (`withLogAppender`), and the JFR event holds the options beside the identity.
 5. **No per-batch allocation:** `VarkaAllocationSampler` over a kernel's steady state allocates
    nothing more than before.
 6. **The bytes oracle and the suites:** `emitted_bytes.json` unchanged; every Varka suite passes at
