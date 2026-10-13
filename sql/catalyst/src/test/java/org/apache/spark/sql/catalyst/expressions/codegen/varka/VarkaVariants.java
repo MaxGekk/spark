@@ -18,6 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -263,12 +264,16 @@ final class VarkaVariants {
    */
   static Optional<Variant> untakenArm(List<VarkaVectorIR> roots, int numInputs,
       ArmOracle oracle, List<VarkaVectorIR> pool, int rotation, Predicate<Variant> fits) {
-    Optional<Variant> first = untakenArmFrom(roots, numInputs, oracle, pool, rotation);
+    // Which arm the batch takes depends on the condition alone, so each is read once, not once
+    // per start: the oracle evaluates the condition over the whole batch.
+    var taken = new IdentityHashMap<Cond, Taken>();
+    ArmOracle once = cond -> taken.computeIfAbsent(cond, oracle::taken);
+    Optional<Variant> first = untakenArmFrom(roots, numInputs, once, pool, rotation);
     if (first.isEmpty() || fits.test(first.get())) {
       return first;
     }
     for (int k = 1; k < pool.size(); k++) {
-      Optional<Variant> other = untakenArmFrom(roots, numInputs, oracle, pool, rotation + k);
+      Optional<Variant> other = untakenArmFrom(roots, numInputs, once, pool, rotation + k);
       if (other.isPresent() && fits.test(other.get())) {
         return other;
       }

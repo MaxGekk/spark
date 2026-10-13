@@ -122,11 +122,10 @@ public final class VarkaVariantChecks {
       List<VarkaVectorIR> pool, int rotation, Predicate<Variant> fits) {
     var roots = c.roots();
     int n = c.numInputs();
-    Variant stranger = strangers.stream()
+    List<Variant> candidates = strangers.stream()
         .map(s -> VarkaVariants.besideAStranger(roots, n, s))
-        .filter(fits)
-        .findFirst()
-        .orElseGet(() -> VarkaVariants.besideAStranger(roots, n, strangers.get(0)));
+        .toList();
+    Variant stranger = candidates.stream().filter(fits).findFirst().orElse(candidates.get(0));
     return List.of(
         new KindVariant(Kind.BESIDE_A_CHILD, VarkaVariants.besideAChild(roots, n)),
         new KindVariant(Kind.PERMUTED, VarkaVariants.permuted(roots, n)),

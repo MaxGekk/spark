@@ -200,3 +200,42 @@ hand-written tree: the first replacement that fits is taken, and the first one w
 **What this does not settle.** A variant that is skipped past the op cap is checked only in the
 budget form, and only when that form answers it rather than declining on size. Both skipped draws
 declined. The grammar's draws never take this path.
+
+### 9.1 Review of #774, 13 October 2026
+
+A `/code-review` of the pull request found nine issues in the reading side and the tests. All are
+fixed except where noted:
+
+1. **The budget form's rejection was skipped too.** `emitOrSkip` skipped an
+   `IllegalArgumentException` from the first emit of an over-the-cap variant, and with a budget
+   that emit is the form that has no op cap, so a real bug there would have been counted as a
+   skip. Now a rejection is skipped only when it is the cap the shape is over, in a form the cap
+   applies to: `MAX_CHAIN_DEPTH` in either form, `MAX_FUSED_NODES` only without a budget.
+2. **The message was not read.** `fitsBudgets` is also false for too many inputs or mixed lanes,
+   and those rejections were skipped as the op cap's. The skip now requires the cap's own message.
+3. **A draw with no budget skipped the variant unchecked**, though section 3.1 said the budget
+   form had run it. Such a variant is now emitted once more under the defaults' budget, which
+   has no op cap. It is compared if that form holds it, and skipped if that form declines on
+   size. A new test runs the 2026101306003 draw with the budget off and sees the second.
+4. **Preferring a variant that fits** could replace large variants the budget form compiles fine,
+   and so lose coverage of its splitting. Measured before deciding: over one million int-lane and
+   one million long-lane draws (20 seeds, 50,000 each), no first-choice variant was over the cap.
+   In the five night draws, each slice from iteration 0 to the failing one held exactly one, the
+   failing variant, and the budget form declined all five. A variant over the cap that the budget
+   form holds was not seen once. The preference stays.
+5. **The regression tests leaked counters** into the fuzz tests after them. They now restore
+   `skippedPastTheCap`, the op-cap count and the variant counts.
+6. **The rebuild test asserted only an absence.** It now asserts that the rebuilt variant was
+   compared. Each test also first checks that its draw's first-choice variant is still over the
+   cap, so a grammar change that moves these draws fails the test instead of leaving it passing
+   on nothing.
+7. **The arm oracle was re-evaluated on every rotation.** It is now read once per condition.
+8. **The cap check ran on every emit.** It is by-name now, and asked only when the emitter
+   rejects the shape.
+9. **An unused options parameter and a stranger built twice.** `fitsWithoutBudget` takes only the
+   roots and the inputs, since `fitsBudgets` reads only the budget, and the first stranger's
+   variant is reused. The size-control trace (`randomTrace`), which the review also named, is
+   informational and has no threshold, so it is left.
+
+`VarkaIrFuzzSuite` (12 passed, 1 opt-in cancel), `VarkaVariantSuite` (7) and
+`VarkaSmallTreeSuite` (6) pass, and the linters pass.
