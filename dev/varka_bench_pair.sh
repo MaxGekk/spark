@@ -21,6 +21,7 @@
 #   dev/varka_bench_pair.sh catalyst VarkaCompileBenchmark                      # base = merge base with origin/master
 #   dev/varka_bench_pair.sh core VarkaFilterBenchmark --base v0.9 --rounds 7 --threshold 8
 #   dev/varka_bench_pair.sh catalyst VarkaCompileBenchmark --base-dir ../varka-base   # a base already built
+#   dev/varka_bench_pair.sh catalyst VarkaCompileBenchmark --base HEAD           # A/A: the runner's own spread
 #
 # One regeneration of a file on one machine cannot tell a pull request's change from the
 # machine's day; alternating the two sides batch by batch cancels what drifts between them, and
@@ -28,8 +29,10 @@
 # the base and on the head (the order swaps every round), with dev/varka_bench_regen.sh's idle
 # check and canary, wide width only; the results are copied aside and the committed files put back,
 # so neither tree is left dirty. After at least three rounds it stops early when every row is
-# within --within percent of the other side. It then prints each row's change in the median rate
-# (+ faster, - slower) and exits 1 if any row is slower by --threshold percent or more.
+# within --within percent of the other side. It then prints each row's change by the median and
+# by the best run (+ faster, - slower), and exits 1 if any row is slower by --threshold percent or
+# more by both. With --base HEAD it pairs the head with itself: an A/A run, whose widest change is
+# the runner's own spread for the class, to read a real pair's changes against.
 #
 #   --base REF        the base: any ref; default the merge base of HEAD and origin/master.
 #                     A worktree is made for it at /tmp and removed afterwards, and needs a build

@@ -1,0 +1,215 @@
+VARKA-322: five interleaved rounds of VarkaCompileBenchmark, the Java benchmark against itself at one commit (3ca09febd4b, base and head the same code): an A/A pair, whose widest change is the runner's own spread for this class. Written by dev/varka_bench_pair.sh --base HEAD on 12 October 2026.
+Each run below is one regeneration of the benchmark; the order swapped each round.
+
+################ base, round 1 ################
+================================================================================================
+compiling an expression into the IR
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+one compile:                                                        Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------
+calendar: year, month, make_date, add_months, last_day, weekofyear              1              1           0          0.2        4277.0       1.0X
+TIME: hour, minute, second                                                      1              1           0          0.2        4620.5       0.9X
+conditionals: IF, coalesce, greatest, CASE WHEN of 6 branches                   2              2           0          0.1        8502.0       0.5X
+a wide projection of 60 mixed outputs                                          48             49           1          0.0      237950.4       0.0X
+predicate: a range, IS NOT NULL and an int comparison                           1              1           0          0.4        2543.9       1.7X
+predicate: IN over eight dates                                                  0              0           0          0.4        2251.3       1.9X
+predicate: a set of three date ranges                                           0              0           0          0.5        2097.2       2.0X
+predicate: NOT, OR and IS NULL over two dates                                   0              0           0          0.6        1802.7       2.4X
+
+
+
+################ head, round 1 ################
+================================================================================================
+compiling an expression into the IR
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+one compile:                                                        Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------
+calendar: year, month, make_date, add_months, last_day, weekofyear              1              1           0          0.2        4326.7       1.0X
+TIME: hour, minute, second                                                      1              1           0          0.2        4535.6       1.0X
+conditionals: IF, coalesce, greatest, CASE WHEN of 6 branches                   2              2           0          0.1        8494.9       0.5X
+a wide projection of 60 mixed outputs                                          46             47           1          0.0      231460.6       0.0X
+predicate: a range, IS NOT NULL and an int comparison                           1              1           0          0.4        2683.3       1.6X
+predicate: IN over eight dates                                                  0              0           0          0.4        2256.1       1.9X
+predicate: a set of three date ranges                                           0              0           0          0.5        2106.9       2.1X
+predicate: NOT, OR and IS NULL over two dates                                   0              0           0          0.5        1825.1       2.4X
+
+
+
+################ head, round 2 ################
+================================================================================================
+compiling an expression into the IR
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+one compile:                                                        Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------
+calendar: year, month, make_date, add_months, last_day, weekofyear              1              1           0          0.2        4076.5       1.0X
+TIME: hour, minute, second                                                      1              1           0          0.2        4614.6       0.9X
+conditionals: IF, coalesce, greatest, CASE WHEN of 6 branches                   2              2           0          0.1        8666.1       0.5X
+a wide projection of 60 mixed outputs                                          44             46           1          0.0      218604.2       0.0X
+predicate: a range, IS NOT NULL and an int comparison                           1              1           0          0.4        2602.2       1.6X
+predicate: IN over eight dates                                                  0              0           0          0.4        2365.9       1.7X
+predicate: a set of three date ranges                                           0              0           0          0.5        2104.4       1.9X
+predicate: NOT, OR and IS NULL over two dates                                   0              0           0          0.6        1811.0       2.3X
+
+
+
+################ base, round 2 ################
+================================================================================================
+compiling an expression into the IR
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+one compile:                                                        Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------
+calendar: year, month, make_date, add_months, last_day, weekofyear              1              1           0          0.2        4373.3       1.0X
+TIME: hour, minute, second                                                      1              1           0          0.2        4586.7       1.0X
+conditionals: IF, coalesce, greatest, CASE WHEN of 6 branches                   2              2           0          0.1        8596.4       0.5X
+a wide projection of 60 mixed outputs                                          49             50           1          0.0      244534.3       0.0X
+predicate: a range, IS NOT NULL and an int comparison                           1              1           0          0.4        2622.2       1.7X
+predicate: IN over eight dates                                                  0              0           0          0.4        2247.5       1.9X
+predicate: a set of three date ranges                                           0              0           0          0.5        2129.9       2.1X
+predicate: NOT, OR and IS NULL over two dates                                   0              0           0          0.6        1816.1       2.4X
+
+
+
+################ base, round 3 ################
+================================================================================================
+compiling an expression into the IR
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+one compile:                                                        Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------
+calendar: year, month, make_date, add_months, last_day, weekofyear              1              1           0          0.2        4444.5       1.0X
+TIME: hour, minute, second                                                      1              1           0          0.2        4587.0       1.0X
+conditionals: IF, coalesce, greatest, CASE WHEN of 6 branches                   2              2           0          0.1        8513.6       0.5X
+a wide projection of 60 mixed outputs                                          49             50           2          0.0      242764.9       0.0X
+predicate: a range, IS NOT NULL and an int comparison                           1              1           0          0.4        2577.1       1.7X
+predicate: IN over eight dates                                                  0              0           0          0.4        2231.5       2.0X
+predicate: a set of three date ranges                                           0              0           0          0.5        2111.3       2.1X
+predicate: NOT, OR and IS NULL over two dates                                   0              0           0          0.6        1796.0       2.5X
+
+
+
+################ head, round 3 ################
+================================================================================================
+compiling an expression into the IR
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+one compile:                                                        Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------
+calendar: year, month, make_date, add_months, last_day, weekofyear              1              1           0          0.2        4331.0       1.0X
+TIME: hour, minute, second                                                      1              1           0          0.2        4715.5       0.9X
+conditionals: IF, coalesce, greatest, CASE WHEN of 6 branches                   2              2           0          0.1        8605.1       0.5X
+a wide projection of 60 mixed outputs                                          50             50           1          0.0      248333.0       0.0X
+predicate: a range, IS NOT NULL and an int comparison                           1              1           0          0.4        2645.2       1.6X
+predicate: IN over eight dates                                                  0              0           0          0.4        2265.6       1.9X
+predicate: a set of three date ranges                                           0              0           0          0.5        2084.6       2.1X
+predicate: NOT, OR and IS NULL over two dates                                   0              0           0          0.6        1801.3       2.4X
+
+
+
+################ head, round 4 ################
+================================================================================================
+compiling an expression into the IR
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+one compile:                                                        Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------
+calendar: year, month, make_date, add_months, last_day, weekofyear              1              1           0          0.2        4258.7       1.0X
+TIME: hour, minute, second                                                      1              1           0          0.2        4669.1       0.9X
+conditionals: IF, coalesce, greatest, CASE WHEN of 6 branches                   2              2           0          0.1        8516.8       0.5X
+a wide projection of 60 mixed outputs                                          48             48           1          0.0      237550.4       0.0X
+predicate: a range, IS NOT NULL and an int comparison                           1              1           0          0.4        2534.7       1.7X
+predicate: IN over eight dates                                                  0              0           0          0.4        2248.3       1.9X
+predicate: a set of three date ranges                                           0              0           0          0.5        2148.1       2.0X
+predicate: NOT, OR and IS NULL over two dates                                   0              0           0          0.5        1820.5       2.3X
+
+
+
+################ base, round 4 ################
+================================================================================================
+compiling an expression into the IR
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+one compile:                                                        Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------
+calendar: year, month, make_date, add_months, last_day, weekofyear              1              1           0          0.2        4451.4       1.0X
+TIME: hour, minute, second                                                      1              1           0          0.2        4605.9       1.0X
+conditionals: IF, coalesce, greatest, CASE WHEN of 6 branches                   2              2           0          0.1        8684.0       0.5X
+a wide projection of 60 mixed outputs                                          51             52           0          0.0      256257.6       0.0X
+predicate: a range, IS NOT NULL and an int comparison                           1              1           0          0.4        2605.2       1.7X
+predicate: IN over eight dates                                                  0              0           0          0.5        2220.8       2.0X
+predicate: a set of three date ranges                                           0              0           0          0.5        2111.0       2.1X
+predicate: NOT, OR and IS NULL over two dates                                   0              0           0          0.6        1804.8       2.5X
+
+
+
+################ base, round 5 ################
+================================================================================================
+compiling an expression into the IR
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+one compile:                                                        Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------
+calendar: year, month, make_date, add_months, last_day, weekofyear              1              1           0          0.2        4219.4       1.0X
+TIME: hour, minute, second                                                      1              1           0          0.2        4688.9       0.9X
+conditionals: IF, coalesce, greatest, CASE WHEN of 6 branches                   2              2           0          0.1        8875.8       0.5X
+a wide projection of 60 mixed outputs                                          49             50           1          0.0      243498.5       0.0X
+predicate: a range, IS NOT NULL and an int comparison                           1              1           0          0.4        2713.1       1.6X
+predicate: IN over eight dates                                                  0              0           0          0.4        2303.6       1.8X
+predicate: a set of three date ranges                                           0              0           0          0.5        2124.5       2.0X
+predicate: NOT, OR and IS NULL over two dates                                   0              0           0          0.6        1802.4       2.3X
+
+
+
+################ head, round 5 ################
+================================================================================================
+compiling an expression into the IR
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4.1+1-1-26.04.4-Ubuntu on Linux 7.0.0-34-generic
+AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+one compile:                                                        Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------
+calendar: year, month, make_date, add_months, last_day, weekofyear              1              1           0          0.2        4115.1       1.0X
+TIME: hour, minute, second                                                      1              1           0          0.2        4534.8       0.9X
+conditionals: IF, coalesce, greatest, CASE WHEN of 6 branches                   2              2           0          0.1        8331.5       0.5X
+a wide projection of 60 mixed outputs                                          42             44           2          0.0      211708.4       0.0X
+predicate: a range, IS NOT NULL and an int comparison                           0              1           0          0.4        2495.6       1.6X
+predicate: IN over eight dates                                                  0              0           0          0.5        2209.8       1.9X
+predicate: a set of three date ranges                                           0              0           0          0.5        2092.5       2.0X
+predicate: NOT, OR and IS NULL over two dates                                   0              0           0          0.6        1767.0       2.3X
+
+
+
+################ the verdict ################
+ median     best  row
+   -0.5%    +1.6%  [one compile] predicate: NOT, OR and IS NULL over two dates
+   -0.4%    +0.5%  [one compile] predicate: IN over eight dates
+   -0.2%    +1.1%  [one compile] TIME: hour, minute, second
+   +0.1%    +1.9%  [one compile] predicate: a range, IS NOT NULL and an int comparison
+   +0.3%    +0.6%  [one compile] predicate: a set of three date ranges
+   +0.9%    +2.0%  [one compile] conditionals: IF, coalesce, greatest, CASE WHEN of 6 branches
+   +2.7%    +3.5%  [one compile] calendar: year, month, make_date, add_months, last_day, weekofyear
+   +5.2%   +12.4%  [one compile] a wide projection of 60 mixed outputs
+
+8 rows, 0 slower and 0 faster by 10% or more by both the median and the best, of 5 base and 5 head runs; the widest change either way is 5.2% by median and 12.4% by best
