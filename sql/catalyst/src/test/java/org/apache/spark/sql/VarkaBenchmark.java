@@ -57,6 +57,19 @@ public final class VarkaBenchmark {
     });
   }
 
+  /**
+   * Keeps only the cases whose name contains {@code substring}: how a benchmark serves {@code
+   * -Dvarka.bench.only}, a diagnostic run of one block that is never written to a results file.
+   */
+  public void retainCases(String substring) {
+    benchmark.benchmarks().filterInPlace(c -> c.name().contains(substring));
+  }
+
+  /** Whether any case is left to run; Spark's {@code run} refuses a benchmark with none. */
+  public boolean hasCases() {
+    return benchmark.benchmarks().nonEmpty();
+  }
+
   /** Runs every case and writes the table, relative speeds against the first case. */
   public void run() {
     benchmark.run(false);

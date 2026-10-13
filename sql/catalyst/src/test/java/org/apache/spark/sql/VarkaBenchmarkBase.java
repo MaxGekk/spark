@@ -20,6 +20,8 @@ package org.apache.spark.sql;
 import scala.runtime.BoxedUnit;
 
 import org.apache.spark.benchmark.BenchmarkBase;
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFusedKernel;
 
 /**
  * The base of a Varka benchmark written in Java: Spark's {@link BenchmarkBase}, with sections and
@@ -46,5 +48,32 @@ public abstract class VarkaBenchmarkBase extends BenchmarkBase {
   /** A benchmark writing to this run's results file; {@code valuesPerIteration} sets the rate. */
   protected final VarkaBenchmark.Builder benchmark(String name, long valuesPerIteration) {
     return new VarkaBenchmark.Builder(name, valuesPerIteration, output());
+  }
+
+  /**
+   * Scala's {@code require}, for the checks a benchmark makes while it sets up. The message is
+   * built before the call, so a check inside a timed loop tests its condition and throws {@link
+   * #requirementFailed} itself, keeping the loop free of string building.
+   */
+  protected static void require(boolean requirement, String message) {
+    if (!requirement) {
+      throw requirementFailed(message);
+    }
+  }
+
+  /** The exception Scala's {@code require} throws, with its message prefix. */
+  protected static IllegalArgumentException requirementFailed(String message) {
+    return new IllegalArgumentException("requirement failed: " + message);
+  }
+
+  /** Defines an emitted kernel's class in {@code loader} and makes an instance of it. */
+  protected static VarkaFusedKernel defineKernel(
+      VarkaGeneratedClassLoader loader, String className, byte[] bytes) {
+    loader.defineGeneratedClass(className, bytes);
+    try {
+      return (VarkaFusedKernel) loader.loadClass(className).getConstructor().newInstance();
+    } catch (ReflectiveOperationException e) {
+      throw new IllegalStateException("cannot instantiate " + className, e);
+    }
   }
 }
