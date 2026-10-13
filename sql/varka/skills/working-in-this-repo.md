@@ -107,10 +107,10 @@ the fuzzer's node generator and the two pinned fixtures.
 Adding a case to `VarkaEmitterParityBenchmark` needs a free case id, and the id
 names the emitted kernel's class. Picking one by reading the ids near where you
 are editing fails: not every id in that file is a literal - the trunc block
-computes `id` and `id + 1` from a tuple list - so a grep can hand you one that is
-already taken, and the emitter's `require` then reports it twenty minutes into a
-regeneration, after every earlier case has been timed. That happened twice in one
-evening, on two different guesses.
+computes `id` and `id + 1` from a list of records - so a grep can hand you one
+that is already taken, and the emitter's `require` then reports it twenty minutes
+into a regeneration, after every earlier case has been timed. That happened twice
+in one evening, on two different guesses.
 
 `dev/varka_bench_ids.sh` is the answer to the question the guess was trying to
 answer. It runs the benchmark with `-Dvarka.bench.dryRun=true`, which emits and

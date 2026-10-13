@@ -29,10 +29,10 @@
 #
 # Use it before adding a case. Reading the file is not a reliable substitute:
 # not every id is a literal - the parity file's trunc block computes `id` and
-# `id + 1` from a tuple list - so a grep can miss one and hand you an id that is
-# already taken. Ids stay explicit rather than auto-assigned on purpose: they
-# become emitted class names that dumps and provenance refer to, so inserting a
-# case must not renumber the ones after it.
+# `id + 1` from a list of records - so a grep can miss one and hand you an id
+# that is already taken. Ids stay explicit rather than auto-assigned on purpose:
+# they become emitted class names that dumps and provenance refer to, so
+# inserting a case must not renumber the ones after it.
 #
 # The id space is per file, not global: each benchmark names its kernels with its
 # own class prefix - VarkaFusedBench for the parity file, VarkaArithBench for the

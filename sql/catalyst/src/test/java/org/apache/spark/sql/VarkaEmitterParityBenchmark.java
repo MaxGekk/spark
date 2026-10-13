@@ -125,13 +125,20 @@ import org.apache.spark.sql.vectorized.ArrowColumnVector;
  */
 public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
 
-  private static final int NUM_ROWS = 1_000_000;
+  // The row count, the passes and the chunk are read at run time, as the Scala object's field
+  // and local vals were, never folded by javac: a static final int would be a compile-time
+  // constant, inlined into every timed loop as an immediate, and C2 would then compile each
+  // walk and each per-row anchor with a constant trip count the Scala form never gave it.
+  // Nothing assigns them after class initialisation.
+
+  /** The rows of every column. */
+  private static int numRows = 1_000_000;
 
   /** The passes over the whole buffer the chunked sections make per iteration. */
-  private static final int REPEATS = 20;
+  private static int repeats = 20;
 
   /** The chunk the chunked sections drive a kernel in: Spark's COLUMN_BATCH_SIZE. */
-  private static final int CHUNK = 4096;
+  private static int chunk = 4096;
 
   private static final int[] NO_LITERALS = new int[0];
 
@@ -177,7 +184,14 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     void run(VarkaFusedKernel kernel, int n);
   }
 
-  /** A section's own runner of its one kernel over one null pattern. */
+  /**
+   * A section's own runner of its one kernel over one null pattern.
+   *
+   * <p>The runners, which the Scala wrote as local functions, are lambdas through these
+   * interfaces, methods of the year section's record or static methods. Bringing them to one
+   * style would change how a timed body reaches its kernel, which this port keeps as it was
+   * first written and measured against the Scala.
+   */
   @FunctionalInterface
   private interface MixedArm {
     void run(boolean mixed);
@@ -214,12 +228,7 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
   }
 
   private static VarkaVectorIR chain(int depth, int slotBase) {
-    VarkaVectorIR node = new ColumnRef(0);
-    for (int level = 0; level < depth; level++) {
-      node = level % 2 == 0 ? new AddDays(node, new LiteralSlot(slotBase + level))
-          : new SubDays(node, new LiteralSlot(slotBase + level));
-    }
-    return node;
+    return chainOver(new ColumnRef(0), depth, slotBase);
   }
 
   private static VarkaVectorIR chainOver(VarkaVectorIR base, int depth, int slotBase) {
@@ -257,11 +266,11 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
   }
 
   private static Column fill(Arena arena, IntPredicate isNull) {
-    MemorySegment data = arena.allocate(NUM_ROWS * 4L, 8);
-    MemorySegment validity = arena.allocate((NUM_ROWS + 7) / 8L, 8);
+    MemorySegment data = arena.allocate(numRows * 4L, 8);
+    MemorySegment validity = arena.allocate((numRows + 7) / 8L, 8);
     validity.fill((byte) 0);
     int nulls = 0;
-    for (int i = 0; i < NUM_ROWS; i++) {
+    for (int i = 0; i < numRows; i++) {
       data.set(ValueLayout.JAVA_INT, i * 4L, i % 20000 - 10000);
       if (isNull.test(i)) {
         nulls += 1;
@@ -369,10 +378,10 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
           outV = tmpValidity[level].address();
         }
         if (level % 2 == 0) {
-          DateVectorOps.vectorAddDays(srcD, srcV, srcNulls, outD, outV, NUM_ROWS,
+          DateVectorOps.vectorAddDays(srcD, srcV, srcNulls, outD, outV, numRows,
               offsets[level]);
         } else {
-          DateVectorOps.vectorSubDays(srcD, srcV, srcNulls, outD, outV, NUM_ROWS,
+          DateVectorOps.vectorSubDays(srcD, srcV, srcNulls, outD, outV, numRows,
               offsets[level]);
         }
         srcD = outD;
@@ -390,17 +399,17 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
       Column mx = fill(arena, i -> i % 7 == 0);
       Column nf2 = fill(arena, i -> false);
       Column mx2 = fill(arena, i -> i % 11 == 0);
-      MemorySegment dst = arena.allocate(NUM_ROWS * 4L, 8);
-      MemorySegment dstValidity = arena.allocate((NUM_ROWS + 7) / 8L, 8);
-      MemorySegment dst2 = arena.allocate(NUM_ROWS * 4L, 8);
-      MemorySegment dst2Validity = arena.allocate((NUM_ROWS + 7) / 8L, 8);
+      MemorySegment dst = arena.allocate(numRows * 4L, 8);
+      MemorySegment dstValidity = arena.allocate((numRows + 7) / 8L, 8);
+      MemorySegment dst2 = arena.allocate(numRows * 4L, 8);
+      MemorySegment dst2Validity = arena.allocate((numRows + 7) / 8L, 8);
       // Sequential-pass temporaries, one pair per intermediate of the deepest chain, and the
       // per-output destinations of the widest shape.
       int maxDepth = 16;
-      MemorySegment[] tmpData = allocateAll(arena, maxDepth, NUM_ROWS * 4L);
-      MemorySegment[] tmpValidity = allocateAll(arena, maxDepth, (NUM_ROWS + 7) / 8L);
-      MemorySegment[] wideDst = allocateAll(arena, 4, NUM_ROWS * 4L);
-      MemorySegment[] wideDstValidity = allocateAll(arena, 4, (NUM_ROWS + 7) / 8L);
+      MemorySegment[] tmpData = allocateAll(arena, maxDepth, numRows * 4L);
+      MemorySegment[] tmpValidity = allocateAll(arena, maxDepth, (numRows + 7) / 8L);
+      MemorySegment[] wideDst = allocateAll(arena, 4, numRows * 4L);
+      MemorySegment[] wideDstValidity = allocateAll(arena, 4, (numRows + 7) / 8L);
       var b = new Buffers(arena, loader, nf.data(), mx.data(), mx.validity(), mx.nulls(),
           nf2.data(), mx2.data(), mx2.validity(), mx2.nulls(), dst, dstValidity, dst2,
           dst2Validity, tmpData, tmpValidity, wideDst, wideDstValidity);
@@ -445,59 +454,62 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
   // ---------------------------------------------------------------------------------------
 
   private void singleOp(Buffers b) {
-    var benchmark = benchmark("date_add over " + NUM_ROWS + " rows", NUM_ROWS).timed().build();
-    var depth1 = emit(List.of(chain(1)), 1, 1, b.loader(), 0);
+    VarkaBenchmark benchmark =
+        benchmark("date_add over " + numRows + " rows", numRows).timed().build();
+    VarkaFusedKernel depth1 = emit(List.of(chain(1)), 1, 1, b.loader(), 0);
     benchmark.addCase("hand-written kernel, null-free", it ->
         DateVectorOps.vectorAddDays(b.nfData().address(), 0L, 0,
-            b.dst().address(), b.dstValidity().address(), NUM_ROWS, 3));
+            b.dst().address(), b.dstValidity().address(), numRows, 3));
     benchmark.addCase("emitted loop, null-free", it ->
         depth1.run(new long[] {b.nfData().address()}, new long[] {0L}, new int[] {0},
             new long[] {b.dst().address()}, new long[] {b.dstValidity().address()},
-            new int[] {3}, NUM_ROWS));
+            new int[] {3}, numRows));
     benchmark.addCase("hand-written kernel, mixed nulls", it ->
         DateVectorOps.vectorAddDays(b.mxData().address(), b.mxValidity().address(),
-            b.mxNulls(), b.dst().address(), b.dstValidity().address(), NUM_ROWS, 3));
+            b.mxNulls(), b.dst().address(), b.dstValidity().address(), numRows, 3));
     benchmark.addCase("emitted loop, mixed nulls", it ->
         depth1.run(new long[] {b.mxData().address()}, new long[] {b.mxValidity().address()},
             new int[] {b.mxNulls()}, new long[] {b.dst().address()},
-            new long[] {b.dstValidity().address()}, new int[] {3}, NUM_ROWS));
+            new long[] {b.dstValidity().address()}, new int[] {3}, numRows));
     runCases(benchmark);
   }
 
   private void dateDiff(Buffers b) {
-    var benchmark = benchmark("datediff over " + NUM_ROWS + " rows", NUM_ROWS).timed().build();
-    var diff = emit(List.of(new DateDiff(new ColumnRef(0), new ColumnRef(1))), 2, 0,
+    VarkaBenchmark benchmark =
+        benchmark("datediff over " + numRows + " rows", numRows).timed().build();
+    VarkaFusedKernel diff = emit(List.of(new DateDiff(new ColumnRef(0), new ColumnRef(1))), 2, 0,
         b.loader(), 100);
     benchmark.addCase("hand-written kernel, null-free", it ->
         DateVectorOps.vectorDateDiff(b.nfData().address(), 0L, 0, b.nf2Data().address(), 0L,
-            0, b.dst().address(), b.dstValidity().address(), NUM_ROWS));
+            0, b.dst().address(), b.dstValidity().address(), numRows));
     benchmark.addCase("emitted loop, null-free", it ->
         diff.run(new long[] {b.nfData().address(), b.nf2Data().address()},
             new long[] {0L, 0L}, new int[] {0, 0}, new long[] {b.dst().address()},
-            new long[] {b.dstValidity().address()}, NO_LITERALS, NUM_ROWS));
+            new long[] {b.dstValidity().address()}, NO_LITERALS, numRows));
     benchmark.addCase("hand-written kernel, mixed nulls", it ->
         DateVectorOps.vectorDateDiff(b.mxData().address(), b.mxValidity().address(),
             b.mxNulls(), b.mx2Data().address(), b.mx2Validity().address(), b.mx2Nulls(),
-            b.dst().address(), b.dstValidity().address(), NUM_ROWS));
+            b.dst().address(), b.dstValidity().address(), numRows));
     benchmark.addCase("emitted loop, mixed nulls", it ->
         diff.run(new long[] {b.mxData().address(), b.mx2Data().address()},
             new long[] {b.mxValidity().address(), b.mx2Validity().address()},
             new int[] {b.mxNulls(), b.mx2Nulls()}, new long[] {b.dst().address()},
-            new long[] {b.dstValidity().address()}, NO_LITERALS, NUM_ROWS));
+            new long[] {b.dstValidity().address()}, NO_LITERALS, numRows));
     // VARKA-70's baselines, committed before that task so its pass has numbers to move
     // (VARKA-70.md 6). The OR root is the one shape where the pass computes an OR
     // rather than a copy or an AND, and it had no committed row at all.
-    var greatest = emit(List.of(new Greatest(new ColumnRef(0), new ColumnRef(1))), 2, 0,
-        b.loader(), 930);
+    VarkaFusedKernel greatest =
+        emit(List.of(new Greatest(new ColumnRef(0), new ColumnRef(1))), 2, 0,
+            b.loader(), 930);
     benchmark.addCase("greatest(d, d2), emitted loop, null-free", it ->
         greatest.run(new long[] {b.nfData().address(), b.nf2Data().address()},
             new long[] {0L, 0L}, new int[] {0, 0}, new long[] {b.dst().address()},
-            new long[] {b.dstValidity().address()}, NO_LITERALS, NUM_ROWS));
+            new long[] {b.dstValidity().address()}, NO_LITERALS, numRows));
     benchmark.addCase("greatest(d, d2), emitted loop, mixed nulls", it ->
         greatest.run(new long[] {b.mxData().address(), b.mx2Data().address()},
             new long[] {b.mxValidity().address(), b.mx2Validity().address()},
             new int[] {b.mxNulls(), b.mx2Nulls()}, new long[] {b.dst().address()},
-            new long[] {b.dstValidity().address()}, NO_LITERALS, NUM_ROWS));
+            new long[] {b.dstValidity().address()}, NO_LITERALS, numRows));
     // The third baseline: an input all-null - validity address 0L and a null count of every
     // row, the morsel contract's spelling - which is the operand 2.3 folds away without
     // dereferencing anything. It hangs off the OR root, not the AND one, on purpose. Under
@@ -510,38 +522,39 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // input's bitmap rather than reading a bitmap that was never materialised.
     benchmark.addCase("greatest(d, d2), emitted loop, first input all-null", it ->
         greatest.run(new long[] {b.mxData().address(), b.mx2Data().address()},
-            new long[] {0L, b.mx2Validity().address()}, new int[] {NUM_ROWS, b.mx2Nulls()},
+            new long[] {0L, b.mx2Validity().address()}, new int[] {numRows, b.mx2Nulls()},
             new long[] {b.dst().address()}, new long[] {b.dstValidity().address()},
-            NO_LITERALS, NUM_ROWS));
+            NO_LITERALS, numRows));
     // VARKA-70's A/B on the OR root: the pass writes the OR of two whole bitmaps once and
     // the loop drops the root's write - but keeps both reads, since the pick's null
     // substitution blends by the operand words for the value (VARKA-70.md 3.3).
-    var greatestPerGroup = emit(List.of(new Greatest(new ColumnRef(0), new ColumnRef(1))), 2,
-        0, b.loader(), 945, PER_GROUP_WRITE);
+    VarkaFusedKernel greatestPerGroup =
+        emit(List.of(new Greatest(new ColumnRef(0), new ColumnRef(1))), 2,
+            0, b.loader(), 945, PER_GROUP_WRITE);
     benchmark.addCase("greatest(d, d2), words per group (VARKA-70 A/B), mixed nulls", it ->
         greatestPerGroup.run(new long[] {b.mxData().address(), b.mx2Data().address()},
             new long[] {b.mxValidity().address(), b.mx2Validity().address()},
             new int[] {b.mxNulls(), b.mx2Nulls()}, new long[] {b.dst().address()},
-            new long[] {b.dstValidity().address()}, NO_LITERALS, NUM_ROWS));
+            new long[] {b.dstValidity().address()}, NO_LITERALS, numRows));
     benchmark.addCase(
         "greatest(d, d2), words per group (VARKA-70 A/B), first input all-null", it ->
         greatestPerGroup.run(new long[] {b.mxData().address(), b.mx2Data().address()},
-            new long[] {0L, b.mx2Validity().address()}, new int[] {NUM_ROWS, b.mx2Nulls()},
+            new long[] {0L, b.mx2Validity().address()}, new int[] {numRows, b.mx2Nulls()},
             new long[] {b.dst().address()}, new long[] {b.dstValidity().address()},
-            NO_LITERALS, NUM_ROWS));
+            NO_LITERALS, numRows));
     runCases(benchmark);
   }
 
   private void fusedChain(Buffers b) {
-    var benchmark = benchmark("chain over " + NUM_ROWS + " rows, mixed nulls", NUM_ROWS)
+    VarkaBenchmark benchmark = benchmark("chain over " + numRows + " rows, mixed nulls", numRows)
         .timed().build();
     for (int depth : List.of(1, 2, 4, 8, 16)) {
       int[] offsets = offsets(depth, 13);
-      var fused = emit(List.of(chain(depth)), 1, depth, b.loader(), depth);
+      VarkaFusedKernel fused = emit(List.of(chain(depth)), 1, depth, b.loader(), depth);
       benchmark.addCase("fused, depth " + depth, it ->
           fused.run(new long[] {b.mxData().address()}, new long[] {b.mxValidity().address()},
               new int[] {b.mxNulls()}, new long[] {b.dst().address()},
-              new long[] {b.dstValidity().address()}, offsets, NUM_ROWS));
+              new long[] {b.dstValidity().address()}, offsets, numRows));
       benchmark.addCase("sequential kernels, depth " + depth, it ->
           b.sequentialChain(depth, offsets, b.mxData().address(), b.mxValidity().address(),
               b.mxNulls(), b.dst().address(), b.dstValidity().address()));
@@ -553,20 +566,22 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // a = chain8(d); b = datediff(chain8(d), d2): 9 distinct ops. With the memo disabled
     // the same trees emit 17 op calls - the delta prices CSE itself, separately from
     // fusion. The sequential oracle is 9 kernel passes.
-    var benchmark = benchmark("two outputs over " + NUM_ROWS + " rows, mixed nulls", NUM_ROWS)
-        .timed().build();
+    VarkaBenchmark benchmark =
+        benchmark("two outputs over " + numRows + " rows, mixed nulls", numRows)
+            .timed().build();
     VarkaVectorIR shared = chain(8);
     List<VarkaVectorIR> roots = List.of(shared, new DateDiff(shared, new ColumnRef(1)));
     int[] offsets = offsets(8, 13);
-    var fused = emit(roots, 2, 8, b.loader(), 200);
-    var fusedNoCse = emit(roots, 2, 8, b.loader(), 201, VarkaEmitOptions.DEFAULTS.withCse(false));
+    VarkaFusedKernel fused = emit(roots, 2, 8, b.loader(), 200);
+    VarkaFusedKernel fusedNoCse =
+        emit(roots, 2, 8, b.loader(), 201, VarkaEmitOptions.DEFAULTS.withCse(false));
     Consumer<VarkaFusedKernel> runFused = kernel ->
         kernel.run(new long[] {b.mxData().address(), b.mx2Data().address()},
             new long[] {b.mxValidity().address(), b.mx2Validity().address()},
             new int[] {b.mxNulls(), b.mx2Nulls()},
             new long[] {b.dst().address(), b.dst2().address()},
             new long[] {b.dstValidity().address(), b.dst2Validity().address()}, offsets,
-            NUM_ROWS);
+            numRows);
     benchmark.addCase("fused, CSE", it -> runFused.accept(fused));
     benchmark.addCase("fused, memo disabled", it -> runFused.accept(fusedNoCse));
     benchmark.addCase("sequential kernels (9 passes)", it -> {
@@ -574,7 +589,7 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
           b.mxNulls(), b.dst().address(), b.dstValidity().address());
       DateVectorOps.vectorDateDiff(b.dst().address(), b.dstValidity().address(), b.mxNulls(),
           b.mx2Data().address(), b.mx2Validity().address(), b.mx2Nulls(),
-          b.dst2().address(), b.dst2Validity().address(), NUM_ROWS);
+          b.dst2().address(), b.dst2Validity().address(), numRows);
     });
     runCases(benchmark);
   }
@@ -584,18 +599,19 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
       long v1, int n1, long d2v, long v2, int n2) {
     kernel.run(new long[] {d1, d2v}, new long[] {v1, v2}, new int[] {n1, n2},
         new long[] {b.dst().address()}, new long[] {b.dstValidity().address()}, offsets,
-        NUM_ROWS);
+        numRows);
   }
 
   private void predication(Buffers b) {
     // The same depth-4 arithmetic with and without a comparison + blend wrapped around
     // it - pricing predication itself, in both bodies. The arms are disjoint chains over
     // each input so the predicated case does strictly more work.
-    var benchmark = benchmark("depth-4 arms over " + NUM_ROWS + " rows", NUM_ROWS).timed()
+    VarkaBenchmark benchmark = benchmark("depth-4 arms over " + numRows + " rows", numRows).timed()
         .build();
     int[] offsets = offsets(8, 13);
-    var plain = emit(List.of(chainOver(new ColumnRef(0), 4, 0)), 2, 8, b.loader(), 400);
-    var blended = emit(List.of(new IfElse(
+    VarkaFusedKernel plain =
+        emit(List.of(chainOver(new ColumnRef(0), 4, 0)), 2, 8, b.loader(), 400);
+    VarkaFusedKernel blended = emit(List.of(new IfElse(
         new Compare(CompareOp.LT, new ColumnRef(0), new ColumnRef(1)),
         chainOver(new ColumnRef(0), 4, 0),
         chainOver(new ColumnRef(1), 4, 4))), 2, 8, b.loader(), 401);
@@ -615,44 +631,46 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
   }
 
   private void dayOfWeek(Buffers b) {
-    var benchmark = benchmark("dayofweek over " + NUM_ROWS + " rows", NUM_ROWS).timed()
+    VarkaBenchmark benchmark = benchmark("dayofweek over " + numRows + " rows", numRows).timed()
         .build();
-    var dow = emit(List.of(new DayOfWeek(new ColumnRef(0))), 1, 0, b.loader(), 500);
-    var dowDiv = emit(List.of(new DayOfWeek(new ColumnRef(0))), 1, 0, b.loader(), 501,
+    VarkaFusedKernel dow = emit(List.of(new DayOfWeek(new ColumnRef(0))), 1, 0, b.loader(), 500);
+    VarkaFusedKernel dowDiv = emit(List.of(new DayOfWeek(new ColumnRef(0))), 1, 0, b.loader(), 501,
         VarkaEmitOptions.DEFAULTS.withFloorMod7(VarkaEmitOptions.FloorMod7.DIV));
-    var dowDigitSum = emit(List.of(new DayOfWeek(new ColumnRef(0))), 1, 0, b.loader(), 502,
-        VarkaEmitOptions.DEFAULTS.withFloorMod7(VarkaEmitOptions.FloorMod7.DIGIT_SUM));
+    VarkaFusedKernel dowDigitSum =
+        emit(List.of(new DayOfWeek(new ColumnRef(0))), 1, 0, b.loader(), 502,
+            VarkaEmitOptions.DEFAULTS.withFloorMod7(VarkaEmitOptions.FloorMod7.DIGIT_SUM));
     // VARKA-57: extract(DAYOFWEEK_ISO), dayofweek's tail with the other offset and the same
     // add; priced beside the shipped dayofweek row, which it should match within noise.
-    var dowIso = emit(List.of(new DayOfWeekIso(new ColumnRef(0))), 1, 0, b.loader(), 507);
+    VarkaFusedKernel dowIso =
+        emit(List.of(new DayOfWeekIso(new ColumnRef(0))), 1, 0, b.loader(), 507);
     benchmark.addCase("dayofweek_iso (VARKA-57), null-free", it ->
         dowIso.run(new long[] {b.nfData().address()}, new long[] {0L}, new int[] {0},
             new long[] {b.dst().address()}, new long[] {b.dstValidity().address()},
-            NO_LITERALS, NUM_ROWS));
+            NO_LITERALS, numRows));
     benchmark.addCase("magic multiply (shipped), null-free", it ->
         dow.run(new long[] {b.nfData().address()}, new long[] {0L}, new int[] {0},
             new long[] {b.dst().address()}, new long[] {b.dstValidity().address()},
-            NO_LITERALS, NUM_ROWS));
+            NO_LITERALS, numRows));
     benchmark.addCase("magic multiply (shipped), mixed nulls", it ->
         dow.run(new long[] {b.mxData().address()}, new long[] {b.mxValidity().address()},
             new int[] {b.mxNulls()}, new long[] {b.dst().address()},
-            new long[] {b.dstValidity().address()}, NO_LITERALS, NUM_ROWS));
+            new long[] {b.dstValidity().address()}, NO_LITERALS, numRows));
     benchmark.addCase("digit sum (VARKA-11 reference), null-free", it ->
         dowDigitSum.run(new long[] {b.nfData().address()}, new long[] {0L}, new int[] {0},
             new long[] {b.dst().address()}, new long[] {b.dstValidity().address()},
-            NO_LITERALS, NUM_ROWS));
+            NO_LITERALS, numRows));
     benchmark.addCase("digit sum (VARKA-11 reference), mixed nulls", it ->
         dowDigitSum.run(new long[] {b.mxData().address()},
             new long[] {b.mxValidity().address()}, new int[] {b.mxNulls()},
             new long[] {b.dst().address()}, new long[] {b.dstValidity().address()},
-            NO_LITERALS, NUM_ROWS));
+            NO_LITERALS, numRows));
     benchmark.addCase("lanewise DIV, null-free", it ->
         dowDiv.run(new long[] {b.nfData().address()}, new long[] {0L}, new int[] {0},
             new long[] {b.dst().address()}, new long[] {b.dstValidity().address()},
-            NO_LITERALS, NUM_ROWS));
+            NO_LITERALS, numRows));
     benchmark.addCase("per-row LocalDate (the path Spark uses today)", it -> {
       int i = 0;
-      while (i < NUM_ROWS) {
+      while (i < numRows) {
         int days = b.nfData().get(ValueLayout.JAVA_INT, i * 4L);
         b.dst().set(ValueLayout.JAVA_INT, i * 4L,
             LocalDate.ofEpochDay(days).getDayOfWeek().plus(1).getValue());
@@ -671,8 +689,8 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     int pass = 0;
     while (pass < repeats) {
       int done = 0;
-      while (done < NUM_ROWS) {
-        int n = Math.min(chunk, NUM_ROWS - done);
+      while (done < numRows) {
+        int n = Math.min(chunk, numRows - done);
         body.accept(done * 4L, done / 8L, n);
         done += n;
       }
@@ -681,15 +699,25 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
   }
 
   /**
-   * fill() nulls every seventh row, so a chunk of n rows read from offset 0 holds exactly this
-   * many. Passing the whole buffer's count instead would hand the kernel a null count for a
-   * batch it is not running, and its dead-column test reads that.
+   * The null count a chunked case hands the kernel for an n-row chunk of the first mixed
+   * column, which fill() nulls every seventh row. A chunk read from offset 0, as the alignment
+   * ladder reads every chunk, holds exactly this many. A chunk that walks the buffer starts at
+   * a multiple of 4096, which is not one of 7, so its real count can be one fewer. That does not
+   * matter: the kernel reads the count only to choose its body - the dense one at 0, the
+   * all-null shortcut at n, and the masked one, which reads the validity bitmap itself,
+   * anywhere between ({@code VarkaFusedKernel}) - and a chunk of thousands of rows is between
+   * whichever count it is given. What must not be passed is the whole buffer's count, a count
+   * for a batch the kernel is not running.
    */
   private static int nullsIn(int n) {
     return (n + 6) / 7;
   }
 
-  /** The same for the second column, which nulls every eleventh row. */
+  /**
+   * The same for the second mixed column, which fill() nulls every eleventh row; exact from
+   * offset 0, possibly one more than the real count for a chunk that walks the buffer, and
+   * either way strictly between 0 and n, so the kernel's choice of body is the same.
+   */
   private static int nulls2In(int n) {
     return (n + 10) / 11;
   }
@@ -705,7 +733,7 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
      * for its own case, which is exactly the drift this prevents.
      */
     void eachChunk(ChunkBody body) {
-      VarkaEmitterParityBenchmark.eachChunk(REPEATS, CHUNK, body);
+      VarkaEmitterParityBenchmark.eachChunk(repeats, chunk, body);
     }
 
     void chunked(VarkaFusedKernel kernel, boolean mixed) {
@@ -848,15 +876,20 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     }
 
     /**
-     * The scalar baseline's chunk walk: the same chunks over the same buffer, handing the
-     * scalar kernel the source, destination and validity addresses of each.
+     * The scalar baseline's chunk walk: the same passes and chunks over the same buffer as
+     * {@link #eachChunk}, handing the scalar kernel each chunk's absolute source, destination
+     * and validity addresses. It is a second walk because the Scala form's was one, a loop of
+     * its own around a four-argument function rather than a body handed to {@code eachChunk};
+     * routing it through {@code eachChunk} would add a call layer to these two timed cases that
+     * the Scala did not have. Its addressing is {@code eachChunk}'s: chunk k starts at row
+     * {@code k * chunk} of every buffer.
      */
     void scalarChunked(ScalarKernel kernel) {
       int pass = 0;
-      while (pass < REPEATS) {
+      while (pass < repeats) {
         int done = 0;
-        while (done < NUM_ROWS) {
-          int n = Math.min(CHUNK, NUM_ROWS - done);
+        while (done < numRows) {
+          int n = Math.min(chunk, numRows - done);
           kernel.run(b.nfData().address() + done * 4L, b.dst().address() + done * 4L,
               b.dstValidity().address() + done / 8L, n);
           done += n;
@@ -879,10 +912,8 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // because VARKA-26 gave calendar nodes a weight that kept each in its own loop method
     // and VARKA-32 step B2 lets siblings over one date share one; the separate/shared pairs
     // below are where that is measured rather than assumed.
-    int repeats = REPEATS;
-    int chunk = CHUNK;
-    var benchmark = benchmark((long) NUM_ROWS * repeats + " rows in 4096-row chunks",
-        (long) NUM_ROWS * repeats).timed().build();
+    VarkaBenchmark benchmark = benchmark((long) numRows * repeats + " rows in 4096-row chunks",
+        (long) numRows * repeats).timed().build();
     // Four outputs need four destinations; one shared buffer would have the kernels
     // overwrite each other and alias four stores onto one cache line. wideDst/wideDstValidity
     // are the same four buffers the "widest shape" section below uses - VARKA-32's own cases
@@ -899,23 +930,24 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // warm prefix, so the regime is worth about 4% here - small, but it is the difference
     // between a measured ratio and a nearly-measured one.
     var r = new YearRunners(b, dstData4, dstValidity4);
-    var loader = b.loader();
-    var year = emit(List.of(new Year(new ColumnRef(0))), 1, 0, loader, 801);
+    VarkaGeneratedClassLoader loader = b.loader();
+    VarkaFusedKernel year = emit(List.of(new Year(new ColumnRef(0))), 1, 0, loader, 801);
     List<VarkaVectorIR> fourFields = List.of(new Year(new ColumnRef(0)),
         new Month(new ColumnRef(0)), new DayOfMonth(new ColumnRef(0)),
         new Quarter(new ColumnRef(0)));
-    var four = emit(fourFields, 1, 0, loader, 803);
-    var dow = emit(List.of(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 804);
+    VarkaFusedKernel four = emit(fourFields, 1, 0, loader, 803);
+    VarkaFusedKernel dow = emit(List.of(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 804);
     // VARKA-45's A/B, on shapes that already exist rather than new ones: the point is what
     // the dense validity fill does to kernels that ship today. Each pair is adjacent, so
     // both sides run back to back under one JIT and thermal state, and the mixed-null rows
     // are the control - the masked bodies are asserted byte for byte identical under the
     // option, so movement there is run noise rather than an effect.
-    var perGroup = VarkaEmitOptions.DEFAULTS.withDenseValidityOnce(false);
-    var yearPerGroup = emit(List.of(new Year(new ColumnRef(0))), 1, 0, loader, 830, perGroup);
-    var yearWordsPerGroup =
+    VarkaEmitOptions perGroup = VarkaEmitOptions.DEFAULTS.withDenseValidityOnce(false);
+    VarkaFusedKernel yearPerGroup =
+        emit(List.of(new Year(new ColumnRef(0))), 1, 0, loader, 830, perGroup);
+    VarkaFusedKernel yearWordsPerGroup =
         emit(List.of(new Year(new ColumnRef(0))), 1, 0, loader, 940, PER_GROUP_WRITE);
-    var dowPerGroup =
+    VarkaFusedKernel dowPerGroup =
         emit(List.of(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 832, perGroup);
     // VARKA-48's A/B. The shipped year kernel skips the prefix's March-month step - four
     // lane ops a year tail never reads, since it takes the January turn off the day of
@@ -927,7 +959,7 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // millisecond at this section's 11 ms best time, so "inside noise" is a legitimate
     // outcome here and the default does not rest on this number - it rests on the step
     // being provably dead work where it is elided.
-    var yearMonthKept = emit(List.of(new Year(new ColumnRef(0))), 1, 0, loader, 802,
+    VarkaFusedKernel yearMonthKept = emit(List.of(new Year(new ColumnRef(0))), 1, 0, loader, 802,
         VarkaEmitOptions.DEFAULTS.withElideChronoMonth(false));
     // add_months is the widest calendar node the emitter has - it decomposes and
     // recomposes in one loop method - and until now it had no committed number at all,
@@ -942,15 +974,15 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // should compound if it is real. `year` is deliberately absent: it reads neither axis,
     // and VARKA-53.md 6.1 prediction 3 is that it does not move - a case that cannot
     // move is a case that only adds runtime to this section.
-    var monthNeri = emit(List.of(new Month(new ColumnRef(0))), 1, 0, loader, 820);
-    var monthOld = emit(List.of(new Month(new ColumnRef(0))), 1, 0, loader, 821,
+    VarkaFusedKernel monthNeri = emit(List.of(new Month(new ColumnRef(0))), 1, 0, loader, 820);
+    VarkaFusedKernel monthOld = emit(List.of(new Month(new ColumnRef(0))), 1, 0, loader, 821,
         VarkaEmitOptions.DEFAULTS.withNeriSchneiderMonth(false));
-    var domNeri = emit(List.of(new DayOfMonth(new ColumnRef(0))), 1, 0, loader, 822);
-    var domOld = emit(List.of(new DayOfMonth(new ColumnRef(0))), 1, 0, loader, 823,
+    VarkaFusedKernel domNeri = emit(List.of(new DayOfMonth(new ColumnRef(0))), 1, 0, loader, 822);
+    VarkaFusedKernel domOld = emit(List.of(new DayOfMonth(new ColumnRef(0))), 1, 0, loader, 823,
         VarkaEmitOptions.DEFAULTS.withNeriSchneiderMonth(false));
-    var fourOld = emit(fourFields, 1, 0, loader, 824,
+    VarkaFusedKernel fourOld = emit(fourFields, 1, 0, loader, 824,
         VarkaEmitOptions.DEFAULTS.withNeriSchneiderMonth(false));
-    var addMonths = emit(List.of(new AddMonths(new ColumnRef(0), new LiteralSlot(0))),
+    VarkaFusedKernel addMonths = emit(List.of(new AddMonths(new ColumnRef(0), new LiteralSlot(0))),
         1, 1, loader, 811);
     // VARKA-54's A/B, both prefix forms named explicitly rather than one of them as "the
     // default", so the labels survive the default changing. `year` is the shape that pays
@@ -960,16 +992,18 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // bottom; `add_months` is the widest node and the one whose year assembly runs inside a
     // recomposition. Adjacent cases, both null patterns, the same interleaving discipline
     // as VARKA-45, VARKA-48 and VARKA-53.
-    var julian = VarkaEmitOptions.DEFAULTS.withJulianMap(true);
-    var centuryYear = VarkaEmitOptions.DEFAULTS.withJulianMap(false);
-    var yearJulian = emit(List.of(new Year(new ColumnRef(0))), 1, 0, loader, 840, julian);
-    var yearCenturyYear =
+    VarkaEmitOptions julian = VarkaEmitOptions.DEFAULTS.withJulianMap(true);
+    VarkaEmitOptions centuryYear = VarkaEmitOptions.DEFAULTS.withJulianMap(false);
+    VarkaFusedKernel yearJulian =
+        emit(List.of(new Year(new ColumnRef(0))), 1, 0, loader, 840, julian);
+    VarkaFusedKernel yearCenturyYear =
         emit(List.of(new Year(new ColumnRef(0))), 1, 0, loader, 841, centuryYear);
-    var fourJulian = emit(fourFields, 1, 0, loader, 842, julian);
-    var fourCenturyYear = emit(fourFields, 1, 0, loader, 843, centuryYear);
-    var addMonthsJulian = emit(List.of(new AddMonths(new ColumnRef(0), new LiteralSlot(0))),
-        1, 1, loader, 844, julian);
-    var addMonthsCenturyYear = emit(
+    VarkaFusedKernel fourJulian = emit(fourFields, 1, 0, loader, 842, julian);
+    VarkaFusedKernel fourCenturyYear = emit(fourFields, 1, 0, loader, 843, centuryYear);
+    VarkaFusedKernel addMonthsJulian =
+        emit(List.of(new AddMonths(new ColumnRef(0), new LiteralSlot(0))),
+            1, 1, loader, 844, julian);
+    VarkaFusedKernel addMonthsCenturyYear = emit(
         List.of(new AddMonths(new ColumnRef(0), new LiteralSlot(0))), 1, 1, loader, 845,
         centuryYear);
     // VARKA-46's A/B: the same kernels emitted against the general validity helpers - the
@@ -990,14 +1024,15 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // one. The dense (null-free) arms and the filter kernel are unaffected either way -
     // the pass rewrites only the masked body, and a `Cond` root is never served - so the
     // same options serve them unchanged.
-    var generalHelpers = PER_GROUP_WRITE.withValidityByWidth(false);
-    var yearGeneral =
+    VarkaEmitOptions generalHelpers = PER_GROUP_WRITE.withValidityByWidth(false);
+    VarkaFusedKernel yearGeneral =
         emit(List.of(new Year(new ColumnRef(0))), 1, 0, loader, 892, generalHelpers);
-    var yearPerGroupGeneral = emit(List.of(new Year(new ColumnRef(0))), 1, 0, loader, 893,
-        generalHelpers.withDenseValidityOnce(false));
-    var dowGeneral = emit(List.of(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 882,
+    VarkaFusedKernel yearPerGroupGeneral =
+        emit(List.of(new Year(new ColumnRef(0))), 1, 0, loader, 893,
+            generalHelpers.withDenseValidityOnce(false));
+    VarkaFusedKernel dowGeneral = emit(List.of(new DayOfWeek(new ColumnRef(0))), 1, 0, loader, 882,
         generalHelpers);
-    var fourSharedGeneral = emit(fourFields, 1, 0, loader, 883, generalHelpers);
+    VarkaFusedKernel fourSharedGeneral = emit(fourFields, 1, 0, loader, 883, generalHelpers);
     // The selection kernel: a Cond root's slot holds a selection bitmap, which is computed
     // rather than known, so VARKA-45's driver fill cannot serve it and the per-group OR
     // stays in the dense body too. It is the shape the columnar filter runs on every batch
@@ -1005,9 +1040,10 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // The second half of VARKA-46: the same kernels with the validity OR emitted after the
     // store, which is where it was until the compiled loop showed it as a real call in every
     // arm. Both sides carry the width-named helpers, so this pair prices the order alone.
-    var orAfter = PER_GROUP_WRITE.withValidityOrFirst(false);
-    var yearOrAfter = emit(List.of(new Year(new ColumnRef(0))), 1, 0, loader, 887, orAfter);
-    var fourSharedOrAfter = emit(fourFields, 1, 0, loader, 888, orAfter);
+    VarkaEmitOptions orAfter = PER_GROUP_WRITE.withValidityOrFirst(false);
+    VarkaFusedKernel yearOrAfter =
+        emit(List.of(new Year(new ColumnRef(0))), 1, 0, loader, 887, orAfter);
+    VarkaFusedKernel fourSharedOrAfter = emit(fourFields, 1, 0, loader, 888, orAfter);
     // VARKA-76's ladder in the number of per-group validity writes, which is the quantity
     // 2.38 proposes keying the helper choice on. The two shapes that raised the question -
     // single-field `year` at one write, the four shared fields at four - differ in method
@@ -1047,8 +1083,9 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
           PER_GROUP_WRITE.withValidityByWord(true)));
     }
     var selectionRoot = new Compare(CompareOp.LT, new ColumnRef(0), new LiteralSlot(0));
-    var filterKernel = emit(List.of(selectionRoot), 1, 1, loader, 884);
-    var filterGeneral = emit(List.of(selectionRoot), 1, 1, loader, 885, generalHelpers);
+    VarkaFusedKernel filterKernel = emit(List.of(selectionRoot), 1, 1, loader, 884);
+    VarkaFusedKernel filterGeneral =
+        emit(List.of(selectionRoot), 1, 1, loader, 885, generalHelpers);
     benchmark.addCase("year, null-free", it -> r.chunked(year, false));
     benchmark.addCase("year, validity OR-ed per group (VARKA-45 A/B), null-free",
         it -> r.chunked(yearPerGroup, false));
@@ -1076,9 +1113,9 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // VARKA-76's rungs, adjacent so each pair shares a JIT and thermal state.
     for (int k = 1; k <= 4; k++) {
       int outputs = k;
-      var specialised = blendSpecialised.get(k - 1);
-      var general = blendGeneral.get(k - 1);
-      var byWord = blendByWord.get(k - 1);
+      VarkaFusedKernel specialised = blendSpecialised.get(k - 1);
+      VarkaFusedKernel general = blendGeneral.get(k - 1);
+      VarkaFusedKernel byWord = blendByWord.get(k - 1);
       benchmark.addCase(
           k + " validity write(s) per body, width-named helpers (VARKA-76), mixed nulls",
           it -> r.chunked(specialised, true, outputs, blendLits));
@@ -1150,22 +1187,22 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // withGroupBudget(200), the measurement rig 7.2 cleared the gate with; the bytes are
     // the same. Neither the option nor the grouping affects results, only which bytes
     // compute them.
-    var separate = VarkaEmitOptions.DEFAULTS.withShareChronoPrefix(false);
+    VarkaEmitOptions separate = VarkaEmitOptions.DEFAULTS.withShareChronoPrefix(false);
     var col0 = new ColumnRef(0);
     List<VarkaVectorIR> yearMonth = List.of(new Year(col0), new Month(col0));
-    var yearMonthDayList = new ArrayList<>(yearMonth);
+    var yearMonthDayList = new ArrayList<VarkaVectorIR>(yearMonth);
     yearMonthDayList.add(new DayOfMonth(col0));
     List<VarkaVectorIR> yearMonthDay = List.copyOf(yearMonthDayList);
-    var yearMonthSeparate = emit(yearMonth, 1, 0, loader, 805, separate);
-    var yearMonthShared = emit(yearMonth, 1, 0, loader, 806);
-    var yearMonthDaySeparate = emit(yearMonthDay, 1, 0, loader, 807, separate);
-    var yearMonthDayShared = emit(yearMonthDay, 1, 0, loader, 808);
-    var fourSeparate = emit(fourFields, 1, 0, loader, 809, separate);
+    VarkaFusedKernel yearMonthSeparate = emit(yearMonth, 1, 0, loader, 805, separate);
+    VarkaFusedKernel yearMonthShared = emit(yearMonth, 1, 0, loader, 806);
+    VarkaFusedKernel yearMonthDaySeparate = emit(yearMonthDay, 1, 0, loader, 807, separate);
+    VarkaFusedKernel yearMonthDayShared = emit(yearMonthDay, 1, 0, loader, 808);
+    VarkaFusedKernel fourSeparate = emit(fourFields, 1, 0, loader, 809, separate);
     // `four` above is the defaults, which is the shared four-field kernel now.
-    var fourShared = four;
-    var fourSharedPerGroup = emit(fourFields, 1, 0, loader, 831,
+    VarkaFusedKernel fourShared = four;
+    VarkaFusedKernel fourSharedPerGroup = emit(fourFields, 1, 0, loader, 831,
         VarkaEmitOptions.DEFAULTS.withDenseValidityOnce(false));
-    var fourSharedWordsPerGroup = emit(fourFields, 1, 0, loader, 941, PER_GROUP_WRITE);
+    VarkaFusedKernel fourSharedWordsPerGroup = emit(fourFields, 1, 0, loader, 941, PER_GROUP_WRITE);
     benchmark.addCase("year+month, separate (2 loop methods), null-free",
         it -> r.chunked(yearMonthSeparate, false, 2));
     benchmark.addCase("year+month, shared (1 loop method), null-free",
@@ -1208,7 +1245,7 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // emitted under withGroupBudget(200), which put the two in one method by clause 1 with
     // two prefixes in it; under the defaults they are two methods, so this row's number is
     // not comparable to the one committed before B2.
-    var twoDates =
+    VarkaFusedKernel twoDates =
         emit(List.of(new Year(col0), new Year(new ColumnRef(1))), 2, 0, loader, 810);
     benchmark.addCase("year(d1), year(d2), two dates, shared option, null-free",
         it -> r.eachChunk((dataOff, validityOff, n) -> {
@@ -1232,12 +1269,13 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // so a difference in that row is run noise, not the guard. The second date buffer stands in
     // for the offset column: its values are days in [-10000, 10000), so every sum stays in
     // range and the status must read zero.
-    var guardOff = VarkaEmitOptions.DEFAULTS.withGuardDayProducers(false);
+    VarkaEmitOptions guardOff = VarkaEmitOptions.DEFAULTS.withGuardDayProducers(false);
     var offsetAdd = new AddDays(col0, new ColumnRef(1));
-    var yearOfAddGuarded = emit(List.of(new Year(offsetAdd)), 2, 0, loader, 850);
-    var yearOfAddUnguarded = emit(List.of(new Year(offsetAdd)), 2, 0, loader, 851, guardOff);
-    var addAloneGuardOn = emit(List.of(offsetAdd), 2, 0, loader, 852);
-    var addAloneGuardOff = emit(List.of(offsetAdd), 2, 0, loader, 853, guardOff);
+    VarkaFusedKernel yearOfAddGuarded = emit(List.of(new Year(offsetAdd)), 2, 0, loader, 850);
+    VarkaFusedKernel yearOfAddUnguarded =
+        emit(List.of(new Year(offsetAdd)), 2, 0, loader, 851, guardOff);
+    VarkaFusedKernel addAloneGuardOn = emit(List.of(offsetAdd), 2, 0, loader, 852);
+    VarkaFusedKernel addAloneGuardOff = emit(List.of(offsetAdd), 2, 0, loader, 853, guardOff);
     benchmark.addCase("year(date_add(d, off)), producer guard on (VARKA-52 A/B), null-free",
         it -> r.chunkedTwo(yearOfAddGuarded, false));
     benchmark.addCase("year(date_add(d, off)), producer guard off (VARKA-52 A/B), null-free",
@@ -1260,13 +1298,13 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // keep every sum in range, so no batch declines under either setting and this prices
     // the qualification rather than the declines it prevents, which the differential
     // counts instead.
-    var armOff = VarkaEmitOptions.DEFAULTS.withGuardUnderArm(false);
+    VarkaEmitOptions armOff = VarkaEmitOptions.DEFAULTS.withGuardUnderArm(false);
     var guardedUnderArm = new IfElse(
         new Compare(CompareOp.LT, col0, new ColumnRef(1)),
         new Year(offsetAdd),
         new Year(col0));
-    var armOn = emit(List.of(guardedUnderArm), 2, 0, loader, 960);
-    var armless = emit(List.of(guardedUnderArm), 2, 0, loader, 961, armOff);
+    VarkaFusedKernel armOn = emit(List.of(guardedUnderArm), 2, 0, loader, 960);
+    VarkaFusedKernel armless = emit(List.of(guardedUnderArm), 2, 0, loader, 961, armOff);
     benchmark.addCase(
         "CASE over year(date_add(d, off)), arm context on (VARKA-79 A/B), null-free",
         it -> r.chunkedTwo(armOn, false));
@@ -1302,10 +1340,12 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // coupling this task's review removed - see VARKA-60.md 9.
     var addMonthsCol = new AddMonths(col0, new ColumnRef(1));
     var addMonthsLit = new AddMonths(col0, new LiteralSlot(0));
-    var addMonthsColGuarded = emit(List.of(addMonthsCol), 2, 0, loader, 950);
-    var addMonthsLitControl = emit(List.of(addMonthsLit), 2, 1, loader, 855);
-    var addMonthsColPerGroup = emit(List.of(addMonthsCol), 2, 0, loader, 943, PER_GROUP_WRITE);
-    var addMonthsLitPerGroup = emit(List.of(addMonthsLit), 2, 1, loader, 944, PER_GROUP_WRITE);
+    VarkaFusedKernel addMonthsColGuarded = emit(List.of(addMonthsCol), 2, 0, loader, 950);
+    VarkaFusedKernel addMonthsLitControl = emit(List.of(addMonthsLit), 2, 1, loader, 855);
+    VarkaFusedKernel addMonthsColPerGroup =
+        emit(List.of(addMonthsCol), 2, 0, loader, 943, PER_GROUP_WRITE);
+    VarkaFusedKernel addMonthsLitPerGroup =
+        emit(List.of(addMonthsLit), 2, 1, loader, 944, PER_GROUP_WRITE);
     benchmark.addCase("add_months(d, m), column count (VARKA-60), null-free",
         it -> r.chunkedTwo(addMonthsColGuarded, false));
     benchmark.addCase("add_months(d, 13), literal count (VARKA-60 control), null-free",
@@ -1330,10 +1370,10 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // though only its subtract form is expected to ship: it is the day-of-month tail with one
     // op changed, and it prices the recomposition on the shape where it has the least to hide
     // behind. The per-row DateTimeUtils.truncDate loop is what Spark runs today.
-    var recompose = VarkaEmitOptions.DEFAULTS
+    VarkaEmitOptions recompose = VarkaEmitOptions.DEFAULTS
         .withTruncDate(VarkaEmitOptions.TruncDateForm.RECOMPOSE);
     var truncCases = new ArrayList<TruncArms>();
-    for (var c : List.of(new TruncLevelCase("YEAR", TruncLevel.YEAR, 860),
+    for (TruncLevelCase c : List.of(new TruncLevelCase("YEAR", TruncLevel.YEAR, 860),
         new TruncLevelCase("MONTH", TruncLevel.MONTH, 862),
         new TruncLevelCase("QUARTER", TruncLevel.QUARTER, 864))) {
       truncCases.add(new TruncArms(c.name(),
@@ -1358,10 +1398,10 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // dates, so every triple is valid and in range - the NULL and ANSI forms as an adjacent
     // A/B (they differ by a word store and the mask the guard receives), a mixed-null run
     // with mxData's validity on the year, and the per-row path Spark uses today.
-    MemorySegment yData = b.arena().allocate(NUM_ROWS * 4L, 8);
-    MemorySegment mData = b.arena().allocate(NUM_ROWS * 4L, 8);
-    MemorySegment dData = b.arena().allocate(NUM_ROWS * 4L, 8);
-    for (int i = 0; i < NUM_ROWS; i++) {
+    MemorySegment yData = b.arena().allocate(numRows * 4L, 8);
+    MemorySegment mData = b.arena().allocate(numRows * 4L, 8);
+    MemorySegment dData = b.arena().allocate(numRows * 4L, 8);
+    for (int i = 0; i < numRows; i++) {
       LocalDate date = LocalDate.ofEpochDay(b.nfData().get(ValueLayout.JAVA_INT, i * 4L));
       yData.set(ValueLayout.JAVA_INT, i * 4L, date.getYear());
       mData.set(ValueLayout.JAVA_INT, i * 4L, date.getMonthValue());
@@ -1370,8 +1410,10 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     var parts = new DateParts(yData, mData, dData);
     var col1 = new ColumnRef(1);
     var col2 = new ColumnRef(2);
-    var makeDateNull = emit(List.of(new MakeDate(col0, col1, col2, false)), 3, 0, loader, 880);
-    var makeDateAnsi = emit(List.of(new MakeDate(col0, col1, col2, true)), 3, 0, loader, 881);
+    VarkaFusedKernel makeDateNull =
+        emit(List.of(new MakeDate(col0, col1, col2, false)), 3, 0, loader, 880);
+    VarkaFusedKernel makeDateAnsi =
+        emit(List.of(new MakeDate(col0, col1, col2, true)), 3, 0, loader, 881);
     benchmark.addCase("make_date, NULL form (VARKA-42 A/B), null-free",
         it -> r.chunkedThree(makeDateNull, false, parts));
     benchmark.addCase("make_date, ANSI form (VARKA-42 A/B), null-free",
@@ -1384,7 +1426,7 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
       int pass = 0;
       while (pass < repeats) {
         int i = 0;
-        while (i < NUM_ROWS) {
+        while (i < numRows) {
           LocalDate date = LocalDate.of(yData.get(ValueLayout.JAVA_INT, i * 4L),
               mData.get(ValueLayout.JAVA_INT, i * 4L), dData.get(ValueLayout.JAVA_INT, i * 4L));
           b.dst().set(ValueLayout.JAVA_INT, i * 4L, DateTimeUtils.localDateToDays(date));
@@ -1396,12 +1438,13 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // VARKA-37: weekofyear as the compiler builds it, the week tail over the Thursday shift,
     // beside the dayofyear rows above as the sibling control (the tail is dayofyear's plus
     // four ops, the shift another seventeen), the shift alone, and the per-row path.
-    var weekOfYear = emit(List.of(new WeekOfYear(new ThursdayOf(col0))), 1, 0, loader, 870);
-    var thursdayOf = emit(List.of(new ThursdayOf(col0)), 1, 0, loader, 872);
+    VarkaFusedKernel weekOfYear =
+        emit(List.of(new WeekOfYear(new ThursdayOf(col0))), 1, 0, loader, 870);
+    VarkaFusedKernel thursdayOf = emit(List.of(new ThursdayOf(col0)), 1, 0, loader, 872);
     // VARKA-58: yearofweek is Year over the same shift; the pair is the sharing row, one
     // ThursdayOf and one prefix for both fields under CSE.
-    var yearOfWeek = emit(List.of(new Year(new ThursdayOf(col0))), 1, 0, loader, 873);
-    var isoPair = emit(List.of(new WeekOfYear(new ThursdayOf(col0)),
+    VarkaFusedKernel yearOfWeek = emit(List.of(new Year(new ThursdayOf(col0))), 1, 0, loader, 873);
+    VarkaFusedKernel isoPair = emit(List.of(new WeekOfYear(new ThursdayOf(col0)),
         new Year(new ThursdayOf(col0))), 1, 0, loader, 874);
     benchmark.addCase("weekofyear (VARKA-37), null-free", it -> r.chunked(weekOfYear, false));
     benchmark.addCase("yearofweek (VARKA-58), null-free", it -> r.chunked(yearOfWeek, false));
@@ -1415,7 +1458,7 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
       int pass = 0;
       while (pass < repeats) {
         int i = 0;
-        while (i < NUM_ROWS) {
+        while (i < numRows) {
           int days = b.nfData().get(ValueLayout.JAVA_INT, i * 4L);
           b.dst().set(ValueLayout.JAVA_INT, i * 4L, DateTimeUtils.getWeekOfYear(days));
           i += 1;
@@ -1427,7 +1470,7 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
       int pass = 0;
       while (pass < repeats) {
         int i = 0;
-        while (i < NUM_ROWS) {
+        while (i < numRows) {
           int days = b.nfData().get(ValueLayout.JAVA_INT, i * 4L);
           // TRUNC_TO_YEAR is private[sql], which gets no static forwarder: read it off the
           // module, as the Scala call compiles to.
@@ -1508,7 +1551,7 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
       probeSrc[pi] = b.nfData().get(ValueLayout.JAVA_INT, pi * 4L);
       pi += 1;
     }
-    int probePasses = repeats * (NUM_ROWS / chunk);
+    int probePasses = repeats * (numRows / chunk);
     benchmark.addCase("probe: trivial body, int[] (control)", it -> {
       int p = 0;
       while (p < probePasses) {
@@ -1537,7 +1580,7 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
       int pass = 0;
       while (pass < repeats) {
         int i = 0;
-        while (i < NUM_ROWS) {
+        while (i < numRows) {
           int days = b.nfData().get(ValueLayout.JAVA_INT, i * 4L);
           b.dst().set(ValueLayout.JAVA_INT, i * 4L, LocalDate.ofEpochDay(days).getYear());
           i += 1;
@@ -1563,22 +1606,22 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // (`shareWholeNodes`), not a wider budget, because the budget is what keeps compile
     // time in hand. So the arms are the rule off and on, both at the shipped budget: off
     // is what every regeneration through VARKA-70 measured, on is what ships.
-    var benchmark = benchmark(
-        "two outputs over a shared chain, " + NUM_ROWS + " rows, mixed nulls", NUM_ROWS)
+    VarkaBenchmark benchmark = benchmark(
+        "two outputs over a shared chain, " + numRows + " rows, mixed nulls", numRows)
         .timed().build();
     VarkaVectorIR shared = chain(8);
     List<VarkaVectorIR> roots = List.of(chainOver(shared, 6, 8), chainOver(shared, 6, 14));
     int[] offsets = offsets(20, 13);
-    var split = emit(roots, 2, 20, b.loader(), 600,
+    VarkaFusedKernel split = emit(roots, 2, 20, b.loader(), 600,
         VarkaEmitOptions.DEFAULTS.withShareWholeNodes(false));
-    var together = emit(roots, 2, 20, b.loader(), 601, VarkaEmitOptions.DEFAULTS);
+    VarkaFusedKernel together = emit(roots, 2, 20, b.loader(), 601, VarkaEmitOptions.DEFAULTS);
     Consumer<VarkaFusedKernel> run = kernel ->
         kernel.run(new long[] {b.mxData().address(), b.mx2Data().address()},
             new long[] {b.mxValidity().address(), b.mx2Validity().address()},
             new int[] {b.mxNulls(), b.mx2Nulls()},
             new long[] {b.dst().address(), b.dst2().address()},
             new long[] {b.dstValidity().address(), b.dst2Validity().address()}, offsets,
-            NUM_ROWS);
+            numRows);
     benchmark.addCase("whole-node reuse off: two loop methods, shared chain recomputed",
         it -> run.accept(split));
     benchmark.addCase("whole-node reuse on (shipped): one loop method, CSE kept",
@@ -1600,23 +1643,21 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // still beats its unshared arm at both vector widths and whose methods reach tier 4
     // inside a second (-XX:+PrintCompilation, read in a separate run); the case names
     // carry each arm's loop-method count, so the file says which split it measured.
-    int repeats = REPEATS;
-    int chunk = CHUNK;
-    var benchmark = benchmark((long) NUM_ROWS * repeats + " rows in 4096-row chunks",
-        (long) NUM_ROWS * repeats).timed().build();
+    VarkaBenchmark benchmark = benchmark((long) numRows * repeats + " rows in 4096-row chunks",
+        (long) numRows * repeats).timed().build();
     var col = new ColumnRef(0);
     List<VarkaVectorIR> fields =
         List.of(new Year(col), new Month(col), new DayOfMonth(col), new Quarter(col));
     int[] months = {1, 2, 3, 4, 5, 6, 7, 8};
-    MemorySegment[] dsts = allocateAll(b.arena(), 12, NUM_ROWS * 4L);
-    MemorySegment[] dstValidities = allocateAll(b.arena(), 12, (NUM_ROWS + 7) / 8L);
+    MemorySegment[] dsts = allocateAll(b.arena(), 12, numRows * 4L);
+    MemorySegment[] dstValidities = allocateAll(b.arena(), 12, (numRows + 7) / 8L);
     KernelAt chunkedWide = (kernel, outputs) -> {
       int[] lits = Arrays.copyOf(months, outputs - 4);
       int pass = 0;
       while (pass < repeats) {
         int done = 0;
-        while (done < NUM_ROWS) {
-          int n = Math.min(chunk, NUM_ROWS - done);
+        while (done < numRows) {
+          int n = Math.min(chunk, numRows - done);
           long dataOff = done * 4L;
           long validityOff = done / 8L;
           int status = kernel.run(new long[] {b.nfData().address() + dataOff},
@@ -1631,7 +1672,7 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
         pass += 1;
       }
     };
-    var settings = List.of(
+    List<Setting> settings = List.of(
         new Setting("unshared", VarkaEmitOptions.DEFAULTS.withShareChronoPrefix(false)),
         new Setting("one method", VarkaEmitOptions.DEFAULTS.withFusedCeiling(1000)),
         new Setting("fusedCeiling 200", VarkaEmitOptions.DEFAULTS.withFusedCeiling(200)),
@@ -1644,7 +1685,8 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
         for (int k = 0; k < outputs - 4; k++) {
           roots.add(new AddMonths(col, new LiteralSlot(k)));
         }
-        var kernel = emit(List.copyOf(roots), 1, outputs - 4, b.loader(), id, setting.options());
+        VarkaFusedKernel kernel =
+            emit(List.copyOf(roots), 1, outputs - 4, b.loader(), id, setting.options());
         id += 1;
         int methods = 0;
         for (Method m : kernel.getClass().getDeclaredMethods()) {
@@ -1664,15 +1706,15 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // GROUP_BUDGET-sized loop methods since VARKA-11, which is what keeps this case honest
     // in a JVM that has compiled every other kernel in this file first (see
     // VARKA-11.md section 6). The sequential version is the same 64 kernel passes.
-    var benchmark = benchmark("4 outputs x depth 16 over " + NUM_ROWS + " rows", NUM_ROWS)
+    VarkaBenchmark benchmark = benchmark("4 outputs x depth 16 over " + numRows + " rows", numRows)
         .timed().build();
     List<VarkaVectorIR> roots = roots(4, k -> chain(16, k * 16));
     int[] offsets = offsets(64, 7);
-    var fused = emit(roots, 1, 64, b.loader(), 300);
+    VarkaFusedKernel fused = emit(roots, 1, 64, b.loader(), 300);
     benchmark.addCase("fused, 64 ops", it ->
         fused.run(new long[] {b.mxData().address()}, new long[] {b.mxValidity().address()},
             new int[] {b.mxNulls()}, addresses(b.wideDst()), addresses(b.wideDstValidity()),
-            offsets, NUM_ROWS));
+            offsets, numRows));
     benchmark.addCase("sequential kernels, 64 passes", it -> {
       for (int k = 0; k < 4; k++) {
         b.sequentialChain(16, Arrays.copyOfRange(offsets, k * 16, k * 16 + 16),
@@ -1696,7 +1738,9 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
    * Closes every non-null vector in {@code vs}, guarding each so one failure cannot strand the
    * rest. {@code failing}, when non-null, is an exception already on its way out: a close
    * failure is attached to it rather than replacing it, since that one is the reason the run is
-   * ending.
+   * ending. What it catches is what Scala's {@code NonFatal} catches: anything but a virtual
+   * machine error, a linkage error or an interrupt. ({@code NonFatal} also excludes
+   * {@code ThreadDeath}, which nothing can throw since {@code Thread.stop} was removed.)
    */
   private static void closeNames(VarCharVector[] vs, Throwable failing) {
     if (vs != null) {
@@ -1707,11 +1751,15 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
         if (v != null) {
           try {
             v.close();
-          } catch (RuntimeException e) {
+          } catch (Throwable e) {
+            if (e instanceof VirtualMachineError || e instanceof LinkageError
+                || e instanceof InterruptedException) {
+              throw e;
+            }
             if (failing != null) {
               failing.addSuppressed(e);
             } else {
-              System.out.println("closing a benchmark name vector failed: " + e);
+              System.out.println("closing a benchmark string vector failed: " + e);
             }
           }
         }
@@ -1744,7 +1792,7 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     try {
       int c = 0;
       while (c < chunks) {
-        int n = Math.min(chunk, NUM_ROWS - c * chunk);
+        int n = Math.min(chunk, numRows - c * chunk);
         VarCharVector v = new VarCharVector("s", allocator);
         built[c] = v;
         v.allocateNew(n * 10L, n);
@@ -1783,17 +1831,15 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // row-engine parser constructs an exception per bad row. Driven in 4096-row chunks
     // over the whole buffer like the year section, for the same reason: the anchor walks
     // every row, so the kernel must too.
-    int repeats = REPEATS;
-    int chunk = CHUNK;
-    var benchmark = benchmark((long) NUM_ROWS * repeats + " rows in 4096-row chunks",
-        (long) NUM_ROWS * repeats).timed().build();
+    VarkaBenchmark benchmark = benchmark((long) numRows * repeats + " rows in 4096-row chunks",
+        (long) numRows * repeats).timed().build();
     // The weekday column: the 21 spellings in three case styles, cycling; and the same
     // with every tenth row unrecognised. One Arrow vector per 4096-row chunk, which is
     // what the evaluator hands the leaf - a cached batch is its own vector - read through
     // the same ArrowColumnVector accessor it reads a cached string column by.
     BufferAllocator allocator = ArrowUtils.rootAllocator().newChildAllocator("next-day-bench", 0,
         Long.MAX_VALUE);
-    int chunks = (NUM_ROWS + chunk - 1) / chunk;
+    int chunks = (numRows + chunk - 1) / chunk;
     // The two arrays are built *inside* the try, and assigned to variables declared outside
     // it, so that the finally owns them from the first vector onward. Built before it - as
     // they were - a failure in the second `names` call left the first array and the
@@ -1807,17 +1853,19 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
       ArrowColumnVector[] mixedNames = columns(tenthBad);
       // k as the kernel reads it after the leaf: -1 .. 5, cycling; the leaf's own output
       // buffers, overwritten per chunk.
-      MemorySegment kData = b.arena().allocate(NUM_ROWS * 4L, 8);
-      for (int i = 0; i < NUM_ROWS; i++) {
+      MemorySegment kData = b.arena().allocate(numRows * 4L, 8);
+      for (int i = 0; i < numRows; i++) {
         kData.set(ValueLayout.JAVA_INT, i * 4L, i % 7 - 1);
       }
-      MemorySegment kValidity = b.arena().allocate((NUM_ROWS + 7) / 8L, 8);
-      var literal = emit(List.of(new NextDay(new ColumnRef(0), new LiteralSlot(0))), 1, 1,
-          b.loader(), 890);
-      var column = emit(List.of(new NextDay(new ColumnRef(0), new ColumnRef(1))), 2, 0,
+      MemorySegment kValidity = b.arena().allocate((numRows + 7) / 8L, 8);
+      VarkaFusedKernel literal =
+          emit(List.of(new NextDay(new ColumnRef(0), new LiteralSlot(0))), 1, 1,
+              b.loader(), 890);
+      VarkaFusedKernel column = emit(List.of(new NextDay(new ColumnRef(0), new ColumnRef(1))), 2, 0,
           b.loader(), 891);
-      var columnPerGroup = emit(List.of(new NextDay(new ColumnRef(0), new ColumnRef(1))), 2, 0,
-          b.loader(), 942, PER_GROUP_WRITE);
+      VarkaFusedKernel columnPerGroup =
+          emit(List.of(new NextDay(new ColumnRef(0), new ColumnRef(1))), 2, 0,
+              b.loader(), 942, PER_GROUP_WRITE);
       Runnable chunkedLiteral = () -> eachChunk(repeats, chunk, (dataOff, validityOff, n) -> {
         int status = literal.run(new long[] {b.nfData().address() + dataOff},
             new long[] {0L}, new int[] {0}, new long[] {b.dst().address() + dataOff},
@@ -1913,22 +1961,28 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     };
   }
 
+  /** Builds every chunk's format vector, closing the ones already built if one fails, as names. */
   private static VarCharVector[] formats(BufferAllocator allocator, int chunks, int chunk,
       IntPredicate bad) {
-    VarCharVector[] out = new VarCharVector[chunks];
-    for (int c = 0; c < chunks; c++) {
-      int n = Math.min(chunk, NUM_ROWS - c * chunk);
-      VarCharVector v = new VarCharVector("fmt", allocator);
-      v.allocateNew(n * 8L, n);
-      for (int i = 0; i < n; i++) {
-        int row = c * chunk + i;
-        String f = bad.test(row) ? (row % 20 == 9 ? "DAY" : "QTR") : styledFormat(row);
-        v.setSafe(i, f.getBytes(StandardCharsets.UTF_8));
+    VarCharVector[] built = new VarCharVector[chunks];
+    try {
+      for (int c = 0; c < chunks; c++) {
+        int n = Math.min(chunk, numRows - c * chunk);
+        VarCharVector v = new VarCharVector("fmt", allocator);
+        built[c] = v;
+        v.allocateNew(n * 8L, n);
+        for (int i = 0; i < n; i++) {
+          int row = c * chunk + i;
+          String f = bad.test(row) ? (row % 20 == 9 ? "DAY" : "QTR") : styledFormat(row);
+          v.setSafe(i, f.getBytes(StandardCharsets.UTF_8));
+        }
+        v.setValueCount(n);
       }
-      v.setValueCount(n);
-      out[c] = v;
+      return built;
+    } catch (RuntimeException | Error e) {
+      closeNames(built, e);
+      throw e;
     }
-    return out;
   }
 
   private void truncFormat(Buffers b) {
@@ -1941,33 +1995,39 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // an unrecognised format is a null lane), and the anchor is parseTruncLevel then
     // truncDate per row, which is what the row engine runs. 4096-row chunks like the year
     // and next_day sections.
-    int repeats = REPEATS;
-    int chunk = CHUNK;
-    var benchmark = benchmark((long) NUM_ROWS * repeats + " rows in 4096-row chunks",
-        (long) NUM_ROWS * repeats).timed().build();
+    VarkaBenchmark benchmark = benchmark((long) numRows * repeats + " rows in 4096-row chunks",
+        (long) numRows * repeats).timed().build();
     // The format column: the eight accepted spellings in three case styles, cycling; and
     // the same with every tenth row a sub-day or unrecognised format.
     BufferAllocator allocator = ArrowUtils.rootAllocator().newChildAllocator("trunc-bench", 0,
         Long.MAX_VALUE);
-    int chunks = (NUM_ROWS + chunk - 1) / chunk;
-    VarCharVector[] validFormats = formats(allocator, chunks, chunk, row -> false);
-    VarCharVector[] tenthBad = formats(allocator, chunks, chunk, row -> row % 10 == 9);
+    int chunks = (numRows + chunk - 1) / chunk;
+    // Built inside the try and closed in a guarded finally, as the next_day section's names
+    // are, so that a failure in the second call or in one close cannot strand the first array
+    // or the allocator. (The Scala form built both before its try and closed them unguarded.)
+    VarCharVector[] validFormats = null;
+    VarCharVector[] tenthBad = null;
     try {
+      validFormats = formats(allocator, chunks, chunk, row -> false);
+      tenthBad = formats(allocator, chunks, chunk, row -> row % 10 == 9);
       ArrowColumnVector[] valid = columns(validFormats);
       ArrowColumnVector[] mixedFormats = columns(tenthBad);
       // The level column as the kernel reads it after the leaf: the four codes cycling;
       // also the leaf's own output buffers, overwritten per chunk.
-      MemorySegment levelData = b.arena().allocate(NUM_ROWS * 4L, 8);
-      for (int i = 0; i < NUM_ROWS; i++) {
+      MemorySegment levelData = b.arena().allocate(numRows * 4L, 8);
+      for (int i = 0; i < numRows; i++) {
         levelData.set(ValueLayout.JAVA_INT, i * 4L, TruncLevelLeaf.WEEK + i % 4);
       }
-      MemorySegment levelValidity = b.arena().allocate((NUM_ROWS + 7) / 8L, 8);
-      var dynamic = emit(List.of(new TruncDateDynamic(new ColumnRef(0), new ColumnRef(1))),
-          2, 0, b.loader(), 902);
-      var quarter = emit(List.of(new TruncDate(new ColumnRef(0), TruncLevel.QUARTER)), 1, 0,
-          b.loader(), 903);
-      var month = emit(List.of(new TruncDate(new ColumnRef(0), TruncLevel.MONTH)), 1, 0,
-          b.loader(), 904);
+      MemorySegment levelValidity = b.arena().allocate((numRows + 7) / 8L, 8);
+      VarkaFusedKernel dynamic =
+          emit(List.of(new TruncDateDynamic(new ColumnRef(0), new ColumnRef(1))),
+              2, 0, b.loader(), 902);
+      VarkaFusedKernel quarter =
+          emit(List.of(new TruncDate(new ColumnRef(0), TruncLevel.QUARTER)), 1, 0,
+              b.loader(), 903);
+      VarkaFusedKernel month =
+          emit(List.of(new TruncDate(new ColumnRef(0), TruncLevel.MONTH)), 1, 0,
+              b.loader(), 904);
       KernelArm chunkedLiteral = (kernel, mixed) ->
           eachChunk(repeats, chunk, (dataOff, validityOff, n) -> {
             int status;
@@ -2043,13 +2103,12 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
           }));
       runCases(benchmark);
     } finally {
-      for (VarCharVector v : validFormats) {
-        v.close();
+      try {
+        closeNames(validFormats, null);
+        closeNames(tenthBad, null);
+      } finally {
+        allocator.close();
       }
-      for (VarCharVector v : tenthBad) {
-        v.close();
-      }
-      allocator.close();
     }
   }
 
@@ -2090,12 +2149,11 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // call. An end-to-end query's is ten to twenty times larger - VarkaFilterBenchmark
     // and VarkaThroughputBenchmark measure 5-25 ns/row once Arrow access and the row
     // boundary are in it - so the same absolute cost is a far smaller share there.
-    int repeats = REPEATS;
-    var benchmark = benchmark((long) NUM_ROWS * repeats + " rows in chunks",
-        (long) NUM_ROWS * repeats).timed().build();
+    VarkaBenchmark benchmark = benchmark((long) numRows * repeats + " rows in chunks",
+        (long) numRows * repeats).timed().build();
     int[] chainOffsets = offsets(4, 13);
-    var chain4 = emit(List.of(chain(4)), 1, 4, b.loader(), 700);
-    var dow = emit(List.of(new DayOfWeek(new ColumnRef(0))), 1, 0, b.loader(), 701);
+    VarkaFusedKernel chain4 = emit(List.of(chain(4)), 1, 4, b.loader(), 700);
+    VarkaFusedKernel dow = emit(List.of(new DayOfWeek(new ColumnRef(0))), 1, 0, b.loader(), 701);
     for (Rung rung : LADDER) {
       benchmark.addCase("depth-4 chain, chunk " + rung.chunk() + " (" + rung.note()
           + "), null-free", it -> alignedChunks(b, chain4, rung.chunk(), chainOffsets, false));
@@ -2122,10 +2180,11 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     List<VarkaVectorIR> fourFieldsCol = List.of(new Year(new ColumnRef(0)),
         new Month(new ColumnRef(0)), new DayOfMonth(new ColumnRef(0)),
         new Quarter(new ColumnRef(0)));
-    var fourFieldsUnshared = emit(fourFieldsCol, 1, 0, b.loader(), 710,
+    VarkaFusedKernel fourFieldsUnshared = emit(fourFieldsCol, 1, 0, b.loader(), 710,
         VarkaEmitOptions.DEFAULTS.withShareChronoPrefix(false));
-    var fourFieldsShared = emit(fourFieldsCol, 1, 0, b.loader(), 711);
-    var fourFieldsPerGroup = emit(fourFieldsCol, 1, 0, b.loader(), 946, PER_GROUP_WRITE);
+    VarkaFusedKernel fourFieldsShared = emit(fourFieldsCol, 1, 0, b.loader(), 711);
+    VarkaFusedKernel fourFieldsPerGroup =
+        emit(fourFieldsCol, 1, 0, b.loader(), 946, PER_GROUP_WRITE);
     long[] calDstData = addresses(b.wideDst());
     long[] calDstValidity = addresses(b.wideDstValidity());
     for (Rung rung : LADDER) {
@@ -2159,10 +2218,10 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
   private static void alignedChunks(Buffers b, VarkaFusedKernel kernel, int chunk,
       int[] offsets, boolean mixed) {
     int pass = 0;
-    while (pass < REPEATS) {
+    while (pass < repeats) {
       int done = 0;
-      while (done < NUM_ROWS) {
-        int n = Math.min(chunk, NUM_ROWS - done);
+      while (done < numRows) {
+        int n = Math.min(chunk, numRows - done);
         if (mixed) {
           kernel.run(new long[] {b.mxData().address()}, new long[] {b.mxValidity().address()},
               new int[] {nullsIn(n)}, new long[] {b.dst().address()},
@@ -2182,10 +2241,10 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
   private static void calendarChunks(Buffers b, long[] calDstData, long[] calDstValidity,
       VarkaFusedKernel kernel, int chunk, boolean mixed) {
     int pass = 0;
-    while (pass < REPEATS) {
+    while (pass < repeats) {
       int done = 0;
-      while (done < NUM_ROWS) {
-        int n = Math.min(chunk, NUM_ROWS - done);
+      while (done < numRows) {
+        int n = Math.min(chunk, numRows - done);
         int status;
         if (mixed) {
           status = kernel.run(new long[] {b.mxData().address()},
@@ -2214,17 +2273,16 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // runs interpreted with boxed vectors on every batch whose length is not a lane
     // multiple - and 4048 bytes shared, comfortably under it. This section is where that
     // crossing is priced rather than inferred from bytecode size alone.
-    int repeats = REPEATS;
     int cols = 5;
-    var benchmark = benchmark(
-        (long) NUM_ROWS * repeats + " rows, 20 calendar outputs over 5 dates",
-        (long) NUM_ROWS * repeats).timed().build();
+    VarkaBenchmark benchmark = benchmark(
+        (long) numRows * repeats + " rows, 20 calendar outputs over 5 dates",
+        (long) numRows * repeats).timed().build();
     MemorySegment[] srcCols = new MemorySegment[cols];
     for (int c = 0; c < cols; c++) {
       srcCols[c] = fill(b.arena(), i -> false).data();
     }
-    MemorySegment[] dstCols = allocateAll(b.arena(), 4 * cols, NUM_ROWS * 4L);
-    MemorySegment[] dstValCols = allocateAll(b.arena(), 4 * cols, (NUM_ROWS + 7) / 8L);
+    MemorySegment[] dstCols = allocateAll(b.arena(), 4 * cols, numRows * 4L);
+    MemorySegment[] dstValCols = allocateAll(b.arena(), 4 * cols, (numRows + 7) / 8L);
     var roots20 = new ArrayList<VarkaVectorIR>();
     for (int c = 0; c < cols; c++) {
       var col = new ColumnRef(c);
@@ -2234,18 +2292,18 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // Both arms in the single-epilogue form (methodByteBudget 0): VARKA-87's default splits
     // the epilogue per group, under which neither arm crosses the limit and this section
     // would price nothing. VarkaMethodSizeBenchmark measures the split form against this one.
-    var single = VarkaEmitOptions.DEFAULTS.withMethodByteBudget(0);
-    var unshared20 = emit(List.copyOf(roots20), cols, 0, b.loader(), 900,
+    VarkaEmitOptions single = VarkaEmitOptions.DEFAULTS.withMethodByteBudget(0);
+    VarkaFusedKernel unshared20 = emit(List.copyOf(roots20), cols, 0, b.loader(), 900,
         single.withShareChronoPrefix(false));
-    var shared20 = emit(List.copyOf(roots20), cols, 0, b.loader(), 901, single);
+    VarkaFusedKernel shared20 = emit(List.copyOf(roots20), cols, 0, b.loader(), 901, single);
     long[] srcValidityZero = new long[cols];
     int[] srcNullsZero = new int[cols];
     KernelAt chunked20 = (kernel, chunk) -> {
       int pass = 0;
       while (pass < repeats) {
         int done = 0;
-        while (done < NUM_ROWS) {
-          int n = Math.min(chunk, NUM_ROWS - done);
+        while (done < numRows) {
+          int n = Math.min(chunk, numRows - done);
           long dataOff = done * 4L;
           long validityOff = done / 8L;
           int status = kernel.run(
@@ -2297,7 +2355,7 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // subtrees are CSE'd away by emitValue. A greatest/least tree over independent
     // dayofweek(d + k) subtrees with distinct literal slots avoids all three, and measures
     // exactly linear at 19 ops per subtree.
-    var benchmark = benchmark("one output over " + NUM_ROWS + " rows, null-free", NUM_ROWS)
+    VarkaBenchmark benchmark = benchmark("one output over " + numRows + " rows, null-free", numRows)
         .timed().build();
     for (LadderPoint point : List.of(new LadderPoint(1, 20), new LadderPoint(3, 58),
         new LadderPoint(5, 96), new LadderPoint(8, 153), new LadderPoint(10, 191),
@@ -2320,7 +2378,7 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
           it -> {
             int status = kernel.run(new long[] {b.nfData().address()}, new long[] {0L},
                 new int[] {0}, new long[] {b.dst().address()},
-                new long[] {b.dstValidity().address()}, offsets, NUM_ROWS);
+                new long[] {b.dstValidity().address()}, offsets, numRows);
             if (status != 0) {
               throw requirementFailed("the kernel declined a batch: status " + status);
             }
@@ -2359,12 +2417,14 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // reciprocal inexact for /146097 over the era step's dividend, so that one site falls
     // back to the magic under this setting while the other two divisions convert. The row
     // is named for what it is rather than for what it asks for.
-    var benchmark = benchmark("constant division over " + NUM_ROWS + " rows, null-free",
-        NUM_ROWS).timed().build();
-    var magic = VarkaEmitOptions.DEFAULTS;
-    var trueDiv = VarkaEmitOptions.DEFAULTS.withDivision(VarkaEmitOptions.Division.DOUBLE_DIV);
-    var recip = VarkaEmitOptions.DEFAULTS.withDivision(VarkaEmitOptions.Division.DOUBLE_RECIP);
-    var divisionShapes = List.of(
+    VarkaBenchmark benchmark = benchmark("constant division over " + numRows + " rows, null-free",
+        numRows).timed().build();
+    VarkaEmitOptions magic = VarkaEmitOptions.DEFAULTS;
+    VarkaEmitOptions trueDiv =
+        VarkaEmitOptions.DEFAULTS.withDivision(VarkaEmitOptions.Division.DOUBLE_DIV);
+    VarkaEmitOptions recip =
+        VarkaEmitOptions.DEFAULTS.withDivision(VarkaEmitOptions.Division.DOUBLE_RECIP);
+    List<DivisionShape> divisionShapes = List.of(
         new DivisionShape("year (three divisions, the whole body)",
             List.of(new Year(new ColumnRef(0))), 0),
         new DivisionShape("four fields shared (three divisions, one prefix, three tails)",
@@ -2374,13 +2434,14 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
             List.of(new AddMonths(new ColumnRef(0), new LiteralSlot(0))), 1));
     for (int shape = 0; shape < divisionShapes.size(); shape++) {
       DivisionShape s = divisionShapes.get(shape);
-      var forms = List.of(new Setting("magic multiply (shipped)", magic),
+      List<Setting> forms = List.of(new Setting("magic multiply (shipped)", magic),
           new Setting("double lane, true divide", trueDiv),
           new Setting("double lane, reciprocal where admitted", recip));
       for (int variant = 0; variant < forms.size(); variant++) {
         Setting form = forms.get(variant);
-        var kernel = emit(s.roots(), 1, s.lits(), b.loader(), 974 + shape * 3 + variant,
-            form.options());
+        VarkaFusedKernel kernel =
+            emit(s.roots(), 1, s.lits(), b.loader(), 974 + shape * 3 + variant,
+                form.options());
         int[] offsets = s.lits() == 0 ? NO_LITERALS : new int[] {13};
         // One destination per root, taken from the shape rather than assumed: the
         // four-field shape writes four columns, and a single-destination call reaches the
@@ -2389,7 +2450,7 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
         long[] dstValAddrs = addresses(Arrays.copyOf(b.wideDstValidity(), s.roots().size()));
         benchmark.addCase(s.label() + ": " + form.label(), it -> {
           int status = kernel.run(new long[] {b.nfData().address()}, new long[] {0L},
-              new int[] {0}, dstAddrs, dstValAddrs, offsets, NUM_ROWS);
+              new int[] {0}, dstAddrs, dstValAddrs, offsets, numRows);
           if (status != 0) {
             throw requirementFailed("the kernel declined a batch: status " + status);
           }
@@ -2419,26 +2480,27 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // JVM's own output to establish rather than a ratio's to imply. So the row bounds the
     // advantage from below and `VARKA-88.md` 6.1's prediction 3, which is stated
     // against the row engine, needs a row-engine comparand to be scored.
-    MemorySegment months = b.arena().allocate(NUM_ROWS * 4L, 8);
-    int step = (int) ((1L << 32) / NUM_ROWS);
-    for (int i = 0; i < NUM_ROWS; i++) {
+    MemorySegment months = b.arena().allocate(numRows * 4L, 8);
+    int step = (int) ((1L << 32) / numRows);
+    for (int i = 0; i < numRows; i++) {
       months.set(ValueLayout.JAVA_INT, i * 4L, (int) ((long) Integer.MIN_VALUE + (long) i * step));
     }
-    var benchmark = benchmark("extract(YEAR FROM ym) over " + NUM_ROWS + " rows, null-free",
-        NUM_ROWS).timed().build();
+    VarkaBenchmark benchmark =
+        benchmark("extract(YEAR FROM ym) over " + numRows + " rows, null-free",
+            numRows).timed().build();
     // VARKA-149 gave this division a second lowering, the multiply-high through 64-bit
     // lanes, and made it the default: the conversion form stays as the reference arm
     // behind `mulHiDivide`, so the two are adjacent here and the scalar loop is the
     // comparand for both. The shipped case keeps its id; its bytes changed, which is the
     // point of the row.
     List<VarkaVectorIR> divide = List.of(new ConstDivide(new ColumnRef(0), 12));
-    var mulHi = emit(divide, 1, 0, b.loader(), 983);
-    var converting = emit(divide, 1, 0, b.loader(), 984,
+    VarkaFusedKernel mulHi = emit(divide, 1, 0, b.loader(), 983);
+    VarkaFusedKernel converting = emit(divide, 1, 0, b.loader(), 984,
         VarkaEmitOptions.DEFAULTS.withMulHiDivide(false));
     benchmark.addCase("multiply-high through 64-bit lanes (shipped)", it -> {
       int status = mulHi.run(new long[] {months.address()}, new long[] {0L}, new int[] {0},
           new long[] {b.dst().address()}, new long[] {b.dstValidity().address()},
-          NO_LITERALS, NUM_ROWS);
+          NO_LITERALS, numRows);
       if (status != 0) {
         throw requirementFailed("the kernel declined a batch: status " + status);
       }
@@ -2446,14 +2508,14 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     benchmark.addCase("double lane, true divide: the conversion form it replaced", it -> {
       int status = converting.run(new long[] {months.address()}, new long[] {0L},
           new int[] {0}, new long[] {b.dst().address()},
-          new long[] {b.dstValidity().address()}, NO_LITERALS, NUM_ROWS);
+          new long[] {b.dstValidity().address()}, NO_LITERALS, numRows);
       if (status != 0) {
         throw requirementFailed("the kernel declined a batch: status " + status);
       }
     });
     benchmark.addCase("scalar loop, one division per row: a floor on the row engine", it -> {
       int i = 0;
-      while (i < NUM_ROWS) {
+      while (i < numRows) {
         b.dst().set(ValueLayout.JAVA_INT, i * 4L,
             months.get(ValueLayout.JAVA_INT, i * 4L) / 12);
         i += 1;
