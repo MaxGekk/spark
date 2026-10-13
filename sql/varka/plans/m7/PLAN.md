@@ -642,7 +642,7 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 | 286 | The gate in parallel: after one build, the suites wide and narrow at once, each module's suites over several JVMs weighted by their last times, sbt's steps in a lane of their own, the JIT-measuring suites in a quiet phase at the end; and the narrow step really narrow, `-XX:MaxVectorSize=16` on each test JVM's command line where `JAVA_OPTS` had never reached them. **Done** (`VARKA-286.md` 9.1, 5 October 2026): 682 s from 2,074, the narrow step passing at 128 bits | the owner, 5 October 2026 | small |
 | 287 | **Done** (`VARKA-287.md` 9.2, 6 October 2026): the suites run through the runner over two JVMs with their JUnit times cached, and the matrix step reuses their defaults' fused batches; the catalyst job takes 14 minutes from 22 to 25, the SQL job 22 to 24 from 22 and 33, where the runner's recording of fused batches spends what the reused defaults save. Planned in two pull requests: the step as a script with a times cache, then the runner behind it. The same split in CI: the `varka-scoped` jobs run their module's Varka suites through the runner over two or three JVMs instead of one sbt test JVM, on the four-core runners; measured on the runners against the jobs' times today | VARKA-286 | small |
 | 180 | Promotion, continuously | item 81 | a cadence |
-| 258 | A post for Spark users: how Spark compiles a query, and why it compiles it again | item 78 | medium |
+| 258 | **Outlined** (`VARKA-258.md`, 13 October 2026; the measurements and the draft open). A post for Spark users: how Spark compiles a query, and why it compiles it again | item 78 | medium |
 | 259 | Its companion for Spark and JVM developers: bytecode without source | item 79 | medium |
 | 260 | A reference post: Spark's code generator by the numbers | item 80 | small |
 | 270 | The milestone's own post, for JVM and database engineers: how Varka knows its answers are right, and where that stops | the plan review (2.5), item 58 | medium |
@@ -748,3 +748,133 @@ anything rows 262, 263 and 269 find is weighed against the milestone's scope (se
   231 (the fallback's row loops), and milestone 5's row 74 (a validity-pass optimisation).
 * Verifying the emitter itself, Java-level deductive tools, and a formal semantics of Spark's
   dates, for item 58's reasons.
+
+## 9. Review at the halfway point, 13 October 2026
+
+*Added on 13 October 2026 at the owner's request, eleven days after the milestone opened, as
+section 4 provides. Section 4's waves are not rewritten; 9.3 is the ordering for what remains,
+and where they differ 9.3 is current. The decisions in 9.4 are the owner's to take.*
+
+### 9.1 The state against 1.1
+
+The table had 53 rows when the plan merged on 2 October and has 98 today: rows 283 to 327 were
+added since, 13 of them by the owner on 12 October (310 to 322, the test code to Java and the
+errors rows) and the rest findings of the milestone's own tests. 63 rows read **Done** or are
+closed; 271, 138, 274 and 322 are part done.
+
+| 1.1 | State on 13 October |
+| :-- | :-- |
+| 1. Every bounded lowering proven, against a specification | The proofs are in: 240 (tooling, Z3 in the lint job), 241 (the long-lane divisions), 242 (the calendar's bounded lowerings), the last commit 10 October. The specification is not: 243 (the fragment), 244 (Spark's departures as named deltas), 245 (the proofs as refinements of it) and 281 (the analyses that supply the guards' bounds) have not started |
+| 2. The tests reach what they miss today | The spine is through or landing. Done: 81, 246, 247, 248, 262, 263, 269, 273, 275 to 278, 284, 285, and the findings 289, 292 to 297, 299, 301, 303, 323, 324. Landing this week: 271 (271a merged, 271b's full run under way), 138 (138a merged, 138b with an agent), 274 (274a in review). Open: 272 (after 274a's tier witness), 279 (planned, waiting on 138), 280, 298, 326, 327, and 265 last by design |
+| 3. Varka's code is Java and legible | Through but for two rows. Done: 214 to 217, 224, 248 to 251, 264, 266 to 268, 83, 86, 290, 291, 310 to 312, 320, 321. 322 is a third done: 322a merged (ten benchmarks), 322a-2 reviewed and waiting on its pair, 322b and 322c open. 252 (comments that narrate history) is open, last by design |
+| 4. The infrastructure stops costing manual work | Half. Done: 256 (one section regenerated, paired runs), 283, 286, 287. Open: 255 (the CI queue off the laptop), 257 (the slow mode after other kernels, a number). The errors rows the owner added to this point's section on 12 October, 313 to 319, have not started; 325 is in review |
+| 5. Beside the spine: promotion | 288 published on 12 October. 258 to 260 and 270 have not started, and 180 has no commit in this milestone |
+
+### 9.2 What the review finds
+
+**The milestone has drifted to the measurable track again, as milestone 6 did.** Point 2's rows
+each end in a number and a merged test, so they kept winning the next slot; point 1's
+specification rows end in a document and an argument, and nothing has moved there since the
+proofs landed on 10 October. Milestone 6's review (`m6/PLAN.md` 9.1) found the same pattern for
+its promotion track, and promotion has not moved here either.
+
+**The laptop is the bottleneck, and 255 has been open since wave 0.** Three benchmark jobs wait for
+an idle machine - 322a's ten Java-against-Scala pairs, 325's two results files and 322a-2's pair of
+about three hours - and #780 merged before its pairs ran. The fork's CI queue sat for up to fifty
+minutes on 13 October with nothing in progress, and a night load beside a gate still fails
+watchdogs. 255 is the row that removes the laptop from CI's path; benchmarks on GitHub-hosted
+runners, with the datapath probe checked first, are already the project's practice for CI
+benchmarks.
+
+**The tests are getting slower, and nothing tracks the total.** On 13 October alone the per-row
+coverage check grew 27% (138a), the IR fuzz suite 6% with a compiled test of 145 s (274a), and
+the nightly gained the golden-file step, 21 to 33 minutes per arm. Each was justified in its
+plan; no plan carries a budget for the gate or the nightly as a whole.
+
+**Reviews came after CI, and every one found something.** The six pull requests reviewed on 13
+October (#785, #786, #789, #791, #792, #795) each had seven to ten findings, among them a suite
+that could overwrite Spark's golden files, a fault check that was circular, a benchmark that split
+shapes differently from the compiler and a tier witness that dropped traps in inlined code. Each
+cost a second CI round and a second agent run.
+
+**Parallel agents collided on shared state.** One agent's `pkill -f` pattern stopped three test
+JVMs in other worktrees (now blocked by a hook, and `dev/varka_bg.sh` with the "Processes" rule in
+`sql/varka/AGENTS.md`, #783); two agents edited `VarkaKernelChecks` at once (138a and 274a), and
+one used `git stash`, which every worktree shares.
+
+**Cost predictions miss on the optimistic side.** 138a predicted at most 25% on the per-row
+test and measured 38%, then 27% after its review; four of 274a's six predictions missed, three of
+them on cost. The plans record the misses, as they should, but the next plan's estimates do not
+yet read them.
+
+### 9.3 What comes first
+
+| Order | Rows | Why here | Size |
+| ---: | :-- | :-- | :-- |
+| 1 | 271b, 138b, 274a; 325's files and 322a-2's pair in the next idle window | In flight; each closes its row or its step, and three of them close 1.1 point 2's named rows | small each |
+| 2 | 255 | Takes the laptop out of CI's path and, with the benchmark pairs on GitHub-hosted runners, out of the benchmark queue; every later row's CI and every pair benefit | medium |
+| 3 | 243, then 244 | 1.1 point 1 is the one done-when point with nothing in flight; 243 bounds the specification to the coverage table's operations (risk 3), and 244 names Spark's departures with a test each | medium each |
+| 4 | 274b, 272, 279, 326, 327, 298 | The rest of point 2's compiled-kernel and guard checks; 272 reuses 274a's witness, 279 reads 138's domains; 298 last of them, the analyzer's casts at random | small to medium each |
+| 5 | 313, 314, 315, 317, 318, 319, 316 | The errors rows, in the order section 4 gives them, 315 after 314 and 316 last; 317 and 319 are test strength as well | small to medium each |
+| 6 | 322b, 322c | The last test code to Java; their pairs run where 255 leaves the benchmarks | medium to large |
+| 7 | 281, 245 | The analyses proven and the refinement proofs, after 243 and 244 show what they cost | medium each |
+| 8 | 258, 259, 260 | The posts, 258 first; 260 between them and the next long post | medium, small |
+| 9 | 280, 257, 252, 265 | Measurement and legibility once the structure has settled; 265 last by design | small to medium each |
+| 10 | 270, 261 | The milestone's post and its close | medium, small |
+
+New rows join this table only with a reason in 1.1 to do them in this milestone; a finding that
+serves no point of 1.1 is an item in `m8/SCOPE.md` (as items 93 to 95 were on 13 October).
+
+### 9.4 Decisions for the owner
+
+1. **245 stays or moves.** Risk 3 names it as the row to cut if 243 and 244 run long. The
+   recommendation: keep it, and decide when 244 lands, from what 243 and 244 cost. *Decided by
+   the owner on 13 October 2026: kept, to be decided again when 244 lands.*
+2. **298 stays or moves.** A Catalyst-level grammar with casts is test strength, and the first
+   reading was that 262 and 271 reach the analyzer's casts through Spark itself. They do not:
+   262's fuzzer composes whole coverage rows over columns of exactly the types each row expects,
+   so the analyzer inserts no cast, and in 271b's run with literals lifted, Spark's 18
+   type-coercion golden files (`typeCoercion/native/*`) gave Varka no served execution, since
+   their casts are between types Varka does not read. *Decided by the owner on 13 October 2026:
+   kept, ordered with the rest of point 2 after 272 and 279.*
+3. **The errors rows (313 to 319) stay whole.** Added by the owner on 12 October; the
+   recommendation is to keep all seven, after 255 and 243. *Decided by the owner on 13 October
+   2026: all seven kept, in 9.3's order, 315 after 314 and 316 last of them.*
+4. **The promotion track.** 258 to 260 have not started and 180 has no commit; the recommendation
+   is to outline 258 now, as milestone 6's review did for its post, so the posts stop losing the
+   comparison with the next measurable row. *Decided by the owner on 13 October 2026: outlined the same day
+   (`VARKA-258.md`), its measurements in 9.3's order.*
+
+### 9.5 Practices this review changes
+
+Proposed point by point against 9.2 and agreed by the owner on 13 October 2026.
+
+* **Against the drift (9.2, first finding).** Until point 1 and point 5 each have a row in flight,
+  every other task started comes from one of them; 243 starts as soon as 271b, 138b and 274a land,
+  before 272, 279 or 298. And the state against 1.1 is written as a two-line note under this
+  section after every five merged rows, not only at the halfway point, so a drift shows within
+  days.
+* **Against the laptop bottleneck (second finding).** 255 is the next row of work after the rows
+  in flight, and the benchmark pairs move to GitHub-hosted runners through `benchmark.yml`, whose
+  runner now starts the Java ports, with the datapath probe checked first, so 322a's pairs, 325's
+  results files and 322a-2's pair stop waiting for an idle laptop.
+* **Against the tests' growing cost (third finding).** 255 also records each gate and nightly
+  step's time from CI, and a committed budget holds them; a pull request that adds more than 5% to
+  a step says so, with the times before and after. The first budget is the times of 13 October, so
+  138a's 27%, 274a's 6% and the golden-file step's 21 minutes are recorded rather than lost.
+* **Against reviews after CI (fourth finding).** The authoring agent reviews its own pull request
+  before opening it (`/code-review high` on the diff), fixes what it verifies and says what the
+  review found; every agent brief ends with that, and the owner's review after CI is the second
+  look (`sql/varka/AGENTS.md`, "Pull requests", #797).
+* **Against agents colliding (fifth finding).** No `git stash`, no writes outside one's own
+  worktree, the files an agent edits named in its first message, and tasks that edit one file run
+  one after the other, each brief listing the files its agent owns (`sql/varka/AGENTS.md`,
+  "Processes", #797; the pattern-kill hook and `dev/varka_bg.sh` came first, #783).
+* **Against optimistic cost predictions (sixth finding).** A calibration table in
+  `skills/testing-and-debugging.md` holds every scored cost prediction, predicted against measured
+  with the ratio; a new plan states its cost prediction at the observed ratio unless it says why
+  not (#797).
+* **A finding becomes a row only through a point of 1.1**, named in the row; otherwise it is an
+  item in `m8/SCOPE.md`.
+* **A benchmark port merges with its pair**, or its pull request says why not and names the row
+  that owes it.
