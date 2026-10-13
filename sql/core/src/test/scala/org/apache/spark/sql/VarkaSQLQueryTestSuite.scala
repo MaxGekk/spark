@@ -66,8 +66,8 @@ import org.apache.spark.sql.execution.VarkaColumnarToRowExec
  *
  * `varka.goldenSuite.fault=<flag>` plants one of the emitter's fault injectors in every kernel:
  * the check that the suite does reach Varka (test 1 of the plan), to be run over a few files
- * only. Until literals are lifted (271b) the fault that shows it is `misdescribeWordLiveness`,
- * under which every emission raises; `misdescribeAdd` reaches no served query yet.
+ * only: `misdescribeAdd` fails the date files, whose lifted statements call `date_add`, and
+ * `misdescribeWordLiveness`, under which every emission raises, fails every test Varka serves.
  */
 class VarkaSQLQueryTestSuite extends SQLQueryTestSuite {
 
@@ -83,10 +83,15 @@ class VarkaSQLQueryTestSuite extends SQLQueryTestSuite {
   // agree on all but three tests, and those differ by one served execution even run alone
   // (`VARKA-271.md` 9). A test that served a batch when the report was written must still serve
   // one, or it has silently stopped testing Varka. Checked in the Varka arm without a planted
-  // fault, and not while the report is being rewritten.
+  // fault, with literals lifted (the report is written with the lift), and not while the report
+  // is being rewritten.
   private lazy val servedFloor: Map[String, Long] =
-    if (arm != Arm.VARKA || fault.isDefined || VarkaSQLQueryTestSuite.regenerating) Map.empty
-    else VarkaSQLQueryTestSuite.readServed(spanFile("served.json"))
+    if (arm != Arm.VARKA || fault.isDefined || !VarkaArrowSource.liftEnabled ||
+        VarkaSQLQueryTestSuite.regenerating) {
+      Map.empty
+    } else {
+      VarkaSQLQueryTestSuite.readServed(spanFile("served.json"))
+    }
 
   // The served report: each test's counts, in the order the tests ran.
   private val served = mutable.LinkedHashMap.empty[String, VarkaArrowSource.Served]
@@ -238,10 +243,13 @@ class VarkaSQLQueryTestSuite extends SQLQueryTestSuite {
       val ignored = tags.collect { case (name, t) if t.contains(VarkaSQLQueryTestSuite.Ignore) =>
         name }.toSet
       val skipped = testNames.toSet -- ignored -- ran
-      require(arm == Arm.VARKA && fault.isEmpty && skipped.isEmpty,
+      require(arm == Arm.VARKA && fault.isEmpty && VarkaArrowSource.liftEnabled &&
+          skipped.isEmpty,
         "VARKA_GOLDEN_SUITE_REGEN=true rewrites sql/varka/spark_suites/served.json only from a " +
-          s"full run of the Varka arm with no fault planted; this run is the ${arm.spelling} " +
-          s"arm${fault.map(f => s" with $f planted").getOrElse("")} and left " +
+          "full run of the Varka arm with the lift and no fault planted; this run is the " +
+          s"${arm.spelling} " +
+          s"arm${fault.map(f => s" with $f planted").getOrElse("")}" +
+          s"${if (VarkaArrowSource.liftEnabled) "" else " without the lift"} and left " +
           s"${skipped.size} tests out")
       Files.writeString(spanFile("served.json"), rendered, StandardCharsets.UTF_8)
     }
