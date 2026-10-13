@@ -158,13 +158,23 @@ public final class VarkaCompiledCheck {
    */
   public record Run(History history, String skipped, String className, boolean warmed,
       boolean settled, long settleMillis, long millis, List<VarkaTierWitness.Call> calls,
-      String unsettled) {
+      String unsettled, List<VarkaTierWitness.Decision> decisions) {
     public Run {
       calls = List.copyOf(calls);
+      decisions = List.copyOf(decisions);
     }
 
     static Run skipped(History h, String why) {
-      return new Run(h, why, null, false, false, 0L, 0L, List.of(), "");
+      return new Run(h, why, null, false, false, 0L, 0L, List.of(), "", List.of());
+    }
+
+    /**
+     * Whether every warm-up decision of the run holds with everything the recording delivered:
+     * read after the witness has settled. A run whose warm-up stopped on a version the recording
+     * later showed to be an on-stack replacement is settled but not confirmed.
+     */
+    public boolean confirmed() {
+      return settled && decisions.stream().allMatch(VarkaTierWitness.get()::confirmed);
     }
 
     /** Each compared call's verdict, in order; empty when the witness was off. */
@@ -219,12 +229,32 @@ public final class VarkaCompiledCheck {
       }
       try {
         runs.add(new Check(c, emit, s, h).run());
-      } catch (RuntimeException | AssertionError e) {
-        throw new IllegalStateException(firstLine(e) + "\n  in history " + h.label
+      } catch (VirtualMachineError e) {
+        throw e;
+      } catch (RuntimeException | Error e) {
+        throw new HistoryFailure(h, firstLine(e) + "\n  in history " + h.label
             + "; replay with " + replay + " -Dvarka.fuzz.history=" + h.label, e);
       }
     }
     return new Result(c.label(), c.lane(), runs);
+  }
+
+  /**
+   * A history's failure: the history, and the check's own failure as the cause, which is what a
+   * failure signature classifies (a generated class's linkage error stays one) and what a shrinker
+   * holds the smaller cases to.
+   */
+  public static final class HistoryFailure extends IllegalStateException {
+    private final transient History history;
+
+    HistoryFailure(History history, String message, Throwable cause) {
+      super(message, cause);
+      this.history = history;
+    }
+
+    public History history() {
+      return history;
+    }
   }
 
   private static String firstLine(Throwable e) {
@@ -314,11 +344,11 @@ public final class VarkaCompiledCheck {
   // One history on one case.
   // ---------------------------------------------------------------------------------------------
 
-  /** Rows of the warm-up's copy, as {@link VarkaKernelWarmup#SNAPSHOT_ROWS}. */
-  private static final int SNAPSHOT_ROWS = 1024;
+  /** Rows of the warm-up's copy: production's warm-up's own constant. */
+  private static final int SNAPSHOT_ROWS = VarkaKernelWarmup.SNAPSHOT_ROWS;
 
-  /** Rows a warm-up call runs before the batch's remainder, as the production warm-up's. */
-  private static final int SLICE_ROWS = 32;
+  /** Rows a warm-up call runs before the batch's remainder: production's warm-up's constant. */
+  private static final int SLICE_ROWS = VarkaKernelWarmup.SLICE_ROWS;
 
   /** Calls between two reads of the code list while warming. */
   private static final int CALLS_PER_LOOK = 256;
@@ -345,6 +375,7 @@ public final class VarkaCompiledCheck {
     private long settleMillis;
     private boolean everWarmed;
     private String unsettledLevels = "";
+    private final List<VarkaTierWitness.Decision> decisions = new ArrayList<>();
 
     Check(VarkaFuzzCase c, Function<String, byte[]> emit, Settings s, History h) {
       this.c = c;
@@ -420,7 +451,7 @@ public final class VarkaCompiledCheck {
       }
       long millis = (System.nanoTime() - start) / 1_000_000L;
       return new Run(h, null, className, everWarmed, settled, settleMillis, millis, calls,
-          unsettledLevels);
+          unsettledLevels, decisions);
     }
 
     /** Rows per warm-up call: 32 and the drawn batch's remainder past them. */
@@ -592,29 +623,21 @@ public final class VarkaCompiledCheck {
             sets.add(args(arena, snapshot, maskedNulls, from, rows, true));
           }
         }
-        boolean done = false;
-        for (long k = 0; !done; k++) {
+        VarkaTierWitness.Decision last = null;
+        for (long k = 0; last == null || !last.c2() && System.nanoTime() <= deadline; k++) {
           sets.get((int) (k % sets.size())).call(kernel, isLong);
           if (k % CALLS_PER_LOOK == CALLS_PER_LOOK - 1) {
-            done = allC2(required) || System.nanoTime() > deadline;
+            last = VarkaTierWitness.get().decideNow(className, required);
           }
         }
+        decisions.add(last);
       }
-      boolean ok = allC2(required);
+      boolean ok = decisions.getLast().c2();
       if (!ok && unsettledLevels.isEmpty()) {
         unsettledLevels = VarkaTierWitness.get().levelsNow(className, required).toString();
       }
       settled &= ok;
       settleMillis += (System.nanoTime() - start) / 1_000_000L;
-    }
-
-    /**
-     * Whether the warm-up is done, read from the code list and from what the recording has said
-     * about on-stack replacements and inlining - which the warm-up needs whether or not the
-     * compared calls are witnessed.
-     */
-    private boolean allC2(TreeSet<String> required) {
-      return VarkaTierWitness.get().allC2Now(className, required);
     }
 
     /**
@@ -693,17 +716,33 @@ public final class VarkaCompiledCheck {
 
     /**
      * {@code quiet-null}'s warm-up and all-null batch; then, if that threw code away, calls that
-     * mix all-null slices into the warm-up until every method is C2 code again, and the all-null
-     * batch once more. A kernel the all-null batch did not trap has nothing to recover from, and
-     * its run shows only the first batch's call.
+     * mix all-null slices into the warm-up until the loops and epilogues, and every method whose
+     * code was thrown away, are C2 code again, and the all-null batch once more. Thrown away is
+     * read off the code list, over every method of the class: the all-null trap is usually in the
+     * masked driver's shortcut, not in a loop. A kernel the batch did not trap has nothing to
+     * recover from, and its run shows only the first batch's calls.
      */
     private void recompiled() {
       var required = allMethods();
       var snapshot = drawn.cycled(SNAPSHOT_ROWS);
       warm(snapshot, everyFifth(numInputs, SNAPSHOT_ROWS), sliceRows(), required);
+      var before = VarkaTierWitness.parse(VarkaTierWitness.readCodeList(), className);
       Cols trapping = firstAllNull();
       compareBoth("the drawn batch with column 0 all-null", trapping);
-      if (!allC2(required)) {
+      var inUse = new java.util.HashSet<Integer>();
+      for (var e : VarkaTierWitness.parse(VarkaTierWitness.readCodeList(), className)) {
+        if (e.inUse()) {
+          inUse.add(e.compileId());
+        }
+      }
+      boolean threw = false;
+      for (var e : before) {
+        if (e.inUse() && !inUse.contains(e.compileId())) {
+          required.add(e.method());
+          threw = true;
+        }
+      }
+      if (threw) {
         var mixed = everyFifth(numInputs, SNAPSHOT_ROWS);
         int rows = sliceRows();
         for (int from = 0; from + rows <= SNAPSHOT_ROWS; from += 2 * rows) {
@@ -951,6 +990,10 @@ public final class VarkaCompiledCheck {
           if (h.warmed) {
             long settled = ran.stream().filter(Run::settled).count();
             line.append(", settled ").append(settled).append('/').append(ran.size());
+            if (witnessed) {
+              line.append(" (confirmed ").append(ran.stream().filter(Run::confirmed).count())
+                  .append(')');
+            }
           }
           line.append(", ms ").append(percentiles(ran.stream().map(Run::millis).toList()));
           if (witnessed) {
@@ -978,6 +1021,11 @@ public final class VarkaCompiledCheck {
           }
           lines.add(line.toString());
         }
+      }
+      if (witnessed) {
+        lines.add(VarkaTierWitness.get().inlinedTraps() + " trap(s) taken inside code C2 inlined "
+            + "from another class, found through the compile they threw away: "
+            + VarkaTierWitness.get().inlinedTrapExamples());
       }
       if (coldOnly > 0) {
         lines.add(coldOnly + " case(s) with a lanes override, run cold only after the others");
@@ -1007,11 +1055,13 @@ public final class VarkaCompiledCheck {
   }
 
   /**
-   * The histories a run shows did not happen, each as a failure message: a {@code cold} call that
-   * was not interpreted at both edges, a lane whose settled {@code warm-same} or {@code warm-other}
+   * The histories a run shows did not happen, each as a message: a {@code cold} call that was
+   * not interpreted at both edges, a lane whose settled {@code warm-same} or {@code warm-other}
    * runs never once showed every call as C2 code, and a lane whose {@code released} runs never
    * showed an on-stack replacement. A history not reached is a fact about the JIT on this machine
-   * and its load, never a wrong answer, and the message carries the code list to read it by.
+   * and its load, never a wrong answer, so the fuzz suite counts and prints these, and fails on
+   * them only when asked to ({@code -Dvarka.fuzz.requireTiers=true}, for a quiet machine); the
+   * message carries the code list to read it by.
    */
   public static List<String> notReached(Tally tally) {
     var out = new ArrayList<String>();
@@ -1026,7 +1076,7 @@ public final class VarkaCompiledCheck {
       }
       for (History h : List.of(History.WARM_SAME, History.WARM_OTHER)) {
         var settled = tally.runs(lane, h).stream()
-            .filter(r -> r.skipped() == null && r.settled()).toList();
+            .filter(r -> r.skipped() == null && r.confirmed()).toList();
         if (!settled.isEmpty() && settled.stream().noneMatch(r -> Tally.all(r, "C2"))) {
           var sample = settled.get(0);
           out.add("history not reached: " + h.label + ", no settled case of the " + lane

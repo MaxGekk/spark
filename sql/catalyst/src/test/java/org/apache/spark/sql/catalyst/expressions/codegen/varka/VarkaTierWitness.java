@@ -90,8 +90,13 @@ public final class VarkaTierWitness {
     }
   }
 
-  /** A deoptimization of one of the kernel's methods fell inside the call. */
-  public record Trapped(String method, String reason, String action) implements Verdict {
+  /**
+   * A deoptimization of the kernel's compiled code fell inside the call: {@code method} is the
+   * kernel method whose compiled version was deoptimized, {@code at} the method the trap was in,
+   * which differs where C2 inlined it - a Vector API method or a Varka runtime helper.
+   */
+  public record Trapped(String method, String reason, String action, String at)
+      implements Verdict {
     @Override public String label() {
       return "trapped";
     }
@@ -182,20 +187,38 @@ public final class VarkaTierWitness {
 
   /**
    * Each of {@code methods}' level as the code list shows it: its highest level among its versions
-   * in use that are not on-stack replacements ({@code osrIds}) - 4 for C2 code, 1 to 3 for C1's,
-   * 0 where none is installed - raised to 4 where C2 inlined it into a caller's version in use
-   * ({@code inlined}, the methods each compile inlined, by compile id). A small kernel's loop is
-   * often compiled only inside its driver or {@code run}, and then never on its own, since its
-   * own invocation counter stops once its caller is C2 code.
+   * in use that the recording has reported as finished compiles and not on-stack replacements
+   * ({@code known}, by compile id: true for an OSR) - 4 for C2 code, 1 to 3 for C1's, 0 where none
+   * is installed - raised to 4 where C2 inlined it into a caller's level-4 version in use
+   * ({@code inlined}, the methods each compile inlined). A small kernel's loop is often compiled
+   * only inside its driver or {@code run}, and then never on its own, since its own invocation
+   * counter stops once its caller is C2 code.
+   *
+   * <p>A version whose compile the recording has not delivered yet does not count: the code list
+   * is current and the recording about a second behind, and until its compile event arrives the
+   * witness cannot tell a version from an on-stack replacement, nor what it inlined. A decision
+   * taken from these levels is therefore never ahead of the recording.
    */
   public static Map<String, Integer> levels(List<CodeEntry> entries, Set<String> methods,
-      Set<Integer> osrIds, Map<Integer, Set<String>> inlined) {
+      Map<Integer, Boolean> known, Map<Integer, Set<String>> inlined) {
+    return levels(entries, methods, known, inlined, true);
+  }
+
+  /**
+   * {@link #levels}, or with {@code strict} off counting a version the recording has not
+   * delivered yet as a standard one: the warm-up's quick decision, which a {@link Decision}
+   * records so that it is checked with everything delivered afterwards.
+   */
+  private static Map<String, Integer> levels(List<CodeEntry> entries, Set<String> methods,
+      Map<Integer, Boolean> known, Map<Integer, Set<String>> inlined, boolean strict) {
     var levels = new TreeMap<String, Integer>();
     for (String m : methods) {
       levels.put(m, 0);
     }
     for (CodeEntry e : entries) {
-      if (!e.inUse() || osrIds.contains(e.compileId())) {
+      Boolean osr = known.get(e.compileId());
+      boolean counted = strict ? Boolean.FALSE.equals(osr) : !Boolean.TRUE.equals(osr);
+      if (!e.inUse() || !counted) {
         continue;
       }
       if (levels.containsKey(e.method())) {
@@ -213,17 +236,37 @@ public final class VarkaTierWitness {
   }
 
   /**
+   * The compiled versions that make {@code method} C2 code in {@code entries}: its own level-4
+   * versions in use, and the level-4 versions in use of callers C2 inlined it into, each a known
+   * compile that is not an on-stack replacement. A call is C2 only where one of these is in use at
+   * both of its edges: the same code, not code thrown away and recompiled in between.
+   */
+  public static Set<Integer> c2Versions(List<CodeEntry> entries, String method,
+      Map<Integer, Boolean> known, Map<Integer, Set<String>> inlined) {
+    var out = new HashSet<Integer>();
+    for (CodeEntry e : entries) {
+      if (e.inUse() && e.level() == 4 && Boolean.FALSE.equals(known.get(e.compileId()))
+          && (e.method().equals(method)
+              || inlined.getOrDefault(e.compileId(), Set.of()).contains(method))) {
+        out.add(e.compileId());
+      }
+    }
+    return out;
+  }
+
+  /**
    * Each of {@code methods}' highest level among its on-stack-replacement versions in use, 0
    * where it has none.
    */
   public static Map<String, Integer> osrLevels(List<CodeEntry> entries, Set<String> methods,
-      Set<Integer> osrIds) {
+      Map<Integer, Boolean> known) {
     var levels = new TreeMap<String, Integer>();
     for (String m : methods) {
       levels.put(m, 0);
     }
     for (CodeEntry e : entries) {
-      if (e.inUse() && osrIds.contains(e.compileId()) && levels.containsKey(e.method())) {
+      if (e.inUse() && Boolean.TRUE.equals(known.get(e.compileId()))
+          && levels.containsKey(e.method())) {
         levels.merge(e.method(), e.level(), Math::max);
       }
     }
@@ -231,9 +274,9 @@ public final class VarkaTierWitness {
   }
 
   /** Whether every one of {@code methods} is C2 code in use, read as {@link #levels} does. */
-  public static boolean allC2(List<CodeEntry> entries, Set<String> methods, Set<Integer> osrIds,
-      Map<Integer, Set<String>> inlined) {
-    for (int level : levels(entries, methods, osrIds, inlined).values()) {
+  public static boolean allC2(List<CodeEntry> entries, Set<String> methods,
+      Map<Integer, Boolean> known, Map<Integer, Set<String>> inlined) {
+    for (int level : levels(entries, methods, known, inlined).values()) {
       if (level != 4) {
         return false;
       }
@@ -248,7 +291,8 @@ public final class VarkaTierWitness {
   /** What the stream reported for a watched class: a finished compile or a trap. */
   private record Compiled(int compileId, String method, int level, boolean osr, Instant end) { }
 
-  private record Trap(String method, String reason, String action, Instant at) { }
+  /** A trap: the kernel method whose code it threw away, and the method it was taken in. */
+  private record Trap(String method, String inner, String reason, String action, Instant at) { }
 
   private record Window(Instant start, Instant end) { }
 
@@ -263,6 +307,7 @@ public final class VarkaTierWitness {
     private List<CodeEntry> before = List.of();
     private List<CodeEntry> after = List.of();
     private VarkaCheckedCallEvent event;
+    private Verdict verdict;
 
     private Call(long id, String className, Set<String> methods) {
       this.id = id;
@@ -298,9 +343,19 @@ public final class VarkaTierWitness {
       return before;
     }
 
-    /** The verdict, which needs the stream to have settled since the call ({@link #settle}). */
-    public Verdict verdict() {
-      return verdictOf(this);
+    /**
+     * The verdict, read once the stream has settled since the call ({@link #settle}) and kept: a
+     * report asks for it several times, and each reading scans the class's compiles and traps.
+     */
+    public synchronized Verdict verdict() {
+      if (verdict == null) {
+        if (id > settledThrough) {
+          throw new IllegalStateException("the verdict of call " + id + " on " + className
+              + " was read before the witness settled after it");
+        }
+        verdict = verdictOf(this);
+      }
+      return verdict;
     }
   }
 
@@ -318,10 +373,30 @@ public final class VarkaTierWitness {
     return instance;
   }
 
+  /**
+   * Stops the JVM's recording, so that the tests after a compiled run do not pay for recording
+   * every compile and every inlining decision in the JVM. A verdict already read stays readable;
+   * a later {@link #get} starts a new recording that knows nothing of earlier calls.
+   */
+  public static synchronized void close() {
+    if (instance != null) {
+      instance.stream.close();
+      instance = null;
+    }
+  }
+
   private final RecordingStream stream = new RecordingStream();
   private final AtomicLong calls = new AtomicLong();
   private final Set<String> watched = ConcurrentHashMap.newKeySet();
-  private final Set<Integer> osrIds = ConcurrentHashMap.newKeySet();
+  /** Every finished compile of a watched class, by id: true for an on-stack replacement. */
+  private final Map<Integer, Boolean> known = new ConcurrentHashMap<>();
+  /** The watched class and kernel method each of those compiles was of. */
+  private final Map<Integer, String[]> compiledAs = new ConcurrentHashMap<>();
+  /** Traps found through their compile id, taken in a method of another class. */
+  private final java.util.concurrent.atomic.AtomicInteger inlinedTraps =
+      new java.util.concurrent.atomic.AtomicInteger();
+  private final List<String> inlinedExamples =
+      java.util.Collections.synchronizedList(new ArrayList<>());
   // Guarded by `this`: what the stream reported, and how far it has got.
   private final Map<String, List<Compiled>> compiles = new HashMap<>();
   private final Map<String, List<Trap>> traps = new HashMap<>();
@@ -339,6 +414,8 @@ public final class VarkaTierWitness {
   private long markerSeen;
   private long markers;
   private long flushes;
+  /** The last call id a completed {@link #settle} covers. */
+  private volatile long settledThrough;
 
   private VarkaTierWitness() {
     stream.enable("jdk.Compilation").withThreshold(Duration.ZERO);
@@ -367,9 +444,8 @@ public final class VarkaTierWitness {
     }
     boolean osr = e.getBoolean("isOsr");
     int id = e.getInt("compileId");
-    if (osr) {
-      osrIds.add(id);
-    }
+    known.put(id, osr);
+    compiledAs.put(id, new String[] {cls, m.getName()});
     synchronized (this) {
       compiles.computeIfAbsent(cls, k -> new ArrayList<>())
           .add(new Compiled(id, m.getName(), e.getInt("compileLevel"), osr, e.getEndTime()));
@@ -391,16 +467,47 @@ public final class VarkaTierWitness {
         .add(callee.getString("name"));
   }
 
+  /**
+   * A trap is the kernel's when the compiled code it throws away is: the event's
+   * {@code compileId} names that code. Its {@code method} is the method the trap was taken in,
+   * which, where C2 inlined a Vector API method or a runtime helper into the kernel's loop, is
+   * that callee and not the kernel's method; read by {@code method} alone such a trap is lost.
+   */
   private void onDeoptimization(RecordedEvent e) {
     RecordedMethod m = e.getValue("method");
-    String cls = classOf(m);
-    if (cls == null || !watched.contains(cls)) {
-      return;
+    String[] owner = compiledAs.get(e.getInt("compileId"));
+    String inner = m == null ? "?" : classOf(m) + "." + m.getName();
+    String cls;
+    String method;
+    if (owner != null) {
+      cls = owner[0];
+      method = owner[1];
+      if (m == null || !cls.equals(classOf(m))) {
+        if (inlinedTraps.incrementAndGet() <= 5) {
+          inlinedExamples.add(method + " <- " + inner + " (" + e.getString("reason") + ")");
+        }
+      }
+    } else {
+      cls = classOf(m);
+      method = m == null ? "?" : m.getName();
+      if (cls == null || !watched.contains(cls)) {
+        return;
+      }
     }
     synchronized (this) {
-      traps.computeIfAbsent(cls, k -> new ArrayList<>()).add(new Trap(m.getName(),
+      traps.computeIfAbsent(cls, k -> new ArrayList<>()).add(new Trap(method, inner,
           e.getString("reason"), e.getString("action"), e.getStartTime()));
     }
+  }
+
+  /** How many traps were found only through their compile id, taken inside inlined code. */
+  public int inlinedTraps() {
+    return inlinedTraps.get();
+  }
+
+  /** The first few of those, as {@code kernelMethod <- class.method (reason)}. */
+  public List<String> inlinedTrapExamples() {
+    return List.copyOf(inlinedExamples);
   }
 
   private void onCall(RecordedEvent e) {
@@ -469,12 +576,43 @@ public final class VarkaTierWitness {
    * the code list, an on-stack replacement the stream has reported not counting.
    */
   public boolean allC2Now(String className, Set<String> methods) {
-    return allC2(parse(readCodeList(), className), methods, osrIds, inlined);
+    return allC2(parse(readCodeList(), className), methods, known, inlined);
+  }
+
+  /**
+   * A warm-up's decision that {@code methods} are C2 code: the code list it read, the methods,
+   * and the quick answer, which counts a version whose compile the recording has not delivered
+   * yet as a standard one. Waiting for the recording at every look would cost each warm-up about
+   * a second, JFR's delivery interval; deciding quickly and confirming afterwards
+   * ({@link #confirmed}) costs nothing, and a decision taken ahead of the recording - an
+   * on-stack replacement read as a standard version - is then reported, not believed.
+   */
+  public record Decision(List<CodeEntry> read, Set<String> methods, boolean c2) {
+    public Decision {
+      read = List.copyOf(read);
+      methods = Set.copyOf(methods);
+    }
+  }
+
+  /** The warm-up's quick decision on {@code methods} of {@code className} now. */
+  public Decision decideNow(String className, Set<String> methods) {
+    var read = parse(readCodeList(), className);
+    boolean c2 = levels(read, methods, known, inlined, false).values().stream()
+        .allMatch(l -> l == 4);
+    return new Decision(read, methods, c2);
+  }
+
+  /**
+   * Whether a quick decision holds with everything the recording delivered since: read after
+   * {@link #settle}, every version it counted known, none an on-stack replacement.
+   */
+  public boolean confirmed(Decision d) {
+    return d.c2() && allC2(d.read(), d.methods(), known, inlined);
   }
 
   /** {@link #levels} of {@code methods} of {@code className} now, for a message. */
   public Map<String, Integer> levelsNow(String className, Set<String> methods) {
-    return levels(parse(readCodeList(), className), methods, osrIds, inlined);
+    return levels(parse(readCodeList(), className), methods, known, inlined);
   }
 
   /**
@@ -484,6 +622,7 @@ public final class VarkaTierWitness {
    * is a failure of the witness, never of a kernel's answer.
    */
   public void settle(long timeoutMillis) {
+    long covered = calls.get();
     long token;
     synchronized (this) {
       token = ++markers;
@@ -502,6 +641,7 @@ public final class VarkaTierWitness {
         while (flushes == seen) {
           waitUntil(deadline, token);
         }
+        settledThrough = Math.max(settledThrough, covered);
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
         throw new IllegalStateException("interrupted while the tier witness settled", e);
@@ -539,11 +679,11 @@ public final class VarkaTierWitness {
     }
     for (Trap t : traps.getOrDefault(c.className, List.of())) {
       if (inside(t.at(), w)) {
-        return new Trapped(t.method(), t.reason(), t.action());
+        return new Trapped(t.method(), t.reason(), t.action(), t.inner());
       }
     }
-    var own = levels(c.before, c.methods, osrIds, inlined);
-    var osr = osrLevels(c.before, c.methods, osrIds);
+    var own = levels(c.before, c.methods, known, inlined);
+    var osr = osrLevels(c.before, c.methods, known);
     var inUseAfter = new HashSet<Integer>();
     for (CodeEntry e : c.after) {
       if (e.inUse()) {
@@ -567,11 +707,16 @@ public final class VarkaTierWitness {
     if (served != null) {
       return served;
     }
-    var after = levels(c.after, c.methods, osrIds, inlined);
+    var after = levels(c.after, c.methods, known, inlined);
     // A body with no loop or epilogue method of its own - a kernel whose outputs read no column
     // has nothing on its masked side - has no C2 code to show, and is never called C2.
-    if (!c.methods.isEmpty() && own.values().stream().allMatch(l -> l == 4)
-        && after.values().stream().allMatch(l -> l == 4)) {
+    boolean c2 = !c.methods.isEmpty();
+    for (String m : c.methods) {
+      var both = c2Versions(c.before, m, known, inlined);
+      both.retainAll(c2Versions(c.after, m, known, inlined));
+      c2 &= !both.isEmpty();
+    }
+    if (c2) {
       return new C2();
     }
     return new Mixed(own, after);
@@ -579,10 +724,5 @@ public final class VarkaTierWitness {
 
   private static boolean inside(Instant t, Window w) {
     return !t.isBefore(w.start()) && !t.isAfter(w.end());
-  }
-
-  /** The compile ids the stream has reported as on-stack replacements, for a test to read. */
-  Set<Integer> osrIds() {
-    return new HashSet<>(osrIds);
   }
 }

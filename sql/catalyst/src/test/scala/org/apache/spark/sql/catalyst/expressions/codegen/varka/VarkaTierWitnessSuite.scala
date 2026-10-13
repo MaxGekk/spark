@@ -88,6 +88,7 @@ class VarkaTierWitnessSuite extends SparkFunSuite with VarkaOwnJvm {
     assert(cold.verdicts.asScala.forall(interpreted), s"cold: ${cold.verdicts}")
     val warm = run(fixedCase(guarded), History.WARM_SAME)
     assert(warm.settled, s"the warm-up did not settle in ${settings.settleMillis} ms")
+    assert(warm.confirmed, "the warm-up's decision did not hold once the recording caught up")
     assert(labels(warm).forall(_ == "C2"), s"warm-same: ${warm.verdicts}")
     // The trap is the remainder's, in an epilogue: C2 compiled it from calls that never left a
     // remainder past the last whole vector. The plan's all-null input traps in the masked
@@ -147,18 +148,36 @@ class VarkaTierWitnessSuite extends SparkFunSuite with VarkaOwnJvm {
     assert(entries.size == 7)
     val methods = Set("loopDense0", "loopMasked0", "epilogueDense0", "epilogueMasked0",
       "runDense").asJava
-    val osr = Set[Integer](1760).asJava
-    val levels = VarkaTierWitness.levels(entries, methods, osr, java.util.Map.of()).asScala
+    // What the recording reported: every compile finished, 1760 an on-stack replacement.
+    val known = new java.util.HashMap[Integer, java.lang.Boolean]()
+    Seq(1729, 1731, 1740, 1741, 1750, 1751).foreach(id => known.put(id, false))
+    known.put(1760, true)
+    val none = java.util.Map.of[Integer, java.util.Set[String]]()
+    val levels = VarkaTierWitness.levels(entries, methods, known, none).asScala
     assert(levels == Map("loopDense0" -> 4, "loopMasked0" -> 3, "epilogueDense0" -> 4,
       "epilogueMasked0" -> 0, "runDense" -> 0))
     // A method C2 inlined into a caller's level-4 code in use counts as C2 code.
     val inlined = java.util.Map.of[Integer, java.util.Set[String]](1731, Set("runDense").asJava)
-    assert(VarkaTierWitness.levels(entries, methods, osr, inlined).get("runDense") == 4)
-    assert(VarkaTierWitness.osrLevels(entries, methods, osr).get("epilogueMasked0") == 4)
-    assert(VarkaTierWitness.allC2(entries, Set("loopDense0", "epilogueDense0").asJava, osr,
-      java.util.Map.of()))
-    assert(!VarkaTierWitness.allC2(entries, Set("loopDense0", "loopMasked0").asJava, osr,
-      java.util.Map.of()))
+    assert(VarkaTierWitness.levels(entries, methods, known, inlined).get("runDense") == 4)
+    assert(VarkaTierWitness.osrLevels(entries, methods, known).get("epilogueMasked0") == 4)
+    assert(VarkaTierWitness.allC2(entries, Set("loopDense0", "epilogueDense0").asJava, known,
+      none))
+    assert(!VarkaTierWitness.allC2(entries, Set("loopDense0", "loopMasked0").asJava, known,
+      none))
+    // A version whose compile the recording has not delivered yet does not count: it could be an
+    // on-stack replacement, and what it inlined is not known.
+    known.remove(1751)
+    assert(VarkaTierWitness.levels(entries, methods, known, none).get("epilogueDense0") == 0)
+    known.put(1751, false)
+    // C2 at both edges means the same version: 1751 at one edge and a recompiled 1790 at the
+    // other is not one C2 version that served the whole call.
+    val recompiled = VarkaTierWitness.parse(text.replace("1751 4 0", "1790 4 0"), cls)
+    known.put(1790, false)
+    val both = VarkaTierWitness.c2Versions(entries, "epilogueDense0", known, none)
+    both.retainAll(VarkaTierWitness.c2Versions(recompiled, "epilogueDense0", known, none))
+    assert(both.isEmpty)
+    assert(VarkaTierWitness.c2Versions(recompiled, "epilogueDense0", known, none).asScala ==
+      Set(1790))
   }
 
   test("a planted wrong answer fails every history, the history named") {
