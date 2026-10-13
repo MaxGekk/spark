@@ -492,4 +492,7 @@ Tests 3, 5 and 8 are one test of `checkShape` over three abstract fixtures; befo
 assertion failed. After the fixes the four harness and example suites pass under sbt (32 tests),
 and one matrix JVM at the defaults over `VarkaMatrixSuite`, `VarkaTestWatchdogSuite`,
 `VarkaMethodNamesSuite` and `VarkaSuiteHarnessSuite` printed `Suites: completed 4, aborted 0` and
-`Tests: succeeded 32` last, which the report read (32 passed, exit 0).
+`Tests: succeeded 32` last, which the report read (32 passed, exit 0). The Scala face's own-JVM
+suites get the two new checks of fix 1 too, through the shared `VarkaChildJvm.run`; two of them,
+`VarkaEmitterLongLaneSuite` and `VarkaExactGroupingSuite`, passed 13 of 13 in a matrix JVM at the
+defaults with the checks in place. The gate was not rerun after the fixes.
