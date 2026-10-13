@@ -370,6 +370,10 @@ the coverage rows' histories, the nightly step and the skills section are 274b's
   of a lane ran every call as C2 code, or when no `released` case of a lane was served by an OSR.
   `-Dvarka.fuzz.compiled`, `-Dvarka.fuzz.history`, `-Dvarka.fuzz.settleMillis`,
   `-Dvarka.fuzz.releasedBatches`/`releasedRows` and `-Dvarka.fuzz.witness` size it.
+* **The nightly fuzz job** (`.github/workflows/varka-fuzz.yml`) runs `VarkaIrFuzzSuite` in one
+  JVM per runner core with the day's seed, so from the next night it runs the compiled test too:
+  20 new draws a lane in each JVM, beside the others on a loaded runner, which is also the first
+  place "history not reached" can fire under load. 274b's own step over 2,000 draws is separate.
 * **`VarkaTierWitnessSuite`**, seven tests, joins `VarkaAssemblySuite` in the quiet phase of
   `dev/varka_gate.sh` and `dev/varka_scoped_suites.sh` and in `dev/varka_matrix.sh`'s exclusions.
 
