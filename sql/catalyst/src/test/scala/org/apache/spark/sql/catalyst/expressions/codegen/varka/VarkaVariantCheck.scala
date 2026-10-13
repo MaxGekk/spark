@@ -63,6 +63,12 @@ object VarkaVariantCheck {
     VarkaVariantChecks.variants(c, stranger, pool.asJava, rotation).asScala.toSeq
       .map(kv => kv.kind() -> kv.variant().toScala)
 
+  /** [[VarkaVariantChecks.variants]] with the strangers in order and a predicate (VARKA-323). */
+  def variants(c: VarkaFuzzCase, strangers: Seq[VarkaVectorIR], pool: Seq[VarkaVectorIR],
+      rotation: Int, fits: Variant => Boolean): Seq[(Kind, Option[Variant])] =
+    VarkaVariantChecks.variants(c, strangers.asJava, pool.asJava, rotation,
+      (v: Variant) => fits(v)).asScala.toSeq.map(kv => kv.kind() -> kv.variant().toScala)
+
   /** [[VarkaVariantChecks.armOracle]]. */
   def armOracle(c: VarkaFuzzCase): VarkaVariants.ArmOracle = VarkaVariantChecks.armOracle(c)
 
