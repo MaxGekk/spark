@@ -395,7 +395,9 @@ the trunc section's are not, and `nf2Data` is filled exactly as `nfData` is.
 `BenchmarkBase` temporarily instrumented, uncommitted, to print every section title, every
 benchmark's name with its rate denominator, minimum iterations, warm-up and minimum time, and
 every case's name with its fixed iteration count, in order: the Scala form at `25a1bae6893` before
-its deletion, the Java form on the branch. The two outputs are identical, 271 lines: 17 sections,
+its deletion, the Java form on the branch. The instrumentation is three `println`s, one each at the
+top of `Benchmark`'s constructor, of `Benchmark.addTimerCase` (which `addCase` goes through) and
+of `BenchmarkBase.runBenchmark`, so any port can repeat it; it was reverted before the commit. The two outputs are identical, 271 lines: 17 sections,
 17 benchmarks (all 5 iterations, 2 s and 2 s), 235 cases, and the ids line, 125 ids, 0 to 984,
 next free 985; `dev/varka_bench_ids.sh VarkaEmitterParityBenchmark` on the clean branch prints
 the same. Labels with computed parts match too: the B2 ladder's loop-method counts read off the
