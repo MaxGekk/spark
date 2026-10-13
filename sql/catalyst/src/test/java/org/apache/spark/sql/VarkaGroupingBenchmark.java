@@ -25,7 +25,6 @@ import java.util.Arrays;
 import java.util.List;
 
 import scala.collection.immutable.Seq;
-import scala.jdk.javaapi.CollectionConverters;
 
 import org.apache.spark.sql.catalyst.expressions.Attribute;
 import org.apache.spark.sql.catalyst.expressions.NamedExpression;
@@ -114,10 +113,6 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
   private record Emitted(VarkaFusedKernel kernel, int loops, byte[] probe) { }
 
   private volatile int blackhole;
-
-  private static <T> Seq<T> seq(List<T> list) {
-    return CollectionConverters.asScala(list).toSeq();
-  }
 
   private static List<Shape> shapes() {
     var weekdays = new ArrayList<String>(

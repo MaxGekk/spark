@@ -125,7 +125,16 @@ object Benchmarks {
           // Force GC to minimize the side effect.
           System.gc()
           try {
-            runBenchmark.invoke(null, args.tail.toArray)
+            // A Scala object has a static `main` forwarder. A Java subclass of BenchmarkBase
+            // cannot declare a static `main` (it would hide the inherited instance one), so its
+            // `main` is the instance method, invoked on an instance made with its no-arg
+            // constructor.
+            val instance = if (Modifier.isStatic(runBenchmark.getModifiers)) {
+              null
+            } else {
+              clazz.getDeclaredConstructor().newInstance()
+            }
+            runBenchmark.invoke(instance, args.tail.toArray)
           } catch {
             case e: Throwable if !isFailFast =>
               // scalastyle:off println
