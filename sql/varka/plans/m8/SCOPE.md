@@ -4969,6 +4969,59 @@ vector widths and at two working sets, one in the last-level cache and one past 
 numbers are committed and this item says whether a bit-sliced cache form for filter-only columns
 is worth a design beside item 7's bit-packing.
 
+### Item 92. A baseline tier for a shape's first batches: compiled kernels per operation, the idea of copy-and-patch
+
+*Added on 13 October 2026 from the owner's question whether low-latency JIT techniques apply to
+Varka: copy-and-patch (stencils precompiled per operation, copied and patched at run time), TPDE
+(a single-pass back-end from SSA IR, 8 to 26 times faster than LLVM `-O0`), Cranelift, MicroJIT
+(OpenJ9's template JIT), baseline JITs built on abstract interpretation, and Druid (a metacompiler
+deriving a JIT from an interpreter). A step becomes a row when a milestone takes the item.*
+
+**Where Varka's compile latency is.** Not in emission: a kernel is emitted in one pass in about
+80 microseconds (`docs/sql-varka.md`, "shape cache"). It is in HotSpot's tiers: a new class runs
+interpreted, where Vector API code is a library call and an allocation an operation and slower than
+Spark's row code, until C2 compiles it, 13 to 50 ms a class. So the warm-up
+(`spark.sql.codegen.varka.warmup.enabled`, on by default) sends a new shape's batches to the node's
+row path until its kernel is compiled, and counts them in `numWarmupBatches`. A shape seen once - an
+ad hoc query, a golden file's statement - may never run its kernel at all.
+
+**Which of the techniques apply.** TPDE, Cranelift and MicroJIT make machine code quickly; Varka
+makes bytecode and HotSpot makes the machine code, and a JVM offers no supported way to load native
+code a program generated, so they do not apply, and the step they speed up is already 80
+microseconds here. Register allocation and scheduling by abstract interpretation are C2's work.
+Deriving the emitter from an interpreter, Druid's direction, is the reverse of the record's: the
+emitter is written by hand and checked against a reference evaluator. Copy-and-patch as a technique
+needs native code too, but its idea - reuse code already compiled and fill only the holes - carries
+over in two halves:
+
+1. *Done already:* the shape cache keys a class by shape and holds literals in fields rather than
+   constants, so a query of the same shape with other constants runs the class C2 has compiled.
+2. *Missing:* a tier for a shape's first batches. A fixed set of vector kernels, one per operation,
+   over Arrow buffers into scratch columns, shared by every shape and so compiled by C2 once per
+   JVM, would serve a new shape node by node while its fused kernel warms, instead of the row path.
+   Slower than the fused kernel, since every intermediate column is written and read again, but
+   possibly faster than the row path, and it would narrow the gap between a cold shape and a warm
+   one - which matters if Varka is to replace Catalyst's code generator, where every first query is
+   cold. `DateVectorOps` is the existing reference for such per-operation kernels.
+
+**What the record warns.** VARKA-202 measured an interpreted vector engine, vecruntime 0.0.3, at
+about 58 ns a row an entry: 2.9 times slower than stock Spark below the 8000-byte cliff and 30 to 59
+times slower than Varka. The tier is worth building only if its node-at-a-time kernels beat the row
+path on a cold shape, which nothing has measured.
+
+**What to do, and done when.**
+
+1. *How much work goes to the row path cold.* Spark's golden-file suite through VARKA-271's Arrow
+   source runs mostly shapes seen once, the case this tier is for. Run its Varka arm with the
+   warm-up on (the suite turns it off) and its listener recording `numWarmupBatches` beside the
+   batches served, per test and in total. Done when the share of batches and of row-path time spent
+   waiting on warm kernels is committed.
+2. *Whether a per-operation kernel beats the row path cold.* If step 1's share is large: one
+   operation (`date_add`) and one chain of three through fixed per-operation kernels over scratch
+   columns, against the row path and against the warm fused kernel, in a fresh JVM per fork so the
+   fused kernel is really cold, at both vector widths. Done when the numbers are committed and this
+   item says whether a baseline tier is worth a design.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
