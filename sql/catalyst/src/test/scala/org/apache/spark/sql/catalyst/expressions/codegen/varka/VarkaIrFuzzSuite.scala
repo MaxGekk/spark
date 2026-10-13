@@ -17,13 +17,14 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
+import java.util.Random
 import java.util.concurrent.atomic.AtomicInteger
 
 import scala.jdk.CollectionConverters._
-import scala.util.Random
+import scala.jdk.OptionConverters._
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaIrGrammar._
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaIrGrammar.{Drawn, LongShapes, Shapes}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 
@@ -90,6 +91,14 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils
  * 0 none), which is how the nightly's forty thousand draws a lane stay inside the test's cap.
  */
 class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwnJvm {
+
+  // The grammar's bounds and seeds, by the names this suite has always used.
+  private val columnBound = VarkaIrGrammar.COLUMN_BOUND
+  private val literalBound = VarkaIrGrammar.LITERAL_BOUND
+  private val longColumnBound = VarkaIrGrammar.LONG_COLUMN_BOUND
+  private val longLiteralBound = VarkaIrGrammar.LONG_LITERAL_BOUND
+  private val fuzzSeed = VarkaIrGrammar.FUZZ_SEED
+  private val longFuzzSeed = VarkaIrGrammar.LONG_FUZZ_SEED
 
   private val seed = sys.props.get("varka.fuzz.seed").map(_.toLong).getOrElse(fuzzSeed)
   private val longSeed = sys.props.get("varka.fuzz.seed").map(_.toLong).getOrElse(longFuzzSeed)
@@ -204,10 +213,13 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   }
 
   private def drawInt(iteration: Int, drawSeed: Long = seed): VarkaFuzzCase = {
-    val rnd = shapeRandom(drawSeed, iteration)
+    val rnd = VarkaIrGrammar.shapeRandom(drawSeed, iteration)
     // The shape itself comes from the shared draw, so this suite and the emitted-bytes oracle
     // run over one corpus; `rnd` is left where the lane values and null patterns below pick up.
-    val Drawn(roots, numInputs, numLiterals, smallOrdinal, levelOrdinal) = drawShape(rnd)
+    val drawn = VarkaIrGrammar.drawShape(rnd)
+    val roots = drawn.roots
+    val (numInputs, numLiterals) = (drawn.numInputs, drawn.numLiterals)
+    val (smallOrdinal, levelOrdinal) = (drawn.smallOrdinal, drawn.levelOrdinal)
     val lits = Array.fill(numLiterals)(rnd.nextInt(2 * literalBound + 1) - literalBound)
     val length = lengths(rnd.nextInt(lengths.length))
     val patternIds = Seq.fill(numInputs)(rnd.nextInt(patternNames.length))
@@ -232,12 +244,12 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     }
 
     val context = s"seed=$drawSeed iteration=$iteration " +
-      s"roots=${roots.map(r => VarkaVectorIR.canonical(r)).mkString("[", ", ", "]")} " +
+      s"roots=${roots.asScala.map(r => VarkaVectorIR.canonical(r)).mkString("[", ", ", "]")} " +
       s"options=${if (options.isDefault) "(defaults)" else options.canonical()} " +
       s"length=$length patterns=${patternIds.map(patternNames).mkString(",")} " +
       s"literals=${lits.mkString(",")} forceMasked=$forceMasked"
 
-    VarkaFuzzCase(LaneType.INT, roots, numInputs, lits.map(_.toLong), length,
+    new VarkaFuzzCase(LaneType.INT, roots, numInputs, lits.map(_.toLong), length,
       Array.tabulate(numInputs, length)((c, i) => patterns(c)(i)), data.map(_.map(_.toLong)),
       forceMasked, options, smallOrdinal, levelOrdinal, context)
   }
@@ -251,8 +263,10 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
    * has to be caught reading it.
    */
   private def drawLong(iteration: Int, drawSeed: Long = longSeed): VarkaFuzzCase = {
-    val rnd = shapeRandom(drawSeed, iteration)
-    val DrawnLong(roots, numInputs, numLiterals) = drawLongShape(rnd)
+    val rnd = VarkaIrGrammar.shapeRandom(drawSeed, iteration)
+    val drawn = VarkaIrGrammar.drawLongShape(rnd)
+    val roots = drawn.roots
+    val (numInputs, numLiterals) = (drawn.numInputs, drawn.numLiterals)
     // A floor modulus, so a negative draw lands inside the bound too: a signed `%` would put
     // it as far as three bounds below zero, outside every guard the grammar drew.
     def draw(bound: Long): Long = Math.floorMod(rnd.nextLong(), 2 * bound + 1) - bound
@@ -265,12 +279,12 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     val data = Array.tabulate(numInputs, length)((_, _) => draw(longColumnBound))
 
     val context = s"lane=long seed=$drawSeed iteration=$iteration " +
-      s"roots=${roots.map(r => VarkaVectorIR.canonical(r)).mkString("[", ", ", "]")} " +
+      s"roots=${roots.asScala.map(r => VarkaVectorIR.canonical(r)).mkString("[", ", ", "]")} " +
       s"options=${if (options.isDefault) "(defaults)" else options.canonical()} " +
       s"length=$length patterns=${patternIds.map(patternNames).mkString(",")} " +
       s"literals=${lits.mkString(",")} forceMasked=$forceMasked"
 
-    VarkaFuzzCase(LaneType.LONG, roots, numInputs, lits, length,
+    new VarkaFuzzCase(LaneType.LONG, roots, numInputs, lits, length,
       Array.tabulate(numInputs, length)((c, i) => patterns(c)(i)), data, forceMasked, options,
       -1, -1, context)
   }
@@ -285,19 +299,21 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     val className = "org.apache.spark.sql.varka.execution.VarkaFusedFuzz" +
       s"${if (long) "Long" else ""}${classCounter.addAndGet(1)}"
     def emitWith(o: VarkaEmitOptions): Array[Byte] = VarkaLoopEmitter.emitTraced(
-      className, c.roots.asJava, c.numInputs, c.lits.length, o, randomTrace)
+      className, c.roots, c.numInputs, c.lits.length, o, randomTrace)
     val bytes = emitOrSkip(c.label, c.options)(emitWith) match {
       case Some(b) => b
       case None => return false
     }
-    val patterns = (0 until c.numInputs).map(col => (i: Int) => c.nulls(col)(i))
+    // The case's own null flags and roots, handed to the Java checks as they are.
     if (long) {
-      VarkaKernelCheck.runAndCompareLong(c.label, className, bytes, c.roots, c.numInputs, c.lits,
-        VarkaKernelCheck.LongBatch(c.length, patterns, c.data, c.forceMasked))
+      VarkaKernelChecks.runAndCompareLong(c.label, className, bytes, c.roots, c.numInputs,
+        c.lits, new VarkaKernelChecks.LongBatch(c.length, c.nulls, c.data, c.forceMasked),
+        false, null)
     } else {
-      VarkaKernelCheck.runAndCompare(c.label, className, bytes, c.roots, c.numInputs,
+      VarkaKernelChecks.runAndCompare(c.label, className, bytes, c.roots, c.numInputs,
         c.lits.map(_.toInt),
-        VarkaKernelCheck.Batch(c.length, patterns, c.data.map(_.map(_.toInt)), c.forceMasked))
+        new VarkaKernelChecks.Batch(c.length, c.nulls, c.data.map(_.map(_.toInt)), c.forceMasked),
+        false, null)
     }
     true
   }
@@ -331,7 +347,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
           logWarning(s"known fuzz failure, not shrunk: $signature")
           return false
         }
-        val shrunk = VarkaShrinker.shrink(c, signature, x => outcomeOf(x.copy(label = "case")))
+        val shrunk = shrink(c, signature)
         val early = (if (shrunk.stoppedEarly) ", budget reached" else "") +
           (if (shrunk.stable) "" else ", UNSTABLE: it did not fail the same way three times")
         fail(Option(t.getMessage).getOrElse(t.getClass.getName) +
@@ -388,10 +404,11 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
       }
     }
     val variants = try {
-      val pool = VarkaVariants.valueSubtrees(c.roots.asJava).asScala.toSeq
+      val pool = VarkaVariants.valueSubtrees(c.roots).asScala.toSeq
       // The draw's roots as strangers, from the next one round: the first whose variant the
       // form without a budget holds, as the grammar's draws are held.
-      val strangers = c.roots.indices.map(i => c.roots((iteration + 1 + i) % c.roots.size))
+      val strangers =
+        (0 until c.roots.size).map(i => c.roots.get((iteration + 1 + i) % c.roots.size))
       VarkaVariantCheck.variants(c, strangers, pool, iteration, v => fits(v.roots, v.numInputs))
     } catch {
       case e: VirtualMachineError => throw e
@@ -446,7 +463,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
 
   /** `c` with the planted-bug option `name` on. */
   private def planted(c: VarkaFuzzCase, name: String): VarkaFuzzCase =
-    c.copy(options = VarkaEmitOption.named(name) match {
+    c.withOptions(VarkaEmitOption.named(name) match {
       case flag: VarkaEmitOption.Flag => flag.`with`(c.options, true)
       case count: VarkaEmitOption.Count => count.`with`(c.options, 1)
       case other => fail(s"$name is not a planted-bug option: $other")
@@ -466,10 +483,14 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   private def shrunkPlanted(name: String): (VarkaFuzzCase, VarkaFailureSignature,
       VarkaShrinker.Shrunk) = {
     val (c, sig) = firstPlantedFailure(name)
-    (c, sig, VarkaShrinker.shrink(c, sig, x => outcomeOf(x.copy(label = "case"))))
+    (c, sig, shrink(c, sig))
   }
 
-  private def nodes(c: VarkaFuzzCase): Int = c.roots.map(VarkaShrinker.size).sum
+  /** `c` shrunk, each candidate run under the label "case" so the signature compares alone. */
+  private def shrink(c: VarkaFuzzCase, signature: VarkaFailureSignature): VarkaShrinker.Shrunk =
+    VarkaShrinker.shrink(c, signature, (x: VarkaFuzzCase) => outcomeOf(x.withLabel("case")).toJava)
+
+  private def nodes(c: VarkaFuzzCase): Int = c.roots.asScala.map(VarkaShrinker.size(_)).sum
 
   private def contains(node: VarkaVectorIR, cls: Class[_]): Boolean =
     cls.isInstance(node) || VarkaVectorIR.childrenOf(node).exists(contains(_, cls))
@@ -491,7 +512,8 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     val (_, sig, shrunk) = shrunkPlanted("misdescribeAdd")
     val small = shrunk.small
     assert(sig.kind == "generated class: NoSuchMethodError", sig)
-    assert(small.roots.exists(contains(_, classOf[AddDays])), VarkaFuzzCase.describe(small))
+    assert(small.roots.asScala.exists(contains(_, classOf[AddDays])),
+      VarkaFuzzCase.describe(small))
     assert(VarkaFuzzCase.optionDelta(small.options).contains("misdescribeAdd=true"))
     assert(shrunk.runs <= 600 && shrunk.millis < 60000L && shrunk.stable)
   }
@@ -510,7 +532,8 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
       // A composition fuzzer's entry (VARKA-294) is replayed by its own suite.
       case _ => Some(e.signature)
     }
-    val stale = VarkaKnownFailures.stale(VarkaKnownFailures.entries, replay)
+    val stale = VarkaKnownFailures.stale(VarkaKnownFailures.entries,
+      (e: VarkaKnownFailures.Entry) => replay(e).toJava).asScala
     assert(stale.isEmpty, "these known fuzz failures no longer reproduce; delete them from " +
       s"${VarkaKnownFailures.PATH}: ${stale.mkString(", ")}")
   }
@@ -665,7 +688,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   private def wideDraws(rnd: Random): Seq[Drawn] = {
     val draws = scala.collection.mutable.ArrayBuffer.empty[Drawn]
     while (draws.map(_.roots.size).sum < 250 && draws.size < 12) {
-      draws += drawWideShape(rnd)
+      draws += VarkaIrGrammar.drawWideShape(rnd)
     }
     draws.toSeq
   }
@@ -677,10 +700,10 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
    * checked row by row like a drawn shape's; a decline must name a size.
    */
   private def runWide(iteration: Int, trace: VarkaEmitTrace): Unit = {
-    val rnd = shapeRandom(seed ^ 0x57494445L, iteration)
+    val rnd = VarkaIrGrammar.shapeRandom(seed ^ 0x57494445L, iteration)
     val (label, options) = wideVariants(iteration % wideVariants.size)
     val draws = wideDraws(rnd)
-    val roots = draws.flatMap(_.roots).distinct.toSeq
+    val roots = draws.flatMap(_.roots.asScala).distinct.toSeq
     val numInputs = draws.map(_.numInputs).max
     val numLiterals = draws.map(_.numLiterals).max
     val levels = draws.map(_.levelOrdinal).filter(_ >= 0).toSet
@@ -808,7 +831,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
       s"seed=$seed longSeed=$longSeed base=" +
         (if (VarkaMatrix.base.isDefault) "(defaults)" else VarkaMatrix.base.canonical()))
     for (k <- 0 until 1500; c <- Seq(drawInt(k), drawLong(k))) {
-      lines += line(s"${c.lane} $k ${c.options.canonical()}", c.roots, c.numInputs,
+      lines += line(s"${c.lane} $k ${c.options.canonical()}", c.roots.asScala.toSeq, c.numInputs,
         c.lits.length, c.options)
     }
     val d = VarkaMatrix.base
@@ -822,8 +845,8 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
       "planned, whole driver misread" ->
         d.withSplitDriver(false).withMisdescribeDriverBytes(4000))
     for (k <- 0 until 24; (label, o) <- wideVariants ++ planned) {
-      val draws = wideDraws(shapeRandom(seed ^ 0x57494445L, k))
-      lines += line(s"wide $k ($label)", draws.flatMap(_.roots).distinct,
+      val draws = wideDraws(VarkaIrGrammar.shapeRandom(seed ^ 0x57494445L, k))
+      lines += line(s"wide $k ($label)", draws.flatMap(_.roots.asScala).distinct.toSeq,
         draws.map(_.numInputs).max, draws.map(_.numLiterals).max, o)
     }
     java.nio.file.Files.write(java.nio.file.Paths.get(target.get), lines.asJava)

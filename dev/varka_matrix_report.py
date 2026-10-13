@@ -35,6 +35,12 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 MODULES = ("catalyst", "sql")
 
+# How much of each line of a failure's message the report keeps. A message can carry a whole
+# diagnostic on one line - the warm-up's JIT state with its compile queue runs to a couple of
+# thousand characters (VARKA-295) - and CI's log of this report may be the only copy of it, so a
+# line is cut only where it would bury the rest of the report.
+MESSAGE_WIDTH = 4000
+
 
 def modules_run(runs):
     """The modules the runner was asked for (`--module`), both when it does not say."""
@@ -141,7 +147,7 @@ def main(runs, skips_path):
                 for more in lines[i + 1 : i + 7]:
                     if not more.startswith("  ") or not more.strip():
                         break
-                    details.append(f"      {more.strip()[:400]}")
+                    details.append(f"      {more.strip()[:MESSAGE_WIDTH]}")
         details += [
             f"  {name}: fuses nothing, fused under the defaults: {s} / {t}" for s, t in unfused
         ]

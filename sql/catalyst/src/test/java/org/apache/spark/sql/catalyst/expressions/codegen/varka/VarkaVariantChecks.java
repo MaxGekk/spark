@@ -33,8 +33,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Lan
  * Runs the variants of a passing case ({@link VarkaVariants}, VARKA-278) through the emitter and
  * {@link VarkaKernelChecks}, for {@code VarkaVariantSuite} over the small-tree series and
  * {@code VarkaIrFuzzSuite} over its draws. A variant becomes a case of its own, its columns built
- * from the original's by the variant's plan. {@code VarkaVariantCheck} is its Scala face, over the
- * suites' {@code VarkaFuzzCase} (VARKA-311).
+ * from the original's by the variant's plan. Its cases are the suites' {@link VarkaFuzzCase}s, and
+ * {@code VarkaVariantCheck} is its Scala face (VARKA-311, VARKA-320).
  *
  * <p>Every output of a variant is compared with the reference evaluator, row for row. A variant
  * may decline only where {@link Kind#mayDecline} says, and then the kernel is emitted again under
@@ -45,15 +45,6 @@ public final class VarkaVariantChecks {
 
   private VarkaVariantChecks() {
   }
-
-  /**
-   * One case: the roots over {@code numInputs} columns at {@code lane}, the literals, one batch -
-   * each column's null flags and values - and the options it is emitted under, with the two
-   * special columns' ordinals and the label a failure names it by. {@code VarkaFuzzCase}'s fields.
-   */
-  public record Case(LaneType lane, List<VarkaVectorIR> roots, int numInputs, long[] lits,
-      int length, boolean[][] nulls, long[][] data, boolean forceMasked, VarkaEmitOptions options,
-      int smallOrdinal, int levelOrdinal, String label) { }
 
   /** What one variant's emission and check came to. */
   public sealed interface Outcome {
@@ -102,7 +93,7 @@ public final class VarkaVariantChecks {
 
   private static final AtomicInteger CLASS_COUNTER = new AtomicInteger(0);
 
-  private static String className(Case c) {
+  private static String className(VarkaFuzzCase c) {
     return "org.apache.spark.sql.varka.execution.VarkaVariant"
         + (c.lane() == LaneType.LONG ? "Long" : "") + CLASS_COUNTER.addAndGet(1);
   }
@@ -115,7 +106,7 @@ public final class VarkaVariantChecks {
    * over {@code c}'s columns, and {@code pool} the trees an untaken arm may be replaced by,
    * scanned from {@code rotation}.
    */
-  public static List<KindVariant> variants(Case c, VarkaVectorIR stranger,
+  public static List<KindVariant> variants(VarkaFuzzCase c, VarkaVectorIR stranger,
       List<VarkaVectorIR> pool, int rotation) {
     return variants(c, List.of(stranger), pool, rotation, v -> true);
   }
@@ -127,7 +118,7 @@ public final class VarkaVariantChecks {
    * {@code fits} chooses. The fuzzer passes whether the emitter's form without a byte budget holds
    * the variant, which a draw always satisfies and a grown variant may not.
    */
-  public static List<KindVariant> variants(Case c, List<VarkaVectorIR> strangers,
+  public static List<KindVariant> variants(VarkaFuzzCase c, List<VarkaVectorIR> strangers,
       List<VarkaVectorIR> pool, int rotation, Predicate<Variant> fits) {
     var roots = c.roots();
     int n = c.numInputs();
@@ -156,7 +147,7 @@ public final class VarkaVariantChecks {
    * condition over a column's validity can turn there, and an arm untaken on one is taken on the
    * other.
    */
-  public static VarkaVariants.ArmOracle armOracle(Case c) {
+  public static VarkaVariants.ArmOracle armOracle(VarkaFuzzCase c) {
     return cond -> {
       var batches = new ArrayList<boolean[][]>();
       batches.add(c.nulls());
@@ -200,7 +191,7 @@ public final class VarkaVariantChecks {
   }
 
   /** {@code c} as {@code v} sees it: {@code v}'s roots over the columns its plan builds. */
-  public static Case caseOf(Case c, Variant v) {
+  public static VarkaFuzzCase caseOf(VarkaFuzzCase c, Variant v) {
     var sources = v.columns();
     long[][] data = new long[sources.size()][];
     boolean[][] nulls = new boolean[sources.size()][];
@@ -222,7 +213,7 @@ public final class VarkaVariantChecks {
     for (var root : roots) {
       shown.add(VarkaVectorIR.canonical(root));
     }
-    return new Case(c.lane(), roots, sources.size(), c.lits(), c.length(), nulls, data,
+    return new VarkaFuzzCase(c.lane(), roots, sources.size(), c.lits(), c.length(), nulls, data,
         c.forceMasked(), c.options(), moved(sources, c.smallOrdinal()),
         moved(sources, c.levelOrdinal()), c.label() + " variant=" + v.kind().label + " roots=["
         + String.join(", ", shown) + "]");
@@ -233,7 +224,7 @@ public final class VarkaVariantChecks {
   }
 
   /** {@code c} itself, emitted and compared; a decline fails. */
-  public static Outcome checkPlain(Case c, Emit emit) {
+  public static Outcome checkPlain(VarkaFuzzCase c, Emit emit) {
     String name = className(c);
     var bytes = emit.emit(c.roots(), c.numInputs(), c.lits().length, c.options(), name);
     if (bytes.isEmpty()) {
@@ -247,7 +238,7 @@ public final class VarkaVariantChecks {
    * Variant {@code v} of {@code c}, emitted and compared; throws on a mismatch, on a decline the
    * variant may not make, and on one whose exact bits are not all the guards' it adds.
    */
-  public static Outcome check(Case c, Variant v, Emit emit) {
+  public static Outcome check(VarkaFuzzCase c, Variant v, Emit emit) {
     var vc = caseOf(c, v);
     var first = run(vc, vc.options(), v.kind().mayDecline, emit);
     if (first.isEmpty()) {
@@ -273,15 +264,16 @@ public final class VarkaVariantChecks {
     return new Outcome.Declined(exact);
   }
 
-  private static Optional<Integer> run(Case vc, VarkaEmitOptions options, boolean mayDecline,
-      Emit emit) {
+  private static Optional<Integer> run(VarkaFuzzCase vc, VarkaEmitOptions options,
+      boolean mayDecline, Emit emit) {
     String name = className(vc);
     return emit.emit(vc.roots(), vc.numInputs(), vc.lits().length, options, name)
         .map(bytes -> status(vc, name, bytes, mayDecline));
   }
 
   /** {@code c}'s kernel run over {@code c}'s batch: the status, 0 once every row is compared. */
-  private static int status(Case c, String name, byte[] bytes, boolean declineAllowed) {
+  private static int status(VarkaFuzzCase c, String name, byte[] bytes,
+      boolean declineAllowed) {
     if (c.lane() == LaneType.LONG) {
       return VarkaKernelChecks.runAndCompareLongStatus(c.label(), name, bytes, c.roots(),
           c.numInputs(), c.lits(), new VarkaKernelChecks.LongBatch(c.length(), c.nulls(),

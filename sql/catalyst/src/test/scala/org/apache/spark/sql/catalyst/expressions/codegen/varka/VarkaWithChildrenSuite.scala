@@ -17,6 +17,8 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
+import scala.jdk.CollectionConverters._
+
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaIrGrammar._
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
@@ -34,9 +36,9 @@ class VarkaWithChildrenSuite extends SparkFunSuite {
   test("rebuilding a node over its own children gives the node, for every drawn node type") {
     val seen = scala.collection.mutable.Set.empty[String]
     for (k <- 0 until 4000) {
-      val int = drawShape(shapeRandom(fuzzSeed, k))
-      val long = drawLongShape(shapeRandom(longFuzzSeed, k))
-      for (root <- int.roots ++ long.roots; node <- nodes(root)) {
+      val int = drawShape(shapeRandom(FUZZ_SEED, k))
+      val long = drawLongShape(shapeRandom(LONG_FUZZ_SEED, k))
+      for (root <- (int.roots.asScala ++ long.roots.asScala); node <- nodes(root)) {
         val rebuilt = VarkaVectorIR.withChildren(node, VarkaVectorIR.childrenOf(node): _*)
         assert(rebuilt == node, s"${VarkaVectorIR.canonical(node)} rebuilt as " +
           VarkaVectorIR.canonical(rebuilt))

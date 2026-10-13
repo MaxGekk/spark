@@ -25,8 +25,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVariants.{Ki
 /**
  * The variant check's Scala face: [[VarkaVariantChecks]], the Java class that runs a case's
  * variants (VARKA-278) through the emitter and the kernel check (VARKA-311), over the suites'
- * [[VarkaFuzzCase]]. Each method converts the case, the suite's emit function and the outcome;
- * nothing is checked here.
+ * [[VarkaFuzzCase]]. Each method converts the suite's emit function and the outcome; nothing is
+ * checked here.
  */
 object VarkaVariantCheck {
 
@@ -47,10 +47,6 @@ object VarkaVariantCheck {
     VarkaVariantChecks.RETRY_WITHOUT_BUDGET.emit(roots.asJava, numInputs, numLiterals, options,
       className).toScala
 
-  private def toJava(c: VarkaFuzzCase): VarkaVariantChecks.Case =
-    new VarkaVariantChecks.Case(c.lane, c.roots.asJava, c.numInputs, c.lits, c.length, c.nulls,
-      c.data, c.forceMasked, c.options, c.smallOrdinal, c.levelOrdinal, c.label)
-
   private def toJava(emit: Emit): VarkaVariantChecks.Emit =
     (roots, numInputs, numLiterals, options, className) =>
       emit(roots.asScala.toSeq, numInputs, numLiterals, options, className).toJava
@@ -64,31 +60,26 @@ object VarkaVariantCheck {
   /** [[VarkaVariantChecks.variants]]: each kind, and its variant where it applies to `c`. */
   def variants(c: VarkaFuzzCase, stranger: VarkaVectorIR, pool: Seq[VarkaVectorIR],
       rotation: Int): Seq[(Kind, Option[Variant])] =
-    VarkaVariantChecks.variants(toJava(c), stranger, pool.asJava, rotation).asScala.toSeq
+    VarkaVariantChecks.variants(c, stranger, pool.asJava, rotation).asScala.toSeq
       .map(kv => kv.kind() -> kv.variant().toScala)
 
   /** [[VarkaVariantChecks.variants]] with the strangers in order and a predicate (VARKA-323). */
   def variants(c: VarkaFuzzCase, strangers: Seq[VarkaVectorIR], pool: Seq[VarkaVectorIR],
       rotation: Int, fits: Variant => Boolean): Seq[(Kind, Option[Variant])] =
-    VarkaVariantChecks.variants(toJava(c), strangers.asJava, pool.asJava, rotation,
+    VarkaVariantChecks.variants(c, strangers.asJava, pool.asJava, rotation,
       (v: Variant) => fits(v)).asScala.toSeq.map(kv => kv.kind() -> kv.variant().toScala)
 
   /** [[VarkaVariantChecks.armOracle]]. */
-  def armOracle(c: VarkaFuzzCase): VarkaVariants.ArmOracle = VarkaVariantChecks.armOracle(toJava(c))
+  def armOracle(c: VarkaFuzzCase): VarkaVariants.ArmOracle = VarkaVariantChecks.armOracle(c)
 
-  /** [[VarkaVariantChecks.caseOf]], as a [[VarkaFuzzCase]]. */
-  def caseOf(c: VarkaFuzzCase, v: Variant): VarkaFuzzCase = {
-    val vc = VarkaVariantChecks.caseOf(toJava(c), v)
-    c.copy(roots = vc.roots().asScala.toSeq, numInputs = vc.numInputs(), nulls = vc.nulls(),
-      data = vc.data(), smallOrdinal = vc.smallOrdinal(), levelOrdinal = vc.levelOrdinal(),
-      label = vc.label())
-  }
+  /** [[VarkaVariantChecks.caseOf]]. */
+  def caseOf(c: VarkaFuzzCase, v: Variant): VarkaFuzzCase = VarkaVariantChecks.caseOf(c, v)
 
   /** [[VarkaVariantChecks.checkPlain]]. */
   def checkPlain(c: VarkaFuzzCase, emit: Emit): Outcome =
-    outcome(VarkaVariantChecks.checkPlain(toJava(c), toJava(emit)))
+    outcome(VarkaVariantChecks.checkPlain(c, toJava(emit)))
 
   /** [[VarkaVariantChecks.check]]. */
   def check(c: VarkaFuzzCase, v: Variant, emit: Emit): Outcome =
-    outcome(VarkaVariantChecks.check(toJava(c), v, toJava(emit)))
+    outcome(VarkaVariantChecks.check(c, v, toJava(emit)))
 }

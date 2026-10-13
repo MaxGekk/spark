@@ -69,7 +69,7 @@ import org.apache.spark.sql.types.{DateType, DayTimeIntervalType, IntegerType, L
  */
 class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
 
-  private val seed = fuzzSeed
+  private val seed = FUZZ_SEED
   private val shapes = 10000
   private val blockSize = 100
   private val widths = Seq(4, 16)
@@ -246,7 +246,7 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
   /** The int sequence, drawn once per JVM: every pass reads it, twenty of them (VARKA-307). */
   private lazy val intShapes: IndexedSeq[FuzzShape] = (0 until shapes).map { k =>
     val drawn = drawShape(shapeRandom(seed, k))
-    FuzzShape(drawn.roots, drawn.numInputs, drawn.numLiterals)
+    FuzzShape(drawn.roots.asScala.toSeq, drawn.numInputs, drawn.numLiterals)
   }
 
   /**
@@ -256,8 +256,8 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
   private def longFuzzShape(k: Int): FuzzShape = longShapes(k)
 
   private lazy val longShapes: IndexedSeq[FuzzShape] = (0 until shapes).map { k =>
-    val drawn = drawLongShape(shapeRandom(longFuzzSeed, k))
-    FuzzShape(drawn.roots, drawn.numInputs, drawn.numLiterals)
+    val drawn = drawLongShape(shapeRandom(LONG_FUZZ_SEED, k))
+    FuzzShape(drawn.roots.asScala.toSeq, drawn.numInputs, drawn.numLiterals)
   }
 
   /** The digest of one block of a sequence at one width. */
@@ -440,7 +440,7 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
           "seed" -> seed, "shapes" -> shapes, "block_size" -> blockSize,
           "blocks" -> blocks.asJava),
         "fuzz_long" -> ordered(
-          "seed" -> longFuzzSeed, "shapes" -> shapes, "block_size" -> blockSize,
+          "seed" -> LONG_FUZZ_SEED, "shapes" -> shapes, "block_size" -> blockSize,
           "blocks" -> longBlocks.asJava))
     }
     val armHashes = ordered(pinnedArms.map { case (name, arm) =>

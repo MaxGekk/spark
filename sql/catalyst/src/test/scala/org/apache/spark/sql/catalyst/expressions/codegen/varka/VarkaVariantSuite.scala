@@ -62,25 +62,21 @@ class VarkaVariantSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOw
   private final class SeriesBatch(val name: String, val length: Int,
       val nulls: Array[Array[Boolean]], val data: Array[Array[Long]], val lits: Array[Long])
 
-  private def nullsOf(patterns: Seq[Int => Boolean], length: Int): Array[Array[Boolean]] =
-    patterns.map(p => Array.tabulate(length)(p)).toArray
-
-  private lazy val intBatches: Seq[SeriesBatch] = VarkaIrSeries.intBatches.map { b =>
-    new SeriesBatch(b.name, b.batch.length, nullsOf(b.batch.patterns, b.batch.length),
+  private lazy val intBatches: Seq[SeriesBatch] = VarkaIrSeries.intBatches.asScala.toSeq.map {
+    b => new SeriesBatch(b.name, b.batch.length, b.batch.nulls,
       b.batch.data.map(_.map(_.toLong)), b.lits.map(_.toLong))
   }
 
-  private lazy val longBatches: Seq[SeriesBatch] = VarkaIrSeries.longBatches.map { b =>
-    new SeriesBatch(b.name, b.batch.length, nullsOf(b.batch.patterns, b.batch.length),
-      b.batch.data, b.lits)
+  private lazy val longBatches: Seq[SeriesBatch] = VarkaIrSeries.longBatches.asScala.toSeq.map {
+    b => new SeriesBatch(b.name, b.batch.length, b.batch.nulls, b.batch.data, b.lits)
   }
 
   private def caseOf(root: VarkaVectorIR, long: Boolean, b: SeriesBatch, label: String,
       options: VarkaEmitOptions): VarkaFuzzCase =
-    VarkaFuzzCase(if (long) LaneType.LONG else LaneType.INT, Seq(root),
-      if (long) VarkaIrSeries.LongNumInputs else VarkaIrSeries.NumInputs, b.lits, b.length,
-      b.nulls, b.data, forceMasked = false, options,
-      if (long) -1 else VarkaIrSeries.SmallColumn, if (long) -1 else VarkaIrSeries.LevelColumn,
+    new VarkaFuzzCase(if (long) LaneType.LONG else LaneType.INT, java.util.List.of(root),
+      if (long) VarkaIrSeries.LONG_NUM_INPUTS else VarkaIrSeries.NUM_INPUTS, b.lits, b.length,
+      b.nulls, b.data, false, options,
+      if (long) -1 else VarkaIrSeries.SMALL_COLUMN, if (long) -1 else VarkaIrSeries.LEVEL_COLUMN,
       s"$label batch=${b.name}")
 
   /** A lane's series, its batches, and the trees a stranger and a replacement come from. */
@@ -91,9 +87,10 @@ class VarkaVariantSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOw
     val name: String = if (long) "long" else "int"
     /** The roots to size 2, every one of which the series passes: strangers. */
     lazy val strangers: IndexedSeq[VarkaVectorIR] =
-      (series.roots(1) ++ series.roots(2)).toIndexedSeq
+      (series.roots(1).asScala ++ series.roots(2).asScala).toIndexedSeq
     /** The value trees to size 2: replacements for an untaken arm. */
-    lazy val replacements: Seq[VarkaVectorIR] = (1 to 2).flatMap(series.value(_)).map(_.node)
+    lazy val replacements: Seq[VarkaVectorIR] =
+      (1 to 2).flatMap(series.value(_).asScala).map(_.node)
 
     /** The `index`-th tree's stranger: a different tree from the pool, by a fixed stride. */
     def stranger(root: VarkaVectorIR, index: Int): VarkaVectorIR = {
@@ -170,7 +167,7 @@ class VarkaVariantSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOw
     // recorded like a check rather than left to abort the lane.
     var variants = Seq.empty[(Kind, Option[Variant])]
     val built = recording(tally, c.label) {
-      variants = VarkaVariantCheck.variants(c, lane.stranger(c.roots.head, index),
+      variants = VarkaVariantCheck.variants(c, lane.stranger(c.roots.get(0), index),
         lane.replacements, index)
     }
     if (!built) return
@@ -193,7 +190,8 @@ class VarkaVariantSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOw
       kinds: Set[Kind] = Kind.values.toSet): Tally = {
     val tally = new Tally
     var index = 0
-    for ((treeSize, root) <- lane.series.upTo(upTo)) {
+    for (sized <- lane.series.upTo(upTo).asScala) {
+      val (treeSize, root) = (sized.size, sized.root)
       if (index % slices == slice) {
         tally.trees += 1
         val batches = if (allBatches) lane.batches
@@ -244,7 +242,7 @@ class VarkaVariantSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOw
       val lane = new Lane(long)
       val tally = new Tally
       var index = 0
-      for (root <- lane.series.roots(4) if root.isInstanceOf[IfElse]) {
+      for (root <- lane.series.roots(4).asScala if root.isInstanceOf[IfElse]) {
         tally.trees += 1
         for (b <- lane.batches) {
           checkCase(lane, caseOf(root, long, b, s"lane=${lane.name} size=4 index=$index",
@@ -376,7 +374,7 @@ class VarkaVariantSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOw
     // the month-count bit, which the variant brought, so the check accepts the decline.
     val far = VarkaChrono.MONTH_ARITH_MAX_MONTHS.toLong + 1
     val c = caseOf(t, long = false, intBatches(1), "planted", VarkaMatrix.base)
-      .copy(lits = Array(far))
+      .withLits(Array(far))
     assert(VarkaVariantCheck.check(c, moved, VarkaVariantCheck.retryWithoutBudget) ==
       VarkaVariantCheck.Declined(VarkaFusedKernel.STATUS_MONTH_COUNT))
     // The same guard firing in a variant that may not decline fails it: the moved case's
@@ -408,7 +406,8 @@ class VarkaVariantSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOw
     var index = 0
     val trees = lane.series.upTo(3)
     while (trees.hasNext && caught.values.exists(_ == 0)) {
-      val (treeSize, root) = trees.next()
+      val sized = trees.next()
+      val (treeSize, root) = (sized.size, sized.root)
       val c = caseOf(root, long = false, lane.batches(index % lane.batches.size),
         s"planted size=$treeSize index=$index", planted)
       val plain = scala.util.Try(VarkaVariantCheck.checkPlain(c,

@@ -18,10 +18,10 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import java.time.LocalDate
+import java.util.Random
 import java.util.function.IntUnaryOperator
 
 import scala.collection.mutable
-import scala.util.Random
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaIrGrammar._
@@ -502,7 +502,7 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite with VarkaTestWatchdog {
       // reads it the way the compiler does.
       val literals = {
         val drawn = mutable.LinkedHashSet.empty[Int]
-        while (drawn.size < numLiterals) drawn += rnd.nextInt(2 * literalBound + 1) - literalBound
+        while (drawn.size < numLiterals) drawn += rnd.nextInt(2 * LITERAL_BOUND + 1) - LITERAL_BOUND
         drawn.toArray
       }
       val (asked, roles) = walk(root)
@@ -513,7 +513,7 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite with VarkaTestWatchdog {
           VarkaChrono.MONTH_ARITH_MAX_MONTHS - VarkaChrono.MONTH_ARITH_MIN_MONTHS + 1)
         case Role.Day => VarkaChrono.CONTRACT_MIN_DAYS + rnd.nextInt(
           VarkaChrono.CONTRACT_MAX_DAYS - VarkaChrono.CONTRACT_MIN_DAYS + 1)
-        case Role.Offset => (rnd.nextLong() % (2 * columnBound + 1) - columnBound).toInt
+        case Role.Offset => (rnd.nextLong() % (2 * COLUMN_BOUND + 1) - COLUMN_BOUND).toInt
         case Role.Int => rnd.nextInt()
       }
       val rows = Seq.fill(8)((0 until numInputs).map(c =>

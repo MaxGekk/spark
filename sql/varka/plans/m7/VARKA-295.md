@@ -173,3 +173,55 @@ bound did not bound a hung child (a daemon thread ends it); the deadline propert
 class doc (it is); and, the finding that stands, the row is marked Done on a cause that is inferred:
 production still releases at 60 s on a loaded host, and the row now reads "fix applied, cause
 unconfirmed" until the release-path diagnostic has fired on a runner.
+
+### 9.2 The diagnostic fired once, 12 October 2026, cut short
+
+The release-path diagnostic fired on the fork's CI on 12 October (run 38223921205, `varka-279-impl`
+at 4ef8f48443e, job "Varka suites: sql"). It fired before faacde3cc9e, which since that afternoon
+runs `VarkaWarmupEndToEndSuite` alone after the module's other suites, as the gate's quiet step
+does. The first projection test failed at the raised deadline:
+
+    RELEASED did not equal COMPILED Outcome[shapeHash=wd36813e98d5e22ac, state=RELEASED,
+    calls=107424, rows=95260672, queuedNanos=17846257, runNanos=119984889971,
+    firstProbeBytes=5214992, lastProbeBytes=270576]; the first run took 683 ms; JIT: compile time
+    333642 ms; CodeCache 45/128 MB; compile queue of 8 lines: Current compiles: | C1
+    CompilerThread0  65099       3       jdk.internal.loader.NativeLib
+
+**What it shows.** The warm-up task was not starved: it waited 18 ms in its own queue and ran
+107,424 calls over the whole 120 s. The kernel was partly compiled, with its last probe block 19
+times below the first, but at 270,576 bytes it was far over the 9 KB allowance and 7 to 14 times the
+20 to 38 KB that one still-interpreted light loop left in 9.1's failures, so more of it was still
+uncompiled. The code cache was not full, so the JIT had not stopped for lack of space. The
+compiler threads had been busy, 334 s of compile time in a JVM that lived at most the job's 578 s
+with two test JVMs sharing four vCPUs, but **at the deadline nothing was waiting for them.** The
+queue's line count says so although its text was cut: `Compiler.queue` prints a header, one line
+per compile in progress, and then for each of C1 and C2 a heading followed by its queued methods
+or the single word `Empty`, with a blank line before each heading. That is 5 lines plus one per
+compile in progress plus at least one per queue, and 8 lines with one compile in progress (the C1
+compile shown) leaves exactly one line per queue: both `Empty`, and no C2 compile running. A JDK
+25 JVM printed the same layout locally, 10 lines for three compiles in progress and two empty
+queues.
+
+**What that means for 9.1.** 9.1 inferred that the uncompiled loop methods were waiting in C2's
+queue on a loaded runner. In this firing they were not in the queue at all, so for this failure
+the inference is wrong. 9.1 named the case that would reopen the row as an empty queue and a
+kernel that never compiles; the queue was empty and the kernel stayed mostly uncompiled for two
+minutes, which is that case in all but the 19-fold drop. What keeps the methods out of the queue
+is the open question: a compile that failed or bailed out and marked the method not compilable at
+that tier, a deoptimization loop, or loop methods that never reach the tier policy's thresholds
+under this warm-up. `-XX:+PrintCompilation` and JFR's `jdk.CompilationFailure` and
+`jdk.Deoptimization` events in the failing JVM would tell them apart.
+
+**What it does not show.** Which methods were compiled and which were not.
+`dev/varka_matrix_report.py` cut each line of a failure's message at 400 characters, and the job
+uploads no test reports, so the queue's text ended after its first entry; here only its line count
+carried information. The cut is now `MESSAGE_WIDTH` = 4000 characters, wide enough for the JIT
+state's twelve queue lines, so the next firing prints the queue whole.
+
+**The rate since 9.1.** The sql job ran 46 times from 9 October to the night of 12 October and
+failed this way once, against about two runs in five before 9.1. All 10 runs that include
+faacde3cc9e passed. The rate fell, but the firing contradicts the cause 9.1 inferred, so the
+row reads "fix applied, cause contradicted": the deadline and the quiet step made the failure
+rarer without explaining it, and production still releases at 60 s when the kernel's loop
+methods stay out of the compiler's reach. What remains is to find why they do, from the JIT's
+own events in a failing JVM, before the test's wait or the verdict is changed.
