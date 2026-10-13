@@ -33,8 +33,8 @@
 #   narrow    the same under -XX:MaxVectorSize=16 (128-bit lanes), on each test JVM's own
 #             command line
 #             Every suite step runs with the memory sanitizer on (VARKA-263); quiet does not.
-#   quiet     the two suites that measure the JIT rather than answers, VarkaAssemblySuite and
-#             VarkaWarmupEndToEndSuite, at both widths, after everything else
+#   quiet     the suites that measure the JIT rather than answers, VarkaAssemblySuite,
+#             VarkaWarmupEndToEndSuite and VarkaTierWitnessSuite, at both widths, after the rest
 #   sweep     the opt-in exhaustive calendar sweeps (-Dvarka.sweep=true), both
 #             the scalar model's and the emitted kernel's, at the wide width
 #   doc       build/sbt catalyst/doc, the javadoc gate CI runs
@@ -136,7 +136,7 @@ rm -f "$logdir"/*.status "$logdir"/*.secs
 # The suites run outside sbt, on the classpath the compile step exports (dev/varka_matrix.sh).
 suites_build="$logdir/suites-build"
 split="${VARKA_GATE_SPLIT:-3}"
-timing_suites=VarkaAssemblySuite,VarkaWarmupEndToEndSuite
+timing_suites=VarkaAssemblySuite,VarkaWarmupEndToEndSuite,VarkaTierWitnessSuite
 suites=(dev/varka_matrix.sh --defaults --skip-build --build-dir "$suites_build")
 
 if selected_has compile; then
@@ -181,7 +181,7 @@ lane_sbt &
 lane_rest &
 wait
 
-# The quiet phase: each width's two JIT-measuring suites, the narrow after the wide. The deadline
+# The quiet phase: each width's JIT-measuring suites, the narrow after the wide. The deadline
 # wrapper runs a program, so the two runs are one quoted bash command.
 if selected_has quiet; then
   quiet_wide=$(printf '%q ' "${suites[@]}" --out "$logdir/quiet-wide-runs" \
