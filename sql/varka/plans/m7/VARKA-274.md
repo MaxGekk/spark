@@ -15,11 +15,13 @@ through the interpreter, C1 and C2 while its batches run. The C2 vector code is 
 an answer on three shapes only (`VarkaWarmupEndToEndSuite`).
 
 Li, Jiang, Xu and Su ("Validating JIT Compilers via Compilation Space Exploration", SOSP 2023;
-`m7/READING.md` 11) found that 138 of the 154 seeds whose output Artemis made differ (89.6%) did
-not differ between the default run and a fully compiled one (Table 4, p. 10). The bugs needed
-the mixed histories in between: a method compiled at one tier, recompiled at another,
-deoptimized, entered by OSR. Artemis tries up to eight mutants per seed (p. 10), which is where
-the row's "about eight batch histories" comes from. The plan's section 2.2 ("Interpreted code")
+`m7/READING.md` 11) report, for a seven-day run against OpenJ9, that of the 154 seeds whose output
+Artemis made differ, 138 (89.6%) "cannot be triggered simply by comparing the default and
+fully-compiled JIT-trace" (p. 10, beside Table 4; checked against the PDF). Those needed the
+mixed histories in between: a method compiled at one tier, recompiled at another, deoptimized,
+entered by OSR. HotSpot's miscompilation in their example needed C1, C2, a deoptimization and an
+OSR (p. 3). Artemis gives up on a seed after eight mutants (p. 10), which is where the row's
+"about eight batch histories" comes from. The plan's section 2.2 ("Interpreted code")
 and risk 8 take the row in; row 272, the interpreter, C1, C2 and intrinsics-off arms in forked
 JVMs, follows it and reuses its tier proof (3.2).
 
@@ -92,9 +94,11 @@ the recording and 102,197 ms without it, and the median warm-up 352 ms against 3
 DiagnosticCommand MBean's `compilerCodelist`, the in-process `jcmd Compiler.codelist`, read in
 about 3 ms the installed code of the whole JVM (3,233 lines): compile id, level and state per
 method, `0` for in use and `1` for not entrant. It showed exactly the methods JFR had seen trap
-as not entrant. One thing JFR does not show: once, a `run` method went from level 4 to 0 on the
-all-null batch with no trap event and no deoptimization log line. So a call's tier is read at
-both edges, from the code list, and what happened inside, from the events.
+as not entrant. In one run a `run` method read level 4 and later level 0 with no trap event; a
+rerun under the deoptimization log did not compile that `run` at all, so the change was not
+reproduced. Code can leave the code cache without a trap (an invalidation by a broken dependency
+is not a JFR event), so the design reads a call's tier at both edges, from the code list, and
+what happened inside, from the events.
 
 **(d) An OSR mid-batch and a trap after a quiet warm-up can both be provoked, and both happen
 on the users' paths.**
@@ -204,7 +208,7 @@ guard-edge values row 279 builds, and a draw with no guard skips it.
 - **`VarkaIrFuzzSuite`** gets a test, "random IR trees compiled by C2 match the reference
   evaluator over eight batch histories", at both lanes, over the first `-Dvarka.fuzz.compiled`
   draws (default 20) of the run's own seed, so a failure replays with the fuzzer's
-  `-Dvarka.fuzz.only`. Draws whose options set a lanes override run `cold` only and are counted:
+  `-Dvarka.fuzz.only`, and `-Dvarka.fuzz.history=<name>` runs one history alone. Draws whose options set a lanes override run `cold` only and are counted:
   a second species in the JVM makes every later kernel's C2 code box at the merge of two receiver
   classes (`vector-api-and-width.md`), which no user's single-species JVM runs. The suite already
   runs in a JVM of its own (`VarkaOwnJvm`).
@@ -272,8 +276,9 @@ None: no emitted code changes.
    in the second's window and not the first's.
 4. **The code list is read right.** The witness's parser over code-list text captured in 2's
    probe: a method listed at level 4 with state 0 counts as C2 code, the same method with state 1
-   (not entrant) or missing does not. This is what catches an invalidation no event reports
-   (2(c)); it is tested on captured text because no shipped API invalidates a method on demand.
+   (not entrant) or missing does not. This is the read that would catch code leaving the cache
+   without a trap event (2(c)); it is tested on captured text because no shipped API invalidates
+   a method on demand.
 5. **A planted wrong answer fails every history.** A test hook adds one to the reference's answer
    for one output on one row; each of the eight histories fails, its name in the message. Without
    it, a history that compared nothing would pass.
