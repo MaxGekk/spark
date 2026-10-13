@@ -135,8 +135,9 @@ meets is `INTERNAL_ERROR` with a request to report it. Option A's family is not 
   its message parameter the original text, the context record when one exists and the request to
   report it. They keep the Java type each site throws today, so every caller and test that catches
   by type is unchanged. They apply to the `IllegalArgumentException`, `IllegalStateException` and
-  `UnsupportedOperationException` sites of all three buckets: 53 + 20 + 4 at planning and code
-  generation, 10 + 3 per batch, 17 in building options.
+  `UnsupportedOperationException` sites of all three buckets - 53 + 20 + 4 at planning and code
+  generation, 10 + 3 per batch, 17 in building options - less the one test-injection
+  `IllegalStateException`: 106 sites. The other 15 are below.
 - **Not converted**, since they are control flow or already conditioned:
   - the designed declines `VarkaEmitDeclined` (4) and `VarkaBatchDeclined` (3);
   - `VarkaKernelFailure`, which `run`'s `catch (VarkaKernelFailure)` reads, and
@@ -249,7 +250,7 @@ in high when a check added work per batch; this change adds none, so the predict
 1. No new per-batch allocation (test 5).
 2. The benchmark pair reads within the pair runner's own spread on every row.
 3. `emitted_bytes.json` is unchanged.
-4. Every invariant site of 3.1 converts with its Java type kept, and no Varka suite's outcome
+4. All 106 invariant sites of 3.1 convert with their Java type kept, and no Varka suite's outcome
    changes.
 
 ## 7. Risks
@@ -259,8 +260,8 @@ in high when a check added work per batch; this change adds none, so the predict
    changes. The conversion runs the Varka suites after each family of sites.
 2. **The record's rendering itself throws** while a failure is handled. It is built defensively: a
    field that cannot render is written as unavailable, and the original cause is always kept.
-3. **`SparkIllegalArgumentException` and `SparkIllegalStateException` are `private[spark]`.** Varka's
-   code is in `org.apache.spark` packages, and Java sees a Scala `private[spark]` class as public;
+3. **`SparkIllegalArgumentException` and `SparkIllegalStateException` are `private[spark]`.**
+   Varka's code is in `org.apache.spark` packages, and Java sees a Scala `private[spark]` class as public;
    the plan uses them from there only.
 
 ## 8. Sequencing
