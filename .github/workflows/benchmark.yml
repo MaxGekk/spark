@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       class:
-        description: 'Benchmark class'
+        description: 'Benchmark class (a glob). Several, separated by commas or spaces, run as one job each, six at a time.'
         required: true
         default: '*'
       jdk:
@@ -76,6 +76,32 @@ on:
         description: 'Extra JVM options for the benchmark driver (e.g. "-XX:MaxVectorSize=32"). Runs with and without a flag are directly comparable only on the same runner CPU, so pin expected-cpu when using this.'
         required: false
         default: ''
+      pr:
+        type: string
+        description: 'A pull request number of vecbricks/varka: the job measures refs/pull/<pr>/head of that repository instead of the dispatched ref, and the results come back as the artifact (create-commit is ignored). Blank for the dispatched ref.'
+        required: false
+        default: ''
+      pair:
+        type: boolean
+        description: 'Run dev/varka_bench_pair.sh instead of the harness: the class on the base and on the head in alternating rounds on one runner, and a verdict per row. Bare class names only; always JDK 25; tpcds, splits, sections, extra-java-options and create-commit do not apply.'
+        required: false
+        default: false
+      rounds:
+        type: string
+        description: 'Pair mode: at most this many rounds (stops early after three when every row is within 3%).'
+        required: false
+        default: '3'
+      base:
+        type: string
+        description: 'Pair mode: the base commit or ref. Blank for the merge base of the head with vecbricks/varka master; HEAD pairs the head with itself (an A/A run, the runner''s own spread).'
+        required: false
+        default: ''
+
+env:
+  # The repository whose pull requests `pr` names and whose master a pair's merge base is taken
+  # against. Named rather than read from the context because this file also runs on the owner's
+  # fork (MaxGekk/spark), whose own master is apache/spark's, months behind.
+  VARKA_BASE_REPO: vecbricks/varka
 
 jobs:
   matrix-gen:
@@ -83,17 +109,69 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
+      classes: ${{ steps.set-matrix.outputs.classes }}
+      parallel: ${{ steps.set-matrix.outputs.parallel }}
     env:
       SPARK_BENCHMARK_NUM_SPLITS: ${{ inputs.num-splits }}
+      CLASSES: ${{ inputs.class }}
+      PAIR: ${{ inputs.pair }}
+      PR: ${{ inputs.pr }}
+      ROUNDS: ${{ inputs.rounds }}
     steps:
     - name: Generate matrix
       id: set-matrix
-      run: echo "matrix=["`seq -s, 1 $SPARK_BENCHMARK_NUM_SPLITS`"]" >> $GITHUB_OUTPUT
+      shell: python3 {0}
+      run: |
+        import json, os, re, sys
+
+        def fail(msg):
+            print(f"::error::{msg}")
+            sys.exit(1)
+
+        # The class list: commas or spaces separate classes, except inside a glob's {a,b}.
+        classes, cur, depth = [], "", 0
+        for ch in os.environ["CLASSES"]:
+            depth += (ch == "{") - (ch == "}")
+            if depth == 0 and (ch == "," or ch.isspace()):
+                if cur:
+                    classes.append(cur)
+                cur = ""
+            else:
+                cur += ch
+        if cur:
+            classes.append(cur)
+        if not classes:
+            fail("no benchmark class given")
+        pair = os.environ["PAIR"] == "true"
+        if not re.fullmatch(r"[0-9]*", os.environ["PR"]):
+            fail(f"pr must be a pull request number, not '{os.environ['PR']}'")
+        if pair:
+            # dev/varka_bench_pair.sh names the results file after the class, so it needs the
+            # bare name of one class, not a glob or a package.
+            bad = [c for c in classes if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", c)]
+            if bad:
+                fail(f"pair mode takes bare class names, not {bad}")
+            if not re.fullmatch(r"[1-9][0-9]*", os.environ["ROUNDS"]):
+                fail(f"rounds must be a positive number, not '{os.environ['ROUNDS']}'")
+        # Each class's artifact needs a name of its own, without the glob's characters.
+        entries = [
+            {"name": c, "slug": f"{i + 1}-" + (re.sub(r"[^A-Za-z0-9._-]+", "_", c).strip("_") or "all")}
+            for i, c in enumerate(classes)
+        ]
+        splits = list(range(1, int(os.environ["SPARK_BENCHMARK_NUM_SPLITS"]) + 1))
+        # Six classes at a time leave the account's other runner slots to everything else; the
+        # splits of one class keep the twenty they always had.
+        parallel = 6 if len(classes) > 1 else 20
+        with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+            out.write(f"matrix={json.dumps(splits)}\n")
+            out.write(f"classes={json.dumps(entries)}\n")
+            out.write(f"parallel={parallel}\n")
+        print(f"classes: {entries}; splits: {splits}; max-parallel: {parallel}; pair: {pair}")
 
   # Any TPC-DS related updates on this job need to be applied to tpcds-1g job of build_and_test.yml as well
   tpcds-1g-gen:
     name: "Generate an TPC-DS dataset with SF=1"
-    if: inputs.generate-tpcds
+    if: inputs.generate-tpcds && !inputs.pair
     runs-on: ubuntu-latest
     env:
       SPARK_LOCAL_IP: localhost
@@ -138,16 +216,18 @@ jobs:
           mkdir -p `pwd`/tpcds-sf-1-text && rm -f `pwd`/tpcds-sf-1-text/* && `pwd`/tpcds-kit/tools/dsdgen -DISTRIBUTIONS `pwd`/tpcds-kit/tools/tpcds.idx -SCALE 1 -DIR `pwd`/tpcds-sf-1-text
 
   benchmark:
-    name: "Run benchmarks: ${{ inputs.class }} (JDK ${{ inputs.jdk }}, Scala ${{ inputs.scala }}, ${{ matrix.split }} out of ${{ inputs.num-splits }} splits)"
-    if: always()
+    name: "Run benchmarks: ${{ matrix.class.name }} (JDK ${{ inputs.jdk }}, Scala ${{ inputs.scala }}, ${{ matrix.split }} out of ${{ inputs.num-splits }} splits)"
+    if: always() && !inputs.pair && needs.matrix-gen.result == 'success'
     needs: [matrix-gen, tpcds-1g-gen]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      max-parallel: 20
+      max-parallel: ${{ fromJSON(needs.matrix-gen.outputs.parallel) }}
       matrix:
+        class: ${{ fromJSON(needs.matrix-gen.outputs.classes) }}
         split: ${{fromJSON(needs.matrix-gen.outputs.matrix)}}
     env:
+      BENCHMARK_CLASS: ${{ matrix.class.name }}
       SPARK_BENCHMARK_FAILFAST: ${{ inputs.failfast }}
       SPARK_BENCHMARK_NUM_SPLITS: ${{ inputs.num-splits }}
       SPARK_BENCHMARK_CUR_SPLIT: ${{ matrix.split }}
@@ -162,29 +242,26 @@ jobs:
     steps:
     - name: Checkout Spark repository
       uses: actions/checkout@v7
-      # In order to get diff files
+      # In order to get diff files. With `pr`, the pull request's head on the base repository,
+      # which keeps refs/pull/<n>/head for every pull request opened against it.
       with:
         fetch-depth: 0
-    - name: Check CPU model
-      env:
-        EXPECTED_CPU: ${{ inputs.expected-cpu }}
-      run: |
-        CPU_MODEL=$(grep "model name" /proc/cpuinfo | head -1 | sed 's/model name\s*:\s*//')
-        echo "Runner CPU: $CPU_MODEL"
-        echo "::notice::Runner CPU: $CPU_MODEL"
-        if [ -n "$EXPECTED_CPU" ]; then
-          if echo "$CPU_MODEL" | grep -qF "$EXPECTED_CPU"; then
-            echo "CPU matches expected: $EXPECTED_CPU"
-          else
-            echo "::error::CPU mismatch! Expected '$EXPECTED_CPU' but got '$CPU_MODEL'"
-            exit 1
-          fi
-        fi
+        repository: ${{ inputs.pr != '' && env.VARKA_BASE_REPO || github.repository }}
+        ref: ${{ inputs.pr != '' && format('refs/pull/{0}/head', inputs.pr) || '' }}
     - name: Setup build environment
       uses: ./.github/actions/setup-build-env
       with:
         java-version: ${{ inputs.jdk }}
         coursier: cache
+    # The machine, on the job that measures: every job is a fresh VM from a pool that mixes Zen 3,
+    # Zen 4, Zen 5 and two Xeons, so a check in any other job describes another machine. It needs
+    # the JDK (the probe uses jdk.incubator.vector), and stops the job here, before the build, when
+    # expected-cpu names another CPU. The CPU and the 512:256 ratio go into the provenance below.
+    - name: Probe the machine's CPU and vector datapath
+      id: probe
+      env:
+        EXPECTED_CPU: ${{ inputs.expected-cpu }}
+      run: dev/varka_datapath.sh --require any --expected-cpu "$EXPECTED_CPU" --github
     - name: Cache TPC-DS generated data
       if: inputs.generate-tpcds
       id: cache-tpcds-sf-1
@@ -195,6 +272,14 @@ jobs:
           ./tpcds-sf-1-text
         key: tpcds-${{ hashFiles('.github/workflows/benchmark.yml', 'sql/core/src/test/scala/org/apache/spark/sql/TPCDSSchema.scala') }}
     - name: Run benchmarks
+      env:
+        PR: ${{ inputs.pr }}
+        JDK: ${{ inputs.jdk }}
+        SCALA: ${{ inputs.scala }}
+        PROBE_CPU: ${{ steps.probe.outputs.cpu }}
+        PROBE_LANES: ${{ steps.probe.outputs.lanes }}
+        PROBE_CONTROL: ${{ steps.probe.outputs.control }}
+        PROBE_RATIO: ${{ steps.probe.outputs.ratio }}
       run: |
         ./build/sbt -Pscala-${{ inputs.scala }} -Pyarn -Pkubernetes -Phive -Phive-thriftserver -Phadoop-cloud -Pkinesis-asl -Pcredential-aws -Pspark-ganglia-lgpl Test/package
         # Make less noisy
@@ -226,23 +311,59 @@ jobs:
           "${EXTRA_ARGS[@]}" \
           --jars "`find . -name '*-SNAPSHOT-tests.jar' -o -name '*avro*-SNAPSHOT.jar' -o -name 'varka-engine_*-SNAPSHOT.jar' | paste -sd ',' -`,`find ~/.cache/coursier -name 'curator-test-*.jar'`" \
           "`find . -name 'spark-core*-SNAPSHOT-tests.jar'`" \
-          "${{ inputs.class }}"
+          "$BENCHMARK_CLASS"
         # Keep the committed sections the run was not asked to replace (VARKA-256): a run on
         # whichever CPU the pool assigns would otherwise rewrite every section of the file.
         if [ -n "$BENCHMARK_SECTIONS" ]; then
           python3 dev/varka_bench_sections.py restore --sections "$BENCHMARK_SECTIONS"
+        fi
+        # Provenance beside each results file the run wrote, as dev/varka_bench_regen.sh writes it
+        # on the laptop: which runner, which CPU and datapath, which commit. Not for the class `*`,
+        # which regenerates Spark's own files, whose provenance is their header line.
+        if [ "$BENCHMARK_CLASS" != '*' ]; then
+          commit="$(git rev-parse --short=11 HEAD)"
+          if [ -n "$PR" ]; then
+            commit="$commit (refs/pull/$PR/head of $VARKA_BASE_REPO)"
+          else
+            commit="$commit (${GITHUB_REF_NAME} of ${GITHUB_REPOSITORY})"
+          fi
+          { git diff --name-only; git ls-files --others --exclude-standard; } \
+            | { grep -E '/benchmarks/[^/]*-results\.txt$' || true; } | while read -r results; do
+            {
+              echo "benchmark:   $BENCHMARK_CLASS"
+              echo "where:       a GitHub-hosted runner, through .github/workflows/benchmark.yml"
+              echo "run:         $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              echo "commit:      $commit"
+              echo "date:        $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              echo "inputs:      jdk=$JDK scala=$SCALA num-splits=$SPARK_BENCHMARK_NUM_SPLITS" \
+                "extra-java-options=${EXTRA_JAVA_OPTIONS:-<none>}"
+              echo "jdk:         $(java -version 2>&1 | sed -n 2p)"
+              echo "kernel:      $(uname -r)"
+              echo "cpu:         $PROBE_CPU"
+              echo "datapath:    $PROBE_LANES lane-ops/ns at 128 / 256 / 512 bits;" \
+                "256:128 = $PROBE_CONTROL (control), 512:256 = $PROBE_RATIO" \
+                "(dev/varka_datapath.sh)"
+              echo "pinned to:   none (the runner is not pinned)"
+              if [ -n "$BENCHMARK_SECTIONS" ]; then
+                echo "sections:    $BENCHMARK_SECTIONS (the rest of the file is as committed)"
+              fi
+            } > "${results%-results.txt}-provenance.txt"
+            echo "wrote ${results%-results.txt}-provenance.txt"
+          done
         fi
         # To keep the directory structure and file permissions, tar them
         # See also https://github.com/actions/upload-artifact#maintaining-file-permissions-and-case-sensitive-files
         echo "Preparing the benchmark results:"
         tar -cvf target/benchmark-results-${{ inputs.jdk }}-${{ inputs.scala }}.tar `git diff --name-only` `git ls-files --others --exclude=tpcds-sf-1 --exclude=tpcds-sf-1-text --exclude-standard`
     - name: Create a pull request with the results
-      if: ${{ inputs.create-commit && success() }}
+      # A pull request's head lives on the base repository, which cannot push to the fork the
+      # branch came from without a stored credential, so with `pr` the artifact is the result.
+      if: ${{ inputs.create-commit && inputs.pr == '' && success() }}
       run: |
         git config --local user.name "${{ github.actor }}"
         git config --local user.email "${{ github.event.pusher.email || format('{0}@users.noreply.github.com', github.actor) }}"
         git add -A
-        git commit -m "Benchmark results for ${{ inputs.class }} (JDK ${{ inputs.jdk }}, Scala ${{ inputs.scala }}, split ${{ matrix.split }} of ${{ inputs.num-splits }})"
+        git commit -m "Benchmark results for $BENCHMARK_CLASS (JDK ${{ inputs.jdk }}, Scala ${{ inputs.scala }}, split ${{ matrix.split }} of ${{ inputs.num-splits }})"
         for i in {1..5}; do
           echo "Attempt $i to push..."
           git fetch origin ${{ github.ref_name }}
@@ -260,5 +381,138 @@ jobs:
     - name: Upload benchmark results
       uses: actions/upload-artifact@v7
       with:
-        name: benchmark-results-${{ inputs.jdk }}-${{ inputs.scala }}-${{ matrix.split }}
+        name: benchmark-results-${{ matrix.class.slug }}-${{ inputs.jdk }}-${{ inputs.scala }}-${{ matrix.split }}
         path: target/benchmark-results-${{ inputs.jdk }}-${{ inputs.scala }}.tar
+
+  # A pair: the class on a base and on the head in alternating rounds, both on this one runner,
+  # and a verdict per row (dev/varka_bench_pair.sh). One regeneration cannot tell a change from the
+  # machine's day, and a pair's alternation is the control only when both sides share a machine,
+  # so each class is one job. Two builds and at least three rounds of two class runs must fit the
+  # six-hour job cap: a class whose single run takes over about fifty minutes on a runner does not.
+  pair:
+    name: "Benchmark pair: ${{ matrix.class.name }}"
+    if: inputs.pair
+    needs: matrix-gen
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        class: ${{ fromJSON(needs.matrix-gen.outputs.classes) }}
+    env:
+      BENCHMARK_CLASS: ${{ matrix.class.name }}
+      SPARK_LOCAL_IP: localhost
+      SPARK_HOME: ${{ github.workspace }}
+    steps:
+    - name: Checkout Spark repository
+      uses: actions/checkout@v7
+      # The whole history, for the merge base. With `pr`, the pull request's head on the base
+      # repository.
+      with:
+        fetch-depth: 0
+        repository: ${{ inputs.pr != '' && env.VARKA_BASE_REPO || github.repository }}
+        ref: ${{ inputs.pr != '' && format('refs/pull/{0}/head', inputs.pr) || '' }}
+    # JDK 25 whatever `jdk` says: dev/varka_bench_regen.sh reads the -jdk25-results.txt file the
+    # harness writes under it. Two trees are compiled on this one runner, hence the disk.
+    - name: Setup build environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        java-version: '25'
+        coursier: cache
+        free-disk-space: host
+    - name: Probe the machine's CPU and vector datapath
+      id: probe
+      env:
+        EXPECTED_CPU: ${{ inputs.expected-cpu }}
+      run: dev/varka_datapath.sh --require any --expected-cpu "$EXPECTED_CPU" --github
+    - name: Resolve the module and the base
+      id: resolve
+      env:
+        BASE: ${{ inputs.base }}
+      run: |
+        src="$(find sql/catalyst/src/test sql/core/src/test \
+          \( -name "$BENCHMARK_CLASS.scala" -o -name "$BENCHMARK_CLASS.java" \) | head -1)"
+        case "$src" in
+          sql/catalyst/*) module=catalyst ;;
+          sql/core/*) module=core ;;
+          *) echo "::error::no $BENCHMARK_CLASS.scala or .java under sql/catalyst or sql/core"
+             exit 1 ;;
+        esac
+        # The merge base against the base repository's master, fetched here: the checkout's
+        # origin is the fork on the fork's runs, whose master is apache/spark's.
+        if [ -z "$BASE" ]; then
+          git fetch --no-tags -q "https://github.com/$VARKA_BASE_REPO.git" master
+          base="$(git merge-base HEAD FETCH_HEAD)"
+          how="the merge base with $VARKA_BASE_REPO master"
+        else
+          base="$(git rev-parse --verify "$BASE^{commit}")"
+          how="the base input '$BASE'"
+        fi
+        [ "$base" != "$(git rev-parse HEAD)" ] || how="$how, the head itself (an A/A pair)"
+        { echo "module=$module"; echo "base=$base"; echo "how=$how"; } >> "$GITHUB_OUTPUT"
+        echo "module $module ($src); base $base, $how; head $(git rev-parse HEAD)"
+    - name: Run the pair
+      id: pair
+      env:
+        MODULE: ${{ steps.resolve.outputs.module }}
+        BASE_SHA: ${{ steps.resolve.outputs.base }}
+        ROUNDS: ${{ inputs.rounds }}
+      # --force: a runner has no canary baseline and need not read idle; the alternation is the
+      # control here. The exit status is the verdict: 1 when a row is slower by 10% by both the
+      # median and the best.
+      run: |
+        mkdir -p target/pair
+        dev/varka_bench_pair.sh "$MODULE" "$BENCHMARK_CLASS" --base "$BASE_SHA" \
+          --rounds "$ROUNDS" --force --out target/pair 2>&1 | tee target/pair/pair.log
+    - name: Write the verdict to the summary
+      if: always() && steps.resolve.outcome == 'success'
+      env:
+        OUTCOME: ${{ steps.pair.outcome }}
+        HOW: ${{ steps.resolve.outputs.how }}
+        BASE_SHA: ${{ steps.resolve.outputs.base }}
+        ROUNDS: ${{ inputs.rounds }}
+        PROBE_CPU: ${{ steps.probe.outputs.cpu }}
+        PROBE_LANES: ${{ steps.probe.outputs.lanes }}
+        PROBE_CONTROL: ${{ steps.probe.outputs.control }}
+        PROBE_RATIO: ${{ steps.probe.outputs.ratio }}
+      run: |
+        mkdir -p target/pair
+        case "$OUTCOME" in
+          success) verdict="pass: no row slower by 10% by both the median and the best" ;;
+          failure) verdict="FAIL: a row is slower, or the pair did not finish (see the log)" ;;
+          *) verdict="$OUTCOME" ;;
+        esac
+        # From the comparison's header to its last line, "<n> rows, ... the widest change ...".
+        table="$(awk '/^ median     best  row$/ { on = 1 } on { print } on && /^[0-9]+ rows, / { exit }' \
+          target/pair/pair.log 2>/dev/null || true)"
+        {
+          echo "### Benchmark pair: $BENCHMARK_CLASS"
+          echo
+          echo "| | |"
+          echo "| --- | --- |"
+          echo "| verdict | $verdict |"
+          echo "| base | \`$BASE_SHA\`, $HOW |"
+          echo "| head | \`$(git rev-parse HEAD)\` |"
+          echo "| rounds | at most $ROUNDS |"
+          echo "| runner CPU | $PROBE_CPU |"
+          echo "| datapath | $PROBE_LANES lane-ops/ns at 128 / 256 / 512 bits;" \
+            "256:128 = $PROBE_CONTROL (control), 512:256 = $PROBE_RATIO |"
+          echo
+          echo "Each row's change of the head against the base, + faster and - slower, from each"
+          echo "side's median over its rounds and from each side's best round. The files of every"
+          echo "round of both sides are the job's artifact."
+          echo
+          echo '```'
+          echo "${table:-no table: the pair did not reach its comparison}"
+          echo '```'
+        } | tee target/pair/summary.md >> "$GITHUB_STEP_SUMMARY"
+        widest="$(printf '%s\n' "$table" | tail -1)"
+        [ -z "$widest" ] || echo "::notice::$BENCHMARK_CLASS pair: $widest"
+    - name: Upload the pair's files
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: benchmark-pair-${{ matrix.class.slug }}
+        path: target/pair
+        if-no-files-found: ignore
