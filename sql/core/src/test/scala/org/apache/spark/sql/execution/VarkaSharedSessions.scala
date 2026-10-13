@@ -155,12 +155,22 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
    * values afterwards. The setting is read when an expression is analyzed, which is inside the
    * body's queries, so it has to be live on each session while they run (VARKA-42).
    */
-  protected def withAnsi[T](enabled: Boolean)(body: => T): T = {
+  protected def withAnsi[T](enabled: Boolean)(body: => T): T =
+    withBothConf(SQLConf.ANSI_ENABLED.key, enabled.toString)(body)
+
+  /**
+   * Runs `body` with the SQL conf `key` set to `value` on `spark` and `varkaSpark`, restoring
+   * each session's previous value afterwards, or unsetting the key where it had none, so that
+   * both sides of a comparison plan their queries under the same setting.
+   */
+  protected def withBothConf[T](key: String, value: String)(body: => T): T = {
     val sessions = Seq(spark, varkaSpark)
-    val before = sessions.map(_.conf.get(SQLConf.ANSI_ENABLED.key))
-    sessions.foreach(_.conf.set(SQLConf.ANSI_ENABLED.key, enabled.toString))
-    try body
-    finally sessions.zip(before).foreach { case (s, v) => s.conf.set(SQLConf.ANSI_ENABLED.key, v) }
+    val before = sessions.map(_.conf.getOption(key))
+    sessions.foreach(_.conf.set(key, value))
+    try body finally sessions.zip(before).foreach {
+      case (session, Some(v)) => session.conf.set(key, v)
+      case (session, None) => session.conf.unset(key)
+    }
   }
 
   protected def cacheDatePairs(session: SparkSession): Unit = {
