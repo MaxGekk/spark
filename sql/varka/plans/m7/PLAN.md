@@ -453,7 +453,10 @@ repository acts only on itself. `VARKA-227.md` 3 put the whole queue on `vecbric
 which needs a personal access token on the fork with Actions write, kept as a secret there. The
 owner declined that on 2 October 2026: any workflow on any branch of the base repository can read
 a repository secret, and Actions write on the fork can dispatch workflows that push commits.
-Instead:
+The design below was the first answer. On 13 October 2026 the owner accepted `VARKA-255.md` 3.1
+and 3.2 in its place: GitHub's cron ran hours late in both repositories, so the queue became an
+admission job inside the Build and the check sync starts on each push. The two bullets below are
+kept as the record of what was replaced. The first design was:
 
 * **The queue runs on the fork.** A workflow on `MaxGekk/spark`, on a five-minute cron and
   `workflow_dispatch`, decides as 227 lays out - open pull requests without a passed Build, in
