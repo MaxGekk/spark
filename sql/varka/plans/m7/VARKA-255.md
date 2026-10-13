@@ -2,15 +2,14 @@
 
 ## 1. Where this came from
 
-Milestone 7 row 255 (`m7/PLAN.md` 2.4), item 76 redesigned. The fork's CI is kept to one Build
-at a time by `dev/varka_ci_queue.sh` (VARKA-176), a process on the owner's laptop that cancels
-the run a push starts and reruns it in turn; `VARKA-227.md` 3 proposed moving that dispatcher to
-a workflow on `vecbricks/varka` with a personal access token on the fork, and the owner declined
-any stored token on 2 October 2026. Section 2.4 then laid out the token-free split: the queue on
-`MaxGekk/spark` on a five-minute cron with its own `GITHUB_TOKEN`, the check sync on the base
-repository on a cron with its own; master's head run after each merge; a pull request's new tests
-rerun several times, and a fix's new test required to fail on the base, as ClickHouse's CI does
-(`m7/READING.md` 9).
+Milestone 7 row 255 (`m7/PLAN.md` 2.4), item 76 redesigned. The fork's CI is kept to one Build at a
+time by `dev/varka_ci_queue.sh` (VARKA-176), a process on the owner's laptop that cancels the run a
+push starts and reruns it in turn; `VARKA-227.md` 3 proposed moving that dispatcher to a workflow on
+`vecbricks/varka` with a personal access token on the fork, and the owner declined any stored token
+on 2 October 2026. `m7/PLAN.md` 2.4 then laid out the token-free split: the queue on `MaxGekk/spark`
+on a five-minute cron with its own `GITHUB_TOKEN`, the check sync on the base repository on a cron
+with its own; master's head run after each merge; a pull request's new tests rerun several times,
+and a fix's new test required to fail on the base, as ClickHouse's CI does (`m7/READING.md` 9).
 
 The halfway review of 13 October (`m7/PLAN.md` 9.2, second and third findings; 9.5) added two
 things the owner agreed to put in this row: **(a)** the benchmark pairs
@@ -21,11 +20,11 @@ and 322a-2's pair (#791) stop waiting for an idle laptop; and **(b)** each gate 
 time is recorded from CI into a committed budget, and a pull request that adds more than 5% to a
 step says so (`sql/varka/AGENTS.md`, "Pull requests").
 
-The admission check below overturns two premises of 2.4 - that a five-minute cron can drive a
-queue, and that one Build at a time is the right rule - so section 3 replaces 2.4's dispatcher
-with a different mechanism and keeps 2.4's constraints: no stored credential, each repository
-acting only on itself with its own `GITHUB_TOKEN`, and nothing on the laptop. That change is the
-owner's to accept (section 8, owner action 1).
+The admission check below overturns two premises of `m7/PLAN.md` 2.4 - that a five-minute cron can
+drive a queue, and that one Build at a time is the right rule - so section 3 replaces that section's
+dispatcher with a different mechanism and keeps its constraints: no stored credential, each
+repository acting only on itself with its own `GITHUB_TOKEN`, and nothing on the laptop. That change
+is the owner's to accept (section 8, owner action 1).
 
 ## 2. The admission check, done
 
@@ -36,10 +35,10 @@ enabled or labelled. The probe scripts lived in the scratch area and are not com
 
 ### 2.1 GitHub's cron does not fire on time here, by hours
 
-2.4 rests on a five-minute cron. GitHub's documentation says the shortest interval is five
-minutes, that "the `schedule` event can be delayed during periods of high loads" and that "some
-queued jobs may be dropped" (Events that trigger workflows, `schedule`). What it does in these
-two repositories:
+`m7/PLAN.md` 2.4 rests on a five-minute cron. GitHub's documentation says the shortest interval is
+five minutes, that "the `schedule` event can be delayed during periods of high loads" and that "some
+queued jobs may be dropped" (Events that trigger workflows, `schedule`). What it does in these two
+repositories:
 
 | workflow (repository) | cron | when it actually started | late by |
 | --- | --- | --- | --- |
@@ -56,16 +55,16 @@ only as a backstop. This also explains why pull requests' `Build` checks have re
 the laptop queue stopped dispatching the sync (2.3): the cron is the only other thing that
 updates them.
 
-**Nothing needs enabling on the fork.** 2.4 expected a step "enable the scheduled workflows once
-in the Actions tab". The fork already runs them: `actions/runs?event=schedule` on
+**Nothing needs enabling on the fork.** `m7/PLAN.md` 2.4 expected a step "enable the scheduled
+workflows once in the Actions tab". The fork already runs them: `actions/runs?event=schedule` on
 `MaxGekk/spark` reports 2,500 scheduled runs, five of them on 13 October (90 of the latest 100
 skipped, since they are apache/spark's branch schedulers). What does bind is the default-branch
 rule: `schedule`, `workflow_dispatch` and `workflow_run` all trigger "only if the workflow file
 exists on the default branch" (same page), and the fork's `master` is apache/spark's of 21 August
 (`ee11a92a9f1`); `varka-canary.yml` is not on it (404), while `benchmark.yml` is, which is why
 `benchmark.yml` can be dispatched on the fork at a PR branch's ref and a new workflow file could
-not. Section 3 puts no file on the fork's `master`, which settles open question 7.3 of
-`m7/PLAN.md` by not needing it.
+not. Section 3 puts no file on the fork's `master`, which settles open question 7.3 of `m7/PLAN.md`
+by not needing it.
 
 ### 2.2 The fork's runner slots on 13 October: full only while a full-matrix run held them
 
@@ -129,10 +128,10 @@ synced only by the late cron (2.1), and 2.2's numbers are what no queue looks li
   `reopened` and `synchronize`: every push to a pull request starts a job on the base with the
   base's write token, at the moment the fork's Build starts. That is the event the check sync can
   hang on instead of a cron. It must never check out the pull request's code, and does not.
-* **Events from a `GITHUB_TOKEN` start no workflows**, "with the exception of
-  `workflow_dispatch` and `repository_dispatch`" (Events that trigger workflows). 2.4's queue
-  would rerun with the fork's token and then wait to hear the rerun end; whether a token-made
-  rerun's completion fires `workflow_run` is not documented, and section 3 does not depend on it.
+* **Events from a `GITHUB_TOKEN` start no workflows**, "with the exception of `workflow_dispatch`
+  and `repository_dispatch`" (Events that trigger workflows). `m7/PLAN.md` 2.4's queue would rerun
+  with the fork's token and then wait to hear the rerun end; whether a token-made rerun's completion
+  fires `workflow_run` is not documented, and section 3 does not depend on it.
 
 ### 2.5 Master: nothing runs after a merge, and the weekly run does not run what it says
 
@@ -222,7 +221,7 @@ flag can only name a step beyond the spread.
 
 ### 2.8 What the check rejected
 
-1. **A cron-driven queue** (2.4): the cron runs hours late (2.1).
+1. **A cron-driven queue** (`m7/PLAN.md` 2.4): the cron runs hours late (2.1).
 2. **One Build at a time** (227): six hours on 13 October's load (2.2).
 3. **A dispatcher that cancels and reruns.** It needs a waiter that hears the rerun end, which
    with a `GITHUB_TOKEN` rerun is either an undocumented `workflow_run` or a job holding a slot;
@@ -245,19 +244,23 @@ wait for it. One step is appended to the `precondition` job of `build_and_test.y
 `Check all modules` has written `required`, and runs only on a repository other than apache/spark
 and vecbricks/varka, on a `push`:
 
-* **A scoped or documents-only run passes at once.** The step reads `required`; if `build` is not
-  `"true"` the run is not a full-matrix run (`build_and_test.yml` 230-245 set it false for both
-  scopes) and the step ends in under a second.
-* **A full-matrix run waits for older full-matrix runs.** The step lists the fork's Build runs
-  that are `queued` or `in_progress` and were created before its own, and reads each one's jobs.
-  An older run blocks while its `Check changes` job is still running, since that job either is
-  still choosing (about a minute) or is waiting at this same step, which only a full-matrix run
-  does; and while its `Precompile Spark` job exists and is not `skipped`, which marks a run that
-  passed the step as full-matrix; a run with no job started yet blocks too. The step polls every
-  120 seconds until no older run blocks. Nothing depends on reading another run's annotations or
-  outputs. Order is first come, first served by run creation, the order
-  GitHub's own queue keeps; 227's pull-request-number order assumed merges in number order, which
-  23 merges in a day out of order do not keep.
+* **A scoped or documents-only run passes at once.** "Full-matrix" here means a run whose
+  `Precompile Spark` job runs: the step evaluates that job's own condition on `required`
+  (`build_and_test.yml` 646-655: `build`, `pyspark`, `pyspark-pandas`, `pyspark-periodic` or
+  `sparkr` true), which both Varka scopes set false (230-245), so a scoped or documents-only run
+  ends the step in under a second. A run that precompiles without the module matrix, as
+  `varka-bg-processes` did on 13 October (13 jobs), counts as full: it is the precompile and its
+  dependants that take the slots.
+* **A full-matrix run waits for older full-matrix runs.** The step lists the fork's Build runs that
+  are `queued` or `in_progress` and were created before its own, and reads each one's jobs. An older
+  run blocks while its `Check changes` job (`Run / Check changes` in the jobs API, matched by
+  suffix) is still running, since that job either is still choosing (about a minute) or is waiting
+  at this same step, which only a full-matrix run does; and while its `Precompile Spark` job exists
+  and is not `skipped`, which marks a run that passed the step as full-matrix; a run with no job
+  started yet blocks too. The step polls every 120 seconds until no older run blocks. Nothing
+  depends on reading another run's annotations or outputs. Order is first come, first served by run
+  creation, the order GitHub's own queue keeps; 227's pull-request-number order assumed merges in
+  number order, which 23 merges in a day out of order do not keep.
 * **`ci-hold` takes a pull request out.** The step finds its pull request on the base
   (`pulls?head=MaxGekk:<branch>`) and, when it carries the label, fails with "held by ci-hold".
   The run stops at its first job; removing the label and rerunning the run resumes it.
@@ -290,7 +293,7 @@ an hour per waiting run with five runs in flight.
 `update_build_status.yml` keeps its pass as it is and gains a loop and a trigger:
 
 * **Trigger**: `pull_request_target` on `opened`, `reopened` and `synchronize`, the event
-  `notify_test_workflow.yml` already takes (2.4), beside the cron (kept as a backstop) and
+  `notify_test_workflow.yml` already takes (2.4 above), beside the cron (kept as a backstop) and
   `workflow_dispatch`.
 * **Loop**: the pass repeats every 120 seconds while any open pull request's `Build` check is not
   completed, and ends when all are, or at 345 minutes. A pass patches a check only when its
@@ -318,6 +321,13 @@ with the newest (GitHub's default for a group, Workflow syntax, `concurrency`), 
 builds the last head of the burst; on 13 October's 23 merges that is a run every half hour while
 merges come. A failure is visible on the commit and the workflow's page; the CI-failure
 investigation in `CLAUDE.md` applies unchanged.
+
+The Varka suite jobs' second step runs one emit-option configuration, chosen from the option a
+diff names or a hash of the branch name, and blames only failures the merge base does not share
+(`sql/varka/AGENTS.md`, "Measurements"). On a push to `master` there is no pull-request diff and
+the merge base is the head itself, so 255b reads what `dev/varka_scoped_suites.sh` does with those
+inputs on `master` and gives the master run a fixed choice - the defaults, or a rotation by date -
+before its first run rather than after its first red one.
 
 `varka-weekly-matrix.yml` passes an explicit `jobs` JSON too, Spark's full module set as
 `build_java25.yml` names it, so that it runs the matrix its comment promises; and the
@@ -455,12 +465,12 @@ None: no emitted code changes.
 
 ## 5. Tests, and what each is for
 
-1. **`dev/varka_ci_admit.py` over recorded API responses** (unit tests in Python, run by the
-   docs job): a scoped run passes; a full run with an older full run in flight waits and with only
-   younger ones passes; a full run behind an older run still in its `Check changes` job waits; a
-   held pull request fails; a finished first job with neither name fails loudly; a run listing
-   with a completed older run passes. Without these, the only test of the step is a live day of
-   CI.
+1. **`dev/varka_ci_admit.py` over recorded API responses** (unit tests in Python, run by the docs
+   job): a scoped run passes; a run with only `pyspark` true counts as full; a full run with an
+   older full run in flight waits and with only younger ones passes; a full run behind an older run
+   still in its `Check changes` job waits; a held pull request fails; a finished first job with
+   neither name fails loudly; a run listing with a completed older run passes. Without these, the
+   only test of the step is a live day of CI.
 2. **The step on the fork, live**: a scoped push passes the step in under a second; two
    full-matrix pushes (a workflow-file change each) a minute apart: the second's log says it
    waited on the first's run id and its fan-out starts within one poll of the first's end.
@@ -571,7 +581,7 @@ on it and it touches nothing the others do.
 
 **Owner actions**, none of which an agent may take:
 
-1. **Accept 3.1 and 3.2 in place of 2.4's cron dispatcher**, on 2.1 and 2.2's numbers.
+1. **Accept 3.1 and 3.2 in place of `m7/PLAN.md` 2.4's cron dispatcher**, on 2.1 and 2.2's numbers.
 2. **Create the labels `ci-hold` and `fix` on `vecbricks/varka`** before 255c and 255e merge;
    neither exists today (`repos/vecbricks/varka/labels`).
 3. **Stop starting `dev/varka_ci_queue.sh run`, `hold` and `drop`** once 255c merges; a held
