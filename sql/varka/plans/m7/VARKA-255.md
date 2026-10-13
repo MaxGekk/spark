@@ -626,3 +626,88 @@ on it and it touches nothing the others do.
 
 ## 9. Outcome
 
+### 9.1 255a: benchmark pairs and results files on GitHub-hosted runners (14 October 2026)
+
+**What landed.** `benchmark.yml` gains four inputs (`pr`, `pair`, `rounds`, and `base`, which
+test 8 needed for an A/A run and which also takes a commit or a branch of `vecbricks/varka`),
+fourteen in all; GitHub accepted the dispatch, so the old limit of ten no longer binds. A list in
+`class` is one job per class, six at a time (the splits of one class keep twenty). Every
+measuring job runs `dev/varka_datapath.sh --require any` first; it stops the job only when
+`expected-cpu` names another machine. In pair mode the job resolves the module from the class's
+source, takes the merge base against `vecbricks/varka`'s master fetched by URL (so the fork's
+August `origin` never enters), and runs `dev/varka_bench_pair.sh ... --force --out target/pair`
+on JDK 25; the verdict, the per-row table, the CPU and the probe go to the job summary, and every
+round's results file, provenance and log to the artifact. Results-file mode with `pr` writes a
+`-provenance.txt` beside each results file it changes (runner, run URL, commit, inputs, JDK,
+kernel, CPU, the probe's lanes and ratio; not for the class `*`) and returns both as the
+artifact; `create-commit` is skipped with `pr`. With `pr` the scripts come from the workflow's own
+commit (`.varka-tooling`), the pull request's checkout gets no credentials, and the workflow's
+token is read-only except for the harness job, which `create-commit` needs. The pair script gained
+`--out DIR`, and its forced idle wait gives up after two minutes with a warning;
+`dev/varka_bench_regen.sh` no longer hands `taskset` an unmatched glob on a machine with no
+cpufreq directory.
+
+**Test 8, the runner A/A pair.** `VarkaRangeFilterBenchmark`, `base=HEAD`, three rounds, run
+[38467933738](https://github.com/MaxGekk/spark/actions/runs/38467933738) on the fork at
+`8a854eec54f`: an Intel Xeon 6973P-C (Granite Rapids), probe 48.2 / 97.1 / 130.2 lane-ops/ns,
+control 2.01, 512:256 = 1.34. Verdict **pass**: 18 rows, none slower or faster by 10% by both the
+median and the best. The widest change is **504.9% by median and 110.0% by best**, and both come
+from rows that are bimodal across JVM forks rather than from the pair: `200 ranges ... Varka,
+split conditions` read a best time of 87 to 93 ms in three runs and 346 to 1,348 ms in the other
+three, with a standard deviation of 1,800 to 2,500 ms inside every run, so whichever side drew
+two slow forks lost by its median; `48 ranges ... split conditions` is the same by its best.
+Without those two rows the widest change is 18.2% by median and 7.3% by best. The laptop's only
+recorded A/A (`VARKA-256.md` 9, `VarkaCompileBenchmark`, a different class) was within 4.1% by
+median. So on a runner, **a row is read by the best and against its own A/A**, which is what the
+pair's both-measures rule already does: the four rows the median alone flagged (marked "the
+median's alone") are the A/A's noise, and the verdict, which needs both measures, stayed a pass.
+The job took 67 minutes: 5 minutes of setup, then 61 for the base's build, the head's and six
+class runs.
+
+A first dispatch ([38465858064](https://github.com/MaxGekk/spark/actions/runs/38465858064))
+"passed" in five minutes having measured nothing: its pair step piped through `tee` without
+`pipefail` (GitHub's default `bash -e`), and the regeneration script failed its first round on
+the `taskset` glob. Both are fixed above, and the lesson is in `skills/benchmarking.md`.
+
+**Results-file mode.** Run [38467960582](https://github.com/MaxGekk/spark/actions/runs/38467960582)
+with `pr=799` and `class=VarkaRangeFilterBenchmark,CachedTableWidthBenchmark`: two jobs, both
+green, each artifact holding the class's `-jdk25-results.txt` and the new provenance file (AMD
+EPYC 9V74, 512:256 = 0.91), and nothing from `.varka-tooling`. An earlier run of the same inputs
+failed with "No benchmark found to run": the harness matches its glob against the fully qualified
+name, so a bare name now becomes `*.<Name>`.
+
+**`VarkaWideKernelBenchmark` stays a laptop pair.** A subset path would need the regeneration
+script to run without `SPARK_GENERATE_BENCHMARK_FILES` (which `VarkaBenchmarkBase` requires for
+a partial run, `VarkaBenchmarkBase.java:64-70`), a parser for the harness's printed table in place
+of the results file the pair reads each round, and a way to shard the class's cases over jobs
+whose verdicts are then merged. That is a row's work, not a step of this one, and one class does
+not repay it. Its *results file* fits a runner as a single harness run (88 to 189 minutes, 2.6);
+only its pair does not.
+
+**Predictions.** 7 is half scored: a fourteen-minute class paired at three rounds in 67 minutes,
+so a twenty-minute one is on course for well under four hours; the three waiting jobs are
+dispatched after this merges. 8 is open: one CPU model so far, under 10% by best on all but one
+bimodal row and not by median.
+
+**After the merge**, the three waiting jobs, on `vecbricks/varka`:
+
+```
+# 322a: the A/A on the Java side, then the nine ported classes against their Scala form
+gh workflow run benchmark.yml -R vecbricks/varka -f pr=780 -f pair=true \
+  -f class=VarkaEmissionBenchmark -f base=HEAD
+gh workflow run benchmark.yml -R vecbricks/varka -f pr=780 -f pair=true -f rounds=3 \
+  -f class="VarkaCodegenBenchmark,VarkaUnreadLocalsBenchmark,VarkaSharedPrefixBenchmark,\
+VarkaLongLaneBenchmark,VarkaEmissionBenchmark,VarkaVectorApiProbeBenchmark,\
+VarkaMethodSizeBenchmark,VarkaArithmeticBenchmark,VarkaTimeBenchmark"
+# 325 (#789): both results files, and the emission class's pair
+gh workflow run benchmark.yml -R vecbricks/varka -f pr=789 -f jdk=25 -f generate-tpcds=false \
+  -f class="VarkaWideKernelBenchmark,VarkaEmissionBenchmark" \
+  -f extra-java-options="--add-modules jdk.incubator.vector"
+gh workflow run benchmark.yml -R vecbricks/varka -f pr=789 -f pair=true \
+  -f class=VarkaEmissionBenchmark
+# 322a-2 (#791)
+gh workflow run benchmark.yml -R vecbricks/varka -f pr=791 -f pair=true -f rounds=5 \
+  -f class=VarkaEmitterParityBenchmark
+```
+
+`VarkaWideKernelBenchmark`'s pairs (322a's tenth, 325's second) stay on the laptop.

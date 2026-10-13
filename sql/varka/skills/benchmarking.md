@@ -204,6 +204,39 @@ Two tools (VARKA-256):
   change (+ faster, - slower, the diff tool's sign); it exits 1 if any row is slower by 10% and
   stops early within 3%. Reach for it for a claim of "no row moves", which a single regeneration
   cannot make, and for a claim near the noise (under about 1.3, the repo's own rule).
+* **Both run on GitHub-hosted runners, with no laptop in the path** (VARKA-255): dispatch
+  `benchmark.yml` with `pair=true` and bare class names for pairs, or without it for results
+  files, and `pr=<n>` to measure a pull request of `vecbricks/varka`
+  (`gh workflow run benchmark.yml -R vecbricks/varka -f pr=<n> -f pair=true
+  -f class="A,B" -f rounds=3`). Each class is one job, six at a time; a pair's two sides share
+  that job's machine, which is what makes its alternation a control, and the job probes that
+  machine's datapath first (`dev/varka_datapath.sh`) and puts the verdict, the per-row table, the
+  CPU and the 512:256 ratio in its summary, every round's files in its artifact. The merge base is
+  taken against `vecbricks/varka`'s master even on the fork, whose `origin` master is
+  apache/spark's of August; `base=HEAD` is the A/A run. A results file from a `pr` run comes back
+  as the artifact with a provenance file beside it, for the author to commit; `create-commit`
+  only pushes to the dispatched branch. A class whose single run takes over about fifty minutes
+  on a runner (`VarkaWideKernelBenchmark`) cannot pair inside the six-hour job cap and stays a
+  laptop pair.
+
+## A runner pair that fails can still report a pass: three traps of the first one
+
+The first A/A pair on a GitHub-hosted runner (VARKA-255) "passed" in five minutes having
+measured nothing. Three things, each cheap to check before the next workflow that wraps a script:
+
+* **A `run:` step without `shell: bash` has no `pipefail`.** GitHub runs an unspecified Linux
+  shell as `bash -e {0}`, and only an explicit `shell: bash` adds `-o pipefail`. So
+  `script | tee log` reports `tee`'s success whatever the script did; the pair's verdict is its
+  exit status, and it was thrown away. Set `shell: bash` on any step that pipes the command whose
+  status matters.
+* **A runner VM has no `/sys/devices/system/cpu/cpu*/cpufreq`.** A loop over
+  `cpu[0-9]*/cpufreq` then runs once on the unmatched glob itself; the regeneration script's
+  automatic pin handed `taskset -c` the text `[0-9]*` and the first round died. Test `-d` inside
+  such a loop, so a machine without the directory gets no pin rather than a nonsense one.
+* **A pull request's tree carries the scripts it was branched with.** Measuring `pr=<n>` with the
+  pull request's own `dev/` runs whatever version that branch has, which for a branch older than
+  a script's change lacks its options. The workflow checks out its own commit's `dev/` beside the
+  tree (`.varka-tooling`) and runs that against the pull request's code.
 
 ## A benchmark number is reproducible within a run and not between runs
 
