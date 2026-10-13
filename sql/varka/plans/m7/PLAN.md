@@ -847,14 +847,34 @@ serves no point of 1.1 is an item in `m8/SCOPE.md` (as items 93 to 95 were on 13
 
 ### 9.5 Practices this review changes
 
-* **The authoring agent reviews its own pull request before opening it**, with the review the
-  owner runs (`/code-review`), and fixes what it finds; the owner's review after CI then starts
-  from a clean diff.
-* **Parallel agents are given the files they own**, and work that touches one file is staggered;
-  no agent uses `git stash`, which every worktree shares, or kills a process it did not start.
-* **A finding becomes a row only through a point of 1.1**, named in the row.
-* **A benchmark port merges with its pair**, or the pull request says why not and names the row
+Proposed point by point against 9.2 and agreed by the owner on 13 October 2026.
+
+* **Against the drift (9.2, first finding).** Until point 1 and point 5 each have a row in flight,
+  every other task started comes from one of them; 243 starts as soon as 271b, 138b and 274a land,
+  before 272, 279 or 298. And the state against 1.1 is written as a two-line note under this
+  section after every five merged rows, not only at the halfway point, so a drift shows within
+  days.
+* **Against the laptop bottleneck (second finding).** 255 is the next row of work after the rows
+  in flight, and the benchmark pairs move to GitHub-hosted runners through `benchmark.yml`, whose
+  runner now starts the Java ports, with the datapath probe checked first, so 322a's pairs, 325's
+  results files and 322a-2's pair stop waiting for an idle laptop.
+* **Against the tests' growing cost (third finding).** 255 also records each gate and nightly
+  step's time from CI, and a committed budget holds them; a pull request that adds more than 5% to
+  a step says so, with the times before and after. The first budget is the times of 13 October, so
+  138a's 27%, 274a's 6% and the golden-file step's 21 minutes are recorded rather than lost.
+* **Against reviews after CI (fourth finding).** The authoring agent reviews its own pull request
+  before opening it (`/code-review high` on the diff), fixes what it verifies and says what the
+  review found; every agent brief ends with that, and the owner's review after CI is the second
+  look (`sql/varka/AGENTS.md`, "Pull requests", #797).
+* **Against agents colliding (fifth finding).** No `git stash`, no writes outside one's own
+  worktree, the files an agent edits named in its first message, and tasks that edit one file run
+  one after the other, each brief listing the files its agent owns (`sql/varka/AGENTS.md`,
+  "Processes", #797; the pattern-kill hook and `dev/varka_bg.sh` came first, #783).
+* **Against optimistic cost predictions (sixth finding).** A calibration table in
+  `skills/testing-and-debugging.md` holds every scored cost prediction, predicted against measured
+  with the ratio; a new plan states its cost prediction at the observed ratio unless it says why
+  not (#797).
+* **A finding becomes a row only through a point of 1.1**, named in the row; otherwise it is an
+  item in `m8/SCOPE.md`.
+* **A benchmark port merges with its pair**, or its pull request says why not and names the row
   that owes it.
-* **A plan that adds test time states it against a budget**: the gate's and the nightly's times
-  before and after, so the total is tracked, and its cost predictions are read against the
-  previous plans' misses.
