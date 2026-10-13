@@ -222,9 +222,24 @@ every Scala-to-Java port; existing Java that a change does not touch is not swep
 * **Explicit imports.** No `import module`: it hides what a file depends on, and Spark's
   checkstyle expects imports by name.
 
+**The suites.**
+
+* **A new catalyst suite whose helpers are Java is a JUnit 5 class under `@VarkaSuite`**
+  (VARKA-312), each `@Test` carrying its sentence as a `@DisplayName`, the way a ScalaTest test is
+  named: `@DisplayName("a reduction that fails differently is not smaller")`, not a method name
+  standing in for one. The sentence is the test's name in sbt's output, the matrix's report, the
+  JUnit XML and `sql/varka/matrix/skips.tsv`. `@Tag(VarkaSuite.PINS_DEFAULTS)` is `PinsDefaults`,
+  and the annotation's `watchdogMinutes` and `ownJvm` are the ScalaTest traits' parameters;
+  `dev/varka_matrix.sh` finds a `Varka...Suite` under it beside the Scala suites, so the gate and
+  CI run it with no change. `sql/varka/skills/testing-and-debugging.md` says how to write and run
+  one.
+* **An existing ScalaTest suite moves only when a task touches it**, as for other code, and the
+  sql/core suites stay ScalaTest: their base is Spark's `SharedSparkSession`, which no JUnit
+  extension provides yet.
+
 **What stays as it is.** Spark's interop surface stays Scala - the `SparkPlan` subclasses, the
-Catalyst rules, the ScalaTest suites - as the migration rule below says. Test helpers are Java and
-the suites thin Scala wrappers over them. A new benchmark is Java on `VarkaBenchmarkBase`, the
+Catalyst rules, the ScalaTest suites over Spark's sessions - as the migration rule below says.
+Test helpers are Java, and an existing ScalaTest suite is a thin Scala layer over them. A new benchmark is Java on `VarkaBenchmarkBase`, the
 catalyst test tree's adapter over Spark's harness (VARKA-224), and a Scala benchmark is ported
 when a task touches it, the port proving itself by reproducing its committed results; the engine module's tests are JUnit 5 as they are, and no
 new assertion library comes in. A refactor is proven by `emitted_bytes.json` byte-identical, a
