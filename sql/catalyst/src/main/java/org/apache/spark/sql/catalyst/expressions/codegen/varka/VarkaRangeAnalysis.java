@@ -88,12 +88,15 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Yea
  * policy for its own subtree whatever the caller's policy was, so a producer under a
  * {@code last_day} inside a {@code datediff} is still bounded.
  *
- * <p><b>Under {@code INT} every answer is an interval symmetric about zero</b>, {@code [-m, m]}.
- * That reproduces the magnitude arithmetic the compiler used before this class exactly: a sum
- * bounds as the sum of magnitudes, a product as their product, and the hull nodes stay unknown.
- * Both are looser than interval arithmetic could be and are registered as debt rather than
- * changed here, because the refactor's contract is that every shape is admitted or declined as
- * before.
+ * <p><b>Under {@code INT} the answers the compiler's trees produce are intervals symmetric about
+ * zero</b>, {@code [-m, m]}. That reproduces the magnitude arithmetic the compiler used before
+ * this class exactly: a sum bounds as the sum of magnitudes, a product as their product, and the
+ * hull nodes stay unknown. Both are looser than interval arithmetic could be and are registered
+ * as debt rather than changed here, because the refactor's contract is that every shape is
+ * admitted or declined as before. Two arms answer asymmetric intervals - a {@link GuardedRange}'s
+ * own bounds and a {@link BoundedDivide}'s {@code [0, q]} - so the arithmetic arms are the
+ * lattice's general operations, which {@code range_analysis.smt2} proves over two general
+ * intervals (VARKA-281).
  *
  * <p>The switch over the sealed IR is exhaustive, so a node type without a transfer function
  * does not compile - which is the protection the two traversals this replaces did not have. The
@@ -336,10 +339,20 @@ public final class VarkaRangeAnalysis {
     return VarkaValueRange.UNKNOWN;
   }
 
-  /** Int arithmetic over the operands' magnitudes: a product for {@code MUL}, a sum otherwise. */
+  /**
+   * Int arithmetic over the operands' intervals: the lattice's product, sum or difference. Over
+   * the symmetric intervals the compiler's int trees produce, the difference is the sum, which is
+   * what this answered for {@code SUB} until VARKA-281's review: over asymmetric operands - a
+   * {@link BoundedDivide}'s {@code [0, q]}, an int-lane {@link GuardedRange}'s bounds - the sum
+   * misses the negative differences, and no compiler path composed such operands only by luck.
+   */
   private static Range arith(IntArith n, GuardPolicy policy, IntUnaryOperator literals) {
     Range l = range(n.left(), Kind.INT, policy, literals);
     Range r = range(n.right(), Kind.INT, policy, literals);
-    return n.op() == IntOp.MUL ? l.mul(r) : l.add(r);
+    return switch (n.op()) {
+      case ADD -> l.add(r);
+      case SUB -> l.sub(r);
+      case MUL -> l.mul(r);
+    };
   }
 }

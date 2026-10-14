@@ -193,7 +193,7 @@
 (check-sat)
 (pop 1)
 
-(echo "quotientBound(DAY_OF_NANOS, 60000000000) is 1440, as the renderer computes it: expect unsat")
+(echo "quotientBound(DAY_OF_NANOS, 60000000000) is 1440, as ConstDivide.quotientBound computes it: expect unsat")
 (push 1)
 (assert (not (= (div (+ 86400000000000 59999999999) 60000000000) 1440)))
 (check-sat)
@@ -204,8 +204,7 @@
 (declare-const x Int)
 (assert (and (<= 0 x) (< x 1440)))
 (define-fun r () Int (jlong.sub x (jlong.mul (jlong.div x 60) 60)))
-(assert (= r (mod x 60)))
-(assert (not (and (<= 0 r) (<= r 59))))
+(assert (not (and (<= 0 r) (<= r 59) (= r (mod x 60)))))
 (check-sat)
 (pop 1)
 
@@ -214,8 +213,7 @@
 (declare-const x Int)
 (assert (and (<= 0 x) (< x 1440)))
 (define-fun r () Int (jlong.sub x (jlong.mul (jlong.div x 60) 60)))
-(assert (= r (mod x 60)))
-(assert (not (and (<= (+ 0 1) r) (<= r 59))))
+(assert (not (and (<= (+ 0 1) r) (<= r 59) (= r (mod x 60)))))
 (check-sat)
 (pop 1)
 
@@ -224,8 +222,7 @@
 (declare-const x Int)
 (assert (and (<= 0 x) (< x 1440)))
 (define-fun r () Int (jlong.sub x (jlong.mul (jlong.div x 60) 60)))
-(assert (= r (mod x 60)))
-(assert (not (and (<= 0 r) (<= r (- 59 1)))))
+(assert (not (and (<= 0 r) (<= r (- 59 1)) (= r (mod x 60)))))
 (check-sat)
 (pop 1)
 
@@ -247,7 +244,7 @@
 (check-sat)
 (pop 1)
 
-(echo "quotientBound(DAY_OF_NANOS, 1000000000) is 86400, as the renderer computes it: expect unsat")
+(echo "quotientBound(DAY_OF_NANOS, 1000000000) is 86400, as ConstDivide.quotientBound computes it: expect unsat")
 (push 1)
 (assert (not (= (div (+ 86400000000000 999999999) 1000000000) 86400)))
 (check-sat)
@@ -258,8 +255,7 @@
 (declare-const x Int)
 (assert (and (<= 0 x) (< x 86400)))
 (define-fun r () Int (jlong.sub x (jlong.mul (jlong.div x 60) 60)))
-(assert (= r (mod x 60)))
-(assert (not (and (<= 0 r) (<= r 59))))
+(assert (not (and (<= 0 r) (<= r 59) (= r (mod x 60)))))
 (check-sat)
 (pop 1)
 
@@ -268,8 +264,7 @@
 (declare-const x Int)
 (assert (and (<= 0 x) (< x 86400)))
 (define-fun r () Int (jlong.sub x (jlong.mul (jlong.div x 60) 60)))
-(assert (= r (mod x 60)))
-(assert (not (and (<= (+ 0 1) r) (<= r 59))))
+(assert (not (and (<= (+ 0 1) r) (<= r 59) (= r (mod x 60)))))
 (check-sat)
 (pop 1)
 
@@ -278,8 +273,7 @@
 (declare-const x Int)
 (assert (and (<= 0 x) (< x 86400)))
 (define-fun r () Int (jlong.sub x (jlong.mul (jlong.div x 60) 60)))
-(assert (= r (mod x 60)))
-(assert (not (and (<= 0 r) (<= r (- 59 1)))))
+(assert (not (and (<= 0 r) (<= r (- 59 1)) (= r (mod x 60)))))
 (check-sat)
 (pop 1)
 

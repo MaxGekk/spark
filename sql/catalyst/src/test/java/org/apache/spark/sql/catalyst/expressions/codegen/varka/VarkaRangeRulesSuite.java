@@ -151,9 +151,31 @@ public final class VarkaRangeRulesSuite {
   @DisplayName("dayofweek, the ISO weekday and weekday of every admitted day lie under their "
       + "magnitudes")
   void weekdays() {
-    sweep("the weekdays", d -> within((Math.floorMod(d, 7) + 4) % 7 + 1, 1,
+    // Spark's own definitions, through java.time: dayofweek is Sunday 1 to Saturday 7, the ISO
+    // weekday Monday 1 to Sunday 7, and weekday Monday 0 to Sunday 6 - not the lanes' floorMod
+    // forms, which range_calendar.smt2 proves and which would hold by construction here.
+    sweep("the weekdays", d -> within(DateTimeUtils.getDayOfWeek(d), 1,
             VarkaRangeAnalysis.DAY_OF_WEEK_MAGNITUDE)
         && within(DateTimeUtils.getWeekDay(d) + 1, 1, VarkaRangeAnalysis.DAY_OF_WEEK_MAGNITUDE)
-        && within((Math.floorMod(d, 7) + 3) % 7, 0, VarkaRangeAnalysis.WEEK_DAY_MAGNITUDE));
+        && within(DateTimeUtils.getWeekDay(d), 0, VarkaRangeAnalysis.WEEK_DAY_MAGNITUDE));
+  }
+
+  @Test
+  @DisplayName("IntArith SUB over asymmetric operands answers the differences, not the sums")
+  void subtractionOverAsymmetricOperands() {
+    // Found by VARKA-281's review: `arith` answered the sum's interval for SUB, which is the
+    // difference's only over symmetric operands. Over two BoundedDivide answers, [0, 52] and
+    // [0, 3], the sum's [0, 55] misses day_of_year 1 of a December: 0 - 3.
+    var c0 = new VarkaVectorIR.ColumnRef(0);
+    var dayOfYearWeeks = VarkaVectorIR.BoundedDivide.of(new VarkaVectorIR.DayOfYear(c0), 7, 367);
+    var monthQuarters = VarkaVectorIR.BoundedDivide.of(new VarkaVectorIR.Month(c0), 4, 13);
+    var difference = new VarkaVectorIR.IntArith(VarkaVectorIR.IntOp.SUB,
+        VarkaVectorIR.Overflow.WRAP, dayOfYearWeeks, monthQuarters);
+    VarkaValueRange.Range answer = VarkaRangeAnalysis.range(difference,
+        VarkaRangeAnalysis.Kind.INT, VarkaRangeAnalysis.GuardPolicy.NONE, i -> {
+          throw new IllegalStateException("no literal slots");
+        });
+    assertTrue(answer.equals(VarkaValueRange.of(-3, 52)), () -> "SUB answered " + answer);
+    assertTrue(answer.within(-3, 52) && !answer.within(0, 55));
   }
 }

@@ -24,8 +24,8 @@
 ; each claim. add_months with the month count symbolic is one check split by the signs of
 ; the count, the year and the target year: as one check it takes Z3 12 s and cvc5 cannot
 ; decide it under QF_NIA (VARKA-281.md 2.3); the file declares ALL. The weekday fields and
-; weekofyear rest on VarkaRangeRulesSuite's sweep of the admitted range against java.time,
-; which every rule here is swept by as well.
+; weekofyear are stated over the forms the lanes compute; that each form is java.time's
+; field, like every rule here, is VarkaRangeRulesSuite's sweep of the admitted range.
 ;
 ; Rendered by VarkaProofFiles. VarkaProofFilesSuite fails when this file differs from its
 ; rendering, and VARKA_PROOFS_REGEN=true build/sbt 'catalyst/testOnly *VarkaProofFilesSuite'
@@ -1968,5 +1968,122 @@
 (assert (and (<= (- 12801) y) (<= y 42401) (<= 1 m) (<= m 12) (<= 1 d) (<= d (cal.mlen y m))))
 (assert (and (<= (- 5394572) (cal.epoch y m d)) (<= (cal.epoch y m d) 14766813)))
 (assert (not (and (<= 1 m) (<= m 12))))
+(check-sat)
+(pop 1)
+
+(echo "month: the month lies in [1, 12]: with the low end raised by one it is not: expect sat")
+(push 1)
+(declare-const y Int) (declare-const m Int) (declare-const d Int)
+(assert (and (<= (- 12801) y) (<= y 42401) (<= 1 m) (<= m 12) (<= 1 d) (<= d (cal.mlen y m))))
+(assert (and (<= (- 5394572) (cal.epoch y m d)) (<= (cal.epoch y m d) 14766813)))
+(assert (not (and (<= (+ 1 1) m) (<= m 12))))
+(check-sat)
+(pop 1)
+
+(echo "month: the month lies in [1, 12]: with the high end lowered by one it is not: expect sat")
+(push 1)
+(declare-const y Int) (declare-const m Int) (declare-const d Int)
+(assert (and (<= (- 12801) y) (<= y 42401) (<= 1 m) (<= m 12) (<= 1 d) (<= d (cal.mlen y m))))
+(assert (and (<= (- 5394572) (cal.epoch y m d)) (<= (cal.epoch y m d) 14766813)))
+(assert (not (and (<= 1 m) (<= m (- 12 1)))))
+(check-sat)
+(pop 1)
+
+; The weekday fields and the week, over the forms the lanes compute, for every int epoch day e;
+; that each form is java.time's field is VarkaRangeRulesSuite's sweep.
+
+(echo "dayofweek: (floorMod(e, 7) + 4) % 7 + 1, Sunday 1 to Saturday 7, lies in [1, 7]: expect unsat")
+(push 1)
+(declare-const e Int)
+(assert (jint.in e))
+(assert (not (and (<= 1 (+ (mod (+ (jint.floorMod e 7) 4) 7) 1)) (<= (+ (mod (+ (jint.floorMod e 7) 4) 7) 1) 7))))
+(check-sat)
+(pop 1)
+
+(echo "dayofweek: (floorMod(e, 7) + 4) % 7 + 1, Sunday 1 to Saturday 7, lies in [1, 7]: with the low end raised by one it is not: expect sat")
+(push 1)
+(declare-const e Int)
+(assert (jint.in e))
+(assert (not (and (<= (+ 1 1) (+ (mod (+ (jint.floorMod e 7) 4) 7) 1)) (<= (+ (mod (+ (jint.floorMod e 7) 4) 7) 1) 7))))
+(check-sat)
+(pop 1)
+
+(echo "dayofweek: (floorMod(e, 7) + 4) % 7 + 1, Sunday 1 to Saturday 7, lies in [1, 7]: with the high end lowered by one it is not: expect sat")
+(push 1)
+(declare-const e Int)
+(assert (jint.in e))
+(assert (not (and (<= 1 (+ (mod (+ (jint.floorMod e 7) 4) 7) 1)) (<= (+ (mod (+ (jint.floorMod e 7) 4) 7) 1) (- 7 1)))))
+(check-sat)
+(pop 1)
+
+(echo "the ISO weekday: floorMod(e + 3, 7) + 1, Monday 1 to Sunday 7, lies in [1, 7]: expect unsat")
+(push 1)
+(declare-const e Int)
+(assert (jint.in e))
+(assert (not (and (<= 1 (+ (jint.floorMod (jint.add e 3) 7) 1)) (<= (+ (jint.floorMod (jint.add e 3) 7) 1) 7))))
+(check-sat)
+(pop 1)
+
+(echo "the ISO weekday: floorMod(e + 3, 7) + 1, Monday 1 to Sunday 7, lies in [1, 7]: with the low end raised by one it is not: expect sat")
+(push 1)
+(declare-const e Int)
+(assert (jint.in e))
+(assert (not (and (<= (+ 1 1) (+ (jint.floorMod (jint.add e 3) 7) 1)) (<= (+ (jint.floorMod (jint.add e 3) 7) 1) 7))))
+(check-sat)
+(pop 1)
+
+(echo "the ISO weekday: floorMod(e + 3, 7) + 1, Monday 1 to Sunday 7, lies in [1, 7]: with the high end lowered by one it is not: expect sat")
+(push 1)
+(declare-const e Int)
+(assert (jint.in e))
+(assert (not (and (<= 1 (+ (jint.floorMod (jint.add e 3) 7) 1)) (<= (+ (jint.floorMod (jint.add e 3) 7) 1) (- 7 1)))))
+(check-sat)
+(pop 1)
+
+(echo "weekday: (floorMod(e, 7) + 3) % 7, Monday 0 to Sunday 6, lies in [0, 6]: expect unsat")
+(push 1)
+(declare-const e Int)
+(assert (jint.in e))
+(assert (not (and (<= 0 (mod (+ (jint.floorMod e 7) 3) 7)) (<= (mod (+ (jint.floorMod e 7) 3) 7) 6))))
+(check-sat)
+(pop 1)
+
+(echo "weekday: (floorMod(e, 7) + 3) % 7, Monday 0 to Sunday 6, lies in [0, 6]: with the low end raised by one it is not: expect sat")
+(push 1)
+(declare-const e Int)
+(assert (jint.in e))
+(assert (not (and (<= (+ 0 1) (mod (+ (jint.floorMod e 7) 3) 7)) (<= (mod (+ (jint.floorMod e 7) 3) 7) 6))))
+(check-sat)
+(pop 1)
+
+(echo "weekday: (floorMod(e, 7) + 3) % 7, Monday 0 to Sunday 6, lies in [0, 6]: with the high end lowered by one it is not: expect sat")
+(push 1)
+(declare-const e Int)
+(assert (jint.in e))
+(assert (not (and (<= 0 (mod (+ (jint.floorMod e 7) 3) 7)) (<= (mod (+ (jint.floorMod e 7) 3) 7) (- 6 1)))))
+(check-sat)
+(pop 1)
+
+(echo "weekofyear: (doy - 1) / 7 + 1 over the Thursday's day of the year, in [1, 366], lies in [1, 53]: expect unsat")
+(push 1)
+(declare-const doy Int)
+(assert (and (<= 1 doy) (<= doy 366)))
+(assert (not (and (<= 1 (+ (div (- doy 1) 7) 1)) (<= (+ (div (- doy 1) 7) 1) 53))))
+(check-sat)
+(pop 1)
+
+(echo "weekofyear: (doy - 1) / 7 + 1 over the Thursday's day of the year, in [1, 366], lies in [1, 53]: with the low end raised by one it is not: expect sat")
+(push 1)
+(declare-const doy Int)
+(assert (and (<= 1 doy) (<= doy 366)))
+(assert (not (and (<= (+ 1 1) (+ (div (- doy 1) 7) 1)) (<= (+ (div (- doy 1) 7) 1) 53))))
+(check-sat)
+(pop 1)
+
+(echo "weekofyear: (doy - 1) / 7 + 1 over the Thursday's day of the year, in [1, 366], lies in [1, 53]: with the high end lowered by one it is not: expect sat")
+(push 1)
+(declare-const doy Int)
+(assert (and (<= 1 doy) (<= doy 366)))
+(assert (not (and (<= 1 (+ (div (- doy 1) 7) 1)) (<= (+ (div (- doy 1) 7) 1) (- 53 1)))))
 (check-sat)
 (pop 1)

@@ -358,15 +358,15 @@ agreement.
   `MONTH_DAYS_MIN`/`MAX` and the seven field magnitudes beside `YEAR_FIELD_MAGNITUDE`; its arms,
   the renderer and the sweep read them. `VarkaRangeAnalysisSuite` passes unchanged, which is the
   check that no answer moved.
-* **Four rendered files, 257 checks**, every one holding under Z3 5.1.0 and cvc5 1.4.1, as whole
+* **Four rendered files, 306 checks**, every one holding under Z3 5.1.0 and cvc5 1.4.1, as whole
   files and check by check:
 
   | file | checks | claims (`unsat`) | neighbours and vacuity (`sat`) | Z3 | cvc5 |
   | :--- | ---: | ---: | ---: | ---: | ---: |
   | `value_range.smt2` | 68 | 29 | 39 | 0.10 s | 0.77 s |
-  | `range_analysis.smt2` | 111 | 41 | 70 | 0.11 s | 0.34 s |
-  | `range_calendar.smt2` | 38 | 23 | 15 | 8.4 to 11 s | 15 to 16 s |
-  | `time_bounds.smt2` | 40 | 24 | 16 | 0.03 s | 0.11 s |
+  | `range_analysis.smt2` | 146 | 53 | 93 | 0.39 s | 0.95 s |
+  | `range_calendar.smt2` | 52 | 27 | 25 | 6.8 to 11 s | 12 to 16 s |
+  | `time_bounds.smt2` | 40 | 24 | 16 | 0.04 s | 0.1 to 4.6 s |
 
   The times are the laptop's on the evening of 14 October with two other agents' builds running,
   so they are inflated and noisy: the same `dev/varka_prove.sh --lint` that took 9.2 s before this
@@ -376,7 +376,8 @@ agreement.
   and the nightly are unchanged: no file needs a nightly-only list.
 * **The pins.** `value_range.smt2` holds each stated lattice rule to `Bounded`'s own answers at
   nine sample intervals (1,377 equations in seven checks), `range_analysis.smt2` each stated arm
-  to `VarkaRangeAnalysis.range`'s answers on sample trees (27 equations), and
+  to `VarkaRangeAnalysis.range`'s answers on sample trees, symmetric and asymmetric (57
+  equations), and
   `range_calendar.smt2` its transcription of `LocalDate.toEpochDay` and `lengthOfMonth` to the
   JVM at 31 years times twelve months times three days (1,488 equations).
 * **`VarkaRangeRulesSuite`**, eight JUnit 5 tests sweeping every calendar rule over the 20.2
@@ -411,9 +412,27 @@ through the suite and the renderer:
    against under 20 s predicted. The line is in the calibration table: the estimate priced
    single-threaded decodes and doubled, and the parallel stream and the JIT left little of either.
 4. **Holds.** Every planted fault fails a check, and the `[0, 29]` fault fails both legs (9.2).
-5. **Holds: no rule is unsound.** Two findings beside it, in 9.4.
+5. **Missed, by the review rather than the solver.** `arith` answered the sum's interval for
+   `SUB`, which is the difference's only over symmetric operands; a `BoundedDivide`'s `[0, q]`
+   and an int-lane `GuardedRange`'s bounds are asymmetric, and over two such operands the
+   answer missed every negative difference. No compiler path composes such operands today, so
+   nothing emitted was wrong, but the rule was, and the plan's own premise - "under `INT` every
+   answer is symmetric" - was what hid it from the solver: the obligation proved the symmetric
+   theorem the compiler's trees satisfy, not the code's domain. The arm now takes the lattice's
+   `sub`, the obligations are stated over two general intervals, a `sat` check shows the old
+   answer failing over asymmetric operands and an `unsat` one that it equals the new one over
+   symmetric ones, and `VarkaRangeRulesSuite` holds the input that shows it: `[0, 52] - [0, 3]`
+   is `[-3, 52]`, not `[0, 55]`. Found by `/code-review high` on the branch (9.6). The other
+   findings are in 9.4.
 
 ### 9.4 What the plan did not foresee
+
+* **The `INT` answers are not all symmetric**, so the obligations' premise was narrower than
+  the code (9.3, prediction 5): `GuardedRange` under `INT` answers its own bounds and
+  `BoundedDivide` `[0, (bound - 1) / d]`, both added after VARKA-84 wrote the symmetric
+  contract. The arithmetic arms are now proven over two general intervals; `ConstDivide` over a
+  general interval needs the hypothesis that the interval lies within int32, where the lane
+  value is the witness, and over a symmetric one needs none.
 
 * **The `year` answer's low end is slack by 29,600 years.** The rule's symmetric interval
   `[-42400, 42400]` is exact at the top and the admitted years begin at -12800, so the
@@ -444,10 +463,32 @@ through the suite and the renderer:
 * **The four guard promises** - `GuardedDay`, `GuardedRange`, the armed column offset,
   `make_date`'s year - rest on the emitter's guard tests (VARKA-279), as 3.4 said; the analysis
   and the emitter share the constants.
-* **The weekday fields and `weekofyear`** rest on the sweep alone; a closed form of the ISO week
-  would put them in the solver's reach too.
-* **`VarkaTimeCompiler`'s bounds are restated**, as `long_divide.smt2` restates its divisors; a
-  `quotientBound` that lived in the IR would let the renderer read it.
+* **The weekday fields and `weekofyear`** are proven over the forms the lanes compute (the
+  `floorMod` offsets, the Thursday's day of the year); that each form is `java.time`'s field is
+  the sweep's, now through `DateTimeUtils.getDayOfWeek` and `getWeekDay` rather than the forms
+  themselves, which the review found tautological.
+* **`VarkaTimeCompiler`'s dividend bounds are restated**, as `long_divide.smt2` restates its
+  divisors; `quotientBound` moved into `ConstDivide` at the review's suggestion, so that one the
+  renderer reads.
 * **`VarkaRangeAnalysisSuite`'s property test** still states containment, which is true over its
   grammar's literals and false in general; the lesson is recorded, and a test of the witness form
   over wide literals would be the stronger statement.
+
+### 9.6 The review
+
+`/code-review high` on the branch found seven things, every one verified and changed:
+
+| finding | what changed |
+| :--- | :--- |
+| `remainderOfSixty`'s obligation asserted `r = x mod 60` as a premise, assuming half of its claim | the equality is in the negated conclusion; a wrong multiply or divide now fails it |
+| `arith` answers the sum's interval for `SUB`, sound only over symmetric operands | the lattice's `sub`; the obligations over general intervals; the test and the two checks of 9.3 |
+| two of the three weekday sweeps tested hand-rolled `floorMod` forms, in range by construction | `DateTimeUtils.getDayOfWeek` and `getWeekDay`, Spark's definitions through `java.time` |
+| `month` had no neighbours, and the weekday fields and `weekofyear` no obligation, while the row said every rule | `month` through `rule`; four obligations over the lanes' forms, with the identity to `java.time` the sweep's |
+| `quotientBound` was re-implemented in the renderer, so the pin could not see the compiler drift | `ConstDivide.quotientBound()` in the IR, read by the compiler and the renderer |
+| `pinEnds` silently dropped a sample the lattice saturates at | it refuses the sample, so a lost pin is a failed rendering |
+| `TIME_UNITS` carried a dead second column beside a parallel name array | a `TimeUnit` record |
+
+The second is the task's one unsound rule, latent, and the review's premise check - "is the
+obligation's domain the code's?" - is what the solver could not ask. After the changes the four
+files hold whole and check by check under both solvers (9.1), and the three suites pass.
+
