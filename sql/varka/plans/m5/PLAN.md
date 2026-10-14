@@ -2380,7 +2380,9 @@ query holds, and not all of them.
 103): `extract(DAY FROM dt)` is exact over the whole long, not only under 2^52. The divisor
 86,400,000,000 is 2^13 times 10,546,875, so the division is an arithmetic shift by 13 and a
 Granlund-Montgomery magic by 10,546,875 over a value of at most 2^50, exact everywhere (shift 71,
-multiplier 223,875,151,780,487, first wrong dividend 1,933,372,399,218,749); the hours, minutes
+multiplier 223,875,151,780,487, first wrong dividend 1,933,372,399,218,749). The split floors
+and `IntervalUtils.getDays` truncates toward zero, so it runs over the magnitude with the sign
+restored afterwards, as `ConstDivide` already does for a truncating quotient; the hours, minutes
 and seconds extracts take the same split with their own constants.*
 `MakeDTInterval` is multiplies and adds under overflow checks.
 

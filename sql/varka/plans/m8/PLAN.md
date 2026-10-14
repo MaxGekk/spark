@@ -10,7 +10,8 @@ catalogue moved forward in the same pull request: the catalogue that sat in this
 plans of the two rows it holds (`VARKA-64.md`, `VARKA-73.md`) beside it, and every inbound
 reference rewritten by `dev/varka_catalogue_move.sh 8 9`, which a later merge reruns. The items
 this milestone takes are named below with the number they have there: 1, 2, 31, 32, 33, 34, 35,
-36, 54, 55, 89 (bullet 1, and bullet 6 without its runtime bound), 93 and 94. So are the rows it
+36, 54, 55, 89 (bullet 1, and bullet 6 without its runtime bound, which the 128-bit lane pair of
+2.8 makes unnecessary), 93 and 94. So are the rows it
 takes from the catalogue's moved-row tables (items 15 and 39), which keep their task numbers and
 their designs where they are: 27, 28, 30, 39, 89, 95, 103, 104 and 157. Four of those already
 have plan files in this folder (`VARKA-28.md`, `VARKA-39.md`, `VARKA-89.md`, `VARKA-104.md`).
@@ -74,16 +75,17 @@ ones.**
    an unscaled long up to precision 18 and as a 128-bit lane pair above). Each has a coverage row
    for a load, a comparison, a choice and an output, its Arrow vector admitted by `isArrowBacked`
    and allocated by `allocateVector`, the IR fuzzer and the Spark-level fuzzer drawing it (352), and
-   the bytes oracle unchanged for every existing shape at each lane's landing. The two
+   the bytes oracle unchanged for every existing shape at each lane's landing. The three
    representation questions with machine-dependent answers are built both ways and measured, the
    losing arm kept (329 for `BYTE` and `SHORT`, 347 for the decimal load path below precision 19,
    359 for the lane pair's layout).
 2. **Most of the census is fused.** Of the 183 in-scope entries of `m8/census.tsv`, at least 122
    (two thirds) are fused for every type they admit, and of its 881 entry-and-type pairs at least
-   661 (three quarters); every pair left unfused carries its reason in the census, each reason one
-   of: a construction's declined band (346, recorded with its bounds), the owner's decision (decimal
-   division, recorded in the census's reason column and outside the 881), or a named row of
-   `m9/SCOPE.md`. Today the counts are 15 entries and 96 pairs. A type counts as fused only where a
+   661 (three quarters); every pair of the 881 left unfused carries its reason in the census,
+   either a construction's declined band (346, recorded with its bounds) or a named row of
+   `m9/SCOPE.md`; the pairs an owner's decision removed (decimal division) are outside the 881 and
+   carry that decision in the census's reason column. Today the counts are 15 entries and 96
+   pairs. A type counts as fused only where a
    coverage row reads a column of it, which `dev/varka_census.py` checks against `coverage.json` and
    row 328 makes exact.
 3. **The cast matrix is fused and proven.** Every one of the 106 legal pairs of `m8/casts.tsv`
@@ -240,7 +242,7 @@ about every pair, so the matrix cannot drift from the rules it copies.
 | widening | 12 | integral to a wider integral, to a floating type that holds it exactly, `FLOAT` to `DOUBLE`; exact in every mode |
 | narrowing | 6 | integral to a narrower integral: LEGACY wraps, ANSI raises `CAST_OVERFLOW`, TRY nulls |
 | rounding | 6 | `INT` or `BIGINT` to `FLOAT`, `BIGINT` to `DOUBLE`, `DOUBLE` to `FLOAT`, decimal to floating; round to nearest even, no error in any mode |
-| truncation | 12 | floating to integral (LEGACY saturates to `INT` or `BIGINT`, NaN to zero, and for `TINYINT` and `SMALLINT` saturates to `INT` and then wraps; ANSI and TRY range-check on the double, which `2^63` passes and saturates, and raise or null on NaN), decimal to integral (toward zero, the low bits kept under LEGACY; `CAST_OVERFLOW` under ANSI, by the exact rule for a long-backed value and the double rule for a `BigDecimal`-backed one, 2.8) |
+| truncation | 12 | floating to integral (LEGACY saturates to `INT` or `BIGINT`, NaN to zero, and for `TINYINT` and `SMALLINT` saturates to `INT` and then wraps; ANSI and TRY range-check on the double - against `2^31 - 1` exactly for `INT`, and for `BIGINT` against `Long.MaxValue.toDouble`, which is `2^63`, so `2^63` passes and saturates - and raise or null on NaN), decimal to integral (toward zero, the low bits kept under LEGACY; `CAST_OVERFLOW` under ANSI, by the exact rule for a long-backed value and the double rule for a `BigDecimal`-backed one, 2.8) |
 | scale up | 13 | integral to decimal (overflow past `p - s` digits: null or `NUMERIC_VALUE_OUT_OF_RANGE`), `DATE` to `TIMESTAMP_NTZ` and integral to an interval (`multiplyExact`: raises under LEGACY and ANSI and is null under TRY, since `try_cast` wraps every in-scope cast in a catch - `Cast.canUseLegacyCastForTryCast` exempts only string sources; a `TINYINT` or `SMALLINT` source never overflows, an `INT` only to a DAY end, past 106,751,991, or a YEAR end, past 178,956,970) |
 | rescale | 4 | decimal to decimal (`ROUND_HALF_UP` on a smaller scale, overflow null or error), `TIME` to decimal, decimal to an interval |
 | floor division, floor modulo, unit division | 16 | `TIMESTAMP_NTZ` to `DATE` and to `TIME`, `TIME` and the intervals to integral and decimal targets |
@@ -430,7 +432,9 @@ every row, equal to the literal in the plan; a second query run under a differen
 reuses the cached kernel and returns its own date.
 
 Row 103 takes the same reading: `extract(DAY FROM dt)` is exact over the whole long by the same
-shift split, so `m5/PLAN.md` 2.38's "exact only under `2^52`" is corrected there by a dated note;
+shift split over the magnitude with the sign restored afterwards - `IntervalUtils.getDays` truncates
+toward zero where the split floors, the sign trick `ConstDivide` already applies to a truncating
+quotient - so `m5/PLAN.md` 2.38's "exact only under `2^52`" is corrected there by a dated note;
 the hours and minutes extracts need the byte output (329, 330) and the seconds extract the decimal
 lane (351); `make_dt_interval` checks each partial sum in Spark's order; and its `HALF_UP` on a
 double factor is tested at ties for both signs, at `2^53` and at the long edges, with Spark's own
@@ -598,11 +602,11 @@ the math reading's corrections:
   coverage table says so beside the bound.
 * **The register records it.** `SCOPE_STANDARD_MODE.md` 3.4 is the first deliberate departure from
   "row answers follow Spark", with the reason, the bound and the configuration.
-* **Two scope items for milestone 9** (`m9/SCOPE.md` 98): an emitted SLEEF-shaped `exp` and `log`,
+* **A scope item for milestone 9** (`m9/SCOPE.md` 98): an emitted SLEEF-shaped `exp` and `log`,
   about 25 and 45 lane operations, as the route to one bit pattern on every host and, later, to
   correct rounding - not an alternative to the contract, since fdlibm itself is not correctly
-  rounded; and item 36's emitted-fdlibm option costed without FMA, because `StrictMath` is pure
-  Java and FMA changes the bits.
+  rounded. Item 36's own dated correction records that its emitted-fdlibm option, which stays item
+  36's, must be costed without FMA, because `StrictMath` is pure Java and FMA changes the bits.
 
 **The default is on: owner's decision, 14 October 2026.** The plan had recommended off; the owner
 chose the speed. The consequences, plainly:
@@ -915,7 +919,7 @@ catalogue keep theirs. Sizes are the house's small, medium and large.
 | 104 | `BIGINT` arithmetic in the three modes, closing VARKA-30's int64 half. **Done when** `VARKA-104.md`'s list holds | catalogue item 39 table; `VARKA-104.md` | medium |
 | 30 | The integral division family: `div`, `%` and `pmod` over `INT` and `BIGINT`, a zero divisor null or raised, by 2.9's reading - `div` over `INT` as the long-lane divide over two widening casts, `pmod(-1, Int.MinValue)` as `Int.MaxValue` with the SMT goal wrapping, a null dividend with a zero divisor null under ANSI, `emitConstDivide` reused for a constant divisor, `pmod` by a power of two as an AND, and the four-`vpmuludq` long-lane magic as a measured option for a literal divisor. **Done when** each fuses in the three modes with the row engine's error classes, proven by exhaustion at 32 bits and SMT at 64 | catalogue item 39 table; `m5/PLAN.md` 2.4; item 33 | medium |
 | 95 | An int multiply by a column, and `i % k`. **Done when** both fuse with the checked-multiply rule, or the record says why not | catalogue item 39 table; `m5/PLAN.md` 2.30 | small |
-| 103 | Day-time interval arithmetic, multiplications and divisions, the extracts and `make_dt_interval`: `extract(DAY FROM dt)` exact over the whole long by the shift split of 2.6, hours and minutes over the byte output, seconds over the decimal lane, the partial sums of `make_dt_interval` checked in Spark's order, `HALF_UP` on a double factor tested at ties for both signs, at `2^53` and at the long edges with Spark's own IEEE operations. **Done when** `m5/PLAN.md` 2.38's list fuses (its "exact only under `2^52`" corrected by a dated note), each division exact under its stated bound or guarded, `java.time` the oracle at the edges | catalogue item 39 table; `m5/PLAN.md` 2.38 | medium |
+| 103 | Day-time interval arithmetic, multiplications and divisions, the extracts and `make_dt_interval`: `extract(DAY FROM dt)` exact over the whole long by the shift split of 2.6 over the magnitude with the sign restored (a truncating quotient, not a floor), hours and minutes over the byte output, seconds over the decimal lane, the partial sums of `make_dt_interval` checked in Spark's order, `HALF_UP` on a double factor tested at ties for both signs, at `2^53` and at the long edges with Spark's own IEEE operations. **Done when** `m5/PLAN.md` 2.38's list fuses (its "exact only under `2^52`" corrected by a dated note), each division exact under its stated bound or guarded, `java.time` the oracle at the edges | catalogue item 39 table; `m5/PLAN.md` 2.38 | medium |
 | 39 | `date - date`, the first mixed-width kernel. **Done when** `VARKA-39.md`'s list holds | catalogue item 39 table; `VARKA-39.md` | small |
 | 89 | The year-month divisions beyond `extract(YEAR FROM ym)`. **Done when** `VARKA-89.md`'s list holds | catalogue item 39 table; `VARKA-89.md` | small |
 | 333 | The choice and null shapes on every existing type: item 55's int branches, item 94's CASE without ELSE, `coalesce`, `greatest`, `least` and `IN` on each existing type, and the rewritten conditionals `nullif`, `nvl2`, `zeroifnull`, `nullifzero`, `between`; identity substitution for `greatest` and `least` with real `MIN_VALUE` and `MAX_VALUE` operands beside nulls as named cases, and the plan `nullif` reaches after the `With` rewrite checked before it counts as one shape. **Done when** each fuses on all six existing types with a coverage row, `date_add(d, i)`'s offset rule unchanged | items 55, 94 | small |

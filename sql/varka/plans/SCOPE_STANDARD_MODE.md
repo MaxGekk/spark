@@ -147,9 +147,11 @@ Section 1's rule holds everywhere else; here it is broken on purpose, and this e
 record. Spark computes `sin`, `exp`, `log` and the rest of the transcendental family with one scalar
 call per row, `java.lang.Math` or `StrictMath`. The Vector API lowers the same operators to a host
 library - SVML at AVX-512, SVML at AVX2, SLEEF on NEON - and no bound operator reproduces the row
-engine's bits on any host: they differ on up to thirteen percent of ordinary inputs, by one unit in
-the last place, two for `log10` everywhere and `tanh` on x86 (`SCOPE_FUNCTIONS.md` 3). No range
-guard can fix that, so section 2's construction does not apply: the difference is in the result.
+engine's bits on any host: they differ on up to thirteen percent of ordinary inputs, by one
+representable double, two for `log10` against the `StrictMath.log10` Spark calls, which is that
+function's own error and not the library's (`SCOPE_FUNCTIONS.md` 3 and its dated correction; `tanh`
+on x86 is one against the `Math.tanh` Spark calls). No range guard can fix that, so section 2's
+construction does not apply: the difference is in the result.
 
 **What is promised instead.** Each fused function states, per host library, its bound against
 `java.lang.Math` in the coverage table and the user support table, measured and committed by

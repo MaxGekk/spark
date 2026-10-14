@@ -10,7 +10,8 @@ was rewritten by `dev/varka_catalogue_move.sh 8 9`, so every `item <n>` citation
 already ask for milestones 7 and 6.*
 
 **Items and rows milestone 8 takes.** Items 1, 2, 31, 32, 33, 34, 35, 36, 54, 55, 89 (bullet 1,
-and bullet 6 without its runtime bound, which the owner ruled out on 14 October 2026), 93 and
+and bullet 6 without its runtime bound, which the 128-bit lane pair of `m8/PLAN.md` 2.8 makes
+unnecessary), 93 and
 94; and, from the tables of items 15 and 39, rows 27, 28, 30, 39, 89, 95, 103, 104 and 157,
 whose plans and designs stay where they are. `m8/PLAN.md` names each with the number it has
 here. Its census (`m8/census.tsv`) also scopes, for this catalogue's later readers, which of
@@ -3090,9 +3091,9 @@ so `Math` runs fdlibm for them everywhere too. Three more: an operator the JDK l
 exact only where Spark calls `Math` (`POW` at AVX2 falls back to `Math.pow`, not Spark's
 `StrictMath.pow`); `tanh` on x86 is one step against `Math.tanh`, which Spark calls, the two being
 against `StrictMath`; and `log10`'s two is `StrictMath.log10`'s own error, not the library's. The
-owner chose the first option on 14 October 2026 (`m8/PLAN.md` 2.7.1); the emitted-fdlibm option,
-kept for milestone 9 as item 98, must be costed without FMA, since `StrictMath` is pure Java and
-FMA changes the bits.*
+owner chose the first option on 14 October 2026 (`m8/PLAN.md` 2.7.1); the emitted-fdlibm option
+stays this item's, beside item 98's SLEEF-shaped route, and must be costed without FMA, since
+`StrictMath` is pure Java and FMA changes the bits.*
 
 ### Item 37. A third AVX2 lowering for the 64-bit divide, from 32-bit converts
 
