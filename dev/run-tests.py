@@ -509,9 +509,26 @@ def main():
         is_github_prev_sha = os.environ.get("GITHUB_PREV_SHA", "") != ""
         # Otherwise, we're in either periodic job in Github Actions or somewhere else.
 
+        # A run of Varka's master itself - the weekly matrix, the run after each merge - has
+        # its merge base with master at its own head, so the diff below is empty and would
+        # narrow every module job to nothing, passing without a test (VARKA-255.md 2.9). With
+        # no change to measure, test the modules the job names, as a periodic job does. A pull
+        # request's base is never its head.
+        diff_base = os.environ.get("VARKA_DIFF_BASE", "")
+        no_change_to_measure = diff_base != "" and diff_base == os.environ.get("VARKA_DIFF_HEAD")
+        if no_change_to_measure:
+            print(
+                f"[info] no change to measure: the diff base {diff_base} is the head; "
+                "testing the modules given"
+            )
+
         # If we're running the tests in GitHub Actions, attempt to detect and test
         # only the affected modules.
-        if test_env == "github_actions" and (is_apache_spark_ref or is_github_prev_sha):
+        if (
+            test_env == "github_actions"
+            and (is_apache_spark_ref or is_github_prev_sha)
+            and not no_change_to_measure
+        ):
             if os.environ.get("VARKA_DIFF_BASE") and os.environ.get("VARKA_DIFF_HEAD"):
                 # The pull request's own change; see dev/is-changed.py for why the base is
                 # Varka's master rather than apache/spark.
