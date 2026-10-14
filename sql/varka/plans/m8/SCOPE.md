@@ -5022,6 +5022,77 @@ path on a cold shape, which nothing has measured.
    fused kernel is really cold, at both vector widths. Done when the numbers are committed and this
    item says whether a baseline tier is worth a design.
 
+### Item 93. IS NULL and IS NOT NULL over a predicate, fused
+
+*Added on 13 October 2026 from VARKA-138's admission check (`m7/VARKA-138.md` 2 and 9). Proposed
+as a milestone 7 row and moved here the same day, since it is coverage and milestone 7 is trust and
+maintainability.*
+
+**The gap.** As written, `(p) IS NULL` was fused for none of the 27 predicate rows of the coverage
+table, under the default optimizer as with Spark's rewrites excluded. It reaches Varka only where
+`NullDownPropagation` can push the test onto the columns, 30 of 81 cases; a predicate it cannot push
+through, or a query whose optimizer settings keep the form, hands the filter or the CASE back to
+Spark's row path.
+
+**The design, started.** The unknown truth value is exactly what a fused condition already
+computes: Varka's conditions carry a known-true and a known-false mask. `IsNotNull` takes a
+condition child beside a column, with `kT = kT(child) | kF(child)` and `kF = ~kT` in a masked body
+and constant true in a dense one, which has no unknown lane; `IS NULL` stays the NOT of it, a slot
+swap. Shapes over a column emit the same bytes. A local branch, `varka-326` (commit `8077a4b9ddf`,
+not pushed), holds the compiler, analysis, slot and walk changes and four coverage rows, all of
+which fuse; its first catalyst run failed seven tests not yet diagnosed (the per-row kernel check,
+the wide composition test and two shrinker tests of `VarkaCoverageCompositionFuzzSuite`, the bytes
+oracle and its many-threads test, and the `validityOrFirst` test).
+
+**Done when** both fuse as filters and as CASE conditions over every predicate row, with coverage
+rows, the bytes oracle's entries and the cost table, the seven failures understood, and the
+partition oracle of VARKA-138 querying `p IS NULL` directly.
+
+### Item 94. A CASE without an ELSE, fused
+
+*Added on 13 October 2026 from VARKA-138's admission check (`m7/VARKA-138.md` 2 and 9); moved here
+from a proposed milestone 7 row the same day, as coverage.*
+
+`CASE WHEN c THEN e END` was fused for none of 49 projection rows, while the same CASE with an ELSE
+is a shape the coverage table fuses; the missing ELSE is a null literal of `e`'s type. **Done when**
+the shape fuses for every row whose THEN fuses, with a coverage row and the bytes oracle's entry, or
+the record says why it should not.
+
+### Item 95. The warm-up's verdict and the epilogue methods
+
+*Added on 13 October 2026 from VARKA-274's admission check (`m7/VARKA-274.md` 3.7); moved here
+from a proposed milestone 7 row the same day, since it measures production's cost, not an answer.*
+
+When `VarkaKernelWarmup` decided a kernel had stopped allocating, 32 of 39 kernels still had
+interpreted epilogue methods, so the first batches after the switch may run their remainders
+interpreted. **Done when** what an interpreted epilogue costs per batch on production's paths is
+measured, and, if it shows, the verdict waits for the epilogues through the JIT's code list.
+
+### Item 96. A check or a column bound qualified by the side that reads it
+
+*Added on 13 October 2026 from VARKA-138b's ANSI form (`m7/VARKA-138.md` 10.3), as coverage: no
+answer was wrong.*
+
+A kernel computes every lane of every operand and declines the whole batch when a check fires - an
+overflow, a field out of range, a date leaving the range the calendar lowering is exact over. Under
+a CASE arm, `guardUnderArm` qualifies a guard by the arm's condition, so a lane the arm is not taken
+for cannot condemn the batch. Two places have no such qualification, and the ANSI form's extremes
+row finds both:
+
+- **The right side of an AND.** `WHERE rid < 0 AND (i + 1) = i` declines its batch on the lane
+  holding `Int.MaxValue` although `rid < 0` already rejected that row: the same for `year(d) + i`,
+  `ym - ymm`, `make_date(2021, i, 1)`, `add_months(d, i)`, `d + ym` and `d - ym`, seven of the 65
+  projection rows. The row path answers, correctly, and the kernel serves nothing.
+- **A column's bound.** `d + CAST(i AS INTERVAL DAY)` puts a bound on the column `i`, since the cast
+  throws past `INTERVAL_DAY_LIMIT_DAYS` where a kernel would wrap, and the evaluator checks it per
+  batch before the kernel runs (`VarkaChronoCompiler.dayIntervalColumn`). The bound belongs to the
+  column, not to the expression reading it, so the untaken CASE arm, the later COALESCE argument
+  and the false AND all decline a batch holding `i = Int.MaxValue`.
+
+**Done when** a check or bound read only on the right side of an AND, or only under one arm chain,
+condemns only the lanes the left side or the arm lets through, with the ANSI form's declined
+entries for these rows gone stale and removed, or the record says why one must stay whole-batch.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads

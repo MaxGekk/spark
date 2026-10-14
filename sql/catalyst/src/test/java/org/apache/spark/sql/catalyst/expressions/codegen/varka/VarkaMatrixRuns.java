@@ -305,11 +305,13 @@ public final class VarkaMatrixRuns {
 
   /**
    * How a test framework cancels and fails a test, and how it tells a cancel: the body's own
-   * cancel passes through {@link #around} untouched, as a cancel and not a failure.
+   * cancel passes through {@link #around} untouched, as a cancel and not a failure. The two
+   * factories return a {@code Throwable}, not a {@code RuntimeException}, because JUnit's failure,
+   * opentest4j's {@code AssertionFailedError}, is an {@code Error}.
    */
   public record Outcomes(
-      Function<String, RuntimeException> cancel,
-      Function<String, RuntimeException> fail,
+      Function<String, Throwable> cancel,
+      Function<String, Throwable> fail,
       Class<? extends Throwable> cancelled) {}
 
   /**
