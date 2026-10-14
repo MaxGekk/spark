@@ -59,6 +59,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFallbackEvent;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmup;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemorySanitizer;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemoryViolation;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaReproduction;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeCache;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeEntry;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeKey;
@@ -373,6 +375,9 @@ public abstract class VarkaEvaluatorBase {
               VarkaErrorContext.safely(this::kernelShapeHash), null, false);
           LOG.warn("Failed to emit the Varka fused kernel " + ctx.identity()
               + "; falling back to the per-row path." + VarkaFallbackAccounting.block(ctx), e);
+          // A class that fails to verify or define fails here, and no class dump has it.
+          VarkaReproduction.write(ctx, e, shapeKey(compiled), compiled.literals(),
+              compiled.longLiterals(), null, null);
           emissionFailed(e);
           refuseUndeclaredFallback("emission of " + ctx.identity(), ctx);
         }
@@ -583,9 +588,31 @@ public abstract class VarkaEvaluatorBase {
         vector.setValueCount(len);
       }
       return columns;
+    } catch (VarkaKernelFailure e) {
+      // Written here, inside the sanitizer's window and with this kernel's runner, then
+      // rethrown unchanged for serveBatch to fall back on (VARKA-315).
+      reproduceKernelFailure(VarkaFallbackEvent.KERNEL_FAILURE, e.getCause(), kernel, input, len);
+      throw e;
+    } catch (VarkaMemoryViolation e) {
+      // A violation fails the task and passes every catch above unrecorded, so this is the one
+      // place it is written down.
+      reproduceKernelFailure(VarkaErrorContext.MEMORY_VIOLATION, e, kernel, input, len);
+      throw e;
     } finally {
       VarkaMemorySanitizer.end();
     }
+  }
+
+  /**
+   * The reproduction file of a failure inside this evaluator's kernel (VARKA-315): its shape key,
+   * its literals, the call it failed in and its class. {@link VarkaReproduction#write} never
+   * throws, so the failure being handled is rethrown as it is.
+   */
+  private void reproduceKernelFailure(String kind, Throwable failure, VarkaKernelRunner kernel,
+      ColumnarBatch input, int len) {
+    VarkaErrorContext ctx = errorContext(kind, failure, null, kernel.shapeHash, input, true);
+    VarkaReproduction.write(ctx, failure, shapeKey(plan), plan.literals(), plan.longLiterals(),
+        maxBatchBytes -> kernel.capture(input, len, maxBatchBytes), kernel.classBytes);
   }
 
   /**
