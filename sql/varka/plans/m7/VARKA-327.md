@@ -40,7 +40,7 @@ the warm-up is off throughout.
 **What VARKA-274a learned that bears on this.** 3.5 left the Spark-level fuzzer out on purpose,
 since a warmed comparison needs each query run twice with a wait between, as the end-to-end suite
 does. 3.7 found that 3 of 40 small drawn kernels entered the deoptimization cycle on the warmed
-path (row 326) and that the warm-up's verdict comes before the epilogues are compiled in 32 of 39
+path (VARKA-326) and that the warm-up's verdict comes before the epilogues are compiled in 32 of 39
 kernels. The first says some compositions will never get a verdict and will wait out the deadline.
 
 **Probe 1: 40 compositions at the production deadline** (the arm of 3.1, seed 20261008): 22 s for
@@ -69,9 +69,9 @@ difference this machine's noise can show. Of seed 7's 31 compositions that never
 6 had no Varka node, 13 raised on both sides (compared by error class) and 12 had every cached
 batch pruned by the scan's statistics before a Varka node saw one; none had a batch declined.
 
-**What the 35 releases show (row 295's evidence).** In all 35 the C2 compile queue was empty at the
+**What the 35 releases show (evidence for VARKA-295).** In all 35 the C2 compile queue was empty at the
 release. In 24 the recording holds no deoptimization of the kernel; in 11 it holds
-`profile_predicate` or `unstable_if` traps in a masked loop or `run`, 274a's cycle (row 326). The
+`profile_predicate` or `unstable_if` traps in a masked loop or `run`, VARKA-274a's cycle (VARKA-326). The
 code list names methods with no code in use in 31 of them: the `runDense` or `runMasked` driver
 overloads in 30, a masked loop and its epilogue in 8; in 4 every method had code. In 30 the warm-up
 thread's allocation samples hold interpreted frames of a loop method the code list shows compiled
@@ -132,7 +132,7 @@ flags in its note.
   shape. The pivot check is kept, since it costs one row-engine query.
 - **The shared sessions keep the warm-up off**, so every other suite compares the kernels'
   answers from a shape's first batch.
-- **`VarkaKernelWarmup` and its verdict.** Row 295 owns why a kernel misses its verdict, row 326
+- **`VarkaKernelWarmup` and its verdict.** VARKA-295 owns why a kernel misses its verdict, VARKA-326
   the deoptimization cycle; this arm only reports what it meets.
 - **`VarkaWarmupEndToEndSuite`**, which pins which path served each batch on fixed shapes.
 
@@ -199,3 +199,71 @@ most near 1.2; these are stated from probe 3 with that margin.
 
 1. This plan.
 2. The arm, the planted-fault test, the nightly step, the skill and the milestone row.
+
+## 9. Outcome
+
+Built as 3.1 describes, on 14 October 2026, with the review's corrections in 9.1. Timings are the
+laptop's, at a load of 1 to 4 from other agents, on six cores, and rough.
+
+**The nightly's volume.** The `sparkwarm` step's command at 2,000 compositions of seed 20261014
+(the day's seed), with the review's corrections (9.1), took 13 min 24 s for the test and 14 min 10
+s with sbt's start, about 0.4 s a composition. 2,477 warm-ups: 2,453 COMPILED, 22 released at the
+deadline (0.9%) and 2 released at once, with nothing to wait for. 2,372 runs on the row path while
+warming, 1,499 on a kernel; 1,499 compositions handed over (75%), and of the other 501, 200 had no
+Varka node, 153 raised on both sides, 148 had every batch pruned, none had a batch declined. Of the
+1,499 runs over other data, 30 met a new shape. No wait timed out. No disagreement. The same
+command before the corrections took 14 min 4 s with the same counts to within a few, except 2,000
+runs over other data (101 new shapes) and 25 releases, 2 of them the early kind 9.1's second item
+stopped reporting.
+
+**The CI default.** The whole of `VarkaSparkFuzzSuite` and `VarkaSparkReproducerSuite` in 114 s
+for sbt and both suites; the warmed arm's 8 compositions 2.9 s (7 warm-ups, all COMPILED) and the
+planted-fault test 0.9 s, so the PR's addition is about 4 s on this machine, plus 10 s for each
+release, which at 1% to 7% of warm-ups is under one a run.
+
+**The 22 deadline releases of the nightly run** have the shape of 2's 35: every one with an empty
+C2 queue, 14 with no deoptimization of the kernel recorded and 8 with traps in a masked loop or
+`run` (VARKA-326's cycle), 21 with some method without code in use (in 7 a masked loop and its
+epilogue), 1 with code for every method, and a last probe of 21,040 to 522,640 bytes. So the
+release rate depends on the seed (6.8% at seed 20261008, 1.3% at seed 7, 0.9% at seed 20261014),
+and every release this arm has met is VARKA-295's signature or VARKA-326's cycle, none a compile
+still queued at the deadline.
+
+### 6.1's predictions, scored
+
+1. **CI default under 15 s, a release up to 10 s each.** Held: about 4 s, no release in the runs.
+2. **The nightly's 2,000 under an hour.** Held: 13 minutes, a quarter of the 52 predicted and a
+   third of probe 3's rate; probe 3's seed released 6.8% of its warm-ups, this seed 0.9%, and the
+   releases were most of probe 3's time. Ratio 0.26, the second pessimistic line in the table.
+3. **No disagreement at 2,000.** Held.
+4. **Releases at 1% to 8%, each with an empty C2 queue.** Missed narrowly on the rate, 0.9%, below
+   the range; held on the queue, empty in all 22.
+
+### 9.1 What the review changed
+
+`/code-review high` on the branch found ten things; all were fixed but one.
+
+1. **A failure over the other data was written with the first data's pivot**, which that data no
+   longer holds; it is written without one.
+2. **Every RELEASED outcome was reported as a missed verdict**, though the warm-up also releases a
+   kernel with nothing to wait for and one that failed. Only a release whose queue and run time
+   reach the deadline is reported; the others are counted.
+3. **The side a run was put on read the warm-up batches alone**, so a run with a filter on its
+   kernel while the projection above it warmed was labelled the row path, and one with every batch
+   declined the kernel. A run's side is now one of four: the row path, the kernel, one node on its
+   kernel while another warms, or no batch on a kernel.
+4. **Two releases in one composition shared one recording**, and the second read a recording
+   started after its warm-up. The recording is read for the first; the second says so.
+5. **`laterData` kept the old values where a fresh draw was NULL**, so a fresh draw at null rate
+   1.0 gave back the first data. A cell now takes the first of four fresh draws that is not NULL
+   there, and a composition drawn from the wider pool draws its later data from it too.
+6. **The pivot's own outputs were asked once per run**; once per composition now.
+7. **The run over other data ran for compositions that never reached a kernel**, comparing the row
+   engine with itself and counted as coverage; it runs only after a handover.
+8. **`withVarkaWarmup` reset the session's setting to off** instead of restoring it; it restores.
+   The copied property name is left as it is: `VarkaKernelWarmup.DEADLINE_PROPERTY` is
+   package-private to the warm-up, and `VarkaWarmupEndToEndSuite` copies it the same way.
+9. **Tasks were called "row 295" and "row 326"** in the skill, the plan and the nightly; by id now.
+10. **A JVM that cannot warm failed the arm**; it cancels it (`assume`). The arm runs under every
+    option-matrix configuration, which leaves out `VarkaWarmupEndToEndSuite` for timing a compile;
+    this arm asserts on no timing, and its 8 compositions add seconds per configuration.

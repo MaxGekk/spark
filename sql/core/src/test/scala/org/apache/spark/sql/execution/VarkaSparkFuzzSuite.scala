@@ -146,16 +146,18 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
 
   test(s"random compositions agree with the row engine on both sides of the warm-up handover " +
       s"(seed $seed, $warmupIterations of them)") {
-    // The arm needs a JVM that warms kernels; every JVM the suites run in does (VARKA-212).
-    assert(VarkaKernelWarmup.canWarm(), "this JVM cannot warm kernels")
+    // The arm needs a JVM that warms kernels, as every JVM the suites run in does (VARKA-212).
+    assume(VarkaKernelWarmup.canWarm(), "this JVM cannot warm kernels")
     val failures = scala.collection.mutable.ArrayBuffer.empty[String]
     val verdicts = scala.collection.mutable.TreeMap.empty[String, Int]
+    var releasedEarly = 0
     val range = warmupOnly.map(k => k to k).getOrElse(0 until warmupIterations)
     var evidence = if (warmupJitEvidence) Some(VarkaJitEvidence.start()) else None
     try withWarmupDeadline(warmupDeadline) {
       for (it <- range if failures.size < 3) {
         val c = rectify(draw(rows, seed, it))
-        val later = laterData(c, new Random(~seed * 31L + it), safe = it % 2 == 0)
+        val later = laterData(c, new Random(~seed * 31L + it), safe = it % 2 == 0,
+          wide = (it / 2) % 2 == 1)
         // Every composition starts from a cold shape, so that each one takes the handover.
         VarkaShapeCache.invalidateAll()
         val before = VarkaKernelWarmup.recentOutcomes().asScala.toSet
@@ -164,28 +166,41 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
         outcomes.foreach { o =>
           verdicts(o.state().toString) = verdicts.getOrElse(o.state().toString, 0) + 1
         }
-        outcomes.filter(_.state() == VarkaKernelWarmth.State.RELEASED).foreach { o =>
-          // A release is not a failure here, only evidence for the warm-up's open question of why
-          // a kernel misses its verdict in a busy JVM (VARKA-295): the JIT's state at the release
-          // and, when the recording runs, its account of the kernel.
-          val account = evidence.map { e =>
-            val text = e.summary(VarkaShapeCache.classNameFor(o.shapeHash()),
-              "varka-kernel-warmup", Duration.ofSeconds(20))
-            e.close()
-            evidence = Some(VarkaJitEvidence.start())
-            text
-          }.getOrElse("JIT evidence not recorded")
+        // A release at the deadline is not a failure here, only evidence for the open question
+        // of why a kernel misses its verdict (VARKA-295): the JIT's state at the release and,
+        // when the recording runs, its account of the kernel. The warm-up also releases a kernel
+        // with nothing to wait for, or one that failed; those are counted, not reported.
+        val (atDeadline, early) = outcomes.filter(_.state() == VarkaKernelWarmth.State.RELEASED)
+          .partition(o => o.queuedNanos() + o.runNanos() >= warmupDeadline * 1000000000L)
+        releasedEarly += early.size
+        atDeadline.zipWithIndex.foreach { case (o, n) =>
+          // The recording is read once, for the composition's first release: reading it stops it,
+          // and a new one would have missed every later release's warm-up.
+          val account = evidence match {
+            case Some(e) if n == 0 =>
+              val text = e.summary(VarkaShapeCache.classNameFor(o.shapeHash()),
+                "varka-kernel-warmup", Duration.ofSeconds(20))
+              e.close()
+              evidence = Some(VarkaJitEvidence.start())
+              text
+            case Some(_) => "JIT evidence read for this composition's first release"
+            case None => "JIT evidence not recorded"
+          }
           // In the test's report rather than the log, whose lines the test logger cuts short.
-          info(s"iteration $it: a kernel was released without its verdict: $o; " +
+          // The JIT state is the last deadline release's, which this one is unless two were.
+          info(s"iteration $it: a kernel was released at the deadline without its verdict: $o; " +
             s"${VarkaKernelWarmup.lastReleaseJitState()}; $account")
         }
         result.foreach { kind =>
           // Not shrunk: each smaller case is a new shape and a new warm-up, seconds apiece. The
           // seed and iteration replay it exactly, the other data included.
-          val fixture = if (kind.startsWith("over other data")) fixtureSql(later) else c.fixture
+          // A failure over the other data is stored with that data, and without the pivot,
+          // which is a row of the first data and was not checked there.
+          val overLater = kind.startsWith("over other data")
           val text = render(Reproducer("regression", s"seed $seed iteration $it, the warm-up on: " +
             s"-Dvarka.sparkfuzz.seed=$seed -Dvarka.sparkfuzz.warmupOnly=$it", c.ansi, kind,
-            c.select, c.where, fixture, c.pivot.map(rowText)))
+            c.select, c.where, if (overLater) fixtureSql(later) else c.fixture,
+            if (overLater) None else c.pivot.map(rowText)))
           val dir = getWorkspaceFilePath("sql", "core", "target", "varka-sparkfuzz")
           Files.createDirectories(dir)
           val file = dir.resolve(s"$seed-warmed-$it.sql")
@@ -202,7 +217,8 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
       s"batches declined $warmedDeclined")
     info(s"runs over other data $laterRuns, of which $laterNewShape met a new shape; " +
       s"waits that timed out $notIdle")
-    info(s"warm-up verdicts: ${verdicts.map { case (k, n) => s"$k $n" }.mkString(", ")}")
+    info(s"warm-up verdicts: ${verdicts.map { case (k, n) => s"$k $n" }.mkString(", ")}, " +
+      s"of the releases $releasedEarly before the deadline")
     // An arm whose shapes stopped reaching the kernel would compare the row engine with itself.
     // Three in four compositions hand over at two seeds (VARKA-327.md 2); the rest have no
     // Varka node, raise on both sides, or have every batch pruned, so half is far from the edge.
@@ -362,7 +378,7 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     // the shape to the kernel as a verdict does.
     val found = withPlantedRollback(Some(k)) {
       withWarmupDeadline(2) {
-        warmedDisagreement(c, laterData(c, new Random(plantedSeed), safe = true))
+        warmedDisagreement(c, laterData(c, new Random(plantedSeed), safe = true, wide = false))
       }
     }
     info(s"composition $it, output $k forced: ${found.getOrElse("no disagreement")}")

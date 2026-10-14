@@ -244,21 +244,28 @@ object VarkaSparkFuzz {
 
   /**
    * Data for a later batch of `c`'s shape (VARKA-327): every cell of `c.data` that is not NULL
-   * replaced by the cell a fresh draw of the same kind (safe or full) puts there, unless that one
-   * is NULL, and every NULL kept where it is. A column holds a NULL here exactly where it did,
-   * so each column's nullability, which the shape is compiled for, is the same, and a kernel
-   * warmed on `c.data` serves these rows without a new warm-up; the values are new, so the
-   * compiled code meets guard outcomes and values its profile never saw.
+   * replaced by a fresh draw's cell of the same kind (safe or full, and from the wider pool when
+   * `wide`), and every NULL kept where it is. A column holds a NULL here exactly where it did, so
+   * each column's nullability, which the shape is compiled for, is the same, and a kernel warmed
+   * on `c.data` serves these rows without a new warm-up; the values are new, so the compiled code
+   * meets guard outcomes and values its profile never saw. A fresh draw draws its own null rate,
+   * so a cell takes the first of up to `LaterDraws` draws that is not NULL there.
    */
-  def laterData(c: Case, rnd: Random, safe: Boolean): Vector[Vector[String]] = {
-    val fresh = drawData(rnd, c.data.size, safe)
+  def laterData(c: Case, rnd: Random, safe: Boolean, wide: Boolean): Vector[Vector[String]] = {
     def isNull(cell: String): Boolean = cell.startsWith("CAST(NULL")
-    c.data.zip(fresh).map { case (row, other) =>
-      row.zip(other).map { case (cell, next) =>
-        if (isNull(cell) || isNull(next)) cell else next
+    val fresh = Vector.fill(LaterDraws)(
+      drawData(rnd, c.data.size, safe, if (wide) Some(new Random(rnd.nextLong())) else None))
+    c.data.indices.toVector.map { r =>
+      c.data(r).indices.toVector.map { j =>
+        val cell = c.data(r)(j)
+        if (isNull(cell)) cell
+        else fresh.iterator.map(_(r)(j)).find(!isNull(_)).getOrElse(cell)
       }
     }
   }
+
+  /** Fresh draws `laterData` takes a cell from; a cell NULL in all of them keeps its value. */
+  private val LaterDraws = 4
 
   // ---- the comparison ---------------------------------------------------------------------
 

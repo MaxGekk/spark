@@ -116,7 +116,7 @@ fi
 # The same compositions with the kernel warm-up on, as production runs (VARKA-327): each shape's
 # first query on the row path while its kernel compiles, the next on the kernel, then the kernel
 # over other data, every run against the row engine. A kernel released without its verdict logs
-# the JIT's account of it, the evidence row 295 asks for; only answers fail the step.
+# the JIT's account of it, the evidence VARKA-295 asks for; only answers fail the step.
 if [ "$sparkwarm" -gt 0 ]; then
   run_step sparkwarm build/sbt -batch "project sql" \
     "set Test/javaOptions ++= Seq(\"-Dvarka.sparkfuzz.warmupIterations=$sparkwarm\", \"-Dvarka.sparkfuzz.seed=$seed\", \"-Dspark.test.timeout=170\", \"-Dvarka.test.watchdog.minutes=170\")" \

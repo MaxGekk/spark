@@ -761,9 +761,9 @@ default, 2,000 in the nightly's `sparkwarm` step), `-Dvarka.sparkfuzz.warmupOnly
   verdict (`VARKA-327.md` 2), so the arm sets the deadline to 10 s
   (`-Dvarka.sparkfuzz.warmupDeadlineSeconds`) where production waits 60, and reports each release
   in the test's output: the outcome, the JIT state at the release (queue, code list, methods with
-  no code) and the `VarkaJitEvidence` account. Read it for row 295: an empty C2 queue with the
+  no code) and the `VarkaJitEvidence` account. Read it for VARKA-295: an empty C2 queue with the
   kernel's loops compiled and the probe still allocating is its signature; `profile_predicate`
-  traps in a masked loop are row 326's cycle; a busy queue means the deadline was too short.
+  traps in a masked loop are VARKA-326's cycle; a busy queue means the deadline was too short.
 * **Read the counts before trusting a pass.** Three in four compositions hand over; the rest have
   no Varka node, raise on both sides, or have every cached batch pruned by the scan's statistics
   (`numInputBatches` 0). At 50 or more the test fails if fewer than half hand over.
@@ -1110,6 +1110,7 @@ predicted. Add the line when the prediction is scored, whichever way it went.
 | VARKA-274a (6.1 #2) | under 3 s per case for all histories | 3,623 ms median at the int lane, 1,356 ms at the long lane | 1.2 | long lane faster than predicted |
 | VARKA-274a (6.1 #8) | the tier witness adds under 5% | +19% (int) and +25% (long) per case; +6% on the whole test | 3.8 to 5.0 | one code-list read per call, about 3.5 ms, is most of it |
 | VARKA-271a (6.1 #6) | the Varka arm under 70 minutes in one JVM | 33 minutes beside the cache-only arm | 0.5 | the one pessimistic line so far |
+| VARKA-327 (6.1 #2) | the warmed Spark differential's 2,000 compositions under an hour | 13 minutes | 0.26 | predicted from a seed that released 6.8% of its warm-ups at 10 s each; the nightly's released 0.9% |
 
 What the table says so far: a check that adds a run per batch or a read per call costs more than
 the plan's arithmetic, because the arithmetic counts the kernel's work and not the harness's
