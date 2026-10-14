@@ -628,13 +628,14 @@ None: no emitted code changes.
    bench drivers`, `Varka assembly gate` and `Varka docs checks`, and every other job is skipped,
    `Precompile Spark` and `Build modules` among them; (c) the lint job's `Java linter` step passes
    on the base's `/__w/varka/varka/` path, with no `InvalidJavadocPosition` line; (d) each suite
-   job's option step prints `== <module> under <configuration>: no change to measure on master;
-   the hash of commit <sha>` and, if it fails, ends `failed, and there is no merge base to compare
-   with`, never `fails on the merge base too`; (e) two merges inside one run leave one pending
+   job's option step prints `== <module> under <configuration>: no change to measure, the merge
+   base is the head; the hash of commit <sha>` and, if it fails, ends `failed on a run of the
+   merge base itself, so nothing excuses it`, never `fails on the merge base too`, and two master
+   runs at different commits may name different configurations; (e) two merges inside one run leave one pending
    run, which builds the later head, and nothing is cancelled; (f) the run's wall time, for
    prediction 5. On the Sunday after: the weekly run's `Build modules` jobs run, and every one's
-   log reads `no change to measure` and then runs tests rather than `There are no modules to
-   test`.
+   log reads `[info] no change to measure: the diff base <sha> is the head; testing the modules
+   given` and then runs tests, never `There are no modules to test`.
 6. **`dev/varka_new_tests.py` over recorded diffs**: a new ScalaTest test, a new JUnit display
    name, a renamed test (counted as new), a moved test (not new), a test whose title is an
    interpolated string (reported as unlistable, not silently dropped).
@@ -860,3 +861,43 @@ gh workflow run benchmark.yml -R vecbricks/varka -f pr=791 -f pair=true -f round
 ```
 
 `VarkaWideKernelBenchmark`'s pairs (322a's tenth, 325's second) stay on the laptop.
+
+### 9.2 255b: master after each merge (14 October 2026)
+
+**What landed.** `varka-master.yml` on `vecbricks/varka`, on a push to `master` and on dispatch,
+calls `build_and_test.yml` with the eleven-job set of 3.3 (255b's form) and the group
+`varka-master` without cancelling. `varka-weekly-matrix.yml` names its jobs: `build_java25.yml`'s
+set with the Kubernetes and OIDC jobs off, plus `lint`, `java25`, `docs` and Varka's five.
+`dev/run-tests.py` reads a diff base equal to the head as no change to measure and tests the
+modules a job names. `dev/varka_matrix_ci.sh`, on such a run, keys its pick on the commit and fails
+on any failure instead of rerunning the same tree. `dev/checkstyle-suppressions.xml` keys the
+`InvalidJavadocPosition` exemption on the package path below a `java/` source root. No line of
+`build_and_test.yml` or of the checkout action changed.
+
+**Evidence, off CI.** Checkstyle 11.0.1, run from the coursier cache over copies of the six
+flagged files and a planted misplaced comment in a `varka` package, under roots `varka/varka/` and
+`plain/spark/`: before the fix the first root reported the six and the plant, the second only the
+plant; after it, both report only the plant, and the worktree's own Varka Java sources stay clean.
+`dev/run-tests.py` loaded with its builds and test runs stubbed out, `--modules catalyst` in a
+GitHub Actions environment: with the base at the head it now tests `catalyst` (master's file
+printed "There are no modules to test"), and with the base at the parent commit, whose diff is a
+plan file, it still tests nothing, as a pull request's run should. `dev/varka_matrix_ci.sh` over a
+stub matrix whose configuration always fails, in a scratch repository: with the base at the head,
+master's script passed with "fails on the merge base too" and the new one fails with "failed on a
+run of the merge base itself"; with the base at the parent it still compares, and with no base it
+still fails. actionlint reports the same 103 findings as on master (none in the two workflow
+files); shellcheck the same single pre-existing warning in `dev/varka_matrix_ci.sh`.
+
+**Owed, after the merge** (test 5's checklist, for the coordinator): the merge commit's own push
+starts the first master run, and its jobs, lint verdict, option-step lines and wall time are read
+against (a) to (f). The weekly run can be dispatched at once instead of waiting for Sunday
+(`gh workflow run varka-weekly-matrix.yml -R vecbricks/varka`), at the price of Spark's full matrix
+on the base's slots for about two and a half hours; it cannot run before the merge, because a
+pull request's branch lives on the fork, whose default branch does not carry the file. Prediction
+5 is scored over the first working day of merges.
+
+**Known and left.** The `docs` job's own `dev/is-changed.py` calls (`build_and_test.yml` 1408-1412)
+still skip the Python and R API docs on the weekly run, since on master they see no change;
+`dev/is-changed.py` keeps its reading, because a branch pushed with no commits of its own has the same
+empty diff and must not start the full matrix. The emitted-bytes step prints "unchanged since
+<head>" on a master run (2.9).

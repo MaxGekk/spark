@@ -190,6 +190,8 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Run `dev/scalastyle` before pushing Scala; its parser is older than the language](sql/varka/skills/working-in-this-repo.md#run-devscalastyle-before-pushing-scala-its-parser-is-older-than-the-language)
 * [A run's job list on this fork used to say nothing about what the pull request changed](sql/varka/skills/working-in-this-repo.md#a-runs-job-list-on-this-fork-used-to-say-nothing-about-what-the-pull-request-changed)
 * [Upstream enters only through a sync pull request](sql/varka/skills/working-in-this-repo.md#upstream-enters-only-through-a-sync-pull-request)
+* [A run of master scoped by its diff from master tests nothing, and says it passed](sql/varka/skills/working-in-this-repo.md#a-run-of-master-scoped-by-its-diff-from-master-tests-nothing-and-says-it-passed)
+* [A path-based checkstyle suppression matches the absolute path, checkout directory included](sql/varka/skills/working-in-this-repo.md#a-path-based-checkstyle-suppression-matches-the-absolute-path-checkout-directory-included)
 * [A two-track milestone drifts to the measurable track; review it against the done-when list](sql/varka/skills/working-in-this-repo.md#a-two-track-milestone-drifts-to-the-measurable-track-review-it-against-the-done-when-list)
 * [A day of merges is a day of Builds; the queue now keeps a verdict across docs-only pushes](sql/varka/skills/working-in-this-repo.md#a-day-of-merges-is-a-day-of-builds-the-queue-now-keeps-a-verdict-across-docs-only-pushes)
 

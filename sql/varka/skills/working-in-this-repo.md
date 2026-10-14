@@ -200,6 +200,35 @@ widespread failure is *this project's* problem to schedule. It is not. A failure
 code this repository does not contain is not Varka work and does not become a
 milestone task row; at most it becomes a line here, which is what this is.
 
+## A run of master scoped by its diff from master tests nothing, and says it passed
+
+Since upstream stopped being merged in at checkout, a pull request's Build tests the branch as
+it was cut, not the branch merged with today's master, so two pull requests green on their own
+can break master together. `varka-master.yml` (VARKA-255) builds master after each merge for
+that reason, on `vecbricks/varka`'s own slots: Varka's jobs, the linters and the Java 25 Maven
+build, one run at a time with the newest push waiting; Spark's module matrix is the weekly run's.
+
+The trap in giving master a run is that every scoping step measures a change against the merge
+base with master, and on master that base is the head. Three places read the empty diff as
+"nothing to do" and passed: the precondition selected none of the test jobs (the weekly run
+did this for three Sundays), `dev/run-tests.py` narrowed each module job to no module and printed
+"There are no modules to test", and the option step reran a failure on its "merge base" - the
+same tree - and excused it. The master runs now name their jobs, and the other two read a base
+equal to the head as no change to measure. When a CI step compares against a base, ask what it
+does when the base is the commit itself.
+
+## A path-based checkstyle suppression matches the absolute path, checkout directory included
+
+`dev/checkstyle-suppressions.xml` exempted Spark's sources from `InvalidJavadocPosition` with
+"no path segment named `varka`". Checkstyle matches `files=` against the absolute path, and
+`vecbricks/varka`'s runners check out into `/__w/varka/varka/`, so on that repository nothing was
+exempt and the weekly run's Java linter failed on six Spark files, while the fork, checked out
+into `/__w/spark/spark/`, passed. The pattern now requires the package path,
+`java/org/apache/spark/.../varka/`. A suppression keyed on a directory name has to be keyed below
+the source root, or it depends on where the repository was cloned. Checkstyle 11.0.1 runs in
+seconds from the coursier cache (`com.puppycrawl.tools.checkstyle.Main -c dev/checkstyle.xml
+<dir>`), which is how the failure was reproduced under a root named `varka/varka`.
+
 ## A two-track milestone drifts to the measurable track; review it against the done-when list
 
 Milestone 6 has two tracks the owner set on the day it opened: the compiler's foundation and
