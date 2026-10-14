@@ -893,7 +893,9 @@ the next) and paired at five rounds in under three and a half hours, so three wo
 about two and a quarter; and the three waiting jobs completed with no laptop time. But
 `VarkaUnreadLocalsBenchmark` is no twenty-minute class on a runner: 26 to 34 minutes a side-run
 on an EPYC 9V45, by the same provenance dates, so its pair at five rounds took 4 h 51 min, ten
-single runs and the two builds, with an hour of the six to spare; the class, whose every case
+single runs and the two builds, with an hour of the six to spare. What failed for it is the
+prediction's premise, that the waiting classes were twenty-minute classes, not its arithmetic:
+three rounds of this class would have ended under four hours too. The class, whose every case
 runs its first iterations before C2 has finished a 1.7 MB class (`VARKA-322.md` 9), was not in
 2.6's table of runner times. The results-file run took 2:55:41 for `VarkaWideKernelBenchmark` on
 an EPYC 7763 and 0:13:25 for `VarkaEmissionBenchmark` on an EPYC 9V74 (`VARKA-322.md` 9, "Row
@@ -912,8 +914,12 @@ itself (`taskset -c 0,1,2,3`): that runner VM has a cpufreq directory, so the re
 script's automatic pin applied, where every EPYC job ran unpinned (`the runner is not pinned` in
 its provenance). And the Java side's A/A at five rounds read 16.2% by best on one emission row,
 while two pairs drew three slow forks of five on one side of a bimodal row (`VARKA-322.md` 9),
-the draw the scoring of prediction 8 above reckoned five rounds would make rare; the
-threshold-per-class rule stands, and a runner's median alone decides nothing.
+the draw the scoring of prediction 8 above reckoned five rounds would make rare. By the rule that
+scoring set, `VarkaEmissionBenchmark`'s next runner pair dispatches with `threshold=17`, its A/A's
+widest best rounded up, with that A/A as the reason: the A/A itself would have failed at 10 had
+its median on that row read 10.0% rather than 9.9%. No other class has a runner A/A yet, so the
+others keep 10 and read a flagged row against an A/A run then. A runner's median alone decides
+nothing.
 
 ### 9.2 255b: master after each merge (14 October 2026)
 
