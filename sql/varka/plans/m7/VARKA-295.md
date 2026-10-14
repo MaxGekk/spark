@@ -284,9 +284,11 @@ known.
 
 **What changed.**
 
-* The release-path state now lists the kernel class's compiled methods, from `Compiler.codelist`
-  (compile id, tier, state), and the methods with no code at all (`VarkaKernelWarmup.jitState`).
-  On a forced case it reads `no code: [..., loopDense0, ...]`.
+* The release-path state now lists the kernel class's compiled code, from `Compiler.codelist`
+  (compile id, tier, state; on JDK 25 state 1 is not entrant), and the methods with no code in
+  use, matched by name and descriptor (`VarkaKernelWarmup.jitState`). On a forced case it reads
+  `no code in use: [loopDense0(7)]`. The list cannot mark an OSR compile, and it names classes
+  rather than loaders; this test's shape is new to the JVM, so the second does not arise here.
 * The test records the JIT's events while it runs (`VarkaJitEvidence`: every compile, compile
   failure, deoptimization and inlining decision, and the allocation samples, read back in two
   streaming passes from a bounded recording) and its failure message carries, for the kernel's
@@ -294,7 +296,8 @@ known.
   inlining C2 refused, the Vector API classes it inlined (a second one would be the species
   pollution of `vector-api-and-width.md`), and where the warm-up thread's last 20 s of allocation
   came from, each frame marked interpreted, compiled or inlined. On the forced case that reads
-  `loopDense0:1 (Interpreted)`. `-Dvarka.warmup.jitEvidence=always` logs it on a pass too.
+  `loopDense0:1 (Interpreted)`. Any failure after the first run carries it, not only the
+  verdict's. `-Dvarka.warmup.jitEvidence=always` logs it on a pass too.
 * `dev/varka_matrix_report.py` keeps 12,000 characters of a message line, for the longer message.
 
 **What is deliberately unchanged.** The test still fails the module's job. Cancelling it there, or

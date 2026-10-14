@@ -261,8 +261,8 @@ class VarkaKernelWarmupSuite extends SparkFunSuite with VarkaTestWatchdog {
     // Given a class, it also lists that class's compiled methods and the ones with no code:
     // String's are compiled in any JVM that has run a test, and its rarely used ones are not.
     val classState = VarkaKernelWarmup.jitState(classOf[String])
-    assert(classState.matches(".*kernel code: \\d+ L\\d s\\d \\w+, .*"), classState)
-    assert(classState.contains("no code: ["), classState)
+    assert(classState.matches(".*kernel code \\(\\d+\\): .*\\d+ L\\d s\\d \\S+, .*"), classState)
+    assert(classState.contains("no code in use: ["), classState)
   }
 
   test("a block is clean only within the allowance and a quarter of the first") {

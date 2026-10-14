@@ -23,9 +23,11 @@ import java.util.concurrent.TimeUnit
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
 
+import org.scalatest.exceptions.TestFailedException
+
 import org.apache.spark.sql.{DataFrame, QueryTest, Row}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaJitEvidence,
-  VarkaKernelWarmth, VarkaKernelWarmup, VarkaShapeCache, VarkaShapeCacheImpl}
+  VarkaKernelWarmth, VarkaKernelWarmup, VarkaShapeCache}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.util.QueryExecutionListener
@@ -119,9 +121,27 @@ class VarkaWarmupEndToEndSuite extends QueryTest with VarkaSharedSessions with V
       // A shape another suite emitted is a class this JVM has already met; start from a new one.
       VarkaShapeCache.invalidateAll()
       val evidence = VarkaJitEvidence.start()
-      try checkWarmupRuns(query, expected, evidence) finally evidence.close()
+      try {
+        checkWarmupRuns(query, expected, evidence)
+      } catch {
+        // Any check after the first run can fail for a JIT reason - the wait, the probe, the
+        // second run's path - so each failure carries the JIT's account of the kernel, as the
+        // verdict's own does.
+        case e: TestFailedException if !e.getMessage.contains(JitEvidenceMark) =>
+          val account = VarkaKernelWarmup.recentOutcomes().asScala.lastOption
+            .map(o => jitAccount(evidence, o)).getOrElse("no warm-up outcome")
+          fail(s"${e.getMessage}; $account", e)
+      } finally {
+        evidence.close()
+      }
     }
   }
+
+  private val JitEvidenceMark = "JIT evidence for "
+
+  private def jitAccount(evidence: VarkaJitEvidence, outcome: VarkaKernelWarmup.Outcome): String =
+    evidence.summary(VarkaShapeCache.classNameFor(outcome.shapeHash()), "varka-kernel-warmup",
+      Duration.ofSeconds(20))
 
   private def checkWarmupRuns(
       query: String, expected: Seq[Row], evidence: VarkaJitEvidence): Unit = {
@@ -142,12 +162,12 @@ class VarkaWarmupEndToEndSuite extends QueryTest with VarkaSharedSessions with V
     // allocations came from (VARKA-295). `-Dvarka.warmup.jitEvidence=always` logs it on a pass.
     if (outcome.state() != VarkaKernelWarmth.State.COMPILED ||
         sys.props.get("varka.warmup.jitEvidence").contains("always")) {
-      val account = evidence.summary(VarkaShapeCacheImpl.classNameFor(outcome.shapeHash()),
-        "varka-kernel-warmup", Duration.ofSeconds(20))
+      val account = jitAccount(evidence, outcome)
       logWarning(s"The warm-up of `$query`: $outcome; $account")
+      // The account before the release-path state, whose code list can be long.
       assert(outcome.state() === VarkaKernelWarmth.State.COMPILED,
-        s"$outcome; the first run took $firstMillis ms; " +
-          s"${VarkaKernelWarmup.lastReleaseJitState()}; $account")
+        s"$outcome; the first run took $firstMillis ms; $account; " +
+          VarkaKernelWarmup.lastReleaseJitState())
     }
     assert(outcome.firstProbeBytes() > outcome.lastProbeBytes(), outcome)
 

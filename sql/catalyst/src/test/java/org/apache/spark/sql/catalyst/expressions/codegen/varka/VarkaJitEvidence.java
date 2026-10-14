@@ -74,7 +74,7 @@ public final class VarkaJitEvidence implements AutoCloseable {
     var r = evidence.recording;
     r.enable("jdk.Compilation").withThreshold(Duration.ZERO);
     r.enable("jdk.CompilationFailure");
-    r.enable("jdk.Deoptimization").withStackTrace();
+    r.enable("jdk.Deoptimization").withoutStackTrace();
     r.enable("jdk.CompilerInlining");
     r.enable("jdk.CodeCacheFull");
     r.enable("jdk.ObjectAllocationSample").withStackTrace().with("throttle", "1000/s");
