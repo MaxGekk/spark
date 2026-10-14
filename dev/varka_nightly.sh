@@ -17,18 +17,19 @@
 #
 # The checks that need volume or an idle machine, in one command that leaves a
 # dated log: the machine canary, the IR fuzzer at ten thousand iterations with
-# a fresh seed, the random differential against vanilla Spark (VARKA-262), the
-# exhaustive calendar sweeps, the SMT proofs under both pinned solvers, every small IR
-# tree to size 5 (VARKA-269) and to size 4 in each of its variants (VARKA-278), the
-# deoptimization-cycle guard, the inlining-cliff guard, and Spark's golden-file suite with
-# Varka on (VARKA-271). Optionally the whole gate.
+# a fresh seed, the random differential against vanilla Spark (VARKA-262) and its arm
+# with the kernel warm-up on (VARKA-327), the exhaustive calendar sweeps, the SMT proofs
+# under both pinned solvers, every small IR tree to size 5 (VARKA-269) and to size 4 in
+# each of its variants (VARKA-278), the deoptimization-cycle guard, the inlining-cliff
+# guard, and Spark's golden-file suite with Varka on (VARKA-271). Optionally the whole gate.
 #
-#   dev/varka_nightly.sh                  # canary, fuzzer (10000, seed = today), Spark differential (50000), sweeps, proofs, deopt, cliff
+#   dev/varka_nightly.sh                  # canary, fuzzer (10000, seed = today), Spark differential (50000, and 2000 warmed), sweeps, proofs, deopt, cliff
 #   dev/varka_nightly.sh --iterations 500 --seed 42 --skip-sweep --skip-deopt --skip-cliff   # a quick trial
 #   dev/varka_nightly.sh --gate           # the standing gate as well
 #   dev/varka_nightly.sh --series-size 6  # every small tree to size 6, hours over every core
 #   dev/varka_nightly.sh --variants-size 0  # without the variants of the small trees
 #   dev/varka_nightly.sh --sparkfuzz-iterations 5000 --skip-sweep --skip-deopt --skip-cliff
+#   dev/varka_nightly.sh --sparkwarm-iterations 0   # without the warmed arm of the differential
 #   dev/varka_nightly.sh --skip-golden    # without the golden-file suite, about an hour
 #
 # The deopt step forks ten fresh JVMs per vector width of the default emission's twelve-output
@@ -57,6 +58,7 @@ usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
 root="$(git rev-parse --show-toplevel)"; cd "$root"
 iterations=10000; seed="$(date +%Y%m%d)"; sweep=1; deopt=1; cliff=1; gate=0; golden=1
 sparkfuzz=50000
+sparkwarm=2000
 series=5
 variants=4
 while [ "$#" -gt 0 ]; do
@@ -65,6 +67,7 @@ while [ "$#" -gt 0 ]; do
     --iterations) iterations="$2"; shift 2 ;;
     --seed) seed="$2"; shift 2 ;;
     --sparkfuzz-iterations) sparkfuzz="$2"; shift 2 ;;
+    --sparkwarm-iterations) sparkwarm="$2"; shift 2 ;;
     --series-size) series="$2"; shift 2 ;;
     --variants-size) variants="$2"; shift 2 ;;
     --skip-sweep) sweep=0; shift ;;
@@ -110,6 +113,15 @@ if [ "$sparkfuzz" -gt 0 ]; then
     "set Test/javaOptions ++= Seq(\"-Dvarka.sparkfuzz.iterations=$sparkfuzz\", \"-Dvarka.sparkfuzz.seed=$seed\", \"-Dspark.test.timeout=170\", \"-Dvarka.test.watchdog.minutes=170\")" \
     'testOnly *VarkaSparkFuzzSuite *VarkaSparkReproducerSuite'
 fi
+# The same compositions with the kernel warm-up on, as production runs (VARKA-327): each shape's
+# first query on the row path while its kernel compiles, the next on the kernel, then the kernel
+# over other data, every run against the row engine. A kernel released without its verdict logs
+# the JIT's account of it, the evidence row 295 asks for; only answers fail the step.
+if [ "$sparkwarm" -gt 0 ]; then
+  run_step sparkwarm build/sbt -batch "project sql" \
+    "set Test/javaOptions ++= Seq(\"-Dvarka.sparkfuzz.warmupIterations=$sparkwarm\", \"-Dvarka.sparkfuzz.seed=$seed\", \"-Dspark.test.timeout=170\", \"-Dvarka.test.watchdog.minutes=170\")" \
+    "testOnly *VarkaSparkFuzzSuite -- -z \"both sides of the warm-up handover\""
+fi
 # Spark's golden files through the Arrow source with Varka on, in a JVM of its own; a failure not
 # on sql/varka/spark_suites/excluded.tsv is rerun with Varka off and named Varka's or the harness's.
 if [ "$golden" -eq 1 ]; then
@@ -147,10 +159,11 @@ fi
 [ "$gate" -eq 1 ] && run_step gate dev/varka_gate.sh
 
 echo
-echo "fuzzer seed $seed, $iterations iterations; Spark differential $sparkfuzz compositions"
+echo "fuzzer seed $seed, $iterations iterations; Spark differential $sparkfuzz compositions," \
+  "$sparkwarm with the warm-up on"
 printf '%-9s %-7s %6s  %s\n' step status secs log
 bad=0
-for s in canary fuzz forced sparkfuzz sweep prove series variants deopt cliff gate; do
+for s in canary fuzz forced sparkfuzz sparkwarm sweep prove series variants deopt cliff gate; do
   [ -n "${status[$s]:-}" ] || continue
   printf '%-9s %-7s %6d  %s\n' "$s" "${status[$s]}" "${secs[$s]}" "$logdir/$s.log"
   [ "${status[$s]}" = ok ] || bad=$((bad + 1))

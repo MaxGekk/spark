@@ -242,6 +242,24 @@ object VarkaSparkFuzz {
     Case(outputs, conjuncts, op, data, ansi, pivot)
   }
 
+  /**
+   * Data for a later batch of `c`'s shape (VARKA-327): every cell of `c.data` that is not NULL
+   * replaced by the cell a fresh draw of the same kind (safe or full) puts there, unless that one
+   * is NULL, and every NULL kept where it is. A column holds a NULL here exactly where it did,
+   * so each column's nullability, which the shape is compiled for, is the same, and a kernel
+   * warmed on `c.data` serves these rows without a new warm-up; the values are new, so the
+   * compiled code meets guard outcomes and values its profile never saw.
+   */
+  def laterData(c: Case, rnd: Random, safe: Boolean): Vector[Vector[String]] = {
+    val fresh = drawData(rnd, c.data.size, safe)
+    def isNull(cell: String): Boolean = cell.startsWith("CAST(NULL")
+    c.data.zip(fresh).map { case (row, other) =>
+      row.zip(other).map { case (cell, next) =>
+        if (isNull(cell) || isNull(next)) cell else next
+      }
+    }
+  }
+
   // ---- the comparison ---------------------------------------------------------------------
 
   /** A query's outcome: its rows sorted as strings, or the class of what it raised. */
