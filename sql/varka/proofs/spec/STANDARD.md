@@ -142,8 +142,8 @@ raises 22003 rather than wrapping.
 
 ### 4.2 Comparison of exact numerics
 
-`i > 0`, `i = 5`, `month(d) > i`, `l > l2`, `l = l2`, `l >= 5000000000` (`EqualTo`, `LessThan`,
-`LessThanOrEqual`, `GreaterThan`, `GreaterThanOrEqual`). SQL-92 8.2.
+`i > 0`, `i = 5`, `year(d) = 2021`, `month(d) > i`, `l > l2`, `l = l2`, `l >= 5000000000`
+(`EqualTo`, `LessThan`, `LessThanOrEqual`, `GreaterThan`, `GreaterThanOrEqual`). SQL-92 8.2.
 
 > GR 1(a): If XV or YV is the null value, then "X <comp op> Y" is unknown.
 >
@@ -159,8 +159,8 @@ it false.
 
 ### 4.3 Comparison of datetimes
 
-`d = d2`, `d < d2`, `d <= d2`, `d > d2`, `d >= d2`, `year(d) = 2021`'s date side, `t < t2`,
-`t = TIME'12:34:56.789'`. SQL-92 8.2.
+`d = d2`, `d < d2`, `d <= d2`, `d > d2`, `d >= d2`, `t < t2`, `t = TIME'12:34:56.789'`. SQL-92
+8.2.
 
 > GR 5: The comparison of two datetimes is determined according to the interval resulting from
 > their subtraction. Let X and Y be the two values to be compared and let H be the least

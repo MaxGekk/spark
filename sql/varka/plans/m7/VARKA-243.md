@@ -208,8 +208,12 @@ a lesson in `skills/calendar-algorithms.md` says which divisions truncate and wh
 * A transcription loss: the "unknown" rows of 8.12's truth tables are missing from the text read,
   so `unknown AND unknown` and its kin are stated from the surviving rows and Spark, and owed.
 
-**A correction the suite made.** The plan's comparison example ran `d < d2` as a projected value;
-a predicate fuses only as a filter, so the suite runs comparisons as `WHERE` clauses.
+**Two corrections to section 5.** The plan's comparison example ran `d < d2` as a projected
+value; a predicate fuses only as a filter, so the suite runs comparisons as `WHERE` clauses. And
+the `ym * 2` example is not pinned: the coverage table fuses an interval multiply only over
+bounded operands, so a stored interval column times a constant declines to the row engine, and the
+bounded form, `make_ym_interval(year(d), month(d)) * 2`, is not negative for any date the
+standard admits, years 1 to 9999. Its definition (4.18) stands on the text alone until row 244 or 245 reaches it.
 
 **The predictions, scored.**
 
