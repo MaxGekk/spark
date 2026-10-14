@@ -224,10 +224,11 @@ release, which at 1% to 7% of warm-ups is under one a run.
 **The 22 deadline releases of the nightly run** have the shape of 2's 35: every one with an empty
 C2 queue, 14 with no deoptimization of the kernel recorded and 8 with traps in a masked loop or
 `run` (VARKA-326's cycle), 21 with some method without code in use (in 7 a masked loop and its
-epilogue), 1 with code for every method, and a last probe of 21,040 to 522,640 bytes. So the
-release rate depends on the seed (6.8% at seed 20261008, 1.3% at seed 7, 0.9% at seed 20261014),
-and every release this arm has met is VARKA-295's signature or VARKA-326's cycle, none a compile
-still queued at the deadline.
+epilogue), 1 with code for every method, and a last probe of 21,040 to 522,640 bytes. The release
+rate moves with the seed (6.8% at seed 20261008, 1.3% at seed 7, 0.9% at seed 20261014) and from
+run to run: seed 20261008's 400 compositions released 29 at the deadline in one run and 13 in the
+next, the same compositions. Every release this arm has met is VARKA-295's signature or
+VARKA-326's cycle, none a compile still queued at the deadline.
 
 ### 6.1's predictions, scored
 
@@ -267,3 +268,34 @@ still queued at the deadline.
 10. **A JVM that cannot warm failed the arm**; it cancels it (`assume`). The arm runs under every
     option-matrix configuration, which leaves out `VarkaWarmupEndToEndSuite` for timing a compile;
     this arm asserts on no timing, and its 8 compositions add seconds per configuration.
+
+### 9.2 What the second review changed
+
+A second `/code-review high`, over the corrections, found ten more; nine were fixed (7 below is two
+of them).
+
+1. **The planted-fault test could pass with no handover**, its shape going to the kernel without
+   a warm-up; it now asserts a run took the row path, and cancels on a JVM that cannot warm.
+2. **A composition whose four runs all had a node still warming** was counted nowhere and never
+   ran over other data, though a kernel had served it. A run with any kernel batches now counts
+   as reaching a kernel, and a composition still warming after four runs has its own count.
+3. **A warmed reproducer would replay with the warm-up off** if kept in `sql/varka/fuzz/spark/`,
+   and pass for the wrong reason. Its status is `warmed`, which the replay suite refuses.
+4. **The final wait for the warm-up ignored a timeout**; it is counted.
+5. **The planted test accepted only the kernel side**, though a filter's planted fault would show
+   while a projection above it warms; it accepts both kernel sides.
+6. **The outcome of a query was computed by a copy** of `VarkaSparkFuzz.outcome`; the object has
+   `outcomeOf(df)`, which `outcome` calls.
+7. **The fixture's caching was written twice** in the trait, and the warm-up setting's restore
+   repeated `withBothConf`; both use the one helper now.
+8. **The arm's counts were vars on the shared trait**, which the planted test added to as well;
+   each test has its own `WarmedCounts`.
+
+Not changed: the copied deadline property and default (9.1's eighth item, for the same reason),
+and nothing further for the replay suite, which would need the later data in the reproducer's
+format to replay a warmed case; a warmed failure replays by seed and iteration instead.
+
+After both: the two suites pass (15 tests, 118 s with sbt); 400 compositions of seed 20261008 in
+4 min 40 s, 304 handed over, the other 96 accounted for, 13 deadline releases and 1 early one, no
+disagreement. The nightly-volume run above predates these changes, which move no comparison and
+only the counting of a run with one node on its kernel and another warming.

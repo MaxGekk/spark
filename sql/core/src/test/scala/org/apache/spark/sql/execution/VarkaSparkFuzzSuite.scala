@@ -151,6 +151,7 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     val failures = scala.collection.mutable.ArrayBuffer.empty[String]
     val verdicts = scala.collection.mutable.TreeMap.empty[String, Int]
     var releasedEarly = 0
+    val counts = new WarmedCounts
     val range = warmupOnly.map(k => k to k).getOrElse(0 until warmupIterations)
     var evidence = if (warmupJitEvidence) Some(VarkaJitEvidence.start()) else None
     try withWarmupDeadline(warmupDeadline) {
@@ -161,7 +162,7 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
         // Every composition starts from a cold shape, so that each one takes the handover.
         VarkaShapeCache.invalidateAll()
         val before = VarkaKernelWarmup.recentOutcomes().asScala.toSet
-        val result = warmedDisagreement(c, later)
+        val result = warmedDisagreement(c, later, counts)
         val outcomes = VarkaKernelWarmup.recentOutcomes().asScala.filterNot(before.contains)
         outcomes.foreach { o =>
           verdicts(o.state().toString) = verdicts.getOrElse(o.state().toString, 0) + 1
@@ -197,7 +198,10 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
           // A failure over the other data is stored with that data, and without the pivot,
           // which is a row of the first data and was not checked there.
           val overLater = kind.startsWith("over other data")
-          val text = render(Reproducer("regression", s"seed $seed iteration $it, the warm-up on: " +
+          // Status `warmed`: the replay suite replays with the warm-up off, where this case's
+          // path is not taken, and fails on any status but its two, so a warmed reproducer
+          // cannot be kept there and pass for the wrong reason.
+          val text = render(Reproducer("warmed", s"seed $seed iteration $it, the warm-up on: " +
             s"-Dvarka.sparkfuzz.seed=$seed -Dvarka.sparkfuzz.warmupOnly=$it", c.ansi, kind,
             c.select, c.where, if (overLater) fixtureSql(later) else c.fixture,
             if (overLater) None else c.pivot.map(rowText)))
@@ -211,20 +215,15 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     } finally {
       evidence.foreach(_.close())
     }
-    info(s"compositions $warmedCompositions: runs on the row path while warming $rowPathRuns, " +
-      s"on the kernel $kernelRuns, handed over $handedOver; never on a kernel: no Varka node " +
-      s"$warmedUnfused, raised $warmedRaised, no batch $warmedNoBatches, " +
-      s"batches declined $warmedDeclined")
-    info(s"runs over other data $laterRuns, of which $laterNewShape met a new shape; " +
-      s"waits that timed out $notIdle")
+    counts.summary.foreach(info(_))
     info(s"warm-up verdicts: ${verdicts.map { case (k, n) => s"$k $n" }.mkString(", ")}, " +
       s"of the releases $releasedEarly before the deadline")
     // An arm whose shapes stopped reaching the kernel would compare the row engine with itself.
     // Three in four compositions hand over at two seeds (VARKA-327.md 2); the rest have no
     // Varka node, raise on both sides, or have every batch pruned, so half is far from the edge.
-    if (warmedCompositions >= 50) {
-      assert(handedOver * 2 >= warmedCompositions,
-        s"only $handedOver of $warmedCompositions compositions were handed over to a kernel")
+    if (counts.compositions >= 50) {
+      assert(counts.handedOver * 2 >= counts.compositions,
+        s"only ${counts.handedOver} of ${counts.compositions} compositions were handed over")
     }
     assert(failures.isEmpty, failures.mkString("\n"))
   }
@@ -365,8 +364,9 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
 
   test("the warmed arm finds a planted kernel fault after the handover, not before it") {
     // The planted rollback changes what the kernel computes and nothing the row path does, so
-    // with the warm-up on the runs on the row path must pass and the first run on the kernel
+    // with the warm-up on the runs on the row path must pass and the first run with a kernel
     // fail: the arm compares both sides of the switch, and keeps them apart.
+    assume(VarkaKernelWarmup.canWarm(), "this JVM cannot warm kernels")
     val it = plantedFirst.map(_._1)
       .getOrElse(fail(s"seed $plantedSeed: the planted rollback changed no answer in 300"))
     val c = rectify(draw(rows, plantedSeed, it))
@@ -374,15 +374,20 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
       withPlantedRollback()(kindOf(c, partitions = false, Seq(k))).isDefined
     }.getOrElse(fail(s"composition $it: no single forced output changes an answer"))
     VarkaShapeCache.invalidateAll()
+    val counts = new WarmedCounts
     // Two seconds of deadline: the planted kernel's warm-up can wait one out, and a release hands
     // the shape to the kernel as a verdict does.
     val found = withPlantedRollback(Some(k)) {
       withWarmupDeadline(2) {
-        warmedDisagreement(c, laterData(c, new Random(plantedSeed), safe = true, wide = false))
+        warmedDisagreement(c, laterData(c, new Random(plantedSeed), safe = true, wide = false),
+          counts)
       }
     }
     info(s"composition $it, output $k forced: ${found.getOrElse("no disagreement")}")
-    assert(found.exists(_.startsWith("after the handover to the kernel")), found)
+    // A shape that went to its kernel without a warm-up would pass the check below untested.
+    assert(counts.rowPathRuns > 0, "no run took the row path while the kernel warmed")
+    assert(found.exists(kind => kind.startsWith("after the handover to the kernel") ||
+      kind.startsWith("with one node on its kernel while another warms")), found)
   }
 
   test("a reproducer with a pivot parses back to what was rendered") {

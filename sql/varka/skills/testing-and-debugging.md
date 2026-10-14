@@ -755,8 +755,10 @@ default, 2,000 in the nightly's `sparkwarm` step), `-Dvarka.sparkfuzz.warmupOnly
 
 * **The kind names the side of the switch**: "on the row path while the kernel warms", "after the
   handover to the kernel", "over other data after the handover". A reproducer is not shrunk -
-  each smaller case is a new warm-up - and replays by its note's flags; the replay suite runs with
-  the warm-up off, so do not keep one in `sql/varka/fuzz/spark/` without saying so.
+  each smaller case is a new warm-up - and replays by its note's flags. Its status is `warmed`,
+  which `VarkaSparkReproducerSuite` refuses: that suite replays with the warm-up off, where the
+  case's path is not taken, so a warmed case kept in `sql/varka/fuzz/spark/` would pass for the
+  wrong reason.
 * **A release is evidence, never a failure.** About one small kernel in fifteen never gets its
   verdict (`VARKA-327.md` 2), so the arm sets the deadline to 10 s
   (`-Dvarka.sparkfuzz.warmupDeadlineSeconds`) where production waits 60, and reports each release
@@ -766,7 +768,8 @@ default, 2,000 in the nightly's `sparkwarm` step), `-Dvarka.sparkfuzz.warmupOnly
   traps in a masked loop are VARKA-326's cycle; a busy queue means the deadline was too short.
 * **Read the counts before trusting a pass.** Three in four compositions hand over; the rest have
   no Varka node, raise on both sides, or have every cached batch pruned by the scan's statistics
-  (`numInputBatches` 0). At 50 or more the test fails if fewer than half hand over.
+  (`numInputBatches` 0); the counts name each. At 50 or more the test fails if fewer than half
+  hand over.
 
 
 ## A decline is the entry deleted, and only a forced decline reaches the branch that has to make it so
