@@ -513,8 +513,8 @@ def main():
         # only the affected modules.
         if test_env == "github_actions" and (is_apache_spark_ref or is_github_prev_sha):
             if os.environ.get("VARKA_DIFF_BASE") and os.environ.get("VARKA_DIFF_HEAD"):
-                # The pull request's own change; see dev/is-changed.py for why HEAD is the
-                # wrong thing to diff on this fork.
+                # The pull request's own change; see dev/is-changed.py for why the base is
+                # Varka's master rather than apache/spark.
                 changed_files = identify_changed_files_from_git_commits(
                     os.environ["VARKA_DIFF_HEAD"], target_ref=os.environ["VARKA_DIFF_BASE"]
                 )

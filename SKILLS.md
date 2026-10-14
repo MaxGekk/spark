@@ -187,8 +187,8 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A recipe for a cheap agent ages at the rate of the emitter, not of the arithmetic](sql/varka/skills/working-in-this-repo.md#a-recipe-for-a-cheap-agent-ages-at-the-rate-of-the-emitter-not-of-the-arithmetic)
 * [A value that depends on repo state is queried, not chosen](sql/varka/skills/working-in-this-repo.md#a-value-that-depends-on-repo-state-is-queried-not-chosen)
 * [Run `dev/scalastyle` before pushing Scala; its parser is older than the language](sql/varka/skills/working-in-this-repo.md#run-devscalastyle-before-pushing-scala-its-parser-is-older-than-the-language)
-* [A run's job list on this fork says nothing about what the pull request changed](sql/varka/skills/working-in-this-repo.md#a-runs-job-list-on-this-fork-says-nothing-about-what-the-pull-request-changed)
-* [A red Build here may be failing on code this repository does not contain](sql/varka/skills/working-in-this-repo.md#a-red-build-here-may-be-failing-on-code-this-repository-does-not-contain)
+* [A run's job list on this fork used to say nothing about what the pull request changed](sql/varka/skills/working-in-this-repo.md#a-runs-job-list-on-this-fork-used-to-say-nothing-about-what-the-pull-request-changed)
+* [Upstream enters only through a sync pull request](sql/varka/skills/working-in-this-repo.md#upstream-enters-only-through-a-sync-pull-request)
 * [A two-track milestone drifts to the measurable track; review it against the done-when list](sql/varka/skills/working-in-this-repo.md#a-two-track-milestone-drifts-to-the-measurable-track-review-it-against-the-done-when-list)
 * [A day of merges is a day of Builds; the queue now keeps a verdict across docs-only pushes](sql/varka/skills/working-in-this-repo.md#a-day-of-merges-is-a-day-of-builds-the-queue-now-keeps-a-verdict-across-docs-only-pushes)
 

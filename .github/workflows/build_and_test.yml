@@ -134,12 +134,11 @@ jobs:
               changed_files=$(git diff --name-only "$APACHE_SPARK_REF" HEAD 2>/dev/null)
             fi
             # Printed because its size is the tell. The first form is the pull request's own
-            # change - the fetched branch head against its merge base with the branch it was
-            # cut from, both computed in checkout-and-sync before the squash discards the
-            # ancestry (PR #91 squash-merged the base as well and had to be reverted; see "two
-            # squash merges cannot work"). The second is the old behaviour, kept for a fork
-            # whose upstream could not be fetched: it measures this fork's whole divergence
-            # from apache/spark, so almost every run selects `root` and tests everything.
+            # change - the checked-out commit against its merge base with Varka's master, both
+            # set by checkout-and-sync. The second is the fallback for a fork whose upstream
+            # could not be fetched: checkout-and-sync then sets APACHE_SPARK_REF to the merge
+            # base with apache/spark, which measures this fork's whole divergence, so almost
+            # every run selects `root` and tests everything.
             echo "changed files vs base: $(echo "$changed_files" | grep -c . || true)"
             if [ -n "$changed_files" ]; then
               static_only=true
@@ -1254,13 +1253,9 @@ jobs:
   # standard-library Python and finish in seconds; before this job neither ran anywhere but
   # on a developer's machine, through the pre-commit hook.
   #
-  # This job checks out the branch itself, with its full history, rather than the
-  # apache/spark tree with the branch squash-merged on top that checkout-and-sync gives every
-  # other job. The quote check accepts a number that appears in any committed version of a
-  # results file - plans quote the figure a change moved away from - and on the squashed tree
-  # that history is a single commit, which turns most of the documents' quotes into orphans
-  # (VARKA-106.md, section 2). The documents are the fork's; upstream's tree has no
-  # bearing on whether they quote the fork's numbers.
+  # This job needs the branch's full history: the quote check accepts a number that appears
+  # in any committed version of a results file - plans quote the figure a change moved away
+  # from (VARKA-106.md, section 2).
   # The Varka suites alone, for a change confined to Varka's files (VARKA-160). Two jobs in
   # parallel, one per module, each the sbt build of that module's tests and its `*Varka*`
   # suites; the sql job adds the Arrow cache serializer's suite, which is Varka's without the

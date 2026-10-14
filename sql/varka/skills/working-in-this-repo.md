@@ -144,37 +144,41 @@ job on VARKA-116's suite after every test in it had passed locally. `dev/scalast
 takes about a minute on a warm build; run it before the first push of any Scala
 change, and spell large literals without separators.
 
-## A run's job list on this fork says nothing about what the pull request changed
+## A run's job list on this fork used to say nothing about what the pull request changed
 
-Every pull request on the fork runs the full matrix - about 36 jobs, about an
-hour - however small the change, and that is not a sign the change touched
-something wide. The `Check changes` job diffs the checked-out tree against
-apache/spark master (`APACHE_SPARK_REF`), which is the fork's whole delta from
-upstream, so every module gate answers true; the documents-only pull request that
-recorded this (#222, one plan file) was required to run the Varka engine on two
-architectures, the bench module, the Java 25 Maven build and every test shard.
-Do not read a skipped job as "this PR did not touch that module" or a required
-one as "it did", and do not plan a task around a gate skipping until the
-precondition measures the pull request's own files (`VARKA-106.md` 9).
+Until VARKA-106, every pull request on the fork ran the full matrix - about 36
+jobs, about an hour - however small the change, because the `Check changes` job
+diffed against apache/spark master, the fork's whole delta from upstream. It now
+diffs the checked-out commit against its merge base with Varka's master
+(`VARKA_DIFF_BASE`), and prints the count as "changed files vs base". A count in
+the thousands means that base could not be fetched and the run fell back to the
+whole delta: then a required job still says nothing about what the pull request
+touched.
 
-## A red Build here may be failing on code this repository does not contain
+## Upstream enters only through a sync pull request
 
-The fork's CI does not build the branch. It builds the branch *merged with a newer
-upstream Spark* - the Precompile job's log opens with a page of `Auto-merging` lines
-across the workflows, `AGENTS.md` and the error-condition tables. So the tree under
-test is this repository plus upstream commits it does not carry, and a failing test
-can belong entirely to Spark rather than to anything here.
+Until 14 October 2026 the fork's CI did not build the branch. Upstream's
+checkout action, which Varka had kept, checked out apache/spark's newest master and
+squash-merged the branch on top, so the tree under test was this repository plus
+upstream commits it did not carry. Two things followed. One upstream edit to a file
+Varka rewrote failed every open branch at checkout at once (`build_and_test.yml` on
+9 October, `README.md` on 14 October). And a test could fail on every branch while
+it existed nowhere in this repository, as `AvroSchemaHelperSuite."SPARK-59311: a
+pathologically nested map-key type names the map-key property on overflow"` did for
+a week.
 
-That is not hypothetical. `AvroSchemaHelperSuite."SPARK-59311: a pathologically
-nested map-key type names the map-key property on overflow"` failed on every branch
-in this fork for a week, including documentation-only ones, while the test existed
-nowhere in this repository: `grep -rn "SPARK-59311" .` found nothing outside CI logs.
+`.github/actions/checkout-and-sync` now checks out the triggering commit itself.
+Upstream changes arrive only through a sync pull request (branch
+`varka-sync-apache-<MMDD>`) that merges apache/spark's master into Varka's master;
+its run is where an upstream conflict or an upstream test failure shows, once, and
+the checks below are for that run.
 
-**The check, and the order to do it in.** Before investigating a failing test, grep
-this repository for its name. If the test is not here, the failure is upstream's and
-nothing in the branch can have caused it - stop. Only if it is here does the usual
-question arise, which is whether the branch or the machine caused it, and which
-`.github` documents under "Investigating PR CI Failures".
+**The check, and the order to do it in.** Before investigating a test that fails
+on a sync pull request, grep the pre-sync master for its name. If the test is not
+there, the failure is upstream's and nothing in Varka can have caused it - stop.
+Only if it is there does the usual question arise, which is whether the branch or
+the machine caused it, and which `.github` documents under "Investigating PR CI
+Failures".
 
 **The second check, once the sync has brought the test in.** After VARKA-117 synced
 the fork with upstream master, the same test was in the tree and still red, and the
