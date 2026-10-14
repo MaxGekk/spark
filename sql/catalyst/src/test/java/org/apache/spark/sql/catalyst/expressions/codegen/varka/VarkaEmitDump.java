@@ -17,9 +17,12 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -87,6 +90,9 @@ import org.apache.spark.sql.types.YearMonthIntervalType;
  * and a delta column per variant against the defaults. That is the table VARKA-53 and VARKA-54
  * built by hand; summing the types rather than reading {@code IntVector} alone is what keeps a
  * variant that moves work onto the double lane from reporting the move as a saving.
+ *
+ * <p>{@code --replay <file>} replays a reproduction file a kernel failure wrote (VARKA-315,
+ * {@link VarkaReplay}) and exits 0 when it fails with the recorded signature.
  */
 public final class VarkaEmitDump {
 
@@ -103,7 +109,7 @@ public final class VarkaEmitDump {
 
   /** The command line, parsed. */
   private record Args(List<String> exprs, String columns, String options, int rounds, int repeat,
-      int rows, int nulls, boolean table, List<String> variants) {
+      int rows, int nulls, boolean table, List<String> variants, String replay) {
 
     static Args parse(String[] args) {
       var exprs = new ArrayList<String>();
@@ -115,6 +121,7 @@ public final class VarkaEmitDump {
       int rows = 1024;
       int nulls = 0;
       boolean table = false;
+      String replay = null;
       for (int i = 0; i < args.length; i++) {
         switch (args[i]) {
           case "--columns" -> columns = args[++i];
@@ -125,19 +132,25 @@ public final class VarkaEmitDump {
           case "--nulls" -> nulls = Integer.parseInt(args[++i]);
           case "--table" -> table = true;
           case "--variant" -> variants.add(args[++i]);
+          case "--replay" -> replay = args[++i];
           default -> exprs.add(args[i]);
         }
       }
-      return new Args(exprs, columns, options, rounds, repeat, rows, nulls, table, variants);
+      return new Args(exprs, columns, options, rounds, repeat, rows, nulls, table, variants,
+          replay);
     }
   }
 
-  public static void main(String[] argv) {
+  public static void main(String[] argv) throws IOException {
     var args = Args.parse(argv);
+    if (args.replay() != null) {
+      replay(Path.of(args.replay()));
+      return;
+    }
     if (args.exprs().isEmpty()) {
       System.err.println("usage: VarkaEmitDump <sql expression>... "
           + "[--columns d:date,i:int] [--options cse=false,...] [--rounds N] [--rows N] "
-          + "[--nulls N] [--repeat N]");
+          + "[--nulls N] [--repeat N] | --replay <reproduction file>");
       System.exit(2);
     }
     List<Attribute> childOutput = parseColumns(args.columns());
@@ -161,6 +174,16 @@ public final class VarkaEmitDump {
       return;
     }
     dump(args, compiled.get(), childOutput, options);
+  }
+
+  /**
+   * {@code --replay}: a reproduction file (VARKA-315) replayed to its failure, the report printed,
+   * and the exit status 0 when the replay failed with the file's signature and 1 otherwise.
+   */
+  private static void replay(Path file) throws IOException {
+    var replay = VarkaReplay.of(VarkaReproduction.parse(Files.readString(file)));
+    replay.report().forEach(VarkaEmitDump::report);
+    System.exit(replay.reproduced() ? 0 : 1);
   }
 
   /** The entries, the kernel's tables and IR, the shape hash, and the per-method table. */

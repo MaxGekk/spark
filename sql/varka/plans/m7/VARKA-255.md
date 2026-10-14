@@ -150,7 +150,8 @@ the Varka suites, the engine, the assembly gate and every `Build modules` job, a
 linter (`InvalidJavadocPosition`), as it did on 27 September and 4 October. It passes no `jobs`
 input, so its precondition decides from a diff (`build_and_test.yml` lines 131-134), and on
 `master` the pull-request diff it computes is, by every sign, empty; the job log has expired, so
-the first PR of section 8 confirms the cause before it relies on it. `build_java25.yml` shows the
+the first PR of section 8 confirms the cause before it relies on it (confirmed from the log, which
+had not expired, in 2.9). `build_java25.yml` shows the
 form that runs what it names: an explicit `jobs` JSON, which the precondition takes verbatim
 (lines 109, 332).
 
@@ -239,6 +240,82 @@ flag can only name a step beyond the spread.
    serialize every run, which is rejection 2.
 6. **Pairs on the fork.** A pair holds one fork slot for hours, and its merge base would be
    August's (2.6).
+
+### 2.9 255b's admission check, against the code of 14 October
+
+Read on 14 October 2026 between 13:30 and 14:30 CEST, at `90b8871b705`, with the owner's `gh`
+for reads; nothing was dispatched. It found the plan's master run (3.3) right in outline and five
+things it did not know.
+
+**#806 made the master run the only build of the merged tree.** #806 merged today and changed
+`.github/actions/checkout-and-sync`: outside apache/spark every job now checks out the triggering
+commit itself (`github.sha`, full history) instead of merging the branch onto apache/spark's
+master, and sets `VARKA_DIFF_HEAD` to that commit and `VARKA_DIFF_BASE` to its merge base with
+`vecbricks/varka`'s master, from which the precondition (`dev/is-changed.py`, `dev/varka_scope.py`)
+scopes the jobs to what the branch changed (`working-in-this-repo.md`, "Upstream enters only
+through a sync pull request"). A pull request's Build is therefore a test of the branch as it was
+cut, not of the branch merged with today's master. Two pull requests each green on its own can
+break master together - one renames a helper the other's new test calls, or both move a pinned
+file such as `sql/varka/emitted_bytes.json` - and no run builds the result. 3.8's "deliberately
+unchanged" checkout-and-sync merge with apache/spark no longer exists; the master run replaces the
+coverage it gave, against the right master.
+
+**2.5's reading of the weekly run's skip, confirmed.** Its job log had not expired after all
+(`gh run view 38118793414 -R vecbricks/varka --log`, the run of 11 October). Its precondition
+printed `change detection base: c7e7cc85c0f... (merge base with ... vecbricks/varka.git master)`,
+which is the run's own head, then `changed files vs base: 0` and `varka change scope: spark`, and
+chose `"build": "false"` and every `varka-*` key false, with `lint`, `java25`, `docs`, `buf` and
+`ui` true: the six jobs it ran. The cause holds under #806's action too: on a run of master, the
+merge base of the head with `vecbricks/varka`'s master is the head, so any master run that leaves
+the precondition to decide selects nothing to test.
+
+**An explicit `jobs` alone would still test nothing in the module jobs.** `Build modules` runs
+`dev/run-tests --modules ...`, and `dev/run-tests.py` (lines 507-544) narrows the modules to those
+the diff from `VARKA_DIFF_BASE` to `VARKA_DIFF_HEAD` touches whenever `APACHE_SPARK_REF` is set,
+which the action sets on every run outside apache/spark. On master that diff is empty, so each
+module job would print "There are no modules to test, exiting without testing." and pass. The
+`pyspark`, `sparkr` and `docker-integration-tests` jobs call the same script. So the weekly
+matrix, given its `jobs`, would have turned green while testing nothing; `dev/run-tests.py` must
+read a base equal to the head as "no change to measure", test the modules it was given, and say
+so. A pull request is unaffected: its base is never its head, and a branch pushed with no commits
+of its own has no module job, since its precondition selects none.
+
+**The option step would pass every failure on master.** The Varka suite jobs' second step
+(`dev/varka_matrix_ci.sh`) reruns a failing option configuration on `VARKA_DIFF_BASE` and passes,
+with a warning, when every failure is also there. On master that base is the head, so it would
+rebuild the same tree, find the same failures and pass: no option failure could ever turn the
+master run red. Its pick (`dev/varka_matrix_pick.py`) hashes the branch name, `master`, so it
+would also draw the same configuration on every run. When the base is the head the step has no
+change to blame: it fails on any failure, and it keys the pick on the commit instead, so that
+successive master runs walk the configuration list while a rerun of one commit draws the same
+configuration. The emitted-bytes step beside it prints "unchanged since <head>" in the same case;
+it is right, if uninformative, and is left as it is. *(Corrected in 9.2: it says the oracle
+"proves this change byte-identical", which on a merged tree is false, so it now says a run of
+master has nothing to compare with.)*
+
+**The Java linter's failure is a suppression keyed on the checkout's directory name.** The six
+errors of 11 October (`InvalidJavadocPosition` in `CollationSupport.java`, `GeometryModel.java`,
+`HadoopLineRecordReader.java`, `CLIService.java`, `HiveSessionProxy.java`,
+`HiveSessionImpl.java`) are all in Spark's own sources, which `dev/checkstyle-suppressions.xml`
+exempts from the rule with `files="^(?!.*[\\/]varka[\\/]).*$"`: suppress where no path segment is
+`varka`. Checkstyle matches it against the absolute path, and on `vecbricks/varka` the runner's
+workspace is `/__w/varka/varka/`, so every file has such a segment and nothing is exempt; on the
+fork the workspace is `/__w/spark/spark/` and the rule works, which is why only the base's lint
+was red. Reproduced on the laptop with checkstyle 11.0.1 over copies of the six files and a
+planted misplaced comment in a `varka` package: under a root `.../varka/varka/` the six and the
+plant are reported, under `.../plain/spark/` only the plant. A clone in a directory named `varka`
+would fail the same way. The fix anchors the segment under the Java source root's package path,
+`java/org/apache/spark/.../varka/`, where every Varka Java source lives; the six files are left
+alone, being Spark's. *(Corrected in 9.2: 44 Varka classes live outside such a package, among them
+`VarkaKernelEvaluator` and `PartialVarkaProjection`, and were exempt under the old pattern as
+well; the pattern now also covers a class whose name holds `Varka`.)*
+
+**The called workflow's concurrency does not cancel master runs.** `build_and_test.yml` declares
+`concurrency: build-test-<calling workflow>-<ref>` with `cancel-in-progress: true`. A calling
+workflow with a workflow-level group of its own holds its second run pending until the first
+completes, so two calls never overlap in the inner group and the inner cancel cannot fire;
+`varka-master.yml`'s group therefore decides, and no line of `build_and_test.yml` changes for it.
+(Two of its lines changed for other reasons; 9.2.)
 
 ## 3. The design
 
@@ -360,6 +437,34 @@ bypassing that line), and with `lint`, `java25`, `docs` and the five `varka-*` k
 `InvalidJavadocPosition` finding that has failed it three Sundays is fixed in the same pull
 request, since the master run's linter would fail on it as well.
 
+**255b's form, after its admission check (2.9).** What a master run tests, and how often:
+
+* **A fixed job set, not the commits since the previous run.** The run names `varka-scoped`,
+  `varka-engine`, `varka-bench`, `varka-asm`, `varka-docs`, `lint` and `java25`: eleven jobs with
+  the precondition and the lint image, every lint step (the flags `lint-spark`, `lint-code` and
+  `lint-python` are left out, which the lint job reads as true), and no `Precompile Spark`, `Build
+  modules`, `docs`, `buf` or `ui`. Scoping to the commits since the previous master run was the
+  alternative and loses on three counts. It needs that run's head from the API, since under
+  coalescing a push's `before` may never have been built. A merge that touches a Spark source
+  would start the full matrix, 35 jobs and two to two and a half hours (2.2), on the base's twenty
+  slots beside the benchmark jobs, of which seven were in flight at 14:26 today. And what a
+  merged tree adds over its pull requests is the interaction between them, which for Varka's pull
+  requests is in Varka's code, its pinned files and its suites; each pull request's own scope,
+  Spark modules included, already ran on its branch. An interaction inside Spark's modules is the
+  weekly matrix's to find, within a week.
+* **One run at a time, the newest waiting.** `concurrency: {group: varka-master,
+  cancel-in-progress: false}`. A push during a run leaves one pending run, and a later push
+  replaces it, so a burst of merges builds the head the run started on and the burst's last head.
+  Cancelling in progress was rejected: at several merges an hour against a run of half an hour or
+  more, every run would be cancelled by the next merge and none would finish while merges came.
+* **On failure.** A red master run is visible on the commit and on the workflow's page, and the
+  next merge's run says whether it was fixed. The run is read as `CLAUDE.md`'s CI-failure steps
+  describe, against `vecbricks/varka` rather than the fork.
+
+The weekly matrix's explicit `jobs` turns on the module jobs, and `dev/run-tests.py` then tests
+every module each job names (2.9), so on Sunday they test something for the first time on this
+repository's master.
+
 ### 3.4 New tests rerun several times, and a fix's new test failing on the base
 
 Both in the Varka suite jobs of a pull request's Build, after the suites:
@@ -455,7 +560,8 @@ the past tense, and its `update_build_status.yml` dispatch comment removed.
   their verdict and does not change it.
 * **The checkout-and-sync merge with apache/spark** before every build
   (`working-in-this-repo.md`, "A red Build here may be failing on code this repository does not
-  contain").
+  contain"). *Superseded on 14 October by #806, which removed that merge; 2.9
+  says what the master run takes over from it.*
 * **`notify_test_workflow.yml`**: it still creates the check; 3.2 only keeps it current.
 * **The fork's `master`** and its apache/spark schedulers.
 * **`varka-surface-benchmark.yml`**, the published-number path with its own datapath gate.
@@ -486,7 +592,10 @@ None: no emitted code changes.
 | `.github/workflows/update_build_status.yml` | `workflow_run` on notify, the loop, one loop at a time, the re-dispatch at the cap, patch only on change, the step-time summary |
 | `.github/workflows/varka-master.yml` | new: master's head after each merge, explicit `jobs` |
 | `.github/workflows/varka-weekly-matrix.yml` | explicit `jobs` |
-| the file the Java linter names | the `InvalidJavadocPosition` fix |
+| `dev/checkstyle-suppressions.xml` (was "the file the Java linter names", 2.9) | the `InvalidJavadocPosition` exemption anchored under the package path |
+| `dev/run-tests.py` (255b, 2.9) | a diff base equal to the head tests the modules given |
+| `dev/varka_matrix_ci.sh` (255b, 2.9) | on a run of master: no base comparison, the pick keyed on the commit |
+| `.github/workflows/build_and_test.yml` (255b, 9.2) | on a run of master: the `docs` job builds every API doc; the emitted-bytes step says there is nothing to compare |
 | `dev/varka_new_tests.py` | the new tests of a diff; the base-overlay check for `fix` |
 | `.github/workflows/build_and_test.yml` (Varka suite jobs) | the rerun and fails-on-base steps |
 | `.github/workflows/benchmark.yml` | `pr`, `pair`, `rounds`, the probe first, a class list as a matrix |
@@ -517,6 +626,23 @@ None: no emitted code changes.
 5. **The master run**: the merge of section 8's second PR runs `varka-master.yml` with the jobs
    it names and no `Build modules` job; the weekly run on the following Sunday runs the module
    jobs.
+   255b's checklist for the coordinator, from 2.9, read on `vecbricks/varka` after the merge
+   (`gh run list -R vecbricks/varka --workflow varka-master.yml`, then the run's jobs and logs):
+   (a) a run starts on the merge commit's push, its event `push`; (b) its jobs are `Check
+   changes`, `Base image build`, `Linters, licenses, and dependencies`, `Java 25 build with
+   Maven`, `Varka suites: catalyst` and `: sql`, `Varka engine (x86_64)` and `(aarch64)`, `Varka
+   bench drivers`, `Varka assembly gate` and `Varka docs checks`, and every other job is skipped,
+   `Precompile Spark` and `Build modules` among them; (c) the lint job's `Java linter` step passes
+   on the base's `/__w/varka/varka/` path, with no `InvalidJavadocPosition` line; (d) each suite
+   job's option step prints `== <module> under <configuration>: no change to measure, the merge
+   base is the head; the hash of commit <sha>` and, if it fails, ends `failed on a run of the
+   merge base itself, so nothing excuses it`, never `fails on the merge base too`, and two master
+   runs at different commits may name different configurations; (e) two merges inside one run:
+   the run in progress finishes, the first merge's pending run shows as cancelled when the second
+   push supersedes it (that is the coalescing, not a failure), and the next run builds the later
+   head; (f) the run's wall time, for prediction 5. On the Sunday after: the weekly run's `Build modules` jobs run, and every one's
+   log reads `[info] no change to measure: the diff base <sha> is the head; testing the modules
+   given` and then runs tests, never `There are no modules to test`.
 6. **`dev/varka_new_tests.py` over recorded diffs**: a new ScalaTest test, a new JUnit display
    name, a renamed test (counted as new), a moved test (not new), a test whose title is an
    interpolated string (reported as unlistable, not silently dropped).
@@ -555,6 +681,9 @@ arithmetic unless they come from a measured run.
 4. The sync loop stays under 600 requests an hour on the base on a day like 13 October (400 by
    arithmetic, at 1.5 times).
 5. `varka-master.yml` runs in 30 to 45 minutes and fewer than 15 times on a day of 23 merges.
+   (255b, registered before its first run: its longest job is the Java 25 Maven build, 35
+   minutes in the weekly run of 11 October, or a Varka suite job at up to 54 minutes on the fork
+   on 13 October (2.7), so 45 is the edge of this prediction rather than its middle.)
 6. The new-test reruns add under 3 minutes to a Varka suite job on a typical pull request, and the
    fails-on-base step under 8 minutes when it runs (a compile of the base, measured at 4 to 5
    minutes in `varka-fuzz.yml`'s compile step, plus the tests).
@@ -592,7 +721,12 @@ arithmetic unless they come from a measured run.
 6. **The master run's first runs fail on what nothing has run since September**, the Javadoc
    position first. That is the point of the run; the second PR of section 8 fixes what its own
    first run shows before it merges.
-7. **GitHub changes a limit.** Every limit the design leans on is quoted in section 2 with its page;
+7. **The master run shares the base's twenty slots** with `benchmark.yml` dispatches (255a),
+   which take up to six jobs a dispatch and hours each: seven were in flight at 14:26 on 14
+   October. Eleven master jobs beside them fit; two class lists dispatched together do not, and
+   the master run then waits in GitHub's queue, late rather than lost. If it does so often, the
+   benchmark lists' `max-parallel` comes down before the master set does.
+8. **GitHub changes a limit.** Every limit the design leans on is quoted in section 2 with its page;
    the admission job and the loop log their request counts, so a change shows as a failure with a
    number rather than as silence.
 
@@ -734,3 +868,114 @@ gh workflow run benchmark.yml -R vecbricks/varka -f pr=791 -f pair=true -f round
 ```
 
 `VarkaWideKernelBenchmark`'s pairs (322a's tenth, 325's second) stay on the laptop.
+
+**The three waiting jobs, run** (14 October 2026). The block above was dispatched at 13:21 CEST,
+two minutes after this merged, as five runs on `vecbricks/varka`: the A/A
+[38555923693](https://github.com/vecbricks/varka/actions/runs/38555923693), the nine classes
+[38555927657](https://github.com/vecbricks/varka/actions/runs/38555927657), #789's two results
+files [38555932989](https://github.com/vecbricks/varka/actions/runs/38555932989), #789's Emission
+pair [38555937778](https://github.com/vecbricks/varka/actions/runs/38555937778) and #791's parity
+pair [38555942066](https://github.com/vecbricks/varka/actions/runs/38555942066). All five
+completed with success; the last job ended at 18:12 CEST. The verdicts and the per-row reading are
+in `VARKA-322.md` 9 ("The ten pairs, on GitHub-hosted runners"); the cost and the mechanics are
+here.
+
+**Prediction 7 held for the parity class and failed for `VarkaUnreadLocalsBenchmark`.** Wall
+times per pair job, `started_at` to `completed_at`, every pair at five rounds but the probe
+class, which stopped after three: `VarkaVectorApiProbeBenchmark` 0:30:52,
+`VarkaArithmeticBenchmark` 0:39:10, `VarkaCodegenBenchmark` 0:47:36, `VarkaEmissionBenchmark`
+0:49:41 (322a-1), 0:51:07 (the A/A) and 0:52:30 (#789), `VarkaSharedPrefixBenchmark` 0:58:37,
+`VarkaLongLaneBenchmark` 1:08:06, `VarkaMethodSizeBenchmark` 1:22:59, `VarkaTimeBenchmark`
+1:59:53, `VarkaEmitterParityBenchmark` 3:29:26 and `VarkaUnreadLocalsBenchmark` 4:51:27. The
+parity class, the twenty-minute class the prediction had in mind, took 19 to 25 minutes a
+side-run on an EPYC 7763 (the `date:` lines of the artifact's ten provenance files, one run to
+the next) and paired at five rounds in under three and a half hours, so three would have been
+about two and a quarter; and the three waiting jobs completed with no laptop time. But
+`VarkaUnreadLocalsBenchmark` is no twenty-minute class on a runner: 26 to 34 minutes a side-run
+on an EPYC 9V45, by the same provenance dates, so its pair at five rounds took 4 h 51 min, ten
+single runs and the two builds, with an hour of the six to spare. What failed for it is the
+prediction's premise, that the waiting classes were twenty-minute classes, not its arithmetic:
+three rounds of this class would have ended under four hours too. The class, whose every case
+runs its first iterations before C2 has finished a 1.7 MB class (`VARKA-322.md` 9), was not in
+2.6's table of runner times. The results-file run took 2:55:41 for `VarkaWideKernelBenchmark` on
+an EPYC 7763 and 0:13:25 for `VarkaEmissionBenchmark` on an EPYC 9V74 (`VARKA-322.md` 9, "Row
+325's pair and its two runner files").
+
+**Mechanics seen.** The nine-class list ran six jobs at a time as 3.5 says, so three jobs started
+31 to 50 minutes after the first six, and the run took 4:51:38 in all. Eight of the twelve pair
+jobs and the wide-kernel results job end with two warnings, `Failed to save: Unable to reserve
+cache with key coursier-Linux-<hash>, another job may be creating this cache` and the same for
+`build-Linux-<hash>`: the jobs of one dispatch share a key, the first job to finish saves it
+(`VarkaVectorApiProbeBenchmark`'s log reads `Cache saved with key` for both; for the key the
+#789 and #791 jobs share, the Emission results job on the 9V74 does), and `actions/cache`'s post
+step in every job that finishes later finds the key taken and reports success with the warning.
+Nothing is lost: the next dispatch restores what that first job saved. The Xeon 6973P-C job pinned
+itself (`taskset -c 0,1,2,3`): that runner VM has a cpufreq directory, so the regeneration
+script's automatic pin applied, where every EPYC job ran unpinned (`the runner is not pinned` in
+its provenance). And the Java side's A/A at five rounds read 16.2% by best on one emission row,
+while two pairs drew three slow forks of five on one side of a bimodal row (`VARKA-322.md` 9),
+the draw the scoring of prediction 8 above reckoned five rounds would make rare. By the rule that
+scoring set, `VarkaEmissionBenchmark`'s next runner pair dispatches with `threshold=17`, its A/A's
+widest best rounded up, with that A/A as the reason: the A/A itself would have failed at 10 had
+its median on that row read 10.0% rather than 9.9%. No other class has a runner A/A yet, so the
+others keep 10 and read a flagged row against an A/A run then. A runner's median alone decides
+nothing.
+
+### 9.2 255b: master after each merge (14 October 2026)
+
+**What landed.** `varka-master.yml` on `vecbricks/varka`, on a push to `master` and on dispatch,
+calls `build_and_test.yml` with the eleven-job set of 3.3 (255b's form), in the group
+`varka-master-<ref>` without cancelling, and runs only on `master`. `varka-weekly-matrix.yml`
+names its jobs: `build_java25.yml`'s set with the Kubernetes and OIDC jobs off, plus the
+pandas-on-Spark, old Connect client and periodic PySpark groups, `lint`, `java25`, `docs` and
+Varka's five. `dev/run-tests.py` reads a diff base that resolves to the head as no change to
+measure and tests the modules a job names. `dev/varka_matrix_ci.sh`, on such a run, keys its pick
+on the commit and fails on any failure instead of rerunning the same tree, and stops when no
+configuration was picked. `dev/checkstyle-suppressions.xml` keys the `InvalidJavadocPosition`
+exemption on a Varka package path below a `java/` source root or a class name holding `Varka`.
+In `build_and_test.yml`, the `docs` job builds the Python and R API docs on a run of master
+instead of reading the empty diff as no change, and the emitted-bytes step says a run of master
+has nothing to compare with. The checkout action is unchanged.
+
+**The review** (`/code-review high` on the branch's diff) found nine things; eight are fixed
+above. A dispatch from another branch shared the group and would have taken a merge's pending
+slot and built that branch, hence the ref in the group and the job's `master` condition. The
+weekly set left out three PySpark groups, six of the pyspark job's ten module groups. The `docs`
+job and the emitted-bytes step were two more readers of the empty diff. The comparison in
+`dev/run-tests.py` was of strings, which an abbreviated SHA would defeat; both sides are now
+resolved by git. The pick's failure went unchecked, and the failure lines were computed before
+the master-run exit that discards them. The exemption's comment claimed every Varka Java source
+sits in a `varka` package, which 44 do not; a checkstyle run with no suppressions over those 44
+reports nothing, so the pattern now covers them, and a planted misplaced comment in a
+`VarkaPlanted` class outside any `varka` package is reported under both roots. Not taken: one flag
+exported by the checkout action for "no change", read by every consumer, in place of each
+consumer's own comparison. The action is what #806 just settled for pull requests, and the four
+readers this branch touches are one comparison each; the lesson in `working-in-this-repo.md` is
+the guard for the next one.
+
+**Evidence, off CI.** Checkstyle 11.0.1, run from the coursier cache over copies of the six
+flagged files and a planted misplaced comment in a `varka` package, under roots `varka/varka/` and
+`plain/spark/`: before the fix the first root reported the six and the plant, the second only the
+plant; after it, both report only the plant, and the worktree's own Varka Java sources stay clean.
+`dev/run-tests.py` loaded with its builds and test runs stubbed out, `--modules catalyst` in a
+GitHub Actions environment: with the base at the head it now tests `catalyst` (master's file
+printed "There are no modules to test"), and with the base at the parent commit, whose diff is a
+plan file, it still tests nothing, as a pull request's run should. `dev/varka_matrix_ci.sh` over a
+stub matrix whose configuration always fails, in a scratch repository: with the base at the head,
+master's script passed with "fails on the merge base too" and the new one fails with "failed on a
+run of the merge base itself"; with the base at the parent it still compares, and with no base it
+still fails. actionlint reports the same 103 findings as on master, none in the two new or
+changed caller workflows (the docs script's five pre-existing shellcheck notes move down four
+lines); shellcheck the same single pre-existing warning in `dev/varka_matrix_ci.sh`.
+
+**Owed, after the merge** (test 5's checklist, for the coordinator): the merge commit's own push
+starts the first master run, and its jobs, lint verdict, option-step lines and wall time are read
+against (a) to (f). The weekly run can be dispatched at once instead of waiting for Sunday
+(`gh workflow run varka-weekly-matrix.yml -R vecbricks/varka`), at the price of Spark's full matrix
+on the base's slots for about two and a half hours; it cannot run before the merge, because a
+pull request's branch lives on the fork, whose default branch does not carry the file. Prediction
+5 is scored over the first working day of merges.
+
+**Known and left.** `dev/is-changed.py` keeps reading an empty diff as no change: the master runs
+name their jobs and never ask it, and a branch pushed with no commits of its own has the same
+empty diff and must not start the full matrix.

@@ -224,6 +224,24 @@ Two tools (VARKA-256):
   before it is called a regression; run at five rounds where time allows, and raise `threshold`
   for a class with its A/A as the reason.
 
+Ten pairs at up to five rounds on 14 October 2026 (VARKA-322, the Java ports against their Scala
+forms) say how to read the two measures on a runner. The widest change by median was 12,173% on
+`VarkaMethodSizeBenchmark`, 9,505% on `VarkaSharedPrefixBenchmark`, 80% on
+`VarkaUnreadLocalsBenchmark` and 68% on `VarkaLongLaneBenchmark`, while on those four classes no
+best moved more than 17%, and across the ten no row was slower by both (the parity class's widest
+best, 43.1%, is a port speed-up on a 64-row chunk arm, moved by both measures). The first two are
+2 ms rows that run about a hundred times slower in some JVM forks, and one side drew three slow
+forks of five on both classes; the third is a 1.7 MB class whose five iterations ended before C2
+did in four of one side's runs; the fourth is sub-millisecond rows whose rate prints to one
+decimal. A median moves on three draws and a best on one: `VarkaSharedPrefixBenchmark`'s widest
+best, 17%, is one run at 17 ms where the other nine read 21 or 22, and the Java side's A/A read
+16.2% by best on a 14 to 32 ms emission row of identical code. So a verdict reads both measures
+and the class's own A/A, as the pair's rule already does, and a runner's median alone says
+nothing. One more key that moves between machines: a case label that embeds an emitted byte
+count. Four `VarkaWideKernelBenchmark` rows could not be matched between the laptop's file and a
+runner's because one byte of class size per class differed between the two JDK builds or
+machines; a label should name the shape, and carry such a count beside it.
+
 ## A runner pair that fails can still report a pass: three traps of the first one
 
 The first A/A pair on a GitHub-hosted runner (VARKA-255) "passed" in five minutes having

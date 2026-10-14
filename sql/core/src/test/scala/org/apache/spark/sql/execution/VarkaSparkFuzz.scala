@@ -23,7 +23,7 @@ import scala.util.{Random, Try}
 import com.fasterxml.jackson.databind.ObjectMapper
 
 import org.apache.spark.SparkThrowable
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShrinker
 
 /**
@@ -242,13 +242,75 @@ object VarkaSparkFuzz {
     Case(outputs, conjuncts, op, data, ansi, pivot)
   }
 
+  /**
+   * Data for a later batch of `c`'s shape (VARKA-327): every cell of `c.data` that is not NULL
+   * replaced by a fresh draw's cell of the same kind (safe or full, and from the wider pool when
+   * `wide`), and every NULL kept where it is. A column holds a NULL here exactly where it did, so
+   * each column's nullability, which the shape is compiled for, is the same, and a kernel warmed
+   * on `c.data` serves these rows without a new warm-up; the values are new, so the compiled code
+   * meets guard outcomes and values its profile never saw. A fresh draw draws its own null rate,
+   * so a cell takes the first of up to `LaterDraws` draws that is not NULL there.
+   */
+  def laterData(c: Case, rnd: Random, safe: Boolean, wide: Boolean): Vector[Vector[String]] = {
+    def isNull(cell: String): Boolean = cell.startsWith("CAST(NULL")
+    val fresh = Vector.fill(LaterDraws)(
+      drawData(rnd, c.data.size, safe, if (wide) Some(new Random(rnd.nextLong())) else None))
+    c.data.indices.toVector.map { r =>
+      c.data(r).indices.toVector.map { j =>
+        val cell = c.data(r)(j)
+        if (isNull(cell)) cell
+        else fresh.iterator.map(_(r)(j)).find(!isNull(_)).getOrElse(cell)
+      }
+    }
+  }
+
+  /** Fresh draws `laterData` takes a cell from; a cell NULL in all of them keeps its value. */
+  private val LaterDraws = 4
+
+  /**
+   * How the warmed arm's compositions went (VARKA-327), one per test so that two tests' counts do
+   * not mix. `rowPathRuns` were served, at least in part, on the row path while a kernel warmed;
+   * `kernelRuns` had at least one node serve batches on its kernel; `handedOver` counts the
+   * compositions that had runs of both kinds. Of those that never reached a kernel, `unfused` had
+   * no Varka node, `raised` raised (compared by the error's class), `noBatches` had every cached
+   * batch pruned by its statistics, `declined` had their batches declined, and `stillWarming`
+   * were still waiting after four runs. `laterRuns` ran a shape that reached its kernel over
+   * other data, and `laterNewShape` of them met a new shape instead, which compares the row path
+   * again. `notIdle` counts the waits for the warm-up that timed out.
+   */
+  final class WarmedCounts {
+    var compositions = 0
+    var rowPathRuns = 0
+    var kernelRuns = 0
+    var handedOver = 0
+    var unfused = 0
+    var raised = 0
+    var noBatches = 0
+    var declined = 0
+    var stillWarming = 0
+    var laterRuns = 0
+    var laterNewShape = 0
+    var notIdle = 0
+
+    def summary: Seq[String] = Seq(
+      s"compositions $compositions: runs on the row path while warming $rowPathRuns, on a " +
+        s"kernel $kernelRuns, handed over $handedOver; never on a kernel: no Varka node " +
+        s"$unfused, raised $raised, no batch $noBatches, batches declined $declined, still " +
+        s"warming after four runs $stillWarming",
+      s"runs over other data $laterRuns, of which $laterNewShape met a new shape; waits that " +
+        s"timed out $notIdle")
+  }
+
   // ---- the comparison ---------------------------------------------------------------------
 
   /** A query's outcome: its rows sorted as strings, or the class of what it raised. */
   type Outcome = Either[String, Seq[String]]
 
-  def outcome(session: SparkSession, sql: String): Outcome =
-    Try(session.sql(sql).collect().map(_.toString).sorted.toSeq).toEither.left.map { e =>
+  def outcome(session: SparkSession, sql: String): Outcome = outcomeOf(session.sql(sql))
+
+  /** `df`'s outcome, for a caller that reads `df`'s plan and metrics afterwards. */
+  def outcomeOf(df: DataFrame): Outcome =
+    Try(df.collect().map(_.toString).sorted.toSeq).toEither.left.map { e =>
       val chain = Iterator.iterate[Throwable](e)(_.getCause).takeWhile(_ != null).toSeq
       chain.collectFirst { case t: SparkThrowable if t.getCondition != null => t.getCondition }
         .getOrElse(e.getClass.getName)

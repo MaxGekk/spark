@@ -228,3 +228,26 @@ production instance of the transition-table timezone design milestone 4's item 2
 two sorted instant arrays per zone, DST rules taking over past the table's end, and the
 floor-versus-truncate decision at a gap that is wrong by an hour if made the other way. What it
 does not contain is any extraction: `year` and its family live in cuDF on `cuda::std::chrono`.
+
+## An interval's fields truncate and a date's fields floor
+
+The SQL standard gives an interval one sign and non-negative fields: SQL-92 6.6 says an extracted
+field "has the same sign as the <extract source>", so `INTERVAL '-1-6' YEAR TO MONTH` is minus
+(one year, six months). Over a signed month count that is `quot(m, 12)` and `rem(m, 12)`, Java's
+`/` and `%`: YEAR `-1`, MONTH `-6`. `Math.floorDiv` would give `-2` and `6`, the same count in
+fields the standard does not have. Spark's `IntervalUtils.getYears` and `getDays` truncate, and
+agree.
+
+A date is the other way. The standard has no day count; Spark's, from 1970-01-01, is negative for
+every date before 1970, and decoding it must floor: day `-1` is 1969-12-31, where a truncating
+year step lands in 1970. Varka's decomposition sidesteps the choice by biasing the count
+non-negative first (`VarkaChrono.MARCH_EPOCH_SHIFT`, `NARROW_BIAS`), after which `quot` and `div`
+agree. The two other floors in the covered operations are a month added to a date, whose carry is
+`div(M - 1 + m, 12)`, and a time plus an interval, which the standard wraps "modulo 24" to the
+non-negative residue where Spark raises.
+
+So before writing a division in a lowering or a proof, ask which of the two the definition is:
+SMT-LIB's `div` is Euclidean and floors for a positive divisor, and Java's `/` truncates. The
+definitions, each with its clause and a negative example, are `sql/varka/proofs/spec/STANDARD.md`
+(VARKA-243). The repository holds none of the standard's text; that file cites the SQL-92 text
+it names, and the current edition's clauses are owed.

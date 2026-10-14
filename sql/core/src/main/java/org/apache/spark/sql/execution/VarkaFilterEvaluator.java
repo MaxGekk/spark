@@ -41,11 +41,15 @@ import org.apache.spark.sql.catalyst.expressions.codegen.CompiledVarkaPredicate;
 import org.apache.spark.sql.catalyst.expressions.codegen.CompiledVarkaProjection;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.SelectionVectorOps;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrorContext;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFallbackEvent;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemorySanitizer;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemoryViolation;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSegments;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSelectionBitmap;
 import org.apache.spark.sql.catalyst.types.DataTypeUtils$;
 import org.apache.spark.sql.execution.varka.VarkaBatchLedger;
+import org.apache.spark.sql.execution.varka.VarkaKernelFailure;
 import org.apache.spark.sql.execution.varka.VarkaKernelRunner;
 import org.apache.spark.sql.execution.vectorized.OffHeapColumnVector;
 import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector;
@@ -233,6 +237,14 @@ public class VarkaFilterEvaluator extends VarkaEvaluatorBase {
       }
       MemorySegment mask = base.asSlice(0, (len + 7) / 8);
       return new VarkaSelection(mask, VarkaSelectionBitmap.countSet(mask, len));
+    } catch (VarkaKernelFailure e) {
+      // As the projection's runKernel does (VARKA-315): the file, then the failure unchanged.
+      reproduceKernelFailure(VarkaFallbackEvent.KERNEL_FAILURE, e.getCause(), runner, input, len,
+          true);
+      throw e;
+    } catch (VarkaMemoryViolation e) {
+      reproduceKernelFailure(VarkaErrorContext.MEMORY_VIOLATION, e, runner, input, len, true);
+      throw e;
     } finally {
       VarkaMemorySanitizer.end();
     }

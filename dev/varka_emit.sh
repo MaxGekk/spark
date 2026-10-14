@@ -26,6 +26,13 @@
 #   dev/varka_emit.sh "year(d)" "month(d)" "add_months(d, 1)" --table \
 #     --variant neriSchneiderMonth=false
 #   dev/varka_emit.sh "second(t)" --columns t:time --asm --width=16   # 128-bit species
+#   dev/varka_emit.sh --replay /tmp/varka-reproductions/varka-repro-<hash>-<kind>-pid<pid>-<token>.txt
+#
+# --replay FILE replays a reproduction file a Varka kernel failure wrote (VARKA-315): it
+# rebuilds the kernel from the file's IR and options, walks the failing path - the verification,
+# the class's definition, or a run over the recorded batch - and compares what it throws with the
+# signature the file is headed by. Exits 0 when the replay fails the same way and 1 otherwise. The
+# JVM gets -Dvarka.sanitizeMemory=true when the file says the sanitizer was on where it failed.
 #
 # --width=N (bytes, as the JVM's MaxVectorSize counts them: 16 is 128 bits, 32 is 256)
 # runs the --asm probe at that species instead of the host's preferred one, which is how
@@ -49,7 +56,36 @@ set -euo pipefail
 usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
 case "${1:-}" in -h|--help) usage 0 ;; esac
 
-root="$(git rev-parse --show-toplevel)"; cd "$root"
+root="$(git rev-parse --show-toplevel)"
+main=org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitDump
+if [ "${1:-}" = "--replay" ]; then
+  [ "$#" -eq 2 ] || usage
+  [ -f "$2" ] || { echo "no such file: $2" >&2; exit 2; }
+  # Resolved before the cd below, so a relative path means what it meant to the caller.
+  file="$(realpath "$2")"
+  cd "$root"
+  sanitizer=()
+  if grep -qx 'sanitizer: on' "$file"; then
+    sanitizer=('set Test/javaOptions += "-Dvarka.sanitizeMemory=true"')
+  fi
+  log="$(mktemp -t varka-replay.XXXXXX)"
+  trap 'rm -f "$log"' EXIT
+  # `|| true`: the replay exits 1 when it does not reproduce, which is a result, not an error.
+  # The guarded expansion: bash before 4.4 calls an empty "${a[@]}" unbound under set -u.
+  build/sbt -batch "project catalyst" ${sanitizer[@]+"${sanitizer[@]}"} \
+    "Test/runMain $main --replay \"$file\"" > "$log" 2>&1 || true
+  report="$(sed -E 's/^\[(info|error)\] ?//' "$log" | sed -n '/^== Varka replay ==/,$p' \
+    | grep -v -E '^\[(success|warn|error)\]|^WARNING: |onzero exit code|^Total time|^stack trace' || true)"
+  if [ -z "$report" ]; then
+    echo "the replay produced no report; the run's own output follows" >&2
+    sed -E 's/^\[(info|error)\] ?//' "$log" | grep -E 'Exception|Error|error:' | head -5 >&2
+    exit 2
+  fi
+  printf '%s\n' "$report"
+  grep -q '^REPRODUCED' <<< "$report"
+  exit $?
+fi
+cd "$root"
 asm=0; width=""; pass=()
 for a in "$@"; do
   case "$a" in
@@ -59,7 +95,6 @@ for a in "$@"; do
   esac
 done
 [ "${#pass[@]}" -gt 0 ] || { usage; }
-main=org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitDump
 # sbt splits runMain's argument string on spaces; keep each expression one token.
 quoted=""
 for a in "${pass[@]}"; do quoted+=" \"$a\""; done

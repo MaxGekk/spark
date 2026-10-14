@@ -955,7 +955,11 @@ public final class VarkaLoopEmitter {
       List<List<Integer>> groups, boolean epiloguePerGroup) {
     boolean anyColumns = analysis.referencedColumns != 0;
     analysis.owner = classDesc;
-    return ClassFile.of().build(classDesc, (ClassBuilder b) -> {
+    // The fault injector of a class the verifier rejects (VARKA-315): without its stack maps,
+    // every method with a branch fails verification at its first branch target.
+    ClassFile classFile = analysis.options.dropStackMaps()
+        ? ClassFile.of(ClassFile.StackMapsOption.DROP_STACK_MAPS) : ClassFile.of();
+    return classFile.build(classDesc, (ClassBuilder b) -> {
       emitRangeTables(b, classDesc, analysis);
       b.withFlags(AccessFlag.PUBLIC, AccessFlag.FINAL)
           .withInterfaceSymbols(FUSED_KERNEL)

@@ -92,6 +92,24 @@ Each step either pins the fault or narrows it.
   only has `pipelineTime`. Read the node's own metric via
   `plan.collectFirst { case v: VarkaColumnarToRowExec => v }`, not `plan.metrics`.
 
+## A metric that can say "not reported": two sums in one value, rendered by a custom type
+
+- A plain sum `SQLMetric` reads 0 when nothing added to it, so it cannot tell "none" from
+  "unknown". The one way Spark gives a metric cell text is the data source V2 custom metric: an
+  `SQLMetric` whose type is `CustomMetrics.buildV2CustomMetricTypeName(c)` makes the SQL listener
+  load `c`'s class and show `aggregateTaskMetrics(long[])` over the tasks' values
+  (`VarkaReasonMetric`, VARKA-313). The class needs a no-argument constructor; a history server
+  without it shows "N/A".
+- Keep "unknown" as a count, never as a sentinel. VARKA-313's first version left a metric at -1
+  for "not reported" and set it at the task's end; review found three places Spark loses it:
+  `DAGScheduler.updateAccumulators` drops an update whose `isZero` holds, so the event log and a
+  history server never see a -1; a coalesce runs several evaluators in one task against one
+  metric copy, and the first `add` turns -1 into 0; and the driver's merge skips it. A metric
+  that never goes below 0 survives all three. `VarkaReasonMetric` adds exact declines as 1 and
+  unattributed ones as `1L << 32`, both sums, and decodes them when it renders.
+- The driver's `metric.value` is the encoded sum; decode it (`VarkaReasonMetric.exact` and
+  `unattributed`, or `VarkaFallbackReasons` in the suites) rather than comparing it with a count.
+
 ## Independent Reference Evaluators as Test Oracles
 
 - For an algebraic surface (three-valued logic, null-skipping picks, blend
@@ -741,6 +759,36 @@ file first; it is the whole case.
 * **Stratify the draw.** A uniform draw over the 92 rows found a planted bug in one row after 254
   of 300 compositions; forcing row `k mod 92` into composition `k` finds it in the second pass.
 
+## The differential with the warm-up on: both sides of the handover compared, a release reported
+
+The shared sessions turn the kernel warm-up off, so every other Spark-level suite's kernels serve a
+shape's first batch, interpreted, and none of them meets code C2 compiled from the warm-up's copy of
+a batch. `VarkaSparkFuzzSuite`'s warmed arm (VARKA-327, "random compositions agree with the row
+engine on both sides of the warm-up handover") turns it on: per composition, from an empty shape
+cache, the query on the row path while its kernel warms, again after `awaitIdle` until no node
+waited (a projection over a Varka filter claims its warm-up only once the filter serves Arrow
+batches, so up to four runs), then the warmed shape over other data with the same nulls
+(`laterData`), every run against the row engine. `-Dvarka.sparkfuzz.warmupIterations` (8 by
+default, 2,000 in the nightly's `sparkwarm` step), `-Dvarka.sparkfuzz.warmupOnly=<it>` replays one.
+
+* **The kind names the side of the switch**: "on the row path while the kernel warms", "after the
+  handover to the kernel", "over other data after the handover". A reproducer is not shrunk -
+  each smaller case is a new warm-up - and replays by its note's flags. Its status is `warmed`,
+  which `VarkaSparkReproducerSuite` refuses: that suite replays with the warm-up off, where the
+  case's path is not taken, so a warmed case kept in `sql/varka/fuzz/spark/` would pass for the
+  wrong reason.
+* **A release is evidence, never a failure.** About one small kernel in fifteen never gets its
+  verdict (`VARKA-327.md` 2), so the arm sets the deadline to 10 s
+  (`-Dvarka.sparkfuzz.warmupDeadlineSeconds`) where production waits 60, and reports each release
+  in the test's output: the outcome, the JIT state at the release (queue, code list, methods with
+  no code) and the `VarkaJitEvidence` account. Read it for VARKA-295: an empty C2 queue with the
+  kernel's loops compiled and the probe still allocating is its signature; `profile_predicate`
+  traps in a masked loop are VARKA-326's cycle; a busy queue means the deadline was too short.
+* **Read the counts before trusting a pass.** Three in four compositions hand over; the rest have
+  no Varka node, raise on both sides, or have every cached batch pruned by the scan's statistics
+  (`numInputBatches` 0); the counts name each. At 50 or more the test fails if fewer than half
+  hand over.
+
 
 ## A decline is the entry deleted, and only a forced decline reaches the branch that has to make it so
 
@@ -956,6 +1004,42 @@ guard at `lo - 1`, `lo`, `hi` and `hi + 1`. What it took:
 To date every guard's edges hold at both lanes, in a full vector and the epilogue, through both
 bodies.
 
+## A planted bug has a prerequisite, and the test that plants it sets it over the matrix's base
+
+VARKA-269's follow-up, 14 October 2026. `misdescribeWordLiveness` inverts the word-liveness
+verdict, and `Slots.plan` asks for a verdict only in a masked loop or epilogue body under
+`validityByBitmap`: off, every word is live, no verdict is computed, the inversion never runs,
+and the kernel emits as if nothing were planted (the option's Javadoc says so;
+`VarkaEmitterValiditySuite` pins it on `year(d)`). The two tests that hold the
+series and the variants to catching the planted bug planted it over `VarkaMatrix.base`, so under
+the matrix's `validityByBitmap=false`, and the configuration that turns off the three validity
+passes, the bug was inert and the series passed every tree: "the planted bug failed no tree to
+size 3". The first run of the option matrix on master (VARKA-255) failed the series' test; the
+variants' had met the same two configurations in VARKA-278's local run of all fifty, been read as
+the injector reaching a different set of words, and been listed in the skip list.
+
+- **Plant the bug over the options it needs**: `VarkaMatrix.base.withValidityByBitmap(true)`, as
+  `VarkaGuardEdgeSuite` sets the guards it tests and `VarkaReproductionEndToEndSuite` plants this
+  one. A skip-list line records a dependency, but cancels the test in two configurations and keeps
+  whatever mechanism its author read into it; the forced option keeps the test asserting
+  everywhere, at no cost.
+- **Count only the planted bug's own failure.** `failures.count > 0` is met by any failure, so
+  with the bug inert one regression, or the forced option beside a configuration's others, would
+  pass the test as a catch. Each failure counted is held to the invariant's refusal, "stored but
+  never loaded" or "declared dead is loaded" (`VarkaKernelChecks.isWordLivenessRefusal`), which
+  the review of the fix asked for.
+- **The fuzzer's planted tests survived the same run** because they search the first 200 draws,
+  whose options vary over the table, so a draw turns the pass back on; a test over one fixed
+  options record has to set the prerequisite itself.
+- **The injector stays inert without the pass.** Asking for the verdict under the injector too, or
+  refusing the combination in the options builder, would make a third inert plant fail loudly;
+  both change the emitter or the behaviour `VarkaEmitterValiditySuite` pins for a test-only gain,
+  so the review's proposal is recorded and not taken. A third planting is the moment to reconsider.
+- **Green under a pull request's one configuration says nothing about the other configurations.**
+  The run after each merge draws a configuration from the commit's hash and the weekly matrix
+  runs them all; a test that leans on an option the base can switch off is checked before the
+  merge with `dev/varka_matrix.sh --module catalyst --config <option>=<other value>`.
+
 ## The emitter is called from several threads, so a test holds it to that
 
 VARKA-307. `VarkaEmittedBytesSuite` hashes every shape twenty times, once per pinned arm and
@@ -1068,6 +1152,40 @@ signs each passed a check that compared Spark with itself:
 entry, no row `FilterExec` in the plan. And `EXPLAIN`'s first line above the Varka node says at a
 glance whether Spark kept part of the query.
 
+## A kernel failure leaves a file you can replay, and where each failure first surfaces
+
+*Added on 14 October 2026 by VARKA-315.* A kernel class that fails to verify or define, an
+exception inside a kernel and a memory-sanitizer violation each write a reproduction file
+(`VarkaReproduction`), and `dev/varka_emit.sh --replay <file>` replays it to the same
+`VarkaFailureSignature`. What the work found, which holds beyond the file:
+
+- **The canonical IR is a complete serialization of a kernel.** The shape hash is SHA-256 over
+  the outputs' canonical renderings, the counts and the options, and the cache serves one class
+  per hash, so the rendering already carries everything the bytes depend on.
+  `VarkaCanonicalIr.parse` reads it back and refuses any string its tree does not render to
+  again. Two components are not rendered on purpose: `ConstDivide`'s dividend bound (no byte
+  depends on it; the parser gives a long-lane division `EXACT_DIVIDEND_BOUND`, and the round-trip
+  test compares bytes to hold it to that) and `BoundedDivide`'s pair (`BoundedDivide.of` derives
+  it). A new node type fails that test until the parser has a case for it.
+- **A class the verifier rejects fails in two places.** Under test the plan-time admission
+  verifies the bytes it builds (`VarkaShapeCache.admit`, `verify = Utils.isTesting()`), and the
+  `VerifyError` is not `NonFatal`, so it leaves `VarkaSizeAdmission` and the compiler's
+  `catch (RuntimeException)` and fails the query on the driver. In production nothing is verified
+  at planning; `getConstructor()` in the cache's `emit` links the class and the error reaches the
+  evaluator's emission catch, an `emission-failure` fallback. A test of the production path cannot
+  get there through a query; `VarkaReproductionSuite` drives the definition directly.
+- **A sanitizer violation passes every catch.** `isCatchable` excludes it, so the runner rethrows
+  it unwrapped and `serveBatch` rethrows it before building any record. The one place it can be
+  written down is `runKernel`'s own `catch`, inside the window it came from.
+- **Plant a failure the file can replay with a fault-injector option, not a hook.** A test hook
+  (`setFailKernelForTesting`) is not in the shape key, so a file of its failure replays clean.
+  `misdescribeAdd` (a link failure), `misdescribeDataBytes` (negative: an
+  `IndexOutOfBoundsException` in the loop; positive: a violation under the sanitizer) and
+  `dropStackMaps` (a `VerifyError`) ride the key.
+- **Fill a replay's buffers before opening the sanitizer's window.** `VarkaSegments.map` is
+  checked inside a window, so a harness that registers its buffers and then writes their contents
+  through a mapping reports its own write as a violation.
+
 ## Cost predictions run optimistic: the calibration table
 
 *Added on 13 October 2026 from milestone 7's halfway review (`m7/PLAN.md` 9.2 and 9.5).* A plan
@@ -1082,7 +1200,10 @@ predicted. Add the line when the prediction is scored, whichever way it went.
 | VARKA-138b (6.1 #3) | the coverage differential at most twice as long | +47% by minimums, +55% after the review's fixes | 0.5 | 122 short tests, about 0.2 to 0.5 s each |
 | VARKA-274a (6.1 #2) | under 3 s per case for all histories | 3,623 ms median at the int lane, 1,356 ms at the long lane | 1.2 | long lane faster than predicted |
 | VARKA-274a (6.1 #8) | the tier witness adds under 5% | +19% (int) and +25% (long) per case; +6% on the whole test | 3.8 to 5.0 | one code-list read per call, about 3.5 ms, is most of it |
-| VARKA-271a (6.1 #6) | the Varka arm under 70 minutes in one JVM | 33 minutes beside the cache-only arm | 0.5 | the one pessimistic line so far |
+| VARKA-271a (6.1 #6) | the Varka arm under 70 minutes in one JVM | 33 minutes beside the cache-only arm | 0.5 | pessimistic |
+| VARKA-315 (6.1 #4) | the end-to-end suite under 30 s | 4.5 s of tests, 38 s with sbt's start | 0.15 | eight short queries over one cached view |
+| VARKA-243 (6.1 #3) | a new sql/core suite under 10 s | 18 s, its tests under 4 s | about 2 | the estimate counted the tests and not the suite's own sessions and cached table |
+| VARKA-327 (6.1 #2) | the warmed Spark differential's 2,000 compositions under an hour | 13 minutes | 0.26 | predicted from a seed that released 6.8% of its warm-ups at 10 s each; the nightly's released 0.9% |
 
 What the table says so far: a check that adds a run per batch or a read per call costs more than
 the plan's arithmetic, because the arithmetic counts the kernel's work and not the harness's

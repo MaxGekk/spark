@@ -30,6 +30,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.{Forwar
   FusedOutput, KernelOutput, ResidualOutput}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
+import org.apache.spark.sql.execution.varka.VarkaKernelRunner
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.util.{CompletionIterator, Utils}
@@ -120,7 +121,7 @@ case class VarkaColumnarToRowExec(
   }
 
   override lazy val metrics: Map[String, SQLMetric] =
-    VarkaExecMetrics.projectionMetrics(sparkContext).asScala.toMap
+    VarkaExecMetrics.projectionMetrics(sparkContext, false).asScala.toMap
 
   // One driver-side compilation serves both EXPLAIN and the residual-entry count below
   // (task-21 review: the node used to re-run the same pure compile per consumer).
@@ -150,7 +151,7 @@ case class VarkaColumnarToRowExec(
     residualMetric += classification.toScala.map(_.declines.size.toLong).getOrElse(0L)
     SQLMetrics.postDriverMetricUpdates(sparkContext,
       sparkContext.getLocalProperty(SQLExecution.EXECUTION_ID_KEY), Seq(residualMetric))
-    val varkaMetrics = VarkaExecMetrics.fromNode(longMetric)
+    val varkaMetrics = VarkaExecMetrics.fromNode(metrics.getOrElse(_, null))
     val evaluatorFactory = new VarkaColumnarToRowEvaluatorFactory(
       projectList,
       child.output,
@@ -192,13 +193,21 @@ private[sql] object VarkaColumnarToRowExec {
   // drives it that way; the hook exists to reach it without depending on any one expression's
   // range, and to make a whole-query fallback cheap to assert. Same discipline as the hook
   // above - static, because Spark runs tasks on other threads, and reset in a finally block.
-  @volatile private var declineKernelForTesting = false
+  // The boolean form declines with the forced status; the status form plants the refusal
+  // reasons a test names (the bits on `VarkaFusedKernel` and `VarkaKernelRunner`), so a suite
+  // can assert a reason's metric, or a folded set's "not reported", on a query the row engine
+  // answers. 0 is no decline.
+  @volatile private var declineStatus = 0
 
   private[sql] def setDeclineKernelForTesting(decline: Boolean): Unit = {
-    declineKernelForTesting = decline
+    declineStatus = if (decline) VarkaKernelRunner.STATUS_FORCED else 0
   }
 
-  private[sql] def isDeclineKernelForTesting: Boolean = declineKernelForTesting
+  private[sql] def setDeclineStatusForTesting(status: Int): Unit = {
+    declineStatus = status
+  }
+
+  private[sql] def declineStatusForTesting: Int = declineStatus
 
   // Test-only hook that fails the kernel-class lookup, simulating an emission failure, so every
   // batch takes the fallback path with `numEmissionFailures` counted once. Same discipline as
