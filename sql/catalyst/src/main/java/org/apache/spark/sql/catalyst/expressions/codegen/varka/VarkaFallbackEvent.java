@@ -37,7 +37,8 @@ import jdk.jfr.Name;
  * {@link #EMISSION_FAILURE} (the task could not emit or define its kernel class, once per
  * task). The kernel identity is the shape-named class plus the operator/stage, the same string
  * the fallback warnings log; {@code exceptionClass} is empty for the non-Arrow cause, which is
- * a plan/data property rather than an error. Every emission site is on a fallback path, never
+ * a plan/data property rather than an error; {@code options} names the emit options that differ
+ * from the defaults. Every emission site is on a fallback path, never
  * in the fused loop; fires only while a recording has the event enabled.
  */
 @Name("org.apache.spark.sql.varka.Fallback")
@@ -64,6 +65,14 @@ public final class VarkaFallbackEvent extends Event {
 
   @Label("Exception Class")
   public @Nullable String exceptionClass;
+
+  /**
+   * The emit options the kernel was built under that differ from the defaults, as
+   * {@link VarkaErrorContext#renderOptions} names them, empty at the defaults (VARKA-314): beside
+   * the identity, they say which variant of the shape fell back.
+   */
+  @Label("Options")
+  public @Nullable String options;
 
   /**
    * A declined batch's status word, zero for every other cause: the refusal reasons' bits

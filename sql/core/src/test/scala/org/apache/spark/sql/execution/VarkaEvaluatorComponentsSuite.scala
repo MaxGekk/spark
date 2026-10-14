@@ -129,9 +129,10 @@ class VarkaEvaluatorComponentsSuite extends SparkFunSuite {
     // Catches: dropping the null check in `add`, which would be an NPE inside `serveBatch`'s catch
     // arm for a node that registered a partial `VarkaExecMetrics`.
     val none = new VarkaFallbackAccounting(
-      new VarkaFallbackAccounting.Counters(null, null, null, null, null), () => "kernel")
-    none.kernelFailure(new RuntimeException("boom"), null)
-    none.rowPathFailure(new RuntimeException("boom"))
+      new VarkaFallbackAccounting.Counters(null, null, null, null, null), () => "kernel",
+      () => "")
+    none.kernelFailure(new RuntimeException("boom"), null, null)
+    none.rowPathFailure(new RuntimeException("boom"), null)
     none.declinedBatch(1, null)
     none.nonArrowBatch()
     none.allocationSample(1L << 30, 1)
@@ -140,9 +141,9 @@ class VarkaEvaluatorComponentsSuite extends SparkFunSuite {
     val Seq(kernel, rowPath, declined, nonArrow, suspect) = Seq.fill(5)(metric())
     val counted = new VarkaFallbackAccounting(
       new VarkaFallbackAccounting.Counters(kernel, rowPath, declined, nonArrow, suspect),
-      () => "kernel")
-    counted.kernelFailure(new RuntimeException("boom"), "further kernel")
-    counted.rowPathFailure(new RuntimeException("boom"))
+      () => "kernel", () => "")
+    counted.kernelFailure(new RuntimeException("boom"), "further kernel", null)
+    counted.rowPathFailure(new RuntimeException("boom"), null)
     counted.declinedBatch(1, "further kernel")
     counted.declinedBatch(1, null)
     counted.nonArrowBatch()
@@ -166,7 +167,8 @@ class VarkaEvaluatorComponentsSuite extends SparkFunSuite {
     assert(kernelBits.max < evaluatorBits.min, bits)
 
     val accounting = new VarkaFallbackAccounting(
-      new VarkaFallbackAccounting.Counters(null, null, null, null, null), () => "kernel")
+      new VarkaFallbackAccounting.Counters(null, null, null, null, null), () => "kernel",
+      () => "")
     accounting.declinedBatch(
       VarkaFusedKernel.STATUS_MAKE_DATE | VarkaFusedKernel.STATUS_INT_OVERFLOW, null)
     accounting.declinedBatch(VarkaFusedKernel.STATUS_MAKE_DATE, null)

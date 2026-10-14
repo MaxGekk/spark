@@ -281,7 +281,7 @@ public final class VarkaKernelRunner {
       if (!isCatchable(e)) {
         throw e;
       }
-      throw new VarkaKernelFailure(e);
+      throw new VarkaKernelFailure(e, null, shapeHash);
     }
     // After the kernel has returned and not from a throw out of it, so that a canary does not
     // replace the failure it follows; a no-op unless the sanitizer is on.

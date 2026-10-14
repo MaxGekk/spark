@@ -17,6 +17,8 @@
 
 package org.apache.spark.sql.execution
 
+import org.apache.logging.log4j.Level
+
 import org.apache.spark.{SparkArithmeticException, TaskContext}
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.catalyst.expressions.{Add, AddMonths, Alias, Attribute, AttributeReference, Cast, DateAdd, DateDiff, DateSub, EvalMode, Expression, ExtractANSIIntervalDays, Greatest, Literal, NamedExpression, Remainder, Year}
@@ -230,6 +232,9 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession with Varka
     VarkaColumnarToRowExec.setFailKernelForTesting(true)
     try {
       val appender = new LogAppender("varka fallback")
+      // Only warnings: the root appender keeps at most 1000 events and drops the rest, and the
+      // INFO lines a JVM's earlier suites leave to background threads can fill it first.
+      appender.setThreshold(Level.WARN)
       withLogAppender(appender) {
         val plan = node(
           project(Alias(DateAdd(attrD, Literal(3)), "add")()),

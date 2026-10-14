@@ -116,7 +116,7 @@ final class VarkaKernelPart extends VarkaEvaluatorBase {
       return new VarkaBatchDeclined(d.status, kernelIdentity());
     }
     if (e instanceof VarkaKernelFailure f && f.kernel == null) {
-      return new VarkaKernelFailure(f.getCause(), kernelIdentity());
+      return new VarkaKernelFailure(f.getCause(), kernelIdentity(), f.shapeHash);
     }
     return e;
   }

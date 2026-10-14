@@ -1,0 +1,259 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.spark.sql.execution
+
+import org.apache.logging.log4j.Level
+
+import org.apache.spark.{SparkException, SparkIllegalArgumentException, SparkIllegalStateException}
+import org.apache.spark.sql.QueryTest
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAllocationSampler, VarkaEmitOption, VarkaEmitOptions, VarkaErrorContext, VarkaErrors, VarkaFallbackEvent, VarkaJfrTestSupport, VarkaTestWatchdog}
+import org.apache.spark.sql.execution.varka.VarkaFallbackAccounting
+import org.apache.spark.sql.internal.SQLConf
+
+/**
+ * Varka's failures carry one context record (VARKA-314): what failed, the shape hash, the emit
+ * options that differ from the defaults, the batch, and the cause. A bug at planning time
+ * reaches the user as Spark's `INTERNAL_ERROR` with the record instead of a bare
+ * `IllegalArgumentException`; a fallback's warning and its JFR event name the options; and the
+ * refusal of an undeclared fallback under test raises the internal error with the record.
+ *
+ * The broken kernel here is the `misdescribeAdd` fault injector, which emits `date_add` against a
+ * wrong method descriptor, so the kernel throws `NoSuchMethodError` when it runs - and the
+ * option that broke it is the one the record names.
+ */
+class VarkaErrorContextSuite extends QueryTest with VarkaSharedSessions with VarkaTestWatchdog {
+
+  private val query = "SELECT date_add(d, 3) AS a FROM varka_dates"
+
+  /** Runs `body` with every kernel emitted under `misdescribeAdd`, then restores the options. */
+  private def withBrokenKernel[T](body: => T): T = {
+    val previous = VarkaColumnarToRowExec.currentEmitOptions
+    val broken = VarkaEmitOption.named("misdescribeAdd") match {
+      case flag: VarkaEmitOption.Flag => flag.`with`(previous, true)
+      case other => fail(s"misdescribeAdd is not a flag: $other")
+    }
+    VarkaColumnarToRowExec.setEmitOptionsForTesting(broken)
+    try body finally VarkaColumnarToRowExec.setEmitOptionsForTesting(previous)
+  }
+
+  private def withFailureDeclared[T](body: => T): T = {
+    VarkaColumnarToRowExec.setFailureFallbackExpectedForTesting(true)
+    try body finally VarkaColumnarToRowExec.setFailureFallbackExpectedForTesting(false)
+  }
+
+  private def causes(e: Throwable): Seq[Throwable] =
+    Iterator.iterate(e)(_.getCause).takeWhile(_ != null).take(20).toSeq
+
+  /**
+   * The warnings `logger` writes while `body` runs. Captured on the root logger and filtered by
+   * name: an appender on a named logger makes log4j create a config of that logger's own, which
+   * outlives the test with the level it had then and so stops a later suite's root appender from
+   * seeing that logger's warnings.
+   */
+  private def warnings(logger: Class[_])(body: => Unit): Seq[String] = {
+    val appender = new LogAppender("varka failure warnings")
+    appender.setThreshold(Level.WARN)
+    withLogAppender(appender)(body)
+    appender.loggingEvents.toSeq.filter(_.getLoggerName == logger.getName)
+      .map(_.getMessage.getFormattedMessage)
+  }
+
+  test("the one user setting out of range raises INVALID_CONF_VALUE.REQUIREMENT") {
+    val e = intercept[SparkIllegalArgumentException] {
+      varkaSpark.conf.set(SQLConf.VARKA_EMIT_USE_AVX.key, "-2")
+    }
+    checkError(e,
+      condition = "INVALID_CONF_VALUE.REQUIREMENT",
+      parameters = Map(
+        "confName" -> SQLConf.VARKA_EMIT_USE_AVX.key,
+        "confValue" -> "-2",
+        "confRequirement" -> "the level is -1 for the emitter's default or a -XX:UseAVX value"))
+  }
+
+  test("a compiler bug at planning fails the query on the driver with INTERNAL_ERROR and the " +
+      "record, keeping its Java type") {
+    cacheDates(varkaSpark)
+    VarkaExpressionCompiler.setFailForTesting(true)
+    val e = try {
+      // VarkaColumnarRule asks the compiler on the driver whether the projection fuses.
+      intercept[SparkIllegalArgumentException](varkaSpark.sql(query).collect())
+    } finally {
+      VarkaExpressionCompiler.setFailForTesting(false)
+    }
+    assert(e.isInstanceOf[IllegalArgumentException])
+    checkError(e,
+      condition = "INTERNAL_ERROR",
+      parameters = Map("message" ->
+        ("(?s)Varka's compiler failed while planning\\.\nVarka context:\n" +
+          "  kind: planning\n" +
+          "  identity: projection \\[date_add\\(d#\\d+, 3\\) AS a#\\d+\\] over \\[d#\\d+.*\\]\n" +
+          "  shape hash: none\n" +
+          "  options: .*\n" +
+          "  cause: java.lang.IllegalArgumentException: injected Varka compiler failure\n" +
+          java.util.regex.Pattern.quote(VarkaErrors.REPORT))),
+      matchPVals = true)
+    assert(e.getCause.getMessage === "injected Varka compiler failure")
+    // The hook reset, the same query plans and fuses again.
+    assertFused(varkaSpark.sql(query).queryExecution.executedPlan)
+  }
+
+  test("an undeclared kernel failure fails the job with INTERNAL_ERROR, the record naming the " +
+      "options and the batch") {
+    cacheDates(varkaSpark)
+    val e = withBrokenKernel(intercept[SparkException](varkaSpark.sql(query).collect()))
+    // A task's internal error reaches the driver inside "Job aborted"; DAGScheduler wraps it.
+    val internal = causes(e).collectFirst { case s: SparkIllegalStateException => s }
+      .getOrElse(fail("no internal error in the failure's causes", e))
+    checkError(internal,
+      condition = "INTERNAL_ERROR",
+      parameters = Map("message" ->
+        ("(?s)A failure of the kernel VarkaFusedProjection_.*\\(VARKA-275\\)\n" +
+          "Varka context:\n" +
+          "  kind: kernel-failure\n" +
+          "  identity: VarkaFusedProjection_\\w+\\.java \\[.*\\] \\(Varka_\\w+_Stage\\d+\\)\n" +
+          "  shape hash: \\w+\n" +
+          "  options: .*misdescribeAdd=true.*\n" +
+          "  batch: \\d+ rows, nulls per input \\[\\d+(, \\d+)*\\]\n" +
+          "  cause: java.lang.NoSuchMethodError.*\n" +
+          java.util.regex.Pattern.quote(VarkaErrors.REPORT))),
+      matchPVals = true)
+    assert(internal.getCause.isInstanceOf[NoSuchMethodError], internal.getCause)
+  }
+
+  test("a declared kernel failure's warning carries the record, and its event the options") {
+    cacheDates(spark)
+    cacheDates(varkaSpark)
+    val expected = spark.sql(query).collect().toSeq
+    val (lines, recorded) = VarkaJfrTestSupport.withJfrRecording(classOf[VarkaFallbackEvent]) {
+      withBrokenKernel(withFailureDeclared {
+        warnings(classOf[VarkaFallbackAccounting]) {
+          checkAnswer(varkaSpark.sql(query), expected)
+        }
+      })
+    }
+    val warning = lines.find(_.contains("failed on this batch"))
+      .getOrElse(fail(s"no kernel-failure warning among: ${lines.mkString("\n")}"))
+    assert(warning.contains("\nVarka context:\n  kind: kernel-failure\n"), warning)
+    assert(warning.contains("misdescribeAdd=true"), warning)
+    assert(warning.matches("(?s).*\n  batch: \\d+ rows, nulls per input \\[.*"), warning)
+    assert(warning.contains("\n  cause: java.lang.NoSuchMethodError"), warning)
+    val events = recorded.filter(VarkaJfrTestSupport.isEvent(_, classOf[VarkaFallbackEvent]))
+      .filter(_.getString("cause") == VarkaFallbackEvent.KERNEL_FAILURE)
+    assert(events.nonEmpty, recorded.mkString("; "))
+    events.foreach { event =>
+      assert(event.getString("options").contains("misdescribeAdd=true"), event)
+      assert(event.getString("kernelIdentity").contains("VarkaFusedProjection_"), event)
+    }
+  }
+
+  test("an emission failure's warning carries the record, with the shape hash computed at the " +
+      "catch") {
+    cacheDates(spark)
+    cacheDates(varkaSpark)
+    val expected = spark.sql(query).collect().toSeq
+    VarkaColumnarToRowExec.setFailEmissionForTesting(true)
+    val lines = try {
+      warnings(classOf[VarkaEvaluatorBase]) {
+        checkAnswer(varkaSpark.sql(query), expected)
+      }
+    } finally {
+      VarkaColumnarToRowExec.setFailEmissionForTesting(false)
+    }
+    val warning = lines.find(_.contains("Failed to emit the Varka fused kernel"))
+      .getOrElse(fail(s"no emission-failure warning among: ${lines.mkString("\n")}"))
+    assert(warning.contains("\nVarka context:\n  kind: emission-failure\n"), warning)
+    assert(warning.matches("(?s).*\n  shape hash: \\w+\n.*"), warning)
+    assert(!warning.contains("shape hash: none"), warning)
+    assert(warning.contains("\n  cause: java.lang.IllegalStateException: injected Varka " +
+      "emission failure"), warning)
+  }
+
+  test("after failures built records on every batch, the kernel's steady state allocates " +
+      "nothing") {
+    // The record is built only in a catch. This checks the other half of that: a task whose
+    // batches all failed and were answered by the row path leaves nothing behind that the
+    // kernel's own path then pays per batch. The allocation sampler measures every kernel batch;
+    // the first rounds run the kernel before C2 has compiled it, when every vector is a heap
+    // object, so the check is that some round within the cap samples clean
+    // (VarkaProjectExecSuite's sampler test explains the warm-up).
+    val view = "varka_error_context_steady"
+    varkaSpark.range(0, 1 << 20)
+      .selectExpr("date_add(DATE'2000-01-01', CAST(id % 20000 AS INT)) AS d")
+      .createOrReplaceTempView(view)
+    varkaSpark.catalog.cacheTable(view)
+    val steady = s"SELECT date_add(d, 3) AS a FROM $view"
+    def round(): (Long, Long, Long) = {
+      val df = varkaSpark.sql(steady)
+      assert(df.queryExecution.toRdd.count() === (1L << 20))
+      val node = collectFirst(df.queryExecution.executedPlan) { case v if isVarkaNode(v) => v }
+        .getOrElse(fail("expected a Varka node"))
+      def metric(name: String): Long = node.metrics.get(name).map(_.value).getOrElse(0L)
+      (metric("numVarkaBatches"), metric("numFallbackBatchesKernel"),
+        metric("numSuspectAllocationSamples"))
+    }
+    val maxRounds = 20
+    VarkaEvaluatorBase.allocationSchedule = new VarkaAllocationSampler.Schedule(1, 1)
+    try {
+      varkaSpark.table(view).count()
+      VarkaColumnarToRowExec.setFailKernelForTesting(true)
+      val (_, failed, _) = try round() finally {
+        VarkaColumnarToRowExec.setFailKernelForTesting(false)
+      }
+      assert(failed > 0L, "the failing round should have taken the kernel-failure catch")
+      var clean = false
+      var rounds = 0
+      var last = (0L, 0L, 0L)
+      while (!clean && rounds < maxRounds) {
+        last = round()
+        rounds += 1
+        assert(last._1 > 0L && last._2 === 0L, last)
+        clean = last._3 === 0L
+      }
+      assert(clean, s"no clean round within $maxRounds rounds; the last read $last")
+      logInfo(s"steady state clean after $rounds rounds, $failed failed batches before")
+    } finally {
+      VarkaEvaluatorBase.allocationSchedule = VarkaAllocationSampler.Schedule.DEFAULT
+      varkaSpark.catalog.uncacheTable(view)
+    }
+  }
+
+  test("the record renders a field it cannot compute as unavailable, and never throws") {
+    val hostile = new RuntimeException("hidden") {
+      override def toString: String = throw new IllegalStateException("toString failed")
+    }
+    val ctx = new VarkaErrorContext("kernel-failure", null,
+      null, VarkaErrorContext.safely(() => throw new ArithmeticException("no options")),
+      new VarkaErrorContext.Batch(3, java.util.List.of(Int.box(1))), hostile)
+    val block = ctx.render()
+    assert(block.contains("  identity: unavailable\n"), block)
+    assert(block.contains("  shape hash: none\n"), block)
+    assert(block.contains("  options: unavailable (java.lang.ArithmeticException)\n"), block)
+    assert(block.contains("  batch: 3 rows, nulls per input [1]\n"), block)
+    assert(block.contains("  cause: unavailable (java.lang.IllegalStateException)"), block)
+    assert(VarkaErrorContext.renderOptions(VarkaEmitOptions.DEFAULTS) === "")
+    val error = VarkaErrors.illegalState("an invariant", ctx)
+    assert(error.getCondition === "INTERNAL_ERROR")
+    assert(error.getCause eq hostile)
+    assert(error.getMessageParameters.get("message").startsWith("an invariant\nVarka context:"))
+    // A string literal of the user's, rendered into the record, may hold a placeholder; Spark's
+    // template filling must neither replace it nor loop on it.
+    val literal = VarkaErrors.illegalArgument("concat(s, '${message}')", null)
+    assert(literal.getMessage.contains("concat(s, '${message}')"), literal.getMessage)
+  }
+}
