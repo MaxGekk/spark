@@ -10,15 +10,20 @@ catalogue moved forward in the same pull request: the catalogue that sat in this
 plans of the two rows it holds (`VARKA-64.md`, `VARKA-73.md`) beside it, and every inbound
 reference rewritten by `dev/varka_catalogue_move.sh 8 9`, which a later merge reruns. The items
 this milestone takes are named below with the number they have there: 1, 2, 31, 32, 33, 34, 35,
-36, 54, 55, 89 (bullets 1 and 6), 93 and 94. So are the rows it takes from the catalogue's moved-row
-tables (items 15 and 39), which keep their task numbers and their designs where they are: 27, 28,
-30, 39, 89, 95, 103, 104 and 157. Four of those already have plan files in this folder
+36, 54, 55, 89 (bullet 1, and bullet 6 without its runtime bound), 93 and 94. So are the rows it
+takes from the catalogue's moved-row tables (items 15 and 39), which keep their task numbers and
+their designs where they are: 27, 28, 30, 39, 89, 95, 103, 104 and 157. Four of those already have plan files in this folder
 (`VARKA-28.md`, `VARKA-39.md`, `VARKA-89.md`, `VARKA-104.md`).
 
 *Owner's decision, 14 October 2026, on the math family: item 36's first option, a ULP contract
 behind a SQL configuration (2.7.1, row 345). The functions it covers are fused within a stated
 bound, the one deliberate departure from bit-identical answers, recorded as such in
 `SCOPE_STANDARD_MODE.md`.*
+
+*Owner's decision, 14 October 2026, on decimals: precision 18 binds the inputs, every
+intermediate and the result type, as Spark's type rules compute them, and no per-batch value bound
+admits a wider declared type (2.8). TPC-H q6 at its specification's types is not fused by this
+milestone.*
 
 *Owner's decision, 14 October 2026: no milestone 7 row moves.* The rows still open in
 `m7/PLAN.md` stay there and close there; nothing below depends on one except where a row says so.
@@ -162,8 +167,8 @@ types' `BOOLEAN` 41, `TINYINT` 75, `SMALLINT` 75, `FLOAT` 65, `DOUBLE` 101, `DEC
 By the hardest work left once its lanes exist: 15 done, 73 plumbing (a compiler arm and IR on the
 lanes), 60 semantics (overflow modes, NaN, rounding, decimal scale), 27 the math family under
 its ULP contract (2.7.1), and 7 hard - `round`, `bround`, `truncate`, `%`, `mod`, `pmod` and
-`try_mod`, each hard only on a floating operand (Spark rounds a double through `BigDecimal`, and a floating remainder
-is `fmod`), and semantics on the integral and decimal ones.
+`try_mod`, each hard only on a floating operand (Spark rounds a double through `BigDecimal`, and
+a floating remainder is `fmod`), and semantics on the integral and decimal ones.
 
 Three properties of the census to read it by:
 
@@ -416,14 +421,39 @@ it. Row 157 is the output's mirror: the store that writes the value word and its
 into each sixteen-byte slot. A precision-up-to-9 decimal on the int lane is a third arm 347
 measures.
 
-**The precision rule reads on every node, the result included.** A decimal above precision 18 is
-outside the type set wherever it appears, so a node whose result type exceeds 18 declines like an
-input that does. Spark's result types make that bite: `DECIMAL(p1, s1) * DECIMAL(p2, s2)` is
-`DECIMAL(p1 + p2 + 1, s1 + s2)`, so `DECIMAL(10, 2) * DECIMAL(10, 2)` is `DECIMAL(21, 4)` and
-declines, and TPC-H q6's `l_extendedprice * l_discount` at the specification's `DECIMAL(15, 2)`
-declines with it. Item 89 bullet 6's runtime bound - the long product is exact when both unscaled
-operands fit 32 bits in the batch - would admit it under a guard; whether the rule allows that is
-the owner's (section 7).
+**The precision rule binds every node: owner's decision, 14 October 2026.** Precision 18 binds
+the inputs, every intermediate and the result type, as Spark's type rules compute them, and no
+per-batch value bound admits a wider declared type - so item 89 bullet 6's runtime bound (the long
+product is exact when both unscaled operands fit 32 bits in the batch) is not taken. What that
+declines, plainly:
+
+* **Products.** `DECIMAL(p1, s1) * DECIMAL(p2, s2)` is `DECIMAL(p1 + p2 + 1, s1 + s2)`, so a product
+  fuses only when `p1 + p2 <= 17`. `DECIMAL(10, 2) * DECIMAL(10, 2)` is `DECIMAL(21, 4)` and
+  declines. **TPC-H q6 at its specification's types is not fused by milestone 8**: its
+  `l_extendedprice * l_discount` over `DECIMAL(15, 2)` is `DECIMAL(31, 4)`. (This tree's own
+  benchmark schema declares `DECIMAL(10, 0)`, which still exceeds the rule's product bound.)
+* **Sums and differences.** The result is `max(p1 - s1, p2 - s2) + max(s1, s2) + 1` digits, so two
+  operands at precision 18, or any pair whose integer and fraction digits together reach 18,
+  decline; `DECIMAL(17, s) + DECIMAL(17, s)` is the widest that fuses at equal scales.
+* **Quotients.** `s = max(6, s1 + p2 + 1)` and `p = p1 - s1 + s2 + s`, so only small operands stay
+  under 18 (`DECIMAL(5, 2) / DECIMAL(5, 2)` is `DECIMAL(13, 8)`), and those are 346's hard entry.
+* **Integral operands meet decimals at their decimal width.** Type coercion turns a `TINYINT`,
+  `SMALLINT`, `INT` or `BIGINT` met by a decimal into `DECIMAL(3, 0)`, `(5, 0)`, `(10, 0)` or
+  `(20, 0)`. So **every arithmetic or comparison between a `BIGINT` and a decimal declines**, its
+  coerced side being `DECIMAL(20, 0)`; an `INT` times a `DECIMAL(p, s)` fuses only for `p <= 7`.
+* **The census and the casts.** The census counts a type, not a precision, so no entry or pair
+  leaves it: an entry's decimal pair counts fused when it fuses for every declared precision whose
+  result the rule admits, and declines with this reason for the rest. Of the census's in-scope
+  entries, the ones that meet the rule as a limit are the decimal arithmetic (`+`, `-`, `*`, `/`,
+  `%`, `mod`, `pmod`, `div` and the `try_` forms), the comparisons and `IN` between a decimal and an
+  integral or decimal of other width (through coercion), `CheckOverflow`, and the interval
+  products and quotients by a decimal factor. In the cast matrix every pair's target is a type in
+  the set, so no legal pair leaves; what declines is a cast to a decimal type above 18, already out
+  of the set, and the implicit `BIGINT`-to-`DECIMAL(20, 0)` coercion above. The functions with
+  decimal results all stay inside: `time_to_seconds` is `DECIMAL(14, 6)`, `extract(SECOND FROM dt)`
+  `DECIMAL(8, 6)`, `make_time`'s seconds `DECIMAL(16, 6)`, `make_dt_interval`'s `DECIMAL(18, 6)`.
+* **The done-when shares do not change**: 1.1 item 2 counts entries and pairs by type, and its
+  targets stand; the declines above are reasons the census records.
 
 **Semantics, ANSI and LEGACY.** Under the rule, decimal `+`, `-` and `*` cannot overflow: the
 result precision Spark picks (`max(p1 - s1, p2 - s2) + max(s1, s2) + 1` for a sum, `p1 + p2 + 1`
@@ -517,12 +547,12 @@ catalogue keep theirs. Sizes are the house's small, medium and large.
 | 357 | The hyperbolic functions under the contract: `sinh`, `cosh`, `tanh`, and Spark's formulas for `asinh`, `acosh`, `atanh`. **Done when** each fuses within its stated bound, the formulas reproduced term by term | items 35, 36 | medium |
 | 358 | The exponential, logarithmic, power and root functions under the contract: `exp`, `expm1`, `log` (one and two arguments), `ln`, `log10`, `log1p`, `log2`, `pow`, `power`, `cbrt`, `hypot`. **Done when** each fuses within its stated bound, `log10` at its two units | items 35, 36 | medium |
 | 346 | The hard entries: floating `round`, `bround`, `truncate`, `%`, `pmod` and `try_mod`, floating to decimal, decimal division. **Done when** each has an exact construction fused with its proof or a recorded reason to decline, in the census | this plan, 2.7 and 2.8 | small |
-| 347 | The decimal load path, built three ways: the de-interleave (shuffle, and compress where it intrinsifies) with the high word checked, an unscaled-long cache layout for precision up to 18, and the int lane for precision up to 9. **Done when** all three read a decimal column with coverage rows, the measurement is committed per width with its verdict, and the arms that lose stay behind the option | items 1, 89 bullet 6 | large |
+| 347 | The decimal load path, built three ways (for declared precisions up to 18; no wider type admitted by a value bound): the de-interleave (shuffle, and compress where it intrinsifies) with the high word checked, an unscaled-long cache layout for precision up to 18, and the int lane for precision up to 9. **Done when** all three read a decimal column with coverage rows, the measurement is committed per width with its verdict, and the arms that lose stay behind the option | items 1, 89 bullet 6 without its runtime bound | large |
 | 157 | The widening store: a decimal output as its value word and sign extension in each sixteen-byte slot. **Done when** `m5/PLAN.md` 2.93's list holds | catalogue item 39 table; `m5/PLAN.md` 2.93 | small |
-| 348 | Decimal comparisons, choice, `IN`, null tests, negation and `abs`, at equal and at unequal scales (a constant rescale proven to fit the long). **Done when** each fuses, the load's precision check declining an out-of-precision batch | items 1, 2 | medium |
-| 349 | Decimal `+`, `-` and `*` under the precision rule, with `CheckOverflow`, `MakeDecimal` and `UnscaledValue`. **Done when** each fuses for every operand pair whose result stays within precision 18, the no-overflow claim and the rescales proven by SMT over every precision pair, LEGACY and ANSI giving the same bytes | item 2 | medium |
-| 350 | The decimal casts: to and from integral types, decimal to decimal (`ROUND_HALF_UP`, overflow null or raised), to and from `BOOLEAN`, to floating under the 2^53 guard. **Done when** every decimal pair of `m8/casts.tsv` fuses or is a recorded hard entry, the integer rules proven by SMT | this plan, 2.2 and 2.8 | medium |
-| 351 | Decimals in the existing types' functions: `time_to_seconds`, `second` with its fraction, `extract(SECOND FROM dt)`, `make_time`, `make_dt_interval` and `make_timestamp_ntz` over decimal seconds, `time_from_seconds` over a decimal, `floor`, `ceil`, `round`, `bround` and `truncate` over a decimal. **Done when** each fuses with a coverage row | `m5/PLAN.md` 2.93; items 1, 2 | medium |
+| 348 | Decimal comparisons, choice, `IN`, null tests, negation and `abs`, at equal and at unequal scales (a constant rescale proven to fit the long), declining every pair whose common type exceeds precision 18, a `BIGINT` operand's `DECIMAL(20, 0)` included. **Done when** each fuses, the load's precision check declining an out-of-precision batch | items 1, 2 | medium |
+| 349 | Decimal `+`, `-` and `*` under the precision rule, with `CheckOverflow`, `MakeDecimal` and `UnscaledValue`. **Done when** each fuses for every operand pair whose inputs, coerced operands and result stay within precision 18 and declines the rest with the rule as its reason (no value bound admits a wider type), the no-overflow claim and the rescales proven by SMT over every precision pair, LEGACY and ANSI giving the same bytes | item 2 | medium |
+| 350 | The decimal casts, to and from decimal types up to precision 18: to and from integral types, decimal to decimal (`ROUND_HALF_UP`, overflow null or raised), to and from `BOOLEAN`, to floating under the 2^53 guard. **Done when** every decimal pair of `m8/casts.tsv` fuses or is a recorded hard entry, the integer rules proven by SMT | this plan, 2.2 and 2.8 | medium |
+| 351 | Decimals in the existing types' functions, all of whose decimal types are within precision 18: `time_to_seconds`, `second` with its fraction, `extract(SECOND FROM dt)`, `make_time`, `make_dt_interval` and `make_timestamp_ntz` over decimal seconds, `time_from_seconds` over a decimal, `floor`, `ceil`, `round`, `bround` and `truncate` over a decimal. **Done when** each fuses with a coverage row | `m5/PLAN.md` 2.93; items 1, 2 | medium |
 | 352 | The fuzzers and the reference evaluator across types: the IR fuzzer's grammar and the Spark-level fuzzer's columns over all thirteen types, with the cross-type compositions and the option matrix's configurations. **Done when** both fuzzers draw every type at every nightly and a cross-type disagreement found is fixed or a named row | this plan, 2.10 | medium |
 | 353 | The support table for users: `docs/sql-varka.md` states, per type and per family, what fuses, from the census and `coverage.json`, and its "three types" paragraph says what the code admits, with each math function's ULP bound per host library (2.7.1). **Done when** the table is generated and `VarkaCoverageSuite` fails when it drifts | item 54 | small |
 | 354 | The closing task: 1.1 read row by row, the census and the cast matrix regenerated on the milestone's build, the README's account updated. **Done when** each item of 1.1 is met or its gap is named | this plan | small |
@@ -580,9 +610,9 @@ Every structural row cites the proof its row names:
 3. **The decimal cache arm changes a file format.** Mitigation: a version tag the serializer checks,
    the row path's reader proven by the coverage oracle, and the de-interleave kept for every other
    source whatever the measurement says.
-4. **The precision rule declines the headline decimal query.** TPC-H q6 at the specification's
-   types declines under the rule as given (2.8). Accepted until the owner rules on the runtime
-   bound; the post's claim is the census, not that query.
+4. **The precision rule declines the headline decimal query.** TPC-H q6 at its specification's
+   types is not fused by this milestone (2.8, owner's decision). Accepted: the post's claim is the
+   census, not that query, and the post says which decimal shapes decline and why.
 5. **The ULP contract is a departure users may not expect.** Mitigation: the configuration, the
    bound stated per function and host in the coverage and support tables, the register entry, and
    a default the owner sets knowingly (section 7).
@@ -598,15 +628,11 @@ Every structural row cites the proof its row names:
 1. **The default of `spark.sql.codegen.varka.math.ulpContract.enabled`** (2.7.1). On buys item 36's
    speed for every user, at answers a unit in the last place from vanilla Spark's; off keeps
    enabling Varka answer-neutral and makes the speed opt-in. The plan recommends off.
-2. **Does "precision 18" bind intermediate and result types, or the columns only?** Read as written
-   it binds every node (2.8), which declines `DECIMAL(10, 2) * DECIMAL(10, 2)` and TPC-H q6 at its
-   specification's types. Item 89 bullet 6's runtime bound would admit them under a guard. Is that
-   within the rule?
-3. **`TIME` to `TIMESTAMP_NTZ` takes the session's current date.** After `ComputeCurrentTime` it
+2. **`TIME` to `TIMESTAMP_NTZ` takes the session's current date.** After `ComputeCurrentTime` it
    is a literal per query, so 340 can fuse it as the time plus a constant; confirm that a cast whose
    answer depends on when the query runs is wanted in a kernel.
-4. **Decimal division**: an exact construction found by 346, or out of this milestone by decision?
-5. **The post's headline**: the census share alone (2.11), or a benchmark number beside it?
+3. **Decimal division**: an exact construction found by 346, or out of this milestone by decision?
+4. **The post's headline**: the census share alone (2.11), or a benchmark number beside it?
 
 ## 8. Explicitly out of milestone 8
 
