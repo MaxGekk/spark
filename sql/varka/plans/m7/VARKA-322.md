@@ -531,3 +531,25 @@ the rows that moved past 5% slower are the benchmark's own hand-written code, re
 being called a port's penalty. No A/A run of this class exists yet to read the spread against; it
 and the inlining check are owed, and either can run on a GitHub-hosted runner once the runner
 pair lands.
+
+**The inlining check** (14 October 2026). The per-row loops of both sides were run alone
+(`-Dvarka.bench.only=per-row`, pinned to the fast cores) under `-XX:+PrintCompilation
+-XX:+PrintInlining`, and the two slower loops under `-XX:+PrintAssembly`, the base built at
+`25a1bae6893`. The machine was not quiet, so no timing is read. **Inlining does not differ.** Each
+loop is compiled the same way on both sides (a C2 OSR compile, a deoptimization, a second OSR
+compile, a normal C2 compile), and in every compile `LocalDate.of` with `LocalDate::create`,
+`localDateToDays`, `truncDate` and the `MemorySegment` get and set chains are "inline (hot)" or
+forced inline; the Java's `Buffers` accessors and its static forwarders inline too. Nothing is
+"too big" on either side; the one refusal, `getWeekOfYear` "already compiled into a big method",
+is on both. The compiled loops have the same shape (strip-mined, bounds and addresses hoisted,
+the `LocalDate` scalar-replaced, 3208 against 3168 bytes for truncDate, 5064 against 5192 for
+make_date). **What differs is register allocation**, the same in a second base run: the Java keeps
+the segment bases in XMM registers and moves them back on every row (truncDate's store is `vmovq
+%xmm11, %rbx; movq %rbx, %r11; movl %ecx, (%r11, %r8)` against the Scala's `movl %ecx, (%rbp,
+%r8)`), and its loop safepoints hold 6 oops against 4 (truncDate) and 13 against 10 (make_date).
+**Matching the Scala's source does not remove it.** Four variants of the two loops were compiled:
+the buffers read into locals inside the closure; the bare segments captured, as the Scala did;
+the pass count captured too, which gives the closure the Scala's exact signature; and the
+module's methods called directly with the row count captured. Every one kept the XMM round trip
+and 6 and 12 oops, so item 6 is not the cause and the source is unchanged. The cause stays open:
+the register allocation is the only difference found, and nothing shows it costs 10% to 15%.
