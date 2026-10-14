@@ -31,9 +31,14 @@ the curated file's [implicit] section.
 
 The script fails rather than guess when the two halves disagree: a registered name with neither
 a curated row nor an exclusion, a curated name the registry no longer has, a class named in the
-census that the source does not define, and a type claimed as fused for a class that no row of
-`sql/varka/coverage.json` both names and reads a column of. So the census is regenerated, not
-edited, and a registry change upstream shows up as a failure here.
+census that the source does not define, an entry line in a registry section the parser did not
+read, and a type claimed as fused for a class that no row of `sql/varka/coverage.json` both names
+and reads a column of. That last check is a check and not a proof: a coverage row naming several
+classes credits each with every column it reads, so `year(d) = 2021 AND i > 0` would support an
+int claim for Year. Row 328 adds the single-expression coverage rows that make it exact. A type
+marked `~` is fused only over a derived operand, and its note must quote the coverage row that
+shows it. The cast aliases' source types are not curated: they are the sources `legal()` allows.
+So the census is regenerated, not edited, and a registry change upstream shows up here.
 """
 
 import argparse
@@ -220,6 +225,25 @@ def read(path):
         return f.read()
 
 
+ENTRY_START = (
+    r"\bexpression\[|\bexpressionBuilder\(|\bexpressionGeneratorBuilderOuter\(|"
+    r"\bcastAlias\(|\.registryEntry\b"
+)
+# The cast aliases and the type each casts to: their admitted sources come from legal().
+CAST_ALIASES = {
+    "boolean": "bool",
+    "tinyint": "byte",
+    "smallint": "short",
+    "int": "int",
+    "bigint": "bigint",
+    "float": "float",
+    "double": "double",
+    "decimal": "dec",
+    "date": "date",
+    "time": "time",
+}
+
+
 def registry():
     """(section, name, class) for every registered name, in registry order."""
     text = read(REGISTRY)
@@ -260,6 +284,12 @@ def registry():
                     name, cls = fn(mm)
                 entries.append((section, name, cls))
                 break
+    # Every entry line the sections hold must have been read: a form the patterns above do not
+    # know would otherwise drop out of the census without the "neither curated nor excluded"
+    # check ever seeing it.
+    expected = len(re.findall(ENTRY_START, text))
+    if expected != len(entries):
+        raise SystemExit(f"census: {expected} registry entries in the source, {len(entries)} read")
     return entries
 
 
@@ -307,11 +337,13 @@ def coverage_index():
     data = json.loads(read(COVERAGE))
     columns = {c: COVERAGE_TYPES.get(t) for c, t in data["columns"].items()}
     index = collections.defaultdict(set)
+    index["#sql"] = {}
     for row in data["expressions"]:
         tokens = set(re.findall(r"\b[a-z]\w*\b", row["executable"]))
         types = {columns[c] for c in tokens if c in columns and columns[c]}
         for cls in row["catalyst"]:
             index[cls] |= types
+        index["#sql"][row["sql"]] = set(row["catalyst"])
     return index
 
 
@@ -332,7 +364,6 @@ def defined_classes():
 VIA = {
     "ifnull": "Coalesce",
     "nvl": "Coalesce",
-    "between": "And",
     "when": "CaseWhen",
     "date_diff": "DateDiff",
     "dateadd": "DateAdd",
@@ -348,6 +379,10 @@ VIA = {
     "time_from_millis": "TimeFromMillis",
     "time_from_micros": "TimeFromMicros",
 }
+
+
+def check_cls_of(name, cls):
+    return VIA.get(name, cls)
 
 
 def build():
@@ -387,14 +422,24 @@ def build():
 
 
 def row(section, name, cls, types, result, fused, need, rows, note, cov, errors):
+    if types == "legal":
+        target = CAST_ALIASES[name]
+        t = [src for src in ORDER if any(legal(src, target))]
+        types = ",".join(t)
     t = expand(types)
     res = t if result == "same" else expand(result)
     f = expand(fused)
     # A type marked `~` is fused in a coverage row whose operand of that type is derived (a
     # literal, or another expression's result) rather than a column, so the column check cannot
-    # see it; the row is named in the note or found by the class in coverage.json.
+    # see it; the note must quote that row's SQL, and the row must name the class.
     derived = {p.rstrip("~") for p in fused.split(",") if p.endswith("~")}
-    check_cls = VIA.get(name, cls)
+    if derived:
+        quoted = re.findall(r"`([^`]+)`", note)
+        if not any(
+            q in cov.get("#sql", {}) and check_cls_of(name, cls) in cov["#sql"][q] for q in quoted
+        ):
+            errors.append(f"{name}: a ~ claim must quote a coverage row naming its class")
+    check_cls = check_cls_of(name, cls)
     for x in f:
         if x not in t:
             errors.append(f"{name}: fused type {x} is not among its types")
@@ -609,11 +654,14 @@ def cast_kind(src, dst):
     return "?", ""
 
 
-def cast_proof(src):
-    """How a pair is proven, by its source: exhaustion where the source has at most 32 bits."""
+def cast_proof(src, dst):
+    """How a pair is proven: exhaustion where the source has at most 32 bits; SMT for an integer
+    rule over a 64-bit source; sampled regions and the fuzzer for a double source and for a
+    64-bit source rounding to a floating type, which floating-point theory does not decide in
+    useful time (VARKA-241.md)."""
     if src in ("bool", "byte", "short", "int", "date", "ym", "float"):
         return "exhaustion"
-    if src in ("bigint", "dt", "time", "ntz", "dec"):
+    if src in ("bigint", "dt", "time", "ntz", "dec") and dst not in ("float", "double"):
         return "SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer"
     return "sampled regions and the fuzzer"
 
@@ -669,7 +717,7 @@ def cast_matrix():
                     "yes" if an else "no",
                     kind,
                     note,
-                    cast_proof(src),
+                    cast_proof(src, dst),
                     fused,
                     cast_rows(src, dst),
                 ]

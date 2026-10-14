@@ -6,9 +6,11 @@ generator, a plugin others can install, and trust and maintainability - the owne
 last.*
 
 This is a task plan, not a scope catalogue. Under the house rule (`sql/varka/AGENTS.md`), the
-catalogue moved forward the same day: `SCOPE_MILESTONE_7.md` is now `m9/SCOPE.md`,
+catalogue moved forward the same day: `SCOPE_MILESTONE_7.md` became milestone 8's `SCOPE.md`,
 with its item numbers unchanged, and the coverage spine it argues for (decimal lanes, aggregate
-wiring, grouped aggregation, string keys, TPC-H q6) is milestone 8's. Nothing in it is withdrawn.
+wiring, grouped aggregation, string keys, TPC-H q6) was milestone 8's. Nothing in it is withdrawn.
+*On 14 October 2026 milestone 8 became every numeric and temporal type (`m8/PLAN.md`), and the
+catalogue moved on again, to `m9/SCOPE.md`; the citations below follow it.*
 The items this milestone takes are named below with the item number they have there, and the
 rows that moved there from milestones 5 and 6 keep their task numbers.
 
@@ -736,7 +738,7 @@ anything rows 262, 263 and 269 find is weighed against the milestone's scope (se
 
 * The coverage spine and everything else in `m9/SCOPE.md` not named above - decimals,
   aggregation, strings, the plugin (item 53), the configuration surface (item 64), the fallback
-  metrics (item 65).
+  metrics (item 65). Decimals up to precision 18 are milestone 8's since 14 October 2026.
 * Item 47, one place per node: it waits for a second lane type or representation to design
   against.
 * Item 51, a mapping type per IR node: it lands with the first operator that is not
@@ -744,7 +746,7 @@ anything rows 262, 263 and 269 find is weighed against the milestone's scope (se
 * Item 36, the math family's ULP contract: a decision for a family Varka does not lower yet.
 * What `m9/SCOPE.md` item 89 collects from the Polars reading beyond rows 252 and 301: the double lane,
   strings, aggregation, decimals, time zones and the Parquet reader wait for the milestone that
-  builds them.
+  builds them (milestone 8, since 14 October 2026, for the double lane and the decimals).
 * Porting the exec nodes and the columnar rule to Java: they stay thin Scala wrappers, since
   `SparkPlan` case classes are the interop surface the owner's Java rule exempts (2.3).
 * Row 218 (optional JIT research), rows 207, 208 and 213 (range-set and warm-up tuning), row

@@ -26,7 +26,7 @@ year-month intervals on a 32-bit lane and `BIGINT`, `TIME` and day-time interval
 `VarkaKernelEvaluator.allocateVector` writes the same six. Everything else a query computes over a
 number - a `DOUBLE` price, a `DECIMAL` amount, a `BOOLEAN` flag, a `SMALLINT` code, a
 `TIMESTAMP_NTZ` event time - goes back to Spark's row engine at the first node that touches it.
-And on the six types it has, Varka fuses 63 of the 182 expressions the census below finds in
+And on the six types it has, Varka fuses 62 of the 182 expressions the census below finds in
 scope, 15 of them for every type they take.
 
 The owner's theme is the answer: **new data types, and more casts and expressions on the existing
@@ -51,16 +51,18 @@ ones.**
    questions with machine-dependent answers are built both ways and measured, the losing arm kept
    (329 for `BYTE` and `SHORT`, 347 for the decimal load path).
 2. **Most of the census is fused.** Of the 182 in-scope entries of `m8/census.tsv`, at least 122
-   (two thirds) are fused for every type they admit, and of its 915 entry-and-type pairs at least
-   687 (three quarters); every pair left unfused carries its reason in the census, each reason one
+   (two thirds) are fused for every type they admit, and of its 882 entry-and-type pairs at least
+   662 (three quarters); every pair left unfused carries its reason in the census, each reason one
    of: the owner's decision on the math family (345), a hard case declined (346), or a named row of
-   `m9/SCOPE.md`. Today the counts are 15 entries and 98 pairs. A type counts as fused only where a
-   coverage row reads a column of it, which is what `dev/varka_census.py` checks.
+   `m9/SCOPE.md`. Today the counts are 15 entries and 96 pairs. A type counts as fused only where a
+   coverage row reads a column of it, which `dev/varka_census.py` checks against `coverage.json`
+   and row 328 makes exact.
 3. **The cast matrix is fused and proven.** Every one of the 106 legal pairs of `m8/casts.tsv`
    is fused under LEGACY, ANSI and TRY where the mode admits it, or declined with its reason; each
    proven as section 5 assigns, by exhaustion where the source has at most 32 bits (62 pairs), by
-   the SMT proofs of `dev/varka_prove.sh` for the integer rule where the source is 64 bits (36),
-   and by sampled regions and the fuzzer where it is a double (8).
+   the SMT proofs of `dev/varka_prove.sh` where the source is a 64-bit integer and the rule an
+   integer one (32), and by sampled regions and the fuzzer where the source is a double or the pair
+   rounds a 64-bit value to a floating type (12).
 4. **Spark's semantics hold at the edges and are tested there**: NaN and both zeros in every
    floating comparison, choice and `IN` (item 89 bullet 1's table against
    `SQLOrderingUtil.compareDoubles`); a zero divisor null under LEGACY and an error under ANSI for
@@ -98,8 +100,12 @@ admits within the set, its result, what Varka fuses today and what is left - is
 `m8/census_curated.txt`, read against each class's `inputTypes` and `dataType`. The script fails
 rather than guess: a registered name with neither a curated line nor an exclusion, a curated name
 the registry no longer has, a class the sources do not define, or a type claimed fused for a class
-that no row of `coverage.json` both names and reads a column of. `--check` fails if either
-committed file is stale, and row 328 runs it in the linters' job.
+that no row of `coverage.json` both names and reads a column of, and any registry entry line it
+did not read. The last-but-one is a check and not a proof - a coverage row naming several classes
+credits each with every column it reads - and row 328 adds the single-expression coverage rows
+that make it exact. A type fused only over a derived operand (`year(d) * 2` for an int multiply)
+is marked, and its curated note must quote the coverage row. `--check` fails if either committed
+file is stale, and row 328 runs it in the linters' job.
 
 **The registry has 599 names, not 511.** `SCOPE_FUNCTIONS.md` counted 511 on 19 September 2026.
 The same parse over the registry at `3fe328d55c0` (20 September) finds 595, with the sections
@@ -129,21 +135,21 @@ classes. By family, with the entry-and-type pairs they admit and the pairs fused
 
 | family | entries | pairs | fused pairs | fully fused entries |
 | :--- | ---: | ---: | ---: | ---: |
-| conditional | 11 | 120 | 10 | 0 |
+| conditional | 11 | 120 | 8 | 0 |
 | predicate | 16 | 149 | 25 | 0 |
-| math and arithmetic | 59 | 242 | 12 | 0 |
+| math and arithmetic | 59 | 226 | 12 | 0 |
 | bitwise | 13 | 41 | 0 | 0 |
 | datetime | 41 | 102 | 40 | 11 |
 | hash | 2 | 26 | 0 | 0 |
-| conversion (`cast` and its aliases) | 11 | 121 | 0 | 0 |
+| conversion (`cast` and its aliases) | 11 | 104 | 0 | 0 |
 | misc (bitmap positions) | 2 | 2 | 0 | 0 |
 | implicit operators | 27 | 112 | 11 | 4 |
-| **total** | **182** | **915** | **98** | **15** |
+| **total** | **182** | **882** | **96** | **15** |
 
-By type, pairs fused today over pairs admitted: `INT` 16 of 90, `BIGINT` 12 of 86, `DATE` 42 of 67,
-`TIME` 13 of 54, year-month interval 10 of 62, day-time interval 5 of 64; and none yet of the new
+By type, pairs fused today over pairs admitted: `INT` 15 of 90, `BIGINT` 12 of 86, `DATE` 41 of 63,
+`TIME` 13 of 49, year-month interval 10 of 55, day-time interval 5 of 57; and none yet of the new
 types' `BOOLEAN` 41, `TINYINT` 75, `SMALLINT` 75, `FLOAT` 65, `DOUBLE` 101, `DECIMAL` 71,
-`TIMESTAMP_NTZ` 64.
+`TIMESTAMP_NTZ` 54.
 
 By the hardest work left once its lanes exist: 15 done, 73 plumbing (a compiler arm and IR on the
 lanes), 60 semantics (overflow modes, NaN, rounding, decimal scale), 27 the math family's ULP
@@ -157,9 +163,11 @@ Three properties of the census to read it by:
   column of it: `docs/sql-varka.md` says year-month intervals fuse in the comparisons and `IN`, but
   no coverage row shows it, so the census does not count it. Row 328 adds the coverage rows that
   close such gaps, which moves the count without moving the compiler.
-* **The cast entries count by source type**, as the census's other entries count by type: a
-  source counts fused when every legal pair from it in `m8/casts.tsv` is fused in every mode it
-  admits. So the conversion family's 121 pairs move with section 2.2's matrix.
+* **The cast entries count by source type**, as the census's other entries count by type: an
+  alias admits exactly the sources `Cast` allows it (the script computes them from the matrix's
+  legality, not by hand), and a source counts fused when every legal pair from it in
+  `m8/casts.tsv` is fused in every mode it admits. So the conversion family's 104 pairs move with
+  section 2.2's matrix.
 * **The done-when share is over pairs and over entries.** Pairs weigh an expression by how many
   types it serves, so `=` over thirteen types is thirteen; entries weigh `factorial` the same as
   `+`. Either alone would flatter one kind of work.
@@ -202,12 +210,13 @@ the two can differ, so 350 guards the bound and declines a batch outside it.
 possible: every value of a `BOOLEAN`, `TINYINT`, `SMALLINT`, `INT`, `DATE` or year-month interval,
 and every bit pattern of a `FLOAT` (2^32 of them), is tried against Spark's own `Cast` - 62 pairs.
 A 64-bit integer source (`BIGINT`, day-time interval, `TIME`, `TIMESTAMP_NTZ`, the unscaled
-decimal) cannot be exhausted, but the integer rule of each of its 36 pairs - a wrap, a range check,
-a multiply by a power of ten, a division by a unit - is what milestone 7's SMT proofs state
-(`VARKA-240.md`, `VARKA-241.md`), so each is proven there over the whole domain, beside sampled
-regions and the fuzzer. A `DOUBLE` source gets sampled regions (both zeros, NaN, the infinities,
-the subnormals, each integral boundary and its neighbouring doubles) and the fuzzer: `VARKA-241.md`
-found floating-point theory does not decide in useful time. Seven pairs are fused today, each in
+decimal) cannot be exhausted, but where the rule is an integer one - a wrap, a range check, a
+multiply by a power of ten, a division by a unit, 32 pairs - it is what milestone 7's SMT proofs
+state (`VARKA-240.md`, `VARKA-241.md`), so each is proven there over the whole domain, beside
+sampled regions and the fuzzer. The other 12 - a `DOUBLE` source, and a 64-bit source rounding to
+`FLOAT` or `DOUBLE` - get sampled regions (both zeros, NaN, the infinities, the subnormals, each
+integral boundary and its neighbouring values) and the fuzzer: `VARKA-241.md` found
+floating-point theory does not decide in useful time. Seven pairs are fused today, each in
 part (the note column says which part).
 
 ### 2.3 What the lane model has, and what each new type asks of it
@@ -427,7 +436,7 @@ catalogue keep theirs. Sizes are the house's small, medium and large.
 
 | task | what it is | where it came from | size |
 | ---: | :--- | :--- | :--- |
-| 328 | The census and the cast matrix kept true: `dev/varka_census.py --check` in the linters' job; a suite holding `m8/casts.tsv`'s legality to `Cast.canCast`, `canAnsiCast` and `canTryCast` over every pair; the coverage rows that prove what the documentation already says fuses (year-month comparisons and `IN`, null tests on every existing type). **Done when** both checks run in CI and the census's fused count moves only with a coverage row | this plan, 2.1 and 2.2 | small |
+| 328 | The census and the cast matrix kept true: `dev/varka_census.py --check` in the linters' job; a suite holding `m8/casts.tsv`'s legality to `Cast.canCast`, `canAnsiCast` and `canTryCast` over every pair; the coverage rows that prove what the documentation already says fuses (year-month comparisons and `IN`, null tests on every existing type), and a single-expression coverage row behind every fused claim, so the census's check reads one class per row; `dev/varka_catalogue_move.sh --check 8 9` beside them. **Done when** the three checks run in CI and the census's fused count moves only with a coverage row | this plan, 2.1 and 2.2 | small |
 | 28 | Lane-width conversion: one kernel over two widths, the int-to-long cast and the narrowing back. **Done when** `VARKA-28.md`'s own list holds, with the mixed-width trees of this milestone's casts admitted | catalogue item 39 table; `VARKA-28.md` | medium |
 | 104 | `BIGINT` arithmetic in the three modes, closing VARKA-30's int64 half. **Done when** `VARKA-104.md`'s list holds | catalogue item 39 table; `VARKA-104.md` | medium |
 | 30 | The integral division family: `div`, `%` and `pmod` over `INT` and `BIGINT` (item 33's sign rule, corrected by item 89), a zero divisor null or raised. **Done when** each fuses in the three modes with the row engine's error classes, proven by exhaustion at 32 bits and SMT at 64 | catalogue item 39 table; `m5/PLAN.md` 2.4; item 33 | medium |

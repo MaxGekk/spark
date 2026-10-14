@@ -8,6 +8,7 @@
 #   name | class | family | types | result | fused today | need | rows | note
 #
 # Types are bool byte short int bigint float double dec date ntz time ym dt, or a group:
+# ("legal" for a cast alias: the sources Cast allows, computed by the script)
 # INTEGRAL, FLOAT, NUM (integral, floating and decimal), IVL (ym, dt), ALL. "same" as a result
 # maps each type to itself. A fused type marked ~ is fused in a coverage row whose operand of
 # that type is derived (a literal or another expression's result), which the column check cannot
@@ -27,7 +28,7 @@ nvl|ALL|same|date|plumbing|333|rewritten to coalesce by the optimizer
 nvl2|ALL|same||plumbing|333|rewritten to if(a IS NOT NULL, b, c)
 zeroifnull|NUM|same||plumbing|333|rewritten to coalesce(a, 0)
 when|ALL|same|date,bigint,dt|plumbing|333|the CASE WHEN entry; item 94, in row 333, adds the missing ELSE
-between|ALL|bool|date,int|plumbing|333|rewritten to two comparisons and an AND
+between|ALL|bool||plumbing|333|rewritten to two comparisons and an AND; no coverage row yet
 isnan|FLOAT|bool||plumbing|341|
 isnull|ALL|bool|date,bigint|plumbing|333,334|a validity read; item 93 over a predicate
 isnotnull|ALL|bool|date,int,bigint,dt|plumbing|333,334|a validity read; item 93 over a predicate
@@ -92,17 +93,17 @@ tan|double|double||ulp|345|Math
 cot|double|double||ulp|345|1 / Math.tan
 tanh|double|double||ulp|345|Math
 width_bucket|double,IVL,time|bigint||semantics|344|bucket arithmetic over doubles
-+|NUM,IVL,date,ntz,time|same|int|semantics|330,104,103,342,349|integral overflow modes; decimal result scale
--|NUM,IVL,date,ntz,time|same|int,ym|semantics|330,104,103,342,349,39,339|date - date and ntz - ntz give dt
-*|NUM,IVL|same|int~|semantics|330,95,104,103,342,349|integral overflow modes; decimal result scale
-/|double,dec,IVL|same||semantics|342,89,103,346|zero divisor null or error; decimal division is item 2's open case
++|NUM,IVL|same|int|semantics|330,104,103,342,349|integral overflow modes; decimal result scale; date and timestamp sums are other classes
+-|NUM,IVL|same|int,ym|semantics|330,104,103,342,349|date, timestamp and time differences are other classes
+*|NUM|same|int~|semantics|330,95,104,342,349|fused for int in `year(d) * 2`; interval products are other classes
+/|double,dec|same||semantics|342,346|zero divisor null or error; decimal division is item 2's open case
 div|INTEGRAL,dec,IVL|bigint||semantics|30,104,103|zero divisor null or error
 %|NUM|same||hard|30,95,104,346,349|integral is semantics; floating remainder is fmod
-try_add|NUM,IVL,date|same||semantics|330,104,103,342,349|overflow gives null
-try_divide|double,dec,IVL|same||semantics|342,346|zero divisor gives null
+try_add|NUM,IVL|same||semantics|330,104,103,342,349|overflow gives null
+try_divide|double,dec|same||semantics|342,346|zero divisor gives null
 try_mod|NUM|same||hard|30,104,346|floating remainder is fmod
-try_subtract|NUM,IVL,date|same||semantics|330,104,103,342,349|overflow gives null
-try_multiply|NUM,IVL|same||semantics|330,104,103,342,349|overflow gives null
+try_subtract|NUM,IVL|same||semantics|330,104,103,342,349|overflow gives null
+try_multiply|NUM|same||semantics|330,104,342,349|overflow gives null
 shiftleft|int,bigint|same||plumbing|335|item 32; byte and short widen to int first
 shiftright|int,bigint|same||plumbing|335|item 32
 shiftrightunsigned|int,bigint|same||plumbing|335|item 32
@@ -142,34 +143,34 @@ make_date|int|date|int|done||
 make_time|int,dec|time||semantics|351|seconds arrive as DECIMAL(16,6)
 time_trunc|time|time|time|done||
 time_from_seconds|NUM|time||semantics|351,343|from a decimal or a double
-time_from_millis|INTEGRAL|time|bigint~|plumbing|329|byte and short widen
-time_from_micros|INTEGRAL|time|bigint~|plumbing|329|byte and short widen
+time_from_millis|INTEGRAL|time|bigint~|plumbing|329|fused for bigint in `time_from_millis(time_to_millis(t2))`
+time_from_micros|INTEGRAL|time|bigint~|plumbing|329|fused for bigint in `time_from_micros(time_to_micros(t))`
 time_to_seconds|time|dec||plumbing|351,157|a DECIMAL(14,6) result
 time_to_millis|time|bigint|time|done||
 time_to_micros|time|bigint|time|done||
 make_timestamp_ntz|date,time,int,dec|ntz||semantics|340,351|the date and time form first; the six-field form takes decimal seconds
 try_make_timestamp_ntz|int,dec|ntz||semantics|351|null instead of an error
 make_dt_interval|int,bigint,dec|dt||semantics|351,103|seconds arrive as DECIMAL(18,6)
-make_ym_interval|int|ym|int~|done||
-extract|date,ntz,time,ym,dt|int,dec|date,ym|semantics|340,103,351|fields over ntz and dt are new; SECOND gives a decimal
-date_part|date,ntz,time,ym,dt|int,dec|date,ym|semantics|340,103,351|as extract
-datepart|date,ntz,time,ym,dt|int,dec|date,ym|semantics|340,103,351|as extract
-date_from_unix_date|int|date|int~|done||
+make_ym_interval|int|ym|int~|done||fused in `make_ym_interval(year(d), month(d))`
+extract|date,ntz,time,ym,dt|int,byte,dec|date,ym|semantics|340,103,351|fields over ntz and dt are new; SECOND gives a decimal
+date_part|date,ntz,time,ym,dt|int,byte,dec|date,ym|semantics|340,103,351|as extract
+datepart|date,ntz,time,ym,dt|int,byte,dec|date,ym|semantics|340,103,351|as extract
+date_from_unix_date|int|date|int~|done||fused in `date_from_unix_date(unix_date(d))`
 unix_date|date|int|date|done||
 time_bucket|IVL,ntz|ntz||semantics|339|a floor division of the micros by the bucket
 hash|ALL|int||semantics|337|Murmur3 over each column's bytes
 xxhash64|ALL|bigint||semantics|337|XxHash64 over each column's bytes
 cast|ALL|ALL||semantics|332,343,350,338,28|the matrix in m8/PLAN.md 2.2
-boolean|ALL|bool||semantics|332,343,350|cast alias
-tinyint|ALL|byte||semantics|332,343,350|cast alias
-smallint|ALL|short||semantics|332,343,350|cast alias
-int|ALL|int||semantics|332,343,350|cast alias
-bigint|ALL|bigint||semantics|332,343,350,28|cast alias
-float|ALL|float||semantics|343|cast alias
-double|ALL|double||semantics|343|cast alias
-decimal|ALL|dec||semantics|350|cast alias; DECIMAL(10,0) by default
-date|date,ntz|date||plumbing|340|cast alias; other sources are not legal casts
-time|time,ntz|time||plumbing|340|cast alias; TIME widening is fused today
+boolean|legal|bool||semantics|332,343,350|cast alias
+tinyint|legal|byte||semantics|332,343,350|cast alias
+smallint|legal|short||semantics|332,343,350|cast alias
+int|legal|int||semantics|332,343,350|cast alias
+bigint|legal|bigint||semantics|332,343,350,28|cast alias
+float|legal|float||semantics|343|cast alias
+double|legal|double||semantics|343|cast alias
+decimal|legal|dec||semantics|350|cast alias; DECIMAL(10,0) by default
+date|legal|date||plumbing|340|cast alias
+time|legal|time||plumbing|340|cast alias; TIME widening is fused today
 bitmap_bucket_number|bigint|bigint||plumbing|335|a division and an offset over a constant
 bitmap_bit_position|bigint|bigint||plumbing|335|a remainder over a constant
 
@@ -179,13 +180,13 @@ in_set|InSet|predicate|ALL|bool|date|plumbing|333,341,348|IN over many literals
 date_minus_date|SubtractDates|datetime|date|dt||semantics|39|row 39: days times micros per day, exact
 ntz_minus_ntz|SubtractTimestamps|datetime|ntz|dt||semantics|339|plain long arithmetic in UTC, exact or raise
 time_minus_time|SubtractTimes|datetime|time|dt|time|done||
-time_plus_dt|TimeAddInterval|datetime|time,dt|time|time,dt~|done||
+time_plus_dt|TimeAddInterval|datetime|time,dt|time|time,dt~|done||fused in `t + INTERVAL '0 00:00:00' DAY TO SECOND`
 date_plus_ym|DateAddYMInterval|datetime|date,ym|date|date,ym|done||
 datetime_sub|DatetimeSub|datetime|date,ntz,IVL|date,ntz|date,ym|plumbing|339|the wrapper over the subtraction forms
 ntz_plus_dt|TimestampAddInterval|datetime|ntz,dt|ntz||semantics|339|UTC, so plain arithmetic; exact or raise
 ntz_plus_ym|TimestampAddYMInterval|datetime|ntz,ym|ntz||semantics|339|calendar months on the date part
 timestampadd|TimestampAdd|datetime|bigint,ntz|ntz||semantics|339|units up to a week are arithmetic, months and years calendar
-ym_times_num|MultiplyYMInterval|interval|ym,NUM|ym|ym~,int~|semantics|103,329,342,349|the int factor is fused; rounding HALF_UP from fractions
+ym_times_num|MultiplyYMInterval|interval|ym,NUM|ym|ym~,int~|semantics|103,329,342,349|fused in `make_ym_interval(year(d), month(d)) * 2`; HALF_UP from fractions
 dt_times_num|MultiplyDTInterval|interval|dt,NUM|dt||semantics|103,342,349|checked multiply; HALF_UP from fractions
 ym_div_num|DivideYMInterval|interval|ym,NUM|ym||semantics|89,342,349|HALF_UP division
 dt_div_num|DivideDTInterval|interval|dt,NUM|dt||semantics|103,342,349|HALF_UP division

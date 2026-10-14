@@ -9,7 +9,7 @@ nvl	Nvl	conditionalExpressions	in		bool,byte,short,int,bigint,float,double,dec,d
 nvl2	Nvl2	conditionalExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt		bool,byte,short,float,double,dec,ntz	plumbing	333	rewritten to if(a IS NOT NULL, b, c)
 zeroifnull	ZeroIfNull	conditionalExpressions	in		byte,short,int,bigint,float,double,dec	byte,short,int,bigint,float,double,dec		byte,short,float,double,dec	plumbing	333	rewritten to coalesce(a, 0)
 when	CaseWhen	conditionalExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	bigint,date,dt	bool,byte,short,float,double,dec,ntz	plumbing	333	the CASE WHEN entry; item 94, in row 333, adds the missing ELSE
-between	Between	conditionalExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	bool	int,date	bool,byte,short,float,double,dec,ntz	plumbing	333	rewritten to two comparisons and an AND
+between	Between	conditionalExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	bool		bool,byte,short,float,double,dec,ntz	plumbing	333	rewritten to two comparisons and an AND; no coverage row yet
 isnan	IsNaN	predicateExpressions	in		float,double	bool		bool,float,double	plumbing	341	
 isnull	IsNull	predicateExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	bool	bigint,date	bool,byte,short,float,double,dec,ntz	plumbing	333,334	a validity read; item 93 over a predicate
 isnotnull	IsNotNull	predicateExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	bool	int,bigint,date,dt	bool,byte,short,float,double,dec,ntz	plumbing	333,334	a validity read; item 93 over a predicate
@@ -88,17 +88,17 @@ tan	Tan	mathExpressions	in		double	double		double	ulp	345	Math
 cot	Cot	mathExpressions	in		double	double		double	ulp	345	1 / Math.tan
 tanh	Tanh	mathExpressions	in		double	double		double	ulp	345	Math
 width_bucket	WidthBucket	mathExpressions	in		double,time,ym,dt	bigint		double	semantics	344	bucket arithmetic over doubles
-+	Add	mathExpressions	in		byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	int	byte,short,float,double,dec,ntz	semantics	330,104,103,342,349	integral overflow modes; decimal result scale
--	Subtract	mathExpressions	in		byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	int,ym	byte,short,float,double,dec,ntz	semantics	330,104,103,342,349,39,339	date - date and ntz - ntz give dt
-*	Multiply	mathExpressions	in		byte,short,int,bigint,float,double,dec,ym,dt	byte,short,int,bigint,float,double,dec,ym,dt	int	byte,short,float,double,dec	semantics	330,95,104,103,342,349	integral overflow modes; decimal result scale
-/	Divide	mathExpressions	in		double,dec,ym,dt	double,dec,ym,dt		double,dec	semantics	342,89,103,346	zero divisor null or error; decimal division is item 2's open case
++	Add	mathExpressions	in		byte,short,int,bigint,float,double,dec,ym,dt	byte,short,int,bigint,float,double,dec,ym,dt	int	byte,short,float,double,dec	semantics	330,104,103,342,349	integral overflow modes; decimal result scale; date and timestamp sums are other classes
+-	Subtract	mathExpressions	in		byte,short,int,bigint,float,double,dec,ym,dt	byte,short,int,bigint,float,double,dec,ym,dt	int,ym	byte,short,float,double,dec	semantics	330,104,103,342,349	date, timestamp and time differences are other classes
+*	Multiply	mathExpressions	in		byte,short,int,bigint,float,double,dec	byte,short,int,bigint,float,double,dec	int	byte,short,float,double,dec	semantics	330,95,104,342,349	fused for int in `year(d) * 2`; interval products are other classes
+/	Divide	mathExpressions	in		double,dec	double,dec		double,dec	semantics	342,346	zero divisor null or error; decimal division is item 2's open case
 div	IntegralDivide	mathExpressions	in		byte,short,int,bigint,dec,ym,dt	bigint		byte,short,dec	semantics	30,104,103	zero divisor null or error
 %	Remainder	mathExpressions	in		byte,short,int,bigint,float,double,dec	byte,short,int,bigint,float,double,dec		byte,short,float,double,dec	hard	30,95,104,346,349	integral is semantics; floating remainder is fmod
-try_add	TryAdd	mathExpressions	in		byte,short,int,bigint,float,double,dec,date,ym,dt	byte,short,int,bigint,float,double,dec,date,ym,dt		byte,short,float,double,dec	semantics	330,104,103,342,349	overflow gives null
-try_divide	TryDivide	mathExpressions	in		double,dec,ym,dt	double,dec,ym,dt		double,dec	semantics	342,346	zero divisor gives null
+try_add	TryAdd	mathExpressions	in		byte,short,int,bigint,float,double,dec,ym,dt	byte,short,int,bigint,float,double,dec,ym,dt		byte,short,float,double,dec	semantics	330,104,103,342,349	overflow gives null
+try_divide	TryDivide	mathExpressions	in		double,dec	double,dec		double,dec	semantics	342,346	zero divisor gives null
 try_mod	TryMod	mathExpressions	in		byte,short,int,bigint,float,double,dec	byte,short,int,bigint,float,double,dec		byte,short,float,double,dec	hard	30,104,346	floating remainder is fmod
-try_subtract	TrySubtract	mathExpressions	in		byte,short,int,bigint,float,double,dec,date,ym,dt	byte,short,int,bigint,float,double,dec,date,ym,dt		byte,short,float,double,dec	semantics	330,104,103,342,349	overflow gives null
-try_multiply	TryMultiply	mathExpressions	in		byte,short,int,bigint,float,double,dec,ym,dt	byte,short,int,bigint,float,double,dec,ym,dt		byte,short,float,double,dec	semantics	330,104,103,342,349	overflow gives null
+try_subtract	TrySubtract	mathExpressions	in		byte,short,int,bigint,float,double,dec,ym,dt	byte,short,int,bigint,float,double,dec,ym,dt		byte,short,float,double,dec	semantics	330,104,103,342,349	overflow gives null
+try_multiply	TryMultiply	mathExpressions	in		byte,short,int,bigint,float,double,dec	byte,short,int,bigint,float,double,dec		byte,short,float,double,dec	semantics	330,104,342,349	overflow gives null
 unhex	Unhex	mathExpressions	out	STRING input or output: owner's decision, 14 October 2026							
 randstr	RandStr	stringExpressions	out	STRING input or output: owner's decision, 14 October 2026							
 try_to_binary	TryToBinary	stringExpressions	out	STRING input or output: owner's decision, 14 October 2026							
@@ -245,8 +245,8 @@ make_date	MakeDate	datetimeExpressions	in		int	date	int		done
 make_time	MakeTime	datetimeExpressions	in		int,dec	time		dec	semantics	351	seconds arrive as DECIMAL(16,6)
 time_trunc	TimeTrunc	datetimeExpressions	in		time	time	time		done		
 time_from_seconds	TimeFromSeconds	datetimeExpressions	in		byte,short,int,bigint,float,double,dec	time		byte,short,float,double,dec	semantics	351,343	from a decimal or a double
-time_from_millis	TimeFromMillis	datetimeExpressions	in		byte,short,int,bigint	time	bigint	byte,short	plumbing	329	byte and short widen
-time_from_micros	TimeFromMicros	datetimeExpressions	in		byte,short,int,bigint	time	bigint	byte,short	plumbing	329	byte and short widen
+time_from_millis	TimeFromMillis	datetimeExpressions	in		byte,short,int,bigint	time	bigint	byte,short	plumbing	329	fused for bigint in `time_from_millis(time_to_millis(t2))`
+time_from_micros	TimeFromMicros	datetimeExpressions	in		byte,short,int,bigint	time	bigint	byte,short	plumbing	329	fused for bigint in `time_from_micros(time_to_micros(t))`
 time_to_seconds	TimeToSeconds	datetimeExpressions	in		time	dec		dec	plumbing	351,157	a DECIMAL(14,6) result
 time_to_millis	TimeToMillis	datetimeExpressions	in		time	bigint	time		done		
 time_to_micros	TimeToMicros	datetimeExpressions	in		time	bigint	time		done		
@@ -259,11 +259,11 @@ try_make_timestamp_ntz	TryMakeTimestampNTZExpressionBuilder	datetimeExpressions	
 try_make_timestamp_ltz	TryMakeTimestampLTZExpressionBuilder	datetimeExpressions	out	TIMESTAMP with local time zone: owner's decision, 14 October 2026							
 make_interval	MakeInterval	datetimeExpressions	out	CALENDAR INTERVAL result: outside the type set							
 make_dt_interval	MakeDTInterval	datetimeExpressions	in		int,bigint,dec	dt		dec	semantics	351,103	seconds arrive as DECIMAL(18,6)
-make_ym_interval	MakeYMInterval	datetimeExpressions	in		int	ym	int		done		
-extract	Extract	datetimeExpressions	in		date,ntz,time,ym,dt	int,dec	date,ym	dec,ntz	semantics	340,103,351	fields over ntz and dt are new; SECOND gives a decimal
-date_part	DatePartExpressionBuilder	datetimeExpressions	in		date,ntz,time,ym,dt	int,dec	date,ym	dec,ntz	semantics	340,103,351	as extract
-datepart	DatePartExpressionBuilder	datetimeExpressions	in		date,ntz,time,ym,dt	int,dec	date,ym	dec,ntz	semantics	340,103,351	as extract
-date_from_unix_date	DateFromUnixDate	datetimeExpressions	in		int	date	int		done		
+make_ym_interval	MakeYMInterval	datetimeExpressions	in		int	ym	int		done		fused in `make_ym_interval(year(d), month(d))`
+extract	Extract	datetimeExpressions	in		date,ntz,time,ym,dt	byte,int,dec	date,ym	byte,dec,ntz	semantics	340,103,351	fields over ntz and dt are new; SECOND gives a decimal
+date_part	DatePartExpressionBuilder	datetimeExpressions	in		date,ntz,time,ym,dt	byte,int,dec	date,ym	byte,dec,ntz	semantics	340,103,351	as extract
+datepart	DatePartExpressionBuilder	datetimeExpressions	in		date,ntz,time,ym,dt	byte,int,dec	date,ym	byte,dec,ntz	semantics	340,103,351	as extract
+date_from_unix_date	DateFromUnixDate	datetimeExpressions	in		int	date	int		done		fused in `date_from_unix_date(unix_date(d))`
 unix_date	UnixDate	datetimeExpressions	in		date	int	date		done		
 timestamp_seconds	SecondsToTimestamp	datetimeExpressions	out	TIMESTAMP with local time zone: owner's decision, 14 October 2026							
 timestamp_millis	MillisToTimestamp	datetimeExpressions	out	TIMESTAMP with local time zone: owner's decision, 14 October 2026							
@@ -445,15 +445,15 @@ posexplode	PosExplodeExpressionBuilder	generatorExpressions	out	generator: Varka
 posexplode_outer	PosExplodeExpressionBuilder	generatorExpressions	out	generator: Varka fuses scalar projections and filters							
 stack	Stack	generatorExpressions	out	generator: Varka fuses scalar projections and filters							
 cast	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt		bool,byte,short,float,double,dec,ntz	semantics	332,343,350,338,28	the matrix in m8/PLAN.md 2.2
-boolean	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	bool		bool,byte,short,float,double,dec,ntz	semantics	332,343,350	cast alias
-tinyint	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	byte		bool,byte,short,float,double,dec,ntz	semantics	332,343,350	cast alias
-smallint	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	short		bool,byte,short,float,double,dec,ntz	semantics	332,343,350	cast alias
-int	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	int		bool,byte,short,float,double,dec,ntz	semantics	332,343,350	cast alias
-bigint	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	bigint		bool,byte,short,float,double,dec,ntz	semantics	332,343,350,28	cast alias
-float	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	float		bool,byte,short,float,double,dec,ntz	semantics	343	cast alias
-double	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	double		bool,byte,short,float,double,dec,ntz	semantics	343	cast alias
-decimal	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	dec		bool,byte,short,float,double,dec,ntz	semantics	350	cast alias; DECIMAL(10,0) by default
-date	Cast	conversionExpressions	in		date,ntz	date		ntz	plumbing	340	cast alias; other sources are not legal casts
+boolean	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date	bool		bool,byte,short,float,double,dec	semantics	332,343,350	cast alias
+tinyint	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,time,ym,dt	byte		bool,byte,short,float,double,dec	semantics	332,343,350	cast alias
+smallint	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,time,ym,dt	short		bool,byte,short,float,double,dec	semantics	332,343,350	cast alias
+int	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,time,ym,dt	int		bool,byte,short,float,double,dec	semantics	332,343,350	cast alias
+bigint	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,time,ym,dt	bigint		bool,byte,short,float,double,dec	semantics	332,343,350,28	cast alias
+float	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date	float		bool,byte,short,float,double,dec	semantics	343	cast alias
+double	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date	double		bool,byte,short,float,double,dec	semantics	343	cast alias
+decimal	Cast	conversionExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,time,ym,dt	dec		bool,byte,short,float,double,dec	semantics	350	cast alias; DECIMAL(10,0) by default
+date	Cast	conversionExpressions	in		date,ntz	date		ntz	plumbing	340	cast alias
 timestamp	Cast	conversionExpressions	out	TIMESTAMP with local time zone: owner's decision, 14 October 2026							
 time	Cast	conversionExpressions	in		ntz,time	time		ntz	plumbing	340	cast alias; TIME widening is fused today
 binary	Cast	conversionExpressions	out	BINARY: outside the type set							
@@ -603,13 +603,13 @@ in_set	InSet	implicit: predicate	in		bool,byte,short,int,bigint,float,double,dec
 date_minus_date	SubtractDates	implicit: datetime	in		date	dt			semantics	39	row 39: days times micros per day, exact
 ntz_minus_ntz	SubtractTimestamps	implicit: datetime	in		ntz	dt		ntz	semantics	339	plain long arithmetic in UTC, exact or raise
 time_minus_time	SubtractTimes	implicit: datetime	in		time	dt	time		done		
-time_plus_dt	TimeAddInterval	implicit: datetime	in		time,dt	time	time,dt		done		
+time_plus_dt	TimeAddInterval	implicit: datetime	in		time,dt	time	time,dt		done		fused in `t + INTERVAL '0 00:00:00' DAY TO SECOND`
 date_plus_ym	DateAddYMInterval	implicit: datetime	in		date,ym	date	date,ym		done		
 datetime_sub	DatetimeSub	implicit: datetime	in		date,ntz,ym,dt	date,ntz	date,ym	ntz	plumbing	339	the wrapper over the subtraction forms
 ntz_plus_dt	TimestampAddInterval	implicit: datetime	in		ntz,dt	ntz		ntz	semantics	339	UTC, so plain arithmetic; exact or raise
 ntz_plus_ym	TimestampAddYMInterval	implicit: datetime	in		ntz,ym	ntz		ntz	semantics	339	calendar months on the date part
 timestampadd	TimestampAdd	implicit: datetime	in		bigint,ntz	ntz		ntz	semantics	339	units up to a week are arithmetic, months and years calendar
-ym_times_num	MultiplyYMInterval	implicit: interval	in		byte,short,int,bigint,float,double,dec,ym	ym	int,ym	byte,short,float,double,dec	semantics	103,329,342,349	the int factor is fused; rounding HALF_UP from fractions
+ym_times_num	MultiplyYMInterval	implicit: interval	in		byte,short,int,bigint,float,double,dec,ym	ym	int,ym	byte,short,float,double,dec	semantics	103,329,342,349	fused in `make_ym_interval(year(d), month(d)) * 2`; HALF_UP from fractions
 dt_times_num	MultiplyDTInterval	implicit: interval	in		byte,short,int,bigint,float,double,dec,dt	dt		byte,short,float,double,dec	semantics	103,342,349	checked multiply; HALF_UP from fractions
 ym_div_num	DivideYMInterval	implicit: interval	in		byte,short,int,bigint,float,double,dec,ym	ym		byte,short,float,double,dec	semantics	89,342,349	HALF_UP division
 dt_div_num	DivideDTInterval	implicit: interval	in		byte,short,int,bigint,float,double,dec,dt	dt		byte,short,float,double,dec	semantics	103,342,349	HALF_UP division

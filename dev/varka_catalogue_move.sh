@@ -24,8 +24,8 @@
 # catalogue moves forward with its item numbers unchanged, and a plan may be renamed only if every
 # inbound reference is updated with it. The files that move are the catalogue (SCOPE.md), its
 # reading notes (READING_*.md) and the plans of the rows the catalogue holds, which live beside it
-# (AGENTS.md, "Plans are records"): MOVED_PLANS below, which the caller keeps current. Plans of
-# rows the new milestone takes stay where they are.
+# (AGENTS.md, "Plans are records"): MOVED_PLANS below, derived from the old milestone's task
+# table. Plans of rows the new milestone takes stay where they are.
 #
 # The script is idempotent: a second run moves nothing and rewrites only citations that arrived
 # since the first, such as those a merge of master brings in. Run it again after every such merge,
@@ -48,11 +48,28 @@ to="$2"
 cd "$(git rev-parse --show-toplevel)"
 plans=sql/varka/plans
 
-# The plans of rows that sit in the catalogue, by milestone: they move with it.
-case "$from" in
-  8) MOVED_PLANS=(VARKA-64.md VARKA-73.md) ;;
-  *) MOVED_PLANS=() ;;
-esac
+if [ ! -f "$plans/m$from/PLAN.md" ]; then
+  echo "$plans/m$from/PLAN.md does not exist: a catalogue moves when its milestone has a plan" >&2
+  exit 1
+fi
+
+# The plans of rows the catalogue holds move with it: a VARKA-<n>.md in the old folder whose row
+# is not in that milestone's task table. After a first run they are in the new folder, where no
+# task table holds them either, and are still named so their citations keep being rewritten.
+holds_row() { # plan file, task file name
+  local n="${2#VARKA-}"
+  n="${n%.md}"
+  [ -f "$1" ] && grep -qE "^\| *$n *\|" "$1"
+}
+MOVED_PLANS=()
+for f in "$plans/m$from"/VARKA-*.md "$plans/m$to"/VARKA-*.md; do
+  [ -e "$f" ] || continue
+  name="$(basename "$f")"
+  dir="$(dirname "$f")"
+  if ! holds_row "$dir/PLAN.md" "$name"; then
+    MOVED_PLANS+=("$name")
+  fi
+done
 
 files_to_move=(SCOPE.md)
 for f in "$plans/m$from"/READING_*.md; do
@@ -62,7 +79,7 @@ done
 for f in "$plans/m$to"/READING_*.md; do
   [ -e "$f" ] && files_to_move+=("$(basename "$f")")
 done
-files_to_move+=("${MOVED_PLANS[@]}")
+files_to_move+=(${MOVED_PLANS[@]+"${MOVED_PLANS[@]}"})
 
 # Every path that changes, as a literal "m<from>/<name>" to "m<to>/<name>" rewrite.
 patterns=()
