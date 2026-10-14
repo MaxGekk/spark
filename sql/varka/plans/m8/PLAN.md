@@ -15,6 +15,11 @@ tables (items 15 and 39), which keep their task numbers and their designs where 
 30, 39, 89, 95, 103, 104 and 157. Four of those already have plan files in this folder
 (`VARKA-28.md`, `VARKA-39.md`, `VARKA-89.md`, `VARKA-104.md`).
 
+*Owner's decision, 14 October 2026, on the math family: item 36's first option, a ULP contract
+behind a SQL configuration (2.7.1, row 345). The functions it covers are fused within a stated
+bound, the one deliberate departure from bit-identical answers, recorded as such in
+`SCOPE_STANDARD_MODE.md`.*
+
 *Owner's decision, 14 October 2026: no milestone 7 row moves.* The rows still open in
 `m7/PLAN.md` stay there and close there; nothing below depends on one except where a row says so.
 
@@ -53,7 +58,7 @@ ones.**
 2. **Most of the census is fused.** Of the 182 in-scope entries of `m8/census.tsv`, at least 122
    (two thirds) are fused for every type they admit, and of its 882 entry-and-type pairs at least
    662 (three quarters); every pair left unfused carries its reason in the census, each reason one
-   of: the owner's decision on the math family (345), a hard case declined (346), or a named row of
+   of: the math configuration switched off (2.7.1), a hard case declined (346), or a named row of
    `m9/SCOPE.md`. Today the counts are 15 entries and 96 pairs. A type counts as fused only where a
    coverage row reads a column of it, which `dev/varka_census.py` checks against `coverage.json`
    and row 328 makes exact.
@@ -70,8 +75,11 @@ ones.**
    ANSI, `TINYINT` and `SMALLINT` included; decimal rescaling `ROUND_HALF_UP`, and decimal overflow
    null under LEGACY and an error under ANSI; the ANSI form comparing error classes, as
    `VARKA-138.md` built it, on every new type.
-5. **The math family is decided and built to the decision**: item 36's three options put to the
-   owner (345), and the 27 entries it covers fused under the chosen contract or declined by it.
+5. **The math family is fused under the ULP contract** (345, 356 to 358): each of its 27 entries
+   states its bound per host library (SVML at AVX-512, SVML at AVX2, SLEEF on NEON) in the coverage
+   table and the user support table, its test oracle compares within that bound, it is gated by
+   `spark.sql.codegen.varka.math.ulpContract.enabled`, and the departure is entry 3.4 of
+   `SCOPE_STANDARD_MODE.md`. Every other expression stays bit-exact.
 6. **The existing types are filled in**: `BIGINT` arithmetic (104), the integral division shapes
    (30, 95, item 33), the day-time interval expressions (103), `date - date` (39), the year-month
    divisions (89), the bitwise family (item 32), null-safe equality (item 34), the choice shapes of
@@ -152,9 +160,9 @@ types' `BOOLEAN` 41, `TINYINT` 75, `SMALLINT` 75, `FLOAT` 65, `DOUBLE` 101, `DEC
 `TIMESTAMP_NTZ` 54.
 
 By the hardest work left once its lanes exist: 15 done, 73 plumbing (a compiler arm and IR on the
-lanes), 60 semantics (overflow modes, NaN, rounding, decimal scale), 27 the math family's ULP
-contract, and 7 hard - `round`, `bround`, `truncate`, `%`, `mod`, `pmod` and `try_mod`, each hard
-only on a floating operand (Spark rounds a double through `BigDecimal`, and a floating remainder
+lanes), 60 semantics (overflow modes, NaN, rounding, decimal scale), 27 the math family under
+its ULP contract (2.7.1), and 7 hard - `round`, `bround`, `truncate`, `%`, `mod`, `pmod` and
+`try_mod`, each hard only on a floating operand (Spark rounds a double through `BigDecimal`, and a floating remainder
 is `fmod`), and semantics on the integral and decimal ones.
 
 Three properties of the census to read it by:
@@ -335,9 +343,50 @@ first rows:
   754 in a lane exactly as in the scalar code, and `abs`, negation, `signum`, `degrees` and
   `radians` (`Math.toDegrees` is one multiply) are exact by construction; 342 ships them all. The
   transcendental functions are not: item 36's probe found every bound operator differing from the
-  library Spark calls on up to thirteen percent of inputs on every host. 345 puts item 36's three
-  options to the owner - a ULP contract, an emitted fdlibm for the six `StrictMath` functions, or a
-  decline - and builds what he chooses.
+  library Spark calls on up to thirteen percent of inputs on every host, so they are fused under
+  the contract 2.7.1 describes.
+
+#### 2.7.1 The math family's ULP contract (345, 356 to 358)
+
+The owner chose item 36's first option on 14 October 2026. What it means, piece by piece:
+
+* **A bound per function and per host library, stated where users read.** Each fused math function
+  states in the coverage table and in the user support table (353) how far its lanes may be from
+  `java.lang.Math`: "within 1 ulp" for most, "within 2 ulp" for `log10` everywhere and for `tanh`
+  on x86, as item 36's measurements found (`SCOPE_FUNCTIONS.md` 3). The bound is per host library,
+  since the JDK binds a different one on each - SVML at AVX-512, SVML at AVX2, SLEEF on NEON - and
+  an operator the JDK leaves unbound on a host (`POW` at AVX2, `TANH` on NEON) runs the scalar call
+  and is exact there. Item 36's probe measured fourteen operators against the library Spark calls,
+  which is `StrictMath` for `exp`, `expm1`, `log`, `log10`, `log1p` and `pow`; 345 extends
+  `dev/varka_canary/MathLaneProbe.java` to every function the family fuses (`asin`, `acos`,
+  `sinh`, `cosh` and the composites `sec`, `csc`, `cot`, `log2`, `asinh`, `acosh`, `atanh` were
+  not probed) and to both references, and states the larger distance, so a bound against
+  `java.lang.Math` is also a bound against the row engine's answer. A function without a measured
+  bound on a host is not fused there.
+* **The oracle compares within the bound, and only for these functions.** The coverage oracle, the
+  reference evaluator and the fuzzers compare a math function's lanes with the row engine's within
+  its stated bound for the host they run on, and a composition containing one compares its outputs
+  that way; every other expression, including `sqrt`, `degrees`, `radians` and the arithmetic, stays
+  bit for bit.
+* **A SQL configuration gates it**, because it is a departure:
+  `spark.sql.codegen.varka.math.ulpContract.enabled`, on the two-surface model of
+  `SCOPE_STANDARD_MODE.md` 4, with the emit option in the shape key. Off, the math family declines
+  with a reason naming the configuration. The configuration audit suite runs after it is added.
+* **One query can mix the two answers.** The ghost fallback serves a declined batch on the row
+  engine, so with the configuration on, rows of one output column can come from a kernel in one
+  batch and from `Math` or `StrictMath` in the next, and may differ in the last bit by batch. That
+  is the mix a cluster already produces: HotSpot's `Math.sin` itself differs between x86 and
+  aarch64 executors, so a column of `sin` over a mixed cluster is already not one bit pattern. The
+  coverage table says so beside the bound.
+* **The register records it.** `SCOPE_STANDARD_MODE.md` 3.4 is the first deliberate departure from
+  "row answers follow Spark", with the reason, the bound and the configuration.
+
+**The default is open** (section 7). On, users get the speed item 36 measured - 5x to 14x at eight
+lanes, 2.5x to 9x at four, 1.1x to 3.9x at two - with answers a unit in the last place from vanilla
+Spark's. Off, Varka keeps its promise that enabling it changes nothing a query returns, and the
+speed is opt-in. The plan recommends **off**: the bit-identical promise is what the differential
+suites, the ghost fallback's soundness and the posts all rest on, a user who wants the speed loses
+one setting, and a default can be flipped once users have read the bound.
 
 The rounding functions (344) are built, not called, since `VectorOperators` has no rounding
 operator: `floor`, `ceil` and `rint` by the 2^52 construction, `floor` and `ceil` of a double
@@ -463,7 +512,10 @@ catalogue keep theirs. Sizes are the house's small, medium and large.
 | 342 | Floating arithmetic and the exact functions: `+`, `-`, `*`, `/` (a zero divisor null or raised; an int division through its casts), negation, `abs`, `signum`, `sqrt`, `degrees`, `radians`, `try_divide`, the interval products and quotients by a floating factor. **Done when** each fuses, bit-identical to the row engine over sampled regions and the fuzzer | item 35 | medium |
 | 343 | The floating casts: integral to floating (rounding as the JVM does), `FLOAT` and `DOUBLE` to each other, floating to integral (LEGACY's saturation, ANSI's and TRY's range check and NaN), to and from `BOOLEAN`, `time_from_seconds` over a double. **Done when** every such pair of `m8/casts.tsv` fuses in the three modes, a `FLOAT` source proven over all 2^32 bit patterns | this plan, 2.2 | medium |
 | 344 | The rounding functions: `floor`, `ceil`, `rint` over a double by the 2^52 construction, `floor` and `ceil` to `BIGINT`, `round`, `bround` and `truncate` over integral types, `factorial`, `width_bucket`. **Done when** each fuses, the double forms checked over every boundary region and the integral ones by exhaustion at 32 bits | items 35, 36 | medium |
-| 345 | The math family's contract: item 36's three options put to the owner, then the 27 entries built to his decision - under a stated ULP bound per function, through an emitted fdlibm, or declined by name. **Done when** the decision is recorded and every entry fuses under it or declines citing it | item 36 | small for the decision; large for a build |
+| 345 | The math family's ULP contract and its configuration (2.7.1): `MathLaneProbe` extended to every function and both references, a bound per function and per host library, the coverage and support tables' bound column, the oracle and fuzzers comparing within the bound, `spark.sql.codegen.varka.math.ulpContract.enabled` with its emit option in the shape key, and `SCOPE_STANDARD_MODE.md` 3.4. **Done when** a probe run on each of the three host libraries is committed, the configuration declines the family when off, and a test shows a within-bound comparison catches a lane two units further out | item 36; owner's decision, 14 October 2026 | medium |
+| 356 | The trigonometric functions under the contract: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sec`, `csc`, `cot`. **Done when** each fuses within its stated bound with a coverage row per host library | items 35, 36 | medium |
+| 357 | The hyperbolic functions under the contract: `sinh`, `cosh`, `tanh`, and Spark's formulas for `asinh`, `acosh`, `atanh`. **Done when** each fuses within its stated bound, the formulas reproduced term by term | items 35, 36 | medium |
+| 358 | The exponential, logarithmic, power and root functions under the contract: `exp`, `expm1`, `log` (one and two arguments), `ln`, `log10`, `log1p`, `log2`, `pow`, `power`, `cbrt`, `hypot`. **Done when** each fuses within its stated bound, `log10` at its two units | items 35, 36 | medium |
 | 346 | The hard entries: floating `round`, `bround`, `truncate`, `%`, `pmod` and `try_mod`, floating to decimal, decimal division. **Done when** each has an exact construction fused with its proof or a recorded reason to decline, in the census | this plan, 2.7 and 2.8 | small |
 | 347 | The decimal load path, built three ways: the de-interleave (shuffle, and compress where it intrinsifies) with the high word checked, an unscaled-long cache layout for precision up to 18, and the int lane for precision up to 9. **Done when** all three read a decimal column with coverage rows, the measurement is committed per width with its verdict, and the arms that lose stay behind the option | items 1, 89 bullet 6 | large |
 | 157 | The widening store: a decimal output as its value word and sign extension in each sixteen-byte slot. **Done when** `m5/PLAN.md` 2.93's list holds | catalogue item 39 table; `m5/PLAN.md` 2.93 | small |
@@ -472,7 +524,7 @@ catalogue keep theirs. Sizes are the house's small, medium and large.
 | 350 | The decimal casts: to and from integral types, decimal to decimal (`ROUND_HALF_UP`, overflow null or raised), to and from `BOOLEAN`, to floating under the 2^53 guard. **Done when** every decimal pair of `m8/casts.tsv` fuses or is a recorded hard entry, the integer rules proven by SMT | this plan, 2.2 and 2.8 | medium |
 | 351 | Decimals in the existing types' functions: `time_to_seconds`, `second` with its fraction, `extract(SECOND FROM dt)`, `make_time`, `make_dt_interval` and `make_timestamp_ntz` over decimal seconds, `time_from_seconds` over a decimal, `floor`, `ceil`, `round`, `bround` and `truncate` over a decimal. **Done when** each fuses with a coverage row | `m5/PLAN.md` 2.93; items 1, 2 | medium |
 | 352 | The fuzzers and the reference evaluator across types: the IR fuzzer's grammar and the Spark-level fuzzer's columns over all thirteen types, with the cross-type compositions and the option matrix's configurations. **Done when** both fuzzers draw every type at every nightly and a cross-type disagreement found is fixed or a named row | this plan, 2.10 | medium |
-| 353 | The support table for users: `docs/sql-varka.md` states, per type and per family, what fuses, from the census and `coverage.json`, and its "three types" paragraph says what the code admits. **Done when** the table is generated and `VarkaCoverageSuite` fails when it drifts | item 54 | small |
+| 353 | The support table for users: `docs/sql-varka.md` states, per type and per family, what fuses, from the census and `coverage.json`, and its "three types" paragraph says what the code admits, with each math function's ULP bound per host library (2.7.1). **Done when** the table is generated and `VarkaCoverageSuite` fails when it drifts | item 54 | small |
 | 354 | The closing task: 1.1 read row by row, the census and the cast matrix regenerated on the milestone's build, the README's account updated. **Done when** each item of 1.1 is met or its gap is named | this plan | small |
 | 355 | The milestone's post, *One engine, every number*, for JVM and database engineers. **Done when** published with the census share per type and the proofs behind it, as 2.11 says | this plan, 2.11 | medium |
 
@@ -480,10 +532,10 @@ catalogue keep theirs. Sizes are the house's small, medium and large.
 
 | wave | tasks | why they wait |
 | ---: | :--- | :--- |
-| 0 | 328, 28, 104, 333, 334, 335, 345 (the decision) | 328 makes every later count honest; 28 gates most casts and the timestamp fields; 104, 333, 334 and 335 need nothing new; the math decision is the owner's and should be asked first, so its build is not the milestone's last surprise |
+| 0 | 328, 28, 104, 333, 334, 335 | 328 makes every later count honest; 28 gates most casts and the timestamp fields; 104, 333, 334 and 335 need nothing new |
 | 1 | 329, 330, 331, 27, 332, 30, 95, 103, 39, 89, 336 | the first new types prove the plumbing on integral descriptors; 330 after 329's arms; 27 beside 331; 332 after 28 and 329; 30 and 95 after 104's checked forms; 39 after 28 |
 | 2 | 338, 339, 340, 337 | the long lane's new type, after 28 (340's narrowing) and 332 (its casts' harness) |
-| 3 | 341, 342, 343, 344, 345 (the build), 346 | the floating split, comparisons first; arithmetic before the math functions; 344 after 341's lane; 346 once 344 and 350 have met their hard cases |
+| 3 | 341, 342, 343, 344, 345, 356, 357, 358, 346 | the floating split, comparisons first; arithmetic before the math functions; 345's contract and configuration before 356 to 358, which fuse the family under it; 344 after 341's lane; 346 once 344 and 350 have met their hard cases |
 | 4 | 347, 157, 348, 349, 350, 351 | the decimal path last, its load measured first, as item 1 asks |
 | 5 | 352, 353, 354, 355 | 352 runs across waves 1 to 4 and closes here; 354 last by definition; 355 written from what 354 records |
 
@@ -503,6 +555,8 @@ Every structural row cites the proof its row names:
   (340),
   the decimal rescales, the no-overflow claim and the `ROUND_HALF_UP` division (348, 349, 350), the
   64-bit division family (30, 104).
+* **Within the stated bound** for the 27 math functions under the ULP contract (2.7.1), on each
+  host library, and nowhere else.
 * **The coverage oracle** (the row engine) for every shape a row admits, with the poisoned null
   lanes and both validity fills of `VARKA-138.md`, and its ANSI form comparing error classes.
 * **The fuzzers**, IR and Spark-level, drawing each type from the pull request that adds it (352).
@@ -529,8 +583,9 @@ Every structural row cites the proof its row names:
 4. **The precision rule declines the headline decimal query.** TPC-H q6 at the specification's
    types declines under the rule as given (2.8). Accepted until the owner rules on the runtime
    bound; the post's claim is the census, not that query.
-5. **The math decision can grow the milestone.** An emitted fdlibm is a large build. Mitigation:
-   the decision asked in wave 0, and a ULP contract or a decline both cheap.
+5. **The ULP contract is a departure users may not expect.** Mitigation: the configuration, the
+   bound stated per function and host in the coverage and support tables, the register entry, and
+   a default the owner sets knowingly (section 7).
 6. **The exhaustive sweeps cost the nightly time.** Each 2^32 sweep is predicted at the int32
    sweeps' order and up to twice it (2.10). Mitigation: PR CI runs slices, the nightly the rest,
    and an idle window the first full pass, its times recorded against the prediction.
@@ -540,9 +595,9 @@ Every structural row cites the proof its row names:
 
 ## 7. Open questions
 
-1. **The math family's contract** (345, item 36): a ULP bound per function stated in the coverage
-   table, an emitted fdlibm for `exp`, `expm1`, `log`, `log10`, `log1p` and `pow`, or a decline. The
-   plan does not choose.
+1. **The default of `spark.sql.codegen.varka.math.ulpContract.enabled`** (2.7.1). On buys item 36's
+   speed for every user, at answers a unit in the last place from vanilla Spark's; off keeps
+   enabling Varka answer-neutral and makes the speed opt-in. The plan recommends off.
 2. **Does "precision 18" bind intermediate and result types, or the columns only?** Read as written
    it binds every node (2.8), which declines `DECIMAL(10, 2) * DECIMAL(10, 2)` and TPC-H q6 at its
    specification's types. Item 89 bullet 6's runtime bound would admit them under a guard. Is that
