@@ -637,8 +637,9 @@ None: no emitted code changes.
    job's option step prints `== <module> under <configuration>: no change to measure, the merge
    base is the head; the hash of commit <sha>` and, if it fails, ends `failed on a run of the
    merge base itself, so nothing excuses it`, never `fails on the merge base too`, and two master
-   runs at different commits may name different configurations; (e) two merges inside one run leave one pending
-   run, which builds the later head, and nothing is cancelled; (f) the run's wall time, for
+   runs at different commits may name different configurations; (e) two merges inside one run: the run in progress
+   finishes, the first merge's pending run shows as cancelled when the second push supersedes it
+   (that is the coalescing, not a failure), and the next run builds the later head; (f) the run's wall time, for
    prediction 5. On the Sunday after: the weekly run's `Build modules` jobs run, and every one's
    log reads `[info] no change to measure: the diff base <sha> is the head; testing the modules
    given` and then runs tests, never `There are no modules to test`.
