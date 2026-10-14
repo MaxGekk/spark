@@ -178,3 +178,52 @@ None: a document and a test.
 4. The suite.
 
 ## 9. Outcome
+
+Written on 14 October 2026.
+
+**What was built.** `sql/varka/proofs/spec/STANDARD.md`: the 19 operations of 2.2, each quoting
+its SQL-92 clause, stated over the lane values, with its exception conditions, a verdict on
+truncation and a worked negative example, its choices, and a one-line pointer where Spark departs.
+Eight choices cut across operations (its section 3), among them the proleptic calendar, no leap
+seconds, and the sign-and-magnitude reading of intervals that decides every interval division.
+`VarkaStandardExamplesSuite` runs the worked examples Spark agrees with through the kernels, and
+a lesson in `skills/calendar-algorithms.md` says which divisions truncate and which floor.
+
+**What reading the text turned up that the record did not have.**
+
+* SQL-92 has no `ABS`, `GREATEST`, `LEAST`, `BIGINT` or `BOOLEAN`. The first three count as
+  Spark's until a later edition is checked; the long-lane comparisons and a projected predicate
+  rest on the last two, owed.
+* 8.2 GR 6 read literally compares intervals after `CAST (X AS INTEGER)`, which would drop a
+  SECOND interval's fraction and make `INTERVAL '0.4' SECOND` equal zero. The fragment reads the
+  "common base unit" as microseconds, which is what Spark does, and records the choice (4.4).
+* Two SQLSTATEs claim a year past 9999 reached by arithmetic: 22008 (6.14 GR 3(c)) and 22007
+  (6.1 GR 6). The fragment takes 22008 for arithmetic (4.14).
+* 6.14 SR 3 forbids a time plus an interval with a DAY field, so the coverage row
+  `t + INTERVAL '0 00:00:00' DAY TO SECOND` is outside the standard's syntax: a departure for
+  row 244 beside the known one, that Spark raises where the standard wraps.
+* `t - t2` truncates by the choice the text leaves open (6.15 GR 6(b)), Spark's; over the
+  coverage table's `TIME(6)` columns the difference is whole microseconds and the choice never
+  shows.
+* A transcription loss: the "unknown" rows of 8.12's truth tables are missing from the text read,
+  so `unknown AND unknown` and its kin are stated from the surviving rows and Spark, and owed.
+
+**A correction the suite made.** The plan's comparison example ran `d < d2` as a projected value;
+a predicate fuses only as a filter, so the suite runs comparisons as `WHERE` clauses.
+
+**The predictions, scored.**
+
+1. *17 of 19 need nothing past SQL-92, the two exceptions BIGINT and BOOLEAN.* Held: those two are
+   the only operations resting on a later edition, and both are owed.
+2. *Three floor in lane terms, two truncate, the rest do not divide.* Held: the date decode
+   (4.10), the month carry (4.13) and the modulo-24 (4.15) floor; the interval extracts (4.12) and
+   the time difference (4.16) truncate; the HOUR, MINUTE and SECOND extracts (4.11) divide a
+   non-negative value, where the two agree.
+3. *The suite adds under ten seconds.* Missed: its seven tests take under four seconds, but the suite
+   takes eighteen with its sessions and cached table, on the laptop beside other agents' jobs.
+
+**Owed**, as `STANDARD.md` section 6 lists: the current edition's clause for every definition;
+the truth tables' unknown rows; the editions defining `BIGINT`, `BOOLEAN`, interval `ABS`,
+`GREATEST` and `LEAST`; and the current wording of a time plus an interval. Whether the SQL-92
+text read here belongs under `sql/varka/papers/` is the owner's call; it is not committed.
+
