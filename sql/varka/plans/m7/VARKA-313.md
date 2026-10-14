@@ -253,4 +253,56 @@ agents' jobs, and the owner's direction was not to take it there.
 
 ## 9. Outcome
 
-*Filled in when the work lands.*
+Built on 14 October 2026 in two commits after the plan; the measurement of section 6 is owed.
+
+**What landed, against section 3.** As designed, with one finding the plan did not have:
+
+- The reason metrics (`VarkaReasonMetric`), the rows per path on every node, the kernel time on
+  every node and the fallback time on the two columnar-out nodes; the decline hook as a status word; the filter's
+  `EXPLAIN` from the whole condition; the benchmark section, whose case ids 985 and 986 the dry
+  run (`dev/varka_bench_ids.sh`) accepts and whose setup checks that neither arm declines.
+- **Section 3.1's -1 sentinel was wrong, and was replaced before the pull request.** The review
+  (`/code-review high` on the branch) found that a metric left at -1 for "not reported" and set at
+  the task's end does not survive Spark: `DAGScheduler.updateAccumulators` drops an update whose
+  `isZero` holds, so the event log and a history server never see the -1; a coalesce runs one
+  evaluator per parent partition in one task against one metric copy, and the first `add` turns
+  -1 into 0; and the driver's merge skips it, so `value` read an attributed sum the UI
+  contradicted. Each reason's metric now carries two sums in one value: an exact decline adds 1,
+  a decline whose status named the reason among others adds `1L << 32`, and the renderer decodes
+  them into a count, "not reported", or both. The task-end flush and its listener registration
+  went with the sentinel. A tenth reason, `unrecognised`, counts status bits no name covers, which
+  the first version counted under no reason (another review finding). The lesson is in
+  `skills/testing-and-debugging.md`.
+
+**The tests.** `VarkaFallbackReasonSuite`, 6 tests (section 5's planted reason, folded pair, real
+data, AQE, split filter and rendering); one more in `VarkaEvaluatorComponentsSuite` for the
+attribution rule; the rows, time and reported zeros in `VarkaProjectExecSuite`'s metrics test. Two
+mutations were run against the suite: counting every status as attributed fails the folded-pair
+test, and rendering the filter from the fused conjuncts fails the split-filter test. Sixteen
+Varka suites around the change pass after the review's fixes, 275 tests (6 cancelled by their
+option-matrix assumptions, as on master).
+
+**Section 7's risks.** 1, a task-end write lost: moot once the flush was removed. 2 and 3 stand
+as written, 3 with ten metrics rather than nine. 4: the change stays out of row 315's files and the failure catches.
+
+**The review's other findings.** Ten in all; the sentinel (three findings) and the unrecognised
+bits are above. Fixed: `fromNode` again fails the plan on a metric key one side renamed (the first
+version looked keys up leniently so that `fallbackTime` could be absent; now only that key may
+be), and the two timing brackets are one helper. Described rather than changed: `fallbackTime`
+includes the per-row machinery's one-time compile and `varkaKernelTime` excludes the kernel's
+emission, and on a row-out node the kernel time ends at the kernels' output batch, before the
+residual entries and the row conversion run lazily - both now said in the metric descriptions and
+`docs/sql-varka.md`; a projection that only forwards columns counts its rows with Varka's path,
+whose description now says so. Accepted: ten more metrics per node, the row's own ask (risk 3).
+
+**6.1, scored.** 1 is owed to the quiet machine with the command in 3.2. 2 was not measured, as
+registered.
+
+**Left for later, not taken here.**
+
+1. **The exact-status measurement and the default it decides** (3.2), owed to an idle machine.
+2. **A plan with no Varka node says nothing about Varka.** A projection or filter with nothing to
+   fuse stays Spark's node, and nothing in `EXPLAIN` says why; answering it needs a tag on Spark's
+   nodes, as Gluten's `FallbackTags` do, and is the whole-plan half of the row's question.
+3. **The benchmarks' provenance naming the fallback share** (item 65's last done-when clause): the
+   rows per path now exist for a provenance writer to read; no benchmark reads them yet.
