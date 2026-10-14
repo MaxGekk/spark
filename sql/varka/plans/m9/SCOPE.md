@@ -1,4 +1,19 @@
-# Varka Milestone 8 Scope: coverage
+# Varka Milestone 9 Scope: coverage
+
+*Renumbered from milestone 8 on 14 October 2026, when milestone 8 became every numeric and
+temporal type, on the owner's choice, and got a task plan of its own (`m8/PLAN.md`). The house
+rule moves the furthest-out catalogue forward, and this is that move: the file left milestone 8's
+folder for this one with its reading note (`READING_LAYOUTS.md`) and the plans of the two rows it
+holds (`VARKA-64.md`, `VARKA-73.md`), the item numbers are unchanged, and every inbound reference
+was rewritten by `dev/varka_catalogue_move.sh 8 9`, so every `item <n>` citation resolves. Read
+"milestone 8" below as "this milestone" except where a sentence is dated, as the notes below
+already ask for milestones 7 and 6.*
+
+**Items and rows milestone 8 takes.** Items 1, 2, 31, 32, 33, 34, 35, 36, 54, 55, 89 (bullets 1
+and 6), 93 and 94; and, from the tables of items 15 and 39, rows 27, 28, 30, 39, 89, 95, 103, 104
+and 157, whose plans and designs stay where they are. `m8/PLAN.md` names each with the number it
+has here. Its census (`m8/census.tsv`) also scopes, for this catalogue's later readers, which of
+Spark's scalar expressions the thirteen types reach.
 
 *Renumbered from milestone 7 on 2 October 2026, when milestone 7 became trust and
 maintainability, on the owner's choice, and got a task plan of its own (`m7/PLAN.md`).
