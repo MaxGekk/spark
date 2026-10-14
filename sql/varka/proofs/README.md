@@ -15,6 +15,7 @@ VARKA-241 added the long lane's division forms, and VARKA-242 the calendar's div
 | `chrono_divide.smt2` | every calendar division site (`ChronoDivide`): the magic form with its carry exact over the site's dividends and first failing where the table says, and both double forms exact over the range (VARKA-242) | `VarkaProofFiles` |
 | `floor_mod7.smt2` | `emitFloorMod7`'s three forms, `Math.floorMod(v, 7)` for every int, by lemmas over each fold's digits (VARKA-242) | `VarkaProofFiles` |
 | `leap_hash.smt2` | the leap flag's perfect hash and its unsigned compare exact over every biased year to `LEAP_HASH_MAX_BIASED_YEAR`, over bit-vectors (VARKA-242) | `VarkaProofFiles` |
+| `spec/STANDARD.md` | not a proof: the SQL standard's definition of each operation the coverage table lowers that the standard fixes, what the proofs are to be restated against (VARKA-243); it holds no SMT-LIB, and `dev/varka_prove.sh` reads only this folder's own `.smt2` files | hand |
 
 ## Running them
 
