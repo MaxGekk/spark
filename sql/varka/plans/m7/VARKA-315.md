@@ -390,9 +390,10 @@ emitter) replayed to its signature too, with no change to that suite.
 4. **Held, pessimistic.** The end-to-end suite's eight tests take 4.5 s (38 s with sbt's start)
    against 30 s predicted; the line is in the calibration table.
 
-**Evidence.** `dev/varka_scoped_suites.sh catalyst`: 645 passed, 26 canceled, 0 failed, and the
-quiet step 7 passed, 14 canceled. `dev/varka_scoped_suites.sh sql` (sanitizer and both-bodies
-check on): 690 passed, 7 canceled, 0 failed, and the quiet step 5 passed. The end-to-end suite
+**Evidence**, on the final commit. `dev/varka_scoped_suites.sh catalyst`: 646 passed, 26
+canceled, 0 failed, and the quiet step 7 passed, 14 canceled. `dev/varka_scoped_suites.sh sql`
+(sanitizer and both-bodies check on): 691 passed, 7 canceled, 0 failed, and the quiet step 5
+passed. The end-to-end suite
 alone, after the review's fixes (a ninth test, a filter kernel's failure): 9 passed with the
 sanitizer on; before them, 7 passed and 1 canceled without it.
 `SparkConfigBindingPolicySuite` 3 passed; `catalyst/doc` passes.
