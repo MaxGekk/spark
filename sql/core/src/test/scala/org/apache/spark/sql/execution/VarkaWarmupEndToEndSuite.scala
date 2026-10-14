@@ -17,14 +17,17 @@
 
 package org.apache.spark.sql.execution
 
+import java.time.Duration
 import java.util.concurrent.TimeUnit
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
 
+import org.scalatest.exceptions.TestFailedException
+
 import org.apache.spark.sql.{DataFrame, QueryTest, Row}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaKernelWarmth,
-  VarkaKernelWarmup, VarkaShapeCache}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaJitEvidence,
+  VarkaKernelWarmth, VarkaKernelWarmup, VarkaShapeCache}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.util.QueryExecutionListener
@@ -117,33 +120,67 @@ class VarkaWarmupEndToEndSuite extends QueryTest with VarkaSharedSessions with V
     withWarmup {
       // A shape another suite emitted is a class this JVM has already met; start from a new one.
       VarkaShapeCache.invalidateAll()
-      val startedAt = System.nanoTime()
-      val first = varkaSpark.sql(query)
-      runAndCheck(first, expected)
-      val firstMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
-      expectWarmup(first, firstMillis, "the first run")(
-        varkaMetric(first, "numWarmupBatches") === numBatches)
-      expectWarmup(first, firstMillis, "the first run")(
-        varkaMetric(first, "numVarkaBatches") === 0L)
-
-      assert(VarkaKernelWarmup.awaitIdle(150000), "the warm-up did not finish within 150 seconds")
-      val outcome = VarkaKernelWarmup.recentOutcomes().asScala.last
-      logInfo(s"The warm-up of `$query`: $outcome; the first run took $firstMillis ms")
-      assert(outcome.state() === VarkaKernelWarmth.State.COMPILED,
-        s"$outcome; the first run took $firstMillis ms; ${VarkaKernelWarmup.lastReleaseJitState()}")
-      assert(outcome.firstProbeBytes() > outcome.lastProbeBytes(), outcome)
-
-      val second = varkaSpark.sql(query)
-      runAndCheck(second, expected)
-      expectWarmup(second, firstMillis, "the second run")(
-        varkaMetric(second, "numVarkaBatches") === numBatches)
-      expectWarmup(second, firstMillis, "the second run")(
-        varkaMetric(second, "numWarmupBatches") === 0L)
-      Seq("numFallbackBatchesNonArrow", "numFallbackBatchesKernel", "numFallbackBatchesRowPath",
-        "numFallbackBatchesDeclined").foreach { m =>
-        assert(varkaMetric(first, m) === 0L, m)
-        assert(varkaMetric(second, m) === 0L, m)
+      val evidence = VarkaJitEvidence.start()
+      try {
+        checkWarmupRuns(query, expected, evidence)
+      } catch {
+        // Any check after the first run can fail for a JIT reason - the wait, the probe, the
+        // second run's path - so each failure carries the JIT's account of the kernel, as the
+        // verdict's own does.
+        case e: TestFailedException if !e.getMessage.contains(JitEvidenceMark) =>
+          val account = VarkaKernelWarmup.recentOutcomes().asScala.lastOption
+            .map(o => jitAccount(evidence, o)).getOrElse("no warm-up outcome")
+          fail(s"${e.getMessage}; $account", e)
+      } finally {
+        evidence.close()
       }
+    }
+  }
+
+  private val JitEvidenceMark = "JIT evidence for "
+
+  private def jitAccount(evidence: VarkaJitEvidence, outcome: VarkaKernelWarmup.Outcome): String =
+    evidence.summary(VarkaShapeCache.classNameFor(outcome.shapeHash()), "varka-kernel-warmup",
+      Duration.ofSeconds(20))
+
+  private def checkWarmupRuns(
+      query: String, expected: Seq[Row], evidence: VarkaJitEvidence): Unit = {
+    val startedAt = System.nanoTime()
+    val first = varkaSpark.sql(query)
+    runAndCheck(first, expected)
+    val firstMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
+    expectWarmup(first, firstMillis, "the first run")(
+      varkaMetric(first, "numWarmupBatches") === numBatches)
+    expectWarmup(first, firstMillis, "the first run")(
+      varkaMetric(first, "numVarkaBatches") === 0L)
+
+    assert(VarkaKernelWarmup.awaitIdle(150000), "the warm-up did not finish within 150 seconds")
+    val outcome = VarkaKernelWarmup.recentOutcomes().asScala.last
+    logInfo(s"The warm-up of `$query`: $outcome; the first run took $firstMillis ms")
+    // The verdict is a JIT outcome, so a failure carries the JIT's own account of the kernel:
+    // its methods' compiles, deoptimizations and refused inlining, and where the warm-up's last
+    // allocations came from (VARKA-295). `-Dvarka.warmup.jitEvidence=always` logs it on a pass.
+    if (outcome.state() != VarkaKernelWarmth.State.COMPILED ||
+        sys.props.get("varka.warmup.jitEvidence").contains("always")) {
+      val account = jitAccount(evidence, outcome)
+      logWarning(s"The warm-up of `$query`: $outcome; $account")
+      // The account before the release-path state, whose code list can be long.
+      assert(outcome.state() === VarkaKernelWarmth.State.COMPILED,
+        s"$outcome; the first run took $firstMillis ms; $account; " +
+          VarkaKernelWarmup.lastReleaseJitState())
+    }
+    assert(outcome.firstProbeBytes() > outcome.lastProbeBytes(), outcome)
+
+    val second = varkaSpark.sql(query)
+    runAndCheck(second, expected)
+    expectWarmup(second, firstMillis, "the second run")(
+      varkaMetric(second, "numVarkaBatches") === numBatches)
+    expectWarmup(second, firstMillis, "the second run")(
+      varkaMetric(second, "numWarmupBatches") === 0L)
+    Seq("numFallbackBatchesNonArrow", "numFallbackBatchesKernel", "numFallbackBatchesRowPath",
+      "numFallbackBatchesDeclined").foreach { m =>
+      assert(varkaMetric(first, m) === 0L, m)
+      assert(varkaMetric(second, m) === 0L, m)
     }
   }
 

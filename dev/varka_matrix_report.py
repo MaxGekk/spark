@@ -36,10 +36,11 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m")
 MODULES = ("catalyst", "sql")
 
 # How much of each line of a failure's message the report keeps. A message can carry a whole
-# diagnostic on one line - the warm-up's JIT state with its compile queue runs to a couple of
-# thousand characters (VARKA-295) - and CI's log of this report may be the only copy of it, so a
-# line is cut only where it would bury the rest of the report.
-MESSAGE_WIDTH = 4000
+# diagnostic on one line - the warm-up's JIT state and the JIT's account of the kernel, its
+# compiles, deoptimizations, inlining and allocation sites, run to some ten thousand characters
+# (VARKA-295) - and CI's log of this report may be the only copy of it, so a line is cut only
+# where it would bury the rest of the report.
+MESSAGE_WIDTH = 12000
 
 
 def modules_run(runs):

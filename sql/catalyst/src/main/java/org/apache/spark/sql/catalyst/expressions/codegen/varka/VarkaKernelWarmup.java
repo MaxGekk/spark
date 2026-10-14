@@ -20,10 +20,12 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodType;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryPoolMXBean;
 import java.util.ArrayDeque;
 import java.util.List;
+import java.util.TreeSet;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -328,6 +330,15 @@ public final class VarkaKernelWarmup {
   }
 
   static String jitState() {
+    return jitState(null);
+  }
+
+  /**
+   * {@link #jitState()}, and for {@code kernelClass} which of its methods have compiled code and at
+   * which tier ({@code Compiler.codelist}) and which have none. That is what tells a loop method
+   * the compiler never took from a compiled kernel that still allocates (VARKA-295).
+   */
+  static String jitState(Class<?> kernelClass) {
     var state = new StringBuilder("JIT: ");
     var compilation = ManagementFactory.getCompilationMXBean();
     if (compilation != null && compilation.isCompilationTimeMonitoringSupported()) {
@@ -353,7 +364,63 @@ public final class VarkaKernelWarmup {
     } catch (Exception | LinkageError e) {
       state.append("compile queue unavailable: ").append(e);
     }
+    if (kernelClass != null) {
+      appendKernelCode(state, kernelClass);
+    }
     return state.toString();
+  }
+
+  /** Kernel code entries the state lists at most; a wide kernel has dozens of methods. */
+  private static final int MAX_CODE_ENTRIES = 40;
+
+  /**
+   * Appends the kernel class's compiled code, one {@code id tier state name} per entry from
+   * {@code Compiler.codelist} (on JDK 25 state 0 is in use and 1 not entrant), then the declared
+   * methods with no code in use, matched by name and descriptor so that two overloads of
+   * {@code run} are told apart. Three limits: the list names classes, not loaders, so a shape
+   * emitted again under a new loader while the old one is alive shows both classes' code; it does
+   * not mark an OSR compile, which a call still enters interpreted; and it prints the whole code
+   * cache, which this pays once per shape that has already waited out its deadline.
+   */
+  private static void appendKernelCode(StringBuilder state, Class<?> kernelClass) {
+    try {
+      Object list = ManagementFactory.getPlatformMBeanServer().invoke(
+          new ObjectName("com.sun.management:type=DiagnosticCommand"), "compilerCodelist",
+          new Object[] {null}, new String[] {String[].class.getName()});
+      String prefix = kernelClass.getName() + ".";
+      var inUse = new TreeSet<String>();
+      var entries = new StringBuilder();
+      int listed = 0;
+      for (String line : String.valueOf(list).split("\\R")) {
+        // "<id> <tier> <state> <class>.<method><descriptor> [<addresses>]"
+        String[] fields = line.strip().split(" ", 5);
+        if (fields.length < 4 || !fields[3].startsWith(prefix)) {
+          continue;
+        }
+        String method = fields[3].substring(prefix.length());
+        if ("0".equals(fields[2])) {
+          inUse.add(method);
+        }
+        if (listed++ < MAX_CODE_ENTRIES) {
+          entries.append(fields[0]).append(" L").append(fields[1]).append(" s")
+              .append(fields[2]).append(' ').append(method, 0, method.indexOf('('))
+              .append(", ");
+        }
+      }
+      var noCode = new TreeSet<String>();
+      for (var m : kernelClass.getDeclaredMethods()) {
+        String descriptor = MethodType.methodType(m.getReturnType(), m.getParameterTypes())
+            .toMethodDescriptorString();
+        if (!inUse.contains(m.getName() + descriptor)) {
+          // Named with its argument count: the descriptors of a kernel's methods are long.
+          noCode.add(m.getName() + "(" + m.getParameterCount() + ")");
+        }
+      }
+      state.append("kernel code (").append(listed).append("): ").append(entries)
+          .append("no code in use: ").append(noCode);
+    } catch (Exception | LinkageError e) {
+      state.append("kernel code unavailable: ").append(e);
+    }
   }
 
   /** The most recent warm-ups' outcomes, oldest first. */
@@ -595,7 +662,7 @@ public final class VarkaKernelWarmup {
           }
           if (System.nanoTime() - deadline > 0) {
             warmth.release();
-            lastReleaseJitState = jitState();
+            lastReleaseJitState = jitState(kernel.getClass());
             why = "no compile after " + deadlineSeconds + " seconds; " + lastReleaseJitState;
             break;
           }
