@@ -17,21 +17,21 @@
 
 # Spark's full module matrix on this project's master, once a week (VARKA-177,
 # VARKA-179.md section 5). A change confined to Varka's files runs only the Varka
-# suites on its pull request, and after the merge nothing runs at all: build_main.yml
-# skips pushes to master on forks and Spark's scheduled builds are apache/spark-only.
-# So without this file the last full matrix a Varka-scoped change ever sees is the one
-# of the last pull request that touched a Spark file. Sunday, early, when no pull
-# request is using the runner slots.
+# suites on its pull request, and after the merge varka-master.yml runs only Varka's
+# jobs, the linters and the Maven build: build_main.yml skips pushes to master on forks
+# and Spark's scheduled builds are apache/spark-only. So without this file the last full
+# matrix a Varka-scoped change ever sees is the one of the last pull request that
+# touched a Spark file. Sunday, early, when no pull request is using the runner slots.
 #
-# The jobs are named rather than left to the precondition (VARKA-255.md 2.5, 2.9): on master
-# the precondition diffs the head against itself, finds no change and selects nothing, so
-# until 255b this run built only the linters, the docs and the Java 25 Maven build. The set
-# is build_java25.yml's, with the pandas-on-Spark, old Connect client and periodic PySpark
-# groups, lint, java25, docs and Varka's jobs added - what a pull request touching a shared
-# file runs - and the Kubernetes and OIDC jobs off, as build_and_test.yml switches them off on this fork - an explicit set
-# bypasses that line. The module jobs then test every module they name: dev/run-tests.py
-# reads a diff base equal to the head as no change to measure. Varka's own run after each
-# merge is varka-master.yml.
+# The jobs are named rather than left to the precondition (VARKA-255.md 2.5, 2.9): on
+# master the precondition diffs the head against itself, finds no change and selects
+# nothing, so until VARKA-255 this run built only the linters, the docs and the Java 25
+# Maven build. The set is build_java25.yml's, with the pandas-on-Spark, old Connect
+# client and periodic PySpark groups, lint, java25, docs and Varka's jobs added - what a
+# pull request touching a shared file runs - and the Kubernetes and OIDC jobs off, as
+# build_and_test.yml switches them off on this fork; an explicit set bypasses that line.
+# The module jobs then test every module they name: dev/run-tests.py reads a diff base
+# equal to the head as no change to measure.
 name: "Build / Weekly full matrix (Scala 2.13, JDK 25)"
 
 on:

@@ -1411,8 +1411,8 @@ jobs:
         # A run of Varka's master has its diff base at its own head, so every module would read
         # as unchanged; it has no change to measure and builds every language's docs
         # (VARKA-255.md 2.9).
-        if [ -f "./dev/is-changed.py" ] && \
-            { [ -z "${VARKA_DIFF_BASE:-}" ] || [ "$VARKA_DIFF_BASE" != "${VARKA_DIFF_HEAD:-}" ]; }; then
+        if [ -f "./dev/is-changed.py" ] && { [ -z "${VARKA_DIFF_BASE:-}" ] ||
+            [ "$VARKA_DIFF_BASE" != "${VARKA_DIFF_HEAD:-}" ]; }; then
           # Skip PySpark and SparkR docs while keeping Scala/Java/SQL docs
           pyspark_modules=`cd dev && python3.12 -c "import sparktestsupport.modules as m; print(','.join(m.name for m in m.all_modules if m.name.startswith('pyspark')))"`
           if [ `./dev/is-changed.py -m $pyspark_modules` = false ]; then export SKIP_PYTHONDOC=1; fi
