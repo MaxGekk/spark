@@ -64,6 +64,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeEntry;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeKey;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeLookup;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
+import org.apache.spark.sql.execution.metric.SQLMetric;
 import org.apache.spark.sql.execution.varka.VarkaBatchDeclined;
 import org.apache.spark.sql.execution.varka.VarkaBatchLedger;
 import org.apache.spark.sql.execution.varka.VarkaClassDump;
@@ -144,8 +145,8 @@ public abstract class VarkaEvaluatorBase {
     }
 
     @Override
-    public boolean declineKernel() {
-      return VarkaColumnarToRowExec$.MODULE$.isDeclineKernelForTesting();
+    public int declineStatus() {
+      return VarkaColumnarToRowExec$.MODULE$.declineStatusForTesting();
     }
 
     @Override
@@ -320,7 +321,9 @@ public abstract class VarkaEvaluatorBase {
               metrics.fallbackBatchesRowPath(),
               metrics.fallbackBatchesDeclined(),
               metrics.fallbackBatchesNonArrow(),
-              metrics.suspectAllocationSamples()),
+              metrics.suspectAllocationSamples(),
+              metrics.declinedByReason()),
+          emitOptions.exactRefusalStatus(),
           this::kernelIdentity,
           this::renderedOptions);
     }
@@ -613,28 +616,33 @@ public abstract class VarkaEvaluatorBase {
    * batch it is, as it would be on the kernel path. A batch that is not Arrow because a Varka node
    * below sent it down its own row path while its kernel warmed is a warm-up batch here too, and
    * so is this node's output for it, for the node above.
+   *
+   * <p>Each batch's rows count under the path that answered it, and the time in that path is
+   * added where it can be measured ({@link VarkaExecMetrics.Paths}): the kernel path's time only
+   * for a batch it served, since a declined or failed attempt's output is thrown away.
    */
   public <T> T serveBatch(
       ColumnarBatch input, VarkaBatchPath<T> kernelPath, VarkaBatchPath<T> fallbackPath) {
     if (!canRun(input)) {
       if (recordRefusedBatch(input)) {
-        return markWarmupBatch(fallbackPath.run());
+        return markWarmupBatch(fallback(input, fallbackPath));
       }
-      return fallbackPath.run();
+      return fallback(input, fallbackPath);
     }
     boolean ready;
     try {
       ready = kernelReady(input);
     } catch (VarkaBatchDeclined declined) {
       accounting().declinedBatch(declined.status, declined.kernel);
-      return fallbackPath.run();
+      return fallback(input, fallbackPath);
     }
     if (!ready) {
       VarkaExecMetrics.inc(metrics.warmupBatches());
-      return markWarmupBatch(fallbackPath.run());
+      return markWarmupBatch(fallback(input, fallbackPath));
     }
     try {
-      return kernelPath.run();
+      VarkaExecMetrics.Paths paths = metrics.paths();
+      return timed(paths.kernelTime(), paths.kernelRows(), input, kernelPath);
     } catch (VarkaBatchDeclined e) {
       // Not a failure: the kernel ran and said it could not answer for this batch.
       accounting().declinedBatch(e.status, e.kernel);
@@ -655,7 +663,29 @@ public abstract class VarkaEvaluatorBase {
       accounting().rowPathFailure(e, ctx);
       refuseUndeclaredFallback("the per-row machinery beside " + kernelIdentity(), ctx);
     }
-    return fallbackPath.run();
+    return fallback(input, fallbackPath);
+  }
+
+  /** Runs the caller's fallback for {@code input}, counting its rows and, where eager, its time. */
+  private <T> T fallback(ColumnarBatch input, VarkaBatchPath<T> fallbackPath) {
+    VarkaExecMetrics.Paths paths = metrics.paths();
+    return timed(paths.fallbackTime(), paths.fallbackRows(), input, fallbackPath);
+  }
+
+  /**
+   * Runs {@code path} for {@code input}; when it returns, adds the nanoseconds it took to
+   * {@code time} and the batch's rows to {@code rows}, each where present. A path that throws
+   * adds neither.
+   */
+  private static <T> T timed(@Nullable SQLMetric time, @Nullable SQLMetric rows,
+      ColumnarBatch input, VarkaBatchPath<T> path) {
+    long start = time != null ? System.nanoTime() : 0L;
+    T result = path.run();
+    if (time != null) {
+      time.add(System.nanoTime() - start);
+    }
+    VarkaExecMetrics.add(rows, input.numRows());
+    return result;
   }
 
   /**

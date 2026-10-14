@@ -89,7 +89,12 @@ public final class VarkaKernelRunner {
   public interface Hooks {
     boolean failKernel();
 
-    boolean declineKernel();
+    /**
+     * The status a test plants on every batch the kernel would have served, as a kernel whose
+     * guards fired returns it, or 0 for none; {@link #STATUS_FORCED} where the test names no
+     * reason.
+     */
+    int declineStatus();
 
     VarkaAllocationSampler.Schedule allocationSchedule();
   }
@@ -289,8 +294,9 @@ public final class VarkaKernelRunner {
     if (sampled) {
       accounting.allocationSample(VarkaAllocationSampler.allocatedBytes() - before, len);
     }
-    if (status != 0 || hooks.declineKernel()) {
-      throw new VarkaBatchDeclined(status != 0 ? status : STATUS_FORCED);
+    int planted = status != 0 ? status : hooks.declineStatus();
+    if (planted != 0) {
+      throw new VarkaBatchDeclined(planted);
     }
     if (CHECK_BOTH_BODIES) {
       checkOtherBody(len, scratchAddress);
