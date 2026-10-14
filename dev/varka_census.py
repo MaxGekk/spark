@@ -84,7 +84,7 @@ COVERAGE_TYPES = {
     "time(6)": "time",
     "interval day to second": "dt",
 }
-NEEDS = ["done", "plumbing", "semantics", "ulp", "hard"]
+NEEDS = ["done", "plumbing", "semantics", "ulp", "hard"]  # hard: empty since 14 October 2026
 DECLINED = "owner's decision, 14 October 2026"
 
 STRING = "STRING input or output: owner's decision, 14 October 2026"
@@ -610,7 +610,7 @@ def cast_kind(src, dst):
     if src in INTEGRAL and dst in INTEGRAL:
         if WIDTH[dst] > WIDTH[src]:
             return "widening", "sign extension, exact"
-        return "narrowing", "LEGACY wraps; ANSI errors; TRY nulls"
+        return "narrowing", "LEGACY wraps; ANSI raises CAST_OVERFLOW; TRY nulls"
     if src in INTEGRAL and dst in MANTISSA:
         if WIDTH[src] < MANTISSA[dst]:
             return "widening", "exact"
@@ -621,23 +621,58 @@ def cast_kind(src, dst):
         return "rounding", "round to nearest even; overflow to infinity, no error"
     if src in MANTISSA and dst in INTEGRAL:
         if dst in ("int", "bigint"):
-            note = "LEGACY saturates, NaN to 0; ANSI and TRY range-check, NaN errors"
+            note = (
+                "LEGACY saturates, NaN to 0; ANSI and TRY range-check on the double (2^63 passes"
+                " and saturates), NaN raises or nulls"
+            )
         else:
-            note = "LEGACY saturates to int then wraps; ANSI and TRY range-check, NaN errors"
+            note = (
+                "LEGACY saturates to int then wraps; ANSI and TRY range-check, NaN raises or nulls"
+            )
         return "truncation", note
     if src in INTEGRAL and dst == "dec":
-        return "scale up", "exact; overflow past p - s digits: LEGACY null, ANSI error"
+        return (
+            "scale up",
+            "exact; overflow past p - s digits: LEGACY null, ANSI NUMERIC_VALUE_OUT_OF_RANGE",
+        )
+    if src == "dec" and dst == "bigint":
+        return (
+            "truncation",
+            "toward zero, exact; LEGACY keeps the low bits, ANSI raises CAST_OVERFLOW",
+        )
     if src == "dec" and dst in INTEGRAL:
-        return "truncation", "toward zero; LEGACY wraps, ANSI errors"
-    if src == "dec" and dst in MANTISSA:
+        return (
+            "truncation",
+            "toward zero; LEGACY exact, keeping the low bits; ANSI and TRY range-check by the exact"
+            " rule for a long-backed value (precision <= 18, row 365) and by the double rule"
+            " (Decimal.roundToNumeric) for a BigDecimal-backed one (precision > 18)",
+        )
+    if src == "dec" and dst == "double":
         return (
             "rounding",
-            "BigDecimal.doubleValue: exact by division below 2^53, then a 128-bit rule",
+            "BigDecimal.doubleValue: one division under the JDK's guard (scale 0, or (long)(double)"
+            " u == u with 0 < s <= 22, Long.MAX_VALUE excluded); the exact arm (366) for the rest",
+        )
+    if src == "dec" and dst == "float":
+        return (
+            "rounding",
+            "BigDecimal.floatValue, rounded once: (long)(float) u == u and s <= 10 divided in"
+            " float, never the double quotient narrowed; round-to-odd or the exact arm (366)"
+            " past it",
         )
     if src in MANTISSA and dst == "dec":
-        return "hard", "Decimal(double) goes through the double's decimal string"
+        return (
+            "shortest digits",
+            "Decimal(double) is the double's shortest decimal: a lanewise guard from the rounding"
+            " interval and an integer arm in lanes, the exact shortest-digits path for the rest"
+            " (346)",
+        )
     if src == "date" and dst == "ntz":
-        return "scale up", "days times micros per day; multiplyExact raises in every mode"
+        return (
+            "scale up",
+            "days times micros per day; past 106,751,991 days multiplyExact raises under LEGACY"
+            " and ANSI, TRY nulls",
+        )
     if src == "ntz" and dst == "date":
         return "floor division", "floorDiv by micros per day, exact"
     if src == "ntz" and dst == "time":
@@ -656,12 +691,32 @@ def cast_kind(src, dst):
             "unit division",
             "truncating division by the end field's unit; narrower targets check",
         )
-    if src in ("ym", "dt") and dst == "dec":
+    if src == "ym" and dst == "dec":
+        return "unit division", "the month count divided to the end field's unit, truncating"
+    if src == "dt" and dst == "dec":
         return "unit division", "to the end field's unit; a SECOND end keeps six decimals"
-    if src in INTEGRAL and dst in ("ym", "dt"):
-        return "scale up", "times the unit; multiplyExact raises in every mode"
+    if src in ("byte", "short") and dst in ("ym", "dt"):
+        return "scale up", "times the unit, exact: no value of the source overflows"
+    if src == "int" and dst == "ym":
+        return (
+            "scale up",
+            "times the unit; a YEAR end overflows past 178,956,970 (multiplyExact in int): raises"
+            " under LEGACY and ANSI, TRY nulls; a MONTH end never",
+        )
+    if src == "int" and dst == "dt":
+        return (
+            "scale up",
+            "times the unit; a DAY end overflows past 106,751,991: raises under LEGACY and ANSI,"
+            " TRY nulls; the other ends never",
+        )
+    if src == "bigint" and dst in ("ym", "dt"):
+        return (
+            "scale up",
+            "times the unit (and narrowed to int for a year-month target); overflow raises under"
+            " LEGACY and ANSI, TRY nulls",
+        )
     if src == "dec" and dst in ("ym", "dt"):
-        return "rescale", "to the unit, HALF_UP; raises on overflow"
+        return "rescale", "to the unit, HALF_UP; overflow raises under LEGACY and ANSI, TRY nulls"
     return "?", ""
 
 
@@ -669,9 +724,16 @@ def cast_proof(src, dst):
     """How a pair is proven: exhaustion where the source has at most 32 bits; SMT for an integer
     rule over a 64-bit source; sampled regions and the fuzzer for a double source and for a
     64-bit source rounding to a floating type, which floating-point theory does not decide in
-    useful time (VARKA-241.md)."""
+    useful time (VARKA-241.md). A decimal to INT, SMALLINT or TINYINT is mixed: the exact rule
+    below precision 19 is an integer rule, the double rule above it is not (owner's decision A1,
+    14 October 2026)."""
     if src in ("bool", "byte", "short", "int", "date", "ym", "float"):
         return "exhaustion"
+    if src == "dec" and dst in ("byte", "short", "int"):
+        return (
+            "mixed: SMT (dev/varka_prove.sh) for the exact rule below precision 19, sampled regions"
+            " and the fuzzer for the double rule above it"
+        )
     if src in ("bigint", "dt", "time", "ntz", "dec") and dst not in ("float", "double"):
         return "SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer"
     return "sampled regions and the fuzzer"
@@ -680,6 +742,10 @@ def cast_proof(src, dst):
 def cast_rows(src, dst):
     lanes = {src, dst}
     if "dec" in lanes:
+        if dst in ("byte", "short", "int"):
+            return "350,364,365"
+        if lanes & {"float", "double"}:
+            return "350,364,366"
         return "350,364"
     if lanes & {"float", "double"}:
         return "343"
@@ -745,7 +811,7 @@ def cast_summary(rows):
     lines.append(f"legal under LEGACY only: {sum(r[2] == 'yes' and r[3] == 'no' for r in rows)}")
     kinds = collections.Counter(r[5] for r in rows)
     lines.append("by kind: " + ", ".join(f"{k} {n}" for k, n in kinds.most_common()))
-    proofs = collections.Counter(r[7].split(" ")[0] for r in rows)
+    proofs = collections.Counter(r[7].split(" ")[0].rstrip(":") for r in rows)
     lines.append("by proof: " + ", ".join(f"{k} {n}" for k, n in proofs.most_common()))
     lines.append(f"fused today, at least in part: {sum(bool(r[8]) for r in rows)}")
     return "\n".join(lines) + "\n"
