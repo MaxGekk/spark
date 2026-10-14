@@ -91,11 +91,11 @@ width_bucket	WidthBucket	mathExpressions	in		double,time,ym,dt	bigint		double	se
 +	Add	mathExpressions	in		byte,short,int,bigint,float,double,dec,ym,dt	byte,short,int,bigint,float,double,dec,ym,dt	int	byte,short,float,double,dec	semantics	330,104,103,342,349	integral overflow modes; decimal result scale; date and timestamp sums are other classes
 -	Subtract	mathExpressions	in		byte,short,int,bigint,float,double,dec,ym,dt	byte,short,int,bigint,float,double,dec,ym,dt	int,ym	byte,short,float,double,dec	semantics	330,104,103,342,349	date, timestamp and time differences are other classes
 *	Multiply	mathExpressions	in		byte,short,int,bigint,float,double,dec	byte,short,int,bigint,float,double,dec	int	byte,short,float,double,dec	semantics	330,95,104,342,349	fused for int in `year(d) * 2`; interval products are other classes
-/	Divide	mathExpressions	in		double,dec	double,dec		double,dec	semantics	342,346	zero divisor null or error; decimal division is item 2's open case
-div	IntegralDivide	mathExpressions	in		byte,short,int,bigint,dec,ym,dt	bigint		byte,short,dec	semantics	30,104,103	zero divisor null or error
+/	Divide	mathExpressions	in	declined dec: owner's decision, 14 October 2026	double	double		double	semantics	342	zero divisor null or error; decimal division is out of milestone 8
+div	IntegralDivide	mathExpressions	in	declined dec: owner's decision, 14 October 2026	byte,short,int,bigint,ym,dt	bigint		byte,short	semantics	30,104,103	zero divisor null or error; a decimal div divides decimals, out of milestone 8
 %	Remainder	mathExpressions	in		byte,short,int,bigint,float,double,dec	byte,short,int,bigint,float,double,dec		byte,short,float,double,dec	hard	30,95,104,346,349	integral is semantics; floating remainder is fmod
 try_add	TryAdd	mathExpressions	in		byte,short,int,bigint,float,double,dec,ym,dt	byte,short,int,bigint,float,double,dec,ym,dt		byte,short,float,double,dec	semantics	330,104,103,342,349	overflow gives null
-try_divide	TryDivide	mathExpressions	in		double,dec	double,dec		double,dec	semantics	342,346	zero divisor gives null
+try_divide	TryDivide	mathExpressions	in	declined dec: owner's decision, 14 October 2026	double	double		double	semantics	342	zero divisor gives null; decimal division is out of milestone 8
 try_mod	TryMod	mathExpressions	in		byte,short,int,bigint,float,double,dec	byte,short,int,bigint,float,double,dec		byte,short,float,double,dec	hard	30,104,346	floating remainder is fmod
 try_subtract	TrySubtract	mathExpressions	in		byte,short,int,bigint,float,double,dec,ym,dt	byte,short,int,bigint,float,double,dec,ym,dt		byte,short,float,double,dec	semantics	330,104,103,342,349	overflow gives null
 try_multiply	TryMultiply	mathExpressions	in		byte,short,int,bigint,float,double,dec	byte,short,int,bigint,float,double,dec		byte,short,float,double,dec	semantics	330,104,342,349	overflow gives null

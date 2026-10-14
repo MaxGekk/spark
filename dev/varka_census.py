@@ -83,6 +83,7 @@ COVERAGE_TYPES = {
     "interval day to second": "dt",
 }
 NEEDS = ["done", "plumbing", "semantics", "ulp", "hard"]
+DECLINED = "owner's decision, 14 October 2026"
 
 STRING = "STRING input or output: owner's decision, 14 October 2026"
 LTZ = "TIMESTAMP with local time zone: owner's decision, 14 October 2026"
@@ -428,7 +429,10 @@ def row(section, name, cls, types, result, fused, need, rows, note, cov, errors)
         target = CAST_ALIASES[name]
         t = [src for src in ORDER if any(legal(src, target))]
         types = ",".join(t)
-    t = expand(types)
+    # A type marked `!` is declined by the owner's decision: it leaves the types the entry admits
+    # (and so the done-when denominator) and is recorded in the reason column instead.
+    declined = expand(",".join(p[:-1] for p in types.split(",") if p.endswith("!")))
+    t = expand(",".join(p for p in types.split(",") if p and not p.endswith("!")))
     res = t if result == "same" else expand(result)
     f = expand(fused)
     # A type marked `~` is fused in a coverage row whose operand of that type is derived (a
@@ -459,7 +463,7 @@ def row(section, name, cls, types, result, fused, need, rows, note, cov, errors)
         cls,
         section,
         "in",
-        "",
+        f"declined {','.join(declined)}: {DECLINED}" if declined else "",
         ",".join(t),
         ",".join(res),
         ",".join(f),

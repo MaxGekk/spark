@@ -10,7 +10,9 @@
 # Types are bool byte short int bigint float double dec date ntz time ym dt, or a group:
 # ("legal" for a cast alias: the sources Cast allows, computed by the script)
 # INTEGRAL, FLOAT, NUM (integral, floating and decimal), IVL (ym, dt), ALL. "same" as a result
-# maps each type to itself. A fused type marked ~ is fused in a coverage row whose operand of
+# maps each type to itself. A type marked ! is declined by the owner's decision (decimal division,
+# 14 October 2026): it leaves the entry's types and is recorded in the census's reason column.
+# A fused type marked ~ is fused in a coverage row whose operand of
 # that type is derived (a literal or another expression's result), which the column check cannot
 # see. A need is the hardest work left once the lanes the row names exist: done; plumbing (an arm
 # and IR on the lanes); semantics (Spark's overflow, NaN, rounding or scale rules); ulp (the math
@@ -97,11 +99,11 @@ width_bucket|double,IVL,time|bigint||semantics|344|bucket arithmetic over double
 +|NUM,IVL|same|int|semantics|330,104,103,342,349|integral overflow modes; decimal result scale; date and timestamp sums are other classes
 -|NUM,IVL|same|int,ym|semantics|330,104,103,342,349|date, timestamp and time differences are other classes
 *|NUM|same|int~|semantics|330,95,104,342,349|fused for int in `year(d) * 2`; interval products are other classes
-/|double,dec|same||semantics|342,346|zero divisor null or error; decimal division is item 2's open case
-div|INTEGRAL,dec,IVL|bigint||semantics|30,104,103|zero divisor null or error
+/|double,dec!|same||semantics|342|zero divisor null or error; decimal division is out of milestone 8
+div|INTEGRAL,dec!,IVL|bigint||semantics|30,104,103|zero divisor null or error; a decimal div divides decimals, out of milestone 8
 %|NUM|same||hard|30,95,104,346,349|integral is semantics; floating remainder is fmod
 try_add|NUM,IVL|same||semantics|330,104,103,342,349|overflow gives null
-try_divide|double,dec|same||semantics|342,346|zero divisor gives null
+try_divide|double,dec!|same||semantics|342|zero divisor gives null; decimal division is out of milestone 8
 try_mod|NUM|same||hard|30,104,346|floating remainder is fmod
 try_subtract|NUM,IVL|same||semantics|330,104,103,342,349|overflow gives null
 try_multiply|NUM|same||semantics|330,104,342,349|overflow gives null

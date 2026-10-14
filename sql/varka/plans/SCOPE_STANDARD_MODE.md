@@ -15,8 +15,8 @@ A kernel that computed a standard-conformant value where Spark computes somethin
 else would break both.
 
 *One deliberate exception, the owner's decision of 14 October 2026: the math family's ULP contract
-(3.4), behind a configuration. It is the only place a fused answer may differ from Spark's, and it
-says by how much.*
+(3.4), behind a configuration that is on by default. It is the only place a fused answer may
+differ from Spark's, and it says by how much.*
 
 **And the SQL standard is still worth reading first**, because Spark's limits are
 often storage accidents rather than declared types, and a narrower *proven* range
@@ -164,7 +164,13 @@ cluster is not one bit pattern today. **What it costs**: one query can mix the t
 ghost fallback serves a declined batch on the row engine, so with the configuration on, rows of one
 column may differ in the last bit by batch. The coverage table says so beside the bound.
 
-**The default** of the configuration is the owner's to set (`m8/PLAN.md` section 7).
+**The default is on**, the owner's decision of 14 October 2026. So with Varka enabled, these
+functions' answers may differ from vanilla Spark's by up to their stated bound unless a user turns
+the configuration off; enabling Varka stays answer-neutral for every other expression. The
+differential suites compare within the bound by default and run a configuration-off arm that
+asserts bit-identical answers, the fallback's per-batch mix is the default behaviour, and
+`docs/sql-varka.md` and the user support table state the default and the switch where users look
+(`m8/PLAN.md` 2.7.1).
 
 ## 4. What would have to be built, when a task claims one of these
 

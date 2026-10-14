@@ -25,6 +25,10 @@ intermediate and the result type, as Spark's type rules compute them, and no per
 admits a wider declared type (2.8). TPC-H q6 at its specification's types is not fused by this
 milestone.*
 
+*Owner's answers, 14 October 2026, to the plan's open questions: the math configuration defaults
+to on (2.7.1); `TIME` to `TIMESTAMP_NTZ` is in, its date a per-query constant (2.6); decimal
+division is out of this milestone (2.8); the post's headline is decided later (section 7).*
+
 *Owner's decision, 14 October 2026: no milestone 7 row moves.* The rows still open in
 `m7/PLAN.md` stay there and close there; nothing below depends on one except where a row says so.
 
@@ -61,12 +65,12 @@ ones.**
    questions with machine-dependent answers are built both ways and measured, the losing arm kept
    (329 for `BYTE` and `SHORT`, 347 for the decimal load path).
 2. **Most of the census is fused.** Of the 182 in-scope entries of `m8/census.tsv`, at least 122
-   (two thirds) are fused for every type they admit, and of its 882 entry-and-type pairs at least
-   662 (three quarters); every pair left unfused carries its reason in the census, each reason one
-   of: the math configuration switched off (2.7.1), a hard case declined (346), or a named row of
-   `m9/SCOPE.md`. Today the counts are 15 entries and 96 pairs. A type counts as fused only where a
-   coverage row reads a column of it, which `dev/varka_census.py` checks against `coverage.json`
-   and row 328 makes exact.
+   (two thirds) are fused for every type they admit, and of its 879 entry-and-type pairs at least
+   660 (three quarters); every pair left unfused carries its reason in the census, each reason one
+   of: a hard case declined (346), the owner's decision (decimal division, recorded in the census's
+   reason column and outside the 879), or a named row of `m9/SCOPE.md`. Today the counts are 15
+   entries and 96 pairs. A type counts as fused only where a coverage row reads a column of it,
+   which `dev/varka_census.py` checks against `coverage.json` and row 328 makes exact.
 3. **The cast matrix is fused and proven.** Every one of the 106 legal pairs of `m8/casts.tsv`
    is fused under LEGACY, ANSI and TRY where the mode admits it, or declined with its reason; each
    proven as section 5 assigns, by exhaustion where the source has at most 32 bits (62 pairs), by
@@ -83,8 +87,9 @@ ones.**
 5. **The math family is fused under the ULP contract** (345, 356 to 358): each of its 27 entries
    states its bound per host library (SVML at AVX-512, SVML at AVX2, SLEEF on NEON) in the coverage
    table and the user support table, its test oracle compares within that bound, it is gated by
-   `spark.sql.codegen.varka.math.ulpContract.enabled`, and the departure is entry 3.4 of
-   `SCOPE_STANDARD_MODE.md`. Every other expression stays bit-exact.
+   `spark.sql.codegen.varka.math.ulpContract.enabled`, on by default, and the departure is entry
+   3.4 of `SCOPE_STANDARD_MODE.md` and is stated where users look (353). Every other expression
+   stays bit-exact.
 6. **The existing types are filled in**: `BIGINT` arithmetic (104), the integral division shapes
    (30, 95, item 33), the day-time interval expressions (103), `date - date` (39), the year-month
    divisions (89), the bitwise family (item 32), null-safe equality (item 34), the choice shapes of
@@ -150,18 +155,18 @@ classes. By family, with the entry-and-type pairs they admit and the pairs fused
 | :--- | ---: | ---: | ---: | ---: |
 | conditional | 11 | 120 | 8 | 0 |
 | predicate | 16 | 149 | 25 | 0 |
-| math and arithmetic | 59 | 226 | 12 | 0 |
+| math and arithmetic | 59 | 223 | 12 | 0 |
 | bitwise | 13 | 41 | 0 | 0 |
 | datetime | 41 | 102 | 40 | 11 |
 | hash | 2 | 26 | 0 | 0 |
 | conversion (`cast` and its aliases) | 11 | 104 | 0 | 0 |
 | misc (bitmap positions) | 2 | 2 | 0 | 0 |
 | implicit operators | 27 | 112 | 11 | 4 |
-| **total** | **182** | **882** | **96** | **15** |
+| **total** | **182** | **879** | **96** | **15** |
 
 By type, pairs fused today over pairs admitted: `INT` 15 of 90, `BIGINT` 12 of 86, `DATE` 41 of 63,
 `TIME` 13 of 49, year-month interval 10 of 55, day-time interval 5 of 57; and none yet of the new
-types' `BOOLEAN` 41, `TINYINT` 75, `SMALLINT` 75, `FLOAT` 65, `DOUBLE` 101, `DECIMAL` 71,
+types' `BOOLEAN` 41, `TINYINT` 75, `SMALLINT` 75, `FLOAT` 65, `DOUBLE` 101, `DECIMAL` 68,
 `TIMESTAMP_NTZ` 54.
 
 By the hardest work left once its lanes exist: 15 done, 73 plumbing (a compiler arm and IR on the
@@ -181,6 +186,9 @@ Three properties of the census to read it by:
   legality, not by hand), and a source counts fused when every legal pair from it in
   `m8/casts.tsv` is fused in every mode it admits. So the conversion family's 104 pairs move with
   section 2.2's matrix.
+* **A pair declined by the owner's decision leaves the denominator.** Decimal division (`/`,
+  `try_divide` and `div` over decimals) is out of this milestone; the three pairs are marked in the
+  curated file and recorded in the census's reason column, not counted among the 879.
 * **The done-when share is over pairs and over entries.** Pairs weigh an expression by how many
   types it serves, so `=` over thirteen types is thirteen; entries weigh `factorial` the same as
   `+`. Either alone would flatter one kind of work.
@@ -210,7 +218,7 @@ about every pair, so the matrix cannot drift from the rules it copies.
 | floor division, floor modulo, unit division | 16 | `TIMESTAMP_NTZ` to `DATE` and to `TIME`, `TIME` and the intervals to integral and decimal targets |
 | test, select | 14 | numeric to `BOOLEAN` (`x != 0`, NaN true), `BOOLEAN` to numeric (one or zero) |
 | always null | 8 | `DATE` to numeric and `BOOLEAN`, LEGACY only |
-| session date | 1 | `TIME` to `TIMESTAMP_NTZ` takes its date from `CURRENT_DATE`, which `ComputeCurrentTime` makes a literal per query |
+| session date | 1 | `TIME` to `TIMESTAMP_NTZ` takes its date from `CURRENT_DATE`, which `ComputeCurrentTime` makes a literal per query; in, as a per-query constant (2.6) |
 | hard | 2 | `FLOAT` and `DOUBLE` to decimal: `Decimal(double)` goes through the double's shortest decimal string |
 
 Decimal to floating is in "rounding" with a bound: `Decimal.toDouble` is
@@ -326,6 +334,17 @@ and a batch with an overflowing lane declines to the row engine, which raises th
   `minute` and `second` are a floor modulo by the day and divisions by constants; the casts with
   `TIME`, and `make_timestamp_ntz(date, time)`.
 
+**`TIME` to `TIMESTAMP_NTZ`, owner's decision, 14 October 2026: in.** Spark takes the date from
+`CURRENT_DATE` in the session time zone, and in a real plan `ComputeCurrentTime` replaces it with a
+date literal fixed once per query (`Cast.castToTimestampNTZ`). So the kernel receives the date as a
+per-query constant - a literal slot, whose value is an argument and not part of the shape key, so a
+kernel cached from yesterday's query takes today's date - and computes `days * micros per day +
+nanos / 1000`. The ghost fallback sees the same date because it evaluates the same rewritten
+expression, with the same literal, on the row engine. 340's test pins it: a query whose batches
+are split between the kernel and the fallback (a forced decline on every other batch) returns one
+date on every row, equal to the literal in the plan; a second query run under a different clock
+date reuses the cached kernel and returns its own date.
+
 Out with the zoned type: `date_trunc`, `months_between` and `timestampdiff`, whose operands Spark
 coerces to `TIMESTAMP`.
 
@@ -386,12 +405,22 @@ The owner chose item 36's first option on 14 October 2026. What it means, piece 
 * **The register records it.** `SCOPE_STANDARD_MODE.md` 3.4 is the first deliberate departure from
   "row answers follow Spark", with the reason, the bound and the configuration.
 
-**The default is open** (section 7). On, users get the speed item 36 measured - 5x to 14x at eight
-lanes, 2.5x to 9x at four, 1.1x to 3.9x at two - with answers a unit in the last place from vanilla
-Spark's. Off, Varka keeps its promise that enabling it changes nothing a query returns, and the
-speed is opt-in. The plan recommends **off**: the bit-identical promise is what the differential
-suites, the ghost fallback's soundness and the posts all rest on, a user who wants the speed loses
-one setting, and a default can be flipped once users have read the bound.
+**The default is on: owner's decision, 14 October 2026.** The plan had recommended off; the owner
+chose the speed. The consequences, plainly:
+
+* **With Varka enabled, the math functions' answers may differ from vanilla Spark's by up to their
+  stated bound**, unless a user sets `spark.sql.codegen.varka.math.ulpContract.enabled` to false.
+  Enabling Varka is no longer answer-neutral for these 27 functions; it stays so for every other
+  expression.
+* **The differential suites** compare the math functions within the bound by default, since the
+  default configuration is what they test; a second arm with the configuration off asserts that the
+  family declines and the answers are Spark's bit for bit. The option matrix carries both.
+* **The fallback** mixes the two answers in one column by batch, as above, by default rather than
+  only for a user who opted in.
+* **The documentation says so where users look**: the user support table (353) gives each
+  function's bound per host library, and `docs/sql-varka.md` states the default and how to turn it
+  off at the head of its math section and in its configuration list, not only in the coverage
+  table. 353 is not done until both do.
 
 The rounding functions (344) are built, not called, since `VectorOperators` has no rounding
 operator: `floor`, `ceil` and `rint` by the 2^52 construction, `floor` and `ceil` of a double
@@ -436,7 +465,8 @@ declines, plainly:
   operands at precision 18, or any pair whose integer and fraction digits together reach 18,
   decline; `DECIMAL(17, s) + DECIMAL(17, s)` is the widest that fuses at equal scales.
 * **Quotients.** `s = max(6, s1 + p2 + 1)` and `p = p1 - s1 + s2 + s`, so only small operands stay
-  under 18 (`DECIMAL(5, 2) / DECIMAL(5, 2)` is `DECIMAL(13, 8)`), and those are 346's hard entry.
+  under 18 (`DECIMAL(5, 2) / DECIMAL(5, 2)` is `DECIMAL(13, 8)`); decimal division is out of the
+  milestone in any case (below).
 * **Integral operands meet decimals at their decimal width.** Type coercion turns a `TINYINT`,
   `SMALLINT`, `INT` or `BIGINT` met by a decimal into `DECIMAL(3, 0)`, `(5, 0)`, `(10, 0)` or
   `(20, 0)`. So **every arithmetic or comparison between a `BIGINT` and a decimal declines**, its
@@ -466,10 +496,13 @@ every precision pair up to 18 by the SMT tooling, and the rescale to a common sc
 LEGACY and TRY, `NUMERIC_VALUE_OUT_OF_RANGE` under ANSI), and what rounds is a cast to a smaller
 scale: `ROUND_HALF_UP`, which on an unscaled long is an add of half the divisor away from zero and
 a truncating division by `10^k`, a constant division the long lane's proven forms serve (350).
-Decimal division needs a wider intermediate by item 2's reading; its result often stays under
-precision 18 (`DECIMAL(5, 2) / DECIMAL(5, 2)` is `DECIMAL(13, 8)`), but `u1 * 10^k` does not fit
-a long in general, so it is a hard entry until 346 finds an exact construction or the owner rules
-it out.
+**Decimal division is out of milestone 8: owner's decision, 14 October 2026.** Its result often
+stays under precision 18, but `u1 * 10^k` does not fit a long in general, and item 2 had already put
+it out of a first pass. `/`, `try_divide` and `div` over decimals decline with the reason "owner's
+decision, 14 October 2026"; the census records the three pairs in its reason column and leaves them
+out of the done-when denominator. No cast is affected: a cast to a smaller decimal scale divides by
+a power of ten, which is the rounding rescale 350 builds, not the division operator. Decimal `%`,
+`mod` and `pmod` are remainders, not quotients, and stay in.
 
 ### 2.9 The existing types
 
@@ -506,8 +539,8 @@ windows; PR CI runs a fixed sampled slice of each.
 is built from the census rather than from a benchmark: the share it states is 1.1 item 2's, per
 type and per family, and its substance is how a kernel can be shown to agree with Spark across
 thirteen types - exhaustion where the width allows, SMT for 64-bit integer rules, the fuzzers for
-the rest, and the cases declined with their reasons. Whether a benchmark headline joins it is the
-owner's (section 7).
+the rest, and the cases declined with their reasons. Whether a per-type benchmark joins it is
+decided later by the owner (section 7).
 
 ## 3. Task breakdown
 
@@ -537,16 +570,16 @@ catalogue keep theirs. Sizes are the house's small, medium and large.
 | 337 | `hash` and `xxhash64` over the numeric and temporal columns. **Done when** both fuse over every type in the set with Spark's per-type byte layouts, proven against `Murmur3HashFunction` and `XxHash64Function` by exhaustion at 32 bits | this plan, 2.1 | medium |
 | 338 | The `TIMESTAMP_NTZ` lane: load and store, comparisons, choice, `IN`, the null tests, the casts with `DATE`. **Done when** each fuses with coverage rows, `DATE` to `TIMESTAMP_NTZ` guarded against `multiplyExact`'s overflow | item 31 | small |
 | 339 | `TIMESTAMP_NTZ` arithmetic: `ntz - ntz`, `ntz +/- dt`, `ntz +/- ym`, `timestampadd`, `time_bucket`, checked. **Done when** each fuses, the overflowing lane declining to the row engine's error, the calendar forms proven against `java.time` over the sweep the date family uses | item 31 | medium |
-| 340 | `TIMESTAMP_NTZ` decomposition: the date fields through an exact full-range floor division into the int32 prefix, `hour`, `minute`, `second`, `extract` over it, the casts with `TIME`, `make_timestamp_ntz(date, time)`. **Done when** each fuses, the division proven by SMT over the whole long range and added to `ChronoDivide`'s table | item 31; `m5/PLAN.md` 2.6 for the long-lane division | medium |
+| 340 | `TIMESTAMP_NTZ` decomposition: the date fields through an exact full-range floor division into the int32 prefix, `hour`, `minute`, `second`, `extract` over it, the casts with `TIME` (to `TIMESTAMP_NTZ` with the query's date as a per-query constant, 2.6), `make_timestamp_ntz(date, time)`. **Done when** each fuses, the date-pinning test of 2.6 passes with half the batches on the fallback, the division proven by SMT over the whole long range and added to `ChronoDivide`'s table | item 31; `m5/PLAN.md` 2.6 for the long-lane division | medium |
 | 341 | The floating lanes: `Lane` split into integral and floating halves, `DOUBLE` and `FLOAT` lane types, `Float8Vector` and `Float4Vector` read and written, comparisons, choice and `IN` by Spark's NaN and `-0.0` rules, `isnan`, `nanvl`. **Done when** item 89 bullet 1's table test passes for every operator and its constant-specialised forms, the bytes oracle unchanged for every integral shape | items 35, 89 | large |
 | 342 | Floating arithmetic and the exact functions: `+`, `-`, `*`, `/` (a zero divisor null or raised; an int division through its casts), negation, `abs`, `signum`, `sqrt`, `degrees`, `radians`, `try_divide`, the interval products and quotients by a floating factor. **Done when** each fuses, bit-identical to the row engine over sampled regions and the fuzzer | item 35 | medium |
 | 343 | The floating casts: integral to floating (rounding as the JVM does), `FLOAT` and `DOUBLE` to each other, floating to integral (LEGACY's saturation, ANSI's and TRY's range check and NaN), to and from `BOOLEAN`, `time_from_seconds` over a double. **Done when** every such pair of `m8/casts.tsv` fuses in the three modes, a `FLOAT` source proven over all 2^32 bit patterns | this plan, 2.2 | medium |
 | 344 | The rounding functions: `floor`, `ceil`, `rint` over a double by the 2^52 construction, `floor` and `ceil` to `BIGINT`, `round`, `bround` and `truncate` over integral types, `factorial`, `width_bucket`. **Done when** each fuses, the double forms checked over every boundary region and the integral ones by exhaustion at 32 bits | items 35, 36 | medium |
-| 345 | The math family's ULP contract and its configuration (2.7.1): `MathLaneProbe` extended to every function and both references, a bound per function and per host library, the coverage and support tables' bound column, the oracle and fuzzers comparing within the bound, `spark.sql.codegen.varka.math.ulpContract.enabled` with its emit option in the shape key, and `SCOPE_STANDARD_MODE.md` 3.4. **Done when** a probe run on each of the three host libraries is committed, the configuration declines the family when off, and a test shows a within-bound comparison catches a lane two units further out | item 36; owner's decision, 14 October 2026 | medium |
+| 345 | The math family's ULP contract and its configuration (2.7.1): `MathLaneProbe` extended to every function and both references, a bound per function and per host library, the coverage and support tables' bound column, the oracle and fuzzers comparing within the bound, `spark.sql.codegen.varka.math.ulpContract.enabled`, on by default, with its emit option in the shape key, the differential suites' config-off arm, and `SCOPE_STANDARD_MODE.md` 3.4. **Done when** a probe run on each of the three host libraries is committed, the configuration declines the family when off, and a test shows a within-bound comparison catches a lane two units further out | item 36; owner's decision, 14 October 2026 | medium |
 | 356 | The trigonometric functions under the contract: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sec`, `csc`, `cot`. **Done when** each fuses within its stated bound with a coverage row per host library | items 35, 36 | medium |
 | 357 | The hyperbolic functions under the contract: `sinh`, `cosh`, `tanh`, and Spark's formulas for `asinh`, `acosh`, `atanh`. **Done when** each fuses within its stated bound, the formulas reproduced term by term | items 35, 36 | medium |
 | 358 | The exponential, logarithmic, power and root functions under the contract: `exp`, `expm1`, `log` (one and two arguments), `ln`, `log10`, `log1p`, `log2`, `pow`, `power`, `cbrt`, `hypot`. **Done when** each fuses within its stated bound, `log10` at its two units | items 35, 36 | medium |
-| 346 | The hard entries: floating `round`, `bround`, `truncate`, `%`, `pmod` and `try_mod`, floating to decimal, decimal division. **Done when** each has an exact construction fused with its proof or a recorded reason to decline, in the census | this plan, 2.7 and 2.8 | small |
+| 346 | The hard entries: floating `round`, `bround`, `truncate`, `%`, `pmod` and `try_mod`, floating to decimal. **Done when** each has an exact construction fused with its proof or a recorded reason to decline, in the census | this plan, 2.7 and 2.8 | small |
 | 347 | The decimal load path, built three ways (for declared precisions up to 18; no wider type admitted by a value bound): the de-interleave (shuffle, and compress where it intrinsifies) with the high word checked, an unscaled-long cache layout for precision up to 18, and the int lane for precision up to 9. **Done when** all three read a decimal column with coverage rows, the measurement is committed per width with its verdict, and the arms that lose stay behind the option | items 1, 89 bullet 6 without its runtime bound | large |
 | 157 | The widening store: a decimal output as its value word and sign extension in each sixteen-byte slot. **Done when** `m5/PLAN.md` 2.93's list holds | catalogue item 39 table; `m5/PLAN.md` 2.93 | small |
 | 348 | Decimal comparisons, choice, `IN`, null tests, negation and `abs`, at equal and at unequal scales (a constant rescale proven to fit the long), declining every pair whose common type exceeds precision 18, a `BIGINT` operand's `DECIMAL(20, 0)` included. **Done when** each fuses, the load's precision check declining an out-of-precision batch | items 1, 2 | medium |
@@ -554,7 +587,7 @@ catalogue keep theirs. Sizes are the house's small, medium and large.
 | 350 | The decimal casts, to and from decimal types up to precision 18: to and from integral types, decimal to decimal (`ROUND_HALF_UP`, overflow null or raised), to and from `BOOLEAN`, to floating under the 2^53 guard. **Done when** every decimal pair of `m8/casts.tsv` fuses or is a recorded hard entry, the integer rules proven by SMT | this plan, 2.2 and 2.8 | medium |
 | 351 | Decimals in the existing types' functions, all of whose decimal types are within precision 18: `time_to_seconds`, `second` with its fraction, `extract(SECOND FROM dt)`, `make_time`, `make_dt_interval` and `make_timestamp_ntz` over decimal seconds, `time_from_seconds` over a decimal, `floor`, `ceil`, `round`, `bround` and `truncate` over a decimal. **Done when** each fuses with a coverage row | `m5/PLAN.md` 2.93; items 1, 2 | medium |
 | 352 | The fuzzers and the reference evaluator across types: the IR fuzzer's grammar and the Spark-level fuzzer's columns over all thirteen types, with the cross-type compositions and the option matrix's configurations. **Done when** both fuzzers draw every type at every nightly and a cross-type disagreement found is fixed or a named row | this plan, 2.10 | medium |
-| 353 | The support table for users: `docs/sql-varka.md` states, per type and per family, what fuses, from the census and `coverage.json`, and its "three types" paragraph says what the code admits, with each math function's ULP bound per host library (2.7.1). **Done when** the table is generated and `VarkaCoverageSuite` fails when it drifts | item 54 | small |
+| 353 | The support table for users: `docs/sql-varka.md` states, per type and per family, what fuses, from the census and `coverage.json`, and its "three types" paragraph says what the code admits, with each math function's ULP bound per host library, and the math configuration's default (on) and how to turn it off stated at the head of the math section and in the configuration list (2.7.1). **Done when** the table is generated and `VarkaCoverageSuite` fails when it drifts | item 54 | small |
 | 354 | The closing task: 1.1 read row by row, the census and the cast matrix regenerated on the milestone's build, the README's account updated. **Done when** each item of 1.1 is met or its gap is named | this plan | small |
 | 355 | The milestone's post, *One engine, every number*, for JVM and database engineers. **Done when** published with the census share per type and the proofs behind it, as 2.11 says | this plan, 2.11 | medium |
 
@@ -613,9 +646,10 @@ Every structural row cites the proof its row names:
 4. **The precision rule declines the headline decimal query.** TPC-H q6 at its specification's
    types is not fused by this milestone (2.8, owner's decision). Accepted: the post's claim is the
    census, not that query, and the post says which decimal shapes decline and why.
-5. **The ULP contract is a departure users may not expect.** Mitigation: the configuration, the
-   bound stated per function and host in the coverage and support tables, the register entry, and
-   a default the owner sets knowingly (section 7).
+5. **The ULP contract is a departure users may not expect, and it is on by default.** Mitigation:
+   the bound stated per function and host in the coverage and support tables, the default and its
+   switch stated in `docs/sql-varka.md` where users look, the register entry, and the config-off
+   arm of the differential suites.
 6. **The exhaustive sweeps cost the nightly time.** Each 2^32 sweep is predicted at the int32
    sweeps' order and up to twice it (2.10). Mitigation: PR CI runs slices, the nightly the rest,
    and an idle window the first full pass, its times recorded against the prediction.
@@ -625,20 +659,16 @@ Every structural row cites the proof its row names:
 
 ## 7. Open questions
 
-1. **The default of `spark.sql.codegen.varka.math.ulpContract.enabled`** (2.7.1). On buys item 36's
-   speed for every user, at answers a unit in the last place from vanilla Spark's; off keeps
-   enabling Varka answer-neutral and makes the speed opt-in. The plan recommends off.
-2. **`TIME` to `TIMESTAMP_NTZ` takes the session's current date.** After `ComputeCurrentTime` it
-   is a literal per query, so 340 can fuse it as the time plus a constant; confirm that a cast whose
-   answer depends on when the query runs is wanted in a kernel.
-3. **Decimal division**: an exact construction found by 346, or out of this milestone by decision?
-4. **The post's headline**: the census share alone (2.11), or a benchmark number beside it?
+1. **The post's headline: decided later by the owner.** The two options are the census share alone
+   (2.11), or the share with a per-type benchmark beside it.
 
 ## 8. Explicitly out of milestone 8
 
 * `STRING` and every cast to or from it, `TIMESTAMP` with the local time zone, and `DECIMAL` above
   precision 18: owner's decision, 14 October 2026. So are the functions that take or return them -
   151 registered names for strings, 20 for the zoned timestamp (2.1).
+* Decimal division (`/`, `try_divide` and `div` over decimals): owner's decision, 14 October 2026
+  (2.8).
 * Aggregate, window and generator functions: Varka fuses scalar projections and filters; the
   aggregation items of `m9/SCOPE.md` (4, 5, 6) are a later milestone's.
 * Nested types, `BINARY`, `VARIANT`, sketches and geospatial types, which have no representation.
