@@ -364,3 +364,59 @@ A review of the pull request found ten issues; all are fixed, each shown by a ru
 the Python UDTF test cancelled, 59 ignored by Spark, none failed, the two arms identical test for
 test, 1,256 s and 1,251 s. The Varka arm served 1,584 of 47,323 query executions and 5,843
 batches, in 108 tests; that run's report is the committed `served.json`.
+
+## 10. Outcome (271b), 13 October 2026
+
+Done as 3.3 describes, with two guards the first full run added.
+
+* **The lift.** `VarkaArrowSource.LiftRule`, a plan-normalization rule, rewrites each `SELECT`
+  with no `FROM`: every non-null literal of a type a kernel reads, in a position the compiler fuses
+  as a column (asked of `VarkaExpressionCompiler` with the literal replaced by a column), becomes a
+  column of a 17-row relation, and `LIMIT 1` keeps one row. One literal used twice is one column.
+  `-Dvarka.goldenSuite.lift=false` (`dev/varka_golden_suite.sh --no-lift`) turns it off.
+* **A bug the first short run found**, fixed before the full run: the relation's row was built by
+  mapping over the set of lifted literals, so two literals of different types holding one value
+  (`INTERVAL '-1-1' YEAR TO MONTH = INTERVAL '-13' MONTH`, -13 months each) became one value for
+  two columns, and Spark's own plan normalization under test threw
+  `ArrayIndexOutOfBoundsException`. The row is built from the sequence now; a unit test holds it.
+* **Two guards the first full run added.** It failed two tests in both arms, so both were the
+  harness's: `time-bucket.sql`, whose `time_bucket` needs a constant bucket width, where the
+  lifted interval sum - which Varka fuses, so the parent check passed - made it a column and plan
+  validation refused the plan; and `try_arithmetic.sql`, where an overflow inside
+  `try_multiply(1, 2147483647 + 1)` reports a different query-context fragment when evaluated at
+  run time rather than folded. A lifted projection entry is now kept only if every node of it
+  still passes Spark's own `checkInputDataTypes`, where a constant-argument rule lives; and nothing
+  under a `try_` function is lifted, neither a `TryEval` nor the runtime-replaceable `try_add`
+  family, whose replacement over numbers is the operation in TRY mode with no `TryEval` at all.
+* **Tests.** `VarkaLiteralLiftSuite`, seven: a fused expression over literals reads them from 17
+  equal rows with one kept and the output's name unchanged; one literal used twice is one column;
+  two literals of different types holding one value are two columns of one row; a literal in a
+  map key or of a type no kernel reads stays; nothing under `try_` is lifted, as `TryEval` or as
+  `try_multiply`; each scan partition holds 17 rows, so the kernel's batch is 17 long; a query
+  with a `FROM` is left to the cache rule.
+
+**Predictions scored (6.1), 271b's.**
+
+3. **Failed.** Served executions rose from 1,584 to 1,761 of 47,323, and in the execution tests
+   alone from 1,521 to 1,698, in 115 tests against 106; the plan predicted at least 2,000. The date
+   files now reach Varka (`date.sql` 0 to 7 served executions, `interval.sql` 0 to 10,
+   `extract.sql` 0 to 3, `time.sql` +114), but most golden statements with literals either have no
+   type a kernel reads or put the literal where a column is not fused, and the nine probe files'
+   rise from 26 to 88 did not extrapolate to the whole suite.
+5. **Held, with the lift.** With `misdescribeAdd` planted, over `date.sql`, `interval.sql`,
+   `extract.sql` and `int4.sql`, the Varka arm failed `date.sql` and `nonansi/date.sql` at query
+   29, `date_add(DATE '2011-11-11', 1)`, and nothing else; the same files pass without the fault.
+
+**Test 4 held.** On those four files the lifted Varka arm passed all 16 tests, as the unlifted arm
+and the lifted cache-only arm did; served executions there rose from 24 to 72.
+
+**Both arms with the lift, every golden file**, side by side on 13 October 2026: 790 tests each,
+789 passed, the Python UDTF test cancelled, 59 ignored by Spark, none failed, the two arms
+identical test for test, 1,353 s and 1,357 s. The Varka arm served 1,761 of 47,323 query
+executions and 6,018 batches, in 117 tests; that run's report is the committed `served.json`.
+This run is the reviewed version: the 17 rows are split across the scan's partitions, so each
+batch is 17 long, and a lifted entry is kept only if the whole entry still compiles.
+Prediction 1 holds with the lift as well: the cache-only arm fails only the listed environment
+test.
+
+Row 271 is done.
