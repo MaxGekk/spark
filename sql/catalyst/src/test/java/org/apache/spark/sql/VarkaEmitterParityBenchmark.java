@@ -56,11 +56,14 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Day
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfYear;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Greatest;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Least;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.MakeDate;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Month;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NextDay;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Overflow;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Quarter;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.SubDays;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ThursdayOf;
@@ -442,6 +445,7 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
           () -> constantDivision(b));
       section("VARKA-88 step 4: extract(YEAR FROM ym), the division with no magic form",
           () -> extractYear(b));
+      section(EXACT_STATUS_SECTION, () -> exactRefusalStatus(b));
     } finally {
       loader.release();
       arena.close();
@@ -2521,6 +2525,58 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
         i += 1;
       }
     });
+    runCases(benchmark);
+  }
+
+  // ---------------------------------------------------------------------------------------
+  // VARKA-313: what exact refusal status costs
+  // ---------------------------------------------------------------------------------------
+
+  /** The section's title, which {@code dev/varka_bench_regen.sh --sections} selects it by. */
+  static final String EXACT_STATUS_SECTION =
+      "VARKA-313: exact refusal status, a mask per reason against one folded mask";
+
+  /**
+   * The cost of {@code exactRefusalStatus}, which decides whether it becomes the default
+   * ({@code VARKA-313.md} 3.2). {@code year(date_add(d, i + i))} under ANSI holds two guards of
+   * two reasons in one loop method - the sum's overflow and the day {@code year} reads - so the
+   * default folds them into one mask and the option keeps a mask per reason: two more
+   * {@code VectorMask} calls and 18 more bytes in each loop method, by {@code dev/varka_emit.sh}.
+   * The data keeps every lane in range, so no batch declines and the rows time the extra mask
+   * alone; the setup checks that, since a declining kernel would time a different path.
+   */
+  private void exactRefusalStatus(Buffers b) {
+    VarkaBenchmark benchmark = benchmark("year(date_add(d, i + i)) under ANSI over " + numRows
+        + " rows", numRows).timed().build();
+    List<VarkaVectorIR> roots = List.of(new Year(new AddDays(new ColumnRef(0),
+        new IntArith(IntOp.ADD, Overflow.FAIL, new ColumnRef(1), new ColumnRef(1)))));
+    VarkaFusedKernel folded = emit(roots, 2, 0, b.loader(), 985);
+    VarkaFusedKernel exact = emit(roots, 2, 0, b.loader(), 986,
+        VarkaEmitOptions.DEFAULTS.withExactRefusalStatus(true));
+    long[] nfData = {b.nfData().address(), b.nf2Data().address()};
+    long[] mxData = {b.mxData().address(), b.mx2Data().address()};
+    long[] mxValidity = {b.mxValidity().address(), b.mx2Validity().address()};
+    int[] mxNulls = {b.mxNulls(), b.mx2Nulls()};
+    long[] dst = {b.dst().address()};
+    long[] dstValidity = {b.dstValidity().address()};
+    for (VarkaFusedKernel kernel : List.of(folded, exact)) {
+      int dense = kernel.run(nfData, new long[] {0L, 0L}, new int[] {0, 0}, dst, dstValidity,
+          NO_LITERALS, numRows);
+      int masked = kernel.run(mxData, mxValidity, mxNulls, dst, dstValidity, NO_LITERALS,
+          numRows);
+      require(dense == 0 && masked == 0, "the exact-status section's data declined (status "
+          + dense + ", " + masked + "); its rows would time the decline, not the masks");
+    }
+    benchmark.addCase("one folded mask (the default), null-free", it ->
+        folded.run(nfData, new long[] {0L, 0L}, new int[] {0, 0}, dst, dstValidity,
+            NO_LITERALS, numRows));
+    benchmark.addCase("a mask per reason (exactRefusalStatus), null-free", it ->
+        exact.run(nfData, new long[] {0L, 0L}, new int[] {0, 0}, dst, dstValidity,
+            NO_LITERALS, numRows));
+    benchmark.addCase("one folded mask (the default), mixed nulls", it ->
+        folded.run(mxData, mxValidity, mxNulls, dst, dstValidity, NO_LITERALS, numRows));
+    benchmark.addCase("a mask per reason (exactRefusalStatus), mixed nulls", it ->
+        exact.run(mxData, mxValidity, mxNulls, dst, dstValidity, NO_LITERALS, numRows));
     runCases(benchmark);
   }
 }

@@ -28,9 +28,12 @@ import org.apache.spark.internal.SparkLogger;
 import org.apache.spark.internal.SparkLoggerFactory;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitDeclined;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrorContext;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmup;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaReproduction;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeCache;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeKey;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.internal.SQLConf;
 
 /**
@@ -104,6 +107,12 @@ final class VarkaSizeAdmission {
           + (cut < 0 ? message : message.substring(0, cut)) + ")";
       return Optional.of(new Decline(d.outputs(), reason, d.plannedCut()));
     } catch (Throwable t) {
+      if (t instanceof VerifyError) {
+        // Under test the admission verifies the bytes it built, so a class the verifier rejects
+        // fails the query here, at planning, before any evaluator could record it: the
+        // reproduction file is written here instead (VARKA-315), and the error rethrown as it is.
+        reproduce(t, fused, key);
+      }
       if (!NonFatal.apply(t)) {
         throw t;
       }
@@ -118,6 +127,28 @@ final class VarkaSizeAdmission {
             + "which the executor will meet behind the fallback: " + t.getMessage(), t);
       }
       return Optional.empty();
+    }
+  }
+
+  /**
+   * The reproduction file of a class the admission's verification rejected. It cannot throw: the
+   * error it records is rethrown after it.
+   */
+  private static void reproduce(Throwable failure, CompiledVarkaProjection fused,
+      VarkaShapeKey key) {
+    try {
+      String hash = VarkaShapeCache.shapeHash(key);
+      var ir = new StringBuilder();
+      for (VarkaVectorIR output : key.outputs()) {
+        ir.append(ir.length() > 0 ? ", " : "").append(VarkaVectorIR.canonical(output));
+      }
+      var ctx = new VarkaErrorContext(VarkaErrorContext.PLANNING,
+          VarkaShapeCache.sourceFileFor(hash) + " [" + ir + "] (planning)", hash,
+          VarkaErrorContext.renderOptions(key.options()), null, failure);
+      VarkaReproduction.write(() -> ctx, hash, failure, key, fused.literals(),
+          fused.longLiterals(), null, null);
+    } catch (Throwable t) {
+      VarkaReproduction.unwritten(t);
     }
   }
 }

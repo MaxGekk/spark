@@ -104,6 +104,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Debugging Method: Progressive Isolation](sql/varka/skills/testing-and-debugging.md#debugging-method-progressive-isolation)
 * [Columnar Transition Wiring (plan level)](sql/varka/skills/testing-and-debugging.md#columnar-transition-wiring-plan-level)
 * [Metrics as the "did it really run" proof](sql/varka/skills/testing-and-debugging.md#metrics-as-the-did-it-really-run-proof)
+* [A metric that can say "not reported": two sums in one value, rendered by a custom type](sql/varka/skills/testing-and-debugging.md#a-metric-that-can-say-not-reported-two-sums-in-one-value-rendered-by-a-custom-type)
 * [Independent Reference Evaluators as Test Oracles](sql/varka/skills/testing-and-debugging.md#independent-reference-evaluators-as-test-oracles)
 * [A second lane gets a second fuzz corpus, and its reach set comes from the constructors](sql/varka/skills/testing-and-debugging.md#a-second-lane-gets-a-second-fuzz-corpus-and-its-reach-set-comes-from-the-constructors)
 * [A fixture that fills undefined memory decides what its whole matrix can catch](sql/varka/skills/testing-and-debugging.md#a-fixture-that-fills-undefined-memory-decides-what-its-whole-matrix-can-catch)
@@ -139,6 +140,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Error Prone and NullAway run beside the build, and the pending list only shrinks](sql/varka/skills/testing-and-debugging.md#error-prone-and-nullaway-run-beside-the-build-and-the-pending-list-only-shrinks)
 * [A Varka suite in JUnit 5: `@VarkaSuite`, a sentence per test, and ScalaTest's lines](sql/varka/skills/testing-and-debugging.md#a-varka-suite-in-junit-5-varkasuite-a-sentence-per-test-and-scalatests-lines)
 * [A Varka node in the plan is not a kernel evaluating the expression](sql/varka/skills/testing-and-debugging.md#a-varka-node-in-the-plan-is-not-a-kernel-evaluating-the-expression)
+* [A kernel failure leaves a file you can replay, and where each failure first surfaces](sql/varka/skills/testing-and-debugging.md#a-kernel-failure-leaves-a-file-you-can-replay-and-where-each-failure-first-surfaces)
 * [Cost predictions run optimistic: the calibration table](sql/varka/skills/testing-and-debugging.md#cost-predictions-run-optimistic-the-calibration-table)
 
 #### [What C2 does with these loops](sql/varka/skills/the-jit.md)
@@ -191,6 +193,8 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Run `dev/scalastyle` before pushing Scala; its parser is older than the language](sql/varka/skills/working-in-this-repo.md#run-devscalastyle-before-pushing-scala-its-parser-is-older-than-the-language)
 * [A run's job list on this fork used to say nothing about what the pull request changed](sql/varka/skills/working-in-this-repo.md#a-runs-job-list-on-this-fork-used-to-say-nothing-about-what-the-pull-request-changed)
 * [Upstream enters only through a sync pull request](sql/varka/skills/working-in-this-repo.md#upstream-enters-only-through-a-sync-pull-request)
+* [A run of master scoped by its diff from master tests nothing, and says it passed](sql/varka/skills/working-in-this-repo.md#a-run-of-master-scoped-by-its-diff-from-master-tests-nothing-and-says-it-passed)
+* [A path-based checkstyle suppression matches the absolute path, checkout directory included](sql/varka/skills/working-in-this-repo.md#a-path-based-checkstyle-suppression-matches-the-absolute-path-checkout-directory-included)
 * [A two-track milestone drifts to the measurable track; review it against the done-when list](sql/varka/skills/working-in-this-repo.md#a-two-track-milestone-drifts-to-the-measurable-track-review-it-against-the-done-when-list)
 * [A day of merges is a day of Builds; the queue now keeps a verdict across docs-only pushes](sql/varka/skills/working-in-this-repo.md#a-day-of-merges-is-a-day-of-builds-the-queue-now-keeps-a-verdict-across-docs-only-pushes)
 

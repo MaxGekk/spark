@@ -87,7 +87,7 @@ case class VarkaProjectExec(
   }
 
   override lazy val metrics: Map[String, SQLMetric] =
-    VarkaExecMetrics.projectionMetrics(sparkContext).asScala.toMap
+    VarkaExecMetrics.projectionMetrics(sparkContext, true).asScala.toMap
 
   // One driver-side compilation serves both EXPLAIN and the residual-entry count below
   // (task-21 review: the node used to re-run the same pure compile per consumer).
@@ -124,7 +124,7 @@ case class VarkaProjectExec(
     residualMetric += classification.toScala.map(_.declines.size.toLong).getOrElse(0L)
     SQLMetrics.postDriverMetricUpdates(sparkContext,
       sparkContext.getLocalProperty(SQLExecution.EXECUTION_ID_KEY), Seq(residualMetric))
-    val varkaMetrics = VarkaExecMetrics.fromNode(longMetric)
+    val varkaMetrics = VarkaExecMetrics.fromNode(metrics.getOrElse(_, null))
     val evaluatorFactory = new VarkaProjectEvaluatorFactory(
       projectList,
       child.output,
@@ -246,6 +246,7 @@ private[sql] class VarkaProjectEvaluatorFactory(
       case Some(ordinals) =>
         val batch = kernels.forwardColumns(input, ordinals)
         VarkaExecMetrics.inc(varkaMetrics.varkaBatches)
+        VarkaExecMetrics.add(varkaMetrics.paths.kernelRows, input.numRows())
         batch
       case None =>
         kernels.serveBatch[ColumnarBatch](input,

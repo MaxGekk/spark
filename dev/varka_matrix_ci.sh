@@ -25,6 +25,12 @@
 # failure line of the branch's report is also in the base's, the failures were there before this
 # change, and the step passes with a warning naming them; otherwise it fails. Writes its verdict
 # to GITHUB_STEP_SUMMARY when that is set.
+#
+# A run of master itself (the weekly matrix, the run after each merge) has VARKA_DIFF_BASE at its
+# own head: there is no change to measure, so the pick hashes the commit rather than the branch -
+# successive master runs walk the configuration list, a rerun draws the same one - and a failure
+# is not compared with the base, which is the same tree and would excuse every failure
+# (VARKA-255.md 2.9).
 
 set -uo pipefail
 
@@ -34,6 +40,11 @@ OUT=target/varka-matrix
 SUMMARY=${GITHUB_STEP_SUMMARY:-/dev/null}
 branch=${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}}
 base=${VARKA_DIFF_BASE:-}
+head=$(git rev-parse HEAD)
+no_change=false
+if [ -n "$base" ] && [ "$(git rev-parse --verify --quiet "$base^{commit}")" = "$head" ]; then
+  no_change=true
+fi
 
 python3 dev/varka_matrix_pick.py --self-test || exit 1
 # The job's suites step (dev/varka_scoped_suites.sh) has run the defaults through the runner in
@@ -48,8 +59,17 @@ else
   dev/varka_matrix.sh --module "$module" --sbt-arg -Phive --list > /dev/null || exit 1
   reuse=(--skip-build)
 fi
-mapfile -t picked < <(python3 dev/varka_matrix_pick.py "$OUT/configurations" "$branch" "$base")
-config=${picked[0]}
+if [ "$no_change" = true ]; then
+  mapfile -t picked < <(python3 dev/varka_matrix_pick.py "$OUT/configurations" "$head")
+  picked[1]="no change to measure, the merge base is the head; the hash of commit $head"
+else
+  mapfile -t picked < <(python3 dev/varka_matrix_pick.py "$OUT/configurations" "$branch" "$base")
+fi
+config=${picked[0]:-}
+if [ -z "$config" ]; then
+  echo "no configuration picked from $OUT/configurations" | tee -a "$SUMMARY"
+  exit 1
+fi
 echo "== $module under $config: ${picked[1]}" | tee -a "$SUMMARY"
 
 dev/varka_matrix.sh --module "$module" "${reuse[@]}" --config "$config" -j 2 \
@@ -59,6 +79,10 @@ cat "$OUT/report.txt"
 if [ "$status" = 0 ]; then
   echo "passed" >> "$SUMMARY"
   exit 0
+fi
+if [ "$no_change" = true ]; then
+  echo "failed on a run of the merge base itself, so nothing excuses it" | tee -a "$SUMMARY"
+  exit 1
 fi
 
 # The lines that name a failure under the picked configuration or the defaults.
