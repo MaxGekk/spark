@@ -1,0 +1,203 @@
+# The curated half of the census (dev/varka_census.py, m8/PLAN.md 2.1). Edit this file, then
+# rerun the script; census.tsv is generated from it and from FunctionRegistry.scala.
+#
+# [registered]: one registered name a line,
+#   name | types it admits in the set | result | types fused today | need | rows | note
+# [implicit]: operators with no registry entry of their own, built by the parser, by type
+# coercion or by the analyzer and the optimizer,
+#   name | class | family | types | result | fused today | need | rows | note
+#
+# Types are bool byte short int bigint float double dec date ntz time ym dt, or a group:
+# INTEGRAL, FLOAT, NUM (integral, floating and decimal), IVL (ym, dt), ALL. "same" as a result
+# maps each type to itself. A fused type marked ~ is fused in a coverage row whose operand of
+# that type is derived (a literal or another expression's result), which the column check cannot
+# see. A need is the hardest work left once the lanes the row names exist: done; plumbing (an arm
+# and IR on the lanes); semantics (Spark's overflow, NaN, rounding or scale rules); ulp (the math
+# family's contract, m9/SCOPE.md item 36); hard (no exact construction known: declined unless one
+# is found). Rows are milestone 8's task numbers (m8/PLAN.md 3).
+
+[registered]
+coalesce|ALL|same|date|plumbing|333,329,331,338,341,348|item 55 adds the int branches
+if|ALL|same|date,bigint|plumbing|333,329,331,338,341,348|
+ifnull|ALL|same|date|plumbing|333|rewritten to coalesce by the optimizer
+nanvl|FLOAT|same||semantics|341|NaN test and blend
+nullif|ALL|same||plumbing|333|rewritten to if(a = b, null, a)
+nullifzero|NUM|same||plumbing|333|rewritten to if(a = 0, null, a)
+nvl|ALL|same|date|plumbing|333|rewritten to coalesce by the optimizer
+nvl2|ALL|same||plumbing|333|rewritten to if(a IS NOT NULL, b, c)
+zeroifnull|NUM|same||plumbing|333|rewritten to coalesce(a, 0)
+when|ALL|same|date,bigint,dt|plumbing|333|the CASE WHEN entry; item 94, in row 333, adds the missing ELSE
+between|ALL|bool|date,int|plumbing|333|rewritten to two comparisons and an AND
+isnan|FLOAT|bool||plumbing|341|
+isnull|ALL|bool|date,bigint|plumbing|333,334|a validity read; item 93 over a predicate
+isnotnull|ALL|bool|date,int,bigint,dt|plumbing|333,334|a validity read; item 93 over a predicate
+equal_null|ALL|bool||semantics|336|null-tolerant: item 34
+and|bool|bool||plumbing|331,27|fused today as a condition, not over a BOOLEAN column or as an output
+in|ALL|bool|date|plumbing|333,341,348|NaN equals NaN in Spark's IN
+not|bool|bool||plumbing|331,27|fused today as a condition, not over a BOOLEAN column or as an output
+or|bool|bool||plumbing|331,27|fused today as a condition, not over a BOOLEAN column or as an output
+<=>|ALL|bool||semantics|336|null-tolerant: item 34
+=|ALL|bool|date,int,bigint,time|semantics|341,348|Spark's NaN and -0.0 rules on floats
+==|ALL|bool|date,int,bigint,time|semantics|341,348|alias of =
+>|ALL|bool|date,int,bigint,dt|semantics|341,348|Spark's NaN ordering on floats
+>=|ALL|bool|date,bigint|semantics|341,348|Spark's NaN ordering on floats
+<|ALL|bool|date,time,dt|semantics|341,348|Spark's NaN ordering on floats
+<=|ALL|bool|date|semantics|341,348|Spark's NaN ordering on floats
+!|bool|bool||plumbing|331,27|alias of not
+abs|NUM,IVL|same|ym|semantics|330,104,103,342,348|the minimum value overflows: wraps or throws
+greatest|ALL|same|date,bigint,time|semantics|333,341,348|NaN is the greatest float
+least|ALL|same|date,bigint|semantics|333,341,348|NaN is the greatest float
+acos|double|double||ulp|345|Math
+acosh|double|double||ulp|345|Spark's log-and-sqrt formula over StrictMath.log
+asin|double|double||ulp|345|Math
+asinh|double|double||ulp|345|Spark's log-and-sqrt formula over StrictMath.log
+atan|double|double||ulp|345|Math
+atan2|double|double||ulp|345|Math
+atanh|double|double||ulp|345|Spark's formula over StrictMath.log
+bround|NUM|same||hard|344,346,351|HALF_EVEN; integral and decimal are semantics, double goes through BigDecimal
+cbrt|double|double||ulp|345|Math
+ceil|NUM|bigint,dec||semantics|344,351|double and integral give bigint, decimal a decimal of scale 0
+ceiling|NUM|bigint,dec||semantics|344,351|alias of ceil
+cos|double|double||ulp|345|Math
+sec|double|double||ulp|345|1 / Math.cos
+cosh|double|double||ulp|345|Math
+degrees|double|double||plumbing|342|Math.toDegrees is one multiply, bit-exact
+exp|double|double||ulp|345|StrictMath
+expm1|double|double||ulp|345|StrictMath
+floor|NUM|bigint,dec||semantics|344,351|double and integral give bigint, decimal a decimal of scale 0
+factorial|int|bigint||semantics|344|a table of 21 entries, null outside it
+hypot|double|double||ulp|345|Math
+log|double|double||ulp|345|StrictMath, one or two arguments
+log10|double|double||ulp|345|StrictMath
+log1p|double|double||ulp|345|StrictMath
+log2|double|double||ulp|345|StrictMath.log over a constant
+ln|double|double||ulp|345|StrictMath
+mod|NUM|same||hard|30,95,104,346,349|integral is semantics (zero divisor); floating remainder is fmod
+negative|NUM,IVL|same|int,ym|semantics|330,104,103,342,348|the minimum value overflows
+pmod|NUM|same||hard|30,104,346|integral is semantics (item 33's sign rule); floating is fmod
+positive|NUM,IVL|same||plumbing|333|rewritten to its child
+pow|double|double||ulp|345|StrictMath
+power|double|double||ulp|345|alias of pow
+radians|double|double||plumbing|342|Math.toRadians is one multiply, bit-exact
+rint|double|double||semantics|344|round half even to an integer, the 2^52 construction
+round|NUM|same||hard|344,346,351|HALF_UP; integral and decimal are semantics, double goes through BigDecimal
+truncate|NUM|same||hard|344,346,351|ROUND_DOWN to a scale; double goes through BigDecimal
+sign|double,IVL|double||plumbing|342|exact: a compare and a blend
+signum|double,IVL|double||plumbing|342|alias of sign
+sin|double|double||ulp|345|Math
+csc|double|double||ulp|345|1 / Math.sin
+sinh|double|double||ulp|345|Math
+sqrt|double|double||plumbing|342|IEEE 754 rounds sqrt correctly, so a lane is bit-exact
+tan|double|double||ulp|345|Math
+cot|double|double||ulp|345|1 / Math.tan
+tanh|double|double||ulp|345|Math
+width_bucket|double,IVL,time|bigint||semantics|344|bucket arithmetic over doubles
++|NUM,IVL,date,ntz,time|same|int|semantics|330,104,103,342,349|integral overflow modes; decimal result scale
+-|NUM,IVL,date,ntz,time|same|int,ym|semantics|330,104,103,342,349,39,339|date - date and ntz - ntz give dt
+*|NUM,IVL|same|int~|semantics|330,95,104,103,342,349|integral overflow modes; decimal result scale
+/|double,dec,IVL|same||semantics|342,89,103,346|zero divisor null or error; decimal division is item 2's open case
+div|INTEGRAL,dec,IVL|bigint||semantics|30,104,103|zero divisor null or error
+%|NUM|same||hard|30,95,104,346,349|integral is semantics; floating remainder is fmod
+try_add|NUM,IVL,date|same||semantics|330,104,103,342,349|overflow gives null
+try_divide|double,dec,IVL|same||semantics|342,346|zero divisor gives null
+try_mod|NUM|same||hard|30,104,346|floating remainder is fmod
+try_subtract|NUM,IVL,date|same||semantics|330,104,103,342,349|overflow gives null
+try_multiply|NUM,IVL|same||semantics|330,104,103,342,349|overflow gives null
+shiftleft|int,bigint|same||plumbing|335|item 32; byte and short widen to int first
+shiftright|int,bigint|same||plumbing|335|item 32
+shiftrightunsigned|int,bigint|same||plumbing|335|item 32
+&|INTEGRAL|same||plumbing|335|item 32
+~|INTEGRAL|same||plumbing|335|item 32
+||INTEGRAL|same||plumbing|335|item 32
+^|INTEGRAL|same||plumbing|335|item 32
+<<|int,bigint|same||plumbing|335|alias of shiftleft
+>>|int,bigint|same||plumbing|335|alias of shiftright
+>>>|int,bigint|same||plumbing|335|alias of shiftrightunsigned
+bit_count|INTEGRAL,bool|int||plumbing|335|item 32; bigint narrows to int
+bit_get|INTEGRAL|byte||plumbing|335|item 32; the byte result was its blocker
+getbit|INTEGRAL|byte||plumbing|335|alias of bit_get
+add_months|date,int|date|date,int|done||
+datediff|date|int|date|done||
+date_diff|date|int|date|done||alias of datediff
+date_add|date,INTEGRAL|date|date,int|plumbing|329|byte and short offsets are new
+dateadd|date,INTEGRAL|date|date,int|plumbing|329|alias of date_add
+date_sub|date,INTEGRAL|date|date|plumbing|329|byte and short offsets, and int, are new
+day|date,ntz|int|date|plumbing|340|ntz through its date
+dayofyear|date,ntz|int|date|plumbing|340|ntz through its date
+dayofmonth|date,ntz|int|date|plumbing|340|ntz through its date
+hour|time,ntz|int|time|plumbing|340|ntz in UTC: a floor-mod of the micros
+last_day|date,ntz|date|date|plumbing|340|ntz through its date
+minute|time,ntz|int|time|plumbing|340|ntz in UTC
+month|date,ntz|int|date|plumbing|340|ntz through its date
+next_day|date,ntz|date|date|plumbing|340|ntz through its date
+quarter|date,ntz|int|date|plumbing|340|ntz through its date
+second|time,ntz|int,dec|time|plumbing|340,351|the fractional form is a decimal (row 157)
+time_diff|time|bigint|time|done||
+trunc|date,ntz|date|date|plumbing|340|ntz through its date
+dayofweek|date,ntz|int|date|plumbing|340|ntz through its date
+weekday|date,ntz|int|date|plumbing|340|ntz through its date
+weekofyear|date,ntz|int|date|plumbing|340|ntz through its date
+year|date,ntz|int|date|plumbing|340|ntz through its date
+make_date|int|date|int|done||
+make_time|int,dec|time||semantics|351|seconds arrive as DECIMAL(16,6)
+time_trunc|time|time|time|done||
+time_from_seconds|NUM|time||semantics|351,343|from a decimal or a double
+time_from_millis|INTEGRAL|time|bigint~|plumbing|329|byte and short widen
+time_from_micros|INTEGRAL|time|bigint~|plumbing|329|byte and short widen
+time_to_seconds|time|dec||plumbing|351,157|a DECIMAL(14,6) result
+time_to_millis|time|bigint|time|done||
+time_to_micros|time|bigint|time|done||
+make_timestamp_ntz|date,time,int,dec|ntz||semantics|340,351|the date and time form first; the six-field form takes decimal seconds
+try_make_timestamp_ntz|int,dec|ntz||semantics|351|null instead of an error
+make_dt_interval|int,bigint,dec|dt||semantics|351,103|seconds arrive as DECIMAL(18,6)
+make_ym_interval|int|ym|int~|done||
+extract|date,ntz,time,ym,dt|int,dec|date,ym|semantics|340,103,351|fields over ntz and dt are new; SECOND gives a decimal
+date_part|date,ntz,time,ym,dt|int,dec|date,ym|semantics|340,103,351|as extract
+datepart|date,ntz,time,ym,dt|int,dec|date,ym|semantics|340,103,351|as extract
+date_from_unix_date|int|date|int~|done||
+unix_date|date|int|date|done||
+time_bucket|IVL,ntz|ntz||semantics|339|a floor division of the micros by the bucket
+hash|ALL|int||semantics|337|Murmur3 over each column's bytes
+xxhash64|ALL|bigint||semantics|337|XxHash64 over each column's bytes
+cast|ALL|ALL||semantics|332,343,350,338,28|the matrix in m8/PLAN.md 2.2
+boolean|ALL|bool||semantics|332,343,350|cast alias
+tinyint|ALL|byte||semantics|332,343,350|cast alias
+smallint|ALL|short||semantics|332,343,350|cast alias
+int|ALL|int||semantics|332,343,350|cast alias
+bigint|ALL|bigint||semantics|332,343,350,28|cast alias
+float|ALL|float||semantics|343|cast alias
+double|ALL|double||semantics|343|cast alias
+decimal|ALL|dec||semantics|350|cast alias; DECIMAL(10,0) by default
+date|date,ntz|date||plumbing|340|cast alias; other sources are not legal casts
+time|time,ntz|time||plumbing|340|cast alias; TIME widening is fused today
+bitmap_bucket_number|bigint|bigint||plumbing|335|a division and an offset over a constant
+bitmap_bit_position|bigint|bigint||plumbing|335|a remainder over a constant
+
+[implicit]
+try_cast|Cast|conversion|ALL|ALL||semantics|332,343,350|the parser's TRY mode: null instead of an error
+in_set|InSet|predicate|ALL|bool|date|plumbing|333,341,348|IN over many literals
+date_minus_date|SubtractDates|datetime|date|dt||semantics|39|row 39: days times micros per day, exact
+ntz_minus_ntz|SubtractTimestamps|datetime|ntz|dt||semantics|339|plain long arithmetic in UTC, exact or raise
+time_minus_time|SubtractTimes|datetime|time|dt|time|done||
+time_plus_dt|TimeAddInterval|datetime|time,dt|time|time,dt~|done||
+date_plus_ym|DateAddYMInterval|datetime|date,ym|date|date,ym|done||
+datetime_sub|DatetimeSub|datetime|date,ntz,IVL|date,ntz|date,ym|plumbing|339|the wrapper over the subtraction forms
+ntz_plus_dt|TimestampAddInterval|datetime|ntz,dt|ntz||semantics|339|UTC, so plain arithmetic; exact or raise
+ntz_plus_ym|TimestampAddYMInterval|datetime|ntz,ym|ntz||semantics|339|calendar months on the date part
+timestampadd|TimestampAdd|datetime|bigint,ntz|ntz||semantics|339|units up to a week are arithmetic, months and years calendar
+ym_times_num|MultiplyYMInterval|interval|ym,NUM|ym|ym~,int~|semantics|103,329,342,349|the int factor is fused; rounding HALF_UP from fractions
+dt_times_num|MultiplyDTInterval|interval|dt,NUM|dt||semantics|103,342,349|checked multiply; HALF_UP from fractions
+ym_div_num|DivideYMInterval|interval|ym,NUM|ym||semantics|89,342,349|HALF_UP division
+dt_div_num|DivideDTInterval|interval|dt,NUM|dt||semantics|103,342,349|HALF_UP division
+extract_ym_years|ExtractANSIIntervalYears|interval|ym|int|ym|done||
+extract_ym_months|ExtractANSIIntervalMonths|interval|ym|byte||plumbing|329|matched today only to decline: its result is a byte
+extract_dt_days|ExtractANSIIntervalDays|interval|dt|int||plumbing|103|fused today only inside date + CAST(i AS INTERVAL DAY)
+extract_dt_hours|ExtractANSIIntervalHours|interval|dt|byte||plumbing|103|division by a constant
+extract_dt_minutes|ExtractANSIIntervalMinutes|interval|dt|byte||plumbing|103|division by a constant
+extract_dt_seconds|ExtractANSIIntervalSeconds|interval|dt|dec||plumbing|103,157|a DECIMAL(8,6) result
+check_overflow|CheckOverflow|decimal internals|dec|dec||semantics|349|null or error when a value leaves its precision
+make_decimal|MakeDecimal|decimal internals|bigint|dec||plumbing|349|a relabel of an unscaled long
+unscaled_value|UnscaledValue|decimal internals|dec|bigint||plumbing|349|a relabel to the unscaled long
+known_not_null|KnownNotNull|internals|ALL|same||plumbing|333|a relabel the optimizer adds
+known_fp_normalized|KnownFloatingPointNormalized|internals|FLOAT|same||plumbing|341|a relabel around NaN and -0.0 normalization
+try_eval|TryEval|internals|ALL|same||semantics|330,342,349|the try_ functions' wrapper: an error becomes null
