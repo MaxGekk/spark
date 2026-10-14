@@ -906,6 +906,35 @@ VARKA-22 extends the account to the SQL UI and to JDK Flight Recorder:
   `spark.sql.codegen.varka.emit.exactRefusalStatus=true` (internal, off by
   default), and the kernels it emits are cached apart from the default ones.
 
+VARKA-315 leaves a reproduction file behind a kernel failure, as the JVM leaves
+an `hs_err` file behind a crash:
+
+* **What writes one.** A kernel class that fails to verify or define, an
+  exception thrown inside a kernel, and a memory-sanitizer violation. Each
+  writes from the `catch` that already handles it and then falls back or fails
+  exactly as before; a file that cannot be written is a warning.
+* **What it holds.** The failure's signature (`VarkaFailureSignature`: its kind
+  and its message with the numbers taken out), the context record of the
+  warning, the shape key the class is built from - each output's canonical IR,
+  the counts, the emit options that differ from the defaults by name - the
+  literal values, the batch as the kernel read it (each input's values,
+  validity, null count and buffer capacity), and the class bytes. A batch over
+  `spark.sql.codegen.varka.reproduction.maxBatchBytes` keeps its shape and not
+  its values.
+* **Where it goes.** `varka-repro-<shape hash>-<kind>-pid<pid>-<token>.txt`
+  (the token is the JVM's own, since containers often run every executor as
+  pid 1) under `spark.sql.codegen.varka.reproduction.directory`, by default
+  `varka-reproductions` under the failing JVM's `java.io.tmpdir`, owner-only
+  since a batch is the query's data. One file per shape and kind per JVM, at
+  most 32 per JVM and 256 in the directory from all JVMs, and the warning
+  names the file. A projection's kernel and a filter's both write one.
+* **Replaying it.** `dev/varka_emit.sh --replay <file>` rebuilds the kernel from
+  the file's IR and options (refusing a file whose IR does not hash to its
+  shape hash), walks the failing path - verification, definition, or a run over
+  the batch under the sanitizer if the file says it was on - and exits 0 when
+  the failure reproduces with the same signature. It rebuilds the class rather
+  than running the bytes the file carries, so a fixed emitter stops reproducing.
+
 All of it is metadata or diagnostics: the emitted methods are byte-identical
 with and without the attributes, which the JVM ignores by specification.
 `VarkaDebugInfoReader` turns captured class bytes back into those strings.
@@ -1054,6 +1083,9 @@ All Varka configurations are internal:
 | :--- | :--- | :--- |
 | `spark.sql.codegen.varka.enabled` | `false` | When true, an eligible projection (at least one fusable entry) over Arrow `DateDayVector` columns runs the fused SIMD kernel instead of per-row codegen - as `VarkaProjectExec` where the consumer takes batches, and as `VarkaColumnarToRowExec` where it wants rows; ineligible entries run the row path per row and merge, and non-Arrow batches fall back entirely. |
 | `spark.sql.codegen.varka.classDumpDirectory` | (none) | Diagnostics (VARKA-16). When set, every emitted kernel class is written to this directory under its `SourceFile` name, for `javap`. A failed write is logged and never fails the query; every task of a shape holds identical bytes and overwrites one file. |
+| `spark.sql.codegen.varka.reproduction.enabled` | `true` | VARKA-315. A kernel class that fails to verify or define, an exception inside a kernel, or a memory-sanitizer violation writes one reproduction file, which `dev/varka_emit.sh --replay` runs again outside Spark (Telemetry and debuggability). The failure is handled as without it. |
+| `spark.sql.codegen.varka.reproduction.directory` | (none) | Where reproduction files go on the failing JVM; unset, `varka-reproductions` under its `java.io.tmpdir`. Created owner-only, since a file can hold a batch of the query's data. |
+| `spark.sql.codegen.varka.reproduction.maxBatchBytes` | `16m` | The most bytes of a failing batch's values a reproduction file holds; a larger batch keeps its row count, null counts and buffer sizes, and a replay runs a synthetic batch of that shape. `0` never writes values. |
 | `spark.sql.codegen.varka.emit.useAVX` | `-1` | The `-XX:UseAVX` level the emitter lowers for where a lowering depends on it (VARKA-121): `3` or above takes a 64-bit division through double lanes, `2` the magic-number form, because the converts do not become instructions below AVX-512; `-1` leaves the emitter's own default, which is deliberately not the host's level so the shape hashes and the committed bytes describe no one machine. The level is part of the shape hash, so a session that sets it emits and caches its own classes. For benchmarks and A/Bs. |
 | `spark.sql.codegen.varka.cache.maxEntries` | `100` | Static (VARKA-18). Capacity of the JVM-wide cache of loaded fused-kernel classes, keyed on the kernel's structural shape; the least recently used class is released on eviction, bounding Metaspace by this size. `0` restores the per-task emit-and-unload lifecycle. |
 | `spark.sql.codegen.varka.warmup.enabled` | `true` | VARKA-212. When true, a newly emitted kernel serves no batch until C2 has compiled it: the shape's batches take the per-row path while a background thread runs the kernel on a copy of the first batch, and every task of the shape switches to the kernel once it runs without allocating. When false, a new kernel serves batches from the first and runs interpreted until enough batches have gone through it. |

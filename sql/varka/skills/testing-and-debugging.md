@@ -1086,6 +1086,40 @@ signs each passed a check that compared Spark with itself:
 entry, no row `FilterExec` in the plan. And `EXPLAIN`'s first line above the Varka node says at a
 glance whether Spark kept part of the query.
 
+## A kernel failure leaves a file you can replay, and where each failure first surfaces
+
+*Added on 14 October 2026 by VARKA-315.* A kernel class that fails to verify or define, an
+exception inside a kernel and a memory-sanitizer violation each write a reproduction file
+(`VarkaReproduction`), and `dev/varka_emit.sh --replay <file>` replays it to the same
+`VarkaFailureSignature`. What the work found, which holds beyond the file:
+
+- **The canonical IR is a complete serialization of a kernel.** The shape hash is SHA-256 over
+  the outputs' canonical renderings, the counts and the options, and the cache serves one class
+  per hash, so the rendering already carries everything the bytes depend on.
+  `VarkaCanonicalIr.parse` reads it back and refuses any string its tree does not render to
+  again. Two components are not rendered on purpose: `ConstDivide`'s dividend bound (no byte
+  depends on it; the parser gives a long-lane division `EXACT_DIVIDEND_BOUND`, and the round-trip
+  test compares bytes to hold it to that) and `BoundedDivide`'s pair (`BoundedDivide.of` derives
+  it). A new node type fails that test until the parser has a case for it.
+- **A class the verifier rejects fails in two places.** Under test the plan-time admission
+  verifies the bytes it builds (`VarkaShapeCache.admit`, `verify = Utils.isTesting()`), and the
+  `VerifyError` is not `NonFatal`, so it leaves `VarkaSizeAdmission` and the compiler's
+  `catch (RuntimeException)` and fails the query on the driver. In production nothing is verified
+  at planning; `getConstructor()` in the cache's `emit` links the class and the error reaches the
+  evaluator's emission catch, an `emission-failure` fallback. A test of the production path cannot
+  get there through a query; `VarkaReproductionSuite` drives the definition directly.
+- **A sanitizer violation passes every catch.** `isCatchable` excludes it, so the runner rethrows
+  it unwrapped and `serveBatch` rethrows it before building any record. The one place it can be
+  written down is `runKernel`'s own `catch`, inside the window it came from.
+- **Plant a failure the file can replay with a fault-injector option, not a hook.** A test hook
+  (`setFailKernelForTesting`) is not in the shape key, so a file of its failure replays clean.
+  `misdescribeAdd` (a link failure), `misdescribeDataBytes` (negative: an
+  `IndexOutOfBoundsException` in the loop; positive: a violation under the sanitizer) and
+  `dropStackMaps` (a `VerifyError`) ride the key.
+- **Fill a replay's buffers before opening the sanitizer's window.** `VarkaSegments.map` is
+  checked inside a window, so a harness that registers its buffers and then writes their contents
+  through a mapping reports its own write as a violation.
+
 ## Cost predictions run optimistic: the calibration table
 
 *Added on 13 October 2026 from milestone 7's halfway review (`m7/PLAN.md` 9.2 and 9.5).* A plan
@@ -1100,7 +1134,8 @@ predicted. Add the line when the prediction is scored, whichever way it went.
 | VARKA-138b (6.1 #3) | the coverage differential at most twice as long | +47% by minimums, +55% after the review's fixes | 0.5 | 122 short tests, about 0.2 to 0.5 s each |
 | VARKA-274a (6.1 #2) | under 3 s per case for all histories | 3,623 ms median at the int lane, 1,356 ms at the long lane | 1.2 | long lane faster than predicted |
 | VARKA-274a (6.1 #8) | the tier witness adds under 5% | +19% (int) and +25% (long) per case; +6% on the whole test | 3.8 to 5.0 | one code-list read per call, about 3.5 ms, is most of it |
-| VARKA-271a (6.1 #6) | the Varka arm under 70 minutes in one JVM | 33 minutes beside the cache-only arm | 0.5 | the one pessimistic line so far |
+| VARKA-271a (6.1 #6) | the Varka arm under 70 minutes in one JVM | 33 minutes beside the cache-only arm | 0.5 | pessimistic |
+| VARKA-315 (6.1 #4) | the end-to-end suite under 30 s | 4.5 s of tests, 38 s with sbt's start | 0.15 | eight short queries over one cached view |
 
 What the table says so far: a check that adds a run per batch or a read per call costs more than
 the plan's arithmetic, because the arithmetic counts the kernel's work and not the harness's
