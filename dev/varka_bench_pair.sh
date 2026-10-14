@@ -92,7 +92,11 @@ fi
 made_worktree=0
 # The regeneration script overwrites the results file and its provenance in the tree it runs in.
 # They are put back after every run, and on any exit or interrupt: a file tracked at the tree's
-# commit is checked out, one that is not (a base older than the benchmark) is removed.
+# commit is checked out, one that is not (a base older than the benchmark) is removed. Only once
+# both trees have been checked clean (`touched`): an exit before that, such as the refusal of a
+# tree with uncommitted results, must leave those results alone, since keeping them is the
+# refusal's whole point; restoring them anyway once threw away a fresh regeneration.
+touched=0
 restore_files() {
   local tree="$1" path
   for path in "$wide" "$prov"; do
@@ -104,8 +108,10 @@ restore_files() {
   done
 }
 cleanup() {
-  [ -z "${base_dir:-}" ] || restore_files "$base_dir"
-  restore_files "$head_dir"
+  if [ "$touched" -eq 1 ]; then
+    [ -z "${base_dir:-}" ] || restore_files "$base_dir"
+    restore_files "$head_dir"
+  fi
   if [ "$made_worktree" -eq 1 ] && [ "$keep" -eq 0 ]; then
     git -C "$head_dir" worktree remove --force "$base_dir" > /dev/null 2>&1 || true
   fi
@@ -128,11 +134,16 @@ fi
 echo "base: $(git -C "$base_dir" log -1 --format='%h %s' | cut -c1-80) ($base_dir)"
 echo "head: $(git -C "$head_dir" log -1 --format='%h %s' | cut -c1-80) ($head_dir)"
 
+# Modified or untracked: an untracked results file (a class not yet committed) is removed by
+# restore_files as surely as a modified one is checked out.
 for tree in "$base_dir" "$head_dir"; do
-  git -C "$tree" diff --quiet HEAD -- "$wide" "$prov" 2> /dev/null \
-    || { echo "$tree has uncommitted changes to $wide or its provenance;" \
-           "commit or restore them" >&2; exit 1; }
+  if [ -n "$(git -C "$tree" status --porcelain -- "$wide" "$prov" 2> /dev/null)" ]; then
+    echo "$tree has uncommitted changes to $wide or its provenance;" \
+      "commit or restore them" >&2
+    exit 1
+  fi
 done
+touched=1
 
 # The regeneration script refuses above a load of 1.0, and the run before this one leaves its own
 # load behind for a minute, so each side waits for the one-minute average to fall (ten minutes at

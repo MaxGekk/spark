@@ -644,7 +644,11 @@ kernel, CPU, the probe's lanes and ratio; not for the class `*`) and returns bot
 artifact; `create-commit` is skipped with `pr`. With `pr` the scripts come from the workflow's own
 commit (`.varka-tooling`), the pull request's checkout gets no credentials, and the workflow's
 token is read-only except for the harness job, which `create-commit` needs. The pair script gained
-`--out DIR`, and its forced idle wait gives up after two minutes with a warning;
+`--out DIR`, and its forced idle wait gives up after two minutes with a warning; its refusal of a
+tree with uncommitted (or untracked) results no longer discards them on the way out - its exit
+trap restored both trees' files before the check had passed, which on 13 October threw away a
+fresh `VarkaEmissionBenchmark` regeneration - and a scratch-repository check reproduced the loss
+on the old script and its absence on the new;
 `dev/varka_bench_regen.sh` no longer hands `taskset` an unmatched glob on a machine with no
 cpufreq directory.
 
