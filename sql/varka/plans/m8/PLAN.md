@@ -242,7 +242,9 @@ Checked in the code on 14 October 2026:
   whatever the precision (`ArrowUtils.toArrowType` maps every decimal to `Decimal(p, s, 128)`,
   section 2.8).
 * **Mixed widths wait on `VARKA-28.md`.** Today an emission carries one lane and the IR refuses a
-  tree that mixes them, except where `NarrowLane` closes one known shape. Most of the cast matrix,
+  tree that mixes them, except for `NarrowLane`: a long value delivered as an int column, allowed
+  only as an output root and only over values proven to fit (the `TIME` field extracts), which
+  row 28 generalizes rather than replaces. Most of the cast matrix,
   the `TIMESTAMP_NTZ` calendar fields (a long dividing into the int32 calendar prefix) and every
   implicit promotion Catalyst inserts (`i + l` arrives as `CAST(i AS BIGINT) + l`) are mixed-width
   trees, so row 28 is wave 0 whatever the type order.

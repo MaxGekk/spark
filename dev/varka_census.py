@@ -422,6 +422,8 @@ def build():
 
 
 def row(section, name, cls, types, result, fused, need, rows, note, cov, errors):
+    if (name in CAST_ALIASES) != (types == "legal") and section != "implicit":
+        errors.append(f"{name}: a cast alias, and only one, takes its sources from legal()")
     if types == "legal":
         target = CAST_ALIASES[name]
         t = [src for src in ORDER if any(legal(src, target))]
