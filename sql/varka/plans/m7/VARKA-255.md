@@ -884,7 +884,7 @@ In `build_and_test.yml`, the `docs` job builds the Python and R API docs on a ru
 instead of reading the empty diff as no change, and the emitted-bytes step says a run of master
 has nothing to compare with. The checkout action is unchanged.
 
-**The review** (`/code-review high` on the branch's diff) found nine things; seven are fixed
+**The review** (`/code-review high` on the branch's diff) found nine things; eight are fixed
 above. A dispatch from another branch shared the group and would have taken a merge's pending
 slot and built that branch, hence the ref in the group and the job's `master` condition. The
 weekly set left out three PySpark groups, six of the pyspark job's ten module groups. The `docs`
