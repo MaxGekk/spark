@@ -1000,3 +1000,92 @@ one (a rename keeps its place; a split does not), and a NullAway suppression ove
 It also checks a class master has taken off the list since the branch began, so a branch behind
 master fails before the merge does. An intended finding is suppressed at its site with a `//`
 reason; no check is turned off for the whole pass.
+
+## A Varka suite in JUnit 5: `@VarkaSuite`, a sentence per test, and ScalaTest's lines
+
+VARKA-312. A catalyst suite can be a JUnit 5 class, and since then a new one whose helpers are
+Java is one (`sql/varka/AGENTS.md`). What to know when writing and running one:
+
+- **The class takes `@VarkaSuite`, each test a `@DisplayName` sentence.** The annotation registers
+  `VarkaSuiteExtension`, the JUnit face of what `VarkaTestWatchdog` gives a ScalaTest suite: the
+  matrix's skip list around each test, the watchdog inside it, the Arrow allocator check around
+  the class. `@Tag(VarkaSuite.PINS_DEFAULTS)` is `PinsDefaults`; `@VarkaSuite(watchdogMinutes = 0)`
+  runs with no watchdog and `@VarkaSuite(ownJvm = true)` is `VarkaOwnJvm`. The sentence is the
+  test's name in the printed lines, the JUnit XML, `skips.tsv` and `fused.tsv`, and the suite is
+  the class's simple name, so a skip-list line is written as for a ScalaTest test. The extension
+  fails the class before its tests run (an aborted suite) when two tests share one name, as
+  ScalaTest refuses them; when a test is not a plain `@Test` (`@ParameterizedTest`,
+  `@RepeatedTest`, `@TestFactory`: JUnit runs those past the interceptor that applies the skip list
+  and the watchdog, and names their invocations `[1] ...`); when the class holds `@Nested` classes;
+  and when it takes `@VarkaSuite` from a superclass only, since `dev/varka_matrix.sh` finds a Java
+  suite by the annotation in its own file.
+- **An own-JVM class.** In the shared JVM each test takes the child's result as it is: the skip
+  list, `PinsDefaults` and the watchdog act in the child only, a child's cancel keeps the child's
+  reason, and a class-level abort in the child (or a non-zero exit with no failure in its report)
+  fails the parent's tests. The child is limited to the class's `watchdogMinutes` less one, and
+  not at all for `0`.
+- **What prints the lines.** `VarkaSuiteListener`, registered in catalyst's test resources under
+  `META-INF/services`, prints `- <sentence>`, `*** FAILED ***`, `!!! CANCELED !!!` and
+  `!!! IGNORED !!!` for `@VarkaSuite` classes only and nothing for any other JUnit class. Under sbt
+  `jupiter-interface`'s `Test <class>#<method>() started` lines stay beside them, and sbt's
+  `Passed: Total N` summary replaces ScalaTest's. JUnit orders a class's tests by method name, not
+  by declaration as ScalaTest does, so the lines come in that order.
+- **How it runs outside sbt.** `dev/varka_matrix.sh` (so the gate and CI's scoped jobs) finds a
+  `@VarkaSuite` class named `Varka...Suite` in `src/test/java` and starts `VarkaSuiteRunner`: it
+  runs the ScalaTest suites through ScalaTest's Runner, then the JUnit classes through the Launcher,
+  writes `TEST-<class>.xml` for both, and prints one `Suites:` and one `Tests:` line over both,
+  last. The matrix's report reads the last of each, so a line printed after them would be read
+  instead. A `-z <text>` or `-t <name>` after a `-s` filters that suite's tests, as ScalaTest's
+  Runner does; for a JUnit class it is matched against the display names.
+- **A cancel is thrown, not decided.** The extension cancels by throwing opentest4j's
+  `TestAbortedException` from its interceptor; an `ExecutionCondition` would report the test
+  disabled, which is ScalaTest's "ignored". JUnit's failure, `AssertionFailedError`, is an `Error`,
+  so `VarkaMatrixRuns.Outcomes` takes factories of `Throwable`; Spark's checkstyle rejects
+  `throw new ...Error(`, so test code fails with `Assertions.fail(...)`.
+- **sbt runs nested classes alone.** It discovers every class with `@Test` methods, nested static
+  ones too, and Spark's catalyst job runs them. `VarkaSuiteHarnessSuite`'s fixtures therefore pass
+  when run alone and plant their failures only while a harness test runs them, through a Launcher
+  of its own with the `META-INF/services` listeners off, so the fixtures' lines and counts do not
+  reach the JVM's own.
+
+## A Varka node in the plan is not a kernel evaluating the expression
+
+*Added on 13 October 2026 from VARKA-138b (`m7/VARKA-138.md` 10.3 and 10.4).* A test that means
+to check what a kernel does with an expression has to show the kernel evaluated it. Three weaker
+signs each passed a check that compared Spark with itself:
+
+- **A Varka node in the plan.** The node can decline every batch, at run time, to the row path.
+- **`numVarkaBatches > 0`.** The rule splits a filter's conjuncts: in
+  `WHERE rid < 0 AND (year(d)) IS NOT NULL` the Varka filter held `rid < 0`, served its batch, and a
+  row `FilterExec` above it evaluated `isnotnull(year(d))` - Varka fuses no `IS NOT NULL` over a
+  computed value. 61 of 65 coverage rows looked served that way. A projection's equivalent is an
+  entry in `numResidualEntries`.
+- **A guard over a cached fixture.** `WHERE rid < 0` over an Arrow-cached view lets the in-memory
+  scan drop every batch on its column statistics before any Varka node runs, so the guarded side
+  meets no kernel; set `spark.sql.inMemoryColumnarStorage.partitionPruning=false` on both sessions.
+
+`VarkaCoverageDifferentialSuite.kernelServed` is the check: batches served, no residual projection
+entry, no row `FilterExec` in the plan. And `EXPLAIN`'s first line above the Varka node says at a
+glance whether Spark kept part of the query.
+
+## Cost predictions run optimistic: the calibration table
+
+*Added on 13 October 2026 from milestone 7's halfway review (`m7/PLAN.md` 9.2 and 9.5).* A plan
+predicts what its own checks will cost before it builds them, and the predictions scored so far
+in milestone 7 mostly came in low. One line per scored cost prediction, so the next plan can state
+its estimate at the ratio observed rather than at its hope; a ratio above 1 means it cost more than
+predicted. Add the line when the prediction is scored, whichever way it went.
+
+| task | predicted | measured | ratio | note |
+| --- | --- | --- | ---: | --- |
+| VARKA-138a (6.1 #2) | per-row coverage check at most 25% slower | +38% by minimums, +27% after the review dropped a redundant dense run | 1.5, then 1.1 | the fixed poisoned batch alone added about 27% of the work |
+| VARKA-138b (6.1 #3) | the coverage differential at most twice as long | +47% by minimums, +55% after the review's fixes | 0.5 | 122 short tests, about 0.2 to 0.5 s each |
+| VARKA-274a (6.1 #2) | under 3 s per case for all histories | 3,623 ms median at the int lane, 1,356 ms at the long lane | 1.2 | long lane faster than predicted |
+| VARKA-274a (6.1 #8) | the tier witness adds under 5% | +19% (int) and +25% (long) per case; +6% on the whole test | 3.8 to 5.0 | one code-list read per call, about 3.5 ms, is most of it |
+| VARKA-271a (6.1 #6) | the Varka arm under 70 minutes in one JVM | 33 minutes beside the cache-only arm | 0.5 | the one pessimistic line so far |
+
+What the table says so far: a check that adds a run per batch or a read per call costs more than
+the plan's arithmetic, because the arithmetic counts the kernel's work and not the harness's
+(loading, copying, reading the JIT's state); predict that overhead from a probe, not from the
+kernel's share.
+

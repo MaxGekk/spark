@@ -22,17 +22,19 @@
 #   dev/varka_golden_suite.sh --attribute              # and the cache-only arm over its failures
 #   dev/varka_golden_suite.sh --arm cacheOnly          # the Arrow source with Varka off
 #   dev/varka_golden_suite.sh --file date.sql --file interval.sql   # a few files only
-#   dev/varka_golden_suite.sh --fault misdescribeWordLiveness --file postgreSQL/date.sql
-#                                                      # the planted fault: served tests fail
+#   dev/varka_golden_suite.sh --fault misdescribeAdd --file date.sql
+#                                                      # the planted fault: date_add's tests fail
 #   dev/varka_golden_suite.sh --skip-build --out DIR   # reuse the last build's classpath
+#   dev/varka_golden_suite.sh --no-lift                # without lifting literals (VARKA-271.md 3.3)
 #
 # --file is a substring of the test name, ScalaTest's -z, and may repeat. --deadline SECS stops
 # each arm past that many seconds (default 7200). --attribute reruns the cache-only arm over the
 # tests the Varka arm failed: a test failing in both is the harness's, one failing only with
 # Varka on is Varka's. VARKA_GOLDEN_SUITE_REGEN=true in the environment rewrites
 # sql/varka/spark_suites/served.json from the run; the suite refuses unless it is the Varka arm
-# over every file with no fault planted. Until literals are lifted (271b) the fault that shows the
-# suite reaching Varka is misdescribeWordLiveness, under which every emission raises.
+# over every file with no fault planted. misdescribeAdd shows the suite reaching date_add through
+# the lifted literals; misdescribeWordLiveness, under which every emission raises, fails every test
+# Varka serves.
 #
 # The suite needs its own JVM: it sets the Arrow cache serializer, a process-wide field fixed at
 # first use. sbt builds once and exports the test classpath and JVM options, as
@@ -47,6 +49,7 @@ arm=varka
 build=1
 attribute=0
 fault=""
+lift=true
 deadline=7200
 files=()
 usage() { sed -n '18,/^[^#]/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
@@ -56,6 +59,7 @@ while [ $# -gt 0 ]; do
     --file) files+=("$2"); shift 2 ;;
     --fault) fault="$2"; shift 2 ;;
     --attribute) attribute=1; shift ;;
+    --no-lift) lift=false; shift ;;
     --deadline) deadline="$2"; shift 2 ;;
     --skip-build) build=0; shift ;;
     --out) OUT=$(realpath -m "$2"); shift 2 ;;
@@ -93,7 +97,7 @@ run_arm() {
   local start; start=$(date +%s)
   (cd "$dir" && SPARK_TESTING=1 SPARK_SCALA_VERSION=2.13 "$ROOT/dev/varka_deadline.sh" \
     "$deadline" java "${OPTS[@]}" -Xmx6g -Djava.io.tmpdir="$dir/tmp" \
-    -Dspark.test.home="$ROOT" -Dvarka.goldenSuite.arm="$which" \
+    -Dspark.test.home="$ROOT" -Dvarka.goldenSuite.arm="$which" -Dvarka.goldenSuite.lift="$lift" \
     -Dvarka.goldenSuite.servedOut="$dir/served.json" "${extra[@]}" \
     -cp "$CP" org.scalatest.tools.Runner -oW -u "$dir/junit" \
     -s org.apache.spark.sql.VarkaSQLQueryTestSuite "${filters[@]}" > "$dir/run.log" 2>&1)

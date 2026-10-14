@@ -214,18 +214,25 @@ public final class VarkaEmitterFixtures {
    * than the bytes its group occupies faults here rather than corrupting a neighbour. VARKA-47's
    * word writer needs whole words instead, which is what an Arrow destination buffer actually
    * carries (VarkaKernelEvaluatorSuite), so its arm asks for that size explicitly rather than
-   * widening every other test's guard. It starts all ones: the loop must zero it, and stale bits
-   * must not leak through.
+   * widening every other test's guard. Its validity starts at {@code fill} (VARKA-138): all ones
+   * catches a bit the kernel fails to clear, all zeros - what production's Arrow buffers hold -
+   * one it fails to set.
    */
-  public static Output makeOutput(Arena arena, int length, long validityBytes) {
+  public static Output makeOutput(Arena arena, int length, long validityBytes,
+      VarkaKernelChecks.ValidityFill fill) {
     MemorySegment data = alloc(arena, length * 4L);
     for (int i = 0; i < length; i++) {
       data.set(ValueLayout.JAVA_INT, i * 4L, 0xDEADBEEF);
     }
     MemorySegment validity =
         alloc(arena, validityBytes >= 0 ? validityBytes : (length + 7) / 8L);
-    validity.fill((byte) 0xFF);
+    validity.fill(fill.value());
     return new Output(data, validity);
+  }
+
+  /** {@link #makeOutput} with validity that starts all ones, as the suites' own cases use. */
+  public static Output makeOutput(Arena arena, int length, long validityBytes) {
+    return makeOutput(arena, length, validityBytes, VarkaKernelChecks.ValidityFill.ONES);
   }
 
   /** The destination validity bytes an emission under {@code options} needs. */
@@ -286,16 +293,22 @@ public final class VarkaEmitterFixtures {
 
   /**
    * {@link #makeOutput}'s twin at 64-bit lanes, with the same two assertions: data poisoned with
-   * a sentinel no case computes, and validity bytes that start all ones.
+   * a sentinel no case computes, and validity bytes that start at {@code fill}.
    */
-  public static Output makeLongOutput(Arena arena, int length) {
+  public static Output makeLongOutput(Arena arena, int length,
+      VarkaKernelChecks.ValidityFill fill) {
     MemorySegment data = alloc(arena, length * 8L);
     for (int i = 0; i < length; i++) {
       data.set(ValueLayout.JAVA_LONG, i * 8L, 0xDEADBEEFCAFEBABEL);
     }
     MemorySegment validity = alloc(arena, (length + 7) / 8L);
-    validity.fill((byte) 0xFF);
+    validity.fill(fill.value());
     return new Output(data, validity);
+  }
+
+  /** {@link #makeLongOutput} with validity that starts all ones. */
+  public static Output makeLongOutput(Arena arena, int length) {
+    return makeLongOutput(arena, length, VarkaKernelChecks.ValidityFill.ONES);
   }
 
   /** Runs a two-input kernel with one output, returning the batch status. */
@@ -497,7 +510,9 @@ public final class VarkaEmitterFixtures {
   /**
    * One of the three sweeps: the kernel for {@code roots} over every day of the narrow range, a
    * chunk at a time, each chunk's outputs handed to {@code check} with the chunk's first day and
-   * row count. A declined chunk fails.
+   * row count. A declined chunk fails. The input is every row valid; the outputs' validity is
+   * filled again before each chunk, at the two fills in turn (VARKA-138), and every row must read
+   * valid, so the sweep meets production's zero fill as well as ones at no extra run.
    */
   private static void sweep(List<VarkaVectorIR> roots, VarkaEmitOptions options,
       ChunkCheck check) {
@@ -515,8 +530,12 @@ public final class VarkaEmitterFixtures {
         outValidity[o] = outs[o].validity().address();
       }
       int day = VarkaChrono.NARROW_MIN_DAYS;
-      while (day <= VarkaChrono.NARROW_MAX_DAYS) {
+      var fills = VarkaKernelChecks.ValidityFill.BOTH;
+      for (int chunk = 0; day <= VarkaChrono.NARROW_MAX_DAYS; chunk++) {
         int n = Math.min(CHUNK, VarkaChrono.NARROW_MAX_DAYS - day + 1);
+        for (var out : outs) {
+          out.validity().fill(fills.get(chunk % fills.size()).value());
+        }
         for (int i = 0; i < n; i++) {
           data.set(ValueLayout.JAVA_INT, i * 4L, day + i);
         }
@@ -526,6 +545,17 @@ public final class VarkaEmitterFixtures {
         if (status != 0) {
           throw new IllegalStateException(status + " did not equal 0 the kernel declined an "
               + "in-range batch at day " + day);
+        }
+        // Every input row is valid and every swept root maps a valid day to a value, so every
+        // output row must read valid, whatever fill the chunk started at.
+        for (int o = 0; o < outs.length; o++) {
+          for (int i = 0; i < n; i++) {
+            if ((outs[o].validity().get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) == 0) {
+              throw new IllegalStateException("output " + o + " reads null at day " + (day + i)
+                  + " under " + options.canonical() + ", validity pre-filled with "
+                  + fills.get(chunk % fills.size()));
+            }
+          }
         }
         check.check(outs, day, n);
         day += n;

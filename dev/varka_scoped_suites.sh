@@ -30,8 +30,8 @@
 # times. The run records each test's fused batches too, which the option matrix's step
 # (dev/varka_matrix_ci.sh) takes instead of running the defaults again.
 #
-# The module's suite that measures the JIT rather than answers - VarkaAssemblySuite in catalyst,
-# VarkaWarmupEndToEndSuite in sql - runs after the others, alone and without the memory sanitizer,
+# The module's suites that measure the JIT rather than answers - VarkaAssemblySuite and
+# VarkaTierWitnessSuite in catalyst, VarkaWarmupEndToEndSuite in sql - run after the others, alone and without the memory sanitizer,
 # in target/varka-scoped-quiet, as the gate's quiet step runs them: beside the other JVM's suites
 # the warm-up test's kernel has stayed mostly uncompiled past its two minutes (VARKA-295.md 9.2),
 # and a rerun, restoring the same cached times, puts it beside the same suites again.
@@ -42,7 +42,7 @@ cd "$(dirname "$0")/.."
 module=${1:?usage: dev/varka_scoped_suites.sh catalyst|sql}
 extra=()
 case "$module" in
-  catalyst) timing=VarkaAssemblySuite ;;
+  catalyst) timing=VarkaAssemblySuite,VarkaTierWitnessSuite ;;
   sql) timing=VarkaWarmupEndToEndSuite
        extra=(--extra-suite
          sql:org.apache.spark.sql.execution.columnar.ArrowCachedBatchSerializerSuite) ;;

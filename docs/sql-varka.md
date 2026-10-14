@@ -1070,6 +1070,19 @@ exist.
   `Integer.MAX_VALUE`.
 * **Catalyst tests** check bytecode shape by disassembly, the loader
   define/release lifecycle, and ghost-fallback injection.
+  They are ScalaTest suites or, for a suite whose helpers are Java,
+  JUnit 5 classes under `@VarkaSuite`; both run under the same option
+  matrix, skip list and per-test watchdog, and a JUnit test is printed and
+  matched by its `@DisplayName` sentence as a ScalaTest test is by its name.
+* **Random kernels, in the code users run** (`VarkaIrFuzzSuite`,
+  `VarkaTierWitnessSuite`): the IR fuzzer compares random trees with a reference
+  evaluator row by row, each kernel once in the interpreter and the first 20
+  draws a lane again over eight batch histories - warmed until C2 has compiled
+  every loop, warmed on calls that never leave a remainder or a null column and
+  then given one (a trap back to the interpreter), recompiled after that trap,
+  and run cold with C1 on through on-stack replacements at both tiers. A JFR
+  stream and the code cache's method list say which JIT tier served each
+  compared call (VARKA-274).
 * **sql/core tests** (`VarkaColumnarToRowExecSuite`, `VarkaProjectExecSuite`,
   `VarkaFilterExecSuite`, `VarkaColumnarWriteSuite`, `VarkaEndToEndSuite`,
   `VarkaDifferentialSuite`, `VarkaCoverageDifferentialSuite`,
@@ -1077,6 +1090,24 @@ exist.
   `checkAnswer` equality over a query matrix - re-run warm so a cache hit is
   differentially checked too - `numVarkaBatches > 0` on fused plans,
   Metaspace bounds, and config-driven activation.
+* **Three stronger forms over every coverage row.** The kernel checks
+  poison every null lane, put a fixed batch with a poisoned lane in the loop
+  and the epilogue in front of each row's masked body, and run every
+  compared batch with the output validity pre-filled with zeros, as
+  production's Arrow buffers are, and with ones, so a kernel that fails to
+  set a bit fails as surely as one that fails to clear it.
+  `VarkaCoverageDifferentialSuite` checks each predicate row's three
+  partitions: `WHERE p` and `WHERE NOT (p)` on Varka share no row, and the
+  rows in neither are Spark's `WHERE (p) IS NULL`, compared as rows, under
+  the default optimizer and with `BooleanSimplification`,
+  `NullDownPropagation` and `InferFiltersFromConstraints` excluded so
+  `NOT (p)` reaches Varka as written. And under ANSI, on a fixture of the
+  types' extremes, each row runs alone and where Spark skips it - the
+  untaken arm of a CASE, a later COALESCE argument, the right side of a false
+  AND or a true OR: both engines raise the same error, compared by condition,
+  SQLSTATE and message parameters, or both answer the same rows. A skipped
+  position must be served by a kernel or be on the suite's declined list
+  with its reason.
 * **Spark's own date tests** (`VarkaGoldenCorpusSuite`) run the `select`
   statements of the golden-file inputs (`date.sql`, `interval.sql`,
   `extract.sql`, the timestamp and datetime files) on both engines, each
@@ -1089,7 +1120,9 @@ exist.
   Varka on, Spark's committed `.sql.out` files the oracle. A test-only
   extension puts an Arrow-cached copy under every relation with a column
   Varka reads, except under a command or a hidden metadata column, so the
-  queries reach the kernels; a second arm runs the same cache with Varka off,
+  queries reach the kernels, and lifts a `SELECT` with no `FROM` into a
+  relation of seventeen equal rows where the compiler fuses its literals as
+  columns; a second arm runs the same source with Varka off,
   so a failure in both is the harness's and one only with Varka on is
   Varka's. `sql/varka/spark_suites/excluded.tsv` says what the cache itself
   changes: the files whose `EXPLAIN` output prints plans, which then compare
