@@ -74,7 +74,11 @@
               files="src/main/java/org/apache/datasketches/memory/internal/ResourceImpl.java"/>
     <!-- A doc comment attached to no declaration: on for Varka's sources only, where a
          refactor found three blocks stacked on the wrong method (m8/SCOPE.md item 43).
-         Spark's own sources are not held to it here. -->
+         Spark's own sources are not held to it here. Varka's Java lives in packages
+         org.apache.spark.(...).varka, so the pattern looks for that package path below a
+         java/ source root. It is matched against the absolute path, so a bare `varka`
+         directory anywhere would not do: vecbricks/varka's runners check out into
+         /__w/varka/varka/, which exempted nothing there (VARKA-255.md 2.9). -->
     <suppress checks="InvalidJavadocPosition"
-              files="^(?!.*[\\/]varka[\\/]).*$"/>
+              files="^(?!.*[\\/]java[\\/]org[\\/]apache[\\/]spark[\\/](.*[\\/])?varka[\\/]).*$"/>
 </suppressions>
