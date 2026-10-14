@@ -24,6 +24,7 @@ import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryPoolMXBean;
 import java.util.ArrayDeque;
 import java.util.List;
+import java.util.TreeSet;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -328,6 +329,15 @@ public final class VarkaKernelWarmup {
   }
 
   static String jitState() {
+    return jitState(null);
+  }
+
+  /**
+   * {@link #jitState()}, and for {@code kernelClass} which of its methods have compiled code and at
+   * which tier ({@code Compiler.codelist}) and which have none. That is what tells a loop method
+   * the compiler never took from a compiled kernel that still allocates (VARKA-295).
+   */
+  static String jitState(Class<?> kernelClass) {
     var state = new StringBuilder("JIT: ");
     var compilation = ManagementFactory.getCompilationMXBean();
     if (compilation != null && compilation.isCompilationTimeMonitoringSupported()) {
@@ -353,7 +363,46 @@ public final class VarkaKernelWarmup {
     } catch (Exception | LinkageError e) {
       state.append("compile queue unavailable: ").append(e);
     }
+    if (kernelClass != null) {
+      appendKernelCode(state, kernelClass);
+    }
     return state.toString();
+  }
+
+  /**
+   * Appends the kernel class's compiled methods, one {@code id tier state name} each from
+   * {@code Compiler.codelist} (state 0 is in use, 1 not used, 2 not entrant), then the declared
+   * methods with no code in it at all. The list names classes, not loaders, so a shape emitted
+   * again under a new loader can show its predecessor's code too, not entrant by then.
+   */
+  private static void appendKernelCode(StringBuilder state, Class<?> kernelClass) {
+    try {
+      Object list = ManagementFactory.getPlatformMBeanServer().invoke(
+          new ObjectName("com.sun.management:type=DiagnosticCommand"), "compilerCodelist",
+          new Object[] {null}, new String[] {String[].class.getName()});
+      String prefix = kernelClass.getName() + ".";
+      var compiled = new TreeSet<String>();
+      var entries = new StringBuilder();
+      for (String line : String.valueOf(list).split("\\R")) {
+        // "<id> <tier> <state> <class>.<method>(<descriptor>) [<addresses>]"
+        String[] fields = line.strip().split(" ", 5);
+        if (fields.length >= 4 && fields[3].startsWith(prefix)) {
+          String method = fields[3].substring(prefix.length(), fields[3].indexOf('('));
+          compiled.add(method);
+          entries.append(fields[0]).append(" L").append(fields[1]).append(" s").append(fields[2])
+              .append(' ').append(method).append(", ");
+        }
+      }
+      var uncompiled = new TreeSet<String>();
+      for (var m : kernelClass.getDeclaredMethods()) {
+        if (!compiled.contains(m.getName())) {
+          uncompiled.add(m.getName());
+        }
+      }
+      state.append("kernel code: ").append(entries).append("no code: ").append(uncompiled);
+    } catch (Exception | LinkageError e) {
+      state.append("kernel code unavailable: ").append(e);
+    }
   }
 
   /** The most recent warm-ups' outcomes, oldest first. */
@@ -595,7 +644,7 @@ public final class VarkaKernelWarmup {
           }
           if (System.nanoTime() - deadline > 0) {
             warmth.release();
-            lastReleaseJitState = jitState();
+            lastReleaseJitState = jitState(kernel.getClass());
             why = "no compile after " + deadlineSeconds + " seconds; " + lastReleaseJitState;
             break;
           }

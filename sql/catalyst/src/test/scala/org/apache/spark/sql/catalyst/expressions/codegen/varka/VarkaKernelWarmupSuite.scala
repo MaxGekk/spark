@@ -258,6 +258,11 @@ class VarkaKernelWarmupSuite extends SparkFunSuite with VarkaTestWatchdog {
     assert(state.contains("compile time"), state)
     assert(state.contains("Code"), state)
     assert(state.contains("compile queue of"), state)
+    // Given a class, it also lists that class's compiled methods and the ones with no code:
+    // String's are compiled in any JVM that has run a test, and its rarely used ones are not.
+    val classState = VarkaKernelWarmup.jitState(classOf[String])
+    assert(classState.matches(".*kernel code: \\d+ L\\d s\\d \\w+, .*"), classState)
+    assert(classState.contains("no code: ["), classState)
   }
 
   test("a block is clean only within the allowance and a quarter of the first") {

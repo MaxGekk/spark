@@ -225,3 +225,83 @@ row reads "fix applied, cause contradicted": the deadline and the quiet step mad
 rarer without explaining it, and production still releases at 60 s when the kernel's loop
 methods stay out of the compiler's reach. What remains is to find why they do, from the JIT's
 own events in a failing JVM, before the test's wait or the verdict is changed.
+
+### 9.3 Three firings in the module's JVM, 14 October 2026
+
+The test failed three times on 14 October in "Build modules: sql - other tests", where it runs
+after some 750 other suites in one JVM: #803 (`varka-255a` at 8bbacddebd4) on its first run and on
+a rerun of that job, and #804 (`varka-sync-apache-1014` at 929a4ebf223, run 38503448829) on its
+first attempt, which passed on the rerun. The failing and passing jobs ran the suites in the same
+order. The three messages, each after the full 120 s:
+
+    calls=108420, queuedNanos=32462928, firstProbeBytes=7942928, lastProbeBytes=24816;
+    JIT: compile time 2983156 ms; CodeCache 72/128 MB; compile queue of 7 lines: Current
+    compiles: | | C1 compile queue: | Empty | | C2 compile queue: | Empty |
+
+    calls=108980, queuedNanos=93182403, firstProbeBytes=5882640, lastProbeBytes=20960;
+    JIT: compile time 2915004 ms; CodeCache 70/128 MB; compile queue of 8 lines: Current
+    compiles: | C2 CompilerThread0 ... sun.management.Util::newObjectName | ... | C2 compile
+    queue: | ... javax.management.ObjectName::<init> |
+
+    calls=108736, queuedNanos=22230628, firstProbeBytes=7942928, lastProbeBytes=24816;
+    JIT: compile time 3086651 ms; CodeCache 72/128 MB; compile queue of 7 lines: (both Empty)
+
+**They are 9.2's case, not 9.1's.** Nothing of the kernel's was queued: two queues are empty, and
+the third's only entries are the `ObjectName` methods the diagnostic itself was calling. The
+warm-up was not starved (18 to 93 ms in its own queue, some 108,000 calls) and the cache was not
+full. The compilers had been busy all along, about 3,000 s of compile time in a JVM about 70
+minutes old, but at the deadline they had nothing of this kernel to do.
+
+**What the bytes say.** Run on the laptop at the runner's width (`-XX:MaxVectorSize=32`), the
+first probe allocates 7,942,928 bytes, the same count as two of the failures, so the local and CI
+probes can be compared byte for byte. Excluding one method at a time from compilation
+(`-XX:CompileCommand=exclude`), with the test unchanged:
+
+| left uncompiled | verdict | last probe, bytes |
+|---|---|---|
+| nothing | COMPILED | 1,040 to 2,240 |
+| `run`, or every epilogue | COMPILED, from the four loops alone | 1,760 |
+| one light loop (`loopDense0` or `loopMasked0`) | RELEASED | 49,312 |
+| both light loops | RELEASED | 98,624 |
+| the heavy masked loop | RELEASED | 2,556,144 |
+
+An interpreted light loop allocates 24,656 bytes a call, and a probe makes two calls per driver.
+CI's 24,816 and 20,960, and section 9's 20,720, are about one such call per probe: not a compiled
+kernel with some residue left out of line (that is 1 to 2 KB), and not a light loop that never
+compiled (that is 49,312). 9.2's 270,576 is about eleven such calls' worth. So in every
+firing so far part of a light loop ran without compiled code while the compile queue was empty.
+Two readings fit, and the next firing tells them apart: a light loop that never compiled and is
+reached on one call in two (no `jdk.Compilation` event for it, no deoptimization), or compiled code
+that a frame leaves once a probe through a trap and finishes interpreted (deoptimizations on `run`
+or a light loop, thousands, all with one reason).
+
+**Not reproduced locally.** The 26 Varka suites that precede it in that JVM, then the suite, in one
+JVM on four cores: COMPILED in 0.24 s. All 754 suites that precede it in CI's order, then the
+suite, in one JVM on four cores (`taskset -c 0-3`), 14,709 tests, at 512 bits and again at 256:
+COMPILED both times, in 0.5 and 0.7 s, with compile ids near 936,000 and 945,000 against CI's
+979,000, so the local JVMs had aged about as much. What CI has that the laptop does not is not
+known.
+
+**What changed.**
+
+* The release-path state now lists the kernel class's compiled methods, from `Compiler.codelist`
+  (compile id, tier, state), and the methods with no code at all (`VarkaKernelWarmup.jitState`).
+  On a forced case it reads `no code: [..., loopDense0, ...]`.
+* The test records the JIT's events while it runs (`VarkaJitEvidence`: every compile, compile
+  failure, deoptimization and inlining decision, and the allocation samples, read back in two
+  streaming passes from a bounded recording) and its failure message carries, for the kernel's
+  class, each method's compiles with tier and outcome, the deoptimizations with their reasons, the
+  inlining C2 refused, the Vector API classes it inlined (a second one would be the species
+  pollution of `vector-api-and-width.md`), and where the warm-up thread's last 20 s of allocation
+  came from, each frame marked interpreted, compiled or inlined. On the forced case that reads
+  `loopDense0:1 (Interpreted)`. `-Dvarka.warmup.jitEvidence=always` logs it on a pass too.
+* `dev/varka_matrix_report.py` keeps 12,000 characters of a message line, for the longer message.
+
+**What is deliberately unchanged.** The test still fails the module's job. Cancelling it there, or
+running it only in the quiet step, would stop the failures without explaining them, which 3.2 and
+9.1 rule out; and the module's 70-minute JVM is the only place it has fired since faacde3cc9e,
+and the closest thing CI has to a long-lived executor. The cost is that an unrelated pull request
+can fail that job until a firing has been read; a rerun of the job has passed every time so far.
+Production still releases a kernel at 60 s when this happens, and with one light loop interpreted
+it then runs at most a few kilobytes a call above a compiled one, so the user-visible cost is the
+minute on the row path, not the kernel's speed afterwards.
