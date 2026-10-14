@@ -625,7 +625,7 @@ The milestones:
   gaps closed, the compiler ported to Java and refactored with no emitted byte
   moved, and CI that needs no laptop.
 * **Milestone 8**: *coverage* - the scope catalogue is in
-  [`sql/varka/plans/m8/SCOPE.md`](sql/varka/plans/m8/SCOPE.md),
+  [`sql/varka/plans/m9/SCOPE.md`](sql/varka/plans/m9/SCOPE.md),
   driven by a census of TPC-DS, TPC-H and the New York taxi benchmark. What that
   census says: `DateType`, the only type Varka has today, is 3.1% of the columns
   in TPC-DS and TPC-H; `DECIMAL` is the most-aggregated type and strings are 60%

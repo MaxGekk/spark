@@ -5,7 +5,7 @@ types, and more casts and expressions on the existing ones. The decisions in sec
 and fixed; this plan works inside them.*
 
 This is a task plan, not a scope catalogue. Under the house rule (`sql/varka/AGENTS.md`), the
-catalogue moved forward in the same pull request: what was `m8/SCOPE.md` is now
+catalogue moved forward in the same pull request: the catalogue that sat in this folder is now
 `m9/SCOPE.md`, with its item numbers unchanged, its reading note (`READING_LAYOUTS.md`) and the
 plans of the two rows it holds (`VARKA-64.md`, `VARKA-73.md`) beside it, and every inbound
 reference rewritten by `dev/varka_catalogue_move.sh 8 9`, which a later merge reruns. The items

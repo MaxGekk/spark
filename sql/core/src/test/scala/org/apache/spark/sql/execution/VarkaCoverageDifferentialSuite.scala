@@ -570,7 +570,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
    */
   private val ansiDeclined: Map[(String, String), String] = {
     val intCoalesce = "Varka's COALESCE takes only a bare date column before its last operand, " +
-      "and compiles no bare int column as a value (m8/SCOPE.md item 55)"
+      "and compiles no bare int column as a value (m9/SCOPE.md item 55)"
     val narrowed = "an int computed on the long lane is narrowed only at a kernel's store, so " +
       "it cannot sit under a CASE, a COALESCE or a comparison with an int (VARKA-28)"
     val intValued = Seq("datediff(d2, d)", "unix_date(d)", "year(d)", "month(d)", "day(d)",
@@ -582,17 +582,17 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
     // `CAST(i AS INTERVAL DAY)` throws past `INTERVAL_DAY_LIMIT_DAYS`, so the compiler puts a
     // bound on `i` that the evaluator checks before the kernel runs; the bound belongs to the
     // column, not to the arm reading it, and the extremes row's `Int.MaxValue` declines the
-    // batch wherever the expression sits (m8/SCOPE.md item 96).
+    // batch wherever the expression sits (m9/SCOPE.md item 96).
     val dayCast = "d + CAST(i AS INTERVAL DAY)"
     val columnBound = "the offset column's bound is checked per batch whichever arm reads it, " +
-      "and Int.MaxValue is past it, so the batch declines (m8/SCOPE.md item 96)"
+      "and Int.MaxValue is past it, so the batch declines (m9/SCOPE.md item 96)"
     // A check that condemns the batch - an overflow, a field out of range, a date leaving the
     // range the calendar lowering is exact over - is qualified by the condition of a CASE arm
     // it sits under (`guardUnderArm`), but not by the left side of an AND: the kernel computes
     // the right side on every lane, and the extremes row's lane condemns the batch although
-    // `rid < 0` already rejected it (m8/SCOPE.md item 96).
+    // `rid < 0` already rejected it (m9/SCOPE.md item 96).
     val unqualified = "a check on the right side of an AND condemns the batch from a lane the " +
-      "left side rejected (m8/SCOPE.md item 96)"
+      "left side rejected (m9/SCOPE.md item 96)"
     val checkedRight = Seq("make_date(2021, i, 1)", "add_months(d, i)", "d + ym", "d - ym",
       "ym - ymm", "i + 1", "year(d) + i")
     intValued.map(sql => (sql, CoalesceTail) -> intCoalesce).toMap ++
