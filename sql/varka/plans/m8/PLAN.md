@@ -20,10 +20,10 @@ behind a SQL configuration (2.7.1, row 345). The functions it covers are fused w
 bound, the one deliberate departure from bit-identical answers, recorded as such in
 `SCOPE_STANDARD_MODE.md`.*
 
-*Owner's decision, 14 October 2026, on decimals: precision 18 binds the inputs, every
-intermediate and the result type, as Spark's type rules compute them, and no per-batch value bound
-admits a wider declared type (2.8). TPC-H q6 at its specification's types is not fused by this
-milestone.*
+*Owner's decision, 14 October 2026, on decimals: milestone 8 supports `DECIMAL` up to precision
+38, an unscaled long up to precision 18 and a 128-bit lane pair above (2.8, rows 359 to 364). It
+replaces a rule of the same day that bound every decimal node to precision 18. Decimal division
+stays out.*
 
 *Owner's answers, 14 October 2026, to the plan's open questions: the math configuration defaults
 to on (2.7.1); `TIME` to `TIMESTAMP_NTZ` is in, its date a per-query constant (2.6); decimal
@@ -48,9 +48,10 @@ ones.**
 
 * **The type set.** The existing six, checked against the code above, plus seven new ones:
   `BOOLEAN`, `TINYINT` (`BYTE`), `SMALLINT` (`SHORT`), `FLOAT`, `DOUBLE`, `TIMESTAMP_NTZ` and
-  `DECIMAL` with precision at most 18. A decimal of higher precision declines.
+  `DECIMAL` up to precision 38, Spark's maximum, in two representations (an unscaled long up to
+  precision 18, a 128-bit lane pair above).
 * **Out of scope, owner's decision, 14 October 2026:** `STRING` itself and every cast to or from
-  it; `TIMESTAMP` with the local time zone; `DECIMAL` above precision 18.
+  it; `TIMESTAMP` with the local time zone. Decimal division is out too (2.8).
 * **The expressions:** "Explore all expressions, operators and functions which support existing
   and new types only. We should support most of them." Section 2.1 is that exploration, committed
   as a file a script regenerates, and 1.1 item 2 turns "most" into a number.
@@ -58,12 +59,14 @@ ones.**
 
 ### 1.1 Done when
 
-1. **The seven new types are read and written by kernels.** Each has a coverage row for a load, a
-   comparison, a choice and an output, its Arrow vector admitted by `isArrowBacked` and allocated
-   by `allocateVector`, the IR fuzzer and the Spark-level fuzzer drawing it (352), and the bytes
-   oracle unchanged for every existing shape at each lane's landing. The two representation
-   questions with machine-dependent answers are built both ways and measured, the losing arm kept
-   (329 for `BYTE` and `SHORT`, 347 for the decimal load path).
+1. **The seven new types are read and written by kernels, in eight representations** (`DECIMAL` as
+   an unscaled long up to precision 18 and as a 128-bit lane pair above). Each has a coverage row
+   for a load, a comparison, a choice and an output, its Arrow vector admitted by `isArrowBacked`
+   and allocated by `allocateVector`, the IR fuzzer and the Spark-level fuzzer drawing it (352), and
+   the bytes oracle unchanged for every existing shape at each lane's landing. The two
+   representation questions with machine-dependent answers are built both ways and measured, the
+   losing arm kept (329 for `BYTE` and `SHORT`, 347 for the decimal load path below precision 19,
+   359 for the lane pair's layout).
 2. **Most of the census is fused.** Of the 182 in-scope entries of `m8/census.tsv`, at least 122
    (two thirds) are fused for every type they admit, and of its 879 entry-and-type pairs at least
    660 (three quarters); every pair left unfused carries its reason in the census, each reason one
@@ -81,9 +84,10 @@ ones.**
    floating comparison, choice and `IN` (item 89 bullet 1's table against
    `SQLOrderingUtil.compareDoubles`); a zero divisor null under LEGACY and an error under ANSI for
    every numeric type; integral overflow wrapping at its own width under LEGACY and raising under
-   ANSI, `TINYINT` and `SMALLINT` included; decimal rescaling `ROUND_HALF_UP`, and decimal overflow
-   null under LEGACY and an error under ANSI; the ANSI form comparing error classes, as
-   `VARKA-138.md` built it, on every new type.
+   ANSI, `TINYINT` and `SMALLINT` included; decimal rescaling `ROUND_HALF_UP`, Spark's
+   precision-loss rule above precision 38 (363), and decimal overflow null under LEGACY and an error
+   under ANSI, at every precision up to 38; the ANSI form comparing error classes, as `VARKA-138.md`
+   built it, on every new type.
 5. **The math family is fused under the ULP contract** (345, 356 to 358): each of its 27 entries
    states its bound per host library (SVML at AVX-512, SVML at AVX2, SLEEF on NEON) in the coverage
    table and the user support table, its test oracle compares within that bound, it is gated by
@@ -229,16 +233,16 @@ the two can differ, so 350 guards the bound and declines a batch outside it.
 
 **How each pair is proven** is by its source, since the source's width is what makes exhaustion
 possible: every value of a `BOOLEAN`, `TINYINT`, `SMALLINT`, `INT`, `DATE` or year-month interval,
-and every bit pattern of a `FLOAT` (2^32 of them), is tried against Spark's own `Cast` - 62 pairs.
-A 64-bit integer source (`BIGINT`, day-time interval, `TIME`, `TIMESTAMP_NTZ`, the unscaled
-decimal) cannot be exhausted, but where the rule is an integer one - a wrap, a range check, a
-multiply by a power of ten, a division by a unit, 32 pairs - it is what milestone 7's SMT proofs
-state (`VARKA-240.md`, `VARKA-241.md`), so each is proven there over the whole domain, beside
-sampled regions and the fuzzer. The other 12 - a `DOUBLE` source, and a 64-bit source rounding to
-`FLOAT` or `DOUBLE` - get sampled regions (both zeros, NaN, the infinities, the subnormals, each
-integral boundary and its neighbouring values) and the fuzzer: `VARKA-241.md` found
-floating-point theory does not decide in useful time. Seven pairs are fused today, each in
-part (the note column says which part).
+and every bit pattern of a `FLOAT` (2^32 of them), is tried against Spark's own `Cast` - 62 pairs. A
+64-bit integer source (`BIGINT`, day-time interval, `TIME`, `TIMESTAMP_NTZ`, the unscaled decimal,
+which above precision 18 is 128 bits) cannot be exhausted, but where the rule is an integer one - a
+wrap, a range check, a multiply by a power of ten, a division by a unit, 32 pairs - it is what
+milestone 7's SMT proofs state (`VARKA-240.md`, `VARKA-241.md`), so each is proven there over the
+whole domain, beside sampled regions and the fuzzer. The other 12 - a `DOUBLE` source, and a 64-bit
+source rounding to `FLOAT` or `DOUBLE` - get sampled regions (both zeros, NaN, the infinities, the
+subnormals, each integral boundary and its neighbouring values) and the fuzzer: `VARKA-241.md` found
+floating-point theory does not decide in useful time. Seven pairs are fused today, each in part (the
+note column says which part).
 
 ### 2.3 What the lane model has, and what each new type asks of it
 
@@ -428,81 +432,98 @@ returning a `BIGINT` through the saturating conversion Spark uses. `round`, `bro
 `truncate` over a double go through `BigDecimal` in Spark, and a floating `%` is `fmod`; those are
 the hard entries, and 346 records for each an exact construction or the reason it declines.
 
-### 2.8 `DECIMAL` up to precision 18 (347 to 351, 157)
+### 2.8 `DECIMAL` up to precision 38 (347 to 351, 157, 359 to 364)
 
-Items 1 and 2 are the design input. What this plan adds is the owner's precision rule and the
-load-path choice.
+Items 1 and 2 are the design input. *Owner's decision, 14 October 2026: milestone 8 supports
+`DECIMAL` up to precision 38, Spark's maximum, with a 128-bit physical representation above
+precision 18.* It replaces the same day's rule that bound every node to precision 18; decimal
+division stays out.
 
-**Representation.** A decimal of precision at most 18 is an unscaled long - the long lane - and
-its scale rides on the Spark type, as a year-month interval's unit does. Spark's own column vectors
-store precision up to 9 as an int and up to 18 as a long; Arrow stores every decimal as 128 bits,
-so the Arrow-backed column a kernel reads is pairs of longs.
+**Two representations.** Spark's maximum precision is 38 (`DecimalType.MAX_PRECISION`), and
+`10^38 - 1` is below `2^127`, so every Spark decimal's unscaled value fits a 128-bit two's
+complement integer. Its scale rides on the Spark type, as a year-month interval's unit does.
 
-**The load path is a measurement, built both ways (347).** Item 1's de-interleave - two loads and
-an even-lane shuffle per output vector, or a compress where it intrinsifies - with the high word
-checked against the sign of the low one, a mismatch declining the batch; against a cache layout in
-which `ArrowCachedBatchSerializer` writes a decimal of precision up to 18 as its unscaled long (or
-int up to 9), which the kernel loads like a `BIGINT` and the row path reads through a column vector
-that rebuilds the `Decimal`. The cache arm changes a file format, so it carries a version tag the
-serializer checks; the de-interleave serves every other Arrow source (Python, a columnar reader)
-either way. Item 1 asked for exactly this measurement first, since the whole decimal case rests on
-it. Row 157 is the output's mirror: the store that writes the value word and its sign extension
-into each sixteen-byte slot. A precision-up-to-9 decimal on the int lane is a third arm 347
-measures.
+* **Precision up to 18: an unscaled long**, on the long lane, read by 347's three arms below.
+* **Precision 19 to 38: a lane pair** - two long lanes, the low words and the high words, a value
+  occupying one lane of each. Widening from the 64-bit form is sign extension of the low word into
+  the high one. A 512-bit register then holds four values' worth of a pair (eight low words in one
+  register, eight high words in another), half the long lane's density.
 
-**The precision rule binds every node: owner's decision, 14 October 2026.** Precision 18 binds
-the inputs, every intermediate and the result type, as Spark's type rules compute them, and no
-per-batch value bound admits a wider declared type - so item 89 bullet 6's runtime bound (the long
-product is exact when both unscaled operands fit 32 bits in the batch) is not taken. What that
-declines, plainly:
+**What Arrow holds.** `ArrowUtils.toArrowType` maps every decimal to `Decimal(p, s, 128)`: sixteen
+bytes a value, little-endian two's complement, the low word first. For precision above 18 those
+are the value as it is, so no high-word guard is needed - but the words are interleaved in memory,
+so the lane pair is still built by a de-interleave (two loads and two even and odd lane selections,
+the shuffle 347's first arm uses for the low word alone) and stored by the inverse interleave; the
+alternative of computing on adjacent lanes moves every carry across a lane instead, and 359 picks
+by measurement.
 
-* **Products.** `DECIMAL(p1, s1) * DECIMAL(p2, s2)` is `DECIMAL(p1 + p2 + 1, s1 + s2)`, so a product
-  fuses only when `p1 + p2 <= 17`. `DECIMAL(10, 2) * DECIMAL(10, 2)` is `DECIMAL(21, 4)` and
-  declines. **TPC-H q6 at its specification's types is not fused by milestone 8**: its
-  `l_extendedprice * l_discount` over `DECIMAL(15, 2)` is `DECIMAL(31, 4)`. (This tree's own
-  benchmark schema declares `DECIMAL(10, 0)`, which still exceeds the rule's product bound.)
-* **Sums and differences.** The result is `max(p1 - s1, p2 - s2) + max(s1, s2) + 1` digits, so two
-  operands at precision 18, or any pair whose integer and fraction digits together reach 18,
-  decline; `DECIMAL(17, s) + DECIMAL(17, s)` is the widest that fuses at equal scales.
-* **Quotients.** `s = max(6, s1 + p2 + 1)` and `p = p1 - s1 + s2 + s`, so only small operands stay
-  under 18 (`DECIMAL(5, 2) / DECIMAL(5, 2)` is `DECIMAL(13, 8)`); decimal division is out of the
-  milestone in any case (below).
-* **Integral operands meet decimals at their decimal width.** Type coercion turns a `TINYINT`,
-  `SMALLINT`, `INT` or `BIGINT` met by a decimal into `DECIMAL(3, 0)`, `(5, 0)`, `(10, 0)` or
-  `(20, 0)`. So **every arithmetic or comparison between a `BIGINT` and a decimal declines**, its
-  coerced side being `DECIMAL(20, 0)`; an `INT` times a `DECIMAL(p, s)` fuses only for `p <= 7`.
-* **The census and the casts.** The census counts a type, not a precision, so no entry or pair
-  leaves it: an entry's decimal pair counts fused when it fuses for every declared precision whose
-  result the rule admits, and declines with this reason for the rest. Of the census's in-scope
-  entries, the ones that meet the rule as a limit are the decimal arithmetic (`+`, `-`, `*`, `/`,
-  `%`, `mod`, `pmod`, `div` and the `try_` forms), the comparisons and `IN` between a decimal and an
-  integral or decimal of other width (through coercion), `CheckOverflow`, and the interval
-  products and quotients by a decimal factor. In the cast matrix every pair's target is a type in
-  the set, so no legal pair leaves; what declines is a cast to a decimal type above 18, already out
-  of the set, and the implicit `BIGINT`-to-`DECIMAL(20, 0)` coercion above. The functions with
-  decimal results all stay inside: `time_to_seconds` is `DECIMAL(14, 6)`, `extract(SECOND FROM dt)`
-  `DECIMAL(8, 6)`, `make_time`'s seconds `DECIMAL(16, 6)`, `make_dt_interval`'s `DECIMAL(18, 6)`.
-* **The done-when shares do not change**: 1.1 item 2 counts entries and pairs by type, and its
-  targets stand; the declines above are reasons the census records.
+**The load path below 19 is a measurement, built three ways (347).** Item 1's de-interleave - two
+loads and an even-lane shuffle per output vector, or a compress where it intrinsifies - with the
+high word checked against the sign of the low one, a mismatch declining the batch; against a cache
+layout in which `ArrowCachedBatchSerializer` writes a decimal of precision up to 18 as its unscaled
+long (or int up to 9), which the kernel loads like a `BIGINT` and the row path reads through a
+column vector that rebuilds the `Decimal`; and the int lane for precision up to 9. The cache arm
+changes a file format, so it carries a version tag the serializer checks; the de-interleave serves
+every other Arrow source (Python, a columnar reader) either way. Row 157 is the output's mirror:
+the store that writes the value word and its sign extension into each sixteen-byte slot.
 
-**Semantics, ANSI and LEGACY.** Under the rule, decimal `+`, `-` and `*` cannot overflow: the
-result precision Spark picks (`max(p1 - s1, p2 - s2) + max(s1, s2) + 1` for a sum, `p1 + p2 + 1`
-for a product) holds every exact result of operands within their precisions, and
-`spark.sql.decimalOperations.allowPrecisionLoss` changes a type only above precision 38. So the two
-modes agree, provided the inputs respect their precisions - which the load checks, as one range
-compare per lane group, a violation declining the batch. 349 proves the claim per operator over
-every precision pair up to 18 by the SMT tooling, and the rescale to a common scale (a multiply by
-`10^k`, constant per node) with it. What can overflow is a cast to a smaller precision (null under
-LEGACY and TRY, `NUMERIC_VALUE_OUT_OF_RANGE` under ANSI), and what rounds is a cast to a smaller
-scale: `ROUND_HALF_UP`, which on an unscaled long is an add of half the divisor away from zero and
-a truncating division by `10^k`, a constant division the long lane's proven forms serve (350).
-**Decimal division is out of milestone 8: owner's decision, 14 October 2026.** Its result often
-stays under precision 18, but `u1 * 10^k` does not fit a long in general, and item 2 had already put
-it out of a first pass. `/`, `try_divide` and `div` over decimals decline with the reason "owner's
-decision, 14 October 2026"; the census records the three pairs in its reason column and leaves them
-out of the done-when denominator. No cast is affected: a cast to a smaller decimal scale divides by
-a power of ten, which is the rounding rescale 350 builds, not the division operator. Decimal `%`,
-`mod` and `pmod` are remainders, not quotients, and stay in.
+**What the row path costs, and why the speed-up is expected large.** Spark's row path reads an
+Arrow decimal through `ArrowColumnVector`'s `DecimalAccessor`, which is
+`Decimal.apply(accessor.getObject(rowId), precision, scale)`: a `java.math.BigDecimal` built per
+value and kept as the `Decimal`'s `decimalVal`, at every precision, not only above 18. Arithmetic
+on such a `Decimal` is `BigDecimal` arithmetic, allocating per value. A kernel over unscaled lanes
+allocates nothing per value, so the largest speed-ups of the milestone are expected here,
+especially above precision 18 where the result is also a `BigDecimal`. **Unmeasured**: no number is
+claimed until 347 and 359 commit one.
+
+**What 128 bits change.**
+
+* **TPC-H q6's product fuses**: `l_extendedprice * l_discount` over the specification's
+  `DECIMAL(15, 2)` is `DECIMAL(31, 4)`, a 64 by 64 to 128-bit multiply (361). Its `sum()` is an
+  aggregate and stays Spark's in this milestone, so q6 as a query is still not Varka's end to end.
+* **A `BIGINT` meets a decimal at `DECIMAL(20, 0)`** under type coercion (`DecimalType.LongDecimal`;
+  `TINYINT`, `SMALLINT` and `INT` meet it at precision 3, 5 and 10), so `BIGINT`-with-decimal
+  arithmetic and comparison now fuse through the widening casts of 360.
+* **Precision loss.** With `spark.sql.decimalOperations.allowPrecisionLoss` true, the default, a
+  result type above 38 is capped by `DecimalType.adjustPrecisionScale`: precision 38, scale `max(38
+  - intDigits, min(scale, 6))`, the value rounded `ROUND_HALF_UP` to that scale. A product of two
+  wide decimals is exact only in 256 bits before that rounding, so 362 and 363 carry the cases a
+  128-bit lane pair cannot hold whole: a full 128 by 128 product, and a rounding division of a
+  128-bit (or 256-bit) value by `10^k` by a magic-number multiply with a 256-bit product. Both may
+  decline cases with a recorded reason where a construction or its proof does not hold; the plan
+  targets them.
+
+**What the Vector API offers for it**, checked in JDK 25.0.4's `VectorOperators`: unsigned
+comparisons (`ULT`, `ULE`, `UGT`, `UGE`), so a sum's carry is `ULT(lo, a.lo)`; unsigned `UMIN`,
+`UMAX` and saturating `SUADD`; `ZERO_EXTEND_I2L`; shifts and masks. There is **no multiply-high on
+any lane type**, and `MUL` on a `LongVector` keeps the low 64 bits. So a 64 by 64 to 128-bit product
+is built from 32-bit limbs: each operand's halves (`LSHR` by 32, `AND` with `0xFFFFFFFF`), four
+limb products by `LongVector` `MUL` of operands below `2^32`, each exact in 64 bits, and the
+partial sums carried with the unsigned compare. On AVX-512, `VPMULLQ` is the full 64-bit low
+product and `VPMULUDQ` the 32 by 32 to 64 one the limbs want; whether C2 selects `VPMULUDQ` for a
+`MUL` whose operands are masked to 32 bits is not known and 361 reads it with `dev/varka_emit.sh
+--asm` before it claims a cost.
+
+**Semantics, ANSI and LEGACY.** A result that overflows its type (`CheckOverflow`: more digits than
+`p - s` in the integer part) is null under LEGACY and TRY and `NUMERIC_VALUE_OUT_OF_RANGE` under
+ANSI; for the 64-bit form with a result within precision 18 that cannot happen, and 349 proves it,
+while the lane pair checks against `10^p` per lane group (359). A cast to a smaller scale rounds
+`ROUND_HALF_UP`: on an unscaled value, an add of half the divisor away from zero and a truncating
+division by `10^k`, a constant division the long lane's proven forms serve below 19 (350) and 363's
+magic-number multiply above. Decimal to integral truncates toward zero and keeps the low bits under
+LEGACY (`Decimal.toLong` is `BigDecimal.longValue`), raising under ANSI.
+
+**Decimal division is out of milestone 8: owner's decision, 14 October 2026.** `/`, `try_divide`
+and `div` over decimals decline with the reason "owner's decision, 14 October 2026"; the census
+records the three pairs in its reason column and leaves them out of the done-when denominator. No
+cast is affected: a cast to a smaller decimal scale divides by a power of ten, which is the rounding
+rescale 350 and 363 build, not the division operator. Decimal `%`, `mod` and `pmod` are
+remainders, not quotients, and stay in.
+
+**The census and the casts.** Both count the decimal as one type, so the move from 18 to 38 changes
+no count: the census still has 879 pairs, 68 of them decimal, and the cast matrix 106 legal pairs.
+What changes is that a decimal pair counts fused only when it fuses at every precision up to 38,
+both representations, which is what rows 359 to 364 are for; the decimal entries' rows say so.
 
 ### 2.9 The existing types
 
@@ -536,9 +557,9 @@ windows; PR CI runs a fixed sampled slice of each.
 ### 2.11 The post
 
 *One engine, every number* is for JVM and database engineers, as milestone 7's own post was, and it
-is built from the census rather than from a benchmark: the share it states is 1.1 item 2's, per
-type and per family, and its substance is how a kernel can be shown to agree with Spark across
-thirteen types - exhaustion where the width allows, SMT for 64-bit integer rules, the fuzzers for
+is built from the census rather than from a benchmark: the share it states is 1.1 item 2's, per type
+and per family, and its substance is how a kernel can be shown to agree with Spark across thirteen
+types - exhaustion where the width allows, SMT for 64- and 128-bit integer rules, the fuzzers for
 the rest, and the cases declined with their reasons. Whether a per-type benchmark joins it is
 decided later by the owner (section 7).
 
@@ -580,12 +601,18 @@ catalogue keep theirs. Sizes are the house's small, medium and large.
 | 357 | The hyperbolic functions under the contract: `sinh`, `cosh`, `tanh`, and Spark's formulas for `asinh`, `acosh`, `atanh`. **Done when** each fuses within its stated bound, the formulas reproduced term by term | items 35, 36 | medium |
 | 358 | The exponential, logarithmic, power and root functions under the contract: `exp`, `expm1`, `log` (one and two arguments), `ln`, `log10`, `log1p`, `log2`, `pow`, `power`, `cbrt`, `hypot`. **Done when** each fuses within its stated bound, `log10` at its two units | items 35, 36 | medium |
 | 346 | The hard entries: floating `round`, `bround`, `truncate`, `%`, `pmod` and `try_mod`, floating to decimal. **Done when** each has an exact construction fused with its proof or a recorded reason to decline, in the census | this plan, 2.7 and 2.8 | small |
-| 347 | The decimal load path, built three ways (for declared precisions up to 18; no wider type admitted by a value bound): the de-interleave (shuffle, and compress where it intrinsifies) with the high word checked, an unscaled-long cache layout for precision up to 18, and the int lane for precision up to 9. **Done when** all three read a decimal column with coverage rows, the measurement is committed per width with its verdict, and the arms that lose stay behind the option | items 1, 89 bullet 6 without its runtime bound | large |
+| 347 | The decimal load path for precision up to 18, built three ways: the de-interleave (shuffle, and compress where it intrinsifies) with the high word checked, an unscaled-long cache layout for precision up to 18, and the int lane for precision up to 9. **Done when** all three read a decimal column with coverage rows, the measurement is committed per width with its verdict, and the arms that lose stay behind the option | items 1, 89 bullet 6 without its runtime bound | large |
 | 157 | The widening store: a decimal output as its value word and sign extension in each sixteen-byte slot. **Done when** `m5/PLAN.md` 2.93's list holds | catalogue item 39 table; `m5/PLAN.md` 2.93 | small |
-| 348 | Decimal comparisons, choice, `IN`, null tests, negation and `abs`, at equal and at unequal scales (a constant rescale proven to fit the long), declining every pair whose common type exceeds precision 18, a `BIGINT` operand's `DECIMAL(20, 0)` included. **Done when** each fuses, the load's precision check declining an out-of-precision batch | items 1, 2 | medium |
-| 349 | Decimal `+`, `-` and `*` under the precision rule, with `CheckOverflow`, `MakeDecimal` and `UnscaledValue`. **Done when** each fuses for every operand pair whose inputs, coerced operands and result stay within precision 18 and declines the rest with the rule as its reason (no value bound admits a wider type), the no-overflow claim and the rescales proven by SMT over every precision pair, LEGACY and ANSI giving the same bytes | item 2 | medium |
-| 350 | The decimal casts, to and from decimal types up to precision 18: to and from integral types, decimal to decimal (`ROUND_HALF_UP`, overflow null or raised), to and from `BOOLEAN`, to floating under the 2^53 guard. **Done when** every decimal pair of `m8/casts.tsv` fuses or is a recorded hard entry, the integer rules proven by SMT | this plan, 2.2 and 2.8 | medium |
-| 351 | Decimals in the existing types' functions, all of whose decimal types are within precision 18: `time_to_seconds`, `second` with its fraction, `extract(SECOND FROM dt)`, `make_time`, `make_dt_interval` and `make_timestamp_ntz` over decimal seconds, `time_from_seconds` over a decimal, `floor`, `ceil`, `round`, `bround` and `truncate` over a decimal. **Done when** each fuses with a coverage row | `m5/PLAN.md` 2.93; items 1, 2 | medium |
+| 348 | Decimal comparisons, choice, `IN`, null tests, negation and `abs`, at equal and at unequal scales (a constant rescale proven to fit the long), for operands whose common type stays within precision 18; wider ones are 359's. **Done when** each fuses, the load's precision check declining an out-of-precision batch | items 1, 2 | medium |
+| 349 | Decimal `+`, `-` and `*` in the 64-bit form, with `CheckOverflow`, `MakeDecimal` and `UnscaledValue`. **Done when** each fuses for every operand pair whose result stays within precision 18 (wider results are 360 to 362's), the no-overflow claim and the rescales proven by SMT over every precision pair, LEGACY and ANSI giving the same bytes | item 2 | medium |
+| 350 | The decimal casts in the 64-bit form (both sides within precision 18): to and from integral types, decimal to decimal (`ROUND_HALF_UP`, overflow null or raised), to and from `BOOLEAN`, to floating under the 2^53 guard. **Done when** every decimal pair of `m8/casts.tsv` fuses or is a recorded hard entry, the integer rules proven by SMT | this plan, 2.2 and 2.8 | medium |
+| 351 | Decimals in the existing types' functions, all of whose decimal types are within precision 18, and the rounding functions over a decimal of either form: `time_to_seconds`, `second` with its fraction, `extract(SECOND FROM dt)`, `make_time`, `make_dt_interval` and `make_timestamp_ntz` over decimal seconds, `time_from_seconds` over a decimal, `floor`, `ceil`, `round`, `bround` and `truncate` over a decimal. **Done when** each fuses with a coverage row | `m5/PLAN.md` 2.93; items 1, 2 | medium |
+| 359 | The 128-bit lane pair: a decimal of precision 19 to 38 as low-word and high-word long lanes in the IR and the emitter, `Decimal128` loaded by a de-interleave and stored by the inverse (or computed on adjacent lanes, by measurement), comparisons (the high words signed, the low words unsigned), `IN`, choice, null tests, negation and `abs` with their borrow, and the `10^p` overflow check per lane group. **Done when** each fuses at every precision from 19 to 38 with coverage rows, the comparisons and the `10^p` check proven by SMT over 128-bit bit-vectors, and the bytes oracle unchanged for every 64-bit shape | this plan, 2.8 | large |
+| 360 | 128-bit add and subtract with the carry from an unsigned compare, and the widening casts: a 64-bit decimal to the lane pair by sign extension, and an integral to `DECIMAL(3, 0)`, `(5, 0)`, `(10, 0)` or `(20, 0)` as type coercion inserts them, so a `BIGINT` with a decimal fuses. **Done when** each fuses in the three modes with `CheckOverflow`'s `10^p` check, the carry and the sign extension proven by SMT over 128-bit bit-vectors | this plan, 2.8 | medium |
+| 361 | The widening multiply: two operands within precision 18 whose product exceeds it (TPC-H q6's `DECIMAL(15, 2) * DECIMAL(15, 2)`, `DECIMAL(31, 4)`), 64 by 64 to 128 bits from 32-bit limbs, the Vector API having no multiply-high. **Done when** it fuses with its emitted instruction mix read by `dev/varka_emit.sh --asm`, the limb identity proven by SMT and the signed product by exhaustion at a reduced limb width, sampled regions and the fuzzer | this plan, 2.8 | medium |
+| 362 | The full multiply: 128 by 128 bits into a 256-bit product where a result above precision 18 has an operand above it, before the rounding 363 applies. **Done when** it fuses for every precision pair whose result Spark keeps exactly, or declines a recorded case; the limb identity proven at a reduced width, the full width by sampled regions and the fuzzer, since a nonlinear 128-bit multiply is not expected to decide in useful time | this plan, 2.8 | large |
+| 363 | Spark's precision-loss rule and the rescale down: with `allowPrecisionLoss` (default true) a result type above 38 is capped at 38 and its scale cut to `max(38 - intDigits, min(scale, 6))`, the value rounded `ROUND_HALF_UP` by a division of a 128-bit or 256-bit value by `10^k` as a magic-number multiply with a 256-bit product; with it false, the exact type and its overflow. The rounding functions over a 128-bit decimal use the same division. **Done when** both settings fuse or decline a recorded case, the magic constants proven by the proof files' rule (`sql/varka/proofs/`) at a reduced width and by sampled regions and the fuzzer at full width | this plan, 2.8 | large |
+| 364 | The 128-bit decimal casts: to and from integral types (truncation toward zero, the low bits under LEGACY, `NUMERIC_VALUE_OUT_OF_RANGE` under ANSI), to and from floating types, to and from other decimals of either form (`ROUND_HALF_UP` through 363's division), to and from `BOOLEAN`. **Done when** every decimal pair of `m8/casts.tsv` fuses at every precision up to 38 or is a recorded hard entry, the integer rules proven by SMT over 128-bit bit-vectors | this plan, 2.2 and 2.8 | medium |
 | 352 | The fuzzers and the reference evaluator across types: the IR fuzzer's grammar and the Spark-level fuzzer's columns over all thirteen types, with the cross-type compositions and the option matrix's configurations. **Done when** both fuzzers draw every type at every nightly and a cross-type disagreement found is fixed or a named row | this plan, 2.10 | medium |
 | 353 | The support table for users: `docs/sql-varka.md` states, per type and per family, what fuses, from the census and `coverage.json`, and its "three types" paragraph says what the code admits, with each math function's ULP bound per host library, and the math configuration's default (on) and how to turn it off stated at the head of the math section and in the configuration list (2.7.1). **Done when** the table is generated and `VarkaCoverageSuite` fails when it drifts | item 54 | small |
 | 354 | The closing task: 1.1 read row by row, the census and the cast matrix regenerated on the milestone's build, the README's account updated. **Done when** each item of 1.1 is met or its gap is named | this plan | small |
@@ -599,7 +626,7 @@ catalogue keep theirs. Sizes are the house's small, medium and large.
 | 1 | 329, 330, 331, 27, 332, 30, 95, 103, 39, 89, 336 | the first new types prove the plumbing on integral descriptors; 330 after 329's arms; 27 beside 331; 332 after 28 and 329; 30 and 95 after 104's checked forms; 39 after 28 |
 | 2 | 338, 339, 340, 337 | the long lane's new type, after 28 (340's narrowing) and 332 (its casts' harness) |
 | 3 | 341, 342, 343, 344, 345, 356, 357, 358, 346 | the floating split, comparisons first; arithmetic before the math functions; 345's contract and configuration before 356 to 358, which fuse the family under it; 344 after 341's lane; 346 once 344 and 350 have met their hard cases |
-| 4 | 347, 157, 348, 349, 350, 351 | the decimal path last, its load measured first, as item 1 asks |
+| 4 | 347, 157, 348, 349, 350, 351, 359, 360, 361, 362, 363, 364 | the decimal path last, its 64-bit load measured first, as item 1 asks; the lane pair (359) after the 64-bit rows, then its add and widening casts (360), the widening multiply (361), the full multiply (362), the precision-loss rescale (363) and the casts (364) |
 | 5 | 352, 353, 354, 355 | 352 runs across waves 1 to 4 and closes here; 354 last by definition; 355 written from what 354 records |
 
 At the halfway point the milestone is reviewed against 1.1, not against this table, as milestone
@@ -617,7 +644,14 @@ Every structural row cites the proof its row names:
   `BIGINT`, `TIME`, `TIMESTAMP_NTZ` and the intervals (332, 340), the timestamp floor division
   (340),
   the decimal rescales, the no-overflow claim and the `ROUND_HALF_UP` division (348, 349, 350), the
-  64-bit division family (30, 104).
+  64-bit division family (30, 104); and over 128-bit bit-vectors, the lane pair's comparisons, add
+  and subtract with their carry, sign extension, constant multiplies and the `10^p` checks (359,
+  360, 364).
+* **A reduced width, then sampled regions and the fuzzer**, where a 128-bit rule is nonlinear and
+  SMT is not expected to decide in useful time: the limb products of the 64 by 64 and 128 by 128
+  multiplies and the 256-bit magic division (361 to 363), each proven exhaustively or by SMT on
+  the same construction at a narrower limb width and held at full width by sampled regions and the
+  fuzzer, as `VARKA-241.md` did for floating point.
 * **Within the stated bound** for the 27 math functions under the ULP contract (2.7.1), on each
   host library, and nowhere else.
 * **The coverage oracle** (the row engine) for every shape a row admits, with the poisoned null
@@ -643,17 +677,26 @@ Every structural row cites the proof its row names:
 3. **The decimal cache arm changes a file format.** Mitigation: a version tag the serializer checks,
    the row path's reader proven by the coverage oracle, and the de-interleave kept for every other
    source whatever the measurement says.
-4. **The precision rule declines the headline decimal query.** TPC-H q6 at its specification's
-   types is not fused by this milestone (2.8, owner's decision). Accepted: the post's claim is the
-   census, not that query, and the post says which decimal shapes decline and why.
-5. **The ULP contract is a departure users may not expect, and it is on by default.** Mitigation:
+4. **Two-lane values touch the IR, the emitter and the fuzzers**, a change comparable to the
+   floating split: every node over a 128-bit decimal carries two lanes, a lane pair holds four
+   values per 512-bit register, half the long lane's density, and the shape key, the budget's op
+   counts and the reference evaluator learn a value that is not one lane. Mitigation: 359 lands the
+   pair with only comparisons and choice, the bytes oracle unchanged for every other shape, before
+   any arithmetic.
+5. **The 128-bit proofs have gaps.** Add, compare, carry, constant multiply and the `10^p` checks
+   are linear and expected to decide over 128-bit bit-vectors; the 128 by 128 multiply and the
+   256-bit magic division are nonlinear and, as `VARKA-241.md` found for floating point, may not
+   decide in useful time. Those are proven at a reduced width, where exhaustion or SMT decides, and
+   held at full width by sampled regions and the fuzzer, and the plan says so wherever it claims
+   them. TPC-H q6's `sum()` stays Spark's: an aggregate is out of the milestone.
+6. **The ULP contract is a departure users may not expect, and it is on by default.** Mitigation:
    the bound stated per function and host in the coverage and support tables, the default and its
    switch stated in `docs/sql-varka.md` where users look, the register entry, and the config-off
    arm of the differential suites.
-6. **The exhaustive sweeps cost the nightly time.** Each 2^32 sweep is predicted at the int32
+7. **The exhaustive sweeps cost the nightly time.** Each 2^32 sweep is predicted at the int32
    sweeps' order and up to twice it (2.10). Mitigation: PR CI runs slices, the nightly the rest,
    and an idle window the first full pass, its times recorded against the prediction.
-7. **The new types will find disagreements.** NaN, `-0.0`, wraps at narrow widths and half-up
+8. **The new types will find disagreements.** NaN, `-0.0`, wraps at narrow widths and half-up
    rounding are where engines disagree. Each finding is fixed, or a named delta in the standard-mode
    register, or a row; the halfway review weighs the growth against 1.1.
 
@@ -664,8 +707,8 @@ Every structural row cites the proof its row names:
 
 ## 8. Explicitly out of milestone 8
 
-* `STRING` and every cast to or from it, `TIMESTAMP` with the local time zone, and `DECIMAL` above
-  precision 18: owner's decision, 14 October 2026. So are the functions that take or return them -
+* `STRING` and every cast to or from it, and `TIMESTAMP` with the local time zone: owner's
+  decision, 14 October 2026. So are the functions that take or return them -
   151 registered names for strings, 20 for the zoned timestamp (2.1).
 * Decimal division (`/`, `try_divide` and `div` over decimals): owner's decision, 14 October 2026
   (2.8).

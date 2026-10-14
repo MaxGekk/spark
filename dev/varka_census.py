@@ -61,6 +61,8 @@ SOURCES = ["sql/catalyst/src/main/scala", "sql/catalyst/src/main/java", "sql/api
 # today (VarkaNodeCompiler.laneOf: int, date and year-month intervals on the int lane; bigint,
 # TIME and day-time intervals on the long lane); NEW are the ones this milestone adds.
 EXISTING = ["int", "date", "ym", "bigint", "time", "dt"]
+# "dec" is DECIMAL up to precision 38 (owner's decision, 14 October 2026): an unscaled long up to
+# precision 18 and a 128-bit lane pair above it.
 NEW = ["bool", "byte", "short", "float", "double", "dec", "ntz"]
 ORDER = ["bool", "byte", "short", "int", "bigint", "float", "double", "dec"]
 ORDER += ["date", "ntz", "time", "ym", "dt"]
@@ -628,7 +630,10 @@ def cast_kind(src, dst):
     if src == "dec" and dst in INTEGRAL:
         return "truncation", "toward zero; LEGACY wraps, ANSI errors"
     if src == "dec" and dst in MANTISSA:
-        return "rounding", "BigDecimal.doubleValue: exact by division below 2^53, else decline"
+        return (
+            "rounding",
+            "BigDecimal.doubleValue: exact by division below 2^53, then a 128-bit rule",
+        )
     if src in MANTISSA and dst == "dec":
         return "hard", "Decimal(double) goes through the double's decimal string"
     if src == "date" and dst == "ntz":
@@ -675,7 +680,7 @@ def cast_proof(src, dst):
 def cast_rows(src, dst):
     lanes = {src, dst}
     if "dec" in lanes:
-        return "350"
+        return "350,364"
     if lanes & {"float", "double"}:
         return "343"
     if lanes & {"ntz"}:

@@ -6,7 +6,7 @@ bool	int	yes	yes	yes	select	1 or 0; DECIMAL(p, s) with p = s overflows	exhaustio
 bool	bigint	yes	yes	yes	select	1 or 0; DECIMAL(p, s) with p = s overflows	exhaustion		332
 bool	float	yes	yes	yes	select	1 or 0; DECIMAL(p, s) with p = s overflows	exhaustion		343
 bool	double	yes	yes	yes	select	1 or 0; DECIMAL(p, s) with p = s overflows	exhaustion		343
-bool	dec	yes	yes	yes	select	1 or 0; DECIMAL(p, s) with p = s overflows	exhaustion		350
+bool	dec	yes	yes	yes	select	1 or 0; DECIMAL(p, s) with p = s overflows	exhaustion		350,364
 byte	bool	yes	yes	yes	test	x != 0 (a NaN is true)	exhaustion		332
 byte	byte	yes	yes	yes	identity		exhaustion		332
 byte	short	yes	yes	yes	widening	sign extension, exact	exhaustion		332
@@ -14,7 +14,7 @@ byte	int	yes	yes	yes	widening	sign extension, exact	exhaustion		332
 byte	bigint	yes	yes	yes	widening	sign extension, exact	exhaustion		332,28
 byte	float	yes	yes	yes	widening	exact	exhaustion		343
 byte	double	yes	yes	yes	widening	exact	exhaustion		343
-byte	dec	yes	yes	yes	scale up	exact; overflow past p - s digits: LEGACY null, ANSI error	exhaustion		350
+byte	dec	yes	yes	yes	scale up	exact; overflow past p - s digits: LEGACY null, ANSI error	exhaustion		350,364
 byte	ym	yes	yes	yes	scale up	times the unit; multiplyExact raises in every mode	exhaustion		103,332
 byte	dt	yes	yes	yes	scale up	times the unit; multiplyExact raises in every mode	exhaustion		103,332
 short	bool	yes	yes	yes	test	x != 0 (a NaN is true)	exhaustion		332
@@ -24,7 +24,7 @@ short	int	yes	yes	yes	widening	sign extension, exact	exhaustion		332
 short	bigint	yes	yes	yes	widening	sign extension, exact	exhaustion		332,28
 short	float	yes	yes	yes	widening	exact	exhaustion		343
 short	double	yes	yes	yes	widening	exact	exhaustion		343
-short	dec	yes	yes	yes	scale up	exact; overflow past p - s digits: LEGACY null, ANSI error	exhaustion		350
+short	dec	yes	yes	yes	scale up	exact; overflow past p - s digits: LEGACY null, ANSI error	exhaustion		350,364
 short	ym	yes	yes	yes	scale up	times the unit; multiplyExact raises in every mode	exhaustion		103,332
 short	dt	yes	yes	yes	scale up	times the unit; multiplyExact raises in every mode	exhaustion		103,332
 int	bool	yes	yes	yes	test	x != 0 (a NaN is true)	exhaustion		332
@@ -34,7 +34,7 @@ int	int	yes	yes	yes	identity		exhaustion		332
 int	bigint	yes	yes	yes	widening	sign extension, exact	exhaustion		332,28
 int	float	yes	yes	yes	rounding	round to nearest even, as the JVM converts; no error	exhaustion		343
 int	double	yes	yes	yes	widening	exact	exhaustion		343
-int	dec	yes	yes	yes	scale up	exact; overflow past p - s digits: LEGACY null, ANSI error	exhaustion		350
+int	dec	yes	yes	yes	scale up	exact; overflow past p - s digits: LEGACY null, ANSI error	exhaustion		350,364
 int	ym	yes	yes	yes	scale up	times the unit; multiplyExact raises in every mode	exhaustion	MONTH and YEAR units	103,332
 int	dt	yes	yes	yes	scale up	times the unit; multiplyExact raises in every mode	exhaustion	DAY unit, only as date_add's offset (d + CAST(i AS INTERVAL DAY))	103,332
 bigint	bool	yes	yes	yes	test	x != 0 (a NaN is true)	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		332
@@ -44,7 +44,7 @@ bigint	int	yes	yes	yes	narrowing	LEGACY wraps; ANSI errors; TRY nulls	SMT (dev/v
 bigint	bigint	yes	yes	yes	identity		SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		332
 bigint	float	yes	yes	yes	rounding	round to nearest even, as the JVM converts; no error	sampled regions and the fuzzer		343
 bigint	double	yes	yes	yes	rounding	round to nearest even, as the JVM converts; no error	sampled regions and the fuzzer		343
-bigint	dec	yes	yes	yes	scale up	exact; overflow past p - s digits: LEGACY null, ANSI error	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350
+bigint	dec	yes	yes	yes	scale up	exact; overflow past p - s digits: LEGACY null, ANSI error	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350,364
 bigint	ym	yes	yes	yes	scale up	times the unit; multiplyExact raises in every mode	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		103,332
 bigint	dt	yes	yes	yes	scale up	times the unit; multiplyExact raises in every mode	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		103,332
 float	bool	yes	yes	yes	test	x != 0 (a NaN is true)	exhaustion		343
@@ -54,7 +54,7 @@ float	int	yes	yes	yes	truncation	LEGACY saturates, NaN to 0; ANSI and TRY range-
 float	bigint	yes	yes	yes	truncation	LEGACY saturates, NaN to 0; ANSI and TRY range-check, NaN errors	exhaustion		343
 float	float	yes	yes	yes	identity		exhaustion		343
 float	double	yes	yes	yes	widening	exact	exhaustion		343
-float	dec	yes	yes	yes	hard	Decimal(double) goes through the double's decimal string	exhaustion		350
+float	dec	yes	yes	yes	hard	Decimal(double) goes through the double's decimal string	exhaustion		350,364
 double	bool	yes	yes	yes	test	x != 0 (a NaN is true)	sampled regions and the fuzzer		343
 double	byte	yes	yes	yes	truncation	LEGACY saturates to int then wraps; ANSI and TRY range-check, NaN errors	sampled regions and the fuzzer		343
 double	short	yes	yes	yes	truncation	LEGACY saturates to int then wraps; ANSI and TRY range-check, NaN errors	sampled regions and the fuzzer		343
@@ -62,17 +62,17 @@ double	int	yes	yes	yes	truncation	LEGACY saturates, NaN to 0; ANSI and TRY range
 double	bigint	yes	yes	yes	truncation	LEGACY saturates, NaN to 0; ANSI and TRY range-check, NaN errors	sampled regions and the fuzzer		343
 double	float	yes	yes	yes	rounding	round to nearest even; overflow to infinity, no error	sampled regions and the fuzzer		343
 double	double	yes	yes	yes	identity		sampled regions and the fuzzer		343
-double	dec	yes	yes	yes	hard	Decimal(double) goes through the double's decimal string	sampled regions and the fuzzer		350
-dec	bool	yes	yes	yes	test	x != 0 (a NaN is true)	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350
-dec	byte	yes	yes	yes	truncation	toward zero; LEGACY wraps, ANSI errors	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350
-dec	short	yes	yes	yes	truncation	toward zero; LEGACY wraps, ANSI errors	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350
-dec	int	yes	yes	yes	truncation	toward zero; LEGACY wraps, ANSI errors	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350
-dec	bigint	yes	yes	yes	truncation	toward zero; LEGACY wraps, ANSI errors	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350
-dec	float	yes	yes	yes	rounding	BigDecimal.doubleValue: exact by division below 2^53, else decline	sampled regions and the fuzzer		350
-dec	double	yes	yes	yes	rounding	BigDecimal.doubleValue: exact by division below 2^53, else decline	sampled regions and the fuzzer		350
-dec	dec	yes	yes	yes	rescale	scale up multiplies by 10^k; scale down rounds HALF_UP; overflow	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350
-dec	ym	yes	yes	yes	rescale	to the unit, HALF_UP; raises on overflow	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350
-dec	dt	yes	yes	yes	rescale	to the unit, HALF_UP; raises on overflow	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350
+double	dec	yes	yes	yes	hard	Decimal(double) goes through the double's decimal string	sampled regions and the fuzzer		350,364
+dec	bool	yes	yes	yes	test	x != 0 (a NaN is true)	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350,364
+dec	byte	yes	yes	yes	truncation	toward zero; LEGACY wraps, ANSI errors	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350,364
+dec	short	yes	yes	yes	truncation	toward zero; LEGACY wraps, ANSI errors	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350,364
+dec	int	yes	yes	yes	truncation	toward zero; LEGACY wraps, ANSI errors	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350,364
+dec	bigint	yes	yes	yes	truncation	toward zero; LEGACY wraps, ANSI errors	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350,364
+dec	float	yes	yes	yes	rounding	BigDecimal.doubleValue: exact by division below 2^53, then a 128-bit rule	sampled regions and the fuzzer		350,364
+dec	double	yes	yes	yes	rounding	BigDecimal.doubleValue: exact by division below 2^53, then a 128-bit rule	sampled regions and the fuzzer		350,364
+dec	dec	yes	yes	yes	rescale	scale up multiplies by 10^k; scale down rounds HALF_UP; overflow	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350,364
+dec	ym	yes	yes	yes	rescale	to the unit, HALF_UP; raises on overflow	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350,364
+dec	dt	yes	yes	yes	rescale	to the unit, HALF_UP; raises on overflow	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350,364
 date	bool	yes	no	no	always null	LEGACY returns null for every date	exhaustion		332
 date	byte	yes	no	no	always null	LEGACY returns null for every date	exhaustion		332
 date	short	yes	no	no	always null	LEGACY returns null for every date	exhaustion		332
@@ -80,7 +80,7 @@ date	int	yes	no	no	always null	LEGACY returns null for every date	exhaustion		33
 date	bigint	yes	no	no	always null	LEGACY returns null for every date	exhaustion		332
 date	float	yes	no	no	always null	LEGACY returns null for every date	exhaustion		343
 date	double	yes	no	no	always null	LEGACY returns null for every date	exhaustion		343
-date	dec	yes	no	no	always null	LEGACY returns null for every date	exhaustion		350
+date	dec	yes	no	no	always null	LEGACY returns null for every date	exhaustion		350,364
 date	date	yes	yes	yes	identity		exhaustion	identity	332
 date	ntz	yes	yes	yes	scale up	days times micros per day; multiplyExact raises in every mode	exhaustion		338
 ntz	date	yes	yes	yes	floor division	floorDiv by micros per day, exact	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		338
@@ -90,18 +90,18 @@ time	byte	yes	yes	yes	floor division	floorDiv by nanos per second; narrower targ
 time	short	yes	yes	yes	floor division	floorDiv by nanos per second; narrower targets range-check	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		332
 time	int	yes	yes	yes	floor division	floorDiv by nanos per second; narrower targets range-check	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		332
 time	bigint	yes	yes	yes	floor division	floorDiv by nanos per second; narrower targets range-check	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		332
-time	dec	yes	yes	yes	rescale	nanos as DECIMAL(14, 9), HALF_UP to the target scale	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350
+time	dec	yes	yes	yes	rescale	nanos as DECIMAL(14, 9), HALF_UP to the target scale	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350,364
 time	ntz	yes	yes	yes	session date	the date comes from CURRENT_DATE, a literal after ComputeCurrentTime	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		340
 time	time	yes	yes	yes	relabel or truncation	wider precision keeps the nanos; narrower floors	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer	widening precision only	332
 ym	byte	yes	yes	yes	unit division	truncating division by the end field's unit; narrower targets check	exhaustion		103,332
 ym	short	yes	yes	yes	unit division	truncating division by the end field's unit; narrower targets check	exhaustion		103,332
 ym	int	yes	yes	yes	unit division	truncating division by the end field's unit; narrower targets check	exhaustion	MONTH-ended source only	103,332
 ym	bigint	yes	yes	yes	unit division	truncating division by the end field's unit; narrower targets check	exhaustion		103,332
-ym	dec	yes	yes	yes	unit division	to the end field's unit; a SECOND end keeps six decimals	exhaustion		350
+ym	dec	yes	yes	yes	unit division	to the end field's unit; a SECOND end keeps six decimals	exhaustion		350,364
 ym	ym	yes	yes	yes	relabel or unit narrowing	MONTH end field keeps the count; YEAR divides by 12	exhaustion	MONTH end field only (CAST(ymy AS INTERVAL MONTH), ym - ymm)	103,332
 dt	byte	yes	yes	yes	unit division	truncating division by the end field's unit; narrower targets check	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		103,332
 dt	short	yes	yes	yes	unit division	truncating division by the end field's unit; narrower targets check	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		103,332
 dt	int	yes	yes	yes	unit division	truncating division by the end field's unit; narrower targets check	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		103,332
 dt	bigint	yes	yes	yes	unit division	truncating division by the end field's unit; narrower targets check	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		103,332
-dt	dec	yes	yes	yes	unit division	to the end field's unit; a SECOND end keeps six decimals	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350
+dt	dec	yes	yes	yes	unit division	to the end field's unit; a SECOND end keeps six decimals	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer		350,364
 dt	dt	yes	yes	yes	relabel or unit narrowing	SECOND end field keeps the micros; coarser divides	SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer	SECOND end field only (dt < INTERVAL '0' SECOND)	103,332
