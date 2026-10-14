@@ -202,14 +202,22 @@ class VarkaSmallTreeSuite extends SparkFunSuite with VarkaMatrixTests with Varka
 
   test("a planted liveness bug fails the series by size 3, with a tree in the message") {
     // The series is only worth what it catches: the fuzzer's planted bug, which keeps a validity
-    // word live that the liveness pass should have killed, has to fail it.
-    val planted = VarkaEmitOption.named("misdescribeWordLiveness") match {
-      case flag: VarkaEmitOption.Flag => flag.`with`(VarkaMatrix.base, true)
-      case other => fail(s"not a flag: $other")
-    }
+    // word live that the liveness pass should have killed, has to fail it. The bug inverts the
+    // pass's verdict, and `Slots.plan` asks for a verdict only in a masked loop or epilogue body
+    // under the bitmap validity pass - with that pass off every word is live, no verdict is
+    // computed and the inversion never runs - so the test sets the pass on over the matrix's
+    // options, as `VarkaGuardEdgeSuite` sets the guards it tests. Planted over the base alone,
+    // the bug was inert under the matrix's `validityByBitmap=false`, every tree passed, and the
+    // first run of the matrix on master failed this test (VARKA-269.md 9). Every failure counted
+    // is held to the invariant's own refusal, so that a failure of another kind - a regression,
+    // or the forced pass beside a configuration's other options - cannot stand in for the bug.
+    val planted = VarkaMatrix.base.withValidityByBitmap(true).withMisdescribeWordLiveness(true)
     val failures = runSeries(new VarkaIrSeries.IntSeries, long = false, 3, planted)
     assert(failures.count > 0, "the planted bug failed no tree to size 3")
-    assert(failures.first.head.contains("roots=["), failures.first.head)
+    for (failure <- failures.first) {
+      assert(failure.contains("roots=[") && VarkaKernelChecks.isWordLivenessRefusal(failure),
+        failure)
+    }
   }
 
   // ---------------------------------------------------------------------------------------------

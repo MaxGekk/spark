@@ -136,6 +136,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Every small tree, counted in grammar productions, beside the random fuzzer](sql/varka/skills/testing-and-debugging.md#every-small-tree-counted-in-grammar-productions-beside-the-random-fuzzer)
 * [A tree in other company: variants whose answers follow from its own](sql/varka/skills/testing-and-debugging.md#a-tree-in-other-company-variants-whose-answers-follow-from-its-own)
 * [Every guard at its bound: a verdict from the emitter's own rule](sql/varka/skills/testing-and-debugging.md#every-guard-at-its-bound-a-verdict-from-the-emitters-own-rule)
+* [A planted bug has a prerequisite, and the test that plants it sets it over the matrix's base](sql/varka/skills/testing-and-debugging.md#a-planted-bug-has-a-prerequisite-and-the-test-that-plants-it-sets-it-over-the-matrixs-base)
 * [The emitter is called from several threads, so a test holds it to that](sql/varka/skills/testing-and-debugging.md#the-emitter-is-called-from-several-threads-so-a-test-holds-it-to-that)
 * [Error Prone and NullAway run beside the build, and the pending list only shrinks](sql/varka/skills/testing-and-debugging.md#error-prone-and-nullaway-run-beside-the-build-and-the-pending-list-only-shrinks)
 * [A Varka suite in JUnit 5: `@VarkaSuite`, a sentence per test, and ScalaTest's lines](sql/varka/skills/testing-and-debugging.md#a-varka-suite-in-junit-5-varkasuite-a-sentence-per-test-and-scalatests-lines)
