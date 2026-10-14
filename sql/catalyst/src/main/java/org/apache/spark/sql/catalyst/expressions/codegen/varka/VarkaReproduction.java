@@ -209,9 +209,13 @@ public record VarkaReproduction(
   /**
    * Writes the reproduction of {@code failure} and logs where, or does nothing when the settings
    * say not to, when this JVM already wrote one for the shape and signature kind, or when it has
-   * written {@link #MAX_FILES_PER_JVM}. Never throws but a {@link VirtualMachineError}: it runs in
-   * a {@code catch} while another failure is handled, and a write that failed is logged as a
-   * warning and nothing else, so the query falls back or fails exactly as it would have.
+   * written {@link #MAX_FILES_PER_JVM}. Never throws: it runs in a {@code catch} while another
+   * failure is handled, and a write that failed is logged as a warning and nothing else, so the
+   * query falls back or fails exactly as it would have. That includes a
+   * {@link VirtualMachineError}, unlike {@link VarkaErrorContext#safely}: an
+   * {@code OutOfMemoryError} here is most likely the copy of the batch this makes, and the failure
+   * to report is still the one being handled; a JVM that is really out of memory fails again on
+   * the next allocation outside this.
    *
    * @param ctx the failure's context record; its kind is the file's stage
    * @param failure what failed: the kernel's own exception, the violation, or what the emission,
@@ -262,11 +266,8 @@ public record VarkaReproduction(
       LOG.warn("Wrote a reproduction of this Varka failure (" + signature + ") to " + file
           + "; replay it with dev/varka_emit.sh --replay " + file);
       return Optional.of(file);
-    } catch (VirtualMachineError e) {
-      throw e;
     } catch (Throwable t) {
-      LOG.warn("Could not write a reproduction of a Varka failure; the failure itself is "
-          + "handled as before.", t);
+      unwritten(t);
       return Optional.empty();
     } finally {
       // Not written after all: a later failure of the shape may try again, and the file it did
@@ -277,6 +278,19 @@ public record VarkaReproduction(
       if (counted) {
         FILES.decrementAndGet();
       }
+    }
+  }
+
+  /**
+   * Logs that a reproduction could not be written, for a write site whose own preparation threw;
+   * never throws, not even when logging does.
+   */
+  public static void unwritten(Throwable t) {
+    try {
+      LOG.warn("Could not write a reproduction of a Varka failure; the failure itself is "
+          + "handled as before.", t);
+    } catch (Throwable ignored) {
+      // Nothing is left to tell, and the failure being handled must still propagate.
     }
   }
 

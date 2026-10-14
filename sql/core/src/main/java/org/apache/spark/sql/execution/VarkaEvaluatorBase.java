@@ -376,8 +376,12 @@ public abstract class VarkaEvaluatorBase {
           LOG.warn("Failed to emit the Varka fused kernel " + ctx.identity()
               + "; falling back to the per-row path." + VarkaFallbackAccounting.block(ctx), e);
           // A class that fails to verify or define fails here, and no class dump has it.
-          VarkaReproduction.write(ctx, e, shapeKey(compiled), compiled.literals(),
-              compiled.longLiterals(), null, null);
+          try {
+            VarkaReproduction.write(ctx, e, shapeKey(compiled), compiled.literals(),
+                compiled.longLiterals(), null, null);
+          } catch (Throwable t) {
+            VarkaReproduction.unwritten(t);
+          }
           emissionFailed(e);
           refuseUndeclaredFallback("emission of " + ctx.identity(), ctx);
         }
@@ -605,14 +609,19 @@ public abstract class VarkaEvaluatorBase {
 
   /**
    * The reproduction file of a failure inside this evaluator's kernel (VARKA-315): its shape key,
-   * its literals, the call it failed in and its class. {@link VarkaReproduction#write} never
-   * throws, so the failure being handled is rethrown as it is.
+   * its literals, the call it failed in and its class. Nothing here may throw, since the failure
+   * being handled is rethrown after it: {@link VarkaReproduction#write} catches its own failures,
+   * and this catches what building its arguments could throw.
    */
   private void reproduceKernelFailure(String kind, Throwable failure, VarkaKernelRunner kernel,
       ColumnarBatch input, int len) {
-    VarkaErrorContext ctx = errorContext(kind, failure, null, kernel.shapeHash, input, true);
-    VarkaReproduction.write(ctx, failure, shapeKey(plan), plan.literals(), plan.longLiterals(),
-        maxBatchBytes -> kernel.capture(input, len, maxBatchBytes), kernel.classBytes);
+    try {
+      VarkaErrorContext ctx = errorContext(kind, failure, null, kernel.shapeHash, input, true);
+      VarkaReproduction.write(ctx, failure, shapeKey(plan), plan.literals(), plan.longLiterals(),
+          maxBatchBytes -> kernel.capture(input, len, maxBatchBytes), kernel.classBytes);
+    } catch (Throwable t) {
+      VarkaReproduction.unwritten(t);
+    }
   }
 
   /**

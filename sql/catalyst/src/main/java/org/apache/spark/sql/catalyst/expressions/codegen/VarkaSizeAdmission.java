@@ -130,21 +130,25 @@ final class VarkaSizeAdmission {
     }
   }
 
-  /** The reproduction file of a class the admission's verification rejected. */
+  /**
+   * The reproduction file of a class the admission's verification rejected. It cannot throw: the
+   * error it records is rethrown after it.
+   */
   private static void reproduce(Throwable failure, CompiledVarkaProjection fused,
       VarkaShapeKey key) {
-    String hash = VarkaErrorContext.safely(() -> VarkaShapeCache.shapeHash(key));
-    String identity = VarkaErrorContext.safely(() -> {
+    try {
+      String hash = VarkaShapeCache.shapeHash(key);
       var ir = new StringBuilder();
       for (VarkaVectorIR output : key.outputs()) {
         ir.append(ir.length() > 0 ? ", " : "").append(VarkaVectorIR.canonical(output));
       }
-      return VarkaShapeCache.sourceFileFor(hash) + " [" + ir + "] (planning)";
-    });
-    var ctx = new VarkaErrorContext(VarkaErrorContext.PLANNING, identity, hash,
-        VarkaErrorContext.safely(() -> VarkaErrorContext.renderOptions(key.options())), null,
-        failure);
-    VarkaReproduction.write(ctx, failure, key, fused.literals(), fused.longLiterals(), null,
-        null);
+      var ctx = new VarkaErrorContext(VarkaErrorContext.PLANNING,
+          VarkaShapeCache.sourceFileFor(hash) + " [" + ir + "] (planning)", hash,
+          VarkaErrorContext.renderOptions(key.options()), null, failure);
+      VarkaReproduction.write(ctx, failure, key, fused.literals(), fused.longLiterals(), null,
+          null);
+    } catch (Throwable t) {
+      VarkaReproduction.unwritten(t);
+    }
   }
 }
