@@ -275,3 +275,10 @@ emitter's:
   beside a stranger then fails no tree the plain series passes; the skip list says so for that
   configuration and the one that turns off the three validity passes. Every other test of the
   suite passed under all 50 configurations.
+  *Correction, 14 October 2026 (VARKA-269's follow-up):* the mechanism above is misread. With
+  the bitmap validity pass off the planted bug reaches no word at all - `Slots.plan` computes the
+  liveness verdict the injector inverts only under that pass - so the plain series passes every
+  tree and the variants, with nothing to invert, catch none. The test now plants the bug over
+  `VarkaMatrix.base.withValidityByBitmap(true)` and the two skip-list lines are removed; the
+  first run of the option matrix on master found the same premise in the series' own planted
+  test (`VARKA-269.md` 9).

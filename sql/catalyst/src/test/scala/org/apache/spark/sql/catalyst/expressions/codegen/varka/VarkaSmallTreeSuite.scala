@@ -202,9 +202,15 @@ class VarkaSmallTreeSuite extends SparkFunSuite with VarkaMatrixTests with Varka
 
   test("a planted liveness bug fails the series by size 3, with a tree in the message") {
     // The series is only worth what it catches: the fuzzer's planted bug, which keeps a validity
-    // word live that the liveness pass should have killed, has to fail it.
+    // word live that the liveness pass should have killed, has to fail it. The bug inverts that
+    // pass's verdict, and `Slots.plan` computes the verdict only under the bitmap validity pass:
+    // with it off every word is live and there is nothing to invert, so the test sets the pass on
+    // over the matrix's options, as `VarkaGuardEdgeSuite` sets the guards it tests. Planted over
+    // the base alone, the bug was inert under the matrix's `validityByBitmap=false`, every tree
+    // passed, and the first run of the matrix on master failed this test (VARKA-269.md 9).
+    val base = VarkaMatrix.base.withValidityByBitmap(true)
     val planted = VarkaEmitOption.named("misdescribeWordLiveness") match {
-      case flag: VarkaEmitOption.Flag => flag.`with`(VarkaMatrix.base, true)
+      case flag: VarkaEmitOption.Flag => flag.`with`(base, true)
       case other => fail(s"not a flag: $other")
     }
     val failures = runSeries(new VarkaIrSeries.IntSeries, long = false, 3, planted)

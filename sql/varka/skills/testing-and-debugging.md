@@ -974,6 +974,32 @@ guard at `lo - 1`, `lo`, `hi` and `hi + 1`. What it took:
 To date every guard's edges hold at both lanes, in a full vector and the epilogue, through both
 bodies.
 
+## A planted bug has a prerequisite, and the test that plants it sets it over the matrix's base
+
+VARKA-269's follow-up, 14 October 2026. `misdescribeWordLiveness` inverts the word-liveness
+verdict, and `Slots.plan` computes that verdict only under `validityByBitmap`: off, every word is
+live, there is nothing to invert, and the kernel emits as if nothing were planted (the option's
+Javadoc says so; `VarkaEmitterValiditySuite` pins it on `year(d)`). The two tests that hold the
+series and the variants to catching the planted bug planted it over `VarkaMatrix.base`, so under
+the matrix's `validityByBitmap=false`, and the configuration that turns off the three validity
+passes, the bug was inert and the series passed every tree: "the planted bug failed no tree to
+size 3". The first run of the option matrix on master (VARKA-255) failed the series' test; the
+variants' had met the same two configurations in VARKA-278's local run of all fifty, been read as
+the injector reaching a different set of words, and been listed in the skip list.
+
+- **Plant the bug over the options it needs**: `VarkaMatrix.base.withValidityByBitmap(true)`, as
+  `VarkaGuardEdgeSuite` sets the guards it tests and `VarkaReproductionEndToEndSuite` plants this
+  one. A skip-list line records a dependency, but cancels the test in two configurations and keeps
+  whatever mechanism its author read into it; the forced option keeps the test asserting
+  everywhere, at no cost.
+- **The fuzzer's planted tests survived the same run** because they search the first 200 draws,
+  whose options vary over the table, so a draw turns the pass back on; a test over one fixed
+  options record has to set the prerequisite itself.
+- **Green under a pull request's one configuration says nothing about the other forty-nine.** The
+  run after each merge draws a configuration from the commit's hash and the weekly matrix runs
+  them all; a test that leans on an option the base can switch off is checked before the merge
+  with `dev/varka_matrix.sh --module catalyst --config <option>=<other value>`.
+
 ## The emitter is called from several threads, so a test holds it to that
 
 VARKA-307. `VarkaEmittedBytesSuite` hashes every shape twenty times, once per pinned arm and

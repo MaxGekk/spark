@@ -241,3 +241,23 @@ test now runs to size 4 at any size, being generation and analysis only; the nig
 size-4 step at the 128-bit width; and the weekly option matrix passes `-Dvarka.series.size=4`.
 What stays: a size-4 regression is found at night, not before a merge, and the rotation of batches
 past size 3 runs only at night.
+
+**Found 14 October 2026 by the first run of the option matrix on master** (`varka-master.yml`,
+VARKA-255): under `validityByBitmap=false`, the configuration the commit's hash drew, the planted
+liveness test failed with "the planted bug failed no tree to size 3", in the matrix's JVM and
+again in its own. The cause is the test's premise, not the series: `misdescribeWordLiveness`
+inverts the word-liveness verdict, and `Slots.plan` computes that verdict only under the bitmap
+validity pass - its Javadoc says so, and `VarkaEmitterValiditySuite` pins it on `year(d)`, which
+under the injector throws "stored but never loaded" with the pass on and emits a class with it
+off. Planted over `VarkaMatrix.base`, the bug was inert under that configuration and under
+`denseValidityOnce=false,validityByBitmap=false,validityOrFirst=false`, every tree passed, and
+the test measured nothing. It had failed so since it landed: #719's CI ran the one configuration
+its branch hashed to, no weekly matrix ran between the merge and the master run, and the test
+fails the same way at the merge base before the day's merges (0f148eb7038) and at #719's own
+commit. The test now plants the bug over `VarkaMatrix.base.withValidityByBitmap(true)`, as
+`VarkaGuardEdgeSuite` sets the guards it tests over the matrix's options and
+`VarkaReproductionEndToEndSuite` plants this bug; it passes under the defaults and both
+configurations. `VarkaVariantSuite`'s planted test (VARKA-278) had the same premise, which #737
+had read as the injector reaching a different set of words and listed in the skip list under both
+configurations; it is planted the same way and the two lines are removed. The lesson is in
+`skills/testing-and-debugging.md`.

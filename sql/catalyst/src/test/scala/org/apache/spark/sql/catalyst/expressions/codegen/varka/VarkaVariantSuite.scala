@@ -397,8 +397,13 @@ class VarkaVariantSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOw
     // fails 2,253 of the 3,203 trees to size 3, and these two variants fail 950 of the trees it
     // passes. A planted bug that shows only when an output keeps company is what the variants
     // are for, so each of the two must keep catching one. The walk stops once both have.
+    // The bug inverts the word-liveness verdict, which `Slots.plan` computes only under the
+    // bitmap validity pass, so the pass is set on over the matrix's options: with it off nothing
+    // is inverted, the plain series passes every tree and the variants catch none
+    // (VarkaSmallTreeSuite's planted test, VARKA-269.md 9).
+    val base = VarkaMatrix.base.withValidityByBitmap(true)
     val planted = VarkaEmitOption.named("misdescribeWordLiveness") match {
-      case flag: VarkaEmitOption.Flag => flag.`with`(VarkaMatrix.base, true)
+      case flag: VarkaEmitOption.Flag => flag.`with`(base, true)
       case other => fail(s"not a flag: $other")
     }
     val lane = new Lane(false)
