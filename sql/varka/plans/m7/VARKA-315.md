@@ -314,4 +314,93 @@ test instead of a benchmark.
 
 ## 9. Outcome
 
-*Filled in when the work lands.*
+*14 October 2026.*
+
+**What was built.** As section 3 planned: `VarkaFailureSignature` moved to main; the two fault
+injectors; `VarkaReproduction` (the file, its text form, its parser and its bounded writer);
+the three settings; the four write sites (`runKernel` for a kernel's exception and for a
+violation, the emission catch, the admission's verification); `VarkaKernelRunner.capture`;
+`VarkaCanonicalIr`, `VarkaReplay` and `VarkaEmitDump --replay` behind `dev/varka_emit.sh
+--replay`.
+
+**Done-when, checked.** Each kind planted through a fault injector writes a file that replays to
+the same signature, in `VarkaReproductionEndToEndSuite` (sql) through the production write
+sites: `IndexOutOfBoundsException` (`misdescribeDataBytes=-4`), `generated class:
+NoSuchMethodError` (`misdescribeAdd`), `memory violation` (`misdescribeDataBytes=4096`, with
+the sanitizer), `generated class: VerifyError` (`dropStackMaps`, at planning under test) and an
+emitter's own `IllegalStateException` (`misdescribeWordLiveness`, through the emission catch),
+and a filter kernel's `IndexOutOfBoundsException` through the filter's own write site.
+Two files were replayed by hand through `dev/varka_emit.sh --replay` as well (the violation and
+the verify failure, both `REPRODUCED`, exit 0), and a file with its signature edited replayed to
+`NOT REPRODUCED`, exit 1. A file another suite's planted fault wrote under the default settings
+(`VarkaSparkFuzzSuite`'s `misdescribeRollback=3`, an `IllegalArgumentException` from the
+emitter) replayed to its signature too, with no change to that suite.
+
+**Where the code corrected the plan.**
+
+1. **The writer swallows a `VirtualMachineError` too.** 3.3 said it catches everything else; an
+   `OutOfMemoryError` there is most likely its own copy of the batch, and rethrowing it would
+   replace the failure it records. The write sites also build their arguments (the record, the
+   shape key) inside a catch of their own, since those are evaluated before the writer is entered.
+2. **The file has no `lane` line.** The replay derives the lane from the IR
+   (`VarkaVectorIR.emissionLane`), so a file cannot disagree with itself about it.
+3. **The record is written as `# ` comment lines**, since a cause's message can span lines (a
+   `VerifyError`'s does) and would otherwise break the `key: value` form.
+4. **Test 5.3 moved to the sql suite.** Planting each kind at the emitter level and writing its
+   file there would have produced the file's signature with the replay's own harness, which proves
+   nothing; the end-to-end suite plants through the real write sites. The catalyst suite keeps the
+   verify failure at both stages that meet it and the not-reproduced case, and adds a check that
+   every option's label reads back through `VarkaMatrixRuns.parse` - the file's `options` line
+   depends on it.
+5. **A production verify failure at the emission is not reached by a query under test**, since the
+   admission verifies first (2). The emission catch's write is covered by the emitter-throw plant,
+   and the definition step of the replay by `VarkaReproductionSuite`.
+6. **The review's corrections** (`/code-review high` on the branch, ten findings):
+   - the filter's kernel runs outside `runKernel` (`VarkaFilterEvaluator.filterMask`), so 3.2's
+     one site missed every predicate kernel: the filter's mask call now writes too, and the call
+     records that its outputs were the filter's selection bitmaps, which the replay lays out in
+     one buffer as the filter does;
+   - the emission catch's shape hash could read `unavailable (...)` (314's `safely`), which named
+     the file after it and made every replay refuse it: the writer uses a caller's hash only when
+     it is one, and hashes the key otherwise;
+   - the admission wrote any `LinkageError` as `planning`, whose replay only verifies: it writes
+     only a `VerifyError` now;
+   - 3.3's per-JVM bounds do not bound a shared directory over executors that restart, and the
+     pid alone does not tell containerised executors apart: a directory holds at most 256 files
+     from all JVMs, and each name carries a per-JVM random token after the pid;
+   - the record and the call were built on every failing batch before the writer's checks: the
+     writer now takes the record as a supplier and tests its memo before reading the settings, and
+     a failed write keeps its claim, so a directory that cannot be written warns once;
+   - the replay leaked its class loader when definition failed, and registered a zero validity
+     capacity as a whole bitmap; `dev/varka_emit.sh` expanded an empty array that bash before 4.4
+     calls unbound.
+   One finding is not changed: the replay's output buffers always have room for a canary, where
+   production's capacity is Arrow's. Under the sanitizer `runKernel` allocates `CANARY_ROWS`
+   extra rows for exactly that room, so production's outputs have it too.
+7. **Files written by the suites land in each test JVM's own tmpdir** (`target/.../tmp`, which
+   Spark's build sets), not `/tmp`: the default location needed no test-only rule.
+
+**Predictions (6.1), scored.**
+
+1. **Held.** `VarkaErrorContextSuite` (its steady-state allocation test included) and
+   `VarkaProjectExecSuite` pass in the scoped sql run; no code runs on a batch that does not fail.
+2. **Held.** `VarkaEmittedBytesSuite` passes; `emitted_bytes.json` is unchanged.
+3. **Held.** The parser round-tripped every node type and 800 drawn trees on the first run, and
+   60 long-lane shapes emitted byte-identical classes from the parsed trees.
+4. **Held, pessimistic.** The end-to-end suite's eight tests take 4.5 s (38 s with sbt's start)
+   against 30 s predicted; the line is in the calibration table.
+
+**Evidence.** `dev/varka_scoped_suites.sh catalyst`: 645 passed, 26 canceled, 0 failed, and the
+quiet step 7 passed, 14 canceled. `dev/varka_scoped_suites.sh sql` (sanitizer and both-bodies
+check on): 690 passed, 7 canceled, 0 failed, and the quiet step 5 passed. The end-to-end suite
+alone, after the review's fixes (a ninth test, a filter kernel's failure): 9 passed with the
+sanitizer on; before them, 7 passed and 1 canceled without it.
+`SparkConfigBindingPolicySuite` 3 passed; `catalyst/doc` passes.
+
+**Left for later.**
+
+- A kernel failure on the warm-up's background thread writes no file (3.6).
+- Under the both-bodies check (`-Dvarka.checkBothBodies`), a violation in the body the batch did
+  not take is written with the batch, but the replay runs the body the batch's null counts choose.
+- The default directory under a shared `/tmp` can be created first by another user, which leaves
+  the files unwritten (a warning) rather than readable: the file is created owner-only either way.

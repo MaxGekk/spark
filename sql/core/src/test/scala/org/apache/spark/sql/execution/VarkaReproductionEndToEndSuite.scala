@@ -114,7 +114,7 @@ class VarkaReproductionEndToEndSuite
     assert(file.options().contains("misdescribeDataBytes=-4"), file.options())
     assert(file.context().contains("kind: kernel-failure"), file.context())
     assert(name.toString.matches(
-      "varka-repro-\\w+-indexoutofboundsexception-pid\\d+\\.txt"), name)
+      "varka-repro-\\w+-indexoutofboundsexception-pid\\d+-[0-9a-f]+\\.txt"), name)
     val call = file.call()
     assert(call != null && call.omitted() == null, call)
     assert(call.inputs().size() === 1)
@@ -122,6 +122,20 @@ class VarkaReproductionEndToEndSuite
     assert(input.data().length === call.rows() * 4)
     assert(input.nullCount() > 0 && input.validity() != null, input)
     assert(file.classBytes() != null)
+    assertReplays(file)
+  }
+
+  test("a filter kernel's exception writes a file with its selection layout, which replays") {
+    cacheView()
+    val filter = s"SELECT d FROM $view WHERE date_add(d, 3) > DATE'2001-06-01'"
+    val expected = spark.sql(filter).collect().toSeq
+    val (file, _) = reproduced {
+      withOptions(_.withMisdescribeDataBytes(-4)) {
+        withFailureDeclared(checkAnswer(varkaSpark.sql(filter), expected))
+      }
+    }
+    assert(file.signature().kind() === "IndexOutOfBoundsException", file.signature())
+    assert(file.call() != null && file.call().selectionBitmaps(), file.call())
     assertReplays(file)
   }
 

@@ -23,6 +23,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -35,6 +36,8 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongFunction;
+import java.util.function.Supplier;
+import java.util.regex.Pattern;
 
 import javax.annotation.Nullable;
 
@@ -70,11 +73,11 @@ import org.apache.spark.sql.internal.SQLConf;
  * </ul>
  *
  * <p><b>Bounds.</b> One file per shape and signature kind per JVM, at most
- * {@link #MAX_FILES_PER_JVM} files per JVM, the batch's bytes only up to
- * {@code spark.sql.codegen.varka.reproduction.maxBatchBytes} (the rest of the call is kept, so a
- * replay can run a synthetic batch of the same shape), and the class only up to
- * {@link #MAX_CLASS_BYTES}. A batch is user data, so the directory and the file are made readable
- * by their owner only where the file system has POSIX permissions.
+ * {@link #MAX_FILES_PER_JVM} files per JVM and {@link #MAX_FILES_PER_DIRECTORY} in a directory,
+ * the batch's bytes only up to {@code spark.sql.codegen.varka.reproduction.maxBatchBytes} (the
+ * rest of the call is kept, so a replay can run a synthetic batch of the same shape), and the
+ * class only up to {@link #MAX_CLASS_BYTES}. A batch is user data, so the directory and the file
+ * are made readable by their owner only where the file system has POSIX permissions.
  *
  * @param signature the failure's signature: what a replay must reproduce
  * @param stage where it failed, which decides how far a replay goes: {@code planning} (the
@@ -131,7 +134,24 @@ public record VarkaReproduction(
   /** The directory under {@code java.io.tmpdir} the files go to when none is configured. */
   public static final String DEFAULT_DIRECTORY_NAME = "varka-reproductions";
 
-  /** The {@code (directory, shape hash, signature kind)} triples this JVM has written. */
+  /**
+   * The most files a directory holds before no JVM adds another: the per-JVM bounds do not stop a
+   * cluster whose executors restart from filling a shared directory, since each new JVM starts
+   * with none written.
+   */
+  public static final int MAX_FILES_PER_DIRECTORY = 256;
+
+  /** What a shape hash looks like: sixteen hex digits, after the warm-up's mark if warmed. */
+  private static final Pattern SHAPE_HASH = Pattern.compile("w?[0-9a-f]{16}");
+
+  /**
+   * One per JVM, in each file's name beside the pid: containers often run every executor as
+   * pid 1, and two of them sharing a directory must not replace each other's files.
+   */
+  private static final String JVM_TOKEN =
+      Long.toHexString(new SecureRandom().nextLong() & 0xffffffL);
+
+  /** The {@code (shape hash, signature kind)} pairs this JVM has written. */
   private static final Set<String> WRITTEN = ConcurrentHashMap.newKeySet();
 
   private static final AtomicInteger FILES = new AtomicInteger();
@@ -168,9 +188,11 @@ public record VarkaReproduction(
    * @param outputWidths bytes per value of each output; 0 for a selection bitmap
    * @param inputs the kernel's inputs, in kernel order
    * @param omitted why the inputs carry no bytes, or null when they do
+   * @param selectionBitmaps whether the outputs were a filter's selection bitmaps, which the
+   *        filter lays out in one buffer, a whole number of words each, and guards as one
    */
   public record KernelCall(int rows, int scratchBytesPerRow, List<Integer> outputWidths,
-      List<Input> inputs, @Nullable String omitted) {
+      List<Input> inputs, @Nullable String omitted, boolean selectionBitmaps) {
     public KernelCall {
       outputWidths = List.copyOf(outputWidths);
       inputs = List.copyOf(inputs);
@@ -209,8 +231,9 @@ public record VarkaReproduction(
 
   /**
    * Writes the reproduction of {@code failure} and logs where, or does nothing when the settings
-   * say not to, when this JVM already wrote one for the shape and signature kind, or when it has
-   * written {@link #MAX_FILES_PER_JVM}. Never throws: it runs in a {@code catch} while another
+   * say not to, when this JVM already wrote one for the shape and signature kind, when it has
+   * written {@link #MAX_FILES_PER_JVM}, or when the directory already holds
+   * {@link #MAX_FILES_PER_DIRECTORY}. Never throws: it runs in a {@code catch} while another
    * failure is handled, and a write that failed is logged as a warning and nothing else, so the
    * query falls back or fails exactly as it would have. That includes a
    * {@link VirtualMachineError}, unlike {@link VarkaErrorContext#safely}: an
@@ -218,7 +241,11 @@ public record VarkaReproduction(
    * to report is still the one being handled; a JVM that is really out of memory fails again on
    * the next allocation outside this.
    *
-   * @param ctx the failure's context record; its kind is the file's stage
+   * @param context the failure's context record, whose kind is the file's stage; built only when
+   *        a file is written, so a kernel that fails on every batch builds one
+   * @param knownHash the key's shape hash where the caller holds it, or null to compute it from
+   *        the key; anything that is not a shape hash is ignored, so the file always names the key
+   *        it records
    * @param failure what failed: the kernel's own exception, the violation, or what the emission,
    *        the definition or the verification threw
    * @param key the shape key the class was built from
@@ -229,27 +256,30 @@ public record VarkaReproduction(
    * @param classBytes the failing class's bytes, or null where none was defined
    * @return the file, when one was written
    */
-  public static Optional<Path> write(VarkaErrorContext ctx, Throwable failure, VarkaShapeKey key,
+  public static Optional<Path> write(Supplier<VarkaErrorContext> context,
+      @Nullable String knownHash, Throwable failure, VarkaShapeKey key,
       List<Integer> intLiterals, List<Long> longLiterals,
       @Nullable LongFunction<KernelCall> capture, @Nullable byte[] classBytes) {
-    String claim = null;
     boolean counted = false;
     try {
-      Settings settings = Settings.current();
-      if (!settings.enabled()) {
-        return Optional.empty();
-      }
       VarkaFailureSignature signature = VarkaFailureSignature.of(failure, "");
-      String hash = ctx.shapeHash() != null ? ctx.shapeHash() : VarkaShapeCacheImpl.shapeHash(key);
-      String candidate = settings.directory() + "|" + hash + "|" + signature.kind();
-      if (FILES.get() >= MAX_FILES_PER_JVM || !WRITTEN.add(candidate)) {
+      String hash = knownHash != null && SHAPE_HASH.matcher(knownHash).matches()
+          ? knownHash : VarkaShapeCacheImpl.shapeHash(key);
+      String candidate = hash + "|" + signature.kind();
+      // The cheap test first: a kernel that fails on every batch stops here after its first file.
+      if (WRITTEN.contains(candidate) || FILES.get() >= MAX_FILES_PER_JVM) {
         return Optional.empty();
       }
-      claim = candidate;
+      Settings settings = Settings.current();
+      if (!settings.enabled() || !WRITTEN.add(candidate)) {
+        return Optional.empty();
+      }
       counted = true;
-      if (FILES.incrementAndGet() > MAX_FILES_PER_JVM) {
+      if (FILES.incrementAndGet() > MAX_FILES_PER_JVM
+          || filesIn(settings.directory()) >= MAX_FILES_PER_DIRECTORY) {
         return Optional.empty();
       }
+      VarkaErrorContext ctx = context.get();
       var outputs = new ArrayList<String>();
       for (VarkaVectorIR output : key.outputs()) {
         outputs.add(VarkaVectorIR.canonical(output));
@@ -262,7 +292,6 @@ public record VarkaReproduction(
           classBytes != null && classBytes.length <= MAX_CLASS_BYTES ? classBytes : null);
       Path file = settings.directory().resolve(fileName(hash, signature.kind()));
       writeAtomically(settings.directory(), file, reproduction.render());
-      claim = null;
       counted = false;
       LOG.warn("Wrote a reproduction of this Varka failure (" + signature + ") to " + file
           + "; replay it with dev/varka_emit.sh --replay " + file);
@@ -271,14 +300,21 @@ public record VarkaReproduction(
       unwritten(t);
       return Optional.empty();
     } finally {
-      // Not written after all: a later failure of the shape may try again, and the file it did
-      // not write does not count against the cap.
-      if (claim != null) {
-        WRITTEN.remove(claim);
-      }
+      // A file not written does not count against the cap. Its claim stays: a kernel that fails
+      // on every batch over a directory that cannot be written warns once, not once a batch.
       if (counted) {
         FILES.decrementAndGet();
       }
+    }
+  }
+
+  /** The reproduction files already in {@code dir}, from every JVM; 0 when it does not exist. */
+  private static long filesIn(Path dir) throws IOException {
+    if (!Files.isDirectory(dir)) {
+      return 0;
+    }
+    try (var files = Files.list(dir)) {
+      return files.filter(f -> f.getFileName().toString().startsWith("varka-repro-")).count();
     }
   }
 
@@ -295,11 +331,15 @@ public record VarkaReproduction(
     }
   }
 
-  /** {@code varka-repro-<hash>-<kind>-pid<pid>.txt}, the kind in lower-case words. */
+  /**
+   * {@code varka-repro-<hash>-<kind>-pid<pid>-<token>.txt}, the kind in lower-case words and the
+   * token this JVM's own.
+   */
   static String fileName(String hash, String kind) {
     String slug = kind.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "-")
         .replaceAll("^-|-$", "");
-    return "varka-repro-" + hash + "-" + slug + "-pid" + ProcessHandle.current().pid() + ".txt";
+    return "varka-repro-" + hash + "-" + slug + "-pid" + ProcessHandle.current().pid() + "-"
+        + JVM_TOKEN + ".txt";
   }
 
   /**
@@ -362,6 +402,7 @@ public record VarkaReproduction(
       line(out, "rows", Integer.toString(call.rows()));
       line(out, "scratch bytes per row", Integer.toString(call.scratchBytesPerRow()));
       line(out, "output widths", join(call.outputWidths()));
+      line(out, "selection bitmaps", Boolean.toString(call.selectionBitmaps()));
       if (call.omitted() != null) {
         line(out, "batch omitted", call.omitted());
       }
@@ -496,6 +537,7 @@ public record VarkaReproduction(
       for (String v : split(reader.take("output widths"))) {
         widths.add(Integer.parseInt(v));
       }
+      boolean selection = Boolean.parseBoolean(reader.take("selection bitmaps"));
       String omitted = reader.next("batch omitted") ? reader.take("batch omitted") : null;
       var inputs = new ArrayList<Input>();
       while (reader.next("input")) {
@@ -510,7 +552,7 @@ public record VarkaReproduction(
             Integer.parseInt(fields.get("nulls")), Boolean.parseBoolean(fields.get("derived")),
             bytes(reader.take("input data")), bytes(reader.take("input validity"))));
       }
-      call = new KernelCall(rows, scratch, widths, inputs, omitted);
+      call = new KernelCall(rows, scratch, widths, inputs, omitted, selection);
     }
     byte[] classBytes = bytes(reader.take("class"));
     if (reader.peek() != null) {

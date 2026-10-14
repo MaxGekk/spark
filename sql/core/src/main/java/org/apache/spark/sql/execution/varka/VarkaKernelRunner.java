@@ -427,8 +427,10 @@ public final class VarkaKernelRunner {
    *
    * @param maxBatchBytes the most bytes of values to copy; past it, the call keeps every input's
    *                      shape and no bytes
+   * @param selectionBitmaps whether the outputs are a filter's selection bitmaps
    */
-  public VarkaReproduction.KernelCall capture(ColumnarBatch input, int len, long maxBatchBytes) {
+  public VarkaReproduction.KernelCall capture(ColumnarBatch input, int len, long maxBatchBytes,
+      boolean selectionBitmaps) {
     int n = inputOrdinals.length;
     var widths = new int[n];
     var dataBufs = new ArrowBuf[n];
@@ -476,7 +478,7 @@ public final class VarkaKernelRunner {
       outputWidths.add(w);
     }
     return new VarkaReproduction.KernelCall(len, scratchBytesPerRow, outputWidths, inputs,
-        omitted);
+        omitted, selectionBitmaps);
   }
 
   /**

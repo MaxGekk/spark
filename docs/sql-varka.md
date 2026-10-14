@@ -898,11 +898,13 @@ an `hs_err` file behind a crash:
   validity, null count and buffer capacity), and the class bytes. A batch over
   `spark.sql.codegen.varka.reproduction.maxBatchBytes` keeps its shape and not
   its values.
-* **Where it goes.** `varka-repro-<shape hash>-<kind>-pid<pid>.txt` under
-  `spark.sql.codegen.varka.reproduction.directory`, by default
+* **Where it goes.** `varka-repro-<shape hash>-<kind>-pid<pid>-<token>.txt`
+  (the token is the JVM's own, since containers often run every executor as
+  pid 1) under `spark.sql.codegen.varka.reproduction.directory`, by default
   `varka-reproductions` under the failing JVM's `java.io.tmpdir`, owner-only
   since a batch is the query's data. One file per shape and kind per JVM, at
-  most 32 per JVM, and the warning names the file.
+  most 32 per JVM and 256 in the directory from all JVMs, and the warning
+  names the file. A projection's kernel and a filter's both write one.
 * **Replaying it.** `dev/varka_emit.sh --replay <file>` rebuilds the kernel from
   the file's IR and options (refusing a file whose IR does not hash to its
   shape hash), walks the failing path - verification, definition, or a run over

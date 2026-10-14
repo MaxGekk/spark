@@ -26,7 +26,7 @@
 #   dev/varka_emit.sh "year(d)" "month(d)" "add_months(d, 1)" --table \
 #     --variant neriSchneiderMonth=false
 #   dev/varka_emit.sh "second(t)" --columns t:time --asm --width=16   # 128-bit species
-#   dev/varka_emit.sh --replay /tmp/varka-reproductions/varka-repro-<hash>-<kind>-pid<pid>.txt
+#   dev/varka_emit.sh --replay /tmp/varka-reproductions/varka-repro-<hash>-<kind>-pid<pid>-<token>.txt
 #
 # --replay FILE replays a reproduction file a Varka kernel failure wrote (VARKA-315): it
 # rebuilds the kernel from the file's IR and options, walks the failing path - the verification,
@@ -71,7 +71,8 @@ if [ "${1:-}" = "--replay" ]; then
   log="$(mktemp -t varka-replay.XXXXXX)"
   trap 'rm -f "$log"' EXIT
   # `|| true`: the replay exits 1 when it does not reproduce, which is a result, not an error.
-  build/sbt -batch "project catalyst" "${sanitizer[@]}" \
+  # The guarded expansion: bash before 4.4 calls an empty "${a[@]}" unbound under set -u.
+  build/sbt -batch "project catalyst" ${sanitizer[@]+"${sanitizer[@]}"} \
     "Test/runMain $main --replay \"$file\"" > "$log" 2>&1 || true
   report="$(sed -E 's/^\[(info|error)\] ?//' "$log" | sed -n '/^== Varka replay ==/,$p' \
     | grep -v -E '^\[(success|warn|error)\]|^WARNING: |onzero exit code|^Total time|^stack trace' || true)"

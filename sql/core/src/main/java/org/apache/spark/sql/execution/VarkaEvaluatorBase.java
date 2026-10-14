@@ -377,7 +377,7 @@ public abstract class VarkaEvaluatorBase {
               + "; falling back to the per-row path." + VarkaFallbackAccounting.block(ctx), e);
           // A class that fails to verify or define fails here, and no class dump has it.
           try {
-            VarkaReproduction.write(ctx, e, shapeKey(compiled), compiled.literals(),
+            VarkaReproduction.write(() -> ctx, null, e, shapeKey(compiled), compiled.literals(),
                 compiled.longLiterals(), null, null);
           } catch (Throwable t) {
             VarkaReproduction.unwritten(t);
@@ -595,12 +595,13 @@ public abstract class VarkaEvaluatorBase {
     } catch (VarkaKernelFailure e) {
       // Written here, inside the sanitizer's window and with this kernel's runner, then
       // rethrown unchanged for serveBatch to fall back on (VARKA-315).
-      reproduceKernelFailure(VarkaFallbackEvent.KERNEL_FAILURE, e.getCause(), kernel, input, len);
+      reproduceKernelFailure(VarkaFallbackEvent.KERNEL_FAILURE, e.getCause(), kernel, input, len,
+          false);
       throw e;
     } catch (VarkaMemoryViolation e) {
       // A violation fails the task and passes every catch above unrecorded, so this is the one
       // place it is written down.
-      reproduceKernelFailure(VarkaErrorContext.MEMORY_VIOLATION, e, kernel, input, len);
+      reproduceKernelFailure(VarkaErrorContext.MEMORY_VIOLATION, e, kernel, input, len, false);
       throw e;
     } finally {
       VarkaMemorySanitizer.end();
@@ -609,16 +610,22 @@ public abstract class VarkaEvaluatorBase {
 
   /**
    * The reproduction file of a failure inside this evaluator's kernel (VARKA-315): its shape key,
-   * its literals, the call it failed in and its class. Nothing here may throw, since the failure
-   * being handled is rethrown after it: {@link VarkaReproduction#write} catches its own failures,
-   * and this catches what building its arguments could throw.
+   * its literals, the call it failed in and its class. The projection's {@link #runKernel} and the
+   * filter's mask call it from their catches. Nothing here may throw, since the failure being
+   * handled is rethrown after it: {@link VarkaReproduction#write} catches its own failures, and
+   * this catches what building its arguments could throw. The record and the call are built only
+   * when a file is written, so a kernel that fails on every batch pays for them once.
    */
-  private void reproduceKernelFailure(String kind, Throwable failure, VarkaKernelRunner kernel,
-      ColumnarBatch input, int len) {
+  protected final void reproduceKernelFailure(String kind, Throwable failure,
+      VarkaKernelRunner kernel, ColumnarBatch input, int len, boolean selectionBitmaps) {
     try {
-      VarkaErrorContext ctx = errorContext(kind, failure, null, kernel.shapeHash, input, true);
-      VarkaReproduction.write(ctx, failure, shapeKey(plan), plan.literals(), plan.longLiterals(),
-          maxBatchBytes -> kernel.capture(input, len, maxBatchBytes), kernel.classBytes);
+      CompiledVarkaProjection compiled = plan();
+      VarkaReproduction.write(
+          () -> errorContext(kind, failure, null, kernel.shapeHash, input, true),
+          kernel.shapeHash, failure, shapeKey(compiled), compiled.literals(),
+          compiled.longLiterals(),
+          maxBatchBytes -> kernel.capture(input, len, maxBatchBytes, selectionBitmaps),
+          kernel.classBytes);
     } catch (Throwable t) {
       VarkaReproduction.unwritten(t);
     }

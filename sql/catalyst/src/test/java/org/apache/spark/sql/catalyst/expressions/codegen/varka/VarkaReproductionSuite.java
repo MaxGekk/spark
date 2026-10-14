@@ -183,7 +183,7 @@ public final class VarkaReproductionSuite {
         new VarkaReproduction.Input(4, 64, 64, 1, false, new byte[12], new byte[] {5, 0, 0, 0,
             0, 0, 0, 0}),
         new VarkaReproduction.Input(4, 16, 0, 0, true, new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
-            11, 12}, null)), null);
+            11, 12}, null)), null, false);
     VarkaReproduction written = sample(call);
     VarkaReproduction read = VarkaReproduction.parse(written.render());
     assertEquals(written.signature(), read.signature());
@@ -205,9 +205,11 @@ public final class VarkaReproductionSuite {
       assertArrayEquals(a.validity(), b.validity());
     }
     var omitted = new VarkaReproduction.KernelCall(3, 0, List.of(4), List.of(
-        new VarkaReproduction.Input(4, 64, 64, 1, false, null, null)), "over the limit of 0");
+        new VarkaReproduction.Input(4, 64, 64, 1, false, null, null)), "over the limit of 0",
+        true);
     var back = VarkaReproduction.parse(sample(omitted).render()).call();
     assertEquals("over the limit of 0", back.omitted());
+    assertTrue(back.selectionBitmaps());
     assertNull(back.inputs().get(0).data());
     assertThrows(IllegalArgumentException.class, () -> VarkaReproduction.parse("not a file"));
   }
@@ -224,8 +226,8 @@ public final class VarkaReproductionSuite {
   }
 
   private Optional<Path> write(Throwable failure) {
-    return VarkaReproduction.write(context(VarkaFallbackEvent.EMISSION_FAILURE), failure,
-        addDays(), List.of(3), List.of(), null, null);
+    return VarkaReproduction.write(() -> context(VarkaFallbackEvent.EMISSION_FAILURE), null,
+        failure, addDays(), List.of(3), List.of(), null, null);
   }
 
   @Test
@@ -256,15 +258,16 @@ public final class VarkaReproductionSuite {
     assertEquals(List.of("(addDays col:0 lit:0)"), read.outputs());
     assertNull(read.call());
 
-    // A file where the directory should be: the write fails, quietly, and claims nothing.
+    // A file where the directory should be: the write fails, quietly, is not tried again for
+    // the same shape and kind, and does not count against the cap.
     VarkaReproduction.resetForTesting();
     Path blocker = dir.resolve("blocker");
     Files.writeString(blocker, "x");
     SQLConf.get().setConfString(SQLConf.VARKA_REPRODUCTION_DIRECTORY().key(), blocker.toString());
     assertTrue(write(new IllegalStateException("one")).isEmpty());
     SQLConf.get().setConfString(SQLConf.VARKA_REPRODUCTION_DIRECTORY().key(), target.toString());
-    assertTrue(write(new IllegalStateException("one")).isPresent(),
-        "a failed write does not count as written");
+    assertTrue(write(new IllegalStateException("one")).isEmpty(), "tried once only");
+    assertTrue(write(new UnsupportedOperationException("u")).isPresent());
   }
 
   @Test
@@ -276,12 +279,24 @@ public final class VarkaReproductionSuite {
     for (int k = 0; k < VarkaReproduction.MAX_FILES_PER_JVM + 5; k++) {
       var key = new VarkaShapeKey(List.of(new AddDays(new ColumnRef(0), new LiteralSlot(0))), 1,
           1, VarkaEmitOptions.DEFAULTS.withGroupBudget(1 + k));
-      if (VarkaReproduction.write(context(VarkaFallbackEvent.EMISSION_FAILURE),
+      if (VarkaReproduction.write(() -> context(VarkaFallbackEvent.EMISSION_FAILURE), null,
           new IllegalStateException("x"), key, List.of(3), List.of(), null, null).isPresent()) {
         written++;
       }
     }
     assertEquals(VarkaReproduction.MAX_FILES_PER_JVM, written);
+  }
+
+  @Test
+  @DisplayName("a directory that already holds its cap of files gets no more, from any JVM")
+  void directoryCap() throws IOException {
+    Path full = dir.resolve("full");
+    Files.createDirectories(full);
+    for (int k = 0; k < VarkaReproduction.MAX_FILES_PER_DIRECTORY; k++) {
+      Files.writeString(full.resolve("varka-repro-other-" + k + ".txt"), "x");
+    }
+    SQLConf.get().setConfString(SQLConf.VARKA_REPRODUCTION_DIRECTORY().key(), full.toString());
+    assertTrue(write(new IllegalStateException("one")).isEmpty());
   }
 
   @Test

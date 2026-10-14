@@ -107,7 +107,7 @@ final class VarkaSizeAdmission {
           + (cut < 0 ? message : message.substring(0, cut)) + ")";
       return Optional.of(new Decline(d.outputs(), reason, d.plannedCut()));
     } catch (Throwable t) {
-      if (t instanceof LinkageError) {
+      if (t instanceof VerifyError) {
         // Under test the admission verifies the bytes it built, so a class the verifier rejects
         // fails the query here, at planning, before any evaluator could record it: the
         // reproduction file is written here instead (VARKA-315), and the error rethrown as it is.
@@ -145,8 +145,8 @@ final class VarkaSizeAdmission {
       var ctx = new VarkaErrorContext(VarkaErrorContext.PLANNING,
           VarkaShapeCache.sourceFileFor(hash) + " [" + ir + "] (planning)", hash,
           VarkaErrorContext.renderOptions(key.options()), null, failure);
-      VarkaReproduction.write(ctx, failure, key, fused.literals(), fused.longLiterals(), null,
-          null);
+      VarkaReproduction.write(() -> ctx, hash, failure, key, fused.literals(),
+          fused.longLiterals(), null, null);
     } catch (Throwable t) {
       VarkaReproduction.unwritten(t);
     }

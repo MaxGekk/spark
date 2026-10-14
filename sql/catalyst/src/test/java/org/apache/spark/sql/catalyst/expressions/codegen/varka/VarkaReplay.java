@@ -122,16 +122,16 @@ public record VarkaReplay(VarkaFailureSignature expected, Optional<VarkaFailureS
           + (errors.isEmpty() ? "it verifies" : errors.size() + " errors"));
       return errors.isEmpty() ? done(file, notes) : failed(file, notes, errors.get(0));
     }
-    VarkaFusedKernel kernel;
     var loader = new VarkaGeneratedClassLoader(VarkaReplay.class.getClassLoader());
     try {
-      kernel = load(loader, className, bytes);
-      notes.add("defined and linked the class");
-    } catch (Throwable t) {
-      notes.add("defining or linking the class threw");
-      return failed(file, notes, t);
-    }
-    try {
+      VarkaFusedKernel kernel;
+      try {
+        kernel = load(loader, className, bytes);
+        notes.add("defined and linked the class");
+      } catch (Throwable t) {
+        notes.add("defining or linking the class threw");
+        return failed(file, notes, t);
+      }
       if (file.call() == null) {
         return done(file, notes);
       }
@@ -210,7 +210,10 @@ public record VarkaReplay(VarkaFailureSignature expected, Optional<VarkaFailureS
       ArrowBuf scratch = scratchBytes > 0 ? buffer(allocator, owned, scratchBytes) : null;
       var dstData = new ArrowBuf[outputs];
       var dstValidity = new ArrowBuf[outputs];
-      for (int o = 0; o < outputs; o++) {
+      // A filter's bitmaps are one buffer of whole words per output, as VarkaFilterEvaluator
+      // lays them out; a projection's outputs are a vector each.
+      ArrowBuf bitmaps = call.selectionBitmaps() ? buffer(allocator, owned, words * outputs) : null;
+      for (int o = 0; o < outputs && bitmaps == null; o++) {
         dstData[o] = buffer(allocator, owned, (long) rows * call.outputWidths().get(o));
         dstValidity[o] = buffer(allocator, owned, ((rows + 63L) / 64) * 8);
       }
@@ -237,14 +240,20 @@ public record VarkaReplay(VarkaFailureSignature expected, Optional<VarkaFailureS
                 input.dataCapacity());
             if (validity[i] != null) {
               VarkaMemorySanitizer.register("input validity", i, validity[i].memoryAddress(),
-                  input.validityCapacity() == 0 ? words : input.validityCapacity());
+                  input.validityCapacity());
             }
           }
         }
         if (scratch != null) {
           VarkaMemorySanitizer.guard("kernel scratch", 0, scratch, scratchBytes);
         }
-        for (int o = 0; o < outputs; o++) {
+        if (bitmaps != null) {
+          VarkaMemorySanitizer.guard("selection bitmaps", 0, bitmaps, words * outputs);
+          for (int o = 0; o < outputs; o++) {
+            dstValid[o] = bitmaps.memoryAddress() + o * words;
+          }
+        }
+        for (int o = 0; o < outputs && bitmaps == null; o++) {
           dst[o] = dstData[o].memoryAddress();
           dstValid[o] = dstValidity[o].memoryAddress();
           VarkaMemorySanitizer.guard("output data", o, dstData[o],
