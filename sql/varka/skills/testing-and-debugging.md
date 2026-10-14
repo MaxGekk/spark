@@ -1083,6 +1083,7 @@ predicted. Add the line when the prediction is scored, whichever way it went.
 | VARKA-274a (6.1 #2) | under 3 s per case for all histories | 3,623 ms median at the int lane, 1,356 ms at the long lane | 1.2 | long lane faster than predicted |
 | VARKA-274a (6.1 #8) | the tier witness adds under 5% | +19% (int) and +25% (long) per case; +6% on the whole test | 3.8 to 5.0 | one code-list read per call, about 3.5 ms, is most of it |
 | VARKA-271a (6.1 #6) | the Varka arm under 70 minutes in one JVM | 33 minutes beside the cache-only arm | 0.5 | the one pessimistic line so far |
+| VARKA-243 (6.1 #3) | a new sql/core suite under 10 s | 18 s, its tests under 4 s | about 2 | the estimate counted the tests and not the suite's own sessions and cached table |
 
 What the table says so far: a check that adds a run per batch or a read per call costs more than
 the plan's arithmetic, because the arithmetic counts the kernel's work and not the harness's

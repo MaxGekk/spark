@@ -213,18 +213,28 @@ value; a predicate fuses only as a filter, so the suite runs comparisons as `WHE
 the `ym * 2` example is not pinned: the coverage table fuses an interval multiply only over
 bounded operands, so a stored interval column times a constant declines to the row engine, and the
 bounded form, `make_ym_interval(year(d), month(d)) * 2`, is not negative for any date the
-standard admits, years 1 to 9999. Its definition (4.18) stands on the text alone until row 244 or 245 reaches it.
+standard admits, years 1 to 9999. Its definition (4.18) stands on the text alone until row 244
+or 245 reaches it, as do two extracts of 4.12 that no coverage row fuses: an interval's MONTH,
+whose `-6` against flooring's `6` is the sharpest case of C5 (`extract(MONTH FROM ym)` declines by design,
+since Spark returns it as a byte and no lane holds one, `VarkaIntervalCompiler`), and a day-time
+interval's DAY over a negative interval. Each is pinned when a coverage row fuses it.
+
+**A correction to section 4.** The branch also adds a lesson to `skills/calendar-algorithms.md`
+and regenerates `SKILLS.md`'s index, which the files table did not list.
 
 **The predictions, scored.**
 
-1. *17 of 19 need nothing past SQL-92, the two exceptions BIGINT and BOOLEAN.* Held: those two are
-   the only operations resting on a later edition, and both are owed.
+1. *17 of 19 need nothing past SQL-92, the two exceptions BIGINT and BOOLEAN.* Wrong as stated:
+   all 19 definitions rest on SQL-92 clauses. BIGINT and BOOLEAN are types that some of them
+   assume - the long-lane comparisons, a projected predicate - not operations of their own, and
+   the prediction counted them as operations. Both are owed.
 2. *Three floor in lane terms, two truncate, the rest do not divide.* Held: the date decode
    (4.10), the month carry (4.13) and the modulo-24 (4.15) floor; the interval extracts (4.12) and
    the time difference (4.16) truncate; the HOUR, MINUTE and SECOND extracts (4.11) divide a
    non-negative value, where the two agree.
-3. *The suite adds under ten seconds.* Missed: its seven tests take under four seconds, but the suite
-   takes eighteen with its sessions and cached table, on the laptop beside other agents' jobs.
+3. *The suite adds under ten seconds.* Missed: its tests take under four seconds, but the suite
+   takes eighteen with its sessions and cached table, on the laptop beside other agents' jobs. The
+   line is in the calibration table in `skills/testing-and-debugging.md`.
 
 **Owed**, as `STANDARD.md` section 6 lists: the current edition's clause for every definition;
 the truth tables' unknown rows; the editions defining `BIGINT`, `BOOLEAN`, interval `ABS`,

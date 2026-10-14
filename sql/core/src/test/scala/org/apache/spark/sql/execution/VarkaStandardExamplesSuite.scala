@@ -32,17 +32,22 @@ import org.apache.spark.sql.types.YearMonthIntervalType.{MONTH, YEAR}
  * That file defines each operation of the coverage table that the SQL standard fixes, and says
  * for each whether it truncates, floors or does not divide, with an example over a negative
  * value where the two would differ. A wrong example there would mislead the proofs restated
- * against it, so each example on which Spark agrees with the standard is run here: the query is
+ * against it, so the examples on which Spark agrees with the standard are run here: the query is
  * fused, its kernels serve the batch, and the answer is the literal value the file states and the
- * row engine's. The examples where Spark departs from the standard - a month added to the 31st,
- * a time plus an interval leaving the day - are VARKA-244's tests, not these.
+ * row engine's. Three are not, because no coverage row fuses them over a negative value: an
+ * interval's MONTH field and a day-time interval's DAY field (4.12), and an interval times a
+ * number (4.18), which fuses only over operands a bound keeps small. The examples where Spark
+ * departs from the standard - a month added to the 31st, a time plus an interval leaving the
+ * day - are VARKA-244's tests, not these.
  *
- * One cached table, two rows of negative inputs and a row of nulls:
+ * One cached table, two rows of negative inputs, a row whose dates run the other way, and a row
+ * of nulls:
  *
  *  - `d`, a date to take fields from: 1969-12-31, day count -1, and 1600-02-29, a proleptic leap
- *    day far before the epoch;
+ *    day far before the epoch; then 2000-03-01, after the epoch and after its `d2`;
  *  - `d2`, a date whose day exists in every month the tests move it to;
- *  - `i`, a day count to add; `ym`, `ymm` and `ymy`, year-month intervals of the three unit ranges,
+ *  - `i`, a day count to add, which crosses 29 February 1968 in the second row; `n`, an int at the
+ *    bottom of its range; `ym`, `ymm` and `ymy`, year-month intervals of the three unit ranges,
  *    negative where it matters; `t` and `t2`, times on either side of each other.
  */
 class VarkaStandardExamplesSuite extends QueryTest with VarkaSharedSessions
@@ -53,14 +58,17 @@ class VarkaStandardExamplesSuite extends QueryTest with VarkaSharedSessions
   private def months(n: Int): Period = Period.ofMonths(n).normalized()
 
   private def rows: Seq[Row] = Seq(
-    Row(date("1969-12-31"), date("1970-01-01"), -1, months(-18), months(6), Period.ofYears(-2),
-      LocalTime.of(0, 15), LocalTime.of(1, 0)),
-    Row(date("1600-02-29"), date("1970-01-15"), -366, months(-1), months(-6), Period.ofYears(1),
-      LocalTime.of(23, 0), LocalTime.of(0, 0)),
-    Row(null, null, null, null, null, null, null, null))
+    Row(date("1969-12-31"), date("1970-01-01"), -1, -2147483647, months(-18), months(6),
+      Period.ofYears(-2), LocalTime.of(0, 15), LocalTime.of(1, 0)),
+    Row(date("1600-02-29"), date("1970-01-15"), -700, 0, months(-1), months(-6),
+      Period.ofYears(1), LocalTime.of(23, 0), LocalTime.of(0, 0)),
+    Row(date("2000-03-01"), date("1969-12-31"), 0, 5, months(12), months(-12),
+      Period.ofYears(0), LocalTime.of(12, 0), LocalTime.of(11, 59, 59, 999999000)),
+    Row(null, null, null, null, null, null, null, null, null))
 
   private val schema = StructType(Seq(
     StructField("d", DateType), StructField("d2", DateType), StructField("i", IntegerType),
+    StructField("n", IntegerType),
     StructField("ym", YearMonthIntervalType(YEAR, MONTH)),
     StructField("ymm", YearMonthIntervalType(MONTH, MONTH)),
     StructField("ymy", YearMonthIntervalType(YEAR, YEAR)),
@@ -96,44 +104,52 @@ class VarkaStandardExamplesSuite extends QueryTest with VarkaSharedSessions
 
   test("an interval's year truncates: minus eighteen months is minus one year, not minus two") {
     // 4.12: YEAR is quot(m, 12), the magnitude's years with the interval's sign.
-    checkExample("extract(YEAR FROM ym)", Seq(Row(-1), Row(0), Row(null)))
+    checkExample("extract(YEAR FROM ym)", Seq(Row(-1), Row(0), Row(1), Row(null)))
   }
 
   test("a date's fields decode from the day count by flooring: day minus one is 1969-12-31") {
     // 4.10: the day count is negative for every date before 1970.
     checkExample("year(d), month(d), day(d)",
-      Seq(Row(1969, 12, 31), Row(1600, 2, 29), Row(null, null, null)))
+      Seq(Row(1969, 12, 31), Row(1600, 2, 29), Row(2000, 3, 1), Row(null, null, null)))
   }
 
   test("a month carry floors: 1970-01-15 plus minus one month is 1969-12-15") {
     // 4.13: the carry div(M - 1 + m, 12) is -1, and the day is kept.
-    checkExample("d2 + ym", Seq(Row(date("1968-07-01")), Row(date("1969-12-15")), Row(null)))
-    checkExample("d2 - ym", Seq(Row(date("1971-07-01")), Row(date("1970-02-15")), Row(null)))
+    checkExample("d2 + ym", Seq(Row(date("1968-07-01")), Row(date("1969-12-15")),
+      Row(date("1970-12-31")), Row(null)))
+    checkExample("d2 - ym", Seq(Row(date("1971-07-01")), Row(date("1970-02-15")),
+      Row(date("1968-12-31")), Row(null)))
   }
 
-  test("a negative day interval moves a date back across the epoch and a leap year") {
-    // 4.14 and 4.19: n + k, with the cast's day count exact.
+  test("a negative day interval moves a date back across the epoch and a leap day") {
+    // 4.14 and 4.19: n + k, with the cast's day count exact; 700 days back from 1970-01-15
+    // passes 29 February 1968.
     checkExample("d2 + CAST(i AS INTERVAL DAY)",
-      Seq(Row(date("1969-12-31")), Row(date("1969-01-14")), Row(null)))
+      Seq(Row(date("1969-12-31")), Row(date("1968-02-15")), Row(date("1969-12-31")), Row(null)))
+  }
+
+  test("an int subtraction at the bottom of the range is exact: -2147483647 - 1 is in range") {
+    // 4.1: the exact result, which INTEGER can represent here.
+    checkExample("n - 1", Seq(Row(Int.MinValue), Row(-1), Row(4), Row(null)))
   }
 
   test("interval arithmetic and the year-to-month cast keep one sign across zero") {
     // 4.17 and 4.19: m_A - m_B over the least significant field, and 12 * years.
-    checkExample("ym - ymm", Seq(Row(months(-24)), Row(months(5)), Row(null)))
+    checkExample("ym - ymm", Seq(Row(months(-24)), Row(months(5)), Row(months(24)), Row(null)))
     checkExample("CAST(ymy AS INTERVAL MONTH)",
-      Seq(Row(months(-24)), Row(months(12)), Row(null)))
+      Seq(Row(months(-24)), Row(months(12)), Row(months(0)), Row(null)))
   }
 
   test("dates compare by their signed day counts, before and after the epoch") {
     // 4.3: (X - Y) DAY against zero.
-    // Both rows' d is the earlier date, so `<` keeps both, `>` neither, and the nulls neither.
+    // The first two rows' d is the earlier date, the third's the later; the nulls are in neither.
     checkExample("d", Seq(Row(date("1969-12-31")), Row(date("1600-02-29"))), where = "d < d2")
-    checkExample("d", Seq.empty, where = "d > d2")
+    checkExample("d", Seq(Row(date("2000-03-01"))), where = "d > d2")
   }
 
   test("a time minus a later time is a negative interval, exact at six digits") {
     // 4.16: quot(t_A - t_B, 1000) microseconds, exact over TIME(6).
-    checkExample("t - t2",
-      Seq(Row(Duration.ofMinutes(-45)), Row(Duration.ofHours(23)), Row(null)))
+    checkExample("t - t2", Seq(Row(Duration.ofMinutes(-45)), Row(Duration.ofHours(23)),
+      Row(Duration.ofNanos(1000)), Row(null)))
   }
 }

@@ -92,8 +92,9 @@ gives an interval fields that are each non-negative within their range (Table 7:
 <extract source>" - one sign for the whole value. So `INTERVAL '-1-6' YEAR TO MONTH` has YEAR 1,
 MONTH 6 and a minus sign. Over a signed count `m`, that is exactly `quot(m, 12)` and `rem(m, 12)`:
 `quot(-18, 12) = -1` and `rem(-18, 12) = -6`. The flooring split, `-2` years and `+6` months,
-describes the same count but not the standard's fields. This choice decides every interval
-division in sections 4.12 and 4.18.
+describes the same count but not the standard's fields. This choice decides the interval
+divisions of section 4.12, the only ones in this fragment, and how the counts that 4.17 to 4.19
+produce read as fields.
 
 **C6. Interval precision is a parameter.** 10.1 SR 5: "If <interval leading field precision> is
 not specified, then an <interval leading field precision> of 2 is implicit", and SR 3 sets its
@@ -337,8 +338,7 @@ and over non-negative operands `quot = div`. There is no admissible negative exa
 
 **Spark.** `second(t)` returns an integer, the standard's SECOND with its fraction dropped:
 `second(TIME '12:34:56.789')` is 56 where the standard's `EXTRACT(SECOND ...)` is 56.789
-(VARKA-244). Over
-non-negative values that drop is a truncation and a floor alike.
+(VARKA-244). Over non-negative values that drop is a truncation and a floor alike.
 
 ### 4.12 `EXTRACT` of a field from an interval
 
@@ -550,8 +550,10 @@ with an integer, `datediff`, `unix_date`, `date_from_unix_date`, `quarter`, `day
 interval, `greatest`, `least`, `time_diff`, `time_trunc`, `time_to_millis`, `time_to_micros`,
 `time_from_millis`, `time_from_micros`. Three reduce to an operation above: `date_add(d, k)` to
 4.14 with `CAST(k AS INTERVAL DAY)`, `date_sub` to the same with `-k`, and `datediff(a, b)` to
-`(a - b) DAY` of 6.15 GR 6 over dates. `ABS`, `GREATEST` and `LEAST` do not occur in the SQL-92
-text.
+`(a - b) DAY`: 6.15 GR 6, quoted in 4.16, over two dates, where the unit Y is DAY and the
+difference is `n_a - n_b` exactly, so nothing rounds. No coverage row spells a date minus a date,
+so that reduction has no section of its own here; whether `datediff` is defined by it is
+VARKA-244's call. `ABS`, `GREATEST` and `LEAST` do not occur in the SQL-92 text.
 
 ## 6. Owed
 
