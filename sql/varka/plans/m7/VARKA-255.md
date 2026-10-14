@@ -869,6 +869,52 @@ gh workflow run benchmark.yml -R vecbricks/varka -f pr=791 -f pair=true -f round
 
 `VarkaWideKernelBenchmark`'s pairs (322a's tenth, 325's second) stay on the laptop.
 
+**The three waiting jobs, run** (14 October 2026). The block above was dispatched at 13:21 CEST,
+two minutes after this merged, as five runs on `vecbricks/varka`: the A/A
+[38555923693](https://github.com/vecbricks/varka/actions/runs/38555923693), the nine classes
+[38555927657](https://github.com/vecbricks/varka/actions/runs/38555927657), #789's two results
+files [38555932989](https://github.com/vecbricks/varka/actions/runs/38555932989), #789's Emission
+pair [38555937778](https://github.com/vecbricks/varka/actions/runs/38555937778) and #791's parity
+pair [38555942066](https://github.com/vecbricks/varka/actions/runs/38555942066). All five
+completed with success; the last job ended at 18:12 CEST. The verdicts and the per-row reading are
+in `VARKA-322.md` 9 ("The ten pairs, on GitHub-hosted runners"); the cost and the mechanics are
+here.
+
+**Prediction 7 held for the parity class and failed for `VarkaUnreadLocalsBenchmark`.** Wall
+times per pair job, `started_at` to `completed_at`, every pair at five rounds but the probe
+class, which stopped after three: `VarkaVectorApiProbeBenchmark` 0:30:52,
+`VarkaArithmeticBenchmark` 0:39:10, `VarkaCodegenBenchmark` 0:47:36, `VarkaEmissionBenchmark`
+0:49:41 (322a-1), 0:51:07 (the A/A) and 0:52:30 (#789), `VarkaSharedPrefixBenchmark` 0:58:37,
+`VarkaLongLaneBenchmark` 1:08:06, `VarkaMethodSizeBenchmark` 1:22:59, `VarkaTimeBenchmark`
+1:59:53, `VarkaEmitterParityBenchmark` 3:29:26 and `VarkaUnreadLocalsBenchmark` 4:51:27. The
+parity class, the twenty-minute class the prediction had in mind, took 19 to 25 minutes a
+side-run on an EPYC 7763 (the `date:` lines of the artifact's ten provenance files, one run to
+the next) and paired at five rounds in under three and a half hours, so three would have been
+about two and a quarter; and the three waiting jobs completed with no laptop time. But
+`VarkaUnreadLocalsBenchmark` is no twenty-minute class on a runner: 26 to 34 minutes a side-run
+on an EPYC 9V45, by the same provenance dates, so its pair at five rounds took 4 h 51 min, ten
+single runs and the two builds, with an hour of the six to spare; the class, whose every case
+runs its first iterations before C2 has finished a 1.7 MB class (`VARKA-322.md` 9), was not in
+2.6's table of runner times. The results-file run took 2:55:41 for `VarkaWideKernelBenchmark` on
+an EPYC 7763 and 0:13:25 for `VarkaEmissionBenchmark` on an EPYC 9V74 (`VARKA-322.md` 9, "Row
+325's pair and its two runner files").
+
+**Mechanics seen.** The nine-class list ran six jobs at a time as 3.5 says, so three jobs started
+31 to 50 minutes after the first six, and the run took 4:51:38 in all. Eight of the twelve pair
+jobs and the wide-kernel results job end with two warnings, `Failed to save: Unable to reserve
+cache with key coursier-Linux-<hash>, another job may be creating this cache` and the same for
+`build-Linux-<hash>`: the jobs of one dispatch share a key, the first job to finish saves it
+(`VarkaVectorApiProbeBenchmark`'s log reads `Cache saved with key` for both; for the key the
+#789 and #791 jobs share, the Emission results job on the 9V74 does), and `actions/cache`'s post
+step in every job that finishes later finds the key taken and reports success with the warning.
+Nothing is lost: the next dispatch restores what that first job saved. The Xeon 6973P-C job pinned
+itself (`taskset -c 0,1,2,3`): that runner VM has a cpufreq directory, so the regeneration
+script's automatic pin applied, where every EPYC job ran unpinned (`the runner is not pinned` in
+its provenance). And the Java side's A/A at five rounds read 16.2% by best on one emission row,
+while two pairs drew three slow forks of five on one side of a bimodal row (`VARKA-322.md` 9),
+the draw the scoring of prediction 8 above reckoned five rounds would make rare; the
+threshold-per-class rule stands, and a runner's median alone decides nothing.
+
 ### 9.2 255b: master after each merge (14 October 2026)
 
 **What landed.** `varka-master.yml` on `vecbricks/varka`, on a push to `master` and on dispatch,

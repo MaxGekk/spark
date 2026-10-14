@@ -553,3 +553,163 @@ the pass count captured too, which gives the closure the Scala's exact signature
 module's methods called directly with the row count captured. Every one kept the XMM round trip
 and 6 and 12 oops, so item 6 is not the cause and the source is unchanged. The cause stays open:
 the register allocation is the only difference found, and nothing shows it costs 10% to 15%.
+
+**The ten pairs, on GitHub-hosted runners** (14 October 2026). #803 (VARKA-255a) merged at 13:19
+CEST, and at 13:21 the coordinator dispatched the block `VARKA-255.md` 9.1 lists under "After the
+merge" as five runs on `vecbricks/varka`: the A/A of 6
+([38555923693](https://github.com/vecbricks/varka/actions/runs/38555923693)), the nine other
+classes of 322a-1 ([38555927657](https://github.com/vecbricks/varka/actions/runs/38555927657)),
+row 325's two results files
+([38555932989](https://github.com/vecbricks/varka/actions/runs/38555932989)) and its Emission pair
+([38555937778](https://github.com/vecbricks/varka/actions/runs/38555937778)), and the parity pair
+([38555942066](https://github.com/vecbricks/varka/actions/runs/38555942066)). All five completed;
+the last job ended at 18:12 CEST. A pair ran at most five rounds, both sides on one machine, with
+`--force` (no runner has a canary baseline), the base built in a worktree of its own. For 322a-1
+the head is `refs/pull/780/head`, `5e2321c5951`, the ports after the review, and the base its
+merge base with master, `ad1feaa347c` (#781), the Scala forms; for the parity class the head is
+`f0975d9df75` and the base `8549423c12d` (#804); the A/A ran `5e2321c5951` against itself. The
+pool handed out four CPU models. Each job's verdict, per-row table, CPU and probe are its summary,
+every round's results file and provenance its artifact; the wall time below is the job's
+`started_at` to `completed_at` in the API.
+
+| class | rows | slower | faster | widest by median | widest by best | rounds | runner CPU | wall |
+|---|---:|---:|---:|---:|---:|---:|---|---:|
+| `VarkaEmissionBenchmark`, A/A (`base=HEAD`) | 28 | 0 | 0 | 9.9% | 16.2% | 5 | AMD EPYC 7763 | 0:51:07 |
+| `VarkaCodegenBenchmark` | 2 | 0 | 0 | 5.2% | 4.9% | 5 | AMD EPYC 7763 | 0:47:36 |
+| `VarkaUnreadLocalsBenchmark` | 32 | 0 | 0 | 79.8% | 10.9% | 5 | AMD EPYC 9V45 | 4:51:27 |
+| `VarkaSharedPrefixBenchmark` | 20 | 0 | 0 | 9,505.3% | 17.0% | 5 | AMD EPYC 9V45 | 0:58:37 |
+| `VarkaLongLaneBenchmark` | 64 | 0 | 0 | 67.8% | 9.2% | 5 | AMD EPYC 9V74 | 1:08:06 |
+| `VarkaEmissionBenchmark` | 28 | 0 | 0 | 28.8% | 15.6% | 5 | AMD EPYC 7763 | 0:49:41 |
+| `VarkaVectorApiProbeBenchmark` | 12 | 0 | 0 | 2.2% | 2.1% | 3 | AMD EPYC 7763 | 0:30:52 |
+| `VarkaMethodSizeBenchmark` | 64 | 0 | 0 | 12,173.0% | 5.7% | 5 | AMD EPYC 9V45 | 1:22:59 |
+| `VarkaArithmeticBenchmark` | 19 | 0 | 0 | 18.1% | 9.3% | 5 | AMD EPYC 9V45 | 0:39:10 |
+| `VarkaTimeBenchmark` | 140 | 0 | 2 | 37.3% | 24.8% | 5 | Intel Xeon 6973P-C | 1:59:53 |
+| `VarkaEmitterParityBenchmark` (#791) | 235 | 0 | 6 | 54.4% | 43.1% | 5 | AMD EPYC 7763 | 3:29:26 |
+| `VarkaEmissionBenchmark` (#789, row 325) | 28 | 0 | 0 | 33.2% | 2.6% | 5 | AMD EPYC 7763 | 0:52:30 |
+
+"Slower" and "faster" count the rows moved 10% or more by both the median and the best, the
+pair's rule; the widest changes are either way. `VarkaVectorApiProbeBenchmark` stopped after three
+rounds, every row within 3%. The nine-class run was a matrix of six jobs at a time, so
+`VarkaMethodSizeBenchmark`, `VarkaArithmeticBenchmark` and `VarkaTimeBenchmark` started 31 to 50
+minutes after the others. The Xeon job pinned itself (`taskset -c 0,1,2,3`: the regeneration
+script's automatic pin found a cpufreq directory on that machine); the eleven others ran unpinned.
+
+**The verdict for 322a: every ported class a runner can pair passes its pair**, prediction 4, on
+every class. The wide-kernel pair is still owed, on the laptop: a runner cannot pair that class
+inside the six-hour job cap (`VARKA-255.md` 9.1), and its single run there took 2 h 55 min
+(below).
+
+**The A/A spread, read first.** The Java side against itself: 28 rows, widest 9.9% by median and
+16.2% by best, both on `[one emission] a column, copied`, a 14 to 32 ms emission whose best time
+varied by that much over ten runs of identical code (bests of 14, 18, 19, 23 and 32 ms on one
+side, 16, 19, 21, 22 and 23 on the other; the artifact's `base-*.txt` and `head-*.txt`). Every
+other row is within 9.2% by median and 3.4% by best. The same row is the widest in the two other
+Emission pairs on the 7763, -28.8% by median and +15.6% by best in 322a-1's, +33.2% and +2.1% in
+row 325's, so it is read as the runner's spread, not the port's.
+
+**The two rows the laptop pair found slower did not reproduce** ("322a-2's pair, run", above). On
+the EPYC 7763, `per-row DateTimeUtils.truncDate YEAR` read -8.1% by median and -4.7% by best (base
+bests 217 to 230 ms, head 227 to 248), the laptop's direction but under the gate; and `per-row
+LocalDate.of make_date` read +13.3% by both, faster: the five base runs at 194 or 195 ms, the
+five head runs at 172, with a standard deviation of 0 ms inside every run. The laptop, an AMD
+Ryzen AI 9 HX PRO 370 (Zen 5) pinned to its fast cores, had read them -10.4%/-11.1% and
+-15.1%/-15.3%. The inlining check found the two sides differing in register allocation only; what
+that costs is evidently the microarchitecture's to decide, 15% one way on Zen 5 and 13% the other
+on Zen 3. The cause question of that section stays open, and is now known to be
+machine-dependent; no number the benchmark reports for Varka moves on either machine.
+
+**The parity pair's six faster rows** are the 20-output epilogue ladder at 63- and 64-row chunks
+(the shared arms +33.4%/+35.7% and +54.4%/+43.1%, base bests 511 to 644 ms against head 357 to
+470; the unshared +14.1%/+13.6% and +14.9%/+12.1%), the make_date reference above, and `scalar
+year, magic multiply (may auto-vectorize), null-free` (+15.0%/+15.4%; 137 or 138 ms in every base
+run, 119 or 120 in every head run). The ladder rows are the ones the laptop pair read faster for
+the harness's per-chunk work (items 1 to 3 of the list above), wider here. Its two rows marked
+"the median's alone" include `[dayofweek over 1000000 rows] lanewise DIV, null-free` at -20.7% by
+median and -0.9% by best: a row of 4 or 5 ms, where the harness's integer milliseconds make one
+step a fifth. `VarkaTimeBenchmark`'s two faster rows are emitted forms over 8,388,608 rows, past
+L3, `the split itself ... both halves stored wide` (+37.3%/+11.5%) and `minute ... narrowed
+store, half species` (+20.1%/+13.8%), rows of 9 to 19 ms where the same grain and the memory
+system set the spread; its twelve rows marked "the median's alone" are rows of the same kinds.
+The hand-written magic-multiply rows of prediction 2 moved between -13.9% and +24.8% by one
+measure or the other, none by 10% by both: the +24.8% by best is a sub-millisecond row whose
+nanoseconds a row print to one decimal, and the -13.9% by best (`hour: seconds of day, int32
+lanes, hand-written magic multiply`, in L3) came with -8.6% by median.
+
+**The odd medians, from the rows.** Four classes report a widest change by median of 68% to
+12,173% while their widest by best stays within 17%. The per-round files say why; it is three
+things, none of them the port.
+
+* **A fork lottery on 2 ms rows.** `VarkaMethodSizeBenchmark`'s `[4 make_date outputs ...] single
+  epilogue` rows (chunk 1024 and 1031, null-free) ran at 2 ms in some JVM forks and at 267 to 284
+  ms in others, on both sides: the base drew three slow forks of five and the head two, so the
+  medians sit in different modes (+12,081.1% and +12,173.0%) while the bests agree (+4.1% and
+  -3.8%). `VarkaSharedPrefixBenchmark`'s `fused ceiling 400: 6 groups, prefix per group` is the
+  same: 3 ms or 267 to 462 ms, the base three slow forks and the head two, +9,505.3% by median and
+  +3.1% by best. The record traces this bimodality to JDK-8380195 (`skills/benchmarking.md`, "A
+  benchmark number is reproducible within a run and not between runs"); three slow forks of five,
+  the draw `VARKA-255.md` 9.1 reckoned five rounds would make rare, happened twice in one
+  afternoon.
+* **Sub-millisecond rows.** `VarkaLongLaneBenchmark`'s eight marked rows are the int64 arms of
+  `[262144 rows - both arms in L3]`, each under a millisecond (a best time of 0 ms, 0.2 to 0.9 ns
+  a row). Three of the base's five runs read those rows at between a quarter and two thirds of
+  the other runs' rate and none of the head's did, so the medians read +46.2% to +67.8% and the
+  bests -4.4% to -8.8%. The int32 arms of the same table moved 0.5% to 6.1% by both.
+* **A class whose five iterations end before C2 does.** `VarkaUnreadLocalsBenchmark`'s three
+  marked rows are the null-free 400-entry arms, a class of 1.7 MB. The base's bests read 192 to
+  207 ms in every run; the head's read 193 to 203 in one or two runs and 322 to 4,800 in the
+  others (four of five runs of `as emitted`, three of `reloads stripped` and `as emitted, again`),
+  runs whose best iteration never reached the compiled speed, so the medians fell 38% to 80% and
+  the bests held within 1%. The committed laptop file shows the class's nature, an average
+  iteration of 3.5 to 4 s against a best of 0.3. Why the head drew those runs and the base did not
+  is not established.
+
+**`VarkaUnreadLocalsBenchmark`'s `as emitted` arms time a different class on each side**, by
+design: 322a-1's review made every arm emit with `withElideUnreadLocals(false)` ("Timed bodies
+that changed", above), where the base's Scala form emitted under the defaults and had nothing to
+strip. So the head's `as emitted` and `as emitted, again` rows with nulls read -10.9% and -8.3% by
+best (the first: bests of 232 to 238 ms against 207 to 219), and the first's allocation line
+52,040 bytes a batch against the base's 28,000 to 39,760, which is the price of the unread locals
+the benchmark exists to measure, and what the committed laptop file reads too (338 ms as emitted
+against 309 stripped; 52,040 bytes against 28,000). The `stripped` arms, the closest to the class
+the base timed, moved -3.5% to +2.9% by best.
+
+**Row 325's pair and its two runner files.** The Emission pair of #789 (`16373fc283f` against
+its merge base `453944cbfb1`, #806; the last row of the table) passed on the 7763 as it had on the
+laptop, 28 rows, none 10% apart by both measures. The results-file run regenerated
+`VarkaWideKernelBenchmark` on an EPYC 7763 (512:256 = 1.00; 2 h 55 min 41 s, 13:21 to 16:16 CEST)
+and `VarkaEmissionBenchmark` on an EPYC 9V74 (512:256 = 0.91; 13 min 25 s), each with the
+provenance file 255a writes. Both came back as artifacts and stay there: the committed files are
+the laptop's (AMD Ryzen AI 9 HX PRO 370 pinned to its fast cores, the canary passing, JDK 25.0.4.1
+Ubuntu; the runners ran Zulu 25.0.4+7 unpinned), every section measured on one machine in one run,
+and a results file is regenerated on the machine that measured it, so that its rows stay
+comparable with their own history and with the other files the plans quote beside them
+(`VARKA-255.md` 7, risk 5); a runner file also brings no 128-bit companion. What the runner files
+record, read with `dev/varka_bench_diff.py <committed> <runner>`: the Emission rows are all slower
+on the 9V74 than on the laptop, by 36% to 44% on the emission rows and 50% to 54% on the
+emission-and-definition rows, single-threaded compiler work on a lower clock; the wide-kernel
+rows are all slower on the 7763, the kernel rows by 57% to 86% (most by 62% to 71%, the
+22-cheap-tails arms by 68% to 86%) and the section's emission rows by 53% to 79%, and two rows
+apart: `64 cheap tails, predicted (3 loop methods)`, null-free and with nulls, read 97% and 98%
+slower, a fourteenth and a twentieth of their neighbours' rate (`weights`, `planned` and
+`weights, again` at 4 loop methods, 62% to 64% slower) where the laptop has the four arms within
+15% of each other - a slow mode of that kernel on that machine, which a regeneration there would
+need a pair to read. And four labels differ by a byte count: `800 entries, split driver, the
+loop's two builds (3451877 bytes)` is `(3451876 bytes)` on the runner, `800 entries, several
+kernels, the loop's classes alone (3469249 bytes in 2 classes)` is `3469247`, and the 1200-entry
+pair `5110577` and `5208235` are `5110576` and `5208233`: one byte less per class, so the diff
+tool cannot match those four rows. The two runs differ in machine and in JDK build; which moved
+the byte is not established, and no other label moved.
+
+**6.1, for the ten.** Prediction 4 held on every class a runner paired. Prediction 1 held for
+`VarkaCodegenBenchmark` (4.9% by best) and `VarkaMethodSizeBenchmark` (5.7%) and failed on the
+letter elsewhere: `VarkaEmissionBenchmark` 15.6%, on the row the A/A read at 16.2%;
+`VarkaArithmeticBenchmark` 9.3%, on one row; `VarkaLongLaneBenchmark` 4.4% to 9.2%, on the eight
+sub-millisecond int64 rows; `VarkaSharedPrefixBenchmark` 17.0%, on `fused ceiling 200: 20 groups,
+prefix computed once`, where one base run read 17 ms and the other nine runs 21 or 22. A best
+moves on one lucky run as a median on three slow ones, which is why the verdict reads both.
+Prediction 2 held: nothing hand-written moved by both measures, and
+`VarkaVectorApiProbeBenchmark` settled within 3% after three rounds. Prediction 3 held for the
+`stripped` arms and does not apply to the `as emitted` arms the review changed; the wide-kernel
+half waits for its pair. The A/A spread the predictions were to be read against is 16.2% by best
+for this class on a runner, where the plan had the laptop's one A/A, 4.1% by median
+(`VARKA-256.md` 9), in mind.
