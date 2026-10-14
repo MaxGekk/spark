@@ -12,8 +12,8 @@ reference rewritten by `dev/varka_catalogue_move.sh 8 9`, which a later merge re
 this milestone takes are named below with the number they have there: 1, 2, 31, 32, 33, 34, 35,
 36, 54, 55, 89 (bullet 1, and bullet 6 without its runtime bound), 93 and 94. So are the rows it
 takes from the catalogue's moved-row tables (items 15 and 39), which keep their task numbers and
-their designs where they are: 27, 28, 30, 39, 89, 95, 103, 104 and 157. Four of those already have plan files in this folder
-(`VARKA-28.md`, `VARKA-39.md`, `VARKA-89.md`, `VARKA-104.md`).
+their designs where they are: 27, 28, 30, 39, 89, 95, 103, 104 and 157. Four of those already
+have plan files in this folder (`VARKA-28.md`, `VARKA-39.md`, `VARKA-89.md`, `VARKA-104.md`).
 
 *Owner's decision, 14 October 2026, on the math family: item 36's first option, a ULP contract
 behind a SQL configuration (2.7.1, row 345). The functions it covers are fused within a stated
