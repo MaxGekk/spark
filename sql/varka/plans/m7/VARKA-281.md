@@ -349,4 +349,105 @@ agreement.
 2. The named constants, byte-identical answers; the four renderers and files; the sweep suite;
    the planted faults; the README and the lessons; section 9 and the row.
 
-## 9. Outcome
+## 9. Outcome, 14 October 2026
+
+### 9.1 What was built
+
+* **The rules' constants, named.** `VarkaRangeAnalysis` carries `NEXT_DAY_SHIFT`,
+  `THURSDAY_SHIFT`, `LAST_DAY_SHIFT`, `TRUNC_SHIFT` (a `Shift` record applied with `over`),
+  `MONTH_DAYS_MIN`/`MAX` and the seven field magnitudes beside `YEAR_FIELD_MAGNITUDE`; its arms,
+  the renderer and the sweep read them. `VarkaRangeAnalysisSuite` passes unchanged, which is the
+  check that no answer moved.
+* **Four rendered files, 257 checks**, every one holding under Z3 5.1.0 and cvc5 1.4.1, as whole
+  files and check by check:
+
+  | file | checks | claims (`unsat`) | neighbours and vacuity (`sat`) | Z3 | cvc5 |
+  | :--- | ---: | ---: | ---: | ---: | ---: |
+  | `value_range.smt2` | 68 | 29 | 39 | 0.10 s | 0.77 s |
+  | `range_analysis.smt2` | 111 | 41 | 70 | 0.11 s | 0.34 s |
+  | `range_calendar.smt2` | 38 | 23 | 15 | 8.4 to 11 s | 15 to 16 s |
+  | `time_bounds.smt2` | 40 | 24 | 16 | 0.03 s | 0.11 s |
+
+  The times are the laptop's on the evening of 14 October with two other agents' builds running,
+  so they are inflated and noisy: the same `dev/varka_prove.sh --lint` that took 9.2 s before this
+  task took 27 s wall at the end of it, of which the four new files are 8.7 s under Z3 and
+  `long_divide.smt2` under cvc5 had itself doubled from 8.1 s to 16 s. The nightly's form,
+  `--solver both` over all ten files, took 85 s wall, every run holding. `dev/varka_prove.sh`, CI
+  and the nightly are unchanged: no file needs a nightly-only list.
+* **The pins.** `value_range.smt2` holds each stated lattice rule to `Bounded`'s own answers at
+  nine sample intervals (1,377 equations in seven checks), `range_analysis.smt2` each stated arm
+  to `VarkaRangeAnalysis.range`'s answers on sample trees (27 equations), and
+  `range_calendar.smt2` its transcription of `LocalDate.toEpochDay` and `lengthOfMonth` to the
+  JVM at 31 years times twelve months times three days (1,488 equations).
+* **`VarkaRangeRulesSuite`**, eight JUnit 5 tests sweeping every calendar rule over the 20.2
+  million admitted days against `java.time` and `DateTimeUtils`, 1.5 s in all.
+* The README's new section, the three lessons in `skills/testing-and-debugging.md`, and this row.
+
+### 9.2 The planted faults
+
+Each in a copy of a rendered file, run under Z3, except the first, which is in the source and ran
+through the suite and the renderer:
+
+| fault | caught by |
+| :--- | :--- |
+| `LAST_DAY_SHIFT` as `[0, 29]` in `VarkaRangeAnalysis` | the sweep, at the first admitted day (1 March -12800, whose last day is 30 days on); the rendering moves to `[0, 29]` and the solver refutes the claim, `sat` |
+| `toEpochDay`'s correction past February off by one, in the transcription | the 1,488 pins, and four claims that rest on the leap day (`add_months` for negative counts, both `make_date` checks) |
+| `last_day`'s claim narrowed to `[0, 29]` in the file | the claim, `sat` |
+| the ring identity's `Q` without its `q1 my` term | layer A, `sat` |
+| `ra.nextday.hi` stated as `hi + 8` | the pin against the analysis's answer, `sat`, and the high-end neighbour, now `unsat`: a stated rule that drifted from the code fails without the claim being wrong |
+| `sub`'s low end stated as `a - c` | the claim and the pin against `Bounded.sub` |
+| the microsecond count guard one too wide | the `timeFromUnits` claim, `sat` |
+
+### 9.3 The predictions scored
+
+1. **To be scored from the pull request's CI run**: the "Varka proofs" step was 26 s on the runner
+   before this task, and the four files add 8.7 s under Z3 on the loaded laptop, about 9 s less
+   loaded, so about 18 s on the runner by VARKA-240's ratio - under the 45 s predicted and inside
+   the minute, if the laptop's ratio holds. If the step passes the minute, `range_calendar.smt2`
+   is the file to move and `dev/varka_prove.sh` gains a nightly-only list (7, risk 4).
+2. **Holds.** Both solvers meet every expectation on every check of the four files, whole and
+   alone; `range_calendar.smt2`'s checks were also each timed alone (2.3).
+3. **Holds, and the estimate was pessimistic by a factor of twelve**: 1.5 s for the eight tests
+   against under 20 s predicted. The line is in the calibration table: the estimate priced
+   single-threaded decodes and doubled, and the parallel stream and the JIT left little of either.
+4. **Holds.** Every planted fault fails a check, and the `[0, 29]` fault fails both legs (9.2).
+5. **Holds: no rule is unsound.** Two findings beside it, in 9.4.
+
+### 9.4 What the plan did not foresee
+
+* **The `year` answer's low end is slack by 29,600 years.** The rule's symmetric interval
+  `[-42400, 42400]` is exact at the top and the admitted years begin at -12800, so the
+  neighbour the renderer writes for every other rule - the low end raised by one - is not
+  refuted here; `range_calendar.smt2` records the slack as a holding check instead. It is
+  `m8/SCOPE.md` item 86's debt, the symmetric `INT` answers, made visible by a proof.
+* **A `sat` neighbour can be the hard check.** `add_months` with `29k` as the lower bound is
+  refuted by cvc5 in a third of a second and left unknown by Z3 after 20 s when run alone, though
+  Z3 answered it `sat` inside the file: a satisfiable search over the closed forms, the reverse of
+  VARKA-242's lesson, where a check held alone and failed in company. The neighbours now name
+  their witnesses (31 January 2001 plus one month is 28 February) and decide at once.
+* **A file costs about twice the sum of its checks alone**: the eight `add_months` cases take
+  4.4 s under Z3 one at a time and 8 to 9 s in one file, pins or no pins, reordered or not. The
+  per-check limit is what the runner enforces, and the slowest case is a fifth of it.
+* **cvc5 left one hull claim unknown alone and decided it in the file**: `Least`'s witness as an
+  `ite` over the wrapped lanes, ten seconds alone, a third of a second in company, while the
+  identically shaped `Greatest` decided both ways. Stated per branch taken - the left lane at
+  most the right, the right below the left - with no `ite`, all six hull checks decide at once
+  under both solvers. VARKA-242's rule stands: run a new file whole and check by check.
+* **Z3 and cvc5 divided the nonlinear claims between them** exactly as the admission check found,
+  and the reals and the two layers were needed for the files to hold under both; cvc5 proved
+  every integer product claim the spike put to it.
+
+### 9.5 What this leaves
+
+* **The step's time on the runner**, scored by the pull request's CI (9.3).
+* **The symmetric `INT` answers** (item 86), with the `year` slack now quantified.
+* **The four guard promises** - `GuardedDay`, `GuardedRange`, the armed column offset,
+  `make_date`'s year - rest on the emitter's guard tests (VARKA-279), as 3.4 said; the analysis
+  and the emitter share the constants.
+* **The weekday fields and `weekofyear`** rest on the sweep alone; a closed form of the ISO week
+  would put them in the solver's reach too.
+* **`VarkaTimeCompiler`'s bounds are restated**, as `long_divide.smt2` restates its divisors; a
+  `quotientBound` that lived in the IR would let the renderer read it.
+* **`VarkaRangeAnalysisSuite`'s property test** still states containment, which is true over its
+  grammar's literals and false in general; the lesson is recorded, and a test of the witness form
+  over wide literals would be the stronger statement.

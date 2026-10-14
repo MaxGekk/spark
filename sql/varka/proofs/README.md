@@ -15,6 +15,10 @@ VARKA-241 added the long lane's division forms, and VARKA-242 the calendar's div
 | `chrono_divide.smt2` | every calendar division site (`ChronoDivide`): the magic form with its carry exact over the site's dividends and first failing where the table says, and both double forms exact over the range (VARKA-242) | `VarkaProofFiles` |
 | `floor_mod7.smt2` | `emitFloorMod7`'s three forms, `Math.floorMod(v, 7)` for every int, by lemmas over each fold's digits (VARKA-242) | `VarkaProofFiles` |
 | `leap_hash.smt2` | the leap flag's perfect hash and its unsigned compare exact over every biased year to `LEAP_HASH_MAX_BIASED_YEAR`, over bit-vectors (VARKA-242) | `VarkaProofFiles` |
+| `value_range.smt2` | the value-range lattice (`VarkaValueRange.Bounded`): each of its eleven operations sound over symbolic ends, `mul` over the reals, every stated rule pinned to the code at sample intervals (VARKA-281) | `VarkaProofFiles` |
+| `range_analysis.smt2` | the range analysis's arithmetic arms (`VarkaRangeAnalysis`) sound over Java's wrapping, in the witness form below, each pinned to the analysis's own answer on a sample tree (VARKA-281) | `VarkaProofFiles` |
+| `range_calendar.smt2` | the analysis's calendar rules - `add_months` with the month count symbolic, `last_day`, `trunc`, `make_date`, the fields - over `java.time`'s closed forms, pinned to the JVM; swept independently by `VarkaRangeRulesSuite` (VARKA-281) | `VarkaProofFiles` |
+| `time_bounds.smt2` | the six bounds `VarkaTimeCompiler` states on the long lane, under the `TIME` type's range (VARKA-281) | `VarkaProofFiles` |
 | `spec/STANDARD.md` | not a proof: the SQL standard's definition of each operation the coverage table lowers that the standard fixes, what the proofs are to be restated against (VARKA-243); it holds no SMT-LIB, and `dev/varka_prove.sh` reads only this folder's own `.smt2` files | hand |
 
 ## Running them
@@ -64,6 +68,23 @@ without which a check could pass by leaving a value out.
 The leap hash is the exception (`leap_hash.smt2`): a mask of scattered bits over a wrapped product.
 Over integers it ran past ten minutes under Z3; over bit-vectors, whose operators are Java's int
 operators exactly for a multiply, a mask and an unsigned compare, both solvers take under a second.
+
+## The analyses, and the claim that is true of them
+
+The range analysis's proofs (VARKA-281) state a different kind of claim: not that a lowering
+computes Java's `/`, but that the interval the compiler computes for a node accounts for every
+value the node's lanes can produce. "The interval contains the lane value" is false past int32 - a
+literal shift of 2^31 - 1 carries the contract's interval past it while the lanes wrap - so the
+obligations are stated in the *witness* form: for every value of each child's interval there is a
+member of the node's interval congruent, modulo 2^32, to the lane value the node computes from the
+children's lane values. The compiler reads an interval only when it lies within int32, where the
+member is the lane value itself. Each check writes the witness out, so it is quantifier-free, and
+each rule has two `sat` neighbours, the rule narrowed by one at either end. The two product claims
+are over the reals (`Real` sorts under `ALL`): both solvers decide them in a fraction of a second,
+where over the integers Z3 proves the four-corner theorem and leaves the wrapped congruence
+unknown, and cvc5 the reverse; every integer instance is a real one, so the integer claims follow.
+The congruence itself goes in two layers, a ring identity both solvers normalise and the wrap's
+periodicity, which is linear - Fiat Cryptography's split of the algebra from the bounds.
 
 ## Adding a proof
 
