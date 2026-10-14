@@ -110,7 +110,6 @@ public class VarkaFilterEvaluator extends VarkaEvaluatorBase {
     super(childOutput, operatorName, classDumpDirectory, metrics, sessionEmit, warmupEnabled);
     this.condition = condition;
     this.offHeapColumnVectorEnabled = offHeapColumnVectorEnabled;
-    reportReasonsAtTaskEnd();
   }
 
   /** The defaults a suite or diagnostic builds with: no class dump, no metrics, no warm-up. */

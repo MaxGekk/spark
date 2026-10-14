@@ -18,6 +18,7 @@
 
 package org.apache.spark.sql.execution.varka;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -58,7 +59,7 @@ public final class VarkaFallbackAccounting {
 
   /**
    * The counters each cause adds to, each null where the node registered none, and the declined
-   * batches by reason, in {@link #REASONS}' order or empty, which {@link #flushReasons} sets.
+   * batches by reason, in {@link #REASONS}' order or empty, each a {@link VarkaReasonMetric}.
    */
   public record Counters(
       SQLMetric kernelFailures,
@@ -90,12 +91,6 @@ public final class VarkaFallbackAccounting {
   private long kernelBatches;
   /** Declined batches by status bit, {@link #STATUS_NAMES}' order; see {@link #declinedBatch}. */
   private final long[] declinedByBit = new long[STATUS_BITS.length];
-  /**
-   * The reasons, as bits in {@link #STATUS_NAMES}' order, that some declined batch named without
-   * naming exactly: a status of several bits from kernels emitted without
-   * {@code exactRefusalStatus}, where one loop method may report every reason it holds.
-   */
-  private int unattributed;
 
   /**
    * The decline status bits, the kernels' refusal reasons ({@code VarkaFusedKernel}, VARKA-304)
@@ -112,8 +107,28 @@ public final class VarkaFallbackAccounting {
       "day-producer", "month-count", "make-date", "int-overflow", "day-range", "value-range",
       "input-bound", "derived-input", "forced"};
 
-  /** The refusal reasons' names, in the order of the counts and the reason metrics. */
-  public static final List<String> REASONS = List.of(STATUS_NAMES);
+  /** The reason a status bit outside {@link #STATUS_BITS} is counted under. */
+  public static final String UNRECOGNISED = "unrecognised";
+
+  /**
+   * The refusal reasons' names, in the order of the reason metrics: the status bits', then
+   * {@link #UNRECOGNISED} for a bit no name covers, so that a declined batch always lands under
+   * some reason rather than leaving every reason at 0.
+   */
+  public static final List<String> REASONS;
+
+  private static final int KNOWN_BITS;
+
+  static {
+    var names = new ArrayList<>(List.of(STATUS_NAMES));
+    names.add(UNRECOGNISED);
+    REASONS = List.copyOf(names);
+    int known = 0;
+    for (int bit : STATUS_BITS) {
+      known |= bit;
+    }
+    KNOWN_BITS = known;
+  }
 
   /**
    * @param exactStatus whether the kernels were emitted under {@code exactRefusalStatus}, so that
@@ -192,45 +207,35 @@ public final class VarkaFallbackAccounting {
           + ": " + describeStatus(status) + "); falling back to the per-row path.");
     }
     add(counters.declined());
-    // One bit is exact under either setting: a method that folds reasons reports all it holds,
-    // so a lone bit comes from a method of one reason, or from the evaluator, which raises its
-    // own one at a time. Several bits are exact only under exactRefusalStatus.
-    boolean attributed = exactStatus || Integer.bitCount(status) == 1;
+    int unrecognised = status & ~KNOWN_BITS;
+    // One reason is exact under either setting: a method that folds reasons reports all it
+    // holds, so a lone bit comes from a method of one reason, or from the evaluator, which raises
+    // its own one at a time. Several are exact only under exactRefusalStatus. The unrecognised
+    // bits count as one reason, so that a batch naming only them still lands under one.
+    int named = Integer.bitCount(status & KNOWN_BITS) + (unrecognised != 0 ? 1 : 0);
+    long weight = exactStatus || named == 1 ? 1L : VarkaReasonMetric.UNATTRIBUTED;
+    List<SQLMetric> metrics = counters.declinedByReason();
     for (int i = 0; i < STATUS_BITS.length; i++) {
       if ((status & STATUS_BITS[i]) != 0) {
         declinedByBit[i]++;
-        if (!attributed) {
-          unattributed |= 1 << i;
+        if (!metrics.isEmpty()) {
+          metrics.get(i).add(weight);
         }
       }
+    }
+    if (unrecognised != 0 && !metrics.isEmpty()) {
+      metrics.get(STATUS_BITS.length).add(weight);
     }
     fallbackEvent(VarkaFallbackEvent.RANGE_DECLINED, kernel != null ? () -> kernel : kernelIdentity,
         options, "", status);
   }
 
   /**
-   * Sets each reason's metric once, at the end of the task: to its count when every declined
-   * batch that named the reason named it exactly - a 0 included, so a reason that never fired
-   * reads 0 - and not at all otherwise, which leaves the metric at the -1 that
-   * {@link VarkaReasonMetric} renders as "not reported". Deciding at the end rather than per batch
-   * is what keeps a count from being shown that a later folded decline would have made a lower
-   * bound. Does nothing where the node registered no reason metrics.
-   */
-  public void flushReasons() {
-    List<SQLMetric> metrics = counters.declinedByReason();
-    for (int i = 0; i < metrics.size(); i++) {
-      if ((unattributed & (1 << i)) == 0) {
-        metrics.get(i).add(declinedByBit[i]);
-      }
-    }
-  }
-
-  /**
    * How many declined batches carried each status bit, by its name: a batch counts once against
    * every bit its status sets. A method that folds guards of several reasons into one mask
    * reports them all, so under the default emit options a count is an upper bound for a reason
-   * that shares a method with another, and exact under {@code exactRefusalStatus}. The metrics
-   * {@link #flushReasons} sets show only the exact ones.
+   * that shares a method with another, and exact under {@code exactRefusalStatus}. The reason
+   * metrics keep the exact and the unattributed declines apart ({@link VarkaReasonMetric}).
    */
   public Map<String, Long> declinedByReason() {
     var counts = new LinkedHashMap<String, Long>();

@@ -53,7 +53,7 @@ import org.apache.spark.sql.execution.varka.VarkaReasonMetric;
  * @param paths the rows and the time through the kernel path and the fallback
  * @param declinedByReason declined batches by refusal reason, in
  *        {@link VarkaFallbackAccounting#REASONS}' order, or empty where none is registered; each
- *        a {@link VarkaReasonMetric}, set once per task at its end
+ *        a {@link VarkaReasonMetric}, which keeps exact and unattributed declines apart
  */
 public record VarkaExecMetrics(
     @Nullable SQLMetric varkaBatches,
@@ -82,10 +82,14 @@ public record VarkaExecMetrics(
    * lazy row iterator that a bracket around the call does not time, so it has no such metric
    * rather than one that reads 0.
    *
-   * @param kernelRows input rows of the batches the kernels served
+   * @param kernelRows input rows of the batches Varka answered without the per-row path: the
+   *        kernels', and a projection's that only forwards columns and runs no kernel
    * @param fallbackRows input rows of the batches the per-row path answered, whatever the cause
-   * @param kernelTime nanoseconds in the kernel path, up to its output batch
-   * @param fallbackTime nanoseconds in an eager fallback; null on a row-out node
+   * @param kernelTime nanoseconds in the kernel path of the batches it served, until its output
+   *        batch: on a row-out node the residual entries and the row conversion are evaluated
+   *        lazily after it, and are not in it; the kernel's emission is not in it either
+   * @param fallbackTime nanoseconds in an eager fallback, the per-row machinery's one-time
+   *        compile included; null on a row-out node
    */
   public record Paths(
       @Nullable SQLMetric kernelRows,
@@ -159,14 +163,14 @@ public record VarkaExecMetrics(
     metrics.put("numWarmupBatches", SQLMetrics.createMetric(
         sc, "batches on the per-row path while a new kernel was compiled"));
     metrics.put("numVarkaRows", SQLMetrics.createMetric(
-        sc, "input rows of the batches the Varka SIMD kernels served"));
+        sc, "input rows of the batches Varka answered without the per-row path"));
     metrics.put("numFallbackRows", SQLMetrics.createMetric(
         sc, "input rows of the batches the per-row path answered"));
     metrics.put("varkaKernelTime", SQLMetrics.createNanoTimingMetric(
-        sc, "time in the Varka kernel path", -1L));
+        sc, "time in the Varka kernels, until their output batch", -1L));
     if (eagerFallback) {
       metrics.put("fallbackTime", SQLMetrics.createNanoTimingMetric(
-          sc, "time in the per-row fallback", -1L));
+          sc, "time in the per-row fallback, its compile included", -1L));
     }
     for (String reason : VarkaFallbackAccounting.REASONS) {
       metrics.put(reasonKey(reason), VarkaReasonMetric.create(
@@ -188,32 +192,35 @@ public record VarkaExecMetrics(
 
   /**
    * The evaluator-facing bundle built from a node's registered metrics; {@code metric} returns
-   * null for a key the node did not register.
+   * null for a key the node did not register. Only {@code fallbackTime} may be missing: a
+   * missing key of the {@link #nodeMetrics} set throws, so a key renamed on one side only fails
+   * the plan rather than counting nothing.
    */
   public static VarkaExecMetrics fromNode(Function<String, SQLMetric> metric) {
-    // A node registers every reason's metric or none.
+    Function<String, SQLMetric> required = key -> {
+      SQLMetric m = metric.apply(key);
+      if (m == null) {
+        throw new IllegalStateException("the node registers no metric " + key);
+      }
+      return m;
+    };
     var reasons = new ArrayList<SQLMetric>();
     for (String reason : VarkaFallbackAccounting.REASONS) {
-      SQLMetric m = metric.apply(reasonKey(reason));
-      if (m == null) {
-        reasons.clear();
-        break;
-      }
-      reasons.add(m);
+      reasons.add(required.apply(reasonKey(reason)));
     }
     return new VarkaExecMetrics(
-        metric.apply("numVarkaBatches"),
-        metric.apply("numVarkaCacheHits"),
-        metric.apply("numVarkaCacheMisses"),
-        metric.apply("numFallbackBatchesNonArrow"),
-        metric.apply("numFallbackBatchesKernel"),
-        metric.apply("numFallbackBatchesRowPath"),
-        metric.apply("numFallbackBatchesDeclined"),
-        metric.apply("numEmissionFailures"),
-        metric.apply("numSuspectAllocationSamples"),
-        metric.apply("numWarmupBatches"),
-        new Paths(metric.apply("numVarkaRows"), metric.apply("numFallbackRows"),
-            metric.apply("varkaKernelTime"), metric.apply("fallbackTime")),
+        required.apply("numVarkaBatches"),
+        required.apply("numVarkaCacheHits"),
+        required.apply("numVarkaCacheMisses"),
+        required.apply("numFallbackBatchesNonArrow"),
+        required.apply("numFallbackBatchesKernel"),
+        required.apply("numFallbackBatchesRowPath"),
+        required.apply("numFallbackBatchesDeclined"),
+        required.apply("numEmissionFailures"),
+        required.apply("numSuspectAllocationSamples"),
+        required.apply("numWarmupBatches"),
+        new Paths(required.apply("numVarkaRows"), required.apply("numFallbackRows"),
+            required.apply("varkaKernelTime"), metric.apply("fallbackTime")),
         reasons);
   }
 

@@ -29,7 +29,7 @@ import org.apache.spark.{SparkFunSuite, TaskContext}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaEmitOptions, VarkaFusedKernel}
 import org.apache.spark.sql.execution.metric.SQLMetric
 import org.apache.spark.sql.execution.varka.{VarkaBatchLedger, VarkaClassDump,
-  VarkaFallbackAccounting, VarkaKernelRunner}
+  VarkaFallbackAccounting, VarkaKernelRunner, VarkaReasonMetric}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.util.ArrowUtils
 import org.apache.spark.sql.vectorized.{ColumnarBatch, ColumnVector}
@@ -182,12 +182,13 @@ class VarkaEvaluatorComponentsSuite extends SparkFunSuite {
       "day-range|value-range|0x100000")
   }
 
-  test("a reason's metric is set at the task's end only where every decline naming it was exact") {
+  test("a reason's metric counts a decline as exact only where its status names it alone, or " +
+      "under exactRefusalStatus") {
     // VARKA-313. Catches: a candidate set's reasons counted as if each had fired (the default
-    // options fold a method's reasons into one mask), a reason that never fired left unset
-    // rather than reported as 0, and exactRefusalStatus not trusted to name every bit it sets.
+    // options fold a method's reasons into one mask), exactRefusalStatus not trusted to name
+    // every bit it sets, and a status of bits no name covers counted under no reason.
     def run(exact: Boolean): Map[String, SQLMetric] = {
-      val metrics = VarkaFallbackAccounting.REASONS.asScala.map(_ => new SQLMetric("sum", -1L))
+      val metrics = VarkaFallbackAccounting.REASONS.asScala.map(_ => new SQLMetric("sum", 0L))
       val accounting = new VarkaFallbackAccounting(
         new VarkaFallbackAccounting.Counters(null, null, null, null, null, metrics.asJava),
         exact, () => "kernel", () => "")
@@ -195,18 +196,18 @@ class VarkaEvaluatorComponentsSuite extends SparkFunSuite {
         VarkaFusedKernel.STATUS_MAKE_DATE | VarkaFusedKernel.STATUS_INT_OVERFLOW, null)
       accounting.declinedBatch(VarkaFusedKernel.STATUS_INT_OVERFLOW, null)
       accounting.declinedBatch(VarkaKernelRunner.STATUS_INPUT_BOUND, null)
-      accounting.flushReasons()
+      accounting.declinedBatch(1 << 20, null)
       VarkaFallbackAccounting.REASONS.asScala.zip(metrics).toMap
     }
-    val folded = run(exact = false)
-    assert(folded("make-date").isZero && folded("int-overflow").isZero)
-    assert(!folded("input-bound").isZero && folded("input-bound").value === 1L)
-    assert(folded.removedAll(Seq("make-date", "int-overflow", "input-bound"))
-      .values.forall(m => !m.isZero && m.value == 0L))
-    val exact = run(exact = true)
-    assert(exact.view.mapValues(_.value).filter(_._2 > 0L).toMap ===
-      Map("make-date" -> 1L, "int-overflow" -> 2L, "input-bound" -> 1L))
-    assert(exact.values.forall(!_.isZero))
+    def decoded(metrics: Map[String, SQLMetric]): Map[String, (Long, Long)] =
+      metrics.view.mapValues(m => (VarkaReasonMetric.exact(m.value),
+        VarkaReasonMetric.unattributed(m.value))).filter(_._2 != ((0L, 0L))).toMap
+    assert(decoded(run(exact = false)) === Map("make-date" -> ((0L, 1L)),
+      "int-overflow" -> ((1L, 1L)), "input-bound" -> ((1L, 0L)),
+      VarkaFallbackAccounting.UNRECOGNISED -> ((1L, 0L))))
+    assert(decoded(run(exact = true)) === Map("make-date" -> ((1L, 0L)),
+      "int-overflow" -> ((2L, 0L)), "input-bound" -> ((1L, 0L)),
+      VarkaFallbackAccounting.UNRECOGNISED -> ((1L, 0L))))
   }
 
   test("a session's emit settings are bound from its conf once, and lay nothing over the base " +

@@ -495,15 +495,14 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession with Varka
     assert(plan.metrics("numResidualEntries").value === 0)
     // VARKA-313: the rows and the time through each path. The kernel served the two-row batch;
     // the on-heap row and the empty batch went down the fallback, which on this columnar-out
-    // node is eager and so timed. Nothing declined, so every reason reads a reported 0, not the
-    // "not reported" of a metric no task set.
+    // node is eager and so timed. Nothing declined, so every reason reads 0.
     assert(plan.metrics("numVarkaRows").value === 2)
     assert(plan.metrics("numFallbackRows").value === 1)
     assert(plan.metrics("varkaKernelTime").value > 0)
     assert(plan.metrics("fallbackTime").value > 0)
     VarkaFallbackAccounting.REASONS.forEach { reason =>
       val metric = plan.metrics(VarkaExecMetrics.reasonKey(reason))
-      assert(!metric.isZero && metric.value === 0, reason)
+      assert(metric.value === 0, reason)
     }
   }
 

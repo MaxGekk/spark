@@ -31,25 +31,32 @@ import org.apache.spark.sql.execution.varka.VarkaReasonMetric;
 
 /**
  * Reads a Varka node's declined batches by refusal reason, the way a suite asserts which reason a
- * query fell back for (VARKA-313; Comet's {@code checkSparkAnswerAndFallbackReason} is the model).
- * Two readings, because they can differ: the driver-side accumulators, which sum only the tasks
- * that reported a reason, and the strings the SQL UI shows, which also say where a reason was not
- * reported.
+ * query fell back for (VARKA-313; Comet's {@code checkSparkAnswerAndFallbackReason} is the model):
+ * from the driver's accumulators, decoded into the batches that named a reason exactly and those
+ * whose candidate set included it ({@link VarkaReasonMetric}), and as the SQL UI renders them.
  */
 public final class VarkaFallbackReasons {
 
   private VarkaFallbackReasons() {
   }
 
-  /**
-   * Each reason's driver-side count, or null for a reason no task reported - one that a folded
-   * decline left unattributed in every task ({@link VarkaFallbackAccounting#flushReasons}).
-   */
+  /** Each reason's batches that named it exactly, from the driver's accumulators. */
   public static Map<String, Long> counts(SparkPlan node) {
     var out = new LinkedHashMap<String, Long>();
     for (String reason : VarkaFallbackAccounting.REASONS) {
-      SQLMetric metric = metric(node, reason);
-      out.put(reason, metric.isZero() ? null : metric.value());
+      out.put(reason, VarkaReasonMetric.exact(metric(node, reason).value()));
+    }
+    return out;
+  }
+
+  /**
+   * Each reason's batches whose status named it among others under the default emit options, a
+   * candidate set that cannot be counted against it.
+   */
+  public static Map<String, Long> unattributed(SparkPlan node) {
+    var out = new LinkedHashMap<String, Long>();
+    for (String reason : VarkaFallbackAccounting.REASONS) {
+      out.put(reason, VarkaReasonMetric.unattributed(metric(node, reason).value()));
     }
     return out;
   }

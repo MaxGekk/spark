@@ -92,24 +92,23 @@ Each step either pins the fault or narrows it.
   only has `pipelineTime`. Read the node's own metric via
   `plan.collectFirst { case v: VarkaColumnarToRowExec => v }`, not `plan.metrics`.
 
-## A metric that can say "not reported": a custom type at -1, set at the task's end
+## A metric that can say "not reported": two sums in one value, rendered by a custom type
 
 - A plain sum `SQLMetric` reads 0 when nothing added to it, so it cannot tell "none" from
   "unknown". The one way Spark gives a metric cell text is the data source V2 custom metric: an
   `SQLMetric` whose type is `CustomMetrics.buildV2CustomMetricTypeName(c)` makes the SQL listener
-  load `c`'s class and show `aggregateTaskMetrics(long[])` over every task's raw value
+  load `c`'s class and show `aggregateTaskMetrics(long[])` over the tasks' values
   (`VarkaReasonMetric`, VARKA-313). The class needs a no-argument constructor; a history server
   without it shows "N/A".
-- Create it at -1. A successful task sends every external accumulator, an untouched one too, and
-  sends the raw value, so -1 reaches the aggregator as "this task did not report". A task that
-  never sent an update reads 0 in the listener's array, not -1.
-- Decide at the task's end, not per batch: a count added per batch is already shown when a later
-  batch makes it a lower bound. The evaluator's ledger listener runs before the executor collects
-  the updates, so a write there arrives. Register it when the evaluator is built inside a task,
-  not on first allocation, or a task that never allocates reports nothing.
-- The driver's accumulator merges only the tasks that reported, so `metric.value` can read 0 for a
-  reason the UI says was not reported in some tasks. Assert the UI string
-  (`VarkaFallbackReasons.rendered`, from the status store) where "not reported" is the subject.
+- Keep "unknown" as a count, never as a sentinel. VARKA-313's first version left a metric at -1
+  for "not reported" and set it at the task's end; review found three places Spark loses it:
+  `DAGScheduler.updateAccumulators` drops an update whose `isZero` holds, so the event log and a
+  history server never see a -1; a coalesce runs several evaluators in one task against one
+  metric copy, and the first `add` turns -1 into 0; and the driver's merge skips it. A metric
+  that never goes below 0 survives all three. `VarkaReasonMetric` adds exact declines as 1 and
+  unattributed ones as `1L << 32`, both sums, and decodes them when it renders.
+- The driver's `metric.value` is the encoded sum; decode it (`VarkaReasonMetric.exact` and
+  `unattributed`, or `VarkaFallbackReasons` in the suites) rather than comparing it with a count.
 
 ## Independent Reference Evaluators as Test Oracles
 

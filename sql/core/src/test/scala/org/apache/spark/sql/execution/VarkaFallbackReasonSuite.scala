@@ -77,8 +77,8 @@ class VarkaFallbackReasonSuite extends QueryTest with VarkaSharedSessions with V
 
   test("a planted reason is counted under its own metric, every other reason reads 0, and the " +
       "rows add up across the two paths") {
-    // Catches: a reason routed to another reason's metric, a metric the task's end never set
-    // (it would read "not reported"), and rows counted under neither path or both.
+    // Catches: a reason routed to another reason's metric, a lone bit taken for a candidate set,
+    // and rows counted under neither path or both.
     cacheDates(spark)
     cacheDates(varkaSpark)
     val node = withPlantedStatus(VarkaFusedKernel.STATUS_DAY_RANGE) {
@@ -108,10 +108,14 @@ class VarkaFallbackReasonSuite extends QueryTest with VarkaSharedSessions with V
         val actual = varkaSpark.sql(datesQuery)
         checkAnswer(actual, spark.sql(datesQuery))
         val node = varkaNode(actual)
-        assert(node.metrics("numFallbackBatchesDeclined").value > 0L)
+        val declined = node.metrics("numFallbackBatchesDeclined").value
+        assert(declined > 0L)
         val shown = VarkaFallbackReasons.rendered(varkaSpark, node).asScala
+        val counts = VarkaFallbackReasons.counts(node).asScala
+        val unattributed = VarkaFallbackReasons.unattributed(node).asScala
         for (r <- Seq("day-range", "int-overflow")) {
-          assert(shown(r).contains(VarkaReasonMetric.NOT_REPORTED), shown)
+          assert(shown(r).startsWith(VarkaReasonMetric.NOT_REPORTED), shown)
+          assert(counts(r) === 0L && unattributed(r) === declined, (counts, unattributed))
         }
         assert(reasons.filterNot(Set("day-range", "int-overflow")).forall(r => shown(r) == "0"),
           shown)
@@ -168,12 +172,16 @@ class VarkaFallbackReasonSuite extends QueryTest with VarkaSharedSessions with V
   }
 
   test("the reason metric renders a count, \"not reported\", or both, from its task values") {
-    // The UI's aggregation over the tasks' raw values: -1 is a task that could not attribute.
+    // The UI's aggregation over the tasks' values, each the exact declines plus the unattributed
+    // ones in the bits above 32. Catches a decode that mixes the two, and an unattributed
+    // decline that renders as a count. A task that never reported reads 0 in the UI's array.
     val metric = new VarkaReasonMetric
+    val u = VarkaReasonMetric.UNATTRIBUTED
     assert(metric.aggregateTaskMetrics(Array(2L, 0L, 1L)) === "3")
     assert(metric.aggregateTaskMetrics(Array.empty[Long]) === "0")
-    assert(metric.aggregateTaskMetrics(Array(-1L, -1L)) === VarkaReasonMetric.NOT_REPORTED)
-    assert(metric.aggregateTaskMetrics(Array(4L, -1L, 0L)) ===
-      s"4 attributed, ${VarkaReasonMetric.NOT_REPORTED} in 1 of 3 tasks")
+    assert(metric.aggregateTaskMetrics(Array(u, 2 * u, 0L)) ===
+      s"${VarkaReasonMetric.NOT_REPORTED} (3 batches named it among others)")
+    assert(metric.aggregateTaskMetrics(Array(4L, u, 0L)) ===
+      s"4, and ${VarkaReasonMetric.NOT_REPORTED} in 1 batches that named it among others")
   }
 }

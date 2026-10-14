@@ -64,6 +64,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeEntry;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeKey;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeLookup;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
+import org.apache.spark.sql.execution.metric.SQLMetric;
 import org.apache.spark.sql.execution.varka.VarkaBatchDeclined;
 import org.apache.spark.sql.execution.varka.VarkaBatchLedger;
 import org.apache.spark.sql.execution.varka.VarkaClassDump;
@@ -228,25 +229,6 @@ public abstract class VarkaEvaluatorBase {
     // guarded on its own, then closes the allocator.
     ledger.onTaskCompletion(this::releaseTaskScratch);
     ledger.onTaskCompletion(this::onTaskCleanup);
-  }
-
-  /**
-   * Has the task's end set the declined-batch metrics by reason
-   * ({@link VarkaFallbackAccounting#flushReasons}), registering the task-completion listener now
-   * rather than on first allocation, so that a task that never allocates - every batch refused,
-   * or none at all - still reports its reasons, as 0. For the evaluator that serves a node's
-   * batches; a further kernel of a projection is counted by the projection's evaluator and calls
-   * nothing. Outside a task, where a suite drives an evaluator directly, and for a bundle without
-   * reason metrics, it registers nothing.
-   */
-  protected final void reportReasonsAtTaskEnd() {
-    if (metrics.declinedByReason().isEmpty()) {
-      return;
-    }
-    ledger.onTaskCompletion(() -> accounting().flushReasons());
-    if (TaskContext.get() != null) {
-      ledger.ensureCleanup();
-    }
   }
 
   /** The fused sub-plan the kernel computes; None when nothing is Varka-eligible. */
@@ -660,13 +642,7 @@ public abstract class VarkaEvaluatorBase {
     }
     try {
       VarkaExecMetrics.Paths paths = metrics.paths();
-      long start = paths.kernelTime() != null ? System.nanoTime() : 0L;
-      T served = kernelPath.run();
-      if (paths.kernelTime() != null) {
-        paths.kernelTime().add(System.nanoTime() - start);
-      }
-      VarkaExecMetrics.add(paths.kernelRows(), input.numRows());
-      return served;
+      return timed(paths.kernelTime(), paths.kernelRows(), input, kernelPath);
     } catch (VarkaBatchDeclined e) {
       // Not a failure: the kernel ran and said it could not answer for this batch.
       accounting().declinedBatch(e.status, e.kernel);
@@ -693,13 +669,23 @@ public abstract class VarkaEvaluatorBase {
   /** Runs the caller's fallback for {@code input}, counting its rows and, where eager, its time. */
   private <T> T fallback(ColumnarBatch input, VarkaBatchPath<T> fallbackPath) {
     VarkaExecMetrics.Paths paths = metrics.paths();
-    long start = paths.fallbackTime() != null ? System.nanoTime() : 0L;
-    T answered = fallbackPath.run();
-    if (paths.fallbackTime() != null) {
-      paths.fallbackTime().add(System.nanoTime() - start);
+    return timed(paths.fallbackTime(), paths.fallbackRows(), input, fallbackPath);
+  }
+
+  /**
+   * Runs {@code path} for {@code input}; when it returns, adds the nanoseconds it took to
+   * {@code time} and the batch's rows to {@code rows}, each where present. A path that throws
+   * adds neither.
+   */
+  private static <T> T timed(@Nullable SQLMetric time, @Nullable SQLMetric rows,
+      ColumnarBatch input, VarkaBatchPath<T> path) {
+    long start = time != null ? System.nanoTime() : 0L;
+    T result = path.run();
+    if (time != null) {
+      time.add(System.nanoTime() - start);
     }
-    VarkaExecMetrics.add(paths.fallbackRows(), input.numRows());
-    return answered;
+    VarkaExecMetrics.add(rows, input.numRows());
+    return result;
   }
 
   /**

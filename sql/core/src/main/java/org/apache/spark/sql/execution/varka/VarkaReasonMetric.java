@@ -27,24 +27,31 @@ import org.apache.spark.sql.execution.metric.SQLMetric;
 /**
  * The SQL metric type of a declined-batch count by refusal reason, which can say "not reported".
  *
- * <p>A plain sum metric reads 0 when nothing added to it, so it cannot tell "no batch declined for
- * this reason" from "a batch may have, and nobody could say". The second happens under the default
- * emit options: a kernel loop method that holds guards of several reasons folds them into one mask
- * and reports all of them for a batch any one declined, a candidate set rather than a reason
- * ({@code docs/sql-varka.md}, "A declined batch names its guard"). Reading that as a count would
- * be wrong; reading it as 0 would be worse. So each task reports a reason only when it can: its
- * count, a 0 included, when every decline that named the reason was attributed exactly, and
- * nothing - the metric left at its initial -1 - when one was not ({@link
- * VarkaFallbackAccounting#flushReasons}).
+ * <p>A plain count cannot tell "no batch declined for this reason" from "a batch may have, and
+ * nobody could say". The second happens under the default emit options: a kernel loop method that
+ * holds guards of several reasons folds them into one mask and reports all of them for a batch any
+ * one declined, a candidate set rather than a reason ({@code docs/sql-varka.md}, "A declined batch
+ * names its guard"). Counting it against each would overcount; leaving it out would show a 0 that
+ * may be false.
+ *
+ * <p>So one metric carries two counts: the batches that named the reason exactly in its low 32
+ * bits, and the batches whose candidate set included it in the bits above, added as
+ * {@link #UNATTRIBUTED} each. Both are sums, so the encoding survives everything Spark does to a
+ * metric - the merge of tasks, of several evaluators in one task (a coalesce runs one per parent
+ * partition), the driver's accumulator and the event log a history server replays - where a
+ * sentinel value would not. A task would need four billion declined batches to carry over.
  *
  * <p>The SQL UI renders a metric whose type names a {@link CustomMetric} class by loading that
- * class and calling {@link #aggregateTaskMetrics} over every task's raw value, -1 included; that
- * is the one way Spark gives a metric cell text rather than a number, and why this is a custom
- * metric rather than a sum. The class needs the no-argument constructor the UI calls.
+ * class and calling {@link #aggregateTaskMetrics} over the tasks' values; that is the one way
+ * Spark gives a metric cell text rather than a number. The class needs the no-argument
+ * constructor the UI calls.
  */
 public final class VarkaReasonMetric implements CustomMetric {
 
-  /** What a reason reads as when no task could attribute it. */
+  /** What one unattributed declined batch adds to a reason's metric. */
+  public static final long UNATTRIBUTED = 1L << 32;
+
+  /** What a reason reads as when every decline that named it was a candidate set. */
   public static final String NOT_REPORTED = "not reported";
 
   @Override
@@ -57,40 +64,53 @@ public final class VarkaReasonMetric implements CustomMetric {
     return "batches the Varka kernels declined for one refusal reason";
   }
 
-  /**
-   * The sum over the tasks that reported; {@link #NOT_REPORTED} when none did, and both when only
-   * some did. A task that never sent an update reads 0 in the UI's array and is not told apart
-   * from one that reported 0; a finished task always sends one.
-   */
+  /** The batches that named the reason exactly, from a metric value or a sum of them. */
+  public static long exact(long value) {
+    return value & (UNATTRIBUTED - 1);
+  }
+
+  /** The batches whose candidate set included the reason, from a value or a sum of them. */
+  public static long unattributed(long value) {
+    return value >>> 32;
+  }
+
+  /** The tasks' values summed, then {@link #render}ed. */
   @Override
   public String aggregateTaskMetrics(long[] taskMetrics) {
     long sum = 0;
-    int unreported = 0;
     for (long v : taskMetrics) {
-      if (v < 0) {
-        unreported++;
-      } else {
+      if (v > 0) {
         sum += v;
       }
     }
-    if (unreported == 0) {
-      return format(sum);
+    return render(sum);
+  }
+
+  /**
+   * The exact count where nothing was unattributed, a 0 included; {@link #NOT_REPORTED} where
+   * every decline that named the reason was a candidate set; both where some were.
+   */
+  public static String render(long value) {
+    long exact = exact(value);
+    long unattributed = unattributed(value);
+    if (unattributed == 0) {
+      return format(exact);
     }
-    if (unreported == taskMetrics.length) {
-      return NOT_REPORTED;
+    if (exact == 0) {
+      return NOT_REPORTED + " (" + format(unattributed) + " batches named it among others)";
     }
-    return format(sum) + " attributed, " + NOT_REPORTED + " in " + unreported + " of "
-        + taskMetrics.length + " tasks";
+    return format(exact) + ", and " + NOT_REPORTED + " in " + format(unattributed)
+        + " batches that named it among others";
   }
 
   private static String format(long value) {
     return NumberFormat.getIntegerInstance(Locale.US).format(value);
   }
 
-  /** A reason's metric on a node: of this type, at -1 until a task reports it. */
+  /** A reason's metric on a node, of this type. */
   public static SQLMetric create(SparkContext sc, String description) {
     var metric = new SQLMetric(CustomMetrics.buildV2CustomMetricTypeName(new VarkaReasonMetric()),
-        -1L);
+        0L);
     metric.register(sc, scala.Option.apply(description), false);
     return metric;
   }

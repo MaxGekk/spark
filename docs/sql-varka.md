@@ -848,17 +848,20 @@ VARKA-22 extends the account to the SQL UI and to JDK Flight Recorder:
 * **Declines by reason, rows and time by path (VARKA-313).** Each refusal
   reason has its own metric, `numDeclinedBatches[<reason>]` (`day-producer`,
   `month-count`, `make-date`, `int-overflow`, `day-range`, `value-range`,
-  `input-bound`, `derived-input`, `forced`), set once per task at its end. A
-  reason reads as a count, 0 included, where every declined batch that named
-  it named it exactly, and as "not reported" where one did not: under the
-  default emit options a loop method that holds guards of several reasons
-  reports all of them for a batch any one declined (below), so such a batch
-  cannot be counted against either, and setting
-  `spark.sql.codegen.varka.emit.exactRefusalStatus` lets it be. Where only
-  some tasks could attribute a reason the cell says both. `numVarkaRows` and
-  `numFallbackRows` count the input rows each path answered, and
-  `varkaKernelTime` the time in the kernel path of the batches it served;
-  `fallbackTime` is registered only on the columnar-out nodes, whose
+  `input-bound`, `derived-input`, `forced`, and `unrecognised` for a status
+  bit no name covers). A reason reads as a count, 0 included, where every
+  declined batch that named it named it exactly, and as "not reported" where
+  a batch named it among others: under the default emit options a loop
+  method that holds guards of several reasons reports all of them for a
+  batch any one declined (below), so such a batch cannot be counted against
+  either, and setting `spark.sql.codegen.varka.emit.exactRefusalStatus` lets
+  it be. Where both kinds occurred the cell gives both. `numVarkaRows` and
+  `numFallbackRows` count the input rows each path answered (a projection
+  that only forwards columns counts with the first), and `varkaKernelTime`
+  the time in the kernels of the batches they served, until their output
+  batch - on a row-out node the residual entries and the row conversion run
+  lazily after it. `fallbackTime`, which includes the per-row machinery's
+  one-time compile, is registered only on the columnar-out nodes, whose
   fallback builds its batch before it returns - a row-out node's fallback is
   a lazy row iterator, which a bracket around the call would not time. A
   Varka filter node's verbose `EXPLAIN` renders the whole condition when the
