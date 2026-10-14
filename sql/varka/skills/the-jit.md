@@ -575,6 +575,17 @@ to defeat a cache can push a value past a kernel's covered range - `add_months`'
 here - and the kernel's guard then hands every batch to Spark's row path, so the Varka arm times
 vanilla. `VarkaSizeLadder.varkaFused` now fails a run that has any fallback batch.
 
+A test whose verdict is "the allocation samples read clean within N rounds" measures the same
+thing before it measures its subject. `VarkaErrorContextSuite`'s steady-state check - that a
+task whose batches all failed leaves nothing the kernel's path then pays per batch - read every
+batch suspect for twenty rounds in the option matrix's run after a merge on 14 October 2026, on
+a kernel that reads clean within five rounds on the laptop and whose bytes do not depend on the
+configuration drawn; `-XX:CompileCommand=exclude` over the kernel classes reproduces the read
+exactly, and the interpreted loop allocates about 120 KB a 10,000-row batch where a compiled one
+allocates a few. The test now takes a control under the same cap before its treatment and cancels,
+with `VarkaJitEvidence`'s account of the class, when the control never reads clean
+(`VARKA-314.md` 9.2); the warm-up suite, whose subject is the JIT, keeps failing instead.
+
 ## A method C1 compiles at tier 2 but not at tier 3 is stranded on C1 code
 
 A kernel's loop and epilogue methods are too large for C1's fully profiled tier: every tier-3
