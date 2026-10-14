@@ -246,18 +246,26 @@ past size 3 runs only at night.
 VARKA-255): under `validityByBitmap=false`, the configuration the commit's hash drew, the planted
 liveness test failed with "the planted bug failed no tree to size 3", in the matrix's JVM and
 again in its own. The cause is the test's premise, not the series: `misdescribeWordLiveness`
-inverts the word-liveness verdict, and `Slots.plan` computes that verdict only under the bitmap
-validity pass - its Javadoc says so, and `VarkaEmitterValiditySuite` pins it on `year(d)`, which
-under the injector throws "stored but never loaded" with the pass on and emits a class with it
-off. Planted over `VarkaMatrix.base`, the bug was inert under that configuration and under
-`denseValidityOnce=false,validityByBitmap=false,validityOrFirst=false`, every tree passed, and
-the test measured nothing. It had failed so since it landed: #719's CI ran the one configuration
-its branch hashed to, no weekly matrix ran between the merge and the master run, and the test
+inverts the word-liveness verdict, and `Slots.plan` asks for a verdict only in a masked loop or
+epilogue body under the bitmap validity pass, so with the pass off no verdict is computed and the
+inversion never runs - the option's Javadoc says so, and `VarkaEmitterValiditySuite` pins it on
+`year(d)`, which under the injector throws "stored but never loaded" with the pass on and emits a
+class with it off. Planted over `VarkaMatrix.base`, the bug was inert under that configuration
+and under `denseValidityOnce=false,validityByBitmap=false,validityOrFirst=false`, every tree
+passed, and the test measured nothing. It had failed so since it landed: #719's CI ran one configuration, as
+a pull request's does, no weekly matrix ran between the merge and the master run, and the test
 fails the same way at the merge base before the day's merges (0f148eb7038) and at #719's own
 commit. The test now plants the bug over `VarkaMatrix.base.withValidityByBitmap(true)`, as
 `VarkaGuardEdgeSuite` sets the guards it tests over the matrix's options and
 `VarkaReproductionEndToEndSuite` plants this bug; it passes under the defaults and both
 configurations. `VarkaVariantSuite`'s planted test (VARKA-278) had the same premise, which #737
 had read as the injector reaching a different set of words and listed in the skip list under both
-configurations; it is planted the same way and the two lines are removed. The lesson is in
-`skills/testing-and-debugging.md`.
+configurations; it is planted the same way and the two lines are removed. The review of the
+change asked that each failure the two tests count be the invariant's own refusal rather than
+any failure, since `failures.count > 0` would take a regression, or the forced pass beside a
+configuration's other options, for the planted bug - done, through
+`VarkaKernelChecks.isWordLivenessRefusal` - and proposed making the injector loud without the
+pass, by asking for the verdict under it too or refusing the combination in the options
+builder; that is left, since either changes the emitter or the behaviour
+`VarkaEmitterValiditySuite` pins for a test-only gain, and a third planting is the moment to
+reconsider. The lesson is in `skills/testing-and-debugging.md`.

@@ -977,9 +977,10 @@ bodies.
 ## A planted bug has a prerequisite, and the test that plants it sets it over the matrix's base
 
 VARKA-269's follow-up, 14 October 2026. `misdescribeWordLiveness` inverts the word-liveness
-verdict, and `Slots.plan` computes that verdict only under `validityByBitmap`: off, every word is
-live, there is nothing to invert, and the kernel emits as if nothing were planted (the option's
-Javadoc says so; `VarkaEmitterValiditySuite` pins it on `year(d)`). The two tests that hold the
+verdict, and `Slots.plan` asks for a verdict only in a masked loop or epilogue body under
+`validityByBitmap`: off, every word is live, no verdict is computed, the inversion never runs,
+and the kernel emits as if nothing were planted (the option's Javadoc says so;
+`VarkaEmitterValiditySuite` pins it on `year(d)`). The two tests that hold the
 series and the variants to catching the planted bug planted it over `VarkaMatrix.base`, so under
 the matrix's `validityByBitmap=false`, and the configuration that turns off the three validity
 passes, the bug was inert and the series passed every tree: "the planted bug failed no tree to
@@ -992,13 +993,22 @@ the injector reaching a different set of words, and been listed in the skip list
   one. A skip-list line records a dependency, but cancels the test in two configurations and keeps
   whatever mechanism its author read into it; the forced option keeps the test asserting
   everywhere, at no cost.
+- **Count only the planted bug's own failure.** `failures.count > 0` is met by any failure, so
+  with the bug inert one regression, or the forced option beside a configuration's others, would
+  pass the test as a catch. Each failure counted is held to the invariant's refusal, "stored but
+  never loaded" or "declared dead is loaded" (`VarkaKernelChecks.isWordLivenessRefusal`), which
+  the review of the fix asked for.
 - **The fuzzer's planted tests survived the same run** because they search the first 200 draws,
   whose options vary over the table, so a draw turns the pass back on; a test over one fixed
   options record has to set the prerequisite itself.
-- **Green under a pull request's one configuration says nothing about the other forty-nine.** The
-  run after each merge draws a configuration from the commit's hash and the weekly matrix runs
-  them all; a test that leans on an option the base can switch off is checked before the merge
-  with `dev/varka_matrix.sh --module catalyst --config <option>=<other value>`.
+- **The injector stays inert without the pass.** Asking for the verdict under the injector too, or
+  refusing the combination in the options builder, would make a third inert plant fail loudly;
+  both change the emitter or the behaviour `VarkaEmitterValiditySuite` pins for a test-only gain,
+  so the review's proposal is recorded and not taken. A third planting is the moment to reconsider.
+- **Green under a pull request's one configuration says nothing about the other configurations.**
+  The run after each merge draws a configuration from the commit's hash and the weekly matrix
+  runs them all; a test that leans on an option the base can switch off is checked before the
+  merge with `dev/varka_matrix.sh --module catalyst --config <option>=<other value>`.
 
 ## The emitter is called from several threads, so a test holds it to that
 

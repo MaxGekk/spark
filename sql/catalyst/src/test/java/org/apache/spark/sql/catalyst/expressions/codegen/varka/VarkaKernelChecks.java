@@ -434,6 +434,29 @@ public final class VarkaKernelChecks {
         ? OptionalLong.of(want.getAsLong() + 1) : want;
   }
 
+  /**
+   * Whether {@code message} is the word-liveness invariant's own refusal, in either direction: a
+   * word stored but never loaded ({@code VarkaBodyEmitter.assertWordsLive}) or a word declared
+   * dead and loaded ({@code VarkaVectorWalk.loadWord}). The tests that plant
+   * {@code misdescribeWordLiveness} hold every failure they count to it, so that a failure of
+   * another kind cannot stand in for the planted bug (VARKA-269.md 9).
+   */
+  public static boolean isWordLivenessRefusal(String message) {
+    return message.contains("stored but never loaded")
+        || message.contains("declared dead is loaded");
+  }
+
+  /** {@link #isWordLivenessRefusal(String)} over {@code t}'s message and its causes'. */
+  public static boolean isWordLivenessRefusal(Throwable t) {
+    for (Throwable c = t; c != null; c = c.getCause()) {
+      String message = c.getMessage();
+      if (message != null && isWordLivenessRefusal(message)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** {@code run} over the batch's own body and then {@link #otherBody}'s, each status in order. */
   private static List<Integer> each(String context, int numInputs, int length,
       boolean[][] nulls, boolean forceMasked, BodyRun run) {
