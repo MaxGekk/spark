@@ -181,6 +181,7 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
     super(childOutput, operatorName, classDumpDirectory, metrics, sessionEmit, warmupEnabled);
     this.projectList = projectList;
     this.offHeapColumnVectorEnabled = offHeapColumnVectorEnabled;
+    reportReasonsAtTaskEnd();
   }
 
   /** The defaults a suite or diagnostic builds with: no class dump, no metrics, no warm-up. */

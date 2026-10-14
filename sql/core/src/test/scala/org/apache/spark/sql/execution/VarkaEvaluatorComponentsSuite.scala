@@ -182,6 +182,33 @@ class VarkaEvaluatorComponentsSuite extends SparkFunSuite {
       "day-range|value-range|0x100000")
   }
 
+  test("a reason's metric is set at the task's end only where every decline naming it was exact") {
+    // VARKA-313. Catches: a candidate set's reasons counted as if each had fired (the default
+    // options fold a method's reasons into one mask), a reason that never fired left unset
+    // rather than reported as 0, and exactRefusalStatus not trusted to name every bit it sets.
+    def run(exact: Boolean): Map[String, SQLMetric] = {
+      val metrics = VarkaFallbackAccounting.REASONS.asScala.map(_ => new SQLMetric("sum", -1L))
+      val accounting = new VarkaFallbackAccounting(
+        new VarkaFallbackAccounting.Counters(null, null, null, null, null, metrics.asJava),
+        exact, () => "kernel", () => "")
+      accounting.declinedBatch(
+        VarkaFusedKernel.STATUS_MAKE_DATE | VarkaFusedKernel.STATUS_INT_OVERFLOW, null)
+      accounting.declinedBatch(VarkaFusedKernel.STATUS_INT_OVERFLOW, null)
+      accounting.declinedBatch(VarkaKernelRunner.STATUS_INPUT_BOUND, null)
+      accounting.flushReasons()
+      VarkaFallbackAccounting.REASONS.asScala.zip(metrics).toMap
+    }
+    val folded = run(exact = false)
+    assert(folded("make-date").isZero && folded("int-overflow").isZero)
+    assert(!folded("input-bound").isZero && folded("input-bound").value === 1L)
+    assert(folded.removedAll(Seq("make-date", "int-overflow", "input-bound"))
+      .values.forall(m => !m.isZero && m.value == 0L))
+    val exact = run(exact = true)
+    assert(exact.view.mapValues(_.value).filter(_._2 > 0L).toMap ===
+      Map("make-date" -> 1L, "int-overflow" -> 2L, "input-bound" -> 1L))
+    assert(exact.values.forall(!_.isZero))
+  }
+
   test("a session's emit settings are bound from its conf once, and lay nothing over the base " +
       "options at the defaults") {
     // VARKA-308. Catches: a setting the binding forgets to read, a default session that changes

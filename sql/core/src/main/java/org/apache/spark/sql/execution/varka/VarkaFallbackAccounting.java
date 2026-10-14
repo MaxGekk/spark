@@ -19,6 +19,7 @@
 package org.apache.spark.sql.execution.varka;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.StringJoiner;
 import java.util.function.Supplier;
@@ -55,15 +56,32 @@ public final class VarkaFallbackAccounting {
   private static final SparkLogger LOG =
       SparkLoggerFactory.getLogger(VarkaFallbackAccounting.class);
 
-  /** The counters each cause adds to, each null where the node registered none. */
+  /**
+   * The counters each cause adds to, each null where the node registered none, and the declined
+   * batches by reason, in {@link #REASONS}' order or empty, which {@link #flushReasons} sets.
+   */
   public record Counters(
       SQLMetric kernelFailures,
       SQLMetric rowPathFailures,
       SQLMetric declined,
       SQLMetric nonArrow,
-      SQLMetric suspectAllocationSamples) {}
+      SQLMetric suspectAllocationSamples,
+      List<SQLMetric> declinedByReason) {
+
+    public Counters {
+      declinedByReason = declinedByReason == null ? List.of() : List.copyOf(declinedByReason);
+    }
+
+    /** The counters without the reason metrics: what a suite that reads the tallies passes. */
+    public Counters(SQLMetric kernelFailures, SQLMetric rowPathFailures, SQLMetric declined,
+        SQLMetric nonArrow, SQLMetric suspectAllocationSamples) {
+      this(kernelFailures, rowPathFailures, declined, nonArrow, suspectAllocationSamples,
+          List.of());
+    }
+  }
 
   private final Counters counters;
+  private final boolean exactStatus;
   private final Supplier<String> kernelIdentity;
   private final Supplier<String> options;
   private final VarkaAllocationSampler.Tracker allocationTracker =
@@ -72,6 +90,12 @@ public final class VarkaFallbackAccounting {
   private long kernelBatches;
   /** Declined batches by status bit, {@link #STATUS_NAMES}' order; see {@link #declinedBatch}. */
   private final long[] declinedByBit = new long[STATUS_BITS.length];
+  /**
+   * The reasons, as bits in {@link #STATUS_NAMES}' order, that some declined batch named without
+   * naming exactly: a status of several bits from kernels emitted without
+   * {@code exactRefusalStatus}, where one loop method may report every reason it holds.
+   */
+  private int unattributed;
 
   /**
    * The decline status bits, the kernels' refusal reasons ({@code VarkaFusedKernel}, VARKA-304)
@@ -88,15 +112,27 @@ public final class VarkaFallbackAccounting {
       "day-producer", "month-count", "make-date", "int-overflow", "day-range", "value-range",
       "input-bound", "derived-input", "forced"};
 
+  /** The refusal reasons' names, in the order of the counts and the reason metrics. */
+  public static final List<String> REASONS = List.of(STATUS_NAMES);
+
   /**
+   * @param exactStatus whether the kernels were emitted under {@code exactRefusalStatus}, so that
+   *                    every bit of a status names a reason that fired
    * @param options the emit options that differ from the defaults, rendered as
    *                {@link VarkaErrorContext#renderOptions} renders them, for the event
    */
-  public VarkaFallbackAccounting(
-      Counters counters, Supplier<String> kernelIdentity, Supplier<String> options) {
+  public VarkaFallbackAccounting(Counters counters, boolean exactStatus,
+      Supplier<String> kernelIdentity, Supplier<String> options) {
     this.counters = counters;
+    this.exactStatus = exactStatus;
     this.kernelIdentity = kernelIdentity;
     this.options = options;
+  }
+
+  /** The accounting of kernels emitted without {@code exactRefusalStatus}. */
+  public VarkaFallbackAccounting(
+      Counters counters, Supplier<String> kernelIdentity, Supplier<String> options) {
+    this(counters, false, kernelIdentity, options);
   }
 
   private static void add(SQLMetric metric) {
@@ -156,9 +192,16 @@ public final class VarkaFallbackAccounting {
           + ": " + describeStatus(status) + "); falling back to the per-row path.");
     }
     add(counters.declined());
+    // One bit is exact under either setting: a method that folds reasons reports all it holds,
+    // so a lone bit comes from a method of one reason, or from the evaluator, which raises its
+    // own one at a time. Several bits are exact only under exactRefusalStatus.
+    boolean attributed = exactStatus || Integer.bitCount(status) == 1;
     for (int i = 0; i < STATUS_BITS.length; i++) {
       if ((status & STATUS_BITS[i]) != 0) {
         declinedByBit[i]++;
+        if (!attributed) {
+          unattributed |= 1 << i;
+        }
       }
     }
     fallbackEvent(VarkaFallbackEvent.RANGE_DECLINED, kernel != null ? () -> kernel : kernelIdentity,
@@ -166,10 +209,28 @@ public final class VarkaFallbackAccounting {
   }
 
   /**
+   * Sets each reason's metric once, at the end of the task: to its count when every declined
+   * batch that named the reason named it exactly - a 0 included, so a reason that never fired
+   * reads 0 - and not at all otherwise, which leaves the metric at the -1 that
+   * {@link VarkaReasonMetric} renders as "not reported". Deciding at the end rather than per batch
+   * is what keeps a count from being shown that a later folded decline would have made a lower
+   * bound. Does nothing where the node registered no reason metrics.
+   */
+  public void flushReasons() {
+    List<SQLMetric> metrics = counters.declinedByReason();
+    for (int i = 0; i < metrics.size(); i++) {
+      if ((unattributed & (1 << i)) == 0) {
+        metrics.get(i).add(declinedByBit[i]);
+      }
+    }
+  }
+
+  /**
    * How many declined batches carried each status bit, by its name: a batch counts once against
    * every bit its status sets. A method that folds guards of several reasons into one mask
    * reports them all, so under the default emit options a count is an upper bound for a reason
-   * that shares a method with another, and exact under {@code exactRefusalStatus}.
+   * that shares a method with another, and exact under {@code exactRefusalStatus}. The metrics
+   * {@link #flushReasons} sets show only the exact ones.
    */
   public Map<String, Long> declinedByReason() {
     var counts = new LinkedHashMap<String, Long>();

@@ -110,11 +110,10 @@ public final class VarkaFusionReport {
 
   /**
    * The filter counterpart: one line per conjunct of the predicate's {@code AND} spine - fused
-   * into the mask kernel, or residual with the compiler's reason. On a Varka filter node every
-   * line reads "fused" by construction (the rule keeps residual conjuncts in a row
-   * {@code FilterExec} above); the mixed rendering exists for logs and for reporting the original,
-   * unsplit condition. A predicate too large for one method that the compiler split across
-   * several selection outputs gets one more line saying so.
+   * into the mask kernel, or residual with the compiler's reason. A Varka filter node renders its
+   * whole condition, so the conjuncts the rule kept in a row {@code FilterExec} above it read as
+   * residual with their reasons beside the fused ones. A predicate too large for one method that
+   * the compiler split across several selection outputs gets one more line saying so.
    */
   public static Seq<String> predicateLines(
       Expression condition, Seq<Attribute> childOutput, VarkaEmitOptions options) {

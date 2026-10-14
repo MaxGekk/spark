@@ -144,8 +144,8 @@ public abstract class VarkaEvaluatorBase {
     }
 
     @Override
-    public boolean declineKernel() {
-      return VarkaColumnarToRowExec$.MODULE$.isDeclineKernelForTesting();
+    public int declineStatus() {
+      return VarkaColumnarToRowExec$.MODULE$.declineStatusForTesting();
     }
 
     @Override
@@ -228,6 +228,25 @@ public abstract class VarkaEvaluatorBase {
     // guarded on its own, then closes the allocator.
     ledger.onTaskCompletion(this::releaseTaskScratch);
     ledger.onTaskCompletion(this::onTaskCleanup);
+  }
+
+  /**
+   * Has the task's end set the declined-batch metrics by reason
+   * ({@link VarkaFallbackAccounting#flushReasons}), registering the task-completion listener now
+   * rather than on first allocation, so that a task that never allocates - every batch refused,
+   * or none at all - still reports its reasons, as 0. For the evaluator that serves a node's
+   * batches; a further kernel of a projection is counted by the projection's evaluator and calls
+   * nothing. Outside a task, where a suite drives an evaluator directly, and for a bundle without
+   * reason metrics, it registers nothing.
+   */
+  protected final void reportReasonsAtTaskEnd() {
+    if (metrics.declinedByReason().isEmpty()) {
+      return;
+    }
+    ledger.onTaskCompletion(() -> accounting().flushReasons());
+    if (TaskContext.get() != null) {
+      ledger.ensureCleanup();
+    }
   }
 
   /** The fused sub-plan the kernel computes; None when nothing is Varka-eligible. */
@@ -320,7 +339,9 @@ public abstract class VarkaEvaluatorBase {
               metrics.fallbackBatchesRowPath(),
               metrics.fallbackBatchesDeclined(),
               metrics.fallbackBatchesNonArrow(),
-              metrics.suspectAllocationSamples()),
+              metrics.suspectAllocationSamples(),
+              metrics.declinedByReason()),
+          emitOptions.exactRefusalStatus(),
           this::kernelIdentity,
           this::renderedOptions);
     }
@@ -613,28 +634,39 @@ public abstract class VarkaEvaluatorBase {
    * batch it is, as it would be on the kernel path. A batch that is not Arrow because a Varka node
    * below sent it down its own row path while its kernel warmed is a warm-up batch here too, and
    * so is this node's output for it, for the node above.
+   *
+   * <p>Each batch's rows count under the path that answered it, and the time in that path is
+   * added where it can be measured ({@link VarkaExecMetrics.Paths}): the kernel path's time only
+   * for a batch it served, since a declined or failed attempt's output is thrown away.
    */
   public <T> T serveBatch(
       ColumnarBatch input, VarkaBatchPath<T> kernelPath, VarkaBatchPath<T> fallbackPath) {
     if (!canRun(input)) {
       if (recordRefusedBatch(input)) {
-        return markWarmupBatch(fallbackPath.run());
+        return markWarmupBatch(fallback(input, fallbackPath));
       }
-      return fallbackPath.run();
+      return fallback(input, fallbackPath);
     }
     boolean ready;
     try {
       ready = kernelReady(input);
     } catch (VarkaBatchDeclined declined) {
       accounting().declinedBatch(declined.status, declined.kernel);
-      return fallbackPath.run();
+      return fallback(input, fallbackPath);
     }
     if (!ready) {
       VarkaExecMetrics.inc(metrics.warmupBatches());
-      return markWarmupBatch(fallbackPath.run());
+      return markWarmupBatch(fallback(input, fallbackPath));
     }
     try {
-      return kernelPath.run();
+      VarkaExecMetrics.Paths paths = metrics.paths();
+      long start = paths.kernelTime() != null ? System.nanoTime() : 0L;
+      T served = kernelPath.run();
+      if (paths.kernelTime() != null) {
+        paths.kernelTime().add(System.nanoTime() - start);
+      }
+      VarkaExecMetrics.add(paths.kernelRows(), input.numRows());
+      return served;
     } catch (VarkaBatchDeclined e) {
       // Not a failure: the kernel ran and said it could not answer for this batch.
       accounting().declinedBatch(e.status, e.kernel);
@@ -655,7 +687,19 @@ public abstract class VarkaEvaluatorBase {
       accounting().rowPathFailure(e, ctx);
       refuseUndeclaredFallback("the per-row machinery beside " + kernelIdentity(), ctx);
     }
-    return fallbackPath.run();
+    return fallback(input, fallbackPath);
+  }
+
+  /** Runs the caller's fallback for {@code input}, counting its rows and, where eager, its time. */
+  private <T> T fallback(ColumnarBatch input, VarkaBatchPath<T> fallbackPath) {
+    VarkaExecMetrics.Paths paths = metrics.paths();
+    long start = paths.fallbackTime() != null ? System.nanoTime() : 0L;
+    T answered = fallbackPath.run();
+    if (paths.fallbackTime() != null) {
+      paths.fallbackTime().add(System.nanoTime() - start);
+    }
+    VarkaExecMetrics.add(paths.fallbackRows(), input.numRows());
+    return answered;
   }
 
   /**
