@@ -453,6 +453,18 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        kept two and ran within 3% of the old grouping; a mixed shape ran 14 and 25% faster than
  *        before at 256 and 128 bits; and the cost audit's corpus took 39% fewer loop methods
  *        ({@code VARKA-254.md} 9). Outside those conditions the budget binds either way.
+ * @param dropStackMaps a fault injector for the class file (VARKA-315), like the
+ *        {@code misdescribe} switches: the class is built without its {@code StackMapTable}, so
+ *        every method with a branch fails verification with "Expecting a stackmap frame at branch
+ *        target", the failure a stack-map bug in the emitter would give. What a reproduction
+ *        file's test plants for a class that fails to verify. False in production.
+ * @param misdescribeDataBytes a fault injector for the kernel's mappings (VARKA-315): bytes added
+ *        to {@code dataBytes}, the nominal size every input, output and scratch segment of a body
+ *        is mapped at. Positive maps past a buffer, which the memory sanitizer reports and nothing
+ *        reads without it; negative maps short, and the vector loop's last load throws
+ *        {@code IndexOutOfBoundsException} inside the kernel. What a reproduction file's tests
+ *        plant for a sanitizer violation and for a run-time exception in a kernel. Zero in
+ *        production.
  */
 public record VarkaEmitOptions(
     int groupBudget,
@@ -498,7 +510,9 @@ public record VarkaEmitOptions(
     int forceResidualAt,
     int misdescribeRollback,
     boolean exactRefusalStatus,
-    boolean groupBudgetUnderPrediction) {
+    boolean groupBudgetUnderPrediction,
+    boolean dropStackMaps,
+    int misdescribeDataBytes) {
 
   /**
    * The three mod-7 lowerings. {@link #MAGIC} is what ships: two 15-bit digit-sum folds followed
@@ -611,7 +625,7 @@ public record VarkaEmitOptions(
           VarkaEmitBudget.HUGE_METHOD_LIMIT,
           true, true, true, true,
           VarkaEmitBudget.CALL_SITE_BUDGET, VarkaEmitBudget.HEAVY_GROUP_OUTPUTS,
-          true, true, true, true, true, true, true, 0, 0, 0, false, false);
+          true, true, true, true, true, true, true, 0, 0, 0, false, false, false, 0);
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {
@@ -710,6 +724,8 @@ public record VarkaEmitOptions(
       b.misdescribeRollback = misdescribeRollback;
       b.exactRefusalStatus = exactRefusalStatus;
       b.groupBudgetUnderPrediction = groupBudgetUnderPrediction;
+      b.dropStackMaps = dropStackMaps;
+      b.misdescribeDataBytes = misdescribeDataBytes;
     return b;
   }
 
@@ -759,6 +775,8 @@ public record VarkaEmitOptions(
     private int misdescribeRollback;
     private boolean exactRefusalStatus;
     private boolean groupBudgetUnderPrediction;
+    private boolean dropStackMaps;
+    private int misdescribeDataBytes;
 
     private Builder() {
     }
@@ -983,6 +1001,16 @@ public record VarkaEmitOptions(
       return this;
     }
 
+    public Builder dropStackMaps(boolean drop) {
+      this.dropStackMaps = drop;
+      return this;
+    }
+
+    public Builder misdescribeDataBytes(int bytes) {
+      this.misdescribeDataBytes = bytes;
+      return this;
+    }
+
     public VarkaEmitOptions build() {
       return new VarkaEmitOptions(
           groupBudget, fusedCeiling, cse, shareChronoPrefix, denseValidityOnce,
@@ -994,7 +1022,8 @@ public record VarkaEmitOptions(
           groupLocalSlots, materializeChronoPrefix, callSiteBudget, heavyGroupOutputs,
           predictGrouping, driverOutputTable, exactGrouping, splitDriver, severalKernels,
           elideUnreadLocals, planSize, misdescribeDriverBytes, forceResidualAt,
-          misdescribeRollback, exactRefusalStatus, groupBudgetUnderPrediction);
+          misdescribeRollback, exactRefusalStatus, groupBudgetUnderPrediction, dropStackMaps,
+          misdescribeDataBytes);
     }
   }
 
@@ -1065,6 +1094,14 @@ public record VarkaEmitOptions(
 
   public VarkaEmitOptions withExactRefusalStatus(boolean exact) {
     return toBuilder().exactRefusalStatus(exact).build();
+  }
+
+  public VarkaEmitOptions withDropStackMaps(boolean drop) {
+    return toBuilder().dropStackMaps(drop).build();
+  }
+
+  public VarkaEmitOptions withMisdescribeDataBytes(int bytes) {
+    return toBuilder().misdescribeDataBytes(bytes).build();
   }
 
   public VarkaEmitOptions withRangeSets(boolean enabled) {
