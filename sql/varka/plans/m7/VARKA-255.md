@@ -24,7 +24,8 @@ The admission check below overturns two premises of `m7/PLAN.md` 2.4 - that a fi
 drive a queue, and that one Build at a time is the right rule - so section 3 replaces that section's
 dispatcher with a different mechanism and keeps its constraints: no stored credential, each
 repository acting only on itself with its own `GITHUB_TOKEN`, and nothing on the laptop. That change
-is the owner's to accept (section 8, owner action 1).
+was the owner's to accept, and the owner accepted it on 13 October 2026 (section 8,
+owner action 1).
 
 ## 2. The admission check, done
 
@@ -617,8 +618,9 @@ on it and it touches nothing the others do.
 **Owner actions**, none of which an agent may take:
 
 1. **Accept 3.1 and 3.2 in place of `m7/PLAN.md` 2.4's cron dispatcher**, on 2.1 and 2.2's numbers.
-2. **Create the labels `ci-hold` and `fix` on `vecbricks/varka`** before 255c and 255e merge;
-   neither exists today (`repos/vecbricks/varka/labels`).
+   Done: the owner accepted them on 13 October 2026.
+2. **Create the labels `ci-hold` and `fix` on `vecbricks/varka`** before 255c and 255e merge.
+   Done on 13 October 2026, on the owner's request.
 3. **Stop starting `dev/varka_ci_queue.sh run`, `hold` and `drop`** once 255c merges; a held
    run would be cancelled by the script and never rerun by anything.
 4. **Nothing to enable in the fork's Actions tab** (2.1), and nothing to decide on 7.3: no file

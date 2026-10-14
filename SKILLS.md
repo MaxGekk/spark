@@ -137,6 +137,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [The emitter is called from several threads, so a test holds it to that](sql/varka/skills/testing-and-debugging.md#the-emitter-is-called-from-several-threads-so-a-test-holds-it-to-that)
 * [Error Prone and NullAway run beside the build, and the pending list only shrinks](sql/varka/skills/testing-and-debugging.md#error-prone-and-nullaway-run-beside-the-build-and-the-pending-list-only-shrinks)
 * [A Varka suite in JUnit 5: `@VarkaSuite`, a sentence per test, and ScalaTest's lines](sql/varka/skills/testing-and-debugging.md#a-varka-suite-in-junit-5-varkasuite-a-sentence-per-test-and-scalatests-lines)
+* [A Varka node in the plan is not a kernel evaluating the expression](sql/varka/skills/testing-and-debugging.md#a-varka-node-in-the-plan-is-not-a-kernel-evaluating-the-expression)
 * [Cost predictions run optimistic: the calibration table](sql/varka/skills/testing-and-debugging.md#cost-predictions-run-optimistic-the-calibration-table)
 
 #### [What C2 does with these loops](sql/varka/skills/the-jit.md)
