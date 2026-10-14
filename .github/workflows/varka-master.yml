@@ -1,0 +1,71 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+# Varka's master after each merge (VARKA-255.md 3.3). A pull request's Build checks out the
+# branch's own commit and scopes its jobs to the branch's diff from its merge base, so it never
+# builds the branch merged with today's master: two pull requests that pass on their own can
+# break master together, and this run is the only place the merged tree is built and tested.
+# build_main.yml skips pushes to master outside apache/spark, so nothing else runs here.
+#
+# The jobs are named rather than left to the precondition, which on master diffs the head
+# against itself and selects nothing: Varka's suites, engine, bench drivers, assembly gate and
+# docs checks, the linters with every step, and the Java 25 Maven build, which is the only place
+# the shading and incubator-module failures of sql/varka/AGENTS.md's house rules appear. Spark's
+# module matrix is the weekly run's (varka-weekly-matrix.yml): each pull request already ran the
+# modules its own change touches, and a merge that touches a Spark file would otherwise start
+# 35 jobs for two hours on the twenty slots this repository shares with benchmark.yml.
+name: "Build / Varka master after each merge (JDK 25)"
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+# One run at a time. A push during a run leaves one pending run and a later push replaces it,
+# so a burst of merges builds the head the run started on and the burst's last head. Cancelling
+# in progress would let each merge cancel the run before it, and at several merges an hour
+# against a run of half an hour or more no run would finish while merges came. Being a
+# workflow-level group, it also keeps build_and_test.yml's own group (which cancels) from ever
+# seeing two of these runs at once.
+concurrency:
+  group: varka-master
+  cancel-in-progress: false
+
+jobs:
+  run-build:
+    permissions:
+      packages: write
+    name: Run
+    uses: ./.github/workflows/build_and_test.yml
+    if: github.repository == 'vecbricks/varka'
+    with:
+      java: 25
+      branch: master
+      hadoop: hadoop3
+      # Keys left out are off, except the lint job's step flags (lint-spark, lint-code,
+      # lint-python), which it reads as on.
+      jobs: >-
+        {
+          "varka-scoped": "true",
+          "varka-engine": "true",
+          "varka-bench": "true",
+          "varka-asm": "true",
+          "varka-docs": "true",
+          "lint": "true",
+          "java25": "true"
+        }

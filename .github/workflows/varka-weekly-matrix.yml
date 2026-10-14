@@ -22,6 +22,15 @@
 # So without this file the last full matrix a Varka-scoped change ever sees is the one
 # of the last pull request that touched a Spark file. Sunday, early, when no pull
 # request is using the runner slots.
+#
+# The jobs are named rather than left to the precondition (VARKA-255.md 2.5, 2.9): on master
+# the precondition diffs the head against itself, finds no change and selects nothing, so
+# until 255b this run built only the linters, the docs and the Java 25 Maven build. The set
+# is build_java25.yml's, with lint, java25, docs and Varka's jobs added, and the Kubernetes
+# and OIDC jobs off, as build_and_test.yml switches them off on this fork - an explicit set
+# bypasses that line. The module jobs then test every module they name: dev/run-tests.py
+# reads a diff base equal to the head as no change to measure. Varka's own run after each
+# merge is varka-master.yml.
 name: "Build / Weekly full matrix (Scala 2.13, JDK 25)"
 
 on:
@@ -45,3 +54,24 @@ jobs:
       java: 25
       branch: ${{ github.event.inputs.branch || 'master' }}
       hadoop: hadoop3
+      jobs: >-
+        {
+          "build": "true",
+          "pyspark": "true",
+          "sparkr": "true",
+          "tpcds-1g": "true",
+          "docker-integration-tests": "true",
+          "yarn": "true",
+          "k8s-integration-tests": "false",
+          "oidc-e2e": "false",
+          "buf": "true",
+          "ui": "true",
+          "lint": "true",
+          "java25": "true",
+          "docs": "true",
+          "varka-scoped": "true",
+          "varka-engine": "true",
+          "varka-bench": "true",
+          "varka-asm": "true",
+          "varka-docs": "true"
+        }
