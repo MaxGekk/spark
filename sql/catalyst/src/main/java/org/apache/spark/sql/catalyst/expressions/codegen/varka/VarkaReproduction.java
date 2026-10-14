@@ -93,7 +93,8 @@ import org.apache.spark.sql.internal.SQLConf;
  * @param intLiterals the int literal table the kernel was called with
  * @param longLiterals the long literal table
  * @param call the kernel call, or null where the failure was not in one
- * @param classBytes the failing class, or null where none was defined or it was over the cap
+ * @param classBytes the failing class, or null where none was defined or it was over the cap;
+ *        an array, so the record's equality is identity on it, as on {@link Input}'s
  */
 public record VarkaReproduction(
     VarkaFailureSignature signature,

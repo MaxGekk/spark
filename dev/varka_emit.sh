@@ -60,9 +60,9 @@ root="$(git rev-parse --show-toplevel)"
 main=org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitDump
 if [ "${1:-}" = "--replay" ]; then
   [ "$#" -eq 2 ] || usage
+  [ -f "$2" ] || { echo "no such file: $2" >&2; exit 2; }
   # Resolved before the cd below, so a relative path means what it meant to the caller.
   file="$(realpath "$2")"
-  [ -f "$file" ] || { echo "no such file: $2" >&2; exit 2; }
   cd "$root"
   sanitizer=()
   if grep -qx 'sanitizer: on' "$file"; then
