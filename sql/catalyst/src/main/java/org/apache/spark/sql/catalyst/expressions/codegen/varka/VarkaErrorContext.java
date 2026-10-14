@@ -27,7 +27,7 @@ import javax.annotation.Nullable;
  * message (VARKA-314). It answers the questions a bug report needs answered first - which kernel,
  * compiled under which options, over what batch - without a second run.
  *
- * <p>A record is built only inside a {@code catch}, from what the evaluator, the runner or the
+ * <p>A record is built only inside a catch block, from what the evaluator, the runner or the
  * compiler already hold when the failure reaches them, so the path that runs per batch allocates
  * nothing for it. Building and rendering never throw: they run while a failure is being handled,
  * and an exception here would replace the one being reported. A field the catch could not obtain

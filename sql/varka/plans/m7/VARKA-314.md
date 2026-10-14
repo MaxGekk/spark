@@ -319,7 +319,8 @@ the evaluators' own compiles in a task, the exec nodes' and EXPLAIN's. `VarkaEva
 the record in its three catches (emission, kernel, row path); the emission warning and
 `VarkaFallbackAccounting.kernelFailure` and `rowPathFailure` log its block after their sentence; the
 three refusals under test raise `VarkaErrors.illegalState` with it; and `VarkaFallbackEvent` has
-`options`, which every cause's event fills. A test hook, `VarkaExpressionCompiler.setFailForTesting`,
+`options`, which every cause's event fills. A test hook,
+`VarkaExpressionCompiler.setFailForTesting`,
 throws inside the planning catch. `VarkaErrorContextSuite` holds tests 1 to 5 of section 5, test 4
 as two (the kernel warning and event, and the emission warning), and one more for risk 2: a record
 whose cause's `toString` throws and whose options could not render still renders, those fields
@@ -367,15 +368,24 @@ reading as unavailable.
    message, and fork CI caught it. The escape is gone, and the test that caught it now checks that
    such a literal renders as written.
 
-**Predictions (6.1) that 314a scores.** Scored after the suites run; see the pull request's test
-results.
+**Predictions (6.1) that 314a scores**, on the laptop on 14 October 2026 and on fork CI.
 
-1. No new per-batch allocation: test 5.
-2. **Owed.** The pair needs an idle laptop; the class is `VarkaEvaluatorOverheadBenchmark`
-   (`dev/varka_bench_pair.sh core VarkaEvaluatorOverheadBenchmark`), whose cases are the
-   evaluator's per-batch path that the change leaves untouched outside its catches.
-3. `emitted_bytes.json` unchanged: nothing in the emitter changed.
+1. **Held.** Test 5 ran one round in which every one of 106 kernel batches failed and built a
+   record, then found a clean round (no suspect allocation sample) on its third steady-state round;
+   `VarkaProjectExecSuite`'s own sampler test passes unchanged. The success path gained no code: the
+   record, the options rendering and the batch facts are reached only from the catches.
+2. **Owed.** The pair needs an idle laptop and was not run; the class is
+   `VarkaEvaluatorOverheadBenchmark`
+   (`dev/varka_bench_pair.sh core VarkaEvaluatorOverheadBenchmark`),
+   whose cases are the evaluator's per-batch path that the change leaves untouched outside its
+   catches.
+3. **Held.** `VarkaEmittedBytesSuite` passes and `emitted_bytes.json` is unchanged; nothing in the
+   emitter changed.
 4. Belongs to 314b.
+
+**Test time.** `VarkaErrorContextSuite` adds about 4 s to the sql step (its steady-state test 0.8 s
+locally); fork CI's scoped sql step read 401 s against 395 s for a neighbouring branch's run of 39
+suites, within that step's run-to-run spread.
 
 **Left for 314b.** The remaining invariant sites of 3.1 and the docs section of 3.4, as section 8
 says.
