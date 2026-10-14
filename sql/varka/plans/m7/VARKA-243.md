@@ -186,7 +186,8 @@ its SQL-92 clause, stated over the lane values, with its exception conditions, a
 truncation and a worked negative example, its choices, and a one-line pointer where Spark departs.
 Eight choices cut across operations (its section 3), among them the proleptic calendar, no leap
 seconds, and the sign-and-magnitude reading of intervals that decides every interval division.
-`VarkaStandardExamplesSuite` runs the worked examples Spark agrees with through the kernels, and
+`VarkaStandardExamplesSuite` runs through the kernels the worked examples Spark agrees with that
+a coverage row fuses, and
 a lesson in `skills/calendar-algorithms.md` says which divisions truncate and which floor.
 
 **What reading the text turned up that the record did not have.**
