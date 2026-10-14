@@ -2376,6 +2376,12 @@ and 1 000 000, and every one of them needs the bound: in 2.19's reciprocal form
 the floor is exact while the operand is under 2^52 microseconds, about 52 000
 days, so even the days extract is exact only below that - most intervals a
 query holds, and not all of them.
+*Corrected on 14 October 2026 by the division reading for milestone 8 (`m8/PLAN.md` 2.6, row
+103): `extract(DAY FROM dt)` is exact over the whole long, not only under 2^52. The divisor
+86,400,000,000 is 2^13 times 10,546,875, so the division is an arithmetic shift by 13 and a
+Granlund-Montgomery magic by 10,546,875 over a value of at most 2^50, exact everywhere (shift 71,
+multiplier 223,875,151,780,487, first wrong dividend 1,933,372,399,218,749); the hours, minutes
+and seconds extracts take the same split with their own constants.*
 `MakeDTInterval` is multiplies and adds under overflow checks.
 
 **VARKA-39 lands here.** `date - date` is Catalyst's `SubtractDates`, and its result

@@ -157,6 +157,12 @@ Four things follow.
    own answer for `sin(x)` already differs between the two architectures a
    cluster may mix. The six `StrictMath` functions are the only ones whose
    row-engine bits are the same everywhere.
+   *Corrected on 14 October 2026 (`m8/PLAN.md` 2.7.1, from the math reading for milestone 8):
+   the last sentence is wrong by this point's own list. `atan`, `atan2`, `hypot`, `sinh`, `cosh`,
+   `asin` and `acos` have no x86 intrinsic either, so `Math` runs fdlibm for them on both
+   architectures and their row-engine bits are the same everywhere too; thirteen functions are
+   host-independent, not six. The table above also measures `tanh` on x86 at two against
+   `StrictMath`, which Spark does not call for it: against `Math.tanh` it is one.*
 4. **The speed-up is width.** Eight lanes buy 5x to 14x, four buy 2.5x to 9x
    (except `tanh`, where SVML's AVX2 build loses to HotSpot's scalar intrinsic
    by 2x), two buy 1.1x to 3.9x. On NEON the operators that clear 2x are `exp`,

@@ -172,6 +172,36 @@ asserts bit-identical answers, the fallback's per-batch mix is the default behav
 `docs/sql-varka.md` and the user support table state the default and the switch where users look
 (`m8/PLAN.md` 2.7.1).
 
+### 3.5 NaN payloads and signs: what the oracles compare
+
+*Added 14 October 2026 from the IEEE 754 reading for milestone 8 (`m8/PLAN.md` 2.7). Not a
+departure from Spark's answers: a rule for what "the same answer" means where the standard leaves
+it open.*
+
+The standard leaves a NaN's sign and payload unspecified, and Spark's row engine does not
+normalise them: a row carries raw bits, `abs` is a bit operation, negation flips the sign, and
+Spark's own `rint(-NaN)` sign depends on the JIT tier that ran it (derived from the source;
+`m8/PLAN.md` row 344 runs the probe). So Varka's oracles compare NaN lanes **bit for bit in a
+pass-through shape** (a column or a literal delivered unchanged) and **by NaN-ness in a computed
+one** (the result of an operation whose NaN the standard leaves to the implementation), the
+fuzzers draw payload, negative and signalling NaNs, and the emitter never commutes a floating `+`
+or `*`, which are not commutative at the bit level when both operands are NaN. The rule is stated
+here so that a future reader does not mistake a payload difference in a computed NaN for a wrong
+answer, or a bit difference in a pass-through one for an acceptable one.
+
+### 3.6 The reference for a floating-to-decimal answer is JDK 19's `Double.toString`
+
+*Added 14 October 2026 from the float-conversions reading for milestone 8 (`m8/PLAN.md` 2.7).*
+
+Spark builds a decimal from a double through the double's decimal string, and `round`, `bround`
+and `truncate` over a double act on that shortest decimal. `Double.toString` returns the shortest
+decimal only from JDK 19 (JDK-4511638); the reading reports Ryu's measurement of 2,877
+non-shortest outputs per million doubles in the older algorithm, so Spark on JDK 17 differs on
+those inputs from Spark on JDK 19 and later. Varka's kernels and oracles take JDK 19's answer as
+the reference - this fork builds on JDK 25 - and the oracle's header says so, so that a
+differential run against an older row engine reads a disagreement on those inputs as the JDK's,
+not the kernel's.
+
 ## 4. What would have to be built, when a task claims one of these
 
 Nothing here is designed yet. The shape is sketched so an entry can be costed:
