@@ -461,5 +461,10 @@ run; the bad case costs the cap and a cancel instead of a failed master run.
 **Not reproduced in the busy composition.** The module's matrix run as CI runs it - the defaults
 and `exactGrouping=false`, each over two JVMs confined to four cores - passed the test on the
 laptop, in a shard composition that is not CI's: the shards follow the previous run's times, and
-nothing on this machine reproduces a runner's compiler state. The next firing prints its account.
+nothing on this machine reproduces a runner's compiler state. The next firing's account is
+printed only if it is a failure after a clean control, which the matrix report prints at up to
+12,000 characters; a cancel's lands in the JVM's `run.log` under `target/varka-matrix`, which
+the job neither prints nor uploads, and the report counts cancels without their messages. Making
+the report print the cancels that are not the skip list's would surface it, and changes what
+every matrix run prints; that is the owner's call and is left open here.
 
