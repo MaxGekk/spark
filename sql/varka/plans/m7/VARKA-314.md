@@ -373,7 +373,9 @@ reading as unavailable.
 1. **Held.** Test 5 ran one round in which every one of 106 kernel batches failed and built a
    record, then found a clean round (no suspect allocation sample) on its third steady-state round;
    `VarkaProjectExecSuite`'s own sampler test passes unchanged. The success path gained no code: the
-   record, the options rendering and the batch facts are reached only from the catches.
+   record, the options rendering and the batch facts are reached only from the catches. (Held on
+   the laptop and on fork CI; the test's first firing, in the option matrix's run after a merge,
+   read the JVM's compiler and not the failure path, 9.2.)
 2. **Owed.** The pair needs an idle laptop and was not run; the class is
    `VarkaEvaluatorOverheadBenchmark`
    (`dev/varka_bench_pair.sh core VarkaEvaluatorOverheadBenchmark`),
@@ -389,4 +391,69 @@ suites, within that step's run-to-run spread.
 
 **Left for 314b.** The remaining invariant sites of 3.1 and the docs section of 3.4, as section 8
 says.
+
+### 9.2 The steady-state test's first firing read the JVM, not the failure path, 14 October 2026
+
+**What fired.** The second run of `varka-master.yml` (run 38608521281, master at e753f8fb66a, job
+"Varka suites: sql") drew `exactGrouping=false` for its option-matrix step and failed test 5 there:
+
+    after failures built records on every batch, the kernel's steady state allocates nothing
+    *** FAILED ***
+      clean was false no clean round within 20 rounds; the last read (106,0,106)
+
+Every one of the 106 batches of every one of the 20 rounds sampled suspect. The defaults in the
+same job passed the test, the catalyst job passed under the same configuration, and the first run
+of the workflow (242cba890eb, with VARKA-313's metrics and VARKA-315's reproduction file already
+merged) had passed it under `validityByBitmap=false`.
+
+**What the firing was.** Five readings, none of which needed the configuration.
+
+1. The kernel's bytes do not depend on the option. `exactGrouping` chooses how a projection's
+   outputs are partitioned into loop methods, and `date_add(d, 3)` is one output: `dev/varka_emit.sh`
+   renders the same methods, bytes and op counts under the defaults and under
+   `exactGrouping=false`, and only the shape hash differs (`dee952db4f2a64e9` against
+   `3b865226468607ef`), since the options are part of it.
+2. The failure path is not in the sampled window. The sampler reads the thread's allocation
+   around the kernel call alone (`VarkaKernelRunner.invoke`); VARKA-313's timers and row counts
+   wrap the path outside it and VARKA-315's reproduction writer runs in the catches. And the
+   failing round throws from the test hook before the kernel's `run` is entered, so the kernel
+   class's compiled state is whatever the rounds before it left.
+3. On the laptop the test passes under both configurations, alone and in its suite, at master
+   and at 3f6f450bd71 where it was added, reading clean after three to five rounds; a bisect over
+   the day's merges has nothing to bisect.
+4. The read is an uncompiled loop's. The sampler's warnings in the rounds before the clean one
+   show the interpreted kernel allocating 120,400 to 120,560 bytes a 10,000-row batch, twelve
+   bytes a row against the verdict's one; and `-XX:CompileCommand=exclude` over the kernel
+   classes on the test JVM reproduces the firing to the character, "no clean round within 20
+   rounds; the last read (106,0,106)".
+5. The same job's JVMs have left kernel loop methods uncompiled for two minutes before, with the
+   compile queue empty and the compilers busy (`VARKA-295.md` 9.2 and 9.3), which is why the
+   warm-up suite runs in the quiet step. Two test JVMs share the runner's four cores, and which
+   suites a JVM holds and in what order is set by the previous run's times.
+
+So the firing was the JIT's reach in that JVM at that moment, and the configuration was the draw of
+the commit's hash. The test as written gave the compiler 20 rounds, the laptop's number, and
+blamed the failure path when the compiler did not come.
+
+**What changed.** The measurement is taken twice under one cap, 30 s of rounds in place of 20:
+the control, before any failure, and the steady state after it. A control that never reads clean
+says the JVM did not compile the loop and cancels the test; after a clean control, the failing
+round runs and the steady state must read clean again, and a state that does not is the real
+finding and fails. Either message carries what its reader needs: the last round's samples in bytes
+a batch (an interpreted loop reads about 120 KB, a compiled one's residue a few KB; that figure
+alone would have settled this firing) and `VarkaJitEvidence`'s account of the kernel class - its
+compiles by tier and outcome, deoptimizations with reasons, the inlining C2 refused, the Vector
+API classes it inlined and where the task threads' last allocations came from, each frame marked
+interpreted, compiled or inlined - as the warm-up suite's failures carry it since VARKA-295.
+`VarkaJitEvidence` matches thread names by prefix now, so the task threads, which Spark names
+after each task, are read. The cancel is the one judgement here: VARKA-295 keeps the warm-up test
+failing so that firings are collected, but that test's subject is the JIT and it is the designated
+collector; this test's subject is the failure path, and a JVM that cannot compile the loop in 30 s
+cannot measure it. The control costs three to five rounds, about half a second locally, on every
+run; the bad case costs the cap and a cancel instead of a failed master run.
+
+**Not reproduced in the busy composition.** The module's matrix run as CI runs it - the defaults
+and `exactGrouping=false`, each over two JVMs confined to four cores - passed the test on the
+laptop, in a shard composition that is not CI's: the shards follow the previous run's times, and
+nothing on this machine reproduces a runner's compiler state. The next firing prints its account.
 
