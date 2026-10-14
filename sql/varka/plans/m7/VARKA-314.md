@@ -446,7 +446,13 @@ compiles by tier and outcome, deoptimizations with reasons, the inlining C2 refu
 API classes it inlined and where the task threads' last allocations came from, each frame marked
 interpreted, compiled or inlined - as the warm-up suite's failures carry it since VARKA-295.
 `VarkaJitEvidence` matches thread names by prefix now, so the task threads, which Spark names
-after each task, are read. The cancel is the one judgement here: VARKA-295 keeps the warm-up test
+after each task, are read. The review of the change found two things about the measurement
+itself: a recording's dump holds every event the JVM recorded while it ran, those another open
+recording enabled included, so the suite's recording nested in the evidence's would have loaded
+the evidence's inlining decisions and allocation samples into memory by the million -
+`VarkaJfrTestSupport` now streams a dump and keeps the enabled classes' events alone; and
+ScalaTest builds an assertion's clue before it tests the condition, so a failure message that
+reads the recording is built on the failure path only. The cancel is the one judgement here: VARKA-295 keeps the warm-up test
 failing so that firings are collected, but that test's subject is the JIT and it is the designated
 collector; this test's subject is the failure path, and a JVM that cannot compile the loop in 30 s
 cannot measure it. The control costs three to five rounds, about half a second locally, on every

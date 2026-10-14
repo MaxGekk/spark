@@ -276,8 +276,12 @@ class VarkaErrorContextSuite extends QueryTest with VarkaSharedSessions with Var
             "what the failures leave behind: " + account(reads.controlRounds, reads.control))
         case Some((failed, rounds, last)) =>
           assert(failed > 0L, "the failing round should have taken the kernel-failure catch")
-          assert(last._3 === 0L, s"no clean round after the failures, against a control that " +
-            s"read clean after ${reads.controlRounds} rounds: " + account(rounds, last))
+          // Not an assert with the account as its clue: ScalaTest builds a clue before it tests
+          // the condition, and the account stops and reads the recording.
+          if (last._3 != 0L) {
+            fail(s"no clean round after the failures, against a control that read clean after " +
+              s"${reads.controlRounds} rounds: " + account(rounds, last))
+          }
           logInfo(s"steady state clean after $rounds rounds, $failed failed batches before, " +
             s"the control clean after ${reads.controlRounds} rounds")
       }

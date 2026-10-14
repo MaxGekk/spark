@@ -46,8 +46,9 @@ import jdk.jfr.consumer.RecordingFile;
  * Every kernel method's compiles with their tier and outcome; the deoptimizations of its compiled
  * code with their reason; the inlining C2 refused in its compiles, and every Vector API class it
  * inlined there, where a second class of one lane type is the species pollution of
- * {@code vector-api-and-width.md}; and where the warm-up thread's allocation samples of the last
- * seconds came from, with each frame's kind (interpreted, compiled, inlined).
+ * {@code vector-api-and-width.md}; and where the allocation samples of the last seconds came
+ * from on the threads the caller names - the warm-up's own, or Spark's task threads - with each
+ * frame's kind (interpreted, compiled, inlined).
  *
  * <p>The events are the JDK's own, enabled by name, with no flag on the JVM. The recording costs
  * the JVM one event per compile and inlining decision while it runs, so a test starts it just
@@ -191,7 +192,9 @@ public final class VarkaJitEvidence implements AutoCloseable {
           case "jdk.CodeCacheFull" -> codeCacheFull = true;
           case "jdk.ObjectAllocationSample" -> {
             var thread = e.getThread("eventThread");
-            if (thread != null && thread.getJavaName().startsWith(threadName)
+            // A thread that is not a Java thread has no Java name.
+            String name = thread == null ? null : thread.getJavaName();
+            if (name != null && name.startsWith(threadName)
                 && !e.getStartTime().isBefore(tailFrom) && e.getStackTrace() != null) {
               long weight = e.getLong("weight");
               sampled += weight;
