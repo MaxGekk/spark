@@ -50,12 +50,15 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.*;
  *       guard's bit.</li>
  * </ul>
  *
- * <p>A null is never a reason to decline. A batch's verdict joins its rows'. The bounds are the
- * constants the emitter reads ({@code VarkaChrono}'s narrow range, month-arithmetic and
- * {@code make_date} limits, the lane's own range for a checked overflow, a {@code GuardedRange}'s
- * own {@code lo} and {@code hi}), not copies, so the verdict cannot drift from the code by someone
- * editing one side. The values are {@link VarkaReference}'s, which shares no lowering with the
- * emitter.
+ * <p>A null is never a reason to decline. A guard above a FAIL-mode node that overflowed on the
+ * row <b>may</b> fire: the kernel condemns the batch for the overflow and leaves the wrapped value
+ * in a lane that stays valid, which the guard above then reads, where the reference evaluator has
+ * no value for the lane at all (found by the coverage rows' partitions, VARKA-279 9.2). A batch's
+ * verdict joins its rows'. The bounds are the constants the emitter reads ({@code VarkaChrono}'s
+ * narrow range, month-arithmetic and {@code make_date} limits, the lane's own range for a checked
+ * overflow, a {@code GuardedRange}'s own {@code lo} and {@code hi}), not copies, so the verdict
+ * cannot drift from the code by someone editing one side. The values are
+ * {@link VarkaReference}'s, which shares no lowering with the emitter.
  *
  * <p>The plan's fourth verdict, an input outside the column contract, is not computed: the IR does
  * not say which columns are dates, so the edge suite keeps every input inside the contract by
@@ -186,26 +189,71 @@ public final class VarkaGuardSpecs {
     var v = Verdict.ANSWER;
     Set<VarkaVectorIR> live = null;
     for (var guarded : g.guards()) {
-      if (!fires(guarded.node(), guarded.reason(), values, g.isLong(), shifts)) {
+      boolean fired = fires(guarded.node(), guarded.reason(), values, g.isLong(), shifts);
+      // Below a FAIL node that overflowed, the kernel's lane holds the wrapped value and stays
+      // valid - the batch is condemned for the overflow anyway - so a guard above it reads that
+      // value and may fire, where the reference has no value and fires() sees a null.
+      boolean wrapped = !fired && overflowedBelow(guarded.node(), values, g.isLong());
+      if (!fired && !wrapped) {
         continue;
       }
       int bit = guarded.reason().status;
+      Verdict must = new Verdict(bit, 0);
+      Verdict may = new Verdict(0, bit);
       if (!guarded.chain().isEmpty()) {
         boolean selected = true;
         for (var step : guarded.chain()) {
           selected &= values.holds(step.node().cond()) == step.thenBranch();
         }
         if (selected) {
-          v = v.or(new Verdict(bit, 0));
+          v = v.or(fired ? must : may);
         }
       } else {
         if (live == null) {
           live = reached(g.roots(), values);
         }
-        v = v.or(live.contains(guarded.node()) ? new Verdict(bit, 0) : new Verdict(0, bit));
+        v = v.or(fired && live.contains(guarded.node()) ? must : may);
       }
     }
     return v;
+  }
+
+  /**
+   * Whether a FAIL-mode node below {@code node} overflows on the row - its operands valid and its
+   * exact result outside the lane - so that the lanes {@code node}'s guard reads hold a wrapped
+   * value the reference evaluator does not have. Through an {@code IfElse} only the taken arm
+   * counts, as in {@link #mark}: the blend hands the guard above the taken arm's value.
+   */
+  private static boolean overflowedBelow(VarkaVectorIR node, Values values, boolean isLong) {
+    VarkaVectorIR[] below = node instanceof IfElse n
+        ? new VarkaVectorIR[] {n.cond(), values.holds(n.cond()) ? n.thenNode() : n.elseNode()}
+        : VarkaVectorIR.childrenOf(node);
+    for (var child : below) {
+      if (overflows(child, values, isLong) || overflowedBelow(child, values, isLong)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Whether {@code node} is FAIL-mode arithmetic whose exact result on the row leaves the lane. */
+  private static boolean overflows(VarkaVectorIR node, Values values, boolean isLong) {
+    BigInteger[] lane = isLong ? pair(Long.MIN_VALUE, Long.MAX_VALUE)
+        : pair(Integer.MIN_VALUE, Integer.MAX_VALUE);
+    if (node instanceof IntArith n && n.mode() == Overflow.FAIL) {
+      BigInteger l = values.value(n.left());
+      BigInteger r = l == null ? null : values.value(n.right());
+      return r != null && outside(switch (n.op()) {
+        case ADD -> l.add(r);
+        case SUB -> l.subtract(r);
+        case MUL -> l.multiply(r);
+      }, lane);
+    }
+    if (node instanceof IntNeg n && n.mode() == Overflow.FAIL) {
+      BigInteger c = values.value(n.child());
+      return c != null && outside(c.negate(), lane);
+    }
+    return false;
   }
 
   /**

@@ -1,6 +1,6 @@
 {
   "generated_by" : "VarkaCoverageSuite; regenerate with VARKA_COVERAGE_REGEN=true build/sbt 'catalyst/testOnly *VarkaCoverageSuite'",
-  "description" : "Every expression the Varka compiler fuses, with the Catalyst expression classes each one resolves to. Anything absent runs on Spark's row engine.",
+  "description" : "Every expression the Varka compiler fuses, with the Catalyst expression classes each one resolves to. Anything absent runs on Spark's row engine. A row whose kernel can decline a batch names its domain, the predicate inside which the kernel answers (under ANSI where the modes differ); outside it the batch goes to the row engine. An empty domain means every input of the column types is answered.",
   "columns" : {
     "d" : "date",
     "d2" : "date",
@@ -21,6 +21,7 @@
     "family" : "Day arithmetic",
     "form" : "projection",
     "catalyst" : [ "DateAdd" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "date_add(d, i)",
@@ -28,13 +29,15 @@
     "family" : "Day arithmetic",
     "form" : "projection",
     "catalyst" : [ "DateAdd" ],
-    "note" : "a column offset, under a per-batch bound on its range"
+    "domain" : "",
+    "note" : "a column offset with no bound: the day sum wraps as Spark's own `+` does, and only a calendar node reading such a sum needs the range guard"
   }, {
     "sql" : "date_sub(d, 5)",
     "executable" : "date_sub(d, 5)",
     "family" : "Day arithmetic",
     "form" : "projection",
     "catalyst" : [ "DateSub" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "d + CAST(i AS INTERVAL DAY)",
@@ -42,13 +45,15 @@
     "family" : "Day arithmetic",
     "form" : "projection",
     "catalyst" : [ "Cast", "DateAdd", "ExtractANSIIntervalDays" ],
-    "note" : "the day-interval spelling of a column offset"
+    "domain" : "i BETWEEN -106751991 AND 106751991",
+    "note" : "the day-interval spelling of a column offset; past the bound the cast itself throws in every mode, so the batch declines and the row engine raises"
   }, {
     "sql" : "datediff(d2, d)",
     "executable" : "datediff(d2, d)",
     "family" : "Day arithmetic",
     "form" : "projection",
     "catalyst" : [ "DateDiff" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "unix_date(d)",
@@ -56,6 +61,7 @@
     "family" : "Day arithmetic",
     "form" : "projection",
     "catalyst" : [ "UnixDate" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "date_from_unix_date(unix_date(d))",
@@ -63,6 +69,7 @@
     "family" : "Day arithmetic",
     "form" : "projection",
     "catalyst" : [ "DateFromUnixDate", "UnixDate" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "year(d)",
@@ -70,6 +77,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "Year" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "month(d)",
@@ -77,6 +85,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "Month" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "day(d)",
@@ -84,6 +93,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "DayOfMonth" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "quarter(d)",
@@ -91,6 +101,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "Quarter" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "dayofyear(d)",
@@ -98,6 +109,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "DayOfYear" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "dayofweek(d)",
@@ -105,6 +117,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "DayOfWeek" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "weekday(d)",
@@ -112,6 +125,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "WeekDay" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "extract(DAYOFWEEK_ISO FROM d)",
@@ -119,6 +133,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "Add", "Extract", "WeekDay" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "weekofyear(d)",
@@ -126,6 +141,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "WeekOfYear" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "extract(YEAROFWEEK FROM d)",
@@ -133,6 +149,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "Extract", "YearOfWeek" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "last_day(d)",
@@ -140,6 +157,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "LastDay" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "next_day(d, 'MONDAY')",
@@ -147,6 +165,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "NextDay" ],
+    "domain" : "",
     "note" : "the day name must be a literal"
   }, {
     "sql" : "make_date(2021, i, 1)",
@@ -154,13 +173,15 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "MakeDate" ],
-    "note" : ""
+    "domain" : "i BETWEEN 1 AND 12",
+    "note" : "the month under ANSI: an invalid date declines the batch and the row engine raises; the legacy form answers null and declines nothing"
   }, {
     "sql" : "trunc(d, 'YEAR')",
     "executable" : "trunc(d, 'YEAR')",
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "TruncDate" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "trunc(d, 'MONTH')",
@@ -168,6 +189,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "TruncDate" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "trunc(d, 'QUARTER')",
@@ -175,6 +197,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "TruncDate" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "trunc(d, 'WEEK')",
@@ -182,6 +205,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "TruncDate" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "add_months(d, 3)",
@@ -189,6 +213,7 @@
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "AddMonths" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "add_months(d, i)",
@@ -196,13 +221,15 @@
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "AddMonths" ],
-    "note" : ""
+    "domain" : "i BETWEEN -24576 AND 24564",
+    "note" : "a column month count, inside the range the month arithmetic's magic divide is exact over"
   }, {
     "sql" : "d + INTERVAL 3 MONTH",
     "executable" : "d + INTERVAL 3 MONTH",
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "DateAddYMInterval" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "d + ym",
@@ -210,20 +237,23 @@
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "DateAddYMInterval" ],
-    "note" : ""
+    "domain" : "ym BETWEEN INTERVAL '-2048-0' YEAR TO MONTH AND INTERVAL '2047-0' YEAR TO MONTH",
+    "note" : "the interval's month count, under the same range"
   }, {
     "sql" : "d - ym",
     "executable" : "d - ym",
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "DateAddYMInterval", "DatetimeSub", "UnaryMinus" ],
-    "note" : ""
+    "domain" : "ym BETWEEN INTERVAL '-2047-0' YEAR TO MONTH AND INTERVAL '2048-0' YEAR TO MONTH",
+    "note" : "the negated count under the range, so the bounds change sides"
   }, {
     "sql" : "make_ym_interval(year(d), month(d))",
     "executable" : "make_ym_interval(year(d), month(d))",
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "MakeYMInterval", "Month", "Year" ],
+    "domain" : "",
     "note" : "the operands must be bounded - over a bare int column the checked multiply inside it keeps its overflow test and declines"
   }, {
     "sql" : "make_ym_interval(year(d), month(d)) * 2",
@@ -231,6 +261,7 @@
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "MakeYMInterval", "Month", "MultiplyYMInterval", "Year" ],
+    "domain" : "",
     "note" : "a checked multiply, so bounded operands again: `ym * 2` over a stored interval column declines"
   }, {
     "sql" : "abs(ym)",
@@ -238,20 +269,23 @@
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "Abs" ],
-    "note" : ""
+    "domain" : "ym > INTERVAL '-178956970-8' YEAR TO MONTH",
+    "note" : "interval arithmetic is exact in every mode: the one count whose negation overflows declines"
   }, {
     "sql" : "ym - ymm",
     "executable" : "ym - ymm",
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "Cast", "Subtract" ],
-    "note" : ""
+    "domain" : "CAST(ym AS BIGINT) - CAST(ymm AS BIGINT) BETWEEN -2147483648 AND 2147483647",
+    "note" : "exact in every mode: a difference outside the month count's int declines"
   }, {
     "sql" : "CAST(ymy AS INTERVAL MONTH)",
     "executable" : "CAST(ymy AS INTERVAL MONTH)",
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "Cast" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "extract(YEAR FROM ym)",
@@ -259,6 +293,7 @@
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "Extract", "ExtractANSIIntervalYears" ],
+    "domain" : "",
     "note" : "a division by twelve over a month count nothing bounds, so the calendar's range-narrowed magic cannot serve it; a multiply-high through 64-bit lanes does"
   }, {
     "sql" : "extract(YEAR FROM ym) - 1",
@@ -266,27 +301,31 @@
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "Extract", "ExtractANSIIntervalYears", "Subtract" ],
-    "note" : "the quotient feeding further int arithmetic"
+    "domain" : "extract(YEAR FROM ym) > -2147483648",
+    "note" : "the quotient feeding further int arithmetic, checked under ANSI; the check cannot fire, since the quotient is within +/-178956970"
   }, {
     "sql" : "i + 1",
     "executable" : "i + 1",
     "family" : "Integer arithmetic",
     "form" : "projection",
     "catalyst" : [ "Add" ],
-    "note" : ""
+    "domain" : "i < 2147483647",
+    "note" : "checked under ANSI; the legacy mode wraps as Spark does and declines nothing"
   }, {
     "sql" : "i - 1",
     "executable" : "i - 1",
     "family" : "Integer arithmetic",
     "form" : "projection",
     "catalyst" : [ "Subtract" ],
-    "note" : ""
+    "domain" : "i > -2147483648",
+    "note" : "checked under ANSI"
   }, {
     "sql" : "year(d) * 2",
     "executable" : "year(d) * 2",
     "family" : "Integer arithmetic",
     "form" : "projection",
     "catalyst" : [ "Multiply", "Year" ],
+    "domain" : "",
     "note" : "a multiply is checked, and only bounded operands take the check off: `i * 2` over a bare int column declines"
   }, {
     "sql" : "-i",
@@ -294,20 +333,23 @@
     "family" : "Integer arithmetic",
     "form" : "projection",
     "catalyst" : [ "UnaryMinus" ],
-    "note" : ""
+    "domain" : "i > -2147483648",
+    "note" : "checked under ANSI"
   }, {
     "sql" : "year(d) + i",
     "executable" : "year(d) + i",
     "family" : "Integer arithmetic",
     "form" : "projection",
     "catalyst" : [ "Add", "Year" ],
-    "note" : ""
+    "domain" : "i <= 2147483647 - year(d)",
+    "note" : "checked under ANSI; the lower bound is out of reach, since a year is at least 1"
   }, {
     "sql" : "if(d < d2, d, d2)",
     "executable" : "if(d < d2, d, d2)",
     "family" : "Choice and nulls",
     "form" : "projection",
     "catalyst" : [ "If", "LessThan" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "CASE WHEN d < d2 THEN d ELSE d2 END",
@@ -315,6 +357,7 @@
     "family" : "Choice and nulls",
     "form" : "projection",
     "catalyst" : [ "CaseWhen", "LessThan" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "coalesce(d, d2)",
@@ -322,6 +365,7 @@
     "family" : "Choice and nulls",
     "form" : "projection",
     "catalyst" : [ "Coalesce" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "greatest(d, d2)",
@@ -329,6 +373,7 @@
     "family" : "Choice and nulls",
     "form" : "projection",
     "catalyst" : [ "Greatest" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "least(d, d2)",
@@ -336,6 +381,7 @@
     "family" : "Choice and nulls",
     "form" : "projection",
     "catalyst" : [ "Least" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "d IS NULL",
@@ -343,6 +389,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "IsNull" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "d IS NOT NULL",
@@ -350,6 +397,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "IsNotNull" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "d = d2",
@@ -357,6 +405,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "EqualTo" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "d < d2",
@@ -364,6 +413,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "LessThan" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "d <= d2",
@@ -371,6 +421,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "LessThanOrEqual" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "d > d2",
@@ -378,6 +429,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "GreaterThan" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "d >= d2",
@@ -385,6 +437,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "GreaterThanOrEqual" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "year(d) = 2021",
@@ -392,6 +445,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "EqualTo", "Year" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "NOT (d = d2)",
@@ -399,6 +453,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "EqualTo", "Not" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "d IN (DATE '2021-01-01', DATE '2021-06-01')",
@@ -406,6 +461,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "In" ],
+    "domain" : "",
     "note" : "up to 16 literals"
   }, {
     "sql" : "year(d) = 2021 AND i > 0",
@@ -413,6 +469,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "And", "EqualTo", "GreaterThan", "Year" ],
+    "domain" : "",
     "note" : "every conjunct of an AND fuses or the predicate is not in this table; the int column compares in the kernel rather than leaving a residual row filter (VARKA-122)"
   }, {
     "sql" : "i > 0",
@@ -420,6 +477,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "GreaterThan" ],
+    "domain" : "",
     "note" : "a bare int column compares in the kernel (VARKA-122)"
   }, {
     "sql" : "i IS NOT NULL",
@@ -427,6 +485,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "IsNotNull" ],
+    "domain" : "",
     "note" : "the same column's validity word, which the optimizer infers beside `i > 0`"
   }, {
     "sql" : "i = 5",
@@ -434,6 +493,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "EqualTo" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "month(d) > i",
@@ -441,6 +501,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "GreaterThan", "Month" ],
+    "domain" : "",
     "note" : "an int column against a fused int field"
   }, {
     "sql" : "year(d) = 2021 OR month(d) = 3",
@@ -448,6 +509,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "EqualTo", "Month", "Or", "Year" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "d IN (11 to 16 date literals)",
@@ -455,6 +517,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "InSet" ],
+    "domain" : "",
     "note" : "an IN list this long arrives from the optimizer as an InSet and fuses the same way"
   }, {
     "sql" : "l > l2",
@@ -462,6 +525,7 @@
     "family" : "Long-lane predicates",
     "form" : "predicate",
     "catalyst" : [ "GreaterThan" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "l = l2",
@@ -469,6 +533,7 @@
     "family" : "Long-lane predicates",
     "form" : "predicate",
     "catalyst" : [ "EqualTo" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "l >= 5000000000",
@@ -476,6 +541,7 @@
     "family" : "Long-lane predicates",
     "form" : "predicate",
     "catalyst" : [ "GreaterThanOrEqual" ],
+    "domain" : "",
     "note" : "a bigint literal takes a slot in the long lane's own table"
   }, {
     "sql" : "l IS NULL",
@@ -483,6 +549,7 @@
     "family" : "Long-lane predicates",
     "form" : "predicate",
     "catalyst" : [ "IsNull" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "l IS NOT NULL",
@@ -490,6 +557,7 @@
     "family" : "Long-lane predicates",
     "form" : "predicate",
     "catalyst" : [ "IsNotNull" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "t < t2",
@@ -497,6 +565,7 @@
     "family" : "Long-lane predicates",
     "form" : "predicate",
     "catalyst" : [ "LessThan" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "t = TIME'12:34:56.789'",
@@ -504,6 +573,7 @@
     "family" : "Long-lane predicates",
     "form" : "predicate",
     "catalyst" : [ "EqualTo" ],
+    "domain" : "",
     "note" : "a TIME literal of another precision reaches the column through the widening cast, which is the identity on nanoseconds"
   }, {
     "sql" : "dt > dt2",
@@ -511,6 +581,7 @@
     "family" : "Long-lane predicates",
     "form" : "predicate",
     "catalyst" : [ "GreaterThan" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "dt < INTERVAL '0' SECOND",
@@ -518,6 +589,7 @@
     "family" : "Long-lane predicates",
     "form" : "predicate",
     "catalyst" : [ "Cast", "LessThan" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "dt IS NOT NULL",
@@ -525,6 +597,7 @@
     "family" : "Long-lane predicates",
     "form" : "predicate",
     "catalyst" : [ "IsNotNull" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "greatest(l, l2)",
@@ -532,6 +605,7 @@
     "family" : "Long-lane choice",
     "form" : "projection",
     "catalyst" : [ "Greatest" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "least(l, 5000000000)",
@@ -539,6 +613,7 @@
     "family" : "Long-lane choice",
     "form" : "projection",
     "catalyst" : [ "Least" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "CASE WHEN l < l2 THEN l ELSE l2 END",
@@ -546,6 +621,7 @@
     "family" : "Long-lane choice",
     "form" : "projection",
     "catalyst" : [ "CaseWhen", "LessThan" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "if(l IS NULL, l2, l)",
@@ -553,6 +629,7 @@
     "family" : "Long-lane choice",
     "form" : "projection",
     "catalyst" : [ "If", "IsNull" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "greatest(t, t2)",
@@ -560,6 +637,7 @@
     "family" : "Long-lane choice",
     "form" : "projection",
     "catalyst" : [ "Greatest" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END",
@@ -567,6 +645,7 @@
     "family" : "Long-lane choice",
     "form" : "projection",
     "catalyst" : [ "CaseWhen", "Cast", "GreaterThan" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "t - t2",
@@ -574,6 +653,7 @@
     "family" : "Time arithmetic",
     "form" : "projection",
     "catalyst" : [ "SubtractTimes" ],
+    "domain" : "",
     "note" : "a day-time interval, the nanosecond difference divided by a thousand"
   }, {
     "sql" : "time_diff('HOUR', t, t2)",
@@ -581,6 +661,7 @@
     "family" : "Time arithmetic",
     "form" : "projection",
     "catalyst" : [ "TimeDiff" ],
+    "domain" : "",
     "note" : "the unit is a literal; a column of units would need a kernel per distinct value"
   }, {
     "sql" : "time_diff('microsecond', t2, t)",
@@ -588,6 +669,7 @@
     "family" : "Time arithmetic",
     "form" : "projection",
     "catalyst" : [ "TimeDiff" ],
+    "domain" : "",
     "note" : "units are read case-insensitively, as DateTimeUtils reads them"
   }, {
     "sql" : "time_trunc('MINUTE', t)",
@@ -595,6 +677,7 @@
     "family" : "Time arithmetic",
     "form" : "projection",
     "catalyst" : [ "TimeTrunc" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "time_trunc('MILLISECOND', t2)",
@@ -602,6 +685,7 @@
     "family" : "Time arithmetic",
     "form" : "projection",
     "catalyst" : [ "TimeTrunc" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "hour(t)",
@@ -609,6 +693,7 @@
     "family" : "Time arithmetic",
     "form" : "projection",
     "catalyst" : [ "HoursOfTime" ],
+    "domain" : "",
     "note" : "an int computed in the 64-bit lane and narrowed at the kernel's store, the one place a lane changes width until VARKA-28; so the extract fuses as an output and declines under another expression"
   }, {
     "sql" : "minute(t2)",
@@ -616,6 +701,7 @@
     "family" : "Time arithmetic",
     "form" : "projection",
     "catalyst" : [ "MinutesOfTime" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "second(t)",
@@ -623,6 +709,7 @@
     "family" : "Time arithmetic",
     "form" : "projection",
     "catalyst" : [ "SecondsOfTime" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "time_to_millis(t)",
@@ -630,6 +717,7 @@
     "family" : "Time arithmetic",
     "form" : "projection",
     "catalyst" : [ "TimeToMillis" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "time_to_micros(t2)",
@@ -637,6 +725,7 @@
     "family" : "Time arithmetic",
     "form" : "projection",
     "catalyst" : [ "TimeToMicros" ],
+    "domain" : "",
     "note" : ""
   }, {
     "sql" : "time_from_millis(time_to_millis(t2))",
@@ -644,6 +733,7 @@
     "family" : "Time arithmetic",
     "form" : "projection",
     "catalyst" : [ "TimeFromMillis", "TimeToMillis" ],
+    "domain" : "time_to_millis(t2) BETWEEN 0 AND 86399999",
     "note" : "the count is guarded to the day's worth of its unit, where the multiply is exact; a count outside declines the batch and the row engine raises Spark's error, as for t + dt - so the count here is one that is inside the day by construction"
   }, {
     "sql" : "time_from_micros(time_to_micros(t))",
@@ -651,14 +741,16 @@
     "family" : "Time arithmetic",
     "form" : "projection",
     "catalyst" : [ "TimeFromMicros", "TimeToMicros" ],
-    "note" : ""
+    "domain" : "time_to_micros(t) BETWEEN 0 AND 86399999999",
+    "note" : "the same guard over the microsecond count"
   }, {
     "sql" : "t + INTERVAL '0 00:00:00' DAY TO SECOND",
     "executable" : "t + INTERVAL '0 00:00:00' DAY TO SECOND",
     "family" : "Time arithmetic",
     "form" : "projection",
     "catalyst" : [ "TimeAddInterval" ],
-    "note" : "a zero interval on purpose: this fixture reaches both ends of the day, so any other constant crosses midnight on some row, where Spark raises an error rather than a value. The sum is still guarded to the day; the crossing case, and a column interval, are VarkaTimeArithmeticSuite's"
+    "domain" : "time_to_micros(t) + 0 BETWEEN 0 AND 86399999999",
+    "note" : "a zero interval on purpose: this fixture reaches both ends of the day, so any other constant crosses midnight on some row, where Spark raises an error rather than a value. The sum is still guarded to the day - the domain adds the interval's microseconds, 0 here, to the time's; the crossing case, and a column interval, are VarkaTimeArithmeticSuite's"
   } ],
   "catalyst_classes_admitted" : [ "Abs", "Add", "AddMonths", "And", "CaseWhen", "Cast", "Coalesce", "DateAdd", "DateAddYMInterval", "DateDiff", "DateFromUnixDate", "DateSub", "DayOfMonth", "DayOfWeek", "DayOfYear", "EqualTo", "ExtractANSIIntervalDays", "ExtractANSIIntervalMonths", "ExtractANSIIntervalYears", "GreaterThan", "GreaterThanOrEqual", "Greatest", "If", "In", "InSet", "IsNotNull", "IsNull", "LastDay", "Least", "LessThan", "LessThanOrEqual", "MakeDate", "MakeYMInterval", "Month", "Multiply", "MultiplyYMInterval", "NextDay", "Not", "Or", "Quarter", "Subtract", "TruncDate", "UnaryMinus", "UnixDate", "WeekDay", "WeekOfYear", "Year", "YearOfWeek" ]
 }

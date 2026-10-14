@@ -254,6 +254,19 @@ multiply fuses only where a bound proves it cannot overflow, which is why the
 multiply rows below are written over a calendar field rather than over a plain
 column.
 
+The *Domain* column is filled for a row whose kernel can decline a batch: the
+predicate, over the row's columns, inside which the kernel answers. Outside it
+the batch goes to the row engine, which answers or raises exactly as Spark
+would have; an empty cell means every input of the column types is answered.
+Where the two evaluation modes differ the domain is ANSI's, the mode the table
+is compiled under: the checked int arithmetic and `make_date`'s date check exist
+only there, and the legacy mode wraps or nulls as Spark does with no guard. The
+bounds are rendered from the constants the emitter reads, so a moved bound
+regenerates the table rather than leaving it stale, and `VarkaCoverageSuite`
+fails a row that carries a guard and names no domain, or names one and carries
+no guard. `VarkaCoverageDifferentialSuite` runs each such row under its domain,
+its negation and `IS NULL` (VARKA-279).
+
 The table is generated, not written. `VarkaCoverageSuite` compiles every row
 below through `VarkaExpressionCompiler` and fails if any of them declines, fails
 if the compiler matches an expression class that no row exercises, and fails if
@@ -270,140 +283,140 @@ The *128-bit lanes* column is `sql/varka/width_audit.json`'s census on AMD Ryzen
 
 #### Day arithmetic
 
-| Expression | Notes | 128-bit lanes |
-|---|---|---|
-| `date_add(d, 3)` |  | vector |
-| `date_add(d, i)` | a column offset, under a per-batch bound on its range | vector |
-| `date_sub(d, 5)` |  | vector |
-| `d + CAST(i AS INTERVAL DAY)` | the day-interval spelling of a column offset | vector |
-| `datediff(d2, d)` |  | vector |
-| `unix_date(d)` |  | vector |
-| `date_from_unix_date(unix_date(d))` |  | vector |
+| Expression | Domain | Notes | 128-bit lanes |
+|---|---|---|---|
+| `date_add(d, 3)` |  |  | vector |
+| `date_add(d, i)` |  | a column offset with no bound: the day sum wraps as Spark's own `+` does, and only a calendar node reading such a sum needs the range guard | vector |
+| `date_sub(d, 5)` |  |  | vector |
+| `d + CAST(i AS INTERVAL DAY)` | `i BETWEEN -106751991 AND 106751991` | the day-interval spelling of a column offset; past the bound the cast itself throws in every mode, so the batch declines and the row engine raises | vector |
+| `datediff(d2, d)` |  |  | vector |
+| `unix_date(d)` |  |  | vector |
+| `date_from_unix_date(unix_date(d))` |  |  | vector |
 
 #### Calendar fields
 
-| Expression | Notes | 128-bit lanes |
-|---|---|---|
-| `year(d)` |  | vector |
-| `month(d)` |  | vector |
-| `day(d)` |  | vector |
-| `quarter(d)` |  | vector |
-| `dayofyear(d)` |  | vector |
-| `dayofweek(d)` |  | vector |
-| `weekday(d)` |  | vector |
-| `extract(DAYOFWEEK_ISO FROM d)` |  | vector |
-| `weekofyear(d)` |  | vector |
-| `extract(YEAROFWEEK FROM d)` |  | vector |
-| `last_day(d)` |  | vector |
-| `next_day(d, 'MONDAY')` | the day name must be a literal | vector |
-| `make_date(2021, i, 1)` |  | vector |
-| `trunc(d, 'YEAR')` |  | vector |
-| `trunc(d, 'MONTH')` |  | vector |
-| `trunc(d, 'QUARTER')` |  | vector |
-| `trunc(d, 'WEEK')` |  | vector |
+| Expression | Domain | Notes | 128-bit lanes |
+|---|---|---|---|
+| `year(d)` |  |  | vector |
+| `month(d)` |  |  | vector |
+| `day(d)` |  |  | vector |
+| `quarter(d)` |  |  | vector |
+| `dayofyear(d)` |  |  | vector |
+| `dayofweek(d)` |  |  | vector |
+| `weekday(d)` |  |  | vector |
+| `extract(DAYOFWEEK_ISO FROM d)` |  |  | vector |
+| `weekofyear(d)` |  |  | vector |
+| `extract(YEAROFWEEK FROM d)` |  |  | vector |
+| `last_day(d)` |  |  | vector |
+| `next_day(d, 'MONDAY')` |  | the day name must be a literal | vector |
+| `make_date(2021, i, 1)` | `i BETWEEN 1 AND 12` | the month under ANSI: an invalid date declines the batch and the row engine raises; the legacy form answers null and declines nothing | vector |
+| `trunc(d, 'YEAR')` |  |  | vector |
+| `trunc(d, 'MONTH')` |  |  | vector |
+| `trunc(d, 'QUARTER')` |  |  | vector |
+| `trunc(d, 'WEEK')` |  |  | vector |
 
 #### Months and year-month intervals
 
-| Expression | Notes | 128-bit lanes |
-|---|---|---|
-| `add_months(d, 3)` |  | vector |
-| `add_months(d, i)` |  | vector |
-| `d + INTERVAL 3 MONTH` |  | vector |
-| `d + ym` |  | vector |
-| `d - ym` |  | vector |
-| `make_ym_interval(year(d), month(d))` | the operands must be bounded - over a bare int column the checked multiply inside it keeps its overflow test and declines | vector |
-| `make_ym_interval(year(d), month(d)) * 2` | a checked multiply, so bounded operands again: `ym * 2` over a stored interval column declines | vector |
-| `abs(ym)` |  | vector |
-| `ym - ymm` |  | vector |
-| `CAST(ymy AS INTERVAL MONTH)` |  | vector |
-| `extract(YEAR FROM ym)` | a division by twelve over a month count nothing bounds, so the calendar's range-narrowed magic cannot serve it; a multiply-high through 64-bit lanes does | vector |
-| `extract(YEAR FROM ym) - 1` | the quotient feeding further int arithmetic | vector |
+| Expression | Domain | Notes | 128-bit lanes |
+|---|---|---|---|
+| `add_months(d, 3)` |  |  | vector |
+| `add_months(d, i)` | `i BETWEEN -24576 AND 24564` | a column month count, inside the range the month arithmetic's magic divide is exact over | vector |
+| `d + INTERVAL 3 MONTH` |  |  | vector |
+| `d + ym` | `ym BETWEEN INTERVAL '-2048-0' YEAR TO MONTH AND INTERVAL '2047-0' YEAR TO MONTH` | the interval's month count, under the same range | vector |
+| `d - ym` | `ym BETWEEN INTERVAL '-2047-0' YEAR TO MONTH AND INTERVAL '2048-0' YEAR TO MONTH` | the negated count under the range, so the bounds change sides | vector |
+| `make_ym_interval(year(d), month(d))` |  | the operands must be bounded - over a bare int column the checked multiply inside it keeps its overflow test and declines | vector |
+| `make_ym_interval(year(d), month(d)) * 2` |  | a checked multiply, so bounded operands again: `ym * 2` over a stored interval column declines | vector |
+| `abs(ym)` | `ym > INTERVAL '-178956970-8' YEAR TO MONTH` | interval arithmetic is exact in every mode: the one count whose negation overflows declines | vector |
+| `ym - ymm` | `CAST(ym AS BIGINT) - CAST(ymm AS BIGINT) BETWEEN -2147483648 AND 2147483647` | exact in every mode: a difference outside the month count's int declines | vector |
+| `CAST(ymy AS INTERVAL MONTH)` |  |  | vector |
+| `extract(YEAR FROM ym)` |  | a division by twelve over a month count nothing bounds, so the calendar's range-narrowed magic cannot serve it; a multiply-high through 64-bit lanes does | vector |
+| `extract(YEAR FROM ym) - 1` | `extract(YEAR FROM ym) > -2147483648` | the quotient feeding further int arithmetic, checked under ANSI; the check cannot fire, since the quotient is within +/-178956970 | vector |
 
 #### Integer arithmetic
 
-| Expression | Notes | 128-bit lanes |
-|---|---|---|
-| `i + 1` |  | vector |
-| `i - 1` |  | vector |
-| `year(d) * 2` | a multiply is checked, and only bounded operands take the check off: `i * 2` over a bare int column declines | vector |
-| `-i` |  | vector |
-| `year(d) + i` |  | vector |
+| Expression | Domain | Notes | 128-bit lanes |
+|---|---|---|---|
+| `i + 1` | `i < 2147483647` | checked under ANSI; the legacy mode wraps as Spark does and declines nothing | vector |
+| `i - 1` | `i > -2147483648` | checked under ANSI | vector |
+| `year(d) * 2` |  | a multiply is checked, and only bounded operands take the check off: `i * 2` over a bare int column declines | vector |
+| `-i` | `i > -2147483648` | checked under ANSI | vector |
+| `year(d) + i` | `i <= 2147483647 - year(d)` | checked under ANSI; the lower bound is out of reach, since a year is at least 1 | vector |
 
 #### Choice and nulls
 
-| Expression | Notes | 128-bit lanes |
-|---|---|---|
-| `if(d < d2, d, d2)` |  | vector |
-| `CASE WHEN d < d2 THEN d ELSE d2 END` |  | vector |
-| `coalesce(d, d2)` |  | vector |
-| `greatest(d, d2)` |  | vector |
-| `least(d, d2)` |  | vector |
+| Expression | Domain | Notes | 128-bit lanes |
+|---|---|---|---|
+| `if(d < d2, d, d2)` |  |  | vector |
+| `CASE WHEN d < d2 THEN d ELSE d2 END` |  |  | vector |
+| `coalesce(d, d2)` |  |  | vector |
+| `greatest(d, d2)` |  |  | vector |
+| `least(d, d2)` |  |  | vector |
 
 #### Predicates
 
-| Predicate | Notes | 128-bit lanes |
-|---|---|---|
-| `d IS NULL` |  | vector |
-| `d IS NOT NULL` |  | vector |
-| `d = d2` |  | vector |
-| `d < d2` |  | vector |
-| `d <= d2` |  | vector |
-| `d > d2` |  | vector |
-| `d >= d2` |  | vector |
-| `year(d) = 2021` |  | vector |
-| `NOT (d = d2)` |  | vector |
-| `d IN (DATE '2021-01-01', DATE '2021-06-01')` | up to 16 literals | vector |
-| `year(d) = 2021 AND i > 0` | every conjunct of an AND fuses or the predicate is not in this table; the int column compares in the kernel rather than leaving a residual row filter (VARKA-122) | vector |
-| `i > 0` | a bare int column compares in the kernel (VARKA-122) | vector |
-| `i IS NOT NULL` | the same column's validity word, which the optimizer infers beside `i > 0` | vector |
-| `i = 5` |  | vector |
-| `month(d) > i` | an int column against a fused int field | vector |
-| `year(d) = 2021 OR month(d) = 3` |  | vector |
-| `d IN (11 to 16 date literals)` | an IN list this long arrives from the optimizer as an InSet and fuses the same way | vector |
+| Predicate | Domain | Notes | 128-bit lanes |
+|---|---|---|---|
+| `d IS NULL` |  |  | vector |
+| `d IS NOT NULL` |  |  | vector |
+| `d = d2` |  |  | vector |
+| `d < d2` |  |  | vector |
+| `d <= d2` |  |  | vector |
+| `d > d2` |  |  | vector |
+| `d >= d2` |  |  | vector |
+| `year(d) = 2021` |  |  | vector |
+| `NOT (d = d2)` |  |  | vector |
+| `d IN (DATE '2021-01-01', DATE '2021-06-01')` |  | up to 16 literals | vector |
+| `year(d) = 2021 AND i > 0` |  | every conjunct of an AND fuses or the predicate is not in this table; the int column compares in the kernel rather than leaving a residual row filter (VARKA-122) | vector |
+| `i > 0` |  | a bare int column compares in the kernel (VARKA-122) | vector |
+| `i IS NOT NULL` |  | the same column's validity word, which the optimizer infers beside `i > 0` | vector |
+| `i = 5` |  |  | vector |
+| `month(d) > i` |  | an int column against a fused int field | vector |
+| `year(d) = 2021 OR month(d) = 3` |  |  | vector |
+| `d IN (11 to 16 date literals)` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | vector |
 
 #### Long-lane predicates
 
-| Predicate | Notes | 128-bit lanes |
-|---|---|---|
-| `l > l2` |  | per-lane: compare to mask, mask cast |
-| `l = l2` |  | per-lane: compare to mask, mask cast |
-| `l >= 5000000000` | a bigint literal takes a slot in the long lane's own table | per-lane: compare to mask, mask cast |
-| `l IS NULL` |  | per-lane: mask broadcast, mask logic, mask cast |
-| `l IS NOT NULL` |  | per-lane: mask cast, mask broadcast |
-| `t < t2` |  | per-lane: compare to mask, mask cast |
-| `t = TIME'12:34:56.789'` | a TIME literal of another precision reaches the column through the widening cast, which is the identity on nanoseconds | per-lane: compare to mask, mask cast |
-| `dt > dt2` |  | per-lane: compare to mask, mask cast |
-| `dt < INTERVAL '0' SECOND` |  | per-lane: compare to mask, mask cast |
-| `dt IS NOT NULL` |  | per-lane: mask cast, mask broadcast |
+| Predicate | Domain | Notes | 128-bit lanes |
+|---|---|---|---|
+| `l > l2` |  |  | per-lane: compare to mask, mask cast |
+| `l = l2` |  |  | per-lane: compare to mask, mask cast |
+| `l >= 5000000000` |  | a bigint literal takes a slot in the long lane's own table | per-lane: compare to mask, mask cast |
+| `l IS NULL` |  |  | per-lane: mask broadcast, mask logic, mask cast |
+| `l IS NOT NULL` |  |  | per-lane: mask cast, mask broadcast |
+| `t < t2` |  |  | per-lane: compare to mask, mask cast |
+| `t = TIME'12:34:56.789'` |  | a TIME literal of another precision reaches the column through the widening cast, which is the identity on nanoseconds | per-lane: compare to mask, mask cast |
+| `dt > dt2` |  |  | per-lane: compare to mask, mask cast |
+| `dt < INTERVAL '0' SECOND` |  |  | per-lane: compare to mask, mask cast |
+| `dt IS NOT NULL` |  |  | per-lane: mask cast, mask broadcast |
 
 #### Long-lane choice
 
-| Expression | Notes | 128-bit lanes |
-|---|---|---|
-| `greatest(l, l2)` |  | per-lane: blend, mask broadcast |
-| `least(l, 5000000000)` |  | per-lane: blend, mask broadcast |
-| `CASE WHEN l < l2 THEN l ELSE l2 END` |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
-| `if(l IS NULL, l2, l)` |  | per-lane: mask broadcast, mask logic, blend |
-| `greatest(t, t2)` |  | per-lane: blend, mask broadcast |
-| `CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END` |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
+| Expression | Domain | Notes | 128-bit lanes |
+|---|---|---|---|
+| `greatest(l, l2)` |  |  | per-lane: blend, mask broadcast |
+| `least(l, 5000000000)` |  |  | per-lane: blend, mask broadcast |
+| `CASE WHEN l < l2 THEN l ELSE l2 END` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
+| `if(l IS NULL, l2, l)` |  |  | per-lane: mask broadcast, mask logic, blend |
+| `greatest(t, t2)` |  |  | per-lane: blend, mask broadcast |
+| `CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
 
 #### Time arithmetic
 
-| Expression | Notes | 128-bit lanes |
-|---|---|---|
-| `t - t2` | a day-time interval, the nanosecond difference divided by a thousand | vector |
-| `time_diff('HOUR', t, t2)` | the unit is a literal; a column of units would need a kernel per distinct value | vector |
-| `time_diff('microsecond', t2, t)` | units are read case-insensitively, as DateTimeUtils reads them | vector |
-| `time_trunc('MINUTE', t)` |  | vector |
-| `time_trunc('MILLISECOND', t2)` |  | vector |
-| `hour(t)` | an int computed in the 64-bit lane and narrowed at the kernel's store, the one place a lane changes width until VARKA-28; so the extract fuses as an output and declines under another expression | vector |
-| `minute(t2)` |  | vector |
-| `second(t)` |  | vector |
-| `time_to_millis(t)` |  | vector |
-| `time_to_micros(t2)` |  | vector |
-| `time_from_millis(time_to_millis(t2))` | the count is guarded to the day's worth of its unit, where the multiply is exact; a count outside declines the batch and the row engine raises Spark's error, as for t + dt - so the count here is one that is inside the day by construction | per-lane: compare to mask, mask logic, mask broadcast, mask test |
-| `time_from_micros(time_to_micros(t))` |  | per-lane: compare to mask, mask logic, mask broadcast, mask test |
-| `t + INTERVAL '0 00:00:00' DAY TO SECOND` | a zero interval on purpose: this fixture reaches both ends of the day, so any other constant crosses midnight on some row, where Spark raises an error rather than a value. The sum is still guarded to the day; the crossing case, and a column interval, are VarkaTimeArithmeticSuite's | per-lane: compare to mask, mask logic, mask broadcast, mask test |
+| Expression | Domain | Notes | 128-bit lanes |
+|---|---|---|---|
+| `t - t2` |  | a day-time interval, the nanosecond difference divided by a thousand | vector |
+| `time_diff('HOUR', t, t2)` |  | the unit is a literal; a column of units would need a kernel per distinct value | vector |
+| `time_diff('microsecond', t2, t)` |  | units are read case-insensitively, as DateTimeUtils reads them | vector |
+| `time_trunc('MINUTE', t)` |  |  | vector |
+| `time_trunc('MILLISECOND', t2)` |  |  | vector |
+| `hour(t)` |  | an int computed in the 64-bit lane and narrowed at the kernel's store, the one place a lane changes width until VARKA-28; so the extract fuses as an output and declines under another expression | vector |
+| `minute(t2)` |  |  | vector |
+| `second(t)` |  |  | vector |
+| `time_to_millis(t)` |  |  | vector |
+| `time_to_micros(t2)` |  |  | vector |
+| `time_from_millis(time_to_millis(t2))` | `time_to_millis(t2) BETWEEN 0 AND 86399999` | the count is guarded to the day's worth of its unit, where the multiply is exact; a count outside declines the batch and the row engine raises Spark's error, as for t + dt - so the count here is one that is inside the day by construction | per-lane: compare to mask, mask logic, mask broadcast, mask test |
+| `time_from_micros(time_to_micros(t))` | `time_to_micros(t) BETWEEN 0 AND 86399999999` | the same guard over the microsecond count | per-lane: compare to mask, mask logic, mask broadcast, mask test |
+| `t + INTERVAL '0 00:00:00' DAY TO SECOND` | `time_to_micros(t) + 0 BETWEEN 0 AND 86399999999` | a zero interval on purpose: this fixture reaches both ends of the day, so any other constant crosses midnight on some row, where Spark raises an error rather than a value. The sum is still guarded to the day - the domain adds the interval's microseconds, 0 here, to the time's; the crossing case, and a column interval, are VarkaTimeArithmeticSuite's | per-lane: compare to mask, mask logic, mask broadcast, mask test |
 
 <!-- END generated coverage table -->
 
@@ -1146,7 +1159,7 @@ exist.
   `checkAnswer` equality over a query matrix - re-run warm so a cache hit is
   differentially checked too - `numVarkaBatches > 0` on fused plans,
   Metaspace bounds, and config-driven activation.
-* **Three stronger forms over every coverage row.** The kernel checks
+* **Four stronger forms over every coverage row.** The kernel checks
   poison every null lane, put a fixed batch with a poisoned lane in the loop
   and the epilogue in front of each row's masked body, and run every
   compared batch with the output validity pre-filled with zeros, as
@@ -1163,7 +1176,13 @@ exist.
   AND or a true OR: both engines raise the same error, compared by condition,
   SQLSTATE and message parameters, or both answer the same rows. A skipped
   position must be served by a kernel or be on the suite's declined list
-  with its reason.
+  with its reason. And each row that names a domain runs over a fixture that
+  straddles every guard's bound, cut as TLP cuts a table into the rows inside
+  the domain, outside it and where it is unknown, as a projection and as a
+  filter: inside and under `IS NULL` the kernels serve every batch and nothing
+  declines; outside, every batch declines with exactly the status
+  `VarkaGuardSpec`'s verdict calls for, read off the JFR fallback event, and
+  the answer is Spark's, rows or the same error (VARKA-279).
 * **Spark's own date tests** (`VarkaGoldenCorpusSuite`) run the `select`
   statements of the golden-file inputs (`date.sql`, `interval.sql`,
   `extract.sql`, the timestamp and datetime files) on both engines, each
