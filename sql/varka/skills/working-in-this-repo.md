@@ -213,9 +213,11 @@ base with master, and on master that base is the head. Three places read the emp
 "nothing to do" and passed: the precondition selected none of the test jobs (the weekly run
 did this for three Sundays), `dev/run-tests.py` narrowed each module job to no module and printed
 "There are no modules to test", and the option step reran a failure on its "merge base" - the
-same tree - and excused it. The master runs now name their jobs, and the other two read a base
-equal to the head as no change to measure. When a CI step compares against a base, ask what it
-does when the base is the commit itself.
+same tree - and excused it. Two more said something false: the docs job skipped the Python and
+R API docs, and the emitted-bytes step called the merged tree "byte-identical". The master runs
+now name their jobs, and the other readers treat a base equal to the head as no change to
+measure. When a CI step compares against a base, ask what it does when the base is the commit
+itself.
 
 ## A path-based checkstyle suppression matches the absolute path, checkout directory included
 
@@ -223,9 +225,10 @@ does when the base is the commit itself.
 "no path segment named `varka`". Checkstyle matches `files=` against the absolute path, and
 `vecbricks/varka`'s runners check out into `/__w/varka/varka/`, so on that repository nothing was
 exempt and the weekly run's Java linter failed on six Spark files, while the fork, checked out
-into `/__w/spark/spark/`, passed. The pattern now requires the package path,
-`java/org/apache/spark/.../varka/`. A suppression keyed on a directory name has to be keyed below
-the source root, or it depends on where the repository was cloned. Checkstyle 11.0.1 runs in
+into `/__w/spark/spark/`, passed. The pattern now requires a Varka package path,
+`java/org/apache/spark/.../varka/`, or a class name holding `Varka`. A suppression keyed on a
+directory name has to be keyed below the source root, or it depends on where the repository was
+cloned. Checkstyle 11.0.1 runs in
 seconds from the coursier cache (`com.puppycrawl.tools.checkstyle.Main -c dev/checkstyle.xml
 <dir>`), which is how the failure was reproduced under a root named `varka/varka`.
 

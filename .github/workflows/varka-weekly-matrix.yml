@@ -26,8 +26,9 @@
 # The jobs are named rather than left to the precondition (VARKA-255.md 2.5, 2.9): on master
 # the precondition diffs the head against itself, finds no change and selects nothing, so
 # until 255b this run built only the linters, the docs and the Java 25 Maven build. The set
-# is build_java25.yml's, with lint, java25, docs and Varka's jobs added, and the Kubernetes
-# and OIDC jobs off, as build_and_test.yml switches them off on this fork - an explicit set
+# is build_java25.yml's, with the pandas-on-Spark, old Connect client and periodic PySpark
+# groups, lint, java25, docs and Varka's jobs added - what a pull request touching a shared
+# file runs - and the Kubernetes and OIDC jobs off, as build_and_test.yml switches them off on this fork - an explicit set
 # bypasses that line. The module jobs then test every module they name: dev/run-tests.py
 # reads a diff base equal to the head as no change to measure. Varka's own run after each
 # merge is varka-master.yml.
@@ -58,6 +59,9 @@ jobs:
         {
           "build": "true",
           "pyspark": "true",
+          "pyspark-pandas": "true",
+          "pyspark-connect-old-client": "true",
+          "pyspark-periodic": "true",
           "sparkr": "true",
           "tpcds-1g": "true",
           "docker-integration-tests": "true",

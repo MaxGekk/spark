@@ -65,7 +65,11 @@ if [ "$no_change" = true ]; then
 else
   mapfile -t picked < <(python3 dev/varka_matrix_pick.py "$OUT/configurations" "$branch" "$base")
 fi
-config=${picked[0]}
+config=${picked[0]:-}
+if [ -z "$config" ]; then
+  echo "no configuration picked from $OUT/configurations" | tee -a "$SUMMARY"
+  exit 1
+fi
 echo "== $module under $config: ${picked[1]}" | tee -a "$SUMMARY"
 
 dev/varka_matrix.sh --module "$module" "${reuse[@]}" --config "$config" -j 2 \
@@ -76,6 +80,10 @@ if [ "$status" = 0 ]; then
   echo "passed" >> "$SUMMARY"
   exit 0
 fi
+if [ "$no_change" = true ]; then
+  echo "failed on a run of the merge base itself, so nothing excuses it" | tee -a "$SUMMARY"
+  exit 1
+fi
 
 # The lines that name a failure under the picked configuration or the defaults.
 failures() {
@@ -83,10 +91,6 @@ failures() {
 }
 failures "$OUT/report.txt" > "$OUT/failures-branch.txt"
 
-if [ "$no_change" = true ]; then
-  echo "failed on a run of the merge base itself, so nothing excuses it" | tee -a "$SUMMARY"
-  exit 1
-fi
 if [ -z "$base" ]; then
   echo "failed, and there is no merge base to compare with" | tee -a "$SUMMARY"
   exit 1

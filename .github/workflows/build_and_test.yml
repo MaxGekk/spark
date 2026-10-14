@@ -1327,6 +1327,9 @@ jobs:
         base="${VARKA_DIFF_BASE:-}"
         if [ -z "$base" ]; then
           echo "emitted bytes: the oracle passed; no diff base to compare the pinned file against"
+        elif [ "$(git rev-parse "$base^{commit}")" = "$(git rev-parse HEAD)" ]; then
+          # A run of master (VARKA-255.md 2.9): its merge base is itself, so nothing to compare.
+          echo "emitted bytes: the oracle passed; a run of master has no change to compare with"
         elif git diff --quiet "$base" HEAD -- sql/varka/emitted_bytes.json; then
           echo "emitted bytes: unchanged since $base, so the oracle proves this change byte-identical"
         else
@@ -1405,7 +1408,11 @@ jobs:
         # Build docs first with SKIP_API to ensure they are buildable without requiring any
         # language docs to be built beforehand.
         cd docs; SKIP_ERRORDOC=1 SKIP_API=1 bundle exec jekyll build; cd ..
-        if [ -f "./dev/is-changed.py" ]; then
+        # A run of Varka's master has its diff base at its own head, so every module would read
+        # as unchanged; it has no change to measure and builds every language's docs
+        # (VARKA-255.md 2.9).
+        if [ -f "./dev/is-changed.py" ] && \
+            { [ -z "${VARKA_DIFF_BASE:-}" ] || [ "$VARKA_DIFF_BASE" != "${VARKA_DIFF_HEAD:-}" ]; }; then
           # Skip PySpark and SparkR docs while keeping Scala/Java/SQL docs
           pyspark_modules=`cd dev && python3.12 -c "import sparktestsupport.modules as m; print(','.join(m.name for m in m.all_modules if m.name.startswith('pyspark')))"`
           if [ `./dev/is-changed.py -m $pyspark_modules` = false ]; then export SKIP_PYTHONDOC=1; fi

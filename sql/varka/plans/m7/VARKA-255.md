@@ -289,7 +289,9 @@ would also draw the same configuration on every run. When the base is the head t
 change to blame: it fails on any failure, and it keys the pick on the commit instead, so that
 successive master runs walk the configuration list while a rerun of one commit draws the same
 configuration. The emitted-bytes step beside it prints "unchanged since <head>" in the same case;
-it is right, if uninformative, and is left as it is.
+it is right, if uninformative, and is left as it is. *(Corrected in 9.2: it says the oracle
+"proves this change byte-identical", which on a merged tree is false, so it now says a run of
+master has nothing to compare with.)*
 
 **The Java linter's failure is a suppression keyed on the checkout's directory name.** The six
 errors of 11 October (`InvalidJavadocPosition` in `CollationSupport.java`, `GeometryModel.java`,
@@ -304,13 +306,16 @@ planted misplaced comment in a `varka` package: under a root `.../varka/varka/` 
 plant are reported, under `.../plain/spark/` only the plant. A clone in a directory named `varka`
 would fail the same way. The fix anchors the segment under the Java source root's package path,
 `java/org/apache/spark/.../varka/`, where every Varka Java source lives; the six files are left
-alone, being Spark's.
+alone, being Spark's. *(Corrected in 9.2: 44 Varka classes live outside such a package, among them
+`VarkaKernelEvaluator` and `PartialVarkaProjection`, and were exempt under the old pattern as
+well; the pattern now also covers a class whose name holds `Varka`.)*
 
 **The called workflow's concurrency does not cancel master runs.** `build_and_test.yml` declares
 `concurrency: build-test-<calling workflow>-<ref>` with `cancel-in-progress: true`. A calling
 workflow with a workflow-level group of its own holds its second run pending until the first
 completes, so two calls never overlap in the inner group and the inner cancel cannot fire;
 `varka-master.yml`'s group therefore decides, and no line of `build_and_test.yml` changes for it.
+(Two of its lines changed for other reasons; 9.2.)
 
 ## 3. The design
 
@@ -590,6 +595,7 @@ None: no emitted code changes.
 | `dev/checkstyle-suppressions.xml` (was "the file the Java linter names", 2.9) | the `InvalidJavadocPosition` exemption anchored under the package path |
 | `dev/run-tests.py` (255b, 2.9) | a diff base equal to the head tests the modules given |
 | `dev/varka_matrix_ci.sh` (255b, 2.9) | on a run of master: no base comparison, the pick keyed on the commit |
+| `.github/workflows/build_and_test.yml` (255b, 9.2) | on a run of master: the `docs` job builds every API doc; the emitted-bytes step says there is nothing to compare |
 | `dev/varka_new_tests.py` | the new tests of a diff; the base-overlay check for `fix` |
 | `.github/workflows/build_and_test.yml` (Varka suite jobs) | the rerun and fails-on-base steps |
 | `.github/workflows/benchmark.yml` | `pr`, `pair`, `rounds`, the probe first, a class list as a matrix |
@@ -865,14 +871,34 @@ gh workflow run benchmark.yml -R vecbricks/varka -f pr=791 -f pair=true -f round
 ### 9.2 255b: master after each merge (14 October 2026)
 
 **What landed.** `varka-master.yml` on `vecbricks/varka`, on a push to `master` and on dispatch,
-calls `build_and_test.yml` with the eleven-job set of 3.3 (255b's form) and the group
-`varka-master` without cancelling. `varka-weekly-matrix.yml` names its jobs: `build_java25.yml`'s
-set with the Kubernetes and OIDC jobs off, plus `lint`, `java25`, `docs` and Varka's five.
-`dev/run-tests.py` reads a diff base equal to the head as no change to measure and tests the
-modules a job names. `dev/varka_matrix_ci.sh`, on such a run, keys its pick on the commit and fails
-on any failure instead of rerunning the same tree. `dev/checkstyle-suppressions.xml` keys the
-`InvalidJavadocPosition` exemption on the package path below a `java/` source root. No line of
-`build_and_test.yml` or of the checkout action changed.
+calls `build_and_test.yml` with the eleven-job set of 3.3 (255b's form), in the group
+`varka-master-<ref>` without cancelling, and runs only on `master`. `varka-weekly-matrix.yml`
+names its jobs: `build_java25.yml`'s set with the Kubernetes and OIDC jobs off, plus the
+pandas-on-Spark, old Connect client and periodic PySpark groups, `lint`, `java25`, `docs` and
+Varka's five. `dev/run-tests.py` reads a diff base that resolves to the head as no change to
+measure and tests the modules a job names. `dev/varka_matrix_ci.sh`, on such a run, keys its pick
+on the commit and fails on any failure instead of rerunning the same tree, and stops when no
+configuration was picked. `dev/checkstyle-suppressions.xml` keys the `InvalidJavadocPosition`
+exemption on a Varka package path below a `java/` source root or a class name holding `Varka`.
+In `build_and_test.yml`, the `docs` job builds the Python and R API docs on a run of master
+instead of reading the empty diff as no change, and the emitted-bytes step says a run of master
+has nothing to compare with. The checkout action is unchanged.
+
+**The review** (`/code-review high` on the branch's diff) found nine things; seven are fixed
+above. A dispatch from another branch shared the group and would have taken a merge's pending
+slot and built that branch, hence the ref in the group and the job's `master` condition. The
+weekly set left out three PySpark groups, six of the pyspark job's ten module groups. The `docs`
+job and the emitted-bytes step were two more readers of the empty diff. The comparison in
+`dev/run-tests.py` was of strings, which an abbreviated SHA would defeat; both sides are now
+resolved by git. The pick's failure went unchecked, and the failure lines were computed before
+the master-run exit that discards them. The exemption's comment claimed every Varka Java source
+sits in a `varka` package, which 44 do not; a checkstyle run with no suppressions over those 44
+reports nothing, so the pattern now covers them, and a planted misplaced comment in a
+`VarkaPlanted` class outside any `varka` package is reported under both roots. Not taken: one flag
+exported by the checkout action for "no change", read by every consumer, in place of each
+consumer's own comparison. The action is what #806 just settled for pull requests, and the four
+readers this branch touches are one comparison each; the lesson in `working-in-this-repo.md` is
+the guard for the next one.
 
 **Evidence, off CI.** Checkstyle 11.0.1, run from the coursier cache over copies of the six
 flagged files and a planted misplaced comment in a `varka` package, under roots `varka/varka/` and
@@ -885,8 +911,9 @@ plan file, it still tests nothing, as a pull request's run should. `dev/varka_ma
 stub matrix whose configuration always fails, in a scratch repository: with the base at the head,
 master's script passed with "fails on the merge base too" and the new one fails with "failed on a
 run of the merge base itself"; with the base at the parent it still compares, and with no base it
-still fails. actionlint reports the same 103 findings as on master (none in the two workflow
-files); shellcheck the same single pre-existing warning in `dev/varka_matrix_ci.sh`.
+still fails. actionlint reports the same 103 findings as on master, none in the two new or
+changed caller workflows (the docs script's five pre-existing shellcheck notes move down four
+lines); shellcheck the same single pre-existing warning in `dev/varka_matrix_ci.sh`.
 
 **Owed, after the merge** (test 5's checklist, for the coordinator): the merge commit's own push
 starts the first master run, and its jobs, lint verdict, option-step lines and wall time are read
@@ -896,8 +923,6 @@ on the base's slots for about two and a half hours; it cannot run before the mer
 pull request's branch lives on the fork, whose default branch does not carry the file. Prediction
 5 is scored over the first working day of merges.
 
-**Known and left.** The `docs` job's own `dev/is-changed.py` calls (`build_and_test.yml` 1408-1412)
-still skip the Python and R API docs on the weekly run, since on master they see no change;
-`dev/is-changed.py` keeps its reading, because a branch pushed with no commits of its own has the same
-empty diff and must not start the full matrix. The emitted-bytes step prints "unchanged since
-<head>" on a master run (2.9).
+**Known and left.** `dev/is-changed.py` keeps reading an empty diff as no change: the master runs
+name their jobs and never ask it, and a branch pushed with no commits of its own has the same
+empty diff and must not start the full matrix.

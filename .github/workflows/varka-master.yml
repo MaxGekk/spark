@@ -41,9 +41,12 @@ on:
 # in progress would let each merge cancel the run before it, and at several merges an hour
 # against a run of half an hour or more no run would finish while merges came. Being a
 # workflow-level group, it also keeps build_and_test.yml's own group (which cancels) from ever
-# seeing two of these runs at once.
+# seeing two of these runs at once. The group carries the ref, and the job runs only on master:
+# a dispatch from another branch would otherwise take the pending slot from a merge's run and
+# build that branch under this name, since outside apache/spark every job checks out the
+# triggering commit.
 concurrency:
-  group: varka-master
+  group: varka-master-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -52,7 +55,7 @@ jobs:
       packages: write
     name: Run
     uses: ./.github/workflows/build_and_test.yml
-    if: github.repository == 'vecbricks/varka'
+    if: github.repository == 'vecbricks/varka' && github.ref == 'refs/heads/master'
     with:
       java: 25
       branch: master

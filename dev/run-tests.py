@@ -439,6 +439,17 @@ def parse_opts():
     return args
 
 
+def resolve_commit(ref):
+    """The full SHA a ref names, or the ref itself when git cannot resolve it."""
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--verify", "--quiet", ref + "^{commit}"],
+            universal_newlines=True,
+        ).strip()
+    except subprocess.CalledProcessError:
+        return ref
+
+
 def main():
     opts = parse_opts()
     # Ensure the user home directory (HOME) is valid and is an absolute directory
@@ -515,7 +526,12 @@ def main():
         # no change to measure, test the modules the job names, as a periodic job does. A pull
         # request's base is never its head.
         diff_base = os.environ.get("VARKA_DIFF_BASE", "")
-        no_change_to_measure = diff_base != "" and diff_base == os.environ.get("VARKA_DIFF_HEAD")
+        diff_head = os.environ.get("VARKA_DIFF_HEAD", "")
+        no_change_to_measure = (
+            diff_base != ""
+            and diff_head != ""
+            and resolve_commit(diff_base) == resolve_commit(diff_head)
+        )
         if no_change_to_measure:
             print(
                 f"[info] no change to measure: the diff base {diff_base} is the head; "
