@@ -66,6 +66,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Velox is a semantics reference for the calendar family, not a performance one](sql/varka/skills/calendar-algorithms.md#velox-is-a-semantics-reference-for-the-calendar-family-not-a-performance-one)
 * [The Julian map: one division stage fewer in civil-from-days](sql/varka/skills/calendar-algorithms.md#the-julian-map-one-division-stage-fewer-in-civil-from-days)
 * [A GPU port of Spark's date code is scalar code run per thread](sql/varka/skills/calendar-algorithms.md#a-gpu-port-of-sparks-date-code-is-scalar-code-run-per-thread)
+* [An interval's fields truncate and a date's fields floor](sql/varka/skills/calendar-algorithms.md#an-intervals-fields-truncate-and-a-dates-fields-floor)
 
 #### [The emitter and the IR](sql/varka/skills/emitter-and-ir.md)
 * [Sharing below the node level in an emitter](sql/varka/skills/emitter-and-ir.md#sharing-below-the-node-level-in-an-emitter)
