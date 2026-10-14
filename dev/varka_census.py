@@ -620,10 +620,16 @@ def cast_kind(src, dst):
             return "widening", "exact"
         return "rounding", "round to nearest even; overflow to infinity, no error"
     if src in MANTISSA and dst in INTEGRAL:
-        if dst in ("int", "bigint"):
+        if dst == "bigint":
             note = (
-                "LEGACY saturates, NaN to 0; ANSI and TRY range-check on the double (2^63 passes"
-                " and saturates), NaN raises or nulls"
+                "LEGACY saturates, NaN to 0; ANSI and TRY range-check on the double against"
+                " Long.MaxValue.toDouble, which is 2^63, so 2^63 passes and saturates; NaN raises"
+                " or nulls"
+            )
+        elif dst == "int":
+            note = (
+                "LEGACY saturates, NaN to 0; ANSI and TRY range-check on the double against"
+                " 2^31 - 1 exactly; NaN raises or nulls"
             )
         else:
             note = (
@@ -709,11 +715,16 @@ def cast_kind(src, dst):
             "times the unit; a DAY end overflows past 106,751,991: raises under LEGACY and ANSI,"
             " TRY nulls; the other ends never",
         )
-    if src == "bigint" and dst in ("ym", "dt"):
+    if src == "bigint" and dst == "ym":
         return (
             "scale up",
-            "times the unit (and narrowed to int for a year-month target); overflow raises under"
-            " LEGACY and ANSI, TRY nulls",
+            "times the unit and narrowed to int (toIntExact); overflow raises under LEGACY and"
+            " ANSI, TRY nulls",
+        )
+    if src == "bigint" and dst == "dt":
+        return (
+            "scale up",
+            "times the unit in a long; overflow raises under LEGACY and ANSI, TRY nulls",
         )
     if src == "dec" and dst in ("ym", "dt"):
         return "rescale", "to the unit, HALF_UP; overflow raises under LEGACY and ANSI, TRY nulls"
@@ -744,8 +755,10 @@ def cast_rows(src, dst):
     if "dec" in lanes:
         if dst in ("byte", "short", "int"):
             return "350,364,365"
-        if lanes & {"float", "double"}:
+        if dst in ("float", "double"):
             return "350,364,366"
+        if src in ("float", "double"):
+            return "346,350,364"
         return "350,364"
     if lanes & {"float", "double"}:
         return "343"
