@@ -21,6 +21,7 @@ package org.apache.spark.sql.execution.varka;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.util.ArrayList;
 import java.util.Arrays;
 
 import org.apache.arrow.memory.ArrowBuf;
@@ -34,6 +35,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFusedKernel;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmth;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemorySanitizer;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemoryViolation;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaReproduction;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSegments;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeEntry;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
@@ -89,7 +91,12 @@ public final class VarkaKernelRunner {
   public interface Hooks {
     boolean failKernel();
 
-    boolean declineKernel();
+    /**
+     * The status a test plants on every batch the kernel would have served, as a kernel whose
+     * guards fired returns it, or 0 for none; {@link #STATUS_FORCED} where the test names no
+     * reason.
+     */
+    int declineStatus();
 
     VarkaAllocationSampler.Schedule allocationSchedule();
   }
@@ -289,8 +296,9 @@ public final class VarkaKernelRunner {
     if (sampled) {
       accounting.allocationSample(VarkaAllocationSampler.allocatedBytes() - before, len);
     }
-    if (status != 0 || hooks.declineKernel()) {
-      throw new VarkaBatchDeclined(status != 0 ? status : STATUS_FORCED);
+    int planted = status != 0 ? status : hooks.declineStatus();
+    if (planted != 0) {
+      throw new VarkaBatchDeclined(planted);
     }
     if (CHECK_BOTH_BODIES) {
       checkOtherBody(len, scratchAddress);
@@ -414,6 +422,69 @@ public final class VarkaKernelRunner {
 
   private static boolean bit(MemorySegment bitmap, int r) {
     return (bitmap.get(ValueLayout.JAVA_BYTE, r >>> 3) & (1 << (r & 7))) != 0;
+  }
+
+  /**
+   * The call the kernel just failed in, for its reproduction file (VARKA-315): each input as the
+   * kernel read it, its values and validity copied off the buffers {@link #fill} pointed it at,
+   * with the capacity of each buffer the sanitizer registers. Called only after a failure inside
+   * {@link #invoke}, when {@code fill} has completed for {@code input}, so the source arrays are
+   * this batch's; it allocates, on that failure only.
+   *
+   * @param maxBatchBytes the most bytes of values to copy; past it, the call keeps every input's
+   *                      shape and no bytes
+   * @param selectionBitmaps whether the outputs are a filter's selection bitmaps
+   */
+  public VarkaReproduction.KernelCall capture(ColumnarBatch input, int len, long maxBatchBytes,
+      boolean selectionBitmaps) {
+    int n = inputOrdinals.length;
+    var widths = new int[n];
+    var dataBufs = new ArrowBuf[n];
+    var validityBufs = new ArrowBuf[n];
+    for (int i = 0; i < n; i++) {
+      if (derived[i] == null) {
+        var v = (BaseFixedWidthVector)
+            ((ArrowColumnVector) input.column(inputOrdinals[i])).getValueVector();
+        widths[i] = v.getTypeWidth();
+        dataBufs[i] = v.getDataBuffer();
+        validityBufs[i] = v.getValidityBuffer();
+      } else {
+        widths[i] = 4;
+        dataBufs[i] = scratch.derivedData(i);
+        validityBufs[i] = scratch.derivedValidity(i);
+      }
+    }
+    var shapes = new ArrayList<VarkaReproduction.Input>();
+    for (int i = 0; i < n; i++) {
+      shapes.add(new VarkaReproduction.Input(widths[i], dataBufs[i].capacity(),
+          srcValidity[i] == 0L ? 0L : validityBufs[i].capacity(), srcNullCount[i],
+          derived[i] != null, null, null));
+    }
+    long bytes = VarkaReproduction.KernelCall.bytesOf(len, shapes);
+    String omitted = bytes > maxBatchBytes
+        ? "the inputs' " + bytes + " bytes are over the limit of " + maxBatchBytes : null;
+    var inputs = new ArrayList<VarkaReproduction.Input>();
+    for (int i = 0; i < n; i++) {
+      VarkaReproduction.Input shape = shapes.get(i);
+      byte[] data = null;
+      byte[] validity = null;
+      if (omitted == null) {
+        data = new byte[len * widths[i]];
+        dataBufs[i].getBytes(0, data);
+        if (srcValidity[i] != 0L && srcNullCount[i] != 0) {
+          validity = new byte[(int) Math.min(validityBufs[i].capacity(), ((len + 63L) / 64) * 8)];
+          validityBufs[i].getBytes(0, validity);
+        }
+      }
+      inputs.add(new VarkaReproduction.Input(shape.width(), shape.dataCapacity(),
+          shape.validityCapacity(), shape.nullCount(), shape.derived(), data, validity));
+    }
+    var outputWidths = new ArrayList<Integer>();
+    for (int w : dstWidth) {
+      outputWidths.add(w);
+    }
+    return new VarkaReproduction.KernelCall(len, scratchBytesPerRow, outputWidths, inputs,
+        omitted, selectionBitmaps);
   }
 
   /**

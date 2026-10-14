@@ -33,8 +33,8 @@ import javax.annotation.Nullable;
  * and an exception here would replace the one being reported. A field the catch could not obtain
  * is built through {@link #safely}, and reads as unavailable instead.
  *
- * @param kind the failure's kind: a {@link VarkaFallbackEvent} cause tag, or {@link #PLANNING}
- *        for a throw out of the compiler
+ * @param kind the failure's kind: a {@link VarkaFallbackEvent} cause tag, {@link #PLANNING}
+ *        for a throw out of the compiler, or {@link #MEMORY_VIOLATION}
  * @param identity what failed: the kernel's source file (named by its shape hash), the canonical
  *        IR of each output and the operator and stage, as the fallback warnings name a kernel;
  *        at planning, where no IR exists yet, the Catalyst entries being compiled
@@ -54,6 +54,13 @@ public record VarkaErrorContext(
 
   /** The kind of a throw out of the compiler, at planning time. */
   public static final String PLANNING = "planning";
+
+  /**
+   * The kind of a memory-sanitizer violation in a kernel, which is not a fallback cause: the
+   * violation fails the task (VARKA-263). Its record is built only for a reproduction file
+   * (VARKA-315).
+   */
+  public static final String MEMORY_VIOLATION = "memory-violation";
 
   /** What a field reads as when the catch could not obtain it. */
   public static final String UNAVAILABLE = "unavailable";

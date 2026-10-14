@@ -449,7 +449,13 @@ public sealed interface VarkaEmitOption
           new FlagTag("exactRefusalStatus", true)),
       new Flag("groupBudgetUnderPrediction", Reason.REFERENCE, false,
           VarkaEmitOptions::groupBudgetUnderPrediction, Builder::groupBudgetUnderPrediction,
-          new FlagTag("budgetBoundsGroups", true)));
+          new FlagTag("budgetBoundsGroups", true)),
+      new Flag("dropStackMaps", Reason.FAULT_INJECTOR, false,
+          VarkaEmitOptions::dropStackMaps, Builder::dropStackMaps,
+          new FlagTag("dropStackMaps", true)),
+      new Count("misdescribeDataBytes", Reason.FAULT_INJECTOR, 0,
+          VarkaEmitOptions::misdescribeDataBytes, Builder::misdescribeDataBytes,
+          new CountTag("misdescribeDataBytes="), List.of(), List.of()));
 
   /** The option with this name. */
   static VarkaEmitOption named(String name) {

@@ -3069,6 +3069,43 @@ object SQLConf {
     .stringConf
     .createOptional
 
+  val VARKA_REPRODUCTION_ENABLED = buildConf("spark.sql.codegen.varka.reproduction.enabled")
+    .internal()
+    .doc("When true, a Varka kernel failure writes one reproduction file: a generated class that" +
+      " fails to verify or define, a memory-sanitizer violation, or an exception thrown inside" +
+      " a kernel. The file holds the kernel's IR, the options it was emitted with, its literals" +
+      " and the batch it failed on, and dev/varka_emit.sh --replay runs it again outside Spark." +
+      " The failure itself is handled as it would be without the file, and a file that cannot" +
+      " be written is a logged warning. One file per kernel shape and failure kind per JVM.")
+    .version("5.0.0")
+    // A diagnostic written beside a failure: it changes nothing a view body resolves to.
+    .withBindingPolicy(ConfigBindingPolicy.NOT_APPLICABLE)
+    .booleanConf
+    .createWithDefault(true)
+
+  val VARKA_REPRODUCTION_DIRECTORY = buildConf("spark.sql.codegen.varka.reproduction.directory")
+    .internal()
+    .doc("Where Varka writes its reproduction files (see" +
+      " spark.sql.codegen.varka.reproduction.enabled), on the JVM that failed. Unset, the" +
+      " directory varka-reproductions under that JVM's java.io.tmpdir. Created readable by its" +
+      " owner only, as is each file, since a file can hold a batch of the query's data.")
+    .version("5.0.0")
+    .withBindingPolicy(ConfigBindingPolicy.NOT_APPLICABLE)
+    .stringConf
+    .createOptional
+
+  val VARKA_REPRODUCTION_MAX_BATCH_BYTES =
+    buildConf("spark.sql.codegen.varka.reproduction.maxBatchBytes")
+      .internal()
+      .doc("The most bytes of a failing batch's values a Varka reproduction file holds. A batch" +
+        " over it is left out, with its row count, null counts and buffer sizes kept, and a" +
+        " replay then runs a synthetic batch of the same shape. 0 never writes a batch's values.")
+      .version("5.0.0")
+      .withBindingPolicy(ConfigBindingPolicy.NOT_APPLICABLE)
+      .bytesConf(ByteUnit.BYTE)
+      .checkValue(_ >= 0, "the cap is a byte count, 0 or more")
+      .createWithDefaultString("16m")
+
   val VARKA_EMIT_USE_AVX = buildConf("spark.sql.codegen.varka.emit.useAVX")
     .internal()
     .doc("The -XX:UseAVX level the Varka emitter lowers for, where a lowering depends on it:" +
@@ -9446,6 +9483,12 @@ class SQLConf extends Serializable with Logging with SqlApiConf {
   def varkaEnabled: Boolean = getConf(VARKA_ENABLED)
 
   def varkaClassDumpDirectory: Option[String] = getConf(VARKA_CLASS_DUMP_DIRECTORY)
+
+  def varkaReproductionEnabled: Boolean = getConf(VARKA_REPRODUCTION_ENABLED)
+
+  def varkaReproductionDirectory: Option[String] = getConf(VARKA_REPRODUCTION_DIRECTORY)
+
+  def varkaReproductionMaxBatchBytes: Long = getConf(VARKA_REPRODUCTION_MAX_BATCH_BYTES)
 
   def varkaEmitUseAVX: Int = getConf(VARKA_EMIT_USE_AVX)
 

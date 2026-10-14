@@ -91,9 +91,12 @@ private[sql] trait VarkaFilterExecBase extends UnaryExecNode with PredicateHelpe
   override def outputPartitioning: Partitioning = child.outputPartitioning
 
   // One driver-side compilation serves every EXPLAIN render (task-21 review, second pass:
-  // parity with the projection nodes' memoized classification).
+  // parity with the projection nodes' memoized classification). Rendered from the whole
+  // condition where the rule split one: `condition` holds only the fused conjuncts, so it would
+  // print every line as fused and the reason each residual conjunct was declined nowhere in the
+  // plan (VARKA-313).
   @transient private lazy val fusionLines =
-    VarkaFusionReport.predicateLines(condition, child.output,
+    VarkaFusionReport.predicateLines(wholeCondition.getOrElse(condition), child.output,
       VarkaColumnarToRowExec.emitOptions(sessionEmit))
 
   // The question for a filter is "why didn't my predicate fuse?", answered per conjunct.
@@ -145,7 +148,7 @@ case class VarkaFilterExec(
   // The shared node vocabulary; no residual-entry metric - a filter's residual is a visible
   // row FilterExec above it - and numOutputRows counts selected rows.
   override lazy val metrics: Map[String, SQLMetric] =
-    VarkaExecMetrics.nodeMetrics(sparkContext).asScala.toMap
+    VarkaExecMetrics.nodeMetrics(sparkContext, true).asScala.toMap
 
   // `supportsRowBased` is false because this node is columnar, so the transition rule never
   // asks it for rows: it inserts a to-row transition above instead, which the columnar rule
@@ -162,7 +165,7 @@ case class VarkaFilterExec(
       conf.varkaClassDumpDirectory,
       longMetric("numOutputRows"),
       longMetric("numInputBatches"),
-      VarkaExecMetrics.fromNode(longMetric),
+      VarkaExecMetrics.fromNode(metrics.getOrElse(_, null)),
       sessionEmit = sessionEmit,
       warmupEnabled = conf.varkaWarmupEnabled,
       wholeCondition = wholeCondition)
@@ -371,7 +374,7 @@ case class VarkaFilterColumnarToRowExec(
   // The shared node vocabulary; no residual-entry metric - a filter's residual is a visible
   // row FilterExec above it - and numOutputRows counts selected rows.
   override lazy val metrics: Map[String, SQLMetric] =
-    VarkaExecMetrics.nodeMetrics(sparkContext).asScala.toMap
+    VarkaExecMetrics.nodeMetrics(sparkContext, false).asScala.toMap
 
   override def doExecute(): RDD[InternalRow] = {
     val evaluatorFactory = new VarkaFilterToRowEvaluatorFactory(
@@ -381,7 +384,7 @@ case class VarkaFilterColumnarToRowExec(
       conf.varkaClassDumpDirectory,
       longMetric("numOutputRows"),
       longMetric("numInputBatches"),
-      VarkaExecMetrics.fromNode(longMetric),
+      VarkaExecMetrics.fromNode(metrics.getOrElse(_, null)),
       sessionEmit = sessionEmit,
       warmupEnabled = conf.varkaWarmupEnabled,
       wholeCondition = wholeCondition)

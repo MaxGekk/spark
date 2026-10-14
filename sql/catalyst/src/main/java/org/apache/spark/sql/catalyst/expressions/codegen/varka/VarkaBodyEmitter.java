@@ -237,6 +237,12 @@ final class VarkaBodyEmitter {
     cb.i2l();
     cb.loadConstant(analysis.lane.byteStride);
     cb.lmul();
+    // The fault injector of a wrong mapping (VARKA-315); at zero, the default, nothing is emitted.
+    int misdescribed = analysis.options.misdescribeDataBytes();
+    if (misdescribed != 0) {
+      cb.loadConstant((long) misdescribed);
+      cb.ladd();
+    }
     cb.lstore(s.dataBytes);
     cb.iload(analysis.lane.pLength);
     cb.loadConstant(7);
