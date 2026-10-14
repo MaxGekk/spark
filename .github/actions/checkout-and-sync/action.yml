@@ -19,13 +19,16 @@
 
 name: 'Checkout and Sync'
 description: >-
-  Check out apache/spark at a pinned ref and, on forks, squash-merge the fork
-  branch on top so the build tests the combined result. Callers must add a
-  bare 'actions/checkout' step before invoking this action so that the latest
-  action definition is present in the workspace.
+  Check out the code to build. In apache/spark this is apache/spark at a pinned
+  ref. Elsewhere (Varka's fork and vecbricks/varka) it is the triggering commit
+  of this repository itself, with its whole history, and no merge onto
+  apache/spark. Callers must add a bare 'actions/checkout' step before invoking
+  this action so that the latest action definition is present in the workspace.
 inputs:
   ref:
-    description: 'Git ref to check out from apache/spark'
+    description: >-
+      Git ref to check out from apache/spark. Outside apache/spark it is not used:
+      every job builds the triggering commit.
     required: true
   set-safe-directory:
     description: 'Add GITHUB_WORKSPACE to git safe.directory (needed inside containers)'
@@ -33,67 +36,69 @@ inputs:
     default: 'false'
 outputs:
   head_sha:
-    description: 'The apache/spark HEAD SHA checked out (before the fork merge)'
+    description: 'The commit checked out'
     value: ${{ steps.resolve-sha.outputs.head_sha }}
 runs:
   using: 'composite'
   steps:
+    # apache/spark checks out its own pinned ref, as upstream does. Varka builds its own
+    # commit instead. Upstream's form squash-merged the branch onto apache/spark's newest
+    # master, which suits a small pull request against apache/spark but not a fork that
+    # diverges from it by thousands of commits: every run re-merged all of Varka onto
+    # whatever apache/spark had merged that hour, so one upstream edit to a file Varka
+    # rewrote (README.md, build_and_test.yml) failed every open branch at checkout, and no
+    # run ever built what Varka's master actually holds. apache/spark now enters Varka only
+    # through its sync pull requests, which merge apache/spark's master into Varka's master.
     - name: Checkout Spark repository
+      if: github.repository == 'apache/spark'
       uses: actions/checkout@v7
       with:
         fetch-depth: 0
         repository: apache/spark
         ref: ${{ inputs.ref }}
+    - name: Checkout this repository's commit
+      if: github.repository != 'apache/spark'
+      uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+        ref: ${{ github.sha }}
     - name: Add GITHUB_WORKSPACE to git trust safe.directory
       if: inputs.set-safe-directory == 'true'
       shell: bash
       run: git config --global --add safe.directory ${GITHUB_WORKSPACE}
-    - name: Resolve apache/spark HEAD SHA
+    - name: Resolve the checked-out HEAD SHA
       id: resolve-sha
       shell: bash
       run: echo "head_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
-    - name: Sync the current branch with the latest in Apache Spark
+    - name: Find the base the branch's change is measured against
       if: github.repository != 'apache/spark'
       shell: bash
       run: |
-        echo "APACHE_SPARK_REF=$(git rev-parse HEAD)" >> $GITHUB_ENV
-        git fetch https://github.com/$GITHUB_REPOSITORY.git ${GITHUB_REF#refs/heads/}
-        branch_head="$(git rev-parse FETCH_HEAD)"
-        # The pair a change detector needs, from real history rather than from the squashed
-        # tree below. HEAD after this step is apache/spark's master with one squash commit on
-        # top, so diffing against it measures this fork's whole divergence from upstream
-        # rather than the branch's own change - which is why every module gate answers true
-        # and every pull request runs the full matrix (VARKA-106.md 9). The branch and the
-        # branch it was cut from do share real history, so their merge base is the base the
-        # diff wants. It is computed here, before `merge --squash` discards the ancestry that
-        # makes it computable: a squash commit records no merge parent, which is what defeated
-        # the first attempt at this (reverted in "two squash merges cannot work").
+        # Change detection (dev/is-changed.py, dev/run-tests.py, the "Check changes" job)
+        # diffs the branch against the commit it was cut from on Varka's master, so a
+        # pull request runs the modules its own change touches (VARKA-106.md 9).
+        # APACHE_SPARK_REF keeps its upstream name because those consumers read it, both
+        # as the "this is a fork" flag and as the fallback base; it now holds that same
+        # base rather than apache/spark's head.
         #
-        # The upstream is named rather than derived: this branch lives in a personal fork of
-        # apache/spark whose own master tracks apache/spark, so the base branch is in a third
-        # repository and no event payload on a push carries it. A fetch that fails - another
-        # fork, a network error - leaves both variables unset and the detector falls back to
-        # the behaviour it had before, which is wasteful rather than wrong.
+        # The upstream is named rather than derived: no event payload on a push to a
+        # personal fork carries the repository its pull request targets. When Varka's
+        # master cannot be fetched, the base falls back to the merge base with
+        # apache/spark's master, which measures the fork's whole divergence: every module
+        # runs, which is wasteful rather than wrong.
         varka_upstream="${VARKA_UPSTREAM_URL:-https://github.com/vecbricks/varka.git}"
+        base=""
         if git fetch --quiet "$varka_upstream" master 2>/dev/null; then
-          varka_base="$(git merge-base FETCH_HEAD "$branch_head" 2>/dev/null || true)"
-          if [ -n "$varka_base" ]; then
-            echo "VARKA_DIFF_BASE=$varka_base" >> $GITHUB_ENV
-            echo "VARKA_DIFF_HEAD=$branch_head" >> $GITHUB_ENV
-            echo "change detection base: $varka_base (merge base with $varka_upstream master)"
-          else
-            echo "no merge base with $varka_upstream master; change detection stays on the" \
-              "apache/spark reference"
-          fi
-        else
-          echo "could not fetch $varka_upstream; change detection stays on the" \
-            "apache/spark reference"
+          base="$(git merge-base FETCH_HEAD HEAD 2>/dev/null || true)"
         fi
-        git \
-          -c user.name='Apache Spark Test Account' \
-          -c user.email='sparktestacc@gmail.com' \
-          merge --no-commit --progress --squash "$branch_head"
-        git \
-          -c user.name='Apache Spark Test Account' \
-          -c user.email='sparktestacc@gmail.com' \
-          commit -m "Merged commit" --allow-empty
+        if [ -n "$base" ]; then
+          echo "VARKA_DIFF_BASE=$base" >> $GITHUB_ENV
+          echo "VARKA_DIFF_HEAD=$(git rev-parse HEAD)" >> $GITHUB_ENV
+          echo "change detection base: $base (merge base with $varka_upstream master)"
+        else
+          git fetch --quiet https://github.com/apache/spark.git master
+          base="$(git merge-base FETCH_HEAD HEAD)"
+          echo "no merge base with $varka_upstream master; change detection base:" \
+            "$base (merge base with apache/spark master)"
+        fi
+        echo "APACHE_SPARK_REF=$base" >> $GITHUB_ENV

@@ -266,7 +266,8 @@ The pair runner restores the committed files after each round, so no results fil
 
 ## 9. Outcome
 
-**322a implemented, pairs pending** (13 October 2026). The row stays Planned.
+**322a implemented, pairs pending** (13 October 2026; 322a-2 the same day). The row stays
+Planned.
 
 **What was built.** 322a-1 as 8.2 says, in one commit after this plan: the ten classes of 4.1 are
 Java under their names and packages, their `.scala` files deleted, 2,510 lines of Scala to 3,137
@@ -375,6 +376,105 @@ thirteen are fixed here, and the fourteenth, the wide-kernel benchmark's sixth s
   the run. The Varka case now calls `defineKernel`, which drops the `loadClass` lookup after the
   definition; the case keeps its committed name, "fused emit + define + load + instantiate".
 
+**322a-2: the parity benchmark** (13 October 2026), its own pull request as 8.3 says, one commit
+after 322a-1's merge (`25a1bae6893`). `VarkaEmitterParityBenchmark` is Java under its name and
+package and its `.scala` is deleted: 2,191 lines of Scala to 2,526 of Java after the review, 15%
+more. It uses 322a-1's helpers and adds none to the adapter: `timed()` on all seventeen benchmarks,
+`runCases` on every one (no section called `run()` directly, so the dry run already reached every
+section's setup), `claimCaseId` and `reportCaseIds` for its ids, `defineKernel` for every kernel,
+the width ladder's included, `requirementFailed` for the status checks inside timed loops and
+`roots` for the widest shape. One method per section over a record of the shared buffers, rather
+than one 2,000-line `runBenchmarkSuite`; the per-section chunk walks are records' methods or local
+lambdas, the tuples records (`Rung`, `TruncArms`, `Setting`, `LadderPoint`, `DivisionShape`).
+Oddities kept as they were: "weekofyear (VARKA-37), null-free" is a case twice in its section, and
+`nf2Data` is filled exactly as `nfData` is.
+
+**The evidence, without a timed run** (the machine was busy). Both sides were run as a dry run,
+`-Dvarka.bench.dryRun=true` through `catalyst/Test/runMain`, with core's `Benchmark` and
+`BenchmarkBase` temporarily instrumented, uncommitted, to print every section title, every
+benchmark's name with its rate denominator, minimum iterations, warm-up and minimum time, and every
+case's name with its fixed iteration count, in order: the Scala form at `25a1bae6893` before its
+deletion, the Java form on the branch. The instrumentation is three `println`s, one each at the top
+of `Benchmark`'s constructor, of `Benchmark.addTimerCase` (which `addCase` goes through) and of
+`BenchmarkBase.runBenchmark`, so any port can repeat it; it was reverted before the commit. The two
+outputs are identical, 271 lines: 17 sections, 17 benchmarks (all 5 iterations, 2 s and 2 s), 235
+cases, and the ids line, 125 ids, 0 to 984, next free 985; `dev/varka_bench_ids.sh
+VarkaEmitterParityBenchmark` on the clean branch prints the same. Labels with computed parts match
+too: the B2 ladder's loop-method counts read off the emitted classes and the width ladder's op
+counts and loop-method bytecode sizes. The one check the benchmark makes at setup, that each of the
+width ladder's six points emits its registered number of `IntVector` ops (`require(ops ==
+expectedOps)`), ran and passed on both sides, since the dry run emits every kernel; the rest of its
+checks are the per-batch status checks inside the timed loops, which only a timed run reaches. The
+hand-written kernels (`DateVectorOps`, `ChronoVectorOps`, `ChronoScalarOps`) are engine code the
+benchmark calls, unchanged.
+
+Against the committed `-jdk25-results.txt` (last regenerated 20 September, `ee290a476f0`, its
+labels renamed on 4 October): the same 17 section titles and 235 case names in the same order,
+except twelve computed labels, identical between the two dry runs, that the emitter has moved
+since the file was written. The B2 ladder's unshared and one-method arms now report fewer loop
+methods (6 outputs unshared: 4 for 6; 8 outputs unshared: 6 for 8, one method: 2 for 1, ceiling
+400: 2 for 1; 12 outputs unshared: 10 for 12, one method: 2 for 1, ceiling 400: 3 for 2), and the
+width ladder's six loop methods are 11 bytes smaller each (258 to 1,960 bytes for 269 to 1,971).
+So the next regeneration changes those twelve labels whichever language runs it, and the band
+file, keyed by the old labels, does not cover those cases; the pair reads them within 5%.
+
+**The review's fixes** (13 October 2026). A review of the pull request found ten things, all fixed
+here. (1) The row count, the passes and the chunk size were `static final int`s, compile-time
+constants that javac wrote into every timed loop as immediates, where the Scala read the object's
+field and its local vals at run time; they are now plain `static int` fields, so no loop bound is a
+constant the JIT is handed. `javap -c` before: `eachChunk`'s bounds read `ldc 1000000`, the
+alignment walk's `bipush 20` and `ldc 1000000`, and the per-row `dayofweek` anchor's `ldc 1000000`,
+57 `ldc 1000000` and 5 `sipush 4096` in the class in all; after: `getstatic numRows`, `getstatic
+repeats` and `getstatic chunk` in each, and the literals left only in the static initialiser and
+the alignment ladder's rung records (as the Scala's ladder tuples held them). (2) The trunc
+section's format vectors are built inside its `try` and closed in a guarded `finally`, and their
+builder closes a partial array on failure, as the next_day section's names already were; the Scala
+form had the same leak, so this departs from it in setup only. (3) The guarded close catches what
+Scala's `NonFatal` catches, not only runtime exceptions. (4) A declared type wherever the
+right-hand side does not name it (`sql/varka/AGENTS.md`). (5) The null-count helpers' comments say
+that a chunk walking the buffer can be one null off and why the kernel's choice of body is the
+same either way. (6) `chain` builds on `chainOver`. (7) One name for each of the three values,
+the per-section copies gone. (8) The scalar baseline keeps its own chunk walk, as the Scala's
+`scalarChunked` was a loop of its own, and its comment says so; the runner styles stay as they
+were, since unifying them would change how timed bodies reach their kernels. (9) The two
+documents that described the trunc block's ids as a "tuple list". (10) This section's wrapping.
+After the fixes the dry-run comparison was repeated: the 271 lines are again identical to the
+Scala form's at `25a1bae6893`, the ids again 125 and next free 985, and the width ladder's check
+again passes.
+
+**The timed work, and every difference left.** Every timed body makes the Scala's calls with the
+same arguments and builds the same per-batch arrays, the `take`-then-`map` destination arrays as
+two arrays where the Scala built two. What differs is the language's own glue, and the pair is
+read against this list:
+
+1. **The chunk callbacks.** The chunk walks call a Java functional interface with primitive
+   parameters (`ChunkBody`, `ScalarKernel`) where the Scala called an unspecialised `Function3` or
+   `Function4`, which boxes its `Long` arguments unless escape analysis removes the boxes.
+2. **The status checks.** Scala's `require(status == 0, s"...")` takes its message by name, so
+   scalac allocated a thunk capturing `status` on every call, once per chunk; the Java tests the
+   condition and allocates nothing unless it fails.
+3. **The empty literal arrays.** One shared constant where `Array.empty[Int]`, mostly through a
+   default argument, allocated one per call (per chunk in the chunked runners), as the arithmetic
+   port did.
+4. **The small loops.** The sequential chain and the widest shape's 64 passes are plain loops
+   where the Scala's `for` over a `Range` ran a closure, and the chain's two locals replace a
+   tuple per level; `Math.min` is called directly where `math.min` went through `scala.math`'s
+   forwarder.
+5. **How a timed body reaches its runner.** The Scala's runners were local functions, which
+   scalac lifts into methods called directly with the captured values as arguments. In the Java
+   they are methods of the year section's record (`chunked`, `chunkedTwo`, ...), static methods
+   (the alignment walks, the predication call) or lambdas called through an interface (the
+   next_day, trunc, B2 and epilogue runners, the DAG and grouping `run`), so some calls are
+   interface calls where the Scala's were direct.
+6. **How a body reads the buffers.** The Scala's closures captured each buffer; the Java lambdas
+   capture one record of them and read a buffer through its accessor, a trusted final field.
+7. **The loop bounds.** The row count, passes and chunk size are read from static fields, as the
+   Scala read them from the object's field and its captured local vals; neither form gives the
+   JIT a constant (fix 1 above).
+
+If a chunked row reads faster than the A/A spread, items 1 to 3 are read first, as 6.1's
+prediction 3 reads the wide-kernel harness; a row slower beyond it, item 5.
+
 **Pending: the pairs** (6), on the quiet machine, none run yet:
 
 ```
@@ -389,7 +489,67 @@ dev/varka_bench_pair.sh catalyst VarkaMethodSizeBenchmark
 dev/varka_bench_pair.sh catalyst VarkaArithmeticBenchmark
 dev/varka_bench_pair.sh catalyst VarkaTimeBenchmark
 dev/varka_bench_pair.sh catalyst VarkaWideKernelBenchmark
+dev/varka_bench_pair.sh catalyst VarkaEmitterParityBenchmark
 ```
 
-The last stops on both sides at the sixth section, as above, until that shape is fixed. 6.1 is
-scored when the pairs are in.
+The wide-kernel pair stops on both sides at the sixth section, as above, until that shape is
+fixed. The parity pair is the longest: a full run of the class takes about twenty minutes a side,
+so its five rounds take over three hours of the idle window. 6.1 is scored when the pairs are
+in.
+
+**322a-2's pair, run** (13 to 14 October 2026, 22:55 to 01:55 CEST, the owner away and no other
+JVM on the machine; load 1.2 to 1.4 from the pair's own builds). `dev/varka_bench_pair.sh catalyst
+VarkaEmitterParityBenchmark`, base `25a1bae6893` (the Scala form) against head `e17f656210a`, five
+rounds a side, no early stop. Of 235 rows, 225 moved less than 10% by the median or the best;
+2 are slower and 8 faster by 10% or more by both.
+
+* **The two slower rows are hand-written per-row loops, not emitted kernels**: "per-row
+  `LocalDate.of` make_date" at -15.1% by the median and -15.3% by the best, and "per-row
+  `DateTimeUtils.truncDate` YEAR" at -10.4% and -11.1%. Both are the benchmark's references for the
+  path Spark takes today, each a `while` loop around a call into `java.time` or `DateTimeUtils`.
+  The Java loop makes the Scala's calls with the same arguments, and reads its destination (and,
+  for truncDate, its input) through the shared buffers record's accessor where the Scala read a
+  captured local (item 6 above). That alone does not explain them: the per-row `getWeekOfYear`
+  and `LocalDate` year rows have the same shape and moved -4.1% and -1.8%. The cause is not
+  established; the check that would settle it is the two loops' inlining and compiled code on both
+  sides (`-XX:+PrintCompilation -XX:+UnlockDiagnosticVMOptions -XX:+PrintInlining`), on a quiet
+  machine. No emitted kernel's row is among them, so no number the benchmark reports for Varka
+  moves; what moves is two of its references to Spark's own path.
+* **The eight faster rows are the small-chunk shapes**: the 63- and 64-row chunk arms with mixed
+  nulls (dayofweek +11.4% and +16.6%, the depth-4 chain at 63 rows +14.7%, the 20-output epilogue
+  ladder +14.0% to +30.8%, by the median). At 63 or 64 rows a chunk, the harness's per-chunk work
+  is a large share of each call, and that is where items 1 to 3 differ: the Scala boxed its
+  `Long` arguments through an unspecialised `Function3`, allocated a `require` message thunk and
+  an empty literal array on every chunk, and the Java does none of these. The same arms at 4096
+  rows, where the per-chunk work is a small share, moved under 2%. As prediction 3 said for the
+  wide-kernel harness, these rows read the harness, not the kernel, and the dry run's identical
+  names and ids (above) rule out a dropped body.
+
+**6.1, for this class.** Prediction 4 **failed** for two rows: two rows are slower by 10% by both
+the median and the best, the pair runner's gate. Prediction 2 held in the form it was written:
+the rows that moved past 5% slower are the benchmark's own hand-written code, read here before
+being called a port's penalty. No A/A run of this class exists yet to read the spread against; it
+and the inlining check are owed, and either can run on a GitHub-hosted runner once the runner
+pair lands.
+
+**The inlining check** (14 October 2026). The per-row loops of both sides were run alone
+(`-Dvarka.bench.only=per-row`, pinned to the fast cores) under `-XX:+PrintCompilation
+-XX:+PrintInlining`, and the two slower loops under `-XX:+PrintAssembly`, the base built at
+`25a1bae6893`. The machine was not quiet, so no timing is read. **Inlining does not differ.** Each
+loop is compiled the same way on both sides (a C2 OSR compile, a deoptimization, a second OSR
+compile, a normal C2 compile), and in every compile `LocalDate.of` with `LocalDate::create`,
+`localDateToDays`, `truncDate` and the `MemorySegment` get and set chains are "inline (hot)" or
+forced inline; the Java's `Buffers` accessors and its static forwarders inline too. Nothing is
+"too big" on either side; the one refusal, `getWeekOfYear` "already compiled into a big method",
+is on both. The compiled loops have the same shape (strip-mined, bounds and addresses hoisted,
+the `LocalDate` scalar-replaced, 3208 against 3168 bytes for truncDate, 5064 against 5192 for
+make_date). **What differs is register allocation**, the same in a second base run: the Java keeps
+the segment bases in XMM registers and moves them back on every row (truncDate's store is `vmovq
+%xmm11, %rbx; movq %rbx, %r11; movl %ecx, (%r11, %r8)` against the Scala's `movl %ecx, (%rbp,
+%r8)`), and its loop safepoints hold 6 oops against 4 (truncDate) and 13 against 10 (make_date).
+**Matching the Scala's source does not remove it.** Four variants of the two loops were compiled:
+the buffers read into locals inside the closure; the bare segments captured, as the Scala did;
+the pass count captured too, which gives the closure the Scala's exact signature; and the
+module's methods called directly with the row count captured. Every one kept the XMM round trip
+and 6 and 12 oops, so item 6 is not the cause and the source is unchanged. The cause stays open:
+the register allocation is the only difference found, and nothing shows it costs 10% to 15%.
