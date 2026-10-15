@@ -40,7 +40,6 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Int
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoundedDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntNeg;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LastDay;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Least;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
@@ -88,12 +87,15 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Yea
  * policy for its own subtree whatever the caller's policy was, so a producer under a
  * {@code last_day} inside a {@code datediff} is still bounded.
  *
- * <p><b>Under {@code INT} every answer is an interval symmetric about zero</b>, {@code [-m, m]}.
- * That reproduces the magnitude arithmetic the compiler used before this class exactly: a sum
- * bounds as the sum of magnitudes, a product as their product, and the hull nodes stay unknown.
- * Both are looser than interval arithmetic could be and are registered as debt rather than
- * changed here, because the refactor's contract is that every shape is admitted or declined as
- * before.
+ * <p><b>Under {@code INT} the answers the compiler's trees produce are intervals symmetric about
+ * zero</b>, {@code [-m, m]}. That reproduces the magnitude arithmetic the compiler used before
+ * this class exactly: a sum bounds as the sum of magnitudes, a product as their product, and the
+ * hull nodes stay unknown. Both are looser than interval arithmetic could be and are registered
+ * as debt rather than changed here, because the refactor's contract is that every shape is
+ * admitted or declined as before. Two arms answer asymmetric intervals - a {@link GuardedRange}'s
+ * own bounds and a {@link BoundedDivide}'s {@code [0, q]} - so the arithmetic arms are the
+ * lattice's general operations, which {@code range_analysis.smt2} proves over two general
+ * intervals (VARKA-281).
  *
  * <p>The switch over the sealed IR is exhaustive, so a node type without a transfer function
  * does not compile - which is the protection the two traversals this replaces did not have. The
@@ -124,6 +126,60 @@ public final class VarkaRangeAnalysis {
       LocalDate.of(VarkaChrono.MAKE_DATE_MIN_YEAR, 1, 1).toEpochDay(),
       LocalDate.of(VarkaChrono.MAKE_DATE_MAX_YEAR, 12, 31).toEpochDay());
 
+  // --- The rules' own constants, named so that their proofs render from them (VARKA-281) ------
+
+  /**
+   * How far a calendar rule lets a node's day lie from its child's, as a closed interval of day
+   * counts. The transfer functions below apply one with {@link #over}; {@code VarkaProofFiles}
+   * renders {@code range_calendar.smt2}'s obligations and {@code VarkaRangeRulesSuite}'s sweep
+   * from the same constants, so a bound cannot be proven at one value and applied at another.
+   */
+  record Shift(long lo, long hi) {
+    Shift {
+      if (lo > hi) {
+        throw new IllegalArgumentException("an empty shift [" + lo + ", " + hi + "]");
+      }
+    }
+
+    /** The child's interval moved by this shift. */
+    Range over(Range child) {
+      return child.shift(lo, hi);
+    }
+  }
+
+  /** {@code next_day} lands one to seven days on. */
+  static final Shift NEXT_DAY_SHIFT = new Shift(1, 7);
+
+  /** The Thursday of a day's Monday-based week is at most three days away either way. */
+  static final Shift THURSDAY_SHIFT = new Shift(-3, 3);
+
+  /** {@code last_day}: the last day of the month is the day itself or up to 30 days on. */
+  static final Shift LAST_DAY_SHIFT = new Shift(0, 30);
+
+  /**
+   * A truncated date is its input or an earlier day of the same period: at most 365 back, the
+   * 31st of December of a leap year truncated to its year. The level-column form has the same
+   * bound, its week result at most six days back.
+   */
+  static final Shift TRUNC_SHIFT = new Shift(-365, 0);
+
+  /** The shortest and the longest month: what one month of {@code add_months} moves a day by. */
+  static final int MONTH_DAYS_MIN = 28;
+  static final int MONTH_DAYS_MAX = 31;
+
+  /**
+   * The largest value each calendar field can take, which is the magnitude the {@code INT} query
+   * answers for it; {@code year}'s is {@link VarkaChrono#YEAR_FIELD_MAGNITUDE}, derived from the
+   * admitted day range.
+   */
+  static final int MONTH_MAGNITUDE = 12;
+  static final int DAY_OF_MONTH_MAGNITUDE = 31;
+  static final int QUARTER_MAGNITUDE = 4;
+  static final int DAY_OF_YEAR_MAGNITUDE = 366;
+  static final int WEEK_OF_YEAR_MAGNITUDE = 53;
+  static final int DAY_OF_WEEK_MAGNITUDE = 7;
+  static final int WEEK_DAY_MAGNITUDE = 6;
+
   /**
    * The range of {@code node}'s value, asked for {@code kind}, under {@code policy}, reading
    * literal slots through {@code literals}.
@@ -149,20 +205,17 @@ public final class VarkaRangeAnalysis {
       case SubDays n -> kind != Kind.DAY ? VarkaValueRange.UNKNOWN
           : dayShift(n.days(), n.offset(), -1, policy, literals);
       case NextDay n -> kind != Kind.DAY ? VarkaValueRange.UNKNOWN
-          : range(n.days(), Kind.DAY, policy, literals).shift(1, 7);
+          : NEXT_DAY_SHIFT.over(range(n.days(), Kind.DAY, policy, literals));
       case ThursdayOf n -> kind != Kind.DAY ? VarkaValueRange.UNKNOWN
-          : range(n.days(), Kind.DAY, policy, literals).shift(-3, 3);
+          : THURSDAY_SHIFT.over(range(n.days(), Kind.DAY, policy, literals));
       case AddMonths n -> kind != Kind.DAY ? VarkaValueRange.UNKNOWN : addMonths(n, literals);
       // The calendar consumers re-arm the guards below them: their child is asked under ARMED.
       case LastDay n -> kind != Kind.DAY ? VarkaValueRange.UNKNOWN
-          : range(n.days(), Kind.DAY, GuardPolicy.ARMED, literals).shift(0, 30);
-      // A truncated date is its input or an earlier day of the same period: at most 365 back,
-      // the 31st of December of a leap year truncated to its year. The level-column form has
-      // the same bound, its week result at most six days back.
+          : LAST_DAY_SHIFT.over(range(n.days(), Kind.DAY, GuardPolicy.ARMED, literals));
       case TruncDate n -> kind != Kind.DAY ? VarkaValueRange.UNKNOWN
-          : range(n.days(), Kind.DAY, GuardPolicy.ARMED, literals).shift(-365, 0);
+          : TRUNC_SHIFT.over(range(n.days(), Kind.DAY, GuardPolicy.ARMED, literals));
       case TruncDateDynamic n -> kind != Kind.DAY ? VarkaValueRange.UNKNOWN
-          : range(n.days(), Kind.DAY, GuardPolicy.ARMED, literals).shift(-365, 0);
+          : TRUNC_SHIFT.over(range(n.days(), Kind.DAY, GuardPolicy.ARMED, literals));
       // make_date publishes only whole years of the narrow range; a year outside declines the
       // batch before any consumer sees it, so its operands are not asked.
       case MakeDate n -> kind != Kind.DAY ? VarkaValueRange.UNKNOWN : MAKE_DATE;
@@ -185,14 +238,14 @@ public final class VarkaRangeAnalysis {
       // year bound is the widest year over the whole admitted range, not only the guard's own
       // ceiling (VarkaChrono.YEAR_FIELD_MAGNITUDE says why the two differ).
       case Year n -> field(kind, VarkaChrono.YEAR_FIELD_MAGNITUDE);
-      case Month n -> field(kind, 12);
-      case DayOfMonth n -> field(kind, 31);
-      case Quarter n -> field(kind, 4);
-      case DayOfYear n -> field(kind, 366);
-      case WeekOfYear n -> field(kind, 53);
-      case DayOfWeek n -> field(kind, 7);
-      case DayOfWeekIso n -> field(kind, 7);
-      case WeekDay n -> field(kind, 6);
+      case Month n -> field(kind, MONTH_MAGNITUDE);
+      case DayOfMonth n -> field(kind, DAY_OF_MONTH_MAGNITUDE);
+      case Quarter n -> field(kind, QUARTER_MAGNITUDE);
+      case DayOfYear n -> field(kind, DAY_OF_YEAR_MAGNITUDE);
+      case WeekOfYear n -> field(kind, WEEK_OF_YEAR_MAGNITUDE);
+      case DayOfWeek n -> field(kind, DAY_OF_WEEK_MAGNITUDE);
+      case DayOfWeekIso n -> field(kind, DAY_OF_WEEK_MAGNITUDE);
+      case WeekDay n -> field(kind, WEEK_DAY_MAGNITUDE);
       case IntArith n -> kind != Kind.INT ? VarkaValueRange.UNKNOWN : arith(n, policy, literals);
       case IntNeg n -> kind != Kind.INT ? VarkaValueRange.UNKNOWN
           : range(n.child(), Kind.INT, policy, literals).neg();
@@ -248,20 +301,24 @@ public final class VarkaRangeAnalysis {
   }
 
   /**
-   * {@code add_months}: a literal count moves the day by 28 to 31 days per month, in whichever
-   * order the sign puts them; a column count is bounded by the emitter's own runtime guard to
+   * {@code add_months}: a literal count moves the day by {@link #MONTH_DAYS_MIN} to
+   * {@link #MONTH_DAYS_MAX} days per month, in whichever order the sign puts them; a column count
+   * is bounded by the emitter's own runtime guard to
    * {@code [MONTH_ARITH_MIN_MONTHS, MONTH_ARITH_MAX_MONTHS]}, so it moves the day by the same
-   * 31-day-month over-approximation at the guard's extremes. Either way the node is a calendar
+   * longest-month over-approximation at the guard's extremes. Either way the node is a calendar
    * consumer and its child is asked under {@code ARMED}.
    */
   private static Range addMonths(AddMonths n, IntUnaryOperator literals) {
     Range child = range(n.days(), Kind.DAY, GuardPolicy.ARMED, literals);
     if (n.months() instanceof LiteralSlot slot) {
       long m = literals.applyAsInt(slot.index());
-      return child.shift(Math.min(28 * m, 31 * m), Math.max(28 * m, 31 * m));
+      return child.shift(
+          Math.min(MONTH_DAYS_MIN * m, MONTH_DAYS_MAX * m),
+          Math.max(MONTH_DAYS_MIN * m, MONTH_DAYS_MAX * m));
     }
     return child.shift(
-        31L * VarkaChrono.MONTH_ARITH_MIN_MONTHS, 31L * VarkaChrono.MONTH_ARITH_MAX_MONTHS);
+        (long) MONTH_DAYS_MAX * VarkaChrono.MONTH_ARITH_MIN_MONTHS,
+        (long) MONTH_DAYS_MAX * VarkaChrono.MONTH_ARITH_MAX_MONTHS);
   }
 
   /**
@@ -281,10 +338,20 @@ public final class VarkaRangeAnalysis {
     return VarkaValueRange.UNKNOWN;
   }
 
-  /** Int arithmetic over the operands' magnitudes: a product for {@code MUL}, a sum otherwise. */
+  /**
+   * Int arithmetic over the operands' intervals: the lattice's product, sum or difference. Over
+   * the symmetric intervals the compiler's int trees produce, the difference is the sum, which is
+   * what this answered for {@code SUB} until VARKA-281's review: over asymmetric operands - a
+   * {@link BoundedDivide}'s {@code [0, q]}, an int-lane {@link GuardedRange}'s bounds - the sum
+   * misses the negative differences, and no compiler path composed such operands only by luck.
+   */
   private static Range arith(IntArith n, GuardPolicy policy, IntUnaryOperator literals) {
     Range l = range(n.left(), Kind.INT, policy, literals);
     Range r = range(n.right(), Kind.INT, policy, literals);
-    return n.op() == IntOp.MUL ? l.mul(r) : l.add(r);
+    return switch (n.op()) {
+      case ADD -> l.add(r);
+      case SUB -> l.sub(r);
+      case MUL -> l.mul(r);
+    };
   }
 }

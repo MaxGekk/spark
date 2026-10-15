@@ -562,6 +562,19 @@ public sealed interface VarkaVectorIR
             + "[1, " + EXACT_DIVIDEND_BOUND + "], not " + dividendBound);
       }
     }
+
+    /**
+     * The bound this quotient hands a division over it: {@code |x| < b} divided by {@code d}
+     * gives {@code |x / d| < ceil(b / |d|)}, and at least one. Derived from the node rather than
+     * restated beside it, because the bound is part of this record's equality: two equal
+     * subtrees carrying bounds that were written out separately would stop being one common
+     * subexpression. {@code time_bounds.smt2} proves the rule with the bound symbolic
+     * (VARKA-281).
+     */
+    public long quotientBound() {
+      long d = Math.abs(divisor);
+      return Math.max(1L, (dividendBound + d - 1) / d);
+    }
   }
 
   /**
