@@ -197,3 +197,15 @@ a walk, so they are marked here as not run.
    planted fault (the verifier's) because a compiler bug and a bad class surface differently
    (finding 2).
 2. **Held.** The five tests take under 6 s (3.9 s for the first, which builds the session).
+
+### 9.7 The review's corrections
+
+`/code-review high` on the branch, eight findings, all taken: the slow-query test forces the day
+guard on over the option matrix's options (it failed by design under `guardDayProducers=false`;
+the suite now passes under that configuration and under `arrowBatchSize=1`, by `dev/varka_matrix.sh
+--config`); the page claimed assertions the suite only printed, so it now asserts the counts,
+reasons, `EXPLAIN` lines and warning text it quotes; the verifier test polls for its file; the
+test pinning the defect now accepts any `VerifyError` in the chain so row 314b's conversion will
+not break it; the page names exit 2 of `--replay`; the enabled setting is restored, not set to
+true; the cleanup is recursive; the page no longer quotes the shrinker's run count and timing or
+points readers at the plan.

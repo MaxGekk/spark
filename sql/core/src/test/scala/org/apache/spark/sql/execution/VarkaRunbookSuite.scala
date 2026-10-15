@@ -65,6 +65,22 @@ class VarkaRunbookSuite extends QueryTest with VarkaSharedSessions with VarkaTes
     collectFirst(df.queryExecution.executedPlan) { case v if isVarkaNode(v) => v }
       .getOrElse(fail(s"no Varka node in:\n${df.queryExecution.executedPlan.treeString}"))
 
+  /**
+   * The finished reproduction files in `dir`, waiting up to 30 s for the first: the file is
+   * written by the failing task, which can still be moving it into place when the query's
+   * failure reaches the test.
+   */
+  private def awaitFiles(dir: File): Seq[Path] = {
+    def finished: Seq[Path] = if (!dir.exists()) Seq.empty else {
+      val listing = Files.list(dir.toPath)
+      try listing.iterator().asScala.toSeq.filterNot(_.getFileName.toString.startsWith("."))
+      finally listing.close()
+    }
+    val deadline = System.nanoTime() + 30L * 1000 * 1000 * 1000
+    while (finished.isEmpty && System.nanoTime() < deadline) Thread.sleep(10)
+    finished
+  }
+
   private def years(df: org.apache.spark.sql.DataFrame): String =
     df.collect().map(_.get(0)).mkString("[", ", ", "]")
 
@@ -83,19 +99,27 @@ class VarkaRunbookSuite extends QueryTest with VarkaSharedSessions with VarkaTes
       show("wrong 2 numVarkaBatches / numFallbackBatchesDeclined",
         s"${node.metrics("numVarkaBatches").value} / " +
           s"${node.metrics("numFallbackBatchesDeclined").value}")
+      // The page: nothing declined, so only the comparison can find this fault.
+      assert(node.metrics("numFallbackBatchesDeclined").value === 0L)
       val key = SQLConf.VARKA_ENABLED.key
+      val previous = varkaSpark.conf.getOption(key)
       varkaSpark.conf.set(key, "false")
       try {
         val off = years(varkaSpark.sql(farOffset))
         show("wrong 1 Varka off", off)
         assert(off === expected)
-      } finally varkaSpark.conf.set(key, "true")
+      } finally previous.fold(varkaSpark.conf.unset(key))(varkaSpark.conf.set(key, _))
     }
   }
 
   test("slow query: a query that declines a batch shows it in the metrics and EXPLAIN") {
     cacheDatesFarOffset(spark)
     cacheDatesFarOffset(varkaSpark)
+    // The guard under test is an emit option the option matrix may turn off.
+    withOptions(_.withGuardDayProducers(true))(slowQuery())
+  }
+
+  private def slowQuery(): Unit = {
     val df = varkaSpark.sql(farOffset)
     checkAnswer(df, spark.sql(farOffset))
     val node = varkaNode(df)
@@ -106,9 +130,16 @@ class VarkaRunbookSuite extends QueryTest with VarkaSharedSessions with VarkaTes
     show("slow 1 metric", s"fallbackTime registered = ${node.metrics.contains("fallbackTime")}")
     VarkaFallbackReasons.rendered(varkaSpark, node).asScala.toSeq.sortBy(_._1)
       .foreach { case (reason, shown) => show("slow 2 reason", s"$reason = $shown") }
-    assert(node.metrics("numFallbackBatchesDeclined").value > 0L)
-    show("slow 3 EXPLAIN",
-      df.queryExecution.explainString(ExplainMode.fromString("formatted")))
+    val declined = node.metrics("numFallbackBatchesDeclined").value
+    assert(declined > 0L)
+    assert(node.metrics.contains("varkaKernelTime") && !node.metrics.contains("fallbackTime"))
+    val shown = VarkaFallbackReasons.rendered(varkaSpark, node).asScala
+    assert(shown("day-producer") === declined.toString, shown)
+    assert(shown.filterNot(_._1 == "day-producer").values.forall(_ == "0"), shown)
+    val explained = df.queryExecution.explainString(ExplainMode.fromString("formatted"))
+    show("slow 3 EXPLAIN", explained)
+    // A decline at run time is not in EXPLAIN: the entry still reads fused.
+    assert(explained.contains("y: fused"), explained)
     cacheDates(spark)
     cacheDates(varkaSpark)
     val residual = varkaSpark.sql(
@@ -119,8 +150,10 @@ class VarkaRunbookSuite extends QueryTest with VarkaSharedSessions with VarkaTes
     assert(residualLines.contains("b: residual (unsupported expression"), residualLines)
     val mixed = varkaSpark.sql(
       "SELECT d FROM varka_dates_far_offset WHERE d < date'2024-01-02' AND off % 7 = 1")
-    show("slow 3 EXPLAIN of a filter with a residual conjunct",
-      mixed.queryExecution.explainString(ExplainMode.fromString("formatted")))
+    val mixedText = mixed.queryExecution.explainString(ExplainMode.fromString("formatted"))
+    show("slow 3 EXPLAIN of a filter with a residual conjunct", mixedText)
+    assert(mixedText.contains(": fused") && mixedText.contains(": residual (unsupported"),
+      mixedText)
   }
 
   test("crash: a kernel that throws writes a reproduction file, the warning names it") {
@@ -128,8 +161,7 @@ class VarkaRunbookSuite extends QueryTest with VarkaSharedSessions with VarkaTes
     cacheDatesFarOffset(varkaSpark)
     val query = "SELECT date_add(d, 3) AS a FROM varka_dates_far_offset"
     val expected = spark.sql(query).collect().toSeq
-    Option(out.listFiles()).foreach(_.foreach(f =>
-      Option(f.listFiles()).foreach(_.foreach(_.delete()))))
+    org.apache.spark.util.Utils.deleteRecursively(out)
     val repro = new File(out, "repro")
     val dump = new File(out, "classes")
     VarkaReproduction.resetForTesting()
@@ -150,21 +182,18 @@ class VarkaRunbookSuite extends QueryTest with VarkaSharedSessions with VarkaTes
       varkaSpark.conf.unset(SQLConf.VARKA_CLASS_DUMP_DIRECTORY.key)
     }
     show("crash 1 answer", "the query still answers, with the row engine's rows")
-    appender.loggingEvents.map(_.getMessage.getFormattedMessage).distinct
-      .foreach(show("crash 1 warning", _))
-    val deadline = System.nanoTime() + 30L * 1000 * 1000 * 1000
-    def finished: Seq[Path] = if (!repro.exists()) Seq.empty else {
-      val listing = Files.list(repro.toPath)
-      try listing.iterator().asScala.toSeq.filterNot(_.getFileName.toString.startsWith("."))
-      finally listing.close()
-    }
-    while (finished.isEmpty && System.nanoTime() < deadline) Thread.sleep(10)
-    assert(finished.size === 1, finished)
-    show("crash 2 file", repro.getPath + "/" + finished.head.getFileName)
+    val warnings = appender.loggingEvents.map(_.getMessage.getFormattedMessage).distinct
+    warnings.foreach(show("crash 1 warning", _))
+    assert(warnings.exists(w => w.contains("failed on this batch; falling back to the per-row " +
+      "path.") && w.contains("kind: kernel-failure") && w.contains("shape hash: ")), warnings)
+    assert(warnings.exists(_.contains("Wrote a reproduction of this Varka failure")), warnings)
+    val files = awaitFiles(repro)
+    assert(files.size === 1, files)
+    show("crash 2 file", repro.getPath + "/" + files.head.getFileName)
     show("crash 2 classes", Option(dump.list()).map(_.mkString(", ")).getOrElse("none"))
   }
 
-  test("crash at planning: a class the verifier rejects is still a bare VerifyError") {
+  test("crash at planning: a class the verifier rejects writes a file and replays") {
     cacheDatesFarOffset(varkaSpark)
     val repro = new File(out, "repro-planning")
     VarkaReproduction.resetForTesting()
@@ -174,12 +203,14 @@ class VarkaRunbookSuite extends QueryTest with VarkaSharedSessions with VarkaTes
         val e = intercept[Throwable](
           varkaSpark.sql("SELECT date_add(d, 3) AS a FROM varka_dates_far_offset").collect())
         show("crash 4 error", e.toString.linesIterator.take(12).mkString("\n"))
-        // Open work: the page says this is not yet an INTERNAL_ERROR with a context block.
-        assert(e.isInstanceOf[VerifyError] && !e.getMessage.contains("INTERNAL_ERROR"), e)
+        // What the page says today (row 314b is open): a VerifyError somewhere in the chain.
+        assert(Iterator.iterate(e)(_.getCause).takeWhile(_ != null).take(20)
+          .exists(_.isInstanceOf[VerifyError]), e)
       }
     } finally varkaSpark.conf.unset(SQLConf.VARKA_REPRODUCTION_DIRECTORY.key)
-    Thread.sleep(500)
-    show("crash 4 file", Option(repro.list()).map(_.mkString(", ")).getOrElse("none"))
+    val files = awaitFiles(repro)
+    show("crash 4 file", files.map(_.getFileName.toString).mkString(", "))
+    assert(files.size === 1, files)
   }
 
   test("crash at planning: a compiler bug raises INTERNAL_ERROR with the context record") {

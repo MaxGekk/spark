@@ -986,7 +986,7 @@ symptom
    query and shrinks it. A developer writes the expression and the failing rows as a case for
    `VarkaIrFuzzSuite` (`sql/catalyst`), which shrinks every failure it finds. On a planted emitter
    bug it printed `shrunk to lane=int roots=[(isNotNull col:0)] options={misdescribeWordLiveness=true}
-   length=1 ... (14 runs, 5 ms)` from a tree of three conjuncts. Hand over the expression, the
+   length=1` from a tree of three conjuncts. Hand over the expression, the
    rows and the `spark.sql.codegen.varka.*` settings you ran with.
 
 **A slow query.** A batch Varka cannot run goes to the row engine, so slowness is declined
@@ -1025,8 +1025,8 @@ batches, an entry that did not fuse, or a slow kernel.
    <file>".
 3. On a checkout, `dev/varka_emit.sh --replay <file>` rebuilds the kernel from the file's IR and
    options, runs it over the recorded batch and prints `REPRODUCED: the same signature` with exit
-   0 when it fails the same way; it exits 1 when it does not (a fixed emitter, or an edited
-   file). A file can hold the query's data, so it is owner-only; `...reproduction.maxBatchBytes=0`
+   0 when it fails the same way. It exits 1 when it does not (a fixed emitter, or an edited
+   file) and 2 when it could not run (no such file, no report). A file can hold the query's data, so it is owner-only; `...reproduction.maxBatchBytes=0`
    keeps values out of it and `...reproduction.enabled=false` writes none.
 4. To read the class, set `spark.sql.codegen.varka.classDumpDirectory=<dir>` before the run and
    `javap -c -p <dir>/VarkaFusedProjection_<hash>.class`. `javap -v` shows the `LineNumberTable`
@@ -1044,8 +1044,8 @@ Who reads each thing, and what they do:
 | `java.lang.VerifyError` at planning | user, developer | Not yet an `INTERNAL_ERROR` with a context block (open work); the reproduction file is written and replays |
 | a memory violation (sanitizer on, `-Dvarka.sanitizeMemory=true`) | developer | A diagnostic JVM property: the violation fails the task by design and writes a file; replay it |
 
-`VarkaRunbookSuite` runs each branch on a planted fault, so these steps fail a build when they
-stop being true; what each step showed is in `sql/varka/plans/m7/VARKA-316.md`, section 9.
+`VarkaRunbookSuite` runs each branch on a planted fault and asserts the reason counts, the `EXPLAIN`
+lines and the warning text quoted above, so a step that stops being true fails a build.
 
 ### Execution integration
 
