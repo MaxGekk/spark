@@ -18,14 +18,19 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import java.math.BigInteger;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.function.IntBinaryOperator;
+import java.util.function.IntUnaryOperator;
 import java.util.function.LongBinaryOperator;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDivisionLowering.MulHiMagic;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaValueRange.Range;
 import org.apache.spark.sql.catalyst.util.DateTimeConstants;
 
 /**
@@ -64,6 +69,10 @@ final class VarkaProofFiles {
     files.put("chrono_divide.smt2", chronoDivide());
     files.put("floor_mod7.smt2", floorMod7());
     files.put("leap_hash.smt2", leapHash());
+    files.put("value_range.smt2", valueRange());
+    files.put("range_analysis.smt2", rangeAnalysis());
+    files.put("range_calendar.smt2", rangeCalendar());
+    files.put("time_bounds.smt2", timeBounds());
     return files;
   }
 
@@ -860,6 +869,913 @@ final class VarkaProofFiles {
   /** An int as a 32-bit SMT-LIB bit-vector literal. */
   private static String bv(int v) {
     return String.format("#x%08x", v);
+  }
+
+  // -----------------------------------------------------------------------------------------
+  // The range analyses (VARKA-281): the lattice, the analysis's arms, the calendar rules and
+  // the TIME compiler's bounds.
+  // -----------------------------------------------------------------------------------------
+
+  /**
+   * The intervals each stated lattice rule is pinned to the code at: both signs, a point, the
+   * int32 extremes and the fuzz grammar's two bounds.
+   */
+  private static final long[][] SAMPLE_INTERVALS = {{-3, 5}, {2, 3}, {-7, -2}, {0, 0}, {-1, 1},
+      {5, 9}, {-4000, 4000}, {-2500000, 2500000}, {Integer.MIN_VALUE, Integer.MAX_VALUE}};
+
+  /** A member {@code x} of {@code [a, b]}, declared. */
+  private static final String MEMBER =
+      "(declare-const a Int) (declare-const b Int) (declare-const x Int)\n"
+          + "(assert (and (<= a x) (<= x b)))";
+
+  /** Members {@code x} of {@code [a, b]} and {@code y} of {@code [c, d]}, declared. */
+  private static final String MEMBERS = MEMBER
+      + "\n(declare-const c Int) (declare-const d Int) (declare-const y Int)\n"
+      + "(assert (and (<= c y) (<= y d)))";
+
+  /** A child's witness {@code m} in {@code [lo, hi]}, and its lane value {@code jc}. */
+  private static final String DAY_CHILD =
+      "(declare-const lo Int) (declare-const hi Int) (declare-const m Int)\n"
+          + "(assert (and (<= lo m) (<= m hi)))\n"
+          + "(define-fun jc () Int (jint.wrap m))";
+
+  /** An {@code INT} child's witness {@code mx} in {@code [-m1, m1]}, and its lane value. */
+  private static final String INT_CHILD =
+      "(declare-const m1 Int) (declare-const mx Int)\n"
+          + "(assert (and (<= (- m1) mx) (<= mx m1)))\n"
+          + "(define-fun jx () Int (jint.wrap mx))";
+
+  /** An {@code INT} child's witness {@code mx} in a general {@code [a, b]}, and its lane value. */
+  private static final String INT_ONE =
+      "(declare-const a Int) (declare-const b Int) (declare-const mx Int)\n"
+          + "(assert (and (<= a mx) (<= mx b)))\n"
+          + "(define-fun jx () Int (jint.wrap mx))";
+
+  /** Two {@code INT} children's witnesses, {@code mx} in {@code [a, b]} and {@code my} in
+   * {@code [c, d]}, and their lane values. */
+  private static final String INT_GENERAL = INT_ONE
+      + "\n(declare-const c Int) (declare-const d Int) (declare-const my Int)\n"
+      + "(assert (and (<= c my) (<= my d)))\n"
+      + "(define-fun jy () Int (jint.wrap my))";
+
+  /**
+   * A rule's three checks: {@code value} lies in {@code [lo, hi]} under the premises (unsat: no
+   * member escapes), and does not with the low end raised by one, or the high end lowered by one
+   * (sat), so the statement tells the rule from its neighbours. A rule in the witness form passes
+   * the congruence of its witness with the lane value as {@code also}, which the neighbours keep.
+   */
+  private static void rule(StringBuilder out, String what, List<String> premises, String value,
+      String lo, String hi, String also) {
+    var body = new ArrayList<>(premises);
+    body.add("(assert (not (and (<= " + lo + " " + value + ") (<= " + value + " " + hi + ")"
+        + also + ")))");
+    check(out, what, "unsat", body);
+    var low = new ArrayList<>(premises);
+    low.add("(assert (not (and (<= (+ " + lo + " 1) " + value + ") (<= " + value + " " + hi + ")"
+        + also + ")))");
+    check(out, what + ": with the low end raised by one it is not", "sat", low);
+    var high = new ArrayList<>(premises);
+    high.add("(assert (not (and (<= " + lo + " " + value + ") (<= " + value + " (- " + hi
+        + " 1))" + also + ")))");
+    check(out, what + ": with the high end lowered by one it is not", "sat", high);
+  }
+
+  private static void rule(StringBuilder out, String what, List<String> premises, String value,
+      String lo, String hi) {
+    rule(out, what, premises, value, lo, hi, "");
+  }
+
+  /** The witness form: {@code witness} in {@code [lo, hi]} and congruent to {@code lane}. */
+  private static void witnessRule(StringBuilder out, String what, List<String> premises,
+      String witness, String lane, String lo, String hi) {
+    rule(out, what, premises, witness, lo, hi, " (= (jint.wrap " + witness + ") " + lane + ")");
+  }
+
+  /**
+   * {@code (= (fn args) expected)} for both ends of {@code result}, which the samples are chosen
+   * to keep bounded: a sample the code saturates at would lose its pin without a trace, so it is
+   * refused instead.
+   */
+  private static void pinEnds(List<String> eqs, String fn, String args, Range result) {
+    if (!(result instanceof VarkaValueRange.Bounded b)) {
+      throw new IllegalStateException(fn + " answers UNKNOWN at the sample " + args
+          + "; the pins' samples are chosen bounded, so choose another");
+    }
+    eqs.add("(= (" + fn + ".lo " + args + ") " + lit(b.lo()) + ")");
+    eqs.add("(= (" + fn + ".hi " + args + ") " + lit(b.hi()) + ")");
+  }
+
+  /** An SMT-LIB real literal. */
+  private static String rlit(long v) {
+    return v >= 0 ? v + ".0" : "(- " + (-v) + ".0)";
+  }
+
+  private static String ends(long[] p) {
+    return lit(p[0]) + " " + lit(p[1]);
+  }
+
+  private static String rends(long[] p) {
+    return rlit(p[0]) + " " + rlit(p[1]);
+  }
+
+  /**
+   * {@code value_range.smt2}: {@code VarkaValueRange.Bounded}'s eleven operations sound over
+   * symbolic ends, each pinned to the code at the sample intervals; {@code mul} over the reals.
+   */
+  static String valueRange() {
+    var out = new StringBuilder(LICENSE);
+    out.append("""
+        ; The value-range lattice (VarkaValueRange.Bounded) is sound (VARKA-281): for every member
+        ; x of an interval [a, b], and y of [c, d], each operation's result lies in the interval
+        ; the operation returns, stated over symbolic ends. The lattice is long arithmetic that
+        ; saturates to UNKNOWN through Math.*Exact, so an end it returns is exact: the claims here
+        ; are over mathematical integers, and Java's wrapping enters in range_analysis.smt2, where
+        ; the lanes do.
+        ;
+        ; Each rule is a pair of functions of the ends, vr.<op>.lo and vr.<op>.hi, shared by its
+        ; claim (unsat: no member escapes), by two neighbours (sat: the rule narrowed by one at
+        ; either end admits a counterexample, so the statement can tell the rule from its
+        ; neighbours), and by a pin: the ends Bounded computes for sample intervals, rendered from
+        ; the code, equal the stated rule's, so a rule restated differently from the code fails
+        ; before a proof rests on it. mul's two claims - a product lies within the four corner
+        ; products, and |x| <= m1, |y| <= m2 give |x * y| <= m1 * m2 - are stated over the reals,
+        ; which both solvers decide in a fraction of a second, where over the integers each
+        ; decides one and leaves the other unknown (VARKA-281.md 2.3); every integer instance is
+        ; a real one, so the integer claims follow. divideBy is Java's truncating /, stated per
+        ; divisor the int lane divides by (VarkaProofFiles.INT_DIVISORS): with the divisor
+        ; symbolic Z3 proves it and cvc5 does not. The file declares ALL for the reals.
+        """);
+    out.append(rendered("ALL"));
+    out.append("""
+
+        (define-fun vr.min ((p Int) (q Int)) Int (ite (<= p q) p q))
+        (define-fun vr.max ((p Int) (q Int)) Int (ite (>= p q) p q))
+        (define-fun vr.shift.lo ((a Int) (b Int) (s1 Int) (s2 Int)) Int (+ a s1))
+        (define-fun vr.shift.hi ((a Int) (b Int) (s1 Int) (s2 Int)) Int (+ b s2))
+        (define-fun vr.hull.lo ((a Int) (b Int) (c Int) (d Int)) Int (vr.min a c))
+        (define-fun vr.hull.hi ((a Int) (b Int) (c Int) (d Int)) Int (vr.max b d))
+        (define-fun vr.add.lo ((a Int) (b Int) (c Int) (d Int)) Int (+ a c))
+        (define-fun vr.add.hi ((a Int) (b Int) (c Int) (d Int)) Int (+ b d))
+        (define-fun vr.sub.lo ((a Int) (b Int) (c Int) (d Int)) Int (- a d))
+        (define-fun vr.sub.hi ((a Int) (b Int) (c Int) (d Int)) Int (- b c))
+        (define-fun vr.neg.lo ((a Int) (b Int)) Int (- b))
+        (define-fun vr.neg.hi ((a Int) (b Int)) Int (- a))
+        (define-fun vr.magnitude ((a Int) (b Int)) Int (vr.max (abs a) (abs b)))
+        (define-fun vr.abs.lo ((a Int) (b Int)) Int (ite (>= a 0) a (ite (<= b 0) (- b) 0)))
+        (define-fun vr.abs.hi ((a Int) (b Int)) Int
+          (ite (>= a 0) b (ite (<= b 0) (- a) (vr.magnitude a b))))
+        (define-fun vr.divideBy.lo ((a Int) (b Int) (d Int)) Int
+          (vr.min (trunc.div a d) (trunc.div b d)))
+        (define-fun vr.divideBy.hi ((a Int) (b Int) (d Int)) Int
+          (vr.max (trunc.div a d) (trunc.div b d)))
+        (define-fun vr.within ((a Int) (b Int) (L Int) (H Int)) Bool (and (>= a L) (<= b H)))
+        ; Over the reals, for mul.
+        (define-fun vr.rmin ((p Real) (q Real)) Real (ite (<= p q) p q))
+        (define-fun vr.rmax ((p Real) (q Real)) Real (ite (>= p q) p q))
+        (define-fun vr.mul.lo ((a Real) (b Real) (c Real) (d Real)) Real
+          (vr.rmin (vr.rmin (* a c) (* a d)) (vr.rmin (* b c) (* b d))))
+        (define-fun vr.mul.hi ((a Real) (b Real) (c Real) (d Real)) Real
+          (vr.rmax (vr.rmax (* a c) (* a d)) (vr.rmax (* b c) (* b d))))
+        """);
+    rule(out, "shift: x in [a, b] and s in [s1, s2] give x + s in [a + s1, b + s2]",
+        List.of(MEMBER, "(declare-const s1 Int) (declare-const s2 Int) (declare-const s Int)",
+            "(assert (and (<= s1 s) (<= s s2)))"),
+        "(+ x s)", "(vr.shift.lo a b s1 s2)", "(vr.shift.hi a b s1 s2)");
+    rule(out, "hull: a member of either interval is in [min(a, c), max(b, d)]",
+        List.of("(declare-const a Int) (declare-const b Int) (declare-const c Int)",
+            "(declare-const d Int) (declare-const x Int)",
+            "(assert (or (and (<= a x) (<= x b)) (and (<= c x) (<= x d))))"),
+        "x", "(vr.hull.lo a b c d)", "(vr.hull.hi a b c d)");
+    rule(out, "add: x + y in [a + c, b + d]", List.of(MEMBERS), "(+ x y)",
+        "(vr.add.lo a b c d)", "(vr.add.hi a b c d)");
+    rule(out, "sub: x - y in [a - d, b - c]", List.of(MEMBERS), "(- x y)",
+        "(vr.sub.lo a b c d)", "(vr.sub.hi a b c d)");
+    rule(out, "neg: -x in [-b, -a]", List.of(MEMBER), "(- x)", "(vr.neg.lo a b)",
+        "(vr.neg.hi a b)");
+    rule(out, "magnitude: |x| in [0, max(|a|, |b|)]", List.of(MEMBER), "(abs x)", "0",
+        "(vr.magnitude a b)");
+    rule(out, "abs: |x| in the interval the three arms give", List.of(MEMBER), "(abs x)",
+        "(vr.abs.lo a b)", "(vr.abs.hi a b)");
+    check(out, "within: an interval inside [L, H] has every member inside it", "unsat",
+        List.of(MEMBER, "(declare-const L Int) (declare-const H Int)",
+            "(assert (vr.within a b L H))", "(assert (not (and (<= L x) (<= x H))))"));
+    check(out, "within: and one that reaches past H by one has a member outside", "sat",
+        List.of(MEMBER, "(declare-const L Int) (declare-const H Int)",
+            "(assert (vr.within a b L (+ H 1)))", "(assert (not (and (<= L x) (<= x H))))"));
+    check(out, "fitsInt: an interval within the int range has every member an int", "unsat",
+        List.of(MEMBER, "(assert (vr.within a b jint.MIN jint.MAX))",
+            "(assert (not (jint.in x)))"));
+    for (int d : INT_DIVISORS) {
+      rule(out, "divideBy " + d + ": x / d, truncating, in [min(a / d, b / d), max(a / d, b / d)]",
+          List.of(MEMBER), "(trunc.div x " + lit(d) + ")",
+          "(vr.divideBy.lo a b " + lit(d) + ")", "(vr.divideBy.hi a b " + lit(d) + ")");
+    }
+    String reals = "(declare-const a Real) (declare-const b Real) (declare-const c Real)\n"
+        + "(declare-const d Real) (declare-const x Real) (declare-const y Real)\n"
+        + "(assert (and (<= a x) (<= x b) (<= c y) (<= y d)))";
+    check(out, "mul, over the reals: x * y lies within the four corner products", "unsat",
+        List.of(reals,
+            "(assert (not (and (<= (vr.mul.lo a b c d) (* x y))",
+            "  (<= (* x y) (vr.mul.hi a b c d)))))"));
+    check(out, "mul, over the reals: with the corner b * d dropped it does not", "sat",
+        List.of(reals,
+            "(define-fun lo3 () Real (vr.rmin (vr.rmin (* a c) (* a d)) (* b c)))",
+            "(define-fun hi3 () Real (vr.rmax (vr.rmax (* a c) (* a d)) (* b c)))",
+            "(assert (not (and (<= lo3 (* x y)) (<= (* x y) hi3))))"));
+    String symmetric = "(declare-const m1 Real) (declare-const m2 Real)\n"
+        + "(declare-const x Real) (declare-const y Real)\n"
+        + "(assert (and (<= (- m1) x) (<= x m1) (<= (- m2) y) (<= y m2)))";
+    check(out, "mul, symmetric, over the reals: |x| <= m1 and |y| <= m2 give |x * y| <= m1 * m2",
+        "unsat", List.of(symmetric, "(assert (not (<= (abs (* x y)) (* m1 m2))))"));
+    check(out, "mul, symmetric, over the reals: and not m1 * m2 - 1", "sat",
+        List.of(symmetric, "(assert (not (<= (abs (* x y)) (- (* m1 m2) 1))))"));
+    out.append("\n; The stated rules against the code, at the sample intervals.\n");
+    var shifts = new ArrayList<String>();
+    var hulls = new ArrayList<String>();
+    var adds = new ArrayList<String>();
+    var subs = new ArrayList<String>();
+    var muls = new ArrayList<String>();
+    var unary = new ArrayList<String>();
+    var divides = new ArrayList<String>();
+    for (long[] p : SAMPLE_INTERVALS) {
+      Range r = VarkaValueRange.of(p[0], p[1]);
+      pinEnds(shifts, "vr.shift", ends(p) + " (- 5) 7", r.shift(-5, 7));
+      pinEnds(unary, "vr.neg", ends(p), r.neg());
+      pinEnds(unary, "vr.abs", ends(p), r.abs());
+      unary.add("(= (vr.magnitude " + ends(p) + ") " + lit(r.magnitude().getAsLong()) + ")");
+      unary.add("(= (vr.within " + ends(p) + " jint.MIN jint.MAX) " + r.fitsInt() + ")");
+      for (int d : INT_DIVISORS) {
+        pinEnds(divides, "vr.divideBy", ends(p) + " " + lit(d), r.divideBy(d));
+      }
+      for (long[] q : SAMPLE_INTERVALS) {
+        Range s = VarkaValueRange.of(q[0], q[1]);
+        pinEnds(hulls, "vr.hull", ends(p) + " " + ends(q), r.hull(s));
+        pinEnds(adds, "vr.add", ends(p) + " " + ends(q), r.add(s));
+        pinEnds(subs, "vr.sub", ends(p) + " " + ends(q), r.sub(s));
+        if (!(r.mul(s) instanceof VarkaValueRange.Bounded m)) {
+          throw new IllegalStateException("mul saturates at the samples " + ends(p) + " and "
+              + ends(q) + "; the pins' samples are chosen bounded, so choose another");
+        }
+        muls.add("(= (vr.mul.lo " + rends(p) + " " + rends(q) + ") " + rlit(m.lo()) + ")");
+        muls.add("(= (vr.mul.hi " + rends(p) + " " + rends(q) + ") " + rlit(m.hi()) + ")");
+      }
+    }
+    equations(out, "shift as stated is Bounded.shift", shifts);
+    equations(out, "hull as stated is Bounded.hull", hulls);
+    equations(out, "add as stated is Bounded.add", adds);
+    equations(out, "sub as stated is Bounded.sub", subs);
+    equations(out, "mul as stated is Bounded.mul", muls);
+    equations(out, "neg, abs, magnitude and fitsInt as stated are Bounded's", unary);
+    equations(out, "divideBy as stated is Bounded.divideBy, for every int-lane divisor", divides);
+    return out.toString();
+  }
+
+  /**
+   * {@code range_analysis.smt2}: the arithmetic arms of {@code VarkaRangeAnalysis} in the witness
+   * form, over Java's wrapping, each pinned to the analysis's own answer on a sample tree.
+   */
+  static String rangeAnalysis() {
+    var out = new StringBuilder(LICENSE);
+    out.append("""
+        ; The compile-time range analysis (VarkaRangeAnalysis) is sound over Java's wrapping
+        ; arithmetic (VARKA-281), in the form that is true: for every value of each child's
+        ; interval there is a member of the node's interval congruent, modulo 2^32, to the lane
+        ; value the node computes from the children's lane values. "The interval contains the
+        ; lane value" is false past int32 - a literal shift of 2^31 - 1 carries the contract's
+        ; interval past it while the lanes wrap - and two checks below keep that edge visible. The
+        ; compiler reads an interval only when it lies within int32 (decomposesExactly, fitsInt, a
+        ; magnitude at most Integer.MAX_VALUE), where the member is the lane value itself.
+        ;
+        ; A child with witness m in [lo, hi] has the lane value (jint.wrap m); the node's lane
+        ; value is written with the prelude's operators as the lanes compute it, and its witness
+        ; is written out, so every check is quantifier-free. Under DAY a shift moves both ends;
+        ; under INT the compiler's trees produce symmetric answers, [-m, m], but a BoundedDivide
+        ; or an int-lane GuardedRange answers an asymmetric interval, so the arithmetic arms are
+        ; stated over two general intervals [a, b] and [c, d] - which is what found SUB answering
+        ; the sum's interval (VARKA-281.md 9.4). Each rule's functions ra.<node>.* are shared by
+        ; its claim, its two neighbours narrowed by one (sat), and a pin to
+        ; VarkaRangeAnalysis.range's own answer on a sample tree. MUL's congruence goes in Fiat's
+        ; two layers - the ring identity as a polynomial both solvers normalise, then the wrap's
+        ; periodicity, which is linear - and its corners over the reals, since over the integers
+        ; each solver leaves one of the two unknown (VARKA-281.md 2.3). The constants of the day
+        ; rules are VarkaRangeAnalysis's own; the divisors are the int lane's
+        ; (VarkaProofFiles.INT_DIVISORS); a divisor of -1 is refused by Analysis before any
+        ; emission. The file declares ALL for the reals.
+        """);
+    out.append(rendered("ALL"));
+    VarkaRangeAnalysis.Shift next = VarkaRangeAnalysis.NEXT_DAY_SHIFT;
+    VarkaRangeAnalysis.Shift thursday = VarkaRangeAnalysis.THURSDAY_SHIFT;
+    out.append("""
+
+        (define-fun ra.lit.m ((v Int)) Int (abs v))
+        (define-fun ra.dayshift.lo ((lo Int) (hi Int) (v Int)) Int (+ lo v))
+        (define-fun ra.dayshift.hi ((lo Int) (hi Int) (v Int)) Int (+ hi v))
+        """);
+    out.append("(define-fun ra.nextday.lo ((lo Int) (hi Int)) Int (+ lo ").append(lit(next.lo()))
+        .append("))\n(define-fun ra.nextday.hi ((lo Int) (hi Int)) Int (+ hi ")
+        .append(lit(next.hi())).append("))\n");
+    out.append("(define-fun ra.thursday.lo ((lo Int) (hi Int)) Int (+ lo ")
+        .append(lit(thursday.lo())).append("))\n(define-fun ra.thursday.hi ((lo Int) (hi Int)) Int"
+        + " (+ hi ").append(lit(thursday.hi())).append("))\n");
+    out.append("""
+        (define-fun ra.hull.lo ((a Int) (b Int) (c Int) (d Int)) Int (ite (<= a c) a c))
+        (define-fun ra.hull.hi ((a Int) (b Int) (c Int) (d Int)) Int (ite (>= b d) b d))
+        (define-fun ra.datediff.m ((elo Int) (ehi Int) (slo Int) (shi Int)) Int
+          (ite (>= (abs (- ehi slo)) (abs (- elo shi))) (abs (- ehi slo)) (abs (- elo shi))))
+        ; The int arithmetic, over two intervals [a, b] and [c, d]: the lattice's add, sub, neg,
+        ; mul and divideBy.
+        (define-fun ra.add.lo ((a Int) (b Int) (c Int) (d Int)) Int (+ a c))
+        (define-fun ra.add.hi ((a Int) (b Int) (c Int) (d Int)) Int (+ b d))
+        (define-fun ra.sub.lo ((a Int) (b Int) (c Int) (d Int)) Int (- a d))
+        (define-fun ra.sub.hi ((a Int) (b Int) (c Int) (d Int)) Int (- b c))
+        (define-fun ra.neg.lo ((a Int) (b Int)) Int (- b))
+        (define-fun ra.neg.hi ((a Int) (b Int)) Int (- a))
+        (define-fun ra.min ((p Int) (q Int)) Int (ite (<= p q) p q))
+        (define-fun ra.max ((p Int) (q Int)) Int (ite (>= p q) p q))
+        (define-fun ra.mul.lo ((a Int) (b Int) (c Int) (d Int)) Int
+          (ra.min (ra.min (* a c) (* a d)) (ra.min (* b c) (* b d))))
+        (define-fun ra.mul.hi ((a Int) (b Int) (c Int) (d Int)) Int
+          (ra.max (ra.max (* a c) (* a d)) (ra.max (* b c) (* b d))))
+        (define-fun ra.rmin ((p Real) (q Real)) Real (ite (<= p q) p q))
+        (define-fun ra.rmax ((p Real) (q Real)) Real (ite (>= p q) p q))
+        (define-fun ra.rmul.lo ((a Real) (b Real) (c Real) (d Real)) Real
+          (ra.rmin (ra.rmin (* a c) (* a d)) (ra.rmin (* b c) (* b d))))
+        (define-fun ra.rmul.hi ((a Real) (b Real) (c Real) (d Real)) Real
+          (ra.rmax (ra.rmax (* a c) (* a d)) (ra.rmax (* b c) (* b d))))
+        (define-fun ra.constdiv.lo ((a Int) (b Int) (d Int)) Int
+          (ra.min (trunc.div a d) (trunc.div b d)))
+        (define-fun ra.constdiv.hi ((a Int) (b Int) (d Int)) Int
+          (ra.max (trunc.div a d) (trunc.div b d)))
+        (define-fun ra.boundeddiv.hi ((bound Int) (d Int)) Int (div (- bound 1) d))
+        """);
+    // The literal.
+    witnessRule(out, "LiteralSlot under INT: a literal v lies in [-|v|, |v|]",
+        List.of("(declare-const v Int)", "(assert (jint.in v))"), "v", "v",
+        "(- (ra.lit.m v))", "(ra.lit.m v)");
+    check(out, "LiteralSlot under DAY: a literal is the point [v, v]", "unsat",
+        List.of("(declare-const v Int)", "(assert (jint.in v))",
+            "(assert (not (and (<= v v) (<= v v) (= (jint.wrap v) v))))"));
+    // The literal day shifts.
+    witnessRule(out, "AddDays by a literal v: the lane's d + v is congruent to m + v in "
+        + "[lo + v, hi + v]", List.of(DAY_CHILD, "(declare-const v Int)", "(assert (jint.in v))"),
+        "(+ m v)", "(jint.add jc v)", "(ra.dayshift.lo lo hi v)", "(ra.dayshift.hi lo hi v)");
+    witnessRule(out, "SubDays by a literal v: the lane's d - v is congruent to m - v in "
+        + "[lo - v, hi - v]", List.of(DAY_CHILD, "(declare-const v Int)", "(assert (jint.in v))"),
+        "(- m v)", "(jint.sub jc v)", "(ra.dayshift.lo lo hi (- v))",
+        "(ra.dayshift.hi lo hi (- v))");
+    // next_day: d + 1 + floorMod(k - d, 7), k = dayOfWeek - 1 in [-1, 5].
+    var nextDay = List.of(DAY_CHILD, "(declare-const k Int)",
+        "(assert (and (<= (- 1) k) (<= k 5)))",
+        "(define-fun r () Int (jint.floorMod (jint.sub k jc) 7))",
+        "(define-fun jn () Int (jint.add (jint.add jc 1) r))");
+    witnessRule(out, "NextDay: the lane's d + 1 + floorMod(k - d, 7) is congruent to m + 1 + r "
+        + "in [lo + " + next.lo() + ", hi + " + next.hi() + "], whatever the child's wrap", nextDay,
+        "(+ m 1 r)", "jn", "(ra.nextday.lo lo hi)", "(ra.nextday.hi lo hi)");
+    check(out, "NextDay: the lane value itself can lie outside the interval, past int32", "sat",
+        List.of(DAY_CHILD, "(declare-const k Int)", "(assert (and (<= (- 1) k) (<= k 5)))",
+            "(define-fun r () Int (jint.floorMod (jint.sub k jc) 7))",
+            "(define-fun jn () Int (jint.add (jint.add jc 1) r))",
+            "(assert (not (and (<= (ra.nextday.lo lo hi) jn) (<= jn (ra.nextday.hi lo hi)))))"));
+    check(out, "NextDay: and lies inside it whenever the interval lies within int32, which is "
+        + "when the compiler reads it", "unsat",
+        List.of(DAY_CHILD, "(declare-const k Int)", "(assert (and (<= (- 1) k) (<= k 5)))",
+            "(assert (and (jint.in (ra.nextday.lo lo hi)) (jint.in (ra.nextday.hi lo hi))))",
+            "(define-fun r () Int (jint.floorMod (jint.sub k jc) 7))",
+            "(define-fun jn () Int (jint.add (jint.add jc 1) r))",
+            "(assert (not (and (<= (ra.nextday.lo lo hi) jn) (<= jn (ra.nextday.hi lo hi)))))"));
+    // The Thursday: d + 3 - floorMod(d + 3, 7).
+    witnessRule(out, "ThursdayOf: the lane's d + 3 - floorMod(d + 3, 7) is congruent to m + 3 - w "
+        + "in [lo " + thursday.lo() + ", hi + " + thursday.hi() + "]",
+        List.of(DAY_CHILD, "(define-fun w () Int (jint.floorMod (jint.add jc 3) 7))",
+            "(define-fun jn () Int (jint.sub (jint.add jc 3) w))"),
+        "(- (+ m 3) w)", "jn", "(ra.thursday.lo lo hi)", "(ra.thursday.hi lo hi)");
+    // The hull nodes: the lane takes one branch's value, whose witness is in the hull.
+    String twoDays = "(declare-const a Int) (declare-const b Int) (declare-const m1 Int)\n"
+        + "(declare-const c Int) (declare-const d Int) (declare-const m2 Int)\n"
+        + "(assert (and (<= a m1) (<= m1 b) (<= c m2) (<= m2 d)))\n"
+        + "(define-fun j1 () Int (jint.wrap m1)) (define-fun j2 () Int (jint.wrap m2))";
+    // One check per branch taken, rather than an ite over the wrapped lanes: stated with the
+    // ite, cvc5 decided Greatest and left Least unknown after ten seconds when run alone.
+    witnessRule(out, "Greatest under DAY, the left lane at least the right: Math.max is the left "
+        + "lane, congruent to the left witness, in the hull",
+        List.of(twoDays, "(assert (>= j1 j2))"), "m1", "j1", "(ra.hull.lo a b c d)",
+        "(ra.hull.hi a b c d)");
+    witnessRule(out, "Greatest under DAY, the right lane above the left: Math.max is the right "
+        + "lane, congruent to the right witness, in the hull",
+        List.of(twoDays, "(assert (< j1 j2))"), "m2", "j2", "(ra.hull.lo a b c d)",
+        "(ra.hull.hi a b c d)");
+    witnessRule(out, "Least under DAY, the left lane at most the right: Math.min is the left lane, "
+        + "congruent to the left witness, in the hull",
+        List.of(twoDays, "(assert (<= j1 j2))"), "m1", "j1", "(ra.hull.lo a b c d)",
+        "(ra.hull.hi a b c d)");
+    witnessRule(out, "Least under DAY, the right lane below the left: Math.min is the right lane, "
+        + "congruent to the right witness, in the hull",
+        List.of(twoDays, "(assert (> j1 j2))"), "m2", "j2", "(ra.hull.lo a b c d)",
+        "(ra.hull.hi a b c d)");
+    witnessRule(out, "IfElse under DAY, the condition true: the then branch's lane, congruent to "
+        + "its witness, in the hull", List.of(twoDays), "m1", "j1", "(ra.hull.lo a b c d)",
+        "(ra.hull.hi a b c d)");
+    witnessRule(out, "IfElse under DAY, the condition false or unknown: the else branch's lane, "
+        + "congruent to its witness, in the hull", List.of(twoDays), "m2", "j2",
+        "(ra.hull.lo a b c d)", "(ra.hull.hi a b c d)");
+    // datediff: both operands' intervals within int32, the difference symmetric.
+    witnessRule(out, "DateDiff: with both operands' intervals within int32, the lane's end - start "
+        + "is congruent to the witnesses' difference in [-m, m]", List.of(
+            "(declare-const elo Int) (declare-const ehi Int) (declare-const me Int)",
+            "(declare-const slo Int) (declare-const shi Int) (declare-const ms Int)",
+            "(assert (and (<= elo me) (<= me ehi) (<= slo ms) (<= ms shi)))",
+            "(assert (and (jint.in elo) (jint.in ehi) (jint.in slo) (jint.in shi)))",
+            "(define-fun jn () Int (jint.sub (jint.wrap me) (jint.wrap ms)))"),
+        "(- me ms)", "jn", "(- (ra.datediff.m elo ehi slo shi))",
+        "(ra.datediff.m elo ehi slo shi)");
+    // Int arithmetic, over two general intervals.
+    witnessRule(out, "IntArith ADD: the lane's x + y is congruent to mx + my in [a + c, b + d]",
+        List.of(INT_GENERAL), "(+ mx my)", "(jint.add jx jy)", "(ra.add.lo a b c d)",
+        "(ra.add.hi a b c d)");
+    witnessRule(out, "IntArith SUB: the lane's x - y is congruent to mx - my in [a - d, b - c]",
+        List.of(INT_GENERAL), "(- mx my)", "(jint.sub jx jy)", "(ra.sub.lo a b c d)",
+        "(ra.sub.hi a b c d)");
+    check(out, "IntArith SUB: the sum's interval, which the analysis answered until VARKA-281, "
+        + "misses differences of asymmetric operands", "sat",
+        List.of(INT_GENERAL, "(assert (and (<= 0 a) (<= 0 c)))",
+            "(assert (not (and (<= (ra.add.lo a b c d) (- mx my)) (<= (- mx my) "
+                + "(ra.add.hi a b c d)))))"));
+    check(out, "IntArith SUB: and is the difference's over symmetric ones", "unsat",
+        List.of(INT_GENERAL, "(assert (and (= a (- b)) (= c (- d))))",
+            "(assert (not (and (= (ra.add.lo a b c d) (ra.sub.lo a b c d)) "
+                + "(= (ra.add.hi a b c d) (ra.sub.hi a b c d)))))"));
+    out.append("\n; IntArith MUL, in two layers: the congruence as a ring identity and the wrap's\n"
+        + "; periodicity, and the corners over the reals.\n");
+    check(out, "IntArith MUL, layer A: with jx = mx - 2^32 q1 and jy = my - 2^32 q2, "
+        + "jx * jy - mx * my is 2^32 times Q = 2^32 q1 q2 - q1 my - q2 mx", "unsat",
+        List.of("(declare-const mx Int) (declare-const my Int)",
+            "(declare-const q1 Int) (declare-const q2 Int)",
+            "(define-fun jx () Int (- mx (* 4294967296 q1)))",
+            "(define-fun jy () Int (- my (* 4294967296 q2)))",
+            "(define-fun Q () Int (- (* 4294967296 q1 q2) (* q1 my) (* q2 mx)))",
+            "(assert (not (= (- (* jx jy) (* mx my)) (* 4294967296 Q))))"));
+    check(out, "IntArith MUL, layer B: a lane value is its witness less 2^32 times an integer, and "
+        + "jint.wrap(v + 2^32 Q) = jint.wrap(v)", "unsat",
+        List.of("(declare-const m Int) (declare-const v Int) (declare-const Q Int)",
+            "(assert (not (and (= (jint.wrap m) (- m (* 4294967296 (div (+ m 2147483648) "
+                + "4294967296))))",
+            "  (= (jint.wrap (+ v (* 4294967296 Q))) (jint.wrap v)))))"));
+    check(out, "IntArith MUL, the layers composed: a product P of the lanes and M of the witnesses "
+        + "with P - M = 2^32 Q and |M| <= K wrap alike, and M lies in [-K, K]", "unsat",
+        List.of("(declare-const P Int) (declare-const M Int) (declare-const Q Int)",
+            "(declare-const K Int)", "(assert (and (= (- P M) (* 4294967296 Q)) (<= (abs M) K)))",
+            "(assert (not (and (= (jint.wrap P) (jint.wrap M)) (<= (- K) M) (<= M K))))"));
+    String reals = "(declare-const a Real) (declare-const b Real) (declare-const c Real)\n"
+        + "(declare-const d Real) (declare-const x Real) (declare-const y Real)\n"
+        + "(assert (and (<= a x) (<= x b) (<= c y) (<= y d)))";
+    check(out, "IntArith MUL, the corners over the reals: the witnesses' product lies within "
+        + "the four corner products", "unsat",
+        List.of(reals, "(assert (not (and (<= (ra.rmul.lo a b c d) (* x y))",
+            "  (<= (* x y) (ra.rmul.hi a b c d)))))"));
+    check(out, "IntArith MUL, the corners: with b * d dropped it does not", "sat",
+        List.of(reals,
+            "(define-fun lo3 () Real (ra.rmin (ra.rmin (* a c) (* a d)) (* b c)))",
+            "(define-fun hi3 () Real (ra.rmax (ra.rmax (* a c) (* a d)) (* b c)))",
+            "(assert (not (and (<= lo3 (* x y)) (<= (* x y) hi3))))"));
+    witnessRule(out, "IntNeg: the lane's -x is congruent to -mx in [-b, -a], Integer.MIN_VALUE "
+        + "included", List.of(INT_ONE), "(- mx)", "(jint.neg jx)", "(ra.neg.lo a b)",
+        "(ra.neg.hi a b)");
+    for (int d : INT_DIVISORS) {
+      rule(out, "ConstDivide by " + d + ", over a symmetric interval, no hypothesis: the lane's "
+          + "x / d lies in [-(m1 / |d|), m1 / |d|]",
+          List.of(INT_CHILD, "(assert (>= m1 0))"), "(jint.div jx " + lit(d) + ")",
+          "(ra.constdiv.lo (- m1) m1 " + lit(d) + ")", "(ra.constdiv.hi (- m1) m1 " + lit(d) + ")");
+      rule(out, "ConstDivide by " + d + ", over an interval within int32, where the lane value is "
+          + "the witness: x / d lies in divideBy's interval",
+          List.of(INT_ONE, "(assert (and (jint.in a) (jint.in b)))"),
+          "(jint.div jx " + lit(d) + ")", "(ra.constdiv.lo a b " + lit(d) + ")",
+          "(ra.constdiv.hi a b " + lit(d) + ")");
+    }
+    for (int d : INT_DIVISORS) {
+      if (d < 2) {
+        continue;
+      }
+      rule(out, "BoundedDivide by " + d + ": x in [0, bound) gives x / d in [0, (bound - 1) / d]",
+          List.of("(declare-const x Int) (declare-const bound Int)",
+              "(assert (and (<= 0 x) (< x bound) (<= 2 bound) (jint.in bound)))"),
+          "(jint.div x " + d + ")", "0", "(ra.boundeddiv.hi bound " + d + ")");
+    }
+    out.append("\n; The stated rules against VarkaRangeAnalysis.range, on sample trees.\n");
+    equations(out, "each rule as stated is the analysis's own answer", analysisPins());
+    return out.toString();
+  }
+
+  /** The analysis's answers on sample trees, as equations over the stated rules. */
+  private static List<String> analysisPins() {
+    int[] lits = {10, -3, 7};
+    IntUnaryOperator table = i -> lits[i];
+    var c0 = new VarkaVectorIR.ColumnRef(0);
+    var c1 = new VarkaVectorIR.ColumnRef(1);
+    var slot0 = new VarkaVectorIR.LiteralSlot(0);
+    var slot1 = new VarkaVectorIR.LiteralSlot(1);
+    var slot2 = new VarkaVectorIR.LiteralSlot(2);
+    var eqs = new ArrayList<String>();
+    Range contract = day(c0, table);
+    String c = ends(contract);
+    pinEnds(eqs, "ra.nextday", c, day(new VarkaVectorIR.NextDay(c0, c1), table));
+    pinEnds(eqs, "ra.thursday", c, day(new VarkaVectorIR.ThursdayOf(c0), table));
+    var added = new VarkaVectorIR.AddDays(c0, slot0);
+    pinEnds(eqs, "ra.dayshift", c + " " + lits[0], day(added, table));
+    pinEnds(eqs, "ra.dayshift", c + " " + lit(-lits[0]),
+        day(new VarkaVectorIR.SubDays(c0, slot0), table));
+    pinEnds(eqs, "ra.hull", c + " " + ends(day(added, table)),
+        day(new VarkaVectorIR.Greatest(c0, added), table));
+    eqs.add("(= (ra.lit.m " + lit(lits[1]) + ") " + magnitude(slot1, table) + ")");
+    eqs.add("(= (ra.datediff.m " + c + " " + c + ") "
+        + magnitude(new VarkaVectorIR.DateDiff(c0, c1), table) + ")");
+    // The arithmetic, on symmetric operands (two literals) and on asymmetric ones (two bounded
+    // divisions, [0, 52] and [0, 3]), which is where SUB's old answer was the sum's.
+    var weeks = VarkaVectorIR.BoundedDivide.of(new VarkaVectorIR.DayOfYear(c0), 7, 367);
+    var quarters = VarkaVectorIR.BoundedDivide.of(new VarkaVectorIR.Month(c0), 4, 13);
+    for (VarkaVectorIR[] operands : new VarkaVectorIR[][] {{slot0, slot2}, {weeks, quarters}}) {
+      String ab = ends(intRange(operands[0], table));
+      String cd = ends(intRange(operands[1], table));
+      for (VarkaVectorIR.IntOp op : VarkaVectorIR.IntOp.values()) {
+        var node = new VarkaVectorIR.IntArith(op, VarkaVectorIR.Overflow.WRAP, operands[0],
+            operands[1]);
+        pinEnds(eqs, "ra." + op.name().toLowerCase(Locale.ROOT), ab + " " + cd,
+            intRange(node, table));
+      }
+      pinEnds(eqs, "ra.neg", ab,
+          intRange(new VarkaVectorIR.IntNeg(VarkaVectorIR.Overflow.FAIL, operands[0]), table));
+    }
+    var product = new VarkaVectorIR.IntArith(VarkaVectorIR.IntOp.MUL, VarkaVectorIR.Overflow.WRAP,
+        new VarkaVectorIR.Year(c0), slot2);
+    for (int d : INT_DIVISORS) {
+      pinEnds(eqs, "ra.constdiv", ends(intRange(product, table)) + " " + lit(d),
+          intRange(new VarkaVectorIR.ConstDivide(product, d), table));
+      pinEnds(eqs, "ra.constdiv", ends(intRange(weeks, table)) + " " + lit(d),
+          intRange(new VarkaVectorIR.ConstDivide(weeks, d), table));
+    }
+    eqs.add("(= (ra.boundeddiv.hi 367 7) " + lit(((VarkaValueRange.Bounded) intRange(weeks,
+        table)).hi()) + ")");
+    return eqs;
+  }
+
+  private static Range day(VarkaVectorIR node, IntUnaryOperator table) {
+    return VarkaRangeAnalysis.range(node, VarkaRangeAnalysis.Kind.DAY,
+        VarkaRangeAnalysis.GuardPolicy.NONE, table);
+  }
+
+  private static Range intRange(VarkaVectorIR node, IntUnaryOperator table) {
+    return VarkaRangeAnalysis.range(node, VarkaRangeAnalysis.Kind.INT,
+        VarkaRangeAnalysis.GuardPolicy.NONE, table);
+  }
+
+  private static long magnitude(VarkaVectorIR node, IntUnaryOperator table) {
+    return VarkaRangeAnalysis.magnitude(node, table).getAsLong();
+  }
+
+  private static String ends(Range r) {
+    VarkaValueRange.Bounded b = (VarkaValueRange.Bounded) r;
+    return lit(b.lo()) + " " + lit(b.hi());
+  }
+
+  /** The years the calendar's closed forms are pinned to the JVM at: the sign, century and era
+   * edges, the epoch, and the admitted and published ranges' ends. */
+  private static List<Integer> pinYears() {
+    var years = new LinkedHashSet<Integer>();
+    for (int y : new int[] {LocalDate.ofEpochDay(VarkaChrono.NARROW_MIN_DAYS).getYear(),
+        LocalDate.ofEpochDay(VarkaChrono.NARROW_MIN_DAYS).getYear() + 1, -401, -400, -399, -101,
+        -100, -99, -5, -4, -1, 0, 1, 3, 4, 99, 100, 101, 399, 400, 401, 1969, 1970, 1972, 2000,
+        2024, 9999, VarkaChrono.MAKE_DATE_MIN_YEAR, VarkaChrono.MAKE_DATE_MAX_YEAR,
+        LocalDate.ofEpochDay(VarkaChrono.NARROW_MAX_DAYS).getYear(),
+        LocalDate.ofEpochDay(VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS).getYear() - 1,
+        LocalDate.ofEpochDay(VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS).getYear()}) {
+      years.add(y);
+    }
+    return new ArrayList<>(years);
+  }
+
+  /**
+   * {@code range_calendar.smt2}: the calendar rules of {@code VarkaRangeAnalysis} over
+   * {@code java.time}'s own closed forms, which are pinned to the JVM.
+   */
+  static String rangeCalendar() {
+    int yMin = LocalDate.ofEpochDay(VarkaChrono.NARROW_MIN_DAYS).getYear();
+    int yMax = LocalDate.ofEpochDay(VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS).getYear();
+    int kMin = VarkaChrono.MONTH_ARITH_MIN_MONTHS;
+    int kMax = VarkaChrono.MONTH_ARITH_MAX_MONTHS;
+    int dMin = VarkaRangeAnalysis.MONTH_DAYS_MIN;
+    int dMax = VarkaRangeAnalysis.MONTH_DAYS_MAX;
+    VarkaRangeAnalysis.Shift lastDay = VarkaRangeAnalysis.LAST_DAY_SHIFT;
+    VarkaRangeAnalysis.Shift trunc = VarkaRangeAnalysis.TRUNC_SHIFT;
+    var out = new StringBuilder(LICENSE);
+    out.append("""
+        ; The calendar rules of VarkaRangeAnalysis (VARKA-281), over java.time's own closed forms:
+        ; LocalDate.isLeapYear, Month.length, LocalDate.toEpochDay with both of its sign branches
+        ; and plusMonths's floorDiv and resolvePreviousValid, transcribed from the JDK's source and
+        ; pinned to the JVM below at the sign, century and era edges and the ranges' ends. The
+        ; day rules each move a child's interval by a shift whose ends are the analysis's own
+        ; constants, the field rules answer a magnitude; the claims are over every valid date of
+        ; the admitted years, which cover the days the compiler admits a calendar node for,
+        ; [NARROW_MIN_DAYS, NARROW_DECOMPOSE_MAX_DAYS]. A rule narrowed by one is refuted beside
+        ; each claim. add_months with the month count symbolic is one check split by the signs of
+        ; the count, the year and the target year: as one check it takes Z3 12 s and cvc5 cannot
+        ; decide it under QF_NIA (VARKA-281.md 2.3); the file declares ALL. The weekday fields and
+        ; weekofyear are stated over the forms the lanes compute; that each form is java.time's
+        ; field, like every rule here, is VarkaRangeRulesSuite's sweep of the admitted range.
+        """);
+    out.append(rendered("ALL"));
+    out.append("""
+
+        (define-fun cal.leap ((y Int)) Bool
+          (and (= (mod y 4) 0) (or (not (= (mod y 100) 0)) (= (mod y 400) 0))))
+        (define-fun cal.mlen ((y Int) (m Int)) Int
+          (ite (= m 2) (ite (cal.leap y) 29 28)
+               (ite (or (= m 4) (= m 6) (= m 9) (= m 11)) 30 31)))
+        ; LocalDate.toEpochDay: 365 y plus the leap days, by floor for a non-negative year and by
+        ; Java's truncating / of the negative year for a negative one; the month's days by
+        ; (367 m - 362) / 12 less one or two past February; less DAYS_0000_TO_1970.
+        (define-fun cal.epoch ((y Int) (m Int) (d Int)) Int
+          (let ((yt (ite (>= y 0)
+                         (+ (* 365 y) (- (div (+ y 3) 4) (div (+ y 99) 100)) (div (+ y 399) 400))
+                         (- (* 365 y) (+ (- (trunc.div y (- 4)) (trunc.div y (- 100)))
+                                         (trunc.div y (- 400)))))))
+            (- (+ yt (div (- (* 367 m) 362) 12) (- d 1)
+                  (ite (> m 2) (ite (cal.leap y) (- 1) (- 2)) 0))
+               719528)))
+        ; The Monday on or before an epoch day: 1970-01-01 is a Thursday.
+        (define-fun cal.monday ((e Int)) Int (- e (jint.floorMod (jint.add e 3) 7)))
+        """);
+    var pins = new ArrayList<String>();
+    for (int y : pinYears()) {
+      for (int m = 1; m <= 12; m++) {
+        int len = LocalDate.of(y, m, 1).lengthOfMonth();
+        pins.add("(= (cal.mlen " + lit(y) + " " + m + ") " + len + ")");
+        for (int d : new int[] {1, 28, len}) {
+          pins.add("(= (cal.epoch " + lit(y) + " " + m + " " + d + ") "
+              + lit(LocalDate.of(y, m, d).toEpochDay()) + ")");
+        }
+      }
+    }
+    equations(out, "cal.epoch and cal.mlen are LocalDate.toEpochDay and lengthOfMonth", pins);
+    String date = "(declare-const y Int) (declare-const m Int) (declare-const d Int)\n"
+        + "(assert (and (<= " + lit(yMin) + " y) (<= y " + yMax + ") (<= 1 m) (<= m 12) (<= 1 d) "
+        + "(<= d (cal.mlen y m))))";
+    String target = "(define-fun t () Int (+ (* 12 y) (- m 1) k))\n"
+        + "(define-fun ty () Int (div t 12))\n"
+        + "(define-fun tm () Int (+ (- t (* 12 ty)) 1))\n"
+        + "(define-fun td () Int (ite (<= d (cal.mlen ty tm)) d (cal.mlen ty tm)))\n"
+        + "(define-fun shift () Int (- (cal.epoch ty tm td) (cal.epoch y m d)))";
+    String months = "(declare-const k Int)\n(assert (and (<= " + lit(kMin) + " k) (<= k " + kMax
+        + ")))";
+    out.append("\n; add_months by a literal k in [MONTH_ARITH_MIN_MONTHS, MONTH_ARITH_MAX_MONTHS]:"
+        + " plusMonths moves a day by\n; " + dMin + "k to " + dMax + "k days, in the order the "
+        + "sign puts them.\n");
+    for (String[] ks : new String[][] {{"k >= 0", "(>= k 0)"}, {"k < 0", "(< k 0)"}}) {
+      for (String[] ys : new String[][] {{"y >= 0", "(>= y 0)"}, {"y < 0", "(< y 0)"}}) {
+        for (String[] ts : new String[][] {{"ty >= 0", "(>= ty 0)"}, {"ty < 0", "(< ty 0)"}}) {
+          check(out, "add_months, " + ks[0] + ", " + ys[0] + ", " + ts[0] + ": the shift lies in ["
+              + "min(" + dMin + "k, " + dMax + "k), max(" + dMin + "k, " + dMax + "k)]", "unsat",
+              List.of(date, months, "(assert (and " + ks[1] + " " + ys[1] + "))", target,
+                  "(assert " + ts[1] + ")",
+                  "(define-fun lo () Int (ite (<= (* " + dMin + " k) (* " + dMax + " k)) (* " + dMin
+                      + " k) (* " + dMax + " k)))",
+                  "(define-fun hi () Int (ite (<= (* " + dMin + " k) (* " + dMax + " k)) (* " + dMax
+                      + " k) (* " + dMin + " k)))",
+                  "(assert (not (and (<= lo shift) (<= shift hi))))"));
+        }
+      }
+    }
+    // The neighbours name their witnesses - 31 January 2001 plus one month is 28 February, 1
+    // January 2001 plus one month 1 February - because a satisfiable search over the closed
+    // forms is what Z3 does not finish: left to find them it ran past 20 s alone, where cvc5
+    // took a third of a second.
+    check(out, "add_months: with " + (dMin + 1) + "k as the lower bound it does not, at 31 January "
+        + "2001 plus one month", "sat",
+        List.of(date, months, "(assert (and (= y 2001) (= m 1) (= d 31) (= k 1)))", target,
+            "(assert (not (<= (* " + (dMin + 1) + " k) shift)))"));
+    check(out, "add_months: with " + (dMax - 1) + "k as the upper bound it does not, at 1 January "
+        + "2001 plus one month", "sat",
+        List.of(date, months, "(assert (and (= y 2001) (= m 1) (= d 1) (= k 1)))", target,
+            "(assert (not (<= shift (* " + (dMax - 1) + " k))))"));
+    check(out, "add_months by a column count: the literal rule's interval over every count the "
+        + "guard admits lies in [" + dMax + " * MONTH_ARITH_MIN_MONTHS, " + dMax
+        + " * MONTH_ARITH_MAX_MONTHS]", "unsat",
+        List.of(months, "(declare-const s Int)",
+            "(assert (and (<= (ite (<= (* " + dMin + " k) (* " + dMax + " k)) (* " + dMin
+                + " k) (* " + dMax + " k)) s)",
+            "  (<= s (ite (<= (* " + dMin + " k) (* " + dMax + " k)) (* " + dMax + " k) (* "
+                + dMin + " k)))))",
+            "(assert (not (and (<= " + lit((long) dMax * kMin) + " s) (<= s "
+                + lit((long) dMax * kMax) + "))))"));
+    rule(out, "last_day: the last day of the month is " + lastDay.lo() + " to " + lastDay.hi()
+        + " days on", List.of(date), "(- (cal.epoch y m (cal.mlen y m)) (cal.epoch y m d))",
+        lit(lastDay.lo()), lit(lastDay.hi()));
+    rule(out, "trunc to the year: 1 January is " + (-trunc.lo()) + " to " + (-trunc.hi())
+        + " days back", List.of(date), "(- (cal.epoch y 1 1) (cal.epoch y m d))",
+        lit(trunc.lo()), lit(trunc.hi()));
+    check(out, "trunc to the quarter: its first day is inside the same bound", "unsat",
+        List.of(date, "(define-fun q1 () Int (+ (* 3 (div (- m 1) 3)) 1))",
+            "(define-fun shift () Int (- (cal.epoch y q1 1) (cal.epoch y m d)))",
+            "(assert (not (and (<= " + lit(trunc.lo()) + " shift) (<= shift " + lit(trunc.hi())
+                + "))))"));
+    check(out, "trunc to the month: its first day is inside the same bound", "unsat",
+        List.of(date, "(define-fun shift () Int (- (cal.epoch y m 1) (cal.epoch y m d)))",
+            "(assert (not (and (<= " + lit(trunc.lo()) + " shift) (<= shift " + lit(trunc.hi())
+                + "))))"));
+    check(out, "trunc to the week: the Monday on or before any int epoch day is inside the same "
+        + "bound", "unsat", List.of("(declare-const e Int)", "(assert (jint.in e))",
+            "(define-fun shift () Int (- (cal.monday e) e))",
+            "(assert (not (and (<= " + lit(trunc.lo()) + " shift) (<= shift " + lit(trunc.hi())
+                + "))))"));
+    VarkaValueRange.Bounded made = (VarkaValueRange.Bounded) VarkaRangeAnalysis.MAKE_DATE;
+    check(out, "make_date: MAKE_DATE's ends are 1 January of MAKE_DATE_MIN_YEAR and 31 December "
+        + "of MAKE_DATE_MAX_YEAR", "unsat", List.of(
+            "(assert (not (and (= (cal.epoch " + lit(VarkaChrono.MAKE_DATE_MIN_YEAR) + " 1 1) "
+                + lit(made.lo()) + ")",
+            "  (= (cal.epoch " + VarkaChrono.MAKE_DATE_MAX_YEAR + " 12 31) " + lit(made.hi())
+                + "))))"));
+    rule(out, "make_date: a valid date of a year the kernel's guard admits lies in MAKE_DATE",
+        List.of("(declare-const y Int) (declare-const m Int) (declare-const d Int)",
+            "(assert (and (<= " + lit(VarkaChrono.MAKE_DATE_MIN_YEAR) + " y) (<= y "
+                + VarkaChrono.MAKE_DATE_MAX_YEAR + ") (<= 1 m) (<= m 12) (<= 1 d) "
+                + "(<= d (cal.mlen y m))))"),
+        "(cal.epoch y m d)", lit(made.lo()), lit(made.hi()));
+    out.append("\n; The fields, over a day in the admitted range.\n");
+    String admitted = "(declare-const y Int) (declare-const m Int) (declare-const d Int)\n"
+        + "(assert (and (<= " + lit(yMin - 1) + " y) (<= y " + (yMax + 1) + ") (<= 1 m) (<= m 12) "
+        + "(<= 1 d) (<= d (cal.mlen y m))))\n"
+        + "(assert (and (<= " + lit(VarkaChrono.NARROW_MIN_DAYS) + " (cal.epoch y m d)) "
+        + "(<= (cal.epoch y m d) " + VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS + ")))";
+    // The year's interval is symmetric, as every INT answer is, and the admitted years are not:
+    // the magnitude is exact at the top and slack at the bottom (m8/SCOPE.md item 86), so the
+    // neighbours are the top end's and the bottom's slack is recorded as it is.
+    int yearMagnitude = VarkaChrono.YEAR_FIELD_MAGNITUDE;
+    check(out, "year: the year of an admitted day has magnitude at most YEAR_FIELD_MAGNITUDE",
+        "unsat", List.of(admitted,
+            "(assert (not (and (<= " + lit(-yearMagnitude) + " y) (<= y " + yearMagnitude
+                + "))))"));
+    check(out, "year: with the magnitude lowered by one it does not", "sat",
+        List.of(admitted, "(assert (not (<= y " + (yearMagnitude - 1) + ")))"));
+    check(out, "year: the low end is slack, since the admitted years start at " + yMin
+        + ": raising it to that year still holds", "unsat",
+        List.of(admitted, "(assert (not (<= " + lit(yMin) + " y)))"));
+    rule(out, "day_of_month: the day of the month lies in [1, "
+        + VarkaRangeAnalysis.DAY_OF_MONTH_MAGNITUDE + "]", List.of(admitted), "d", "1",
+        lit(VarkaRangeAnalysis.DAY_OF_MONTH_MAGNITUDE));
+    rule(out, "quarter: (m + 2) / 3 lies in [1, " + VarkaRangeAnalysis.QUARTER_MAGNITUDE + "]",
+        List.of(admitted), "(div (+ m 2) 3)", "1", lit(VarkaRangeAnalysis.QUARTER_MAGNITUDE));
+    rule(out, "day_of_year: the days since 1 January, plus one, lie in [1, "
+        + VarkaRangeAnalysis.DAY_OF_YEAR_MAGNITUDE + "]", List.of(admitted),
+        "(+ (- (cal.epoch y m d) (cal.epoch y 1 1)) 1)", "1",
+        lit(VarkaRangeAnalysis.DAY_OF_YEAR_MAGNITUDE));
+    rule(out, "month: the month lies in [1, " + VarkaRangeAnalysis.MONTH_MAGNITUDE + "]",
+        List.of(admitted), "m", "1", lit(VarkaRangeAnalysis.MONTH_MAGNITUDE));
+    out.append("\n; The weekday fields and the week, over the forms the lanes compute, for every"
+        + " int epoch day e;\n; that each form is java.time's field is VarkaRangeRulesSuite's"
+        + " sweep.\n");
+    String anyDay = "(declare-const e Int)\n(assert (jint.in e))";
+    rule(out, "dayofweek: (floorMod(e, 7) + 4) % 7 + 1, Sunday 1 to Saturday 7, lies in [1, "
+        + VarkaRangeAnalysis.DAY_OF_WEEK_MAGNITUDE + "]", List.of(anyDay),
+        "(+ (mod (+ (jint.floorMod e 7) 4) 7) 1)", "1",
+        lit(VarkaRangeAnalysis.DAY_OF_WEEK_MAGNITUDE));
+    rule(out, "the ISO weekday: floorMod(e + 3, 7) + 1, Monday 1 to Sunday 7, lies in [1, "
+        + VarkaRangeAnalysis.DAY_OF_WEEK_MAGNITUDE + "]", List.of(anyDay),
+        "(+ (jint.floorMod (jint.add e 3) 7) 1)", "1",
+        lit(VarkaRangeAnalysis.DAY_OF_WEEK_MAGNITUDE));
+    rule(out, "weekday: (floorMod(e, 7) + 3) % 7, Monday 0 to Sunday 6, lies in [0, "
+        + VarkaRangeAnalysis.WEEK_DAY_MAGNITUDE + "]", List.of(anyDay),
+        "(mod (+ (jint.floorMod e 7) 3) 7)", "0", lit(VarkaRangeAnalysis.WEEK_DAY_MAGNITUDE));
+    rule(out, "weekofyear: (doy - 1) / 7 + 1 over the Thursday's day of the year, in [1, "
+        + VarkaRangeAnalysis.DAY_OF_YEAR_MAGNITUDE + "], lies in [1, "
+        + VarkaRangeAnalysis.WEEK_OF_YEAR_MAGNITUDE + "]",
+        List.of("(declare-const doy Int)", "(assert (and (<= 1 doy) (<= doy "
+            + VarkaRangeAnalysis.DAY_OF_YEAR_MAGNITUDE + ")))"),
+        "(+ (div (- doy 1) 7) 1)", "1", lit(VarkaRangeAnalysis.WEEK_OF_YEAR_MAGNITUDE));
+    return out.toString();
+  }
+
+  /** A unit the {@code TIME} compiler divides or multiplies by, and its nanoseconds. */
+  private record TimeUnit(String name, long nanos) {
+  }
+
+  private static final List<TimeUnit> TIME_UNITS = List.of(
+      new TimeUnit("a microsecond", DateTimeConstants.NANOS_PER_MICROS),
+      new TimeUnit("a millisecond", DateTimeConstants.NANOS_PER_MILLIS),
+      new TimeUnit("a second", DateTimeConstants.NANOS_PER_SECOND),
+      new TimeUnit("a minute",
+          DateTimeConstants.NANOS_PER_SECOND * DateTimeConstants.SECONDS_PER_MINUTE),
+      new TimeUnit("an hour", DateTimeConstants.NANOS_PER_SECOND
+          * DateTimeConstants.SECONDS_PER_MINUTE * DateTimeConstants.MINUTES_PER_HOUR));
+
+  /**
+   * {@code ConstDivide.quotientBound()} as the {@code TIME} compiler's {@code remainderOfSixty}
+   * reads it: the bound of a day's quotient by {@code d}.
+   */
+  private static long quotientBound(long day, long d) {
+    var dividend = new VarkaVectorIR.ColumnRef(0, VarkaVectorIR.LaneType.LONG);
+    return new VarkaVectorIR.ConstDivide(dividend, d, day).quotientBound();
+  }
+
+  /**
+   * {@code time_bounds.smt2}: the six bounds {@code VarkaTimeCompiler} states on the long lane,
+   * under the {@code TIME} type's range.
+   */
+  static String timeBounds() {
+    long day = DateTimeConstants.NANOS_PER_DAY;
+    long minute = DateTimeConstants.SECONDS_PER_MINUTE;
+    var out = new StringBuilder(LICENSE);
+    out.append("""
+        ; The bounds VarkaTimeCompiler states on the long lane hold (VARKA-281), under the premise
+        ; that a TIME is a count of nanoseconds of day in [0, NANOS_PER_DAY), which is the type's
+        ; range (LocalTime.toNanoOfDay). The compiler's sites, restated with DateTimeConstants:
+        ;
+        ;   subtractTimes, timeDiff:  (end - start) / unit, bound DAY_OF_NANOS on the difference
+        ;   timeTrunc:                (t / unit) * unit, both in wrapping long arithmetic
+        ;   the field extracts:       t / HOUR, t / MINUTE, t / SECOND, each under its field's
+        ;                             limit, the latter two then x - (x / 60) * 60 under
+        ;                             quotientBound(x) = max(1, ceil(bound / divisor))
+        ;   timeToUnit:               t / unit, bound DAY_OF_NANOS on t
+        ;   timeFromUnits:            a count guarded to [0, (NANOS_PER_DAY - 1) / unit], times
+        ;                             the unit
+        ;
+        ; Each claim is linear: every divisor and unit is a constant, and quotientBound's bound is
+        ; symbolic. Beside each, its neighbour: the floor in place of the ceiling, a count one
+        ; past the guard, a bound one too narrow.
+        """);
+    out.append(RENDERED);
+    String time = "(declare-const t Int)\n(assert (and (<= 0 t) (< t " + day + ")))";
+    String times = "(declare-const e Int) (declare-const s Int)\n(assert (and (<= 0 e) (< e " + day
+        + ") (<= 0 s) (< s " + day + ")))";
+    check(out, "the dividend bound is one the long lane's forms honour: DAY_OF_NANOS is at most "
+        + "ConstDivide.EXACT_DIVIDEND_BOUND", "unsat",
+        List.of("(assert (not (<= " + day + " " + VarkaVectorIR.ConstDivide.EXACT_DIVIDEND_BOUND
+            + ")))"));
+    check(out, "subtractTimes, timeDiff: a difference of two times does not wrap and is under "
+        + "DAY_OF_NANOS in magnitude", "unsat",
+        List.of(times, "(assert (not (and (= (jlong.sub e s) (- e s)) (< (abs (- e s)) " + day
+            + "))))"));
+    check(out, "subtractTimes, timeDiff: and the difference reaches DAY_OF_NANOS - 1", "sat",
+        List.of(times, "(assert (= (- e s) " + (day - 1) + "))"));
+    for (TimeUnit u : TIME_UNITS) {
+      long unit = u.nanos();
+      check(out, "timeTrunc to " + u.name() + ": (t / unit) * unit does not wrap and is at most t",
+          "unsat", List.of(time,
+              "(define-fun q () Int (jlong.div t " + unit + "))",
+              "(assert (not (and (= (jlong.mul q " + unit + ") (* q " + unit + ")) (<= (* q " + unit
+                  + ") t) (<= 0 q))))"));
+    }
+    long hour = TIME_UNITS.get(4).nanos();
+    long min = TIME_UNITS.get(3).nanos();
+    long sec = TIME_UNITS.get(2).nanos();
+    rule(out, "hour: t / HOUR lies in [0, " + (day / hour - 1) + "]", List.of(time),
+        "(jlong.div t " + hour + ")", "0", lit(day / hour - 1));
+    rule(out, "minute: t / MINUTE lies in [0, " + (day / min - 1) + "]", List.of(time),
+        "(jlong.div t " + min + ")", "0", lit(day / min - 1));
+    rule(out, "second: t / SECOND lies in [0, " + (day / sec - 1) + "]", List.of(time),
+        "(jlong.div t " + sec + ")", "0", lit(day / sec - 1));
+    for (long d : new long[] {min, sec}) {
+      long qb = quotientBound(day, d);
+      check(out, "quotientBound: |x| < b gives |x / " + d + "| < max(1, ceil(b / " + d + ")), with "
+          + "b symbolic", "unsat", List.of("(declare-const x Int) (declare-const b Int)",
+              "(assert (and (>= b 1) (< (abs x) b) (jlong.in x)))",
+              "(define-fun c () Int (div (+ b " + (d - 1) + ") " + d + "))",
+              "(assert (not (< (abs (jlong.div x " + d + ")) (ite (>= c 1) c 1))))"));
+      check(out, "quotientBound: with the floor in place of the ceiling it does not", "sat",
+          List.of("(declare-const x Int) (declare-const b Int)",
+              "(assert (and (>= b 1) (< (abs x) b) (jlong.in x)))",
+              "(define-fun c () Int (div b " + d + "))",
+              "(assert (not (< (abs (jlong.div x " + d + ")) (ite (>= c 1) c 1))))"));
+      check(out, "quotientBound(DAY_OF_NANOS, " + d + ") is " + qb
+          + ", as ConstDivide.quotientBound computes it", "unsat",
+          List.of("(assert (not (= (div (+ " + day + " " + (d - 1) + ") " + d + ") " + qb
+              + ")))"));
+      rule(out, "remainderOfSixty: for x in [0, " + qb + "), x - (x / " + minute + ") * " + minute
+          + " in wrapping arithmetic is x mod " + minute + ", in [0, " + (minute - 1) + "]",
+          List.of("(declare-const x Int)", "(assert (and (<= 0 x) (< x " + qb + ")))",
+              "(define-fun r () Int (jlong.sub x (jlong.mul (jlong.div x " + minute + ") " + minute
+                  + ")))"),
+          "r", "0", lit(minute - 1), " (= r (mod x " + minute + "))");
+    }
+    for (TimeUnit u : TIME_UNITS) {
+      long unit = u.nanos();
+      check(out, "timeToUnit by " + u.name() + ": a time's quotient lies in [0, "
+          + ((day - 1) / unit) + "]", "unsat", List.of(time,
+              "(assert (not (and (<= 0 (jlong.div t " + unit + ")) (<= (jlong.div t " + unit + ") "
+                  + ((day - 1) / unit) + "))))"));
+    }
+    for (TimeUnit u : TIME_UNITS.subList(0, 3)) {
+      long unit = u.nanos();
+      long top = (day - 1) / unit;
+      check(out, "timeFromUnits by " + u.name() + ": a count in [0, " + top + "] times the unit "
+          + "does not wrap and is a time of day", "unsat",
+          List.of("(declare-const n Int)", "(assert (and (<= 0 n) (<= n " + top + ")))",
+              "(define-fun p () Int (* n " + unit + "))",
+              "(assert (not (and (= (jlong.mul n " + unit + ") p) (<= 0 p) (< p " + day
+                  + "))))"));
+      check(out, "timeFromUnits by " + u.name() + ": one count past the guard is not a time of "
+          + "day", "sat", List.of("(declare-const n Int)",
+              "(assert (= n " + (top + 1) + "))",
+              "(assert (not (< (* n " + unit + ") " + day + ")))"));
+    }
+    return out.toString();
   }
 
   // -----------------------------------------------------------------------------------------
