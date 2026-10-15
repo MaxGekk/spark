@@ -97,3 +97,103 @@ None.
 ## 8. Sequencing
 
 Plan; row; the suite and the page; the outcome.
+
+## 9. Outcome
+
+*15 October 2026.* The page is `### Troubleshooting` in `docs/sql-varka.md`; `VarkaRunbookSuite`
+(`sql/core`) walks each branch on a planted fault and prints what each step shows. The output below
+is trimmed from its run and from the command-line steps run afterwards on the files it left under
+`sql/core/target/varka-runbook`.
+
+### 9.1 The tree
+
+```
+wrong answer : Varka off = right? -> A1 compare, A2 dev/varka_emit.sh (masks), A3 fuzz case + shrinker
+slow query   : Varka off = fast?  -> B1 counters, B2 per-reason metrics, B3 EXPLAIN, B4 change data/query
+crash/error  : INTERNAL_ERROR (planning)     -> C1 context, report
+               "failed on this batch" warning -> C2 file, C3 --replay, C4 class dump + javap
+```
+
+### 9.2 Walk A: a wrong answer (`guardDayProducers=false`, a test-only emit option)
+
+Query `SELECT year(date_add(d, off)) AS y FROM varka_dates_far_offset`, whose second row adds
+-20,000,000 days.
+
+* A1, compare. Spark's own: `[56782, -52735, 2023, null, 1970, null]`. Varka on: `[56782, 49698,
+  2023, null, 1970, null]`. Varka off (`spark.sql.codegen.varka.enabled=false`): equal to Spark's.
+  The node's `numVarkaBatches / numFallbackBatchesDeclined` read `2 / 0`: nothing declined, so the
+  metrics cannot find this fault, only the comparison can.
+* A2, the compiled form. `dev/varka_emit.sh "year(date_add(d, off))" --columns d:date,off:int`:
+  `VectorMask` 5, 7, 4, 6 in `epilogueDense0`, `epilogueMasked0`, `loopDense0`, `loopMasked0`; with
+  `--options guardDayProducers=false`: 0 in all four, and 36 to 38 `IntVector` operations in both.
+  Shape hashes `aa2d7bfebc76b893` against `3c681b82df6a84ff`. This is the step that points at the
+  guard.
+* A3, the shrinker. No fault injector changes an answer and the fuzzers do not draw this fault,
+  so it was run on the planted emitter bug the repository proves it on (`misdescribeWordLiveness`):
+  `shrunk to lane=int roots=[(isNotNull col:0)] options={misdescribeWordLiveness=true} length=1`
+  from a drawn tree of three conjuncts, `(14 runs, 5 ms)`. Whether the fuzzers would find
+  `guardDayProducers=false` was not run (finding 3).
+
+### 9.3 Walk B: a slow query (the same query, the guard on)
+
+* B1: `numVarkaBatches = 1`, `numFallbackBatchesDeclined = 1`, `numVarkaRows = 3`,
+  `numFallbackRows = 3`; `fallbackTime` is not registered on this row-out node.
+* B2: `day-producer = 1`; `day-range`, `derived-input`, `forced`, `input-bound`, `int-overflow`,
+  `make-date`, `month-count`, `unrecognised`, `value-range` all `0`.
+* B3: `EXPLAIN FORMATTED` reads `Varka [1]: [y: fused]` for the query that declines at run time: a
+  decline is invisible to `EXPLAIN`. A projection with an unsupported entry reads `Varka [2]: [a:
+  fused, b: residual (unsupported expression: length(CAST(varka_dates.i AS STRING)))]`, and a
+  filter `... ((varka_dates_far_offset.off % 7) = 1): residual (unsupported expression: ...)`.
+* B4: no setting changes a decline; the page says so.
+
+### 9.4 Walk C: a crash
+
+* C1, planning (`VarkaExpressionCompiler.setFailForTesting`): `[INTERNAL_ERROR] Varka's compiler
+  failed while planning.` then `kind: planning`, `identity: projection [date_add(d#1107, 3) AS
+  a#1115] over [d#1107]`, `shape hash: none`, `options: the defaults`, `cause:
+  java.lang.IllegalArgumentException: injected Varka compiler failure`, `SQLSTATE: XX000`.
+* C2, run time (`misdescribeDataBytes=-4`, the kernel throws in the vector loop): the query answers
+  with the row engine's rows; the warning reads `The Varka SIMD kernels
+  VarkaFusedProjection_85b89e300101e4e1.java [(addDays col:0 lit:0)] (Varka_ProjectToRow_Stage7)
+  failed on this batch; falling back to the per-row path.`, `kind: kernel-failure`, `shape hash:
+  85b89e300101e4e1`, `options: misdescribeDataBytes=-4`, `batch: 3 rows, nulls per input [1]`,
+  `cause: java.lang.IndexOutOfBoundsException: Masked range check failed ...`, then `Wrote a
+  reproduction of this Varka failure (...) to .../varka-repro-85b89e300101e4e1-
+  indexoutofboundsexception-pid179269-f3915c.txt; replay it with dev/varka_emit.sh --replay ...`.
+  Four warnings for the two tasks' two batches each; one file.
+* C3, `dev/varka_emit.sh --replay <file>`: `rebuilt shape 85b89e300101e4e1 ... the emitter built
+  the failing class byte for byte / defined and linked the class / running the recorded batch of 3
+  rows / the kernel threw`, `REPRODUCED: the same signature`, exit 0. For the verify failure
+  (`dropStackMaps`): `verified the class as the admission does: 7 errors`, `REPRODUCED`.
+* C4, `classDumpDirectory`: one file, `VarkaFusedProjection_85b89e300101e4e1.class`; `javap -c -p`
+  prints the class (`run` branches on the null count to `runDense` or `runMasked`); `javap -v`
+  shows `VarkaDebugInfo` = `outputs=[(addDays col:0 lit:0)], numInputs=1, numLiterals=1`, `shape
+  85b89e300101e4e1`, `1=col:0 2=lit:0 3=(addDays 1 2)`.
+
+Not walked: the memory-violation row (needs `-Dvarka.sanitizeMemory=true`; row 315's end-to-end
+suite walks it to a replay), and the VM-flag steps of `SKILLS.md` (`-XX:+PrintCompilation`,
+`dev/varka_c2_report.py`, `--asm`, which needs hsdis): the page names them and does not use them in
+a walk, so they are marked here as not run.
+
+### 9.5 Findings
+
+1. **The shrinker has no entry for a user's query.** `VarkaShrinker` runs inside the fuzz suites
+   on cases they drew. The page says so. A row suggestion: a command that takes an expression, its
+   columns and a data file and shrinks a disagreement with the row engine as the fuzzers do.
+2. **A class the verifier rejects at planning is still a bare `java.lang.VerifyError`**, with a
+   reproduction file but no `INTERNAL_ERROR` and no context block. That is row 314b's work; the
+   page's table says so and the suite asserts it, so 314b will have to change both.
+3. **Whether the fuzzers see `guardDayProducers=false` is not known.** It is the one planted
+   fault of this kind, and no walk ran the fuzzers over it. A row suggestion with the shrinker
+   one above.
+4. **No fault injector changes an answer**; the wrong-answer walk uses an option that removes a
+   guard and is reachable only from a test (it is not a SQL configuration).
+5. **A runtime decline is invisible to `EXPLAIN`**, documented in the page; the metrics are the
+   only record.
+
+### 9.6 Predictions, scored
+
+1. **Held with two corrections.** Every step ran as written; the planning branch needed a second
+   planted fault (the verifier's) because a compiler bug and a bad class surface differently
+   (finding 2).
+2. **Held.** The five tests take under 6 s (3.9 s for the first, which builds the session).
