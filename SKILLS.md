@@ -143,6 +143,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A Varka suite in JUnit 5: `@VarkaSuite`, a sentence per test, and ScalaTest's lines](sql/varka/skills/testing-and-debugging.md#a-varka-suite-in-junit-5-varkasuite-a-sentence-per-test-and-scalatests-lines)
 * [A Varka node in the plan is not a kernel evaluating the expression](sql/varka/skills/testing-and-debugging.md#a-varka-node-in-the-plan-is-not-a-kernel-evaluating-the-expression)
 * [A kernel failure leaves a file you can replay, and where each failure first surfaces](sql/varka/skills/testing-and-debugging.md#a-kernel-failure-leaves-a-file-you-can-replay-and-where-each-failure-first-surfaces)
+* [A guard's domain is tested on partitions Spark cuts, with the status read off the JFR event](sql/varka/skills/testing-and-debugging.md#a-guards-domain-is-tested-on-partitions-spark-cuts-with-the-status-read-off-the-jfr-event)
 * [Cost predictions run optimistic: the calibration table](sql/varka/skills/testing-and-debugging.md#cost-predictions-run-optimistic-the-calibration-table)
 
 #### [What C2 does with these loops](sql/varka/skills/the-jit.md)
