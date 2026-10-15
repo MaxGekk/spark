@@ -19,7 +19,13 @@ package org.apache.spark.sql.execution
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.time.Duration
 
+import scala.jdk.CollectionConverters._
+import scala.util.Random
+
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaJitEvidence,
+  VarkaKernelWarmth, VarkaKernelWarmup, VarkaShapeCache}
 import org.apache.spark.sql.execution.VarkaSparkFuzz._
 
 /**
@@ -33,6 +39,12 @@ import org.apache.spark.sql.execution.VarkaSparkFuzz._
  * `partitionEvery`th composition with a filter also checks the
  * ternary partition on both engines. The planted-rollback test draws from a seed of its own,
  * `-Dvarka.sparkfuzz.plantedSeed`, so a run at another seed does not move it (VARKA-309).
+ *
+ * The shared sessions turn the kernel warm-up off, so the main test's kernels serve a shape's
+ * first batch, interpreted. The warmed arm (VARKA-327) turns it on, as production runs: each
+ * composition's first query on the row path while its kernel compiles, the next ones on the
+ * kernel, then the kernel over other data, every run against the row engine. Its budget is
+ * `-Dvarka.sparkfuzz.warmupIterations` (default 8, about ten seconds).
  */
 class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
 
@@ -54,6 +66,24 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
   private val plantedSeed =
     sys.props.get("varka.sparkfuzz.plantedSeed").map(_.toLong).getOrElse(20261008L)
   private var firstFailure: Option[Int] = None
+
+  /**
+   * The warmed arm's budget (VARKA-327): compositions run with the kernel warm-up on, each
+   * waiting out at least one warm-up, so seconds apiece where the main test's take milliseconds.
+   * `-Dvarka.sparkfuzz.warmupOnly=<iteration>` replays one, and
+   * `-Dvarka.sparkfuzz.jitEvidence=false` runs without the JIT recording a release reports.
+   */
+  private val warmupIterations =
+    sys.props.get("varka.sparkfuzz.warmupIterations").map(_.toInt).getOrElse(8)
+  private val warmupOnly = sys.props.get("varka.sparkfuzz.warmupOnly").map(_.toInt)
+  private val warmupJitEvidence = !sys.props.get("varka.sparkfuzz.jitEvidence").contains("false")
+  /**
+   * The warm-up's deadline in the warmed arm, `-Dvarka.sparkfuzz.warmupDeadlineSeconds`: ten
+   * seconds against production's sixty, because about one warm-up in fifteen waits it out
+   * (VARKA-327.md 2), while a small kernel that does compile gets its verdict in under a second.
+   */
+  private val warmupDeadline =
+    sys.props.get("varka.sparkfuzz.warmupDeadlineSeconds").map(_.toInt).getOrElse(10)
 
   private def kindOf(c: Case, partitions: Boolean, forces: Seq[Int]): Option[String] =
     disagreement(c.fixture, c.select, c.where, c.ansi, partitions, c.pivot.map(rowText), forces)
@@ -111,6 +141,90 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
         s"only $forcedApplied of $forcedRuns forced outputs changed the plan")
     }
     info(s"first disagreement at iteration ${firstFailure.getOrElse("none")}")
+    assert(failures.isEmpty, failures.mkString("\n"))
+  }
+
+  test(s"random compositions agree with the row engine on both sides of the warm-up handover " +
+      s"(seed $seed, $warmupIterations of them)") {
+    // The arm needs a JVM that warms kernels, as every JVM the suites run in does (VARKA-212).
+    assume(VarkaKernelWarmup.canWarm(), "this JVM cannot warm kernels")
+    val failures = scala.collection.mutable.ArrayBuffer.empty[String]
+    val verdicts = scala.collection.mutable.TreeMap.empty[String, Int]
+    var releasedEarly = 0
+    val counts = new WarmedCounts
+    val range = warmupOnly.map(k => k to k).getOrElse(0 until warmupIterations)
+    var evidence = if (warmupJitEvidence) Some(VarkaJitEvidence.start()) else None
+    try withWarmupDeadline(warmupDeadline) {
+      for (it <- range if failures.size < 3) {
+        val c = rectify(draw(rows, seed, it))
+        val later = laterData(c, new Random(~seed * 31L + it), safe = it % 2 == 0,
+          wide = (it / 2) % 2 == 1)
+        // Every composition starts from a cold shape, so that each one takes the handover.
+        VarkaShapeCache.invalidateAll()
+        val before = VarkaKernelWarmup.recentOutcomes().asScala.toSet
+        val result = warmedDisagreement(c, later, counts)
+        val outcomes = VarkaKernelWarmup.recentOutcomes().asScala.filterNot(before.contains)
+        outcomes.foreach { o =>
+          verdicts(o.state().toString) = verdicts.getOrElse(o.state().toString, 0) + 1
+        }
+        // A release at the deadline is not a failure here, only evidence for the open question
+        // of why a kernel misses its verdict (VARKA-295): the JIT's state at the release and,
+        // when the recording runs, its account of the kernel. The warm-up also releases a kernel
+        // with nothing to wait for, or one that failed; those are counted, not reported.
+        val (atDeadline, early) = outcomes.filter(_.state() == VarkaKernelWarmth.State.RELEASED)
+          .partition(o => o.queuedNanos() + o.runNanos() >= warmupDeadline * 1000000000L)
+        releasedEarly += early.size
+        atDeadline.zipWithIndex.foreach { case (o, n) =>
+          // The recording is read once, for the composition's first release: reading it stops it,
+          // and a new one would have missed every later release's warm-up.
+          val account = evidence match {
+            case Some(e) if n == 0 =>
+              val text = e.summary(VarkaShapeCache.classNameFor(o.shapeHash()),
+                "varka-kernel-warmup", Duration.ofSeconds(20))
+              e.close()
+              evidence = Some(VarkaJitEvidence.start())
+              text
+            case Some(_) => "JIT evidence read for this composition's first release"
+            case None => "JIT evidence not recorded"
+          }
+          // In the test's report rather than the log, whose lines the test logger cuts short.
+          // The JIT state is the last deadline release's, which this one is unless two were.
+          info(s"iteration $it: a kernel was released at the deadline without its verdict: $o; " +
+            s"${VarkaKernelWarmup.lastReleaseJitState()}; $account")
+        }
+        result.foreach { kind =>
+          // Not shrunk: each smaller case is a new shape and a new warm-up, seconds apiece. The
+          // seed and iteration replay it exactly, the other data included.
+          // A failure over the other data is stored with that data, and without the pivot,
+          // which is a row of the first data and was not checked there.
+          val overLater = kind.startsWith("over other data")
+          // Status `warmed`: the replay suite replays with the warm-up off, where this case's
+          // path is not taken, and fails on any status but its two, so a warmed reproducer
+          // cannot be kept there and pass for the wrong reason.
+          val text = render(Reproducer("warmed", s"seed $seed iteration $it, the warm-up on: " +
+            s"-Dvarka.sparkfuzz.seed=$seed -Dvarka.sparkfuzz.warmupOnly=$it", c.ansi, kind,
+            c.select, c.where, if (overLater) fixtureSql(later) else c.fixture,
+            if (overLater) None else c.pivot.map(rowText)))
+          val dir = getWorkspaceFilePath("sql", "core", "target", "varka-sparkfuzz")
+          Files.createDirectories(dir)
+          val file = dir.resolve(s"$seed-warmed-$it.sql")
+          Files.write(file, text.getBytes(StandardCharsets.UTF_8))
+          failures += s"$kind (seed $seed, iteration $it), reproducer written to $file:\n$text"
+        }
+      }
+    } finally {
+      evidence.foreach(_.close())
+    }
+    counts.summary.foreach(info(_))
+    info(s"warm-up verdicts: ${verdicts.map { case (k, n) => s"$k $n" }.mkString(", ")}, " +
+      s"of the releases $releasedEarly before the deadline")
+    // An arm whose shapes stopped reaching the kernel would compare the row engine with itself.
+    // Three in four compositions hand over at two seeds (VARKA-327.md 2); the rest have no
+    // Varka node, raise on both sides, or have every batch pruned, so half is far from the edge.
+    if (counts.compositions >= 50) {
+      assert(counts.handedOver * 2 >= counts.compositions,
+        s"only ${counts.handedOver} of ${counts.compositions} compositions were handed over")
+    }
     assert(failures.isEmpty, failures.mkString("\n"))
   }
 
@@ -209,27 +323,71 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     assert(parse(render(r)) == r)
   }
 
-  test("a forced output finds a rollback that truncates one input too far") {
-    // `misdescribeRollback` 3 makes a declining entry's rollback drop the input before its own,
-    // which changes answers; the unforced comparison meets that branch too rarely to see it
-    // (VARKA-296.md 2), and forcing every output of each composition does. Some compositions
-    // fail to emit under the planted rollback instead, and the row path answers them: a failure
-    // fallback this test causes, so it declares one (VARKA-275).
+  /**
+   * Runs `body` with `misdescribeRollback` 3 planted, which makes a declining entry's rollback drop
+   * the input before its own and so changes the kernel's answers, with `force` (an output, from 0)
+   * forced to decline as well. Some compositions fail to emit under the planted rollback instead,
+   * and the row path answers them: a failure fallback the caller causes, so it declares one
+   * (VARKA-275).
+   */
+  private def withPlantedRollback[T](force: Option[Int] = None)(body: => T): T = {
     val previous = VarkaColumnarToRowExec.currentEmitOptions
-    VarkaColumnarToRowExec.setEmitOptionsForTesting(previous.withMisdescribeRollback(3))
+    val planted = previous.withMisdescribeRollback(3)
+    VarkaColumnarToRowExec.setEmitOptionsForTesting(
+      force.fold(planted)(k => planted.withForceResidualAt(k + 1)))
     VarkaColumnarToRowExec.setFailureFallbackExpectedForTesting(true)
-    try {
-      val found = (0 until 300).iterator.map { it =>
-        val c = rectify(draw(rows, plantedSeed, it))
-        (it, kindOf(c, partitions = false, c.outputs.indices))
-      }.collectFirst { case (it, Some(kind)) => (it, kind) }
-      info(s"seed $plantedSeed: the planted rollback first changes an answer at composition " +
-        found.map(_._1).getOrElse("none of 300"))
-      assert(found.exists(_._2.startsWith("with an output forced to decline")), found)
-    } finally {
+    try body finally {
       VarkaColumnarToRowExec.setFailureFallbackExpectedForTesting(false)
       VarkaColumnarToRowExec.setEmitOptionsForTesting(previous)
     }
+  }
+
+  /**
+   * The first composition of the planted seed whose answer the planted rollback changes, with
+   * every output forced in turn, and the kind of the change; shared by the two tests below.
+   */
+  private lazy val plantedFirst: Option[(Int, String)] = withPlantedRollback() {
+    (0 until 300).iterator.map { it =>
+      val c = rectify(draw(rows, plantedSeed, it))
+      (it, kindOf(c, partitions = false, c.outputs.indices))
+    }.collectFirst { case (it, Some(kind)) => (it, kind) }
+  }
+
+  test("a forced output finds a rollback that truncates one input too far") {
+    // The unforced comparison meets the planted rollback's branch too rarely to see it
+    // (VARKA-296.md 2), and forcing every output of each composition does.
+    val found = plantedFirst
+    info(s"seed $plantedSeed: the planted rollback first changes an answer at composition " +
+      found.map(_._1).getOrElse("none of 300"))
+    assert(found.exists(_._2.startsWith("with an output forced to decline")), found)
+  }
+
+  test("the warmed arm finds a planted kernel fault after the handover, not before it") {
+    // The planted rollback changes what the kernel computes and nothing the row path does, so
+    // with the warm-up on the runs on the row path must pass and the first run with a kernel
+    // fail: the arm compares both sides of the switch, and keeps them apart.
+    assume(VarkaKernelWarmup.canWarm(), "this JVM cannot warm kernels")
+    val it = plantedFirst.map(_._1)
+      .getOrElse(fail(s"seed $plantedSeed: the planted rollback changed no answer in 300"))
+    val c = rectify(draw(rows, plantedSeed, it))
+    val k = c.outputs.indices.find { k =>
+      withPlantedRollback()(kindOf(c, partitions = false, Seq(k))).isDefined
+    }.getOrElse(fail(s"composition $it: no single forced output changes an answer"))
+    VarkaShapeCache.invalidateAll()
+    val counts = new WarmedCounts
+    // Two seconds of deadline: the planted kernel's warm-up can wait one out, and a release hands
+    // the shape to the kernel as a verdict does.
+    val found = withPlantedRollback(Some(k)) {
+      withWarmupDeadline(2) {
+        warmedDisagreement(c, laterData(c, new Random(plantedSeed), safe = true, wide = false),
+          counts)
+      }
+    }
+    info(s"composition $it, output $k forced: ${found.getOrElse("no disagreement")}")
+    // A shape that went to its kernel without a warm-up would pass the check below untested.
+    assert(counts.rowPathRuns > 0, "no run took the row path while the kernel warmed")
+    assert(found.exists(kind => kind.startsWith("after the handover to the kernel") ||
+      kind.startsWith("with one node on its kernel while another warms")), found)
   }
 
   test("a reproducer with a pivot parses back to what was rendered") {

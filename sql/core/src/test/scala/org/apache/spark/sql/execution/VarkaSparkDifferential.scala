@@ -19,9 +19,10 @@ package org.apache.spark.sql.execution
 
 import scala.util.Try
 
-import org.apache.spark.SparkThrowable
 import org.apache.spark.sql.{QueryTest, SparkSession}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaKernelWarmup,
+  VarkaTestWatchdog}
+import org.apache.spark.sql.internal.SQLConf
 
 /**
  * The check the random differential and its replay share (VARKA-262): a fixture registered and
@@ -56,11 +57,7 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
    */
   private def outcomeAndResidual(session: SparkSession, sql: String): (Outcome, Long) = {
     val df = session.sql(sql)
-    val out: Outcome = Try(df.collect().map(_.toString).sorted.toSeq).toEither.left.map { e =>
-      val chain = Iterator.iterate[Throwable](e)(_.getCause).takeWhile(_ != null).toSeq
-      chain.collectFirst { case t: SparkThrowable if t.getCondition != null => t.getCondition }
-        .getOrElse(e.getClass.getName)
-    }
+    val out = outcomeOf(df)
     val residual = Try(collect(df.queryExecution.executedPlan) { case v if isVarkaNode(v) => v }
       .flatMap(_.metrics.get("numResidualEntries")).map(_.value).sum).getOrElse(0L)
     (out, residual)
@@ -123,10 +120,7 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
       partitions: Boolean,
       pivot: Option[String] = None,
       forces: Seq[Int] = Nil): Option[String] = {
-    for (session <- Seq(spark, varkaSpark)) {
-      session.sql(fixture).createOrReplaceTempView("fz")
-      session.catalog.cacheTable("fz")
-    }
+    cacheFixture(fixture)
     try withAnsi(ansi) {
       val query = querySql(select, where)
       val off = outcome(spark, query)
@@ -162,7 +156,162 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
         }
       }
     } finally {
-      for (session <- Seq(spark, varkaSpark)) session.catalog.uncacheTable("fz")
+      uncacheFixture()
+    }
+  }
+
+  /** Registers `fixture` as the view `fz` in both sessions, and caches it. */
+  protected def cacheFixture(fixture: String): Unit = for (session <- Seq(spark, varkaSpark)) {
+    session.sql(fixture).createOrReplaceTempView("fz")
+    session.catalog.cacheTable("fz")
+  }
+
+  protected def uncacheFixture(): Unit =
+    for (session <- Seq(spark, varkaSpark)) session.catalog.uncacheTable("fz")
+
+  // ---- the warmed arm (VARKA-327) ---------------------------------------------------------
+
+  /** `VarkaKernelWarmup.DEADLINE_PROPERTY`, which is package-private to the warm-up. */
+  private val warmupDeadlineProperty = "varka.warmup.deadlineSeconds"
+
+  /** How long the warmed arm waits for the warm-up between runs: the deadline and a margin. */
+  private def warmupWaitMillis: Long = {
+    val deadline = sys.props.get(warmupDeadlineProperty).flatMap(_.toIntOption)
+      .filter(_ > 0).getOrElse(60)
+    (deadline + 30) * 1000L
+  }
+
+  /**
+   * One run on `varkaSpark`: its outcome, how many Varka nodes its plan has, and their input,
+   * warm-up, kernel and declined batches.
+   */
+  private case class WarmedRun(outcome: Outcome, nodes: Int, inputBatches: Long,
+      warmupBatches: Long, kernelBatches: Long, declined: Long)
+
+  private def warmedRun(sql: String): WarmedRun = {
+    val df = varkaSpark.sql(sql)
+    val out = outcomeOf(df)
+    val nodes = Try(collect(df.queryExecution.executedPlan) { case v if isVarkaNode(v) => v })
+      .getOrElse(Nil)
+    def total(name: String): Long = nodes.flatMap(_.metrics.get(name)).map(_.value).sum
+    WarmedRun(out, nodes.size, total("numInputBatches"), total("numWarmupBatches"),
+      total("numVarkaBatches"), total("numFallbackBatchesDeclined"))
+  }
+
+  /**
+   * The kind of disagreement `c` shows with the kernel warm-up on (VARKA-327), or None: the path
+   * production takes, where a new shape's batches take the row path while a background thread
+   * gets its kernel compiled, and later ones the kernel. The same query runs on `varkaSpark` until
+   * no Varka node of it waited on a warm-up, waiting for the warm-ups between runs, at most four
+   * runs: a filter's warm-up comes first, and a projection over it claims its own only once the
+   * filter serves Arrow batches. Every run is compared with the row engine. Then a shape that
+   * reached its kernel runs once more over `later`, data with the same nulls and new values, so
+   * that code compiled from one batch's profile meets a batch it was not compiled from, as
+   * production's later batches do. Nothing here reads the warm-up's verdict or its timing: a
+   * kernel released at the deadline serves batches as a compiled one does, and either way the
+   * answers must agree. How the runs went is added to `counts`.
+   */
+  protected def warmedDisagreement(
+      c: Case, later: Vector[Vector[String]], counts: WarmedCounts): Option[String] = {
+    val query = c.query
+    // The outputs over the pivot row alone, by the row engine, asked once for every run.
+    lazy val pivotAlone = c.pivot.filter(_ => c.where.isDefined).map { row =>
+      outcome(spark, s"SELECT ${c.select} FROM (${fixtureRows(Seq(rowText(row)))}) AS fz")
+    }
+    def compare(off: Outcome, run: WarmedRun, side: String, pivot: Boolean): Option[String] =
+      difference(off, run.outcome).orElse {
+        if (pivot) pivotAlone.flatMap(pivotMissing(off, run.outcome, _)) else None
+      }.map(why => s"$side, $why")
+    def await(): Unit = if (!VarkaKernelWarmup.awaitIdle(warmupWaitMillis)) counts.notIdle += 1
+    counts.compositions += 1
+    cacheFixture(c.fixture)
+    try withAnsi(c.ansi) {
+      withVarkaWarmup(counts) {
+        val off = outcome(spark, query)
+        var found: Option[String] = None
+        var runs = 0
+        var waited = true
+        var sawRowPath = false
+        var sawKernel = false
+        var last: WarmedRun = null
+        while (found.isEmpty && waited && runs < 4) {
+          val run = warmedRun(query)
+          last = run
+          runs += 1
+          waited = run.warmupBatches > 0
+          found = compare(off, run, sideOf(run), pivot = true)
+          if (waited) counts.rowPathRuns += 1
+          if (run.kernelBatches > 0) counts.kernelRuns += 1
+          sawRowPath ||= waited
+          sawKernel ||= run.kernelBatches > 0
+          if (waited) await()
+        }
+        if (sawRowPath && sawKernel) counts.handedOver += 1
+        if (!sawKernel && found.isEmpty) {
+          if (last.nodes == 0) counts.unfused += 1
+          else if (last.outcome.isLeft) counts.raised += 1
+          else if (last.inputBatches == 0) counts.noBatches += 1
+          else if (last.declined > 0) counts.declined += 1
+          else counts.stillWarming += 1
+        }
+        // A shape that never reached a kernel has nothing compiled to meet other data.
+        found.orElse(if (!sawKernel) None else {
+          uncacheFixture()
+          cacheFixture(fixtureSql(later))
+          val laterOff = outcome(spark, query)
+          val run = warmedRun(query)
+          counts.laterRuns += 1
+          if (run.warmupBatches > 0) {
+            counts.laterNewShape += 1
+            await()
+          }
+          compare(laterOff, run, s"over other data after the handover, ${sideOf(run)}",
+            pivot = false)
+        })
+      }
+    } finally {
+      uncacheFixture()
+    }
+  }
+
+  /**
+   * Which side of the handover served a run, as a disagreement's kind names it: the row path while
+   * every warming node waited, the kernel once none did, and a run with both - one node on its
+   * kernel while another warms, a filter's below a projection's - or with neither, every batch
+   * declined or pruned, named as such.
+   */
+  private def sideOf(run: WarmedRun): String =
+    (run.warmupBatches > 0, run.kernelBatches > 0) match {
+      case (true, false) => "on the row path while the kernel warms"
+      case (false, true) => "after the handover to the kernel"
+      case (true, true) => "with one node on its kernel while another warms"
+      case (false, false) => "with no batch on a kernel"
+    }
+
+  /**
+   * Runs `body` with the kernel warm-up on, which the shared sessions turn off (it matters only
+   * to `varkaSpark`), and restores the setting after waiting for the warm-ups `body` queued, so
+   * that none outlives it; a wait that times out is counted in `counts`.
+   */
+  protected def withVarkaWarmup[T](counts: WarmedCounts)(body: => T): T =
+    withBothConf(SQLConf.VARKA_WARMUP_ENABLED.key, "true") {
+      try body finally {
+        if (!VarkaKernelWarmup.awaitIdle(warmupWaitMillis)) counts.notIdle += 1
+      }
+    }
+
+  /**
+   * Runs `body` with the warm-up's deadline at `seconds`, restoring what was set before. The
+   * warmed arm shortens it: about one small kernel in fifteen never gets its verdict and waits
+   * out the whole deadline, a minute in production, and a release at any deadline hands the
+   * shape to the kernel just as a verdict does, so the answers compared are the same.
+   */
+  protected def withWarmupDeadline[T](seconds: Int)(body: => T): T = {
+    val previous = sys.props.get(warmupDeadlineProperty)
+    sys.props(warmupDeadlineProperty) = seconds.toString
+    try body finally previous match {
+      case Some(value) => sys.props(warmupDeadlineProperty) = value
+      case None => sys.props.remove(warmupDeadlineProperty)
     }
   }
 }

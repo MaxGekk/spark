@@ -17,9 +17,7 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
-import java.nio.file.Files
-
-import scala.jdk.CollectionConverters._
+import java.nio.file.{Files, Path}
 
 import jdk.jfr.consumer.{RecordedEvent, RecordingFile}
 
@@ -34,9 +32,9 @@ object VarkaJfrTestSupport {
   /**
    * Runs `body` inside a fresh recording with exactly `events` enabled - by class, so a
    * renamed `@Name` breaks these tests at compile time instead of leaving stale string
-   * filters - and returns the body's result with everything recorded. The recording is
-   * closed on every path: a recording leaked past a failing assertion would keep collecting
-   * the rest of the shared test JVM's events.
+   * filters - and returns the body's result with the events of those classes recorded. The
+   * recording is closed on every path: a recording leaked past a failing assertion would keep
+   * collecting the rest of the shared test JVM's events.
    */
   def withJfrRecording[T](events: Class[_ <: jdk.jfr.Event]*)(body: => T)
       : (T, Seq[RecordedEvent]) = {
@@ -49,13 +47,36 @@ object VarkaJfrTestSupport {
       val dump = Files.createTempFile("varka-jfr", ".jfr")
       try {
         recording.dump(dump)
-        (result, RecordingFile.readAllEvents(dump).asScala.toSeq)
+        (result, readEvents(dump, events.map(nameOf).toSet))
       } finally {
         Files.deleteIfExists(dump)
       }
     } finally {
       recording.close()
     }
+  }
+
+  /**
+   * The dump's events of the named types, read one at a time and the rest dropped as they are
+   * read: a recording's dump holds every event the JVM recorded while it ran, those another
+   * recording open at the time enabled included, so under `VarkaJitEvidence`'s recording of
+   * every inlining decision and allocation sample a whole dump in memory would be those by the
+   * million.
+   */
+  private def readEvents(dump: Path, names: Set[String]): Seq[RecordedEvent] = {
+    val kept = Seq.newBuilder[RecordedEvent]
+    val file = new RecordingFile(dump)
+    try {
+      while (file.hasMoreEvents) {
+        val event = file.readEvent()
+        if (names.contains(event.getEventType.getName)) {
+          kept += event
+        }
+      }
+    } finally {
+      file.close()
+    }
+    kept.result()
   }
 
   /** Whether a recorded event came from the given event class, matched through its `@Name`. */
