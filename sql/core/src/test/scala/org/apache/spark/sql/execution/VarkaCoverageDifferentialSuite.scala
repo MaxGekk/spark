@@ -829,6 +829,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
    * the row path of the batch whose status is the last, and the batches after it never ran. The
    * may case is greedy: a may-only batch ahead of a must batch whose status it also admits would
    * take that status; no coverage row produces a may-only batch, so nothing decides it yet.
+   * After a raise the check stops at the last status, so a raising batch that committed no event
+   * is not told apart from an earlier batch that raised.
    */
   private def statusesAgree(
       verdicts: Seq[Verdict], statuses: Seq[Int], raised: Boolean): Boolean = {
@@ -975,6 +977,17 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
           val musts = verdicts.map(_.must).filter(_ != 0)
           mayBatches += verdicts.count(_.may != 0)
           val raised = actual.isInstanceOf[Raised]
+          // The domain itself is what is held here: no batch inside it or under IS NULL may be
+          // one the verdict condemns, and every batch outside it must be, so a domain that is
+          // too wide or too narrow disagrees with the guards' own verdict.
+          if (partition != "outside" && (musts.nonEmpty || verdicts.exists(_.may != 0))) {
+            findings += s"$where: the domain admits batches the verdict condemns: " +
+              verdicts.map(render).mkString("; ")
+          }
+          if (partition == "outside" && !verdicts.forall(_.must != 0)) {
+            findings += s"$where: the domain excludes batches the verdict answers: " +
+              verdicts.map(render).mkString("; ")
+          }
           if (!statusesAgree(verdicts, statuses, raised)) {
             findings += s"$where: declined with ${describe(statuses)} where the verdicts, " +
               s"batch by batch, are ${verdicts.map(render).mkString("; ")}" +

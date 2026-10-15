@@ -269,8 +269,8 @@ carry - `VarkaLoopEmitter.guardsForTest` on each kernel of `compilePartial` (or 
 `fused`) under the defaults, and `CompiledVarkaProjection.inputBounds` for the evaluator's own
 bound - and the count is the admission check's, guard for guard: 15 of 92. Int overflow 8 (`i + 1`,
 `i - 1`, `-i`, `year(d) + i`, `abs(ym)`, `ym - ymm`, `extract(YEAR FROM ym) - 1`, and `d - ym`
-with the month count as well), month count 3 (`add_months(d, i)`, `d + ym`, `d - ym`), value range
-3 (the two `time_from_*` round trips and `t + INTERVAL`), `make_date` 1 and the input bound 1
+with the month count as well; so counted in both groups, these are 16 guards on 15 rows), month
+count 3 (`add_months(d, i)`, `d + ym`, `d - ym`), value range 3 (the two `time_from_*` round trips and `t + INTERVAL`), `make_date` 1 and the input bound 1
 (`d + CAST(i AS INTERVAL DAY)`). No predicate row carries one.
 
 **What was built.**
@@ -407,3 +407,14 @@ subtract after `extract(YEAR FROM ym)` (a quotient within +/-178956970). Each co
 a mask per lane group for a decline that cannot happen; a range analysis that knew a `TIME`'s
 range and a `ConstDivide`'s quotient would take them off. For the scope catalogue, or for row 281
 if its analyses reach operand ranges; not widened here.
+
+**Review** (`/code-review high` on the branch, before the pull request). Of eight findings, five
+fixed: the check never held the domain itself to the partitions - a domain too wide or too narrow
+agreed with the kernel because the verdict does not read the domain - so a batch inside the domain
+or under `IS NULL` that the verdict condemns, and a batch outside that it answers, are findings now
+(all 232 tests still pass under the defaults and the four configurations); a stale comment ("seven
+guards") and the recount that did not sum (`d - ym` is in two groups: 16 guards on 15 rows); the
+skills file's claim of seventeen-row batches, which was never run; and the domain's resolution now
+checks input types as well. Recorded, not changed: after a raise the check stops at the last
+status, so a raising batch that committed no event is not told apart from an earlier one that
+raised; a wrapped lane gives `may`, never `must`; and the `may` count is reported, not asserted.

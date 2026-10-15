@@ -379,7 +379,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
         case (Some(d), _) =>
           val resolved = Try(VarkaSqlResolve.resolve(CatalystSqlParser.parseExpression(d), columns))
           resolved.toEither match {
-            case Right(e) if e.dataType == BooleanType => None
+            case Right(e) if e.dataType == BooleanType && e.checkInputDataTypes().isSuccess =>
+              None
             case Right(e) =>
               Some(s"${row.sql}: the domain `$d` is a ${e.dataType.sql}, not a boolean")
             case Left(t) => Some(s"${row.sql}: the domain `$d` does not resolve: ${t.getMessage}")
@@ -394,8 +395,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     assert(findings.isEmpty,
       "the domain column disagrees with the guards the kernels carry:\n  " +
         findings.mkString("\n  "))
-    // Counted, not assumed: rows on both sides, and the seven guards' reasons all represented
-    // somewhere, or the check would hold a table that carries no guard to nothing.
+    // Counted, not assumed: rows on both sides, and the five reasons the table's rows carry all
+    // represented somewhere, or the check would hold a table that carries no guard to nothing.
     val guarded = all.filter(_._2.domain.isDefined)
     assert(guarded.nonEmpty && guarded.size < all.size, s"${guarded.size} of ${all.size} guarded")
     val reasons = guarded.flatMap { case (f, r) => guardsOf(f, r) }.toSet

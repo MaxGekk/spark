@@ -1203,8 +1203,7 @@ the kernel's status to `VarkaGuardSpec`'s verdict on every batch. What it took:
 
 To date every guarded row answers inside its domain and where it is unknown with nothing
 declined, and declines every batch outside with exactly the status the verdict calls for, in a
-projection and in a filter, at one batch per partition and at one, three and seventeen rows a
-batch.
+projection and in a filter, at one batch per partition and at one and three rows a batch.
 
 ## Cost predictions run optimistic: the calibration table
 
