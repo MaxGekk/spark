@@ -1219,6 +1219,55 @@ exception inside a kernel and a memory-sanitizer violation each write a reproduc
   checked inside a window, so a harness that registers its buffers and then writes their contents
   through a mapping reports its own write as a violation.
 
+## A guard's domain is tested on partitions Spark cuts, with the status read off the JFR event
+
+*Added on 14 October 2026 from VARKA-279's second half (`m7/VARKA-279.md` 9.2).* Each coverage
+row whose kernel can decline a batch names its domain in `coverage.json`, and
+`VarkaCoverageDifferentialSuite` runs it under the domain, its negation and `IS NULL`, holding
+the kernel's status to `VarkaGuardSpec`'s verdict on every batch. What it took:
+
+- **Cut the partitions as cached views, not as `WHERE` clauses on the query.** A verdict is per
+  batch, so a batch has to lie wholly inside or wholly outside the domain. A `WHERE` over the
+  same scan does not give that: the kernel computes the guarded expression on the lanes the
+  filter rejects too (the right side of an AND is not qualified by its left, `m8/SCOPE.md` item
+  96), and a domain predicate Varka cannot fuse would leave the whole projection to Spark. A
+  partition materialized once by Spark into its own cached view is what a kernel then reads,
+  and the three views are checked to cut the fixture by `rid`.
+- **Read a declined batch's status off the JFR fallback event.** Where the row path then raises,
+  as it does outside most domains under ANSI, the task fails and its SQL metrics are never
+  merged; the evaluator commits `VarkaFallbackEvent` with the status before the row path runs.
+  `VarkaProjectExecSuite` read its decline that way; the pattern is now
+  `VarkaJfrTestSupport.withJfrRecording` around the one Varka query. Set
+  `spark.sql.codegen.varka.emit.exactRefusalStatus` on the session, so that a status is exactly
+  the verdict's must bits and the comparison is an equality, not a subset test.
+- **Materialize every view before recording.** A cached view built lazily inside the recording
+  runs its own filter kernel, whose events then sit beside the query's.
+- **Give the verdict the kernel's view of the rows.** Compile the node's own expressions, the
+  optimized form, against the scan's pruned output under the session's emit options, and read
+  the rows with `executeCollect` on exactly those columns - epoch days, month counts,
+  nanoseconds - cut into batches of the session's Arrow batch size in the cached order. The
+  evaluator's input bound is applied first, as the runner applies it: a live lane outside it
+  declines with `STATUS_INPUT_BOUND` and the kernel's guards never run.
+- **Some domains are total.** Four of the fifteen guards no value of the column type can trip:
+  the time conversions' range guards, whose bound is the day the type already lies in, and the
+  checked subtract after `extract(YEAR FROM ym)`, whose quotient is within +/-178956970. Their
+  domains are still written, their outside partition is empty by construction, and a list with
+  reasons polices the emptiness both ways: an unlisted empty partition fails, and a listed one
+  with rows fails as stale.
+- **Run the small Arrow batch sizes; one batch per partition hides a per-row disagreement.** A
+  batch's verdict is the OR of its rows', so a row whose own verdict disagrees with the kernel
+  passes as long as another row in the batch supplies the missing bit. The matrix's
+  `arrowBatchSize=1` found what the defaults could not: above an overflowed FAIL negation the
+  kernel's lane holds the wrapped value, stays valid, and the month count fires on it, while the
+  reference evaluator has no value for the lane and the verdict said nothing. `VarkaGuardSpecs`
+  now allows a guard above an overflowed FAIL node to fire (`overflowedBelow`), through the taken
+  arm only. And under ANSI the first declined batch's row path raises and the task stops, so the
+  events are a prefix of the per-batch verdicts; the check accepts the prefix only after a raise.
+
+To date every guarded row answers inside its domain and where it is unknown with nothing
+declined, and declines every batch outside with exactly the status the verdict calls for, in a
+projection and in a filter, at one batch per partition and at one and three rows a batch.
+
 ## Cost predictions run optimistic: the calibration table
 
 *Added on 13 October 2026 from milestone 7's halfway review (`m7/PLAN.md` 9.2 and 9.5).* A plan

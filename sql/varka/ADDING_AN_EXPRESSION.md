@@ -110,7 +110,12 @@ either be bounded at compile time or carry a runtime guard on its own result.
 
 **7. Add the expression to the coverage table.** Add a row to `VarkaCoverageSuite`'s
 `families` list, in the family it belongs to, with a note if its support is
-conditional. Then regenerate:
+conditional, and with a `domain` if its kernel can decline a batch (step 6's
+guard): the predicate inside which the kernel answers, its bounds rendered from
+the constants the guard reads. The suite fails a guarded row that names none, and
+`VarkaCoverageDifferentialSuite` then runs the row under the domain, its negation
+and `IS NULL` over a fixture that straddles every guard's bound - add rows there
+if the new guard's bound is one the fixture does not reach. Then regenerate:
 `VARKA_COVERAGE_REGEN=true build/sbt 'catalyst/testOnly *VarkaCoverageSuite'`,
 which rewrites the table in `docs/sql-varka.md` and `sql/varka/coverage.json`.
 

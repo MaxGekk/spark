@@ -32,7 +32,9 @@ import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaPredicate
   VarkaExpressionCompiler, VarkaOutputSpec}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.{ForwardedOutput,
   FusedOutput, KernelOutput, ResidualOutput}
-import org.apache.spark.sql.types.{DateType, DayTimeIntervalType, IntegerType, LongType, TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
+import org.apache.spark.sql.catalyst.util.DateTimeConstants.{NANOS_PER_DAY, NANOS_PER_MICROS, NANOS_PER_MILLIS}
+import org.apache.spark.sql.types.{BooleanType, DateType, DayTimeIntervalType, IntegerType, LongType, TimeType, YearMonthIntervalType}
 import org.apache.spark.util.Utils
 
 /**
@@ -99,21 +101,48 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
    * spelling produces directly because Spark's optimizer, not its parser, creates it. Such a
    * row also gives `executable`, SQL that a query can run and that the optimizer turns into the
    * same expression, so that `VarkaCoverageDifferentialSuite` can run every row of the table.
+   *
+   * `domain` is the predicate inside which the row's kernel answers, for a row whose kernel can
+   * decline a batch (VARKA-279 3.3): outside it the batch goes to the row engine, which answers
+   * or raises as Spark does. A row with no guard has none, and the test below holds the two to
+   * each other. Its bounds are rendered from the constants the emitter and the compiler read
+   * (`VarkaChrono`, the lanes' ranges, the time guards' day), so a moved bound regenerates the
+   * table rather than leaving it stale. Where the two modes differ it is ANSI's, the mode this
+   * suite resolves the rows under (Spark's default): the checked int arithmetic and `make_date`'s
+   * date check exist only there, and the legacy mode wraps or nulls as Spark does with no guard.
    */
   private case class Row(
       sql: String,
       note: String = "",
       built: Option[Expression] = None,
-      executable: Option[String] = None)
+      executable: Option[String] = None,
+      domain: Option[String] = None)
 
   private case class Family(title: String, predicates: Boolean, rows: Seq[Row])
+
+  // --- the guarded rows' bounds, as SQL --------------------------------------------------------
+
+  /** `INTERVAL 'y-m' YEAR TO MONTH` for a month count, with its sign ahead of the years. */
+  private def ymLiteral(months: Long): String = {
+    val magnitude = math.abs(months)
+    s"INTERVAL '${if (months < 0) "-" else ""}${magnitude / 12}-${magnitude % 12}' YEAR TO MONTH"
+  }
+
+  private val dayLimit = VarkaChrono.INTERVAL_DAY_LIMIT_DAYS
+  private val minMonths = VarkaChrono.MONTH_ARITH_MIN_MONTHS
+  private val maxMonths = VarkaChrono.MONTH_ARITH_MAX_MONTHS
+  /** The largest count of a unit inside the day: the time conversions' range guard. */
+  private def dayOf(nanosPerUnit: Long): Long = (NANOS_PER_DAY - 1) / nanosPerUnit
 
   private val families: Seq[Family] = Seq(
     Family("Day arithmetic", predicates = false, Seq(
       Row("date_add(d, 3)"),
-      Row("date_add(d, i)", "a column offset, under a per-batch bound on its range"),
+      Row("date_add(d, i)", "a column offset with no bound: the day sum wraps as Spark's own "
+        + "`+` does, and only a calendar node reading such a sum needs the range guard"),
       Row("date_sub(d, 5)"),
-      Row("d + CAST(i AS INTERVAL DAY)", "the day-interval spelling of a column offset"),
+      Row("d + CAST(i AS INTERVAL DAY)", "the day-interval spelling of a column offset; past the "
+        + "bound the cast itself throws in every mode, so the batch declines and the row engine "
+        + "raises", domain = Some(s"i BETWEEN -$dayLimit AND $dayLimit")),
       Row("datediff(d2, d)"),
       Row("unix_date(d)"),
       Row("date_from_unix_date(unix_date(d))"))),
@@ -131,7 +160,9 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("extract(YEAROFWEEK FROM d)"),
       Row("last_day(d)"),
       Row("next_day(d, 'MONDAY')", "the day name must be a literal"),
-      Row("make_date(2021, i, 1)"),
+      Row("make_date(2021, i, 1)", "the month under ANSI: an invalid date declines the batch and "
+        + "the row engine raises; the legacy form answers null and declines nothing",
+        domain = Some("i BETWEEN 1 AND 12")),
       Row("trunc(d, 'YEAR')"),
       Row("trunc(d, 'MONTH')"),
       Row("trunc(d, 'QUARTER')"),
@@ -139,32 +170,42 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
 
     Family("Months and year-month intervals", predicates = false, Seq(
       Row("add_months(d, 3)"),
-      Row("add_months(d, i)"),
+      Row("add_months(d, i)", "a column month count, inside the range the month arithmetic's "
+        + "magic divide is exact over", domain = Some(s"i BETWEEN $minMonths AND $maxMonths")),
       Row("d + INTERVAL 3 MONTH"),
-      Row("d + ym"),
-      Row("d - ym"),
+      Row("d + ym", "the interval's month count, under the same range",
+        domain = Some(s"ym BETWEEN ${ymLiteral(minMonths)} AND ${ymLiteral(maxMonths)}")),
+      Row("d - ym", "the negated count under the range, so the bounds change sides",
+        domain = Some(s"ym BETWEEN ${ymLiteral(-maxMonths)} AND ${ymLiteral(-minMonths)}")),
       Row("make_ym_interval(year(d), month(d))",
         "the operands must be bounded - over a bare int column the checked multiply inside "
           + "it keeps its overflow test and declines"),
       Row("make_ym_interval(year(d), month(d)) * 2",
         "a checked multiply, so bounded operands again: `ym * 2` over a stored interval "
           + "column declines"),
-      Row("abs(ym)"),
-      Row("ym - ymm"),
+      Row("abs(ym)", "interval arithmetic is exact in every mode: the one count whose negation "
+        + "overflows declines", domain = Some(s"ym > ${ymLiteral(Int.MinValue)}")),
+      Row("ym - ymm", "exact in every mode: a difference outside the month count's int declines",
+        domain = Some("CAST(ym AS BIGINT) - CAST(ymm AS BIGINT) BETWEEN "
+          + s"${Int.MinValue} AND ${Int.MaxValue}")),
       Row("CAST(ymy AS INTERVAL MONTH)"),
       Row("extract(YEAR FROM ym)",
         "a division by twelve over a month count nothing bounds, so the calendar's "
           + "range-narrowed magic cannot serve it; a multiply-high through 64-bit lanes does"),
-      Row("extract(YEAR FROM ym) - 1", "the quotient feeding further int arithmetic"))),
+      Row("extract(YEAR FROM ym) - 1", "the quotient feeding further int arithmetic, checked "
+        + "under ANSI; the check cannot fire, since the quotient is within +/-178956970",
+        domain = Some(s"extract(YEAR FROM ym) > ${Int.MinValue}")))),
 
     Family("Integer arithmetic", predicates = false, Seq(
-      Row("i + 1"),
-      Row("i - 1"),
+      Row("i + 1", "checked under ANSI; the legacy mode wraps as Spark does and declines nothing",
+        domain = Some(s"i < ${Int.MaxValue}")),
+      Row("i - 1", "checked under ANSI", domain = Some(s"i > ${Int.MinValue}")),
       Row("year(d) * 2",
         "a multiply is checked, and only bounded operands take the check off: `i * 2` over "
           + "a bare int column declines"),
-      Row("-i"),
-      Row("year(d) + i"))),
+      Row("-i", "checked under ANSI", domain = Some(s"i > ${Int.MinValue}")),
+      Row("year(d) + i", "checked under ANSI; the lower bound is out of reach, since a year is "
+        + "at least 1", domain = Some(s"i <= ${Int.MaxValue} - year(d)")))),
 
     Family("Choice and nulls", predicates = false, Seq(
       Row("if(d < d2, d, d2)"),
@@ -242,13 +283,17 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("time_from_millis(time_to_millis(t2))", "the count is guarded to the day's worth of " +
         "its unit, where the multiply is exact; a count outside declines the batch and the row " +
         "engine raises Spark's error, as for t + dt - so the count here is one that is inside " +
-        "the day by construction"),
-      Row("time_from_micros(time_to_micros(t))"),
+        "the day by construction", domain = Some(
+          s"time_to_millis(t2) BETWEEN 0 AND ${dayOf(NANOS_PER_MILLIS)}")),
+      Row("time_from_micros(time_to_micros(t))", "the same guard over the microsecond count",
+        domain = Some(s"time_to_micros(t) BETWEEN 0 AND ${dayOf(NANOS_PER_MICROS)}")),
       Row("t + INTERVAL '0 00:00:00' DAY TO SECOND",
         "a zero interval on purpose: this fixture reaches both ends of the day, so any other " +
           "constant crosses midnight on some row, where Spark raises an error rather than a " +
-          "value. The sum is still guarded to the day; the crossing case, and a column " +
-          "interval, are VarkaTimeArithmeticSuite's")))
+          "value. The sum is still guarded to the day - the domain adds the interval's " +
+          "microseconds, 0 here, to the time's; the crossing case, and a column interval, are " +
+          "VarkaTimeArithmeticSuite's",
+        domain = Some(s"time_to_micros(t) + 0 BETWEEN 0 AND ${dayOf(NANOS_PER_MICROS)}"))))
   )
 
   private def out(e: Expression): NamedExpression = Alias(e, "c")()
@@ -288,6 +333,93 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     }
     assert(failures.isEmpty,
       "documented as covered, but the compiler declines:\n  " + failures.mkString("\n  "))
+  }
+
+  // --- the guarded rows' domains ---------------------------------------------------------------
+
+  /**
+   * The guards a row's kernels carry, by name: each node the emitter refuses a batch at, by its
+   * reason, and `INPUT_BOUND` where the compiler records a per-batch bound on an input column,
+   * which the evaluator checks before the kernel runs (VARKA-279). Read under
+   * `VarkaEmitOptions.DEFAULTS`, the options the rest of this suite compiles under, and not the
+   * matrix's base: the table documents the engine as shipped, and a configuration that turns a
+   * check off does not take a row's domain away.
+   */
+  private def guardsOf(family: Family, row: Row): Seq[String] = {
+    val expr = expressionOf(row)
+    val options = VarkaEmitOptions.DEFAULTS
+    val kernels: Seq[CompiledVarkaProjection] =
+      if (family.predicates) {
+        VarkaExpressionCompiler.compilePredicate(expr, columns, options).toScala.map(_.fused).toSeq
+      } else {
+        VarkaExpressionCompiler.compilePartial(Seq(out(expr)), columns, options).toScala.toSeq
+          .flatMap(p => p.fused +: p.more.asScala.toSeq)
+      }
+    kernels.flatMap { k =>
+      val refusals = VarkaLoopEmitter.guardsForTest(k.outputs, k.inputOrdinals.size,
+        k.numLiterals, options).asScala.values.map(_.reason.toString).toSeq
+      refusals ++ k.inputBounds.asScala.map(_ => "INPUT_BOUND")
+    }.distinct.sorted
+  }
+
+  /**
+   * What is wrong with the domains of `rows`: a row whose kernel carries a guard and names no
+   * domain, a row that names one and carries no guard (a stale domain), and a domain that does
+   * not resolve to a boolean over the table's columns, which would fail only in the sql/core
+   * suite that runs it otherwise.
+   */
+  private def domainFindings(rows: Seq[(Family, Row)]): Seq[String] = rows.flatMap {
+    case (family, row) =>
+      val guards = guardsOf(family, row)
+      (row.domain, guards) match {
+        case (None, g) if g.nonEmpty =>
+          Some(s"${row.sql}: carries ${g.mkString(", ")} and names no domain")
+        case (Some(d), g) if g.isEmpty =>
+          Some(s"${row.sql}: names the domain `$d` but carries no guard")
+        case (Some(d), _) =>
+          val resolved = Try(VarkaSqlResolve.resolve(CatalystSqlParser.parseExpression(d), columns))
+          resolved.toEither match {
+            case Right(e) if e.dataType == BooleanType && e.checkInputDataTypes().isSuccess =>
+              None
+            case Right(e) =>
+              Some(s"${row.sql}: the domain `$d` is a ${e.dataType.sql}, not a boolean")
+            case Left(t) => Some(s"${row.sql}: the domain `$d` does not resolve: ${t.getMessage}")
+          }
+        case _ => None
+      }
+  }
+
+  test("every row whose kernel can decline a batch names its domain, and no other row does") {
+    val all = families.flatMap(f => f.rows.map(f -> _))
+    val findings = domainFindings(all)
+    assert(findings.isEmpty,
+      "the domain column disagrees with the guards the kernels carry:\n  " +
+        findings.mkString("\n  "))
+    // Counted, not assumed: rows on both sides, and the five reasons the table's rows carry all
+    // represented somewhere, or the check would hold a table that carries no guard to nothing.
+    val guarded = all.filter(_._2.domain.isDefined)
+    assert(guarded.nonEmpty && guarded.size < all.size, s"${guarded.size} of ${all.size} guarded")
+    val reasons = guarded.flatMap { case (f, r) => guardsOf(f, r) }.toSet
+    assert(reasons == Set("INPUT_BOUND", "INT_OVERFLOW", "MAKE_DATE", "MONTH_COUNT", "VALUE_RANGE"),
+      s"the guards the table's rows carry: $reasons")
+    logInfo(s"${guarded.size} of ${all.size} rows carry a guard: " + guarded.map {
+      case (f, r) => s"${r.sql} (${guardsOf(f, r).mkString(", ")})"
+    }.mkString("; "))
+  }
+
+  test("a guarded row with no domain, a domain on a row with no guard, and a domain that is not " +
+      "a boolean all fail the check") {
+    val planted = Family("planted", predicates = false, Seq(
+      Row("i + 1"),
+      Row("year(d)", domain = Some("true")),
+      Row("i - 1", domain = Some("i"))))
+    val findings = domainFindings(planted.rows.map(planted -> _))
+    def found(sql: String, ending: String): Boolean =
+      findings.exists(f => f.startsWith(s"$sql:") && f.endsWith(ending))
+    assert(found("i + 1", "names no domain"), findings)
+    assert(found("year(d)", "carries no guard"), findings)
+    assert(found("i - 1", "not a boolean"), findings)
+    assert(findings.size == 3, findings)
   }
 
   test("every operand the compiler builds in a restricted position is one the position admits") {
@@ -563,11 +695,13 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     }
     families.foreach { family =>
       sb.append(s"#### ${family.title}\n\n")
-      sb.append(if (family.predicates) "| Predicate | Notes | 128-bit lanes |\n"
-        else "| Expression | Notes | 128-bit lanes |\n")
-      sb.append("|---|---|---|\n")
-      family.rows.foreach(r =>
-        sb.append(s"| `${r.sql}` | ${r.note} | ${narrowVerdict(r.sql)} |\n"))
+      sb.append(if (family.predicates) "| Predicate | Domain | Notes | 128-bit lanes |\n"
+        else "| Expression | Domain | Notes | 128-bit lanes |\n")
+      sb.append("|---|---|---|---|\n")
+      family.rows.foreach { r =>
+        val domain = r.domain.map(d => s"`$d`").getOrElse("")
+        sb.append(s"| `${r.sql}` | $domain | ${r.note} | ${narrowVerdict(r.sql)} |\n")
+      }
       sb.append("\n")
     }
     sb.toString
@@ -600,6 +734,7 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
           "family" -> family.title,
           "form" -> (if (family.predicates) "predicate" else "projection"),
           "catalyst" -> classes.distinct.sorted.asJava,
+          "domain" -> row.domain.getOrElse(""),
           "note" -> row.note)
       }
     }
@@ -607,7 +742,10 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       "generated_by" -> ("VarkaCoverageSuite; regenerate with VARKA_COVERAGE_REGEN=true " +
         "build/sbt 'catalyst/testOnly *VarkaCoverageSuite'"),
       "description" -> ("Every expression the Varka compiler fuses, with the Catalyst " +
-        "expression classes each one resolves to. Anything absent runs on Spark's row engine."),
+        "expression classes each one resolves to. Anything absent runs on Spark's row engine. " +
+        "A row whose kernel can decline a batch names its domain, the predicate inside which " +
+        "the kernel answers (under ANSI where the modes differ); outside it the batch goes to " +
+        "the row engine. An empty domain means every input of the column types is answered."),
       "columns" -> ordered(
         "d" -> "date", "d2" -> "date", "i" -> "int",
         "ymm" -> "interval month", "ymy" -> "interval year", "ym" -> "interval year to month",
