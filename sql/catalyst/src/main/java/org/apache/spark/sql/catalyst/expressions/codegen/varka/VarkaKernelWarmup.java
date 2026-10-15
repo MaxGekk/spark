@@ -453,13 +453,28 @@ public final class VarkaKernelWarmup {
     }
   }
 
+  /**
+   * Runs the Vector API template warm-up for the worker's first start, and never throws: this
+   * runs outside the job loop's guard, and a worker that dies here is restarted by the next claim
+   * to die the same way. That includes a failure to initialize the warm-up class itself.
+   */
+  static void templateWarmup() {
+    try {
+      long nanos = VarkaVectorTemplateWarmup.ensure();
+      if (nanos > 0) {
+        templateWarmupNanos = nanos;
+        LOG.info("Vector API template warm-up took " + TimeUnit.NANOSECONDS.toMillis(nanos)
+            + " ms.");
+      }
+    } catch (Throwable t) {
+      LOG.warn("The Vector API template warm-up could not run; kernels warm without it.", t);
+    }
+  }
+
   private static void work() {
     // Once per JVM, before the first kernel's calls give the shared Vector API templates a
     // profile of one kernel's operators (VARKA-295).
-    long nanos = VarkaVectorTemplateWarmup.ensure();
-    if (nanos > 0) {
-      templateWarmupNanos = nanos;
-    }
+    templateWarmup();
     while (true) {
       Job job;
       try {

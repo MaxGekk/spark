@@ -53,14 +53,22 @@ import org.apache.spark.internal.SparkLoggerFactory;
  * life, which the warm-up reads as a kernel that never compiled ({@code VARKA-295.md} 9.5, 9.6).
  *
  * <p><b>What this does.</b> It calls each template {@link #ROUNDS} times, interleaving every
- * operator class, species and argument form the emitter uses, in the interpreter and C1, which is
- * where the profiles are collected. The call sites inside the templates then record several
- * receiver classes, which HotSpot treats as megamorphic, and C2 does not speculate on them.
- * It runs once per JVM, on the warm-up thread before its first job, so the cost is a fixed number
- * of calls on a thread that is not a query's.
+ * operator class, species and argument form the emitter uses. The call sites inside the templates
+ * then record several receiver classes, which HotSpot treats as megamorphic, and C2 does not
+ * speculate on them. The calls are not only profiled: at this count the hottest templates
+ * ({@code VectorOperators.opKind}, {@code ImplCache.find}, the {@code lanewise} template) pass
+ * the tier-4 threshold during the warm-up and are compiled by C2 from the mixed profile
+ * ({@code VARKA-295.md} 9.7). Which of the two - the profile or the early compile - matters more
+ * was not separated; 100 rounds also worked in the reproducer. It runs once per JVM, on the
+ * warm-up thread before its first job, so the cost is a fixed number of calls on a thread that
+ * is not a query's.
  *
- * <p><b>What it does not do.</b> It computes nothing the engine uses, it does not compile
- * anything by itself, and it cannot undo a trap a template has already recorded.
+ * <p><b>What it does not do.</b> It computes nothing the engine uses and it cannot undo a trap a
+ * template has already recorded, so vector code that ran earlier in the JVM (the query-path
+ * helpers {@code IntRangeOps} and {@code SelectionVectorOps}) is not covered. It feeds the
+ * templates receivers of the preferred species only. A call that throws (an unsupported shape on
+ * some CPU) ends the warm-up there: the int, long and double groups run in that order, the
+ * conversions last, and the rest stay cold.
  */
 final class VarkaVectorTemplateWarmup {
 
@@ -99,6 +107,11 @@ final class VarkaVectorTemplateWarmup {
 
   private static boolean done;
 
+  // Calls to warmUp that finished, and the failure a test asks the next one to throw; see
+  // resetForTest.
+  private static int completed;
+  private static volatile Throwable failWith;
+
   // Read by no one: it keeps the JIT from discarding the calls as dead code.
   private static volatile long sink;
 
@@ -106,9 +119,10 @@ final class VarkaVectorTemplateWarmup {
   }
 
   /**
-   * Runs the warm-up if this JVM has not, and returns the nanoseconds it took (zero when it ran
-   * before, is switched off, or failed). A failure is logged and the engine goes on: the warm-up
-   * only improves the odds of a clean compile.
+   * Runs the warm-up if this JVM has not, and returns the nanoseconds it took, or zero when it ran
+   * before, is switched off, or failed. Any failure, an {@code Error} included, is logged and the
+   * engine goes on: the warm-up only improves the odds of a clean compile, and the thread that
+   * calls this serves every shape in the JVM.
    */
   static synchronized long ensure() {
     if (done || "false".equals(System.getProperty(PROPERTY))) {
@@ -118,10 +132,26 @@ final class VarkaVectorTemplateWarmup {
     long start = System.nanoTime();
     try {
       warmUp();
-    } catch (RuntimeException | LinkageError e) {
+    } catch (Throwable e) {
       LOG.warn("The Vector API template warm-up failed; kernels warm without it.", e);
+      return 0;
     }
     return System.nanoTime() - start;
+  }
+
+  /** How many times {@link #warmUp} ran to the end in this JVM; for tests. */
+  static synchronized int completedRuns() {
+    return completed;
+  }
+
+  /**
+   * Test hook: forgets that the warm-up ran, so that {@link #ensure} runs it again, and makes the
+   * next {@link #warmUp} throw {@code failure} if it is not null.
+   */
+  static synchronized void resetForTest(Throwable failure) {
+    done = false;
+    completed = 0;
+    failWith = failure;
   }
 
   /**
@@ -130,6 +160,10 @@ final class VarkaVectorTemplateWarmup {
    * pins that the work is deterministic and computed, not discarded).
    */
   static long warmUp() {
+    Throwable injected = failWith;
+    if (injected != null) {
+      sneakyThrow(injected);
+    }
     VectorSpecies<Integer> is = IntVector.SPECIES_PREFERRED;
     VectorSpecies<Long> ls = LongVector.SPECIES_PREFERRED;
     VectorSpecies<Double> ds = DoubleVector.SPECIES_PREFERRED;
@@ -151,7 +185,7 @@ final class VarkaVectorTemplateWarmup {
       da[i] = 0.5 * i - 1;
       db[i] = i + 1;
     }
-    MemorySegment segment = Arena.global().allocate(BYTES, 64);
+    MemorySegment segment = Arena.ofAuto().allocate(BYTES, 64);
     long acc = 0;
     for (int round = 0; round < ROUNDS; round++) {
       acc += ints(is, ia, ib, segment);
@@ -160,7 +194,15 @@ final class VarkaVectorTemplateWarmup {
       acc += conversions(is, ls, ds, ia, la, da);
     }
     sink = acc;
+    synchronized (VarkaVectorTemplateWarmup.class) {
+      completed++;
+    }
     return acc;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static <T extends Throwable> void sneakyThrow(Throwable t) throws T {
+    throw (T) t;
   }
 
   private static long ints(VectorSpecies<Integer> s, int[] ia, int[] ib, MemorySegment seg) {
@@ -189,6 +231,7 @@ final class VarkaVectorTemplateWarmup {
         + a.max(b).lane(0) + a.and(b).lane(0) + a.or(b).lane(0) + a.and(1).lane(1)
         + a.div(7).lane(0) + a.blend(b, m).lane(0) + a.blend(9, m).lane(0)
         + IntVector.broadcast(s, 5).lane(0) + IntVector.zero(s).lane(0);
+    acc += a.compress(m).lane(0);
     a.intoMemorySegment(seg, 0, ByteOrder.LITTLE_ENDIAN);
     a.intoMemorySegment(seg, 64, ByteOrder.LITTLE_ENDIAN, tail);
     acc += IntVector.fromMemorySegment(s, seg, 0, ByteOrder.LITTLE_ENDIAN).lane(0)
