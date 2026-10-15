@@ -624,8 +624,14 @@ The milestones:
   machine-checked proofs of the bounded arithmetic, the differential tests'
   gaps closed, the compiler ported to Java and refactored with no emitted byte
   moved, and CI that needs no laptop.
-* **Milestone 8**: *coverage* - the scope catalogue is in
-  [`sql/varka/plans/m8/SCOPE.md`](sql/varka/plans/m8/SCOPE.md),
+* **Milestone 8**: *every numeric and temporal type* - the task plan is
+  [`sql/varka/plans/m8/PLAN.md`](sql/varka/plans/m8/PLAN.md): `BOOLEAN`,
+  `TINYINT`, `SMALLINT`, `FLOAT`, `DOUBLE`, `TIMESTAMP_NTZ` and `DECIMAL` up to
+  precision 18 beside the six types Varka fuses today, and most of Spark's scalar
+  expressions and casts over all thirteen, counted by a census of the function
+  registry.
+* **Milestone 9**: *coverage* - the scope catalogue is in
+  [`sql/varka/plans/m9/SCOPE.md`](sql/varka/plans/m9/SCOPE.md),
   driven by a census of TPC-DS, TPC-H and the New York taxi benchmark. What that
   census says: `DateType`, the only type Varka has today, is 3.1% of the columns
   in TPC-DS and TPC-H; `DECIMAL` is the most-aggregated type and strings are 60%
