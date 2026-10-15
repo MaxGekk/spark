@@ -11,15 +11,15 @@ known. This file holds the outline only.*
 
 The reader is a Spark or JVM developer who has used the Vector API or reads C2's logs. They know
 that C2 inlines hot code and that a deoptimization throws compiled code away. They do not know
-that the decision to keep inlining one method can depend on counters kept by other methods, or
+that the guard on one inlined call can depend on counters kept by other methods, or
 that a kernel compiled at the top tier can still allocate. The post answers one question: **why
-does a warmed Vector API kernel allocate one array per loop iteration on one run in ten?**
+does a warmed Vector API kernel allocate one array per loop iteration on in a few per cent of warm-ups?**
 
 ## 2. The claim, and the five-minute version
 
 A warmed Vector API kernel compiled at the top tier still allocates one `int[16]` per loop
-iteration on one run in ten, because C2's inlining gate adds up the trap counts of every inlined
-copy of a shared template. In `doCall.cpp` a class-check miss path is an uncommon trap while the
+iteration in a few per cent of warm-ups (3.6% to 8.2% in the six runs of `VARKA-295.md` 9.5),
+because C2's class-check gate adds up the trap counts of every inlined copy of a shared template. In `doCall.cpp` a class-check miss path is an uncommon trap while the
 compile-wide sums are under their limits and a real virtual call once they are not; the sums are
 class-check traps against `PerMethodTrapLimit` (100) and decompiles against
 `PerMethodRecompilationCutoff` / 2 + 1 (201), each adding a shared method's recorded count once
@@ -59,7 +59,7 @@ the post's numbers are quoted from the committed files under `dev/varka_quote_ch
 
 ## 4. The outline
 
-1. **A kernel that allocates when it should not.** One probe, 20,480 bytes, on one run in ten; the
+1. **A kernel that allocates when it should not.** One probe, 20,480 bytes, in a few warm-ups in a hundred; the
    same shape clean on the next run.
 2. **Ruling things out.** Reading every release from the JIT's own log: not a deoptimization
    cycle, not a bailout, not a policy that never asked. What each looks like in the log, in a
@@ -70,8 +70,9 @@ the post's numbers are quoted from the committed files under `dev/varka_quote_ch
 4. **Who leaves the traps.** Standalone compiles of the shared templates and the first operator
    class they had not seen.
 5. **What removes it.** The two options, with 0 releases in 1,000 warm-ups, and why they are an
-   operator's choice: they cannot be set at run time (row 370), and the first attempt at them
-   caused a deoptimization cycle in its own run.
+   operator's choice: they cannot be set at run time (row 370), and a different pair (the
+   per-method and per-bytecode trap limits) caused a deoptimization cycle in step 1's run, so which
+   options matters.
 6. **What the library could do.** The result of `varka-295f`'s remedy, in a short section, and
    what a Vector API user can do without Varka. **Not written until that result is known.**
 7. **A link** to the reproduction.
@@ -84,8 +85,8 @@ the post's numbers are quoted from the committed files under `dev/varka_quote_ch
 * The log lines that name the sums, found with one `grep` over `-XX:+LogCompilation` output.
 * The limits' defaults, from `java -XX:+PrintFlagsFinal -version`, with the JDK and CPU stated.
 
-Reproducibility depends on one run in ten, so the post gives the number of warm-ups to run (1,000)
-and the expected count, not a single run.
+Reproducibility depends on a rate of a few per cent, so the post gives the number of warm-ups to
+run (1,000) and the expected count, not a single run.
 
 ## 6. Done when
 
