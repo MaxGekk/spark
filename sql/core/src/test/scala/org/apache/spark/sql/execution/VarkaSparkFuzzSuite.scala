@@ -341,6 +341,25 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     assert(rows.map(_.executable).toSet.subsetOf(seen), "a row of the table was not drawn")
   }
 
+  test("the fixture builds for every drawn case, so no composition compares fixture errors") {
+    // A view that raises while it is built (the cached one computes every column, the row engine
+    // prunes the unused ones) makes the two sides raise whichever error their plan meets first.
+    // The draw's hostile years used to overflow the year-month columns of the view (VARKA-372).
+    val ansiKey = org.apache.spark.sql.internal.SQLConf.ANSI_ENABLED.key
+    for (it <- 0 until 600) {
+      val c = draw(rows, seed, it)
+      withSQLConf(ansiKey -> c.ansi.toString) {
+        try {
+          spark.sql(c.fixture).collect()
+        } catch {
+          case e: Throwable =>
+            fail(s"the fixture of composition $it (ANSI ${c.ansi}) raised: ${e.getMessage}\n" +
+              c.fixture, e)
+        }
+      }
+    }
+  }
+
   test("the shrinker reduces a planted failure to the output that causes it and one row") {
     val c = draw(rows, seed, 5).copy(
       outputs = Vector("date_add(d, 3)", "datediff(d2, d)", "year(d)", "month(d)"))
