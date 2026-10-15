@@ -14,6 +14,10 @@ one query can be served partly by each and the two halves must agree row for row
 A kernel that computed a standard-conformant value where Spark computes something
 else would break both.
 
+*One deliberate exception, the owner's decision of 14 October 2026: the math family's ULP contract
+(3.4), behind a configuration that is on by default. It is the only place a fused answer may
+differ from Spark's, and it says by how much.*
+
 **And the SQL standard is still worth reading first**, because Spark's limits are
 often storage accidents rather than declared types, and a narrower *proven* range
 is exactly what Varka's lowerings want. `YearMonthIntervalType` has no precision
@@ -133,6 +137,72 @@ which is the honest place for it, and section 2's test is what says so.
 
 Following it is now a task rather than a wait: `m5/PLAN.md` 2.82 (VARKA-146) takes reviewing the upstream patch, or writing one for ANSI's modulo-24 if
 none exists. That is the only route open here, exactly because a flag is not.
+
+### 3.4 The math family within a stated ULP bound: the first deliberate departure
+
+*Decided 14 October 2026 by the owner (item 36's first option, `m9/SCOPE.md`); built by
+`m8/PLAN.md` rows 345 and 356 to 358, designed in its section 2.7.1.*
+
+Section 1's rule holds everywhere else; here it is broken on purpose, and this entry is the
+record. Spark computes `sin`, `exp`, `log` and the rest of the transcendental family with one scalar
+call per row, `java.lang.Math` or `StrictMath`. The Vector API lowers the same operators to a host
+library - SVML at AVX-512, SVML at AVX2, SLEEF on NEON - and no bound operator reproduces the row
+engine's bits on any host: they differ on up to thirteen percent of ordinary inputs, by one
+representable double, two for `log10` against the `StrictMath.log10` Spark calls, which is that
+function's own error and not the library's (`SCOPE_FUNCTIONS.md` 3 and its dated correction; `tanh`
+on x86 is one against the `Math.tanh` Spark calls). No range guard can fix that, so section 2's
+construction does not apply: the difference is in the result.
+
+**What is promised instead.** Each fused function states, per host library, its bound against
+`java.lang.Math` in the coverage table and the user support table, measured and committed by
+`dev/varka_canary/MathLaneProbe.java`; the tests compare within that bound; and the family is fused
+only while `spark.sql.codegen.varka.math.ulpContract.enabled` is set. Every other expression stays
+bit for bit.
+
+**Why it is acceptable.** The speed is large and width-bound - 5x to 14x at eight lanes, 2.5x to 9x
+at four, 1.1x to 3.9x at two - and the departure is of a kind a cluster already has: HotSpot's
+`Math.sin` differs between x86 and aarch64 executors, so a `sin` column computed across a mixed
+cluster is not one bit pattern today. **What it costs**: one query can mix the two answers. The
+ghost fallback serves a declined batch on the row engine, so with the configuration on, rows of one
+column may differ in the last bit by batch. The coverage table says so beside the bound.
+
+**The default is on**, the owner's decision of 14 October 2026. So with Varka enabled, these
+functions' answers may differ from vanilla Spark's by up to their stated bound unless a user turns
+the configuration off; enabling Varka stays answer-neutral for every other expression. The
+differential suites compare within the bound by default and run a configuration-off arm that
+asserts bit-identical answers, the fallback's per-batch mix is the default behaviour, and
+`docs/sql-varka.md` and the user support table state the default and the switch where users look
+(`m8/PLAN.md` 2.7.1).
+
+### 3.5 NaN payloads and signs: what the oracles compare
+
+*Added 14 October 2026 from the IEEE 754 reading for milestone 8 (`m8/PLAN.md` 2.7). Not a
+departure from Spark's answers: a rule for what "the same answer" means where the standard leaves
+it open.*
+
+The standard leaves a NaN's sign and payload unspecified, and Spark's row engine does not
+normalise them: a row carries raw bits, `abs` is a bit operation, negation flips the sign, and
+Spark's own `rint(-NaN)` sign depends on the JIT tier that ran it (derived from the source;
+`m8/PLAN.md` row 344 runs the probe). So Varka's oracles compare NaN lanes **bit for bit in a
+pass-through shape** (a column or a literal delivered unchanged) and **by NaN-ness in a computed
+one** (the result of an operation whose NaN the standard leaves to the implementation), the
+fuzzers draw payload, negative and signalling NaNs, and the emitter never commutes a floating `+`
+or `*`, which are not commutative at the bit level when both operands are NaN. The rule is stated
+here so that a future reader does not mistake a payload difference in a computed NaN for a wrong
+answer, or a bit difference in a pass-through one for an acceptable one.
+
+### 3.6 The reference for a floating-to-decimal answer is JDK 19's `Double.toString`
+
+*Added 14 October 2026 from the float-conversions reading for milestone 8 (`m8/PLAN.md` 2.7).*
+
+Spark builds a decimal from a double through the double's decimal string, and `round`, `bround`
+and `truncate` over a double act on that shortest decimal. `Double.toString` returns the shortest
+decimal only from JDK 19 (JDK-4511638); the reading reports Ryu's measurement of 2,877
+non-shortest outputs per million doubles in the older algorithm, so Spark on JDK 17 differs on
+those inputs from Spark on JDK 19 and later. Varka's kernels and oracles take JDK 19's answer as
+the reference - this fork builds on JDK 25 - and the oracle's header says so, so that a
+differential run against an older row engine reads a disagreement on those inputs as the JDK's,
+not the kernel's.
 
 ## 4. What would have to be built, when a task claims one of these
 

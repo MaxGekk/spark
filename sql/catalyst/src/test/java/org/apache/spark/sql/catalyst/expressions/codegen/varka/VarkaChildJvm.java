@@ -39,7 +39,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSuiteReport.
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSuiteReport.Skipped;
 
 /**
- * Runs one suite in a JVM of its own and returns each test's result (VARKA-246, {@code m8/SCOPE.md}
+ * Runs one suite in a JVM of its own and returns each test's result (VARKA-246, {@code m9/SCOPE.md}
  * item 69): the machinery behind a suite marked to run alone, free of any test framework, whose
  * face ({@code VarkaOwnJvm} for ScalaTest) names the main class that runs the suite and the
  * arguments it takes (VARKA-312).
