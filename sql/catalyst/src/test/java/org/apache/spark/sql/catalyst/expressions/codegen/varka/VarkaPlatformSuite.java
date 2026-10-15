@@ -121,13 +121,15 @@ public final class VarkaPlatformSuite {
   }
 
   @Test
-  @DisplayName("the JVM at hand reads as the C2 tier, and its facts line names each flag")
+  @DisplayName("the JVM at hand reads as the tier it claims, and its facts line names each flag")
   void thisJvm() {
     VarkaPlatformFacts facts = VarkaPlatformFacts.read();
-    assertEquals(List.of(), facts.contradictions(Tier.C2, Optional.empty()));
+    // A forked arm claims its tier by property, and a developer's JVM may carry its own flags:
+    // the test holds the JVM to the claim, the default one where nothing is claimed.
+    assertEquals(List.of(), facts.contradictions(Tier.fromProperty(), Optional.empty()));
     String line = facts.line();
     assertTrue(line.startsWith("platform: java.home="), line);
-    assertTrue(line.contains(" UseCompiler=true") && line.contains(" TieredStopAtLevel=4"), line);
+    assertTrue(line.contains(" UseCompiler=") && line.contains(" TieredStopAtLevel="), line);
     assertEquals(List.of("UseCompiler", "UseInterpreter", "TieredCompilation",
         "TieredStopAtLevel"), VarkaPlatformFacts.FLAGS.subList(0, 4));
   }
@@ -138,7 +140,9 @@ public final class VarkaPlatformSuite {
     assertEquals(Tier.XCOMP, Tier.named("xcomp"));
     assertEquals(Tier.INTERPRETER, Tier.named("interpreter"));
     assertThrows(IllegalArgumentException.class, () -> Tier.named("c3"));
-    assertEquals(Tier.C2, Tier.fromProperty());
+    if (System.getProperty("varka.fuzz.tier") == null) {
+      assertEquals(Tier.C2, Tier.fromProperty());
+    }
   }
 
   @Test

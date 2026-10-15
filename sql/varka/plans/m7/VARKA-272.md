@@ -417,3 +417,17 @@ with two arms at a time, not measured.
   nothing in the byte budget sees it.
 * The arms' volume is small here; the first nightly's 2,000 and 20 draws are where a
   disagreement, if there is one, will show, and its log directory keeps the crash files.
+
+### 9.5 The review's fixes
+
+`/code-review high` on the branch found nine things; fixed: arm directories left in an `--out` by
+an earlier run were read as part of this one (the script now removes the arms it does not run);
+a mistyped arm name was refused only inside a backgrounded subshell and the verdict stayed clean
+(validated in the foreground); seven arms two at a time at 3,600 s each could outlast the
+nightly's step deadline (the nightly passes `--arm-deadline 1800`); an arm that wrote no answers
+dropped out of the comparison and passed (it fails now, with a self-test case); `--seed 0` gave
+`StressSeed=0`, which draws a fresh seed per compile (refused); a blank history label threw
+(skipped); and two unit tests assumed the JVM at hand was the default tier (they read the
+claim). Not changed: `Observed` computes a run's compiles eagerly, a few milliseconds a run; and
+`VarkaAnswerLog` keeps its repeat counts per key for the JVM's life, which at the nightly's
+volume is hundreds of thousands of strings in a JVM whose heap the arms do not measure.

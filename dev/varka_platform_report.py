@@ -107,6 +107,8 @@ def failures(arm):
         why.append("crashed: " + ", ".join(arm["crash"]))
     if arm["facts"] is None:
         why.append("no platform line: the suite never reached its proof")
+    if not arm["answers"] and not arm["crash"]:
+        why.append("no answers: nothing of this arm can be compared")
     return why
 
 
@@ -264,6 +266,12 @@ def self_test():
         run.mkdir()
         write_arm(run, "c2", facts=None, answers=base)
         assert not report(run), "an arm whose suite printed no platform line must fail"
+
+        run = Path(tmp) / "unanswered"
+        run.mkdir()
+        write_arm(run, "c2", answers=base)
+        write_arm(run, "int", facts="UseCompiler=false")
+        assert not report(run), "an arm that wrote no answers must fail, not drop out"
     print("self-test: ok")
     return 0
 

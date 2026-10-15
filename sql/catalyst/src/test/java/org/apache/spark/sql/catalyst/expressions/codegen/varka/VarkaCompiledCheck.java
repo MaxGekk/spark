@@ -138,7 +138,9 @@ public final class VarkaCompiledCheck {
       var histories = EnumSet.noneOf(History.class);
       if (only != null) {
         for (String label : only.split(",")) {
-          histories.add(History.named(label.strip()));
+          if (!label.isBlank()) {
+            histories.add(History.named(label.strip()));
+          }
         }
       }
       return new Settings(Long.getLong("varka.fuzz.settleMillis", 10_000L),

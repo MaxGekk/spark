@@ -117,7 +117,9 @@ while [ $# -gt 0 ]; do
     *) echo "unknown argument: $1" >&2; usage ;;
   esac
 done
-[[ "$seed" =~ ^[0-9]+$ ]] || { echo "the seed is a number, got '$seed'" >&2; exit 2; }
+[[ "$seed" =~ ^[1-9][0-9]*$ ]] || {
+  echo "the seed is a positive number (StressSeed 0 draws a fresh seed per compile), got '$seed'" >&2
+  exit 2; }
 
 # The fastdebug build: named, or the sibling checkout the lesson files cite (openjdk-build/jdk25).
 if [ -z "$fastdebug_jdk" ]; then
@@ -172,8 +174,17 @@ if [ "$list" = 1 ]; then
   exit 0
 fi
 
+# A mistyped arm is refused here, in the foreground: inside a backgrounded arm it would end only
+# that subshell and leave a verdict for the arms that did run.
+for arm in "${arms[@]}"; do arm_spec "$arm"; done
+
 [ -n "$OUT" ] || OUT=$ROOT/target/varka-platform/$(date +%Y-%m-%dT%H%M%S)
 mkdir -p "$OUT" "$BUILD"
+# The report reads every arm directory under OUT, so the directories of arms this run does not
+# run, left by an earlier run into the same OUT, are removed: they would be listed and compared.
+for arm in "${PRODUCT_ARMS[@]}" fastdebug; do
+  case " ${arms[*]} " in *" $arm "*) ;; *) rm -rf "${OUT:?}/$arm" ;; esac
+done
 if [ "$build" = 1 ]; then
   echo "== build: catalyst's test classes, its test classpath and JVM options"
   build/sbt -batch "catalyst/Test/compile" "export catalyst/Test/fullClasspath" \

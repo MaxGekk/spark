@@ -170,7 +170,9 @@ fi
 # in a JVM of its own, the answers compared across the arms and each arm's tier proven (VARKA-272);
 # last, after the gate has had the machine to itself.
 if [ "$platform" -eq 1 ]; then
-  run_step platform dev/varka_platform.sh --seed "$seed" --out "$logdir/platform"
+  # Each arm's own deadline, 30 minutes, keeps the seven arms two at a time inside the step's.
+  run_step platform dev/varka_platform.sh --seed "$seed" --arm-deadline 1800 \
+    --out "$logdir/platform"
 fi
 
 echo
