@@ -1,0 +1,300 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.spark.sql.catalyst.expressions.codegen.varka;
+
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.nio.ByteOrder;
+import java.util.List;
+
+import jdk.incubator.vector.DoubleVector;
+import jdk.incubator.vector.IntVector;
+import jdk.incubator.vector.LongVector;
+import jdk.incubator.vector.VectorMask;
+import jdk.incubator.vector.VectorOperators;
+import jdk.incubator.vector.VectorOperators.Binary;
+import jdk.incubator.vector.VectorOperators.Comparison;
+import jdk.incubator.vector.VectorOperators.Unary;
+import jdk.incubator.vector.VectorSpecies;
+
+import org.apache.spark.internal.SparkLogger;
+import org.apache.spark.internal.SparkLoggerFactory;
+
+/**
+ * Runs every Vector API method the emitted kernels call once, with every operator class they pass,
+ * before the first kernel is warmed, so that the JDK's shared Vector API templates are profiled as
+ * the many-operator methods they are rather than as the first kernel's operators (VARKA-295).
+ *
+ * <p><b>The problem it removes.</b> {@code IntVector.lanewise}, {@code VectorOperators.opKind}
+ * and the other templates every kernel's vector operation goes through are compiled by C2 on their
+ * own as soon as a first kernel has called them often enough, and that compile reads the profile
+ * the calls so far left: one operator class at a call site, say, so it compiles a check of that
+ * class with an uncommon trap on a miss. The next kernel that passes another operator class meets
+ * the trap, the template is deoptimized, and the trap is recorded in the template's
+ * {@code MethodData}, where it stays. A later C2 compile of a kernel's loop inlines those
+ * templates hundreds of times, adds the recorded counts once per inlined copy, and past 100 traps
+ * (or 201 decompiles) in the sum C2 stops putting uncommon traps on class-check misses and keeps
+ * a real virtual call instead. A vector that flows through that call cannot be scalar-replaced,
+ * and the compiled loop then allocates one {@code int[16]} per iteration for the rest of the JVM's
+ * life, which the warm-up reads as a kernel that never compiled ({@code VARKA-295.md} 9.5, 9.6).
+ *
+ * <p><b>What this does.</b> It calls each template {@link #ROUNDS} times, interleaving every
+ * operator class, species and argument form the emitter uses. The call sites inside the templates
+ * then record several receiver classes, which HotSpot treats as megamorphic, and C2 does not
+ * speculate on them. The calls are not only profiled: at this count the hottest templates
+ * ({@code VectorOperators.opKind}, {@code ImplCache.find}, the {@code lanewise} template) pass
+ * the tier-4 threshold during the warm-up and are compiled by C2 from the mixed profile
+ * ({@code VARKA-295.md} 9.7). Which of the two - the profile or the early compile - matters more
+ * was not separated; 100 rounds also worked in the reproducer. It runs once per JVM, on the
+ * warm-up thread before its first job, so the cost is a fixed number of calls on a thread that
+ * is not a query's.
+ *
+ * <p><b>What it does not do.</b> It computes nothing the engine uses and it cannot undo a trap a
+ * template has already recorded, so vector code that ran earlier in the JVM (the query-path
+ * helpers {@code IntRangeOps} and {@code SelectionVectorOps}) is not covered. It feeds the
+ * templates receivers of the preferred species only. A call that throws (an unsupported shape on
+ * some CPU) ends the warm-up there: the int, long and double groups run in that order, the
+ * conversions last, and the rest stay cold.
+ */
+final class VarkaVectorTemplateWarmup {
+
+  private static final SparkLogger LOG =
+      SparkLoggerFactory.getLogger(VarkaVectorTemplateWarmup.class);
+
+  /**
+   * A system property that turns the warm-up off when it is {@code false}, for the measurements
+   * that compare the JVM with and without it. Production does not set it.
+   */
+  static final String PROPERTY = "varka.warmup.vectorTemplates";
+
+  /**
+   * Rounds of calls. A template reaches C1's profiling tier after 200 invocations, and C2 asks for
+   * it after 5000 at the default scale; the rounds only have to cover the profiling tier with
+   * every operator class mixed in, which C2 then reads whenever it compiles.
+   */
+  static final int ROUNDS = 300;
+
+  private static final int BYTES = 4096;
+
+  private static final List<Unary> UNARY = List.of(VectorOperators.NEG, VectorOperators.ABS,
+      VectorOperators.NOT);
+
+  private static final List<Binary> BINARY = List.of(VectorOperators.ADD, VectorOperators.SUB,
+      VectorOperators.MUL, VectorOperators.DIV, VectorOperators.MIN, VectorOperators.MAX,
+      VectorOperators.AND, VectorOperators.OR, VectorOperators.XOR);
+
+  private static final List<Binary> SHIFTS = List.of(VectorOperators.ASHR,
+      VectorOperators.LSHR, VectorOperators.LSHL);
+
+  private static final List<Comparison> COMPARISONS = List.of(VectorOperators.EQ,
+      VectorOperators.NE, VectorOperators.LT, VectorOperators.LE, VectorOperators.GT,
+      VectorOperators.GE, VectorOperators.ULT, VectorOperators.ULE, VectorOperators.UGT,
+      VectorOperators.UGE);
+
+  private static boolean done;
+
+  // Calls to warmUp that finished, and the failure a test asks the next one to throw; see
+  // resetForTest.
+  private static int completed;
+  private static volatile Throwable failWith;
+
+  // Read by no one: it keeps the JIT from discarding the calls as dead code.
+  private static volatile long sink;
+
+  private VarkaVectorTemplateWarmup() {
+  }
+
+  /**
+   * Runs the warm-up if this JVM has not, and returns the nanoseconds it took, or zero when it ran
+   * before, is switched off, or failed. Any failure, an {@code Error} included, is logged and the
+   * engine goes on: the warm-up only improves the odds of a clean compile, and the thread that
+   * calls this serves every shape in the JVM.
+   */
+  static synchronized long ensure() {
+    if (done || "false".equals(System.getProperty(PROPERTY))) {
+      return 0;
+    }
+    done = true;
+    long start = System.nanoTime();
+    try {
+      warmUp();
+    } catch (Throwable e) {
+      LOG.warn("The Vector API template warm-up failed; kernels warm without it.", e);
+      return 0;
+    }
+    return System.nanoTime() - start;
+  }
+
+  /** How many times {@link #warmUp} ran to the end in this JVM; for tests. */
+  static synchronized int completedRuns() {
+    return completed;
+  }
+
+  /**
+   * Test hook: forgets that the warm-up ran, so that {@link #ensure} runs it again, and makes the
+   * next {@link #warmUp} throw {@code failure} if it is not null.
+   */
+  static synchronized void resetForTest(Throwable failure) {
+    done = false;
+    completed = 0;
+    failWith = failure;
+  }
+
+  /**
+   * The calls themselves, {@link #ROUNDS} rounds of them, and a checksum of the results, which
+   * is the same on every call and every machine for the lane counts of one species set (a test
+   * pins that the work is deterministic and computed, not discarded).
+   */
+  static long warmUp() {
+    Throwable injected = failWith;
+    if (injected != null) {
+      sneakyThrow(injected);
+    }
+    VectorSpecies<Integer> is = IntVector.SPECIES_PREFERRED;
+    VectorSpecies<Long> ls = LongVector.SPECIES_PREFERRED;
+    VectorSpecies<Double> ds = DoubleVector.SPECIES_PREFERRED;
+    int[] ia = new int[is.length()];
+    int[] ib = new int[is.length()];
+    long[] la = new long[ls.length()];
+    long[] lb = new long[ls.length()];
+    double[] da = new double[ds.length()];
+    double[] db = new double[ds.length()];
+    for (int i = 0; i < ia.length; i++) {
+      ia[i] = 3 * i - 7;
+      ib[i] = i + 1;
+    }
+    for (int i = 0; i < la.length; i++) {
+      la[i] = 5L * i - 11;
+      lb[i] = i + 1;
+    }
+    for (int i = 0; i < da.length; i++) {
+      da[i] = 0.5 * i - 1;
+      db[i] = i + 1;
+    }
+    MemorySegment segment = Arena.ofAuto().allocate(BYTES, 64);
+    long acc = 0;
+    for (int round = 0; round < ROUNDS; round++) {
+      acc += ints(is, ia, ib, segment);
+      acc += longs(ls, la, lb, segment);
+      acc += doubles(ds, da, db);
+      acc += conversions(is, ls, ds, ia, la, da);
+    }
+    sink = acc;
+    synchronized (VarkaVectorTemplateWarmup.class) {
+      completed++;
+    }
+    return acc;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static <T extends Throwable> void sneakyThrow(Throwable t) throws T {
+    throw (T) t;
+  }
+
+  private static long ints(VectorSpecies<Integer> s, int[] ia, int[] ib, MemorySegment seg) {
+    IntVector a = IntVector.fromArray(s, ia, 0);
+    IntVector b = IntVector.fromArray(s, ib, 0);
+    VectorMask<Integer> m = a.compare(VectorOperators.GT, b);
+    VectorMask<Integer> tail = s.indexInRange(0, s.length() / 2 + 1);
+    long acc = m.toLong() + (m.anyTrue() ? 1 : 0) + m.and(tail).or(tail.not()).trueCount();
+    acc += VectorMask.fromLong(s, acc).toLong();
+    for (Unary op : UNARY) {
+      acc += a.lanewise(op).lane(0) + a.lanewise(op, m).lane(1);
+    }
+    for (Binary op : BINARY) {
+      acc += a.lanewise(op, b).lane(0) + a.lanewise(op, b, m).lane(1)
+          + a.lanewise(op, 3).lane(2) + a.lanewise(op, 3, m).lane(3);
+    }
+    for (Binary op : SHIFTS) {
+      acc += a.lanewise(op, 2).lane(0) + a.lanewise(op, b).lane(1);
+    }
+    for (Comparison op : COMPARISONS) {
+      acc += a.compare(op, b).toLong() + a.compare(op, 4).toLong()
+          + a.compare(op, b, m).toLong();
+    }
+    acc += a.add(b).lane(0) + a.sub(b).lane(0) + a.mul(b).lane(0) + a.add(4).lane(0)
+        + a.sub(4, m).lane(0) + a.add(b, m).lane(0) + a.mul(4).lane(1) + a.min(b).lane(0)
+        + a.max(b).lane(0) + a.and(b).lane(0) + a.or(b).lane(0) + a.and(1).lane(1)
+        + a.div(7).lane(0) + a.blend(b, m).lane(0) + a.blend(9, m).lane(0)
+        + IntVector.broadcast(s, 5).lane(0) + IntVector.zero(s).lane(0);
+    acc += a.compress(m).lane(0);
+    a.intoMemorySegment(seg, 0, ByteOrder.LITTLE_ENDIAN);
+    a.intoMemorySegment(seg, 64, ByteOrder.LITTLE_ENDIAN, tail);
+    acc += IntVector.fromMemorySegment(s, seg, 0, ByteOrder.LITTLE_ENDIAN).lane(0)
+        + IntVector.fromMemorySegment(s, seg, 64, ByteOrder.LITTLE_ENDIAN, tail).lane(1);
+    return acc;
+  }
+
+  private static long longs(VectorSpecies<Long> s, long[] la, long[] lb, MemorySegment seg) {
+    LongVector a = LongVector.fromArray(s, la, 0);
+    LongVector b = LongVector.fromArray(s, lb, 0);
+    VectorMask<Long> m = a.compare(VectorOperators.GT, b);
+    VectorMask<Long> tail = s.indexInRange(0, s.length() / 2 + 1);
+    long acc = m.toLong() + (m.anyTrue() ? 1 : 0) + m.and(tail).or(tail.not()).trueCount();
+    acc += VectorMask.fromLong(s, acc).toLong();
+    for (Unary op : UNARY) {
+      acc += a.lanewise(op).lane(0) + a.lanewise(op, m).lane(1);
+    }
+    for (Binary op : BINARY) {
+      acc += a.lanewise(op, b).lane(0) + a.lanewise(op, b, m).lane(1)
+          + a.lanewise(op, 3L).lane(0) + a.lanewise(op, 3L, m).lane(1);
+    }
+    for (Binary op : SHIFTS) {
+      acc += a.lanewise(op, 2L).lane(0) + a.lanewise(op, b).lane(1);
+    }
+    for (Comparison op : COMPARISONS) {
+      acc += a.compare(op, b).toLong() + a.compare(op, 4L).toLong()
+          + a.compare(op, b, m).toLong();
+    }
+    acc += a.add(b).lane(0) + a.sub(b).lane(0) + a.mul(b).lane(0) + a.add(4L).lane(0)
+        + a.sub(4L, m).lane(0) + a.add(b, m).lane(0) + a.min(b).lane(0) + a.max(b).lane(0)
+        + a.and(b).lane(0) + a.or(b).lane(0) + a.blend(b, m).lane(0) + a.blend(9L, m).lane(0)
+        + LongVector.broadcast(s, 5L).lane(0) + LongVector.zero(s).lane(0);
+    a.intoMemorySegment(seg, 128, ByteOrder.LITTLE_ENDIAN);
+    a.intoMemorySegment(seg, 256, ByteOrder.LITTLE_ENDIAN, tail);
+    acc += LongVector.fromMemorySegment(s, seg, 128, ByteOrder.LITTLE_ENDIAN).lane(0)
+        + LongVector.fromMemorySegment(s, seg, 256, ByteOrder.LITTLE_ENDIAN, tail).lane(1);
+    return acc;
+  }
+
+  private static long doubles(VectorSpecies<Double> s, double[] da, double[] db) {
+    DoubleVector a = DoubleVector.fromArray(s, da, 0);
+    DoubleVector b = DoubleVector.fromArray(s, db, 0);
+    VectorMask<Double> m = a.compare(VectorOperators.GT, b);
+    long acc = m.toLong();
+    acc += (long) (a.add(b).lane(0) + a.sub(b).lane(0) + a.mul(b).lane(0) + a.div(b).lane(0)
+        + a.lanewise(VectorOperators.NEG).lane(0) + a.lanewise(VectorOperators.MAX, b).lane(0)
+        + a.lanewise(VectorOperators.ADD, 2.0, m).lane(0) + a.blend(b, m).lane(0));
+    for (Comparison op : List.of(VectorOperators.EQ, VectorOperators.LT, VectorOperators.GE)) {
+      acc += a.compare(op, b).toLong();
+    }
+    return acc;
+  }
+
+  private static long conversions(VectorSpecies<Integer> is, VectorSpecies<Long> ls,
+      VectorSpecies<Double> ds, int[] ia, long[] la, double[] da) {
+    IntVector i = IntVector.fromArray(is, ia, 0);
+    LongVector l = LongVector.fromArray(ls, la, 0);
+    DoubleVector d = DoubleVector.fromArray(ds, da, 0);
+    long acc = i.convertShape(VectorOperators.I2L, ls, 0).reinterpretAsLongs().lane(0)
+        + l.convertShape(VectorOperators.L2I, is, 0).reinterpretAsInts().lane(0)
+        + (long) i.convertShape(VectorOperators.I2D, ds, 0).reinterpretAsDoubles().lane(0)
+        + d.convertShape(VectorOperators.D2I, is, 0).reinterpretAsInts().lane(0)
+        + l.reinterpretAsDoubles().reinterpretAsLongs().lane(0);
+    return acc;
+  }
+}

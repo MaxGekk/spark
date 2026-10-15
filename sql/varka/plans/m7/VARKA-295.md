@@ -592,3 +592,96 @@ the first operator class it had not seen. Iteration 220 alone releases 0 of 12 o
 2 of 4 on fastdebug. Both options removed every release in 1,000 warm-ups, the cutoff alone left
 3 to 11. Not shown: which flipped sites are the vector-valued ones. No product code changed; the
 suite gained `warmupSet` and `warmupShow`. Logs: `.../scratchpad/295e/` (`pq_*`, `fe1`, `full_*`).
+
+### 9.7 Step 3: warm the shared templates first, and the releases go (follows 9.6)
+
+**What was built.** `VarkaVectorTemplateWarmup`, run by `VarkaKernelWarmup`'s worker thread before
+it takes its first job, once per JVM. It calls every Vector API method the emitter's kernels call
+(`lanewise` unary, binary, shift, masked and scalar forms, `compare` and its mask forms, `blend`,
+`broadcast`, `convertShape`, the reinterprets, `fromMemorySegment` and `intoMemorySegment` dense
+and masked, the mask `and`/`or`/`not`/`anyTrue`/`toLong`/`fromLong`/`indexInRange`) on `IntVector`,
+`LongVector` and `DoubleVector` at `SPECIES_PREFERRED`, with the operators the emitter names
+(the arithmetic, bitwise and shift operators, `NEG`/`ABS`/`NOT`, the ten comparisons), interleaved
+in each round so every template call site sees several operator classes while it is profiled.
+`IntVector.compress` is in the list (the query-path `SelectionVectorOps` calls it). ROUNDS is 300. `-Dvarka.warmup.vectorTemplates=false` turns it off, for these measurements only.
+The call in the worker is guarded (`VarkaKernelWarmup.templateWarmup`, any `Throwable`, logged, the worker goes on to its first job); the class's own `ensure` returns zero on a failure. `VarkaVectorTemplateWarmupSuite` pins: deterministic and used; the first `ensure` runs the body (a counter) and later ones do not; two threads run it once; an injected `Error` is absorbed and a thread reaches the code after the call; the property switches it off. The effect on the JIT is measured here, not asserted by a test, and a worker thread dying is not tested (the guard is).
+
+**Which methods held the counts.** Runs of the two-composition reproducer with the
+deoptimization log (`pc_*`, three each). Without the warm-up, `class_check` traps in the
+`jdk.incubator.vector` templates, standalone compiles only: 24, 22 and 21; `VectorOperators.opKind`
+4, 5 and 5 of them, `ImplCache.find` 4 (first run), `VectorMask.fromLong` 4 plus 4
+`speculate_class_check`, `VectorMask.fromArray` and a `VectorMask` lambda's `load` the rest. With
+it: 0, 0 and 0. What remains is `profile_predicate` and `osr_bci` traps in `ldLongOp`, `stLongOp` and
+`bTest`, which are not class checks and are in both arms, and one more thing in all three runs:
+`VectorMask.fromLong` still gets a tier-4 compile made not entrant by an uncommon trap, and 4
+`speculate_class_check` traps at bci 24 (compile ids 9673, 9597, 9627). Bci 24 is
+`AbstractSpecies.elementType()` on the `species` argument, so the speculation is on the species
+class that call has seen, not on an operator; the warm-up feeds it the preferred int and long
+species only, and a kernel's masks come from others (the conversions' half-width species). It did
+not push any measured sum over 100 or 201, and releases went to zero, but it shows the profile
+is not made polymorphic at every site, and the same mechanism could come back through a species
+the warm-up does not use.
+
+| arm (seed 20261008) | runs | deadline releases |
+|---|---|---|
+| reproducer, prefix `[0]` then iteration 220, without | 6 | 5 of 6 (9.6 had 5 of 6 too) |
+| the same, with (1500 rounds) | 6 | 0 of 6 |
+| the same, with 100, 300, 600 rounds | 6 each | 0 of 6 each |
+| 400 compositions, about 500 warm-ups, without, 6 cores | 3 | 53, 78, 33 |
+| the same, with 1500 rounds | 3 | 0, 0, 0 (COMPILED 497, 501, 500) |
+| the same, with the shipped 300 rounds | 2 | 0, 0 (COMPILED 500, 499) |
+
+Each run is one JVM on 6 cores (`taskset`), pairs with and without side by side, and every log
+shows `Tests: succeeded 1`. The load average was 7 to 10 for the first six runs and 24 to 33 for
+the 100/300/600 and the last two (other agents' work), so the without-arm's counts are higher than 9.6's
+18, 10, 39 on 12 cores; the direction does not depend on it. Both options of 9.6 gave 0 of 1,000.
+
+**What it costs.** The numbers come from `TMPCOST` lines of a temporary patch to
+`VarkaSparkFuzzSuite` (the worker's `templateWarmupNanos` and each warm-up's queue and run time),
+not in the branch, in the `c_*` and `r*` logs; the load average was 8 to 10 for the `c_*` runs and
+24 to 33 for the `r*` ones. The branch now logs the warm-up's duration once at INFO
+(`VarkaKernelWarmup.templateWarmupNanos`). On the worker thread: 312, 322, 404 and 658 ms at
+1500 rounds; 238 to 398 ms at 600; 219 to 345 ms at 300 (6 runs); 123 to 572 ms at 100. It is
+dominated by interpreting and class loading, not by the number of rounds. The first kernel's wait
+(queue plus run, four runs each, 1500 rounds, `c_*`): 449 to 625 ms without the warm-up and 603 to
+961 ms with it; the second kernel's run time fell from 607 to 639 ms to 301 to 379 ms, because the
+templates are already compiled. It happens once per JVM on the warm-up thread while the shape's
+batches take the row path, so the query that triggers it does not wait, but its shape's verdict is
+later by the warm-up's duration, and that time counts against the 60 s deadline. A warm JVM re-runs
+300 rounds in 28 to 42 ms (the unit suite), which is not the cost a fresh JVM pays.
+
+**What it does not show, and what is not measured.**
+
+* Steady-state kernel throughput with and without the warm-up. Only the warm-up job's run time
+  and compile counts exist (COMPILED 497 to 501 of 500 against 421 to 467). The reasoning is that
+  the emitter passes `getstatic VectorOperators.X` constants, so a call site folds by constant
+  whatever the template's profile; that is reasoning, not a measurement. A benchmark pair
+  (property on and off, a clean-compiling kernel, reported as rates) is owed, and was not run
+  because the machine's load average was 23 while this was written.
+* Non-preferred species. Production kernels bake the preferred species, which the warm-up feeds.
+  A kernel at another species (`lanesOverride` 4 or 16, the option matrix) reaches the same
+  shared templates, whose profiles now hold preferred-shape receivers: this could repeat the
+  pollution, keyed by species instead of operator. No matrix run with the warm-up exists. The
+  `speculate_class_check` residue above is the same kind.
+* Query-path vector code. `IntRangeOps` and `SelectionVectorOps` run vector code on query threads
+  before any warm-up thread exists, and a JVM that ran vector code first may already hold traps in
+  the templates; the warm-up cannot remove them.
+* That 300 rounds is the least that works: 100 rounds was clean in the 6 reproducer runs but was
+  not run through the 400-composition arm. Whether the profile or the early tier-4 compile of
+  `opKind`, `ImplCache.find` and the `lanewise` template is what matters (they reach tier 4
+  inside the warm-up, `pc_on1` compile ids 9243 and 9377) was not separated.
+* The alternating-cores question: every pair ran with the warm-up on cores 0 to 5 and the off arm
+  on 6 to 11. The differences are large (53, 78, 33 against 0, 0, 0), but the pairs did not swap.
+
+The property `varka.warmup.vectorTemplates` stays a system property, as `varka.warmup.deadlineSeconds`
+is. Turning it into an internal SQLConf (string-keyed, a typed value bound once, as
+`VARKA_WARMUP_ENABLED`) is a follow-up; the warm-up is JVM-wide and runs on a thread with no
+session, so the likelier shape is a static conf read when the worker starts.
+
+**After the review's changes** (the guard, `compress` in the list, `Arena.ofAuto`), on the final
+build and at a load of 28 to 30: the reproducer 0 of 3 released, and one 400-composition run 0
+deadline releases (COMPILED 497).
+
+**Nothing else moved.** With the 300 rounds, under the defaults: `VarkaSparkFuzzSuite` (all arms),
+`VarkaWarmupEndToEndSuite` and `VarkaProjectExecSuite`, 47 tests in sql, and the catalyst `*Varka*`
+suites, all passed (the emitted bytes oracle is among them; no emitter code changed).
