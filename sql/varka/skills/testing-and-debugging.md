@@ -1293,3 +1293,39 @@ the plan's arithmetic, because the arithmetic counts the kernel's work and not t
 (loading, copying, reading the JIT's state); predict that overhead from a probe, not from the
 kernel's share.
 
+
+## A forked JVM proves its own tier, and the default JVM's expectations are not that proof
+
+From VARKA-272 (14 October 2026), which forks the IR fuzzer's compiled test under other JVM flags
+(`dev/varka_platform.sh`).
+
+- The compiled histories' default rules (VARKA-274a) say what the default JVM shows: `cold`
+  interpreted, a settled warm-up all C2, `released` entered by an OSR at level 3 or 4. Under
+  `-XX:TieredStopAtLevel=1` the released OSR is at level 1, which the report's kinds do not name
+  ("some mixed"), and under `-Xcomp` nothing is ever interpreted: a `cold` call is compiled code
+  that traps at once on a class the compile found unloaded (`unloaded`, reinterpret), and no loop
+  is entered by an OSR. Both arms failed `-Dvarka.fuzz.requireTiers=true` for the wrong reason
+  until each tier got rules of its own (`VarkaCompiledCheck.Tier`, `-Dvarka.fuzz.tier`), and the
+  JVM's own flags are read back first (`VarkaPlatformFacts`), so an arm whose command line lost a
+  flag fails as "not the tier it claims", never as a kernel's answer.
+- A rule that asks for "no settled case that is not all C2" passes a lane where nothing settled:
+  the intrinsics-off arm's int lane read "0 history(ies) not reached" with every warm-up at level
+  0 at its deadline. A lane with warmed runs and no settled one has not reached the history, and
+  the rule says so now.
+- `EnableVectorSupport` reads `false {default}` under `-XX:+PrintFlagsFinal` on every JDK, with
+  and without `--add-modules jdk.incubator.vector`: `modules.cpp` turns it on when the module is
+  defined, after the flags print. Read it from inside through `HotSpotDiagnosticMXBean`'s
+  `getVMOption`, which needs `-XX:+UnlockExperimentalVMOptions` (locked, the flag "does not
+  exist"), or off `-Xlog:compilation=info`'s startup line.
+- A crashed JVM keeps JFR's emergency dump `hs_err_pid<pid>.jfr` in its working directory
+  whenever a recording is active, the tier witness's stream included; a file recording's
+  `dumponexit` writes nothing on a crash; a replay file (`DumpReplayDataOnError`, on by default)
+  appears only when a compiler thread crashed. So an arm runs with its directory as the working
+  directory and `-XX:ErrorFile` and `-XX:ReplayDataFile` pointed there with `%p`.
+- Never recompile the test classes while forked JVMs run on them: a `NoClassDefFoundError` for
+  `VarkaKernelChecks$LongBatch` in a stress arm's `cold` history read as a finding for ten
+  minutes, and was sbt rewriting the class files under the running JVM.
+- A tier proof that asks for a JIT outcome from one draw is a flaky test on a loaded runner: C1's
+  `released` history was not reached in two runs of three at one compiled draw a lane on two
+  shared cores, from a body with no loop method or a starved C1 queue. Smoke only the arm whose
+  proof is a negative (`-Xint`: nothing compiles) and ask the others for a draw count.

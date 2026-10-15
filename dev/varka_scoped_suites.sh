@@ -34,7 +34,9 @@
 # VarkaTierWitnessSuite in catalyst, VarkaWarmupEndToEndSuite in sql - run after the others, alone and without the memory sanitizer,
 # in target/varka-scoped-quiet, as the gate's quiet step runs them: beside the other JVM's suites
 # the warm-up test's kernel has stayed mostly uncompiled past its two minutes (VARKA-295.md 9.2),
-# and a rerun, restoring the same cached times, puts it beside the same suites again.
+# and a rerun, restoring the same cached times, puts it beside the same suites again. The catalyst
+# run ends with the forked arms' smoke (VARKA-272): dev/varka_platform.sh's interpreter
+# arm on the same build, in target/varka-scoped-platform.
 
 set -euo pipefail
 
@@ -52,3 +54,13 @@ dev/varka_matrix.sh --defaults --module "$module" --split 2 -j 2 --sbt-arg -Phiv
   --out target/varka-scoped --skip-suites "$timing" "${extra[@]}"
 dev/varka_matrix.sh --defaults --module "$module" --skip-build --build-dir target/varka-scoped \
   --out target/varka-scoped-quiet --suites "$timing" -j 1 --no-sanitizer
+# The forked arms' smoke (VARKA-272): the interpreter arm over the IR fuzzer's first draws on
+# this build, made to prove its tier (nothing is compiled, whatever the draw and the machine),
+# a few seconds. Every other arm's proof is a fact about what the JIT did with a draw: on two
+# loaded cores C1's `released` history was not reached in two runs of three at one compiled
+# draw, because the case's body had no loop method or C1 installed nothing in 200 batches
+# (VARKA-272.md 9.6). Those arms keep their strict rules over 20 draws in the nightly.
+if [ "$module" = catalyst ]; then
+  dev/varka_platform.sh --arms int --iterations 20 --draws 1 --skip-build \
+    --build-dir target/varka-scoped --out target/varka-scoped-platform
+fi

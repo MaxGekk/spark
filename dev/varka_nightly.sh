@@ -31,6 +31,7 @@
 #   dev/varka_nightly.sh --sparkfuzz-iterations 5000 --skip-sweep --skip-deopt --skip-cliff
 #   dev/varka_nightly.sh --sparkwarm-iterations 0   # without the warmed arm of the differential
 #   dev/varka_nightly.sh --skip-golden    # without the golden-file suite, about an hour
+#   dev/varka_nightly.sh --skip-platform  # without the forked JVM arms (interpreter, C1, C2, -Xcomp, ...)
 #
 # The deopt step forks ten fresh JVMs per vector width of the default emission's twelve-output
 # make_date kernel and fails if any of them enters the C2 deoptimization cycle, reading the
@@ -41,6 +42,12 @@
 # VARKA-209.md 11). The golden step runs Spark's SQLQueryTestSuite files through an Arrow cache
 # with Varka on, Spark's committed answers the oracle, and reruns the tests it fails with Varka
 # off, naming each failure Varka's or the harness's (dev/varka_golden_suite.sh, VARKA-271.md 3.2).
+# The platform step, the last, forks one JVM per arm - the interpreter, C1, C2, the Vector API's
+# intrinsics off, -Xcomp, C2's seeded stress flags on the shipped JDK, and the fastdebug JDK's
+# when its build is beside the repository - over the IR fuzzer's corpus with the day's seed, each
+# arm made to prove its tier through JFR and the code list, the answers compared across the arms,
+# a crashed arm's hs_err, replay and JFR files kept under the log directory
+# (dev/varka_platform.sh, VARKA-272.md 3).
 #
 # Every step runs under dev/varka_deadline.sh, VARKA_STEP_DEADLINE seconds (default 10800, the
 # ten-thousand-iteration fuzzer's room with margin), so a hung step fails instead of holding
@@ -61,6 +68,7 @@ sparkfuzz=50000
 sparkwarm=2000
 series=5
 variants=4
+platform=1
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h|--help) usage 0 ;;
@@ -74,6 +82,7 @@ while [ "$#" -gt 0 ]; do
     --skip-deopt) deopt=0; shift ;;
     --skip-cliff) cliff=0; shift ;;
     --skip-golden) golden=0; shift ;;
+    --skip-platform) platform=0; shift ;;
     --gate) gate=1; shift ;;
     *) usage ;;
   esac
@@ -157,6 +166,14 @@ if [ "$cliff" -eq 1 ]; then
   run_step cliff dev/varka_inlining_cliff.sh --outputs 24,40 --forks 10 --seconds 12 --fail-if-slow
 fi
 [ "$gate" -eq 1 ] && run_step gate dev/varka_gate.sh
+# The kernels under the interpreter, C1, C2, the intrinsics off, -Xcomp and the stress flags, each
+# in a JVM of its own, the answers compared across the arms and each arm's tier proven (VARKA-272);
+# last, after the gate has had the machine to itself.
+if [ "$platform" -eq 1 ]; then
+  # Each arm's own deadline, 30 minutes, keeps the seven arms two at a time inside the step's.
+  run_step platform dev/varka_platform.sh --seed "$seed" --arm-deadline 1800 \
+    --out "$logdir/platform"
+fi
 
 echo
 echo "fuzzer seed $seed, $iterations iterations; Spark differential $sparkfuzz compositions," \
@@ -168,4 +185,10 @@ for s in canary fuzz forced sparkfuzz sparkwarm sweep prove series variants deop
   printf '%-9s %-7s %6d  %s\n' "$s" "${status[$s]}" "${secs[$s]}" "$logdir/$s.log"
   [ "${status[$s]}" = ok ] || bad=$((bad + 1))
 done
+# The platform step, the last to run, is listed last.
+if [ -n "${status[platform]:-}" ]; then
+  printf '%-9s %-7s %6d  %s\n' platform "${status[platform]}" "${secs[platform]}" \
+    "$logdir/platform.log"
+  [ "${status[platform]}" = ok ] || bad=$((bad + 1))
+fi
 exit "$bad"
