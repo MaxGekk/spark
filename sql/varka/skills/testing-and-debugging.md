@@ -759,6 +759,36 @@ file first; it is the whole case.
 * **Stratify the draw.** A uniform draw over the 92 rows found a planted bug in one row after 254
   of 300 compositions; forcing row `k mod 92` into composition `k` finds it in the second pass.
 
+## The differential with the warm-up on: both sides of the handover compared, a release reported
+
+The shared sessions turn the kernel warm-up off, so every other Spark-level suite's kernels serve a
+shape's first batch, interpreted, and none of them meets code C2 compiled from the warm-up's copy of
+a batch. `VarkaSparkFuzzSuite`'s warmed arm (VARKA-327, "random compositions agree with the row
+engine on both sides of the warm-up handover") turns it on: per composition, from an empty shape
+cache, the query on the row path while its kernel warms, again after `awaitIdle` until no node
+waited (a projection over a Varka filter claims its warm-up only once the filter serves Arrow
+batches, so up to four runs), then the warmed shape over other data with the same nulls
+(`laterData`), every run against the row engine. `-Dvarka.sparkfuzz.warmupIterations` (8 by
+default, 2,000 in the nightly's `sparkwarm` step), `-Dvarka.sparkfuzz.warmupOnly=<it>` replays one.
+
+* **The kind names the side of the switch**: "on the row path while the kernel warms", "after the
+  handover to the kernel", "over other data after the handover". A reproducer is not shrunk -
+  each smaller case is a new warm-up - and replays by its note's flags. Its status is `warmed`,
+  which `VarkaSparkReproducerSuite` refuses: that suite replays with the warm-up off, where the
+  case's path is not taken, so a warmed case kept in `sql/varka/fuzz/spark/` would pass for the
+  wrong reason.
+* **A release is evidence, never a failure.** About one small kernel in fifteen never gets its
+  verdict (`VARKA-327.md` 2), so the arm sets the deadline to 10 s
+  (`-Dvarka.sparkfuzz.warmupDeadlineSeconds`) where production waits 60, and reports each release
+  in the test's output: the outcome, the JIT state at the release (queue, code list, methods with
+  no code) and the `VarkaJitEvidence` account. Read it for VARKA-295: an empty C2 queue with the
+  kernel's loops compiled and the probe still allocating is its signature; `profile_predicate`
+  traps in a masked loop are VARKA-326's cycle; a busy queue means the deadline was too short.
+* **Read the counts before trusting a pass.** Three in four compositions hand over; the rest have
+  no Varka node, raise on both sides, or have every cached batch pruned by the scan's statistics
+  (`numInputBatches` 0); the counts name each. At 50 or more the test fails if fewer than half
+  hand over.
+
 
 ## A decline is the entry deleted, and only a forced decline reaches the branch that has to make it so
 
@@ -1222,6 +1252,7 @@ predicted. Add the line when the prediction is scored, whichever way it went.
 | VARKA-271a (6.1 #6) | the Varka arm under 70 minutes in one JVM | 33 minutes beside the cache-only arm | 0.5 | pessimistic |
 | VARKA-315 (6.1 #4) | the end-to-end suite under 30 s | 4.5 s of tests, 38 s with sbt's start | 0.15 | eight short queries over one cached view |
 | VARKA-243 (6.1 #3) | a new sql/core suite under 10 s | 18 s, its tests under 4 s | about 2 | the estimate counted the tests and not the suite's own sessions and cached table |
+| VARKA-327 (6.1 #2) | the warmed Spark differential's 2,000 compositions under an hour | 13 minutes | 0.26 | predicted from a seed that released 6.8% of its warm-ups at 10 s each; the nightly's released 0.9% |
 
 What the table says so far: a check that adds a run per batch or a read per call costs more than
 the plan's arithmetic, because the arithmetic counts the kernel's work and not the harness's

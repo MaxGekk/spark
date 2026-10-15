@@ -17,12 +17,15 @@
 
 package org.apache.spark.sql.execution
 
+import java.time.Duration
+
 import org.apache.logging.log4j.Level
 
 import org.apache.spark.{SparkException, SparkIllegalArgumentException, SparkIllegalStateException}
+import org.apache.spark.executor.Executor
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAllocationSampler, VarkaEmitOption, VarkaEmitOptions, VarkaErrorContext, VarkaErrors, VarkaFallbackEvent, VarkaJfrTestSupport, VarkaTestWatchdog}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAllocationSampler, VarkaEmitOption, VarkaEmitOptions, VarkaErrorContext, VarkaErrors, VarkaFallbackEvent, VarkaJfrTestSupport, VarkaJitEvidence, VarkaKernelAllocationEvent, VarkaShapeCache, VarkaTestWatchdog}
 import org.apache.spark.sql.execution.varka.VarkaFallbackAccounting
 import org.apache.spark.sql.internal.SQLConf
 
@@ -188,16 +191,21 @@ class VarkaErrorContextSuite extends QueryTest with VarkaSharedSessions with Var
       "nothing") {
     // The record is built only in a catch. This checks the other half of that: a task whose
     // batches all failed and were answered by the row path leaves nothing behind that the
-    // kernel's own path then pays per batch. The allocation sampler measures every kernel batch;
-    // the first rounds run the kernel before C2 has compiled it, when every vector is a heap
-    // object, so the check is that some round within the cap samples clean
-    // (VarkaProjectExecSuite's sampler test explains the warm-up).
+    // kernel's own path then pays per batch. The allocation sampler measures every kernel batch,
+    // and a batch reads clean only once C2 has compiled the loop: before that every vector is a
+    // heap object, about 120 KB a 10,000-row batch, and a JVM whose compilers do not reach the
+    // loop reads so for as long as the test runs, as the option matrix's run after a merge did
+    // (VARKA-314.md 9.2). So the measurement is taken twice under one cap: the control, before
+    // any failure, and the steady state after. A control that never reads clean is the JVM's
+    // compiler and not the failure path, and cancels the test with the JIT's account of the
+    // kernel class; the failure path is blamed only for a steady state dirtier than its control.
     val view = "varka_error_context_steady"
     varkaSpark.range(0, 1 << 20)
       .selectExpr("date_add(DATE'2000-01-01', CAST(id % 20000 AS INT)) AS d")
       .createOrReplaceTempView(view)
     varkaSpark.catalog.cacheTable(view)
     val steady = s"SELECT date_add(d, 3) AS a FROM $view"
+    // One round's read: kernel batches, kernel-failure fallbacks, suspect allocation samples.
     def round(): (Long, Long, Long) = {
       val df = varkaSpark.sql(steady)
       assert(df.queryExecution.toRdd.count() === (1L << 20))
@@ -207,27 +215,78 @@ class VarkaErrorContextSuite extends QueryTest with VarkaSharedSessions with Var
       (metric("numVarkaBatches"), metric("numFallbackBatchesKernel"),
         metric("numSuspectAllocationSamples"))
     }
-    val maxRounds = 20
-    VarkaEvaluatorBase.allocationSchedule = new VarkaAllocationSampler.Schedule(1, 1)
-    try {
-      varkaSpark.table(view).count()
-      VarkaColumnarToRowExec.setFailKernelForTesting(true)
-      val (_, failed, _) = try round() finally {
-        VarkaColumnarToRowExec.setFailKernelForTesting(false)
-      }
-      assert(failed > 0L, "the failing round should have taken the kernel-failure catch")
-      var clean = false
+    val cap = Duration.ofSeconds(30)
+    // Rounds until one reads clean or the cap passes: how many ran, and the last one's read.
+    def roundsUntilClean(): (Int, (Long, Long, Long)) = {
+      val deadline = System.nanoTime() + cap.toNanos
       var rounds = 0
       var last = (0L, 0L, 0L)
-      while (!clean && rounds < maxRounds) {
+      while (rounds == 0 || (last._3 != 0L && System.nanoTime() < deadline)) {
         last = round()
         rounds += 1
         assert(last._1 > 0L && last._2 === 0L, last)
-        clean = last._3 === 0L
       }
-      assert(clean, s"no clean round within $maxRounds rounds; the last read $last")
-      logInfo(s"steady state clean after $rounds rounds, $failed failed batches before")
+      (rounds, last)
+    }
+    // The control's rounds and last read; then the failing round's fallbacks and the steady
+    // state's rounds and last read, which there are none of when the control never read clean.
+    case class Reads(controlRounds: Int, control: (Long, Long, Long),
+        after: Option[(Long, Int, (Long, Long, Long))])
+    VarkaEvaluatorBase.allocationSchedule = new VarkaAllocationSampler.Schedule(1, 1)
+    // The JIT's own account of the kernel class, for the message of a cancel or a failure.
+    val evidence = VarkaJitEvidence.start()
+    try {
+      varkaSpark.table(view).count()
+      val (reads, recorded) =
+        VarkaJfrTestSupport.withJfrRecording(classOf[VarkaKernelAllocationEvent]) {
+          val (controlRounds, control) = roundsUntilClean()
+          if (control._3 != 0L) {
+            Reads(controlRounds, control, None)
+          } else {
+            VarkaColumnarToRowExec.setFailKernelForTesting(true)
+            val (_, failed, _) = try round() finally {
+              VarkaColumnarToRowExec.setFailKernelForTesting(false)
+            }
+            val (rounds, last) = roundsUntilClean()
+            Reads(controlRounds, control, Some((failed, rounds, last)))
+          }
+        }
+      val samples = recorded
+        .filter(VarkaJfrTestSupport.isEvent(_, classOf[VarkaKernelAllocationEvent]))
+        .sortBy(_.getStartTime)
+      // The kernel's class, from the identity every sample names.
+      val shapeHash = samples.headOption.map(_.getString("kernelIdentity"))
+        .flatMap("VarkaFusedProjection_(\\w+)\\.java".r.findFirstMatchIn(_)).map(_.group(1))
+      // What a reader of a cancel or a failure needs: the last round's samples in bytes a batch
+      // (an interpreted loop reads about 120 KB, a compiled one's residue a few KB), and the JIT's
+      // account of the class - its compiles by tier, deoptimizations, refused inlining and where
+      // the task threads' last allocations came from.
+      def account(rounds: Int, last: (Long, Long, Long)): String = {
+        val bytes = samples.takeRight(last._1.toInt).map(_.getLong("allocatedBytes"))
+        val range = if (bytes.isEmpty) "no samples" else s"${bytes.min} to ${bytes.max} bytes"
+        s"the last round read $last after $rounds rounds under a cap of ${cap.toSeconds} s; " +
+          s"its samples allocated $range a batch; " +
+          shapeHash.map(h => evidence.summary(VarkaShapeCache.classNameFor(h),
+            Executor.TASK_THREAD_NAME_PREFIX, Duration.ofSeconds(20)))
+            .getOrElse("no sample named the kernel's class")
+      }
+      reads.after match {
+        case None =>
+          cancel("the kernel did not read clean before any failure, so this JVM cannot measure " +
+            "what the failures leave behind: " + account(reads.controlRounds, reads.control))
+        case Some((failed, rounds, last)) =>
+          assert(failed > 0L, "the failing round should have taken the kernel-failure catch")
+          // Not an assert with the account as its clue: ScalaTest builds a clue before it tests
+          // the condition, and the account stops and reads the recording.
+          if (last._3 != 0L) {
+            fail(s"no clean round after the failures, against a control that read clean after " +
+              s"${reads.controlRounds} rounds: " + account(rounds, last))
+          }
+          logInfo(s"steady state clean after $rounds rounds, $failed failed batches before, " +
+            s"the control clean after ${reads.controlRounds} rounds")
+      }
     } finally {
+      evidence.close()
       VarkaEvaluatorBase.allocationSchedule = VarkaAllocationSampler.Schedule.DEFAULT
       varkaSpark.catalog.uncacheTable(view)
     }
