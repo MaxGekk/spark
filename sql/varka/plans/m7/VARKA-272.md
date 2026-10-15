@@ -356,4 +356,64 @@ Registered at 21:55 CEST on 14 October 2026, after 2.8's three probes and before
 
 ## 9. Outcome
 
-Filled in when the arms have run.
+Done on 15 October 2026 as 3 describes, with the corrections below. Times are the laptop's under
+other agents' load, three cores an arm, two arms at a time: they size the nightly and the smoke,
+and are not performance numbers.
+
+### 9.1 What ran
+
+`dev/varka_platform.sh --iterations 300 --draws 5 -j 2 --cpus 3 --seed 20261014`, its own build
+included, on the merge of master (which brought 327's `sparkwarm` step into the nightly; both
+hooks stay). Every arm passed its tier proof with 0 histories not reached, and every arm's
+digests equal the default JVM's on every key they share:
+
+| arm | wall | answers | shared with `c2`, differing | tier proof read |
+| --- | ---: | ---: | --- | --- |
+| `int` | 65 s | 1,220 | 1,220, 0 | `UseCompiler=false`; every call interpreted, no kernel method compiled |
+| `c1` | 139 s | 3,220 | 3,220, 0 | `TieredStopAtLevel=1`; `cold` interpreted, `released` served by C1's code, no level 4 |
+| `c2` | 101 s | 3,368 | the reference | as VARKA-274a |
+| `novec` | 68 s | 3,220 | 3,220, 0 | `EnableVectorSupport=false` read back; `cold` and `released` as `c2` |
+| `xcomp` | 206 s | 2,268 | 2,268, 0 | `UseInterpreter=false`; nothing interpreted, warm-ups all C2; 30 plain draws a lane, a tenth |
+| `stress` | 129 s | 3,368 | 3,368, 0 | the six flags and `StressSeed=20261014` read back; as `c2` |
+| `fastdebug` | 159 s | 3,220 | 3,220, 0 | the fastdebug build's `java.home`, stress and verify flags; `cold` and `released` as `c2` |
+
+Disagreements between arms: none, and none between a kernel and the reference evaluator on any
+arm. The crash test (prediction 7) held: `-XX:CICrashAt=3000` on the fastdebug arm left
+`hs_err_<pid>.log`, `replay_<pid>.log` and `hs_err_pid<pid>.jfr` in the arm's directory, and the
+report named the arm crashed with the three files. The CI smoke (`int` and `c1`, 1 compiled draw,
+20 plain) took 16 s and 55 s, so it is in `dev/varka_scoped_suites.sh catalyst`; the other arms
+need several draws for a settled warm-up and run nightly. The nightly's defaults are 2,000 plain
+draws and 20 compiled draws a lane; from the 5-draw run that is an estimated 40 to 60 minutes
+with two arms at a time, not measured.
+
+### 9.2 Where the design changed, and why
+
+* `fastdebug` runs `cold` and `released` only, like `novec` (3.1's table said all eight): with
+  `VerifyLoopOptimizations` and `VerifyGraphEdges` on, no int-lane warm-up settled in 10 s (0 of
+  5, in the first run of this arm, which also read the rule's new "no case settled" clause). Its
+  answers agreed then too (3,358 keys, 0 differ). Its 686 s became 159 s.
+* The tier rules are per tier and the default rule gained the "no case settled" clause, as the
+  correction in 3.1 says; `-Dvarka.fuzz.history` takes several histories, comma separated.
+
+### 9.3 The predictions
+
+| | prediction | measured | |
+| --- | --- | --- | --- |
+| 1 | fixed cost about 15 s product, 55 s `-Xcomp`, 45 s fastdebug | 15 s and 53 s; fastdebug not measured on its own | held for two of three |
+| 2 | a draw pair: `c2` 12 s, `stress` within 1.5x, `novec` within 1.5x, `xcomp` 60 s, `c1` under 3 s, fastdebug 3 to 4x | `c2` 12 s; `stress` 16 s, 1.35x; `novec` 67 s, no warm-up settles; `xcomp` 61 s for one draw, 22 s a pair at five; `c1` 22 s; fastdebug 75 s for one draw | `c2`, `stress` held; `novec`, `c1`, fastdebug missed; `xcomp` held at one draw |
+| 3 | plain draws a second a lane: `c2` over 100, `stress` 50, `novec` 30, `c1` 20, `xcomp` 5, fastdebug 10, `int` 2 | `c2` about 200, `stress` and `novec` about 250, `c1` over 100, `int` about 10, fastdebug about 5 to 10 at 200 draws; `xcomp` about 3 | `xcomp` missed, fastdebug not cleanly read, the rest held |
+| 4 | the sanitizer under `-Xint` costs under 30% | 53 s against 54 s | held |
+| 5 | tier proofs at 5 draws: C1 OSR at level 1 in 4 of 5, `xcomp` all-C2 in 4 of 5, `novec`, `stress`, fastdebug at `c2`'s 80% | C1 and `xcomp` pass their rules; `stress` 5 of 5; `novec` 0 of 5 and fastdebug 0 of 5 at the int lane | `novec` and fastdebug missed (they run two histories) |
+| 6 | no disagreement | none in 3,368 keys over seven arms | held |
+| 7 | the crash leaves three files | it did | held |
+| 8 | zero not reached at 20 draws | tried at 5 only | not tested |
+
+### 9.4 Candidates, found and not fixed
+
+* **A JVM with `EnableVectorSupport=false` runs Varka for minutes before C2 code arrives**, and
+  its int lane's loop methods took 20 to 30 s each to compile (`the-jit.md`, last section);
+  whether Varka should decline to warm, or to fuse, when the flag reads false is a decision.
+* **One epilogue's C2 compile used 337 MB of arena**, 1,160 MB with `StressIncrementalInlining`;
+  nothing in the byte budget sees it.
+* The arms' volume is small here; the first nightly's 2,000 and 20 draws are where a
+  disagreement, if there is one, will show, and its log directory keeps the crash files.

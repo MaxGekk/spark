@@ -50,7 +50,9 @@
 #              StressMacroExpansion, product diagnostic flags, with StressSeed set to the seed
 #   fastdebug  the stress flags on a fastdebug JDK, plus its develop stress and verify flags; runs
 #              when VARKA_FASTDEBUG_JDK names the build or ../openjdk-build/jdk25's fastdebug
-#              image exists beside the repository, else it is skipped with a line
+#              image exists beside the repository, else it is skipped with a line. Cold and
+#              released only: with the verifiers on no warm-up settles in 10 s (VARKA-272.md 9),
+#              and released is where C2 compiles the kernels under them
 # StressUnstableIfTraps is left out of the stress set: it threw away a warm-up's code on random
 # traps often enough that two int-lane cases in five never settled, at ten seconds each
 # (VARKA-272.md 9); --jvm-arg -XX:+StressUnstableIfTraps adds it to a longer run.
@@ -156,7 +158,7 @@ arm_spec() {
     stress) ARM_FLAGS=("${STRESS[@]}") ;;
     fastdebug)
       ARM_JAVA=$fastdebug_jdk/bin/java
-      ARM_FLAGS=("${STRESS[@]}" "${FASTDEBUG_EXTRA[@]}") ;;
+      ARM_FLAGS=("${STRESS[@]}" "${FASTDEBUG_EXTRA[@]}"); ARM_HISTORY=cold,released ;;
     *) echo "unknown arm: $1; the arms are ${PRODUCT_ARMS[*]} fastdebug" >&2; exit 2 ;;
   esac
 }
