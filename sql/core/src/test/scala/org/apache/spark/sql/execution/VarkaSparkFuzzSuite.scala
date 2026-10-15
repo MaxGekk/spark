@@ -70,12 +70,18 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
   /**
    * The warmed arm's budget (VARKA-327): compositions run with the kernel warm-up on, each
    * waiting out at least one warm-up, so seconds apiece where the main test's take milliseconds.
-   * `-Dvarka.sparkfuzz.warmupOnly=<iteration>` replays one, and
+   * `-Dvarka.sparkfuzz.warmupOnly=<iteration>` replays one,
+   * `-Dvarka.sparkfuzz.warmupSet=<i,j,k>` replays those, in that order, in one JVM (a prefix
+   * with compositions left out, to find which earlier ones a later release depends on),
+   * `-Dvarka.sparkfuzz.warmupShow=true` reports each composition's outputs and filter, and
    * `-Dvarka.sparkfuzz.jitEvidence=false` runs without the JIT recording a release reports.
    */
   private val warmupIterations =
     sys.props.get("varka.sparkfuzz.warmupIterations").map(_.toInt).getOrElse(8)
   private val warmupOnly = sys.props.get("varka.sparkfuzz.warmupOnly").map(_.toInt)
+  private val warmupShow = sys.props.get("varka.sparkfuzz.warmupShow").contains("true")
+  private val warmupSet =
+    sys.props.get("varka.sparkfuzz.warmupSet").map(_.split(',').map(_.trim.toInt).toSeq)
   private val warmupJitEvidence = !sys.props.get("varka.sparkfuzz.jitEvidence").contains("false")
   /**
    * The warm-up's deadline in the warmed arm, `-Dvarka.sparkfuzz.warmupDeadlineSeconds`: ten
@@ -164,11 +170,15 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     val verdicts = scala.collection.mutable.TreeMap.empty[String, Int]
     var releasedEarly = 0
     val counts = new WarmedCounts
-    val range = warmupOnly.map(k => k to k).getOrElse(0 until warmupIterations)
+    val range: Seq[Int] =
+      warmupSet.orElse(warmupOnly.map(Seq(_))).getOrElse(0 until warmupIterations)
     var evidence = if (warmupJitEvidence) Some(VarkaJitEvidence.start()) else None
     try withWarmupDeadline(warmupDeadline) {
       for (it <- range if failures.size < 3) {
         val c = rectify(draw(rows, seed, it))
+        if (warmupShow) {
+          info(s"iteration $it: outputs ${c.outputs}, filter ${c.conjuncts.map(_.sql)} ${c.op}")
+        }
         val later = laterData(c, new Random(~seed * 31L + it), safe = it % 2 == 0,
           wide = (it / 2) % 2 == 1)
         // Every composition starts from a cold shape, so that each one takes the handover.
