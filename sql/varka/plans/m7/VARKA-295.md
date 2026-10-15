@@ -557,3 +557,38 @@ The logs, the parsed per-class records and the scripts that produced this sectio
 `/tmp/claude-1000/-home-max-proj-vecbricks-varka/53e2e690-d028-4b57-a163-fcdc477c97cf/scratchpad/295d/`
 (`t1` and `t3` keep their `hotspot.xml` and `jit.log`, `t3` also its JFR recording; `tools/` has
 the extractors); they are not in the repository.
+
+### 9.6 Step 2 of 9.4, 15 October 2026: why the allocation survives, and who pollutes (follows 9.5)
+
+**Cause.** A released loop compile has real virtual calls on class-check miss paths where a clean
+one has uncommon traps (`doCall.cpp`). The vector joining from the call is a non-exact
+`IntVector`, so the `binaryOp` intrinsic first refuses it, and the box that stays expands to a
+`new int[16]` plus a `StoreVector` into it (`vector.cpp`); escape analysis removes the box but not
+that mismatched-access array: 80 bytes, the 20,480. Two sums over the whole compile gate the miss
+path, each adding a shared method's MethodData count once per inlined copy: class-check traps
+against 100 (`PerMethodTrapLimit`) and decompiles against 201 (`PerMethodRecompilationCutoff`/2+1).
+A clean `loopDense0` of `67312f01` totals 4 traps; a released one passes 100 at parse 427 of
+3,309, as `VectorOperators.opKind` (inlined 170 times) holds 4 to 5 traps, set by standalone C2
+compiles of `Int512Vector::lanewise`, `opKind` and `ImplCache::find` that speculated on a profile
+and met another operator class. So (b), not (a): counts, not receiver-type profiles.
+
+```
+<observe trap='class_check' count='0' mcount='0' ccount='254'/>   (released; clean: none)
+<observe trap='class_check' count='0' mcount='20' decompiles='1' mdecompiles='202'/>
+JavaObject(23) NoEscape(NoEscape) is NSR. is used in LoadStore or mismatched access
+```
+
+| runs, seed 20261008, then iteration 220 | released |
+|---|---|
+| prefix `[]`, `[0]`, `[1]`, `[0,1]`, `[2,3]`, 6 runs each (ddmin: `{0,1}`) | 0,5,0,5,0 |
+| prefix each of the 220 compositions alone, once | 55 (25%), no operator over 41% |
+| `[0]`, 6 runs: no option / `TypeProfileLevel` 222 / 0 / `-UseBimorphicInlining` | 6, 4, 3, 4 |
+| `[0]`: `PerMethodTrapLimit` / `PerMethodRecompilationCutoff` / both at 100000 | 5, 0, 0 |
+| 400 compositions (500 warm-ups), no option, 3 runs: deadline releases | 18, 10, 39 |
+| the same: cutoff x 3 / both x 2 / `PerMethodTrapLimit` x 1 | 3, 11, 3 / 0, 0 / 28 |
+
+Composition 0 is `abs(ym)`; 54 more kernels do it too, a race between a template's C2 compile and
+the first operator class it had not seen. Iteration 220 alone releases 0 of 12 on the product JDK,
+2 of 4 on fastdebug. Both options removed every release in 1,000 warm-ups, the cutoff alone left
+3 to 11. Not shown: which flipped sites are the vector-valued ones. No product code changed; the
+suite gained `warmupSet` and `warmupShow`. Logs: `.../scratchpad/295e/` (`pq_*`, `fe1`, `full_*`).
