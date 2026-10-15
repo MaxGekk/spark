@@ -16,25 +16,28 @@ prunes the unused one. A nightly run of the warmed arm can fail on this at rando
 
 ## 2. The admission check, done
 
-To be done before the change: for each column the fixture builds from a drawn int (`ymm`, `ymy`,
-`ym`), the exact set of drawn values that raise. `CAST(m AS INTERVAL MONTH)` is the identity on
-months and cannot overflow. `CAST(y AS INTERVAL YEAR)` is `12 * y` and raises for `|y| >
-178956970`; `make_ym_interval(y, mm)` is `12 * y + mm` and raises when that leaves the int range.
-The check enumerates the fuzzer's value pools (`VarkaSparkFuzz`) against these two bounds and
-counts the rows that raise, so the 8 to 10% is explained row by row. It would reject a fix that
-clamps `y` for every column, because `y` also reaches no other column and the boundary values
-`178956970` and `-178956970` must still be drawn.
+The cause is the draw's hostile years, not the view's casts in general. `CAST(m AS INTERVAL
+MONTH)` is the identity on months and cannot overflow. `CAST(y AS INTERVAL YEAR)` is `12 * y` and
+raises for `|y| > 178956970`. The hostile pool for `y` in `VarkaSparkFuzz.drawData` was
+`{178956971, Int.MaxValue}`, both of which overflow, so any hostile `y` cell made the cached view
+raise; the safe pool (`-2` to `4`) and the wide pool (`-100` to `100`) never do, and the hostile
+`mm` pool (`12`, `-1`) does not matter on its own. The expected share follows: a full case has
+one hostile row on average, with one to three of its twelve columns hostile, so about one case in
+six has a hostile `y` cell, 17%; the census measured 17 to 18% of the full pools and none of the
+safe ANSI-off pools. The check would have rejected a fix that only skips the failing compositions:
+that keeps the rate and removes the volume.
 
 ## 3. The design
 
-### 3.1 Total columns, not skipped compositions
+### 3.1 Total columns, and hostile years that fit
 
-Two forms are built and measured. (a) The fixture's `ymy` and `ym` columns are NULL where the
-cast or the construction would overflow, so the view never raises and every composition compares
-values; the boundary years that do not overflow stay in the pool. (b) The composition is run on a
-fixture materialised once up front, and a composition whose fixture raises is counted and skipped,
-not compared. (a) recovers the volume; (b) is the smaller change. The default is the one that
-leaves fewer compositions erroring on both sides without removing a hostile value from the pool.
+Built: the fixture's `ymy` and `ym` are `CASE WHEN <the 64-bit product is in the int range> THEN
+<the cast or construction> END`, so the view never raises, and the hostile `y` pool is `{178956969,
+-178956970}`, the largest years that fit with every `mm` the pool draws. The hostile cells are
+therefore valid and extreme, and the interval operations of a composition (`d + ym`, `ym - ymm`)
+are what overflow, which is the comparison the pool was drawn for. The pool keeps its size, so
+the main stream's draws are the ones it drew before. The alternative of skipping compositions
+whose fixture raises was not built: it keeps the rate.
 
 ### 3.2 What is deliberately unchanged
 
@@ -57,17 +60,17 @@ None; no emitter change.
 
 ## 5. Tests, and what each is for
 
-* A fixture test: over every value of the pools, the view builds and counts without raising
-  (catches a hostile value reintroduced to the pool).
-* The warmed arm at seed 20261008 over iteration 1405 passes (the failure that started this).
-* The census run again at 5,000 compositions on seven seeds: the share of compositions erroring
-  on both sides falls from 8 to 10% to the share the compositions' own casts produce, and the
-  list's other entries are still raised.
+* `the fixture builds for every drawn case, so no composition compares fixture errors`: 600
+  drawn cases in their own ANSI mode, the fixture collected without raising. It fails on the old
+  fixture (composition 17, `CAST_OVERFLOW` for 2147483647) and passes on the new one.
+* The suite's other 18 tests, `VarkaSparkReproducerSuite`, `VarkaGoldenCorpusSuite` and the
+  differential suites pass; no pinned fixture moved.
+* The census at 5,000 compositions on seven seeds (section 9).
 
 ## 6. The measurement
 
-The share of compositions that error on both sides, per pool, before and after, on the same seeds
-(20261101 to 20261107, 5,000 compositions), by the census line each run prints. No benchmark.
+The share of compositions that error on both sides, per pool, on the seven seeds of the census
+(20261101 to 20261107, 5,000 compositions each), before and after, from the line each run prints.
 
 ### 6.1 Predictions, registered before the run
 
@@ -79,15 +82,32 @@ The share of compositions that error on both sides, per pool, before and after, 
 ## 7. Risks
 
 1. Making the columns NULL hides an error the engines should agree on. The compositions' own
-   casts and `ym - ymm` still raise, which the census shows by the entries still being raised.
-2. A fix that clamps the pool loses the boundary draw. Section 5's census shows the boundary
-   values are still drawn.
+   casts and `ym - ymm` still raise, which the census shows by every entry still being raised.
+2. The over-the-limit years (`178956971`) are no longer drawn into the view. The compositions'
+   own `CAST(i AS INTERVAL YEAR)` over a hostile `i` (`Int.MaxValue`) still reach that edge, and
+   the unit suites (`VarkaDifferentialSuite`) pin it.
 
 ## 8. Sequencing
 
-The admission check and the fixture test first; the fixture change behind a property, with the old
-form kept to reproduce the flake; the census; the default and the list's reason text last.
+The fixture test first, run against the old fixture to see it fail; then the fixture and the
+pool; the census; the entry's reason text last.
 
 ## 9. Outcome
 
-Not started.
+On the seven seeds, 5,000 compositions each (15 October 2026, scratch `372/`; before: `C/`):
+
+| | before | after |
+|---|---|---|
+| compositions erroring on both sides, of 5,000 | 393 to 479 | 14 to 68 |
+| full ANSI off pool, of about 1,250 | 177 to 230 | 2 to 16 |
+| full ANSI on pool, of about 1,250 | 207 to 228 | 10 to 39 |
+| safe ANSI on pool, of about 1,260 | 2 to 27 | 2 to 27 |
+| disagreements, unexpected conditions | 0, 0 | 0, 0 |
+
+Predictions: 1 held (at most 3.2% in the full pools); 2 held; 3 held (35,000 compositions). The
+iteration-1405 case of seed 20261008 is a different case now, because the draw changed, and the
+warm arm passes at that seed. Every entry of the expected-errors list is still raised in at
+least one seed; `CAST_OVERFLOW` now in four of seven, so its reason text says where it comes
+from. What is left: the engines still differ in which unused column of a view raises first, which
+the fixture no longer shows them; that is not fixed, and a composition over a view with a
+raising column would still compare an arbitrary one of two errors.

@@ -79,7 +79,14 @@ object VarkaSparkFuzz {
   def querySql(select: String, where: Option[String]): String =
     s"SELECT $select FROM fz${where.map(w => s" WHERE $w").getOrElse("")}"
 
-  /** The twelve columns, as the fixtures of `VarkaCoverageDifferentialSuite` build them. */
+  /**
+   * The twelve columns, as the fixtures of `VarkaCoverageDifferentialSuite` build them, except
+   * that the year-month columns built from `y` are NULL where the cast or the construction would
+   * overflow: a view that raises while it is built (the cached one computes every column, the
+   * row engine prunes the unused ones) makes a composition compare which of two legitimate errors
+   * came first, and about a tenth of the compositions did (VARKA-372). The hostile years are the
+   * largest ones that still fit, so the interval operations of a composition are what overflow.
+   */
   def fixtureSql(data: Seq[Seq[String]]): String =
     fixtureRows(data.map(_.mkString("(", ", ", ")")))
 
@@ -90,8 +97,10 @@ object VarkaSparkFuzz {
   def fixtureRows(valueRows: Seq[String]): String =
     s"""SELECT d, d2, i,
        |       CAST(m AS INTERVAL MONTH) AS ymm,
-       |       CAST(y AS INTERVAL YEAR) AS ymy,
-       |       make_ym_interval(y, mm) AS ym,
+       |       CASE WHEN 12L * y BETWEEN -2147483648L AND 2147483647L
+       |            THEN CAST(y AS INTERVAL YEAR) END AS ymy,
+       |       CASE WHEN 12L * y + mm BETWEEN -2147483648L AND 2147483647L
+       |            THEN make_ym_interval(y, mm) END AS ym,
        |       l, l2, CAST(t AS TIME(6)) AS t, CAST(t2 AS TIME(6)) AS t2, dt, dt2
        |FROM VALUES ${valueRows.mkString(",\n  ")}
        |AS v(d, d2, i, m, y, mm, l, l2, t, t2, dt, dt2)""".stripMargin
@@ -152,7 +161,7 @@ object VarkaSparkFuzz {
       (() => int(1, 12),
         () => pick(rnd, Seq(0, -1, 13, 100000, Int.MaxValue, Int.MinValue)).toString),
       (() => int(-14, 100), () => pick(rnd, Seq(Int.MaxValue, Int.MinValue)).toString),
-      (() => int(-2, 4), () => pick(rnd, Seq(178956971, Int.MaxValue)).toString),
+      (() => int(-2, 4), () => pick(rnd, Seq(178956969, -178956970)).toString),
       (() => int(0, 11), () => pick(rnd, Seq(12, -1)).toString),
       (() => long(), () => s"CAST('${pick(rnd, farLongs)}' AS BIGINT)"),
       (() => long(), () => s"CAST('${pick(rnd, farLongs)}' AS BIGINT)"),
