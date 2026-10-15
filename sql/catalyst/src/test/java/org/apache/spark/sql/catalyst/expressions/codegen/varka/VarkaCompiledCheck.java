@@ -22,9 +22,12 @@ import java.lang.foreign.ValueLayout;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Random;
+import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
@@ -115,22 +118,33 @@ public final class VarkaCompiledCheck {
   /**
    * How a run is sized: the warm-up's deadline, the {@code released} history's batches and rows,
    * whether the tier witness reads each compared call (off for the A/B that prices it; the
-   * recording itself stays on, since the warm-up reads it), and one history alone.
+   * recording itself stays on, since the warm-up reads it), and the histories to run alone
+   * (empty for all eight).
    */
   public record Settings(long settleMillis, int releasedBatches, int releasedRows,
-      boolean witnessed, Optional<History> only) {
+      boolean witnessed, Set<History> only) {
+
+    public Settings {
+      only = Set.copyOf(only);
+    }
 
     /**
      * From {@code -Dvarka.fuzz.*}: {@code settleMillis} (default 10,000), {@code releasedBatches}
-     * (200), {@code releasedRows} (10,000), {@code witness} (true) and {@code history} (all).
+     * (200), {@code releasedRows} (10,000), {@code witness} (true) and {@code history} (all; one
+     * label or several, comma separated, as {@code cold,released}).
      */
     public static Settings fromProperties() {
       String only = System.getProperty("varka.fuzz.history");
+      var histories = EnumSet.noneOf(History.class);
+      if (only != null) {
+        for (String label : only.split(",")) {
+          histories.add(History.named(label.strip()));
+        }
+      }
       return new Settings(Long.getLong("varka.fuzz.settleMillis", 10_000L),
           Integer.getInteger("varka.fuzz.releasedBatches", 200),
           Integer.getInteger("varka.fuzz.releasedRows", 10_000),
-          !"false".equals(System.getProperty("varka.fuzz.witness")),
-          only == null ? Optional.empty() : Optional.of(History.named(only)));
+          !"false".equals(System.getProperty("varka.fuzz.witness")), histories);
     }
 
     public Settings withSettleMillis(long millis) {
@@ -143,11 +157,11 @@ public final class VarkaCompiledCheck {
 
     public Settings withOnly(History history) {
       return new Settings(settleMillis, releasedBatches, releasedRows, witnessed,
-          Optional.of(history));
+          Set.of(history));
     }
 
     public boolean runs(History h) {
-      return only.isEmpty() || only.get() == h;
+      return only.isEmpty() || only.contains(h);
     }
   }
 
@@ -1055,45 +1069,265 @@ public final class VarkaCompiledCheck {
   }
 
   /**
-   * The histories a run shows did not happen, each as a message: a {@code cold} call that was
-   * not interpreted at both edges, a lane whose settled {@code warm-same} or {@code warm-other}
-   * runs never once showed every call as C2 code, and a lane whose {@code released} runs never
-   * showed an on-stack replacement. A history not reached is a fact about the JIT on this machine
-   * and its load, never a wrong answer, so the fuzz suite counts and prints these, and fails on
-   * them only when asked to ({@code -Dvarka.fuzz.requireTiers=true}, for a quiet machine); the
-   * message carries the code list to read it by.
+   * The histories a run shows did not happen under the default JVM, each as a message: a
+   * {@code cold} call that was not interpreted at both edges, a lane whose settled
+   * {@code warm-same} or {@code warm-other} runs never once showed every call as C2 code, and a
+   * lane whose {@code released} runs never showed an on-stack replacement. A history not reached
+   * is a fact about the JIT on this machine and its load, never a wrong answer, so the fuzz suite
+   * counts and prints these, and fails on them only when asked to
+   * ({@code -Dvarka.fuzz.requireTiers=true}, for a quiet machine); the message carries the code
+   * list to read it by. {@link #notReached(Tally, Tier)} is the same under another tier.
    */
   public static List<String> notReached(Tally tally) {
-    var out = new ArrayList<String>();
+    return notReached(tally, Tier.C2);
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // The tier a forked JVM claims (VARKA-272).
+  // ---------------------------------------------------------------------------------------------
+
+  /**
+   * The tier of HotSpot a run says serves its kernels, so that a JVM forked under other flags
+   * (VARKA-272's arms, {@code dev/varka_platform.sh}) is held to its own facts and not the
+   * default JVM's: {@code -Dvarka.fuzz.tier}, {@link #C2} unless set. {@link VarkaPlatformFacts}
+   * holds the JVM's flags to the claim before a run, and {@link #notReached(Tally, Tier)} gives
+   * each tier the histories it must show.
+   */
+  public enum Tier {
+    /** {@code -Xint}: no compiler runs, and every call is interpreted. */
+    INTERPRETER("interpreter"),
+    /** {@code -XX:TieredStopAtLevel=1}: C1 alone, so a kernel is interpreted until C1 takes it. */
+    C1("c1"),
+    /** The default JVM: the interpreter, C1 and C2 tiered, a warm-up ending in C2 code. */
+    C2("c2"),
+    /** {@code -Xcomp}: every method compiled before its first call, and no interpreter. */
+    XCOMP("xcomp");
+
+    public final String label;
+
+    Tier(String label) {
+      this.label = label;
+    }
+
+    /** The tier called {@code label}, as {@code -Dvarka.fuzz.tier} names one. */
+    public static Tier named(String label) {
+      for (Tier t : values()) {
+        if (t.label.equals(label)) {
+          return t;
+        }
+      }
+      throw new IllegalArgumentException("no tier named " + label + "; the tiers are "
+          + Arrays.stream(values()).map(t -> t.label).toList());
+    }
+
+    /** {@code -Dvarka.fuzz.tier}, or {@link #C2}. */
+    public static Tier fromProperty() {
+      String label = System.getProperty("varka.fuzz.tier");
+      return label == null ? C2 : named(label);
+    }
+  }
+
+  /**
+   * What one history's run showed, as the tier rules read it: its verdicts (every compared call,
+   * and {@code counted}, the calls through a body with loop and epilogue methods), whether its
+   * warm-up settled and was confirmed, whether any method of its class was compiled at all, and
+   * the code list before its first call, for a message. The seam the rules are tested through
+   * with verdicts written by hand.
+   */
+  public record Observed(LaneType lane, History history, String className, boolean confirmed,
+      List<VarkaTierWitness.Verdict> verdicts, List<VarkaTierWitness.Verdict> counted,
+      boolean compiled, String codeBefore) {
+    public Observed {
+      verdicts = List.copyOf(verdicts);
+      counted = List.copyOf(counted);
+    }
+
+    /** {@code run} as the witness saw it, its class's compiles asked of the witness. */
+    static Observed of(LaneType lane, Run run) {
+      var witness = VarkaTierWitness.get();
+      return new Observed(lane, run.history(), run.className(), run.confirmed(), run.verdicts(),
+          run.countedVerdicts(), !witness.compiles(run.className(), run.calls()).isEmpty(),
+          run.calls().isEmpty() ? "[]" : run.calls().get(0).codeBefore().toString());
+    }
+  }
+
+  /**
+   * The histories {@code tally} shows did not happen under {@code tier}; see
+   * {@link #notReached(Tally)}.
+   */
+  public static List<String> notReached(Tally tally, Tier tier) {
+    var observed = new ArrayList<Observed>();
     for (LaneType lane : List.of(LaneType.INT, LaneType.LONG)) {
-      for (Run run : tally.runs(lane, History.COLD)) {
-        for (var v : run.verdicts()) {
-          if (!(v instanceof VarkaTierWitness.Mixed m && m.interpreted())) {
-            out.add("history not reached: cold, a call on " + run.className()
+      for (Result r : tally.results()) {
+        if (r.lane() != lane) {
+          continue;
+        }
+        for (Run run : r.runs()) {
+          if (run.skipped() == null) {
+            observed.add(Observed.of(lane, run));
+          }
+        }
+      }
+    }
+    return notReached(tier, observed);
+  }
+
+  /**
+   * Each tier's rules over what the runs showed, a message per history that did not happen:
+   * <ul>
+   *   <li>{@code c2}: the rules of {@link #notReached(Tally)};</li>
+   *   <li>{@code interpreter}: every verdict interpreted at both edges, and no method of any
+   *       kernel class compiled;</li>
+   *   <li>{@code c1}: {@code cold} interpreted; no call anywhere served by level-4 code (a
+   *       {@code C2} verdict, an OSR at level 4, a method at level 4 at either edge); and some
+   *       {@code released} call of each lane served by C1's code, an OSR at level 1 to 3 or every
+   *       method at level 1 to 3 at both edges;</li>
+   *   <li>{@code xcomp}: no counted verdict interpreted at both edges, since nothing is; and
+   *       {@code warm-same} and {@code warm-other} all C2 in some confirmed case. No OSR rule: a
+   *       method compiled before its first call is never entered by one, and a {@code cold} call
+   *       is compiled code that traps on a class the compile found unloaded.</li>
+   * </ul>
+   */
+  static List<String> notReached(Tier tier, List<Observed> observed) {
+    var out = new ArrayList<String>();
+    switch (tier) {
+      case C2 -> {
+        coldInterpreted(observed, out);
+        warmUpsC2(observed, out);
+        for (LaneType lane : List.of(LaneType.INT, LaneType.LONG)) {
+          var released = of(observed, lane, History.RELEASED);
+          if (!released.isEmpty() && released.stream().noneMatch(o -> o.verdicts().stream()
+              .anyMatch(v -> v instanceof VarkaTierWitness.Osr osr && osr.level() >= 3))) {
+            out.add("history not reached: released, no case of the " + lane + " lane was entered "
+                + "by an on-stack replacement in " + released.get(0).verdicts().size()
+                + " batches");
+          }
+        }
+      }
+      case INTERPRETER -> {
+        for (Observed o : observed) {
+          for (var v : o.verdicts()) {
+            if (!interpreted(v)) {
+              out.add("history not reached: " + o.history().label + ", a call on "
+                  + o.className() + " was not interpreted under the interpreter alone: " + v);
+            }
+          }
+          if (o.compiled()) {
+            out.add("history not reached: " + o.history().label + ", a method of "
+                + o.className() + " was compiled under the interpreter alone");
+          }
+        }
+      }
+      case C1 -> {
+        coldInterpreted(observed, out);
+        for (Observed o : observed) {
+          for (var v : o.verdicts()) {
+            if (level4(v)) {
+              out.add("history not reached: " + o.history().label + ", a call on "
+                  + o.className() + " was served by level-4 code under C1 alone: " + v);
+            }
+          }
+        }
+        for (LaneType lane : List.of(LaneType.INT, LaneType.LONG)) {
+          var released = of(observed, lane, History.RELEASED);
+          if (!released.isEmpty() && released.stream()
+              .noneMatch(o -> o.counted().stream().anyMatch(VarkaCompiledCheck::servedByC1))) {
+            out.add("history not reached: released, no call of the " + lane + " lane was served "
+                + "by C1's code in " + released.get(0).verdicts().size() + " batches; first "
+                + "case's verdicts " + released.get(0).verdicts());
+          }
+        }
+      }
+      case XCOMP -> {
+        for (Observed o : observed) {
+          for (var v : o.counted()) {
+            if (interpreted(v)) {
+              out.add("history not reached: " + o.history().label + ", a call on "
+                  + o.className() + " was interpreted at both edges under -Xcomp: " + v);
+            }
+          }
+        }
+        warmUpsC2(observed, out);
+      }
+    }
+    return out;
+  }
+
+  private static List<Observed> of(List<Observed> observed, LaneType lane, History h) {
+    return observed.stream().filter(o -> o.lane() == lane && o.history() == h).toList();
+  }
+
+  /** The default rule on {@code cold}: every call interpreted at both edges. */
+  private static void coldInterpreted(List<Observed> observed, List<String> out) {
+    for (Observed o : observed) {
+      if (o.history() == History.COLD) {
+        for (var v : o.verdicts()) {
+          if (!interpreted(v)) {
+            out.add("history not reached: cold, a call on " + o.className()
                 + " was not interpreted: " + v);
           }
         }
       }
+    }
+  }
+
+  /**
+   * The default rule on the warm-ups: some confirmed case of each lane all C2. A lane whose
+   * warm-ups ran and never once settled has not reached the history either (VARKA-272: with the
+   * Vector API's intrinsics off no int-lane warm-up settles, and the rule passed for want of a
+   * settled case).
+   */
+  private static void warmUpsC2(List<Observed> observed, List<String> out) {
+    for (LaneType lane : List.of(LaneType.INT, LaneType.LONG)) {
       for (History h : List.of(History.WARM_SAME, History.WARM_OTHER)) {
-        var settled = tally.runs(lane, h).stream()
-            .filter(r -> r.skipped() == null && r.confirmed()).toList();
-        if (!settled.isEmpty() && settled.stream().noneMatch(r -> Tally.all(r, "C2"))) {
+        var ran = of(observed, lane, h);
+        var settled = ran.stream().filter(Observed::confirmed).toList();
+        if (!ran.isEmpty() && settled.isEmpty()) {
+          out.add("history not reached: " + h.label + ", no case of the " + lane
+              + " lane settled its warm-up; first case's verdicts " + ran.get(0).verdicts());
+        } else if (!settled.isEmpty() && settled.stream().noneMatch(o -> allC2(o.counted()))) {
           var sample = settled.get(0);
           out.add("history not reached: " + h.label + ", no settled case of the " + lane
               + " lane ran every compared call as C2 code; first case's verdicts "
               + sample.verdicts() + ", its code list before the first call "
-              + sample.calls().get(0).codeBefore());
+              + sample.codeBefore());
         }
       }
-      var released = tally.runs(lane, History.RELEASED).stream()
-          .filter(r -> r.skipped() == null).toList();
-      if (!released.isEmpty()
-          && released.stream().noneMatch(r -> Tally.any(r, "osr3") || Tally.any(r, "osr4"))) {
-        out.add("history not reached: released, no case of the " + lane + " lane was entered by "
-            + "an on-stack replacement in " + released.get(0).calls().size() + " batches");
-      }
     }
-    return out;
+  }
+
+  private static boolean interpreted(VarkaTierWitness.Verdict v) {
+    return v instanceof VarkaTierWitness.Mixed m && m.interpreted();
+  }
+
+  private static boolean allC2(List<VarkaTierWitness.Verdict> counted) {
+    return !counted.isEmpty() && counted.stream().allMatch(v -> v instanceof VarkaTierWitness.C2);
+  }
+
+  /** Whether {@code v} shows level-4 code: C2's verdict, an OSR at 4, a method at 4 at an edge. */
+  private static boolean level4(VarkaTierWitness.Verdict v) {
+    return switch (v) {
+      case VarkaTierWitness.C2 c2 -> true;
+      case VarkaTierWitness.Osr osr -> osr.level() == 4;
+      case VarkaTierWitness.Mixed m -> m.before().containsValue(4) || m.after().containsValue(4);
+      case VarkaTierWitness.Trapped t -> false;
+    };
+  }
+
+  /** Whether C1's code served {@code v}: an OSR at level 1 to 3, or every method there at both
+   * edges. */
+  private static boolean servedByC1(VarkaTierWitness.Verdict v) {
+    return switch (v) {
+      case VarkaTierWitness.Osr osr -> osr.level() >= 1 && osr.level() <= 3;
+      case VarkaTierWitness.Mixed m -> !m.after().isEmpty() && c1Levels(m.before())
+          && c1Levels(m.after());
+      case VarkaTierWitness.C2 c2 -> false;
+      case VarkaTierWitness.Trapped t -> false;
+    };
+  }
+
+  private static boolean c1Levels(Map<String, Integer> levels) {
+    return levels.values().stream().allMatch(l -> l >= 1 && l <= 3);
   }
 
   /**

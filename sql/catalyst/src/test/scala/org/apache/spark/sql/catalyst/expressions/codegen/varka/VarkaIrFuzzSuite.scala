@@ -89,6 +89,12 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils
  * reproducible and a nightly can vary it). The iterations and the seed apply to both lanes.
  * `-Dvarka.fuzz.variantsEvery=n` takes the variants of every n-th draw (default 1, every draw;
  * 0 none), which is how the nightly's forty thousand draws a lane stay inside the test's cap.
+ *
+ * Under another JVM (VARKA-272, `dev/varka_platform.sh`): `-Dvarka.fuzz.tier=interpreter|c1|c2|
+ * xcomp` names the tier the JVM's flags must show and the compiled test's rules follow,
+ * `-Dvarka.fuzz.vectorSupport=true|false` what `EnableVectorSupport` must read, and
+ * `-Dvarka.fuzz.answers=<file>` has every compared batch's digest written, for the comparison
+ * across JVMs (`VarkaAnswerLog`).
  */
 class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwnJvm {
 
@@ -599,6 +605,17 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   test(s"random IR trees compiled by C2 match the reference evaluator over eight batch " +
       s"histories ($compiledDraws draws a lane)") {
     val settings = VarkaCompiledCheck.Settings.fromProperties()
+    // The tier this JVM claims (VARKA-272): its flags are held to the claim first, so that a
+    // forked arm whose command line lost a flag fails here, as not the JVM it says it is, and
+    // never as a kernel's answer; the facts line is what the arms' report reads.
+    val tier = VarkaCompiledCheck.Tier.fromProperty()
+    val vectorSupport = sys.props.get("varka.fuzz.vectorSupport").map(_.toBoolean)
+    val facts = VarkaPlatformFacts.read()
+    info(facts.line())
+    val contradictions =
+      facts.contradictions(tier, vectorSupport.map(java.lang.Boolean.valueOf).toJava).asScala
+    assert(contradictions.isEmpty,
+      s"this JVM is not the ${tier.label} tier the run claims: ${contradictions.mkString("; ")}")
     val tally = new VarkaCompiledCheck.Tally
     val overrides = scala.collection.mutable.ArrayBuffer[(VarkaFuzzCase, String)]()
     val draws: Seq[(Int => VarkaFuzzCase, Long)] =
@@ -626,7 +643,7 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
       if (settings.witnessed) VarkaTierWitness.get().settle()
       tally.report(settings.witnessed).asScala.foreach(info(_))
       if (settings.witnessed) {
-        val notReached = VarkaCompiledCheck.notReached(tally).asScala
+        val notReached = VarkaCompiledCheck.notReached(tally, tier).asScala
         info(s"${notReached.size} history(ies) not reached" +
           (if (requireTiers) "" else " (counted; -Dvarka.fuzz.requireTiers=true fails on them)"))
         notReached.foreach(why => if (requireTiers) fail(why) else info(why))

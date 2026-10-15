@@ -848,6 +848,9 @@ public final class VarkaKernelChecks {
         status = statuses[f];
       }
       if (status != 0 && declineAllowed) {
+        if (VarkaAnswerLog.enabled()) {
+          VarkaAnswerLog.record(context, VarkaAnswerLog.declined(status));
+        }
         return status;
       }
       if (status != 0) {
@@ -916,8 +919,31 @@ public final class VarkaKernelChecks {
           }
         }
       }
+      if (VarkaAnswerLog.enabled()) {
+        VarkaAnswerLog.record(context, digest(lane, roots, outs));
+      }
       return 0;
     }
+  }
+
+  /**
+   * The compared answers of one batch, folded for {@link VarkaAnswerLog}: per run (one per fill),
+   * per output and per row, the validity bit and the value where valid; a selection output's
+   * value is its bit.
+   */
+  private static long digest(Lane lane, VarkaVectorIR[] roots, Outputs[] outs) {
+    long h = VarkaAnswerLog.START;
+    for (Outputs out : outs) {
+      for (int o = 0; o < roots.length; o++) {
+        boolean selection = roots[o] instanceof Cond;
+        for (int i = 0; i < lane.length(); i++) {
+          boolean bit = bit(out.bits()[o], i);
+          long value = bit && !selection ? lane.got(out.values()[o], i, roots[o]) : 0L;
+          h = VarkaAnswerLog.row(h, bit, value);
+        }
+      }
+    }
+    return h;
   }
 
   /**
