@@ -685,3 +685,119 @@ deadline releases (COMPILED 497).
 **Nothing else moved.** With the 300 rounds, under the defaults: `VarkaSparkFuzzSuite` (all arms),
 `VarkaWarmupEndToEndSuite` and `VarkaProjectExecSuite`, 47 tests in sql, and the catalyst `*Varka*`
 suites, all passed (the emitted bytes oracle is among them; no emitter code changed).
+
+### 9.8 What 9.7 left owed: steady state, and the other species (15 October 2026)
+
+Both measurements below ran on a quiet machine (load average 0.2 to 2.2, most of it the
+measurement itself), one JVM at a time, pinned with `taskset` to cores 0-5 or 6-11, the arms
+alternating between the two sets from one repeat to the next so that each pair swaps. The head was
+0cd6d68edf2. Everything is in the scratch directory `295g` of the session, outside the branch.
+
+**1. Steady-state throughput, warm-up on against off.** No existing benchmark starts the warm-up
+worker: `VarkaArrowSessions.createSession` turns the kernel warm-up off unless asked, and the
+throughput benchmarks do not ask. `VarkaColdStartBenchmark` does start it, but times first
+queries. So a throwaway driver (`SteadyDriver.java`, not in the branch) was used. It builds the
+benchmark ladder's session with the warm-up on, caches 2M dates in Arrow, and runs one projection
+of four outputs `greatest(add_months(d, k), date_add(d, k), last_day(d))`, k from 1 to 4, to the
+`noop` sink on one task thread. The first run claims the shape and queues the warm-up; the driver
+waits for the verdict (`awaitIdle`; every run printed COMPILED, `fused=true`), sleeps 1.5 s, times
+six runs ("early"), runs real batches for 3 s, then times ten runs ("steady"). The only difference
+between the arms is `-Dvarka.warmup.vectorTemplates=false` (`templateWarmupMs` was 138 to 187 on
+and 0 off in every run, so the worker did run the template warm-up in the on arm and not in the
+off arm). Command, per run:
+
+    steady.sh <tag> <cpus> [-Dvarka.warmup.vectorTemplates=false]
+
+which is `taskset -c <cpus> java <the test JVM options> -Xmx8g -cp <driver>:<test classpath>
+SteadyDriver`. Rates are millions of rows per second, higher is faster. The median of each JVM's
+ten steady runs:
+
+| run | cores | on | off |
+|---|---|---|---|
+| 1 | on 0-5, off 6-11 | 78.9 | 53.2 |
+| 2 | on 6-11, off 0-5 | 35.6 | 78.4 |
+| 3 | on 0-5, off 6-11 | 72.2 | 52.2 |
+| 4 | on 6-11, off 0-5 | 51.8 | 77.9 |
+| 5 | on 0-5, off 6-11 | 68.3 | 52.0 |
+| 6 | on 6-11, off 0-5 | 51.7 | 69.1 |
+
+Median of the six: 60.1 on, 61.1 off; the range is 35.6 to 78.9 on and 52.0 to 78.4 off. The
+spread is not noise around one value. It is the core set: every JVM on cores 0-5 ran at 68 to 79
+and every one on cores 6-11 at 36 to 53, in both arms. By set, the median of the three runs is
+72.2 on and 77.9 off on cores 0-5 (68.3 to 78.9 against 69.1 to 78.4), and 51.7 on and 52.2 off
+on cores 6-11 (35.6 to 51.8 against 52.0 to 53.2). The A/A runs (warm-up on in both, cores 0-5,
+6-11, 0-5, 6-11) gave 49.6, 51.9, 75.9 and 51.0, so two identical arms differ by as much as the
+two sets (75.9 and 49.6 on the same cores 0-5). I cannot tell why the cores differ (the
+hardware is not known here) and one of the four cores-0-5 runs in the A/A set sat in the lower
+mode. Within a JVM the ten steady runs are tight (a few percent) except in on1, on5 and off6,
+which dropped by a third late in the series. The "early" six runs after the verdict are 17 to 47
+and climb in every run of both arms, as the kernel's own batches finish compiling it.
+
+What this shows: with 6 pairs of 10 timed runs there is no steady-state difference between the
+arms that is larger than the JVM-to-JVM spread, which is 50 percent. The one gap that points at
+the warm-up, the three cores-0-5 pairs (on 72.2 against off 77.9, 7 percent lower), is inside
+that spread (the A/A pair on those cores is 75.9 against 49.6). It does not show that the
+warm-up costs nothing: a difference of a few percent would not have been seen, and one kernel
+shape was used.
+
+**2. Non-preferred species, 400 compositions.** The option name is `lanesOverride`
+(`VarkaEmitOptions`; the matrix lists it as `lanesOverride=4` and `lanesOverride=16`). It reaches
+`VarkaSparkFuzzSuite` through `-Dvarka.matrix.config=lanesOverride=<n>`, since the suite's session
+trait starts from `VarkaMatrix.base`. The arm is the 400-composition one of 9.7, with the matrix
+property added: seed 20261008, `-Dvarka.sparkfuzz.warmupIterations=400`,
+`-Dvarka.sparkfuzz.jitEvidence=false`, the test `both sides of the warm-up handover`, ScalaTest's
+`Runner` on 6 cores, in the scratch copy of the earlier `run.sh`/`full.sh`. Three runs per cell,
+the on/off order and the core set alternating (repeat 1: on 0-5, off 6-11; repeat 2 swapped;
+repeat 3 as 1); every run printed `Tests: succeeded 1`. The machine's preferred species is 256
+bits, eight int lanes, so 4 is a narrower and 16 a wider one than the warm-up feeds.
+
+| lanes | warm-up | deadline releases | COMPILED | seconds |
+|---|---|---|---|---|
+| 4 | on | 183, 141, 144 | 313, 358, 355 | 1932, 1550, 1550 |
+| 4 | off | 136, 139, 148 | 364, 360, 352 | 1501, 1495, 1627 |
+| 16 | on | 0, 0, 0 | 497, 498, 498 | 126, 163, 128 |
+| 16 | off | 43, 19, 59 | 456, 480, 440 | 581, 309, 744 |
+
+(The RELEASED count in each log is the deadline releases plus 0 to 3 releases before the
+deadline, which the 9.5 cause 4 does not cover.) For comparison, 9.7 had 53, 78 and 33 with the
+warm-up off and 0 for all with it on at the preferred species.
+
+So the template warm-up does what it did at the preferred species for 16 lanes (43, 19, 59 down to
+0, 0, 0) and does nothing for 4 lanes: 183, 141, 144 on against 136, 139, 148 off, and each run
+takes 25 to 32 minutes because every released kernel waits out the 60 s deadline. At 4 lanes the
+warm-up makes things neither better nor worse that these three runs can resolve. The pollution
+mechanism keyed by species that 9.7 feared is therefore real for the narrower species. The
+repeats on swapped core sets agree within each cell, so the core set does not explain it.
+
+**What remains unknown.**
+
+* Why 16 is fixed and 4 is not. Not tested. The warm-up feeds the preferred species only; what
+  16-lane and 4-lane kernels share with it (the half- and double-width species of the
+  conversions, the masks) was not examined. The deoptimization log of a 4-lane run
+  (`-Xlog:deoptimization*`, as in 9.7's `pc_*` runs) would say which templates trap; it was not
+  taken.
+* Whether feeding the narrower species in `VarkaVectorTemplateWarmup` (a second pass at the
+  species one and two steps below the preferred) would clear the 4-lane releases. It is a larger
+  warm-up (the cost in 9.7 is 140 to 190 ms for one pass here), so it is a design choice, not a
+  measured result.
+* Whether production ever emits at 4 lanes. `lanesOverride` is an option of the matrix; on a
+  machine whose preferred species is 128 bits (the Apple Silicon laptop the benchmarks publish
+  from) the preferred species is the 4-lane one and the warm-up feeds it, so the 4-lane releases
+  here are a matrix-only result on this machine and would not appear there. That was not
+  measured; the gate runs under `-XX:MaxVectorSize=16`, which makes `SPECIES_PREFERRED` the
+  128-bit one and so exercises exactly that case, and was not run for this section.
+* The throughput of kernels at 4 and 16 lanes with the warm-up on and off. Only the releases were
+  counted.
+* The query-path vector code point of 9.7 and the 100-round question are still open.
+
+**3. The fix at volume (2,000 compositions per run, 5 cores each, load 0.5 to 6).** Warm arm,
+seed 20261008, the seed whose earlier runs showed releases: 442 deadline releases without the
+warm-up (`-Dvarka.warmup.vectorTemplates=false`), 4,854 s; 0 with it, 630 s. With the warm-up on,
+seeds 20261009 to 20261013 gave 0 deadline releases each (553 to 707 s); the control at 20261009
+also gave 0, so that seed does not separate the arms. Verdicts released before the deadline
+(2 to 6 per run) occur with the warm-up on and off alike (6 in the control at 20261008), so the
+warm-up does not cause them. One run, seed 20261008 with the warm-up on, failed at iteration 1405
+with two different error classes (`CAST_OVERFLOW` against `INTERVAL_ARITHMETIC_OVERFLOW`): the
+fixture's `y = 2147483647` row overflows both `ymy` and `ym`, and which error a side raises depends
+on whether the view's unused column is computed (the cached no-batch side) or pruned (the row
+engine). That is the fixture's own flaw, separate from the warm-up, and is not fixed here.
