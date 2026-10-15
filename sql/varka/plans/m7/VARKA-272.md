@@ -431,3 +431,23 @@ dropped out of the comparison and passed (it fails now, with a self-test case); 
 claim). Not changed: `Observed` computes a run's compiles eagerly, a few milliseconds a run; and
 `VarkaAnswerLog` keeps its repeat counts per key for the JVM's life, which at the nightly's
 volume is hundreds of thousands of strings in a JVM whose heap the arms do not measure.
+
+### 9.6 The CI smoke failed on a runner, and why
+
+The first pull request run of the smoke (`int` and `c1`, seed 20261015, 20 plain draws, 1 compiled
+draw a lane, a runner on Zulu 25.0.4) passed `int` in 9 s and failed `c1` in 15 s with 2
+histories not reached, its 484 answers equal to the interpreter's on the 84 keys they share. The
+log kept no `run.log`, so the cause was reproduced: `c1` pinned to two cores that two busy loops
+shared (`taskset -c`), three seeds, failed in two runs of three, in 21 s and 27 s. The messages
+name the lane whose `released` history had no call served by C1's code in 200 batches; the first
+case's verdicts were `Mixed[before={}, after={}]` in one run (a body with no loop or epilogue
+method has no code to show) and every method at level 0 at both edges in the other (a starved C1
+queue installed nothing in time). The rule asks that some call of the lane be served by C1 code,
+and at one draw a lane that is a property of the draw and of the machine's load. It held on the
+laptop's first try only by luck of both.
+
+Decided: the CI smoke is the interpreter arm alone, whose proof (`UseCompiler=false`, every call
+interpreted, no kernel method compiled) holds for any draw and any machine. `c1` keeps its rule
+unchanged in the nightly, where 20 draws a lane are asked for one that shows C1's code; no rule
+was loosened. The same reasoning is why the nightly's other arms ask for several draws, and the
+smoke must not grow another arm without a proof of that kind.

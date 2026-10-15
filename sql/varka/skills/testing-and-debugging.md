@@ -1267,3 +1267,7 @@ From VARKA-272 (14 October 2026), which forks the IR fuzzer's compiled test unde
 - Never recompile the test classes while forked JVMs run on them: a `NoClassDefFoundError` for
   `VarkaKernelChecks$LongBatch` in a stress arm's `cold` history read as a finding for ten
   minutes, and was sbt rewriting the class files under the running JVM.
+- A tier proof that asks for a JIT outcome from one draw is a flaky test on a loaded runner: C1's
+  `released` history was not reached in two runs of three at one compiled draw a lane on two
+  shared cores, from a body with no loop method or a starved C1 queue. Smoke only the arm whose
+  proof is a negative (`-Xint`: nothing compiles) and ask the others for a draw count.
