@@ -559,6 +559,14 @@ the math reading's corrections:
   `SCOPE_FUNCTIONS.md` 3 and item 36 say only six functions have host-independent row-engine bits;
   `atan`, `atan2`, `hypot`, `sinh`, `cosh`, `asin` and `acos` are fdlibm everywhere too, by the
   file's own list of the x86 intrinsics, and both carry a dated correction.
+* **Two facts from the source readings (`READING_JDK.md` 2.2 and 2.3).** Spark calls `StrictMath`
+  for `exp`, `expm1`, `log`, `log2`, `log10`, `log1p` and `pow` and `Math` for the rest, while the
+  Vector API's fallback for an unbound operator is `Math.*`. On x86 `Math.exp`, `Math.log` and
+  `Math.pow` are Intel stubs, so a declined lane for any of them, not only `pow`, is not bit-exact
+  against the row engine. And `Math.cbrt` is an x86 stub but fdlibm on aarch64, and Spark calls
+  `Math.cbrt`, so `cbrt` is host dependent like `sin`, not one of the fdlibm-everywhere functions.
+  The binding is keyed by the species width as well as the CPU: SVML's AVX-512 symbols are chosen
+  only for a 512-bit species, and `POW` is unbound below 512 bits.
 * **The eleven entries the probe never measured have no bound and are not fused until 367
   measures them**, at the level Spark computes them: `asin`, `acos`, `sinh` and `cosh` as
   operators; `sec`, `csc`, `cot`, `log2`, `asinh`, `acosh`, `atanh` and the two-argument `log` as
@@ -566,15 +574,16 @@ the math reading's corrections:
   `asinh` and `acosh` are fdlibm branch blends of three math calls per lane, not formulas.
 * **`pow`, owner's decision A3.** fdlibm's `pow`, which `StrictMath.pow` ports, has a weak branch
   the probe never reached: for `|y| > 0x1.00000_ffff_ffffp31` and `0x1.fffff_0000_0000p-1 <= |x| <=
-  0x1.00000_ffff_ffffp0` it computes `log(x)` by a four-term series, with a known 636-ulp case
-  (`FdLibm.java`, read here). The kernel fuses `pow` behind a guard: a batch with any lane where
-  `|y| > 2^31` and `||x| - 1| <= 2^-20` - the guard tests `|x|`, as the branch does - declines to
-  the row path, and the general-exponent kernel is enabled on a host only after 367 has measured
-  the guarded domain there. fdlibm's exact special exponents, confirmed in `FdLibm.java`'s `Pow`,
-  are exact nodes outside the contract: `y == 2` is `x * x`; `y == 0.5` is `Math.sqrt(x + 0.0)` for
-  every `x >= -Double.MAX_VALUE`, the `+ 0.0` making `pow(-0.0, 0.5)` `+0.0`, with `-infinity`
-  falling through to the general case (not "for `x >= 0`": a negative `x` gives NaN either way);
-  `y == 1` is `x` and `y == -1` is `1.0 / x`.
+  0x1.00000_ffff_ffffp0` it computes `log(x)` by a four-term series, and a 636-ulp case is quoted
+  for it. The branch is in `FdLibm.java`, but the number has no source in the JDK tree
+  (`READING_JDK.md` 2.1), so 367 finds the worst case by search. The kernel fuses `pow` behind a
+  guard: a batch with any lane where `|y| > 2^31` and `||x| - 1| <= 2^-20` - the guard tests `|x|`,
+  as the branch does - declines to the row path, and the general-exponent kernel is enabled on a
+  host only after 367 has measured the guarded domain there. fdlibm's exact special exponents,
+  confirmed in `FdLibm.java`'s `Pow`, are exact nodes outside the contract: `y == 2` is `x * x`;
+  `y == 0.5` is `Math.sqrt(x + 0.0)` for every `x >= -Double.MAX_VALUE`, the `+ 0.0` making
+  `pow(-0.0, 0.5)` `+0.0`, with `-infinity` falling through to the general case (not "for
+  `x >= 0`": a negative `x` gives NaN either way); `y == 1` is `x` and `y == -1` is `1.0 / x`.
 * **An exact-value table per row, tested for bit equality before the bound**: integer-power
   exactness, `pow(x, 1) = x`, `pow(x, 0) = 1`, `log10(10^n) = n`, `tanh`'s saturation, `acos(1) =
   +0`, `exp(0) = 1`, the odd functions' signed zeros, the value-dependent nulls of the log family,
@@ -603,10 +612,12 @@ the math reading's corrections:
 * **The register records it.** `SCOPE_STANDARD_MODE.md` 3.4 is the first deliberate departure from
   "row answers follow Spark", with the reason, the bound and the configuration.
 * **A scope item for milestone 9** (`m9/SCOPE.md` 98): an emitted SLEEF-shaped `exp` and `log`,
-  about 25 and 45 lane operations, as the route to one bit pattern on every host and, later, to
-  correct rounding - not an alternative to the contract, since fdlibm itself is not correctly
-  rounded. Item 36's own dated correction records that its emitted-fdlibm option, which stays item
-  36's, must be costed without FMA, because `StrictMath` is pure Java and FMA changes the bits.
+  about 20 to 35 lane operations for `exp` and 40 for the u35 `log` (the u10 `log` the JDK binds is
+  about 70; hand counts, `READING_SLEEF.md` 2), as the route to one bit pattern on every host and,
+  later, to correct rounding - not an alternative to the contract, since fdlibm itself is not
+  correctly rounded. Item 36's own dated correction records that its emitted-fdlibm option, which
+  stays item 36's, must be costed without FMA, because `StrictMath` is pure Java and FMA changes the
+  bits.
 
 **The default is on: owner's decision, 14 October 2026.** The plan had recommended off; the owner
 chose the speed. The consequences, plainly:
@@ -758,7 +769,12 @@ commit one.
   rule is read from the node's resolved result type - what the analyzer computed under the
   session's `allowPrecisionLoss` - and never from the session configuration at kernel-compile time
   (Comet's bug #4124). Spark's SPARK-45786 random test, which Gluten excludes, is ported; the `k =
-  39` multiply is declined or constant-folded.
+  39` multiply is declined or constant-folded. The fork's `Decimal.scala` (line 593 on) already
+  has the SPARK-45786 fix, so the lemma holds against it; spark-rapids-jni deliberately keeps the
+  earlier double rounding to match older Spark releases (`READING_RAPIDS.md` 2.1), which is why
+  the port pins the fork's behaviour. The product is compared with `10^38` at full 256-bit width
+  before any narrowing: arrow-rs's unchecked multiply keeps the low 128 bits, and a product near
+  `10^61` wraps into range and passes (`READING_ARROW_RS.md`).
 * **Where the bounds live.** `VarkaRangeAnalysis` is int-only, so every "no intermediate passes
   `2^64`" claim of 361 to 363 is an SMT lemma in this milestone; extending the analysis to long
   lanes is `VARKA-104.md` 3.2's question and not taken here.
@@ -1068,7 +1084,8 @@ Every structural row cites the proof its row names:
     `BigDecimal`-backed value and the cache reader a long-backed one, so an ANSI cast of a decimal
     to `INT` can answer differently by batch with Varka on, before any kernel of this milestone.
     Mitigation: 365 in wave 0, its three-path test, and the upstream JIRA.
-11. **`pow` has a case no probe has reached**: fdlibm's weak branch, with a known 636-ulp error.
+11. **`pow` has a case no probe has reached**: fdlibm's weak branch, whose quoted 636-ulp error
+    has no source in the JDK tree.
     Mitigation: the guard of 2.7.1 declines the branch's domain to the row path, and the
     general-exponent kernel is enabled on a host only after 367 has measured the guarded domain.
 

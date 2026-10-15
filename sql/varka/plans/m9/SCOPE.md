@@ -5148,12 +5148,13 @@ measured cost against the row path's `BigDecimal` route, or the record says the 
 Milestone 8 fuses the math family under a ULP contract per host library, because the JDK binds a
 different library on each host and none reproduces the row engine's bits. The route to one bit
 pattern on every host, and later to correct rounding, is an emitted `exp` and `log` in the shape
-SLEEF uses - about 25 and 45 lane operations - whose arithmetic the emitter controls. It is not an
-alternative to the contract: fdlibm itself is not correctly rounded, so an emitted kernel matches
-Spark's bits only if it reproduces fdlibm's arithmetic, which is item 36's emitted-fdlibm option,
-costed without FMA (`StrictMath` is pure Java and FMA changes the bits). **Done when** an emitted
-`exp` or `log` gives one bit pattern on the three CI hosts at a measured cost against the bound
-library, with its contract (fdlibm's bits, or correct rounding) stated.
+SLEEF uses - about 20 to 35 lane operations for `exp` and 40 for the u35 `log`, 70 for the u10 `log`
+the JDK binds (hand counts, `m8/READING_SLEEF.md`) - whose arithmetic the emitter controls. It is
+not an alternative to the contract: fdlibm itself is not correctly rounded, so an emitted kernel
+matches Spark's bits only if it reproduces fdlibm's arithmetic, which is item 36's emitted-fdlibm
+option, costed without FMA (`StrictMath` is pure Java and FMA changes the bits). **Done when** an
+emitted `exp` or `log` gives one bit pattern on the three CI hosts at a measured cost against the
+bound library, with its contract (fdlibm's bits, or correct rounding) stated.
 
 ## 5. Ordering
 
