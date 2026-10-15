@@ -308,3 +308,61 @@ can fail that job until a firing has been read; a rerun of the job has passed ev
 Production still releases a kernel at 60 s when this happens, and with one light loop interpreted
 it then runs at most a few kilobytes a call above a compiled one, so the user-visible cost is the
 minute on the row path, not the kernel's speed afterwards.
+
+### 9.4 What 14 and 15 October add, and a plan to find the cause, 15 October 2026
+
+*Evidence added since 9.3.* Three more observations bear on the cause, and none names it.
+
+* **A local reproducer exists.** VARKA-327's fuzz arm with the warm-up on (#812) released 22
+  warm-ups of 2,477 in a 10-minute JVM, a release rate of 6 to 7 per cent, and 29 and then 13
+  in two runs of the same 400 compositions. All 22 had an empty C2 compile queue; 8 recorded
+  `profile_predicate` or `unstable_if` traps (VARKA-326's deoptimization cycle: 3 of 40 drawn
+  kernels cycled 97 to 110 times in 30 s on the warmed path); 21 had a kernel method with no
+  code in use.
+* **The symptom is reproduced without the cause.** The steady-state allocation test of
+  VARKA-314 (#815) failed in a CI JVM with the same message as when C2 is forbidden to compile
+  the kernel class (`-XX:CompileCommand=exclude,...VarkaFusedProjection_*::*`), to the
+  character. That says what the symptom looks like, not why C2's output is missing.
+* **The compile queue is not the cause.** The queue was empty at every release read so far,
+  on CI and locally.
+
+*The candidate causes.* The diagnostics so far cannot tell these four apart:
+
+1. **A deoptimization cycle.** A trap makes the nmethod not entrant, the method recompiles and
+   traps again, and the loop is interpreted for most of the window.
+2. **A C2 bailout.** The compile fails ("out of nodes", the node limit, not retryable) and the
+   method is then not compilable at tier 4.
+3. **The tiered policy does not ask for the compile.** Its thresholds scale with the compile
+   queue and the number of compiler threads, and a CI runner has 4 cores against this laptop's
+   24.
+4. **Compiled, but the Vector API boxes inside it,** so allocation survives in compiled code.
+
+*The plan, cheapest first.* Each step either names a cause or removes one.
+
+1. **Instrument the local reproducer** (hours): the warm-up fuzz arm with
+   `-Xlog:jit+compilation=debug,deoptimization=debug`, `-XX:+PrintTieredEvents` and
+   `-XX:+LogCompilation` on the kernel classes, and each release classified into the four
+   causes. Bailouts print `COMPILE SKIPPED`; traps print their reason, action and bci.
+2. **Join it with VARKA-326.** If cause 1 holds, 295 and 326 are the same bug and the question
+   is why C2's recompilation does not converge on a loop-predication trap, with the JDK's own
+   `CompilationPolicy` and `Deoptimization` sources (JDK 25, checked out locally) as the
+   reference.
+3. **Reproduce the CI environment locally:** the JVM pinned to 4 cores (`taskset`) with
+   `-XX:CICompilerCount=3` beside a competing JVM, and the runner's JDK (Zulu 25.0.4-7) if it
+   is available from a pinned source. A jump in the release rate points at cause 3.
+4. **If the laptop cannot reproduce the CI rate, reproduce on CI:** a `workflow_dispatch` job
+   that repeats the `sql - other tests` partition in eight parallel copies with the log flags on
+   and the logs uploaded only on failure. The failure rate is about one run in ten, so a
+   dispatch should give several failures for runner time, not laptop time.
+5. **Make the diagnostics permanent and cheap.** The account of 9.3 is built at failure time and
+   cannot see what happened earlier in the JVM's life. A rotating `-Xlog` file or a continuous
+   JFR ring buffer limited to deoptimization and compilation-failure events survives to the
+   failure.
+6. **Ask the JVM directly** if the logs are inconclusive: `-XX:+WhiteBoxAPI` gives the
+   compilation level, the compilability and the entry bci of each kernel loop method at the
+   moment of release.
+
+*What a result looks like.* A cause 1 or 2 result gives a concrete fix or workaround (a kernel
+shape, or a flag the warm-up can set); a cause 3 result lets the warm-up stop waiting on a
+deadline that the environment cannot meet; a cause 4 result is a Vector API escape-analysis
+question for the kernels' emitted form. Row 295 stays open until a step names the cause.
