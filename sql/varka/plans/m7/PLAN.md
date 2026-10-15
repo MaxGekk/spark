@@ -26,6 +26,9 @@ and 272. Row 273 is a bug the reading found, reproduced the same day.*
 *9 October 2026: a read of Polars (`m7/READING_POLARS.md`) added row 301 and refined row 252; the
 rest of what it found is `m9/SCOPE.md` item 89.*
 
+*15 October 2026: the reading of the warm-up flake's cause (`VARKA-295.md` 9.6, in pull request #825 until it merges) added rows 370, a
+check of what a running JVM allows, and 371, a post on the cause.*
+
 ## 1. The question, and what "done" means
 
 Six milestones built vocabulary and then a foundation under it, and each was checked as it
@@ -76,7 +79,10 @@ base they land on provable where proof is cheap, tested where it is not, and eas
    and every emit option states why it exists and moves some hash in the bytes oracle, or is gone
    (247, 248). Every shape the tests run has both its dense and its masked body compared (284).
    What the tests miss is measured, by what the emitter reached, branch coverage of the emitter
-   and of the code it emits, and a bounded mutation run (280, 285, 265).
+   and of the code it emits, and a bounded mutation run (280, 285, 265). The warm-up's flake, which
+   fails the module's job a few times in a hundred warm-ups, has its cause named and the part of it
+   Varka can remove removed, or the part it cannot recorded with what an operator can set (295,
+   370).
 3. **Varka's code is Java and legible**: the compiler ported with its shape cache (214 to 217,
    224) and the evaluators with it (251, 267), checked by Error Prone and NullAway (266); item
    74's refactors landed, each with the proof its row names (248 to 252); the runtime refusals
@@ -86,7 +92,8 @@ base they land on provable where proof is cheap, tested where it is not, and eas
    laptop and runs master after each merge (255), and a benchmark run regenerates only its own
    sections (256). The slow mode a kernel meets after other kernels is a number (257).
 5. Beside the spine: promotion continues (180), the three posts the owner chose on 2 October
-   are published (258 to 260), and the milestone closes on a post of its own (270).
+   are published (258 to 260), a short post on the JIT's trap sums follows the warm-up flake's
+   fix (371), and the milestone closes on a post of its own (270).
 
 ## 2. Design
 
@@ -446,7 +453,7 @@ runner, read by best time as well as median. The ScalaTest harness
 (`VarkaMatrix`, `VarkaOwnJvm`, the watchdog, `VarkaSharedSessions`) is 312's subject, and
 `VarkaEmitterTestBase` shrinks as the suites over it move.
 
-### 2.4 Infrastructure (255 to 257, 283, 286, 287, 313 to 319)
+### 2.4 Infrastructure (255 to 257, 283, 286, 287, 313 to 319, 370)
 
 VARKA-255 takes the CI queue off the laptop with no stored credential, splitting it so each
 repository acts only on itself. `VARKA-227.md` 3 put the whole queue on `vecbricks/varka`,
@@ -515,7 +522,21 @@ are (317, Comet), a kill switch per family named in its messages (318, StarRocks
 expected-errors list in the fuzzers (319, SQLancer). The developer side - fuzz failures signed by their kind, and mismatch messages that
 carry the kernel's value, the row's inputs and the body that ran - is in row 311.
 
-### 2.5 Promotion (180, 258 to 260, 270, 288)
+**What a running JVM allows (370).** Added 15 October 2026 from the cause of the warm-up flake
+(`VARKA-295.md` 9.6, in pull request #825 until it merges): C2 puts a real virtual call in place of
+an uncommon trap on the class-check miss of the Vector API's inlined templates when two sums over
+a compile, trap counts against `PerMethodTrapLimit` and decompiles against
+`PerMethodRecompilationCutoff`, pass their limits, and the two JVM options that raise them cannot
+be set by an executor's own code. Row 370 asks the question that decides the remedy's shape: whether any mechanism of a
+running JVM resets or avoids those counts. Its admission check read the HotSpot source and ran
+the seconds-long experiments: none of the three limits is `manageable`, so `setVMOption`,
+`jcmd VM.set_flag` and the `DiagnosticCommand` MBean refuse them, with or without the diagnostic
+unlock; compiler directives can be added at run time but have no option for them; WhiteBox sets
+them and clears one method's counts, but only under `-XX:+WhiteBoxAPI` and a jar on the boot class
+path (`VARKA-370.md` 2). What remains is the instrumentation route and one replay. The row does
+not touch 295's remedy.
+
+### 2.5 Promotion (180, 258 to 260, 270, 288, 371)
 
 VARKA-180 is the cadence carried from milestone 6. VARKA-258 and VARKA-259 are the pair of posts in
 items 78 and 79, 258 first; 260, the reference post of item 80, comes between them and the next
@@ -531,6 +552,13 @@ VARKA-288, added 5 October 2026 at the owner's request, is the sequel to "The 80
 Spark SQL": apache/spark#59225 (SPARK-33301) closes the thread that post left in review, by
 splitting a large `CASE WHEN` inside a stage only where its method is past the line. It waits on
 that pull request's merge rather than on a wave.
+
+VARKA-371, added 15 October 2026, is a short post for Spark and JVM developers on the cause
+`VARKA-295.md` 9.6 found: a warmed Vector API kernel compiled at the top tier still allocates one
+array per loop iteration in a few per cent of warm-ups, because C2's class-check gate adds up the
+trap counts of every inlined copy of a shared template. It is outlined (`VARKA-371.md`) and its
+draft waits for the result of the fix being tested on branch `varka-295f`, since the post's last
+section is the remedy.
 
 ### 2.6 The closing task (261)
 
@@ -631,6 +659,7 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 | 325 | **In progress** (13 October 2026): the sixth section takes the fewest fields of sixty-four dates the emitter splits, nine today, 576 outputs split 524 + 52 over 64 and 52 inputs, and the benchmark splits a shape as the compiler does - a planned prefix asked again, the compiler's halving, each kernel's inputs numbered by first use and its bytes kept from the emission that built it; both classes' dry runs build every shape. Both results files were regenerated on an idle machine on 14 October 2026 at this branch's head, `VarkaWideKernelBenchmark`'s with every row within a few percent of the 3 October file. `VarkaEmissionBenchmark`'s pair against the merge base ran to the end: 28 shared rows, none 10% apart, the widest 2.7% by median, after three rounds a side. On 14 October 2026 the Emission pair ran again on a GitHub-hosted runner (an EPYC 7763, five rounds): 28 rows, none 10% apart by both measures, the widest 33.2% by median on the emission row the runner's own A/A moves most and 2.6% by best; and both results files were regenerated on runners (`VarkaWideKernelBenchmark` on an EPYC 7763 in 2 h 55 min, `VarkaEmissionBenchmark` on an EPYC 9V74 in 13 min) but stay as artifacts, since a results file is regenerated on the machine that measured it and the committed ones are the laptop's (`VARKA-322.md` 9, "Row 325's pair and its two runner files", with the cross-machine differences). Owed: `VarkaWideKernelBenchmark`'s pair, on the laptop: a runner cannot pair it inside the six-hour job cap (`VARKA-255.md` 9.1), and the laptop regeneration alone took 2 h 24 min. `VarkaWideKernelBenchmark` finishes a run again, and `VarkaEmissionBenchmark`'s results file covers all four of its sections. *Found 13 October 2026 by VARKA-322a's port runs*, on master's Scala class as on the Java port. The benchmark's sixth section compares one kernel against the shape split into several, and checks first that its shape of sixty-four dates by field, 256 outputs, does not fit one kernel; today's emitter fits it in one, so the check stops the run with "fits one kernel: nothing to compare" and the seventh section never runs. The committed results file of 3 October split the shape 181 + 75; the likeliest cause is VARKA-254's grouping change of 12 October, which grouped by predicted bytes. `VarkaEmissionBenchmark`'s committed results file predates its fourth section, added the next day. Done when the sixth section draws a shape that still splits under today's emitter, chosen by the emitter's own split rather than a fixed size so the next grouping change cannot silently empty it, both files are regenerated on an idle machine, and the port's pairs for both classes run to the end | VARKA-322a's port runs, 13 October 2026 | small |
 | 326 | The deoptimization cycle over the fuzz grammar's shapes, censused. *Found 13 October 2026 by VARKA-274's admission check* (`VARKA-274.md` 3.7): 3 of 40 drawn kernels, each of 1 to 3 roots with only a masked driver, cycled on `profile_predicate` for 30 s on the warmed path, 97 to 110 traps each, one with C1 on as well, where the nightly's guard forks one `make_date` kernel only, so the tests do not see how often a kernel users run never settles. Done when the cycle is counted over the grammar's shapes from the JVM's own trap log, the shapes that enter it are named, and the record says whether a guard in the nightly covers them; a change to the emitted loop, if the census calls for one, is a scope item of its own | VARKA-274's admission check, 13 October 2026 | small |
 | 327 | **Done** (`VARKA-327.md` 9, 14 October 2026): `VarkaSparkFuzzSuite` has a warmed arm, each composition from a cold shape with the warm-up on: the query on the row path while its kernel compiles, again after the handover until no node waits, then the kernel over other data with the same nulls, every run against vanilla Spark, and a disagreement's kind naming the side of the switch; a planted kernel fault is found after the handover and not before. It never asserts on the verdict: a release at its 10 s deadline is reported with the JIT's account, evidence for VARKA-295 (an empty C2 queue in every one so far, at 0.9% to 6.8% of warm-ups by seed). CI runs 8 compositions, about 4 s; the nightly's `sparkwarm` step 2,000, about 14 minutes, with no disagreement | VARKA-274's admission check, 13 October 2026 | small |
+| 370 | **Planned** (`VARKA-370.md`, 15 October 2026; the admission check is done: none of `PerMethodTrapLimit`, `PerBytecodeTrapLimit` and `PerMethodRecompilationCutoff` is `manageable`, so `setVMOption`, `jcmd VM.set_flag` and the `DiagnosticCommand` MBean refuse them with or without the diagnostic unlock; compiler directives and `-XX:CompileCommand` have no option for them; WhiteBox sets them and clears one method's counts but needs `-XX:+WhiteBoxAPI` and a jar on the boot class path; the instrumentation route and a replay of the flake with the flags set at run time remain). Whether a running JVM can reset or avoid the trap and decompile counts that make C2 compile the class-check misses of the Vector API's inlined templates as virtual calls instead of uncommon traps: the diagnostic commands and compiler directives (`jcmd Compiler.directives_add`, `-XX:CompileCommand` set at run time through the `Compiler.*` diagnostic commands, the `DiagnosticCommand` MBean), `WhiteBox` (`-XX:+WhiteBoxAPI`: what it can clear of a method's MethodData), and the diagnostic flags writable at run time through `HotSpotDiagnosticMXBean.setVMOption` (which of the three limits are `manageable`; `jdk.management` and HotSpot's `globals.hpp`), and whether any of them is available to an executor without a JVM option at startup. Done when each mechanism has a verdict (available, not available, needs a startup option) with the JDK source or a one-line experiment as the evidence, and the answer says whether a per-JVM or per-method reset is possible from Varka's own code or only by an operator's option. Serves point 2 of 1.1 through row 295 | the reading of `VARKA-295.md` 9.6 (pull request #825) | small |
 | 266 | **Done** (`VARKA-266.md` 9, 11 October 2026), Error Prone clean under `-Werror` and NullAway checking all but 37 classes: Error Prone 2.50.0 runs on JDK 25's javac with the incubator module (69 warnings, no error, over 89 files); a `-Werror` pass in the gate's lint step, NullAway with a pending-class list the script keeps from growing (336 warnings in 45 classes at the start), suppressions with reasons, and eight classes taken off it - the exec metrics, the six JFR events and the compile facade, whose nullable fields are annotated. Error Prone and NullAway on Varka's Java packages only; the first step confirms Error Prone on JDK 25's javac with the incubator module; its own javac pass; NullAway staged by class with a list that only shrinks, reasons on suppressions, checks where Scala calls into Java | the plan review (2.3), `m7/READING.md` 11 | small to medium |
 | 264 | **Done** (`VARKA-264.md` 9, 9 October 2026): all twenty entries owned - eight closed by the task or commit that did it, seven moved to `m9/SCOPE.md` (items 15, 39 and the new 86 to 88), one kept as a decision, four already swept. Milestone 4's debt register swept: each entry of `m4/PLAN.md` section 9 still open closed in the past tense, made a row, or moved to `m9/SCOPE.md` | the plan review (2.3) | small |
 | 83 | **Done** (`VARKA-83.md` 9, 10 October 2026): a refusing node declares its reason, an `Analysis.Refusal`, in one map filled once with the options applied; one slot rule and one liveness rule read it, replacing three sets, four per-body flags and two predicates; `emitted_bytes.json` unchanged | item 39 | medium |
@@ -648,6 +677,7 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 | 258 | **Outlined** (`VARKA-258.md`, 13 October 2026; the measurements and the draft open). A post for Spark users: how Spark compiles a query, and why it compiles it again | item 78 | medium |
 | 259 | Its companion for Spark and JVM developers: bytecode without source | item 79 | medium |
 | 260 | A reference post: Spark's code generator by the numbers | item 80 | small |
+| 371 | **Outlined** (`VARKA-371.md`, 15 October 2026; the draft waits for the result of the fix on branch `varka-295f`). A short post: the JIT's per-compile trap sums, and why one vector array survives in a warmed kernel. For Spark and JVM developers: a warmed Vector API kernel compiled at the top tier still allocates one vector array per loop iteration in a few per cent of warm-ups, because C2's class-check gate adds up the trap counts of every inlined copy of a shared template; found by classifying every release from the JIT's own log, ruling out a deoptimization cycle, a bailout and a policy that never asked, naming the sums in `doCall.cpp`, and a JVM option that removes it. Serves point 5 of 1.1 | the reading of `VARKA-295.md` 9.5 and 9.6 (pull request #825) | small |
 | 270 | The milestone's own post, for JVM and database engineers: how Varka knows its answers are right, and where that stops | the plan review (2.5), item 58 | medium |
 | 288 | **Done** (`VARKA-288.md` 9.3, 12 October 2026): published as "A large CASE WHEN, split only where it has to be"; the fix 4.5 times faster than the cliff post's workaround at 300 branches and that workaround within 3% of whole-stage off, C2's inlining shown from its own log. The cliff's sequel, for the readers of "The 8000-byte cliff in Spark SQL": a large CASE WHEN inside a stage split only where its method is past 8000 bytes, as apache/spark#59225 (SPARK-33301) does it; the cliff post's workaround measured against the fix, and C2's inlining under splitting always; published once the pull request merges, naming the release (`VARKA-288.md`) | the owner, 5 October 2026 | small |
 | 261 | The closing task: 1.1 read row by row, and the README's account of how Varka is checked rewritten; then the close `CONTRIBUTING.md` asks of every milestone, in VARKA-282's shape - the documents, the issue mirror, the lessons, the oracles, the `CHANGELOG.md` entry, the tag `varka-m7`, the cleanup | this plan | small |
@@ -656,13 +686,13 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 
 | wave | tasks | why they wait |
 | ---: | :--- | :--- |
-| 0 | 240, 246, 248, 249, 255, 256, 81, 263, 266, 273, 275, 277, 283, 286, 287, 289, 293, 295, 299 | 240 is the proofs' tooling; 246 makes later suites' verdicts trustworthy; 248 and 249 are what every later refactor touches; 255 and 256 end the laptop queue and the hand splicing for every PR below; 263 and 266 check every port and refactor below as it lands; 81 needs nothing; 273 is a reproduced bug; 289 a reproduced test gap; 293 a reproduced edge in one guard; 295 a reproduced CI flake; 299 a reproduced crash; 275 and 277 make every later test's failure loud and small |
+| 0 | 240, 246, 248, 249, 255, 256, 81, 263, 266, 273, 275, 277, 283, 286, 287, 289, 293, 295, 299, 370 | 240 is the proofs' tooling; 246 makes later suites' verdicts trustworthy; 248 and 249 are what every later refactor touches; 255 and 256 end the laptop queue and the hand splicing for every PR below; 263 and 266 check every port and refactor below as it lands; 81 needs nothing; 273 is a reproduced bug; 289 a reproduced test gap; 293 a reproduced edge in one guard; 295 a reproduced CI flake; 370 the check of what a running JVM allows, which bounds 295's remedy; 299 a reproduced crash; 275 and 277 make every later test's failure loud and small |
 | 1 | 241, 243, 250, 251, 214, 215, 216, 138, 247, 222, 253, 262, 269, 271, 264, 274, 276, 284, 285, 291, 292 | after the tooling and the two cheap refactors; the three family ports run in parallel, by an agent; 262 and 269 need only the fuzzers' grammar and 277's shrinker, and 271 only Spark's suites; 264 is decisions, not code; 274, 276 and 284 sharpen the oracles every later test reads, and 285 measures what 284 closes; 292 follows 263's sanitizer, which found it, and precedes 263's last step; 291 needs only the IR's source and a quiet machine, and its verdict is wanted before the ports have built much of the compiler |
 | 2 | 242, 244, 217, 224, 83, 254, 257, 267, 272, 278, 279, 280, 281, 290, 294, 296, 297, 298, 303 | 303 after 284, whose report it reads; 217 after the families it fronts; 83 after 250, which rewrites the same paths; 290 after 83, whose single refusal is where the size loop's declines end; 294 after 277, whose shrinker it reuses; 296 to 298 after 262, whose harness they extend; 244 after 243 defines what a delta departs from; 267 after 251's components; 272 after 246, so that a configuration's verdict is not a second species' boxing; 278 after 277; 279 after 138; 280 after 262; 281 after 240's tooling |
 | 3 | 245, 86, 252, 268, 265, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325 | 325 before 322a's pairs, whose wide-kernel pair cannot finish without it; 323 first, since it fails a nightly IR chunk in about sixteen and needs nothing, and 324 after 320, whose port it touches; 320 after 311, whose checks the fuzzers call, and before any fuzz suite is written in JUnit under 312; 321 and 322 whenever the machine is free, 322b before 322c, whose adapter it builds, and 322's parity benchmark last; 313 to 319 after the structure settles, 315 after 314, whose error context it writes, 316 last of them since its steps are the others'; 310 to 312 after 268, whose pattern they follow, 311 after 310, whose evaluator it calls, and 312 after 311, so that a new suite has Java helpers to call; 86 after the ports, so the admission is written once in Java; 252 once the structure has settled; 268, optional, once the ports and refactors have settled the helpers' callers; 265 after 262, 263, 269, 280 and 285, so that it measures the tests the milestone leaves |
 | 4 | 261, 270 | 261 last by definition; 270's post written from what 261 records |
 
-VARKA-180 and VARKA-258 to VARKA-260 run across the waves; VARKA-288 waits on apache/spark#59225's
+VARKA-180, VARKA-258 to VARKA-260 and VARKA-371 run across the waves; VARKA-288 waits on apache/spark#59225's
 merge.
 
 At the halfway point the milestone is reviewed against 1.1, not against this table, and the
@@ -817,11 +847,11 @@ yet read them.
 | 1 | 271b, 138b, 274a; 325's files and 322a-2's pair in the next idle window | In flight; each closes its row or its step, and three of them close 1.1 point 2's named rows | small each |
 | 2 | 255 | Takes the laptop out of CI's path and, with the benchmark pairs on GitHub-hosted runners, out of the benchmark queue; every later row's CI and every pair benefit | medium |
 | 3 | 243, then 244 | 1.1 point 1 is the one done-when point with nothing in flight; 243 bounds the specification to the coverage table's operations (risk 3), and 244 names Spark's departures with a test each | medium each |
-| 4 | 274b, 272, 279, 326, 327, 298 | The rest of point 2's compiled-kernel and guard checks; 272 reuses 274a's witness, 279 reads 138's domains; 298 last of them, the analyzer's casts at random | small to medium each |
+| 4 | 274b, 272, 279, 326, 327, 370, 298 | The rest of point 2's compiled-kernel and guard checks; 272 reuses 274a's witness, 279 reads 138's domains; 370 is a check of what a running JVM allows, small, with the flake's remedy; 298 last of them, the analyzer's casts at random | small to medium each |
 | 5 | 313, 314, 315, 317, 318, 319, 316 | The errors rows, in the order section 4 gives them, 315 after 314 and 316 last; 317 and 319 are test strength as well | small to medium each |
 | 6 | 322b, 322c | The last test code to Java; their pairs run where 255 leaves the benchmarks | medium to large |
 | 7 | 281, 245 | The analyses proven and the refinement proofs, after 243 and 244 show what they cost | medium each |
-| 8 | 258, 259, 260 | The posts, 258 first; 260 between them and the next long post | medium, small |
+| 8 | 258, 259, 260, 371 | The posts, 258 first; 260 between them and the next long post; 371 once the flake's remedy has a result | medium, small |
 | 9 | 280, 257, 252, 265 | Measurement and legibility once the structure has settled; 265 last by design | small to medium each |
 | 10 | 270, 261 | The milestone's post and its close | medium, small |
 
