@@ -78,7 +78,7 @@ final class VarkaVectorTemplateWarmup {
    * it after 5000 at the default scale; the rounds only have to cover the profiling tier with
    * every operator class mixed in, which C2 then reads whenever it compiles.
    */
-  static final int ROUNDS = 1500;
+  static final int ROUNDS = 300;
 
   private static final int BYTES = 4096;
 

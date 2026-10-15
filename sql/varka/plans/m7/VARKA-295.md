@@ -592,3 +592,62 @@ the first operator class it had not seen. Iteration 220 alone releases 0 of 12 o
 2 of 4 on fastdebug. Both options removed every release in 1,000 warm-ups, the cutoff alone left
 3 to 11. Not shown: which flipped sites are the vector-valued ones. No product code changed; the
 suite gained `warmupSet` and `warmupShow`. Logs: `.../scratchpad/295e/` (`pq_*`, `fe1`, `full_*`).
+
+### 9.7 Step 3: warm the shared templates first, and the releases go (follows 9.6)
+
+**What was built.** `VarkaVectorTemplateWarmup`, run by `VarkaKernelWarmup`'s worker thread before
+it takes its first job, once per JVM. It calls every Vector API method the emitter's kernels call
+(`lanewise` unary, binary, shift, masked and scalar forms, `compare` and its mask forms, `blend`,
+`broadcast`, `convertShape`, the reinterprets, `fromMemorySegment` and `intoMemorySegment` dense
+and masked, the mask `and`/`or`/`not`/`anyTrue`/`toLong`/`fromLong`/`indexInRange`) on `IntVector`,
+`LongVector` and `DoubleVector` at `SPECIES_PREFERRED`, with the operators the emitter names
+(the arithmetic, bitwise and shift operators, `NEG`/`ABS`/`NOT`, the ten comparisons), interleaved
+in each round so every template call site sees several operator classes while it is profiled.
+ROUNDS is 300. `-Dvarka.warmup.vectorTemplates=false` turns it off, for these measurements only.
+It is a unit-tested class (`VarkaVectorTemplateWarmupSuite`: deterministic and used, once per JVM);
+the effect is measured here, not asserted by a test.
+
+**Which methods held the counts.** Runs of the two-composition reproducer with the
+deoptimization log (`pc_*`, three each). Without the warm-up, `class_check` traps in the
+`jdk.incubator.vector` templates, standalone compiles only: 24, 22 and 21; `VectorOperators.opKind`
+4, 5 and 5 of them, `ImplCache.find` 4 (first run), `VectorMask.fromLong` 4 plus 4
+`speculate_class_check`, `VectorMask.fromArray` and a `VectorMask` lambda's `load` the rest. With
+it: 0, 0 and 0. What remains is `profile_predicate` and `osr_bci` traps in `ldLongOp`, `stLongOp` and
+`bTest`, which are not class checks and are in both arms.
+
+| arm (seed 20261008) | runs | deadline releases |
+|---|---|---|
+| reproducer, prefix `[0]` then iteration 220, without | 6 | 5 of 6 (9.6 had 5 of 6 too) |
+| the same, with (1500 rounds) | 6 | 0 of 6 |
+| the same, with 100, 300, 600 rounds | 6 each | 0 of 6 each |
+| 400 compositions, about 500 warm-ups, without, 6 cores | 3 | 53, 78, 33 |
+| the same, with 1500 rounds | 3 | 0, 0, 0 (COMPILED 497, 501, 500) |
+| the same, with the shipped 300 rounds | 2 | 0, 0 (COMPILED 500, 499) |
+
+Each run is one JVM on 6 cores (`taskset`), pairs with and without side by side, and every log
+shows `Tests: succeeded 1`. The load average was 7 to 10 for the first six runs and 24 to 33 for
+the 100/300/600 and the last two (other agents' work), so the without-arm's counts are higher than 9.6's
+18, 10, 39 on 12 cores; the direction does not depend on it. Both options of 9.6 gave 0 of 1,000.
+
+**What it costs.** Measured on the worker thread (`templateWarmupNanos`) and from the first
+kernel's queue and run time: at 1500 rounds 312, 322, 404 and 658 ms; at 600 rounds 238 to 398 ms; at
+300 rounds 219 to 345 ms; at 100 rounds 123 to 572 ms, all at a load of 8 to 33 and dominated by
+interpreting and class loading, not by the rounds. The first kernel's wait (queue plus run) was
+550 to 700 ms without it and 680 to 940 ms with it (1500 rounds), the later kernels' run fell from
+about 600 ms to about 300 ms because the templates are already profiled. The unit test's JVM
+measured 45 ms for 1500 rounds at a load of 20. It happens once per JVM on the warm-up thread
+while the shape's batches take the row path, so no query waits for it; a shape queued in the first
+half second waits that much longer for its verdict.
+
+**What it does not show.** That a template already compiled by an earlier use outside the warm-up
+thread (a session with the warm-up off that ran kernels first) is covered: the warm-up must run
+before the first standalone C2 compile of a template, and a JVM that ran vector code elsewhere first
+may already hold traps. That a species other than `SPECIES_PREFERRED` (128-bit lanes in the option
+matrix) is covered: the other species' classes (`Int128Vector`) are separate methods with their own
+profiles. That 300 rounds is the least that works: 100 rounds was clean in the 6 reproducer runs
+but was not run through the 400-composition arm. Logs: `.../scratchpad/295f/` (`rep_*`, `full_*`,
+`r*`, `pc_*`).
+
+**Nothing else moved.** With the 300 rounds, under the defaults: `VarkaSparkFuzzSuite` (all arms),
+`VarkaWarmupEndToEndSuite` and `VarkaProjectExecSuite`, 47 tests in sql, and the catalyst `*Varka*`
+suites, all passed (the emitted bytes oracle is among them; no emitter code changed).

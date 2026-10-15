@@ -32,7 +32,8 @@ class VarkaVectorTemplateWarmupSuite extends SparkFunSuite with VarkaTestWatchdo
   }
 
   test("ensure runs the warm-up at most once per JVM") {
-    VarkaVectorTemplateWarmup.ensure()
+    val nanos = VarkaVectorTemplateWarmup.ensure()
+    info(s"the warm-up took $nanos ns")
     assert(VarkaVectorTemplateWarmup.ensure() === 0L, "the second call has nothing to do")
   }
 }
