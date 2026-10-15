@@ -1046,7 +1046,8 @@ the injector reaching a different set of words, and been listed in the skip list
   kernel and the status holds one bit), and failed under that configuration on master. They now
   force the option on; the sql module's matrix step is where such a premise shows, not the
   catalyst one. A test that waits on work another thread does after the job has failed (the
-  reproduction file of VARKA-315) polls for it instead of listing a directory once.
+  reproduction file of VARKA-315) polls for it instead of listing a directory once (a leftover task of the previous test that
+  claims the shape after the reset is not covered; it showed once in 300 back-to-back repeats).
 
 ## The emitter is called from several threads, so a test holds it to that
 
