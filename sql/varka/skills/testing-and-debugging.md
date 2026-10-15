@@ -1039,6 +1039,14 @@ the injector reaching a different set of words, and been listed in the skip list
   The run after each merge draws a configuration from the commit's hash and the weekly matrix
   runs them all; a test that leans on an option the base can switch off is checked before the
   merge with `dev/varka_matrix.sh --module catalyst --config <option>=<other value>`.
+- **The premise need not be a planted bug.** A test that reads a real refusal needs the option
+  that makes the refusal; `VarkaFallbackReasonSuite`'s two day-producer tests and
+  `VarkaProjectExecSuite`'s exact-status test (VARKA-313) leaned on `guardDayProducers`, which
+  `guardDayProducers=false` removes (no mask refusal in the method, so the batch runs on the
+  kernel and the status holds one bit), and failed under that configuration on master. They now
+  force the option on; the sql module's matrix step is where such a premise shows, not the
+  catalyst one. A test that waits on work another thread does after the job has failed (the
+  reproduction file of VARKA-315) polls for it instead of listing a directory once.
 
 ## The emitter is called from several threads, so a test holds it to that
 
