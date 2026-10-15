@@ -46,8 +46,9 @@ import jdk.jfr.consumer.RecordingFile;
  * Every kernel method's compiles with their tier and outcome; the deoptimizations of its compiled
  * code with their reason; the inlining C2 refused in its compiles, and every Vector API class it
  * inlined there, where a second class of one lane type is the species pollution of
- * {@code vector-api-and-width.md}; and where the warm-up thread's allocation samples of the last
- * seconds came from, with each frame's kind (interpreted, compiled, inlined).
+ * {@code vector-api-and-width.md}; and where the allocation samples of the last seconds came
+ * from on the threads the caller names - the warm-up's own, or Spark's task threads - with each
+ * frame's kind (interpreted, compiled, inlined).
  *
  * <p>The events are the JDK's own, enabled by name, with no flag on the JVM. The recording costs
  * the JVM one event per compile and inlining decision while it runs, so a test starts it just
@@ -88,8 +89,10 @@ public final class VarkaJitEvidence implements AutoCloseable {
 
   /**
    * Stops the recording and summarizes what it holds about {@code className}'s methods, and the
-   * allocation samples of the thread named {@code threadName} over the recording's last
-   * {@code tail}. Never throws: a recording that cannot be read says so in the summary.
+   * allocation samples of the threads whose name starts with {@code threadName} over the
+   * recording's last {@code tail} - a prefix, since Spark names a task's thread after the task
+   * ({@code Executor.TASK_THREAD_NAME_PREFIX}). Never throws: a recording that cannot be read
+   * says so in the summary.
    */
   public String summary(String className, String threadName, Duration tail) {
     try {
@@ -189,7 +192,9 @@ public final class VarkaJitEvidence implements AutoCloseable {
           case "jdk.CodeCacheFull" -> codeCacheFull = true;
           case "jdk.ObjectAllocationSample" -> {
             var thread = e.getThread("eventThread");
-            if (thread != null && threadName.equals(thread.getJavaName())
+            // A thread that is not a Java thread has no Java name.
+            String name = thread == null ? null : thread.getJavaName();
+            if (name != null && name.startsWith(threadName)
                 && !e.getStartTime().isBefore(tailFrom) && e.getStackTrace() != null) {
               long weight = e.getLong("weight");
               sampled += weight;
@@ -209,7 +214,8 @@ public final class VarkaJitEvidence implements AutoCloseable {
     if (codeCacheFull) {
       out.append("; the code cache was full");
     }
-    out.append("; allocation samples of ").append(threadName).append(" over the last ")
+    out.append("; allocation samples of threads named ").append(threadName)
+        .append("... over the last ")
         .append(tail.toSeconds()).append(" s: ").append(sampled).append(" bytes, by site ")
         .append(top(allocations)).append(", by class ").append(top(allocatedClasses));
     return out.length() <= MAX_CHARS ? out.toString() : out.substring(0, MAX_CHARS) + "...";
