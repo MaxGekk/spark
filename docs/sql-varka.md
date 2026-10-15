@@ -952,6 +952,101 @@ All of it is metadata or diagnostics: the emitted methods are byte-identical
 with and without the attributes, which the JVM ignores by specification.
 `VarkaDebugInfoReader` turns captured class bytes back into those strings.
 
+### Troubleshooting
+
+Start from the symptom. Every branch begins with the same step, which also tells you whether
+Varka is involved at all: set `spark.sql.codegen.varka.enabled=false` and run the query again.
+That switches off all of Varka. A switch per expression family is a planned task and is not
+built, so there is nothing narrower to try.
+
+```
+symptom
+|-- a wrong answer
+|     Varka off gives the right answer?  no  -> not Varka; stop
+|                                        yes -> A1 which rows, A2 what it compiled to, A3 hand over
+|-- a slow query
+|     Varka off is fast?                 no  -> not Varka; stop
+|                                        yes -> B1 counters, B2 reasons, B3 EXPLAIN, B4 change
+`-- a crash or an error
+      INTERNAL_ERROR at planning        -> C1 read the context, report it
+      "failed on this batch" warning    -> C2 the file, C3 replay it, C4 read the class
+```
+
+**A wrong answer.** The row engine is the oracle.
+
+1. Run the query with Varka off and on and compare the rows; cut the query to the one expression
+   and the few rows that differ. On the planted fault (a guard removed, so a far date offset
+   wraps) the on run reads `[56782, 49698, 2023, null, 1970, null]` against
+   `[56782, -52735, ...]` off, and `numFallbackBatchesDeclined` is 0: nothing declined, the
+   kernel answered.
+2. `dev/varka_emit.sh "year(date_add(d, off))" --columns d:date,off:int` prints the IR, the shape
+   hash and, per emitted method, the `VectorMask` count. A guard is a mask. The default emits 4 to
+   7 masks per method; with `--options guardDayProducers=false` every method shows 0.
+3. The fuzzers' shrinker works on a case a fuzzer drew, not on a query: no command takes your
+   query and shrinks it. A developer writes the expression and the failing rows as a case for
+   `VarkaIrFuzzSuite` (`sql/catalyst`), which shrinks every failure it finds. On a planted emitter
+   bug it printed `shrunk to lane=int roots=[(isNotNull col:0)] options={misdescribeWordLiveness=true}
+   length=1` from a tree of three conjuncts. Hand over the expression, the
+   rows and the `spark.sql.codegen.varka.*` settings you ran with.
+
+**A slow query.** A batch Varka cannot run goes to the row engine, so slowness is declined
+batches, an entry that did not fuse, or a slow kernel.
+
+1. Read the Varka node's metrics in the SQL UI (or `metrics` on the node). `numVarkaBatches` and
+   `numFallbackBatchesDeclined` count batches by path, `numVarkaRows` and `numFallbackRows` rows,
+   `varkaKernelTime` the time in the kernels. On the planted query: 1 batch on the kernel, 1
+   declined, 3 rows each way.
+2. `numDeclinedBatches[<reason>]` says why: `day-producer = 1`, the other nine `0`. A reason can
+   read "not reported" when a loop method holds guards of several reasons and reports them
+   together; `spark.sql.codegen.varka.emit.exactRefusalStatus=true` (internal, off by default)
+   gives each reason its own count, and its kernels are cached apart.
+3. `EXPLAIN FORMATTED` shows what did not fuse at planning: `Varka [2]: [a: fused, b: residual
+   (unsupported expression: length(CAST(varka_dates.i AS STRING)))]`; a filter has one line per
+   conjunct. It does not show a decline at run time: the planted query reads `y: fused`, and
+   step 2 is the only record.
+4. What to change. A residual entry is an expression Varka does not cover (the coverage table
+   lists them): rewrite it or accept the row path for it. A decline names a value the kernel is
+   not defined over (`day-range`, `int-overflow`, `value-range`...): the cure is the data or the
+   query, not a setting. A slow query with nothing declined is a developer's: a JFR recording
+   (the `Varka` events) or the VM flags `SKILLS.md` records (`-XX:+PrintCompilation`,
+   `dev/varka_c2_report.py`).
+
+**A crash or an error.**
+
+1. At planning the query fails with `[INTERNAL_ERROR] Varka's compiler failed while planning.`
+   and a `Varka context:` block: `kind: planning`, the entries being compiled, the options that
+   differ from the defaults, the cause. It is a bug in Varka: report the whole message. With
+   Varka off the query runs.
+2. At run time a kernel that throws does not fail the query. The batch goes to the row engine and
+   the executor logs "The Varka SIMD kernels VarkaFusedProjection_<hash>.java [...] failed on
+   this batch; falling back to the per-row path.", the same `Varka context:` block (`kind:
+   kernel-failure`, shape hash, options, the batch's rows and nulls, the cause) and "Wrote a
+   reproduction of this Varka failure (...) to <file>; replay it with dev/varka_emit.sh --replay
+   <file>".
+3. On a checkout, `dev/varka_emit.sh --replay <file>` rebuilds the kernel from the file's IR and
+   options, runs it over the recorded batch and prints `REPRODUCED: the same signature` with exit
+   0 when it fails the same way. It exits 1 when it does not (a fixed emitter, or an edited
+   file) and 2 when it could not run (no such file, no report). A file can hold the query's data, so it is owner-only; `...reproduction.maxBatchBytes=0`
+   keeps values out of it and `...reproduction.enabled=false` writes none.
+4. To read the class, set `spark.sql.codegen.varka.classDumpDirectory=<dir>` before the run and
+   `javap -c -p <dir>/VarkaFusedProjection_<hash>.class`. `javap -v` shows the `LineNumberTable`
+   (line n is the n-th IR node) and the `VarkaDebugInfo` decoding key.
+
+Who reads each thing, and what they do:
+
+| What you see | Reader | What they do |
+| :--- | :--- | :--- |
+| `INTERNAL_ERROR`, `kind: planning` | user, then developer | User: turn Varka off to unblock the query and report the message whole. Developer: the context names the entries and options; reproduce with `dev/varka_emit.sh` on the expression |
+| "failed on this batch" warning | operator | Count them per shape hash in the executor logs. The answers are right (the row engine served the batch), so it is a cost and a bug report, not an outage. Collect the file the warning names |
+| the reproduction file | developer | Replay it; the exit status is the verdict. Handle it as data |
+| `numDeclinedBatches[...]`, rows per path | user, operator | A declined batch is slow, not wrong: read the reason, change the data or the query, or turn Varka off for the query |
+| a residual entry in `EXPLAIN` | user | The expression is not fused: rewrite it or accept the row path for that entry |
+| `java.lang.VerifyError` at planning | user, developer | Not yet an `INTERNAL_ERROR` with a context block (open work); the reproduction file is written and replays |
+| a memory violation (sanitizer on, `-Dvarka.sanitizeMemory=true`) | developer | A diagnostic JVM property: the violation fails the task by design and writes a file; replay it |
+
+`VarkaRunbookSuite` runs each branch on a planted fault and asserts the reason counts, the `EXPLAIN`
+lines and the warning text quoted above, so a step that stops being true fails a build.
+
 ### Execution integration
 
 `VarkaColumnarRule` (a `ColumnarRule`) rewrites a Varka-eligible projection
