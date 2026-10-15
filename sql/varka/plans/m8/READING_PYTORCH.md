@@ -49,6 +49,21 @@ DOUBLE, a FLOAT input is cast first, so a float-only kernel would never be reach
    belongs in the discussion of row 358 as a design note only: the contract is stated per
    function, not per use, and nothing here changes that.
 
+4. **A tolerance that lets things through is the foil for ours.** PyTorch's vector tests compare
+   each operation with a scalar reference over declared domains with a recorded seed
+   (`aten/src/ATen/test/vec_test_all_types.h`: `DomainRange`, `CheckWithinDomains`, `TestSeed`).
+   The comparison passes a pair when either is within 5e-5 absolute (float) or 1e-9 (double),
+   when the relative difference is within it, or when both are "big" (`nearlyEqual`,
+   `getDefaultTolerance`). That would pass a lane thousands of steps out. It is worth one
+   sentence in 345's done-when as the reason the bound is a step count. **[V]**
+5. **No vector 64-bit or 8-bit multiply, and no vector integer divide, on AVX2.**
+   `vec256_int.h` multiplies `int64` by a scalar element loop (`emulate`), `int8` through two
+   16-bit multiplies and masks, and divides every integer width by a scalar loop (AVX-512 has
+   `_mm512_mullo_epi64`). It is evidence for the A2 measurements of rows 362 and 363 and for the
+   TINYINT and SMALLINT design of row 329 (widen to the int lane, or multiply narrow): the
+   narrow multiply is not free on the 256-bit hosts. It gives no code to borrow, and what the JIT
+   does for the same Vector API operation is **[I]**, not read.
+
 ## 3. What is not worth taking
 
 * **Casts.** `torch/headeronly/util/TypeCast.h` leaves float to integer as the platform's
@@ -62,4 +77,4 @@ DOUBLE, a FLOAT input is cast first, so a float-only kernel would never be reach
 * **The rest of the tree** (autograd, tensors, GPU code) has no counterpart.
 
 Nothing in this note changes a row. Item 1 of section 2 is an addition to 345 and 367 if the
-owner wants it; the others are citations.
+owner wants it; the others are citations. Not read: `torch/_inductor` (its CPU code generator).
