@@ -143,6 +143,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A Varka node in the plan is not a kernel evaluating the expression](sql/varka/skills/testing-and-debugging.md#a-varka-node-in-the-plan-is-not-a-kernel-evaluating-the-expression)
 * [A kernel failure leaves a file you can replay, and where each failure first surfaces](sql/varka/skills/testing-and-debugging.md#a-kernel-failure-leaves-a-file-you-can-replay-and-where-each-failure-first-surfaces)
 * [Cost predictions run optimistic: the calibration table](sql/varka/skills/testing-and-debugging.md#cost-predictions-run-optimistic-the-calibration-table)
+* [A forked JVM proves its own tier, and the default JVM's expectations are not that proof](sql/varka/skills/testing-and-debugging.md#a-forked-jvm-proves-its-own-tier-and-the-default-jvms-expectations-are-not-that-proof)
 
 #### [What C2 does with these loops](sql/varka/skills/the-jit.md)
 * [C2 Compile Latency Is the Wide-Vector-Loop Cliff (root cause, proven)](sql/varka/skills/the-jit.md#c2-compile-latency-is-the-wide-vector-loop-cliff-root-cause-proven)
@@ -168,6 +169,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A method filled to the byte budget by prediction cost thirteen times its neighbours on a four-core runner, and a margin is what bought it back](sql/varka/skills/the-jit.md#a-method-filled-to-the-byte-budget-by-prediction-cost-thirteen-times-its-neighbours-on-a-four-core-runner-and-a-margin-is-what-bought-it-back)
 * [C2 vectorizes unit-stride columns in the heap and off it, and never rows 32 bytes apart](sql/varka/skills/the-jit.md#c2-vectorizes-unit-stride-columns-in-the-heap-and-off-it-and-never-rows-32-bytes-apart)
 * [Value records crash C2's escape analysis on the early-access Valhalla build, and the crash is in a method handle](sql/varka/skills/the-jit.md#value-records-crash-c2s-escape-analysis-on-the-early-access-valhalla-build-and-the-crash-is-in-a-method-handle)
+* [With the intrinsics off C2 takes twenty seconds a loop method, and an epilogue's compile 337 MB](sql/varka/skills/the-jit.md#with-the-intrinsics-off-c2-takes-twenty-seconds-a-loop-method-and-an-epilogues-compile-337-mb)
 
 #### [The Vector API and vector width](sql/varka/skills/vector-api-and-width.md)
 * [Vector API on HotSpot, Measured (JDK 25, x86-64)](sql/varka/skills/vector-api-and-width.md#vector-api-on-hotspot-measured-jdk-25-x86-64)

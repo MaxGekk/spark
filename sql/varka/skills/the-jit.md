@@ -917,3 +917,29 @@ being compiled is always a `LambdaForm$MH::invoke`; `-XX:-DoEscapeAnalysis` and 
 and the plain records on the same JDK do not crash. Value types lean on escape analysis, so
 measuring them with it off understates them: keep reflective code out of the measured JVM
 (`VARKA-291.md` 9.5).
+
+## With the intrinsics off C2 takes twenty seconds a loop method, and an epilogue's compile 337 MB
+
+From VARKA-272's forked arms (14 October 2026, `VARKA-272.md` 2.9).
+
+- Under `-XX:-EnableVectorSupport` every Vector API call is the plain-Java fallback, a per-lane
+  loop over a lambda, and C2 inlines all of it: JFR's `jdk.Compilation` events put the int lane's
+  `loopDense0` at 23,900 ms of compile time, `loopMasked0` at 24,600 and `epilogueDense` at
+  29,000 for one drawn kernel, one compile skipped on "concurrent class loading", and the compiled
+  code trapping on `profile_predicate` in `IntVector.ldLongOp` and `bTest` once it ran; the long
+  lane's methods compiled in 55 to 490 ms. No warm-up settles in 10 s, nor in 90. The fallback is
+  a correctness reference and a trap: a JVM that reaches the module without the intrinsics
+  (`EnableVectorSupport=false` at startup) runs Varka's kernels under C1 and the interpreter for
+  minutes before C2 code arrives, if it arrives. Declining at startup on that flag is a candidate
+  row.
+- `-XX:CompileCommand=MemStat,*.*,print` prints each compilation's arena usage at exit. On the
+  first drawn kernel of seed 20261014 C2 used 337 MB on `epilogueMasked` and 331 MB on
+  `epilogueDense` under the default flags, and 1,160 MB and 1,032 MB under the seeded stress flags
+  with `StressIncrementalInlining`. A fastdebug build has a per-compilation limit of a gigabyte
+  that crashes when hit (`Hit MemLimit`), which is how this was found: the fastdebug arm crashed
+  on its first warmed kernel until its limit went to `-XX:CompileCommand=MemLimit,*.*,2G~crash`.
+  The product build has no limit. A third of a gigabyte for one epilogue's compile is a cost the
+  byte budget does not see; bounding it is a candidate row.
+- `StressUnstableIfTraps` throws away a warm-up's code on random traps: two int-lane cases in five
+  never settled, each at the 10 s deadline per warmed history, seven times the arm's cost. The
+  `quiet` histories take their traps on purpose, so the flag stays out of the nightly's stress set.
