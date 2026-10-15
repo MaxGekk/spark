@@ -17,10 +17,10 @@ section headers:
 |---|---:|---|---|
 | datetime | 64 | int32 and int64 lanes; the calendar algorithms | Varka's home ground; `TIME` is milestone 5's subject |
 | math | 61 | **a double lane**; the Vector API's math operators | section 2 and 3 |
-| aggregate | 76 | the aggregation operator, milestone 6's target | `m8/SCOPE.md` items 4 and 5 |
-| string | 67 | a string representation | `m8/SCOPE.md` item 80's family |
+| aggregate | 76 | the aggregation operator, milestone 6's target | `m9/SCOPE.md` items 4 and 5 |
+| string | 67 | a string representation | `m9/SCOPE.md` item 80's family |
 | predicate, conditional | 13 + 10 | compares, blend, `IS_NAN` | largely fused; `LIKE` and the regexes are strings |
-| bitwise | 6 | shifts and counts, all in the Vector API | `m8/SCOPE.md` item 32 |
+| bitwise | 6 | shifts and counts, all in the Vector API | `m9/SCOPE.md` item 32 |
 | hash | 9 | xxhash64 and murmur over lanes | feasible for numeric inputs; nothing scoped |
 | array, map, lambda, collection, struct | 54 | variable-length nested values per row | far; no representation |
 | window | 9 | operator-level, not expression-level | after aggregation |
@@ -157,6 +157,12 @@ Four things follow.
    own answer for `sin(x)` already differs between the two architectures a
    cluster may mix. The six `StrictMath` functions are the only ones whose
    row-engine bits are the same everywhere.
+   *Corrected on 14 October 2026 (`m8/PLAN.md` 2.7.1, from the math reading for milestone 8):
+   the last sentence is wrong by this point's own list. `atan`, `atan2`, `hypot`, `sinh`, `cosh`,
+   `asin` and `acos` have no x86 intrinsic either, so `Math` runs fdlibm for them on both
+   architectures and their row-engine bits are the same everywhere too; thirteen functions are
+   host-independent, not six. The table above also measures `tanh` on x86 at two against
+   `StrictMath`, which Spark does not call for it: against `Math.tanh` it is one.*
 4. **The speed-up is width.** Eight lanes buy 5x to 14x, four buy 2.5x to 9x
    (except `tanh`, where SVML's AVX2 build loses to HotSpot's scalar intrinsic
    by 2x), two buy 1.1x to 3.9x. On NEON the operators that clear 2x are `exp`,
@@ -174,7 +180,7 @@ functions, whose row-engine bits are the same on every host: `exp` and `log`
 are a table and a short polynomial, and a lane that reproduces fdlibm's
 arithmetic reproduces its bits - bit-exact, slower than SVML by a factor to be
 measured, and a kernel to maintain. Or a **decline** of the family, since no
-function in it is exact. `m8/SCOPE.md` item 36 holds the decision.
+function in it is exact. `m9/SCOPE.md` item 36 holds the decision.
 
 ## 4. What is shared across the families
 

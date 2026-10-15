@@ -257,3 +257,164 @@ still promises a bound its kernel does not carry.
 
 Not taken: `VarkaGuardSpec` in Java. It drives the Scala reference evaluator, for which
 `VarkaKernelCheck` stays Scala; 9.1 records the deviation.
+
+### 9.2 The domains and their partitions (8.3), 14 October 2026
+
+Step 3.3 landed, after row 138 closed on 13 October with the partition oracle and the extremes
+fixture it builds on. The row is Done: 1.1's "every decline the one the row's verdict calls for"
+holds at the guards' edges (9.1) and end to end on every guarded coverage row (here).
+
+**The recount.** `VarkaCoverageSuite` now compiles every row and reads the guards its kernels
+carry - `VarkaLoopEmitter.guardsForTest` on each kernel of `compilePartial` (or a predicate's
+`fused`) under the defaults, and `CompiledVarkaProjection.inputBounds` for the evaluator's own
+bound - and the count is the admission check's, guard for guard: 15 of 92. Int overflow 8 (`i + 1`,
+`i - 1`, `-i`, `year(d) + i`, `abs(ym)`, `ym - ymm`, `extract(YEAR FROM ym) - 1`, and `d - ym`
+with the month count as well; so counted in both groups, these are 16 guards on 15 rows), month
+count 3 (`add_months(d, i)`, `d + ym`, `d - ym`), value range 3 (the two `time_from_*` round trips and `t + INTERVAL`), `make_date` 1 and the input bound 1
+(`d + CAST(i AS INTERVAL DAY)`). No predicate row carries one.
+
+**What was built.**
+
+* **The domain column.** `Row` in `VarkaCoverageSuite` takes a `domain`, a SQL predicate over the
+  row's columns, rendered from the constants the guards read - `VarkaChrono`'s interval-day limit
+  and month range, the int's ends, `DateTimeConstants.NANOS_PER_DAY` for the time guards - so a
+  moved bound regenerates the table rather than leaving it stale. It is carried into
+  `coverage.json` (`"domain"`, beside the note) and into `docs/sql-varka.md` as a *Domain* column,
+  with a paragraph above the table saying what the column means. The fifteen:
+  `i BETWEEN -106751991 AND 106751991`; `i BETWEEN 1 AND 12`; `i BETWEEN -24576 AND 24564`;
+  `ym BETWEEN INTERVAL '-2048-0' YEAR TO MONTH AND INTERVAL '2047-0' YEAR TO MONTH` and, for
+  `d - ym`, the bounds changing sides; `ym > INTERVAL '-178956970-8' YEAR TO MONTH`;
+  `CAST(ym AS BIGINT) - CAST(ymm AS BIGINT) BETWEEN -2147483648 AND 2147483647`;
+  `extract(YEAR FROM ym) > -2147483648`; `i < 2147483647`; `i > -2147483648` twice;
+  `i <= 2147483647 - year(d)`; `time_to_millis(t2) BETWEEN 0 AND 86399999`;
+  `time_to_micros(t) BETWEEN 0 AND 86399999999`; and `time_to_micros(t) + 0` under the same bound.
+* **The requirement**, both ways: a row whose kernel carries a guard and names no domain fails,
+  as does a row that names one and carries no guard (a stale domain), and a domain that does not
+  resolve to a boolean over the table's columns. A planted family - `i + 1` with no domain,
+  `year(d)` with `true`, `i - 1` with `i` - draws exactly those three findings. The guards are
+  read under `VarkaEmitOptions.DEFAULTS`, not the matrix's base: the table documents the engine
+  as shipped, and a configuration that turns a check off does not take a row's domain away.
+* **The partitions**, in `VarkaCoverageDifferentialSuite`. A fifth fixture,
+  `varka_coverage_edges`, holds 39 rows: every guard's bound and one past it on both sides in the
+  column the guard reads (`i` at the int's ends and one in, the interval-day limit, the month range
+  and the months of `make_date`; `d` of year 9999 beside the `i` that takes `year(d) + i` to the
+  int's top and one past; `ym` at the month range on both signs, at the count whose negation
+  overflows and one in, and with `ymm` at the counts whose difference leaves the int; a time at
+  each end of the day) and rows null in those columns, one group at a time and all at once. For
+  each guarded row its three partitions - the domain, `NOT (domain)`, `(domain) IS NULL` - are
+  cached views of their own, built by Spark once, so a kernel then reads batches wholly inside,
+  wholly outside or wholly unknown; the three are checked to cut the fixture by `rid`. Each runs
+  as a projection (`SELECT rid, e`) and as a filter (`WHERE (e) = <a column of e's type>`, 138's
+  fourth position), on both engines, under ANSI and with exact refusal statuses on. Per query:
+  the outcomes agree, rows or the same condition, SQLSTATE and parameters; the declined batches'
+  statuses, read off the JFR fallback events, equal the verdict's must bits batch for batch, where
+  the verdict is `VarkaGuardSpec`'s over the node's own expressions compiled against the scan's
+  pruned output, the view's rows as the kernel reads them, and the evaluator's input bound
+  applied first as the runner applies it; and where every batch must be answered, the kernels
+  served the whole query with nothing declined.
+* **The total domains.** Four guards no value of the column type can trip, so their outside
+  partition is empty by construction: the three value-range guards, whose bound is the day the
+  `TIME` already lies in, and the checked subtract after `extract(YEAR FROM ym)`, whose quotient is
+  within +/-178956970. Their domains are written all the same, and a list with reasons polices the
+  emptiness both ways.
+* **The open question of 2, answered.** `date_add(d, i)`'s note promised "a per-batch bound on
+  its range"; its kernel carries no refusal and no input bound, the compiler records a bound only
+  for the day-interval cast, and Spark's `DateAdd` is a plain int add. The note was stale, not
+  the kernel: over the edges fixture, `i` at both int extremes and `d` of year 9999 among its
+  rows, the kernels serve every batch, nothing falls back, and the wrapped day equals the row
+  engine's. The note now says so, and a test holds the row to it.
+
+**What ran.** 15 guarded rows, 3 partitions, 2 forms: 90 queries on each engine, of which 82 ran
+(the four total domains' outside partitions are empty and run nothing); the 22 outside a reachable
+domain declined every batch - `input-bound` for the day cast, `make-date`, `month-count` for
+`add_months(d, i)` and `d + ym`, `month-count|int-overflow` for `d - ym` at the count whose
+negation overflows and whose wrapped value the month count then rejects, `int-overflow` for the
+other six - and the 60 inside or unknown answered with every batch served; no batch's verdict left
+a guard free to fire except the one below. The suite is 232 tests, 215 before. The catalyst
+suites under the matrix's defaults with the memory sanitizer on, `VarkaCoverageSuite` (9) and
+`VarkaGuardEdgeSuite` (6): 15 passed, the opt-in fusion dump cancelled, in 13 s. `VarkaCoverageDifferentialSuite` under
+the defaults and the four configurations that could change these tests, sanitizer on, two JVMs at
+a time (`dev/varka_matrix.sh --module sql --suites VarkaCoverageDifferentialSuite --config ...
+-j 2`): the defaults, `guardUnderArm=false`, `arrowBatchSize=1` and `arrowBatchSize=3` 232 passed
+each; `checkIntOverflow=false` 223 passed and 9 cancelled, the six new skip lines beside 138b's
+three - the configuration turns the overflow check off, so outside the int rows' domains the
+kernel answers the wrapped value where Spark raises, as 138b's ANSI form found. The first run of
+the batch-size configurations is what found the two things above: the raise that cuts the events
+to a prefix, and the wrapped lane under `d - ym`.
+
+**Times**, this laptop's, beside other agents' test JVMs, load 4.9 to 6.1. The suite on one build,
+master's file and then this one, by ScalaTest's "Run completed": 1 min 35 s for 215 tests before,
+1 min 45 s for 232 after, 22:00 CEST. In the matrix's JUnit report the 17 new tests take 8.3 to
+9.0 s together (median 0.5 s, the longest 1.1 s), and caching the edges fixture and its 45
+partition views 7.6 s on the first session and 3.8 s on the second, inside `beforeAll`. The gate's
+sql step gains about ten seconds in one of its JVMs; no nightly step runs this suite. The plan
+registered no cost prediction for 3.3, so the calibration table gains no line.
+
+The verdict's other reader, `VarkaCompiledCheck`'s guard edges (VARKA-274), reads `must` and
+`admits`; the change leaves `must` as it was and only widens `admits`.
+
+**A finding on the verdict, from the small batches.** Under the matrix's Arrow batch sizes (1, 3
+and 17 rows a batch) the partitions split into several batches and the verdict is held per batch,
+which the defaults' one batch per partition cannot do. That showed `d - ym` at
+`INTERVAL '-178956970-8' YEAR TO MONTH`, the one count whose negation overflows: the kernel's
+status named `month-count|int-overflow`, the verdict `int-overflow` alone. The negation condemns
+the batch and leaves the wrapped `Int.MinValue` in a lane that stays valid; the month count reads
+it and fires too. The reference evaluator has no value for an overflowed FAIL lane, so the
+verdict's month-count check saw a null and stayed silent - and under the defaults the OR over the
+batch's other rows, which fire the month count on their own, had hidden it. The rule 9.1 wrote was
+incomplete, not the kernel: `VarkaGuardSpecs` now allows (as `may`) a guard above a FAIL node that
+overflowed on the row, qualified by its arm as before, and `VarkaGuardEdgeSuite` pins the composed
+kernel at the overflowing count (both bits, the verdict allowing the second), one in from it (the
+count alone, a must) and an ordinary count (answered). The edge suite had no kernel composing a
+FAIL node under a guard; the coverage rows have one.
+
+**Predictions scored.** 2, **held**: of the fifteen guarded rows' notes as they stood, only the two
+time rows' said the kernel is guarded (the admission check counted four, reading "a column
+offset" and "further int arithmetic" as saying so); the other thirteen said nothing, and
+`date_add(d, i)`, which said so, is not guarded. 3, **held, for a reason the plan did not give**:
+the may-decline verdict is rare in the coverage rows - one row, `d - ym`, at one value - but not
+because arm qualification covers the rest; no coverage row puts a guard under an arm at all, and
+the one may bit comes from the wrapped lane above, a source the plan's table of verdicts did not
+have. The arm case remains the composition fuzzer's.
+
+**Corrections to the plan.**
+
+* **The partitions are cached views, not `WHERE` clauses.** A verdict is per batch, so a batch has
+  to lie wholly on one side; a `WHERE` over the same scan computes the guarded expression on the
+  rejected lanes too (`m9/SCOPE.md` item 96), and a domain Varka cannot fuse - `CAST(ym AS
+  BIGINT)` arithmetic, `2147483647 - year(d)` - would leave the whole projection to Spark. A
+  partition Spark materializes once is what TLP cuts anyway.
+* **The status comes off the JFR fallback event, not the metrics.** Outside most domains the row
+  path raises under ANSI, the task fails, and a failed task's SQL metrics are never merged;
+  the evaluator commits the event with the status first. The metrics are read where the outcome is
+  rows (`kernelServed`, `numFallbackBatchesDeclined`, and the served and declined counts where
+  only some batches must decline). Exact refusal statuses are set on the sessions for these tests,
+  so a status is what its batch's verdict admits, batch by batch in the order they ran; and
+  where the row path raised, the task stopped in the batch whose status is the last, so the
+  statuses are what the batches up to it produced - a prefix the check accepts only after a raise.
+* **`partitionBroken` was not reused**: `VarkaSparkFuzz.querySql` binds it to the fuzzer's table
+  `fz`. The suite checks the cut with `rid` sets, as its own partition oracle does.
+* **A guard may be dead.** 3.3 assumed every guard has an outside; four do not. The analysis that
+  bounds the operands (row 281's business) could prove those guards away; recorded below.
+* **4's table** had `VarkaKernelCheck` taking a verdict entry point and `VarkaGuardSpec` in Java;
+  neither, as 9.1 said. `ADDING_AN_EXPRESSION.md` step 7 and `skills/testing-and-debugging.md`
+  gained the domain, which 4 did not list.
+
+**Candidate rows found.** Four guards no input can trip: the range guards of
+`time_from_millis(time_to_millis(t2))`, `time_from_micros(time_to_micros(t))` and
+`t + INTERVAL '0 00:00:00' DAY TO SECOND` (a count the type keeps inside the day), and the checked
+subtract after `extract(YEAR FROM ym)` (a quotient within +/-178956970). Each costs a compare and
+a mask per lane group for a decline that cannot happen; a range analysis that knew a `TIME`'s
+range and a `ConstDivide`'s quotient would take them off. For the scope catalogue, or for row 281
+if its analyses reach operand ranges; not widened here.
+
+**Review** (`/code-review high` on the branch, before the pull request). Of eight findings, five
+fixed: the check never held the domain itself to the partitions - a domain too wide or too narrow
+agreed with the kernel because the verdict does not read the domain - so a batch inside the domain
+or under `IS NULL` that the verdict condemns, and a batch outside that it answers, are findings now
+(all 232 tests still pass under the defaults and the four configurations); a stale comment ("seven
+guards") and the recount that did not sum (`d - ym` is in two groups: 16 guards on 15 rows); the
+skills file's claim of seventeen-row batches, which was never run; and the domain's resolution now
+checks input types as well. Recorded, not changed: after a raise the check stops at the last
+status, so a raising batch that committed no event is not told apart from an earlier one that
+raised; a wrapped lane gives `may`, never `must`; and the `may` count is reported, not asserted.

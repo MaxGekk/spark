@@ -1605,7 +1605,7 @@ final class VarkaProofFiles {
         + "(assert (and (<= " + lit(VarkaChrono.NARROW_MIN_DAYS) + " (cal.epoch y m d)) "
         + "(<= (cal.epoch y m d) " + VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS + ")))";
     // The year's interval is symmetric, as every INT answer is, and the admitted years are not:
-    // the magnitude is exact at the top and slack at the bottom (m8/SCOPE.md item 86), so the
+    // the magnitude is exact at the top and slack at the bottom (m9/SCOPE.md item 86), so the
     // neighbours are the top end's and the bottom's slack is recorded as it is.
     int yearMagnitude = VarkaChrono.YEAR_FIELD_MAGNITUDE;
     check(out, "year: the year of an admitted day has magnitude at most YEAR_FIELD_MAGNITUDE",

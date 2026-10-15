@@ -315,6 +315,39 @@ class VarkaGuardEdgeSuite extends SparkFunSuite with VarkaMatrixTests {
     }
   }
 
+  test("a guard above a FAIL lane that overflowed may fire on the wrapped value, and the kernel " +
+      "names both reasons") {
+    // `d - ym` at the one count whose negation overflows: `AddMonths(c0, IntNeg(FAIL, c1))`. The
+    // negation condemns the batch, its lane keeps the wrapped Int.MinValue and stays valid, and
+    // the month count reads it and fires too; the reference evaluator has no value for an
+    // overflowed FAIL lane, so the verdict allows the count's bit rather than requiring it. Found
+    // by the coverage rows' partitions (VARKA-279 9.2), where one batch per row had hidden it
+    // behind the OR of the batch's rows. One in from the overflow, the negation is the int's top
+    // and the count alone fires; an ordinary count is answered.
+    val root = new AddMonths(new ColumnRef(0), new IntNeg(Overflow.FAIL, new ColumnRef(1)))
+    val o = VarkaFusedKernel.STATUS_INT_OVERFLOW
+    val m = VarkaFusedKernel.STATUS_MONTH_COUNT
+    val none: Seq[Int => Boolean] = Seq.fill(2)((_: Int) => false)
+    val cases = Seq(
+      ("the count whose negation overflows", Int.MinValue.toLong, Verdict(o, m), o | m),
+      ("the count whose negation is the int's top", Int.MinValue + 1L, Verdict(m, 0), m),
+      ("an ordinary count", -5L, VarkaGuardSpec.Answer, 0))
+    for ((label, count, expected, status) <- cases) {
+      val data = Array.tabulate(2, length)((c, i) => if (c == 0) 0L else if (i == 3) count else 7L)
+      val verdict = VarkaGuardSpec.verdict(Seq(root), 2, Array.empty, options, long = false,
+        rowsOf(data, none))
+      assert(verdict == expected, s"$label: verdict $verdict")
+      val name =
+        s"org.apache.spark.sql.varka.execution.VarkaGuardWrapped${classCounter.incrementAndGet()}"
+      val bytes = VarkaLoopEmitter.emit(name, Seq[VarkaVectorIR](root).asJava, 2, 0, null, null,
+        options)
+      val st = VarkaKernelCheck.runEachBodyStatus(label, name, bytes, Seq(root), 2, Array.empty,
+        VarkaKernelCheck.Batch(length, none, data.map(_.map(_.toInt)), forceMasked = false))
+      assert(st.forall(_ == status), s"$label: statuses $st, the kernel should give $status")
+      assert(st.forall(verdict.admits), s"$label: statuses $st, verdict $verdict")
+    }
+  }
+
   // ---------------------------------------------------------------------------------------------
   // The input bound
   // ---------------------------------------------------------------------------------------------

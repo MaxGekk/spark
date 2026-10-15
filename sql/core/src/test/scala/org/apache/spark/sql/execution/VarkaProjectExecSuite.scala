@@ -301,6 +301,17 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession with Varka
     // cancelled there rather than listed as a failure that run alone it would not have.
     assume(VarkaMatrix.base.checkIntOverflow(),
       "the overflow check is off by design under this configuration")
+    // The method must hold both guards for "every reason it holds" to be more than one, and the
+    // day guard is an option (guardDayProducers=false removes it, leaving the overflow bit
+    // alone), so the test turns it on over whatever the matrix set.
+    val previousOptions = VarkaColumnarToRowExec.currentEmitOptions
+    VarkaColumnarToRowExec.setEmitOptionsForTesting(previousOptions.withGuardDayProducers(true))
+    try exactStatusUnderDayGuard() finally {
+      VarkaColumnarToRowExec.setEmitOptionsForTesting(previousOptions)
+    }
+  }
+
+  private def exactStatusUnderDayGuard(): Unit = {
     def build(): VarkaProjectExec = node(
       project(Alias(Year(DateAdd(attrD, Add(intAttr, intAttr, EvalMode.ANSI))), "y")()),
       Seq(BatchSpec("arrow", Seq(Seq(Int.box(1), Int.box(2)),

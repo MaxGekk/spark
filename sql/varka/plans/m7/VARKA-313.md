@@ -1,7 +1,7 @@
 # VARKA-313: Why a query did not use Varka, where users look
 
 *Row 313 of `m7/PLAN.md`, added by the owner on 12 October 2026 with rows 314 to 319
-(`m7/PLAN.md` 2.4, "Errors and troubleshooting"); it takes in `m8/SCOPE.md` item 65. Planned on
+(`m7/PLAN.md` 2.4, "Errors and troubleshooting"); it takes in `m9/SCOPE.md` item 65. Planned on
 14 October 2026 in a worktree at master `f37b52026ba` (after #807). Section 2 corrects the row in
 four places; the row's text is left as written and this file is the correction.*
 
@@ -11,7 +11,7 @@ The row asks, per Varka operator, for SQL metrics that say how many batches a ke
 how many fell back and why, with the rows and the time through each path; for the compile-time
 declines in `EXPLAIN`; for a refusal reason that was not recorded to read as "not reported" and
 never as 0, as Polars keeps the two apart (`READING_POLARS.md`); for the reasons to survive
-adaptive re-planning, where Gluten lost its tags (`m8/SCOPE.md` item 28); and for tests that
+adaptive re-planning, where Gluten lost its tags (`m9/SCOPE.md` item 28); and for tests that
 assert which reason a query fell back for, as Comet's `checkSparkAnswerAndFallbackReason` and
 Gluten's `failOnFallback` do (`READING.md` 2). It also asks what exact refusal status costs, and
 for that status to become the default if the cost is within noise. Item 65 adds the warm-up's
@@ -306,3 +306,16 @@ registered.
    nodes, as Gluten's `FallbackTags` do, and is the whole-plan half of the row's question.
 3. **The benchmarks' provenance naming the fallback share** (item 65's last done-when clause): the
    rows per path now exist for a provenance writer to read; no benchmark reads them yet.
+
+**Found by the option matrix, 15 October 2026.** Master's run after #815 failed three tests under
+`guardDayProducers=false`: "a real out-of-range day is counted under the day producer's guard"
+and the AQE test (both in `VarkaFallbackReasonSuite`, "Results do not match": the far-offset
+batch is not declined and the kernel's wrapped days differ from the row engine's), and the
+exact-status test in `VarkaProjectExecSuite` ("1 was not greater than 1 status int-overflow": the
+method holds no day guard, so the status without the exact masks is the overflow bit alone).
+The emitter shows the premise gone: `dev/varka_emit.sh "year(date_add(d, i))" --options
+guardDayProducers=false` emits the four loop and epilogue methods with no `VectorMask` operations
+(0, against 4 to 7) and 50 to 250 bytes shorter. The three tests now set
+`withGuardDayProducers(true)` over the matrix's base; the three, run under the option before and
+after, fail and pass. The same family as VARKA-269's planted bug (see
+`skills/testing-and-debugging.md`): a test's premise that an option removes.

@@ -73,6 +73,18 @@ class VarkaFallbackReasonSuite extends QueryTest with VarkaSharedSessions with V
     try body finally varkaSpark.conf.unset(key)
   }
 
+  /**
+   * Runs `body` with the day producers' guard on over whatever else the option matrix sets. The
+   * two tests that read a real out-of-range day need the guard to decline it; under
+   * `guardDayProducers=false` there is none, the batch runs on the kernel, and the premise they
+   * plant is inert (as the liveness tests of VARKA-269 found for `validityByBitmap`).
+   */
+  private def withDayGuard[T](body: => T): T = {
+    val previous = VarkaColumnarToRowExec.currentEmitOptions
+    VarkaColumnarToRowExec.setEmitOptionsForTesting(previous.withGuardDayProducers(true))
+    try body finally VarkaColumnarToRowExec.setEmitOptionsForTesting(previous)
+  }
+
   private val datesQuery = "SELECT year(d) AS a, date_add(d, 3) AS b FROM varka_dates"
 
   test("a planted reason is counted under its own metric, every other reason reads 0, and the " +
@@ -133,13 +145,15 @@ class VarkaFallbackReasonSuite extends QueryTest with VarkaSharedSessions with V
     // and the producer's guard declines the batch. Catches a reason that only the hook reaches.
     cacheDatesFarOffset(spark)
     cacheDatesFarOffset(varkaSpark)
-    checkVarkaAnswerAndFallbackReason(
-      "SELECT year(date_add(d, off)) AS y FROM varka_dates_far_offset", "day-producer")
+    withDayGuard {
+      checkVarkaAnswerAndFallbackReason(
+        "SELECT year(date_add(d, off)) AS y FROM varka_dates_far_offset", "day-producer")
+    }
   }
 
   test("under adaptive execution the final plan's Varka node carries the reasons, and EXPLAIN " +
       "after the run still names the residual entry's reason") {
-    // m8/SCOPE.md item 28: Gluten loses its fallback tags when AQE builds a stage's plan anew.
+    // m9/SCOPE.md item 28: Gluten loses its fallback tags when AQE builds a stage's plan anew.
     // Varka's EXPLAIN lines are computed from the node's own fields and its metrics are the
     // executed node's own, so both should survive; this holds them to it, through a shuffle.
     val aqe = varkaSpark.newSession()
@@ -147,16 +161,18 @@ class VarkaFallbackReasonSuite extends QueryTest with VarkaSharedSessions with V
     cacheDatesFarOffset(spark)
     cacheDatesFarOffset(aqe)
     val query = "SELECT year(date_add(d, off)) AS y, off % 7 AS r FROM varka_dates_far_offset"
-    val actual = aqe.sql(query).repartition(2, col("y"))
-    checkAnswer(actual, spark.sql(query))
-    val plan = actual.queryExecution.executedPlan
-    assert(plan.isInstanceOf[adaptive.AdaptiveSparkPlanExec], plan.treeString)
-    val node = varkaNode(actual)
-    val declined = node.metrics("numFallbackBatchesDeclined").value
-    assert(declined > 0L, node.treeString)
-    assert(VarkaFallbackReasons.rendered(aqe, node).get("day-producer") === declined.toString)
-    val explained = actual.queryExecution.explainString(ExplainMode.fromString("formatted"))
-    assert(explained.contains("r: residual ("), explained)
+    withDayGuard {
+      val actual = aqe.sql(query).repartition(2, col("y"))
+      checkAnswer(actual, spark.sql(query))
+      val plan = actual.queryExecution.executedPlan
+      assert(plan.isInstanceOf[adaptive.AdaptiveSparkPlanExec], plan.treeString)
+      val node = varkaNode(actual)
+      val declined = node.metrics("numFallbackBatchesDeclined").value
+      assert(declined > 0L, node.treeString)
+      assert(VarkaFallbackReasons.rendered(aqe, node).get("day-producer") === declined.toString)
+      val explained = actual.queryExecution.explainString(ExplainMode.fromString("formatted"))
+      assert(explained.contains("r: residual ("), explained)
+    }
   }
 
   test("a split predicate's EXPLAIN names the residual conjunct and its reason") {

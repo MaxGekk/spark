@@ -54,13 +54,16 @@ class VarkaReproductionEndToEndSuite
   private val query = s"SELECT date_add(d, 3) AS a FROM $view"
 
   /**
-   * A thousand dates with a null every 97th row: long enough for the vector loop to run full lane
-   * groups at any width, so a short mapping fails in the loop and not only in the epilogue.
+   * A thousand dates with a null every second row: long enough for the vector loop to run full
+   * lane groups at any width, so a short mapping fails in the loop and not only in the epilogue,
+   * and dense enough that any batch the option matrix cuts it into longer than one row holds both
+   * nulls and values (the tests read the failing batch's validity; a one-row batch is either
+   * without nulls or all null, which has no validity buffer).
    */
   private def cacheView(): Unit = {
     for (session <- Seq(spark, varkaSpark)) {
       session.range(0, 1000)
-        .selectExpr(s"IF(id % 97 = 5, NULL, date_add(DATE'2000-01-01', CAST(id AS INT))) AS d")
+        .selectExpr(s"IF(id % 2 = 1, NULL, date_add(DATE'2000-01-01', CAST(id AS INT))) AS d")
         .createOrReplaceTempView(view)
       session.catalog.cacheTable(view)
     }
@@ -77,7 +80,15 @@ class VarkaReproductionEndToEndSuite
     try body finally VarkaColumnarToRowExec.setFailureFallbackExpectedForTesting(false)
   }
 
-  /** Runs `body`, then reads the one file it wrote; the directory is gone afterwards. */
+  /**
+   * Runs `body`, then reads the one file it wrote; the directory is gone afterwards.
+   *
+   * The file can land after `body` returns. A query's tasks run side by side and the first to fail
+   * writes the file, but a sibling that fails on the same shape finds it claimed, rethrows at
+   * once, and the job's failure reaches the test while the first task is still creating its
+   * temporary file or moving it into place. So the test waits for a finished file (a name the
+   * writer's final move gives, not the dot-named temporary) and then counts them.
+   */
   private def reproduced(body: => Unit): (VarkaReproduction, Path) = {
     var read: Option[(VarkaReproduction, Path)] = None
     withTempDir { dir =>
@@ -85,8 +96,14 @@ class VarkaReproductionEndToEndSuite
       VarkaReproduction.resetForTesting()
       varkaSpark.conf.set(SQLConf.VARKA_REPRODUCTION_DIRECTORY.key, target.getPath)
       try body finally varkaSpark.conf.unset(SQLConf.VARKA_REPRODUCTION_DIRECTORY.key)
-      val files = if (target.exists()) Files.list(target.toPath).iterator().asScala.toSeq
-        else Seq.empty
+      def finished: Seq[Path] = if (!target.exists()) Seq.empty else {
+        val listing = Files.list(target.toPath)
+        try listing.iterator().asScala.toSeq.filterNot(_.getFileName.toString.startsWith("."))
+        finally listing.close()
+      }
+      val deadline = System.nanoTime() + 30L * 1000 * 1000 * 1000
+      while (finished.isEmpty && System.nanoTime() < deadline) Thread.sleep(10)
+      val files = finished
       assert(files.size === 1, s"expected one reproduction file, got: ${files.mkString(", ")}")
       read = Some((VarkaReproduction.parse(Files.readString(files.head)), files.head.getFileName))
     }
