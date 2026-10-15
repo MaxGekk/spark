@@ -49,8 +49,11 @@ class VarkaRunbookSuite extends QueryTest with VarkaSharedSessions with VarkaTes
 
   private val farOffset = "SELECT year(date_add(d, off)) AS y FROM varka_dates_far_offset"
 
-  private def show(step: String, text: String): Unit =
+  private def show(step: String, text: String): Unit = {
+    // scalastyle:off println
     text.linesIterator.foreach(line => println(s"RUNBOOK [$step] $line"))
+    // scalastyle:on println
+  }
 
   private def withOptions[T](change: VarkaEmitOptions => VarkaEmitOptions)(body: => T): T = {
     val previous = VarkaColumnarToRowExec.currentEmitOptions
