@@ -1072,6 +1072,13 @@ the injector reaching a different set of words, and been listed in the skip list
   catalyst one. A test that waits on work another thread does after the job has failed (the
   reproduction file of VARKA-315) polls for it instead of listing a directory once (a leftover task of the previous test that
   claims the shape after the reset is not covered; it showed once in 300 back-to-back repeats).
+- **Sweep, do not wait for the next failure.** This premise failed master in four rounds (the
+  validity bitmap, exact grouping, the day-producer guard with the group budget, and
+  `checkIntOverflow` for the two-refusal-reasons test). On 15 October 2026 the 23 suites that the
+  previous two days' merges had added or changed (13 catalyst, 10 sql) ran over all 50
+  configurations and the defaults, 1173 runs in about two hours on six JVMs at a time, and found
+  no failure beyond the fourth. A new suite is swept before its merge:
+  `dev/varka_matrix.sh --module <m> --suites <Suite> --all -j 4`.
 
 ## The emitter is called from several threads, so a test holds it to that
 
