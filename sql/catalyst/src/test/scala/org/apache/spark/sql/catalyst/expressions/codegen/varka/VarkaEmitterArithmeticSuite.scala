@@ -466,14 +466,16 @@ class VarkaEmitterArithmeticSuite extends VarkaEmitterTestBase {
     // method (VARKA-304.md 2): by default both guards fold into one mask and the status names
     // both whichever fired, a candidate set; the option gives each reason its own mask. At lane
     // `overflow` the sum overflows and wraps to -2, inside the guard's bounds, so only the
-    // overflow fires; at lane `outside` it lands outside them without overflowing.
+    // overflow fires; at lane `outside` it lands outside them without overflowing. The FAIL-mode
+    // addition holds a refusal only under `checkIntOverflow`, so it is forced on: off, the sum
+    // wraps unchecked and the method holds one reason, the range.
     val root = new GuardedRange(
       new IntArith(IntOp.ADD, Overflow.FAIL, new ColumnRef(0), new ColumnRef(1)), -1000L, 1000L)
     val both = VarkaFusedKernel.STATUS_INT_OVERFLOW | VarkaFusedKernel.STATUS_VALUE_RANGE
     for (exact <- Seq(false, true)) {
       val name = if (exact) "exact" else "default"
       val (kernel, loader) = load(emitMulti(Seq[VarkaVectorIR](root), 2, 0,
-        VarkaMatrix.base.withExactRefusalStatus(exact)))
+        VarkaMatrix.base.withCheckIntOverflow(true).withExactRefusalStatus(exact)))
       try {
         val arena = Arena.ofConfined()
         try {

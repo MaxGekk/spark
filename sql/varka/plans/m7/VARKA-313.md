@@ -295,6 +295,15 @@ residual entries and the row conversion run lazily - both now said in the metric
 `docs/sql-varka.md`; a projection that only forwards columns counts its rows with Varka's path,
 whose description now says so. Accepted: ten more metrics per node, the row's own ask (risk 3).
 
+**The matrix on master, 15 October 2026.** The run after #824's merge failed one test, the
+two-refusal-reasons test of `VarkaEmitterArithmeticSuite`, under `checkIntOverflow=false`: its
+FAIL-mode addition holds an overflow refusal only with the check on, so with it off the method held
+one reason and the overflow lanes read status 0 (`0 did not equal 40`). The test now forces the
+option on, as the guard-day tests force `guardDayProducers`. A sweep of the 23 suites that the
+merges of 14 and 15 October added or changed, over all 50 configurations and the defaults (1173
+suite-configuration runs), found no other failure; the cancellations are the skip list's and the
+`PinsDefaults` tests'.
+
 **6.1, scored.** 1 is owed to the quiet machine with the command in 3.2. 2 was not measured, as
 registered.
 
