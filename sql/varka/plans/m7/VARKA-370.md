@@ -32,8 +32,12 @@ The sources are `/home/max/proj/openjdk-build/jdk25` (commit `6c48f4ed7`, August
 JDK 25 GA-era tree); the experiments ran on the system JDK 25.0.4.1 (the distribution build). The
 only difference met is that the tree's `WhiteBox.java` declares six natives the runtime does not
 register, which prints six warnings and changes nothing below.
-Experiment files are in the scratch area of the session, not committed; each is a few lines and
-quoted in full where it matters.
+The experiments are not committed; each is described with its exact calls and results, so it
+can be rewritten in a few lines: `ManagementFactory.getPlatformMXBean(HotSpotDiagnosticMXBean.class)`
+with `getVMOption` and `setVMOption`; `ManagementFactory.getPlatformMBeanServer().invoke` on
+`com.sun.management:type=DiagnosticCommand` with `vmSetFlag` and `compilerDirectivesAdd`, each
+taking a `String[]`; and `jdk.test.whitebox.WhiteBox.getWhiteBox()` with `setIntxVMFlag`,
+`getIntxVMFlag` and `clearMethodState`.
 
 ### 2.1 The flags: none of the three is manageable
 

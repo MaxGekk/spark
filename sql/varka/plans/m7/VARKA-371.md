@@ -36,7 +36,8 @@ program can and cannot do about it from inside.
 
 ## 3. The evidence the post cites
 
-All of it is in `VARKA-295.md` on the fork's `varka-295e` branch (9.5 and 9.6) until that merges;
+9.5 is in `VARKA-295.md` on master; 9.6 is in the pull request on the fork's `varka-295e` branch
+(#825) until that merges;
 the post's numbers are quoted from the committed files under `dev/varka_quote_check.py`.
 
 * **Step 1 (9.5):** the warm-up arm run seven times with the JIT's own log, 171 releases at the
