@@ -306,3 +306,16 @@ registered.
    nodes, as Gluten's `FallbackTags` do, and is the whole-plan half of the row's question.
 3. **The benchmarks' provenance naming the fallback share** (item 65's last done-when clause): the
    rows per path now exist for a provenance writer to read; no benchmark reads them yet.
+
+**Found by the option matrix, 15 October 2026.** Master's run after #815 failed three tests under
+`guardDayProducers=false`: "a real out-of-range day is counted under the day producer's guard"
+and the AQE test (both in `VarkaFallbackReasonSuite`, "Results do not match": the far-offset
+batch is not declined and the kernel's wrapped days differ from the row engine's), and the
+exact-status test in `VarkaProjectExecSuite` ("1 was not greater than 1 status int-overflow": the
+method holds no day guard, so the status without the exact masks is the overflow bit alone).
+The emitter shows the premise gone: `dev/varka_emit.sh "year(date_add(d, i))" --options
+guardDayProducers=false` emits the four loop and epilogue methods with no `VectorMask` operations
+(0, against 4 to 7) and 50 to 250 bytes shorter. The three tests now set
+`withGuardDayProducers(true)` over the matrix's base; the three, run under the option before and
+after, fail and pass. The same family as VARKA-269's planted bug (see
+`skills/testing-and-debugging.md`): a test's premise that an option removes.
