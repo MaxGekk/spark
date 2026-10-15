@@ -261,7 +261,7 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
       assert(e.families().asScala.forall(families.contains),
         s"${e.condition()}: a family that is not in coverage.json: ${e.families()}")
       assert(org.apache.spark.SparkThrowableHelper.isValidErrorClass(e.condition()) ||
-        scala.util.Try(Class.forName(e.condition())).isSuccess,
+        scala.util.Try(org.apache.spark.util.Utils.classForName(e.condition())).isSuccess,
         s"${e.condition()} is neither a Spark error condition nor an exception class")
     }
     val keys = list.flatMap(e => e.modes().asScala.map(m => (e.condition(), m)))
@@ -273,7 +273,7 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     val list = listOf(
       "X\trow\tANSI\tfixture\ta reason",
       "Y\tboth\tLEGACY,ANSI\tfixture\ta reason")
-    def raise(o: Outcome, engine: VarkaExpectedErrors.Side, ansi: Boolean) =
+    def raise(o: Outcome, engine: VarkaExpectedErrors.Side, ansi: Boolean): Option[String] =
       unexpectedRaise(o, engine, ansi, list)
     import VarkaExpectedErrors.Side._
     assert(raise(Left("X"), ROW, ansi = true).isEmpty)
@@ -294,7 +294,7 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     val list = listOf("Y\tboth\tANSI\tfixture\ta reason")
     def run(raised: String): String => Outcome =
       q => if (q.contains("IS NULL")) Left(raised) else Right(Seq("a"))
-    def check(raised: String) = partitionBroken("c", "p", run(raised),
+    def check(raised: String): Option[String] = partitionBroken("c", "p", run(raised),
       unexpectedRaise(_, VarkaExpectedErrors.Side.ROW, ansi = true, list))
     assert(check("Z").exists(_.contains("unexpected error condition Z")))
     assert(check("Y").isEmpty)

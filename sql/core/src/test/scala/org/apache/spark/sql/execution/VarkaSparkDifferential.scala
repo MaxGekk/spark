@@ -17,6 +17,8 @@
 
 package org.apache.spark.sql.execution
 
+import java.util.Locale
+
 import scala.jdk.CollectionConverters._
 import scala.util.Try
 
@@ -63,9 +65,11 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
     VarkaExpectedErrors.entries().asScala.toSeq.filterNot { e =>
       errorsSeen.keys.exists { case (raised, side, mode) =>
         raised == e.condition() && e.modes().contains(VarkaExpectedErrors.Mode.valueOf(mode)) &&
-          e.side().covers(VarkaExpectedErrors.Side.valueOf(side.toUpperCase))
+          e.side().covers(VarkaExpectedErrors.Side.valueOf(side.toUpperCase(Locale.ROOT)))
       }
-    }.map(e => s"${e.condition()} (${e.side().toString.toLowerCase}, ${e.modes()})")
+    }.map { e =>
+      s"${e.condition()} (${e.side().toString.toLowerCase(Locale.ROOT)}, ${e.modes()})"
+    }
 
   /** Filtered queries the row engine answered, and those that returned a row (VARKA-297). */
   protected var filtered = 0
