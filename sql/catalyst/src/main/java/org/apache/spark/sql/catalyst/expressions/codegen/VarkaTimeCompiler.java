@@ -216,7 +216,7 @@ final class VarkaTimeCompiler {
 
   /**
    * Whether the type is one of the two timestamps, which milestone 5 leaves out by decision
-   * ({@code m8/SCOPE.md} item 31): a zoned {@code TIMESTAMP}'s differences and interval additions
+   * ({@code m9/SCOPE.md} item 31): a zoned {@code TIMESTAMP}'s differences and interval additions
    * are computed on local date-times in the session zone and are not lane arithmetic, and the
    * NTZ family, whose arithmetic would be plain, waits with it. The decline names the milestone
    * so EXPLAIN shows a decision rather than a gap.

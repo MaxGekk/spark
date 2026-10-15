@@ -1,4 +1,21 @@
-# Varka Milestone 8 Scope: coverage
+# Varka Milestone 9 Scope: coverage
+
+*Renumbered from milestone 8 on 14 October 2026, when milestone 8 became every numeric and
+temporal type, on the owner's choice, and got a task plan of its own (`m8/PLAN.md`). The house
+rule moves the furthest-out catalogue forward, and this is that move: the file left milestone 8's
+folder for this one with its reading note (`READING_LAYOUTS.md`) and the plans of the two rows it
+holds (`VARKA-64.md`, `VARKA-73.md`), the item numbers are unchanged, and every inbound reference
+was rewritten by `dev/varka_catalogue_move.sh 8 9`, so every `item <n>` citation resolves. Read
+"milestone 8" below as "this milestone" except where a sentence is dated, as the notes below
+already ask for milestones 7 and 6.*
+
+**Items and rows milestone 8 takes.** Items 1, 2, 31, 32, 33, 34, 35, 36, 54, 55, 89 (bullet 1,
+and bullet 6 without its runtime bound, which the 128-bit lane pair of `m8/PLAN.md` 2.8 makes
+unnecessary), 93 and
+94; and, from the tables of items 15 and 39, rows 27, 28, 30, 39, 89, 95, 103, 104 and 157,
+whose plans and designs stay where they are. `m8/PLAN.md` names each with the number it has
+here. Its census (`m8/census.tsv`) also scopes, for this catalogue's later readers, which of
+Spark's scalar expressions the thirteen types reach.
 
 *Renumbered from milestone 7 on 2 October 2026, when milestone 7 became trust and
 maintainability, on the owner's choice, and got a task plan of its own (`m7/PLAN.md`).
@@ -2978,6 +2995,12 @@ the narrowing.
 so it is item 3's business and not this one's; recording that here saves the next
 reader the same lookup.
 
+*Corrected on 14 October 2026 by the integer reading for milestone 8 (`m8/PLAN.md` 2.9): `div`
+over two `INT` operands is not an "int32 in, int64 out" kernel. `IntegralDivide.inputType` is
+`LongType` (with the decimal and interval types), so type coercion widens both operands to `BIGINT`
+first and `div` over `INT` is the existing long-lane divide over two exact widening casts - a
+caller of VARKA-28's widening cast, not a widening kernel of its own.*
+
 ### Item 34. Null-safe equality
 
 *Opened 18 September 2026, from the coverage audit; the one gap it found that is
@@ -3059,6 +3082,18 @@ eight lanes, 2.5x to 9x at four, 1.1x to 3.9x at two, so on NEON only `exp`,
 `log10`, `expm1`, `log1p`, `pow` and `atan2` clear 2x - which is an input to
 the decision, not a way round it. This is a decision about the contract before
 it is a task, which is why it is a scope item.
+
+*Corrected on 14 October 2026 by the math reading for milestone 8 (`m8/PLAN.md` 2.7.1), with
+`SCOPE_FUNCTIONS.md` 3: the six `StrictMath` functions are not the only ones whose row-engine bits
+are the same on every host. By the file's own list of HotSpot's x86 intrinsics (`sin cos tan exp
+log log10 pow tanh cbrt`), `atan`, `atan2`, `hypot`, `sinh`, `cosh`, `asin` and `acos` have none,
+so `Math` runs fdlibm for them everywhere too. Three more: an operator the JDK leaves unbound is
+exact only where Spark calls `Math` (`POW` at AVX2 falls back to `Math.pow`, not Spark's
+`StrictMath.pow`); `tanh` on x86 is one step against `Math.tanh`, which Spark calls, the two being
+against `StrictMath`; and `log10`'s two is `StrictMath.log10`'s own error, not the library's. The
+owner chose the first option on 14 October 2026 (`m8/PLAN.md` 2.7.1); the emitted-fdlibm option
+stays this item's, beside item 98's SLEEF-shaped route, and must be costed without FMA, since
+`StrictMath` is pure Java and FMA changes the bits.*
 
 ### Item 37. A third AVX2 lowering for the 64-bit divide, from 32-bit converts
 
@@ -5092,6 +5127,33 @@ row finds both:
 **Done when** a check or bound read only on the right side of an AND, or only under one arm chain,
 condemns only the lanes the left side or the arm lets through, with the ANSI form's declined
 entries for these rows gone stale and removed, or the record says why one must stay whole-batch.
+
+### Item 97. Schubfach's selection half in lanes, for the rounding band milestone 8 declines
+
+*Added 14 October 2026 from the float-conversions reading for milestone 8 (`m8/PLAN.md` 2.7, row
+346).*
+
+`round`, `bround` and `truncate` over a `DOUBLE` act on the double's shortest decimal, and
+milestone 8's kernel serves the scales 0 to 22 by a tie test under a magnitude guard, returning
+`d` itself where `|d| >= 10^(16 - s)` and declining the band between the guard and that bound. The
+band has a construction: Schubfach's *selection* half - which of the candidate decimals is the
+shortest - costs about 24 limb multiplies and two gathers per lane and needs no digit extraction,
+the part of the algorithm (and of Ryu) that a lane cannot do. **Done when** the band fuses under a
+measured cost against the row path's `BigDecimal` route, or the record says the gathers lose.
+
+### Item 98. An emitted SLEEF-shaped `exp` and `log`: one bit pattern on every host
+
+*Added 14 October 2026 from the math reading for milestone 8 (`m8/PLAN.md` 2.7.1).*
+
+Milestone 8 fuses the math family under a ULP contract per host library, because the JDK binds a
+different library on each host and none reproduces the row engine's bits. The route to one bit
+pattern on every host, and later to correct rounding, is an emitted `exp` and `log` in the shape
+SLEEF uses - about 25 and 45 lane operations - whose arithmetic the emitter controls. It is not an
+alternative to the contract: fdlibm itself is not correctly rounded, so an emitted kernel matches
+Spark's bits only if it reproduces fdlibm's arithmetic, which is item 36's emitted-fdlibm option,
+costed without FMA (`StrictMath` is pure Java and FMA changes the bits). **Done when** an emitted
+`exp` or `log` gives one bit pattern on the three CI hosts at a measured cost against the bound
+library, with its contract (fdlibm's bits, or correct rounding) stated.
 
 ## 5. Ordering
 

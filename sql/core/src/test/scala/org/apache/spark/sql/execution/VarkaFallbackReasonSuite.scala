@@ -153,7 +153,7 @@ class VarkaFallbackReasonSuite extends QueryTest with VarkaSharedSessions with V
 
   test("under adaptive execution the final plan's Varka node carries the reasons, and EXPLAIN " +
       "after the run still names the residual entry's reason") {
-    // m8/SCOPE.md item 28: Gluten loses its fallback tags when AQE builds a stage's plan anew.
+    // m9/SCOPE.md item 28: Gluten loses its fallback tags when AQE builds a stage's plan anew.
     // Varka's EXPLAIN lines are computed from the node's own fields and its metrics are the
     // executed node's own, so both should survive; this holds them to it, through a shuffle.
     val aqe = varkaSpark.newSession()
