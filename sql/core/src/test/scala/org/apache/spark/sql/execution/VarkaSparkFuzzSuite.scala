@@ -314,8 +314,11 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
   test("a condition on the list passes the fuzzer's check") {
     // `make_date` with month 13 raises DATETIME_FIELD_OUT_OF_BOUNDS... under ANSI on both engines.
     val listed = oneRowCase("make_date(2021, i, 1)", 13, ansi = true)
+    def seenCount: Int = errorsSeen.filter(_._1._1.startsWith("DATETIME_FIELD_OUT_OF_BOUNDS"))
+      .values.sum
+    val before = seenCount
     assert(kindOf(listed, partitions = true, Nil).isEmpty)
-    assert(errorsSeen.keys.exists(_._1.startsWith("DATETIME_FIELD_OUT_OF_BOUNDS")))
+    assert(seenCount > before, "the case raised nothing, so it did not test a listed raise")
   }
 
   test("the draw includes every row of the table in every pass of the table's length") {

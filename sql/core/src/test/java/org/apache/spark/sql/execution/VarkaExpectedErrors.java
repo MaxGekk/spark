@@ -33,7 +33,8 @@ import java.util.stream.Collectors;
  * expected-errors lists), {@code sql/varka/fuzz/expected_errors.tsv}: tab separated condition (or
  * the class name of a non-Spark exception), side, modes, families and reason; {@code #} starts a
  * comment line. A raise on the list, for that side and mode, is expected; any other is a finding.
- * A listed condition that only one engine raises is still a disagreement, which the comparison of
+ * The families are documentation: a listed condition is expected from any expression. A listed
+ * condition that only one engine raises is still a disagreement, which the comparison of
  * the two outcomes reports.
  */
 public final class VarkaExpectedErrors {

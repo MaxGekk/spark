@@ -216,4 +216,8 @@ is Java, `VarkaSparkFuzz.unexpectedRaise` its one Scala caller.
 * `rectify` consumes errors unread (7, risk 3).
 * The unused-entries line is a warning; a hard check needs a census long enough to be stable under
   a changed coverage table.
-
+* The outcome is keyed by the outermost Spark condition, so a wrapper such as
+  `EXPRESSION_DECODING_FAILED` hides a different inner exception on one engine. Comparing the
+  innermost exception's class too is row 317's business (errors compared as answers).
+* The review (a branch-diff read) found that `noteRaises` does not count the forced and partition
+  queries, so the unused-entries warning can name an entry that those raised; cosmetic.
