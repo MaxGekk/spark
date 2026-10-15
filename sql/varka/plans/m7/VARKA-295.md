@@ -366,3 +366,194 @@ minute on the row path, not the kernel's speed afterwards.
 shape, or a flag the warm-up can set); a cause 3 result lets the warm-up stop waiting on a
 deadline that the environment cannot meet; a cause 4 result is a Vector API escape-analysis
 question for the kernels' emitted form. Row 295 stays open until a step names the cause.
+
+### 9.5 Step 1 of 9.4, 15 October 2026: every release is cause 4, compiled and still allocating
+
+**What was run.** The warm-up arm of `VarkaSparkFuzzSuite` (the `sparkwarm` step's test: `-z "both
+sides of the warm-up handover"`, seed 20261008, 400 compositions, about 500 warm-ups, a 10-second
+deadline in this arm) in a JVM started by hand from the classpath and `jvm.opts` that
+`dev/varka_matrix.sh --module sql --list` exports, so it carries the options sbt's forked test JVM
+has, at 512-bit lanes on the laptop, with a load average of 6.6 to 8.5 from other agents' work (not
+idle). The JIT's own record was switched on with
+`-XX:+UnlockDiagnosticVMOptions -XX:+LogCompilation -XX:+PrintTieredEvents
+-Xlog:jit+compilation=debug,deoptimization=debug` (the log, one 1.8 GB XML per run, was read by
+two streaming passes: every tiered-policy event, compile request, nmethod, uncommon trap,
+not-entrant mark, bailout and C2 inlining decision of the `VarkaFused*` classes), and in two runs a
+JFR recording with allocation samples (stack depth 12, frame types kept), deoptimizations and
+compiles. The flags do not change what is measured: 41, 18, 18, 32, 26 and 36 deadline releases in
+six runs of the same 400 compositions (3.6% to 8.2% of the warm-ups) against 29 and 13 in 9.4's two
+runs without them. Seven runs and two replays in all; the logs and the extraction scripts are in the scratch
+directory named at the end, not in the repository.
+
+| run | JVM | flags beyond the log | warm-ups released at the deadline |
+|---|---|---|---|
+| t1 | 12 cores | none | 41 |
+| t2 | 10 cores | + JFR (its 250 MB default cap kept the last 3 minutes of 6) | 18 |
+| t3 | 10 cores | + JFR, uncapped | 18 |
+| t4 | 12 cores | none (control) | 32 |
+| t5 | 12 cores | `-XX:PerMethodTrapLimit=100000` | 26 |
+| t6 | 8 cores | both `-XX:PerMethodTrapLimit` and `-XX:PerBytecodeTrapLimit` at 100000 | 151 |
+| t7 | 4 cores (`taskset`) | `-XX:CICompilerCount=3`, the runner's scale | 36 |
+
+**The result.** 171 releases in t1 to t5 and t7 (170 parse; one message was cut by interleaved
+tiered-event output), each classified from the JIT's record of its own kernel class between the
+warm-up's start and its release. The cause-4 class is assigned positively, not as what is left
+over: every loop method of the kernel had a C2 nmethod, tier 4, installed and never marked not
+entrant, and no class had a compile failure. The counts per cause:
+
+| cause | releases | what was looked for, and what was found |
+|---|---|---|
+| 1, deoptimization cycle | 0 | a kernel method with 10 or more uncommon traps or 3 not-entrant marks. The most traps on any class are 8 (two loop methods, 4 each, `profile_predicate` with action `maybe_recompile`, in 11 of the 41 of t1); the most not-entrant marks 2. VARKA-326's cycle makes 97 to 110 in 30 s |
+| 2, C2 bailout | 0 | a `<failure>` element inside any kernel compile task, or `make_not_compilable` at tier 4 on a kernel method: none in the six runs. JFR's 59 compilation failures in t3 (`retry without subsuming loads`, C2's own retry; two C1 `out of virtual registers`) include no kernel compile id. The only `make_not_compilable` on kernel methods is `excluded by CompileCommand` at tier 3, which is Varka's own C1 directive (`VarkaKernelCompileDirective`), not a bailout |
+| 3, the policy does not ask | 0 | the last loop method of a released kernel had C2 code a median 0.5 s after the warm-up started, at most 3.3 s (t1); at the runner's scale (t7: 4 cores, 3 compiler threads) a median 0.8 s, p90 1.5 s, at most 5.7 s, and no more releases than on 12 cores (36 against 32 and 41). Epilogue methods with no C2 code were in 54 of the 170, 5 to 12 per run: each is a method whose tier-3 request the directive refuses and whose later events stop with the spin phase, and no probe runs one (1024 rows is a multiple of every lane count), so none explains a release |
+| 4, compiled, in use, still allocating | 170 | see below |
+
+`no code in use: [runDense(7), runMasked(7)]` in the release-path state is benign: those are 60 to
+73-byte methods inlined into `run`'s tier-4 compile.
+
+**Why cause 4 is the cause, three ways.**
+
+1. *The bytes are one vector per loop iteration.* A probe is 4 calls of 1024 rows; a 512-bit int
+   vector has 16 lanes, so each loop method runs 64 iterations a call, and an `int[16]` is 80
+   bytes: 4 x 64 x 80 = 20,480 bytes. 45 of the 169 last-probe values are 20,480 to 22,400 bytes,
+   the smallest 20,480 to the byte: **exactly one vector backing array a loop iteration survives
+   in tier-4 code.** The rest are multiples: the median, 164,240 bytes, is eight arrays an
+   iteration, the largest, 1,587,840, seventy-eight. A healthy kernel ends at 480 to 800 bytes, and
+   the verdict's allowance is 4,096 + 4,096 + 1,024 a column, 9,216 bytes for one column, so one surviving array an iteration
+   is enough to fail it for the whole deadline. In a replay of compositions 0 to 222 with a 20 ms
+   `jdk.ThreadAllocationStatistics`, the warm-up thread's allocation counter grew a steady 3.9 MB/s
+   over seconds 1 to 9, 20 KB per 5 ms pace interval, which is the same number from the other
+   side.
+2. *JFR puts it in compiled kernel frames.* In t3, 12 of the 18 releases have an allocation
+   sample in their own kernel class after the first two seconds (sampling is sparse at 4 MB/s, and
+   the other 6 have none); 99.8% of that weight is under a kernel frame of type `JIT compiled`,
+   100% of it class `int[]`, and the top site is `IntVector.lanewiseTemplate:798` in 10 releases
+   (the `VectorSupport.binaryOp` line, where a result vector is boxed) and
+   `ScopedMemoryAccess.loadFromMemorySegmentScopedInternal:358` in 2:
+
+   ```
+   objectClass = int[]   weight = 3.0 MB   eventThread = "varka-kernel-warmup"
+   IntVector.lanewiseTemplate(VectorOperators$Binary, Vector) line: 798      type: Inlined
+   Int512Vector.lanewise(VectorOperators$Binary, Vector) line: 278           type: Inlined
+   VarkaFusedProjection_w...loopMasked0(long[], long[], int[], long[], long[], int[], int)  type: JIT compiled
+   ```
+3. *The same class compiles clean in another run.* The 337 shapes seen in the six runs: 45 were
+   released at least once, 10 in all six runs, 18 in four, and 35 of the 45 were COMPILED in
+   another run. Their C2 compiles differ in one way the log shows: the number of `<virtual_call>`
+   sites left in the loop and epilogue methods, a mean 1.19% of the call sites in the run that
+   released and 0.55% in the run that did not, higher in 31 of the 35 shapes. For shape
+   `w2d78f55c08bd76f0` (iteration 53) the `loopMasked0` compile of t1 (compile 34128, released) has
+   119 `<virtual_call>` elements, 49 of them on `Int512Vector.lanewise` and 37 on `broadcast`; the
+   one of t3 (compile 35233, COMPILED) has 34, with 18 and 8. Both are tier-4 compiles of the same 1,278
+   bytecodes, with no failure.
+
+The shapes that release are mostly the same ones run to run, so a release is a property of the
+shape and of the JVM's profile history far more than of the machine or of timing, and
+a replay of iteration 222 alone (`-Dvarka.sparkfuzz.warmupOnly=222`) is COMPILED; the first 223
+compositions in a row released 1 of the 7 that t3 released in that range. The release-path state
+the test already logs agrees with the JIT record: in t1's first release it lists the kernel's
+five methods at `L4` and no loop method among those without code.
+
+**What the virtual calls are, as a hypothesis for step 2 (not shown by step 1).** Each of those
+`<virtual_call>` elements follows a `<predicted_call>` and an
+`observe trap='class_check' count='0' mcount='0' ccount='136'`. In the JDK 25 source
+(`src/hotspot/share/opto/doCall.cpp` 262 to 300) a monomorphic or bimorphic call that was inlined
+gets an uncommon trap on the miss path, unless `too_many_traps_or_recompiles` says class-check
+traps are already too many (`compile.cpp` 4128 to 4170: a trap recorded at this bci, or
+`PerMethodTrapLimit` = 100 traps of the kind in the compile's inlined methods' profiles); then the
+miss path is a real virtual call and the inlined path and the call rejoin, so a vector that
+reaches the join cannot be scalar-replaced. The shared Vector API templates' profiles carry such
+traps from every earlier kernel and species in the JVM (the deoptimization log has `class_check`
+and `bimorphic_or_optimized_type_check` traps in `IntVector.bTest`, `AbstractMask.vectorSpecies`
+and others). That is the "polluted template profile" of section 2, with a mechanism, but this step did not show that these virtual calls are where the 20,480 bytes come from, and t5
+(below) says the compile-wide limit is not the only way to the virtual call: the per-bytecode
+trap record in the shared methods' profiles (`has_trap_at`, `PerBytecodeTrapLimit` = 4) is the
+other.
+
+**Controls.** t5 (`PerMethodTrapLimit` 100000 alone) did not lower the rate (26 against 32 and
+41), though the flag was in the JVM's arguments. t6 (both limits at 100000) made it five times
+worse, 151 against 32, and made the other causes appear: 31 of its 133 parsed releases are cause 1
+(`profile_predicate` traps by the hundred thousand, 84,926 `class_check` traps at one bci of the
+harness's `VarkaFusedKernel.run`), 1 is cause 2 (`out of nodes during split` in `loopMasked0` of
+shape `...8a2f200d`, which also releases at the defaults), 3 are cause 3. The trap limits are what
+keeps the same C2 from the cycle of cause 1, so raising them is not a fix: it turns this symptom
+into VARKA-326's. 9.4's step 2 (join with VARKA-326) is the same JIT with a different symptom.
+
+**A correction candidate for 9.3, not asserted.** 9.3 read CI's 20,960 and 24,816 bytes as one
+interpreted light-loop call per probe (24,656 bytes). At CI's 8 lanes one surviving `int[8]`
+(48 bytes) per loop iteration over 4 calls of 1024 rows is 4 x 128 x 48 = 24,576 bytes, and the
+two readings give the same number. Locally JFR's frame types say compiled code; for CI, the next
+firing's frame-marked allocation samples (9.3) settle which.
+
+**What the counts say about the next step.**
+
+* Step 3 (the runner's scale) and step 4 (a CI dispatch) are not needed to find the cause: the
+  runner's scale did not change the rate or the structure (t7), and the release follows the
+  shape and the profile history. What the long CI JVM adds is more profile history, which fits
+  9.3's 750-suite JVM.
+* Step 2 changes shape: not a trap cycle, but what makes one allocation per iteration survive
+  the tier-4 compile of this shape. Two replays of one shape that releases in all six runs
+  (`67312f01`, iteration 220, or `e33b1eb0`, iteration 312), each after the compositions that
+  precede it: one with `-XX:+PrintIntrinsics` (does `VectorSupport.binaryOp` at line 798 print
+  `missing constant` or another rejection, so the Java fallback allocates, or is it intrinsified)
+  and one on the fastdebug build with `-XX:+PrintEscapeAnalysis -XX:+PrintEliminateAllocations`
+  (the allocation is there, so what keeps it from being scalar-replaced). The 20,480-byte
+  arithmetic says there is exactly one allocation per iteration to find. A bisection of the prefix
+  that makes iteration 222 release says which earlier kernels pollute.
+* The verdict's allowance is crossed by one array per iteration, so how the warm-up should judge a
+  kernel that is compiled at tier 4 but cannot be made allocation-free in this JVM is a
+  question for after the cause: 9.1 withdrew the 32x rule for a reason that still holds.
+
+**Every release of t1** (the first run; sorted by iteration; the shape is the last 8 hex digits of
+the hash; all 41 are cause 4 by the test above; 'loops with C2 code' counts the kernel's loop
+methods with a tier-4 nmethod in use at the deadline). t2 to t7 release mostly the same shapes;
+their tables are in the scratch directory, with the per-run counts above.
+
+| iter | shape (last 8 hex) | last probe (B) | loops with C2 code in use (first / last, s after start) | epilogues with none | traps on the kernel | virtual calls left (% of call sites) |
+|---|---|---|---|---|---|---|
+| 53 | 08bd76f0 | 430320 | 2 of 2 (0.3 / 0.5) | - | 0 | 2.8 |
+| 79 | 783e7605 | 399600 | 2 of 2 (0.3 / 0.5) | - | 0 | 2.8 |
+| 82 | 433382dc | 20960 | 2 of 2 (0.2 / 0.3) | - | 4 profile_predicate | 1.1 |
+| 90 | a360d32e | 512480 | 6 of 6 (0.2 / 0.7) | epD0 | 0 | 2.5 |
+| 98 | 4c712c1b | 389120 | 3 of 3 (0.1 / 0.2) | - | 0 | 2.3 |
+| 104 | be396b93 | 22080 | 1 of 1 (0.2 / 0.2) | - | 0 | 0.8 |
+| 109 | c7f4916e | 143680 | 4 of 4 (0.1 / 0.3) | epD1 | 0 | 1.5 |
+| 110 | 5d560c10 | 31120 | 2 of 2 (0.2 / 0.4) | - | 4 profile_predicate | 0.8 |
+| 119 | 2f926389 | 154240 | 4 of 4 (0.2 / 0.5) | - | 8 profile_predicate | 1.4 |
+| 138 | cdbf41f3 | 31280 | 2 of 2 (0.2 / 0.3) | - | 0 | 1.2 |
+| 156 | 72959b0a | 389120 | 3 of 3 (0.2 / 0.2) | - | 0 | 1.9 |
+| 184 | b2184ac0 | 92880 | 4 of 4 (0.2 / 0.3) | - | 0 | 1.1 |
+| 197 | 7746bae2 | 400080 | 6 of 6 (0.1 / 0.6) | epD0,epD2 | 0 | 2.4 |
+| 206 | 8e294179 | 502080 | 2 of 2 (0.3 / 0.7) | - | 0 | 2.8 |
+| 212 | ea10eeca | 72240 | 2 of 2 (0.2 / 0.2) | - | 0 | 1.6 |
+| 220 | 67312f01 | 553680 | 4 of 4 (0.2 / 2.4) | epD1 | 4 profile_predicate | 2.5 |
+| 222 | 78e9ebe3 | 492000 | 2 of 2 (0.3 / 0.6) | - | 0 | 2.9 |
+| 224 | 831d5f52 | 21440 | 2 of 2 (0.2 / 0.3) | - | 8 profile_predicate | 0.7 |
+| 226 | e9aa2b2e | 983600 | 4 of 4 (0.2 / 1.9) | epD0,epM0 | 0 | 3.4 |
+| 232 | 32ce81a9 | 430480 | 6 of 6 (0.1 / 0.8) | epD0 | 0 | 2.2 |
+| 234 | d6892e88 | 348160 | 3 of 3 (0.1 / 0.2) | - | 0 | 2.0 |
+| 240 | 858f8853 | 430560 | 4 of 4 (0.2 / 0.8) | - | 4 profile_predicate | 2.0 |
+| 260 | 64a5b133 | 164480 | 4 of 4 (0.2 / 0.5) | - | 4 profile_predicate | 1.7 |
+| 263 | 4335e0df | 399680 | 4 of 4 (0.1 / 0.7) | epD0,epM0 | 0 | 2.8 |
+| 268 | ac9d9354 | 20640 | 2 of 2 (0.2 / 0.2) | - | 0 | 2.1 |
+| 274 | 1c25de6e | 563680 | 4 of 4 (0.2 / 0.8) | epD1 | 4 profile_predicate | 2.7 |
+| 293 | b4b70692 | 40960 | 2 of 2 (0.1 / 0.1) | - | 0 | 1.3 |
+| 302 | 1e23c716 | 430640 | 6 of 6 (0.1 / 0.5) | epD0,epD2 | 4 profile_predicate | 2.5 |
+| 312 | e33b1eb0 | 1198720 | 2 of 2 (0.8 / 2.1) | - | 0 | 3.4 |
+| 314 | 2789563e | 880640 | 1 of 1 (0.4 / 0.4) | - | 0 | 3.3 |
+| 318 | f7b12c23 | n/a | 2 of 2 (0.1 / 0.2) | - | 0 | 2.5 |
+| 319 | 785229a7 | 430480 | 6 of 6 (0.2 / 0.6) | - | 0 | 2.3 |
+| 325 | 39ffed49 | 522640 | 4 of 4 (0.2 / 0.7) | epD0 | 0 | 2.6 |
+| 326 | e63ac14f | 20480 | 2 of 2 (0.1 / 0.1) | - | 0 | 1.2 |
+| 338 | 9787c504 | 82160 | 2 of 2 (0.2 / 0.4) | - | 4 profile_predicate | 1.7 |
+| 339 | 6f882064 | 21040 | 2 of 2 (0.2 / 0.2) | - | 0 | 0.7 |
+| 355 | 7603cfb3 | 348160 | 2 of 2 (0.1 / 0.2) | - | 0 | 2.5 |
+| 364 | 8a2f200d | 983520 | 2 of 2 (0.6 / 3.3) | - | 0 | 3.2 |
+| 370 | 5a9a1f8f | 410000 | 4 of 4 (0.1 / 0.5) | epD0,epM0 | 0 | 2.7 |
+| 379 | 781e50f9 | 20800 | 4 of 4 (0.2 / 0.3) | - | 0 | 1.3 |
+| 388 | a18ada49 | 400080 | 4 of 4 (0.3 / 0.7) | - | 4 profile_predicate | 2.0 |
+
+The logs, the parsed per-class records and the scripts that produced this section are in
+`/tmp/claude-1000/-home-max-proj-vecbricks-varka/53e2e690-d028-4b57-a163-fcdc477c97cf/scratchpad/295d/`
+(`t1` and `t3` keep their `hotspot.xml` and `jit.log`, `t3` also its JFR recording; `tools/` has
+the extractors); they are not in the repository.
