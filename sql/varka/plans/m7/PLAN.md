@@ -79,7 +79,10 @@ base they land on provable where proof is cheap, tested where it is not, and eas
    and every emit option states why it exists and moves some hash in the bytes oracle, or is gone
    (247, 248). Every shape the tests run has both its dense and its masked body compared (284).
    What the tests miss is measured, by what the emitter reached, branch coverage of the emitter
-   and of the code it emits, and a bounded mutation run (280, 285, 265).
+   and of the code it emits, and a bounded mutation run (280, 285, 265). The warm-up's flake, which
+   fails the module's job a few times in a hundred warm-ups, has its cause named and the part of it
+   Varka can remove removed, or the part it cannot recorded with what an operator can set (295,
+   370).
 3. **Varka's code is Java and legible**: the compiler ported with its shape cache (214 to 217,
    224) and the evaluators with it (251, 267), checked by Error Prone and NullAway (266); item
    74's refactors landed, each with the proof its row names (248 to 252); the runtime refusals
@@ -89,7 +92,8 @@ base they land on provable where proof is cheap, tested where it is not, and eas
    laptop and runs master after each merge (255), and a benchmark run regenerates only its own
    sections (256). The slow mode a kernel meets after other kernels is a number (257).
 5. Beside the spine: promotion continues (180), the three posts the owner chose on 2 October
-   are published (258 to 260), and the milestone closes on a post of its own (270).
+   are published (258 to 260), a short post on the JIT's trap sums follows the warm-up flake's
+   fix (371), and the milestone closes on a post of its own (270).
 
 ## 2. Design
 
