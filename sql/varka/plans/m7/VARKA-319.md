@@ -63,6 +63,15 @@ overflowing under LEGACY would be a wrapped value in Spark, so the entries are k
 interval casts, so they compare an error with an error and nothing else. That is the fixture's
 draw, not this row; it is recorded as a debt in 9 rather than fixed here.
 
+*Correction, made while testing (15 October 2026).* The census above was too short to be
+complete, and the list it produced was caught out by the first long run: 5,000 compositions at seed
+11 failed on `INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION` (`ym - ymm`: year-month interval
+arithmetic is checked in every mode, both engines raise it), and seed 13 on
+`EXPRESSION_DECODING_FAILED` under LEGACY (`date_add(d, i)` overflows in every mode, not only
+under ANSI). Neither is a Varka bug (both engines agree); the list became six entries, the last
+entry's modes widened, and "five entries" in 3 to 5 reads six. The census needs about 5,000
+compositions per seed to see a condition that one in a few hundred compositions raises.
+
 ## 3. The design
 
 ### 3.1 The list and its reader
@@ -165,3 +174,46 @@ None: a test-strength change with no performance claim.
 1. This plan and row 319's cell.
 2. The list, the Java reader, the check wired into the four sites, with tests 3, 5 and 6.
 3. The end-to-end tests 1, 2 and 4, the census line, section 9.
+
+## 9. Outcome
+
+Built as 3 describes, with the list at six entries (2, correction). Review and merge are the
+coordinator's.
+
+**The census** (the committed fuzzer prints it with `info`, one line per condition, side and
+mode). The default arm (seed 20261008, 200 compositions, 183 fused): `CAST_OVERFLOW` 10 ANSI and
+9 LEGACY per side (the fixture), `DATETIME_FIELD_OUT_OF_BOUNDS.WITHOUT_SUGGESTION` 1 ANSI per
+side. 5,000 compositions at seed 11: `CAST_OVERFLOW` 204 ANSI and 206 LEGACY, `DATETIME...` 33,
+`ARITHMETIC_OVERFLOW` 3 ANSI, `INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION` 3 ANSI and 2 LEGACY,
+every one on both sides. At seed 13: the same plus `EXPRESSION_DECODING_FAILED` 2 ANSI and 7
+LEGACY and `ARITHMETIC_OVERFLOW` 1 LEGACY. No run raised a condition on one side only, a
+non-Spark exception or `INTERNAL_ERROR`; the only unlisted conditions ever met were the two the
+correction names, each a missing entry.
+
+**The tests of 5** all pass: the planted `i / 0` (`DIVIDE_BY_ZERO` on both engines under ANSI)
+fails with "unexpected error condition DIVIDE_BY_ZERO from the row engine under ANSI", the seed,
+the iteration and a shrunk reproducer whose select is `i / 0 AS c0`; `make_date(2021, 13, 1)`
+passes; the synthetic outcomes, the partition check and the file's well-formedness pass. Run under
+the defaults and under `cse=false` through `dev/varka_matrix.sh` (20 tests each, 0 failures).
+
+**Predictions** (6.1). 1: held (the default arm raised `CAST_OVERFLOW` and `DATETIME...` only).
+2: held (three of the five entries then listed were not raised in 200 compositions; with six
+entries two to three are unused in a default run, reported as a line, not a failure). 3: **missed**,
+twice: seed 11 and seed 13 each raised a condition not on the list (the correction in 2).
+
+**The partition check** (row 352's gap) now reads the list: a raise on any of its four queries that
+the list does not allow is reported; a listed raise still says nothing about the rows.
+
+**What moved that the plan did not list.** `failureText` was extracted from the main test's loop
+so that the planted test goes through the failure path the fuzzer uses. `VarkaExpectedErrors`
+is Java, `VarkaSparkFuzz.unexpectedRaise` its one Scala caller.
+
+**Left for later.**
+* About 8% of compositions read a fixture whose interval casts overflow, so they compare an error
+  with an error and nothing else (`CAST_OVERFLOW`, 71 to 206 per 1,500 to 5,000 compositions). The
+  fixture's draw should keep the interval-cast columns' ints inside the cast's range in a
+  composition that is meant to compare values; it is the draw's debt, not this row's.
+* `rectify` consumes errors unread (7, risk 3).
+* The unused-entries line is a warning; a hard check needs a census long enough to be stable under
+  a changed coverage table.
+

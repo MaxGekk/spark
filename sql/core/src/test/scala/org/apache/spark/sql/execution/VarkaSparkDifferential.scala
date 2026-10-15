@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.execution
 
+import scala.jdk.CollectionConverters._
 import scala.util.Try
 
 import org.apache.spark.sql.{QueryTest, SparkSession}
@@ -37,6 +38,34 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
   protected var fused = 0
   protected var compared = 0
   protected var bothErrored = 0
+
+  /**
+   * What the two engines raised over the checks run (VARKA-319): per condition, engine and mode,
+   * how many checks raised it. `unusedExpectedErrors` reads it against the list.
+   */
+  protected val errorsSeen =
+    scala.collection.mutable.TreeMap.empty[(String, String, String), Int]
+
+  private def noteRaises(off: Outcome, on: Outcome, ansi: Boolean): Unit = {
+    val mode = if (ansi) "ANSI" else "LEGACY"
+    for ((side, o) <- Seq("row" -> off, "varka" -> on); raised <- o.left.toOption) {
+      val key = (raised, side, mode)
+      errorsSeen(key) = errorsSeen.getOrElse(key, 0) + 1
+    }
+  }
+
+  /** The census, one line per condition, engine and mode. */
+  protected def errorCensus: Seq[String] =
+    errorsSeen.toSeq.map { case ((raised, side, mode), n) => s"$n x $raised, $side, $mode" }
+
+  /** The entries of the expected-errors list that no check run raised. */
+  protected def unusedExpectedErrors: Seq[String] =
+    VarkaExpectedErrors.entries().asScala.toSeq.filterNot { e =>
+      errorsSeen.keys.exists { case (raised, side, mode) =>
+        raised == e.condition() && e.modes().contains(VarkaExpectedErrors.Mode.valueOf(mode)) &&
+          e.side().covers(VarkaExpectedErrors.Side.valueOf(side.toUpperCase))
+      }
+    }.map(e => s"${e.condition()} (${e.side().toString.toLowerCase}, ${e.modes()})")
 
   /** Filtered queries the row engine answered, and those that returned a row (VARKA-297). */
   protected var filtered = 0
@@ -68,8 +97,8 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
    * the row engine's `off` when the plan proves the force moved execution: exactly one more
    * residual entry than `residualOn`. A run whose plan did not change is counted, never passed.
    */
-  private def forcedDifference(query: String, k: Int, off: Outcome, residualOn: Long)
-      : Option[String] = {
+  private def forcedDifference(
+      query: String, k: Int, off: Outcome, residualOn: Long, ansi: Boolean): Option[String] = {
     val previous = VarkaColumnarToRowExec.currentEmitOptions
     VarkaColumnarToRowExec.setEmitOptionsForTesting(previous.withForceResidualAt(k + 1))
     val (forced, residualForced) = try outcomeAndResidual(varkaSpark, query) finally {
@@ -78,7 +107,8 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
     forcedRuns += 1
     if (residualForced == residualOn + 1) {
       forcedApplied += 1
-      difference(off, forced).map(why => s"with an output forced to decline, $why")
+      unexpectedRaise(forced, VarkaExpectedErrors.Side.VARKA, ansi)
+        .orElse(difference(off, forced)).map(why => s"with an output forced to decline, $why")
     } else {
       None
     }
@@ -131,6 +161,7 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
         fused += 1
       }
       if (off.isLeft && on.isLeft) bothErrored += 1
+      noteRaises(off, on, ansi)
       if (where.isDefined) off.foreach { rows =>
         filtered += 1
         if (rows.nonEmpty) filteredNonEmpty += 1
@@ -139,8 +170,8 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
           if (rows.nonEmpty) pivotFilteredNonEmpty += 1
         }
       }
-      difference(off, on).orElse {
-        forces.iterator.flatMap(k => forcedDifference(query, k, off, residualOn)).nextOption()
+      unexpectedError(off, on, ansi).orElse(difference(off, on)).orElse {
+        forces.iterator.flatMap(k => forcedDifference(query, k, off, residualOn, ansi)).nextOption()
       }.orElse {
         pivot.filter(_ => where.isDefined).flatMap { row =>
           // The outputs over the pivot row alone, by the row engine.
@@ -149,8 +180,10 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
         }
       }.orElse {
         if (partitions && where.isDefined) {
-          Seq(spark, varkaSpark).iterator.flatMap(s =>
-            partitionBroken(select, where.get, outcome(s, _))).toSeq.headOption
+          Seq(spark -> VarkaExpectedErrors.Side.ROW, varkaSpark -> VarkaExpectedErrors.Side.VARKA)
+            .iterator.flatMap { case (s, side) =>
+              partitionBroken(select, where.get, outcome(s, _), unexpectedRaise(_, side, ansi))
+            }.toSeq.headOption
         } else {
           None
         }
@@ -219,7 +252,7 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
       outcome(spark, s"SELECT ${c.select} FROM (${fixtureRows(Seq(rowText(row)))}) AS fz")
     }
     def compare(off: Outcome, run: WarmedRun, side: String, pivot: Boolean): Option[String] =
-      difference(off, run.outcome).orElse {
+      unexpectedError(off, run.outcome, c.ansi).orElse(difference(off, run.outcome)).orElse {
         if (pivot) pivotAlone.flatMap(pivotMissing(off, run.outcome, _)) else None
       }.map(why => s"$side, $why")
     def await(): Unit = if (!VarkaKernelWarmup.awaitIdle(warmupWaitMillis)) counts.notIdle += 1
@@ -238,6 +271,7 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
           val run = warmedRun(query)
           last = run
           runs += 1
+          noteRaises(off, run.outcome, c.ansi)
           waited = run.warmupBatches > 0
           found = compare(off, run, sideOf(run), pivot = true)
           if (waited) counts.rowPathRuns += 1

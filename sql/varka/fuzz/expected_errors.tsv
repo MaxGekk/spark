@@ -1,0 +1,12 @@
+# The errors a drawn case may raise (VARKA-319; VarkaExpectedErrors), after SQLancer.
+# Tab separated: condition (or exception class), side (row, varka or both), modes (LEGACY and/or
+# ANSI, comma separated), the coverage families that raise it (semicolon separated, or fixture),
+# the reason. The Spark-level fuzzer treats a raise on this list, for that side and mode, as
+# expected; any other condition is a finding. A listed condition raised by one engine only is still
+# a disagreement. The census behind the list is in plans/m7/VARKA-319.md 2.
+CAST_OVERFLOW	both	LEGACY,ANSI	fixture;Day arithmetic	The fixture's interval columns are casts of drawn ints, and a hostile int (Int.MaxValue, 178956971) overflows the cast when the cached relation is built, so every query over that fixture raises, in both modes; INT to INTERVAL DAY (d + CAST(i AS INTERVAL DAY)) is checked in every mode too
+ARITHMETIC_OVERFLOW	both	ANSI	Integer arithmetic;Months and year-month intervals	Checked integer addition and multiplication raise on overflow under ANSI (i + 1 at Int.MaxValue); add_months(d, i) overflows under ANSI as well
+ARITHMETIC_OVERFLOW	both	LEGACY	Months and year-month intervals	add_months(d, i) adds the months with Math.addExact in every mode, so an int outside the date range raises even with ANSI off
+DATETIME_FIELD_OUT_OF_BOUNDS.WITHOUT_SUGGESTION	both	ANSI	Calendar fields	make_date(2021, i, 1) with a month outside 1 to 12 raises under ANSI; with ANSI off it answers null
+EXPRESSION_DECODING_FAILED	both	LEGACY,ANSI	Day arithmetic	date_add(d, i) whose day sum leaves the int range raises a raw ArithmeticException (integer overflow) in every mode, which Spark reports wrapped in this condition; the wrapping is Spark's and the same on both engines
+INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION	both	LEGACY,ANSI	Months and year-month intervals	Year-month interval addition and subtraction (ym - ymm) use Math.addExact in every mode, so a result outside the int month count raises with ANSI off as well

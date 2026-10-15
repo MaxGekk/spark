@@ -102,6 +102,11 @@ object VarkaSparkFuzz {
       CoverageRow(e.get("sql").asText(), e.get("executable").asText(), e.get("form").asText())
     }
 
+  /** The families the coverage table names, which the expected-errors list's rows cite. */
+  def coverageFamilies(file: java.io.File): Set[String] =
+    new ObjectMapper().readTree(file).get("expressions").elements().asScala
+      .map(_.get("family").asText()).toSet
+
   // ---- the draw ---------------------------------------------------------------------------
 
   private val dates = Seq("2024-01-31", "2024-02-29", "2023-12-27", "2021-01-01", "2021-06-01",
@@ -316,6 +321,35 @@ object VarkaSparkFuzz {
         .getOrElse(e.getClass.getName)
     }
 
+  /**
+   * The kind of finding when `outcome`, raised by `engine` (ROW or VARKA) under `ansi`, is an
+   * error the expected-errors list (VARKA-319) does not allow for that side and mode, else None.
+   * A raise that is a class name rather than a condition is unlisted unless the list names it.
+   */
+  def unexpectedRaise(
+      outcome: Outcome,
+      engine: VarkaExpectedErrors.Side,
+      ansi: Boolean,
+      list: java.util.List[VarkaExpectedErrors.Entry] = VarkaExpectedErrors.entries())
+      : Option[String] = {
+    val mode = if (ansi) VarkaExpectedErrors.Mode.ANSI else VarkaExpectedErrors.Mode.LEGACY
+    outcome.left.toOption.filterNot(VarkaExpectedErrors.expected(list, _, engine, mode)).map {
+      raised =>
+        val who = if (engine == VarkaExpectedErrors.Side.ROW) "the row engine" else "Varka"
+        s"unexpected error condition $raised from $who under $mode"
+    }
+  }
+
+  /** [[unexpectedRaise]] for the row engine's outcome and Varka's. */
+  def unexpectedError(
+      off: Outcome,
+      on: Outcome,
+      ansi: Boolean,
+      list: java.util.List[VarkaExpectedErrors.Entry] = VarkaExpectedErrors.entries())
+      : Option[String] =
+    unexpectedRaise(off, VarkaExpectedErrors.Side.ROW, ansi, list)
+      .orElse(unexpectedRaise(on, VarkaExpectedErrors.Side.VARKA, ansi, list))
+
   /** How two outcomes differ, or None when they agree. */
   def difference(off: Outcome, on: Outcome): Option[String] = (off, on) match {
     case (Right(a), Right(b)) => if (a == b) None else Some("values differ")
@@ -343,14 +377,19 @@ object VarkaSparkFuzz {
   /**
    * The ternary partition of a filter: the rows of `WHERE p`, `WHERE NOT (p)` and
    * `WHERE (p) IS NULL` together are the rows of the unfiltered query. None when it holds or
-   * when a side raised (an error says nothing about the rows).
+   * when a side raised (an error says nothing about the rows), except that a raise `unexpected`
+   * does not allow (the expected-errors list, VARKA-319) is reported.
    */
   def partitionBroken(
-      select: String, where: String, run: String => Outcome): Option[String] = {
+      select: String,
+      where: String,
+      run: String => Outcome,
+      unexpected: Outcome => Option[String] = _ => None): Option[String] = {
     val whole = run(querySql(select, None))
     val parts = Seq(where, s"NOT ($where)", s"($where) IS NULL").map(w =>
       run(querySql(select, Some(w))))
-    if ((whole +: parts).exists(_.isLeft)) None
+    val all = whole +: parts
+    if (all.exists(_.isLeft)) all.iterator.flatMap(unexpected(_)).nextOption()
     else {
       val union = parts.flatMap(_.toOption.get).sorted
       if (union == whole.toOption.get.sorted) None else Some("partition broken")

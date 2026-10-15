@@ -98,6 +98,26 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     else if (forceAll) c.outputs.indices
     else Seq(it % c.outputs.size)
 
+  /**
+   * The failure text of composition `it`, which showed `found`: the case shrunk, its reproducer
+   * written under `target/varka-sparkfuzz/`, and the kind with the reproducer in one message.
+   */
+  private def failureText(c: Case, it: Int, partitions: Boolean, found: String): String = {
+    // A forced disagreement is shrunk with the one output that shows it forced, so the
+    // reproducer can name it; a forced kind that needs every force names none.
+    val forced = if (!found.startsWith("with an output forced")) c
+      else c.copy(force = forcesOf(c, it).find(k => kindOf(c, partitions, Seq(k)).isDefined))
+    val kind = kindOf(forced, partitions, forced.force.toSeq).getOrElse(found)
+    val small = shrink(forced, kind, x => kindOf(x, partitions, x.force.toSeq))
+    val text = render(Reproducer("regression", s"seed $seed iteration $it", small.ansi, kind,
+      small.select, small.where, small.fixture, small.pivot.map(rowText), small.force))
+    val dir = getWorkspaceFilePath("sql", "core", "target", "varka-sparkfuzz")
+    Files.createDirectories(dir)
+    val file = dir.resolve(s"$seed-$it.sql")
+    Files.write(file, text.getBytes(StandardCharsets.UTF_8))
+    s"$kind (seed $seed, iteration $it), reproducer written to $file:\n$text"
+  }
+
   test(s"random compositions agree with the row engine (seed $seed, $iterations of them)") {
     val failures = scala.collection.mutable.ArrayBuffer.empty[String]
     val pool = scala.collection.mutable.TreeMap.empty[String, (Int, Int)]
@@ -112,24 +132,16 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
         case (n, e) => (n + 1, e + (if (bothErrored > errorsBefore) 1 else 0))
       }
       result.foreach { found =>
-        // A forced disagreement is shrunk with the one output that shows it forced, so the
-        // reproducer can name it; a forced kind that needs every force names none.
-        val forced = if (!found.startsWith("with an output forced")) c
-          else c.copy(force = forcesOf(c, it).find(k => kindOf(c, partitions, Seq(k)).isDefined))
-        val kind = kindOf(forced, partitions, forced.force.toSeq).getOrElse(found)
-        val small = shrink(forced, kind, x => kindOf(x, partitions, x.force.toSeq))
-        val text = render(Reproducer("regression", s"seed $seed iteration $it", small.ansi, kind,
-          small.select, small.where, small.fixture, small.pivot.map(rowText), small.force))
-        val dir = getWorkspaceFilePath("sql", "core", "target", "varka-sparkfuzz")
-        Files.createDirectories(dir)
-        val file = dir.resolve(s"$seed-$it.sql")
-        Files.write(file, text.getBytes(StandardCharsets.UTF_8))
         if (firstFailure.isEmpty) firstFailure = Some(it)
-        failures += s"$kind (seed $seed, iteration $it), reproducer written to $file:\n$text"
+        failures += failureText(c, it, partitions, found)
       }
     }
     info(s"compared $compared, fused $fused, both errored $bothErrored")
     pool.foreach { case (k, (n, e)) => info(s"  $k: $n compositions, $e errored on both sides") }
+    errorCensus.foreach(l => info(s"  raised: $l"))
+    // A warning, not a failure: which conditions a bounded run meets moves with the coverage
+    // table, and a failure here would blame a pull request that only added a row (VARKA-319.md 5).
+    unusedExpectedErrors.foreach(e => info(s"  expected error never raised in this run: $e"))
     info(s"filters returning a row: $filteredNonEmpty of $filtered, with a pivot " +
       s"$pivotFilteredNonEmpty of $pivotFiltered")
     info(s"outputs forced to decline: $forcedRuns, of which $forcedApplied changed the plan")
@@ -226,6 +238,84 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
         s"only ${counts.handedOver} of ${counts.compositions} compositions were handed over")
     }
     assert(failures.isEmpty, failures.mkString("\n"))
+  }
+
+  // ---- the expected-errors list (VARKA-319) -------------------------------------------------
+
+  private def listOf(lines: String*): java.util.List[VarkaExpectedErrors.Entry] =
+    VarkaExpectedErrors.parse(lines.mkString("\n"))
+
+  /** A one-row case whose only output is `output`, over a non-null `i`. */
+  private def oneRowCase(output: String, i: Int, ansi: Boolean): Case = {
+    val row = draw(rows, seed, 1).data.head.updated(2, i.toString)
+    Case(Vector(output), Vector.empty, "AND", Vector(row), ansi)
+  }
+
+  test("the committed expected-errors list has a reason per entry and names real things") {
+    val list = VarkaExpectedErrors.entries().asScala.toSeq
+    assert(list.nonEmpty)
+    val families = coverageFamilies(getWorkspaceFilePath("sql", "varka", "coverage.json").toFile) +
+      "fixture"
+    list.foreach { e =>
+      assert(e.reason().length > 20, s"${e.condition()}: the reason is missing or a word")
+      assert(e.families().asScala.forall(families.contains),
+        s"${e.condition()}: a family that is not in coverage.json: ${e.families()}")
+      assert(org.apache.spark.SparkThrowableHelper.isValidErrorClass(e.condition()) ||
+        scala.util.Try(Class.forName(e.condition())).isSuccess,
+        s"${e.condition()} is neither a Spark error condition nor an exception class")
+    }
+    val keys = list.flatMap(e => e.modes().asScala.map(m => (e.condition(), m)))
+      .groupBy(identity).filter(_._2.size > 1).keys
+    assert(keys.isEmpty, s"entries that overlap in condition and mode: ${keys.mkString(", ")}")
+  }
+
+  test("a raise is expected only from the side and under the mode its entry lists") {
+    val list = listOf(
+      "X\trow\tANSI\tfixture\ta reason",
+      "Y\tboth\tLEGACY,ANSI\tfixture\ta reason")
+    def raise(o: Outcome, engine: VarkaExpectedErrors.Side, ansi: Boolean) =
+      unexpectedRaise(o, engine, ansi, list)
+    import VarkaExpectedErrors.Side._
+    assert(raise(Left("X"), ROW, ansi = true).isEmpty)
+    assert(raise(Left("X"), VARKA, ansi = true).exists(_.contains("X from Varka under ANSI")))
+    assert(raise(Left("X"), ROW, ansi = false).exists(_.contains("X from the row engine")))
+    assert(raise(Left("Y"), VARKA, ansi = false).isEmpty)
+    assert(raise(Left("java.lang.ArithmeticException"), ROW, ansi = true).isDefined)
+    assert(raise(Right(Seq("1")), ROW, ansi = true).isEmpty)
+    assert(unexpectedError(Left("Y"), Left("Y"), ansi = true, list).isEmpty)
+    assert(unexpectedError(Left("Y"), Left("Z"), ansi = true, list)
+      .exists(_.contains("Z from Varka")))
+    // A listed condition on one side only is no finding of the list's, and still a disagreement.
+    assert(unexpectedError(Left("Y"), Right(Seq("1")), ansi = true, list).isEmpty)
+    assert(difference(Left("Y"), Right(Seq("1"))).isDefined)
+  }
+
+  test("the partition check reports a raise the list does not allow, and ignores a listed one") {
+    val list = listOf("Y\tboth\tANSI\tfixture\ta reason")
+    def run(raised: String): String => Outcome =
+      q => if (q.contains("IS NULL")) Left(raised) else Right(Seq("a"))
+    def check(raised: String) = partitionBroken("c", "p", run(raised),
+      unexpectedRaise(_, VarkaExpectedErrors.Side.ROW, ansi = true, list))
+    assert(check("Z").exists(_.contains("unexpected error condition Z")))
+    assert(check("Y").isEmpty)
+  }
+
+  test("a condition on no entry fails the fuzzer's check, naming the condition and the case") {
+    // `i / 0` raises DIVIDE_BY_ZERO under ANSI on both engines, which the list does not hold.
+    val planted = oneRowCase("i / 0", 5, ansi = true)
+      .copy(outputs = Vector("year(d)", "i / 0", "month(d)"))
+    val found = kindOf(planted, partitions = false, Nil)
+    assert(found.exists(k => k.contains("DIVIDE_BY_ZERO") && k.contains("the row engine")), found)
+    val text = failureText(planted, 999999, partitions = false, found.get)
+    assert(text.contains("unexpected error condition DIVIDE_BY_ZERO"), text)
+    assert(text.contains("iteration 999999") && text.contains("-- select: i / 0 AS c0"), text)
+  }
+
+  test("a condition on the list passes the fuzzer's check") {
+    // `make_date` with month 13 raises DATETIME_FIELD_OUT_OF_BOUNDS... under ANSI on both engines.
+    val listed = oneRowCase("make_date(2021, i, 1)", 13, ansi = true)
+    assert(kindOf(listed, partitions = true, Nil).isEmpty)
+    assert(errorsSeen.keys.exists(_._1.startsWith("DATETIME_FIELD_OUT_OF_BOUNDS")))
   }
 
   test("the draw includes every row of the table in every pass of the table's length") {
