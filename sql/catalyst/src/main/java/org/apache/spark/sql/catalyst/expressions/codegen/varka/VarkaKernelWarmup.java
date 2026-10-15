@@ -223,6 +223,14 @@ public final class VarkaKernelWarmup {
   // Replaced when it has died; see ensureWorker.
   private static Thread worker;
 
+  // What the Vector API template warm-up took on the worker's first start, for diagnostics.
+  private static volatile long templateWarmupNanos;
+
+  /** Nanoseconds the one-time Vector API template warm-up took, or zero if it has not run. */
+  public static long templateWarmupNanos() {
+    return templateWarmupNanos;
+  }
+
   private VarkaKernelWarmup() {
   }
 
@@ -446,6 +454,12 @@ public final class VarkaKernelWarmup {
   }
 
   private static void work() {
+    // Once per JVM, before the first kernel's calls give the shared Vector API templates a
+    // profile of one kernel's operators (VARKA-295).
+    long nanos = VarkaVectorTemplateWarmup.ensure();
+    if (nanos > 0) {
+      templateWarmupNanos = nanos;
+    }
     while (true) {
       Job job;
       try {
