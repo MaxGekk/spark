@@ -405,3 +405,37 @@ sanitizer on; before them, 7 passed and 1 canceled without it.
   not take is written with the batch, but the replay runs the body the batch's null counts choose.
 - The default directory under a shared `/tmp` can be created first by another user, which leaves
   the files unwritten (a warning) rather than readable: the file is created owner-only either way.
+
+**Found by the option matrix, 15 October 2026.** On #816's job, `groupBudget=64` failed "a
+memory-sanitizer violation fails the task unchanged and writes a file that replays to it" with
+"not a Varka reproduction file of format 1; its first line is" (empty), while the matrix's own
+rerun on the merge base passed: #816 changes no code, and the failure was a race the test lost.
+`VarkaReproduction.write` claims a `(shape hash, kind)` pair and then writes through a temporary
+file and a move. A query's tasks run side by side: the first to fail claims the pair, a sibling
+failing on the same shape finds it claimed, rethrows at once, and the job's failure reaches the
+test while the first task is still creating its temporary file (an empty, dot-named file, which
+the test then listed as "the" file and parsed) or has not created it yet. The test already used
+its own directory (`spark.sql.codegen.varka.reproduction.directory`), so another suite's file
+was never the cause. Reproduced locally as the matrix runs it, the test body repeated 300 times
+in one JVM pinned to two cores beside three busy loops: 17 of 300 iterations failed before the
+change, with the empty-first-line error and with "expected one reproduction file, got:" (none
+yet), and 1 of 300 after waiting for a finished file, an iteration that found no file at all
+for 30 s. Spacing the iterations by 300 ms removed that last one in 300 more (and in 300 under
+the defaults), which reads as a task of the previous iteration claiming the pair after the
+test's `resetForTesting`; one test per failure kind does not repeat a kind back to back. The
+test's `reproduced` now waits up to 30 s for a finished file (a name without the leading dot)
+before counting. The product is left as it is: the error reaching the user before the file is
+written is by design (the writer never delays a failure), and a file that is only ever renamed
+into place is never half written.
+
+The sweep of the suite over every configuration found a second, older failure of the same
+family, in the three `arrowBatchSize` configurations (1, 3, 17; a batch-size axis, not an emit
+option): the cached view's null every 97th row left the failing batch of a small-batch run
+without nulls, and the tests read that batch's null count and validity. The view now has a null
+every second row, so any batch of more than one row holds both; for one row a batch no data can
+(a one-row batch is without nulls or all null, which has no validity buffer), and the two tests
+that read it are skip-list lines under `arrowBatchSize=1`.
+
+Review of the branch: the null-every-second-row view no longer gives these tests a null-free batch
+(the replay's no-nulls body is reached by `VarkaReproductionSuite`, not here), and the leftover
+task described above is still possible in a back-to-back loop and is not closed by the poll.

@@ -910,6 +910,30 @@ VARKA-242 the calendar's divisions, `floorMod7` and the leap hash. What the next
   day back when the year overshoots, absorbs the error. The proof of each `ChronoDivide` site and
   the pinned first failing dividends see it; an end-to-end sweep cannot. So a constant's comment
   states its site's bound, and the proof holds the site to it.
+* **An interval analysis over wrapping lanes is sound as a congruence, not a containment**
+  (VARKA-281). `VarkaRangeAnalysisSuite`'s property test asserts that the interval contains the
+  lane value, and passes only because the grammar's literals are small: `date_add(d, 2147483647)`
+  carries the contract's interval past int32 while the lanes wrap, and a second shift back lands
+  both inside again, correctly. The theorem is the witness form - a member of the interval
+  congruent modulo 2^32 to the lane value - which every consumer turns into containment by reading
+  an interval only when it lies within int32. Stated that way each rule is local, quantifier-free
+  once the witness is written out, and linear; the two `sat` checks that keep the edge visible are
+  in `range_analysis.smt2`.
+* **The two solvers are complementary on nonlinear claims, and the reals are a way out**
+  (VARKA-281). Over the integers cvc5 proves a wrapped product's congruence in a fifth of a second
+  (its incremental linearization, which Zohar et al.'s int-blasting leans on) and Z3 leaves it
+  unknown, while Z3 proves division by a symbolic divisor monotone and cvc5 leaves that unknown.
+  The nightly needs both, so: a claim true over the reals - the four-corner product theorem, a
+  symmetric magnitude - is stated over `Real` sorts, where nlsat decides it instantly and every
+  integer instance follows; a congruence goes in Fiat's two layers, the ring identity as a
+  polynomial and the wrap's periodicity as a linear lemma; a symbolic divisor is instantiated per
+  divisor in use.
+* **Split a slow Presburger check by sign** (VARKA-281). `add_months` by a symbolic month count
+  over `java.time`'s closed forms took Z3 12 s as one check, past the ten seconds a check has on
+  the runner, and cvc5 could not decide it under `QF_NIA`; split by the signs of the count, the
+  year and the target year, each of the eight cases decides in under 2 s under either solver, and
+  the transcription of `toEpochDay`, with its own branch on the year's sign, is pinned to the JVM
+  at the branch edges.
 
 ## Every small tree, counted in grammar productions, beside the random fuzzer
 
@@ -1039,6 +1063,15 @@ the injector reaching a different set of words, and been listed in the skip list
   The run after each merge draws a configuration from the commit's hash and the weekly matrix
   runs them all; a test that leans on an option the base can switch off is checked before the
   merge with `dev/varka_matrix.sh --module catalyst --config <option>=<other value>`.
+- **The premise need not be a planted bug.** A test that reads a real refusal needs the option
+  that makes the refusal; `VarkaFallbackReasonSuite`'s two day-producer tests and
+  `VarkaProjectExecSuite`'s exact-status test (VARKA-313) leaned on `guardDayProducers`, which
+  `guardDayProducers=false` removes (no mask refusal in the method, so the batch runs on the
+  kernel and the status holds one bit), and failed under that configuration on master. They now
+  force the option on; the sql module's matrix step is where such a premise shows, not the
+  catalyst one. A test that waits on work another thread does after the job has failed (the
+  reproduction file of VARKA-315) polls for it instead of listing a directory once (a leftover task of the previous test that
+  claims the shape after the reset is not covered; it showed once in 300 back-to-back repeats).
 
 ## The emitter is called from several threads, so a test holds it to that
 
@@ -1204,6 +1237,7 @@ predicted. Add the line when the prediction is scored, whichever way it went.
 | VARKA-315 (6.1 #4) | the end-to-end suite under 30 s | 4.5 s of tests, 38 s with sbt's start | 0.15 | eight short queries over one cached view |
 | VARKA-243 (6.1 #3) | a new sql/core suite under 10 s | 18 s, its tests under 4 s | about 2 | the estimate counted the tests and not the suite's own sessions and cached table |
 | VARKA-327 (6.1 #2) | the warmed Spark differential's 2,000 compositions under an hour | 13 minutes | 0.26 | predicted from a seed that released 6.8% of its warm-ups at 10 s each; the nightly's released 0.9% |
+| VARKA-281 (6.1 #3) | the calendar sweep suite under 20 s | 1.5 s for its eight tests over 20 million days each | 0.08 | the estimate priced single-threaded `LocalDate` decodes and then doubled; a parallel stream over the test JVM's cores and the JIT's inlining of the decode left little of either |
 
 What the table says so far: a check that adds a run per batch or a read per call costs more than
 the plan's arithmetic, because the arithmetic counts the kernel's work and not the harness's

@@ -640,18 +640,7 @@ final class VarkaTimeCompiler {
   private static VarkaVectorIR remainderOfSixty(ConstDivide x, DeclineSink sink) {
     return new IntArith(IntOp.SUB, Overflow.WRAP, x,
         new IntArith(IntOp.MUL, Overflow.WRAP,
-            new ConstDivide(x, DateTimeConstants.SECONDS_PER_MINUTE, quotientBound(x)),
+            new ConstDivide(x, DateTimeConstants.SECONDS_PER_MINUTE, x.quotientBound()),
             sink.longSlot(DateTimeConstants.SECONDS_PER_MINUTE)));
-  }
-
-  /**
-   * The bound a quotient inherits from its dividend's: {@code |x| < b} divided by {@code d} gives
-   * {@code |x / d| < ceil(b / |d|)}. Derived from the node rather than restated beside it,
-   * because the bound is part of {@code ConstDivide}'s equality: two equal subtrees carrying
-   * bounds that were written out separately would stop being one common subexpression.
-   */
-  private static long quotientBound(ConstDivide x) {
-    long d = Math.abs(x.divisor());
-    return Math.max(1L, (x.dividendBound() + d - 1) / d);
   }
 }
