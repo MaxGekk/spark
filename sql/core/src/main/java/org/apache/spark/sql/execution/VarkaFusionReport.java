@@ -19,6 +19,7 @@ package org.apache.spark.sql.execution;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import scala.collection.immutable.Seq;
 import scala.jdk.javaapi.CollectionConverters;
@@ -37,6 +38,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.FusedOu
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.KernelOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.ResidualOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
 
 /**
  * How a Varka node serves each entry of its projection, in words.
@@ -117,9 +119,15 @@ public final class VarkaFusionReport {
    */
   public static Seq<String> predicateLines(
       Expression condition, Seq<Attribute> childOutput, VarkaEmitOptions options) {
+    return predicateLines(condition, childOutput, options, Set.of());
+  }
+
+  /** {@link #predicateLines(Expression, Seq, VarkaEmitOptions)} with the families switched off. */
+  public static Seq<String> predicateLines(Expression condition, Seq<Attribute> childOutput,
+      VarkaEmitOptions options, Set<VarkaFamily> familiesOff) {
     var out = new ArrayList<String>();
-    VarkaExpressionCompiler.Explained explained =
-        VarkaExpressionCompiler.explainAndCompilePredicate(condition, childOutput, options);
+    VarkaExpressionCompiler.Explained explained = VarkaExpressionCompiler
+        .explainAndCompilePredicate(condition, childOutput, options, familiesOff);
     for (VarkaConjunctSpec spec : explained.specs()) {
       if (spec.fused()) {
         out.add(render(spec.conjunct()) + ": fused");

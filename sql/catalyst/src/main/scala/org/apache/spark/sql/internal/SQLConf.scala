@@ -46,6 +46,7 @@ import org.apache.spark.sql.catalyst.ScalaReflection
 import org.apache.spark.sql.catalyst.analysis.{HintErrorLogger, Resolver}
 import org.apache.spark.sql.catalyst.expressions.CodegenObjectFactoryMode
 import org.apache.spark.sql.catalyst.expressions.codegen.CodeGenerator
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 import org.apache.spark.sql.catalyst.plans.logical.HintErrorHandler
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
@@ -3157,6 +3158,28 @@ object SQLConf {
     .withBindingPolicy(ConfigBindingPolicy.NOT_APPLICABLE)
     .booleanConf
     .createWithDefault(true)
+
+  // The kill switch of one Varka expression family (VARKA-318), one entry per VarkaFamily: false
+  // keeps every expression the family covers on Spark's row engine while the rest of a projection
+  // or filter still fuses. The key and the coverage are the enum's, which every message about the
+  // family names, so a family added there is a setting here with no second list to keep.
+  private def varkaFamilySwitch(family: VarkaFamily): ConfigEntry[Boolean] =
+    buildConf(family.switchKey())
+      .internal()
+      .doc(s"When false, Varka's compiler declines the ${family.label()} family -" +
+        s" ${family.covers()} - naming this setting as the reason in the verbose EXPLAIN, and" +
+        " those expressions run on Spark's per-row path while the rest of the projection or" +
+        " filter still fuses. The switch for one family that answers wrongly or fails, without" +
+        " turning off Varka (spark.sql.codegen.varka.enabled).")
+      .version("5.0.0")
+      // Chooses which of two equal-answer paths computes an expression; nothing a view body
+      // resolves to.
+      .withBindingPolicy(ConfigBindingPolicy.NOT_APPLICABLE)
+      .booleanConf
+      .createWithDefault(true)
+
+  val VARKA_FAMILY_SWITCHES: Map[VarkaFamily, ConfigEntry[Boolean]] =
+    VarkaFamily.values().toSeq.map(f => f -> varkaFamilySwitch(f)).toMap
 
   val CODEGEN_FACTORY_MODE = buildConf("spark.sql.codegen.factoryMode")
     .internal()
@@ -9495,6 +9518,9 @@ class SQLConf extends Serializable with Logging with SqlApiConf {
   def varkaEmitExactRefusalStatus: Option[Boolean] = getConf(VARKA_EMIT_EXACT_REFUSAL_STATUS)
 
   def varkaWarmupEnabled: Boolean = getConf(VARKA_WARMUP_ENABLED)
+
+  /** Whether this session leaves the Varka expression family `family` on (VARKA-318). */
+  def varkaFamilyEnabled(family: VarkaFamily): Boolean = getConf(VARKA_FAMILY_SWITCHES(family))
 
   def codegenFallback: Boolean = getConf(CODEGEN_FALLBACK)
 

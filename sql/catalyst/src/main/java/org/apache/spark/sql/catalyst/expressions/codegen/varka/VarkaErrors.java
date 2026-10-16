@@ -17,6 +17,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.function.Supplier;
 
 import javax.annotation.Nullable;
@@ -177,14 +178,29 @@ public final class VarkaErrors {
    */
   public static RuntimeException planningFailure(
       RuntimeException e, Supplier<String> identity, VarkaEmitOptions options) {
+    return planningFailure(e, identity, options, null);
+  }
+
+  /**
+   * {@link #planningFailure(RuntimeException, Supplier, VarkaEmitOptions)} for a throw out of
+   * {@code family}'s lowering (VARKA-318): the record names the family and its switch, and the
+   * sentence ends with {@link VarkaFamily#retry()}, the setting that plans the query with that
+   * family on Spark's row engine, as StarRocks's "set jit_level = 0 to disable jit and retry"
+   * names its own. An exception passed through unchanged stays unchanged: a user's error is not a
+   * family's to switch off.
+   */
+  public static RuntimeException planningFailure(RuntimeException e, Supplier<String> identity,
+      VarkaEmitOptions options, @Nullable VarkaFamily family) {
     if (e instanceof VarkaEmitDeclined || (e instanceof SparkThrowable && siteText(e) == null)) {
       return e;
     }
     var ctx = new VarkaErrorContext(VarkaErrorContext.PLANNING,
         VarkaErrorContext.safely(identity), null,
-        VarkaErrorContext.safely(() -> VarkaErrorContext.renderOptions(options)), null, e);
+        VarkaErrorContext.safely(() -> VarkaErrorContext.renderOptions(options)),
+        family == null ? List.of() : List.of(family), null, e);
     // The original's message is the record's cause line; the sentence does not repeat it.
-    String what = "Varka's compiler failed while planning.";
+    String what = "Varka's compiler failed while planning."
+        + (family == null ? "" : " " + family.retry());
     return e instanceof IllegalArgumentException
         ? illegalArgument(what, ctx)
         : illegalState(what, ctx);
