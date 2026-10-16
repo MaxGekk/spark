@@ -20,11 +20,11 @@ package org.apache.spark.sql.execution
 import scala.collection.mutable.ArrayBuffer
 import scala.jdk.CollectionConverters._
 import scala.jdk.OptionConverters._
-import scala.util.{Failure, Success, Try}
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import org.scalatest.exceptions.TestFailedException
 
-import org.apache.spark.SparkThrowable
+import org.apache.spark.SparkArithmeticException
 import org.apache.spark.sql.{QueryTest, Row, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.NamedExpression
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, VarkaExpressionCompiler}
@@ -33,6 +33,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaGuardSpec.Ve
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType
 import org.apache.spark.sql.catalyst.optimizer.{BooleanSimplification, InferFiltersFromConstraints, NullDownPropagation}
 import org.apache.spark.sql.catalyst.plans.logical.Project
+import org.apache.spark.sql.execution.VarkaMaybeThrows.{difference => outcomeDifference, Answered, Raised}
 import org.apache.spark.sql.execution.columnar.InMemoryTableScanExec
 import org.apache.spark.sql.execution.varka.{VarkaFallbackAccounting, VarkaKernelRunner}
 import org.apache.spark.sql.internal.SQLConf
@@ -66,8 +67,10 @@ import org.apache.spark.sql.types.{DataType, DateType, DayTimeIntervalType, Inte
  *  - **The ANSI form.** A fourth fixture holds the types' extremes, and each row is run where
  *    Spark evaluates it and where Spark skips it (an untaken CASE arm, a later COALESCE
  *    argument, the right side of a false AND, of a true OR). Both engines must raise the same
- *    error - condition, SQLSTATE and message parameters, what `checkError` compares - or both
- *    answer the same rows: Varka must neither raise where Spark skips nor miss Spark's raise.
+ *    error - condition, SQLSTATE and message parameters, what `checkError` compares, and the
+ *    message and exception class - or both answer the same rows: Varka must neither raise where
+ *    Spark skips nor miss Spark's raise. The comparison is [[VarkaMaybeThrows]]'s (VARKA-317),
+ *    and a kernel planted to wrap an overflowing row instead of declining fails it.
  *  - **The domains** (VARKA-279). A row whose kernel can decline a batch names in the table the
  *    predicate inside which it answers. Each such row runs over a fixture that straddles every
  *    guard's bound, cut as TLP cuts a table - the rows inside the domain, outside it and where
@@ -76,7 +79,7 @@ import org.apache.spark.sql.types.{DataType, DateType, DayTimeIntervalType, Inte
  *    declines with exactly the status `VarkaGuardSpec`'s verdict calls for, read off the JFR
  *    fallback event, and the answer is Spark's, rows or the same error.
  */
-class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
+class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
   with VarkaTestWatchdog {
 
   /**
@@ -456,52 +459,6 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
   // The ANSI form (VARKA-138)
   // ---------------------------------------------------------------------------------------------
 
-  /** What a query did: the rows it answered, or the error it raised as `checkError` sees one. */
-  private sealed trait Outcome
-
-  private case class Answered(rows: Seq[Row]) extends Outcome
-
-  private case class Raised(condition: String, sqlState: String, parameters: Map[String, String])
-    extends Outcome
-
-  /**
-   * The outcome of `query` on `session`, and the plan it ran with unless it raised before
-   * running. Analysis, planning and execution are all inside, so an error raised at any stage
-   * is an outcome on either engine. An error is the first `SparkThrowable` with a condition on
-   * its cause chain: a task's error reaches the driver wrapped in the job's failure. An error
-   * with no condition anywhere is kept by its root cause's class and message, not the job
-   * failure's, whose text names stage and task numbers that differ between any two runs.
-   */
-  private def run(session: SparkSession, query: String): (Outcome, Option[SparkPlan]) = {
-    var plan: Option[SparkPlan] = None
-    val result = Try {
-      val df = session.sql(query)
-      plan = Some(df.queryExecution.executedPlan)
-      df.collect().toSeq
-    }
-    val out = result match {
-      case Success(rows) => Answered(rows)
-      case Failure(e) =>
-        val chain = Iterator.iterate[Throwable](e)(_.getCause).takeWhile(_ != null).toSeq
-        chain.collectFirst { case t: SparkThrowable if t.getCondition != null =>
-          Raised(t.getCondition, t.getSqlState, t.getMessageParameters.asScala.toMap)
-        }.getOrElse(Raised(chain.last.getClass.getName, null,
-          Map("message" -> String.valueOf(chain.last.getMessage))))
-    }
-    (out, plan)
-  }
-
-  private def outcome(session: SparkSession, query: String): Outcome = run(session, query)._1
-
-  /** How Varka's outcome differs from Spark's, or nothing. */
-  private def outcomeDifference(onSpark: Outcome, onVarka: Outcome): Option[String] =
-    (onSpark, onVarka) match {
-      case (Answered(s), Answered(v)) => QueryTest.sameRows(s, v).map(d => s"rows differ:\n$d")
-      case (s: Raised, v: Raised) => Option.when(s != v)(s"errors differ: Spark $s, Varka $v")
-      case (s: Raised, v: Answered) => Some(s"only Spark raises: Spark $s, Varka $v")
-      case (s: Answered, v: Raised) => Some(s"only Varka raises: Spark $s, Varka $v")
-    }
-
   private val extremesTable = extremes._1
 
   /** The positions of the ANSI form; every one but the first is one Spark skips on both rows. */
@@ -637,7 +594,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
             s"$position: no column of the expression's type, and not on the declined list")
           (finding.toSeq, None, None)
         case Some(q) =>
-          val (varka, plan) = run(varkaSpark, q)
+          val (varka, plan) = runOutcome(varkaSpark, q)
           val served = varka.isInstanceOf[Answered] && plan.exists(kernelServed)
           val difference = outcomeDifference(outcome(spark, q), varka)
           val reach = if (position == Alone || !strict) None
@@ -707,9 +664,58 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
         assert(outcomeDifference(skipped, skipped).isEmpty)
         assert(outcomeDifference(skipped, alone).exists(_.startsWith("only Varka raises")))
         assert(outcomeDifference(alone, skipped).exists(_.startsWith("only Spark raises")))
-        // The same condition with other parameters is a different error.
-        val moved = raised.copy(parameters = raised.parameters + ("planted" -> "1"))
-        assert(outcomeDifference(alone, moved).exists(_.startsWith("errors differ")))
+        // The same condition with other parameters, another message or another exception class
+        // is a different error.
+        for (moved <- Seq(raised.copy(parameters = raised.parameters + ("planted" -> "1")),
+            raised.copy(message = raised.message + " (planted)"),
+            raised.copy(exceptionClass = classOf[ArithmeticException].getName))) {
+          assert(outcomeDifference(alone, moved).exists(_.startsWith("errors differ")), moved)
+        }
+        // Another condition, from a real query: `make_date(2021, i, 1)` leaves the month range
+        // on the same row (VARKA-317).
+        val otherCondition =
+          outcome(spark, s"SELECT make_date(2021, i, 1) AS v FROM $extremesTable")
+        otherCondition match {
+          case r: Raised => assert(r.condition.startsWith("DATETIME_FIELD_OUT_OF_BOUNDS"), r)
+          case other => fail(s"expected make_date to raise on the extremes row, got $other")
+        }
+        assert(outcomeDifference(alone, otherCondition).exists(_.startsWith("errors differ")))
+      }
+    }
+  }
+
+  test("the ANSI form fails a kernel planted to answer an overflowing row") {
+    // The fault the form exists for, planted in a kernel rather than in the outcomes (VARKA-317):
+    // with `checkIntOverflow` off, a checked int add emits as LEGACY and wraps, so the kernel
+    // answers the extremes row's `Int.MaxValue + 1` where Spark raises ARITHMETIC_OVERFLOW. The
+    // options are laid over the current base, which the option matrix sets, and they are part of
+    // the kernel cache's key, so the checked kernel compiled by the row's own test is not reused.
+    val q = s"SELECT i + 1 AS v FROM $extremesTable"
+    withAnsi(enabled = true) {
+      withBothConf(SQLConf.IN_MEMORY_PARTITION_PRUNING.key, "false") {
+        val previous = VarkaColumnarToRowExec.currentEmitOptions
+        if (previous.checkIntOverflow()) {
+          // The shipped kernel declines the batch and the row engine raises: one error.
+          assert(checkSparkRaisesTheSame[SparkArithmeticException](q).condition ===
+            "ARITHMETIC_OVERFLOW")
+        }
+        VarkaColumnarToRowExec.setEmitOptionsForTesting(previous.withCheckIntOverflow(false))
+        try {
+          // The plant took: a kernel served the whole query and answered the wrapped value. An
+          // inert plant - a reused checked kernel, a declined batch - fails here, not as a catch.
+          val (planted, plan) = runOutcome(varkaSpark, q)
+          assert(plan.exists(kernelServed), plan.map(_.treeString).getOrElse("(no plan)"))
+          planted match {
+            case Answered(rows) => assert(rows.exists(r => !r.isNullAt(0) &&
+              r.getInt(0) == Int.MinValue), s"expected the wrapped Int.MinValue in $rows")
+            case other => fail(s"expected the planted kernel to answer, got $other")
+          }
+          val e = intercept[TestFailedException](checkSparkAnswerMaybeThrows(q))
+          assert(e.getMessage.contains("only Spark raises"), e.getMessage)
+          assert(e.getMessage.contains("ARITHMETIC_OVERFLOW"), e.getMessage)
+        } finally {
+          VarkaColumnarToRowExec.setEmitOptionsForTesting(previous)
+        }
       }
     }
   }
@@ -961,7 +967,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
       val where = s"$partition the domain, in $form"
       val expected = outcome(spark, q)
       val ((actual, plan), events) =
-        VarkaJfrTestSupport.withJfrRecording(classOf[VarkaFallbackEvent])(run(varkaSpark, q))
+        VarkaJfrTestSupport.withJfrRecording(classOf[VarkaFallbackEvent])(runOutcome(varkaSpark, q))
       val fallbacks = events.filter(VarkaJfrTestSupport.isEvent(_, classOf[VarkaFallbackEvent]))
       val statuses = fallbacks.filter(_.getString("cause") == VarkaFallbackEvent.RANGE_DECLINED)
         .map(_.getInt("status"))
@@ -1056,7 +1062,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaSharedSessions
     val q = s"SELECT rid, date_add(d, i) AS v FROM ${edges._1}"
     val ((actual, plan), events) =
       withBothConf(SQLConf.IN_MEMORY_PARTITION_PRUNING.key, "false") {
-        VarkaJfrTestSupport.withJfrRecording(classOf[VarkaFallbackEvent])(run(varkaSpark, q))
+        VarkaJfrTestSupport.withJfrRecording(classOf[VarkaFallbackEvent])(runOutcome(varkaSpark, q))
       }
     assert(outcomeDifference(outcome(spark, q), actual).isEmpty)
     assert(!events.exists(VarkaJfrTestSupport.isEvent(_, classOf[VarkaFallbackEvent])))

@@ -43,7 +43,7 @@ import org.apache.spark.sql.types.{DayTimeIntervalType, LongType, StructField, S
  * return a time where Spark returns an error, and that is exactly the difference the guard
  * exists to remove.
  */
-class VarkaTimeArithmeticSuite extends QueryTest with VarkaSharedSessions with VarkaTestWatchdog {
+class VarkaTimeArithmeticSuite extends QueryTest with VarkaMaybeThrows with VarkaTestWatchdog {
 
   private val secondsPerDay = 86400
   private val day = "varka_time_day"
@@ -189,11 +189,8 @@ class VarkaTimeArithmeticSuite extends QueryTest with VarkaSharedSessions with V
     // Fused first, so the error below is one the kernel's decline handed to the row engine and
     // not one a query that never reached the kernel would have raised anyway.
     assertFused(varkaSpark.sql(query).queryExecution.executedPlan)
-    val expected = intercept[SparkArithmeticException](spark.sql(query).collect())
-    val actual = intercept[SparkArithmeticException](varkaSpark.sql(query).collect())
-    assert(expected.getCondition === "DATETIME_OVERFLOW")
-    assert(actual.getCondition === expected.getCondition)
-    assert(actual.getMessage === expected.getMessage)
+    val raised = checkSparkRaisesTheSame[SparkArithmeticException](query)
+    assert(raised.condition === "DATETIME_OVERFLOW")
   }
 
   test("t + the interval of Long.MinValue microseconds raises Spark's error, not t unchanged") {
@@ -202,10 +199,7 @@ class VarkaTimeArithmeticSuite extends QueryTest with VarkaSharedSessions with V
     // answered every time unchanged, where Spark's multiplyExact throws on every row (VARKA-293).
     val query = s"SELECT t + INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND AS v " +
       s"FROM $crossing"
-    val expected = intercept[SparkArithmeticException](spark.sql(query).collect())
-    val actual = intercept[SparkArithmeticException](varkaSpark.sql(query).collect())
-    assert(actual.getCondition === expected.getCondition)
-    assert(actual.getMessage === expected.getMessage)
+    checkSparkRaisesTheSame[SparkArithmeticException](query)
   }
 
   test("a guard under a CASE arm fires only for the lanes the arm is taken for") {
@@ -305,9 +299,6 @@ class VarkaTimeArithmeticSuite extends QueryTest with VarkaSharedSessions with V
     assertFused(varkaSpark.sql(query).queryExecution.executedPlan)
     // A SparkDateTimeException, not the arithmetic one `t + dt` raises: the conversion's range
     // check is its own error, and the kernel's decline has to hand the row engine that one.
-    val expected = intercept[SparkDateTimeException](spark.sql(query).collect())
-    val actual = intercept[SparkDateTimeException](varkaSpark.sql(query).collect())
-    assert(actual.getCondition === expected.getCondition)
-    assert(actual.getMessage === expected.getMessage)
+    checkSparkRaisesTheSame[SparkDateTimeException](query)
   }
 }
