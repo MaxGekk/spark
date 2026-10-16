@@ -93,7 +93,7 @@ case class VarkaProjectExec(
   // (task-21 review: the node used to re-run the same pure compile per consumer).
   @transient private lazy val classification =
     VarkaExpressionCompiler.compilePartial(projectList, child.output,
-      VarkaColumnarToRowExec.emitOptions(sessionEmit))
+      VarkaColumnarToRowExec.emitOptions(sessionEmit), sessionEmit.familiesOff)
 
   // verbose EXPLAIN answers "why didn't my projection fuse?" - every entry's
   // classification, and for a residual entry the reason the compiler declined it.
