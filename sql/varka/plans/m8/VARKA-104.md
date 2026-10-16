@@ -215,7 +215,7 @@ rather than on the bound.
 
 ## 4. Files
 
-*Superseded on 16 October 2026 by the second table, below the first: the Java compiler, the
+*Superseded on 16 October 2026 by the list below the first table: the Java compiler, the
 emitter split, and the interval arms that share `arithOver`.*
 
 | file | what |

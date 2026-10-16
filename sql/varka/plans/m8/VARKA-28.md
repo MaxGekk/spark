@@ -254,7 +254,7 @@ kernel doing the same work. 6.1 states it.
 
 ## 4. Files
 
-*Superseded on 16 October 2026 by the second table, below the first: the emitter split, the Java
+*Superseded on 16 October 2026 by the list below the first table: the emitter split, the Java
 compiler and the done first-commit items.*
 
 | file | what |

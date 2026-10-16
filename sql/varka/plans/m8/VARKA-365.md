@@ -39,12 +39,13 @@ What reading settled, at `8a50f61a368`:
    column path keeps it whole. Precision above 18 takes the slow path (149 to 160).
 3. **Which path a cached batch takes depends on the table's other columns.**
    `ArrowCachedBatchSerializer.convertCachedBatchToInternalRow` (181 to 255) uses the row reader
-   only when no column needs its fallback; a table with an array, struct, map, interval, variant,
-   UDT, geospatial or nanosecond-timestamp column goes through `convertCachedBatchToColumnarBatch`
-   and an `UnsafeProjection` (205 to 239), that is through `ArrowColumnVector`. So with Varka off,
-   the same decimal column answers by the exact rule in one cached table and by the double rule in
-   another that adds, say, an interval column. The columnar path, which Varka and its fallback
-   read, always goes through `ArrowColumnVector`
+   only when no column needs its fallback; a table with an array, struct, map, calendar-interval,
+   variant, null-typed, UDT, geospatial or nanosecond-timestamp column (`needsFallback`, 205 to
+   218; the ANSI interval types are not among them) goes through
+   `convertCachedBatchToColumnarBatch` and an `UnsafeProjection` (220 to 239), that is through
+   `ArrowColumnVector`. So with Varka off, the same decimal column answers by the exact rule in one
+   cached table and by the double rule in another that adds, say, an array column. The columnar
+   path, which Varka and its fallback read, always goes through `ArrowColumnVector`
    (`ArrowCachedBatchToColumnarBatchIterator.scala` 134 and 137).
 4. **The two rules.** `Decimal.roundToNumeric` (`sql/api/.../types/Decimal.scala` 294 to 320),
    behind `roundToByte`, `roundToShort` and `roundToInt`: a long-backed value truncates and checks
@@ -75,7 +76,7 @@ not observed. One sql/core test, run on cores 3 to 5, observes it on all three p
 
 over a table of `DECIMAL(18, 18)` holding `0.999999999999999999` and `DECIMAL(18, 8)` holding
 `2147483647.99999999`, cached under `ArrowCachedBatchSerializer`, read three ways: the row path
-(decimal columns only), the row path's columnar fallback (the same table plus an interval column),
+(decimal columns only), the row path's columnar fallback (the same table plus an array column),
 and the columnar path with Varka on and every batch on the fallback. Each read runs
 `CAST(x AS INT)` under ANSI and under `try_cast`. **The row is admitted if** the row path answers
 0 and 2147483647 and the other two answer 1 and raise `CAST_OVERFLOW` (null under TRY): the
