@@ -100,6 +100,8 @@ varka_docs_regexes = (
     r"dev/varka_quote_check\.py$",
     r"dev/varka_quote_allowlist\.txt$",
     r"dev/varka_toc\.py$",
+    # The CI tools whose self-tests the docs job runs (VARKA-255.md 5).
+    r"dev/varka_ci_[a-z_]+\.py$",
 )
 
 

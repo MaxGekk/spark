@@ -143,6 +143,7 @@ final class VarkaVectorWalk {
       Analysis analysis, Slots s, Set<VarkaVectorIR> computed) {
     Integer shared = s.sharedSlot.get(node);
     if (shared != null && computed.contains(node)) {
+      analysis.reach(VarkaEmitMechanism.SHARED_LOCAL);
       cb.aload(shared);
       return;
     }
@@ -681,6 +682,18 @@ final class VarkaVectorWalk {
     cb.aload(acc);
     cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
     cb.astore(acc);
+    // What this guard reached (VARKA-280): its reason, the arms that qualify it, and the masks of
+    // their own the reasons of an exact status fold into.
+    Analysis.Refusal reason = analysis.refusals.get(node);
+    if (reason != null) {
+      analysis.reach(VarkaEmitMechanism.guard(reason));
+    }
+    if (!analysis.armChainOf(node).isEmpty()) {
+      analysis.reach(VarkaEmitMechanism.GUARD_UNDER_ARM);
+    }
+    if (s.guardAccByReason != null) {
+      analysis.reach(VarkaEmitMechanism.GUARD_EXACT_STATUS);
+    }
   }
 
   /**

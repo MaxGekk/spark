@@ -1,0 +1,92 @@
+# Probe370: standalone probe (VARKA-370 9.1), java --add-modules jdk.incubator.vector -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xbootclasspath/a:wb.jar -cp probe.jar Probe370 probe.jar <mode>, taskset -c 0-2
+# Runs in order: redefine, clear, none, redefine, clear (the WhiteBox registration warnings and the agent warning filtered out).
+mode redefine; agent load: return code: 0 inst=true
+kernel bytes/call, fresh: A=0 B=0
+cycle 1 polluted: IntVector.add traps=8 decompiles=1; all vector methods traps=28 class_check=14 bimorphic=10 decompiles=5 methodsWithTraps=4
+kernel bytes/call, polluted: A=0 B=12384
+redefine took 90 ms
+cycle 1 after redefine: IntVector.add traps=0 decompiles=0; all vector methods traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+kernel bytes/call, after redefine: A=0 B=12384
+cycle 2 polluted: IntVector.add traps=0 decompiles=0; all vector methods traps=20 class_check=12 bimorphic=8 decompiles=4 methodsWithTraps=3
+kernel bytes/call, polluted: A=0 B=12384
+redefine took 71 ms
+cycle 2 after redefine: IntVector.add traps=0 decompiles=0; all vector methods traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+kernel bytes/call, after redefine: A=0 B=0
+cycle 3 polluted: IntVector.add traps=5 decompiles=0; all vector methods traps=19 class_check=15 bimorphic=4 decompiles=3 methodsWithTraps=4
+kernel bytes/call, polluted: A=0 B=12384
+redefine took 71 ms
+cycle 3 after redefine: IntVector.add traps=0 decompiles=0; all vector methods traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+kernel bytes/call, after redefine: A=0 B=0
+sink 0
+mode clear; agent load: return code: 0 inst=true
+kernel bytes/call, fresh: A=0 B=0
+cycle 1 polluted: IntVector.add traps=8 decompiles=1; all vector methods traps=23 class_check=15 bimorphic=4 decompiles=4 methodsWithTraps=4
+kernel bytes/call, polluted: A=0 B=12384
+clear took 2 ms
+cycle 1 after clear: IntVector.add traps=0 decompiles=0; all vector methods traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+kernel bytes/call, after clear: A=0 B=12384
+cycle 2 polluted: IntVector.add traps=0 decompiles=0; all vector methods traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+kernel bytes/call, polluted: A=0 B=12384
+clear took 4 ms
+cycle 2 after clear: IntVector.add traps=0 decompiles=0; all vector methods traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+kernel bytes/call, after clear: A=0 B=12384
+cycle 3 polluted: IntVector.add traps=0 decompiles=0; all vector methods traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+kernel bytes/call, polluted: A=0 B=12384
+clear took 3 ms
+cycle 3 after clear: IntVector.add traps=0 decompiles=0; all vector methods traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+kernel bytes/call, after clear: A=0 B=12384
+sink 0
+mode none; agent load: return code: 0 inst=true
+kernel bytes/call, fresh: A=0 B=0
+cycle 1 polluted: IntVector.add traps=8 decompiles=1; all vector methods traps=26 class_check=14 bimorphic=4 decompiles=5 methodsWithTraps=3
+kernel bytes/call, polluted: A=0 B=12384
+none took 0 ms
+cycle 1 after none: IntVector.add traps=8 decompiles=1; all vector methods traps=26 class_check=14 bimorphic=4 decompiles=5 methodsWithTraps=3
+kernel bytes/call, after none: A=0 B=12384
+cycle 2 polluted: IntVector.add traps=8 decompiles=1; all vector methods traps=26 class_check=14 bimorphic=4 decompiles=5 methodsWithTraps=3
+kernel bytes/call, polluted: A=0 B=12384
+none took 0 ms
+cycle 2 after none: IntVector.add traps=8 decompiles=1; all vector methods traps=26 class_check=14 bimorphic=4 decompiles=5 methodsWithTraps=3
+kernel bytes/call, after none: A=0 B=12384
+cycle 3 polluted: IntVector.add traps=8 decompiles=1; all vector methods traps=27 class_check=15 bimorphic=4 decompiles=6 methodsWithTraps=3
+kernel bytes/call, polluted: A=0 B=12384
+none took 0 ms
+cycle 3 after none: IntVector.add traps=8 decompiles=1; all vector methods traps=27 class_check=15 bimorphic=4 decompiles=6 methodsWithTraps=3
+kernel bytes/call, after none: A=0 B=12384
+sink 0
+mode redefine; agent load: return code: 0 inst=true
+kernel bytes/call, fresh: A=0 B=0
+cycle 1 polluted: IntVector.add traps=8 decompiles=1; all vector methods traps=22 class_check=14 bimorphic=4 decompiles=3 methodsWithTraps=4
+kernel bytes/call, polluted: A=0 B=12384
+redefine took 70 ms
+cycle 1 after redefine: IntVector.add traps=0 decompiles=0; all vector methods traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+kernel bytes/call, after redefine: A=0 B=0
+cycle 2 polluted: IntVector.add traps=6 decompiles=1; all vector methods traps=16 class_check=10 bimorphic=4 decompiles=1 methodsWithTraps=4
+kernel bytes/call, polluted: A=0 B=11360
+redefine took 74 ms
+cycle 2 after redefine: IntVector.add traps=0 decompiles=0; all vector methods traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+kernel bytes/call, after redefine: A=0 B=0
+cycle 3 polluted: IntVector.add traps=5 decompiles=0; all vector methods traps=19 class_check=15 bimorphic=0 decompiles=3 methodsWithTraps=3
+kernel bytes/call, polluted: A=0 B=12384
+redefine took 71 ms
+cycle 3 after redefine: IntVector.add traps=0 decompiles=0; all vector methods traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+kernel bytes/call, after redefine: A=0 B=12384
+sink 0
+mode clear; agent load: return code: 0 inst=true
+kernel bytes/call, fresh: A=0 B=0
+cycle 1 polluted: IntVector.add traps=8 decompiles=1; all vector methods traps=29 class_check=15 bimorphic=10 decompiles=6 methodsWithTraps=4
+kernel bytes/call, polluted: A=0 B=11360
+clear took 2 ms
+cycle 1 after clear: IntVector.add traps=0 decompiles=0; all vector methods traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+kernel bytes/call, after clear: A=0 B=12384
+cycle 2 polluted: IntVector.add traps=0 decompiles=0; all vector methods traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+kernel bytes/call, polluted: A=0 B=12384
+clear took 3 ms
+cycle 2 after clear: IntVector.add traps=0 decompiles=0; all vector methods traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+kernel bytes/call, after clear: A=0 B=12384
+cycle 3 polluted: IntVector.add traps=0 decompiles=0; all vector methods traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+kernel bytes/call, polluted: A=0 B=12384
+clear took 4 ms
+cycle 3 after clear: IntVector.add traps=0 decompiles=0; all vector methods traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+kernel bytes/call, after clear: A=0 B=12384
+sink 0

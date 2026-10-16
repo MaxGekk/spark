@@ -231,10 +231,11 @@ class VarkaErrorContextSuite extends QueryTest with VarkaSharedSessions with Var
     val previous = VarkaColumnarToRowExec.currentEmitOptions
     // Validity words exist only with validityByBitmap, so the option matrix's arm that turns it
     // off has no liveness to misdescribe; it is turned back on here, under every other arm.
-    def flag(name: String, options: VarkaEmitOptions) = VarkaEmitOption.named(name) match {
-      case f: VarkaEmitOption.Flag => f.`with`(options, true)
-      case other => fail(s"$name is not a flag: $other")
-    }
+    def flag(name: String, options: VarkaEmitOptions): VarkaEmitOptions =
+      VarkaEmitOption.named(name) match {
+        case f: VarkaEmitOption.Flag => f.`with`(options, true)
+        case other => fail(s"$name is not a flag: $other")
+      }
     val planted = flag("misdescribeWordLiveness", flag("validityByBitmap", previous))
     VarkaShapeCache.invalidateAll()
     VarkaColumnarToRowExec.setEmitOptionsForTesting(planted)

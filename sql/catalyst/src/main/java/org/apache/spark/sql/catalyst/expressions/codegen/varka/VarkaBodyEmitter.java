@@ -74,6 +74,30 @@ final class VarkaBodyEmitter {
     } else {
       emitUnrolledDriver(cb, dense, classDesc, outputs, all, analysis, numLiterals, groups, s);
     }
+    noteDriverReached(dense, outputs, analysis);
+  }
+
+  /**
+   * The mechanisms a driver just emitted reached (VARKA-280), read from the predicates both
+   * driver forms emit by: the bitmap pass and its declines, the all-null shortcut, and a kernel
+   * with no dense body. The stages are noted where their calls are emitted.
+   */
+  private static void noteDriverReached(boolean dense, List<VarkaVectorIR> outputs,
+      Analysis analysis) {
+    for (int o = 0; o < outputs.size(); o++) {
+      if (servedByPass(analysis, dense, o)) {
+        analysis.reach(VarkaEmitMechanism.BITMAP_PASS);
+      }
+    }
+    if (!dense && analysis.declinedBitmapRoots > 0) {
+      analysis.reach(VarkaEmitMechanism.BITMAP_PASS_DECLINED);
+    }
+    if (shortcutApplies(dense, outputs, analysis)) {
+      analysis.reach(VarkaEmitMechanism.ALL_NULL_SHORTCUT);
+    }
+    if (analysis.nullsFromValidInputs) {
+      analysis.reach(VarkaEmitMechanism.MASKED_ONLY);
+    }
   }
 
   /**
@@ -203,6 +227,10 @@ final class VarkaBodyEmitter {
     }
     assertWordsLive(s, mode);
     emitStatusReturn(cb, s);
+    if (!s.deadRefs.isEmpty()) {
+      // The input words this masked body allocated and, by the liveness pass, never read.
+      analysis.reach(VarkaEmitMechanism.DEAD_INPUT_WORD);
+    }
   }
 
   private static List<Integer> allOutputs(List<VarkaVectorIR> outputs) {
@@ -474,6 +502,7 @@ final class VarkaBodyEmitter {
   private static void emitGroupCalls(CodeBuilder cb, boolean dense, ClassDesc classDesc,
       Analysis analysis, List<List<Integer>> groups, Slots s) {
     if (analysis.stageGroups > 0) {
+      analysis.reach(VarkaEmitMechanism.STAGED_DRIVER);
       cb.loadConstant(0);
       for (int k = 0; k * analysis.stageGroups < groups.size(); k++) {
         invokeCall(cb, classDesc, VarkaMethodNames.stage(dense, k), analysis);
