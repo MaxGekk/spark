@@ -1,0 +1,11 @@
+VARKA-313: exact refusal status, a mask per reason against one folded mask
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4.1+1-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+year(date_add(d, i + i)) under ANSI over 1000000 rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------
+one folded mask (the default), null-free                           1              1           0       1039.0           1.0       1.0X
+a mask per reason (exactRefusalStatus), null-free                  1              1           0       1003.8           1.0       1.0X
+one folded mask (the default), mixed nulls                         1              1           0        849.2           1.2       0.8X
+a mask per reason (exactRefusalStatus), mixed nulls                1              1           0        859.9           1.2       0.8X

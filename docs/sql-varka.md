@@ -917,7 +917,9 @@ VARKA-22 extends the account to the SQL UI and to JDK Flight Recorder:
   option `exactRefusalStatus` gives each reason its own mask, for exact
   attribution when diagnosing; a session sets it with
   `spark.sql.codegen.varka.emit.exactRefusalStatus=true` (internal, off by
-  default), and the kernels it emits are cached apart from the default ones.
+  default), and the kernels it emits are cached apart from the default ones. It is off by
+  default because it costs a guarded kernel 2.5 to 3.9 percent of its rate on the measured case
+  (VARKA-313); set it for the session that diagnoses and pay for the exact reasons there.
 
 VARKA-315 leaves a reproduction file behind a kernel failure, as the JVM leaves
 an `hs_err` file behind a crash:
