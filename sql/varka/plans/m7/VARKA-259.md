@@ -231,3 +231,46 @@ timing is read from it):
   that first time, so in the timed rows the admission is a lookup and the private cache's
   emission is the one build. That matches a cold production query, which builds once at the
   admission and defines at the lookup.
+
+**The runner's numbers, 16 October 2026.** Run 38890693365 on `MaxGekk/spark` at `47998915f11`, an
+AMD EPYC 7763 with Zulu JDK 25.0.4.1; `VarkaCodegenBenchmark-jdk25-results.txt` holds this section
+from the run and the first section as committed (byte-identical, checked before the commit), and
+the provenance sidecar's `cpu:` line says which is which. Per class, best of the run:
+
+| List | Janino cold (ns) | Varka cold (ns) | Ratio | Spark hit (ns) | Varka hit (ns) | Varka hit against Janino cold |
+|---|---|---|---|---|---|---|
+| 1 date | 1471760.0 | 292781.0 | 5.0X | 60854.0 | 5240.0 | 280.9X |
+| 4 date | 2602249.0 | 445489.0 | 5.8X | 267654.0 | 9017.0 | 288.6X |
+| 16 date | 4190322.0 | 1198206.0 | 3.5X | 1025361.0 | 35717.0 | 117.3X |
+| 64 date | 10665113.0 | 4275725.0 | 2.5X | 4056213.0 | 331014.0 | 32.2X |
+| 16 int | 4517241.0 | 1153733.0 | 3.9X | 1023839.0 | 41198.0 | 109.6X |
+
+What it says. Over the same expressions, a cold Varka class costs 2.5X to 5.8X less than a cold
+Janino class, not the first section's 65.6X: that row timed the emitter alone on a different
+kernel, while the matched row also runs the compiler, hashes the shape and goes through the cache.
+The gap narrows with width, because Varka's cost grows with the entries about as fast as
+Janino's does past four. Spark's cache hit is not free: it generates the source again on every
+call, and at 16 and 64 entries that alone costs about what a cold Varka build does (1025361.0
+against 1198206.0 ns, 4056213.0 against 4275725.0). Varka's shape hit is the large difference,
+32.2X to 288.6X under Janino's cold compile, and it holds across constants, which Janino's does
+not.
+
+**The predictions, scored.**
+
+* Janino cold, 8 / 10 / 20 / 60 ms: **wrong by four to six times** (about 1.5, 2.6, 4.2 and 10.7
+  ms). The guess scaled the laptop's 6516903.0 ns row. A likely part of that gap, not measured
+  here: the first section's Janino row takes its literal from the iteration index, which is -1
+  for the whole warm-up, so its warm-up compiles once and Janino's own code reaches the five timed
+  compiles barely JIT-compiled, where the new rows warm it on hundreds of compiles. The machines
+  differ too, so the file cannot separate the two.
+* Varka cold, 0.1 / 0.2 / 0.5 / 2 ms: **low by two to three times** (about 0.29, 0.45, 1.2 and 4.3
+  ms). The guess started from the emitter-only row and left out the compiler and the cache.
+* The ratio falling from 80x to 30x: **the direction right after four entries, the size wrong
+  by an order of magnitude** (5.0X, 5.8X, 3.5X, 2.5X).
+* Spark's hit at a tenth of its cold row or more, 0.5 ms for 1 and 5 for 64: **right at 4, 16 and
+  64 entries (a tenth, a quarter, two fifths), wrong at 1** (about 4 percent, 60854.0 ns); 5 ms at
+  64 was close (4056213.0 ns), 0.5 ms at 1 was eight times high.
+* Varka's hit at a tenth of its cold row or less: **right**, from about 2 percent at 1 entry to
+  about 8 at 64.
+* Wall clock about two minutes: **not scored**; the results file does not carry it, and the job
+  log was not read.
