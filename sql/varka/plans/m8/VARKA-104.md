@@ -6,6 +6,14 @@ September: comparisons over a `bigint` column landed with VARKA-29, and this tas
 keeps every arithmetic form - `bi + 1` included - because the overflow-mode
 decision is its subject.*
 
+*Brought up to date on 16 October 2026, against `m8/PLAN.md` (row 104, wave 0, beside 28) and its
+review of the same day (section 10), at `8a50f61a368`. The September text stands; each place where
+the code or the record has moved carries a dated correction. In short: the arms and the overflow
+decision now live in Java (`VarkaNodeCompiler.java`), and `arithOver` is shared with the interval
+compiler; the lattice's long refusal is unchanged; division is no longer this task's but row 30's;
+option B's AVX2 caveat is now a source-read fact (10.1 item 4); and option C is the limb
+construction row 361 also needs.*
+
 ## 1. Where this came from, and what it owes
 
 VARKA-30 was narrowed on 4 September 2026 to the int32 forms and shipped them in
@@ -21,6 +29,11 @@ wave table lists 104 after 29, 84 and 28's cast. Of those:
   one thing it does not yet do.
 * **28** (lane-width conversion) - planned (`VARKA-28.md`), not built. It
   owns the int-to-long cast, which this task *consumes* rather than builds.
+
+*Still so on 16 October 2026*: 28 and this row are both in milestone 8's wave 0, run side by side,
+and only step 5 of section 8 waits for 28 to merge. The two share no file except
+`VarkaNodeCompiler.java`, where 28 adds the cast arms and this row the long arithmetic arms; they
+are adjacent switch arms, so whichever merges second rebases over the other.
 
 So the arithmetic that is this task's subject - checked and wrapping `+`, `-`,
 `*` and negate over `bigint` columns and literals - is single-lane work that
@@ -42,6 +55,9 @@ sign compare and the broadcast all go through `analysis.lane.lanewiseVV`,
 `IntNeg` are emittable at `LONG`, and `VarkaReferenceEvaluator.evalLong` already
 has arms for both.
 
+*Checked again, 16 October 2026:* `emitIntArith` and `emitIntNeg` are now in
+`varka/VarkaVectorWalk.java` (412 and 479), still through the lane's descriptors.
+
 **So checked add, subtract and negate at the long lane are already emitted
 correctly, and nothing in this task has to build them.** What stops `bi + 1`
 fusing is the *compiler*, which VARKA-29 deliberately narrowed to comparisons,
@@ -60,6 +76,16 @@ fusing is the *compiler*, which VARKA-29 deliberately narrowed to comparisons,
 ## 3. The design
 
 ### 3.1 The compiler arms
+
+*Correction, 16 October 2026: the compiler is Java.* The arms are in `VarkaNodeCompiler.java`:
+`Add`, `Subtract`, `Multiply` and `UnaryMinus` gated `when isInt(...)` (218 to 224), the shared
+body `intArith` (450 to 469), and the overflow decision `arithOver` (479 to 496), whose
+`cannotOverflow` and `boundedByIntMax` (424 to 441) compare a magnitude against
+`Integer.MAX_VALUE`. **`arithOver` is shared with `VarkaIntervalCompiler`** (225, 296, 301, 334,
+365: the year-month interval arms), so making the saturation rule lane-dependent touches the
+interval arms' path too; those are int-lane and must keep their bytes, which the oracle checks.
+The names below (`intOperand`, `DeclineSink.longSlot`) still exist; the long gate is
+`VarkaNodeCompiler.laneOf` (279).
 
 `intOperand` gates on `IntegerType`; the long arms need the sibling gate that
 `laneOf` already provides, and `DeclineSink.longSlot` already registers a 64-bit
@@ -135,6 +161,21 @@ the real limit is 2^63 leaves a factor of two of margin, which is enormous besid
 that error. It can therefore never admit an overflow; it can only decline a
 product that would have been fine, and declining is always safe.
 
+*Added 16 October 2026.* The review read the cause in the source (`m8/PLAN.md` 10.1 item 4):
+`x86.ad`'s `match_rule_supported_vector` refuses a vector cast from long to a floating type and
+back without AVX512DQ (lines 1757 to 1777), so on the EPYC 7763 runners, which are AVX2, option B's
+two `L2D` are not intrinsic at all, whatever the species. Row 376's census records it per host.
+Option B is therefore an AVX512DQ-only form, chosen per host statically, as row 30 chooses its
+division form; on AVX2 the choice is between A and C.
+
+Option C is the 64 by 64 to 128-bit product from 32-bit limbs that row 361 builds for decimals
+(`m8/PLAN.md` 2.8): only its high half is needed here, compared with the low half's sign. Two
+facts of that row's reading apply to C: JDK 25 emits one `vpmuludq` for a 64-bit lane multiply
+only when both inputs are visibly masked to 32 bits or shifted right by 32 or more, so a broadcast
+constant limb is written `broadcast(c).and(0xFFFFFFFF)`, checked with `dev/varka_emit.sh --asm`;
+and the carry-free limb order with the `unsignedMultiplyHigh` sign correction needs no compares.
+If C is built here first, it is built as a helper 361 reuses, not a second copy.
+
 **B has an AVX-level caveat that A and C do not.** `dev/varka_canary/L2DProbe.java`
 records that under `-XX:UseAVX=2` the long-to-double converts fail to inline and
 the loop degrades to scalar. So B is a good default at AVX-512 and possibly a bad
@@ -145,6 +186,14 @@ at both widths rather than picking once.
 3.2 is what makes it reach anything at all.
 
 ### 3.4 Division, modulo and `pmod`
+
+*Superseded, 16 October 2026.* Milestone 8 gives the integral division family to row 30: `div`, `%`
+and `pmod` over `INT` and `BIGINT`, a constant divisor by `emitConstDivide`, and a `BIGINT` column
+divisor by Monniaux and Pain's 64-bit algorithm over the whole range (`READING_M8_PAPERS.md` 1),
+so the "declined until VARKA-64" below no longer holds and VARKA-64 itself is out of milestone 8
+(`m8/PLAN.md` 8). `/` over integers arrives as a division of two casts to `DOUBLE`, which is row
+342's. This row builds no division; the census's `rows` column also names 104 on `div`, `%`,
+`mod`, `pmod` and `try_mod`, and this row's pull request corrects those lines to 30.
 
 `div`, `%` and `pmod` are divisions and take 2.19's rule - exact under a proven
 bound, declined otherwise. For a `bigint` column with no statistics that means
@@ -166,6 +215,9 @@ rather than on the bound.
 
 ## 4. Files
 
+*Superseded on 16 October 2026 by the list below the first table: the Java compiler, the
+emitter split, and the interval arms that share `arithOver`.*
+
 | file | what |
 |---|---|
 | `VarkaRangeAnalysis.java`, `VarkaValueRange.java` | the long half of the lattice, and a saturation rule that is lane-dependent rather than int32 |
@@ -174,6 +226,20 @@ rather than on the bound.
 | `VarkaReferenceEvaluator.scala` | the checked-multiply arm at `long`, which throws today |
 | `VarkaIrGrammar.scala` | long arithmetic productions for the fuzzer |
 | `VarkaCoverageSuite.scala` | the `bigint` arithmetic rows |
+
+* `.../codegen/varka/VarkaRangeAnalysis.java`, `VarkaValueRange.java`: the lattice's long half, a
+  lane-dependent saturation rule
+* `.../codegen/VarkaNodeCompiler.java`: the long arms; `arithOver`'s bound read per lane
+* `.../codegen/VarkaIntervalCompiler.java`: none expected; listed because it calls `arithOver`
+* `.../codegen/varka/VarkaVectorWalk.java`: only the multiply, and only if 3.3 picks B or C
+* test: `VarkaReference.java`: the checked multiply at `long`
+* test: `VarkaIrGrammar.java`: long arithmetic productions
+* test: `VarkaCoverageSuite.scala`; `coverage.json`, `docs/sql-varka.md`: the `bigint` rows,
+  regenerated
+* `sql/varka/proofs/` (the range-analysis files), `VarkaProofFiles`: the long half's rules proven as
+  the int half's are (VARKA-281)
+* `sql/varka/plans/m8/census_curated.txt`, `census.tsv`: `BIGINT` in `+`, `-`, `*`, `negative`,
+  `abs`, the `try_` forms; 104 off the division lines
 
 ## 5. Tests
 
@@ -188,6 +254,14 @@ rather than on the bound.
 5. **The multiply's chosen mechanism at both widths and both AVX levels** if
    3.3 picks B, because that is where its answer changes.
 
+*Added 16 October 2026.*
+
+6. **The interval arms' bytes do not move** when `arithOver`'s bound becomes lane-dependent; the
+   bytes oracle over the year-month rows holds it.
+7. **The long half's rules are proven** in the range-analysis proof files the way VARKA-281 proved
+   the int half's (a bound past `Long.MAX_VALUE` is the case that matters, risk 1), so the
+   "wrong-answer bug" of risk 1 has a proof against it, not only a test.
+
 ## 6. The measurement
 
 ### 6.1 Predictions, registered before the run
@@ -201,6 +275,11 @@ rather than on the bound.
    This is a prediction about coverage, not speed, and 5.2 is where it is read.
 3. **Option B loses to A at 128-bit** and may win at AVX-512, for the converts'
    inlining rather than for the arithmetic.
+
+*Added 16 October 2026.* Prediction 3 is now partly settled by the source: on an AVX2 host B's
+converts are not intrinsic (10.1 item 4), so B is measured only on AVX512DQ hosts and C against A
+on AVX2. The 128-bit numbers carry the release rate beside them, since `m7` row 374 closed
+without a fix (`m8/PLAN.md` 10.3 item 4).
 
 ## 7. Risks
 
