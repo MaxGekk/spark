@@ -19,15 +19,15 @@ are right, and where the checking stops.
 >    every small expression tree, nearly four million of them.
 > 4. The tests are measured too: which loops ran, which JIT compiler's code ran, and which
 >    memory a kernel touched.
-> 5. The checking stops at the bytecode's plumbing, the JVM itself, an unchecked assumption
->    about stored dates, what random tests cannot reach, and tests whose verdict depends on
->    the JIT.
+> 5. The checking stops where proofs and random tests stop. The bytecode around the
+>    arithmetic is tested but not proven, and the JVM itself is trusted.
+> 6. Random tests reach only what they draw, and some verdicts depend on what the JIT did.
 
 ## What does "right" mean?
 
-Right means what Spark says. Varka's kernels must return the rows vanilla Spark returns, with
-the same nulls. When Spark raises an error, Varka must raise the same one, compared by error
-class, SQLSTATE and message parameters, because that is what a user's error handling reads.
+Right means what Spark says. Varka's kernels must return the rows vanilla Spark returns, with the
+same nulls. When Spark raises an error, Varka must raise the same one, compared by error class,
+SQLSTATE and message parameters.
 
 When a kernel cannot promise that answer for a batch, it declines: Spark's own row engine
 computes the batch instead. A kernel that throws is caught the same way. That safety net can hide
@@ -40,8 +40,9 @@ proofs below use these definitions with Spark's departures applied.
 
 ![Who checks whom](figures/svg/fig45-who-checks-whom.svg)
 
-*Figure 1. Every check ends at Spark's answer. Kernels are compared with a separate interpreter,
-the interpreter with Spark's own, and whole queries with Spark directly.*
+*Figure 1. Every check ends at Spark's answer. Kernels are compared with the reference
+evaluator, the reference evaluator with Spark's own expression engine, and whole queries with
+Spark directly.*
 
 ## Is the arithmetic exact?
 
@@ -52,16 +53,16 @@ all of them.
 Each such rewrite has a proof file in SMT-LIB, checked by two solvers, Z3 and cvc5, which must
 agree. Java's operators are defined once, in a shared prelude, and that prelude is itself checked
 against the JVM on boundary values. The constants are rendered from the Java code, and a test
-fails when the committed file differs from what the code would write. Each file also checks
-that its proofs are not vacuous: for one, the claim with a constant changed by one must fail.
+fails when the committed file differs from what the code would write. To show a proof is not
+vacuous, each file also re-checks one claim with a constant off by one, and that check must fail.
 
 The proofs found things. The usual recipe for magic numbers, from Hacker's Delight, does not
 always meet the theorem it is justified by: for 327,741,950 of the 32-bit divisors, its shift is
 too small for Granlund and Montgomery's condition. The recipe's numbers are still exact, for a
-different reason, and no divisor Varka uses was affected. Varka now asserts the theorem
-and raises the shift where needed. The proofs also label every bound as sufficient or exact. The
-year-of-century division is used on dividends up to 36,524 and is first wrong at 44,894, and a
-test pins that input.
+different reason, and no divisor Varka uses today was affected. To guard divisors added later,
+Varka now asserts the theorem and raises the shift where it fails. The proofs also label every
+bound as sufficient or exact. The year-of-century division is used on dividends up to 36,524 and
+is first wrong at 44,894, and a test pins that input.
 
 ![What the solvers prove](figures/svg/fig46-what-the-solvers-prove.svg)
 
@@ -71,16 +72,18 @@ range analysis, which decides when a check can be skipped, is proven too.*
 ## Does the bytecode compute the expression?
 
 Varka compiles an expression into a small tree of vector operations, then writes bytecode for
-the tree. A reference evaluator, a plain Java interpreter of that tree written separately from
-the bytecode writer, says what each tree means. The question is whether the bytecode agrees.
+the tree. The reference evaluator, plain Java code that computes the same tree one value at a
+time and is written separately from the bytecode writer, says what each tree means. The question
+is whether the bytecode agrees.
 
-Random testing misses corners, so Varka also enumerates. Every well-typed tree up to five grammar
-productions, nearly four million at 32 and 64 bits, goes through the bytecode writer and is compared
-with the interpreter over data with nulls. Nothing failed. Each passing tree up to four productions
-is also rewritten in ways that must not change its answer, such as permuting its outputs or adding
-an output nobody reads, and checked again.
+Varka also enumerates: every well-typed tree of up to five nodes, for kernels over 32-bit and over
+64-bit values, nearly four million trees in all, goes through the bytecode writer and is compared
+with the reference evaluator over data with nulls. Nothing failed. Each passing tree of up to four
+nodes is also rewritten in ways that must not change its answer, such as permuting its outputs or
+adding an output nobody reads, and checked again.
 
-The opening number came from JaCoCo, which instruments a generated class like any other. Most
+The opening number came from JaCoCo, the JVM coverage tool, which instruments a generated class
+like any other. Most
 kernels were compared on one loop only, because a test usually runs a shape once, on one pattern
 of nulls. Now every compared batch also runs through the other loop, and the two must agree.
 
@@ -96,18 +99,18 @@ Today nearly nine in ten do, and most of the rest have only one loop by design.*
 
 ## Does a query return Spark's rows?
 
-The interpreter is Varka's own, so it is held to Spark's: for every expression Varka compiles,
-the interpreter must agree with Catalyst's own `eval` of the same expression. Then whole queries
-are compared with Spark. A fuzzer, a test that generates random expressions and data, builds
-projections and filters over data with nulls. It runs each through Spark with Varka on and off,
-in both ANSI modes, and compares the rows.
-A failure is shrunk to its smallest failing expression and saved, and saved failures replay on
-every pull request. In a census of 35,000 random queries, none disagreed.
+The reference evaluator is Varka's own, so it is held to Spark's. For every expression Varka
+compiles, it must agree with Catalyst, Spark's own expression engine, evaluating the same
+expression. Then whole queries are compared with Spark. A fuzzer, a test that generates random
+expressions and data, builds projections and filters over data with nulls. It runs each through
+Spark with Varka on and off, with Spark's ANSI mode on and off, and compares the rows. A failure
+is shrunk to its smallest failing expression and saved, and saved failures replay on every pull
+request. In a census of 35,000 random queries, none disagreed.
 
-Two other checks borrow Spark's own tests. Spark's golden SQL files run with Varka on and give
-the same results as with it off. A harvest of Spark's date tests runs each of 731 statements as a
-projection and as a filter on both engines. None disagrees, and the 122 that raise an error raise
-the same one.
+Two other checks borrow Spark's own tests. Spark's golden SQL files, its SQL test files with
+recorded expected output, run with Varka on and give the same results as with it off. A harvest of
+Spark's date tests runs each of 731 statements as a projection and as a filter on both engines. None
+disagrees, and the 122 that raise an error raise the same one.
 
 The fuzzers have found real bugs. One was a filter fallback that failed on a column of
 `NULL` type where Spark answered. Not every bug came from a test: a filter that raised an error on
@@ -129,11 +132,11 @@ Two checks close that gap. The first runs the fuzzers' kernels in the seven JVM 
 of Figure 5, each proving from the JVM's own events which compiler's code served the compared
 calls.
 
-The second warms each kernel to C2 before comparing it, over eight histories such as a trap
-after a warm-up that never saw nulls, or a compile in the middle of a batch. A tier witness reads
-JFR's compilation events and the code cache's method list during the test, so each compared call
-is known to have run C2's code. In the first run 85% of warm-ups reached C2 within their
-deadline, and no history found a wrong answer.
+The second warms each kernel to C2 before comparing it, over eight histories such as a trap after a
+warm-up that never saw nulls, or a compile in the middle of a batch. A tier witness reads the
+compilation events of JFR (Java Flight Recorder) and the code cache's method list during the test,
+so each compared call is known to have run C2's code. In the first run 85% of warm-ups reached C2
+within their deadline, and no history found a wrong answer.
 
 [PENDING #870: the same warmed histories on the expressions Varka compiles, and the nightly run
 over many random kernels; what they found.]
@@ -150,10 +153,10 @@ not proven: null masks, validity bits, how outputs are split into methods, the t
 That is where Varka's real bugs have been, and a proof there would rest on a model of the Vector
 API and of memory, which is where the risk lives. Enumeration and the fuzzers are the method.
 
-**The JVM is trusted.** No proof reaches HotSpot. JDK 25 has a known C2 bug that can drop a
-scalar store followed by a masked vector store (JDK-8388492). Varka's stores should not take that
-shape, and comparing the interpreter with C2 should show a wrong value. That is a
-test, not a proof, and it covers only the JDKs and CPUs we run.
+**The JVM is trusted.** No proof reaches HotSpot. JDK 25 has a known C2 bug that can drop a scalar
+store followed by a masked vector store (JDK-8388492). Varka's stores should not take that shape,
+and comparing the interpreter with C2 should show a wrong value. That is a test on the JDKs and CPUs
+we run, not a proof.
 
 **One assumption about stored data is unchecked.** A date column is assumed to hold years 1 to
 9999, so `year(d)` runs with no guard. Spark can store any 32-bit day. The solver finds exactly
@@ -161,6 +164,10 @@ that gap: past a day in the year 42400, the date decoding leaves the range it is
 code's scalar twin already gets the day of the month wrong there, and further out it returns a
 month of 31,848. We read from the code that a cached column can reach that kernel. We have not
 run it end to end.
+
+[PENDING #874: date columns checked per batch to lie within years 1 to 9999. Once it merges, this
+paragraph becomes a closed gap: say what the check does and what it costs, or move the paragraph
+out of this section.]
 
 **Random tests reach only what they draw.** The bytecode writer names 39 mechanisms it uses to shape
 code. Random trees reach 29 of them. The paths that shrink a class that is too big are reached
@@ -172,16 +179,18 @@ earlier condition would have excluded. Under ANSI that raised an error Spark nev
 test passed over it; reading a paper on testing showed where to look, and it is fixed.
 
 [PENDING #871: random expressions nested across neighbouring types, so that Spark's analyzer
-inserts casts; what they found.]
+inserts casts; what they found. When it merges, change two sentences: "In a census of 35,000
+random queries, none disagreed" in the section on Spark's rows, and "it is fixed" for the filter
+bug above. Its nested census found the mirror of that bug, a compiled condition running before a
+not-compiled one that Spark evaluates first, which is an open row.]
 
 [PENDING #890: branch coverage of the bytecode writer and the compiler, and a bounded mutation
 run; which branches and mutants no test reaches.]
 
-**Some verdicts depend on the JIT.** Varka hands a kernel real batches only after C2 has compiled
-it and it runs without allocating. Whether that happens before the deadline depends on what the
-JIT did, in that JVM, on that machine. On three cores, 2 of 1,602 warm-ups still missed it. Tests
-like that report what happened and the nightly holds a ceiling; they cannot assert a fixed
-outcome.
+**Some verdicts depend on the JIT.** Varka hands a kernel real batches only after C2 has compiled it
+and it runs without allocating. Whether that happens before the deadline depends on what the JIT
+did, in that JVM, on that machine. On three cores, 2 of 1,602 warm-ups still missed it. Such tests
+report what happened, against a ceiling the nightly holds, rather than assert an outcome.
 
 ![What random draws reach](figures/svg/fig50-what-random-draws-reach.svg)
 

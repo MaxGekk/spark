@@ -17,9 +17,9 @@
 
 
 """Figure 45: who checks whom - the oracles a Varka answer is compared with, and what each is
-held to. The answer that counts is vanilla Spark's; Catalyst's own `eval` of an expression is
-Spark's interpreter; the reference evaluator, a plain Java interpreter of Varka's expression
-tree, is held to it; the kernel is compared with the reference evaluator on every small tree and
+held to. The answer that counts is vanilla Spark's; Catalyst is Spark's own expression engine;
+the reference evaluator, Varka's own plain Java evaluation of its expression tree, is held to
+it; the kernel is compared with the reference evaluator on every small tree and
 with Spark's session on random queries and Spark's own SQL tests; the arithmetic inside it is
 proven against the SQL-92 definitions with Spark's departures named. The coverage row count is
 read from `coverage.json` and the departures from `spec/DELTAS.md`, so the labels cannot drift."""
@@ -59,9 +59,9 @@ def box(x, y, w, h, fill, label, size=19):
 # The answer that counts.
 box(330, 120, 340, 70, "green", "Spark, with Varka off", size=22)
 # Two ways of reaching it.
-box(40, 270, 320, 80, "white", "Catalyst's eval of the\nsame expression (Spark's own)")
+box(40, 270, 320, 80, "white", "Catalyst, Spark's own\nexpression engine")
 box(640, 270, 320, 80, "white", "the same query,\nwith Varka on")
-box(40, 440, 320, 80, "yellow", "the reference evaluator:\na plain Java interpreter")
+box(40, 440, 320, 80, "yellow", "the reference evaluator:\nVarka's own, in plain Java")
 box(640, 440, 320, 80, "blue", "the kernel:\nbytecode Varka wrote")
 box(330, 610, 340, 80, "violet", "SQL-92 definitions, with\nSpark's %d departures named" % DELTAS)
 

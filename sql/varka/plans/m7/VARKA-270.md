@@ -57,7 +57,7 @@ does. The post uses them only in these senses:
 | tier witness | the JVM's own events, read during a test, that say which compiler's code ran a compared call |
 | emitted bytes | a committed hash of every class the emitter writes for a fixed set of shapes |
 | coverage row | one expression the compiler fuses, listed in the generated coverage table |
-| reference evaluator | a plain Java interpreter of Varka's expression tree, written separately from the emitter |
+| reference evaluator | plain Java code that computes Varka's expression tree one value at a time, written separately from the emitter; never called an interpreter, a word the post keeps for the JVM's tier |
 
 ## 4. The evidence, by section
 
@@ -85,7 +85,7 @@ drawn from a committed file by a script under `figures/`.
 
 ## 6. What waits on open pull requests
 
-Three pieces are in open pull requests; the draft carries a slot for each, marked
+Four pieces are in open pull requests; the draft carries a slot for each, marked
 `[PENDING #<n>: ...]` so that `grep -n 'PENDING #' POST_CORRECTNESS.md` finds them, and quotes no
 number from their branches:
 
@@ -95,6 +95,13 @@ number from their branches:
   what they found. Slot in "Where does the checking stop?".
 * **#870 (row 274b)**: kernels warmed to C2 and checked on the coverage rows, and the nightly
   step over many draws. Slot in "Do the tests run the code users run?".
+* **#874**: date columns checked per batch to lie within years 1 to 9999. Slot after "One
+  assumption about stored data is unchecked", which becomes a closed gap once it merges. Added
+  17 October 2026 at the coordinator's review.
+
+The #871 slot also names the two sentences that change when it merges: the 35,000-query census
+"none disagreed", and "it is fixed" for the filter-order bug, since that branch's nested census
+found the mirror of that bug in the compiled-conditions path, an open row.
 
 Each slot is filled from that row's plan once it merges, the markers removed and the pull request
 numbers moved to the provenance section.
@@ -118,7 +125,8 @@ should not contradict each other.
 
 * New measurements: the post reports the record and runs nothing.
 * The README's account of checking (row 261).
-* A separate post on the proofs alone, for which the record has enough; the owner's call.
+* A separate post on the proofs alone, for which the record has enough; the owner's call, now
+  `m9/SCOPE.md` item 102.
 
 ## 10. Outcome
 
@@ -144,3 +152,17 @@ where they were found rather than in a section of their own, and the filter-orde
 "Where does the checking stop?", since it was found by reading after every test had passed over
 it. Owed before publication: the three slots, from rows 265, 298 and 274b once they merge, and the
 owner's edit.
+
+### 10.2 The coordinator's review, 17 October 2026
+
+Changed on the review: "interpreter" now means only the JVM's tier, and Varka's own is "the
+reference evaluator" throughout, Figure 45 included; Catalyst, JaCoCo, JFR, the golden SQL files
+and the two ANSI modes are defined where they first appear; "grammar productions" became nodes, and
+"32 and 64 bits" says it means the kernels' values; the Theorem 5.1 paragraph says the shift guard
+is for divisors added later; the vacuity check is said plainly; "In short" splits its last item in
+two; a `[PENDING #874]` slot follows the column-contract paragraph; and the #871 slot names the two
+sentences that change when it merges. The proofs-only post is `m9/SCOPE.md` item 102.
+
+Prediction 1 rescored: the definitions put the body, without figure lines and slots, at about
+1,930 words, 30 over the plan's 1,900, after four phrases were cut. **Failed, narrowly**; the
+coordinator's definitions are worth the words.
