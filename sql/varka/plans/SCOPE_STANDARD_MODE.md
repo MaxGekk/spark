@@ -90,6 +90,14 @@ sign is applied to a non-negative magnitude - but `CAST(i AS INTERVAL MONTH)` is
 the identity on the lane, so a stored column can hold any int32 regardless. The
 bound check is what makes that safe.
 
+**The theorems** (`proofs/refinement.smt2`, VARKA-245). "extract(YEAR FROM ym), Spark mode and
+standard mode: one statement" holds over every month count: the kernel today is the multiply-high
+`int_mulhi_divide.smt2` proves exact over all of int32 (VARKA-149, after this entry was written), not
+the seven-op double route above, so the standard's bound is no longer needed for the answer, only
+for a cheaper form. That form's bound is `chrono_divide.smt2`'s `MONTH_ARITH`, exact to a dividend
+of 98303, which a month count in `[-1199, 1199]` reaches after a bias; neither the form nor its saving
+is built or measured.
+
 ### 3.2 Day-time interval range: divisions that decline today would fuse
 
 *Found 18 September 2026, from VARKA-103's scope. The same delta as 3.1,
@@ -117,6 +125,13 @@ the register: it converts declines into kernels rather than shaving ops off one.
 **The bound to register:** the interval column, `[-99 days, 99 days]` in
 microseconds for the default precision.
 
+**The theorems** (`proofs/refinement.smt2`, VARKA-245). "standard mode, SCOPE_STANDARD_MODE.md 3.2"
+proves the bound under `ConstDivide.EXACT_DIVIDEND_BOUND`, where `long_divide.smt2` proves both
+long-lane forms exact, and its neighbour that Spark's own range is not. The interval's
+precision is a range the kernels do not hold today: "d + CAST(i AS INTERVAL DAY), standard mode" is
+`sat` at `CAST(100 AS INTERVAL DAY)` (`interval_precision_unbounded`), the bound standard mode would
+register.
+
 ### 3.3 `time + interval`: a guard and a fallback channel removed
 
 *Found 18 September 2026, VARKA-102. Upstream question still open. The delta is
@@ -140,6 +155,11 @@ which is the honest place for it, and section 2's test is what says so.
 
 Following it is now a task rather than a wait: `m5/PLAN.md` 2.82 (VARKA-146) takes reviewing the upstream patch, or writing one for ANSI's modulo-24 if
 none exists. That is the only route open here, exactly because a flag is not.
+
+**The theorem** (`proofs/refinement.smt2`, VARKA-245). "t + dt, standard mode" is the witness this
+entry says no flag can buy: its query 5 is `sat` at `TIME '23:30' + INTERVAL '1' HOUR`, where the
+standard gives 00:30 and the kernel declines because Spark raises, and `unsat` once the sums that
+leave the day are excluded. Spark mode's refinement holds.
 
 ### 3.4 The math family within a stated ULP bound: the first deliberate departure
 
@@ -226,6 +246,17 @@ over 0001-9999 - a narrower multiply in the era or year step - is the thing to l
 entry claims a speedup, and none has been found.
 
 **The bound to register:** the date column, `[-719162, 2932896]`.
+
+**The theorems** (`proofs/refinement.smt2`, VARKA-245), and a correction to what this entry says
+is bought. A bare date column is already taken to hold this range: it is the project's column
+contract (`VarkaChrono.CONTRACT_MIN_DAYS` and `CONTRACT_MAX_DAYS`), assumed and not checked, so
+`year(d)` over a column fuses with no guard. "year(d), month(d), day(d), Spark mode and standard
+mode: one statement" holds under it, and "the column contract is load-bearing" is `sat`: a date
+Spark holds outside it (`proleptic_range`) feeds the era step past its proof. And the guard
+standard mode would need is on results, not inputs: "d + ym, standard mode" and "d +
+CAST(i AS INTERVAL DAY), standard mode" are `sat` at `DATE '9999-12-15' + INTERVAL '1' MONTH` and
+`DATE '9999-12-31' + INTERVAL '1' DAY`, whose results the standard raises on and the kernels, with no
+guard on their results, answer.
 
 ## 4. What would have to be built, when a task claims one of these
 
