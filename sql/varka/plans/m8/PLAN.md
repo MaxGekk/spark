@@ -856,14 +856,22 @@ branch exists with seven failures to understand). The integer reading settles fo
   of VARKA-149, measured against the current lowering. The text above is silent on a divisor that
   is a column, and no node of the emitter divides by one (`VarkaVectorIR` has `ConstDivide` and
   `BoundedDivide` only; the census lists `div`, `%`, `mod` and `pmod` as not fused today). The
-  record's route for it is the double lane, `a - trunc(a / b) * b`, exact for `|a| < 2^52`
-  (`skills/vector-api-and-width.md`), so the row states it: a column divisor fuses behind a
-  per-batch bound on the dividend and a zero-divisor mask, and declines with its reason outside
-  the bound; and Sneller's second iteration on the integer remainder, which carries the route to
-  the whole `BIGINT` range (`READING_SNELLER.md`), is a measured option only if a batch leaves the
-  bound often enough to matter. Round-to-nearest needs a correction in both directions, and its
-  error bound is an interval lemma with sampling, not an SMT goal, unless Monniaux and Pain's Coq
-  proof (arXiv 2207.08420, in the reading set, not yet read) covers it. A `TINYINT` or
+  row states it, after reading Monniaux and Pain's Coq-proved division through doubles
+  (`READING_M8_PAPERS.md` 1): a `BIGINT` column divisor takes their 64-bit algorithm over the
+  whole range - a correctly rounded `float` reciprocal of `b`, one refinement by two `fma` to
+  about 46 bits, a first quotient and its exact integer remainder, a second quotient from that
+  remainder, one correction where the last remainder is negative, `b = 1` and `b >= 2^63` (after
+  the signs are taken off, the case of `Long.MIN_VALUE`) chosen by a blend, the sign put back
+  after - so no batch declines for size, and `div`, `%` and `pmod` over one divisor share the
+  reciprocal. Its proof assumes round-to-nearest conversions from double to integer; Java's
+  truncate, so the conversion is emulated (the 2^52 add-and-subtract below `2^52`, the identity
+  above it) and stated as its own lemma, which keeps the paper's sequence of operations and with
+  it the proof; the kernel is written from the paper, not from CompCert's code, and cites the
+  proof's files (`FPDivision64.v`). The double route `a - trunc(a / b) * b` (exact for
+  `|a| < 2^52`, `skills/vector-api-and-width.md`) stays for `INT`, where it is exact for every
+  operand, and Sneller's second iteration (`READING_SNELLER.md`) is superseded. On AVX2 the
+  conversions and the 64-bit multiply are emulated by the JDK, so the algorithm is measured
+  against the scalar loop there and declines with a reason if it loses. A `TINYINT` or
   `SMALLINT` dividend is below `2^24`, so `trunc(a / b)` in a `float` lane is exact for it by the
   same dividend bound; the 8-bit and 16-bit notes of `READING_0X80.md` measured 6.7 to 15 times
   the scalar divide with that form.
@@ -946,7 +954,7 @@ catalogue keep theirs. Sizes are the house's small, medium and large.
 | 328 | The census and the cast matrix kept true: `dev/varka_census.py --check` in the linters' job; a suite holding `m8/casts.tsv`'s legality to `Cast.canCast`, `canAnsiCast` and `canTryCast` over every pair, under Comet's four-way rule - a legal pair has a test, an illegal and an identity pair have none, and a declined pair is exactly a pair without a coverage row, per mode; the coverage rows that prove what the documentation already says fuses (year-month comparisons and `IN`, null tests on every existing type), and a single-expression coverage row behind every fused claim, so the census's check reads one class per row; `dev/varka_catalogue_move.sh --check 8 9` beside them. **Done when** the three checks run in CI and the census's fused count moves only with a coverage row | this plan, 2.1 and 2.2 | small |
 | 28 | Lane-width conversion: one kernel over two widths, the int-to-long cast and the narrowing back. **Done when** `VARKA-28.md`'s own list holds, with the mixed-width trees of this milestone's casts admitted | catalogue item 39 table; `VARKA-28.md` | medium |
 | 104 | `BIGINT` arithmetic in the three modes, closing VARKA-30's int64 half. **Done when** `VARKA-104.md`'s list holds | catalogue item 39 table; `VARKA-104.md` | medium |
-| 30 | The integral division family: `div`, `%` and `pmod` over `INT` and `BIGINT`, a zero divisor null or raised, by 2.9's reading - `div` over `INT` as the long-lane divide over two widening casts, `pmod(-1, Int.MinValue)` as `Int.MaxValue` with the SMT goal wrapping, a null dividend with a zero divisor null under ANSI, `emitConstDivide` reused for a constant divisor, `pmod` by a power of two as an AND, and the four-`vpmuludq` long-lane magic as a measured option for a literal divisor, and a column divisor by the double route behind a per-batch bound on the dividend (declined with its reason outside it, the second iteration of `READING_SNELLER.md` a measured option), `TINYINT` and `SMALLINT` dividends in the `float` lane, exact below `2^24` (`READING_0X80.md`), and Monniaux and Pain's Coq proof of division through doubles (arXiv 2207.08420) read before the design. **Done when** each fuses in the three modes with the row engine's error classes, proven by exhaustion at 32 bits and SMT at 64, and a column divisor fuses inside its bound and declines with a reason outside it | catalogue item 39 table; `m5/PLAN.md` 2.4; item 33 | medium |
+| 30 | The integral division family: `div`, `%` and `pmod` over `INT` and `BIGINT`, a zero divisor null or raised, by 2.9's reading - `div` over `INT` as the long-lane divide over two widening casts, `pmod(-1, Int.MinValue)` as `Int.MaxValue` with the SMT goal wrapping, a null dividend with a zero divisor null under ANSI, `emitConstDivide` reused for a constant divisor, `pmod` by a power of two as an AND, and the four-`vpmuludq` long-lane magic as a measured option for a literal divisor, and a column divisor: `BIGINT` by Monniaux and Pain's 64-bit algorithm over the whole range, its round-to-nearest conversions emulated as a lemma of their own (`READING_M8_PAPERS.md` 1), `INT` by the double route, `TINYINT` and `SMALLINT` in the `float` lane, exact below `2^24` (`READING_0X80.md`). **Done when** each fuses in the three modes with the row engine's error classes, proven by exhaustion at 32 bits and SMT at 64, the `BIGINT` column divisor by the paper's proof plus the conversion lemma and tested at the paper's corner cases (`b = 1`, `b >= 2^63` after the signs, `b` either side of `2^42`, `Long.MIN_VALUE` against `-1` and `1`) and over a large random draw, and its cost against the scalar loop measured at both widths and on an AVX2 host | catalogue item 39 table; `m5/PLAN.md` 2.4; item 33 | medium |
 | 95 | An int multiply by a column, and `i % k`. **Done when** both fuse with the checked-multiply rule, or the record says why not | catalogue item 39 table; `m5/PLAN.md` 2.30 | small |
 | 103 | Day-time interval arithmetic, multiplications and divisions, the extracts and `make_dt_interval`: `extract(DAY FROM dt)` exact over the whole long by the shift split of 2.6 over the magnitude with the sign restored (a truncating quotient, not 340's floor, so the magnitude and sign steps on top of the split's three lane operations), hours and minutes over the byte output, seconds over the decimal lane, the partial sums of `make_dt_interval` checked in Spark's order, `HALF_UP` on a double factor tested at ties for both signs, at `2^53` and at the long edges with Spark's own IEEE operations. **Done when** `m5/PLAN.md` 2.38's list fuses (its "exact only under `2^52`" corrected by a dated note), each division exact under its stated bound or guarded, `java.time` the oracle at the edges | catalogue item 39 table; `m5/PLAN.md` 2.38 | medium |
 | 39 | `date - date`, the first mixed-width kernel. **Done when** `VARKA-39.md`'s list holds | catalogue item 39 table; `VARKA-39.md` | small |
