@@ -110,6 +110,10 @@ run_step() {
     status[$name]=FAILED
   fi
   secs[$name]=$((SECONDS - start))
+  # Beside the log, as dev/varka_gate.sh writes them, so `dev/varka_ci_times.py gate` reads a
+  # nightly's step times against the budget (VARKA-255.md 3.6).
+  echo "${secs[$name]}" > "$logdir/$name.secs"
+  echo "${status[$name]}" > "$logdir/$name.status"
   grep -h -E "Tests: succeeded|FAILED \*\*\*|^failed \(|verdict|[[:space:]]OFF$|seed=|^\[info\] - " "$logdir/$name.log" \
     | sed 's/^\[info\] //' | head -6 | sed 's/^/   /'
 }

@@ -1402,6 +1402,8 @@ jobs:
       run: ./dev/varka_toc.py --check SKILLS.md --from sql/varka/skills
     - name: The CI queue's admission decision, over recorded API responses
       run: python3 dev/varka_ci_admit.py --self-test
+    - name: The step-time budget's tool, over recorded API responses
+      run: python3 dev/varka_ci_times.py --self-test
 
   # Documentation build
   docs:
