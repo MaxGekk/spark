@@ -246,3 +246,116 @@ runner's ratio to the laptop is VARKA-241's 2.1 (`VARKA-241.md` 9.3).
 1. This plan, and row 245 marked Planned.
 2. `refinement()` and the rendered file, the README row; run under both solvers.
 3. The register's citations, section 9 and the row's outcome.
+
+## 9. Outcome
+
+Written on 16 October 2026.
+
+### 9.1 What was built
+
+`sql/varka/proofs/refinement.smt2`, rendered by `VarkaRefinementFile` through `VarkaProofFiles.render`,
+209 checks under `ALL`:
+
+* **The calendar, rules to formula**: the four rules of 2.2 and C1's leap year, for every year, and
+  `spec.days` pinned to `LocalDate.toEpochDay` at 17 dates from the int32 day count's ends through
+  year 0, 1582 and 10000.
+* **The lemmas**: the era's tail (1a over its quotients, split by century, 1b tying the quotients to
+  the divisions, 1 their composition), the 400-year period (2), the decomposition over `[NARROW_MIN_DAYS,
+  NARROW_DECOMPOSE_MAX_DAYS]` (3), injectivity (4), the inverse equal to `spec.days` over years
+  -15199 to 44447 (5a, 5b), `emitAddMonths`'s month length (6), its month arithmetic (7), the count
+  an int (8); and for the time and the week, the long lane's division as the floor (T), the
+  remainder of sixty (S), `floorMod(n, 7)` (F).
+* **The sites**: every dividend fed to `ERA_NARROW`, `JULIAN_CENTURY`, `JULIAN_YEAR`, `DAY_OF_MONTH`,
+  `MONTH_ARITH`, `MONTH_START`, `YEAR_OF_ERA_400` and `YEAR_OF_ERA_100` lies in the shape and range
+  `chrono_divide.smt2` proves the site over, read from `ChronoDivide`; every year fed to the leap hash
+  and the inverse, by `add_months` under its guard and by `make_date` under its, is one they are proven
+  for.
+* **The refinements**, five queries each, for 3.4's table: 4.1's four operators in three arms each,
+  `abs`, the calendar fields, `d + ym` in both modes, `d - ym`, `date_add`, `d + CAST(i AS INTERVAL
+  DAY)` in both modes, `datediff`, the three days of the week, `make_date` in both ANSI settings,
+  `extract(YEAR FROM ym)`, `hour`/`minute`, `second`, `t - t2`, `time_from_micros`, `t + dt` in both
+  modes; and `SCOPE_STANDARD_MODE.md` 3.2's bound as a theorem.
+
+`SCOPE_STANDARD_MODE.md` 3.1, 3.2, 3.3 and 3.7 cite the theorems; `proofs/README.md` has the file's row.
+
+### 9.2 What the proofs found
+
+Three things the specification work had not shown, none of them changed here:
+
+1. **The column contract is load-bearing, and Spark breaks it.** A bare date column is taken to hold
+   0001-01-01 to 9999-12-31 and is not checked, so `year(d)` over one fuses with no guard. Under
+   `proleptic_range` Spark holds any int32 day, and the check "the column contract is load-bearing"
+   is `sat`: the first day past `NARROW_DECOMPOSE_MAX_DAYS` feeds the era step past its proof. The
+   scalar twin agrees on the consequence: `VarkaChrono.narrowed(14766814)` is 42400-03-02 where
+   `java.time` says 42400-03-01, and at day 100,000,000 it gives month 31848. A cached column of such
+   dates read by a fused `year(d)` would be a wrong answer with no fallback; that the cache path
+   reaches the unguarded kernel is read from the IR and `docs/sql-varka.md`, **not run end to end**.
+2. **Three guards decline batches Spark does not need declined.** `d + CAST(i AS INTERVAL DAY)`'s input
+   bound, `d - ym`'s negation and `t + dt`'s one-day interval guard each read one operand's validity,
+   so a row whose other operand is null and whose bounded operand is out of range declines the batch,
+   where Spark evaluates nothing on that row. Query 5 is `sat` at exactly those rows and `unsat` with
+   the other operand valid: a decline costs the batch's speed, never an answer.
+3. **`EXTENSIONS.md` 1 says `datediff` "never wraps"; it does.** Two int32 day counts differ by up to
+   2^32 - 1; Spark's `DateDiff` is an `Int` subtraction and wraps, and so does the kernel. Inside the
+   column contract the definition holds; outside it the check is `sat`. The sentence is #854's, now on
+   master; a correction there is owed.
+
+And the standard mode shows what `DELTAS.md` predicted, plus two: `overflow_wraps`,
+`clamp_to_month_end` and `time_add_raises` are the witnesses of results no guard buys;
+`proleptic_range` is one too for `d + ym` and `d + CAST(...)`, because their kernels have no guard on
+the result; and `interval_precision_unbounded` for the cast, whose input bound is Spark's
+106,751,991 days and not the standard's two digits.
+
+### 9.3 Where the plan was wrong
+
+* **The solvers' time is the form's, not the claim's.** The first rendering held every check but
+  took Z3 98 s, with three checks past a minute, and cvc5 answered `unknown` in a run on checks it
+  decides alone in milliseconds. What fixed it: lemma 1a over declared quotients and split by
+  century (Z3 three times faster than over `div`); `add_months`'s recomposition and day count as
+  unknown functions `D` and `KC`, constrained only by the instances of lemmas 5 and 8, with their
+  definitions given only to the checks that expect `sat` (an unsat check that holds with a function
+  unknown holds of its definition); `add_months` restated over the prefix's fields, which the
+  calendar fields' refinement proves are the specification's date; lemma 5 in two halves, by
+  January and February; and the time and week divisions through quotient and remainder variables
+  with lemmas T, S and F. Each of these is in the file's comments where it applies.
+* **The century-then-year prefix**, the reference variant, is not restated (3.5): the default took
+  the time there was.
+* `SCOPE_STANDARD_MODE.md` 3.1 described a seven-op lowering of `extract(YEAR FROM ym)`; the kernel
+  is now VARKA-149's multiply-high, exact over all of int32, and the entry says so.
+
+### 9.4 The predictions, scored
+
+1. **Half held.** Every Spark-mode refinement holds in soundness (queries 2 to 4), over the column
+   contract for the calendar rows; guard completeness (5) fails for the three guards of 9.2 item 2,
+   which the prediction did not foresee. Standard mode fails where predicted and in two more places
+   (9.2's last paragraph).
+2. **Held**: 209 checks; 3.7 to 6.8 s under Z3 and 5.8 to 6.7 s under cvc5, whole, at load 25 to 35
+   on cores 12 to 23; every check alone under both solvers (cvc5 `--incremental`, as the runner
+   invokes it) meets its expectation, the slowest 2.6 s. The linters' run on the laptop went from
+   42.8 s to the same plus 3.7 to 7.4 s, so 8 to 16 s on the runner by VARKA-241's ratio of 2.1; to be
+   scored against the pull request's CI. Its line is in the calibration table.
+3. **Held**: `sat` at day 14,766,814.
+4. **Held**: `VarkaProofFilesSuite`'s one test takes 0.22 to 0.35 s with the new file rendered.
+5. **Held**: dropping `add_months`'s clamp fails both `d + ym` and `d - ym`'s query 4; dropping the
+   ANSI overflow guard fails `a + b`'s query 2; letting `make_date`'s year guard fire on a null lane
+   fails both arms' query 5; moving the time sum's bound by one fails query 2 in Spark mode and 4 in
+   standard mode; and a leap year without the century rule fails two rules and lemma 4.
+
+### 9.5 Added test time
+
+* **The gate** (`VarkaProofFilesSuite`, catalyst): within the suite's 0.22 to 0.35 s.
+* **The linters' "Varka proofs" step**: plus 3.7 to 7.4 s under Z3 on the laptop, about 8 to 16 s on
+  the runner.
+* **The nightly's prove step** (both solvers): plus about 13 s on the laptop.
+
+### 9.6 What this leaves
+
+* **For the owner**: the column contract (9.2 item 1): check it per batch, guard the calendar
+  nodes over bare columns, or record that Varka assumes it; and an end-to-end reproduction first.
+* **The three needless declines** (9.2 item 2): reading the node's word, the AND of both operands',
+  rather than one operand's, would make query 5 hold; not done here, since no answer changes.
+* **`EXTENSIONS.md` 1's `datediff` sentence** (9.2 item 3).
+* **Not restated**: `STANDARD.md` 4.2 to 4.9 (no lowering proof to restate), the extensions of 3.5
+  (the ISO week and week-year, `dayofyear`, `quarter`, `last_day`, `next_day`, `trunc`,
+  `make_ym_interval`, `greatest`/`least`, `time_diff`, `time_trunc`), and the century-then-year
+  prefix. Each would reuse the lemmas here.
