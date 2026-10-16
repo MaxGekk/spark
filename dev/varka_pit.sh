@@ -189,6 +189,7 @@ if [ "$run" = 1 ]; then
   excluded_methods=""
   if [ -n "$methods" ]; then
     CLASSES_DIR=$CLASSES/${PKG//.//}
+    lambda_re='^lambda[$]([^$]+)[$][0-9]+$'
     # javap names a constructor by its class, so PIT's <init> and <clinit> are added by hand.
     for name in $( (for c in ${classes//,/ }; do
         for f in "$CLASSES_DIR/$c.class" "$CLASSES_DIR/$c\$"*.class; do
@@ -198,7 +199,7 @@ if [ "$run" = 1 ]; then
       | sort -u); do
       # A lambda's body is its method's code: lambda$<method>$<n> goes with <method>.
       owner=$name
-      [[ "$name" =~ ^lambda\$([^$]+)\$[0-9]+$ ]] && owner=${BASH_REMATCH[1]}
+      [[ "$name" =~ $lambda_re ]] && owner=${BASH_REMATCH[1]}
       [[ ",$methods," == *",$owner,"* ]] || excluded_methods+="${excluded_methods:+,}$name"
     done
   fi
