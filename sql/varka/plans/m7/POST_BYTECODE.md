@@ -1,141 +1,146 @@
-# Bytecode without source
+# The class got 65 times cheaper. The first query got slower.
 
-*Draft for row 259, 16 October 2026, the companion of row 258's post. Every number is from
-`sql/core/benchmarks/VarkaCodegenBenchmark-jdk25-results.txt` and
-`sql/core/benchmarks/VarkaColdStartBenchmark-jdk25-results.txt` (JDK 25.0.4 on an AMD Ryzen AI 9
-HX PRO 370 laptop), or from the published posts and skill files it links. The benchmark item 79
-asks for, emission against Janino over the same expression list, is not yet run; see
-`VARKA-259.md` 9.1.*
+Varka is a fork of Apache Spark that compiles SQL expressions into Java Vector API kernels. Spark
+turns each query stage into Java source and compiles it with Janino. Varka skips the source: it
+writes the kernel's bytecode directly. When we timed the two, making one class took Spark about
+6.5 milliseconds and Varka about a tenth of one.
 
-How Spark compiles a query, and why it compiles it again [link to row 258's post when it is
-published] followed one query from its plan to running code: one Java source string per
-stage, compiled by Janino on the driver and again on every executor, cached by the text of that
-source, and then compiled a third time by the JIT. This post is for the people who write that kind
-of code generator. It asks what changes when the generator writes bytecode instead of Java, from
-what we learned building Varka, a fork of Spark that compiles expressions into Java Vector API
-kernels and writes their classes directly.
+Then we timed the first query of a new shape, and Varka without help was the slowest bar on the
+chart.
 
-The short answer: generating the class gets cheap and its size becomes a fact instead of a guess.
-The JIT's wait does not change at all, and the saving that matters comes from what the class is
-keyed by, which has nothing to do with bytecode.
+![The class is the cheap part](figures/svg/fig33-the-class-is-the-cheap-part.svg)
 
-## What a string costs
+*Figure 1. Making a class and running a query, on one scale. Sixteen date expressions over
+100,000 cached rows, best of five, JDK 25 on a laptop. The two class bars are not the same
+work; see "The 65x, honestly" below.*
 
-Spark's generator produces text. It cannot know how much bytecode the text will become, so it
-guesses: `spark.sql.codegen.methodSplitThreshold` cuts code into methods every 1024 characters, and
-its own documentation says why - "We cannot know how many bytecode will be generated, so use the
-code length as metric." On a projection of forty `x + k` that comes to about seven characters a
-byte. Only after Janino has parsed and compiled the text does Spark read the methods' sizes off the
-class, and by then the class exists; [Under 8000 bytes by
-construction](https://vecbricks.github.io/under-8000-bytes-by-construction/) told that part.
+This post is for people who write code generators. It covers what changes when the generator
+writes bytecode instead of source, and what doesn't. In short: the size of the generated code
+becomes a fact instead of a guess; the class becomes almost free to make, which turns out not to
+matter; and the saving that does matter comes from how classes are cached, which has nothing to
+do with bytecode.
 
-Text has a second property that row 258's post turns on. Spark's cache of generated classes is
-keyed by the source, and some literals are written into the source. A query that differs only in
-an integer or a date is a new string, so it is a new class.
+## Two ways to make a class
 
-## Writing the class directly
+![Two generators, one measurement](figures/svg/fig25-two-generators-one-measurement.svg)
 
-Varka's emitter never produces Java. It walks a small IR of vector operations and writes bytecode
-with `java.lang.classfile`, the Class-File API that became final in JDK 24. Two things follow.
+*Figure 2. Spark writes Java source, compiles it with Janino and only then reads the method
+sizes off the class. Varka emits bytecode, reads the same sizes off the class it just built,
+and rebuilds it with smaller groups when one is too big.*
 
-**The size is read, not estimated.** The emitter builds the class, reads every method's length in
-the unit HotSpot enforces, and only then decides: a group of outputs with a method over 8000 bytes
-is split and the class built again; an output too large for any method is declined with a reason,
-and Spark computes that one. None of this needs the class to be loaded. One exception taught us
-something: the class-file format's own cap, 65,535 bytes of code in a method, is enforced by the
-Class-File API while it assembles the class, so past it there is no class to measure. The API
-throws "Code length N is outside the allowed range", and the emitter reads that refusal as the
-measurement of that one method.
+**Spark guesses the size.** Spark's generator writes text, and text doesn't know how much
+bytecode it will become. So Spark cuts the code into methods every 1024 characters
+(`spark.sql.codegen.methodSplitThreshold`). The setting's own documentation admits the guess:
+"We cannot know how many bytecode will be generated, so use the code length as metric." On a
+projection of forty `x + k` it comes to about seven characters per byte of bytecode. Spark reads
+the real sizes only after Janino has compiled the class. By default it then does nothing with
+them: the check that could act, `spark.sql.codegen.hugeMethodLimit`, defaults to 65535, a size
+no method that compiled can reach. [Under 8000 bytes by
+construction](https://vecbricks.github.io/under-8000-bytes-by-construction/) tells that part
+of the story.
 
-**The assembler checks the stack.** `ClassFile.of().build(...)` computes the stack map frames
-itself, and an inconsistent operand stack fails at emit time with the bytecode offset and an
-instruction dump, before the JVM's verifier could see it. A double-store bug in an early kernel
-never got as far as a class loader. What it does not catch is a wrong method descriptor, which
-builds, verifies and fails on first execution with `NoSuchMethodError`; we keep a test for exactly
-that.
+**Varka measures it.** Varka's emitter walks a small tree of vector operations and writes
+bytecode with `java.lang.classfile`, the Class-File API that became final in JDK 24. It builds
+the class, reads every method's length in the unit HotSpot enforces, and then decides. A group
+of outputs whose method is over 8000 bytes is split and the class built again. An output too big
+for any method is declined with a reason, and Spark computes that one instead. Nothing has been
+loaded yet. The one surprise was the class-file format's hard cap of 65,535 bytes of code per
+method. The Class-File API enforces it while it assembles the class, so past the cap there is no
+class to measure. Instead the API throws "Code length N is outside the allowed range", and the
+emitter takes that error as the measurement.
 
-## What the class is keyed by
+**The assembler checks the stack, too.** `ClassFile.of().build(...)` computes the stack map
+frames itself. A method that leaves the operand stack inconsistent fails at emit time, with the
+bytecode offset and an instruction dump, before the JVM's verifier ever sees it. One early
+kernel stored a value twice, and the bug never reached a class loader. What the assembler
+doesn't catch is a wrong method descriptor. That builds, verifies, and fails the first time it
+runs with `NoSuchMethodError`, so we keep a test for exactly that.
 
-A third difference is not about bytecode at all: it comes from emitting from an IR in which each
-constant is a slot, and a source generator could do the same. Spark already does it for strings,
-decimals and binaries, which it passes to the class as references rather than writing them into the
-text.
+## Why the cheap class didn't help
+
+Go back to Figure 1. Every new class starts in the bytecode interpreter, moves to C1's code and
+then to C2's. A Vector API kernel is slow until C2 compiles it, because until then each vector
+is a real object on the heap. Varka without help hands batches to a kernel that C2 hasn't
+compiled yet. Its first run takes 241 ms and its second 213 ms, against Spark's 110 and 53.
+
+The fix has nothing to do with bytecode. A background thread warms the new kernel while the
+shape's batches take Spark's own path. When the JIT has compiled the kernel, the thread hands
+over to it. In this run the hand-over came after 1.6 to 1.9 seconds, and from then on the query
+took 27 ms against Spark's 53. Planning a new shape, including emitting its kernel, took 18 ms
+against Spark's 17.
+
+So a tenth of a millisecond for the class doesn't change the first query, and 6.5 ms wouldn't
+have changed it either. Making the class was never the expensive part. Waiting for the JIT is.
+
+## Never make the class again
+
+If the JIT is the expensive part, the best class is one you already have. That depends on what
+the class cache is keyed by.
+
+![Two queries, one class](figures/svg/fig34-two-queries-one-class.svg)
+
+*Figure 3. Spark writes an integer literal into the generated source, so a query that differs
+only in that number is a new string, a new class and a new JIT compile. Varka's emitter turns
+the literal into a slot, so both queries are one shape and run on one compiled class.*
+
+Spark caches generated classes by their source text, and some literals are written into that
+text. A dashboard that reruns `date_add(d, 7)` as `date_add(d, 30)` gets a new string, so a new
+Janino compile, so a new class that the JIT starts again from the interpreter. Spark already
+avoids this for strings, decimals and binary values, which it passes to the class as references
+instead of writing them into the text. [Link to row 258's post, which measures what the extra
+compiles cost on Spark, when it is published.]
 
 Varka's emitter takes a tree with every constant replaced by a slot. `date_add(d, 7), year(d)`
-and `date_add(d, 30), year(d)` are one shape with one hash, and run one class with a different
-value in slot 0; so does the same pair over any other date column, since the tree says "column
-0". Varka's cache of loaded classes is keyed by that shape, so a dashboard that
-reruns one query with a new date pays for its class once, and its JIT compile once. Spark has met
-the same question in a narrower place: since 4.4.0 a stage remembers in its generated code whether
-a large `CASE WHEN` was split, so a literal that changes every run makes it decide again, and a key
-that leaves literal values out is filed as
+and `date_add(d, 30), year(d)` are one shape with one hash, and run on one class with a different
+value in slot 0. So does the same pair over any other date column, because the tree says
+"column 0", not `d`. The cache of loaded classes is keyed by that shape, so the dashboard pays
+for its class, and its JIT compile, once.
+
+This part isn't about bytecode at all. A source generator could put constants in slots just as
+well. Spark has run into the same question in a narrower place: since 4.4.0 a stage records in
+its generated code whether it split a large `CASE WHEN`, so a literal that changes on every run
+makes it decide again. A cache key that leaves literal values out is filed as
 [SPARK-60048](https://issues.apache.org/jira/browse/SPARK-60048).
 
-## What emission costs
+## The 65x, honestly
 
-Varka's codegen benchmark times both generators cold, one class per iteration:
-
-| generator | one class |
+| generator | one class, cold |
 |:--|--:|
 | Spark: `GenerateUnsafeProjection.generate` (source, then Janino) | about 6.5 ms |
 | Varka: emit, define, load and instantiate a fused kernel | about 99 us |
 
-That is 65.6 times. The Janino arm defeats Spark's cache the way row 258's post describes, with a
-new literal each iteration, and it has done so since Varka's first milestone, because without it
-every iteration after the first would hit the cache.
-
-The comparison is not like for like, and we say so before anyone else does. The Janino arm
-compiles a one-output `date_add` projection with Spark's row writer; the Varka arm emits a
-two-output kernel with a shared subexpression. [A benchmark that emits and compiles the same
-expression list both ways is owed before publication; the table above is replaced or joined by
-its numbers.]
-
-## What it does not change
-
-Generating a class is not running it fast. A new class starts in the interpreter, moves to C1's
-code and then to C2's, and a Vector API kernel is slow until C2 has it, because the vectors stay
-boxed until then. Varka's cold-start benchmark shows where the time goes, for sixteen date
-expressions over a hundred thousand cached rows:
-
-| | first run | second run | once compiled |
-|:--|--:|--:|--:|
-| Spark | 110 ms | 53 ms | |
-| Varka, no warm-up | 241 ms | 213 ms | |
-| Varka with its warm-up | 140 ms | 62 ms | 27 ms |
-
-On Varka, planning includes classifying the projection and emitting its kernel, and planning a
-new shape takes 18 ms against Spark's 17. The class costs a tenth of a millisecond to make, and
-Varka without help is still the slowest of the three for its first runs: the kernel is serving
-batches before C2 has compiled it. What fixes that is
-not the bytecode but a background thread that warms the new kernel while the shape's batches take
-Spark's own path, and hands over when the JIT has compiled it. In this run the hand-over came after
-1.6 to 1.9 seconds, and from there the query takes 27 ms against Spark's 53.
-
-So for a generator that writes bytecode, the saving that matters is the second and third queries,
-not the first: a class that is never rebuilt for a new constant never waits for the JIT again.
+That is 65.6 times. To time Janino cold, the benchmark gives it a new literal on every iteration,
+which defeats Spark's cache exactly as Figure 3 shows. The two arms are not the same work,
+though, and we'd rather say so before anyone else does. The Janino arm compiles a one-output
+`date_add` projection with Spark's row writer; the Varka arm emits a two-output kernel with a
+shared subexpression. [A benchmark that emits and compiles the same expression list both ways is
+owed before publication; this table is replaced or joined by its numbers.]
 
 ## What you give up
 
-There is no source to read. A Spark developer runs `explain("codegen")` and reads Java; a
-Varka developer needs tools to see what was built:
+There is no source to read. A Spark developer runs `explain("codegen")` and reads Java. A Varka
+developer needs tools to see what was built:
 
 * `dev/varka_emit.sh "date_add(d,7)" "year(d)"` prints the shape, its hash, the literals in slot
-  order and every method with its bytes, for any projection.
-* The emitted methods carry a line number table whose numbers are IR node indices, decoded by a
-  custom attribute inside the class, so a stack trace through a kernel names the IR node that
-  threw.
-* `javap` works on the bytes like on any class.
+  order and every method with its size, for any projection.
+* The emitted methods carry a line number table whose numbers are tree node indices, so a stack
+  trace through a kernel names the node that threw.
+* `javap` reads the bytes like any other class.
 
-The larger cost is that every new expression is written as instructions rather than as a line
-of Java, and what keeps those honest is the stack map generator and the tests, not a compiler.
+The bigger cost is that every new expression is written as instructions instead of a line of
+Java. What keeps those honest is the stack map check and the tests, not a compiler.
 
 ## Reproducing it
 
 ```
 dev/varka_bench_regen.sh core VarkaCodegenBenchmark
+dev/varka_bench_regen.sh core VarkaColdStartBenchmark
 dev/varka_emit.sh "date_add(d,7)" "year(d)"
 ```
 
-and, on any stock Spark, `df.explain("codegen")` for the generated Java and the stage's
-`maxMethodCodeSize`. The code, the benchmarks and every results file quoted here are in
+On any stock Spark, `df.explain("codegen")` shows the generated Java and the stage's
+`maxMethodCodeSize`. Every number here comes from
+`sql/core/benchmarks/VarkaCodegenBenchmark-jdk25-results.txt` and
+`VarkaColdStartBenchmark-jdk25-results.txt` (JDK 25.0.4, AMD Ryzen AI 9 HX PRO 370), and the
+figures are drawn from those files by the scripts beside them. The code and the results are in
 [vecbricks/varka](https://github.com/vecbricks/varka).
