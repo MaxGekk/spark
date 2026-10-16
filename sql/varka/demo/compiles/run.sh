@@ -17,13 +17,24 @@
 #
 
 # Runs the scripts of this directory on a stock Spark distribution and writes the outputs
-# committed beside them. What they print are counts of compiled classes, which do not depend on
-# the machine, so they run on whatever machine has the distribution:
+# committed beside them. What the count scripts print are counts of compiled classes, which do
+# not depend on the machine, so they run on whatever machine has the distribution:
 #
 #   sql/varka/demo/compiles/run.sh <spark-home> [<java-home>]
+#
+# times.scala prints times, which do, so it runs only with --times, alone, and its committed
+# output comes from a GitHub-hosted runner through .github/workflows/varka-demo.yml, which names
+# the run and the CPU in the output's header:
+#
+#   sql/varka/demo/compiles/run.sh --times <spark-home> [<java-home>]
 
 set -euo pipefail
-SPARK="${1:?usage: run.sh <spark-home> [<java-home>]}"
+times=false
+if [ "${1:-}" = "--times" ]; then
+  times=true
+  shift
+fi
+SPARK="${1:?usage: run.sh [--times] <spark-home> [<java-home>]}"
 if [ -n "${2:-}" ]; then
   export JAVA_HOME="$2"
 fi
@@ -46,7 +57,16 @@ run() {
   local out="$name-jdk$jdk-output.txt"
   {
     echo "Output of $script ($*) on stock Spark, by run.sh."
+    if [ -n "${GITHUB_RUN_ID:-}" ]; then
+      echo "run:     ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+    fi
     echo "commit:  $commit"
+    if $times; then
+      echo "cpu:     $(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //')"
+      if [ -n "${GITHUB_RUN_ID:-}" ]; then
+        echo "pinned:  ${EXPECTED_CPU:-no (the runner is not pinned)}"
+      fi
+    fi
     echo "java:    $version"
     echo "spark:   $spark"
     echo
@@ -54,13 +74,18 @@ run() {
     sed -n '/^###/,/^### Spark/p' "$log" | { grep -v -E '^[0-9]{2}/[0-9]{2}/[0-9]{2} ' || true; }
   } > "$out"
   if ! grep -q '^### Spark' "$out"; then
-    echo "$script did not finish; its log is $log" >&2
+    echo "$script did not finish; its log is $log, which ends:" >&2
+    tail -n 40 "$log" >&2
     return 1
   fi
   rm -f "$log"
   cat "$out"
 }
 
+if $times; then
+  run times.scala times --master 'local[1]'
+  exit 0
+fi
 run literals.scala literals --master 'local[1]'
 # local-cluster's workers keep their executors' logs under the distribution's work/ directory;
 # this run's are removed after it, and any that were there before are left alone.
