@@ -97,7 +97,7 @@ public interface VarkaFusedKernel {
    */
   default int run(long[] srcData, long[] srcValidity, int[] srcNullCount,
       long[] dstData, long[] dstValidity, int[] scalarArgs, int length) {
-    throw new UnsupportedOperationException(
+    throw VarkaErrors.unsupportedOperation(
         getClass().getName() + " is a 64-bit-lane kernel; call the eight-argument run");
   }
 
@@ -119,7 +119,7 @@ public interface VarkaFusedKernel {
    */
   default int run(long[] srcData, long[] srcValidity, int[] srcNullCount,
       long[] dstData, long[] dstValidity, int[] scalarArgs, long[] longArgs, int length) {
-    throw new UnsupportedOperationException(
+    throw VarkaErrors.unsupportedOperation(
         getClass().getName() + " is a 32-bit-lane kernel; call the seven-argument run");
   }
 

@@ -1000,6 +1000,42 @@ To size 4 nothing failed and nothing declined, at either lane. Under the planted
 `misdescribeWordLiveness`, beside a stranger and literal to column fail trees the plain series
 passes, which is what shows the variants reach something the series alone does not.
 
+## What the emitter reached, and steering a fuzzer toward the rest
+
+VARKA-280. `VarkaEmitMechanism` lists 39 things the emitter decides about a whole shape - the
+grouping, what a computation is shared with, the validity words, the guards, the division form,
+the size loop's reactions, the declines - and the emitter notes each where it emits it into the
+emission's `Analysis.reached`, handed to the `VarkaEmitTrace` when the emission ends. A suite
+attaches a `VarkaEmitReach` to its trace and prints what it reached and never did; with
+`VARKA_REACH_DUMP=<dir>` it writes the table under `sql/varka/coverage/reach/`. What it taught:
+
+- **Note a mechanism where its bytes are emitted, not where a slot is planned.** `Slots.plan`
+  plans slots for bodies no build emits (a dense body of a kernel that nulls valid inputs) and,
+  without group-local frames, for other groups' nodes; a note there reports what was never built.
+- **Report an emission's last pass, not the union of its builds.** The size loop rebuilds; a
+  union over its passes reports a one-group class halved on bytes as one group and several, and
+  pairs the last grouping with what earlier builds threw away. Each pass starts the grouping and
+  body mechanisms afresh; only the loop's reactions and declines span passes.
+- **A decline is an emission too.** The size loop hands the set over in a `catch` of
+  `VarkaEmitDeclined` as well as on return, so a run whose shapes decline still says what they
+  reached first; any other failure is not an emission and is not noted.
+- **The suites' fixed seeds miss the size loop's corners.** The IR fuzzer's two lanes miss ten
+  mechanisms: seven that only its wide compositions reach (stages, rollbacks, both grouping
+  switches dropped, a class-wide decline) and three that nothing in it reaches (the plan's decline,
+  the class-file cap's refusal, the constant pool's decline). The coverage table misses every size
+  reaction and every decline: its widest shape is one kernel that fits. Count a report's misses
+  from its last column, not by searching for "never": a mechanism's sentence can hold the word.
+- **Steering does not pay at the gate's budget; at the nightly's it only gains.** Over 16
+  seed-lanes at 300 emissions an arm, keeping a draw that reached a new set of mechanisms (QPG's
+  rule without the trees) or a rare mechanism and mutating it - an option changed, a variant -
+  did no better: the better of the two arms reached more than the plain draws in 7 and fewer in
+  4, and both reached the common mechanisms at about twice the emission. At 3000 the steered arms
+  reached fewer in none and more in 15 of 32 seed-lanes, among them the call-site rollback and
+  both grouping switches dropped, which plain draws never reach: the growing variants, applied
+  again to a case kept for growing, make it wide enough. Random draws reach a new mechanism set
+  at most steps (185 of 300), so set novelty keeps nearly everything; rarity keeps less and did no
+  better at 300.
+
 ## Every guard at its bound: a verdict from the emitter's own rule
 
 VARKA-279. `VarkaGuardSpec` says per batch which guard bits a kernel must decline with, which it
@@ -1309,6 +1345,7 @@ predicted. Add the line when the prediction is scored, whichever way it went.
 | VARKA-244 (5.1 #1) | a new sql/core suite under 40 s, its tests under 10 s | 25 s, its tests 8.4 s | 0.6 | predicted at VARKA-243's ratio of 2, which a suite of the same shape repeated; a later run at load average 46 took 72 s |
 | VARKA-317 (6.1 #1) | the coverage differential's added test time at most 10 s | 0.3 s: the planted test 126 ms, the extended one 182 ms | 0.03 | the estimate priced a kernel compile per query and doubled it by VARKA-243's ratio; where the 0.3 s went was not split |
 | VARKA-378 (6.1 #2) | the NULL-mode guard step about 12 minutes, two widths of 200 kernels at a trial's 1.4 s each, at a ratio of 1.2 | 10.7 to 15.4 minutes over three runs on three pinned cores at a load of 21 to 46 | 0.9 to 1.3 | the time moves with the load: a kernel still in the cycle costs the full 10 s deadline, and a busy machine leaves more of them in it |
+| VARKA-280 (6.1 #5) | the opt-in steering A/B under 10 s at one seed pair, 1800 emissions | 13.2 and 12.8 s in a fresh JVM alone | 1.3 | about 7 ms an emission with the emitter cold; the estimate took two |
 | VARKA-379 (6.1 #4) | a new sql/core suite under 60 s, its tests under 30 s, at VARKA-243's ratio of 2 | 25 s, its tests 16 s | 0.5 | about 200 queries over one-batch cached views, each view cached once per fixture rather than per query |
 
 What the table says so far: a check that adds a run per batch or a read per call costs more than

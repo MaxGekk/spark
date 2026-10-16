@@ -217,14 +217,26 @@ public final class VarkaExpressionCompiler {
   // The planning-time catch
   // ---------------------------------------------------------------------------------------------
 
-  // Test-only hook that makes every compile throw inside the catch below, as a broken invariant
-  // of the compiler would, so a suite can show what such a bug reaches the user as (VARKA-314).
-  // Static because Spark plans on one thread and runs tasks on others; reset in a finally block.
-  private static volatile boolean failForTesting = false;
+  // Test-only hook run inside the catch below before every compile, which throws as a broken
+  // invariant of the compiler would, so a suite can show what such a bug reaches the user as
+  // (VARKA-314). Static because Spark plans on one thread and runs tasks on others; reset in a
+  // finally block.
+  private static volatile @Nullable Runnable failForTesting = null;
 
   /** Sets the test-only hook that fails every compile; see {@code failForTesting}. */
   public static void setFailForTesting(boolean fail) {
-    failForTesting = fail;
+    setFailForTesting(fail ? () -> {
+      throw new IllegalArgumentException("injected Varka compiler failure");
+    } : null);
+  }
+
+  /**
+   * Sets the test-only hook to {@code failure}, run where the compile starts, or clears it with
+   * null: a suite passes a call that reaches one of Varka's own invariant sites with an argument
+   * it rejects, so the site's error crosses the planning catch as a compiler bug's would.
+   */
+  public static void setFailForTesting(@Nullable Runnable failure) {
+    failForTesting = failure;
   }
 
   /**
@@ -241,8 +253,9 @@ public final class VarkaExpressionCompiler {
       Supplier<String> identity,
       VarkaEmitOptions options) {
     try {
-      if (failForTesting) {
-        throw new IllegalArgumentException("injected Varka compiler failure");
+      Runnable failure = failForTesting;
+      if (failure != null) {
+        failure.run();
       }
       return compile.get();
     } catch (RuntimeException e) {
@@ -718,7 +731,7 @@ public final class VarkaExpressionCompiler {
     /** The predicate of {@code layout} over this pass's tables; see the static form. */
     CompiledVarkaPredicate build(List<List<Cond>> layout) {
       if (tables == null) {
-        throw new IllegalStateException("nothing fused");
+        throw VarkaErrors.illegalState("nothing fused");
       }
       return VarkaExpressionCompiler.build(specs, tables, layout);
     }
