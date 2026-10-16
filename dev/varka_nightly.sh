@@ -179,9 +179,9 @@ if [ "$deoptnull" -eq 1 ]; then
   run_step deoptnull dev/varka_deopt_census.sh --guard --out "$logdir/deoptnull"
 fi
 # A kernel compiled after other kernels (VARKA-257): forks warm sixteen kernels of the IR fuzz
-# grammar through production's warm-up, then the cliff probe's 64 cheap tails, read its rate and
-# its allocation, and compare every kernel's answers; a wrong answer, an unfinished fork or a slow
-# one fails (dev/varka_kernel_history.sh, VARKA-257.md 3.2). It reuses deoptnull's build.
+# grammar through production's warm-up, then the cliff probe's cheap tails at 24 outputs, read its
+# rate and its allocation, and compare every kernel's answers; a wrong answer, an unfinished fork
+# or a slow one fails (dev/varka_kernel_history.sh, VARKA-257.md 3.2). It reuses deoptnull's build.
 if [ "${history:-1}" -eq 1 ]; then
   history_build=(--build)
   [ "${status[deoptnull]:-}" = ok ] && history_build=()

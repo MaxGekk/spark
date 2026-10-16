@@ -204,3 +204,113 @@ case, at the host's width (512 bits here) and at 128 bits, prewarm on and off; p
 1. The plan, with the admission trial's numbers.
 2. The probe, the launcher and the reader.
 3. The sweep and its committed readings, the nightly step, the calibration line, section 9.
+
+## 9. Outcome
+
+### 9.1 Corrections to 3.1, 4 and 5, after the build and the review
+
+3.1 was written before the admission trial and describes the first draft. As built (section 2 has
+why): the probe takes a fourth argument, the cheap-tail count of the kernel under test, 24 by
+default; the launcher's warm-up deadline is 30 s, not 10. The self-review (`/code-review high`)
+then changed five things in the probe and reader: a draw whose shape repeats an earlier draw's
+(the cache key holds no literal values, so the cache hands back the kernel already warmed) is
+skipped instead of ending the fork; only `VarkaEmitDeclined` skips a draw, any other emitter
+failure ends the fork and reads as unfinished; the timed calls' statuses are kept and a fork
+whose timed calls declined reads as declined, not fast; a failure of the harness rather than the
+check is `VARKA_HISTORY_ERROR`, exit 2, apart from a wrong answer; the reader keys a case on the
+fork's file name, so a fork that died before its first line stays in its case, and reads each
+fork's exit status. Section 5's planted answer is a property, not a hand edit:
+`-Dvarka.history.plantWrongAnswer=true` sets VARKA-274's plant; one fork with it printed two
+wrong answers of three kernels (the third's row 0 is null in its batch, where the plant has no
+value to change) and the reader failed under `--guard`. The history counts are split by lane,
+since the lanes alternate and position 0, the control, is always an int kernel.
+Two files beyond section 4's table: the lesson in `sql/varka/skills/the-jit.md` and its line in
+the generated `SKILLS.md`.
+
+### 9.2 The readings
+
+`sql/catalyst/benchmarks/VarkaKernelHistory-jdk25-probe.txt`, 16 October 2026, cores 12-17 at
+machine loads of 14 to 30 from other agents' work, two JVMs of three cores each. 52 forks of the
+sweep, 1,140 kernels warmed and compared, 0 wrong answers.
+
+**The kernel under test is never slow.** 0 of 36 forks at the host's width (N = 0, 16 and 64,
+prewarm on and off, six forks each) and 0 of 16 at 128 bits (N = 0 and 16), every one compiled
+by the warm-up with all four loop methods at tier 4, 0 bytes a call, 1.0 to 2.9 ns a row at the
+host's width and 2.6 to 5.7 at 128 bits. For this kernel the slow mode's frequency as a function
+of N is zero at every N measured, against the 4 of 80 benchmark instances of `VARKA-209.md`
+12.4. Those were the 64-tail class with C1 on in a benchmark JVM, a mode the warm-up's C1
+exclusion takes away.
+
+**The history's own kernels are where the slow mode is**, and it grows with the history.
+Released at the 30 s deadline still allocating, of those warmed, at the host's width:
+
+| position in the history | int, prewarm off | int, prewarm on | long, prewarm off | long, prewarm on |
+|---|---|---|---|---|
+| 0 (the control) | 0 of 12 | 0 of 12 | - | - |
+| 1 to 3 | 4 of 12 | 0 of 12 | 0 of 24 | 0 of 24 |
+| 4 to 15 | 15 of 72 | 0 of 72 | 11 of 72 | 7 of 72 |
+| 16 to 63 | 40 of 144 | 15 of 144 | 46 of 144 | 43 of 144 |
+
+Every long-lane release and 54 of the 74 int-lane ones had C2 code in use for every loop method:
+cause 4, compiled and still allocating. The other 20 had a loop method with no code in use, a
+compile that never came within 30 s or a deoptimization cycle (`VARKA-326.md`), which a code list
+cannot tell apart. The releases are the history's: the two first released draws ran alone 6 of 6
+compiled, the long lane's first draw alone compiled at the host's width in 6 of 6 seeds, and
+position 0 never released.
+
+**So the template prewarm works for the int lane and not for the long lane.** With it, no int
+kernel released before position 16 (0 of 84, against 19 of 84 without), and the int rate past 16
+fell from 27.8 to 10.4 per cent. The long lane's did not move: 7 against 11 of 72 at positions 4
+to 15 and 43 against 46 of 144 past 16, 29.9 per cent with the prewarm. VARKA-295 9.8's "0 of
+2,000" was read on the Spark fuzzer's compositions, whose kernels are mostly int-lane; this is
+the first reading of long-lane kernels after a history, and it says the prewarm, which calls the
+`LongVector` templates too, does not keep their profiles clean against what the grammar's long
+kernels do to them.
+
+**At 128 bits the long lane releases alone.** 31 of 32 long kernels released at both prewarm
+settings, and the long lane's first draw alone was released at 128 bits in 6 of 6 seeds, every
+loop at tier 4: that is the shape at that width, `VARKA-374.md`'s case (no two-lane masks on
+x86), not a history. The int lane at 128 bits: 10 of 28 released past position 0 without the
+prewarm, 4 of 28 with it, 0 of 8 at position 0.
+
+### 9.3 The predictions of 6.1, scored
+
+1. **At 512 bits with the prewarm on, no slow fork at any N: holds** (0 of 18). **No history
+   kernel released after position 0: wrong.** 15 of 144 int kernels past position 16 and 50 of
+   216 long kernels past position 3 were released.
+2. **With the prewarm off the history's release rate grows with position: holds** (int 0, 4 of
+   12, 15 of 72, 40 of 144; long 0 of 24, 11 of 72, 46 of 144). **The kernel under test slow by
+   allocation at N = 16 and 64: wrong**, 0 of 12.
+3. **At 128 bits releases with the prewarm on and off alike, near 42 per 100: half right.** The
+   long lane releases alike (31 of 32 in each arm), but alone, so it is not history; the int lane
+   is 10 against 4 of 28, so the prewarm does move it, which `VARKA-373.md` 9 did not see on the
+   Spark compositions at a 128-bit preferred species.
+4. **No wrong answer: holds**, 0 in 1,140 kernels of the sweep, 102 of the nightly arm's run and
+   54 of the trial.
+5. **The nightly arm about 3 minutes (2.5 to 4): holds**, 3 min 52 s for six forks on three
+   pinned cores at a load of 14, a ratio of 1.3 to the 3-minute point estimate.
+
+### 9.4 The nightly step
+
+`history` (`--skip-history`), after the `deoptnull` step: `dev/varka_kernel_history.sh --after 16
+--forks 6 --guard`, the host's width, prewarm on. It fails on a wrong answer, a harness error, an
+unfinished or declined fork, or any slow fork of the kernel under test (`--max-slow 0`, since 0
+of 52 forks were slow); the history's releases are printed and not failed, since at N = 16 with
+the prewarm on they are a measured 7 of 72 long kernels and the step is a reader of them, not a
+ratchet. **It adds about 4 minutes to the nightly** (3 min 52 s here; on an idle machine it can
+use the default cores 0 to 5 and be faster), plus catalyst's test build when the `deoptnull` step
+did not run.
+
+### 9.5 What this leaves
+
+* **The long lane's releases after a history at the preferred species**, 29.9 per cent past
+  position 16 with the prewarm on, untouched by it. Not this row's to fix (no product code
+  changes here); it needs the classification VARKA-373 2 did for the int lane at four lanes
+  (which template sites hold the traps, from `-XX:+LogCompilation` on a replayed history, which
+  `-Dvarka.history.from` and the seed make exact), then a decision. Reported to the owner as a
+  candidate row.
+* **Which methods of a slow kernel are slow, under a C2 compile that still allocates**: the code
+  list says every loop is C2 code; which loop keeps the box needs the compile log or JFR's
+  allocation samples, as VARKA-373 took them.
+* **The 64-tail kernel of VARKA-209 under history**, `--outputs 64`, priced at 45 to 60 s a fork
+  on loaded cores and not run here.

@@ -1,0 +1,217 @@
+VARKA-257's probe (scope item 62; VARKA-257.md 2 and 9): what a kernel meets when it is
+warmed after N other kernels in the same JVM, which the cliff probe beside this file
+(VarkaInliningCliff-jdk25-probe.txt) cannot see, since it forks one class per JVM.
+
+Taken 16 October 2026 on the laptop (AMD Ryzen AI 9 HX PRO 370, 512-bit preferred species,
+OpenJDK 25.0.4.1) with dev/varka_kernel_history.sh: fresh JVMs of VarkaKernelHistoryProbe,
+each warming N kernels of the IR fuzz grammar (int at even positions, long at odd, seed
+20260903 + fork) through production's warm-up worker, then the cliff probe's cheap tails
+`year(d) + k` at 24 outputs, timed for 12 s, every kernel's answers compared with the
+reference evaluator on the compiled instance. Two JVMs at a time on three cores each, pinned
+to cores 12-17, beside other agents' work (the load is in each run's provenance). The
+warm-up's deadline is 30 s: a history kernel RELEASED is one still allocating at 30 s, and
+"with every loop C2" is one whose loop methods all had C2 code in use when it was released,
+VARKA-295's cause 4. The kernel under test is slow above 40 ns a row (the median of its last
+three seconds) or above 2048 bytes a call (its last second). "--prewarm off" is
+-Dvarka.warmup.vectorTemplates=false; 128 bits is -XX:MaxVectorSize=16.
+
+1. The sweep at the host's width: N = 0, 16, 64, prewarm on and off, 6 forks each
+
+commit:  6bbb6762da6
+date:    2026-10-16T11:26:29+00:00
+jdk:     openjdk version "25.0.4.1" 2026-08-18
+cpu:     AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+load:    18.89 24.21 26.18 at start
+args:    after=0,16,64 forks=6 seconds=12 widths=host prewarm=on,off seed=20260903 jvms=2 cpus=3 cpu_base=12 deadline=30 outputs=24 jvm=
+
+case (bits, prewarm, N)      verdict       ns/row bytes/call  warm-up | loop tiers
+512 bits, off, N=0 #0        fast             1.4         0  COMPILED 987ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, off, N=0 #1        fast             1.0         0  COMPILED 739ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, off, N=0 #2        fast             1.7         0  COMPILED 681ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, off, N=0 #3        fast             1.7         0  COMPILED 904ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, off, N=0 #4        fast             2.2         0  COMPILED 2089ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, off, N=0 #5        fast             1.8         0  COMPILED 1324ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, off, N=16 #0       fast             1.4         0  COMPILED 488ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, off, N=16 #1       fast             1.6         0  COMPILED 408ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, off, N=16 #2       fast             1.3         0  COMPILED 341ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, off, N=16 #3       fast             1.0         0  COMPILED 342ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, off, N=16 #4       fast             2.2         0  COMPILED 671ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, off, N=16 #5       fast             1.9         0  COMPILED 916ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, off, N=64 #0       fast             1.7         0  COMPILED 591ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, off, N=64 #1       fast             1.4         0  COMPILED 620ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, off, N=64 #2       fast             1.2         0  COMPILED 470ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, off, N=64 #3       fast             1.9         0  COMPILED 981ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, off, N=64 #4       fast             1.5         0  COMPILED 1034ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, off, N=64 #5       fast             2.4         0  COMPILED 646ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, on, N=0 #0         fast             1.9         0  COMPILED 1769ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, on, N=0 #1         fast             2.2         0  COMPILED 928ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, on, N=0 #2         fast             1.2         0  COMPILED 999ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, on, N=0 #3         fast             1.2         0  COMPILED 822ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, on, N=0 #4         fast             1.2         0  COMPILED 666ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, on, N=0 #5         fast             2.2         0  COMPILED 1746ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, on, N=16 #0        fast             2.9         0  COMPILED 915ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, on, N=16 #1        fast             1.6         0  COMPILED 501ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, on, N=16 #2        fast             1.4         0  COMPILED 522ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, on, N=16 #3        fast             1.2         0  COMPILED 460ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, on, N=16 #4        fast             2.1         0  COMPILED 1400ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, on, N=16 #5        fast             2.1         0  COMPILED 1093ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, on, N=64 #0        fast             1.8         0  COMPILED 422ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, on, N=64 #1        fast             1.4         0  COMPILED 510ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, on, N=64 #2        fast             1.3         0  COMPILED 433ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, on, N=64 #3        fast             1.3         0  COMPILED 362ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, on, N=64 #4        fast             2.2         0  COMPILED 735ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+512 bits, on, N=64 #5        fast             2.1         0  COMPILED 679ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+
+the kernel under test: slow by rate / slow by allocation / fast / unfinished or declined
+  512 bits  prewarm off, N=0     0 /   0 /   6 /   0   slow 0 of 6; fast 1.0 to 2.2 ns/row
+  512 bits  prewarm off, N=16    0 /   0 /   6 /   0   slow 0 of 6; fast 1.0 to 2.2 ns/row
+  512 bits  prewarm off, N=64    0 /   0 /   6 /   0   slow 0 of 6; fast 1.2 to 2.4 ns/row
+  512 bits  prewarm on , N=0     0 /   0 /   6 /   0   slow 0 of 6; fast 1.2 to 2.2 ns/row
+  512 bits  prewarm on , N=16    0 /   0 /   6 /   0   slow 0 of 6; fast 1.2 to 2.9 ns/row
+  512 bits  prewarm on , N=64    0 /   0 /   6 /   0   slow 0 of 6; fast 1.3 to 2.2 ns/row
+
+the history's kernels: released by the warm-up / warmed, by lane and position
+  512 bits  prewarm off, int  positions 0         0 /   12 (0.0%), 0 with every loop C2
+  512 bits  prewarm off, int  positions 1-3       4 /   12 (33.3%), 4 with every loop C2
+  512 bits  prewarm off, int  positions 4-15     15 /   72 (20.8%), 15 with every loop C2
+  512 bits  prewarm off, int  positions 16-63    40 /  144 (27.8%), 26 with every loop C2
+  512 bits  prewarm off, long positions 1-3       0 /   24 (0.0%), 0 with every loop C2
+  512 bits  prewarm off, long positions 4-15     11 /   72 (15.3%), 11 with every loop C2
+  512 bits  prewarm off, long positions 16-63    46 /  144 (31.9%), 46 with every loop C2
+  512 bits  prewarm on , int  positions 0         0 /   12 (0.0%), 0 with every loop C2
+  512 bits  prewarm on , int  positions 1-3       0 /   12 (0.0%), 0 with every loop C2
+  512 bits  prewarm on , int  positions 4-15      0 /   72 (0.0%), 0 with every loop C2
+  512 bits  prewarm on , int  positions 16-63    15 /  144 (10.4%), 9 with every loop C2
+  512 bits  prewarm on , long positions 1-3       0 /   24 (0.0%), 0 with every loop C2
+  512 bits  prewarm on , long positions 4-15      7 /   72 (9.7%), 7 with every loop C2
+  512 bits  prewarm on , long positions 16-63    43 /  144 (29.9%), 43 with every loop C2
+
+verdict: 0 of 36 forks slow; 0 wrong answers in 996 kernels compared
+
+2. The sweep at 128 bits: N = 0, 16, prewarm on and off, 4 forks each
+
+commit:  a8c595321d4 (dirty)
+date:    2026-10-16T12:31:12+00:00
+jdk:     openjdk version "25.0.4.1" 2026-08-18
+cpu:     AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+load:    30.25 30.24 29.06 at start
+args:    after=0,16 forks=4 seconds=12 widths=16 prewarm=on,off seed=20260903 jvms=2 cpus=3 cpu_base=12 deadline=30 outputs=24 jvm=
+
+case (bits, prewarm, N)      verdict       ns/row bytes/call  warm-up | loop tiers
+128 bits, off, N=0 #0        fast             3.1         0  COMPILED 786ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+128 bits, off, N=0 #1        fast             3.5         0  COMPILED 872ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+128 bits, off, N=0 #2        fast             3.1         0  COMPILED 795ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+128 bits, off, N=0 #3        fast             3.3         0  COMPILED 820ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+128 bits, off, N=16 #0       fast             3.3         0  COMPILED 1040ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+128 bits, off, N=16 #1       fast             4.4         0  COMPILED 511ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+128 bits, off, N=16 #2       fast             2.6         0  COMPILED 464ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+128 bits, off, N=16 #3       fast             3.8         0  COMPILED 944ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+128 bits, on, N=0 #0         fast             3.0         0  COMPILED 949ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+128 bits, on, N=0 #1         fast             3.1         0  COMPILED 991ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+128 bits, on, N=0 #2         fast             3.2         0  COMPILED 1038ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+128 bits, on, N=0 #3         fast             3.8         0  COMPILED 985ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+128 bits, on, N=16 #0        fast             5.7         0  COMPILED 1317ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+128 bits, on, N=16 #1        fast             3.4         0  COMPILED 477ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+128 bits, on, N=16 #2        fast             5.1         0  COMPILED 882ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+128 bits, on, N=16 #3        fast             3.5         0  COMPILED 394ms | loopDense0:L4,loopDense1:L4,loopMasked0:L4,loopMasked1:L4
+
+the kernel under test: slow by rate / slow by allocation / fast / unfinished or declined
+  128 bits  prewarm off, N=0     0 /   0 /   4 /   0   slow 0 of 4; fast 3.1 to 3.5 ns/row
+  128 bits  prewarm off, N=16    0 /   0 /   4 /   0   slow 0 of 4; fast 2.6 to 4.4 ns/row
+  128 bits  prewarm on , N=0     0 /   0 /   4 /   0   slow 0 of 4; fast 3.0 to 3.8 ns/row
+  128 bits  prewarm on , N=16    0 /   0 /   4 /   0   slow 0 of 4; fast 3.4 to 5.7 ns/row
+
+the history's kernels: released by the warm-up / warmed, by lane and position
+  128 bits  prewarm off, int  positions 0         0 /    4 (0.0%), 0 with every loop C2
+  128 bits  prewarm off, int  positions 1-3       2 /    4 (50.0%), 2 with every loop C2
+  128 bits  prewarm off, int  positions 4-15      8 /   24 (33.3%), 8 with every loop C2
+  128 bits  prewarm off, long positions 1-3       8 /    8 (100.0%), 8 with every loop C2
+  128 bits  prewarm off, long positions 4-15     23 /   24 (95.8%), 23 with every loop C2
+  128 bits  prewarm on , int  positions 0         0 /    4 (0.0%), 0 with every loop C2
+  128 bits  prewarm on , int  positions 1-3       0 /    4 (0.0%), 0 with every loop C2
+  128 bits  prewarm on , int  positions 4-15      4 /   24 (16.7%), 4 with every loop C2
+  128 bits  prewarm on , long positions 1-3       8 /    8 (100.0%), 8 with every loop C2
+  128 bits  prewarm on , long positions 4-15     23 /   24 (95.8%), 23 with every loop C2
+
+verdict: 0 of 16 forks slow; 0 wrong answers in 144 kernels compared
+
+3. Controls: the history's releases are the history's, except the long lane at 128 bits
+
+Draws that were released after a history, run alone (N = 1 from the draw,
+-Dvarka.history.from), at the host's width, prewarm off, seed 20260903, three runs each:
+
+  VARKA_HISTORY_KERNEL=0 draw=13 lane=long outputs=2 state=COMPILED millis=4715 first=1204568 last=1040 answers=ok
+  VARKA_HISTORY_KERNEL=0 draw=13 lane=long outputs=2 state=COMPILED millis=1645 first=1205600 last=1360 answers=ok
+  VARKA_HISTORY_KERNEL=0 draw=13 lane=long outputs=2 state=COMPILED millis=3986 first=1204592 last=720 answers=ok
+  VARKA_HISTORY_KERNEL=0 draw=6 lane=int outputs=1 state=COMPILED millis=3066 first=8718336 last=1472 answers=ok
+  VARKA_HISTORY_KERNEL=0 draw=6 lane=int outputs=1 state=COMPILED millis=1446 first=8968304 last=1312 answers=ok
+  VARKA_HISTORY_KERNEL=0 draw=6 lane=int outputs=1 state=COMPILED millis=4268 first=9129344 last=1152 answers=ok
+
+The long lane's first draw (draw 1) alone, six seeds (20260903 to 20260908), prewarm on, at
+128 bits and at the host's width:
+
+128 bits:
+  VARKA_HISTORY_KERNEL=0 draw=1 lane=long outputs=1 state=RELEASED millis=30041 first=5121880 last=2775872 answers=ok tiers=loopDense0:L4,loopMasked0:L4
+  VARKA_HISTORY_KERNEL=0 draw=1 lane=long outputs=1 state=RELEASED millis=30036 first=3004480 last=1880848 answers=ok tiers=loopDense0:L4,loopMasked0:L4
+  VARKA_HISTORY_KERNEL=0 draw=1 lane=long outputs=2 state=RELEASED millis=30031 first=2163136 last=1854704 answers=ok tiers=loopDense0:L4,loopMasked0:L4
+  VARKA_HISTORY_KERNEL=0 draw=1 lane=long outputs=1 state=RELEASED millis=30036 first=3480136 last=1635456 answers=ok tiers=loopDense0:L4,loopMasked0:L4
+  VARKA_HISTORY_KERNEL=0 draw=1 lane=long outputs=1 state=RELEASED millis=30031 first=1015920 last=753664 answers=ok tiers=loopDense0:L4,loopMasked0:L4
+  VARKA_HISTORY_KERNEL=0 draw=1 lane=long outputs=3 state=RELEASED millis=30028 first=10510960 last=6468944 answers=ok tiers=loopMasked0:L4
+host:
+  VARKA_HISTORY_KERNEL=0 draw=1 lane=long outputs=1 state=COMPILED millis=1430 first=2417808 last=1840 answers=ok
+  VARKA_HISTORY_KERNEL=0 draw=1 lane=long outputs=1 state=COMPILED millis=951 first=1265568 last=1280 answers=ok
+  VARKA_HISTORY_KERNEL=0 draw=1 lane=long outputs=2 state=COMPILED millis=670 first=900704 last=1680 answers=ok
+  VARKA_HISTORY_KERNEL=0 draw=1 lane=long outputs=1 state=COMPILED millis=1058 first=1555664 last=1040 answers=ok
+  VARKA_HISTORY_KERNEL=0 draw=1 lane=long outputs=1 state=COMPILED millis=541 first=366704 last=1120 answers=ok
+  VARKA_HISTORY_KERNEL=0 draw=1 lane=long outputs=3 state=COMPILED millis=1117 first=3757296 last=2320 answers=ok
+
+Fork 0's history (seed 20260903, N = 16) replayed whole at the host's width, the released
+positions with every loop method C2:
+
+  prewarm off run 1: released at positions 6
+  prewarm off run 2: released at positions 6, 8, 13
+  prewarm on run 1: released at positions 13
+  prewarm on run 2: released at positions 13, 14
+
+4. The admission trial: prewarm off, N = 0 and 16, 3 forks each
+
+commit:  0bb50dec792 (dirty)
+date:    2026-10-16T11:13:15+00:00
+jdk:     openjdk version "25.0.4.1" 2026-08-18
+cpu:     AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+load:    28.31 27.04 25.53 at start
+args:    after=0,16 forks=3 seconds=12 widths=host prewarm=off seed=20260903 jvms=2 cpus=3 cpu_base=12 deadline=30 outputs=24 jvm=
+
+the kernel under test: slow by rate / slow by allocation / fast / unfinished or declined
+  512 bits  prewarm off, N=0     0 /   0 /   3 /   0   slow 0 of 3; fast 2.5 to 3.5 ns/row
+  512 bits  prewarm off, N=16    0 /   0 /   3 /   0   slow 0 of 3; fast 3.4 to 3.7 ns/row
+
+the history's kernels: released by the warm-up / warmed, by lane and position
+  512 bits  prewarm off, int  positions 0         0 /    3 (0.0%), 0 with every loop C2
+  512 bits  prewarm off, int  positions 1-3       0 /    3 (0.0%), 0 with every loop C2
+  512 bits  prewarm off, int  positions 4-15      1 /   18 (5.6%), 0 with every loop C2
+  512 bits  prewarm off, long positions 1-3       0 /    6 (0.0%), 0 with every loop C2
+  512 bits  prewarm off, long positions 4-15      1 /   18 (5.6%), 0 with every loop C2
+
+verdict: 0 of 6 forks slow; 0 wrong answers in 54 kernels compared
+
+5. The nightly's arm: N = 16, prewarm on, 6 forks, under --guard (3 min 52 s on three loaded cores)
+
+commit:  a8c595321d4 (dirty)
+date:    2026-10-16T13:13:39+00:00
+jdk:     openjdk version "25.0.4.1" 2026-08-18
+cpu:     AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M
+load:    14.47 13.67 13.71 at start
+args:    after=16 forks=6 seconds=12 widths=host prewarm=on seed=20260903 jvms=2 cpus=3 cpu_base=12 deadline=30 outputs=24 jvm=
+
+the kernel under test: slow by rate / slow by allocation / fast / unfinished or declined
+  512 bits  prewarm on , N=16    0 /   0 /   6 /   0   slow 0 of 6; fast 1.7 to 3.1 ns/row
+
+the history's kernels: released by the warm-up / warmed, by lane and position
+  512 bits  prewarm on , int  positions 0         0 /    6 (0.0%), 0 with every loop C2
+  512 bits  prewarm on , int  positions 1-3       0 /    6 (0.0%), 0 with every loop C2
+  512 bits  prewarm on , int  positions 4-15      1 /   36 (2.8%), 0 with every loop C2
+  512 bits  prewarm on , long positions 1-3       0 /   12 (0.0%), 0 with every loop C2
+  512 bits  prewarm on , long positions 4-15      5 /   36 (13.9%), 5 with every loop C2
+
+verdict: 0 of 6 forks slow; 0 wrong answers in 102 kernels compared

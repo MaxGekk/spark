@@ -38,8 +38,10 @@
 # its own cores. --deadline is the warm-up's deadline in seconds (30; production's is 60): a
 # kernel still allocating then is released, which is what the history kernels' RELEASED counts
 # read. --outputs is the cheap-tail count of the kernel under test (24, the cliff guard's smaller
-# case: the 64 of VARKA-209 12.3 takes 45 to 60 s to warm on three loaded cores). --guard makes the exit status 1 on a wrong answer, a fork that
-# did not finish, or more slow forks than --max-slow (0): the nightly's arm (dev/varka_nightly.sh).
+# case: the 64 of VARKA-209 12.3 takes 45 to 60 s to warm on three loaded cores). --guard makes
+# the exit status 1 on a wrong answer or a harness error, a fork that did not finish or whose
+# timed calls declined, or more slow forks than --max-slow (0): the nightly's arm
+# (dev/varka_nightly.sh).
 #
 # Needs catalyst's test classes and exported classpath; builds them with dev/varka_matrix.sh
 # --module catalyst --list when they are missing or under --build. Fork logs and the summary go
@@ -75,16 +77,18 @@ root=$(pwd)
 if [ "$build" -eq 1 ] || [ ! -s target/varka-matrix/classpath ]; then
   dev/varka_matrix.sh --module catalyst --list > /dev/null
 fi
-# The JIT is what is measured, so the memory sanitizer's branches stay out of the kernels, as
-# for the benchmarks and the other JIT probes (sql/varka/AGENTS.md).
-mapfile -t opts < <(grep -v -e '^-Dvarka.sanitizeMemory' target/varka-matrix/jvm.opts)
+# The test JVM's options as sbt gives them. The JIT is what is measured, so the memory sanitizer
+# stays off, as for the benchmarks and the other JIT probes (sql/varka/AGENTS.md): the options
+# file does not carry it (dev/varka_matrix.sh adds it to its own runs), and nothing here adds it.
+mapfile -t opts < target/varka-matrix/jvm.opts
 cp="$root/sql/catalyst/target/scala-2.13/classes:$(cat target/varka-matrix/classpath)"
 main=org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelHistoryProbe
 out=${out:-target/varka-kernel-history/$(date +%Y%m%d-%H%M%S)}
 case "$out" in /*) ;; *) out="$root/$out" ;; esac
 mkdir -p "$out"
 {
-  echo "commit:  $(git rev-parse --short=11 HEAD)$(git diff --quiet HEAD -- sql dev || echo ' (dirty)')"
+  dirty=$(git diff --quiet HEAD -- sql dev || echo ' (dirty)')
+  echo "commit:  $(git rev-parse --short=11 HEAD)$dirty"
   echo "date:    $(date -u +%Y-%m-%dT%H:%M:%S+00:00)"
   echo "jdk:     $(java -version 2>&1 | head -1)"
   echo "cpu:     $(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //')"

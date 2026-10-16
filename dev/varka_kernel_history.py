@@ -24,9 +24,11 @@
 # A fork's kernel under test is slow by its rate, as the inlining-cliff reader cuts it (the median
 # of its last three seconds over --slow-at nanoseconds a row: the loop past C1's limit), or by its
 # allocation (over --alloc-at bytes a call in its last second: a C2 compile that kept a vector box
-# per loop iteration, VARKA-295), and both are reported apart. A fork whose log has no DONE line
-# did not finish. A wrong answer, from any kernel of any fork, is listed, and under --guard fails,
-# as do an unfinished fork and more slow forks than --max-slow.
+# per loop iteration, VARKA-295), and both are reported apart. A fork whose log has no DONE line,
+# or whose JVM exited with a status other than the probe's own (0, 1 for a wrong answer, 2 for a
+# harness error), did not finish; a fork whose timed calls declined is "declined", since its rate
+# measured no loop. A wrong answer or a harness error, from any kernel of any fork, is listed, and
+# under --guard fails, as do an unfinished or declined fork and more slow forks than --max-slow.
 import argparse
 import glob
 import os
@@ -58,6 +60,7 @@ def read_fork(path, slow_at, alloc_at):
         "alloc": None,
         "code": "",
         "wrong": [],
+        "errors": [],
         "done": None,
         "skipped": 0,
     }
@@ -85,12 +88,26 @@ def read_fork(path, slow_at, alloc_at):
                 fork["code"] = rest
             elif key == "WRONG":
                 fork["wrong"].append(rest)
+            elif key == "ERROR":
+                fork["errors"].append(rest)
             elif key == "DONE":
                 fork["done"] = fields(rest)
+    exit_path = path[: -len(".log")] + ".exit"
+    exit_status = None
+    if os.path.exists(exit_path):
+        with open(exit_path) as f:
+            exit_status = f.read().strip()
     last = fork["rates"][-3:]
     fork["ns_per_row"] = statistics.median(last) if last else None
-    if fork["done"] is None or fork["ns_per_row"] is None or fork["alloc"] is None:
+    if (
+        fork["done"] is None
+        or fork["ns_per_row"] is None
+        or fork["alloc"] is None
+        or exit_status not in (None, "0", "1", "2")
+    ):
         fork["verdict"] = "unfinished"
+    elif fork["done"].get("runStatus", "0") != "0":
+        fork["verdict"] = "declined"
     elif fork["ns_per_row"] > slow_at:
         fork["verdict"] = "slow-rate"
     elif fork["alloc"] > alloc_at:
@@ -109,6 +126,11 @@ def bucket(position):
         if lo <= position <= hi:
             return "%d" % lo if lo == hi else "%d-%s" % (lo, hi if hi < 1 << 30 else "")
     return "?"
+
+
+def label(fork):
+    """A fork's width as shown: its preferred int vector bits, once it printed them."""
+    return "%s bits" % fork["bits"] if fork["bits"] else fork["width"]
 
 
 def main():
@@ -134,7 +156,7 @@ def main():
         print(
             "%-28s %-11s %8s %9s  %s %sms | %s"
             % (
-                "%s, %s, N=%d #%d" % (f["bits"] or f["width"], f["prewarm"], f["after"], f["fork"]),
+                "%s, %s, N=%d #%d" % (label(f), f["prewarm"], f["after"], f["fork"]),
                 f["verdict"],
                 "%.1f" % f["ns_per_row"] if f["ns_per_row"] is not None else "-",
                 "%.0f" % f["alloc"] if f["alloc"] is not None else "-",
@@ -145,10 +167,13 @@ def main():
         )
 
     print()
-    print("the kernel under test: slow by rate / slow by allocation / fast / unfinished per case")
+    widths = {f["width"]: label(f) for f in all_forks if f["bits"]}
+    print(
+        "the kernel under test: slow by rate / slow by allocation / fast / unfinished or declined"
+    )
     cases = defaultdict(list)
     for f in all_forks:
-        cases[(f["bits"] or f["width"], f["prewarm"], f["after"])].append(f)
+        cases[(f["width"], f["prewarm"], f["after"])].append(f)
     slow = 0
     for case in sorted(cases, key=lambda c: (c[0], c[1], c[2])):
         group = cases[case]
@@ -159,15 +184,15 @@ def main():
         fast = [f["ns_per_row"] for f in group if f["verdict"] == "fast"]
         released = sum(1 for f in group if f["test"].get("state") == "RELEASED")
         print(
-            "  %4s bits, prewarm %-3s, N=%-3d %3d / %3d / %3d / %3d   slow %d of %d%s%s"
+            "  %-9s prewarm %-3s, N=%-3d %3d / %3d / %3d / %3d   slow %d of %d%s%s"
             % (
-                case[0],
+                widths.get(case[0], case[0]),
                 case[1],
                 case[2],
                 n["slow-rate"],
                 n["slow-alloc"],
                 n["fast"],
-                n["unfinished"],
+                n["unfinished"] + n["declined"],
                 n["slow-rate"] + n["slow-alloc"],
                 len(group),
                 "; fast %.1f to %.1f ns/row" % (min(fast), max(fast)) if fast else "",
@@ -176,38 +201,58 @@ def main():
         )
 
     print()
-    print("the history's kernels: released by the warm-up / warmed, by position in the history")
-    by_position = defaultdict(lambda: [0, 0])
+    print("the history's kernels: released by the warm-up / warmed, by lane and position")
+    # By lane too: the history alternates the lanes, int at even positions, so position 0, the
+    # control, is an int kernel, and a long kernel that releases alone shows at every position.
+    by_position = defaultdict(lambda: [0, 0, 0])
     for f in all_forks:
         for k in f["kernels"]:
-            key = (f["bits"] or f["width"], f["prewarm"], bucket(k["position"]))
+            key = (f["width"], f["prewarm"], k.get("lane", "?"), bucket(k["position"]))
             by_position[key][1] += 1
             if k.get("state") == "RELEASED":
                 by_position[key][0] += 1
-    for key in sorted(by_position, key=lambda k: (k[0], k[1], int(k[2].split("-")[0]))):
-        released, total = by_position[key]
+                # Every loop method with C2 code in use: compiled and still allocating.
+                if "tiers" in k and ":none" not in k["tiers"]:
+                    by_position[key][2] += 1
+    for key in sorted(by_position, key=lambda k: (k[0], k[1], k[2], int(k[3].split("-")[0]))):
+        released, total, compiled = by_position[key]
         print(
-            "  %4s bits, prewarm %-3s, positions %-6s %4d / %4d (%.1f%%)"
-            % (key[0], key[1], key[2], released, total, 100.0 * released / total)
+            "  %-9s prewarm %-3s, %-4s positions %-6s %4d / %4d (%.1f%%), %d with every loop C2"
+            % (
+                widths.get(key[0], key[0]),
+                key[1],
+                key[2],
+                key[3],
+                released,
+                total,
+                100.0 * released / total,
+                compiled,
+            )
         )
 
     wrong = [(f, w) for f in all_forks for w in f["wrong"]]
-    unfinished = sum(1 for f in all_forks if f["verdict"] == "unfinished")
+    errors = [(f, e) for f in all_forks for e in f["errors"]]
+    unfinished = sum(1 for f in all_forks if f["verdict"] in ("unfinished", "declined"))
+    skipped = sum(f["skipped"] for f in all_forks)
     compared = sum(len(f["kernels"]) + (1 if f["done"] else 0) for f in all_forks)
     print()
     for f, w in wrong:
         print("WRONG ANSWER in %s: %s" % (os.path.basename(f["path"]), w))
+    for f, e in errors:
+        print("HARNESS ERROR in %s: %s" % (os.path.basename(f["path"]), e))
     print(
-        "verdict: %d of %d forks slow%s; %d wrong answers in %d kernels compared"
+        "verdict: %d of %d forks slow%s; %d wrong answers%s in %d kernels compared%s"
         % (
             slow,
             len(all_forks),
-            ", %d unfinished" % unfinished if unfinished else "",
+            ", %d unfinished or declined" % unfinished if unfinished else "",
             len(wrong),
+            ", %d harness errors" % len(errors) if errors else "",
             compared,
+            "; %d draws skipped (declined or repeated)" % skipped if skipped else "",
         )
     )
-    if args.guard and (wrong or unfinished or slow > args.max_slow):
+    if args.guard and (wrong or errors or unfinished or slow > args.max_slow):
         sys.exit(1)
 
 

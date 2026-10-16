@@ -69,7 +69,7 @@ import org.apache.spark.util.Utils;
  * through {@link VarkaKernelChecks#runLoaded} on the instance the JVM compiled, over a batch with
  * nulls and one without, against {@link VarkaReference}: a kernel that runs fast and answers
  * wrong after a history is the finding the rate cannot show. A wrong answer is printed and the
- * process exits 1 at the end.
+ * process exits 1 at the end; a failure of the harness rather than the check exits 2.
  *
  * <p>Arguments: {@code <after N> <seed> <seconds> [outputs]}, the last the cheap-tail count
  * of the kernel under test (24 by default: the 64 of VARKA-209 12.3 takes 45 to 60 s to warm on
@@ -81,15 +81,18 @@ import org.apache.spark.util.Utils;
  *   <li>{@code VARKA_HISTORY_KERNEL=<position> draw=<k> lane=<int|long> outputs=<n>
  *       state=<COMPILED|RELEASED|...> millis=<warm-up> first=<bytes> last=<bytes>
  *       answers=<ok|declined|wrong>}, with {@code tiers=<loop tiers>} when released, one per
- *       history kernel, position 0 first; {@code VARKA_HISTORY_SKIPPED=<k>} for a draw the
- *       emitter refused;</li>
+ *       history kernel, position 0 first; {@code VARKA_HISTORY_SKIPPED=<k> <why>} for a draw the
+ *       emitter declined or whose shape repeated an earlier draw's;</li>
  *   <li>{@code VARKA_HISTORY_TEST=state=<state> millis=<warm-up> first=<bytes> last=<bytes>
  *       methods=<loop>:<bytes>:<sites>,...};</li>
  *   <li>{@code VARKA_HISTORY_RATE=<second> <nanoseconds a row>} once a second;</li>
  *   <li>{@code VARKA_HISTORY_ALLOC=<bytes a call>} over the last second;</li>
  *   <li>{@code VARKA_HISTORY_CODE=<loop method>:<tier of the code in use, or none>,...};</li>
- *   <li>{@code VARKA_HISTORY_WRONG=<position or test> <the check's message, first line>};</li>
- *   <li>{@code VARKA_HISTORY_DONE=status=<0 or 1> templateMillis=<the prewarm's time>}.</li>
+ *   <li>{@code VARKA_HISTORY_WRONG=<position or test> <the check's message, first line>}, and
+ *       {@code VARKA_HISTORY_ERROR=} the same for a failure that is not the check's;</li>
+ *   <li>{@code VARKA_HISTORY_DONE=status=<0, 1 for a wrong answer, 2 for an error>
+ *       runStatus=<the timed calls' statuses or'd> answers=<the test kernel's>
+ *       templateMillis=<the prewarm's time>}.</li>
  * </ul>
  */
 public final class VarkaKernelHistoryProbe {
@@ -104,6 +107,8 @@ public final class VarkaKernelHistoryProbe {
   public static final String ALLOC_PREFIX = "VARKA_HISTORY_ALLOC=";
   public static final String CODE_PREFIX = "VARKA_HISTORY_CODE=";
   public static final String WRONG_PREFIX = "VARKA_HISTORY_WRONG=";
+  public static final String ERROR_PREFIX = "VARKA_HISTORY_ERROR=";
+  public static final String SKIPPED_PREFIX = "VARKA_HISTORY_SKIPPED=";
   public static final String DONE_PREFIX = "VARKA_HISTORY_DONE=";
 
   /** Plants a wrong reference answer in every comparison, to show the check compares. */
@@ -301,7 +306,9 @@ public final class VarkaKernelHistoryProbe {
    * The kernel's answers on its batch, through both bodies - the batch's nulls, then none - on
    * the instance given: {@code ok}, {@code declined} when a guard declined a body (allowed: the
    * check is of answers, and the values are drawn inside the bounds), or the failure's first line
-   * prefixed with {@code wrong: }.
+   * prefixed with {@code wrong: } for the check's own failures, which are all
+   * {@link IllegalStateException}s (a row, a validity bit or a status that differs), and with
+   * {@code error: } for anything else, which is the harness's and not the kernel's.
    */
   static String answers(VarkaFusedKernel kernel, Subject s, String context) {
     int n = s.numInputs();
@@ -324,14 +331,19 @@ public final class VarkaKernelHistoryProbe {
                 VarkaKernelChecks.CallHook.NONE);
         declined |= status != 0;
       }
+    } catch (IllegalStateException e) {
+      return "wrong: " + firstLine(e);
     } catch (VirtualMachineError e) {
       throw e;
     } catch (Throwable t) {
-      String message = String.valueOf(t.getMessage());
-      return "wrong: " + t.getClass().getSimpleName() + ": " + message.lines().findFirst()
-          .orElse("");
+      return "error: " + firstLine(t);
     }
     return declined ? "declined" : "ok";
+  }
+
+  private static String firstLine(Throwable t) {
+    return t.getClass().getSimpleName() + ": "
+        + String.valueOf(t.getMessage()).lines().findFirst().orElse("");
   }
 
   /**
@@ -390,29 +402,32 @@ public final class VarkaKernelHistoryProbe {
     for (int position = 0; position < args.after(); position++) {
       Subject s = null;
       VarkaShapeEntry entry = null;
-      // A draw the emitter refuses (past the class-file cap) does not run; the next draw takes
-      // its position.
+      // A draw the emitter declines (past a class-file cap), or one whose shape an earlier draw
+      // already had - the key holds no literal values, so the cache hands back the kernel already
+      // warmed - does not run; the next draw takes its position. Any other emitter failure ends
+      // the fork, which the reader reports as unfinished.
       for (int tries = 0; entry == null; tries++, k++) {
         if (tries == MAX_DRAWS_PER_KERNEL) {
-          throw new IllegalStateException(tries + " draws in a row did not emit, at draw " + k);
+          throw new IllegalStateException(tries + " draws in a row did not run, at draw " + k);
         }
         s = draw(args.seed(), k);
         try {
           entry = emit(cache, s, "history-" + k);
-        } catch (RuntimeException e) {
-          System.out.println("VARKA_HISTORY_SKIPPED=" + k + " " + e.getClass().getSimpleName());
+          if (entry.warmth().state() != VarkaKernelWarmth.State.COLD) {
+            System.out.println(SKIPPED_PREFIX + k + " repeated shape");
+            entry = null;
+          }
+        } catch (VarkaEmitDeclined e) {
+          System.out.println(SKIPPED_PREFIX + k + " declined: " + firstLine(e));
         }
       }
       Warmed w = warm(entry, s, "history-" + (k - 1));
       String verdict = answers(w.entry().newKernel(), s, "history kernel " + position);
-      if (verdict.startsWith("wrong")) {
-        status = 1;
-        System.out.println(WRONG_PREFIX + position + " draw=" + (k - 1) + " " + verdict);
-      }
+      status = Math.max(status, failed(verdict, position + " draw=" + (k - 1)));
       System.out.println(KERNEL_PREFIX + position + " draw=" + (k - 1) + " lane="
           + (s.longLane() ? "long" : "int") + " outputs=" + s.roots().size() + " state="
           + w.state() + " millis=" + w.millis() + " first=" + w.firstProbeBytes() + " last="
-          + w.lastProbeBytes() + " answers=" + (verdict.startsWith("wrong") ? "wrong" : verdict)
+          + w.lastProbeBytes() + " answers=" + word(verdict)
           // A released kernel's loop tiers: no C2 code is a compile that never came or a
           // deoptimization cycle, C2 code in use is a compiled kernel still allocating.
           + (w.state() == VarkaKernelWarmth.State.RELEASED
@@ -433,25 +448,47 @@ public final class VarkaKernelHistoryProbe {
         + w.firstProbeBytes() + " last=" + w.lastProbeBytes() + " methods="
         + String.join(",", methods));
     var kernel = w.entry().newKernel();
-    timed(kernel, test, args.seconds());
+    int runStatus = timed(kernel, test, args.seconds());
     System.out.println(CODE_PREFIX + loopTiers(w.entry().klass()));
     String verdict = answers(kernel, test, "kernel under test");
-    if (verdict.startsWith("wrong")) {
-      status = 1;
-      System.out.println(WRONG_PREFIX + "test " + verdict);
-    }
-    System.out.println(DONE_PREFIX + "status=" + status + " answers="
-        + (verdict.startsWith("wrong") ? "wrong" : verdict) + " templateMillis="
+    status = Math.max(status, failed(verdict, "test"));
+    // A timed call that declined ran no loop, so its rate and allocation say nothing.
+    System.out.println(DONE_PREFIX + "status=" + status + " runStatus=" + runStatus
+        + " answers=" + word(verdict) + " templateMillis="
         + VarkaKernelWarmup.templateWarmupNanos() / 1_000_000L);
     System.exit(status);
+  }
+
+  /** The verdict's first word: ok, declined, wrong or error. */
+  private static String word(String verdict) {
+    int colon = verdict.indexOf(':');
+    return colon < 0 ? verdict : verdict.substring(0, colon);
+  }
+
+  /**
+   * Prints a wrong answer or a harness error of the kernel at {@code where}, and returns the exit
+   * status it asks for: 1 for a wrong answer, 2 for an error, 0 for neither.
+   */
+  private static int failed(String verdict, String where) {
+    return switch (word(verdict)) {
+      case "wrong" -> {
+        System.out.println(WRONG_PREFIX + where + " " + verdict);
+        yield 1;
+      }
+      case "error" -> {
+        System.out.println(ERROR_PREFIX + where + " " + verdict);
+        yield 2;
+      }
+      default -> 0;
+    };
   }
 
   /**
    * The cliff probe's timed loop, statement for statement in what it reads: null-free 1024-row
    * calls for {@code seconds}, the rate printed once a second and the allocation per call of the
-   * last second at the end.
+   * last second at the end. Returns the calls' statuses or'd, nonzero if any call declined.
    */
-  private static void timed(VarkaFusedKernel kernel, Subject s, int seconds) {
+  private static int timed(VarkaFusedKernel kernel, Subject s, int seconds) {
     var threads = (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
     int outputs = s.roots().size();
     try (var arena = Arena.ofConfined()) {
@@ -477,8 +514,9 @@ public final class VarkaKernelHistoryProbe {
       long windowCalls = 0L;
       long windowBytes = threads.getCurrentThreadAllocatedBytes();
       double bytesPerCall = 0.0;
+      int status = 0;
       while (System.nanoTime() < end) {
-        kernel.run(src, noValidity, noNulls, dst, dstValidity, literals, ROWS);
+        status |= kernel.run(src, noValidity, noNulls, dst, dstValidity, literals, ROWS);
         windowRows += ROWS;
         windowCalls += 1;
         long now = System.nanoTime();
@@ -495,6 +533,7 @@ public final class VarkaKernelHistoryProbe {
         }
       }
       System.out.println(ALLOC_PREFIX + String.format("%.0f", bytesPerCall));
+      return status;
     }
   }
 }
