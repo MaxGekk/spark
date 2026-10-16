@@ -176,6 +176,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Value records crash C2's escape analysis on the early-access Valhalla build, and the crash is in a method handle](sql/varka/skills/the-jit.md#value-records-crash-c2s-escape-analysis-on-the-early-access-valhalla-build-and-the-crash-is-in-a-method-handle)
 * [With the intrinsics off C2 takes twenty seconds a loop method, and an epilogue's compile 337 MB](sql/varka/skills/the-jit.md#with-the-intrinsics-off-c2-takes-twenty-seconds-a-loop-method-and-an-epilogues-compile-337-mb)
 * [With the trap limits raised, a masked loop traps thousands of times and still reads as settled](sql/varka/skills/the-jit.md#with-the-trap-limits-raised-a-masked-loop-traps-thousands-of-times-and-still-reads-as-settled)
+* [A kernel warmed after other kernels can stay allocating, and the template prewarm guards only the int lane](sql/varka/skills/the-jit.md#a-kernel-warmed-after-other-kernels-can-stay-allocating-and-the-template-prewarm-guards-only-the-int-lane)
 
 #### [The Vector API and vector width](sql/varka/skills/vector-api-and-width.md)
 * [Vector API on HotSpot, Measured (JDK 25, x86-64)](sql/varka/skills/vector-api-and-width.md#vector-api-on-hotspot-measured-jdk-25-x86-64)
@@ -206,6 +207,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A run of master scoped by its diff from master tests nothing, and says it passed](sql/varka/skills/working-in-this-repo.md#a-run-of-master-scoped-by-its-diff-from-master-tests-nothing-and-says-it-passed)
 * [A path-based checkstyle suppression matches the absolute path, checkout directory included](sql/varka/skills/working-in-this-repo.md#a-path-based-checkstyle-suppression-matches-the-absolute-path-checkout-directory-included)
 * [A two-track milestone drifts to the measurable track; review it against the done-when list](sql/varka/skills/working-in-this-repo.md#a-two-track-milestone-drifts-to-the-measurable-track-review-it-against-the-done-when-list)
-* [A day of merges is a day of Builds; the queue now keeps a verdict across docs-only pushes](sql/varka/skills/working-in-this-repo.md#a-day-of-merges-is-a-day-of-builds-the-queue-now-keeps-a-verdict-across-docs-only-pushes)
+* [A day of merges was a day of Builds; the laptop queue kept a verdict across docs-only pushes](sql/varka/skills/working-in-this-repo.md#a-day-of-merges-was-a-day-of-builds-the-laptop-queue-kept-a-verdict-across-docs-only-pushes)
+* [The fork's CI queue is a job inside the Build, and the check sync rides the push](sql/varka/skills/working-in-this-repo.md#the-forks-ci-queue-is-a-job-inside-the-build-and-the-check-sync-rides-the-push)
 
 <!-- END generated contents -->

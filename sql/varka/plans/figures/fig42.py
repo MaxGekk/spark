@@ -123,7 +123,7 @@ for row, (when, boxes) in enumerate(ROWS):
 r.note(
     40,
     600,
-    "run alone before the allocating kernel, %d of %d earlier kernels were enough"
+    "run alone before the allocating kernel, %d of %d earlier compositions were enough"
     % (n["alone"], n["of"]),
     size=19,
 )
