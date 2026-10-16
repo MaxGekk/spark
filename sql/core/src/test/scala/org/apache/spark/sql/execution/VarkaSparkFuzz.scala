@@ -269,13 +269,14 @@ object VarkaSparkFuzz {
   }
 
   /**
-   * Whether composition `iteration` adds nested trees (VARKA-298): half of them, three in a row
-   * and then three without, so that the nested ones meet both pools, the wider pool, pivots and
-   * the partition check in every combination those cycles of two, three and four make.
+   * Whether composition `iteration` adds nested trees (VARKA-298): half of them, five in a row and
+   * then five without. A run of five covers every residue of two and four and the period of ten
+   * is prime to three, so the nested ones meet both pools, the wider pool, pivots in both pools
+   * and the partition check (which only safe compositions take).
    * `-Dvarka.sparkfuzz.nested=false` draws none, which replays a seed's compositions as they were
    * drawn before VARKA-298 and measures what the nested ones cost.
    */
-  def nestedIteration(iteration: Int): Boolean = nestedOn && (iteration / 3) % 2 == 1
+  def nestedIteration(iteration: Int): Boolean = nestedOn && (iteration / 5) % 2 == 1
 
   private val nestedOn = !sys.props.get("varka.sparkfuzz.nested").contains("false")
 
@@ -287,16 +288,28 @@ object VarkaSparkFuzz {
    */
   private def withNested(c: Case, seed: Long, iteration: Int): Case = {
     val n = new java.util.Random(seed * 1000003L + iteration + NestedSalt)
+    // A tree that renders as one of the composition's coverage rows (`year(d)` is both) is not
+    // added, so that `trees` names nested trees only.
+    val taken = (c.outputs ++ c.conjuncts.map(_.sql)).toSet
     val outputs = (0 until 1 + n.nextInt(2)).map(_ => VarkaCatalystGrammar.drawOutput(n))
-    var trees = c.trees ++ outputs.map(t => t.sql -> t)
+    var trees = c.trees
     var outs = c.outputs
-    outputs.foreach(t => outs = outs.patch(n.nextInt(outs.size + 1), Seq(t.sql), 0))
+    outputs.foreach { t =>
+      val at = n.nextInt(outs.size + 1)
+      if (!taken.contains(t.sql)) {
+        outs = outs.patch(at, Seq(t.sql), 0)
+        trees += t.sql -> t
+      }
+    }
     var conjuncts = c.conjuncts
     if (if (conjuncts.nonEmpty) n.nextBoolean() else n.nextInt(3) == 0) {
       val p = VarkaCatalystGrammar.drawPredicate(n)
-      trees += p.sql -> p
-      conjuncts = conjuncts.patch(n.nextInt(conjuncts.size + 1),
-        Seq(Conjunct(p.sql, n.nextInt(4) == 0)), 0)
+      val at = n.nextInt(conjuncts.size + 1)
+      val negated = n.nextInt(4) == 0
+      if (!taken.contains(p.sql)) {
+        trees += p.sql -> p
+        conjuncts = conjuncts.patch(at, Seq(Conjunct(p.sql, negated)), 0)
+      }
     }
     c.copy(outputs = outs, conjuncts = conjuncts, trees = trees)
   }

@@ -102,6 +102,29 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     disagreement(c.fixture, c.select, c.where, c.ansi, partitions, c.pivot.map(rowText), forces)
 
   /**
+   * Runs `body` with the census counters of `VarkaSparkDifferential` restored afterwards, so that
+   * the reruns of a racing disagreement are not counted as compositions.
+   */
+  private def withoutCounting[T](body: => T): T = {
+    val counters = (compared, fused, bothErrored, filtered, filteredNonEmpty, pivotFiltered,
+      pivotFilteredNonEmpty, forcedRuns, forcedApplied)
+    val seen = errorsSeen.clone()
+    try body finally {
+      compared = counters._1
+      fused = counters._2
+      bothErrored = counters._3
+      filtered = counters._4
+      filteredNonEmpty = counters._5
+      pivotFiltered = counters._6
+      pivotFilteredNonEmpty = counters._7
+      forcedRuns = counters._8
+      forcedApplied = counters._9
+      errorsSeen.clear()
+      errorsSeen ++= seen
+    }
+  }
+
+  /**
    * The outputs a composition forces: one, chosen by the iteration, or every one. A composition of
    * one output forces none: with its only output declined the plan keeps no Varka node, so the
    * plan cannot prove the force moved anything.
@@ -124,7 +147,11 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     // A kind that no longer needs the force (the first run's was not repeatable) keeps none, so
     // the reproducer does not name a force its kind does not depend on.
     val start = if (kind.startsWith("with an output forced")) forced else forced.copy(force = None)
-    val small = shrink(start, kind, x => kindOf(x, partitions, x.force.toSeq))
+    // A kind two listed errors can show by racing (VARKA-298.md 9.3) is kept by a candidate only
+    // if it shows twice, so that a lucky race does not pass for a smaller case.
+    val twice = racingErrors(kind, start.ansi)
+    val small = shrink(start, kind, x => kindOf(x, partitions, x.force.toSeq)
+      .filter(k => !twice || kindOf(x, partitions, x.force.toSeq).contains(k)))
     val text = render(Reproducer("regression", s"seed $seed iteration $it", small.ansi, kind,
       small.select, small.where, small.fixture, small.pivot.map(rowText), small.force))
     val dir = getWorkspaceFilePath("sql", "core", "target", "varka-sparkfuzz")
@@ -150,8 +177,9 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
       val partitions = it % partitionEvery == 0
       val errorsBefore = bothErrored
       val result = kindOf(c, partitions, forcesOf(c, it)).filter { kind =>
-        val believed = !racingErrors(kind, c.ansi) ||
+        val believed = !racingErrors(kind, c.ansi) || withoutCounting {
           (0 until 3).forall(_ => kindOf(c, partitions, forcesOf(c, it)).isDefined)
+        }
         if (!believed) raced += 1
         believed
       }
@@ -205,7 +233,9 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     var evidence = if (warmupJitEvidence) Some(VarkaJitEvidence.start()) else None
     try withWarmupDeadline(warmupDeadline) {
       for (it <- range if failures.size < 3) {
-        val c = rectify(draw(rows, seed, it))
+        // The coverage rows alone: the nested trees meet the bug of VARKA-298.md 9.2 and the race
+        // of 9.3, which this arm, comparing up to five runs a composition, has no rerun for.
+        val c = rectify(drawRows(rows, seed, it))
         if (warmupShow) {
           info(s"iteration $it: outputs ${c.outputs}, filter ${c.conjuncts.map(_.sql)} ${c.op}")
         }
@@ -414,7 +444,9 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     // end without a filter; that case is not a PQS case and is skipped.
     var checked = 0
     for (it <- 0 until 300 if checked < 60) {
-      val drawn = draw(rows, seed, it)
+      // The coverage rows alone: a nested conjunct can meet the bug of VARKA-298.md 9.2, which is
+      // the main test's to find, not this one's.
+      val drawn = drawRows(rows, seed, it)
       if (drawn.pivot.isDefined) {
         val c = rectify(drawn)
         if (c.conjuncts.nonEmpty) {
@@ -620,18 +652,22 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
   }
 
   test("half the compositions add nested trees and keep the coverage rows they drew") {
-    assume(nestedIteration(3), "-Dvarka.sparkfuzz.nested=false draws no nested trees")
+    assume(nestedIteration(5), "-Dvarka.sparkfuzz.nested=false draws no nested trees")
     val nestedOnes = (0 until 60).filter(nestedIteration)
     assert(nestedOnes.size == 30)
+    var withTrees = 0
     for (it <- 0 until 60) {
       val c = draw(rows, seed, it)
       val plain = drawRows(rows, seed, it)
-      assert(c.trees.nonEmpty == nestedIteration(it), s"iteration $it")
+      // A nested composition whose every tree rendered as one of its coverage rows adds none.
+      if (c.trees.nonEmpty) withTrees += 1
+      assert(c.trees.isEmpty || nestedIteration(it), s"iteration $it")
       assert(c.outputs.filterNot(c.trees.contains) == plain.outputs, s"iteration $it")
       assert(c.conjuncts.filterNot(cj => c.trees.contains(cj.sql)).map(_.sql) ==
         plain.conjuncts.map(_.sql), s"iteration $it")
       assert(c.data == plain.data && c.ansi == plain.ansi && c.pivot == plain.pivot)
     }
+    assert(withTrees >= 28, s"only $withTrees of 30 nested compositions added a tree")
   }
 
   test("only two different listed conditions read as errors racing across partitions") {

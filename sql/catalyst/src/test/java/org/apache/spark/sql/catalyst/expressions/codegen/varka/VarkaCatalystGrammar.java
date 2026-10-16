@@ -93,15 +93,6 @@ public final class VarkaCatalystGrammar {
       return out;
     }
 
-    /** The number of nodes. */
-    public int size() {
-      int n = 1;
-      for (Node c : children) {
-        n += c.size();
-      }
-      return n;
-    }
-
     public Node withChildren(List<Node> updated) {
       return new Node(type, template, updated);
     }
@@ -277,13 +268,14 @@ public final class VarkaCatalystGrammar {
     out.add(new Production(r, "least($0, $1)", List.of(r, a), weight));
   }
 
-  /** The deepest a drawn tree goes: the root is at depth 0. */
+  /**
+   * The deepest a drawn operation goes, the root being at depth 0. A boolean due at this depth,
+   * which has no column to stop at, is a comparison, a null test or an {@code IN} over leaves, so
+   * a tree's leaves can sit one level deeper.
+   */
   public static final int MAX_DEPTH = 3;
 
-  /**
-   * A tree of {@code type}, its root an operation (never a bare leaf), at most {@link #MAX_DEPTH}
-   * deep.
-   */
+  /** A tree of {@code type}, its root an operation (never a bare leaf), to {@link #MAX_DEPTH}. */
   public static Node draw(Random rnd, Type type) {
     return draw(rnd, type, 0, MAX_DEPTH);
   }

@@ -209,81 +209,109 @@ domain that cannot overflow. The planted-rollback tests now draw `drawRows`: at 
 composition 5, a nested tree meets the planted rollback's branch with no force at all ("values
 differ" unforced), and those tests are about the force.
 
+*Corrections from the review of the diff* (`/code-review high` on the branch, ten findings, all
+taken). The nested compositions are five in a row with and five without, not three (3.2): with a
+period of six, every nested pivot case fell in the safe pool and every nested partition check in a
+pivot case. The warmed arm and the pivot test draw `drawRows`, since both would meet 9.2 and 9.3
+with no rerun. A tree that renders as one of its composition's coverage rows (`year(d)` is both) is
+not added, so `trees` names nested trees only. The shrinker keeps a racing kind only if it shows
+twice, `shrinkTree` does not ask again about a candidate that passed, the reruns of 9.3 leave the
+census counters as they were, and the grammar's depth is stated as it is: a boolean due at
+`MAX_DEPTH` takes leaves one level deeper. The census below is the final code's; the two earlier
+runs (the discovery run and one at the period of six) are in 9.1's last paragraph.
+
 ### 9.1 The census
 
-Two runs of seven seeds (20261101 to 20261107), 5,000 compositions each, one JVM per seed pinned
-to cores 12 to 23, on a machine shared with other agents' builds (load 20 to 58). The first run
-was a discovery run: it stopped each seed at its third disagreement (the suite's cap), and its
-disagreements were the two harness-side classes below. The grammar and the list were corrected and
-the second run, with the cap lifted, is the measurement.
+Seven seeds (20261101 to 20261107), 5,000 compositions each, one JVM per seed pinned to cores 12
+to 23, `-Dvarka.sparkfuzz.maxFailures` lifted so that no seed stops at its third disagreement, on a
+machine shared with other agents' builds (load 20 to 58), on the final code:
 
 | | VARKA-372 9 (coverage rows only) | this run |
 |---|---|---|
-| compositions | 35,000 | 35,000, of which 17,493 with nested trees |
-| erroring on both sides, of 5,000 | 14 to 68 | 39 to 111 |
-| of them, among the 2,499 nested per seed | - | 31 to 84 (1.2 to 3.4%) |
-| of them, among the 2,501 others per seed | - | 8 to 32 (0.3 to 1.3%) |
+| compositions | 35,000 | 35,000, of which 17,490 with nested trees |
+| erroring on both sides, of 5,000 | 14 to 68 | 48 to 110 |
+| of them, among the about 2,500 nested per seed | - | 43 to 77 (1.7 to 3.1%) |
+| of them, among the about 2,500 others per seed | - | 5 to 37 (0.2 to 1.5%) |
 | safe ANSI-off pool erroring on both sides | 0 | 0 |
-| disagreements | 0 | 4, all in nested compositions: 3 of 9.2's kind and 1 of 9.3's |
-| unexpected conditions | 0 | 0 (after the entry of 9.4) |
+| disagreements | 0 | 4, all in nested compositions and all of 9.2's kind |
+| two listed errors racing (9.3), absorbed by the rerun | - | 0 |
+| unexpected conditions | 0 | 0 |
 
-From the tests of 5 at the default seed: 139 of 300 nested outputs and 89 of 150 nested
-predicates carry a cast the analyzer inserted; 46 of 100 outputs and 77 of 100 predicates fuse
+From the tests of 5 at the default seed: 144 of 300 nested outputs and 90 of 150 nested
+predicates carry a cast the analyzer inserted; 41 of 100 outputs and 80 of 100 predicates fuse
 alone.
+
+Two earlier runs at the same seeds led here. The first, a discovery run with the cap of three,
+stopped six seeds after 2,000 to 2,800 compositions on the multiply and the condition of 9.4, and
+met the race of 9.3 twice. The second, with those fixed and the cap lifted but before the review's
+corrections (the period of six), found four disagreements, three of 9.2's kind and one race.
 
 ### 9.2 Finding: a fused conjunct hides an earlier residual conjunct's error (proposed row)
 
 **A Varka bug, not fixed here.** When Varka splits a filter, the conjuncts it fuses run in the
 `VarkaFilterColumnarToRow` below the row `Filter` that holds the rest. Spark's `Filter` evaluates
 its conjuncts in their optimized order and stops at the first false one; Varka evaluates the fused
-ones first. So under ANSI a row that a fused conjunct rejects never reaches a residual conjunct
-that Spark evaluates *before* it and that raises on that row: Spark raises, Varka answers. It is
-the mirror of row 273, which gave the fallback the whole condition in Spark's order and assumed the
-raising conjunct is the fused one. Three shrunk reproducers from the census, all under ANSI:
+ones first. So a row that a fused conjunct rejects never reaches a residual conjunct that Spark
+evaluates *before* it and that raises on that row: Spark raises, Varka answers. Under ANSI most
+conditions do this; year-month interval arithmetic raises in every mode, so it happens under
+LEGACY too. It is the mirror of row 273, which gave the fallback the whole condition in Spark's
+order and assumed the raising conjunct is the fused one. Five shrunk reproducers across the census
+runs (three of them found in two runs):
 
-* seed 20261105, iteration 291: `SELECT weekofyear(d) AS c0 FROM fz WHERE (((12 + l) = 5000000000))
-  AND (l = l2)` over one row with `l` = -9223372036854775808 and `l2` = 9223372036854775807. The
-  optimizer's `InferFiltersFromConstraints` adds `(l2 + 12) = 5000000000` and puts it first:
-  Spark's condition is `((l2 + 12) = 5000000000) AND isnotnull(l) AND isnotnull(l2) AND
-  ((l + 12) = 5000000000) AND (l = l2)`. Spark raises `ARITHMETIC_OVERFLOW` on `l2 + 12`. Varka
-  fuses `isnotnull(l) AND isnotnull(l2) AND (l = l2)`, which rejects the row, and the residual
-  `Filter` never sees it: no rows.
-* seed 20261104, iteration 2199: `SELECT l AS c0 FROM fz WHERE ((date_from_unix_date(i) >=
+* seed 20261105, iteration 291 (ANSI): `SELECT weekofyear(d) AS c0 FROM fz WHERE
+  (((12 + l) = 5000000000)) AND (l = l2)` over one row with `l` = -9223372036854775808 and `l2` =
+  9223372036854775807. The optimizer's `InferFiltersFromConstraints` adds `(l2 + 12) = 5000000000`
+  and puts it first: Spark's condition is `((l2 + 12) = 5000000000) AND isnotnull(l) AND
+  isnotnull(l2) AND ((l + 12) = 5000000000) AND (l = l2)`. Spark raises `ARITHMETIC_OVERFLOW` on
+  `l2 + 12`. Varka fuses `isnotnull(l) AND isnotnull(l2) AND (l = l2)`, which rejects the row, and
+  the residual `Filter` never sees it: no rows.
+* seed 20261104, iteration 2199 (ANSI): `SELECT l AS c0 FROM fz WHERE ((date_from_unix_date(i) >=
   make_date(i, i, i))) AND (d IN (DATE '2021-01-01', DATE '2021-06-01'))` over three rows, one with
   `i` = 3840. Spark raises `DATETIME_FIELD_OUT_OF_BOUNDS.WITHOUT_SUGGESTION` (month 3840) from the
   first conjunct; Varka fuses the `IN`, which rejects that row first.
-* seed 20261102, iteration 4775: `SELECT dt AS c0 FROM fz WHERE NOT (((ym + ym) IS NOT NULL)) AND
-  (d = d2)` over one row whose `ym` is 2147483636 months and whose `d` differs from `d2`. Spark
-  raises `INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION`; Varka fuses `d = d2`.
+* seed 20261102, iteration 4775 (ANSI): `SELECT dt AS c0 FROM fz WHERE NOT (((ym + ym) IS NOT
+  NULL)) AND (d = d2)` over one row whose `ym` is 2147483636 months and whose `d` differs from
+  `d2`. Spark raises `INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION`; Varka fuses `d = d2`.
+* seed 20261105, iteration 3145 (ANSI): `... WHERE NOT (((- (i * 2)) < (-42L))) AND NOT (l = l2)`
+  over two rows, one with `i` = 2147483647 and `l` = `l2`: `ARITHMETIC_OVERFLOW` on `i * 2` in
+  Spark, the row rejected by the fused `NOT (l = l2)` in Varka.
+* seed 20261106, iteration 4069 (LEGACY): `... WHERE ((((ymy - INTERVAL '3' MONTH) + ymy) >= ym))
+  IS NULL AND (dt > dt2) IS NULL` over four rows, one with `y` = 178956969:
+  `INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION` in Spark with ANSI off, the row rejected by the
+  fused null test of `dt > dt2` in Varka.
 
 Proposed row: "A fused conjunct runs before a residual conjunct that Spark's optimized `Filter`
-evaluates first, so under ANSI Varka answers where Spark raises (VARKA-298 9.2, three reproducers;
-the mirror of row 273). Decide between fusing only the conjuncts before the first residual one that
-can raise, and evaluating the residual conjuncts first on the batch; save the three reproducers
-under `sql/varka/fuzz/spark/` as `known` until then." The fix is open: the first choice gives up
-fusion wherever a raising residual conjunct comes first, the second gives up the kernel's row
-reduction for the residual ones.
+evaluates first, so where that residual conjunct raises (under ANSI, or year-month interval
+arithmetic in any mode) Varka answers and Spark raises (VARKA-298 9.2, five reproducers; the mirror
+of row 273). Decide between fusing only the conjuncts before the first residual one that can
+raise, and evaluating the residual conjuncts first on the batch; save the reproducers under
+`sql/varka/fuzz/spark/` as `known` until then." The fix is open: the first choice gives up fusion
+wherever a raising residual conjunct comes first, the second gives up the kernel's row reduction
+for the residual ones.
 
-**What it means for the nightly.** At about one of these in 6,000 nested compositions, the
-nightly's 50,000 at the day's seed will meet some most nights and fail its `sparkfuzz` step until
-the row has a number and the three files are kept as `status: known <row>` in
-`sql/varka/fuzz/spark/`, which this task does not own.
+**What it means for the nightly.** At four in 17,490 nested compositions, the nightly's 50,000 at
+the day's seed (about 25,000 nested) will meet five or six a night on average and fail its
+`sparkfuzz` step until the row is fixed: a `known` reproducer in `sql/varka/fuzz/spark/` makes the
+replay suite expect the disagreement, but the main test fails on any disagreement it draws, known
+or not, so keeping the files does not keep the nightly green. Either the owner accepts a red
+`sparkfuzz` step until the row lands, or the nightly runs with `-Dvarka.sparkfuzz.nested=false`
+until then; `dev/varka_nightly.sh` is not this task's to change.
 
 ### 9.3 Finding: two legitimate errors race across partitions (harness, proposed row)
 
-Seed 20261106, iteration 3861, and the first run's seed 20261106, iteration 4259: two outputs that
-each raise a listed condition on different rows (`d - ym` overflowing, `make_date(3, 3,
-unix_date(d))` out of range). The view has two partitions (the sessions run on `local[2]`), and
-whichever task fails first decides what the query raises, on either engine and from one run to the
-next: replayed eight times in one JVM, the reproducer of 4259 agreed five times and disagreed three,
-with either engine raising either condition. It is not Varka's: both engines flip. Nested trees
-make it more likely, since more of a composition's outputs can raise. The suite now reruns a
-disagreement whose two conditions are both listed for that mode (`racingErrors`) three times and
-believes it only if every rerun disagrees, counting the others in an info line. Four of five
-300-composition runs at the default seed met one and passed on its rerun (one before the rerun
-existed failed on composition 203 of that seed, `make_date(2021, i, 1)` beside `(d2 + ymm) +
-ymy`); the PR arm's 200 compositions stop short of it. A deterministic Varka bug that raises the wrong
-listed condition still fails, since it repeats.
+The discovery run's seed 20261106, iteration 4259, and the second run's seed 20261106, iteration
+3861: two outputs that each raise a listed condition on different rows (`d - ym` overflowing,
+`make_date(3, 3, unix_date(d))` out of range). The view has two partitions (the sessions run on
+`local[2]`), and whichever task fails first decides what the query raises, on either engine and
+from one run to the next: replayed eight times in one JVM, the reproducer of 4259 agreed five times
+and disagreed three, with either engine raising either condition. It is not Varka's: both engines
+flip. Nested trees make it more likely, since more of a composition's outputs can raise. The suite
+now reruns a disagreement whose two conditions are both listed for that mode (`racingErrors`)
+three times and believes it only if every rerun disagrees, counting the others in an info line.
+Four of five 300-composition runs at the default seed met one and passed on its rerun (one before
+the rerun existed failed on composition 203 of that seed, `make_date(2021, i, 1)` beside `(d2 +
+ymm) + ymy`); the PR arm's 200 compositions stop short of it, and the final census met none. A
+deterministic Varka bug that raises the wrong listed condition still fails, since it repeats.
 
 Proposed row: "The Spark-level differential's view has two partitions, so two listed errors on rows
 in different partitions race and the query's error is either one, on either engine (VARKA-298 9.3).
@@ -296,16 +324,16 @@ here: one partition would take the multi-partition, multi-task runs out of every
 One entry: `INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION`, both engines, ANSI and LEGACY,
 raised by `make_ym_interval(i, i)` and by `d - ymm` (negating an `INTERVAL MONTH` of
 `Int.MinValue` months), both reachable only with drawn ints in those positions, so only the nested
-trees meet it; both engines raise it in both modes (checked by replay). The second run met it in
-four of seven seeds. `DATETIME_OVERFLOW` (2) is not listed, since the grammar does not draw it.
+trees meet it; both engines raise it in both modes (checked by replay). The final census met it in
+six of seven seeds. `DATETIME_OVERFLOW` (2) is not listed, since the grammar does not draw it.
 
 ### 9.5 Predictions scored
 
-1. **Refuted.** Four disagreements in 35,000 compositions: three of a real Varka bug (9.2) and
-   one of a harness race (9.3); the first run met the race and two classes of grammar errors
-   (the conditionless multiply and the unlisted condition of 9.4).
+1. **Refuted.** Four disagreements in 35,000 compositions, all one real Varka bug (9.2); the earlier
+   runs also met a harness race (9.3) and two classes of grammar errors (the conditionless multiply
+   and the unlisted condition of 9.4).
 2. **Refuted on the magnitude, held on the direction.** The nested compositions error on both
-   sides at 1.2 to 3.4%, against 0.3 to 1.3% for the others, not 5 to 12% against 1 to 3%.
+   sides at 1.7 to 3.1%, against 0.2 to 1.5% for the others, not 5 to 12% against 1 to 3%.
 3. **Refuted.** One condition outside the list (9.4) and one with no condition at all (the
    multiply), both legitimate and raised identically by both engines.
 4. **Refuted: no cost measurable on this machine.** The 300-composition run at the default seed,

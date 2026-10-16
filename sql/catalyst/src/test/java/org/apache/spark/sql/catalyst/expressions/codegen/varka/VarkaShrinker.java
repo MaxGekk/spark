@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
@@ -411,6 +412,10 @@ public final class VarkaShrinker {
   public static <T> T shrinkTree(T root, TreeMoves<T> moves, boolean freeRoot,
       Predicate<T> fails) {
     T current = root;
+    // Each accepted move restarts the search from the root, where the candidates already tried
+    // are the same trees again; one that did not fail is not asked again, since each ask can be a
+    // whole query on two engines.
+    var passed = new HashSet<T>();
     boolean improved = true;
     while (improved) {
       improved = false;
@@ -434,7 +439,11 @@ public final class VarkaShrinker {
           }
           for (T r : candidates) {
             T t = replaceIn(current, p, r, moves);
-            if (sizeOf(t, moves) < currentSize && fails.test(t)) {
+            if (sizeOf(t, moves) < currentSize && !passed.contains(t)) {
+              if (!fails.test(t)) {
+                passed.add(t);
+                continue;
+              }
               current = t;
               improved = true;
               break search;
