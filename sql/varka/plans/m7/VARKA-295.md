@@ -809,3 +809,12 @@ per-bytecode trap count at `IntVector.add` bci 5, not from 9.6's compile-wide su
 narrower species does not clear them; with `-XX:MaxVectorSize=16` (a 128-bit preferred species) the
 warm-up does nothing either. `VARKA-373.md` 2 and 9 have the logs' classification and the numbers.
 
+### 9.9 Closed, 16 October 2026
+
+The row closes on 9.7 and 9.8: at the preferred species the warm-up of the shared templates takes
+the deadline releases of the warm arm to zero, at volume (0 in 2,000 compositions on each of five
+seeds, against 442 without it at seed 20261008), with no steady-state cost the measurement could
+see. What it does not cover is tracked where it was found: a 4-lane override, whose releases come
+from a per-bytecode trap at a shared site (`VARKA-373.md`, closed with no fix, a matrix-only
+configuration), and a 128-bit preferred species, where the warm-up does nothing (`VARKA-374.md`,
+open). The SQL configuration for `varka.warmup.vectorTemplates` noted in 9.7 stays a follow-up.
