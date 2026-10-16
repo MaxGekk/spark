@@ -696,7 +696,7 @@ class VarkaCoverageCompositionFuzzSuite
         val emit: java.util.function.Function[String, Array[Byte]] = name =>
           VarkaLoopEmitter.emit(name, plan.outputs, plan.inputOrdinals.size, plan.numLiterals,
             null, null, opts)
-        val replay = s"-Dvarka.fuzz.seed=$seed -Dvarka.fuzz.coverageRow=\"$sql\""
+        val replay = s"-Dvarka.fuzz.seed=$seed -Dvarka.fuzz.coverageRow=" + "\"" + sql + "\""
         try tally.add(VarkaCompiledCheck.run(c, emit, settings, replay))
         catch {
           case f: VarkaCompiledCheck.HistoryFailure => fail(f.getMessage, f)
