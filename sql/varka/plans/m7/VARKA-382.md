@@ -151,4 +151,37 @@ One commit for the plan, one for the step and the option, the outcome after the 
 
 ## 9. Outcome
 
-Filled when the checks have run.
+Built as designed in 3.1, checked locally on 16 October 2026; this pull request's CI scores 6.1.
+
+### 9.1 A third breakage, found by the check this row adds
+
+Run on master with #875's fixes merged (`51f9e03e616` plus `fork/varka-errorprone-827`, a local
+merge never committed), the script still failed: one NullAway error,
+`VarkaEmitTrace.java:101: @NonNull field 'onEmission' not initialized`. #861 (VARKA-280) added
+that field after #875 branched from `e0acfd4fa4a`, and #875's own commit passes (exit 0, 37 s with
+the classpath exported, 7 s of javac). So between #875's branch and its merge a third pull request
+merged with a finding no CI step looked for - the gap this row closes, reproduced while it was
+being closed. #875 merged as `cf5aa283b6e` while this branch was in progress; the branch merges
+master and fixes the finding the way the code means it: the field is null wherever no suite asks
+for emission records, which its Javadoc already says and `noteEmission` already checks, so it is
+`@javax.annotation.Nullable` rather than suppressed.
+
+### 9.2 Checks
+
+* **The script on this branch, as the CI step runs it** (`--master` and `--base` named): exit 0,
+  98 files, 37 classes pending NullAway; 138 s with a cold `sql/compile` on the laptop, 7 s of
+  javac. With the defaults the gate uses: exit 0.
+* **The script on the branch before the merge and the fix fails**, naming #809's findings in
+  `VarkaReproduction` (three NullAway errors and five warnings), #827's in
+  `VarkaVectorTemplateWarmup` and `VarkaKernelWarmup`, and #861's: exit 1, so a finding fails the
+  step.
+* **The flag's shell over 3.1's cases** gives the design's value in each (5's list).
+* **The workflow parses**, and `actionlint` reports the same 60 findings on it as on master's
+  file, none new; `shellcheck` the same three on the script as before.
+* **The suites over `VarkaEmitTrace`** (`VarkaKernelPlanSuite`, `VarkaCoverageSuite`,
+  `VarkaEmitterBudgetSuite`, `VarkaIrFuzzSuite` through `dev/varka_matrix.sh --defaults`, the
+  memory sanitizer on): 61 passed, none failed, 3 cancelled - the opt-in dumps and the opt-in
+  steering A/B, which cancel without their properties - in 253 s over four JVMs.
+
+6.1's predictions 1 and 2 are scored on the first CI runs that reach the step; prediction 3 is
+void, since master passes with this branch's fix.

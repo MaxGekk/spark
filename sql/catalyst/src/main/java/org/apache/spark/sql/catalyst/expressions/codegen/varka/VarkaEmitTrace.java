@@ -98,7 +98,7 @@ final class VarkaEmitTrace {
    * Called with each emission's record where a suite asks for them, null otherwise - and null in
    * every emission the engine makes, so the record is never built there.
    */
-  java.util.function.Consumer<Emission> onEmission;
+  @javax.annotation.Nullable java.util.function.Consumer<Emission> onEmission;
 
   /**
    * The counters a reaction moves, in the order of {@link #COUNTED}: the one place that pairs a
