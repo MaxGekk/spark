@@ -675,9 +675,20 @@ public final class VarkaExpressionCompiler {
     // condition root, which the emitter cannot split by name. Under `splitConditions` the
     // compiler splits it instead (see `split`); otherwise, or when no split fits, a decline
     // demotes the last-admitted conjunct and the rest are asked again.
+    // The order rule comes first in each round (VARKA-380): a fused conjunct that Spark evaluates
+    // after a residual one that can raise is demoted, so the residual filter evaluates it in
+    // Spark's order. A demoted conjunct that can raise moves the line again, and so does a size
+    // demotion, so the rule is asked again every round until it holds.
+    List<Expression> written = conjuncts(condition);
     Map<Integer, String> demoted = new HashMap<>();
     while (true) {
       PredicatePass once = predicateOnce(condition, childOutput, demoted, options);
+      Map<Integer, String> late = VarkaConjunctOrder.behindRaising(written,
+          once.specs().stream().map(VarkaConjunctSpec::fused).toList());
+      if (!late.isEmpty()) {
+        demoted.putAll(late);
+        continue;
+      }
       Optional<VarkaSizeAdmission.Decline> decline = once.compiled().flatMap(p ->
           VarkaSizeAdmission.admit(p.fused(), options));
       if (decline.isEmpty()) {
