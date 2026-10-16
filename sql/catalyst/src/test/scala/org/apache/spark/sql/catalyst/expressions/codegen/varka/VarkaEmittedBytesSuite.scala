@@ -143,7 +143,8 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
         // too. Any other rejection is a contract violation and fails the suite (VARKA-306).
         case e: IllegalArgumentException if options.methodByteBudget == 0 &&
             String.valueOf(e.getMessage).contains("MAX_FUSED_NODES") =>
-          return Seq("<rejected>" -> sha(e.getMessage))
+          // A site's own text, not Spark's INTERNAL_ERROR framing around it (VARKA-314).
+          return Seq("<rejected>" -> sha(Option(VarkaErrors.siteText(e)).getOrElse(e.getMessage)))
       }
     ("<class>" -> sha(VarkaEmitterTestSupport.classSummary(bytes))) +:
       VarkaEmitterTestSupport.methodBodies(bytes).asScala.toSeq.map { case (m, body) =>

@@ -1049,6 +1049,51 @@ Who reads each thing, and what they do:
 `VarkaRunbookSuite` runs each branch on a planted fault and asserts the reason counts, the `EXPLAIN`
 lines and the warning text quoted above, so a step that stops being true fails a build.
 
+### When Varka falls back, and when it fails
+
+Varka answers a batch it cannot run on the row engine, and the answer is still right. Each such
+batch has a cause, the tag on the `Fallback` JFR event (`VarkaFallbackEvent`), and each cause has a
+metric on the Varka node:
+
+| Cause | When | What it leaves | What to do |
+| :--- | :--- | :--- | :--- |
+| `non-arrow-batch` | the batch's columns are not Arrow vectors, such as vectorized Parquet's | `numFallbackBatchesNonArrow` | nothing: a property of the source; the Arrow cache serializer is what produces Arrow batches (Limitations) |
+| `range-declined` | a value lies outside the range a lowering is exact over | `numFallbackBatchesDeclined`, `numDeclinedBatches[<reason>]` | nothing, or change the data or query (Troubleshooting B2) |
+| `emission-failure` | the task could not build or load the kernel class | `numEmissionFailures` (tasks), the warning "Failed to emit the Varka fused kernel ...", once per task, a reproduction file | report it with the warning and the file |
+| `kernel-failure` | the kernel threw on the batch | `numFallbackBatchesKernel`, the warning "... failed on this batch", a reproduction file | report it with the warning and the file |
+| `row-path-failure` | the per-row machinery beside the kernel threw | `numFallbackBatchesRowPath`, the warning "The per-row machinery beside the Varka kernel ..." | report it with the warning |
+
+The emitter's designed decline of a shape over its method budget logs "The Varka emitter
+declined ..." once per JVM and is not a failure. Every warning of the last three causes ends with
+the `Varka context:` block: the kind (the cause tag), the kernel's identity (its source file, the
+IR of each output, the operator and stage), the shape hash, the emit options that differ from the
+defaults by name, the batch's rows and nulls per input where a batch was involved, and the
+original exception. The event's `options` field carries the same options.
+
+**Internal errors.** An invariant Varka checks in the compiler, the IR, the emitters, the
+options, the runner or the exec nodes raises Spark's `INTERNAL_ERROR` (SQLSTATE `XX000`) with the
+check's own text and "This is a bug in Varka, Spark's vectorized code generator. Please report it
+with this message and the full stack trace." Varka adds no error condition of its own. The
+exception is a `SparkIllegalArgumentException`, `SparkIllegalStateException` or
+`SparkUnsupportedOperationException`, the JDK type the check raised before, so code that catches
+`IllegalArgumentException` still does. Outside it: the engine module's own checks and the check
+inside an emitted kernel raise plain JDK exceptions, which the fallback catches answer. Where an internal error surfaces:
+
+* **At planning** it fails the query. The compiler's catch puts the `Varka context:` block
+  around it (`kind: planning`, the entries being compiled, the options), with the check's
+  message on the `cause:` line (Troubleshooting C1); an argument check stays an
+  `IllegalArgumentException`, any other becomes an `IllegalStateException`. Raised on the driver it arrives as it is;
+  raised by an evaluator's compile in a task, it arrives inside Spark's "Job aborted" error.
+* **While building or running a kernel** it does not fail the query: it is one of the fallback
+  causes above, and the warning's block names it on the `cause:` line.
+* **Under test**, a fallback over a failure no test declared fails the task with
+  `INTERNAL_ERROR` and the same block (`VarkaColumnarToRowExec.setFailureFallbackExpectedForTesting`).
+
+The one user setting with a range, `spark.sql.codegen.varka.emit.useAVX`, rejects a value out of
+range with `INVALID_CONF_VALUE.REQUIREMENT`, as any Spark setting does. A
+`spark.sql.codegen.varka.classDumpDirectory` that cannot be written is a warning naming the
+setting, and the query runs.
+
 ### Execution integration
 
 `VarkaColumnarRule` (a `ColumnarRule`) rewrites a Varka-eligible projection

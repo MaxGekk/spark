@@ -420,7 +420,7 @@ public record VarkaReproduction(
 
   private static void line(StringBuilder out, String key, String value) {
     if (value.indexOf('\n') >= 0) {
-      throw new IllegalArgumentException(key + " spans lines: " + value);
+      throw VarkaErrors.illegalArgument(key + " spans lines: " + value);
     }
     out.append(key).append(": ").append(value).append('\n');
   }

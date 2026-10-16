@@ -74,6 +74,30 @@ final class VarkaBodyEmitter {
     } else {
       emitUnrolledDriver(cb, dense, classDesc, outputs, all, analysis, numLiterals, groups, s);
     }
+    noteDriverReached(dense, outputs, analysis);
+  }
+
+  /**
+   * The mechanisms a driver just emitted reached (VARKA-280), read from the predicates both
+   * driver forms emit by: the bitmap pass and its declines, the all-null shortcut, and a kernel
+   * with no dense body. The stages are noted where their calls are emitted.
+   */
+  private static void noteDriverReached(boolean dense, List<VarkaVectorIR> outputs,
+      Analysis analysis) {
+    for (int o = 0; o < outputs.size(); o++) {
+      if (servedByPass(analysis, dense, o)) {
+        analysis.reach(VarkaEmitMechanism.BITMAP_PASS);
+      }
+    }
+    if (!dense && analysis.declinedBitmapRoots > 0) {
+      analysis.reach(VarkaEmitMechanism.BITMAP_PASS_DECLINED);
+    }
+    if (shortcutApplies(dense, outputs, analysis)) {
+      analysis.reach(VarkaEmitMechanism.ALL_NULL_SHORTCUT);
+    }
+    if (analysis.nullsFromValidInputs) {
+      analysis.reach(VarkaEmitMechanism.MASKED_ONLY);
+    }
   }
 
   /**
@@ -173,7 +197,7 @@ final class VarkaBodyEmitter {
     boolean perGroup = analysis.options.methodByteBudget() > 0;
     List<Integer> bodyOutputs = group >= 0 ? groups.get(group) : allOutputs(outputs);
     if (perGroup && group < 0) {
-      throw new IllegalArgumentException(
+      throw VarkaErrors.illegalArgument(
           "a " + mode + " body under the byte budget is one group's");
     }
     Slots s = Slots.plan(dense, mode, outputs, bodyOutputs, analysis, numLiterals, perGroup,
@@ -199,10 +223,14 @@ final class VarkaBodyEmitter {
     switch (mode) {
       case LOOP -> emitVectorLoop(cb, dense, outputs, bodyOutputs, analysis, s);
       case EPILOGUE -> emitEpilogue(cb, dense, outputs, bodyOutputs, analysis, s);
-      case DRIVER -> throw new IllegalArgumentException("the driver is emitDriver's, not a body's");
+      case DRIVER -> throw VarkaErrors.illegalArgument("the driver is emitDriver's, not a body's");
     }
     assertWordsLive(s, mode);
     emitStatusReturn(cb, s);
+    if (!s.deadRefs.isEmpty()) {
+      // The input words this masked body allocated and, by the liveness pass, never read.
+      analysis.reach(VarkaEmitMechanism.DEAD_INPUT_WORD);
+    }
   }
 
   private static List<Integer> allOutputs(List<VarkaVectorIR> outputs) {
@@ -474,6 +502,7 @@ final class VarkaBodyEmitter {
   private static void emitGroupCalls(CodeBuilder cb, boolean dense, ClassDesc classDesc,
       Analysis analysis, List<List<Integer>> groups, Slots s) {
     if (analysis.stageGroups > 0) {
+      analysis.reach(VarkaEmitMechanism.STAGED_DRIVER);
       cb.loadConstant(0);
       for (int k = 0; k * analysis.stageGroups < groups.size(); k++) {
         invokeCall(cb, classDesc, VarkaMethodNames.stage(dense, k), analysis);
@@ -1301,14 +1330,14 @@ final class VarkaBodyEmitter {
   private static void assertWordsLive(Slots s, BodyMode mode) {
     for (int ref : s.wordDefs) {
       if (!s.wordUses.containsKey(ref)) {
-        throw new IllegalStateException("word slot " + ref + " is stored but never loaded in a "
+        throw VarkaErrors.illegalState("word slot " + ref + " is stored but never loaded in a "
             + mode + " body: a consumer the liveness inventory lists is not emitted, or the "
             + "word is dead and should not have been computed");
       }
     }
     for (int ref : s.wordUses.keySet()) {
       if (!s.wordDefs.contains(ref)) {
-        throw new IllegalStateException("word slot " + ref + " is loaded but never stored in a "
+        throw VarkaErrors.illegalState("word slot " + ref + " is loaded but never stored in a "
             + mode + " body: a consumer the liveness inventory missed");
       }
     }

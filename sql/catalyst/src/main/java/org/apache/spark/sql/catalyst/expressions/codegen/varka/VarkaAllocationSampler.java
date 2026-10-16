@@ -69,7 +69,7 @@ public final class VarkaAllocationSampler {
 
     public Schedule {
       if (first < 1 || every < 1) {
-        throw new IllegalArgumentException("first and every must be positive: " + this);
+        throw VarkaErrors.illegalArgument("first and every must be positive: " + this);
       }
     }
 

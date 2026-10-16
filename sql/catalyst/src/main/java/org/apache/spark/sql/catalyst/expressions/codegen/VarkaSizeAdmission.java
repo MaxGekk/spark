@@ -18,6 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,6 +30,7 @@ import org.apache.spark.internal.SparkLoggerFactory;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitDeclined;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrorContext;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmup;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaReproduction;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeCache;
@@ -124,7 +126,9 @@ final class VarkaSizeAdmission {
       String where = frames.length > 0 ? frames[0].toString() : "";
       if (LOGGED_FAILURES.add(t.getClass().getName() + "@" + where)) {
         LOG.warn("The Varka emitter failed at plan time on a shape the compiler admitted, "
-            + "which the executor will meet behind the fallback: " + t.getMessage(), t);
+            + "which the executor will meet behind the fallback: "
+            + Objects.requireNonNullElse(VarkaErrors.siteText(t), String.valueOf(t.getMessage())),
+            t);
       }
       return Optional.empty();
     }
