@@ -1,0 +1,14 @@
+Output of executors.scala (--master local-cluster[2,1,1024]) on stock Spark, by run.sh.
+commit:  6a70cc2dd0a
+java:    openjdk version "25.0.4.1" 2026-08-18
+spark:   4.2.0
+
+### Classes compiled per query, on each JVM of local-cluster[2,1,1024]
+query                          driver  executor 0  executor 1
+int, first                          1           2           2
+int, the same again                 0           0           0
+int, new value                      1           2           2
+string, new value                   0           0           0
+int parameter, new                  1           2           2
+string parameter, new               0           0           0
+### Spark 4.2.0, Java 25.0.4.1

@@ -1,0 +1,17 @@
+Output of cache.scala (--master local[1] --conf spark.sql.codegen.cache.maxEntries=1000) on stock Spark, by run.sh.
+commit:  6a70cc2dd0a
+java:    openjdk version "25.0.4.1" 2026-08-18
+spark:   4.2.0
+
+### n distinct queries, then the same n again, spark.sql.codegen.cache.maxEntries = 1000
+  queries  classes, 1st loop  classes, 2nd loop  2nd loop's queries that compiled
+       10                30                  0              0 of 10
+       20                60                  0              0 of 20
+       25                75                  0              0 of 25
+       30                90                  0              0 of 30
+       33                99                  0              0 of 33
+       40               120                  0              0 of 40
+       50               150                  0              0 of 50
+      100               300                  0              0 of 100
+      150               450                  0              0 of 150
+### Spark 4.2.0, Java 25.0.4.1

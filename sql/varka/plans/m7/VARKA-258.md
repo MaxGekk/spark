@@ -117,3 +117,57 @@ published, with every number tracing under `dev/varka_quote_check.py`.
    ratio as well as the times.
 
 ## 9. Outcome
+
+### 9.1 The measurements, 16 October 2026
+
+The counts ran on the laptop, since they do not depend on the machine: `sql/varka/demo/compiles/
+run.sh` runs three `spark-shell` scripts on the stock Spark 4.2.0 distribution under JDK 25 and
+writes their outputs beside them, each with its commit. Three runs gave the same counts. The times
+are `CodegenRecompileBenchmark` (sql/core, Java on `VarkaBenchmarkBase`), on the fork's Spark with
+Varka off, owed by a GitHub-hosted runner through `benchmark.yml`.
+
+**1, the literal check** (`literals.scala`, `literals-jdk25-output.txt`). In local mode a new int,
+bigint, double, date or timestamp compiled three classes; a new string or decimal none; a new
+value of an int parameter three, of a string parameter none; a string value for an int column
+three, since it is cast and folded into an int literal. The three are the stage compiled by the
+driver, the stage compiled again by the task, and the cached table's batch filter
+(`SpecificPredicate`), which holds the value too. The stage is compiled twice in one JVM because the
+cache is keyed by the compiling thread's class loader as well as the source (SPARK-44795), and a
+task runs under the executor's loader. The hand check of section 2 counted two classes; its
+query is not in the record, and one over a table that was not cached, which has no batch filter,
+would give two.
+
+**2, compiles per executor** (`executors.scala`, `executors-jdk25-output.txt`). On
+`local-cluster[2,1,1024]` a new int compiled one class on the driver and two on each executor (the
+stage and the batch filter); a new string and a new string parameter none anywhere.
+
+**3, a new literal's cost to a short query; 4, Janino against a stage's size; 6, the integer as a
+reference.** Owed by the runner: the benchmark's three sections, in that order. Section 4 uses
+projections of 1 to 99 entries and aggregates of 10 to 60 sums, not the `CASE WHEN` rungs: on this
+build a stage with a `CASE WHEN` is already compiled while its code is generated, to decide whether
+to split it (SPARK-33301), so a timed compile of its source is a cache hit. Section 6 uses
+`IntSlot`, a test-only expression that reads the value from a field set from the class's
+references, over `i % 1000 = <value>` so that neither arm can prune the cached batches.
+
+**5, past the cache's 100 entries** (`cache.scala`, `cache-100-jdk25-output.txt`,
+`cache-1000-jdk25-output.txt`). Loops of n queries differing only in an int, run twice: under the
+default cache the second loop compiled nothing up to 30 queries (90 classes), 31 of 33 queries
+at 33, and every query from 40 on; the 150-query loop compiled 450 classes in each loop. Under
+`maxEntries=1000` the second loop compiled nothing at any n up to 150.
+
+**Predictions scored** (3.1).
+
+1. **Held**, with a second class the prediction did not name: one new class a stage on the driver,
+   and on each executor the stage and the cached table's batch filter; a new string none.
+2. **Held**, with the same batch filter beside the stage on each executor.
+3. Owed (the runner).
+4. **Held, and stronger than predicted**: all 150 of the second loop's queries compiled again, not
+   50. A loop larger than the cache evicts each class just before it is needed, and at three
+   classes a query the cache holds about 30 such queries.
+5. Owed (the runner).
+
+### 9.2 The draft, 16 October 2026
+
+`POST_COMPILES.md`, from the counts above, with figures 36 (where one query is compiled, read from
+`executors-jdk25-output.txt`) and 37 (what the cache keeps, read from the two cache outputs). The
+runner's numbers are in brackets in its sections 1, 3 and 5, as is the link to row 259's post.
