@@ -221,10 +221,205 @@ line: 0 and 0).
 3. Section 9, and the answer to the row: whether a per-JVM or per-method reset is possible from
    Varka's own code, or only by an operator's option.
 
-## 9. Outcome
+## 9. Outcome (16 October 2026): one no-option route resets the counts, at the price of a deoptimization
 
-Open. What the admission check already says: from Varka's own code with no startup option, the
-limits cannot be raised and the counts cannot be reset. Run-time directives are available but do
-not reach them. Only WhiteBox does, and it needs two JVM options and a boot class path jar, so a
-Spark executor gets it no more cheaply than the two options of `VARKA-295.md` 9.6. The remedy
-that needs no option is to avoid creating the counts, which is what `varka-295f` tests.
+The placeholder this section held said that from Varka's own code, with no startup option, "the
+limits cannot be raised and the counts cannot be reset". The first half stands; the second is
+wrong. A running JDK 25 can load a Java agent into itself through its own `DiagnosticCommand`
+MBean, and that agent can redefine the Vector API's classes with their own bytes, which gives
+every method a new, empty MethodData (9.1). In the warm arm, one such reset a minute into the
+run took the deadline releases from 58 and 68 to 1 and 0 (9.3). It is not a fix to ship (9.4).
+
+### 9.1 The instrumentation route, read and run
+
+**Loading an agent with no startup option.** `JVMTI.agent_load` is a diagnostic command exported
+to every source, the MBean among them (`DCmdFactoryImpl<JVMTIAgentLoadDCmd>(full_export, ...)`,
+`services/diagnosticCommand.cpp` 123). A library path ending in `.jar` is loaded as a Java agent
+through the `instrument` library (299 to 330). The only gate is `EnableDynamicAgentLoading`
+(`prims/jvmtiAgent.cpp` 494), a product flag whose default is `true` (`runtime/globals.hpp`
+1765). If the flag is not set on the command line, the Java side prints a four-line warning
+(`InstrumentationImpl.java` 107: "A Java agent has been loaded dynamically ... will be disallowed
+by default in a future release", JEP 451). A program calls it on itself in one line, with no
+attach and no `-Djdk.attach.allowAttachSelf`:
+
+    ManagementFactory.getPlatformMBeanServer().invoke(
+        new ObjectName("com.sun.management:type=DiagnosticCommand"), "jvmtiAgentLoad",
+        new Object[] {new String[] {"/path/agent.jar"}}, new String[] {String[].class.getName()});
+
+What it needs: the `jdk.management` and `java.instrument` modules in the runtime image, an agent
+jar on disk whose manifest names an `Agent-Class` with `agentmain` and `Can-Redefine-Classes:
+true`, and the flag not turned off. Experiment: on the system JDK 25.0.4.1, with no option at all
+beyond `--add-modules jdk.incubator.vector`, the call returned `return code: 0`, printed the
+warning, and `agentmain` received the `Instrumentation`. (Spark's test JVM options already carry
+`-XX:+EnableDynamicAgentLoading`, from `project/SparkBuild.scala`'s `javaOptions` as
+`jvm.opts` lists it, so in the replay the warning does not print.) The agent class is on the
+application class path too, so the application sees the same class and its static
+`Instrumentation` field.
+
+**What redefinition does to MethodData.** `VM_RedefineClasses` parses the new bytes into a
+scratch class and installs the scratch class's methods: `the_class->set_methods(_new_methods)`
+(`prims/jvmtiRedefineClasses.cpp` 4269). Those are new `Method` objects with no MethodData; the
+old ones are kept only for frames still running them, and the only MethodData code touches is
+`clean_weak_method_links` on the new methods (3725 to 3731). jmethodIDs and reflected methods
+resolve to the new methods afterwards. So redefining a class with its own bytes (read here from
+`jrt:/modules/jdk.incubator.vector/...`) resets every count of every method of the class: the
+trap history, the decompile count, the per-bytecode trap bits and the receiver profiles, all of
+it. The class has to be modifiable: not hidden, not an array (`is_modifiable_class`, 337), so the
+Vector API's lambda forms and hidden classes are out of reach, and the 115 to 189 loaded
+`jdk.incubator.vector` classes that are not hidden are in. The cost is `flush_dependent_code`
+(4085): `AlwaysRecordEvolDependencies` is `true` by default (`globals.hpp` 1988), so every
+nmethod with a dependency on a redefined class, which is every compiled kernel, is deoptimized;
+not the whole code cache.
+
+`RetransformClasses` runs the same VM operation, so it is the same route. A native JVMTI agent
+(the same diagnostic command with a `.so`) has the same two functions and no function that resets
+MethodData. JVMCI's `CompilerToVM.reprofile` (`jvmci/jvmciCompilerToVM.cpp` 1375) does reset one
+method: it makes its code not entrant and calls `MethodData::reinitialize()`, which zeroes every
+cell. But it needs `-XX:+UnlockExperimentalVMOptions -XX:+EnableJVMCI` (`jvmci_globals.hpp` 47)
+and `--add-exports` of `jdk.internal.vm.ci`, so it is a startup option like WhiteBox (not run).
+
+**The probe.** A standalone program (`Probe370`, in the scratch directory named at the end) feeds
+one compiled caller of `IntVector.add` receivers of four species, which records 22 to 30 traps in
+3 or 4 vector methods, among them 8 on `IntVector.add`. A reduction loop through that caller then
+allocates 11,360 to 12,384 bytes a call (64 iterations of 16 lanes), where it allocated 0 before
+the pollution; each measurement deoptimizes the loop first so it is compiled again.
+
+| probe (2 runs of 3 cycles each, on cores 0 to 2) | counts after the step | loop allocation after the step |
+|---|---|---|
+| nothing (1 run) | unchanged | 12,384 B in 3 of 3 cycles |
+| `Agent370.redefine` of the 189 loaded vector classes, 68 to 94 ms | 0 in every method | 0 B in 4 of 6 cycles |
+| WhiteBox `clearMethodState` on all 6,568 vector methods, 2 to 4 ms | 0 in every method | 12,384 B in 6 of 6 cycles |
+
+So redefinition from inside a JVM started with no option resets the counts, and in this toy it
+usually gives the clean compile back. The clear zeroes the counts and does not, here; one
+candidate reason is that `init()` also zeroes the MethodData's own invocation and backedge
+counters, and C2 reads a call site's receiver profile only from a mature MethodData
+(`ciMethod::call_profile_at_bci`, `ci/ciMethod.cpp` 468; maturity is computed from those counters,
+`CompilationPolicy::is_mature`). That was not shown, and the replay below disagrees with the toy.
+
+### 9.2 Two corrections to section 2
+
+1. **The clear does reach the per-bytecode route.** 2.3 says `clearMethodState` resets the sums'
+   inputs "but not the per-bytecode route", and 6.1 prediction 2 rests on it. The per-bytecode
+   bits do survive `init()`, but C2 never reads them alone: `ciMethodData::has_trap_at`
+   (`ci/ciMethodData.cpp` 505) returns 0 when the method-level `trap_count(reason)` is 0,
+   "regardless of trap_state", and `init()` zeroes those counts (`CompilerCounters()`). So after
+   the clear the gate at `IntVector.add` bci 5 is open until the next trap of the same reason
+   anywhere in the method, when the stale bit counts again. The 4-lane replay (9.3) agrees.
+2. **`PerBytecodeTrapLimit` is not the gate C2 consults.** `VARKA-373.md` 2 reads the log's
+   `count='4'` as the site having reached `PerBytecodeTrapLimit`'s default. In the source,
+   `Compile::too_many_traps(method, bci, reason)` (`opto/compile.cpp` 4142) treats any recorded
+   trap at the bci as too many ("Assume PerBytecodeTrapLimit==0"), and prints the method-level
+   count; `PerBytecodeTrapLimit` is read only by the runtime, which makes the trapping code not
+   entrant once the method's count reaches it at a bci that trapped before
+   (`runtime/deoptimization.cpp` 2403). So the 4 in the log is the count at which the runtime
+   forced the recompile, and raising the flag delays that recompile without opening the gate:
+   the trapping code runs longer, which fits run `t6` of `VARKA-295.md` 9.5 (both trap limits at
+   100,000, 151 releases and a deoptimization cycle).
+
+### 9.3 The replay, with the flags and resets made at run time
+
+The warm arm of `VarkaSparkFuzzSuite` ("both sides of the warm-up handover", seed 20261008) with
+the template warm-up off (`-Dvarka.warmup.vectorTemplates=false`, since with it on the preferred
+species already releases nothing, `VARKA-295.md` 9.7 and 9.8), in a JVM started by hand from
+`dev/varka_matrix.sh --module sql --list`'s classpath and `jvm.opts` at master 7cc402b8f34,
+pinned with `taskset -c 0-2`, one JVM at a time. Every arm, the control included, had
+`-XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xbootclasspath/a:<WhiteBox jar>`, loaded the
+agent through the MBean before the suite started, and read the WhiteBox counts over every
+`jdk.incubator.vector` method every 30 s; the arms differ only in the one action:
+
+* **flags**: WhiteBox `setIntxVMFlag` of `PerMethodTrapLimit` and `PerMethodRecompilationCutoff`
+  to 100,000 before the suite starts (read back `100000 100000`);
+* **redefine once**: at 60 s, `redefineClasses` of every loaded, non-hidden vector class with its
+  own bytes, through the agent (115 to 117 classes, 124 to 409 ms);
+* **clear once**: at 60 s, WhiteBox `clearMethodState` on every method of those classes (6,568
+  methods, 2 to 7 ms).
+
+60 s is after the first 18 to 76 class-check traps are recorded and before most releases (the
+first in the control is iteration 53 of 400; the arm reports verdicts only at its end). Every run printed `Tests: succeeded 1`; every release was at the
+deadline (10 s in this arm), none before it. The load is the 1-minute average before and after
+each run, most of it other agents' work on cores 3 to 23.
+
+| arm | lanes, compositions | deadline releases | COMPILED | seconds | load before / after |
+|---|---|---|---|---|---|
+| control | preferred (16), 400 | 58 | 476 | 905 | 22 / 48 |
+| control | preferred, 400 | 68 | 466 | 894 | 22 / 13 |
+| flags | preferred, 400 | 0 | 534 | 336 | 47 / 38 |
+| flags | preferred, 400 | 0 | 534 | 458 | 39 / 34 |
+| redefine once | preferred, 400 | 1 | 533 | 323 | 38 / 30 |
+| redefine once | preferred, 400 | 0 | 534 | 186 | 12 / 9 |
+| clear once | preferred, 400 | 2 | 532 | 293 | 27 / 23 |
+| clear once | preferred, 400 | 3 | 531 | 824 | 35 / 39 |
+| control | 4 (`lanesOverride=4`), 100 | 29 | 113 | 466 | 32 / 29 |
+| control | 4, 100 | 30 | 112 | 391 | 21 / 24 |
+| redefine once | 4, 100 | 17 | 125 | 319 | 26 / 36 |
+| redefine once | 4, 100 | 16 | 126 | 260 | 36 / 18 |
+| clear once | 4, 100 | 1 | 141 | 163 | 28 / 26 |
+| clear once | 4, 100 | 3 | 139 | 178 | 18 / 22 |
+
+The controls agree with the record (9.6: 18, 10, 39 on 12 cores; 9.7: 53, 78, 33 on 6;
+`VARKA-373.md` 9, 4 lanes off: 31, 18).
+
+What the counts did after the reset:
+
+* **redefine**: the counts are back within 30 s (at the preferred species 83 to 106 traps, 21 to
+  25 of them class checks, against 103 to 110 and 18 to 23 just before; at 4 lanes 143 to 182),
+  presumably because every kernel's code was thrown away and recompiled from empty profiles. At the
+  preferred species the releases stay away anyway, and the methods that hold class-check traps
+  afterwards are others: the per-method list (added to the wrapper after the first
+  control, flags and redefine runs) shows `VectorOperators.opKind`, 9.6's culprit, in the one
+  control and the one flags run that carried it (the flags run also `ImplCache.find`), and neither
+  appears in any of the three reset runs at the preferred species that carried it.
+  So what helps is the template profiles filled again by a JVM that has already run many
+  operator classes, as the template warm-up of 9.7 fills them by design, not the count being
+  zero; that is a reading, not shown. At 4 lanes it halves the releases (16, 17 against 29, 30).
+* **clear**: the counts stay low (7 to 25 traps at 90 s, 12 to 59 at the end, against 117 to 303
+  at the end of the controls), since no code was thrown away and the zeroed method counts
+  reopen the gates (9.2). It removes nearly all releases at both lane counts, the 4-lane
+  per-bytecode case included, which the toy of 9.1 did not predict.
+
+### 9.4 The answer to the row
+
+| mechanism | verdict | evidence |
+|---|---|---|
+| raise the limits: `setVMOption`, `jcmd VM.set_flag`, `DiagnosticCommand` `vmSetFlag` | **not available** | 2.1 |
+| compiler directives, run-time or `-XX:CompileCommand` | **available, cannot reach the limits or the counts** | 2.2 |
+| WhiteBox `setIntxVMFlag`, `clearMethodState` | **needs a startup option** (`-XX:+WhiteBoxAPI`, the unlock, a boot class path jar); then the flags gave 0 and 0 releases and one clear 2 and 3 (1 and 3 at 4 lanes) | 2.3, 9.3 |
+| JVMCI `reprofile` | **needs a startup option** (`EnableJVMCI` and an export); resets one method fully | 9.1, source only |
+| a Java agent loaded in-process through `JVMTI.agent_load`, redefining the vector classes with their own bytes | **available with no startup option on JDK 25**, with a warning and on JEP 451's path to being refused by default; resets every count of every non-hidden vector class, and deoptimizes every kernel | 9.1, 9.3: 1 and 0 releases at the preferred species, 16 and 17 at 4 lanes |
+
+So a per-method reset from Varka's own code is not possible without an option, a per-class reset
+is: redefinition is per class, not per method, and the JVM's own code that inlined those
+classes goes with it. Raising the limits stays an operator's option. For an executor this is a
+worse remedy than the template warm-up (`VARKA-295.md` 9.7), which avoids creating the counts at
+no deoptimization: redefinition throws away the compiled kernels of every query in the JVM, the
+counts come back within seconds, it depends on a dynamic-agent default that the JDK has announced
+it will change, and it brings a JVMTI capability into the product. It is worth knowing as a
+diagnostic, and as the one in-process way to undo a pollution that has already happened (for
+instance by query-path vector code before any warm-up, 9.7). Nothing in the product changes here.
+
+### 9.5 Predictions of 6.1, scored
+
+1. **Right.** The flags set through WhiteBox before the first warm-up gave 0 and 0 releases in
+   1,068 warm-ups, as the startup options did.
+2. **Wrong in its reason, right by a hair in its letter.** The clear removed fewer releases than
+   the flags (2 and 3 left against 0 and 0), but it removed 56 of 58 and 65 of 68, and at 4 lanes,
+   where the cause is the per-bytecode route the prediction said it would miss, 26 to 29 of 29 and
+   30. The per-bytecode bits are not what decides (9.2). It was also run once at 60 s, not "after
+   the warm-up of the first composition", which the arm does not report as it happens.
+3. **Not run.** The forced-inline directive was not measured; the replays above answered the
+   row without it.
+
+### 9.6 Not done
+
+A periodic reset (the redefinition every 30 s): the source and the once-arm's 30-second return
+of the counts already say what it would cost, a deoptimization of every kernel each time. The
+forced-inline directive (prediction 3). The 128-bit preferred species (`-XX:MaxVectorSize=16`),
+whose releases `VARKA-373.md` 9 says are a different cause. The flags at 4 lanes: the per-method
+flags do not touch the per-bytecode gate by the source (9.2), so they were not run there.
+
+The probe, the agent, the replay wrapper (`Replay370`, which runs ScalaTest's `Runner` after the
+agent load and the arm's action), the run script and every run's log are in
+`/tmp/claude-1000/-home-max-proj-vecbricks-varka/53e2e690-d028-4b57-a163-fcdc477c97cf/scratchpad/370/`,
+not in the repository; the WhiteBox jar there is built from the source tree's
+`test/lib/jdk/test/whitebox`.
