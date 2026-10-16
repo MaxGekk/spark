@@ -19,8 +19,10 @@ Which probe each run used. The commit lines below name the branch before it was 
 master. Section 1 ran on the first build of the probe (commit 6bbb6762da6, whose content is
 a8c595321d4 after the rebase); sections 2 and 5 ran on that build plus the self-review's fixes,
 uncommitted then ("dirty") and committed as 5ed6ebe64f4. The fixes change no reading here: no
-draw was skipped (repeated or declined) and no timed call declined in any run, and the
-summaries were all re-read with the final reader.
+draw was skipped (repeated or declined) in any run, no timed call declined in sections 2 and 5
+(section 1's build did not log the timed calls' status, but its timed batch is the same fixed
+dates through the same kernel as in the 22 forks of sections 2 and 5, none of whose calls
+declined), and the summaries were all re-read with the final reader.
 
 1. The sweep at the host's width: N = 0, 16, 64, prewarm on and off, 6 forks each
 
