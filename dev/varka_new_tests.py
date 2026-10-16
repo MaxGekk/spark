@@ -59,6 +59,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
@@ -91,7 +92,7 @@ def literal_chain(text, pos):
     'a b c'
     >>> literal_chain('"x"\\n      + "y", Tag)', 0)
     'xy'
-    >>> literal_chain('s"size $n")', 1) is None
+    >>> literal_chain('s"size $n")', 0) is None
     True
     >>> literal_chain('"n = " + n)', 0) is None
     True
@@ -246,10 +247,29 @@ def resolve_base(arg):
 # Running tests through the matrix runner on an exported build.
 
 
+def read_text(path):
+    with open(path) as f:
+        return f.read()
+
+
+def write_text(path, text):
+    with open(path, "w") as f:
+        f.write(text)
+
+
+def log_tail(path, lines=30):
+    """The last lines of a log, for a step's output: the scratch directory is gone with the job."""
+    try:
+        return "\n".join(read_text(path).splitlines()[-lines:])
+    except OSError:
+        return "(no log at %s)" % path
+
+
 def run_tests(build_dir, tests, workdir, extra_jvm=()):
-    """{(suite, name): 'passed' | 'failed' | 'skipped'} for the tests that ran, from one JVM."""
-    cp = open(os.path.join(build_dir, "classpath")).read().strip()
-    opts = [o for o in open(os.path.join(build_dir, "jvm.opts")).read().splitlines() if o]
+    """({(suite, name): 'passed' | 'failed' | 'skipped'} for the tests that ran, the runner's
+    exit status), from one JVM. The runner exits non-zero on any failure or aborted suite."""
+    cp = read_text(os.path.join(build_dir, "classpath")).strip()
+    opts = [o for o in read_text(os.path.join(build_dir, "jvm.opts")).splitlines() if o]
     os.makedirs(os.path.join(workdir, "tmp"), exist_ok=True)
     args = ["-oW", "-u", os.path.join(workdir, "junit")]
     # One -s a suite with its tests' -t after it: two -s of one suite would run it twice, and
@@ -275,8 +295,10 @@ def run_tests(build_dir, tests, workdir, extra_jvm=()):
         *args,
     ]
     with open(os.path.join(workdir, "run.log"), "w") as log:
-        subprocess.run(cmd, cwd=workdir, stdout=log, stderr=subprocess.STDOUT, env=env)
-    return junit_results(os.path.join(workdir, "junit"))
+        status = subprocess.run(
+            cmd, cwd=workdir, stdout=log, stderr=subprocess.STDOUT, env=env
+        ).returncode
+    return junit_results(os.path.join(workdir, "junit")), status
 
 
 def junit_results(directory):
@@ -363,31 +385,42 @@ def cmd_rerun(args):
         say("no build in %s to rerun the new tests on; the suites step makes it" % args.build_dir)
         return 1
     say("== %d new test(s) of %s, %d rounds" % (len(tests), args.module, args.times))
-    failed, ran = [], set()
+    failed, aborted, ran = [], [], set()
     scratch = tempfile.mkdtemp(prefix="varka-new-tests-")
     for k in range(args.times):
         extra = () if k == 0 else ("-Dvarka.fuzz.seed=%d" % (0x5EED + k),)
-        results = run_tests(
-            args.build_dir, tests, os.path.join(scratch, "round-%d" % (k + 1)), extra
-        )
+        workdir = os.path.join(scratch, "round-%d" % (k + 1))
+        results, status = run_tests(args.build_dir, tests, workdir, extra)
+        round_failed = False
         for suite, name in tests:
             result = outcome(results, suite, name)
             if result is not None:
                 ran.add((suite, name))
             if result == "failed":
                 failed.append((k + 1, suite, name))
+                round_failed = True
+        # A non-zero exit with no failed test in the reports is a suite that aborted (a
+        # fixture that threw) or a JVM that died: no report names it, and it is still a failure.
+        if status != 0 and not round_failed:
+            aborted.append((k + 1, status, os.path.join(workdir, "run.log")))
     for suite, name in tests:
         if (suite, name) not in ran:
             say(
                 "::notice::%s: %s ran in no round; the runner did not match its name"
                 % (suite, name)
             )
+    for k, status, log in aborted:
+        say(
+            "round %d of %d: the runner exited %d with no new test failed in its reports, so a "
+            "suite aborted or the JVM died" % (k, args.times, status)
+        )
+        print(log_tail(log))
     if failed:
         for k, suite, name in failed:
-            say(
-                "failed in round %d of %d: %s: %s (logs under %s)"
-                % (k, args.times, suite, name, scratch)
-            )
+            say("failed in round %d of %d: %s: %s" % (k, args.times, suite, name))
+        first = failed[0][0]
+        print(log_tail(os.path.join(scratch, "round-%d" % first, "run.log")))
+    if failed or aborted:
         return 1
     say("passed: every new test of %s, %d times" % (args.module, args.times))
     return 0
@@ -395,7 +428,8 @@ def cmd_rerun(args):
 
 def labelled_fix(branch, owner):
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-    url = "https://api.github.com/repos/%s/pulls?state=open&head=%s:%s" % (BASE_REPO, owner, branch)
+    head = urllib.parse.quote("%s:%s" % (owner, branch), safe=":")
+    url = "https://api.github.com/repos/%s/pulls?state=open&head=%s" % (BASE_REPO, head)
     req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
     if token:
         req.add_header("Authorization", "Bearer " + token)
@@ -440,14 +474,14 @@ def build(tree, module, out):
         ).returncode
     if status != 0:
         return False
-    plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]|\r", "", open(log_path).read()).splitlines()
+    plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]|\r", "", read_text(log_path)).splitlines()
     cp = [line for line in plain if re.match(r"^/[^ ]+:/", line)]
     opts = [line[len("[info] * ") :] for line in plain if line.startswith("[info] * ")]
     opts = [o for o in opts if not o.startswith("-Djava.io.tmpdir=")]
     if not cp or "scalatest" not in cp[-1]:
         return False
-    open(os.path.join(out, "classpath"), "w").write(cp[-1] + "\n")
-    open(os.path.join(out, "jvm.opts"), "w").write("\n".join(opts) + "\n")
+    write_text(os.path.join(out, "classpath"), cp[-1] + "\n")
+    write_text(os.path.join(out, "jvm.opts"), "\n".join(opts) + "\n")
     return True
 
 
@@ -461,7 +495,7 @@ def cmd_fails_on_base(args):
     if not args.force:
         try:
             pr = labelled_fix(branch, owner)
-        except OSError as e:
+        except (OSError, ValueError) as e:
             say("::warning::could not read the pull request's labels (%s); not checked" % e)
             return 0
         if pr is None:
@@ -500,7 +534,8 @@ def cmd_fails_on_base(args):
                 "base's main sources does not compile; %s)" % os.path.join(build_dir, "build.log")
             )
             return 0
-        results = run_tests(build_dir, tests, os.path.join(scratch, "run"))
+        # The runner's status is not read: the tests are meant to fail here.
+        results, _ = run_tests(build_dir, tests, os.path.join(scratch, "run"))
     finally:
         git("worktree", "remove", "--force", tree, check=False)
     passed, unshown = [], []
@@ -653,14 +688,14 @@ class NewTestsTest(unittest.TestCase):
                 git("config", "user.name", "t")
                 for path in ("m/src/main/A.scala", "m/src/test/T.scala"):
                     os.makedirs(os.path.dirname(path), exist_ok=True)
-                    open(path, "w").write("base\n")
+                    write_text(path, "base\n")
                 git("add", "-A")
                 git("commit", "-qm", "base")
                 base = git("rev-parse", "HEAD").strip()
-                open("m/src/main/A.scala", "w").write("fixed\n")
-                open("m/src/main/B.scala", "w").write("new helper\n")
-                open("m/src/test/T.scala", "w").write("new test\n")
-                open("m/src/test/U.scala", "w").write("another\n")
+                write_text("m/src/main/A.scala", "fixed\n")
+                write_text("m/src/main/B.scala", "new helper\n")
+                write_text("m/src/test/T.scala", "new test\n")
+                write_text("m/src/test/U.scala", "another\n")
                 git("add", "-A")
                 git("commit", "-qm", "fix")
                 self.assertEqual(
@@ -668,6 +703,33 @@ class NewTestsTest(unittest.TestCase):
                 )
             finally:
                 os.chdir(here)
+
+    def test_a_round_whose_runner_fails_with_clean_reports_fails(self):
+        # A suite whose fixture throws, or a JVM that dies, leaves no report naming the new
+        # test; the runner's exit status is then the only sign, and it fails the step.
+        import contextlib
+        import io
+
+        g = globals()
+        names = ("resolve_base", "listing", "run_tests", "SUMMARY")
+        saved = {k: g[k] for k in names}
+        test = (PKG + "VarkaLaneSuite", "t")
+        try:
+            g["SUMMARY"] = os.devnull
+            g["resolve_base"] = lambda arg: ("b" * 40, "")
+            g["listing"] = lambda module, base: ([test], [])
+            with tempfile.TemporaryDirectory() as d:
+                write_text(os.path.join(d, "classpath"), "cp\n")
+                args = argparse.Namespace(base=None, module="catalyst", times=2, build_dir=d)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    g["run_tests"] = lambda *a: ({}, 1)
+                    self.assertEqual(cmd_rerun(args), 1)
+                    g["run_tests"] = lambda *a: ({test: "passed"}, 0)
+                    self.assertEqual(cmd_rerun(args), 0)
+                    g["run_tests"] = lambda *a: ({test: "failed"}, 1)
+                    self.assertEqual(cmd_rerun(args), 1)
+        finally:
+            g.update(saved)
 
     def test_timing_suites_are_not_rerun(self):
         found = [(PKG + "VarkaAssemblySuite", "a"), (PKG + "VarkaLaneSuite", "b")]

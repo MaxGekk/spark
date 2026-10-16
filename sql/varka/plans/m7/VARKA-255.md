@@ -1295,3 +1295,13 @@ build's time on a runner beside the suites (prediction 6: under 8 minutes), the 
 a typical pull request (prediction 6: under 3 minutes), and that the fork's token reads the
 base's pull-request labels (a failed read is a warning and no check). Section 6's count of `fix`
 pull requests whose overlay did not compile starts with the first one.
+
+**The author's review** (16 October) found the self-test failing: a doctest of `literal_chain`
+started one character past an `s"..."` title's `s`, so it read a plain literal, and the step,
+which runs the self-test first, would have failed every Varka suite job. The doctest now starts
+at the `s`. `rerun` dropped the runner's exit status, so a suite whose fixture threw, or a JVM
+that died, left no report, every new test "ran in no round" as a notice and the step passed; a
+round that exits non-zero with no new test failed in its reports now fails the step, with a
+thirteenth unit test, and a failed or aborted round prints the end of its log, since the scratch
+directory goes with the job. The branch is quoted in the label lookup's `head=` query, a body
+that is not JSON is a warning like any failed read, and the self-test closes the files it writes.
