@@ -173,7 +173,7 @@ enum Lane {
         return lane;
       }
     }
-    throw new IllegalArgumentException("unsupported lane type " + laneType);
+    throw VarkaErrors.illegalArgument("unsupported lane type " + laneType);
   }
 
   /**
@@ -282,7 +282,7 @@ enum Lane {
    */
   void requireInt(VarkaVectorIR node) {
     if (this != INT) {
-      throw new IllegalArgumentException("the calendar lowering needs int lanes, not "
+      throw VarkaErrors.illegalArgument("the calendar lowering needs int lanes, not "
           + laneType + ", for a " + node.getClass().getSimpleName());
     }
   }

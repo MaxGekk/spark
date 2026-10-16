@@ -740,3 +740,94 @@ at the fixed head on an idle laptop and on a runner, every row within a few perc
 head alternated on one machine, and the wide-kernel half of prediction 3 therefore stays
 unmeasured as a pair. A section-subset path that would let a base run only the sections it can
 finish is the alternative `VARKA-255.md` 9.3 describes; it was not built.
+
+**322b: the counterpart, implemented, its pair pending** (16 October 2026, on master
+`7cc402b8f34`). `VarkaSqlBenchmarkBase`, in `sql/core/src/test/java/.../execution/benchmark/`,
+extends `VarkaBenchmarkBase` with what `SqlBasedBenchmark` gives a Scala benchmark:
+
+* **`spark()`**, the default session with the trait's settings (`local[1]`, one shuffle
+  partition, broadcast threshold 1, no UI, a 3g result limit), made by an overridable
+  `getSparkSession()` on first use; `afterAll` stops it only if it was made. A Scala benchmark
+  object starts that session when it is initialised, and the size ladders stop it at once to build
+  their own Arrow sessions; the port never starts it.
+* **`withConf(SparkSession, Map<String, String>, Runnable)`**, the trait's `withSQLConf` on a
+  session the caller names, since these benchmarks hold two. A key's earlier state is read with
+  `RuntimeConfig.contains` (Scala's `private[sql]`, which this package is inside), not `get`, which
+  answers a registered key's default when nothing set it, so a restore through it would leave the
+  key set to its default instead of unset. Each key set is put back, in reverse order, even when
+  the body throws or a later key is refused; `set` refuses a static key, and a Spark core key while
+  `spark.sql.legacy.setCommandRejectsSparkCoreConfs` is on, where `withSQLConf` takes the latter.
+* **`noop(Dataset)`**, and **`note(String)`**, a line printed and written to the results file
+  outside a table: five of the fifteen classes carry a private copy of it (the three size
+  ladders, `VarkaRangeFilterBenchmark` and `VarkaSchemaWidthBenchmark`).
+
+**Two departures from 3.2.** `note` is an addition, for the five copies. And the wrapper's
+`addTimerCase` is not added: it belongs in catalyst's `VarkaBenchmark`, which no 322b class needs,
+so it comes with its first user, `VarkaColdPathBenchmark`, in 322c. An overridable `suffix` needs
+no adapter: `BenchmarkBase.suffix` is a public method a Java subclass overrides.
+
+**The port.** `VarkaSizeLadderParallelBenchmark` is Java under its name and package, on the new
+base, its `.scala` deleted: 115 lines of Scala to 126 of Java after the review. The timed bodies
+are the Scala's, `noop(session.sql(query))`, and the dry run comes from `runCases`, which the
+Scala form lacked.
+`VarkaSizeLadder`'s members are `private[benchmark]`, which scalac gives no static forwarder, so
+the port reaches them through `VarkaSizeLadder$.MODULE$` until 322c ports the helper.
+
+**The ids are vacuous here, the names are the proof.** The class claims no case ids, and
+`dev/varka_bench_ids.sh` runs only catalyst classes, so there is no id list to compare. The names
+were compared as 322a-2 compared them: core's `Benchmark` and `BenchmarkBase` instrumented,
+uncommitted, with its three `println`s, and a fourth line, `Benchmark.run` returning at once under
+`-Dvarka.bench.dryRun=true`, since the Scala form has no dry run and would otherwise time every
+case. The Scala form ran at `7cc402b8f34` before its deletion and the Java form after, both through
+`sql/Test/runMain` pinned to cores 12 to 23. The two outputs are identical, 37 lines: the section, 9
+benchmarks (each 2,000,000 values an iteration, 5 iterations, 2 s warm-up, 2 s minimum), 18 cases,
+and the 9 rung notes, each with vanilla's largest method (2,416 to 17,132 bytes), Varka fusing every
+entry, 12 cores and 12 cached partitions. Against the committed runner file,
+`VarkaSizeLadderParallelBenchmark-jdk25-runner-7763-results.txt`, the section title, benchmark
+names, case names and rung notes match, the method byte counts included, except the core and
+partition counts, 4 there: the label carries the machine's core count, and both sides of a pair run
+on one machine. The instrumentation was reverted before the commit.
+
+**`withConf`, proved without a user.** No 322b class calls it, so a throwaway subclass, not
+committed, ran it once on the default session, which is also the only run `getSparkSession()`
+had (it started the trait's `local[1]` session): `spark.sql.codegen.maxFields`, unset (default 100),
+and `spark.sql.codegen.hugeMethodLimit`, set to 7000, read 1000 and 9000 inside the body; after it,
+`maxFields` was unset again rather than set to 100 and `hugeMethodLimit` read 7000; the same after a
+body that threw, the exception propagated; and with the static `spark.sql.cache.serializer` between
+the two keys, the set threw `CANNOT_MODIFY_STATIC_CONFIG`, the body did not run, `maxFields`, set
+ahead of it, was unset, and `hugeMethodLimit`, after it, untouched. Its committed users,
+`VarkaSchemaWidthBenchmark` and `VarkaSizeLadderTuningBenchmark`, come in 322c.
+
+**What differs in the timed work**: nothing a query of two million rows would show. The case is a
+Java `IntConsumer` where the Scala's was a `Function1` boxing its iteration, `noop` a static call
+where the Scala built the trait's implicit wrapper each call, and the JVM never started and stopped
+the default `local[1]` context before building the two `local[*]` sessions.
+
+**The review's fixes** (`/code-review high` on the branch; a first run reviewed another diff and
+was repeated). Eight findings, seven fixed, one declined. (1) The Scala form's `spark.stop()` also
+stopped a session another class had left running, which a failed class does under Spark's
+`Benchmarks` runner; without it the two `local[*]` sessions would join that context and keep its
+master, one core, silently. The base gains `stopLeftoverSessions()`, which stops and clears the
+active and default sessions, and the port calls it first. (2) The baseline session leaked if the
+Varka session failed to build, as in the Scala form; each session is now stopped by a `finally` of
+its own. (3) `spark()` made after a benchmark's own session would get that session back from
+`getOrCreate` and write the defaults into a measured arm, which the eager Scala trait could not
+do; it is refused. (4) `withConf`'s refusal of core keys, documented (above). (5) The class's dry
+run caches and plans to print its notes, not "about the time a JVM takes to start"; its Javadoc
+says so. (6) The default session's name is `getClass().getName()`, which an anonymous subclass
+does not make null. (7) `note` reads `output()` once. Declined: making `VarkaSizeLadder`'s members
+public so that Java gets static forwarders, since that file is 322c's to port. After the fixes the
+dry-run comparison was repeated, the 37 lines again identical, and the throwaway check again
+passed, with two cases more: `stopLeftoverSessions()` stopped the default session and its
+context, and `spark()` after another session threw `requirement failed: spark() is called after
+another session was made`.
+
+**Pending: the pair**, on a GitHub-hosted runner (the laptop is busy), dispatched by the owner once
+the pull request is open: `gh workflow run benchmark.yml -R MaxGekk/spark --ref <fork branch> -f
+pr=<n> -f pair=true -f rounds=5 -f class=VarkaSizeLadderParallelBenchmark`, the base left blank, so
+the merge base with `vecbricks/varka` master, where the class is the Scala object. No laptop
+results file and no band are committed for the class, so the pair reads the 10% gate by both the
+median and the best, and the pair runner removes each round's file as it does for an uncommitted
+class. **Prediction, registered before the run: no row slower by 10% by both**, and every row
+within the runner's spread, since each timed body is a Spark query whose planning and two million
+rows dwarf what the harness changed.
