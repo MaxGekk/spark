@@ -682,6 +682,8 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 | 372 | **Done** (`VARKA-372.md` 9, 15 October 2026: the hostile years are the largest that fit and the view's year-month columns are NULL where they would overflow; compositions erroring on both sides fell from 393 to 479 of each 5,000 to 14 to 68, the full pools from 17 to 18% to under 3.2%, no disagreement in 35,000 compositions, and a new test fails on the old fixture). The Spark-level fuzzer's fixture raises on a hostile row: its interval columns `ymy` and `ym` overflow for the drawn `y = 2147483647`, so 8 to 10% of the compositions (393 to 479 of each 5,000 in the 35,000-composition census) compare an error with an error and nothing else, 17 to 18% in the full pools, and the warmed arm failed once at random on it (seed 20261008, iteration 1405: `CAST_OVERFLOW` against `INTERVAL_ARITHMETIC_OVERFLOW`, each legitimate for a different column of the same row). Make the fixture total, or run only compositions whose fixture builds, and measure the share before and after. **Done when** the share of compositions erroring on both sides falls under 6% in the full pools, the warmed arm passes seed 20261008 over iteration 1405, the census still raises every entry of the expected-errors list, and no pool loses its boundary draw | the census of `VARKA-319.md` 2, `VARKA-295.md` 9.8 | small |
 | 373 | **Done, no fix** (`VARKA-373.md` 9, 16 October 2026). The 4-lane warm arm was classified from the JIT log (2 runs, 151 released classes each, all cause 4): the cause is a per-bytecode trap count of 4 at `IntVector.add` bci 5 that turns the miss path of a shared template into a virtual call, not 9.6's compile-wide sums; warming the narrower species does not help (128-bit alone 26 releases per 100 compositions, with the preferred 62, against 14 to 16 shipped and 18 to 31 off). 9.8's "256-bit preferred" was wrong: it is 512 here, so 16 lanes was the preferred arm. Production emits at the preferred species only; at a 128-bit preferred species (`-XX:MaxVectorSize=16`, the gate's) the warm-up does nothing either (41 to 43 per 100 against 45 to 46 off), by a different mechanism, undiagnosed: that is the open item. No code changed | `VARKA-295.md` 9.8 | medium |
 | 374 | **Done, no fix** (`VARKA-374.md` 9, 16 October 2026). The cause at a 128-bit preferred species is named from two classified JIT logs of the warm arm at `-XX:MaxVectorSize=16` (100 and 400 compositions, 41 and 151 releases): x86 C2 lowers no 2-lane mask (`x86.ad` refuses `VectorLoadMask`, `VectorStoreMask` and `VectorMaskCast` at `vlen == 2`, before any profile is read), so every long kernel with a mask runs the Vector API's Java fallback per mask operation, allocates and is released at the deadline, warm-up or not. Every class with a 2-lane long mask in a loop compile released (66 classes, 133 of the 151 releases) and none of the 273 others; the rest is the predication cycle, 3 to 7 per 100. A standalone loop: long 2 lanes 38,852 ns a call against 2,175 for int 4 lanes, 18x, and equal at 4 lanes. The rate cannot fall under 10 per 100 without a mask-free or declined 2-lane long kernel, which is design work beyond the row. Correction: this is the x86 back end below its width, not Apple Silicon, whose aarch64 back end has 2-lane masks (`VARKA-153.md` 6); production reach is AVX-only and SSE-only x86 hosts. No code changed | `VARKA-373.md` 9 | medium |
+| 384 | The calibration table as one file per entry. `skills/testing-and-debugging.md`'s table gains a line from most tasks, so each merge conflicts with every open branch that added one, and each resolution costs a push and a CI restart (six or so per merge on 16 October 2026). In milestone 7 because it slows every remaining row's review and the close (section 10, the first CI entry). Each entry becomes a small file under one directory, the table is generated from them by the tool that already checks `SKILLS.md`, and the pre-commit check fails when the table and the files differ. **Done when** two branches that each add an entry merge without a conflict, the generated table equals today's lines, and the cost-prediction rule in `sql/varka/AGENTS.md` names the new files | section 10, opened 16 October 2026 | small |
+| 385 | The Varka engine's Maven plugins from the cache. CI's "Install the Varka engine" step skips the Maven cache and downloads its plugins on every run, and on 16 October 2026 a transient Maven Central miss of `maven-resources-plugin` 3.4.0 failed it twice (#888, #889), each costing a rerun. In milestone 7 because every full CI run of the remaining rows takes that step (section 10, the second CI entry). Restore the cache in the jobs that install the engine, or pin the engine pom's plugin versions so a cached copy is always found. **Done when** a run whose cache is warm downloads no plugin in that step, shown by its log | section 10, opened 16 October 2026 | small |
 | 270 | The milestone's own post, for JVM and database engineers: how Varka knows its answers are right, and where that stops | the plan review (2.5), item 58 | medium |
 | 288 | **Done** (`VARKA-288.md` 9.3, 12 October 2026): published as "A large CASE WHEN, split only where it has to be"; the fix 4.5 times faster than the cliff post's workaround at 300 branches and that workaround within 3% of whole-stage off, C2's inlining shown from its own log. The cliff's sequel, for the readers of "The 8000-byte cliff in Spark SQL": a large CASE WHEN inside a stage split only where its method is past 8000 bytes, as apache/spark#59225 (SPARK-33301) does it; the cliff post's workaround measured against the fix, and C2's inlining under splitting always; published once the pull request merges, naming the release (`VARKA-288.md`) | the owner, 5 October 2026 | small |
 | 261 | The closing task: 1.1 read row by row, and the README's account of how Varka is checked rewritten; then the close `CONTRIBUTING.md` asks of every milestone, in VARKA-282's shape - the documents, the issue mirror, the lessons, the oracles, the `CHANGELOG.md` entry, the tag `varka-m7`, the cleanup | this plan | small |
@@ -694,6 +696,7 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 | 1 | 241, 243, 250, 251, 214, 215, 216, 138, 247, 222, 253, 262, 269, 271, 264, 274, 276, 284, 285, 291, 292 | after the tooling and the two cheap refactors; the three family ports run in parallel, by an agent; 262 and 269 need only the fuzzers' grammar and 277's shrinker, and 271 only Spark's suites; 264 is decisions, not code; 274, 276 and 284 sharpen the oracles every later test reads, and 285 measures what 284 closes; 292 follows 263's sanitizer, which found it, and precedes 263's last step; 291 needs only the IR's source and a quiet machine, and its verdict is wanted before the ports have built much of the compiler |
 | 2 | 242, 244, 217, 224, 83, 254, 257, 267, 272, 278, 279, 280, 281, 290, 294, 296, 297, 298, 303 | 303 after 284, whose report it reads; 217 after the families it fronts; 83 after 250, which rewrites the same paths; 290 after 83, whose single refusal is where the size loop's declines end; 294 after 277, whose shrinker it reuses; 296 to 298 after 262, whose harness they extend; 244 after 243 defines what a delta departs from; 267 after 251's components; 272 after 246, so that a configuration's verdict is not a second species' boxing; 278 after 277; 279 after 138; 280 after 262; 281 after 240's tooling |
 | 3 | 245, 86, 252, 268, 265, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325 | 325 before 322a's pairs, whose wide-kernel pair cannot finish without it; 323 first, since it fails a nightly IR chunk in about sixteen and needs nothing, and 324 after 320, whose port it touches; 320 after 311, whose checks the fuzzers call, and before any fuzz suite is written in JUnit under 312; 321 and 322 whenever the machine is free, 322b before 322c, whose adapter it builds, and 322's parity benchmark last; 313 to 319 after the structure settles, 315 after 314, whose error context it writes, 316 last of them since its steps are the others'; 310 to 312 after 268, whose pattern they follow, 311 after 310, whose evaluator it calls, and 312 after 311, so that a new suite has Java helpers to call; 86 after the ports, so the admission is written once in Java; 252 once the structure has settled; 268, optional, once the ports and refactors have settled the helpers' callers; 265 after 262, 263, 269, 280 and 285, so that it measures the tests the milestone leaves |
+| 3b | 384, 385 | added 16 October 2026 from section 10: two CI debts that cost every remaining row a rerun, so before the close |
 | 4 | 261, 270 | 261 last by definition; 270's post written from what 261 records |
 
 VARKA-180, VARKA-258 to VARKA-260 and VARKA-371 run across the waves; VARKA-288 waits on apache/spark#59225's
@@ -915,3 +918,68 @@ Proposed point by point against 9.2 and agreed by the owner on 13 October 2026.
   item in `m9/SCOPE.md`.
 * **A benchmark port merges with its pair**, or its pull request says why not and names the row
   that owes it.
+
+## 10. Debt register
+
+One bullet per debt: what it is, why it is a debt, and what closing it would take. Opened on 16
+October 2026: milestone 7 had no register until then, and the debts it found sat in single task
+plans or nowhere. Per `sql/varka/AGENTS.md`, a swept entry is rewritten in the past tense with what
+the sweep found, never deleted; row 261, the close, sweeps this list. Debts already owned elsewhere
+are not repeated here: the long-lane template prewarm (`m8/PLAN.md` row 383), the per-shape date
+bound (`m9/SCOPE.md` item 102), the generated-class families the coverage analyser does not fold
+(rows 284 and 285), and Varka's mask applied after a residual check (row 380's record).
+
+**In code and tests**
+
+* **`VarkaTierWitnessSuite` fails under the memory sanitizer.** "The witness sees each tier" trips
+  a `speculate_null_assert` trap in `VarkaMemorySanitizer.check` under load, on master as on every
+  branch that ran the gate on 16 October 2026 (`VARKA-318.md` 9.1, `VARKA-265.md` 9.1, row 380's
+  outcome); it passes without the sanitizer. A suite the gate always fails hides a real failure
+  of the same suite. Closing it: run the suite without the sanitizer as the JIT-measuring suites
+  already do (`--no-sanitizer`), or make the witness tolerate the sanitizer's trap, with a lesson in
+  `skills/the-jit.md` either way.
+* **Spark's two conjunct orders are hand-ported** (row 380, `VarkaConjunctOrder`). Varka reproduces
+  `FilterExec.generatePredicateCode`'s order and codegen's extra null checks by a port linked to
+  Spark's code only by a comment, as Spark's own two copies are. An upstream change to either order
+  would make Varka's demotion rule wrong silently. Closing it: a test that compares the port's order
+  with `GeneratePredicateHelper`'s on generated conditions, or one shared function upstream.
+* **The compiler entry points without the family switches stay public** (row 318, `VARKA-318.md`
+  9.3). Tests and tools call them with every family on; a production caller that used one would
+  ignore the user's switches. Closing it: one compile-context value carrying the options and the
+  switches through every compiler signature.
+* **One mutant survives both mutation passes unexplained** (row 265, its local shard check in #890): a removed
+  `requireNonNull` in `Analysis.pureOf`, which the earlier sample recorded as killed. An unexplained
+  survivor is either a missing test or a wrong reading of the sample. Closing it: the full run's
+  report names it; a test or a note in `sql/varka/mutation/notes.tsv`.
+* **`catalyst/Test/checkstyle` fails on master** on upstream's `StUtilsSuite.java`, whose outer class
+  `STUtilsSuite` does not match its file name; apache/spark's master has the same mismatch. A module
+  check that always fails hides a new finding of ours in that module. Closing it: upstream's fix,
+  arriving by a sync; a fork-only rename would conflict with every sync until then.
+
+**In CI and tooling**
+
+* **The calibration table conflicts on nearly every merge.** `skills/testing-and-debugging.md`'s
+  table gains a line from most tasks, so each merge conflicts with every open branch that added one,
+  and each resolution is a push and a CI restart (six or so per merge on 16 October 2026). Closing
+  it: one small file per entry under a directory, with the table generated from them by the tool
+  that already checks `SKILLS.md`, so two branches never edit the same lines. Owned by row 384.
+* **"Install the Varka engine" downloads Maven's plugins on every run.** The job's Maven cache is
+  skipped, and on 16 October 2026 it failed twice on a transient Maven Central miss of
+  `maven-resources-plugin` 3.4.0 (#888, #889), each costing a rerun. Closing it: restore the Maven
+  cache in that job, or pin the engine pom's plugin versions to ones the cache already holds.
+  Owned by row 385.
+* **The admission queue keeps dead runs.** A run whose pull request has merged, or whose branch
+  has been pushed again, still counts as ahead until it is cancelled by hand; on 16 October 2026 two
+  such runs held four pull requests' full runs for hours. Closing it: `dev/varka_ci_admit.py` skips
+  a run whose pull request is closed or whose head is no longer its branch's.
+* **"Re-run failed jobs" on a full run skips the queue** (`VARKA-255.md` 9.4): the rerun reuses the
+  first attempt's admission. Known and documented, not handled. Closing it: the admission job reruns
+  with the failed jobs when any module job does, or the documentation says to use "Re-run all jobs".
+* **A Java port's timing pair can approach the job's cap.** `VarkaSizeLadderBenchmark`'s pair took
+  about four and a half hours of the 355-minute limit (#877). The next pair of a class that size can
+  time out and lose every round. Closing it: split a long class's pair across jobs by section, or
+  record a per-class round count in the pair tooling.
+* **About 80 worktrees of merged branches remain on the owner's machine** (`dev/varka_worktree.sh
+  list`, 16 October 2026: 83 of 105 merged). They hold disk and make `git worktree list` and the
+  merge sweeps slow to read. Closing it: `dev/varka_worktree.sh gc`, with the parked ones (row 334's
+  `varka-326`, the far-date reproduction) kept by name.
