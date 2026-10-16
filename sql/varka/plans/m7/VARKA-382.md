@@ -182,6 +182,10 @@ for emission records, which its Javadoc already says and `noteEmission` already 
   `VarkaEmitterBudgetSuite`, `VarkaIrFuzzSuite` through `dev/varka_matrix.sh --defaults`, the
   memory sanitizer on): 61 passed, none failed, 3 cancelled - the opt-in dumps and the opt-in
   steering A/B, which cancel without their properties - in 253 s over four JVMs.
+* **Risk 1, checked locally**: after the script's own compile, `sql/compile` under MiMa's
+  profiles and then without them compiled nothing either time (20 s and 19 s, sbt's start),
+  so the profiles do not invalidate sql's analysis and prediction 1's no-op path holds here.
+* **The step-time budget** is still not on master at `57cf25f8c98`; nothing here edits it.
 
 6.1's predictions 1 and 2 are scored on the first CI runs that reach the step; prediction 3 is
 void, since master passes with this branch's fix.
