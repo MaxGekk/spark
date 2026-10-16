@@ -34,7 +34,8 @@ import org.apache.spark.sql.internal.SQLConf;
  * The emit settings a session chooses, resolved from its {@code SQLConf} once, when the columnar
  * rule builds an exec node - the node holds them, so a plan executed again after the conf changed
  * still emits what it was planned with - and carried to the factories and evaluators that emit
- * its kernels (VARKA-308). Each setting either overrides the base options or, unset, leaves them:
+ * its kernels (VARKA-308). Each emit setting overrides the base options or, unset, leaves them
+ * (the families switched off are not an emit setting and are passed beside the options instead):
  * a session that says nothing must not undo a variant a suite drives through the test hook, and a
  * session that sets a value, {@code false} included, must get it. The
  * executors cannot read the session's configuration, so the settings travel with the plan, and a
