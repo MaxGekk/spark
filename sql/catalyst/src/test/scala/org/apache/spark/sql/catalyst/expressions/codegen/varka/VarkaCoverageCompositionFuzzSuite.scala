@@ -277,26 +277,7 @@ class VarkaCoverageCompositionFuzzSuite
       }
     }
     val forceMasked = !poisoned && length > 1 && rnd.nextBoolean()
-    def intValue(i: Int, scale: Int): Int = plan.derivedAt(i).toScala.map(_.kind) match {
-      case Some(VarkaDerivedKind.TRUNC_LEVEL) =>
-        DateTimeUtils.TRUNC_TO_WEEK +
-          rnd.nextInt(DateTimeUtils.TRUNC_TO_YEAR - DateTimeUtils.TRUNC_TO_WEEK + 1)
-      case Some(_) => rnd.nextInt(7)
-      case None =>
-        def unbounded: Int = scale match {
-          case 0 => rnd.nextInt(60001) - 30000
-          case 1 => rnd.nextInt(201) - 100
-          case _ => 1 + rnd.nextInt(3)
-        }
-        plan.inputBounds.asScala.find(_.inputIndex == i) match {
-          case Some(b) if scale == 0 =>
-            (b.lo + (rnd.nextLong() & Long.MaxValue) % (b.hi.toLong - b.lo + 1)).toInt
-          // Nearer zero as the unbounded draw, inside the bound: a value across the whole of
-          // it, added to a date, passes the date guard at every attempt.
-          case Some(b) => unbounded.max(b.lo).min(b.hi)
-          case None => unbounded
-        }
-    }
+    def intValue(i: Int, scale: Int): Int = intInput(plan, i, scale, rnd)
     val roots = plan.outputs.asScala.toSeq
     def attempt(scale: Int): Boolean = if (plan.lane == LaneType.LONG) {
       val data = Array.tabulate(numInputs) { i =>
@@ -331,6 +312,33 @@ class VarkaCoverageCompositionFuzzSuite
     if (compared) comparedByLane(plan.lane) = comparedByLane.getOrElse(plan.lane, 0) + 1
     compared
   }
+
+  /**
+   * The value of int-lane input `i` of `plan` at `scale`, the attempt's step towards zero: a
+   * derived input from its kind's codes, a bounded input across its bound, any other within thirty
+   * thousand either side of zero, then nearer at each step.
+   */
+  private def intInput(plan: CompiledVarkaProjection, i: Int, scale: Int, rnd: Random): Int =
+    plan.derivedAt(i).toScala.map(_.kind) match {
+      case Some(VarkaDerivedKind.TRUNC_LEVEL) =>
+        DateTimeUtils.TRUNC_TO_WEEK +
+          rnd.nextInt(DateTimeUtils.TRUNC_TO_YEAR - DateTimeUtils.TRUNC_TO_WEEK + 1)
+      case Some(_) => rnd.nextInt(7)
+      case None =>
+        def unbounded: Int = scale match {
+          case 0 => rnd.nextInt(60001) - 30000
+          case 1 => rnd.nextInt(201) - 100
+          case _ => 1 + rnd.nextInt(3)
+        }
+        plan.inputBounds.asScala.find(_.inputIndex == i) match {
+          case Some(b) if scale == 0 =>
+            (b.lo + (rnd.nextLong() & Long.MaxValue) % (b.hi.toLong - b.lo + 1)).toInt
+          // Nearer zero as the unbounded draw, inside the bound: a value across the whole of
+          // it, added to a date, passes the date guard at every attempt.
+          case Some(b) => unbounded.max(b.lo).min(b.hi)
+          case None => unbounded
+        }
+    }
 
   /** The fixed poisoned batch's rows (VARKA-138): see `poisonedPatterns`. */
   private val PoisonedLength = 257
@@ -517,6 +525,73 @@ class VarkaCoverageCompositionFuzzSuite
   }
 
   // ---------------------------------------------------------------------------------------------
+  // The coverage rows' kernels as C2 code (VARKA-274).
+  // ---------------------------------------------------------------------------------------------
+
+  /**
+   * Coverage row `sql`'s kernel `plan` as a case for the compiled histories (VARKA-274): one batch
+   * of 64 to 1,000 rows, a third of each column's rows null, its values drawn as `checkKernel`
+   * draws them. The compiled histories compare with no decline allowed, so the batch is the first
+   * of three attempts, each nearer zero, whose every row the guards answer, with no nulls, with the
+   * batch's own null flags and with column 0 all-null. Only the row's derived truncation level is
+   * named to the check (`levelOrdinal`); its other derived codes, its bounds and a `TIME`'s day
+   * are not, so only the histories that run this batch's values (`compiledHistories`) may run it.
+   */
+  private def compiledCase(sql: String, plan: CompiledVarkaProjection, opts: VarkaEmitOptions,
+      rnd: Random): VarkaFuzzCase = {
+    val n = plan.inputOrdinals.size
+    val isLong = plan.lane == LaneType.LONG
+    val length = Seq(64, 100, 257, 1000)(rnd.nextInt(4))
+    val nulls = Array.fill(n)(Array.tabulate(length)(i => i % 5 != 4 && rnd.nextInt(3) == 0))
+    val lits = if (isLong) plan.longLiterals.asScala.map(_.longValue).toArray
+      else plan.literals.asScala.map(_.longValue).toArray
+    def value(i: Int, scale: Int): Long =
+      if (isLong) drawLong(rnd, columns(plan.inputOrdinals.get(i)).dataType, scale)
+      else intInput(plan, i, scale, rnd)
+    // The null flags the histories run: none (the other body's run, which reads every value),
+    // the batch's own, and `quiet-null`'s column 0 all-null.
+    val masks = Seq(nulls.map(_.map(_ => false)), nulls, nulls.zipWithIndex.map { case (z, i) =>
+      if (i == 0) z.map(_ => true) else z })
+    val answered = (0 until 3).iterator
+      .map(scale => Array.tabulate(n)(i => Array.fill(length)(value(i, scale))))
+      .find { d =>
+        val rows = Array.tabulate(length)(r => Array.tabulate(n)(col => d(col)(r)))
+        masks.forall { z =>
+          VarkaGuardSpecs.verdict(plan.outputs, n, lits, opts, isLong, rows,
+            Array.tabulate(length)(r => Array.tabulate(n)(col => z(col)(r))),
+            java.util.List.of()).answers()
+        }
+      }
+    val data = answered.getOrElse(fail(s"$sql: a guard declined each of three attempts"))
+    val level = (0 until n).find(i =>
+      plan.derivedAt(i).toScala.exists(_.kind == VarkaDerivedKind.TRUNC_LEVEL)).getOrElse(-1)
+    new VarkaFuzzCase(plan.lane, plan.outputs, n, lits, length, nulls, data, false, opts, -1,
+      level, s"coverage row $sql, ${plan.lane} lane, $length rows")
+  }
+
+  /**
+   * The coverage rows the compiled test runs (VARKA-274): `-Dvarka.fuzz.coverageCompiled`, rows a
+   * lane (default 4) or `all`, and `-Dvarka.fuzz.coverageRow=<sql>` runs that row alone.
+   */
+  private val coverageCompiled = sys.props.get("varka.fuzz.coverageCompiled")
+  private val coverageRow = sys.props.get("varka.fuzz.coverageRow")
+
+  /**
+   * The histories the compiled test runs: `warm-same`, `quiet-null` and `released`, or those of
+   * them, `cold` and `recompiled` that `-Dvarka.fuzz.history` names. The others draw values of
+   * their own (`warm-other`) or walk a column to a guard's edge (`quiet-guard`), within the IR
+   * grammar's bounds, which a coverage row's derived codes, bounds and `TIME` day do not share.
+   */
+  private def compiledHistories: java.util.Set[VarkaCompiledCheck.History] = {
+    import VarkaCompiledCheck.History._
+    val named = VarkaCompiledCheck.Settings.fromProperties().only.asScala.toSet
+    val runs = if (named.isEmpty) Set(WARM_SAME, QUIET_NULL, RELEASED)
+      else named.intersect(Set(COLD, WARM_SAME, QUIET_NULL, RECOMPILED, RELEASED))
+    assert(runs.nonEmpty, s"no history of ${named.map(_.label)} runs a coverage row's batch")
+    runs.asJava
+  }
+
+  // ---------------------------------------------------------------------------------------------
   // Failures, shrunk (VARKA-294).
   // ---------------------------------------------------------------------------------------------
 
@@ -568,6 +643,80 @@ class VarkaCoverageCompositionFuzzSuite
       case count: VarkaEmitOption.Count => count.`with`(c.options, 1)
       case other => fail(s"$name is not a planted-bug option: $other")
     })
+
+  /**
+   * Coverage rows' kernels alone over three of `VarkaCompiledCheck`'s histories: warmed to C2 and
+   * given its batch (`warm-same`), warmed on partial nulls and given an all-null column
+   * (`quiet-null`), and with C1 on and no warm-up over batches of 10,000 rows (`released`), every
+   * batch compared with the reference evaluator whatever tier served it, and the tier read by
+   * `VarkaTierWitness`. So the lowerings the table lists are checked as the C2 code users run, not
+   * only in the interpreter, which is all the other tests' single calls reach.
+   * `-Dvarka.fuzz.history` narrows them (`compiledHistories`).
+   *
+   * A row costs four to six seconds on a quiet laptop and many times that under load, so a run
+   * takes a sample of rows a lane, drawn by the seed, and the nightly, whose seed is the day's,
+   * runs every row (`dev/varka_compiled_fuzz.sh`). Each row's batch is drawn from a stream of its
+   * own, so a row's case is the same in a sample as in the whole table.
+   *
+   * At the matrix base without a lanes override, and registered first: a lanes-override kernel
+   * puts a second vector species in the JVM, and every later kernel's C2 code then boxes its
+   * vectors, which no user's JVM runs; the other tests emit such kernels. A wrong answer fails; a
+   * history whose tier never showed is counted and printed, and fails only under
+   * `-Dvarka.fuzz.requireTiers=true`, as in `VarkaIrFuzzSuite`. The recording is stopped when the
+   * test ends.
+   */
+  test("coverage rows' kernels agree with the reference evaluator as C2 code, across a trap " +
+      "and on the way up the tiers (VARKA-274)") {
+    val opts = VarkaMatrix.base.withLanesOverride(0)
+    val props = VarkaCompiledCheck.Settings.fromProperties()
+    val settings = new VarkaCompiledCheck.Settings(props.settleMillis, props.releasedBatches,
+      props.releasedRows, props.witnessed, compiledHistories)
+    val tally = new VarkaCompiledCheck.Tally
+    try {
+      val rowKernels = projections.map { row =>
+        row.executable -> VarkaExpressionCompiler.compile(Seq(Alias(resolve(row.executable),
+          "c")()), columns, opts).toScala.getOrElse(fail(s"${row.executable} did not fuse alone"))
+      } ++ predicates.map { row =>
+        row.executable -> VarkaExpressionCompiler.compilePredicate(resolve(row.executable),
+          columns, opts).toScala.getOrElse(fail(s"${row.executable} did not fuse alone")).fused
+      }
+      val kernels = coverageRow match {
+        case Some(sql) =>
+          rowKernels.filter(_._1 == sql).ensuring(_.nonEmpty, s"no coverage row is $sql")
+        case None if coverageCompiled.contains("all") => rowKernels
+        case None =>
+          val perLane = coverageCompiled.map(_.toInt).getOrElse(4)
+          LaneType.values.toSeq.flatMap { lane =>
+            new Random(seed ^ 274L ^ lane.ordinal).shuffle(rowKernels.filter(_._2.lane == lane))
+              .take(perLane)
+          }
+      }
+      for ((sql, plan) <- kernels) {
+        val c = compiledCase(sql, plan, opts, new Random(seed ^ 274L ^ sql.hashCode))
+        val emit: java.util.function.Function[String, Array[Byte]] = name =>
+          VarkaLoopEmitter.emit(name, plan.outputs, plan.inputOrdinals.size, plan.numLiterals,
+            null, null, opts)
+        val replay = s"-Dvarka.fuzz.seed=$seed -Dvarka.fuzz.coverageRow=\"$sql\""
+        try tally.add(VarkaCompiledCheck.run(c, emit, settings, replay))
+        catch {
+          case f: VarkaCompiledCheck.HistoryFailure => fail(f.getMessage, f)
+        }
+      }
+      info(s"${kernels.size} of ${rowKernels.size} coverage rows' kernels")
+      if (settings.witnessed) VarkaTierWitness.get().settle()
+      tally.report(settings.witnessed).asScala.foreach(info(_))
+      if (settings.witnessed) {
+        val notReached = VarkaCompiledCheck.notReached(tally).asScala
+        val require = sys.props.get("varka.fuzz.requireTiers").contains("true")
+        info(s"${notReached.size} history(ies) not reached" +
+          (if (require) "" else " (counted; -Dvarka.fuzz.requireTiers=true fails on them)"))
+        notReached.foreach(why => if (require) fail(why) else info(why))
+      }
+      assert(tally.results().size == kernels.size)
+    } finally {
+      VarkaTierWitness.close()
+    }
+  }
 
   test("random projections over more columns than a kernel reads are fused or declined, and " +
       "their kernels answer as the reference evaluator does") {

@@ -34,6 +34,7 @@
 #   dev/varka_nightly.sh --skip-golden    # without the golden-file suite, about an hour
 #   dev/varka_nightly.sh --skip-platform  # without the forked JVM arms (interpreter, C1, C2, -Xcomp, ...)
 #   dev/varka_nightly.sh --skip-deoptnull # without the NULL-mode kernels' cycle ratchet
+#   dev/varka_nightly.sh --skip-compiled  # without the compiled fuzz histories at volume
 #
 # The deopt step forks ten fresh JVMs per vector width of the default emission's twelve-output
 # make_date kernel and fails if any of them enters the C2 deoptimization cycle, reading the
@@ -77,6 +78,7 @@ series=5
 variants=4
 platform=1
 deoptnull=1
+compiled=1
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h|--help) usage 0 ;;
@@ -89,6 +91,7 @@ while [ "$#" -gt 0 ]; do
     --skip-sweep) sweep=0; shift ;;
     --skip-deopt) deopt=0; shift ;;
     --skip-deoptnull) deoptnull=0; shift ;;
+    --skip-compiled) compiled=0; shift ;;
     --skip-cliff) cliff=0; shift ;;
     --skip-golden) golden=0; shift ;;
     --skip-platform) platform=0; shift ;;
@@ -176,6 +179,18 @@ fi
 if [ "$deoptnull" -eq 1 ]; then
   run_step deoptnull dev/varka_deopt_census.sh --guard --out "$logdir/deoptnull"
 fi
+# The IR fuzzer's compiled test at volume (VARKA-274): 2,000 draws a lane with the day's seed, each
+# kernel over the eight batch histories - interpreted, warmed to C2, trapped after a quiet warm-up,
+# recompiled, released through the OSRs with C1 on - every batch compared and its tier read by
+# JFR, eight JVMs of three cores; then every coverage row's kernel over three of the histories. A
+# wrong answer fails the step; the verdicts per history, the unsettled kernels and the histories
+# not reached are counted (dev/varka_compiled_fuzz.sh).
+if [ "$compiled" -eq 1 ]; then
+  reuse=()
+  [ "$deoptnull" -eq 1 ] && [ "${status[deoptnull]:-}" = ok ] && reuse=(--skip-build)
+  run_step compiled dev/varka_compiled_fuzz.sh --seed "$seed" --out "$logdir/compiled" \
+    "${reuse[@]}"
+fi
 if [ "$cliff" -eq 1 ]; then
   run_step cliff dev/varka_inlining_cliff.sh --outputs 24,40 --forks 10 --seconds 12 --fail-if-slow
 fi
@@ -200,6 +215,11 @@ for s in canary fuzz forced sparkfuzz sparkwarm sweep prove series variants deop
   printf '%-9s %-7s %6d  %s\n' "$s" "${status[$s]}" "${secs[$s]}" "$logdir/$s.log"
   [ "${status[$s]}" = ok ] || bad=$((bad + 1))
 done
+if [ -n "${status[compiled]:-}" ]; then
+  printf '%-9s %-7s %6d  %s\n' compiled "${status[compiled]}" "${secs[compiled]}" \
+    "$logdir/compiled.log"
+  [ "${status[compiled]}" = ok ] || bad=$((bad + 1))
+fi
 # The platform step, the last to run, is listed last.
 if [ -n "${status[platform]:-}" ]; then
   printf '%-9s %-7s %6d  %s\n' platform "${status[platform]}" "${secs[platform]}" \

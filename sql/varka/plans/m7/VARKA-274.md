@@ -569,3 +569,120 @@ reached; the catalyst suites at the defaults (`dev/varka_matrix.sh --defaults --
 width now reads 10 of 14 and 12 of 14 at the int lane, 12 of 14 and 12 of 14 at the long, still
 missed; prediction 8 was not re-measured on a quiet machine, and at load 5 the A/B read +11% at
 the int lane and -17% at the long, which is that load's noise.
+
+### 9.7 274b: the coverage rows, the nightly step and the skills section
+
+Built on 16 October 2026, on the laptop at load average 5 to 34 (other agents' runs beside), on
+six of its cores (18 to 23), so every time here is a loaded machine's.
+
+**What was built.**
+
+* **The coverage rows' kernels as C2 code.** `VarkaCoverageCompositionFuzzSuite` gets a test,
+  registered first, that runs coverage rows' kernels alone over `warm-same`, `quiet-null` and
+  `released` (`VarkaCompiledCheck`, unchanged), at the matrix base with any lanes override taken
+  off, for the reason 3.4 gives for the IR suite. Each row's batch comes from a stream seeded by
+  the run's seed and the row, 64 to 1,000 rows with a third of each column null, its values drawn
+  as the suite's other kernel checks draw them; the histories compare with no decline allowed, so
+  the batch is the first of three attempts, each nearer zero, that `VarkaGuardSpecs` says every
+  guard answers. A failure names the row and replays with `-Dvarka.fuzz.coverageRow=<sql>`.
+  The int-lane value draw moved out of `checkKernel` into `intInput` so both use it; the stream
+  it draws from is unchanged, and the suite's other 14 tests pass as before, and `VarkaIrFuzzSuite`'s 14 with the sanitizer.
+* **The nightly step, `compiled`** (`dev/varka_nightly.sh`, after `deoptnull`, `--skip-compiled`),
+  runs `dev/varka_compiled_fuzz.sh`: the IR fuzzer's compiled test over draws 0 to 1,999 a lane
+  with the day's seed, split by draw range over eight JVMs of three cores each
+  (`-Dvarka.fuzz.compiledFrom`, which row 326's census added), then the coverage test over every
+  row in one JVM on all 24 cores. It reuses `deoptnull`'s build when that step passed. Wrong
+  answers fail it; history-not-reached is counted, as 9.6.6 settled.
+* **The totals.** Under `-Dvarka.fuzz.census=true` the IR suite now also prints, once the witness
+  has settled, one `VARKA_COMPILED` line per history run - lane, draw, history, what its calls
+  came to (`Tally.kind`, pulled out of the report so both read the same rule), settled,
+  confirmed, settle and wall ms, an unsettled warm-up's trap reasons, the label - and
+  `dev/varka_compiled_fuzz.py` totals them over the JVMs: per lane and history, the unsettled
+  cases with their traps (prediction 6), the not-reached lines and the failed tests (prediction
+  1). It checks itself on planted lines before each run (`--self-test`).
+* **The skills section**: `the-jit.md`, "Which tier served a call: the code list at the call's
+  edges, JFR's events inside it", from 2 and 9.2.
+
+**Where the design changed.**
+
+1. **The coverage rows run as a sample, the whole table at night.** 3.4 had every row's kernel run
+   in the suite's test. The first full run took 540 s for the 92 rows at load 30 with the memory
+   sanitizer on and had not finished when the suite's 9-minute own-JVM watchdog failed the run,
+   taking every later test of the suite with it. So a run takes 4 rows a lane drawn by the seed
+   (`-Dvarka.fuzz.coverageCompiled=<n>|all`), and the nightly's step, whose seed is the day's,
+   runs all 92 without the sanitizer: over nights the sample rotates through every lowering in
+   the gate as well. A separate test rather than three more histories in "every coverage row's
+   kernel agrees", since that test runs a lanes-override pass and is registered after one.
+2. **A lanes override is taken off, not cancelled.** Under a matrix configuration that sets one,
+   the test runs the configuration's other options at the JVM's own width, so the matrix's
+   declining check never sees a test that fused nothing.
+
+**The measurements.**
+
+* **The coverage test.** A sample of 8 a lane, with the sanitizer as the gate runs it: the suite
+  51 s in its own JVM without the test's rows and 112 s with them (load 5 to 11), and 5 minutes
+  with them at load 35, beside the IR suite, which its 9-minute watchdog failed at that load. So
+  the default is 4 a lane: the suite 91 s without the rows and 133 s with them at load 26 to
+  29, and about half a minute added on a quiet machine by the 8-a-lane run's numbers; every
+  history reached, no wrong answer. All 92 rows
+  without the sanitizer on six cores at load 7 to 10: 321 s; `warm-same` all C2 on 63 of 63 and
+  29 of 29, `quiet-null` trapped on 61 of 63 and 29 of 29, `released` a tier-4 OSR on 63 of 63 and
+  29 of 29, first at batch 84 and 42 at the median (two runs a batch, master's validity fills).
+  One `quiet-null` warm-up (`date_add(d, 3)`) was unsettled with every method at level 0 and no
+  trap, where the run before had settled it; not reproduced, not investigated. Under the sanitizer
+  4 traps a run fall inside `VarkaMemorySanitizer.check`, inlined into the loops: the gate's C2
+  code is the sanitizer's, which the nightly's arm, without it, is not.
+* **The step, a trial.** `--draws 40 --jvms 2 --cpus 3 --cpu-base 18` at seed 20261016, load 10:
+  each JVM's 20 draws a lane took 7.1 and 7.4 minutes, the coverage arm 321 s, the step 763 s.
+  34 int-lane and 32 long-lane cases ran the compiled histories (6 and 8 lanes-override draws
+  cold only); the median case took 11.5 s at the int lane and 8.4 s at the long, about three
+  times 9.4's whole-machine medians; why was not split. No wrong answer, no history not reached.
+  Unsettled: 1 of 34 int-lane cases (2.9%) and 2 of 32 long-lane (6.2%), all three trapping at
+  `profile_predicate`. A second trial at load 35 (seed 7, 8 draws a lane) ran a case in 45 s at
+  the int lane's median and left 3 of 12 cases unsettled, one of them with only `unstable_if`
+  traps: under load a warm-up can miss its deadline outside the cycle, which prediction 6's
+  "every unsettled one shows `profile_predicate`" does not allow for.
+* **The nightly's time, extrapolated, not measured.** Eight JVMs of 250 draws a lane each, at the
+  trial's 7.2 minutes per 20 draws a lane on three cores, is about 90 minutes, and the coverage arm
+  on 24 cores at most the trial's 5 minutes: **about 95 minutes added to the nightly**, inside the
+  step deadline of three hours, if eight JVMs on 24 cores run as two did on six. 3.4's 21 minutes
+  assumed 9.4's whole-machine case times; a JVM held to three cores runs a case about 2.6 times
+  slower. `--draws 1000` would halve it; the default stays 3.4's 2,000 until a night has run.
+
+**Predictions 1, 6 and 9**, which 8 gives the first nightly, are owed to it: the trial's 66
+compiled cases and 92 coverage rows found no wrong answer (1), its unsettled share sits inside 6's band with every one
+trapping at `profile_predicate`, and 9 (under 30 minutes) is extrapolated to miss at about 95,
+a ratio near 3.2, on the calibration table as an extrapolation until a night scores it.
+
+**Owed.** The first nightly's totals, which score 1, 6 and 9. 9.5's first candidate, the cheaper
+tier read, was not built: the witness's +19 to 25% a case is most of a quarter-hour of this step.
+
+**The review's fixes.** `/code-review high` on the diff found nine things; seven were fixed after
+each was checked, two were left with a reason.
+
+1. **Only the histories that run the row's own batch.** `-Dvarka.fuzz.history=warm-other` or
+   `quiet-guard` would have drawn values in the IR grammar's bounds into a coverage row's derived
+   code, bounded or `TIME` input; the test now runs only `cold`, `warm-same`, `quiet-null`,
+   `recompiled` and `released` of what the property names.
+2. **The guard check read no nulls.** A guard above a `coalesce` or `greatest` reads the value a
+   null input leaves; the check now asks the guards about the batch with no nulls (the other
+   body's run reads every value), with its own null flags, and with `quiet-null`'s all-null
+   column 0.
+3. **The watchdogs outlasted the step.** Each fuzz JVM had 170 minutes and the coverage arm 170
+   after them, inside the nightly's three-hour step deadline, which would have killed the reader
+   with them. Now 120 and 40, so a long night still ends in totals; at the trial's 90 minutes a
+   JVM the margin is a third, and `--draws 1000` is the lever if a night runs out of it.
+4. **A failed JVM gave no totals.** The `VARKA_COMPILED` lines were printed after the last draw, so
+   a JVM whose test failed dropped every case it had run. They are printed from the test's
+   `finally`, after a settle, and a failure there is logged, never put in place of the test's own.
+5. **A garbled line crashed the reader.** It is skipped and counted, and the self-test plants one.
+6. **The new members split the "Failures, shrunk" section.** They have a section of their own; the
+   test itself stays first among the tests, with no header, as 9.6.10 settled for the IR suite.
+7. **A local `table` shadowed the suite's.** Renamed.
+
+Left: **the test runs in steps that filter it out** - `VarkaOwnJvm`'s child runs the whole suite
+whatever the `-z`, so the nightly's `forced` step and every matrix configuration pay the
+sample's minute too; that is the trait's documented cost, and a test that skips itself under a
+filter would leave the gate's runs without it. **Listing `compiled` in the summary loop** instead
+of its own block after it: the loop's line is shared with row 257's step in flight, which the
+brief kept every agent off.

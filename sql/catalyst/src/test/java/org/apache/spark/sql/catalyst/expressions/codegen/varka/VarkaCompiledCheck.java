@@ -949,6 +949,17 @@ public final class VarkaCompiledCheck {
       return -1;
     }
 
+    /**
+     * What a run's counted calls came to, as the report counts cases: {@code all C2},
+     * {@code trapped}, {@code osr4}, {@code osr3}, {@code all mixed} or {@code some mixed}, the
+     * first that holds. Read after the witness has settled.
+     */
+    public static String kind(Run run) {
+      return all(run, "C2") ? "all C2" : any(run, "trapped") ? "trapped"
+          : any(run, "osr4") ? "osr4" : any(run, "osr3") ? "osr3"
+          : all(run, "mixed") ? "all mixed" : "some mixed";
+    }
+
     private static String percentiles(List<Long> values) {
       if (values.isEmpty()) {
         return "-";
@@ -1015,10 +1026,7 @@ public final class VarkaCompiledCheck {
           if (witnessed) {
             var counts = new java.util.TreeMap<String, Integer>();
             for (Run run : ran) {
-              String kind = all(run, "C2") ? "all C2" : any(run, "trapped") ? "trapped"
-                  : any(run, "osr4") ? "osr4" : any(run, "osr3") ? "osr3"
-                  : all(run, "mixed") ? "all mixed" : "some mixed";
-              counts.merge(kind, 1, Integer::sum);
+              counts.merge(kind(run), 1, Integer::sum);
             }
             line.append("; cases ").append(counts);
             if (h == History.RECOMPILED) {

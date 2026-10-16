@@ -978,3 +978,38 @@ compiled test, draws 0 to 99 a lane at seed 20260903, with `-XX:PerMethodTrapLim
   what runs today; it is what an operator's raised limits would turn the cycle into
   (`VARKA-295.md` 9.6 raised `PerMethodTrapLimit` to end a different trap sum). A check that
   wants to see it counts traps per second of C2 code, not recompiles.
+
+## Which tier served a call: the code list at the call's edges, JFR's events inside it
+
+From VARKA-274 (13 to 16 October 2026, `VARKA-274.md` 2 and 9), which runs drawn kernels over
+batch histories and proves per compared call which tier ran it, with no diagnostic flags.
+
+* **The code list is the in-process `jcmd Compiler.codelist`.** The DiagnosticCommand MBean's
+  `compilerCodelist` returns the whole JVM's installed code, one line per version: compile id,
+  level, state (`0` in use, `1` not entrant) and method. A read takes about 3.5 ms at a few
+  thousand lines, which is the tier witness's main cost; read it once per call and reuse the
+  previous call's closing read as the next one's opening read.
+* **Read the tier at both edges, and what happened inside from the events.** Code can leave the
+  cache with no `jdk.Deoptimization` event (an invalidated dependency is not one), so a call is C2
+  code only when the same compiled version of each loop and epilogue method was in use at both
+  edges and no trap fell in its window. JFR delivers events about a second late: settle on a
+  marker event and one further flush, never on a sleep, and do not let a warm-up decide on a code
+  list the stream has not caught up with - it can take an OSR version for a standard one.
+* **A small kernel's loop is C2 code inside its caller.** C2 inlines a one-root kernel's loop and
+  epilogue into `runDense` or `run`, after which their own invocation counters stop and the code
+  list shows them at level 0 forever. Count a method inlined into a caller's level-4 version in
+  use (`jdk.CompilerInlining`) as level 4, or every such kernel reads unsettled.
+* **A trap is attributed by the compile it threw away.** `jdk.Deoptimization`'s `method` is
+  where the trap was taken, often a Vector API method or a runtime helper inlined into a kernel
+  method; its `compileId` names the kernel's compiled code. Matching on `method` dropped every
+  trap taken in inlined code.
+* **An OSR version serves the call after the one it was compiled in.** It is entered at the next
+  back edge, and the compile usually finishes while the harness compares the previous batch.
+* **Where OSR happens.** With C1 on, as for a kernel run with the warm-up off or released at its
+  deadline, cold batches of 10,000 rows enter each loop by a tier-3 OSR around the 100th
+  kernel call and a tier-4 OSR around the 165th: the back-edge counter crosses 60,000 a few calls
+  before the invocation counter reaches its minimum. With C1 excluded, the warmed path, nothing
+  is OSR-compiled even in one call of 2,000,000 rows.
+* **The warm-up's allocation verdict fires before the epilogues are compiled.** It reads what a
+  1,024-row call allocates; an epilogue running only the remainder allocates too little to show,
+  so in 32 of 39 drawn kernels an epilogue was still interpreted when the verdict fired.
