@@ -130,7 +130,7 @@ class VarkaWarmupEndToEndSuite extends QueryTest with VarkaSharedSessions with V
         case e: TestFailedException if !e.getMessage.contains(JitEvidenceMark) =>
           val account = VarkaKernelWarmup.recentOutcomes().asScala.lastOption
             .map(o => jitAccount(evidence, o)).getOrElse("no warm-up outcome")
-          fail(s"${e.getMessage}; $account", e)
+          fail(s"${e.getMessage}; $account; ${VarkaKernelWarmup.templateWarmupAccount()}", e)
       } finally {
         evidence.close()
       }
@@ -165,8 +165,11 @@ class VarkaWarmupEndToEndSuite extends QueryTest with VarkaSharedSessions with V
       val account = jitAccount(evidence, outcome)
       logWarning(s"The warm-up of `$query`: $outcome; $account")
       // The account before the release-path state, whose code list can be long.
+      // When the template warm-up ran, and after how many kernels: a JVM whose suites ran kernels
+      // before its first warm-up has their profiles in the templates already (VARKA-383 2.3).
       assert(outcome.state() === VarkaKernelWarmth.State.COMPILED,
         s"$outcome; the first run took $firstMillis ms; $account; " +
+          s"${VarkaKernelWarmup.templateWarmupAccount()}; " +
           VarkaKernelWarmup.lastReleaseJitState())
     }
     assert(outcome.firstProbeBytes() > outcome.lastProbeBytes(), outcome)

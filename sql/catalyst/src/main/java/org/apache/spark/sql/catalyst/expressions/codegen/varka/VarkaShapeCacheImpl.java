@@ -203,6 +203,16 @@ public final class VarkaShapeCacheImpl {
   // that a shape was built once between the compiler's question and the kernel's first batch.
   private final LongAdder builds = new LongAdder();
 
+  // Kernel classes defined by every instance in this JVM: the Vector API template warm-up records
+  // how many came before it, which says whether earlier kernels had already profiled the templates
+  // it means to profile first (VARKA-383).
+  private static final LongAdder DEFINED = new LongAdder();
+
+  /** Kernel classes every cache in this JVM has defined so far. */
+  static long kernelsDefined() {
+    return DEFINED.sum();
+  }
+
   public VarkaShapeCacheImpl(int maxEntries) {
     if (maxEntries < 0) {
       throw VarkaErrors.illegalArgument("maxEntries must not be negative: " + maxEntries);
@@ -545,6 +555,7 @@ public final class VarkaShapeCacheImpl {
     }
     VarkaGeneratedClassLoader loader = new VarkaGeneratedClassLoader(loaderKey.parent());
     Class<?> klass = loader.defineGeneratedClass(className, bytes);
+    DEFINED.increment();
     emissionEvent.end();
     commitEmission(emissionEvent, hash, key, bytes, true);
     LOG.debug("Emitted and defined {} for shape {}", className, hash);

@@ -18,6 +18,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.lang.management.ManagementFactory;
 import java.nio.ByteOrder;
 import java.util.List;
 import javax.annotation.Nullable;
@@ -117,7 +118,27 @@ final class VarkaVectorTemplateWarmup {
   @SuppressWarnings("UnusedVariable")
   private static volatile long sink;
 
+  // When the one run of this JVM started and what it found; see lastRun.
+  private static volatile @Nullable Run lastRun;
+
   private VarkaVectorTemplateWarmup() {
+  }
+
+  /**
+   * When the warm-up ran and what had run before it, for a failure message (VARKA-383): the
+   * templates it profiles may already carry the profile of the kernels defined before it, which
+   * it cannot undo.
+   *
+   * @param uptimeMillis the JVM's uptime when the warm-up started.
+   * @param kernelsBefore kernel classes the shape caches had defined by then.
+   * @param nanos how long it took, or -1 when it failed.
+   */
+  record Run(long uptimeMillis, long kernelsBefore, long nanos) {
+  }
+
+  /** The run of this JVM's warm-up, or null when it has not run (or is switched off). */
+  static @Nullable Run lastRun() {
+    return lastRun;
   }
 
   /**
@@ -131,14 +152,19 @@ final class VarkaVectorTemplateWarmup {
       return 0;
     }
     done = true;
+    long uptime = ManagementFactory.getRuntimeMXBean().getUptime();
+    long kernelsBefore = VarkaShapeCacheImpl.kernelsDefined();
     long start = System.nanoTime();
     try {
       warmUp();
     } catch (Throwable e) {
+      lastRun = new Run(uptime, kernelsBefore, -1);
       LOG.warn("The Vector API template warm-up failed; kernels warm without it.", e);
       return 0;
     }
-    return System.nanoTime() - start;
+    long nanos = System.nanoTime() - start;
+    lastRun = new Run(uptime, kernelsBefore, nanos);
+    return nanos;
   }
 
   /** How many times {@link #warmUp} ran to the end in this JVM; for tests. */
@@ -156,6 +182,7 @@ final class VarkaVectorTemplateWarmup {
   static synchronized void resetForTest(@Nullable Throwable failure) {
     done = false;
     completed = 0;
+    lastRun = null;
     failWith = failure;
   }
 

@@ -18,7 +18,11 @@
 # Reads the fork logs of dev/varka_kernel_history.sh (VARKA-257) and says, per case - the vector
 # width, the template prewarm on or off, and N, the kernels warmed before the kernel under test -
 # how often that kernel landed in a slow mode, and how often the history's own kernels were
-# released by the warm-up still allocating, by their position in the history.
+# released by the warm-up still allocating, by their position in the history. A case also names
+# the kernel under test (the cheap tails, or e2e for VarkaWarmupEndToEndSuite's projection) and the
+# unwarmed kernels run before anything was warmed (cold), and each fork says after how many kernel
+# classes the template prewarm ran (VARKA-383). The directory may hold the logs of several shards
+# merged, one provenance-<shard>.txt each, whose CPUs are listed.
 #   dev/varka_kernel_history.py --dir target/varka-kernel-history/<date-time>
 #   dev/varka_kernel_history.py --dir DIR --guard --max-slow 0   # the nightly's verdict
 # A fork's kernel under test is slow by its rate, as the inlining-cliff reader cuts it (the median
@@ -54,6 +58,9 @@ def read_fork(path, slow_at, alloc_at):
         "after": int(m.group(3)),
         "fork": int(m.group(4)),
         "bits": None,
+        "test_kind": "tails",
+        "cold": 0,
+        "cold_kernels": [],
         "kernels": [],
         "test": {},
         "rates": [],
@@ -71,7 +78,12 @@ def read_fork(path, slow_at, alloc_at):
                 continue
             key, _, rest = line[len(PREFIX) :].partition("=")
             if key == "BEGIN":
-                fork["bits"] = fields(rest).get("bits")
+                begin = fields(rest)
+                fork["bits"] = begin.get("bits")
+                fork["test_kind"] = begin.get("test", "tails")
+                fork["cold"] = int(begin.get("cold", "0"))
+            elif key == "COLD":
+                fork["cold_kernels"].append(fields(rest))
             elif key == "KERNEL":
                 f = fields(rest)
                 f["position"] = int(rest.split()[0])
@@ -133,6 +145,22 @@ def label(fork):
     return "%s bits" % fork["bits"] if fork["bits"] else fork["width"]
 
 
+def variant(fork):
+    """The kernel under test and the cold prefix, where they are not the defaults."""
+    parts = []
+    if fork["test_kind"] != "tails":
+        parts.append(fork["test_kind"])
+    if fork["cold"]:
+        parts.append("cold %d" % fork["cold"])
+    return ", ".join(parts)
+
+
+def template_after(fork):
+    """Kernel classes defined before the template prewarm ran, '-' if it did not or is unread."""
+    after = (fork["done"] or {}).get("templateAfter", "-1")
+    return "-" if after == "-1" else after
+
+
 def main():
     parser = argparse.ArgumentParser(description="The slow mode's frequency after N kernels.")
     parser.add_argument("--dir", required=True)
@@ -147,19 +175,41 @@ def main():
     if not paths:
         sys.exit("no fork log in %s" % args.dir)
     all_forks = [read_fork(p, args.slow_at, args.alloc_at) for p in paths]
+    for prov in sorted(glob.glob(os.path.join(args.dir, "provenance*.txt"))):
+        with open(prov, errors="replace") as f:
+            cpu = next((ln.split(":", 1)[1].strip() for ln in f if ln.startswith("cpu:")), "?")
+        print("%s: %s" % (os.path.basename(prov), cpu))
 
     print(
-        "%-28s %-11s %8s %9s  %s"
-        % ("case (bits, prewarm, N)", "verdict", "ns/row", "bytes/call", "warm-up | loop tiers")
+        "%-38s %-11s %8s %9s %8s  %s"
+        % (
+            "case (bits, prewarm, N)",
+            "verdict",
+            "ns/row",
+            "bytes/call",
+            "tmpl after",
+            "warm-up | loop tiers",
+        )
     )
-    for f in sorted(all_forks, key=lambda f: (f["width"], f["prewarm"], f["after"], f["fork"])):
+    for f in sorted(
+        all_forks,
+        key=lambda f: (f["width"], f["test_kind"], f["cold"], f["prewarm"], f["after"], f["fork"]),
+    ):
         print(
-            "%-28s %-11s %8s %9s  %s %sms | %s"
+            "%-38s %-11s %8s %9s %8s  %s %sms | %s"
             % (
-                "%s, %s, N=%d #%d" % (label(f), f["prewarm"], f["after"], f["fork"]),
+                "%s, %s, N=%d #%d%s"
+                % (
+                    label(f),
+                    f["prewarm"],
+                    f["after"],
+                    f["fork"],
+                    " (%s)" % variant(f) if variant(f) else "",
+                ),
                 f["verdict"],
                 "%.1f" % f["ns_per_row"] if f["ns_per_row"] is not None else "-",
                 "%.0f" % f["alloc"] if f["alloc"] is not None else "-",
+                template_after(f),
                 f["test"].get("state", "-"),
                 f["test"].get("millis", "-"),
                 f["code"] or "-",
@@ -173,9 +223,9 @@ def main():
     )
     cases = defaultdict(list)
     for f in all_forks:
-        cases[(f["width"], f["prewarm"], f["after"])].append(f)
+        cases[(f["width"], f["prewarm"], f["after"], variant(f))].append(f)
     slow = 0
-    for case in sorted(cases, key=lambda c: (c[0], c[1], c[2])):
+    for case in sorted(cases):
         group = cases[case]
         n = defaultdict(int)
         for f in group:
@@ -183,12 +233,16 @@ def main():
         slow += n["slow-rate"] + n["slow-alloc"]
         fast = [f["ns_per_row"] for f in group if f["verdict"] == "fast"]
         released = sum(1 for f in group if f["test"].get("state") == "RELEASED")
+        # The e2e kernel's warm-up verdict is the reading its case exists for, so it is always
+        # shown; the cheap tails' only when one released.
+        shown = released or group[0]["test_kind"] != "tails"
         print(
-            "  %-9s prewarm %-3s, N=%-3d %3d / %3d / %3d / %3d   slow %d of %d%s%s"
+            "  %-9s prewarm %-5s, N=%-3d%s %3d / %3d / %3d / %3d   slow %d of %d%s%s"
             % (
                 widths.get(case[0], case[0]),
                 case[1],
                 case[2],
+                " (%s)" % case[3] if case[3] else "",
                 n["slow-rate"],
                 n["slow-alloc"],
                 n["fast"],
@@ -196,7 +250,7 @@ def main():
                 n["slow-rate"] + n["slow-alloc"],
                 len(group),
                 "; fast %.1f to %.1f ns/row" % (min(fast), max(fast)) if fast else "",
-                "; warm-up released %d" % released if released else "",
+                "; warm-up released %d of %d" % (released, len(group)) if shown else "",
             )
         )
 
@@ -207,22 +261,23 @@ def main():
     by_position = defaultdict(lambda: [0, 0, 0])
     for f in all_forks:
         for k in f["kernels"]:
-            key = (f["width"], f["prewarm"], k.get("lane", "?"), bucket(k["position"]))
+            key = (f["width"], f["prewarm"], variant(f), k.get("lane", "?"), bucket(k["position"]))
             by_position[key][1] += 1
             if k.get("state") == "RELEASED":
                 by_position[key][0] += 1
                 # Every loop method with C2 code in use: compiled and still allocating.
                 if "tiers" in k and ":none" not in k["tiers"]:
                     by_position[key][2] += 1
-    for key in sorted(by_position, key=lambda k: (k[0], k[1], k[2], int(k[3].split("-")[0]))):
+    for key in sorted(by_position, key=lambda k: k[:4] + (int(k[4].split("-")[0]),)):
         released, total, compiled = by_position[key]
         print(
-            "  %-9s prewarm %-3s, %-4s positions %-6s %4d / %4d (%.1f%%), %d with every loop C2"
+            "  %-9s prewarm %-5s,%s %-4s positions %-6s %4d / %4d (%.1f%%), %d with every loop C2"
             % (
                 widths.get(key[0], key[0]),
                 key[1],
-                key[2],
+                " (%s)" % key[2] if key[2] else "",
                 key[3],
+                key[4],
                 released,
                 total,
                 100.0 * released / total,
@@ -234,7 +289,9 @@ def main():
     errors = [(f, e) for f in all_forks for e in f["errors"]]
     unfinished = sum(1 for f in all_forks if f["verdict"] in ("unfinished", "declined"))
     skipped = sum(f["skipped"] for f in all_forks)
-    compared = sum(len(f["kernels"]) + (1 if f["done"] else 0) for f in all_forks)
+    compared = sum(
+        len(f["cold_kernels"]) + len(f["kernels"]) + (1 if f["done"] else 0) for f in all_forks
+    )
     print()
     for f, w in wrong:
         print("WRONG ANSWER in %s: %s" % (os.path.basename(f["path"]), w))

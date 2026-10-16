@@ -451,3 +451,58 @@ within 9.7's range, measured on a runner with `VarkaColdStartBenchmark`.
 ## 9. Outcome
 
 Filled in as the runs land.
+
+### 9.1 The reproduction tooling and the diagnostics (section 8 step 2), built
+
+No product behaviour changed, and no run on a runner has been made yet.
+
+* **`benchmark.yml`'s history mode.** Inputs `history` and `history-bits` as 3.1 has them. With
+  `history` set, `matrix-gen` checks it (no `pair`, no `pr`, `history-bits` 256, 512 or blank, and
+  no `--fork-base`, `--out`, `--build` or `--guard`, which the job sets), `tpcds-1g-gen`,
+  `benchmark` and `pair` are skipped, and one `kernel-history` job runs per split: JDK 25 whatever
+  `jdk` says, the CPU and `MaxVectorSize` printed and the job failed before the build when the
+  width is not `history-bits`, catalyst's test classes built with the launcher's own command, then
+  the launcher with the `history` words, each word of `extra-java-options` as a `--jvm`, and
+  `--fork-base (split - 1) * forks` (`--forks` read from `history`, 10 when absent). Its summary
+  goes to the job summary and its directory, without the forks' temporary directories, to the
+  artifact `kernel-history-split-<n>`. `kernel-history-report` downloads every split, copies the
+  fork logs into one directory with each split's provenance as `provenance-<n>.txt`, runs the
+  reader over it, and publishes the summary to the job summary and the artifact
+  `kernel-history-report`. Every input reaches the shell through `env:`. With `history` blank the
+  file's other jobs are as they were. A dispatch runs `num-splits` + 2 jobs: R1 and R2 five each,
+  R3 three, R4 four, seventeen in all, of which the nine splits are the runner hours 3.1 costs.
+* **The launcher** takes `--fork-base B` (forks `B` to `B + forks - 1`, seed `--seed + f`, the log
+  named by the global fork), `--prewarm` `on`, `off` or `first`, `--cold K` and `--test tails|e2e`,
+  checks them, and writes them to the provenance's `args:` line.
+* **The probe** takes `-Dvarka.history.cold=K`: K grammar kernels, int and long in turn, from a
+  seed of their own (the seed plus 2^40, so no fork's history draw repeats one), emitted unwarmed
+  (C1 allowed), each called forty times on its 1,024-row batch on the main thread and then
+  compared, one `VARKA_HISTORY_COLD` line each, all before the first warm-up starts the worker.
+  `-Dvarka.history.prewarmFirst=true` (the launcher's `first`) runs the prewarm before the cold
+  kernels. `-Dvarka.history.test=e2e` makes the kernel under test the end-to-end suite's three date
+  outputs over the suite's dates, every seventeenth row null. `BEGIN` carries `prewarm`, `cold`
+  and `test`; `DONE` carries `templateAfter`, the kernel classes defined before the prewarm ran,
+  and `templateMillis` now comes from the prewarm's own record, so a `first` fork reports it too.
+  `templateAfter` counts definitions, not runs: an `on` fork reads K + 1, the first warmed kernel
+  being defined before the warm-up that starts the worker.
+* **The reader** lists each `provenance*.txt`'s CPU, labels a case with its kernel under test and
+  cold prefix where they are not the defaults, shows `templateAfter` per fork, always shows the
+  e2e kernel's released count, and counts the cold kernels among those compared. The
+  `--max-long-released` ratchet of section 4 is left for step 6, where section 5 sets its value
+  from the runners' re-reading.
+* **The diagnostics.** `VarkaVectorTemplateWarmup` records, when it runs, the JVM's uptime, the
+  kernel classes defined before it (a JVM-wide count `VarkaShapeCacheImpl` keeps, one line beside
+  the class definition; that file was listed for arm B only) and its duration;
+  `VarkaKernelWarmup` records the uptime at the worker's first start and renders both as
+  `templateWarmupAccount()`, which `VarkaWarmupEndToEndSuite` appends to its verdict assertion and
+  to every other failure its catch rewrites.
+
+Checked locally, counts only: the workflow parses, actionlint reports the 19 shellcheck notes
+master's file has and none in the new jobs, shellcheck and ruff are clean on the launcher and the
+reader, the matrix step's checks accept the four dispatches' `history` values and refuse `--out`
+and `history-bits=128`, and the run step's argument handling was traced with a stand-in launcher
+for R3 and R4 (fork bases 12 and 3, the trap-limit flags as two `--jvm`s). One run of
+`--cold 4 --after 0 --test e2e --forks 1 --fork-base 3 --prewarm on,first` finished both forks
+(seed 20260906, four cold kernels compared ok in each, `templateAfter` 5 and 0), one of
+`--after 3 --forks 2 --fork-base 4` finished forks 4 and 5, and the report step's merge of the two
+directories read all four forks with both provenances. The four commands of 3.1 run unchanged.

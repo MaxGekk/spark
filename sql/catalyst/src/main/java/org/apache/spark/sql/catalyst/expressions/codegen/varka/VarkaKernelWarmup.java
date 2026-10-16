@@ -231,6 +231,36 @@ public final class VarkaKernelWarmup {
     return templateWarmupNanos;
   }
 
+  // The JVM's uptime when the worker first started, or -1 before; see templateWarmupAccount.
+  private static volatile long workerStartUptimeMillis = -1;
+
+  /**
+   * When the warm-up worker first started and when the Vector API template warm-up ran, with the
+   * kernel classes defined before it, as one line for a failure message (VARKA-383). A JVM whose
+   * sessions start with the warm-up off runs kernels long before the worker starts, and those
+   * kernels' profiles are already in the templates when the warm-up runs; this is what says so,
+   * without a log level change.
+   */
+  public static String templateWarmupAccount() {
+    long workerStart = workerStartUptimeMillis;
+    var run = VarkaVectorTemplateWarmup.lastRun();
+    String worker = workerStart < 0 ? "the warm-up worker has not started"
+        : "the warm-up worker first started at JVM uptime " + workerStart + " ms";
+    String templates;
+    if (run == null) {
+      templates = "false".equals(System.getProperty(VarkaVectorTemplateWarmup.PROPERTY))
+          ? "the Vector API template warm-up is off"
+          : "the Vector API template warm-up has not run";
+    } else {
+      templates = "the Vector API template warm-up "
+          + (run.nanos() < 0 ? "failed" : "took " + TimeUnit.NANOSECONDS.toMillis(run.nanos())
+              + " ms")
+          + ", from JVM uptime " + run.uptimeMillis() + " ms, after " + run.kernelsBefore()
+          + " kernel classes were defined (" + VarkaShapeCacheImpl.kernelsDefined() + " now)";
+    }
+    return worker + "; " + templates;
+  }
+
   private VarkaKernelWarmup() {
   }
 
@@ -445,6 +475,9 @@ public final class VarkaKernelWarmup {
    */
   private static synchronized void ensureWorker() {
     if (worker == null || !worker.isAlive()) {
+      if (worker == null) {
+        workerStartUptimeMillis = ManagementFactory.getRuntimeMXBean().getUptime();
+      }
       Thread t = Thread.ofPlatform().daemon().name("varka-kernel-warmup")
           .inheritInheritableThreadLocals(false).unstarted(VarkaKernelWarmup::work);
       t.setContextClassLoader(VarkaKernelWarmup.class.getClassLoader());

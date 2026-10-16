@@ -101,6 +101,16 @@ on:
         description: 'Pair mode: the base. Blank for the merge base of the head with vecbricks/varka master; HEAD pairs the head with itself (an A/A run, the runner''s own spread); a commit SHA; or a branch of vecbricks/varka.'
         required: false
         default: ''
+      history:
+        type: string
+        description: 'Kernel history mode: the arguments of dev/varka_kernel_history.sh (e.g. "--after 16,64 --forks 2 --prewarm on,off --jvms 1 --cpus 4"), run on each of num-splits runners, split s with the forks from (s - 1) * forks on, so every split draws other histories; extra-java-options go to every fork. The forks'' logs and the reader''s summary are the artifacts. Always JDK 25 on the dispatched ref; class, pair, pr, tpcds, sections and create-commit do not apply. Blank runs the benchmarks.'
+        required: false
+        default: ''
+      history-bits:
+        type: string
+        description: 'History mode: the vector width in bits, 256 or 512, that a runner must have (its MaxVectorSize); a job on another machine fails before the build, and rerunning the failed jobs draws other machines. Blank for any.'
+        required: false
+        default: ''
 
 # Read-only by default: with `pr` the jobs build and run a pull request's code. Only the harness
 # job, whose create-commit pushes the results to the dispatched branch, may write.
@@ -128,6 +138,8 @@ jobs:
       PR: ${{ inputs.pr }}
       ROUNDS: ${{ inputs.rounds }}
       THRESHOLD: ${{ inputs.threshold }}
+      HISTORY: ${{ inputs.history }}
+      HISTORY_BITS: ${{ inputs.history-bits }}
     steps:
     - name: Generate matrix
       id: set-matrix
@@ -166,6 +178,17 @@ jobs:
                 fail(f"rounds must be a positive number, not '{os.environ['ROUNDS']}'")
             if not re.fullmatch(r"[0-9]+(\.[0-9]+)?", os.environ["THRESHOLD"]):
                 fail(f"threshold must be a number of percent, not '{os.environ['THRESHOLD']}'")
+        # History mode runs the launcher on the dispatched ref, one split per runner; the job
+        # sets the forks' numbering and the output directory itself.
+        history = os.environ["HISTORY"].strip()
+        if history:
+            if pair or os.environ["PR"]:
+                fail("history mode takes neither pair nor pr")
+            if os.environ["HISTORY_BITS"] not in ("", "256", "512"):
+                fail(f"history-bits must be 256, 512 or blank, not '{os.environ['HISTORY_BITS']}'")
+            taken = re.findall(r"(?:^|\s)(--(?:fork-base|out|build|guard))(?=\s|$)", history)
+            if taken:
+                fail(f"history must not set {taken}: the job sets the forks' numbering and output")
         # Each class's artifact needs a name of its own, without the glob's characters. The
         # harness matches its glob against the fully qualified name, so a bare class name, which
         # the pair takes, becomes `*.<Name>`: that class in any package, and no class ending in it.
@@ -184,12 +207,13 @@ jobs:
             out.write(f"matrix={json.dumps(splits)}\n")
             out.write(f"classes={json.dumps(entries)}\n")
             out.write(f"parallel={parallel}\n")
-        print(f"classes: {entries}; splits: {splits}; max-parallel: {parallel}; pair: {pair}")
+        print(f"classes: {entries}; splits: {splits}; max-parallel: {parallel}; pair: {pair}; "
+              f"history: '{history}'")
 
   # Any TPC-DS related updates on this job need to be applied to tpcds-1g job of build_and_test.yml as well
   tpcds-1g-gen:
     name: "Generate an TPC-DS dataset with SF=1"
-    if: inputs.generate-tpcds && !inputs.pair
+    if: inputs.generate-tpcds && !inputs.pair && inputs.history == ''
     runs-on: ubuntu-latest
     env:
       SPARK_LOCAL_IP: localhost
@@ -239,7 +263,7 @@ jobs:
 
   benchmark:
     name: "Run benchmarks: ${{ matrix.class.name }} (JDK ${{ inputs.jdk }}, Scala ${{ inputs.scala }}, ${{ matrix.split }} out of ${{ inputs.num-splits }} splits)"
-    if: always() && !inputs.pair && needs.matrix-gen.result == 'success'
+    if: always() && !inputs.pair && inputs.history == '' && needs.matrix-gen.result == 'success'
     needs: [matrix-gen, tpcds-1g-gen]
     runs-on: ubuntu-latest
     permissions:
@@ -433,7 +457,7 @@ jobs:
   # six-hour job cap: a class whose single run takes over about fifty minutes on a runner does not.
   pair:
     name: "Benchmark pair: ${{ matrix.class.name }}"
-    if: inputs.pair
+    if: inputs.pair && inputs.history == ''
     needs: matrix-gen
     runs-on: ubuntu-latest
     timeout-minutes: 355
@@ -584,4 +608,164 @@ jobs:
       with:
         name: benchmark-pair-${{ matrix.class.slug }}
         path: target/pair
+        if-no-files-found: ignore
+
+  # History mode: what a kernel meets when it is compiled after other kernels in one JVM
+  # (dev/varka_kernel_history.sh, VARKA-257), on idle runners rather than a loaded laptop
+  # (VARKA-383). Each split is one runner, its forks numbered from (split - 1) * forks so that the
+  # splits draw distinct histories and, with the default seed, forks 0 to 5 replay the laptop's.
+  # The width a reading belongs to is the runner's, so a job on a machine of another width stops
+  # before the build.
+  kernel-history:
+    name: "Kernel history: ${{ matrix.split }} out of ${{ inputs.num-splits }} splits"
+    if: inputs.history != ''
+    needs: matrix-gen
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        split: ${{ fromJSON(needs.matrix-gen.outputs.matrix) }}
+    env:
+      SPLIT: ${{ matrix.split }}
+      SPARK_LOCAL_IP: localhost
+      SPARK_HOME: ${{ github.workspace }}
+    steps:
+    - name: Checkout Spark repository
+      uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+    # JDK 25 whatever `jdk` says, as the pair: the launcher's probe is the laptop's JDK's.
+    - name: Setup build environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        java-version: '25'
+        coursier: cache
+    - name: Check the runner's vector width
+      id: width
+      env:
+        HISTORY_BITS: ${{ inputs.history-bits }}
+      run: |
+        cpu="$(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //')"
+        echo "cpu: $cpu"
+        echo "AVX/SVE flags: $(lscpu | tr ' ' '\n' | grep -E '^avx|^sve' | sort -u | tr '\n' ' ')"
+        java -XX:+PrintFlagsFinal -version 2>/dev/null | grep -E ' (MaxVectorSize|UseAVX|UseSVE) '
+        bytes="$(java -XX:+PrintFlagsFinal -version 2>/dev/null \
+          | awk '$2 == "MaxVectorSize" { print $4 }')"
+        bits=$((bytes * 8))
+        { echo "cpu=$cpu"; echo "bits=$bits"; } >> "$GITHUB_OUTPUT"
+        if [ -n "$HISTORY_BITS" ] && [ "$bits" != "$HISTORY_BITS" ]; then
+          echo "::error::this runner's widest vector is $bits bits ($cpu), not the" \
+            "$HISTORY_BITS asked for; rerun the failed jobs to draw other machines"
+          exit 1
+        fi
+        echo "::notice::split $SPLIT: $cpu, $bits-bit vectors"
+    - name: Build catalyst's test classes
+      run: |
+        dev/varka_matrix.sh --module catalyst --list > /dev/null || {
+          tail -100 target/varka-matrix/build.log; exit 1; }
+    - name: Run the kernel history
+      env:
+        HISTORY: ${{ inputs.history }}
+        EXTRA_JAVA_OPTIONS: ${{ inputs.extra-java-options }}
+      shell: bash
+      run: |
+        # Word-split on purpose: the inputs are lists of arguments and JVM flags, and an array
+        # keeps each word whole from here on.
+        read -r -a args <<< "$HISTORY"
+        read -r -a opts <<< "$EXTRA_JAVA_OPTIONS"
+        forks=10
+        for ((i = 0; i + 1 < ${#args[@]}; i++)); do
+          if [ "${args[$i]}" = --forks ]; then forks="${args[$((i + 1))]}"; fi
+        done
+        [[ "$forks" =~ ^[0-9]+$ ]] || { echo "::error::--forks takes a count, not '$forks'"; exit 1; }
+        jvm=()
+        for o in "${opts[@]}"; do jvm+=(--jvm "$o"); done
+        echo "::notice::Extra JVM options: ${EXTRA_JAVA_OPTIONS:-<none>}"
+        dev/varka_kernel_history.sh "${args[@]}" "${jvm[@]}" \
+          --fork-base "$(( (SPLIT - 1) * forks ))" --out "target/kernel-history/split-$SPLIT"
+    - name: Write the split's summary
+      if: always() && steps.width.outcome == 'success'
+      env:
+        HISTORY: ${{ inputs.history }}
+        CPU: ${{ steps.width.outputs.cpu }}
+        BITS: ${{ steps.width.outputs.bits }}
+      run: |
+        {
+          echo "### Kernel history: split $SPLIT"
+          echo
+          echo "\`dev/varka_kernel_history.sh $HISTORY\` on $CPU, $BITS-bit vectors"
+          echo
+          echo '```'
+          cat "target/kernel-history/split-$SPLIT/summary.txt" 2>/dev/null \
+            || echo "no summary: the run did not reach its reader (see the log)"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+    - name: Upload the split's readings
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: kernel-history-split-${{ matrix.split }}
+        path: |
+          target/kernel-history/split-${{ matrix.split }}
+          !target/kernel-history/split-${{ matrix.split }}/tmp-*
+        if-no-files-found: ignore
+
+  # The splits' logs in one directory, read once: every case's forks from every runner together,
+  # with each split's CPU listed (dev/varka_kernel_history.py).
+  kernel-history-report:
+    name: "Kernel history: the report"
+    if: always() && inputs.history != '' && needs.matrix-gen.result == 'success'
+    needs: [matrix-gen, kernel-history]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout this workflow's scripts
+      uses: actions/checkout@v7
+      with:
+        sparse-checkout: dev
+        persist-credentials: false
+    - name: Download the splits' readings
+      uses: actions/download-artifact@v8
+      with:
+        pattern: kernel-history-split-*
+        path: target/kernel-history-splits
+    - name: Merge the splits and read them
+      env:
+        HISTORY: ${{ inputs.history }}
+        HISTORY_BITS: ${{ inputs.history-bits }}
+        EXTRA_JAVA_OPTIONS: ${{ inputs.extra-java-options }}
+      run: |
+        merged=target/kernel-history/merged
+        mkdir -p "$merged"
+        # Fork logs are named by their fork, which the splits number apart; provenance is not.
+        for dir in target/kernel-history-splits/kernel-history-split-*; do
+          [ -d "$dir" ] || continue
+          split="${dir##*-}"
+          find "$dir" -maxdepth 1 \( -name 'width-*.log' -o -name 'width-*.exit' \) \
+            -exec cp -t "$merged" {} +
+          if [ -f "$dir/provenance.txt" ]; then
+            cp "$dir/provenance.txt" "$merged/provenance-$split.txt"
+          fi
+        done
+        status=0
+        python3 dev/varka_kernel_history.py --dir "$merged" > "$merged/summary.txt" 2>&1 \
+          || status=$?
+        cat "$merged/summary.txt"
+        {
+          echo "### Kernel history: every split"
+          echo
+          echo "\`dev/varka_kernel_history.sh $HISTORY\`, history-bits ${HISTORY_BITS:-any}," \
+            "extra JVM options ${EXTRA_JAVA_OPTIONS:-none}"
+          echo
+          echo '```'
+          cat "$merged/summary.txt"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+        exit "$status"
+    - name: Upload the report
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: kernel-history-report
+        path: target/kernel-history/merged
         if-no-files-found: ignore

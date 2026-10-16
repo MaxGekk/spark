@@ -29,11 +29,18 @@
 #   dev/varka_kernel_history.sh --after 16 --forks 6 --guard     # the nightly's arm
 #   dev/varka_kernel_history.sh --outputs 64                     # VARKA-209 12.3's 64 tails
 #   dev/varka_kernel_history.sh --after 1 --forks 1 --jvm -Dvarka.history.from=13   # draw 13 alone
+#   dev/varka_kernel_history.sh --after 16,64 --forks 2 --fork-base 2   # forks 2 and 3 of six
+#   dev/varka_kernel_history.sh --cold 128 --after 0 --test e2e --prewarm on,first   # VARKA-383
 #
 # --widths is in bytes, as MaxVectorSize counts them, empty for the host's own; --prewarm says
-# whether the warm-up worker runs its Vector API template warm-up first (VARKA-295), on as in
-# production. Fork f of a case draws its history from seed --seed + f, so the forks of a case
-# have different histories and a case's N forks replay with the same seed. --jvms JVMs run at
+# when the Vector API template warm-up runs (VARKA-295): on, at the warm-up worker's first start
+# as in production; off, never; first, before anything else in the JVM (VARKA-383). Fork f of a
+# case draws its history from seed --seed + f, so the forks of a case have different histories
+# and a case's N forks replay with the same seed; --fork-base B numbers the forks from B, so that
+# shards of one run on several machines draw distinct histories, and with the default seed forks
+# 0 to 5 are VARKA-257's laptop histories. --cold K runs K unwarmed kernels before anything is
+# warmed, the CI suites' situation, and --test e2e makes VarkaWarmupEndToEndSuite's date
+# projection the kernel under test in place of the cheap tails (VARKA-383 3.1). --jvms JVMs run at
 # once, each pinned to --cpus cores from --cpu-base on, so that a run beside other work stays on
 # its own cores. --deadline is the warm-up's deadline in seconds (30; production's is 60): a
 # kernel still allocating then is released, which is what the history kernels' RELEASED counts
@@ -50,10 +57,14 @@ usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
 set -euo pipefail
 after=0,4,16,64; forks=10; seconds=12; widths=""; prewarm=on; seed=20260903; jvms=2; cpus=3
 cpu_base=0; deadline=30; outputs=24; jvm_args=(); out=""; guard=0; max_slow=0; build=0
+fork_base=0; cold=0; test=tails
 while [ $# -gt 0 ]; do
   case "$1" in
     --after) after="$2"; shift 2 ;;
     --forks) forks="$2"; shift 2 ;;
+    --fork-base) fork_base="$2"; shift 2 ;;
+    --cold) cold="$2"; shift 2 ;;
+    --test) test="$2"; shift 2 ;;
     --seconds) seconds="$2"; shift 2 ;;
     --widths) widths="$2"; shift 2 ;;
     --prewarm) prewarm="$2"; shift 2 ;;
@@ -71,6 +82,16 @@ while [ $# -gt 0 ]; do
     -h|--help) usage 0 ;;
     *) usage ;;
   esac
+done
+for n in "$forks" "$fork_base" "$cold"; do
+  [[ "$n" =~ ^[0-9]+$ ]] || { echo "--forks, --fork-base and --cold take a count, not '$n'" >&2
+    exit 2; }
+done
+case "$test" in tails|e2e) ;; *) echo "--test takes tails or e2e, not '$test'" >&2; exit 2 ;; esac
+IFS=',' read -r -a prewarm_list <<< "$prewarm"
+for p in "${prewarm_list[@]}"; do
+  case "$p" in on|off|first) ;; *) echo "--prewarm takes on, off or first, not '$p'" >&2
+    exit 2 ;; esac
 done
 cd "$(dirname "$0")/.."
 root=$(pwd)
@@ -93,17 +114,16 @@ mkdir -p "$out"
   echo "jdk:     $(java -version 2>&1 | head -1)"
   echo "cpu:     $(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //')"
   echo "load:    $(cut -d' ' -f1-3 /proc/loadavg) at start"
-  echo "args:    after=$after forks=$forks seconds=$seconds widths=${widths:-host}" \
-    "prewarm=$prewarm seed=$seed jvms=$jvms cpus=$cpus cpu_base=$cpu_base" \
-    "deadline=$deadline outputs=$outputs jvm=${jvm_args[*]:-}"
+  echo "args:    after=$after forks=$forks fork_base=$fork_base seconds=$seconds" \
+    "widths=${widths:-host} prewarm=$prewarm cold=$cold test=$test seed=$seed jvms=$jvms" \
+    "cpus=$cpus cpu_base=$cpu_base deadline=$deadline outputs=$outputs jvm=${jvm_args[*]:-}"
 } > "$out/provenance.txt"
 cat "$out/provenance.txt"
 IFS=',' read -r -a after_list <<< "$after"
-IFS=',' read -r -a prewarm_list <<< "$prewarm"
 if [ -n "$widths" ]; then IFS=',' read -r -a width_list <<< "$widths"; else width_list=(host); fi
 # Every fork as "width prewarm after fork", forks of one case spread over the slots.
 jobs=()
-for ((f = 0; f < forks; f++)); do
+for ((f = fork_base; f < fork_base + forks; f++)); do
   for w in "${width_list[@]}"; do
     for p in "${prewarm_list[@]}"; do
       for n in "${after_list[@]}"; do
@@ -121,6 +141,8 @@ run_fork() {
   local extra=()
   [ "$w" != host ] && extra+=("-XX:MaxVectorSize=$w")
   [ "$p" = off ] && extra+=("-Dvarka.warmup.vectorTemplates=false")
+  [ "$p" = first ] && extra+=("-Dvarka.history.prewarmFirst=true")
+  extra+=("-Dvarka.history.cold=$cold" "-Dvarka.history.test=$test")
   mkdir -p "$out/tmp-$slot"
   (set +e; SPARK_TESTING=1 SPARK_SCALA_VERSION=2.13 \
     taskset -c "$first-$((first + cpus - 1))" \

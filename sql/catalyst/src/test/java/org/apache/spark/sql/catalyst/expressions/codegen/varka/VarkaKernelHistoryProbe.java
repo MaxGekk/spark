@@ -66,6 +66,16 @@ import org.apache.spark.util.Utils;
  * VARKA-373) runs a few nanoseconds a row slower but allocates thousands of bytes a call. The
  * code list says which of its loop methods are C2 code at the end.
  *
+ * <p>Two variants for the case of {@code VARKA-383.md} 2.3, a JVM that ran kernels long before its
+ * first warm-up. {@code -Dvarka.history.cold=K} runs K grammar kernels first, the int and the long
+ * lane in turn, emitted unwarmed (so C1 may compile them, as in a test session) and called forty
+ * times each on the main thread before anything is warmed: the warm-up worker, and with it the
+ * template prewarm, starts only after them. {@code -Dvarka.history.prewarmFirst=true} instead
+ * runs the prewarm before anything else, the control. And {@code -Dvarka.history.test=e2e} puts
+ * {@code VarkaWarmupEndToEndSuite}'s projection, {@code date_add(d, 3)}, {@code add_months(d, 2)}
+ * and {@code last_day(d)} over one date column with every seventeenth row null, in place of the
+ * cheap tails as the kernel under test.
+ *
  * <p>Every kernel's answers are compared after its warm-up, the history's and the one under test,
  * through {@link VarkaKernelChecks#runLoaded} on the instance the JVM compiled, over a batch with
  * nulls and one without, against {@link VarkaReference}: a kernel that runs fast and answers
@@ -78,7 +88,9 @@ import org.apache.spark.util.Utils;
  * ({@code dev/varka_kernel_history.py}) looks for:
  * <ul>
  *   <li>{@code VARKA_HISTORY_BEGIN=pid=<pid> after=<N> seed=<seed> outputs=<n> bits=<preferred
- *       int vector bits> prewarm=<on|off>};</li>
+ *       int vector bits> prewarm=<on|off|first> cold=<K> test=<tails|e2e>};</li>
+ *   <li>{@code VARKA_HISTORY_COLD=<position> draw=<k> lane=<int|long> outputs=<n>
+ *       status=<the calls' statuses or'd> answers=<ok|declined|wrong>}, one per cold kernel;</li>
  *   <li>{@code VARKA_HISTORY_KERNEL=<position> draw=<k> lane=<int|long> outputs=<n>
  *       state=<COMPILED|RELEASED|...> millis=<warm-up> first=<bytes> last=<bytes>
  *       answers=<ok|declined|wrong>}, with {@code tiers=<loop tiers>} when released, one per
@@ -93,7 +105,9 @@ import org.apache.spark.util.Utils;
  *       {@code VARKA_HISTORY_ERROR=} the same for a failure that is not the check's;</li>
  *   <li>{@code VARKA_HISTORY_DONE=status=<0, 1 for a wrong answer, 2 for an error>
  *       runStatus=<the timed calls' statuses or'd> answers=<the test kernel's>
- *       templateMillis=<the prewarm's time>}.</li>
+ *       templateMillis=<the prewarm's time> templateAfter=<kernel classes defined before the
+ *       prewarm ran, -1 if it did not>}: 0 for {@code first}, and K + 1 for {@code on}, since the
+ *       first warmed kernel's class is defined before the warm-up that starts the worker.</li>
  * </ul>
  */
 public final class VarkaKernelHistoryProbe {
@@ -103,6 +117,7 @@ public final class VarkaKernelHistoryProbe {
 
   public static final String BEGIN_PREFIX = "VARKA_HISTORY_BEGIN=";
   public static final String KERNEL_PREFIX = "VARKA_HISTORY_KERNEL=";
+  public static final String COLD_PREFIX = "VARKA_HISTORY_COLD=";
   public static final String TEST_PREFIX = "VARKA_HISTORY_TEST=";
   public static final String RATE_PREFIX = "VARKA_HISTORY_RATE=";
   public static final String ALLOC_PREFIX = "VARKA_HISTORY_ALLOC=";
@@ -120,6 +135,24 @@ public final class VarkaKernelHistoryProbe {
    * from its draw, which says whether its release was the history's or its shape's.
    */
   static final String FROM_PROPERTY = "varka.history.from";
+
+  /** Unwarmed kernels run before anything is warmed, 0 by default; see the class doc. */
+  static final String COLD_PROPERTY = "varka.history.cold";
+
+  /** The kernel under test: {@code tails} (the default) or {@code e2e}; see the class doc. */
+  static final String TEST_PROPERTY = "varka.history.test";
+
+  /** Runs the template prewarm before anything else when {@code true}; see the class doc. */
+  static final String PREWARM_FIRST_PROPERTY = "varka.history.prewarmFirst";
+
+  /** Calls of each cold kernel: a suite's four 10,000-row batches in 1,024-row calls. */
+  static final int COLD_CALLS = 40;
+
+  /**
+   * Added to the seed for the cold kernels' draws, so that they share no draw with any fork's
+   * history ({@link VarkaIrGrammar#shapeRandom} is linear in the seed and the draw).
+   */
+  private static final long COLD_SEED_OFFSET = 1L << 40;
 
   /** Rows of every batch: the warm-up's copy, the timed calls and the compared batches. */
   private static final int ROWS = 1024;
@@ -158,19 +191,23 @@ public final class VarkaKernelHistoryProbe {
 
   /**
    * One kernel to warm and check: its shape, and one batch of its inputs - values inside the
-   * grammar's bounds, so that no guard declines, and every fifth row null in each input.
+   * grammar's bounds, so that no guard declines, and every {@code nullEvery}-th row null in each
+   * input (every fifth for the grammar's draws).
    */
   record Subject(List<VarkaVectorIR> roots, int numInputs, boolean longLane, int[] intLits,
-      long[] longLits, int[][] intData, long[][] longData) {
+      long[] longLits, int[][] intData, long[][] longData, int nullEvery) {
 
     int numLiterals() {
       return longLane ? longLits.length : intLits.length;
     }
 
     boolean isNull(int column, int row) {
-      return (row + column) % 5 == 0;
+      return (row + column) % nullEvery == 0;
     }
   }
+
+  /** Every fifth row of a grammar draw's inputs is null. */
+  private static final int DRAW_NULL_EVERY = 5;
 
   /** The trunc level codes TruncLevelLeaf produces, week to year. */
   private static final int WEEK = DateTimeUtils$.MODULE$.TRUNC_TO_WEEK();
@@ -198,7 +235,8 @@ public final class VarkaKernelHistoryProbe {
           }
         }
       }
-      return new Subject(d.roots(), d.numInputs(), false, lits, new long[0], data, null);
+      return new Subject(d.roots(), d.numInputs(), false, lits, new long[0], data, null,
+          DRAW_NULL_EVERY);
     }
     var d = VarkaIrGrammar.drawLongShape(rnd);
     long[] lits = new long[d.numLiterals()];
@@ -211,7 +249,8 @@ public final class VarkaKernelHistoryProbe {
         data[c][i] = VarkaIrGrammar.within(rnd, VarkaIrGrammar.LONG_COLUMN_BOUND);
       }
     }
-    return new Subject(d.roots(), d.numInputs(), true, new int[0], lits, null, data);
+    return new Subject(d.roots(), d.numInputs(), true, new int[0], lits, null, data,
+        DRAW_NULL_EVERY);
   }
 
   private static final Seq<Attribute> COLUMNS = CollectionConverters.asScala(
@@ -233,7 +272,37 @@ public final class VarkaKernelHistoryProbe {
       // The cliff probe's dates: around 1970, inside every calendar guard.
       data[0][i] = i * 7 % 20000 - 10000;
     }
-    return new Subject(fused.outputs(), 1, false, lits, new long[0], data, null);
+    return new Subject(fused.outputs(), 1, false, lits, new long[0], data, null,
+        DRAW_NULL_EVERY);
+  }
+
+  /** The end-to-end suite's projection, minus its pass-through column {@code i}. */
+  static final List<String> E2E_EXPRESSIONS =
+      List.of("date_add(d, 3)", "add_months(d, 2)", "last_day(d)");
+
+  /** 2020-01-01 as days since the epoch: the first date of the suite's table. */
+  private static final int E2E_FIRST_DAY = 18262;
+
+  /**
+   * The kernel under test of {@code -Dvarka.history.test=e2e}: {@code VarkaWarmupEndToEndSuite}'s
+   * projection through the real compiler, over its table's dates (a year from 2020-01-01, every
+   * seventeenth row null, {@code cacheDatesBig}).
+   */
+  static Subject e2eSubject() {
+    var exprs = new ArrayList<NamedExpression>();
+    for (int k = 0; k < E2E_EXPRESSIONS.size(); k++) {
+      exprs.add(VarkaSqlResolve.named(VarkaSqlResolve.parse(E2E_EXPRESSIONS.get(k), COLUMNS),
+          "c" + k));
+    }
+    CompiledVarkaProjection fused = VarkaExpressionCompiler.compile(
+        CollectionConverters.asScala(exprs).toSeq(), COLUMNS)
+        .orElseThrow(() -> new IllegalStateException("the end-to-end projection did not fuse"));
+    int[] lits = fused.literals().stream().mapToInt(Integer::intValue).toArray();
+    int[][] data = new int[1][ROWS];
+    for (int i = 0; i < ROWS; i++) {
+      data[0][i] = E2E_FIRST_DAY + i % 365;
+    }
+    return new Subject(fused.outputs(), 1, false, lits, new long[0], data, null, 17);
   }
 
   /** A queued, finished warm-up: the cache's entry, and the outcome the worker recorded. */
@@ -245,9 +314,54 @@ public final class VarkaKernelHistoryProbe {
    * then queues its warm-up on its batch, every input nullable, and waits for the verdict.
    */
   static VarkaShapeEntry emit(VarkaShapeCacheImpl cache, Subject s, String label) {
+    return lookup(cache, s, label, true).entry();
+  }
+
+  /**
+   * {@link #emit}'s lookup, which also says whether the cache already held the shape; with
+   * {@code warmed} false the class has the name the C1-exclusion directive does not match, as a
+   * session with the warm-up off emits it.
+   */
+  static VarkaShapeLookup lookup(VarkaShapeCacheImpl cache, Subject s, String label,
+      boolean warmed) {
     var key = new VarkaShapeKey(s.roots(), s.numInputs(), s.numLiterals(),
-        VarkaEmitOptions.DEFAULTS, true);
-    return cache.getOrEmit(Utils.getContextOrSparkClassLoader(), key, label).entry();
+        VarkaEmitOptions.DEFAULTS, warmed);
+    return cache.getOrEmit(Utils.getContextOrSparkClassLoader(), key, label);
+  }
+
+  /**
+   * One batch of {@code s}'s inputs off the heap, as a kernel's {@code run} takes them: each
+   * input's data and validity address, its null count and its bytes a row.
+   */
+  record Inputs(long[] data, long[] validity, int[] nullCount, int[] widths) { }
+
+  /** {@code s}'s batch, allocated in {@code arena}, which must outlive its use. */
+  static Inputs inputs(Arena arena, Subject s) {
+    int n = s.numInputs();
+    var in = new Inputs(new long[n], new long[n], new int[n], new int[n]);
+    for (int c = 0; c < n; c++) {
+      int width = s.longLane() ? 8 : 4;
+      in.widths()[c] = width;
+      MemorySegment values = arena.allocate((long) ROWS * width, 64);
+      MemorySegment bits = arena.allocate(((ROWS + 63) / 64) * 8L, 64);
+      for (int i = 0; i < ROWS; i++) {
+        if (s.longLane()) {
+          values.setAtIndex(ValueLayout.JAVA_LONG, i, s.longData()[c][i]);
+        } else {
+          values.setAtIndex(ValueLayout.JAVA_INT, i, s.intData()[c][i]);
+        }
+        if (s.isNull(c, i)) {
+          in.nullCount()[c]++;
+        } else {
+          int b = i / 8;
+          bits.set(ValueLayout.JAVA_BYTE, b,
+              (byte) (bits.get(ValueLayout.JAVA_BYTE, b) | (1 << (i % 8))));
+        }
+      }
+      in.data()[c] = values.address();
+      in.validity()[c] = bits.address();
+    }
+    return in;
   }
 
   /** Queues the warm-up of {@code entry}'s kernel on {@code s}'s batch; see {@link #emit}. */
@@ -258,36 +372,10 @@ public final class VarkaKernelHistoryProbe {
     }
     long start = System.nanoTime();
     try (var arena = Arena.ofConfined()) {
-      int n = s.numInputs();
-      long[] data = new long[n];
-      long[] validity = new long[n];
-      int[] nullCount = new int[n];
-      int[] widths = new int[n];
-      for (int c = 0; c < n; c++) {
-        int width = s.longLane() ? 8 : 4;
-        widths[c] = width;
-        MemorySegment values = arena.allocate((long) ROWS * width, 64);
-        MemorySegment bits = arena.allocate(((ROWS + 63) / 64) * 8L, 64);
-        for (int i = 0; i < ROWS; i++) {
-          if (s.longLane()) {
-            values.setAtIndex(ValueLayout.JAVA_LONG, i, s.longData()[c][i]);
-          } else {
-            values.setAtIndex(ValueLayout.JAVA_INT, i, s.intData()[c][i]);
-          }
-          if (s.isNull(c, i)) {
-            nullCount[c]++;
-          } else {
-            int b = i / 8;
-            bits.set(ValueLayout.JAVA_BYTE, b,
-                (byte) (bits.get(ValueLayout.JAVA_BYTE, b) | (1 << (i % 8))));
-          }
-        }
-        data[c] = values.address();
-        validity[c] = bits.address();
-      }
+      var in = inputs(arena, s);
       boolean queued = VarkaKernelWarmup.start(entry.warmth(), entry.shapeHash(),
-          entry.newKernel(), s.longLane(), data, validity, nullCount, widths, true, ROWS,
-          s.roots().size(), s.intLits(), s.longLits());
+          entry.newKernel(), s.longLane(), in.data(), in.validity(), in.nullCount(), in.widths(),
+          true, ROWS, s.roots().size(), s.intLits(), s.longLits());
       if (!queued) {
         throw new IllegalStateException("the warm-up was not queued: " + label);
       }
@@ -390,15 +478,27 @@ public final class VarkaKernelHistoryProbe {
     // must read wrong, so a fork that compares nothing cannot pass.
     VarkaKernelChecks.plantWrongAnswer = Boolean.getBoolean(PLANT_PROPERTY);
     boolean prewarm = !"false".equals(System.getProperty(VarkaVectorTemplateWarmup.PROPERTY));
+    boolean prewarmFirst = prewarm && Boolean.getBoolean(PREWARM_FIRST_PROPERTY);
+    int cold = Integer.getInteger(COLD_PROPERTY, 0);
+    String test = System.getProperty(TEST_PROPERTY, "tails");
+    if (cold < 0 || !List.of("tails", "e2e").contains(test)) {
+      throw new IllegalArgumentException("requirement failed: " + COLD_PROPERTY + " >= 0 and "
+          + TEST_PROPERTY + " tails or e2e, not " + cold + " and " + test);
+    }
     System.out.println(BEGIN_PREFIX + "pid=" + ProcessHandle.current().pid() + " after="
         + args.after() + " seed=" + args.seed() + " outputs=" + args.outputs() + " bits="
-        + IntVector.SPECIES_PREFERRED.vectorBitSize() + " prewarm=" + (prewarm ? "on" : "off"));
+        + IntVector.SPECIES_PREFERRED.vectorBitSize() + " prewarm="
+        + (prewarmFirst ? "first" : prewarm ? "on" : "off") + " cold=" + cold + " test=" + test);
     if (!VarkaKernelWarmup.canWarm()) {
       System.out.println(DONE_PREFIX + "status=3 reason=this JVM cannot warm kernels");
       System.exit(3);
     }
-    var cache = new VarkaShapeCacheImpl(args.after() + 8);
-    int status = 0;
+    if (prewarmFirst) {
+      // Before any kernel, where the worker's own call would come after the cold kernels.
+      VarkaVectorTemplateWarmup.ensure();
+    }
+    var cache = new VarkaShapeCacheImpl(args.after() + cold + 8);
+    int status = coldPrefix(cache, args.seed(), cold);
     int k = Integer.getInteger(FROM_PROPERTY, 0);
     for (int position = 0; position < args.after(); position++) {
       Subject s = null;
@@ -435,8 +535,8 @@ public final class VarkaKernelHistoryProbe {
               ? " tiers=" + loopTiers(w.entry().klass()) : ""));
     }
 
-    Subject test = testSubject(args.outputs());
-    Warmed w = warm(emit(cache, test, "kernel-under-test"), test, "kernel-under-test");
+    Subject subject = "e2e".equals(test) ? e2eSubject() : testSubject(args.outputs());
+    Warmed w = warm(emit(cache, subject, "kernel-under-test"), subject, "kernel-under-test");
     var measured = VarkaEmittedClass.measure(w.entry().classBytes());
     var methods = new ArrayList<String>();
     for (String m : VarkaEmitterTestSupport.methodNames(w.entry().classBytes())) {
@@ -449,15 +549,87 @@ public final class VarkaKernelHistoryProbe {
         + w.firstProbeBytes() + " last=" + w.lastProbeBytes() + " methods="
         + String.join(",", methods));
     var kernel = w.entry().newKernel();
-    int runStatus = timed(kernel, test, args.seconds());
+    int runStatus = timed(kernel, subject, args.seconds());
     System.out.println(CODE_PREFIX + loopTiers(w.entry().klass()));
-    String verdict = answers(kernel, test, "kernel under test");
+    String verdict = answers(kernel, subject, "kernel under test");
     status = Math.max(status, failed(verdict, "test"));
+    // The prewarm's own record, which holds whichever thread ran it: the worker, or this one.
+    var template = VarkaVectorTemplateWarmup.lastRun();
     // A timed call that declined ran no loop, so its rate and allocation say nothing.
     System.out.println(DONE_PREFIX + "status=" + status + " runStatus=" + runStatus
         + " answers=" + word(verdict) + " templateMillis="
-        + VarkaKernelWarmup.templateWarmupNanos() / 1_000_000L);
+        + (template == null ? 0 : Math.max(template.nanos(), 0) / 1_000_000L)
+        + " templateAfter=" + (template == null ? -1 : template.kernelsBefore()));
     System.exit(status);
+  }
+
+  /**
+   * Runs {@code count} unwarmed grammar kernels, the int and the long lane in turn, each called
+   * {@link #COLD_CALLS} times on its batch on this thread and then compared; none is warmed, so
+   * the warm-up worker has not started when this returns. Returns the exit status the answers
+   * ask for, as {@link #failed} does.
+   */
+  static int coldPrefix(VarkaShapeCacheImpl cache, long seed, int count) {
+    int status = 0;
+    int k = 0;
+    for (int position = 0; position < count; position++) {
+      Subject s = null;
+      VarkaShapeEntry entry = null;
+      // As the history does: a declined draw, or one whose shape an earlier draw had, is
+      // replaced by the next draw.
+      for (int tries = 0; entry == null; tries++, k++) {
+        if (tries == MAX_DRAWS_PER_KERNEL) {
+          throw new IllegalStateException(tries + " cold draws in a row did not run, at " + k);
+        }
+        s = draw(seed + COLD_SEED_OFFSET, k);
+        try {
+          var found = lookup(cache, s, "cold-" + k, false);
+          if (found.hit()) {
+            System.out.println(SKIPPED_PREFIX + "cold-" + k + " repeated shape");
+          } else {
+            entry = found.entry();
+          }
+        } catch (VarkaEmitDeclined e) {
+          System.out.println(SKIPPED_PREFIX + "cold-" + k + " declined: " + firstLine(e));
+        }
+      }
+      var kernel = entry.newKernel();
+      int runStatus = coldRuns(kernel, s);
+      String verdict = answers(kernel, s, "cold kernel " + position);
+      status = Math.max(status, failed(verdict, "cold-" + position + " draw=" + (k - 1)));
+      System.out.println(COLD_PREFIX + position + " draw=" + (k - 1) + " lane="
+          + (s.longLane() ? "long" : "int") + " outputs=" + s.roots().size() + " status="
+          + runStatus + " answers=" + word(verdict));
+    }
+    return status;
+  }
+
+  /**
+   * {@link #COLD_CALLS} calls of {@code kernel} on {@code s}'s batch, its nulls included, through
+   * the entry point of its lane; returns their statuses or'd.
+   */
+  private static int coldRuns(VarkaFusedKernel kernel, Subject s) {
+    try (var arena = Arena.ofConfined()) {
+      var in = inputs(arena, s);
+      int outputs = s.roots().size();
+      long[] dst = new long[outputs];
+      long[] dstValidity = new long[outputs];
+      for (int o = 0; o < outputs; o++) {
+        // Eight bytes a row fits either lane's outputs.
+        dst[o] = arena.allocate(ROWS * 8L, 64).address();
+        dstValidity[o] = arena.allocate(ROWS / 8L + 8, 64).address();
+      }
+      int[] noInts = new int[0];
+      int status = 0;
+      for (int call = 0; call < COLD_CALLS; call++) {
+        status |= s.longLane()
+            ? kernel.run(in.data(), in.validity(), in.nullCount(), dst, dstValidity, noInts,
+                s.longLits(), ROWS)
+            : kernel.run(in.data(), in.validity(), in.nullCount(), dst, dstValidity, s.intLits(),
+                ROWS);
+      }
+      return status;
+    }
   }
 
   /** The verdict's first word: ok, declined, wrong or error. */
