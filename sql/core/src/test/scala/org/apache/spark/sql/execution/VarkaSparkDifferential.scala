@@ -22,7 +22,7 @@ import java.util.Locale
 import scala.jdk.CollectionConverters._
 import scala.util.Try
 
-import org.apache.spark.sql.{QueryTest, SparkSession}
+import org.apache.spark.sql.{DataFrame, QueryTest, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaKernelWarmup,
   VarkaTestWatchdog}
 import org.apache.spark.sql.internal.SQLConf
@@ -85,12 +85,54 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
   protected var forcedApplied = 0
 
   /**
+   * Checks in which a query raised and that were therefore compared again where no task races
+   * another (VARKA-381), and those of them whose two-partition run showed a difference the rerun
+   * did not, reported as such.
+   */
+  protected var comparedAgain = 0
+  protected var twoPartitionsOnly = 0
+
+  /** How a check that met a raise is compared again, `-Dvarka.sparkfuzz.errorRerun`. */
+  protected val errorRerun: ErrorRerun = errorRerunOf(sys.props.get("varka.sparkfuzz.errorRerun"))
+
+  /** The counters a check adds to, as they stood at one moment, to be put back. */
+  private case class Counters(compared: Int, fused: Int, bothErrored: Int, filtered: Int,
+      filteredNonEmpty: Int, pivotFiltered: Int, pivotFilteredNonEmpty: Int, forcedRuns: Int,
+      forcedApplied: Int, errorsSeen: Map[(String, String, String), Int])
+
+  private def counters: Counters = Counters(compared, fused, bothErrored, filtered,
+    filteredNonEmpty, pivotFiltered, pivotFilteredNonEmpty, forcedRuns, forcedApplied,
+    errorsSeen.toMap)
+
+  private def restore(c: Counters): Unit = {
+    compared = c.compared
+    fused = c.fused
+    bothErrored = c.bothErrored
+    filtered = c.filtered
+    filteredNonEmpty = c.filteredNonEmpty
+    pivotFiltered = c.pivotFiltered
+    pivotFilteredNonEmpty = c.pivotFilteredNonEmpty
+    forcedRuns = c.forcedRuns
+    forcedApplied = c.forcedApplied
+    errorsSeen.clear()
+    errorsSeen ++= c.errorsSeen
+  }
+
+  /** Whether a query of the check in progress raised, which `observed` records. */
+  private var raisedInCheck = false
+
+  private def observed(o: Outcome): Outcome = {
+    if (o.isLeft) raisedInCheck = true
+    o
+  }
+
+  /**
    * `sql`'s outcome on `session`, as [[VarkaSparkFuzz.outcome]] gives it, and the residual
    * entries the Varka nodes of the plan it ran with reported.
    */
   private def outcomeAndResidual(session: SparkSession, sql: String): (Outcome, Long) = {
     val df = session.sql(sql)
-    val out = outcomeOf(df)
+    val out = observed(outcomeOf(df))
     val residual = Try(collect(df.queryExecution.executedPlan) { case v if isVarkaNode(v) => v }
       .flatMap(_.metrics.get("numResidualEntries")).map(_.value).sum).getOrElse(0L)
     (out, residual)
@@ -145,6 +187,13 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
    * The kind of disagreement `select` over `where` shows on `fixture` under `ansi`, or None.
    * `partitions` also checks the ternary partition of the filter on both engines, and each of
    * `forces` is an output run once more on Varka forced to decline (VARKA-296).
+   *
+   * The view has two partitions (the sessions run on `local[2]`), so a query whose rows raise in
+   * both raises whichever condition the first task to fail met. A check in which any query raised
+   * is therefore run again as `rerun` says (VARKA-381), and that run's verdict and counts are the
+   * check's: what is compared never depends on which task failed first. A difference the first
+   * run showed that does not name a condition and that the rerun does not show is reported too,
+   * prefixed "at two partitions only", since the rerun changes the batches both engines see.
    */
   protected def disagreement(
       fixture: String,
@@ -153,11 +202,64 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
       ansi: Boolean,
       partitions: Boolean,
       pivot: Option[String] = None,
-      forces: Seq[Int] = Nil): Option[String] = {
-    cacheFixture(fixture)
-    try withAnsi(ansi) {
+      forces: Seq[Int] = Nil,
+      rerun: ErrorRerun = errorRerun): Option[String] = {
+    def check(view: DataFrame => DataFrame, pivotHere: Option[String]): Option[String] = {
+      cacheFixture(fixture, view)
+      try checkOnce(select, where, ansi, partitions, pivotHere, forces) finally uncacheFixture()
+    }
+    val before = counters
+    raisedInCheck = false
+    val first = check(identity, pivot)
+    if (!raisedInCheck) {
+      first
+    } else {
+      comparedAgain += 1
+      val again = rerun match {
+        case OnePartition =>
+          restore(before)
+          check(_.coalesce(1), pivot)
+        case EachRow =>
+          // Each row alone, its own one-row view; the pivot is checked by the first run only,
+          // since a filter rectified to select it says nothing about another row alone. The
+          // census counts the check once, as its first run did, and each condition and side a
+          // row raised once.
+          val afterFirst = counters
+          val raised = scala.collection.mutable.Set.empty[(String, String, String)]
+          val rows = spark.sql(fixture).count().toInt
+          val found = (0 until rows).iterator.map { k =>
+            val seenBefore = errorsSeen.toMap
+            val kind = check(_.offset(k).limit(1), None)
+            raised ++= errorsSeen.collect {
+              case (key, n) if n > seenBefore.getOrElse(key, 0) => key
+            }
+            kind
+          }.collectFirst { case Some(kind) => kind }
+          restore(afterFirst.copy(errorsSeen = before.errorsSeen))
+          raised.foreach(key => errorsSeen(key) = errorsSeen.getOrElse(key, 0) + 1)
+          found
+      }
+      again.orElse(first.flatMap(withoutConditions).map { kind =>
+        twoPartitionsOnly += 1
+        s"at two partitions only, $kind"
+      })
+    }
+  }
+
+  /**
+   * One run of [[disagreement]]'s comparison over the view `fz` as it is cached now, adding to the
+   * counters, and recording in `raisedInCheck` whether any query over the view raised.
+   */
+  private def checkOnce(
+      select: String,
+      where: Option[String],
+      ansi: Boolean,
+      partitions: Boolean,
+      pivot: Option[String],
+      forces: Seq[Int]): Option[String] = {
+    withAnsi(ansi) {
       val query = querySql(select, where)
-      val off = outcome(spark, query)
+      val off = observed(outcome(spark, query))
       val (on, residualOn) = outcomeAndResidual(varkaSpark, query)
       compared += 1
       if (scala.util.Try(varkaSpark.sql(query).queryExecution.executedPlan).toOption
@@ -186,22 +288,26 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
         if (partitions && where.isDefined) {
           Seq(spark -> VarkaExpectedErrors.Side.ROW, varkaSpark -> VarkaExpectedErrors.Side.VARKA)
             .iterator.flatMap { case (s, side) =>
-              partitionBroken(select, where.get, outcome(s, _), unexpectedRaise(_, side, ansi))
+              partitionBroken(select, where.get, q => observed(outcome(s, q)),
+                unexpectedRaise(_, side, ansi))
             }.toSeq.headOption
         } else {
           None
         }
       }
-    } finally {
-      uncacheFixture()
     }
   }
 
-  /** Registers `fixture` as the view `fz` in both sessions, and caches it. */
-  protected def cacheFixture(fixture: String): Unit = for (session <- Seq(spark, varkaSpark)) {
-    session.sql(fixture).createOrReplaceTempView("fz")
-    session.catalog.cacheTable("fz")
-  }
+  /**
+   * Registers `fixture`, shaped by `view`, as the view `fz` in both sessions, and caches it. The
+   * fixture alone is cached as two partitions, one per core of `local[2]`; `_.coalesce(1)` makes
+   * them one, and `_.offset(k).limit(1)` keeps the `k`th row alone (VARKA-381).
+   */
+  protected def cacheFixture(fixture: String, view: DataFrame => DataFrame = identity): Unit =
+    for (session <- Seq(spark, varkaSpark)) {
+      view(session.sql(fixture)).createOrReplaceTempView("fz")
+      session.catalog.cacheTable("fz")
+    }
 
   protected def uncacheFixture(): Unit =
     for (session <- Seq(spark, varkaSpark)) session.catalog.uncacheTable("fz")
@@ -260,11 +366,25 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
         if (pivot) pivotAlone.flatMap(pivotMissing(off, run.outcome, _)) else None
       }.map(why => s"$side, $why")
     def await(): Unit = if (!VarkaKernelWarmup.awaitIdle(warmupWaitMillis)) counts.notIdle += 1
+    // `fixture` cached as `fz` and the row engine's outcome over it. An outcome that raised is
+    // asked again over the rows as one partition, which Varka's runs then read too, so that the
+    // condition compared is the first raising row's and not the first failing task's (VARKA-381).
+    // Where only Varka raises, its condition may still be a race's, but that is a disagreement
+    // whichever condition it names.
+    def cacheAndAsk(fixture: String): Outcome = {
+      cacheFixture(fixture)
+      val first = outcome(spark, query)
+      if (first.isRight) first
+      else {
+        uncacheFixture()
+        cacheFixture(fixture, _.coalesce(1))
+        outcome(spark, query)
+      }
+    }
     counts.compositions += 1
-    cacheFixture(c.fixture)
     try withAnsi(c.ansi) {
       withVarkaWarmup(counts) {
-        val off = outcome(spark, query)
+        val off = cacheAndAsk(c.fixture)
         var found: Option[String] = None
         var runs = 0
         var waited = true
@@ -295,8 +415,7 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
         // A shape that never reached a kernel has nothing compiled to meet other data.
         found.orElse(if (!sawKernel) None else {
           uncacheFixture()
-          cacheFixture(fixtureSql(later))
-          val laterOff = outcome(spark, query)
+          val laterOff = cacheAndAsk(fixtureSql(later))
           val run = warmedRun(query)
           counts.laterRuns += 1
           if (run.warmupBatches > 0) {

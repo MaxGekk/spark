@@ -421,22 +421,45 @@ object VarkaSparkFuzz {
       .orElse(unexpectedRaise(on, VarkaExpectedErrors.Side.VARKA, ansi, list))
 
   /**
-   * Whether `kind` is two different conditions, each one the expected-errors list allows from
-   * either engine under `ansi`: the signature of two legitimate errors on rows in different
-   * partitions, where whichever task fails first decides what the query raises, on either engine
-   * and from one run to the next (VARKA-298.md 9). Such a disagreement is believed only if it
-   * repeats.
+   * How a check that met a raise is compared again (VARKA-381). The view has two partitions, and
+   * when rows in both raise, whichever task fails first decides what the query raises, on either
+   * engine and from one run to the next (VARKA-298.md 9.3). So a check in which any query raised
+   * is run again where no task races another: `OnePartition` over the same rows as one partition,
+   * where a query raises the first raising row's condition in the rows' order, two queries more
+   * per such check; `EachRow` over every row alone, which also compares the values of the rows
+   * that do not raise and which condition each row raises, at a check per row.
+   * `-Dvarka.sparkfuzz.errorRerun=eachRow` selects the second; the first is the default.
    */
-  def racingErrors(kind: String, ansi: Boolean): Boolean = {
-    val marker = "error classes differ: "
-    val at = kind.indexOf(marker)
-    val mode = if (ansi) VarkaExpectedErrors.Mode.ANSI else VarkaExpectedErrors.Mode.LEGACY
-    val list = VarkaExpectedErrors.entries()
-    at >= 0 && kind.substring(at + marker.length).split(", ").toSeq.forall { raised =>
-      Seq(VarkaExpectedErrors.Side.ROW, VarkaExpectedErrors.Side.VARKA)
-        .forall(VarkaExpectedErrors.expected(list, raised, _, mode))
-    }
+  sealed trait ErrorRerun
+  case object OnePartition extends ErrorRerun
+  case object EachRow extends ErrorRerun
+
+  /** The arm `-Dvarka.sparkfuzz.errorRerun` names, `onePartition` (the default) or `eachRow`. */
+  def errorRerunOf(property: Option[String]): ErrorRerun = property match {
+    case None | Some("onePartition") => OnePartition
+    case Some("eachRow") => EachRow
+    case Some(other) => throw new IllegalArgumentException(
+      s"-Dvarka.sparkfuzz.errorRerun is onePartition or eachRow, not $other")
   }
+
+  /**
+   * What is left of `kind`, found where the view had two partitions, once the conditions are
+   * taken out, or None when nothing is: a kind that names one side's raise keeps which side
+   * raised and drops the condition, which a race may have chosen, and one that compares two
+   * conditions keeps nothing. Over the same partitions, which side raises does not depend on
+   * which task fails first, only which condition it names does; so a kind left here that the
+   * rerun of [[ErrorRerun]] does not show is a difference the two partitions' batches made, and
+   * is reported as such. The batches decide more than Varka's kernels: the cached scan skips a
+   * batch whose statistics fail a conjunct, so a row that raises in a batch of six may never be
+   * evaluated in a batch of its own (VARKA-381.md 9).
+   */
+  def withoutConditions(kind: String): Option[String] =
+    if (kind.contains("error classes differ: ") || kind.contains("unexpected error condition ")) {
+      None
+    } else {
+      val at = kind.indexOf(" throws: ")
+      Some(if (at < 0) kind else kind.substring(0, at + " throws".length))
+    }
 
   /** How two outcomes differ, or None when they agree. */
   def difference(off: Outcome, on: Outcome): Option[String] = (off, on) match {
