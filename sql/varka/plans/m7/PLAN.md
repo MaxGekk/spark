@@ -947,11 +947,13 @@ bound (`m9/SCOPE.md` item 102), the generated-class families the coverage analys
   9.3). Tests and tools call them with every family on; a production caller that used one would
   ignore the user's switches. Closing it: one compile-context value carrying the options and the
   switches through every compiler signature.
-* **One mutant survives both mutation passes unexplained** (row 265, its local shard check in #890): a removed
+* **One mutant survives both mutation passes unexplained** (row 265, its local shard check in
+  #890): a removed
   `requireNonNull` in `Analysis.pureOf`, which the earlier sample recorded as killed. An unexplained
   survivor is either a missing test or a wrong reading of the sample. Closing it: the full run's
   report names it; a test or a note in `sql/varka/mutation/notes.tsv`.
-* **`catalyst/Test/checkstyle` fails on master** on upstream's `StUtilsSuite.java`, whose outer class
+* **`catalyst/Test/checkstyle` fails on master** on upstream's `StUtilsSuite.java`, whose outer
+  class
   `STUtilsSuite` does not match its file name; apache/spark's master has the same mismatch. A module
   check that always fails hides a new finding of ours in that module. Closing it: upstream's fix,
   arriving by a sync; a fork-only rename would conflict with every sync until then.
@@ -962,7 +964,9 @@ bound (`m9/SCOPE.md` item 102), the generated-class families the coverage analys
   table gains a line from most tasks, so each merge conflicts with every open branch that added one,
   and each resolution is a push and a CI restart (six or so per merge on 16 October 2026). Closing
   it: one small file per entry under a directory, with the table generated from them by the tool
-  that already checks `SKILLS.md`, so two branches never edit the same lines. Owned by row 384.
+  that already checks `SKILLS.md`, so two branches never edit the same lines. Owned by row 384,
+  which found that a committed generated table still conflicts and keeps the entries as files
+  under `skills/calibration/`, printed by `dev/varka_calibration.py` (`VARKA-384.md` 9).
 * **"Install the Varka engine" downloads Maven's plugins on every run.** The job's Maven cache is
   skipped, and on 16 October 2026 it failed twice on a transient Maven Central miss of
   `maven-resources-plugin` 3.4.0 (#888, #889), each costing a rerun. Closing it: restore the Maven
