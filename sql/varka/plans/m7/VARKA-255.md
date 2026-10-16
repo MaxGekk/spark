@@ -1087,8 +1087,9 @@ two at each hop, against one run per episode.
 October, after 2.2 was measured, and a full run now has about 41 jobs. `max-parallel` 12 on the
 `Build modules` matrix is implemented as 3.1 states it (accepted on 13 October), but its premise,
 "keeping eight slots" of twenty, has moved: the PySpark matrix keeps its own `max-parallel` 20
-beside the 12 module jobs, so a full run can still take most of forty. The number is the owner's to re-pick once a day of runs
-on forty slots has been read (section 6).
+beside the 12 module jobs, so a full run can still take most of forty. The owner kept 12 on 16
+October, with the review's fail-open rule for unreadable runs (the job admits after five failed
+polls in a row, about ten minutes, rather than failing the Build).
 
 **What landed.** `build_and_test.yml` has the `admit` job, "Admit a full-matrix run", on
 `ubuntu-latest` with a 340-minute timeout, carrying `Precompile Spark`'s old condition;
