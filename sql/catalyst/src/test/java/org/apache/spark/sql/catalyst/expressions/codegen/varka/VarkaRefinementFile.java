@@ -134,9 +134,14 @@ final class VarkaRefinementFile {
       ;   5. unsat  the kernel declines inside the bound where the specification does not raise.
       ;
       ; 2 to 4 are soundness, 5 guard completeness; a null lane is inside every bound, so 5 also
-      ; says a null never declines. Where a refinement is false, the query that fails is written
-      ; expect sat with the departure's own example as its witness, then again with the
-      ; departure's inputs excluded, unsat: so the witness is the only way it fails. In standard
+      ; says a null never declines. The bound is each guard's own, the range its lowering is
+      ; proven over (the sites section), so 5 shows a kernel declines nothing else - no null, no
+      ; value of another operand - and not that a guard is as wide as the values Spark answers:
+      ; make_date's years, add_months's counts and time_from_micros's count decline by design
+      ; past their bounds, where Spark may still answer. Where a refinement is false, the query
+      ; that fails is written expect sat with the departure's own example as its witness, then
+      ; again with the departure's inputs excluded, unsat: so the witness is the only way it
+      ; fails. In standard
       ; mode those are the deltas DELTAS.md calls results; in Spark mode they are declines Spark
       ; does not need, a guard reading one operand's validity where Spark evaluates nothing.
       ;
@@ -266,17 +271,13 @@ final class VarkaRefinementFile {
 
   /** Around year 0, the Gregorian change, 1970, 9999 and 10000, and the guarded range's ends. */
   private static List<LocalDate> pinDates() {
-    var dates = new ArrayList<LocalDate>();
-    for (LocalDate p : List.of(LocalDate.of(-1, 12, 31), LocalDate.of(0, 2, 29),
-        LocalDate.of(0, 3, 1), LocalDate.of(1, 1, 1), LocalDate.of(1582, 10, 4),
-        LocalDate.of(1582, 10, 15), LocalDate.of(1900, 3, 1), LocalDate.of(1969, 12, 31),
-        LocalDate.of(1970, 1, 1), LocalDate.of(2000, 2, 29), LocalDate.of(2024, 1, 31),
-        LocalDate.of(9999, 12, 31), LocalDate.of(10000, 1, 1),
-        LocalDate.ofEpochDay(DECOMPOSE_MIN), LocalDate.ofEpochDay(DECOMPOSE_MAX),
-        LocalDate.ofEpochDay(Integer.MIN_VALUE), LocalDate.ofEpochDay(Integer.MAX_VALUE))) {
-      dates.add(p);
-    }
-    return dates;
+    return List.of(LocalDate.of(-1, 12, 31), LocalDate.of(0, 2, 29), LocalDate.of(0, 3, 1),
+        LocalDate.of(1, 1, 1), LocalDate.of(1582, 10, 4), LocalDate.of(1582, 10, 15),
+        LocalDate.of(1900, 3, 1), LocalDate.of(1969, 12, 31), LocalDate.of(1970, 1, 1),
+        LocalDate.of(2000, 2, 29), LocalDate.of(2024, 1, 31), LocalDate.of(9999, 12, 31),
+        LocalDate.of(10000, 1, 1), LocalDate.ofEpochDay(DECOMPOSE_MIN),
+        LocalDate.ofEpochDay(DECOMPOSE_MAX), LocalDate.ofEpochDay(Integer.MIN_VALUE),
+        LocalDate.ofEpochDay(Integer.MAX_VALUE));
   }
 
   private static final String DOE =
@@ -476,8 +477,9 @@ final class VarkaRefinementFile {
             + ") (<= 0 (+ y " + VarkaChrono.YEAR_BIAS + ")) (<= (+ y " + VarkaChrono.YEAR_BIAS
             + ") " + VarkaChrono.LEAP_HASH_MAX_BIASED_YEAR + "))))");
     check(out, "the column contract is load-bearing: a date Spark holds outside it "
-        + "(proleptic_range), the first past NARROW_DECOMPOSE_MAX_DAYS, feeds ERA_NARROW past its "
-        + "proof, where chrono_divide.smt2 shows the magic wrong", "sat",
+        + "(proleptic_range), the first past NARROW_DECOMPOSE_MAX_DAYS, feeds ERA_NARROW the "
+        + "dividend " + (DECOMPOSE_MAX + 1 + VarkaChrono.NARROW_BIAS) + ", past its proof's range, "
+        + "at which chrono_divide.smt2 shows the magic form wrong", "sat",
         "(declare-const n Int)",
         "(assert (= n " + (DECOMPOSE_MAX + 1) + "))",
         "(assert (not " + covered(ChronoDivide.ERA_NARROW, "(+ n " + VarkaChrono.NARROW_BIAS + ")")
@@ -493,6 +495,12 @@ final class VarkaRefinementFile {
    * witness, and {@code inputs} is the departure's domain, which the restated query excludes.
    */
   private record Departure(int query, String why, List<String> example, String inputs) {
+    Departure {
+      if (query < 2 || query > 5) {
+        throw new IllegalArgumentException("a departure fails one of queries 2 to 5, not " + query);
+      }
+      example = List.copyOf(example);
+    }
   }
 
   /**
@@ -506,6 +514,12 @@ final class VarkaRefinementFile {
   private record Refinement(String name, List<String> setup, List<String> definitions, String pre,
       String bound, String defined, String raises, String specValid, String decline,
       String kernelValid, String differs, List<Departure> departures) {
+
+    Refinement {
+      setup = List.copyOf(setup);
+      definitions = List.copyOf(definitions);
+      departures = List.copyOf(departures);
+    }
 
     Refinement(String name, List<String> setup, String pre, String bound, String defined,
         String raises, String specValid, String decline, String kernelValid, String differs,
@@ -626,72 +640,88 @@ final class VarkaRefinementFile {
     section(out, "STANDARD.md 4.13: a date plus or minus a year-month interval, and add_months");
     // The prefix is year(d), month(d) and day(d)'s, whose refinement above shows it is the
     // specification's date of d; the tail is restated over that date.
-    var setup = new ArrayList<>(dateOperand().subList(0, 3));
-    setup.add("(declare-const m Int) (declare-const vm Bool)\n(assert (jint.in m))");
-    setup.add("(define-fun sy2 () Int (+ sy (div (+ (- sm 1) m) 12)))");
-    setup.add("(define-fun sm2 () Int (+ (mod (+ (- sm 1) m) 12) 1))");
-    setup.add("(define-fun sl () Int (spec.mlen sy2 sm2))");
-    setup.add("(define-fun cl () Int (ite (< sd sl) sd sl))");
-    setup.add("(assert " + monthArith("sy", "sm", "m") + ")");
-    setup.add("(assert (=> (and (<= 0 (k.am.nm sm m)) (<= (k.am.nm sm m) 11)) "
+    var date = dateOperand().subList(0, 3);
+    var tail = new ArrayList<String>();
+    tail.add("(define-fun sy2 () Int (+ sy (div (+ (- sm 1) m) 12)))");
+    tail.add("(define-fun sm2 () Int (+ (mod (+ (- sm 1) m) 12) 1))");
+    tail.add("(define-fun sl () Int (spec.mlen sy2 sm2))");
+    tail.add("(define-fun cl () Int (ite (< sd sl) sd sl))");
+    tail.add("(assert " + monthArith("sy", "sm", "m") + ")");
+    tail.add("(assert (=> (and (<= 0 (k.am.nm sm m)) (<= (k.am.nm sm m) 11)) "
         + "(= (k.len (k.am.nm sm m) (k.am.ny sy sm m)) (spec.mlen (k.am.ny sy sm m) "
         + "(+ (k.am.nm sm m) 1)))))");
     // The recomposition and the day count left unknown: D for spec.days and KC for the inverse,
     // tied by lemma 5's instance, and D bounded by lemma 8's at the specification's result.
-    setup.add("(declare-fun D (Int Int Int) Int) (declare-fun KC (Int Int Int) Int)");
-    setup.add("(define-fun ny () Int (k.am.ny sy sm m))");
-    setup.add("(define-fun nm1 () Int (+ (k.am.nm sm m) 1))");
-    setup.add("(define-fun cd () Int (k.am.cd sy sm sd m))");
-    setup.add("(assert (=> (and (spec.date ny nm1 cd) (<= " + lit(CIVIL_MIN_YEAR) + " ny) (<= ny "
+    tail.add("(declare-fun D (Int Int Int) Int) (declare-fun KC (Int Int Int) Int)");
+    tail.add("(define-fun ny () Int (k.am.ny sy sm m))");
+    tail.add("(define-fun nm1 () Int (+ (k.am.nm sm m) 1))");
+    tail.add("(define-fun cd () Int (k.am.cd sy sm sd m))");
+    tail.add("(assert (=> (and (spec.date ny nm1 cd) (<= " + lit(CIVIL_MIN_YEAR) + " ny) (<= ny "
         + CIVIL_MAX_YEAR + ")) (= (KC ny nm1 cd) (D ny nm1 cd))))");
-    setup.add("(assert (=> (and (spec.date sy2 sm2 cl) (<= " + lit(CIVIL_MIN_YEAR) + " sy2) "
+    tail.add("(assert (=> (and (spec.date sy2 sm2 cl) (<= " + lit(CIVIL_MIN_YEAR) + " sy2) "
         + "(<= sy2 " + CIVIL_MAX_YEAR + ")) (jint.in (D sy2 sm2 cl))))");
     var definitions = List.of("(assert (= (D ny nm1 cd) (spec.days ny nm1 cd)))",
         "(assert (= (D sy2 sm2 cl) (spec.days sy2 sm2 cl)))",
         "(assert (= (D sy2 sm2 sd) (spec.days sy2 sm2 sd)))",
         "(assert (= (KC ny nm1 cd) (k.addMonths sy sm sd m)))");
+    var add = new ArrayList<>(date);
+    add.add("(declare-const m Int) (declare-const vm Bool)\n(assert (jint.in m))");
+    add.addAll(tail);
+    // d - ym: the count negated by a FAIL node first, whose guard reads the count's validity alone.
+    var sub = new ArrayList<>(date);
+    sub.add("(declare-const m0 Int) (declare-const vm Bool)\n(assert (jint.in m0))");
+    sub.add("(define-fun m () Int (jint.neg m0))");
+    sub.addAll(tail);
     String guard = "(and (<= " + lit(VarkaChrono.MONTH_ARITH_MIN_MONTHS) + " m) (<= m "
         + VarkaChrono.MONTH_ARITH_MAX_MONTHS + "))";
     String both = "(and vd vm)";
     String clamped = "(D sy2 sm2 cl)";
     String kernel = "(KC ny nm1 cd)";
     refine(out, new Refinement("d + ym, add_months(d, i), Spark mode (clamp_to_month_end, "
-        + "proleptic_range): the month guard", setup, definitions, contract("d", "vd"),
+        + "proleptic_range): the month guard", add, definitions, contract("d", "vd"),
         "(=> " + both + " " + guard + ")", both, "(and " + both + " (not (jint.in " + clamped
         + ")))", both, "(and " + both + " (not " + guard + "))", both,
         "(not (= " + kernel + " " + clamped + "))", List.of()));
-    String stdBound = "(=> vm (and (<= " + lit(-STD_MONTHS) + " m) (<= m " + STD_MONTHS + ")))";
     String stdRaises = "(and " + both + " (or (> sd sl) (< sy2 1) (> sy2 9999)))";
+    String clampInputs = "(> sd sl)";
+    String rangeInputs = "(or (< sy2 1) (> sy2 9999))";
+    String clampWhy = "clamp_to_month_end, a result: the day the target month lacks is its last "
+        + "day, where the standard raises 22008";
+    String rangeWhy = "proleptic_range: a year past 0001 to 9999 is a date, where the standard "
+        + "raises 22008 and the kernel has no guard on its result";
     refine(out, new Refinement("d + ym, standard mode: the kernel as built, under the standard's "
-        + "range for the interval", setup, definitions, contract("d", "vd"), stdBound, both,
+        + "range for the interval", add, definitions, contract("d", "vd"),
+        "(=> vm (and (<= " + lit(-STD_MONTHS) + " m) (<= m " + STD_MONTHS + ")))", both,
         stdRaises, both, "(and " + both + " (not " + guard + "))", both,
         "(not (= " + kernel + " (D sy2 sm2 sd)))",
-        List.of(new Departure(2, "clamp_to_month_end, a result: DATE '2024-01-31' + INTERVAL '1' "
-                + "MONTH is 2024-02-29 where the standard raises 22008",
+        List.of(new Departure(2, clampWhy + ", at DATE '2024-01-31' + INTERVAL '1' MONTH",
                 List.of("(assert (and vd vm (= d " + LocalDate.of(2024, 1, 31).toEpochDay()
-                    + ") (= m 1)))"), "(> sd sl)"),
-            new Departure(2, "proleptic_range: DATE '9999-12-15' + INTERVAL '1' MONTH is "
-                + "+10000-01-15, where the standard raises 22008 and the kernel has no guard on "
-                + "its result", List.of("(assert (and vd vm (= d "
-                    + LocalDate.of(9999, 12, 15).toEpochDay() + ") (= m 1)))"),
-                "(or (< sy2 1) (> sy2 9999))"))));
-    // d - ym: the count negated by a FAIL node first, whose guard reads the count's validity alone.
-    var sub = new ArrayList<>(dateOperand().subList(0, 3));
-    sub.add("(declare-const m0 Int) (declare-const vm Bool)\n(assert (jint.in m0))");
-    sub.add("(define-fun m () Int (jint.neg m0))");
-    sub.addAll(setup.subList(4, setup.size()));
+                    + ") (= m 1)))"), clampInputs),
+            new Departure(2, rangeWhy + ", at DATE '9999-12-15' + INTERVAL '1' MONTH",
+                List.of("(assert (and vd vm (= d " + LocalDate.of(9999, 12, 15).toEpochDay()
+                    + ") (= m 1)))"), rangeInputs))));
     String negOverflow = "(and vm (= m0 jint.MIN))";
-    String negBound = "(=> " + both + " (not (= m0 jint.MIN)))";
+    var mayDecline = new Departure(5, "a decline Spark does not need: the negation's guard reads "
+        + "the interval's validity alone, and Spark negates nothing on a row whose date is null",
+        List.of("(assert (and (not vd) (= m0 jint.MIN) (= sy 1970) (= sm 1) (= sd 1)))"),
+        "(not vd)");
     refine(out, new Refinement("d - ym, Spark mode: the FAIL negation and the month guard", sub,
         definitions, contract("d", "vd"),
-        "(and " + negBound + " (=> " + both + " " + guard + "))", both,
+        "(=> " + both + " (and (not (= m0 jint.MIN)) " + guard + "))", both,
         "(and " + both + " (or (= m0 jint.MIN) (not (jint.in " + clamped + "))))", both,
         "(or " + negOverflow + " (and " + both + " (not " + guard + ")))", both,
-        "(not (= " + kernel + " " + clamped + "))",
-        List.of(new Departure(5, "a decline Spark does not need: the negation's guard reads the "
-            + "interval's validity alone, and Spark negates nothing on a row whose date is null",
-            List.of("(assert (and (not vd) (= m0 jint.MIN) (= sy 1970) (= sm 1) (= sd 1)))"),
-            "(not vd)"))));
+        "(not (= " + kernel + " " + clamped + "))", List.of(mayDecline)));
+    refine(out, new Refinement("d - ym, standard mode: the kernel as built, under the standard's "
+        + "range for the interval", sub, definitions, contract("d", "vd"),
+        "(=> vm (and (<= " + lit(-STD_MONTHS) + " m0) (<= m0 " + STD_MONTHS + ")))", both,
+        stdRaises, both, "(or " + negOverflow + " (and " + both + " (not " + guard + ")))", both,
+        "(not (= " + kernel + " (D sy2 sm2 sd)))",
+        List.of(new Departure(2, clampWhy + ", at DATE '2024-03-31' - INTERVAL '1' MONTH",
+                List.of("(assert (and vd vm (= d " + LocalDate.of(2024, 3, 31).toEpochDay()
+                    + ") (= m0 1)))"), clampInputs),
+            new Departure(2, rangeWhy + ", at DATE '0001-01-15' - INTERVAL '1' MONTH",
+                List.of("(assert (and vd vm (= d " + LocalDate.of(1, 1, 15).toEpochDay()
+                    + ") (= m0 1)))"), rangeInputs))));
   }
 
   private static void addDays(StringBuilder out) {
@@ -731,8 +761,7 @@ final class VarkaRefinementFile {
                 + "is a value, where the standard's two digits raise 22015, and the kernel's "
                 + "input bound is Spark's", List.of("(assert (and vd vi (= d 0) (= i 100)))"),
                 "(not (and (<= " + lit(-STD_DAYS) + " i) (<= i " + STD_DAYS + ")))"))));
-    String ab = "(declare-const a Int) (declare-const va Bool) (declare-const b Int) "
-        + "(declare-const vb Bool)\n(assert (and (jint.in a) (jint.in b)))";
+    String ab = INT_AB;
     refine(out, new Refinement("datediff(a, b), Spark mode: EXTENSIONS.md 1's n_a - n_b",
         List.of(ab), "(and " + contract("a", "va") + " " + contract("b", "vb") + ")", "true",
         "(and va vb)", "false", "(and va vb)", "false", "(and va vb)",
@@ -758,23 +787,24 @@ final class VarkaRefinementFile {
         "(assert (= (jint.floorMod n 7) r))",
         "(define-fun wd () Int (ite (>= (+ r 3) 7) (- (+ r 3) 7) (+ r 3)))",
         "(define-fun dw () Int (+ (ite (>= (+ r 4) 7) (- (+ r 4) 7) (+ r 4)) 1))");
-    refine(out, new Refinement("weekday(d), dayofweek(d), extract(DAYOFWEEK_ISO FROM d), Spark "
-        + "mode: floorMod(n, 7) and a modular offset, no int add before the mod", n,
+    refine(out, new Refinement("weekday(d), dayofweek(d), Spark mode: floorMod(n, 7) and a "
+        + "modular offset, no int add before the mod; extract(DAYOFWEEK_ISO FROM d) is weekday's "
+        + "tail plus one in the emitter and in EXTENSIONS.md 2, so it follows", n,
         "true", "true", "vn", "false", "vn", "false", "vn",
-        "(or (not (= wd r3)) (not (= dw (+ r4 1))) (not (= (+ wd 1) (+ r3 1))))", List.of()));
+        "(or (not (= wd r3)) (not (= dw (+ r4 1))))", List.of()));
   }
 
   private static void makeDate(StringBuilder out) {
     section(out, "EXTENSIONS.md 3: make_date (overflow_yields_null), non-ANSI and ANSI");
     var table = new StringBuilder("(define-fun k.len30 ((c Int)) Int");
     for (int c = 1; c <= 12; c++) {
-      table.append(c < 12 ? " (ite (= c " + c + ") " : " ").append(30 | (c ^ (c >>> 3)));
+      table.append(c < 12 ? " (ite (= c " + c + ") " : " ").append(30 | (c - (c >>> 3)));
     }
     table.append(")".repeat(11)).append(")");
     var setup = List.of("(declare-const y Int) (declare-const m Int) (declare-const dd Int) "
             + "(declare-const vy Bool) (declare-const vm Bool) (declare-const vdd Bool)\n"
             + "(assert (and (jint.in y) (jint.in m) (jint.in dd)))",
-        "; the month length's bit trick, 30 | (c ^ (c >>> 3)), as the JVM computes it per month",
+        "; emitMakeDate's month length, 30 | (c - (c >>> 3)), evaluated per month in Java",
         table.toString(),
         "(define-fun c () Int (ite (< m 1) 1 (ite (> m 12) 12 m)))",
         "(define-fun kdate () Bool (and (<= 1 m) (<= m 12) (<= 1 dd) (<= dd (ite (= c 2) "
@@ -820,8 +850,9 @@ final class VarkaRefinementFile {
     long bound = VarkaVectorIR.ConstDivide.EXACT_DIVIDEND_BOUND;
     check(out, "standard mode, SCOPE_STANDARD_MODE.md 3.2: a day-time interval of the standard's "
         + "two-digit days, under " + (STD_DAYS + 1) + " days of microseconds, lies under "
-        + "ConstDivide.EXACT_DIVIDEND_BOUND, where long_divide.smt2 proves both long-lane division "
-        + "forms exact, so every field extract of it divides exactly", "unsat",
+        + "ConstDivide.EXACT_DIVIDEND_BOUND, the dividend bound under which long_divide.smt2 "
+        + "proves both long-lane division forms exact; a constant comparison, no field extract "
+        + "restated", "unsat",
         "(declare-const u Int)",
         "(assert (< (abs u) " + ((STD_DAYS + 1) * MICROS_PER_DAY) + "))",
         "(assert (not (< (abs u) " + bound + ")))");

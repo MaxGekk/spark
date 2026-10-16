@@ -254,7 +254,7 @@ Written on 16 October 2026.
 ### 9.1 What was built
 
 `sql/varka/proofs/refinement.smt2`, rendered by `VarkaRefinementFile` through `VarkaProofFiles.render`,
-209 checks under `ALL`:
+216 checks under `ALL`:
 
 * **The calendar, rules to formula**: the four rules of 2.2 and C1's leap year, for every year, and
   `spec.days` pinned to `LocalDate.toEpochDay` at 17 dates from the int32 day count's ends through
@@ -271,7 +271,7 @@ Written on 16 October 2026.
   and the inverse, by `add_months` under its guard and by `make_date` under its, is one they are proven
   for.
 * **The refinements**, five queries each, for 3.4's table: 4.1's four operators in three arms each,
-  `abs`, the calendar fields, `d + ym` in both modes, `d - ym`, `date_add`, `d + CAST(i AS INTERVAL
+  `abs`, the calendar fields, `d + ym` and `d - ym` in both modes, `date_add`, `d + CAST(i AS INTERVAL
   DAY)` in both modes, `datediff`, the three days of the week, `make_date` in both ANSI settings,
   `extract(YEAR FROM ym)`, `hour`/`minute`, `second`, `t - t2`, `time_from_micros`, `t + dt` in both
   modes; and `SCOPE_STANDARD_MODE.md` 3.2's bound as a theorem.
@@ -290,10 +290,10 @@ Three things the specification work had not shown, none of them changed here:
    `java.time` says 42400-03-01, and at day 100,000,000 it gives month 31848. A cached column of such
    dates read by a fused `year(d)` would be a wrong answer with no fallback; that the cache path
    reaches the unguarded kernel is read from the IR and `docs/sql-varka.md`, **not run end to end**.
-2. **Three guards decline batches Spark does not need declined.** `d + CAST(i AS INTERVAL DAY)`'s input
-   bound, `d - ym`'s negation and `t + dt`'s one-day interval guard each read one operand's validity,
-   so a row whose other operand is null and whose bounded operand is out of range declines the batch,
-   where Spark evaluates nothing on that row. Query 5 is `sat` at exactly those rows and `unsat` with
+2. **Three guards decline batches Spark does not need declined, on rows whose other operand is
+   null.** `d + CAST(i AS INTERVAL DAY)`'s input bound, `d - ym`'s negation and `t + dt`'s one-day
+   interval guard each read one operand's validity, so a row whose other operand is null and whose
+   bounded operand is out of range declines the batch, where Spark evaluates nothing on that row. Query 5 is `sat` at exactly those rows and `unsat` with
    the other operand valid: a decline costs the batch's speed, never an answer.
 3. **`EXTENSIONS.md` 1 says `datediff` "never wraps"; it does.** Two int32 day counts differ by up to
    2^32 - 1; Spark's `DateDiff` is an `Int` subtraction and wraps, and so does the kernel. Inside the
@@ -320,6 +320,13 @@ the result; and `interval_precision_unbounded` for the cast, whose input bound i
   with lemmas T, S and F. Each of these is in the file's comments where it applies.
 * **The century-then-year prefix**, the reference variant, is not restated (3.5): the default took
   the time there was.
+* **The renderer is its own class**, `VarkaRefinementFile`, called from `VarkaProofFiles.render`,
+  where 3.1 and 4 named a method `VarkaProofFiles.refinement()`: the file is 900 lines, and
+  `VarkaProofFiles` was already 2,000.
+* **The timings moved with the machine.** The same file took Z3 3.7 to 6.8 s in the afternoon's
+  first runs and 14 to 16 s an hour later, when the unchanged `range_calendar.smt2` took 20 s against
+  its 14 s and `chrono_divide.smt2` 1.2 s against 0.5 s: other agents' load on cores 12 to 23. Read
+  the file's time against those two, about three quarters of `range_calendar.smt2`'s.
 * `SCOPE_STANDARD_MODE.md` 3.1 described a seven-op lowering of `extract(YEAR FROM ym)`; the kernel
   is now VARKA-149's multiply-high, exact over all of int32, and the entry says so.
 
@@ -329,13 +336,14 @@ the result; and `interval_precision_unbounded` for the cast, whose input bound i
    contract for the calendar rows; guard completeness (5) fails for the three guards of 9.2 item 2,
    which the prediction did not foresee. Standard mode fails where predicted and in two more places
    (9.2's last paragraph).
-2. **Held**: 209 checks; 3.7 to 6.8 s under Z3 and 5.8 to 6.7 s under cvc5, whole, at load 25 to 35
-   on cores 12 to 23; every check alone under both solvers (cvc5 `--incremental`, as the runner
+2. **Held, at the first runs' load**: 216 checks after the review (209 before it); 3.7 to 6.8 s
+   under Z3 and 5.8 to 6.7 s under cvc5, whole, at load 25 to 35 on cores 12 to 23, and 14 to 16 s
+   and 24 to 32 s an hour later on a slower machine (9.3); every check alone under both solvers (cvc5 `--incremental`, as the runner
    invokes it) meets its expectation, the slowest 2.6 s. The linters' run on the laptop went from
    42.8 s to the same plus 3.7 to 7.4 s, so 8 to 16 s on the runner by VARKA-241's ratio of 2.1; to be
    scored against the pull request's CI. Its line is in the calibration table.
 3. **Held**: `sat` at day 14,766,814.
-4. **Held**: `VarkaProofFilesSuite`'s one test takes 0.22 to 0.35 s with the new file rendered.
+4. **Held**: `VarkaProofFilesSuite`'s one test takes 0.22 to 0.69 s with the new file rendered.
 5. **Held**: dropping `add_months`'s clamp fails both `d + ym` and `d - ym`'s query 4; dropping the
    ANSI overflow guard fails `a + b`'s query 2; letting `make_date`'s year guard fire on a null lane
    fails both arms' query 5; moving the time sum's bound by one fails query 2 in Spark mode and 4 in
@@ -343,10 +351,12 @@ the result; and `interval_precision_unbounded` for the cast, whose input bound i
 
 ### 9.5 Added test time
 
-* **The gate** (`VarkaProofFilesSuite`, catalyst): within the suite's 0.22 to 0.35 s.
-* **The linters' "Varka proofs" step**: plus 3.7 to 7.4 s under Z3 on the laptop, about 8 to 16 s on
-  the runner.
-* **The nightly's prove step** (both solvers): plus about 13 s on the laptop.
+* **The gate** (`VarkaProofFilesSuite`, catalyst): within the suite's 0.22 to 0.69 s.
+* **The linters' "Varka proofs" step**: plus 3.7 to 7.4 s under Z3 on the laptop in the first runs
+  (14 to 16 s when the machine ran slow), about three quarters of `range_calendar.smt2`'s time; 8 to
+  16 s on the runner by VARKA-241's ratio.
+* **The nightly's prove step** (both solvers): plus about 13 s on the laptop at the first runs'
+  load, 40 to 48 s at the slower one.
 
 ### 9.6 What this leaves
 
@@ -359,3 +369,28 @@ the result; and `interval_precision_unbounded` for the cast, whose input bound i
   (the ISO week and week-year, `dayofyear`, `quarter`, `last_day`, `next_day`, `trunc`,
   `make_ym_interval`, `greatest`/`least`, `time_diff`, `time_trunc`), and the century-then-year
   prefix. Each would reuse the lemmas here.
+
+### 9.7 The self-review
+
+`/code-review high` on the branch found ten things; verified and fixed:
+
+* **`make_date`'s month length was restated from the scalar twin**, `30 | (c ^ (c >>> 3))`, where
+  `emitMakeDate` emits `30 | (c - (c >>> 3))`; the table is now evaluated from the emitted form (the
+  two agree on every month, so the rendered table did not move).
+* **`d - ym` had no standard-mode refinement** though 3.4 listed one; added, failing at its own
+  `clamp_to_month_end` and `proleptic_range` witnesses and holding outside them.
+* **The `extract(DAYOFWEEK_ISO ...)` disjunct followed from `weekday`'s**: dropped, and the title says
+  the ISO row is weekday's tail plus one in the emitter, so its refinement follows.
+* **3.2's theorem claimed more than it compares**: it is a comparison of constants, and now says so.
+* **The column-contract check is true by construction** of `ERA_NARROW`'s range: its text now names
+  the dividend, 20,161,386, at which `chrono_divide.smt2` shows the magic wrong, which is where the
+  evidence is.
+* **Query 5 is vacuous where the bound is the guard's own**, as for `make_date`'s years,
+  `add_months`'s counts and `time_from_micros`: the header now says that 5 shows a kernel declines
+  nothing but what its guards' bounds exclude, not that a bound is as wide as Spark's answers.
+* `d - ym`'s setup sliced `d + ym`'s by position; the shared tail is its own list. `pinDates` returns
+  `List.of`; the two records copy their lists and `Departure` refuses a query outside 2 to 5;
+  `datediff`'s operands reuse `INT_AB`.
+
+Not taken: dropping "lemma 1, lemmas 1a and 1b together", a rewriting step the solver discharges in
+under a second, which keeps lemma 3's hypothesis a checked instance rather than an assumption.
