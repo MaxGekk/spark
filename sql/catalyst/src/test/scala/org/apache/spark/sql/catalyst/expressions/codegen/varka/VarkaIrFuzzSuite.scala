@@ -532,6 +532,16 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   /** Draws a lane for the compiled histories: `-Dvarka.fuzz.compiled` (VARKA-274). */
   private val compiledDraws = sys.props.get("varka.fuzz.compiled").map(_.toInt).getOrElse(20)
 
+  /**
+   * The census's switches (VARKA-326): the first draw of the range (`-Dvarka.fuzz.compiledFrom`,
+   * so JVMs split a range), the draws' options (`-Dvarka.fuzz.compiledOptions=defaults` takes the
+   * matrix base instead of the drawn ones), and one line per history run on standard output
+   * (`-Dvarka.fuzz.census=true`) naming the class the JVM's logs call it by.
+   */
+  private val compiledFrom = sys.props.get("varka.fuzz.compiledFrom").map(_.toInt).getOrElse(0)
+  private val compiledBaseOptions = sys.props.get("varka.fuzz.compiledOptions").contains("defaults")
+  private val censusLines = sys.props.get("varka.fuzz.census").contains("true")
+
   /** Whether a history not reached fails the compiled test: only on a quiet machine. */
   private val requireTiers = sys.props.get("varka.fuzz.requireTiers").contains("true")
 
@@ -631,13 +641,25 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     val draws: Seq[(Int => VarkaFuzzCase, Long)] =
       Seq((k => drawInt(k), seed), (k => drawLong(k), longSeed))
     try {
-      for ((draw, drawSeed) <- draws; k <- only.map(Seq(_)).getOrElse(0 until compiledDraws)) {
-        val c = draw(k)
+      val range = compiledFrom until compiledDraws
+      for ((draw, drawSeed) <- draws; k <- only.map(Seq(_)).getOrElse(range)) {
+        val drawn = draw(k)
+        val c = if (compiledBaseOptions) drawn.withOptions(VarkaMatrix.base) else drawn
         val replay = s"-Dvarka.fuzz.seed=$drawSeed -Dvarka.fuzz.only=$k"
         if (c.options.lanesOverride() != 0) {
           overrides += ((c, replay))
         } else {
-          runCompiled(c, settings, replay).foreach(tally.add)
+          runCompiled(c, settings, replay).foreach { r =>
+            tally.add(r)
+            if (censusLines) {
+              r.runs().forEach(run => if (run.skipped() == null) {
+                // scalastyle:off println
+                println(s"VARKA_CENSUS\t${c.lane()}\t$k\t${run.history().label}\t" +
+                  s"${run.className()}\t${run.settled()}\t${run.settleMillis()}\t${c.label}")
+                // scalastyle:on println
+              })
+            }
+          }
         }
       }
       if (settings.runs(VarkaCompiledCheck.History.COLD)) {

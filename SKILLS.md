@@ -143,6 +143,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Error Prone and NullAway run beside the build, and the pending list only shrinks](sql/varka/skills/testing-and-debugging.md#error-prone-and-nullaway-run-beside-the-build-and-the-pending-list-only-shrinks)
 * [A Varka suite in JUnit 5: `@VarkaSuite`, a sentence per test, and ScalaTest's lines](sql/varka/skills/testing-and-debugging.md#a-varka-suite-in-junit-5-varkasuite-a-sentence-per-test-and-scalatests-lines)
 * [A Varka node in the plan is not a kernel evaluating the expression](sql/varka/skills/testing-and-debugging.md#a-varka-node-in-the-plan-is-not-a-kernel-evaluating-the-expression)
+* [A sql/core suite that collects dates makes its session active first](sql/varka/skills/testing-and-debugging.md#a-sqlcore-suite-that-collects-dates-makes-its-session-active-first)
 * [A kernel failure leaves a file you can replay, and where each failure first surfaces](sql/varka/skills/testing-and-debugging.md#a-kernel-failure-leaves-a-file-you-can-replay-and-where-each-failure-first-surfaces)
 * [A guard's domain is tested on partitions Spark cuts, with the status read off the JFR event](sql/varka/skills/testing-and-debugging.md#a-guards-domain-is-tested-on-partitions-spark-cuts-with-the-status-read-off-the-jfr-event)
 * [Cost predictions run optimistic: the calibration table](sql/varka/skills/testing-and-debugging.md#cost-predictions-run-optimistic-the-calibration-table)

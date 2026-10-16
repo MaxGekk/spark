@@ -5156,6 +5156,42 @@ option, costed without FMA (`StrictMath` is pure Java and FMA changes the bits).
 emitted `exp` or `log` gives one bit pattern on the three CI hosts at a measured cost against the
 bound library, with its contract (fdlibm's bits, or correct rounding) stated.
 
+### Item 99. The NULL-mode masked loop that C2 cannot settle
+
+*Added 16 October 2026 from `m7/VARKA-326.md` 9.4.* A kernel with a null-propagating `int` add or
+subtract or a `make_date` node has no dense loop, and in the census of 2,234 fuzzer kernels every
+one of the 104 that fell into C2's deoptimization cycle was of that class, with every
+`profile_predicate` trap in the masked loop (47 of 204 such kernels at 512 bits, 18 of 204 at
+128). Find which predicate C2 hoists and loses in that `loopMasked` (the trap's `pc=` against the
+compare that branches to the stub, as `skills/the-jit.md` reads one), and whether the emitted loop
+can stop offering it, as VARKA-198 did by holding fewer segments. **Done when** the class settles
+in the census's three arms or the record says why the loop cannot change, measured against the
+guard of `m7` row 378.
+
+### Item 100. What `-XX:-UseProfiledLoopPredicate` costs
+
+*Added 16 October 2026 from `m7/VARKA-326.md` 9.4.* The flag removed every trap of the census's
+cycling kernels (0 over 200), so it is the operator's remedy the record can name, as the trap
+limits were for the warm-up flake. Before anyone recommends it, measure what it costs the kernels
+that never cycle: the throughput and parity benchmarks with and without it at both widths, and the
+warm-up's time to its verdict. **Done when** the cost is committed per benchmark family and the
+documentation says when the flag is worth setting, or that it is not.
+
+### Item 101. The 2-lane long kernel: mask-free, or declined
+
+*Added 16 October 2026 from `m7/VARKA-374.md` 9.* At `-XX:MaxVectorSize=16` a `long` vector has two
+lanes, and `x86.ad` refuses `VectorLoadMask`, `VectorStoreMask` and `VectorMaskCast` at
+`vlen == 2` before any profile is read, so every mask operation on the long lane runs the Vector
+API's Java fallback and allocates: 38 of 41 and 133 of 151 warm-up releases at 128 bits, and a
+compare, mask-and and blend loop 18 times slower at two long lanes than at four int lanes, the
+same under `-XX:UseAVX=1`. The aarch64 JIT supports two-lane masks, so this is an x86 host below
+its native width: AVX-only and SSE-only machines. VARKA-153 left the choice open in September and
+it was never taken. Either the long lane gets a lowering without masks at two lanes (validity
+carried as a long, blends as arithmetic), or the compiler declines a kernel with a long-lane mask
+where the species has two lanes, with the reason in `EXPLAIN`. **Done when** one of the two is
+built and the 128-bit warm-up arm releases no kernel for this cause, or the record says why
+neither is worth it on the hosts that have it.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
