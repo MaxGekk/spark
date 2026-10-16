@@ -19,10 +19,11 @@
 Varka's template warm-up off, with both trap limits raised, and as Varka ships, and in a
 separate set of runs with the limits raised from inside the running JVM or the counts reset once
 at 60 s. The upper block reads the 100-replay table of the replay script's committed run
-(sql/varka/demo/trap_sums-laptop-jdk25-output.txt), the middle block its 400-composition table,
-and the lower block the verdict line of each preferred-species run in the trap-reset spike's
-results (sql/varka/spikes/trap-reset/results/). Each block has its own axis, since the counts
-are of different things."""
+(sql/varka/demo/trap_sums-laptop-jdk25-output.txt), the middle block its 400-composition
+run, each arm with its own count of warm-ups from that arm's verdict line, and the lower block
+the verdict line of each preferred-species run in the trap-reset spike's results
+(sql/varka/spikes/trap-reset/results/). Each block has its own axis, since the counts are of
+different things."""
 
 import os
 import re
@@ -62,6 +63,18 @@ def warmups(line):
     return released, compiled + released
 
 
+def arm_warmups(path):
+    """{arm: (deadline releases, warm-ups)} from the per-replay lines of the 400-composition run,
+    which end with the replay's verdicts."""
+    line = re.compile(r"^(defaults|trap limits|stock)\s+replay\s+1: .*\((COMPILED \d+.*)\)$")
+    out = {}
+    with open(path) as f:
+        for text in f:
+            if m := line.match(text.rstrip()):
+                out[m.group(1)] = warmups(m.group(2))
+    return out
+
+
 def spike_runs(name, runs):
     """[(deadline releases, warm-ups)] of the named runs in one results file."""
     out, run = {}, None
@@ -80,16 +93,17 @@ tables = replay_tables(REPLAY)
 assert len(tables) == 2, tables
 jvms, comps = tables
 assert all(of == 100 for _, of, _ in jvms.values()), jvms
-with open(REPLAY) as f:
-    verdicts = next(line for line in f if line.startswith("(the defaults replay's verdicts:"))
-released, WARMUPS = warmups(verdicts)
-assert released == comps["defaults"][2], (released, comps)
+arms = arm_warmups(REPLAY)
+assert sorted(arms) == sorted(comps), (arms, comps)
+assert all(arms[a][0] == comps[a][2] for a in arms), (arms, comps)
 spike = [
     ("off, no action", OFF, spike_runs("control.txt", ["ctl1", "ctl2"])),
     ("off, limits raised (WhiteBox)", LIMITS, spike_runs("flags.txt", ["flags1", "flags2"])),
     ("off, one reset at 60 s", RESET, spike_runs("redefine-once.txt", ["redef1", "redef2"])),
 ]
-assert all(n == WARMUPS for _, _, runs in spike for _, n in runs), spike
+counts = {n for _, _, runs in spike for _, n in runs}
+assert len(counts) == 1, spike
+(WARMUPS,) = counts
 spike = [(label, fill, [v for v, _ in runs]) for label, fill, runs in spike]
 ARMS = [
     ("template warm-up off", OFF, "defaults"),
@@ -121,9 +135,11 @@ def block(y, title, rows, top, step):
     for label, fill, values in rows:
         r.text(LABEL, y + 12, label, size=17, anchor="end")
         for v in values:
+            # A value is a count, or a count with the text to print beside its bar.
+            v, text = v if isinstance(v, tuple) else (v, "%d" % v)
             if v:
                 r.rect(X0, y, px(v) - X0, 20, fill=fill, solid=True)
-            r.text(px(v) + 10, y + 11, "%d" % v, size=17)
+            r.text(px(v) + 10, y + 11, text, size=17)
             y += 25
         y += 5
     r.arrow(X0, y, X1 + 20, y)
@@ -143,14 +159,15 @@ y = block(
 )
 y = block(
     y,
-    "one JVM through %d warm-ups: kernels released at the deadline" % WARMUPS,
-    [(label, fill, [comps[arm][2]]) for label, fill, arm in ARMS],
+    "one JVM per arm through 400 compositions: kernels released at the deadline, of its warm-ups",
+    [(label, fill, [(arms[arm][0], "%d of %d" % arms[arm])]) for label, fill, arm in ARMS],
     80,
     20,
 )
 block(
     y,
-    "the same, a second set of runs with the warm-up off, two JVMs per arm",
+    "a second set of runs over the same compositions (%d warm-ups), the warm-up off, two JVMs "
+    "per arm" % WARMUPS,
     spike,
     80,
     20,

@@ -1,10 +1,21 @@
-Output of trap_sums.sh on the development laptop, not a runner, 16 October 2026.
-commit:  4a63b9c7678 (the script's first commit, on master 81aad3b42fa); classes built from it
+Output of trap_sums.sh on the development laptop, not a runner, 16 October 2026, in two sessions.
 cpu:     AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M, 512-bit preferred vector species
 java:    openjdk version "25.0.4.1" 2026-08-18
 flags:   PerMethodTrapLimit = 100, PerMethodRecompilationCutoff = 400 (the defaults)
-pinned:  --cpus 6-8, one JVM at a time; the load average was 5 to 45 from other work on the
-         machine's other cores
+pinned:  --cpus 6-8, one JVM at a time
+
+The 100-replay run: the script's first commit, 4a63b9c7678, with classes built from master
+81aad3b42fa; the load average was 5 to 45 from other work on the machine's other cores. It was
+not repeated after the script's review-after-merge changes, which leave the counting as it was
+and would take 2 hours 40 minutes again.
+
+The 400-composition run and --keep: the script after that review (it checks compositions 0 and
+220 first, prints each 400-composition replay's verdicts and the largest ccount per compile, and
+runs the stock check itself), with classes built from master 57cf25f8c98; the load average was
+5.20 at the start and 2.12 at the end. sql/varka/coverage.json, which the compositions are drawn
+from, did not change between the two builds, and the check passed.
+
+Paths below are relative to the checkout; the script prints them absolute.
 
 $ sql/varka/demo/trap_sums.sh --skip-build --cpus 6-8 --runs 100
 (the 300 per-replay lines are left out; every release was composition 220's kernel,
@@ -17,31 +28,33 @@ trap limits   0 of 100                      0
 stock         0 of 100                      0
 
 $ sql/varka/demo/trap_sums.sh --skip-build --cpus 6-8 --runs 1 --compositions 400
-defaults     replay   1: 29 released at the deadline, 587 s
-trap limits  replay   1: 0 released at the deadline, 316 s
-stock        replay   1: 0 released at the deadline, 222 s
+== checking that compositions 0 and 220 at seed 20261008 are the replayed ones
+defaults     replay   1: 46 released at the deadline, 695 s (COMPILED 488, RELEASED 46)
+trap limits  replay   1: 0 released at the deadline, 193 s (COMPILED 534)
+stock        replay   1: 1 released at the deadline, 206 s (COMPILED 533, RELEASED 1)
 
-seed 20261008, compositions 0 to 399, 1 replays per arm, 1125 s
+seed 20261008, compositions 0 to 399, 1 replays per arm, 1094 s
 arm           replays with a release        releases at the deadline
-defaults      1 of 1                        29
+defaults      1 of 1                        46
 trap limits   0 of 1                        0
-stock         0 of 1                        0
+stock         1 of 1                        1
 
-(the defaults replay's verdicts: COMPILED 505, RELEASED 29, none before the deadline)
+(the stock release was composition 312's kernel, shape w4619883de33b1eb0, with 21120 bytes in
+its last probe; none of the releases came before the deadline)
 
 $ sql/varka/demo/trap_sums.sh --skip-build --cpus 6-8 --keep
+== checking that compositions 0 and 220 at seed 20261008 are the replayed ones
 replay 1: released 1
-  + iteration 220: a kernel was released at the deadline without its verdict: Outcome[shapeHash=w7fd4deef67312f01, state=RELEASED, calls=23068, rows=8653568, queuedNanos=3401255, runNanos=10041446214,
-JIT log kept: target/varka-demo/trap_sums/keep/hotspot.xml
-(the four lines below are re-read from that log by the script as committed, whose summary
-wording changed after the run; the numbers are the run's)
+  + iteration 220: a kernel was released at the deadline without its verdict: Outcome[shapeHash=w7fd4deef67312f01, state=RELEASED, calls=22948, rows=8530688, queuedNanos=811378, runNanos=10059860337,
+JIT log kept: target/varka-demo/trap_sums/keep-1/hotspot.xml
 class-check sums at the limit in Varka kernels' compiles:
-compile 14547 org.apache.spark.sql.varka.execution.VarkaFusedProjection_w7fd4deef67312f01 loopDense0: at the limit in 602 checks, the first <observe trap='class_check' count='0' mcount='0' ccount='100'/>
-compile 14550 org.apache.spark.sql.varka.execution.VarkaFusedProjection_w7fd4deef67312f01 loopMasked0: at the limit in 737 checks, the first <observe trap='class_check' count='0' mcount='0' ccount='100'/>
-compile 14563 org.apache.spark.sql.varka.execution.VarkaFusedProjection_w7fd4deef67312f01 epilogueDense0: at the limit in 757 checks, the first <observe trap='class_check' count='0' mcount='0' ccount='100'/>
-compile 14564 org.apache.spark.sql.varka.execution.VarkaFusedProjection_w7fd4deef67312f01 epilogueMasked0: at the limit in 892 checks, the first <observe trap='class_check' count='0' mcount='0' ccount='100'/>
+compile 14317 org.apache.spark.sql.varka.execution.VarkaFusedProjection_w7fd4deef67312f01 loopDense0: at the limit in 477 checks, the largest <observe trap='class_check' count='0' mcount='0' ccount='1100'/>
+compile 14327 org.apache.spark.sql.varka.execution.VarkaFusedProjection_w7fd4deef67312f01 loopMasked0: at the limit in 699 checks, the largest <observe trap='class_check' count='0' mcount='4' ccount='1372'/>
+compile 14337 org.apache.spark.sql.varka.execution.VarkaFusedProjection_w7fd4deef67312f01 epilogueDense0: at the limit in 514 checks, the largest <observe trap='class_check' count='0' mcount='0' ccount='1100'/>
+compile 14339 org.apache.spark.sql.varka.execution.VarkaFusedProjection_w7fd4deef67312f01 epilogueMasked0: at the limit in 738 checks, the largest <observe trap='class_check' count='0' mcount='4' ccount='1372'/>
+the same check on one stock replay with the log (0 released, COMPILED 3, JIT log kept: target/varka-demo/trap_sums/keep-stock/hotspot.xml):
+none
 
-A replay of the stock arm with the same log (Varka's template warm-up on, COMPILED 3) has no
-<observe ... ccount=.../> line anywhere: 101 class-check observations, none of a compile-wide sum.
-With -XX:+LogCompilation on, the defaults arm released in 6 of 6 replays here, against 77 of 100
-without it. Why was not examined; the log is for seeing a release, the counts are taken without.
+With -XX:+LogCompilation on, the defaults arm has released in 7 of 7 replays here (the five tries
+while the script was written and both --keep runs), against 77 of 100 without it. Why was not
+examined; the log is for seeing a release, the counts are taken without.

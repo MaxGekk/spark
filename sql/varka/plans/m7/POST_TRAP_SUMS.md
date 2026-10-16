@@ -15,7 +15,7 @@ misses its deadline is released, and its batches go back to Spark's row engine.
 > 2. The traps were left by earlier compiles of the Vector API's shared code that had seen one
 >    operator class.
 > 3. Two JVM options remove it. Running every operator through the vector code first avoids it;
->    Varka now does, and its releases went from about 440 in 2,000 kernels to none.
+>    Varka now does, and its releases went from about 440 in 2,000 compositions to none.
 
 ## Ruling things out
 
@@ -53,7 +53,7 @@ class-check traps against `PerMethodTrapLimit`, 100 by default, and decompiles a
 The log shows it in one line:
 
 ```
-<observe trap='class_check' count='0' mcount='0' ccount='254'/>
+<observe trap='class_check' count='0' mcount='0' ccount='1100'/>
 ```
 
 ## Who leaves the traps
@@ -62,7 +62,7 @@ Not the kernel. The traps sit in the Vector API's shared templates (`Int512Vecto
 `opKind`, `ImplCache::find`), left by earlier standalone C2 compiles of them. A template compiled
 after seeing one operator class speculates on it; the first other class traps. One earlier kernel
 is enough: `abs` over a year-month interval, run first, made the kernel release 5 times in 6, and
-55 of 220 kernels did it alone.
+55 of 220 compositions did it alone.
 
 ![Who leaves the traps](figures/svg/fig42-who-leaves-the-traps.svg)
 
@@ -85,8 +85,9 @@ that it will refuse such agents, and at 4 lanes it only halved the releases.
 
 ![What removes the releases](figures/svg/fig43-what-removes-the-releases.svg)
 
-*Figure 3. The template warm-up off, with both limits raised, and as Varka ships; below,
-separate runs with the limits raised through WhiteBox or the counts reset once at 60 s.*
+*Figure 3. The template warm-up off, with both limits raised, and as Varka ships (one release,
+composition 312's kernel); below, separate runs with the limits raised through WhiteBox or the
+counts reset once at 60 s.*
 
 ## What a library can do
 
@@ -94,8 +95,8 @@ Make sure the templates are compiled before they can be compiled wrong. Varka no
 JVM before its first kernel, a short warm-up that calls every
 Vector API method the kernels use with every operator class, interleaved, for 300 rounds. The
 templates then reach C2 having seen all the classes and record no class-check trap. On the seed
-that had shown about 440 releases in 2,000 kernels without it there were none, and none on five
-more seeds, with no steady-state cost we could measure.
+that had shown about 440 releases in 2,000 compositions without it there were none, and none on
+five more seeds, with no steady-state cost we could measure.
 
 It is not the whole answer. At a 4-lane override the releases come from a per-bytecode trap at
 one call site of `IntVector.add`, which warming the narrower shape did not clear and warming both
@@ -104,7 +105,7 @@ no 2-lane mask, so a kernel over longs with a mask runs the Vector API's allocat
 
 ![Where the template warm-up helps](figures/svg/fig44-where-the-template-warm-up-helps.svg)
 
-*Figure 4. The first 100 kernels of the warm-up test, template warm-up on and off.*
+*Figure 4. The first 100 compositions of the warm-up test, template warm-up on and off.*
 
 If you use the Vector API in a long-lived JVM: run your vector code once, with every operator
 you will use, before the code you care about is compiled. If you can set JVM options, the two
@@ -113,14 +114,15 @@ limits above remove it outright.
 ## How these were measured
 
 On JDK 25.0.4, an AMD Zen 5 laptop with 512-bit preferred vectors, in the warm-up arm of Varka's
-composition fuzzer, which warms one kernel per random composition of expressions. The record is
+composition fuzzer, which warms the kernels of random compositions of expressions. The record is
 `VARKA-295.md` 9.5 to 9.8 (Figures 1 and 2), `VARKA-370.md` 9 with its spike's `results/`
 (Figure 3, lower block), `VARKA-373.md` 9 (Figure 4) and `VARKA-374.md`.
 
-To reproduce from a [Varka checkout](https://github.com/vecbricks/varka) on Linux:
-`sql/varka/demo/trap_sums.sh --runs 100` replays `abs` over a year-month interval and then the
-allocating kernel in a fresh JVM, 100 times each with the template warm-up off, with the two
-options, and as Varka ships. On our laptop, 2 hours 40 minutes on 3 cores, they released in 77, 0
-and 0 JVMs. `--compositions 400` runs one JVM over 400 compositions instead. `--keep` replays until
-one releases and prints the `<observe ... ccount=.../>` line of each of the kernel's compiles; a
-clean replay has none. Our run is `sql/varka/demo/trap_sums-laptop-jdk25-output.txt`.
+To reproduce on Linux from a [Varka checkout](https://github.com/vecbricks/varka) at commit
+57cf25f8c98 or later (the script checks its compositions):
+`sql/varka/demo/trap_sums.sh --runs 100` replays `abs` over a year-month interval, then the
+allocating kernel, in 100 fresh JVMs per arm: warm-up off, the two options, as shipped. On our
+laptop (2 hours 40 minutes, 3 cores) 77, 0 and 0 JVMs released. `--compositions 400` runs 400
+compositions per JVM. `--keep` replays until one releases, prints the largest `<observe ...
+ccount=.../>` line of each kernel compile, and finds none as Varka ships. Our run:
+`sql/varka/demo/trap_sums-laptop-jdk25-output.txt`.

@@ -60,8 +60,8 @@ r.text(40, 44, "Where the template warm-up helps", size=32)
 r.text(
     40,
     84,
-    "kernels released at the deadline in the first 100 of Varka's warm-up test; JDK 25, "
-    "the 512-bit laptop; each bar is one JVM",
+    "kernels released at the deadline in the first 100 compositions of Varka's warm-up test; "
+    "JDK 25, the 512-bit laptop; one JVM a bar",
     size=17,
     color=GREY,
 )
