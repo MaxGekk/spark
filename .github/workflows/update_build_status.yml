@@ -19,19 +19,38 @@
 
 name: Update build status workflow
 
+# The check sync (VARKA-255.md 3.2). Each push to a pull request starts notify_test_workflow.yml
+# ("On pull request update"), which creates the pull request's Build check; this workflow starts
+# when that run completes, so the check exists, and keeps passing over every open pull request
+# every 120 seconds while any of their fork runs is not completed. GitHub's cron runs hours late
+# here (VARKA-255.md 2.1), so it is only the backstop. Nothing here checks out or runs a pull
+# request's code: it reads the API and writes checks with this repository's own token.
 on:
   schedule:
   - cron: "*/15 * * * *"
-  # Dispatched by dev/varka_ci_queue.sh when a held run's rerun completes, so a pull
-  # request's check shows the rerun's result then rather than at the cron's next start.
+  workflow_run:
+    workflows: ["On pull request update"]
+    types: [completed]
+  # For a rerun of a fork run with no push, which fires nothing here, and the loop's own
+  # re-dispatch at its cap.
   workflow_dispatch:
+
+# One loop at a time: a trigger during a loop leaves one pending run, and the loop already
+# running reads every open pull request on each pass.
+concurrency:
+  group: update-build-status
+  cancel-in-progress: false
 
 jobs:
   update:
     name: Update build status
-    runs-on: ubuntu-slim
+    # ubuntu-latest, not ubuntu-slim: a slim job is cut off at 15 minutes, and the loop runs
+    # for as long as a fork run is in flight, up to the cap below.
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
     permissions:
-      actions: read
+      # write, to dispatch this workflow again when the loop reaches its cap.
+      actions: write
       checks: write
     steps:
       - name: "Update build status"
@@ -115,6 +134,24 @@ jobs:
             const isActionRequiredBuildCheck = (cr) =>
               cr.name == 'Build' && cr.conclusion == 'action_required';
 
+            // Every request this run makes, logged per pass (VARKA-255.md 7.8).
+            let requests = 0
+            github.hook.before('request', () => { requests++ })
+
+            // The fields a check would be patched to for a fork run, which a pass compares
+            // with the check's own before patching (VARKA-255.md 3.2: patch only on change).
+            const wanted = (run) => run.status == 'completed'
+              ? {status: 'completed', conclusion: run.conclusion}
+              // PATCH /check-runs accepts only queued | in_progress | completed,
+              // but workflow_run may also report requested / waiting / pending.
+              : {status: run.status == 'in_progress' ? 'in_progress' : 'queued', conclusion: null}
+
+            // One pass over the open pull requests; returns how many of their fork runs are
+            // not completed, read from the runs themselves, so a rerun that reopens a
+            // completed run keeps the loop going.
+            const syncPass = async () => {
+            let inFlight = 0
+            let patches = 0
             // Iterate open PRs
             for await (const prs of github.paginate.iterator(endpoint,params)) {
               // Each page
@@ -179,32 +216,45 @@ jobs:
                       }
                       // Only now that the run is fetched is this a check we can actually sync.
                       syncableBuildCheck = true
+                      if (run.data.status != 'completed') {
+                        inFlight++
+                      }
 
-                      // Keep syncing the status of the checks
-                      if (run.data.status == 'completed') {
-                        console.log('    Run ' + cr.id + ': set status (' + run.data.status + ') and conclusion (' + run.data.conclusion + ')')
-                        const response = await github.request('PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}', {
-                          owner: context.repo.owner,
-                          repo: context.repo.repo,
-                          check_run_id: cr.id,
-                          output: cr.output,
-                          status: run.data.status,
-                          conclusion: run.data.conclusion,
-                          details_url: run.data.details_url
-                        })
-                      } else {
-                        // PATCH /check-runs accepts only queued | in_progress | completed,
-                        // but workflow_run may also report requested / waiting / pending.
-                        const status = run.data.status == 'in_progress' ? 'in_progress' : 'queued'
-                        console.log('    Run ' + cr.id + ': set status (' + run.data.status + ' -> ' + status + ')')
-                        const response = await github.request('PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}', {
-                          owner: context.repo.owner,
-                          repo: context.repo.repo,
-                          check_run_id: cr.id,
-                          output: cr.output,
-                          status: status,
-                          details_url: run.data.details_url
-                        })
+                      // Keep syncing the status of the checks, patching only a check whose
+                      // status or conclusion differs from its run's.
+                      const want = wanted(run.data)
+                      if (cr.status == want.status && (cr.conclusion || null) == want.conclusion) {
+                        continue
+                      }
+                      patches++
+                      // A failed patch skips this check until the next pass rather than
+                      // ending the loop, which every other pull request's sync rides on.
+                      try {
+                        if (run.data.status == 'completed') {
+                          console.log('    Run ' + cr.id + ': set status (' + run.data.status + ') and conclusion (' + run.data.conclusion + ')')
+                          const response = await github.request('PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}', {
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            check_run_id: cr.id,
+                            output: cr.output,
+                            status: run.data.status,
+                            conclusion: run.data.conclusion,
+                            details_url: run.data.details_url
+                          })
+                        } else {
+                          console.log('    Run ' + cr.id + ': set status (' + run.data.status + ' -> ' + want.status + ')')
+                          const response = await github.request('PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}', {
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            check_run_id: cr.id,
+                            output: cr.output,
+                            status: want.status,
+                            details_url: run.data.details_url
+                          })
+                        }
+                      } catch (error) {
+                        console.error('    Run ' + cr.id + ': patch failed; a later pass retries it')
+                        console.error(error)
                       }
                     }
                   }
@@ -318,6 +368,9 @@ jobs:
                       }
 
                       if (matched_run) {
+                        if (matched_run.status != 'completed') {
+                          inFlight++
+                        }
                         // A run exists for this head commit; point the check at it and let the
                         // next pass sync its status.
                         const actions_url = 'https://github.com/' + forkOwner + '/' + forkRepo
@@ -387,4 +440,59 @@ jobs:
                   }
                 }
               }
+            }
+            console.log('Pass: ' + inFlight + ' fork run(s) in flight, ' + patches
+              + ' check(s) patched, ' + requests + ' requests so far')
+            return inFlight
+            }
+
+            // Pass every 120 seconds while any fork run is in flight. At 345 minutes, with a
+            // run still in flight, dispatch this workflow again before the job's cap; the new
+            // run waits in the concurrency group until this one ends. workflow_dispatch is the
+            // one event a GITHUB_TOKEN may start a workflow with. A pass that throws (the pull
+            // request listing failing, a rate limit) is retried at the next interval; five in a
+            // row end the loop without a dispatch, so a lasting fault cannot chain runs.
+            const started = Date.now()
+            const capMs = 345 * 60 * 1000
+            const pollMs = 120 * 1000
+            const maxFailedPasses = 5
+            let failedPasses = 0
+            for (;;) {
+              let inFlight
+              try {
+                inFlight = await syncPass()
+                failedPasses = 0
+              } catch (error) {
+                failedPasses++
+                console.error('Pass failed (' + failedPasses + ' in a row)')
+                console.error(error)
+                if (failedPasses >= maxFailedPasses) {
+                  core.setFailed(maxFailedPasses + ' passes in a row failed; the loop ends')
+                  break
+                }
+                inFlight = -1
+              }
+              if (inFlight == 0) {
+                console.log('No fork run in flight; the loop ends')
+                break
+              }
+              if (Date.now() - started + pollMs > capMs) {
+                if (inFlight < 0) {
+                  console.log('At the cap after a failed pass; not dispatching again')
+                  break
+                }
+                console.log('At the cap with ' + inFlight + ' run(s) in flight; dispatching again')
+                try {
+                  await github.rest.actions.createWorkflowDispatch({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    workflow_id: 'update_build_status.yml',
+                    ref: (context.payload.repository && context.payload.repository.default_branch) || 'master'
+                  })
+                } catch (error) {
+                  core.setFailed('Could not dispatch the sync again: ' + error.message)
+                }
+                break
+              }
+              await new Promise(resolve => setTimeout(resolve, pollMs))
             }

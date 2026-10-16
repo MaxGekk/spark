@@ -478,6 +478,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
       VarkaLoopEmitter.emit("VarkaMixedLaneKernel",
         Seq[VarkaVectorIR](intCol, longCol).asJava, 1, 0, null, null, VarkaMatrix.base)
     }
-    assert(e.getMessage === "outputs mix lanes: INT and LONG", e.getMessage)
+    // An invariant of the emitter's: Spark's INTERNAL_ERROR around the site's text (VARKA-314).
+    assert(VarkaErrors.siteText(e) === "outputs mix lanes: INT and LONG", e.getMessage)
   }
 }

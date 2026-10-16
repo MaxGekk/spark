@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen;
 import java.util.List;
 import java.util.Optional;
 
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.types.DataType;
@@ -55,7 +56,7 @@ public record CompiledVarkaProjection(
     // exactly one of the two literal tables. Both non-empty would mean an entry of the other lane
     // left its literals behind when it was demoted, which the per-entry rollback rules out.
     if (!literals.isEmpty() && !longLiterals.isEmpty()) {
-      throw new IllegalArgumentException(
+      throw VarkaErrors.illegalArgument(
           "a kernel is single-lane, so at most one of its literal tables is populated");
     }
   }

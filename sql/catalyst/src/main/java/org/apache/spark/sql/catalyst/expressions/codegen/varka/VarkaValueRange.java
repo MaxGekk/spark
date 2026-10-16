@@ -111,7 +111,7 @@ public final class VarkaValueRange {
 
     public Bounded {
       if (lo > hi) {
-        throw new IllegalArgumentException("empty range [" + lo + ", " + hi + "]");
+        throw VarkaErrors.illegalArgument("empty range [" + lo + ", " + hi + "]");
       }
     }
 
@@ -252,7 +252,7 @@ public final class VarkaValueRange {
    */
   public static Range symmetric(long m) {
     if (m < 0) {
-      throw new IllegalArgumentException("negative magnitude " + m);
+      throw VarkaErrors.illegalArgument("negative magnitude " + m);
     }
     return new Bounded(-m, m);
   }

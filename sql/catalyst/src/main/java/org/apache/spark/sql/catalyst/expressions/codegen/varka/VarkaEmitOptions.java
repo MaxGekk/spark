@@ -629,46 +629,46 @@ public record VarkaEmitOptions(
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {
-      throw new IllegalArgumentException("groupBudget must be positive: " + groupBudget);
+      throw VarkaErrors.illegalArgument("groupBudget must be positive: " + groupBudget);
     }
     if (fusedCeiling < 1) {
-      throw new IllegalArgumentException("fusedCeiling must be positive: " + fusedCeiling);
+      throw VarkaErrors.illegalArgument("fusedCeiling must be positive: " + fusedCeiling);
     }
     if (truncDate == null) {
-      throw new IllegalArgumentException("truncDate must not be null");
+      throw VarkaErrors.illegalArgument("truncDate must not be null");
     }
     if (floorMod7 == null) {
-      throw new IllegalArgumentException("floorMod7 must not be null");
+      throw VarkaErrors.illegalArgument("floorMod7 must not be null");
     }
     if (useAVX < USE_AVX_UNKNOWN) {
-      throw new IllegalArgumentException("useAVX must be a level or " + USE_AVX_UNKNOWN
+      throw VarkaErrors.illegalArgument("useAVX must be a level or " + USE_AVX_UNKNOWN
           + " for none, not " + useAVX);
     }
     if (methodByteBudget < 0) {
-      throw new IllegalArgumentException("methodByteBudget must be 0 (off) or a positive byte "
+      throw VarkaErrors.illegalArgument("methodByteBudget must be 0 (off) or a positive byte "
           + "count: " + methodByteBudget);
     }
     if (callSiteBudget < 0) {
-      throw new IllegalArgumentException("callSiteBudget must be 0 (off) or a positive "
+      throw VarkaErrors.illegalArgument("callSiteBudget must be 0 (off) or a positive "
           + "call-site count: " + callSiteBudget);
     }
     if (heavyGroupOutputs < 0) {
-      throw new IllegalArgumentException("heavyGroupOutputs must be 0 (every group over the "
+      throw VarkaErrors.illegalArgument("heavyGroupOutputs must be 0 (every group over the "
           + "call-site budget splits) or a positive output count: " + heavyGroupOutputs);
     }
     if (division == null) {
-      throw new IllegalArgumentException("division must not be null");
+      throw VarkaErrors.illegalArgument("division must not be null");
     }
     if (lanesOverride != 0 && (lanesOverride < 1 || Integer.bitCount(lanesOverride) != 1)) {
-      throw new IllegalArgumentException(
+      throw VarkaErrors.illegalArgument(
           "lanesOverride must be 0 or a power of two: " + lanesOverride);
     }
     if (forceResidualAt < 0) {
-      throw new IllegalArgumentException(
+      throw VarkaErrors.illegalArgument(
           "forceResidualAt must be 0 (off) or a position plus one: " + forceResidualAt);
     }
     if (misdescribeRollback < 0) {
-      throw new IllegalArgumentException(
+      throw VarkaErrors.illegalArgument(
           "misdescribeRollback must be 0 (off) or a fault: " + misdescribeRollback);
     }
   }
