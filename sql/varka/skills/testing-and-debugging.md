@@ -1387,6 +1387,8 @@ predicted. Add the line when the prediction is scored, whichever way it went.
 | VARKA-327 (6.1 #2) | the warmed Spark differential's 2,000 compositions under an hour | 13 minutes | 0.26 | predicted from a seed that released 6.8% of its warm-ups at 10 s each; the nightly's released 0.9% |
 | VARKA-281 (6.1 #3) | the calendar sweep suite under 20 s | 1.5 s for its eight tests over 20 million days each | 0.08 | the estimate priced single-threaded `LocalDate` decodes and then doubled; a parallel stream over the test JVM's cores and the JIT's inlining of the decode left little of either |
 | VARKA-244 (5.1 #1) | a new sql/core suite under 40 s, its tests under 10 s | 25 s, its tests 8.4 s | 0.6 | predicted at VARKA-243's ratio of 2, which a suite of the same shape repeated; a later run at load average 46 took 72 s |
+| VARKA-317 (6.1 #1) | the coverage differential's added test time at most 10 s | 0.3 s: the planted test 126 ms, the extended one 182 ms | 0.03 | the estimate priced a kernel compile per query and doubled it by VARKA-243's ratio; where the 0.3 s went was not split |
+| VARKA-378 (6.1 #2) | the NULL-mode guard step about 12 minutes, two widths of 200 kernels at a trial's 1.4 s each, at a ratio of 1.2 | 10.7 to 15.4 minutes over three runs on three pinned cores at a load of 21 to 46 | 0.9 to 1.3 | the time moves with the load: a kernel still in the cycle costs the full 10 s deadline, and a busy machine leaves more of them in it |
 | VARKA-280 (6.1 #5) | the opt-in steering A/B under 10 s at one seed pair, 1800 emissions | 13.2 and 12.8 s in a fresh JVM alone | 1.3 | about 7 ms an emission with the emitter cold; the estimate took two |
 
 What the table says so far: a check that adds a run per batch or a read per call costs more than

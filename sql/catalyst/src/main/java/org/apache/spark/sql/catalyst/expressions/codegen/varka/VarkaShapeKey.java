@@ -67,7 +67,7 @@ public record VarkaShapeKey(
   public VarkaShapeKey {
     outputs = List.copyOf(outputs);
     if (options == null) {
-      throw new IllegalArgumentException("options must not be null");
+      throw VarkaErrors.illegalArgument("options must not be null");
     }
   }
 

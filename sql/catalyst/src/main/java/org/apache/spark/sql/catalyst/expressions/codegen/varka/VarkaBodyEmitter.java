@@ -197,7 +197,7 @@ final class VarkaBodyEmitter {
     boolean perGroup = analysis.options.methodByteBudget() > 0;
     List<Integer> bodyOutputs = group >= 0 ? groups.get(group) : allOutputs(outputs);
     if (perGroup && group < 0) {
-      throw new IllegalArgumentException(
+      throw VarkaErrors.illegalArgument(
           "a " + mode + " body under the byte budget is one group's");
     }
     Slots s = Slots.plan(dense, mode, outputs, bodyOutputs, analysis, numLiterals, perGroup,
@@ -223,7 +223,7 @@ final class VarkaBodyEmitter {
     switch (mode) {
       case LOOP -> emitVectorLoop(cb, dense, outputs, bodyOutputs, analysis, s);
       case EPILOGUE -> emitEpilogue(cb, dense, outputs, bodyOutputs, analysis, s);
-      case DRIVER -> throw new IllegalArgumentException("the driver is emitDriver's, not a body's");
+      case DRIVER -> throw VarkaErrors.illegalArgument("the driver is emitDriver's, not a body's");
     }
     assertWordsLive(s, mode);
     emitStatusReturn(cb, s);
@@ -1330,14 +1330,14 @@ final class VarkaBodyEmitter {
   private static void assertWordsLive(Slots s, BodyMode mode) {
     for (int ref : s.wordDefs) {
       if (!s.wordUses.containsKey(ref)) {
-        throw new IllegalStateException("word slot " + ref + " is stored but never loaded in a "
+        throw VarkaErrors.illegalState("word slot " + ref + " is stored but never loaded in a "
             + mode + " body: a consumer the liveness inventory lists is not emitted, or the "
             + "word is dead and should not have been computed");
       }
     }
     for (int ref : s.wordUses.keySet()) {
       if (!s.wordDefs.contains(ref)) {
-        throw new IllegalStateException("word slot " + ref + " is loaded but never stored in a "
+        throw VarkaErrors.illegalState("word slot " + ref + " is loaded but never stored in a "
             + mode + " body: a consumer the liveness inventory missed");
       }
     }

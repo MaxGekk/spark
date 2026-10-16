@@ -1,0 +1,74 @@
+# Redefine once: at 60 s the agent redefines every loaded non-hidden jdk.incubator.vector class with its own bytes
+# Extracted from each run's run.log, load.before, load.after, seconds and exit (VARKA-370 9.3).
+# Head 7cc402b8f34, JDK 25.0.4.1, taskset -c 0-2, one JVM at a time; template warm-up off.
+
+== run redef1: run.sh <out> redef1 redefine -Dr370.once=true -Dr370.firstMs=60000
+exit 0, seconds 323
+load before: 11:31:42 up 12:02,  1 user,  load average: 37.78, 43.13, 38.03
+load after:  11:37:05 up 12:07,  1 user,  load average: 29.61, 36.64, 36.85
+Tests: succeeded 1, failed 0, canceled 0, ignored 0, pending 0
++ warm-up verdicts: COMPILED 533, RELEASED 1, of the releases 0 before the deadline 
+deadline releases at iterations: 312 
+R370 mode=redefine period=30000 agent=return code: 0 inst=true
+R370 t=60s classes=117 methods=6568 before traps=103 class_check=23 bimorphic=8 decompiles=33 methodsWithTraps=22 redefined 117 in 345 ms | after traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+R370 t=90s classes=141 methods=7459 before traps=106 class_check=25 bimorphic=7 decompiles=39 methodsWithTraps=26 in 0 ms
+R370 t=120s classes=189 methods=9667 before traps=112 class_check=25 bimorphic=7 decompiles=43 methodsWithTraps=28 in 0 ms
+R370 t=150s classes=189 methods=9667 before traps=115 class_check=25 bimorphic=7 decompiles=45 methodsWithTraps=28 in 0 ms
+R370 t=180s classes=189 methods=9667 before traps=116 class_check=25 bimorphic=7 decompiles=46 methodsWithTraps=28 in 0 ms
+R370 t=210s classes=189 methods=9667 before traps=116 class_check=25 bimorphic=7 decompiles=46 methodsWithTraps=28 in 0 ms
+R370 t=240s classes=189 methods=9667 before traps=116 class_check=25 bimorphic=7 decompiles=46 methodsWithTraps=28 in 0 ms
+R370 t=270s classes=189 methods=9667 before traps=116 class_check=25 bimorphic=7 decompiles=46 methodsWithTraps=28 in 0 ms
+R370 t=300s classes=189 methods=9667 before traps=116 class_check=25 bimorphic=7 decompiles=46 methodsWithTraps=28 in 0 ms
+
+== run redef2: run.sh <out> redef2 redefine -Dr370.once=true -Dr370.firstMs=60000
+exit 0, seconds 186
+load before: 11:58:03 up 12:28,  1 user,  load average: 12.05, 14.88, 21.83
+load after:  12:01:09 up 12:32,  1 user,  load average: 9.38, 12.49, 19.66
+Tests: succeeded 1, failed 0, canceled 0, ignored 0, pending 0
++ warm-up verdicts: COMPILED 534, of the releases 0 before the deadline 
+deadline releases at iterations: 
+R370 mode=redefine period=30000 agent=return code: 0 inst=true
+R370 t=60s classes=117 methods=6568 before traps=110 class_check=18 bimorphic=5 decompiles=34 methodsWithTraps=23 redefined 117 in 124 ms | after traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+R370 trapped at t=2: LongVector.lanewiseTemplate=cc4/d0 VectorMask.fromLong=cc4/d1 VectorMask.lambda$fromLong$0=cc5/d3 AbstractSpecies.indexInRange=cc4/d3 AbstractSpecies.opm=cc4/d1 IntVector.ldLongOp=cc0/d3
+R370 t=90s classes=141 methods=7459 before traps=83 class_check=21 bimorphic=4 decompiles=28 methodsWithTraps=25 in 0 ms
+R370 t=120s classes=189 methods=9667 before traps=88 class_check=25 bimorphic=4 decompiles=30 methodsWithTraps=26 in 0 ms
+R370 t=150s classes=189 methods=9667 before traps=88 class_check=25 bimorphic=4 decompiles=30 methodsWithTraps=26 in 0 ms
+R370 t=180s classes=189 methods=9667 before traps=88 class_check=25 bimorphic=4 decompiles=30 methodsWithTraps=26 in 0 ms
+
+== run l4redef: run.sh <out> l4redef redefine -Dr370.once=true -Dr370.firstMs=60000 -Dvarka.matrix.config=lanesOverride=4 (ITER=100)
+exit 0, seconds 319
+load before: 12:43:58 up 13:14,  1 user,  load average: 25.50, 28.44, 32.03
+load after:  12:49:17 up 13:20,  1 user,  load average: 35.57, 33.77, 33.36
+Tests: succeeded 1, failed 0, canceled 0, ignored 0, pending 0
++ warm-up verdicts: COMPILED 125, RELEASED 17, of the releases 0 before the deadline 
+deadline releases at iterations: 9 18 23 33 53 65 68 72 75 79 80 82 83 90 95 97 98 
+R370 mode=redefine period=30000 agent=return code: 0 inst=true
+R370 t=60s classes=115 methods=6566 before traps=186 class_check=53 bimorphic=36 decompiles=62 methodsWithTraps=38 redefined 115 in 409 ms | after traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+R370 trapped at t=2: LongSpecies.dummyVector=cc7/d1 AbstractMask.vectorSpecies=cc4/d1 VectorMask.fromLong=cc4/d2 VectorMask.lambda$fromLong$0=cc4/d3 IntSpecies.broadcastBits=cc4/d1 IntSpecies.dummyVector=cc8/d0 IntVector.fromMemorySegment=cc4/d2 IntVector.lambda$compareTemplate$0=cc0/d3 IntVector.lambda$binaryOperations$0=cc4/d0 IntVector.compareTemplate=cc4/d1 IntVector.intoMemorySegment0=cc2/d0 IntVector.intoMemorySegment=cc4/d2 IntVector.bTest=cc0/d3
+R370 t=90s classes=141 methods=7459 before traps=143 class_check=49 bimorphic=27 decompiles=39 methodsWithTraps=35 in 0 ms
+R370 t=120s classes=189 methods=9667 before traps=160 class_check=53 bimorphic=27 decompiles=45 methodsWithTraps=41 in 0 ms
+R370 t=150s classes=189 methods=9667 before traps=173 class_check=58 bimorphic=27 decompiles=48 methodsWithTraps=42 in 0 ms
+R370 t=180s classes=189 methods=9667 before traps=174 class_check=58 bimorphic=27 decompiles=49 methodsWithTraps=42 in 0 ms
+R370 trapped at t=6: LongSpecies.dummyVector=cc7/d1 LongVector.lambda$binaryOperations$4=cc4/d0 AbstractMask.vectorSpecies=cc4/d1 VectorMask.fromLong=cc4/d2 VectorMask.lambda$fromLong$0=cc4/d3 IntSpecies.broadcastBits=cc5/d1 IntSpecies.dummyVector=cc8/d0 AbstractSpecies.indexInRange=cc0/d3 IntVector.fromArray=cc4/d0 IntVector.fromMemorySegment=cc4/d3 IntVector.fromMemorySegment0Template=cc4/d0 IntVector.lambda$compareTemplate$0=cc0/d4 IntVector.lambda$binaryOperations$0=cc4/d0 IntVector.compareTemplate=cc4/d3 IntVector.intoMemorySegment0=cc2/d0 IntVector.intoMemorySegment=cc4/d2 IntVector.intoMemorySegment=cc4/d2 IntVector.bTest=cc0/d4
+R370 t=210s classes=189 methods=9667 before traps=237 class_check=66 bimorphic=55 decompiles=59 methodsWithTraps=52 in 0 ms
+R370 t=240s classes=189 methods=9667 before traps=237 class_check=66 bimorphic=55 decompiles=59 methodsWithTraps=52 in 0 ms
+R370 t=270s classes=189 methods=9667 before traps=237 class_check=66 bimorphic=55 decompiles=59 methodsWithTraps=52 in 0 ms
+R370 t=300s classes=189 methods=9667 before traps=237 class_check=66 bimorphic=55 decompiles=59 methodsWithTraps=52 in 0 ms
+
+== run l4redef2: run.sh <out> l4redef2 redefine -Dr370.once=true -Dr370.firstMs=60000 -Dvarka.matrix.config=lanesOverride=4 (ITER=100)
+exit 0, seconds 260
+load before: 12:49:34 up 13:20,  1 user,  load average: 35.83, 33.91, 33.41
+load after:  12:53:54 up 13:24,  1 user,  load average: 17.61, 23.94, 29.33
+Tests: succeeded 1, failed 0, canceled 0, ignored 0, pending 0
++ warm-up verdicts: COMPILED 126, RELEASED 16, of the releases 0 before the deadline 
+deadline releases at iterations: 18 33 53 65 68 72 75 79 80 82 83 90 92 95 97 98 
+R370 mode=redefine period=30000 agent=return code: 0 inst=true
+R370 t=60s classes=117 methods=6568 before traps=185 class_check=47 bimorphic=34 decompiles=52 methodsWithTraps=35 redefined 117 in 137 ms | after traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+R370 trapped at t=2: LongSpecies.dummyVector=cc6/d0 LongVector.fromArray0Template=cc4/d0 LongVector.lambda$binaryOperations$4=cc4/d0 VectorMask.fromArray=cc5/d0 VectorMask.fromLong=cc6/d3 VectorMask.lambda$fromLong$0=cc4/d3 IntSpecies.dummyVector=cc10/d1 IntSpecies.broadcastBits=cc5/d1 AbstractSpecies.maskFactory=cc4/d2 AbstractSpecies.indexInRange=cc4/d2 AbstractSpecies.opm=cc4/d2 IntVector.maskFactory=cc4/d1 IntVector.bOpTemplate=cc4/d1 IntVector.intoMemorySegment0=cc4/d1 IntVector.intoMemorySegment=cc4/d2 IntVector.bTest=cc4/d3 IntVector.lanewiseShiftTemplate=cc4/d0 IntVector.fromMemorySegment=cc4/d4 IntVector.fromMemorySegment0Template=cc4/d0 IntVector.lambda$compareTemplate$0=cc0/d4
+R370 t=90s classes=141 methods=7459 before traps=182 class_check=88 bimorphic=13 decompiles=49 methodsWithTraps=38 in 0 ms
+R370 t=120s classes=189 methods=9667 before traps=184 class_check=88 bimorphic=13 decompiles=51 methodsWithTraps=40 in 0 ms
+R370 t=150s classes=189 methods=9667 before traps=184 class_check=88 bimorphic=13 decompiles=51 methodsWithTraps=40 in 0 ms
+R370 t=180s classes=189 methods=9667 before traps=243 class_check=97 bimorphic=46 decompiles=68 methodsWithTraps=49 in 0 ms
+R370 trapped at t=6: LongSpecies.dummyVector=cc6/d0 LongVector.fromArray0Template=cc4/d0 LongVector.lambda$binaryOperations$4=cc4/d0 VectorMask.fromArray=cc5/d0 VectorMask.fromLong=cc6/d3 VectorMask.lambda$fromLong$0=cc4/d3 IntSpecies.dummyVector=cc10/d1 IntSpecies.broadcastBits=cc5/d1 AbstractSpecies.maskFactory=cc4/d2 AbstractSpecies.indexInRange=cc4/d3 AbstractSpecies.opm=cc4/d2 IntVector.fromArray=cc5/d0 IntVector.maskFactory=cc4/d2 IntVector.bOpTemplate=cc4/d2 IntVector.intoMemorySegment0=cc4/d1 IntVector.intoMemorySegment=cc4/d2 IntVector.intoMemorySegment=cc4/d2 IntVector.bTest=cc4/d3 IntVector.lanewiseShiftTemplate=cc4/d0 IntVector.fromMemorySegment=cc4/d4 IntVector.fromMemorySegment0Template=cc4/d0 IntVector.lambda$compareTemplate$0=cc0/d6
+R370 t=210s classes=189 methods=9667 before traps=243 class_check=97 bimorphic=46 decompiles=68 methodsWithTraps=49 in 0 ms
+R370 t=240s classes=189 methods=9667 before traps=243 class_check=97 bimorphic=46 decompiles=68 methodsWithTraps=49 in 0 ms

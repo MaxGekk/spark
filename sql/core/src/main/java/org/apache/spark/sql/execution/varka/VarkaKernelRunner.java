@@ -31,6 +31,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.IntRangeOps;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.TruncLevelLeaf;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaAllocationSampler;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDerivedKind;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFusedKernel;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmth;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemorySanitizer;
@@ -192,7 +193,7 @@ public final class VarkaKernelRunner {
       if (kind == null) {
         var v = (BaseFixedWidthVector) acv.getValueVector();
         if (len != v.getValueCount()) {
-          throw new IllegalArgumentException("requirement failed: rowCount " + len
+          throw VarkaErrors.illegalArgument("requirement failed: rowCount " + len
               + " does not match the vector value count " + v.getValueCount());
         }
         int nullCount = v.getNullCount();
@@ -362,12 +363,12 @@ public final class VarkaKernelRunner {
         if (e instanceof VarkaMemoryViolation || !isCatchable(e)) {
           throw e;
         }
-        throw new IllegalStateException(shapeHash + "'s " + (dense ? "masked" : "dense")
+        throw VarkaErrors.illegalState(shapeHash + "'s " + (dense ? "masked" : "dense")
             + " body threw on a batch its other body served (VARKA-303)", e);
       }
       if (status != 0) {
         if (dense) {
-          throw new IllegalStateException(shapeHash + "'s masked body declined a null-free batch "
+          throw VarkaErrors.illegalState(shapeHash + "'s masked body declined a null-free batch "
               + "its dense body served, status " + status + " (VARKA-303)");
         }
         return;
@@ -400,7 +401,7 @@ public final class VarkaKernelRunner {
         boolean same = bit == bit(otherBits, r) && (served == null || !bit
             || served.asSlice((long) r * w, w).mismatch(other.asSlice((long) r * w, w)) < 0);
         if (!same) {
-          throw new IllegalStateException(shapeHash + "'s dense and masked bodies disagree on "
+          throw VarkaErrors.illegalState(shapeHash + "'s dense and masked bodies disagree on "
               + "output " + o + " at row " + r + " of a " + (dense ? "null-free" : "nullable")
               + " batch of " + len + " (VARKA-303)");
         }

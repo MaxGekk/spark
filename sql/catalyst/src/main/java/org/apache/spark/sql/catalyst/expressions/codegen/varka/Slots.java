@@ -334,7 +334,7 @@ final class Slots {
   /** The epilogue's bounds mask local; see {@link #epilogueReadsMask}. */
   int epilogueMask() {
     if (epilogueMask == null) {
-      throw new IllegalStateException(
+      throw VarkaErrors.illegalState(
           "the epilogue's mask is read but not built: Slots.epilogueReadsMask missed a reader");
     }
     return epilogueMask;
@@ -343,7 +343,7 @@ final class Slots {
   /** Input {@code i}'s data segment local; see the value columns in {@link #plan}. */
   int srcSeg(int i) {
     if (srcSeg[i] < 0) {
-      throw new IllegalStateException("input " + i + "'s data segment is read but not built: "
+      throw VarkaErrors.illegalState("input " + i + "'s data segment is read but not built: "
           + "Slots.plan's value columns missed a reader");
     }
     return srcSeg[i];
@@ -352,7 +352,7 @@ final class Slots {
   /** Output {@code o}'s validity segment local; see {@code buildsValiditySegment}. */
   int dstValSeg(int o) {
     if (dstValSeg[o] < 0) {
-      throw new IllegalStateException("output " + o + "'s validity segment is read but not "
+      throw VarkaErrors.illegalState("output " + o + "'s validity segment is read but not "
           + "built: VarkaBodyEmitter.buildsValiditySegment missed a writer");
     }
     return dstValSeg[o];
@@ -888,7 +888,7 @@ final class Slots {
       }
     };
     if (problem != null) {
-      throw new IllegalStateException("validity-word algebra disagrees with planWordRef on "
+      throw VarkaErrors.illegalState("validity-word algebra disagrees with planWordRef on "
           + VarkaVectorIR.canonical(node) + ": " + problem + " (pure=" + pure + ", owner="
           + owner + ")");
     }
