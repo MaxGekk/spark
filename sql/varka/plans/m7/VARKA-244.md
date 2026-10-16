@@ -182,3 +182,58 @@ None: documents and a test.
 2. The suite.
 3. DELTAS.md, EXTENSIONS.md, STANDARD.md's pointers, the register.
 4. Section 9 and the row's outcome.
+
+## 9. Outcome
+
+Written on 16 October 2026.
+
+**What was built.** `sql/varka/proofs/spec/DELTAS.md`: eleven named deltas, each a patch to the
+`STANDARD.md` definitions it names, with its modes, the patched definition over the lane values,
+its test and what it means for standard mode; then the four groups checked and found not to be
+deltas, and one departure found and not named (a time literal's precision). `EXTENSIONS.md`: the
+27 operations of `STANDARD.md` 5 plus `second(t)` and `hour`/`minute`, each marked - four the
+standard's by reduction (`date_add`, `date_sub`, `datediff`, and the HOUR and MINUTE extracts the
+coverage table spells as functions), five ISO 8601's (the ISO day of the week, week, week-year,
+ordinal day, and the week start `trunc(d, 'WEEK')` takes), the rest Spark's - and defined.
+`STANDARD.md`'s "Spark." lines name their delta, 4.11's is corrected, and sections 1 and 5 point at
+the two new files. `SCOPE_STANDARD_MODE.md` 3.1 to 3.3 carry their delta's name, and entry 3.7
+records the standard's date range as a bound with no measured saving: Varka's calendar guard
+already assumes a range about five times as wide. `VarkaStandardDeltasSuite`, 16 tests: one per
+delta, four for the non-deltas, one for the ISO 8601 marks; seven of them also run their query on
+`varkaSpark`, assert it fused and get Spark's answer, and three assert that Varka raises Spark's
+error.
+
+**Where the plan was wrong, or the run said more.**
+
+* **A DataFrame's row encoder reads the active session's settings, and `VarkaSharedSessions`
+  leaves none active.** Setting `spark.sql.datetime.java8API.enabled` on `spark` and `varkaSpark`,
+  first once in `beforeAll` and then around each comparison with `withBothConf`, still collected
+  `java.sql.Date`, which prints year 10000 as `0000` and year 0 as `0001` through the hybrid
+  calendar; five tests failed on equal-looking rows. The suite now makes the queried session
+  active around each comparison (`onSession`). The lesson belongs in
+  `skills/testing-and-debugging.md`; that file is not this row's to edit (the brief's file list),
+  so it is owed to whoever next touches it.
+* **The non-ANSI queries fuse**: `i + 1` and `-i` give the wrapped values from a fused plan, and
+  `make_date(2021, i, 1)` its nulls; the plan had not known whether they would. The suite asserts
+  the plan fused, not that a kernel served the batch, as 5 says.
+* `hour(t)` and `minute(t)` were in neither of `STANDARD.md`'s lists by name: 4.11 maps them to
+  `EXTRACT`, so `EXTENSIONS.md` 1 lists them as the standard's by reduction rather than leave a
+  coverage row unmarked.
+
+**The prediction, scored.** *The suite under 40 s with its sessions, its tests under 10 s.* Held:
+25 s for the suite, 8.4 s for its 16 tests, on cores 12 to 23 beside other agents' jobs. Its line
+for the calibration table in `skills/testing-and-debugging.md` - "VARKA-244 (5.1 #1) | a new
+sql/core suite under 40 s, its tests under 10 s | 25 s, its tests 8.4 s | 0.6 | predicted at the
+ratio of VARKA-243's line, which this suite's shape repeats" - is owed with the lesson above, for
+the same reason.
+
+**What this leaves.**
+
+* Row 245 writes the patched definitions as SMT-LIB: a delta here is stated so that "Spark mode" is
+  "standard definition, then patch", and `overflow_wraps`, `clamp_to_month_end`,
+  `proleptic_range` and `day_count_wraps` are the four a Spark-mode proof of the coverage rows
+  needs.
+* Row 276's oracle needs no delta list: it found no disagreement between the reference evaluator
+  and Spark, and every delta here is Spark's own behaviour, which the reference already follows.
+* ISO 8601's clauses, quoted, join `STANDARD.md` 6's owed list in spirit: `EXTENSIONS.md` cites the
+  week date's rules without its text.
