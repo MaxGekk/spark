@@ -221,7 +221,12 @@ JVMs on 3 cores here, where 9.8 saw 0 in 2,000 compositions on each of five seed
 core count is the difference visible between the runs, not a shown cause. The post's "none"
 sentences quote 9.8 and are unchanged; Figure 3 shows the release and its caption names it. The
 defaults arm's 46 is above 9.6's 10 to 39 and the earlier run's 29. Whether the stock release
-becomes a row is the owner's decision; it is outside this task. The 100-replay run was not
+becomes a row is the owner's decision; it is outside this task. Logs: the committed run's release
+in `target/varka-demo/trap_sums/stock-1/run.log` of the `varka-371-fixes` worktree, the two
+extra JVMs in `.../scratchpad/stock400-2/` and `stock400-3/` (`replay()`'s java line with
+`-Dvarka.sparkfuzz.warmupIterations=400` and no other option, cores 6 to 8, one after the other).
+Figure 1 is unaffected by the new quote: it reads 9.6's log and labels the limit and the parse
+position where the sum passes it, not the sum at the compile's end. The 100-replay run was not
 repeated: its counting did not change, and it takes 2 hours 40 minutes. `--keep` released at the
 first try, so the log-on defaults arm now stands at 7 of 7.
 
