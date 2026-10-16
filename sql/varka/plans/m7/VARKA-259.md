@@ -274,3 +274,10 @@ not.
   about 8 at 64.
 * Wall clock about two minutes: **not scored**; the results file does not carry it, and the job
   log was not read.
+
+### 9.3 Published, 16 October 2026
+
+The post went live on 16 October 2026 at https://vecbricks.github.io/the-class-got-cheaper/,
+built from the merged Markdown with `dev/varka_post_page.py`. Row 258's post was not yet published,
+so the page says a companion post follows; the link is added when 258 goes live, and the
+repository text already carries it (#867).
