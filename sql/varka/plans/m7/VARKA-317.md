@@ -161,4 +161,55 @@ None: a test-strength change with no performance claim. The cost is the suites' 
 
 ## 9. Outcome
 
-<!-- Filled in when the suites have run. -->
+Built as planned, on 16 October 2026, in one commit after the plan's.
+
+**What landed.** `VarkaMaybeThrows.scala`: the outcome (`Answered`, `Raised` with condition,
+SQLSTATE, parameters, message and exception class), `run`, `difference`, and the trait's
+`checkSparkAnswerMaybeThrows(query)` and `checkSparkRaisesTheSame[T](query)` - the latter the
+form a double `intercept[T]` becomes, which also holds the shared error to the class `T`.
+`VarkaCoverageDifferentialSuite`'s private outcome is gone; its ANSI form, domain check and
+`date_add` test run through the shared one. Ten sites converted rather than the nine 2 counted:
+`VarkaDifferentialSuite`'s checked-add test under a CASE arm (`a guard under a CASE arm condemns
+from the taken arm only`) asked each engine to raise in a loop and compared nothing, and now
+compares the two errors. No test title moved.
+
+**The runs** (pinned to cores 12 to 23):
+
+* The three suites together under the defaults: 336 tests, none failed. The new test, `the ANSI
+  form fails a kernel planted to answer an overflowing row`, took 126 ms; the extended
+  planted-outcome test 182 ms. The planted kernel served the whole query and answered the wrapped
+  `Int.MinValue`, and the check failed it with "only Spark raises" naming `ARITHMETIC_OVERFLOW`.
+* `dev/varka_matrix.sh --module sql --suites VarkaCoverageDifferentialSuite,
+  VarkaDifferentialSuite,VarkaTimeArithmeticSuite --config checkIntOverflow=false -j 2`: the
+  defaults 336 passed; the configuration 322 passed and 14 cancelled, exactly the 14 skip lines
+  of those suites under that configuration, each still failing as listed (none stale). The
+  planted test passed under both.
+
+**6.1 scored.**
+
+1. *At most ten seconds added to the coverage differential*: the one new test takes 126 ms and
+   the conversion adds no query (the ANSI form ran the same two per position before). Right in
+   direction, pessimistic by far; the estimate priced a kernel compile the cache key makes
+   cheap. Ratio about one in eighty; the line is owed to the calibration table in
+   `skills/testing-and-debugging.md`, a file outside this task's brief.
+2. *The converted tests pass with message and class compared*: held, and the coverage suite's
+   positions and domains, which compared neither before, pass with both (risk 2 did not occur).
+3. *Under `checkIntOverflow=false` the planted test passes and lines 22 to 24 still fail*: held.
+
+**The self-review** of the diff found three things, fixed before the commit: scalastyle's
+`Class.forName` rule (now `Utils.classForName`) and its import order; and that
+`checkSparkRaisesTheSame` called without its type argument infers `Nothing`, whose class
+`scala.runtime.Nothing$` is a `Throwable`, so the class check would fail confusingly - it now
+asserts that `T` was named. The suites' targeted tests reran green after each fix.
+
+**Left for later.**
+
+* The fuzzer family keeps its own outcome (`VarkaSparkFuzz.Outcome`, the condition alone, keyed
+  by the expected-errors list of VARKA-319). Moving it onto `VarkaMaybeThrows.Raised` would
+  compare SQLSTATE, parameters and message in the random differential too, and needs the
+  expected-errors lookup to read `Raised.condition`; it is row 298's files, so it waits for a
+  task that owns them.
+* The plant reaches the int lane's checked add only. A long-lane plant (`checkIntOverflow` also
+  governs the long lane's checked arithmetic, skips.tsv line 16) and a calendar-guard plant
+  (`guardDayProducers=false`) would hold the check to the other families the ANSI form covers;
+  the matrix's configurations already run them weekly.
