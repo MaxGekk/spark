@@ -115,7 +115,8 @@ public record VarkaReproduction(
     List<Integer> intLiterals,
     List<Long> longLiterals,
     @Nullable KernelCall call,
-    @Nullable byte[] classBytes) {
+    // An array on purpose, so equality is identity on it; see @param classBytes above.
+    @SuppressWarnings("ArrayRecordComponent") @Nullable byte[] classBytes) {
 
   private static final SparkLogger LOG = SparkLoggerFactory.getLogger(VarkaReproduction.class);
 
@@ -178,7 +179,11 @@ public record VarkaReproduction(
    *        nulls, or every row null) or the batch was left out
    */
   public record Input(int width, long dataCapacity, long validityCapacity, int nullCount,
-      boolean derived, @Nullable byte[] data, @Nullable byte[] validity) {}
+      boolean derived,
+      @SuppressWarnings("ArrayRecordComponent") // an array on purpose, as said above
+      @Nullable byte[] data,
+      @SuppressWarnings("ArrayRecordComponent") // an array on purpose, as said above
+      @Nullable byte[] validity) {}
 
   /**
    * The kernel call a failure happened in.
@@ -440,7 +445,7 @@ public record VarkaReproduction(
     return bytes == null ? "-" : Base64.getEncoder().encodeToString(bytes);
   }
 
-  private static byte[] bytes(String value) {
+  private static @Nullable byte[] bytes(String value) {
     return value.equals("-") ? null : Base64.getDecoder().decode(value);
   }
 
@@ -450,13 +455,13 @@ public record VarkaReproduction(
   /** A file's lines in order, comments and blank lines left out, read one key at a time. */
   private static final class Lines {
     private final Iterator<Line> it;
-    private Line peeked;
+    private @Nullable Line peeked;
 
     Lines(Iterator<Line> it) {
       this.it = it;
     }
 
-    Line peek() {
+    @Nullable Line peek() {
       if (peeked == null && it.hasNext()) {
         peeked = it.next();
       }
@@ -484,7 +489,7 @@ public record VarkaReproduction(
   /** A file's text, as {@link #render} writes it. */
   public static VarkaReproduction parse(String text) {
     var lines = new ArrayList<Line>();
-    var raw = text.split("\n");
+    var raw = text.split("\n", 0);
     if (raw.length == 0 || !raw[0].equals(HEADER)) {
       throw new IllegalArgumentException("not a Varka reproduction file of format " + FORMAT
           + "; its first line is " + (raw.length == 0 ? "missing" : raw[0]));
@@ -542,7 +547,7 @@ public record VarkaReproduction(
       var inputs = new ArrayList<Input>();
       while (reader.next("input")) {
         var fields = new HashMap<String, String>();
-        for (String kv : reader.take("input").split(" ")) {
+        for (String kv : reader.take("input").split(" ", 0)) {
           String[] pair = kv.split("=", 2);
           fields.put(pair[0], pair[1]);
         }
@@ -555,8 +560,9 @@ public record VarkaReproduction(
       call = new KernelCall(rows, scratch, widths, inputs, omitted, selection);
     }
     byte[] classBytes = bytes(reader.take("class"));
-    if (reader.peek() != null) {
-      throw new IllegalArgumentException("unexpected '" + reader.peek().key() + "' at the end");
+    Line extra = reader.peek();
+    if (extra != null) {
+      throw new IllegalArgumentException("unexpected '" + extra.key() + "' at the end");
     }
     return new VarkaReproduction(signature, stage, context.toString(), writtenAt, java, sanitizer,
         shapeHash, numInputs, numLiterals, warmed, options, outputs, ints, longs, call,
