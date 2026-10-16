@@ -295,5 +295,6 @@ nine hours late (2.2): the harm is a full-matrix run taking every slot, not two 
   `dev/varka_ci_times.py collect` from master's runs, the nightly fuzz and laptop gate
   directories; each completed Build check carries `compare`'s table, and `dev/varka_ci_times.py
   gate target/varka-gate` reads a laptop gate (or a nightly's dated directory) against it. A
-  marked step - more than 5% over the budget's 90th percentile - is a line in the pull request's
-  description, not a failure: one day's suites step ranged 2.8 times across runners.
+  marked step - more than 5% and at least 30 s over the budget's 90th percentile - is a line in
+  the pull request's description, not a failure: one day's suites step ranged 2.8 times across
+  runners.

@@ -165,6 +165,13 @@ jobs:
             const { execFileSync } = require('child_process')
             const marker = '<!-- varka-step-times -->'
             const stepTimes = (params) => {
+              // The run's coordinates come from the check's own text; only plain names and a
+              // numeric id reach the tool's API path.
+              if (!/^[A-Za-z0-9_.-]+$/.test(params.owner) || !/^[A-Za-z0-9_.-]+$/.test(params.repo)
+                  || !/^[0-9]+$/.test(String(params.run_id))) {
+                console.error('    step times skipped: unexpected run coordinates')
+                return ''
+              }
               try {
                 return execFileSync('python3', ['dev/varka_ci_times.py', 'compare',
                   '--repo', params.owner + '/' + params.repo, String(params.run_id), '--markdown'],

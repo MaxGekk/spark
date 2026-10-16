@@ -1228,3 +1228,9 @@ this tool's self-test too.
 to `actions/github-script` on the base's runner and the table lands in a completed check's
 summary; that the base's token reads a fork run's jobs for it (the sync already reads the run
 itself that way); and prediction 9, after ten pull requests that do not change test code.
+
+**The author's review** (16 October) found the skills section stating the mark as "more than 5%
+over the budget's 90th percentile" without the 30 s floor, now stated, and added a guard so that
+only a plain owner and repository name and a numeric run id from a check's text reach the tool's
+API path. The checkout in the sync is of the base's default branch with no credentials kept, and
+the tool is called with an argument list, never through a shell.
