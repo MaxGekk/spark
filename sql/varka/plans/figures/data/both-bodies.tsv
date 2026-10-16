@@ -1,0 +1,8 @@
+# The class table of sql/varka/coverage/generated.md at three commits, for fig47.py.
+# Read with: git show <commit>:sql/varka/coverage/generated.md
+# The first version has no "its only driver" column: its 213 one-driver classes are counted
+# under "only the dense one" or "only the masked one", so one_by_design is 0 there.
+commit	label	ran	both	one_by_design	only_dense	only_masked	neither
+6fa0c863a5f	first measured	2803	733	0	399	1607	64
+69302411f8f	every compared batch\nthrough both	2803	2029	213	177	320	64
+05169a63d19	end-to-end suites\ntoo (today)	2805	2427	213	83	18	64
