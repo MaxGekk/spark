@@ -67,10 +67,12 @@ import jdk.incubator.vector.*;
  * the true overflow point is ln(Double.MAX_VALUE) = 709.782712893384. The 15,338,860 doubles
  * in between have a finite exp near 1.7977e308 that the SLEEF lane reports as infinity. Its
  * pow tests the same constant against y * ln|x| (advsimd line 3420, sve line 3507), so
- * pow(Double.MAX_VALUE, 1.0) should come out infinite there too. expm1 uses the true constant
+ * pow(Double.MAX_VALUE, 1.0) is infinite there too. expm1 uses the true constant
  * (advsimd line 3805), so the band is exp's and pow's alone. The inputs are both ends of the
- * band, its middle and the double just outside each end. Read from the source, aarch64 should
- * give +Inf inside the band; on x86 the lanes come from SVML and are only recorded.
+ * band, its middle and the double just outside each end. On the Neoverse N2 runner, 16 October
+ * 2026, every EXP and POW lane inside the band was +Inf (mathlane-aarch64-neoverse-n2.txt).
+ * SVML on x86 uses the true limit: its EXP lanes, and its POW lanes at AVX-512, equal
+ * StrictMath across the band. At AVX2 SVML binds no POW, so those lanes are the fallback.
  *
  * The mask intrinsic. With the argument "fromlong" the probe instead runs a hot
  * VectorMask.fromLong loop and nothing else, meant to be run under
@@ -79,7 +81,9 @@ import jdk.incubator.vector.*;
  * "** not supported: arity=0 op=broadcast ... ismask=1" when it refuses. On aarch64 the
  * node needs SVE's bit-permute extension (hotspot/cpu/aarch64/aarch64_vector.ad lines
  * 217-218 check supports_svebitperm), which the "svebitperm" entry in the CPU feature line
- * reports.
+ * reports. Only the fromBitsCoerced call at bci 39 is fromLong's own; the ones at bci 25 are
+ * maskAll's broadcasts inside the Java fallback. A "missing constant" refusal at bci 39 means
+ * the species was not a constant in that compile, not that the hardware lacks the node.
  */
 public class MathLaneProbe {
   static final VectorSpecies<Double> S = DoubleVector.SPECIES_PREFERRED;
@@ -249,8 +253,11 @@ public class MathLaneProbe {
    * runs in the interpreter or C1, where the operator takes the per-lane scalar fallback and
    * agrees with Math by construction. Over n elements the loop migrates into the C2 code
    * long before the end, so the last tile is read. The witnesses check that it did: the
-   * fallback calls Math and so agrees with it on every lane, while on every host measured so
-   * far the library differs from Math on about one ordinary input in twenty or more.
+   * fallback calls Math and so agrees with it on every lane, while the library differs from
+   * Math on some ordinary inputs: about one in ten for SLEEF on NEON, one in twenty for SVML at
+   * AVX-512, but only one in two hundred for SVML's EXP at AVX2, where a zero count is weak
+   * evidence. An operator with no library symbol (POW at AVX2, TANH on NEON) is always the
+   * fallback, and its witnesses are always zero.
    */
   static double[] tiled(double[] in, double witness, double step, int n) {
     int period = (in.length + WITNESSES + L - 1) / L * L;
