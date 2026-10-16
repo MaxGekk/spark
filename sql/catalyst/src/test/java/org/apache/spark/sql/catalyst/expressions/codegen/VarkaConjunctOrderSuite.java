@@ -109,17 +109,17 @@ public final class VarkaConjunctOrderSuite {
   }
 
   /** {@code d < DATE '2021-06-01'}, a conjunct the compiler fuses. */
-  private Expression dBefore() {
+  private Expression beforeJune() {
     return new LessThan(d, lit(18779, DateType$.MODULE$));
   }
 
   /** {@code d > DATE '2021-02-01'}, another. */
-  private Expression dAfter() {
+  private Expression afterFebruary() {
     return new GreaterThan(d, lit(18659, DateType$.MODULE$));
   }
 
   /** {@code (l + 1) > 0} in {@code mode}: BIGINT arithmetic, which the compiler leaves residual. */
-  private Expression lPlusOne(Enumeration.Value mode) {
+  private Expression sumOfL(Enumeration.Value mode) {
     return new GreaterThan(new Add(l, lit(1L, LongType$.MODULE$), ctx(mode)),
         lit(0L, LongType$.MODULE$));
   }
@@ -129,12 +129,12 @@ public final class VarkaConjunctOrderSuite {
    * treats its null test as one it moves. A literal is not null-intolerant, so {@code l + 1} is
    * not.
    */
-  private Expression lPlusL2(Enumeration.Value mode) {
+  private Expression sumOfLAndL2(Enumeration.Value mode) {
     return new Add(l, l2, ctx(mode));
   }
 
   /** {@code (l2 + 1) > 0} in {@code mode}. */
-  private Expression l2PlusOne(Enumeration.Value mode) {
+  private Expression sumOfL2(Enumeration.Value mode) {
     return new GreaterThan(new Add(l2, lit(1L, LongType$.MODULE$), ctx(mode)),
         lit(0L, LongType$.MODULE$));
   }
@@ -154,9 +154,9 @@ public final class VarkaConjunctOrderSuite {
   void canRaise() {
     assertFalse(VarkaConjunctOrder.canRaise(new EqualTo(s, lit("x", StringType$.MODULE$))));
     assertFalse(VarkaConjunctOrder.canRaise(new IsNotNull(l)));
-    assertFalse(VarkaConjunctOrder.canRaise(dBefore()));
-    assertFalse(VarkaConjunctOrder.canRaise(lPlusOne(LEGACY)));
-    assertTrue(VarkaConjunctOrder.canRaise(lPlusOne(ANSI)));
+    assertFalse(VarkaConjunctOrder.canRaise(beforeJune()));
+    assertFalse(VarkaConjunctOrder.canRaise(sumOfL(LEGACY)));
+    assertTrue(VarkaConjunctOrder.canRaise(sumOfL(ANSI)));
   }
 
   @Test
@@ -192,11 +192,11 @@ public final class VarkaConjunctOrderSuite {
   void codegenOrder() {
     // isnotnull(d), isnotnull(l), (l + 1) > 0, d < ...: the null test of d moves to just before
     // the conjunct that reads d, behind the arithmetic, and the null test of l stays before it.
-    List<Expression> conjuncts = List.of(new IsNotNull(d), new IsNotNull(l), lPlusOne(ANSI),
-        dBefore());
+    List<Expression> conjuncts = List.of(new IsNotNull(d), new IsNotNull(l), sumOfL(ANSI),
+        beforeJune());
     assertEquals(steps(1, 2, 0, 3), VarkaConjunctOrder.codegenOrder(conjuncts));
     // A null test nothing reads goes to the end.
-    List<Expression> unread = List.of(new IsNotNull(i), lPlusOne(ANSI));
+    List<Expression> unread = List.of(new IsNotNull(i), sumOfL(ANSI));
     assertEquals(steps(1, 0), VarkaConjunctOrder.codegenOrder(unread));
   }
 
@@ -205,7 +205,7 @@ public final class VarkaConjunctOrderSuite {
       + "conjunct that reads it")
   void impliedNullCheck() {
     // isnotnull(l + l2) implies l is not null, so codegen checks l before coalesce(l, 0) >= 0.
-    List<Expression> conjuncts = List.of(new IsNotNull(lPlusL2(LEGACY)), coalesceL());
+    List<Expression> conjuncts = List.of(new IsNotNull(sumOfLAndL2(LEGACY)), coalesceL());
     var order = VarkaConjunctOrder.codegenOrder(conjuncts);
     assertEquals(3, order.size(), order.toString());
     assertTrue(order.get(0) instanceof VarkaConjunctOrder.NullCheck(var column)
@@ -237,7 +237,7 @@ public final class VarkaConjunctOrderSuite {
     // coalesce lets a null l2 through.
     Expression coalesce = new GreaterThanOrEqual(
         new Coalesce(seq(l2, lit(0L, LongType$.MODULE$))), lit(0L, LongType$.MODULE$));
-    List<Expression> conjuncts = List.of(coalesce, new IsNotNull(l2), lPlusOne(ANSI));
+    List<Expression> conjuncts = List.of(coalesce, new IsNotNull(l2), sumOfL(ANSI));
     assertEquals(List.of(0),
         List.copyOf(VarkaConjunctOrder.behindRaising(conjuncts, List.of(true, false, false))
             .keySet()));
@@ -245,7 +245,7 @@ public final class VarkaConjunctOrderSuite {
     assertTrue(VarkaConjunctOrder.behindRaising(conjuncts, List.of(true, true, false)).isEmpty());
     // A puller that is null when its column is drops the same rows itself: nothing moves.
     List<Expression> intolerant = List.of(new GreaterThan(l2, lit(0L, LongType$.MODULE$)),
-        new IsNotNull(l2), lPlusOne(ANSI));
+        new IsNotNull(l2), sumOfL(ANSI));
     assertTrue(VarkaConjunctOrder.behindRaising(intolerant, List.of(true, false, false))
         .isEmpty());
   }
@@ -257,8 +257,8 @@ public final class VarkaConjunctOrderSuite {
     // coalesce(l, 0) >= 0 (fused), (l2 + 1) > 0 (raising), isnotnull(l + l2) (residual): codegen
     // checks l before the coalesce, so a row whose l is null never reaches the sum. The residual
     // filter alone reads l in no conjunct before the sum, so it would not check it there.
-    List<Expression> conjuncts = List.of(coalesceL(), l2PlusOne(ANSI),
-        new IsNotNull(lPlusL2(LEGACY)));
+    List<Expression> conjuncts = List.of(coalesceL(), sumOfL2(ANSI),
+        new IsNotNull(sumOfLAndL2(LEGACY)));
     assertEquals(List.of(0),
         List.copyOf(VarkaConjunctOrder.behindRaising(conjuncts, List.of(true, false, false))
             .keySet()));
@@ -267,15 +267,15 @@ public final class VarkaConjunctOrderSuite {
   @Test
   @DisplayName("the fallback's condition is folded in codegen order")
   void inCodegenOrder() {
-    Expression folded = VarkaConjunctOrder.inCodegenOrder(and(new IsNotNull(d), lPlusOne(ANSI)));
-    assertTrue(folded.semanticEquals(and(lPlusOne(ANSI), new IsNotNull(d))), folded.toString());
+    Expression folded = VarkaConjunctOrder.inCodegenOrder(and(new IsNotNull(d), sumOfL(ANSI)));
+    assertTrue(folded.semanticEquals(and(sumOfL(ANSI), new IsNotNull(d))), folded.toString());
   }
 
   @Test
   @DisplayName("a residual conjunct that can raise demotes every fused conjunct Spark evaluates "
       + "after it, with the reason")
   void raisingFirst() {
-    Expression condition = and(lPlusOne(ANSI), dBefore());
+    Expression condition = and(sumOfL(ANSI), beforeJune());
     assertEquals(List.of(false, false), fused(condition));
     var spec = VarkaExpressionCompiler.explainPredicate(condition, output).get(1);
     assertTrue(spec.decline().orElseThrow().reason().contains(VarkaConjunctOrder.OUT_OF_ORDER),
@@ -287,14 +287,15 @@ public final class VarkaConjunctOrderSuite {
   @DisplayName("a fused conjunct written before the raising residual one stays fused, and the "
       + "one after it is demoted")
   void raisingBetween() {
-    assertEquals(List.of(true, false, false), fused(and(dAfter(), lPlusOne(ANSI), dBefore())));
+    assertEquals(List.of(true, false, false),
+        fused(and(afterFebruary(), sumOfL(ANSI), beforeJune())));
   }
 
   @Test
   @DisplayName("a null test written first is demoted when codegen evaluates it after the "
       + "raising conjunct")
   void nullTestAfterRaising() {
-    assertEquals(List.of(false, false), fused(and(new IsNotNull(d), lPlusOne(ANSI))));
+    assertEquals(List.of(false, false), fused(and(new IsNotNull(d), sumOfL(ANSI))));
   }
 
   @Test
@@ -302,7 +303,7 @@ public final class VarkaConjunctOrderSuite {
       + "arithmetic")
   void safeResidual() {
     assertEquals(List.of(false, true),
-        fused(and(new EqualTo(s, lit("x", StringType$.MODULE$)), dBefore())));
-    assertEquals(List.of(false, true), fused(and(lPlusOne(LEGACY), dBefore())));
+        fused(and(new EqualTo(s, lit("x", StringType$.MODULE$)), beforeJune())));
+    assertEquals(List.of(false, true), fused(and(sumOfL(LEGACY), beforeJune())));
   }
 }
