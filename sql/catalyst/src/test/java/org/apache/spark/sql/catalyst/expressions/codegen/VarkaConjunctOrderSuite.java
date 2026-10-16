@@ -212,7 +212,7 @@ public final class VarkaConjunctOrderSuite {
     Expression condition = and(lPlusOne(ANSI), dBefore());
     assertEquals(List.of(false, false), fused(condition));
     var spec = VarkaExpressionCompiler.explainPredicate(condition, output).get(1);
-    assertTrue(spec.decline().orElseThrow().reason().contains("can raise an error"),
+    assertTrue(spec.decline().orElseThrow().reason().contains(VarkaConjunctOrder.OUT_OF_ORDER),
         spec.toString());
     assertTrue(VarkaExpressionCompiler.compilePredicate(condition, output).isEmpty());
   }

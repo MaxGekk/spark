@@ -38,6 +38,7 @@ import org.apache.spark.sql.catalyst.expressions.DateSub;
 import org.apache.spark.sql.catalyst.expressions.EndsWith;
 import org.apache.spark.sql.catalyst.expressions.EvalMode$;
 import org.apache.spark.sql.catalyst.expressions.Expression;
+import org.apache.spark.sql.catalyst.expressions.GetDateField;
 import org.apache.spark.sql.catalyst.expressions.If;
 import org.apache.spark.sql.catalyst.expressions.In;
 import org.apache.spark.sql.catalyst.expressions.InSet;
@@ -97,6 +98,12 @@ public final class VarkaConjunctOrder {
   }
 
   /**
+   * The phrase every reason of this rule carries: a demotion here is a decline of composition,
+   * caused by the other conjuncts, which a suite tells from a decline of the conjunct itself.
+   */
+  public static final String OUT_OF_ORDER = "out of Spark's order";
+
+  /**
    * The fused conjuncts to demote so that no fused conjunct changes which errors Spark's orders
    * raise, by index, each with the reason its spec reports. Empty when the split is safe. The
    * demotions are iterated here to their fixed point - a demoted conjunct that can raise moves
@@ -139,8 +146,9 @@ public final class VarkaConjunctOrder {
     for (int index : order) {
       if (raising != null && isFused[index]) {
         isFused[index] = false;
-        late.putIfAbsent(index, "Spark evaluates it after " + raising.sql()
-            + ", which can raise an error; fused, it would drop the rows that raise it");
+        late.putIfAbsent(index, "Spark evaluates it after " + raising.sql() + ", which can "
+            + "raise an error; fused, it would run " + OUT_OF_ORDER + " and drop the rows that "
+            + "raise it");
         changed = true;
       } else if (raising == null && !isFused[index] && raises[index]) {
         raising = conjuncts.get(index);
@@ -197,9 +205,9 @@ public final class VarkaConjunctOrder {
             if (isFused[f] && nullTested(conjuncts.get(f)) == null
                 && pulls(conjuncts.get(f), tested)) {
               isFused[f] = false;
-              late.putIfAbsent(f, "Spark evaluates " + conjuncts.get(c).sql() + " before "
-                  + conjuncts.get(r).sql() + ", which can raise an error, or after it, by where "
-                  + "this conjunct is; fused, it would leave the residual filter the other order");
+              late.putIfAbsent(f, "it decides whether Spark evaluates " + conjuncts.get(c).sql()
+                  + " before " + conjuncts.get(r).sql() + ", which can raise an error; fused, it "
+                  + "would leave the residual filter to run them " + OUT_OF_ORDER);
               changed = true;
             }
           }
@@ -212,7 +220,7 @@ public final class VarkaConjunctOrder {
       for (int f = 0; f < conjuncts.size(); f++) {
         if (isFused[f]) {
           isFused[f] = false;
-          late.putIfAbsent(f, "the residual filter would order its conjuncts unlike Spark");
+          late.putIfAbsent(f, "the residual filter would run its conjuncts " + OUT_OF_ORDER);
           changed = true;
         }
       }
@@ -361,6 +369,8 @@ public final class VarkaConjunctOrder {
       case If _, CaseWhen _, Coalesce _ -> true;
       case StartsWith _, EndsWith _, Contains _, Upper _, Lower _, Length _, Substring _ -> true;
       case IsNaN _, DateAdd _, DateSub _, DateDiff _ -> true;
+      // year(d), month(d) and the other fields of a date read a day count every date has.
+      case GetDateField _ -> true;
       // A pattern that does not parse raises, so only a constant one, which Spark checks when it
       // generates the code - before any row, on Varka's plan as on its own.
       case Like l -> l.right().foldable();

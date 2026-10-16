@@ -23,7 +23,7 @@ import scala.util.Random
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.{Alias, And, Attribute, AttributeReference, Expression, NamedExpression}
-import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, PartialVarkaProjection, VarkaExpressionCompiler}
+import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, PartialVarkaProjection, VarkaConjunctOrder, VarkaExpressionCompiler}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.{FusedOutput, KernelOutput}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaCompositionCase.Entry
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType
@@ -94,14 +94,16 @@ class VarkaCoverageCompositionFuzzSuite
   }
 
   /**
-   * The two reasons a composition may decline an entry that fuses alone: a size decline, whose
-   * reason names a budget, and the one-lane rule - a kernel holds one lane, so a projection
+   * The reasons a composition may decline an entry that fuses alone: a size decline, whose
+   * reason names a budget; the one-lane rule - a kernel holds one lane, so a projection
    * that mixes the int and the long lane fuses the first lane it meets and leaves the other,
-   * which `VARKA-29.md` pins and VARKA-28's width conversion is to lift. Any other reason on
-   * an admitted row is a finding.
+   * which `VARKA-29.md` pins and VARKA-28's width conversion is to lift; and, for a conjunct,
+   * the order rule of VARKA-380, which demotes one Spark evaluates after a residual conjunct
+   * that can raise. Any other reason on an admitted row is a finding.
    */
   private def isCompositionDecline(reason: String): Boolean =
-    reason.contains("budget") || reason.contains("one kernel holds one lane")
+    reason.contains("budget") || reason.contains("one kernel holds one lane") ||
+      reason.contains(VarkaConjunctOrder.OUT_OF_ORDER)
 
   /**
    * The finding of a failed check on a line of its own, and the case after it: the signature of a

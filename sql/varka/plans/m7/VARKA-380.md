@@ -47,8 +47,8 @@ Spark documents no order for a filter's conjuncts, and its code has two:
 * **Whole-stage codegen** (`FilterExec.generatePredicateCode`, `basicPhysicalOperators.scala`):
   the conjuncts that are not `IsNotNull` as written, each preceded by the `IsNotNull` tests of the
   columns it references (and of the null-intolerant expressions it contains), and the `IsNotNull`
-  tests nothing referenced at the end. The source's own note above that algorithm says it may revisit the
-  order and consider reordering predicates: the order is an implementation choice.
+  tests nothing referenced at the end. The source's own note above that algorithm says it may
+  revisit the order and consider reordering predicates: the order is an implementation choice.
 
 The optimizer adds to this: `InferFiltersFromConstraints` prepends inferred conjuncts, which is
 how reproducer 291's `(l2 + 12) = 5000000000` comes to be first, and `NullDownPropagation`
@@ -176,8 +176,9 @@ those of the merge base. The pair on GitHub runners is given in 9 for the owner 
    show it as a disagreement; each listed node is a comparison, a null test or a choice, plus
    arithmetic and casts guarded by mode and type.
 2. Spark's codegen order changes upstream: the port in `VarkaConjunctOrder.codegenOrder` would
-   drift silently. The rule also holds the written order, so a drift can only lose the cases where
-   the two differ, which are the `IsNotNull` ones; the differential test's `IsNotNull` case shows it.
+   drift silently. The rule also holds the written order, so a drift can only lose the cases
+   where the two differ, which are the `IsNotNull` ones; the differential test's `IsNotNull` case
+   shows it.
 3. Fusion lost in real queries under ANSI: a leading BIGINT arithmetic conjunct now demotes every
    fused conjunct after it. That is the correct cost; alternative 2 of 3.3 is how to win it back.
 
@@ -186,3 +187,121 @@ those of the merge base. The pair on GitHub runners is given in 9 for the owner 
 1. This plan with the admission check.
 2. The rule and its tests, the five reproducers made regressions, the nightly switch removed; the
    census and 9.
+
+## 9. Outcome
+
+Done on 16 October 2026 on branch `varka-380`, based on `varka-298` (PR #871).
+
+**What was built.** `VarkaConjunctOrder` (3.2) and its call in `VarkaExpressionCompiler.predicate`;
+the five reproducers marked `status: regression` with a note naming this row; the `sparkfuzz`
+step of `dev/varka_nightly.sh` without `-Dvarka.sparkfuzz.nested=false`; `VarkaConjunctOrderSuite`
+(ten tests) and one test in `VarkaDifferentialSuite`; a lesson in `skills/emitter-and-ir.md`.
+
+*Corrections to 1-8, from the review of the diff* (`/code-review high` on the branch, nine
+findings, all taken, one in a smaller form; a section 9 that did not yet exist was one of them).
+
+1. **3.4 was wrong about the fallback: it is changed.** The per-row fallback of both filter nodes
+   evaluated the condition as written, so where a *fused* conjunct raises and the kernel declines
+   the batch, an `isnotnull(d2)` written first dropped a row whole-stage codegen raises on.
+   Checked, not assumed: `d2 IS NOT NULL AND make_date(2021, i, 1) < d` with ANSI on, over a row
+   whose `d2` is null and whose `i` is 13, raised `DATETIME_FIELD_OUT_OF_BOUNDS` on Spark and
+   answered on Varka before the change. It predates this row (row 273's fallback has the same
+   order), but the order rule of 3.2 would otherwise hold a split to codegen's order and its own
+   fallback to the other. `VarkaFilterExecBase.fallbackCondition` now folds the condition in
+   codegen order (`VarkaConjunctOrder.inCodegenOrder`) when the session runs whole-stage codegen,
+   and as written when it does not; the differential test has the case. This touches
+   `VarkaFilterExec.scala` (row 318's file) in one helper and the two places that pass it.
+2. **A fused conjunct can move a residual null test.** 3.2's rule looked only for fused
+   conjuncts after a raising one. A fused conjunct that reads a column also decides, in codegen
+   order, where that column's residual `IsNotNull` runs; without it the residual filter runs the
+   test at its end, possibly after a raising conjunct Spark runs after the test. The rule now also
+   demotes such a "puller" (`demotePullers`), and iterates both checks to their fixed point
+   before the compiler classifies again, so a cascade costs one more classification, not one per
+   step. Reaching it needs a residual null test beside a fused conjunct on the same column, which
+   only a lane or size demotion makes; `VarkaConjunctOrderSuite` holds it at the rule's level.
+3. **A date to timestamp cast can raise**: `daysToMicros` multiplies exactly and overflows past
+   the year 294247, so it is off the error-free list; only numeric widening and casts to a string
+   stay.
+4. **The list was too short.** `DateDiff(DateAdd(d2, 9), i) < 3`, a residual conjunct of
+   `VarkaExpressionCompilerSuite`'s table-rollback test, would have demoted the fused one after it
+   (prediction 4 of 6.1 was not checked against that suite before the review). `date_add`,
+   `date_sub` and `datediff` wrap rather than raise (`nullSafeEval` is a plain `+`/`-`), and
+   `upper`, `lower`, `length`, `substring`, `isnan` and `LIKE` with a constant pattern cannot
+   raise on a row, so they joined it. So did the fields of a date (`year`, `month` and the rest of
+   `GetDateField`), after the first run of the suites below.
+5. `basicPhysicalOperators.scala`'s note that its two copies of the `IsNotNull` interleaving
+   change together now names `VarkaConjunctOrder.codegenOrder` as the third.
+
+   The review asked for Spark to expose the order as one function all three call; that is the
+   cleaner design and a change to Spark's operator for Varka's sake, so the cross-reference is
+   the smaller step taken here.
+6. **The composition fuzzer of the compiler knew two composition declines and met a third.**
+   The first `dev/varka_matrix.sh --defaults` run failed `VarkaCoverageCompositionFuzzSuite`'s
+   "random conjunctions ... never thrown" at seed 20260925, iteration 3: `dt IS NOT NULL`, which
+   fuses alone, was demoted behind `year(d) = 2021`, residual there for the one-lane rule and then
+   counted as raising. Two changes: the date fields joined the list (item 4), and every reason of
+   the rule carries `VarkaConjunctOrder.OUT_OF_ORDER`, which the suite now accepts beside the
+   budget and the lane as a decline the other conjuncts cause.
+7. Each demotion round recompiled every conjunct; the rule now returns at once when no residual
+   conjunct can raise, and reaches its fixed point before the next classification (item 2). A
+   hand-written tree walk became `TreeNode.exists`.
+
+### 9.1 The census
+
+`VarkaSparkFuzzSuite`'s main test at the three seeds that met the bug in `VARKA-298.md` 9.1,
+5,000 compositions each, `-Dvarka.sparkfuzz.maxFailures=1000`, one JVM per seed run from the
+exported test classpath on cores 12 to 23, on the final code and, as the control, on the head of
+`varka-298` with the same launcher:
+
+| seed | compositions (nested) | disagreements, this branch | disagreements, `varka-298` | compositions with a Varka node, this branch / `varka-298` |
+|---|---|---|---|---|
+| 20261102 | 5,000 (2,499) | 0 | 1, iteration 4775 (the reproducer) | 4,202 / 4,259 |
+| 20261104 | 5,000 (2,498) | 0 | 1, iteration 2199 (the reproducer) | 4,132 / 4,218 |
+| 20261105 | 5,000 (2,499) | 0 | 1, iteration 3145 (the reproducer) | 4,142 / 4,195 |
+
+Every composition that errored on both sides raised the same condition on both, no unexpected
+condition appeared, and no listed pair raced (9.3 of VARKA-298). The last column is what the rule
+costs in the fuzzer's own population: 53 to 86 of each 5,000 compositions (1.1 to 1.7%) lose every
+Varka node. The control's counts include its shrinker's extra comparisons (22 to 60 per seed), so
+the loss is if anything a little smaller. The fuzzer draws a raising residual conjunct far more
+often than a workload would - BIGINT arithmetic and `make_date` over hostile values under ANSI - so
+this is an upper bound on the fusion a real filter loses, not an estimate of it. Each seed took 10
+to 12 minutes. An earlier run at `54c925d67ef`, before the date fields joined the list (item 4),
+also found no disagreement and lost 63 to 93 compositions a seed.
+
+### 9.2 Predictions scored
+
+1. **Held.** All five agree; in each Varka now raises the condition Spark raises.
+2. **Held.** No disagreement in 15,000 compositions, 7,496 of them nested; the control met three,
+   one per seed, each a known reproducer.
+3. **Not scored**: the pair is for the owner to dispatch (9.3).
+4. **Refuted.** Two existing tests would have failed under the first list: the compiler suite's
+   table rollback (item 4 of the corrections above, found by the review) and the composition
+   fuzzer's (item 6, found by the suites). The final `dev/varka_matrix.sh --defaults` run, with
+   the sanitizer, passed 1,374 tests and failed one, `VarkaTierWitnessSuite`'s "the witness sees
+   each tier": a warmed kernel trapped (`speculate_null_assert` in `VarkaMemorySanitizer.check`)
+   where the test expects C2. It fails the same way on the head of `varka-298` with this branch's
+   sources taken out (`--suites VarkaTierWitnessSuite`, 6 passed and that one failed), so it is
+   the sanitizer's branch under this JDK, not this change; no emitted byte moved here.
+
+### 9.3 The cost pair, for the owner to dispatch
+
+No filter benchmark has a residual conjunct, so the rule demotes nothing in them, and the
+fallback's reordering runs only on a batch the kernel declines, which none of them has. Predicted:
+every row within the runner's band. Once this branch is a pull request of `vecbricks/varka`:
+
+```
+gh workflow run benchmark.yml -R vecbricks/varka -f pr=<PR> -f pair=true -f rounds=5 \
+  -f class="VarkaFilterBenchmark,VarkaFilterNarrowingBenchmark,VarkaRangeFilterBenchmark"
+```
+
+### 9.4 Left for later
+
+* **Fusion lost behind a raising residual conjunct** (9.1): alternative 2 of 3.3 - keep the
+  conjuncts fused and use the mask only after the residual check - wins it back on the shape
+  where it pays, at the cost of a second selection output in both evaluators. Worth building only
+  with a benchmark that has the shape; for the owner to decide.
+* **The error-free list is a list.** A residual conjunct off it demotes the fused ones after it.
+  Widening it is safe one expression at a time, each with a reason it cannot raise.
+* **The warmed arm and the pivot test still draw `drawRows`** (`VARKA-298.md` 9, corrections from
+  its review): they avoided 9.2 and 9.3 there; 9.2 is fixed and 9.3 is row 381.
