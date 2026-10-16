@@ -183,8 +183,12 @@ jobs:
       run: |
         {
           echo "## Mutation run, ${{ inputs.shards }} shards, commit ${{ needs.plan.outputs.sha }}"
-          sed -n '/^## Verdicts by class/,/^## The mutants/p' sql/varka/mutation/verdicts.md \
-            2>/dev/null | sed '$d' || echo "no report"
+          if [ -f sql/varka/mutation/verdicts.md ]; then
+            sed -n '/^## Verdicts by class/,/^## The mutants/p' sql/varka/mutation/verdicts.md \
+              | sed '$d'
+          else
+            echo "no report"
+          fi
         } >> "$GITHUB_STEP_SUMMARY"
     - name: Upload the verdicts
       if: always()

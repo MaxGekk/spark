@@ -433,3 +433,12 @@ The survivors' line decides it, as it does on the laptop. A shard past
 four hours is a reason to dispatch again with `shards=16`, which halves every line but the build
 and the coverage phase.
 
+
+**Checked on the laptop, 16 October 2026**, through the commands the workflow runs, over
+`--classes Analysis --methods pureOf`: the unsharded dry run has 86 mutants and shards 0/2 and 1/2
+43 each, disjoint, their union the 86. Run for real at `--heap 3g --timeout-factor 4` beside each
+other, shard 0 had all 43 killed (347 s, its coverage phase about 180 s of it) and shard 1 had 42,
+its one survivor through the bytes run in 203 s; `--shards` joined them into 85 behavioural and 1
+survived, and refused a missing shard, a doubled one and a mutant in two. The survivor is the
+`requireNonNull` 9.2 records as killed in the sample, which ran before 9.4 moved the
+`PinsDefaults` tests to the second run; neither run kills it now, and the full run will list it.
