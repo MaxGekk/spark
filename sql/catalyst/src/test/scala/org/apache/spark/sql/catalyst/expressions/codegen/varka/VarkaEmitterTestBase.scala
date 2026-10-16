@@ -161,7 +161,7 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
   // VARKA-11: the reference evaluator - an independent Scala implementation of the milestone's
   // 2.6 semantics (three-valued conditions, blend, null-skipping greatest/least, floorMod)
   // that every predication test runs the emitted loop against, row for row and bit for bit.
-  // It lives in VarkaReferenceEvaluator now, shared with the IR fuzzer; these are the suite's
+  // It lives in VarkaReferenceEvaluator, shared with the IR fuzzer; these are the suite's
   // names for it.
   // -------------------------------------------------------------------------------------------
 
@@ -473,7 +473,7 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
   /** What the prefix's month step costs on the axis `options` picks. */
   protected def monthStepOps(options: VarkaEmitOptions): Int = F.monthStepOps(options)
 
-  /** The single masked epilogue's bytecode size in the form before VARKA-87. */
+  /** The single masked epilogue's bytecode size in the single-epilogue form (budget 0). */
   protected def singleEpilogueSize(
       roots: Seq[VarkaVectorIR], numInputs: Int, options: VarkaEmitOptions): Int =
     F.singleEpilogueSize(roots.asJava, numInputs, options)

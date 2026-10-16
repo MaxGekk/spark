@@ -42,8 +42,9 @@ import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
  * predicate reads more columns than the consumer wants:
  *
  *  - `SELECT d ... WHERE d < d2` - the losing shape. Two columns in the predicate, one wanted.
- *    Before VARKA-78 a Janino `Project [d]` sat above the row-producing Varka filter, and the
- *    node converted `d2` to a row as well, whose value that projection discarded.
+ *    Without the rule's absorption (VARKA-78) a Janino `Project [d]` would sit above the
+ *    row-producing Varka filter, and the node would convert `d2` to a row as well, whose value
+ *    that projection discards.
  *  - `SELECT d, d2 ... WHERE d < d2` - the same predicate and the same selectivity with nothing
  *    to narrow, so the projection is redundant and Spark removed it long before this rule ran.
  *    This is the control: it never had a residual projection to absorb, so it must not move.
@@ -132,7 +133,7 @@ object VarkaNarrowingBenchmark extends SqlBasedBenchmark {
    * The rung asserts the selectivity its name claims, before anything is timed. A benchmark
    * whose rungs are mislabelled still measures a real plan over real data, so nothing fails
    * and nothing looks wrong - it just answers a question other than the one on the label, and
-   * the label is what gets quoted. The first version of this file did exactly that.
+   * the label is what gets quoted.
    */
   private def requireSelectivity(session: SparkSession, name: String, pct: Int): Unit = {
     val selected = session.sql(counted).collect()(0).getLong(0).toDouble

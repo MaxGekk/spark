@@ -57,9 +57,9 @@ class VarkaEndToEndSuite extends QueryTest with VarkaSharedSessions with VarkaTe
   }
 
   test("a non-foldable, non-column offset is not fused but still returns correct results") {
-    // A bare int column offset fuses since VARKA-38 and int arithmetic over one since VARKA-63
-    // (both have their own differential coverage in VarkaDifferentialSuite); `i % 7` is built
-    // from an operator neither task lowered, so it stays declined.
+    // A bare int column offset fuses (VARKA-38) and so does int arithmetic over one (VARKA-63),
+    // both with their own differential coverage in VarkaDifferentialSuite; `i % 7` is built
+    // from an operator neither lowers, so it stays declined.
     cacheDates(spark)
     val query = "SELECT date_add(d, i % 7) AS a FROM varka_dates ORDER BY a"
     val expected = spark.sql(query)

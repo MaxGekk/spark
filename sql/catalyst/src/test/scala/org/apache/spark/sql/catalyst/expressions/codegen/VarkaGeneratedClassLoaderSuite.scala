@@ -29,8 +29,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 /**
  * VARKA-7 Metaspace/unloadability proof for the catalyst-side [[VarkaGeneratedClassLoader]],
  * mirroring the engine module's `VarkaClassLoaderTest` (VARKA-3). Generated classes are produced
- * with `VarkaLoopEmitter.emit` (the assembler the execution path uses since VARKA-10 - the
- * milestone-1 dispatcher assembler this suite used before retired in VARKA-17), so each "task"
+ * with `VarkaLoopEmitter.emit` (the assembler the execution path uses, VARKA-10), so each "task"
  * defines one real fused-kernel class in its own per-task loader and releases it on
  * completion.
  *

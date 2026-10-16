@@ -42,6 +42,16 @@
 #   * no TODO or FIXME marker under sql/varka or in a Varka source directory
 #     (sql/varka/AGENTS.md: open work is recorded in a plan, never left as a
 #     marker);
+#   * no comment that narrates history - `used to` or `the old`, case-insensitive, in the
+#     comment part of a line the commit adds to a Varka source file (Scala, Java, Python or
+#     shell under a Varka directory or named Varka*), since a comment describes the code as it
+#     is and history lives in the plans and git (sql/varka/AGENTS.md). Two phrases only: in a
+#     sample of Varka's comments nearly every hit of them was history, where "no longer" and
+#     "previously" describe behaviour as often. The instrumental "is used to select" passes. A
+#     present-tense "the old" (the old year of an ISO week) is reported, and is worded another
+#     way ("the earlier year"). Markdown is out, since plans narrate on purpose and name the
+#     phrases; so is dev/, as for the TODO check, which also keeps this script's own pattern
+#     from tripping it;
 #   * no raw `.reinterpret(` in the main Scala or Java of a Varka class: an address is mapped
 #     through VarkaSegments.map (catalyst) or VarkaVectorSupport.ofAddress (the engine), so that
 #     the memory sanitizer (VARKA-263) sees every mapping;
@@ -59,13 +69,12 @@
 #   dev/varka_precommit.sh --working-tree  # staged, unstaged and untracked
 #   dev/varka_precommit.sh FILE...         # these files
 #   dev/varka_precommit.sh --install-hook  # run it from .git/hooks/pre-commit
-#   dev/varka_precommit.sh --selftest      # check the column rule's three cases
+#   dev/varka_precommit.sh --selftest      # check the column and history rules' cases
 #
 # Exit status is the number of findings.
 set -uo pipefail
 # Usage text is found rather than numbered: a hard-coded range silently truncates as the
-# comment above it grows, which had already happened to four of these scripts. Ends at the
-# first line that is not a comment.
+# comment above it grows. Ends at the first line that is not a comment.
 usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
 case "${1:-}" in -h|--help) usage 0 ;; esac
 
@@ -129,10 +138,10 @@ if [ "${1:-}" = "--selftest" ]; then
     bare git add Old.scala
     bare git -c core.hooksPath=/dev/null commit -qm old
   ) > /dev/null 2>&1
-  scope_case() { # name expected(yes|no)
+  scope_case() { # name expected(yes|no) [finding text]
     local out got=no
     out="$(cd "$repo" && bare "$self" --working-tree 2>&1)"
-    case "$out" in *"line over 100 columns"*) got=yes ;; esac
+    case "$out" in *"${3:-line over 100 columns}"*) got=yes ;; esac
     if [ "$got" != "$2" ]; then
       echo "varka_precommit selftest: $1: expected $2, got $got"
       fails=$((fails + 1))
@@ -142,6 +151,26 @@ if [ "${1:-}" = "--selftest" ]; then
   scope_case "a committed long line, under an unrelated edit" no
   printf 'val c = "%s"\n' "$(printf 'f%.0s' {1..110})" >> "$repo/Old.scala"
   scope_case "a long line this commit adds" yes
+
+  # The history rule, on a Varka file of the fixture: a narrating comment already committed is
+  # not this commit's, one it adds is, and the instrumental "is used to" is not history at all.
+  (
+    cd "$repo" || exit 1
+    bare git checkout -q -- Old.scala
+    printf '// The kernel used to copy the batch.\nclass VarkaOld {}\n' > VarkaOld.java
+    bare git add VarkaOld.java
+    bare git -c core.hooksPath=/dev/null commit -qm history
+  ) > /dev/null 2>&1
+  printf '// An unrelated line.\n' >> "$repo/VarkaOld.java"
+  scope_case "a committed narrating comment, under an unrelated edit" no "narrates history"
+  printf '// The mask is also used to select lanes.\nString s = "it used to be";\n' \
+    >> "$repo/VarkaOld.java"
+  scope_case "an added 'is also used to', and 'used to' in a string" no "narrates history"
+  printf '// This replaces the old guard.\n' >> "$repo/VarkaOld.java"
+  scope_case "an added 'the old'" yes "narrates history"
+  bare git -C "$repo" checkout -q -- VarkaOld.java
+  printf 'int x = 1; // The kernel used to copy.\n' >> "$repo/VarkaOld.java"
+  scope_case "an added trailing comment with 'used to'" yes "narrates history"
 
   if [ "$outer_head" != "$(bare git -C "$root" rev-parse HEAD 2>/dev/null || echo none)" ]; then
     echo "varka_precommit selftest: the fixture moved this repository's HEAD"
@@ -257,13 +286,34 @@ for f in "${files[@]}"; do
         && note "$f:$hit: TODO/FIXME marker; record it in the plan instead"
     done < <(grep -n -E "$pattern" "$f" | cut -d: -f1)
   fi
+  if [[ "$f" =~ \.(scala|java|py|sh)$ ]] && [[ "$f" != dev/* ]] \
+      && { is_varka "$f" || [[ "${f##*/}" == Varka* ]]; }; then
+    # History in a comment: a line the commit adds whose comment says what the code used to do.
+    # Only the comment is read - a whole comment line, or the text after `//` or `#` - so a
+    # string literal or a test title is left alone. The instrumental "used to" passes: after a
+    # form of "be", with at most one word between ("is also used to"), after "it's" or
+    # "that's", and at the start of a comment line, where a wrapped sentence puts it.
+    while IFS= read -r hit; do
+      wrote_line "$f" "$hit" \
+        && note "$f:$hit: a comment that narrates history ('used to', 'the old'); say what the \
+code does, and leave the history to the plan and git (sql/varka/AGENTS.md)"
+    done < <(perl -ne '
+      my $c;
+      if (/^\s*(?:\/\/|\/?\*|#)(.*)$/) { $c = $1 } elsif (/(?:\/\/|#)(.*)$/) { $c = $1 }
+      next unless defined $c;
+      my $u = $c;
+      $u =~ s/\b(?:is|are|be|been|being|was|were|it.s|that.s)\s+(?:\w+\s+)?used to\b//gi;
+      $u =~ s/^\s*used to\b//i;
+      print "$.\n" if $u =~ /\bused to\b/i || $c =~ /\bthe old\b/i;
+    ' "$f")
+  fi
   if [[ "$f" == */src/main/* && "$f" =~ \.(scala|java)$ ]] \
       && { is_varka "$f" || [[ "${f##*/}" == Varka* ]]; } \
       && [[ ! "$f" =~ /(VarkaSegments|VarkaVectorSupport|VarkaMorsel)\.java$ ]]; then
     while IFS= read -r hit; do
       wrote_line "$f" "$hit" \
-        && note "$f:$hit: raw .reinterpret(; map an address through VarkaSegments.map or" \
-              "VarkaVectorSupport.ofAddress, so the memory sanitizer sees it (VARKA-263)"
+        && note "$f:$hit: raw .reinterpret(; map an address through VarkaSegments.map or \
+VarkaVectorSupport.ofAddress, so the memory sanitizer sees it (VARKA-263)"
     done < <(grep -n -F '.reinterpret(' "$f" | cut -d: -f1)
   fi
 done
@@ -318,7 +368,7 @@ fi
 
 # SKILLS.md is generated from the lesson files under sql/varka/skills/, so a lesson added
 # without regenerating it leaves the index wrong rather than merely short - and the index is
-# the only way anything finds a lesson now.
+# the only way anything finds a lesson.
 if printf '%s\n' "${files[@]}" | grep -qE '^(SKILLS\.md|sql/varka/skills/.*\.md)$' \
     && [ -x dev/varka_toc.py ]; then
   out="$(dev/varka_toc.py --check SKILLS.md --from sql/varka/skills 2>&1)"; rc=$?

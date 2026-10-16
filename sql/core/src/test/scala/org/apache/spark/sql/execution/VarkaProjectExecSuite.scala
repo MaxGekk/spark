@@ -227,8 +227,8 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession with Varka
   }
 
   test("the fallback warning names the kernel it gave up on") {
-    // Before VARKA-16 this line carried only the exception, so a log could not say which plan
-    // node or projection had fallen back.
+    // The line names the plan node and projection beside the exception (VARKA-16), so a log
+    // can say which one fell back.
     VarkaColumnarToRowExec.setFailKernelForTesting(true)
     try {
       val appender = new LogAppender("varka fallback")
@@ -362,7 +362,8 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession with Varka
     // VARKA-169.md: a balanced greatest over thirty-two add_months is one output whose loop
     // method is past HugeMethodLimit. The compiler asks the emitter at planning and leaves it to
     // the row path with the reason, so EXPLAIN says so and the kernel the tasks emit is the one
-    // the emitter serves: no emission failure, which before this task was one per task.
+    // the emitter serves: no emission failure, where an unchecked shape would fail once per
+    // task.
     def heavy(lo: Int, hi: Int): Expression =
       if (lo == hi) AddMonths(attrD, Literal(lo))
       else Greatest(Seq(heavy(lo, (lo + hi) / 2), heavy((lo + hi) / 2 + 1, hi)))
@@ -394,7 +395,7 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession with Varka
         SQLMetrics.createMetric(sparkContext, "rows"),
         SQLMetrics.createMetric(sparkContext, "batches"),
         VarkaExecMetrics.NONE)
-      // Before VARKA-15 this constructor compiled the fallback eagerly and threw.
+      // The constructor compiles the fallback lazily (VARKA-15); eagerly it would throw here.
       val evaluator = factory.createEvaluator()
       val column = new OnHeapColumnVector(1, IntegerType)
       column.putInt(0, 7)
@@ -493,8 +494,8 @@ class VarkaProjectExecSuite extends QueryTest with SharedSparkSession with Varka
     // Only the non-empty Arrow batch reaches the kernels; the on-heap one takes the fallback.
     assert(plan.metrics("numVarkaBatches").value === 1)
     // VARKA-18: each spec is its own partition, so three tasks looked the shape up - canRun
-    // forces the runner on the fallback tasks too, which before the cache emitted a class it
-    // never ran and now costs a hit. Hit or miss per task depends on what ran in this JVM.
+    // forces the runner on the fallback tasks too, which costs a cache lookup rather than an
+    // emission. Hit or miss per task depends on what ran in this JVM.
     assert(plan.metrics("numVarkaCacheHits").value +
       plan.metrics("numVarkaCacheMisses").value === 3)
     // VARKA-22: the on-heap fallback batch is counted under its cause; nothing else fired -

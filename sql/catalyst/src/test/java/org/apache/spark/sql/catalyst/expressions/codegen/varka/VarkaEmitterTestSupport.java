@@ -187,7 +187,7 @@ public final class VarkaEmitterTestSupport {
    * VARKA-70's whole-batch {@code copyValidity}/{@code andValidity}/{@code orValidity}.
    *
    * <p>The match is exact, never a prefix, for {@link #invokedNames}' reason: the helpers carry
-   * a lane-count suffix since VARKA-46, and {@code orValidityBitsAt} is a prefix of
+   * a lane-count suffix (VARKA-46), and {@code orValidityBitsAt} is a prefix of
    * {@code orValidityBitsAt16}. An excluded name that the method does not invoke is not an
    * error - the exclusion list says what the metric is, not what the body contains.
    */
@@ -243,8 +243,8 @@ public final class VarkaEmitterTestSupport {
 
   /**
    * The distinct static fields the whole class reads from {@code owner}, sorted. The emitted
-   * species constant is one of these, and since VARKA-46 it is the concrete
-   * {@code SPECIES_512} rather than {@code SPECIES_PREFERRED} wherever a width was baked.
+   * species constant is one of these, and it is the concrete {@code SPECIES_512} rather than
+   * {@code SPECIES_PREFERRED} wherever a width is baked (VARKA-46).
    */
   public static List<String> staticFieldsRead(byte[] bytes, String owner) {
     java.util.TreeSet<String> names = new java.util.TreeSet<>();

@@ -65,8 +65,8 @@ import org.apache.spark.sql.types.DataTypes;
  * committed band.
  *
  * <p>The shapes. {@code dayofweek} and {@code weekday} over two dates beside four
- * {@code date_add}, which the budget splits into five loop methods since VARKA-254 weighed the
- * two at what they emit, and the prediction keeps in two; forty mixed outputs over two dates and
+ * {@code date_add}, which the budget splits into five loop methods, the two weighed at what they
+ * emit (VARKA-254), and the prediction keeps in two; forty mixed outputs over two dates and
  * two integers, which the budget splits into sixteen; VARKA-200's mixed family over one date, the
  * one corpus family where the prediction builds more loop methods than the budget; and two
  * controls that build one class under every arm: 24 {@code date_add}, which the cost model's plan
@@ -171,8 +171,8 @@ public class VarkaGroupingBenchmark extends VarkaBenchmarkBase {
   }
 
   /**
-   * The default first - the prediction bounding groups in the budget's place, since VARKA-254 -
-   * then the group budget binding as it did before ({@code groupBudgetUnderPrediction} on), and
+   * The default first - the prediction bounding groups in the budget's place (VARKA-254) - then
+   * the group budget binding everywhere ({@code groupBudgetUnderPrediction} on), and
    * the budget raised to 400, kept from the file's first rows so the three stay comparable.
    */
   private static List<Arm> arms() {

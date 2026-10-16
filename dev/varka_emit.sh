@@ -51,8 +51,7 @@
 # mark-word stores.
 set -euo pipefail
 # Usage text is found rather than numbered: a hard-coded range silently truncates as the
-# comment above it grows, which had already happened to four of these scripts. Ends at the
-# first line that is not a comment.
+# comment above it grows. Ends at the first line that is not a comment.
 usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
 case "${1:-}" in -h|--help) usage 0 ;; esac
 
@@ -101,11 +100,9 @@ for a in "${pass[@]}"; do quoted+=" \"$a\""; done
 
 if [ "$asm" -eq 0 ]; then
   # The run's output is kept, not piped straight into the filter, so that a run which threw
-  # can be told from a run that simply matched nothing. It could not be before: the filter
-  # printed nothing either way and the script exited 0, so an unsupported --columns type or an
-  # expression the analyzer rewrites read exactly like a negative result. That cost three
-  # round trips on 12 September 2026 before the runner was invoked by hand, and it is the
-  # debt register entry this closes.
+  # can be told from a run that simply matched nothing. Piped straight in, the filter prints
+  # nothing either way and the script exits 0, so an unsupported --columns type or an
+  # expression the analyzer rewrites reads exactly like a negative result.
   log="$(mktemp -t varka-emit.XXXXXX)"
   trap 'rm -f "$log"' EXIT
   # `|| true` so `set -e` does not abort before the diagnosis below: a non-zero run is

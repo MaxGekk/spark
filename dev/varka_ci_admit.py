@@ -574,9 +574,9 @@ class AdmitTest(unittest.TestCase):
         self.assertEqual(main(["--repo", "apache/spark", "--run-id", "1", "--branch", "m"]), 0)
 
     def test_the_workflow_gates_precompile_on_this_job(self):
-        # VARKA-255.md 7.2: `admit` carries Precompile Spark's old condition and Precompile
-        # Spark runs only on admit's success, so one condition decides both and an upstream
-        # edit to the old condition conflicts here instead of drifting.
+        # VARKA-255.md 7.2: `admit` carries the condition upstream gives Precompile Spark, and
+        # Precompile Spark runs only on admit's success, so one condition decides both and an
+        # upstream edit to that condition conflicts here instead of drifting.
         here = os.path.dirname(os.path.abspath(__file__))
         path = os.path.join(here, "..", ".github", "workflows", "build_and_test.yml")
         if not os.path.exists(path):

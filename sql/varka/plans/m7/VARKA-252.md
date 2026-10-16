@@ -118,9 +118,79 @@ No cost is predicted: the pre-commit check is one `grep` per staged Varka file.
 
 ## 5. Outcome
 
+*17 October 2026.*
+
+1. **Failed, low by about half.** About 290 comments changed (counted as diff hunks with two
+   lines of context, so a comment rewritten in two places counts once) in 108 code files: 73 in
+   the main code under `sql/catalyst` and `sql/core`, 12 in the engine and bench modules' main
+   code, 184 in test code, 21 in `dev/` scripts (13 of them one sentence repeated in every script
+   that finds its usage text). The phrase grep found 227 lines, but a hit's comment often held
+   two or three narrating sentences, and the second grep - for "first version", "this task",
+   "before this task", "was replaced", "the port" - found about forty more the first missed. The
+   present-tense uses kept number about thirty ("no longer retains", "in use now", "the old year"
+   of an ISO week, "`rem` is now the day of era"), not fewer than ten: "no longer" and "now" are
+   as often semantics as history, which is the reason the check leaves them out.
+2. **Held.** `VarkaEmittedBytesSuite` and `VarkaCoverageSuite` pass with `emitted_bytes.json`,
+   `coverage.json` and `docs/sql-varka.md` unchanged.
+3. **Held.** A scan of `git diff -U0` outside the plan, `sql/varka/AGENTS.md` and
+   `dev/varka_precommit.sh` finds no changed line that is not a comment line.
+
+What else the pass found:
+
+* **A javadoc link is an import's only use.** Rewriting `VarkaChronoLowering.emitEra`'s javadoc
+  dropped its `{@link Chrono}`, and checkstyle then reported the import of
+  `VarkaVectorIR.Chrono` unused: the compiler is satisfied without it, `dev/lint-java` is not. The
+  link went back in. A comments-only change still needs `dev/lint-java`.
+* **The existing reinterpret check prints half its message.** `note` takes one argument, and that
+  check passes its message as two, so the second half is dropped. The new check passes one string,
+  and after the review below so does the reinterpret check.
+* **Some comments were stale as well as narrating**, and the rewrite had to decide what is true
+  now: `VarkaGeneratedClassLoader` called the engine copy its "catalyst twin", and
+  `VarkaEmitBudget`'s `DAY_OF_YEAR_TAIL_WEIGHT` carried three earlier values of itself. Where the
+  present truth was not evident from the code nearby, the comment was left (6).
+* **The ledgers.** `VarkaEmitterBudgetSuite` recorded each task that moved a `HugeMethodLimit`
+  crossing, three paragraphs deep. It now states today's crossings and names the tasks whose plans
+  hold the moves.
+
+The two corrections of section 2.3 went in as planned, and the readings' other comment findings
+were confirmed closed by VARKA-242 (section 1).
+
+**The author's review** (`/code-review high` on the branch, 17 October 2026) found ten things,
+all verified and all fixed:
+
+* Four rewrites had turned history into a false present-tense claim, which is exactly the wrong
+  comment this task removes. `VarkaDifferentialSuite` said `emitLeapFlag`'s constants "can
+  overflow" past year 12400, where the shipped helper is an exact perfect hash. The driver sizes in
+  `VarkaEmitterBudgetSuite` read as today's sizes. The engine's `VarkaClassLoader` named a task-end
+  owner it does not have; in that module only its tests own one. And `Canary` stated one run's 76
+  billion steps a second as a general rate. Each now says what holds, or dates the measurement.
+  The lesson: dropping "once" or "used to" is not a rewrite. The sentence that is left has to be
+  checked against the code as it is.
+* The check, as first written, ran over whole lines, so a string literal or test title matched.
+  It exempted the instrumental "used to" only right after "is" and its kin, so "is also used to"
+  or a sentence wrapped before "used to" was reported. It skipped shell, which section 2.4 had
+  included. And its self-test had no positive case for "used to". It now reads only the comment
+  part of a line (a comment line, or the text after `//` or `#`). It lets "used to" through
+  after a form of "be" with at most one word between, after "it's" or "that's", and at the start
+  of a comment line. It covers `.sh`. The self-test adds an added trailing `// ... used to`
+  (reported), an added "is also used to" and a `used to` in a string (not reported).
+* "The old" has present-tense uses ("the old year" of an ISO week), which the check reports.
+  The rule asked for the phrase, so it stays. The script's header says so, and that such a use is
+  worded another way ("the earlier year"). A committed use is never reported, so this costs only
+  the commit that writes one.
+* The reinterpret check's dropped half message is fixed.
+
 ## 6. Explicitly out of this task
 
 * Comments in Spark's own files, and the narration in plans, lesson files and posts, which are
   records.
 * A check for "no longer", "previously" or "since VARKA-": each has present-tense uses the check
   could not tell apart, and a check that fires on correct text teaches `--no-verify`.
+* *Added at the outcome.* Comments whose present truth the pass could not establish from the
+  code nearby, left as they are: `VarkaDifferentialSuite`'s "no leaf can read until VARKA-38
+  opens it" over `date_from_unix_date`, `TimeChainsTest`'s "until VARKA-104 builds their
+  arithmetic", and the "until VARKA-28" pointers in `VarkaExpressionCompiler`, `Times` and two
+  suites, which read as open work and may be stale. Several tests still say "this task" for the
+  feature they test (about twenty, mostly `VarkaEmitterValiditySuite` and
+  `VarkaDifferentialSuite`); that names a scope rather than narrating a change, and naming each
+  task is a sweep of its own.

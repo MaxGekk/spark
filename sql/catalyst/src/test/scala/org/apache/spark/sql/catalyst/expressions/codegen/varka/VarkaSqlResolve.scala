@@ -25,21 +25,15 @@ import org.apache.spark.sql.catalyst.plans.logical.{LocalRelation, Project}
 import org.apache.spark.sql.types.DataType
 
 /**
- * One resolver for the SQL-to-expression tools in this package, because there were two and only
- * one of them was right.
+ * One resolver for the SQL-to-expression tools in this package (`VarkaEmitDump`,
+ * `VarkaWordCensus`), shared so that the tools cannot resolve differently.
  *
- * `VarkaEmitDump` and `VarkaWordCensus` each carried a byte-identical `transformUp` that bound
- * attributes by name and looked functions up in the registry - and nothing else. That is enough
- * for a function call and not enough for an operator: `d + ym` parses to `Add(date,
- * yearmonthinterval)` and only becomes `DateAddYMInterval` when the analyzer's type coercion
- * rewrites it, so without that pass the compiler saw an `Add` over two types it has no arm for
- * and declined. The dump reported "declined" for expressions `Surface` had been timing with
- * `expectFused` for weeks, and the census worked around the same bug by hand, truncating its
- * corpus to "the `Surface` projections that resolve without the analyzer's type coercion" -
- * which silently dropped every date/interval shape VARKA-67 added.
- *
- * Fixing one copy would have left the other wrong with nothing in the tree saying so, which is
- * why this is a shared object rather than a second patch.
+ * Binding attributes by name and looking functions up in the registry is enough for a function
+ * call and not enough for an operator: `d + ym` parses to `Add(date, yearmonthinterval)` and
+ * only becomes `DateAddYMInterval` when the analyzer's type coercion rewrites it, so without
+ * that pass the compiler sees an `Add` over two types it has no arm for and declines - and a
+ * tool reports "declined" for an expression `Surface` times as fused, or silently drops every
+ * date/interval shape from its corpus.
  */
 object VarkaSqlResolve {
 

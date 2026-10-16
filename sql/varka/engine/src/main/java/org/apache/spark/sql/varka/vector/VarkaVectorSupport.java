@@ -83,8 +83,8 @@ public final class VarkaVectorSupport {
    * {@code SPECIES.loopBound(length)} over a nominally sized {@code (length + 7) / 8}-byte
    * bitmap: a group whose rows are all below {@code length} can only touch bytes below
    * {@code (length + 7) / 8}. Addressing a whole word instead would read past the end of the
-   * bitmap near it, which is why this used to need a word-alignment bound and left every batch
-   * under 57 rows to the scalar path.
+   * bitmap near it, so a word-addressed form would need a word-alignment bound and would leave
+   * every batch under 57 rows to the scalar path.
    */
   public static long validityBitsAt(MemorySegment validity, long row, int lanes) {
     long byteOffset = row / 8;

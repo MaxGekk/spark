@@ -359,10 +359,10 @@ public final class VarkaLoopEmitter {
     // intrinsics (measured 3x to 4x; see `VARKA-10.md`).
     //
     // The epilogue is one method per group beside its loop method, `epilogueDense<g>` and
-    // `epilogueMasked<g>`; with methodByteBudget 0, the form before VARKA-87, it is one method
-    // for every output. One method was the right shape while GROUP_BUDGET was the only bound:
-    // the epilogue runs once per batch, so a hot method's C2 cost had nothing to bound there.
-    // It is the wrong shape for the JVM's size limit, which reads bytes rather than heat: a
+    // `epilogueMasked<g>`; with methodByteBudget 0, the reference form, it is one method for
+    // every output. One method would suit GROUP_BUDGET alone: the epilogue runs once per batch,
+    // so a hot method's C2 cost has nothing to bound there. It is the wrong shape for the JVM's
+    // size limit, which reads bytes rather than heat: a
     // single epilogue carries every output's tail and crosses HugeMethodLimit at thirteen
     // make_date outputs, after which it is never compiled at all (`VARKA-87.md` 2.2).
     // Split by the loop's groups it is bounded by what bounds the loops, and the split kernel

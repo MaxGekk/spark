@@ -25,7 +25,7 @@ import org.apache.spark.sql.execution.VarkaSparkFuzz._
 
 /**
  * Replays every reproducer in `sql/varka/fuzz/spark/` (VARKA-262): a file marked
- * `status: regression` must now agree between Varka off and on, and one marked
+ * `status: regression` must agree between Varka off and on, and one marked
  * `status: known <row>` must still disagree, so that the list cannot outlive its bugs.
  */
 class VarkaSparkReproducerSuite extends VarkaSparkDifferential {

@@ -54,8 +54,8 @@ import org.apache.spark.util.SparkStringUtils$;
  * therefore {@link VarkaShapeKey}, derived structurally from the same records the emitter walks,
  * never assembled by hand at a call site; the differential suites run warm as well as cold. The key
  * covers <i>every</i> byte-affecting emit input, {@link VarkaEmitOptions}
- * included, so there is no longer a class of emission this cache has to refuse to serve - the
- * guard stack that used to do the refusing is gone, and with it the three races inside it.
+ * included, so there is no class of emission this cache has to refuse to serve, and no guard
+ * that refuses one.
  *
  * <p><b>The loader is part of the key.</b> Each entry's generated loader parents the class loader
  * its caller passed in - in production the context class loader of the task that emitted it, which
@@ -76,8 +76,8 @@ import org.apache.spark.util.SparkStringUtils$;
  * {@link VarkaDebugInfo} attribute's plan fragment carries {@code shape <hash>} - the bytes
  * describe the shape, which is exactly what is shared. The map is keyed on the full structural
  * key, so a hash collision cannot cause a wrong hit; it could only give two distinct shapes one
- * <i>name</i> (their loaders keep the runtime classes distinct). The per-execution identity that
- * used to be baked into the bytes - operator, stage, the projection list - lives in a bounded side
+ * <i>name</i> (their loaders keep the runtime classes distinct). The per-execution identity,
+ * which the bytes do not carry - operator, stage, the projection list - lives in a bounded side
  * table keyed by the hash, recorded (truncated) on every lookup at every capacity,
  * {@code maxEntries} = 0 included, so the diagnostics join {@link #executionsFor} keeps working
  * when sharing is off.
@@ -85,8 +85,8 @@ import org.apache.spark.util.SparkStringUtils$;
  * <p><b>Concurrency and failure.</b> Tasks racing on one shape are serialized by the
  * single-flight gate below ({@link #loadOnce}): the winner emits once, and a cancelled or failed
  * emit fails only its own task - the co-waiters retry for themselves instead of inheriting the
- * failure into their ghost fallbacks. That is the SPARK-43300 discipline this class used to get
- * from {@code NonFateSharingCache}, reimplemented here for a reason that is a constraint on the
+ * failure into their ghost fallbacks. That is the SPARK-43300 discipline of Spark's
+ * {@code NonFateSharingCache}, reimplemented here for a reason that is a constraint on the
  * whole Java migration rather than a preference: Maven shades {@code core}, relocating
  * {@code com.google.common} to {@code org.sparkproject.guava}, so that class's constructor
  * arrives as {@code NonFateSharingCache(org.sparkproject.guava.cache.Cache)}. Scala never sees
@@ -114,7 +114,7 @@ import org.apache.spark.util.SparkStringUtils$;
  * {@code VarkaShapeCache}): nothing that reads Spark's configuration or environment. Capacity and
  * the parent class loader arrive as plain values, so this class has one behaviour per constructed
  * instance rather than one per whichever thread happened to touch a singleton first - which is
- * what made the old lazily-sized singleton nondeterministic on an executor. {@code VarkaShapeCache}
+ * what makes a lazily-sized singleton nondeterministic on an executor. {@code VarkaShapeCache}
  * is the facade that resolves both and owns the JVM-wide instance.
  */
 public final class VarkaShapeCacheImpl {
@@ -444,9 +444,8 @@ public final class VarkaShapeCacheImpl {
     });
     // Not List.copyOf: it rejects nulls, and a null identity is storable (SparkStringUtils.
     // abbreviate passes null through). No production caller passes one - the evaluator's
-    // identity is always a StringBuilder result - but the Scala this replaced tolerated it, and
-    // getOrEmit is public now, so the guard the port dropped stays dropped rather than becoming
-    // an NPE in a diagnostics read.
+    // identity is always a StringBuilder result - but getOrEmit is public, so a null is kept
+    // rather than becoming an NPE in a diagnostics read.
     return Collections.unmodifiableList(snapshot);
   }
 
@@ -565,8 +564,8 @@ public final class VarkaShapeCacheImpl {
    *
    * <p>One atomic remapping, which is what makes it correct: {@code compute} holds the bin lock
    * across the whole update, so the set cannot be evicted between reading it and writing to it -
-   * the race the hand-rolled {@code getIfPresent}/{@code putIfAbsent} retry loop this replaced
-   * existed to converge on (see sweeping the task-18 debt register).
+   * the race a hand-rolled {@code getIfPresent}/{@code putIfAbsent} retry loop would have to
+   * converge on (VARKA-18's debt register).
    */
   private void recordExecution(String hash, String identity) {
     executions.asMap().compute(hash, (h, existing) -> {
