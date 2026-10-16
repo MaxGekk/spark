@@ -376,11 +376,12 @@ reading as unavailable.
    record, the options rendering and the batch facts are reached only from the catches. (Held on
    the laptop and on fork CI; the test's first firing, in the option matrix's run after a merge,
    read the JVM's compiler and not the failure path, 9.2.)
-2. **Owed.** The pair needs an idle laptop and was not run; the class is
-   `VarkaEvaluatorOverheadBenchmark`
-   (`dev/varka_bench_pair.sh core VarkaEvaluatorOverheadBenchmark`),
-   whose cases are the evaluator's per-batch path that the change leaves untouched outside its
-   catches.
+2. **Held** (15 October 2026, on a GitHub-hosted runner, an EPYC 9V74, run 38802868083 of
+   `MaxGekk/spark`: the pair of `VarkaEvaluatorOverheadBenchmark`, five rounds a side, base the
+   merge base of #805 with master, head #805's tip). Twelve rows, none slower or faster by 10% by
+   both the median and the best round; the widest change was 4.1% by median and 4.6% by best.
+   The class's cases are the evaluator's per-batch path that the change leaves untouched outside
+   its catches.
 3. **Held.** `VarkaEmittedBytesSuite` passes and `emitted_bytes.json` is unchanged; nothing in the
    emitter changed.
 4. Belongs to 314b.

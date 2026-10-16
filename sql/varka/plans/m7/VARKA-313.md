@@ -304,12 +304,26 @@ merges of 14 and 15 October added or changed, over all 50 configurations and the
 suite-configuration runs), found no other failure; the cancellations are the skip list's and the
 `PinsDefaults` tests'.
 
-**6.1, scored.** 1 is owed to the quiet machine with the command in 3.2. 2 was not measured, as
-registered.
+**6.1, scored.** 1 held at the wide width and missed at the narrow one. The command of 3.2 ran
+on GitHub-hosted runners on the fork on 15 October 2026 (the harness with the section's title as
+`sections`, JDK 25.0.4.1; runs 38802778502 and 38807851072 of `MaxGekk/spark`; the laptop's
+canary read the cache loop 15% off its baseline that evening, so it was not used). Wide, on an
+EPYC 7763 (256-bit datapath): the exact arm's rate against the folded arm's is 2.5% lower
+null-free (1012.7 against 1038.9 M rows/s) and 1.4% higher with mixed nulls (860.0 against 847.8).
+Narrow (`-XX:MaxVectorSize=16`), on an EPYC 9V74: 6.1% lower null-free (485.4 against 517.0) and
+3.6% lower with mixed nulls (399.9 against 414.7, the folded arm the faster in both). The flat
+threshold of 3.2 is 3%, so the rule's "within it at both widths" is not met and the default stays
+off. One run each, and the two widths ran on different runner CPUs, so the narrow gap is not yet
+separated from the machine: a repeat at both widths on one CPU (`expected-cpu` pins it) is what
+would. 2 was not measured, as registered; 314a's pair on the same day, 6.1 of `VARKA-314.md`,
+read the evaluator's per-batch path within 4.1%.
 
 **Left for later, not taken here.**
 
-1. **The exact-status measurement and the default it decides** (3.2), owed to an idle machine.
+1. **The exact-status default** (3.2): measured once at each width on 15 October 2026 (6.1), the
+   narrow arm 3.6% to 6.1% outside the threshold, so the default stays off. A repeat of both
+   widths on one runner CPU decides whether that gap is real; if it is, the alternative of 3.2
+   (attribution on decline, a cost only declining shapes pay) is the next task.
 2. **A plan with no Varka node says nothing about Varka.** A projection or filter with nothing to
    fuse stays Spark's node, and nothing in `EXPLAIN` says why; answering it needs a tag on Spark's
    nodes, as Gluten's `FallbackTags` do, and is the whole-plan half of the row's question.

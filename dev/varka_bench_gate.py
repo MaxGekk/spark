@@ -112,6 +112,12 @@ PARITY_UNGATED = {
     "extract(YEAR FROM ym) over 1000000 rows, null-free": (
         "one observation and a thin margin; not yet a derived must-beat"
     ),
+    # VARKA-313's A/B: the exact-status arm against the folded one. Which is faster is the
+    # question the table asks (runner runs of 15 October 2026 differ by width), so neither
+    # arm has a must-beat direction.
+    "year(date_add(d, i + i)) under ANSI over 1000000 rows": (
+        "the VARKA-313 A/B; which arm is faster is what it measures"
+    ),
 }
 
 # The fused session against the Janino session, for every shape where Varka wins
