@@ -15,6 +15,13 @@ VARKA-295's cause 4. The kernel under test is slow above 40 ns a row (the median
 three seconds) or above 2048 bytes a call (its last second). "--prewarm off" is
 -Dvarka.warmup.vectorTemplates=false; 128 bits is -XX:MaxVectorSize=16.
 
+Which probe each run used. The commit lines below name the branch before it was rebased onto
+master. Section 1 ran on the first build of the probe (commit 6bbb6762da6, whose content is
+a8c595321d4 after the rebase); sections 2 and 5 ran on that build plus the self-review's fixes,
+uncommitted then ("dirty") and committed as 5ed6ebe64f4. The fixes change no reading here: no
+draw was skipped (repeated or declined) and no timed call declined in any run, and the
+summaries were all re-read with the final reader.
+
 1. The sweep at the host's width: N = 0, 16, 64, prewarm on and off, 6 forks each
 
 commit:  6bbb6762da6
