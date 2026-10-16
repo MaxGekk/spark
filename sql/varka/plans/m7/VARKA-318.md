@@ -373,3 +373,26 @@ what changed:
   other reader of `coverage.json` asserts its key set; the reason a row declines with `predicate`
   off is the comparison's, because `caseWhen` compiles its conditions before its values and the
   sink keeps the first decline.
+
+A `/code-review high` of the two commits then found no high-severity bug and seven smaller
+points:
+
+* **Fixed: a throw in the predicate claim lost its family.** `compileNode` turns a throw in a
+  claim's guards into the family's failure; `compileCond` called `condArm` bare, and the
+  `inFamily(CONDITION, ...)` this change removed from the conjunct loop used to cover it. A throw
+  in the `In`/`InSet` type guards would have reached the planning error with no retry sentence.
+  `compileCond` now wraps the claim as `compileNode` does, naming the predicate family.
+* **Fixed: the switches' table hard-coded the default.** `renderSwitches` printed `true` for
+  every switch; it reads `SQLConf.VARKA_FAMILY_SWITCHES(f).defaultValueString` now, so a family
+  added with a different default renders it.
+* Not taken: sharing one claim-then-gate helper between `compileNode` and `compileCond`, and making
+  `VarkaFamilyArm` generic so the predicate claim needs no adapter. Both touch every family for a
+  second caller; the guard wrapping is the one behaviour the two copies must share, and it is now
+  the same.
+* Not taken: memoizing a row's kernels in `VarkaCoverageSuite`, which compiles each row once more
+  for the column in each of its two rendering tests; 9.4.1 measured the two at 0.26 s together.
+* Not taken: one spelling for the switches. `coverage.json` holds the full keys, which a grep
+  for a setting finds; the page prints the `<name>`, which fits a table cell, and says how the
+  name becomes the key.
+* Noted: `condition.enabled=false` no longer stops a filter from fusing. The key has never left
+  this unmerged branch, so nobody holds the old meaning.

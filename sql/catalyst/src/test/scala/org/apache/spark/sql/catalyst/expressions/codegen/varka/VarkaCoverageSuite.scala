@@ -34,6 +34,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.{Forwar
   FusedOutput, KernelOutput, ResidualOutput}
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 import org.apache.spark.sql.catalyst.util.DateTimeConstants.{NANOS_PER_DAY, NANOS_PER_MICROS, NANOS_PER_MILLIS}
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.{BooleanType, DateType, DayTimeIntervalType, IntegerType, LongType, TimeType, YearMonthIntervalType}
 import org.apache.spark.util.Utils
 
@@ -808,14 +809,15 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   }
 
   /**
-   * The family switches' table for the Configuration section, from `VarkaFamily`: the setting,
-   * its default and what it covers, in the words its `SQLConf` doc renders, so the page cannot
-   * drift from the code (VARKA-318).
+   * The family switches' table for the Configuration section, from `VarkaFamily` and the
+   * `SQLConf` entries derived from it: the setting, its default and what it covers, in the words
+   * its `SQLConf` doc renders, so the page cannot drift from the code (VARKA-318).
    */
   private def renderSwitches(): String = {
     val sb = new StringBuilder("| Config | Default | Covers |\n| :--- | :--- | :--- |\n")
     VarkaFamily.values().foreach { f =>
-      sb.append(s"| `${f.switchKey}` | `true` | The ${f.label} family: ${f.covers}. |\n")
+      val default = SQLConf.VARKA_FAMILY_SWITCHES(f).defaultValueString
+      sb.append(s"| `${f.switchKey}` | `$default` | The ${f.label} family: ${f.covers}. |\n")
     }
     sb.toString
   }

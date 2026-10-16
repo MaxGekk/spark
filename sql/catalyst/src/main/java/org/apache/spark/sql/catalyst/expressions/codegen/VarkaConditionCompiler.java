@@ -328,7 +328,13 @@ final class VarkaConditionCompiler {
     if (expr instanceof RuntimeReplaceable r) {
       return compileCond(r.replacement(), inputs, literals, sink);
     }
-    Supplier<Optional<Cond>> arm = condArm(expr, inputs, literals, sink);
+    Supplier<Optional<Cond>> arm;
+    try {
+      arm = condArm(expr, inputs, literals, sink);
+    } catch (RuntimeException e) {
+      // The claim's guards are the family's code too, as in compileNode: a throw there names it.
+      throw new VarkaNodeCompiler.FamilyFailure(VarkaFamily.PREDICATE, e);
+    }
     if (arm == null) {
       return sink.decline("unsupported predicate", expr);
     }
