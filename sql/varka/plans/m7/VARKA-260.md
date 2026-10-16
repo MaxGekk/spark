@@ -140,7 +140,8 @@ aggregate's peak memory, which stays a fraction of a megabyte until the regular 
 page (64 MB at the 4g driver), so it shows whether any key fell through. Derived from the source,
 since Spark has no counter: with dense keys the fast map holds min(K, capacity) keys. The laptop
 smoke grid (2^21 rows, counts only) showed the default arm's peak memory at 0.3 MB at 65,536 keys
-and 64.2 MB at 65,537.
+and 64.2 MB at 65,537. The full grid ran to its end on the laptop in 6 minutes 20 seconds, its
+checks passing; its times are not quoted.
 
 **Prediction, registered before the run.** No step at 65,536. With `id % K` the first 65,536 keys
 fill the fast map without a collision (`numRows < capacity` is checked before the increment, so the
