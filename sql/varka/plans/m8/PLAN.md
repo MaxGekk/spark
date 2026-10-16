@@ -51,6 +51,13 @@ text is kept where it stands, with notes; the places it shaped (1.1 item 3, 2.2,
 rows 350, 364 and 365, the wave table, risk 10, 10.1 item 3) now carry (iii)'s consequences,
 each marked with this date.*
 
+*Owner's answer, 16 October 2026, to question 4 of section 7: "we should start from the tasks that
+establish the foundation of Varka." Neither order the question offered, but a third one derived
+from the rows' dependencies: every foundation row - a row other rows build on, such as a lane, a
+load or store, a shared IR node or a harness - lands before any function row that nothing waits
+on, for every type. The order is 4.1; the old table stays in section 4 as the record. The places
+the cheapest-first order shaped (2.3, 2.9, section 4, 10.4) carry dated notes.*
+
 *Owner's decision, 14 October 2026: no milestone 7 row moves.* The rows still open in
 `m7/PLAN.md` stay there and close there; nothing below depends on one except where a row says so.
 
@@ -321,7 +328,9 @@ Checked in the code on 14 October 2026:
   arm exists - the operators differ (no shifts, no `AND`; `DIV` is a true divide), and so does
   what a comparison means (section 2.7). That is the structural reason the cheapest-first order of
   the owner's brief is right: `BYTE` and `SHORT` exercise a third and fourth width on integral
-  descriptors, before the floating split.
+  descriptors, before the floating split. *16 October 2026:* the order is now foundations first
+  (4.1, the answer to question 4 of section 7), not cheapest first; this structural point stands,
+  since the narrow lanes (wave F1) still land before the floating split (wave F2).
 * **A kernel reads a column as a `MemorySegment` over the Arrow data buffer with a byte stride**
   (`Lane.byteStride`). `TinyIntVector`, `SmallIntVector`, `Float4Vector`, `Float8Vector` and
   `TimeStampMicroVector` are the same shape at strides one, two, four, eight and eight;
@@ -876,7 +885,11 @@ column multiplier), 103 (day-time interval arithmetic, extracts and `make_dt_int
 emitting `AND`, `XOR` and the shifts), 336 (item 34's null-safe equality), 333 (item 55's int
 branches, item 94's CASE without ELSE, and the rewritten conditionals `nullif`, `nvl2`,
 `zeroifnull`, `nullifzero`, `between`), and 334 (item 93's `IS NULL` over a predicate, whose local
-branch exists with seven failures to understand). The integer reading settles four of them:
+branch exists with seven failures to understand). *16 October 2026, since the answer to question 4
+of section 7:* these rows no longer run beside the new lanes. 104 and 334 are foundation rows of
+wave 0, and 333 and 335's first part stay there because they need nothing new; 30, 95, 103, 39,
+89, 336 and 335's second part are function rows, which land after every lane (4.1). The integer
+reading settles four of them:
 
 * **30.** `div` over `INT` is the existing long-lane divide over two exact widening casts, since
   `IntegralDivide.inputType` is `LongType` (with the decimal and interval types) and type coercion
@@ -990,7 +1003,7 @@ catalogue keep theirs. Sizes are the house's small, medium and large.
 | 375 | **Planned** (`VARKA-375.md`, 16 October 2026; the admission check: the Arm runner has BitPerm and `x86.ad` admits the node under AVX with BMI2, so `fromLong` is intrinsic on every host the milestone measures; a host without BitPerm is the same runner under `-XX:UseSVE=1`, which clears the feature in `vm_version_aarch64.cpp`; that canary run and its allocation reading are the first step, and admit the build half only if the fallback allocates or is slower; *owner's decision, 16 October 2026*: the simulation is accepted for the allocation half, and the timing half on a real NEON-only or SVE1 host stays unbuilt until such a host exists). `VectorMask.fromLong` on Arm (section 10.1 item 2): JDK 25 intrinsifies `VectorLongToMask` on aarch64 only with SVE2 BitPerm (`aarch64_vector.ad`), every kernel builds its validity masks with it, and 331's boolean leaf will; on a NEON-only or SVE1 core it is the Java fallback. In this milestone because 1.1 item 5 keys bounds by the Arm library, 367 runs there, and 331 rests on the call. Find whether the Arm runner has BitPerm and what a validity-reading kernel allocates there; if the call falls back, build the mask from the word by a construction every host intrinsifies (a broadcast, a shift by the lane index, a compare) behind an emit option, measured on x86 and Arm. **Done when** the Arm runner's feature line and a validity-reading kernel's allocation rate there are recorded, and either `fromLong` is shown intrinsic on the hosts the milestone measures or the alternative ships with its measurement, the bytes oracle unchanged under the x86 defaults | this plan, 10.1 | small to medium |
 | 376 | **Planned** (`VARKA-376.md`, 16 October 2026; the admission check: no operator-by-operator census exists - the operator table came from an uncommitted probe, and the width audit reads refusals per shape and no allocation - so the row builds one, forked under `VarkaOwnJvm`, verdicts read from the inlining decisions and allocation as a rate, the widths named by species). The intrinsic and allocation census of this milestone's operators (section 10.3 item 3): one probe per family the rows use - byte and short widening and narrowing, the floating compares, `L2D`, `D2L`, `F2D` and `D2F`, lanewise `FMA`, the math operators, unsigned long compares, the decimal de-interleave's rearranges, `VectorMask.fromLong` and `toLong` per species - at 512 bits (the laptop), 256 (the EPYC 7763 runner) and 128 (the forced width and the Arm runner), each asserting its allocation rate as `VARKA-55.md` does, with the two-species case 329's arms create in one JVM. In this milestone because two of its designs already rest on operators the match rules refuse on a CI host (30's conversions on AVX2, 375's mask on Arm). **Done when** the table is committed beside the record's operator table in `skills/vector-api-and-width.md`, and every row whose design uses an operator the table finds non-intrinsic on a host names its form for that host | this plan, 10.3 | small |
 | 377 | **Planned** (`VARKA-377.md`, 16 October 2026; the admission check: no benchmark covers a new type; the classes are Java in sql/core on `VarkaBenchmarkBase`, both arms the row path today; `benchmark.yml` is dispatch-only and x86-only, pinned with `expected-cpu`, the 128-bit arm by `extra-java-options`, results committed from the artifact as runner files). Baseline benchmarks for the new types before their kernels (section 10.3 item 6): one class per family - `TINYINT` and `SMALLINT`, `BOOLEAN`, `TIMESTAMP_NTZ`, the floating types, decimal at precisions 9, 18 and 38 - over a comparison, an arithmetic chain, a cast and a choice, each measured on the unchanged code in its own pull request, the house rule for a baseline, so that every lane row reports its speed-up against Spark's whole-stage-generated row path as a diff. In this milestone because no row measures the new types against Spark, and 2.8's expected decimal speed-up is unmeasured. **Done when** each family's class and both widths' results are committed before the family's first lane row, and that row's measurement diffs against them | this plan, 10.3 | small |
-| 383 | Long-lane kernels released after a kernel history (added 16 October 2026, wave 0; its plan file is a later step). `m7/VARKA-257.md` 9.2 (on PR #873, not yet merged) found that at the host's width with the template prewarm on, the warm-up released long-lane kernels at the 30 s deadline still allocating in 43 of 144 cases at history positions 16 to 63 and 7 of 72 at positions 4 to 15, while the prewarm cut the int lane's releases past position 16 to 15 of 144; every long-lane release had C2 code in use for every loop method, compiled and still allocating. Those readings were taken on the laptop at a machine load of 14 to 30, so the first step is a reproduction on an idle GitHub-hosted runner (through `benchmark.yml` or a workflow dispatch, after the owner's go-ahead), then a fix of the long-lane template prewarm, or whatever the reproduction shows. It folds in `m9/SCOPE.md` item 77 (owner's decision, 16 October 2026): `VarkaWarmupEndToEndSuite` failed on two pull requests that day with `RELEASED did not equal COMPILED` on one shape (`calls=108464` and `calls=109608`), which is 257's cause: the failed job's log (fork run 38912533464) reads `runNanos=120151168042` and `lastProbeBytes=197328`, a release at the suite's 120 s deadline with the last probe still allocating (`m9/SCOPE.md` item 77's notes of the same day; an earlier reading of one second came from a cut-off failure annotation). In this milestone because `DECIMAL` up to precision 18, `DOUBLE` and `TIMESTAMP_NTZ` are long-lane kernels, so every lane row's measurement and the warm-up's promise for them depend on long-lane kernels compiling clean after a history. **Done when** the runner's reproduction is recorded, the cause it shows is fixed or recorded with its reason, the long lane's release rate after a history is read again on the runner, and `VarkaWarmupEndToEndSuite` passes in a full CI run of the sql module | `m7/VARKA-257.md` 9.2 and 9.5; `m9/SCOPE.md` item 77 | medium |
+| 383 | **Planned** (`VARKA-383.md`, 16 October 2026; the admission check, by reading the code and the failed CI job's log: the end-to-end suite's released shape is an int-lane kernel (`DATE`, `Int256Vector`) at a 256-bit runner's width, every loop at tier 4 and boxing at `IntVector.lanewiseTemplate`, in a JVM whose sessions kept the warm-up off for half an hour of Varka suites before the first warm-up ran the template prewarm; so the row has two halves, 257's long lane after a history and a prewarm that comes after the JVM's first kernels, each reproduced on runners through a history mode of `benchmark.yml` before its fix is admitted). Long-lane kernels released after a kernel history (added 16 October 2026, wave 0; its plan file is a later step). `m7/VARKA-257.md` 9.2 (on PR #873, not yet merged) found that at the host's width with the template prewarm on, the warm-up released long-lane kernels at the 30 s deadline still allocating in 43 of 144 cases at history positions 16 to 63 and 7 of 72 at positions 4 to 15, while the prewarm cut the int lane's releases past position 16 to 15 of 144; every long-lane release had C2 code in use for every loop method, compiled and still allocating. Those readings were taken on the laptop at a machine load of 14 to 30, so the first step is a reproduction on an idle GitHub-hosted runner (through `benchmark.yml` or a workflow dispatch, after the owner's go-ahead), then a fix of the long-lane template prewarm, or whatever the reproduction shows. It folds in `m9/SCOPE.md` item 77 (owner's decision, 16 October 2026): `VarkaWarmupEndToEndSuite` failed on two pull requests that day with `RELEASED did not equal COMPILED` on one shape (`calls=108464` and `calls=109608`), which is 257's cause: the failed job's log (fork run 38912533464) reads `runNanos=120151168042` and `lastProbeBytes=197328`, a release at the suite's 120 s deadline with the last probe still allocating (`m9/SCOPE.md` item 77's notes of the same day; an earlier reading of one second came from a cut-off failure annotation). In this milestone because `DECIMAL` up to precision 18, `DOUBLE` and `TIMESTAMP_NTZ` are long-lane kernels, so every lane row's measurement and the warm-up's promise for them depend on long-lane kernels compiling clean after a history. **Done when** the runner's reproduction is recorded, the cause it shows is fixed or recorded with its reason, the long lane's release rate after a history is read again on the runner, and `VarkaWarmupEndToEndSuite` passes in a full CI run of the sql module | `m7/VARKA-257.md` 9.2 and 9.5; `m9/SCOPE.md` item 77 | medium |
 | 28 | **Planned** (`VARKA-28.md`, 18 September 2026, brought up to date 16 October 2026: `NarrowLane` already exists as a root-only node, so the row adds `WidenLane` and lifts the restriction; the emission's lane is read 91 times across the split emitter; this row admits the two `INT` and `BIGINT` cast pairs, the narrow ones and TRY's null with 332). Lane-width conversion: one kernel over two widths, the int-to-long cast and the narrowing back. **Done when** `VARKA-28.md`'s own list holds, with the mixed-width trees of this milestone's casts admitted | catalogue item 39 table; `VARKA-28.md` | medium |
 | 104 | **Planned** (`VARKA-104.md`, 18 September 2026, brought up to date 16 October 2026: the arms and `arithOver` are in `VarkaNodeCompiler.java`, `arithOver` shared with the interval arms; the lattice's long refusal unchanged; division is row 30's; option B not intrinsic on AVX2, option C the limb product 361 reuses). `BIGINT` arithmetic in the three modes, closing VARKA-30's int64 half. **Done when** `VARKA-104.md`'s list holds | catalogue item 39 table; `VARKA-104.md` | medium |
 | 30 | The integral division family: `div`, `%` and `pmod` over `INT` and `BIGINT`, a zero divisor null or raised, by 2.9's reading - `div` over `INT` as the long-lane divide over two widening casts, `pmod(-1, Int.MinValue)` as `Int.MaxValue` with the SMT goal wrapping, a null dividend with a zero divisor null under ANSI, `emitConstDivide` reused for a constant divisor, `pmod` by a power of two as an AND, and the four-`vpmuludq` long-lane magic as a measured option for a literal divisor, and a column divisor: `BIGINT` by Monniaux and Pain's 64-bit algorithm over the whole range, its round-to-nearest conversions emulated as a lemma of their own (`READING_M8_PAPERS.md` 1), `INT` by the double route, `TINYINT` and `SMALLINT` in the `float` lane, exact below `2^24` (`READING_0X80.md`). **Done when** each fuses in the three modes with the row engine's error classes, proven by exhaustion at 32 bits and SMT at 64, the `BIGINT` column divisor by the paper's proof plus the conversion lemma and tested at the paper's corner cases (`b = 1`, `b >= 2^63` after the signs, `b` either side of `2^42`, `Long.MIN_VALUE` against `-1` and `1`) and over a large random draw, and its cost against the scalar loop measured at both widths and on an AVX2 host, where its four conversions are not intrinsic (`x86.ad` needs AVX512DQ for a long to double and a double to long vector cast), so the form is chosen per host statically: the algorithm where the conversions are intrinsic (376 says where), and on AVX2 either a full-range conversion built from 32-bit halves with its own rounding lemma, measured, or the bounded double route with its decline (section 10.1 item 4) | catalogue item 39 table; `m5/PLAN.md` 2.4; item 33 | medium |
@@ -1044,6 +1057,10 @@ catalogue keep theirs. Sizes are the house's small, medium and large.
 
 ## 4. Ordering
 
+*Superseded 16 October 2026 by the owner's answer to question 4 of section 7: the order is 4.1.
+The table below was the cheapest-first order and is kept as the record; its "why they wait" column
+is one of the two sources 4.1's edges are read from.*
+
 | wave | tasks | why they wait |
 | ---: | :--- | :--- |
 | 0 | 328, 28, 104, 333, 334, 335, 365, 375, 376, 377, 383 | 328 makes every later count honest; 28 gates most casts and the timestamp fields; 104, 333, 334 and 335 need nothing new; 365 needs nothing and every decimal row and 368's cast suites read through the paths it fixes, once question 3 of section 7 is answered (*16 October 2026: answered with option (iii), so 365 fixes no path; its three-path test pins the rule 350 and 364 match, and its documentation states the row path's disagreement*); 375, 376 and 377 say what the later rows can rely on and what they measure against (section 10); 383 because `DECIMAL` up to precision 18, `DOUBLE` and `TIMESTAMP_NTZ` are long-lane kernels, so every lane row's measurement and the warm-up's promise for them rest on the long lane's kernels compiling clean after a history (added 16 October 2026) |
@@ -1060,7 +1077,52 @@ At the halfway point the milestone is reviewed against 1.1, not against this tab
 reports the release rate beside it, since `m7` row 374 closed "Done, no fix" (`m7/VARKA-374.md`
 9) and there is no fix to wait for (10.3 item 4; until a correction of the same day this read
 "waits for `m7` row 374, or reports its release rate beside it"); the place of the decimal wave is
-question 4 of section 7.
+question 4 of section 7. *Answered 16 October 2026: foundations first, in 4.1.*
+
+### 4.1 Foundations first (16 October 2026)
+
+*Added 16 October 2026, from the owner's answer to question 4 of section 7: "we should start from
+the tasks that establish the foundation of Varka."* A foundation row is one other rows build on: a
+lane, a load or a store, a shared IR node, or a harness or measurement that a later row's design or
+numbers rest on. A function row is one nothing waits on. The edges are read from the rows of
+section 3 and from the old table's "why they wait" column, not chosen, and every foundation row
+lands before any function row, for every type. Among the foundations the lanes keep the old
+table's type order, the narrow integral widths before the floating split (2.3); rows that share
+files with a foundation row (330 with 329's descriptors; 343 and 344 with 341's lane; 157, 348 and
+349 with 347's load) land beside it rather than reopen those files a wave later.
+
+Wave 0 keeps its rows and its name, so every plan file that opens "wave 0" stays true. It is the
+one place the rule is applied loosely: 333 and 335's first part (335a) are function rows, admitted
+there because they need nothing new. The owner may move them to G1.
+
+| wave | tasks | what they build on, and what builds on them |
+| :--- | :--- | :--- |
+| 0 | 328, 28, 104, 333, 334, 335 (335a), 365, 375, 376, 377, 383 | unchanged. 328's checks count every later row; 28 is under 30, 39, 332, 335b, 337, 340 and every implicit promotion; 104 under 30, 95 and 361 (its limb product); 334 under 336; 365's three-path test pins the rule 350 and 364 match and 368 reads; 375 under 331's mask; 376 under 329's arms and 30's per-host form; 377 under every family's first lane row; 383 under every long-lane measurement (338, 341's `DOUBLE`, 347); 333 and 335a need nothing new |
+| F1 | 329, 330, 331, 27, 332 | the narrow and boolean lanes. 329, after 376, is under 330, 332, 335b, the narrow casts of 343 and 350 and 103's byte output; 330 beside it, and a foundation too, since its first 2^32 sweep is timed and the budget totalled before the next sweep lands (10.3 item 5), so the sweeps of 332 and 343 wait on it; 331, after 375, is under 27, the boolean casts of 332, 343 and 350, and 335b; 27 beside 331 (2.5), its boolean output under 369's kernel-against-kernel arm; 332, after 28, 329 and 331, is the casts' harness 338 builds on |
+| F2 | 338, 341, 343, 344, 342, 345, 367 | the long and floating lanes. 338, after 28 and 332, is under 339 and 340; 341 under 337's canonicalisation node, 342 to 346, 366, 30's divisions in the `float` and `double` lanes and 350's floating casts; 343 beside it, its magic-number conversion under 344's `floor` and `ceil` to `BIGINT` on AVX2 and under 30's AVX2 form (10.1 item 4); 344's constructions under 346; 342 under the compositions of 356 to 358 (the old table's "arithmetic before the math functions"); 345's contract and configuration, then 367's probe, under 356 to 358, 345 held by question 2 with them |
+| F3 | 347, 157, 348, 349, 350, 366, 359, 360 | the decimal lanes. 347's load and 157's store under 348 to 351, with 348 and 349 beside them over the same load; 347's de-interleave under 359's (2.8); 350, after 365, 341 and 343, is under 346, its guards beside 366; 366 under 350's three double-rule casts and 364's two-pass arm; 359, the 128-bit lane pair, after 347, is under 360 to 364 and holds the 128-bit store 351 needs; 360's uncapped add and widening casts are under 351's precision-19 results and every `BIGINT`-with-decimal shape (2.8), its capped shapes landing with 363 |
+| G1 | 39, 95, 89, 335 (335b), 336, 30, 103 | function rows over the existing, narrow and boolean types. 30 after 104, 28, 329 and 341, its form per host by 343 and 376; 103 after 28 and 329, its decimal seconds being 351's shapes |
+| G2 | 339, 340, 337, 346 | function rows over the long and floating lanes. 340's `SECOND` is 351's shape; 337 after 341 and the decimal loads; 346 after 344 and 350 |
+| G3 | 361, 362, 363, 351, 364 | function rows over the decimal lanes. 362's 256-bit product feeds 363's capped shapes, and 363's division is what 364's decimal-to-decimal casts and 351's 128-bit rounding round through, so 363 leads both |
+| G4 | 356, 357, 358 | the math family under the contract, held by question 2 with 345 |
+| close | 352, 368, 369, 353, 354, 355 | 352 grows beside each lane from wave 0, as every lane's first pull request extends the oracles (2.10), 368 from 332's casts and 369 from 27, and the three close here; the rows over every type (336, 337, 352, 368) start when their first lane exists and close after the last; 354 last by definition; 355 written from what 354 records |
+
+What follows from the order:
+
+* **359 moves from last to F3.** It is the base of 360 to 364 and of 351's precision-19 results,
+  and decimal columns are 18.3% of TPC-DS's and TPC-H's (10.4), so the lane pair no longer waits
+  behind every function row of the milestone.
+* **The cut order, if the halfway review needs one,** falls on function rows nothing else waits on,
+  never on a lane: 362 and the capped shapes of 360 and 363 (the 129th bit and the 256-bit
+  dividends), 346's declined bands and 357's compositions. 363's 128-bit division is not a
+  candidate, since 364 and 351 round through it.
+* **The math chain stays held by question 2** whatever the order: 345, and 356 to 358 under it.
+  367's probe needs no lane and decides no row, so whether it runs before question 2 is answered,
+  ahead of 345, which the old table placed before it, is open.
+* **The existing types' function rows wait.** 30, 95, 103, 39, 89 and 336 sat in the old wave 1;
+  they now land after F3 (2.9's note).
+
+At the halfway point the milestone is still reviewed against 1.1, not against this table.
 
 ## 5. Verification
 
@@ -1223,6 +1285,17 @@ Every structural row cites the proof its row names:
    (the review's candidates: 362 and 363's capped shapes, 346's bands, 357's compositions); (B) the
    64-bit decimal rows 347, 157, 348 and 349, which need the long lane and 365 only, ahead of the
    floating wave, and 350 after 341.
+
+   **The owner's answer, 16 October 2026: "we should start from the tasks that establish the
+   foundation of Varka."** Neither (A) nor (B) as written, but a third order, derived from the
+   dependency graph that section 3's rows and section 4's "why they wait" column describe: every
+   foundation row - one other rows build on, such as a lane, a load or store, a shared IR node or
+   a harness - lands before any function row that nothing waits on, for every type. The order is
+   4.1, the old table kept above it as the record. What it keeps of the two options: (A)'s cut
+   order is written in 4.1 and falls on function rows only (362, the capped shapes of 360 and 363,
+   346's bands, 357's compositions); (B)'s 64-bit decimal rows open the decimal foundation wave
+   F3, though after the floating lanes rather than ahead of them, and 350 lands after 341. The
+   128-bit lane pair (359) moves from last to that wave.
 
 ## 8. Explicitly out of milestone 8
 
@@ -1413,3 +1486,7 @@ The plan cited eight of the eleven notes; `READING_HIGHWAY.md`, `READING_LIBM.md
 `DOUBLE` and `FLOAT` none (the taxi benchmark's measures are all doubles). The waves put the decimal
 rows last and the 128-bit rows at the very end, and section 4 promises a halfway review without a
 cut order. Question 4 of section 7 puts the two orders to the owner.
+
+*Answered 16 October 2026 (section 7 question 4): foundations first, the order in 4.1. The decimal
+lanes, the 128-bit lane pair (359) among them, land in wave F3, before any function row, and the
+cut order is written in 4.1, falling on function rows only.*
