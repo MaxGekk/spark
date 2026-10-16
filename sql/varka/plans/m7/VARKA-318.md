@@ -348,3 +348,28 @@ No cost was predicted before these runs; the times are recorded as measured, at 
 
 #### 9.4.2 The self-review
 
+Read over the diff of 9.4 before the pull request, with the review's questions: does every entry
+to a predicate node pass the gate, can a switch change a row it does not cover, can the column
+disagree with the switches, and does anything read the shapes this changes. What it found and
+what changed:
+
+* **The nested failure was claimed, not tested.** The plan said a failure inside a comparison is
+  named as the predicate family's even inside a `CASE WHEN`, because `inFamily` passes an inner
+  family's failure through the outer gate. Nothing checked it: the failure test's predicate row
+  is whichever row first holds the family. `failureNamesTheSwitch` now plants the failure in
+  `CASE WHEN d < d2 THEN d ELSE d2 END` and requires the predicate family's retry sentence and
+  no mention of the condition family's switch.
+* **The query suite's predicate case did not fuse with the switch on.** The first draft used
+  `if(i > 0, i, 0)`, and a comparison over an int column declines ("non-date column of type
+  int"), so the "switched back on, it fuses" half failed while the decline half passed. It is
+  `if(d > DATE'2000-01-01', d, DATE'2000-01-01')` now.
+* **The column's empty cell said the wrong thing.** The first rendering said a row with no
+  switch "reads only columns and literals"; the one such row, `CAST(ymy AS INTERVAL MONTH)`, is
+  a cast that lowers to the read. Both the page and `coverage.json` now say "compiles to a bare
+  column read".
+* Checked and unchanged: `catalyst_classes_admitted` in `coverage.json` did not move, so the
+  coverage suite's source scan still sees every predicate class after the `instanceof` chain
+  became a `switch`; nothing in `sql/varka/matrix/skips.tsv` names the renamed filter test; no
+  other reader of `coverage.json` asserts its key set; the reason a row declines with `predicate`
+  off is the comparison's, because `caseWhen` compiles its conditions before its values and the
+  sink keeps the first decline.
