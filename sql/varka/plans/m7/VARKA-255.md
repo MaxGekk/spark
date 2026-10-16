@@ -979,3 +979,92 @@ pull request's branch lives on the fork, whose default branch does not carry the
 **Known and left.** `dev/is-changed.py` keeps reading an empty diff as no change: the master runs
 name their jobs and never ask it, and a branch pushed with no commits of its own has the same
 empty diff and must not start the full matrix.
+
+### 9.3 The two owed wide-kernel pairs: split into one-round jobs? (16 October 2026)
+
+The owner asked whether row 322a's tenth pair (PR #780's Java port against its Scala form at the
+merge base) and row 325's second (PR #789's split fix against its merge base) can run on the
+fork's runners as separate one-round pair jobs (`rounds=1`), three per pair, instead of one job
+of at least three rounds. Nothing was dispatched: the first question below ends it.
+
+**0. Neither pair can run on any runner, at any round count.** A pair runs the class on the base
+and on the head (`dev/varka_bench_pair.sh`), and its `run_side` ends the pair on a side whose
+regeneration fails (`the base run failed`); a harness run that dies writes no results file.
+Both bases die. #789's merge base `453944cbfb1` has the sixth section's `require(sizes.size() >
+1, shape.label() + " fits one kernel: nothing to compare")` (its line 560): sixty-four dates by
+field, 256 outputs, fits one kernel on today's emitter, so the run stops there and the seventh
+section never runs. #780's merge base `ad1feaa347c` is the Scala form of the same class with the
+same shape and the same failure (`VARKA-322.md` 9: "the Scala form fails the same way on today's
+emitter"), and #780's own head, the Java port, has the bug too: #789 is what fixed it. 322a's
+tenth pair and 325's second therefore have a head that finishes (only #789's) and a base that
+never does; the five earlier sections are all a base can give. The `VARKA-322.md` 9 comparison of
+the first five sections, by dry-run ids and by the laptop's run to the sixth, is what exists.
+
+**What a section subset would need, and why it cannot be had for these two bases.** (2) The class
+has no section filter. `-Dvarka.bench.only` (`VarkaBenchmarkBase.only`) selects cases by name
+substring and is refused whenever a results file is written, which the regeneration always does;
+the workflow's `sections` input only chooses which sections of a finished run replace the
+committed ones, and `extra-java-options` does not apply to a pair. A subset path is a change to
+the class (a property read where `section(...)` is called), to `dev/varka_bench_regen.sh` and
+`dev/varka_bench_pair.sh` (pass it, and compare the sections that ran), and to `benchmark.yml`
+(an input); and it must exist on both sides of the pair. The two bases predate it and cannot be
+moved: the workflow's `base` is `HEAD`, a SHA of the checkout (the base repository's pull-request
+head with its history) or a branch of `vecbricks/varka`, so a fork-only patch commit on top of
+`ad1feaa` or `453944cbfb1` is unreachable, and nothing may be pushed to `origin`.
+
+**1. Time, for a pair that could run.** Per run of the class's step on the fork's runners (the
+list is 2.6's, with the two runs found for this section): EPYC 9V74, 88 min 53 s, run
+`37048974333` (2 October, an older class, as the committed runner file's provenance); Xeon
+8370C, 189 min 48 s, run `37125243691` (3 October, an older class); EPYC 7763, 173 min 54 s, run
+`38555932989`, today's class, build included (the job's 2:55:41). A one-round pair is two builds
+(the setup step takes 3 min, a tree's first compile a few more: the Emission pair of
+`38555937778` spent 5 min 30 s before its probe) and two runs: 2 x 174 + about 15 = about 363
+min on the 7763 against the cap of 355 (`timeout-minutes`), and 2 x 190 + 15 = about 395 on the
+8370C: **a one-round pair does not fit on either**, and the margin the owner computed (5 min) is
+on the 7763 negative. It fits only on a 9V74: about 100 min a run on today's class (the 7763 is
+57% to 86% slower on its kernel rows, `VARKA-322.md` 9, which scales 174 to 100 to 110), so about
+215 to 235 min, one to two hours of margin, and `rounds=1` only (two rounds would be about 420).
+Getting a 9V74 means `-f expected-cpu="AMD EPYC 9V74"`, which the probe step checks by substring
+and fails the job on a mismatch about four minutes in; the pool gave a 9V74 8 times in 40, so
+about five dispatches per kept job, about thirty for six. The 9V45 (9 in 40, 512:256 = 1.99, a
+different datapath) has no run of this class and is not mixed in.
+
+**3. Whether one-round jobs from different runners combine honestly, and the rule.** Within one
+CPU model, yes, with two named weaknesses. Each job's pair is a self-contained control (both
+sides on one VM, minutes apart), and `dev/varka_bench_pair.py compare` takes any number of files
+per side, so three jobs give three base and three head files: the same medians and bests as a
+three-round pair, taken on three VMs rather than one. Weaknesses: (i) a one-round job always
+runs the base first (`r % 2 = 1`), so a drift that favours the second run reads as a head effect
+in all three jobs alike, where a real pair swaps the order each round; and (ii) no A/A of this
+class exists on a runner (`VARKA-322.md` 9: "no A/A run of this class exists yet"), while the
+neighbouring class's runner A/A read 9.9% by median and 16.2% by best on one row (`VARKA-322.md`
+9), so a 10% threshold can be crossed by the runner alone. Different CPU models do not combine:
+their rates differ by 60% or more (7763 against 9V74), and a median over a mixed set takes
+whichever model sits in the middle, for the two sides alike only by luck.
+
+**The rule, registered before any data.**
+
+1. A pair is three jobs, each `rounds=1`, `expected-cpu="AMD EPYC 9V74"`, `class=
+   VarkaWideKernelBenchmark`, all three on the same base and head. A job on any other CPU, or one
+   that does not finish, is not used and is dispatched again; the verdict needs all three.
+2. Pool the three base and the three head files with `dev/varka_bench_pair.py compare --threshold
+   10`. A row is **slower** only if (a) the pooled change is at most -10% by both the median and
+   the best, and (b) at least two of the three jobs' own base-against-head changes, each from its
+   one pair of runs, are at most -10%. A row that passes (a) and fails (b) is reported as
+   unconfirmed, not slower. Faster is the same with the signs reversed.
+3. The pair passes if no row is slower. An unconfirmed row, or a slower one on a row whose
+   section the plan names bimodal, is read against that row's spread over the three jobs before
+   any call, and is not rerun to a better draw.
+4. The order confound of (i) is stated with the verdict, and the verdict is "no row moved by 10%
+   in this order", not a claim about the other order.
+
+**Alternatives, for the owner.** (A) Close 322a's tenth pair on what exists: dry-run ids and the
+names of every section, benchmark and case identical (`VARKA-322.md` 9), and the first five
+sections matching the committed laptop file; the sixth and seventh sections exist only in the
+Java class's fixed form. 325's second pair has no base to measure: its evidence is the laptop
+regeneration within a few percent of the 3 October file and the runner regeneration and
+Emission pair already recorded. (B) Build the subset path above as its own row, with the three
+one-round jobs and the rule here as its first use, on a base that has it; it serves every pair
+after those two, and a class past the cap by another margin. (C) Run, on the 9V74, a pair that
+can finish, the head against #789's tip, which measures neither owed question and is not
+recommended.
