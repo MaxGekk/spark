@@ -2015,11 +2015,14 @@ alternative is a subsystem with a published list of the ways it is not.
    the plan carries this fallback text), and `checkSparkAnswerMaybeThrows`
    (both engines throw, or both agree) (`CometTestBase`). This engine's
    compiler suite asserts decline reasons and its differential asserts fusion;
-   the "maybe throws" form is the one it lacks and the one `ANSI` rows need:
+   the "maybe throws" form was the one it lacked and the one `ANSI` rows need:
    under `FAIL` the assertion is that Varka and the row engine either both
-   raise the same error or both agree, which is stronger than "declined". A
-   small addition to `VarkaSharedSessions`, best made when the first `ANSI`
-   overflow row lands in the coverage table.
+   raise the same error or both agree, which is stronger than "declined".
+   VARKA-317 (16 October 2026) found the check already private to
+   `VarkaCoverageDifferentialSuite`, made it the shared
+   `checkSparkAnswerMaybeThrows` and `checkSparkRaisesTheSame` in
+   `VarkaMaybeThrows.scala`, moved the paired intercepts of two more suites
+   onto it, and proved it with planted mismatches (`m7/VARKA-317.md` 9).
 
 **Noted for later.** Comet reverts a whole stage to Spark rows when it counts
 more than a configured number of columnar-to-row transitions in it
@@ -5176,6 +5179,21 @@ limits were for the warm-up flake. Before anyone recommends it, measure what it 
 that never cycle: the throughput and parity benchmarks with and without it at both widths, and the
 warm-up's time to its verdict. **Done when** the cost is committed per benchmark family and the
 documentation says when the flag is worth setting, or that it is not.
+
+### Item 101. The 2-lane long kernel: mask-free, or declined
+
+*Added 16 October 2026 from `m7/VARKA-374.md` 9.* At `-XX:MaxVectorSize=16` a `long` vector has two
+lanes, and `x86.ad` refuses `VectorLoadMask`, `VectorStoreMask` and `VectorMaskCast` at
+`vlen == 2` before any profile is read, so every mask operation on the long lane runs the Vector
+API's Java fallback and allocates: 38 of 41 and 133 of 151 warm-up releases at 128 bits, and a
+compare, mask-and and blend loop 18 times slower at two long lanes than at four int lanes, the
+same under `-XX:UseAVX=1`. The aarch64 JIT supports two-lane masks, so this is an x86 host below
+its native width: AVX-only and SSE-only machines. VARKA-153 left the choice open in September and
+it was never taken. Either the long lane gets a lowering without masks at two lanes (validity
+carried as a long, blends as arithmetic), or the compiler declines a kernel with a long-lane mask
+where the species has two lanes, with the reason in `EXPLAIN`. **Done when** one of the two is
+built and the 128-bit warm-up arm releases no kernel for this cause, or the record says why
+neither is worth it on the hosts that have it.
 
 ## 5. Ordering
 
