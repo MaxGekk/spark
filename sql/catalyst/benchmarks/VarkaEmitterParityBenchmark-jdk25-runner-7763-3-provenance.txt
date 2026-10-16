@@ -1,0 +1,12 @@
+benchmark:   *.VarkaEmitterParityBenchmark
+where:       a GitHub-hosted runner, through .github/workflows/benchmark.yml
+run:         https://github.com/MaxGekk/spark/actions/runs/38855817570
+commit:      9edd1e96bb7 (bench-313r of MaxGekk/spark)
+date:        2026-10-16T05:59:43Z
+inputs:      jdk=25 scala=2.13 num-splits=1 extra-java-options=--add-modules jdk.incubator.vector
+jdk:         OpenJDK Runtime Environment Zulu25.36+205-CA (build 25.0.4.1+1-LTS)
+kernel:      6.17.0-1022-azure
+cpu:         AMD EPYC 7763 64-Core Processor
+datapath:    44.9 / 90.1 / 90.2 lane-ops/ns at 128 / 256 / 512 bits; 256:128 = 2.01 (control), 512:256 = 1.00 (dev/varka_datapath.sh)
+pinned to:   none (the runner is not pinned)
+sections:    VARKA-313: exact refusal status, a mask per reason against one folded mask (the rest of the file is as committed)
