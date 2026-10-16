@@ -297,35 +297,35 @@ The *128-bit lanes* column is `sql/varka/width_audit.json`'s census on AMD Ryzen
 
 | Expression | Domain | Notes | 128-bit lanes |
 |---|---|---|---|
-| `year(d)` |  |  | vector |
-| `month(d)` |  |  | vector |
-| `day(d)` |  |  | vector |
-| `quarter(d)` |  |  | vector |
-| `dayofyear(d)` |  |  | vector |
+| `year(d)` | `unix_date(d) BETWEEN -719162 AND 2932896` |  | vector |
+| `month(d)` | `unix_date(d) BETWEEN -719162 AND 2932896` |  | vector |
+| `day(d)` | `unix_date(d) BETWEEN -719162 AND 2932896` |  | vector |
+| `quarter(d)` | `unix_date(d) BETWEEN -719162 AND 2932896` |  | vector |
+| `dayofyear(d)` | `unix_date(d) BETWEEN -719162 AND 2932896` |  | vector |
 | `dayofweek(d)` |  |  | vector |
 | `weekday(d)` |  |  | vector |
 | `extract(DAYOFWEEK_ISO FROM d)` |  |  | vector |
-| `weekofyear(d)` |  |  | vector |
-| `extract(YEAROFWEEK FROM d)` |  |  | vector |
-| `last_day(d)` |  |  | vector |
+| `weekofyear(d)` | `unix_date(d) BETWEEN -719162 AND 2932896` |  | vector |
+| `extract(YEAROFWEEK FROM d)` | `unix_date(d) BETWEEN -719162 AND 2932896` |  | vector |
+| `last_day(d)` | `unix_date(d) BETWEEN -719162 AND 2932896` |  | vector |
 | `next_day(d, 'MONDAY')` |  | the day name must be a literal | vector |
 | `make_date(2021, i, 1)` | `i BETWEEN 1 AND 12` | the month under ANSI: an invalid date declines the batch and the row engine raises; the legacy form answers null and declines nothing | vector |
-| `trunc(d, 'YEAR')` |  |  | vector |
-| `trunc(d, 'MONTH')` |  |  | vector |
-| `trunc(d, 'QUARTER')` |  |  | vector |
+| `trunc(d, 'YEAR')` | `unix_date(d) BETWEEN -719162 AND 2932896` |  | vector |
+| `trunc(d, 'MONTH')` | `unix_date(d) BETWEEN -719162 AND 2932896` |  | vector |
+| `trunc(d, 'QUARTER')` | `unix_date(d) BETWEEN -719162 AND 2932896` |  | vector |
 | `trunc(d, 'WEEK')` |  |  | vector |
 
 #### Months and year-month intervals
 
 | Expression | Domain | Notes | 128-bit lanes |
 |---|---|---|---|
-| `add_months(d, 3)` |  |  | vector |
-| `add_months(d, i)` | `i BETWEEN -24576 AND 24564` | a column month count, inside the range the month arithmetic's magic divide is exact over | vector |
-| `d + INTERVAL 3 MONTH` |  |  | vector |
-| `d + ym` | `ym BETWEEN INTERVAL '-2048-0' YEAR TO MONTH AND INTERVAL '2047-0' YEAR TO MONTH` | the interval's month count, under the same range | vector |
-| `d - ym` | `ym BETWEEN INTERVAL '-2047-0' YEAR TO MONTH AND INTERVAL '2048-0' YEAR TO MONTH` | the negated count under the range, so the bounds change sides | vector |
-| `make_ym_interval(year(d), month(d))` |  | the operands must be bounded - over a bare int column the checked multiply inside it keeps its overflow test and declines | vector |
-| `make_ym_interval(year(d), month(d)) * 2` |  | a checked multiply, so bounded operands again: `ym * 2` over a stored interval column declines | vector |
+| `add_months(d, 3)` | `unix_date(d) BETWEEN -719162 AND 2932896` |  | vector |
+| `add_months(d, i)` | `unix_date(d) BETWEEN -719162 AND 2932896 AND i BETWEEN -24576 AND 24564` | a column month count, inside the range the month arithmetic's magic divide is exact over | vector |
+| `d + INTERVAL 3 MONTH` | `unix_date(d) BETWEEN -719162 AND 2932896` |  | vector |
+| `d + ym` | `unix_date(d) BETWEEN -719162 AND 2932896 AND ym BETWEEN INTERVAL '-2048-0' YEAR TO MONTH AND INTERVAL '2047-0' YEAR TO MONTH` | the interval's month count, under the same range | vector |
+| `d - ym` | `unix_date(d) BETWEEN -719162 AND 2932896 AND ym BETWEEN INTERVAL '-2047-0' YEAR TO MONTH AND INTERVAL '2048-0' YEAR TO MONTH` | the negated count under the range, so the bounds change sides | vector |
+| `make_ym_interval(year(d), month(d))` | `unix_date(d) BETWEEN -719162 AND 2932896` | the operands must be bounded - over a bare int column the checked multiply inside it keeps its overflow test and declines | vector |
+| `make_ym_interval(year(d), month(d)) * 2` | `unix_date(d) BETWEEN -719162 AND 2932896` | a checked multiply, so bounded operands again: `ym * 2` over a stored interval column declines | vector |
 | `abs(ym)` | `ym > INTERVAL '-178956970-8' YEAR TO MONTH` | interval arithmetic is exact in every mode: the one count whose negation overflows declines | vector |
 | `ym - ymm` | `CAST(ym AS BIGINT) - CAST(ymm AS BIGINT) BETWEEN -2147483648 AND 2147483647` | exact in every mode: a difference outside the month count's int declines | vector |
 | `CAST(ymy AS INTERVAL MONTH)` |  |  | vector |
@@ -338,9 +338,9 @@ The *128-bit lanes* column is `sql/varka/width_audit.json`'s census on AMD Ryzen
 |---|---|---|---|
 | `i + 1` | `i < 2147483647` | checked under ANSI; the legacy mode wraps as Spark does and declines nothing | vector |
 | `i - 1` | `i > -2147483648` | checked under ANSI | vector |
-| `year(d) * 2` |  | a multiply is checked, and only bounded operands take the check off: `i * 2` over a bare int column declines | vector |
+| `year(d) * 2` | `unix_date(d) BETWEEN -719162 AND 2932896` | a multiply is checked, and only bounded operands take the check off: `i * 2` over a bare int column declines | vector |
 | `-i` | `i > -2147483648` | checked under ANSI | vector |
-| `year(d) + i` | `i <= 2147483647 - year(d)` | checked under ANSI; the lower bound is out of reach, since a year is at least 1 | vector |
+| `year(d) + i` | `unix_date(d) BETWEEN -719162 AND 2932896 AND i <= 2147483647 - year(d)` | checked under ANSI; the lower bound is out of reach, since a year is at least 1 | vector |
 
 #### Choice and nulls
 
@@ -363,15 +363,15 @@ The *128-bit lanes* column is `sql/varka/width_audit.json`'s census on AMD Ryzen
 | `d <= d2` |  |  | vector |
 | `d > d2` |  |  | vector |
 | `d >= d2` |  |  | vector |
-| `year(d) = 2021` |  |  | vector |
+| `year(d) = 2021` | `unix_date(d) BETWEEN -719162 AND 2932896` |  | vector |
 | `NOT (d = d2)` |  |  | vector |
 | `d IN (DATE '2021-01-01', DATE '2021-06-01')` |  | up to 16 literals | vector |
-| `year(d) = 2021 AND i > 0` |  | every conjunct of an AND fuses or the predicate is not in this table; the int column compares in the kernel rather than leaving a residual row filter (VARKA-122) | vector |
+| `year(d) = 2021 AND i > 0` | `unix_date(d) BETWEEN -719162 AND 2932896` | every conjunct of an AND fuses or the predicate is not in this table; the int column compares in the kernel rather than leaving a residual row filter (VARKA-122) | vector |
 | `i > 0` |  | a bare int column compares in the kernel (VARKA-122) | vector |
 | `i IS NOT NULL` |  | the same column's validity word, which the optimizer infers beside `i > 0` | vector |
 | `i = 5` |  |  | vector |
-| `month(d) > i` |  | an int column against a fused int field | vector |
-| `year(d) = 2021 OR month(d) = 3` |  |  | vector |
+| `month(d) > i` | `unix_date(d) BETWEEN -719162 AND 2932896` | an int column against a fused int field | vector |
+| `year(d) = 2021 OR month(d) = 3` | `unix_date(d) BETWEEN -719162 AND 2932896` |  | vector |
 | `d IN (11 to 16 date literals)` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | vector |
 
 #### Long-lane predicates

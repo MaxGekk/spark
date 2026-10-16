@@ -238,7 +238,7 @@ final class VarkaIntervalCompiler {
       VarkaSlotTable literals,
       DeclineSink sink) {
     return intervalOperand(child, "the negated interval", inputs, literals, sink)
-        .map(x -> (VarkaVectorIR) new IntNeg(negationMode(x, literals), x));
+        .map(x -> (VarkaVectorIR) new IntNeg(negationMode(x, literals, sink), x));
   }
 
   /**
@@ -257,7 +257,7 @@ final class VarkaIntervalCompiler {
     return intervalOperand(child, "the absolute interval", inputs, literals, sink).map(x -> {
       LiteralSlot zero = VarkaNodeCompiler.intSlot(0, literals);
       return (VarkaVectorIR) new IfElse(new Compare(CompareOp.LT, x, zero),
-          new IntNeg(negationMode(x, literals), x), x);
+          new IntNeg(negationMode(x, literals, sink), x), x);
     });
   }
 
@@ -266,8 +266,8 @@ final class VarkaIntervalCompiler {
    * {@code Int.MaxValue}, the one value whose negation overflows may be there. This family's
    * negate and {@code abs}, and the calendar family's negated month count.
    */
-  static Overflow negationMode(VarkaVectorIR x, VarkaSlotTable literals) {
-    boolean bounded = VarkaNodeCompiler.boundedByIntMax(x, literals);
+  static Overflow negationMode(VarkaVectorIR x, VarkaSlotTable literals, DeclineSink sink) {
+    boolean bounded = VarkaNodeCompiler.boundedByIntMax(x, literals, sink);
     return bounded ? Overflow.WRAP : Overflow.FAIL;
   }
 

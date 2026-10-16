@@ -77,7 +77,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "Year" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "month(d)",
@@ -85,7 +85,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "Month" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "day(d)",
@@ -93,7 +93,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "DayOfMonth" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "quarter(d)",
@@ -101,7 +101,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "Quarter" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "dayofyear(d)",
@@ -109,7 +109,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "DayOfYear" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "dayofweek(d)",
@@ -141,7 +141,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "WeekOfYear" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "extract(YEAROFWEEK FROM d)",
@@ -149,7 +149,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "Extract", "YearOfWeek" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "last_day(d)",
@@ -157,7 +157,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "LastDay" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "next_day(d, 'MONDAY')",
@@ -181,7 +181,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "TruncDate" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "trunc(d, 'MONTH')",
@@ -189,7 +189,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "TruncDate" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "trunc(d, 'QUARTER')",
@@ -197,7 +197,7 @@
     "family" : "Calendar fields",
     "form" : "projection",
     "catalyst" : [ "TruncDate" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "trunc(d, 'WEEK')",
@@ -213,7 +213,7 @@
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "AddMonths" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "add_months(d, i)",
@@ -221,7 +221,7 @@
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "AddMonths" ],
-    "domain" : "i BETWEEN -24576 AND 24564",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896 AND i BETWEEN -24576 AND 24564",
     "note" : "a column month count, inside the range the month arithmetic's magic divide is exact over"
   }, {
     "sql" : "d + INTERVAL 3 MONTH",
@@ -229,7 +229,7 @@
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "DateAddYMInterval" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "d + ym",
@@ -237,7 +237,7 @@
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "DateAddYMInterval" ],
-    "domain" : "ym BETWEEN INTERVAL '-2048-0' YEAR TO MONTH AND INTERVAL '2047-0' YEAR TO MONTH",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896 AND ym BETWEEN INTERVAL '-2048-0' YEAR TO MONTH AND INTERVAL '2047-0' YEAR TO MONTH",
     "note" : "the interval's month count, under the same range"
   }, {
     "sql" : "d - ym",
@@ -245,7 +245,7 @@
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "DateAddYMInterval", "DatetimeSub", "UnaryMinus" ],
-    "domain" : "ym BETWEEN INTERVAL '-2047-0' YEAR TO MONTH AND INTERVAL '2048-0' YEAR TO MONTH",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896 AND ym BETWEEN INTERVAL '-2047-0' YEAR TO MONTH AND INTERVAL '2048-0' YEAR TO MONTH",
     "note" : "the negated count under the range, so the bounds change sides"
   }, {
     "sql" : "make_ym_interval(year(d), month(d))",
@@ -253,7 +253,7 @@
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "MakeYMInterval", "Month", "Year" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : "the operands must be bounded - over a bare int column the checked multiply inside it keeps its overflow test and declines"
   }, {
     "sql" : "make_ym_interval(year(d), month(d)) * 2",
@@ -261,7 +261,7 @@
     "family" : "Months and year-month intervals",
     "form" : "projection",
     "catalyst" : [ "MakeYMInterval", "Month", "MultiplyYMInterval", "Year" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : "a checked multiply, so bounded operands again: `ym * 2` over a stored interval column declines"
   }, {
     "sql" : "abs(ym)",
@@ -325,7 +325,7 @@
     "family" : "Integer arithmetic",
     "form" : "projection",
     "catalyst" : [ "Multiply", "Year" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : "a multiply is checked, and only bounded operands take the check off: `i * 2` over a bare int column declines"
   }, {
     "sql" : "-i",
@@ -341,7 +341,7 @@
     "family" : "Integer arithmetic",
     "form" : "projection",
     "catalyst" : [ "Add", "Year" ],
-    "domain" : "i <= 2147483647 - year(d)",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896 AND i <= 2147483647 - year(d)",
     "note" : "checked under ANSI; the lower bound is out of reach, since a year is at least 1"
   }, {
     "sql" : "if(d < d2, d, d2)",
@@ -445,7 +445,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "EqualTo", "Year" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "NOT (d = d2)",
@@ -469,7 +469,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "And", "EqualTo", "GreaterThan", "Year" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : "every conjunct of an AND fuses or the predicate is not in this table; the int column compares in the kernel rather than leaving a residual row filter (VARKA-122)"
   }, {
     "sql" : "i > 0",
@@ -501,7 +501,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "GreaterThan", "Month" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : "an int column against a fused int field"
   }, {
     "sql" : "year(d) = 2021 OR month(d) = 3",
@@ -509,7 +509,7 @@
     "family" : "Predicates",
     "form" : "predicate",
     "catalyst" : [ "EqualTo", "Month", "Or", "Year" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "d IN (11 to 16 date literals)",

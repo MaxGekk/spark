@@ -29,6 +29,7 @@ import scala.runtime.AbstractPartialFunction;
 import org.apache.spark.sql.catalyst.expressions.Attribute;
 import org.apache.spark.sql.catalyst.expressions.BoundReference;
 import org.apache.spark.sql.catalyst.expressions.Expression;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaChrono;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
 
@@ -63,8 +64,12 @@ final class DeclineSink {
   /** The longest rendering of an expression a decline keeps. */
   private static final int SHOWN_MAX = 80;
 
-  /** A noted range fact: child ordinal {@code ordinal} lies in {@code [lo, hi]}. */
-  private record Bound(int ordinal, int lo, int hi) {
+  /**
+   * A noted range fact: the input {@code key} names lies in {@code [lo, hi]}. The key is a child
+   * ordinal, or, where {@code slot} is set, the input's slot in the compile's input table - what
+   * an IR {@code ColumnRef} carries, so a fact the range analysis reports needs no table to note.
+   */
+  private record Bound(int key, boolean slot, int lo, int hi) {
   }
 
   private final Seq<Attribute> childOutput;
@@ -84,7 +89,24 @@ final class DeclineSink {
 
   /** Notes that child ordinal {@code ordinal} must lie in {@code [lo, hi]}. */
   void bound(int ordinal, int lo, int hi) {
-    bounds.add(new Bound(ordinal, lo, hi));
+    bounds.add(new Bound(ordinal, false, lo, hi));
+  }
+
+  /**
+   * Notes that the input in slot {@code slot} of the compile's input table must lie in
+   * {@code [lo, hi]}. Slots are stable for as long as the bound is kept: the table only appends,
+   * and a declining entry truncates the table and these bounds back to the same marks.
+   */
+  void boundSlot(int slot, int lo, int hi) {
+    bounds.add(new Bound(slot, true, lo, hi));
+  }
+
+  /**
+   * Notes the column bound, {@code VarkaRangeAnalysis.CONTRACT}, on the date column in input slot
+   * {@code slot}: the callback a compile hands the range analysis when it acts on the answer.
+   */
+  void dayColumnBound(int slot) {
+    boundSlot(slot, VarkaChrono.CONTRACT_MIN_DAYS, VarkaChrono.CONTRACT_MAX_DAYS);
   }
 
   int boundsMark() {
@@ -127,7 +149,9 @@ final class DeclineSink {
   List<VarkaInputBound> inputBounds(VarkaSlotTable inputs) {
     var distinct = new LinkedHashSet<VarkaInputBound>();
     for (Bound b : bounds) {
-      OptionalInt index = inputs.slot(b.ordinal());
+      OptionalInt index = b.slot()
+          ? (b.key() < inputs.size() ? OptionalInt.of(b.key()) : OptionalInt.empty())
+          : inputs.slot(b.key());
       if (index.isPresent()) {
         distinct.add(new VarkaInputBound(index.getAsInt(), b.lo(), b.hi()));
       }

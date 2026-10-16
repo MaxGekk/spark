@@ -226,7 +226,7 @@ final class VarkaNodeCompiler {
           // overflows on exactly one value, `Int.MinValue`, so any bound at all rules it out and
           // the check comes off - the same reasoning the binary arms use, on a narrower fact.
           () -> intOperand(n.child(), inputs, literals, sink).map(x -> {
-            boolean checked = n.failOnError() && !boundedByIntMax(x, literals);
+            boolean checked = n.failOnError() && !boundedByIntMax(x, literals, sink);
             return (VarkaVectorIR) new IntNeg(checked ? Overflow.FAIL : Overflow.WRAP, x);
           });
       default -> null;
@@ -408,22 +408,24 @@ final class VarkaNodeCompiler {
   }
 
   /**
-   * How large an int-valued node's result can be in absolute value, or empty where nothing
-   * bounds it: {@link VarkaRangeAnalysis}'s {@code INT} query. This exists so a checked operation
-   * that provably cannot overflow needs no check - which is what makes
-   * {@code year(d) * 100 + month(d)} fuse under ANSI, the shape {@code VARKA-63.md} 6 measures.
-   * The compiler can do this and the emitter cannot: a {@code LiteralSlot} carries a slot index,
-   * and the value behind it only arrives in {@code scalarArgs} at run time. Conservative by
-   * construction: an empty answer costs a check or a decline and never a wrong answer.
+   * Whether {@code node}'s magnitude - how large an int-valued result can be in absolute value,
+   * {@link VarkaRangeAnalysis}'s {@code INT} query - is known and at most {@code Int.MaxValue}.
+   * This exists so a checked operation that provably cannot overflow needs no check - which is
+   * what makes {@code year(d) * 100 + month(d)} fuse under ANSI, the shape {@code VARKA-63.md} 6
+   * measures. The compiler can do this and the emitter cannot: a {@code LiteralSlot} carries a
+   * slot index, and the value behind it only arrives in {@code scalarArgs} at run time.
+   * Conservative by construction: a no costs a check or a decline and never a wrong answer. A yes
+   * removes a check, so a date column the magnitude rests on - under a {@code datediff} - gets the
+   * column bound noted in {@code sink}, which the evaluator checks per batch (VARKA-379).
    */
-  static OptionalLong magnitude(VarkaVectorIR node, VarkaSlotTable literals) {
-    return VarkaRangeAnalysis.magnitude(node, literalAt(literals));
-  }
-
-  /** Whether {@code node}'s magnitude is known and at most {@code Int.MaxValue}. */
-  static boolean boundedByIntMax(VarkaVectorIR node, VarkaSlotTable literals) {
-    OptionalLong m = magnitude(node, literals);
-    return m.isPresent() && m.getAsLong() <= Integer.MAX_VALUE;
+  static boolean boundedByIntMax(VarkaVectorIR node, VarkaSlotTable literals, DeclineSink sink) {
+    var columns = new ArrayList<Integer>();
+    OptionalLong m = VarkaRangeAnalysis.magnitude(node, literalAt(literals), columns::add);
+    boolean bounded = m.isPresent() && m.getAsLong() <= Integer.MAX_VALUE;
+    if (bounded) {
+      columns.forEach(sink::dayColumnBound);
+    }
+    return bounded;
   }
 
   /**
@@ -436,8 +438,8 @@ final class VarkaNodeCompiler {
    * overflows.
    */
   private static boolean cannotOverflow(
-      IntOp op, VarkaVectorIR l, VarkaVectorIR r, VarkaSlotTable literals) {
-    return boundedByIntMax(new IntArith(op, Overflow.WRAP, l, r), literals);
+      IntOp op, VarkaVectorIR l, VarkaVectorIR r, VarkaSlotTable literals, DeclineSink sink) {
+    return boundedByIntMax(new IntArith(op, Overflow.WRAP, l, r), literals, sink);
   }
 
   /**
@@ -485,7 +487,7 @@ final class VarkaNodeCompiler {
       VarkaSlotTable literals,
       int mark,
       DeclineSink sink) {
-    Overflow overflow = declared != Overflow.WRAP && cannotOverflow(op, x, y, literals)
+    Overflow overflow = declared != Overflow.WRAP && cannotOverflow(op, x, y, literals, sink)
         ? Overflow.WRAP
         : declared;
     if (op == IntOp.MUL && overflow != Overflow.WRAP) {

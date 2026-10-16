@@ -589,7 +589,7 @@ final class VarkaChronoCompiler {
       Optional<VarkaVectorIR> x = VarkaIntervalCompiler.intervalOperand(
           u.child(), "the negated month count", inputs, literals, sink);
       return x.map(v ->
-          new IntNeg(VarkaIntervalCompiler.negationMode(v, literals), v));
+          new IntNeg(VarkaIntervalCompiler.negationMode(v, literals, sink), v));
     }
     // `d + ym_col`. The stored value is the month count in every unit, so this is the
     // column-count `AddMonths` exactly, with the same runtime guard on the count's lanes -
@@ -771,7 +771,8 @@ final class VarkaChronoCompiler {
       DeclineSink sink) {
     VarkaValueRange.Range range = dayRange(node, literals, VarkaRangeAnalysis.GuardPolicy.ARMED);
     return switch (range) {
-      case VarkaValueRange.Bounded b when decomposesExactly(b) -> Optional.of(node);
+      case VarkaValueRange.Bounded b when decomposesExactly(b) ->
+          Optional.of(boundColumns(node, literals, sink));
       case VarkaValueRange.Bounded b -> {
         // The interval ran out, but if a runtime-valued shift is what carried it out then a check
         // can spend it again. `rearm` rewrites the subtree with the checks in it and answers the
@@ -779,7 +780,7 @@ final class VarkaChronoCompiler {
         // declines.
         Rearmed fixed = rearm(node, literals);
         if (fixed.range() instanceof VarkaValueRange.Bounded f && decomposesExactly(f)) {
-          yield Optional.of(fixed.node());
+          yield Optional.of(boundColumns(fixed.node(), literals, sink));
         }
         yield sink.decline("day range [" + b.lo() + ", " + b.hi()
             + "] leaves the calendar lowering's range", calendar);
@@ -787,6 +788,23 @@ final class VarkaChronoCompiler {
       case VarkaValueRange.Unknown u ->
           sink.decline("day producer the calendar range analysis does not bound", calendar);
     };
+  }
+
+  /**
+   * {@code admitted}, once the admission has rested on its interval: every date column that
+   * interval read as {@link VarkaRangeAnalysis#CONTRACT} gets that range noted as an input bound,
+   * which the evaluator checks per batch before the kernel runs, declining a batch with a live day
+   * outside it to the row engine. Without it the column bound is an assumption, and a cached
+   * column holding a day past the range the lowering is exact over was served wrong (VARKA-379).
+   * Asked once more, on the admitted node, rather than collected while {@link #rearm} explores:
+   * a column below a {@link GuardedDay} the rewrite placed is checked by that guard instead.
+   */
+  private static VarkaVectorIR boundColumns(
+      VarkaVectorIR admitted, VarkaSlotTable literals, DeclineSink sink) {
+    VarkaRangeAnalysis.range(admitted, VarkaRangeAnalysis.Kind.DAY,
+        VarkaRangeAnalysis.GuardPolicy.ARMED, VarkaNodeCompiler.literalAt(literals),
+        sink::dayColumnBound);
+    return admitted;
   }
 
   /**

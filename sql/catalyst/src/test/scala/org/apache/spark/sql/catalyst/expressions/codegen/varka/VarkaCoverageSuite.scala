@@ -131,6 +131,12 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   private val dayLimit = VarkaChrono.INTERVAL_DAY_LIMIT_DAYS
   private val minMonths = VarkaChrono.MONTH_ARITH_MIN_MONTHS
   private val maxMonths = VarkaChrono.MONTH_ARITH_MAX_MONTHS
+  /**
+   * The column bound a calendar field's answer rests on (VARKA-379): the evaluator declines a
+   * batch with a live day outside it before the kernel runs.
+   */
+  private val dayBound =
+    s"unix_date(d) BETWEEN ${VarkaChrono.CONTRACT_MIN_DAYS} AND ${VarkaChrono.CONTRACT_MAX_DAYS}"
   /** The largest count of a unit inside the day: the time conversions' range guard. */
   private def dayOf(nanosPerUnit: Long): Long = (NANOS_PER_DAY - 1) / nanosPerUnit
 
@@ -148,41 +154,44 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("date_from_unix_date(unix_date(d))"))),
 
     Family("Calendar fields", predicates = false, Seq(
-      Row("year(d)"),
-      Row("month(d)"),
-      Row("day(d)"),
-      Row("quarter(d)"),
-      Row("dayofyear(d)"),
+      Row("year(d)", domain = Some(dayBound)),
+      Row("month(d)", domain = Some(dayBound)),
+      Row("day(d)", domain = Some(dayBound)),
+      Row("quarter(d)", domain = Some(dayBound)),
+      Row("dayofyear(d)", domain = Some(dayBound)),
       Row("dayofweek(d)"),
       Row("weekday(d)"),
       Row("extract(DAYOFWEEK_ISO FROM d)"),
-      Row("weekofyear(d)"),
-      Row("extract(YEAROFWEEK FROM d)"),
-      Row("last_day(d)"),
+      Row("weekofyear(d)", domain = Some(dayBound)),
+      Row("extract(YEAROFWEEK FROM d)", domain = Some(dayBound)),
+      Row("last_day(d)", domain = Some(dayBound)),
       Row("next_day(d, 'MONDAY')", "the day name must be a literal"),
       Row("make_date(2021, i, 1)", "the month under ANSI: an invalid date declines the batch and "
         + "the row engine raises; the legacy form answers null and declines nothing",
         domain = Some("i BETWEEN 1 AND 12")),
-      Row("trunc(d, 'YEAR')"),
-      Row("trunc(d, 'MONTH')"),
-      Row("trunc(d, 'QUARTER')"),
+      Row("trunc(d, 'YEAR')", domain = Some(dayBound)),
+      Row("trunc(d, 'MONTH')", domain = Some(dayBound)),
+      Row("trunc(d, 'QUARTER')", domain = Some(dayBound)),
       Row("trunc(d, 'WEEK')"))),
 
     Family("Months and year-month intervals", predicates = false, Seq(
-      Row("add_months(d, 3)"),
+      Row("add_months(d, 3)", domain = Some(dayBound)),
       Row("add_months(d, i)", "a column month count, inside the range the month arithmetic's "
-        + "magic divide is exact over", domain = Some(s"i BETWEEN $minMonths AND $maxMonths")),
-      Row("d + INTERVAL 3 MONTH"),
+        + "magic divide is exact over",
+        domain = Some(s"$dayBound AND i BETWEEN $minMonths AND $maxMonths")),
+      Row("d + INTERVAL 3 MONTH", domain = Some(dayBound)),
       Row("d + ym", "the interval's month count, under the same range",
-        domain = Some(s"ym BETWEEN ${ymLiteral(minMonths)} AND ${ymLiteral(maxMonths)}")),
+        domain = Some(
+          s"$dayBound AND ym BETWEEN ${ymLiteral(minMonths)} AND ${ymLiteral(maxMonths)}")),
       Row("d - ym", "the negated count under the range, so the bounds change sides",
-        domain = Some(s"ym BETWEEN ${ymLiteral(-maxMonths)} AND ${ymLiteral(-minMonths)}")),
+        domain = Some(
+          s"$dayBound AND ym BETWEEN ${ymLiteral(-maxMonths)} AND ${ymLiteral(-minMonths)}")),
       Row("make_ym_interval(year(d), month(d))",
         "the operands must be bounded - over a bare int column the checked multiply inside "
-          + "it keeps its overflow test and declines"),
+          + "it keeps its overflow test and declines", domain = Some(dayBound)),
       Row("make_ym_interval(year(d), month(d)) * 2",
         "a checked multiply, so bounded operands again: `ym * 2` over a stored interval "
-          + "column declines"),
+          + "column declines", domain = Some(dayBound)),
       Row("abs(ym)", "interval arithmetic is exact in every mode: the one count whose negation "
         + "overflows declines", domain = Some(s"ym > ${ymLiteral(Int.MinValue)}")),
       Row("ym - ymm", "exact in every mode: a difference outside the month count's int declines",
@@ -202,10 +211,10 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("i - 1", "checked under ANSI", domain = Some(s"i > ${Int.MinValue}")),
       Row("year(d) * 2",
         "a multiply is checked, and only bounded operands take the check off: `i * 2` over "
-          + "a bare int column declines"),
+          + "a bare int column declines", domain = Some(dayBound)),
       Row("-i", "checked under ANSI", domain = Some(s"i > ${Int.MinValue}")),
       Row("year(d) + i", "checked under ANSI; the lower bound is out of reach, since a year is "
-        + "at least 1", domain = Some(s"i <= ${Int.MaxValue} - year(d)")))),
+        + "at least 1", domain = Some(s"$dayBound AND i <= ${Int.MaxValue} - year(d)")))),
 
     Family("Choice and nulls", predicates = false, Seq(
       Row("if(d < d2, d, d2)"),
@@ -222,18 +231,19 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("d <= d2"),
       Row("d > d2"),
       Row("d >= d2"),
-      Row("year(d) = 2021"),
+      Row("year(d) = 2021", domain = Some(dayBound)),
       Row("NOT (d = d2)"),
       Row("d IN (DATE '2021-01-01', DATE '2021-06-01')", "up to 16 literals"),
       Row("year(d) = 2021 AND i > 0",
         "every conjunct of an AND fuses or the predicate is not in this table; the int column "
-          + "compares in the kernel rather than leaving a residual row filter (VARKA-122)"),
+          + "compares in the kernel rather than leaving a residual row filter (VARKA-122)",
+        domain = Some(dayBound)),
       Row("i > 0", "a bare int column compares in the kernel (VARKA-122)"),
       Row("i IS NOT NULL",
         "the same column's validity word, which the optimizer infers beside `i > 0`"),
       Row("i = 5"),
-      Row("month(d) > i", "an int column against a fused int field"),
-      Row("year(d) = 2021 OR month(d) = 3"),
+      Row("month(d) > i", "an int column against a fused int field", domain = Some(dayBound)),
+      Row("year(d) = 2021 OR month(d) = 3", domain = Some(dayBound)),
       // Over `spark.sql.optimizer.inSetConversionThreshold` (10 by default) the optimizer
       // rewrites the list to an `InSet`, which fuses up to the compiler's own cap of 16.
       Row("d IN (11 to 16 date literals)",
@@ -411,13 +421,13 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       "a boolean all fail the check") {
     val planted = Family("planted", predicates = false, Seq(
       Row("i + 1"),
-      Row("year(d)", domain = Some("true")),
+      Row("dayofweek(d)", domain = Some("true")),
       Row("i - 1", domain = Some("i"))))
     val findings = domainFindings(planted.rows.map(planted -> _))
     def found(sql: String, ending: String): Boolean =
       findings.exists(f => f.startsWith(s"$sql:") && f.endsWith(ending))
     assert(found("i + 1", "names no domain"), findings)
-    assert(found("year(d)", "carries no guard"), findings)
+    assert(found("dayofweek(d)", "carries no guard"), findings)
     assert(found("i - 1", "not a boolean"), findings)
     assert(findings.size == 3, findings)
   }
