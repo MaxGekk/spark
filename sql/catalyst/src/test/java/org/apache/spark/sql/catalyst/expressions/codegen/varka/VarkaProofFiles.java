@@ -73,10 +73,11 @@ final class VarkaProofFiles {
     files.put("range_analysis.smt2", rangeAnalysis());
     files.put("range_calendar.smt2", rangeCalendar());
     files.put("time_bounds.smt2", timeBounds());
+    files.put("refinement.smt2", VarkaRefinementFile.render());
     return files;
   }
 
-  private static final String LICENSE = """
+  static final String LICENSE = """
       ; Licensed to the Apache Software Foundation (ASF) under one or more
       ; contributor license agreements.  See the NOTICE file distributed with
       ; this work for additional information regarding copyright ownership.
@@ -101,7 +102,7 @@ final class VarkaProofFiles {
    * declares {@code ALL} where cvc5 decides its checks only under it (VARKA-242.md 2.2) or where
    * it reasons over bit-vectors, which {@code QF_NIA} does not admit.
    */
-  private static String rendered(String logic) {
+  static String rendered(String logic) {
     return """
         ;
         ; Rendered by VarkaProofFiles. VarkaProofFilesSuite fails when this file differs from its
@@ -2020,7 +2021,7 @@ final class VarkaProofFiles {
   // Shared.
   // -----------------------------------------------------------------------------------------
 
-  private static void check(StringBuilder out, String what, String expect, List<String> body) {
+  static void check(StringBuilder out, String what, String expect, List<String> body) {
     out.append("\n(echo \"").append(what).append(": expect ").append(expect).append("\")\n");
     out.append("(push 1)\n");
     for (String line : body) {
