@@ -24,6 +24,7 @@ import javax.annotation.Nullable;
 import scala.Option;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.internal.SQLConf;
 
 /**
@@ -57,7 +58,7 @@ public record VarkaSessionEmit(int useAVX, @Nullable Boolean exactRefusalStatus)
   public VarkaSessionEmit {
     // SQLConf checks the same on the conf; a record built another way is held to it too.
     if (useAVX < VarkaEmitOptions.USE_AVX_UNKNOWN) {
-      throw new IllegalArgumentException("useAVX is a level from 0 or -1, got " + useAVX);
+      throw VarkaErrors.illegalArgument("useAVX is a level from 0 or -1, got " + useAVX);
     }
   }
 

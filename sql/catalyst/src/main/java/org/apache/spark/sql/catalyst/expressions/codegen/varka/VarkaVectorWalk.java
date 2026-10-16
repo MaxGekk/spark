@@ -119,7 +119,7 @@ final class VarkaVectorWalk {
     if (ref == WORD_ALL_TRUE) {
       cb.loadConstant(-1L);
     } else if (ref == WORD_DEAD || s.deadRefs.contains(ref)) {
-      throw new IllegalStateException("a word the liveness pass declared dead is loaded: slot "
+      throw VarkaErrors.illegalState("a word the liveness pass declared dead is loaded: slot "
           + ref + " - a consumer the inventory in liveWords does not list");
     } else {
       cb.lload(ref);
@@ -153,7 +153,7 @@ final class VarkaVectorWalk {
     // word check refuses a word the liveness pass got wrong. A literal is never shared.
     if (shared == null && analysis.options.cse() && !(node instanceof LiteralSlot)
         && !s.emittedUnshared.add(node)) {
-      throw new IllegalStateException("the body visits " + VarkaVectorIR.canonical(node)
+      throw VarkaErrors.illegalState("the body visits " + VarkaVectorIR.canonical(node)
           + " twice without a shared slot: its use count (Slots.bodyUses) is too low");
     }
     switch (node) {
@@ -370,7 +370,7 @@ final class VarkaVectorWalk {
           storeWord(cb, s, s.wordRef.get(node));
         }
       }
-      case Cond c -> throw new IllegalStateException(
+      case Cond c -> throw VarkaErrors.illegalState(
           "condition node in a value position survived validation: " + c);
     }
     if (shared != null) {
@@ -428,7 +428,7 @@ final class VarkaVectorWalk {
     // correct checked emission for it at all, so "off" cannot mean "the same node, cheaper".
     // A reader who generalises this into the `NULL` and `IntNeg` arms breaks the benchmark.
     if (n.op() == IntOp.MUL && n.mode() != Overflow.WRAP) {
-      throw new IllegalArgumentException("a checked multiply has no int-lane overflow test: " + n);
+      throw VarkaErrors.illegalArgument("a checked multiply has no int-lane overflow test: " + n);
     }
     int[] tmp = s.intArithTmp.get(n);
     if (tmp == null) {
@@ -515,7 +515,7 @@ final class VarkaVectorWalk {
       // A collect the refusal map does not declare would find no accumulator planned for it;
       // refused here by name rather than met as a null slot.
       if (analysis.refusals.get(node) != Analysis.Refusal.INT_OVERFLOW) {
-        throw new IllegalStateException("an overflow collect with no refusal declared: " + node);
+        throw VarkaErrors.illegalState("an overflow collect with no refusal declared: " + node);
       }
       emitGuardCollect(cb, node, dense ? null : s.wordRef.get(node), dense, analysis, s);
       return;
@@ -540,7 +540,7 @@ final class VarkaVectorWalk {
     // emitter suite asserts each of them; the throw is how the assertion has something to
     // catch, not a runtime guarantee.
     if (dense) {
-      throw new IllegalArgumentException(
+      throw VarkaErrors.illegalArgument(
           "a NULL-mode overflow mask reached a dense body, which has no word to narrow: " + node);
     }
     // Not ANDed with the epilogue mask, unlike the FAIL arm's collect: a tail lane above the
@@ -708,7 +708,7 @@ final class VarkaVectorWalk {
     if (acc == null) {
       // The planner gives a mask to every reason among the body's nodes, so a guard with none is
       // a node the planner did not count as this body's; refused by name, not met as a null slot.
-      throw new IllegalStateException("a guard collect with no mask planned for its reason: "
+      throw VarkaErrors.illegalState("a guard collect with no mask planned for its reason: "
           + node);
     }
     return acc;

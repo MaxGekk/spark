@@ -113,7 +113,7 @@ final class VarkaDivisionLowering {
      */
     boolean carries(ChronoDivide div) {
       if (!div.carried) {
-        throw new IllegalStateException(div + " carries its quotient, but ChronoDivide's table "
+        throw VarkaErrors.illegalState(div + " carries its quotient, but ChronoDivide's table "
             + "says it does not, so chrono_divide.smt2 proves a different form");
       }
       return formFor(div) == VarkaEmitOptions.Division.MAGIC;
@@ -183,7 +183,7 @@ final class VarkaDivisionLowering {
       // The ranges first, so that the theorem's product below is exact in a long.
       if (divisor < 2 || divisor > 1L << 31 || multiplier < 1 || multiplier >= 1L << 32
           || shift < 32 || shift > 62 || !meetsTheorem51(divisor, multiplier, shift)) {
-        throw new IllegalArgumentException("(" + multiplier + ", " + shift + ") is not a "
+        throw VarkaErrors.illegalArgument("(" + multiplier + ", " + shift + ") is not a "
             + "multiply-high pair for " + divisor + ": it fails Theorem 5.1's inequality or "
             + "does not fit the lanes");
       }
@@ -225,7 +225,7 @@ final class VarkaDivisionLowering {
    */
   static MulHiMagic signedMagic(long d) {
     if (d < 2 || d > 1L << 31) {
-      throw new IllegalArgumentException(
+      throw VarkaErrors.illegalArgument(
           "the signed magic is derived for divisor magnitudes from 2 to 2^31, not " + d);
     }
     long two31 = 1L << 31;

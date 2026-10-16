@@ -62,6 +62,9 @@ public record VarkaErrorContext(
    */
   public static final String MEMORY_VIOLATION = "memory-violation";
 
+  /** The line that opens the rendered block, and so tells a message with a record apart. */
+  public static final String HEAD = "Varka context:";
+
   /** What a field reads as when the catch could not obtain it. */
   public static final String UNAVAILABLE = "unavailable";
 
@@ -144,7 +147,7 @@ public record VarkaErrorContext(
    * </pre>
    */
   public String render() {
-    var sb = new StringBuilder("Varka context:");
+    var sb = new StringBuilder(HEAD);
     sb.append("\n  kind: ").append(kind);
     sb.append("\n  identity: ").append(identity);
     sb.append("\n  shape hash: ").append(shapeHash == null ? "none" : shapeHash);
@@ -157,8 +160,12 @@ public record VarkaErrorContext(
     }
     if (cause != null) {
       // A cause's toString runs its getMessage, which a Throwable may override, and may be as
-      // long as an IR dump.
-      sb.append("\n  cause: ").append(bounded(safely(cause::toString)));
+      // long as an IR dump. A Varka site's own internal error is rendered by its site's text, so
+      // the condition's framing and the request to report it are said once, by the outer error.
+      sb.append("\n  cause: ").append(bounded(safely(() -> {
+        String site = VarkaErrors.siteText(cause);
+        return site == null ? cause.toString() : cause.getClass().getName() + ": " + site;
+      })));
     }
     return sb.toString();
   }
