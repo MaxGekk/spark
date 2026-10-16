@@ -250,3 +250,21 @@ by the tool; each checked here):
 * *The keep directories of an earlier run survived*: `--keep` clears them first.
 * *The check costs a JVM per invocation* (about half a minute): declined. Checking offline would
   re-implement the suite's draw, and half a minute is small beside a 400-composition run.
+
+**The claim scoped to its data** (the coordinator, after the self-review). This corrects the two
+places above that kept "none" unchanged: the post may not say "none" beside a figure that shows a
+release. "In short" item 3 now says the warm-up "all but removes" the releases: none in 12,000
+compositions on five cores (9.8's seed 20261008 and five more, 2,000 each) and 2 of 1,602
+warm-ups on three (the three 400-composition JVMs as shipped, 1, 1 and 0 of 534 each). "What a
+library can do" says the same and calls the core count the one visible difference, not a cause.
+The two options still "remove" it: 0 in every run. Figure 3's caption now says the upper block
+replays composition 220 after composition 0 in fresh JVMs and the middle one runs 400 compositions,
+a longer history, so "0 as shipped" and "1 as shipped" are not read as one measurement; the
+reproduction paragraph quotes the 400-composition run's 46, 0 and 1, tells the reader to run from
+a current checkout of master (the composition check exists only there), and the plan files of
+"How these were measured" are links. The post fell from 1,197 to 1,195 words; the cuts are a
+sentence on what C2 leaves on a miss path (the next paragraph says it), the 4-lane halving of the
+agent reset, the two-shape detail of the 4-lane trap, the log options' list and the run time.
+
+The as-shipped release (composition 312, `e33b1eb0`, compiled and still allocating at the deadline)
+is for the reproduction of m8 row 383 (planned in #888, not yet merged).
