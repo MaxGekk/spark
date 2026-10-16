@@ -27,9 +27,10 @@ import java.util.function.IntFunction;
  * Generation steered toward mechanisms the emitter has not reached yet, after QPG (VARKA-280):
  * a draw whose emission reached a set of mechanisms ({@link VarkaEmitMechanism}) no earlier
  * emission had is kept, and later steps mutate a kept draw instead of drawing afresh. The
- * mutations are the ones the suites already have, so a mutant is a case the fuzzer can check:
- * one option of {@code VarkaEmitOption.TABLE} redrawn as the IR fuzzer draws it, or one of the
- * draw's {@link VarkaVariants}, built as {@link VarkaVariantChecks#variants} builds them.
+ * mutations are ones the suites already make, so a mutant is a case the fuzzer can check: one
+ * option of {@code VarkaEmitOption.TABLE} changed to another of the values the IR fuzzer draws
+ * (a flag flipped, an enum moved to another constant, a count drawn from its fuzz draws), or one
+ * of the draw's {@link VarkaVariants}, built as {@link VarkaVariantChecks#variants} builds them.
  *
  * <p>The steering is emission only - the mechanisms are compile-time facts - so a sequence is
  * decided before any kernel runs, and a case the fuzzer then checks is one of a sequence that a
@@ -106,9 +107,10 @@ final class VarkaSteering {
   }
 
   /**
-   * One mutation of {@code c}: with even odds one option redrawn, else one of its variants that
+   * One mutation of {@code c}: with even odds one option changed, else one of its variants that
    * the emitter's form without a byte budget holds, chosen at random among those that apply; the
-   * option is redrawn where no variant applies.
+   * option is changed where no variant applies. All eight variants are built to choose among
+   * them, the arm oracle's evaluation included, which the A/B, opt-in and emission only, affords.
    */
   static VarkaFuzzCase mutate(VarkaFuzzCase c, Random rnd, int step) {
     if (rnd.nextBoolean()) {
@@ -129,12 +131,17 @@ final class VarkaSteering {
     VarkaEmitOption option = FUZZED.get(rnd.nextInt(FUZZED.size()));
     VarkaEmitOptions options = switch (option) {
       case VarkaEmitOption.Flag flag -> flag.with(c.options(), !flag.value(c.options()));
-      case VarkaEmitOption.Choice<?> choice ->
-          choice.withIndex(c.options(), rnd.nextInt(choice.constants().size()));
+      case VarkaEmitOption.Choice<?> choice when choice.constants().size() < 2 -> c.options();
+      case VarkaEmitOption.Choice<?> choice -> {
+        // Another constant than the current one, so the mutant differs from its case.
+        int current = choice.constants().indexOf(choice.value(c.options()));
+        int next = rnd.nextInt(choice.constants().size() - 1);
+        yield choice.withIndex(c.options(), next >= current ? next + 1 : next);
+      }
       case VarkaEmitOption.Count count ->
           count.with(c.options(), count.fuzzDraws().get(rnd.nextInt(count.fuzzDraws().size())));
     };
-    return c.withOptions(options).withLabel(c.label() + " -> " + option.name() + " redrawn");
+    return c.withOptions(options).withLabel(c.label() + " -> " + option.name() + " changed");
   }
 
   /** Whether the emitter's form without a byte budget holds a variant, as it holds every draw. */
@@ -145,14 +152,21 @@ final class VarkaSteering {
 
   /**
    * Emits {@code c} once under its options into {@code trace}. A decline is an emission the
-   * trace records; any other refusal - a variant past a cap - is a step that emitted nothing.
+   * trace records, and a refusal on the op cap or the chain depth - a mutant grown past what the
+   * form without a budget holds - a step that emitted nothing, as the IR fuzzer skips one; any
+   * other refusal is the emitter rejecting a shape the grammar builds, and is thrown.
    */
   static void emit(VarkaFuzzCase c, VarkaEmitTrace trace) {
     try {
       VarkaLoopEmitter.emitTraced(CLASS_NAME, c.roots(), c.numInputs(), c.lits().length,
           c.options(), trace);
+    } catch (VarkaEmitDeclined d) {
+      // Noted by the trace as a declined emission.
     } catch (IllegalArgumentException e) {
-      // VarkaEmitDeclined among them, which the trace has already noted.
+      String message = String.valueOf(e.getMessage());
+      if (!message.contains("MAX_FUSED_NODES=") && !message.contains("MAX_CHAIN_DEPTH=")) {
+        throw new IllegalStateException(c.label() + ": the emitter rejected the shape", e);
+      }
     }
   }
 }

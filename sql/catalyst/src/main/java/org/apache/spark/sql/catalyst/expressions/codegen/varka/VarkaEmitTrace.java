@@ -32,9 +32,8 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  * to a later build is the size loop as the last resort, which the counters alone record.
  *
  * <p>Each emission's end is noted too (VARKA-280): the mechanisms it reached
- * ({@link VarkaEmitMechanism}), the counters' among them, counted per mechanism over the
- * emissions this trace has seen and handed to {@link #onEmission} where a suite set one, so a
- * suite can report what its shapes reached and what they never did.
+ * ({@link VarkaEmitMechanism}), the counters' among them, handed to {@link #onEmission} where a
+ * suite set one, so a suite can report what its shapes reached and what they never did.
  */
 final class VarkaEmitTrace {
   int builds;
@@ -95,11 +94,6 @@ final class VarkaEmitTrace {
     }
   }
 
-  /** How many emissions this trace has seen end, built or declined. */
-  int emissions;
-  /** Per mechanism, how many of those emissions reached it. */
-  final java.util.Map<VarkaEmitMechanism, Integer> reachedBy =
-      new java.util.EnumMap<>(VarkaEmitMechanism.class);
   /**
    * Called with each emission's record where a suite asks for them, null otherwise - and null in
    * every emission the engine makes, so the record is never built there.
@@ -125,7 +119,7 @@ final class VarkaEmitTrace {
   /**
    * One emission ended: {@code reached} gains every mechanism whose counter moved since
    * {@code before} (what {@link #counters} read when the emission began), and the emission is
-   * counted, and handed to {@link #onEmission} where a suite set one.
+   * handed to {@link #onEmission} where a suite set one.
    */
   void noteEmission(java.util.List<VarkaVectorIR> outputs,
       java.util.Set<VarkaEmitMechanism> reached, int[] before, int groups, boolean declined) {
@@ -134,10 +128,6 @@ final class VarkaEmitTrace {
       if (after[i] > before[i]) {
         reached.add(COUNTED[i]);
       }
-    }
-    emissions++;
-    for (VarkaEmitMechanism m : reached) {
-      reachedBy.merge(m, 1, Integer::sum);
     }
     if (onEmission != null) {
       onEmission.accept(new Emission(outputs, reached, groups, declined));

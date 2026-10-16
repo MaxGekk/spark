@@ -1012,6 +1012,10 @@ attaches a `VarkaEmitReach` to its trace and prints what it reached and never di
 - **Note a mechanism where its bytes are emitted, not where a slot is planned.** `Slots.plan`
   plans slots for bodies no build emits (a dense body of a kernel that nulls valid inputs) and,
   without group-local frames, for other groups' nodes; a note there reports what was never built.
+- **Report an emission's last pass, not the union of its builds.** The size loop rebuilds; a
+  union over its passes reports a one-group class halved on bytes as one group and several, and
+  pairs the last grouping with what earlier builds threw away. Each pass starts the grouping and
+  body mechanisms afresh; only the loop's reactions and declines span passes.
 - **A decline is an emission too.** The size loop hands the set over in a `catch` of
   `VarkaEmitDeclined` as well as on return, so a run whose shapes decline still says what they
   reached first; any other failure is not an emission and is not noted.
@@ -1020,15 +1024,16 @@ attaches a `VarkaEmitReach` to its trace and prints what it reached and never di
   dropped), four that nothing in it reaches (the plan corrected and its decline, the class-file
   cap's refusal, the constant pool's decline), and the coverage table misses every size reaction
   and every decline: its widest shape is one kernel that fits.
-- **Steering does not pay at the gate's budget, and is not one-sided at the nightly's.** Over 16
+- **Steering does not pay at the gate's budget; at the nightly's it only gains.** Over 16
   seed-lanes at 300 emissions an arm, keeping a draw that reached a new set of mechanisms (QPG's
-  rule without the trees) or a rare mechanism and mutating it - an option redrawn, a variant -
+  rule without the trees) or a rare mechanism and mutating it - an option changed, a variant -
   did no better: the better of the two arms reached more than the plain draws in 7 and fewer in
-  4, and both reached the common mechanisms at about twice the emission. At 3000 it reached fewer in none and more in 13 of 32 steered
-  seed-lanes, among them the call-site rollback and both grouping switches dropped, which plain
-  draws never reach: the growing variants, applied again to a case kept for growing, make it wide
-  enough. Random draws reach a new mechanism set at most steps (185 of 300), so set novelty keeps
-  nearly everything; rarity keeps less and did no better at 300.
+  4, and both reached the common mechanisms at about twice the emission. At 3000 the steered arms
+  reached fewer in none and more in 15 of 32 seed-lanes, among them the call-site rollback and
+  both grouping switches dropped, which plain draws never reach: the growing variants, applied
+  again to a case kept for growing, make it wide enough. Random draws reach a new mechanism set
+  at most steps (185 of 300), so set novelty keeps nearly everything; rarity keeps less and did no
+  better at 300.
 
 ## Every guard at its bound: a verdict from the emitter's own rule
 

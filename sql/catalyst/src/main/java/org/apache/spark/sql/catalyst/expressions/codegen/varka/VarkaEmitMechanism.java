@@ -31,9 +31,10 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  *
  * <p>Each mechanism is noted where the emitter does it, at compile time, into the emission's
  * {@link Analysis#reached}, and the size loop hands the set to the {@link VarkaEmitTrace} when
- * the emission ends, built or declined. A body mechanism is noted where its bytes are emitted,
- * not where a slot is planned for it, since the planner plans slots for bodies and nodes the
- * emission never builds. Nothing here is per batch, and nothing changes a byte the emitter
+ * the emission ends, built or declined: the last pass's grouping and bodies, and the loop's
+ * reactions and declines over all its passes. A body mechanism is noted where its bytes are
+ * emitted, not where a slot is planned for it, since the planner plans slots for bodies and nodes
+ * the emission never builds. Nothing here is per batch, and nothing changes a byte the emitter
  * writes.
  *
  * <p>The list leaves out what an option selects on its own - a lowering the options record

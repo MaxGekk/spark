@@ -1138,10 +1138,12 @@ final class Analysis {
   // ---------------------------------------------------------------------------------------------
 
   /**
-   * The mechanisms this emission has reached so far, over every build of its size loop: carried
-   * here for the reason {@link #options} is, since the analysis already reaches every body that
-   * does one. Noted at compile time only, and read by {@code VarkaLoopEmitter}'s size loop, which
-   * hands the set to the trace when the emission ends; no emitted byte reads it.
+   * The mechanisms this emission has reached so far: those of the size loop's current pass - its
+   * grouping and the bodies it builds, cleared as each pass starts - and the loop's reactions and
+   * declines over every pass. Carried here for the reason {@link #options} is, since the analysis
+   * already reaches every body that does one. Noted at compile time only, and read by
+   * {@code VarkaLoopEmitter}'s size loop, which hands the set to the trace when the emission
+   * ends; no emitted byte reads it.
    */
   final java.util.EnumSet<VarkaEmitMechanism> reached =
       java.util.EnumSet.noneOf(VarkaEmitMechanism.class);

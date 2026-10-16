@@ -229,32 +229,64 @@ kept, the steered test.
 
 ## 9. Outcome
 
-*16 October 2026.* Built as section 3 says, with one correction to 3.3: the A/B test is opt-in
-(`-Dvarka.fuzz.steer=<n>` or `-Dvarka.fuzz.steerSeeds=<a,b,...>`), not run at 300 emissions in
-every gate, since its verdict below kept steering out of the fuzzer and its 13 seconds would buy
-nothing in the gate or in each of the option matrix's configurations. `emitted_bytes.json` is
-byte-identical (`VarkaEmittedBytesSuite` green), and the suites that read the trace's counters
-pass unchanged. The committed reports, `sql/varka/coverage/reach/VarkaIrFuzzSuite.md` and
-`VarkaCoverageSuite.md`, are the run of section 2 regenerated on the final code, every count
-unchanged. A correction to section 2: the table has 65 projection rows, not 66; its 66 projection
-compilations are those 65 alone and the one of all of them.
+*16 October 2026.* Built as section 3 says, with three corrections to it:
+
+* **The A/B test is opt-in** (`-Dvarka.fuzz.steer=<n>` or `-Dvarka.fuzz.steerSeeds=<a,b,...>`),
+  not run at 300 emissions in every gate, since its verdict below kept steering out of the fuzzer
+  and its 13 seconds would buy nothing in the gate or in each of the option matrix's
+  configurations.
+* **An emission reports its last pass**, not the union over every build that 3.1 described. The
+  self-review found the union reporting a one-group class halved on bytes as both one group and
+  several, and pairing the last pass's group count with mechanisms of builds thrown away; so each
+  pass of the size loop starts its grouping, sharing, validity, guard and division mechanisms
+  afresh, and only the loop's reactions and declines span passes. A declined emission reports
+  the pass it declined in, the plan's lone driver included.
+* **Every decline names its kind.** The review found one decline the loop does not throw itself:
+  the driver's table past one class-file constant (`VarkaBodyEmitter.tableConstant`), thrown from
+  inside a build; the loop now counts it as class-wide, as it counts the driver's other limits.
+
+The review's other findings and what was done: a plan was a rendered string of the canonical IR
+and is now the outputs themselves, compared as the records they are, so no report renders a tree;
+the trace kept a per-mechanism count beside the report's, on every engine emission, and no longer
+does; a steered step swallowed every refusal and now throws one that is not the op cap's or the
+chain depth's, as the fuzzer fails on it; a mutation could redraw an enum option to the value it
+had and now moves it to another; two unused accessors went; and the A/B's arms no longer join the
+committed report, whose provenance did not describe them. Left as they are, with the reason: a
+mutation builds all eight variants to choose one, the arm oracle's evaluation among them, which an
+opt-in emission-only A/B affords; and `VarkaSteering` states its own budget-less fit and option
+change rather than sharing the suite's private ones, which are Scala.
+
+`emitted_bytes.json` is byte-identical (`VarkaEmittedBytesSuite` green on the final code), and the
+suites that read the trace's counters pass unchanged. The committed reports,
+`sql/varka/coverage/reach/VarkaIrFuzzSuite.md` and `VarkaCoverageSuite.md`, are the run of
+section 2 regenerated on the final code: with the last pass reported, an emission whose loop
+rebuilt reports less (one group in 934 int-lane emissions where the union said 962, a group past
+the budget by sharing in 437 where it said 465), while every total of section 2's table - the
+emissions, the declines, the distinct plans and sets, the mechanisms reached - is unchanged. A correction to
+section 2: the table has 65 projection rows, not 66; its 66 projection compilations are those 65
+alone and the one of all of them.
 
 ### 9.1 The A/B
 
 Run as section 6 says, but as plain JVMs over the test classpath (the skill "A fuzz campaign is
-sixteen JVMs, not one sbt"), the sixteen pinned to cores 12-23, 104 seconds in all: section 6's
-`build/sbt -D...` sets the property in sbt's JVM and not the test JVM's, which is how the first try
-ran the default seeds alone. Every line is in `sql/varka/spikes/steering-ab/results/ab.txt`. Means over the
-eight seeds of each lane, mechanisms of 39, distinct mechanism sets, and the median emission at
-which the mechanisms all three arms reached were first reached; then, per steered arm, the
-seed-lanes where it reached more mechanisms than plain, as many, and fewer:
+sixteen JVMs, not one sbt"), the sixteen pinned to cores 12-23, 96 seconds in all on the final
+code: section 6's `build/sbt -D...` sets the property in sbt's JVM and not the test JVM's, which
+is how the first try ran the default seeds alone. Every line is in
+`sql/varka/spikes/steering-ab/results/ab.txt`. Means over the eight seeds of each lane,
+mechanisms of 39, distinct mechanism sets, and the median emission at which the mechanisms all
+three arms reached were first reached; then, per steered arm, the seed-lanes where it reached
+more mechanisms than plain, as many, and fewer:
 
 | budget | lane | plain | steered, new set | steered, rare mechanism |
 | ---: | :--- | :--- | :--- | :--- |
-| 300 | int | 26.12, 181.6 sets, first at 6.5 | 25.88, 132.5, 11.9; 3 / 2 / 3 | 25.62, 128.6, 12.4; 2 / 2 / 4 |
-| 300 | long | 17.00, 154.9, 3.8 | 17.62, 109.4, 7.1; 4 / 3 / 1 | 17.50, 110.4, 7.5; 3 / 4 / 1 |
-| 3000 | int | 28.00, 1077.0, 8.9 | 28.00, 888.8, 16.0; 0 / 8 / 0 | 28.50, 743.6, 16.2; 3 / 5 / 0 |
-| 3000 | long | 19.00, 606.4, 4.8 | 19.75, 531.9, 9.0; 6 / 2 / 0 | 19.62, 462.2, 9.9; 4 / 4 / 0 |
+| 300 | int | 26.12, 181.6 sets, first at 6.5 | 25.88, 132.5, 11.9; 3 / 2 / 3 | 25.62, 128.2, 12.4; 2 / 2 / 4 |
+| 300 | long | 17.00, 154.9, 3.8 | 17.62, 109.4, 7.1; 4 / 3 / 1 | 17.38, 110.6, 7.5; 2 / 5 / 1 |
+| 3000 | int | 28.00, 1077.1, 8.9 | 28.25, 892.9, 16.0; 2 / 6 / 0 | 28.50, 742.2, 16.2; 3 / 5 / 0 |
+| 3000 | long | 19.00, 606.4, 4.8 | 19.75, 532.4, 9.0; 6 / 2 / 0 | 19.62, 460.6, 9.9; 4 / 4 / 0 |
+
+The run before the review's fixes, with the union of passes and so other keeping decisions,
+differed in three seed-lanes: the rare-mechanism arm had one more gain at 300 on the long lane,
+the new-set arm two fewer at 3000 on the int lane. The verdict is the same on both.
 
 **Steering is not kept.** By the rule of 6.1 #4, at 300 emissions the better arm reaches more in 7
 of 16 seed-lanes and fewer in 4 (the new-set arm), against the 10 and 2 the rule asks, and its
@@ -263,17 +295,17 @@ budget steering trades fresh draws for mutations of kept ones and gains nothing:
 one seed (a regroup on bytes, a plan corrected, a prefix stored and loaded) it loses in another (a
 call-site split, a day-producer guard, a decline on an output).
 
-**At 3000 it never reaches fewer, and reaches past what plain draws reach.** In 13 of the 32
-steered seed-lanes it reaches more, in none fewer. At the int lane the rare-mechanism arm reached
-the call-site rollback (two seeds), the prediction dropped, the exact grouping dropped and a
-class-wide decline, which no plain draw reaches at 3000 and only the wide compositions reach
-otherwise; at the long lane the steered arms reached call-site splits in seven seed-arms whose
-plain draws had none (plain reaches them in 2 of the 8 seeds), the plan's correction in three, and
-the rare-mechanism arm the call-site rollback once, which plain draws reach at neither lane. The mutations that do it are the variants that
-grow a draw - duplicated, copied, beside a stranger - applied again to a case kept for growing,
-until it is wide enough for the size loop's rare corners. That is a nightly-scale effect of half a
-mechanism on average, and it is left for later (9.3), not kept by a rule registered for the
-gate's scale.
+**At 3000 it never reaches fewer, and reaches past what plain draws reach.** In 15 of the 32
+steered seed-lanes it reaches more, in none fewer. At the int lane both arms reached the call-site
+rollback (two seeds each), and the rare-mechanism arm the prediction dropped, the exact grouping
+dropped and a class-wide decline, which no plain draw reaches at 3000 at either lane and only the
+wide compositions reach otherwise; at the long lane the steered arms reached call-site splits in
+seven seed-arms whose plain draws had none (plain reaches them in 2 of the 8 seeds), the plan's
+correction in three, and the call-site rollback once. The mutations that do it are the variants
+that grow a draw - duplicated, copied, beside a stranger - applied again to a case kept for
+growing, until it is wide enough for the size loop's rare corners. That is a nightly-scale effect
+of a quarter to three quarters of a mechanism on average, and it is left for later (9.3), not kept
+by a rule registered for the gate's scale.
 
 ### 9.2 The predictions, scored
 

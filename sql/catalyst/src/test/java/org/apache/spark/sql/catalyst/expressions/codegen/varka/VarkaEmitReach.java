@@ -55,10 +55,9 @@ final class VarkaEmitReach implements Consumer<VarkaEmitTrace.Emission> {
   private final Map<VarkaEmitMechanism, Integer> reachedBy =
       new EnumMap<>(VarkaEmitMechanism.class);
   private final Map<VarkaEmitMechanism, Integer> firstAt = new EnumMap<>(VarkaEmitMechanism.class);
-  private final Set<String> plans = new HashSet<>();
+  private final Set<List<Object>> plans = new HashSet<>();
   private final Set<Set<VarkaEmitMechanism>> sets = new HashSet<>();
   private boolean lastNewSet;
-  private boolean lastNewMechanism;
   private int lastRarest;
 
   VarkaEmitReach(String name) {
@@ -83,32 +82,21 @@ final class VarkaEmitReach implements Consumer<VarkaEmitTrace.Emission> {
     if (e.declined()) {
       declined++;
     }
-    lastNewMechanism = false;
     lastRarest = Integer.MAX_VALUE;
     for (VarkaEmitMechanism m : e.reached()) {
       lastRarest = Math.min(lastRarest, reachedBy(m));
       reachedBy.merge(m, 1, Integer::sum);
-      if (firstAt.putIfAbsent(m, emissions) == null) {
-        lastNewMechanism = true;
-      }
+      firstAt.putIfAbsent(m, emissions);
     }
     lastNewSet = sets.add(e.reached());
-    StringBuilder plan = new StringBuilder();
-    for (VarkaVectorIR root : e.outputs()) {
-      plan.append(VarkaVectorIR.canonical(root)).append(", ");
-    }
-    plans.add(plan.append("groups=").append(e.groups()).append(' ').append(e.reached())
-        .toString());
+    // The IR nodes are records, so the outputs compare by structure: the canonical IR's identity
+    // without rendering it, and literal slots rather than values, since values are not in the IR.
+    plans.add(List.of(e.outputs(), e.groups(), e.reached()));
   }
 
   /** Whether the last emission reached a set of mechanisms no earlier one had. */
   boolean lastReachedNewSet() {
     return lastNewSet;
-  }
-
-  /** Whether the last emission reached a mechanism no earlier one had. */
-  boolean lastReachedNewMechanism() {
-    return lastNewMechanism;
   }
 
   /**
@@ -139,11 +127,6 @@ final class VarkaEmitReach implements Consumer<VarkaEmitTrace.Emission> {
   /** The 1-based emission that first reached {@code m}, or -1. */
   int firstAt(VarkaEmitMechanism m) {
     return firstAt.getOrDefault(m, -1);
-  }
-
-  Set<VarkaEmitMechanism> reached() {
-    return reachedBy.isEmpty() ? EnumSet.noneOf(VarkaEmitMechanism.class)
-        : EnumSet.copyOf(reachedBy.keySet());
   }
 
   Set<VarkaEmitMechanism> neverReached() {

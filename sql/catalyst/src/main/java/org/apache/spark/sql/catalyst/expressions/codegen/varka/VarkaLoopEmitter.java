@@ -528,6 +528,13 @@ public final class VarkaLoopEmitter {
       try {
         bytes = loop();
       } catch (VarkaEmitDeclined d) {
+        // Every decline the loop throws names its kind where it throws; the one it does not is
+        // the driver's table past a class-file constant (VarkaBodyEmitter.tableConstant), thrown
+        // from inside a build and class-wide like the driver's own limits.
+        if (analysis.reached.stream()
+            .noneMatch(m -> m.family == VarkaEmitMechanism.Family.DECLINE)) {
+          analysis.reach(VarkaEmitMechanism.DECLINE_CLASS);
+        }
         trace.noteEmission(outputs, analysis.reached, before, groupCount, true);
         throw d;
       }
@@ -577,7 +584,11 @@ public final class VarkaLoopEmitter {
       widenedStarts.clear();
       sharingStarts.clear();
       List<List<Integer>> groups = groupOutputs(outputs, grouping, forcedStarts, predictions,
-          exactRuns, widenedStarts, sharingStarts);
+          exactRuns, widenedStarts, sharingStarts, options.groupBudget());
+      // A pass reports its own grouping and the bodies it builds: what an earlier pass built and
+      // threw away is not the emission's, while the loop's reactions and declines span passes.
+      analysis.reached.removeIf(m -> m.family != VarkaEmitMechanism.Family.SIZE
+          && m.family != VarkaEmitMechanism.Family.DECLINE);
       groupCount = groups.size();
       analysis.reach(groups.size() == 1
           ? VarkaEmitMechanism.ONE_GROUP : VarkaEmitMechanism.SEVERAL_GROUPS);
@@ -619,6 +630,7 @@ public final class VarkaLoopEmitter {
             // rest are the compiler's to set aside (VarkaEmitDeclined.plannedCut). No stages
             // here, so no margin for a stage's own code: the reading is the driver's, exact.
             trace.plannedDeclines++;
+            analysis.reach(VarkaEmitMechanism.DECLINE_PLANNED);
             throw new VarkaEmitDeclined(String.join("; ", overLimits(driver, budget))
                 + "; planned before the build: " + fitGroups(groups.size(), widest, budget)
                 + " of " + groups.size() + " groups fit the driver", List.of(),
@@ -1260,15 +1272,18 @@ public final class VarkaLoopEmitter {
       VarkaEmitOptions options, Set<Integer> forcedStarts, TallyRecord record,
       ExactRuns exactRuns) {
     return groupOutputs(outputs, options, forcedStarts, record, exactRuns, new HashSet<>(),
-        new HashSet<>());
+        new HashSet<>(), options.groupBudget());
   }
 
   /** As above, leaving in {@code widenedStarts} the first output of each group the prediction
    *  widened past the group budget, and in {@code sharingStarts} that of each other group of
-   *  several outputs past it, which only what they share holds together (VARKA-280). */
+   *  several outputs past {@code sharingBudget} - the caller's group budget, which a fallback's
+   *  grouping may have raised to the fused ceiling - that only what they share holds together
+   *  (VARKA-280). */
   private static List<List<Integer>> groupOutputs(List<VarkaVectorIR> outputs,
       VarkaEmitOptions options, Set<Integer> forcedStarts, TallyRecord record,
-      ExactRuns exactRuns, Set<Integer> widenedStarts, Set<Integer> sharingStarts) {
+      ExactRuns exactRuns, Set<Integer> widenedStarts, Set<Integer> sharingStarts,
+      int sharingBudget) {
     Set<Integer> exactStarts = null;
     if (options.exactGrouping()) {
       // The best partition's group starts, forced on the walk below. Every group of that
@@ -1308,7 +1323,7 @@ public final class VarkaLoopEmitter {
       // its own: after one calendar output `ops` already exceeds it, so without this test
       // `SELECT year(d) AS a, year(d) AS b` would emit the decomposition twice.
       if (!current.isEmpty() && (closes(step, options) || forcedStarts.contains(o))) {
-        noteWidened(group, current, options, widenedStarts, sharingStarts);
+        noteWidened(group, current, sharingBudget, widenedStarts, sharingStarts);
         groups.add(current);
         if (record != null) {
           record.tallies().add(group.tally);
@@ -1321,7 +1336,7 @@ public final class VarkaLoopEmitter {
       current.add(o);
       group = withNext;
     }
-    noteWidened(group, current, options, widenedStarts, sharingStarts);
+    noteWidened(group, current, sharingBudget, widenedStarts, sharingStarts);
     groups.add(current);
     if (record != null) {
       record.tallies().add(group.tally);
@@ -1336,15 +1351,16 @@ public final class VarkaLoopEmitter {
 
   /**
    * Notes where a closed group starts when it is past the group budget: in {@code widenedStarts}
-   * where the prediction widened it, in {@code sharingStarts} where it holds several outputs and
-   * only what they share - a prefix up to the fused ceiling, a tree it already holds - let them
-   * join. A single output past the budget is neither: it forms a group of its own either way.
+   * where the prediction widened it, in {@code sharingStarts} where it holds several outputs past
+   * {@code budget} and only what they share - a prefix up to the fused ceiling, a tree it already
+   * holds - or a fallback's raised budget let them join. A single output past the budget is
+   * neither: it forms a group of its own either way.
    */
-  private static void noteWidened(GroupOps group, List<Integer> current,
-      VarkaEmitOptions options, Set<Integer> widenedStarts, Set<Integer> sharingStarts) {
+  private static void noteWidened(GroupOps group, List<Integer> current, int budget,
+      Set<Integer> widenedStarts, Set<Integer> sharingStarts) {
     if (group.widenedByPrediction) {
       widenedStarts.add(current.get(0));
-    } else if (current.size() > 1 && group.ops > options.groupBudget()) {
+    } else if (current.size() > 1 && group.ops > budget) {
       sharingStarts.add(current.get(0));
     }
   }
