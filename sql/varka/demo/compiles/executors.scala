@@ -21,12 +21,21 @@
 import org.apache.spark.SparkEnv
 import org.apache.spark.metrics.source.CodegenMetrics
 
-/** The compile counter of the driver and of each executor, by executor id. */
+/** Each executor's compile counter, from a job that reads it where its tasks run. */
+def probe(): Map[String, Long] = sc.parallelize(0 until 64, 64)
+  .map(_ => (SparkEnv.get.executorId, CodegenMetrics.METRIC_COMPILATION_TIME.getCount))
+  .collect().groupBy(_._1).map { case (id, cs) => (s"executor $id", cs.map(_._2).max) }
+
+/** The compile counter of the driver and of both executors, by executor id. */
 def counts(): Map[String, Long] = {
-  // Enough one-task partitions that both executors run some; the job itself compiles nothing.
-  val executors = sc.parallelize(0 until 64, 64)
-    .map(_ => (SparkEnv.get.executorId, CodegenMetrics.METRIC_COMPILATION_TIME.getCount))
-    .collect().groupBy(_._1).map { case (id, cs) => (s"executor $id", cs.map(_._2).max) }
+  // The probe compiles nothing, so it can run again until its tasks have reached both executors.
+  var executors = probe()
+  var tries = 1
+  while (executors.size < 2 && tries < 20) {
+    executors = executors ++ probe()
+    tries += 1
+  }
+  require(executors.size == 2, s"the probe reached ${executors.keys.mkString(", ")} only")
   executors + ("driver" -> CodegenMetrics.METRIC_COMPILATION_TIME.getCount)
 }
 
@@ -41,7 +50,6 @@ spark.sql("SELECT count(*) FROM t WHERE i = 1").collect()
 spark.sql("SELECT count(*) FROM t WHERE s = '1'").collect()
 
 val jvms = counts().keys.toSeq.sorted
-require(jvms.size == 3, s"expected a driver and two executors, found ${jvms.mkString(", ")}")
 
 /** Runs `query` and prints how many classes each JVM compiled for it. */
 def run(label: String, query: String, args: Map[String, Any] = Map.empty): Unit = {

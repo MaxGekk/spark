@@ -147,7 +147,9 @@ projections of 1 to 99 entries and aggregates of 10 to 60 sums, not the `CASE WH
 build a stage with a `CASE WHEN` is already compiled while its code is generated, to decide whether
 to split it (SPARK-33301), so a timed compile of its source is a cache hit. Section 6 uses
 `IntSlot`, a test-only expression that reads the value from a field set from the class's
-references, over `i % 1000 = <value>` so that neither arm can prune the cached batches.
+references, over `i % 1000000 = <value>` for the short query (one row for every value, and no
+batch pruning by the value for either arm) and `i % 1000 = 7` for the steady state; the benchmark
+first checks that both arms count the same rows.
 
 **5, past the cache's 100 entries** (`cache.scala`, `cache-100-jdk25-output.txt`,
 `cache-1000-jdk25-output.txt`). Loops of n queries differing only in an int, run twice: under the
@@ -163,8 +165,8 @@ at 33, and every query from 40 on; the 150-query loop compiled 450 classes in ea
 3. Owed (the runner).
 4. **Held, and stronger than predicted**: all 150 of the second loop's queries compiled again, not
    50. A loop larger than the cache evicts each class just before it is needed, and at three
-   classes a query in local mode the cache holds about 30 such queries (on a cluster, by the
-   per-JVM counts of 2, about 100 on the driver and 50 on each executor; inferred, not measured).
+   classes a query in local mode the cache holds about 30 such queries; at 33 queries, 99
+   classes, it already evicted, since Guava's cache evicts within each of its four segments.
 5. Owed (the runner).
 
 ### 9.2 The draft, 16 October 2026

@@ -14,8 +14,9 @@
 // 100 by default, a static setting read when the JVM starts. This script runs a loop of n queries
 // that differ only in an integer, then the same loop again, and counts how many queries of the
 // second loop compiled anything: with every class still cached, none would. The first loop's
-// classes are the newest in the cache when the second loop starts, so only the cache's size
-// decides. Run it again with a larger cache to see the setting work:
+// classes are the newest in the cache when the second loop starts, so only the cache decides:
+// its size, and Guava's way of evicting, by quarters of the cache rather than across all of it,
+// which starts before the cache is full. Run it again with a larger cache to see the setting work:
 //
 //   bin/spark-shell --master local[1] -i cache.scala
 //   bin/spark-shell --master local[1] --conf spark.sql.codegen.cache.maxEntries=1000 -i cache.scala

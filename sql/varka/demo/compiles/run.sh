@@ -51,10 +51,13 @@ run() {
     echo "spark:   $spark"
     echo
     # From the first ### line to the last, without Spark's own log lines and the shutdown after.
-    sed -n '/^###/,/^### Spark/p' "$log" | grep -v -E '^[0-9]{2}/[0-9]{2}/[0-9]{2} '
+    sed -n '/^###/,/^### Spark/p' "$log" | { grep -v -E '^[0-9]{2}/[0-9]{2}/[0-9]{2} ' || true; }
   } > "$out"
+  if ! grep -q '^### Spark' "$out"; then
+    echo "$script did not finish; its log is $log" >&2
+    return 1
+  fi
   rm -f "$log"
-  grep -q '^### Spark' "$out" || { echo "$script did not finish; see $out" >&2; return 1; }
   cat "$out"
 }
 

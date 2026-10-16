@@ -105,16 +105,13 @@ integer, then the same loop again, and counts how many of the second loop's quer
 *Figure 2. The second loop's queries that compiled again, under the default cache and under a
 cache of 1000, from `cache-100-jdk25-output.txt` and `cache-1000-jdk25-output.txt`.*
 
-In local mode each of these queries compiles three classes, so a cache of 100 holds about thirty
-of them. Up to 30 queries the second loop compiled nothing. At 33, 31 of 33 compiled again; at 40
-and beyond, every one did. The cache doesn't degrade gently: a loop that is larger than the cache
+In local mode each of these queries compiles three classes. Up to 30 queries, 90 classes, the
+second loop compiled nothing. At 33, 99 classes, 31 of 33 compiled again: the cache is Guava's,
+which evicts within each quarter of it, so it starts evicting a little before it holds 100. At 40
+and beyond, every query compiled again. The cache doesn't degrade gently: a loop that is larger than the cache
 evicts each class just before it is needed again, so all 150 queries of the largest loop compiled
 twice, 450 classes each time. With `spark.sql.codegen.cache.maxEntries=1000` the second loop
 compiled nothing at any size up to 150.
-
-On a cluster the classes spread out: the driver caches one class per such query and each executor
-two, so by the same arithmetic the driver's cache would hold about a hundred of them and each
-executor's about fifty. That is inferred from the per-JVM counts above, not measured.
 
 ## 4. What to do today
 

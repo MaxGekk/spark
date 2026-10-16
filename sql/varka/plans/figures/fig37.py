@@ -40,6 +40,15 @@ def rows(entries):
     return out
 
 
+def spark_version(entries):
+    """The Spark release the output file records on its `spark:` line."""
+    path = os.path.join(HERE, "..", "..", "demo", "compiles", "cache-%d-jdk25-output.txt" % entries)
+    for line in open(path).read().splitlines():
+        if line.startswith("spark:"):
+            return line.split()[1]
+    raise ValueError("no spark: line in " + path)
+
+
 SERIES = [(100, "#e03131", "maxEntries = 100, the default"), (1000, "#2f9e44", "maxEntries = 1000")]
 data = {entries: rows(entries) for entries, _, _ in SERIES}
 
@@ -55,7 +64,7 @@ r.text(
 r.text(
     40,
     106,
-    "second loop's queries compiled again (stock Spark 4.2.0, local mode)",
+    "second loop's queries compiled again (stock Spark %s, local mode)" % spark_version(100),
     size=20,
     color=GREY,
 )

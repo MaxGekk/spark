@@ -88,6 +88,13 @@ public class CodegenRecompileBenchmark extends VarkaBenchmarkBase {
   private static final int SAME = 5;
   /** Queries per arm in the tables of classes compiled and Janino's share. */
   private static final int SHARE_QUERIES = 40;
+  /**
+   * The modulus of the short query of the third section: past every row id, so that {@code i %
+   * WIDE = v} matches the one row {@code v} for every value the counter gives, as {@code i = v}
+   * does, while it keeps the cached table's batches from being pruned by the value, which the
+   * reference could not do.
+   */
+  private static final int WIDE = 1_000_000;
   /** Compiles per rung of the compile-time table. */
   private static final int COMPILES_PER_RUNG = 9;
 
@@ -96,7 +103,7 @@ public class CodegenRecompileBenchmark extends VarkaBenchmarkBase {
 
   /** A value no earlier query of this run has used: a row id of the small table. */
   private int fresh() {
-    require(next < SMALL_ROWS, "the counter ran past the small table's row ids");
+    require(next < SMALL_ROWS - 1, "the counter ran past the small table's row ids");
     return next++;
   }
 
@@ -127,6 +134,8 @@ public class CodegenRecompileBenchmark extends VarkaBenchmarkBase {
         .config(SQLConf.SHUFFLE_PARTITIONS().key(), 1)
         .config("spark.ui.enabled", false)
         .config(SQLConf.VARKA_ENABLED().key(), false)
+        // Janino, whatever SPARK_CODEGEN_COMPILER says: the times below are Janino's.
+        .config(SQLConf.CODEGEN_COMPILER().key(), "janino")
         .getOrCreate();
     spark.sql("CACHE TABLE t AS SELECT CAST(id AS INT) AS i, "
         + "DATE_ADD(DATE'2000-01-01', CAST(id AS INT)) AS d, CAST(id AS STRING) AS s "
@@ -158,36 +167,51 @@ public class CodegenRecompileBenchmark extends VarkaBenchmarkBase {
     section("Janino's compile time against a stage's size", this::compileTimes);
 
     List<Arm> slots = List.of(
-        new Arm("literal, the same value each time", v -> modFilter("t", lit(v)), false),
-        new Arm("literal, a new value each time", v -> modFilter("t", lit(v)), true),
+        new Arm("literal, the same value each time", v -> modFilter("t", WIDE, lit(v)), false),
+        new Arm("literal, a new value each time", v -> modFilter("t", WIDE, lit(v)), true),
         new Arm("reference, a new value each time",
-            v -> modFilter("t", CodegenRecompileSupport.intSlot(v)), true));
+            v -> modFilter("t", WIDE, CodegenRecompileSupport.intSlot(v)), true));
     slots.forEach(arm -> arm.query().accept(1));
     section("An integer passed as a reference instead of written into the source", () -> {
       // The reference must filter as the literal does, or the times below describe a broken
       // predicate; the line in the results file is the check's record.
-      for (int v : new int[] {3, 7}) {
-        long byLiteral = modFilter("t", lit(v));
-        long byReference = modFilter("t", CodegenRecompileSupport.intSlot(v));
-        require(byLiteral == SMALL_ROWS / 1000 && byReference == byLiteral, "the reference "
-            + "counted " + byReference + " rows for " + v + ", the literal " + byLiteral);
+      if (!dryRun()) {
+        // The ends of the counter's range, from below and above, so the checks leave every value
+        // it gives new to the cache.
+        checkReference("t", WIDE, SAME, 1);
+        checkReference("t", WIDE, 999, 1);
+        checkReference("t", WIDE, SMALL_ROWS - 1, 1);
+        checkReference("large", 1000, 7, LARGE_ROWS / 1000);
       }
-      note("check: i % 1000 = v counts " + SMALL_ROWS / 1000 + " rows for v = 3 and v = 7, "
-          + "with the literal and with the reference");
-      shortQueries("SELECT count(*) FROM t WHERE i % 1000 = <value>, " + SMALL_ROWS
+      shortQueries("SELECT count(*) FROM t WHERE i % " + WIDE + " = <value>, " + SMALL_ROWS
           + " rows in one partition", slots);
       classesAndJaninoShare(slots);
       var steady = benchmark("steady state: SELECT count(*) FROM large WHERE i % 1000 = 7, "
           + LARGE_ROWS + " rows", LARGE_ROWS).timed().build();
-      steady.addCase("literal", i -> modFilter("large", lit(7)));
-      steady.addCase("reference", i -> modFilter("large", CodegenRecompileSupport.intSlot(7)));
+      steady.addCase("literal", i -> modFilter("large", 1000, lit(7)));
+      steady.addCase("reference",
+          i -> modFilter("large", 1000, CodegenRecompileSupport.intSlot(7)));
       runCases(steady);
     });
   }
 
-  /** {@code SELECT count(*) FROM <table> WHERE i % 1000 = <value>} through the DataFrame API. */
-  private long modFilter(String table, Column value) {
-    return spark.table(table).where(col("i").mod(1000).equalTo(value)).count();
+  /**
+   * Refuses to go on unless the query counts {@code expected} rows for {@code v} both with the
+   * literal and with the reference, and records the check in the results file: the reference's
+   * times mean nothing if it filters differently.
+   */
+  private void checkReference(String table, int modulus, int v, long expected) {
+    long byLiteral = modFilter(table, modulus, lit(v));
+    long byReference = modFilter(table, modulus, CodegenRecompileSupport.intSlot(v));
+    require(byLiteral == expected && byReference == expected, "for " + v + " the literal counted "
+        + byLiteral + " rows and the reference " + byReference + ", not " + expected);
+    note("check: SELECT count(*) FROM " + table + " WHERE i % " + modulus + " = " + v
+        + " counts " + expected + " rows, with the literal and with the reference");
+  }
+
+  /** {@code SELECT count(*) FROM <table> WHERE i % <modulus> = <value>}, the DataFrame API's. */
+  private long modFilter(String table, int modulus, Column value) {
+    return spark.table(table).where(col("i").mod(modulus).equalTo(value)).count();
   }
 
   /** Times each arm's query: milliseconds per query, each iteration one query. */
@@ -216,7 +240,7 @@ public class CodegenRecompileBenchmark extends VarkaBenchmarkBase {
       // that repeat a value.
       arm.run(this::fresh);
       long classes = CodegenMetrics.METRIC_COMPILATION_TIME().getCount();
-      long janino = CodegenRecompileSupport.compileNanos();
+      long janino = CodeGenerator.compileTime();
       long start = System.nanoTime();
       for (int q = 0; q < SHARE_QUERIES; q++) {
         arm.run(this::fresh);
@@ -224,7 +248,7 @@ public class CodegenRecompileBenchmark extends VarkaBenchmarkBase {
       double ms = (System.nanoTime() - start) / 1e6 / SHARE_QUERIES;
       double perQuery =
           (double) (CodegenMetrics.METRIC_COMPILATION_TIME().getCount() - classes) / SHARE_QUERIES;
-      double janinoMs = (CodegenRecompileSupport.compileNanos() - janino) / 1e6 / SHARE_QUERIES;
+      double janinoMs = (CodeGenerator.compileTime() - janino) / 1e6 / SHARE_QUERIES;
       note(String.format("%-40s %16.1f %16.2f %18.2f", arm.label(), perQuery, ms, janinoMs));
     }
     note("");

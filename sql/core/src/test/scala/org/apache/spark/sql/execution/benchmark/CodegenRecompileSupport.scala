@@ -73,7 +73,4 @@ object CodegenRecompileSupport {
       conf.set(key, adaptive)
     }
   }
-
-  /** The total time this JVM has spent compiling generated classes, in nanoseconds. */
-  def compileNanos(): Long = CodeGenerator.compileTime
 }
