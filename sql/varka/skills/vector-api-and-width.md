@@ -843,6 +843,58 @@ library and the symbol per operator, and
 succeeded` for `libraryUnaryOp` or the reason it refused. A lane result quoted
 without that control is a number about whichever code C2 happened to compile.
 
+## The JDK's SLEEF sends `exp` and `pow` to infinity early, SVML does not, and the Arm runner has BitPerm
+
+The canary run of 16 October 2026 (Actions run 38884285755 on the fork; output
+in `dev/varka_canary/mathlane-aarch64-neoverse-n2.txt`) settled two questions
+that the plans had only read from source.
+
+**The overflow band is real on Arm.** JDK 25 bundles SLEEF 3.6.1, whose `exp`
+and `pow` return +Inf above 709.78271114955742909 (`sleefinline_advsimd.h`
+lines 3297 and 3420 at `jdk-25-ga`). The true limit is
+ln(`Double.MAX_VALUE`) = 709.782712893384. On the Neoverse N2 runner every
+`EXP` lane from the first double above the constant through 709.782712893384
+came back +Inf where `StrictMath.exp` is finite, and the constant itself stayed
+finite. `POW` did the same wherever y * ln(x) passed the constant, including
+`pow(Double.MAX_VALUE, 1)`. The 262,144 random inputs never reached the band,
+so only fixed inputs can show it. The probe also checks that the band went
+through the library and not the fallback: it puts ordinary witness lanes in
+the same call and counts how many differ from `Math`.
+
+**SVML uses the true limit.** On the EPYC 7763 runner (AVX2) and on this
+laptop (AVX-512), every band lane equals `StrictMath`. One exception: at AVX2,
+SVML binds no `POW`, so that row is the per-lane `Math.pow` fallback and says
+nothing about SVML.
+
+**The Arm runner has SVE2 BitPerm, so it intrinsifies `VectorMask.fromLong`.**
+`/proc/cpuinfo` lists `svebitperm`, as does the JVM's own feature line
+(`-Xlog:os+cpu`, and the vector `DEBUG: CPUFeatures` line). Under
+`PrintIntrinsics`, `fromBitsCoerced` at bci 39, the call inside
+`VectorMask.fromLong`, reads `(intrinsic) late inline succeeded` wherever the
+species is a compile-time constant. When reading those lines, separate three
+kinds:
+* The `failed to inline (intrinsic)` lines at bci 39 follow
+  `** missing constant: vclass=... etype=Phi` lines: the species was not a
+  constant in that compile. One is `fromLong` compiled with two species merged.
+  The other is the probe's byte species, a local that an on-stack-replacement
+  compile reads from the interpreter frame (inferred: the second call site
+  fails only in the first compile of the loop).
+* The `lambda$fromLong$0 ... inline (hot)` lines are the Java fallback,
+  inlined where the intrinsic was refused.
+* The bci 25 `fromBitsCoerced` lines are `maskAll`'s broadcast inside that
+  fallback.
+
+No `** not supported` line appears, so the hardware never refused
+`VectorLongToMask`. Emitted kernels load their species with `getstatic` of a
+`static final`, which is always a constant.
+
+**This runner cannot show the fallback.** NEON-only cores (Apple's, Graviton2)
+and SVE1 cores (Graviton3) lack BitPerm, and on them `aarch64_vector.ad` (lines
+217-218) refuses the node, so `fromLong` runs the Java fallback. Neither GitHub
+runner class is such a core. So milestone 8 row 375's question, what a
+validity-reading kernel costs where `fromLong` falls back, needs a host
+without BitPerm, or the fallback forced some other way.
+
 ## SLEEF and OpenVML, read for Varka: no integer division anywhere, and what does transfer
 
 Read 19 September 2026, before anyone proposes them again. **SLEEF** (v3.9,

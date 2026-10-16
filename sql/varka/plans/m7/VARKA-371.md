@@ -109,4 +109,11 @@ named with the JDK it was measured on.
 
 ## 9. Outcome
 
-Open.
+### 9.1 The draft, 16 October 2026
+
+`POST_TRAP_SUMS.md` is the draft, about 1000 words on 4's outline, written once the fix's result
+was known (`VARKA-295.md` 9.7 to 9.9). Section 6 of the outline is its "What a library can do",
+including what the fix does not cover (`VARKA-373.md`, `VARKA-374.md`). Still owed before
+publication: the replay script under `sql/varka/demo/` and its run of 1,000 warm-ups (5), row
+370's final verdict on what a running JVM can do (the draft states what its admission check
+found), and the owner's edit.

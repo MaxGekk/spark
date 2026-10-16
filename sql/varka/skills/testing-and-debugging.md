@@ -1192,6 +1192,18 @@ signs each passed a check that compared Spark with itself:
 entry, no row `FilterExec` in the plan. And `EXPLAIN`'s first line above the Varka node says at a
 glance whether Spark kept part of the query.
 
+## A sql/core suite that collects dates makes its session active first
+
+*Added on 16 October 2026 from VARKA-244 (`m7/VARKA-244.md` 9).* A DataFrame chooses its row
+encoder from the *active* session's settings when it is built, not from the session that ran it,
+and `VarkaSharedSessions` clears the active and default sessions when it builds `varkaSpark`. So
+`spark.sql.datetime.java8API.enabled` set on `spark` and `varkaSpark` - once in `beforeAll`, or
+around each query with `withBothConf` - is ignored, and `collect()` returns `java.sql.Date`, which
+prints year 10000 as `0000` and year 0 as `0001` through the hybrid calendar: `checkAnswer` then
+fails on rows that look equal. Set the queried session active around the query
+(`SparkSession.setActiveSession`, restored after), as `VarkaStandardDeltasSuite.onSession` does,
+before expecting `LocalDate`.
+
 ## A kernel failure leaves a file you can replay, and where each failure first surfaces
 
 *Added on 14 October 2026 by VARKA-315.* A kernel class that fails to verify or define, an
@@ -1294,6 +1306,8 @@ predicted. Add the line when the prediction is scored, whichever way it went.
 | VARKA-243 (6.1 #3) | a new sql/core suite under 10 s | 18 s, its tests under 4 s | about 2 | the estimate counted the tests and not the suite's own sessions and cached table |
 | VARKA-327 (6.1 #2) | the warmed Spark differential's 2,000 compositions under an hour | 13 minutes | 0.26 | predicted from a seed that released 6.8% of its warm-ups at 10 s each; the nightly's released 0.9% |
 | VARKA-281 (6.1 #3) | the calendar sweep suite under 20 s | 1.5 s for its eight tests over 20 million days each | 0.08 | the estimate priced single-threaded `LocalDate` decodes and then doubled; a parallel stream over the test JVM's cores and the JIT's inlining of the decode left little of either |
+| VARKA-244 (5.1 #1) | a new sql/core suite under 40 s, its tests under 10 s | 25 s, its tests 8.4 s | 0.6 | predicted at VARKA-243's ratio of 2, which a suite of the same shape repeated; a later run at load average 46 took 72 s |
+| VARKA-317 (6.1 #1) | the coverage differential's added test time at most 10 s | 0.3 s: the planted test 126 ms, the extended one 182 ms | 0.03 | the estimate priced a kernel compile per query and doubled it by VARKA-243's ratio; where the 0.3 s went was not split |
 
 What the table says so far: a check that adds a run per batch or a read per call costs more than
 the plan's arithmetic, because the arithmetic counts the kernel's work and not the harness's
