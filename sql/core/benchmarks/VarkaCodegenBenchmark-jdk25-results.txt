@@ -10,3 +10,53 @@ janino: GenerateUnsafeProjection.generate                    7              8   
 varka: fused emit + define + load + instantiate              0              0           0          0.0       99365.0      65.6X
 
 
+================================================================================================
+One expression list through Janino and through Varka (VARKA-259)
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.4.1+1-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+1 date expression:                                         Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------
+spark: generate + Janino compile, cold                                 1              2           1          0.0     1471760.0       1.0X
+varka: compile + emit + define + load + instantiate, cold              0              0           0          0.0      292781.0       5.0X
+spark: generate, class cache hit                                       0              0           0          0.0       60854.0      24.2X
+varka: compile, shape cache hit                                        0              0           0          0.2        5240.0     280.9X
+
+OpenJDK 64-Bit Server VM 25.0.4.1+1-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+4 date expressions:                                        Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------
+spark: generate + Janino compile, cold                                 3              3           1          0.0     2602249.0       1.0X
+varka: compile + emit + define + load + instantiate, cold              0              1           0          0.0      445489.0       5.8X
+spark: generate, class cache hit                                       0              0           0          0.0      267654.0       9.7X
+varka: compile, shape cache hit                                        0              0           0          0.1        9017.0     288.6X
+
+OpenJDK 64-Bit Server VM 25.0.4.1+1-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+16 date expressions:                                       Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------
+spark: generate + Janino compile, cold                                 4              4           1          0.0     4190322.0       1.0X
+varka: compile + emit + define + load + instantiate, cold              1              1           0          0.0     1198206.0       3.5X
+spark: generate, class cache hit                                       1              1           0          0.0     1025361.0       4.1X
+varka: compile, shape cache hit                                        0              0           0          0.0       35717.0     117.3X
+
+OpenJDK 64-Bit Server VM 25.0.4.1+1-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+64 date expressions:                                       Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------
+spark: generate + Janino compile, cold                                11             12           1          0.0    10665113.0       1.0X
+varka: compile + emit + define + load + instantiate, cold              4              4           2          0.0     4275725.0       2.5X
+spark: generate, class cache hit                                       4              4           0          0.0     4056213.0       2.6X
+varka: compile, shape cache hit                                        0              0           0          0.0      331014.0      32.2X
+
+OpenJDK 64-Bit Server VM 25.0.4.1+1-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+16 int expressions:                                        Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-----------------------------------------------------------------------------------------------------------------------------------------
+spark: generate + Janino compile, cold                                 5              5           1          0.0     4517241.0       1.0X
+varka: compile + emit + define + load + instantiate, cold              1              1           0          0.0     1153733.0       3.9X
+spark: generate, class cache hit                                       1              1           0          0.0     1023839.0       4.4X
+varka: compile, shape cache hit                                        0              0           0          0.0       41198.0     109.6X
+
+
