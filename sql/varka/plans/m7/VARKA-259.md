@@ -174,8 +174,8 @@ table (1000 rounds and the hit list), so no row times building expressions. Vark
 evaluator's: default emit options, warmed as the session's warm-up setting says (on by default,
 so the classes are named with the `w` mark), as the compiler's admission keys it too.
 
-**Predictions**, before any number, for the runner (an EPYC 7763 in every runner-made results
-file so far), guessed from the laptop's first section with no measurement of these lists:
+**Predictions**, before any number, for the runner (an EPYC 7763 in all but one runner-made
+results file so far), guessed from the laptop's first section with no measurement of these lists:
 
 * Janino cold grows from a fixed cost with the entries: about 8 ms for 1, 10 for 4, 20 for 16,
   60 for 64.
@@ -186,6 +186,21 @@ file so far), guessed from the laptop's first section with no measurement of the
   5 for 64), Varka's compile and key lookup at a tenth of its cold row or less.
 * Wall clock: five tables of four cases at the `timed()` settings, at least 4 s a case, about
   two minutes for the section beside the runner's build.
+
+**The runner's run.** Dispatched on the fork, with only this section taken from the run and the
+first kept as committed (`dev/varka_bench_sections.py restore` appends a section the committed file
+lacks):
+
+```
+gh workflow run benchmark.yml -R MaxGekk/spark --ref varka-259-bench \
+  -f class=VarkaCodegenBenchmark -f jdk=25 -f generate-tpcds=false -f create-commit=false \
+  -f extra-java-options="--add-modules jdk.incubator.vector" \
+  -f sections="One expression list through Janino and through Varka (VARKA-259)"
+```
+
+The CPU is not pinned: the post compares rows within this section, which share a machine. The
+run's provenance sidecar will describe the whole file as runner-made, so its `cpu:` line is
+annotated, when the file is committed, to say that the first section is the laptop's.
 
 **The local check, 16 October 2026** (laptop, cores 3 to 5 shared with another agent, so no
 timing is read from it):
