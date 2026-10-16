@@ -91,7 +91,7 @@ beside row 258's, each linking the other.
 
 1. This plan and the draft, and the row marked drafted.
 2. The matched benchmark, on an idle machine or a GitHub runner.
-3. Row 258's publication, then this post's, then 9.2.
+3. Row 258's publication, then this post's, then 9.3 (9.2 is the matched benchmark).
 
 ## 8. Explicitly out of this task
 
@@ -113,3 +113,84 @@ only. Owed before publication:
 2. **Row 258's published link**: its post is outlined, not drafted; the draft's first link is a
    placeholder.
 3. **The owner's edit.**
+
+### 9.2 The matched benchmark, 16 October 2026
+
+9.1's first owed item. Planned and built on 16 October 2026; the numbers come from a GitHub-hosted
+runner and are recorded here when they exist.
+
+**Where it lives.** A second section of `VarkaCodegenBenchmark`, "One expression list through
+Janino and through Varka (VARKA-259)", not a class of its own. The rule that gives a new feature
+family its own benchmark class is about expression families; this is the question the existing
+section asks, generation time, asked again over matched inputs. The `sections` input of
+`benchmark.yml` (VARKA-256) lets the runner replace this section alone and keep the first, which
+the draft quotes, as it was measured on the laptop. The first section's code is unchanged; its
+`benchmark.run()` became `runCases`, which runs it the same way and lets a dry run skip it. The
+cost of sharing the file is that the Relative columns of the two sections are on different
+machines and must not be compared with each other.
+
+**The lists.** Five, each bound against the columns `d`, `d2` (dates) and `i` (int): 1, 4, 16 and
+64 date expressions, and 16 int expressions. Entry `k` of a date list is the `k % 4`-th of
+`date_add(d, c)`, `date_sub(d, c)`, `datediff(date_add(d, c), d2)` and `year(date_add(d, c))`;
+of the int list, the `k % 3`-th of `i + c`, `i - c` and `-(i + c)` under the session's
+arithmetic mode (not `i * c`, which Varka declines; see the local check below). Every entry has its own constant `c`, so no two share a subexpression and neither side's
+common-subexpression elimination has work: the 1-entry list is the first section's Janino
+projection. Both arms receive the same `List<NamedExpression>` from one builder; Spark binds it
+in `GenerateUnsafeProjection.generate`, Varka in `VarkaExpressionCompiler.compile`.
+
+**The arms**, one table per list, Relative against the first row:
+
+| Row | What one iteration does |
+|---|---|
+| spark: generate + Janino compile, cold | `GenerateUnsafeProjection.generate` over a list with new constants: source text, a Janino compile, the instance |
+| varka: compile + emit + define + load + instantiate, cold | `VarkaExpressionCompiler.compile`, the shape key, `getOrEmit` on a private `VarkaShapeCacheImpl` of capacity 0 (the cache disabled: every lookup hashes the shape, emits, defines in a fresh loader, and the entry is evicted as it loads), then `newKernel()` |
+| spark: generate, class cache hit | the same call over one fixed list: the source text is generated again and found in Janino's cache |
+| varka: compile, shape cache hit | the same compile and lookup on a private cache that holds the class, then `newKernel()` |
+
+Cold for Janino means a source text it has not seen: each call moves every constant by a round,
+and the rounds cycle through 1000 against the default cache of 100 classes
+(`spark.sql.codegen.cache.maxEntries`); the constants start at 1000 so that no text is one the
+first section compiled. The existing row takes its literal from the iteration index, which is -1
+for the whole warm-up, so its warm-up compiles once and hits after that; the new rows take the
+round from a counter instead. Varka's shape does not depend on the constants (`VarkaShapeKey`),
+so moving them cannot defeat its cache; the capacity-0 cache does. The hit rows both compile the
+round kept outside the cycle.
+
+**Checked before each table, every run.** The list is printed (`sql()` of every entry), and the
+run fails unless: Varka fuses every entry, one output each; Varka's shape key is the same in four
+other rounds, the cycle's ends included; two new rounds raise Spark's `compilationTime` histogram
+count by two and a repeated fixed list by none; the capacity-0 cache misses on every call; and
+the warm cache hits on the fixed list and on a list with new constants. The last is what the
+post's "never make the class again" rests on: Janino hits only on the same text.
+
+**Predictions**, before any number, for the runner (an EPYC 7763 in every runner-made results
+file so far), guessed from the laptop's first section with no measurement of these lists:
+
+* Janino cold grows from a fixed cost with the entries: about 8 ms for 1, 10 for 4, 20 for 16,
+  60 for 64.
+* Varka cold: about 0.1 ms for 1, 0.2 for 4, 0.5 for 16, 2 for 64; the ratio falls from about
+  80x at 1 to about 30x at 64, since the compiler's walk and the emission grow with the entries
+  and Janino's fixed cost does not.
+* The hits: Spark's source generation alone at a tenth of its cold row or more (0.5 ms for 1,
+  5 for 64), Varka's compile and key lookup at a tenth of its cold row or less.
+* Wall clock: five tables of four cases at the `timed()` settings, at least 4 s a case, about
+  two minutes for the section beside the runner's build.
+
+**The local check, 16 October 2026** (laptop, cores 3 to 5 shared with another agent, so no
+timing is read from it):
+
+* `-Dvarka.bench.dryRun=true` prints the five lists and passes every check above. Varka's classes:
+  1 output from 1 input with 1 literal slot, 3342 bytes; 4 outputs, 2 inputs, 4 slots, 6130
+  bytes; 16 outputs, 16 slots, 16432 bytes; 64 outputs, 64 slots, 58401 bytes; the int list 16
+  outputs from 1 input, 16414 bytes.
+* The first int list did not compile: Varka declines a checked `i * c` whose operands do not rule
+  out overflow ("checked int multiply whose operands do not rule out overflow", entries 2, 5, 8,
+  11 and 14), so the third int form became `-(i + c)`. The check caught it because it refuses a
+  list Varka does not fuse whole and prints the declines by position; a benchmark that timed a
+  partial kernel against a whole Janino projection would have compared nothing.
+* An untimed full run (no results file) ran every case of both sections to the end.
+* Measured and not anticipated in the plan: the compiler's size admission (`VarkaSizeAdmission`)
+  emits through the JVM-wide cache the first time it sees a shape. The check before each table is
+  that first time, so in the timed rows the admission is a lookup and the private cache's
+  emission is the one build. That matches a cold production query, which builds once at the
+  admission and defines at the lookup.
