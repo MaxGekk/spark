@@ -408,7 +408,9 @@ jobs:
     timeout-minutes: ${{ inputs.build_timeout_minutes }}
     strategy:
       fail-fast: false
-      max-parallel: 20
+      # On a fork one full run's modules take at most 12 job slots, leaving the rest to the
+      # small runs beside it (VARKA-255.md 3.1); apache/spark keeps 20.
+      max-parallel: ${{ github.repository == 'apache/spark' && 20 || 12 }}
       matrix:
         java:
           - ${{ inputs.java }}
@@ -642,7 +644,15 @@ jobs:
           cache-from: type=registry,ref=ghcr.io/apache/spark/apache-spark-github-action-image-pyspark-${{ env.PYSPARK_IMAGE_TO_TEST }}-cache:${{ inputs.branch }}
 
 
-  precompile:
+  # The fork's queue (VARKA-255.md 3.1): a run that will precompile Spark and fan out behind it
+  # - the module matrix, the PySpark groups, the Docker and Kubernetes jobs - waits here while
+  # another such run is ahead of it, so two full-matrix runs never share the fork's job slots,
+  # and a pull request labelled ci-hold on vecbricks/varka stops here. A Varka-scoped or
+  # documents-only run skips this job and never waits. The condition is Precompile Spark's,
+  # which now runs only when this job succeeds, so the two cannot drift apart. It runs on
+  # ubuntu-latest, not ubuntu-slim, because a slim job is cut off at 15 minutes and this one
+  # may wait hours; on apache/spark and vecbricks/varka it admits at once.
+  admit:
     needs: precondition
     if: >-
       (!cancelled()) && (
@@ -655,6 +665,30 @@ jobs:
         fromJson(needs.precondition.outputs.required).k8s-integration-tests == 'true' ||
         fromJson(needs.precondition.outputs.required).oidc-e2e == 'true' ||
         fromJson(needs.precondition.outputs.required).tpcds-1g == 'true')
+    name: "Admit a full-matrix run"
+    runs-on: ubuntu-latest
+    # The script gives up at 330 minutes and names the run it waited on.
+    timeout-minutes: 340
+    steps:
+    - name: Checkout the admission script
+      if: github.repository != 'apache/spark' && github.repository != 'vecbricks/varka'
+      uses: actions/checkout@v7
+      with:
+        ref: ${{ needs.precondition.outputs.head_sha }}
+        sparse-checkout: dev/varka_ci_admit.py
+        sparse-checkout-cone-mode: false
+    - name: Wait while another full-matrix run is ahead
+      if: github.repository != 'apache/spark' && github.repository != 'vecbricks/varka'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: >-
+        python3 dev/varka_ci_admit.py --repo "${{ github.repository }}"
+        --run-id "${{ github.run_id }}" --branch "${{ github.ref_name }}"
+        --base-repo vecbricks/varka
+
+  precompile:
+    needs: [precondition, admit]
+    if: (!cancelled()) && needs.admit.result == 'success'
     name: "Precompile Spark"
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -1358,6 +1392,8 @@ jobs:
       run: ./dev/varka_quote_check.py
     - name: SKILLS.md's index matches the lesson files
       run: ./dev/varka_toc.py --check SKILLS.md --from sql/varka/skills
+    - name: The CI queue's admission decision, over recorded API responses
+      run: python3 dev/varka_ci_admit.py --self-test
 
   # Documentation build
   docs:
