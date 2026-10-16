@@ -439,6 +439,6 @@ and the coverage phase.
 43 each, disjoint, their union the 86. Run for real at `--heap 3g --timeout-factor 4` beside each
 other, shard 0 had all 43 killed (347 s, its coverage phase about 180 s of it) and shard 1 had 42,
 its one survivor through the bytes run in 203 s; `--shards` joined them into 85 behavioural and 1
-survived, and refused a missing shard, a doubled one and a mutant in two. The survivor is the
-`requireNonNull` 9.2 records as killed in the sample, which ran before 9.4 moved the
-`PinsDefaults` tests to the second run; neither run kills it now, and the full run will list it.
+survived, and refused a missing shard, a doubled one and a mutant in two. The survivor is a
+removed `requireNonNull` in `pureOf`, the kind 9.2 records as killed in the sample; why it lives
+here, with both runs' tests passing, is not settled by this check, and the full run lists it.
