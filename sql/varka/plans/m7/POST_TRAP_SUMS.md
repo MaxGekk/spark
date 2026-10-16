@@ -84,7 +84,8 @@ on five more seeds; steady-state throughput showed no difference we could see.
 
 It is not the whole answer. At a 4-lane override the releases come from a different counter, a
 per-bytecode trap count at one call site of `IntVector.add`, which warming the narrower vector
-shape did not clear, and warming both shapes made worse. And where the preferred vector is 128 bits wide, as on most Arm cores, the
+shape did not clear, and warming both shapes made worse. And where the preferred vector is 128 bits
+wide, as on most Arm cores, the
 warm-up does not help at all; that case is still open.
 
 If you use the Vector API in a long-lived JVM: run your vector code once, with every operator
@@ -94,5 +95,6 @@ limits above remove the problem outright.
 ## Reproducing it
 
 The replay is the warm-up arm of Varka's composition fuzzer over one prefix and one composition,
-with the JIT's log on; the release rate is a few per cent, so run it 1,000 times and count. [The command
+with the JIT's log on; the release rate is a few per cent, so run it 1,000 times and count. [The
+command
 line and the script go in `sql/varka/demo/` before publication; row 371 owes them.]
