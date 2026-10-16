@@ -232,7 +232,7 @@ class VarkaWarmupEndToEndSuite extends QueryTest with VarkaSharedSessions with V
       assert(varkaMetric(first, "numOutputRows") === numRows.toLong)
       assert(VarkaKernelWarmup.awaitIdle(150000), "the warm-up did not finish within 150 seconds")
       assert(VarkaKernelWarmup.recentOutcomes().asScala.last.state() ===
-        VarkaKernelWarmth.State.COMPILED)
+        VarkaKernelWarmth.State.COMPILED, VarkaKernelWarmup.templateWarmupAccount())
       val second = writeToNoop(query)
       assert(varkaMetric(second, "numVarkaBatches") === numBatches)
       assert(varkaMetric(second, "numWarmupBatches") === 0L)

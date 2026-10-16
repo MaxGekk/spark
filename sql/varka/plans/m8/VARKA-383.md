@@ -501,7 +501,8 @@ No product behaviour changed, and no run on a runner has been made yet.
   the class definition; that file was listed for arm B only) and its duration;
   `VarkaKernelWarmup` records the uptime at the worker's first start and renders both as
   `templateWarmupAccount()`, which `VarkaWarmupEndToEndSuite` appends to its verdict assertion and
-  to every other failure its catch rewrites; it never throws, so a JVM where the prewarm's class
+  to every other failure its catch rewrites, and the columnar-consumer test to its verdict
+  assertion; it never throws, so a JVM where the prewarm's class
   cannot initialize keeps the failure it is explaining.
 * **The self-review** (`/code-review high` on the branch) made ten findings; all ten were fixed
   as the items above describe, the last being one over-long line in the workflow.
