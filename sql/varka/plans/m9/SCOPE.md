@@ -4387,8 +4387,9 @@ numBatches` with the claiming batch on the row path.
 *Moved into `m8/PLAN.md` row 383, 16 October 2026 (owner's decision).* The suite failed on two pull
 requests that day with `RELEASED did not equal COMPILED`, the same shape both times
 (`shapeHash=wd36813e98d5e22ac`, `calls=108464`, `runNanos=1201511680`, and `calls=109608`,
-`runNanos=1201138469`, as the failures were reported to the planning session). The owner's reading
-is that the shape was released about one second into its warm-up, nowhere near this item's
+`runNanos=1201138469`, as the failures were reported to the planning session). The planning
+session's first reading was that the shape was released about one second into its warm-up, nowhere
+near this item's
 deadline, and that it shares the cause `m7/VARKA-257.md` 9.2 found for long-lane kernels after a
 kernel history (on PR #873, not yet merged): compiled, with C2 code in use for every loop method,
 and still allocating. So the item goes to row 383, whose reproduction on an idle runner covers
@@ -4409,6 +4410,13 @@ at 68 calls; the shape leaving the cache; the kernel throwing) do not fit the co
 first check. What changes for this item either way: the progress deadline proposed above would
 not keep a shape whose probes never stop allocating, so its two changes wait for 383's cause.
 The text above stays as the record of what was believed before.
+
+*Settled from the CI log, the same day.* The failed job's own log (fork run 38912533464, `sql -
+other tests`) prints the outcome in full: `runNanos=120151168042`, `firstProbeBytes=7915632`,
+`lastProbeBytes=197328`, and "the first run took 508 ms". The `runNanos` the planning session read
+was the failure annotation's text cut off, not a transcription slip. So it was a release at the
+suite's 120 s deadline, with the last probe still allocating: 257's cause, and row 383's first
+check is done.
 
 ### Item 78. A post for Spark users: how Spark compiles a query, and why it compiles it again
 
