@@ -1294,6 +1294,7 @@ predicted. Add the line when the prediction is scored, whichever way it went.
 | VARKA-243 (6.1 #3) | a new sql/core suite under 10 s | 18 s, its tests under 4 s | about 2 | the estimate counted the tests and not the suite's own sessions and cached table |
 | VARKA-327 (6.1 #2) | the warmed Spark differential's 2,000 compositions under an hour | 13 minutes | 0.26 | predicted from a seed that released 6.8% of its warm-ups at 10 s each; the nightly's released 0.9% |
 | VARKA-281 (6.1 #3) | the calendar sweep suite under 20 s | 1.5 s for its eight tests over 20 million days each | 0.08 | the estimate priced single-threaded `LocalDate` decodes and then doubled; a parallel stream over the test JVM's cores and the JIT's inlining of the decode left little of either |
+| VARKA-317 (6.1 #1) | the coverage differential's added test time at most 10 s | 0.3 s: the planted test 126 ms, the extended one 182 ms | 0.03 | the estimate priced a kernel compile per query and doubled it by VARKA-243's ratio; where the 0.3 s went was not split |
 
 What the table says so far: a check that adds a run per batch or a read per call costs more than
 the plan's arithmetic, because the arithmetic counts the kernel's work and not the harness's

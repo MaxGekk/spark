@@ -2015,11 +2015,14 @@ alternative is a subsystem with a published list of the ways it is not.
    the plan carries this fallback text), and `checkSparkAnswerMaybeThrows`
    (both engines throw, or both agree) (`CometTestBase`). This engine's
    compiler suite asserts decline reasons and its differential asserts fusion;
-   the "maybe throws" form is the one it lacks and the one `ANSI` rows need:
+   the "maybe throws" form was the one it lacked and the one `ANSI` rows need:
    under `FAIL` the assertion is that Varka and the row engine either both
-   raise the same error or both agree, which is stronger than "declined". A
-   small addition to `VarkaSharedSessions`, best made when the first `ANSI`
-   overflow row lands in the coverage table.
+   raise the same error or both agree, which is stronger than "declined".
+   VARKA-317 (16 October 2026) found the check already private to
+   `VarkaCoverageDifferentialSuite`, made it the shared
+   `checkSparkAnswerMaybeThrows` and `checkSparkRaisesTheSame` in
+   `VarkaMaybeThrows.scala`, moved the paired intercepts of two more suites
+   onto it, and proved it with planted mismatches (`m7/VARKA-317.md` 9).
 
 **Noted for later.** Comet reverts a whole stage to Spark rows when it counts
 more than a configured number of columnar-to-row transitions in it
