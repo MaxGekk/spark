@@ -41,6 +41,23 @@ branch, its exact exponents as exact nodes outside the contract (A3, row 358); a
 decimal-to-floating arm, the extended math probe, Spark's own cast and hash suites under the Varka
 evaluator and the fuzzer's count arm are rows of their own (A4, rows 366 to 369).*
 
+*Owner's answer, 16 October 2026, to question 3 of section 7: option (iii), no reader change. It
+supersedes A1. The house rule is that row answers follow vanilla Spark always, and A1 would make
+every Arrow consumer of the fork answer the ANSI and TRY casts of a decimal to `INT`, `SMALLINT`
+and `TINYINT` differently from vanilla Spark with Varka off as well. So the kernel reproduces
+vanilla Spark's column-path rule for those three casts, the double rule over a
+`BigDecimal`-backed value, which is what Varka's fallback reads through `ArrowColumnVector`. A1's
+text is kept where it stands, with notes; the places it shaped (1.1 item 3, 2.2, 2.8, 2.10, 5,
+rows 350, 364 and 365, the wave table, risk 10, 10.1 item 3) now carry (iii)'s consequences,
+each marked with this date.*
+
+*Owner's answer, 16 October 2026, to question 4 of section 7: "we should start from the tasks that
+establish the foundation of Varka." Neither order the question offered, but a third one derived
+from the rows' dependencies: every foundation row - a row other rows build on, such as a lane, a
+load or store, a shared IR node or a harness - lands before any function row that nothing waits
+on, for every type. The order is 4.1; the old table stays in section 4 as the record. The places
+the cheapest-first order shaped (2.3, 2.9, section 4, 10.4) carry dated notes.*
+
 *Owner's decision, 14 October 2026: no milestone 7 row moves.* The rows still open in
 `m7/PLAN.md` stay there and close there; nothing below depends on one except where a row says so.
 
@@ -94,9 +111,11 @@ ones.**
    the SMT proofs of `dev/varka_prove.sh` where the source is a 64-bit integer and the rule an
    integer one (29), by sampled regions and the fuzzer where the source is a double or the pair
    rounds a 64-bit value to a floating type (12), and by both for a decimal to `INT`, `SMALLINT`
-   or `TINYINT`, whose exact rule below precision 19 is SMT's and whose double rule above it is the
-   sampled arm's (3); Spark's own cast suites run through the Varka evaluator agree with the matrix
-   pair by pair (368).
+   or `TINYINT`, whose LEGACY low bits are SMT's and whose ANSI and TRY range check, by Spark's
+   double rule at every precision, is the sampled arm's (3; until the answer to question 3 of
+   section 7 on 16 October 2026 this read "whose exact rule below precision 19 is SMT's and whose
+   double rule above it is the sampled arm's"); Spark's own cast suites run through the Varka
+   evaluator agree with the matrix pair by pair (368).
 4. **Spark's semantics hold at the edges and are tested there**: NaN and both zeros in every
    floating comparison, choice and `IN` (item 89 bullet 1's table against
    `SQLOrderingUtil.compareDoubles`); a zero divisor null under LEGACY and an error under ANSI for
@@ -242,7 +261,7 @@ about every pair, so the matrix cannot drift from the rules it copies.
 | widening | 12 | integral to a wider integral, to a floating type that holds it exactly, `FLOAT` to `DOUBLE`; exact in every mode |
 | narrowing | 6 | integral to a narrower integral: LEGACY wraps, ANSI raises `CAST_OVERFLOW`, TRY nulls |
 | rounding | 6 | `INT` or `BIGINT` to `FLOAT`, `BIGINT` to `DOUBLE`, `DOUBLE` to `FLOAT`, decimal to floating; round to nearest even, no error in any mode |
-| truncation | 12 | floating to integral (LEGACY saturates to `INT` or `BIGINT`, NaN to zero, and for `TINYINT` and `SMALLINT` saturates to `INT` and then wraps; ANSI and TRY range-check on the double - against `2^31 - 1` exactly for `INT`, and for `BIGINT` against `Long.MaxValue.toDouble`, which is `2^63`, so `2^63` passes and saturates - and raise or null on NaN), decimal to integral (toward zero, the low bits kept under LEGACY; `CAST_OVERFLOW` under ANSI, by the exact rule for a long-backed value and the double rule for a `BigDecimal`-backed one, 2.8) |
+| truncation | 12 | floating to integral (LEGACY saturates to `INT` or `BIGINT`, NaN to zero, and for `TINYINT` and `SMALLINT` saturates to `INT` and then wraps; ANSI and TRY range-check on the double - against `2^31 - 1` exactly for `INT`, and for `BIGINT` against `Long.MaxValue.toDouble`, which is `2^63`, so `2^63` passes and saturates - and raise or null on NaN), decimal to integral (toward zero, the low bits kept under LEGACY; `CAST_OVERFLOW` under ANSI, by the exact rule for a long-backed value and the double rule for a `BigDecimal`-backed one, 2.8; for Varka the double rule at every precision for `INT`, `SMALLINT` and `TINYINT`, since its fallback reads `BigDecimal`-backed values: the answer to question 3, 16 October 2026) |
 | scale up | 13 | integral to decimal (overflow past `p - s` digits: null or `NUMERIC_VALUE_OUT_OF_RANGE`), `DATE` to `TIMESTAMP_NTZ` and integral to an interval (`multiplyExact`: raises under LEGACY and ANSI and is null under TRY, since `try_cast` wraps every in-scope cast in a catch - `Cast.canUseLegacyCastForTryCast` exempts only string sources; a `TINYINT` or `SMALLINT` source never overflows, an `INT` only to a DAY end, past 106,751,991, or a YEAR end, past 178,956,970) |
 | rescale | 4 | decimal to decimal (`ROUND_HALF_UP` on a smaller scale, overflow null or error), `TIME` to decimal, decimal to an interval |
 | floor division, floor modulo, unit division | 16 | `TIMESTAMP_NTZ` to `DATE` and to `TIME`, `TIME` and the intervals to integral and decimal targets |
@@ -286,7 +305,10 @@ subnormals, each integral boundary and its neighbouring values, and `+-2^63`, `+
 neighbours for the integral targets) and the fuzzer: `VARKA-241.md` found floating-point theory
 does not decide in useful time. The remaining 3, a decimal to `INT`, `SMALLINT` or `TINYINT`, are
 mixed (2.8): below precision 19 the rule is the exact integer one and SMT's, above it Spark's own
-rule goes through a double and is the sampled arm's. Seven pairs are fused today, each in part (the
+rule goes through a double and is the sampled arm's. *Changed 16 October 2026 by the answer to
+question 3 of section 7:* the kernel follows the double rule at every precision for the ANSI and
+TRY range check of those three, so that check is the sampled arm's throughout and only their
+LEGACY low bits are SMT's; they stay a mixed 3. Seven pairs are fused today, each in part (the
 note column says which part). Beside the matrix, 368 runs Spark's own cast suites through the
 Varka evaluator and records fused or declined per pair and mode, as Gluten's tracker does, diffed
 against the matrix nightly.
@@ -306,7 +328,9 @@ Checked in the code on 14 October 2026:
   arm exists - the operators differ (no shifts, no `AND`; `DIV` is a true divide), and so does
   what a comparison means (section 2.7). That is the structural reason the cheapest-first order of
   the owner's brief is right: `BYTE` and `SHORT` exercise a third and fourth width on integral
-  descriptors, before the floating split.
+  descriptors, before the floating split. *16 October 2026:* the order is now foundations first
+  (4.1, the answer to question 4 of section 7), not cheapest first; this structural point stands,
+  since the narrow lanes (wave F1) still land before the floating split (wave F2).
 * **A kernel reads a column as a `MemorySegment` over the Arrow data buffer with a byte stride**
   (`Lane.byteStride`). `TinyIntVector`, `SmallIntVector`, `Float4Vector`, `Float8Vector` and
   `TimeStampMicroVector` are the same shape at strides one, two, four, eight and eight;
@@ -713,6 +737,21 @@ the double rule through 364's exact decimal-to-double (the two-pass arm), declin
 the arm declines. `BIGINT` is exact on both paths (`roundToLong` uses `longValueExact`), so only
 the three pairs are affected, and they leave the SMT count (2.2).
 
+*Superseded on 16 October 2026 by the owner's answer to question 3 of section 7, option (iii); the
+paragraph above is A1's plan, kept as the record.* 365 changes no reader: the fallback and every
+other Arrow consumer keep `ArrowColumnVector`'s `BigDecimal`-backed value, and the cache's row
+reader keeps its long-backed one, as upstream has them. Since Varka reads columns and its fallback
+reads through `ArrowColumnVector`, the kernel follows the double rule at every precision for the
+ANSI and TRY casts to `INT`, `SMALLINT` and `TINYINT`: 350 builds it below precision 19 as 364 does
+above it. The rule range-checks a correctly rounded `u / 10^s`, so those three pairs take 366's
+exact arm wherever 350's guard fails, and their proof is the sampled arm's, not SMT's (2.2, 5).
+The by-batch disagreement of risk 10 stays, now between Varka-on reads (kernel and fallback both
+on the double rule) and Varka-off reads of a cached table on the row path (the exact rule); 365
+makes it visible, by a coverage note and a line in `docs/sql-varka.md` when the row is built, and
+cannot remove it. The row reader's missing high-word check (`VARKA-365.md` 2 item 2) is reported
+as its own finding in the upstream JIRA, whose text `VARKA-365.md` 9 records and which is filed
+only with the owner's yes.
+
 **What the row path costs, and why the speed-up is expected large.** Every Arrow consumer above
 builds a `java.math.BigDecimal` per value at every precision, and arithmetic on such a `Decimal`
 is `BigDecimal` arithmetic, allocating per value. A kernel over unscaled lanes allocates nothing
@@ -846,7 +885,11 @@ column multiplier), 103 (day-time interval arithmetic, extracts and `make_dt_int
 emitting `AND`, `XOR` and the shifts), 336 (item 34's null-safe equality), 333 (item 55's int
 branches, item 94's CASE without ELSE, and the rewritten conditionals `nullif`, `nvl2`,
 `zeroifnull`, `nullifzero`, `between`), and 334 (item 93's `IS NULL` over a predicate, whose local
-branch exists with seven failures to understand). The integer reading settles four of them:
+branch exists with seven failures to understand). *16 October 2026, since the answer to question 4
+of section 7:* these rows no longer run beside the new lanes. 104 and 334 are foundation rows of
+wave 0, and 333 and 335's first part stay there because they need nothing new; 30, 95, 103, 39,
+89, 336 and 335's second part are function rows, which land after every lane (4.1). The integer
+reading settles four of them:
 
 * **30.** `div` over `INT` is the existing long-lane divide over two exact widening casts, since
   `IntegralDivide.inputType` is `LongType` (with the decimal and interval types) and type coercion
@@ -913,7 +956,8 @@ infinities on (Comet turns `-0.0` off), sweep the decimal shapes `(9, 2)`, `(17,
 decimal operand types from Spark's result rules, and draw casts from `m8/casts.tsv`; (d) two
 cross-mode properties - "TRY is null exactly where ANSI raises, and equal elsewhere" for all 98
 pairs and the `try_` arithmetic, and "ANSI equals LEGACY where ANSI does not raise", with its one
-named exception, the double rule of 2.8 above precision 18; (e) the sampled regions of 2.2, 2.7 and
+named exception, the double rule of 2.8 above precision 18 (at every precision since the answer to
+question 3 of section 7, 16 October 2026); (e) the sampled regions of 2.2, 2.7 and
 the matrix, and the tie windows for `s <= 4` and `s <= 17` with an assertion that no tie occurs
 outside them; all under the option matrix. A lane's first pull request also keeps
 `emitted_bytes.json` unchanged for every existing shape: adding a lane must not move a byte of an
@@ -956,9 +1000,10 @@ catalogue keep theirs. Sizes are the house's small, medium and large.
 | task | what it is | where it came from | size |
 | ---: | :--- | :--- | :--- |
 | 328 | **Planned** (`VARKA-328.md`, 16 October 2026; the admission check is done by reading: `--check` exists and needs no build, nothing runs it, and the `varka-docs` job's trigger misses the census's inputs; 25 of the 92 coverage rows name several classes; the year-month comparisons and `IN` and four types' null tests have no coverage row; whether those compile is one `dev/varka_emit.sh` run, its first step). The census and the cast matrix kept true: `dev/varka_census.py --check` in the linters' job; a suite holding `m8/casts.tsv`'s legality to `Cast.canCast`, `canAnsiCast` and `canTryCast` over every pair, under Comet's four-way rule - a legal pair has a test, an illegal and an identity pair have none, and a declined pair is exactly a pair without a coverage row, per mode; the coverage rows that prove what the documentation already says fuses (year-month comparisons and `IN`, null tests on every existing type), and a single-expression coverage row behind every fused claim, so the census's check reads one class per row; `dev/varka_catalogue_move.sh --check 8 9` beside them. **Done when** the three checks run in CI and the census's fused count moves only with a coverage row | this plan, 2.1 and 2.2 | small |
-| 375 | **Planned** (`VARKA-375.md`, 16 October 2026; the admission check: the Arm runner has BitPerm and `x86.ad` admits the node under AVX with BMI2, so `fromLong` is intrinsic on every host the milestone measures; a host without BitPerm is the same runner under `-XX:UseSVE=1`, which clears the feature in `vm_version_aarch64.cpp`; that canary run and its allocation reading are the first step, and admit the build half only if the fallback allocates or is slower). `VectorMask.fromLong` on Arm (section 10.1 item 2): JDK 25 intrinsifies `VectorLongToMask` on aarch64 only with SVE2 BitPerm (`aarch64_vector.ad`), every kernel builds its validity masks with it, and 331's boolean leaf will; on a NEON-only or SVE1 core it is the Java fallback. In this milestone because 1.1 item 5 keys bounds by the Arm library, 367 runs there, and 331 rests on the call. Find whether the Arm runner has BitPerm and what a validity-reading kernel allocates there; if the call falls back, build the mask from the word by a construction every host intrinsifies (a broadcast, a shift by the lane index, a compare) behind an emit option, measured on x86 and Arm. **Done when** the Arm runner's feature line and a validity-reading kernel's allocation rate there are recorded, and either `fromLong` is shown intrinsic on the hosts the milestone measures or the alternative ships with its measurement, the bytes oracle unchanged under the x86 defaults | this plan, 10.1 | small to medium |
+| 375 | **Planned** (`VARKA-375.md`, 16 October 2026; the admission check: the Arm runner has BitPerm and `x86.ad` admits the node under AVX with BMI2, so `fromLong` is intrinsic on every host the milestone measures; a host without BitPerm is the same runner under `-XX:UseSVE=1`, which clears the feature in `vm_version_aarch64.cpp`; that canary run and its allocation reading are the first step, and admit the build half only if the fallback allocates or is slower; *owner's decision, 16 October 2026*: the simulation is accepted for the allocation half, and the timing half on a real NEON-only or SVE1 host stays unbuilt until such a host exists). `VectorMask.fromLong` on Arm (section 10.1 item 2): JDK 25 intrinsifies `VectorLongToMask` on aarch64 only with SVE2 BitPerm (`aarch64_vector.ad`), every kernel builds its validity masks with it, and 331's boolean leaf will; on a NEON-only or SVE1 core it is the Java fallback. In this milestone because 1.1 item 5 keys bounds by the Arm library, 367 runs there, and 331 rests on the call. Find whether the Arm runner has BitPerm and what a validity-reading kernel allocates there; if the call falls back, build the mask from the word by a construction every host intrinsifies (a broadcast, a shift by the lane index, a compare) behind an emit option, measured on x86 and Arm. **Done when** the Arm runner's feature line and a validity-reading kernel's allocation rate there are recorded, and either `fromLong` is shown intrinsic on the hosts the milestone measures or the alternative ships with its measurement, the bytes oracle unchanged under the x86 defaults | this plan, 10.1 | small to medium |
 | 376 | **Planned** (`VARKA-376.md`, 16 October 2026; the admission check: no operator-by-operator census exists - the operator table came from an uncommitted probe, and the width audit reads refusals per shape and no allocation - so the row builds one, forked under `VarkaOwnJvm`, verdicts read from the inlining decisions and allocation as a rate, the widths named by species). The intrinsic and allocation census of this milestone's operators (section 10.3 item 3): one probe per family the rows use - byte and short widening and narrowing, the floating compares, `L2D`, `D2L`, `F2D` and `D2F`, lanewise `FMA`, the math operators, unsigned long compares, the decimal de-interleave's rearranges, `VectorMask.fromLong` and `toLong` per species - at 512 bits (the laptop), 256 (the EPYC 7763 runner) and 128 (the forced width and the Arm runner), each asserting its allocation rate as `VARKA-55.md` does, with the two-species case 329's arms create in one JVM. In this milestone because two of its designs already rest on operators the match rules refuse on a CI host (30's conversions on AVX2, 375's mask on Arm). **Done when** the table is committed beside the record's operator table in `skills/vector-api-and-width.md`, and every row whose design uses an operator the table finds non-intrinsic on a host names its form for that host | this plan, 10.3 | small |
 | 377 | **Planned** (`VARKA-377.md`, 16 October 2026; the admission check: no benchmark covers a new type; the classes are Java in sql/core on `VarkaBenchmarkBase`, both arms the row path today; `benchmark.yml` is dispatch-only and x86-only, pinned with `expected-cpu`, the 128-bit arm by `extra-java-options`, results committed from the artifact as runner files). Baseline benchmarks for the new types before their kernels (section 10.3 item 6): one class per family - `TINYINT` and `SMALLINT`, `BOOLEAN`, `TIMESTAMP_NTZ`, the floating types, decimal at precisions 9, 18 and 38 - over a comparison, an arithmetic chain, a cast and a choice, each measured on the unchanged code in its own pull request, the house rule for a baseline, so that every lane row reports its speed-up against Spark's whole-stage-generated row path as a diff. In this milestone because no row measures the new types against Spark, and 2.8's expected decimal speed-up is unmeasured. **Done when** each family's class and both widths' results are committed before the family's first lane row, and that row's measurement diffs against them | this plan, 10.3 | small |
+| 383 | **Planned** (`VARKA-383.md`, 16 October 2026; the admission check, by reading the code and the failed CI job's log: the end-to-end suite's released shape is an int-lane kernel (`DATE`, `Int256Vector`) at a 256-bit runner's width, every loop at tier 4 and boxing at `IntVector.lanewiseTemplate`, in a JVM whose sessions kept the warm-up off for half an hour of Varka suites before the first warm-up ran the template prewarm; so the row has two halves, 257's long lane after a history and a prewarm that comes after the JVM's first kernels, each reproduced on runners through a history mode of `benchmark.yml` before its fix is admitted). Long-lane kernels released after a kernel history (added 16 October 2026, wave 0; its plan file is a later step). `m7/VARKA-257.md` 9.2 (on PR #873, not yet merged) found that at the host's width with the template prewarm on, the warm-up released long-lane kernels at the 30 s deadline still allocating in 43 of 144 cases at history positions 16 to 63 and 7 of 72 at positions 4 to 15, while the prewarm cut the int lane's releases past position 16 to 15 of 144; every long-lane release had C2 code in use for every loop method, compiled and still allocating. Those readings were taken on the laptop at a machine load of 14 to 30, so the first step is a reproduction on an idle GitHub-hosted runner (through `benchmark.yml` or a workflow dispatch, after the owner's go-ahead), then a fix of the long-lane template prewarm, or whatever the reproduction shows. It folds in `m9/SCOPE.md` item 77 (owner's decision, 16 October 2026): `VarkaWarmupEndToEndSuite` failed on two pull requests that day with `RELEASED did not equal COMPILED` on one shape (`calls=108464` and `calls=109608`), which is 257's cause: the failed job's log (fork run 38912533464) reads `runNanos=120151168042` and `lastProbeBytes=197328`, a release at the suite's 120 s deadline with the last probe still allocating (`m9/SCOPE.md` item 77's notes of the same day; an earlier reading of one second came from a cut-off failure annotation). In this milestone because `DECIMAL` up to precision 18, `DOUBLE` and `TIMESTAMP_NTZ` are long-lane kernels, so every lane row's measurement and the warm-up's promise for them depend on long-lane kernels compiling clean after a history. **Done when** the runner's reproduction is recorded, the cause it shows is fixed or recorded with its reason, the long lane's release rate after a history is read again on the runner, and `VarkaWarmupEndToEndSuite` passes in a full CI run of the sql module | `m7/VARKA-257.md` 9.2 and 9.5; `m9/SCOPE.md` item 77 | medium |
 | 28 | **Planned** (`VARKA-28.md`, 18 September 2026, brought up to date 16 October 2026: `NarrowLane` already exists as a root-only node, so the row adds `WidenLane` and lifts the restriction; the emission's lane is read 91 times across the split emitter; this row admits the two `INT` and `BIGINT` cast pairs, the narrow ones and TRY's null with 332). Lane-width conversion: one kernel over two widths, the int-to-long cast and the narrowing back. **Done when** `VARKA-28.md`'s own list holds, with the mixed-width trees of this milestone's casts admitted | catalogue item 39 table; `VARKA-28.md` | medium |
 | 104 | **Planned** (`VARKA-104.md`, 18 September 2026, brought up to date 16 October 2026: the arms and `arithOver` are in `VarkaNodeCompiler.java`, `arithOver` shared with the interval arms; the lattice's long refusal unchanged; division is row 30's; option B not intrinsic on AVX2, option C the limb product 361 reuses). `BIGINT` arithmetic in the three modes, closing VARKA-30's int64 half. **Done when** `VARKA-104.md`'s list holds | catalogue item 39 table; `VARKA-104.md` | medium |
 | 30 | The integral division family: `div`, `%` and `pmod` over `INT` and `BIGINT`, a zero divisor null or raised, by 2.9's reading - `div` over `INT` as the long-lane divide over two widening casts, `pmod(-1, Int.MinValue)` as `Int.MaxValue` with the SMT goal wrapping, a null dividend with a zero divisor null under ANSI, `emitConstDivide` reused for a constant divisor, `pmod` by a power of two as an AND, and the four-`vpmuludq` long-lane magic as a measured option for a literal divisor, and a column divisor: `BIGINT` by Monniaux and Pain's 64-bit algorithm over the whole range, its round-to-nearest conversions emulated as a lemma of their own (`READING_M8_PAPERS.md` 1), `INT` by the double route, `TINYINT` and `SMALLINT` in the `float` lane, exact below `2^24` (`READING_0X80.md`). **Done when** each fuses in the three modes with the row engine's error classes, proven by exhaustion at 32 bits and SMT at 64, the `BIGINT` column divisor by the paper's proof plus the conversion lemma and tested at the paper's corner cases (`b = 1`, `b >= 2^63` after the signs, `b` either side of `2^42`, `Long.MIN_VALUE` against `-1` and `1`) and over a large random draw, and its cost against the scalar loop measured at both widths and on an AVX2 host, where its four conversions are not intrinsic (`x86.ad` needs AVX512DQ for a long to double and a double to long vector cast), so the form is chosen per host statically: the algorithm where the conversions are intrinsic (376 says where), and on AVX2 either a full-range conversion built from 32-bit halves with its own rounding lemma, measured, or the bounded double route with its decline (section 10.1 item 4) | catalogue item 39 table; `m5/PLAN.md` 2.4; item 33 | medium |
@@ -992,15 +1037,15 @@ catalogue keep theirs. Sizes are the house's small, medium and large.
 | 157 | The widening store: a decimal output's value word and sign extension interleaved into the sixteen-byte slots by two two-vector selects and two stores. **Done when** `m5/PLAN.md` 2.93's list holds | catalogue item 39 table; `m5/PLAN.md` 2.93 | small |
 | 348 | Decimal comparisons, choice, `IN`, null tests, negation and `abs`, at equal and at unequal scales (a constant rescale proven to fit the long), for operands whose common type stays within precision 18; wider ones are 359's; a negative scale declined. **Done when** each fuses, the load's precision check declining an out-of-precision batch | items 1, 2 | medium |
 | 349 | Decimal `+`, `-` and `*` in the 64-bit form, with `CheckOverflow`, `MakeDecimal` and `UnscaledValue`. **Done when** each fuses for every operand pair whose result stays within precision 18 (wider results are 360 to 362's), the no-overflow claim and the rescales proven by SMT over every precision pair, LEGACY and ANSI giving the same bytes | item 2 | medium |
-| 350 | The decimal casts in the 64-bit form (both sides within precision 18): to and from integral types (the exact rule under ANSI and TRY, after 365), decimal to decimal (`ROUND_HALF_UP` by the signed-half add and the constant division, its `2^52` gap closed by the pre-shift and `5^k` route of 2.8 with the `k = 1..7` guard or the limb-magic arm, overflow null or raised), to and from `BOOLEAN`, to `DOUBLE` and to `FLOAT` under their two guards of 2.2, round-to-odd where the `FLOAT` guard fails. **Done when** every decimal pair of `m8/casts.tsv` fuses or hands the batch to 366's exact arm, the integer rules proven by SMT with `5^k` for `k = 1..18` in a second proof file under cvc5 | this plan, 2.2 and 2.8 | medium |
+| 350 | The decimal casts in the 64-bit form (both sides within precision 18): to and from integral types (the exact rule under ANSI and TRY, after 365; *since the answer to question 3 of section 7, 16 October 2026*: Spark's double rule under ANSI and TRY for `INT`, `SMALLINT` and `TINYINT`, as 364 builds it above precision 18, which needs a correctly rounded `u / 10^s` and so takes 366's exact arm outside the guard, those three pairs' ANSI and TRY range check proven by the sampled arm and not SMT; `BIGINT` and LEGACY stay integer rules), decimal to decimal (`ROUND_HALF_UP` by the signed-half add and the constant division, its `2^52` gap closed by the pre-shift and `5^k` route of 2.8 with the `k = 1..7` guard or the limb-magic arm, overflow null or raised), to and from `BOOLEAN`, to `DOUBLE` and to `FLOAT` under their two guards of 2.2, round-to-odd where the `FLOAT` guard fails. **Done when** every decimal pair of `m8/casts.tsv` fuses or hands the batch to 366's exact arm, the integer rules proven by SMT with `5^k` for `k = 1..18` in a second proof file under cvc5, and the three double-rule range checks by the sampled arm | this plan, 2.2 and 2.8; the answer to question 3 | medium |
 | 351 | Decimals in the existing types' functions, all of whose decimal types are within precision 18, and the rounding functions over a decimal of either form: `time_to_seconds`, `second` with its fraction, `extract(SECOND FROM dt)` and `extract(SECOND FROM ntz)`, `make_time`, `make_dt_interval` and `make_timestamp_ntz` over decimal seconds, `time_from_seconds` over a decimal, `floor`, `ceil`, `round`, `bround` and `truncate` over a decimal - the last three giving precision 19 over a `DECIMAL(18, s)`, so after 360 and 157, a negative-scale `round` raising on overflow in every mode. **Done when** each fuses with a coverage row | `m5/PLAN.md` 2.93; items 1, 2 | medium |
 | 359 | The 128-bit lane pair: a decimal of precision 19 to 38 as low-word and high-word long lanes in the IR and the emitter, `Decimal128` loaded by a de-interleave and stored by the inverse (or computed on adjacent lanes, by measurement), comparisons (the high words signed, the low words unsigned), `IN`, choice, null tests, negation and `abs` with their borrow, and the `10^p` overflow check per lane group; the signed high-word compare is the pair's own, Highway's 128-bit compares being unsigned only (`READING_HIGHWAY.md` 3.5). Admission check, before any of it is built (section 10.3 item 2): a scalar per-row loop inside the kernel on `Math.multiplyHigh` and `unsignedMultiplyHigh`, with no de-interleave, measured against the lane pair for the 128 by 128 product, the `10^38` check and the `HALF_UP` rescale at 512, 256 and 128 bits; the lane pair is built where it wins and the scalar form kept as the reference arm. **Done when** each fuses at every precision from 19 to 38 with coverage rows, the comparisons and the `10^p` check proven by SMT over integers in the two layers of 2.8, and the bytes oracle unchanged for every 64-bit shape | this plan, 2.8 | large |
 | 360 | 128-bit add and subtract with the carry from an unsigned compare, the uncapped shapes first (their wrapped sum fails the `10^p` check, the lemma proven) and the capped shapes with 363 (the 129th bit feeding its unsigned division, or the whole-and-fraction split), the rescale-up of the coarser operand under a batch guard, and the widening casts: a 64-bit decimal to the lane pair by sign extension, and an integral to `DECIMAL(3, 0)`, `(5, 0)`, `(10, 0)` or `(20, 0)` as type coercion inserts them, so a `BIGINT` with a decimal fuses. **Done when** each fuses in the three modes with `CheckOverflow`'s `10^p` check, `DECIMAL(38, 10) + DECIMAL(38, 10)` at `10^38 - 1` a test, the carry and the sign extension proven by SMT over integers at full width | this plan, 2.8 | medium |
 | 361 | The widening multiply: two operands within precision 18 whose product exceeds it (TPC-H q6's `DECIMAL(15, 2) * DECIMAL(15, 2)`, `DECIMAL(31, 4)`), 64 by 64 to 128 bits from 32-bit limbs on Arrow's carry-free limb order with the `unsignedMultiplyHigh` sign correction, every constant limb written as `broadcast(c).and(0xFFFFFFFF)` so C2 selects `vpmuludq`; a `BIGINT` operand arrives as `CAST(l AS DECIMAL(20, 0))` but stays a 64-bit value, so its product is this row's 64 by 64 and not 362's 128 by 128, as StarRocks strips the cast (`READING_DECIMAL_ENGINES.md` 2.5). **Done when** it fuses with its emitted instruction mix read by `dev/varka_emit.sh --asm`, the constant-limb case included and surviving GVN; the ring identity and the carry network proven by SMT over integers at full width, a reduced width as a cross-check only | this plan, 2.8 | medium |
 | 362 | The full multiply: 128 by 128 bits into a 256-bit product by column summation of sixteen `vpmuludq`, no Karatsuba and no compares, with the static shortcut when `p1 + p2 + 1 <= 38`, an SMT line stating it against Velox's weaker `< 38`, and Velox's leading-zero test as an option arm that keeps the common batch on 128 bits (`READING_DECIMAL_ENGINES.md` 2.1, 2.2); built and measured against the row engine, declined with its reason only if it loses (owner's decision A2). **Done when** it fuses for every precision pair whose result Spark keeps exactly, or carries its measured reason to decline; the ring identity and the carry network proven by SMT over integers at full width, a reduced width as a cross-check only; arrow-rs's carry corners and a random `BigInteger` cross-check of every arm as tests (`READING_ARROW_RS.md` 3.4, `READING_DECIMAL_ENGINES.md` 2.6) | this plan, 2.8; owner's decision A2 | large |
 | 363 | Spark's precision-loss rule and the rescale down: with `allowPrecisionLoss` (default true) a result type above 38 is capped at 38 and its scale cut to `max(38 - intDigits, min(scale, 6))`, the value rounded `ROUND_HALF_UP` by the magic-multiply division of 2.8 (pre-shift by `k - 1`, divide by `5^k`, `(q + 1) >> 1`; sixteen `vpmuludq` for a 128-bit dividend, 49 to 64 limb products for a 256-bit one), Trino's last-stage rounding and DuckDB's overflow-free `HALF_UP` borrowed, the `MathContext(39, DOWN)`-then-`HALF_UP` lemma stated and proven, the rule read from the node's resolved type and never the session configuration, SPARK-45786's random test ported, the `k = 39` multiply declined or folded; with the setting false, the exact type and its overflow. The rounding functions over a 128-bit decimal use the same division. Built and measured, declined with its reason only if it loses (owner's decision A2). **Done when** both settings fuse or carry their measured reason, the magic constants proven by the proof files' rule (`sql/varka/proofs/`) over integers at full width - linear, since the multiplier is a constant; the rounding fixtures and the `10^k +- 1` and `5^k +- 1` divisor table of `READING_ARROW_RS.md` 3.2 and 3.3 and rapids' compatibility triples and 38-nines edge (`READING_RAPIDS.md` 3.1) as named tests | this plan, 2.8; owner's decision A2 | large |
-| 364 | The 128-bit decimal casts: to and from integral types (truncation toward zero, the low bits under LEGACY, `CAST_OVERFLOW` under ANSI; to `INT`, `SMALLINT` and `TINYINT` by Spark's double rule above precision 18, through the two-pass exact arm, the lane declined where the arm declines), to `DOUBLE` and `FLOAT` by the exact arm run on the top 64 bits of `|u|` as `w'` and `w' + 1`, accepted when equal and declined otherwise, `Long.MAX_VALUE` excluded from any `(long) (double) u == u` guard, to and from other decimals of either form (`ROUND_HALF_UP` through 363's division), to and from `BOOLEAN`. **Done when** every decimal pair of `m8/casts.tsv` fuses at every precision up to 38 or carries its recorded reason, the integer rules proven by SMT over integers at full width | this plan, 2.2 and 2.8 | medium |
-| 365 | **Planned** (`VARKA-365.md`, 16 October 2026; **the design waits for the owner's answer to question 3 of section 7**; the plan lays out what options (i), (ii) and (iii) each build. The admission check by reading: the column path builds a `BigDecimal`-backed value, the cache's row reader a long-backed one with no high-word check, and which a cached table takes depends on its other columns' types; a three-path test observing the disagreement is the first step). The fork's Arrow readers build a long-backed decimal up to precision 18 (owner's decision A1, 2.8): `ArrowColumnVector.SmallDecimalAccessor` returns `Decimal(unscaled, p, s)` when the high word is the sign extension and `|unscaled| < 10^p`, keeping its `BigDecimal` path for a value outside its precision; `ArrowColumnReader`'s fast path gains the same high-word check; so the kernel, the fallback and the Varka-off path all follow Spark's exact rule for the ANSI and TRY casts to `INT`, `SMALLINT` and `TINYINT`, which is what Parquet gives. Every Arrow consumer in the fork reads through the accessor (the cached-batch iterator, the Python, R and external UDF runners), so the differential covers each. First (section 10.1 item 3, section 7 question 3): the owner's answer to question 3 recorded, with SPARK-59443's record as its input (upstream kept the `BigDecimal`-backed accessor on purpose on 21 September 2026, fork commit `f2dcec5bdd6`, without ruling on it, while its cached-batch row path already gives a long-backed value), because the change makes every Arrow consumer of the fork answer the three casts differently from vanilla Spark with Varka off as well. **Done when** the three paths agree on `0.999999999999999999` as `DECIMAL(18, 18)` cast to `INT` under ANSI and TRY (0, not 1) and on `2147483647.99999999` (no error), a wrong high word still declines or raises as before, Spark's own cast suites pass on every consumer, and an upstream JIRA records that Spark's ANSI and TRY decimal-to-integral cast depends on the data source | this plan, 2.8; owner's decision A1; the layout and casts readings | medium |
+| 364 | The 128-bit decimal casts: to and from integral types (truncation toward zero, the low bits under LEGACY, `CAST_OVERFLOW` under ANSI; to `INT`, `SMALLINT` and `TINYINT` by Spark's double rule above precision 18, through the two-pass exact arm, the lane declined where the arm declines; 350 builds the same rule below 19 since the answer to question 3, 16 October 2026), to `DOUBLE` and `FLOAT` by the exact arm run on the top 64 bits of `|u|` as `w'` and `w' + 1`, accepted when equal and declined otherwise, `Long.MAX_VALUE` excluded from any `(long) (double) u == u` guard, to and from other decimals of either form (`ROUND_HALF_UP` through 363's division), to and from `BOOLEAN`. **Done when** every decimal pair of `m8/casts.tsv` fuses at every precision up to 38 or carries its recorded reason, the integer rules proven by SMT over integers at full width | this plan, 2.2 and 2.8 | medium |
+| 365 | **Planned** (`VARKA-365.md`, 16 October 2026; **design decided the same day: the owner answered question 3 of section 7 with option (iii), no reader change, which supersedes A1**. The admission check by reading: the column path builds a `BigDecimal`-backed value, the cache's row reader a long-backed one with no high-word check, and which a cached table takes depends on its other columns' types; a three-path test observing the disagreement is the first step). Until that answer the row was A1's reader change: `ArrowColumnVector.SmallDecimalAccessor` and `ArrowColumnReader` building a long-backed decimal up to precision 18, so that every path followed Spark's exact rule for the ANSI and TRY casts to `INT`, `SMALLINT` and `TINYINT` (2.8 keeps that plan as the record). It changed because row answers follow vanilla Spark always, and the reader change would have made every Arrow consumer of the fork (the cached-batch iterator, the Python, R and external UDF runners) answer the three casts differently from vanilla Spark with Varka off as well; SPARK-59443's record (upstream kept the `BigDecimal`-backed accessor on purpose on 21 September 2026, fork commit `f2dcec5bdd6`, without ruling on it, while its cached-batch row path already gives a long-backed value) was the answer's input. Under (iii) the readers stay as upstream has them, and the row builds: `VarkaDecimalReadPathSuite` first, the regression test that pins the two rules on the three paths; a coverage note and a line in `docs/sql-varka.md` stating that a Varka-off read of a cached table on the row path answers the three casts by the exact rule where Varka's kernel and fallback answer by the double rule; and the upstream JIRA's text, recorded in `VARKA-365.md` 9, that Spark's ANSI and TRY decimal-to-integral cast depends on the data source and the read path, with the row reader's missing high-word check reported as its own finding. 350 and 364 build the double rule in the kernel. **Done when** `VarkaDecimalReadPathSuite` observes `0.999999999999999999` as `DECIMAL(18, 18)` and `2147483647.99999999` as `DECIMAL(18, 8)` cast to `INT` under ANSI and TRY answering 0 and 2147483647 on the row path and 1 and `CAST_OVERFLOW` (null under TRY) on the row path's columnar fallback and on Varka's columnar path, so that 350's kernel has the answer it must match; the coverage note and the documentation line are in; and the JIRA text is recorded in `VARKA-365.md` 9, filed only with the owner's yes (*until 16 October 2026 the done-when asked for the three paths to agree on the exact rule, a wrong high word declining or raising as before, and Spark's cast suites passing on every consumer*) | this plan, 2.8; owner's decision A1, superseded by the answer to question 3 (16 October 2026); the layout and casts readings | small (medium while it was A1's reader change) |
 | 366 | The exact decimal-to-floating arm (owner's decision A4, 2.2): Eisel and Lemire's algorithm with the scale a per-column constant (a two-long table per kernel), exact for every unscaled long with no fallback while `s <= 27`, for both targets, taken per batch when the guard mask of 350 is not all true; `s >= 28` declines; above precision 18 the two-pass form of 364; for `DOUBLE`, the working-precision round-to-odd of section 9 as an option arm. **Done when** the 64-bit form fuses every value for `DOUBLE` and `FLOAT`, bit-identical to `BigDecimal.doubleValue` and `floatValue` over sampled regions, the tie windows and the fuzzer, with the paper's Theorem 1, Corollary 2 and Lemma 3 cited for the exactness claim and its cost measured against the guarded division | this plan, 2.2; the float-conversions reading | medium |
 | 367 | The extended math probe (owner's decision A4, split out of 345): `dev/varka_canary/MathLaneProbe.java` over every function the family fuses, at the level Spark computes it (the four unprobed operators and the eight compositions), against both references, with bit-pattern inputs over the whole domain, the libraries' switching regions, the handbook's and Gladman's worst cases as fixed vectors, a bisection search for the largest step distance, and `pow`'s guarded domain; the SLEEF overflow band of section 10.1 and glibc's and Intel's switching regions as fixed vectors (`READING_LIBM.md` 6.3, `READING_JDK.md` 2.8); a true-value column from MPFR through the foreign-function API (`libmpfr.so.6` is installed on the laptop), which says which side is wrong where the kernel and the row engine disagree and how often each side misrounds; results keyed by JDK build, symbol and CPU and committed per host, each stated as a lower bound of the true maximum. **Done when** a run on each of the three host libraries is committed and every bound of 356 to 358 cites its line | this plan, 2.7.1; the math reading | medium |
 | 368 | Spark's own `CastWithAnsiOffSuite`, `CastWithAnsiOnSuite`, `TryCastSuite` and `HashExpressionsSuite` run with the Varka evaluator forced on and constant folding excluded (owner's decision A4), recording fused or declined per `(from, to, mode)` as Gluten's tracker does, diffed against `m8/casts.tsv` and the census nightly. **Done when** the four suites pass under the evaluator, the record is committed, and a pair the matrix calls fused that the suites find declined fails the nightly | this plan, 2.10; the casts reading | medium |
@@ -1012,21 +1057,72 @@ catalogue keep theirs. Sizes are the house's small, medium and large.
 
 ## 4. Ordering
 
+*Superseded 16 October 2026 by the owner's answer to question 4 of section 7: the order is 4.1.
+The table below was the cheapest-first order and is kept as the record; its "why they wait" column
+is one of the two sources 4.1's edges are read from.*
+
 | wave | tasks | why they wait |
 | ---: | :--- | :--- |
-| 0 | 328, 28, 104, 333, 334, 335, 365, 375, 376, 377 | 328 makes every later count honest; 28 gates most casts and the timestamp fields; 104, 333, 334 and 335 need nothing new; 365 needs nothing and every decimal row and 368's cast suites read through the paths it fixes, once question 3 of section 7 is answered; 375, 376 and 377 say what the later rows can rely on and what they measure against (section 10) |
+| 0 | 328, 28, 104, 333, 334, 335, 365, 375, 376, 377, 383 | 328 makes every later count honest; 28 gates most casts and the timestamp fields; 104, 333, 334 and 335 need nothing new; 365 needs nothing and every decimal row and 368's cast suites read through the paths it fixes, once question 3 of section 7 is answered (*16 October 2026: answered with option (iii), so 365 fixes no path; its three-path test pins the rule 350 and 364 match, and its documentation states the row path's disagreement*); 375, 376 and 377 say what the later rows can rely on and what they measure against (section 10); 383 because `DECIMAL` up to precision 18, `DOUBLE` and `TIMESTAMP_NTZ` are long-lane kernels, so every lane row's measurement and the warm-up's promise for them rest on the long lane's kernels compiling clean after a history (added 16 October 2026) |
 | 1 | 329, 330, 331, 27, 332, 30, 95, 103, 39, 89, 336 | the first new types prove the plumbing on integral descriptors; 330 after 329's arms; 27 beside 331; 332 after 28 and 329; 30 and 95 after 104's checked forms; 39 after 28; 336 after 334, whose condition-over-validity node it is the second kind of (item 34's answer) |
 | 2 | 338, 339, 340, 337 | the long lane's new type, after 28 (340's narrowing) and 332 (its casts' harness); 337's floating columns follow 341's canonicalisation node |
 | 3 | 341, 342, 343, 344, 345, 367, 356, 357, 358, 346 | the floating split, comparisons first; arithmetic before the math functions; 345's contract and configuration, then 367's probe, before 356 to 358, which fuse only what 367 has measured; 344 after 341's lane; 346 once 344 and 350 have met their constructions |
-| 4 | 347, 157, 348, 349, 350, 366, 351, 359, 360, 361, 362, 363, 364 | the decimal path last, its 64-bit load measured first, as item 1 asks; 366 after 350's guards and 341's lanes; the lane pair (359) after the 64-bit rows, then its uncapped add and widening casts (360), the widening multiply (361), the full multiply (362), the precision-loss rescale (363) with 360's capped shapes, and the casts (364) |
+| 4 | 347, 157, 348, 349, 350, 366, 351, 359, 360, 361, 362, 363, 364 | the decimal path last, its 64-bit load measured first, as item 1 asks; 366 after 350's guards and 341's lanes (*since the answer to question 3, 16 October 2026, 350's ANSI and TRY casts to `INT`, `SMALLINT` and `TINYINT` take 366's exact arm outside the guard, so that part of 350 lands with or after 366*); the lane pair (359) after the 64-bit rows, then its uncapped add and widening casts (360), the widening multiply (361), the full multiply (362), the precision-loss rescale (363) with 360's capped shapes, and the casts (364) |
 | 5 | 352, 368, 369, 353, 354, 355 | 352 and 368 run from wave 1, as the casts land, and close here; 369 after 27 and its fixture; 354 last by definition; 355 written from what 354 records |
 
 At the halfway point the milestone is reviewed against 1.1, not against this table, as milestone
 7's was (`m7/PLAN.md` 9).
 
-*Added 16 October 2026 by the review of section 10.* A measurement at a 128-bit species waits for
-`m7` row 374, or reports its release rate beside it (10.3 item 4); the place of the decimal wave is
-question 4 of section 7.
+*Added 16 October 2026 by the review of section 10.* Every measurement at a 128-bit species
+reports the release rate beside it, since `m7` row 374 closed "Done, no fix" (`m7/VARKA-374.md`
+9) and there is no fix to wait for (10.3 item 4; until a correction of the same day this read
+"waits for `m7` row 374, or reports its release rate beside it"); the place of the decimal wave is
+question 4 of section 7. *Answered 16 October 2026: foundations first, in 4.1.*
+
+### 4.1 Foundations first (16 October 2026)
+
+*Added 16 October 2026, from the owner's answer to question 4 of section 7: "we should start from
+the tasks that establish the foundation of Varka."* A foundation row is one other rows build on: a
+lane, a load or a store, a shared IR node, or a harness or measurement that a later row's design or
+numbers rest on. A function row is one nothing waits on. The edges are read from the rows of
+section 3 and from the old table's "why they wait" column, not chosen, and every foundation row
+lands before any function row, for every type. Among the foundations the lanes keep the old
+table's type order, the narrow integral widths before the floating split (2.3); rows that share
+files with a foundation row (330 with 329's descriptors; 343 and 344 with 341's lane; 157, 348 and
+349 with 347's load) land beside it rather than reopen those files a wave later.
+
+Wave 0 keeps its rows and its name, so every plan file that opens "wave 0" stays true. It is the
+one place the rule is applied loosely: 333 and 335's first part (335a) are function rows, admitted
+there because they need nothing new. The owner may move them to G1.
+
+| wave | tasks | what they build on, and what builds on them |
+| :--- | :--- | :--- |
+| 0 | 328, 28, 104, 333, 334, 335 (335a), 365, 375, 376, 377, 383 | unchanged. 328's checks count every later row; 28 is under 30, 39, 332, 335b, 337, 340 and every implicit promotion; 104 under 30, 95 and 361 (its limb product); 334 under 336; 365's three-path test pins the rule 350 and 364 match and 368 reads; 375 under 331's mask; 376 under 329's arms and 30's per-host form; 377 under every family's first lane row; 383 under every long-lane measurement (338, 341's `DOUBLE`, 347); 333 and 335a need nothing new |
+| F1 | 329, 330, 331, 27, 332 | the narrow and boolean lanes. 329, after 376, is under 330, 332, 335b, the narrow casts of 343 and 350 and 103's byte output; 330 beside it, and a foundation too, since its first 2^32 sweep is timed and the budget totalled before the next sweep lands (10.3 item 5), so the sweeps of 332 and 343 wait on it; 331, after 375, is under 27, the boolean casts of 332, 343 and 350, and 335b; 27 beside 331 (2.5), its boolean output under 369's kernel-against-kernel arm; 332, after 28, 329 and 331, is the casts' harness 338 builds on |
+| F2 | 338, 341, 343, 344, 342, 345, 367 | the long and floating lanes. 338, after 28 and 332, is under 339 and 340; 341 under 337's canonicalisation node, 342 to 346, 366, 30's divisions in the `float` and `double` lanes and 350's floating casts; 343 beside it, its magic-number conversion under 344's `floor` and `ceil` to `BIGINT` on AVX2 and under 30's AVX2 form (10.1 item 4); 344's constructions under 346; 342 under the compositions of 356 to 358 (the old table's "arithmetic before the math functions"); 345's contract and configuration, then 367's probe, under 356 to 358, 345 held by question 2 with them |
+| F3 | 347, 157, 348, 349, 350, 366, 359, 360 | the decimal lanes. 347's load and 157's store under 348 to 351, with 348 and 349 beside them over the same load; 347's de-interleave under 359's (2.8); 350, after 365, 341 and 343, is under 346, its guards beside 366; 366 under 350's three double-rule casts and 364's two-pass arm; 359, the 128-bit lane pair, after 347, is under 360 to 364 and holds the 128-bit store 351 needs; 360's uncapped add and widening casts are under 351's precision-19 results and every `BIGINT`-with-decimal shape (2.8), its capped shapes landing with 363 |
+| G1 | 39, 95, 89, 335 (335b), 336, 30, 103 | function rows over the existing, narrow and boolean types. 30 after 104, 28, 329 and 341, its form per host by 343 and 376; 103 after 28 and 329, its decimal seconds being 351's shapes |
+| G2 | 339, 340, 337, 346 | function rows over the long and floating lanes. 340's `SECOND` is 351's shape; 337 after 341 and the decimal loads; 346 after 344 and 350 |
+| G3 | 361, 362, 363, 351, 364 | function rows over the decimal lanes. 362's 256-bit product feeds 363's capped shapes, and 363's division is what 364's decimal-to-decimal casts and 351's 128-bit rounding round through, so 363 leads both |
+| G4 | 356, 357, 358 | the math family under the contract, held by question 2 with 345 |
+| close | 352, 368, 369, 353, 354, 355 | 352 grows beside each lane from wave 0, as every lane's first pull request extends the oracles (2.10), 368 from 332's casts and 369 from 27, and the three close here; the rows over every type (336, 337, 352, 368) start when their first lane exists and close after the last; 354 last by definition; 355 written from what 354 records |
+
+What follows from the order:
+
+* **359 moves from last to F3.** It is the base of 360 to 364 and of 351's precision-19 results,
+  and decimal columns are 18.3% of TPC-DS's and TPC-H's (10.4), so the lane pair no longer waits
+  behind every function row of the milestone.
+* **The cut order, if the halfway review needs one,** falls on function rows nothing else waits on,
+  never on a lane: 362 and the capped shapes of 360 and 363 (the 129th bit and the 256-bit
+  dividends), 346's declined bands and 357's compositions. 363's 128-bit division is not a
+  candidate, since 364 and 351 round through it.
+* **The math chain stays held by question 2** whatever the order: 345, and 356 to 358 under it.
+  367's probe needs no lane and decides no row, so whether it runs before question 2 is answered,
+  ahead of 345, which the old table placed before it, is open.
+* **The existing types' function rows wait.** 30, 95, 103, 39, 89 and 336 sat in the old wave 1;
+  they now land after F3 (2.9's note).
+
+At the halfway point the milestone is still reviewed against 1.1, not against this table.
 
 ## 5. Verification
 
@@ -1046,9 +1142,12 @@ Every structural row cites the proof its row names:
   subtract with their carry, sign extension, the `10^p` checks, the widening and full multiplies
   and the magic division's constants (359 to 364), a reduced width only as a cross-check for 361
   and 362. The decimal-to-`INT` casts are mixed: SMT below precision 19, the sampled arm above.
+  *Since the answer to question 3 of section 7 (16 October 2026)*: SMT for their LEGACY low bits,
+  the sampled arm for their ANSI and TRY range check at every precision.
 * **Sampled regions and the fuzzer**, never for a carry claim, where floating-point theory does not
   decide in useful time (`VARKA-241.md`): a `DOUBLE` source, a 64-bit value rounding to a floating
-  type, the double rule of the 128-bit decimal-to-`INT` cast, the exact decimal-to-floating arm
+  type, the double rule of the decimal-to-`INT` cast (at every precision since the answer to
+  question 3; before it, the 128-bit form's only), the exact decimal-to-floating arm
   (343, 350, 364, 366), with the regions of 2.2 and 2.7 and the tie windows of 352; the
   round-to-odd truncation as an SMT bit-vector claim with Theorem 3's Coq proof cited, exhausted
   through `binary16` (343).
@@ -1119,6 +1218,13 @@ Every structural row cites the proof its row names:
     `BigDecimal`-backed value and the cache reader a long-backed one, so an ANSI cast of a decimal
     to `INT` can answer differently by batch with Varka on, before any kernel of this milestone.
     Mitigation: 365 in wave 0, its three-path test, and the upstream JIRA.
+    *Since the answer to question 3 of section 7 (16 October 2026, option (iii)) the risk is
+    accepted, not removed:* the readers stay as upstream has them, the kernel follows the
+    fallback's double rule, so with Varka on kernel-served and fallback batches agree, and the
+    disagreement left is between Varka-on reads and Varka-off reads of a cached table on the row
+    path. Mitigation now: 365's three-path test as the regression test, a coverage note and a line
+    in `docs/sql-varka.md` saying so, and the JIRA, which also reports the row reader's missing
+    high-word check.
 11. **`pow` has a case no probe has reached**: fdlibm's weak branch, whose quoted 636-ulp error
     has no source in the JDK tree.
     Mitigation: the guard of 2.7.1 declines the branch's domain to the row path, and the
@@ -1162,10 +1268,34 @@ Every structural row cites the proof its row names:
    "vanilla Spark's rule for an Arrow source" is not one rule but two, chosen by whether the batch
    is read as columns or as rows; (i) and (ii) make the column path agree with the row path and
    Parquet, and the upstream JIRA row 365 already owes can name both paths.
+
+   **The owner's answer, 16 October 2026: (iii), no reader change.** Row answers follow vanilla
+   Spark always, and (i) would make every Arrow consumer of the fork answer the three
+   decimal-to-integral casts differently from vanilla Spark with Varka off as well. Under (iii) the
+   kernel reproduces vanilla Spark's column-path rule (the double rule over a `BigDecimal`-backed
+   value) for the ANSI and TRY casts of a decimal to `INT`, `SMALLINT` and `TINYINT`, which is what
+   Varka's fallback reads through `ArrowColumnVector`. This supersedes owner's decision A1. What
+   follows, in the rows: 350 builds the double rule below precision 19 as 364 does above it, on
+   366's exact arm outside 350's guard, proven by the sampled arm and not SMT (2.2, 2.8, 5); the
+   by-batch disagreement of risk 10 stays between Varka-on reads and Varka-off reads of a cached
+   table on the row path, made visible by a coverage note and a line in `docs/sql-varka.md` when
+   365 is built; the row reader's missing high-word check is reported as its own finding in the
+   upstream JIRA, whose text `VARKA-365.md` 9 records and which is filed only with the owner's yes.
 4. **The wave order** (10.4). (A) Cheapest first as section 4 has it, with a cut order written now
    (the review's candidates: 362 and 363's capped shapes, 346's bands, 357's compositions); (B) the
    64-bit decimal rows 347, 157, 348 and 349, which need the long lane and 365 only, ahead of the
    floating wave, and 350 after 341.
+
+   **The owner's answer, 16 October 2026: "we should start from the tasks that establish the
+   foundation of Varka."** Neither (A) nor (B) as written, but a third order, derived from the
+   dependency graph that section 3's rows and section 4's "why they wait" column describe: every
+   foundation row - one other rows build on, such as a lane, a load or store, a shared IR node or
+   a harness - lands before any function row that nothing waits on, for every type. The order is
+   4.1, the old table kept above it as the record. What it keeps of the two options: (A)'s cut
+   order is written in 4.1 and falls on function rows only (362, the capped shapes of 360 and 363,
+   346's bands, 357's compositions); (B)'s 64-bit decimal rows open the decimal foundation wave
+   F3, though after the floating lanes rather than ahead of them, and 350 lands after 341. The
+   128-bit lane pair (359) moves from last to that wave.
 
 ## 8. Explicitly out of milestone 8
 
@@ -1266,9 +1396,13 @@ to 377), and three are the owner's to decide (section 7, questions 2 to 4).*
    too, and one run with `-XX:+PrintIntrinsics` would say why **[I]**. *Observed 16 October 2026*
    (the same run): the Arm runner has BitPerm. `svebitperm` appears in `/proc/cpuinfo` and in the
    JVM's feature line, and `fromBitsCoerced` inside `fromLong` reads `late inline succeeded`
-   wherever the species is a constant, with no `not supported` line **[V]**. So the runner cannot show the
-   fallback that NEON-only and SVE1 cores take, and 375's allocation reading for those cores needs
-   another host (`skills/vector-api-and-width.md`, the SLEEF and BitPerm entry).
+   wherever the species is a constant, with no `not supported` line **[V]**. So the runner cannot
+   show the fallback that NEON-only and SVE1 cores take, and 375's allocation reading for those
+   cores needs another host (`skills/vector-api-and-width.md`, the SLEEF and BitPerm entry).
+   *Owner's decision, 16 October 2026:* `-XX:UseSVE=1` on the Neoverse N2 runner is accepted for
+   the allocation half of that reading, since it simulates the JVM's feature set and so answers
+   whether the fallback allocates per iteration; the timing half, on a real NEON-only or SVE1
+   host, stays unbuilt until such a host exists (`VARKA-375.md` 2 and 9).
 3. **Row 365 departs from a recent upstream choice (365; question 3).** The accessor that keeps
    "BigDecimal-backed Decimal semantics" is upstream's: SPARK-59443, merged on 21 September 2026
    (fork commit `f2dcec5bdd6`), reduced allocations while keeping "existing Spark decimal conversion
@@ -1278,7 +1412,8 @@ to 377), and three are the owner's to decide (section 7, questions 2 to 4).*
    follow vanilla Spark" outside Varka, which belongs in `SCOPE_STANDARD_MODE.md` or before the
    owner again. SPARK-59443's discussion, read since, is question 3's input: upstream kept the
    behaviour without ruling on it, and its own cached-batch row path already gives the long-backed
-   value.
+   value. *Answered 16 October 2026 (section 7 question 3): option (iii), no reader change, so 365
+   no longer departs from upstream; the kernel follows the column path's double rule instead.*
 4. **Row 30's full range does not reach the AVX2 runners (30).** `x86.ad` refuses a vector cast from
    long to a floating type and from a floating type to long without AVX512DQ
    (`match_rule_supported_vector`, lines 1757 to 1777) **[V]**. On the EPYC 7763 runners the four
@@ -1333,7 +1468,9 @@ The plan cited eight of the eleven notes; `READING_HIGHWAY.md`, `READING_LIBM.md
 4. **374 gates the 128-bit numbers (section 4).** At a 128-bit preferred species 41 to 43 of every
    100 compositions of the warm arm release at the deadline (`m7/VARKA-373.md` 9). This milestone's
    measurements at both widths, 367's Arm runs and the CI narrow step would measure that rate; they
-   wait for 374, or report the rate beside every 128-bit number.
+   wait for 374, or report the rate beside every 128-bit number. *Corrected 16 October 2026:* 374
+   closed "Done, no fix" (`m7/VARKA-374.md` 9: x86 C2 lowers no two-lane mask), so there is nothing
+   to wait for, and every 128-bit number reports the release rate beside it.
 5. **The sweep budget (330, risk 7).** The thirteen and a half minutes of `m7/PLAN.md` 1 are every
    int32 lowering's sweep together, while this milestone asks for of the order of sixty sweeps of
    2^32 (330 alone twelve to eighteen), each checked against Spark's own `Cast` **[I, counted from
@@ -1349,3 +1486,7 @@ The plan cited eight of the eleven notes; `READING_HIGHWAY.md`, `READING_LIBM.md
 `DOUBLE` and `FLOAT` none (the taxi benchmark's measures are all doubles). The waves put the decimal
 rows last and the 128-bit rows at the very end, and section 4 promises a halfway review without a
 cut order. Question 4 of section 7 puts the two orders to the owner.
+
+*Answered 16 October 2026 (section 7 question 4): foundations first, the order in 4.1. The decimal
+lanes, the 128-bit lane pair (359) among them, land in wave F3, before any function row, and the
+cut order is written in 4.1, falling on function rows only.*

@@ -268,3 +268,9 @@ agent reset, the two-shape detail of the 4-lane trap, the log options' list and 
 
 The as-shipped release (composition 312, `e33b1eb0`, compiled and still allocating at the deadline)
 is for the reproduction of m8 row 383 (planned in #888, not yet merged).
+
+### 9.3 Published, 16 October 2026
+
+The post went live on 16 October 2026 at
+https://vecbricks.github.io/why-a-warmed-kernel-can-still-allocate/, built from the Markdown #893
+merged, with the claim scoped as 9.2 records.

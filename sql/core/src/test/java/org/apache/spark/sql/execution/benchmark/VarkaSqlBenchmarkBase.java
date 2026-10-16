@@ -25,7 +25,10 @@ import java.util.ArrayList;
 import java.util.Map;
 
 import scala.Option;
+import scala.runtime.BoxedUnit;
 
+import org.apache.spark.SparkContext;
+import org.apache.spark.SparkContext$;
 import org.apache.spark.internal.config.UI;
 import org.apache.spark.internal.config.package$;
 import org.apache.spark.sql.Dataset;
@@ -33,6 +36,7 @@ import org.apache.spark.sql.RuntimeConfig;
 import org.apache.spark.sql.SaveMode;
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.VarkaBenchmarkBase;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.internal.SQLConf;
 
 /**
@@ -50,6 +54,8 @@ import org.apache.spark.sql.internal.SQLConf;
  *       not set before, so no case leaks a setting into the next.</li>
  *   <li>{@link #noop}, the trait's {@code noop()}: a query run to the end, its rows dropped.</li>
  *   <li>{@link #note}, a line of the results file outside a table, such as a rung's facts.</li>
+ *   <li>{@link #stopLeftoverSessions} and {@link #clearSessions}, for a benchmark that makes its
+ *       own sessions, and {@link #withEmitOptions} for one that compares emitter designs.</li>
  * </ul>
  *
  * <p>A subclass is run as {@link VarkaBenchmarkBase} says, with {@code sql} for the module: {@code
@@ -99,8 +105,9 @@ public abstract class VarkaSqlBenchmarkBase extends VarkaBenchmarkBase {
   }
 
   /**
-   * Stops a session left active or default in this JVM, and with it its SparkContext, and clears
-   * both, for a benchmark about to make sessions of its own. A Scala benchmark did this by stopping
+   * Stops a session left active or default in this JVM, and with it its SparkContext, then any
+   * SparkContext still running, and clears both sessions, for a benchmark about to make sessions
+   * of its own. A Scala benchmark did this by stopping
    * the trait's default session, which had joined any context left running: under Spark's {@code
    * Benchmarks} runner a class that failed leaves its session running, and a session made after it
    * would join that context and keep its master, silently.
@@ -114,6 +121,22 @@ public abstract class VarkaSqlBenchmarkBase extends VarkaBenchmarkBase {
     if (fallback.isDefined()) {
       fallback.get().stop();
     }
+    // A benchmark clears its sessions as it makes them, so one that failed may leave its context
+    // running with neither registered. `getActive` is private[spark], with no static forwarder.
+    Option<SparkContext> context = SparkContext$.MODULE$.getActive();
+    if (context.isDefined()) {
+      context.get().stop();
+    }
+    clearSessions();
+  }
+
+  /**
+   * Clears the active and the default session without stopping either, after a benchmark makes
+   * one of its own: {@code getOrCreate} returns the active or default session when there is one,
+   * so without this the next session the benchmark makes would be this one with the next one's
+   * settings written into it - two names for one session, and a baseline that is not one.
+   */
+  protected static void clearSessions() {
     SparkSession.clearActiveSession();
     SparkSession.clearDefaultSession();
   }
@@ -164,6 +187,18 @@ public abstract class VarkaSqlBenchmarkBase extends VarkaBenchmarkBase {
 
   /** A key {@link #withConf} set, and the value it had before: null where it had none. */
   private record Previous(String key, String value) {}
+
+  /**
+   * Runs {@code body} with the Varka sessions planning and emitting under {@code options}, then
+   * back under the defaults: {@code VarkaArrowSessions.withEmitOptions}, whose body is a Scala
+   * function with a result, for a body that has none.
+   */
+  protected static void withEmitOptions(VarkaEmitOptions options, Runnable body) {
+    VarkaArrowSessions.withEmitOptions(options, () -> {
+      body.run();
+      return BoxedUnit.UNIT;
+    });
+  }
 
   /**
    * Prints {@code line} and writes it to the results file, if the run writes one: a fact a
