@@ -127,7 +127,8 @@ public class VarkaFilterEvaluator extends VarkaEvaluatorBase {
   private CompiledVarkaPredicate predicate() {
     if (!compiledResolved) {
       Optional<CompiledVarkaPredicate> all =
-          VarkaExpressionCompiler.compilePredicate(condition, childAttributes(), emitOptions());
+          VarkaExpressionCompiler.compilePredicate(condition, childAttributes(), emitOptions(),
+              familiesOff());
       if (all.isPresent() && all.get().residualConjuncts().isEmpty()) {
         compiled = all.get();
         List<List<Integer>> byClause = compiled.clauses();
@@ -143,7 +144,8 @@ public class VarkaFilterEvaluator extends VarkaEvaluatorBase {
         if (LOG.isDebugEnabled()) {
           LOG.debug("Varka " + evaluatorOperator() + " fusion: "
               + String.join("; ", CollectionConverters.asJava(
-                  VarkaFusionReport.predicateLines(condition, childAttributes(), emitOptions()))));
+                  VarkaFusionReport.predicateLines(condition, childAttributes(), emitOptions(),
+                      familiesOff()))));
         }
       }
       compiledResolved = true;

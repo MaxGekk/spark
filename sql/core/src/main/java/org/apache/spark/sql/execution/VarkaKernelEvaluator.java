@@ -197,7 +197,8 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
   private Optional<PartialVarkaProjection> compiled() {
     if (!compiledResolved) {
       Optional<PartialVarkaProjection> partial =
-          VarkaExpressionCompiler.compilePartial(projectList, childAttributes(), emitOptions());
+          VarkaExpressionCompiler.compilePartial(projectList, childAttributes(), emitOptions(),
+              familiesOff());
       // The same per-entry account verbose EXPLAIN prints, once per task at debug level.
       if (partial.isPresent() && LOG.isDebugEnabled()) {
         LOG.debug("Varka " + evaluatorOperator() + " fusion: "
