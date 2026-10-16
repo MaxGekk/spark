@@ -17,11 +17,13 @@
 package org.apache.spark.sql.catalyst.expressions.codegen;
 
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.Set;
 
 import scala.collection.immutable.Seq;
 import scala.runtime.AbstractPartialFunction;
@@ -30,6 +32,7 @@ import org.apache.spark.sql.catalyst.expressions.Attribute;
 import org.apache.spark.sql.catalyst.expressions.BoundReference;
 import org.apache.spark.sql.catalyst.expressions.Expression;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaChrono;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
 
@@ -57,7 +60,10 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Lit
  * reason reads in the query's own column names.
  *
  * <p>It also carries the one compile option the condition arms read, {@code rangeSets}, for the
- * same reason as the long table: every arm already has the sink in hand.
+ * same reason as the long table: every arm already has the sink in hand; and, for the same
+ * reason, the families the session has switched off and the families the accepted entries used
+ * (VARKA-318), the latter under the bounds' rollback discipline so that a declining entry's
+ * families are not reported for the kernel.
  */
 final class DeclineSink {
 
@@ -74,17 +80,50 @@ final class DeclineSink {
 
   private final Seq<Attribute> childOutput;
   private final boolean rangeSets;
+  private final Set<VarkaFamily> familiesOff;
+  private final List<VarkaFamily> used = new ArrayList<>();
   private final List<Bound> bounds = new ArrayList<>();
   private final LinkedHashMap<Long, Integer> longLiterals = new LinkedHashMap<>();
   private VarkaDecline first;
 
   DeclineSink(Seq<Attribute> childOutput, boolean rangeSets) {
+    this(childOutput, rangeSets, Set.of());
+  }
+
+  DeclineSink(Seq<Attribute> childOutput, boolean rangeSets, Set<VarkaFamily> familiesOff) {
     this.childOutput = childOutput;
     this.rangeSets = rangeSets;
+    this.familiesOff = Set.copyOf(familiesOff);
   }
 
   boolean rangeSets() {
     return rangeSets;
+  }
+
+  /** Whether the session has switched {@code family} off. */
+  boolean off(VarkaFamily family) {
+    return familiesOff.contains(family);
+  }
+
+  /** Notes that the entry being compiled lowered a node of {@code family}. */
+  void used(VarkaFamily family) {
+    used.add(family);
+  }
+
+  int usedMark() {
+    return used.size();
+  }
+
+  /** Drops the families noted since {@code mark} - a declining entry's. */
+  void truncateUsed(int mark) {
+    used.subList(mark, used.size()).clear();
+  }
+
+  /** The families the surviving entries lowered nodes of, in declaration order. */
+  List<VarkaFamily> familiesUsed() {
+    var distinct = EnumSet.noneOf(VarkaFamily.class);
+    distinct.addAll(used);
+    return List.copyOf(distinct);
   }
 
   /** Notes that child ordinal {@code ordinal} must lie in {@code [lo, hi]}. */

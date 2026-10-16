@@ -1349,6 +1349,8 @@ predicted. Add the line when the prediction is scored, whichever way it went.
 | VARKA-245 (6.1 #2) | a new proof file of under 250 checks under 8 s under Z3 and under 8 s under cvc5 | 209 checks (216 after the review), 3.7 to 6.8 s under Z3 and 5.8 to 6.7 s under cvc5 at load 25 to 35 | about 0.8 | held only after the forms were reworked: the first rendering of the same claims took Z3 98 s and left cvc5 unknown on checks it decides alone, so price a solver from the spiked form, not the claim |
 | VARKA-257 (6.1 #5) | the nightly's kernel-after-kernels arm about 3 minutes, six forks of 16 kernels at the compiled test's 1 to 2 s each, at VARKA-378's ratio | 3 min 52 s on three pinned cores at a load of 14 | 1.3 | a history kernel the warm-up releases costs the full 30 s deadline, and 7 of 72 long kernels past position 3 were released |
 | VARKA-379 (6.1 #4) | a new sql/core suite under 60 s, its tests under 30 s, at VARKA-243's ratio of 2 | 25 s, its tests 16 s | 0.5 | about 200 queries over one-batch cached views, each view cached once per fixture rather than per query |
+| VARKA-318 (6.1 #1) | the compile-only family switch suite under 5 s | 1.9 to 2.3 s, most of it resolving the 92 coverage rows | 0.46 | a first draft that resolved the rows once per test instance took 13.8 s; reading the table in `@BeforeAll` removed it |
+| VARKA-318 (6.1 #2) | the sql/core switch suite's tests under 10 s | 3.7 s alone, about 5 s in the gate | 0.37 | short queries over one cached view, as VARKA-315's eight took 4.5 s |
 
 What the table says so far: a check that adds a run per batch or a read per call costs more than
 the plan's arithmetic, because the arithmetic counts the kernel's work and not the harness's

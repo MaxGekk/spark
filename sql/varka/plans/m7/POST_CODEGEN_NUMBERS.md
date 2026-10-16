@@ -68,10 +68,9 @@ a size no method that compiled can reach, so by default the check never fires.
 Every compiled class goes into a per-JVM cache of 100 (`spark.sql.codegen.cache.maxEntries`,
 fixed when the JVM starts), keyed by the generated source text. A hit skips Janino. A miss
 compiles and logs one `Code generated in ... ms` line at INFO. Because some literals are written
-into the source, a query that differs only in a number or a date is a miss. [Link to row 258's
-post, which measures what that costs, when it is published. What happens past the 100 entries
-is owed: its measurement 5 runs 150 distinct queries twice and counts the second loop's
-compiles.]
+into the source, a query that differs only in a number or a date is a miss. A companion post,
+on how Spark compiles a query and why it compiles it again, measures what such a miss costs and
+what happens to a loop of queries larger than the cache.
 
 ## At the JIT: two limits of 8000
 
@@ -102,8 +101,8 @@ A generated aggregate whose keys and buffers the fast hash map supports probes t
 and a key it can't place falls through to the regular hash map, in the same generated code. The
 default capacity is 16 bits (`spark.sql.codegen.aggregate.fastHashMap.capacityBit`, 10 to 30),
 room for 2^16 entries. A key type the map doesn't support, such as a struct, gets no fast map at
-all, and that is the one case Spark logs, at INFO. [What it costs to pass the capacity is not
-measured; it is owed, and until then this section says only what the source does.]
+all, and that is the one case Spark logs, at INFO. We have not measured what passing the
+capacity costs, so this section says only what the source does.
 
 ## The whole list
 

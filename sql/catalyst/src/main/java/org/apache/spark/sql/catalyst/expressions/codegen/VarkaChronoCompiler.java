@@ -56,6 +56,7 @@ import org.apache.spark.sql.catalyst.expressions.Year;
 import org.apache.spark.sql.catalyst.expressions.YearOfWeek;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaChrono;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDerivedKind;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaOperandPosition;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaRangeAnalysis;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaValueRange;
@@ -579,7 +580,10 @@ final class VarkaChronoCompiler {
         && t.startField() == YearMonthIntervalType.YEAR()
         && t.endField() == YearMonthIntervalType.YEAR()
         && c.child().dataType().equals(DataTypes.IntegerType)) {
-      return VarkaIntervalCompiler.yearsToMonths(c, inputs, literals, sink);
+      // The years-to-months cast is the interval family's node, built here rather than through
+      // the chain, so it runs under that family's switch, as the negation below (VARKA-318).
+      return VarkaNodeCompiler.inFamily(VarkaFamily.INTERVAL,
+          () -> VarkaIntervalCompiler.yearsToMonths(c, inputs, literals, sink), c, sink);
     }
     // `d - ym_col`, which the analyzer spells `DateAddYMInterval(d, UnaryMinus(ym))`, so the
     // count is a negation of an interval column. Its check comes off wherever a negation's
@@ -587,10 +591,12 @@ final class VarkaChronoCompiler {
     // its check and is guarded on the count's value at run time exactly as a plain column
     // count is.
     if (months instanceof UnaryMinus u && u.child().dataType() instanceof YearMonthIntervalType) {
-      Optional<VarkaVectorIR> x = VarkaIntervalCompiler.intervalOperand(
-          u.child(), "the negated month count", inputs, literals, sink);
-      return x.map(v ->
-          new IntNeg(VarkaIntervalCompiler.negationMode(v, literals, sink), v));
+      // The negation is the interval family's node, built here rather than through the chain.
+      return VarkaNodeCompiler.inFamily(VarkaFamily.INTERVAL,
+          () -> VarkaIntervalCompiler.intervalOperand(
+              u.child(), "the negated month count", inputs, literals, sink)
+              .map(v -> new IntNeg(VarkaIntervalCompiler.negationMode(v, literals, sink), v)),
+          u, sink);
     }
     // `d + ym_col`. The stored value is the month count in every unit, so this is the
     // column-count `AddMonths` exactly, with the same runtime guard on the count's lanes -

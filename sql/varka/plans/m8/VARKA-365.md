@@ -5,6 +5,10 @@ design is pending**: it is open question 3 of `m8/PLAN.md` section 7, the owner'
 Section 3 lays out what each of its three options would build, so that the answer can be given
 against the work, and nothing past section 2 starts before it.*
 
+***Design decided, 16 October 2026: option (iii), no reader change.** The owner answered question 3
+the same day (section 9). Sections 2 and 3 stand as written; section 8 now follows (iii)'s branch,
+and the parts of sections 4 to 7 marked (i) or (ii) are not built.*
+
 ## 1. Where this came from
 
 Owner's decision A1 (14 October 2026, `m8/PLAN.md` 2.8): the fork's Arrow readers build a
@@ -221,9 +225,53 @@ a `BigDecimal` per value, which is what SPARK-59443 set out to reduce.
    register entry and the documentation; then the JIRA text for the owner. Under (iii): the
    documentation and the JIRA text only, and 350's design note.
 
+*Updated 16 October 2026, after the answer (iii):* step 1 is done. What remains, in order:
+
+1. `VarkaDecimalReadPathSuite`, first, as the admission run and then the regression test: it pins
+   the row path on the exact rule and the row path's columnar fallback and Varka's columnar path
+   on the double rule, so 350's kernel has the answer it must match, and it fails if any path
+   moves. Section 5's tests 2, 3 and 5 are (i) and (ii)'s and are not built; test 4 needs nothing,
+   since no reader changes.
+2. The coverage note and the line in `docs/sql-varka.md`: a Varka-off read of a cached table on
+   the row path answers the ANSI and TRY casts of a decimal of precision up to 18 to `INT`,
+   `SMALLINT` and `TINYINT` by the exact rule, where Varka's kernel and fallback answer by the
+   double rule. Written when the row is built.
+3. The upstream JIRA's text in section 9: that Spark's ANSI and TRY decimal-to-integral cast
+   depends on the data source and the read path, naming both of upstream's paths, with the row
+   reader's missing high-word check (section 2 item 2) as its own finding. Filed only with the
+   owner's yes.
+4. 350's design note in `m8/PLAN.md` (written with this update): the double rule below precision
+   19, on 366's exact arm outside 350's guard, proven by the sampled arm.
+
 Explicitly out of this row: any kernel (350, 364, 366), precision above 18, `BIGINT` targets, and
 filing the upstream JIRA without the owner's yes.
 
 ## 9. Outcome
 
 *To be written when the work lands.*
+
+### 9.1 The owner's answer to question 3, 16 October 2026
+
+**Option (iii), no reader change.** The reason: the house rule that row answers follow vanilla
+Spark always. Option (i) would make every Arrow consumer of the fork - the cached-batch iterator,
+the Python, R and external UDF runners - answer the three decimal-to-integral casts differently
+from vanilla Spark with Varka off as well, and (ii) only moves that departure behind a switch.
+Under (iii) the kernel reproduces vanilla Spark's column-path rule, the double rule over a
+`BigDecimal`-backed value, for the ANSI and TRY casts of a decimal to `INT`, `SMALLINT` and
+`TINYINT`, which is what Varka's fallback reads through `ArrowColumnVector`.
+
+It supersedes owner's decision A1 of 14 October 2026, which section 1 and 3.1 (i) describe and
+which stay as the record. What changes elsewhere, as 3.1 (iii) laid out:
+
+* `m8/PLAN.md` 2.2, 2.8, 2.10, 5, rows 350, 364 and 365, the wave table, risk 10, question 3 and
+  10.1 item 3 carry the answer with its date; `m8/casts.tsv`'s semantics and proof columns for the
+  three pairs say the double rule at every precision, with the ANSI and TRY range check proven by
+  the sampled arm and only LEGACY's low bits by SMT.
+* 350 builds the double rule below precision 19 as 364 does above it, on 366's exact arm outside
+  350's guard, so that part of 350 lands with or after 366.
+* Risk 10 is accepted, not removed: the disagreement is now between Varka-on reads and Varka-off
+  reads of a cached table on the row path, and the row makes it visible rather than fixing it.
+* Risk 4 of this plan's section 7 (the row reader's truncation of a value outside its declared
+  precision) gets the decision it asked for: it is reported upstream as its own finding, in the
+  JIRA whose text this section will record, and the fork does not patch it.
+* The row shrinks from medium to small: no reader, configuration, register entry or consumer test.

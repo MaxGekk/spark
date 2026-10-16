@@ -44,6 +44,9 @@ import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
  *
  * The chain is read from `VarkaNodeCompiler.families`, the list `compileNode` itself
  * dispatches through, so a group added there is checked here without this file changing. The
+ * predicate family (`VarkaNodeCompiler.predicates`), which `compileNode` does not dispatch to, is
+ * asked beside the chain: each family has its own switch (VARKA-318), and a node claimed by the
+ * predicate family and a chain family would sit under two. The
  * last test duplicates a group on purpose and asserts the check catches it, which is what makes
  * a green run mean something.
  */
@@ -88,7 +91,8 @@ class VarkaFamilyChainSuite extends SparkFunSuite with VarkaTestWatchdog {
 
   private type Chain = Seq[VarkaNodeCompiler.Family]
 
-  private def freshChain(): Chain = VarkaNodeCompiler.families().asScala.toSeq
+  private def freshChain(): Chain =
+    VarkaNodeCompiler.families().asScala.toSeq :+ VarkaNodeCompiler.predicates()
 
   /**
    * The nodes of `sqls` claimed by more than one group of `chain`, each with its claimants, and
