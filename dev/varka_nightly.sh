@@ -20,8 +20,9 @@
 # a fresh seed, the random differential against vanilla Spark (VARKA-262) and its arm
 # with the kernel warm-up on (VARKA-327), the exhaustive calendar sweeps, the SMT proofs
 # under both pinned solvers, every small IR tree to size 5 (VARKA-269) and to size 4 in
-# each of its variants (VARKA-278), the deoptimization-cycle guard, the inlining-cliff
-# guard, and Spark's golden-file suite with Varka on (VARKA-271). Optionally the whole gate.
+# each of its variants (VARKA-278), the deoptimization-cycle guard and its ratchet over the
+# NULL-mode kernels (VARKA-378), the inlining-cliff guard, and Spark's golden-file suite with
+# Varka on (VARKA-271). Optionally the whole gate.
 #
 #   dev/varka_nightly.sh                  # canary, fuzzer (10000, seed = today), Spark differential (50000, and 2000 warmed), sweeps, proofs, deopt, cliff
 #   dev/varka_nightly.sh --iterations 500 --seed 42 --skip-sweep --skip-deopt --skip-cliff   # a quick trial
@@ -32,10 +33,16 @@
 #   dev/varka_nightly.sh --sparkwarm-iterations 0   # without the warmed arm of the differential
 #   dev/varka_nightly.sh --skip-golden    # without the golden-file suite, about an hour
 #   dev/varka_nightly.sh --skip-platform  # without the forked JVM arms (interpreter, C1, C2, -Xcomp, ...)
+#   dev/varka_nightly.sh --skip-deoptnull # without the NULL-mode kernels' cycle ratchet
 #
 # The deopt step forks ten fresh JVMs per vector width of the default emission's twelve-output
 # make_date kernel and fails if any of them enters the C2 deoptimization cycle, reading the
-# JVM's own compile and trap log (dev/varka_deopt_cycle.sh, VARKA-189.md 3.3). The cliff
+# JVM's own compile and trap log (dev/varka_deopt_cycle.sh, VARKA-189.md 3.3). The deoptnull
+# step covers the kernels that one never runs, the NULL-mode kernels with no dense loop, where
+# the cycle lives today (VARKA-326.md 9): the IR fuzzer's compiled test over a fixed range of
+# draws, one JVM per vector width, counting the kernels still trapping at profile_predicate at
+# the warm-up's 10 s deadline, and fails when a width counts more than the ratchet committed in
+# dev/varka_deopt_census_guard.tsv (dev/varka_deopt_census.sh --guard, VARKA-378.md 3.1). The cliff
 # step forks ten fresh JVMs of the cheap-tail shape at 24 and 40 outputs under the production
 # emitter and fails if any of them is slow at the end of twelve seconds - the loop method past
 # C1's limit, which the call-site budget is there to prevent (dev/varka_inlining_cliff.sh,
@@ -69,6 +76,7 @@ sparkwarm=2000
 series=5
 variants=4
 platform=1
+deoptnull=1
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h|--help) usage 0 ;;
@@ -80,6 +88,7 @@ while [ "$#" -gt 0 ]; do
     --variants-size) variants="$2"; shift 2 ;;
     --skip-sweep) sweep=0; shift ;;
     --skip-deopt) deopt=0; shift ;;
+    --skip-deoptnull) deoptnull=0; shift ;;
     --skip-cliff) cliff=0; shift ;;
     --skip-golden) golden=0; shift ;;
     --skip-platform) platform=0; shift ;;
@@ -162,6 +171,11 @@ fi
 if [ "$deopt" -eq 1 ]; then
   run_step deopt dev/varka_deopt_cycle.sh --forms group --forks 10 --fail-on-cycle
 fi
+# The NULL-mode kernels' cycle, ratcheted on a committed count (VARKA-378): it fails when a width
+# counts more than dev/varka_deopt_census_guard.tsv allows, and a fix lowers the count there.
+if [ "$deoptnull" -eq 1 ]; then
+  run_step deoptnull dev/varka_deopt_census.sh --guard --out "$logdir/deoptnull"
+fi
 if [ "$cliff" -eq 1 ]; then
   run_step cliff dev/varka_inlining_cliff.sh --outputs 24,40 --forks 10 --seconds 12 --fail-if-slow
 fi
@@ -180,7 +194,8 @@ echo "fuzzer seed $seed, $iterations iterations; Spark differential $sparkfuzz c
   "$sparkwarm with the warm-up on"
 printf '%-9s %-7s %6s  %s\n' step status secs log
 bad=0
-for s in canary fuzz forced sparkfuzz sparkwarm sweep prove series variants deopt cliff gate; do
+for s in canary fuzz forced sparkfuzz sparkwarm sweep prove series variants deopt deoptnull \
+  cliff gate; do
   [ -n "${status[$s]:-}" ] || continue
   printf '%-9s %-7s %6d  %s\n' "$s" "${status[$s]}" "${secs[$s]}" "$logdir/$s.log"
   [ "${status[$s]}" = ok ] || bad=$((bad + 1))

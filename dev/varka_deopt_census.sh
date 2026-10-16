@@ -31,6 +31,18 @@
 #   dev/varka_deopt_census.sh --label N --jvm-arg -XX:-UseProfiledLoopPredicate
 #   dev/varka_deopt_census.sh --label S --only 375 --jvms 1   # draw 375 of each lane, alone
 #
+#   dev/varka_deopt_census.sh --guard --out DIR               # the nightly guard (VARKA-378)
+#
+# --guard runs the nightly's guard over the NULL-mode kernels' cycle (VARKA-378): the widths,
+# seed, range, deadline and cores of the count file (--guard-file, default
+# dev/varka_deopt_census_guard.tsv), one JVM per width, one after the other, and then the
+# reader's verdict: the exit status is 1 when a width counts more kernels past the deadline with
+# more than four profile_predicate traps than the file's ratchet, or when a JVM failed or left no
+# kernel. Below the ratchet it passes and asks for the ratchet to be lowered. --jvm-arg still
+# applies, which is how the planted run raises the trap limits. The guard rebuilds catalyst's
+# test classes and classpath first, since the nightly runs after a day's merges; --skip-build
+# reuses the last ones.
+#
 # --draws is the total per lane, split evenly over --jvms (default 4); --cpus is the cores per
 # JVM (default 6) and --cpu-base the first core of the first JVM, so that two runs side by
 # side do not share cores; --settle-ms is the warm-up's deadline (30000: the compiled test's own is
@@ -42,7 +54,8 @@
 usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
 set -euo pipefail
 label=census; from=0; draws=400; jvms=4; cpus=6; cpu_base=0; options=defaults; width=pref
-settle=30000; seed=20260903; only=; out=; jvm_args=()
+settle=30000; seed=20260903; only=; out=; jvm_args=(); guard=0; build=0; skip_build=
+guard_file=dev/varka_deopt_census_guard.tsv
 while [ $# -gt 0 ]; do
   case "$1" in
     --label) label="$2"; shift 2 ;;
@@ -58,56 +71,87 @@ while [ $# -gt 0 ]; do
     --only) only="$2"; shift 2 ;;
     --jvm-arg) jvm_args+=("$2"); shift 2 ;;
     --out) out="$2"; shift 2 ;;
+    --guard) guard=1; build=1; shift ;;
+    --skip-build) skip_build=1; shift ;;
+    --guard-file) guard_file="$2"; shift 2 ;;
     -h|--help) usage 0 ;;
     *) usage ;;
   esac
 done
 cd "$(dirname "$0")/.."
 root=$(pwd)
+[ "$guard" -eq 1 ] && [ "$label" = census ] && label=guard
+[ -n "$skip_build" ] && build=0
 out=${out:-target/varka-deopt-census/$label}
 case "$out" in /*) ;; *) out="$root/$out" ;; esac
-case "$out" in /*) ;; *) out="$root/$out" ;; esac
-if [ ! -s target/varka-matrix/classpath ]; then
+if [ "$build" -eq 1 ] || [ ! -s target/varka-matrix/classpath ]; then
   dev/varka_matrix.sh --module catalyst --list > /dev/null
 fi
 opts=$(cat target/varka-matrix/jvm.opts)
 cp="$root/sql/catalyst/target/scala-2.13/classes:$(cat target/varka-matrix/classpath)"
 mkdir -p "$out"
-per=$(( (draws + jvms - 1) / jvms ))
-width_arg=()
-[ "$width" != pref ] && width_arg=("-XX:MaxVectorSize=$width")
-only_arg=()
-[ -n "$only" ] && only_arg=("-Dvarka.fuzz.only=$only")
-{
-  dirty=$(git diff --quiet HEAD -- sql dev || echo ' (dirty)')
-  echo "commit:  $(git rev-parse --short=11 HEAD)$dirty"
-  echo "jdk:     $(java -version 2>&1 | head -1)"
-  echo "cpu:     $(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //')"
-  echo "load:    $(cut -d' ' -f1-3 /proc/loadavg) at start"
-  echo "args:    label=$label from=$from draws=$draws jvms=$jvms options=$options width=$width" \
-    "settle=$settle seed=$seed only=${only:-all} jvm-args=${jvm_args[*]:-none}"
-} > "$out/provenance.txt"
 xlog="jit+compilation=debug,deoptimization=debug"
-pids=()
-for ((i = 0; i < jvms; i++)); do
-  dir="$out/run-$i"
+# One JVM over draws [lo, hi) of both lanes, in its own directory so a crash leaves its files
+# there. `taskset` pins the JVM and the compiler threads it starts to the cores it was given.
+# Arguments: directory, lo, hi, first core, cores, width (pref or MaxVectorSize bytes), settle
+# deadline in ms, seed.
+run_jvm() {
+  local dir="$1" lo="$2" hi="$3" first="$4" ncpu="$5" w="$6" settle_ms="$7" s="$8"
+  local width_arg=() only_arg=()
+  [ "$w" != pref ] && width_arg=("-XX:MaxVectorSize=$w")
+  [ -n "$only" ] && only_arg=("-Dvarka.fuzz.only=$only")
   mkdir -p "$dir/tmp"
-  lo=$(( from + i * per ))
-  hi=$(( lo + per ))
-  first=$(( cpu_base + i * cpus ))
-  # The fork's own directory, so a crash leaves its files there. `taskset` pins the JVM and
-  # the compiler threads it starts to the cores it was given.
-  (cd "$dir" && SPARK_TESTING=1 SPARK_SCALA_VERSION=2.13 taskset -c "$first-$((first + cpus - 1))" \
-    java $opts "-Djava.io.tmpdir=$dir/tmp" -Dvarka.ownJvm=true "-Dvarka.fuzz.seed=$seed" \
+  (cd "$dir" && SPARK_TESTING=1 SPARK_SCALA_VERSION=2.13 \
+    taskset -c "$first-$((first + ncpu - 1))" \
+    java $opts "-Djava.io.tmpdir=$dir/tmp" -Dvarka.ownJvm=true "-Dvarka.fuzz.seed=$s" \
     "-Dvarka.fuzz.compiled=$hi" "-Dvarka.fuzz.compiledFrom=$lo" \
     "-Dvarka.fuzz.compiledOptions=$options" -Dvarka.fuzz.census=true \
-    -Dvarka.fuzz.history=warm-same "-Dvarka.fuzz.settleMillis=$settle" \
+    -Dvarka.fuzz.history=warm-same "-Dvarka.fuzz.settleMillis=$settle_ms" \
     -Dspark.test.timeout=170 -Dvarka.test.watchdog.minutes=170 \
     "-Xlog:$xlog:file=$dir/xlog.txt:uptime,tags:filecount=0,filesize=0" \
     "${width_arg[@]}" "${jvm_args[@]}" "${only_arg[@]}" -cp "$cp" \
     org.scalatest.tools.Runner -oW \
     -s org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaIrFuzzSuite \
-    -z "compiled by C2" > "$dir/run.log" 2>&1; echo $? > "$dir/exit") &
+    -z "compiled by C2" > "$dir/run.log" 2>&1; echo $? > "$dir/exit")
+}
+provenance() {
+  local dirty
+  dirty=$(git diff --quiet HEAD -- sql dev || echo ' (dirty)')
+  echo "commit:  $(git rev-parse --short=11 HEAD)$dirty"
+  echo "jdk:     $(java -version 2>&1 | head -1)"
+  echo "cpu:     $(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //')"
+  echo "load:    $(cut -d' ' -f1-3 /proc/loadavg) at start"
+  echo "args:    $*"
+}
+if [ "$guard" -eq 1 ]; then
+  [ -n "$only" ] && { echo "--guard runs the count file's range; --only does not apply"; exit 2; }
+  options=defaults
+  # The reader proves itself on a recorded cycling kernel before it reads tonight's.
+  dev/varka_deopt_census.py --self-test
+  provenance "guard=$guard_file jvm-args=${jvm_args[*]:-none}" > "$out/provenance.txt"
+  # The count file's rows, comments and the header skipped: one JVM per width, one at a time, so
+  # each sees the cores it was measured on.
+  while IFS=$'\t' read -r w s lo n settle_ms ncpu first _ratchet; do
+    start=$SECONDS
+    echo "== guard width $w: draws $lo to $((lo + n - 1)) a lane," \
+      "cores $first-$((first + ncpu - 1)), load $(cut -d' ' -f1-3 /proc/loadavg)"
+    run_jvm "$out/$w/run-0" "$lo" "$((lo + n))" "$first" "$ncpu" "$w" "$settle_ms" "$s"
+    echo "   $((SECONDS - start)) s, exit $(cat "$out/$w/run-0/exit")"
+  done < <(grep -v -e '^#' -e '^width' -e '^[[:space:]]*$' "$guard_file")
+  echo "load:    $(cut -d' ' -f1-3 /proc/loadavg) at end" >> "$out/provenance.txt"
+  dev/varka_deopt_census.py --guard "$guard_file" "$out" | tee "$out/summary.txt"
+  # The reader's status, not tee's: it is the verdict.
+  exit "${PIPESTATUS[0]}"
+fi
+per=$(( (draws + jvms - 1) / jvms ))
+provenance "label=$label from=$from draws=$draws jvms=$jvms options=$options width=$width" \
+  "settle=$settle seed=$seed only=${only:-all} jvm-args=${jvm_args[*]:-none}" \
+  > "$out/provenance.txt"
+pids=()
+for ((i = 0; i < jvms; i++)); do
+  lo=$(( from + i * per ))
+  run_jvm "$out/run-$i" "$lo" "$(( lo + per ))" "$(( cpu_base + i * cpus ))" "$cpus" "$width" \
+    "$settle" "$seed" &
   pids+=($!)
 done
 echo "== $label: $jvms JVMs of $per draws a lane each, logs under $out"
