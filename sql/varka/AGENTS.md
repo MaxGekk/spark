@@ -58,9 +58,10 @@ built, what was measured and where the plan turned out wrong. Predictions writte
 before a measurement stay in the file after it, scored honestly - the project
 keeps count. Do not retro-edit a task file to look prescient; add the correction
 and say what it corrects. A cost prediction - a test's or a suite's added time, a
-check's overhead - reads the calibration table in `skills/testing-and-debugging.md` first and is
-stated at the ratio the table has observed unless the plan says why not; once scored, its line
-joins the table.
+check's overhead - reads the calibration table first (`dev/varka_calibration.py` prints it;
+`skills/testing-and-debugging.md` says how it is kept) and is stated at the ratio the table has
+observed unless the plan says why not; once scored, it joins the table as a file of its own under
+`skills/calibration/`, which `dev/varka_calibration.py --add-row` writes from the row.
 
 A milestone's file is named for the stage it is in. While it is a scope
 catalogue - numbered items with design input, no task numbers assigned yet - it
