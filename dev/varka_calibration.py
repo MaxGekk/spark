@@ -52,8 +52,8 @@ order (VARKA-138b beside VARKA-138a); they come first, and no new entry sets it.
 
 --check fails on a missing, unknown or repeated field, a file named other than its task, a
 value with a `|` or a stray space (either would change the printed row), an `order` outside
-the fifteen, and a file not in the canonical layout, which --add-row writes and which a file
-edited by hand can be put back into with --normalize.
+the fifteen, anything in the directory that is not an entry file, and a file not in the
+canonical layout, which --add-row writes and --normalize restores in a file edited by hand.
 """
 
 import argparse
@@ -155,6 +155,8 @@ def load(directory: str) -> tuple:
     for name in sorted(os.listdir(directory)):
         path = os.path.join(directory, name)
         if not name.endswith(".md") or not os.path.isfile(path):
+            # A misnamed entry would otherwise drop out of the table without a word.
+            findings.append(f"{show(path)}: not an entry file; entries are `<task>.md` files")
             continue
         with open(path, encoding="utf-8") as handle:
             text = handle.read()

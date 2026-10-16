@@ -151,3 +151,32 @@ command a planner runs once per plan.
 3. Section 9 and row 384 Done.
 
 ## 9. Outcome
+
+Done on 16 October 2026. Correction to row 384's wording, not to the plan above: the row asks for
+the table to be generated into `testing-and-debugging.md` and to equal today's lines. It is printed
+instead (2, check 1): a committed rendering conflicts exactly as the hand-kept table did, so the
+files are the record and `dev/varka_calibration.py` prints the table from them.
+
+6.1's predictions, scored:
+
+1. **Held.** The 17 lines of the old table (header, separator, fifteen rows) saved before the
+   change and the tool's output after it compare equal under `cmp`, SHA-256 `e032ab7a...` for both.
+2. **Held.** In a scratch clone, two branches off this branch each ran `--add-row` for a different
+   task (`VARKA-901 (6.1 #1)` and `VARKA-902 (6.1 #3)`): `git merge-tree --write-tree` exited 0, `git
+   merge` was clean, `--check` passed on the merged tree and the printed table ended with both rows
+   after VARKA-257's. The same clone had shown the committed-block design conflicting (2, check 1).
+   The clone was deleted.
+3. **Held.** `dev/varka_quote_check.py` with the entry files in its set: no orphan.
+
+`--check`'s failure paths, on a scratch copy of the directory, each reported: an unknown field,
+missing fields, a `|` in a value, a double space, a bad date, a repeated `order`, a file named other
+than its task, and `--add-row` refusing a file that exists.
+
+The self-review (`/code-review high` style, over this branch's diff) found and fixed two things:
+the skill's `--add-row` example quoted the row in double quotes, which runs the backticks rows hold
+as shell commands, now single quotes with the reason; and a file in the directory not ending in
+`.md` would have dropped out of the table silently, now a `--check` finding. The table's numbers
+also leave the set `dev/varka_quote_check.py` reads unless its glob grows, so it gained the
+directory (3.1).
+
+Left for later: nothing. The open branches that add a line to the old table resolve by 3.4.

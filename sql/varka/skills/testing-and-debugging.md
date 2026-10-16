@@ -1337,8 +1337,9 @@ entry is a file of its own under `sql/varka/skills/calibration/`, named after it
 (`VARKA-274a (6.1 #8)` is `VARKA-274a-6.1-8.md`), and the table is printed rather than committed
 (VARKA-384): while it was a table here every task appended a row after the same last line, so each
 merge conflicted with every open branch that had added one. To add an entry, paste the row you
-would have added to `dev/varka_calibration.py --add-row "| VARKA-<n> (6.1 #k) | ... |"`, which
-writes the file dated today, or write the file by hand in the layout the tool's help shows;
+would have added to `dev/varka_calibration.py --add-row '| VARKA-<n> (6.1 #k) | ... |'`, in single
+quotes since rows hold backticks, which writes the file dated today (`--added YYYY-MM-DD` for
+another day), or write the file by hand in the layout `dev/varka_calibration.py --help` shows;
 `dev/varka_calibration.py --check`, which the pre-commit hook runs, rejects a malformed one.
 
 What the table says so far: a check that adds a run per batch or a read per call costs more than
