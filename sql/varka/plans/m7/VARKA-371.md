@@ -178,12 +178,12 @@ committed output before anything changed; all but the last were confirmed and fi
    draws over `coverage.json`'s rows. The script now runs one JVM first with
    `-Dvarka.sparkfuzz.warmupShow=true` and stops unless compositions 0 and 220 print as pinned in
    the script (`abs(ym)`, and the four outputs and filter of 220; two JVMs printed them
-   identically), and in the replays of `0,220` it stops on a release of any shape but
-   `w7fd4deef67312f01`. The check is its own JVM, so the counted replays run as before. The post
-   names commit 57cf25f8c98: `coverage.json` did not change between the 100-replay run's classes
-   (81aad3b42fa) and it, and the refreshed runs below were built from it. At that commit the
-   script is #872's, which counts the same but prints the first `ccount` and runs no stock check;
-   those two behaviours land with this change, so the merge commit may replace the hash.
+   identically), and in the replays of `0,220` it names any released shape other than
+   `w7fd4deef67312f01` and keeps that replay's report. The check is its own JVM, so the counted
+   replays run as before. The post says the script stops unless its compositions are commit
+   57cf25f8c98's: `coverage.json` did not change between the 100-replay run's classes
+   (81aad3b42fa) and it, and the refreshed runs below were built from it. The post does not send
+   readers to that commit, whose script is #872's.
 3. **`--keep` read a failed replay as a clean one: confirmed, fixed.** Each try now has its own
    directory; a failed try keeps its report (not its JIT log) and is counted, and when every try
    failed the script says so instead of "no release". A stub `java` drove both paths, and the
@@ -224,3 +224,24 @@ defaults arm's 46 is above 9.6's 10 to 39 and the earlier run's 29. Whether the 
 becomes a row is the owner's decision; it is outside this task. The 100-replay run was not
 repeated: its counting did not change, and it takes 2 hours 40 minutes. `--keep` released at the
 first try, so the log-on defaults arm now stands at 7 of 7.
+
+**Self-review of this change** (`/code-review high`, ten findings, deduplicated but not verified
+by the tool; each checked here):
+
+* *A wrong-shape release stopped the run* and blamed `coverage.json`, though composition 0's own
+  kernel can miss the deadline under load, and an emitter change renames a shape while the
+  compositions stay. Fixed: the replay line names the other shapes and keeps the report, and the
+  run goes on. The `grep -q` pipeline that could lose the match to SIGPIPE went with it.
+* *The post named a commit whose script lacks the check*: fixed as in item 2 above.
+* *"To none" against Figure 3's release*: kept. The sentences quote 9.8's 0 in 2,000 compositions
+  on five seeds; the caption carries this run's release, and the owner decides whether the claim
+  needs a new measurement.
+* *`fig43.py` lost the check that the spike's runs and the arms warm as many kernels*: restored,
+  over all three arms and both spike runs (534 each). It also reads the composition count from
+  the run's summary line instead of a fixed 400, and refuses a run of more than one replay.
+* *The verdicts dropped the count of releases before the deadline*: fixed by appending it when it
+  is not 0, so the committed output, where it was 0 in every arm, is still what the script
+  prints. The output file's note on composition 312 is marked as added by hand.
+* *The keep directories of an earlier run survived*: `--keep` clears them first.
+* *The check costs a JVM per invocation* (about half a minute): declined. Checking offline would
+  re-implement the suite's draw, and half a minute is small beside a 400-composition run.

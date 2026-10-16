@@ -56,10 +56,11 @@
 # replay's line then ends with its warm-up verdicts (COMPILED n, RELEASED n).
 #
 # The compositions are drawn from sql/varka/coverage.json, so a change to it can change which
-# expressions composition 0 and 220 are. The script first runs one JVM that prints both and
-# stops unless they are the ones above, and in the replays of 0 and 220 stops on a release of
-# any kernel but 220's (shape w7fd4deef67312f01). The post's counts were taken over the
-# compositions of commit 57cf25f8c98 of vecbricks/varka.
+# expressions composition 0 and 220 are. The script first runs one JVM (about half a minute)
+# that prints both and stops unless they are the ones above, which they are from commit
+# 81aad3b42fa, where the post's counts were taken, to 57cf25f8c98 at least. In the replays of 0
+# and 220 it names any released kernel other than 220's (shape w7fd4deef67312f01); there was
+# none in the post's counts.
 #
 # The first run builds sql's test classes and exports the test classpath with
 # dev/varka_matrix.sh --module sql --list (tens of minutes on a cold checkout); --skip-build
@@ -142,19 +143,23 @@ released() {
   grep -c 'a kernel was released at the deadline' "$1/run.log"
 }
 
-# verdicts <dir>: the replay's warm-up verdicts, e.g. "COMPILED 505, RELEASED 29".
+# verdicts <dir>: the replay's warm-up verdicts, e.g. "COMPILED 505, RELEASED 29", and how many
+# of the releases came before the deadline when any did.
 verdicts() {
-  sed -n 's/^.*warm-up verdicts: \(.*\), of the releases.*$/\1/p' "$1/run.log" | tail -1
+  local line='^.*warm-up verdicts: \(.*\), of the releases \([0-9]*\) before the deadline.*$'
+  sed -n "s/$line/\\1|\\2/p" "$1/run.log" | tail -1 |
+    awk -F'|' '{ printf "%s%s\n", $1, ($2 > 0 ? ", " $2 " of them before the deadline" : "") }'
 }
 
-# foreign <dir>: stops the script when a replay of 0 and 220 released another kernel than 220's,
-# which means the compositions are no longer the ones the post replays.
-foreign() {
+# others <dir>: in a replay of 0 and 220, the shapes of the kernels released at the deadline other
+# than 220's. Every release the post counts was 220's; another one is worth a look at the
+# replay's report, which is kept, though it does not by itself mean the compositions changed (a
+# change to the emitter renames a shape too).
+others() {
   [ "$compositions" -gt 0 ] && return
-  grep 'a kernel was released at the deadline' "$1/run.log" | grep -qv "shapeHash=$SHAPE" || return
-  echo "a replay released a kernel other than composition 220's ($SHAPE); the compositions" \
-    "at seed 20261008 have changed (see $1/run.log)" >&2
-  exit 1
+  local shapes
+  shapes=$(sed -n 's/^.*released at the deadline.*shapeHash=\(w[0-9a-f]*\).*$/\1/p' "$1/run.log")
+  grep -v "^$SHAPE\$" <<< "$shapes" | sort -u | tr '\n' ' ' | sed 's/ $//'
 }
 
 # One line per compile of a kernel method (a class named for its shape, VarkaFused*_w<hash>)
@@ -192,13 +197,14 @@ for it in 0 220; do
   [ "$got" = "${EXPECT[$it]}" ] || {
     printf 'composition %s at seed 20261008 is not the replayed one:\n' "$it" >&2
     printf '  expected: %s\n  found:    %s\n' "${EXPECT[$it]}" "$got" >&2
-    echo "check out commit 57cf25f8c98 of vecbricks/varka to replay the post's compositions" >&2
+    echo "the post's compositions are those of commit 57cf25f8c98 of vecbricks/varka" >&2
     exit 1; }
 done
 rm -rf "$out/check"
 
 LOG=(-XX:+UnlockDiagnosticVMOptions -XX:+LogCompilation)
 if [ "$keep" = 1 ]; then
+  rm -rf "$out"/keep-*
   fails=0
   for try in $(seq 1 "$keep_tries"); do
     dir=$out/keep-$try
@@ -209,7 +215,8 @@ if [ "$keep" = 1 ]; then
       # A failed replay keeps its report, without its JIT log.
       fails=$((fails + 1)); rm -f "$dir/hotspot.xml"; continue
     fi
-    foreign "$dir"
+    o=$(others "$dir")
+    [ -n "$o" ] && echo "  released kernels other than composition 220's: $o"
     if [ "$n" -gt 0 ]; then
       grep 'a kernel was released at the deadline' "$dir/run.log" | cut -c1-200
       echo "JIT log kept: $dir/hotspot.xml"
@@ -255,7 +262,8 @@ for r in $(seq 1 "$runs"); do
     v=$(verdicts "$dir")
     printf '%s\t%d\t%s\t%s\t%d\t%s\n' "$arm" "$r" "$(cat "$dir/exit")" "$n" \
       $(( $(date +%s) - t0 )) "$v" >> "$out/status.tsv"
-    [ "$n" = failed ] || foreign "$dir"
+    o=""
+    [ "$n" = failed ] || o=$(others "$dir")
     if [ "$n" = failed ]; then
       failed[$arm]=$((failed[$arm] + 1))
     else
@@ -265,7 +273,8 @@ for r in $(seq 1 "$runs"); do
       [ "$n" -gt 0 ] || rm -rf "$dir"
     fi
     printf '%-12s replay %3d: %s released at the deadline, %d s%s\n' \
-      "$arm" "$r" "$n" $(( $(date +%s) - t0 )) "$([ "$compositions" -gt 0 ] && echo " ($v)")"
+      "$arm" "$r" "$n" $(( $(date +%s) - t0 )) "$([ "$compositions" -gt 0 ] && [ -n "$v" ] && echo " ($v)")"
+    [ -n "$o" ] && echo "  released kernels other than composition 220's: $o (see $dir/run.log)"
   done
 done
 

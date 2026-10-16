@@ -39,8 +39,9 @@ defaults      1 of 1                        46
 trap limits   0 of 1                        0
 stock         1 of 1                        1
 
-(the stock release was composition 312's kernel, shape w4619883de33b1eb0, with 21120 bytes in
-its last probe; none of the releases came before the deadline)
+(added by hand from the stock replay's kept report: its release was composition 312's kernel,
+shape w4619883de33b1eb0, with 21120 bytes in its last probe. A verdict line would name any
+release before the deadline; there was none.)
 
 $ sql/varka/demo/trap_sums.sh --skip-build --cpus 6-8 --keep
 == checking that compositions 0 and 220 at seed 20261008 are the replayed ones

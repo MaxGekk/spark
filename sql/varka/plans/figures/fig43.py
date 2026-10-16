@@ -64,15 +64,21 @@ def warmups(line):
 
 
 def arm_warmups(path):
-    """{arm: (deadline releases, warm-ups)} from the per-replay lines of the 400-composition run,
-    which end with the replay's verdicts."""
-    line = re.compile(r"^(defaults|trap limits|stock)\s+replay\s+1: .*\((COMPILED \d+.*)\)$")
-    out = {}
+    """(compositions, {arm: (deadline releases, warm-ups)}) of the one-replay compositions run,
+    from its per-replay lines, which end with the replay's verdicts, and its summary line."""
+    line = re.compile(r"^(defaults|trap limits|stock)\s+replay\s+(\d+): .*\((COMPILED \d+.*)\)$")
+    head = re.compile(r"^seed \d+, compositions 0 to (\d+), (\d+) replays per arm")
+    out, count = {}, None
     with open(path) as f:
         for text in f:
             if m := line.match(text.rstrip()):
-                out[m.group(1)] = warmups(m.group(2))
-    return out
+                assert m.group(2) == "1" and "before the deadline" not in m.group(3), text
+                out[m.group(1)] = warmups(m.group(3))
+            elif m := head.match(text):
+                assert m.group(2) == "1", text
+                count = int(m.group(1)) + 1
+    assert count, "no compositions run in the replay output"
+    return count, out
 
 
 def spike_runs(name, runs):
@@ -93,7 +99,7 @@ tables = replay_tables(REPLAY)
 assert len(tables) == 2, tables
 jvms, comps = tables
 assert all(of == 100 for _, of, _ in jvms.values()), jvms
-arms = arm_warmups(REPLAY)
+COMPOSITIONS, arms = arm_warmups(REPLAY)
 assert sorted(arms) == sorted(comps), (arms, comps)
 assert all(arms[a][0] == comps[a][2] for a in arms), (arms, comps)
 spike = [
@@ -101,8 +107,9 @@ spike = [
     ("off, limits raised (WhiteBox)", LIMITS, spike_runs("flags.txt", ["flags1", "flags2"])),
     ("off, one reset at 60 s", RESET, spike_runs("redefine-once.txt", ["redef1", "redef2"])),
 ]
-counts = {n for _, _, runs in spike for _, n in runs}
-assert len(counts) == 1, spike
+# The spike's runs are over the same compositions, so they warm as many kernels as each arm.
+counts = {n for _, _, runs in spike for _, n in runs} | {n for _, n in arms.values()}
+assert len(counts) == 1, (spike, arms)
 (WARMUPS,) = counts
 spike = [(label, fill, [v for v, _ in runs]) for label, fill, runs in spike]
 ARMS = [
@@ -159,7 +166,8 @@ y = block(
 )
 y = block(
     y,
-    "one JVM per arm through 400 compositions: kernels released at the deadline, of its warm-ups",
+    "one JVM per arm through %d compositions: kernels released at the deadline, of its warm-ups"
+    % COMPOSITIONS,
     [(label, fill, [(arms[arm][0], "%d of %d" % arms[arm])]) for label, fill, arm in ARMS],
     80,
     20,

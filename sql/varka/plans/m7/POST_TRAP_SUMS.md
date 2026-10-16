@@ -118,8 +118,8 @@ composition fuzzer, which warms the kernels of random compositions of expression
 `VARKA-295.md` 9.5 to 9.8 (Figures 1 and 2), `VARKA-370.md` 9 with its spike's `results/`
 (Figure 3, lower block), `VARKA-373.md` 9 (Figure 4) and `VARKA-374.md`.
 
-To reproduce on Linux from a [Varka checkout](https://github.com/vecbricks/varka) at commit
-57cf25f8c98 or later (the script checks its compositions):
+To reproduce on Linux from a [Varka checkout](https://github.com/vecbricks/varka) (the script
+stops unless its compositions are commit 57cf25f8c98's):
 `sql/varka/demo/trap_sums.sh --runs 100` replays `abs` over a year-month interval, then the
 allocating kernel, in 100 fresh JVMs per arm: warm-up off, the two options, as shipped. On our
 laptop (2 hours 40 minutes, 3 cores) 77, 0 and 0 JVMs released. `--compositions 400` runs 400
