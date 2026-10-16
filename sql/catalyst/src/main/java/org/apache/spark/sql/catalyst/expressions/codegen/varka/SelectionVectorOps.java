@@ -108,7 +108,7 @@ public final class SelectionVectorOps {
       long srcData, long srcValidity, boolean hasNulls, MemorySegment selection, int len,
       int count, long dstData, long dstDataBytes, long dstValidity, long dstValidityBytes) {
     if (dstDataBytes < ((long) count + SPECIES.length()) * 4) {
-      throw new IllegalArgumentException("destination data buffer holds " + dstDataBytes
+      throw VarkaErrors.illegalArgument("destination data buffer holds " + dstDataBytes
           + " bytes; the unmasked stores need (count + lanes) * 4 = "
           + (((long) count + SPECIES.length()) * 4) + " - see the class doc's slack rule");
     }
@@ -151,7 +151,7 @@ public final class SelectionVectorOps {
       pos += compactEpilogue(src, dst, srcVal, hasNulls, selection, dstVal, i, len, pos);
     }
     if (pos != count) {
-      throw new IllegalStateException("selection bitmap holds " + pos
+      throw VarkaErrors.illegalState("selection bitmap holds " + pos
           + " selected rows but the caller counted " + count
           + "; the count must come from this same bitmap");
     }

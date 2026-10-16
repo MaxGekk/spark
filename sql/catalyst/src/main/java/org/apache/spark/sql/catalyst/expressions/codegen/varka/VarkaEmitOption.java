@@ -160,7 +160,7 @@ public sealed interface VarkaEmitOption
 
     public Flag {
       if (rendering instanceof CountTag) {
-        throw new IllegalArgumentException(name + ": a flag renders by position or as a flag tag");
+        throw VarkaErrors.illegalArgument(name + ": a flag renders by position or as a flag tag");
       }
       Objects.requireNonNull(subject, "subject");
     }
@@ -214,7 +214,7 @@ public sealed interface VarkaEmitOption
 
     public Count {
       if (rendering instanceof FlagTag) {
-        throw new IllegalArgumentException(
+        throw VarkaErrors.illegalArgument(
             name + ": a count renders by position or as a count tag");
       }
       fuzzDraws = List.copyOf(fuzzDraws);
@@ -290,7 +290,7 @@ public sealed interface VarkaEmitOption
           return with(options, e);
         }
       }
-      throw new IllegalArgumentException(
+      throw VarkaErrors.illegalArgument(
           name + " has no constant " + constant + "; it has " + constants());
     }
 
@@ -464,6 +464,6 @@ public sealed interface VarkaEmitOption
         return option;
       }
     }
-    throw new IllegalArgumentException("no emit option " + name);
+    throw VarkaErrors.illegalArgument("no emit option " + name);
   }
 }

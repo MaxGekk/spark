@@ -26,6 +26,7 @@ import java.util.function.Function;
 import javax.annotation.Nullable;
 
 import org.apache.spark.SparkContext;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.execution.metric.SQLMetric;
 import org.apache.spark.sql.execution.metric.SQLMetrics;
 import org.apache.spark.sql.execution.varka.VarkaFallbackAccounting;
@@ -107,7 +108,7 @@ public record VarkaExecMetrics(
     declinedByReason = declinedByReason == null ? List.of() : List.copyOf(declinedByReason);
     if (!declinedByReason.isEmpty()
         && declinedByReason.size() != VarkaFallbackAccounting.REASONS.size()) {
-      throw new IllegalArgumentException("declinedByReason holds " + declinedByReason.size()
+      throw VarkaErrors.illegalArgument("declinedByReason holds " + declinedByReason.size()
           + " metrics for " + VarkaFallbackAccounting.REASONS.size() + " reasons");
     }
   }
@@ -200,7 +201,7 @@ public record VarkaExecMetrics(
     Function<String, SQLMetric> required = key -> {
       SQLMetric m = metric.apply(key);
       if (m == null) {
-        throw new IllegalStateException("the node registers no metric " + key);
+        throw VarkaErrors.illegalState("the node registers no metric " + key);
       }
       return m;
     };
