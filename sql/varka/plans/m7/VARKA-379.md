@@ -171,3 +171,55 @@ costs more than the kernel arithmetic says, so these allow for the harness.
 One commit for the plan, one for the fix with its suite; the pair dispatched by the owner.
 
 ## 9. Outcome
+
+Built as planned (16 October 2026), on branch `varka-379`; the pair is owed.
+
+**What was built.** Section 3.1 as written, with one change from the review below: the calendar
+admission notes the bound from the query it admits on, and asks again only for a node `rearm`
+rewrote. The bound is noted on 24 of the coverage table's 51 rows over `d` - the calendar fields
+whose lowering decomposes the day, the month arithmetic over them, and the int arithmetic and
+predicates over those fields - and on none of `dayofweek`, `weekday`, the ISO day of week,
+`next_day`, `trunc(d, 'WEEK')`, `unix_date`, `datediff`, the day shifts, the choice nodes or the
+date comparisons, whose lowerings are exact for every int. `emitted_bytes.json` is unchanged
+(`VarkaEmittedBytesSuite` passes without a regeneration): the input bounds are runtime data, not
+part of the shape.
+
+**Two consequences the plan did not list.** The coverage table's VARKA-279 rule - a row whose
+kernel can decline a batch names its domain - made the 24 rows carry
+`unix_date(d) BETWEEN -719162 AND 2932896` (conjoined with the domain four of them had), so
+`coverage.json` and `docs/sql-varka.md` were regenerated, and the coverage differential's edges
+fixture gained `d` at both ends of the bound and one past each; its domain tests now run every
+bounded row over batches wholly inside, outside and null, and the outside ones decline with
+`STATUS_INPUT_BOUND`. And the `datediff` path (section 2) is a confirmed second wrong answer, not
+only a reading: with the bound's note disabled, `datediff(d, d2) * 100` answers a wrapped value
+where Spark raises `ARITHMETIC_OVERFLOW`.
+
+**The suite's teeth.** With `DeclineSink.dayColumnBound` made a no-op, all five
+`VarkaFarDaySuite` tests fail: the reproduction's rows differ, the coverage sweep's `year(d)`
+differs, the edge test sees no decline one day past the bound, `year(date_add(d, 1))` differs,
+and the `datediff` product answers where Spark raises.
+
+**Suites run.** `dev/varka_matrix.sh --defaults --split 4` with the sanitizer: 1,383 passed, one
+failure, `VarkaTierWitnessSuite`, which asserts JIT tiers and traps in `VarkaMemorySanitizer.check`
+under the sanitizer; the gate runs it in its quiet phase without the sanitizer, where it passes
+here (7 of 7). The option matrix over the guard-relevant configurations, `guardDayProducers=false`,
+`guardUnderArm=false`, `exactRefusalStatus=true` and `rangeSets=false`, with the defaults: all
+five pass, 1,237 to 1,335 tests each, nothing failed or unfused.
+
+**Predictions.** 6.1 #4: `VarkaFarDaySuite` took 25 s with its sessions and 16 s of tests,
+against under 60 s and under 30 s - a ratio of about 0.5. 6.1 #1 to #3 wait for the pair.
+
+**Review** (`/code-review high`, eight findings). Fixed: the admission's second traversal on the
+plain path; the suite's hand-kept list of unbounded rows, now read from the table's domains so
+every other date row is held to declining nothing; the proofs README's wrapping; the range
+analysis now says the producer guard's reference configuration (`guardDayProducers=false`) is the
+one gap it cannot see, which computes such a lane wrongly by design, as before. Not changed:
+a slot-keyed bound past the input table is dropped as an ordinal-keyed one always was, which
+happens only when a declined entry's rollback is skipped (the `misdescribeRollback` fault
+injector), and then only for the declined entry's own columns; the per-shape widest bound (3.1's
+follow-up); and the four-argument `range` defaulting to no report, which the tests and proofs use.
+
+**Left for others.** The Spark-level fuzzer's value draws (`VarkaSparkFuzz`, row 298's file) stop
+at 0001-01-15 and 9999-12-01 and a wide draw of 200,000 days either side of the epoch, so it
+never draws a day past the bound; `farDates` there wants `date_from_unix_date` values past
+42400-02-29 and before day -5394572, and int32's ends.
