@@ -60,7 +60,8 @@ r.text(40, 44, "What random draws reach", size=32)
 r.text(
     40,
     84,
-    "the emitter's %d named mechanisms by family, and which fuzzer tests reach each" % total,
+    "the bytecode writer's %d named mechanisms by family, and which fuzzer tests reach each"
+    % total,
     size=20,
     color=GREY,
 )

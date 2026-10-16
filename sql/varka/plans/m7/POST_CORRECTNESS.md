@@ -74,11 +74,11 @@ Varka compiles an expression into a small tree of vector operations, then writes
 the tree. A reference evaluator, a plain Java interpreter of that tree written separately from
 the bytecode writer, says what each tree means. The question is whether the bytecode agrees.
 
-Random testing misses corners, so Varka also enumerates. Every well-typed tree up to five
-grammar productions, nearly four million at 32 and 64 bits, goes through the bytecode writer and
-is compared with the interpreter over data with nulls. Nothing failed. Each passing tree is also
-rewritten in ways that must not change its answer, such as permuting its outputs or adding an
-output nobody reads, and checked again.
+Random testing misses corners, so Varka also enumerates. Every well-typed tree up to five grammar
+productions, nearly four million at 32 and 64 bits, goes through the bytecode writer and is compared
+with the interpreter over data with nulls. Nothing failed. Each passing tree up to four productions
+is also rewritten in ways that must not change its answer, such as permuting its outputs or adding
+an output nobody reads, and checked again.
 
 The opening number came from JaCoCo, which instruments a generated class like any other. Most
 kernels were compared on one loop only, because a test usually runs a shape once, on one pattern
@@ -98,8 +98,9 @@ Today nearly nine in ten do, and most of the rest have only one loop by design.*
 
 The interpreter is Varka's own, so it is held to Spark's: for every expression Varka compiles,
 the interpreter must agree with Catalyst's own `eval` of the same expression. Then whole queries
-are compared with Spark. A random generator builds projections and filters over random data with
-nulls, runs each through Spark with Varka on and off, in both ANSI modes, and compares the rows.
+are compared with Spark. A fuzzer, a test that generates random expressions and data, builds
+projections and filters over data with nulls. It runs each through Spark with Varka on and off,
+in both ANSI modes, and compares the rows.
 A failure is shrunk to its smallest failing expression and saved, and saved failures replay on
 every pull request. In a census of 35,000 random queries, none disagreed.
 
@@ -108,7 +109,7 @@ the same results as with it off. A harvest of Spark's date tests runs each of 73
 projection and as a filter on both engines. None disagrees, and the 122 that raise an error raise
 the same one.
 
-The random generator has found real bugs. One was a filter fallback that failed on a column of
+The fuzzers have found real bugs. One was a filter fallback that failed on a column of
 `NULL` type where Spark answered. Not every bug came from a test: a filter that raised an error on
 rows Spark never evaluates was found by reading, and it is in the last section.
 
@@ -151,7 +152,7 @@ API and of memory, which is where the risk lives. Enumeration and the fuzzers ar
 
 **The JVM is trusted.** No proof reaches HotSpot. JDK 25 has a known C2 bug that can drop a
 scalar store followed by a masked vector store (JDK-8388492). Varka's stores should not take that
-shape, and comparing the interpreter with C2 should show a lane that went wrong. That is a
+shape, and comparing the interpreter with C2 should show a wrong value. That is a
 test, not a proof, and it covers only the JDKs and CPUs we run.
 
 **One assumption about stored data is unchecked.** A date column is assumed to hold years 1 to
@@ -161,11 +162,11 @@ code's scalar twin already gets the day of the month wrong there, and further ou
 month of 31,848. We read from the code that a cached column can reach that kernel. We have not
 run it end to end.
 
-**Random tests reach only what they draw.** The emitter names 39 mechanisms it uses to shape
+**Random tests reach only what they draw.** The bytecode writer names 39 mechanisms it uses to shape
 code. Random trees reach 29 of them. The paths that shrink a class that is too big are reached
-mostly by a few hand-sized wide queries, and three mechanisms no fuzzer reaches at all. The
-filter bug shows the limit plainly. Spark stops evaluating a filter's conditions at the first
-false one. Varka compiles some of the conditions and leaves the rest to Spark. When a kernel
+mostly by a few large expressions drawn for the purpose, and three mechanisms no fuzzer reaches at
+all. The filter bug shows the limit plainly. Spark stops evaluating a filter's conditions at the
+first false one. Varka compiles some of the conditions and leaves the rest to Spark. When a kernel
 declined a batch, Varka refiltered it with the compiled conditions alone, so they ran on rows an
 earlier condition would have excluded. Under ANSI that raised an error Spark never raised. Every
 test passed over it; reading a paper on testing showed where to look, and it is fixed.
@@ -184,7 +185,7 @@ outcome.
 
 ![What random draws reach](figures/svg/fig50-what-random-draws-reach.svg)
 
-*Figure 6. Random trees reach most of how the emitter shapes code, but few of the paths that
+*Figure 6. Random trees reach most of how the bytecode writer shapes code, but few of the paths that
 shrink a class that is too big. Three mechanisms no fuzzer reaches.*
 
 ## How these were measured
