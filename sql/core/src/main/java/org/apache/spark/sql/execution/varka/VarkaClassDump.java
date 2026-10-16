@@ -25,6 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.spark.internal.SparkLogger;
 import org.apache.spark.internal.SparkLoggerFactory;
+import org.apache.spark.sql.internal.SQLConf;
 
 /**
  * Writes an emitted kernel class to the configured dump directory under its {@code SourceFile}
@@ -64,8 +65,9 @@ public final class VarkaClassDump {
       } catch (Throwable e) {
         VarkaBatchLedger.rethrowIfFatal(e);
         DUMPED.remove(memoKey);
-        LOG.warn("Could not dump the Varka kernel class to " + directory
-            + "; execution is unaffected.", e);
+        // The directory is the user's setting, so the warning names it: the one thing to fix.
+        LOG.warn("Could not dump the Varka kernel class to " + directory + " (set by "
+            + SQLConf.VARKA_CLASS_DUMP_DIRECTORY().key() + "); execution is unaffected.", e);
       }
     }
   }

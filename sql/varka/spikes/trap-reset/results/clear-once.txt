@@ -1,0 +1,92 @@
+# Clear once: at 60 s WhiteBox clearMethodState on every method of those classes
+# Extracted from each run's run.log, load.before, load.after, seconds and exit (VARKA-370 9.3).
+# Head 7cc402b8f34, JDK 25.0.4.1, taskset -c 0-2, one JVM at a time; template warm-up off.
+
+== run clear1: run.sh <out> clear1 clear -Dr370.once=true -Dr370.firstMs=60000
+exit 0, seconds 293
+load before: 11:37:37 up 12:08,  1 user,  load average: 27.27, 35.23, 36.37
+load after:  11:42:30 up 12:13,  1 user,  load average: 23.18, 28.72, 33.31
+Tests: succeeded 1, failed 0, canceled 0, ignored 0, pending 0
++ warm-up verdicts: COMPILED 532, RELEASED 2, of the releases 0 before the deadline 
+deadline releases at iterations: 213 245 
+R370 mode=clear period=30000 agent=return code: 0 inst=true
+R370 t=60s classes=117 methods=6568 before traps=146 class_check=40 bimorphic=1 decompiles=43 methodsWithTraps=27 cleared 6568 in 7 ms | after traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+R370 trapped at t=2:
+R370 t=90s classes=139 methods=7381 before traps=8 class_check=0 bimorphic=0 decompiles=2 methodsWithTraps=3 in 0 ms
+R370 t=120s classes=189 methods=9667 before traps=9 class_check=0 bimorphic=0 decompiles=3 methodsWithTraps=4 in 0 ms
+R370 t=150s classes=189 methods=9667 before traps=9 class_check=0 bimorphic=0 decompiles=3 methodsWithTraps=4 in 0 ms
+R370 t=180s classes=189 methods=9667 before traps=9 class_check=0 bimorphic=0 decompiles=3 methodsWithTraps=4 in 0 ms
+R370 trapped at t=6:
+R370 t=210s classes=189 methods=9667 before traps=9 class_check=0 bimorphic=0 decompiles=3 methodsWithTraps=4 in 0 ms
+R370 t=240s classes=189 methods=9667 before traps=13 class_check=4 bimorphic=0 decompiles=3 methodsWithTraps=5 in 0 ms
+R370 t=270s classes=189 methods=9667 before traps=13 class_check=4 bimorphic=0 decompiles=3 methodsWithTraps=5 in 0 ms
+
+== run clear2: run.sh <out> clear2 clear -Dr370.once=true -Dr370.firstMs=60000
+exit 0, seconds 824
+load before: 12:10:52 up 12:41,  1 user,  load average: 35.33, 35.31, 27.14
+load after:  12:24:36 up 12:55,  1 user,  load average: 39.01, 42.94, 38.28
+Tests: succeeded 1, failed 0, canceled 0, ignored 0, pending 0
++ warm-up verdicts: COMPILED 531, RELEASED 3, of the releases 0 before the deadline 
+deadline releases at iterations: 213 245 365 
+R370 mode=clear period=30000 agent=return code: 0 inst=true
+R370 t=60s classes=117 methods=6568 before traps=138 class_check=19 bimorphic=1 decompiles=47 methodsWithTraps=25 cleared 6568 in 6 ms | after traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+R370 trapped at t=2:
+R370 t=90s classes=139 methods=7381 before traps=7 class_check=0 bimorphic=0 decompiles=1 methodsWithTraps=3 in 0 ms
+R370 t=120s classes=189 methods=9667 before traps=7 class_check=0 bimorphic=0 decompiles=1 methodsWithTraps=3 in 0 ms
+R370 t=150s classes=189 methods=9667 before traps=8 class_check=0 bimorphic=0 decompiles=2 methodsWithTraps=4 in 0 ms
+R370 t=180s classes=189 methods=9667 before traps=8 class_check=0 bimorphic=0 decompiles=2 methodsWithTraps=4 in 0 ms
+R370 trapped at t=6:
+R370 t=210s classes=189 methods=9667 before traps=8 class_check=0 bimorphic=0 decompiles=2 methodsWithTraps=4 in 0 ms
+R370 t=240s classes=189 methods=9667 before traps=8 class_check=0 bimorphic=0 decompiles=2 methodsWithTraps=4 in 0 ms
+R370 t=270s classes=189 methods=9667 before traps=8 class_check=0 bimorphic=0 decompiles=2 methodsWithTraps=4 in 0 ms
+R370 t=300s classes=189 methods=9667 before traps=8 class_check=0 bimorphic=0 decompiles=2 methodsWithTraps=4 in 0 ms
+R370 trapped at t=10:
+R370 t=331s classes=189 methods=9667 before traps=8 class_check=0 bimorphic=0 decompiles=2 methodsWithTraps=4 in 0 ms
+R370 t=361s classes=189 methods=9667 before traps=8 class_check=0 bimorphic=0 decompiles=2 methodsWithTraps=4 in 0 ms
+R370 t=391s classes=189 methods=9667 before traps=8 class_check=0 bimorphic=0 decompiles=2 methodsWithTraps=4 in 0 ms
+R370 t=421s classes=189 methods=9667 before traps=8 class_check=0 bimorphic=0 decompiles=2 methodsWithTraps=4 in 0 ms
+R370 trapped at t=14:
+R370 t=451s classes=189 methods=9667 before traps=8 class_check=0 bimorphic=0 decompiles=2 methodsWithTraps=4 in 0 ms
+R370 t=481s classes=189 methods=9667 before traps=8 class_check=0 bimorphic=0 decompiles=2 methodsWithTraps=4 in 0 ms
+R370 t=511s classes=189 methods=9667 before traps=8 class_check=0 bimorphic=0 decompiles=2 methodsWithTraps=4 in 0 ms
+R370 t=541s classes=189 methods=9667 before traps=12 class_check=4 bimorphic=0 decompiles=2 methodsWithTraps=5 in 0 ms
+R370 trapped at t=18: VectorMask.fromLong=cc4/d0
+R370 t=571s classes=189 methods=9667 before traps=12 class_check=4 bimorphic=0 decompiles=2 methodsWithTraps=5 in 0 ms
+R370 t=601s classes=189 methods=9667 before traps=12 class_check=4 bimorphic=0 decompiles=2 methodsWithTraps=5 in 0 ms
+R370 t=631s classes=189 methods=9667 before traps=12 class_check=4 bimorphic=0 decompiles=2 methodsWithTraps=5 in 0 ms
+R370 t=661s classes=189 methods=9667 before traps=12 class_check=4 bimorphic=0 decompiles=2 methodsWithTraps=5 in 0 ms
+R370 trapped at t=22: VectorMask.fromLong=cc4/d0
+R370 t=692s classes=189 methods=9667 before traps=12 class_check=4 bimorphic=0 decompiles=2 methodsWithTraps=5 in 0 ms
+R370 t=722s classes=189 methods=9667 before traps=12 class_check=4 bimorphic=0 decompiles=2 methodsWithTraps=5 in 0 ms
+R370 t=752s classes=189 methods=9667 before traps=12 class_check=4 bimorphic=0 decompiles=2 methodsWithTraps=5 in 0 ms
+R370 t=782s classes=189 methods=9667 before traps=12 class_check=4 bimorphic=0 decompiles=2 methodsWithTraps=5 in 0 ms
+R370 trapped at t=26: VectorMask.fromLong=cc4/d0
+R370 t=812s classes=189 methods=9667 before traps=12 class_check=4 bimorphic=0 decompiles=2 methodsWithTraps=5 in 0 ms
+
+== run l4clear: run.sh <out> l4clear clear -Dr370.once=true -Dr370.firstMs=60000 -Dvarka.matrix.config=lanesOverride=4 (ITER=100)
+exit 0, seconds 163
+load before: 12:40:54 up 13:11,  1 user,  load average: 28.81, 30.72, 33.39
+load after:  12:43:37 up 13:14,  1 user,  load average: 26.10, 28.71, 32.19
+Tests: succeeded 1, failed 0, canceled 0, ignored 0, pending 0
++ warm-up verdicts: COMPILED 141, RELEASED 1, of the releases 0 before the deadline 
+deadline releases at iterations: 23 
+R370 mode=clear period=30000 agent=return code: 0 inst=true
+R370 t=60s classes=117 methods=6568 before traps=200 class_check=76 bimorphic=25 decompiles=52 methodsWithTraps=43 cleared 6568 in 2 ms | after traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+R370 trapped at t=2: IntSpecies.dummyVector=cc4/d0
+R370 t=90s classes=139 methods=7381 before traps=25 class_check=4 bimorphic=0 decompiles=5 methodsWithTraps=6 in 0 ms
+R370 t=120s classes=189 methods=9667 before traps=37 class_check=4 bimorphic=11 decompiles=9 methodsWithTraps=7 in 0 ms
+R370 t=150s classes=189 methods=9667 before traps=55 class_check=12 bimorphic=11 decompiles=9 methodsWithTraps=10 in 0 ms
+
+== run l4clear2: run.sh <out> l4clear2 clear -Dr370.once=true -Dr370.firstMs=60000 -Dvarka.matrix.config=lanesOverride=4 (ITER=100)
+exit 0, seconds 178
+load before: 12:53:54 up 13:24,  1 user,  load average: 17.61, 23.94, 29.33
+load after:  12:56:52 up 13:27,  1 user,  load average: 22.26, 22.12, 27.58
+Tests: succeeded 1, failed 0, canceled 0, ignored 0, pending 0
++ warm-up verdicts: COMPILED 139, RELEASED 3, of the releases 0 before the deadline 
+deadline releases at iterations: 5 18 23 
+R370 mode=clear period=30000 agent=return code: 0 inst=true
+R370 t=60s classes=117 methods=6568 before traps=225 class_check=68 bimorphic=42 decompiles=66 methodsWithTraps=48 cleared 6568 in 5 ms | after traps=0 class_check=0 bimorphic=0 decompiles=0 methodsWithTraps=0
+R370 trapped at t=2: Double256Vector.convertShape=cc0/d3 AbstractVector.convert0=cc4/d0 AbstractVector.convertShapeTemplate=cc4/d0
+R370 t=90s classes=139 methods=7381 before traps=12 class_check=8 bimorphic=0 decompiles=3 methodsWithTraps=2 in 0 ms
+R370 t=120s classes=189 methods=9667 before traps=55 class_check=28 bimorphic=4 decompiles=11 methodsWithTraps=11 in 0 ms
+R370 t=150s classes=189 methods=9667 before traps=59 class_check=31 bimorphic=5 decompiles=12 methodsWithTraps=13 in 0 ms
