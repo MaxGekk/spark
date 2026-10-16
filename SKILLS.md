@@ -142,6 +142,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Error Prone and NullAway run beside the build, and the pending list only shrinks](sql/varka/skills/testing-and-debugging.md#error-prone-and-nullaway-run-beside-the-build-and-the-pending-list-only-shrinks)
 * [A Varka suite in JUnit 5: `@VarkaSuite`, a sentence per test, and ScalaTest's lines](sql/varka/skills/testing-and-debugging.md#a-varka-suite-in-junit-5-varkasuite-a-sentence-per-test-and-scalatests-lines)
 * [A Varka node in the plan is not a kernel evaluating the expression](sql/varka/skills/testing-and-debugging.md#a-varka-node-in-the-plan-is-not-a-kernel-evaluating-the-expression)
+* [A sql/core suite that collects dates makes its session active first](sql/varka/skills/testing-and-debugging.md#a-sqlcore-suite-that-collects-dates-makes-its-session-active-first)
 * [A kernel failure leaves a file you can replay, and where each failure first surfaces](sql/varka/skills/testing-and-debugging.md#a-kernel-failure-leaves-a-file-you-can-replay-and-where-each-failure-first-surfaces)
 * [A guard's domain is tested on partitions Spark cuts, with the status read off the JFR event](sql/varka/skills/testing-and-debugging.md#a-guards-domain-is-tested-on-partitions-spark-cuts-with-the-status-read-off-the-jfr-event)
 * [Cost predictions run optimistic: the calibration table](sql/varka/skills/testing-and-debugging.md#cost-predictions-run-optimistic-the-calibration-table)
@@ -172,6 +173,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [C2 vectorizes unit-stride columns in the heap and off it, and never rows 32 bytes apart](sql/varka/skills/the-jit.md#c2-vectorizes-unit-stride-columns-in-the-heap-and-off-it-and-never-rows-32-bytes-apart)
 * [Value records crash C2's escape analysis on the early-access Valhalla build, and the crash is in a method handle](sql/varka/skills/the-jit.md#value-records-crash-c2s-escape-analysis-on-the-early-access-valhalla-build-and-the-crash-is-in-a-method-handle)
 * [With the intrinsics off C2 takes twenty seconds a loop method, and an epilogue's compile 337 MB](sql/varka/skills/the-jit.md#with-the-intrinsics-off-c2-takes-twenty-seconds-a-loop-method-and-an-epilogues-compile-337-mb)
+* [With the trap limits raised, a masked loop traps thousands of times and still reads as settled](sql/varka/skills/the-jit.md#with-the-trap-limits-raised-a-masked-loop-traps-thousands-of-times-and-still-reads-as-settled)
 
 #### [The Vector API and vector width](sql/varka/skills/vector-api-and-width.md)
 * [Vector API on HotSpot, Measured (JDK 25, x86-64)](sql/varka/skills/vector-api-and-width.md#vector-api-on-hotspot-measured-jdk-25-x86-64)
@@ -184,6 +186,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Converting to a wider element type splits a vector into disjoint halves that rejoin with an OR](sql/varka/skills/vector-api-and-width.md#converting-to-a-wider-element-type-splits-a-vector-into-disjoint-halves-that-rejoin-with-an-or)
 * [An exact quotient makes the round-down carry dead code, and the op counter has to see it](sql/varka/skills/vector-api-and-width.md#an-exact-quotient-makes-the-round-down-carry-dead-code-and-the-op-counter-has-to-see-it)
 * [The Vector API's math lanes match no scalar library's bits on any host, and a probe that lets C2 fall back measures `Math` against itself](sql/varka/skills/vector-api-and-width.md#the-vector-apis-math-lanes-match-no-scalar-librarys-bits-on-any-host-and-a-probe-that-lets-c2-fall-back-measures-math-against-itself)
+* [The JDK's SLEEF sends `exp` and `pow` to infinity early, SVML does not, and the Arm runner has BitPerm](sql/varka/skills/vector-api-and-width.md#the-jdks-sleef-sends-exp-and-pow-to-infinity-early-svml-does-not-and-the-arm-runner-has-bitperm)
 * [SLEEF and OpenVML, read for Varka: no integer division anywhere, and what does transfer](sql/varka/skills/vector-api-and-width.md#sleef-and-openvml-read-for-varka-no-integer-division-anywhere-and-what-does-transfer)
 * [A vector divide is a divider, whatever the lane width; a multiply-high is not](sql/varka/skills/vector-api-and-width.md#a-vector-divide-is-a-divider-whatever-the-lane-width-a-multiply-high-is-not)
 * [A refusal at a forced width is the back end's, not the lane count's](sql/varka/skills/vector-api-and-width.md#a-refusal-at-a-forced-width-is-the-back-ends-not-the-lane-counts)

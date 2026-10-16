@@ -20,6 +20,8 @@ VARKA-241 added the long lane's division forms, and VARKA-242 the calendar's div
 | `range_calendar.smt2` | the analysis's calendar rules - `add_months` with the month count symbolic, `last_day`, `trunc`, `make_date`, the fields - over `java.time`'s closed forms, pinned to the JVM; swept independently by `VarkaRangeRulesSuite` (VARKA-281) | `VarkaProofFiles` |
 | `time_bounds.smt2` | the six bounds `VarkaTimeCompiler` states on the long lane, under the `TIME` type's range (VARKA-281) | `VarkaProofFiles` |
 | `spec/STANDARD.md` | not a proof: the SQL standard's definition of each operation the coverage table lowers that the standard fixes, what the proofs are to be restated against (VARKA-243); it holds no SMT-LIB, and `dev/varka_prove.sh` reads only this folder's own `.smt2` files | hand |
+| `spec/DELTAS.md` | not a proof: Spark's departures from `STANDARD.md` as named patches to its definitions, each with the test in `VarkaStandardDeltasSuite` that shows Spark doing it, so a Spark-mode proof is the definition plus its deltas (VARKA-244) | hand |
+| `spec/EXTENSIONS.md` | not a proof: the coverage table's operations the standard does not define, each marked the standard's by reduction, ISO 8601's or Spark's, and defined over the lane values (VARKA-244) | hand |
 
 ## Running them
 

@@ -1248,7 +1248,12 @@ to 377), and three are the owner's to decide (section 7, questions 2 to 4).*
    committed Arm probe (`dev/varka_canary/mathlane-aarch64-neoverse-n2.txt`) reads `EXP` at one step
    over its 262,144 inputs because none falls in the band, and a bit-pattern draw will never reach
    it. `expm1` uses the right constant **[V]**. Hence 358's output guard on SLEEF hosts and 367's
-   fixed vector.
+   fixed vector. *Observed 16 October 2026* (canary run 38884285755, the new
+   `mathlane-aarch64-neoverse-n2.txt`): on the Neoverse N2 runner every `EXP` lane from the first
+   double above the constant through 709.782712893384 is +Inf, and `POW` is +Inf wherever
+   y * ln(x) passes the constant, `pow(Double.MAX_VALUE, 1)` included **[V]**. SVML uses the true
+   limit: its band lanes equal `StrictMath` on the EPYC runner and on the laptop. At AVX2 SVML binds
+   no `POW`, so that host's `POW` row is the fallback **[V]**.
 2. **`VectorMask.fromLong` is the Java fallback on most Arm cores (375, 331).** `aarch64_vector.ad`
    refuses `VectorLongToMask` unless the core has SVE2 BitPerm (line 217) **[V]**. The emitter
    builds every validity mask with it (`VarkaBodyEmitter` 195, `VarkaVectorWalk` 355, 672 and 738,
@@ -1258,7 +1263,12 @@ to 377), and three are the owner's to decide (section 7, questions 2 to 4).*
    implementation **[I]**. Whether the Arm runner has BitPerm is not known: the canary's feature
    regex folds `svebitperm` into `sve`, and its log filter drops the JVM's feature lines. 374's
    allocation samples at a 128-bit x86 species (`maskFromArray`, `Mask.prepare`) are fallback code
-   too, and one run with `-XX:+PrintIntrinsics` would say why **[I]**.
+   too, and one run with `-XX:+PrintIntrinsics` would say why **[I]**. *Observed 16 October 2026*
+   (the same run): the Arm runner has BitPerm. `svebitperm` appears in `/proc/cpuinfo` and in the
+   JVM's feature line, and `fromBitsCoerced` inside `fromLong` reads `late inline succeeded`
+   wherever the species is a constant, with no `not supported` line **[V]**. So the runner cannot show the
+   fallback that NEON-only and SVE1 cores take, and 375's allocation reading for those cores needs
+   another host (`skills/vector-api-and-width.md`, the SLEEF and BitPerm entry).
 3. **Row 365 departs from a recent upstream choice (365; question 3).** The accessor that keeps
    "BigDecimal-backed Decimal semantics" is upstream's: SPARK-59443, merged on 21 September 2026
    (fork commit `f2dcec5bdd6`), reduced allocations while keeping "existing Spark decimal conversion
