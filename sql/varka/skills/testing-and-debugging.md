@@ -1308,6 +1308,8 @@ predicted. Add the line when the prediction is scored, whichever way it went.
 | VARKA-281 (6.1 #3) | the calendar sweep suite under 20 s | 1.5 s for its eight tests over 20 million days each | 0.08 | the estimate priced single-threaded `LocalDate` decodes and then doubled; a parallel stream over the test JVM's cores and the JIT's inlining of the decode left little of either |
 | VARKA-244 (5.1 #1) | a new sql/core suite under 40 s, its tests under 10 s | 25 s, its tests 8.4 s | 0.6 | predicted at VARKA-243's ratio of 2, which a suite of the same shape repeated; a later run at load average 46 took 72 s |
 | VARKA-317 (6.1 #1) | the coverage differential's added test time at most 10 s | 0.3 s: the planted test 126 ms, the extended one 182 ms | 0.03 | the estimate priced a kernel compile per query and doubled it by VARKA-243's ratio; where the 0.3 s went was not split |
+| VARKA-318 (6.1 #1) | the compile-only family switch suite under 5 s | 1.9 to 2.3 s, most of it resolving the 92 coverage rows | 0.46 | a first draft that resolved the rows once per test instance took 13.8 s; reading the table in `@BeforeAll` removed it |
+| VARKA-318 (6.1 #2) | the sql/core switch suite's tests under 10 s | 3.7 s alone, about 5 s in the gate | 0.37 | short queries over one cached view, as VARKA-315's eight took 4.5 s |
 
 What the table says so far: a check that adds a run per batch or a read per call costs more than
 the plan's arithmetic, because the arithmetic counts the kernel's work and not the harness's

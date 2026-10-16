@@ -180,3 +180,59 @@ There is no benchmark, since no kernel changes. The cost is test time.
 1. This plan and the row.
 2. The switches, the compiler gates and the messages, with both suites and the docs.
 3. Section 9 and the row marked done, after the review.
+
+## 9. Outcome
+
+**What was built.** It follows section 3, with two changes the self-review made (9.2). There are
+five session settings, `spark.sql.codegen.varka.family.{calendar,interval,time,condition,
+intArithmetic}.enabled`, all true by default and all 5.0.0 with `NOT_APPLICABLE`. `SQLConf`
+derives them from `VarkaFamily`, so each key and its coverage text is written once. They are bound
+in `VarkaSessionEmit` beside the emit settings and passed beside the options at every compiler
+call in `sql/core`. A family that is off declines its nodes with "Varka's <family> family is
+switched off (<switch>=false)". A failure inside a family at planning ends its `INTERNAL_ERROR`
+sentence with "To plan the query with Varka's <family> family on Spark's row engine, set
+<switch> to false and retry.". The context record of a planning, emission or kernel failure
+carries a `families:` line naming the kernel's families with their switches. The docs list the
+switches, and the runbook names them in Troubleshooting's opening step, in the wrong-answer step,
+in the who-reads table and in "When Varka falls back, and when it fails".
+
+### 9.1 Tests and time
+
+* `VarkaFamilySwitchSuite` (catalyst, JUnit) has four tests. One compiles each of the 92 coverage
+  rows under each family off and checks it against the chain's claims. Its two-sided oracle found
+  the two cases 9.2 describes. The suite takes 1.9 to 2.3 s, including reading the coverage
+  table, against a prediction of under 5 s (6.1 #1, ratio 0.46).
+* `VarkaFamilySwitchQuerySuite` (sql/core) has three tests: each switch set by `SET`, the
+  condition switch on a filter, and the planning failure with its retry. Its tests take 3.7 s run
+  alone and about 5 s in the gate, against a prediction of under 10 s (6.1 #2, ratio 0.37). The
+  `VarkaErrorContextSuite` assertion adds nothing measurable.
+* The gate (`dev/varka_matrix.sh --defaults --split 4`, 107 suites, 862 s) gave 1,371 passed and
+  two failures. The first was this suite's oracle on `unix_date(d)`, fixed in 9.2. The second was
+  `VarkaTierWitnessSuite` "the witness sees each tier", a `speculate_null_assert` trap in
+  `VarkaMemorySanitizer.check`. It fails identically on `varka-314b`'s own gate run of 11:07 that
+  day, so it predates this task (6.1 #3 holds). After the fixes, the six affected suites rerun
+  together passed but for that one. `SparkConfigBindingPolicySuite` passes.
+
+### 9.2 Where the plan was wrong
+
+* **3.2 said** a node one family's lowering builds directly runs under the caller's switch, and
+  the suite at first listed `d - ym` as the case. The review showed that a user switching the
+  interval family off would still get the interval negation, so the calendar's two direct builds
+  of interval nodes (`d - ym`'s negation, the years-to-months cast) now run under the interval
+  switch through the same `inFamily` the chain uses. What still runs under the caller's switch is
+  helper code that builds no node of its own: `arithOver`'s overflow decision, which int and
+  interval arithmetic share, and the `foldPick` that `greatest`/`least` borrow.
+* **2 said** that only a `BoundReference` or `Literal` is a read. The review found the relabel
+  casts type coercion inserts (`TIME(3)` to `TIME(6)`, the interval unit relabels), which the
+  time and interval families claim: switching time off declined `t6 < t3`. A cast of a read that
+  lowers to the bare read is now a read too, and a cast of a read that computes is still the
+  family's. A function that happens to lower to a bare read, `unix_date(d)`, stays its family's,
+  which the gate's first run caught.
+
+### 9.3 Review findings not taken
+
+* The overloads without `familiesOff` stay public: they are the tests' and tools' entry points
+  (every family on), and every call in `sql/core`'s main code passes the session's set, which
+  section 4 lists. Folding the options and the set into one compile-context value would close the
+  gap for good, at the cost of changing every compiler signature, and is not this task's.
+* `docs/sql-varka.md`'s table repeats `VarkaFamily.covers()` by hand. No suite reads that table.
