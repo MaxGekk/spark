@@ -326,6 +326,48 @@ hours; what decides it is the number the first run leaves, which the report stat
 
 * The full run's survivors, each a test or a note, after the owner's run.
 * The two dead `Slots.plan` overloads: delete them, or leave their mutants as uncovered by
-  construction; an owner's call, since it touches the emitter.
-* `generated.md`'s new families (9.1), for rows 284 and 285.
+  construction; an owner's call, since it touches the emitter. Deleted (9.6).
+* `generated.md`'s new families (9.1), for rows 284 and 285. Handed to them (9.6).
+
+### 9.6 The owner's decisions, 16 October 2026
+
+The owner answered 9.5 and the open tooling question. **Correction to 3.3**: the emitter is no
+longer untouched - item 1 deletes code from `Slots` - though no byte moves.
+
+1. **Delete the two dead `Slots.plan` overloads.** Done: the six- and seven-argument forms, which
+   only forwarded to the eight-argument one that both callers in `VarkaBodyEmitter` use, are gone,
+   and their documentation merges into the remaining method's. The proof: `VarkaEmittedBytesSuite`
+   passes, so `emitted_bytes.json` is byte-identical, and so do the suites whose tests name `Slots`
+   or its per-group planning (`VarkaEmitterBudgetSuite`, `VarkaUnreadLocalsSuite`,
+   `VarkaEmitterFramesSuite`, `VarkaSmallTreeSuite`), `VarkaIrFuzzSuite` at its default size and
+   `VarkaEmitterValiditySuite`: 83 tests passed, 3 opt-in tests cancelled as by default.
+2. **Skip `org.pitest:pitest-junit5-plugin` for this run.** Its publisher is fine (the pitest
+   project, the same as PIT's, on Maven Central), but its compatibility with the JUnit 6.0.3 Spark
+   uses is unverified, and the JUnit 5 `@VarkaSuite` classes test the method names, the platform,
+   the range rules and the reproduction files, not `Slots` or `Analysis`, so the run loses no test
+   of its two classes by leaving them out (section 2).
+3. **`generated.md`'s jump from 14,745 emitted classes to 61,599 is a note for rows 284 and 285,
+   not a new row.** Handed to them: `VARKA-284.md` and `VARKA-285.md` each end with a dated line
+   naming the families 9.1 lists.
+4. **The full mutation run waits for the owner's idle window**; 9.2's command is unchanged.
+
+**Correction to 9.2's mutant count.** The dry run again, on an idle machine after the deletion:
+**1,760 mutants**, 1,006 in `Slots` and 754 in `Analysis`; its whole PIT step took 194 s, against
+9.2's 330 s for the coverage phase alone under load. The
+deletion removed 4 mutants from `Slots` (each overload's forwarding call and its null return), as a
+dry run of `Slots` alone before the deletion shows (1,010); the other 20 come from the master merge
+of VARKA-314, which reworked `Analysis`' and `Slots`' invariant failures into Spark's internal
+errors. 9.2's estimate stands, since the count it scales with moved by under one per cent.
+
+**The coverage report, re-rendered** from a coverage run on this commit (`dev/varka_gen_coverage.sh`
+at its defaults, 103 suites in 528 s; the same `VarkaTierWitnessSuite` trap as 9.1, under the
+memory sanitizer, the one failure): the two overloads leave the list of methods never entered, and
+every `Slots` line of the "never taken" table after them moves up ten. The emitter now counts 873
+methods, 853 entered, 90.1% of its branches; the compiler 218 methods, 83.7%; `Analysis` 96.2% and
+`Slots` 92.9%, unchanged. The method counts moved with the master merge (`VarkaErrors` grew from 5
+methods to 12, and its `illegalState` is never entered), so prediction 4's count is now 20, not 21.
+The re-render found the report broken by the same merge: `VarkaDebugInfo`'s read-side mapper now
+throws through `VarkaErrors`, whose Spark exception lives in `common/utils`, and the analysers
+failed to load it. `dev/varka_gen_coverage.sh` now puts `common/utils`' classes on their classpath.
+`generated.md` stays as committed, as 9.1 says.
 

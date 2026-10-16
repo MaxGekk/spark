@@ -31,7 +31,8 @@
 # own report cannot read the result, since the suites emit one class name with different bytes,
 # so dev/varka_gen_coverage/VarkaGenCoverage.java analyses each class with a builder of its own.
 # It runs as a single-file program against org.jacoco.core and ASM from the local Maven
-# repository, fetched there if missing, and catalyst's built classes: no build gains a dependency.
+# repository, fetched there if missing, and catalyst's and common/utils' built classes: no build
+# gains a dependency.
 #
 # Exit status: the suites' (a failed suite still reports the coverage it reached), else the
 # analyser's.
@@ -98,7 +99,11 @@ CATALYST=$ROOT/sql/catalyst/target/scala-2.13/classes
 [ -d "$CATALYST" ] || { echo "varka_gen_coverage: no catalyst classes at $CATALYST" >&2; exit 1; }
 [ -f "$OUT/jacoco.exec" ] || { echo "varka_gen_coverage: no $OUT/jacoco.exec" >&2; exit 1; }
 mkdir -p "$(dirname "$REPORT")"
-cp="$CORE:$CATALYST"
+UTILS=$ROOT/common/utils/target/scala-2.13/classes
+[ -d "$UTILS" ] || { echo "varka_gen_coverage: no common/utils classes at $UTILS" >&2; exit 1; }
+# The emitter's errors are Spark's (VarkaErrors), so a catalyst class that throws one, as the line
+# map's reader does, needs common/utils to load.
+cp="$CORE:$CATALYST:$UTILS"
 for a in asm asm-commons asm-tree; do cp+=":$M2/org/ow2/asm/$a/$ASM/$a-$ASM.jar"; done
 java -cp "$cp" dev/varka_gen_coverage/VarkaGenCoverage.java "$OUT/jacoco.exec" "$OUT/classes" \
   "$REPORT" || exit 1
