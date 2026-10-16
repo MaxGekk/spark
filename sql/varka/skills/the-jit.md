@@ -954,3 +954,27 @@ From VARKA-272's forked arms (14 October 2026, `VARKA-272.md` 2.9).
 - `StressUnstableIfTraps` throws away a warm-up's code on random traps: two int-lane cases in five
   never settled, each at the 10 s deadline per warmed history, seven times the arm's cost. The
   `quiet` histories take their traps on purpose, so the flag stays out of the nightly's stress set.
+
+## With the trap limits raised, a masked loop traps thousands of times and still reads as settled
+
+From VARKA-378 (16 October 2026, `VARKA-378.md` 9.2), which tried to plant the deoptimization
+cycle by raising the JVM's trap limits under the nightly's NULL-mode guard: the IR fuzzer's
+compiled test, draws 0 to 99 a lane at seed 20260903, with `-XX:PerMethodTrapLimit=100000
+-XX:PerBytecodeTrapLimit=100000` (the census's arm L, `VARKA-326.md` 3.1).
+
+* **The traps did not stop, and the cycle did not appear.** The masked loops trapped at
+  `profile_predicate` 320,187 times at the preferred width and 555,548 times at 128 bits; int-lane
+  draw 67 alone took 3,898 traps on `loopMasked0` in 0.55 s, every one `maybe_recompile`, with
+  three `made not entrant` lines over the whole class. Yet every kernel was reported settled,
+  draw 67 at 897 ms, and VARKA-189's rule (a loop method made not entrant three or more times with
+  more than four traps) counted no kernel cycling: the guard counted 0 and 1 against its ratchets.
+* **Why both checks miss it.** The warm-up's verdict reads the code list, which shows the loop at
+  tier 4 between traps; the cycle rule counts recompiles, and a `maybe_recompile` trap under raised
+  limits throws the frame to the interpreter without throwing the code away. So a loop that
+  leaves its compiled code at every such trap is invisible to the warm-up's check, to
+  the nightly's `deopt` step and to the `deoptnull` count alike.
+* **Under the defaults this form ends**: `PerBytecodeTrapLimit` 4 and `PerMethodTrapLimit` 100 make
+  C2 recompile without the failing predicate, which is the cycle those checks do see. So it is not
+  what runs today; it is what an operator's raised limits would turn the cycle into
+  (`VARKA-295.md` 9.6 raised `PerMethodTrapLimit` to end a different trap sum). A check that wants to see it counts traps per
+  second of C2 code, not recompiles.
