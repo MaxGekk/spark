@@ -55,20 +55,21 @@ usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
 set -euo pipefail
 label=census; from=0; draws=400; jvms=4; cpus=6; cpu_base=0; options=defaults; width=pref
 settle=30000; seed=20260903; only=; out=; jvm_args=(); guard=0; build=0; skip_build=
+census_flags=()
 guard_file=dev/varka_deopt_census_guard.tsv
 while [ $# -gt 0 ]; do
   case "$1" in
     --label) label="$2"; shift 2 ;;
-    --from) from="$2"; shift 2 ;;
-    --draws) draws="$2"; shift 2 ;;
-    --jvms) jvms="$2"; shift 2 ;;
-    --cpus) cpus="$2"; shift 2 ;;
-    --cpu-base) cpu_base="$2"; shift 2 ;;
-    --options) options="$2"; shift 2 ;;
-    --width) width="$2"; shift 2 ;;
-    --settle-ms) settle="$2"; shift 2 ;;
-    --seed) seed="$2"; shift 2 ;;
-    --only) only="$2"; shift 2 ;;
+    --from) from="$2"; census_flags+=("--from"); shift 2 ;;
+    --draws) draws="$2"; census_flags+=("--draws"); shift 2 ;;
+    --jvms) jvms="$2"; census_flags+=("--jvms"); shift 2 ;;
+    --cpus) cpus="$2"; census_flags+=("--cpus"); shift 2 ;;
+    --cpu-base) cpu_base="$2"; census_flags+=("--cpu-base"); shift 2 ;;
+    --options) options="$2"; census_flags+=("--options"); shift 2 ;;
+    --width) width="$2"; census_flags+=("--width"); shift 2 ;;
+    --settle-ms) settle="$2"; census_flags+=("--settle-ms"); shift 2 ;;
+    --seed) seed="$2"; census_flags+=("--seed"); shift 2 ;;
+    --only) only="$2"; census_flags+=("--only"); shift 2 ;;
     --jvm-arg) jvm_args+=("$2"); shift 2 ;;
     --out) out="$2"; shift 2 ;;
     --guard) guard=1; build=1; shift ;;
@@ -101,7 +102,9 @@ run_jvm() {
   [ "$w" != pref ] && width_arg=("-XX:MaxVectorSize=$w")
   [ -n "$only" ] && only_arg=("-Dvarka.fuzz.only=$only")
   mkdir -p "$dir/tmp"
-  (cd "$dir" && SPARK_TESTING=1 SPARK_SCALA_VERSION=2.13 \
+  # `set +e` inside the subshell: a JVM that fails must still leave its exit file, not end the
+  # script. Its standard input is closed, so it cannot read the guard's count-file rows.
+  (set +e; cd "$dir" && SPARK_TESTING=1 SPARK_SCALA_VERSION=2.13 \
     taskset -c "$first-$((first + ncpu - 1))" \
     java $opts "-Djava.io.tmpdir=$dir/tmp" -Dvarka.ownJvm=true "-Dvarka.fuzz.seed=$s" \
     "-Dvarka.fuzz.compiled=$hi" "-Dvarka.fuzz.compiledFrom=$lo" \
@@ -112,7 +115,7 @@ run_jvm() {
     "${width_arg[@]}" "${jvm_args[@]}" "${only_arg[@]}" -cp "$cp" \
     org.scalatest.tools.Runner -oW \
     -s org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaIrFuzzSuite \
-    -z "compiled by C2" > "$dir/run.log" 2>&1; echo $? > "$dir/exit")
+    -z "compiled by C2" < /dev/null > "$dir/run.log" 2>&1; echo $? > "$dir/exit")
 }
 provenance() {
   local dirty
@@ -124,7 +127,10 @@ provenance() {
   echo "args:    $*"
 }
 if [ "$guard" -eq 1 ]; then
-  [ -n "$only" ] && { echo "--guard runs the count file's range; --only does not apply"; exit 2; }
+  if [ "${#census_flags[@]}" -gt 0 ]; then
+    echo "--guard runs the count file's configuration; ${census_flags[*]} do not apply" >&2
+    exit 2
+  fi
   options=defaults
   # The reader proves itself on a recorded cycling kernel before it reads tonight's.
   dev/varka_deopt_census.py --self-test
@@ -137,11 +143,13 @@ if [ "$guard" -eq 1 ]; then
       "cores $first-$((first + ncpu - 1)), load $(cut -d' ' -f1-3 /proc/loadavg)"
     run_jvm "$out/$w/run-0" "$lo" "$((lo + n))" "$first" "$ncpu" "$w" "$settle_ms" "$s"
     echo "   $((SECONDS - start)) s, exit $(cat "$out/$w/run-0/exit")"
-  done < <(grep -v -e '^#' -e '^width' -e '^[[:space:]]*$' "$guard_file")
+  done < <(dev/varka_deopt_census.py --guard-rows "$guard_file")
   echo "load:    $(cut -d' ' -f1-3 /proc/loadavg) at end" >> "$out/provenance.txt"
-  dev/varka_deopt_census.py --guard "$guard_file" "$out" | tee "$out/summary.txt"
-  # The reader's status, not tee's: it is the verdict.
-  exit "${PIPESTATUS[0]}"
+  # The reader's status is the verdict, so it is kept apart from the copy to the terminal.
+  verdict=0
+  dev/varka_deopt_census.py --guard "$guard_file" "$out" > "$out/summary.txt" || verdict=$?
+  cat "$out/summary.txt"
+  exit "$verdict"
 fi
 per=$(( (draws + jvms - 1) / jvms ))
 provenance "label=$label from=$from draws=$draws jvms=$jvms options=$options width=$width" \

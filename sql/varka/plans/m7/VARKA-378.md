@@ -184,7 +184,7 @@ and 15 at the four runs' starts and up to 46 during them.
   line, six of its traps and its made-not-entrant lines) fails the guard at a ratchet of 0 and
   passes at 1; four traps are not counted; a settled kernel alone below the ratchet passes and asks
   for it to be lowered; a JVM whose exit file is not 0 fails, and so does a width with no kernel.
-  All six cases pass; the comparison mutated to `>=` fails two of them.
+  All six cases pass; the comparison mutated to `>=` fails two of them. (The review of 9.6 added a seventh, a JVM that left no exit file.)
 * **A planted kernel over a real night's logs**: run 3's two width directories, at the committed
   ratchets (128 bits at its ratchet, 3), with one more run directory under the 128-bit width
   holding one recorded kernel past the cut - run 1's long-lane draw 25 at the preferred width,
@@ -232,3 +232,28 @@ gives about 5 minutes a width. `--skip-deoptnull` leaves it out.
 * Lower the preferred width's ratchet from the first two quiet nightly runs (9.1).
 * The trap-without-recompile form of 9.2 for the masked-loop scope item.
 * The calibration line of 9.4 item 2.
+
+### 9.6 The review
+
+`/code-review high` on the branch against master found ten points; fixed:
+
+* **A failing JVM ended the guard.** Under `set -e` the subshell around `java` exited before it
+  wrote its exit file, so the second width never ran and no verdict was printed. It now runs with
+  `set +e`; checked with `--jvm-arg -Xmx1k` over a five-draw count file: both widths ran, both exit
+  files read 1, and the verdict failed naming them. The self-test gained the missing-exit-file case.
+* **The JVM inherited the loop's standard input**, the count file's rows; it now reads
+  `/dev/null`.
+* **The verdict's status** is taken from the reader directly rather than from a pipeline with `tee`.
+* **One parser for the count file**: the shell reads its rows through
+  `dev/varka_deopt_census.py --guard-rows`, which rejects a reordered header, a wrong column count
+  and a cell that is not a number.
+* **`--guard` refuses the census's own flags** (`--draws`, `--width`, `--settle-ms` and the rest)
+  instead of ignoring them.
+* **The nightly's quick-trial usage lines** skip the new step too.
+* **The census report's 10 s cut** is now the guard's own `past_cut`.
+
+Not changed: the ratchet of 8 at the preferred width (9.1 says why, and its lowering is the first
+follow-up; counting traps per second of C2 code instead, as `the-jit.md` now suggests, would be a
+row of its own); running the two widths side by side on six cores, which would halve the step but
+not match the runs that set the ratchets, all made one JVM at a time on cores 3 to 5; and skipping
+the guard's build, which keeps the nightly from reading a classpath older than the day's merges.

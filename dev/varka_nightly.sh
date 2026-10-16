@@ -25,11 +25,11 @@
 # Varka on (VARKA-271). Optionally the whole gate.
 #
 #   dev/varka_nightly.sh                  # canary, fuzzer (10000, seed = today), Spark differential (50000, and 2000 warmed), sweeps, proofs, deopt, cliff
-#   dev/varka_nightly.sh --iterations 500 --seed 42 --skip-sweep --skip-deopt --skip-cliff   # a quick trial
+#   dev/varka_nightly.sh --iterations 500 --seed 42 --skip-sweep --skip-deopt --skip-deoptnull --skip-cliff   # a quick trial
 #   dev/varka_nightly.sh --gate           # the standing gate as well
 #   dev/varka_nightly.sh --series-size 6  # every small tree to size 6, hours over every core
 #   dev/varka_nightly.sh --variants-size 0  # without the variants of the small trees
-#   dev/varka_nightly.sh --sparkfuzz-iterations 5000 --skip-sweep --skip-deopt --skip-cliff
+#   dev/varka_nightly.sh --sparkfuzz-iterations 5000 --skip-sweep --skip-deopt --skip-deoptnull --skip-cliff
 #   dev/varka_nightly.sh --sparkwarm-iterations 0   # without the warmed arm of the differential
 #   dev/varka_nightly.sh --skip-golden    # without the golden-file suite, about an hour
 #   dev/varka_nightly.sh --skip-platform  # without the forked JVM arms (interpreter, C1, C2, -Xcomp, ...)

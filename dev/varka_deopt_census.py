@@ -19,6 +19,7 @@
 
   dev/varka_deopt_census.py [--tsv FILE] [--label NAME] RUN_DIR...
   dev/varka_deopt_census.py --guard COUNT_FILE GUARD_DIR    # the nightly guard (VARKA-378)
+  dev/varka_deopt_census.py --guard-rows COUNT_FILE        # its rows, for the shell
   dev/varka_deopt_census.py --self-test
 
 Reads the run directories dev/varka_deopt_census.sh writes - each holds run.log, whose
@@ -182,7 +183,7 @@ def report(rows, label):
             "      NULL-mode kernels by profile_predicate traps: "
             + ", ".join(f"{b} {h.get(b, 0)}" for b in ("0", "1-4", "5-19", "20-99", "100+"))
         )
-        late = [r for r in rs if r["settle_ms"] > 10_000 and r["pp_traps"] > 4]
+        late = [r for r in rs if past_cut(r, 10_000)]
         print(
             f"      settle over 10 s with more than four traps (the compiled test's cut): "
             f"{len(late)}; not settled by the deadline: {sum(not r['settled'] for r in rs)} "
@@ -246,9 +247,12 @@ def read_guard_file(path):
             cells = line.rstrip("\n").split("\t")
             if cells == GUARD_COLUMNS:
                 continue
-            if len(cells) != len(GUARD_COLUMNS):
-                raise ValueError(f"{path}: expected {len(GUARD_COLUMNS)} columns: {line!r}")
-            specs.append(dict(zip(GUARD_COLUMNS, cells)))
+            if cells[0] == "width" or len(cells) != len(GUARD_COLUMNS):
+                raise ValueError(f"{path}: expected the columns {GUARD_COLUMNS}: {line!r}")
+            spec = dict(zip(GUARD_COLUMNS, cells))
+            for c in GUARD_COLUMNS[1:]:
+                int(spec[c])  # a ValueError names the cell that is not a number
+            specs.append(spec)
     if not specs:
         raise ValueError(f"{path}: no width")
     return specs
@@ -343,8 +347,9 @@ def _write_run(run_dir, kernels, traps, exit_code="0"):
             t = f"{55.7 + 0.1 * i:.3f}"
             f.write(_SELF_TEST_TRAP.format(t=t, cid=cid) + "\n")
             f.write(_SELF_TEST_NOT_ENTRANT.format(t=t, cid=cid) + "\n")
-    with open(os.path.join(run_dir, "exit"), "w") as f:
-        f.write(exit_code + "\n")
+    if exit_code is not None:
+        with open(os.path.join(run_dir, "exit"), "w") as f:
+            f.write(exit_code + "\n")
 
 
 def self_test():
@@ -360,6 +365,7 @@ def self_test():
         ("four traps are not the cycle", [settled, cycling], 4, "0", 0, 0, "verdict: ok, at"),
         ("a settled kernel below the ratchet", [settled], 0, "0", 1, 0, "verdict: ok, below"),
         ("a JVM that failed", [settled], 0, "1", 1, 1, "verdict: FAILED"),
+        ("a JVM that left no exit file", [settled], 0, None, 1, 1, "verdict: FAILED"),
         ("no kernel", [], 0, "0", 1, 1, "verdict: FAILED"),
     ]  # fmt: skip
     bad = 0
@@ -383,11 +389,17 @@ def main():
     p.add_argument("--tsv", help="write one row per kernel here")
     p.add_argument("--label", default="census")
     p.add_argument("--guard", metavar="COUNT_FILE", help="the guard's verdict over GUARD_DIR")
+    p.add_argument("--guard-rows", metavar="COUNT_FILE", help="print the count file's rows")
     p.add_argument("--self-test", action="store_true", help="the guard over recorded kernels")
     p.add_argument("run_dirs", nargs="*", metavar="RUN_DIR")
     args = p.parse_args()
     if args.self_test:
         return self_test()
+    if args.guard_rows:
+        # The shell reads the count file through this, so the two never parse it differently.
+        for spec in read_guard_file(args.guard_rows):
+            print("\t".join(spec[c] for c in GUARD_COLUMNS))
+        return 0
     if args.guard:
         if len(args.run_dirs) != 1:
             p.error("--guard takes one GUARD_DIR")

@@ -976,5 +976,5 @@ compiled test, draws 0 to 99 a lane at seed 20260903, with `-XX:PerMethodTrapLim
 * **Under the defaults this form ends**: `PerBytecodeTrapLimit` 4 and `PerMethodTrapLimit` 100 make
   C2 recompile without the failing predicate, which is the cycle those checks do see. So it is not
   what runs today; it is what an operator's raised limits would turn the cycle into
-  (`VARKA-295.md` 9.6 raised `PerMethodTrapLimit` to end a different trap sum). A check that wants to see it counts traps per
-  second of C2 code, not recompiles.
+  (`VARKA-295.md` 9.6 raised `PerMethodTrapLimit` to end a different trap sum). A check that
+  wants to see it counts traps per second of C2 code, not recompiles.
