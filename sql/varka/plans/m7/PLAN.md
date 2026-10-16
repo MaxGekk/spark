@@ -915,3 +915,67 @@ Proposed point by point against 9.2 and agreed by the owner on 13 October 2026.
   item in `m9/SCOPE.md`.
 * **A benchmark port merges with its pair**, or its pull request says why not and names the row
   that owes it.
+
+## 10. Debt register
+
+One bullet per debt: what it is, why it is a debt, and what closing it would take. Opened on 16
+October 2026: milestone 7 had no register until then, and the debts it found sat in single task
+plans or nowhere. Per `sql/varka/AGENTS.md`, a swept entry is rewritten in the past tense with what
+the sweep found, never deleted; row 261, the close, sweeps this list. Debts already owned elsewhere
+are not repeated here: the long-lane template prewarm (`m8/PLAN.md` row 383), the per-shape date
+bound (`m9/SCOPE.md` item 102), the generated-class families the coverage analyser does not fold
+(rows 284 and 285), and Varka's mask applied after a residual check (row 380's record).
+
+**In code and tests**
+
+* **`VarkaTierWitnessSuite` fails under the memory sanitizer.** "The witness sees each tier" trips
+  a `speculate_null_assert` trap in `VarkaMemorySanitizer.check` under load, on master as on every
+  branch that ran the gate on 16 October 2026 (`VARKA-318.md` 9.1, `VARKA-265.md` 9.1, row 380's
+  outcome); it passes without the sanitizer. A suite the gate always fails hides a real failure
+  of the same suite. Closing it: run the suite without the sanitizer as the JIT-measuring suites
+  already do (`--no-sanitizer`), or make the witness tolerate the sanitizer's trap, with a lesson in
+  `skills/the-jit.md` either way.
+* **Spark's two conjunct orders are hand-ported** (row 380, `VarkaConjunctOrder`). Varka reproduces
+  `FilterExec.generatePredicateCode`'s order and codegen's extra null checks by a port linked to
+  Spark's code only by a comment, as Spark's own two copies are. An upstream change to either order
+  would make Varka's demotion rule wrong silently. Closing it: a test that compares the port's order
+  with `GeneratePredicateHelper`'s on generated conditions, or one shared function upstream.
+* **The compiler entry points without the family switches stay public** (row 318, `VARKA-318.md`
+  9.3). Tests and tools call them with every family on; a production caller that used one would
+  ignore the user's switches. Closing it: one compile-context value carrying the options and the
+  switches through every compiler signature.
+* **One mutant survives both mutation passes unexplained** (row 265, its local shard check in #890): a removed
+  `requireNonNull` in `Analysis.pureOf`, which the earlier sample recorded as killed. An unexplained
+  survivor is either a missing test or a wrong reading of the sample. Closing it: the full run's
+  report names it; a test or a note in `sql/varka/mutation/notes.tsv`.
+* **`catalyst/Test/checkstyle` fails on master** on upstream's `StUtilsSuite.java`, whose outer class
+  `STUtilsSuite` does not match its file name; apache/spark's master has the same mismatch. A module
+  check that always fails hides a new finding of ours in that module. Closing it: upstream's fix,
+  arriving by a sync; a fork-only rename would conflict with every sync until then.
+
+**In CI and tooling**
+
+* **The calibration table conflicts on nearly every merge.** `skills/testing-and-debugging.md`'s
+  table gains a line from most tasks, so each merge conflicts with every open branch that added one,
+  and each resolution is a push and a CI restart (six or so per merge on 16 October 2026). Closing
+  it: one small file per entry under a directory, with the table generated from them by the tool
+  that already checks `SKILLS.md`, so two branches never edit the same lines.
+* **"Install the Varka engine" downloads Maven's plugins on every run.** The job's Maven cache is
+  skipped, and on 16 October 2026 it failed twice on a transient Maven Central miss of
+  `maven-resources-plugin` 3.4.0 (#888, #889), each costing a rerun. Closing it: restore the Maven
+  cache in that job, or pin the engine pom's plugin versions to ones the cache already holds.
+* **The admission queue keeps dead runs.** A run whose pull request has merged, or whose branch
+  has been pushed again, still counts as ahead until it is cancelled by hand; on 16 October 2026 two
+  such runs held four pull requests' full runs for hours. Closing it: `dev/varka_ci_admit.py` skips
+  a run whose pull request is closed or whose head is no longer its branch's.
+* **"Re-run failed jobs" on a full run skips the queue** (`VARKA-255.md` 9.4): the rerun reuses the
+  first attempt's admission. Known and documented, not handled. Closing it: the admission job reruns
+  with the failed jobs when any module job does, or the documentation says to use "Re-run all jobs".
+* **A Java port's timing pair can approach the job's cap.** `VarkaSizeLadderBenchmark`'s pair took
+  about four and a half hours of the 355-minute limit (#877). The next pair of a class that size can
+  time out and lose every round. Closing it: split a long class's pair across jobs by section, or
+  record a per-class round count in the pair tooling.
+* **About 80 worktrees of merged branches remain on the owner's machine** (`dev/varka_worktree.sh
+  list`, 16 October 2026: 83 of 105 merged). They hold disk and make `git worktree list` and the
+  merge sweeps slow to read. Closing it: `dev/varka_worktree.sh gc`, with the parked ones (row 334's
+  `varka-326`, the far-date reproduction) kept by name.
