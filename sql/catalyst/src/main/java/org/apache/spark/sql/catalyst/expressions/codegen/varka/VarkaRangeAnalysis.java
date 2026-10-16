@@ -199,7 +199,10 @@ public final class VarkaRangeAnalysis {
    * the answer - admits a calendar node, removes an overflow check - must have each reported
    * column checked against {@link #CONTRACT} per batch, or the answer is an assumption. A column
    * the answer does not rest on is not reported: one under a {@link GuardedDay}, or under a
-   * column-offset day shift, whose own result the runtime guard checks.
+   * column-offset day shift, whose own result the producer guard checks. That guard is the one
+   * this analysis cannot see the absence of: the reference configuration
+   * {@code guardDayProducers=false} removes it and computes such a lane wrongly rather than
+   * declining it, by design ({@link VarkaEmitOptions#guardDayProducers}).
    */
   public static Range range(VarkaVectorIR node, Kind kind, GuardPolicy policy,
       IntUnaryOperator literals, IntConsumer columns) {

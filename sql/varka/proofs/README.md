@@ -80,17 +80,19 @@ literal shift of 2^31 - 1 carries the contract's interval past it while the lane
 obligations are stated in the *witness* form: for every value of each child's interval there is a
 member of the node's interval congruent, modulo 2^32, to the lane value the node computes from the
 children's lane values. The compiler reads an interval only when it lies within int32, where the
-member is the lane value itself. The leaves are premises, not theorems: a bare date column's
-interval is the column bound, 0001-01-01 to 9999-12-31, which Spark's storage does not enforce.
-Since VARKA-379 the premise is discharged at run time - a compile that rests on it notes it against
-the column and the evaluator declines a batch with a live day outside it - so what is proven here
-holds of every batch a kernel serves; before, it was assumed, and a far day was served wrong. Each check writes the witness out, so it is quantifier-free, and
+member is the lane value itself. Each check writes the witness out, so it is quantifier-free, and
 each rule has two `sat` neighbours, the rule narrowed by one at either end. The two product claims
 are over the reals (`Real` sorts under `ALL`): both solvers decide them in a fraction of a second,
 where over the integers Z3 proves the four-corner theorem and leaves the wrapped congruence
 unknown, and cvc5 the reverse; every integer instance is a real one, so the integer claims follow.
 The congruence itself goes in two layers, a ring identity both solvers normalise and the wrap's
 periodicity, which is linear - Fiat Cryptography's split of the algebra from the bounds.
+
+The leaves are premises, not theorems. A bare date column's interval is the column bound,
+0001-01-01 to 9999-12-31, which Spark's storage does not enforce. Since VARKA-379 the premise is
+discharged at run time - a compile that rests on it notes it against the column, and the evaluator
+declines a batch with a live day outside it - so what is proven here holds of every batch a kernel
+serves; before, it was assumed, and a cached far day was served wrong.
 
 ## Adding a proof
 

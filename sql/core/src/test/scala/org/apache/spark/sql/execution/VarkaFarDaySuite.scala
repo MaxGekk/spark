@@ -51,22 +51,24 @@ class VarkaFarDaySuite extends QueryTest with VarkaMaybeThrows {
   private val edgeDays = Seq(VarkaChrono.CONTRACT_MIN_DAYS, VarkaChrono.CONTRACT_MAX_DAYS, 0,
     19000)
 
-  /** The day-of-week family and the plain day reads: their lowerings are exact for every int. */
-  private val unbounded = Set("dayofweek(d)", "weekday(d)", "extract(DAYOFWEEK_ISO FROM d)",
-    "unix_date(d)", "datediff(d2, d)", "date_from_unix_date(unix_date(d))", "d IS NULL",
-    "d IS NOT NULL", "d = d2", "d < d2")
-
   /** The columns the fixture below has; a coverage row over any other column is not run here. */
   private val fixtureColumns = Set("d", "d2", "i", "ym", "ymm", "ymy")
 
-  private case class CoverageRow(sql: String, executable: String, form: String)
+  /**
+   * One row of the table, and whether its domain holds the column bound: the rows whose answer
+   * rests on it, which must decline a batch past it, where every other row's lowering is exact
+   * for any int day and must decline nothing on the input bound.
+   */
+  private case class CoverageRow(sql: String, executable: String, form: String, bounded: Boolean)
 
   private lazy val coverageRows: Seq[CoverageRow] = {
     val file = getWorkspaceFilePath("sql", "varka", "coverage.json").toFile
     val doc = new ObjectMapper().readTree(file)
     val columns = doc.get("columns").fieldNames().asScala.toSet
     doc.get("expressions").elements().asScala.toSeq.map { e =>
-      CoverageRow(e.get("sql").asText(), e.get("executable").asText(), e.get("form").asText())
+      val domain = Option(e.get("domain")).map(_.asText()).getOrElse("")
+      CoverageRow(e.get("sql").asText(), e.get("executable").asText(), e.get("form").asText(),
+        domain.contains("unix_date(d) BETWEEN"))
     }.filter { r =>
       val used = "[a-z0-9_]+".r.findAllIn(r.executable).toSet.intersect(columns)
       used.contains("d") && used.subsetOf(fixtureColumns)
@@ -109,9 +111,10 @@ class VarkaFarDaySuite extends QueryTest with VarkaMaybeThrows {
   /**
    * Runs `query` on both engines: the same rows or the same error. Where Spark answered, the
    * query must have reached a Varka node, every batch it read was either served by its kernel or
-   * declined - nothing failed - and the batches declined on the input bound are returned.
+   * declined - nothing failed - and the batches declined on the input bound are returned; none
+   * where either engine raised or no batch was read.
    */
-  private def check(query: String): Long = {
+  private def check(query: String): Option[Long] = {
     val onSpark = outcome(spark, query)
     val (onVarka, plan) = runOutcome(varkaSpark, query)
     VarkaMaybeThrows.difference(onSpark, onVarka).foreach(d => fail(s"$query\n$d"))
@@ -126,8 +129,8 @@ class VarkaFarDaySuite extends QueryTest with VarkaMaybeThrows {
         // reads no batch at all, and answers no row.
         assert(rows.isEmpty || served + declined > 0L,
           s"$query: no batch reached the kernel:\n${p.treeString}")
-        metric(p, inputBound)
-      case _ => 0L
+        if (served + declined > 0L) Some(metric(p, inputBound)) else None
+      case _ => None
     }
   }
 
@@ -141,7 +144,7 @@ class VarkaFarDaySuite extends QueryTest with VarkaMaybeThrows {
       withDays(days, nulls) {
         for (e <- Seq("year(d)", "month(d)", "dayofmonth(d)")) {
           withClue(s"$e, nulls=$nulls: ") {
-            assert(check(s"SELECT v, $e AS r FROM varka_far_days") > 0L,
+            assert(check(s"SELECT v, $e AS r FROM varka_far_days").exists(_ > 0L),
               "the batch holds days past the bound, so it must decline on the input bound")
           }
         }
@@ -150,14 +153,18 @@ class VarkaFarDaySuite extends QueryTest with VarkaMaybeThrows {
   }
 
   test("every coverage row over a date column answers Spark's over days past the bound") {
-    assert(coverageRows.exists(_.executable == "year(d)"), "the table's rows were not read")
+    assert(coverageRows.exists(r => r.executable == "year(d)" && r.bounded),
+      "the table's rows were not read")
+    assert(coverageRows.exists(r => r.executable == "dayofweek(d)" && !r.bounded))
     for (nulls <- Seq(true, false)) {
       withDays(farDays, nulls) {
         for (r <- coverageRows) {
           withClue(s"${r.sql}, nulls=$nulls: ") {
             val declined = check(query(r))
-            if (unbounded.contains(r.sql)) {
-              assert(declined === 0L, "a lowering exact for every day needs no input bound")
+            if (r.bounded) {
+              assert(declined.forall(_ > 0L), "an answer resting on the bound must decline")
+            } else {
+              assert(declined.forall(_ == 0L), "a lowering exact for every day needs no bound")
             }
           }
         }
@@ -170,7 +177,7 @@ class VarkaFarDaySuite extends QueryTest with VarkaMaybeThrows {
       withDays(edgeDays, nulls) {
         for (r <- coverageRows) {
           withClue(s"${r.sql}, nulls=$nulls: ") {
-            assert(check(query(r)) === 0L)
+            assert(check(query(r)).forall(_ == 0L))
           }
         }
       }
@@ -179,7 +186,7 @@ class VarkaFarDaySuite extends QueryTest with VarkaMaybeThrows {
     for (v <- Seq(VarkaChrono.CONTRACT_MIN_DAYS - 1, VarkaChrono.CONTRACT_MAX_DAYS + 1)) {
       withDays(Seq(0, v), nulls = false) {
         withClue(s"v=$v: ") {
-          assert(check("SELECT v, year(d) AS r FROM varka_far_days") > 0L)
+          assert(check("SELECT v, year(d) AS r FROM varka_far_days").exists(_ > 0L))
         }
       }
     }
@@ -190,12 +197,12 @@ class VarkaFarDaySuite extends QueryTest with VarkaMaybeThrows {
       for (e <- Seq("year(date_add(d, 1))", "dayofmonth(date_sub(d, 1))",
           "month(d + INTERVAL 1 DAY)")) {
         withClue(e) {
-          assert(check(s"SELECT v, $e AS r FROM varka_far_days") > 0L)
+          assert(check(s"SELECT v, $e AS r FROM varka_far_days").exists(_ > 0L))
         }
       }
       // 100000000 is year 275760; a kernel that decomposed it wrong keeps no row or another.
-      assert(check("SELECT v FROM varka_far_days WHERE year(d) = 275760") > 0L)
-      assert(check("SELECT v FROM varka_far_days WHERE dayofmonth(d) = 2") > 0L)
+      assert(check("SELECT v FROM varka_far_days WHERE year(d) = 275760").exists(_ > 0L))
+      assert(check("SELECT v FROM varka_far_days WHERE dayofmonth(d) = 2").exists(_ > 0L))
     }
   }
 
@@ -214,7 +221,7 @@ class VarkaFarDaySuite extends QueryTest with VarkaMaybeThrows {
       }
       // The same shapes inside the bound still fuse and are served.
       withDays(Seq(0, 19000, VarkaChrono.CONTRACT_MAX_DAYS), nulls = false) {
-        assert(check("SELECT v, datediff(d, d2) * 100 AS r FROM varka_far_days") === 0L)
+        assert(check("SELECT v, datediff(d, d2) * 100 AS r FROM varka_far_days").contains(0L))
       }
     }
   }

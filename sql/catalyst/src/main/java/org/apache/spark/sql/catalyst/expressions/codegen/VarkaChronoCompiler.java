@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen;
 
+import java.util.ArrayList;
 import java.util.Optional;
 
 import scala.jdk.javaapi.OptionConverters;
@@ -769,10 +770,15 @@ final class VarkaChronoCompiler {
       Expression calendar,
       VarkaSlotTable literals,
       DeclineSink sink) {
-    VarkaValueRange.Range range = dayRange(node, literals, VarkaRangeAnalysis.GuardPolicy.ARMED);
+    // The columns the interval rests on, noted only if the node is admitted on it.
+    var columns = new ArrayList<Integer>();
+    VarkaValueRange.Range range = VarkaRangeAnalysis.range(node, VarkaRangeAnalysis.Kind.DAY,
+        VarkaRangeAnalysis.GuardPolicy.ARMED, VarkaNodeCompiler.literalAt(literals), columns::add);
     return switch (range) {
-      case VarkaValueRange.Bounded b when decomposesExactly(b) ->
-          Optional.of(boundColumns(node, literals, sink));
+      case VarkaValueRange.Bounded b when decomposesExactly(b) -> {
+        columns.forEach(sink::dayColumnBound);
+        yield Optional.of(node);
+      }
       case VarkaValueRange.Bounded b -> {
         // The interval ran out, but if a runtime-valued shift is what carried it out then a check
         // can spend it again. `rearm` rewrites the subtree with the checks in it and answers the
@@ -791,13 +797,13 @@ final class VarkaChronoCompiler {
   }
 
   /**
-   * {@code admitted}, once the admission has rested on its interval: every date column that
-   * interval read as {@link VarkaRangeAnalysis#CONTRACT} gets that range noted as an input bound,
-   * which the evaluator checks per batch before the kernel runs, declining a batch with a live day
-   * outside it to the row engine. Without it the column bound is an assumption, and a cached
-   * column holding a day past the range the lowering is exact over was served wrong (VARKA-379).
-   * Asked once more, on the admitted node, rather than collected while {@link #rearm} explores:
-   * a column below a {@link GuardedDay} the rewrite placed is checked by that guard instead.
+   * {@code admitted}, a node {@link #rearm} rewrote and the admission then rested on: every date
+   * column its interval read as {@link VarkaRangeAnalysis#CONTRACT} gets that range noted as an
+   * input bound, which the evaluator checks per batch before the kernel runs, declining a batch
+   * with a live day outside it to the row engine. Without it the column bound is an assumption,
+   * and a cached column holding a day past the range the lowering is exact over was served wrong
+   * (VARKA-379). Asked once more, on the rewritten node, rather than collected while the rewrite
+   * explores: a column below a {@link GuardedDay} it placed is checked by that guard instead.
    */
   private static VarkaVectorIR boundColumns(
       VarkaVectorIR admitted, VarkaSlotTable literals, DeclineSink sink) {
