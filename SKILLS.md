@@ -173,6 +173,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [C2 vectorizes unit-stride columns in the heap and off it, and never rows 32 bytes apart](sql/varka/skills/the-jit.md#c2-vectorizes-unit-stride-columns-in-the-heap-and-off-it-and-never-rows-32-bytes-apart)
 * [Value records crash C2's escape analysis on the early-access Valhalla build, and the crash is in a method handle](sql/varka/skills/the-jit.md#value-records-crash-c2s-escape-analysis-on-the-early-access-valhalla-build-and-the-crash-is-in-a-method-handle)
 * [With the intrinsics off C2 takes twenty seconds a loop method, and an epilogue's compile 337 MB](sql/varka/skills/the-jit.md#with-the-intrinsics-off-c2-takes-twenty-seconds-a-loop-method-and-an-epilogues-compile-337-mb)
+* [With the trap limits raised, a masked loop traps thousands of times and still reads as settled](sql/varka/skills/the-jit.md#with-the-trap-limits-raised-a-masked-loop-traps-thousands-of-times-and-still-reads-as-settled)
 
 #### [The Vector API and vector width](sql/varka/skills/vector-api-and-width.md)
 * [Vector API on HotSpot, Measured (JDK 25, x86-64)](sql/varka/skills/vector-api-and-width.md#vector-api-on-hotspot-measured-jdk-25-x86-64)
