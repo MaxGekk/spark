@@ -63,9 +63,10 @@ import org.apache.spark.sql.internal.SQLConf$;
  * coverage-table row that holds a node of that family declines with the reason naming the
  * family's switch, and every other row compiles exactly as it does with every family on. A
  * row's families are read independently of the compiler's own record of them - from which
- * families of {@code VarkaNodeCompiler.families} claim its non-leaf nodes, plus the condition
- * family for a filter's conjunct - and the compiler's record ({@code CompiledVarkaProjection
- * .families}) is held to that reading too, since a kernel failure's warning names it.
+ * families of {@code VarkaNodeCompiler.families}, and the predicate family beside them, claim its
+ * non-leaf nodes - and the compiler's record ({@code CompiledVarkaProjection.families}) is held
+ * to that reading too, since a kernel failure's warning and the coverage table's switch column
+ * name it.
  */
 @VarkaSuite
 public final class VarkaFamilySwitchSuite {
@@ -145,10 +146,10 @@ public final class VarkaFamilySwitchSuite {
   }
 
   /**
-   * The families whose nodes a row holds, read off the chain's claims rather than the compiler's
-   * record: {@code sure}, the families claiming a node of the bound tree (or of what a
-   * replaceable node compiles as) that is not a read, and the condition family for a conjunct;
-   * and {@code castsOfReads}, those claiming only a cast of a column or literal, which is the
+   * The families whose nodes a row holds, read off the claims of the chain and of the predicate
+   * family rather than the compiler's record: {@code sure}, the families claiming a node of the
+   * bound tree (or of what a replaceable node compiles as) that is not a read; and
+   * {@code castsOfReads}, those claiming only a cast of a column or literal, which is the
    * family's when it computes and nobody's when it lowers to the bare read (a relabel), which
    * only the lowering tells.
    */
@@ -162,9 +163,8 @@ public final class VarkaFamilySwitchSuite {
     Expression bound = VarkaSqlResolve.bind(row.expr(), columns);
     var found = EnumSet.noneOf(VarkaFamily.class);
     var casts = EnumSet.noneOf(VarkaFamily.class);
-    if (row.predicate()) {
-      found.add(VarkaFamily.CONDITION);
-    }
+    var claimers = new ArrayList<>(VarkaNodeCompiler.families());
+    claimers.add(VarkaNodeCompiler.predicates());
     var sink = new DeclineSink(columns, true);
     var stack = new ArrayList<Expression>(List.of(bound));
     while (!stack.isEmpty()) {
@@ -177,7 +177,7 @@ public final class VarkaFamilySwitchSuite {
         continue;
       }
       boolean castOfRead = e instanceof Cast c && isRead(c.child());
-      for (VarkaNodeCompiler.Family family : VarkaNodeCompiler.families()) {
+      for (VarkaNodeCompiler.Family family : claimers) {
         if (family.family() != null && family.claim().of(
             e, new VarkaSlotTable(), new VarkaSlotTable(), sink) != null) {
           (castOfRead ? casts : found).add(family.family());
@@ -268,18 +268,31 @@ public final class VarkaFamilySwitchSuite {
     } finally {
       VarkaNodeCompiler.setFailInFamilyForTesting(null);
     }
+    // The comparison in a CASE WHEN's condition is the predicate family's, reached from inside
+    // the condition family's lowering, and its failure is named as the predicate family's.
+    String caseWhen = "CASE WHEN d < d2 THEN d ELSE d2 END";
+    Row conditional = new Row(caseWhen, false, VarkaSqlResolve.parse(caseWhen, columns));
+    VarkaNodeCompiler.setFailInFamilyForTesting(VarkaFamily.PREDICATE);
+    try {
+      String message = assertThrows(SparkIllegalArgumentException.class,
+          () -> compile(conditional, Set.of())).getMessage();
+      assertTrue(message.contains(VarkaFamily.PREDICATE.retry()), message);
+      assertTrue(!message.contains(VarkaFamily.CONDITION.switchKey()), message);
+    } finally {
+      VarkaNodeCompiler.setFailInFamilyForTesting(null);
+    }
   }
 
   @Test
   @DisplayName("a switch keeps the columns its family claims readable by the other families")
   void readsAreNotSwitched() {
     // The time family claims every 64-bit column; with it off, a comparison of two bigint or two
-    // TIME columns is still the condition family's alone and fuses.
+    // TIME columns is still the predicate family's alone and fuses.
     for (String sql : List.of("l > l2", "t < t2")) {
       Outcome off = compile(new Row(sql, true, VarkaSqlResolve.parse(sql, columns)),
           Set.of(VarkaFamily.TIME));
       assertTrue(off.kernel().isPresent(), sql + ": " + off);
-      assertEquals(List.of(VarkaFamily.CONDITION), off.families(), sql);
+      assertEquals(List.of(VarkaFamily.PREDICATE), off.families(), sql);
     }
     // The relabel type coercion puts on a TIME(3) column compared with a TIME(6) one is a read.
     var withT3 = new ArrayList<Attribute>(CollectionConverters.asJava(columns));
@@ -288,6 +301,6 @@ public final class VarkaFamilySwitchSuite {
     Row relabel = new Row("t < t3", true, VarkaSqlResolve.parse("t < t3", wider));
     Outcome off = compile(relabel, Set.of(VarkaFamily.TIME), wider);
     assertTrue(off.kernel().isPresent(), off.toString());
-    assertEquals(List.of(VarkaFamily.CONDITION), off.families());
+    assertEquals(List.of(VarkaFamily.PREDICATE), off.families());
   }
 }

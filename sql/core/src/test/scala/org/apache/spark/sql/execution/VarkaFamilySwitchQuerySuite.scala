@@ -59,6 +59,9 @@ class VarkaFamilySwitchQuerySuite
     VarkaFamily.INT_ARITHMETIC -> "SELECT i + 1 AS a, year(d) AS b",
     VarkaFamily.INTERVAL -> "SELECT make_ym_interval(year(d), month(d)) AS a, i + 1 AS b",
     VarkaFamily.CONDITION -> "SELECT coalesce(d, DATE'2000-01-01') AS a, year(d) AS b",
+    // The comparison in a conditional's condition is the predicate family's, wherever it sits.
+    VarkaFamily.PREDICATE ->
+      "SELECT if(d > DATE'2000-01-01', d, DATE'2000-01-01') AS a, year(d) AS b",
     VarkaFamily.TIME -> "SELECT hour(t) AS a, year(d) AS b")
 
   test("each family switched off runs its entry on the row engine, named in the verbose " +
@@ -81,14 +84,20 @@ class VarkaFamilySwitchQuerySuite
     }
   }
 
-  test("with the condition family off no filter fuses, and the answer is Spark's") {
+  test("with the predicate family off no filter fuses, and the answer is Spark's; with the " +
+      "condition family off the filter still fuses") {
     cacheView()
     val query = s"SELECT d, i FROM $view WHERE d > DATE'2000-01-01'"
     assertFused(varkaSpark.sql(query).queryExecution.executedPlan)
-    withBothConf(VarkaFamily.CONDITION.switchKey(), "false") {
+    withBothConf(VarkaFamily.PREDICATE.switchKey(), "false") {
       val df = varkaSpark.sql(query)
       checkAnswer(df, spark.sql(query).collect().toSeq)
       assertNotFused(df.queryExecution.executedPlan)
+    }
+    withBothConf(VarkaFamily.CONDITION.switchKey(), "false") {
+      val df = varkaSpark.sql(query)
+      checkAnswer(df, spark.sql(query).collect().toSeq)
+      assertFused(df.queryExecution.executedPlan)
     }
   }
 

@@ -160,6 +160,19 @@ final class VarkaNodeCompiler {
       new Family(VarkaFamily.CONDITION, VarkaConditionCompiler::arm),
       new Family(VarkaFamily.INT_ARITHMETIC, VarkaNodeCompiler::arithmeticArm));
 
+  /**
+   * The predicate family, which is not a link of the chain: {@code compileNode} never claims a
+   * comparison or a connective, whose value is a mask and not a lane, and they are reached only
+   * through {@code VarkaConditionCompiler.compileCond}, from a filter's conjunct or a
+   * conditional's condition (VARKA-318). It is here so that the suites read its claim beside the
+   * chain's: no node is claimed by two of them, so each node is under one switch.
+   */
+  private static final Family PREDICATES = new Family(VarkaFamily.PREDICATE,
+      (e, inputs, literals, sink) -> {
+        var arm = VarkaConditionCompiler.condArm(e, inputs, literals, sink);
+        return arm == null ? null : () -> arm.get().map(cond -> cond);
+      });
+
   private VarkaNodeCompiler() {
   }
 
@@ -245,6 +258,11 @@ final class VarkaNodeCompiler {
   /** The chain, for the suite that holds no node is claimed twice. */
   static List<Family> families() {
     return FAMILIES;
+  }
+
+  /** The predicate family's claim, which the chain does not dispatch to, for the same suites. */
+  static Family predicates() {
+    return PREDICATES;
   }
 
   /** The names of the families of {@code chain} that claim {@code expr}, in chain order. */

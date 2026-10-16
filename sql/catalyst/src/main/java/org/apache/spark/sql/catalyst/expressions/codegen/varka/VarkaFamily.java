@@ -23,9 +23,11 @@ import java.util.stream.Collectors;
 /**
  * The expression families of the compiler that a session can switch off one at a time
  * (VARKA-318): the families of the chain {@code VarkaNodeCompiler} dispatches every node
- * through, less the date leaves, which read columns and fuse nothing of their own. A family that
- * is off declines every node it would claim, with {@link #offReason()} as the reason, so the
- * entry around that node runs on Spark's row engine and the rest of the projection still fuses.
+ * through, less the date leaves, which read columns and fuse nothing of their own, and the
+ * predicate family, whose nodes {@code VarkaConditionCompiler.compileCond} lowers outside the
+ * chain. A family that is off declines every node it would claim, with {@link #offReason()} as
+ * the reason, so the entry around that node runs on Spark's row engine and the rest of the
+ * projection still fuses.
  *
  * <p>The switch is {@link #switchKey()}, a session configuration declared in {@code SQLConf}, and
  * every message about a family names it, as StarRocks's "set jit_level = 0 to disable jit and
@@ -33,13 +35,15 @@ import java.util.stream.Collectors;
  * ({@link #retry()}), and the {@code families:} line of the context record a kernel failure's
  * warning carries ({@link VarkaErrorContext}).
  *
- * <p>The switch covers the nodes the family <em>claims</em>, and a node of the family that another
- * family's lowering builds directly - the calendar's negated interval in {@code d - ym}, its
- * years-to-months cast - asks the same switch. Helper code two families share and that builds no
- * node of its own - the overflow decision of the int and interval arithmetic, the pick fold
- * {@code greatest} and {@code least} borrow from the condition family - runs under the switch of
- * the node it serves. A column or literal read, and a cast of one that lowers to the bare read,
- * is no family's.
+ * <p>The switch covers the nodes the family <em>claims</em>, wherever they sit, so each node of a
+ * query is under exactly one switch: a node of the family that another family's lowering builds
+ * or reaches directly - the calendar's negated interval in {@code d - ym}, its years-to-months
+ * cast, a comparison in the condition of an {@code IF} or a {@code CASE WHEN} branch - asks its
+ * own family's switch. Helper code two families share and that builds no node of its own - the
+ * overflow decision of the int and interval arithmetic, the pick fold {@code greatest} and
+ * {@code least} borrow from the condition family, the validity test {@code coalesce} folds onto -
+ * runs under the switch of the node it serves. A column or literal read, and a cast of one that
+ * lowers to the bare read, is no family's.
  */
 public enum VarkaFamily {
   /** {@code VarkaChronoCompiler}. */
@@ -54,10 +58,13 @@ public enum VarkaFamily {
   TIME("time", "time", "the TIME functions (hour, minute, second, time_trunc, time_diff, the"
       + " conversions to and from micros and millis, a time plus a day-time interval) and the"
       + " casts to TIME and to a day-time interval"),
-  /** {@code VarkaConditionCompiler}. */
-  CONDITION("condition", "condition", "a filter's predicates (comparisons, IN, IS NULL and"
-      + " IS NOT NULL, AND, OR and NOT), so that no filter fuses, and the conditionals IF,"
-      + " CASE WHEN and coalesce"),
+  /** {@code VarkaConditionCompiler.compileCond}, reached outside the chain. */
+  PREDICATE("predicate", "predicate", "the comparisons, IN over dates and year-month intervals,"
+      + " IS NULL and IS NOT NULL, AND, OR and NOT, wherever they sit: a filter's predicates, so"
+      + " that no filter fuses, and the conditions of IF and CASE WHEN"),
+  /** {@code VarkaConditionCompiler.arm}. */
+  CONDITION("condition", "condition", "the conditionals IF, CASE WHEN and coalesce (the"
+      + " comparisons in their conditions are the predicate family's)"),
   /** The int arithmetic arm of {@code VarkaNodeCompiler}. */
   INT_ARITHMETIC("int arithmetic", "intArithmetic", "+, -, * and unary minus over int"
       + " operands, checked under ANSI, and greatest and least");
@@ -76,8 +83,8 @@ public enum VarkaFamily {
   }
 
   /**
-   * What the family covers, in the words its switch's documentation uses: the one copy that the
-   * {@code SQLConf} entry's doc renders, and that {@code docs/sql-varka.md}'s table repeats.
+   * What the family covers, in the words its switch's documentation uses: the one copy, which the
+   * {@code SQLConf} entry's doc and {@code docs/sql-varka.md}'s generated switch table render.
    */
   public String covers() {
     return covers;
@@ -86,6 +93,14 @@ public enum VarkaFamily {
   /** The family's name in prose and in the compiler's chain, e.g. {@code int arithmetic}. */
   public String label() {
     return label;
+  }
+
+  /**
+   * The family's name inside its switch, {@code spark.sql.codegen.varka.family.<key>.enabled},
+   * e.g. {@code intArithmetic}: what the coverage table's switch column prints.
+   */
+  public String key() {
+    return key;
   }
 
   /** The configuration that switches the family off when false. */

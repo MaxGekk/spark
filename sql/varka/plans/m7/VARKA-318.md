@@ -235,4 +235,116 @@ in the who-reads table and in "When Varka falls back, and when it fails".
   (every family on), and every call in `sql/core`'s main code passes the session's set, which
   section 4 lists. Folding the options and the set into one compile-context value would close the
   gap for good, at the cost of changing every compiler signature, and is not this task's.
-* `docs/sql-varka.md`'s table repeats `VarkaFamily.covers()` by hand. No suite reads that table.
+* `docs/sql-varka.md`'s table repeated `VarkaFamily.covers()` by hand, and no suite read it. Swept
+  the same day on the owner's decision (9.4): the switches' table is generated from `VarkaFamily`
+  by `VarkaCoverageSuite`, which fails when the page differs.
+
+### 9.4 The owner's decisions of 16 October 2026, and what was built
+
+The owner read 9 and decided two changes before the pull request opens. Where 9 and 9.1 say
+"five settings", there are now six.
+
+**1. `condition` splits in two: a `predicate` switch for the predicates.** Until now `condition`
+covered a filter's predicates as well as the conditionals, so a user whose comparison kernel was
+wrong lost every `IF`, `CASE WHEN` and `coalesce` with it, and a user whose `CASE WHEN` was wrong
+lost every filter. There is now a sixth setting, `spark.sql.codegen.varka.family.predicate.enabled`
+(5.0.0, `NOT_APPLICABLE`, derived in `SQLConf` from the new enum constant like the others), and
+the two cover these node classes:
+
+| switch | node classes | where the compiler reaches them |
+|---|---|---|
+| `predicate` | `LessThan`, `LessThanOrEqual`, `GreaterThan`, `GreaterThanOrEqual`, `EqualTo`, `In` and `InSet` over a date or year-month interval, `IsNull`, `IsNotNull`, `And`, `Or`, `Not` | `VarkaConditionCompiler.compileCond`: a filter's conjunct, the condition of an `IF` or a `CASE WHEN` branch, and the operands of a connective |
+| `condition` | `If`, `CaseWhen`, `Coalesce` | the chain (`VarkaConditionCompiler.arm`) |
+
+*Whose switch is a comparison inside a `CASE WHEN` branch's condition?* The predicate family's,
+wherever it sits. Three reasons. First, it is the rule 9.2 already settled: a node of a family
+that another family's lowering reaches or builds asks its own family's switch, and only helper
+code that builds no node runs under the caller's. A comparison is a node of the user's query, as
+the negated interval in `d - ym` is. Second, it keeps every node class under one switch, so the
+question "which switch keeps `<` off Varka" has one answer: a user whose comparison lowering is
+wrong sets one switch, not two. Third, the position-dependent alternative (a comparison under
+`condition` inside a conditional and under `predicate` in a filter) would make the claim depend
+on the caller, which no other family does. The cost is stated in the docs: with `predicate` off,
+every `IF` and `CASE WHEN` whose condition holds a comparison declines too, with the predicate
+family's reason, since the comparison is the first node to decline. `coalesce` holds no
+predicate node: the validity test it folds onto (`IsNotNull` over the column) is IR its lowering
+builds, not a Catalyst node, so it runs under `condition` as helper code would. `nvl2(a, b, c)`
+arrives as `If(IsNotNull(a), b, c)` and so holds both.
+
+*How it keeps one claimant per node.* The predicate family is not a link of the chain:
+`compileNode` never claims a comparison, whose value is a mask and not a lane, so the chain is
+unchanged and no sub-family per node is needed. Instead `compileCond` is now a claim and a gate in
+the chain's own form. `condArm` is a `switch` over the classes above that returns the lowering
+as a deferred call, or `null` for a node the family does not claim, with the `In`/`InSet` type
+guards inside the claim, so "claimed and off" and "claimed and on" cover the same nodes. A node
+`condArm` does not claim (`EqualNullSafe`, a boolean column) still declines as an unsupported
+predicate whatever the switch. A claimed node lowers through the same `inFamily` the chain uses
+(the switch, the failure carrier, the families-used record), so a failure inside a comparison is
+reported as the predicate family's even inside a `CASE WHEN`, since `inFamily` passes an inner
+family's failure through. The connectives recurse through `compileCond`, so each nested node is
+gated on its own. The conjunct loop in `predicateOnce` lost its `inFamily(CONDITION, ...)`
+wrapper and is back to master's line, so this change leaves no edit in the `predicate()` loop
+that `varka-380` reworks beyond the `off` argument that was already there.
+`VarkaNodeCompiler.predicates()` hands the claim to the two suites as a `Family` beside the chain:
+`VarkaFamilyChainSuite` asks it with the chain's groups and finds no node claimed by two, and
+`VarkaFamilySwitchSuite`'s independent reading of a row's families walks the same claims (the
+hand-added `CONDITION` for a conjunct is gone, since a conjunct's root is now claimed).
+
+The texts follow from the enum: `predicate` sits before `condition` in `VarkaFamily`, so the
+`families:` line and the coverage column list a `CASE WHEN` row as `predicate, condition`. The
+decline reason, the retry sentence and the `families:` line needed no code. The query suite gains
+a `predicate` case (`if(d > DATE'2000-01-01', d, DATE'2000-01-01')` declines with the predicate family's reason while
+`year(d)` fuses) and its filter test now shows both sides: with `predicate` off the filter does
+not fuse, with `condition` off it still does.
+
+**2. A generated switch column in the coverage table, and a generated switch table.** Each
+coverage row now names its switches: a *Switches* column in `docs/sql-varka.md`'s table (the
+switch's `<name>`, `none` for a row that compiles to a bare read) and a `switches` field in
+`coverage.json` (the full keys). `VarkaCoverageSuite` computes them from the compiler: the
+families its kernels record (`CompiledVarkaProjection.families`, the same record a failure's
+`families:` line prints), under the defaults the table documents, through a `kernelsOf` the domain
+check now shares. That is the classification `VarkaFamilySwitchSuite` holds two ways, to the
+claims on the row's nodes and to which rows each switch declines, so the column cannot name a
+switch that would not decline its row nor miss one that would. Over the 92 rows: `calendar` 37,
+`predicate` 32, `time` 13, `int arithmetic` 11, `interval` 7, `condition` 6, and one row with
+none, `CAST(ymy AS INTERVAL MONTH)`, a unit relabel that lowers to the column read (9.2).
+
+The hand-written switch rows of the Configuration table are gone. The switches have their own
+table after it, between `<!-- BEGIN generated family switches -->` marks (an HTML comment inside
+a Markdown table would end the table), rendered from `VarkaFamily` (key, default, `covers()`) by
+`VarkaCoverageSuite` and checked by the test that checks the coverage table, regenerated by the
+same `VARKA_COVERAGE_REGEN=true` command. The prose no longer counts the switches ("the five"), so
+the next family changes no sentence.
+
+#### 9.4.1 Tests and time
+
+No cost was predicted before these runs; the times are recorded as measured, at a machine load of
+8 to 10 from other worktrees' jobs.
+
+* `VarkaFamilySwitchSuite` compiles each of the 92 rows under six families off instead of five,
+  and its failure test adds the nested case: a planted failure in the comparison of
+  `CASE WHEN d < d2 THEN d ELSE d2 END` names the predicate family's switch and not the
+  condition family's. Its four test bodies take 0.78 s by the JUnit report; run alone in a fresh
+  JVM the suite takes 12.7 s, nearly all of it the `@BeforeAll` that resolves the rows through a
+  cold analyzer, which 9.1's 1.9 to 2.3 s did not include (it ran beside another suite that had
+  already paid it).
+* `VarkaFamilyChainSuite` asks the predicate family's claim beside the chain's and finds no node
+  of the coverage table or the seams claimed twice (1.2 to 2.3 s, as before).
+* `VarkaCoverageSuite`: the two tests that render the page and `coverage.json`, which now compile
+  every row's kernels once more each for the switch column, take 92 ms and 165 ms, so the column
+  costs at most about a quarter of a second.
+* `VarkaFamilySwitchQuerySuite` has the predicate case and the two-sided filter test: 3.7 s,
+  0.4 s and 0.2 s for its three tests, against 9.1's 3.7 s alone for the suite.
+* Passed: `VarkaFamilySwitchSuite`, `VarkaFamilyChainSuite`, `VarkaCoverageSuite`,
+  `VarkaExpressionCompilerSuite` (152 tests together, one opt-in dump cancelled as designed) and
+  `VarkaEmittedBytesSuite` in catalyst, whose bytes did not move, as the refactor of
+  `compileCond` into a claim emits the same IR; `VarkaFamilySwitchQuerySuite` and
+  `VarkaErrorContextSuite` in sql/core (12 tests); `SparkConfigBindingPolicySuite` in sql/hive
+  with the new setting. `dev/varka_precommit.sh`, scalastyle (main and test, catalyst and sql) and
+  `dev/lint-java` pass. `dev/varka_errorprone.sh` fails with 14 findings, every one in a file this
+  branch does not touch (`VarkaReproduction`, `VarkaVectorTemplateWarmup`, `VarkaKernelWarmup`,
+  `VarkaEmitTrace`), identical at the merge base `fde86035bad`; master fixed them afterwards in
+  #875, and none is in a file this change edits.
+
+#### 9.4.2 The self-review
+

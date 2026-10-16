@@ -835,10 +835,7 @@ public final class VarkaExpressionCompiler {
         continue;
       }
       Marks marks = Marks.of(inputs, literals, sink);
-      // A conjunct is the condition family's whole: it reaches compileCond without the chain, so
-      // the family's switch and failure catch are asked here (VARKA-318).
-      Optional<Cond> compiled = VarkaNodeCompiler.inFamily(VarkaFamily.CONDITION,
-          () -> VarkaConditionCompiler.compileCond(bound, inputs, literals, sink), bound, sink);
+      Optional<Cond> compiled = VarkaConditionCompiler.compileCond(bound, inputs, literals, sink);
       if (compiled.isPresent()) {
         Cond cond = compiled.get();
         // The lane rule of `compilePartial`, for conjuncts: the AND fold below would refuse a mix
