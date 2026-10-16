@@ -433,6 +433,10 @@ The survivors' line decides it, as it does on the laptop. A shard past
 four hours is a reason to dispatch again with `shards=16`, which halves every line but the build
 and the coverage phase.
 
+**Two predictions for the first run on the runners**, to be scored with 6 and 7: 8. every shard
+at 8 shards finishes in 100 to 165 minutes; 9. no shard's coverage phase fails for memory at 3 GB,
+and under 1% of the mutants end `MEMORY_ERROR` or `TIMED_OUT`.
+
 
 **Checked on the laptop, 16 October 2026**, through the commands the workflow runs, over
 `--classes Analysis --methods pureOf`: the unsharded dry run has 86 mutants and shards 0/2 and 1/2
