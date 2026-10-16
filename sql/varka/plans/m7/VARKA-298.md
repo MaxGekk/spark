@@ -209,8 +209,8 @@ domain that cannot overflow. The planted-rollback tests now draw `drawRows`: at 
 composition 5, a nested tree meets the planted rollback's branch with no force at all ("values
 differ" unforced), and those tests are about the force.
 
-*Corrections from the review of the diff* (`/code-review high` on the branch, ten findings, all
-taken). The nested compositions are five in a row with and five without, not three (3.2): with a
+*Corrections from the review of the diff* (`/code-review high` on the branch, ten findings: nine
+taken, and the tenth, that the nightly will fail on 9.2, recorded there). The nested compositions are five in a row with and five without, not three (3.2): with a
 period of six, every nested pivot case fell in the safe pool and every nested partition check in a
 pivot case. The warmed arm and the pivot test draw `drawRows`, since both would meet 9.2 and 9.3
 with no rerun. A tree that renders as one of its composition's coverage rows (`year(d)` is both) is
@@ -256,7 +256,11 @@ evaluates *before* it and that raises on that row: Spark raises, Varka answers. 
 conditions do this; year-month interval arithmetic raises in every mode, so it happens under
 LEGACY too. It is the mirror of row 273, which gave the fallback the whole condition in Spark's
 order and assumed the raising conjunct is the fused one. Five shrunk reproducers across the census
-runs (three of them found in two runs):
+runs (three of them found in two runs), each replayed and its plans read. The files, as the suite
+wrote them, are in `m7/VARKA-298-reproducers/` (`<seed>-<iteration>.sql`), to be moved to
+`sql/varka/fuzz/spark/` with their `status: regression` lines changed to `status: known <row>`
+once the row below has a number. Kept here they are not replayed: the replay suite reads only
+`sql/varka/fuzz/spark/`, where a status must name the row that owns the bug:
 
 * seed 20261105, iteration 291 (ANSI): `SELECT weekofyear(d) AS c0 FROM fz WHERE
   (((12 + l) = 5000000000)) AND (l = l2)` over one row with `l` = -9223372036854775808 and `l2` =
@@ -273,12 +277,14 @@ runs (three of them found in two runs):
   NULL)) AND (d = d2)` over one row whose `ym` is 2147483636 months and whose `d` differs from
   `d2`. Spark raises `INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION`; Varka fuses `d = d2`.
 * seed 20261105, iteration 3145 (ANSI): `... WHERE NOT (((- (i * 2)) < (-42L))) AND NOT (l = l2)`
-  over two rows, one with `i` = 2147483647 and `l` = `l2`: `ARITHMETIC_OVERFLOW` on `i * 2` in
-  Spark, the row rejected by the fused `NOT (l = l2)` in Varka.
+  over two rows, one with `i` = 2147483647 and `l` = `l2`: Spark's condition is `isnotnull(l) AND
+  isnotnull(l2) AND (-(i * 2) >= -42) AND NOT (l = l2)` and raises `ARITHMETIC_OVERFLOW` on
+  `i * 2`; Varka fuses the null tests and `NOT (l = l2)`, which rejects the row.
 * seed 20261106, iteration 4069 (LEGACY): `... WHERE ((((ymy - INTERVAL '3' MONTH) + ymy) >= ym))
   IS NULL AND (dt > dt2) IS NULL` over four rows, one with `y` = 178956969:
-  `INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION` in Spark with ANSI off, the row rejected by the
-  fused null test of `dt > dt2` in Varka.
+  `NullDownPropagation` rewrites the two null tests into `(<ym sum> IS NULL OR ym IS NULL) AND
+  (dt IS NULL OR dt2 IS NULL)`, and Spark raises `INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION` on
+  the sum with ANSI off; Varka fuses `dt IS NULL OR dt2 IS NULL`, which rejects the row.
 
 Proposed row: "A fused conjunct runs before a residual conjunct that Spark's optimized `Filter`
 evaluates first, so where that residual conjunct raises (under ANSI, or year-month interval

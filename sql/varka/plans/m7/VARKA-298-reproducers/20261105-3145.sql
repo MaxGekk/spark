@@ -1,0 +1,21 @@
+-- VARKA-262 reproducer
+-- status: regression
+-- note: seed 20261105 iteration 3145
+-- ansi: true
+-- kind: only the row engine throws: ARITHMETIC_OVERFLOW
+-- select: dt AS c0
+-- where: NOT (((- (i * 2)) < (-42L))) AND NOT (l = l2)
+-- pivot: (DATE'1969-12-31', DATE'2000-02-29', 7, 46, 3, 0, CAST('0' AS BIGINT), CAST('42' AS BIGINT), TIME'09:30:00', TIME'12:34:56.789', INTERVAL '0 00:00:00' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND)
+-- fixture
+SELECT d, d2, i,
+       CAST(m AS INTERVAL MONTH) AS ymm,
+       CASE WHEN 12L * y BETWEEN -2147483648L AND 2147483647L
+            THEN CAST(y AS INTERVAL YEAR) END AS ymy,
+       CASE WHEN 12L * y + mm BETWEEN -2147483648L AND 2147483647L
+            THEN make_ym_interval(y, mm) END AS ym,
+       l, l2, CAST(t AS TIME(6)) AS t, CAST(t2 AS TIME(6)) AS t2, dt, dt2
+FROM VALUES (DATE'1969-12-31', DATE'2000-02-29', 7, 46, 3, 0, CAST('0' AS BIGINT), CAST('42' AS BIGINT), TIME'09:30:00', TIME'12:34:56.789', INTERVAL '0 00:00:00' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND),
+  (DATE'2000-02-29', DATE'1970-01-01', 2147483647, 51, -178956970, 10, CAST('1' AS BIGINT), CAST('1' AS BIGINT), TIME'09:30:00', TIME'12:34:56.789', INTERVAL '100000 00:00:00' DAY TO SECOND, INTERVAL '-0 00:00:00.5' DAY TO SECOND)
+AS v(d, d2, i, m, y, mm, l, l2, t, t2, dt, dt2)
+-- query
+SELECT dt AS c0 FROM fz WHERE NOT (((- (i * 2)) < (-42L))) AND NOT (l = l2)
