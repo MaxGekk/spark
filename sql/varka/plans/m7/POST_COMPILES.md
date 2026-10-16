@@ -168,4 +168,4 @@ query](https://vecbricks.github.io/when-spark-stops-compiling-your-query/) and [
 WHEN, split only where it has to be](https://vecbricks.github.io/split-only-where-it-has-to-be/).
 If you want to see how a generator that writes bytecode directly avoids the second compile
 altogether, read the companion post, [The class got cheaper. The first query got
-slower.](https://vecbricks.github.io/the-first-query-got-slower/)
+slower.](https://vecbricks.github.io/the-class-got-cheaper/)
