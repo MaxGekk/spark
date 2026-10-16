@@ -25,7 +25,7 @@
 # Then every coverage row's kernel alone over warm-same, quiet-null and released, in one JVM on
 # all the cores (VarkaCoverageCompositionFuzzSuite's compiled test, which a PR's run samples).
 #
-#   dev/varka_compiled_fuzz.sh                          # the nightly's: 2000 draws a lane, 8 JVMs
+#   dev/varka_compiled_fuzz.sh                          # the nightly's: 1000 draws a lane, 8 JVMs
 #   dev/varka_compiled_fuzz.sh --seed 42 --draws 80 --jvms 2 --cpu-base 18   # a trial
 #   dev/varka_compiled_fuzz.sh --skip-build             # reuse the last build and classpath
 #   dev/varka_compiled_fuzz.sh --no-coverage            # without the coverage rows' arm
@@ -49,7 +49,7 @@
 # VarkaTierWitnessSuite.
 usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
 set -euo pipefail
-from=0; draws=2000; jvms=8; cpus=3; cpu_base=0; seed="$(date +%Y%m%d)"; settle=10000; out=
+from=0; draws=1000; jvms=8; cpus=3; cpu_base=0; seed="$(date +%Y%m%d)"; settle=10000; out=
 skip_build=; coverage=1
 while [ $# -gt 0 ]; do
   case "$1" in

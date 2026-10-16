@@ -648,6 +648,9 @@ six of its cores (18 to 23), so every time here is a loaded machine's.
   step deadline of three hours, if eight JVMs on 24 cores run as two did on six. 3.4's 21 minutes
   assumed 9.4's whole-machine case times; a JVM held to three cores runs a case about 2.6 times
   slower. `--draws 1000` would halve it; the default stays 3.4's 2,000 until a night has run.
+  *Owner's decision, 16 October 2026:* the nightly runs 1,000 draws a lane, now the default of
+  `dev/varka_compiled_fuzz.sh`, so the step adds about 50 minutes (45 for the fuzz JVMs, at most 5
+  for the coverage arm), extrapolated as above; 2,000 stays a `--draws 2000` away.
 
 **Predictions 1, 6 and 9**, which 8 gives the first nightly, are owed to it: the trial's 66
 compiled cases and 92 coverage rows found no wrong answer (1), its unsettled share sits inside 6's band with every one

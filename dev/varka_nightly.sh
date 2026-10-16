@@ -179,7 +179,7 @@ fi
 if [ "$deoptnull" -eq 1 ]; then
   run_step deoptnull dev/varka_deopt_census.sh --guard --out "$logdir/deoptnull"
 fi
-# The IR fuzzer's compiled test at volume (VARKA-274): 2,000 draws a lane with the day's seed, each
+# The IR fuzzer's compiled test at volume (VARKA-274): 1,000 draws a lane with the day's seed, each
 # kernel over the eight batch histories - interpreted, warmed to C2, trapped after a quiet warm-up,
 # recompiled, released through the OSRs with C1 on - every batch compared and its tier read by
 # JFR, eight JVMs of three cores; then every coverage row's kernel over three of the histories. A
