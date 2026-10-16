@@ -2,12 +2,13 @@
 
 A dashboard runs the same query every time someone moves a filter. The query is short: a count
 over a cached table. Yet each new date makes it slower than a rerun with the same date, every
-time. On a cloud runner, a count over 100,000 cached rows took about 25 ms with the same integer
-each time and about 41 ms with a new one. Nothing is wrong with the data. Spark compiled the
+time. On a cloud runner, a count over 100,000 cached rows took about 19 ms with the same integer
+each time and about 40 ms with a new one. Nothing is wrong with the data. Spark compiled the
 query again, because the new value is written into the query's code.
 
 This post is about when Spark compiles your query: how often, where, and which queries it
-compiles again. Everything here was measured on stock Spark; how is at the end.
+compiles again. Everything here but one experiment was measured on stock Spark 4.2.0; how is at
+the end.
 
 > **In short**
 >
@@ -70,15 +71,20 @@ class runs slowly.
 
 ![What a click costs](figures/svg/fig39-what-a-click-costs.svg)
 
-*Figure 3. The same short query, 40 times per row, split into Janino's time and the rest, from
-`CodegenRecompileBenchmark-jdk25-results.txt`. The lower rows are the experiment of "What Spark
-could do" below.*
+*Figure 3. The same short query, 40 times per row, split into Janino's time and the rest. The
+upper block is stock Spark 4.2.0 on a GitHub runner with an AMD EPYC 9V45, from
+`times-jdk25-output.txt`. The lower block is the experiment of "What Spark could do" below, a
+separate run on this repository's Spark and another runner (AMD EPYC 7763), from
+`CodegenRecompileBenchmark-jdk25-results.txt`; the two blocks are not comparable with each
+other.*
 
-A new integer made the query about two thirds slower, and almost all of the difference is
-Janino: about 16 ms of the 41. Dates and integer parameters behave the same; a new string costs
-nothing. For a query this small, the new class's time in the interpreter hardly shows. "When
-Spark stops compiling your query" measured where it does: wide stages that took seconds to
-reach their steady speed.
+A new integer made the query about twice as slow: about 40 ms against about 19. Janino took
+about 11 ms of the difference. The rest, about 10 ms, is time outside Janino that the repeated
+query does not pay, such as loading the three new classes and running them cold; it was not
+split further. Dates and integer parameters behave the same. A new string compiles nothing and
+spends nothing in Janino; its query is slower than the integer one because it compares a
+different column, not because of a compile. "When Spark stops compiling your query" measured
+where the cold run hurts most: wide stages that took seconds to reach their steady speed.
 
 Every executor that runs a task of the stage pays its own compile. On fifty executors over a
 cached table, one click would be a hundred and one compiles: one on the driver and two on each
@@ -89,11 +95,14 @@ executor.
 ![Bigger stages cost more to compile](figures/svg/fig40-bigger-stages-cost-more.svg)
 
 *Figure 4. Janino's best time for one compile of a source new to the cache, best of nine,
-against the length of that source, from `CodegenRecompileBenchmark-jdk25-results.txt`.*
+against the length of that source on a log scale; stock Spark 4.2.0 on the runner of Figure 3's
+upper block, from `times-jdk25-output.txt`.*
 
-Janino's time grows with the source: from about 4 ms for a one-entry projection to about 18 ms
-for an aggregate of 60 sums. A 60-sum aggregate with a new literal pays those 18 ms on the
-driver and again on each executor.
+Janino's time grows with the source: from about 3 ms for a one-entry projection to about 31 ms
+for an aggregate of 60 sums. A 60-sum aggregate with a new literal pays those 31 ms on the
+driver and again on each executor. Spark 4.2.0 generates much longer code for an aggregate than
+this repository's newer Spark does: 54,379 characters for 10 sums against 20,456, and 243,154
+for 60 sums.
 
 ## Past the cache's 100 entries
 
@@ -133,11 +142,13 @@ With `spark.sql.codegen.cache.maxEntries=1000` the second loop compiled nothing 
 
 Strings already show the way: pass the value to the class and read it from there, and every
 value of a query shares one class. To see whether that would pay for integers, the benchmark has
-a stand-in expression that passes the integer to the class and reads it from a field. It runs
-`SELECT count(*) FROM t WHERE i % 1000000 = <value>` both ways, after checking that both count
-the same rows. The lower rows of Figure 3 are the result. With a new value each time, the
-literal compiled 2 classes a query and took about 43 ms; passed to the class, it compiled none
-and took about 20 ms, the same as repeating one literal. Once warm it costs nothing measurable:
+a stand-in expression that passes the integer to the class and reads it from a field. A
+stand-in is test code, so this runs on this repository's Spark (master-based, Varka off), not on
+4.2.0, and on another runner (AMD EPYC 7763): compare it with itself, not with the numbers
+above. It runs `SELECT count(*) FROM t WHERE i % 1000000 = <value>` both ways, after checking
+that both count the same rows. The lower block of Figure 3 is the result. With a new value each
+time, the literal compiled 2 classes a query and took about 43 ms; passed to the class, it
+compiled none and took about 20 ms, the same as repeating one literal. Once warm it costs nothing measurable:
 a scan of 20 million cached rows took 12.4 ns a row with the literal and 12.1 with the field, one
 run each. On these numbers the change would pay, and Spark already does it for strings.
 
@@ -150,15 +161,25 @@ is compiling on every click.
 
 ## How these were measured
 
-The counts come from three scripts in
+Everything but the experiment ran on the stock Spark 4.2.0 distribution with JDK 25, through
+`bin/spark-shell -i`, from the scripts in
 [`sql/varka/demo/compiles/`](https://github.com/vecbricks/varka/tree/master/sql/varka/demo/compiles),
-run on the stock Spark 4.2.0 distribution with JDK 25 through `bin/spark-shell -i`, with their
-outputs committed beside them. The times come from `CodegenRecompileBenchmark` on a GitHub-hosted
-runner (AMD EPYC 7763, JDK 25), committed as
-`sql/core/benchmarks/CodegenRecompileBenchmark-jdk25-results.txt`. [The timings ran on this
-repository's Spark, master-based, with Varka off, not on the 4.2.0 distribution; whether that
-build stands in for 4.2.0 is the owner's decision before publication.] The figures are drawn
-from those files by the scripts beside them.
+with their outputs committed beside them:
+
+- **The counts** (Figures 1, 2 and 5) come from `literals.scala`, `executors.scala` and
+  `cache.scala`. Counts do not depend on the machine.
+- **The times of a query and of a compile** (Figure 3's upper block, Figure 4, and every time
+  quoted outside "What Spark could do") come from `times.scala`, run on a GitHub-hosted runner
+  with an AMD EPYC 9V45, committed as `times-jdk25-output.txt`.
+- **The experiment** of "What Spark could do" (Figure 3's lower block) needs a test-only
+  expression, so it ran on this repository's Spark, master-based with Varka off, as
+  `CodegenRecompileBenchmark`, on a GitHub-hosted runner with an AMD EPYC 7763, committed as
+  `sql/core/benchmarks/CodegenRecompileBenchmark-jdk25-results.txt`.
+
+Times move from one machine to the next. The same `times.scala` run on another runner, an AMD
+EPYC 9V74, measured about 15 ms of Janino per new value instead of about 11 (committed as
+`times-attempt1-jdk25-output.txt`). That is why the post quotes one run and names its CPU. The
+figures are drawn from these files by the scripts beside them.
 
 This post follows [The 8000-byte cliff in Spark
 SQL](https://vecbricks.github.io/the-8000-byte-cliff/), [When Spark stops compiling your

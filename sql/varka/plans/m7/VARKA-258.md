@@ -195,3 +195,34 @@ at 33, and every query from 40 on; the 150-query loop compiled 450 classes in ea
 `executors-jdk25-output.txt`) and 37 (what the cache keeps, read from the two cache outputs). The
 runner's numbers were filled in from the results file of 9.1 the same day; what it still owes is
 row 259's published link and the owner's edit.
+
+### 9.3 The times on 4.2.0, 16 October 2026
+
+The owner chose to take every time a reader would quote about their own Spark from the 4.2.0
+distribution, since this repository's master differs from v4.2.0 in Janino (3.1.12 against 3.1.9),
+in `CodeGenerator`'s cache key and in whole-stage codegen. `sql/varka/demo/compiles/times.scala`
+runs the stock sections of `CodegenRecompileBenchmark` (measurements 3 and 4) as a `spark-shell`
+script, with the benchmark's queries, shapes and table formats; `run.sh --times` runs it, and the
+`compiles-times` job of `varka-demo.yml` runs that on a GitHub-hosted runner under JDK 25. A push
+cannot pin the CPU, and run 38899204181 landed on two CPUs: attempt 1 on an AMD EPYC 9V74
+(`times-attempt1-jdk25-output.txt`), attempt 2 on an AMD EPYC 9V45 (`times-jdk25-output.txt`).
+The post quotes attempt 2 and names its CPU; measurement 6 stays on the fork's benchmark (EPYC
+7763), since `IntSlot` is test code, and the post labels it as a separate run on another build.
+
+- **3.** Over 40 queries: 18.87 ms a query with the same int, 39.59 ms with a new one, of which
+  Janino 10.96 ms; a new date 41.11 ms (Janino 11.63), a new int parameter 40.39 ms (Janino
+  10.78), a new string 26.80 ms with no compile. On the 9V74, 26.88 ms against 48.32, Janino
+  15.43 ms. Unlike the fork's run, Janino is only about half of the added time on 4.2.0; the rest
+  is outside Janino and was not split further. The classes per query match the counts: 3 for a
+  new int, date or parameter value, 0 for a string.
+- **4.** Janino's best of nine: 2.82 ms for a one-entry projection (4470 chars), 5.75 ms for 99
+  entries (31930 chars), 12.43 ms for 10 sums and 30.72 ms for 60 sums. The projections' sources
+  are byte for byte as long as on the fork; the aggregates' are 2.7 to 3.0 times longer (54379
+  against 20456 chars for 10 sums, 243154 against 82037 for 60), the whole-stage codegen
+  difference between the builds.
+
+**Prediction 3 rescored on 4.2.0. Mixed: held on the 9V45, missed on the 9V74.** A new int took
+2.1 times the repeated query's time on the 9V45 (39.59 ms against 18.87) and 1.8 times on the
+9V74 (48.32 against 26.88); with the fork's 1.7 times on the 7763 (9.1), the ratio sits around
+the prediction's bar of two and moves with the machine, so the record does not call it either
+way. The other predictions are counts or ran on the fork, and stand as scored in 9.1.
