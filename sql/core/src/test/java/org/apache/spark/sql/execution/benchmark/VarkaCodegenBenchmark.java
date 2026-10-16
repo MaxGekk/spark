@@ -20,10 +20,13 @@ package org.apache.spark.sql.execution.benchmark;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import scala.collection.immutable.Seq;
+import scala.jdk.javaapi.CollectionConverters;
 
 import org.apache.spark.metrics.source.CodegenMetrics;
+import org.apache.spark.sql.VarkaBenchmark;
 import org.apache.spark.sql.VarkaBenchmarkBase;
 import org.apache.spark.sql.catalyst.expressions.Add;
 import org.apache.spark.sql.catalyst.expressions.Attribute;
@@ -42,7 +45,10 @@ import org.apache.spark.sql.catalyst.expressions.codegen.CompiledVarkaProjection
 import org.apache.spark.sql.catalyst.expressions.codegen.GenerateUnsafeProjection;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmup;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaLoopEmitter;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeCache;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeCacheImpl;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeKey;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShapeLookup;
@@ -129,23 +135,40 @@ public class VarkaCodegenBenchmark extends VarkaBenchmarkBase {
     });
 
     section(SAME_LIST_SECTION, () -> {
+      // Janino's cache must be smaller than the cycle, or a cold round could come back cached.
+      int janinoCapacity = SQLConf.get().codegenCacheMaxEntries();
+      require(janinoCapacity < COLD_ROUNDS, "Janino's cache holds " + janinoCapacity
+          + " classes, so a cycle of " + COLD_ROUNDS + " rounds of constants can hit it");
       // A private cache of capacity 0 is the cache disabled: every lookup emits and defines, and
       // the entry is evicted (its loader released) as it is loaded. The warm one keeps every
       // list's class.
       var cold = new VarkaShapeCacheImpl(0);
       var warm = new VarkaShapeCacheImpl(LISTS.size());
       for (ListSpec spec : LISTS) {
-        checkSameList(spec, cold, warm);
-        var benchmark = benchmark(spec.title(), 1).timed().build();
-        benchmark.addCase("spark: generate + Janino compile, cold",
-            i -> sink = sparkProjection(projectList(spec, nextColdRound())));
-        benchmark.addCase("varka: compile + emit + define + load + instantiate, cold",
-            i -> sink = varkaKernel(cold, projectList(spec, nextColdRound())).entry().newKernel());
-        benchmark.addCase("spark: generate, class cache hit",
-            i -> sink = sparkProjection(projectList(spec, HIT_ROUND)));
+        // Every list a timed call compiles is built here, so that no row times building it.
+        var rounds = new Prepared[COLD_ROUNDS];
+        for (int r = 0; r < COLD_ROUNDS; r++) {
+          rounds[r] = prepare(spec, r);
+        }
+        Prepared hit = prepare(spec, HIT_ROUND);
+        checkSameList(spec, rounds, hit, cold, warm);
+
+        VarkaBenchmark benchmark = benchmark(spec.title(), 1).timed().build();
+        benchmark.addCase("spark: generate + Janino compile, cold", i -> {
+          sparkColdCalls++;
+          sink = sparkProjection(rounds[nextColdRound()]);
+        });
+        benchmark.addCase("varka: compile + emit + define + load + instantiate, cold", i -> {
+          varkaColdCalls++;
+          sink = varkaKernel(cold, rounds[nextColdRound()]).entry().newKernel();
+        });
+        benchmark.addCase("spark: generate, class cache hit", i -> sink = sparkProjection(hit));
         benchmark.addCase("varka: compile, shape cache hit",
-            i -> sink = varkaKernel(warm, projectList(spec, HIT_ROUND)).entry().newKernel());
+            i -> sink = varkaKernel(warm, hit).entry().newKernel());
+
+        Counts before = Counts.read(this, cold, warm);
         runCases(benchmark);
+        checkTimedCalls(spec, before, Counts.read(this, cold, warm));
       }
       blackhole = sink;
     });
@@ -209,10 +232,32 @@ public class VarkaCodegenBenchmark extends VarkaBenchmarkBase {
 
   private int coldRound;
 
+  /** The cold calls each arm made, which the table's check compares with what was compiled. */
+  private long sparkColdCalls;
+  private long varkaColdCalls;
+
   private int nextColdRound() {
     int round = coldRound;
     coldRound = (coldRound + 1) % COLD_ROUNDS;
     return round;
+  }
+
+  /**
+   * One list in the two forms the arms take: Spark's {@code Seq<Expression>} and Varka's {@code
+   * Seq<NamedExpression>}, over the same entries. Java sees {@code NamedExpression}, a Scala
+   * trait, as an interface apart from {@code Expression}, so one Scala sequence cannot be both.
+   */
+  private record Prepared(int size, Seq<Expression> spark, Seq<NamedExpression> varka) {
+  }
+
+  private static Prepared prepare(ListSpec spec, int round) {
+    List<NamedExpression> list = projectList(spec, round);
+    var entries = new ArrayList<Expression>(list.size());
+    for (NamedExpression e : list) {
+      // Every entry is an Alias, which is both.
+      entries.add((Expression) e);
+    }
+    return new Prepared(list.size(), seq(entries), seq(list));
   }
 
   /**
@@ -250,14 +295,8 @@ public class VarkaCodegenBenchmark extends VarkaBenchmarkBase {
   }
 
   /** Spark's arm: the source, then Janino unless the text is cached, then the instance. */
-  private static Object sparkProjection(List<NamedExpression> list) {
-    // Java sees NamedExpression, a Scala trait, as an interface apart from Expression, so the
-    // entries are cast one by one; each is an Alias, which is both.
-    var entries = new ArrayList<Expression>(list.size());
-    for (NamedExpression e : list) {
-      entries.add((Expression) e);
-    }
-    return GenerateUnsafeProjection.generate(seq(entries), LIST_INPUT);
+  private static Object sparkProjection(Prepared list) {
+    return GenerateUnsafeProjection.generate(list.spark(), LIST_INPUT);
   }
 
   /**
@@ -270,28 +309,34 @@ public class VarkaCodegenBenchmark extends VarkaBenchmarkBase {
    * first lookup that defines it. Here that first time is the check before the table; after it the
    * question is a map lookup, and the private cache builds the bytes again on every cold call. A
    * cold first query in production also builds them once, at the question, and defines them at
-   * the lookup, so the cold row holds the same one build and one definition.
+   * the lookup, so the cold row holds the same one build and one definition. The check after the
+   * table confirms that the JVM-wide cache built nothing while it ran.
    */
-  private static VarkaShapeLookup varkaKernel(VarkaShapeCacheImpl cache,
-      List<NamedExpression> list) {
+  private static VarkaShapeLookup varkaKernel(VarkaShapeCacheImpl cache, Prepared list) {
     CompiledVarkaProjection compiled = varkaCompile(list);
     return cache.getOrEmit(Utils.getContextOrSparkClassLoader(), shapeKey(compiled), EXECUTION);
   }
 
   /** Varka's compiler over the whole list, refusing one it does not fuse entry for entry. */
-  private static CompiledVarkaProjection varkaCompile(List<NamedExpression> list) {
-    var compiled = VarkaExpressionCompiler.compile(seq(list), LIST_INPUT);
+  private static CompiledVarkaProjection varkaCompile(Prepared list) {
+    Optional<CompiledVarkaProjection> compiled =
+        VarkaExpressionCompiler.compile(list.varka(), LIST_INPUT);
     if (compiled.isEmpty()) {
       throw requirementFailed("Varka does not fuse every entry of a list of " + list.size()
           + "; the declines by position: "
-          + VarkaExpressionCompiler.declines(seq(list), LIST_INPUT));
+          + VarkaExpressionCompiler.declines(list.varka(), LIST_INPUT));
     }
     return compiled.get();
   }
 
+  /**
+   * The key the evaluator builds ({@code VarkaEvaluatorBase.shapeKey}) under the default emit
+   * options, warmed as the session's warm-up setting says, as the compiler's admission keys it.
+   */
   private static VarkaShapeKey shapeKey(CompiledVarkaProjection compiled) {
     return new VarkaShapeKey(compiled.outputs(), compiled.inputOrdinals().size(),
-        compiled.numLiterals());
+        compiled.numLiterals(), VarkaEmitOptions.DEFAULTS,
+        VarkaKernelWarmup.warms(SQLConf.get().varkaWarmupEnabled()));
   }
 
   /** How many classes Janino has compiled in this JVM; a cache hit compiles none. */
@@ -299,48 +344,91 @@ public class VarkaCodegenBenchmark extends VarkaBenchmarkBase {
     return CodegenMetrics.METRIC_COMPILATION_TIME().getCount();
   }
 
+  /** The counters a table's check reads before and after the table is timed. */
+  private record Counts(long sparkColdCalls, long varkaColdCalls, long janinoCompilations,
+      long coldMisses, long warmMisses, long sharedBuilds) {
+    static Counts read(VarkaCodegenBenchmark bench, VarkaShapeCacheImpl cold,
+        VarkaShapeCacheImpl warm) {
+      // Qualified: inside the record, the bare name is the component's accessor.
+      return new Counts(bench.sparkColdCalls, bench.varkaColdCalls,
+          VarkaCodegenBenchmark.janinoCompilations(), cold.missCount(), warm.missCount(),
+          VarkaShapeCache.buildCount());
+    }
+  }
+
+  /**
+   * Checks, after a table is timed, that its rows were what they say over every call they timed
+   * and warmed: Janino compiled once per cold call, plus at most once for the hit list, whose
+   * class the cold rows' hundreds of new classes push out of its cache before the hit row's
+   * warm-up compiles it back; Varka's cold cache emitted once per cold call; its warm cache
+   * emitted nothing; and the JVM-wide cache, where the compiler's admission asks, built nothing.
+   */
+  private static void checkTimedCalls(ListSpec spec, Counts before, Counts after) {
+    if (dryRun()) {
+      return;
+    }
+    long sparkCold = after.sparkColdCalls() - before.sparkColdCalls();
+    long compiled = after.janinoCompilations() - before.janinoCompilations();
+    require(compiled == sparkCold || compiled == sparkCold + 1, spec.title() + ": Janino compiled "
+        + compiled + " classes over " + sparkCold + " cold calls, so a cold row hit its cache");
+    long varkaCold = after.varkaColdCalls() - before.varkaColdCalls();
+    require(after.coldMisses() - before.coldMisses() == varkaCold, spec.title()
+        + ": Varka's cold cache did not emit on each of its " + varkaCold + " calls");
+    require(after.warmMisses() == before.warmMisses(),
+        spec.title() + ": Varka's warm cache missed while its row was timed");
+    require(after.sharedBuilds() == before.sharedBuilds(), spec.title()
+        + ": the compiler's admission built a class while the table was timed");
+  }
+
   /**
    * Prints the list and checks, before its table is timed, what the arms claim: that Varka fuses
-   * every entry into one output each, that its shape is the same in every round, that the cold
-   * arms compile on every call and that the hit arms compile nothing once warm. The warm cache
-   * is warmed here, by the second Varka call of the hit round.
+   * every entry into one output each, that its shape is the same in every round, that new
+   * constants compile in Janino and a repeated list does not, that Varka's cold cache emits on
+   * every call and its warm one hits on the same constants and on new ones, and that a repeated
+   * compile asks the admission without building again. The warm cache is warmed here, by its
+   * first lookup of the hit list. {@link #checkTimedCalls} checks the timed calls themselves.
    */
-  private static void checkSameList(ListSpec spec, VarkaShapeCacheImpl cold,
-      VarkaShapeCacheImpl warm) {
-    List<NamedExpression> list = projectList(spec, HIT_ROUND);
+  private static void checkSameList(ListSpec spec, Prepared[] rounds, Prepared hit,
+      VarkaShapeCacheImpl cold, VarkaShapeCacheImpl warm) {
     System.out.println("VARKA-259 list \"" + spec.title() + "\", the hit round:");
-    for (NamedExpression e : list) {
-      System.out.println("  " + ((Expression) e).sql());
+    for (Expression e : CollectionConverters.asJava(hit.spark())) {
+      System.out.println("  " + e.sql());
     }
 
-    CompiledVarkaProjection compiled = varkaCompile(list);
+    CompiledVarkaProjection compiled = varkaCompile(hit);
     require(compiled.outputs().size() == spec.size(), spec.title() + ": Varka made "
         + compiled.outputs().size() + " outputs of " + spec.size() + " entries");
     VarkaShapeKey key = shapeKey(compiled);
-    for (int round : new int[] {0, COLD_ROUNDS - 1, CHECK_ROUND, CHECK_ROUND + 1}) {
-      require(shapeKey(varkaCompile(projectList(spec, round))).equals(key),
-          spec.title() + ": Varka's shape in round " + round + " differs from the hit round's");
+    Prepared check = prepare(spec, CHECK_ROUND);
+    Prepared checkNext = prepare(spec, CHECK_ROUND + 1);
+    for (Prepared other : List.of(rounds[0], rounds[COLD_ROUNDS - 1], check, checkNext)) {
+      require(shapeKey(varkaCompile(other)).equals(key),
+          spec.title() + ": Varka's shape with other constants differs from the hit list's");
     }
+    long builds = VarkaShapeCache.buildCount();
+    varkaCompile(hit);
+    require(VarkaShapeCache.buildCount() == builds,
+        spec.title() + ": the compiler's admission built a class it had already built");
 
     long compiles = janinoCompilations();
-    sparkProjection(projectList(spec, CHECK_ROUND));
-    sparkProjection(projectList(spec, CHECK_ROUND + 1));
+    sparkProjection(check);
+    sparkProjection(checkNext);
     require(janinoCompilations() - compiles == 2,
         spec.title() + ": Janino did not compile two new rounds twice");
-    sparkProjection(list);
+    sparkProjection(hit);
     compiles = janinoCompilations();
-    sparkProjection(list);
+    sparkProjection(hit);
     require(janinoCompilations() == compiles,
-        spec.title() + ": Janino compiled the hit round again");
+        spec.title() + ": Janino compiled the hit list again");
 
     long misses = cold.missCount();
-    VarkaShapeLookup first = varkaKernel(cold, projectList(spec, CHECK_ROUND));
-    varkaKernel(cold, projectList(spec, CHECK_ROUND));
+    VarkaShapeLookup first = varkaKernel(cold, check);
+    varkaKernel(cold, check);
     require(cold.missCount() - misses == 2 && cold.size() == 0,
         spec.title() + ": the cold cache did not emit on every call");
-    varkaKernel(warm, list);
+    varkaKernel(warm, hit);
     long hits = warm.hitCount();
-    require(varkaKernel(warm, list).hit() && varkaKernel(warm, projectList(spec, 0)).hit()
+    require(varkaKernel(warm, hit).hit() && varkaKernel(warm, rounds[0]).hit()
         && warm.hitCount() - hits == 2,
         spec.title() + ": the warm cache did not hit, on the same constants or on new ones");
 
