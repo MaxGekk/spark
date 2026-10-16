@@ -63,10 +63,21 @@ import org.scalatest.events.TestIgnored;
  * alone - {@code run(Some(name), args)} on a fresh instance of its suite, its
  * {@code beforeAll} and {@code afterAll} around it - after emptying the Varka shape cache: a
  * kernel cached by an earlier test was emitted by other code than the mutant in the JVM now, and
- * would hide the mutant, or blame it for another's bytes. A failed test or an aborted suite fails
- * the unit; a cancelled or ignored test is skipped.
+ * would hide the mutant, or blame it for another's bytes. A failed test, an aborted suite or a
+ * suite status that did not succeed fails the unit; a cancelled or ignored test is skipped.
  */
 public final class VarkaPitScalaTest implements TestPluginFactory {
+
+  /**
+   * Which tests the run takes: {@code exclude} leaves out the structural ones, {@code only} takes
+   * them alone, anything else takes every test. A structural test checks what the emitter emits
+   * rather than what a kernel answers: the bytes oracle's, and every test tagged
+   * {@code PinsDefaults}, the tag the house gives a test whose subject is the defaults' emitted
+   * structure (a grouping, an op count, a build count).
+   */
+  static final String STRUCTURE = "varka.pit.structure";
+  static final String BYTES_ORACLE = "VarkaEmittedBytesSuite";
+  static final String PINS_DEFAULTS = "org.apache.spark.sql.varka.PinsDefaults";
 
   /** The cache a unit empties before its test: emitted kernels outlive the mutant in the JVM. */
   static final String SHAPE_CACHE =
@@ -110,17 +121,32 @@ public final class VarkaPitScalaTest implements TestPluginFactory {
     };
   }
 
-  /** One unit per test of a runnable suite; nothing for any other class. */
+  /**
+   * One unit per test of a runnable suite, as {@link #STRUCTURE} selects; nothing for any other
+   * class.
+   */
   static List<TestUnit> units(Class<?> c, TestUnitExecutionListener listener) {
     Constructor<?> constructor = constructor(c);
     if (constructor == null) {
       return List.of();
     }
     Suite suite = instantiate(constructor);
+    String mode = System.getProperty(STRUCTURE, "");
+    boolean oracle = c.getName().endsWith("." + BYTES_ORACLE);
     var units = new ArrayList<TestUnit>();
     scala.collection.Iterator<String> names = suite.testNames().iterator();
     while (names.hasNext()) {
-      units.add(new Unit(constructor, names.next()));
+      String name = names.next();
+      boolean structural = oracle || suite.tags().get(name)
+          .exists(tags -> tags.contains(PINS_DEFAULTS));
+      boolean keep = switch (mode) {
+        case "exclude" -> !structural;
+        case "only" -> structural;
+        default -> true;
+      };
+      if (keep) {
+        units.add(new Unit(constructor, name));
+      }
     }
     return units;
   }
@@ -172,6 +198,11 @@ public final class VarkaPitScalaTest implements TestPluginFactory {
             scala.Option.empty(), scala.Option.empty());
         Status status = suite.run(scala.Option.apply(test), args);
         status.waitUntilCompleted();
+        // An afterAll that throws reaches the status alone, as its unreported exception, which
+        // succeeds() rethrows; a status that failed with no event fails the unit too.
+        if (!status.succeeds() && outcome.failure == null && !outcome.skipped) {
+          outcome.failure = new AssertionError("the suite's status did not succeed");
+        }
       } catch (Throwable t) {
         outcome.failure = t;
       }

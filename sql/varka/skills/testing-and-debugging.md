@@ -877,7 +877,9 @@ killed only by `VarkaEmittedBytesSuite`, survived - with each survivor answered 
 - **The bytes oracle kills nearly everything a behavioural suite misses**, equivalent mutants
   included - in the first probe, 45 of the 48 one suite left - so its kill is read as a survivor,
   and its run gets only the first run's leftovers (`dev/varka_pit/VarkaPitOnly.java`, PIT's
-  interceptor SPI); its pinned-shapes test took 48 s under load.
+  interceptor SPI); its pinned-shapes test took 48 s under load. The same holds for every test
+  tagged `PinsDefaults` (a grouping, an op count pinned at the defaults), which the plugin moves
+  from the first run to the second by its tag.
 - **Never answer a mutant from a narrow run.** Against one suite, removing javac's
   `requireNonNull` on `pureOf`'s pattern switch survived and looked equivalent; against all 40
   suites it is killed, since a null selector takes the switch's default arm and every pure word is

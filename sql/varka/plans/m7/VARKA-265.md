@@ -233,8 +233,11 @@ the load; a machine verdict, not the emitter's, and the coverage it reached is c
 
 | area | methods | entered | branches |
 | :--- | ---: | ---: | ---: |
-| emitter (`codegen.varka`) | 917 | 895 | 90.0% (392 missed) |
-| compiler (`codegen.Varka*`) | 324 | 320 | 83.7% (179 missed) |
+| emitter (`codegen.varka`) | 868 | 847 | 90.0% (392 missed) |
+| compiler (`codegen.Varka*`) | 217 | 217 | 83.7% (179 missed) |
+
+Methods are those a reader can name: lambda bodies count with the code, not as methods (the first
+render counted them, 917 and 324, which the review of 9.4 corrected).
 
 `Analysis` takes 96.2% of its branches (14 missed, on 12 lines, five of them validation
 refusals a well-formed shape never meets) and `Slots` 92.9% (40 missed, on 24 lines). The
@@ -270,13 +273,15 @@ of the class - hence `--unit-size` (default 20).
       > target/varka-pit.log 2>&1
 
 Twelve minions of 4 GB each. **Expected duration about two hours, and stop to read it past
-four**: the build and coverage phase about 8 minutes; the killed mutants about 1,400 at about 2 s,
-5 minutes over twelve threads; the mutants the first run leaves, about 300 by prediction 6, each
-rerunning about 400 covering tests at the sample survivor's cost, between 150 s idle and 250 s
-loaded, 60 to 105 minutes over twelve threads; the bytes oracle's run on those, at about 14 s a
-mutant, under 10 minutes. The estimate is the arithmetic times the calibration table's ratio for
-harness-bound work, up to 2, which is the four hours; what decides it is the number left by the
-first run, which the report states.
+four**: the build and the coverage phase about 8 minutes; the killed mutants, about 1,400 at about
+2 s, 5 minutes over twelve threads; the mutants the first run leaves, about 300 by prediction 6,
+each rerunning its covering tests, about 400. That last cost is inferred, not timed: the sample's
+mutant phase took 493 s for 104 mutants under load, 103 of them killed after one test at the
+median, so its one survivor took most of it, about 250 s, and perhaps 150 s on an idle machine -
+60 to 105 minutes over twelve threads. The second run on those - the bytes oracle's about 14 s a
+mutant and the `PinsDefaults` tests' few seconds - takes under 15 minutes. The estimate is the
+arithmetic times the calibration table's ratio for harness-bound work, up to 2, which is the four
+hours; what decides it is the number the first run leaves, which the report states.
 
 ### 9.3 The predictions, scored
 
@@ -285,13 +290,39 @@ first run, which the report states.
    two suites suggested.
 2. `Analysis` 90% or more, `Slots` 85% or more: **held**, 96.2% and 92.9%.
 3. The constant pool's decline the only mechanism no suite reaches: **held**.
-4. Under 40 emitter methods never entered: **held**, 22 - among them two `Slots.plan` overloads
+4. Under 40 emitter methods never entered: **held**, 21 - among them two `Slots.plan` overloads
    with no caller in the main or test tree, dead code whose mutants are uncovered by construction.
 5. 2,000 to 3,500 mutants: **missed**, 1,744; the probe's two methods are denser in calls than the
    classes on average.
 6. and 7. The full run's verdicts and duration: open, the owner's idle-window run.
 
-### 9.4 Left for later
+### 9.4 The review
+
+`/code-review high` on the three commits found nine things, all verified and fixed:
+
+* **Structural tests counted as behavioural.** Seventeen suites hold tests tagged `PinsDefaults` -
+  a grouping, an op count, a build count pinned at the defaults, `VarkaEmitCostSuite`'s and
+  `VarkaKernelPlanSuite`'s against `emit_cost_audit.json` among them - and a mutant they alone
+  kill changed what the emitter emits, not an answer. **Correction to 3.2**: the first run now
+  takes the untagged tests, and the second the bytes oracle with every `PinsDefaults` test, both
+  read as "the bytes oracle" in the report. The sample of 9.2 ran before the split, as its opening
+  line says. Suites that read `coverage.json` (`VarkaGroupingBoundSuite`, the composition fuzzer)
+  read it as their corpus, not as a pin, and stay behavioural.
+* **A suite status that failed with no event** - an `afterAll` that throws - passed the unit; the
+  unit now fails on `Status.succeeds()`.
+* **Notes keyed on the line and the first index** went stale on any edit above them, and a note
+  naming the test that now kills its mutant failed the next run. Notes are now keyed on PIT's
+  bytecode identity (method descriptor and indexes) with the line for the reader, and a note is
+  stale only when its method was mutated and no mutant, killed or not, matches it.
+* **`--methods` dropped a method's lambdas**, which javap lists as methods of their own; a
+  `lambda$<method>$<n>` now goes with its method.
+* In the coverage analyser: a missing `Slots` or `Analysis` gave an empty "never taken" table that
+  read as full coverage, and now fails; stale classes now fail the run as well as being named; the
+  method counts left lambdas in while the list left them out (prediction 4's count moved from 22
+  to 21); a choice that ran one arm is reported as unknown for both its mechanisms, never as
+  reached (no mechanism is in that state in this run); and percentages render in `Locale.ROOT`.
+
+### 9.5 Left for later
 
 * The full run's survivors, each a test or a note, after the owner's run.
 * The two dead `Slots.plan` overloads: delete them, or leave their mutants as uncovered by

@@ -1,6 +1,6 @@
 # The answers to the mutants no behavioural test kills (VARKA-265): dev/varka_pit_verdicts.py
 # reads them into the verdicts report. One line per mutant, tab-separated: the class, the method,
-# the line, the mutator and the first instruction index, as the report lists them, then the test
-# that now kills it or why it changes no behaviour. A note that matches no open mutant fails the
-# report, so a note leaves with the mutant it answered.
-Analysis	planBitmapPass	740	RemoveConditionalMutator_EQUAL_ELSE	39	equivalent: planWordAlgebra, which runs first, skips every Cond node, so pureWord holds none and the next line's null check skips a Cond root as this one does
+# its descriptor, the mutator and the instruction indexes - PIT's identity of the mutant, as the
+# report's run gives it - then its line, for the reader, then the test that now kills it or why it
+# changes no behaviour. A note matching no mutant of a method the run mutated fails the report.
+Analysis	planBitmapPass	(Ljava/util/List;)V	RemoveConditionalMutator_EQUAL_ELSE	39	740	equivalent: planWordAlgebra, which runs first, skips every Cond node, so pureWord holds none and the next line's null check skips a Cond root as this one does

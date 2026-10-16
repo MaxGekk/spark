@@ -30,15 +30,19 @@ mutators. A mutant is
   and no answer did, which is read as a survivor, since the oracle kills equivalent mutants too;
 * survived otherwise, with no test covering it or with every covering test passing.
 
+A mutant PIT could not load (`NON_VIABLE`) is left out, and a run with a mutant not started or not
+finished is refused.
+
 A mutant is the same in both runs when its class, method, descriptor, mutator and instruction
 indexes agree, which PIT derives from the bytecode alone. The second run is given only the mutants
 the first did not kill: --keep writes them, one identity a line, for dev/varka_pit/VarkaPitOnly.
 
-NOTES.tsv answers the survivors: one line per mutant, its key (class, method, line, mutator, first
-index, tab-separated) then the test that now kills it or the note that it changes no behaviour;
-the report lists each non-behavioural mutant with its answer, or "open" where there is none yet. A
-note on a method the run mutated that matches no mutant it left fails the run: the note outlived
-its mutant.
+NOTES.tsv answers the survivors: one line per mutant, tab-separated - PIT's identity of it (the
+class and the mutator by their short names, the method, its descriptor, the instruction indexes),
+its line for the reader, then the test that now kills it or the note that it changes no behaviour.
+The identity is the bytecode's, so an edit elsewhere in the file leaves a note matching. The report
+lists each non-behavioural mutant with its answer, or "open" where there is none yet. A note on a
+method the run mutated that matches no mutant fails the run: the code changed under it.
 """
 
 import argparse
@@ -47,6 +51,9 @@ import sys
 import xml.etree.ElementTree as ET
 
 KILLS = {"KILLED", "TIMED_OUT", "MEMORY_ERROR", "RUN_ERROR"}
+# A mutant PIT could not load is no mutant; one it never started or finished means the run broke.
+NON_VIABLE = "NON_VIABLE"
+UNFINISHED = {"NOT_STARTED", "STARTED"}
 VERDICTS = ("behavioural", "bytes only", "survived")
 
 
@@ -66,18 +73,22 @@ def mutants(path):
         )
         if key in out:
             sys.exit(f"duplicate mutant {key} in {path}")
-        out[key] = f
+        if f["status"] in UNFINISHED:
+            sys.exit(f"{path}: mutant {key} is {f['status']}; the run did not finish")
+        if f["status"] != NON_VIABLE:
+            out[key] = f
     return out
 
 
 def note_key(f):
+    """A note's key: PIT's identity of the mutant, the class and mutator by their short names."""
     return "\t".join(
         [
             f["mutatedClass"].rsplit(".", 1)[-1],
             f["mutatedMethod"],
-            f["lineNumber"],
+            f["methodDescription"],
             f["mutator"].rsplit(".", 1)[-1],
-            f["indexes"].split(",")[0],
+            f["indexes"],
         ]
     )
 
@@ -94,9 +105,9 @@ def read_notes(path):
         if not line.strip() or line.startswith("#"):
             continue
         parts = line.split("\t")
-        if len(parts) != 6:
-            sys.exit(f"{path}: a note is five key fields and the answer: {line!r}")
-        notes["\t".join(parts[:5])] = parts[5]
+        if len(parts) != 7:
+            sys.exit(f"{path}: a note is five key fields, the line and the answer: {line!r}")
+        notes["\t".join(parts[:5])] = parts[6]
     return notes
 
 
@@ -108,7 +119,7 @@ def verdict(first, second):
     return "survived"
 
 
-def render(rows, notes, used, scope):
+def render(rows, notes, scope):
     out = [
         "# Mutation run: verdicts",
         "",
@@ -177,8 +188,6 @@ def render(rows, notes, used, scope):
     left.sort(key=lambda r: (r[0]["mutatedClass"], int(r[0]["lineNumber"]), r[2]))
     for f, v, key in left:
         answer = notes.get(key, "open")
-        if key in notes:
-            used.add(key)
         out.append(
             f"| {v} | {f['mutatedClass'].rsplit('.', 1)[-1]} | `{f['mutatedMethod']}` "
             f"| {f['lineNumber']} | {f['mutator'].rsplit('.', 1)[-1]} "
@@ -220,14 +229,15 @@ def main():
         sys.exit(f"{len(extra)} mutants of the second run are not in the first, e.g. {extra[0]}")
     notes = read_notes(args.notes)
     rows = [(f, verdict(f, second.get(k)), note_key(f)) for k, f in first.items()]
-    used = set()
-    text = render(rows, notes, used, args.scope)
+    text = render(rows, notes, args.scope)
     with open(args.report, "w", encoding="utf-8") as out:
         out.write(text)
     # One notes file serves runs of any scope: a note is stale when this run mutated its method
-    # and no mutant it left matches the note.
-    methods = {tuple(note_key(f).split("\t")[:2]) for f, _, _ in rows}
-    stale = sorted(k for k in set(notes) - used if tuple(k.split("\t")[:2]) in methods)
+    # and no mutant matches it. A note naming the test that now kills its mutant stays, with the
+    # mutant now behavioural; one whose mutant is gone - the code changed - is stale.
+    keys = {key for _, _, key in rows}
+    methods = {tuple(key.split("\t")[:2]) for key in keys}
+    stale = sorted(k for k in set(notes) - keys if tuple(k.split("\t")[:2]) in methods)
     counts = collections.Counter(v for _, v, _ in rows)
     print(", ".join(f"{counts[v]} {v}" for v in VERDICTS) + f" of {len(rows)} mutants")
     if stale:

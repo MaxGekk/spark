@@ -25,9 +25,11 @@
 #   dev/varka_pit.sh --skip-build --verdict-only      # the verdicts again, from the last run
 #
 # Two PIT runs over the same mutants, since PIT stops a mutant at its first kill. The first runs
-# every eligible suite but VarkaEmittedBytesSuite, so a kill there is behavioural; the second runs
-# VarkaEmittedBytesSuite alone, so a mutant only it kills changed the bytes and no answer - read as
-# a survivor, since the bytes oracle kills equivalent mutants too (m7/PLAN.md 2.2). PIT identifies
+# every eligible suite's behavioural tests, so a kill there is behavioural; the second runs the
+# structural ones - VarkaEmittedBytesSuite and every test tagged PinsDefaults, whose subject is the
+# defaults' emitted structure (a grouping, an op count) - on the mutants the first left, so a
+# mutant only they kill changed what the emitter emits and no answer: read as a survivor, since
+# they kill equivalent mutants too (m7/PLAN.md 2.2). The report calls them the bytes oracle. PIT identifies
 # a mutant by class, method, descriptor, mutator and index, which both runs share, and
 # dev/varka_pit_verdicts.py joins them and writes the report.
 #
@@ -110,11 +112,10 @@ EXCLUDED=(
   "VarkaProbeOutputSuite:checks a probe's output parsing, not the emitter"
   "VarkaMatrixSuite:checks the matrix's own machinery, not an answer"
   "VarkaEmitCostAuditSuite:compares the cost audit with a committed file, as the bytes do"
-  "VarkaEmittedBytesSuite:the bytes oracle, run on its own second"
+  "VarkaEmittedBytesSuite:the bytes oracle, run second with the PinsDefaults tests"
 )
 
 PIT=1.30.0
-ASM=9.10.1
 M2=${M2_REPO:-$HOME/.m2/repository}
 PIT_JARS=()
 for a in pitest pitest-entry pitest-command-line; do
@@ -195,7 +196,10 @@ if [ "$run" = 1 ]; then
         done
       done | sed -nE 's/.* ([A-Za-z0-9_$<>]+)\(.*/\1/p'; echo '<init>'; echo '<clinit>') \
       | sort -u); do
-      [[ ",$methods," == *",$name,"* ]] || excluded_methods+="${excluded_methods:+,}$name"
+      # A lambda's body is its method's code: lambda$<method>$<n> goes with <method>.
+      owner=$name
+      [[ "$name" =~ ^lambda\$([^$]+)\$[0-9]+$ ]] && owner=${BASH_REMATCH[1]}
+      [[ ",$methods," == *",$owner,"* ]] || excluded_methods+="${excluded_methods:+,}$name"
     done
   fi
   mapfile -t OPTS < "$OUT/jvm.opts"
@@ -208,11 +212,11 @@ if [ "$run" = 1 ]; then
 
   # The run's scope, for the report's opening line.
   echo "Mutated: \`${classes//,/\`, \`}\`${methods:+, methods \`${methods//,/\`, \`}\`}," \
-    "mutators $mutators; behavioural run: ${#found[@]} catalyst suites; the bytes oracle:" \
-    "VarkaEmittedBytesSuite." > "$OUT/scope"
+    "mutators $mutators; behavioural run: the untagged tests of ${#found[@]} catalyst suites;" \
+    "the bytes oracle: VarkaEmittedBytesSuite and their PinsDefaults tests." > "$OUT/scope"
 
   pit() {
-    local name=$1 tests=$2 only=${3:-} start status
+    local name=$1 tests=$2 structure=$3 only=${4:-} start status
     rm -rf "${OUT:?}/$name" && mkdir -p "$OUT/$name"
     local extra=()
     [ -n "$excluded_methods" ] && extra+=(--excludedMethods "$excluded_methods")
@@ -229,7 +233,7 @@ if [ "$run" = 1 ]; then
       --mutators "$mutators" --threads "$threads" --mutationUnitSize "$unit_size" \
       --outputFormats XML,CSV --timestampedReports false --reportDir "$OUT/$name" \
       --timeoutConst 60000 --timeoutFactor 2 \
-      --argLine "$argline" --verbosity VERBOSE_NO_SPINNER "${extra[@]}" \
+      --argLine "$argline -Dvarka.pit.structure=$structure" --verbosity VERBOSE_NO_SPINNER "${extra[@]}" \
       > "$OUT/$name.log" 2>&1
     status=$?
     echo "varka_pit: run $name took $(( $(date +%s) - start )) s, exit status $status"
@@ -237,7 +241,7 @@ if [ "$run" = 1 ]; then
     return "$status"
   }
   behavioural=$(IFS=,; echo "${found[*]}")
-  pit behavioural "$behavioural" || exit 1
+  pit behavioural "$behavioural" exclude || exit 1
   if [ "$dry" = 1 ]; then
     echo "varka_pit: dry run; the mutants are in $OUT/behavioural/mutations.xml"
     exit 0
@@ -246,7 +250,7 @@ if [ "$run" = 1 ]; then
   python3 dev/varka_pit_verdicts.py --keep "$OUT/behavioural/mutations.xml" "$OUT/keep.tsv" \
     || exit 1
   if [ -s "$OUT/keep.tsv" ]; then
-    pit bytes "$BYTES_ORACLE" "$OUT/keep.tsv" || exit 1
+    pit bytes "$BYTES_ORACLE,$behavioural" only "$OUT/keep.tsv" || exit 1
   else
     rm -rf "${OUT:?}/bytes" && mkdir -p "$OUT/bytes"
     echo '<mutations/>' > "$OUT/bytes/mutations.xml"

@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
@@ -88,7 +89,7 @@ public final class VarkaEmitterCoverage {
 
     static String pct(long covered, long missed) {
       long total = covered + missed;
-      return total == 0 ? "-" : String.format("%.1f%%", 100.0 * covered / total);
+      return total == 0 ? "-" : String.format(Locale.ROOT, "%.1f%%", 100.0 * covered / total);
     }
   }
 
@@ -135,16 +136,20 @@ public final class VarkaEmitterCoverage {
       Counts area = areas.computeIfAbsent(area(c.getPackageName()), x -> new Counts());
       Counts fc = byFile.computeIfAbsent(file, x -> new Counts());
       for (IMethodCoverage m : c.getMethods()) {
-        // Synthetic lambdas and bridges count with their code, but a method is listed by name.
+        // A lambda's body counts with the code, but not as a method: the counts are of the
+        // methods a reader can name, as the list of those never entered is.
         boolean entered = m.getInstructionCounter().getCoveredCount() > 0;
+        boolean lambda = m.getName().startsWith("lambda$");
         for (Counts k : List.of(area, fc)) {
           k.add(m.getInstructionCounter(), m.getBranchCounter());
-          k.methods++;
-          if (entered) {
-            k.entered++;
+          if (!lambda) {
+            k.methods++;
+            if (entered) {
+              k.entered++;
+            }
           }
         }
-        if (!entered && !m.getName().startsWith("lambda$")) {
+        if (!entered && !lambda) {
           String simple = c.getName().substring(c.getName().lastIndexOf('/') + 1);
           neverEntered.computeIfAbsent(file, x -> new ArrayList<>())
               .add(simple + "." + m.getName() + (m.getFirstLine() > 0
@@ -161,9 +166,13 @@ public final class VarkaEmitterCoverage {
     for (String name : DETAILED) {
       String key = EMITTER.substring(0, EMITTER.length() - 1) + "/" + name;
       ISourceFileCoverage s = sourceFiles.get(key);
+      if (s == null) {
+        // An empty table would read as every branch taken.
+        throw new IllegalStateException("no coverage for " + key + " in " + classes);
+      }
       List<String> text = Files.readAllLines(sources.resolve(key));
       List<String> rows = new ArrayList<>();
-      if (s != null) {
+      {
         for (int line = s.getFirstLine(); line > 0 && line <= s.getLastLine(); line++) {
           ICounter b = s.getLine(line).getBranchCounter();
           if (b.getMissedCount() > 0) {
@@ -180,6 +189,11 @@ public final class VarkaEmitterCoverage {
 
     Files.writeString(Path.of(args[4]), render(areas, byFile, neverEntered, detail,
         mechanisms(sources, sourceFiles, reach), stale), StandardCharsets.UTF_8);
+    if (!stale.isEmpty()) {
+      // The report says so too; the run fails, since its percentages count those classes missed.
+      System.err.println("VarkaEmitterCoverage: classes ran under other bytes: " + stale);
+      System.exit(1);
+    }
   }
 
   static boolean inScope(Path f) {
@@ -269,7 +283,7 @@ public final class VarkaEmitterCoverage {
             ICounter b = branches(cov, line);
             verdict = b == null || b.getTotalCount() == 0 ? (ran(cov, line) ? "yes" : "no")
                 : b.getMissedCount() == 0 ? "yes"
-                : b.getCoveredCount() > 0 ? "one arm of " + b.getTotalCount() : "no";
+                : b.getCoveredCount() > 0 ? "one of its choice's arms; which, unread" : "no";
           } else {
             verdict = ran(cov, line) ? "yes" : "no";
           }
@@ -321,7 +335,11 @@ public final class VarkaEmitterCoverage {
     return out;
   }
 
-  /** Of two verdicts on one mechanism's sites, the one that says more of it ran. */
+  /**
+   * Of two verdicts on one mechanism's sites, the one that says more of it ran. A choice that ran
+   * one arm only says so for both its mechanisms, since a line's branch counts do not say which;
+   * the report reads it as unknown, never as reached.
+   */
   static String better(String a, String b) {
     if (a.equals("yes") || b.equals("yes")) {
       return "yes";
