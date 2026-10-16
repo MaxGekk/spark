@@ -298,3 +298,9 @@ nine hours late (2.2): the harm is a full-matrix run taking every slot, not two 
   marked step - more than 5% and at least 30 s over the budget's 90th percentile - is a line in
   the pull request's description, not a failure: one day's suites step ranged 2.8 times across
   runners.
+* **New tests rerun, and a fix shows its bug.** The Varka suite jobs rerun the tests a pull
+  request adds five times (`dev/varka_new_tests.py rerun`), naming a test whose name is not a
+  literal as unlistable rather than dropping it; label a pull request `fix` and its new tests
+  must also fail on the merge base's main sources (`fails-on-base`), or the job fails naming the
+  one that passed. Add the label before the push, or rerun the job after adding it: a push build
+  reads the label when it runs.
