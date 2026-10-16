@@ -979,6 +979,28 @@ compiled test, draws 0 to 99 a lane at seed 20260903, with `-XX:PerMethodTrapLim
   (`VARKA-295.md` 9.6 raised `PerMethodTrapLimit` to end a different trap sum). A check that
   wants to see it counts traps per second of C2 code, not recompiles.
 
+## A kernel warmed after other kernels can stay allocating, and the template prewarm guards only the int lane
+
+From VARKA-257 (16 October 2026, `VarkaKernelHistory-jdk25-probe.txt`), which warms N kernels of
+the IR fuzz grammar through production's warm-up in one JVM and reads each one's verdict.
+
+- **History is a variable a fresh-JVM probe cannot see.** At the 512-bit preferred species, with
+  the prewarm off, no kernel at position 0 of a history was released (0 of 12), and past position
+  16 28 to 32 per cent were, nearly all with every loop method at tier 4 and still allocating
+  (VARKA-295's cause 4). The draws released after a history compiled when run alone (6 of 6).
+  A guard that forks one class per JVM reads 0 here by design.
+- **The Vector API template prewarm (`VarkaVectorTemplateWarmup`) clears the int lane early and
+  leaves the long lane**: int releases before position 16 went from 19 of 84 to 0, and past 16
+  from 27.8 to 10.4 per cent; long releases past 16 stayed at about 30 per cent (43 of 144 with it,
+  46 without). Do not read VARKA-295 9.8's "0 of 2,000" as covering long-lane kernels: those were
+  the Spark fuzzer's compositions.
+- **At 128 bits a long-lane kernel releases alone** (6 of 6 seeds, every loop C2): that is
+  VARKA-374's shape-level case, so a history reading at 128 bits must be split by lane before it
+  is read as history.
+- **Replay a release exactly** with the seed and `-Dvarka.history.from=<draw>`
+  (`dev/varka_kernel_history.sh --after 1 --forks 1 --jvm -Dvarka.history.from=<k>`): a release
+  that disappears alone is the history's.
+
 ## Which tier served a call: the code list at the call's edges, JFR's events inside it
 
 From VARKA-274 (13 to 16 October 2026, `VARKA-274.md` 2 and 9), which runs drawn kernels over

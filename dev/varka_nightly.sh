@@ -34,6 +34,7 @@
 #   dev/varka_nightly.sh --skip-golden    # without the golden-file suite, about an hour
 #   dev/varka_nightly.sh --skip-platform  # without the forked JVM arms (interpreter, C1, C2, -Xcomp, ...)
 #   dev/varka_nightly.sh --skip-deoptnull # without the NULL-mode kernels' cycle ratchet
+#   dev/varka_nightly.sh --skip-history   # without the kernel-after-kernels arm (VARKA-257)
 #   dev/varka_nightly.sh --skip-compiled  # without the compiled fuzz histories at volume
 #
 # The deopt step forks ten fresh JVMs per vector width of the default emission's twelve-output
@@ -91,6 +92,7 @@ while [ "$#" -gt 0 ]; do
     --skip-sweep) sweep=0; shift ;;
     --skip-deopt) deopt=0; shift ;;
     --skip-deoptnull) deoptnull=0; shift ;;
+    --skip-history) history=0; shift ;;
     --skip-compiled) compiled=0; shift ;;
     --skip-cliff) cliff=0; shift ;;
     --skip-golden) golden=0; shift ;;
@@ -113,6 +115,10 @@ run_step() {
     status[$name]=FAILED
   fi
   secs[$name]=$((SECONDS - start))
+  # Beside the log, as dev/varka_gate.sh writes them, so `dev/varka_ci_times.py gate` reads a
+  # nightly's step times against the budget (VARKA-255.md 3.6).
+  echo "${secs[$name]}" > "$logdir/$name.secs"
+  echo "${status[$name]}" > "$logdir/$name.status"
   grep -h -E "Tests: succeeded|FAILED \*\*\*|^failed \(|verdict|[[:space:]]OFF$|seed=|^\[info\] - " "$logdir/$name.log" \
     | sed 's/^\[info\] //' | head -6 | sed 's/^/   /'
 }
@@ -179,6 +185,16 @@ fi
 if [ "$deoptnull" -eq 1 ]; then
   run_step deoptnull dev/varka_deopt_census.sh --guard --out "$logdir/deoptnull"
 fi
+# A kernel compiled after other kernels (VARKA-257): forks warm sixteen kernels of the IR fuzz
+# grammar through production's warm-up, then the cliff probe's cheap tails at 24 outputs, read its
+# rate and its allocation, and compare every kernel's answers; a wrong answer, an unfinished fork
+# or a slow one fails (dev/varka_kernel_history.sh, VARKA-257.md 3.2). It reuses deoptnull's build.
+if [ "${history:-1}" -eq 1 ]; then
+  history_build=(--build)
+  [ "${status[deoptnull]:-}" = ok ] && history_build=()
+  run_step history dev/varka_kernel_history.sh --after 16 --forks 6 --guard \
+    "${history_build[@]}" --out "$logdir/history"
+fi
 # The IR fuzzer's compiled test at volume (VARKA-274): 1,000 draws a lane with the day's seed, each
 # kernel over the eight batch histories - interpreted, warmed to C2, trapped after a quiet warm-up,
 # recompiled, released through the OSRs with C1 on - every batch compared and its tier read by
@@ -215,6 +231,12 @@ for s in canary fuzz forced sparkfuzz sparkwarm sweep prove series variants deop
   printf '%-9s %-7s %6d  %s\n' "$s" "${status[$s]}" "${secs[$s]}" "$logdir/$s.log"
   [ "${status[$s]}" = ok ] || bad=$((bad + 1))
 done
+# The history step is listed on its own lines, so that the step list above stays as it was.
+if [ -n "${status[history]:-}" ]; then
+  printf '%-9s %-7s %6d  %s\n' history "${status[history]}" "${secs[history]}" \
+    "$logdir/history.log"
+  [ "${status[history]}" = ok ] || bad=$((bad + 1))
+fi
 if [ -n "${status[compiled]:-}" ]; then
   printf '%-9s %-7s %6d  %s\n' compiled "${status[compiled]}" "${secs[compiled]}" \
     "$logdir/compiled.log"
