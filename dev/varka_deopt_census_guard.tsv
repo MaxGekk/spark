@@ -1,0 +1,14 @@
+# The nightly guard over the NULL-mode kernels' deoptimization cycle (VARKA-378), read by
+# dev/varka_deopt_census.sh --guard and dev/varka_deopt_census.py --guard. One row per width:
+# pref is the preferred species (512 bits on the laptop), 16 is -XX:MaxVectorSize=16 (128 bits).
+# Each row is one JVM over draws [from, from + draws) of both lanes, at the seed, under the matrix
+# base options, with the warm-up's deadline in ms, pinned to cpus cores from cpu_base.
+# The ratchet is the most kernels past the deadline with more than four profile_predicate traps
+# the width may count: the step fails above it. The count moves with the machine's load (the
+# cycle's traps come slower on a busy machine, so more kernels are caught at the deadline), so
+# lower it when two nightly runs count fewer, and say why in the commit; it only ever falls, and
+# rises only with a plan that measured why. Set from three runs on a loaded laptop: pref 8, 8, 2
+# and 16 2, 3, 3 (sql/varka/plans/m7/VARKA-378.md 9).
+width	seed	from	draws	deadline_ms	cpus	cpu_base	ratchet
+pref	20260903	0	100	10000	3	3	8
+16	20260903	0	100	10000	3	3	3

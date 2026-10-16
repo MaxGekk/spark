@@ -23,8 +23,9 @@
 #   dev/varka_task_new.sh 37 "..." --dir /somewhere/else
 #
 # Creates ../varka-<n> on branch varka-<n> at origin/master, writes
-# sql/varka/plans/m<k>/VARKA-<n>.md there for the milestone in flight (the highest m<k> with a
-# PLAN.md) from sql/varka/plans/TEMPLATE_TASK.md,
+# sql/varka/plans/m<k>/VARKA-<n>.md there for the milestone whose PLAN.md task table holds the
+# row `| <n> |` (the highest m<k> with a PLAN.md when no table has it yet, for a row about to be
+# added) from sql/varka/plans/TEMPLATE_TASK.md,
 # and installs the pre-commit check in that worktree. It does not commit: the
 # first commit is the plan, once its admission check is done, per the template.
 # Refuses to overwrite an existing plan file or reuse an existing branch.
@@ -46,15 +47,35 @@ root="$(git rev-parse --show-toplevel)"
 remote="${VARKA_BASE_REMOTE:-origin}"
 branch="varka-$n"
 [ -n "$dir" ] || dir="$(dirname "$root")/varka-$n"
-milestone="$(ls -d "$root"/sql/varka/plans/m*/PLAN.md | sed -E 's|.*/m([0-9]+)/PLAN.md|\1|' | sort -n | tail -1)"
-plan="sql/varka/plans/m$milestone/VARKA-$n.md"
 
 if git -C "$root" show-ref --quiet "refs/heads/$branch"; then
   echo "branch $branch already exists; pick up the existing worktree instead" >&2; exit 1
 fi
 [ -e "$dir" ] && { echo "$dir already exists" >&2; exit 1; }
 git -C "$root" fetch -q "$remote" master
-if git -C "$root" ls-tree -r --name-only "$remote/master" sql/varka/plans | grep -q "/VARKA-$n\.md$"; then
+# A task's plan lives with the milestone whose table holds its row. Two milestones can have a
+# PLAN.md at once (the next one is planned while the current one runs), so the highest one is
+# only the fallback for a row not yet in any table. The grep reads its whole input rather than
+# `grep -q`: under pipefail, -q's early exit kills `git show` with SIGPIPE on a long PLAN.md and
+# the match would read as a failure.
+plans="$(git -C "$root" ls-tree --name-only "$remote/master" sql/varka/plans/ \
+  | grep -E '/m[0-9]+$' | sed -E 's|.*/m||' | sort -n)"
+milestone=""
+for k in $plans; do
+  if git -C "$root" show "$remote/master:sql/varka/plans/m$k/PLAN.md" 2>/dev/null \
+      | grep "^| $n |" > /dev/null; then
+    milestone="$k"
+  fi
+done
+if [ -z "$milestone" ]; then
+  for k in $plans; do
+    git -C "$root" cat-file -e "$remote/master:sql/varka/plans/m$k/PLAN.md" 2>/dev/null \
+      && milestone="$k"
+  done
+fi
+[ -n "$milestone" ] || { echo "no sql/varka/plans/m<k>/PLAN.md on $remote/master" >&2; exit 1; }
+plan="sql/varka/plans/m$milestone/VARKA-$n.md"
+if git -C "$root" ls-tree -r --name-only "$remote/master" sql/varka/plans | grep "/VARKA-$n\.md$" > /dev/null; then
   echo "$plan already exists on $remote/master; this task has a plan" >&2; exit 1
 fi
 

@@ -1,54 +1,115 @@
-# MathLaneProbe on GitHub's ubuntu-24.04-arm runner, 19 September 2026, JDK 25.0.4+7 (Zulu).
-# GitHub Actions run 35468234337, job 105964377798, on the MaxGekk/spark fork.
-# CPU part 0xd49 is Arm's Neoverse N2; the runner reports asimd, sve and sve2, and the JVM
-# still picks a 128-bit species (MaxVectorSize=16), the SVE vector length of that core.
+# MathLaneProbe on GitHub's ubuntu-24.04-arm runner, 16 October 2026, JDK 25.0.4+7 (Zulu).
+# GitHub Actions run 38884285755, job 116918163150, on the MaxGekk/spark fork, at commit
+# 5307ee4adf4 of branch varka-canary-sleef. CPU part 0xd49 is Arm's Neoverse N2. The JVM picks a
+# 128-bit species (MaxVectorSize=16), the SVE vector length of that core, so the advsimd SLEEF
+# symbols are bound.
+# The overflow band: every EXP lane from the first double above SLEEF 3.6.1's constant
+# 709.7827111495575 through 709.782712893384 is +Inf where StrictMath is finite; the constant
+# itself stays finite. POW is +Inf wherever y * ln(x) passes the same constant, including
+# pow(MAX_VALUE, 1). The witnesses (21 and 25 of 256 differ from Math) show the band ran through
+# SLEEF; the control pass agrees with StrictMath on all of it.
+# The mask intrinsic: the core reports svebitperm, both in /proc/cpuinfo and in the JVM's own
+# feature list, so VectorMask.fromLong is intrinsified here (fromBitsCoerced "late inline
+# succeeded" where the species is a constant). This runner cannot show the fallback that
+# NEON-only and SVE1 cores take. The full PrintIntrinsics output is in the run's artifact.
 # CPU part	: 0xd49
-# asimd sve sve2 
+# Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm uscat ilrcpc flagm sb paca pacg dcpodp sve2 sveaes svebitperm svesha3 svesm4 flagm2 frint svei8mm svebf16 i8mm bf16
+# [0.001s][info][os,cpu] CPU: total 4 (initial active 4) 0x41:0x0:0xd49:0, fp, asimd, evtstrm, aes, pmull, sha1, sha256, crc32, lse, fphp, asimdhp, dcpop, sha3, sha512, sve, paca, svebitperm, sve2
 # openjdk version "25.0.4" 2026-07-21 LTS
 ### vector math library
+DEBUG: CPUFeatures: fp, asimd, evtstrm, aes, pmull, sha1, sha256, crc32, lse, fphp, asimdhp, dcpop, sha3, sha512, sve, paca, svebitperm, sve2
 DEBUG: VectorMathLibrary: SLEEF library is used
-DEBUG: VectorMathLibrary: SIN sind2_u10advsimd => 0x0000ff77f0853c84
-DEBUG: VectorMathLibrary: COS cosd2_u10advsimd => 0x0000ff77f0854440
-DEBUG: VectorMathLibrary: TAN tand2_u10advsimd => 0x0000ff77f0853430
-DEBUG: VectorMathLibrary: EXP expd2_u10advsimd => 0x0000ff77f0855a80
-DEBUG: VectorMathLibrary: LOG logd2_u10advsimd => 0x0000ff77f08554b0
-DEBUG: VectorMathLibrary: LOG10 log10d2_u10advsimd => 0x0000ff77f0855690
-DEBUG: VectorMathLibrary: EXPM1 expm1d2_u10advsimd => 0x0000ff77f0855bb4
-DEBUG: VectorMathLibrary: LOG1P log1pd2_u10advsimd => 0x0000ff77f0855890
-DEBUG: VectorMathLibrary: ATAN atand2_u10advsimd => 0x0000ff77f0854fa0
-DEBUG: VectorMathLibrary: CBRT cbrtd2_u10advsimd => 0x0000ff77f08551e0
-DEBUG: VectorMathLibrary: POW powd2_u10advsimd => 0x0000ff77f0856924
-DEBUG: VectorMathLibrary: ATAN2 atan2d2_u10advsimd => 0x0000ff77f0856620
-DEBUG: VectorMathLibrary: HYPOT hypotd2_u05advsimd => 0x0000ff77f0856e04
+DEBUG: VectorMathLibrary: SIN sind2_u10advsimd => 0x0000ff4594123c84
+DEBUG: VectorMathLibrary: COS cosd2_u10advsimd => 0x0000ff4594124440
+DEBUG: VectorMathLibrary: TAN tand2_u10advsimd => 0x0000ff4594123430
+DEBUG: VectorMathLibrary: EXP expd2_u10advsimd => 0x0000ff4594125a80
+DEBUG: VectorMathLibrary: LOG logd2_u10advsimd => 0x0000ff45941254b0
+DEBUG: VectorMathLibrary: LOG10 log10d2_u10advsimd => 0x0000ff4594125690
+DEBUG: VectorMathLibrary: EXPM1 expm1d2_u10advsimd => 0x0000ff4594125bb4
+DEBUG: VectorMathLibrary: LOG1P log1pd2_u10advsimd => 0x0000ff4594125890
+DEBUG: VectorMathLibrary: ATAN atand2_u10advsimd => 0x0000ff4594124fa0
+DEBUG: VectorMathLibrary: CBRT cbrtd2_u10advsimd => 0x0000ff45941251e0
+DEBUG: VectorMathLibrary: POW powd2_u10advsimd => 0x0000ff4594126924
+DEBUG: VectorMathLibrary: ATAN2 atan2d2_u10advsimd => 0x0000ff4594126620
+DEBUG: VectorMathLibrary: HYPOT hypotd2_u05advsimd => 0x0000ff4594126e04
 arch=aarch64 jvm=25.0.4+7-LTS UseAVX=n/a MaxVectorSize=16 species double=2 library=default; inputs=262144; rounds before measuring=200
 SIN     10.5 ns/elem  vs Math:  24466 lanes differ (max 1 ulp)  vs StrictMath:  11179 lanes differ (max 1 ulp)
 COS     12.3 ns/elem  vs Math:  23212 lanes differ (max 1 ulp)  vs StrictMath:  11061 lanes differ (max 1 ulp)
-TAN     16.1 ns/elem  vs Math:  10121 lanes differ (max 1 ulp)  vs StrictMath:  10121 lanes differ (max 1 ulp)
+TAN     16.0 ns/elem  vs Math:  10121 lanes differ (max 1 ulp)  vs StrictMath:  10121 lanes differ (max 1 ulp)
 EXP      4.6 ns/elem  vs Math:  27347 lanes differ (max 1 ulp)  vs StrictMath:  27347 lanes differ (max 1 ulp)
 LOG      9.5 ns/elem  vs Math:  13198 lanes differ (max 1 ulp)  vs StrictMath:  13198 lanes differ (max 1 ulp)
-LOG10    9.9 ns/elem  vs Math:  24250 lanes differ (max 2 ulp)  vs StrictMath:  24250 lanes differ (max 2 ulp)
+LOG10   10.0 ns/elem  vs Math:  24250 lanes differ (max 2 ulp)  vs StrictMath:  24250 lanes differ (max 2 ulp)
 EXPM1   10.9 ns/elem  vs Math:  25701 lanes differ (max 1 ulp)  vs StrictMath:  25701 lanes differ (max 1 ulp)
 LOG1P   10.2 ns/elem  vs Math:  12377 lanes differ (max 1 ulp)  vs StrictMath:  12377 lanes differ (max 1 ulp)
 ATAN    10.1 ns/elem  vs Math:   9611 lanes differ (max 1 ulp)  vs StrictMath:   9611 lanes differ (max 1 ulp)
-TANH    31.6 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+TANH    29.6 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
 CBRT    16.2 ns/elem  vs Math:  21981 lanes differ (max 1 ulp)  vs StrictMath:  21981 lanes differ (max 1 ulp)
 POW     25.7 ns/elem  vs Math:  25775 lanes differ (max 1 ulp)  vs StrictMath:  25775 lanes differ (max 1 ulp)
 ATAN2   13.7 ns/elem  vs Math:  21507 lanes differ (max 1 ulp)  vs StrictMath:  21507 lanes differ (max 1 ulp)
 HYPOT   10.4 ns/elem  vs Math:  34155 lanes differ (max 1 ulp)  vs StrictMath:  34155 lanes differ (max 1 ulp)
+overflow band: SLEEF 3.6.1 exp/pow threshold 709.7827111495575, true exp overflow above 709.782712893384
+EXP  709.7827111495574 (40862e42fe102c82) lane=1.7976899999998969E308   StrictMath=1.7976899999998969E308   Math=1.7976899999998969E308   below band
+EXP  709.7827111495575 (40862e42fe102c83) lane=1.7976900000001013E308   StrictMath=1.7976900000001013E308   Math=1.7976900000001013E308   SLEEF constant (still finite)
+EXP  709.7827111495576 (40862e42fe102c84) lane=Infinity                 StrictMath=1.7976900000003056E308   Math=1.7976900000003056E308   first double above it  <- differs
+EXP  709.7827120214707 (40862e42fe853339) lane=Infinity                 StrictMath=1.797691567430504E308    Math=1.797691567430504E308    middle of band  <- differs
+EXP  709.7827112 (40862e42fe16f1b4)     lane=Infinity                 StrictMath=1.7976900906800972E308   Math=1.7976900906800972E308   709.7827112, inside the band  <- differs
+EXP  709.7827128933839 (40862e42fefa39ee) lane=Infinity                 StrictMath=1.7976931348620688E308   Math=1.7976931348620688E308   last below EXP_MAX  <- differs
+EXP  709.782712893384 (40862e42fefa39ef) lane=Infinity                 StrictMath=1.7976931348622732E308   Math=1.7976931348622732E308   EXP_MAX (last finite)  <- differs
+EXP  709.7827128933841 (40862e42fefa39f0) lane=Infinity                 StrictMath=Infinity                 Math=Infinity                 first true overflow
+POW  2.0^1023.0                         lane=8.98846567431158E307     StrictMath=8.98846567431158E307     Math=8.98846567431158E307     d far below band
+POW  2.0^1023.999997                    lane=1.7976893966684283E308   StrictMath=1.7976893966684283E308   Math=1.7976893966684283E308   d just below band
+POW  2.0^1023.9999975                   lane=Infinity                 StrictMath=1.7976900197001322E308   Math=1.7976900197001322E308   d just above SLEEF constant  <- differs
+POW  2.0^1023.999999                    lane=Infinity                 StrictMath=1.7976918887968229E308   Math=1.7976918887968229E308   d in middle of band  <- differs
+POW  1.7976931348623157E308^1.0         lane=Infinity                 StrictMath=1.7976931348623157E308   Math=1.7976931348623157E308   d = EXP_MAX (top end)  <- differs
+POW  2.0^1024.0                         lane=Infinity                 StrictMath=Infinity                 Math=Infinity                 first true overflow
+witnesses in the same tile (library reached if some differ): EXP 21 of 256, POW 25 of 256 ordinary lanes differ from Math
 ### control: per-lane scalar fallback forced
+DEBUG: CPUFeatures: fp, asimd, evtstrm, aes, pmull, sha1, sha256, crc32, lse, fphp, asimdhp, dcpop, sha3, sha512, sve, paca, svebitperm, sve2
 DEBUG: VectorMathLibrary: Java library is used
 arch=aarch64 jvm=25.0.4+7-LTS UseAVX=n/a MaxVectorSize=16 species double=2 library=java; inputs=262144; rounds before measuring=200
-SIN     19.0 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:  19081 lanes differ (max 1 ulp)
-COS     18.3 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:  17697 lanes differ (max 1 ulp)
-TAN     26.1 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+SIN     19.5 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:  19081 lanes differ (max 1 ulp)
+COS     18.7 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:  17697 lanes differ (max 1 ulp)
+TAN     26.7 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
 EXP     18.1 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
-LOG     15.0 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
-LOG10   20.7 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
-EXPM1   26.7 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
-LOG1P   24.7 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
-ATAN    19.0 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
-TANH    24.6 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
-CBRT    17.5 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
-POW     58.8 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+LOG     15.7 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+LOG10   20.6 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+EXPM1   26.0 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+LOG1P   24.6 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+ATAN    18.2 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+TANH    24.3 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+CBRT    17.4 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+POW     59.4 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
 ATAN2   28.6 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
-HYPOT   18.9 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+HYPOT   19.0 ns/elem  vs Math:      0 lanes differ (max 0 ulp)  vs StrictMath:      0 lanes differ (max 0 ulp)
+overflow band: SLEEF 3.6.1 exp/pow threshold 709.7827111495575, true exp overflow above 709.782712893384
+EXP  709.7827111495574 (40862e42fe102c82) lane=1.7976899999998969E308   StrictMath=1.7976899999998969E308   Math=1.7976899999998969E308   below band
+EXP  709.7827111495575 (40862e42fe102c83) lane=1.7976900000001013E308   StrictMath=1.7976900000001013E308   Math=1.7976900000001013E308   SLEEF constant (still finite)
+EXP  709.7827111495576 (40862e42fe102c84) lane=1.7976900000003056E308   StrictMath=1.7976900000003056E308   Math=1.7976900000003056E308   first double above it
+EXP  709.7827120214707 (40862e42fe853339) lane=1.797691567430504E308    StrictMath=1.797691567430504E308    Math=1.797691567430504E308    middle of band
+EXP  709.7827112 (40862e42fe16f1b4)     lane=1.7976900906800972E308   StrictMath=1.7976900906800972E308   Math=1.7976900906800972E308   709.7827112, inside the band
+EXP  709.7827128933839 (40862e42fefa39ee) lane=1.7976931348620688E308   StrictMath=1.7976931348620688E308   Math=1.7976931348620688E308   last below EXP_MAX
+EXP  709.782712893384 (40862e42fefa39ef) lane=1.7976931348622732E308   StrictMath=1.7976931348622732E308   Math=1.7976931348622732E308   EXP_MAX (last finite)
+EXP  709.7827128933841 (40862e42fefa39f0) lane=Infinity                 StrictMath=Infinity                 Math=Infinity                 first true overflow
+POW  2.0^1023.0                         lane=8.98846567431158E307     StrictMath=8.98846567431158E307     Math=8.98846567431158E307     d far below band
+POW  2.0^1023.999997                    lane=1.7976893966684283E308   StrictMath=1.7976893966684283E308   Math=1.7976893966684283E308   d just below band
+POW  2.0^1023.9999975                   lane=1.7976900197001322E308   StrictMath=1.7976900197001322E308   Math=1.7976900197001322E308   d just above SLEEF constant
+POW  2.0^1023.999999                    lane=1.7976918887968229E308   StrictMath=1.7976918887968229E308   Math=1.7976918887968229E308   d in middle of band
+POW  1.7976931348623157E308^1.0         lane=1.7976931348623157E308   StrictMath=1.7976931348623157E308   Math=1.7976931348623157E308   d = EXP_MAX (top end)
+POW  2.0^1024.0                         lane=Infinity                 StrictMath=Infinity                 Math=Infinity                 first true overflow
+witnesses in the same tile (library reached if some differ): EXP 0 of 256, POW 0 of 256 ordinary lanes differ from Math
+### VectorMask.fromLong under PrintIntrinsics
+  ** missing constant: vclass=DecodeN etype=Phi vlen=LoadI from_ms=ConI
+                                  @ 25   jdk.internal.vm.vector.VectorSupport::fromBitsCoerced (35 bytes)   (intrinsic)   late inline succeeded
+  ** missing constant: vclass=DecodeN etype=Phi vlen=LoadI bitwise=ConI
+  ** missing constant: vclass=DecodeN etype=Phi vlen=LoadI from_ms=ConI
+                              @ 39   jdk.internal.vm.vector.VectorSupport::fromBitsCoerced (35 bytes)   failed to inline: failed to inline (intrinsic)
+                                      @ 25   jdk.internal.vm.vector.VectorSupport::fromBitsCoerced (35 bytes)   (intrinsic)   late inline succeeded
+  ** missing constant: vclass=DecodeN etype=Phi vlen=LoadI from_ms=ConI
+                                    @ 25   jdk.internal.vm.vector.VectorSupport::fromBitsCoerced (35 bytes)   (intrinsic)   late inline succeeded
+  ** missing constant: vclass=DecodeN etype=Phi vlen=LoadI bitwise=ConI
+  ** missing constant: vclass=DecodeN etype=Phi vlen=LoadI bitwise=ConI
+                                @ 39   jdk.internal.vm.vector.VectorSupport::fromBitsCoerced (35 bytes)   (intrinsic)   late inline succeeded
+                                @ 39   jdk.internal.vm.vector.VectorSupport::fromBitsCoerced (35 bytes)   failed to inline: failed to inline (intrinsic)   failed to inline: failed to inline (intrinsic)
+                                @ 39   jdk.internal.vm.vector.VectorSupport::fromBitsCoerced (35 bytes)   (intrinsic)   late inline succeeded
+                                @ 39   jdk.internal.vm.vector.VectorSupport::fromBitsCoerced (35 bytes)   (intrinsic)   late inline succeeded
+arch=aarch64 jvm=25.0.4+7-LTS UseAVX=n/a MaxVectorSize=16 species double=2 library=default; VectorMask.fromLong over Species[double, 2, S_128_BIT] and Species[byte, 16, S_128_BIT], sink=269583674000
