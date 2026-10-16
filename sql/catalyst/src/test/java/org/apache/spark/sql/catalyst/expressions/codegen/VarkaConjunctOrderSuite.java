@@ -54,6 +54,7 @@ import org.apache.spark.sql.types.IntegerType$;
 import org.apache.spark.sql.types.LongType$;
 import org.apache.spark.sql.types.Metadata;
 import org.apache.spark.sql.types.StringType$;
+import org.apache.spark.sql.types.TimestampType$;
 import org.apache.spark.sql.types.YearMonthIntervalType;
 
 /**
@@ -156,8 +157,10 @@ public final class VarkaConjunctOrderSuite {
   }
 
   @Test
-  @DisplayName("a widening cast cannot raise and a narrowing one can")
+  @DisplayName("a widening cast cannot raise, and a narrowing one or a date to a timestamp can")
   void casts() {
+    assertTrue(VarkaConjunctOrder.canRaise(new IsNotNull(
+        new Cast(d, TimestampType$.MODULE$, scala.Option.apply("UTC"), ANSI))));
     assertFalse(VarkaConjunctOrder.canRaise(new GreaterThan(
         new Cast(i, LongType$.MODULE$, scala.Option.empty(), ANSI),
         l)));
@@ -178,6 +181,28 @@ public final class VarkaConjunctOrderSuite {
     // A null test nothing reads goes to the end.
     List<Expression> unread = List.of(new IsNotNull(i), lPlusOne(ANSI));
     assertEquals(List.of(1, 0), VarkaConjunctOrder.codegenOrder(unread));
+  }
+
+  @Test
+  @DisplayName("a fused conjunct that pulls a residual null test ahead of a raising conjunct is "
+      + "demoted, since the residual filter alone would test it after")
+  void puller() {
+    // Codegen: isnotnull(d) before d < ..., which reads d, so before the sum. The residual filter
+    // without d < ... places isnotnull(d) last, behind the sum: a row whose d is null and whose
+    // sum overflows raises there and not in Spark.
+    List<Expression> conjuncts = List.of(dBefore(), new IsNotNull(d), lPlusOne(ANSI));
+    assertEquals(List.of(0),
+        List.copyOf(VarkaConjunctOrder.behindRaising(conjuncts, List.of(true, false, false))
+            .keySet()));
+    // With the null test fused beside it nothing moves.
+    assertTrue(VarkaConjunctOrder.behindRaising(conjuncts, List.of(true, true, false)).isEmpty());
+  }
+
+  @Test
+  @DisplayName("the fallback's condition is folded in codegen order")
+  void inCodegenOrder() {
+    Expression folded = VarkaConjunctOrder.inCodegenOrder(and(new IsNotNull(d), lPlusOne(ANSI)));
+    assertTrue(folded.semanticEquals(and(lPlusOne(ANSI), new IsNotNull(d))), folded.toString());
   }
 
   @Test

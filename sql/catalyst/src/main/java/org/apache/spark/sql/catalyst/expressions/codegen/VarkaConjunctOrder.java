@@ -32,31 +32,37 @@ import org.apache.spark.sql.catalyst.expressions.CaseWhen;
 import org.apache.spark.sql.catalyst.expressions.Cast;
 import org.apache.spark.sql.catalyst.expressions.Coalesce;
 import org.apache.spark.sql.catalyst.expressions.Contains;
+import org.apache.spark.sql.catalyst.expressions.DateAdd;
+import org.apache.spark.sql.catalyst.expressions.DateDiff;
+import org.apache.spark.sql.catalyst.expressions.DateSub;
 import org.apache.spark.sql.catalyst.expressions.EndsWith;
 import org.apache.spark.sql.catalyst.expressions.EvalMode$;
 import org.apache.spark.sql.catalyst.expressions.Expression;
 import org.apache.spark.sql.catalyst.expressions.If;
 import org.apache.spark.sql.catalyst.expressions.In;
 import org.apache.spark.sql.catalyst.expressions.InSet;
+import org.apache.spark.sql.catalyst.expressions.IsNaN;
 import org.apache.spark.sql.catalyst.expressions.IsNotNull;
 import org.apache.spark.sql.catalyst.expressions.IsNull;
 import org.apache.spark.sql.catalyst.expressions.KnownNotNull;
+import org.apache.spark.sql.catalyst.expressions.Length;
+import org.apache.spark.sql.catalyst.expressions.Like;
 import org.apache.spark.sql.catalyst.expressions.Literal;
+import org.apache.spark.sql.catalyst.expressions.Lower;
 import org.apache.spark.sql.catalyst.expressions.Multiply;
 import org.apache.spark.sql.catalyst.expressions.Not;
 import org.apache.spark.sql.catalyst.expressions.Or;
 import org.apache.spark.sql.catalyst.expressions.StartsWith;
+import org.apache.spark.sql.catalyst.expressions.Substring;
 import org.apache.spark.sql.catalyst.expressions.Subtract;
 import org.apache.spark.sql.catalyst.expressions.UnaryMinus;
+import org.apache.spark.sql.catalyst.expressions.Upper;
 import org.apache.spark.sql.types.DataType;
-import org.apache.spark.sql.types.DateType$;
 import org.apache.spark.sql.types.DoubleType$;
 import org.apache.spark.sql.types.FloatType$;
 import org.apache.spark.sql.types.IntegralType;
 import org.apache.spark.sql.types.NumericType;
 import org.apache.spark.sql.types.StringType;
-import org.apache.spark.sql.types.TimestampNTZType;
-import org.apache.spark.sql.types.TimestampType;
 
 /**
  * Which fused conjuncts of a split filter would run ahead of an error Spark raises (VARKA-380).
@@ -69,43 +75,192 @@ import org.apache.spark.sql.types.TimestampType;
  * demoted to the residual filter, which then evaluates it in Spark's order with the rest.
  *
  * <p>Spark has two orders, and the check holds a fused conjunct to both. The interpreted
- * predicate, and Varka's own fallback, evaluate the {@code AND} tree as written. Whole-stage
- * codegen ({@code FilterExec.generatePredicateCode}) evaluates the other conjuncts as written but
- * moves each {@code IsNotNull} to just before the first of them that references its column, and
- * the {@code IsNotNull} conjuncts no other conjunct references to the end. So an
- * {@code isnotnull(l)} written first still runs after a raising conjunct that does not read
- * {@code l}.
+ * predicate evaluates the {@code AND} tree as written. Whole-stage codegen
+ * ({@code FilterExec.generatePredicateCode}) evaluates the other conjuncts as written but moves
+ * each {@code IsNotNull} to just before the first of them that references its column, and the
+ * {@code IsNotNull} conjuncts no other conjunct references to the end. So an {@code isnotnull(l)}
+ * written first still runs after a raising conjunct that does not read {@code l}. That also means
+ * a fused conjunct can decide where a residual {@code IsNotNull} runs: taken out of the residual
+ * filter, it no longer pulls the test ahead of a raising conjunct there, so such a conjunct is
+ * demoted too. {@link #codegenOrder} is a port of that algorithm and has to follow it.
  *
  * <p>Whether a conjunct can raise is answered conservatively by {@link #canRaise}: a conjunct is
  * error-free only when every node in it is one of a short list of expressions that never throw in
  * the mode they carry. Anything else counts as raising, which costs fusion and never an answer.
+ *
+ * <p>Internal to Spark SQL; public for {@code sql/core}, whose filter fallback evaluates the
+ * condition in codegen order ({@link #inCodegenOrder}).
  */
-final class VarkaConjunctOrder {
+public final class VarkaConjunctOrder {
 
   private VarkaConjunctOrder() {
   }
 
   /**
-   * The fused conjuncts that Spark, in either of its orders, evaluates after a residual conjunct
-   * that can raise, by index, each with the reason its spec reports. Empty when the split is safe.
+   * The fused conjuncts to demote so that no fused conjunct changes which errors Spark's orders
+   * raise, by index, each with the reason its spec reports. Empty when the split is safe. The
+   * demotions are iterated here to their fixed point - a demoted conjunct that can raise moves
+   * the line again - so the compiler classifies once more, not once per demotion.
    *
    * @param conjuncts the condition's {@code AND} spine in written order
    * @param fused whether each conjunct fused, by the same index
    */
   static Map<Integer, String> behindRaising(List<Expression> conjuncts, List<Boolean> fused) {
+    int size = conjuncts.size();
+    var raises = new boolean[size];
+    var isFused = new boolean[size];
+    boolean anyResidualRaises = false;
+    for (int index = 0; index < size; index++) {
+      isFused[index] = fused.get(index);
+      raises[index] = canRaise(conjuncts.get(index));
+      anyResidualRaises |= raises[index] && !isFused[index];
+    }
     Map<Integer, String> late = new LinkedHashMap<>();
-    for (List<Integer> order : List.of(writtenOrder(conjuncts.size()), codegenOrder(conjuncts))) {
-      Expression raising = null;
-      for (int index : order) {
-        if (raising != null && fused.get(index)) {
-          late.putIfAbsent(index, "Spark evaluates it after " + raising.sql()
-              + ", which can raise an error; fused, it would drop the rows that raise it");
-        } else if (raising == null && !fused.get(index) && canRaise(conjuncts.get(index))) {
-          raising = conjuncts.get(index);
-        }
+    if (!anyResidualRaises) {
+      return late;
+    }
+    List<Integer> codegen = codegenOrder(conjuncts);
+    boolean changed = true;
+    while (changed) {
+      changed = demoteBehind(writtenOrder(size), conjuncts, raises, isFused, late)
+          | demoteBehind(codegen, conjuncts, raises, isFused, late);
+      if (!changed) {
+        changed = demotePullers(conjuncts, codegen, raises, isFused, late);
       }
     }
     return late;
+  }
+
+  /** Demotes the fused conjuncts {@code order} places after its first raising residual one. */
+  private static boolean demoteBehind(List<Integer> order, List<Expression> conjuncts,
+      boolean[] raises, boolean[] isFused, Map<Integer, String> late) {
+    Expression raising = null;
+    boolean changed = false;
+    for (int index : order) {
+      if (raising != null && isFused[index]) {
+        isFused[index] = false;
+        late.putIfAbsent(index, "Spark evaluates it after " + raising.sql()
+            + ", which can raise an error; fused, it would drop the rows that raise it");
+        changed = true;
+      } else if (raising == null && !isFused[index] && raises[index]) {
+        raising = conjuncts.get(index);
+      }
+    }
+    return changed;
+  }
+
+  /**
+   * Demotes the fused conjuncts that place a residual null test on the other side of a raising
+   * residual conjunct in codegen order than the residual filter would place it without them. The
+   * residual filter orders its own conjuncts by the same algorithm, and a null test runs before
+   * the first conjunct that reads its column: when that conjunct is fused, the residual filter
+   * moves the test later. Demoting every fused conjunct that reads the column restores the place.
+   */
+  private static boolean demotePullers(List<Expression> conjuncts, List<Integer> codegen,
+      boolean[] raises, boolean[] isFused, Map<Integer, String> late) {
+    var residual = new ArrayList<Integer>();
+    var residualConjuncts = new ArrayList<Expression>();
+    for (int index = 0; index < conjuncts.size(); index++) {
+      if (!isFused[index]) {
+        residual.add(index);
+        residualConjuncts.add(conjuncts.get(index));
+      }
+    }
+    var fullPosition = new int[conjuncts.size()];
+    for (int position = 0; position < codegen.size(); position++) {
+      fullPosition[codegen.get(position)] = position;
+    }
+    var residualPosition = new int[conjuncts.size()];
+    List<Integer> residualOrder = codegenOrder(residualConjuncts);
+    for (int position = 0; position < residualOrder.size(); position++) {
+      residualPosition[residual.get(residualOrder.get(position))] = position;
+    }
+    boolean changed = false;
+    boolean mismatched = false;
+    for (int r : residual) {
+      if (!raises[r]) {
+        continue;
+      }
+      for (int c : residual) {
+        boolean beforeInFull = fullPosition[c] < fullPosition[r];
+        boolean beforeInResidual = residualPosition[c] < residualPosition[r];
+        if (c == r || beforeInFull == beforeInResidual) {
+          continue;
+        }
+        mismatched = true;
+        for (int test : List.of(c, r)) {
+          Expression tested = nullTested(conjuncts.get(test));
+          if (tested == null) {
+            continue;
+          }
+          for (int f = 0; f < conjuncts.size(); f++) {
+            if (isFused[f] && nullTested(conjuncts.get(f)) == null
+                && pulls(conjuncts.get(f), tested)) {
+              isFused[f] = false;
+              late.putIfAbsent(f, "Spark evaluates " + conjuncts.get(c).sql() + " before "
+                  + conjuncts.get(r).sql() + ", which can raise an error, or after it, by where "
+                  + "this conjunct is; fused, it would leave the residual filter the other order");
+              changed = true;
+            }
+          }
+        }
+      }
+    }
+    if (mismatched && !changed) {
+      // Unreachable while codegenOrder ports Spark's algorithm: only a null test moves between the
+      // two orders, and its pullers are what moves it. Should the port drift, nothing stays fused.
+      for (int f = 0; f < conjuncts.size(); f++) {
+        if (isFused[f]) {
+          isFused[f] = false;
+          late.putIfAbsent(f, "the residual filter would order its conjuncts unlike Spark");
+          changed = true;
+        }
+      }
+    }
+    return changed;
+  }
+
+  /** The tested expression of a null test codegen moves, or null for any other conjunct. */
+  private static Expression nullTested(Expression conjunct) {
+    return conjunct instanceof IsNotNull n && isNullIntolerant(n.child()) ? n.child() : null;
+  }
+
+  /** Whether codegen places the null test of {@code tested} just before {@code conjunct}. */
+  private static boolean pulls(Expression conjunct, Expression tested) {
+    if (tested instanceof Attribute) {
+      for (Attribute reference : CollectionConverters.asJava(conjunct.references().toSeq())) {
+        if (tested.semanticEquals(reference)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    return conjunct.exists(e -> e.semanticEquals(tested));
+  }
+
+  /**
+   * {@code condition} with its conjuncts in the order whole-stage codegen evaluates them, for the
+   * per-row fallback of a Varka filter, whose generated predicate evaluates an {@code AND} tree as
+   * written: folded in this order, it stops where the codegen filter stops, and raises what it
+   * raises.
+   */
+  public static Expression inCodegenOrder(Expression condition) {
+    List<Expression> conjuncts = new ArrayList<>();
+    collectConjuncts(condition, conjuncts);
+    Expression folded = null;
+    for (int index : codegenOrder(conjuncts)) {
+      folded = folded == null ? conjuncts.get(index) : new And(folded, conjuncts.get(index));
+    }
+    return folded;
+  }
+
+  private static void collectConjuncts(Expression condition, List<Expression> conjuncts) {
+    if (condition instanceof And and) {
+      collectConjuncts(and.left(), conjuncts);
+      collectConjuncts(and.right(), conjuncts);
+    } else {
+      conjuncts.add(condition);
+    }
   }
 
   /** The conjuncts' indices in the order the {@code AND} tree evaluates them. */
@@ -126,7 +281,7 @@ final class VarkaConjunctOrder {
     var notNull = new ArrayList<Integer>();
     var other = new ArrayList<Integer>();
     for (int index = 0; index < conjuncts.size(); index++) {
-      if (conjuncts.get(index) instanceof IsNotNull n && isNullIntolerant(n.child())) {
+      if (nullTested(conjuncts.get(index)) != null) {
         notNull.add(index);
       } else {
         other.add(index);
@@ -136,9 +291,11 @@ final class VarkaConjunctOrder {
     var order = new ArrayList<Integer>(conjuncts.size());
     for (int c : other) {
       Expression conjunct = conjuncts.get(c);
+      // Spark looks up the first null test of each referenced column, and places it unless an
+      // earlier conjunct already did.
       for (Attribute reference : CollectionConverters.asJava(conjunct.references().toSeq())) {
         for (int n : notNull) {
-          if (((IsNotNull) conjuncts.get(n)).child().semanticEquals(reference)) {
+          if (nullTested(conjuncts.get(n)).semanticEquals(reference)) {
             if (!placed[n]) {
               placed[n] = true;
               order.add(n);
@@ -148,8 +305,8 @@ final class VarkaConjunctOrder {
         }
       }
       for (int n : notNull) {
-        Expression tested = ((IsNotNull) conjuncts.get(n)).child();
-        if (!placed[n] && !(tested instanceof Attribute) && contains(conjunct, tested)) {
+        Expression tested = nullTested(conjuncts.get(n));
+        if (!placed[n] && !(tested instanceof Attribute) && pulls(conjunct, tested)) {
           placed[n] = true;
           order.add(n);
         }
@@ -177,19 +334,6 @@ final class VarkaConjunctOrder {
     return true;
   }
 
-  /** Whether {@code tree} has a node semantically equal to {@code target}. */
-  private static boolean contains(Expression tree, Expression target) {
-    if (tree.semanticEquals(target)) {
-      return true;
-    }
-    for (Expression child : CollectionConverters.asJava(tree.children())) {
-      if (contains(child, target)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   /**
    * Whether evaluating {@code expr} on some row can throw. False only when every node is on the
    * list below; the list is what residual conjuncts beside fused ones usually are - comparisons,
@@ -215,7 +359,11 @@ final class VarkaConjunctOrder {
       case IsNull _, IsNotNull _, KnownNotNull _, Not _, And _, Or _ -> true;
       case BinaryComparison _, In _, InSet _ -> true;
       case If _, CaseWhen _, Coalesce _ -> true;
-      case StartsWith _, EndsWith _, Contains _ -> true;
+      case StartsWith _, EndsWith _, Contains _, Upper _, Lower _, Length _, Substring _ -> true;
+      case IsNaN _, DateAdd _, DateSub _, DateDiff _ -> true;
+      // A pattern that does not parse raises, so only a constant one, which Spark checks when it
+      // generates the code - before any row, on Varka's plan as on its own.
+      case Like l -> l.right().foldable();
       // Year-month and day-time interval arithmetic raises on overflow in every mode, and decimal
       // arithmetic is left off rather than reasoned about, so only the plain numeric types pass.
       case Add a -> arithmeticCannotOverflow(a.evalMode(), a.dataType());
@@ -240,14 +388,16 @@ final class VarkaConjunctOrder {
     return type instanceof IntegralType && !EvalMode$.MODULE$.ANSI().equals(mode);
   }
 
-  /** A cast that only widens: a number to a wider number, a date to a timestamp, or to a string. */
+  /**
+   * A cast that only widens: a number to a wider number, or anything to a string. A date to a
+   * timestamp is a widening Spark allows but not one that cannot raise: the microseconds of a
+   * date past the year 294247 overflow a long.
+   */
   private static boolean wideningCast(DataType from, DataType to) {
     if (!Cast.canUpCast(from, to)) {
       return false;
     }
     return (from instanceof NumericType && to instanceof NumericType)
-        || (from == DateType$.MODULE$ && (to instanceof TimestampType
-            || to instanceof TimestampNTZType))
         || (to instanceof StringType && !(from instanceof StringType));
   }
 }

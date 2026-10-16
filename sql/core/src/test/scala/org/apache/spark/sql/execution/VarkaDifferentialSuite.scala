@@ -1368,6 +1368,15 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
           |AS t(l, d)""".stripMargin)
         .coalesce(1).createOrReplaceTempView("varka_raising_null_test")
       session.catalog.cacheTable("varka_raising_null_test")
+      // The fallback's case: every conjunct fuses, the kernel declines the batch on the month
+      // of 13, and the per-row fallback must evaluate `d2 IS NOT NULL` where codegen does, last.
+      session.sql(
+        """SELECT * FROM VALUES
+          |  (13, DATE'2021-12-31', CAST(NULL AS DATE)),
+          |  (5, DATE'2021-12-31', DATE'2021-01-01')
+          |AS t(i, d, d2)""".stripMargin)
+        .coalesce(1).createOrReplaceTempView("varka_raising_fallback")
+      session.catalog.cacheTable("varka_raising_fallback")
     }
     def plan(q: String): SparkPlan = varkaSpark.sql(q).queryExecution.executedPlan
     val t = "FROM varka_raising_residual WHERE"
@@ -1388,6 +1397,10 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
         val nullTest = "SELECT l FROM varka_raising_null_test WHERE d IS NOT NULL AND (l + 1) > 0"
         assertNotFused(plan(nullTest))
         checkSparkRaisesTheSame[SparkArithmeticException](nullTest)
+        val fallback =
+          "SELECT i FROM varka_raising_fallback WHERE d2 IS NOT NULL AND make_date(2021, i, 1) < d"
+        assertFused(plan(fallback))
+        checkSparkRaisesTheSame[SparkDateTimeException](fallback)
       }
       withAnsi(false) {
         val first = s"SELECT i $t (l + 1) > 0 AND d < DATE'2021-06-01' ORDER BY i"
@@ -1400,6 +1413,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
       Seq(spark, varkaSpark).foreach { session =>
         session.catalog.uncacheTable("varka_raising_residual")
         session.catalog.uncacheTable("varka_raising_null_test")
+        session.catalog.uncacheTable("varka_raising_fallback")
       }
     }
   }

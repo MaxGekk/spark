@@ -25,6 +25,7 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, BasePredicate, Expression, IsNotNull, NamedExpression, Predicate, PredicateHelper, SortOrder, UnsafeProjection}
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaConjunctOrder
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSelectionBitmap
 import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
@@ -65,6 +66,18 @@ private[sql] trait VarkaFilterExecBase extends UnaryExecNode with PredicateHelpe
    * the conf as it stands when the plan runs, so the two cannot split the condition differently.
    */
   def sessionEmit: VarkaSessionEmit
+
+  /**
+   * What the per-row fallback evaluates: the whole condition where the rule split one, and the
+   * fused conjuncts otherwise, in the order whole-stage codegen evaluates them when the session
+   * runs it, which moves `IsNotNull` tests from where they are written (VARKA-380): the generated
+   * predicate evaluates an `AND` tree as written, and an `isnotnull(d)` written first would drop a
+   * row before a conjunct that raises on it in Spark.
+   */
+  protected def fallbackCondition: Expression = {
+    val whole = wholeCondition.getOrElse(condition)
+    if (conf.wholeStageEnabled) VarkaConjunctOrder.inCodegenOrder(whole) else whole
+  }
 
   // The settings are an implementation detail of the node, not an argument a plan reader needs.
   override protected def stringArgs: Iterator[Any] =
@@ -168,7 +181,7 @@ case class VarkaFilterExec(
       VarkaExecMetrics.fromNode(metrics.getOrElse(_, null)),
       sessionEmit = sessionEmit,
       warmupEnabled = conf.varkaWarmupEnabled,
-      wholeCondition = wholeCondition)
+      wholeCondition = Some(fallbackCondition))
     if (conf.usePartitionEvaluator) {
       child.executeColumnar().mapPartitionsWithEvaluator(evaluatorFactory)
     } else {
@@ -387,7 +400,7 @@ case class VarkaFilterColumnarToRowExec(
       VarkaExecMetrics.fromNode(metrics.getOrElse(_, null)),
       sessionEmit = sessionEmit,
       warmupEnabled = conf.varkaWarmupEnabled,
-      wholeCondition = wholeCondition)
+      wholeCondition = Some(fallbackCondition))
     if (conf.usePartitionEvaluator) {
       child.executeColumnar().mapPartitionsWithEvaluator(evaluatorFactory)
     } else {
