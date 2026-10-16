@@ -186,3 +186,145 @@ the nested ones, the conditions raised, and the time.
 3. The census on seven seeds, the expected-errors list if it must change, then section 9.
 
 ## 9. Outcome
+
+Done on 16 October 2026, at `7cc402b8f34` (master) plus this branch.
+
+**What was built.** `VarkaCatalystGrammar` (3.1); `VarkaShrinker.TreeMoves` and `shrinkTree`
+(3.3); in `VarkaSparkFuzz`, the nested draw on half the compositions (`drawRows` is the old draw),
+the case's map from text to tree, and the shrink inside nested outputs and conjuncts; in the
+suite, the five tests of 5 plus one for the race of 9.3, and an info line for the nested
+compositions. One entry joins `sql/varka/fuzz/expected_errors.tsv`. Three switches were added
+along the way: `-Dvarka.sparkfuzz.nested=false` (no nested trees, which replays a seed's draw as it
+was before this row), `-Dvarka.sparkfuzz.maxFailures` (default 3; a census needs it raised, or a
+seed's third disagreement ends its run), and the rerun of 9.3. No product code changed.
+
+*Corrections to 1-8, found while building.* The grammar lost two productions the plan listed:
+`extract(YEAR | MONTH FROM <ym>)` takes only a field its interval has, so the operand is widened to
+YEAR TO MONTH first by `+ INTERVAL '0-0' YEAR TO MONTH`, a cast the analyzer writes; and
+`<ym> * 2` is gone, because an overflowing interval multiply raises a bare `ArithmeticException`
+in every mode on both engines (Spark's `MultiplyYMInterval`), which reaches the fuzzer as the job's
+`org.apache.spark.SparkException` with no condition. Listing that class would excuse every task
+failure; the coverage row `make_ym_interval(year(d), month(d)) * 2` keeps the multiply drawn over a
+domain that cannot overflow. The planted-rollback tests now draw `drawRows`: at the planted seed's
+composition 5, a nested tree meets the planted rollback's branch with no force at all ("values
+differ" unforced), and those tests are about the force.
+
+### 9.1 The census
+
+Two runs of seven seeds (20261101 to 20261107), 5,000 compositions each, one JVM per seed pinned
+to cores 12 to 23, on a machine shared with other agents' builds (load 20 to 58). The first run
+was a discovery run: it stopped each seed at its third disagreement (the suite's cap), and its
+disagreements were the two harness-side classes below. The grammar and the list were corrected and
+the second run, with the cap lifted, is the measurement.
+
+| | VARKA-372 9 (coverage rows only) | this run |
+|---|---|---|
+| compositions | 35,000 | 35,000, of which 17,493 with nested trees |
+| erroring on both sides, of 5,000 | 14 to 68 | 39 to 111 |
+| of them, among the 2,499 nested per seed | - | 31 to 84 (1.2 to 3.4%) |
+| of them, among the 2,501 others per seed | - | 8 to 32 (0.3 to 1.3%) |
+| safe ANSI-off pool erroring on both sides | 0 | 0 |
+| disagreements | 0 | 4, all in nested compositions: 3 of 9.2's kind and 1 of 9.3's |
+| unexpected conditions | 0 | 0 (after the entry of 9.4) |
+
+From the tests of 5 at the default seed: 139 of 300 nested outputs and 89 of 150 nested
+predicates carry a cast the analyzer inserted; 46 of 100 outputs and 77 of 100 predicates fuse
+alone.
+
+### 9.2 Finding: a fused conjunct hides an earlier residual conjunct's error (proposed row)
+
+**A Varka bug, not fixed here.** When Varka splits a filter, the conjuncts it fuses run in the
+`VarkaFilterColumnarToRow` below the row `Filter` that holds the rest. Spark's `Filter` evaluates
+its conjuncts in their optimized order and stops at the first false one; Varka evaluates the fused
+ones first. So under ANSI a row that a fused conjunct rejects never reaches a residual conjunct
+that Spark evaluates *before* it and that raises on that row: Spark raises, Varka answers. It is
+the mirror of row 273, which gave the fallback the whole condition in Spark's order and assumed the
+raising conjunct is the fused one. Three shrunk reproducers from the census, all under ANSI:
+
+* seed 20261105, iteration 291: `SELECT weekofyear(d) AS c0 FROM fz WHERE (((12 + l) = 5000000000))
+  AND (l = l2)` over one row with `l` = -9223372036854775808 and `l2` = 9223372036854775807. The
+  optimizer's `InferFiltersFromConstraints` adds `(l2 + 12) = 5000000000` and puts it first:
+  Spark's condition is `((l2 + 12) = 5000000000) AND isnotnull(l) AND isnotnull(l2) AND
+  ((l + 12) = 5000000000) AND (l = l2)`. Spark raises `ARITHMETIC_OVERFLOW` on `l2 + 12`. Varka
+  fuses `isnotnull(l) AND isnotnull(l2) AND (l = l2)`, which rejects the row, and the residual
+  `Filter` never sees it: no rows.
+* seed 20261104, iteration 2199: `SELECT l AS c0 FROM fz WHERE ((date_from_unix_date(i) >=
+  make_date(i, i, i))) AND (d IN (DATE '2021-01-01', DATE '2021-06-01'))` over three rows, one with
+  `i` = 3840. Spark raises `DATETIME_FIELD_OUT_OF_BOUNDS.WITHOUT_SUGGESTION` (month 3840) from the
+  first conjunct; Varka fuses the `IN`, which rejects that row first.
+* seed 20261102, iteration 4775: `SELECT dt AS c0 FROM fz WHERE NOT (((ym + ym) IS NOT NULL)) AND
+  (d = d2)` over one row whose `ym` is 2147483636 months and whose `d` differs from `d2`. Spark
+  raises `INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION`; Varka fuses `d = d2`.
+
+Proposed row: "A fused conjunct runs before a residual conjunct that Spark's optimized `Filter`
+evaluates first, so under ANSI Varka answers where Spark raises (VARKA-298 9.2, three reproducers;
+the mirror of row 273). Decide between fusing only the conjuncts before the first residual one that
+can raise, and evaluating the residual conjuncts first on the batch; save the three reproducers
+under `sql/varka/fuzz/spark/` as `known` until then." The fix is open: the first choice gives up
+fusion wherever a raising residual conjunct comes first, the second gives up the kernel's row
+reduction for the residual ones.
+
+**What it means for the nightly.** At about one of these in 6,000 nested compositions, the
+nightly's 50,000 at the day's seed will meet some most nights and fail its `sparkfuzz` step until
+the row has a number and the three files are kept as `status: known <row>` in
+`sql/varka/fuzz/spark/`, which this task does not own.
+
+### 9.3 Finding: two legitimate errors race across partitions (harness, proposed row)
+
+Seed 20261106, iteration 3861, and the first run's seed 20261106, iteration 4259: two outputs that
+each raise a listed condition on different rows (`d - ym` overflowing, `make_date(3, 3,
+unix_date(d))` out of range). The view has two partitions (the sessions run on `local[2]`), and
+whichever task fails first decides what the query raises, on either engine and from one run to the
+next: replayed eight times in one JVM, the reproducer of 4259 agreed five times and disagreed three,
+with either engine raising either condition. It is not Varka's: both engines flip. Nested trees
+make it more likely, since more of a composition's outputs can raise. The suite now reruns a
+disagreement whose two conditions are both listed for that mode (`racingErrors`) three times and
+believes it only if every rerun disagrees, counting the others in an info line. Four of five
+300-composition runs at the default seed met one and passed on its rerun (one before the rerun
+existed failed on composition 203 of that seed, `make_date(2021, i, 1)` beside `(d2 + ymm) +
+ymy`); the PR arm's 200 compositions stop short of it. A deterministic Varka bug that raises the wrong
+listed condition still fails, since it repeats.
+
+Proposed row: "The Spark-level differential's view has two partitions, so two listed errors on rows
+in different partitions race and the query's error is either one, on either engine (VARKA-298 9.3).
+Make the comparison deterministic - one partition for error cases, or the set of conditions each
+row raises compared instead of the first - and drop the rerun." The view keeps its two partitions
+here: one partition would take the multi-partition, multi-task runs out of every composition.
+
+### 9.4 The expected-errors list
+
+One entry: `INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION`, both engines, ANSI and LEGACY,
+raised by `make_ym_interval(i, i)` and by `d - ymm` (negating an `INTERVAL MONTH` of
+`Int.MinValue` months), both reachable only with drawn ints in those positions, so only the nested
+trees meet it; both engines raise it in both modes (checked by replay). The second run met it in
+four of seven seeds. `DATETIME_OVERFLOW` (2) is not listed, since the grammar does not draw it.
+
+### 9.5 Predictions scored
+
+1. **Refuted.** Four disagreements in 35,000 compositions: three of a real Varka bug (9.2) and
+   one of a harness race (9.3); the first run met the race and two classes of grammar errors
+   (the conditionless multiply and the unlisted condition of 9.4).
+2. **Refuted on the magnitude, held on the direction.** The nested compositions error on both
+   sides at 1.2 to 3.4%, against 0.3 to 1.3% for the others, not 5 to 12% against 1 to 3%.
+3. **Refuted.** One condition outside the list (9.4) and one with no condition at all (the
+   multiply), both legitimate and raised identically by both engines.
+4. **Refuted: no cost measurable on this machine.** The 300-composition run at the default seed,
+   five times with the nested trees and five without, alternating, took 70 to 306 s and 85 to
+   432 s, the spread being the load of other agents' builds; by minimums, 70 s with and 85 s
+   without. An earlier pair under load 48 read 148 s against 85 s at 200 compositions, which is the
+   machine, not the code. The calibration table in `skills/testing-and-debugging.md` would take a
+   line (predicted 10 to 45%, measured none above the noise); that file is not this task's.
+
+### 9.6 Left for later
+
+* The two proposed rows of 9.2 and 9.3.
+* **A widened INT on the long lane** (2): Varka declines every BIGINT choice over an INT operand
+  (`greatest(i, l)`, `coalesce(i, l)`, `if(c, i, l)`), and fuses none of BIGINT arithmetic, so a
+  projection that mixes the two lanes falls back whole. A `Cast(int to bigint)` arm on the long
+  lane is the scope item; with the arithmetic it belongs with milestone 8's new numeric types.
+* **A TIME plus an interval** raises `DATETIME_OVERFLOW` in every mode on both engines and is not
+  drawn (2); drawing it needs a value domain that keeps most sums inside the day.
+* The shrink inside a conjunct is skipped under a pivot (a smaller conjunct may take another value
+  on the pivot row), and the outputs' ddmin can drop the forced output and leave the index pointing
+  at another (VARKA-296's, unchanged).
+

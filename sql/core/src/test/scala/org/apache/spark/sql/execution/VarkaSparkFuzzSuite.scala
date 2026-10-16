@@ -24,18 +24,24 @@ import java.time.Duration
 import scala.jdk.CollectionConverters._
 import scala.util.Random
 
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaJitEvidence,
-  VarkaKernelWarmth, VarkaKernelWarmup, VarkaShapeCache}
+import org.apache.spark.sql.catalyst.expressions.Cast
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaCatalystGrammar,
+  VarkaJitEvidence, VarkaKernelWarmth, VarkaKernelWarmup, VarkaShapeCache}
+import org.apache.spark.sql.catalyst.plans.logical.Filter
 import org.apache.spark.sql.execution.VarkaSparkFuzz._
 
 /**
  * Random compositions of the coverage table's rows over random data, run with Varka off and on,
- * ANSI off and on, the answers compared (VARKA-262). A disagreement is shrunk, written as a
+ * ANSI off and on, the answers compared (VARKA-262); half the compositions add nested trees of
+ * neighbouring types from `VarkaCatalystGrammar` (VARKA-298, `-Dvarka.sparkfuzz.nested=false`
+ * leaves them out). A disagreement is shrunk, written as a
  * reproducer under `target/varka-sparkfuzz/`, and fails the test with the reproducer in its
  * message; `sql/varka/fuzz/spark/` is where a reviewed one is kept.
  *
- * Budget: `-Dvarka.sparkfuzz.iterations` (default 200, about ten seconds) and
- * `-Dvarka.sparkfuzz.seed`; `-Dvarka.sparkfuzz.only=<iteration>` replays one. Every
+ * Budget: `-Dvarka.sparkfuzz.iterations` (default 200, about a minute) and
+ * `-Dvarka.sparkfuzz.seed`; `-Dvarka.sparkfuzz.only=<iteration>` replays one, and
+ * `-Dvarka.sparkfuzz.maxFailures` (default 3) is how many disagreements stop the run, which a
+ * census of what a seed finds raises so that a known one does not end it early. Every
  * `partitionEvery`th composition with a filter also checks the
  * ternary partition on both engines. The planted-rollback test draws from a seed of its own,
  * `-Dvarka.sparkfuzz.plantedSeed`, so a run at another seed does not move it (VARKA-309).
@@ -54,6 +60,7 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
   private val seed = sys.props.get("varka.sparkfuzz.seed").map(_.toLong).getOrElse(20261008L)
   private val iterations = sys.props.get("varka.sparkfuzz.iterations").map(_.toInt).getOrElse(200)
   private val onlyIteration = sys.props.get("varka.sparkfuzz.only").map(_.toInt)
+  private val maxFailures = sys.props.get("varka.sparkfuzz.maxFailures").map(_.toInt).getOrElse(3)
   // Every output of a composition forced in turn, where the default forces one (VARKA-296).
   private val forceAll = sys.props.get("varka.sparkfuzz.forceAll").contains("true")
   private val partitionEvery = 4
@@ -114,7 +121,10 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     val forced = if (!found.startsWith("with an output forced")) c
       else c.copy(force = forcesOf(c, it).find(k => kindOf(c, partitions, Seq(k)).isDefined))
     val kind = kindOf(forced, partitions, forced.force.toSeq).getOrElse(found)
-    val small = shrink(forced, kind, x => kindOf(x, partitions, x.force.toSeq))
+    // A kind that no longer needs the force (the first run's was not repeatable) keeps none, so
+    // the reproducer does not name a force its kind does not depend on.
+    val start = if (kind.startsWith("with an output forced")) forced else forced.copy(force = None)
+    val small = shrink(start, kind, x => kindOf(x, partitions, x.force.toSeq))
     val text = render(Reproducer("regression", s"seed $seed iteration $it", small.ansi, kind,
       small.select, small.where, small.fixture, small.pivot.map(rowText), small.force))
     val dir = getWorkspaceFilePath("sql", "core", "target", "varka-sparkfuzz")
@@ -127,15 +137,32 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
   test(s"random compositions agree with the row engine (seed $seed, $iterations of them)") {
     val failures = scala.collection.mutable.ArrayBuffer.empty[String]
     val pool = scala.collection.mutable.TreeMap.empty[String, (Int, Int)]
+    // The compositions with nested trees (VARKA-298), those of them that errored on both sides,
+    // and those that disagreed.
+    var nested = 0
+    var nestedErrored = 0
+    var nestedFailed = 0
+    // Two legitimate errors racing across partitions, which did not repeat in three reruns.
+    var raced = 0
     val range = onlyIteration.map(k => k to k).getOrElse(0 until iterations)
-    for (it <- range if failures.size < 3) {
+    for (it <- range if failures.size < maxFailures) {
       val c = rectify(draw(rows, seed, it))
       val partitions = it % partitionEvery == 0
       val errorsBefore = bothErrored
-      val result = kindOf(c, partitions, forcesOf(c, it))
+      val result = kindOf(c, partitions, forcesOf(c, it)).filter { kind =>
+        val believed = !racingErrors(kind, c.ansi) ||
+          (0 until 3).forall(_ => kindOf(c, partitions, forcesOf(c, it)).isDefined)
+        if (!believed) raced += 1
+        believed
+      }
       val key = (if (it % 2 == 0) "safe" else "full") + (if (c.ansi) " ANSI on" else " ANSI off")
       pool(key) = pool.getOrElse(key, (0, 0)) match {
         case (n, e) => (n + 1, e + (if (bothErrored > errorsBefore) 1 else 0))
+      }
+      if (c.trees.nonEmpty) {
+        nested += 1
+        if (bothErrored > errorsBefore) nestedErrored += 1
+        if (result.isDefined) nestedFailed += 1
       }
       result.foreach { found =>
         if (firstFailure.isEmpty) firstFailure = Some(it)
@@ -144,6 +171,9 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     }
     info(s"compared $compared, fused $fused, both errored $bothErrored")
     pool.foreach { case (k, (n, e)) => info(s"  $k: $n compositions, $e errored on both sides") }
+    info(s"  with nested trees: $nested compositions, $nestedErrored errored on both sides, " +
+      s"$nestedFailed disagreed")
+    info(s"  two listed errors that differed once and agreed on a rerun: $raced")
     errorCensus.foreach(l => info(s"  raised: $l"))
     // A warning, not a failure: which conditions a bounded run meets moves with the coverage
     // table, and a failure here would blame a pull request that only added a row (VARKA-319.md 5).
@@ -466,11 +496,13 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
 
   /**
    * The first composition of the planted seed whose answer the planted rollback changes, with
-   * every output forced in turn, and the kind of the change; shared by the two tests below.
+   * every output forced in turn, and the kind of the change; shared by the two tests below. The
+   * compositions are the coverage rows' alone (`drawRows`): a nested tree meets the planted
+   * rollback's branch without a force (VARKA-298.md 9), and these tests are about the force.
    */
   private lazy val plantedFirst: Option[(Int, String)] = withPlantedRollback() {
     (0 until 300).iterator.map { it =>
-      val c = rectify(draw(rows, plantedSeed, it))
+      val c = rectify(drawRows(rows, plantedSeed, it))
       (it, kindOf(c, partitions = false, c.outputs.indices))
     }.collectFirst { case (it, Some(kind)) => (it, kind) }
   }
@@ -491,7 +523,7 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     assume(VarkaKernelWarmup.canWarm(), "this JVM cannot warm kernels")
     val it = plantedFirst.map(_._1)
       .getOrElse(fail(s"seed $plantedSeed: the planted rollback changed no answer in 300"))
-    val c = rectify(draw(rows, plantedSeed, it))
+    val c = rectify(drawRows(rows, plantedSeed, it))
     val k = c.outputs.indices.find { k =>
       withPlantedRollback()(kindOf(c, partitions = false, Seq(k))).isDefined
     }.getOrElse(fail(s"composition $it: no single forced output changes an answer"))
@@ -517,5 +549,141 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
       "pivot row not selected by Varka", "d AS c0", Some("(d) IS NULL"),
       fixtureSql(Seq(Seq("1", "2"))), Some("(1, 2)"))
     assert(parse(render(r)) == r)
+  }
+
+  // ---- nested trees of neighbouring types (VARKA-298) -----------------------------------------
+
+  /** `n` trees from the grammar, outputs or predicates, from a stream of their own. */
+  private def grammarTrees(n: Int, predicates: Boolean): Seq[VarkaCatalystGrammar.Node] = {
+    val rnd = new java.util.Random(if (predicates) 2980002L else 2980001L)
+    (0 until n).map { _ =>
+      if (predicates) VarkaCatalystGrammar.drawPredicate(rnd)
+      else VarkaCatalystGrammar.drawOutput(rnd)
+    }
+  }
+
+  /** The query a tree is checked in: an output alone, or a predicate alone in a `WHERE`. */
+  private def queryOf(tree: VarkaCatalystGrammar.Node, predicate: Boolean): String =
+    if (predicate) querySql("d AS c0", Some(tree.sql)) else querySql(s"${tree.sql} AS c0", None)
+
+  /** The casts in the tree's own operator of `sql`'s analyzed plan, not the view's. */
+  private def castsOf(sql: String, predicate: Boolean): Int = {
+    val plan = spark.sql(sql).queryExecution.analyzed
+    val exprs = if (predicate) plan.collectFirst { case f: Filter => f.condition }.toSeq
+      else plan.expressions
+    exprs.map(_.collect { case c: Cast => c }.size).sum
+  }
+
+  test("the grammar's trees analyze under ANSI on and off, and the analyzer inserts casts") {
+    // A tree that failed to analyze would compare one analysis error with another and test
+    // nothing; the grammar is well typed by construction, and this holds it to that.
+    spark.sql(draw(rows, seed, 0).fixture).createOrReplaceTempView("fz")
+    val failures = scala.collection.mutable.ArrayBuffer.empty[String]
+    for (predicate <- Seq(false, true)) {
+      val trees = grammarTrees(if (predicate) 150 else 300, predicate)
+      var implicitCasts = 0
+      for (tree <- trees; ansi <- Seq(false, true)) withAnsi(ansi) {
+        val sql = queryOf(tree, predicate)
+        scala.util.Try(castsOf(sql, predicate)) match {
+          case scala.util.Success(casts) =>
+            // A cast the analyzer inserted is one the text does not write.
+            if (ansi && casts > tree.sql.split("CAST\\(", -1).length - 1) implicitCasts += 1
+          case scala.util.Failure(e) =>
+            failures += s"ANSI $ansi: $sql: ${String.valueOf(e.getMessage).takeWhile(_ != '\n')}"
+        }
+      }
+      val what = if (predicate) "predicates" else "outputs"
+      info(s"$what: $implicitCasts of ${trees.size} with a cast the text does not write")
+      assert(implicitCasts * 4 >= trees.size,
+        s"only $implicitCasts of ${trees.size} $what had a cast inserted by the analyzer")
+    }
+    assert(failures.isEmpty, failures.take(10).mkString("\n"))
+  }
+
+  test("a share of the grammar's trees fuse on their own") {
+    // A grammar whose trees all fell back would test the row path against itself.
+    val c = draw(rows, seed, 0)
+    cacheFixture(c.fixture)
+    try {
+      for (predicate <- Seq(false, true)) {
+        val trees = grammarTrees(100, predicate)
+        val fusedAlone = trees.count { tree =>
+          val df = varkaSpark.sql(queryOf(tree, predicate))
+          scala.util.Try(df.queryExecution.executedPlan).toOption
+            .exists(p => find(p)(isVarkaNode).isDefined)
+        }
+        val what = if (predicate) "predicates" else "outputs"
+        info(s"$what: $fusedAlone of ${trees.size} fuse alone")
+        assert(fusedAlone * 5 >= trees.size, s"only $fusedAlone of ${trees.size} $what fuse")
+      }
+    } finally uncacheFixture()
+  }
+
+  test("half the compositions add nested trees and keep the coverage rows they drew") {
+    assume(nestedIteration(3), "-Dvarka.sparkfuzz.nested=false draws no nested trees")
+    val nestedOnes = (0 until 60).filter(nestedIteration)
+    assert(nestedOnes.size == 30)
+    for (it <- 0 until 60) {
+      val c = draw(rows, seed, it)
+      val plain = drawRows(rows, seed, it)
+      assert(c.trees.nonEmpty == nestedIteration(it), s"iteration $it")
+      assert(c.outputs.filterNot(c.trees.contains) == plain.outputs, s"iteration $it")
+      assert(c.conjuncts.filterNot(cj => c.trees.contains(cj.sql)).map(_.sql) ==
+        plain.conjuncts.map(_.sql), s"iteration $it")
+      assert(c.data == plain.data && c.ansi == plain.ansi && c.pivot == plain.pivot)
+    }
+  }
+
+  test("only two different listed conditions read as errors racing across partitions") {
+    val two =
+      "error classes differ: ARITHMETIC_OVERFLOW, DATETIME_FIELD_OUT_OF_BOUNDS.WITHOUT_SUGGESTION"
+    assert(racingErrors(two, ansi = true))
+    assert(racingErrors(s"with an output forced to decline, $two", ansi = true))
+    // DATETIME_FIELD_OUT_OF_BOUNDS is listed under ANSI only.
+    assert(!racingErrors(two, ansi = false))
+    assert(!racingErrors("error classes differ: ARITHMETIC_OVERFLOW, DIVIDE_BY_ZERO", ansi = true))
+    assert(!racingErrors("only the row engine throws: ARITHMETIC_OVERFLOW", ansi = true))
+    assert(!racingErrors("values differ", ansi = true))
+  }
+
+  private def node(t: VarkaCatalystGrammar.Type, template: String,
+      children: VarkaCatalystGrammar.Node*): VarkaCatalystGrammar.Node =
+    new VarkaCatalystGrammar.Node(t, template, children.asJava)
+
+  test("the shrinker reduces inside a nested output to the subtree that causes it") {
+    import VarkaCatalystGrammar.Type._
+    // (year(date_add(d, datediff(d2, d))) + l), a BIGINT whose cause is an INT three levels down:
+    // as an output it may become that INT.
+    val inner = node(INT, "datediff($0, $1)", node(DATE, "d2"), node(DATE, "d"))
+    val tree = node(BIGINT, "($0 + $1)",
+      node(INT, "year($0)", node(DATE, "date_add($0, $1)", node(DATE, "d"), inner)),
+      node(BIGINT, "l"))
+    val c = draw(rows, seed, 5).copy(outputs = Vector("year(d)", tree.sql, "month(d)"),
+      conjuncts = Vector.empty, trees = Map(tree.sql -> tree))
+    val planted = (x: Case) =>
+      if (x.outputs.exists(_.contains("datediff(d2, d)"))) Some("values differ") else None
+    val small = shrink(c, "values differ", planted)
+    assert(small.outputs == Vector("datediff(d2, d)"), small.outputs)
+    assert(small.data.size == 1, small.data)
+  }
+
+  test("the shrinker keeps a nested conjunct boolean and each node inside it of its type") {
+    import VarkaCatalystGrammar.Type._
+    // ((i > 3) AND (year(date_add(date_add(d, 3), i)) > l)), failing whenever a date_add is left:
+    // the AND gives way to its boolean child and the outer date_add to its inner one, while the
+    // comparison cannot become its INT operand, which is not a boolean.
+    val dateAdd = node(DATE, "date_add($0, $1)",
+      node(DATE, "date_add($0, $1)", node(DATE, "d"), node(INT, "3")), node(INT, "i"))
+    val compare = node(BOOLEAN, "($0 > $1)", node(INT, "year($0)", dateAdd),
+      node(BIGINT, "l"))
+    val tree = node(BOOLEAN, "($0 AND $1)",
+      node(BOOLEAN, "($0 > $1)", node(INT, "i"), node(INT, "3")), compare)
+    val c = draw(rows, seed, 5).copy(outputs = Vector("year(d)"),
+      conjuncts = Vector(Conjunct(tree.sql, negated = false)), trees = Map(tree.sql -> tree))
+    val planted = (x: Case) =>
+      if (x.conjuncts.exists(_.sql.contains("date_add("))) Some("values differ") else None
+    val small = shrink(c, "values differ", planted)
+    assert(small.conjuncts.map(_.sql) == Vector("(year(date_add(d, 3)) > l)"), small.conjuncts)
+    assert(small.trees(small.conjuncts.head.sql).`type` == BOOLEAN)
   }
 }

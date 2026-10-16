@@ -370,6 +370,86 @@ public final class VarkaShrinker {
     return current;
   }
 
+  /**
+   * How {@link #shrinkTree} reads and rebuilds a tree of some other grammar than the IR: a node's
+   * children, the node rebuilt over new children, and the smaller trees to try in a node's place,
+   * each of which must type wherever the node does.
+   */
+  public interface TreeMoves<T> {
+    List<T> children(T node);
+
+    T withChildren(T node, List<T> children);
+
+    List<T> replacements(T node);
+  }
+
+  private static <T> int sizeOf(T node, TreeMoves<T> moves) {
+    int n = 1;
+    for (T child : moves.children(node)) {
+      n += sizeOf(child, moves);
+    }
+    return n;
+  }
+
+  private static <T> T replaceIn(T root, List<Integer> path, T repl, TreeMoves<T> moves) {
+    if (path.isEmpty()) {
+      return repl;
+    }
+    var children = new ArrayList<>(moves.children(root));
+    int head = path.get(0);
+    children.set(head, replaceIn(children.get(head), path.subList(1, path.size()), repl, moves));
+    return moves.withChildren(root, children);
+  }
+
+  /**
+   * {@code root} reduced while {@code fails} holds, the way {@link #shrinkTrees} reduces an IR
+   * tree (VARKA-298): positions root first and then level by level, each node replaced by the first
+   * of its {@code replacements} that is smaller and still fails, until no replacement does. With
+   * {@code freeRoot} the root may also become any of its children whatever its type, which suits a
+   * position that takes any type, such as a query's output.
+   */
+  public static <T> T shrinkTree(T root, TreeMoves<T> moves, boolean freeRoot,
+      Predicate<T> fails) {
+    T current = root;
+    boolean improved = true;
+    while (improved) {
+      improved = false;
+      int currentSize = sizeOf(current, moves);
+      var level = List.<List<Integer>>of(List.of());
+      search:
+      while (!level.isEmpty()) {
+        var next = new ArrayList<List<Integer>>();
+        for (List<Integer> p : level) {
+          T node = current;
+          for (int k : p) {
+            node = moves.children(node).get(k);
+          }
+          var candidates = new ArrayList<>(moves.replacements(node));
+          if (freeRoot && p.isEmpty()) {
+            for (T child : moves.children(node)) {
+              if (!candidates.contains(child)) {
+                candidates.add(child);
+              }
+            }
+          }
+          for (T r : candidates) {
+            T t = replaceIn(current, p, r, moves);
+            if (sizeOf(t, moves) < currentSize && fails.test(t)) {
+              current = t;
+              improved = true;
+              break search;
+            }
+          }
+          for (int k = 0; k < moves.children(node).size(); k++) {
+            next.add(append(p, k));
+          }
+        }
+        level = next;
+      }
+    }
+    return current;
+  }
+
   // ---- options --------------------------------------------------------------------------
 
   private static VarkaFuzzCase shrinkOptions(VarkaFuzzCase c, Predicate<VarkaFuzzCase> fails) {
