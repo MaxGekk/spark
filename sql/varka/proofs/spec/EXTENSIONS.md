@@ -41,7 +41,9 @@ numberings: "ISO 8601's week rules, and Spark's own day-of-week numberings" in
 of 6.15 GR 6 is DAY for two dates and nothing rounds. Spark agrees: `datediff(DATE '1969-12-31',
 DATE '1970-01-02')` is -2 and the interval `DATE '1969-12-31' - DATE '1970-01-02'` is minus two
 days (the test "not a delta: three-valued logic, IN with a null, the calendar across 1582,
-datediff"). The difference of two int32 day counts always fits an int, so it never wraps.
+datediff"). Inside the column contract (years 0001 to 9999) the difference of two day counts fits
+an int; outside it two int32 day counts can differ by up to 2^32 - 1, and Spark's `DateDiff`, an
+`Int` subtraction, wraps, as the kernel does (VARKA-245 9.2 item 3).
 
 ## 2. ISO 8601's
 

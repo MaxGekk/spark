@@ -1,0 +1,277 @@
+# VARKA-365: one decimal rule for every Arrow read path below precision 19
+
+*Row 365 of `m8/PLAN.md`, wave 0. Planned on 16 October 2026 at `8a50f61a368`. **The choice of
+design is pending**: it is open question 3 of `m8/PLAN.md` section 7, the owner's to answer.
+Section 3 lays out what each of its three options would build, so that the answer can be given
+against the work, and nothing past section 2 starts before it.*
+
+***Design decided, 16 October 2026: option (iii), no reader change.** The owner answered question 3
+the same day (section 9). Sections 2 and 3 stand as written; section 8 now follows (iii)'s branch,
+and the parts of sections 4 to 7 marked (i) or (ii) are not built.*
+
+## 1. Where this came from
+
+Owner's decision A1 (14 October 2026, `m8/PLAN.md` 2.8): the fork's Arrow readers build a
+long-backed `Decimal` up to precision 18, so the kernel, the ghost fallback and the Varka-off path
+all follow Spark's exact rule for the ANSI and TRY casts of a decimal to `INT`, `SMALLINT` and
+`TINYINT`, which is what Parquet gives. Risk 10 of the milestone is the reason it is wave 0: the
+fork's two row paths disagree on decimals today, so an ANSI `CAST(dec AS INT)` over a cached table
+can answer differently by batch with Varka on, before any kernel of this milestone exists. The
+review of 16 October 2026 (10.1 item 3) then found that the accessor A1 changes is upstream's own
+recent choice - SPARK-59443, merged on 21 September 2026 (fork commit `f2dcec5bdd6`) - and that A1
+makes every Arrow consumer of the fork, Varka off included, answer the three casts differently from
+vanilla Spark's column path. That is a departure outside Varka, so the review put it back to the
+owner as question 3, with three options. This plan records the code as it stands, the run that
+would confirm the disagreement, and what each option builds.
+
+## 2. The admission check, done
+
+What reading settled, at `8a50f61a368`:
+
+1. **The column path builds a `BigDecimal`-backed value at every precision.**
+   `ArrowColumnVector` (`sql/catalyst/src/main/java/org/apache/spark/sql/vectorized/`) picks
+   `SmallDecimalAccessor` for precision 1 to 18 (207 to 213). Its `getDecimal` (469 to 483) reads
+   the low and the high word, and when the high word is the low word's sign extension it returns
+   `Decimal.apply(BigDecimal.valueOf(unscaled, scale), precision, scale)`, under the comment "Keep
+   BigDecimal-backed Decimal semantics, including checked integral conversions"; otherwise it
+   builds one from `getObject`. `DecimalAccessor` (496 to 499) builds one from `getObject` too.
+2. **The cache's row reader builds a long-backed value, with no high-word check.**
+   `ArrowColumnReader.scala` (`sql/core/.../execution/columnar/`), for `DecimalType` up to
+   `MAX_LONG_DIGITS` (124 to 148), writes the low word straight into the `UnsafeRow` (143 to 147),
+   which `getDecimal` reads back long-backed. A slot whose high word is not the sign extension -
+   a value outside its declared precision - is silently truncated to its low word here, where the
+   column path keeps it whole. Precision above 18 takes the slow path (149 to 160).
+3. **Which path a cached batch takes depends on the table's other columns.**
+   `ArrowCachedBatchSerializer.convertCachedBatchToInternalRow` (181 to 255) uses the row reader
+   only when no column needs its fallback; a table with an array, struct, map, calendar-interval,
+   variant, null-typed, UDT, geospatial or nanosecond-timestamp column (`needsFallback`, 205 to
+   218; the ANSI interval types are not among them) goes through
+   `convertCachedBatchToColumnarBatch` and an `UnsafeProjection` (220 to 239), that is through
+   `ArrowColumnVector`. So with Varka off, the same decimal column answers by the exact rule in one
+   cached table and by the double rule in another that adds, say, an array column. The columnar
+   path, which Varka and its fallback read, always goes through `ArrowColumnVector`
+   (`ArrowCachedBatchToColumnarBatchIterator.scala` 134 and 137).
+4. **The two rules.** `Decimal.roundToNumeric` (`sql/api/.../types/Decimal.scala` 294 to 320),
+   behind `roundToByte`, `roundToShort` and `roundToInt`: a long-backed value truncates and checks
+   exactly; a `BigDecimal`-backed one converts to a double and range-checks `floor` and `ceil` of
+   it. `roundToLong` (327 to 345) uses `longValueExact` on the `BigDecimal` branch, so `BIGINT` is
+   exact on both, and only the three pairs differ.
+5. **Every Arrow consumer in the fork reads through `ArrowColumnVector`**: the cached-batch
+   columnar iterator, `ArrowRRunner`, `ExecuteExternalUDFExec`, `ArrowConverters`,
+   `PythonArrowOutput`, `PythonStreamingSourceRunner` and
+   `TransformWithStateInPySparkDeserializer` (all under `sql/core/.../execution/`).
+6. **Upstream's regression test pins the double rule.** `ArrowColumnVectorSuite` (sql/core) has
+   eight decimal tests from SPARK-59443; "decimal checked integral conversions" (397 to 418)
+   asserts that `roundToByte`, `roundToShort`, `roundToInt` and `roundToLong` match a
+   `BigDecimal`-backed `Decimal`, for values including `2147483647.99999999`. Under option (i)
+   that test's expectation changes; no Varka test exercises the three casts over a decimal today,
+   and `0.999999999999999999` appears in no test.
+7. **Upstream's record** (`m8/PLAN.md` question 3, read 16 October 2026): SPARK-59443 is a
+   performance change that kept the old behaviour on purpose without ruling on it; its one
+   reviewer compared old and new accessors and approved; nobody discussed a long-backed value. And
+   vanilla Spark's own `ArrowCachedBatchSerializer` already gives the long-backed value on its row
+   path. So "vanilla Spark's rule for an Arrow source" is two rules, chosen by whether a batch is
+   read as rows or as columns, and by item 3 above, by the table's other columns.
+
+**What still needs a run, and what admits the row.** The disagreement of items 2 to 4 has been read,
+not observed. One sql/core test, run on cores 3 to 5, observes it on all three paths:
+
+    taskset -c 3-5 build/sbt 'sql/testOnly *VarkaDecimalReadPathSuite'
+
+over a table of `DECIMAL(18, 18)` holding `0.999999999999999999` and `DECIMAL(18, 8)` holding
+`2147483647.99999999`, cached under `ArrowCachedBatchSerializer`, read three ways: the row path
+(decimal columns only), the row path's columnar fallback (the same table plus an array column),
+and the columnar path with Varka on and every batch on the fallback. Each read runs
+`CAST(x AS INT)` under ANSI and under `try_cast`. **The row is admitted if** the row path answers
+0 and 2147483647 and the other two answer 1 and raise `CAST_OVERFLOW` (null under TRY): the
+disagreement is real and the plan's premise holds. If all three agree, risk 10 is not real as
+stated, and the row shrinks to the upstream record of section 3.4. The suite is the first commit
+whatever the option, since every option needs it as its regression test.
+
+## 3. The design
+
+### 3.1 The three options, as question 3 states them, and what each builds
+
+**(i) Owner's decision A1 as it stands.** `SmallDecimalAccessor.getDecimal` returns
+`Decimal(unscaled, precision, scale)` - long-backed - when the high word is the sign extension and
+`|unscaled| < 10^precision`, keeping its `BigDecimal` path for a value outside its declared
+precision; `ArrowColumnReader`'s fast path gains the same high-word and precision check and takes
+the `BigDecimal` path when it fails. Every path then gives the exact rule below precision 19, as
+Parquet does. It builds:
+* the two reader changes, and `ArrowColumnVectorSuite`'s "decimal checked integral conversions"
+  rewritten to expect the exact rule, with a comment naming this departure;
+* an entry 3.8 in `SCOPE_STANDARD_MODE.md`: the fork's Arrow consumers, Varka off as well, answer
+  the three casts by the exact rule where vanilla Spark's column path uses the double rule;
+* for the kernels: row 350 builds the exact integer rule below precision 19 (SMT at full width),
+  and 364 the double rule above, through 366's exact decimal-to-double, as `m8/PLAN.md` 2.8 has
+  it. Nothing in 350 depends on a switch.
+
+**(ii) A1 behind a configuration, off by default.** The same reader changes, taken only when a
+new SQL configuration is true; off, the fork answers as vanilla Spark's column path until upstream
+agrees. It builds:
+* the reader changes under the flag, read once per accessor construction, never per value;
+* a SQL configuration, proposed as `spark.sql.execution.arrow.longBackedSmallDecimal.enabled`
+  (not under `spark.sql.codegen.varka`, since it governs every Arrow consumer, Varka off
+  included), with the configuration audit suite run after it is added. Its binding policy cannot
+  be the `NOT_APPLICABLE` every existing Varka entry carries (each says it never changes what a
+  view resolves to, and `VARKA_WARMUP_ENABLED` chooses between equal answers): this one changes
+  answers, so the policy and the reason are decided with the audit;
+* both arms of `ArrowColumnVectorSuite`'s test, the existing expectation under the default;
+* for the kernels, **350's ANSI and TRY decimal-to-integral design flips with the switch**: off,
+  the fallback gives the double rule, so the kernel must too, through a correctly rounded
+  `u / 10^s` (366's exact arm wherever 350's guard fails); on, the exact integer rule. Both are
+  built and the flag is in the shape key. The row engine's own cached row path keeps its
+  long-backed value either way, so with the flag off the disagreement of section 2 item 3 stays.
+
+**(iii) No reader change.** The kernel reproduces vanilla Spark's rule for an Arrow source. Since
+Varka reads columns and its fallback reads `ArrowColumnVector`, that is the double rule at every
+precision. It builds:
+* nothing in the readers; the fork keeps both upstream behaviours, including the row reader's
+  missing high-word check (section 2 item 2), which is then reported as its own finding;
+* for the kernels, 350 builds the double rule below precision 19 as 364 does above it: the three
+  pairs depend on a correctly rounded `u / 10^s`, so on 366's exact arm outside 350's guard, and
+  their proof is the sampled arm's, not SMT's (`m8/casts.tsv`'s semantics column and `m8/PLAN.md`
+  2.2 and 5 change with it);
+* the by-batch disagreement of risk 10 stays, now between Varka-on reads (kernel and fallback
+  both double rule) and Varka-off reads of a cached table on the row path (exact rule). The plan
+  can make it visible - a coverage note and a line in `docs/sql-varka.md` - but not remove it.
+
+What all three share: section 2's three-path suite, and the upstream JIRA. Under (i) and (ii) the
+JIRA records that Spark's ANSI and TRY decimal-to-integral cast depends on the data source and on
+the read path, naming both of upstream's paths; under (iii) it records the same as a finding.
+Filing it is an external operation and waits for the owner's yes; its text goes in section 9 first.
+
+### 3.2 What is deliberately unchanged
+
+* Precision above 18: `DecimalAccessor` stays `BigDecimal`-backed, and the double rule there is
+  Spark's on every path (364 builds it).
+* `BIGINT` targets: exact on both backings (`roundToLong`), untouched.
+* No Varka compiler, emitter or kernel change: 350, 364 and 366 build the kernels, under whichever
+  option is chosen.
+* The `UnsafeRow` decimal layout and the cache's file format; the cache arm of 347 is that row's.
+
+### 3.3 Registered op counts
+
+None: this row emits no kernel.
+
+## 4. Files
+
+* `sql/catalyst/src/main/java/org/apache/spark/sql/vectorized/ArrowColumnVector.java` - (i):
+  long-backed small decimal; (ii): the same, under the flag
+* `sql/core/src/main/scala/.../execution/columnar/ArrowColumnReader.scala` - (i): high-word and
+  precision check; (ii): the same, under the flag
+* `sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala` - (ii): the
+  configuration
+* `sql/core/src/test/scala/org/apache/spark/sql/vectorized/ArrowColumnVectorSuite.scala` - (i):
+  expectation rewritten; (ii): both arms
+* `sql/core/src/test/scala/.../execution/VarkaDecimalReadPathSuite.scala` - (i): new: the three-path
+  suite; (ii): new; (iii): new
+* `sql/varka/plans/SCOPE_STANDARD_MODE.md` - (i): entry 3.8; (ii): entry 3.8, conditional
+* `sql/varka/plans/m8/casts.tsv` via `census_curated.txt`, `m8/PLAN.md` 2.2 - (ii): the mode note;
+  (iii): the three pairs' proof
+* `docs/sql-varka.md` - (i): a note on the three casts; (ii): the configuration; (iii): the
+  disagreement
+
+## 5. Tests, and what each is for
+
+1. **`VarkaDecimalReadPathSuite`**: the two values of section 2 on the three paths, ANSI and TRY;
+   it catches any path that answers by the other rule. Under (ii), both settings.
+2. **A wrong high word**: a slot whose high word is not the sign extension still declines on the
+   kernel's load and still reads whole on the column path; under (i) and (ii) the row reader now
+   agrees with it instead of truncating.
+3. **A slot holding `10^p`** (outside precision 18, high word zero): takes the `BigDecimal` path
+   on every reader under (i) and (ii).
+4. **Spark's own cast suites on every consumer**: `CastWithAnsiOnSuite` and `TryCastSuite`
+   unchanged, and `ArrowColumnVectorSuite` per section 4.
+5. **The Python and R runners**: one test each through `ArrowConverters` that the three casts give
+   the chosen rule, since those consumers change too under (i) and (ii).
+
+## 6. The measurement
+
+The row changes semantics, not speed; but under (i) and (ii) the small-decimal read stops building
+a `BigDecimal` per value, which is what SPARK-59443 set out to reduce.
+
+### 6.1 Predictions, registered before the run
+
+1. **Under (i), `ArrowDecimalReadBenchmark`** (upstream's, sql/core, no committed results file in
+   this tree) shows the small-precision `getDecimal` faster than today's, by allocating one object
+   per value instead of two; direction only, since the baseline has never been run here. Its
+   results are generated on the same machine before and after and committed with the change.
+2. **The three-path suite adds under 30 s** to the sql/core Varka tests: one cached table, three
+   reads, four casts each, stated at the calibration table's ratio for a new sql/core suite
+   (VARKA-243's, about 2, on an estimate of 15 s for its sessions and the cache).
+3. **Section 2's run finds the disagreement** exactly as section 2 predicts (row path 0 and
+   2147483647; the other two 1 and an error).
+
+## 7. Risks
+
+1. **Under (i), the fork's Arrow consumers answer differently from vanilla Spark with Varka off.**
+   That is the departure question 3 exists for; entry 3.8 and the documentation say it.
+2. **Under (ii), the flag is read where it is cheap.** Read per accessor, not per value; test 1
+   runs both settings in one JVM.
+3. **Under (iii), 350's three pairs cost more**: every batch whose guard fails takes 366's exact
+   arm, and the proof weakens from SMT to sampling.
+4. **The row reader's truncation (section 2 item 2) is a wrong answer today** for a value outside
+   its declared precision. Under (i) and (ii) it is fixed; under (iii) it needs its own decision.
+5. **Upstream may answer the JIRA the other way.** Under (i) the fork then carries the departure
+   until it is reverted; under (ii) it is a default left off.
+
+## 8. Sequencing
+
+1. This plan. **Then the owner's answer to question 3, recorded here and in `m8/PLAN.md` section
+   7 with its date.** Nothing below starts before it, except step 2.
+2. `VarkaDecimalReadPathSuite` as section 2's admission run, its result recorded here.
+3. Under (i) or (ii): the reader changes (with the flag under (ii)), the tests of section 5, the
+   register entry and the documentation; then the JIRA text for the owner. Under (iii): the
+   documentation and the JIRA text only, and 350's design note.
+
+*Updated 16 October 2026, after the answer (iii):* step 1 is done. What remains, in order:
+
+1. `VarkaDecimalReadPathSuite`, first, as the admission run and then the regression test: it pins
+   the row path on the exact rule and the row path's columnar fallback and Varka's columnar path
+   on the double rule, so 350's kernel has the answer it must match, and it fails if any path
+   moves. Section 5's tests 2, 3 and 5 are (i) and (ii)'s and are not built; test 4 needs nothing,
+   since no reader changes.
+2. The coverage note and the line in `docs/sql-varka.md`: a Varka-off read of a cached table on
+   the row path answers the ANSI and TRY casts of a decimal of precision up to 18 to `INT`,
+   `SMALLINT` and `TINYINT` by the exact rule, where Varka's kernel and fallback answer by the
+   double rule. Written when the row is built.
+3. The upstream JIRA's text in section 9: that Spark's ANSI and TRY decimal-to-integral cast
+   depends on the data source and the read path, naming both of upstream's paths, with the row
+   reader's missing high-word check (section 2 item 2) as its own finding. Filed only with the
+   owner's yes.
+4. 350's design note in `m8/PLAN.md` (written with this update): the double rule below precision
+   19, on 366's exact arm outside 350's guard, proven by the sampled arm.
+
+Explicitly out of this row: any kernel (350, 364, 366), precision above 18, `BIGINT` targets, and
+filing the upstream JIRA without the owner's yes.
+
+## 9. Outcome
+
+*To be written when the work lands.*
+
+### 9.1 The owner's answer to question 3, 16 October 2026
+
+**Option (iii), no reader change.** The reason: the house rule that row answers follow vanilla
+Spark always. Option (i) would make every Arrow consumer of the fork - the cached-batch iterator,
+the Python, R and external UDF runners - answer the three decimal-to-integral casts differently
+from vanilla Spark with Varka off as well, and (ii) only moves that departure behind a switch.
+Under (iii) the kernel reproduces vanilla Spark's column-path rule, the double rule over a
+`BigDecimal`-backed value, for the ANSI and TRY casts of a decimal to `INT`, `SMALLINT` and
+`TINYINT`, which is what Varka's fallback reads through `ArrowColumnVector`.
+
+It supersedes owner's decision A1 of 14 October 2026, which section 1 and 3.1 (i) describe and
+which stay as the record. What changes elsewhere, as 3.1 (iii) laid out:
+
+* `m8/PLAN.md` 2.2, 2.8, 2.10, 5, rows 350, 364 and 365, the wave table, risk 10, question 3 and
+  10.1 item 3 carry the answer with its date; `m8/casts.tsv`'s semantics and proof columns for the
+  three pairs say the double rule at every precision, with the ANSI and TRY range check proven by
+  the sampled arm and only LEGACY's low bits by SMT.
+* 350 builds the double rule below precision 19 as 364 does above it, on 366's exact arm outside
+  350's guard, so that part of 350 lands with or after 366.
+* Risk 10 is accepted, not removed: the disagreement is now between Varka-on reads and Varka-off
+  reads of a cached table on the row path, and the row makes it visible rather than fixing it.
+* Risk 4 of this plan's section 7 (the row reader's truncation of a value outside its declared
+  precision) gets the decision it asked for: it is reported upstream as its own finding, in the
+  JIRA whose text this section will record, and the fork does not patch it.
+* The row shrinks from medium to small: no reader, configuration, register entry or consumer test.

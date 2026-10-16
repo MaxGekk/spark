@@ -16,14 +16,15 @@
 #
 
 """Figure 33: the class is not the cost - on one millisecond scale, what making a class costs
-each generator (Janino's compile of a generated projection, Varka's emit, define and load of a
-kernel) against what the first, second and compiled queries of a new shape cost each engine:
-Spark, Varka with no warm-up, and Varka with its warm-up. Sixteen date expressions over a
-hundred thousand cached rows, the cold-start benchmark's first rung.
+each generator for the same sixteen date expressions, both cold (Janino over Spark's generated
+source; Varka's compiler, emitter, define and load) against what the first, second and
+compiled queries of a new shape cost each engine: Spark, Varka with no warm-up, and Varka with
+its warm-up, over a hundred thousand cached rows, the cold-start benchmark's first rung.
 
-Every value is read from the committed laptop files when the script runs
-(sql/core/benchmarks/VarkaCodegenBenchmark-jdk25-results.txt and
-VarkaColdStartBenchmark-jdk25-results.txt), so the figure cannot drift from them."""
+Every value is read from the committed files when the script runs, so the figure cannot drift
+from them: the class bars from the matched section of
+sql/core/benchmarks/VarkaCodegenBenchmark-jdk25-results.txt (a GitHub runner, VARKA-259 9.2), the
+query bars from VarkaColdStartBenchmark-jdk25-results.txt (the laptop)."""
 
 import os
 import re
@@ -39,14 +40,19 @@ GREY = "#5c5f66"
 RED, ORANGE, GREEN = "#e03131", "#f08c00", "#2f9e44"
 
 
-def per_row_ms(path, prefix):
-    """The 'Per Row(ns)' column of the row starting with prefix, in milliseconds."""
+def per_row_ms(path, table, prefix):
+    """The 'Per Row(ns)' column, in milliseconds, of the row starting with prefix in the table
+    whose heading starts with table."""
     row = re.compile(r"^(.*?)\s+\d+\s+\d+\s+\d+\s+[\d.]+\s+([\d.]+)\s+[\d.]+X\s*$")
+    inside = False
     with open(path) as f:
         for line in f:
-            if (m := row.match(line.rstrip())) and m.group(1).strip().startswith(prefix):
+            line = line.rstrip()
+            if line.endswith("Relative"):
+                inside = line.startswith(table)
+            elif inside and (m := row.match(line)) and m.group(1).strip().startswith(prefix):
                 return float(m.group(2)) / 1e6
-    raise ValueError(prefix)
+    raise ValueError(table + ": " + prefix)
 
 
 def rung_best_ms(path, rung):
@@ -66,8 +72,9 @@ def rung_best_ms(path, rung):
     return rows
 
 
-janino = per_row_ms(CODEGEN, "janino")
-emit = per_row_ms(CODEGEN, "varka")
+TABLE = "%d date expressions:" % RUNG
+janino = per_row_ms(CODEGEN, TABLE, "spark: generate + Janino compile, cold")
+emit = per_row_ms(CODEGEN, TABLE, "varka: compile + emit + define + load + instantiate, cold")
 cold = rung_best_ms(COLD, RUNG)
 
 r = Rough(1000, 700, seed=3301)
@@ -75,8 +82,8 @@ r.text(40, 44, "The class is the cheap part", size=32)
 r.text(
     40,
     84,
-    "milliseconds, best of five, one scale; %d date expressions over 100,000 cached rows; "
-    "JDK 25, AMD Ryzen AI 9 laptop" % RUNG,
+    "milliseconds, best of five, one scale; %d date expressions, JDK 25; classes on a GitHub "
+    "runner, queries on a laptop over 100,000 cached rows" % RUNG,
     size=17,
     color=GREY,
 )
@@ -99,7 +106,7 @@ def bar(y, label, ms, color, text=None):
 y = 130
 r.text(40, y + 10, "making the class", size=23)
 bar(y + 26, "Spark: source, then Janino", janino, GREY, "%.1f ms" % janino)
-bar(y + 70, "Varka: emit, define, load", emit, GREEN, "%.1f ms" % emit)
+bar(y + 70, "Varka: compile, emit, load", emit, GREEN, "%.1f ms" % emit)
 
 y = 270
 r.text(40, y + 10, "running the query", size=23)
@@ -130,7 +137,7 @@ for ms in (0, 50, 100, 150, 200, 250):
 r.note(
     40,
     y + 66,
-    "a 65x cheaper class leaves the first query slower: the kernel serves batches before C2 "
+    "a cheaper class leaves the first query slower: the kernel serves batches before C2 "
     "has compiled it",
     size=20,
 )

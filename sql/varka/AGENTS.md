@@ -300,8 +300,9 @@ loads, benchmarks. So:
 * **A benchmark port merges with its pair** (`dev/varka_bench_pair.sh` against the merge base), or
   its description says why not and names the row that owes the pair.
 * **A change that adds test time says so**: the gate's and the nightly's affected steps, their
-  time before and after, in the description; once row 255's CI records step times, against the
-  committed budget it keeps.
+  time before and after, in the description, read against the committed budget
+  `sql/varka/ci/step-budget.tsv` (`dev/varka_ci_times.py gate <dir>` for a laptop gate or
+  nightly; a Build's check carries the same table for its CI steps).
 
 ## House rules that bite here specifically
 

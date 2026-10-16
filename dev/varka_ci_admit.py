@@ -15,9 +15,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-"""Admit a full-matrix Build on a fork only when no other full-matrix run is ahead of it.
+"""Admit a full-matrix Build on a fork only while fewer than N other full-matrix runs are ahead.
 
     dev/varka_ci_admit.py --repo OWNER/NAME --run-id ID --branch BRANCH [--base-repo OWNER/NAME]
+        [--concurrent N]
     dev/varka_ci_admit.py --self-test       # the decision over recorded API responses
 
 This is the `admit` job of `.github/workflows/build_and_test.yml` (VARKA-255.md 3.1). The job
@@ -27,8 +28,11 @@ A Varka-scoped or documents-only run skips it and never waits.
 
 The marker of a full run is its own `admit` job, read from the jobs API: one `in_progress` is a
 full run waiting, one that succeeded in a run still `queued` or `in_progress` is a full run that
-has fanned out. This run's `admit` waits while any other run has fanned out, and while any other
-run's `admit` started waiting before its own (`started_at`, ties broken by the lower run id).
+has fanned out. A run is ahead of this one when it has fanned out, or when its `admit` started
+waiting before this run's own (`started_at`, ties broken by the lower run id); this run's `admit`
+waits while N or more runs are ahead. N is `--concurrent`, 2 by default: the fork runs 40 jobs at
+once since its account moved to Pro, and a full run holds about 20 of them at its widest (twelve
+module slots and the jobs beside them), so two fit side by side and a third would share slots.
 A rerun starts a new `admit`, so a rerun of an old run queues behind the full runs already
 waiting instead of passing them on its first attempt's creation time. A run whose precondition
 is still choosing has no `admit` yet and takes its place when it has one.
@@ -168,8 +172,9 @@ def held(pulls):
 
 
 class Admission:
-    def __init__(self, api, repo, run_id, branch, base_repo):
+    def __init__(self, api, repo, run_id, branch, base_repo, concurrent=1):
         self.api = api
+        self.concurrent = concurrent
         self.repo = repo
         self.run_id = int(run_id)
         self.branch = branch
@@ -223,7 +228,7 @@ class Admission:
             own = {"started_at": "9999", "status": "in_progress"}
         others = {r: self.jobs(r) for r in self.in_flight() if r != self.run_id}
         found = blockers(self.run_id, own, others)
-        return ("wait", found) if found else ("admit", [])
+        return ("wait", found) if len(found) >= self.concurrent else ("admit", found)
 
 
 def run(
@@ -262,8 +267,8 @@ def run(
             return 1
         if verdict == "admit":
             print(
-                "%s admitted: no other full-matrix run is ahead (%d requests)"
-                % (stamp, admission.api.requests)
+                "%s admitted: %d other full-matrix run(s) ahead, %d allowed at once (%d requests)"
+                % (stamp, len(detail), admission.concurrent, admission.api.requests)
             )
             return 0
         for run_id, why in detail:
@@ -293,6 +298,7 @@ def main(argv):
     p.add_argument("--poll", type=int, default=120)
     p.add_argument("--deadline-minutes", type=int, default=330)
     p.add_argument("--max-failed-polls", type=int, default=5)
+    p.add_argument("--concurrent", type=int, default=2)
     args = p.parse_args(argv)
     if args.self_test:
         import doctest
@@ -302,6 +308,8 @@ def main(argv):
         return 1 if failed or not result.wasSuccessful() else 0
     if not (args.repo and args.run_id and args.branch):
         p.error("--repo, --run-id and --branch are required")
+    if args.concurrent < 1:
+        p.error("--concurrent must be at least 1")
     if args.repo in EXEMPT_REPOS:
         print("admitted: %s's Builds are not queued" % args.repo)
         return 0
@@ -309,7 +317,7 @@ def main(argv):
     api = Api(token)
     base = args.base_repo if args.base_repo != args.repo else None
     return run(
-        Admission(api, args.repo, args.run_id, args.branch, base),
+        Admission(api, args.repo, args.run_id, args.branch, base, args.concurrent),
         args.poll,
         args.deadline_minutes,
         max_failed_polls=args.max_failed_polls,
@@ -369,9 +377,9 @@ def recorded(repo, runs, jobs_by_run, pulls=(), page_size=100, branch="b"):
 REPO = "MaxGekk/spark"
 
 
-def admission(runs, jobs_by_run, pulls=(), page_size=100, own=1, branch="b"):
+def admission(runs, jobs_by_run, pulls=(), page_size=100, own=1, branch="b", concurrent=1):
     api = FakeApi(recorded(REPO, runs, jobs_by_run, pulls, page_size, branch))
-    return Admission(api, REPO, own, branch, "vecbricks/varka")
+    return Admission(api, REPO, own, branch, "vecbricks/varka", concurrent)
 
 
 class FailingApi(Api):
@@ -386,6 +394,30 @@ class FailingApi(Api):
 
 
 class AdmitTest(unittest.TestCase):
+    def test_two_at_once_admits_beside_one_run_that_has_fanned_out(self):
+        runs = {1: "in_progress", 2: "in_progress"}
+        jobs = {
+            1: [admit("in_progress", started_at="2026-10-16T10:05:00Z")],
+            2: [admit("completed", "success", "2026-10-16T10:00:00Z")],
+        }
+        self.assertEqual(
+            admission(runs, jobs, concurrent=2).poll(), ("admit", [(2, "has fanned out")])
+        )
+
+    def test_two_at_once_waits_behind_two_runs_ahead(self):
+        # One run has fanned out and another started waiting first: two ahead, so a third waits.
+        runs = {1: "in_progress", 2: "in_progress", 3: "in_progress"}
+        jobs = {
+            1: [admit("in_progress", started_at="2026-10-16T10:05:00Z")],
+            2: [admit("completed", "success", "2026-10-16T10:00:00Z")],
+            3: [admit("in_progress", started_at="2026-10-16T10:01:00Z")],
+        }
+        verdict, found = admission(runs, jobs, concurrent=2).poll()
+        self.assertEqual(verdict, "wait")
+        self.assertEqual(sorted(r for r, _ in found), [2, 3])
+        # The run that started waiting first is admitted beside the one that fanned out.
+        self.assertEqual(admission(runs, jobs, own=3, concurrent=2).poll()[0], "admit")
+
     def test_waits_on_a_run_that_has_fanned_out(self):
         a = admission(
             {1: "in_progress", 2: "in_progress"},
