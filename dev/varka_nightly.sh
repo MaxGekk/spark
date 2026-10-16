@@ -34,6 +34,7 @@
 #   dev/varka_nightly.sh --skip-golden    # without the golden-file suite, about an hour
 #   dev/varka_nightly.sh --skip-platform  # without the forked JVM arms (interpreter, C1, C2, -Xcomp, ...)
 #   dev/varka_nightly.sh --skip-deoptnull # without the NULL-mode kernels' cycle ratchet
+#   dev/varka_nightly.sh --skip-history   # without the kernel-after-kernels arm (VARKA-257)
 #
 # The deopt step forks ten fresh JVMs per vector width of the default emission's twelve-output
 # make_date kernel and fails if any of them enters the C2 deoptimization cycle, reading the
@@ -89,6 +90,7 @@ while [ "$#" -gt 0 ]; do
     --skip-sweep) sweep=0; shift ;;
     --skip-deopt) deopt=0; shift ;;
     --skip-deoptnull) deoptnull=0; shift ;;
+    --skip-history) history=0; shift ;;
     --skip-cliff) cliff=0; shift ;;
     --skip-golden) golden=0; shift ;;
     --skip-platform) platform=0; shift ;;
@@ -180,6 +182,16 @@ fi
 if [ "$deoptnull" -eq 1 ]; then
   run_step deoptnull dev/varka_deopt_census.sh --guard --out "$logdir/deoptnull"
 fi
+# A kernel compiled after other kernels (VARKA-257): forks warm sixteen kernels of the IR fuzz
+# grammar through production's warm-up, then the cliff probe's cheap tails at 24 outputs, read its
+# rate and its allocation, and compare every kernel's answers; a wrong answer, an unfinished fork
+# or a slow one fails (dev/varka_kernel_history.sh, VARKA-257.md 3.2). It reuses deoptnull's build.
+if [ "${history:-1}" -eq 1 ]; then
+  history_build=(--build)
+  [ "${status[deoptnull]:-}" = ok ] && history_build=()
+  run_step history dev/varka_kernel_history.sh --after 16 --forks 6 --guard \
+    "${history_build[@]}" --out "$logdir/history"
+fi
 if [ "$cliff" -eq 1 ]; then
   run_step cliff dev/varka_inlining_cliff.sh --outputs 24,40 --forks 10 --seconds 12 --fail-if-slow
 fi
@@ -204,6 +216,12 @@ for s in canary fuzz forced sparkfuzz sparkwarm sweep prove series variants deop
   printf '%-9s %-7s %6d  %s\n' "$s" "${status[$s]}" "${secs[$s]}" "$logdir/$s.log"
   [ "${status[$s]}" = ok ] || bad=$((bad + 1))
 done
+# The history step is listed on its own lines, so that the step list above stays as it was.
+if [ -n "${status[history]:-}" ]; then
+  printf '%-9s %-7s %6d  %s\n' history "${status[history]}" "${secs[history]}" \
+    "$logdir/history.log"
+  [ "${status[history]}" = ok ] || bad=$((bad + 1))
+fi
 # The platform step, the last to run, is listed last.
 if [ -n "${status[platform]:-}" ]; then
   printf '%-9s %-7s %6d  %s\n' platform "${status[platform]}" "${secs[platform]}" \

@@ -1091,6 +1091,15 @@ beside the 12 module jobs, so a full run can still take most of forty. The owner
 October, with the review's fail-open rule for unreadable runs (the job admits after five failed
 polls in a row, about ten minutes, rather than failing the Build).
 
+*Two full runs at once, the owner's request of 16 October 2026.* With forty slots the owner asked
+for at least two pull requests' CI to run side by side; one full run at a time had four pull
+requests' runs waiting behind one full run that afternoon. `dev/varka_ci_admit.py` takes
+`--concurrent N` and admits a run while fewer than N runs are ahead of it (fanned out, or waiting
+since earlier); the workflow passes 2. So that two admitted runs fit in forty, the PySpark matrix
+on a fork takes at most 6 slots beside the modules' 12, keeping a full run near twenty at its
+widest; apache/spark keeps 20 for both. Two new self-tests: a run is admitted beside one that has
+fanned out, and waits behind two runs ahead.
+
 **What landed.** `build_and_test.yml` has the `admit` job, "Admit a full-matrix run", on
 `ubuntu-latest` with a 340-minute timeout, carrying `Precompile Spark`'s old condition;
 `Precompile Spark` now needs it and runs on `(!cancelled()) && needs.admit.result ==
