@@ -1,5 +1,5 @@
 Output of cache.scala (--master local[1] --conf spark.sql.codegen.cache.maxEntries=1000) on stock Spark, by run.sh.
-commit:  6a70cc2dd0a
+commit:  7be6584f988
 java:    openjdk version "25.0.4.1" 2026-08-18
 spark:   4.2.0
 
