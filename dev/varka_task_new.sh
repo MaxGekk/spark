@@ -55,13 +55,15 @@ fi
 git -C "$root" fetch -q "$remote" master
 # A task's plan lives with the milestone whose table holds its row. Two milestones can have a
 # PLAN.md at once (the next one is planned while the current one runs), so the highest one is
-# only the fallback for a row not yet in any table.
+# only the fallback for a row not yet in any table. The grep reads its whole input rather than
+# `grep -q`: under pipefail, -q's early exit kills `git show` with SIGPIPE on a long PLAN.md and
+# the match would read as a failure.
 plans="$(git -C "$root" ls-tree --name-only "$remote/master" sql/varka/plans/ \
   | grep -E '/m[0-9]+$' | sed -E 's|.*/m||' | sort -n)"
 milestone=""
 for k in $plans; do
   if git -C "$root" show "$remote/master:sql/varka/plans/m$k/PLAN.md" 2>/dev/null \
-      | grep -q "^| $n |"; then
+      | grep "^| $n |" > /dev/null; then
     milestone="$k"
   fi
 done
@@ -73,7 +75,7 @@ if [ -z "$milestone" ]; then
 fi
 [ -n "$milestone" ] || { echo "no sql/varka/plans/m<k>/PLAN.md on $remote/master" >&2; exit 1; }
 plan="sql/varka/plans/m$milestone/VARKA-$n.md"
-if git -C "$root" ls-tree -r --name-only "$remote/master" sql/varka/plans | grep -q "/VARKA-$n\.md$"; then
+if git -C "$root" ls-tree -r --name-only "$remote/master" sql/varka/plans | grep "/VARKA-$n\.md$" > /dev/null; then
   echo "$plan already exists on $remote/master; this task has a plan" >&2; exit 1
 fi
 
