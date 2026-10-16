@@ -163,6 +163,17 @@ count by two and a repeated fixed list by none; the capacity-0 cache misses on e
 the warm cache hits on the fixed list and on a list with new constants. The last is what the
 post's "never make the class again" rests on: Janino hits only on the same text.
 
+**Checked after each table, every timed run.** Janino compiled exactly once per cold call it timed
+or warmed (plus at most once for the hit list, which the cold row's new classes push out of its
+cache), Varka's cold cache emitted once per cold call, its warm cache emitted nothing, and the
+JVM-wide cache the compiler's admission asks built nothing. A run fails before the section starts
+if Janino's cache holds as many classes as the cycle has rounds.
+
+**What a timed call holds and does not.** Every list a timed call compiles is built before the
+table (1000 rounds and the hit list), so no row times building expressions. Varka's key is the
+evaluator's: default emit options, warmed as the session's warm-up setting says (on by default,
+so the classes are named with the `w` mark), as the compiler's admission keys it too.
+
 **Predictions**, before any number, for the runner (an EPYC 7763 in every runner-made results
 file so far), guessed from the laptop's first section with no measurement of these lists:
 
@@ -179,16 +190,27 @@ file so far), guessed from the laptop's first section with no measurement of the
 **The local check, 16 October 2026** (laptop, cores 3 to 5 shared with another agent, so no
 timing is read from it):
 
-* `-Dvarka.bench.dryRun=true` prints the five lists and passes every check above. Varka's classes:
-  1 output from 1 input with 1 literal slot, 3342 bytes; 4 outputs, 2 inputs, 4 slots, 6130
-  bytes; 16 outputs, 16 slots, 16432 bytes; 64 outputs, 64 slots, 58401 bytes; the int list 16
-  outputs from 1 input, 16414 bytes.
+* `-Dvarka.bench.dryRun=true` prints the five lists and passes every check above. Varka's classes,
+  warmed names: 1 output from 1 input with 1 literal slot, 3345 bytes; 4 outputs, 2 inputs, 4
+  slots, 6133 bytes; 16 outputs, 16 slots, 16435 bytes; 64 outputs, 64 slots, 58404 bytes; the
+  int list 16 outputs from 1 input, 16417 bytes.
 * The first int list did not compile: Varka declines a checked `i * c` whose operands do not rule
   out overflow ("checked int multiply whose operands do not rule out overflow", entries 2, 5, 8,
   11 and 14), so the third int form became `-(i + c)`. The check caught it because it refuses a
   list Varka does not fuse whole and prints the declines by position; a benchmark that timed a
   partial kernel against a whole Janino projection would have compared nothing.
-* An untimed full run (no results file) ran every case of both sections to the end.
+* An untimed full run (no results file) ran every case of both sections to the end and passed
+  the checks after each table.
+* `/code-review high` on the first commit found nine points, all about whether the rows measure
+  what they say; seven were fixed in the second commit: the cycle checked against Janino's cache
+  size, the timed calls themselves checked after each table (the first version checked only two
+  rounds the timed rows never compile), the admission's builds checked, the key built as the
+  evaluator builds it (it had dropped the warmed flag), the lists built outside the timed calls
+  (which also removed a per-call copy of Spark's list), and two `var`s whose right side does not
+  name the type. Not changed: both cold rows define a class per call, thousands a second for
+  Varka, so metaspace collections can land in timed iterations, which the averages carry more
+  than the best times; and the check before each table also runs in a dry run and under a filter
+  that times none of its cases, which is what the dry run is for here.
 * Measured and not anticipated in the plan: the compiler's size admission (`VarkaSizeAdmission`)
   emits through the JVM-wide cache the first time it sees a shape. The check before each table is
   that first time, so in the timed rows the admission is a lookup and the private cache's
