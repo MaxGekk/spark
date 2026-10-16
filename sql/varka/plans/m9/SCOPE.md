@@ -4384,6 +4384,40 @@ failure. The two changes above stay as written for the deadline; if the counters
 serving a later batch, the first-run assertion becomes `numWarmupBatches + numVarkaBatches ===
 numBatches` with the claiming batch on the row path.
 
+*Moved into `m8/PLAN.md` row 383, 16 October 2026 (owner's decision).* The suite failed on two pull
+requests that day with `RELEASED did not equal COMPILED`, the same shape both times
+(`shapeHash=wd36813e98d5e22ac`, `calls=108464`, `runNanos=1201511680`, and `calls=109608`,
+`runNanos=1201138469`, as the failures were reported to the planning session). The planning
+session's first reading was that the shape was released about one second into its warm-up, nowhere
+near this item's
+deadline, and that it shares the cause `m7/VARKA-257.md` 9.2 found for long-lane kernels after a
+kernel history (on PR #873, not yet merged): compiled, with C2 code in use for every loop method,
+and still allocating. So the item goes to row 383, whose reproduction on an idle runner covers
+it, and whose done-when includes this item's last clause, `VarkaWarmupEndToEndSuite` passing in a
+full CI run of the sql module.
+
+*A check of the call counts against the code, the same day.* `VarkaKernelWarmup.run` at
+`8d0c3d4953b` spins in blocks of 64 calls and a probe of 4 until 16,000 calls (16,048 after 236
+blocks), then pauses 5 ms (`PACE_MILLIS`) before each further probe of 4. 108464 calls is 23,104
+paced probes and 109608 is 23,390, so each warm-up ran at least 115 s, which is the suite's 120 s
+deadline (it raises the production sixty), not one second. The `runNanos` figures read as
+hundredths of that (`1201511680` against about 120,151,168,000 ns), so they were most likely
+transcribed two digits short. If so, both were deadline releases after some 23,000 probes that
+never came clean twice in a row, which is 257's cause (compiled and still allocating, released at
+the deadline) and also this item's framing; the early exits (a first probe within its allowance,
+at 68 calls; the shape leaving the cache; the kernel throwing) do not fit the counts. The CI logs'
+`stopped its warm-up after ... ms` line names the exit and settles it; reading it is row 383's
+first check. What changes for this item either way: the progress deadline proposed above would
+not keep a shape whose probes never stop allocating, so its two changes wait for 383's cause.
+The text above stays as the record of what was believed before.
+
+*Settled from the CI log, the same day.* The failed job's own log (fork run 38912533464, `sql -
+other tests`) prints the outcome in full: `runNanos=120151168042`, `firstProbeBytes=7915632`,
+`lastProbeBytes=197328`, and "the first run took 508 ms". The `runNanos` the planning session read
+was the failure annotation's text cut off, not a transcription slip. So it was a release at the
+suite's 120 s deadline, with the last probe still allocating: 257's cause, and row 383's first
+check is done.
+
 ### Item 78. A post for Spark users: how Spark compiles a query, and why it compiles it again
 
 *Added 2 October 2026 on the owner's decision, from the post proposals made after VARKA-233's

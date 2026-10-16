@@ -20,6 +20,7 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.nio.ByteOrder;
 import java.util.List;
+import javax.annotation.Nullable;
 
 import jdk.incubator.vector.DoubleVector;
 import jdk.incubator.vector.IntVector;
@@ -110,9 +111,10 @@ final class VarkaVectorTemplateWarmup {
   // Calls to warmUp that finished, and the failure a test asks the next one to throw; see
   // resetForTest.
   private static int completed;
-  private static volatile Throwable failWith;
+  private static volatile @Nullable Throwable failWith;
 
   // Read by no one: it keeps the JIT from discarding the calls as dead code.
+  @SuppressWarnings("UnusedVariable")
   private static volatile long sink;
 
   private VarkaVectorTemplateWarmup() {
@@ -148,7 +150,10 @@ final class VarkaVectorTemplateWarmup {
    * Test hook: forgets that the warm-up ran, so that {@link #ensure} runs it again, and makes the
    * next {@link #warmUp} throw {@code failure} if it is not null.
    */
-  static synchronized void resetForTest(Throwable failure) {
+  // A test hands in the one failure the next warm-up is to throw, so it is stored, not created on
+  // demand; production never sets it.
+  @SuppressWarnings("StaticAssignmentOfThrowable")
+  static synchronized void resetForTest(@Nullable Throwable failure) {
     done = false;
     completed = 0;
     failWith = failure;
@@ -162,7 +167,7 @@ final class VarkaVectorTemplateWarmup {
   static long warmUp() {
     Throwable injected = failWith;
     if (injected != null) {
-      sneakyThrow(injected);
+      throw VarkaShapeCacheImpl.sneakyThrow(injected);
     }
     VectorSpecies<Integer> is = IntVector.SPECIES_PREFERRED;
     VectorSpecies<Long> ls = LongVector.SPECIES_PREFERRED;
@@ -179,7 +184,7 @@ final class VarkaVectorTemplateWarmup {
     }
     for (int i = 0; i < la.length; i++) {
       la[i] = 5L * i - 11;
-      lb[i] = i + 1;
+      lb[i] = i + 1L;
     }
     for (int i = 0; i < da.length; i++) {
       da[i] = 0.5 * i - 1;
@@ -198,11 +203,6 @@ final class VarkaVectorTemplateWarmup {
       completed++;
     }
     return acc;
-  }
-
-  @SuppressWarnings("unchecked")
-  private static <T extends Throwable> void sneakyThrow(Throwable t) throws T {
-    throw (T) t;
   }
 
   private static long ints(VectorSpecies<Integer> s, int[] ia, int[] ib, MemorySegment seg) {
