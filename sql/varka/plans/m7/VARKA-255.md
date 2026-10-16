@@ -1169,3 +1169,62 @@ only "Re-run all jobs" queues as 3.1 describes.
 **Owner action 3** applies when this merges: stop starting `dev/varka_ci_queue.sh run`, `hold`
 and `drop`, since a run the script cancels is now never rerun, and a held pull request is held
 with the `ci-hold` label instead.
+
+### 9.5 255d: the step-time budget, and the laptop queue retired (16 October 2026)
+
+**What landed.** `dev/varka_ci_times.py` with `collect`, `compare` and `gate` as 3.6 describes,
+and `sql/varka/ci/step-budget.tsv`, its first version. `collect` reads runs' jobs and steps from
+the API (by default every completed run of `varka-master.yml` and `varka-fuzz.yml` on
+`vecbricks/varka`; `--created`, `--runs`, `--jobs` and `--conclusion` narrow it) and laptop
+`<step>.secs` directories, and rewrites only the lines it read. A job's own wall time is the step
+`(job)`; the runner's own steps (`Set up job`, `Complete job`, `Post ...`) are left out; a failed
+step, and every step of a failed job, is not a sample. `compare <run>` reads every completed job
+of a run, `gate <dir>` a laptop directory, and both mark a step more than 5% over the budget's
+90th percentile **and at least 30 seconds over it**: the first live `compare` marked a docs step
+of 5 s against a 90th percentile of 4 s, which the API's whole seconds make a 25% move. The CPU
+column is `-` throughout: a Build job does not record its runner's CPU (only `benchmark.yml`
+annotates it), so the budget has no per-CPU lines yet, and a CI line is read across the pool.
+`dev/varka_nightly.sh` writes `<step>.secs` and `<step>.status` beside each log, as the gate
+does, and a step whose status is not `ok` is skipped. The check sync checks out the base's
+default branch (only the tool and the budget, no credentials kept) and, when it patches a check
+to completed, appends `compare --markdown` to the check's summary after a marker, so a later
+completion replaces the table rather than adding a second; a failure of the tool leaves the
+summary as it was. Risk 4's guard, read as its invariant: the sync never checks out the pull
+request's code; a checkout of the base's own default branch is this repository's trusted code.
+
+**The first budget.** CI lines: the Varka jobs of the fork's Build runs created on 13 October
+CEST (`2026-10-12T22:00:00Z..2026-10-13T21:59:59Z`), successful jobs only, and the nightly of 12
+October (run 38222969275). Laptop lines: the twelve full gates whose `.secs` files survive in the
+worktrees of `varka-250` to `varka-311` (5 to 12 October); the four partial gates beside them
+are left out, two of them run beside a night load (`varka-269-nightly`'s `wide` 2,023 s). Master's
+own runs exist since 14 October and are the default source from the next regeneration on.
+
+**Test 9.** The self-test (nine unit tests and the doctests) plants a step 20% over its 90th
+percentile and marks it, leaves one 3% over and one 20% over the median (inside the spread)
+unmarked, does not mark a 4-second step at 9 s, skips failed jobs, steps and gate steps, and
+keeps the lines `collect` did not read. Against the API, read-only: the nightly of 12 October
+reproduces 2.7 to the second (compile 222, IR fuzzer 404, composition 43, variants 514; second
+job 299, 2,807, 124). The 13 October Varka jobs reproduce 2.7's medians to within two minutes and
+not exactly, and on more runs: 27 catalyst and 26 sql suite jobs where 2.7 counted 21, medians
+for the catalyst job, suites and option steps of 22.8, 12.1 and 5.5 minutes against 23, 14 and 6,
+and for sql 24.3, 15.8 and 7.2 against 26, 16 and 7; the assembly gate 7.1 against 7, the bench
+drivers 2.2 against 2. 2.7 did not record which runs it read (by the counts, not every run of the
+day), so the window is the difference, and the budget is the reproducible version. Its first
+`compare`, on a fork run of 16 October, marked the `Checkout and sync Spark repository` step of
+five jobs at 50 to 62 s against a 90th percentile of 41 to 46 s before the 30 s floor was added:
+the full-history checkout #806 introduced on 14 October, after the budget's window, which is the
+kind of move the budget is for.
+
+**The laptop queue retired.** `dev/varka_ci_queue.sh` is deleted. In
+`sql/varka/skills/working-in-this-repo.md` its section is in the past tense and a new one
+describes the admission job, the check sync, the 15-minute `ubuntu-slim` cap and the budget;
+`SKILLS.md` is regenerated. Two files outside the row's list named the script or the budget and
+are changed with it: `CONTRIBUTING.md`'s paragraph on the queue now describes `admit` and
+`ci-hold`, and `sql/varka/AGENTS.md`'s "Pull requests" rule names the budget file and the tool.
+`dev/varka_ci_*.py` were added to the `varka-docs` module's files in 255c, so the docs job runs
+this tool's self-test too.
+
+**What only a real run can show**: that `require('child_process')` and `python3` are available
+to `actions/github-script` on the base's runner and the table lands in a completed check's
+summary; that the base's token reads a fork run's jobs for it (the sync already reads the run
+itself that way); and prediction 9, after ten pull requests that do not change test code.

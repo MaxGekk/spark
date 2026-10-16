@@ -53,8 +53,22 @@ jobs:
       actions: write
       checks: write
     steps:
+      # This repository's own step-time tool and budget, from its default branch, for the
+      # table a completed check's summary carries (VARKA-255.md 3.6). Never the pull request's
+      # code: the job holds a write token.
+      - name: Checkout the step-time budget
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: |
+            dev/varka_ci_times.py
+            sql/varka/ci/step-budget.tsv
+          sparse-checkout-cone-mode: false
       - name: "Update build status"
         uses: actions/github-script@v9
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -146,6 +160,30 @@ jobs:
               // but workflow_run may also report requested / waiting / pending.
               : {status: run.status == 'in_progress' ? 'in_progress' : 'queued', conclusion: null}
 
+            // A completed run's steps against the budget, as markdown for the check's summary,
+            // or '' when the tool fails; the summary is a disclosure, never worth a failed pass.
+            const { execFileSync } = require('child_process')
+            const marker = '<!-- varka-step-times -->'
+            const stepTimes = (params) => {
+              try {
+                return execFileSync('python3', ['dev/varka_ci_times.py', 'compare',
+                  '--repo', params.owner + '/' + params.repo, String(params.run_id), '--markdown'],
+                  {encoding: 'utf8', timeout: 120000})
+              } catch (error) {
+                console.error('    step times unavailable: ' + error.message)
+                return ''
+              }
+            }
+            const withStepTimes = (output, params) => {
+              const summary = (output.summary || '').split(marker)[0].trimEnd()
+              const table = stepTimes(params)
+              return {
+                title: output.title,
+                summary: table ? (summary + '\n\n' + table).slice(0, 65000) : summary,
+                text: output.text
+              }
+            }
+
             // One pass over the open pull requests; returns how many of their fork runs are
             // not completed, read from the runs themselves, so a rerun that reopens a
             // completed run keeps the loop going.
@@ -236,7 +274,7 @@ jobs:
                             owner: context.repo.owner,
                             repo: context.repo.repo,
                             check_run_id: cr.id,
-                            output: cr.output,
+                            output: withStepTimes(cr.output, params),
                             status: run.data.status,
                             conclusion: run.data.conclusion,
                             details_url: run.data.details_url

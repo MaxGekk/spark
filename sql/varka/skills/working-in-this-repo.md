@@ -249,26 +249,51 @@ written in the row, or it goes to the furthest-out scope catalogue instead; twen
 days is more than a milestone closes, and each one added is a choice not to do the track that
 has none.
 
-## A day of merges is a day of Builds; the queue now keeps a verdict across docs-only pushes
+## A day of merges was a day of Builds; the laptop queue kept a verdict across docs-only pushes
 
 On 25 September 2026 the owner asked why the Varka pull requests were taking so long to pass
 CI, and the fork's run list for the day answered with four causes, in the order they cost.
-The queue runner (`dev/varka_ci_queue.sh`, VARKA-176) waits until no Build runs anywhere on the
-fork, because the twenty job slots are shared, and two upstream Builds on the same fork that
-day took 125 and 132 minutes of them, pausing the Varka queue for 2 h 18 min at one stretch.
-One Build failed in a way that hung a job until its timeout (the G32 heap case in
-`testing-and-debugging.md`) and cost 4 h 29 min before its fix could be built and rerun. A PR
-that touches the build workflow runs every module, 39 jobs with the longest over an hour,
-where a plan-only PR runs a handful in about 33 minutes. And seven merges each sent a merge of
-master into every other open PR, and each such push cancelled that PR's Build and needed a
-new one: the day's list held more than twenty cancelled runs.
+The queue runner of the time (`dev/varka_ci_queue.sh`, VARKA-176, deleted by VARKA-255) waited
+until no Build ran anywhere on the fork, because the twenty job slots were shared, and two
+upstream Builds on the same fork that day took 125 and 132 minutes of them, pausing the Varka
+queue for 2 h 18 min at one stretch. One Build failed in a way that hung a job until its timeout
+(the G32 heap case in `testing-and-debugging.md`) and cost 4 h 29 min before its fix could be
+built and rerun. A PR that touched the build workflow ran every module, 39 jobs with the longest
+over an hour, where a plan-only PR ran a handful in about 33 minutes. And seven merges each sent a
+merge of master into every other open PR, and each such push cancelled that PR's Build and needed
+a new one: the day's list held more than twenty cancelled runs.
 
-The last cause is the one the tooling can remove, and VARKA-211 did: a PR whose head moved
-since a Build passed keeps that verdict when everything changed since is outside what the
-Build tests - the plans, skills and papers, any Markdown, and committed benchmark results - and
-the passed head is an ancestor of the new one. The check is GitHub's compare API from the
-tested head to the current one, which for a merge of master lists master's new commits, so a
-merge that brought a test file still reruns. The other three are choices rather than tooling:
-upstream Builds on the same fork pause the queue for their two hours; a workflow change runs
-the full matrix; and merging green PRs in one sitting, then merging master into the rest once,
-replaces several requeue rounds with one.
+VARKA-211 removed the last cause in the laptop script: a PR whose head moved since a Build passed
+kept that verdict when everything changed since was outside what the Build tests and the passed
+head was an ancestor of the new one. Since #806 a documents-only push runs only the six short
+documents jobs, so the kept verdict saved little, and VARKA-255 retired the script with it: the
+script ran on the laptop, slept when the laptop did, and had dispatched nothing since 3 October.
+The other three causes were choices rather than tooling, and the next section says what replaced
+the queue.
+
+## The fork's CI queue is a job inside the Build, and the check sync rides the push
+
+VARKA-255 replaced the laptop queue (above) with two token-free parts, after an admission check
+found that GitHub's cron fires four to ten hours late on both repositories (`VARKA-255.md` 2.1),
+so nothing may wait on a cron, and that one Build at a time would have ended 13 October almost
+nine hours late (2.2): the harm is a full-matrix run taking every slot, not two runs side by side.
+
+* **`admit`** in `build_and_test.yml` runs only in a Build that will precompile Spark, and
+  `Precompile Spark` needs it to succeed. `dev/varka_ci_admit.py` waits while another fork run's
+  `admit` has succeeded (that run has fanned out) or started waiting earlier, so full runs go one
+  at a time in the order they asked and scoped runs never wait. A pull request labelled `ci-hold`
+  on `vecbricks/varka` fails at `admit`; remove the label and rerun the failed jobs to resume.
+  A re-push cancels a waiting run through the Build's own concurrency group.
+* **The check sync**, `update_build_status.yml` on the base, starts when notify ("On pull request
+  update") completes for a push, and passes every 120 seconds while any open pull request's fork
+  run is in flight. Rerunning a fork run fires nothing on the base: dispatch the sync yourself
+  (`gh workflow run update_build_status.yml -R vecbricks/varka`) if no loop is alive.
+* **A job that waits cannot run on `ubuntu-slim`**: GitHub stops a slim job at 15 minutes (the
+  runner's changelog of 28 October 2025), so both run on `ubuntu-latest`. A slot is a slot either
+  way.
+* **Step times** have a committed budget, `sql/varka/ci/step-budget.tsv`, written by
+  `dev/varka_ci_times.py collect` from master's runs, the nightly fuzz and laptop gate
+  directories; each completed Build check carries `compare`'s table, and `dev/varka_ci_times.py
+  gate target/varka-gate` reads a laptop gate (or a nightly's dated directory) against it. A
+  marked step - more than 5% over the budget's 90th percentile - is a line in the pull request's
+  description, not a failure: one day's suites step ranged 2.8 times across runners.
