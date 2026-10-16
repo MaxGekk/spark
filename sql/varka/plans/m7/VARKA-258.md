@@ -163,7 +163,8 @@ at 33, and every query from 40 on; the 150-query loop compiled 450 classes in ea
 3. Owed (the runner).
 4. **Held, and stronger than predicted**: all 150 of the second loop's queries compiled again, not
    50. A loop larger than the cache evicts each class just before it is needed, and at three
-   classes a query the cache holds about 30 such queries.
+   classes a query in local mode the cache holds about 30 such queries (on a cluster, by the
+   per-JVM counts of 2, about 100 on the driver and 50 on each executor; inferred, not measured).
 5. Owed (the runner).
 
 ### 9.2 The draft, 16 October 2026

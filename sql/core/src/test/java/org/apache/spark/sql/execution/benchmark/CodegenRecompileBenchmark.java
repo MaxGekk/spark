@@ -164,6 +164,16 @@ public class CodegenRecompileBenchmark extends VarkaBenchmarkBase {
             v -> modFilter("t", CodegenRecompileSupport.intSlot(v)), true));
     slots.forEach(arm -> arm.query().accept(1));
     section("An integer passed as a reference instead of written into the source", () -> {
+      // The reference must filter as the literal does, or the times below describe a broken
+      // predicate; the line in the results file is the check's record.
+      for (int v : new int[] {3, 7}) {
+        long byLiteral = modFilter("t", lit(v));
+        long byReference = modFilter("t", CodegenRecompileSupport.intSlot(v));
+        require(byLiteral == SMALL_ROWS / 1000 && byReference == byLiteral, "the reference "
+            + "counted " + byReference + " rows for " + v + ", the literal " + byLiteral);
+      }
+      note("check: i % 1000 = v counts " + SMALL_ROWS / 1000 + " rows for v = 3 and v = 7, "
+          + "with the literal and with the reference");
       shortQueries("SELECT count(*) FROM t WHERE i % 1000 = <value>, " + SMALL_ROWS
           + " rows in one partition", slots);
       classesAndJaninoShare(slots);
@@ -176,8 +186,8 @@ public class CodegenRecompileBenchmark extends VarkaBenchmarkBase {
   }
 
   /** {@code SELECT count(*) FROM <table> WHERE i % 1000 = <value>} through the DataFrame API. */
-  private void modFilter(String table, Column value) {
-    spark.table(table).where(col("i").mod(1000).equalTo(value)).count();
+  private long modFilter(String table, Column value) {
+    return spark.table(table).where(col("i").mod(1000).equalTo(value)).count();
   }
 
   /** Times each arm's query: milliseconds per query, each iteration one query. */

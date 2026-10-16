@@ -25,9 +25,9 @@ about when Spark compiles it: how often, where, and which queries it compiles ag
 >    a new class. Strings and decimals are passed to the class instead, so a new one is not.
 > 2. A named parameter doesn't help: Spark binds it as a literal, so `:p` compiles like the value
 >    it holds.
-> 3. One new integer cost three compiles on a driver and two executors, and the default cache of
->    100 classes holds about thirty such queries. A dashboard that cycles through more than that
->    compiles every query again.
+> 3. One new integer cost five compiles on a driver and two executors: one on the driver, two on
+>    each executor. In local mode the default cache of 100 classes held about thirty such
+>    queries; a loop of more than that compiled every query again.
 
 ## 1. From a plan to running code
 
@@ -37,8 +37,8 @@ about when Spark compiles it: how often, where, and which queries it compiles ag
 `executors-jdk25-output.txt`: one compile on the driver and two on each executor.*
 
 Whole-stage codegen turns each stage of the physical plan into one Java source string. The driver
-compiles it with Janino in `CodeGenerator.compile`, partly to run it and partly to read the size
-of every method, which is where the 64 KB fallback and the 8000-byte check of the earlier posts
+compiles it with Janino in `CodeGenerator.compile`, to check that it compiles and to read the
+size of every method, which is where the 64 KB fallback and the 8000-byte check of the earlier posts
 are decided. Then it ships the stage to the executors, and what it ships is the source, not the
 class. Every executor compiles the source again into a cache of its own.
 
@@ -105,12 +105,16 @@ integer, then the same loop again, and counts how many of the second loop's quer
 *Figure 2. The second loop's queries that compiled again, under the default cache and under a
 cache of 1000, from `cache-100-jdk25-output.txt` and `cache-1000-jdk25-output.txt`.*
 
-Each of these queries compiles three classes, so a cache of 100 holds about thirty of them. Up to
-30 queries the second loop compiled nothing. At 33, 31 of 33 compiled again; at 40 and beyond,
-every one did. The cache doesn't degrade gently: a loop that is larger than the cache evicts each
-class just before it is needed again, so all 150 queries of the outline's loop compiled twice,
-450 classes each time. With `spark.sql.codegen.cache.maxEntries=1000` the second loop compiled
-nothing at any size up to 150.
+In local mode each of these queries compiles three classes, so a cache of 100 holds about thirty
+of them. Up to 30 queries the second loop compiled nothing. At 33, 31 of 33 compiled again; at 40
+and beyond, every one did. The cache doesn't degrade gently: a loop that is larger than the cache
+evicts each class just before it is needed again, so all 150 queries of the largest loop compiled
+twice, 450 classes each time. With `spark.sql.codegen.cache.maxEntries=1000` the second loop
+compiled nothing at any size up to 150.
+
+On a cluster the classes spread out: the driver caches one class per such query and each executor
+two, so by the same arithmetic the driver's cache would hold about a hundred of them and each
+executor's about fifty. That is inferred from the per-JVM counts above, not measured.
 
 ## 4. What to do today
 
