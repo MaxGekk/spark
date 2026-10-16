@@ -1401,6 +1401,12 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
           "SELECT i FROM varka_raising_fallback WHERE d2 IS NOT NULL AND make_date(2021, i, 1) < d"
         assertFused(plan(fallback))
         checkSparkRaisesTheSame[SparkDateTimeException](fallback)
+        // Without whole-stage codegen Spark evaluates the condition as written and the null test
+        // drops the row first: no error on either engine, so the fallback follows that order.
+        withBothConf(SQLConf.WHOLESTAGE_CODEGEN_ENABLED.key, "false") {
+          assertFused(plan(fallback))
+          assert(checkSparkAnswerMaybeThrows(fallback) == VarkaMaybeThrows.Answered(Seq(Row(5))))
+        }
       }
       withAnsi(false) {
         val first = s"SELECT i $t (l + 1) > 0 AND d < DATE'2021-06-01' ORDER BY i"
@@ -1414,6 +1420,8 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
         session.catalog.uncacheTable("varka_raising_residual")
         session.catalog.uncacheTable("varka_raising_null_test")
         session.catalog.uncacheTable("varka_raising_fallback")
+        Seq("varka_raising_residual", "varka_raising_null_test", "varka_raising_fallback")
+          .foreach(session.catalog.dropTempView)
       }
     }
   }

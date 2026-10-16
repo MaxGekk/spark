@@ -24,8 +24,8 @@ import org.apache.spark.{PartitionEvaluator, PartitionEvaluatorFactory, SparkExc
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.{Attribute, BasePredicate, Expression, IsNotNull, NamedExpression, Predicate, PredicateHelper, SortOrder, UnsafeProjection}
-import org.apache.spark.sql.catalyst.expressions.codegen.VarkaConjunctOrder
+import org.apache.spark.sql.catalyst.expressions.{Attribute, BasePredicate, Expression, IsNotNull, LeafExpression, NamedExpression, Predicate, PredicateHelper, SortOrder, UnsafeProjection}
+import org.apache.spark.sql.catalyst.expressions.codegen.{CodegenFallback, VarkaConjunctOrder}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSelectionBitmap
 import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
@@ -69,14 +69,24 @@ private[sql] trait VarkaFilterExecBase extends UnaryExecNode with PredicateHelpe
 
   /**
    * What the per-row fallback evaluates: the whole condition where the rule split one, and the
-   * fused conjuncts otherwise, in the order whole-stage codegen evaluates them when the session
-   * runs it, which moves `IsNotNull` tests from where they are written (VARKA-380): the generated
-   * predicate evaluates an `AND` tree as written, and an `isnotnull(d)` written first would drop a
-   * row before a conjunct that raises on it in Spark.
+   * fused conjuncts otherwise, in the order Spark's own `FilterExec` would evaluate them here
+   * (VARKA-380). The generated predicate evaluates an `AND` tree as written, which is Spark's
+   * order when the filter is not whole-stage compiled; when it is, codegen moves the `IsNotNull`
+   * tests, and an `isnotnull(d)` written first would drop a row before a conjunct that raises on
+   * it in Spark. Whether Spark compiles the filter is `CollapseCodegenStages.supportCodegen`'s
+   * test, asked of this node: codegen on, no expression that falls back, and no more columns
+   * than `spark.sql.codegen.maxFields`.
    */
   protected def fallbackCondition: Expression = {
     val whole = wholeCondition.getOrElse(condition)
-    if (conf.wholeStageEnabled) VarkaConjunctOrder.inCodegenOrder(whole) else whole
+    val fallsBack = whole.exists {
+      case _: LeafExpression => false
+      case _: CodegenFallback => true
+      case _ => false
+    }
+    val compiled = conf.wholeStageEnabled && !fallsBack &&
+      !WholeStageCodegenExec.isTooManyFields(conf, child.schema)
+    if (compiled) VarkaConjunctOrder.inCodegenOrder(whole) else whole
   }
 
   // The settings are an implementation detail of the node, not an argument a plan reader needs.

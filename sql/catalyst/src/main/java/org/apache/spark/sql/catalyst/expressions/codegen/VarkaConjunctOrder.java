@@ -66,7 +66,7 @@ import org.apache.spark.sql.types.NumericType;
 import org.apache.spark.sql.types.StringType;
 
 /**
- * Which fused conjuncts of a split filter would run ahead of an error Spark raises (VARKA-380).
+ * Which fused conjuncts of a split filter would change the errors Spark raises (VARKA-380).
  *
  * <p>A split filter runs its fused conjuncts in the Varka node below and its residual conjuncts in
  * a row {@code FilterExec} above, so the residual ones see only the rows every fused conjunct
@@ -77,13 +77,16 @@ import org.apache.spark.sql.types.StringType;
  *
  * <p>Spark has two orders, and the check holds a fused conjunct to both. The interpreted
  * predicate evaluates the {@code AND} tree as written. Whole-stage codegen
- * ({@code FilterExec.generatePredicateCode}) evaluates the other conjuncts as written but moves
- * each {@code IsNotNull} to just before the first of them that references its column, and the
- * {@code IsNotNull} conjuncts no other conjunct references to the end. So an {@code isnotnull(l)}
- * written first still runs after a raising conjunct that does not read {@code l}. That also means
- * a fused conjunct can decide where a residual {@code IsNotNull} runs: taken out of the residual
- * filter, it no longer pulls the test ahead of a raising conjunct there, so such a conjunct is
- * demoted too. {@link #codegenOrder} is a port of that algorithm and has to follow it.
+ * ({@code FilterExec.generatePredicateCode}) evaluates the other conjuncts as written but puts
+ * each {@code IsNotNull} conjunct just before the first of them that reads its column, the ones
+ * nothing reads at the end, and, before a conjunct reading a column that an {@code IsNotNull} of a
+ * larger expression implies is not null ({@code isnotnull(l + 1)} implies {@code l}), a null check
+ * of that column of its own. So an {@code isnotnull(l)} written first still runs after a raising
+ * conjunct that does not read {@code l}. It also means the conjuncts decide where those null
+ * checks run, and the residual filter, which orders its own conjuncts the same way, places them
+ * by the residual conjuncts alone: a fused conjunct that put a null check ahead of a raising
+ * residual conjunct is demoted too, unless the fused conjuncts drop the same null rows anyway.
+ * {@link #codegenOrder} is a port of that algorithm and has to follow it.
  *
  * <p>Whether a conjunct can raise is answered conservatively by {@link #canRaise}: a conjunct is
  * error-free only when every node in it is one of a short list of expressions that never throw in
@@ -102,6 +105,18 @@ public final class VarkaConjunctOrder {
    * caused by the other conjuncts, which a suite tells from a decline of the conjunct itself.
    */
   public static final String OUT_OF_ORDER = "out of Spark's order";
+
+  /** One step of codegen's order: a conjunct, or a null check codegen adds of a column. */
+  sealed interface Step {
+  }
+
+  /** The conjunct of this index in the written order. */
+  record Conjunct(int index) implements Step {
+  }
+
+  /** A null check of {@code column} that no conjunct writes, implied by a larger null test. */
+  record NullCheck(Attribute column) implements Step {
+  }
 
   /**
    * The fused conjuncts to demote so that no fused conjunct changes which errors Spark's orders
@@ -126,13 +141,22 @@ public final class VarkaConjunctOrder {
     if (!anyResidualRaises) {
       return late;
     }
-    List<Integer> codegen = codegenOrder(conjuncts);
+    var written = new ArrayList<Integer>(size);
+    for (int index = 0; index < size; index++) {
+      written.add(index);
+    }
+    var codegen = new ArrayList<Integer>(size);
+    for (Step step : codegenOrder(conjuncts)) {
+      if (step instanceof Conjunct(int index)) {
+        codegen.add(index);
+      }
+    }
     boolean changed = true;
     while (changed) {
-      changed = demoteBehind(writtenOrder(size), conjuncts, raises, isFused, late)
+      changed = demoteBehind(written, conjuncts, raises, isFused, late)
           | demoteBehind(codegen, conjuncts, raises, isFused, late);
       if (!changed) {
-        changed = demotePullers(conjuncts, codegen, raises, isFused, late);
+        changed = demoteNullCheckMovers(conjuncts, raises, isFused, late);
       }
     }
     return late;
@@ -158,74 +182,159 @@ public final class VarkaConjunctOrder {
   }
 
   /**
-   * Demotes the fused conjuncts that place a residual null test on the other side of a raising
-   * residual conjunct in codegen order than the residual filter would place it without them. The
-   * residual filter orders its own conjuncts by the same algorithm, and a null test runs before
-   * the first conjunct that reads its column: when that conjunct is fused, the residual filter
-   * moves the test later. Demoting every fused conjunct that reads the column restores the place.
+   * Demotes the fused conjuncts that decide whether a null check runs before a raising residual
+   * conjunct in codegen order. For each raising residual conjunct, the rows Spark lets reach it
+   * are those every step before it in the full codegen order keeps; on Varka they are those every
+   * fused conjunct and every step before it in the residual filter's own codegen order keeps. With
+   * {@link #demoteBehind} done, the two sets of steps differ only in null tests and null checks.
+   * A difference is harmless when the other side drops the same null rows anyway, and otherwise
+   * the fused conjuncts that pulled the null test into place in the full order are demoted, so the
+   * residual filter pulls it into the same place.
    */
-  private static boolean demotePullers(List<Expression> conjuncts, List<Integer> codegen,
-      boolean[] raises, boolean[] isFused, Map<Integer, String> late) {
+  private static boolean demoteNullCheckMovers(List<Expression> conjuncts, boolean[] raises,
+      boolean[] isFused, Map<Integer, String> late) {
     var residual = new ArrayList<Integer>();
     var residualConjuncts = new ArrayList<Expression>();
+    var fusedSteps = new ArrayList<Step>();
     for (int index = 0; index < conjuncts.size(); index++) {
-      if (!isFused[index]) {
+      if (isFused[index]) {
+        fusedSteps.add(new Conjunct(index));
+      } else {
         residual.add(index);
         residualConjuncts.add(conjuncts.get(index));
       }
     }
-    var fullPosition = new int[conjuncts.size()];
-    for (int position = 0; position < codegen.size(); position++) {
-      fullPosition[codegen.get(position)] = position;
-    }
-    var residualPosition = new int[conjuncts.size()];
-    List<Integer> residualOrder = codegenOrder(residualConjuncts);
-    for (int position = 0; position < residualOrder.size(); position++) {
-      residualPosition[residual.get(residualOrder.get(position))] = position;
+    List<Step> full = codegenOrder(conjuncts);
+    var residualOrder = new ArrayList<Step>();
+    for (Step step : codegenOrder(residualConjuncts)) {
+      residualOrder.add(switch (step) {
+        case Conjunct(int index) -> new Conjunct(residual.get(index));
+        case NullCheck n -> n;
+      });
     }
     boolean changed = false;
-    boolean mismatched = false;
+    boolean unexplained = false;
     for (int r : residual) {
       if (!raises[r]) {
         continue;
       }
-      for (int c : residual) {
-        boolean beforeInFull = fullPosition[c] < fullPosition[r];
-        boolean beforeInResidual = residualPosition[c] < residualPosition[r];
-        if (c == r || beforeInFull == beforeInResidual) {
-          continue;
-        }
-        mismatched = true;
-        for (int test : List.of(c, r)) {
-          Expression tested = nullTested(conjuncts.get(test));
-          if (tested == null) {
+      List<Step> onSpark = before(full, r);
+      List<Step> onVarka = new ArrayList<>(fusedSteps);
+      onVarka.addAll(before(residualOrder, r));
+      for (List<List<Step>> sides : List.of(List.of(onSpark, onVarka),
+          List.of(onVarka, onSpark))) {
+        for (Step step : sides.get(0)) {
+          if (holds(sides.get(1), step)) {
             continue;
           }
+          Expression tested = nullTestOf(step, conjuncts);
+          if (tested == null) {
+            unexplained = true;
+            continue;
+          }
+          if (dropsNullsOf(sides.get(1), tested, conjuncts)) {
+            continue;
+          }
+          boolean demoted = false;
           for (int f = 0; f < conjuncts.size(); f++) {
             if (isFused[f] && nullTested(conjuncts.get(f)) == null
                 && pulls(conjuncts.get(f), tested)) {
               isFused[f] = false;
-              late.putIfAbsent(f, "it decides whether Spark evaluates " + conjuncts.get(c).sql()
-                  + " before " + conjuncts.get(r).sql() + ", which can raise an error; fused, it "
-                  + "would leave the residual filter to run them " + OUT_OF_ORDER);
-              changed = true;
+              late.putIfAbsent(f, "it decides whether Spark tests " + tested.sql()
+                  + " for null before " + conjuncts.get(r).sql() + ", which can raise an error; "
+                  + "fused, it would leave the residual filter to test it " + OUT_OF_ORDER);
+              demoted = true;
             }
           }
+          changed |= demoted;
+          unexplained |= !demoted;
         }
       }
     }
-    if (mismatched && !changed) {
-      // Unreachable while codegenOrder ports Spark's algorithm: only a null test moves between the
-      // two orders, and its pullers are what moves it. Should the port drift, nothing stays fused.
+    if (unexplained && !changed) {
+      // Unreachable while codegenOrder ports Spark's algorithm: the two sides can differ only in
+      // null tests, and the fused conjuncts that pull one are what moves it. Should the port
+      // drift, nothing stays fused, under a reason no suite takes for a composition decline.
       for (int f = 0; f < conjuncts.size(); f++) {
         if (isFused[f]) {
           isFused[f] = false;
-          late.putIfAbsent(f, "the residual filter would run its conjuncts " + OUT_OF_ORDER);
+          late.putIfAbsent(f, "the residual filter would order its conjuncts unlike Spark's "
+              + "codegen, which VarkaConjunctOrder.codegenOrder no longer follows");
           changed = true;
         }
       }
     }
     return changed;
+  }
+
+  /** The steps of {@code order} before the conjunct {@code index}. */
+  private static List<Step> before(List<Step> order, int index) {
+    var steps = new ArrayList<Step>();
+    for (Step step : order) {
+      if (step instanceof Conjunct(int i) && i == index) {
+        break;
+      }
+      steps.add(step);
+    }
+    return steps;
+  }
+
+  /** Whether {@code steps} holds {@code step}: the same conjunct, or a check of the same column. */
+  private static boolean holds(List<Step> steps, Step step) {
+    for (Step other : steps) {
+      boolean same = switch (step) {
+        case Conjunct(int index) -> other instanceof Conjunct(int i) && i == index;
+        case NullCheck(Attribute column) ->
+            other instanceof NullCheck(Attribute c) && c.semanticEquals(column);
+      };
+      if (same) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** What {@code step} tests for null, or null when it is a conjunct of another kind. */
+  private static Expression nullTestOf(Step step, List<Expression> conjuncts) {
+    return switch (step) {
+      case Conjunct(int index) -> nullTested(conjuncts.get(index));
+      case NullCheck(Attribute column) -> column;
+    };
+  }
+
+  /** Whether one of {@code steps} drops every row on which {@code tested} is null. */
+  private static boolean dropsNullsOf(List<Step> steps, Expression tested,
+      List<Expression> conjuncts) {
+    for (Step step : steps) {
+      boolean drops = switch (step) {
+        case Conjunct(int index) -> {
+          Expression conjunct = conjuncts.get(index);
+          yield nullWhenNull(conjunct, tested)
+              || (conjunct instanceof IsNotNull n && nullWhenNull(n.child(), tested));
+        }
+        case NullCheck(Attribute column) -> column.semanticEquals(tested);
+      };
+      if (drops) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Whether {@code expr} is null on every row where {@code tested} is. */
+  private static boolean nullWhenNull(Expression expr, Expression tested) {
+    if (expr.semanticEquals(tested)) {
+      return true;
+    }
+    if (!expr.nullIntolerant()) {
+      return false;
+    }
+    for (Expression child : CollectionConverters.asJava(expr.children())) {
+      if (nullWhenNull(child, tested)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** The tested expression of a null test codegen moves, or null for any other conjunct. */
@@ -236,97 +345,106 @@ public final class VarkaConjunctOrder {
   /** Whether codegen places the null test of {@code tested} just before {@code conjunct}. */
   private static boolean pulls(Expression conjunct, Expression tested) {
     if (tested instanceof Attribute) {
-      for (Attribute reference : CollectionConverters.asJava(conjunct.references().toSeq())) {
-        if (tested.semanticEquals(reference)) {
-          return true;
-        }
-      }
-      return false;
+      return references(conjunct, (Attribute) tested);
     }
     return conjunct.exists(e -> e.semanticEquals(tested));
   }
 
+  private static boolean references(Expression conjunct, Attribute column) {
+    for (Attribute reference : CollectionConverters.asJava(conjunct.references().toSeq())) {
+      if (column.semanticEquals(reference)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /**
-   * {@code condition} with its conjuncts in the order whole-stage codegen evaluates them, for the
-   * per-row fallback of a Varka filter, whose generated predicate evaluates an {@code AND} tree as
-   * written: folded in this order, it stops where the codegen filter stops, and raises what it
-   * raises.
+   * {@code condition} with its conjuncts, and the null checks codegen adds, in the order
+   * whole-stage codegen evaluates them, for the per-row fallback of a Varka filter, whose
+   * generated predicate evaluates an {@code AND} tree as written: folded in this order, it stops
+   * where the codegen filter stops, and raises what it raises.
    */
   public static Expression inCodegenOrder(Expression condition) {
-    List<Expression> conjuncts = new ArrayList<>();
-    collectConjuncts(condition, conjuncts);
+    List<Expression> conjuncts = VarkaExpressionCompiler.conjuncts(condition);
     Expression folded = null;
-    for (int index : codegenOrder(conjuncts)) {
-      folded = folded == null ? conjuncts.get(index) : new And(folded, conjuncts.get(index));
+    for (Step step : codegenOrder(conjuncts)) {
+      Expression next = switch (step) {
+        case Conjunct(int index) -> conjuncts.get(index);
+        case NullCheck(Attribute column) -> new IsNotNull(column);
+      };
+      folded = folded == null ? next : new And(folded, next);
     }
     return folded;
   }
 
-  private static void collectConjuncts(Expression condition, List<Expression> conjuncts) {
-    if (condition instanceof And and) {
-      collectConjuncts(and.left(), conjuncts);
-      collectConjuncts(and.right(), conjuncts);
-    } else {
-      conjuncts.add(condition);
-    }
-  }
-
-  /** The conjuncts' indices in the order the {@code AND} tree evaluates them. */
-  private static List<Integer> writtenOrder(int size) {
-    var order = new ArrayList<Integer>(size);
-    for (int index = 0; index < size; index++) {
-      order.add(index);
-    }
-    return order;
-  }
-
   /**
-   * The conjuncts' indices in the order {@code FilterExec.generatePredicateCode} evaluates them:
-   * each conjunct that is not a null test as written, preceded by the null tests of the columns it
-   * references and of the null-intolerant expressions it contains, then the null tests left over.
+   * The order {@code FilterExec.generatePredicateCode} evaluates the conjuncts in: each conjunct
+   * that is not a null test as written, preceded by the null tests of the columns it reads, the
+   * null checks codegen adds of the columns a larger null test implies, and the null tests of the
+   * larger expressions it contains; then the null tests left over.
    */
-  static List<Integer> codegenOrder(List<Expression> conjuncts) {
+  static List<Step> codegenOrder(List<Expression> conjuncts) {
     var notNull = new ArrayList<Integer>();
     var other = new ArrayList<Integer>();
+    var implied = new ArrayList<Attribute>();
     for (int index = 0; index < conjuncts.size(); index++) {
-      if (nullTested(conjuncts.get(index)) != null) {
+      Expression tested = nullTested(conjuncts.get(index));
+      if (tested != null) {
         notNull.add(index);
+        implied.addAll(CollectionConverters.asJava(tested.references().toSeq()));
       } else {
         other.add(index);
       }
     }
     var placed = new boolean[conjuncts.size()];
-    var order = new ArrayList<Integer>(conjuncts.size());
+    var checked = new ArrayList<Attribute>();
+    var order = new ArrayList<Step>(conjuncts.size());
     for (int c : other) {
       Expression conjunct = conjuncts.get(c);
-      // Spark looks up the first null test of each referenced column, and places it unless an
-      // earlier conjunct already did.
+      // Spark looks up the first null test of each column the conjunct reads, and places it
+      // unless an earlier conjunct did; failing that, a column a null test implies gets a check
+      // of its own, once.
       for (Attribute reference : CollectionConverters.asJava(conjunct.references().toSeq())) {
+        int found = -1;
         for (int n : notNull) {
           if (nullTested(conjuncts.get(n)).semanticEquals(reference)) {
-            if (!placed[n]) {
-              placed[n] = true;
-              order.add(n);
-            }
+            found = n;
             break;
           }
+        }
+        if (found != -1 && !placed[found]) {
+          placed[found] = true;
+          order.add(new Conjunct(found));
+        } else if (containsColumn(implied, reference) && !containsColumn(checked, reference)) {
+          checked.add(reference);
+          order.add(new NullCheck(reference));
         }
       }
       for (int n : notNull) {
         Expression tested = nullTested(conjuncts.get(n));
         if (!placed[n] && !(tested instanceof Attribute) && pulls(conjunct, tested)) {
           placed[n] = true;
-          order.add(n);
+          order.add(new Conjunct(n));
         }
       }
-      order.add(c);
+      order.add(new Conjunct(c));
     }
     for (int n : notNull) {
       if (!placed[n]) {
-        order.add(n);
+        order.add(new Conjunct(n));
       }
     }
     return order;
+  }
+
+  private static boolean containsColumn(List<Attribute> columns, Attribute column) {
+    for (Attribute c : columns) {
+      if (c.exprId().equals(column.exprId())) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** {@code PredicateHelper.isNullIntolerant}: null in, null out, all the way down. */

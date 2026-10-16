@@ -35,11 +35,13 @@ import org.apache.spark.sql.catalyst.expressions.And;
 import org.apache.spark.sql.catalyst.expressions.Attribute;
 import org.apache.spark.sql.catalyst.expressions.AttributeReference;
 import org.apache.spark.sql.catalyst.expressions.Cast;
+import org.apache.spark.sql.catalyst.expressions.Coalesce;
 import org.apache.spark.sql.catalyst.expressions.Divide;
 import org.apache.spark.sql.catalyst.expressions.EqualTo;
 import org.apache.spark.sql.catalyst.expressions.EvalMode$;
 import org.apache.spark.sql.catalyst.expressions.Expression;
 import org.apache.spark.sql.catalyst.expressions.GreaterThan;
+import org.apache.spark.sql.catalyst.expressions.GreaterThanOrEqual;
 import org.apache.spark.sql.catalyst.expressions.IsNotNull;
 import org.apache.spark.sql.catalyst.expressions.LessThan;
 import org.apache.spark.sql.catalyst.expressions.Literal;
@@ -122,6 +124,21 @@ public final class VarkaConjunctOrderSuite {
         lit(0L, LongType$.MODULE$));
   }
 
+  /**
+   * {@code l + l2} in {@code mode}: null when either column is, all the way down, so codegen
+   * treats its null test as one it moves. A literal is not null-intolerant, so {@code l + 1} is
+   * not.
+   */
+  private Expression lPlusL2(Enumeration.Value mode) {
+    return new Add(l, l2, ctx(mode));
+  }
+
+  /** {@code (l2 + 1) > 0} in {@code mode}. */
+  private Expression l2PlusOne(Enumeration.Value mode) {
+    return new GreaterThan(new Add(l2, lit(1L, LongType$.MODULE$), ctx(mode)),
+        lit(0L, LongType$.MODULE$));
+  }
+
   /** Which conjuncts fused, in written order. */
   private List<Boolean> fused(Expression condition) {
     var flags = new ArrayList<Boolean>();
@@ -177,25 +194,74 @@ public final class VarkaConjunctOrderSuite {
     // the conjunct that reads d, behind the arithmetic, and the null test of l stays before it.
     List<Expression> conjuncts = List.of(new IsNotNull(d), new IsNotNull(l), lPlusOne(ANSI),
         dBefore());
-    assertEquals(List.of(1, 2, 0, 3), VarkaConjunctOrder.codegenOrder(conjuncts));
+    assertEquals(steps(1, 2, 0, 3), VarkaConjunctOrder.codegenOrder(conjuncts));
     // A null test nothing reads goes to the end.
     List<Expression> unread = List.of(new IsNotNull(i), lPlusOne(ANSI));
-    assertEquals(List.of(1, 0), VarkaConjunctOrder.codegenOrder(unread));
+    assertEquals(steps(1, 0), VarkaConjunctOrder.codegenOrder(unread));
+  }
+
+  @Test
+  @DisplayName("codegen checks a column that a larger null test implies before the first "
+      + "conjunct that reads it")
+  void impliedNullCheck() {
+    // isnotnull(l + l2) implies l is not null, so codegen checks l before coalesce(l, 0) >= 0.
+    List<Expression> conjuncts = List.of(new IsNotNull(lPlusL2(LEGACY)), coalesceL());
+    var order = VarkaConjunctOrder.codegenOrder(conjuncts);
+    assertEquals(3, order.size(), order.toString());
+    assertTrue(order.get(0) instanceof VarkaConjunctOrder.NullCheck(var column)
+        && column.semanticEquals(l), order.toString());
+    assertEquals(steps(1, 0), order.subList(1, 3));
+  }
+
+  /** {@code coalesce(l, 0) >= 0}: reads l, and is not null when l is. */
+  private Expression coalesceL() {
+    return new GreaterThanOrEqual(new Coalesce(seq(l, lit(0L, LongType$.MODULE$))),
+        lit(0L, LongType$.MODULE$));
+  }
+
+  private static List<VarkaConjunctOrder.Step> steps(int... indices) {
+    var steps = new ArrayList<VarkaConjunctOrder.Step>();
+    for (int index : indices) {
+      steps.add(new VarkaConjunctOrder.Conjunct(index));
+    }
+    return steps;
   }
 
   @Test
   @DisplayName("a fused conjunct that pulls a residual null test ahead of a raising conjunct is "
-      + "demoted, since the residual filter alone would test it after")
+      + "demoted, unless it drops the null rows itself")
   void puller() {
-    // Codegen: isnotnull(d) before d < ..., which reads d, so before the sum. The residual filter
-    // without d < ... places isnotnull(d) last, behind the sum: a row whose d is null and whose
-    // sum overflows raises there and not in Spark.
-    List<Expression> conjuncts = List.of(dBefore(), new IsNotNull(d), lPlusOne(ANSI));
+    // Codegen: isnotnull(l2) before coalesce(l2, 0) >= 0, which reads l2, so before the sum of
+    // l. The residual filter without the coalesce places isnotnull(l2) last, behind the sum: a row
+    // whose l2 is null and whose sum overflows would raise there and not in Spark, since the
+    // coalesce lets a null l2 through.
+    Expression coalesce = new GreaterThanOrEqual(
+        new Coalesce(seq(l2, lit(0L, LongType$.MODULE$))), lit(0L, LongType$.MODULE$));
+    List<Expression> conjuncts = List.of(coalesce, new IsNotNull(l2), lPlusOne(ANSI));
     assertEquals(List.of(0),
         List.copyOf(VarkaConjunctOrder.behindRaising(conjuncts, List.of(true, false, false))
             .keySet()));
     // With the null test fused beside it nothing moves.
     assertTrue(VarkaConjunctOrder.behindRaising(conjuncts, List.of(true, true, false)).isEmpty());
+    // A puller that is null when its column is drops the same rows itself: nothing moves.
+    List<Expression> intolerant = List.of(new GreaterThan(l2, lit(0L, LongType$.MODULE$)),
+        new IsNotNull(l2), lPlusOne(ANSI));
+    assertTrue(VarkaConjunctOrder.behindRaising(intolerant, List.of(true, false, false))
+        .isEmpty());
+  }
+
+  @Test
+  @DisplayName("a fused conjunct that a codegen null check puts behind is demoted when the "
+      + "residual filter would not check the column")
+  void impliedPuller() {
+    // coalesce(l, 0) >= 0 (fused), (l2 + 1) > 0 (raising), isnotnull(l + l2) (residual): codegen
+    // checks l before the coalesce, so a row whose l is null never reaches the sum. The residual
+    // filter alone reads l in no conjunct before the sum, so it would not check it there.
+    List<Expression> conjuncts = List.of(coalesceL(), l2PlusOne(ANSI),
+        new IsNotNull(lPlusL2(LEGACY)));
+    assertEquals(List.of(0),
+        List.copyOf(VarkaConjunctOrder.behindRaising(conjuncts, List.of(true, false, false))
+            .keySet()));
   }
 
   @Test

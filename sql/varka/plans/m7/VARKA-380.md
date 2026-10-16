@@ -195,7 +195,7 @@ Done on 16 October 2026 on branch `varka-380`, based on `varka-298` (PR #871).
 **What was built.** `VarkaConjunctOrder` (3.2) and its call in `VarkaExpressionCompiler.predicate`;
 the five reproducers marked `status: regression` with a note naming this row; the `sparkfuzz`
 step of `dev/varka_nightly.sh` without `-Dvarka.sparkfuzz.nested=false`; `VarkaConjunctOrderSuite`
-(ten tests) and one test in `VarkaDifferentialSuite`; a lesson in `skills/emitter-and-ir.md`.
+(twelve tests) and one test in `VarkaDifferentialSuite`; a lesson in `skills/emitter-and-ir.md`.
 
 *Corrections to 1-8, from the review of the diff* (`/code-review high` on the branch, nine
 findings, all taken, one in a smaller form; a section 9 that did not yet exist was one of them).
@@ -246,6 +246,48 @@ findings, all taken, one in a smaller form; a section 9 that did not yet exist w
    conjunct can raise, and reaches its fixed point before the next classification (item 2). A
    hand-written tree walk became `TreeNode.exists`.
 
+*Corrections from a second review* (`/code-review high` on the whole branch after the first
+round's fixes, eight findings: six taken, two answered).
+
+1. **The fallback's order followed a flag, not Spark's plan.** With codegen on, Spark still runs a
+   filter as written when the stage would read more than `spark.sql.codegen.maxFields` columns or
+   holds an expression that falls back. `fallbackCondition` now asks the question
+   `CollapseCodegenStages.supportCodegen` asks of the node, and the differential test runs the
+   fallback case with codegen off too, where both engines answer.
+2. **The port missed codegen's own null checks.** `generatePredicateCode` also checks a column
+   before the first conjunct that reads it when a null test of a larger null-intolerant
+   expression implies it (`isnotnull(l + l2)` implies `l`), with no conjunct of its own.
+   `codegenOrder` now returns steps - a conjunct or such a `NullCheck` - and `inCodegenOrder`
+   folds the checks into the fallback's condition.
+3. **The puller rule demoted more than it had to, and less.** It is now a comparison of what
+   reaches each raising residual conjunct: the steps before it in the full codegen order against
+   every fused conjunct plus the steps before it in the residual filter's own codegen order. A
+   null test or check on one side and not the other is harmless when the other side drops the
+   same null rows anyway (a fused `l2 > 0` drops every row a later `isnotnull(l2)` would), and
+   otherwise the fused conjuncts that pulled it into place are demoted. The first version's test
+   asserted a demotion of exactly such a harmless puller; it now asserts the harmless case and a
+   `coalesce` puller that does need it, and a test holds the implied check.
+4. The safety net for a drifted port demoted under the `OUT_OF_ORDER` phrase, which the
+   composition fuzzer accepts as a composition decline, so a drift would have passed silently;
+   it has a reason of its own now.
+5. `VarkaConjunctOrder` split the `AND` spine with a copy of the compiler's helper; the
+   compiler's `conjuncts` is package-private now and shared, so the indices cannot drift apart.
+6. The differential test drops its views.
+
+Answered: the shared function in Spark (the altitude finding again, as in the first review), and
+order demotions that stay when a later round's demotion makes the conjunct they sat behind fuse
+after all. That needs a raising conjunct residual only for the one-lane rule and a later
+demotion of the conjunct holding the lane; what it costs is fusion and a reason that names a
+conjunct that ended up fused, never an answer, and recomputing the order demotions from scratch
+each round would trade it for a loop that can oscillate.
+
+The suites after both rounds (`dev/varka_matrix.sh --defaults`, sanitizer on, eight JVMs): 1,375
+passed and two failed. One is the `VarkaTierWitnessSuite` trap of 9.2 item 4, pre-existing. The
+other, `VarkaWarmupEndToEndSuite`'s "a projection's first query takes the row path and its next
+one the compiled kernel", is a projection's warm-up verdict that did not arrive in two minutes
+beside seven other test JVMs (`runNanos` about 120 s, state `RELEASED`); it passed in the
+second of the three matrix runs and alone (5 of 5), and touches no filter.
+
 ### 9.1 The census
 
 `VarkaSparkFuzzSuite`'s main test at the three seeds that met the bug in `VARKA-298.md` 9.1,
@@ -277,7 +319,7 @@ also found no disagreement and lost 63 to 93 compositions a seed.
 3. **Not scored**: the pair is for the owner to dispatch (9.3).
 4. **Refuted.** Two existing tests would have failed under the first list: the compiler suite's
    table rollback (item 4 of the corrections above, found by the review) and the composition
-   fuzzer's (item 6, found by the suites). The final `dev/varka_matrix.sh --defaults` run, with
+   fuzzer's (item 6, found by the suites). The second `dev/varka_matrix.sh --defaults` run, with
    the sanitizer, passed 1,374 tests and failed one, `VarkaTierWitnessSuite`'s "the witness sees
    each tier": a warmed kernel trapped (`speculate_null_assert` in `VarkaMemorySanitizer.check`)
    where the test expects C2. It fails the same way on the head of `varka-298` with this branch's

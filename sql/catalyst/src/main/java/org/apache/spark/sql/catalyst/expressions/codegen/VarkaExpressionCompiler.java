@@ -1077,7 +1077,7 @@ public final class VarkaExpressionCompiler {
   }
 
   /** The {@code AND} spine of a condition, in query order: the split the predicate works. */
-  private static List<Expression> conjuncts(Expression condition) {
+  static List<Expression> conjuncts(Expression condition) {
     List<Expression> conjuncts = new ArrayList<>();
     collectConjuncts(condition, conjuncts);
     return conjuncts;
