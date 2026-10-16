@@ -162,6 +162,11 @@ class's A/A pair.
    owner's go-ahead, the results committed into the same pull request from the artifacts.
 3. Each lane row's measurement section names its baseline file.
 
+*Recorded 16 October 2026:* nothing is dispatched yet, since none of the five classes is written.
+The order is each class written, one pull request each, then the dispatches within the fork's job
+budget. The naming question (section 2 item 5) is settled when the classes' pull requests open,
+by the names they carry.
+
 Explicitly out of this row: any kernel, laptop baselines, Arm benchmarks, aggregates, and the lane
 rows' own pairs.
 
