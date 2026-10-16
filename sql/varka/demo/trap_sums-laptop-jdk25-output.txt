@@ -36,10 +36,10 @@ JIT log kept: target/varka-demo/trap_sums/keep/hotspot.xml
 (the four lines below are re-read from that log by the script as committed, whose summary
 wording changed after the run; the numbers are the run's)
 class-check sums at the limit in Varka kernels' compiles:
-compile 14547 org.apache.spark.sql.varka.execution.VarkaFusedProjection_w7fd4deef67312f01 loopDense0: at the limit for 602 calls, the first <observe trap='class_check' count='0' mcount='0' ccount='100'/>
-compile 14550 org.apache.spark.sql.varka.execution.VarkaFusedProjection_w7fd4deef67312f01 loopMasked0: at the limit for 737 calls, the first <observe trap='class_check' count='0' mcount='0' ccount='100'/>
-compile 14563 org.apache.spark.sql.varka.execution.VarkaFusedProjection_w7fd4deef67312f01 epilogueDense0: at the limit for 757 calls, the first <observe trap='class_check' count='0' mcount='0' ccount='100'/>
-compile 14564 org.apache.spark.sql.varka.execution.VarkaFusedProjection_w7fd4deef67312f01 epilogueMasked0: at the limit for 892 calls, the first <observe trap='class_check' count='0' mcount='0' ccount='100'/>
+compile 14547 org.apache.spark.sql.varka.execution.VarkaFusedProjection_w7fd4deef67312f01 loopDense0: at the limit in 602 checks, the first <observe trap='class_check' count='0' mcount='0' ccount='100'/>
+compile 14550 org.apache.spark.sql.varka.execution.VarkaFusedProjection_w7fd4deef67312f01 loopMasked0: at the limit in 737 checks, the first <observe trap='class_check' count='0' mcount='0' ccount='100'/>
+compile 14563 org.apache.spark.sql.varka.execution.VarkaFusedProjection_w7fd4deef67312f01 epilogueDense0: at the limit in 757 checks, the first <observe trap='class_check' count='0' mcount='0' ccount='100'/>
+compile 14564 org.apache.spark.sql.varka.execution.VarkaFusedProjection_w7fd4deef67312f01 epilogueMasked0: at the limit in 892 checks, the first <observe trap='class_check' count='0' mcount='0' ccount='100'/>
 
 A replay of the stock arm with the same log (Varka's template warm-up on, COMPILED 3) has no
 <observe ... ccount=.../> line anywhere: 101 class-check observations, none of a compile-wide sum.

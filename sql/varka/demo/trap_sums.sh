@@ -40,8 +40,8 @@
 #   sql/varka/demo/trap_sums.sh --compositions 400 --runs 1   # the post's 400-composition arm
 #
 # --keep replays the defaults arm with -XX:+LogCompilation until a replay releases, keeps that
-# replay's log (about 100 MB), and prints the line of each compile of a Varka kernel
-# where C2 found too many class-check traps, the line the post quotes:
+# replay's log (about 100 MB; at most 30 tries, --keep-tries N), and prints the line of each
+# compile of a Varka kernel where C2 found too many class-check traps, the line the post quotes:
 #
 #   <observe trap='class_check' count='0' mcount='0' ccount='254'/>
 #
@@ -54,14 +54,19 @@
 #
 # The first run builds sql's test classes and exports the test classpath with
 # dev/varka_matrix.sh --module sql --list (tens of minutes on a cold checkout); --skip-build
-# reuses it. Results go to target/varka-demo/trap_sums/ unless --out names another directory.
+# reuses it. Results go to target/varka-demo/trap_sums/ unless --out names another directory;
+# status.tsv there has one line per replay (arm, replay, the JVM's exit status, releases,
+# seconds), and the script exits 1 when every replay of an arm failed. It needs Linux (taskset
+# for --cpus) and bash 4.4 or later.
 #
 # Written on JDK 25.0.4 at a 512-bit preferred vector species. The release depends on the JIT's
-# profile history, so on another JDK or vector width the rates differ; where the preferred
+# profile history, so on another JDK or vector width the rates differ; on x86 where the preferred
 # species is 128 bits wide, Varka's template warm-up does not clear the releases (VARKA-374).
 
 set -uo pipefail
 
+usage() { awk 'NR >= 18 && !/^#/ { exit } NR >= 18 { sub(/^# ?/, ""); print }' "$0"; }
+caller=$(pwd)
 cd "$(dirname "$0")/../../.."
 ROOT=$(pwd)
 runs=20
@@ -75,12 +80,13 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --runs) runs=$2; shift 2 ;;
     --cpus) cpus=$2; shift 2 ;;
-    --out) out=$2; shift 2 ;;
+    --out) case "$2" in /*) out=$2 ;; *) out=$caller/$2 ;; esac; shift 2 ;;
     --skip-build) build=0; shift ;;
     --keep) keep=1; shift ;;
     --keep-tries) keep_tries=$2; shift 2 ;;
     --compositions) compositions=$2; shift 2 ;;
-    *) sed -n '18,60p' "$0"; exit 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage; exit 2 ;;
   esac
 done
 
@@ -91,6 +97,9 @@ if [ "$build" = 1 ]; then
 fi
 [ -s "$BUILD/classpath" ] && [ -s "$BUILD/jvm.opts" ] || {
   echo "no classpath or JVM options in $BUILD; run without --skip-build" >&2; exit 1; }
+# Another script can leave catalyst's classpath there (dev/varka_deopt_census.sh does).
+grep -q 'sql/core/target' "$BUILD/classpath" || {
+  echo "the classpath in $BUILD is not sql's; run without --skip-build" >&2; exit 1; }
 CP=$ROOT/sql/catalyst/target/scala-2.13/classes:$(cat "$BUILD/classpath")
 mapfile -t OPTS < "$BUILD/jvm.opts"
 pin=()
@@ -110,22 +119,25 @@ replay() {
     -Dvarka.test.watchdog.minutes=170 "$@" -cp "$CP" org.scalatest.tools.Runner -oW \
     -s org.apache.spark.sql.execution.VarkaSparkFuzzSuite \
     -z "both sides of the warm-up handover" > "$dir/run.log" 2>&1)
+  echo $? > "$dir/exit"
   rm -rf "$dir/tmp" "$dir/spark-warehouse"
 }
 
-# released <dir>: the replay's releases at the deadline, or "failed" when its test did not pass.
+# released <dir>: the replay's releases at the deadline, or "failed" when its JVM or test did not
+# pass.
 released() {
+  [ "$(cat "$1/exit")" = 0 ] || { echo failed; return; }
   grep -q 'Tests: succeeded 1' "$1/run.log" || { echo failed; return; }
   grep -c 'a kernel was released at the deadline' "$1/run.log"
 }
 
 # One line per compile of a kernel method (a class named for its shape, VarkaFused*_w<hash>)
 # in which C2 found the compile-wide class-check sum too high: the compile id, the method, how
-# many calls it decided, and the first such <observe> line. HotSpot writes that form,
-# with mcount and ccount, only when the sum decides a call site.
+# many of its trap checks the sum decided, and the first such <observe> line. HotSpot writes
+# that form, with mcount and ccount, only when the sum is at the limit.
 observed() {
   awk 'function flush() {
-         if (n > 0) printf "compile %s %s: at the limit for %d calls, the first %s\n",
+         if (n > 0) printf "compile %s %s: at the limit in %d checks, the first %s\n",
            id, name, n, first
          n = 0 }
        /<task / { flush(); name = ""
@@ -161,6 +173,7 @@ arms=("defaults" "trap limits" "stock")
 declare -A total=() releasing=() failed=()
 for arm in "${arms[@]}"; do total[$arm]=0; releasing[$arm]=0; failed[$arm]=0; done
 start=$(date +%s)
+printf 'arm\treplay\texit\treleased\tseconds\n' > "$out/status.tsv"
 for r in $(seq 1 "$runs"); do
   for arm in "${arms[@]}"; do
     case "$arm" in
@@ -172,6 +185,8 @@ for r in $(seq 1 "$runs"); do
     t0=$(date +%s)
     replay "$dir" "${args[@]}"
     n=$(released "$dir")
+    printf '%s\t%d\t%s\t%s\t%d\n' "$arm" "$r" "$(cat "$dir/exit")" "$n" \
+      $(( $(date +%s) - t0 )) >> "$out/status.tsv"
     if [ "$n" = failed ]; then
       failed[$arm]=$((failed[$arm] + 1))
     else
@@ -194,4 +209,6 @@ for arm in "${arms[@]}"; do
   printf '%-12s  %-28s  %s\n' "$arm" "${releasing[$arm]} of $ok" "${total[$arm]}"
   [ "${failed[$arm]}" -gt 0 ] && echo "  ${failed[$arm]} replays failed; their logs are in $out"
 done
-exit 0
+status=0
+for arm in "${arms[@]}"; do [ "${failed[$arm]}" = "$runs" ] && status=1; done
+exit $status

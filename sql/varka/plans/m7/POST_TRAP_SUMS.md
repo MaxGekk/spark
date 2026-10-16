@@ -91,9 +91,9 @@ on five more seeds; steady-state throughput showed no difference we could see.
 
 It is not the whole answer. At a 4-lane override the releases come from a different counter, a
 per-bytecode trap count at one call site of `IntVector.add`, which warming the narrower vector
-shape did not clear, and warming both shapes made worse. And where the preferred vector is 128 bits
-wide, as on most Arm cores, the
-warm-up does not help at all; that case is still open.
+shape did not clear, and warming both shapes made worse. And on x86 where the preferred vector is
+128 bits wide, the warm-up does not help at all: C2 there has no 2-lane mask, so a kernel over
+longs with a mask runs the Vector API's allocating Java fallback, warmed or not.
 
 If you use the Vector API in a long-lived JVM: run your vector code once, with every operator
 you will use, before the code you care about is compiled. If you can set JVM options, the two
@@ -103,10 +103,12 @@ limits above remove the problem outright.
 
 The replay is the warm-up arm of Varka's composition fuzzer over one prefix and one composition:
 `abs` over a year-month interval, then the kernel above, each replay in a fresh JVM. From a Varka
-checkout, `sql/varka/demo/trap_sums.sh --runs 100` runs it 100 times with Varka's template warm-up
-off, 100 with the two options added, and 100 as Varka ships, and counts the releases. On our
-laptop that took 2 hours 40 minutes on 3 cores and released 77, 0 and 0, every one the same
-kernel; `--compositions 400` gave 29, 0 and 0 in the 400-composition arm the counts above come
-from. `--keep` replays until one releases, keeps its `-XX:+LogCompilation` log, and prints the
-`<observe ... ccount=.../>` line of each of the kernel's compiles; a clean replay's log has none.
-The run is in `sql/varka/demo/trap_sums-laptop-jdk25-output.txt`.
+checkout on Linux, `sql/varka/demo/trap_sums.sh --runs 100` runs it 100 times with Varka's
+template warm-up off, 100 with the two options added, and 100 as Varka ships, and counts the
+JVMs that release. On our laptop, at 512-bit vectors, that took 2 hours 40 minutes on 3 cores and
+released in 77, 0 and 0 of them, every time the same kernel: with this prefix the release is the
+rule, not a few per cent. `--compositions 400` runs the arm the rates above come from, one JVM of
+400 compositions: 29 releases in 534 warm-ups, then 0 and 0. `--keep` replays until one
+releases, keeps its `-XX:+LogCompilation` log, and prints the `<observe ... ccount=.../>` line of
+each of the kernel's compiles; a clean replay's log has none. The run is in
+`sql/varka/demo/trap_sums-laptop-jdk25-output.txt`.
