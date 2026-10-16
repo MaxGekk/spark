@@ -267,12 +267,20 @@ narrow run's survivor is not an answer. A killed mutant ran one test at the medi
 ran 405. The run took 320 s of coverage and 493 s of mutants, serially, since PIT made one unit
 of the class - hence `--unit-size` (default 20).
 
-**The idle-window command** (owner), from `/home/max/proj/varka-265`:
+**The command** (16 October 2026: on GitHub's runners, at the owner's request; 9.7 has the
+design, the memory and the time), dispatched from any checkout:
+
+    gh workflow run varka-mutation.yml -R MaxGekk/spark --ref varka-265 \
+      -f shards=8 -f threads=3 -f heap=3g -f timeout-factor=4
+
+The report is the run's `varka-mutation-verdicts` artifact, `sql/varka/mutation/verdicts.md`,
+committed by hand once read. **The alternative, the owner's laptop in an idle window**, from
+`/home/max/proj/varka-265`:
 
     dev/varka_pit.sh --threads 12 --report sql/varka/mutation/verdicts.md \
       > target/varka-pit.log 2>&1
 
-Twelve minions of 4 GB each. **Expected duration about two hours, and stop to read it past
+Twelve minions of 4 GB each. **Expected duration on the laptop about two hours, and stop to read it past
 four**: the build and the coverage phase about 8 minutes; the killed mutants, about 1,400 at about
 2 s, 5 minutes over twelve threads; the mutants the first run leaves, about 300 by prediction 6,
 each rerunning its covering tests, about 400. That last cost is inferred, not timed: the sample's
@@ -294,7 +302,7 @@ hours; what decides it is the number the first run leaves, which the report stat
    with no caller in the main or test tree, dead code whose mutants are uncovered by construction.
 5. 2,000 to 3,500 mutants: **missed**, 1,744; the probe's two methods are denser in calls than the
    classes on average.
-6. and 7. The full run's verdicts and duration: open, the owner's idle-window run.
+6. and 7. The full run's verdicts and duration: open, the run on GitHub's runners (9.7).
 
 ### 9.4 The review
 
@@ -370,4 +378,58 @@ The re-render found the report broken by the same merge: `VarkaDebugInfo`'s read
 throws through `VarkaErrors`, whose Spark exception lives in `common/utils`, and the analysers
 failed to load it. `dev/varka_gen_coverage.sh` now puts `common/utils`' classes on their classpath.
 `generated.md` stays as committed, as 9.1 says.
+
+### 9.7 The full run on GitHub's runners, 16 October 2026
+
+The owner asked on 16 October 2026 for the full run to go to CI instead of waiting for an idle
+window on the laptop. **Correction to 9.6 item 4**: 9.2's command is now the workflow's dispatch,
+with the laptop's kept as the alternative.
+
+`.github/workflows/varka-mutation.yml`, dispatch only, runs N shards (default 8), one 4-core,
+16 GB runner each, then one job that joins them:
+
+* **The split.** `dev/varka_pit.sh --shard K/N` (K from zero, as `dev/varka_matrix.sh` counts)
+  hands PIT `-Dvarka.pit.shard=K/N`, and `dev/varka_pit/VarkaPitOnly` keeps the mutants at
+  positions K, K + N, ... of each class's mutants sorted by PIT's identity, the class's offset
+  from its name's hash. Even in count by construction - over the 1,010 mutants of the last `Slots`
+  dry run, 8 shards hold 125 to 127, where a hash of each mutant held 101 to 144 - and, since a
+  method's mutants sort together, a method's survivors, which are what a run spends its time on
+  (9.2), are dealt across the shards rather than landing on one.
+* **A shard** runs both PIT runs over its slice, the bytes oracle's on that slice's survivors, and
+  uploads the two `mutations.xml`, its logs, its scope and a `shard` file naming K/N. It writes no
+  report: a note in `notes.tsv` on a method whose mutant fell to another shard would read as stale.
+* **The join**, `dev/varka_pit_verdicts.py --shards DIR REPORT`, refuses a missing or doubled shard,
+  shards that ran different scopes and a mutant in two shards, then writes the report an unsharded
+  run over the same scope writes, with "Run in N shards." after its scope. It uploads
+  `sql/varka/mutation/verdicts.md` as an artifact and commits nothing. A shard that fails skips
+  the join; rerun the failed jobs and the join reruns after them.
+
+**Memory.** Three minions (`threads=3`), each at `-Xmx3g` (`--heap`, which replaces both of sbt's
+`-Xmx4g`): 9 GB of heap, up to 3,900 MB of metaspace at its 1,300 MB cap, 384 MB of code cache, and
+PIT's own JVM, under the runner's 16 GB with a little to spare. Three at sbt's 4 GB would not fit.
+The coverage phase runs every covering test in one JVM at the same heap, so a coverage phase that
+passes shows the unmutated tests fit in 3 GB; a mutant that then runs out counts as a kill
+(`MEMORY_ERROR`), in the report's "of them timed out or crashed" column.
+
+**Timeouts.** A runner core is about half the laptop's (the Z3 proof that takes 28 s on the laptop
+took 59 s on a runner, `skills/testing-and-debugging.md`) and its neighbours vary, so the timeout
+factor is 4 against the laptop's 2 (`--timeout-factor`), with PIT's constant of 60 s kept. A
+`TIMED_OUT` mutant counts as killed, so the same column is where a runner's slowness would show,
+and a shard with many there is read before it is believed.
+
+**Expected time per shard at 8 shards, about two hours (100 to 165 minutes), and up to about four
+and a half at the calibration ratio of 2 on the mutant phases; the cap is 330 minutes**, inside
+GitHub's six hours with time to upload the logs:
+
+| phase | per shard | from |
+| :--- | ---: | :--- |
+| build: engine install, catalyst's tests, PIT's fetch | 10 to 25 min | the nightly's same compile step, 222 and 299 s (`VARKA-255.md`); 25 min the brief's bound |
+| coverage phase, once in each PIT run | 2 x 7 to 11 min | 194 to 330 s on the laptop (9.2, 9.6), times 2 |
+| killed mutants, about 175 at 2 s | 4 min | 9.2, times 2, over 3 threads |
+| survivors of the first run, about 38 at 150 to 250 s | 60 to 105 min | 9.2, times 2, over 3 threads |
+| the bytes oracle on those | 8 min | 9.2's 14 s a mutant and the `PinsDefaults` tests, times 2 |
+
+The survivors' line decides it, as it does on the laptop. A shard past
+four hours is a reason to dispatch again with `shards=16`, which halves every line but the build
+and the coverage phase.
 

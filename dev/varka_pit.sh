@@ -23,6 +23,7 @@
 #   dev/varka_pit.sh --classes Analysis --suites VarkaEmitterValiditySuite --methods liveWords
 #   dev/varka_pit.sh --threads 10 --report sql/varka/mutation/Slots-Analysis.md
 #   dev/varka_pit.sh --skip-build --verdict-only      # the verdicts again, from the last run
+#   dev/varka_pit.sh --shard 2/8 --threads 3 --heap 3g --out target/varka-pit-2   # one CI shard
 #
 # Two PIT runs over the same mutants, since PIT stops a mutant at its first kill. The first runs
 # every eligible suite's behavioural tests, so a kill there is behavioural; the second runs the
@@ -42,12 +43,25 @@
 # is the JIT's or the machine's, and the JUnit 5 suites, which PIT's plugin does not reach, are
 # left out (the list below, each with its reason).
 #
+# The full run is sharded on GitHub's runners by .github/workflows/varka-mutation.yml (the owner,
+# 16 October 2026): each shard runs this script with --shard K/N, both runs over its slice, and a
+# last job joins the shards' mutations.xml into one report with dev/varka_pit_verdicts.py --shards.
+# A shard writes no report of its own, since a note on a method whose mutant fell to another shard
+# would read as stale. The slice is dev/varka_pit/VarkaPitOnly's: each class's mutants sorted by
+# PIT's identity and dealt round-robin, so the shards are even in count and a method's mutants,
+# whose survivors cost the run, spread across them.
+#
 # Options:
 #   --classes A,B     emitter classes to mutate, simple names in codegen.varka (Slots,Analysis)
 #   --methods m,n     mutate only these methods: every other method name of the classes, read
 #                     with javap, goes to PIT's --excludedMethods (PIT has no inclusion filter)
 #   --suites S,T      only these suites (simple names); default every eligible one
 #   --threads N       PIT minion threads (default 8)
+#   --heap SIZE       each minion's -Xmx, in place of sbt's 4g (a runner fits three at 3g)
+#   --shard K/N       mutate only shard K of N (K from zero); writes no report, see above
+#   --timeout-factor F, --timeout-const MS   PIT's mutant timeout, F times the test's unmutated
+#                     time plus MS (default 2 and 60000); a TIMED_OUT mutant counts as killed, so
+#                     a slower or noisier machine than the laptop wants a larger factor
 #   --unit-size N     mutants per PIT work unit (default 20): PIT otherwise makes one unit of a
 #                     class, which one thread runs alone however many are given
 #   --out DIR         working directory (default target/varka-pit)
@@ -68,6 +82,10 @@ classes=Slots,Analysis
 methods=""
 suites=""
 threads=8
+heap=""
+shard=""
+timeout_factor=2
+timeout_const=60000
 unit_size=20
 report=""
 mutators=DEFAULTS,NON_VOID_METHOD_CALLS,REMOVE_CONDITIONALS
@@ -81,6 +99,10 @@ while [ "$#" -gt 0 ]; do
     --methods) methods="$2"; shift 2 ;;
     --suites) suites="$2"; shift 2 ;;
     --threads) threads="$2"; shift 2 ;;
+    --heap) heap="$2"; shift 2 ;;
+    --shard) shard="$2"; shift 2 ;;
+    --timeout-factor) timeout_factor="$2"; shift 2 ;;
+    --timeout-const) timeout_const="$2"; shift 2 ;;
     --unit-size) unit_size="$2"; shift 2 ;;
     --out) OUT=$(realpath -m "$2"); shift 2 ;;
     --report) report=$(realpath -m "$2"); shift 2 ;;
@@ -94,6 +116,12 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ -n "$report" ] || report=$OUT/verdicts.md
+if [ -n "$shard" ]; then
+  [[ "$shard" =~ ^([0-9]+)/([0-9]+)$ ]] && [ "${BASH_REMATCH[1]}" -lt "${BASH_REMATCH[2]}" ] || {
+    echo "--shard is K/N with 0 <= K < N, not $shard" >&2; exit 2; }
+  [ "$run" = 1 ] || { echo "--shard writes no report; join shards with" \
+    "dev/varka_pit_verdicts.py --shards" >&2; exit 2; }
+fi
 PKG=org.apache.spark.sql.catalyst.expressions.codegen.varka
 BYTES_ORACLE=$PKG.VarkaEmittedBytesSuite
 
@@ -169,6 +197,8 @@ if [ "$run" = 1 ]; then
     done)
   [ ${#found[@]} -gt 0 ] || { echo "no eligible suite" >&2; exit 1; }
   printf '%s\n' "${found[@]}" > "$OUT/suites"
+  # Which shard this is, for dev/varka_pit_verdicts.py --shards to check none is missing.
+  if [ -n "$shard" ]; then echo "$shard" > "$OUT/shard"; else rm -f "$OUT/shard"; fi
 
   # The test classpath, one entry a line; the plugin first, so ServiceLoader finds it in minions.
   # Spark's sbt exports catalyst as a jar, and PIT mutates classes in a directory it is given, so
@@ -203,7 +233,13 @@ if [ "$run" = 1 ]; then
       [[ ",$methods," == *",$owner,"* ]] || excluded_methods+="${excluded_methods:+,}$name"
     done
   fi
-  mapfile -t OPTS < "$OUT/jvm.opts"
+  if [ -n "$heap" ]; then
+    # sbt's options name -Xmx twice; drop both rather than rely on the last one winning.
+    mapfile -t OPTS < <(grep -v '^-Xmx' "$OUT/jvm.opts")
+    OPTS+=("-Xmx$heap")
+  else
+    mapfile -t OPTS < "$OUT/jvm.opts"
+  fi
   # The IR fuzzer's C2 test runs each draw through eight JIT histories (482 s of the 869 s
   # coverage phase on 16 October 2026): no draws under PIT, since what a mutant changes is the
   # emission, which the fuzzer's interpreted test reaches over the same draws.
@@ -225,6 +261,9 @@ if [ "$run" = 1 ]; then
     start=$(date +%s)
     local launch=()
     [ -n "$only" ] && launch+=("-Dvarka.pit.only=$only")
+    # Both runs take the shard: the second's keep file is already inside it, and the filter
+    # stops a wrong keep file widening the slice.
+    [ -n "$shard" ] && launch+=("-Dvarka.pit.shard=$shard")
     java "${launch[@]}" -cp "$OUT/plugin:$(IFS=:; echo "${PIT_JARS[*]}"):$LAUNCH_EXTRA" \
       org.pitest.mutationtest.commandline.MutationCoverageReport \
       --classPathFile "$OUT/classpath.lines" \
@@ -233,7 +272,7 @@ if [ "$run" = 1 ]; then
       --mutableCodePaths "$CLASSES" \
       --mutators "$mutators" --threads "$threads" --mutationUnitSize "$unit_size" \
       --outputFormats XML,CSV --timestampedReports false --reportDir "$OUT/$name" \
-      --timeoutConst 60000 --timeoutFactor 2 \
+      --timeoutConst "$timeout_const" --timeoutFactor "$timeout_factor" \
       --argLine "$argline -Dvarka.pit.structure=$structure" --verbosity VERBOSE_NO_SPINNER "${extra[@]}" \
       > "$OUT/$name.log" 2>&1
     status=$?
@@ -255,6 +294,10 @@ if [ "$run" = 1 ]; then
   else
     rm -rf "${OUT:?}/bytes" && mkdir -p "$OUT/bytes"
     echo '<mutations/>' > "$OUT/bytes/mutations.xml"
+  fi
+  if [ -n "$shard" ]; then
+    echo "varka_pit: shard $shard done; its runs are in ${OUT#"$ROOT"/}"
+    exit 0
   fi
 fi
 

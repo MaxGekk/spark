@@ -18,6 +18,7 @@
 """The three verdicts of a bounded mutation run (VARKA-265), from dev/varka_pit.sh's two runs.
 
   dev/varka_pit_verdicts.py BEHAVIOURAL.xml BYTES.xml REPORT.md [--notes NOTES.tsv]
+  dev/varka_pit_verdicts.py --shards DIR REPORT.md [--notes NOTES.tsv]
   dev/varka_pit_verdicts.py --keep BEHAVIOURAL.xml KEEP.tsv
 
 BEHAVIOURAL.xml is PIT's mutations.xml from the run of every eligible suite but the bytes
@@ -33,6 +34,12 @@ mutators. A mutant is
 A mutant PIT could not load (`NON_VIABLE`) is left out, and a run with a mutant not started or not
 finished is refused.
 
+--shards joins a sharded run (dev/varka_pit.sh --shard K/N, as .github/workflows/varka-mutation.yml
+runs it): DIR holds one directory per shard, each a dev/varka_pit.sh --out directory with its two
+runs' mutations.xml, its `shard` file and its `scope`. The join is refused when a shard of the N is
+missing or doubled, when the shards' scopes differ, or when a mutant is in two shards; the report is
+then the one an unsharded run over the same scope writes.
+
 A mutant is the same in both runs when its class, method, descriptor, mutator and instruction
 indexes agree, which PIT derives from the bytecode alone. The second run is given only the mutants
 the first did not kill: --keep writes them, one identity a line, for dev/varka_pit/VarkaPitOnly.
@@ -47,6 +54,8 @@ method the run mutated that matches no mutant fails the run: the code changed un
 
 import argparse
 import collections
+import glob
+import os
 import sys
 import xml.etree.ElementTree as ET
 
@@ -78,6 +87,48 @@ def mutants(path):
         if f["status"] != NON_VIABLE:
             out[key] = f
     return out
+
+
+def join(parts):
+    """Several shards' mutants as one run's: a mutant in two shards means the split broke."""
+    out = {}
+    for path in parts:
+        for key, f in mutants(path).items():
+            if key in out:
+                sys.exit(f"mutant {key} is in two shards, e.g. {path}")
+            out[key] = f
+    return out
+
+
+def read_shards(root):
+    """The shard directories under ROOT: their two runs' mutations.xml paths and their scope."""
+    dirs = sorted(d for d in glob.glob(os.path.join(root, "*")) if os.path.isdir(d))
+    seen = {}
+    scopes = set()
+    for d in dirs:
+        try:
+            with open(os.path.join(d, "shard"), encoding="utf-8") as f:
+                index, count = (int(x) for x in f.read().strip().split("/"))
+            with open(os.path.join(d, "scope"), encoding="utf-8") as f:
+                scopes.add(f.read().strip())
+        except (OSError, ValueError) as e:
+            sys.exit(f"{d} is not a shard of dev/varka_pit.sh --shard: {e}")
+        if (index, count) in seen:
+            sys.exit(f"shard {index}/{count} is in both {seen[(index, count)]} and {d}")
+        seen[(index, count)] = d
+    counts = {c for _, c in seen}
+    if len(counts) != 1:
+        sys.exit(f"{root}: the shards disagree on their number, or there are none: {sorted(seen)}")
+    count = counts.pop()
+    missing = sorted(set(range(count)) - {i for i, _ in seen})
+    if missing:
+        sys.exit(f"{root}: shards {missing} of {count} are missing")
+    if len(scopes) != 1:
+        sys.exit(f"{root}: the shards ran different scopes: {sorted(scopes)}")
+    order = [seen[(i, count)] for i in range(count)]
+    behavioural = [os.path.join(d, "behavioural", "mutations.xml") for d in order]
+    bytes_ = [os.path.join(d, "bytes", "mutations.xml") for d in order]
+    return behavioural, bytes_, f"{scopes.pop()} Run in {count} shards."
 
 
 def note_key(f):
@@ -210,14 +261,23 @@ def main():
     if len(sys.argv) == 4 and sys.argv[1] == "--keep":
         return keep(sys.argv[2], sys.argv[3])
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("behavioural")
-    ap.add_argument("bytes")
-    ap.add_argument("report")
+    ap.add_argument("paths", nargs="+", help="BEHAVIOURAL.xml BYTES.xml REPORT.md, or REPORT.md")
+    ap.add_argument("--shards", metavar="DIR", help="join the shard directories under DIR")
     ap.add_argument("--notes")
     ap.add_argument("--scope", help="a sentence saying what the run mutated and ran")
     args = ap.parse_args()
-    first = mutants(args.behavioural)
-    second = mutants(args.bytes)
+    if args.shards:
+        if len(args.paths) != 1:
+            ap.error("--shards takes the report alone")
+        behavioural, bytes_, scope = read_shards(args.shards)
+        args.scope = args.scope or scope
+    elif len(args.paths) == 3:
+        behavioural, bytes_ = [args.paths[0]], [args.paths[1]]
+    else:
+        ap.error("give BEHAVIOURAL.xml BYTES.xml REPORT.md, or --shards DIR REPORT.md")
+    args.report = args.paths[-1]
+    first = join(behavioural)
+    second = join(bytes_)
     # The second run has exactly the mutants the first did not kill.
     missing = [k for k, f in first.items() if f["status"] not in KILLS and k not in second]
     if missing:
