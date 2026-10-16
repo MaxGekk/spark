@@ -18,13 +18,17 @@
 package org.apache.spark.sql.execution;
 
 import java.io.Serializable;
+import java.util.EnumSet;
+import java.util.Set;
 
 import javax.annotation.Nullable;
 
 import scala.Option;
+import scala.jdk.javaapi.CollectionConverters;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
 import org.apache.spark.sql.internal.SQLConf;
 
 /**
@@ -45,11 +49,18 @@ import org.apache.spark.sql.internal.SQLConf;
  * @param exactRefusalStatus whether a method of several refusal reasons gives each its own mask
  *        ({@code spark.sql.codegen.varka.emit.exactRefusalStatus}, VARKA-304), null to leave the
  *        base options' setting
+ * @param familiesOff the expression families the session has switched off
+ *        ({@code spark.sql.codegen.varka.family.<name>.enabled} set to false, VARKA-318). Not an
+ *        emit option - it changes which entries the compiler admits, never a kernel's bytes - so
+ *        it is not laid over the options; it travels here because the compile at planning and the
+ *        evaluator's compile in a task must decline alike, and every caller of the compiler passes
+ *        it beside {@code VarkaColumnarToRowExec.emitOptions}.
  */
-public record VarkaSessionEmit(int useAVX, @Nullable Boolean exactRefusalStatus)
+public record VarkaSessionEmit(
+    int useAVX, @Nullable Boolean exactRefusalStatus, Set<VarkaFamily> familiesOff)
     implements Serializable {
 
-  private static final long serialVersionUID = 1L;
+  private static final long serialVersionUID = 2L;
 
   /** A session that sets nothing: what a suite that builds an evaluator directly passes. */
   public static final VarkaSessionEmit DEFAULTS =
@@ -60,13 +71,26 @@ public record VarkaSessionEmit(int useAVX, @Nullable Boolean exactRefusalStatus)
     if (useAVX < VarkaEmitOptions.USE_AVX_UNKNOWN) {
       throw VarkaErrors.illegalArgument("useAVX is a level from 0 or -1, got " + useAVX);
     }
+    familiesOff = Set.copyOf(familiesOff);
+  }
+
+  /** The emit settings alone, with every family on. */
+  public VarkaSessionEmit(int useAVX, @Nullable Boolean exactRefusalStatus) {
+    this(useAVX, exactRefusalStatus, Set.of());
   }
 
   /** The session's settings, read from {@code conf}: the one place they are bound. */
   public static VarkaSessionEmit of(SQLConf conf) {
     Option<Object> exact = conf.varkaEmitExactRefusalStatus();
+    var off = EnumSet.noneOf(VarkaFamily.class);
+    var keys = CollectionConverters.asJava(conf.varkaFamilySwitchesOff());
+    for (VarkaFamily family : VarkaFamily.values()) {
+      if (keys.contains(family.switchKey())) {
+        off.add(family);
+      }
+    }
     return new VarkaSessionEmit(conf.varkaEmitUseAVX(),
-        exact.isDefined() ? (Boolean) exact.get() : null);
+        exact.isDefined() ? (Boolean) exact.get() : null, off);
   }
 
   /** {@code base} with the session's settings laid over it, or {@code base} when none is set. */

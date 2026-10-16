@@ -958,8 +958,10 @@ with and without the attributes, which the JVM ignores by specification.
 
 Start from the symptom. Every branch begins with the same step, which also tells you whether
 Varka is involved at all: set `spark.sql.codegen.varka.enabled=false` and run the query again.
-That switches off all of Varka. A switch per expression family is a planned task and is not
-built, so there is nothing narrower to try.
+That switches off all of Varka. When Varka is involved, narrow it to one expression family: set
+the family's switch, `spark.sql.codegen.varka.family.<name>.enabled=false` (Configuration lists
+the five and what each covers), and run again. The switch keeps that family's expressions on the
+row engine and the rest of Varka on, so it is also what to leave set while a fault is reported.
 
 ```
 symptom
@@ -989,7 +991,9 @@ symptom
    `VarkaIrFuzzSuite` (`sql/catalyst`), which shrinks every failure it finds. On a planted emitter
    bug it printed `shrunk to lane=int roots=[(isNotNull col:0)] options={misdescribeWordLiveness=true}
    length=1` from a tree of three conjuncts. Hand over the expression, the
-   rows and the `spark.sql.codegen.varka.*` settings you ran with.
+   rows and the `spark.sql.codegen.varka.*` settings you ran with. Until it is fixed, set the
+   switch of the expression's family to false (Configuration): its entries run on the row engine,
+   the verbose `EXPLAIN` names the switch on each, and the rest of Varka stays on.
 
 **A slow query.** A batch Varka cannot run goes to the row engine, so slowness is declined
 batches, an entry that did not fuse, or a slow kernel.
@@ -1038,11 +1042,11 @@ Who reads each thing, and what they do:
 
 | What you see | Reader | What they do |
 | :--- | :--- | :--- |
-| `INTERNAL_ERROR`, `kind: planning` | user, then developer | User: turn Varka off to unblock the query and report the message whole. Developer: the context names the entries and options; reproduce with `dev/varka_emit.sh` on the expression |
-| "failed on this batch" warning | operator | Count them per shape hash in the executor logs. The answers are right (the row engine served the batch), so it is a cost and a bug report, not an outage. Collect the file the warning names |
+| `INTERNAL_ERROR`, `kind: planning` | user, then developer | User: set the switch the message names (the `families:` line), or turn Varka off, to unblock the query, and report the message whole. Developer: the context names the entries and options; reproduce with `dev/varka_emit.sh` on the expression |
+| "failed on this batch" warning | operator | Count them per shape hash in the executor logs. The answers are right (the row engine served the batch), so it is a cost and a bug report, not an outage. Collect the file the warning names; a kernel failing on every batch is worked around by the switch on the `families:` line |
 | the reproduction file | developer | Replay it; the exit status is the verdict. Handle it as data |
 | `numDeclinedBatches[...]`, rows per path | user, operator | A declined batch is slow, not wrong: read the reason, change the data or the query, or turn Varka off for the query |
-| a residual entry in `EXPLAIN` | user | The expression is not fused: rewrite it or accept the row path for that entry |
+| a residual entry in `EXPLAIN` | user | The expression is not fused: rewrite it or accept the row path for that entry. A reason naming `spark.sql.codegen.varka.family.<name>.enabled=false` is a switch the session set |
 | `java.lang.VerifyError` at planning | user, developer | Not yet an `INTERNAL_ERROR` with a context block (open work); the reproduction file is written and replays |
 | a memory violation (sanitizer on, `-Dvarka.sanitizeMemory=true`) | developer | A diagnostic JVM property: the violation fails the task by design and writes a file; replay it |
 
@@ -1067,8 +1071,8 @@ The emitter's designed decline of a shape over its method budget logs "The Varka
 declined ..." once per JVM and is not a failure. Every warning of the last three causes ends with
 the `Varka context:` block: the kind (the cause tag), the kernel's identity (its source file, the
 IR of each output, the operator and stage), the shape hash, the emit options that differ from the
-defaults by name, the batch's rows and nulls per input where a batch was involved, and the
-original exception. The event's `options` field carries the same options.
+defaults by name, the families whose nodes the kernel holds, each with its switch (`families:`),
+the batch's rows and nulls per input where a batch was involved, and the original exception. The event's `options` field carries the same options.
 
 **Internal errors.** An invariant Varka checks in the compiler, the IR, the emitters, the
 options, the runner or the exec nodes raises Spark's `INTERNAL_ERROR` (SQLSTATE `XX000`) with the
@@ -1081,11 +1085,16 @@ inside an emitted kernel raise plain JDK exceptions, which the fallback catches 
 
 * **At planning** it fails the query. The compiler's catch puts the `Varka context:` block
   around it (`kind: planning`, the entries being compiled, the options), with the check's
-  message on the `cause:` line (Troubleshooting C1); an argument check stays an
+  message on the `cause:` line (Troubleshooting C1). A failure inside one family's lowering also
+  names that family on the `families:` line and ends its sentence with the setting that works
+  around it: "To plan the query with Varka's calendar family on Spark's row engine, set
+  spark.sql.codegen.varka.family.calendar.enabled to false and retry."; an argument check stays an
   `IllegalArgumentException`, any other becomes an `IllegalStateException`. Raised on the driver it arrives as it is;
   raised by an evaluator's compile in a task, it arrives inside Spark's "Job aborted" error.
 * **While building or running a kernel** it does not fail the query: it is one of the fallback
-  causes above, and the warning's block names it on the `cause:` line.
+  causes above, and the warning's block names it on the `cause:` line. A kernel that fails on
+  every batch runs every batch on the row engine; the switch of a family on its `families:` line
+  keeps that family's entries off the kernel until the failure is fixed.
 * **Under test**, a fallback over a failure no test declared fails the task with
   `INTERNAL_ERROR` and the same block (`VarkaColumnarToRowExec.setFailureFallbackExpectedForTesting`).
 
@@ -1232,7 +1241,15 @@ descriptors (strings), so a missing engine jar degrades to the fallback.
 
 ## Configuration
 
-All Varka configurations are internal:
+All Varka configurations are internal. The five `family.<name>.enabled` switches are the families
+of the compiler's chain (`VarkaNodeCompiler`, `VarkaFamily`): a family that is off declines every
+node it claims, with the reason `Varka's <family> family is switched off (<switch>=false)` in the
+verbose `EXPLAIN`, and the entry holding that node runs on the row engine while the rest of the
+projection or filter still fuses. A column or literal is never declined by a switch, so a
+`bigint` comparison still fuses with the time family off; and a node one family's lowering builds
+directly for another family's node goes with the caller: in `d - ym` the negated interval is the
+calendar's. The date leaves (a date column, a date literal, the identity date cast) have no switch.
+
 
 | Config | Default | Description |
 | :--- | :--- | :--- |
@@ -1243,6 +1260,11 @@ All Varka configurations are internal:
 | `spark.sql.codegen.varka.reproduction.maxBatchBytes` | `16m` | The most bytes of a failing batch's values a reproduction file holds; a larger batch keeps its row count, null counts and buffer sizes, and a replay runs a synthetic batch of that shape. `0` never writes values. |
 | `spark.sql.codegen.varka.emit.useAVX` | `-1` | The `-XX:UseAVX` level the emitter lowers for where a lowering depends on it (VARKA-121): `3` or above takes a 64-bit division through double lanes, `2` the magic-number form, because the converts do not become instructions below AVX-512; `-1` leaves the emitter's own default, which is deliberately not the host's level so the shape hashes and the committed bytes describe no one machine. The level is part of the shape hash, so a session that sets it emits and caches its own classes. For benchmarks and A/Bs. |
 | `spark.sql.codegen.varka.cache.maxEntries` | `100` | Static (VARKA-18). Capacity of the JVM-wide cache of loaded fused-kernel classes, keyed on the kernel's structural shape; the least recently used class is released on eviction, bounding Metaspace by this size. `0` restores the per-task emit-and-unload lifecycle. |
+| `spark.sql.codegen.varka.family.calendar.enabled` | `true` | VARKA-318, the calendar family's kill switch: false declines day arithmetic (`date_add`, `date_sub`, `datediff`, `unix_date`, `date_from_unix_date`), the calendar fields (`year` to `weekofyear`), `make_date`, `last_day`, `next_day`, `trunc`, `add_months` and a date plus a year-month interval. |
+| `spark.sql.codegen.varka.family.interval.enabled` | `true` | The interval family's: year-month interval arithmetic, negation and `abs`, `make_ym_interval`, the year and month extractions, the multiply by an int and the casts between year-month intervals and ints. |
+| `spark.sql.codegen.varka.family.time.enabled` | `true` | The time family's: the `TIME` functions (`hour`, `minute`, `second`, `time_trunc`, `time_diff`, the conversions to and from micros and millis, a time plus a day-time interval) and the casts to `TIME` and to a day-time interval. |
+| `spark.sql.codegen.varka.family.condition.enabled` | `true` | The condition family's: a filter's predicates (comparisons, `IN`, `IS NULL`, `IS NOT NULL`, `AND`, `OR`, `NOT`), so that no filter fuses, and the conditionals `IF`, `CASE WHEN` and `coalesce`. |
+| `spark.sql.codegen.varka.family.intArithmetic.enabled` | `true` | The int arithmetic family's: `+`, `-`, `*` and unary minus over int operands, checked under ANSI, and `greatest` and `least`. |
 | `spark.sql.codegen.varka.warmup.enabled` | `true` | VARKA-212. When true, a newly emitted kernel serves no batch until C2 has compiled it: the shape's batches take the per-row path while a background thread runs the kernel on a copy of the first batch, and every task of the shape switches to the kernel once it runs without allocating. When false, a new kernel serves batches from the first and runs interpreted until enough batches have gone through it. |
 
 The rule is registered on every `SparkSession` but does nothing while the

@@ -25,7 +25,7 @@ import org.apache.spark.{SparkException, SparkIllegalArgumentException, SparkIll
 import org.apache.spark.executor.Executor
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAllocationSampler, VarkaEmitOption, VarkaEmitOptions, VarkaErrorContext, VarkaErrors, VarkaFallbackEvent, VarkaJfrTestSupport, VarkaJitEvidence, VarkaKernelAllocationEvent, VarkaShapeCache, VarkaTestWatchdog, VarkaValueRange}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAllocationSampler, VarkaEmitOption, VarkaEmitOptions, VarkaErrorContext, VarkaErrors, VarkaFallbackEvent, VarkaFamily, VarkaJfrTestSupport, VarkaJitEvidence, VarkaKernelAllocationEvent, VarkaShapeCache, VarkaTestWatchdog, VarkaValueRange}
 import org.apache.spark.sql.execution.varka.VarkaFallbackAccounting
 import org.apache.spark.sql.internal.SQLConf
 
@@ -182,6 +182,10 @@ class VarkaErrorContextSuite extends QueryTest with VarkaSharedSessions with Var
       .getOrElse(fail(s"no kernel-failure warning among: ${lines.mkString("\n")}"))
     assert(warning.contains("\nVarka context:\n  kind: kernel-failure\n"), warning)
     assert(warning.contains("misdescribeAdd=true"), warning)
+    // The kernel's date_add is the calendar family's, and the record names its switch, the
+    // setting that keeps that work off Varka while the failure is reported (VARKA-318).
+    assert(warning.contains(
+      s"\n  families: calendar (${VarkaFamily.CALENDAR.switchKey()})\n"), warning)
     assert(warning.matches("(?s).*\n  batch: \\d+ rows, nulls per input \\[.*"), warning)
     assert(warning.contains("\n  cause: java.lang.NoSuchMethodError"), warning)
     val events = recorded.filter(VarkaJfrTestSupport.isEvent(_, classOf[VarkaFallbackEvent]))
