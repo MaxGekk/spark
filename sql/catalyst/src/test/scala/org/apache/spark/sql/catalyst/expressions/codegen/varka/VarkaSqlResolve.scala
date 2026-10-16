@@ -18,8 +18,8 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import org.apache.spark.sql.catalyst.analysis.{SimpleAnalyzer, UnresolvedAttribute}
-import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference, Expression,
-  NamedExpression}
+import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference,
+  BindReferences, Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 import org.apache.spark.sql.catalyst.plans.logical.{LocalRelation, Project}
 import org.apache.spark.sql.types.DataType
@@ -56,6 +56,13 @@ object VarkaSqlResolve {
 
   /** `e` as a projection entry named `name`, for the Java tools, as [[column]] is. */
   def named(e: Expression, name: String): NamedExpression = Alias(e, name)()
+
+  /**
+   * `e` with its attributes bound to their ordinals in `columns`, as the compiler binds an entry,
+   * for the Java tools: the implicit `AttributeSeq` the binding takes is not nameable from Java.
+   */
+  def bind(e: Expression, columns: Seq[Attribute]): Expression =
+    BindReferences.bindReference(e, columns)
 
   /**
    * Bind `e` against `columns` and run the analyzer over the result, so operators get the type
