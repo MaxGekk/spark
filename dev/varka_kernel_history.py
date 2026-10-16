@@ -175,10 +175,21 @@ def main():
     if not paths:
         sys.exit("no fork log in %s" % args.dir)
     all_forks = [read_fork(p, args.slow_at, args.alloc_at) for p in paths]
+    launched = {}
     for prov in sorted(glob.glob(os.path.join(args.dir, "provenance*.txt"))):
         with open(prov, errors="replace") as f:
-            cpu = next((ln.split(":", 1)[1].strip() for ln in f if ln.startswith("cpu:")), "?")
+            lines = f.read().splitlines()
+        cpu = next((ln.split(":", 1)[1].strip() for ln in lines if ln.startswith("cpu:")), "?")
         print("%s: %s" % (os.path.basename(prov), cpu))
+        for ln in lines:
+            if ln.startswith("args:"):
+                launched.setdefault("test", fields(ln).get("test", "tails"))
+                launched.setdefault("cold", int(fields(ln).get("cold", "0")))
+    # A fork whose JVM died before its BEGIN line belongs to the case the launcher started it in.
+    for f in all_forks:
+        if f["bits"] is None:
+            f["test_kind"] = launched.get("test", "tails")
+            f["cold"] = launched.get("cold", 0)
 
     print(
         "%-38s %-11s %8s %9s %8s  %s"
@@ -193,7 +204,7 @@ def main():
     )
     for f in sorted(
         all_forks,
-        key=lambda f: (f["width"], f["test_kind"], f["cold"], f["prewarm"], f["after"], f["fork"]),
+        key=lambda f: (label(f), f["test_kind"], f["cold"], f["prewarm"], f["after"], f["fork"]),
     ):
         print(
             "%-38s %-11s %8s %9s %8s  %s %sms | %s"
@@ -217,13 +228,14 @@ def main():
         )
 
     print()
-    widths = {f["width"]: label(f) for f in all_forks if f["bits"]}
     print(
         "the kernel under test: slow by rate / slow by allocation / fast / unfinished or declined"
     )
     cases = defaultdict(list)
     for f in all_forks:
-        cases[(f["width"], f["prewarm"], f["after"], variant(f))].append(f)
+        # By the bits the fork read, not the width it was asked for: a run with no width
+        # requirement may land its splits on machines of two widths.
+        cases[(label(f), f["prewarm"], f["after"], variant(f))].append(f)
     slow = 0
     for case in sorted(cases):
         group = cases[case]
@@ -239,7 +251,7 @@ def main():
         print(
             "  %-9s prewarm %-5s, N=%-3d%s %3d / %3d / %3d / %3d   slow %d of %d%s%s"
             % (
-                widths.get(case[0], case[0]),
+                case[0],
                 case[1],
                 case[2],
                 " (%s)" % case[3] if case[3] else "",
@@ -261,7 +273,7 @@ def main():
     by_position = defaultdict(lambda: [0, 0, 0])
     for f in all_forks:
         for k in f["kernels"]:
-            key = (f["width"], f["prewarm"], variant(f), k.get("lane", "?"), bucket(k["position"]))
+            key = (label(f), f["prewarm"], variant(f), k.get("lane", "?"), bucket(k["position"]))
             by_position[key][1] += 1
             if k.get("state") == "RELEASED":
                 by_position[key][0] += 1
@@ -273,7 +285,7 @@ def main():
         print(
             "  %-9s prewarm %-5s,%s %-4s positions %-6s %4d / %4d (%.1f%%), %d with every loop C2"
             % (
-                widths.get(key[0], key[0]),
+                key[0],
                 key[1],
                 " (%s)" % key[2] if key[2] else "",
                 key[3],

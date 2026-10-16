@@ -103,7 +103,7 @@ on:
         default: ''
       history:
         type: string
-        description: 'Kernel history mode: the arguments of dev/varka_kernel_history.sh (e.g. "--after 16,64 --forks 2 --prewarm on,off --jvms 1 --cpus 4"), run on each of num-splits runners, split s with the forks from (s - 1) * forks on, so every split draws other histories; extra-java-options go to every fork. The forks'' logs and the reader''s summary are the artifacts. Always JDK 25 on the dispatched ref; class, pair, pr, tpcds, sections and create-commit do not apply. Blank runs the benchmarks.'
+        description: 'Kernel history mode: the arguments of dev/varka_kernel_history.sh (e.g. "--after 16,64 --forks 2 --prewarm on,off --jvms 1 --cpus 4"), run on each of num-splits runners, split s with the forks from (s - 1) * forks on, so every split draws other histories; extra-java-options go to every fork. The forks'' logs and the reader''s summary are the artifacts, and the report fails on a wrong answer or an unfinished fork. Always JDK 25 on the dispatched ref; expected-cpu pins the machine; class, pair, pr, tpcds, sections and create-commit do not apply. Blank runs the benchmarks.'
         required: false
         default: ''
       history-bits:
@@ -181,14 +181,19 @@ jobs:
         # History mode runs the launcher on the dispatched ref, one split per runner; the job
         # sets the forks' numbering and the output directory itself.
         history = os.environ["HISTORY"].strip()
+        # The jobs choose the mode by the raw input, so a blank-looking one must not reach them.
+        if os.environ["HISTORY"] and not history:
+            fail("history holds only white space; leave it empty to run the benchmarks")
         if history:
             if pair or os.environ["PR"]:
                 fail("history mode takes neither pair nor pr")
             if os.environ["HISTORY_BITS"] not in ("", "256", "512"):
                 fail(f"history-bits must be 256, 512 or blank, not '{os.environ['HISTORY_BITS']}'")
-            taken = re.findall(r"(?:^|\s)(--(?:fork-base|out|build|guard))(?=\s|$)", history)
+            taken = re.findall(
+                r"(?:^|\s)(--(?:fork-base|out|build|guard|max-slow))(?=\s|$)", history)
             if taken:
-                fail(f"history must not set {taken}: the job sets the forks' numbering and output")
+                fail(f"history must not set {taken}: the jobs set the forks' numbering, the "
+                     "output and the verdict")
         # Each class's artifact needs a name of its own, without the glob's characters. The
         # harness matches its glob against the fully qualified name, so a bare class name, which
         # the pair takes, becomes `*.<Name>`: that class in any package, and no class ending in it.
@@ -641,10 +646,14 @@ jobs:
       with:
         java-version: '25'
         coursier: cache
+    # The CPU and the width, read from the JVM rather than timed: dev/varka_datapath.sh measures
+    # the datapath behind the width, which a history reading does not need. expected-cpu still
+    # pins the machine, matched as varka_datapath.sh matches it.
     - name: Check the runner's vector width
       id: width
       env:
         HISTORY_BITS: ${{ inputs.history-bits }}
+        EXPECTED_CPU: ${{ inputs.expected-cpu }}
       run: |
         cpu="$(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //')"
         echo "cpu: $cpu"
@@ -657,6 +666,11 @@ jobs:
         if [ -n "$HISTORY_BITS" ] && [ "$bits" != "$HISTORY_BITS" ]; then
           echo "::error::this runner's widest vector is $bits bits ($cpu), not the" \
             "$HISTORY_BITS asked for; rerun the failed jobs to draw other machines"
+          exit 1
+        fi
+        if [ -n "$EXPECTED_CPU" ] && ! echo "$cpu" | grep -qF "$EXPECTED_CPU"; then
+          echo "::error::this runner is $cpu, not the $EXPECTED_CPU asked for; rerun the failed" \
+            "jobs to draw other machines"
           exit 1
         fi
         echo "::notice::split $SPLIT: $cpu, $bits-bit vectors"
@@ -678,7 +692,10 @@ jobs:
         for ((i = 0; i + 1 < ${#args[@]}; i++)); do
           if [ "${args[$i]}" = --forks ]; then forks="${args[$((i + 1))]}"; fi
         done
-        [[ "$forks" =~ ^[0-9]+$ ]] || { echo "::error::--forks takes a count, not '$forks'"; exit 1; }
+        if ! [[ "$forks" =~ ^[0-9]+$ ]]; then
+          echo "::error::--forks takes a count, not '$forks'"
+          exit 1
+        fi
         jvm=()
         for o in "${opts[@]}"; do jvm+=(--jvm "$o"); done
         echo "::notice::Extra JVM options: ${EXTRA_JAVA_OPTIONS:-<none>}"
@@ -710,6 +727,8 @@ jobs:
           target/kernel-history/split-${{ matrix.split }}
           !target/kernel-history/split-${{ matrix.split }}/tmp-*
         if-no-files-found: ignore
+        # A rerun of the failed jobs uploads under the same name.
+        overwrite: true
 
   # The splits' logs in one directory, read once: every case's forks from every runner together,
   # with each split's CPU listed (dev/varka_kernel_history.py).
@@ -747,9 +766,11 @@ jobs:
             cp "$dir/provenance.txt" "$merged/provenance-$split.txt"
           fi
         done
+        # The guard fails the job on a wrong answer, a harness error or an unfinished fork; slow
+        # forks are the reading, never a failure.
         status=0
-        python3 dev/varka_kernel_history.py --dir "$merged" > "$merged/summary.txt" 2>&1 \
-          || status=$?
+        python3 dev/varka_kernel_history.py --dir "$merged" --guard --max-slow 1000000 \
+          > "$merged/summary.txt" 2>&1 || status=$?
         cat "$merged/summary.txt"
         {
           echo "### Kernel history: every split"
@@ -769,3 +790,5 @@ jobs:
         name: kernel-history-report
         path: target/kernel-history/merged
         if-no-files-found: ignore
+        # A rerun of the failed splits runs this job again, under the same name.
+        overwrite: true

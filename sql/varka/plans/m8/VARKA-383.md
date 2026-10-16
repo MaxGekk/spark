@@ -457,18 +457,20 @@ Filled in as the runs land.
 No product behaviour changed, and no run on a runner has been made yet.
 
 * **`benchmark.yml`'s history mode.** Inputs `history` and `history-bits` as 3.1 has them. With
-  `history` set, `matrix-gen` checks it (no `pair`, no `pr`, `history-bits` 256, 512 or blank, and
-  no `--fork-base`, `--out`, `--build` or `--guard`, which the job sets), `tpcds-1g-gen`,
+  `history` set, `matrix-gen` checks it (not white space alone, no `pair`, no `pr`, `history-bits`
+  256, 512 or blank, and no `--fork-base`, `--out`, `--build`, `--guard` or `--max-slow`, which the
+  jobs set), `tpcds-1g-gen`,
   `benchmark` and `pair` are skipped, and one `kernel-history` job runs per split: JDK 25 whatever
   `jdk` says, the CPU and `MaxVectorSize` printed and the job failed before the build when the
-  width is not `history-bits`, catalyst's test classes built with the launcher's own command, then
+  width is not `history-bits` or the CPU not `expected-cpu`, catalyst's test classes built with the launcher's own command, then
   the launcher with the `history` words, each word of `extra-java-options` as a `--jvm`, and
   `--fork-base (split - 1) * forks` (`--forks` read from `history`, 10 when absent). Its summary
   goes to the job summary and its directory, without the forks' temporary directories, to the
   artifact `kernel-history-split-<n>`. `kernel-history-report` downloads every split, copies the
   fork logs into one directory with each split's provenance as `provenance-<n>.txt`, runs the
-  reader over it, and publishes the summary to the job summary and the artifact
-  `kernel-history-report`. Every input reaches the shell through `env:`. With `history` blank the
+  reader over it under `--guard` with no limit on slow forks (so a wrong answer, a harness error
+  or an unfinished fork fails it, and a slow one never does), and publishes the summary to the job summary and the artifact
+  `kernel-history-report`; both uploads overwrite, for a rerun of the failed jobs. Every input reaches the shell through `env:`. With `history` blank the
   file's other jobs are as they were. A dispatch runs `num-splits` + 2 jobs: R1 and R2 five each,
   R3 three, R4 four, seventeen in all, of which the nine splits are the runner hours 3.1 costs.
 * **The launcher** takes `--fork-base B` (forks `B` to `B + forks - 1`, seed `--seed + f`, the log
@@ -484,9 +486,13 @@ No product behaviour changed, and no run on a runner has been made yet.
   and `test`; `DONE` carries `templateAfter`, the kernel classes defined before the prewarm ran,
   and `templateMillis` now comes from the prewarm's own record, so a `first` fork reports it too.
   `templateAfter` counts definitions, not runs: an `on` fork reads K + 1, the first warmed kernel
-  being defined before the warm-up that starts the worker.
-* **The reader** lists each `provenance*.txt`'s CPU, labels a case with its kernel under test and
-  cold prefix where they are not the defaults, shows `templateAfter` per fork, always shows the
+  being defined before the warm-up that starts the worker, which corrects 3.1's
+  `templateAfter=<K>`. `VarkaKernelWarmup.templateWarmupNanos()` reads the same record now, so it
+  is right whichever thread ran the prewarm.
+* **The reader** lists each `provenance*.txt`'s CPU, groups forks by the vector bits each read
+  (not the width asked for, which is `host` on every runner), labels a case with its kernel under
+  test and cold prefix where they are not the defaults (from the launcher's provenance for a fork
+  that died before saying), shows `templateAfter` per fork, always shows the
   e2e kernel's released count, and counts the cold kernels among those compared. The
   `--max-long-released` ratchet of section 4 is left for step 6, where section 5 sets its value
   from the runners' re-reading.
@@ -495,7 +501,10 @@ No product behaviour changed, and no run on a runner has been made yet.
   the class definition; that file was listed for arm B only) and its duration;
   `VarkaKernelWarmup` records the uptime at the worker's first start and renders both as
   `templateWarmupAccount()`, which `VarkaWarmupEndToEndSuite` appends to its verdict assertion and
-  to every other failure its catch rewrites.
+  to every other failure its catch rewrites; it never throws, so a JVM where the prewarm's class
+  cannot initialize keeps the failure it is explaining.
+* **The self-review** (`/code-review high` on the branch) made ten findings; all ten were fixed
+  as the items above describe, the last being one over-long line in the workflow.
 
 Checked locally, counts only: the workflow parses, actionlint reports the 19 shellcheck notes
 master's file has and none in the new jobs, shellcheck and ruff are clean on the launcher and the

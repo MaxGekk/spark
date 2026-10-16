@@ -223,12 +223,26 @@ public final class VarkaKernelWarmup {
   // Replaced when it has died; see ensureWorker.
   private static Thread worker;
 
-  // What the Vector API template warm-up took on the worker's first start, for diagnostics.
-  private static volatile long templateWarmupNanos;
-
-  /** Nanoseconds the one-time Vector API template warm-up took, or zero if it has not run. */
+  /**
+   * Nanoseconds the one-time Vector API template warm-up took, or zero if it has not run or
+   * failed; whichever thread ran it, the worker or a caller of its own.
+   */
   public static long templateWarmupNanos() {
-    return templateWarmupNanos;
+    var run = templateRun();
+    return run == null ? 0 : Math.max(run.nanos(), 0);
+  }
+
+  /**
+   * The template warm-up's record, or null when it has not run or its class cannot initialize
+   * (the Vector API unresolved): a diagnostic must not throw where {@link #templateWarmup} would
+   * have logged and gone on.
+   */
+  private static VarkaVectorTemplateWarmup.Run templateRun() {
+    try {
+      return VarkaVectorTemplateWarmup.lastRun();
+    } catch (Throwable t) {
+      return null;
+    }
   }
 
   // The JVM's uptime when the worker first started, or -1 before; see templateWarmupAccount.
@@ -243,7 +257,7 @@ public final class VarkaKernelWarmup {
    */
   public static String templateWarmupAccount() {
     long workerStart = workerStartUptimeMillis;
-    var run = VarkaVectorTemplateWarmup.lastRun();
+    var run = templateRun();
     String worker = workerStart < 0 ? "the warm-up worker has not started"
         : "the warm-up worker first started at JVM uptime " + workerStart + " ms";
     String templates;
@@ -495,7 +509,6 @@ public final class VarkaKernelWarmup {
     try {
       long nanos = VarkaVectorTemplateWarmup.ensure();
       if (nanos > 0) {
-        templateWarmupNanos = nanos;
         LOG.info("Vector API template warm-up took " + TimeUnit.NANOSECONDS.toMillis(nanos)
             + " ms.");
       }
