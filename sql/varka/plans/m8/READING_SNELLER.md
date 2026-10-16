@@ -51,8 +51,11 @@ on the integer remainder, which is the part the record does not have.
 1. **One candidate for row 30**: a second iteration on the integer remainder to take a `BIGINT`
    column divisor past the `2^52` bound of the double route, with round-to-nearest estimates and a
    correction in both directions, measured against the scalar loop and against declining the batch.
-   It is worth building only if the emitter declines a batch today when the dividend leaves the
-   bound; that check comes first (`VARKA-30.md`, if the row gets a plan).
+   The check was made: the emitter has no node that divides by a column at all (`ConstDivide`
+   and `BoundedDivide` only, and the census lists `div`, `%`, `mod` and `pmod` as not fused
+   today), so there is no decline to remove. Row 30 builds the family, and `PLAN.md` 2.9 now
+   states the column divisor it left out: the double route behind a per-batch bound, with this
+   second iteration a measured option if batches leave the bound.
 2. **Nothing else.** Decimal division is out of the milestone and row 363's divisors are constants,
    which a magic multiply already handles.
 
