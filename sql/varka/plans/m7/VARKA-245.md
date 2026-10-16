@@ -341,7 +341,14 @@ the result; and `interval_precision_unbounded` for the cast, whose input bound i
    and 24 to 32 s an hour later on a slower machine (9.3); every check alone under both solvers (cvc5 `--incremental`, as the runner
    invokes it) meets its expectation, the slowest 2.6 s. The linters' run on the laptop went from
    42.8 s to the same plus 3.7 to 7.4 s, so 8 to 16 s on the runner by VARKA-241's ratio of 2.1; to be
-   scored against the pull request's CI. Its line is in the calibration table.
+   scored against the pull request's CI. Its line is in the calibration table. **What decides the
+   linters' job is the slowest check, not the total**: `--lint` gives each check 10 s under Z3, and
+   the slowest alone is lemma 5a, 2.3 to 2.7 s on the laptop at load 15 to 30 (5.9 s once at the
+   heaviest load), so about 5 to 6 s on the runner by the ratio of 2.1: inside the limit, with less
+   than a factor of two to spare. Splitting it by month or by year range moved the time between Z3
+   and cvc5 rather than removing it (January alone takes cvc5 9 s under `--incremental`), so it is
+   whole. After the review, `d + ym` and `d - ym`'s query 1 is pinned to 2024-01-15 and one month,
+   which took their model searches from 1.4 to 3.5 s to under half a second.
 3. **Held**: `sat` at day 14,766,814.
 4. **Held**: `VarkaProofFilesSuite`'s one test takes 0.22 to 0.69 s with the new file rendered.
 5. **Held**: dropping `add_months`'s clamp fails both `d + ym` and `d - ym`'s query 4; dropping the
@@ -355,6 +362,8 @@ the result; and `interval_precision_unbounded` for the cast, whose input bound i
 * **The linters' "Varka proofs" step**: plus 3.7 to 7.4 s under Z3 on the laptop in the first runs
   (14 to 16 s when the machine ran slow), about three quarters of `range_calendar.smt2`'s time; 8 to
   16 s on the runner by VARKA-241's ratio.
+* **The slowest check** under Z3 alone, lemma 5a: 2.3 to 2.7 s on the laptop, about 5 to 6 s on the
+  runner against the 10 s per-check limit (9.4 item 2).
 * **The nightly's prove step** (both solvers): plus about 13 s on the laptop at the first runs'
   load, 40 to 48 s at the slower one.
 
@@ -392,5 +401,16 @@ the result; and `interval_precision_unbounded` for the cast, whose input bound i
   `List.of`; the two records copy their lists and `Departure` refuses a query outside 2 to 5;
   `datediff`'s operands reuse `INT_AB`.
 
+After the advisor's read of the review: query 1 of the four `add_months` refinements pinned to one
+input, and lemma S's instance asserted under its own premise, as lemma 5's is.
+
 Not taken: dropping "lemma 1, lemmas 1a and 1b together", a rewriting step the solver discharges in
 under a second, which keeps lemma 3's hypothesis a checked instance rather than an assumption.
+
+### 9.8 A risk the run showed
+
+Risk 4 of section 7 is nearer than it read. At 13:17 on 16 October, with load 30 on the laptop, the
+unchanged `range_calendar.smt2` took 20 s and answered `unknown` on one check under Z3 (its `add_months`
+check with a negative count), the per-check limit passed. The linters' step's per-check margin is
+thin for that file today, before this one; the runner is not loaded as the laptop was, but a slower
+runner would show it there first.

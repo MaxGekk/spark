@@ -127,7 +127,8 @@ final class VarkaRefinementFile {
       ; bound), five checks (m7/PLAN.md 2.1):
       ;
       ;   1. sat    the precondition admits a valid lane the specification defines and the kernel
-      ;             answers, so 2 to 5 are not vacuous;
+      ;             answers, so 2 to 5 are not vacuous (any one model shows it, so a check whose
+      ;             model search is slow is pinned to one input);
       ;   2. unsat  the specification raises and the kernel does not decline;
       ;   3. unsat  neither, and the validity differs;
       ;   4. unsat  neither, the specification's lane valid, and the data differs from its value;
@@ -509,16 +510,31 @@ final class VarkaRefinementFile {
    * those names. {@code definitions} gives a function the setup leaves unknown its definition, and
    * goes only into the checks that expect sat: an unsat check that holds with a function unknown,
    * constrained only by proven lemmas' instances, holds of its definition too, and the solver no
-   * longer unfolds it.
+   * longer unfolds it. {@code admits} pins query 1 to one input where searching for a model is
+   * slow: a satisfiable precondition is shown by any one model.
    */
   private record Refinement(String name, List<String> setup, List<String> definitions, String pre,
       String bound, String defined, String raises, String specValid, String decline,
-      String kernelValid, String differs, List<Departure> departures) {
+      String kernelValid, String differs, List<Departure> departures, List<String> admits) {
 
     Refinement {
       setup = List.copyOf(setup);
       definitions = List.copyOf(definitions);
       departures = List.copyOf(departures);
+      admits = List.copyOf(admits);
+    }
+
+    Refinement(String name, List<String> setup, List<String> definitions, String pre,
+        String bound, String defined, String raises, String specValid, String decline,
+        String kernelValid, String differs, List<Departure> departures) {
+      this(name, setup, definitions, pre, bound, defined, raises, specValid, decline, kernelValid,
+          differs, departures, List.of());
+    }
+
+    /** This refinement with query 1 pinned to the input {@code pins} name. */
+    Refinement admitting(String... pins) {
+      return new Refinement(name, setup, definitions, pre, bound, defined, raises, specValid,
+          decline, kernelValid, differs, departures, List.of(pins));
     }
 
     Refinement(String name, List<String> setup, String pre, String bound, String defined,
@@ -554,6 +570,7 @@ final class VarkaRefinementFile {
       if (departures.isEmpty()) {
         if (i == 0) {
           body.addAll(r.definitions());
+          body.addAll(r.admits());
         }
         check(out, r.name() + ": " + what[i], i == 0 ? "sat" : "unsat", body);
         continue;
@@ -677,11 +694,14 @@ final class VarkaRefinementFile {
     String both = "(and vd vm)";
     String clamped = "(D sy2 sm2 cl)";
     String kernel = "(KC ny nm1 cd)";
+    // Query 1 at 2024-01-15 and one month (minus one for d - ym), where a model search is slow.
+    String admits = "(assert (and (= d " + LocalDate.of(2024, 1, 15).toEpochDay()
+        + ") (= sy 2024) (= sm 1) (= sd 15) (or (= m 1) (= m (- 1)))))";
     refine(out, new Refinement("d + ym, add_months(d, i), Spark mode (clamp_to_month_end, "
         + "proleptic_range): the month guard", add, definitions, contract("d", "vd"),
         "(=> " + both + " " + guard + ")", both, "(and " + both + " (not (jint.in " + clamped
         + ")))", both, "(and " + both + " (not " + guard + "))", both,
-        "(not (= " + kernel + " " + clamped + "))", List.of()));
+        "(not (= " + kernel + " " + clamped + "))", List.of()).admitting(admits));
     String stdRaises = "(and " + both + " (or (> sd sl) (< sy2 1) (> sy2 9999)))";
     String clampInputs = "(> sd sl)";
     String rangeInputs = "(or (< sy2 1) (> sy2 9999))";
@@ -699,7 +719,7 @@ final class VarkaRefinementFile {
                     + ") (= m 1)))"), clampInputs),
             new Departure(2, rangeWhy + ", at DATE '9999-12-15' + INTERVAL '1' MONTH",
                 List.of("(assert (and vd vm (= d " + LocalDate.of(9999, 12, 15).toEpochDay()
-                    + ") (= m 1)))"), rangeInputs))));
+                    + ") (= m 1)))"), rangeInputs))).admitting(admits));
     String negOverflow = "(and vm (= m0 jint.MIN))";
     var mayDecline = new Departure(5, "a decline Spark does not need: the negation's guard reads "
         + "the interval's validity alone, and Spark negates nothing on a row whose date is null",
@@ -710,7 +730,7 @@ final class VarkaRefinementFile {
         "(=> " + both + " (and (not (= m0 jint.MIN)) " + guard + "))", both,
         "(and " + both + " (or (= m0 jint.MIN) (not (jint.in " + clamped + "))))", both,
         "(or " + negOverflow + " (and " + both + " (not " + guard + ")))", both,
-        "(not (= " + kernel + " " + clamped + "))", List.of(mayDecline)));
+        "(not (= " + kernel + " " + clamped + "))", List.of(mayDecline)).admitting(admits));
     refine(out, new Refinement("d - ym, standard mode: the kernel as built, under the standard's "
         + "range for the interval", sub, definitions, contract("d", "vd"),
         "(=> vm (and (<= " + lit(-STD_MONTHS) + " m0) (<= m0 " + STD_MONTHS + ")))", both,
@@ -721,7 +741,7 @@ final class VarkaRefinementFile {
                     + ") (= m0 1)))"), clampInputs),
             new Departure(2, rangeWhy + ", at DATE '0001-01-15' - INTERVAL '1' MONTH",
                 List.of("(assert (and vd vm (= d " + LocalDate.of(1, 1, 15).toEpochDay()
-                    + ") (= m0 1)))"), rangeInputs))));
+                    + ") (= m0 1)))"), rangeInputs))).admitting(admits));
   }
 
   private static void addDays(StringBuilder out) {
@@ -876,6 +896,12 @@ final class VarkaRefinementFile {
         + " " + unit + "))))";
   }
 
+  /** Lemma S's instance at {@code x}, under its own premise. */
+  private static String sixtyInstance(String x, String r) {
+    return "(assert (=> (and vt (<= 0 " + x + ") (< " + x + " " + (DAY / SECOND) + ")) (= "
+        + sixty(x) + " " + r + ")))";
+  }
+
   private static String sixty(String x) {
     return "(jlong.sub " + x + " (jlong.mul (jlong.div " + x + " " + SIXTY + ") " + SIXTY + "))";
   }
@@ -902,7 +928,7 @@ final class VarkaRefinementFile {
         quotient("rh", MINUTE, "qm", "rm", "vt"), quotient("t", MINUTE, "qn", "rn", "vt"),
         quotient("qn", SIXTY, "qs", "rs", "vt"),
         "(assert (=> vt (and (= (jlong.div t " + HOUR + ") qh) (= (jlong.div t " + MINUTE
-            + ") qn) (= " + sixty("qn") + " rs))))");
+            + ") qn))))", sixtyInstance("qn", "rs"));
     refine(out, new Refinement("hour(t), minute(t), Spark mode and standard mode: one statement; "
         + "the divisions are jlong.div by long_divide.smt2 and time_bounds.smt2", hm, "true",
         "true", "vt", "false", "vt", "false", "vt",
@@ -911,7 +937,7 @@ final class VarkaRefinementFile {
     var sec = List.of(time("t", "vt"), quotient("t", MINUTE, "qm", "rm", "vt"),
         quotient("rm", SECOND, "qs", "rs", "vt"), quotient("t", SECOND, "qn", "rn", "vt"),
         quotient("qn", SIXTY, "q6", "r6", "vt"),
-        "(assert (=> vt (and (= (jlong.div t " + SECOND + ") qn) (= " + sixty("qn") + " r6))))");
+        "(assert (=> vt (= (jlong.div t " + SECOND + ") qn)))", sixtyInstance("qn", "r6"));
     refine(out, new Refinement("second(t), Spark mode: EXTENSIONS.md 3's whole seconds", sec,
         "true", "true", "vt", "false", "vt", "false", "vt",
         "(not (= " + sixty("qn") + " qs))", List.of()));

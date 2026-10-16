@@ -22,7 +22,8 @@
 ; bound), five checks (m7/PLAN.md 2.1):
 ;
 ;   1. sat    the precondition admits a valid lane the specification defines and the kernel
-;             answers, so 2 to 5 are not vacuous;
+;             answers, so 2 to 5 are not vacuous (any one model shows it, so a check whose
+;             model search is slow is pinned to one input);
 ;   2. unsat  the specification raises and the kernel does not decline;
 ;   3. unsat  neither, and the validity differs;
 ;   4. unsat  neither, the specification's lane valid, and the data differs from its value;
@@ -1444,6 +1445,7 @@
 (assert (= (D sy2 sm2 cl) (spec.days sy2 sm2 cl)))
 (assert (= (D sy2 sm2 sd) (spec.days sy2 sm2 sd)))
 (assert (= (KC ny nm1 cd) (k.addMonths sy sm sd m)))
+(assert (and (= d 19737) (= sy 2024) (= sm 1) (= sd 15) (or (= m 1) (= m (- 1)))))
 (check-sat)
 (pop 1)
 
@@ -1584,6 +1586,7 @@
 (assert (= (D sy2 sm2 cl) (spec.days sy2 sm2 cl)))
 (assert (= (D sy2 sm2 sd) (spec.days sy2 sm2 sd)))
 (assert (= (KC ny nm1 cd) (k.addMonths sy sm sd m)))
+(assert (and (= d 19737) (= sy 2024) (= sm 1) (= sd 15) (or (= m 1) (= m (- 1)))))
 (check-sat)
 (pop 1)
 
@@ -1789,6 +1792,7 @@
 (assert (= (D sy2 sm2 cl) (spec.days sy2 sm2 cl)))
 (assert (= (D sy2 sm2 sd) (spec.days sy2 sm2 sd)))
 (assert (= (KC ny nm1 cd) (k.addMonths sy sm sd m)))
+(assert (and (= d 19737) (= sy 2024) (= sm 1) (= sd 15) (or (= m 1) (= m (- 1)))))
 (check-sat)
 (pop 1)
 
@@ -1968,6 +1972,7 @@
 (assert (= (D sy2 sm2 cl) (spec.days sy2 sm2 cl)))
 (assert (= (D sy2 sm2 sd) (spec.days sy2 sm2 sd)))
 (assert (= (KC ny nm1 cd) (k.addMonths sy sm sd m)))
+(assert (and (= d 19737) (= sy 2024) (= sm 1) (= sd 15) (or (= m 1) (= m (- 1)))))
 (check-sat)
 (pop 1)
 
@@ -2892,7 +2897,8 @@
 (assert (=> vt (and (= t (+ (* 60000000000 qn) rn)) (<= 0 rn) (< rn 60000000000))))
 (declare-const qs Int) (declare-const rs Int)
 (assert (=> vt (and (= qn (+ (* 60 qs) rs)) (<= 0 rs) (< rs 60))))
-(assert (=> vt (and (= (jlong.div t 3600000000000) qh) (= (jlong.div t 60000000000) qn) (= (jlong.sub qn (jlong.mul (jlong.div qn 60) 60)) rs))))
+(assert (=> vt (and (= (jlong.div t 3600000000000) qh) (= (jlong.div t 60000000000) qn))))
+(assert (=> (and vt (<= 0 qn) (< qn 86400)) (= (jlong.sub qn (jlong.mul (jlong.div qn 60) 60)) rs)))
 (assert true)
 (assert true)
 (assert vt)
@@ -2913,7 +2919,8 @@
 (assert (=> vt (and (= t (+ (* 60000000000 qn) rn)) (<= 0 rn) (< rn 60000000000))))
 (declare-const qs Int) (declare-const rs Int)
 (assert (=> vt (and (= qn (+ (* 60 qs) rs)) (<= 0 rs) (< rs 60))))
-(assert (=> vt (and (= (jlong.div t 3600000000000) qh) (= (jlong.div t 60000000000) qn) (= (jlong.sub qn (jlong.mul (jlong.div qn 60) 60)) rs))))
+(assert (=> vt (and (= (jlong.div t 3600000000000) qh) (= (jlong.div t 60000000000) qn))))
+(assert (=> (and vt (<= 0 qn) (< qn 86400)) (= (jlong.sub qn (jlong.mul (jlong.div qn 60) 60)) rs)))
 (assert true)
 (assert false)
 (assert (not false))
@@ -2932,7 +2939,8 @@
 (assert (=> vt (and (= t (+ (* 60000000000 qn) rn)) (<= 0 rn) (< rn 60000000000))))
 (declare-const qs Int) (declare-const rs Int)
 (assert (=> vt (and (= qn (+ (* 60 qs) rs)) (<= 0 rs) (< rs 60))))
-(assert (=> vt (and (= (jlong.div t 3600000000000) qh) (= (jlong.div t 60000000000) qn) (= (jlong.sub qn (jlong.mul (jlong.div qn 60) 60)) rs))))
+(assert (=> vt (and (= (jlong.div t 3600000000000) qh) (= (jlong.div t 60000000000) qn))))
+(assert (=> (and vt (<= 0 qn) (< qn 86400)) (= (jlong.sub qn (jlong.mul (jlong.div qn 60) 60)) rs)))
 (assert true)
 (assert (not false))
 (assert (not false))
@@ -2952,7 +2960,8 @@
 (assert (=> vt (and (= t (+ (* 60000000000 qn) rn)) (<= 0 rn) (< rn 60000000000))))
 (declare-const qs Int) (declare-const rs Int)
 (assert (=> vt (and (= qn (+ (* 60 qs) rs)) (<= 0 rs) (< rs 60))))
-(assert (=> vt (and (= (jlong.div t 3600000000000) qh) (= (jlong.div t 60000000000) qn) (= (jlong.sub qn (jlong.mul (jlong.div qn 60) 60)) rs))))
+(assert (=> vt (and (= (jlong.div t 3600000000000) qh) (= (jlong.div t 60000000000) qn))))
+(assert (=> (and vt (<= 0 qn) (< qn 86400)) (= (jlong.sub qn (jlong.mul (jlong.div qn 60) 60)) rs)))
 (assert true)
 (assert (not false))
 (assert (not false))
@@ -2973,7 +2982,8 @@
 (assert (=> vt (and (= t (+ (* 60000000000 qn) rn)) (<= 0 rn) (< rn 60000000000))))
 (declare-const qs Int) (declare-const rs Int)
 (assert (=> vt (and (= qn (+ (* 60 qs) rs)) (<= 0 rs) (< rs 60))))
-(assert (=> vt (and (= (jlong.div t 3600000000000) qh) (= (jlong.div t 60000000000) qn) (= (jlong.sub qn (jlong.mul (jlong.div qn 60) 60)) rs))))
+(assert (=> vt (and (= (jlong.div t 3600000000000) qh) (= (jlong.div t 60000000000) qn))))
+(assert (=> (and vt (<= 0 qn) (< qn 86400)) (= (jlong.sub qn (jlong.mul (jlong.div qn 60) 60)) rs)))
 (assert true)
 (assert true)
 (assert false)
@@ -2993,7 +3003,8 @@
 (assert (=> vt (and (= t (+ (* 1000000000 qn) rn)) (<= 0 rn) (< rn 1000000000))))
 (declare-const q6 Int) (declare-const r6 Int)
 (assert (=> vt (and (= qn (+ (* 60 q6) r6)) (<= 0 r6) (< r6 60))))
-(assert (=> vt (and (= (jlong.div t 1000000000) qn) (= (jlong.sub qn (jlong.mul (jlong.div qn 60) 60)) r6))))
+(assert (=> vt (= (jlong.div t 1000000000) qn)))
+(assert (=> (and vt (<= 0 qn) (< qn 86400)) (= (jlong.sub qn (jlong.mul (jlong.div qn 60) 60)) r6)))
 (assert true)
 (assert true)
 (assert vt)
@@ -3014,7 +3025,8 @@
 (assert (=> vt (and (= t (+ (* 1000000000 qn) rn)) (<= 0 rn) (< rn 1000000000))))
 (declare-const q6 Int) (declare-const r6 Int)
 (assert (=> vt (and (= qn (+ (* 60 q6) r6)) (<= 0 r6) (< r6 60))))
-(assert (=> vt (and (= (jlong.div t 1000000000) qn) (= (jlong.sub qn (jlong.mul (jlong.div qn 60) 60)) r6))))
+(assert (=> vt (= (jlong.div t 1000000000) qn)))
+(assert (=> (and vt (<= 0 qn) (< qn 86400)) (= (jlong.sub qn (jlong.mul (jlong.div qn 60) 60)) r6)))
 (assert true)
 (assert false)
 (assert (not false))
@@ -3033,7 +3045,8 @@
 (assert (=> vt (and (= t (+ (* 1000000000 qn) rn)) (<= 0 rn) (< rn 1000000000))))
 (declare-const q6 Int) (declare-const r6 Int)
 (assert (=> vt (and (= qn (+ (* 60 q6) r6)) (<= 0 r6) (< r6 60))))
-(assert (=> vt (and (= (jlong.div t 1000000000) qn) (= (jlong.sub qn (jlong.mul (jlong.div qn 60) 60)) r6))))
+(assert (=> vt (= (jlong.div t 1000000000) qn)))
+(assert (=> (and vt (<= 0 qn) (< qn 86400)) (= (jlong.sub qn (jlong.mul (jlong.div qn 60) 60)) r6)))
 (assert true)
 (assert (not false))
 (assert (not false))
@@ -3053,7 +3066,8 @@
 (assert (=> vt (and (= t (+ (* 1000000000 qn) rn)) (<= 0 rn) (< rn 1000000000))))
 (declare-const q6 Int) (declare-const r6 Int)
 (assert (=> vt (and (= qn (+ (* 60 q6) r6)) (<= 0 r6) (< r6 60))))
-(assert (=> vt (and (= (jlong.div t 1000000000) qn) (= (jlong.sub qn (jlong.mul (jlong.div qn 60) 60)) r6))))
+(assert (=> vt (= (jlong.div t 1000000000) qn)))
+(assert (=> (and vt (<= 0 qn) (< qn 86400)) (= (jlong.sub qn (jlong.mul (jlong.div qn 60) 60)) r6)))
 (assert true)
 (assert (not false))
 (assert (not false))
@@ -3074,7 +3088,8 @@
 (assert (=> vt (and (= t (+ (* 1000000000 qn) rn)) (<= 0 rn) (< rn 1000000000))))
 (declare-const q6 Int) (declare-const r6 Int)
 (assert (=> vt (and (= qn (+ (* 60 q6) r6)) (<= 0 r6) (< r6 60))))
-(assert (=> vt (and (= (jlong.div t 1000000000) qn) (= (jlong.sub qn (jlong.mul (jlong.div qn 60) 60)) r6))))
+(assert (=> vt (= (jlong.div t 1000000000) qn)))
+(assert (=> (and vt (<= 0 qn) (< qn 86400)) (= (jlong.sub qn (jlong.mul (jlong.div qn 60) 60)) r6)))
 (assert true)
 (assert true)
 (assert false)
