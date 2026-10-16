@@ -1,5 +1,5 @@
 -- VARKA-262 reproducer
--- status: regression
+-- status: known 380
 -- note: seed 20261104 iteration 2199
 -- ansi: true
 -- kind: only the row engine throws: DATETIME_FIELD_OUT_OF_BOUNDS.WITHOUT_SUGGESTION

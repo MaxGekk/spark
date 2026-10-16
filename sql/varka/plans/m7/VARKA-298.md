@@ -246,7 +246,7 @@ stopped six seeds after 2,000 to 2,800 compositions on the multiply and the cond
 met the race of 9.3 twice. The second, with those fixed and the cap lifted but before the review's
 corrections (the period of six), found four disagreements, three of 9.2's kind and one race.
 
-### 9.2 Finding: a fused conjunct hides an earlier residual conjunct's error (proposed row)
+### 9.2 Finding: a fused conjunct hides an earlier residual conjunct's error (VARKA-380)
 
 **A Varka bug, not fixed here.** When Varka splits a filter, the conjuncts it fuses run in the
 `VarkaFilterColumnarToRow` below the row `Filter` that holds the rest. Spark's `Filter` evaluates
@@ -256,11 +256,9 @@ evaluates *before* it and that raises on that row: Spark raises, Varka answers. 
 conditions do this; year-month interval arithmetic raises in every mode, so it happens under
 LEGACY too. It is the mirror of row 273, which gave the fallback the whole condition in Spark's
 order and assumed the raising conjunct is the fused one. Five shrunk reproducers across the census
-runs (three of them found in two runs), each replayed and its plans read. The files, as the suite
-wrote them, are in `m7/VARKA-298-reproducers/` (`<seed>-<iteration>.sql`), to be moved to
-`sql/varka/fuzz/spark/` with their `status: regression` lines changed to `status: known <row>`
-once the row below has a number. Kept here they are not replayed: the replay suite reads only
-`sql/varka/fuzz/spark/`, where a status must name the row that owns the bug:
+runs (three of them found in two runs), each replayed and its plans read. The files are kept as
+`sql/varka/fuzz/spark/varka-380-<seed>-<iteration>.sql` with `status: known 380`, so the replay
+suite requires the disagreement to remain until row 380 fixes it:
 
 * seed 20261105, iteration 291 (ANSI): `SELECT weekofyear(d) AS c0 FROM fz WHERE
   (((12 + l) = 5000000000)) AND (l = l2)` over one row with `l` = -9223372036854775808 and `l2` =
@@ -286,12 +284,8 @@ once the row below has a number. Kept here they are not replayed: the replay sui
   (dt IS NULL OR dt2 IS NULL)`, and Spark raises `INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION` on
   the sum with ANSI off; Varka fuses `dt IS NULL OR dt2 IS NULL`, which rejects the row.
 
-Proposed row: "A fused conjunct runs before a residual conjunct that Spark's optimized `Filter`
-evaluates first, so where that residual conjunct raises (under ANSI, or year-month interval
-arithmetic in any mode) Varka answers and Spark raises (VARKA-298 9.2, five reproducers; the mirror
-of row 273). Decide between fusing only the conjuncts before the first residual one that can
-raise, and evaluating the residual conjuncts first on the batch; save the reproducers under
-`sql/varka/fuzz/spark/` as `known` until then." The fix is open: the first choice gives up fusion
+The owner made it row 380 of `m7/PLAN.md` on 16 October 2026: a wrong answer, so in milestone 7
+under 1.1 point 2. The fix is open: the first choice gives up fusion
 wherever a raising residual conjunct comes first, the second gives up the kernel's row reduction
 for the residual ones.
 
@@ -299,11 +293,13 @@ for the residual ones.
 the day's seed (about 25,000 nested) will meet five or six a night on average and fail its
 `sparkfuzz` step until the row is fixed: a `known` reproducer in `sql/varka/fuzz/spark/` makes the
 replay suite expect the disagreement, but the main test fails on any disagreement it draws, known
-or not, so keeping the files does not keep the nightly green. Either the owner accepts a red
-`sparkfuzz` step until the row lands, or the nightly runs with `-Dvarka.sparkfuzz.nested=false`
-until then; `dev/varka_nightly.sh` is not this task's to change.
+or not, so keeping the files does not keep the nightly green. The owner chose the second of the
+two ways out: the `sparkfuzz` step of `dev/varka_nightly.sh` runs with
+`-Dvarka.sparkfuzz.nested=false` until row 380's fix, whose done-when removes the switch, since a
+red nightly would hide every other regression meanwhile. The PR arm keeps the nested trees: its
+200 compositions at the default seed meet no instance of 380.
 
-### 9.3 Finding: two legitimate errors race across partitions (harness, proposed row)
+### 9.3 Finding: two legitimate errors race across partitions (harness, VARKA-381)
 
 The discovery run's seed 20261106, iteration 4259, and the second run's seed 20261106, iteration
 3861: two outputs that each raise a listed condition on different rows (`d - ym` overflowing,
@@ -319,10 +315,9 @@ the rerun existed failed on composition 203 of that seed, `make_date(2021, i, 1)
 ymm) + ymy`); the PR arm's 200 compositions stop short of it, and the final census met none. A
 deterministic Varka bug that raises the wrong listed condition still fails, since it repeats.
 
-Proposed row: "The Spark-level differential's view has two partitions, so two listed errors on rows
-in different partitions race and the query's error is either one, on either engine (VARKA-298 9.3).
-Make the comparison deterministic - one partition for error cases, or the set of conditions each
-row raises compared instead of the first - and drop the rerun." The view keeps its two partitions
+The owner made it row 381 of `m7/PLAN.md`: the comparison made deterministic (one partition for
+error cases, or the set of conditions each row raises compared instead of the first) and the rerun
+dropped, in milestone 7 because it makes the fuzzer's verdict trustworthy. The view keeps its two partitions
 here: one partition would take the multi-partition, multi-task runs out of every composition.
 
 ### 9.4 The expected-errors list
@@ -346,16 +341,17 @@ six of seven seeds. `DATETIME_OVERFLOW` (2) is not listed, since the grammar doe
    five times with the nested trees and five without, alternating, took 70 to 306 s and 85 to
    432 s, the spread being the load of other agents' builds; by minimums, 70 s with and 85 s
    without. An earlier pair under load 48 read 148 s against 85 s at 200 compositions, which is the
-   machine, not the code. The calibration table in `skills/testing-and-debugging.md` would take a
-   line (predicted 10 to 45%, measured none above the noise); that file is not this task's.
+   machine, not the code. The line is in the calibration table of
+   `skills/testing-and-debugging.md`.
 
 ### 9.6 Left for later
 
-* The two proposed rows of 9.2 and 9.3.
+* Rows 380 and 381, from 9.2 and 9.3.
 * **A widened INT on the long lane** (2): Varka declines every BIGINT choice over an INT operand
   (`greatest(i, l)`, `coalesce(i, l)`, `if(c, i, l)`), and fuses none of BIGINT arithmetic, so a
-  projection that mixes the two lanes falls back whole. A `Cast(int to bigint)` arm on the long
-  lane is the scope item; with the arithmetic it belongs with milestone 8's new numeric types.
+  projection that mixes the two lanes falls back whole. The int-to-long cast is milestone 8's row
+  28 (VARKA-28, lane-width conversion), which this grammar's INT-beside-BIGINT trees will exercise
+  once it lands.
 * **A TIME plus an interval** raises `DATETIME_OVERFLOW` in every mode on both engines and is not
   drawn (2); drawing it needs a value domain that keeps most sums inside the day.
 * The shrink inside a conjunct is skipped under a pivot (a smaller conjunct may take another value

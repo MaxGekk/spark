@@ -1,5 +1,5 @@
 -- VARKA-262 reproducer
--- status: regression
+-- status: known 380
 -- note: seed 20261102 iteration 4775
 -- ansi: true
 -- kind: only the row engine throws: INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION
