@@ -28,7 +28,7 @@
 #
 #   sql/varka/demo/hashmap/run.sh --smoke <spark-home> [<java-home>]
 #
-# The layout is that of ../compiles/run.sh --times.
+# The layout is that of row 258's compiles/run.sh --times (PR #867, branch varka-258).
 
 set -euo pipefail
 name=capacity
