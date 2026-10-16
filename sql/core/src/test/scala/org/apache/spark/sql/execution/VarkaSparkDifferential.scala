@@ -20,6 +20,7 @@ package org.apache.spark.sql.execution
 import java.util.Locale
 
 import scala.jdk.CollectionConverters._
+import scala.jdk.OptionConverters._
 import scala.util.Try
 
 import org.apache.spark.sql.{DataFrame, QueryTest, SparkSession}
@@ -93,16 +94,32 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
   protected var twoPartitionsOnly = 0
 
   /** How a check that met a raise is compared again, `-Dvarka.sparkfuzz.errorRerun`. */
-  protected val errorRerun: ErrorRerun = errorRerunOf(sys.props.get("varka.sparkfuzz.errorRerun"))
+  protected val errorRerun: VarkaErrorRerun =
+    VarkaErrorRerun.fromProperty(sys.props.get(VarkaErrorRerun.PROPERTY).orNull)
 
   /** The counters a check adds to, as they stood at one moment, to be put back. */
   private case class Counters(compared: Int, fused: Int, bothErrored: Int, filtered: Int,
       filteredNonEmpty: Int, pivotFiltered: Int, pivotFilteredNonEmpty: Int, forcedRuns: Int,
-      forcedApplied: Int, errorsSeen: Map[(String, String, String), Int])
+      forcedApplied: Int, comparedAgain: Int, twoPartitionsOnly: Int,
+      errorsSeen: Map[(String, String, String), Int])
 
   private def counters: Counters = Counters(compared, fused, bothErrored, filtered,
     filteredNonEmpty, pivotFiltered, pivotFilteredNonEmpty, forcedRuns, forcedApplied,
-    errorsSeen.toMap)
+    comparedAgain, twoPartitionsOnly, errorsSeen.toMap)
+
+  /**
+   * Runs `body` with every counter of the census put back afterwards, so that the checks a
+   * failure's shrink and replay run are not counted as compositions.
+   */
+  protected def withoutCounting[T](body: => T): T = {
+    val saved = counters
+    try body finally restore(saved)
+  }
+
+  /** The conditions, sides and modes `errorsSeen` counts more of than `before` did. */
+  private def raisedSince(
+      before: Map[(String, String, String), Int]): Set[(String, String, String)] =
+    errorsSeen.collect { case (key, n) if n > before.getOrElse(key, 0) => key }.toSet
 
   private def restore(c: Counters): Unit = {
     compared = c.compared
@@ -114,6 +131,8 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
     pivotFilteredNonEmpty = c.pivotFilteredNonEmpty
     forcedRuns = c.forcedRuns
     forcedApplied = c.forcedApplied
+    comparedAgain = c.comparedAgain
+    twoPartitionsOnly = c.twoPartitionsOnly
     errorsSeen.clear()
     errorsSeen ++= c.errorsSeen
   }
@@ -192,8 +211,9 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
    * both raises whichever condition the first task to fail met. A check in which any query raised
    * is therefore run again as `rerun` says (VARKA-381), and that run's verdict and counts are the
    * check's: what is compared never depends on which task failed first. A difference the first
-   * run showed that does not name a condition and that the rerun does not show is reported too,
-   * prefixed "at two partitions only", since the rerun changes the batches both engines see.
+   * run showed that the rerun does not show is reported too, without a condition a race may have
+   * chosen and prefixed "at two partitions only", since the rerun changes the batches both
+   * engines see (`VarkaErrorRerun.withoutConditions`).
    */
   protected def disagreement(
       fixture: String,
@@ -203,7 +223,7 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
       partitions: Boolean,
       pivot: Option[String] = None,
       forces: Seq[Int] = Nil,
-      rerun: ErrorRerun = errorRerun): Option[String] = {
+      rerun: VarkaErrorRerun = errorRerun): Option[String] = {
     def check(view: DataFrame => DataFrame, pivotHere: Option[String]): Option[String] = {
       cacheFixture(fixture, view)
       try checkOnce(select, where, ansi, partitions, pivotHere, forces) finally uncacheFixture()
@@ -214,32 +234,35 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
     if (!raisedInCheck) {
       first
     } else {
-      comparedAgain += 1
-      val again = rerun match {
-        case OnePartition =>
-          restore(before)
-          check(_.coalesce(1), pivot)
-        case EachRow =>
-          // Each row alone, its own one-row view; the pivot is checked by the first run only,
-          // since a filter rectified to select it says nothing about another row alone. The
-          // census counts the check once, as its first run did, and each condition and side a
-          // row raised once.
-          val afterFirst = counters
-          val raised = scala.collection.mutable.Set.empty[(String, String, String)]
+      // The census counts what the rerun counts, except that a condition, side and mode any run
+      // of the check raised is counted once: one partition raises only the first raising row's
+      // condition, and the first run may have met another, which some row does raise.
+      val raised = scala.collection.mutable.Set.empty[(String, String, String)]
+      raised ++= raisedSince(before.errorsSeen)
+      restore(before.copy(comparedAgain = before.comparedAgain + 1))
+      val again = check(_.coalesce(1), pivot).orElse {
+        if (rerun == VarkaErrorRerun.ONE_PARTITION) None
+        else {
+          // Each row alone, its own one-row view, up to the first that disagrees; the pivot was
+          // checked over the whole rows, and a filter rectified to select it says nothing about
+          // another row alone. These checks add to the census only the conditions they raise.
+          val afterOne = counters
           val rows = spark.sql(fixture).count().toInt
           val found = (0 until rows).iterator.map { k =>
             val seenBefore = errorsSeen.toMap
             val kind = check(_.offset(k).limit(1), None)
-            raised ++= errorsSeen.collect {
-              case (key, n) if n > seenBefore.getOrElse(key, 0) => key
-            }
+            raised ++= raisedSince(seenBefore)
             kind
           }.collectFirst { case Some(kind) => kind }
-          restore(afterFirst.copy(errorsSeen = before.errorsSeen))
-          raised.foreach(key => errorsSeen(key) = errorsSeen.getOrElse(key, 0) + 1)
+          restore(afterOne)
           found
+        }
       }
-      again.orElse(first.flatMap(withoutConditions).map { kind =>
+      raised ++= raisedSince(before.errorsSeen)
+      errorsSeen.clear()
+      errorsSeen ++= before.errorsSeen
+      raised.foreach(key => errorsSeen(key) = errorsSeen.getOrElse(key, 0) + 1)
+      again.orElse(first.flatMap(VarkaErrorRerun.withoutConditions(_).toScala).map { kind =>
         twoPartitionsOnly += 1
         s"at two partitions only, $kind"
       })

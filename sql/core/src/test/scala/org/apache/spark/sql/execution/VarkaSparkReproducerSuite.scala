@@ -38,13 +38,13 @@ class VarkaSparkReproducerSuite extends VarkaSparkDifferential {
 
   /**
    * Why the reproducer is not what its status says, or None when it is. A check that raises is
-   * compared again over one partition whatever `-Dvarka.sparkfuzz.errorRerun` says: that is the
-   * arm a reproducer's kind was found and written under, and the per-row arm's one-row batches
-   * can change the kind (VARKA-381.md 9).
+   * compared again under the arm the reproducer was found under, which its note names when it is
+   * not the default (`VarkaErrorRerun.ofNote`), whatever `-Dvarka.sparkfuzz.errorRerun` says:
+   * the per-row arm's one-row batches can show a kind the default does not.
    */
   private def verdict(r: Reproducer): Option[String] = {
     val now = disagreement(r.fixture, r.select, r.where, r.ansi, partitions = true, r.pivot,
-      r.force.toSeq, rerun = OnePartition)
+      r.force.toSeq, rerun = VarkaErrorRerun.ofNote(r.note))
     if (r.status == "regression") {
       now.map(kind => s"a regression disagrees again: $kind")
     } else if (!r.status.startsWith("known ")) {
