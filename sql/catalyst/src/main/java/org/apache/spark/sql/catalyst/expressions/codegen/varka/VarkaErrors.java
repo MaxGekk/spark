@@ -16,6 +16,7 @@
  */
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import java.util.Arrays;
 import java.util.function.Supplier;
 
 import javax.annotation.Nullable;
@@ -26,6 +27,7 @@ import org.apache.spark.QueryContext;
 import org.apache.spark.SparkIllegalArgumentException;
 import org.apache.spark.SparkIllegalStateException;
 import org.apache.spark.SparkThrowable;
+import org.apache.spark.SparkUnsupportedOperationException;
 
 /**
  * Varka's broken invariants as Spark's {@code INTERNAL_ERROR} (VARKA-314): a bug in Varka that a
@@ -52,7 +54,10 @@ import org.apache.spark.SparkThrowable;
  * </pre>
  *
  * <p>The record's {@code cause} becomes the exception's cause, so the original stack trace is
- * kept.
+ * kept. A site deep in the compiler, the IR or the emitter knows only its own invariant, so it
+ * raises the error without a record ({@link #illegalArgument(String)} and its siblings), and the
+ * catch that knows more - the compiler's planning catch, an evaluator's fallback catch - adds the
+ * record around it ({@link #planningFailure}, {@link #siteText}).
  */
 public final class VarkaErrors {
 
@@ -66,17 +71,96 @@ public final class VarkaErrors {
   public static final String REPORT = "This is a bug in Varka, Spark's vectorized code generator."
       + " Please report it with this message and the full stack trace.";
 
+  /**
+   * A broken argument invariant as {@code INTERNAL_ERROR}, an {@link IllegalArgumentException},
+   * from a site that has no record to give: a planning-time or fallback catch adds one around it.
+   */
+  public static SparkIllegalArgumentException illegalArgument(String what) {
+    return illegalArgument(what, null);
+  }
+
   /** A broken argument invariant as {@code INTERNAL_ERROR}, an {@link IllegalArgumentException}. */
   public static SparkIllegalArgumentException illegalArgument(
       String what, @Nullable VarkaErrorContext ctx) {
-    return new SparkIllegalArgumentException(INTERNAL_ERROR, parameters(what, ctx), cause(ctx));
+    return atSite(
+        new SparkIllegalArgumentException(INTERNAL_ERROR, parameters(what, ctx), cause(ctx)));
+  }
+
+  /**
+   * A broken state invariant as {@code INTERNAL_ERROR}, an {@link IllegalStateException}, from a
+   * site that has no record to give: a planning-time or fallback catch adds one around it.
+   */
+  public static SparkIllegalStateException illegalState(String what) {
+    return illegalState(what, (VarkaErrorContext) null);
+  }
+
+  /**
+   * A broken state invariant found by catching {@code cause}, as {@code INTERNAL_ERROR}, an
+   * {@link IllegalStateException} whose cause it is, from a site that has no record to give.
+   */
+  public static SparkIllegalStateException illegalState(String what, Throwable cause) {
+    return state(what, null, cause);
   }
 
   /** A broken state invariant as {@code INTERNAL_ERROR}, an {@link IllegalStateException}. */
   public static SparkIllegalStateException illegalState(
       String what, @Nullable VarkaErrorContext ctx) {
-    return new SparkIllegalStateException(INTERNAL_ERROR, parameters(what, ctx),
-        new QueryContext[0], cause(ctx), Option.empty());
+    return state(what, ctx, cause(ctx));
+  }
+
+  private static SparkIllegalStateException state(
+      String what, @Nullable VarkaErrorContext ctx, @Nullable Throwable cause) {
+    return atSite(new SparkIllegalStateException(INTERNAL_ERROR, parameters(what, ctx),
+        new QueryContext[0], cause, Option.empty()));
+  }
+
+  /**
+   * An operation a Varka type does not support, reached anyway, as {@code INTERNAL_ERROR}, an
+   * {@link UnsupportedOperationException}: a kernel called through the entry point of the other
+   * lane width, or a class-file attribute mapper used in the direction it does not serve. Spark's
+   * carrier of that type takes no cause, and no such site has a record to give.
+   */
+  public static SparkUnsupportedOperationException unsupportedOperation(String what) {
+    return atSite(
+        new SparkUnsupportedOperationException(INTERNAL_ERROR, parameters(what, null)));
+  }
+
+  /**
+   * {@code e} with this class's own frames taken off the top of its stack trace, so the trace
+   * starts at the site that raised it, as a {@code throw new} there would have: a reader and a
+   * once-per-site log key ({@code VarkaSizeAdmission}'s) both read the top frame as the site.
+   */
+  private static <T extends Throwable> T atSite(T e) {
+    StackTraceElement[] frames = e.getStackTrace();
+    int top = 0;
+    String self = VarkaErrors.class.getName();
+    while (top < frames.length && frames[top].getClassName().equals(self)) {
+      top++;
+    }
+    if (top > 0) {
+      e.setStackTrace(Arrays.copyOfRange(frames, top, frames.length));
+    }
+    return e;
+  }
+
+  /**
+   * The site's own text of {@code e} when {@code e} is an internal error a Varka site raised
+   * without a record, or null for anything else - an exception of another origin, or one that
+   * already carries a record. The planning catch wraps such an error with the record its site
+   * could not build, and a record renders it as its cause by this text, so the condition's
+   * framing and the request to report it are not repeated inside the message that has them.
+   */
+  public static @Nullable String siteText(@Nullable Throwable e) {
+    if (!(e instanceof SparkThrowable st) || !INTERNAL_ERROR.equals(st.getCondition())) {
+      return null;
+    }
+    String message = st.getMessageParameters().get("message");
+    String tail = "\n" + REPORT;
+    if (message == null || !message.endsWith(tail)
+        || message.contains("\n" + VarkaErrorContext.HEAD)) {
+      return null;
+    }
+    return message.substring(0, message.length() - tail.length());
   }
 
   /**
@@ -85,12 +169,15 @@ public final class VarkaErrors {
    * record, of {@code e}'s type where a carrier exists - an {@link IllegalArgumentException} stays
    * one, and any other runtime exception (an {@link IllegalStateException}, and the bugs no
    * carrier matches, such as a {@link NullPointerException}) becomes an
-   * {@link IllegalStateException}. Returned unchanged: an exception that already carries a
-   * condition, and the emitter's designed decline, which is control flow.
+   * {@link IllegalStateException}. An internal error a Varka site raised without a record
+   * ({@link #siteText}) is wrapped the same way, its site's error the cause. Returned unchanged:
+   * any other exception that carries a condition (a user's error Catalyst raised while the
+   * compiler folded a constant, or a Varka error that already has its record), and the emitter's
+   * designed decline, which is control flow.
    */
   public static RuntimeException planningFailure(
       RuntimeException e, Supplier<String> identity, VarkaEmitOptions options) {
-    if (e instanceof SparkThrowable || e instanceof VarkaEmitDeclined) {
+    if (e instanceof VarkaEmitDeclined || (e instanceof SparkThrowable && siteText(e) == null)) {
       return e;
     }
     var ctx = new VarkaErrorContext(VarkaErrorContext.PLANNING,

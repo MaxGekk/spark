@@ -33,7 +33,7 @@ import org.apache.spark.sql.internal.SQLConf
  * Where the projection is fused into [[VarkaColumnarToRowExec]], the SIMD kernels must actually
  * process the Arrow batches; where it is not, the plan must be untouched.
  */
-class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions with VarkaTestWatchdog {
+class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaTestWatchdog {
 
   private def metaspaceUsed(): Long = {
     java.lang.management.ManagementFactory.getMemoryPoolMXBeans.asScala.collect {
@@ -384,10 +384,9 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions with Var
         withAnsi(ansi) {
           val plan = varkaSpark.sql(q).queryExecution.executedPlan
           assertFused(plan)
-          val expected = intercept[SparkArithmeticException](spark.sql(q).collect())
-          val actual = intercept[SparkArithmeticException](varkaSpark.sql(q).collect())
-          assert(actual.getCondition === expected.getCondition, s"ansi=$ansi")
-          assert(actual.getMessage === expected.getMessage, s"ansi=$ansi")
+          withClue(s"ansi=$ansi") {
+            checkSparkRaisesTheSame[SparkArithmeticException](q)
+          }
         }
       }
     } finally {
@@ -449,11 +448,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions with Var
       // answer rather than an exception, so the assertion still has teeth.
       assert(declined(producerTaken) > 0L,
         "VARKA-52's producer: the far offsets are in the taken arm, so the batch must decline")
-      for (session <- Seq(spark, varkaSpark)) {
-        intercept[SparkArithmeticException] {
-          session.sql(arithTaken).collect()
-        }
-      }
+      checkSparkRaisesTheSame[SparkArithmeticException](arithTaken)
     } finally {
       Seq(spark, varkaSpark).foreach { s =>
         s.catalog.uncacheTable("varka_dates_far_offset")
@@ -913,10 +908,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions with Var
     }
     try {
       val q = "SELECT d + CAST(off AS INTERVAL DAY) AS a FROM varka_far_interval ORDER BY a"
-      val expected = intercept[SparkArithmeticException](spark.sql(q).collect())
-      val actual = intercept[SparkArithmeticException](varkaSpark.sql(q).collect())
-      assert(actual.getCondition === expected.getCondition)
-      assert(actual.getMessage === expected.getMessage)
+      checkSparkRaisesTheSame[SparkArithmeticException](q)
     } finally {
       Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_far_interval"))
     }
@@ -1311,10 +1303,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions with Var
         "SELECT make_date(y, m, dd) AS a FROM varka_date_parts WHERE d IS NOT NULL ORDER BY a",
         expectFused = true)
       val q = "SELECT make_date(y, m, dd) AS a FROM varka_date_parts ORDER BY a"
-      val expected = intercept[SparkDateTimeException](spark.sql(q).collect())
-      val actual = intercept[SparkDateTimeException](varkaSpark.sql(q).collect())
-      assert(actual.getCondition === expected.getCondition)
-      assert(actual.getMessage === expected.getMessage)
+      checkSparkRaisesTheSame[SparkDateTimeException](q)
     }
   }
 
@@ -1644,10 +1633,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions with Var
       // The whole table: the leaf declines the batch on the first non-name and the row engine
       // raises ILLEGAL_DAY_OF_WEEK for the same row, so the two errors are one error.
       val q = "SELECT next_day(d, s) AS a FROM varka_dates_weekday ORDER BY a"
-      val expected = intercept[SparkIllegalArgumentException](spark.sql(q).collect())
-      val actual = intercept[SparkIllegalArgumentException](varkaSpark.sql(q).collect())
-      assert(actual.getCondition === expected.getCondition)
-      assert(actual.getMessage === expected.getMessage)
+      checkSparkRaisesTheSame[SparkIllegalArgumentException](q)
       // The rule that decided the route (VARKA-59.md 2): a non-name beside a null date is
       // NULL under ANSI, because the row engine never parses it. The leaf sees the non-name,
       // declines, and the row engine answers - counted as a decline, never as a failure.
@@ -1711,16 +1697,10 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions with Var
       // The kernel's sign test condemns the batch, the row engine recomputes it and raises
       // ARITHMETIC_OVERFLOW for the same row: one error, from two engines.
       val q = "SELECT big + i AS a FROM varka_ints_overflow ORDER BY a"
-      val expected = intercept[SparkArithmeticException](spark.sql(q).collect())
-      val actual = intercept[SparkArithmeticException](varkaSpark.sql(q).collect())
-      assert(actual.getCondition === expected.getCondition)
-      assert(actual.getMessage === expected.getMessage)
+      checkSparkRaisesTheSame[SparkArithmeticException](q)
       // Negation overflows on exactly one value, and the same holds there.
-      val nq = "SELECT -big AS a FROM varka_ints_overflow ORDER BY a"
-      val nExpected = intercept[SparkArithmeticException](spark.sql(nq).collect())
-      val nActual = intercept[SparkArithmeticException](varkaSpark.sql(nq).collect())
-      assert(nActual.getCondition === nExpected.getCondition)
-      assert(nActual.getMessage === nExpected.getMessage)
+      checkSparkRaisesTheSame[SparkArithmeticException](
+        "SELECT -big AS a FROM varka_ints_overflow ORDER BY a")
     }
   }
 
@@ -1751,12 +1731,9 @@ class VarkaDifferentialSuite extends QueryTest with VarkaSharedSessions with Var
           // the batch so the row engine can raise. This is the row that would go silent.
           ("SELECT datediff(date_add(d, 2147483647), d) + 1 AS a FROM varka_dates ORDER BY a",
             true))) {
-        val expected = intercept[SparkArithmeticException](spark.sql(q).collect())
         val plan = varkaSpark.sql(q).queryExecution.executedPlan
         if (fused) assertFused(plan) else assertNotFused(plan)
-        val actual = intercept[SparkArithmeticException](varkaSpark.sql(q).collect())
-        assert(actual.getCondition === expected.getCondition, q)
-        assert(actual.getMessage === expected.getMessage, q)
+        checkSparkRaisesTheSame[SparkArithmeticException](q)
       }
     }
     withAnsi(false) {
