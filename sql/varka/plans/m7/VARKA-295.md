@@ -801,3 +801,11 @@ with two different error classes (`CAST_OVERFLOW` against `INTERVAL_ARITHMETIC_O
 fixture's `y = 2147483647` row overflows both `ymy` and `ym`, and which error a side raises depends
 on whether the view's unused column is computed (the cached no-batch side) or pruned (the row
 engine). That is the fixture's own flaw, separate from the warm-up, and is not fixed here.
+
+**Correction to 9.8 (VARKA-373, 16 October 2026).** 9.8 says the machine's preferred species is 256
+bits. It is 512 (`S_512_BIT`, 16 int lanes) on this host, so the "16 lanes" cell of the table is the
+preferred species itself and 4 lanes is two steps below it. The 4-lane releases come from a
+per-bytecode trap count at `IntVector.add` bci 5, not from 9.6's compile-wide sums, and warming the
+narrower species does not clear them; with `-XX:MaxVectorSize=16` (a 128-bit preferred species) the
+warm-up does nothing either. `VARKA-373.md` 2 and 9 have the logs' classification and the numbers.
+
