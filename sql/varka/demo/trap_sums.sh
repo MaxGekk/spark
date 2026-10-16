@@ -40,24 +40,34 @@
 #   sql/varka/demo/trap_sums.sh --compositions 400 --runs 1   # the post's 400-composition arm
 #
 # --keep replays the defaults arm with -XX:+LogCompilation until a replay releases, keeps that
-# replay's log (about 100 MB; at most 30 tries, --keep-tries N), and prints the line of each
-# compile of a Varka kernel where C2 found too many class-check traps, the line the post quotes:
+# replay's log (about 100 MB; at most 30 tries, --keep-tries N), and prints, for each compile of
+# a Varka kernel where C2 found too many class-check traps, the line with the largest sum, the
+# kind of line the post quotes:
 #
-#   <observe trap='class_check' count='0' mcount='0' ccount='254'/>
+#   <observe trap='class_check' count='0' mcount='0' ccount='1100'/>
 #
 # ccount is the compile-wide sum of class-check traps, against PerMethodTrapLimit (100 by
-# default). A replay that compiles clean has no such line in its kernel's compiles. The limits'
-# defaults on your JVM: java -XX:+PrintFlagsFinal -version | grep -E 'PerMethod(Trap|Recomp)'.
+# default). It then replays the stock arm once with the same log and runs the same check on it,
+# which finds no such line in a kernel's compiles. The limits' defaults on your JVM:
+# java -XX:+PrintFlagsFinal -version | grep -E 'PerMethod(Trap|Recomp)'.
 #
 # --compositions K runs compositions 0 to K-1 in one JVM per replay instead of the prefix and
-# composition 220, as the counts the post quotes for 500 and 1,000 warm-ups were taken.
+# composition 220, as the counts the post quotes for 500 and 1,000 warm-ups were taken; each
+# replay's line then ends with its warm-up verdicts (COMPILED n, RELEASED n).
+#
+# The compositions are drawn from sql/varka/coverage.json, so a change to it can change which
+# expressions composition 0 and 220 are. The script first runs one JVM (about half a minute)
+# that prints both and stops unless they are the ones above, which they are from commit
+# 81aad3b42fa, where the post's counts were taken, to 57cf25f8c98 at least. In the replays of 0
+# and 220 it names any released kernel other than 220's (shape w7fd4deef67312f01); there was
+# none in the post's counts.
 #
 # The first run builds sql's test classes and exports the test classpath with
 # dev/varka_matrix.sh --module sql --list (tens of minutes on a cold checkout); --skip-build
 # reuses it. Results go to target/varka-demo/trap_sums/ unless --out names another directory;
 # status.tsv there has one line per replay (arm, replay, the JVM's exit status, releases,
-# seconds), and the script exits 1 when every replay of an arm failed. It needs Linux (taskset
-# for --cpus) and bash 4.4 or later.
+# seconds, warm-up verdicts), and the script exits 1 when every replay of an arm failed. It
+# needs Linux (taskset for --cpus) and bash 4.4 or later.
 #
 # Written on JDK 25.0.4 at a 512-bit preferred vector species. The release depends on the JIT's
 # profile history, so on another JDK or vector width the rates differ; on x86 where the preferred
@@ -67,7 +77,7 @@ set -uo pipefail
 
 usage() { awk 'NR >= 18 && !/^#/ { exit } NR >= 18 { sub(/^# ?/, ""); print }' "$0"; }
 caller=$(pwd)
-cd "$(dirname "$0")/../../.."
+cd "$(dirname "$0")/../../.." || exit 1
 ROOT=$(pwd)
 runs=20
 cpus=""
@@ -100,17 +110,19 @@ fi
 # Another script can leave catalyst's classpath there (dev/varka_deopt_census.sh does).
 grep -q 'sql/core/target' "$BUILD/classpath" || {
   echo "the classpath in $BUILD is not sql's; run without --skip-build" >&2; exit 1; }
-CP=$ROOT/sql/catalyst/target/scala-2.13/classes:$(cat "$BUILD/classpath")
+CP=$(cat "$BUILD/classpath")
 mapfile -t OPTS < "$BUILD/jvm.opts"
 pin=()
 [ -n "$cpus" ] && pin=(taskset -c "$cpus")
 TRAP_LIMITS=(-XX:PerMethodTrapLimit=100000 -XX:PerMethodRecompilationCutoff=100000)
 mkdir -p "$out"
 
+SHAPE=w7fd4deef67312f01
 # replay <dir> <JVM option>...: one replay in a fresh JVM, its ScalaTest report in <dir>/run.log.
+# Later options win, so an option given here overrides the workload's.
 replay() {
   local dir=$1; shift
-  local workload=(-Dvarka.sparkfuzz.warmupSet=0,220)
+  local workload=("-Dvarka.sparkfuzz.warmupSet=0,220")
   [ "$compositions" -gt 0 ] && workload=(-Dvarka.sparkfuzz.warmupIterations="$compositions")
   rm -rf "$dir"; mkdir -p "$dir/tmp"
   (cd "$dir" && SPARK_TESTING=1 SPARK_SCALA_VERSION=2.13 "${pin[@]}" java "${OPTS[@]}" \
@@ -131,41 +143,103 @@ released() {
   grep -c 'a kernel was released at the deadline' "$1/run.log"
 }
 
+# verdicts <dir>: the replay's warm-up verdicts, e.g. "COMPILED 505, RELEASED 29", and how many
+# of the releases came before the deadline when any did.
+verdicts() {
+  local line='^.*warm-up verdicts: \(.*\), of the releases \([0-9]*\) before the deadline.*$'
+  sed -n "s/$line/\\1|\\2/p" "$1/run.log" | tail -1 |
+    awk -F'|' '{ printf "%s%s\n", $1, ($2 > 0 ? ", " $2 " of them before the deadline" : "") }'
+}
+
+# others <dir>: in a replay of 0 and 220, the shapes of the kernels released at the deadline other
+# than 220's. Every release the post counts was 220's; another one is worth a look at the
+# replay's report, which is kept, though it does not by itself mean the compositions changed (a
+# change to the emitter renames a shape too).
+others() {
+  [ "$compositions" -gt 0 ] && return
+  local shapes
+  shapes=$(sed -n 's/^.*released at the deadline.*shapeHash=\(w[0-9a-f]*\).*$/\1/p' "$1/run.log")
+  grep -v "^$SHAPE\$" <<< "$shapes" | sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+
 # One line per compile of a kernel method (a class named for its shape, VarkaFused*_w<hash>)
 # in which C2 found the compile-wide class-check sum too high: the compile id, the method, how
-# many of its trap checks the sum decided, and the first such <observe> line. HotSpot writes
-# that form, with mcount and ccount, only when the sum is at the limit.
+# many of its trap checks the sum decided, and the <observe> line with the largest sum. HotSpot
+# writes that form, with mcount and ccount, only when the sum is at the limit.
 observed() {
   awk 'function flush() {
-         if (n > 0) printf "compile %s %s: at the limit in %d checks, the first %s\n",
-           id, name, n, first
-         n = 0 }
+         if (n > 0) printf "compile %s %s: at the limit in %d checks, the largest %s\n",
+           id, name, n, top
+         n = 0; most = -1 }
        /<task / { flush(); name = ""
          if ($0 ~ /VarkaFused[A-Za-z]*_w/) {
            match($0, /method=\047[^(\047]*/); name = substr($0, RSTART + 8, RLENGTH - 9)
            match($0, /compile_id=\047[0-9]*/); id = substr($0, RSTART + 12, RLENGTH - 12) } }
        /<\/task>/ { flush(); name = "" }
        name != "" && /<observe trap=.class_check. .*ccount=/ {
-         if (n++ == 0) { first = $0; sub(/^[ \t]*/, "", first) } }
+         n++; match($0, /ccount=\047[0-9]*/); c = substr($0, RSTART + 8, RLENGTH - 8) + 0
+         if (c > most) { most = c; top = $0; sub(/^[ \t]*/, "", top) } }
        END { flush() }' "$1"
 }
 
+# The compositions the replay of 0 and 220 stands for, as -Dvarka.sparkfuzz.warmupShow prints
+# them at seed 20261008. A change to coverage.json can redraw them; the replay then means nothing.
+declare -A EXPECT=([0]="outputs Vector(abs(ym)), filter Vector() OR")
+EXPECT[220]="outputs Vector(d - ym, year(d) + i, ym - ymm, t - t2),"
+EXPECT[220]+=" filter Vector(dt < INTERVAL '0' SECOND) OR"
+echo "== checking that compositions 0 and 220 at seed 20261008 are the replayed ones"
+replay "$out/check" "-Dvarka.sparkfuzz.warmupSet=0,220" -Dvarka.sparkfuzz.warmupShow=true
+[ "$(released "$out/check")" = failed ] && {
+  echo "the check's replay failed; its log is $out/check/run.log" >&2; exit 1; }
+for it in 0 220; do
+  got=$(sed -n "s/^.*iteration $it: outputs \(.*[^ ]\) *$/outputs \1/p" "$out/check/run.log" \
+    | head -1)
+  [ "$got" = "${EXPECT[$it]}" ] || {
+    printf 'composition %s at seed 20261008 is not the replayed one:\n' "$it" >&2
+    printf '  expected: %s\n  found:    %s\n' "${EXPECT[$it]}" "$got" >&2
+    echo "the post's compositions are those of commit 57cf25f8c98 of vecbricks/varka" >&2
+    exit 1; }
+done
+rm -rf "$out/check"
+
+LOG=(-XX:+UnlockDiagnosticVMOptions -XX:+LogCompilation)
 if [ "$keep" = 1 ]; then
+  rm -rf "$out"/keep-*
+  fails=0
   for try in $(seq 1 "$keep_tries"); do
-    dir=$out/keep
-    replay "$dir" -Dvarka.warmup.vectorTemplates=false -XX:+UnlockDiagnosticVMOptions \
-      -XX:+LogCompilation -XX:LogFile="$dir/hotspot.xml"
+    dir=$out/keep-$try
+    replay "$dir" -Dvarka.warmup.vectorTemplates=false "${LOG[@]}" -XX:LogFile="$dir/hotspot.xml"
     n=$(released "$dir")
     echo "replay $try: released $n"
-    if [ "$n" != failed ] && [ "$n" -gt 0 ]; then
+    if [ "$n" = failed ]; then
+      # A failed replay keeps its report, without its JIT log.
+      fails=$((fails + 1)); rm -f "$dir/hotspot.xml"; continue
+    fi
+    o=$(others "$dir")
+    [ -n "$o" ] && echo "  released kernels other than composition 220's: $o"
+    if [ "$n" -gt 0 ]; then
       grep 'a kernel was released at the deadline' "$dir/run.log" | cut -c1-200
       echo "JIT log kept: $dir/hotspot.xml"
       echo "class-check sums at the limit in Varka kernels' compiles:"
       observed "$dir/hotspot.xml"
+      clean=$out/keep-stock
+      replay "$clean" "${LOG[@]}" -XX:LogFile="$clean/hotspot.xml"
+      n=$(released "$clean")
+      [ "$n" = failed ] && {
+        echo "the stock replay failed; its log is $clean/run.log" >&2; exit 1; }
+      echo "the same check on one stock replay with the log ($n released, $(verdicts "$clean")," \
+        "JIT log kept: $clean/hotspot.xml):"
+      lines=$(observed "$clean/hotspot.xml")
+      echo "${lines:-none}"
       exit 0
     fi
+    rm -rf "$dir"
   done
-  echo "no release in $keep_tries replays" >&2
+  if [ "$fails" = "$keep_tries" ]; then
+    echo "every one of $keep_tries replays failed; their reports are in $out/keep-*" >&2
+  else
+    echo "no release in $keep_tries replays, $fails of them failed (reports in $out/keep-*)" >&2
+  fi
   exit 1
 fi
 
@@ -173,7 +247,7 @@ arms=("defaults" "trap limits" "stock")
 declare -A total=() releasing=() failed=()
 for arm in "${arms[@]}"; do total[$arm]=0; releasing[$arm]=0; failed[$arm]=0; done
 start=$(date +%s)
-printf 'arm\treplay\texit\treleased\tseconds\n' > "$out/status.tsv"
+printf 'arm\treplay\texit\treleased\tseconds\tverdicts\n' > "$out/status.tsv"
 for r in $(seq 1 "$runs"); do
   for arm in "${arms[@]}"; do
     case "$arm" in
@@ -185,8 +259,11 @@ for r in $(seq 1 "$runs"); do
     t0=$(date +%s)
     replay "$dir" "${args[@]}"
     n=$(released "$dir")
-    printf '%s\t%d\t%s\t%s\t%d\n' "$arm" "$r" "$(cat "$dir/exit")" "$n" \
-      $(( $(date +%s) - t0 )) >> "$out/status.tsv"
+    v=$(verdicts "$dir")
+    printf '%s\t%d\t%s\t%s\t%d\t%s\n' "$arm" "$r" "$(cat "$dir/exit")" "$n" \
+      $(( $(date +%s) - t0 )) "$v" >> "$out/status.tsv"
+    o=""
+    [ "$n" = failed ] || o=$(others "$dir")
     if [ "$n" = failed ]; then
       failed[$arm]=$((failed[$arm] + 1))
     else
@@ -195,8 +272,9 @@ for r in $(seq 1 "$runs"); do
       # A replay's report is kept only when it released, so the directory stays small.
       [ "$n" -gt 0 ] || rm -rf "$dir"
     fi
-    printf '%-12s replay %3d: %s released at the deadline, %d s\n' \
-      "$arm" "$r" "$n" $(( $(date +%s) - t0 ))
+    printf '%-12s replay %3d: %s released at the deadline, %d s%s\n' \
+      "$arm" "$r" "$n" $(( $(date +%s) - t0 )) "$([ "$compositions" -gt 0 ] && [ -n "$v" ] && echo " ($v)")"
+    [ -n "$o" ] && echo "  released kernels other than composition 220's: $o (see $dir/run.log)"
   done
 done
 
