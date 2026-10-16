@@ -1,7 +1,8 @@
 # Why a warmed Vector API kernel can still allocate
 
-*Draft for row 371, 16 October 2026. Every number is from `VARKA-295.md` 9.5 to 9.8 and
-`VARKA-373.md`; measured on JDK 25.0.4 on an AMD Zen 5 laptop at 512-bit vectors.*
+*Draft for row 371, 16 October 2026. Every number is from `VARKA-295.md` 9.5 to 9.8,
+`VARKA-370.md` 9, `VARKA-373.md` and `sql/varka/demo/trap_sums-laptop-jdk25-output.txt`; measured
+on JDK 25.0.4 on an AMD Zen 5 laptop at 512-bit vectors.*
 
 Varka compiles Spark SQL expressions into Java Vector API kernels. A kernel is warmed before it
 serves a query: compiled by C2, checked to run without allocating, and only then handed real
@@ -69,9 +70,15 @@ Raise both limits: with `-XX:PerMethodTrapLimit=100000 -XX:PerMethodRecompilatio
 cutoff alone left 3 to 11, and raising the per-method and per-bytecode trap limits together caused
 a deoptimization cycle instead.
 
-They are an operator's choice, not a program's. None of the three limits is a manageable flag, so
-`HotSpotDiagnosticMXBean.setVMOption` and `jcmd VM.set_flag` refuse them, and compiler directives
-have no option for them. WhiteBox can set them, but only with two startup options and a jar.
+Raising the limits is an operator's choice: none of the three is a manageable flag, compiler
+directives have no option for them, and WhiteBox needs two startup options and a jar. Throwing the
+counts away is within a program's reach: on JDK 25 a JVM can load a Java agent into itself
+through its own `DiagnosticCommand` MBean, and redefining the Vector API classes with their own
+bytes gives every method an empty profile. One such reset a minute into the run took the releases
+from 58 and 68 to 1 and 0. It is not a fix: it deoptimizes every method that inlined a vector
+class, the counts are back within half a minute, it prints a warning that the JDK says will become
+a refusal, and at 4 lanes it only halved the releases. Warming the shared templates first remains
+the remedy.
 
 ## What a library can do
 
@@ -94,7 +101,12 @@ limits above remove the problem outright.
 
 ## Reproducing it
 
-The replay is the warm-up arm of Varka's composition fuzzer over one prefix and one composition,
-with the JIT's log on; the release rate is a few per cent, so run it 1,000 times and count. [The
-command
-line and the script go in `sql/varka/demo/` before publication; row 371 owes them.]
+The replay is the warm-up arm of Varka's composition fuzzer over one prefix and one composition:
+`abs` over a year-month interval, then the kernel above, each replay in a fresh JVM. From a Varka
+checkout, `sql/varka/demo/trap_sums.sh --runs 100` runs it 100 times with Varka's template warm-up
+off, 100 with the two options added, and 100 as Varka ships, and counts the releases. On our
+laptop that took 2 hours 40 minutes on 3 cores and released 77, 0 and 0, every one the same
+kernel; `--compositions 400` gave 29, 0 and 0 in the 400-composition arm the counts above come
+from. `--keep` replays until one releases, keeps its `-XX:+LogCompilation` log, and prints the
+`<observe ... ccount=.../>` line of each of the kernel's compiles; a clean replay's log has none.
+The run is in `sql/varka/demo/trap_sums-laptop-jdk25-output.txt`.

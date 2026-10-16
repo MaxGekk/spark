@@ -1,0 +1,47 @@
+Output of trap_sums.sh on the development laptop, not a runner, 16 October 2026.
+commit:  4a63b9c7678 (the script's first commit, on master 81aad3b42fa); classes built from it
+cpu:     AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M, 512-bit preferred vector species
+java:    openjdk version "25.0.4.1" 2026-08-18
+flags:   PerMethodTrapLimit = 100, PerMethodRecompilationCutoff = 400 (the defaults)
+pinned:  --cpus 6-8, one JVM at a time; the load average was 5 to 45 from other work on the
+         machine's other cores
+
+$ sql/varka/demo/trap_sums.sh --skip-build --cpus 6-8 --runs 100
+(the 300 per-replay lines are left out; every release was composition 220's kernel,
+shape w7fd4deef67312f01)
+
+seed 20261008, composition 0 then 220, 100 replays per arm, 9577 s
+arm           replays with a release        releases at the deadline
+defaults      77 of 100                     77
+trap limits   0 of 100                      0
+stock         0 of 100                      0
+
+$ sql/varka/demo/trap_sums.sh --skip-build --cpus 6-8 --runs 1 --compositions 400
+defaults     replay   1: 29 released at the deadline, 587 s
+trap limits  replay   1: 0 released at the deadline, 316 s
+stock        replay   1: 0 released at the deadline, 222 s
+
+seed 20261008, compositions 0 to 399, 1 replays per arm, 1125 s
+arm           replays with a release        releases at the deadline
+defaults      1 of 1                        29
+trap limits   0 of 1                        0
+stock         0 of 1                        0
+
+(the defaults replay's verdicts: COMPILED 505, RELEASED 29, none before the deadline)
+
+$ sql/varka/demo/trap_sums.sh --skip-build --cpus 6-8 --keep
+replay 1: released 1
+  + iteration 220: a kernel was released at the deadline without its verdict: Outcome[shapeHash=w7fd4deef67312f01, state=RELEASED, calls=23068, rows=8653568, queuedNanos=3401255, runNanos=10041446214,
+JIT log kept: target/varka-demo/trap_sums/keep/hotspot.xml
+(the four lines below are re-read from that log by the script as committed, whose summary
+wording changed after the run; the numbers are the run's)
+class-check sums at the limit in Varka kernels' compiles:
+compile 14547 org.apache.spark.sql.varka.execution.VarkaFusedProjection_w7fd4deef67312f01 loopDense0: at the limit for 602 calls, the first <observe trap='class_check' count='0' mcount='0' ccount='100'/>
+compile 14550 org.apache.spark.sql.varka.execution.VarkaFusedProjection_w7fd4deef67312f01 loopMasked0: at the limit for 737 calls, the first <observe trap='class_check' count='0' mcount='0' ccount='100'/>
+compile 14563 org.apache.spark.sql.varka.execution.VarkaFusedProjection_w7fd4deef67312f01 epilogueDense0: at the limit for 757 calls, the first <observe trap='class_check' count='0' mcount='0' ccount='100'/>
+compile 14564 org.apache.spark.sql.varka.execution.VarkaFusedProjection_w7fd4deef67312f01 epilogueMasked0: at the limit for 892 calls, the first <observe trap='class_check' count='0' mcount='0' ccount='100'/>
+
+A replay of the stock arm with the same log (Varka's template warm-up on, COMPILED 3) has no
+<observe ... ccount=.../> line anywhere: 101 class-check observations, none of a compile-wide sum.
+With -XX:+LogCompilation on, the defaults arm released in 6 of 6 replays here, against 77 of 100
+without it. Why was not examined; the log is for seeing a release, the counts are taken without.

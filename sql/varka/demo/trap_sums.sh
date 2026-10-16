@@ -121,11 +121,11 @@ released() {
 
 # One line per compile of a kernel method (a class named for its shape, VarkaFused*_w<hash>)
 # in which C2 found the compile-wide class-check sum too high: the compile id, the method, how
-# many call sites it found it at, and the first such <observe> line. HotSpot writes that form,
+# many calls it decided, and the first such <observe> line. HotSpot writes that form,
 # with mcount and ccount, only when the sum decides a call site.
 observed() {
   awk 'function flush() {
-         if (n > 0) printf "compile %s %s: over the limit at %d calls, the first %s\n",
+         if (n > 0) printf "compile %s %s: at the limit for %d calls, the first %s\n",
            id, name, n, first
          n = 0 }
        /<task / { flush(); name = ""
@@ -148,7 +148,7 @@ if [ "$keep" = 1 ]; then
     if [ "$n" != failed ] && [ "$n" -gt 0 ]; then
       grep 'a kernel was released at the deadline' "$dir/run.log" | cut -c1-200
       echo "JIT log kept: $dir/hotspot.xml"
-      echo "class-check sums over the limit in Varka kernels' compiles:"
+      echo "class-check sums at the limit in Varka kernels' compiles:"
       observed "$dir/hotspot.xml"
       exit 0
     fi

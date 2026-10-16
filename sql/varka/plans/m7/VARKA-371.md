@@ -117,3 +117,41 @@ including what the fix does not cover (`VARKA-373.md`, `VARKA-374.md`). Still ow
 publication: the replay script under `sql/varka/demo/` and its run of 1,000 warm-ups (5), row
 370's final verdict on what a running JVM can do (the draft states what its admission check
 found), and the owner's edit.
+
+**The replay, 16 October 2026.** `sql/varka/demo/trap_sums.sh` is the script 5 asked for, and
+`trap_sums-laptop-jdk25-output.txt` beside it is its run; the post's "Reproducing it" names both.
+Each replay is a fresh JVM running the warm arm of `VarkaSparkFuzzSuite` at seed 20261008 over
+`warmupSet=0,220` (9.6's two-composition reproducer: `abs(ym)`, then shape `67312f01`), with
+`jitEvidence=false`, from the classpath `dev/varka_matrix.sh --module sql --list` exports. Three
+arms alternate replay by replay: the template warm-up off (`-Dvarka.warmup.vectorTemplates=false`,
+the JVM the post describes), the same with `-XX:PerMethodTrapLimit=100000
+-XX:PerMethodRecompilationCutoff=100000`, and stock Varka. A release is a line of the arm's
+"released at the deadline" report in a run whose test passed. `--keep` adds `-XX:+LogCompilation`
+to the first arm until a replay releases and prints, per C2 compile of the kernel's class, the
+first `<observe trap='class_check' ... ccount=.../>` line; `--compositions K` runs the
+K-composition arm instead.
+
+What it showed, on the laptop pinned to cores 6 to 8 at a load average of 5 to 45 from other work,
+against the classes of master 81aad3b42fa:
+
+| run | template warm-up off | off, with both options | stock |
+|---|---|---|---|
+| 100 replays of `0,220` each, 9,577 s | 77 of 100 | 0 of 100 | 0 of 100 |
+| 400 compositions, one JVM each, 1,125 s | 29 (of 534 verdicts) | 0 | 0 |
+| `--keep` | released at the first replay; four compiles of `67312f01`'s loop and epilogue methods, each first at `ccount='100'`, at the limit for 602 to 892 calls | | a stock replay's log: no `ccount` line at all |
+
+**Against the post's numbers.** The 400-composition run's 29 sits inside 9.6's 10 to 39 in 500,
+and the options' 0 agrees with its 0 in 1,000, though one run of each is not 1,000 warm-ups. The
+outline's plan (5) of 1,000 replays rested on a rate of a few per cent, which is the 400-composition
+arm's rate per warm-up; the two-composition replay releases in most JVMs (77 of 100, 9.6 had 5 of
+6), so 100 replays per arm separate the arms by 77 to 0 and 1,000 were not run: at about 32 s a
+replay on 3 cores, 3,000 would take over a day. The post's paragraph was rewritten to say so.
+Every release was iteration 220's kernel. With the log on, the first arm released in 6 of 6
+replays (the five tries while the script was written, and `--keep`'s), so the log is for seeing a
+release and the counts are taken without it; why the log raises the rate was not examined.
+
+**Row 370's verdict** (merged as #864, `VARKA-370.md` 9) replaced the paragraph of "What removes
+it" that began "They are an operator's choice", in the coordinator's wording adjusted to the
+post: the in-process agent reset that took the releases from 58 and 68 to 1 and 0, and why it is
+not a fix. "Within seconds" became "within half a minute", the interval at which `results/` saw
+the counts back. Still owed before publication: the owner's edit.
