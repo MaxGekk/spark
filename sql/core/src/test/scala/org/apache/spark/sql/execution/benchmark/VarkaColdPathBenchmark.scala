@@ -86,7 +86,8 @@ object VarkaColdPathBenchmark extends SqlBasedBenchmark {
 
   private val numRows = if (smoke) 10000 else 100000
   private val repetitions = if (smoke) 2 else 5
-  private val rungs = if (smoke) Seq(16) else VarkaSizeLadder.rungs
+  private val rungs =
+    if (smoke) Seq(16) else VarkaSizeLadder.RUNGS.asScala.map(_.intValue).toSeq
   private val steadyWarmup = if (smoke) 500.millis else 2.seconds
 
   /**

@@ -17,11 +17,6 @@
 
 package org.apache.spark.sql.execution.benchmark;
 
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
-
-import scala.jdk.javaapi.CollectionConverters;
-
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.VarkaBenchmark;
 import org.apache.spark.sql.catalyst.expressions.codegen.CodeGenerator;
@@ -58,13 +53,6 @@ import org.apache.spark.sql.catalyst.expressions.codegen.CodeGenerator;
  */
 public class VarkaSizeLadderParallelBenchmark extends VarkaSqlBenchmarkBase {
 
-  /**
-   * The ladder's rungs, data and query, shared with the one-core ladder. Its members are
-   * {@code private[benchmark]}, which scalac gives no static forwarder, so Java reaches them
-   * through the Scala object's instance.
-   */
-  private static final VarkaSizeLadder$ LADDER = VarkaSizeLadder$.MODULE$;
-
   @Override
   public void runBenchmarkSuite(String[] mainArgs) {
     // These arms own their Arrow-backed sessions, as the one-core ladder's do; the default
@@ -74,13 +62,11 @@ public class VarkaSizeLadderParallelBenchmark extends VarkaSqlBenchmarkBase {
     SparkSession baseline = VarkaArrowSessions.createSession(
         "VarkaSizeLadderParallel-vanilla", false, false, "local[*]");
     try {
-      SparkSession.clearActiveSession();
-      SparkSession.clearDefaultSession();
+      clearSessions();
       SparkSession varka = VarkaArrowSessions.createSession(
           "VarkaSizeLadderParallel-varka", true, false, "local[*]");
       try {
-        SparkSession.clearActiveSession();
-        SparkSession.clearDefaultSession();
+        clearSessions();
         require(baseline != varka, "the two sessions must be distinct or there is no baseline");
         ladder(baseline, varka);
       } finally {
@@ -93,21 +79,17 @@ public class VarkaSizeLadderParallelBenchmark extends VarkaSqlBenchmarkBase {
 
   private void ladder(SparkSession baseline, SparkSession varka) {
     int cores = baseline.sparkContext().defaultParallelism();
-    int numRows = LADDER.numRows();
+    int numRows = VarkaSizeLadder.NUM_ROWS;
     int hugeMethodLimit = CodeGenerator.DEFAULT_JVM_HUGE_METHOD_LIMIT();
-    LADDER.cacheDates(baseline, numRows);
-    LADDER.cacheDates(varka, numRows);
+    VarkaSizeLadder.cacheDates(baseline);
+    VarkaSizeLadder.cacheDates(varka);
     int partitions = baseline.table("ladder_dates").rdd().getNumPartitions();
     section("the size ladder on local[*], " + cores + " cores: "
         + "greatest(add_months(d, k), date_add(d, k), last_day(d))", () -> {
-      for (Object rung : CollectionConverters.asJava(LADDER.rungs())) {
-        int n = (Integer) rung;
-        String query = "SELECT "
-            + IntStream.rangeClosed(1, n).mapToObj(LADDER::entry)
-                .collect(Collectors.joining(", "))
-            + " FROM ladder_dates";
+      for (int n : VarkaSizeLadder.RUNGS) {
+        String query = VarkaSizeLadder.query(n);
         int bytes = VarkaArrowSessions.vanillaMethodBytes(baseline, query);
-        int fused = LADDER.varkaFused(varka, query);
+        int fused = VarkaSizeLadder.varkaFused(varka, query);
         require(fused == n, "the Varka arm fused " + fused + " of " + n + " entries");
         VarkaBenchmark benchmark = benchmark(
             n + " entries over " + numRows + " Arrow-cached rows on " + cores + " cores",

@@ -116,14 +116,15 @@ object VarkaColdStartBenchmark extends SqlBasedBenchmark {
    */
   private val numRows = if (smoke) 10000 else 100000
   private val repetitions = if (smoke) 2 else 5
-  private val rungs = if (smoke) Seq(16) else VarkaSizeLadder.rungs
+  private val rungs =
+    if (smoke) Seq(16) else VarkaSizeLadder.RUNGS.asScala.map(_.intValue).toSeq
 
   /** The rungs the back-to-back section runs, and how many queries it runs on each arm. */
   private val seriesRungs = if (smoke) Seq(16) else Seq(16, 54, 100)
   private val seriesLength = if (smoke) 4 else 15
 
   /** Rows for the steady-state section: the ladder's own. */
-  private val steadyRows = if (smoke) 20000 else VarkaSizeLadder.numRows
+  private val steadyRows = if (smoke) 20000 else VarkaSizeLadder.NUM_ROWS
 
   /**
    * The rung's query with offsets no earlier iteration used, so nothing about it is cached. The
