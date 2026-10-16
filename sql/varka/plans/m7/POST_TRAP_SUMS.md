@@ -2,9 +2,9 @@
 
 A Java Vector API kernel, compiled by C2 at the top tier and in use, allocated one `int[16]`, 80
 bytes, on every loop iteration. The next run compiled the same code clean. This happened in a few
-warm-ups in every hundred in Varka, which compiles Spark SQL expressions into such kernels and
-hands one real batches only once C2 has compiled it and it runs without allocating. A warm-up
-that misses its deadline is released, and its batches go back to Spark's row engine.
+warm-ups in every hundred in Varka, which compiles Spark SQL expressions into such kernels and hands
+a kernel real batches only after C2 has compiled it and it runs without allocating. A warm-up that
+misses its deadline is released, and its batches go back to Spark's row engine.
 
 > **In short**
 >
@@ -21,7 +21,7 @@ that misses its deadline is released, and its batches go back to Spark's row eng
 
 We ran the warm-up test with the JIT's own log on (`-XX:+LogCompilation`, deoptimization logging,
 tiered events) and classified every release, 171 in six runs, from the record of its own kernel
-class. Each usual suspect leaves a different trace:
+class. Each suspect leaves a different trace:
 
 * **A deoptimization cycle**: the compiled method is thrown away and recompiled again and again.
   The log shows repeated not-entrant marks. None of the 171 had one.
@@ -117,10 +117,10 @@ composition fuzzer, which warms one kernel per random composition of expressions
 `VARKA-295.md` 9.5 to 9.8 (Figures 1 and 2), `VARKA-370.md` 9 with its spike's `results/`
 (Figure 3, lower block), `VARKA-373.md` 9 (Figure 4) and `VARKA-374.md`.
 
-To reproduce on Linux: `sql/varka/demo/trap_sums.sh --runs 100` replays `abs` over a year-month
-interval and then the allocating kernel in a fresh JVM, 100 times each with the template warm-up
-off, with the two options, and as Varka ships. On our laptop, 2 hours 40 minutes on 3 cores, they
-released in 77, 0 and 0 JVMs. `--compositions 400` runs one JVM over 400 compositions instead.
-`--keep` replays until one releases and prints the `<observe ... ccount=.../>` line of each of the
-kernel's compiles; a clean replay has none. Our run is
-`sql/varka/demo/trap_sums-laptop-jdk25-output.txt`.
+To reproduce from a [Varka checkout](https://github.com/vecbricks/varka) on Linux:
+`sql/varka/demo/trap_sums.sh --runs 100` replays `abs` over a year-month interval and then the
+allocating kernel in a fresh JVM, 100 times each with the template warm-up off, with the two
+options, and as Varka ships. On our laptop, 2 hours 40 minutes on 3 cores, they released in 77, 0
+and 0 JVMs. `--compositions 400` runs one JVM over 400 compositions instead. `--keep` replays until
+one releases and prints the `<observe ... ccount=.../>` line of each of the kernel's compiles; a
+clean replay has none. Our run is `sql/varka/demo/trap_sums-laptop-jdk25-output.txt`.
