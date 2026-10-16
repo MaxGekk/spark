@@ -298,7 +298,7 @@ Three things the specification work had not shown, none of them changed here:
 3. **`EXTENSIONS.md` 1 says `datediff` "never wraps"; it does.** Two int32 day counts differ by up to
    2^32 - 1; Spark's `DateDiff` is an `Int` subtraction and wraps, and so does the kernel. Inside the
    column contract the definition holds; outside it the check is `sat`. The sentence is #854's, now on
-   master; a correction there is owed.
+   master; corrected in this row's pull request.
 
 And the standard mode shows what `DELTAS.md` predicted, plus two: `overflow_wraps`,
 `clamp_to_month_end` and `time_add_raises` are the witnesses of results no guard buys;
@@ -373,7 +373,6 @@ the result; and `interval_precision_unbounded` for the cast, whose input bound i
   nodes over bare columns, or record that Varka assumes it; and an end-to-end reproduction first.
 * **The three needless declines** (9.2 item 2): reading the node's word, the AND of both operands',
   rather than one operand's, would make query 5 hold; not done here, since no answer changes.
-* **`EXTENSIONS.md` 1's `datediff` sentence** (9.2 item 3).
 * **Not restated**: `STANDARD.md` 4.2 to 4.9 (no lowering proof to restate), the extensions of 3.5
   (the ISO week and week-year, `dayofyear`, `quarter`, `last_day`, `next_day`, `trunc`,
   `make_ym_interval`, `greatest`/`least`, `time_diff`, `time_trunc`), and the century-then-year
