@@ -160,3 +160,111 @@ it" that began "They are an operator's choice", in the coordinator's wording adj
 post: the in-process agent reset that took the releases from 58 and 68 to 1 and 0, and why it is
 not a fix. "Within seconds" became "within half a minute", the interval at which `results/` saw
 the counts back. Still owed before publication: the owner's edit.
+
+### 9.2 Review after merge, 16 October 2026
+
+A code review of #872 reported eight findings. Each was checked against the files and the
+committed output before anything changed; all but the last were confirmed and fixed.
+
+1. **Kernels where the record counts compositions: confirmed, fixed.** The post said "about 440
+   in 2,000 kernels", "55 of 220 kernels" and "the first 100 kernels", and its measurement
+   section said the fuzzer "warms one kernel per random composition". The sources count
+   compositions (`VARKA-295.md` 9.8 3, the "prefix each of the 220 compositions alone" row of
+   9.6, the "first 100 compositions" of `VARKA-373.md` 9), and a composition can warm more than
+   one kernel: the 400 compositions warm 534 kernels. All four now say compositions, as do
+   Figure 2's note and Figure 4's subtitle. "Kernels released at the deadline" stays where it
+   is the numerator; the 1,000 and 500 warm-ups of "What removes it" already matched 9.6.
+2. **The replay's compositions could move silently: confirmed, fixed.** `warmupSet=0,220` names
+   draws over `coverage.json`'s rows. The script now runs one JVM first with
+   `-Dvarka.sparkfuzz.warmupShow=true` and stops unless compositions 0 and 220 print as pinned in
+   the script (`abs(ym)`, and the four outputs and filter of 220; two JVMs printed them
+   identically), and in the replays of `0,220` it names any released shape other than
+   `w7fd4deef67312f01` and keeps that replay's report. The check is its own JVM, so the counted
+   replays run as before. The post says the script stops unless its compositions are commit
+   57cf25f8c98's: `coverage.json` did not change between the 100-replay run's classes
+   (81aad3b42fa) and it, and the refreshed runs below were built from it. The post does not send
+   readers to that commit, whose script is #872's.
+3. **`--keep` read a failed replay as a clean one: confirmed, fixed.** Each try now has its own
+   directory; a failed try keeps its report (not its JIT log) and is counted, and when every try
+   failed the script says so instead of "no release". A stub `java` drove both paths, and the
+   wrong-shape stop.
+4. **`--keep` printed `ccount='100'` where the post quotes 254: confirmed, fixed by printing the
+   largest.** Within one compile the observed sum only rises (100, 104, 112 and on, in steps of
+   one inlined copy), so the script now prints the line with the largest `ccount` per compile. The
+   old log was gone, so `--keep` ran again: `ccount='1100'` in the loop and epilogue dense
+   compiles, 1372 in the masked ones, against 9.6's 254 in its run; the sum at a compile's end
+   varies run to run, the form is what reproduces. The post quotes the 1100 line.
+5. **"A clean replay has none" was a hand-made contrast: confirmed, fixed.** After the release,
+   `--keep` replays the stock arm once with the same log and runs the same check on it, which
+   printed `none` (0 `ccount` lines in the whole log, 133 class-check observations). The post
+   says "finds none as Varka ships"; the output file's hand-written lines are replaced by what
+   the script prints.
+6. **Figure 3's middle block gave all arms the defaults arm's warm-ups: confirmed, fixed.** A
+   `--compositions` replay's line now ends with its verdicts, `fig43.py` reads each arm's own,
+   asserts its releases against the summary table and labels each bar "n of warm-ups"; the lower
+   block takes its count from the spike's runs. That needed the 400-composition run again.
+7. **The catalyst-classes prefix: confirmed, fixed.** sql's exported classpath already holds
+   catalyst's jar and test classes; the script now uses `$(cat "$BUILD/classpath")` as
+   `dev/varka_matrix.sh` does, and every run below used it.
+8. **Share `replay()` with `varka_matrix.sh`: declined.** The matrix launches `VarkaSuiteRunner`
+   over whole suites with its own arguments; `replay()` launches ScalaTest's `Runner` for one test
+   with a per-replay working and temporary directory. What they share is the environment, the JVM
+   options and `-cp`, three lines; a sourced helper would couple two scripts for less than that.
+
+**The refreshed runs** (`trap_sums-laptop-jdk25-output.txt`, cores 6 to 8, load average about 5
+falling to 2): the 400-composition run released 46 of 534 warm-ups with the template warm-up
+off, 0 of 534 with both options, and **1 of 534 as Varka ships**: composition 312's kernel,
+`e33b1eb0`, the second reproducer 9.6 names, at the deadline with 21,120 bytes in its last probe.
+Two more stock JVMs over the same 400 compositions on the same cores, the command `replay()` runs,
+gave 1 (the same kernel, 21,280 bytes) and 0. So as shipped, this kernel released in 2 of 3
+JVMs on 3 cores here, where 9.8 saw 0 in 2,000 compositions on each of five seeds with 5 cores. The
+core count is the difference visible between the runs, not a shown cause. The post's "none"
+sentences quote 9.8 and are unchanged; Figure 3 shows the release and its caption names it. The
+defaults arm's 46 is above 9.6's 10 to 39 and the earlier run's 29. Whether the stock release
+becomes a row is the owner's decision; it is outside this task. Logs: the committed run's release
+in `target/varka-demo/trap_sums/stock-1/run.log` of the `varka-371-fixes` worktree, the two
+extra JVMs in `.../scratchpad/stock400-2/` and `stock400-3/` (`replay()`'s java line with
+`-Dvarka.sparkfuzz.warmupIterations=400` and no other option, cores 6 to 8, one after the other).
+Figure 1 is unaffected by the new quote: it reads 9.6's log and labels the limit and the parse
+position where the sum passes it, not the sum at the compile's end. The 100-replay run was not
+repeated: its counting did not change, and it takes 2 hours 40 minutes. `--keep` released at the
+first try, so the log-on defaults arm now stands at 7 of 7.
+
+**Self-review of this change** (`/code-review high`, ten findings, deduplicated but not verified
+by the tool; each checked here):
+
+* *A wrong-shape release stopped the run* and blamed `coverage.json`, though composition 0's own
+  kernel can miss the deadline under load, and an emitter change renames a shape while the
+  compositions stay. Fixed: the replay line names the other shapes and keeps the report, and the
+  run goes on. The `grep -q` pipeline that could lose the match to SIGPIPE went with it.
+* *The post named a commit whose script lacks the check*: fixed as in item 2 above.
+* *"To none" against Figure 3's release*: kept. The sentences quote 9.8's 0 in 2,000 compositions
+  on five seeds; the caption carries this run's release, and the owner decides whether the claim
+  needs a new measurement.
+* *`fig43.py` lost the check that the spike's runs and the arms warm as many kernels*: restored,
+  over all three arms and both spike runs (534 each). It also reads the composition count from
+  the run's summary line instead of a fixed 400, and refuses a run of more than one replay.
+* *The verdicts dropped the count of releases before the deadline*: fixed by appending it when it
+  is not 0, so the committed output, where it was 0 in every arm, is still what the script
+  prints. The output file's note on composition 312 is marked as added by hand.
+* *The keep directories of an earlier run survived*: `--keep` clears them first.
+* *The check costs a JVM per invocation* (about half a minute): declined. Checking offline would
+  re-implement the suite's draw, and half a minute is small beside a 400-composition run.
+
+**The claim scoped to its data** (the coordinator, after the self-review). This corrects the two
+places above that kept "none" unchanged: the post may not say "none" beside a figure that shows a
+release. "In short" item 3 now says the warm-up "all but removes" the releases: none in 12,000
+compositions on five cores (9.8's seed 20261008 and five more, 2,000 each) and 2 of 1,602
+warm-ups on three (the three 400-composition JVMs as shipped, 1, 1 and 0 of 534 each). "What a
+library can do" says the same and calls the core count the one visible difference, not a cause.
+The two options still "remove" it: 0 in every run. Figure 3's caption now says the upper block
+replays composition 220 after composition 0 in fresh JVMs and the middle one runs 400 compositions,
+a longer history, so "0 as shipped" and "1 as shipped" are not read as one measurement; the
+reproduction paragraph quotes the 400-composition run's 46, 0 and 1, tells the reader to run from
+a current checkout of master (the composition check exists only there), and the plan files of
+"How these were measured" are links. The post fell from 1,197 to 1,195 words; the cuts are a
+sentence on what C2 leaves on a miss path (the next paragraph says it), the 4-lane halving of the
+agent reset, the two-shape detail of the 4-lane trap, the log options' list and the run time.
+
+The as-shipped release (composition 312, `e33b1eb0`, compiled and still allocating at the deadline)
+is for the reproduction of m8 row 383 (planned in #888, not yet merged).

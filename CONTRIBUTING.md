@@ -107,12 +107,11 @@ CI runs only what a change can reach: a change confined to Varka's files runs
 the Varka suites and the assembly gate in about half an hour; a change to a
 shared Spark file runs Spark's full matrix.
 
-A fork runs at most twenty CI jobs at once, and one Build is about thirty-five,
-so with several pull requests open, give the fork's CI to one at a time in the
-order they will merge. `dev/varka_ci_queue.sh` does that: `hold <pr>` after a
-push cancels the Build it started and queues the PR, `run` reruns the queue one
-Build at a time and prints each verdict, `drop <pr>` after a merge cancels a
-run that no longer matters, and `status` shows every open PR's run.
+A Build that runs Spark's full matrix waits in its "Admit a full-matrix run"
+job while another full-matrix run on the same fork is ahead of it, so two never
+share the fork's job slots; scoped runs never wait. Label a pull request
+`ci-hold` to stop its Build at that job, and rerun the failed jobs after
+removing the label to resume it.
 
 ### Pull requests
 

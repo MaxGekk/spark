@@ -689,7 +689,7 @@ jobs:
         ADMIT_BRANCH: ${{ github.ref_name }}
       run: >-
         python3 dev/varka_ci_admit.py --repo "$ADMIT_REPO" --run-id "$ADMIT_RUN_ID"
-        --branch "$ADMIT_BRANCH" --base-repo vecbricks/varka
+        --branch "$ADMIT_BRANCH" --base-repo vecbricks/varka --concurrent 2
 
   precompile:
     needs: [precondition, admit]
@@ -749,7 +749,10 @@ jobs:
         --security-opt seccomp=unconfined
     strategy:
       fail-fast: false
-      max-parallel: 20
+      # On a fork the PySpark groups take at most 6 job slots, so that with the module matrix's
+      # 12 a full run stays near 20 of the fork's 40 and two admitted runs fit side by side
+      # (dev/varka_ci_admit.py --concurrent); apache/spark keeps 20.
+      max-parallel: ${{ github.repository == 'apache/spark' && 20 || 6 }}
       matrix:
         java:
           - ${{ inputs.java }}
@@ -1399,6 +1402,8 @@ jobs:
       run: ./dev/varka_toc.py --check SKILLS.md --from sql/varka/skills
     - name: The CI queue's admission decision, over recorded API responses
       run: python3 dev/varka_ci_admit.py --self-test
+    - name: The step-time budget's tool, over recorded API responses
+      run: python3 dev/varka_ci_times.py --self-test
 
   # Documentation build
   docs:
