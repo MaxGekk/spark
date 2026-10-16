@@ -281,6 +281,10 @@ demotion of the conjunct holding the lane; what it costs is fusion and a reason 
 conjunct that ended up fused, never an answer, and recomputing the order demotions from scratch
 each round would trade it for a loop that can oscillate.
 
+The compiler's composition fuzzer, "random conjunctions of coverage predicates", at 3,000
+compositions on each of three seeds (20260925, its default, 20261016 and 20261102): no finding,
+so the drift safety net of item 4, whose reason that suite does not accept, never fired.
+
 The suites after both rounds (`dev/varka_matrix.sh --defaults`, sanitizer on, eight JVMs): 1,375
 passed and two failed. One is the `VarkaTierWitnessSuite` trap of 9.2 item 4, pre-existing. The
 other, `VarkaWarmupEndToEndSuite`'s "a projection's first query takes the row path and its next

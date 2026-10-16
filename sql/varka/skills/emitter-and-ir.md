@@ -949,8 +949,10 @@ predicate evaluates the `AND` tree as written, while whole-stage codegen
 (`FilterExec.generatePredicateCode`) moves each `IsNotNull` to just before the first conjunct
 that reads its column and the unread ones to the end, so `isnotnull(d) AND (l + 1) > 0` raises on
 a row with a null `d` under codegen and not interpreted. `InferFiltersFromConstraints` prepends
-such tests to nearly every filter. `VarkaConjunctOrder` holds a split to both orders, and the
-per-row fallback evaluates the codegen order when the session runs codegen (`VARKA-380.md` 3).
+such tests to nearly every filter, and codegen adds null checks of its own for the columns a
+null test of a larger expression implies. `VarkaConjunctOrder` holds a split to both orders, and
+the per-row fallback evaluates the codegen order where Spark would compile the filter
+(`VARKA-380.md` 9).
 Any new place that reorders or splits conjuncts - a pushdown, a storage filter, a cache predicate
 - has the same two orders to keep, and the differential needs a raising conjunct and a null
 column to see it fail.
