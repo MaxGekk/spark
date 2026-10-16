@@ -65,7 +65,8 @@ guarded this way is a different and much weaker proposition, and should say so.
 
 ### 3.1 Year-month interval range: two lane ops instead of seven
 
-*Found 18 September 2026, VARKA-89.*
+*Found 18 September 2026, VARKA-89. The delta it reads as a speedup is
+`interval_precision_unbounded` (`proofs/spec/DELTAS.md` 1.6, VARKA-244).*
 
 | | range |
 |---|---|
@@ -91,7 +92,8 @@ bound check is what makes that safe.
 
 ### 3.2 Day-time interval range: divisions that decline today would fuse
 
-*Found 18 September 2026, from VARKA-103's scope.*
+*Found 18 September 2026, from VARKA-103's scope. The same delta as 3.1,
+`interval_precision_unbounded` (`proofs/spec/DELTAS.md` 1.6).*
 
 | | range |
 |---|---|
@@ -117,7 +119,8 @@ microseconds for the default precision.
 
 ### 3.3 `time + interval`: a guard and a fallback channel removed
 
-*Found 18 September 2026, VARKA-102. Upstream question still open.*
+*Found 18 September 2026, VARKA-102. Upstream question still open. The delta is
+`time_add_raises` (`proofs/spec/DELTAS.md` 1.8), with `time_add_day_field` (1.9) beside it.*
 
 Vanilla's `timeAddInterval` is `addExact` plus a check that the result lies in
 `[0, 24h)`, throwing `timeAddIntervalOverflowError` otherwise - it does not wrap.
@@ -203,6 +206,26 @@ those inputs from Spark on JDK 19 and later. Varka's kernels and oracles take JD
 the reference - this fork builds on JDK 25 - and the oracle's header says so, so that a
 differential run against an older row engine reads a disagreement on those inputs as the JDK's,
 not the kernel's.
+
+### 3.7 The standard's date range: a bound already wider than it is guarded
+
+*Added 16 October 2026 by VARKA-244, from the delta `proleptic_range` (`proofs/spec/DELTAS.md`
+1.4). Not a measured saving.*
+
+| | range |
+|---|---|
+| **Standard** | YEAR 0001 to 9999: day counts `[-719162, 2932896]` |
+| **Spark** | any int32 day count, years -5877641 to 5881580, wrapping past it (`day_count_wraps`) |
+
+**What it would buy: nothing measured yet.** The calendar lowering already assumes a range and
+guards it: `VarkaChrono.narrowed` is exact for days in `[NARROW_MIN_DAYS, NARROW_MAX_DAYS]`, 1 March
+-12800 to 15 August 33134, a bound set by `w < 2^24` (`chrono_divide.smt2`, VARKA-242), and a batch
+outside declines. The standard's range lies inside that one, about a fifth of its width, so
+standard mode would change a guard's constants, not remove a guard. A cheaper lowering exact only
+over 0001-9999 - a narrower multiply in the era or year step - is the thing to look for before this
+entry claims a speedup, and none has been found.
+
+**The bound to register:** the date column, `[-719162, 2932896]`.
 
 ## 4. What would have to be built, when a task claims one of these
 

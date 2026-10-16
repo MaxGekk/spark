@@ -7,8 +7,9 @@ not divide, and records every choice the text leaves to the implementation. This
 specification to prove lowerings against and to measure Spark against, not a description of what
 Varka returns: Varka's answers follow vanilla Spark, always (`plans/SCOPE_STANDARD_MODE.md` 1).
 Where Spark departs from a definition, one line names the departure; the departures themselves,
-each with a test showing Spark doing it, are VARKA-244's, and the operations the standard does not
-define are listed at the end.
+each a named patch to these definitions with a test showing Spark doing it, are in `DELTAS.md`,
+and the operations the standard does not define are listed at the end and marked in
+`EXTENSIONS.md` (VARKA-244).
 
 ## 1. The source, and what it is not
 
@@ -72,7 +73,7 @@ calendar would make `days` piecewise and every lowering's proof with it.
 the same Note. The choice: SECOND is 0 to 59 and every day is `86,400 * 10^9` nanoseconds, since
 Spark's `TIME` cannot hold a 60th second and a lane of nanoseconds has no place for one. The
 standard admits time values Spark cannot represent; that is a range difference, not a delta in an
-answer.
+answer, and is named `no_leap_second` (`DELTAS.md` 1.11).
 
 **C3. A time without a time zone is local and never converted.** 4.5.1: a time "that does not
 specify WITH TIME ZONE has an implicit time zone equal to the local time zone for the
@@ -101,7 +102,8 @@ not specified, then an <interval leading field precision> of 2 is implicit", and
 maximum as "implementation-defined, but shall not be less than 2". The definitions take the
 leading precision `p` as a parameter: the standard's default `p = 2` is what standard mode would
 register (`SCOPE_STANDARD_MODE.md` 3.1 and 3.2); in Spark mode the maximum is the lane's own
-range, since Spark's interval types have no precision. Spark's wider range is a delta.
+range, since Spark's interval types have no precision. Spark's wider range is a delta,
+`interval_precision_unbounded` (`DELTAS.md` 1.6).
 
 **C7. Evaluation order is not part of a definition.** The text defines values, not whether `AND`
 or `CASE` evaluates an operand it does not need. Which operand raises first is Varka's contract
@@ -139,7 +141,8 @@ result of two `INTEGER`s is `INTEGER`, so the range is int32's. Monadic minus is
 arithmetic operation under GR 5(a), its result type that of its operand (SR 3), so `-(-2147483648)`
 raises 22003 rather than wrapping.
 
-**Spark.** Non-ANSI Spark wraps where this raises; ANSI Spark raises (VARKA-244).
+**Spark.** Non-ANSI Spark wraps where this raises, `overflow_wraps` (`DELTAS.md` 1.1); ANSI Spark
+raises 22003, as defined here.
 
 ### 4.2 Comparison of exact numerics
 
@@ -317,7 +320,8 @@ truncating one (`chrono_divide.smt2`, and the site table in `plans/m7/VARKA-242.
 **Choices.** The result type is "exact numeric with implementation-defined precision and scale 0"
 (SR 4(a)); it is int32.
 
-**Spark.** Spark's dates run past 0001-9999 on the int32 day count (VARKA-244's range delta).
+**Spark.** Spark's dates run past 0001-9999 on the int32 day count, `proleptic_range` (`DELTAS.md`
+1.4).
 
 ### 4.11 `EXTRACT` of HOUR, MINUTE or SECOND from a time
 
@@ -336,9 +340,10 @@ the time's fractional digits.
 and over non-negative operands `quot = div`. There is no admissible negative example: a negative
 `t` is not a time, and the definition need not choose.
 
-**Spark.** `second(t)` returns an integer, the standard's SECOND with its fraction dropped:
-`second(TIME '12:34:56.789')` is 56 where the standard's `EXTRACT(SECOND ...)` is 56.789
-(VARKA-244). Over non-negative values that drop is a truncation and a floor alike.
+**Spark.** Agrees: `extract(SECOND FROM TIME '12:34:56.789')` is 56.789000, a `decimal(8,6)`, and
+a `decimal(11,9)` over `TIME(9)`. *Corrected by VARKA-244, which ran it:* this line said Spark
+drops the fraction, which is true of the coverage row's `second(t)`, an int: that is Spark's own
+`second` function, not `EXTRACT`, and is marked in `EXTENSIONS.md` 3 (`DELTAS.md` 2).
 
 ### 4.12 `EXTRACT` of a field from an interval
 
@@ -396,8 +401,8 @@ admitted, and the two divisions agree there.
 **Choices.** None: the DAY rule and the overflow are the text's.
 
 **Spark.** `DATE '2024-01-31' + INTERVAL '1' MONTH` is 22008 here, since February has no 31st;
-Spark clamps to 2024-02-29 (VARKA-244, `clamp_to_month_end`). They agree whenever the day exists in
-the target month, which the worked example's does.
+Spark clamps to 2024-02-29, `clamp_to_month_end` (`DELTAS.md` 1.3). They agree whenever the day
+exists in the target month, which the worked example's does.
 
 ### 4.14 A date plus a day interval
 
@@ -422,8 +427,9 @@ range; 22007 for a value made any other way.
 
 **Spark.** SR 3 forbids a date plus an interval with an HOUR, MINUTE or SECOND field; Spark accepts
 one, casting the date to a timestamp and returning a timestamp
-(`BinaryArithmeticWithDatetimeResolver`), outside the coverage table. Spark's range is again the
-int32 day count.
+(`BinaryArithmeticWithDatetimeResolver`), outside the coverage table: `date_add_time_field`
+(`DELTAS.md` 1.10). Spark's range is again the int32 day count (`proleptic_range`), and past it
+`n + k` wraps, `day_count_wraps` (1.5).
 
 ### 4.15 A time plus a day-time interval
 
@@ -442,9 +448,10 @@ int32 day count.
 **Choices.** "Modulo 24" is read as the non-negative residue, because Table 10 admits HOUR only
 "00 to 23", so no other residue is a valid field.
 
-**Spark.** Spark raises where the sum leaves the day instead of wrapping
-(`SCOPE_STANDARD_MODE.md` 3.3; SPARK-57853 asks whether to follow the standard). And the coverage
-row's interval is DAY TO SECOND, which SR 3 forbids beside a time. Both are VARKA-244's.
+**Spark.** Spark raises 22008 where the sum leaves the day instead of wrapping, `time_add_raises`
+(`DELTAS.md` 1.8; `SCOPE_STANDARD_MODE.md` 3.3; SPARK-57853 asks whether to follow the standard).
+And the coverage row's interval is DAY TO SECOND, which SR 3 forbids beside a time,
+`time_add_day_field` (1.9).
 
 ### 4.16 A time minus a time
 
@@ -511,6 +518,9 @@ INTERVAL '6' MONTH` is `-18 - 6 = -24` months, `INTERVAL '-2-0' YEAR TO MONTH` b
 multiplier would need GR 4(e)'s cast to an integral MONTH count to round or truncate, which the
 text leaves to the implementation; no coverage row has one.
 
+**Spark.** Past int32 the product throws an `ArithmeticException` with no SQLSTATE where this is
+22015, `interval_overflow_state` (`DELTAS.md` 1.7).
+
 ### 4.19 `CAST` to an interval
 
 `CAST(ymy AS INTERVAL MONTH)`, `CAST(i AS INTERVAL DAY)` (`Cast`). SQL-92 6.10.
@@ -539,21 +549,24 @@ INTERVAL DAY)` is minus one day, and `CAST(INTERVAL '-2' YEAR AS INTERVAL MONTH)
 '-24' MONTH`.
 
 **Spark.** Spark's day interval holds about 106,751,991 days, int64 microseconds, where the
-standard's default is two digits (VARKA-244's range delta; `SCOPE_STANDARD_MODE.md` 3.2).
+standard's default is two digits, `interval_precision_unbounded` (`DELTAS.md` 1.6;
+`SCOPE_STANDARD_MODE.md` 3.2); and past the lane the cast raises 22003 where this is 22015,
+`interval_overflow_state` (1.7).
 
 ## 5. The coverage table's operations the standard does not define
 
-Spark's own functions, for VARKA-244 to mark as Spark's or ISO 8601's: `date_add` and `date_sub`
-with an integer, `datediff`, `unix_date`, `date_from_unix_date`, `quarter`, `dayofyear`,
-`dayofweek`, `weekday`, `extract(DAYOFWEEK_ISO ...)`, `weekofyear`, `extract(YEAROFWEEK ...)`,
-`last_day`, `next_day`, `make_date`, `trunc`, `add_months`, `make_ym_interval`, `abs` of an
-interval, `greatest`, `least`, `time_diff`, `time_trunc`, `time_to_millis`, `time_to_micros`,
-`time_from_millis`, `time_from_micros`. Three reduce to an operation above: `date_add(d, k)` to
-4.14 with `CAST(k AS INTERVAL DAY)`, `date_sub` to the same with `-k`, and `datediff(a, b)` to
-`(a - b) DAY`: 6.15 GR 6, quoted in 4.16, over two dates, where the unit Y is DAY and the
-difference is `n_a - n_b` exactly, so nothing rounds. No coverage row spells a date minus a date,
-so that reduction has no section of its own here; whether `datediff` is defined by it is
-VARKA-244's call. `ABS`, `GREATEST` and `LEAST` do not occur in the SQL-92 text.
+Spark's own functions, each marked as Spark's, ISO 8601's or the standard's by reduction, and
+defined, in `EXTENSIONS.md`: `date_add` and `date_sub` with an integer, `datediff`, `unix_date`,
+`date_from_unix_date`, `quarter`, `dayofyear`, `dayofweek`, `weekday`, `extract(DAYOFWEEK_ISO ...)`,
+`weekofyear`, `extract(YEAROFWEEK ...)`, `last_day`, `next_day`, `make_date`, `trunc`, `add_months`,
+`make_ym_interval`, `abs` of an interval, `greatest`, `least`, `time_diff`, `time_trunc`,
+`time_to_millis`, `time_to_micros`, `time_from_millis`, `time_from_micros`; and `second(t)`, which
+4.11 shows is not `EXTRACT`. Three reduce to an operation above: `date_add(d, k)` to 4.14 with
+`CAST(k AS INTERVAL DAY)`, `date_sub` to the same with `-k`, and `datediff(a, b)` to `(a - b) DAY`:
+6.15 GR 6, quoted in 4.16, over two dates, where the unit Y is DAY and the difference is `n_a - n_b`
+exactly, so nothing rounds. No coverage row spells a date minus a date, so that reduction has no
+section of its own here; `EXTENSIONS.md` 1 defines `datediff` by it, and Spark agrees. `ABS`,
+`GREATEST` and `LEAST` do not occur in the SQL-92 text.
 
 ## 6. Owed
 
