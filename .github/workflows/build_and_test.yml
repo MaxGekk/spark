@@ -675,16 +675,21 @@ jobs:
       uses: actions/checkout@v7
       with:
         ref: ${{ needs.precondition.outputs.head_sha }}
+        persist-credentials: false
         sparse-checkout: dev/varka_ci_admit.py
         sparse-checkout-cone-mode: false
     - name: Wait while another full-matrix run is ahead
       if: github.repository != 'apache/spark' && github.repository != 'vecbricks/varka'
+      # The branch name is the pusher's text, so it reaches the shell through the environment,
+      # never through an expression expanded into the script.
       env:
         GH_TOKEN: ${{ github.token }}
+        ADMIT_REPO: ${{ github.repository }}
+        ADMIT_RUN_ID: ${{ github.run_id }}
+        ADMIT_BRANCH: ${{ github.ref_name }}
       run: >-
-        python3 dev/varka_ci_admit.py --repo "${{ github.repository }}"
-        --run-id "${{ github.run_id }}" --branch "${{ github.ref_name }}"
-        --base-repo vecbricks/varka
+        python3 dev/varka_ci_admit.py --repo "$ADMIT_REPO" --run-id "$ADMIT_RUN_ID"
+        --branch "$ADMIT_BRANCH" --base-repo vecbricks/varka
 
   precompile:
     needs: [precondition, admit]

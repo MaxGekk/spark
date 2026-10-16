@@ -1147,6 +1147,24 @@ patches; and whether GitHub lets a completed check be patched back to `in_progre
 is rerun, which the old pass also attempted. A fork run that never completes would keep the loop
 re-dispatching every 345 minutes; none has been seen, and the log would show it.
 
+**The author's review** (`/code-review high` on the diff, 16 October) found four things, fixed in a
+second commit. The branch name reached the `admit` step's shell through a `${{ }}` expression;
+it now goes through the environment. A read of the API that kept failing - a caller without
+`actions: read`, such as `build_java25.yml` dispatched on the fork - was retried every poll for
+the whole 330 minutes and then failed the Build, and a dropped connection or a body cut short
+raised past the retry and failed it at once; every such error is now retried, and five failed
+polls in a row admit with a warning, the hold's own rule that a broken read must not stop CI.
+The branch went unquoted into the hold's `head=` query, where a `+` or `#` would miss the pull
+request. And the check sync had no error boundary around its pull-request listing or its patches,
+so one failed request ended a loop meant to run for hours; a failed patch is now logged and left
+to a later pass, a failed pass is retried, and five failed passes in a row end the loop without
+a dispatch, so a lasting fault cannot chain runs. Two things it found are the owner's: 3.2's
+request count is low, since a pass lists the check runs and reads the run of every open pull
+request, completed ones included, about 1 + 2N requests for N open pull requests, so 30 passes an
+hour reach the base's 1,000 at about 16 open; and "Re-run failed jobs" on a completed full run
+keeps the first attempt's succeeded `admit`, so its matrix fans out at once without waiting, and
+only "Re-run all jobs" queues as 3.1 describes.
+
 **Owner action 3** applies when this merges: stop starting `dev/varka_ci_queue.sh run`, `hold`
 and `drop`, since a run the script cancels is now never rerun, and a held pull request is held
 with the `ci-hold` label instead.

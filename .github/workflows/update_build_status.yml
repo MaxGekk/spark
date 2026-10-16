@@ -227,27 +227,34 @@ jobs:
                         continue
                       }
                       patches++
-                      if (run.data.status == 'completed') {
-                        console.log('    Run ' + cr.id + ': set status (' + run.data.status + ') and conclusion (' + run.data.conclusion + ')')
-                        const response = await github.request('PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}', {
-                          owner: context.repo.owner,
-                          repo: context.repo.repo,
-                          check_run_id: cr.id,
-                          output: cr.output,
-                          status: run.data.status,
-                          conclusion: run.data.conclusion,
-                          details_url: run.data.details_url
-                        })
-                      } else {
-                        console.log('    Run ' + cr.id + ': set status (' + run.data.status + ' -> ' + want.status + ')')
-                        const response = await github.request('PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}', {
-                          owner: context.repo.owner,
-                          repo: context.repo.repo,
-                          check_run_id: cr.id,
-                          output: cr.output,
-                          status: want.status,
-                          details_url: run.data.details_url
-                        })
+                      // A failed patch skips this check until the next pass rather than
+                      // ending the loop, which every other pull request's sync rides on.
+                      try {
+                        if (run.data.status == 'completed') {
+                          console.log('    Run ' + cr.id + ': set status (' + run.data.status + ') and conclusion (' + run.data.conclusion + ')')
+                          const response = await github.request('PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}', {
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            check_run_id: cr.id,
+                            output: cr.output,
+                            status: run.data.status,
+                            conclusion: run.data.conclusion,
+                            details_url: run.data.details_url
+                          })
+                        } else {
+                          console.log('    Run ' + cr.id + ': set status (' + run.data.status + ' -> ' + want.status + ')')
+                          const response = await github.request('PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}', {
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            check_run_id: cr.id,
+                            output: cr.output,
+                            status: want.status,
+                            details_url: run.data.details_url
+                          })
+                        }
+                      } catch (error) {
+                        console.error('    Run ' + cr.id + ': patch failed; a later pass retries it')
+                        console.error(error)
                       }
                     }
                   }
@@ -442,24 +449,49 @@ jobs:
             // Pass every 120 seconds while any fork run is in flight. At 345 minutes, with a
             // run still in flight, dispatch this workflow again before the job's cap; the new
             // run waits in the concurrency group until this one ends. workflow_dispatch is the
-            // one event a GITHUB_TOKEN may start a workflow with.
+            // one event a GITHUB_TOKEN may start a workflow with. A pass that throws (the pull
+            // request listing failing, a rate limit) is retried at the next interval; five in a
+            // row end the loop without a dispatch, so a lasting fault cannot chain runs.
             const started = Date.now()
             const capMs = 345 * 60 * 1000
             const pollMs = 120 * 1000
+            const maxFailedPasses = 5
+            let failedPasses = 0
             for (;;) {
-              const inFlight = await syncPass()
+              let inFlight
+              try {
+                inFlight = await syncPass()
+                failedPasses = 0
+              } catch (error) {
+                failedPasses++
+                console.error('Pass failed (' + failedPasses + ' in a row)')
+                console.error(error)
+                if (failedPasses >= maxFailedPasses) {
+                  core.setFailed(maxFailedPasses + ' passes in a row failed; the loop ends')
+                  break
+                }
+                inFlight = -1
+              }
               if (inFlight == 0) {
                 console.log('No fork run in flight; the loop ends')
                 break
               }
               if (Date.now() - started + pollMs > capMs) {
+                if (inFlight < 0) {
+                  console.log('At the cap after a failed pass; not dispatching again')
+                  break
+                }
                 console.log('At the cap with ' + inFlight + ' run(s) in flight; dispatching again')
-                await github.rest.actions.createWorkflowDispatch({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  workflow_id: 'update_build_status.yml',
-                  ref: (context.payload.repository && context.payload.repository.default_branch) || 'master'
-                })
+                try {
+                  await github.rest.actions.createWorkflowDispatch({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    workflow_id: 'update_build_status.yml',
+                    ref: (context.payload.repository && context.payload.repository.default_branch) || 'master'
+                  })
+                } catch (error) {
+                  core.setFailed('Could not dispatch the sync again: ' + error.message)
+                }
                 break
               }
               await new Promise(resolve => setTimeout(resolve, pollMs))

@@ -38,19 +38,26 @@ so `Precompile Spark` and everything behind it skip; removing the label and reru
 failed jobs resumes it. The label is read on every poll, so a run already waiting can be held.
 
 The wait polls every 120 seconds and gives up after 330 minutes, inside the 360-minute job
-cap, naming the runs it waited on. On apache/spark and on the base repository it admits at
-once and makes no request: their Builds are not queued here. Reads use the token in
+cap, naming the runs it waited on. A poll that cannot read the API is retried at the next one;
+after five such polls in a row (a token without `actions: read`, a run that is gone) the job
+admits with a warning rather than hold a slot for the whole deadline and then fail the Build:
+like the hold, the queue is a convenience a broken read must not turn into a red run.
+
+On apache/spark and on the base repository it admits at once and makes no request: their
+Builds are not queued here. Reads use the token in
 GH_TOKEN (or GITHUB_TOKEN), the fork's own, which the calling job grants `actions: read`.
 Every poll prints the requests made so far, so a changed rate limit shows as a number.
 """
 
 import argparse
+import http.client
 import json
 import os
 import sys
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 
 API = "https://api.github.com"
@@ -62,6 +69,9 @@ HOLD_LABEL = "ci-hold"
 # is the weekly matrix.
 EXEMPT_REPOS = ("apache/spark", "vecbricks/varka")
 WORKFLOW_FILE = "build_main.yml"
+# What a failed read raises: URLError and HTTPError (both OSError), a socket timeout or reset, a
+# response cut short (http.client.HTTPException) and a body that is not JSON (ValueError).
+READ_ERRORS = (OSError, http.client.HTTPException, ValueError)
 
 
 class Api:
@@ -171,11 +181,11 @@ class Admission:
         owner = self.repo.split("/")[0]
         try:
             pulls = self.api.get_all(
-                "/repos/%s/pulls?state=open&head=%s:%s&per_page=100"
-                % (self.base_repo, owner, self.branch),
+                "/repos/%s/pulls?state=open&head=%s&per_page=100"
+                % (self.base_repo, urllib.parse.quote("%s:%s" % (owner, self.branch), safe=":")),
                 None,
             )
-        except urllib.error.URLError as e:
+        except READ_ERRORS as e:
             # The hold is an operator's convenience; a failed read must not stop CI.
             print(
                 "warning: could not read %s's pull requests (%s); no hold applied"
@@ -216,15 +226,32 @@ class Admission:
         return ("wait", found) if found else ("admit", [])
 
 
-def run(admission, poll_seconds, deadline_minutes, sleep=time.sleep, clock=time.monotonic):
+def run(
+    admission,
+    poll_seconds,
+    deadline_minutes,
+    sleep=time.sleep,
+    clock=time.monotonic,
+    max_failed_polls=5,
+):
     start = clock()
     last = []
+    failed_polls = 0
     while True:
         stamp = time.strftime("%H:%M:%SZ", time.gmtime())
         try:
             verdict, detail = admission.poll()
-        except (urllib.error.URLError, TimeoutError) as e:
-            # A server error or a dropped connection: try again at the next poll.
+            failed_polls = 0
+        except READ_ERRORS as e:
+            # A server error or a dropped connection: try again at the next poll. A read that
+            # keeps failing will not mend by the deadline, so admit rather than wait it out.
+            failed_polls += 1
+            if failed_polls >= max_failed_polls:
+                print(
+                    "%s warning: admitted without the queue, %d polls in a row could not read "
+                    "the fork's runs (last: %s)" % (stamp, failed_polls, e)
+                )
+                return 0
             print("%s could not read the fork's runs (%s); polling again" % (stamp, e))
             verdict, detail = "wait", []
         if verdict == "held":
@@ -265,6 +292,7 @@ def main(argv):
     p.add_argument("--base-repo", default="vecbricks/varka")
     p.add_argument("--poll", type=int, default=120)
     p.add_argument("--deadline-minutes", type=int, default=330)
+    p.add_argument("--max-failed-polls", type=int, default=5)
     args = p.parse_args(argv)
     if args.self_test:
         import doctest
@@ -281,7 +309,10 @@ def main(argv):
     api = Api(token)
     base = args.base_repo if args.base_repo != args.repo else None
     return run(
-        Admission(api, args.repo, args.run_id, args.branch, base), args.poll, args.deadline_minutes
+        Admission(api, args.repo, args.run_id, args.branch, base),
+        args.poll,
+        args.deadline_minutes,
+        max_failed_polls=args.max_failed_polls,
     )
 
 
@@ -307,7 +338,7 @@ class FakeApi(Api):
         return self.pages[url]
 
 
-def recorded(repo, runs, jobs_by_run, pulls=(), page_size=100):
+def recorded(repo, runs, jobs_by_run, pulls=(), page_size=100, branch="b"):
     """URL -> (body, Link) for a fork with `runs` (id -> status) and their jobs."""
     pages = {}
     for status in ("in_progress", "queued"):
@@ -327,7 +358,10 @@ def recorded(repo, runs, jobs_by_run, pulls=(), page_size=100):
             link = '<%s>; rel="next"' % nxt if n + 1 < len(chunks) else ""
             pages[url] = ({"jobs": chunk}, link)
             url = nxt
-    pulls_url = "%s/repos/vecbricks/varka/pulls?state=open&head=MaxGekk:b&per_page=100" % API
+    pulls_url = "%s/repos/vecbricks/varka/pulls?state=open&head=MaxGekk:%s&per_page=100" % (
+        API,
+        urllib.parse.quote(branch, safe=""),
+    )
     pages[pulls_url] = (list(pulls), "")
     return pages
 
@@ -335,9 +369,20 @@ def recorded(repo, runs, jobs_by_run, pulls=(), page_size=100):
 REPO = "MaxGekk/spark"
 
 
-def admission(runs, jobs_by_run, pulls=(), page_size=100, own=1):
-    api = FakeApi(recorded(REPO, runs, jobs_by_run, pulls, page_size))
-    return Admission(api, REPO, own, "b", "vecbricks/varka")
+def admission(runs, jobs_by_run, pulls=(), page_size=100, own=1, branch="b"):
+    api = FakeApi(recorded(REPO, runs, jobs_by_run, pulls, page_size, branch))
+    return Admission(api, REPO, own, branch, "vecbricks/varka")
+
+
+class FailingApi(Api):
+    """Every read fails with `error`."""
+
+    def __init__(self, error):
+        super().__init__(None, opener=self._fail)
+        self.error = error
+
+    def _fail(self, url):
+        raise self.error
 
 
 class AdmitTest(unittest.TestCase):
@@ -444,6 +489,52 @@ class AdmitTest(unittest.TestCase):
         }
         a = admission({1: "in_progress", 2: "in_progress"}, jobs)
         ticks = iter(range(0, 10**6, 120))
+        self.assertEqual(run(a, 120, 10, sleep=lambda s: None, clock=lambda: next(ticks)), 1)
+
+    def test_a_branch_name_is_quoted_in_the_hold_lookup(self):
+        # "+" and "#" read raw would be a space and a fragment, and the hold would miss.
+        pulls = [{"number": 851, "labels": [{"name": HOLD_LABEL}]}]
+        a = admission(
+            {1: "in_progress"},
+            {1: [admit("in_progress", started_at="2026-10-16T10:00:00Z")]},
+            pulls,
+            branch="varka-1+2#x",
+        )
+        self.assertEqual(a.poll(), ("held", 851))
+
+    def test_reads_that_keep_failing_admit_with_a_warning(self):
+        # A 403 for a token without actions: read, a reset connection, a body cut short, a
+        # body that is not JSON: each is retried, and five in a row admit.
+        errors = (
+            urllib.error.HTTPError("u", 403, "Resource not accessible by integration", {}, None),
+            ConnectionResetError("reset"),
+            http.client.IncompleteRead(b""),
+            ValueError("not JSON"),
+        )
+        for error in errors:
+            a = Admission(FailingApi(error), REPO, 1, "b", "vecbricks/varka")
+            slept = []
+            self.assertEqual(run(a, 120, 330, sleep=slept.append, clock=lambda: 0), 0)
+            self.assertEqual(len(slept), 4)
+
+    def test_one_failed_read_is_retried_and_the_wait_goes_on(self):
+        jobs = {
+            1: [admit("in_progress", started_at="2026-10-16T10:05:00Z")],
+            2: [admit("completed", "success", "2026-10-16T09:00:00Z")],
+        }
+        a = admission({1: "in_progress", 2: "in_progress"}, jobs)
+        polls = iter([OSError("dropped"), None, None])
+        real = a.poll
+
+        def flaky():
+            failure = next(polls, None)
+            if failure is not None:
+                raise failure
+            return real()
+
+        a.poll = flaky
+        ticks = iter(range(0, 10**6, 120))
+        # The failure does not admit: the run behind run 2 waits on to its deadline.
         self.assertEqual(run(a, 120, 10, sleep=lambda s: None, clock=lambda: next(ticks)), 1)
 
     def test_exempt_repositories_make_no_request(self):
