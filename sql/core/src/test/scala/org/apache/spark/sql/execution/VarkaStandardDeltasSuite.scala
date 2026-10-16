@@ -35,8 +35,10 @@ import org.apache.spark.sql.internal.SQLConf
  * rather than left to go stale. Where a query reads a cached column through an expression the
  * coverage table fuses, it also runs on `varkaSpark` and must give the same answer: Varka follows
  * Spark (`plans/SCOPE_STANDARD_MODE.md` 1), and these are exactly the rows where Spark is not
- * the standard. Those queries are asserted fused, not that the kernels served every batch, since
- * a range guard declining a far date to the row engine is a correct way to give Spark's answer.
+ * the standard. Those queries are asserted fused, and that the kernels served the batch, except
+ * over the int32 day count's two ends, where a range guard declining the batch to the row engine
+ * is a correct way to give Spark's answer. A query that raises is asserted to raise the same
+ * exception, with the same message, on both engines, and fused where a coverage row reaches it.
  *
  * Dates come back as `LocalDate` (`spark.sql.datetime.java8API.enabled`), which holds year 0 and
  * year 10000 as themselves; `java.sql.Date` would print them through the hybrid calendar.
@@ -45,8 +47,6 @@ class VarkaStandardDeltasSuite extends QueryTest with VarkaSharedSessions
   with VarkaTestWatchdog {
 
   private def d(year: Int, month: Int, day: Int): LocalDate = LocalDate.of(year, month, day)
-
-  private def months(n: Int): Period = Period.ofMonths(n).normalized()
 
   /** Builds a view from `sql` in `session`, one partition, and caches it. */
   private def cacheView(session: SparkSession, name: String, sql: String): Unit = {
@@ -132,16 +132,19 @@ class VarkaStandardDeltasSuite extends QueryTest with VarkaSharedSessions
 
   /**
    * The query's answer is `expected` on the row engine, and the same with Varka on, where the
-   * query is fused: the delta as Spark has it, followed by Varka through its kernels or its
-   * guards.
+   * query is fused: the delta as Spark has it, followed by Varka. With `kernels`, the fixture has
+   * no row a guard declines, so the kernels must have served it; without, a range guard may hand
+   * a far date to the row engine, which is a correct way to give Spark's answer.
    */
-  private def bothAnswer(query: String, expected: Seq[Row]): Unit = {
+  private def bothAnswer(query: String, expected: Seq[Row], kernels: Boolean): Unit = {
     sparkAnswers(query, expected)
     onSession(varkaSpark) {
       withClue(s"with Varka on: $query") {
         val actual = varkaSpark.sql(query)
-        assertFused(actual.queryExecution.executedPlan)
+        val plan = actual.queryExecution.executedPlan
+        assertFused(plan)
         checkAnswer(actual, expected)
+        if (kernels) assertKernelsRan(plan)
       }
     }
   }
@@ -150,27 +153,46 @@ class VarkaStandardDeltasSuite extends QueryTest with VarkaSharedSessions
    * The first `SparkThrowable` with a condition on `e`'s cause chain: a literal's error is thrown
    * by the optimizer's folding, a column's by a task, which a job failure may wrap.
    */
-  private def sparkThrowable(e: Throwable): Option[SparkThrowable] =
+  private def sparkThrowable(e: Throwable): Option[Throwable with SparkThrowable] =
     Iterator.iterate(e)(_.getCause).takeWhile(_ != null).collectFirst {
-      case t: SparkThrowable if t.getCondition != null => t
+      case t: Throwable with SparkThrowable if t.getCondition != null => t
     }
 
-  /** The query raises `condition` with `sqlState` on `session`. */
+  /** The query raises `condition` with `sqlState` on `session`; the error is returned. */
   private def raisesOn(
-      session: SparkSession, query: String, condition: String, sqlState: String): Unit =
+      session: SparkSession, query: String, condition: String, sqlState: String): Throwable =
     withClue(query) {
       val e = intercept[Throwable](session.sql(query).collect())
       val t = sparkThrowable(e).getOrElse(fail(s"no condition on the error's causes: $e", e))
       assert(t.getCondition === condition)
       assert(t.getSqlState === sqlState)
+      e
     }
 
   private def raises(query: String, condition: String, sqlState: String): Unit =
     raisesOn(spark, query, condition, sqlState)
 
-  /** The query raises `condition` with `sqlState` with Varka off and with it on. */
-  private def bothRaise(query: String, condition: String, sqlState: String): Unit =
-    Seq(spark, varkaSpark).foreach(raisesOn(_, query, condition, sqlState))
+  /**
+   * The query raises `condition` with `sqlState` with Varka off and with it on, as the same
+   * exception with the same message, so the fallback changes nothing a user sees. With `fused`
+   * the Varka plan is asserted fused first, so the error is one a kernel's decline handed to the
+   * row engine rather than the row engine's alone.
+   */
+  private def bothRaise(query: String, condition: String, sqlState: String,
+      fused: Boolean): Unit = {
+    val expected = raisesOn(spark, query, condition, sqlState)
+    if (fused) {
+      withClue(s"with Varka on: $query") {
+        assertFused(varkaSpark.sql(query).queryExecution.executedPlan)
+      }
+    }
+    val actual = raisesOn(varkaSpark, query, condition, sqlState)
+    withClue(s"with Varka on: $query") {
+      assert(actual.getClass === expected.getClass)
+      assert(sparkThrowable(actual).map(_.getMessage) ===
+        sparkThrowable(expected).map(_.getMessage))
+    }
+  }
 
   // ---------------------------------------------------------------------------------------------
   // The deltas, in DELTAS.md's order
@@ -183,14 +205,15 @@ class VarkaStandardDeltasSuite extends QueryTest with VarkaSharedSessions
         Row(Int.MinValue, Int.MaxValue - 1, -Int.MaxValue),
         Row(Int.MinValue + 1, Int.MaxValue, Int.MinValue),
         Row(6, 4, -5),
-        Row(null, null, null)))
+        Row(null, null, null)), kernels = true)
       sparkAnswers("SELECT 2147483647 * 2, 9223372036854775807L + 1L",
         Seq(Row(-2, Long.MinValue)))
     }
     // ANSI mode is the standard: the same overflows raise 22003.
     withAnsi(enabled = true) {
-      bothRaise("SELECT i + 1 FROM varka_deltas_ints", "ARITHMETIC_OVERFLOW", "22003")
-      bothRaise("SELECT -i FROM varka_deltas_ints", "ARITHMETIC_OVERFLOW", "22003")
+      bothRaise("SELECT i + 1 FROM varka_deltas_ints", "ARITHMETIC_OVERFLOW", "22003",
+        fused = true)
+      bothRaise("SELECT -i FROM varka_deltas_ints", "ARITHMETIC_OVERFLOW", "22003", fused = true)
       raises("SELECT 2147483647 * 2", "ARITHMETIC_OVERFLOW", "22003")
     }
   }
@@ -201,7 +224,7 @@ class VarkaStandardDeltasSuite extends QueryTest with VarkaSharedSessions
     withAnsi(enabled = false) {
       sparkAnswers("SELECT 1 / 0, 7 % 0, make_date(2024, 2, 30)", Seq(Row(null, null, null)))
       bothAnswer("SELECT make_date(2021, i, 1) FROM varka_deltas_ints",
-        Seq(Row(null), Row(null), Row(d(2021, 5, 1)), Row(null)))
+        Seq(Row(null), Row(null), Row(d(2021, 5, 1)), Row(null)), kernels = true)
     }
     withAnsi(enabled = true) {
       raises("SELECT 1 / 0", "DIVIDE_BY_ZERO", "22012")
@@ -220,11 +243,11 @@ class VarkaStandardDeltasSuite extends QueryTest with VarkaSharedSessions
           Row(d(2025, 2, 28), d(2023, 5, 31)),
           Row(d(2024, 6, 30), d(2025, 2, 28)),
           Row(d(1969, 12, 15), d(1970, 2, 15)),
-          Row(null, null)))
+          Row(null, null)), kernels = true)
         // Spark's add_months (EXTENSIONS.md) clamps by the same rule.
         bothAnswer("SELECT add_months(d, 1) FROM varka_deltas_months", Seq(
           Row(d(2024, 2, 29)), Row(d(2024, 3, 29)), Row(d(2024, 9, 30)), Row(d(1970, 2, 15)),
-          Row(null)))
+          Row(null)), kernels = true)
       }
     }
   }
@@ -239,7 +262,7 @@ class VarkaStandardDeltasSuite extends QueryTest with VarkaSharedSessions
           "year(date_add(d, k)) FROM varka_deltas_range", Seq(
           Row(d(10000, 1, 1), d(10000, 1, 1), d(10000, 1, 31), 10000),
           Row(d(0, 12, 31), d(0, 12, 31), d(0, 12, 1), 0),
-          Row(null, null, null, null)))
+          Row(null, null, null, null)), kernels = true)
         sparkAnswers("SELECT make_date(0, 2, 29), make_date(-1, 1, 1), DATE'+10000-01-01'",
           Seq(Row(d(0, 2, 29), d(-1, 1, 1), d(10000, 1, 1))))
       }
@@ -255,8 +278,14 @@ class VarkaStandardDeltasSuite extends QueryTest with VarkaSharedSessions
           "FROM varka_deltas_wrap", Seq(
           Row(Int.MinValue, Int.MinValue),
           Row(Int.MaxValue, Int.MaxValue),
-          Row(null, null)))
+          Row(null, null)), kernels = false)
         raises("SELECT date_from_unix_date(2147483647) + INTERVAL '1' MONTH",
+          "ARITHMETIC_OVERFLOW", "22003")
+        // Spark's own functions do the same plain Int arithmetic (EXTENSIONS.md): last_day of
+        // the last representable date is (n - 11) + 31, wrapped; add_months raises like d + ym.
+        sparkAnswers("SELECT unix_date(last_day(date_from_unix_date(2147483647)))",
+          Seq(Row(Int.MinValue + 19)))
+        raises("SELECT add_months(date_from_unix_date(2147483647), 1)",
           "ARITHMETIC_OVERFLOW", "22003")
       }
     }
@@ -282,14 +311,17 @@ class VarkaStandardDeltasSuite extends QueryTest with VarkaSharedSessions
     raises("SELECT CAST(178956971 AS INTERVAL YEAR)", "CAST_OVERFLOW", "22003")
     withAnsi(enabled = true) {
       bothRaise("SELECT d + CAST(i AS INTERVAL DAY) FROM varka_deltas_ints",
-        "CAST_OVERFLOW", "22003")
+        "CAST_OVERFLOW", "22003", fused = true)
     }
     val e = intercept[ArithmeticException](
       spark.sql("SELECT CAST(1073741824 AS INTERVAL MONTH) * 2").collect())
     assert(e.getMessage === "integer overflow")
     assert(sparkThrowable(e).isEmpty, s"expected no condition, got $e")
-    // Interval addition, negation and an over-long literal raise 22015, as the standard does.
+    // Interval addition, subtraction and negation raise 22015, as the standard does; an
+    // over-long literal does too (interval_precision_unbounded's test).
     raises("SELECT CAST(2147483647 AS INTERVAL MONTH) + INTERVAL '1' MONTH",
+      "INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION", "22015")
+    raises("SELECT CAST(-2147483648 AS INTERVAL MONTH) - INTERVAL '1' MONTH",
       "INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION", "22015")
     raises("SELECT -CAST(-2147483648 AS INTERVAL MONTH)",
       "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION", "22015")
@@ -303,9 +335,9 @@ class VarkaStandardDeltasSuite extends QueryTest with VarkaSharedSessions
         raises("SELECT TIME'23:30:00' + INTERVAL '1' HOUR", "DATETIME_OVERFLOW", "22008")
         raises("SELECT TIME'00:15:00' + INTERVAL '-1' HOUR", "DATETIME_OVERFLOW", "22008")
         bothRaise("SELECT t + INTERVAL '1' HOUR FROM varka_deltas_times",
-          "DATETIME_OVERFLOW", "22008")
+          "DATETIME_OVERFLOW", "22008", fused = true)
         bothRaise("SELECT t - INTERVAL '1' HOUR FROM varka_deltas_times",
-          "DATETIME_OVERFLOW", "22008")
+          "DATETIME_OVERFLOW", "22008", fused = true)
       }
     }
   }
@@ -319,7 +351,7 @@ class VarkaStandardDeltasSuite extends QueryTest with VarkaSharedSessions
       Seq(Row(LocalTime.of(1, 0), LocalTime.of(1, 30))))
     raises("SELECT TIME'01:00:00' + INTERVAL '1' DAY", "DATETIME_OVERFLOW", "22008")
     bothAnswer("SELECT t + INTERVAL '0 00:00:00' DAY TO SECOND FROM varka_deltas_times",
-      Seq(Row(LocalTime.of(23, 30)), Row(LocalTime.of(0, 15)), Row(null)))
+      Seq(Row(LocalTime.of(23, 30)), Row(LocalTime.of(0, 15)), Row(null)), kernels = true)
   }
 
   test("date_add_time_field: a date plus an HOUR interval is a timestamp") {
@@ -399,6 +431,6 @@ class VarkaStandardDeltasSuite extends QueryTest with VarkaSharedSessions
       Row(1, 2025, 1, 365, d(2024, 12, 30), 2, 0),
       Row(1, 2024, 7, 7, d(2024, 1, 1), 1, 6),
       Row(1, 2025, 2, 366, d(2024, 12, 30), 3, 1),
-      Row(null, null, null, null, null, null, null)))
+      Row(null, null, null, null, null, null, null)), kernels = true)
   }
 }

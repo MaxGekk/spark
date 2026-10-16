@@ -200,8 +200,9 @@ the two new files. `SCOPE_STANDARD_MODE.md` 3.1 to 3.3 carry their delta's name,
 records the standard's date range as a bound with no measured saving: Varka's calendar guard
 already assumes a range about five times as wide. `VarkaStandardDeltasSuite`, 16 tests: one per
 delta, four for the non-deltas, one for the ISO 8601 marks; seven of them also run their query on
-`varkaSpark`, assert it fused and get Spark's answer, and three assert that Varka raises Spark's
-error.
+`varkaSpark`, assert it fused and get Spark's answer - with the kernels asserted to have served the
+batch everywhere but the int32 day count's ends - and three assert that a fused Varka plan raises
+Spark's exception with Spark's message.
 
 **Where the plan was wrong, or the run said more.**
 
@@ -213,9 +214,11 @@ error.
   active around each comparison (`onSession`). The lesson belongs in
   `skills/testing-and-debugging.md`; that file is not this row's to edit (the brief's file list),
   so it is owed to whoever next touches it.
-* **The non-ANSI queries fuse**: `i + 1` and `-i` give the wrapped values from a fused plan, and
-  `make_date(2021, i, 1)` its nulls; the plan had not known whether they would. The suite asserts
-  the plan fused, not that a kernel served the batch, as 5 says.
+* **The non-ANSI queries fuse and the kernels serve them**: `i + 1` and `-i` give the wrapped
+  values from the kernels, and `make_date(2021, i, 1)` its nulls; the plan had not known whether
+  they would. So do the year-10000 and year-0 rows of `proleptic_range`, inside the calendar
+  guard's range (`SCOPE_STANDARD_MODE.md` 3.7). Section 5 had asserted only fusion; the review
+  below made it the kernels wherever no guard can decline.
 * `hour(t)` and `minute(t)` were in neither of `STANDARD.md`'s lists by name: 4.11 maps them to
   `EXTRACT`, so `EXTENSIONS.md` 1 lists them as the standard's by reduction rather than leave a
   coverage row unmarked.
@@ -226,6 +229,21 @@ for the calibration table in `skills/testing-and-debugging.md` - "VARKA-244 (5.1
 sql/core suite under 40 s, its tests under 10 s | 25 s, its tests 8.4 s | 0.6 | predicted at the
 ratio of VARKA-243's line, which this suite's shape repeats" - is owed with the lesson above, for
 the same reason.
+
+**The self-review** (`/code-review high` on the branch) found ten things; fixed: `bothRaise` now
+asserts the Varka plan fused and compares the exception's class and message across the engines, not
+only its condition; `bothAnswer` asserts the kernels served the batch wherever no guard can
+decline; `overflow_yields_null`'s patched definition was as wide as "every data exception is null",
+which would have contradicted three other deltas in a Spark-mode proof, and is now the two cases;
+`EXTENSIONS.md` claimed its definitions held over every int32 day, where `last_day`, `next_day` and
+`trunc(d, 'WEEK')` wrap at the ends and `add_months` raises (`last_day`'s wrap and `add_months`'s
+22003 now tested); interval subtraction's 22015 was claimed and untested, and is tested; an unused
+helper went. Not taken: moving `onSession` into `VarkaSharedSessions` (not this row's file; it is
+the lesson below), writing the helpers in Java (the sql/core suites stay ScalaTest on
+`SharedSparkSession`, and `VarkaStandardExamplesSuite`, the model here, keeps its helpers in Scala),
+and the lesson and calibration line (the brief's file list; see above). After the fixes the suite
+took 72 s, its tests 37 s, at a load average of 46 on 24 cores from other agents' jobs - the first
+run's 25 s is the one the prediction is scored on.
 
 **What this leaves.**
 

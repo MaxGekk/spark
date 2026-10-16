@@ -9,7 +9,9 @@ a proof in Spark mode has to include, not a choice Varka makes.
 
 Every delta has a test in `VarkaStandardDeltasSuite` (`sql/core`) that runs its query on the row
 engine and asserts the delta's answer as a literal, and, where the query reads a column a coverage
-row fuses, asserts that Varka gives the same answer. The tests were written against this fork's
+row fuses, asserts that Varka gives the same answer from a fused plan whose kernels served the
+batch (or, over the int32 day count's ends, whose guard declined it), or raises the same exception
+with the same message. The tests were written against this fork's
 Spark on 16 October 2026 (VARKA-244); a Spark change that removes or alters a delta fails its
 test, and the section here is then corrected.
 
@@ -69,7 +71,9 @@ standard raises, so it is kept under item 59's name for the two places it is tru
 
 **Modes:** non-ANSI only.
 
-**Patched definition.** Where the standard raises a data exception, the result is null.
+**Patched definition.** Over exactly those two: `x / 0` and `x % 0` are null, and `make_date(y,
+m, dd)` is null where `(y, m, dd)` names no day. Nothing else: the other data exceptions of the
+fragment wrap (1.1) or still raise in non-ANSI mode (1.5, 1.7, 1.8).
 
 **Test:** "overflow_yields_null: non-ANSI division by zero and a non-existent make_date are null",
 with `make_date(2021, i, 1)` fused, and its ANSI arm.
@@ -131,7 +135,8 @@ would be int32's and the result past it an exception.
 `date_add(date_from_unix_date(2147483647), 1)` is day `-2147483648`, the year -5877641. A
 year-month interval added there does not wrap: `DateTimeUtils.dateAddMonths` converts through
 `LocalDate` and `Math.toIntExact`, and raises `ARITHMETIC_OVERFLOW`, 22003, where 6.14 GR 3(c)
-says 22008.
+says 22008. Spark's own date functions there do the same plain `Int` arithmetic (`EXTENSIONS.md`):
+`last_day(date_from_unix_date(2147483647))` is day `-2147483629`, and `add_months` raises 22003.
 
 **Test:** "day_count_wraps: a day added past the int32 day count wraps to the other end", over both
 coverage spellings fused, in both modes, and the month's 22003.
@@ -174,7 +179,7 @@ range); the exception is not:
 * `ym * k` past int32 throws `java.lang.ArithmeticException` ("integer overflow"), with no error
   condition and no SQLSTATE;
 * interval `+`, `-`, negation and an over-long literal raise `INTERVAL_ARITHMETIC_OVERFLOW`, 22015,
-  as the standard does.
+  as the standard does (the literal in 1.6's test, the rest in this one's).
 
 **Test:** "interval_overflow_state: a cast past the lane raises 22003, an interval product none",
 including `d + CAST(i AS INTERVAL DAY)` on both engines.

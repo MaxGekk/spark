@@ -17,8 +17,13 @@ Monday, Monday is day 1 and Sunday day 7, and week 1 of a week-numbering year is
 that year's first Thursday - and the ordinal date's day of the year, from 1. Quoting the clauses is
 owed with the SQL standard's current edition.
 
-Every definition below holds over the int32 day counts of `proleptic_range`; none raises for
-range unless it says so. `dow(n) = mod(n + 3, 7)` is the day of the week counted from Monday = 0,
+Every definition below holds over the int32 day counts of `proleptic_range` as long as its result
+and Spark's intermediate sums stay in int32. At the two ends they do not, and Spark's plain `Int`
+arithmetic wraps as `day_count_wraps` does (`DELTAS.md` 1.5): `last_day` computes `(n - D) + L`,
+so `last_day(date_from_unix_date(2147483647))` is day `-2147483629` (tested); `next_day` and
+`trunc(d, 'WEEK')` compute `n + 1` and `n - 7` first, so within a week of either end their answer
+wraps, and its weekday is no longer the one named, since `2^32` is not a multiple of 7 (from the
+source, not tested); the month functions raise 22003 instead. `dow(n) = mod(n + 3, 7)` is the day of the week counted from Monday = 0,
 since day 0, 1970-01-01, was a Thursday. A test pins the ISO 8601 marks and Spark's two day-of-week
 numberings: "ISO 8601's week rules, and Spark's own day-of-week numberings" in
 `VarkaStandardDeltasSuite`.
@@ -66,7 +71,7 @@ of 2020; 2024-12-30 is week 1 of 2025.
 | `next_day(d, w)` | `n + 1 + mod(w - 1 - n, 7)` for weekday `w` as Spark's `DateTimeUtils.getNextDateForDayOfWeek` numbers it: the first day after `d`, never `d` itself | a name that is not a weekday is null, or `ILLEGAL_DAY_OF_WEEK` under ANSI |
 | `make_date(y, m, dd)` | `days(y, m, dd)` | `overflow_yields_null`: a day that does not exist is null, or 22023 under ANSI; any year int32 days reach (`proleptic_range`) |
 | `trunc(d, 'YEAR')`, `'MONTH'`, `'QUARTER'` | `days(Y, 1, 1)`, `days(Y, M, 1)`, `days(Y, 3 * quot(M - 1, 3) + 1, 1)` | an unknown level is null |
-| `add_months(d, k)` | 4.13 with `k` months: the standard's definition patched by `clamp_to_month_end` | Spark's name; the same function as `d + ym` |
+| `add_months(d, k)` | 4.13 with `k` months: the standard's definition patched by `clamp_to_month_end` | Spark's name; the same function as `d + ym`, raising 22003 past int32 days |
 | `make_ym_interval(y, mo)` | `12 * y + mo` months, exact; past int32, `INTERVAL_ARITHMETIC_OVERFLOW`, 22015 | `make_ym_interval(1, -18)` is minus six months: the fields are added, not sign-and-magnitude (C5) |
 | `abs(ym)` | `m` with its sign dropped, exact; `abs` of `-2147483648` months raises `ARITHMETIC_OVERFLOW`, 22003 | no `ABS` in SQL-92 (`STANDARD.md` 6, item 4) |
 | `greatest(a, b, ...)`, `least(...)` | the largest or smallest non-null operand, by 4.2 to 4.4's comparison; null only if all are | skips nulls, unlike a comparison, which is unknown on a null; not in SQL-92 |
