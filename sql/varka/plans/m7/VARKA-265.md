@@ -222,3 +222,79 @@ duration of 9; its dry run here gives the mutant count and the coverage phase's 
 4. The full run (owner, idle window), then the notes and the tests that answer its survivors.
 
 ## 9. Outcome
+
+### 9.1 Branch coverage
+
+`dev/varka_gen_coverage.sh -j 4 --split 3` on 16 October 2026, cores 12-23 beside three other
+agents: 102 suites in 1268 s, 1352 tests passed, 34 cancelled, one failed - `VarkaTierWitnessSuite`,
+which asserts the JIT tier of a call and saw C2's code trap on the memory sanitizer's check under
+the load; a machine verdict, not the emitter's, and the coverage it reached is counted. From
+`sql/varka/coverage/emitter.md`:
+
+| area | methods | entered | branches |
+| :--- | ---: | ---: | ---: |
+| emitter (`codegen.varka`) | 917 | 895 | 90.0% (392 missed) |
+| compiler (`codegen.Varka*`) | 324 | 320 | 83.7% (179 missed) |
+
+`Analysis` takes 96.2% of its branches (14 missed, on 12 lines, five of them validation
+refusals a well-formed shape never meets) and `Slots` 92.9% (40 missed, on 24 lines). The
+constant pool's decline is the one mechanism whose recording code no suite runs. The plan's
+decline and the method-cap refusal, which VARKA-280's reach reports never saw, do run under other
+suites.
+
+**Correction to section 4**: `generated.md` is not committed regenerated. The same run moved it
+from 14,745 emitted classes to 61,599 and shows families VARKA-284's table names no reason for -
+`VarkaFusedFuzzTier`, and `VarkaFusedProjection_w<hash>` classes that `VarkaGenCoverage.family`
+does not fold, since their suffix starts with `w` - which is row 284's and 285's to read, not this
+row's.
+
+### 9.2 The mutation run, set up
+
+The dry run over the full scope (`dev/varka_pit.sh --dry-run`): **1,744 mutants**, 1,006 in `Slots`
+and 738 in `Analysis`; the coverage phase ran 588 tests of 40 suites one unit each in 330 s, with
+the IR fuzzer's C2 test off. The first dry run had it on, and it alone took 482 s of 869; the same
+run stopped on `VarkaWidthAuditSuite`, which fails under PIT's agent and is now left out.
+
+A sample over all 40 suites (`--classes Analysis --methods planBitmapPass,pureOf`):
+`sql/varka/mutation/sample.md`, 104 mutants, 103 killed by a behavioural test, none by the bytes
+oracle alone, one survivor, answered in `notes.tsv` as equivalent (`planWordAlgebra` keeps every
+`Cond` node out of `pureWord`, so `planBitmapPass`'s `instanceof Cond` test is redundant). The
+probe's other survivor, javac's `requireNonNull` on `pureOf`'s pattern switch, is killed here: a
+narrow run's survivor is not an answer. A killed mutant ran one test at the median; the survivor
+ran 405. The run took 320 s of coverage and 493 s of mutants, serially, since PIT made one unit
+of the class - hence `--unit-size` (default 20).
+
+**The idle-window command** (owner), from `/home/max/proj/varka-265`:
+
+    dev/varka_pit.sh --threads 12 --report sql/varka/mutation/verdicts.md \
+      > target/varka-pit.log 2>&1
+
+Twelve minions of 4 GB each. **Expected duration about two hours, and stop to read it past
+four**: the build and coverage phase about 8 minutes; the killed mutants about 1,400 at about 2 s,
+5 minutes over twelve threads; the mutants the first run leaves, about 300 by prediction 6, each
+rerunning about 400 covering tests at the sample survivor's cost, between 150 s idle and 250 s
+loaded, 60 to 105 minutes over twelve threads; the bytes oracle's run on those, at about 14 s a
+mutant, under 10 minutes. The estimate is the arithmetic times the calibration table's ratio for
+harness-bound work, up to 2, which is the four hours; what decides it is the number left by the
+first run, which the report states.
+
+### 9.3 The predictions, scored
+
+1. Emitter branch coverage 82% within five: **missed**, 90.0%; the compiler's 80% within five:
+   **held**, 83.7%. The fuzzers and the matrix base reach more of the emitter than the smoke run's
+   two suites suggested.
+2. `Analysis` 90% or more, `Slots` 85% or more: **held**, 96.2% and 92.9%.
+3. The constant pool's decline the only mechanism no suite reaches: **held**.
+4. Under 40 emitter methods never entered: **held**, 22 - among them two `Slots.plan` overloads
+   with no caller in the main or test tree, dead code whose mutants are uncovered by construction.
+5. 2,000 to 3,500 mutants: **missed**, 1,744; the probe's two methods are denser in calls than the
+   classes on average.
+6. and 7. The full run's verdicts and duration: open, the owner's idle-window run.
+
+### 9.4 Left for later
+
+* The full run's survivors, each a test or a note, after the owner's run.
+* The two dead `Slots.plan` overloads: delete them, or leave their mutants as uncovered by
+  construction; an owner's call, since it touches the emitter.
+* `generated.md`'s new families (9.1), for rows 284 and 285.
+
