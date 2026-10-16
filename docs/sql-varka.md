@@ -1246,9 +1246,11 @@ of the compiler's chain (`VarkaNodeCompiler`, `VarkaFamily`): a family that is o
 node it claims, with the reason `Varka's <family> family is switched off (<switch>=false)` in the
 verbose `EXPLAIN`, and the entry holding that node runs on the row engine while the rest of the
 projection or filter still fuses. A column or literal is never declined by a switch, so a
-`bigint` comparison still fuses with the time family off; and a node one family's lowering builds
-directly for another family's node goes with the caller: in `d - ym` the negated interval is the
-calendar's. The date leaves (a date column, a date literal, the identity date cast) have no switch.
+`bigint` comparison, or a `TIME(3)` column relabelled to `TIME(6)` for one, still fuses with the
+time family off. A node of one family that another's lowering builds directly, such as the
+negated interval in `d - ym`, asks its own family's switch; helper code two families share, such
+as the overflow decision or the pick fold `greatest` borrows, runs under the switch of the node
+it serves. The date leaves (a date column, a date literal, the identity date cast) have no switch.
 
 
 | Config | Default | Description |

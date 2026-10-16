@@ -33,53 +33,54 @@ import java.util.stream.Collectors;
  * ({@link #retry()}), and the {@code families:} line of the context record a kernel failure's
  * warning carries ({@link VarkaErrorContext}).
  *
- * <p>The switch covers the nodes the family <em>claims</em>. Code of one family that another
- * family's lowering calls directly - the calendar's year-month interval operand, the int
- * arithmetic's {@code greatest} and {@code least} folding through the condition family's pick -
- * runs under the claiming family's switch.
+ * <p>The switch covers the nodes the family <em>claims</em>, and a node of the family that another
+ * family's lowering builds directly - the calendar's negated interval in {@code d - ym}, its
+ * years-to-months cast - asks the same switch. Helper code two families share and that builds no
+ * node of its own - the overflow decision of the int and interval arithmetic, the pick fold
+ * {@code greatest} and {@code least} borrow from the condition family - runs under the switch of
+ * the node it serves. A column or literal read, and a cast of one that lowers to the bare read,
+ * is no family's.
  */
 public enum VarkaFamily {
-  /**
-   * {@code VarkaChronoCompiler}: day arithmetic ({@code date_add}, {@code datediff},
-   * {@code unix_date}), the calendar fields ({@code year} to {@code weekofyear}),
-   * {@code make_date}, {@code last_day}, {@code next_day}, {@code trunc}, {@code add_months} and a
-   * date plus a year-month interval.
-   */
-  CALENDAR("calendar", "calendar"),
-  /**
-   * {@code VarkaIntervalCompiler}: year-month interval arithmetic, negation and {@code abs},
-   * {@code make_ym_interval}, the year and month extractions, the multiply by an int and the
-   * casts between intervals and ints.
-   */
-  INTERVAL("interval", "interval"),
-  /**
-   * {@code VarkaTimeCompiler}: the {@code TIME} functions ({@code hour} to {@code time_trunc},
-   * {@code time_diff}, a time plus a day-time interval) and the casts to {@code TIME} and to a
-   * day-time interval.
-   */
-  TIME("time", "time"),
-  /**
-   * {@code VarkaConditionCompiler}: a filter's predicates (comparisons, {@code IN}, the validity
-   * tests and the connectives) and the value-side conditionals {@code IF}, {@code CASE WHEN} and
-   * {@code coalesce}. Off, no filter fuses.
-   */
-  CONDITION("condition", "condition"),
-  /**
-   * The int arithmetic of {@code VarkaNodeCompiler}: {@code +}, {@code -}, {@code *} and unary
-   * minus over int operands, checked under ANSI where the operands' bounds do not rule out
-   * overflow, and {@code greatest} and {@code least}.
-   */
-  INT_ARITHMETIC("int arithmetic", "intArithmetic");
+  /** {@code VarkaChronoCompiler}. */
+  CALENDAR("calendar", "calendar", "day arithmetic (date_add, date_sub, datediff, unix_date,"
+      + " date_from_unix_date), the calendar fields (year to weekofyear), make_date, last_day,"
+      + " next_day, trunc, add_months and a date plus a year-month interval"),
+  /** {@code VarkaIntervalCompiler}. */
+  INTERVAL("interval", "interval", "year-month interval arithmetic, negation and abs,"
+      + " make_ym_interval, the year and month extractions, the multiply by an int and the"
+      + " casts between year-month intervals and ints"),
+  /** {@code VarkaTimeCompiler}. */
+  TIME("time", "time", "the TIME functions (hour, minute, second, time_trunc, time_diff, the"
+      + " conversions to and from micros and millis, a time plus a day-time interval) and the"
+      + " casts to TIME and to a day-time interval"),
+  /** {@code VarkaConditionCompiler}. */
+  CONDITION("condition", "condition", "a filter's predicates (comparisons, IN, IS NULL and"
+      + " IS NOT NULL, AND, OR and NOT), so that no filter fuses, and the conditionals IF,"
+      + " CASE WHEN and coalesce"),
+  /** The int arithmetic arm of {@code VarkaNodeCompiler}. */
+  INT_ARITHMETIC("int arithmetic", "intArithmetic", "+, -, * and unary minus over int"
+      + " operands, checked under ANSI, and greatest and least");
 
   /** The prefix every family's switch shares. */
   public static final String SWITCH_PREFIX = "spark.sql.codegen.varka.family.";
 
   private final String label;
   private final String key;
+  private final String covers;
 
-  VarkaFamily(String label, String key) {
+  VarkaFamily(String label, String key, String covers) {
     this.label = label;
     this.key = key;
+    this.covers = covers;
+  }
+
+  /**
+   * What the family covers, in the words its switch's documentation uses: the one copy that the
+   * {@code SQLConf} entry's doc renders, and that {@code docs/sql-varka.md}'s table repeats.
+   */
+  public String covers() {
+    return covers;
   }
 
   /** The family's name in prose and in the compiler's chain, e.g. {@code int arithmetic}. */

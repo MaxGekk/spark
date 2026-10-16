@@ -28,7 +28,6 @@ import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -44,6 +43,7 @@ import scala.jdk.javaapi.CollectionConverters;
 import org.apache.spark.SparkIllegalArgumentException;
 import org.apache.spark.sql.catalyst.expressions.Attribute;
 import org.apache.spark.sql.catalyst.expressions.BoundReference;
+import org.apache.spark.sql.catalyst.expressions.Cast;
 import org.apache.spark.sql.catalyst.expressions.Expression;
 import org.apache.spark.sql.catalyst.expressions.Literal;
 import org.apache.spark.sql.catalyst.expressions.NamedExpression;
@@ -82,16 +82,6 @@ public final class VarkaFamilySwitchSuite {
 
   private static final VarkaEmitOptions OPTIONS = VarkaMatrixRuns.BASE;
 
-  /**
-   * The rows holding a node one family claims that another family's lowering builds directly,
-   * without the chain, so the claimant's switch does not reach it (`VARKA-318.md` 3.2): each
-   * with the family whose switch it escapes. In `d - ym` the calendar lowers the negated interval
-   * operand through `VarkaIntervalCompiler`'s helpers. A new such row fails the test until it is
-   * listed here, and a listed row that stops being one fails it too.
-   */
-  private static final Map<String, VarkaFamily> LOWERED_BY_CALLER =
-      Map.of("d - ym", VarkaFamily.INTERVAL);
-
   // Read once for the class: JUnit builds an instance per test, and the rows' resolution through
   // the analyzer is most of the suite's time.
   private static Seq<Attribute> columns;
@@ -123,6 +113,10 @@ public final class VarkaFamilySwitchSuite {
   }
 
   private Outcome compile(Row row, Set<VarkaFamily> off) {
+    return compile(row, off, columns);
+  }
+
+  private static Outcome compile(Row row, Set<VarkaFamily> off, Seq<Attribute> columns) {
     if (row.predicate()) {
       var explained =
           VarkaExpressionCompiler.explainAndCompilePredicate(row.expr(), columns, OPTIONS, off);
@@ -151,13 +145,23 @@ public final class VarkaFamilySwitchSuite {
   }
 
   /**
-   * The families whose nodes {@code row} holds, read off the chain's claims rather than the
-   * compiler's record: every non-leaf node of the bound tree (and of what a replaceable node
-   * compiles as) that a switchable family claims, and the condition family for a conjunct.
+   * The families whose nodes a row holds, read off the chain's claims rather than the compiler's
+   * record: {@code sure}, the families claiming a node of the bound tree (or of what a
+   * replaceable node compiles as) that is not a read, and the condition family for a conjunct;
+   * and {@code castsOfReads}, those claiming only a cast of a column or literal, which is the
+   * family's when it computes and nobody's when it lowers to the bare read (a relabel), which
+   * only the lowering tells.
    */
-  private List<VarkaFamily> claimedFamilies(Row row) {
+  private record Claims(List<VarkaFamily> sure, Set<VarkaFamily> castsOfReads) {}
+
+  private static boolean isRead(Expression e) {
+    return e instanceof BoundReference || e instanceof Literal;
+  }
+
+  private Claims claims(Row row) {
     Expression bound = VarkaSqlResolve.bind(row.expr(), columns);
     var found = EnumSet.noneOf(VarkaFamily.class);
+    var casts = EnumSet.noneOf(VarkaFamily.class);
     if (row.predicate()) {
       found.add(VarkaFamily.CONDITION);
     }
@@ -169,17 +173,19 @@ public final class VarkaFamilySwitchSuite {
         stack.add(r.replacement());
       }
       stack.addAll(CollectionConverters.asJava(e.children()));
-      if (e instanceof BoundReference || e instanceof Literal) {
+      if (isRead(e)) {
         continue;
       }
+      boolean castOfRead = e instanceof Cast c && isRead(c.child());
       for (VarkaNodeCompiler.Family family : VarkaNodeCompiler.families()) {
         if (family.family() != null && family.claim().of(
             e, new VarkaSlotTable(), new VarkaSlotTable(), sink) != null) {
-          found.add(family.family());
+          (castOfRead ? casts : found).add(family.family());
         }
       }
     }
-    return List.copyOf(found);
+    casts.removeAll(found);
+    return new Claims(List.copyOf(found), Set.copyOf(casts));
   }
 
   @Test
@@ -189,22 +195,17 @@ public final class VarkaFamilySwitchSuite {
     var failures = new ArrayList<String>();
     for (Row row : rows) {
       Outcome on = compile(row, Set.of());
-      List<VarkaFamily> holds = claimedFamilies(row);
+      Claims claims = claims(row);
       if (on.kernel().isEmpty()) {
         failures.add("`" + row.sql() + "` does not fuse with every family on: " + on.reason());
         continue;
       }
-      VarkaFamily escapes = LOWERED_BY_CALLER.get(row.sql());
-      if (escapes != null) {
-        if (!holds.contains(escapes) || on.families().contains(escapes)) {
-          failures.add("`" + row.sql() + "` is listed as lowering " + escapes.label()
-              + " in its caller, and no longer does");
-        }
-        holds = holds.stream().filter(f -> f != escapes).toList();
-      }
-      if (!on.families().equals(holds)) {
+      // The record holds every sure family, and a cast's family only where the cast computed.
+      var holds = on.families().stream()
+          .filter(f -> claims.sure().contains(f) || claims.castsOfReads().contains(f)).toList();
+      if (!on.families().equals(holds) || !holds.containsAll(claims.sure())) {
         failures.add("`" + row.sql() + "` records families " + on.families() + ", its nodes are "
-            + holds);
+            + claims);
       }
       for (VarkaFamily family : VarkaFamily.values()) {
         Outcome off = compile(row, Set.of(family));
@@ -240,8 +241,7 @@ public final class VarkaFamilySwitchSuite {
   void failureNamesTheSwitch() {
     for (VarkaFamily family : VarkaFamily.values()) {
       Row row = rows.stream()
-          .filter(r -> !LOWERED_BY_CALLER.containsKey(r.sql()))
-          .filter(r -> claimedFamilies(r).contains(family)).findFirst().orElseThrow();
+          .filter(r -> claims(r).sure().contains(family)).findFirst().orElseThrow();
       VarkaNodeCompiler.setFailInFamilyForTesting(family);
       try {
         RuntimeException e = assertThrows(RuntimeException.class, () -> compile(row, Set.of()));
@@ -257,6 +257,17 @@ public final class VarkaFamilySwitchSuite {
         VarkaNodeCompiler.setFailInFamilyForTesting(null);
       }
     }
+    // Nested, the innermost family is the one named: the calendar's year under int arithmetic.
+    Row nested = new Row("year(d) + 1", false, VarkaSqlResolve.parse("year(d) + 1", columns));
+    VarkaNodeCompiler.setFailInFamilyForTesting(VarkaFamily.CALENDAR);
+    try {
+      String message = assertThrows(SparkIllegalArgumentException.class,
+          () -> compile(nested, Set.of())).getMessage();
+      assertTrue(message.contains(VarkaFamily.CALENDAR.retry()), message);
+      assertTrue(!message.contains(VarkaFamily.INT_ARITHMETIC.switchKey()), message);
+    } finally {
+      VarkaNodeCompiler.setFailInFamilyForTesting(null);
+    }
   }
 
   @Test
@@ -270,5 +281,13 @@ public final class VarkaFamilySwitchSuite {
       assertTrue(off.kernel().isPresent(), sql + ": " + off);
       assertEquals(List.of(VarkaFamily.CONDITION), off.families(), sql);
     }
+    // The relabel type coercion puts on a TIME(3) column compared with a TIME(6) one is a read.
+    var withT3 = new ArrayList<Attribute>(CollectionConverters.asJava(columns));
+    withT3.add(VarkaSqlResolve.column("t3", CatalystSqlParser$.MODULE$.parseDataType("time(3)")));
+    Seq<Attribute> wider = CollectionConverters.asScala(withT3).toSeq();
+    Row relabel = new Row("t < t3", true, VarkaSqlResolve.parse("t < t3", wider));
+    Outcome off = compile(relabel, Set.of(VarkaFamily.TIME), wider);
+    assertTrue(off.kernel().isPresent(), off.toString());
+    assertEquals(List.of(VarkaFamily.CONDITION), off.families());
   }
 }

@@ -24,7 +24,6 @@ import java.util.Set;
 import javax.annotation.Nullable;
 
 import scala.Option;
-import scala.jdk.javaapi.CollectionConverters;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
@@ -83,9 +82,8 @@ public record VarkaSessionEmit(
   public static VarkaSessionEmit of(SQLConf conf) {
     Option<Object> exact = conf.varkaEmitExactRefusalStatus();
     var off = EnumSet.noneOf(VarkaFamily.class);
-    var keys = CollectionConverters.asJava(conf.varkaFamilySwitchesOff());
     for (VarkaFamily family : VarkaFamily.values()) {
-      if (keys.contains(family.switchKey())) {
+      if (!conf.varkaFamilyEnabled(family)) {
         off.add(family);
       }
     }

@@ -46,6 +46,7 @@ import org.apache.spark.sql.catalyst.ScalaReflection
 import org.apache.spark.sql.catalyst.analysis.{HintErrorLogger, Resolver}
 import org.apache.spark.sql.catalyst.expressions.CodegenObjectFactoryMode
 import org.apache.spark.sql.catalyst.expressions.codegen.CodeGenerator
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 import org.apache.spark.sql.catalyst.plans.logical.HintErrorHandler
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
@@ -3158,16 +3159,18 @@ object SQLConf {
     .booleanConf
     .createWithDefault(true)
 
-  // The kill switch of one Varka expression family (VARKA-318): false keeps every expression the
-  // family covers on Spark's row engine while the rest of a projection or filter still fuses.
-  // Each key equals its VarkaFamily's switchKey, which every message about the family names.
-  private def varkaFamilySwitch(key: String, covers: String): ConfigEntry[Boolean] =
-    buildConf(key)
+  // The kill switch of one Varka expression family (VARKA-318), one entry per VarkaFamily: false
+  // keeps every expression the family covers on Spark's row engine while the rest of a projection
+  // or filter still fuses. The key and the coverage are the enum's, which every message about the
+  // family names, so a family added there is a setting here with no second list to keep.
+  private def varkaFamilySwitch(family: VarkaFamily): ConfigEntry[Boolean] =
+    buildConf(family.switchKey())
       .internal()
-      .doc(s"When false, Varka's compiler declines $covers, naming this setting as the reason in" +
-        " the verbose EXPLAIN, and those expressions run on Spark's per-row path while the" +
-        " rest of the projection or filter still fuses. The switch for one family that answers" +
-        " wrongly or fails, without turning off Varka (spark.sql.codegen.varka.enabled).")
+      .doc(s"When false, Varka's compiler declines the ${family.label()} family -" +
+        s" ${family.covers()} - naming this setting as the reason in the verbose EXPLAIN, and" +
+        " those expressions run on Spark's per-row path while the rest of the projection or" +
+        " filter still fuses. The switch for one family that answers wrongly or fails, without" +
+        " turning off Varka (spark.sql.codegen.varka.enabled).")
       .version("5.0.0")
       // Chooses which of two equal-answer paths computes an expression; nothing a view body
       // resolves to.
@@ -3175,34 +3178,8 @@ object SQLConf {
       .booleanConf
       .createWithDefault(true)
 
-  val VARKA_FAMILY_CALENDAR_ENABLED = varkaFamilySwitch(
-    "spark.sql.codegen.varka.family.calendar.enabled",
-    "the calendar family: day arithmetic (date_add, date_sub, datediff, unix_date," +
-      " date_from_unix_date), the calendar fields (year to weekofyear), make_date, last_day," +
-      " next_day, trunc, add_months and a date plus a year-month interval")
-
-  val VARKA_FAMILY_INTERVAL_ENABLED = varkaFamilySwitch(
-    "spark.sql.codegen.varka.family.interval.enabled",
-    "the interval family: year-month interval arithmetic, negation and abs, make_ym_interval," +
-      " the year and month extractions, the multiply by an int and the casts between" +
-      " year-month intervals and ints")
-
-  val VARKA_FAMILY_TIME_ENABLED = varkaFamilySwitch(
-    "spark.sql.codegen.varka.family.time.enabled",
-    "the time family: the TIME functions (hour, minute, second, time_trunc, time_diff, the" +
-      " conversions to and from micros and millis, a time plus a day-time interval) and the" +
-      " casts to TIME and to a day-time interval")
-
-  val VARKA_FAMILY_CONDITION_ENABLED = varkaFamilySwitch(
-    "spark.sql.codegen.varka.family.condition.enabled",
-    "the condition family: a filter's predicates (comparisons, IN, IS NULL and IS NOT NULL," +
-      " AND, OR and NOT), so that no filter fuses, and the conditionals IF, CASE WHEN and" +
-      " coalesce")
-
-  val VARKA_FAMILY_INT_ARITHMETIC_ENABLED = varkaFamilySwitch(
-    "spark.sql.codegen.varka.family.intArithmetic.enabled",
-    "the int arithmetic family: +, -, * and unary minus over int operands, checked under ANSI," +
-      " and greatest and least")
+  val VARKA_FAMILY_SWITCHES: Map[VarkaFamily, ConfigEntry[Boolean]] =
+    VarkaFamily.values().toSeq.map(f => f -> varkaFamilySwitch(f)).toMap
 
   val CODEGEN_FACTORY_MODE = buildConf("spark.sql.codegen.factoryMode")
     .internal()
@@ -9542,11 +9519,8 @@ class SQLConf extends Serializable with Logging with SqlApiConf {
 
   def varkaWarmupEnabled: Boolean = getConf(VARKA_WARMUP_ENABLED)
 
-  /** The keys of the Varka family switches this session sets to false (VARKA-318). */
-  def varkaFamilySwitchesOff: Seq[String] = Seq(
-    VARKA_FAMILY_CALENDAR_ENABLED, VARKA_FAMILY_INTERVAL_ENABLED, VARKA_FAMILY_TIME_ENABLED,
-    VARKA_FAMILY_CONDITION_ENABLED, VARKA_FAMILY_INT_ARITHMETIC_ENABLED)
-    .filterNot(getConf(_)).map(_.key)
+  /** Whether this session leaves the Varka expression family `family` on (VARKA-318). */
+  def varkaFamilyEnabled(family: VarkaFamily): Boolean = getConf(VARKA_FAMILY_SWITCHES(family))
 
   def codegenFallback: Boolean = getConf(CODEGEN_FALLBACK)
 
