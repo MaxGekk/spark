@@ -262,9 +262,16 @@ suites that read the trace's counters pass unchanged. The committed reports,
 section 2 regenerated on the final code: with the last pass reported, an emission whose loop
 rebuilt reports less (one group in 934 int-lane emissions where the union said 962, a group past
 the budget by sharing in 437 where it said 465), while every total of section 2's table - the
-emissions, the declines, the distinct plans and sets, the mechanisms reached - is unchanged. A correction to
-section 2: the table has 65 projection rows, not 66; its 66 projection compilations are those 65
-alone and the one of all of them.
+emissions, the declines, the distinct plans and sets, the mechanisms reached - is unchanged.
+
+Two corrections to section 2, which miscounted the probe's lists. **Three mechanisms are reached by
+no test of the IR fuzzer, not four**: `METHOD_CAP_REFUSAL`, `DECLINE_PLANNED` and
+`DECLINE_CONSTANT_POOL`; `PLAN_CORRECTED` is reached by the int-lane draws (21 emissions) and the
+long-lane draws (9), and section 2 had read it off the wide test's list. **The two lanes' draws
+alone miss ten, not nine**: those three, and `STAGED_DRIVER`, `STAGE_SPLIT`, `CALL_SITE_ROLLBACK`,
+`EXACT_GROUPING_DROPPED`, `PREDICTION_DROPPED`, `PLANNED_STAGES` and `DECLINE_CLASS`, seven that
+only the wide compositions reach. And the table has 65 projection rows, not 66; its 66 projection
+compilations are those 65 alone and the one of all of them.
 
 ### 9.1 The A/B
 
@@ -337,10 +344,10 @@ by a rule registered for the gate's scale.
   through the shape cache, whose `emit` makes its own trace, so the report needs a trace handed
   down or a per-test sink); `VarkaCoverageCompositionFuzzSuite` and `VarkaSmallTreeSuite`, a few
   lines each with `VarkaEmitReach`, at their next change.
-* **The four never reached** by the IR fuzzer (section 2): the plan's correction and its decline
-  are reached by the opt-in size-trace dump's planned variants and by the trace suites, not by the
+* **The three never reached** by the IR fuzzer (9, correcting section 2): the plan's decline is
+  reached by the opt-in size-trace dump's planned variants and by the trace suites, not by the
   fuzzer; the class-file cap's refusal is about one draw in three hundred thousand; the constant
   pool's decline is reached by nothing, which row 265's branch coverage will show as well.
 
-The lesson is in `skills/testing-and-debugging.md`, "Steering a fuzzer toward unseen emitter
-mechanisms", and the cost line in its calibration table.
+The lesson is in `skills/testing-and-debugging.md`, "What the emitter reached, and steering a
+fuzzer toward the rest", and the cost line in its calibration table.

@@ -1019,11 +1019,12 @@ attaches a `VarkaEmitReach` to its trace and prints what it reached and never di
 - **A decline is an emission too.** The size loop hands the set over in a `catch` of
   `VarkaEmitDeclined` as well as on return, so a run whose shapes decline still says what they
   reached first; any other failure is not an emission and is not noted.
-- **The suites' fixed seeds miss the size loop's corners.** The IR fuzzer's two lanes miss nine
-  mechanisms that only its wide compositions reach (stages, rollbacks, both grouping switches
-  dropped), four that nothing in it reaches (the plan corrected and its decline, the class-file
-  cap's refusal, the constant pool's decline), and the coverage table misses every size reaction
-  and every decline: its widest shape is one kernel that fits.
+- **The suites' fixed seeds miss the size loop's corners.** The IR fuzzer's two lanes miss ten
+  mechanisms: seven that only its wide compositions reach (stages, rollbacks, both grouping
+  switches dropped, a class-wide decline) and three that nothing in it reaches (the plan's decline,
+  the class-file cap's refusal, the constant pool's decline). The coverage table misses every size
+  reaction and every decline: its widest shape is one kernel that fits. Count a report's misses
+  from its last column, not by searching for "never": a mechanism's sentence can hold the word.
 - **Steering does not pay at the gate's budget; at the nightly's it only gains.** Over 16
   seed-lanes at 300 emissions an arm, keeping a draw that reached a new set of mechanisms (QPG's
   rule without the trees) or a rare mechanism and mutating it - an option changed, a variant -
