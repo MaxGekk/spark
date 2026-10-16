@@ -46,6 +46,14 @@ jdk="$("$JAVA" -XshowSettings:properties -version 2>&1 \
 spark="$(sed -n 's/^Spark \([^ ]*\) .*/\1/p' "$SPARK/RELEASE")"
 commit="$(git rev-parse --short=11 HEAD)"
 
+# The machine's CPU: lscpu's model name on Linux, x86 or Arm, and the brand string on macOS.
+cpu() {
+  local model
+  model="$(lscpu 2>/dev/null | sed -n 's/^Model name: *//p' | head -1)"
+  [ -n "$model" ] || model="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || true)"
+  echo "${model:-unknown}"
+}
+
 # run <script> <output name> <spark-shell options...>
 run() {
   local script="$1" name="$2"
@@ -62,7 +70,7 @@ run() {
     fi
     echo "commit:  $commit"
     if $times; then
-      echo "cpu:     $(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //')"
+      echo "cpu:     $(cpu)"
       if [ -n "${GITHUB_RUN_ID:-}" ]; then
         echo "pinned:  ${EXPECTED_CPU:-no (the runner is not pinned)}"
       fi
@@ -74,11 +82,12 @@ run() {
     sed -n '/^###/,/^### Spark/p' "$log" | { grep -v -E '^[0-9]{2}/[0-9]{2}/[0-9]{2} ' || true; }
   } > "$out"
   if ! grep -q '^### Spark' "$out"; then
-    echo "$script did not finish; its log is $log, which ends:" >&2
-    tail -n 40 "$log" >&2
+    mv "$log" "$name-jdk$jdk.log"
+    echo "$script did not finish; its log is $PWD/$name-jdk$jdk.log, which ends:" >&2
+    tail -n 40 "$name-jdk$jdk.log" >&2
     return 1
   fi
-  rm -f "$log"
+  rm -f "$log" "$name-jdk$jdk.log"
   cat "$out"
 }
 

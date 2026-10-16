@@ -12,11 +12,12 @@
 //
 // The other scripts here count the classes Spark compiles; this one times them. It has two parts,
 // the stock-Spark sections of CodegenRecompileBenchmark (sql/core/benchmarks), with the same
-// queries, shapes and table formats, so that the two can be compared line by line:
+// queries, shapes and table formats, so that the two tables can be compared line by line:
 //
 // 1. a short query over a small cached table, with the same integer each time, or a new integer,
 //    date, string or integer parameter each time: over 40 queries, the classes compiled per
-//    query, the wall time per query, and Janino's part of it;
+//    query, the wall time per query, and Janino's part of it. The benchmark's harness first times
+//    each arm for two seconds after two of warm-up; here the arm runs as long, untimed;
 // 2. Janino's time for one compile of a whole stage against the stage's size: projections of
 //    1 to 99 entries `id + k` and aggregates of 10 to 60 sums by a key, each compile of a source
 //    new to the cache, best and median of nine.
@@ -94,6 +95,8 @@ def means(): Unit = {
     f"${"ms / query"}%16s ${"Janino ms / query"}%18s")
   arms.foreach { arm =>
     arm.run()
+    // As the benchmark harness does before each case.
+    System.gc()
     val classes = CodegenMetrics.METRIC_COMPILATION_TIME.getCount
     val janino = CodeGenerator.compileTime
     val start = System.nanoTime()
@@ -158,14 +161,22 @@ def compileTimes(): Unit = {
   println()
 }
 
-// Spark's own classes compile on a session's first queries; each shape runs once first.
-arms.foreach(_.query(1))
-
-println("### A short query over a small cached table: the same value each time, or a new one")
-println(s"SELECT count(*) FROM t WHERE <column> = <value>, $rows rows in one partition; " +
-  s"each arm ${warmupSeconds} s first")
-means()
-println("### Janino's compile time against a stage's size")
-compileTimes()
-println(s"### Spark ${spark.version}, Java ${System.getProperty("java.version")}")
-System.exit(0)
+// One statement, so that the end marker is printed only if every part ran: spark-shell -i goes
+// on to the next statement after one that fails, and run.sh takes the marker as the sign that the
+// script finished.
+try {
+  // Spark's own classes compile on a session's first queries; each shape runs once first.
+  arms.foreach(_.query(1))
+  println("### A short query over a small cached table: the same value each time, or a new one")
+  println(s"SELECT count(*) FROM t WHERE <column> = <value>, $rows rows in one partition; " +
+    s"each arm ${warmupSeconds} s first")
+  means()
+  println("### Janino's compile time against a stage's size")
+  compileTimes()
+  println(s"### Spark ${spark.version}, Java ${System.getProperty("java.version")}")
+  System.exit(0)
+} catch {
+  case e: Throwable =>
+    e.printStackTrace()
+    System.exit(1)
+}
