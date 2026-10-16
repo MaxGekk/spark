@@ -1,0 +1,79 @@
+# The step-time budget (VARKA-255.md 3.6), written by dev/varka_ci_times.py collect.
+where	job	step	cpu	runs	median_s	p90_s	first	last
+ci	Every small tree, size 5	(job)	-	1	3296	3296	2026-10-12	2026-10-12
+ci	Every small tree, size 5	Cache Coursier local repository	-	1	11	11	2026-10-12	2026-10-12
+ci	Every small tree, size 5	Cache SBT and Maven	-	1	5	5	2026-10-12	2026-10-12
+ci	Every small tree, size 5	Checkout	-	1	12	12	2026-10-12	2026-10-12
+ci	Every small tree, size 5	Compile the catalyst tests and export their classpath	-	1	299	299	2026-10-12	2026-10-12
+ci	Every small tree, size 5	Install Java 25	-	1	9	9	2026-10-12	2026-10-12
+ci	Every small tree, size 5	Install the Varka engine	-	1	14	14	2026-10-12	2026-10-12
+ci	Every small tree, size 5	Keep the logs	-	1	1	1	2026-10-12	2026-10-12
+ci	Every small tree, size 5	Run every tree to size 4 at the 128-bit width, one JVM per core	-	1	124	124	2026-10-12	2026-10-12
+ci	Every small tree, size 5	Run every tree to size 5, one JVM per core	-	1	2807	2807	2026-10-12	2026-10-12
+ci	Nightly fuzz	(job)	-	1	1253	1253	2026-10-12	2026-10-12
+ci	Nightly fuzz	Cache Coursier local repository	-	1	15	15	2026-10-12	2026-10-12
+ci	Nightly fuzz	Cache SBT and Maven	-	1	4	4	2026-10-12	2026-10-12
+ci	Nightly fuzz	Checkout	-	1	12	12	2026-10-12	2026-10-12
+ci	Nightly fuzz	Compile the catalyst tests and export their classpath	-	1	222	222	2026-10-12	2026-10-12
+ci	Nightly fuzz	Install Java 25	-	1	10	10	2026-10-12	2026-10-12
+ci	Nightly fuzz	Install the Varka engine	-	1	16	16	2026-10-12	2026-10-12
+ci	Nightly fuzz	Keep the logs	-	1	1	1	2026-10-12	2026-10-12
+ci	Nightly fuzz	Run every tree's variants to size 4, one JVM per core	-	1	514	514	2026-10-12	2026-10-12
+ci	Nightly fuzz	Run the IR fuzzer, one JVM per core	-	1	404	404	2026-10-12	2026-10-12
+ci	Nightly fuzz	Run the coverage composition fuzzer	-	1	43	43	2026-10-12	2026-10-12
+ci	Varka assembly gate	(job)	-	34	428	465	2026-10-12	2026-10-13
+ci	Varka assembly gate	Assert the instructions	-	34	334	364	2026-10-12	2026-10-13
+ci	Varka assembly gate	Bootstrap composite actions	-	34	12	13	2026-10-12	2026-10-13
+ci	Varka assembly gate	Build hsdis	-	34	2	4	2026-10-12	2026-10-13
+ci	Varka assembly gate	Checkout and sync Spark repository	-	34	40	46	2026-10-12	2026-10-13
+ci	Varka assembly gate	Install Java 25	-	34	8	10	2026-10-12	2026-10-13
+ci	Varka assembly gate	Install the disassembler's build dependency	-	34	9	17	2026-10-12	2026-10-13
+ci	Varka assembly gate	Report the machine	-	34	17	18	2026-10-12	2026-10-13
+ci	Varka bench drivers	(job)	-	15	134	205	2026-10-13	2026-10-13
+ci	Varka bench drivers	Bootstrap composite actions	-	15	12	13	2026-10-13	2026-10-13
+ci	Varka bench drivers	Cache Maven local repository	-	15	0	3	2026-10-13	2026-10-13
+ci	Varka bench drivers	Checkout and sync Spark repository	-	15	45	77	2026-10-13	2026-10-13
+ci	Varka bench drivers	Install Java 25	-	15	9	11	2026-10-13	2026-10-13
+ci	Varka bench drivers	Run the bench module's tests	-	15	57	70	2026-10-13	2026-10-13
+ci	Varka docs checks	(job)	-	50	46	52	2026-10-12	2026-10-13
+ci	Varka docs checks	Checkout the branch with its full history	-	50	38	43	2026-10-12	2026-10-13
+ci	Varka docs checks	Every quoted number traces to a committed results file	-	50	4	4	2026-10-12	2026-10-13
+ci	Varka docs checks	SKILLS.md's index matches the lesson files	-	50	0	0	2026-10-12	2026-10-13
+ci	Varka engine (aarch64)	(job)	-	14	86	98	2026-10-13	2026-10-13
+ci	Varka engine (aarch64)	Bootstrap composite actions	-	14	11	12	2026-10-13	2026-10-13
+ci	Varka engine (aarch64)	Build and test the Varka engine	-	14	22	28	2026-10-13	2026-10-13
+ci	Varka engine (aarch64)	Checkout and sync Spark repository	-	14	36	41	2026-10-13	2026-10-13
+ci	Varka engine (aarch64)	Install Java 25	-	14	8	10	2026-10-13	2026-10-13
+ci	Varka engine (x86_64)	(job)	-	14	94	174	2026-10-13	2026-10-13
+ci	Varka engine (x86_64)	Bootstrap composite actions	-	14	12	13	2026-10-13	2026-10-13
+ci	Varka engine (x86_64)	Build and test the Varka engine	-	14	24	28	2026-10-13	2026-10-13
+ci	Varka engine (x86_64)	Checkout and sync Spark repository	-	14	42	46	2026-10-13	2026-10-13
+ci	Varka engine (x86_64)	Install Java 25	-	14	9	15	2026-10-13	2026-10-13
+ci	Varka suites: catalyst	(job)	-	27	1366	2039	2026-10-12	2026-10-13
+ci	Varka suites: catalyst	Bootstrap composite actions	-	27	12	13	2026-10-12	2026-10-13
+ci	Varka suites: catalyst	Cache Coursier local repository	-	27	2	12	2026-10-12	2026-10-13
+ci	Varka suites: catalyst	Cache SBT and Maven	-	27	3	5	2026-10-12	2026-10-13
+ci	Varka suites: catalyst	Cache the Varka suites' times	-	27	1	1	2026-10-12	2026-10-13
+ci	Varka suites: catalyst	Checkout and sync Spark repository	-	27	40	46	2026-10-12	2026-10-13
+ci	Varka suites: catalyst	Install Java 25	-	27	9	12	2026-10-12	2026-10-13
+ci	Varka suites: catalyst	Run the Varka suites of catalyst	-	27	724	1087	2026-10-12	2026-10-13
+ci	Varka suites: catalyst	The Varka suites of catalyst under one emit option configuration	-	27	327	1126	2026-10-12	2026-10-13
+ci	Varka suites: catalyst	The emitted-bytes oracle's verdict	-	27	0	1	2026-10-12	2026-10-13
+ci	Varka suites: sql	(job)	-	25	1464	1726	2026-10-12	2026-10-13
+ci	Varka suites: sql	Bootstrap composite actions	-	25	12	14	2026-10-12	2026-10-13
+ci	Varka suites: sql	Cache Coursier local repository	-	25	3	17	2026-10-12	2026-10-13
+ci	Varka suites: sql	Cache SBT and Maven	-	25	3	4	2026-10-12	2026-10-13
+ci	Varka suites: sql	Cache the Varka suites' times	-	25	0	1	2026-10-12	2026-10-13
+ci	Varka suites: sql	Checkout and sync Spark repository	-	25	41	47	2026-10-12	2026-10-13
+ci	Varka suites: sql	Install Java 25	-	25	9	12	2026-10-12	2026-10-13
+ci	Varka suites: sql	Run the Varka suites of sql	-	25	947	1127	2026-10-12	2026-10-13
+ci	Varka suites: sql	The Varka suites of sql under one emit option configuration	-	25	431	477	2026-10-12	2026-10-13
+laptop	gate	bench	-	12	86	105	2026-10-05	2026-10-12
+laptop	gate	compile	-	12	31	151	2026-10-05	2026-10-12
+laptop	gate	doc	-	12	248	288	2026-10-05	2026-10-12
+laptop	gate	lint	-	11	224	263	2026-10-05	2026-10-12
+laptop	gate	narrow	-	12	707	853	2026-10-05	2026-10-12
+laptop	gate	quiet	-	12	58	63	2026-10-05	2026-10-12
+laptop	gate	quotes	-	12	6	6	2026-10-05	2026-10-12
+laptop	gate	sweep	-	12	268	304	2026-10-05	2026-10-12
+laptop	gate	wide	-	12	708	843	2026-10-05	2026-10-12
