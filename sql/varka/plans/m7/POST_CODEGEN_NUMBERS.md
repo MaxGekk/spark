@@ -69,9 +69,13 @@ Every compiled class goes into a per-JVM cache of 100 (`spark.sql.codegen.cache.
 fixed when the JVM starts), keyed by the generated source text. A hit skips Janino. A miss
 compiles and logs one `Code generated in ... ms` line at INFO. Because some literals are written
 into the source, a query that differs only in a number or a date is a miss. [Link to row 258's
-post, which measures what that costs, when it is published. What happens past the 100 entries
-is owed: its measurement 5 runs 150 distinct queries twice and counts the second loop's
-compiles.]
+post, which measures what that costs, when it is published.]
+
+Past 100 the cache doesn't degrade gently. On stock 4.2.0 a loop of 150 queries that differ only
+in an integer, run twice, compiled all 150 again in the second loop. In local mode each such query
+compiles three classes, so the default cache holds about 30 of them, and a loop larger than the
+cache evicts each class just before it is needed again. With `maxEntries=1000` the second loop
+compiled nothing.
 
 ## At the JIT: two limits of 8000
 

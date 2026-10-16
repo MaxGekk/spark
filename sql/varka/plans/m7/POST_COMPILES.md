@@ -1,15 +1,16 @@
 # How Spark compiles a query, and why it compiles it again
 
 *Draft (row 258, `VARKA-258.md`). Every count below is from `sql/varka/demo/compiles/` on stock
-Spark 4.2.0 with JDK 25. The times are owed by `CodegenRecompileBenchmark` on a GitHub-hosted
-runner and are in brackets until its results file is committed.*
+Spark 4.2.0 with JDK 25. The times are from `CodegenRecompileBenchmark` on a GitHub-hosted runner's
+AMD EPYC 7763 with JDK 25 (`sql/core/benchmarks/CodegenRecompileBenchmark-jdk25-results.txt`), on this repository's Spark, master-based, with Varka off; the
+owner decides whether that build stands in for 4.2.0 at publication.*
 
 ---
 
 A dashboard runs the same query every time someone moves a filter. The query is short: a count
 over a cached table. Yet the first run with each new date is slower than the rerun with the same
-date, every time. [Measured: the short query's ms with the same value and with a new one, from
-`CodegenRecompileBenchmark`'s first table, and the ratio.] Nothing is wrong with the data. Spark
+date, every time. On a cloud runner a count over 100,000 cached rows took 24.92 ms on average
+with the same integer each time and 41.45 ms with a new one. Nothing is wrong with the data. Spark
 compiled the query again, because a date it writes into the query's code is new.
 
 The earlier posts here - [The 8000-byte cliff in Spark
@@ -87,15 +88,33 @@ filter (`executors.scala`). A new string compiled nothing anywhere. Every execut
 task of the stage compiles it, so on fifty executors over a cached table one click is a hundred
 and one compiles.
 
-**Per query.** [From `CodegenRecompileBenchmark`'s first section: the short query's ms with the
-same int each time and with a new one, and the same for a date, a string and an int parameter;
-then, per query, the classes compiled and the ms Janino took, so that the rest - mostly the new
-class running in the interpreter - can be read off.]
+**Per query.** The same short query, run back to back in local mode on a runner, 40 queries per
+row:
 
-**Against a stage's size.** [From its second section: Janino's best and median ms for
-projections of 1 to 99 entries and aggregates of 10 to 60 sums, against the source's size and the
-largest method's bytes. The point to make: what a wide stage costs to compile again, on the driver
-and on each executor that runs it.]
+| `SELECT count(*) FROM t WHERE ...` | classes a query | ms a query | of which Janino |
+|---|---|---|---|
+| the same int each time | 0 | 24.92 | 0 |
+| a new int each time | 3 | 41.45 | 16.42 |
+| a new date each time | 3 | 42.77 | 16.05 |
+| a new string each time | 0 | 21.61 | 0 |
+| a new int parameter each time | 3 | 42.57 | 15.46 |
+
+A new integer made the query about two thirds slower, and almost all of the difference is Janino,
+16.42 ms a query. For a query this small the new class's time in the interpreter
+hardly shows; "When Spark stops compiling your query" measured where it does, on wide stages that
+took seconds to reach their steady speed.
+
+**Against a stage's size.** Each compile from a source new to the cache, best of nine:
+
+| stage | source | largest method | Janino, best |
+|---|---|---|---|
+| a projection of 1 entry `id + k` | 4470 chars | 280 bytes | 3.91 ms |
+| a projection of 99 entries | 31930 chars | 3672 bytes | 9.07 ms |
+| an aggregate of 10 sums by a key | 20456 chars | 486 bytes | 7.97 ms |
+| an aggregate of 60 sums by a key | 82037 chars | 2586 bytes | 17.85 ms |
+
+Janino's time grows with the source, and every JVM that runs the stage pays it again: a 60-sum
+aggregate with a new literal is about 18 ms on the driver and about 18 ms more on each executor.
 
 **Past the cache's 100 entries.** `cache.scala` runs a loop of n queries that differ only in an
 integer, then the same loop again, and counts how many of the second loop's queries compiled.
@@ -129,11 +148,14 @@ compiled nothing at any size up to 150.
 ## 5. What Spark could do
 
 Strings already show the way: pass the value to the class and read it from there, and every
-value of a query shares one class. [From `CodegenRecompileBenchmark`'s third section: with an
-integer passed this way, the classes compiled per query with a new value (expected 0) and the
-short query's ms against the literal's; and the steady-state cost of reading the value from a
-field instead of a constant, on a scan of 20 million cached rows. Then say whether that is worth
-proposing upstream.]
+value of a query shares one class. To see whether that would pay for integers, the benchmark
+has a stand-in expression that passes the integer to the class and reads it from a field, and runs
+`SELECT count(*) FROM t WHERE i % 1000000 = <value>` both ways, after checking that both count the
+same rows. With a new value each time, the literal compiled 2 classes a query and averaged 42.96
+ms; passed to the class, it compiled none and averaged 19.92 ms, the same as repeating one literal
+(19.30 ms). Once warm it costs nothing: a scan of 20 million cached rows took 12.4 ns a row with
+the literal and 12.1 with the field, one run each, a difference too small to call either way.
+On these numbers the change would pay, and Spark already does it for strings.
 
 ## 6. Seeing it on your own cluster
 
