@@ -130,9 +130,9 @@ request number in the body, one question a section. Rendered with `dev/varka_pos
 
 Scored against 7:
 
-1. **Held.** The body from the title to the provenance heading is about 1,900 words with the
-   figure lines and the three slots counted, about 1,850 without them; a first pass was 2,050 and
-   was cut.
+1. **Held, at the top of the range.** The body from the title to the provenance heading is about
+   1,980 words with the figure lines and the three slots counted, about 1,880 without them; a
+   first pass was 2,050 and was cut.
 2. **Held.** Six figures, `fig45.py` to `fig50.py`, each reading a committed file: `coverage.json`
    and `spec/DELTAS.md`, the `.smt2` files, `figures/data/both-bodies.tsv` (held to the current
    `coverage/generated.md`), `spark_suites/served.json`, `VARKA-272.md` 9.1, and
