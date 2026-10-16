@@ -228,3 +228,87 @@ committed reports; one for the measurement's outcome in section 9 and the row, a
 kept, the steered test.
 
 ## 9. Outcome
+
+*16 October 2026.* Built as section 3 says, with one correction to 3.3: the A/B test is opt-in
+(`-Dvarka.fuzz.steer=<n>` or `-Dvarka.fuzz.steerSeeds=<a,b,...>`), not run at 300 emissions in
+every gate, since its verdict below kept steering out of the fuzzer and its 13 seconds would buy
+nothing in the gate or in each of the option matrix's configurations. `emitted_bytes.json` is
+byte-identical (`VarkaEmittedBytesSuite` green), and the suites that read the trace's counters
+pass unchanged. The committed reports, `sql/varka/coverage/reach/VarkaIrFuzzSuite.md` and
+`VarkaCoverageSuite.md`, are the run of section 2 regenerated on the final code, every count
+unchanged. A correction to section 2: the table has 65 projection rows, not 66; its 66 projection
+compilations are those 65 alone and the one of all of them.
+
+### 9.1 The A/B
+
+Run as section 6 says, but as plain JVMs over the test classpath (the skill "A fuzz campaign is
+sixteen JVMs, not one sbt"), the sixteen pinned to cores 12-23, 104 seconds in all: section 6's
+`build/sbt -D...` sets the property in sbt's JVM and not the test JVM's, which is how the first try
+ran the default seeds alone. Every line is in `sql/varka/spikes/steering-ab/results/ab.txt`. Means over the
+eight seeds of each lane, mechanisms of 39, distinct mechanism sets, and the median emission at
+which the mechanisms all three arms reached were first reached; then, per steered arm, the
+seed-lanes where it reached more mechanisms than plain, as many, and fewer:
+
+| budget | lane | plain | steered, new set | steered, rare mechanism |
+| ---: | :--- | :--- | :--- | :--- |
+| 300 | int | 26.12, 181.6 sets, first at 6.5 | 25.88, 132.5, 11.9; 3 / 2 / 3 | 25.62, 128.6, 12.4; 2 / 2 / 4 |
+| 300 | long | 17.00, 154.9, 3.8 | 17.62, 109.4, 7.1; 4 / 3 / 1 | 17.50, 110.4, 7.5; 3 / 4 / 1 |
+| 3000 | int | 28.00, 1077.0, 8.9 | 28.00, 888.8, 16.0; 0 / 8 / 0 | 28.50, 743.6, 16.2; 3 / 5 / 0 |
+| 3000 | long | 19.00, 606.4, 4.8 | 19.75, 531.9, 9.0; 6 / 2 / 0 | 19.62, 462.2, 9.9; 4 / 4 / 0 |
+
+**Steering is not kept.** By the rule of 6.1 #4, at 300 emissions the better arm reaches more in 7
+of 16 seed-lanes and fewer in 4 (the new-set arm), against the 10 and 2 the rule asks, and its
+mean is higher by 0.62 at the long lane and lower by 0.25 at the int lane. At the main tests'
+budget steering trades fresh draws for mutations of kept ones and gains nothing: what it gains in
+one seed (a regroup on bytes, a plan corrected, a prefix stored and loaded) it loses in another (a
+call-site split, a day-producer guard, a decline on an output).
+
+**At 3000 it never reaches fewer, and reaches past what plain draws reach.** In 13 of the 32
+steered seed-lanes it reaches more, in none fewer. At the int lane the rare-mechanism arm reached
+the call-site rollback (two seeds), the prediction dropped, the exact grouping dropped and a
+class-wide decline, which no plain draw reaches at 3000 and only the wide compositions reach
+otherwise; at the long lane the steered arms reached call-site splits in seven seed-arms whose
+plain draws had none (plain reaches them in 2 of the 8 seeds), the plan's correction in three, and
+the rare-mechanism arm the call-site rollback once, which plain draws reach at neither lane. The mutations that do it are the variants that
+grow a draw - duplicated, copied, beside a stranger - applied again to a case kept for growing,
+until it is wide enough for the size loop's rare corners. That is a nightly-scale effect of half a
+mechanism on average, and it is left for later (9.3), not kept by a rule registered for the
+gate's scale.
+
+### 9.2 The predictions, scored
+
+1. *At 300 neither steered arm reaches more, each mean within one of plain's.* **Right**: within
+   0.25 at the int lane and 0.62 at the long lane, and the rule's count fails both arms.
+2. *At 3000 the rare-mechanism arm reaches one more than plain at the int lane on average; the long
+   lane equal.* **Wrong both ways in size**: half a mechanism more at the int lane (28.50 against
+   28.00), and the long lane was not equal - both arms gained, 0.62 and 0.75, on call-site splits
+   and the plan's correction.
+3. *Both steered arms reach fewer distinct sets than plain, and the common mechanisms later.*
+   **Right** at every budget and lane: 27% to 31% fewer sets at 300, the median first emission
+   about doubled.
+4. *By the rule, steering is not kept.* **Right.**
+5. *The A/B test under 10 seconds at its defaults; the coverage suite's reach test under 2.*
+   **The first wrong, the second right**: 13.2 and 12.8 seconds in a fresh JVM alone on the
+   pinned cores (about 7 ms an emission, the emitter cold), ratio 1.3; the reach test 0.56
+   seconds. The A/B is opt-in now, so neither the gate nor the nightly pays for it. The reports
+   in the main tests cost one canonical rendering of a draw's outputs per emission, which the
+   draw already pays once for its label; not measured apart.
+
+### 9.3 Left for later
+
+* **A steered arm in the nightly.** 9.1's 3000-emission result says a steered sequence beside the
+  plain draws reaches the size loop's rare corners from the one-to-three-root grammar, where today
+  only the wide compositions do; it would need the steered test of 3.3, each case checked against
+  the reference evaluator, at the nightly's budget. Not a row of this milestone by the rule of 6.1;
+  offered for the owner to place.
+* **The other fuzzers' reports.** `VarkaSparkFuzzSuite` after row 298 merges (its emissions go
+  through the shape cache, whose `emit` makes its own trace, so the report needs a trace handed
+  down or a per-test sink); `VarkaCoverageCompositionFuzzSuite` and `VarkaSmallTreeSuite`, a few
+  lines each with `VarkaEmitReach`, at their next change.
+* **The four never reached** by the IR fuzzer (section 2): the plan's correction and its decline
+  are reached by the opt-in size-trace dump's planned variants and by the trace suites, not by the
+  fuzzer; the class-file cap's refusal is about one draw in three hundred thousand; the constant
+  pool's decline is reached by nothing, which row 265's branch coverage will show as well.
+
+The lesson is in `skills/testing-and-debugging.md`, "Steering a fuzzer toward unseen emitter
+mechanisms", and the cost line in its calibration table.

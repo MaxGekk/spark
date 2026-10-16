@@ -145,13 +145,16 @@ final class VarkaDivisionLowering {
       return;
     }
     if (takesMagicDivide(analysis, n)) {
+      analysis.reach(VarkaEmitMechanism.DIVIDE_MAGIC_LONG);
       emitMagicDivide(cb, n, s);
       return;
     }
     if (takesMulHiDivide(analysis, n)) {
+      analysis.reach(VarkaEmitMechanism.DIVIDE_MULTIPLY_HIGH);
       emitMulHiDivide(cb, analysis, n, s);
       return;
     }
+    analysis.reach(VarkaEmitMechanism.DIVIDE_CONVERTED);
     emitDoubleDivide(cb, analysis.lane,
         new Divider(VarkaEmitOptions.Division.DOUBLE_DIV, analysis.divider.species()),
         n.divisor());

@@ -453,6 +453,10 @@ public final class VarkaLoopEmitter {
     /** The first output of each group of the current grouping the prediction widened; see
      *  {@link #admit}. The call-site split halves such a group however narrow. */
     private final Set<Integer> widenedStarts = new HashSet<>();
+    /** The first output of each other group past the group budget, for the trace alone. */
+    private final Set<Integer> sharingStarts = new HashSet<>();
+    // The current grouping's group count, which the trace's record of the emission carries.
+    private int groupCount;
 
     // The options the grouping reads: the caller's, with the call-site budget dropped when the
     // loop drops it, and without a grouping switch once a class it produced would decline.
@@ -514,7 +518,24 @@ public final class VarkaLoopEmitter {
      */
     private record Split(boolean any, List<Integer> stuck) {}
 
+    /**
+     * The size loop, and what it reached handed to the trace when it ends, built or declined
+     * (VARKA-280). A failure that is not a decline is not an emission and is not noted.
+     */
     byte[] run() {
+      int[] before = trace.counters();
+      byte[] bytes;
+      try {
+        bytes = loop();
+      } catch (VarkaEmitDeclined d) {
+        trace.noteEmission(outputs, analysis.reached, before, groupCount, true);
+        throw d;
+      }
+      trace.noteEmission(outputs, analysis.reached, before, groupCount, false);
+      return bytes;
+    }
+
+    private byte[] loop() {
       while (true) {
         List<List<Integer>> groups = group();
         plan(groups);
@@ -538,6 +559,8 @@ public final class VarkaLoopEmitter {
           continue;
         }
         if (!fallBack(stuck)) {
+          analysis.reach(stuck.isEmpty()
+              ? VarkaEmitMechanism.DECLINE_CLASS : VarkaEmitMechanism.DECLINE_OUTPUT);
           throw new VarkaEmitDeclined(String.join("; ", findings)
               + (stuck.isEmpty() ? "" : "; output" + (stuck.size() == 1 ? " " : "s ") + stuck
                   + " cannot be regrouped smaller"), stuck,
@@ -552,8 +575,18 @@ public final class VarkaLoopEmitter {
         predictions.tallies().clear();
       }
       widenedStarts.clear();
+      sharingStarts.clear();
       List<List<Integer>> groups = groupOutputs(outputs, grouping, forcedStarts, predictions,
-          exactRuns, widenedStarts);
+          exactRuns, widenedStarts, sharingStarts);
+      groupCount = groups.size();
+      analysis.reach(groups.size() == 1
+          ? VarkaEmitMechanism.ONE_GROUP : VarkaEmitMechanism.SEVERAL_GROUPS);
+      if (!widenedStarts.isEmpty()) {
+        analysis.reach(VarkaEmitMechanism.GROUP_WIDENED_BY_PREDICTION);
+      }
+      if (!sharingStarts.isEmpty()) {
+        analysis.reach(VarkaEmitMechanism.GROUP_PAST_BUDGET_BY_SHARING);
+      }
       // Decided per grouping, since a regroup can move a prefix across a group boundary; empty
       // unless the option is on and a prefix crosses one, and then the class takes the scratch
       // address as an eighth argument (VARKA-198).
@@ -622,11 +655,13 @@ public final class VarkaLoopEmitter {
         Optional<VarkaEmittedClass> refusal = VarkaEmittedClass.refused(e);
         if (refusal.isEmpty()) {
           if (VarkaEmittedClass.refusedConstantPool(e)) {
+            analysis.reach(VarkaEmitMechanism.DECLINE_CONSTANT_POOL);
             throw new VarkaEmitDeclined("the constant pool is over the cap of " + CONSTANT_POOL_CAP
                 + ": the class cannot be built (" + e.getMessage() + ")", List.of());
           }
           throw e;
         }
+        analysis.reach(VarkaEmitMechanism.METHOD_CAP_REFUSAL);
         return new Build(null, refusal.get(), METHOD_CODE_CAP);
       }
     }
@@ -1224,14 +1259,16 @@ public final class VarkaLoopEmitter {
   private static List<List<Integer>> groupOutputs(List<VarkaVectorIR> outputs,
       VarkaEmitOptions options, Set<Integer> forcedStarts, TallyRecord record,
       ExactRuns exactRuns) {
-    return groupOutputs(outputs, options, forcedStarts, record, exactRuns, new HashSet<>());
+    return groupOutputs(outputs, options, forcedStarts, record, exactRuns, new HashSet<>(),
+        new HashSet<>());
   }
 
   /** As above, leaving in {@code widenedStarts} the first output of each group the prediction
-   *  widened past the group budget. */
+   *  widened past the group budget, and in {@code sharingStarts} that of each other group of
+   *  several outputs past it, which only what they share holds together (VARKA-280). */
   private static List<List<Integer>> groupOutputs(List<VarkaVectorIR> outputs,
       VarkaEmitOptions options, Set<Integer> forcedStarts, TallyRecord record,
-      ExactRuns exactRuns, Set<Integer> widenedStarts) {
+      ExactRuns exactRuns, Set<Integer> widenedStarts, Set<Integer> sharingStarts) {
     Set<Integer> exactStarts = null;
     if (options.exactGrouping()) {
       // The best partition's group starts, forced on the walk below. Every group of that
@@ -1271,9 +1308,7 @@ public final class VarkaLoopEmitter {
       // its own: after one calendar output `ops` already exceeds it, so without this test
       // `SELECT year(d) AS a, year(d) AS b` would emit the decomposition twice.
       if (!current.isEmpty() && (closes(step, options) || forcedStarts.contains(o))) {
-        if (group.widenedByPrediction) {
-          widenedStarts.add(current.get(0));
-        }
+        noteWidened(group, current, options, widenedStarts, sharingStarts);
         groups.add(current);
         if (record != null) {
           record.tallies().add(group.tally);
@@ -1286,9 +1321,7 @@ public final class VarkaLoopEmitter {
       current.add(o);
       group = withNext;
     }
-    if (group.widenedByPrediction) {
-      widenedStarts.add(current.get(0));
-    }
+    noteWidened(group, current, options, widenedStarts, sharingStarts);
     groups.add(current);
     if (record != null) {
       record.tallies().add(group.tally);
@@ -1299,6 +1332,21 @@ public final class VarkaLoopEmitter {
           + "partition judged a step apart");
     }
     return groups;
+  }
+
+  /**
+   * Notes where a closed group starts when it is past the group budget: in {@code widenedStarts}
+   * where the prediction widened it, in {@code sharingStarts} where it holds several outputs and
+   * only what they share - a prefix up to the fused ceiling, a tree it already holds - let them
+   * join. A single output past the budget is neither: it forms a group of its own either way.
+   */
+  private static void noteWidened(GroupOps group, List<Integer> current,
+      VarkaEmitOptions options, Set<Integer> widenedStarts, Set<Integer> sharingStarts) {
+    if (group.widenedByPrediction) {
+      widenedStarts.add(current.get(0));
+    } else if (current.size() > 1 && group.ops > options.groupBudget()) {
+      sharingStarts.add(current.get(0));
+    }
   }
 
   /**

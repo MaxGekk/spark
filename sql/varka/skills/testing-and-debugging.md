@@ -1000,6 +1000,36 @@ To size 4 nothing failed and nothing declined, at either lane. Under the planted
 `misdescribeWordLiveness`, beside a stranger and literal to column fail trees the plain series
 passes, which is what shows the variants reach something the series alone does not.
 
+## What the emitter reached, and steering a fuzzer toward the rest
+
+VARKA-280. `VarkaEmitMechanism` lists 39 things the emitter decides about a whole shape - the
+grouping, what a computation is shared with, the validity words, the guards, the division form,
+the size loop's reactions, the declines - and the emitter notes each where it emits it into the
+emission's `Analysis.reached`, handed to the `VarkaEmitTrace` when the emission ends. A suite
+attaches a `VarkaEmitReach` to its trace and prints what it reached and never did; with
+`VARKA_REACH_DUMP=<dir>` it writes the table under `sql/varka/coverage/reach/`. What it taught:
+
+- **Note a mechanism where its bytes are emitted, not where a slot is planned.** `Slots.plan`
+  plans slots for bodies no build emits (a dense body of a kernel that nulls valid inputs) and,
+  without group-local frames, for other groups' nodes; a note there reports what was never built.
+- **A decline is an emission too.** The size loop hands the set over in a `catch` of
+  `VarkaEmitDeclined` as well as on return, so a run whose shapes decline still says what they
+  reached first; any other failure is not an emission and is not noted.
+- **The suites' fixed seeds miss the size loop's corners.** The IR fuzzer's two lanes miss nine
+  mechanisms that only its wide compositions reach (stages, rollbacks, both grouping switches
+  dropped), four that nothing in it reaches (the plan corrected and its decline, the class-file
+  cap's refusal, the constant pool's decline), and the coverage table misses every size reaction
+  and every decline: its widest shape is one kernel that fits.
+- **Steering does not pay at the gate's budget, and is not one-sided at the nightly's.** Over 16
+  seed-lanes at 300 emissions an arm, keeping a draw that reached a new set of mechanisms (QPG's
+  rule without the trees) or a rare mechanism and mutating it - an option redrawn, a variant -
+  did no better: the better of the two arms reached more than the plain draws in 7 and fewer in
+  4, and both reached the common mechanisms at about twice the emission. At 3000 it reached fewer in none and more in 13 of 32 steered
+  seed-lanes, among them the call-site rollback and both grouping switches dropped, which plain
+  draws never reach: the growing variants, applied again to a case kept for growing, make it wide
+  enough. Random draws reach a new mechanism set at most steps (185 of 300), so set novelty keeps
+  nearly everything; rarity keeps less and did no better at 300.
+
 ## Every guard at its bound: a verdict from the emitter's own rule
 
 VARKA-279. `VarkaGuardSpec` says per batch which guard bits a kernel must decline with, which it
@@ -1294,6 +1324,7 @@ predicted. Add the line when the prediction is scored, whichever way it went.
 | VARKA-243 (6.1 #3) | a new sql/core suite under 10 s | 18 s, its tests under 4 s | about 2 | the estimate counted the tests and not the suite's own sessions and cached table |
 | VARKA-327 (6.1 #2) | the warmed Spark differential's 2,000 compositions under an hour | 13 minutes | 0.26 | predicted from a seed that released 6.8% of its warm-ups at 10 s each; the nightly's released 0.9% |
 | VARKA-281 (6.1 #3) | the calendar sweep suite under 20 s | 1.5 s for its eight tests over 20 million days each | 0.08 | the estimate priced single-threaded `LocalDate` decodes and then doubled; a parallel stream over the test JVM's cores and the JIT's inlining of the decode left little of either |
+| VARKA-280 (6.1 #5) | the opt-in steering A/B under 10 s at one seed pair, 1800 emissions | 13.2 and 12.8 s in a fresh JVM alone | 1.3 | about 7 ms an emission with the emitter cold; the estimate took two |
 
 What the table says so far: a check that adds a run per batch or a read per call costs more than
 the plan's arithmetic, because the arithmetic counts the kernel's work and not the harness's

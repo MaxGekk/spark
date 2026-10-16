@@ -84,6 +84,14 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils
  * is one the draw's columns were drawn for. A variant's failure is reported with the variant and
  * the draw's replay, not shrunk.
  *
+ * What the emitter reached (VARKA-280): the int-lane, long-lane and wide tests each print which
+ * of the emitter's mechanisms (`VarkaEmitMechanism`) their emissions reached, which they never
+ * did, and how many distinct plans and mechanism sets they produced (`VarkaEmitReach`); with
+ * `VARKA_REACH_DUMP=<dir>` the reports are written there as `VarkaIrFuzzSuite.md`, the file under
+ * `sql/varka/coverage/reach/` that row 265 reads. An opt-in test measures steering toward unseen
+ * mechanisms against the plain draws (`VarkaSteering`), which the measurement kept out of the
+ * main tests.
+ *
  * Budget: `-Dvarka.fuzz.iterations` (default 300, a few seconds); `-Dvarka.fuzz.wide` (default
  * 10 compositions, a few seconds); `-Dvarka.fuzz.seed` (default fixed, so the committed run is
  * reproducible and a nightly can vary it). The iterations and the seed apply to both lanes.
@@ -118,6 +126,8 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   private val skippedPastTheOpCap = new AtomicInteger(0)
   // What the random shapes' emissions did about size, reported after each run (VARKA-238).
   private val randomTrace = new VarkaEmitTrace
+  // What each reporting test's emissions reached, for the file row 265 reads (VARKA-280).
+  private val reachReports = scala.collection.mutable.ArrayBuffer.empty[VarkaEmitReach]
   private val lengths = Seq(1, 3, 7, 15, 16, 17, 33, 64, 65, 100, 257, 1000)
 
   /** The options `randomOptions` draws, in the order it draws them. */
@@ -1015,20 +1025,20 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   test(s"wide compositions past the driver's ceiling match the reference evaluator, and reach " +
       s"every size mechanism (seed $seed, $wideIterations compositions)") {
     val trace = new VarkaEmitTrace
+    val reach = VarkaEmitReach.attach(trace, "wide compositions")
     wideDeclines = 0
     wideChecked = 0
     (0 until wideIterations).foreach(runWide(_, trace))
     // Under the defaults nothing of this width declines: the split driver serves every one.
     assert(wideChecked === wideIterations,
       s"$wideChecked of $wideIterations compositions ran against the reference evaluator")
-    def reached: Seq[(String, Int)] = Seq(
-      "a group halved on bytes" -> trace.byteRegroups,
-      "a group split on call sites" -> trace.siteSplits,
-      "the call-site splits rolled back" -> trace.siteRollbacks,
-      "a driver split into stages" -> trace.stageSplits,
-      "the exact grouping dropped" -> trace.exactFallbacks,
-      "the prediction dropped" -> trace.predictFallbacks,
-      "a decline" -> wideDeclines)
+    // The size loop's reactions the wide variants aim at, by the emissions that reached each
+    // (`VarkaEmitTrace.counters` pairs each counter with its mechanism), and the declines.
+    import VarkaEmitMechanism._
+    def reached: Seq[(String, Int)] = Seq(BYTE_REGROUP, CALL_SITE_SPLIT, CALL_SITE_ROLLBACK,
+        STAGE_SPLIT, EXACT_GROUPING_DROPPED, PREDICTION_DROPPED)
+      .map(m => m.sentence -> trace.reachedBy.getOrDefault(m, Integer.valueOf(0)).intValue) :+
+      ("a decline" -> wideDeclines)
     def missed: Seq[String] = reached.collect { case (mechanism, 0) => mechanism }
     // Every variant runs at least once only from a full cycle up. Which mechanisms a width
     // reaches is the defaults' structure, so the option matrix checks only the answers. A
@@ -1045,9 +1055,13 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
       info(s"${k - wideIterations} further compositions drawn for a mechanism the first " +
         s"$wideIterations missed")
       reached.foreach { case (mechanism, n) => info(s"$mechanism: $n") }
+      VarkaEmitReach.detach(trace)
+      reportReach(reach)
       assert(missed.isEmpty, s"no wide composition reached, in $k: ${missed.mkString(", ")}")
     } else {
       reached.foreach { case (mechanism, n) => info(s"$mechanism: $n") }
+      VarkaEmitReach.detach(trace)
+      reportReach(reach)
     }
   }
 
@@ -1114,20 +1128,131 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   }
 
   test(s"random IR trees match the reference evaluator (seed $seed, $iterations iterations)") {
-    only match {
-      case Some(k) => runOne(k)
-      case None => (0 until iterations).foreach(runOne)
+    val reach = VarkaEmitReach.attach(randomTrace, "int-lane draws")
+    try {
+      only match {
+        case Some(k) => runOne(k)
+        case None => (0 until iterations).foreach(runOne)
+      }
+    } finally {
+      VarkaEmitReach.detach(randomTrace)
     }
+    reportReach(reach)
     reportSkipped()
   }
 
   test(s"random long-lane IR trees match the reference evaluator (seed $longSeed, " +
       s"$iterations iterations)") {
-    only match {
-      case Some(k) => runOneLong(k)
-      case None => (0 until iterations).foreach(runOneLong)
+    val reach = VarkaEmitReach.attach(randomTrace, "long-lane draws")
+    try {
+      only match {
+        case Some(k) => runOneLong(k)
+        case None => (0 until iterations).foreach(runOneLong)
+      }
+    } finally {
+      VarkaEmitReach.detach(randomTrace)
     }
+    reportReach(reach)
     reportSkipped()
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // What the emitter reached, and steering toward what it has not (VARKA-280).
+  // ---------------------------------------------------------------------------------------------
+
+  /** The steering A/B's emissions per arm: `-Dvarka.fuzz.steer`, the main tests' by default. */
+  private val steerBudget = sys.props.get("varka.fuzz.steer").map(_.toInt).getOrElse(iterations)
+  /** Whether the A/B runs: it is opt-in, since its verdict kept steering out (`VARKA-280.md` 9). */
+  private val steerRequested =
+    sys.props.contains("varka.fuzz.steer") || sys.props.contains("varka.fuzz.steerSeeds")
+
+  /** The seeds the A/B runs at: `-Dvarka.fuzz.steerSeeds=a,b,...`, the suite's two by default. */
+  private val steerSeeds: Seq[(Long, Long)] = sys.props.get("varka.fuzz.steerSeeds")
+    .map(_.split(',').toSeq.map(_.trim.toLong).map(s => (s, s))).getOrElse(Seq((seed, longSeed)))
+
+  /**
+   * QPG's question asked of the emitter: does steering toward unseen mechanisms reach more of
+   * them than the plain draws, for the same number of emissions? Emission only - the mechanisms
+   * are compile-time facts - so the arms run in seconds and nothing is compared with the
+   * reference evaluator here. The plain arm emits draws 0 to n-1 of each lane; each steered arm
+   * spends about half its steps mutating cases it kept (`VarkaSteering`), one keeping a case that
+   * reached a new set of mechanisms, the other one that reached a rare mechanism. Each arm prints
+   * one `A/B` line for the tally in `VARKA-280.md` 9 and, per mechanism, the emission that first
+   * reached it. Reported, not asserted: the verdict is the plan's, and the numbers move with the
+   * grammar and the emitter. Opt-in, about 13 seconds at the defaults in a fresh JVM: the A/B kept
+   * steering out of the fuzzer (`VARKA-280.md` 9), so no gate pays for it.
+   */
+  test(s"steering toward unseen mechanisms against the plain draws, emission only " +
+      s"(opt-in: -Dvarka.fuzz.steer=<n> or -Dvarka.fuzz.steerSeeds=<a,b,...>; VARKA-280)") {
+    assume(steerRequested, "opt-in: set -Dvarka.fuzz.steer or -Dvarka.fuzz.steerSeeds")
+    for ((intSeed, laneLongSeed) <- steerSeeds) {
+      val lanes: Seq[(String, Long, Int => VarkaFuzzCase)] = Seq(
+        ("int", intSeed, k => drawInt(k, intSeed)),
+        ("long", laneLongSeed, k => drawLong(k, laneLongSeed)))
+      for ((lane, laneSeed, draw) <- lanes) {
+        def arm(name: String)(run: (VarkaEmitTrace, VarkaEmitReach) => Unit): VarkaEmitReach = {
+          val trace = new VarkaEmitTrace
+          val reach = VarkaEmitReach.attach(trace, s"$lane $name")
+          run(trace, reach)
+          reach
+        }
+        val arms = Seq(
+          arm("plain")((t, _) => VarkaSteering.unsteered(steerBudget, k => draw(k), t)),
+          arm("steered by new set")((t, r) => VarkaSteering.steered(steerBudget, laneSeed,
+            k => draw(k), t, r, VarkaSteering.Keep.NEW_SET)),
+          arm("steered by rare mechanism")((t, r) => VarkaSteering.steered(steerBudget,
+            laneSeed, k => draw(k), t, r, VarkaSteering.Keep.RARE_MECHANISM)))
+        // The mechanisms every arm reached, whose first emissions compare arm against arm.
+        val common = VarkaEmitMechanism.values.toSeq.filter(m => arms.forall(_.firstAt(m) > 0))
+        for (r <- arms) {
+          val firsts = common.map(r.firstAt).sorted
+          val median = if (firsts.isEmpty) -1 else firsts(firsts.size / 2)
+          val armName = r.name.stripPrefix(lane + " ").replace(' ', '-')
+          info(s"A/B lane=$lane seed=$laneSeed arm=$armName emissions=${r.emissions} " +
+            s"mechanisms=${VarkaEmitMechanism.values.length - r.neverReached.size} " +
+            s"sets=${r.distinctSets} plans=${r.distinctPlans} medianFirst=$median " +
+            s"never=${r.neverReached.asScala.mkString(",")}")
+        }
+        info(s"  first reached (" + arms.map(_.name).mkString(" / ") + "): " +
+          VarkaEmitMechanism.values.toSeq.filter(m => arms.exists(_.firstAt(m) > 0)).map { m =>
+            m.name + " " + arms.map(r => if (r.firstAt(m) < 0) "-" else r.firstAt(m).toString)
+              .mkString("/")
+          }.mkString(", "))
+        if (steerSeeds.size == 1) {
+          reachReports ++= arms
+        }
+      }
+    }
+  }
+
+  /** Prints what a test's emissions reached and keeps the report for the dump. */
+  private def reportReach(reach: VarkaEmitReach): Unit = {
+    reach.lines.asScala.foreach(info(_))
+    reachReports += reach
+  }
+
+  /**
+   * The reports of the tests that ran, written as markdown where `VARKA_REACH_DUMP` names a
+   * directory: `VARKA_REACH_DUMP=$PWD/sql/varka/coverage/reach build/sbt 'catalyst/testOnly
+   * *VarkaIrFuzzSuite'` regenerates the committed one, which row 265 reads. An absolute path,
+   * since the test JVM's working directory is the module's.
+   */
+  override def afterAll(): Unit = {
+    try {
+      if (reachReports.nonEmpty) {
+        val provenance = s"Generated by `VarkaIrFuzzSuite` with `VARKA_REACH_DUMP` set " +
+          s"(VARKA-280): seed $seed (int lane) and $longSeed (long lane), $iterations " +
+          s"iterations a lane, $wideIterations wide compositions, options drawn over " +
+          (if (VarkaMatrix.base.isDefault) "the defaults" else VarkaMatrix.base.canonical()) +
+          ". A draw's emissions include its variants' and a declined form's retry without the " +
+          "budget. Do not edit; regenerate with `VARKA_REACH_DUMP=$PWD/sql/varka/coverage/reach " +
+          "build/sbt 'catalyst/testOnly *VarkaIrFuzzSuite'`."
+        VarkaEmitReach.dump("VarkaIrFuzzSuite.md", "What the IR fuzzer's emissions reached",
+          provenance, reachReports.asJava).ifPresent(p => logInfo(s"reach report written to $p"))
+      }
+    } finally {
+      super.afterAll()
+    }
   }
 
   /**

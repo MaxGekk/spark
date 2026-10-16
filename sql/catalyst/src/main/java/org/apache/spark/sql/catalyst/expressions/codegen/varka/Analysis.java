@@ -1132,4 +1132,22 @@ final class Analysis {
   static boolean referenced(Analysis analysis, int ordinal) {
     return (analysis.referencedColumns >>> ordinal & 1L) != 0;
   }
+
+  // ---------------------------------------------------------------------------------------------
+  // What the emission reached (VARKA-280).
+  // ---------------------------------------------------------------------------------------------
+
+  /**
+   * The mechanisms this emission has reached so far, over every build of its size loop: carried
+   * here for the reason {@link #options} is, since the analysis already reaches every body that
+   * does one. Noted at compile time only, and read by {@code VarkaLoopEmitter}'s size loop, which
+   * hands the set to the trace when the emission ends; no emitted byte reads it.
+   */
+  final java.util.EnumSet<VarkaEmitMechanism> reached =
+      java.util.EnumSet.noneOf(VarkaEmitMechanism.class);
+
+  /** Notes that this emission reached {@code mechanism}. */
+  void reach(VarkaEmitMechanism mechanism) {
+    reached.add(mechanism);
+  }
 }
