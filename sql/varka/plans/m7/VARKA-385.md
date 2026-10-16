@@ -194,4 +194,46 @@ sitting, after the admission check.
 
 ## 9. Outcome
 
-Filled in when the local checks of section 5 and the first CI run land.
+Built as 3.1 now reads, which already includes four changes a self-review (`/code-review` high,
+16 October 2026) made to the first build: the online fallback after an offline failure was taken
+on any failure and is now taken only on a missing artifact, so a flaky test is not rerun green; an
+online transfer failure is retried twice, for a branch's cold first run; the fallback to any older
+pom's entry was dropped in favour of the test mode's fallback to the build entry; and the key got
+its `v1`, since a bad entry cannot be overwritten. Local checks (section 5), 16 October 2026, JDK 25.0.4, Maven 3.9.16:
+
+| case | result | downloads |
+|---|---|---|
+| cold, skip-tests | miss line, online, `BUILD SUCCESS` | 301 |
+| warm, skip-tests, `-o` | offline line, `BUILD SUCCESS` | 0 |
+| cold, tests | miss line, online, `BUILD SUCCESS` (54 tests) | 316 |
+| warm, tests, `-o` | offline line, `BUILD SUCCESS` | 0 |
+| stale hit: tests over the skip-tests repository | offline fails on `surefire-junit-platform:3.2.5`, warning, online `BUILD SUCCESS` | 15 |
+| compile failure, exact hit | offline `BUILD FAILURE`, step fails, no online rerun | 0 |
+| dead mirror, cold | "Could not transfer artifact ... maven-resources-plugin:pom:3.4.0", three attempts, two warnings, step fails | 0 |
+
+Repositories: 35 MB (skip-tests) and 36 MB (tests). YAML parses; `actionlint` over the workflows:
+the same 101 findings as master, none new; `shellcheck` on the install script: clean.
+
+Predictions: 1 holds locally; 2 and 3 are scored by the first CI run, and so is the done-when:
+the row stays in progress until that log shows it.
+
+**What the first CI run must show** (downloads are never listed, section 2, so the evidence is the
+offline install succeeding):
+
+* `precompile`: "Restore the engine's local Maven repository" logs `Cache not found for input
+  keys: varka-engine-m2-v1-Linux-build-<hash>`; the install step logs `No exact cache hit for ...:
+  installing online, then saving the cache` and `BUILD SUCCESS`; "Save the engine's local Maven
+  repository" logs `Cache saved with key: varka-engine-m2-v1-Linux-build-<hash>` at about 35 MB.
+* Every job that `needs` `precompile` on a host runner (the `build` module matrix, `tpcds-1g`,
+  `docker-integration-tests`, `k8s-integration-tests`): `Cache restored from key:
+  varka-engine-m2-v1-Linux-build-<hash>`, then `Local Maven repository restored from ...: installing
+  offline (-o)` followed by `BUILD SUCCESS`, no "lacks an artifact" warning, and the save step
+  skipped. That is the done-when.
+* The container jobs `pyspark` and `sparkr` show the same if their image compresses as the host
+  does; otherwise a miss and a save of their own (risk 1), warm from the next run.
+* `lint`, `docs`, `java25` and `varka-engine` start alongside `precompile`, so they are cold in the
+  first run and warm in the second; `varka-engine` uses the `test` key, and in a run where the
+  `build` entry already exists it logs `Cache restored from key: varka-engine-m2-v1-Linux-build-...`
+  and installs online, fetching only surefire's provider.
+* After the run, the fork's cache listing holds `varka-engine-m2-v1-Linux-build-<hash>` and
+  `varka-engine-m2-v1-Linux-test-<hash>` on the branch.

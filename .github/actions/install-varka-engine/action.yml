@@ -34,17 +34,93 @@ inputs:
       turns it on.
     required: false
     default: 'false'
+  cache:
+    description: >-
+      Restore the local Maven repository the engine build needs (Maven's plugins
+      and the engine's dependencies, about 35 MB) from a cache of its own, and
+      install offline when the restore is an exact hit. Off only for jobs that
+      already restore Spark's own Maven repository into ~/.m2/repository
+      (maven_test.yml): the save right after the install would snapshot that
+      whole repository under this small cache's key.
+    required: false
+    default: 'true'
 runs:
   using: 'composite'
   steps:
     - name: Check the engine builds against Spark's Arrow
       shell: bash
       run: ./dev/check_varka_arrow_version.py
+    # The key hashes the engine pom alone, which pins every plugin the build
+    # runs, so the pom fixes the set of artifacts the build resolves; bump the
+    # v1 to discard an entry that turns out to lack one. The mode is part of
+    # the key because running the tests resolves more (surefire's JUnit
+    # provider) than skipping them does, and the test mode falls back to the
+    # build entry of the same pom. The entry also holds the engine jar of the
+    # commit that saved it, which every install overwrites. Restore, install
+    # and save are separate steps so that the save runs right after the
+    # install, before anything later in the job adds to ~/.m2/repository.
+    - name: Restore the engine's local Maven repository
+      id: m2-restore
+      if: inputs.cache == 'true'
+      uses: actions/cache/restore@v6
+      with:
+        path: ~/.m2/repository
+        key: >-
+          varka-engine-m2-v1-${{ runner.os }}-${{ inputs.run-tests == 'true' && 'test' || 'build'
+          }}-${{ hashFiles('sql/varka/engine/pom.xml') }}
+        restore-keys: >-
+          ${{ inputs.run-tests == 'true' && format('varka-engine-m2-v1-{0}-build-{1}', runner.os,
+          hashFiles('sql/varka/engine/pom.xml')) || '' }}
     - name: Install the Varka engine into the local Maven repository
       shell: bash
+      env:
+        RUN_TESTS: ${{ inputs.run-tests }}
+        CACHE_HIT: ${{ steps.m2-restore.outputs.cache-hit }}
+        CACHE_KEY: ${{ steps.m2-restore.outputs.cache-primary-key }}
       run: |
-        if [ "${{ inputs.run-tests }}" = "true" ]; then
-          ./build/mvn -B -f sql/varka/engine/pom.xml install
-        else
-          ./build/mvn -B -f sql/varka/engine/pom.xml -Dmaven.test.skip=true install
+        mvn_args=(-B -f sql/varka/engine/pom.xml)
+        if [ "$RUN_TESTS" != "true" ]; then
+          mvn_args+=(-Dmaven.test.skip=true)
         fi
+        log=$(mktemp)
+        # Runs one install, keeping its output in $log so that a failure can be
+        # told apart: only a failure to resolve an artifact is worth retrying,
+        # a compile or test failure fails the step at once.
+        run_install() {
+          ./build/mvn "$@" "${mvn_args[@]}" install 2>&1 | tee "$log"
+        }
+        # An exact hit holds everything the build resolves, so the install runs
+        # offline and downloads nothing; an offline install that fails to
+        # resolve an artifact means the entry is stale, and goes online.
+        if [ "$CACHE_HIT" = "true" ]; then
+          echo "Local Maven repository restored from $CACHE_KEY: installing offline (-o)"
+          if run_install -o; then
+            exit 0
+          fi
+          if ! grep -q "in offline mode" "$log"; then
+            exit 1
+          fi
+          echo "::warning::The cache restored from $CACHE_KEY lacks an artifact the" \
+            "engine build needs; installing online (bump the key's version to replace it)"
+        elif [ -n "$CACHE_KEY" ]; then
+          echo "No exact cache hit for $CACHE_KEY: installing online, then saving the cache"
+        fi
+        # Online, a transient Maven Central miss (16 October 2026: "Could not
+        # transfer artifact") is retried twice before the step fails.
+        for attempt in 1 2 3; do
+          if run_install; then
+            exit 0
+          fi
+          if [ "$attempt" = 3 ] || ! grep -q "Could not transfer artifact" "$log"; then
+            exit 1
+          fi
+          echo "::warning::Maven could not download an artifact (attempt $attempt of 3);" \
+            "retrying in 30 seconds"
+          sleep 30
+        done
+    - name: Save the engine's local Maven repository
+      if: inputs.cache == 'true' && steps.m2-restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ~/.m2/repository
+        key: ${{ steps.m2-restore.outputs.cache-primary-key }}
