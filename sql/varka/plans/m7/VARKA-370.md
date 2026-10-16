@@ -278,7 +278,7 @@ method: it makes its code not entrant and calls `MethodData::reinitialize()`, wh
 cell. But it needs `-XX:+UnlockExperimentalVMOptions -XX:+EnableJVMCI` (`jvmci_globals.hpp` 47)
 and `--add-exports` of `jdk.internal.vm.ci`, so it is a startup option like WhiteBox (not run).
 
-**The probe.** A standalone program (`Probe370`, in the scratch directory named at the end) feeds
+**The probe.** A standalone program (`Probe370`, in `sql/varka/spikes/trap-reset/`, its output in `results/probe.txt`) feeds
 one compiled caller of `IntVector.add` receivers of four species, which records 22 to 30 traps in
 3 or 4 vector methods, among them 8 on `IntVector.add`. A reduction loop through that caller then
 allocates 11,360 to 12,384 bytes a call (64 iterations of 16 lanes), where it allocated 0 before
@@ -338,7 +338,8 @@ agent through the MBean before the suite started, and read the WhiteBox counts o
 60 s is after the first 18 to 76 class-check traps are recorded and before most releases (the
 first in the control is iteration 53 of 400; the arm reports verdicts only at its end). Every run printed `Tests: succeeded 1`; every release was at the
 deadline (10 s in this arm), none before it. The load is the 1-minute average before and after
-each run, most of it other agents' work on cores 3 to 23.
+each run, most of it other agents' work on cores 3 to 23. The runs are `run.sh` of
+`sql/varka/spikes/trap-reset/`, and each row's run is in that arm's file under `results/`.
 
 | arm | lanes, compositions | deadline releases | COMPILED | seconds | load before / after |
 |---|---|---|---|---|---|
@@ -419,7 +420,10 @@ whose releases `VARKA-373.md` 9 says are a different cause. The flags at 4 lanes
 flags do not touch the per-bytecode gate by the source (9.2), so they were not run there.
 
 The probe, the agent, the replay wrapper (`Replay370`, which runs ScalaTest's `Runner` after the
-agent load and the arm's action), the run script and every run's log are in
-`/tmp/claude-1000/-home-max-proj-vecbricks-varka/53e2e690-d028-4b57-a163-fcdc477c97cf/scratchpad/370/`,
-not in the repository; the WhiteBox jar there is built from the source tree's
-`test/lib/jdk/test/whitebox`.
+agent load and the arm's action), the build and run scripts and the results are committed in
+`sql/varka/spikes/trap-reset/`, outside every source set; its README has the command lines. Each
+arm's file in `results/` (`control.txt`, `flags.txt`, `redefine-once.txt`, `clear-once.txt`)
+holds, per run, the command, exit, seconds, load before and after, the verdict line, the
+iterations released at the deadline and every count line the wrapper printed, extracted from
+the run logs, which are not committed (they are mostly tiered-compilation event noise). The
+WhiteBox jar is built by `build.sh` from the source tree's `test/lib/jdk/test/whitebox`.
