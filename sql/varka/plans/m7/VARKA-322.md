@@ -595,9 +595,9 @@ minutes after the others. The Xeon job pinned itself (`taskset -c 0,1,2,3`: the 
 script's automatic pin found a cpufreq directory on that machine); the eleven others ran unpinned.
 
 **The verdict for 322a: every ported class a runner can pair passes its pair**, prediction 4, on
-every class. The wide-kernel pair is still owed, on the laptop: a runner cannot pair that class
-inside the six-hour job cap (`VARKA-255.md` 9.1), and its single run there took 2 h 55 min
-(below).
+every class. The wide-kernel pair was closed without one on 16 October 2026 (the last paragraph of
+this section): its base cannot finish on any machine, and its single run on a runner took 2 h
+55 min (below).
 
 **The A/A spread, read first.** The Java side against itself: 28 rows, widest 9.9% by median and
 16.2% by best, both on `[one emission] a column, copied`, a 14 to 32 ms emission whose best time
@@ -721,8 +721,22 @@ magic-multiply rows moved by both measures, and `VarkaVectorApiProbeBenchmark` s
 after three rounds; the parity class's own hand-written references moved by both measures on both
 machines, two slower on the laptop and two faster on the 7763, as above. Prediction 3 held for the
 `stripped` arms and does not apply to the `as emitted` arms the review changed; the wide-kernel
-half waits for its pair. Prediction 5 held, the ids identical (above). Prediction 6 held for
+half was not measured as a pair, for the reason in the last paragraph. Prediction 5 held, the ids identical (above). Prediction 6 held for
 322a-1's ten classes, a quarter more Java than Scala (above), and failed for the parity class, 15%
 more, under a fifth. The A/A spread the predictions were to be read against is 16.2% by best
 for this class on a runner, where the plan had the laptop's one A/A, 4.1% by median
 (`VARKA-256.md` 9), in mind.
+
+**The tenth pair, closed without a pair (16 October 2026, owner's decision A of `VARKA-255.md`
+9.3).** `VarkaWideKernelBenchmark`'s pair of 322a (the Java port against its Scala form at the
+merge base) and row 325's second pair (the split fix against its merge base) cannot run on any
+machine, the laptop included: both bases stop at the sixth section's `require` ("fits one kernel:
+nothing to compare"), the bug 325 fixed, so a pair, which needs both sides to finish, has no
+base. What exists in place of the pair is recorded here and in `VARKA-325`'s row: the dry-run ids
+and the names of every section, benchmark and case identical between the Scala and Java forms;
+the first five sections matching the committed laptop file (above); and the class regenerated
+at the fixed head on an idle laptop and on a runner, every row within a few percent of the
+3 October file on the laptop. That is a comparison against a committed file, not a base and a
+head alternated on one machine, and the wide-kernel half of prediction 3 therefore stays
+unmeasured as a pair. A section-subset path that would let a base run only the sections it can
+finish is the alternative `VARKA-255.md` 9.3 describes; it was not built.
