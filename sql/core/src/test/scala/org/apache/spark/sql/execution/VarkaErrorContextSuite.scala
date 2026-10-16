@@ -25,7 +25,7 @@ import org.apache.spark.{SparkException, SparkIllegalArgumentException, SparkIll
 import org.apache.spark.executor.Executor
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAllocationSampler, VarkaEmitOption, VarkaEmitOptions, VarkaErrorContext, VarkaErrors, VarkaFallbackEvent, VarkaJfrTestSupport, VarkaJitEvidence, VarkaKernelAllocationEvent, VarkaShapeCache, VarkaTestWatchdog}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAllocationSampler, VarkaEmitOption, VarkaEmitOptions, VarkaErrorContext, VarkaErrors, VarkaFallbackEvent, VarkaJfrTestSupport, VarkaJitEvidence, VarkaKernelAllocationEvent, VarkaShapeCache, VarkaTestWatchdog, VarkaValueRange}
 import org.apache.spark.sql.execution.varka.VarkaFallbackAccounting
 import org.apache.spark.sql.internal.SQLConf
 
@@ -116,6 +116,34 @@ class VarkaErrorContextSuite extends QueryTest with VarkaSharedSessions with Var
     assertFused(varkaSpark.sql(query).queryExecution.executedPlan)
   }
 
+  test("a Varka invariant site that fails at planning reaches the user with the planning " +
+      "record around it") {
+    // The hook runs a real site with an argument it rejects - the range analysis's empty
+    // interval - inside the planning catch, as a compiler bug reaches it since VARKA-314b: the
+    // site raises INTERNAL_ERROR with no record, and the catch adds the record around it.
+    cacheDates(varkaSpark)
+    VarkaExpressionCompiler.setFailForTesting(() => { new VarkaValueRange.Bounded(5, 1); () })
+    val e = try {
+      intercept[SparkIllegalArgumentException](varkaSpark.sql(query).collect())
+    } finally {
+      VarkaExpressionCompiler.setFailForTesting(false)
+    }
+    checkError(e,
+      condition = "INTERNAL_ERROR",
+      parameters = Map("message" ->
+        ("(?s)Varka's compiler failed while planning\\.\nVarka context:\n" +
+          "  kind: planning\n" +
+          "  identity: projection \\[date_add\\(d#\\d+, 3\\) AS a#\\d+\\] over .*\n" +
+          "  shape hash: none\n" +
+          "  options: .*\n" +
+          "  cause: org.apache.spark.SparkIllegalArgumentException: empty range \\[5, 1\\]\n" +
+          java.util.regex.Pattern.quote(VarkaErrors.REPORT))),
+      matchPVals = true)
+    assert(e.getCause.isInstanceOf[SparkIllegalArgumentException], e.getCause)
+    assert(e.getMessage.split(java.util.regex.Pattern.quote(VarkaErrors.REPORT), -1).length == 2,
+      "the request to report is said once: " + e.getMessage)
+  }
+
   test("an undeclared kernel failure fails the job with INTERNAL_ERROR, the record naming the " +
       "options and the batch") {
     cacheDates(varkaSpark)
@@ -185,6 +213,44 @@ class VarkaErrorContextSuite extends QueryTest with VarkaSharedSessions with Var
     assert(!warning.contains("shape hash: none"), warning)
     assert(warning.contains("\n  cause: java.lang.IllegalStateException: injected Varka " +
       "emission failure"), warning)
+  }
+
+  test("an emitter invariant that fails building the kernel falls back, its warning naming the " +
+      "site on the record's cause line") {
+    // misdescribeWordLiveness plants a liveness verdict the emitter's own walk then contradicts:
+    // a real invariant site (VarkaVectorWalk's), raised as INTERNAL_ERROR with no record, which
+    // the emission catch puts in the record of its warning.
+    cacheDates(spark)
+    cacheDates(varkaSpark)
+    val nullable = "SELECT date_add(d, 3) AS a, year(d) AS y FROM varka_dates"
+    val expected = spark.sql(nullable).collect().toSeq
+    val previous = VarkaColumnarToRowExec.currentEmitOptions
+    // Validity words exist only with validityByBitmap, so the option matrix's arm that turns it
+    // off has no liveness to misdescribe; it is turned back on here, under every other arm.
+    def flag(name: String, options: VarkaEmitOptions) = VarkaEmitOption.named(name) match {
+      case f: VarkaEmitOption.Flag => f.`with`(options, true)
+      case other => fail(s"$name is not a flag: $other")
+    }
+    val planted = flag("misdescribeWordLiveness", flag("validityByBitmap", previous))
+    VarkaShapeCache.invalidateAll()
+    VarkaColumnarToRowExec.setEmitOptionsForTesting(planted)
+    val lines = try {
+      withFailureDeclared {
+        warnings(classOf[VarkaEvaluatorBase]) {
+          checkAnswer(varkaSpark.sql(nullable), expected)
+        }
+      }
+    } finally {
+      VarkaColumnarToRowExec.setEmitOptionsForTesting(previous)
+      VarkaShapeCache.invalidateAll()
+    }
+    val warning = lines.find(_.contains("Failed to emit the Varka fused kernel"))
+      .getOrElse(fail(s"no emission-failure warning among: ${lines.mkString("\n")}"))
+    assert(warning.contains("\nVarka context:\n  kind: emission-failure\n"), warning)
+    assert(warning.contains("misdescribeWordLiveness=true"), warning)
+    assert(warning.matches(
+      "(?s).*\n  cause: org\\.apache\\.spark\\.SparkIllegalStateException: [^\n]+"), warning)
+    assert(!warning.contains(VarkaErrors.REPORT), warning)
   }
 
   test("after failures built records on every batch, the kernel's steady state allocates " +

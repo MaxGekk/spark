@@ -55,7 +55,7 @@ public final class VarkaScratch {
    */
   public static long forRows(int bytesPerRow, int rows) {
     if (TaskContext.get() != null) {
-      throw new IllegalStateException("a kernel with " + bytesPerRow + " bytes of scratch per "
+      throw VarkaErrors.illegalState("a kernel with " + bytesPerRow + " bytes of scratch per "
           + "row was run inside a Spark task without a scratch address; a task passes its own, "
           + "through the forms of run that take one (VarkaFusedKernel, VARKA-253)");
     }

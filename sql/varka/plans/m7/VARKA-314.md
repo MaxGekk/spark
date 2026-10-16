@@ -469,3 +469,120 @@ the job neither prints nor uploads, and the report counts cancels without their 
 the report print the cancels that are not the skip list's would surface it, and changes what
 every matrix run prints; that is the owner's call and is left open here.
 
+
+### 9.3 314b, 16 October 2026
+
+**What was built.** The remaining invariant sites raise Spark's `INTERNAL_ERROR` through
+`VarkaErrors`: 110 sites in 33 files of Varka's main code, 77 `illegalArgument`, 29 `illegalState`
+and 4 `unsupportedOperation`, each with the site's own text, so the message reads
+`[INTERNAL_ERROR] <the site's text>` and then the request to report it. The 17 of the
+option-building bucket are among them (`VarkaEmitOption` 4, `VarkaEmitOptions` 12,
+`VarkaSessionEmit` 1). A site deep in the compiler, the IR or the emitter knows only its own
+invariant, so it raises the error without a record (`illegalArgument(what)` and its siblings, and
+`illegalState(what, cause)` for the one site that found its invariant by catching, the runner's
+comparison of its two bodies, VARKA-303), and the catch that knows more adds the record around it.
+`docs/sql-varka.md` has the section of 3.4, "When Varka falls back, and when it fails": each
+cause tag, what it leaves, what the warning's block holds and what to do, then where an internal
+error surfaces. The class dump's warning names `spark.sql.codegen.varka.classDumpDirectory` (3.1).
+
+**Where the code corrected the plan.**
+
+1. **The planning catch would have dropped the record from every converted site.** 9.1's rule
+   passed any `SparkThrowable` through unchanged, which held while every site threw a JDK type.
+   Once the sites below the compiler raise `INTERNAL_ERROR` themselves, a compiler bug arrives at
+   the catch already a `SparkThrowable` and would have reached the user without the entries or
+   options - the bug the record was built for. `planningFailure` now wraps an internal error a
+   Varka site raised without a record (`VarkaErrors.siteText` tells one: condition
+   `INTERNAL_ERROR`, a message parameter ending in the request to report and holding no block),
+   keeping its Java type and making it the cause; it still passes a user's condition (an error
+   Catalyst raised while the compiler folded a constant), a Varka error that has its record, and
+   `VarkaEmitDeclined`.
+2. **A record names a site's error by the site's text.** The cause line of the planning error, of
+   the emission warning and of a refusal under test would otherwise repeat the condition's framing
+   and the request to report inside the message that already has them; `VarkaErrorContext.render`
+   writes such a cause as its class and the site's text, so the request is said once.
+3. **110 sites, not 106.** The code grew between the admission check and 314b: the raw throws of
+   the three JDK types numbered 116, less the two test injections and the four below. One of them,
+   in `CompiledVarkaProjection`, sits outside the admission check's `Varka*` file names and was
+   found by the self-review.
+4. **`UnsupportedOperationException` has a carrier**, `SparkUnsupportedOperationException`, which
+   9.1's third correction missed; it takes no cause, and no such site has a record. The four sites
+   (a kernel called through the entry point of the other lane width, a class-file attribute mapper
+   used the wrong way) keep their type. At planning, where none of them fires, the catch still
+   turns a stray one into an `IllegalStateException`.
+5. **Left raw, by decision:** the reproduction file's parser (four sites in
+   `VarkaReproduction.parse`), whose errors say that a file handed to `dev/varka_emit.sh --replay`
+   is malformed - the reader's mistake, not a bug in Varka; the two test injections; and the
+   emitted kernel's own throw when it is handed no scratch (`VarkaLoopEmitter`'s `emitThrow`),
+   which is bytecode in every emitted class - changing it changes `emitted_bytes.json` - and is
+   answered by the per-batch catch as a kernel failure, with its record, like any other.
+6. **The fuzzers' failure signature reads the site.** `VarkaFailureSignature.of` takes a site's
+   text and the JDK type its carrier extends, so a converted error classifies as before
+   ("IllegalArgumentException: empty range [#, #]", not the framing's first line under
+   `SparkIllegalArgumentException`), and a reproduction file written before 314b replays to the
+   same signature.
+7. **The planning test hook takes a call.** `setFailForTesting(Runnable)` runs a real site with an
+   argument it rejects inside the planning catch, beside the boolean form 314a's tests and
+   VARKA-316's runbook use.
+8. **A `VerifyError` at planning is still raw.** It is a `LinkageError`, which the size admission's
+   `NonFatal` test rethrows, outside 3.1's three types; the troubleshooting table's line saying so
+   stands.
+
+**What the self-review changed** (`/code-review high` on the branch). The factories build the
+exception in `VarkaErrors`, so every converted error's top stack frame was the factory's: the size
+admission, which warns once per JVM per exception class and top frame, would have warned on the
+first emitter bug at plan time and never on a different one, and every trace began inside
+`VarkaErrors`. The factories now take their own frames off the trace, so it starts at the site.
+The scan missed `CompiledVarkaProjection` (item 3) and a `throw new java.lang.` form, and now reads
+every file whose name holds `Varka`; the size admission's warning and the emitted-bytes oracle's
+rejection hash read a site's text rather than the condition's framing; the docs say that the engine
+module's checks and the emitted kernel's own throw raise plain JDK exceptions, and that the
+emission failure leaves a reproduction file. Left as they are: the two-body check of VARKA-303,
+filed as a row-path failure as it was before; the stack trace's "Caused by" line, which prints the
+site's error whole, the request to report included; the fallback event's `exceptionClass`,
+which names the Spark carrier, the class that was thrown; and `siteText`'s reading of the message
+(the request to report at its end, no record's block in it) to tell a site's error from one with a
+record - a second message parameter as a marker would break every `checkError` that matches the
+condition's parameters exactly, and the text is `VarkaErrors`' own.
+
+**Tests.** `VarkaInternalErrorSuite` (catalyst, JUnit): a scan of Varka's main code that fails on a
+raw throw of the three types outside the list of item 5, so the conversion holds for the next
+change; a site of each family (an IR node's constructor, the range analysis, the emitter, the
+options' constructor and lookup, a kernel's other entry point, a released class loader) raising
+`INTERNAL_ERROR` with its own text in its Java type; the planning catch wrapping a site's error
+and passing the rest; the record's and the signature's reading of a site. `VarkaErrorContextSuite`
+gains two end to end: a real site failing inside the planning catch reaches the user on the
+driver with the planning record and the site on its cause line, the request said once; and the
+emitter's own word-liveness check, tripped by `misdescribeWordLiveness`, falls back with the
+emission warning naming the site's `SparkIllegalStateException` on the cause line. That test turns
+`validityByBitmap` back on under its planted fault: the option matrix's run of the suite over all
+50 configurations found the two arms that turn it off with no validity words to misdescribe, and
+the suite now passes in both. One existing
+test matched a site's whole message (`VarkaLaneTypeSuite`, "outputs mix lanes") and now matches its
+site text.
+
+**Predictions (6.1) that 314b scores**, on the laptop on 16 October 2026, test JVMs pinned to
+cores 12 to 23.
+
+3. **Held again.** `VarkaEmittedBytesSuite` passes in the run below and `emitted_bytes.json` is
+   unchanged; no emitted code changed.
+4. **Held, at 110 sites** (item 3). Every converted site keeps its Java type, and the defaults run
+   of every Varka suite with the sanitizer on (`dev/varka_matrix.sh --defaults --split 3 -j 6`,
+   104 suites, 736 s) passed 1347 tests with 47 cancelled, the one failure
+   `VarkaTierWitnessSuite`, a timing suite the gate runs apart without the sanitizer
+   (`dev/varka_gate.sh`); run that way it passes, and the failing read was a trap in
+   `VarkaMemorySanitizer.check`, code this change does not touch. One configuration of the option
+   matrix, `cse=false` (96 suites, 1472 s beside other agents' loads, the machine's load average
+   above 30), passed 1197 tests; its 15 failures were the whole of `VarkaIrFuzzSuite`, which did not
+   finish inside its JVM's nine minutes, and rerun alone under the same configuration it passed
+   in 304 s against 408 s at the defaults in the loaded run. After the self-review's changes the
+   defaults ran again (103 suites, the timing suite left to its own run): 1328 passed and 46
+   cancelled, and the 15 failures were again the whole of `VarkaIrFuzzSuite` past its nine
+   minutes, the load average near 35; alone, on the same build, it passed in 394 s, and
+   `VarkaTierWitnessSuite` without the sanitizer passed in 32 s.
+
+**Test time.** `VarkaInternalErrorSuite` takes 0.15 s in the gate's catalyst JVM, and the two new
+tests of `VarkaErrorContextSuite` 0.7 s in the sql JVM: under a second together.
+
+**Row 314 is done**: every throw site decided, the record in every warning and internal error, and
+the docs section written.

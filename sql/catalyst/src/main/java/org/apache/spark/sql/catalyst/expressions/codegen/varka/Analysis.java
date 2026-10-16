@@ -435,7 +435,7 @@ final class Analysis {
     roots.add(root);
     analyze(root);
     if (height.get(root) > MAX_CHAIN_DEPTH) {
-      throw new IllegalArgumentException(
+      throw VarkaErrors.illegalArgument(
           "chain deeper than MAX_CHAIN_DEPTH=" + MAX_CHAIN_DEPTH);
     }
   }
@@ -611,13 +611,13 @@ final class Analysis {
   private void refuse(VarkaVectorIR node, Refusal reason) {
     Refusal had = refusals.put(node, reason);
     if (had != null && had != reason) {
-      throw new IllegalStateException(node + " refuses for both " + had + " and " + reason);
+      throw VarkaErrors.illegalState(node + " refuses for both " + had + " and " + reason);
     }
   }
 
   private static void requireValue(VarkaVectorIR node, String position) {
     if (node instanceof Cond) {
-      throw new IllegalArgumentException(
+      throw VarkaErrors.illegalArgument(
           "condition node " + node + " in a value position (" + position + ")");
     }
   }
@@ -883,11 +883,11 @@ final class Analysis {
     // value into a computation nothing here can hold. Asked before the lane check so the
     // refusal names the cause rather than the lane mix that follows from it.
     if (node instanceof NarrowLane && !roots.contains(node)) {
-      throw new IllegalArgumentException(
+      throw VarkaErrors.illegalArgument(
           "a narrowing is an output root only; found one under another node: " + node);
     }
     if (VarkaVectorIR.emissionLane(node) != lane.laneType) {
-      throw new IllegalArgumentException("a " + node.laneType() + " node in a "
+      throw VarkaErrors.illegalArgument("a " + node.laneType() + " node in a "
           + lane.laneType + " emission: " + node.getClass().getSimpleName());
     }
     if (!analyzed.add(node)) {
@@ -900,7 +900,7 @@ final class Analysis {
     switch (node) {
       case ColumnRef c -> {
         if (c.ordinal() < 0 || c.ordinal() >= numInputs) {
-          throw new IllegalArgumentException(
+          throw VarkaErrors.illegalArgument(
               "column ordinal " + c.ordinal() + " outside [0, " + numInputs + ")");
         }
         long set = 1L << c.ordinal();
@@ -911,7 +911,7 @@ final class Analysis {
       }
       case LiteralSlot l -> {
         if (l.index() < 0 || l.index() >= numLiterals) {
-          throw new IllegalArgumentException(
+          throw VarkaErrors.illegalArgument(
               "literal slot " + l.index() + " outside [0, " + numLiterals + ")");
         }
         columns.put(node, 0L);
@@ -942,7 +942,7 @@ final class Analysis {
         // At the int lane the bounds have to be what the lane can compare against; the long
         // lane holds any bound. Refused here, where the tree is, rather than at the push.
         if (lane == Lane.INT && (n.lo() < Integer.MIN_VALUE || n.hi() > Integer.MAX_VALUE)) {
-          throw new IllegalArgumentException(
+          throw VarkaErrors.illegalArgument(
               "a range guard at the int lane needs int bounds: " + node);
         }
         analyzeOp(node, false, n.child());
@@ -987,7 +987,7 @@ final class Analysis {
         // Spark has no try_negative, so NULL never reaches here; refused rather than
         // emitted as a form nothing can produce (VarkaVectorIR.IntNeg).
         if (n.mode() == Overflow.NULL) {
-          throw new IllegalArgumentException("IntNeg has no NULL mode: " + node);
+          throw VarkaErrors.illegalArgument("IntNeg has no NULL mode: " + node);
         }
         analyzeOp(node, false, n.child());
       }
@@ -1000,7 +1000,7 @@ final class Analysis {
         // IntNeg above is. The one input the int lane cannot divide is Integer.MIN_VALUE by
         // -1, which the compiler refuses rather than emitting; see its own arm there.
         if (n.divisor() == -1) {
-          throw new IllegalArgumentException("a constant division by -1 overflows at "
+          throw VarkaErrors.illegalArgument("a constant division by -1 overflows at "
               + (lane == Lane.LONG ? "Long.MIN_VALUE" : "Integer.MIN_VALUE") + ": " + node);
         }
         // Where this node takes the conversion form it has no magic range-narrowed form to
@@ -1008,7 +1008,7 @@ final class Analysis {
         // it. Refused here rather than in the emitter, where the absence would surface as
         // a class that computes nothing.
         if (!divider.canConvert()) {
-          throw new IllegalArgumentException(
+          throw VarkaErrors.illegalArgument(
               "a constant division needs a double species to convert through, which "
               + lane.laneType + " at " + lanes + " lanes has not: " + node);
         }
@@ -1024,7 +1024,7 @@ final class Analysis {
               g.lo() == Long.MIN_VALUE ? Long.MAX_VALUE : Math.abs(g.lo()),
               g.hi() == Long.MIN_VALUE ? Long.MAX_VALUE : Math.abs(g.hi()));
           if (widest >= n.dividendBound()) {
-            throw new IllegalArgumentException("a constant division claims its dividend is "
+            throw VarkaErrors.illegalArgument("a constant division claims its dividend is "
                 + "under " + n.dividendBound() + " and the guard below it admits " + widest
                 + ": " + VarkaVectorIR.canonical(node));
           }
@@ -1047,7 +1047,7 @@ final class Analysis {
         // The compiler enforces this too; re-checked here because emitCond reads the
         // child's per-input validity word, which only a column has before any value walk.
         if (!(n.child() instanceof ColumnRef)) {
-          throw new IllegalArgumentException(
+          throw VarkaErrors.illegalArgument(
               "IsNotNull child must be a ColumnRef, got " + n.child());
         }
         // skips = true states the semantics - known output from a null input - though a
@@ -1068,7 +1068,7 @@ final class Analysis {
     opNodes++;
     // Only the form without a byte budget is capped by op count; see MAX_FUSED_NODES.
     if (opNodes > MAX_FUSED_NODES && options.methodByteBudget() == 0) {
-      throw new IllegalArgumentException(
+      throw VarkaErrors.illegalArgument(
           "more than MAX_FUSED_NODES=" + MAX_FUSED_NODES + " distinct ops");
     }
     long set = 0L;
@@ -1102,7 +1102,7 @@ final class Analysis {
   private static void requireOperand(VarkaOperandPosition position, VarkaVectorIR operand,
       String name) {
     if (operand == null || !position.admits(operand)) {
-      throw new IllegalArgumentException(
+      throw VarkaErrors.illegalArgument(
           name + " must be " + position.takes() + ", got " + operand);
     }
   }
@@ -1115,7 +1115,7 @@ final class Analysis {
    */
   private static void requireThursdayChild(VarkaVectorIR days) {
     if (!(days instanceof ThursdayOf)) {
-      throw new IllegalArgumentException(
+      throw VarkaErrors.illegalArgument(
           "WeekOfYear's child must be a ThursdayOf, got " + days);
     }
   }

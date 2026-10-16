@@ -36,6 +36,7 @@ import org.apache.spark.sql.catalyst.expressions.RuntimeReplaceable;
 import org.apache.spark.sql.catalyst.expressions.Subtract;
 import org.apache.spark.sql.catalyst.expressions.UnaryMinus;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDerivedKind;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaRangeAnalysis;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaOperandPosition;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
@@ -309,7 +310,7 @@ final class VarkaNodeCompiler {
     if (modes.TRY().equals(mode)) {
       return Overflow.NULL;
     }
-    throw new IllegalArgumentException("unknown evaluation mode " + mode);
+    throw VarkaErrors.illegalArgument("unknown evaluation mode " + mode);
   }
 
   /**

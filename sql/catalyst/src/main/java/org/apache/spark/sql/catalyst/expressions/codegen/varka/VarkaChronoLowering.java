@@ -423,7 +423,7 @@ final class VarkaChronoLowering {
       case TruncDateDynamic n -> emitChronoTruncDynamic(cb, n, analysis, s, t, neri, julian);
       case WeekOfYear n ->
           emitChronoWeekOfYear(cb, t, era, century, yearOfCentury, rem, julian, analysis.divider);
-      default -> throw new IllegalStateException("not a calendar node: " + node);
+      default -> throw VarkaErrors.illegalState("not a calendar node: " + node);
     }
   }
 
@@ -1817,7 +1817,7 @@ final class VarkaChronoLowering {
       case TruncDate n -> n.days();
       case TruncDateDynamic n -> n.days();
       case WeekOfYear n -> n.days();
-      default -> throw new IllegalStateException("not a calendar node: " + node);
+      default -> throw VarkaErrors.illegalState("not a calendar node: " + node);
     };
   }
 
@@ -1857,7 +1857,7 @@ final class VarkaChronoLowering {
           : n.level() == TruncLevel.MONTH ? days | dayOfMonth : year | days;
       // Every level's arm, chosen per lane.
       case TruncDateDynamic n -> year | days;
-      default -> throw new IllegalStateException("not a calendar node: " + node);
+      default -> throw VarkaErrors.illegalState("not a calendar node: " + node);
     };
   }
 
@@ -1890,7 +1890,7 @@ final class VarkaChronoLowering {
       case TruncDateDynamic n -> true;
       // The week tail is the day-of-year tail plus a division: no month.
       case WeekOfYear n -> false;
-      default -> throw new IllegalStateException("not a calendar node: " + node);
+      default -> throw VarkaErrors.illegalState("not a calendar node: " + node);
     };
   }
 }

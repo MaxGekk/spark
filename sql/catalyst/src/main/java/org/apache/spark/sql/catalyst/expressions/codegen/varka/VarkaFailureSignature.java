@@ -47,7 +47,11 @@ public record VarkaFailureSignature(String kind, String text) {
    * (VARKA-311).
    */
   public static VarkaFailureSignature of(Throwable t, String label) {
-    String message = t.getMessage() == null ? "" : t.getMessage();
+    // A Varka site's internal error is read by its site's text, without Spark's condition
+    // framing around it, and named by the JDK type its Spark carrier extends (VARKA-314), so it
+    // classifies, and a reproduction file written before the carriers replays, as it did.
+    String site = VarkaErrors.siteText(t);
+    String message = site != null ? site : t.getMessage() == null ? "" : t.getMessage();
     String bare = message;
     if (!label.isEmpty() && message.startsWith(label)) {
       String rest = message.substring(label.length());
@@ -70,6 +74,7 @@ public record VarkaFailureSignature(String kind, String text) {
     } else if (text.startsWith("the emitter")) {
       return new VarkaFailureSignature("emitter rejection", text);
     }
-    return new VarkaFailureSignature(t.getClass().getSimpleName(), text);
+    Class<?> type = site != null ? t.getClass().getSuperclass() : t.getClass();
+    return new VarkaFailureSignature(type.getSimpleName(), text);
   }
 }

@@ -173,14 +173,14 @@ public final class VarkaLoopEmitter {
    */
   private static Lane laneOf(List<VarkaVectorIR> outputs) {
     if (outputs.isEmpty()) {
-      throw new IllegalArgumentException("no output chains to emit");
+      throw VarkaErrors.illegalArgument("no output chains to emit");
     }
     // The emission lane, not the root's: a NarrowLane root is a 32-bit column computed in the
     // 64-bit lane its child is on, and the loop runs at the child's species.
     Lane lane = Lane.of(VarkaVectorIR.emissionLane(outputs.get(0)));
     for (VarkaVectorIR output : outputs) {
       if (VarkaVectorIR.emissionLane(output) != lane.laneType) {
-        throw new IllegalArgumentException("outputs mix lanes: " + lane.laneType + " and "
+        throw VarkaErrors.illegalArgument("outputs mix lanes: " + lane.laneType + " and "
             + VarkaVectorIR.emissionLane(output));
       }
     }
@@ -332,7 +332,7 @@ public final class VarkaLoopEmitter {
       String className, List<VarkaVectorIR> outputs, int numInputs, int numLiterals,
       String sourceFile, String planFragment, VarkaEmitOptions options, VarkaEmitTrace trace) {
     if (outputs.isEmpty()) {
-      throw new IllegalArgumentException("no output chains to emit");
+      throw VarkaErrors.illegalArgument("no output chains to emit");
     }
     // The planner and the body emitters index the outputs per method, so a caller's list that is
     // not random access - a Scala List seen through asJava, as the tools pass it - would make every
@@ -340,13 +340,13 @@ public final class VarkaLoopEmitter {
     // cache already hands in a copy; copying here makes it true of every caller.
     outputs = List.copyOf(outputs);
     if (numInputs < 1 || numInputs > MAX_INPUTS) {
-      throw new IllegalArgumentException(
+      throw VarkaErrors.illegalArgument(
           "numInputs " + numInputs + " outside [1, " + MAX_INPUTS + "]");
     }
     if (options == null) {
       // Checked beside the others rather than left to fail as a bare NPE deep in the walk;
       // VarkaShapeKey rejects a null the same way, so this closes the other door in.
-      throw new IllegalArgumentException("emit options must not be null");
+      throw VarkaErrors.illegalArgument("emit options must not be null");
     }
     Analysis analysis = analyze(outputs, numInputs, numLiterals, options);
 
@@ -1117,7 +1117,7 @@ public final class VarkaLoopEmitter {
       @Override
       public Attr readAttribute(java.lang.classfile.AttributedElement enclosing,
           java.lang.classfile.ClassReader cf, int pos) {
-        throw new UnsupportedOperationException(
+        throw VarkaErrors.unsupportedOperation(
             "write-side mapper; parsing uses VarkaDebugInfo.read()");
       }
 
@@ -1294,7 +1294,7 @@ public final class VarkaLoopEmitter {
       record.tallies().add(group.tally);
     }
     if (exactStarts != null && groups.size() != exactStarts.size()) {
-      throw new IllegalStateException("the greedy walk formed " + groups.size() + " groups "
+      throw VarkaErrors.illegalState("the greedy walk formed " + groups.size() + " groups "
           + "where the best partition has " + exactStarts.size() + ": the walk and the best "
           + "partition judged a step apart");
     }

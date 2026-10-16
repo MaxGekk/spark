@@ -48,6 +48,7 @@ import org.apache.spark.sql.catalyst.expressions.Literal;
 import org.apache.spark.sql.catalyst.expressions.Not;
 import org.apache.spark.sql.catalyst.expressions.Or;
 import org.apache.spark.sql.catalyst.expressions.RuntimeReplaceable;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
@@ -483,7 +484,7 @@ final class VarkaConditionCompiler {
    */
   private static Cond balancedFold(List<Cond> conds, BinaryOperator<Cond> combine) {
     if (conds.isEmpty()) {
-      throw new IllegalArgumentException(
+      throw VarkaErrors.illegalArgument(
           "requirement failed: balancedFold needs at least one condition");
     }
     List<Cond> level = conds;
