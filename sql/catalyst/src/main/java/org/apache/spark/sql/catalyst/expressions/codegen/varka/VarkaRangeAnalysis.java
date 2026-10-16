@@ -137,7 +137,7 @@ public final class VarkaRangeAnalysis {
   record Shift(long lo, long hi) {
     Shift {
       if (lo > hi) {
-        throw new IllegalArgumentException("an empty shift [" + lo + ", " + hi + "]");
+        throw VarkaErrors.illegalArgument("an empty shift [" + lo + ", " + hi + "]");
       }
     }
 

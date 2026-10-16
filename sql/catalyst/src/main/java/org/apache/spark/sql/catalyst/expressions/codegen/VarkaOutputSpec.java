@@ -17,6 +17,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 
 /**
  * How one projection entry is served under partial eligibility: computed by the fused kernel,
@@ -43,7 +44,7 @@ public sealed interface VarkaOutputSpec {
   record KernelOutput(int kernel, int fusedIndex) implements VarkaOutputSpec {
     public KernelOutput {
       if (kernel < 1) {
-        throw new IllegalArgumentException(
+        throw VarkaErrors.illegalArgument(
             "kernel 0's outputs are FusedOutput, not KernelOutput(" + kernel + ", ...)");
       }
     }

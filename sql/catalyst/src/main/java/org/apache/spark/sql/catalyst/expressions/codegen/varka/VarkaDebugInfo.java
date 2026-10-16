@@ -179,7 +179,7 @@ public final class VarkaDebugInfo {
 
       @Override
       public void writeAttribute(java.lang.classfile.BufWriter buf, Parsed attr) {
-        throw new UnsupportedOperationException(
+        throw VarkaErrors.unsupportedOperation(
             "read-side mapper; emission uses the emitter's debugElement");
       }
 

@@ -205,7 +205,7 @@ public final class VarkaShapeCacheImpl {
 
   public VarkaShapeCacheImpl(int maxEntries) {
     if (maxEntries < 0) {
-      throw new IllegalArgumentException("maxEntries must not be negative: " + maxEntries);
+      throw VarkaErrors.illegalArgument("maxEntries must not be negative: " + maxEntries);
     }
     this.maxEntries = maxEntries;
     Cache<LoaderShapeKey, VarkaShapeEntry> classes = CacheBuilder.newBuilder()
