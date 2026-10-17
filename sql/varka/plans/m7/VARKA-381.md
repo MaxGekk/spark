@@ -285,7 +285,7 @@ first) is the owner's call; vanilla Spark's answer is the oracle this harness ho
    (whole JVM): 47.9 against 48.5 s by minimums, under the noise; the run meets four raising
    compositions. The census adds one check per raising composition, 1.1 to 1.3% of the nightly
    step's compositions. Ratio under 1 against the estimate of under 3%; the calibration entry is
-   owed to `skills/calibration/`, outside this task's files.
+   `skills/calibration/VARKA-381-6.1-3.md`.
 4. **Held**: the three tests take about 9 s together, the planted race nearly all of it.
 
 ### 9.4 The self-review
@@ -313,4 +313,4 @@ warm-up sequence over one partition.
   failed before a task raising a listed condition in the other partition, and its replay needs
   the same race. Dropping it was worse: an unlisted condition is a finding whichever task raised
   it. With the warmed arm's Varka-only raise (9.4), these are the two residues.
-* The calibration entry for 6.1 #3 (`skills/calibration/`).
+* The calibration entry for 6.1 #3 is `skills/calibration/VARKA-381-6.1-3.md`; the two findings are rows 386 and 387, their reproducers saved as known.
