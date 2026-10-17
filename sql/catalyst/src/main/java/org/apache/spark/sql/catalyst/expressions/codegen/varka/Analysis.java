@@ -299,7 +299,10 @@ final class Analysis {
      * compiler admits the expression on the strength of this check ({@code VARKA-93.md} 3.4).
      */
     DAY_RANGE(Family.REARMED, true, VarkaFusedKernel.STATUS_DAY_RANGE),
-    /** {@link GuardedRange}: the day guard's twin at either lane, with the bounds it carries. */
+    /**
+     * {@link GuardedRange}: the day guard's twin at either lane, with the bounds it carries - a
+     * value the row engine throws on, or a date column outside the column bound (VARKA-379).
+     */
     VALUE_RANGE(Family.REARMED, true, VarkaFusedKernel.STATUS_VALUE_RANGE);
 
     final Family family;
@@ -504,6 +507,38 @@ final class Analysis {
     }
     List<ArmStep> chain = armChain.get(node);
     return chain == null ? List.of() : chain;
+  }
+
+  /**
+   * Whether {@code node}'s guard checks a column's stored values, null rows included: the column
+   * bound, the int-lane {@link GuardedRange} over a bare {@link ColumnRef} with the bounds
+   * {@link VarkaChrono#CONTRACT_MIN_DAYS} and {@link VarkaChrono#CONTRACT_MAX_DAYS} that
+   * {@code VarkaRangeAnalysis.guardColumns} wraps a date column in (VARKA-379). Every other guard
+   * ANDs its condemning mask with the lanes' validity, so that a null lane's undefined value cannot
+   * condemn the batch; this one does not, because turning the validity word into a lane mask costs
+   * a cheap kernel more than its own work on AVX2, and a null row a Spark writer filled holds day
+   * 0, inside the bound. A far day stored under a null declines the batch to the row engine, which
+   * answers it: slower, never wrong ({@code VARKA-379.md} 11.3). Told by its bounds as well as its
+   * shape, so that a range guard over a column with any other bounds - the IR grammar draws them,
+   * over null lanes the harness poisons - keeps the qualified form, as does the long lane, where
+   * the {@code TIME} family's guards sit and AVX2 has no 64-bit min or max for
+   * {@link Slots#rangeAcc}.
+   */
+  static boolean guardsStoredValues(VarkaVectorIR node) {
+    return node instanceof GuardedRange g && g.child() instanceof ColumnRef c
+        && c.lane() == VarkaVectorIR.LaneType.INT
+        && g.lo() == VarkaChrono.CONTRACT_MIN_DAYS && g.hi() == VarkaChrono.CONTRACT_MAX_DAYS;
+  }
+
+  /**
+   * Whether {@code node}'s guard is kept as a lane-wise min and max in a loop body
+   * ({@link Slots#rangeAcc}) rather than as two compares a lane group: a stored-value guard
+   * ({@link #guardsStoredValues}) in a loop method, where no arm qualifies it. The epilogue, one
+   * pass, keeps the compares and the bounds mask's AND; a guard under arms keeps them so its mask
+   * can be ANDed with the arm's condition, which a min cannot be without a blend.
+   */
+  boolean accumulatesRange(VarkaVectorIR node, boolean loop) {
+    return loop && guardsStoredValues(node) && armChainOf(node).isEmpty();
   }
 
   /**

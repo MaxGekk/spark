@@ -20,10 +20,14 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka
 import java.util.concurrent.atomic.AtomicInteger
 
 import scala.jdk.CollectionConverters._
+import scala.jdk.OptionConverters._
 
 import org.apache.spark.SparkFunSuite
+import org.apache.spark.sql.catalyst.expressions.{Add, Alias, AttributeReference, DateAdd => SqlDateAdd, DateDiff => SqlDateDiff, DayOfWeek => SqlDayOfWeek, EvalMode, Expression, Literal, Month => SqlMonth, WeekDay => SqlWeekDay, Year => SqlYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaGuardSpec.{Shift, Verdict}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
+import org.apache.spark.sql.types.DateType
 
 /**
  * Every guard on both sides of its bound (VARKA-279 3.2). For each of the emitter's six guards, a
@@ -35,7 +39,10 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
  * one there. The kernel's status, read under `exactRefusalStatus`, is held to
  * [[VarkaGuardSpec]]'s verdict for each body, and where the verdict is an answer every row is
  * compared with the reference evaluator. The seventh guard, the per-batch input bound, has no IR
- * node: it is `IntRangeOps.allWithin` in the evaluator, and is driven there.
+ * node: it is `IntRangeOps.allWithin` in the evaluator, and is driven there. A date column's
+ * bound is not that one since VARKA-379 but an int range guard over the column, which the
+ * compiler places: its edges are here beside the other range guard's, and a section of its own
+ * drives it through the compiler.
  *
  * The hand-written edge tests stay as the readable examples; this suite is what makes every guard
  * have them. A planted wrong bound - each end of each guard moved by one, on the verdict's side -
@@ -147,6 +154,13 @@ class VarkaGuardEdgeSuite extends SparkFunSuite with VarkaMatrixTests {
       Guarded("an int range guard", Analysis.Refusal.VALUE_RANGE,
         Seq(new GuardedRange(c0, -1000L, 1000L)), long = false, Seq(5L),
         around(-1000L, 1000L).map { case (l, v) => l -> Seq(v) }, column = 0),
+      // The column bound the compiler guards a date column with (VARKA-379), under the
+      // calendar field it lets fuse.
+      Guarded("the column bound on a date column", Analysis.Refusal.VALUE_RANGE,
+        Seq(new Year(new GuardedRange(c0, VarkaChrono.CONTRACT_MIN_DAYS,
+          VarkaChrono.CONTRACT_MAX_DAYS))), long = false, Seq(0L),
+        around(VarkaChrono.CONTRACT_MIN_DAYS, VarkaChrono.CONTRACT_MAX_DAYS).map {
+          case (l, d) => l -> Seq(d) }, column = 0),
       Guarded("a long range guard", Analysis.Refusal.VALUE_RANGE,
         Seq(new GuardedRange(l0, 0L, 86399999999999L)), long = true, Seq(5L),
         around(0L, 86399999999999L).map { case (l, v) => l -> Seq(v) }, column = 0),
@@ -375,6 +389,153 @@ class VarkaGuardEdgeSuite extends SparkFunSuite with VarkaMatrixTests {
         assert(cases.exists(!_._2),
           s"the input bound moved by ($dLo, $dHi) agrees with every edge")
       }
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // The column bound, through the compiler (VARKA-379)
+  // ---------------------------------------------------------------------------------------------
+
+  test("VARKA-379: the column bound is checked in the kernel's own loop, in both bodies, in a " +
+      "full lane group and the tail, and in a split method, by a min and a max in the loop") {
+    // The compiler guards a date column whose bound an admission rested on; this drives the
+    // kernels it builds. A day one past the bound declines the batch in a full lane group (row
+    // 0) and in the tail (row 16 of 17), in the dense body and in the masked one, the loop's
+    // guard a min and a max compared once after the loop. The guard reads the column's stored
+    // days and not its validity (VARKA-379 11); the harness stores the bound's own ends under a
+    // null of such a column (VarkaKernelChecks.storedUnderNull), so a batch whose only far days
+    // are under null rows is answered by its own, masked body, and declined by the dense one once
+    // its nulls are cleared and those days read as valid. The masked body forced over a batch
+    // with no nulls answers inside the bound and declines one far day. The split
+    // shape gives each output a method of its own, the guarded output last, so its guard is in a
+    // group method other than the first. At the JVM's own width, one species per test JVM
+    // (VARKA-246): the gate runs the suite at the host's width and under -XX:MaxVectorSize=16,
+    // and row 16 is past every whole lane group at 128, 256 and 512 bits.
+    val d = AttributeReference("d", DateType)()
+    val d2 = AttributeReference("d2", DateType)()
+    val bit = VarkaFusedKernel.STATUS_VALUE_RANGE
+    val shapes: Seq[(String, Seq[Expression], Int)] = Seq(
+      ("year(d)", Seq(SqlYear(d)), -1),
+      ("datediff(d, d2) + 1 under ANSI", Seq(Add(SqlDateDiff(d, d2), Literal(1), EvalMode.ANSI)),
+        -1),
+      ("a kernel split by output, the guarded one last",
+        Seq(SqlDayOfWeek(d2), SqlWeekDay(d2), SqlMonth(d)), 600))
+    var batches = 0
+    for ((name, entries, budget) <- shapes) {
+      val base = VarkaMatrix.base.withExactRefusalStatus(true).withSeveralKernels(false)
+      val o = if (budget > 0) base.withMethodByteBudget(budget) else base
+      val named = entries.map(e => Alias(e, "c")())
+      val compiled = VarkaExpressionCompiler.compile(named, Seq(d, d2), o).toScala.getOrElse(
+        fail(s"$name does not fuse: " + VarkaExpressionCompiler.declines(named, Seq(d, d2), o)))
+      val roots = compiled.outputs.asScala.toSeq
+      val numInputs = compiled.inputOrdinals.size
+      // The kernel inputs the compiler guarded: the date columns the bound is checked on.
+      def guardedIn(n: VarkaVectorIR): Set[Int] = n match {
+        case g: GuardedRange => g.child() match {
+          case c: ColumnRef => Set(c.ordinal())
+          case other => guardedIn(other)
+        }
+        case other => VarkaVectorIR.childrenOf(other).toSeq.flatMap(guardedIn).toSet
+      }
+      val guardedInputs = roots.flatMap(guardedIn).toSet
+      assert(guardedInputs.nonEmpty, s"$name: no column is guarded in ${roots.mkString("; ")}")
+      assert(compiled.inputBounds.isEmpty, s"$name: the bound reached the evaluator's pre-pass")
+      val className =
+        s"org.apache.spark.sql.varka.execution.VarkaColumnBound${classCounter.incrementAndGet()}"
+      val bytes = VarkaLoopEmitter.emit(className, compiled.outputs, numInputs,
+        compiled.numLiterals, null, null, o)
+      if (budget > 0) {
+        // The guard's bound is a constant in the method that holds it: a group's loop other than
+        // the first, the outputs before the guarded one having filled that.
+        val bodies = VarkaEmitterTestSupport.methodBodies(bytes).asScala
+        val loops = bodies.keys.filter(_.startsWith("loopDense")).toSeq
+        val guarding =
+          loops.filter(m => bodies(m).contains(VarkaChrono.CONTRACT_MAX_DAYS.toString))
+        assert(loops.size >= 2 && guarding.nonEmpty &&
+          !guarding.exists(_.startsWith("loopDense0(")),
+          s"$name: loop methods ${loops.mkString(", ")}, the guard in ${guarding.mkString(", ")}")
+      }
+      val lits = compiled.literals.asScala.map(_.intValue).toArray
+      for (k <- guardedInputs) {
+        // (label, the rows holding a far day, the rows null in column k, forced masked, each
+        //  body's status: its own, then the other's, which clears the nulls and keeps the data)
+        val cases: Seq[(String, Set[Int], Set[Int], Boolean, Seq[Int])] = Seq(
+          ("every day inside", Set.empty, Set.empty, false, Seq(0, 0)),
+          ("a far day in a full lane group, dense", Set(0), Set.empty, false, Seq(bit, bit)),
+          ("a far day in the tail, dense", Set(16), Set.empty, false, Seq(bit, bit)),
+          ("a far day in a full lane group, masked", Set(0), Set(5), false, Seq(bit, bit)),
+          ("a far day in the tail, masked", Set(16), Set(5), false, Seq(bit, bit)),
+          ("every day inside, masked body forced", Set.empty, Set.empty, true, Seq(0, 0)),
+          ("a far day in a full lane group, masked body forced", Set(0), Set.empty, true,
+            Seq(bit, bit)),
+          ("a far day in the tail, masked body forced", Set(16), Set.empty, true, Seq(bit, bit)),
+          // The masked body runs null rows over what the harness stores under them, the
+          // bound's ends; the other body clears the nulls and keeps the data.
+          ("poison under nulls in a lane group and the tail", Set.empty, Set(3, 16), false,
+            Seq(0, 0)),
+          ("far days under nulls in a lane group and the tail", Set(3, 16), Set(3, 16), false,
+            Seq(0, bit)))
+        for ((label, far, nullRows, forced, want) <- cases) {
+          val data = Array.tabulate(numInputs, length) { (c, i) =>
+            if (c == k && far.contains(i)) VarkaChrono.CONTRACT_MAX_DAYS + 1 else 19000 + i * 400
+          }
+          val patterns: Seq[Int => Boolean] =
+            (0 until numInputs).map(c => (i: Int) => c == k && nullRows.contains(i))
+          val context = s"$name, input $k: $label"
+          val st = VarkaKernelCheck.runEachBodyStatus(context, className, bytes, roots,
+            numInputs, lits, VarkaKernelCheck.Batch(length, patterns, data, forceMasked = forced))
+          assert(st == want, s"$context: statuses $st, want $want")
+          batches += 1
+        }
+      }
+    }
+    // Three shapes, four guarded inputs among them, ten batches each.
+    assert(batches == 4 * 10, s"$batches batches")
+  }
+
+  test("VARKA-379: in a projection split across kernels, the kernel holding the guard declines " +
+      "a far day while the one before it serves") {
+    // Under the op cap (the byte budget off) with several kernels, thirty-two entries over d2,
+    // 64 ops, fill the first kernel and the calendar fields over d are the second's, the only one
+    // with the guard. A far day in d is declined by the second kernel after the first has
+    // answered; the evaluator then sends the whole batch to the row engine, which
+    // `VarkaFarDaySuite` checks end to end. Inside the bound both kernels answer as the
+    // reference evaluator does.
+    val d = AttributeReference("d", DateType)()
+    val d2 = AttributeReference("d2", DateType)()
+    val entries = (1 to 32).map(k => SqlDayOfWeek(SqlDateAdd(d2, Literal(k)))) ++
+      (1 to 12).map(k => SqlYear(SqlDateAdd(d, Literal(k))))
+    val o = VarkaMatrix.base.withMethodByteBudget(0).withSeveralKernels(true)
+      .withExactRefusalStatus(true)
+    val partial = VarkaExpressionCompiler.compilePartial(entries.map(e => Alias(e, "c")()),
+      Seq(d, d2), o).toScala.getOrElse(fail("the projection does not fuse"))
+    val kernels = partial.fused +: partial.more.asScala.toSeq
+    assert(kernels.size == 2 && partial.declines.isEmpty, s"${kernels.size} kernels, " +
+      s"declines ${partial.declines}")
+    def guarded(n: VarkaVectorIR): Boolean =
+      n.isInstanceOf[GuardedRange] || VarkaVectorIR.childrenOf(n).exists(guarded)
+    assert(kernels.map(_.outputs.asScala.exists(guarded)) == Seq(false, true),
+      "the guard belongs to the second kernel alone")
+    val bit = VarkaFusedKernel.STATUS_VALUE_RANGE
+    for ((far, want) <- Seq(false -> Seq(0, 0), true -> Seq(0, bit))) {
+      val statuses = kernels.map { k =>
+        val roots = k.outputs.asScala.toSeq
+        val numInputs = k.inputOrdinals.size
+        val className =
+          s"org.apache.spark.sql.varka.execution.VarkaColumnBound${classCounter.incrementAndGet()}"
+        val bytes = VarkaLoopEmitter.emit(className, k.outputs, numInputs, k.numLiterals, null,
+          null, o)
+        // Kernel input i reads child column inputOrdinals(i): 0 is d, 1 is d2.
+        val data = Array.tabulate(numInputs, length) { (c, i) =>
+          if (far && k.inputOrdinals.get(c) == 0 && i == 16) VarkaChrono.CONTRACT_MAX_DAYS + 1
+          else 19000 + i * 400
+        }
+        VarkaKernelCheck.runAndCompareStatus(s"kernel over ${k.inputOrdinals}, far=$far",
+          className, bytes, roots, numInputs, k.literals.asScala.map(_.intValue).toArray,
+          VarkaKernelCheck.Batch(length, Seq.fill(numInputs)((_: Int) => false), data,
+            forceMasked = false), declineAllowed = true)
+      }
+      assert(statuses == want, s"far=$far: statuses $statuses, want $want")
     }
   }
 

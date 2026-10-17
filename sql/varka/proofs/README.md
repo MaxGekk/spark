@@ -89,6 +89,12 @@ unknown, and cvc5 the reverse; every integer instance is a real one, so the inte
 The congruence itself goes in two layers, a ring identity both solvers normalise and the wrap's
 periodicity, which is linear - Fiat Cryptography's split of the algebra from the bounds.
 
+The leaves are premises, not theorems. A bare date column's interval is the column bound,
+0001-01-01 to 9999-12-31, which Spark's storage does not enforce. Since VARKA-379 the premise is
+discharged at run time - a compile that rests on it guards the column in the kernel, which declines
+a batch with a live day outside it - so what is proven here holds of every batch a kernel
+serves; before, it was assumed, and a cached far day was served wrong.
+
 ## Adding a proof
 
 1. One file per lowering, its header naming the Java it encodes. Constants that live in the code

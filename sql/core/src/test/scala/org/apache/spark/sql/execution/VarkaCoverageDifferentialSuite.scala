@@ -729,12 +729,13 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
    * its bound and one past it on both sides, in the column the guard reads. `i` at the int
    * extremes and one in from each, at the day-interval limit, at the month range and at the
    * months of `make_date`; `d` of year 9999 beside the `i` that takes `year(d) + i` to the int's
-   * top and one past; `ym` at the month range on both signs, at the one count whose negation
-   * overflows and one in from it, and at the counts whose difference with `ymm` leaves the int,
-   * `ymm` at its most negative; a time at each end of the day. Then rows null in those columns,
-   * one column group at a time and all at once, which the `IS NULL` partitions select. The
-   * other columns hold the mixed fixture's first row. One partition, so a partition view's rows
-   * are one batch at the default batch size.
+   * top and one past, and `d` at the column bound's ends and one past each (VARKA-379); `ym` at
+   * the month range on both signs, at the one count whose negation overflows and one in from
+   * it, and at the counts whose difference with `ymm` leaves the int, `ymm` at its most negative;
+   * a time at each end of the day. Then rows null in those columns, one column group at a time
+   * and all at once, which the `IS NULL` partitions select. The other columns hold the mixed
+   * fixture's first row. One partition, so a partition view's rows are one batch at the default
+   * batch size.
    */
   private val edges: (String, String) = {
     def row(d: String = "DATE'2024-01-31'", i: String = "3", m: String = "0", y: String = "0",
@@ -756,6 +757,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
     val rows = ints.map(i => row(i = i.toString)) ++
       Seq(Int.MaxValue - 9999L, Int.MaxValue - 9998L).map(i =>
         row(d = "DATE'9999-12-31'", i = i.toString)) ++
+      around(VarkaChrono.CONTRACT_MIN_DAYS, VarkaChrono.CONTRACT_MAX_DAYS).map(v =>
+        row(d = s"date_from_unix_date($v)")) ++
       (around(minMonths, maxMonths) ++ around(-maxMonths, -minMonths)).map(ymRow(_)) ++
       Seq(ymRow(Int.MinValue), ymRow(Int.MinValue, m = "1"), ymRow(Int.MinValue + 1L),
         ymRow(Int.MaxValue), ymRow(Int.MaxValue, m = "-1"), row(m = Int.MinValue.toString),

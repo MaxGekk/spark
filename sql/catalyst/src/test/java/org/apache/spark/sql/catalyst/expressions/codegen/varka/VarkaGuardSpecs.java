@@ -50,14 +50,21 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.*;
  *       guard's bit.</li>
  * </ul>
  *
- * <p>A null is never a reason to decline. A guard above a FAIL-mode node that overflowed on the
- * row <b>may</b> fire: the kernel condemns the batch for the overflow and leaves the wrapped value
- * in a lane that stays valid, which the guard above then reads, where the reference evaluator has
- * no value for the lane at all (found by the coverage rows' partitions, VARKA-279 9.2). A batch's
- * verdict joins its rows'. The bounds are the constants the emitter reads ({@code VarkaChrono}'s
- * narrow range, month-arithmetic and {@code make_date} limits, the lane's own range for a checked
- * overflow, a {@code GuardedRange}'s own {@code lo} and {@code hi}), not copies, so the verdict
- * cannot drift from the code by someone editing one side. The values are
+ * <p>A null is never a reason a batch must decline. One guard reads a null row all the same: an
+ * int-lane {@code GuardedRange} over a bare column checks the column's stored values, null rows
+ * included ({@code Analysis.guardsStoredValues}, VARKA-379 11), and the reference has no value for
+ * a null row: a null row whose stored day is outside the bound <b>may</b> decline by its bit. The
+ * stored day is the caller's value for the null cell: {@code 0} from the Scala face, as Spark's
+ * Arrow writer leaves it, and inside the bound wherever the kernel harness filled the batch
+ * ({@code VarkaKernelChecks.storedUnderNull}). A guard above a
+ * FAIL-mode node that overflowed on the row <b>may</b> fire: the kernel condemns the batch for the
+ * overflow and leaves the wrapped value in a lane that stays valid, which the guard above then
+ * reads, where the reference evaluator has no value for the lane at all (found by the coverage
+ * rows' partitions, VARKA-279 9.2). A batch's verdict joins its rows'. The bounds are the
+ * constants the emitter reads ({@code VarkaChrono}'s narrow range, month-arithmetic and
+ * {@code make_date} limits, the lane's own range for a checked overflow, a {@code GuardedRange}'s
+ * own {@code lo} and {@code hi}), not copies, so the verdict cannot drift from the code by someone
+ * editing one side. The values are
  * {@link VarkaReference}'s, which shares no lowering with the emitter.
  *
  * <p>The plan's fourth verdict, an input outside the column contract, is not computed: the IR does
@@ -132,7 +139,9 @@ public final class VarkaGuardSpecs {
 
   /**
    * The verdict on a batch for the kernel {@code g}: row {@code r}'s column {@code c} holds
-   * {@code values[r][c]} where {@code isNull[r][c]} is false.
+   * {@code values[r][c]} where {@code isNull[r][c]} is false; where it is true,
+   * {@code values[r][c]} is what the column stores under the null, which only the column bound
+   * reads.
    */
   public static Verdict verdict(Guards g, long[] lits, long[][] values, boolean[][] isNull,
       List<Shift> shifts) {
@@ -189,6 +198,16 @@ public final class VarkaGuardSpecs {
     var v = Verdict.ANSWER;
     Set<VarkaVectorIR> live = null;
     for (var guarded : g.guards()) {
+      if (guarded.node() instanceof GuardedRange range && Analysis.guardsStoredValues(range)
+          && values.value(range.child()) == null) {
+        // The column bound reads the day stored under a null row, which the reference has no
+        // value for: the caller's value for the null cell. Outside, the batch may decline.
+        long stored = (int) values.row()[((ColumnRef) range.child()).ordinal()];
+        if (outside(BigInteger.valueOf(stored), bound(range, guarded.reason(), false, shifts))) {
+          v = v.or(new Verdict(0, guarded.reason().status));
+        }
+        continue;
+      }
       boolean fired = fires(guarded.node(), guarded.reason(), values, g.isLong(), shifts);
       // Below a FAIL node that overflowed, the kernel's lane holds the wrapped value and stays
       // valid - the batch is condemned for the overflow anyway - so a guard above it reads that

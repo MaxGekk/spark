@@ -329,6 +329,34 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite with VarkaTestWatchdog {
     }
   }
 
+  test("VARKA-379: the columns an answer rests on are reported, and only those") {
+    // The column bound is checked per batch on exactly the columns reported, so a column left
+    // out is an assumption again, and one reported needlessly declines batches it need not.
+    def rests(node: VarkaVectorIR, kind: Kind, policy: GuardPolicy,
+        literals: IntUnaryOperator = noLits): Set[Int] = {
+      val seen = mutable.Set[Int]()
+      VarkaRangeAnalysis.range(node, kind, policy, literals, i => seen += i)
+      seen.toSet
+    }
+    val l = lits(1)
+    // A bare column, a literal shift over one, and both arms of a hull rest on the bound.
+    assert(rests(c0, Kind.DAY, GuardPolicy.ARMED) === Set(0))
+    assert(rests(new AddDays(c0, slot0), Kind.DAY, GuardPolicy.ARMED, l) === Set(0))
+    assert(rests(new Greatest(c0, c1), Kind.DAY, GuardPolicy.NONE) === Set(0, 1))
+    assert(rests(new LastDay(c1), Kind.DAY, GuardPolicy.NONE) === Set(1))
+    // So does a datediff's magnitude, which removes an overflow check above it.
+    assert(rests(new DateDiff(c0, c1), Kind.INT, GuardPolicy.NONE) === Set(0, 1))
+    assert(rests(new IntArith(IntOp.MUL, Overflow.WRAP, new DateDiff(c0, c1), slot0),
+      Kind.INT, GuardPolicy.NONE, l) === Set(0, 1))
+    // A column-offset shift is held to the narrow range by its own guard, and a GuardedDay by
+    // its check: neither rests on the column below it. An int column is never a day.
+    assert(rests(new AddDays(c0, c1), Kind.DAY, GuardPolicy.ARMED) === Set())
+    assert(rests(new GuardedDay(new AddDays(c0, slot0)), Kind.DAY, GuardPolicy.ARMED) === Set())
+    assert(rests(c0, Kind.INT, GuardPolicy.NONE) === Set())
+    // The calendar fields answer their constants without asking the child.
+    assert(rests(new Year(c0), Kind.INT, GuardPolicy.NONE) === Set())
+  }
+
   // ---------------------------------------------------------------------------------------
   // The property test
   // ---------------------------------------------------------------------------------------

@@ -85,7 +85,7 @@
     "form" : "projection",
     "catalyst" : [ "Year" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "month(d)",
@@ -94,7 +94,7 @@
     "form" : "projection",
     "catalyst" : [ "Month" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "day(d)",
@@ -103,7 +103,7 @@
     "form" : "projection",
     "catalyst" : [ "DayOfMonth" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "quarter(d)",
@@ -112,7 +112,7 @@
     "form" : "projection",
     "catalyst" : [ "Quarter" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "dayofyear(d)",
@@ -121,7 +121,7 @@
     "form" : "projection",
     "catalyst" : [ "DayOfYear" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "dayofweek(d)",
@@ -157,7 +157,7 @@
     "form" : "projection",
     "catalyst" : [ "WeekOfYear" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "extract(YEAROFWEEK FROM d)",
@@ -166,7 +166,7 @@
     "form" : "projection",
     "catalyst" : [ "Extract", "YearOfWeek" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "last_day(d)",
@@ -175,7 +175,7 @@
     "form" : "projection",
     "catalyst" : [ "LastDay" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "next_day(d, 'MONDAY')",
@@ -202,7 +202,7 @@
     "form" : "projection",
     "catalyst" : [ "TruncDate" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "trunc(d, 'MONTH')",
@@ -211,7 +211,7 @@
     "form" : "projection",
     "catalyst" : [ "TruncDate" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "trunc(d, 'QUARTER')",
@@ -220,7 +220,7 @@
     "form" : "projection",
     "catalyst" : [ "TruncDate" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "trunc(d, 'WEEK')",
@@ -238,7 +238,7 @@
     "form" : "projection",
     "catalyst" : [ "AddMonths" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "add_months(d, i)",
@@ -247,7 +247,7 @@
     "form" : "projection",
     "catalyst" : [ "AddMonths" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled" ],
-    "domain" : "i BETWEEN -24576 AND 24564",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896 AND i BETWEEN -24576 AND 24564",
     "note" : "a column month count, inside the range the month arithmetic's magic divide is exact over"
   }, {
     "sql" : "d + INTERVAL 3 MONTH",
@@ -256,7 +256,7 @@
     "form" : "projection",
     "catalyst" : [ "DateAddYMInterval" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "d + ym",
@@ -265,7 +265,7 @@
     "form" : "projection",
     "catalyst" : [ "DateAddYMInterval" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled" ],
-    "domain" : "ym BETWEEN INTERVAL '-2048-0' YEAR TO MONTH AND INTERVAL '2047-0' YEAR TO MONTH",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896 AND ym BETWEEN INTERVAL '-2048-0' YEAR TO MONTH AND INTERVAL '2047-0' YEAR TO MONTH",
     "note" : "the interval's month count, under the same range"
   }, {
     "sql" : "d - ym",
@@ -274,7 +274,7 @@
     "form" : "projection",
     "catalyst" : [ "DateAddYMInterval", "DatetimeSub", "UnaryMinus" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled", "spark.sql.codegen.varka.family.interval.enabled" ],
-    "domain" : "ym BETWEEN INTERVAL '-2047-0' YEAR TO MONTH AND INTERVAL '2048-0' YEAR TO MONTH",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896 AND ym BETWEEN INTERVAL '-2047-0' YEAR TO MONTH AND INTERVAL '2048-0' YEAR TO MONTH",
     "note" : "the negated count under the range, so the bounds change sides"
   }, {
     "sql" : "make_ym_interval(year(d), month(d))",
@@ -283,7 +283,7 @@
     "form" : "projection",
     "catalyst" : [ "MakeYMInterval", "Month", "Year" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled", "spark.sql.codegen.varka.family.interval.enabled" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : "the operands must be bounded - over a bare int column the checked multiply inside it keeps its overflow test and declines"
   }, {
     "sql" : "make_ym_interval(year(d), month(d)) * 2",
@@ -292,7 +292,7 @@
     "form" : "projection",
     "catalyst" : [ "MakeYMInterval", "Month", "MultiplyYMInterval", "Year" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled", "spark.sql.codegen.varka.family.interval.enabled" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : "a checked multiply, so bounded operands again: `ym * 2` over a stored interval column declines"
   }, {
     "sql" : "abs(ym)",
@@ -364,7 +364,7 @@
     "form" : "projection",
     "catalyst" : [ "Multiply", "Year" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled", "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : "a multiply is checked, and only bounded operands take the check off: `i * 2` over a bare int column declines"
   }, {
     "sql" : "-i",
@@ -382,7 +382,7 @@
     "form" : "projection",
     "catalyst" : [ "Add", "Year" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled", "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
-    "domain" : "i <= 2147483647 - year(d)",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896 AND i <= 2147483647 - year(d)",
     "note" : "checked under ANSI; the lower bound is out of reach, since a year is at least 1"
   }, {
     "sql" : "if(d < d2, d, d2)",
@@ -499,7 +499,7 @@
     "form" : "predicate",
     "catalyst" : [ "EqualTo", "Year" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled", "spark.sql.codegen.varka.family.predicate.enabled" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "NOT (d = d2)",
@@ -526,7 +526,7 @@
     "form" : "predicate",
     "catalyst" : [ "And", "EqualTo", "GreaterThan", "Year" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled", "spark.sql.codegen.varka.family.predicate.enabled" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : "every conjunct of an AND fuses or the predicate is not in this table; the int column compares in the kernel rather than leaving a residual row filter (VARKA-122)"
   }, {
     "sql" : "i > 0",
@@ -562,7 +562,7 @@
     "form" : "predicate",
     "catalyst" : [ "GreaterThan", "Month" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled", "spark.sql.codegen.varka.family.predicate.enabled" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : "an int column against a fused int field"
   }, {
     "sql" : "year(d) = 2021 OR month(d) = 3",
@@ -571,7 +571,7 @@
     "form" : "predicate",
     "catalyst" : [ "EqualTo", "Month", "Or", "Year" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled", "spark.sql.codegen.varka.family.predicate.enabled" ],
-    "domain" : "",
+    "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : ""
   }, {
     "sql" : "d IN (11 to 16 date literals)",

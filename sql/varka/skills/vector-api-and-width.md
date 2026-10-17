@@ -1086,3 +1086,22 @@ Vector API's correctness suite with the intrinsics off; OpenJDK's `Vectorization
 the analogous thing for auto-vectorized loops, comparing the interpreter's answer, got through
 WhiteBox, with C2's. On the performance side this is the same fallback `the-jit.md` warns about:
 a silent slow path when it runs in production, a reference when it runs on purpose.
+
+## On AVX2 a validity word made into a lane mask costs more than a cheap kernel's own work
+
+Read from C2's assembly for VARKA-379 (`VARKA-379.md` 11), on the laptop under
+`-XX:UseAVX=2 -XX:MaxVectorSize=32`, the instruction set of the GitHub runners' EPYC 7763.
+`VectorMask.fromLong(species, word)` per lane group, ANDed with a guard's compares, compiles to
+a bounds-checked byte load of the bitmap, `pdep`, `vmovq`, `vpxor`, `vpsubb`, `vpmovsxbd` and a
+`vpand`: nine instructions for eight int lanes, where AVX-512 does the same with a `kmov` and a
+`kandw`. Beside `datediff(d, DATE'2000-01-01') + 1`, whose loop is a load, a subtract, an add
+and a store, that is twice the kernel, and the end-to-end pair saw it as a residual on every
+bounded row because the benchmark's table holds a null every 31st row and so runs the masked
+body. A check that needs no validity avoids the whole sequence; one that does should test
+validity once per 64-row word rather than once per lane group.
+
+The second lesson from the same loops: a per-lane check folded into a loop-carried accumulator
+costs at least that accumulator's latency per lane group, whatever form it takes - two compares
+and two ORs into a mask, or a lane-wise min and max - because C2 does not reassociate the chain
+across its unrolled copies. A kernel of tens of ops a group hides it; a kernel of four does not.
+The min and the max are still the cheaper form: two ops a group against four, and no mask.

@@ -5229,6 +5229,23 @@ where the species has two lanes, with the reason in `EXPLAIN`. **Done when** one
 built and the 128-bit warm-up arm releases no kernel for this cause, or the record says why
 neither is worth it on the hosts that have it.
 
+### Item 102. A date column's bound per shape, not the calendar's 0001 to 9999
+
+*Added 16 October 2026 from `m7/VARKA-379.md` 3.1.* VARKA-379 made the date column bound a check:
+wherever an answer rests on a bare date column's range, the compiler notes 0001-01-01 to
+9999-12-31 against the column and the kernel declines a batch with a live day outside it. That
+is one constant for every shape, so days the admitted kernel computes exactly - from day -5394572
+up to 0001-01-01, and from 10000-01-01 up to 42400-02-29 for a bare field, less any literal shift
+the shape adds - now go to the row engine where master served them. The mechanism takes a bound
+per shape already (`DeclineSink.boundSlot` carries any interval, and the compiler wraps the column
+in a `GuardedRange` over it): the widest interval of the
+column that keeps the admitted node's interval inside the range the lowering decomposes exactly,
+found by running the range analysis's transfer functions backwards from the admission's limit,
+or by asking it at the candidate bound. The proofs then take that interval as the leaf's premise.
+**Done when** a calendar field over a cached column holding years 10000 to 42400 is served by its
+kernel and still declines one day past the exact range, with `VarkaFarDaySuite`'s edges moved to
+the new bound.
+
 ### Item 103. Why the kernel warm-up gives up on small runners
 
 *Added 17 October 2026 from `m7/VARKA-322.md` and PR #900's pairs.* On a 4-core GitHub runner
