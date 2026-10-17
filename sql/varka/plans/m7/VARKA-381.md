@@ -186,3 +186,122 @@ the census's info line, read against the nightly's `sparkfuzz` step.
 1. This plan and the row marked planned.
 2. The rerun, the warmed arm's row answer, the removals and the three tests; both suites green.
 3. The census and the per-row arm's runs; section 9 and the row's cell.
+
+## 9. Outcome
+
+Done on 17 October 2026, on `varka-298` (merged in up to `509bd978907`).
+
+**What was built.** As 3.1 and 3.2 planned, with four changes from the self-review (below):
+`disagreement` reruns a check in which any query raised over the rows as one partition, or under
+`-Dvarka.sparkfuzz.errorRerun=eachRow` over one partition and then each row alone; the arm and the
+stripping of a race's condition are a Java enum, `VarkaErrorRerun` (sql/core's test tree), not
+Scala; the warmed arm asks the row engine over one partition once it raised. The rerun of
+VARKA-298 9.3, `racingErrors`, `withoutCounting`'s old form and the shrinker's keep-if-twice are
+gone. Three tests: the view's partitions and fusion (5.1), the planted race (5.2), the pure rules
+(5.3).
+
+*Corrections to 1-8.*
+
+* **Section 2's "a query over two partitions raises if and only if it raises over one" is false.**
+  The cached scan skips a batch whose column statistics fail a conjunct (`InMemoryTableScanExec`'s
+  batch pruning), so whether a raising row is evaluated at all depends on the batch it sits in.
+  The per-row arm found it on the `known 380` reproducer of seed 20261104, iteration 2199: over its
+  three rows as one batch the row engine raises on the row with `i` = 3840, but that row alone has
+  `d` = 2190-08-04, outside the `IN` list's two dates, so its batch is skipped on both engines and
+  neither raises. The design survives: what the race decides is still only which condition; a
+  check whose queries all answered over two partitions is compared there; and a difference only
+  the two-partition batches show is reported as `at two partitions only, ...` (risk 2), not
+  dropped.
+* **The per-row arm runs over one partition first** (the review's finding 4): run alone, it never
+  checked the pivot and its one-row batches lost the 2199 reproducer's disagreement. A reproducer
+  found under it carries the arm in its note, and the replay takes the arm from the note.
+* **The census counts each condition any run of a check raised, once** (finding 5): over one
+  partition only the first raising row's condition is raised, so counting the rerun alone would
+  have hidden conditions the two-partition run met. Which extra condition the first run adds may
+  be a race's choice; the census lines are counts, not verdicts.
+
+**The planted race (5.2).** With the test choosing which task fails first, the comparison before
+this task answered, for the four choices, agree, `error classes differ: ARITHMETIC_OVERFLOW,
+DATETIME_FIELD_OUT_OF_BOUNDS.WITHOUT_SUGGESTION`, the mirror, agree; `disagreement` under both arms
+answered agreement in all sixteen checks. The test takes 9 s on a quiet machine and up to 15 s
+beside other builds.
+
+### 9.1 The census
+
+Six JVMs, one per seed and arm, four pinned cores each, 50,000 compositions at seeds 20261017 to
+20261019 (the next three nightly seeds), `-Dvarka.sparkfuzz.maxFailures` lifted. The first three
+are the nightly's `sparkfuzz` step as it runs today (`-Dvarka.sparkfuzz.nested=false`) on this
+branch; the other three draw the nested trees, on this branch merged with `varka-380` in a scratch
+worktree that was never committed or pushed, since row 380's fix is what lets the nightly draw
+them again.
+
+| | without nested trees (this branch) | with nested trees (this branch and row 380) |
+|---|---|---|
+| compositions | 150,000 | 150,000, of which 74,983 nested |
+| erroring on both sides | 561, 597, 645 | 928, 935, 988 |
+| compared again because a query raised | 561, 597, 645 (1.1 to 1.3%) | 935, 941, 993 (1.9 to 2.0%) |
+| differed at two partitions only | 0 | 0 |
+| disagreements | 0 | 2 (9.2) |
+| listed conditions never raised | `INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION`, which only nested trees reach (`VARKA-298.md` 9.4) | none |
+| unexpected conditions | 0 | 0 |
+
+### 9.2 Two findings the deterministic comparison exposes (Varka's, not this task's)
+
+Both replay at their seed and iteration on this branch alone, without row 380, and every time, so
+neither is a race and neither came from row 380. Reproducers are kept in this task's scratch area,
+not in `sql/varka/fuzz/spark/`, which this task does not own.
+
+* **Seed 20261017, iteration 22897 (LEGACY): Varka raises where Spark's earlier conjunct rejects the
+  row.** `SELECT t + INTERVAL '0 00:00:00' DAY TO SECOND AS c0 FROM fz WHERE NOT (year(d) = 2021
+  AND i > 0) AND ((ymy <= (INTERVAL '1' YEAR - ym)))` over two rows; on the row with `d` in 2021,
+  `i` NULL and `y` = -178956970 the first conjunct is NULL, so Spark's `Filter` stops there, while
+  Varka evaluates the second, whose year-month subtraction overflows in every mode: `only Varka
+  throws: INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION`. The direction row 380 did not cover (380
+  is Spark raising where Varka's fused conjunct rejects first).
+* **Seed 20261018, iteration 47807 (ANSI): the order of raises inside a batch.** `SELECT
+  make_date(2021, i, 1) AS c0 FROM fz WHERE (((ymy + ym) >= ym))` over two rows. Over one
+  partition Spark evaluates the filter and then the projection row by row and raises the first
+  row's month (`i` = -2821); Varka's filter runs over the whole batch first and raises the second
+  row's interval overflow (`y` = 178956969). Risk 1 of 7, met: a deterministic `error classes
+  differ` at one partition. Over two partitions the two rows sit in different tasks, so before
+  this task it was a race the rerun absorbed.
+
+At two in 74,983 nested compositions, a nightly of 50,000 that draws nested trees (once row 380
+lands) meets one about two nights in three, so these need rows before the switch is removed.
+Whether the second is a bug or an allowed difference (which of two raising rows an engine names
+first) is the owner's call; vanilla Spark's answer is the oracle this harness holds both to.
+
+### 9.3 Predictions scored
+
+1. **Partly refuted.** Without nested trees, no disagreement and every listed condition raised but
+   the nested-only one, as predicted. With nested trees, every listed condition was raised, but
+   two disagreements, both Varka's (9.2).
+2. **Held**: 1.1 to 1.3% compared again without nested trees, 1.9 to 2.0% with them.
+3. **Held**: the 200-composition run at the default seed, five times each, alternating, on four
+   pinned cores of an otherwise idle machine, took 47.9 to 51.9 s before and 48.5 to 56.8 s after
+   (whole JVM): 47.9 against 48.5 s by minimums, under the noise; the run meets four raising
+   compositions. The census adds one check per raising composition, 1.1 to 1.3% of the nightly
+   step's compositions. Ratio under 1 against the estimate of under 3%; the calibration entry is
+   owed to `skills/calibration/`, outside this task's files.
+4. **Held**: the three tests take about 9 s together, the planted race nearly all of it.
+
+### 9.4 The self-review
+
+`/code-review high` on the diff against `varka-298`: ten findings, nine taken. (1) An unlisted
+condition seen only over two partitions was dropped: now kept whole. (2) A forced kind under the
+`at two partitions only` prefix lost its force in the reproducer: forced kinds are found anywhere
+in the text. (3) A reproducer found under the per-row arm was replayed under the default: the arm
+goes in its note. (4) and (5): the corrections above. (6) A failure's shrink counted its checks in
+the census: `failureText` runs uncounted. (7) The planted test's wait was per row and its function
+stayed registered: once per task on marked rows, five seconds at most, dropped after. (9) The
+comments' citation of this section, which now exists, and section 2's claim, corrected above.
+(10) The helpers in Scala against the house rule: `VarkaErrorRerun` is Java. Not taken, (8): the
+warmed arm's Varka-only raise over two partitions still names a race's condition. Its kinds are
+neither shrunk nor replayed by kind (a `warmed` reproducer is refused by the replay), the case is
+a disagreement whichever condition it names, and naming a fixed one would mean repeating the
+warm-up sequence over one partition.
+
+### 9.5 Left for later
+
+* The two findings of 9.2, for the owner to make rows.
+* The calibration entry for 6.1 #3 (`skills/calibration/`).
