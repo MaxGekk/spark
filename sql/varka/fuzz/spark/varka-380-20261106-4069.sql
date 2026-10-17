@@ -1,6 +1,6 @@
 -- VARKA-262 reproducer
--- status: known 380
--- note: seed 20261106 iteration 4069
+-- status: regression
+-- note: seed 20261106 iteration 4069, found by VARKA-298, fixed by VARKA-380: a fused conjunct ran ahead of a residual one that raises in Spark
 -- ansi: false
 -- kind: only the row engine throws: INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION
 -- select: l AS c0
