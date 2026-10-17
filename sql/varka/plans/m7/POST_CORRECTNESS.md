@@ -105,7 +105,8 @@ expression. Then whole queries are compared with Spark. A fuzzer, a test that ge
 expressions and data, builds projections and filters over data with nulls. It runs each through
 Spark with Varka on and off, with Spark's ANSI mode on and off, and compares the rows. A failure
 is shrunk to its smallest failing expression and saved, and saved failures replay on every pull
-request. In a census of 35,000 random queries, none disagreed.
+request. In a census of 35,000 random queries, the flat half never disagreed; the nested half is
+below.
 
 Two other checks borrow Spark's own tests. Spark's golden SQL files, its SQL test files with
 recorded expected output, run with Varka on and give the same results as with it off. A harvest of
@@ -138,8 +139,10 @@ compilation events of JFR (Java Flight Recorder) and the code cache's method lis
 so each compared call is known to have run C2's code. In the first run 85% of warm-ups reached C2
 within their deadline, and no history found a wrong answer.
 
-[PENDING #870: the same warmed histories on the expressions Varka compiles, and the nightly run
-over many random kernels; what they found.]
+Every pull request now warms the kernels of four coverage rows per lane type through three of
+those histories, and every night a thousand random kernels per lane type go through all eight,
+then every coverage row. A first two-JVM trial found no wrong answer. In 3 of its 66 cases the
+kernel never settled in C2, each caught in the same cycle of deoptimizing and recompiling.
 
 ![Seven JVMs, one set of answers](figures/svg/fig49-seven-jvms-one-set-of-answers.svg)
 
@@ -176,13 +179,19 @@ all. The filter bug shows the limit plainly. Spark stops evaluating a filter's c
 first false one. Varka compiles some of the conditions and leaves the rest to Spark. When a kernel
 declined a batch, Varka refiltered it with the compiled conditions alone, so they ran on rows an
 earlier condition would have excluded. Under ANSI that raised an error Spark never raised. Every
-test passed over it; reading a paper on testing showed where to look, and it is fixed.
+test passed over it; reading a paper on testing showed where to look, and it is fixed. Its mirror
+image turned up later, by a different route.
 
-[PENDING #871: random expressions nested across neighbouring types, so that Spark's analyzer
-inserts casts; what they found. When it merges, change two sentences: "In a census of 35,000
-random queries, none disagreed" in the section on Spark's rows, and "it is fixed" for the filter
-bug above. Its nested census found the mirror of that bug, a compiled condition running before a
-not-compiled one that Spark evaluates first, which is an open row.]
+Flat random expressions miss what Spark's analyzer does to nested ones. A second grammar draws
+expressions nested across neighbouring types, so that the analyzer inserts casts, and the
+shrinker now reduces inside them. Half of the 35,000 queries in the census were nested, and 4 of
+those 17,490 disagreed, all from one bug, the mirror of the one above: Varka compiled a condition
+that Spark evaluates after a condition it left to Spark, so where that one raised, Spark failed
+the query and Varka returned rows.
+
+[PENDING #908, #909: the mirror bug fixed; the 150,000-query census with nested trees and a
+deterministic error verdict found two more, rows 386 and 387, and one disagreement inside Spark
+itself, between its compiled and interpreted filters (SPARK-60315). Say how each ended.]
 
 [PENDING #890: branch coverage of the bytecode writer and the compiler, and a bounded mutation
 run; which branches and mutants no test reaches.]
