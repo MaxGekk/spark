@@ -1,15 +1,27 @@
 # How a SQL engine is tested: ten methods, what each found, and what each missed
 
-Varka is a fork of Apache Spark that compiles SQL expressions into kernels: classes it writes as
-bytecode at run time, each computing a query's expressions over a batch of columns with the Java
-Vector API. Every kernel has two loops. One runs batches with no nulls; the other carries a null
-mask. In October we measured which of that code the test suites had actually compared with
-anything. Of about 2,800 kernel classes the suites ran, about 730 had run both loops under a
-comparison. The rest had been compiled, loaded and run, and never checked.
+Varka is a fork of Apache Spark that runs some SQL expressions faster by compiling them. Take
+
+```sql
+SELECT year(d), date_add(d, 7) FROM events WHERE d BETWEEN DATE'2024-01-01' AND DATE'2024-12-31'
+```
+
+Spark evaluates the two expressions and the filter one row at a time. Varka reads the column `d`
+in batches of a few thousand values, writes a small Java class for exactly these three
+expressions, loads it, and runs it over each batch with the Java Vector API, which computes
+eight or sixteen values in one CPU instruction. That generated class is a *kernel*. A query gets
+a kernel per distinct expression shape, so a test suite that runs thousands of expressions
+produces thousands of kernels, each written as bytecode at run time, none of them a file a person
+has read. Every kernel has two loops: one for batches with no nulls, one that carries a null mask.
+
+In October we measured which of that generated code the test suites had compared with anything.
+Of about 2,800 kernel classes the suites ran, about 730 had run both loops under a comparison.
+The rest had been compiled, loaded and run, and never checked.
 
 This post is for testers and quality engineers. It lays out the ten methods Varka uses to check
-that its answers are right, each in the same shape: what it checks and against what, what it has
-found, what it costs to run, and where it stops. A table up front links to each.
+that its answers are right, each in the same shape: what it checks and against what, an
+example, what it has found, what it costs to run, and where it stops. A table up front links to
+each. The last section links to the files every number comes from.
 
 > **In short**
 >
@@ -26,9 +38,10 @@ found, what it costs to run, and where it stops. A table up front links to each.
 
 ## The oracle
 
-Right means what Spark says. Varka's kernels must return the rows vanilla Spark returns, with the
-same nulls. When Spark raises an error, Varka must raise the same one, compared by error class,
-SQLSTATE and message parameters.
+Right means what Spark says. A kernel must return the rows vanilla Spark returns, with the same
+nulls. When Spark raises an error, Varka must raise the same one, compared by error class,
+SQLSTATE and message parameters. So under Spark's ANSI mode, `make_date(2021, -2821, 1)` must
+raise `DATETIME_FIELD_OUT_OF_BOUNDS` from a kernel as it does from Spark, not return a null.
 
 When a kernel cannot promise that answer for a batch, it declines: Spark's own row engine
 computes the batch instead. A kernel that throws is caught the same way. That safety net can hide
@@ -71,16 +84,31 @@ constants are rendered from the Java code, and a test fails when the committed f
 what the code would write. To show a proof is not vacuous, each file also re-checks one claim with
 a constant off by one, and that check must fail.
 
+A claim reads like a test with the quantifier turned round: state the negation, and ask the solver
+for one value that satisfies it. From `floor_mod7.smt2`, the file behind `x mod 7`, where the
+kernel splits a 32-bit value into two 15-bit digits:
+
+```
+(echo "x >>> 15 is the high digit a of a non-negative int's unsigned reading: expect unsat")
+(assert (and (jint.in x) (>= x 0)))
+(assert (and (= (fm7.unsigned x) (+ (* 32768 a) b)) (<= 0 b) (< b 32768)))
+(assert (not (= (jint.ushr x 15) a)))
+(check-sat)
+```
+
+`unsat` means no such `x` exists, over all four billion of them.
+
 The proofs found two things. The usual recipe for magic numbers, from Hacker's Delight, does not
 always meet the theorem it is justified by: for 327,741,950 of the 32-bit divisors, its shift is
-too small for Granlund and Montgomery's condition. The numbers are still exact, for a different
-reason, and no divisor Varka uses was affected; Varka now asserts the theorem and raises the shift
-where it fails. The second find was an assumption about data. A date column was assumed to hold
-years 1 to 9999, so `year(d)` ran with no guard. Spark can store any 32-bit day, and past a day in
-the year 42400 the date decoding leaves the range it is proven for. Run over a cached table, the
-kernel returned a day of the month of 2 where Spark returns 1. A proposed change makes the
-assumption a check inside the kernel's loop and declines the batch past it. The proofs run in
-about 14 minutes of every nightly; the slowest file takes Z3 28 seconds.
+too small for Granlund and Montgomery's condition. The first is 196,611, whose multiplier and
+shift exceed the theorem's bound by three. The numbers are still exact, for a different reason,
+and no divisor Varka uses was affected; Varka now asserts the theorem and raises the shift where it
+fails. The second find was an assumption about data. A date column was assumed to hold years 1 to
+9999, so `year(d)` ran with no guard. Spark can store any 32-bit day, and past a day in the year
+42400 the date decoding leaves the range it is proven for. Run over a cached table, the kernel
+returned a day of the month of 2 where Spark returns 1. A proposed change makes the assumption a
+check inside the kernel's loop and declines the batch past it. The proofs run in about 14 minutes
+of every nightly; the slowest file takes Z3 28 seconds.
 
 Where it stops: the proofs cover arithmetic. The bytecode around it, null masks, validity bits,
 how outputs are split into methods, the tail of a batch, is not proven, and that is where Varka's
@@ -95,12 +123,12 @@ range analysis, which decides when a check can be skipped, is proven too.*
 <a id="m2"></a>
 ## 2. Enumeration of small kernels
 
-Varka compiles an expression into a small tree of vector operations, then writes bytecode for
-the tree. The reference evaluator, plain Java code that computes the same tree one value at a
-time and is written separately from the bytecode writer, says what each tree means. Every
-well-typed tree of up to five nodes, for kernels over 32-bit and over 64-bit values, nearly four
-million trees in all, goes through the bytecode writer and is compared with the reference
-evaluator over data with nulls.
+Varka compiles an expression into a small tree of vector operations, then writes bytecode for the
+tree. `IfElse(a < b, a + 7, b * 12)` is a tree of five nodes. The reference evaluator, plain
+Java code that computes the same tree one value at a time and is written separately from the
+bytecode writer, says what each tree means. Every well-typed tree of up to five nodes, for
+kernels over 32-bit and over 64-bit values, nearly four million trees in all, goes through the
+bytecode writer and is compared with the reference evaluator over data with nulls.
 
 It has found nothing. Every pull request runs the trees to four nodes, about 100,000, in about a
 minute at both vector widths; the night runs the five-node trees, about 11 minutes for the 64-bit
@@ -111,9 +139,14 @@ which is why method 4 exists.
 <a id="m3"></a>
 ## 3. Variants
 
-Each passing tree of up to four nodes is also rewritten in ways that must not change its answer,
-such as permuting its outputs or adding an output nobody reads, and checked again. This is
-metamorphic testing: the oracle is the kernel's own answer before the rewrite.
+Each passing tree is also emitted in eight rewritten forms whose answers follow from its own, and
+checked again. This is metamorphic testing: the oracle is the tree's own answer. For a tree `T`
+the variants are `[T, C]` with `C` its first child, `[C, T]` with the outputs permuted, `[T, T]`
+with one node object twice, `[T, T']` with a structural copy, `[T, D]` beside an unrelated passing
+tree, `T` with a literal read from a column that holds it, `T` with its columns renumbered, and
+`T` with an arm the data never takes replaced. Each one makes the bytecode writer decide
+something it did not decide for `T` alone: how outputs group into methods, which subtree is
+shared, which slot a column gets.
 
 It has found nothing. It costs about two minutes at each width in the pull request gate. Where it
 stops: it checks only the relations we thought to write, and a bug that survives the rewrite
@@ -127,9 +160,11 @@ compiles, it must agree with Catalyst, Spark's own expression engine, evaluating
 expression over the same values. A reference that disagrees with Spark is fixed, or becomes one
 of the 11 named departures.
 
-It found one disagreement, and that was the harness's: a value drawn outside its type. It runs in
-under half a minute. Where it stops: one expression at a time, no plan, no partitions, no filter
-order.
+It found one disagreement, and that was the harness's. On `t + INTERVAL '0' DAY TO SECOND` Spark
+answered 64653424019000 where the reference answered 64653424019403, the value it was handed: the
+fuzzer had drawn a `TIME(6)` to the nanosecond, which the type cannot hold, and Spark truncated it
+on its first arithmetic. Drawn in whole microseconds, nothing disagrees. The check runs in under
+half a minute. Where it stops: one expression at a time, no plan, no partitions, no filter order.
 
 <a id="m5"></a>
 ## 5. Random queries against Spark
@@ -141,17 +176,33 @@ and saved, and saved failures replay on every pull request. A second grammar dra
 nested across neighbouring types, so that Spark's analyzer inserts casts, and the shrinker reduces
 inside them.
 
+A saved failure is a SQL file with a header, and this is the one that found the third defect
+below, after shrinking:
+
+```sql
+-- status: known 387
+-- ansi: true
+-- kind: error classes differ: DATETIME_FIELD_OUT_OF_BOUNDS.WITHOUT_SUGGESTION,
+--       INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION
+SELECT make_date(2021, i, 1) AS c0 FROM fz WHERE (((ymy + ym) >= ym))
+```
+
+with a two-row fixture in which `i` is -2821 on the first row and the year-month intervals
+overflow on the second. The header's `status` says whether the file must agree, is a known
+failure, or is Spark's own behaviour, and the suite fails when a file's status is out of date.
+
 This is the method that finds bugs. A filter fallback that failed on a column of `NULL` type where
 Spark answered. The mirror of the filter-order bug of the last section: Varka compiled a condition
 that Spark evaluates after a condition it left to Spark, so where that one raised, Spark failed the
 query and Varka returned rows; 4 of 17,490 nested queries in a census of 35,000. Then, once the
-verdict was made deterministic (below), two more in 150,000 nested queries. In one, Varka's
-columnar filter finished its batch before the projection above saw a row, so where Spark raised
-the projection's error on the first row, Varka raised the filter's on the second; a proposed change
-delivers the rows before the failing one first. In the other, Varka raises where Spark's default
-session answers, and Spark disagrees with itself: its compiled filter stops at a condition that is
-NULL, its interpreted filter goes on to the one that raises (SPARK-60315). A change proposed
-upstream would make the compiled filter raise too, so that case waits for Spark's decision.
+verdict was made deterministic (below), two more in 150,000 nested queries. In the file above,
+Varka's columnar filter finished its batch before the projection above saw a row, so where Spark
+raised the projection's error on the first row, Varka raised the filter's on the second; a
+proposed change delivers the rows before the failing one first. In the other, Varka raises where
+Spark's default session answers, and Spark disagrees with itself: its compiled filter stops at a
+condition that is NULL, its interpreted filter goes on to the one that raises (SPARK-60315). A
+change proposed upstream would make the compiled filter raise too, so that case waits for Spark's
+decision.
 
 The saved reproducers replay in seconds on every pull request; the night draws 50,000 queries; a
 census of 150,000 takes six JVMs on pinned cores. Where it stops: random draws reach only what
@@ -169,7 +220,9 @@ that shrink a class that is too big. Three mechanisms no fuzzer reaches.*
 
 Two checks borrow Spark's tests. Spark's golden SQL files, its SQL test files with recorded
 expected output, run with Varka on and give the same results as with it off. A harvest of Spark's
-date tests runs each of 731 statements as a projection and as a filter on both engines. None
+date tests runs each of 731 statements as a projection and as a filter on both engines, and the
+harvest records what Varka did with each: of the 102 statements in `date.sql`, 14 projections
+fused into a kernel, 54 stayed on Spark's row path, 20 raise an error on both engines. None
 disagrees, and the 122 that raise an error raise the same one.
 
 The harvest runs in 74 seconds; the golden files take about an hour a night in a JVM of their
@@ -185,12 +238,18 @@ run.*
 ## 7. Coverage of generated code
 
 The opening number came from JaCoCo, the JVM coverage tool, which instruments a generated class
-like any other. Most kernels were compared on one loop only, because a test usually runs a shape
-once, on one pattern of nulls. Now every compared batch also runs through the other loop, and the
-two must agree; today nearly nine in ten kernels have both loops compared, and most of the rest
-have one loop by design. Under every Varka suite the bytecode writer takes 90% of its branches
-and the compiler 84%, and one of the writer's named mechanisms, the constant pool's decline, is
-reached by no test.
+like any other. The report's first line, today:
+
+| emitted | ran | both loops | one loop by design | only the dense one | only the masked one | neither |
+|---:|---:|---:|---:|---:|---:|---:|
+| 14,745 | 2,805 | 2,427 | 213 | 83 | 18 | 64 |
+
+Most kernels were compared on one loop only, because a test usually runs a shape once, on one
+pattern of nulls. Now every compared batch also runs through the other loop, and the two must
+agree; today nearly nine in ten kernels have both loops compared, and most of the rest have one
+loop by design. Under every Varka suite the bytecode writer takes 90% of its branches and the
+compiler 84%, and one of the writer's named mechanisms, the constant pool's decline, is reached by
+no test.
 
 The measurement costs nothing worth naming: the suites take the same time with the agent on.
 Where it stops: coverage is a measure, not an oracle. A line that ran under a test that compared
@@ -204,11 +263,20 @@ Today nearly nine in ten do, and most of the rest have only one loop by design.*
 <a id="m8"></a>
 ## 8. Mutation testing
 
-A mutation run planted 1,760 small faults, a flipped condition or a dropped call, in the two
-classes that plan every kernel before a byte is written. Tests that check an answer caught 85% of
-them. Of the other 256, 37 were caught by tests written after reading them, and the rest change no
-answer: a check that cannot fire, state nothing reads, or only the shape of the emitted code. No
-fault exposed a wrong answer; the five gaps were tests that did not exist.
+A mutation run, with PIT, planted 1,760 small faults, a flipped condition or a dropped call, in
+the two classes that plan every kernel before a byte is written. Tests that check an answer
+caught 85% of them. Of the other 256, 37 were caught by tests written after reading them, and the
+rest change no answer. Each of those has a note, one line per mutant, naming the class, the
+method, the mutator and why the fault is invisible:
+
+```
+Analysis  planBitmapPass  RemoveConditionalMutator_EQUAL_ELSE  line 740
+  equivalent: planWordAlgebra, which runs first, skips every Cond node, so pureWord holds
+  none and the next line's null check skips a Cond root as this one does
+```
+
+A note that matches no mutant of the run fails the report, so the notes cannot outlive the code.
+No fault exposed a wrong answer; the five gaps were tests that did not exist.
 
 The run is made by hand on the laptop, not nightly. Where it stops: two classes, and faults of the
 kinds the tool knows how to plant.
@@ -222,11 +290,13 @@ verdicts come from the interpreter, which runs the Vector API's plain Java fallb
 vector instructions C2 emits. Users run the C2 code.
 
 Two checks close that gap. The first runs the fuzzers' kernels in the seven JVM configurations of
-Figure 6, each proving from the JVM's own events which compiler's code served the compared calls.
-The second warms each kernel to C2 before comparing it, over eight histories such as a trap after
-a warm-up that never saw nulls, or a compile in the middle of a batch. A tier witness reads the
-compilation events of JFR (Java Flight Recorder) and the code cache's method list during the test,
-so each compared call is known to have run C2's code.
+Figure 6, such as the interpreter alone, C1 only, or C2 with the Vector API's intrinsics off, each
+proving from the JVM's own events which compiler's code served the compared calls. The second
+warms each kernel to C2 before comparing it, over eight histories such as a trap after a warm-up
+that never saw nulls, or a compile in the middle of a batch. A tier witness reads the compilation
+events of JFR (Java Flight Recorder) and the code cache's method list during the test, and gives
+each compared call a verdict: `C2`, `Trapped`, `Osr(level)` or `Mixed(before, after)`. Only a call
+the witness says ran C2's code counts as a C2 comparison.
 
 No tier has given a different answer. Reading the JIT's own log did find a defect: a warmed kernel
 that still allocated one vector array per loop iteration in a few per cent of warm-ups, because
@@ -248,8 +318,9 @@ runs compared about 3,400 answers each.*
 
 Kernels read and write raw memory, so the suites run with a memory checker on. Every memory
 segment a kernel maps is checked against the buffers it was handed, and a canary sits past each
-buffer. It found one thing: some outputs were mapped at twice their real size. No answer was
-wrong, but a bad write could have gone unnoticed.
+buffer. It found one thing, reported as `a mapping of 40 bytes ... for 20 bytes`: outputs that
+were narrowed to a smaller type were mapped at their wide size, twice what the buffer held. No
+answer was wrong, but a write past the end would have gone unnoticed.
 
 It is on in every suite in CI. Where it stops: it checks addresses, not values, and only on the
 paths the suites take.
@@ -297,32 +368,48 @@ assumptions about the data, and one of them was wrong. Random tests reach only w
 Mutation testing has looked at two classes. And some verdicts are the JIT's, reported and bounded
 rather than asserted.
 
-## How these were measured
+## The files behind this post
 
-Every number above comes from a committed file in [Varka](https://github.com/vecbricks/varka),
-and each figure is drawn from one by a script beside it under `sql/varka/plans/figures/`. The
-plans named here are under `sql/varka/plans/m7/`.
+Every number above comes from a committed file in the
+[Varka repository](https://github.com/vecbricks/varka), and each figure is drawn from one by a
+script in [`sql/varka/plans/figures/`](https://github.com/vecbricks/varka/tree/master/sql/varka/plans/figures).
 
-* The opening and Figure 5: `sql/varka/coverage/generated.md`, the JaCoCo report over every
-  emitted class, at commits 6fa0c863a5f (first measured), 69302411f8f and 05169a63d19 (today),
-  kept in `figures/data/both-bodies.tsv`; `VARKA-285.md`, `VARKA-284.md`, `VARKA-303.md`.
-* The oracle and Figure 1: `sql/varka/proofs/spec/STANDARD.md`, `spec/DELTAS.md`,
-  `sql/varka/coverage.json`; `VARKA-243.md`, `VARKA-244.md`, `VARKA-275.md`, `VARKA-317.md`.
-* Method 1 and Figure 2: the files under `sql/varka/proofs/` and its README; `VARKA-240.md` 2.3
-  (Theorem 5.1) and its nightly cost, `VARKA-242.md` (bounds), `VARKA-245.md` 9.2 (the column
-  contract) and pull request #874 (the date bound).
-* Methods 2 to 4: `VARKA-269.md` 9 (enumeration and its costs), `VARKA-278.md` (variants),
-  `VARKA-276.md` (the reference evaluator against Spark).
-* Method 5 and Figure 3: `VARKA-262.md`, `VARKA-372.md` (35,000 queries), `VARKA-298.md` 9.2
-  (the mirror), `VARKA-299.md` (the `NULL`-type column), `VARKA-380.md`, `VARKA-381.md` 9 (the
-  two censuses of 150,000), `m8/PLAN.md` rows 386 and 387, pull request #911, SPARK-60315 and
-  apache/spark#59573, `VARKA-280.md` and `sql/varka/coverage/reach/VarkaIrFuzzSuite.md`.
-* Method 6 and Figure 4: `VARKA-81.md` and `sql/varka/golden_corpus.json` (731 statements),
-  `VARKA-271.md` and `sql/varka/spark_suites/served.json`.
-* Method 8: `VARKA-284.md`.
-* Method 9 and Figure 6: `VARKA-272.md` 9.1, `VARKA-274.md` 9, `VARKA-370.md` and `VARKA-371.md`
-  9.2 (the trap sums; 2 of 1,602 on three cores), `VARKA-378.md` (the nightly ceiling).
-* Method 10: `VARKA-263.md`, `VARKA-292.md`.
-* Figure 7: `figures/data/defects-by-method.tsv`, which names the record behind each chip; the
-  filter order is `m7/PLAN.md` section 2.2 and its row 273.
-* Where it stops: `m9/SCOPE.md` item 58 (what a proof can reach), item 56 (JDK-8388492).
+* **The oracle**: the [SQL-92 definitions](https://github.com/vecbricks/varka/blob/master/sql/varka/proofs/spec/STANDARD.md)
+  and [Spark's 11 departures](https://github.com/vecbricks/varka/blob/master/sql/varka/proofs/spec/DELTAS.md);
+  the [coverage register](https://github.com/vecbricks/varka/blob/master/sql/varka/coverage.json)
+  of what Varka compiles.
+* **Method 1**: the [proof files](https://github.com/vecbricks/varka/tree/master/sql/varka/proofs)
+  and their [README](https://github.com/vecbricks/varka/blob/master/sql/varka/proofs/README.md);
+  the [shift finding](https://github.com/vecbricks/varka/blob/master/sql/varka/plans/m7/VARKA-240.md)
+  (section 2.3); the [date bound](https://github.com/vecbricks/varka/pull/874).
+* **Methods 2 to 4**: [enumeration](https://github.com/vecbricks/varka/blob/master/sql/varka/plans/m7/VARKA-269.md),
+  [variants](https://github.com/vecbricks/varka/blob/master/sql/varka/plans/m7/VARKA-278.md),
+  the [reference evaluator against Spark](https://github.com/vecbricks/varka/blob/master/sql/varka/plans/m7/VARKA-276.md).
+* **Method 5**: the [saved reproducers](https://github.com/vecbricks/varka/tree/master/sql/varka/fuzz/spark);
+  the [35,000-query census](https://github.com/vecbricks/varka/blob/master/sql/varka/plans/m7/VARKA-372.md);
+  the [nested grammar and the mirror bug](https://github.com/vecbricks/varka/blob/master/sql/varka/plans/m7/VARKA-298.md);
+  the [`NULL`-type column](https://github.com/vecbricks/varka/blob/master/sql/varka/plans/m7/VARKA-299.md);
+  the [two censuses of 150,000](https://github.com/vecbricks/varka/blob/master/sql/varka/plans/m7/VARKA-381.md);
+  the [filter's batch](https://github.com/vecbricks/varka/pull/911) and
+  [SPARK-60315](https://issues.apache.org/jira/browse/SPARK-60315);
+  the [reach report](https://github.com/vecbricks/varka/blob/master/sql/varka/coverage/reach/VarkaIrFuzzSuite.md)
+  behind Figure 3.
+* **Method 6**: the [harvest of 731 statements](https://github.com/vecbricks/varka/blob/master/sql/varka/golden_corpus.json)
+  and the [golden files' record](https://github.com/vecbricks/varka/blob/master/sql/varka/spark_suites/served.json)
+  behind Figure 4.
+* **Method 7**: the [JaCoCo report over every emitted class](https://github.com/vecbricks/varka/blob/master/sql/varka/coverage/generated.md),
+  at three commits in [`both-bodies.tsv`](https://github.com/vecbricks/varka/blob/master/sql/varka/plans/figures/data/both-bodies.tsv)
+  for Figure 5; [the measurement](https://github.com/vecbricks/varka/blob/master/sql/varka/plans/m7/VARKA-285.md).
+* **Method 8**: the [mutation run](https://github.com/vecbricks/varka/blob/master/sql/varka/plans/m7/VARKA-265.md)
+  and the [notes on its survivors](https://github.com/vecbricks/varka/blob/master/sql/varka/mutation/notes.tsv).
+* **Method 9**: the [seven JVMs](https://github.com/vecbricks/varka/blob/master/sql/varka/plans/m7/VARKA-272.md)
+  (section 9.1, Figure 6), the [warm histories](https://github.com/vecbricks/varka/blob/master/sql/varka/plans/m7/VARKA-274.md),
+  the [trap sums](https://github.com/vecbricks/varka/blob/master/sql/varka/plans/m7/VARKA-371.md),
+  the [nightly ceiling](https://github.com/vecbricks/varka/blob/master/sql/varka/plans/m7/VARKA-378.md).
+* **Method 10**: the [memory checker](https://github.com/vecbricks/varka/blob/master/sql/varka/plans/m7/VARKA-263.md)
+  and [what it found](https://github.com/vecbricks/varka/blob/master/sql/varka/plans/m7/VARKA-292.md).
+* **Figure 7**: [`defects-by-method.tsv`](https://github.com/vecbricks/varka/blob/master/sql/varka/plans/figures/data/defects-by-method.tsv),
+  which names the record behind each chip; the filter-order bug is row 273 of the
+  [milestone plan](https://github.com/vecbricks/varka/blob/master/sql/varka/plans/m7/PLAN.md).
+* **Where it stops**: items 56 and 58 of the
+  [later scope](https://github.com/vecbricks/varka/blob/master/sql/varka/plans/m9/SCOPE.md).
