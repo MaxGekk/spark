@@ -510,19 +510,24 @@ final class Analysis {
   }
 
   /**
-   * Whether {@code node}'s guard checks a column's stored values, null rows included: an int-lane
-   * {@link GuardedRange} directly over a {@link ColumnRef}, which is the column bound the compiler
-   * wraps a date column in (VARKA-379). Every other guard ANDs its condemning mask with the lanes'
-   * validity, so that a null lane's undefined value cannot condemn the batch; this one does not,
-   * because turning the validity word into a lane mask costs a cheap kernel more than its own work
-   * on AVX2, and a null row a Spark writer filled holds day 0, inside the bound. A far day stored
-   * under a null declines the batch to the row engine, which answers it: slower, never wrong
-   * ({@code VARKA-379.md} 11.3). The long lane keeps the qualified form: the {@code TIME} family's
-   * guards sit there, and AVX2 has no 64-bit min or max for {@link Slots#rangeAcc} to use.
+   * Whether {@code node}'s guard checks a column's stored values, null rows included: the column
+   * bound, the int-lane {@link GuardedRange} over a bare {@link ColumnRef} with the bounds
+   * {@link VarkaChrono#CONTRACT_MIN_DAYS} and {@link VarkaChrono#CONTRACT_MAX_DAYS} that
+   * {@code VarkaRangeAnalysis.guardColumns} wraps a date column in (VARKA-379). Every other guard
+   * ANDs its condemning mask with the lanes' validity, so that a null lane's undefined value cannot
+   * condemn the batch; this one does not, because turning the validity word into a lane mask costs
+   * a cheap kernel more than its own work on AVX2, and a null row a Spark writer filled holds day
+   * 0, inside the bound. A far day stored under a null declines the batch to the row engine, which
+   * answers it: slower, never wrong ({@code VARKA-379.md} 11.3). Told by its bounds as well as its
+   * shape, so that a range guard over a column with any other bounds - the IR grammar draws them,
+   * over null lanes the harness poisons - keeps the qualified form, as does the long lane, where
+   * the {@code TIME} family's guards sit and AVX2 has no 64-bit min or max for
+   * {@link Slots#rangeAcc}.
    */
   static boolean guardsStoredValues(VarkaVectorIR node) {
     return node instanceof GuardedRange g && g.child() instanceof ColumnRef c
-        && c.lane() == VarkaVectorIR.LaneType.INT;
+        && c.lane() == VarkaVectorIR.LaneType.INT
+        && g.lo() == VarkaChrono.CONTRACT_MIN_DAYS && g.hi() == VarkaChrono.CONTRACT_MAX_DAYS;
   }
 
   /**

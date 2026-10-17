@@ -669,6 +669,7 @@ public final class VarkaCompiledCheck {
       var srcData = new long[numInputs];
       var srcValidity = new long[numInputs];
       var nullCounts = new int[numInputs];
+      long boundColumns = isLong ? 0L : VarkaKernelChecks.columnBoundColumns(c.roots());
       for (int col = 0; col < numInputs; col++) {
         var d = VarkaEmitterFixtures.alloc(arena, rows * stride);
         var v = VarkaEmitterFixtures.alloc(arena, words);
@@ -676,7 +677,8 @@ public final class VarkaCompiledCheck {
         int count = 0;
         for (int i = 0; i < rows; i++) {
           boolean z = nulls[col][from + i];
-          long value = z ? poison(count) : snapshot.data()[col][from + i];
+          long value = z ? poison((boundColumns >>> col & 1L) != 0, count)
+              : snapshot.data()[col][from + i];
           if (isLong) {
             d.set(ValueLayout.JAVA_LONG, i * 8L, value);
           } else {
@@ -720,10 +722,16 @@ public final class VarkaCompiledCheck {
           rows, VarkaEmitterTestSupport.scratch(kernel, rows));
     }
 
-    /** The harness's poison for the {@code k}-th null of a column, at the case's lane. */
-    private long poison(int k) {
-      return isLong ? ((k & 1) == 0 ? Long.MIN_VALUE : Long.MAX_VALUE)
-          : VarkaEmitterFixtures.poison(k);
+    /**
+     * The harness's poison for the {@code k}-th null of a column, at the case's lane: the column
+     * bound's ends for a column the kernel reads through it ({@code bounded}), as
+     * {@code VarkaKernelChecks.storedUnderNull} says why.
+     */
+    private long poison(boolean bounded, int k) {
+      if (isLong) {
+        return (k & 1) == 0 ? Long.MIN_VALUE : Long.MAX_VALUE;
+      }
+      return bounded ? VarkaKernelChecks.storedUnderNull(k) : VarkaEmitterFixtures.poison(k);
     }
 
     // -------------------------------------------------------------------------------------------

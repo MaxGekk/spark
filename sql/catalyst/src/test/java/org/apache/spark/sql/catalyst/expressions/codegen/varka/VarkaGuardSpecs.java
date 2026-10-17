@@ -53,7 +53,10 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.*;
  * <p>A null is never a reason a batch must decline. One guard reads a null row all the same: an
  * int-lane {@code GuardedRange} over a bare column checks the column's stored values, null rows
  * included ({@code Analysis.guardsStoredValues}, VARKA-379 11), and the reference has no value for
- * a null row, so a null row under that guard <b>may</b> decline by its bit. A guard above a
+ * a null row: a null row whose stored day is outside the bound <b>may</b> decline by its bit. The
+ * stored day is the caller's value for the null cell: {@code 0} from the Scala face, as Spark's
+ * Arrow writer leaves it, and inside the bound wherever the kernel harness filled the batch
+ * ({@code VarkaKernelChecks.storedUnderNull}). A guard above a
  * FAIL-mode node that overflowed on the row <b>may</b> fire: the kernel condemns the batch for the
  * overflow and leaves the wrapped value in a lane that stays valid, which the guard above then
  * reads, where the reference evaluator has no value for the lane at all (found by the coverage
@@ -136,7 +139,9 @@ public final class VarkaGuardSpecs {
 
   /**
    * The verdict on a batch for the kernel {@code g}: row {@code r}'s column {@code c} holds
-   * {@code values[r][c]} where {@code isNull[r][c]} is false.
+   * {@code values[r][c]} where {@code isNull[r][c]} is false; where it is true,
+   * {@code values[r][c]} is what the column stores under the null, which only the column bound
+   * reads.
    */
   public static Verdict verdict(Guards g, long[] lits, long[][] values, boolean[][] isNull,
       List<Shift> shifts) {
@@ -195,8 +200,12 @@ public final class VarkaGuardSpecs {
     for (var guarded : g.guards()) {
       if (guarded.node() instanceof GuardedRange range && Analysis.guardsStoredValues(range)
           && values.value(range.child()) == null) {
-        // The stored day under a null row, which the reference does not have.
-        v = v.or(new Verdict(0, guarded.reason().status));
+        // The column bound reads the day stored under a null row, which the reference has no
+        // value for: the caller's value for the null cell. Outside, the batch may decline.
+        long stored = (int) values.row()[((ColumnRef) range.child()).ordinal()];
+        if (outside(BigInteger.valueOf(stored), bound(range, guarded.reason(), false, shifts))) {
+          v = v.or(new Verdict(0, guarded.reason().status));
+        }
         continue;
       }
       boolean fired = fires(guarded.node(), guarded.reason(), values, g.isLong(), shifts);

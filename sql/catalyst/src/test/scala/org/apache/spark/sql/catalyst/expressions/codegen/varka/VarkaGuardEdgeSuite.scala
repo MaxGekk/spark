@@ -397,15 +397,16 @@ class VarkaGuardEdgeSuite extends SparkFunSuite with VarkaMatrixTests {
   // ---------------------------------------------------------------------------------------------
 
   test("VARKA-379: the column bound is checked in the kernel's own loop, in both bodies, in a " +
-      "full lane group and the tail, and in a split method, on the stored day of a null row too") {
+      "full lane group and the tail, and in a split method, by a min and a max in the loop") {
     // The compiler guards a date column whose bound an admission rested on; this drives the
     // kernels it builds. A day one past the bound declines the batch in a full lane group (row
     // 0) and in the tail (row 16 of 17), in the dense body and in the masked one, the loop's
     // guard a min and a max compared once after the loop. The guard reads the column's stored
-    // days and not its validity (VARKA-379 11), so a far day stored under a null row declines the
-    // masked body too, as the harness's poison does, and the dense body, its nulls cleared, reads
-    // the same far day as valid. The masked body forced over a batch with no nulls is the case
-    // with no poison in it: inside the bound it answers, and one far day declines it. The split
+    // days and not its validity (VARKA-379 11); the harness stores the bound's own ends under a
+    // null of such a column (VarkaKernelChecks.storedUnderNull), so a batch whose only far days
+    // are under null rows is answered by its own, masked body, and declined by the dense one once
+    // its nulls are cleared and those days read as valid. The masked body forced over a batch
+    // with no nulls answers inside the bound and declines one far day. The split
     // shape gives each output a method of its own, the guarded output last, so its guard is in a
     // group method other than the first. At the JVM's own width, one species per test JVM
     // (VARKA-246): the gate runs the suite at the host's width and under -XX:MaxVectorSize=16,
@@ -468,12 +469,12 @@ class VarkaGuardEdgeSuite extends SparkFunSuite with VarkaMatrixTests {
           ("a far day in a full lane group, masked body forced", Set(0), Set.empty, true,
             Seq(bit, bit)),
           ("a far day in the tail, masked body forced", Set(16), Set.empty, true, Seq(bit, bit)),
-          // The masked body runs null rows over the harness's poison, int32's ends, which the
-          // guard reads as stored days; the other body clears the nulls and keeps the data.
+          // The masked body runs null rows over what the harness stores under them, the
+          // bound's ends; the other body clears the nulls and keeps the data.
           ("poison under nulls in a lane group and the tail", Set.empty, Set(3, 16), false,
-            Seq(bit, 0)),
+            Seq(0, 0)),
           ("far days under nulls in a lane group and the tail", Set(3, 16), Set(3, 16), false,
-            Seq(bit, bit)))
+            Seq(0, bit)))
         for ((label, far, nullRows, forced, want) <- cases) {
           val data = Array.tabulate(numInputs, length) { (c, i) =>
             if (c == k && far.contains(i)) VarkaChrono.CONTRACT_MAX_DAYS + 1 else 19000 + i * 400

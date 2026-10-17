@@ -700,7 +700,10 @@ final class VarkaVectorWalk {
     // contains {@link #guardScratch}, the slot planner's predicate, by construction - so the
     // planner cannot decide this node is guarded while the liveness pass decides its word is dead.
     // It was one predicate, but its two readers ask different questions; the containment is what
-    // preserves the property.
+    // preserves the property. One guard sits outside it on purpose: the column bound
+    // (Analysis.guardsStoredValues) takes a scratch slot in the epilogue and under arms while
+    // demanding no word, and is safe because its callers pass a null word, so it never reaches
+    // `loadWord` (VARKA-379 11).
     if (!dense && word != null && word != WORD_ALL_TRUE) {
       cb.aload(s.species);
       loadWord(cb, s, word);

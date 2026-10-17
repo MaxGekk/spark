@@ -34,6 +34,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.SortedMap;
+import java.util.TreeMap;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.Analysis.WordExpr;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.Analysis.WordOwner;
@@ -230,7 +232,7 @@ final class Slots {
    * ({@code VarkaBodyEmitter.emitRangeFold}). Ordered by the bounds, so the slots do not depend on
    * a hash order. Empty in every other body.
    */
-  final java.util.SortedMap<Bounds, Integer> rangeAcc = new java.util.TreeMap<>();
+  final SortedMap<Bounds, Integer> rangeAcc = new TreeMap<>();
 
   /** A guard's inclusive bounds, as {@link #rangeAcc} keys its accumulators. */
   record Bounds(long lo, long hi) implements Comparable<Bounds> {
