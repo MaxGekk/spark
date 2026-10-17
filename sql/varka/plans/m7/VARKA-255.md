@@ -1243,3 +1243,74 @@ over the budget's 90th percentile" without the 30 s floor, now stated, and added
 only a plain owner and repository name and a numeric run id from a check's text reach the tool's
 API path. The checkout in the sync is of the base's default branch with no credentials kept, and
 the tool is called with an argument list, never through a shell.
+
+### 9.6 255e: new tests rerun, and a fix's new test failing on the base (16 October 2026)
+
+**It fits one pull request**, so 3.4 stays in this row: one script, `dev/varka_new_tests.py`, and
+two steps at the end of each Varka suite job.
+
+**What landed.** `list` reads the module's Varka suites as `dev/varka_matrix.sh` finds them
+(ScalaTest classes named `Varka...Suite`, JUnit classes under `@VarkaSuite`) and takes a test as
+new when its name is in a file the diff from `VARKA_DIFF_BASE` changes and in no Varka-named
+suite file of the base nor the base's version of a changed file: a renamed test is new, a test
+moved between files is not. A name is read as a chain of string literals joined by `+` across
+lines, which is how the long titles and display names are written; anything else - `s"..."`, a
+literal plus a value, a `@ParameterizedTest`, `@RepeatedTest` or `@TestFactory` - is reported
+`unlistable` with its file and line, as a notice in the job, and is not rerun. A class-level
+`@DisplayName` is not a test. The comparison is by name alone, so a new test that reuses another
+suite's title is missed; the runner's report names it if it matters.
+
+`rerun` runs the new tests five rounds (`--times`), one JVM a round with every new test in it,
+on the classpath and JVM options the suites step left in `target/varka-scoped`, with the memory
+sanitizer and the both-bodies check on, through `VarkaSuiteRunner`'s `-s <suite> -t <name>` (one
+`-s` per suite: a second `-s` of the same suite reran it and its report replaced the first's,
+which a local run showed). Rounds 2 to 5 set `-Dvarka.fuzz.seed` to four other seeds; a suite
+that does not read the property ignores it. Results come from the runner's JUnit reports, by
+suite and name; a failure in any round fails the step naming the test and the round, and a
+listed test that ran in no round is a notice. New tests of the timing suites (`VarkaAssemblySuite`,
+`VarkaTierWitnessSuite`, `VarkaWarmupEndToEndSuite`), which run alone and unsanitized, are listed
+but not rerun. "In the suite's JVM" of 3.4 became one JVM per round rather than five repetitions
+inside one JVM: ScalaTest's runner has no repeat, and a fresh JVM is also what a flaky warm-up
+needs to show.
+
+`fails-on-base` asks `vecbricks/varka` for the open pull request of the branch and acts only on
+the `fix` label (a fork's push build does not know its pull request; a label added after the
+push needs the job rerun). In a scratch worktree of the head it checks out from the base every
+changed path outside `src/test/` and deletes every such path the pull request adds, builds the
+module's tests there as `dev/varka_matrix.sh` does (`Test/compile`, the exported classpath and
+JVM options), runs the new tests once and passes when each fails; a test that passes fails the
+step by name; an overlay that does not compile is the notice "not shown: the tests need the fix's
+main code", and the step passes. The `dev/` scripts run from the head, so the overlay's restored
+tooling never runs.
+
+**Tests.** Test 6, the self-test (twelve unit tests and the doctests), over recorded diffs: a new
+ScalaTest test; a title concatenated over two lines; a new JUnit display name, and a class-level
+one ignored; a Java file without `@VarkaSuite` not read; a renamed test counted as new; a test
+moved to another file not new; an interpolated title reported unlistable, and one already on the
+base not reported; a parameterized JUnit test unlistable; JUnit reports matched by suite with or
+without the package; the overlay's split of changed main paths into restored and deleted, in a
+scratch repository; the timing suites left out of the rerun. The step runs the self-test before
+the rerun. Over this repository's history, `list` named exactly the tests six merged commits
+added (for example 5 in `VarkaVectorTemplateWarmupSuite` at `aa457c3797b`, 9 in the new
+`VarkaPlatformSuite` at `4b3524ada43`, 9 display names in `VarkaRangeRulesSuite` at
+`ad6009d0fbf`), and at `cb92050e6d9` one new test, a test whose line changed but whose title did not left out, and one
+`s"..."` title reported unlistable. One local round, on another worktree's exported catalyst
+build and cores 12 to 23, ran a JUnit display name and a ScalaTest name through the runner and
+read both as passed from the reports, and a name that matches nothing as not run.
+
+**What only a real run can show**: test 7 (a planted pull request labelled `fix` whose new test
+passes on master fails the step naming it; the same with a real one-line fix passes), the base
+build's time on a runner beside the suites (prediction 6: under 8 minutes), the reruns' time on
+a typical pull request (prediction 6: under 3 minutes), and that the fork's token reads the
+base's pull-request labels (a failed read is a warning and no check). Section 6's count of `fix`
+pull requests whose overlay did not compile starts with the first one.
+
+**The author's review** (16 October) found the self-test failing: a doctest of `literal_chain`
+started one character past an `s"..."` title's `s`, so it read a plain literal, and the step,
+which runs the self-test first, would have failed every Varka suite job. The doctest now starts
+at the `s`. `rerun` dropped the runner's exit status, so a suite whose fixture threw, or a JVM
+that died, left no report, every new test "ran in no round" as a notice and the step passed; a
+round that exits non-zero with no new test failed in its reports now fails the step, with a
+thirteenth unit test, and a failed or aborted round prints the end of its log, since the scratch
+directory goes with the job. The branch is quoted in the label lookup's `head=` query, a body
+that is not JSON is a warning like any failed read, and the self-test closes the files it writes.
