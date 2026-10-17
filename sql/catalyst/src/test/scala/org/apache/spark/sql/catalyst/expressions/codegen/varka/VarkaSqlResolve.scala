@@ -18,28 +18,22 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import org.apache.spark.sql.catalyst.analysis.{SimpleAnalyzer, UnresolvedAttribute}
-import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference, Expression,
-  NamedExpression}
+import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeReference,
+  BindReferences, Expression, NamedExpression}
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 import org.apache.spark.sql.catalyst.plans.logical.{LocalRelation, Project}
 import org.apache.spark.sql.types.DataType
 
 /**
- * One resolver for the SQL-to-expression tools in this package, because there were two and only
- * one of them was right.
+ * One resolver for the SQL-to-expression tools in this package (`VarkaEmitDump`,
+ * `VarkaWordCensus`), shared so that the tools cannot resolve differently.
  *
- * `VarkaEmitDump` and `VarkaWordCensus` each carried a byte-identical `transformUp` that bound
- * attributes by name and looked functions up in the registry - and nothing else. That is enough
- * for a function call and not enough for an operator: `d + ym` parses to `Add(date,
- * yearmonthinterval)` and only becomes `DateAddYMInterval` when the analyzer's type coercion
- * rewrites it, so without that pass the compiler saw an `Add` over two types it has no arm for
- * and declined. The dump reported "declined" for expressions `Surface` had been timing with
- * `expectFused` for weeks, and the census worked around the same bug by hand, truncating its
- * corpus to "the `Surface` projections that resolve without the analyzer's type coercion" -
- * which silently dropped every date/interval shape VARKA-67 added.
- *
- * Fixing one copy would have left the other wrong with nothing in the tree saying so, which is
- * why this is a shared object rather than a second patch.
+ * Binding attributes by name and looking functions up in the registry is enough for a function
+ * call and not enough for an operator: `d + ym` parses to `Add(date, yearmonthinterval)` and
+ * only becomes `DateAddYMInterval` when the analyzer's type coercion rewrites it, so without
+ * that pass the compiler sees an `Add` over two types it has no arm for and declines - and a
+ * tool reports "declined" for an expression `Surface` times as fused, or silently drops every
+ * date/interval shape from its corpus.
  */
 object VarkaSqlResolve {
 
@@ -56,6 +50,13 @@ object VarkaSqlResolve {
 
   /** `e` as a projection entry named `name`, for the Java tools, as [[column]] is. */
   def named(e: Expression, name: String): NamedExpression = Alias(e, name)()
+
+  /**
+   * `e` with its attributes bound to their ordinals in `columns`, as the compiler binds an entry,
+   * for the Java tools: the implicit `AttributeSeq` the binding takes is not nameable from Java.
+   */
+  def bind(e: Expression, columns: Seq[Attribute]): Expression =
+    BindReferences.bindReference(e, columns)
 
   /**
    * Bind `e` against `columns` and run the analyzer over the result, so operators get the type

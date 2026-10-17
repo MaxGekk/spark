@@ -608,23 +608,23 @@ final class VarkaVectorWalk {
    * because the value being guarded and the word that qualifies it are not always the same node's:
    * a producer guard covers a node's own result under that node's own word, while the month-count
    * guard covers an operand under the {@code AddMonths} node's word. Resolving it here from one
-   * node reference made those two cases indistinguishable, and reading the word slot before the arm
-   * that fills it is what produced this task's VerifyError; making the caller state it keeps the
-   * two facts together at the site that knows both.
+   * node reference would make those two cases indistinguishable, and reading the word slot before
+   * the arm that fills it fails verification; making the caller state it keeps the two
+   * facts together at the site that knows both.
    *
-   * <p>This is the old per-extraction guard block, retargeted from the extraction's input to the
-   * producer's output - so it runs once per distinct producer rather than once per calendar node
-   * reading it, and not at all for the shapes the compiler bounds. The set is keyed on the guarded
-   * node, not on the operand it checks, so two {@code AddMonths} over one count column each emit
-   * their own guard over that column - redundant, not wrong, and the price of keying on the node
-   * that owns the validity word the guard has to AND with. Two ANDs carry over unchanged and for
-   * the same reasons: with the node's validity word in the masked body, because a null row's lanes
-   * are undefined and must not condemn the batch (the node's word is the AND of every input, so a
-   * null offset or a null count is covered), and with the epilogue's bounds mask, because a partial
-   * group's padding lanes hold whatever the masked load left. The dense body skips the word AND:
-   * every lane is valid there. A producer used more than once is emitted once per lane group under
-   * CSE, guard included; with CSE off it is re-emitted per use, which repeats the guard - correct,
-   * merely redundant, and not a shape production emits.
+   * <p>The guard checks a producer's output rather than each extraction's input - so it runs
+   * once per distinct producer rather than once per calendar node reading it, and not at all for
+   * the shapes the compiler bounds. The set is keyed on the guarded node, not on the operand it
+   * checks, so two {@code AddMonths} over one count column each emit their own guard over that
+   * column - redundant, not wrong, and the price of keying on the node that owns the validity word
+   * the guard has to AND with. Two ANDs carry over unchanged and for the same reasons: with the
+   * node's validity word in the masked body, because a null row's lanes are undefined and must not
+   * condemn the batch (the node's word is the AND of every input, so a null offset or a null count
+   * is covered), and with the epilogue's bounds mask, because a partial group's padding lanes hold
+   * whatever the masked load left. The dense body skips the word AND: every lane is valid there. A
+   * producer used more than once is emitted once per lane group under CSE, guard included; with CSE
+   * off it is re-emitted per use, which repeats the guard - correct, merely redundant, and not a
+   * shape production emits.
    */
   static void emitRangeGuard(CodeBuilder cb, VarkaVectorIR node, Integer word,
       int guardTmp, boolean dense, Analysis analysis, Slots s, long lo, long hi) {
@@ -716,8 +716,8 @@ final class VarkaVectorWalk {
 
   /**
    * ANDs the condemning mask on the stack with the arms {@code node} sits under, where its uses
-   * agree on one chain of them. Nothing is emitted for the empty chain, which is what every shape
-   * had before this task and what {@link VarkaEmitOptions#guardUnderArm} off restores.
+   * agree on one chain of them. Nothing is emitted for the empty chain, which is what
+   * {@link VarkaEmitOptions#guardUnderArm} off gives every shape.
    *
    * <p>Polarity follows SQL's {@code CASE}, in which an <em>unknown</em> condition falls to
    * {@code ELSE}: the then arm's mask is the condition's known-true set and the else arm's is

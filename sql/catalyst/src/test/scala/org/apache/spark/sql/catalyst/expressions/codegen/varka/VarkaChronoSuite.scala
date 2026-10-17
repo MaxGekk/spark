@@ -256,10 +256,10 @@ class VarkaChronoSuite extends SparkFunSuite with VarkaTestWatchdog {
   test("the Julian map agrees with LocalDate and with the century-then-year form " +
       "over a whole era") {
     // The map's two divisions have a bounded input - the day of era, 146097 values - so the
-    // new part of the prefix is verified over its entire domain here, committed rather than
-    // opt-in, and against both oracles at once: LocalDate, and the form this replaces. The era
-    // starting 1 March 2000 is as good as any; the era step in front of both forms is shared
-    // and unchanged, so one era is the whole domain.
+    // map's part of the prefix is verified over its entire domain here, committed rather than
+    // opt-in, and against both oracles at once: LocalDate, and the split form beside it. The
+    // era starting 1 March 2000 is as good as any; the era step in front of both forms is
+    // shared, so one era is the whole domain.
     val start = LocalDate.of(2000, 3, 1).toEpochDay.toInt
     for (dayOfEra <- 0 until VarkaChrono.ERA_DAYS) {
       val day = start + dayOfEra
@@ -358,9 +358,9 @@ class VarkaChronoSuite extends SparkFunSuite with VarkaTestWatchdog {
       "the extension should exceed the shift domain")
     assert(bound.toLong * VarkaChrono.NARROW_ERA_M > Int.MaxValue.toLong,
       "the extension should also exceed the multiply's own bound, which the correction absorbs")
-    // The ordering the compiler now depends on: the decomposition reaches further up than the
-    // range the shipped guards enforce, so widening the admission check cannot reach a day the
-    // decomposition gets wrong. Downward nothing moved - NARROW_MIN_DAYS still binds both.
+    // The ordering the compiler depends on: the decomposition reaches further up than the range
+    // the shipped guards enforce, so the wider admission check cannot reach a day the
+    // decomposition gets wrong. Downward NARROW_MIN_DAYS binds both.
     assert(VarkaChrono.NARROW_MAX_DAYS < VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS)
     assert(VarkaChrono.NARROW_MIN_DAYS < VarkaChrono.CONTRACT_MIN_DAYS)
     assert(VarkaChrono.CONTRACT_MAX_DAYS < VarkaChrono.NARROW_MAX_DAYS)

@@ -55,6 +55,7 @@ import org.apache.spark.sql.catalyst.expressions.Year;
 import org.apache.spark.sql.catalyst.expressions.YearOfWeek;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaChrono;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDerivedKind;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaOperandPosition;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaRangeAnalysis;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaValueRange;
@@ -318,8 +319,8 @@ final class VarkaChronoCompiler {
       DeclineSink sink) {
     // The date child compiles before the offset, matching CaseWhen's rule a few cases below:
     // ordinals and literal slots register in reading order. A foldable literal offset registers
-    // no ordinal, so this ordering is new in an observable way now that an offset can be a
-    // column: when BOTH operands are unfusable, DeclineSink's "first note wins" rule reports the
+    // no ordinal, so the ordering is observable only for a column offset: when BOTH operands are
+    // unfusable, DeclineSink's "first note wins" rule reports the
     // child's reason, not the offset's (pinned by VarkaExpressionCompilerSuite's "with two
     // independently unfusable operands, the child's reason is reported" test).
     Expression days = n.days();
@@ -386,7 +387,7 @@ final class VarkaChronoCompiler {
    * <i>shift</i> domain and the range the runtime guards enforce on a producer's own result - but
    * how far the decomposition stays exact on a value already in hand, which {@code eraOf}'s
    * one-era correction carries about 9,266 years further. So an upward shift over a guarded day
-   * producer, which used to decline conservatively, is admitted where it is genuinely exact.
+   * producer is admitted where it is genuinely exact, rather than declined at the narrower bound.
    */
   private static boolean decomposesExactly(VarkaValueRange.Bounded b) {
     return b.within(VarkaChrono.NARROW_MIN_DAYS, VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS);
@@ -401,7 +402,7 @@ final class VarkaChronoCompiler {
    * {@code DateType}-only: widening it instead of this dedicated path would let an int column
    * reach every other position that calls {@code compileNode} too ({@code Compare},
    * {@code DateDiff}, {@code Coalesce}, {@code Greatest}...), fusing plain integer-vs-integer
-   * predicates that were never part of this task's scope ("do not open it wider",
+   * predicates that are outside this path's scope ("do not open it wider",
    * {@code VARKA-38.md} 6).
    */
   static Optional<VarkaVectorIR> compileOffset(
@@ -578,7 +579,10 @@ final class VarkaChronoCompiler {
         && t.startField() == YearMonthIntervalType.YEAR()
         && t.endField() == YearMonthIntervalType.YEAR()
         && c.child().dataType().equals(DataTypes.IntegerType)) {
-      return VarkaIntervalCompiler.yearsToMonths(c, inputs, literals, sink);
+      // The years-to-months cast is the interval family's node, built here rather than through
+      // the chain, so it runs under that family's switch, as the negation below (VARKA-318).
+      return VarkaNodeCompiler.inFamily(VarkaFamily.INTERVAL,
+          () -> VarkaIntervalCompiler.yearsToMonths(c, inputs, literals, sink), c, sink);
     }
     // `d - ym_col`, which the analyzer spells `DateAddYMInterval(d, UnaryMinus(ym))`, so the
     // count is a negation of an interval column. Its check comes off wherever a negation's
@@ -586,16 +590,17 @@ final class VarkaChronoCompiler {
     // its check and is guarded on the count's value at run time exactly as a plain column
     // count is.
     if (months instanceof UnaryMinus u && u.child().dataType() instanceof YearMonthIntervalType) {
-      Optional<VarkaVectorIR> x = VarkaIntervalCompiler.intervalOperand(
-          u.child(), "the negated month count", inputs, literals, sink);
-      return x.map(v ->
-          new IntNeg(VarkaIntervalCompiler.negationMode(v, literals), v));
+      // The negation is the interval family's node, built here rather than through the chain.
+      return VarkaNodeCompiler.inFamily(VarkaFamily.INTERVAL,
+          () -> VarkaIntervalCompiler.intervalOperand(
+              u.child(), "the negated month count", inputs, literals, sink)
+              .map(v -> new IntNeg(VarkaIntervalCompiler.negationMode(v, literals), v)),
+          u, sink);
     }
     // `d + ym_col`. The stored value is the month count in every unit, so this is the
     // column-count `AddMonths` exactly, with the same runtime guard on the count's lanes -
-    // the guard reads the value and not the column's Spark type. It declined until now only
-    // because the evaluator would not read the vector, and the evaluator would not read it
-    // because no arm asked.
+    // the guard reads the value and not the column's Spark type; the evaluator reads the
+    // vector because this arm asks for it.
     if (months instanceof BoundReference br
         && br.dataType() instanceof YearMonthIntervalType) {
       return Optional.of(VarkaNodeCompiler.columnRef(br, inputs, LaneType.INT));
@@ -670,10 +675,9 @@ final class VarkaChronoCompiler {
    * re-armed only when <i>its own</i> shift is runtime-valued - a column offset, a column month
    * count - and not merely when something below it was. A literal shift that leaves the range
    * leaves it for every row, so a check above it would emit a kernel that reports every batch:
-   * a slower way to decline than declining once, here, for free. The first version of this
-   * rule tested "did any runtime value contribute", and admitted
-   * {@code year(date_add(date_add(d, i), 20000000))} on the strength of the inner column offset,
-   * which is exactly that mistake.
+   * a slower way to decline than declining once, here, for free. A rule testing "did any runtime
+   * value contribute" would admit {@code year(date_add(date_add(d, i), 20000000))} on the
+   * strength of the inner column offset, which is exactly that mistake.
    *
    * <p>Descends only the day-typed children the analysis bounds, which is exactly
    * {@link #dayRange}'s own set; anything else is returned untouched and its interval speaks for

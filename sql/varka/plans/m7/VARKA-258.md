@@ -117,3 +117,112 @@ published, with every number tracing under `dev/varka_quote_check.py`.
    ratio as well as the times.
 
 ## 9. Outcome
+
+### 9.1 The measurements, 16 October 2026
+
+The counts ran on the laptop, since they do not depend on the machine: `sql/varka/demo/compiles/
+run.sh` runs three `spark-shell` scripts on the stock Spark 4.2.0 distribution under JDK 25 and
+writes their outputs beside them, each with its commit. Four runs gave the same counts. The times
+are `CodegenRecompileBenchmark` (sql/core, Java on `VarkaBenchmarkBase`), on the fork's Spark with
+Varka off, run on a GitHub-hosted runner through `benchmark.yml`.
+
+**1, the literal check** (`literals.scala`, `literals-jdk25-output.txt`). In local mode a new int,
+bigint, double, date or timestamp compiled three classes; a new string or decimal none; a new
+value of an int parameter three, of a string parameter none; a string value for an int column
+three, since it is cast and folded into an int literal. The three are the stage compiled by the
+driver, the stage compiled again by the task, and the cached table's batch filter
+(`SpecificPredicate`), which holds the value too. The stage is compiled twice in one JVM because the
+cache is keyed by the compiling thread's class loader as well as the source (SPARK-44795), and a
+task runs under the executor's loader. The hand check of section 2 counted two classes; its
+query is not in the record, and one over a table that was not cached, which has no batch filter,
+would give two.
+
+**2, compiles per executor** (`executors.scala`, `executors-jdk25-output.txt`). On
+`local-cluster[2,1,1024]` a new int compiled one class on the driver and two on each executor (the
+stage and the batch filter); a new string and a new string parameter none anywhere.
+
+**3, 4 and 6, the times** (`sql/core/benchmarks/CodegenRecompileBenchmark-jdk25-results.txt`,
+its provenance beside it: run 38892282294 on MaxGekk/spark, AMD EPYC 7763, JDK 25, commit
+`33e1cbc59b9`). They ran on this repository's Spark with Varka off and Janino pinned, not on the
+4.2.0 distribution section 3 named; the classes compiled per query match the 4.2.0 counts (3 for a
+new int, date or parameter value, 0 for a string).
+
+- **3.** Over 40 queries of `SELECT count(*) FROM t WHERE <column> = <value>` on 100,000 cached
+  rows: 24.92 ms a query with the same int, 41.45 ms with a new one, of which Janino 16.42 ms; a new
+  date 42.77 ms (Janino 16.05), a new int parameter 42.57 ms (Janino 15.46), a new string 21.61 ms.
+  Best times 35 ms against 55. Nearly all of the added time is Janino; the new class's time in the
+  interpreter hardly shows on a query this short.
+- **4.** Janino's best of nine compiles of sources new to the cache: 3.91 ms for a projection of
+  one entry `id + k` (4470 chars), 9.07 ms for 99 entries (31930 chars), 7.97 ms for an aggregate
+  of 10 sums (20456 chars), 17.85 ms for 60 sums (82037 chars). Section 4 uses projections and
+  aggregates, not the `CASE WHEN` rungs: on this build a stage with a `CASE WHEN` is already
+  compiled while its code is generated, to decide whether to split it (SPARK-33301), so a timed
+  compile of its source is a cache hit.
+- **6.** `IntSlot`, a test-only expression that reads the value from a field set from the class's
+  references, over `i % 1000000 = <value>` for the short query (one row for every value, and no
+  batch pruning by the value for either arm) and `i % 1000 = 7` for the steady state; the
+  benchmark first checked that both arms count the same rows. With a new value each time the
+  literal compiled 2 classes a query and averaged 42.96 ms, the reference none and 19.92 ms, as
+  against 19.30 ms for one repeated literal. Steady state over 20 million cached rows: 12.4 ns a
+  row with the literal, 12.1 with the reference, one run each.
+
+**5, past the cache's 100 entries** (`cache.scala`, `cache-100-jdk25-output.txt`,
+`cache-1000-jdk25-output.txt`). Loops of n queries differing only in an int, run twice: under the
+default cache the second loop compiled nothing up to 30 queries (90 classes), 31 of 33 queries
+at 33, and every query from 40 on; the 150-query loop compiled 450 classes in each loop. Under
+`maxEntries=1000` the second loop compiled nothing at any n up to 150.
+
+**Predictions scored** (3.1).
+
+1. **Held**, with a second class the prediction did not name: one new class a stage on the driver,
+   and on each executor the stage and the cached table's batch filter; a new string none.
+2. **Held**, with the same batch filter beside the stage on each executor.
+3. **Missed on its own query, held on the second.** A new int made `i = <value>` about two
+   thirds slower, not twice (41.45 ms against 24.92 on average, best 55 against 35); on the
+   `i % 1000000` query of section 6 a new literal took 42.96 ms against 19.30, more than twice.
+   The added time is Janino's in both, so the ratio depends on how cheap the repeated query is.
+4. **Held, and stronger than predicted**: all 150 of the second loop's queries compiled again, not
+   50. A loop larger than the cache evicts each class just before it is needed, and at three
+   classes a query in local mode the cache holds about 30 such queries; at 33 queries, 99
+   classes, it already evicted, since Guava's cache evicts within each of its four segments.
+5. **Held.** The reference compiled no class for a new value, and its steady state was within
+   3% of the literal's (12.1 ns a row against 12.4), the reference the faster; one run, under the
+   1.3x rerun bar, so the record says no measurable cost rather than a gain.
+
+### 9.2 The draft, 16 October 2026
+
+`POST_COMPILES.md`, from the counts above, with figures 36 (where one query is compiled, read from
+`executors-jdk25-output.txt`) and 37 (what the cache keeps, read from the two cache outputs). The
+runner's numbers were filled in from the results file of 9.1 the same day; what it still owes is
+row 259's published link and the owner's edit.
+
+### 9.3 The times on 4.2.0, 16 October 2026
+
+The owner chose to take every time a reader would quote about their own Spark from the 4.2.0
+distribution, since this repository's master differs from v4.2.0 in Janino (3.1.12 against 3.1.9),
+in `CodeGenerator`'s cache key and in whole-stage codegen. `sql/varka/demo/compiles/times.scala`
+runs the stock sections of `CodegenRecompileBenchmark` (measurements 3 and 4) as a `spark-shell`
+script, with the benchmark's queries, shapes and table formats; `run.sh --times` runs it, and the
+`compiles-times` job of `varka-demo.yml` runs that on a GitHub-hosted runner under JDK 25. A push
+cannot pin the CPU, and run 38899204181 landed on two CPUs: attempt 1 on an AMD EPYC 9V74
+(`times-attempt1-jdk25-output.txt`), attempt 2 on an AMD EPYC 9V45 (`times-jdk25-output.txt`).
+The post quotes attempt 2 and names its CPU; measurement 6 stays on the fork's benchmark (EPYC
+7763), since `IntSlot` is test code, and the post labels it as a separate run on another build.
+
+- **3.** Over 40 queries: 18.87 ms a query with the same int, 39.59 ms with a new one, of which
+  Janino 10.96 ms; a new date 41.11 ms (Janino 11.63), a new int parameter 40.39 ms (Janino
+  10.78), a new string 26.80 ms with no compile. On the 9V74, 26.88 ms against 48.32, Janino
+  15.43 ms. Unlike the fork's run, Janino is only about half of the added time on 4.2.0; the rest
+  is outside Janino and was not split further. The classes per query match the counts: 3 for a
+  new int, date or parameter value, 0 for a string.
+- **4.** Janino's best of nine: 2.82 ms for a one-entry projection (4470 chars), 5.75 ms for 99
+  entries (31930 chars), 12.43 ms for 10 sums and 30.72 ms for 60 sums. The projections' sources
+  are byte for byte as long as on the fork; the aggregates' are 2.7 to 3.0 times longer (54379
+  against 20456 chars for 10 sums, 243154 against 82037 for 60), the whole-stage codegen
+  difference between the builds.
+
+**Prediction 3 rescored on 4.2.0. Mixed: held on the 9V45, missed on the 9V74.** A new int took
+2.1 times the repeated query's time on the 9V45 (39.59 ms against 18.87) and 1.8 times on the
+9V74 (48.32 against 26.88); with the fork's 1.7 times on the 7763 (9.1), the ratio sits around
+the prediction's bar of two and moves with the machine, so the record does not call it either
+way. The other predictions are counts or ran on the fork, and stand as scored in 9.1.

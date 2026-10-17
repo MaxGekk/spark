@@ -196,8 +196,9 @@ object VarkaColumnarRule extends ColumnarRule with Logging {
   // predication included - with bare columns forwarded and the rest evaluated per row.
   private def isVarkaEligible(
       projectList: Seq[NamedExpression], childOutput: Seq[Attribute]): Boolean = {
+    val session = VarkaSessionEmit.of(SQLConf.get)
     VarkaExpressionCompiler.compilePartial(projectList, childOutput,
-      VarkaColumnarToRowExec.emitOptions(VarkaSessionEmit.of(SQLConf.get))).isPresent
+      VarkaColumnarToRowExec.emitOptions(session), session.familiesOff).isPresent
   }
 
   /**
@@ -231,7 +232,7 @@ object VarkaColumnarRule extends ColumnarRule with Logging {
    * say (task-21 review, second pass): `supportsColumnar` alone is satisfied by Parquet/ORC
    * vectorized scans whose OnHeap/OffHeap batches fail `canRun` on every batch - rewriting a
    * filter there pays per-row fallback at WHERE-clause frequency and splits whole-stage
-   * codegen for nothing, strictly slower than the FilterExec it replaced. `vectorTypes` is
+   * codegen for nothing, strictly slower than the FilterExec it would replace. `vectorTypes` is
    * the plan-time signal: a child declaring only Arrow vectors (or a Varka node, whose fused
    * columns are Arrow) qualifies; a child declaring non-Arrow vectors does not; a child
    * declaring nothing keeps the optimistic task-6 default and the per-batch guard decides at
@@ -257,8 +258,9 @@ object VarkaColumnarRule extends ColumnarRule with Logging {
       condition: Expression,
       child: SparkPlan,
       mkVarka: (Expression, SparkPlan, Option[Expression]) => SparkPlan): Option[SparkPlan] = {
-    val options = VarkaColumnarToRowExec.emitOptions(VarkaSessionEmit.of(SQLConf.get))
-    val compiled = VarkaExpressionCompiler.compilePredicate(condition, child.output, options)
+    val session = VarkaSessionEmit.of(SQLConf.get)
+    val compiled = VarkaExpressionCompiler.compilePredicate(condition, child.output,
+      VarkaColumnarToRowExec.emitOptions(session), session.familiesOff)
     compiled.toScala.map { predicate =>
       val residual = predicate.residualConjuncts.asScala.reduceLeftOption(And(_, _))
       // With residual conjuncts split off, a batch the kernel cannot serve is refiltered with

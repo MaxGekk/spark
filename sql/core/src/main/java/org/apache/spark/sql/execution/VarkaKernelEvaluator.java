@@ -197,7 +197,8 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
   private Optional<PartialVarkaProjection> compiled() {
     if (!compiledResolved) {
       Optional<PartialVarkaProjection> partial =
-          VarkaExpressionCompiler.compilePartial(projectList, childAttributes(), emitOptions());
+          VarkaExpressionCompiler.compilePartial(projectList, childAttributes(), emitOptions(),
+              familiesOff());
       // The same per-entry account verbose EXPLAIN prints, once per task at debug level.
       if (partial.isPresent() && LOG.isDebugEnabled()) {
         LOG.debug("Varka " + evaluatorOperator() + " fusion: "
@@ -522,8 +523,8 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
       // build for the type - BigIntVector, TimeNanoVector with the precision in its field metadata,
       // DurationVector in microseconds - so the row path reads them back through the accessors
       // ArrowColumnVector has, and the cache serializer sees the field it expects. A destination is
-      // needed even though this task adds no long arithmetic: greatest, least and CASE WHEN produce
-      // a long column.
+      // needed even where no long arithmetic fuses: greatest, least and CASE WHEN produce a long
+      // column.
       vector = ArrowUtils.toArrowField(name, dataType, true, null, false,
           org.apache.spark.sql.types.Metadata.empty(), false).createVector(allocator);
     } else {

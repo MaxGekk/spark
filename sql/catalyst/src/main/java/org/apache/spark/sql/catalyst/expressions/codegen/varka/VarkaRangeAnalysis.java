@@ -340,10 +340,10 @@ public final class VarkaRangeAnalysis {
 
   /**
    * Int arithmetic over the operands' intervals: the lattice's product, sum or difference. Over
-   * the symmetric intervals the compiler's int trees produce, the difference is the sum, which is
-   * what this answered for {@code SUB} until VARKA-281's review: over asymmetric operands - a
-   * {@link BoundedDivide}'s {@code [0, q]}, an int-lane {@link GuardedRange}'s bounds - the sum
-   * misses the negative differences, and no compiler path composed such operands only by luck.
+   * the symmetric intervals the compiler's int trees produce, the difference is the sum; over
+   * asymmetric operands - a {@link BoundedDivide}'s {@code [0, q]}, an int-lane
+   * {@link GuardedRange}'s bounds - the sum misses the negative differences, so {@code SUB}
+   * takes the true difference (VARKA-281).
    */
   private static Range arith(IntArith n, GuardPolicy policy, IntUnaryOperator literals) {
     Range l = range(n.left(), Kind.INT, policy, literals);

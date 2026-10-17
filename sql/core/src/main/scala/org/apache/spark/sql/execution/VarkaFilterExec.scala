@@ -97,12 +97,12 @@ private[sql] trait VarkaFilterExecBase extends UnaryExecNode with PredicateHelpe
   // plan (VARKA-313).
   @transient private lazy val fusionLines =
     VarkaFusionReport.predicateLines(wholeCondition.getOrElse(condition), child.output,
-      VarkaColumnarToRowExec.emitOptions(sessionEmit))
+      VarkaColumnarToRowExec.emitOptions(sessionEmit), sessionEmit.familiesOff)
 
   // The question for a filter is "why didn't my predicate fuse?", answered per conjunct.
   // The condition renders as FilterExec renders its own - a plain line, because
   // ExplainUtils.generateFieldString does not accept a bare expression (formatted EXPLAIN of
-  // any Varka filter node used to throw on exactly that; caught writing the PR description).
+  // a Varka filter node would throw on exactly that).
   override def verboseStringWithOperatorId(): String = {
     s"""
        |$formattedNodeName
@@ -224,7 +224,7 @@ private[sql] class VarkaFilterEvaluatorFactory(
       val batches = inputs.head
       new Iterator[ColumnarBatch] {
         // Same one-batch-at-a-time discipline as VarkaProjectExec: released before the next
-        // input batch is requested. Two things now depend on that ordering, not one. The
+        // input batch is requested. Two things depend on that ordering. The
         // selection buffer is task state, so the previous batch must be done before the mask
         // is overwritten - and an all-selected batch *forwards* the child's
         // vectors rather than copying them, so an output batch can alias input memory that a

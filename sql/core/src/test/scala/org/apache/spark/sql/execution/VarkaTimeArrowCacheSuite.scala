@@ -36,8 +36,8 @@ import org.apache.spark.sql.vectorized.ArrowColumnVector
  * Every piece of that path exists on its own - Spark's Arrow writer and accessors, the cache
  * serializer's column stats, the evaluator's buffer mapping - and nothing composes them for
  * these two types until here. The lanes are checked by mapping the Arrow buffer with the same
- * call `VarkaKernelRunner.fill` hands the kernel an address with (since VARKA-251; before it,
- * `VarkaKernelEvaluator.extractMorsel`), `MemorySegment.ofAddress(...).reinterpret`, rather than
+ * call `VarkaKernelRunner.fill` hands the kernel an address with (VARKA-251),
+ * `MemorySegment.ofAddress(...).reinterpret`, rather than
  * through `ArrowColumnVector`'s accessor: the accessor would prove Spark's path, and this suite
  * is about Varka's. It proves the layout of Arrow's buffers, which `fill` relies on, and not
  * `fill` itself, which the long-lane and time-arithmetic suites run. The checks run inside the

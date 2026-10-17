@@ -57,8 +57,8 @@ import org.apache.spark.sql.types.YearMonthIntervalType$;
  * that can drift, and the cross-check is what would show it. VARKA-74 replaces the mirror with the
  * analysis itself.
  *
- * <p>Java since VARKA-321, printing what the Scala form printed byte for byte: the records' text
- * forms are the Scala case classes' ({@code Chain(true,2)}, a pair as {@code (1,500)}).
+ * <p>It prints what the Scala form printed byte for byte (VARKA-321): the records' text forms
+ * are the Scala case classes' ({@code Chain(true,2)}, a pair as {@code (1,500)}).
  */
 public final class VarkaWordCensus {
 

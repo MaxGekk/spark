@@ -45,13 +45,10 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
 
   test("neither next_day's weekday nor add_months' month count trips " +
       "analysis anymore, now that both widened from a literal-only offset to a column") {
-    // The check that used to reject both nodes together (and whose message the IR fuzzer's
-    // first failure quoted for the wrong one, #110) required a literal for either operand.
-    // VARKA-59 widened next_day's weekday to a column (the evaluator's derived leaf) and VARKA-60
-    // widened add_months' month count the same way (VARKA-38's AddDays/SubDays offset shape);
-    // with both landed, requireLiteralOffset has no caller left and is gone, so neither shape
-    // is rejected at analysis - each is exercised in full (values, nulls, cost) by its own
-    // task's tests below.
+    // Neither operand needs a literal: next_day's weekday takes a column (the evaluator's
+    // derived leaf, VARKA-59) and add_months' month count the same way (VARKA-38's
+    // AddDays/SubDays offset shape, VARKA-60), so neither shape is rejected at analysis - each
+    // is exercised in full (values, nulls, cost) by its own task's tests below.
     val (_, months) = emitMulti(Seq(new AddMonths(new ColumnRef(0), new ColumnRef(1))), 2, 0)
     assert(months.nonEmpty)
     val (_, weekday) = emitMulti(Seq(new NextDay(new ColumnRef(0), new ColumnRef(1))), 2, 0)
@@ -77,10 +74,10 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
   }
 
   test("the month count takes int arithmetic, next_day's weekday still does not") {
-    // VARKA-68 split the emitter's shared check in two (now VarkaOperandPosition's MONTH_COUNT
-    // and WEEKDAY). The month count and the weekday shared it
-    // under one sentence - that each "carries a runtime bound a derived value cannot declare" -
-    // which is true of the weekday and false of the count: a column-count `AddMonths` refuses for
+    // The month count and the weekday are two positions, VarkaOperandPosition's MONTH_COUNT
+    // and WEEKDAY (VARKA-68), not one check under one sentence - that each "carries a runtime
+    // bound a derived value cannot declare" - which is true of the weekday and false of the
+    // count: a column-count `AddMonths` refuses for
     // `MONTH_COUNT` and is checked at run time against MONTH_ARITH_MIN/MAX_MONTHS by a
     // lanewise test on the count's own value, which cares nothing about what produced it. The
     // weekday has no such guard, so a derived value there reaches `emitFloorMod7` unchecked.
@@ -181,8 +178,8 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
 
   test("next_day with a column weekday matches the reference evaluator over every " +
       "null pattern of both columns, in and out of the leaf's range") {
-    // The trap is VARKA-38's again: the node's word used to alias the date's alone, which was
-    // right only while the weekday was always a literal. combos(2) drives every (date,
+    // The trap is VARKA-38's again: a node word aliased to the date's alone is right only while
+    // the weekday is a literal. combos(2) drives every (date,
     // weekday) null-pattern pair, the null-weekday-on-a-live-date one included. The weekday
     // column cycles through -2 .. 6, so the leaf's whole range -1 .. 5 and a value either side
     // of it are covered: the lowering is exact for every int k, and the reference is Spark's
@@ -587,8 +584,8 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
   test("the trunc tails cost what VARKA-35.md section 8 registered, per level " +
       "and form, and adding the node moved no other node's bytes", PinsDefaults) {
     // Off the class file, like the VARKA-53 and VARKA-54 registers, at the shipped prefix options.
-    // The DayOfYear arm was refactored onto emitJanuaryDayOfYear for this task, so its count
-    // is pinned too: the extraction's bytes must not have moved.
+    // The DayOfYear arm shares emitJanuaryDayOfYear, so its count is pinned too: the
+    // extraction's bytes must not move with the helper.
     val col = new ColumnRef(0)
     def ops(root: VarkaVectorIR, form: VarkaEmitOptions.TruncDateForm): Int =
       laneOps(emitMulti(Seq(root), 1, 0, VarkaMatrix.base.withTruncDate(form))._2,
@@ -869,12 +866,11 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
   }
 
   test("a chained calendar computation matches across every lane-group tail length") {
-    // Historically an epilogue-mask/guard interaction bug: a masked load fills the lanes past
-    // `length` with 0, and the now-removed guard ran on the node's *input*, which here is a
-    // computed value (0 - 5400000, well outside the guard's range) - so an unmasked check
-    // declined every batch whose length was not a lane multiple, even though every real row,
-    // near 2022, was in range. VARKA-51 removed the guard entirely; this case is kept as a
-    // general correctness check on a chained node across non-lane-multiple lengths.
+    // A masked load fills the lanes past `length` with 0, so an unmasked check on the node's
+    // *input*, a computed value here (0 - 5400000, well outside the narrowed range), would
+    // decline every batch whose length is not a lane multiple although every real row, near
+    // 2022, is in range. No calendar node carries such a guard (VARKA-51); this is a general
+    // correctness check on a chained node across non-lane-multiple lengths.
     val root = new Year(new SubDays(new ColumnRef(0), new LiteralSlot(0)))
     def days(c: Int, i: Int): Int = 19000 + i
     checkMatrix(Seq(root), 1, Array(5400000), Seq(16, 17, 31, 64, 1000, 4095, 4096),
@@ -955,14 +951,13 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
   }
 
   test("a day outside the covered range is no longer declined") {
-    // VARKA-26 through 40 guarded every calendar extraction against a day outside
-    // VarkaChrono.NARROW_MIN_DAYS..NARROW_MAX_DAYS, declining the whole batch to the row
-    // engine. VARKA-51 removed that guard: the arithmetic is still only proven exact inside
-    // the narrowed range (VarkaChronoSuite's exhaustive sweep is over exactly that range), but
-    // nothing checks it at run time anymore, so a day outside it is now computed silently
-    // rather than declined. VARKA-51.md records why the owner accepted that trade, and
-    // VARKA-52 moved the check to the nodes that can actually manufacture such a day: the
-    // compiler bounds every literal shift and the emitter guards a column-offset producer
+    // No calendar extraction is guarded against a day outside
+    // VarkaChrono.NARROW_MIN_DAYS..NARROW_MAX_DAYS (VARKA-51): the arithmetic is only proven
+    // exact inside the narrowed range (VarkaChronoSuite's exhaustive sweep is over exactly that
+    // range), but nothing checks it at run time, so a day outside it is computed silently
+    // rather than declined. VARKA-51.md records why the owner accepted that trade. The check
+    // sits on the nodes that can actually manufacture such a day (VARKA-52): the compiler
+    // bounds every literal shift and the emitter guards a column-offset producer
     // (the "VARKA-52" tests below). A bare column past the range is the column contract's
     // breach, not a guard's business, so this batch is still computed, not declined.
     val root = new Year(new ColumnRef(0))
@@ -1030,15 +1025,12 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
   }
 
   test("the guard's removal reaches the shared prefix too") {
-    // This PR predates VARKA-51 and originally asserted the opposite: that the guard, sharing
-    // the prefix across the three outputs below, still fired and declined the batch. VARKA-51
-    // removed the guard from emitEra, which emitChronoPrefixOnce - the fragment-sharing entry
-    // point this PR added - calls exactly like the unshared path does. That is why removal
-    // needed no change here: there was never a second, sharing-specific copy of the guard to
-    // find and delete. This test now exists to keep it that way - if a future change gives
-    // the shared path its own inlined guard logic instead of routing through emitEra, this is
-    // where that would first show up as a mistaken STATUS_DAY_PRODUCER. VARKA-52's guard lives
-    // at a column-offset producer, never in the prefix, so this stays true after it too.
+    // emitEra carries no range guard (VARKA-51), and emitChronoPrefixOnce - the
+    // fragment-sharing entry point - calls it exactly like the unshared path does, so the
+    // shared prefix across the three outputs below has no guard either. If a future change
+    // gives the shared path its own inlined guard logic instead of routing through emitEra,
+    // this is where that would first show up as a mistaken STATUS_DAY_PRODUCER. VARKA-52's
+    // guard lives at a column-offset producer, never in the prefix.
     val col = new ColumnRef(0)
     val roots = Seq[VarkaVectorIR](new Year(col), new Month(col), new Quarter(col))
     val (kernel, loader) = load(emitMulti(roots, 1, 0, sharing))
@@ -1074,17 +1066,17 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
   // producer the compiler cannot bound - a date_add/date_sub whose offset is a column.
   private val guardOff = VarkaMatrix.base.withGuardDayProducers(false)
 
-  // VARKA-79's A/B arm: the arm context off, which is what every shape emitted before it.
+  // VARKA-79's A/B arm: the arm context off, the reference.
   private val armOff = VarkaMatrix.base.withGuardUnderArm(false)
 
   test("a guarded producer under a CASE arm no longer condemns from the untaken arm") {
     // `CASE WHEN c < 1 THEN year(date_add(d, off)) ELSE year(d) END`, on the day-producer guard
     // VARKA-52 built. Whether a lane is out of range and which arm it takes are set by two
     // different columns - `off` and `c` - so a lane index chooses one without deciding the
-    // other. The first version of this test derived the arm from the lane's parity, which made
-    // the index carry both, and the two epilogue cases inherited the wrong arm; the expected
-    // status is also computed from `takesThen` now rather than written beside each index, so
-    // the fixture and the assertion cannot disagree about a fact the fixture determines.
+    // other; deriving the arm from the lane's parity would make the index carry both, and the
+    // two epilogue cases would inherit the wrong arm. The expected status is computed from
+    // `takesThen` rather than written beside each index, so the fixture and the assertion
+    // cannot disagree about a fact the fixture determines.
     val producer = new Year(new AddDays(new ColumnRef(0), new ColumnRef(1)))
     val root = new IfElse(
       new Compare(CompareOp.LT, new ColumnRef(2), new LiteralSlot(0)),
@@ -1119,7 +1111,7 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
         def expected(at: Int): Int =
           if (at >= 0 && takesThen(at)) VarkaFusedKernel.STATUS_DAY_PRODUCER else 0
         // A loop lane in each arm, and a lane only the epilogue covers in each arm - four
-        // cases whose arm and whose body are now chosen independently.
+        // cases whose arm and whose body are chosen independently.
         for ((length, at) <- Seq((64, 3), (64, 4), (17, 15), (17, 16))) {
           assert(status(kernel, length, at) === expected(at),
             s"length $length lane $at: takesThen=${takesThen(at)}")
@@ -1234,7 +1226,7 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
 
   test("a shape with no guarded node under an arm is byte-identical either way") {
     // The assertion that the context reached only the guards: every shape without a
-    // batch-condemning node under an arm emits exactly what it did before VARKA-79.
+    // batch-condemning node under an arm emits exactly what it emits with the arm context off.
     val shapes = Seq(
       "plain year" -> (Seq(new Year(new ColumnRef(0))), 1, 0),
       "guarded producer, no arm" ->
@@ -1397,8 +1389,8 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
     }
   }
 
-  // VARKA-60's runtime half: the same range-guard block (now `emitRangeGuard`, generalized from
-  // VARKA-52's `emitProducerGuard`) on AddMonths' own month count, wherever it sits - the guard
+  // VARKA-60's runtime half: the same range-guard block (`emitRangeGuard`, which VARKA-52's
+  // producer guard also uses) on AddMonths' own month count, wherever it sits - the guard
   // protects the node's own magic-multiply arithmetic, not a further calendar consumer's.
 
   test("a column month count declines the batch whose count leaves the range - in a " +
@@ -1593,7 +1585,7 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
     assert(singleEpilogueSize(roots, 2, sharing) === singleEpilogueSize(roots, 2, unshared),
       "the epilogue moved for two outputs that have nothing to share")
     // And clause 2 does not put them in one loop method: the second reuses no prefix. Under the
-    // budget's rule, since the prediction, the default since VARKA-254, may join them anyway.
+    // budget's rule, since the prediction, the default (VARKA-254), may join them anyway.
     assert(methodNames(emitMulti(roots, 2, 0, sharing.withGroupBudgetUnderPrediction(true)))
       .count(isLoop(_, true)) === 2,
       "two dates with nothing to share landed in one loop method")
@@ -1722,7 +1714,7 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
     // Unshared, year(d) and month(d) name different locals even though their fragment keys are
     // equal, so the year's own prefix elides and the month's does not - keying the decision on
     // the fragment there would make the year pay for a month it shares nothing with.
-    // Unshared, the two fields are two loop groups and, since VARKA-87, two epilogues, so only
+    // Unshared, the two fields are two loop groups and two epilogues (VARKA-87), so only
     // the single-epilogue form (budget 0) puts both prefixes in one method.
     val col = new ColumnRef(0)
     val roots = Seq[VarkaVectorIR](new Year(col), new Month(col))

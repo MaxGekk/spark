@@ -79,7 +79,7 @@ PARITY_PAIRS = [
     ("two outputs over 1000000 rows, mixed nulls", "fused, CSE", "sequential kernels (9 passes)"),
     # The pair VARKA-77 exists for.
     ("4 outputs x depth 16 over 1000000 rows", "fused, 64 ops", "sequential kernels, 64 passes"),
-    # The shipped lowering against the two it replaced.
+    # The shipped lowering against the two reference lowerings.
     (
         "dayofweek over 1000000 rows",
         "magic multiply (shipped), null-free",

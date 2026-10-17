@@ -121,9 +121,9 @@ public class ChainsTest {
         allThree++;
       }
     }
-    // Every entry, derived from the list rather than written down: the bound used to be 8 with
-    // twelve qualifying, so a third of the list could have lost its int or interval column and
-    // this would still have passed - which is the drift its javadoc says it exists to catch.
+    // Every entry, derived from the list rather than written down: a written-down bound below
+    // the list's size would let part of the list lose its int or interval column and still
+    // pass - which is the drift its javadoc says it exists to catch.
     assertEquals(Chains.ENTRIES.size(), allThree,
         "every entry must reference a date, an int and an interval column; the list has drifted "
             + "back to being about dates");

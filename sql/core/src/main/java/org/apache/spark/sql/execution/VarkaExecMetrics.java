@@ -133,9 +133,9 @@ public record VarkaExecMetrics(
   }
 
   /**
-   * The metric set every Varka node registers, defined once (the four nodes once carried
-   * byte-identical copies, where a changed key or description would compile clean and fork the UI
-   * vocabularies). {@code numOutputRows} semantics stay per node: a projection counts input rows,
+   * The metric set every Varka node registers, defined once rather than copied into each of the
+   * four nodes, where a changed key or description would compile clean and fork the UI
+   * vocabularies. {@code numOutputRows} semantics stay per node: a projection counts input rows,
    * a filter counts selected rows. {@code eagerFallback} says whether the node's fallback builds
    * its output before it returns, so that its time can be measured ({@link Paths}).
    */

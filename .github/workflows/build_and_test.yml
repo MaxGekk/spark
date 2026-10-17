@@ -278,6 +278,20 @@ jobs:
           if [ "$varka_scope" = "docs" ] || [ "$varka_scope" = "none" ]; then
             lint_code=false
           fi
+          # Error Prone and NullAway over Varka's Java run in the lint job (VARKA-382) for a change
+          # to the main Java of catalyst or sql/core, where the sources it checks live, to its
+          # script or to its pending list, and for every Spark change and every run with no diff:
+          # those compile sql in the MiMa step before it, so the check adds its sbt start and its
+          # javac pass. A Varka-scoped change compiles sql for it, minutes the job spends only
+          # when a file the check reads may have moved. The grep reads its whole input: under
+          # pipefail, -q's early exit could fail the echo.
+          lint_errorprone=true
+          errorprone_reads='^sql/(catalyst|core)/src/main/java/.*\.java$'
+          errorprone_reads+='|^dev/varka_errorprone\.sh$|^dev/varka_nullaway_pending\.txt$'
+          if [ "$varka_scope" != "spark" ] \
+              && ! echo "${changed_files:-}" | grep -E "$errorprone_reads" > /dev/null; then
+            lint_errorprone=false
+          fi
           varka_engine=`./dev/is-changed.py -m varka-engine`
           varka_bench=`./dev/is-changed.py -m varka-bench`
           varka_docs=`./dev/is-changed.py -m varka-docs`
@@ -321,6 +335,7 @@ jobs:
               \"lint-spark\": \"$lint_spark\",
               \"lint-code\": \"$lint_code\",
               \"lint-python\": \"$lint_python\",
+              \"lint-errorprone\": \"$lint_errorprone\",
             }"
           echo $precondition # For debugging
           # Remove `\n` to avoid "Invalid format" error
@@ -1113,6 +1128,19 @@ jobs:
         ./dev/varka_prove.sh --install both
         ./dev/varka_prove.sh --self-test --solver both
         ./dev/varka_prove.sh --lint
+    # Error Prone and NullAway over Varka's Java under -Werror (VARKA-266, here since VARKA-382):
+    # the gate ran them alone, and pull requests merged with findings. The check reads two
+    # refs: the merge base, whose pending-class list this branch's may not outgrow, and Varka's
+    # master, whose list may have shrunk since. On a fork origin/master is not Varka's, so both
+    # are named. The script needs JDK 25 and refuses another.
+    - name: Error Prone and NullAway over Varka's Java
+      if: >-
+        inputs.java == '25' &&
+        fromJson(needs.precondition.outputs.required).lint-errorprone != 'false'
+      run: |
+        git fetch --quiet "${VARKA_UPSTREAM_URL:-https://github.com/vecbricks/varka.git}" master
+        ./dev/varka_errorprone.sh --master "$(git rev-parse FETCH_HEAD)" \
+          ${VARKA_DIFF_BASE:+--base "$VARKA_DIFF_BASE"}
     - name: Spark connect jvm client mima check
       if: fromJson(needs.precondition.outputs.required).lint-spark != 'false'
       run: ./dev/connect-jvm-client-mima-check
@@ -1384,6 +1412,20 @@ jobs:
     # red step means this change. The weekly varka-option-matrix workflow runs all of them.
     - name: The Varka suites of ${{ matrix.module }} under one emit option configuration
       run: ./dev/varka_matrix_ci.sh ${{ matrix.module }}
+    # The tests this change adds, rerun five times on the suites step's build, a seeded fuzz under
+    # four other seeds; and for a pull request labelled `fix`, its new tests run once on the merge
+    # base's main sources, where each must fail (VARKA-255.md 3.4). A run of master has no new
+    # tests. The label is read from vecbricks/varka, since a push build does not know its pull
+    # request; a label added after the push takes a rerun of the job.
+    - name: The new tests of ${{ matrix.module }}, rerun five times
+      run: |
+        python3 dev/varka_new_tests.py --self-test > target/varka-new-tests-self-test.log 2>&1 ||
+          { cat target/varka-new-tests-self-test.log; exit 1; }
+        python3 dev/varka_new_tests.py rerun ${{ matrix.module }} --times 5
+    - name: A fix's new tests of ${{ matrix.module }} fail on the merge base
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 dev/varka_new_tests.py fails-on-base ${{ matrix.module }}
 
   varka-docs:
     needs: [precondition]

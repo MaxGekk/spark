@@ -127,7 +127,8 @@ public class VarkaFilterEvaluator extends VarkaEvaluatorBase {
   private CompiledVarkaPredicate predicate() {
     if (!compiledResolved) {
       Optional<CompiledVarkaPredicate> all =
-          VarkaExpressionCompiler.compilePredicate(condition, childAttributes(), emitOptions());
+          VarkaExpressionCompiler.compilePredicate(condition, childAttributes(), emitOptions(),
+              familiesOff());
       if (all.isPresent() && all.get().residualConjuncts().isEmpty()) {
         compiled = all.get();
         List<List<Integer>> byClause = compiled.clauses();
@@ -143,7 +144,8 @@ public class VarkaFilterEvaluator extends VarkaEvaluatorBase {
         if (LOG.isDebugEnabled()) {
           LOG.debug("Varka " + evaluatorOperator() + " fusion: "
               + String.join("; ", CollectionConverters.asJava(
-                  VarkaFusionReport.predicateLines(condition, childAttributes(), emitOptions()))));
+                  VarkaFusionReport.predicateLines(condition, childAttributes(), emitOptions(),
+                      familiesOff()))));
         }
       }
       compiledResolved = true;
@@ -293,8 +295,8 @@ public class VarkaFilterEvaluator extends VarkaEvaluatorBase {
    *
    * <p>Two selectivity extremes skip that work entirely. At {@code count == len} nothing has to be
    * shortened, and a vector that does not have to be shortened does not have to be copied, so the
-   * child's columns are forwarded: the earlier rule that a compacting filter owns every output
-   * column holds only where the compaction is real. At {@code count == 0} the per-row scans are
+   * child's columns are forwarded: a compacting filter owns every output column only where the
+   * compaction is real. At {@code count == 0} the per-row scans are
    * skipped - they are O(len) either way today, which is why the 0%-selected rung is the weakest of
    * the committed ladder.
    */

@@ -22,11 +22,11 @@ import java.lang.foreign.{Arena, MemorySegment, ValueLayout}
 import org.apache.spark.SparkFunSuite
 
 /**
- * [[SelectionVectorOps.compactInts]] against a per-row scalar reference (task-24 review: the
- * kernel previously had only end-to-end coverage through the differential suite, and the
- * filter suite's release test had silently stopped exercising compaction when the
- * all-selected fast path started forwarding). Lengths straddle every lane and byte boundary
- * the way `VarkaEmitterTestBase`'s do, so every remainder runs at 4, 8 and 16 lanes alike.
+ * [[SelectionVectorOps.compactInts]] against a per-row scalar reference (VARKA-24's review):
+ * end-to-end coverage through the differential suite is not enough, and the filter suite's
+ * release test does not exercise compaction, since the all-selected fast path forwards. Lengths
+ * straddle every lane and byte boundary the way `VarkaEmitterTestBase`'s do, so every remainder
+ * runs at 4, 8 and 16 lanes alike.
  *
  * Named with the `Varka` prefix, unlike the class it tests, so the documented
  * `testOnly *Varka*` gate picks it up.

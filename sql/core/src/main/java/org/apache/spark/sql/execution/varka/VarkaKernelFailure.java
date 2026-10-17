@@ -18,6 +18,10 @@
 
 package org.apache.spark.sql.execution.varka;
 
+import java.util.List;
+
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
+
 /**
  * Marks a throwable as coming from the emitted kernel invocation itself (VARKA-21 review): the
  * exec nodes label their per-batch catch by it, so a catchable failure in the per-row machinery
@@ -34,9 +38,22 @@ public final class VarkaKernelFailure extends RuntimeException {
    */
   public final String shapeHash;
 
+  /**
+   * The families whose nodes the further kernel {@code kernel} holds, which the failure's context
+   * record names with their switches (VARKA-318); empty for the evaluator's own kernel, whose
+   * evaluator knows its families.
+   */
+  public final List<VarkaFamily> families;
+
   public VarkaKernelFailure(Throwable cause, String kernel, String shapeHash) {
+    this(cause, kernel, shapeHash, List.of());
+  }
+
+  public VarkaKernelFailure(
+      Throwable cause, String kernel, String shapeHash, List<VarkaFamily> families) {
     super(cause);
     this.kernel = kernel;
     this.shapeHash = shapeHash;
+    this.families = List.copyOf(families);
   }
 }

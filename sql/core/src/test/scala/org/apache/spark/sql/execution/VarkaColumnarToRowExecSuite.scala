@@ -281,7 +281,7 @@ class VarkaColumnarToRowExecSuite extends QueryTest with SharedSparkSession with
         SQLMetrics.createMetric(sparkContext, "rows"),
         SQLMetrics.createMetric(sparkContext, "batches"),
         VarkaExecMetrics.NONE)
-      // Before VARKA-15 this constructor compiled the fallback eagerly and threw.
+      // The constructor compiles the fallback lazily (VARKA-15); eagerly it would throw here.
       val evaluator = factory.createEvaluator()
       val column = new OnHeapColumnVector(1, IntegerType)
       column.putInt(0, 7)
@@ -419,7 +419,7 @@ class VarkaColumnarToRowExecSuite extends QueryTest with SharedSparkSession with
     val eligible = ProjectExec(
       project(Alias(DateAdd(attrD, Literal(3)), "add")()),
       ColumnarToRowExec(child))
-    // One fused entry beside a forward and a residual: eligible since VARKA-12.
+    // One fused entry beside a forward and a residual: eligible (VARKA-12).
     val mixed = ProjectExec(
       project(
         Alias(DateAdd(attrD, Literal(3)), "add")(),

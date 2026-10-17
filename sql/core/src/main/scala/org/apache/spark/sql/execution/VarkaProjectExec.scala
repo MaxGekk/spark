@@ -47,7 +47,7 @@ import org.apache.spark.util.ArrayImplicits._
  * Batch ownership follows the convention in `SparkPlan.doExecuteColumnar`: the producer owns the
  * batch and closes it, so a consumer must not hold on to one past the call that gave it. This
  * node releases each batch when the next is requested - before asking the child for more input,
- * which the evaluator's ordering contract requires now that an output batch can hold forwarded
+ * which the evaluator's ordering contract requires because an output batch can hold forwarded
  * input vectors - and [[VarkaKernelEvaluator]]'s
  * task-completion listener closes whatever is still open if the task stops early.
  *
@@ -89,11 +89,11 @@ case class VarkaProjectExec(
   override lazy val metrics: Map[String, SQLMetric] =
     VarkaExecMetrics.projectionMetrics(sparkContext, true).asScala.toMap
 
-  // One driver-side compilation serves both EXPLAIN and the residual-entry count below
-  // (task-21 review: the node used to re-run the same pure compile per consumer).
+  // One driver-side compilation serves both EXPLAIN and the residual-entry count below, rather
+  // than the same pure compile once per consumer (VARKA-21's review).
   @transient private lazy val classification =
     VarkaExpressionCompiler.compilePartial(projectList, child.output,
-      VarkaColumnarToRowExec.emitOptions(sessionEmit))
+      VarkaColumnarToRowExec.emitOptions(sessionEmit), sessionEmit.familiesOff)
 
   // verbose EXPLAIN answers "why didn't my projection fuse?" - every entry's
   // classification, and for a residual entry the reason the compiler declined it.

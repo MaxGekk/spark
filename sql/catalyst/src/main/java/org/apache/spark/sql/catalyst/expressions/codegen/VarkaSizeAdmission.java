@@ -56,9 +56,9 @@ import org.apache.spark.sql.internal.SQLConf;
  * names none, and the caller demotes outputs from the end, since the driver it leaves over the
  * budget grows with their number ({@code VarkaExpressionCompiler} bisects, or cuts in one step
  * where the decline carries the plan's cut, VARKA-236). Any other failure of the build admits the
- * shape as before, and is logged once per JVM: the executor meets it where it always has, behind
- * the ghost fallback. A class that builds but fails to define or link is no longer met here at
- * all, since nothing is defined: the executors meet it on its first batch, the same fallback; the
+ * shape, and is logged once per JVM: the executor meets it behind the ghost fallback. A class
+ * that builds but fails to define or link is not met here at all, since nothing is defined: the
+ * executors meet it on its first batch, the same fallback; the
  * tests verify every admitted shape's bytes instead ({@link VarkaShapeCache#admit}).
  */
 final class VarkaSizeAdmission {

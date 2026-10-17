@@ -32,10 +32,10 @@ import org.apache.spark.sql.test.SharedSparkSession
  * projection is fused into [[VarkaColumnarToRowExec]] and runs the SIMD kernels only when the
  * config is on, and that the rule is inert otherwise.
  *
- * The registration point matters as much as the registration: the rule used to be injected into
- * the `SparkSessionExtensions` inside `SparkSession.Builder.getOrCreate`, which skipped sessions
- * built any other way, registered twice when `getOrCreate` was called twice on one builder, and
- * mutated a user-supplied extensions object. The last three tests pin those down.
+ * The registration point matters as much as the registration: injecting the rule into the
+ * `SparkSessionExtensions` inside `SparkSession.Builder.getOrCreate` would skip sessions built
+ * any other way, register twice when `getOrCreate` is called twice on one builder, and mutate a
+ * user-supplied extensions object. The last three tests pin those down.
  */
 class VarkaAutoRegistrationSuite extends QueryTest with SharedSparkSession with VarkaTestWatchdog {
 

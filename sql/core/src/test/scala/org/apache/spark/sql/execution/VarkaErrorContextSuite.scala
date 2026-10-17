@@ -25,7 +25,7 @@ import org.apache.spark.{SparkException, SparkIllegalArgumentException, SparkIll
 import org.apache.spark.executor.Executor
 import org.apache.spark.sql.QueryTest
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAllocationSampler, VarkaEmitOption, VarkaEmitOptions, VarkaErrorContext, VarkaErrors, VarkaFallbackEvent, VarkaJfrTestSupport, VarkaJitEvidence, VarkaKernelAllocationEvent, VarkaShapeCache, VarkaTestWatchdog, VarkaValueRange}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaAllocationSampler, VarkaEmitOption, VarkaEmitOptions, VarkaErrorContext, VarkaErrors, VarkaFallbackEvent, VarkaFamily, VarkaJfrTestSupport, VarkaJitEvidence, VarkaKernelAllocationEvent, VarkaShapeCache, VarkaTestWatchdog, VarkaValueRange}
 import org.apache.spark.sql.execution.varka.VarkaFallbackAccounting
 import org.apache.spark.sql.internal.SQLConf
 
@@ -119,7 +119,7 @@ class VarkaErrorContextSuite extends QueryTest with VarkaSharedSessions with Var
   test("a Varka invariant site that fails at planning reaches the user with the planning " +
       "record around it") {
     // The hook runs a real site with an argument it rejects - the range analysis's empty
-    // interval - inside the planning catch, as a compiler bug reaches it since VARKA-314b: the
+    // interval - inside the planning catch, as a compiler bug reaches it (VARKA-314b): the
     // site raises INTERNAL_ERROR with no record, and the catch adds the record around it.
     cacheDates(varkaSpark)
     VarkaExpressionCompiler.setFailForTesting(() => { new VarkaValueRange.Bounded(5, 1); () })
@@ -182,6 +182,10 @@ class VarkaErrorContextSuite extends QueryTest with VarkaSharedSessions with Var
       .getOrElse(fail(s"no kernel-failure warning among: ${lines.mkString("\n")}"))
     assert(warning.contains("\nVarka context:\n  kind: kernel-failure\n"), warning)
     assert(warning.contains("misdescribeAdd=true"), warning)
+    // The kernel's date_add is the calendar family's, and the record names its switch, the
+    // setting that keeps that work off Varka while the failure is reported (VARKA-318).
+    assert(warning.contains(
+      s"\n  families: calendar (${VarkaFamily.CALENDAR.switchKey()})\n"), warning)
     assert(warning.matches("(?s).*\n  batch: \\d+ rows, nulls per input \\[.*"), warning)
     assert(warning.contains("\n  cause: java.lang.NoSuchMethodError"), warning)
     val events = recorded.filter(VarkaJfrTestSupport.isEvent(_, classOf[VarkaFallbackEvent]))

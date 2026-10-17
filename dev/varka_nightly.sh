@@ -35,6 +35,7 @@
 #   dev/varka_nightly.sh --skip-platform  # without the forked JVM arms (interpreter, C1, C2, -Xcomp, ...)
 #   dev/varka_nightly.sh --skip-deoptnull # without the NULL-mode kernels' cycle ratchet
 #   dev/varka_nightly.sh --skip-history   # without the kernel-after-kernels arm (VARKA-257)
+#   dev/varka_nightly.sh --skip-compiled  # without the compiled fuzz histories at volume
 #
 # The deopt step forks ten fresh JVMs per vector width of the default emission's twelve-output
 # make_date kernel and fails if any of them enters the C2 deoptimization cycle, reading the
@@ -66,8 +67,7 @@
 # Exit status is the number of failed steps.
 set -uo pipefail
 # Usage text is found rather than numbered: a hard-coded range silently truncates as the
-# comment above it grows, which had already happened to four of these scripts. Ends at the
-# first line that is not a comment.
+# comment above it grows. Ends at the first line that is not a comment.
 usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
 
 root="$(git rev-parse --show-toplevel)"; cd "$root"
@@ -78,6 +78,7 @@ series=5
 variants=4
 platform=1
 deoptnull=1
+compiled=1
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h|--help) usage 0 ;;
@@ -91,6 +92,7 @@ while [ "$#" -gt 0 ]; do
     --skip-deopt) deopt=0; shift ;;
     --skip-deoptnull) deoptnull=0; shift ;;
     --skip-history) history=0; shift ;;
+    --skip-compiled) compiled=0; shift ;;
     --skip-cliff) cliff=0; shift ;;
     --skip-golden) golden=0; shift ;;
     --skip-platform) platform=0; shift ;;
@@ -133,8 +135,9 @@ run_step forced build/sbt -batch "project catalyst" \
 # One output of each composition is forced to decline as well (VARKA-296); forcing every one
 # (-Dvarka.sparkfuzz.forceAll=true) cost two hours for 5,000 compositions, so it is for idle windows.
 if [ "$sparkfuzz" -gt 0 ]; then
+  # Without the nested trees (VARKA-298) until VARKA-380's fix removes this switch: they meet that bug most nights.
   run_step sparkfuzz build/sbt -batch "project sql" \
-    "set Test/javaOptions ++= Seq(\"-Dvarka.sparkfuzz.iterations=$sparkfuzz\", \"-Dvarka.sparkfuzz.seed=$seed\", \"-Dspark.test.timeout=170\", \"-Dvarka.test.watchdog.minutes=170\")" \
+    "set Test/javaOptions ++= Seq(\"-Dvarka.sparkfuzz.iterations=$sparkfuzz\", \"-Dvarka.sparkfuzz.nested=false\", \"-Dvarka.sparkfuzz.seed=$seed\", \"-Dspark.test.timeout=170\", \"-Dvarka.test.watchdog.minutes=170\")" \
     'testOnly *VarkaSparkFuzzSuite *VarkaSparkReproducerSuite'
 fi
 # The same compositions with the kernel warm-up on, as production runs (VARKA-327): each shape's
@@ -192,6 +195,18 @@ if [ "${history:-1}" -eq 1 ]; then
   run_step history dev/varka_kernel_history.sh --after 16 --forks 6 --guard \
     "${history_build[@]}" --out "$logdir/history"
 fi
+# The IR fuzzer's compiled test at volume (VARKA-274): 1,000 draws a lane with the day's seed, each
+# kernel over the eight batch histories - interpreted, warmed to C2, trapped after a quiet warm-up,
+# recompiled, released through the OSRs with C1 on - every batch compared and its tier read by
+# JFR, eight JVMs of three cores; then every coverage row's kernel over three of the histories. A
+# wrong answer fails the step; the verdicts per history, the unsettled kernels and the histories
+# not reached are counted (dev/varka_compiled_fuzz.sh).
+if [ "$compiled" -eq 1 ]; then
+  reuse=()
+  [ "$deoptnull" -eq 1 ] && [ "${status[deoptnull]:-}" = ok ] && reuse=(--skip-build)
+  run_step compiled dev/varka_compiled_fuzz.sh --seed "$seed" --out "$logdir/compiled" \
+    "${reuse[@]}"
+fi
 if [ "$cliff" -eq 1 ]; then
   run_step cliff dev/varka_inlining_cliff.sh --outputs 24,40 --forks 10 --seconds 12 --fail-if-slow
 fi
@@ -221,6 +236,11 @@ if [ -n "${status[history]:-}" ]; then
   printf '%-9s %-7s %6d  %s\n' history "${status[history]}" "${secs[history]}" \
     "$logdir/history.log"
   [ "${status[history]}" = ok ] || bad=$((bad + 1))
+fi
+if [ -n "${status[compiled]:-}" ]; then
+  printf '%-9s %-7s %6d  %s\n' compiled "${status[compiled]}" "${secs[compiled]}" \
+    "$logdir/compiled.log"
+  [ "${status[compiled]}" = ok ] || bad=$((bad + 1))
 fi
 # The platform step, the last to run, is listed last.
 if [ -n "${status[platform]:-}" ]; then

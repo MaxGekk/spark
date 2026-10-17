@@ -140,10 +140,10 @@ class VarkaEmitterArithmeticSuite extends VarkaEmitterTestBase {
   }
 
   test("AddDays/SubDays with a column offset match the reference evaluator") {
-    // The trap this task exists to catch: `s.wordRef` used to alias the result's validity to
-    // `days` alone, which was correct only because the offset used to always be a literal
-    // (all-valid). A null offset on a non-null date must still make the row null - checkMatrix's
-    // full combos(2) drives every (date, offset) null-pattern pair, that one included.
+    // The trap this catches: a `s.wordRef` that aliased the result's validity to `days` alone
+    // would be correct only for a literal (all-valid) offset. A null offset on a non-null date must
+    // still make the row null - checkMatrix's full combos(2) drives every (date, offset)
+    // null-pattern pair, that one included.
     val add = new AddDays(new ColumnRef(0), new ColumnRef(1))
     val sub = new SubDays(new ColumnRef(0), new ColumnRef(1))
     checkMatrix(Seq(add, sub), 2, Array.emptyIntArray, Seq(1, 17, 64, 65, 1000), combos(2),
@@ -302,8 +302,8 @@ class VarkaEmitterArithmeticSuite extends VarkaEmitterTestBase {
   }
 
   test("a node shared across groups gets no slot in a body that uses it once", PinsDefaults) {
-    // The budget's rule, which is what this pins: since VARKA-254 the prediction bounds groups by
-    // default, and the budget binds where it cannot and under groupBudgetUnderPrediction.
+    // The budget's rule, which is what this pins: the prediction bounds groups by default
+    // (VARKA-254), and the budget binds where it cannot and under groupBudgetUnderPrediction.
     // VARKA-223: a shared slot is decided by the body's own use count, not the kernel's. Two
     // outputs over one column, each a chain of 12 ops - two would pass the group budget of 16,
     // and the chain depth stays under its limit - take a group each, and use the
@@ -423,8 +423,8 @@ class VarkaEmitterArithmeticSuite extends VarkaEmitterTestBase {
       // Under `checkOff` too. Not because that switch never changes meaning - for a checked
       // add it does, deliberately, which is what makes it a reference arm - but because a
       // multiply has no correct checked emission at all, so there is no cheaper version of
-      // the same node for "off" to select. It used to gate this refusal, and a checked
-      // multiply emitted there as a plain wrapping one.
+      // the same node for "off" to select. If it gated this refusal, a checked multiply would
+      // be emitted there as a plain wrapping one.
       val refused = intercept[IllegalArgumentException] {
         emitMulti(Seq[VarkaVectorIR](new IntArith(IntOp.MUL, mode, a, b)), 2, 0, options)
       }
@@ -734,7 +734,7 @@ class VarkaEmitterArithmeticSuite extends VarkaEmitterTestBase {
   test("BETWEEN- and IN-shaped roots match the reference") {
     // The survey's two dominant filter shapes: BETWEEN as And over paired comparisons
     // against literals, and IN as the balanced OR chain of EQ leaves (VARKA-20's lowering,
-    // now at a root). Data cycles a small range so both selects and rejects occur.
+    // at a root). Data cycles a small range so both selects and rejects occur.
     val d = new ColumnRef(0)
     val between = new And(
       new Compare(CompareOp.GE, d, new LiteralSlot(0)),

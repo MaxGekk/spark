@@ -68,9 +68,15 @@ a size no method that compiled can reach, so by default the check never fires.
 Every compiled class goes into a per-JVM cache of 100 (`spark.sql.codegen.cache.maxEntries`,
 fixed when the JVM starts), keyed by the generated source text. A hit skips Janino. A miss
 compiles and logs one `Code generated in ... ms` line at INFO. Because some literals are written
-into the source, a query that differs only in a number or a date is a miss. A companion post,
-on how Spark compiles a query and why it compiles it again, measures what such a miss costs and
-what happens to a loop of queries larger than the cache.
+into the source, a query that differs only in a number or a date is a miss. [How Spark compiles a
+query, and why it compiles it again](https://vecbricks.github.io/how-spark-compiles-a-query/)
+measures what that costs.
+
+Past 100 the cache doesn't degrade gently. On stock 4.2.0 a loop of 150 queries that differ only
+in an integer, run twice, compiled all 150 again in the second loop. In local mode each such query
+compiles three classes, so the default cache holds about 30 of them, and a loop larger than the
+cache evicts each class just before it is needed again. With `maxEntries=1000` the second loop
+compiled nothing.
 
 ## At the JIT: two limits of 8000
 
