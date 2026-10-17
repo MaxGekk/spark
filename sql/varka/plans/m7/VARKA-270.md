@@ -191,5 +191,6 @@ slots' overrun; nothing was cut, since each sentence states a find or how it end
 The post went live on 17 October 2026 at https://vecbricks.github.io/where-the-checking-stops/, built from the merged Markdown (#914)
 with `dev/varka_post_page.py` and a card from Figure 3. Before publication the two phrases of
 10.3 flipped to "a proposed change": the owner moved rows 379 and 387 to milestone 8 as open
-pull requests (#874 and #911), so neither fix is merged and the post says so. The cost of the
+pull requests (#874 and #911), so neither fix was merged and the post said so; #911 merged later
+the same day, and row 387 is done in this milestone after all. The cost of the
 date check is not in the post; its pair had not returned.
