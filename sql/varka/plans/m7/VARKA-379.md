@@ -589,6 +589,11 @@ days stored under nulls differently from any other decline.
 wide and narrow 1,392 passed each, none failed, 34 cancelled as on every run (105 suites, with
 the sanitizer); lint (`dev/lint-java`, `dev/scalastyle`, Error Prone and NullAway) and the quote
 check pass. The first gate, before the narrowing, is the failure 11.6 corrects. 11.4 #4 held: no
-suite added, and the column bound test's two new batches are milliseconds.
+suite added, and the column bound test's two new batches are milliseconds. The option matrix
+over the two guard configurations that change this emission's paths, against that gate's
+defaults: `exactRefusalStatus=true` 1,267 passed and `guardUnderArm=false` 1,263, none failed or
+unfused in either. A suite that pins the per-reason branch of `emitRangeFold` is not among them:
+the edge suite's column-bound shapes hold one refusal reason each, so whether a two-reason body
+reaches that branch rests on the coverage and composition suites run under that configuration.
 
 **Prediction 11.4 #3** waits for the re-pair.
