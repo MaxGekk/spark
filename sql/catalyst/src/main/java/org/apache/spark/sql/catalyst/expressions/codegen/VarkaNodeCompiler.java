@@ -23,6 +23,8 @@ import java.util.OptionalLong;
 import java.util.function.IntUnaryOperator;
 import java.util.function.Supplier;
 
+import javax.annotation.Nullable;
+
 import org.apache.spark.sql.catalyst.expressions.Add;
 import org.apache.spark.sql.catalyst.expressions.BoundReference;
 import org.apache.spark.sql.catalyst.expressions.Cast;
@@ -36,6 +38,8 @@ import org.apache.spark.sql.catalyst.expressions.RuntimeReplaceable;
 import org.apache.spark.sql.catalyst.expressions.Subtract;
 import org.apache.spark.sql.catalyst.expressions.UnaryMinus;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDerivedKind;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaRangeAnalysis;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaOperandPosition;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
@@ -96,8 +100,51 @@ final class VarkaNodeCompiler {
         DeclineSink sink);
   }
 
-  /** A named link of the chain. */
-  record Family(String name, Claim claim) {
+  /**
+   * A named link of the chain, with the session switch that turns it off ({@code family}), or
+   * none for the date leaves, which fuse nothing of their own (VARKA-318).
+   */
+  record Family(String name, @Nullable VarkaFamily family, Claim claim) {
+    /** A link with no switch: the date leaves, or a suite's copy of a link. */
+    Family(String name, Claim claim) {
+      this(name, null, claim);
+    }
+
+    Family(VarkaFamily family, Claim claim) {
+      this(family.label(), family, claim);
+    }
+  }
+
+  /**
+   * A throw out of a family's lowering, carried from the innermost {@link #compileNode} that ran
+   * the arm to the compiler's planning catch, which unwraps it: the family goes on the internal
+   * error's record and its retry sentence names the switch (VARKA-318). Never seen outside the
+   * compiler, so the exception a caller catches is the site's own, as VARKA-314 left it.
+   */
+  static final class FamilyFailure extends RuntimeException {
+    private static final long serialVersionUID = 1L;
+    private final transient VarkaFamily family;
+
+    FamilyFailure(VarkaFamily family, RuntimeException cause) {
+      super(null, cause, false, false);
+      this.family = family;
+    }
+
+    VarkaFamily family() {
+      return family;
+    }
+
+    RuntimeException original() {
+      return (RuntimeException) getCause();
+    }
+  }
+
+  // Test-only: the family whose claimed nodes throw an injected internal error, as a bug in
+  // its lowering would, so a suite can see the planning error name the family's switch.
+  private static volatile @Nullable VarkaFamily failInFamilyForTesting = null;
+
+  static void setFailInFamilyForTesting(@Nullable VarkaFamily family) {
+    failInFamilyForTesting = family;
   }
 
   /**
@@ -107,11 +154,24 @@ final class VarkaNodeCompiler {
    */
   private static final List<Family> FAMILIES = List.of(
       new Family("date leaves", VarkaNodeCompiler::leafArm),
-      new Family("calendar", VarkaChronoCompiler::arm),
-      new Family("interval", VarkaIntervalCompiler::arm),
-      new Family("time", VarkaTimeCompiler::arm),
-      new Family("condition", VarkaConditionCompiler::arm),
-      new Family("int arithmetic", VarkaNodeCompiler::arithmeticArm));
+      new Family(VarkaFamily.CALENDAR, VarkaChronoCompiler::arm),
+      new Family(VarkaFamily.INTERVAL, VarkaIntervalCompiler::arm),
+      new Family(VarkaFamily.TIME, VarkaTimeCompiler::arm),
+      new Family(VarkaFamily.CONDITION, VarkaConditionCompiler::arm),
+      new Family(VarkaFamily.INT_ARITHMETIC, VarkaNodeCompiler::arithmeticArm));
+
+  /**
+   * The predicate family, which is not a link of the chain: {@code compileNode} never claims a
+   * comparison or a connective, whose value is a mask and not a lane, and they are reached only
+   * through {@code VarkaConditionCompiler.compileCond}, from a filter's conjunct or a
+   * conditional's condition (VARKA-318). It is here so that the suites read its claim beside the
+   * chain's: no node is claimed by two of them, so each node is under one switch.
+   */
+  private static final Family PREDICATES = new Family(VarkaFamily.PREDICATE,
+      (e, inputs, literals, sink) -> {
+        var arm = VarkaConditionCompiler.condArm(e, inputs, literals, sink);
+        return arm == null ? null : () -> arm.get().map(cond -> cond);
+      });
 
   private VarkaNodeCompiler() {
   }
@@ -129,17 +189,80 @@ final class VarkaNodeCompiler {
       VarkaSlotTable literals,
       DeclineSink sink) {
     for (Family family : FAMILIES) {
-      VarkaFamilyArm arm = family.claim().of(expr, inputs, literals, sink);
+      VarkaFamilyArm arm;
+      try {
+        arm = family.claim().of(expr, inputs, literals, sink);
+      } catch (RuntimeException e) {
+        // A claim's guards are the family's code too: a throw there names the family as well.
+        throw family.family() == null || e instanceof FamilyFailure
+            ? e
+            : new FamilyFailure(family.family(), e);
+      }
       if (arm != null) {
-        return arm.compile();
+        return family.family() == null
+            ? arm.compile()
+            : inFamily(family.family(), arm::compile, expr, sink);
       }
     }
     return fallback(expr, inputs, literals, sink);
   }
 
+  /**
+   * Runs {@code lowering}, of {@code family} and claimed for {@code expr}, under the family's
+   * switch (VARKA-318): a family the session has switched off declines the node with the reason
+   * naming the switch, and a family that is on lowers it and is noted as used. A read is never
+   * declined by a switch and uses no family, because a switch keeps a family's operations off
+   * Varka, not the columns they read: a column or a literal, which the interval and time families
+   * claim for their lanes and which the 64-bit arithmetic of other families shares, and a cast of
+   * one that lowers to the bare read - the relabels type coercion inserts, such as
+   * {@code TIME(3)} to {@code TIME(6)} before a comparison. A throw out of the lowering leaves as
+   * a {@link FamilyFailure} naming the innermost family it passed through.
+   */
+  static <T> Optional<T> inFamily(
+      VarkaFamily family, Supplier<Optional<T>> lowering, Expression expr, DeclineSink sink) {
+    boolean read = isRead(expr);
+    boolean relabel = expr instanceof Cast c && isRead(c.child());
+    if (!read && !relabel && sink.off(family)) {
+      return sink.decline(family.offReason(), expr);
+    }
+    try {
+      if (!read && failInFamilyForTesting == family) {
+        throw VarkaErrors.illegalArgument("injected failure in Varka's " + family.label()
+            + " family");
+      }
+      Optional<T> built = lowering.get();
+      if (built.isEmpty() || read) {
+        return built;
+      }
+      if (relabel && (built.get() instanceof ColumnRef || built.get() instanceof LiteralSlot)) {
+        // A relabel: the read itself, no family's operation.
+        return built;
+      }
+      if (relabel && sink.off(family)) {
+        // A cast of a read that computes: the family's operation, and the family is off.
+        return sink.decline(family.offReason(), expr);
+      }
+      sink.used(family);
+      return built;
+    } catch (FamilyFailure e) {
+      throw e;
+    } catch (RuntimeException e) {
+      throw new FamilyFailure(family, e);
+    }
+  }
+
+  private static boolean isRead(Expression e) {
+    return e instanceof BoundReference || e instanceof Literal;
+  }
+
   /** The chain, for the suite that holds no node is claimed twice. */
   static List<Family> families() {
     return FAMILIES;
+  }
+
+  /** The predicate family's claim, which the chain does not dispatch to, for the same suites. */
+  static Family predicates() {
+    return PREDICATES;
   }
 
   /** The names of the families of {@code chain} that claim {@code expr}, in chain order. */
@@ -309,7 +432,7 @@ final class VarkaNodeCompiler {
     if (modes.TRY().equals(mode)) {
       return Overflow.NULL;
     }
-    throw new IllegalArgumentException("unknown evaluation mode " + mode);
+    throw VarkaErrors.illegalArgument("unknown evaluation mode " + mode);
   }
 
   /**

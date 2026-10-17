@@ -97,3 +97,12 @@ note. Owed before publication:
    owner's decision to print the row from the source alone.
 3. **Row 258's published link** for the 100-classes section.
 4. **The owner's edit.**
+
+### 9.2 Published, 16 October 2026
+
+The post went live on 16 October 2026 at https://vecbricks.github.io/nine-numbers/, after #896
+replaced its two bracketed author notes with plain sentences: the cache section points to row 258's
+post, which measures the cache, and the capacity section says the cost of passing the fast hash
+map's 16 bits was not measured. The owner then asked for that measurement; it runs on stock Spark
+4.2.0 on a GitHub runner (`sql/varka/demo/hashmap/`), and the section gains its result as an
+addition to the published post, not as a condition of this row.

@@ -49,6 +49,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.Forward
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.FusedOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.KernelOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.ResidualOutput;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.types.DataTypeUtils$;
 import org.apache.spark.sql.execution.vectorized.OffHeapColumnVector;
 import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector;
@@ -196,7 +197,8 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
   private Optional<PartialVarkaProjection> compiled() {
     if (!compiledResolved) {
       Optional<PartialVarkaProjection> partial =
-          VarkaExpressionCompiler.compilePartial(projectList, childAttributes(), emitOptions());
+          VarkaExpressionCompiler.compilePartial(projectList, childAttributes(), emitOptions(),
+              familiesOff());
       // The same per-entry account verbose EXPLAIN prints, once per task at debug level.
       if (partial.isPresent() && LOG.isDebugEnabled()) {
         LOG.debug("Varka " + evaluatorOperator() + " fusion: "
@@ -526,7 +528,7 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
       vector = ArrowUtils.toArrowField(name, dataType, true, null, false,
           org.apache.spark.sql.types.Metadata.empty(), false).createVector(allocator);
     } else {
-      throw new IllegalStateException("no Varka output vector for " + dataType);
+      throw VarkaErrors.illegalState("no Varka output vector for " + dataType);
     }
     var fixed = (BaseFixedWidthVector) vector;
     try {

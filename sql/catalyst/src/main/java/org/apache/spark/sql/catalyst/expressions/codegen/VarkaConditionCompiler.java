@@ -25,6 +25,9 @@ import java.util.OptionalInt;
 import java.util.OptionalLong;
 import java.util.TreeSet;
 import java.util.function.BinaryOperator;
+import java.util.function.Supplier;
+
+import javax.annotation.Nullable;
 
 import scala.Tuple2;
 import scala.jdk.javaapi.CollectionConverters;
@@ -48,6 +51,8 @@ import org.apache.spark.sql.catalyst.expressions.Literal;
 import org.apache.spark.sql.catalyst.expressions.Not;
 import org.apache.spark.sql.catalyst.expressions.Or;
 import org.apache.spark.sql.catalyst.expressions.RuntimeReplaceable;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
@@ -61,15 +66,18 @@ import org.apache.spark.sql.types.DataTypes;
 import org.apache.spark.sql.types.YearMonthIntervalType;
 
 /**
- * The predicate family of the compiler: the three-valued conditions - comparisons, {@code IN} over
- * date literals, the validity predicates and the connectives - compiled by {@link #compileCond}
- * for a filter's mask root and for the value-side conditionals {@code IF}, {@code CASE WHEN} and
- * {@code coalesce}, which fold onto {@code IfElse} over those conditions.
+ * Two families of the compiler, each with its own switch (VARKA-318). The predicate family is the
+ * three-valued conditions - comparisons, {@code IN} over date literals, the validity predicates
+ * and the connectives - compiled by {@link #compileCond} for a filter's mask root and for the
+ * conditions of the value-side conditionals. The condition family is those conditionals,
+ * {@code IF}, {@code CASE WHEN} and {@code coalesce}, which fold onto {@code IfElse} over the
+ * predicate family's conditions.
  *
- * <p>{@link #arm} is the family's one entry from the chain {@code VarkaExpressionCompiler}
- * dispatches through, in the form {@code VarkaIntervalCompiler} set: a {@code switch} that tests
- * and deconstructs a node and returns the lowering as a deferred call, or {@code null} for a node
- * the family does not claim. {@code compilePredicate} reaches {@link #compileCond} and the
+ * <p>{@link #arm} is the condition family's one entry from the chain
+ * {@code VarkaExpressionCompiler} dispatches through, in the form {@code VarkaIntervalCompiler}
+ * set: a {@code switch} that tests and deconstructs a node and returns the lowering as a deferred
+ * call, or {@code null} for a node the family does not claim; {@link #condArm} is the predicate
+ * family's claim in the same form. {@code compilePredicate} reaches {@link #compileCond} and the
  * balanced {@link #andFold} directly.
  *
  * <p>The literal and input tables are the classifier's {@link VarkaSlotTable}s.
@@ -304,108 +312,124 @@ final class VarkaConditionCompiler {
    * via the emitter's known-true/known-false pairs. {@code EqualNullSafe} deliberately declines -
    * its both-null-is-true case breaks the null-intolerant comparison rule and earns its own
    * algebra entry or nothing (plan section 4).
+   *
+   * <p>Every node {@link #condArm} claims is the predicate family's and lowers under its switch
+   * (VARKA-318), wherever it is reached: a filter's conjunct, the condition of an {@code IF} or a
+   * {@code CASE WHEN} branch, or an operand of a connective, since the connectives recurse
+   * through here. A node it does not claim declines as unsupported whatever the switch.
    */
   static Optional<Cond> compileCond(
       Expression expr,
       VarkaSlotTable inputs,
       VarkaSlotTable literals,
       DeclineSink sink) {
-    // A chain of `instanceof` tests: Catalyst's expressions are not a sealed set, so there is
-    // nothing for a pattern `switch` to be exhaustive over. The classes are disjoint, so the
-    // order only matters where a guard falls through.
-    if (expr instanceof LessThan n) {
-      return compare(CompareOp.LT, n.left(), n.right(), inputs, literals, sink);
-    }
-    if (expr instanceof LessThanOrEqual n) {
-      return compare(CompareOp.LE, n.left(), n.right(), inputs, literals, sink);
-    }
-    if (expr instanceof GreaterThan n) {
-      return compare(CompareOp.GT, n.left(), n.right(), inputs, literals, sink);
-    }
-    if (expr instanceof GreaterThanOrEqual n) {
-      return compare(CompareOp.GE, n.left(), n.right(), inputs, literals, sink);
-    }
-    if (expr instanceof EqualTo n) {
-      return compare(CompareOp.EQ, n.left(), n.right(), inputs, literals, sink);
-    }
-    // IN over date literals: an EQ chain joined by OR, which the mask algebra
-    // makes exactly SQL's IN inside a condition - a null value leaves every comparison
-    // unknown, the OR of unknowns is unknown, and an unknown condition falls to ELSE.
-    if (expr instanceof In in && isDateOrInterval(in.value().dataType())) {
-      List<OptionalInt> elements = new ArrayList<>();
-      for (Expression element : CollectionConverters.asJava(in.list())) {
-        elements.add(literalDays(element));
-      }
-      return compileInList(in.value(), elements, in, inputs, literals, sink);
-    }
-    if (expr instanceof InSet inSet && isDateOrInterval(inSet.child().dataType())) {
-      // InSet's set is unordered; compileInList sorts, which is what keeps the literal
-      // slots and the shape hash deterministic across runs.
-      List<OptionalInt> elements = new ArrayList<>();
-      for (Object element : CollectionConverters.asJava(inSet.hset())) {
-        elements.add(
-            element instanceof Integer days ? OptionalInt.of(days) : OptionalInt.empty());
-      }
-      return compileInList(inSet.child(), elements, inSet, inputs, literals, sink);
-    }
-    if (expr instanceof And and) {
-      Optional<Cond> left = compileCond(and.left(), inputs, literals, sink);
-      if (left.isEmpty()) {
-        return left;
-      }
-      Optional<Cond> right = compileCond(and.right(), inputs, literals, sink);
-      if (right.isEmpty()) {
-        return right;
-      }
-      if (!sameLane(expr, sink, left.get(), right.get())) {
-        return Optional.empty();
-      }
-      return Optional.of(new VarkaVectorIR.And(left.get(), right.get()));
-    }
-    if (expr instanceof Or or) {
-      // A disjunction of ranges over one int or date column - the partition-key filter a BI
-      // tool writes for a set of date ranges - is one range set, whose code does not grow with
-      // the ranges, instead of a tree of comparisons whose code does.
-      if (sink.rangeSets()) {
-        Optional<RangeSet> set = rangeSet(or);
-        if (set.isPresent()) {
-          return Optional.of(new InRanges(
-              VarkaNodeCompiler.columnRef(set.get().column(), inputs, LaneType.INT),
-              set.get().bounds()));
-        }
-      }
-      Optional<Cond> left = compileCond(or.left(), inputs, literals, sink);
-      if (left.isEmpty()) {
-        return left;
-      }
-      Optional<Cond> right = compileCond(or.right(), inputs, literals, sink);
-      if (right.isEmpty()) {
-        return right;
-      }
-      if (!sameLane(expr, sink, left.get(), right.get())) {
-        return Optional.empty();
-      }
-      return Optional.of(new VarkaVectorIR.Or(left.get(), right.get()));
-    }
-    if (expr instanceof Not not) {
-      Optional<Cond> child = compileCond(not.child(), inputs, literals, sink);
-      return child.map(v -> new VarkaVectorIR.Not(v));
-    }
-    // The validity predicates: IS NOT NULL is the IR's first total condition
-    // (never unknown), and IS NULL is its NOT - a slot swap in the emitter, no code.
-    if (expr instanceof IsNotNull n) {
-      return compileValidity(n.child(), expr, inputs, literals, sink);
-    }
-    if (expr instanceof IsNull n) {
-      Optional<Cond> validity = compileValidity(n.child(), expr, inputs, literals, sink);
-      return validity.map(v -> new VarkaVectorIR.Not(v));
-    }
     // Defensive, mirroring compileNode: hand-built Nvl/Nvl2 in tests and the fusion report
     // arrive unreplaced; real queries never do.
     if (expr instanceof RuntimeReplaceable r) {
       return compileCond(r.replacement(), inputs, literals, sink);
     }
-    return sink.decline("unsupported predicate", expr);
+    Supplier<Optional<Cond>> arm;
+    try {
+      arm = condArm(expr, inputs, literals, sink);
+    } catch (RuntimeException e) {
+      // The claim's guards are the family's code too, as in compileNode: a throw there names it.
+      throw new VarkaNodeCompiler.FamilyFailure(VarkaFamily.PREDICATE, e);
+    }
+    if (arm == null) {
+      return sink.decline("unsupported predicate", expr);
+    }
+    return VarkaNodeCompiler.inFamily(VarkaFamily.PREDICATE, arm, expr, sink);
+  }
+
+  /**
+   * The lowering {@link #compileCond} runs for {@code expr}, deferred, or {@code null} for a node
+   * the predicate family does not claim: the claim of the family, in the form of the chain's
+   * arms, which {@code VarkaNodeCompiler.predicates} hands to the suites that check no node is
+   * claimed twice and that each switch declines exactly its nodes. The classes are disjoint, so
+   * the order only matters where a guard falls through.
+   */
+  static @Nullable Supplier<Optional<Cond>> condArm(
+      Expression expr,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
+      DeclineSink sink) {
+    return switch (expr) {
+      case LessThan n -> () -> compare(CompareOp.LT, n.left(), n.right(), inputs, literals, sink);
+      case LessThanOrEqual n ->
+          () -> compare(CompareOp.LE, n.left(), n.right(), inputs, literals, sink);
+      case GreaterThan n ->
+          () -> compare(CompareOp.GT, n.left(), n.right(), inputs, literals, sink);
+      case GreaterThanOrEqual n ->
+          () -> compare(CompareOp.GE, n.left(), n.right(), inputs, literals, sink);
+      case EqualTo n -> () -> compare(CompareOp.EQ, n.left(), n.right(), inputs, literals, sink);
+      // IN over date literals: an EQ chain joined by OR, which the mask algebra
+      // makes exactly SQL's IN inside a condition - a null value leaves every comparison
+      // unknown, the OR of unknowns is unknown, and an unknown condition falls to ELSE.
+      case In in when isDateOrInterval(in.value().dataType()) -> () -> {
+        List<OptionalInt> elements = new ArrayList<>();
+        for (Expression element : CollectionConverters.asJava(in.list())) {
+          elements.add(literalDays(element));
+        }
+        return compileInList(in.value(), elements, in, inputs, literals, sink);
+      };
+      case InSet inSet when isDateOrInterval(inSet.child().dataType()) -> () -> {
+        // InSet's set is unordered; compileInList sorts, which is what keeps the literal
+        // slots and the shape hash deterministic across runs.
+        List<OptionalInt> elements = new ArrayList<>();
+        for (Object element : CollectionConverters.asJava(inSet.hset())) {
+          elements.add(
+              element instanceof Integer days ? OptionalInt.of(days) : OptionalInt.empty());
+        }
+        return compileInList(inSet.child(), elements, inSet, inputs, literals, sink);
+      };
+      case And and -> () -> {
+        Optional<Cond> left = compileCond(and.left(), inputs, literals, sink);
+        if (left.isEmpty()) {
+          return left;
+        }
+        Optional<Cond> right = compileCond(and.right(), inputs, literals, sink);
+        if (right.isEmpty()) {
+          return right;
+        }
+        if (!sameLane(expr, sink, left.get(), right.get())) {
+          return Optional.empty();
+        }
+        return Optional.of(new VarkaVectorIR.And(left.get(), right.get()));
+      };
+      case Or or -> () -> {
+        // A disjunction of ranges over one int or date column - the partition-key filter a BI
+        // tool writes for a set of date ranges - is one range set, whose code does not grow with
+        // the ranges, instead of a tree of comparisons whose code does.
+        if (sink.rangeSets()) {
+          Optional<RangeSet> set = rangeSet(or);
+          if (set.isPresent()) {
+            return Optional.of(new InRanges(
+                VarkaNodeCompiler.columnRef(set.get().column(), inputs, LaneType.INT),
+                set.get().bounds()));
+          }
+        }
+        Optional<Cond> left = compileCond(or.left(), inputs, literals, sink);
+        if (left.isEmpty()) {
+          return left;
+        }
+        Optional<Cond> right = compileCond(or.right(), inputs, literals, sink);
+        if (right.isEmpty()) {
+          return right;
+        }
+        if (!sameLane(expr, sink, left.get(), right.get())) {
+          return Optional.empty();
+        }
+        return Optional.of(new VarkaVectorIR.Or(left.get(), right.get()));
+      };
+      case Not not ->
+          () -> compileCond(not.child(), inputs, literals, sink).map(v -> new VarkaVectorIR.Not(v));
+      // The validity predicates: IS NOT NULL is the IR's first total condition
+      // (never unknown), and IS NULL is its NOT - a slot swap in the emitter, no code.
+      case IsNotNull n -> () -> compileValidity(n.child(), expr, inputs, literals, sink);
+      case IsNull n -> () -> compileValidity(n.child(), expr, inputs, literals, sink)
+          .map(v -> new VarkaVectorIR.Not(v));
+      default -> null;
+    };
   }
 
   private static boolean isDateOrInterval(DataType dataType) {
@@ -483,7 +507,7 @@ final class VarkaConditionCompiler {
    */
   private static Cond balancedFold(List<Cond> conds, BinaryOperator<Cond> combine) {
     if (conds.isEmpty()) {
-      throw new IllegalArgumentException(
+      throw VarkaErrors.illegalArgument(
           "requirement failed: balancedFold needs at least one condition");
     }
     List<Cond> level = conds;

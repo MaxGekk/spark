@@ -334,7 +334,7 @@ final class Slots {
   /** The epilogue's bounds mask local; see {@link #epilogueReadsMask}. */
   int epilogueMask() {
     if (epilogueMask == null) {
-      throw new IllegalStateException(
+      throw VarkaErrors.illegalState(
           "the epilogue's mask is read but not built: Slots.epilogueReadsMask missed a reader");
     }
     return epilogueMask;
@@ -343,7 +343,7 @@ final class Slots {
   /** Input {@code i}'s data segment local; see the value columns in {@link #plan}. */
   int srcSeg(int i) {
     if (srcSeg[i] < 0) {
-      throw new IllegalStateException("input " + i + "'s data segment is read but not built: "
+      throw VarkaErrors.illegalState("input " + i + "'s data segment is read but not built: "
           + "Slots.plan's value columns missed a reader");
     }
     return srcSeg[i];
@@ -352,7 +352,7 @@ final class Slots {
   /** Output {@code o}'s validity segment local; see {@code buildsValiditySegment}. */
   int dstValSeg(int o) {
     if (dstValSeg[o] < 0) {
-      throw new IllegalStateException("output " + o + "'s validity segment is read but not "
+      throw VarkaErrors.illegalState("output " + o + "'s validity segment is read but not "
           + "built: VarkaBodyEmitter.buildsValiditySegment missed a writer");
     }
     return dstValSeg[o];
@@ -374,27 +374,17 @@ final class Slots {
    * op) shares that child's reference instead of recomputing it. Per-node slots are planned
    * only for the body roles that emit them - the vector-walk slots for a loop or epilogue
    * method, neither for the driver, which runs only the shared prologue.
-   */
-  static Slots plan(boolean dense, BodyMode mode, List<VarkaVectorIR> outputs,
-      List<Integer> outputIdx, Analysis analysis, int numLiterals) {
-    return plan(dense, mode, outputs, outputIdx, analysis, numLiterals, false);
-  }
-
-  /**
-   * As above; with {@code perGroup} the body gets slots only for the outputs in {@code outputIdx}
+   *
+   * <p>With {@code perGroup} the body gets slots only for the outputs in {@code outputIdx}
    * and the literals their trees reference, and every other output or literal slot is {@code -1}
    * so that an emission which reaches for one fails to build rather than reading a stale local.
    * A group's loop and epilogue methods plan this way (VARKA-87): setting up every output of the
    * kernel in every group was the term that grew each group's methods with the whole kernel
    * ({@code VARKA-87.md} 2.6.2). The driver keeps planning for every output, since it
-   * zeroes and serves them all.
+   * zeroes and serves them all. {@code group} is the loop-method group whose loop or epilogue
+   * method this plans, or {@code -1} for the driver and for the single epilogue of the form
+   * without a byte budget.
    */
-  static Slots plan(boolean dense, BodyMode mode, List<VarkaVectorIR> outputs,
-      List<Integer> outputIdx, Analysis analysis, int numLiterals, boolean perGroup) {
-    return plan(dense, mode, outputs, outputIdx, analysis, numLiterals, perGroup, -1);
-  }
-
-  /** As above, for the loop or epilogue method of loop-method group {@code group}. */
   static Slots plan(boolean dense, BodyMode mode, List<VarkaVectorIR> outputs,
       List<Integer> outputIdx, Analysis analysis, int numLiterals, boolean perGroup,
       int group) {
@@ -888,7 +878,7 @@ final class Slots {
       }
     };
     if (problem != null) {
-      throw new IllegalStateException("validity-word algebra disagrees with planWordRef on "
+      throw VarkaErrors.illegalState("validity-word algebra disagrees with planWordRef on "
           + VarkaVectorIR.canonical(node) + ": " + problem + " (pure=" + pure + ", owner="
           + owner + ")");
     }

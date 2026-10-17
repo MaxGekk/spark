@@ -1,23 +1,24 @@
-# The class got 65 times cheaper. The first query got slower.
+# The class got cheaper. The first query got slower.
 
 Varka is a fork of Apache Spark that compiles SQL expressions into Java Vector API kernels. Spark
 turns each query stage into Java source and compiles it with Janino. Varka skips the source: it
-writes the kernel's bytecode directly. When we timed the two, making one class took Spark about
-6.5 milliseconds and Varka about a tenth of one.
+writes the kernel's bytecode directly. When we compiled the same expressions both ways, Varka made
+the class three to six times faster: for sixteen date expressions, a little over a millisecond
+against more than four.
 
 Then we timed the first query of a new shape, and Varka without help was the slowest bar on the
 chart.
 
 ![The class is the cheap part](figures/svg/fig33-the-class-is-the-cheap-part.svg)
 
-*Figure 1. Making a class and running a query, on one scale. Sixteen date expressions over
-100,000 cached rows, best of five, JDK 25 on a laptop. The two class bars are not the same
-work; see "The 65x, honestly" below.*
+*Figure 1. Making a class and running a query, on one scale, for the same sixteen date
+expressions, best of five, JDK 25. The class bars are from a GitHub runner (AMD EPYC 7763), the
+query bars from a laptop over 100,000 cached rows; "What a class costs" below has every size.*
 
 This post is for people who write code generators. It covers what changes when the generator
 writes bytecode instead of source, and what doesn't. In short: the size of the generated code
-becomes a fact instead of a guess; the class becomes almost free to make, which turns out not to
-matter; and the saving that does matter comes from how classes are cached, which has nothing to
+becomes a fact instead of a guess; the class gets several times cheaper to make, which turns out
+not to matter; and the saving that does matter comes from how classes are cached, which has nothing to
 do with bytecode.
 
 ## Two ways to make a class
@@ -69,8 +70,8 @@ over to it. In this run the hand-over came after 1.6 to 1.9 seconds, and from th
 took 27 ms against Spark's 53. Planning a new shape, including emitting its kernel, took 18 ms
 against Spark's 17.
 
-So a tenth of a millisecond for the class doesn't change the first query, and 6.5 ms wouldn't
-have changed it either. Making the class was never the expensive part. Waiting for the JIT is.
+So a millisecond for the class doesn't change the first query, and Janino's four wouldn't have
+changed it either. Making the class was never the expensive part. Waiting for the JIT is.
 
 ## Never make the class again
 
@@ -87,8 +88,9 @@ Spark caches generated classes by their source text, and some literals are writt
 text. A dashboard that reruns `date_add(d, 7)` as `date_add(d, 30)` gets a new string, so a new
 Janino compile, so a new class that the JIT starts again from the interpreter. Spark already
 avoids this for strings, decimals and binary values, which it passes to the class as references
-instead of writing them into the text. [Link to row 258's post, which measures what the extra
-compiles cost on Spark, when it is published.]
+instead of writing them into the text. [How Spark compiles a query, and why it compiles it
+again](https://vecbricks.github.io/how-spark-compiles-a-query/) measures what the extra compiles
+cost on Spark.
 
 Varka's emitter takes a tree with every constant replaced by a slot. `date_add(d, 7), year(d)`
 and `date_add(d, 30), year(d)` are one shape with one hash, and run on one class with a different
@@ -102,19 +104,29 @@ its generated code whether it split a large `CASE WHEN`, so a literal that chang
 makes it decide again. A cache key that leaves literal values out is filed as
 [SPARK-60048](https://issues.apache.org/jira/browse/SPARK-60048).
 
-## The 65x, honestly
+## What a class costs
 
-| generator | one class, cold |
-|:--|--:|
-| Spark: `GenerateUnsafeProjection.generate` (source, then Janino) | about 6.5 ms |
-| Varka: emit, define, load and instantiate a fused kernel | about 99 us |
+The benchmark compiles one expression list both ways: Janino over Spark's generated source, and
+Varka's compiler and emitter, each with its cache defeated so every call builds a class. Each list
+gives every entry its own constant, so neither side can share work between entries. On a GitHub
+runner (AMD EPYC 7763, JDK 25), in microseconds per class, best of five:
 
-That is 65.6 times. To time Janino cold, the benchmark gives it a new literal on every iteration,
-which defeats Spark's cache exactly as Figure 3 shows. The two arms are not the same work,
-though, and we'd rather say so before anyone else does. The Janino arm compiles a one-output
-`date_add` projection with Spark's row writer; the Varka arm emits a two-output kernel with a
-shared subexpression. [A benchmark that emits and compiles the same expression list both ways is
-owed before publication; this table is replaced or joined by its numbers.]
+| expressions | Spark, cold | Varka, cold | Varka's lead | Spark, cache hit | Varka, cache hit |
+|:--|--:|--:|--:|--:|--:|
+| 1 date | 1,472 | 293 | 5.0x | 61 | 5 |
+| 4 date | 2,602 | 445 | 5.8x | 268 | 9 |
+| 16 date | 4,190 | 1,198 | 3.5x | 1,025 | 36 |
+| 64 date | 10,665 | 4,276 | 2.5x | 4,056 | 331 |
+| 16 int | 4,517 | 1,154 | 3.9x | 1,024 | 41 |
+
+Writing bytecode directly is three to six times cheaper than going through source, and the lead
+shrinks as the list grows. An earlier number of ours, 65 times, compared a one-output Janino
+compile with a two-output Varka kernel; this table replaces it.
+
+The last two columns are the "never make the class again" argument in numbers. Spark's cache hit
+still generates the whole source to look the class up, so at sixteen and sixty-four entries a hit
+costs about as much as building Varka's class from scratch. Varka's hit is a lookup by shape: 36
+microseconds at sixteen entries.
 
 ## What you give up
 

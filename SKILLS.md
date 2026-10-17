@@ -134,9 +134,11 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A decline is the entry deleted, and only a forced decline reaches the branch that has to make it so](sql/varka/skills/testing-and-debugging.md#a-decline-is-the-entry-deleted-and-only-a-forced-decline-reaches-the-branch-that-has-to-make-it-so)
 * [Under test a failure fallback fails its task, unless the test declared it](sql/varka/skills/testing-and-debugging.md#under-test-a-failure-fallback-fails-its-task-unless-the-test-declared-it)
 * [The coverage of emitted classes: one JaCoCo builder per class, and the agent into own-JVM suites](sql/varka/skills/testing-and-debugging.md#the-coverage-of-emitted-classes-one-jacoco-builder-per-class-and-the-agent-into-own-jvm-suites)
+* [How well the tests test: the emitter's branches, and PIT through ScalaTest test by test](sql/varka/skills/testing-and-debugging.md#how-well-the-tests-test-the-emitters-branches-and-pit-through-scalatest-test-by-test)
 * [A solver proves an arithmetic lowering in integers, and its verdicts are checked like output](sql/varka/skills/testing-and-debugging.md#a-solver-proves-an-arithmetic-lowering-in-integers-and-its-verdicts-are-checked-like-output)
 * [Every small tree, counted in grammar productions, beside the random fuzzer](sql/varka/skills/testing-and-debugging.md#every-small-tree-counted-in-grammar-productions-beside-the-random-fuzzer)
 * [A tree in other company: variants whose answers follow from its own](sql/varka/skills/testing-and-debugging.md#a-tree-in-other-company-variants-whose-answers-follow-from-its-own)
+* [What the emitter reached, and steering a fuzzer toward the rest](sql/varka/skills/testing-and-debugging.md#what-the-emitter-reached-and-steering-a-fuzzer-toward-the-rest)
 * [Every guard at its bound: a verdict from the emitter's own rule](sql/varka/skills/testing-and-debugging.md#every-guard-at-its-bound-a-verdict-from-the-emitters-own-rule)
 * [A planted bug has a prerequisite, and the test that plants it sets it over the matrix's base](sql/varka/skills/testing-and-debugging.md#a-planted-bug-has-a-prerequisite-and-the-test-that-plants-it-sets-it-over-the-matrixs-base)
 * [The emitter is called from several threads, so a test holds it to that](sql/varka/skills/testing-and-debugging.md#the-emitter-is-called-from-several-threads-so-a-test-holds-it-to-that)
@@ -175,6 +177,8 @@ the pre-commit hook also checks. Groups below are in file order.
 * [Value records crash C2's escape analysis on the early-access Valhalla build, and the crash is in a method handle](sql/varka/skills/the-jit.md#value-records-crash-c2s-escape-analysis-on-the-early-access-valhalla-build-and-the-crash-is-in-a-method-handle)
 * [With the intrinsics off C2 takes twenty seconds a loop method, and an epilogue's compile 337 MB](sql/varka/skills/the-jit.md#with-the-intrinsics-off-c2-takes-twenty-seconds-a-loop-method-and-an-epilogues-compile-337-mb)
 * [With the trap limits raised, a masked loop traps thousands of times and still reads as settled](sql/varka/skills/the-jit.md#with-the-trap-limits-raised-a-masked-loop-traps-thousands-of-times-and-still-reads-as-settled)
+* [A kernel warmed after other kernels can stay allocating, and the template prewarm guards only the int lane](sql/varka/skills/the-jit.md#a-kernel-warmed-after-other-kernels-can-stay-allocating-and-the-template-prewarm-guards-only-the-int-lane)
+* [Which tier served a call: the code list at the call's edges, JFR's events inside it](sql/varka/skills/the-jit.md#which-tier-served-a-call-the-code-list-at-the-calls-edges-jfrs-events-inside-it)
 
 #### [The Vector API and vector width](sql/varka/skills/vector-api-and-width.md)
 * [Vector API on HotSpot, Measured (JDK 25, x86-64)](sql/varka/skills/vector-api-and-width.md#vector-api-on-hotspot-measured-jdk-25-x86-64)
@@ -205,6 +209,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A run of master scoped by its diff from master tests nothing, and says it passed](sql/varka/skills/working-in-this-repo.md#a-run-of-master-scoped-by-its-diff-from-master-tests-nothing-and-says-it-passed)
 * [A path-based checkstyle suppression matches the absolute path, checkout directory included](sql/varka/skills/working-in-this-repo.md#a-path-based-checkstyle-suppression-matches-the-absolute-path-checkout-directory-included)
 * [A two-track milestone drifts to the measurable track; review it against the done-when list](sql/varka/skills/working-in-this-repo.md#a-two-track-milestone-drifts-to-the-measurable-track-review-it-against-the-done-when-list)
-* [A day of merges is a day of Builds; the queue now keeps a verdict across docs-only pushes](sql/varka/skills/working-in-this-repo.md#a-day-of-merges-is-a-day-of-builds-the-queue-now-keeps-a-verdict-across-docs-only-pushes)
+* [A day of merges was a day of Builds; the laptop queue kept a verdict across docs-only pushes](sql/varka/skills/working-in-this-repo.md#a-day-of-merges-was-a-day-of-builds-the-laptop-queue-kept-a-verdict-across-docs-only-pushes)
+* [The fork's CI queue is a job inside the Build, and the check sync rides the push](sql/varka/skills/working-in-this-repo.md#the-forks-ci-queue-is-a-job-inside-the-build-and-the-check-sync-rides-the-push)
 
 <!-- END generated contents -->

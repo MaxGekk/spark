@@ -41,6 +41,10 @@ import javax.annotation.Nullable;
  * @param shapeHash the shape cache's hash of the kernel; null at planning, where there is none
  * @param options the emit options that differ from {@link VarkaEmitOptions#DEFAULTS}, as
  *        {@link #renderOptions} renders them; empty at the defaults
+ * @param families the expression families whose nodes the failing kernel holds, or at planning
+ *        the family whose lowering threw (VARKA-318), rendered with each one's switch so that a
+ *        reader who needs the query to run meanwhile knows which setting keeps that work on
+ *        Spark's row engine; empty, and not rendered, where none is known
  * @param batch the failing batch's row count and null counts; null when no batch was involved
  * @param cause the original exception, kept whole
  */
@@ -49,6 +53,7 @@ public record VarkaErrorContext(
     String identity,
     @Nullable String shapeHash,
     String options,
+    List<VarkaFamily> families,
     @Nullable Batch batch,
     @Nullable Throwable cause) {
 
@@ -61,6 +66,9 @@ public record VarkaErrorContext(
    * (VARKA-315).
    */
   public static final String MEMORY_VIOLATION = "memory-violation";
+
+  /** The line that opens the rendered block, and so tells a message with a record apart. */
+  public static final String HEAD = "Varka context:";
 
   /** What a field reads as when the catch could not obtain it. */
   public static final String UNAVAILABLE = "unavailable";
@@ -91,6 +99,13 @@ public record VarkaErrorContext(
     kind = kind == null ? UNAVAILABLE : kind;
     identity = identity == null ? UNAVAILABLE : bounded(identity);
     options = options == null ? UNAVAILABLE : options;
+    families = families == null ? List.of() : List.copyOf(families);
+  }
+
+  /** A record that names no family: a site that cannot tell which family it was in. */
+  public VarkaErrorContext(String kind, String identity, @Nullable String shapeHash,
+      String options, @Nullable Batch batch, @Nullable Throwable cause) {
+    this(kind, identity, shapeHash, options, List.of(), batch, cause);
   }
 
   /**
@@ -139,16 +154,20 @@ public record VarkaErrorContext(
    *   identity: VarkaFusedProjection_1a2b3c4d.java [date_add(c0, s0)] (Varka_Project_Stage3)
    *   shape hash: 1a2b3c4d
    *   options: misdescribeAdd=true
+   *   families: calendar (spark.sql.codegen.varka.family.calendar.enabled)
    *   batch: 3 rows, nulls per input [1]
    *   cause: java.lang.NoSuchMethodError: ...
    * </pre>
    */
   public String render() {
-    var sb = new StringBuilder("Varka context:");
+    var sb = new StringBuilder(HEAD);
     sb.append("\n  kind: ").append(kind);
     sb.append("\n  identity: ").append(identity);
     sb.append("\n  shape hash: ").append(shapeHash == null ? "none" : shapeHash);
     sb.append("\n  options: ").append(options.isEmpty() ? "the defaults" : options);
+    if (!families.isEmpty()) {
+      sb.append("\n  families: ").append(VarkaFamily.render(families));
+    }
     if (batch != null) {
       sb.append("\n  batch: ").append(batch.rows()).append(" rows");
       if (!batch.nullCounts().isEmpty()) {
@@ -157,8 +176,12 @@ public record VarkaErrorContext(
     }
     if (cause != null) {
       // A cause's toString runs its getMessage, which a Throwable may override, and may be as
-      // long as an IR dump.
-      sb.append("\n  cause: ").append(bounded(safely(cause::toString)));
+      // long as an IR dump. A Varka site's own internal error is rendered by its site's text, so
+      // the condition's framing and the request to report it are said once, by the outer error.
+      sb.append("\n  cause: ").append(bounded(safely(() -> {
+        String site = VarkaErrors.siteText(cause);
+        return site == null ? cause.toString() : cause.getClass().getName() + ": " + site;
+      })));
     }
     return sb.toString();
   }

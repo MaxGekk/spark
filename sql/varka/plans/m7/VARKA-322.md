@@ -154,7 +154,7 @@ adapter.
 ### 3.3 322c: the other fourteen
 
 On 3.2, smallest first, the shared helpers ported with their first user. Their designs are
-written in a section 10 of this plan when 322b's pair is in.
+written in 9 with each part's outcome, as 322b's were.
 
 ### 3.4 What is deliberately unchanged
 
@@ -740,3 +740,297 @@ at the fixed head on an idle laptop and on a runner, every row within a few perc
 head alternated on one machine, and the wide-kernel half of prediction 3 therefore stays
 unmeasured as a pair. A section-subset path that would let a base run only the sections it can
 finish is the alternative `VARKA-255.md` 9.3 describes; it was not built.
+
+**322b: the counterpart, implemented, its pair pending** (16 October 2026, on master
+`7cc402b8f34`). `VarkaSqlBenchmarkBase`, in `sql/core/src/test/java/.../execution/benchmark/`,
+extends `VarkaBenchmarkBase` with what `SqlBasedBenchmark` gives a Scala benchmark:
+
+* **`spark()`**, the default session with the trait's settings (`local[1]`, one shuffle
+  partition, broadcast threshold 1, no UI, a 3g result limit), made by an overridable
+  `getSparkSession()` on first use; `afterAll` stops it only if it was made. A Scala benchmark
+  object starts that session when it is initialised, and the size ladders stop it at once to build
+  their own Arrow sessions; the port never starts it.
+* **`withConf(SparkSession, Map<String, String>, Runnable)`**, the trait's `withSQLConf` on a
+  session the caller names, since these benchmarks hold two. A key's earlier state is read with
+  `RuntimeConfig.contains` (Scala's `private[sql]`, which this package is inside), not `get`, which
+  answers a registered key's default when nothing set it, so a restore through it would leave the
+  key set to its default instead of unset. Each key set is put back, in reverse order, even when
+  the body throws or a later key is refused; `set` refuses a static key, and a Spark core key while
+  `spark.sql.legacy.setCommandRejectsSparkCoreConfs` is on, where `withSQLConf` takes the latter.
+* **`noop(Dataset)`**, and **`note(String)`**, a line printed and written to the results file
+  outside a table: five of the fifteen classes carry a private copy of it (the three size
+  ladders, `VarkaRangeFilterBenchmark` and `VarkaSchemaWidthBenchmark`).
+
+**Two departures from 3.2.** `note` is an addition, for the five copies. And the wrapper's
+`addTimerCase` is not added: it belongs in catalyst's `VarkaBenchmark`, which no 322b class needs,
+so it comes with its first user, `VarkaColdPathBenchmark`, in 322c. An overridable `suffix` needs
+no adapter: `BenchmarkBase.suffix` is a public method a Java subclass overrides.
+
+**The port.** `VarkaSizeLadderParallelBenchmark` is Java under its name and package, on the new
+base, its `.scala` deleted: 115 lines of Scala to 126 of Java after the review. The timed bodies
+are the Scala's, `noop(session.sql(query))`, and the dry run comes from `runCases`, which the
+Scala form lacked.
+`VarkaSizeLadder`'s members are `private[benchmark]`, which scalac gives no static forwarder, so
+the port reaches them through `VarkaSizeLadder$.MODULE$` until 322c ports the helper.
+
+**The ids are vacuous here, the names are the proof.** The class claims no case ids, and
+`dev/varka_bench_ids.sh` runs only catalyst classes, so there is no id list to compare. The names
+were compared as 322a-2 compared them: core's `Benchmark` and `BenchmarkBase` instrumented,
+uncommitted, with its three `println`s, and a fourth line, `Benchmark.run` returning at once under
+`-Dvarka.bench.dryRun=true`, since the Scala form has no dry run and would otherwise time every
+case. The Scala form ran at `7cc402b8f34` before its deletion and the Java form after, both through
+`sql/Test/runMain` pinned to cores 12 to 23. The two outputs are identical, 37 lines: the section, 9
+benchmarks (each 2,000,000 values an iteration, 5 iterations, 2 s warm-up, 2 s minimum), 18 cases,
+and the 9 rung notes, each with vanilla's largest method (2,416 to 17,132 bytes), Varka fusing every
+entry, 12 cores and 12 cached partitions. Against the committed runner file,
+`VarkaSizeLadderParallelBenchmark-jdk25-runner-7763-results.txt`, the section title, benchmark
+names, case names and rung notes match, the method byte counts included, except the core and
+partition counts, 4 there: the label carries the machine's core count, and both sides of a pair run
+on one machine. The instrumentation was reverted before the commit.
+
+**`withConf`, proved without a user.** No 322b class calls it, so a throwaway subclass, not
+committed, ran it once on the default session, which is also the only run `getSparkSession()`
+had (it started the trait's `local[1]` session): `spark.sql.codegen.maxFields`, unset (default 100),
+and `spark.sql.codegen.hugeMethodLimit`, set to 7000, read 1000 and 9000 inside the body; after it,
+`maxFields` was unset again rather than set to 100 and `hugeMethodLimit` read 7000; the same after a
+body that threw, the exception propagated; and with the static `spark.sql.cache.serializer` between
+the two keys, the set threw `CANNOT_MODIFY_STATIC_CONFIG`, the body did not run, `maxFields`, set
+ahead of it, was unset, and `hugeMethodLimit`, after it, untouched. Its committed users,
+`VarkaSchemaWidthBenchmark` and `VarkaSizeLadderTuningBenchmark`, come in 322c.
+
+**What differs in the timed work**: nothing a query of two million rows would show. The case is a
+Java `IntConsumer` where the Scala's was a `Function1` boxing its iteration, `noop` a static call
+where the Scala built the trait's implicit wrapper each call, and the JVM never started and stopped
+the default `local[1]` context before building the two `local[*]` sessions.
+
+**The review's fixes** (`/code-review high` on the branch; a first run reviewed another diff and
+was repeated). Eight findings, seven fixed, one declined. (1) The Scala form's `spark.stop()` also
+stopped a session another class had left running, which a failed class does under Spark's
+`Benchmarks` runner; without it the two `local[*]` sessions would join that context and keep its
+master, one core, silently. The base gains `stopLeftoverSessions()`, which stops and clears the
+active and default sessions, and the port calls it first. (2) The baseline session leaked if the
+Varka session failed to build, as in the Scala form; each session is now stopped by a `finally` of
+its own. (3) `spark()` made after a benchmark's own session would get that session back from
+`getOrCreate` and write the defaults into a measured arm, which the eager Scala trait could not
+do; it is refused. (4) `withConf`'s refusal of core keys, documented (above). (5) The class's dry
+run caches and plans to print its notes, not "about the time a JVM takes to start"; its Javadoc
+says so. (6) The default session's name is `getClass().getName()`, which an anonymous subclass
+does not make null. (7) `note` reads `output()` once. Declined: making `VarkaSizeLadder`'s members
+public so that Java gets static forwarders, since that file is 322c's to port. After the fixes the
+dry-run comparison was repeated, the 37 lines again identical, and the throwaway check again
+passed, with two cases more: `stopLeftoverSessions()` stopped the default session and its
+context, and `spark()` after another session threw `requirement failed: spark() is called after
+another session was made`.
+
+**Pending: the pair**, on a GitHub-hosted runner (the laptop is busy), dispatched by the owner once
+the pull request is open: `gh workflow run benchmark.yml -R MaxGekk/spark --ref <fork branch> -f
+pr=<n> -f pair=true -f rounds=5 -f class=VarkaSizeLadderParallelBenchmark`, the base left blank, so
+the merge base with `vecbricks/varka` master, where the class is the Scala object. No laptop
+results file and no band are committed for the class, so the pair reads the 10% gate by both the
+median and the best, and the pair runner removes each round's file as it does for an uncommitted
+class. **Prediction, registered before the run: no row slower by 10% by both**, and every row
+within the runner's spread, since each timed body is a Spark query whose planning and two million
+rows dwarf what the harness changed.
+
+**322c-1: the size ladders and the first `withConf` user, implemented, their pairs pending** (16
+October 2026, stacked on 322b at `00235aad37c`). Three classes are Java under their names and
+package, on 322b's base, their `.scala` files deleted: `VarkaSizeLadderBenchmark`,
+`VarkaSizeLadderTuningBenchmark` and `VarkaSchemaWidthBenchmark`, 564 lines of Scala to 724 of Java
+with the helper below (28% more). That leaves eleven of 322c's fourteen. Not smallest first, as 3.3
+has it: the shared helper goes with its first users, the two size ladders whose file holds it and
+the parallel ladder that 322b left on `VarkaSizeLadder$.MODULE$`, and the schema-width benchmark, at
+184 lines, is the first class whose code `withConf` serves, which 322b proved without a committed
+user.
+
+* **`VarkaSizeLadder` is a Java class of static helpers**, ported with its first user, since the
+  Scala object lived in `VarkaSizeLadderBenchmark.scala`: `NUM_ROWS`, `RUNGS` (a `List.of`),
+  `entry`, `cacheDates` and `quiesce` each with an overload for the Scala's default argument,
+  `varkaFused`, and one addition, `query(n)`, the rung's `SELECT`, which the three ladders each
+  built. `VarkaSizeLadderParallelBenchmark` drops 322b's `VarkaSizeLadder$.MODULE$`. The five
+  Scala classes still using it import the Java statics as they imported the object's members;
+  only `VarkaColdStartBenchmark` and `VarkaColdPathBenchmark` change, their `rungs` converted from
+  the Java list and `numRows` renamed. `quiesce` declares the `InterruptedException` its sleep
+  throws, which Scala callers ignore as before.
+* **The first committed `withConf`** is `VarkaSchemaWidthBenchmark`'s first phase: the
+  `maxFields=1000` arm, timed and in its note, was a set and an unset in a `try`, which is what
+  `withConf` does. Its timed body is the same work for that arm; for the other two arms the Scala
+  unset an unset key every iteration and `withConf` with no settings touches nothing.
+* **Where `withConf` does not fit, the Scala's form stays**: `VarkaSizeLadderTuningBenchmark`'s
+  arms and the schema-width second phase's Varka switch are put in place at the start of every
+  timed iteration and left for the next arm to clear. Scoping them would add a restore to every
+  timed iteration, so `use` and `varkaOn` keep doing what the Scala did, and their Javadoc says
+  why.
+* **`suffix`** is overridden as 3.2 said: the tuning benchmark reads `DontCompileHugeMethods`
+  from HotSpot once, when the instance is made, before Spark's `main` names the results file.
+
+**The proof: the dry run's names, as 322b's.** Core's `Benchmark` and `BenchmarkBase`
+instrumented, uncommitted, with 322b's four lines and a fifth printing the results file's name
+with its suffix, and the four size-ladder and schema-width classes run through `sql/Test/runMain`
+with `-Dvarka.bench.dryRun=true`, pinned to cores 9 to 11: the Scala forms at `00235aad37c`
+before their deletion (with the parallel ladder in Java on the Scala helper), the Java forms
+after. The two outputs are identical, 142 lines: file names, 5 sections, 29 benchmarks with their
+settings, 70 cases, the 27 rung notes with vanilla's method sizes (2,416 to 17,132 bytes) and
+the schema-width benchmark's 7 lines on how each arm's plan read the cache. Every setup check
+ran on both sides: each rung's `varkaFused` and its fused-all-entries `require`, and the tuning
+benchmark's check that each arm executed as its setting promises. Against the committed laptop
+files, section titles, benchmark names, case names and notes match in order, the byte counts
+included: `VarkaSizeLadderBenchmark` (37 entries), `VarkaSizeLadderTuningBenchmark` (46) and
+`VarkaSchemaWidthBenchmark` (18). The tuning class run again under `-XX:-DontCompileHugeMethods`
+named its file `VarkaSizeLadderTuningBenchmark-dontcompilehugemethods-off`, titled its section
+`(DontCompileHugeMethods=false)`, and matched the committed `-dontcompilehugemethods-off` file's
+46 entries. The parallel ladder's section reads 3 cores, the pinned run's; the core count is in
+its label by design (322b, above). The instrumentation was reverted before the commit.
+
+**What differs in the timed work**, beyond 322b's list (an `IntConsumer` for a boxing
+`Function1`, a static `noop`): the tuning arms' `use` makes the Scala's calls, unsetting the two
+arm keys and setting the arm's, through `List.forEach` and `Map.forEach`; the schema-width first
+phase as above. Every timed body is a query over one or two million rows.
+
+**Pending: the pairs**, on GitHub-hosted runners (the laptop is busy), once the pull request is
+open: `gh workflow run benchmark.yml -R MaxGekk/spark --ref <fork branch> -f pr=<n> -f pair=true
+-f rounds=5 -f class=VarkaSizeLadderBenchmark,VarkaSizeLadderTuningBenchmark,VarkaSchemaWidthBenchmark`,
+the base left blank, so the merge base with `vecbricks/varka` master, where the three are Scala
+objects. All three commit a band file, which the pair reads. **Prediction, registered before the
+run: no row slower by 10% by both the median and the best**, every timed body being a Spark query
+whose planning and rows dwarf what the harness changed; the tuning class's per-operator arms past
+the cliff, interpreted code, may spread widest.
+
+**The review's fixes** (`/code-review high` on the commit). Nine findings, five fixed, four
+declined. (1) The tuning benchmark's check chose each arm's expected execution by matching its
+display name, so a new or renamed arm fell through to the `hugeMethodLimit` rule; the expectation
+is now a field of the arm. (2) Javadoc that justified the code by "the Scala form", which the
+commit deletes, states its reason instead. (3) `VarkaSizeLadder`'s Javadoc gave a Scala-only reason
+for being a separate class; it now says Scala and Java benchmarks share it. (4) 3.3's promise of a
+section 10 now points at 9, where 322b's and this part's designs are. (5) Why this part is not
+smallest first, above. Declined: folding the one-core and parallel ladders' session setup into one
+helper (the two classes were separate in Scala too, and a port keeps its structure); a shared
+`fresh()` and a public `require` in the bases, 322b's and 322a's files, for a later part; and a
+Scala-facing `RUNGS` accessor for the two Scala callers, which go when they are ported. After the
+fixes the tuning dry run was repeated, uninstrumented: its checks passed and its nine rung notes
+are again identical to the Scala form's.
+
+**What remains of 322c**: `addTimerCase` in catalyst's `VarkaBenchmark` with its first user,
+`VarkaColdPathBenchmark`, and that family's helpers (`VarkaColdPath`, `VarkaColdPathProbe`);
+`VarkaColdStartBenchmark`, `VarkaWarmupDirectiveBenchmark` with its child JVM's `main`, and
+`VarkaArrowSessions`, a Scala object the Java ports call through its static forwarders; and
+`VarkaRangeFilterBenchmark`, `VarkaFilterNarrowingBenchmark`, `VarkaEvaluatorOverheadBenchmark`,
+`VarkaInExpressionBenchmark`, `VarkaFilterBenchmark`, `VarkaNarrowingBenchmark`,
+`VarkaLongLaneThroughputBenchmark` and `VarkaThroughputBenchmark`.
+
+**322c-2: the other eleven, implemented, their pairs pending** (16 October 2026, on 322c-1 at
+`c78f58a649a`). Every class 322c-1 left is Java under its name and package on 322b's base, its
+`.scala` deleted, in four commits meant as up to four pull requests of two to four classes each,
+after a commit of shared helpers: 3,086 lines of Scala to 3,364 of Java (9% more). Of 322c's
+Scala files only `VarkaArrowSessions` is left, a Scala object the Java ports call through its
+static forwarders, as the task said.
+
+* **Shared helpers first**, a commit of their own in 322a's and 322b's files, as 322c-1's review
+  proposed: `VarkaBenchmarkBase.require` and `requirementFailed` are public, so `VarkaSizeLadder`
+  drops its private copy and `VarkaColdPath`, the probe and the directive benchmark's child call
+  the same check; `VarkaSqlBenchmarkBase.clearSessions` is the clear after a benchmark makes a
+  session, which every port repeated twice or three times and `stopLeftoverSessions` now ends
+  with; `VarkaSchemaWidthBenchmark`'s `fresh()` and the size ladders' inline clears use it.
+* **`addTimerCase`**, with its first user, `VarkaColdPathBenchmark`: a case that times what it
+  brackets with a `VarkaBenchmark.Timer`, a Java wrapper of Spark's, whose body (`TimerCase`) may
+  throw the `InterruptedException` that `quiesce` and the warm-up's `awaitIdle` declare - the
+  adapter restores the interrupt and fails the case. The builder gains `outputPerIteration`,
+  which the first-run tables of both cold benchmarks set.
+* **`withEmitOptions(options, Runnable)`** on `VarkaSqlBenchmarkBase`, with its first users, the
+  cold-start and range-filter benchmarks: `VarkaArrowSessions.withEmitOptions` for a body with no
+  result, so a Java case does not return `BoxedUnit`.
+* **Sessions**: five classes built their sessions with a private copy of
+  `VarkaArrowSessions.createSession`, the same settings key for key; the filter-narrowing, IN,
+  filter, narrowing and throughput benchmarks call the shared one. The long-lane benchmark keeps
+  its own builder, which also turns `TIME` on.
+* **The directive benchmark's child** is a nested `VarkaWarmupDirectiveBenchmark.Child` with a
+  static `main`: the benchmark class inherits Spark's instance `main`, which a static one beside
+  it cannot hide, and the parent launches `Child.class.getName()`.
+* **Dry runs**: every port goes through `runCases`, so all eleven take `-Dvarka.bench.dryRun`,
+  which none of the Scala forms had. Where a check after a table needs a timed case to have run,
+  the dry run skips it and says so: the cold-path benchmark's check that the warmed kernel
+  served the steady state (its verdict line reads "not taken, a dry run times nothing", and the
+  compile section compiles one source of its own for the method-size note), and the evaluator
+  benchmark's count of batches the kernel served; both also skip it in a run filtered with
+  `-Dvarka.bench.only`. The directive benchmark has no table, and its dry run starts no child.
+
+**The proof: the names, as 322c-1's, with the cases run where a check needs them.** Core's
+`Benchmark` and `BenchmarkBase` instrumented, uncommitted, with the five lines 322c-1 used and a
+sixth: under `-Dvarka.proof.once=true`, `Benchmark.run` runs each case its minimum number of
+iterations, untimed and with no warm-up, instead of timing it, so that a check after a table
+finds the work it checks. Both forms ran through `sql/Test/runMain` pinned to cores 9 to 11, the
+Scala at `c78f58a649a` before the deletions and the Java after:
+
+* the cold-path benchmark at full size with the cases run (218 lines with the next three: 2
+  sections, 36 benchmarks with their settings, 108 cases, 18 notes);
+* the cold-start benchmark twice, its smoke run with the cases run and its full dry run (4
+  sections, 17 benchmarks, 130 cases, 29 notes); the directive benchmark's smoke run, one child
+  JVM per mode; the probe for five seconds;
+* the evaluator benchmark with the cases run, the other seven as dry runs (447 lines with the 8
+  file names: 95 sections, 100 benchmarks, 238 cases, the range filter's 6 rung notes).
+
+The outputs are identical but for two things. Spark's `Benchmark` prints a zero warm-up and
+minimum time from Java as `0 days`, `Duration.ZERO` converted, where Scala's `0.seconds` reads `0
+seconds`; the two are equal, and the results file prints neither. And a warm-up's verdict is
+`COMPILED` on one side and `RELEASED`, the warm-up giving up after its 60 seconds, on the other in
+four lines of the cold-start runs, in both directions: on three loaded cores the kernel's C2
+compile competes with the queries' own, and the full cold-path run read `RELEASED` at every rung on
+both sides. The timings inside the notes are masked in the comparison; the notes' text, the
+method sizes (2,426 to 17,242 bytes) and the range filter's rows passed are identical. Every setup
+check ran on both sides, and every check after a table on the runs with the cases run. Against the
+committed laptop files, section titles, benchmark names, case names and notes match in order for
+all ten classes with a table, the cold-start file's 180 entries with its verdict lists masked
+(the dry run takes none). The instrumentation was reverted before the commits; uninstrumented,
+the Java cold-path smoke dry run and the evaluator dry run pass.
+
+**What differs in the timed work**: none of the timed bodies changed what they run. The cases
+are `IntConsumer`s and `TimerCase`s for Scala functions, each a query of a hundred thousand to
+twenty million rows, or for the evaluator benchmark a task over 2,000 to 20,000 batches; the
+timer wrapper allocates one small object per iteration, outside the timed span.
+
+**Pending: the pairs**, on GitHub-hosted runners, once each pull request is open, the base left
+blank (the merge base, where the classes are Scala):
+
+* the cold-path benchmark: `-f class=VarkaColdPathBenchmark`; the probe has no table;
+* the cold-start benchmark: `-f class=VarkaColdStartBenchmark`; the directive benchmark has no
+  table, only the children's verdict lines, so there is nothing for a pair to compare, and it
+  rests on its smoke run's lines;
+* `-f class=VarkaRangeFilterBenchmark,VarkaFilterNarrowingBenchmark,VarkaEvaluatorOverheadBenchmark,VarkaInExpressionBenchmark`;
+* `-f class=VarkaFilterBenchmark,VarkaNarrowingBenchmark,VarkaLongLaneThroughputBenchmark,VarkaThroughputBenchmark`.
+
+Six of the ten commit a band file. **Prediction, registered before the run: no row slower by 10%
+by both the median and the best**, every timed body being the Scala one's; the first-run tables
+of the two cold benchmarks, one event per iteration with no warm-up, may spread widest.
+
+**The review's fixes** (`/code-review high` on the six commits). Eight findings, five fixed, three
+declined. (1) `stopLeftoverSessions` stopped only a registered session, where the Scala forms'
+`spark.stop()` stopped any context left running, since their default session had joined it; a
+port that failed after clearing its sessions would leave a context the next class joined,
+keeping its master. It now also stops `SparkContext.getActive`. (2) The evaluator benchmark's
+check after a table failed for the cases `-Dvarka.bench.only` dropped; it is skipped in a filtered
+run too. (3) The cold-path benchmark took a missing verdict and missing method sizes for a dry
+run; a filtered run that drops the kernel cases now says so instead of claiming a dry run. (4)
+The directive benchmark's dry run started its six child JVMs, minutes of work against the dry
+run's promise of a JVM's start; it starts none. (5) The two cold benchmarks' copies of the
+interrupt-safe wait are `VarkaSizeLadder.quiesceOrFail`, and the cold-path checks pair each plan
+with its node class in a record rather than in two lists read by index. `VarkaSizeLadder`'s
+Javadoc, which gave a reason that held while Scala benchmarks called it, now names the mains that
+are no benchmark. Declined: the evaluator check's `require` for Scala's `assert`, kept, since an
+`assert` vanishes under `-da`; one shared Varka-node predicate for the four classes that spell
+the same four classes, which their Scala forms each spelled too; and the per-class metric lookup
+`count`, seven lines in two classes. After the fixes `sql/Test/compile` and checkstyle pass, and
+the cold-path smoke dry run, the directive dry run and the evaluator benchmark filtered to its
+filter case run clean.
+
+**The split for review** (16 October 2026, after 322b's merge as #866). The fourteen ports go
+out as five pull requests. This first one carries the size ladders above and every change to
+the two bases that the other eleven need, so that the four after it touch disjoint files and
+merge in any order: catalyst's `VarkaBenchmark` gains `addTimerCase` and `outputPerIteration`,
+`VarkaBenchmarkBase`'s `require` and `requirementFailed` become public for the static helper
+classes, and `VarkaSqlBenchmarkBase` gains `clearSessions`, `withEmitOptions` and a
+`stopLeftoverSessions` that also stops a context left running with no session registered, each
+as 322c-2's review left it. Their first users are the cold-path, cold-start and range-filter
+ports. The four after it: the cold path (`VarkaColdPath`, `VarkaColdPathBenchmark`,
+`VarkaColdPathProbe`); the cold start and the warm-up directive; four filter and evaluator
+benchmarks (`VarkaEvaluatorOverheadBenchmark`, `VarkaFilterNarrowingBenchmark`,
+`VarkaInExpressionBenchmark`, `VarkaRangeFilterBenchmark`); and the filter, narrowing and two
+throughput benchmarks, with 322c-2's record and the row.

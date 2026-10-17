@@ -848,6 +848,50 @@ hook and passed by accident, one because its `intercept[Throwable]` caught whate
 * **"Ran" is a kernel method entered**, not any covered instruction: a test that builds a kernel
   and calls the wrong overload covers only the constructor.
 
+## How well the tests test: the emitter's branches, and PIT through ScalaTest test by test
+
+VARKA-265. `dev/varka_gen_coverage.sh` also writes `sql/varka/coverage/emitter.md`: the branches
+of the emitter's and the compiler's own classes under every Varka suite, from the execution file
+the generated-code report reads. `dev/varka_pit.sh` mutates emitter classes (default `Slots` and
+`Analysis`) with PIT and gives each mutant one of three verdicts - killed by a behavioural test,
+killed only by `VarkaEmittedBytesSuite`, survived - with each survivor answered in
+`sql/varka/mutation/notes.tsv`. What it took:
+
+- **PIT reaches ScalaTest with no third-party plugin.** PIT 1.30.0 (`org.pitest`, Maven Central)
+  ships JUnit 4 support only; its `TestPluginFactory` SPI takes a plugin of about 220 lines
+  (`dev/varka_pit/VarkaPitScalaTest.java`) that makes each test of a suite one unit, run alone by
+  `run(Some(name), args)` on a fresh instance. Give its configuration a priority under 10, or
+  PIT's JUnit finder is asked first. ScalaTest's `Stopper.default()` and `Filter.default()` are
+  named with a Java keyword, so Java reaches them by reflection.
+- **Empty the shape cache before every test.** A kernel cached by an earlier test was emitted by
+  the code before the mutant was swapped in, and hides the mutant from the next test.
+- **Spark's sbt exports catalyst as a jar**, so PIT finds no mutable code ("No mutations found",
+  `codePaths=[]` in its verbose log) until the jar on the minions' classpath gives way to
+  `sql/catalyst/target/scala-2.13/classes` and `--mutableCodePaths` names it. `pitest-entry` also
+  needs Commons Text in the launching JVM, which Spark's test classpath already has.
+- **PIT makes one work unit of a class**, which one minion runs alone however many threads are
+  given; `--mutationUnitSize` splits it.
+- **Run own-JVM suites inline** (`-Dvarka.ownJvm=true`): a child JVM loads the unmutated classes.
+  Leave out what answers to the JIT or the machine; `VarkaWidthAuditSuite` fails under PIT's
+  agent, and the IR fuzzer's C2 test (482 s of an 869 s coverage phase) runs with no draws.
+- **The bytes oracle kills nearly everything a behavioural suite misses**, equivalent mutants
+  included - in the first probe, 45 of the 48 one suite left - so its kill is read as a survivor,
+  and its run gets only the first run's leftovers (`dev/varka_pit/VarkaPitOnly.java`, PIT's
+  interceptor SPI); its pinned-shapes test took 48 s under load. The same holds for every test
+  tagged `PinsDefaults` (a grouping, an op count pinned at the defaults), which the plugin moves
+  from the first run to the second by its tag.
+- **Never answer a mutant from a narrow run.** Against one suite, removing javac's
+  `requireNonNull` on `pureOf`'s pattern switch survived and looked equivalent; against all 40
+  suites it is killed, since a null selector takes the switch's default arm and every pure word is
+  lost.
+- **A survivor costs the suites; a kill costs a test.** In the two-method sample a killed mutant
+  ran one test (the median) and the one survivor ran 405, so a full run's length is its survivors'
+  - the bytes-only ones included, since the first run does not kill them either.
+- **The free jar's bitwise mutators are `MATH`'s** (AND and OR exchanged, XOR to AND, the shifts
+  exchanged), one of the defaults; no other bitwise set ships free.
+- **Do not edit a shell script while it runs**: bash reads it as it goes, and the edited tail ran
+  as a syntax error after the PIT runs it had launched had finished.
+
 ## A solver proves an arithmetic lowering in integers, and its verdicts are checked like output
 
 VARKA-240 proves the int lane's multiply-high division exact with SMT solvers
@@ -999,6 +1043,42 @@ output. What building them taught:
 To size 4 nothing failed and nothing declined, at either lane. Under the planted
 `misdescribeWordLiveness`, beside a stranger and literal to column fail trees the plain series
 passes, which is what shows the variants reach something the series alone does not.
+
+## What the emitter reached, and steering a fuzzer toward the rest
+
+VARKA-280. `VarkaEmitMechanism` lists 39 things the emitter decides about a whole shape - the
+grouping, what a computation is shared with, the validity words, the guards, the division form,
+the size loop's reactions, the declines - and the emitter notes each where it emits it into the
+emission's `Analysis.reached`, handed to the `VarkaEmitTrace` when the emission ends. A suite
+attaches a `VarkaEmitReach` to its trace and prints what it reached and never did; with
+`VARKA_REACH_DUMP=<dir>` it writes the table under `sql/varka/coverage/reach/`. What it taught:
+
+- **Note a mechanism where its bytes are emitted, not where a slot is planned.** `Slots.plan`
+  plans slots for bodies no build emits (a dense body of a kernel that nulls valid inputs) and,
+  without group-local frames, for other groups' nodes; a note there reports what was never built.
+- **Report an emission's last pass, not the union of its builds.** The size loop rebuilds; a
+  union over its passes reports a one-group class halved on bytes as one group and several, and
+  pairs the last grouping with what earlier builds threw away. Each pass starts the grouping and
+  body mechanisms afresh; only the loop's reactions and declines span passes.
+- **A decline is an emission too.** The size loop hands the set over in a `catch` of
+  `VarkaEmitDeclined` as well as on return, so a run whose shapes decline still says what they
+  reached first; any other failure is not an emission and is not noted.
+- **The suites' fixed seeds miss the size loop's corners.** The IR fuzzer's two lanes miss ten
+  mechanisms: seven that only its wide compositions reach (stages, rollbacks, both grouping
+  switches dropped, a class-wide decline) and three that nothing in it reaches (the plan's decline,
+  the class-file cap's refusal, the constant pool's decline). The coverage table misses every size
+  reaction and every decline: its widest shape is one kernel that fits. Count a report's misses
+  from its last column, not by searching for "never": a mechanism's sentence can hold the word.
+- **Steering does not pay at the gate's budget; at the nightly's it only gains.** Over 16
+  seed-lanes at 300 emissions an arm, keeping a draw that reached a new set of mechanisms (QPG's
+  rule without the trees) or a rare mechanism and mutating it - an option changed, a variant -
+  did no better: the better of the two arms reached more than the plain draws in 7 and fewer in
+  4, and both reached the common mechanisms at about twice the emission. At 3000 the steered arms
+  reached fewer in none and more in 15 of 32 seed-lanes, among them the call-site rollback and
+  both grouping switches dropped, which plain draws never reach: the growing variants, applied
+  again to a case kept for growing, make it wide enough. Random draws reach a new mechanism set
+  at most steps (185 of 300), so set novelty keeps nearly everything; rarity keeps less and did no
+  better at 300.
 
 ## Every guard at its bound: a verdict from the emitter's own rule
 
@@ -1291,25 +1371,20 @@ projection and in a filter, at one batch per partition and at one and three rows
 
 *Added on 13 October 2026 from milestone 7's halfway review (`m7/PLAN.md` 9.2 and 9.5).* A plan
 predicts what its own checks will cost before it builds them, and the predictions scored so far
-in milestone 7 mostly came in low. One line per scored cost prediction, so the next plan can state
+in milestone 7 mostly came in low. One entry per scored cost prediction, so the next plan can state
 its estimate at the ratio observed rather than at its hope; a ratio above 1 means it cost more than
-predicted. Add the line when the prediction is scored, whichever way it went.
+predicted. Add the entry when the prediction is scored, whichever way it went.
 
-| task | predicted | measured | ratio | note |
-| --- | --- | --- | ---: | --- |
-| VARKA-138a (6.1 #2) | per-row coverage check at most 25% slower | +38% by minimums, +27% after the review dropped a redundant dense run | 1.5, then 1.1 | the fixed poisoned batch alone added about 27% of the work |
-| VARKA-138b (6.1 #3) | the coverage differential at most twice as long | +47% by minimums, +55% after the review's fixes | 0.5 | 122 short tests, about 0.2 to 0.5 s each |
-| VARKA-274a (6.1 #2) | under 3 s per case for all histories | 3,623 ms median at the int lane, 1,356 ms at the long lane | 1.2 | long lane faster than predicted |
-| VARKA-274a (6.1 #8) | the tier witness adds under 5% | +19% (int) and +25% (long) per case; +6% on the whole test | 3.8 to 5.0 | one code-list read per call, about 3.5 ms, is most of it |
-| VARKA-271a (6.1 #6) | the Varka arm under 70 minutes in one JVM | 33 minutes beside the cache-only arm | 0.5 | pessimistic |
-| VARKA-315 (6.1 #4) | the end-to-end suite under 30 s | 4.5 s of tests, 38 s with sbt's start | 0.15 | eight short queries over one cached view |
-| VARKA-243 (6.1 #3) | a new sql/core suite under 10 s | 18 s, its tests under 4 s | about 2 | the estimate counted the tests and not the suite's own sessions and cached table |
-| VARKA-327 (6.1 #2) | the warmed Spark differential's 2,000 compositions under an hour | 13 minutes | 0.26 | predicted from a seed that released 6.8% of its warm-ups at 10 s each; the nightly's released 0.9% |
-| VARKA-281 (6.1 #3) | the calendar sweep suite under 20 s | 1.5 s for its eight tests over 20 million days each | 0.08 | the estimate priced single-threaded `LocalDate` decodes and then doubled; a parallel stream over the test JVM's cores and the JIT's inlining of the decode left little of either |
-| VARKA-244 (5.1 #1) | a new sql/core suite under 40 s, its tests under 10 s | 25 s, its tests 8.4 s | 0.6 | predicted at VARKA-243's ratio of 2, which a suite of the same shape repeated; a later run at load average 46 took 72 s |
-| VARKA-317 (6.1 #1) | the coverage differential's added test time at most 10 s | 0.3 s: the planted test 126 ms, the extended one 182 ms | 0.03 | the estimate priced a kernel compile per query and doubled it by VARKA-243's ratio; where the 0.3 s went was not split |
-| VARKA-378 (6.1 #2) | the NULL-mode guard step about 12 minutes, two widths of 200 kernels at a trial's 1.4 s each, at a ratio of 1.2 | 10.7 to 15.4 minutes over three runs on three pinned cores at a load of 21 to 46 | 0.9 to 1.3 | the time moves with the load: a kernel still in the cycle costs the full 10 s deadline, and a busy machine leaves more of them in it |
-| VARKA-298 (6.1 #4) | nested trees on half the Spark-level compositions add 10 to 45% to a run | none measurable above the noise: a 300-composition run at the default seed, five times with and five without, alternating, 70 to 306 s with and 85 to 432 s without, 70 s against 85 s by minimums, at a load of 20 to 58 | none | the run's time is the machine's load, not the extra outputs; an earlier single pair under load 48 read 148 s against 85 s |
+Read the table with `dev/varka_calibration.py`, which prints it as Markdown: task (with the
+prediction it scores), predicted, measured, ratio, note, in the order the entries were added. Each
+entry is a file of its own under `sql/varka/skills/calibration/`, named after its task cell
+(`VARKA-274a (6.1 #8)` is `VARKA-274a-6.1-8.md`), and the table is printed rather than committed
+(VARKA-384): while it was a table here every task appended a row after the same last line, so each
+merge conflicted with every open branch that had added one. To add an entry, paste the row you
+would have added to `dev/varka_calibration.py --add-row '| VARKA-<n> (6.1 #k) | ... |'`, in single
+quotes since rows hold backticks, which writes the file dated today (`--added YYYY-MM-DD` for
+another day), or write the file by hand in the layout `dev/varka_calibration.py --help` shows;
+`dev/varka_calibration.py --check`, which the pre-commit hook runs, rejects a malformed one.
 
 What the table says so far: a check that adds a run per batch or a read per call costs more than
 the plan's arithmetic, because the arithmetic counts the kernel's work and not the harness's

@@ -30,6 +30,10 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  * counter as well, and named in {@link #corrections} with the method, what the plan predicted
  * for it and what it measured, so the audit can list every shape the plan got wrong. A reaction
  * to a later build is the size loop as the last resort, which the counters alone record.
+ *
+ * <p>Each emission's end is noted too (VARKA-280): the mechanisms it reached
+ * ({@link VarkaEmitMechanism}), the counters' among them, handed to {@link #onEmission} where a
+ * suite set one, so a suite can report what its shapes reached and what they never did.
  */
 final class VarkaEmitTrace {
   int builds;
@@ -69,5 +73,64 @@ final class VarkaEmitTrace {
   /** The grouping switches dropped, the fallback {@code emitCountingBuilds} reports. */
   int fallbacks() {
     return exactFallbacks + predictFallbacks;
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // The mechanisms each emission reached (VARKA-280).
+  // ---------------------------------------------------------------------------------------------
+
+  /**
+   * One emission as a suite reads it: its outputs, the mechanisms it reached
+   * ({@link VarkaEmitMechanism}), how many loop-method groups its last grouping had, and whether
+   * it declined. The set is a copy the record owns.
+   */
+  record Emission(java.util.List<VarkaVectorIR> outputs,
+      java.util.Set<VarkaEmitMechanism> reached, int groups, boolean declined) {
+    Emission {
+      outputs = java.util.List.copyOf(outputs);
+      reached = java.util.Collections.unmodifiableSet(
+          reached.isEmpty() ? java.util.EnumSet.noneOf(VarkaEmitMechanism.class)
+              : java.util.EnumSet.copyOf(reached));
+    }
+  }
+
+  /**
+   * Called with each emission's record where a suite asks for them, null otherwise - and null in
+   * every emission the engine makes, so the record is never built there.
+   */
+  @javax.annotation.Nullable java.util.function.Consumer<Emission> onEmission;
+
+  /**
+   * The counters a reaction moves, in the order of {@link #COUNTED}: the one place that pairs a
+   * counter with the mechanism it counts, so a counter added above is paired here.
+   */
+  int[] counters() {
+    return new int[] {byteRegroups, siteSplits, siteRollbacks, stageSplits, exactFallbacks,
+        predictFallbacks, plannedStages, plannedDeclines, corrections.size()};
+  }
+
+  private static final VarkaEmitMechanism[] COUNTED = {
+      VarkaEmitMechanism.BYTE_REGROUP, VarkaEmitMechanism.CALL_SITE_SPLIT,
+      VarkaEmitMechanism.CALL_SITE_ROLLBACK, VarkaEmitMechanism.STAGE_SPLIT,
+      VarkaEmitMechanism.EXACT_GROUPING_DROPPED, VarkaEmitMechanism.PREDICTION_DROPPED,
+      VarkaEmitMechanism.PLANNED_STAGES, VarkaEmitMechanism.DECLINE_PLANNED,
+      VarkaEmitMechanism.PLAN_CORRECTED};
+
+  /**
+   * One emission ended: {@code reached} gains every mechanism whose counter moved since
+   * {@code before} (what {@link #counters} read when the emission began), and the emission is
+   * handed to {@link #onEmission} where a suite set one.
+   */
+  void noteEmission(java.util.List<VarkaVectorIR> outputs,
+      java.util.Set<VarkaEmitMechanism> reached, int[] before, int groups, boolean declined) {
+    int[] after = counters();
+    for (int i = 0; i < COUNTED.length; i++) {
+      if (after[i] > before[i]) {
+        reached.add(COUNTED[i]);
+      }
+    }
+    if (onEmission != null) {
+      onEmission.accept(new Emission(outputs, reached, groups, declined));
+    }
   }
 }

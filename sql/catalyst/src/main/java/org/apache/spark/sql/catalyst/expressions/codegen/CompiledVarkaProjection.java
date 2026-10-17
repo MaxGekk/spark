@@ -19,6 +19,8 @@ package org.apache.spark.sql.catalyst.expressions.codegen;
 import java.util.List;
 import java.util.Optional;
 
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.types.DataType;
@@ -30,7 +32,9 @@ import org.apache.spark.sql.types.DataType;
  * runtime {@code scalarArgs} values (slot index = position in {@code literals}, or in
  * {@code longLiterals} for a kernel on the 64-bit lane), and each output's Spark type, which is
  * what tells a {@code datediff} day-count column ({@code IntegerType}) apart from a date column
- * when the output vectors are allocated.
+ * when the output vectors are allocated. {@code families} are the switchable expression families
+ * whose nodes the accepted entries hold, in declaration order (VARKA-318): the switches a failure
+ * of this kernel names, which no kernel byte depends on.
  *
  * <p>Internal to Spark SQL; public for {@code sql/core}.
  */
@@ -41,7 +45,8 @@ public record CompiledVarkaProjection(
     List<Integer> literals,
     List<VarkaInputBound> inputBounds,
     List<VarkaDerivedInput> derivedInputs,
-    List<Long> longLiterals) {
+    List<Long> longLiterals,
+    List<VarkaFamily> families) {
 
   public CompiledVarkaProjection {
     outputs = List.copyOf(outputs);
@@ -51,11 +56,12 @@ public record CompiledVarkaProjection(
     inputBounds = List.copyOf(inputBounds);
     derivedInputs = List.copyOf(derivedInputs);
     longLiterals = List.copyOf(longLiterals);
+    families = List.copyOf(families);
     // A kernel is single-lane - every output root agrees, which the emitter enforces - so it reads
     // exactly one of the two literal tables. Both non-empty would mean an entry of the other lane
     // left its literals behind when it was demoted, which the per-entry rollback rules out.
     if (!literals.isEmpty() && !longLiterals.isEmpty()) {
-      throw new IllegalArgumentException(
+      throw VarkaErrors.illegalArgument(
           "a kernel is single-lane, so at most one of its literal tables is populated");
     }
   }

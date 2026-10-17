@@ -28,7 +28,7 @@ import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeReference,
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.{ForwardedOutput,
   FusedOutput, KernelOutput, ResidualOutput}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaEmitOptions, VarkaErrors}
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLMetrics}
 import org.apache.spark.sql.execution.varka.VarkaKernelRunner
 import org.apache.spark.sql.internal.SQLConf
@@ -127,7 +127,7 @@ case class VarkaColumnarToRowExec(
   // (task-21 review: the node used to re-run the same pure compile per consumer).
   @transient private lazy val classification =
     VarkaExpressionCompiler.compilePartial(projectList, child.output,
-      VarkaColumnarToRowExec.emitOptions(sessionEmit))
+      VarkaColumnarToRowExec.emitOptions(sessionEmit), sessionEmit.familiesOff)
 
   // verbose EXPLAIN answers "why didn't my projection fuse?" - every entry's
   // classification, and for a residual entry the reason the compiler declined it.
@@ -349,7 +349,7 @@ private[sql] class VarkaColumnarToRowEvaluatorFactory(
             case (_: ResidualOutput, named) => named
             // scalac cannot check a match over a Java sealed interface for exhaustiveness, so a
             // new spec type is refused here by name rather than met as a MatchError.
-            case (other, _) => throw new IllegalStateException(s"unknown output spec $other")
+            case (other, _) => throw VarkaErrors.illegalState(s"unknown output spec $other")
           }
           Some(UnsafeProjection.create(merged, childOutput ++ fusedAttrs))
         }

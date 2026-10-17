@@ -148,7 +148,7 @@ public sealed interface VarkaVectorIR
         // The child's type name, not `canonical(child)`: that rendering recurses without a memo
         // over what is a DAG in effect, so a shared subtree is re-rendered once per edge and a
         // deep tree would cost exponential time to build a message nobody needs it in.
-        throw new IllegalArgumentException(what + " takes int lanes, not " + child.laneType()
+        throw VarkaErrors.illegalArgument(what + " takes int lanes, not " + child.laneType()
             + ", from a " + child.getClass().getSimpleName());
       }
     }
@@ -164,7 +164,7 @@ public sealed interface VarkaVectorIR
     LaneType lane = first.laneType();
     for (VarkaVectorIR other : rest) {
       if (other.laneType() != lane) {
-        throw new IllegalArgumentException(
+        throw VarkaErrors.illegalArgument(
             what + " mixes lanes: " + lane + " and " + other.laneType());
       }
     }
@@ -316,7 +316,7 @@ public sealed interface VarkaVectorIR
   record GuardedRange(VarkaVectorIR child, long lo, long hi) implements VarkaVectorIR {
     public GuardedRange {
       if (lo > hi) {
-        throw new IllegalArgumentException("an empty range guards nothing: [" + lo + ", " + hi
+        throw VarkaErrors.illegalArgument("an empty range guards nothing: [" + lo + ", " + hi
             + "]");
       }
     }
@@ -343,7 +343,7 @@ public sealed interface VarkaVectorIR
   record NarrowLane(VarkaVectorIR child) implements VarkaVectorIR {
     public NarrowLane {
       if (child.laneType() != LaneType.LONG) {
-        throw new IllegalArgumentException("narrowLane takes a LONG child, not "
+        throw VarkaErrors.illegalArgument("narrowLane takes a LONG child, not "
             + child.laneType() + ", from a " + child.getClass().getSimpleName());
       }
     }
@@ -525,19 +525,19 @@ public sealed interface VarkaVectorIR
 
     public ConstDivide {
       if (divisor == 0) {
-        throw new IllegalArgumentException("a constant division by zero has no lowering");
+        throw VarkaErrors.illegalArgument("a constant division by zero has no lowering");
       }
       // The lowering that divides by the magnitude cannot form this one: negating
       // Long.MIN_VALUE yields Long.MIN_VALUE, so the division would be by a negative
       // magnitude and the quotient would be neither Java's nor anything else's.
       if (divisor == Long.MIN_VALUE) {
-        throw new IllegalArgumentException(
+        throw VarkaErrors.illegalArgument(
             "a constant division by Long.MIN_VALUE has no representable magnitude");
       }
       // A divisor wider than the dividend's lane quotients every input to zero, which is a
       // mistake in the tree rather than a shape worth emitting.
       if (child.laneType() == LaneType.INT && (int) divisor != divisor) {
-        throw new IllegalArgumentException(
+        throw VarkaErrors.illegalArgument(
             "a constant division at the int lane needs an int divisor, not " + divisor);
       }
       // The bound is the caller's undertaking and this is where it becomes unforgeable: a node
@@ -548,7 +548,7 @@ public sealed interface VarkaVectorIR
       // what is missing beside it.
       if (dividendBound == UNSTATED) {
         if (child.laneType() != LaneType.INT) {
-          throw new IllegalArgumentException("a constant division at the long lane must state "
+          throw VarkaErrors.illegalArgument("a constant division at the long lane must state "
               + "the dividend bound its caller proved: / " + divisor + " over a "
               + child.getClass().getSimpleName());
         }
@@ -558,7 +558,7 @@ public sealed interface VarkaVectorIR
       // nothing anywhere, and an int-lane value is under INT_DIVIDEND_BOUND whatever is
       // claimed, so the int lane needs no ceiling of its own.
       if (dividendBound < 1 || dividendBound > EXACT_DIVIDEND_BOUND) {
-        throw new IllegalArgumentException("a constant division's dividend bound must lie in "
+        throw VarkaErrors.illegalArgument("a constant division's dividend bound must lie in "
             + "[1, " + EXACT_DIVIDEND_BOUND + "], not " + dividendBound);
       }
     }
@@ -607,17 +607,17 @@ public sealed interface VarkaVectorIR
 
     public BoundedDivide {
       if (child.laneType() != LaneType.INT) {
-        throw new IllegalArgumentException("boundedDivide takes an INT child, not "
+        throw VarkaErrors.illegalArgument("boundedDivide takes an INT child, not "
             + child.laneType() + ", from a " + child.getClass().getSimpleName());
       }
       if (divisor < 2 || bound < 2) {
-        throw new IllegalArgumentException(
+        throw VarkaErrors.illegalArgument(
             "a bounded division needs a divisor and a bound of at least 2, not / " + divisor
                 + " over [0, " + bound + ")");
       }
       int[] pair = magic(divisor, bound);
       if (pair[0] != multiplier || pair[1] != shift) {
-        throw new IllegalArgumentException("the pair (" + multiplier + ", " + shift
+        throw VarkaErrors.illegalArgument("the pair (" + multiplier + ", " + shift
             + ") is not the exact single-multiply form of / " + divisor + " over [0, " + bound
             + "), which is (" + pair[0] + ", " + pair[1] + ")");
       }
@@ -642,7 +642,7 @@ public sealed interface VarkaVectorIR
           return new int[] {(int) m, k};
         }
       }
-      throw new IllegalArgumentException(
+      throw VarkaErrors.illegalArgument(
           "no exact single-multiply form for / " + divisor + " over [0, " + bound + ")");
     }
   }
@@ -715,16 +715,16 @@ public sealed interface VarkaVectorIR
       requireInt("inRanges", child);
       bounds = List.copyOf(bounds);
       if (bounds.isEmpty() || bounds.size() % 2 != 0) {
-        throw new IllegalArgumentException(
+        throw VarkaErrors.illegalArgument(
             "a range set needs pairs of bounds, got " + bounds.size());
       }
       for (int i = 0; i < bounds.size(); i += 2) {
         if (bounds.get(i) > bounds.get(i + 1)) {
-          throw new IllegalArgumentException("an empty range in a range set: [" + bounds.get(i)
+          throw VarkaErrors.illegalArgument("an empty range in a range set: [" + bounds.get(i)
               + ", " + bounds.get(i + 1) + "]");
         }
         if (i > 0 && (long) bounds.get(i - 1) + 1 >= bounds.get(i)) {
-          throw new IllegalArgumentException("a range set's ranges must be sorted, disjoint and"
+          throw VarkaErrors.illegalArgument("a range set's ranges must be sorted, disjoint and"
               + " not adjacent: [.., " + bounds.get(i - 1) + "] then [" + bounds.get(i) + ", ..]");
         }
       }
@@ -1226,7 +1226,7 @@ public sealed interface VarkaVectorIR
   static VarkaVectorIR withChildren(VarkaVectorIR node, VarkaVectorIR... children) {
     int expected = childrenOf(node).length;
     if (children.length != expected) {
-      throw new IllegalArgumentException(node.getClass().getSimpleName() + " has " + expected
+      throw VarkaErrors.illegalArgument(node.getClass().getSimpleName() + " has " + expected
           + " children, not " + children.length);
     }
     return switch (node) {
@@ -1275,7 +1275,7 @@ public sealed interface VarkaVectorIR
     if (node instanceof Cond cond) {
       return cond;
     }
-    throw new IllegalArgumentException(
+    throw VarkaErrors.illegalArgument(
         "a condition goes here, not a " + node.getClass().getSimpleName());
   }
 }

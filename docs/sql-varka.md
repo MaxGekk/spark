@@ -281,142 +281,144 @@ VARKA_COVERAGE_REGEN=true build/sbt 'catalyst/testOnly *VarkaCoverageSuite'
 <!-- BEGIN generated coverage table -->
 The *128-bit lanes* column is `sql/varka/width_audit.json`'s census on AMD Ryzen AI 9 HX PRO 370 w/ Radeon 890M at a forced 128-bit species: `vector` means C2 refused no Vector API call in the row's kernel there; `per-lane` names the constructions it had no lowering for, which then run as Java loops over the lanes (VARKA-153). It is this x86 JVM's table below its own width: the pool's aarch64 runner, whose native species is 128 bits, refuses nothing (`VARKA-153.md` 6).
 
+The *Switches* column names the family switches that keep the row off Varka, each `<name>` the setting `spark.sql.codegen.varka.family.<name>.enabled` (Configuration): the families whose nodes the row's kernel holds, as the compiler records them for a failure's `families:` line. A row with none compiles to a bare column read, which no switch declines.
+
 #### Day arithmetic
 
-| Expression | Domain | Notes | 128-bit lanes |
-|---|---|---|---|
-| `date_add(d, 3)` |  |  | vector |
-| `date_add(d, i)` |  | a column offset with no bound: the day sum wraps as Spark's own `+` does, and only a calendar node reading such a sum needs the range guard | vector |
-| `date_sub(d, 5)` |  |  | vector |
-| `d + CAST(i AS INTERVAL DAY)` | `i BETWEEN -106751991 AND 106751991` | the day-interval spelling of a column offset; past the bound the cast itself throws in every mode, so the batch declines and the row engine raises | vector |
-| `datediff(d2, d)` |  |  | vector |
-| `unix_date(d)` |  |  | vector |
-| `date_from_unix_date(unix_date(d))` |  |  | vector |
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `date_add(d, 3)` | `calendar` |  |  | vector |
+| `date_add(d, i)` | `calendar` |  | a column offset with no bound: the day sum wraps as Spark's own `+` does, and only a calendar node reading such a sum needs the range guard | vector |
+| `date_sub(d, 5)` | `calendar` |  |  | vector |
+| `d + CAST(i AS INTERVAL DAY)` | `calendar` | `i BETWEEN -106751991 AND 106751991` | the day-interval spelling of a column offset; past the bound the cast itself throws in every mode, so the batch declines and the row engine raises | vector |
+| `datediff(d2, d)` | `calendar` |  |  | vector |
+| `unix_date(d)` | `calendar` |  |  | vector |
+| `date_from_unix_date(unix_date(d))` | `calendar` |  |  | vector |
 
 #### Calendar fields
 
-| Expression | Domain | Notes | 128-bit lanes |
-|---|---|---|---|
-| `year(d)` |  |  | vector |
-| `month(d)` |  |  | vector |
-| `day(d)` |  |  | vector |
-| `quarter(d)` |  |  | vector |
-| `dayofyear(d)` |  |  | vector |
-| `dayofweek(d)` |  |  | vector |
-| `weekday(d)` |  |  | vector |
-| `extract(DAYOFWEEK_ISO FROM d)` |  |  | vector |
-| `weekofyear(d)` |  |  | vector |
-| `extract(YEAROFWEEK FROM d)` |  |  | vector |
-| `last_day(d)` |  |  | vector |
-| `next_day(d, 'MONDAY')` |  | the day name must be a literal | vector |
-| `make_date(2021, i, 1)` | `i BETWEEN 1 AND 12` | the month under ANSI: an invalid date declines the batch and the row engine raises; the legacy form answers null and declines nothing | vector |
-| `trunc(d, 'YEAR')` |  |  | vector |
-| `trunc(d, 'MONTH')` |  |  | vector |
-| `trunc(d, 'QUARTER')` |  |  | vector |
-| `trunc(d, 'WEEK')` |  |  | vector |
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `year(d)` | `calendar` |  |  | vector |
+| `month(d)` | `calendar` |  |  | vector |
+| `day(d)` | `calendar` |  |  | vector |
+| `quarter(d)` | `calendar` |  |  | vector |
+| `dayofyear(d)` | `calendar` |  |  | vector |
+| `dayofweek(d)` | `calendar` |  |  | vector |
+| `weekday(d)` | `calendar` |  |  | vector |
+| `extract(DAYOFWEEK_ISO FROM d)` | `calendar` |  |  | vector |
+| `weekofyear(d)` | `calendar` |  |  | vector |
+| `extract(YEAROFWEEK FROM d)` | `calendar` |  |  | vector |
+| `last_day(d)` | `calendar` |  |  | vector |
+| `next_day(d, 'MONDAY')` | `calendar` |  | the day name must be a literal | vector |
+| `make_date(2021, i, 1)` | `calendar` | `i BETWEEN 1 AND 12` | the month under ANSI: an invalid date declines the batch and the row engine raises; the legacy form answers null and declines nothing | vector |
+| `trunc(d, 'YEAR')` | `calendar` |  |  | vector |
+| `trunc(d, 'MONTH')` | `calendar` |  |  | vector |
+| `trunc(d, 'QUARTER')` | `calendar` |  |  | vector |
+| `trunc(d, 'WEEK')` | `calendar` |  |  | vector |
 
 #### Months and year-month intervals
 
-| Expression | Domain | Notes | 128-bit lanes |
-|---|---|---|---|
-| `add_months(d, 3)` |  |  | vector |
-| `add_months(d, i)` | `i BETWEEN -24576 AND 24564` | a column month count, inside the range the month arithmetic's magic divide is exact over | vector |
-| `d + INTERVAL 3 MONTH` |  |  | vector |
-| `d + ym` | `ym BETWEEN INTERVAL '-2048-0' YEAR TO MONTH AND INTERVAL '2047-0' YEAR TO MONTH` | the interval's month count, under the same range | vector |
-| `d - ym` | `ym BETWEEN INTERVAL '-2047-0' YEAR TO MONTH AND INTERVAL '2048-0' YEAR TO MONTH` | the negated count under the range, so the bounds change sides | vector |
-| `make_ym_interval(year(d), month(d))` |  | the operands must be bounded - over a bare int column the checked multiply inside it keeps its overflow test and declines | vector |
-| `make_ym_interval(year(d), month(d)) * 2` |  | a checked multiply, so bounded operands again: `ym * 2` over a stored interval column declines | vector |
-| `abs(ym)` | `ym > INTERVAL '-178956970-8' YEAR TO MONTH` | interval arithmetic is exact in every mode: the one count whose negation overflows declines | vector |
-| `ym - ymm` | `CAST(ym AS BIGINT) - CAST(ymm AS BIGINT) BETWEEN -2147483648 AND 2147483647` | exact in every mode: a difference outside the month count's int declines | vector |
-| `CAST(ymy AS INTERVAL MONTH)` |  |  | vector |
-| `extract(YEAR FROM ym)` |  | a division by twelve over a month count nothing bounds, so the calendar's range-narrowed magic cannot serve it; a multiply-high through 64-bit lanes does | vector |
-| `extract(YEAR FROM ym) - 1` | `extract(YEAR FROM ym) > -2147483648` | the quotient feeding further int arithmetic, checked under ANSI; the check cannot fire, since the quotient is within +/-178956970 | vector |
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `add_months(d, 3)` | `calendar` |  |  | vector |
+| `add_months(d, i)` | `calendar` | `i BETWEEN -24576 AND 24564` | a column month count, inside the range the month arithmetic's magic divide is exact over | vector |
+| `d + INTERVAL 3 MONTH` | `calendar` |  |  | vector |
+| `d + ym` | `calendar` | `ym BETWEEN INTERVAL '-2048-0' YEAR TO MONTH AND INTERVAL '2047-0' YEAR TO MONTH` | the interval's month count, under the same range | vector |
+| `d - ym` | `calendar`, `interval` | `ym BETWEEN INTERVAL '-2047-0' YEAR TO MONTH AND INTERVAL '2048-0' YEAR TO MONTH` | the negated count under the range, so the bounds change sides | vector |
+| `make_ym_interval(year(d), month(d))` | `calendar`, `interval` |  | the operands must be bounded - over a bare int column the checked multiply inside it keeps its overflow test and declines | vector |
+| `make_ym_interval(year(d), month(d)) * 2` | `calendar`, `interval` |  | a checked multiply, so bounded operands again: `ym * 2` over a stored interval column declines | vector |
+| `abs(ym)` | `interval` | `ym > INTERVAL '-178956970-8' YEAR TO MONTH` | interval arithmetic is exact in every mode: the one count whose negation overflows declines | vector |
+| `ym - ymm` | `interval` | `CAST(ym AS BIGINT) - CAST(ymm AS BIGINT) BETWEEN -2147483648 AND 2147483647` | exact in every mode: a difference outside the month count's int declines | vector |
+| `CAST(ymy AS INTERVAL MONTH)` | none |  |  | vector |
+| `extract(YEAR FROM ym)` | `interval` |  | a division by twelve over a month count nothing bounds, so the calendar's range-narrowed magic cannot serve it; a multiply-high through 64-bit lanes does | vector |
+| `extract(YEAR FROM ym) - 1` | `interval`, `intArithmetic` | `extract(YEAR FROM ym) > -2147483648` | the quotient feeding further int arithmetic, checked under ANSI; the check cannot fire, since the quotient is within +/-178956970 | vector |
 
 #### Integer arithmetic
 
-| Expression | Domain | Notes | 128-bit lanes |
-|---|---|---|---|
-| `i + 1` | `i < 2147483647` | checked under ANSI; the legacy mode wraps as Spark does and declines nothing | vector |
-| `i - 1` | `i > -2147483648` | checked under ANSI | vector |
-| `year(d) * 2` |  | a multiply is checked, and only bounded operands take the check off: `i * 2` over a bare int column declines | vector |
-| `-i` | `i > -2147483648` | checked under ANSI | vector |
-| `year(d) + i` | `i <= 2147483647 - year(d)` | checked under ANSI; the lower bound is out of reach, since a year is at least 1 | vector |
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `i + 1` | `intArithmetic` | `i < 2147483647` | checked under ANSI; the legacy mode wraps as Spark does and declines nothing | vector |
+| `i - 1` | `intArithmetic` | `i > -2147483648` | checked under ANSI | vector |
+| `year(d) * 2` | `calendar`, `intArithmetic` |  | a multiply is checked, and only bounded operands take the check off: `i * 2` over a bare int column declines | vector |
+| `-i` | `intArithmetic` | `i > -2147483648` | checked under ANSI | vector |
+| `year(d) + i` | `calendar`, `intArithmetic` | `i <= 2147483647 - year(d)` | checked under ANSI; the lower bound is out of reach, since a year is at least 1 | vector |
 
 #### Choice and nulls
 
-| Expression | Domain | Notes | 128-bit lanes |
-|---|---|---|---|
-| `if(d < d2, d, d2)` |  |  | vector |
-| `CASE WHEN d < d2 THEN d ELSE d2 END` |  |  | vector |
-| `coalesce(d, d2)` |  |  | vector |
-| `greatest(d, d2)` |  |  | vector |
-| `least(d, d2)` |  |  | vector |
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `if(d < d2, d, d2)` | `predicate`, `condition` |  |  | vector |
+| `CASE WHEN d < d2 THEN d ELSE d2 END` | `predicate`, `condition` |  |  | vector |
+| `coalesce(d, d2)` | `condition` |  |  | vector |
+| `greatest(d, d2)` | `intArithmetic` |  |  | vector |
+| `least(d, d2)` | `intArithmetic` |  |  | vector |
 
 #### Predicates
 
-| Predicate | Domain | Notes | 128-bit lanes |
-|---|---|---|---|
-| `d IS NULL` |  |  | vector |
-| `d IS NOT NULL` |  |  | vector |
-| `d = d2` |  |  | vector |
-| `d < d2` |  |  | vector |
-| `d <= d2` |  |  | vector |
-| `d > d2` |  |  | vector |
-| `d >= d2` |  |  | vector |
-| `year(d) = 2021` |  |  | vector |
-| `NOT (d = d2)` |  |  | vector |
-| `d IN (DATE '2021-01-01', DATE '2021-06-01')` |  | up to 16 literals | vector |
-| `year(d) = 2021 AND i > 0` |  | every conjunct of an AND fuses or the predicate is not in this table; the int column compares in the kernel rather than leaving a residual row filter (VARKA-122) | vector |
-| `i > 0` |  | a bare int column compares in the kernel (VARKA-122) | vector |
-| `i IS NOT NULL` |  | the same column's validity word, which the optimizer infers beside `i > 0` | vector |
-| `i = 5` |  |  | vector |
-| `month(d) > i` |  | an int column against a fused int field | vector |
-| `year(d) = 2021 OR month(d) = 3` |  |  | vector |
-| `d IN (11 to 16 date literals)` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | vector |
+| Predicate | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `d IS NULL` | `predicate` |  |  | vector |
+| `d IS NOT NULL` | `predicate` |  |  | vector |
+| `d = d2` | `predicate` |  |  | vector |
+| `d < d2` | `predicate` |  |  | vector |
+| `d <= d2` | `predicate` |  |  | vector |
+| `d > d2` | `predicate` |  |  | vector |
+| `d >= d2` | `predicate` |  |  | vector |
+| `year(d) = 2021` | `calendar`, `predicate` |  |  | vector |
+| `NOT (d = d2)` | `predicate` |  |  | vector |
+| `d IN (DATE '2021-01-01', DATE '2021-06-01')` | `predicate` |  | up to 16 literals | vector |
+| `year(d) = 2021 AND i > 0` | `calendar`, `predicate` |  | every conjunct of an AND fuses or the predicate is not in this table; the int column compares in the kernel rather than leaving a residual row filter (VARKA-122) | vector |
+| `i > 0` | `predicate` |  | a bare int column compares in the kernel (VARKA-122) | vector |
+| `i IS NOT NULL` | `predicate` |  | the same column's validity word, which the optimizer infers beside `i > 0` | vector |
+| `i = 5` | `predicate` |  |  | vector |
+| `month(d) > i` | `calendar`, `predicate` |  | an int column against a fused int field | vector |
+| `year(d) = 2021 OR month(d) = 3` | `calendar`, `predicate` |  |  | vector |
+| `d IN (11 to 16 date literals)` | `predicate` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | vector |
 
 #### Long-lane predicates
 
-| Predicate | Domain | Notes | 128-bit lanes |
-|---|---|---|---|
-| `l > l2` |  |  | per-lane: compare to mask, mask cast |
-| `l = l2` |  |  | per-lane: compare to mask, mask cast |
-| `l >= 5000000000` |  | a bigint literal takes a slot in the long lane's own table | per-lane: compare to mask, mask cast |
-| `l IS NULL` |  |  | per-lane: mask broadcast, mask logic, mask cast |
-| `l IS NOT NULL` |  |  | per-lane: mask cast, mask broadcast |
-| `t < t2` |  |  | per-lane: compare to mask, mask cast |
-| `t = TIME'12:34:56.789'` |  | a TIME literal of another precision reaches the column through the widening cast, which is the identity on nanoseconds | per-lane: compare to mask, mask cast |
-| `dt > dt2` |  |  | per-lane: compare to mask, mask cast |
-| `dt < INTERVAL '0' SECOND` |  |  | per-lane: compare to mask, mask cast |
-| `dt IS NOT NULL` |  |  | per-lane: mask cast, mask broadcast |
+| Predicate | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `l > l2` | `predicate` |  |  | per-lane: compare to mask, mask cast |
+| `l = l2` | `predicate` |  |  | per-lane: compare to mask, mask cast |
+| `l >= 5000000000` | `predicate` |  | a bigint literal takes a slot in the long lane's own table | per-lane: compare to mask, mask cast |
+| `l IS NULL` | `predicate` |  |  | per-lane: mask broadcast, mask logic, mask cast |
+| `l IS NOT NULL` | `predicate` |  |  | per-lane: mask cast, mask broadcast |
+| `t < t2` | `predicate` |  |  | per-lane: compare to mask, mask cast |
+| `t = TIME'12:34:56.789'` | `predicate` |  | a TIME literal of another precision reaches the column through the widening cast, which is the identity on nanoseconds | per-lane: compare to mask, mask cast |
+| `dt > dt2` | `predicate` |  |  | per-lane: compare to mask, mask cast |
+| `dt < INTERVAL '0' SECOND` | `predicate` |  |  | per-lane: compare to mask, mask cast |
+| `dt IS NOT NULL` | `predicate` |  |  | per-lane: mask cast, mask broadcast |
 
 #### Long-lane choice
 
-| Expression | Domain | Notes | 128-bit lanes |
-|---|---|---|---|
-| `greatest(l, l2)` |  |  | per-lane: blend, mask broadcast |
-| `least(l, 5000000000)` |  |  | per-lane: blend, mask broadcast |
-| `CASE WHEN l < l2 THEN l ELSE l2 END` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
-| `if(l IS NULL, l2, l)` |  |  | per-lane: mask broadcast, mask logic, blend |
-| `greatest(t, t2)` |  |  | per-lane: blend, mask broadcast |
-| `CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `greatest(l, l2)` | `intArithmetic` |  |  | per-lane: blend, mask broadcast |
+| `least(l, 5000000000)` | `intArithmetic` |  |  | per-lane: blend, mask broadcast |
+| `CASE WHEN l < l2 THEN l ELSE l2 END` | `predicate`, `condition` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
+| `if(l IS NULL, l2, l)` | `predicate`, `condition` |  |  | per-lane: mask broadcast, mask logic, blend |
+| `greatest(t, t2)` | `intArithmetic` |  |  | per-lane: blend, mask broadcast |
+| `CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END` | `predicate`, `condition` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
 
 #### Time arithmetic
 
-| Expression | Domain | Notes | 128-bit lanes |
-|---|---|---|---|
-| `t - t2` |  | a day-time interval, the nanosecond difference divided by a thousand | vector |
-| `time_diff('HOUR', t, t2)` |  | the unit is a literal; a column of units would need a kernel per distinct value | vector |
-| `time_diff('microsecond', t2, t)` |  | units are read case-insensitively, as DateTimeUtils reads them | vector |
-| `time_trunc('MINUTE', t)` |  |  | vector |
-| `time_trunc('MILLISECOND', t2)` |  |  | vector |
-| `hour(t)` |  | an int computed in the 64-bit lane and narrowed at the kernel's store, the one place a lane changes width until VARKA-28; so the extract fuses as an output and declines under another expression | vector |
-| `minute(t2)` |  |  | vector |
-| `second(t)` |  |  | vector |
-| `time_to_millis(t)` |  |  | vector |
-| `time_to_micros(t2)` |  |  | vector |
-| `time_from_millis(time_to_millis(t2))` | `time_to_millis(t2) BETWEEN 0 AND 86399999` | the count is guarded to the day's worth of its unit, where the multiply is exact; a count outside declines the batch and the row engine raises Spark's error, as for t + dt - so the count here is one that is inside the day by construction | per-lane: compare to mask, mask logic, mask broadcast, mask test |
-| `time_from_micros(time_to_micros(t))` | `time_to_micros(t) BETWEEN 0 AND 86399999999` | the same guard over the microsecond count | per-lane: compare to mask, mask logic, mask broadcast, mask test |
-| `t + INTERVAL '0 00:00:00' DAY TO SECOND` | `time_to_micros(t) + 0 BETWEEN 0 AND 86399999999` | a zero interval on purpose: this fixture reaches both ends of the day, so any other constant crosses midnight on some row, where Spark raises an error rather than a value. The sum is still guarded to the day - the domain adds the interval's microseconds, 0 here, to the time's; the crossing case, and a column interval, are VarkaTimeArithmeticSuite's | per-lane: compare to mask, mask logic, mask broadcast, mask test |
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `t - t2` | `time` |  | a day-time interval, the nanosecond difference divided by a thousand | vector |
+| `time_diff('HOUR', t, t2)` | `time` |  | the unit is a literal; a column of units would need a kernel per distinct value | vector |
+| `time_diff('microsecond', t2, t)` | `time` |  | units are read case-insensitively, as DateTimeUtils reads them | vector |
+| `time_trunc('MINUTE', t)` | `time` |  |  | vector |
+| `time_trunc('MILLISECOND', t2)` | `time` |  |  | vector |
+| `hour(t)` | `time` |  | an int computed in the 64-bit lane and narrowed at the kernel's store, the one place a lane changes width until VARKA-28; so the extract fuses as an output and declines under another expression | vector |
+| `minute(t2)` | `time` |  |  | vector |
+| `second(t)` | `time` |  |  | vector |
+| `time_to_millis(t)` | `time` |  |  | vector |
+| `time_to_micros(t2)` | `time` |  |  | vector |
+| `time_from_millis(time_to_millis(t2))` | `time` | `time_to_millis(t2) BETWEEN 0 AND 86399999` | the count is guarded to the day's worth of its unit, where the multiply is exact; a count outside declines the batch and the row engine raises Spark's error, as for t + dt - so the count here is one that is inside the day by construction | per-lane: compare to mask, mask logic, mask broadcast, mask test |
+| `time_from_micros(time_to_micros(t))` | `time` | `time_to_micros(t) BETWEEN 0 AND 86399999999` | the same guard over the microsecond count | per-lane: compare to mask, mask logic, mask broadcast, mask test |
+| `t + INTERVAL '0 00:00:00' DAY TO SECOND` | `time` | `time_to_micros(t) + 0 BETWEEN 0 AND 86399999999` | a zero interval on purpose: this fixture reaches both ends of the day, so any other constant crosses midnight on some row, where Spark raises an error rather than a value. The sum is still guarded to the day - the domain adds the interval's microseconds, 0 here, to the time's; the crossing case, and a column interval, are VarkaTimeArithmeticSuite's | per-lane: compare to mask, mask logic, mask broadcast, mask test |
 
 <!-- END generated coverage table -->
 
@@ -958,8 +960,10 @@ with and without the attributes, which the JVM ignores by specification.
 
 Start from the symptom. Every branch begins with the same step, which also tells you whether
 Varka is involved at all: set `spark.sql.codegen.varka.enabled=false` and run the query again.
-That switches off all of Varka. A switch per expression family is a planned task and is not
-built, so there is nothing narrower to try.
+That switches off all of Varka. When Varka is involved, narrow it to one expression family: set
+the family's switch, `spark.sql.codegen.varka.family.<name>.enabled=false` (Configuration lists
+them and what each covers), and run again. The switch keeps that family's expressions on the
+row engine and the rest of Varka on, so it is also what to leave set while a fault is reported.
 
 ```
 symptom
@@ -989,7 +993,9 @@ symptom
    `VarkaIrFuzzSuite` (`sql/catalyst`), which shrinks every failure it finds. On a planted emitter
    bug it printed `shrunk to lane=int roots=[(isNotNull col:0)] options={misdescribeWordLiveness=true}
    length=1` from a tree of three conjuncts. Hand over the expression, the
-   rows and the `spark.sql.codegen.varka.*` settings you ran with.
+   rows and the `spark.sql.codegen.varka.*` settings you ran with. Until it is fixed, set the
+   switch of the expression's family to false (Configuration): its entries run on the row engine,
+   the verbose `EXPLAIN` names the switch on each, and the rest of Varka stays on.
 
 **A slow query.** A batch Varka cannot run goes to the row engine, so slowness is declined
 batches, an entry that did not fuse, or a slow kernel.
@@ -1038,16 +1044,66 @@ Who reads each thing, and what they do:
 
 | What you see | Reader | What they do |
 | :--- | :--- | :--- |
-| `INTERNAL_ERROR`, `kind: planning` | user, then developer | User: turn Varka off to unblock the query and report the message whole. Developer: the context names the entries and options; reproduce with `dev/varka_emit.sh` on the expression |
-| "failed on this batch" warning | operator | Count them per shape hash in the executor logs. The answers are right (the row engine served the batch), so it is a cost and a bug report, not an outage. Collect the file the warning names |
+| `INTERNAL_ERROR`, `kind: planning` | user, then developer | User: set the switch the message names (the `families:` line), or turn Varka off, to unblock the query, and report the message whole. Developer: the context names the entries and options; reproduce with `dev/varka_emit.sh` on the expression |
+| "failed on this batch" warning | operator | Count them per shape hash in the executor logs. The answers are right (the row engine served the batch), so it is a cost and a bug report, not an outage. Collect the file the warning names; a kernel failing on every batch is worked around by the switch on the `families:` line |
 | the reproduction file | developer | Replay it; the exit status is the verdict. Handle it as data |
 | `numDeclinedBatches[...]`, rows per path | user, operator | A declined batch is slow, not wrong: read the reason, change the data or the query, or turn Varka off for the query |
-| a residual entry in `EXPLAIN` | user | The expression is not fused: rewrite it or accept the row path for that entry |
+| a residual entry in `EXPLAIN` | user | The expression is not fused: rewrite it or accept the row path for that entry. A reason naming `spark.sql.codegen.varka.family.<name>.enabled=false` is a switch the session set |
 | `java.lang.VerifyError` at planning | user, developer | Not yet an `INTERNAL_ERROR` with a context block (open work); the reproduction file is written and replays |
 | a memory violation (sanitizer on, `-Dvarka.sanitizeMemory=true`) | developer | A diagnostic JVM property: the violation fails the task by design and writes a file; replay it |
 
 `VarkaRunbookSuite` runs each branch on a planted fault and asserts the reason counts, the `EXPLAIN`
 lines and the warning text quoted above, so a step that stops being true fails a build.
+
+### When Varka falls back, and when it fails
+
+Varka answers a batch it cannot run on the row engine, and the answer is still right. Each such
+batch has a cause, the tag on the `Fallback` JFR event (`VarkaFallbackEvent`), and each cause has a
+metric on the Varka node:
+
+| Cause | When | What it leaves | What to do |
+| :--- | :--- | :--- | :--- |
+| `non-arrow-batch` | the batch's columns are not Arrow vectors, such as vectorized Parquet's | `numFallbackBatchesNonArrow` | nothing: a property of the source; the Arrow cache serializer is what produces Arrow batches (Limitations) |
+| `range-declined` | a value lies outside the range a lowering is exact over | `numFallbackBatchesDeclined`, `numDeclinedBatches[<reason>]` | nothing, or change the data or query (Troubleshooting B2) |
+| `emission-failure` | the task could not build or load the kernel class | `numEmissionFailures` (tasks), the warning "Failed to emit the Varka fused kernel ...", once per task, a reproduction file | report it with the warning and the file |
+| `kernel-failure` | the kernel threw on the batch | `numFallbackBatchesKernel`, the warning "... failed on this batch", a reproduction file | report it with the warning and the file |
+| `row-path-failure` | the per-row machinery beside the kernel threw | `numFallbackBatchesRowPath`, the warning "The per-row machinery beside the Varka kernel ..." | report it with the warning |
+
+The emitter's designed decline of a shape over its method budget logs "The Varka emitter
+declined ..." once per JVM and is not a failure. Every warning of the last three causes ends with
+the `Varka context:` block: the kind (the cause tag), the kernel's identity (its source file, the
+IR of each output, the operator and stage), the shape hash, the emit options that differ from the
+defaults by name, the families whose nodes the kernel holds, each with its switch (`families:`),
+the batch's rows and nulls per input where a batch was involved, and the original exception. The event's `options` field carries the same options.
+
+**Internal errors.** An invariant Varka checks in the compiler, the IR, the emitters, the
+options, the runner or the exec nodes raises Spark's `INTERNAL_ERROR` (SQLSTATE `XX000`) with the
+check's own text and "This is a bug in Varka, Spark's vectorized code generator. Please report it
+with this message and the full stack trace." Varka adds no error condition of its own. The
+exception is a `SparkIllegalArgumentException`, `SparkIllegalStateException` or
+`SparkUnsupportedOperationException`, the JDK type the check raised before, so code that catches
+`IllegalArgumentException` still does. Outside it: the engine module's own checks and the check
+inside an emitted kernel raise plain JDK exceptions, which the fallback catches answer. Where an internal error surfaces:
+
+* **At planning** it fails the query. The compiler's catch puts the `Varka context:` block
+  around it (`kind: planning`, the entries being compiled, the options), with the check's
+  message on the `cause:` line (Troubleshooting C1). A failure inside one family's lowering also
+  names that family on the `families:` line and ends its sentence with the setting that works
+  around it: "To plan the query with Varka's calendar family on Spark's row engine, set
+  spark.sql.codegen.varka.family.calendar.enabled to false and retry."; an argument check stays an
+  `IllegalArgumentException`, any other becomes an `IllegalStateException`. Raised on the driver it arrives as it is;
+  raised by an evaluator's compile in a task, it arrives inside Spark's "Job aborted" error.
+* **While building or running a kernel** it does not fail the query: it is one of the fallback
+  causes above, and the warning's block names it on the `cause:` line. A kernel that fails on
+  every batch runs every batch on the row engine; the switch of a family on its `families:` line
+  keeps that family's entries off the kernel until the failure is fixed.
+* **Under test**, a fallback over a failure no test declared fails the task with
+  `INTERNAL_ERROR` and the same block (`VarkaColumnarToRowExec.setFailureFallbackExpectedForTesting`).
+
+The one user setting with a range, `spark.sql.codegen.varka.emit.useAVX`, rejects a value out of
+range with `INVALID_CONF_VALUE.REQUIREMENT`, as any Spark setting does. A
+`spark.sql.codegen.varka.classDumpDirectory` that cannot be written is a warning naming the
+setting, and the query runs.
 
 ### Execution integration
 
@@ -1187,7 +1243,22 @@ descriptors (strings), so a missing engine jar degrades to the fallback.
 
 ## Configuration
 
-All Varka configurations are internal:
+All Varka configurations are internal. The `family.<name>.enabled` switches, in their own table
+after the others, are the compiler's expression families (`VarkaFamily`): the families of the
+chain `VarkaNodeCompiler` dispatches every node through, and the predicate family, which lowers
+the comparisons and connectives of a filter and of a conditional's condition. A family that is
+off declines every node it claims, with the reason
+`Varka's <family> family is switched off (<switch>=false)` in the verbose `EXPLAIN`, and the entry
+holding that node runs on the row engine while the rest of the projection or filter still fuses.
+Each node is under exactly one switch, wherever it sits: a comparison inside a `CASE WHEN`
+branch's condition is the predicate family's, so with that switch off the `CASE WHEN` declines
+too, and the `CASE WHEN` itself is the condition family's. A column or literal is never declined
+by a switch, so a `bigint` comparison, or a `TIME(3)` column relabelled to `TIME(6)` for one,
+still fuses with the time family off. A node of one family that another's lowering builds
+directly, such as the negated interval in `d - ym`, asks its own family's switch; helper code two
+families share, such as the overflow decision or the pick fold `greatest` borrows, runs under the
+switch of the node it serves. The date leaves (a date column, a date literal, the identity date
+cast) have no switch. The coverage table's *Switches* column names each row's.
 
 | Config | Default | Description |
 | :--- | :--- | :--- |
@@ -1199,6 +1270,20 @@ All Varka configurations are internal:
 | `spark.sql.codegen.varka.emit.useAVX` | `-1` | The `-XX:UseAVX` level the emitter lowers for where a lowering depends on it (VARKA-121): `3` or above takes a 64-bit division through double lanes, `2` the magic-number form, because the converts do not become instructions below AVX-512; `-1` leaves the emitter's own default, which is deliberately not the host's level so the shape hashes and the committed bytes describe no one machine. The level is part of the shape hash, so a session that sets it emits and caches its own classes. For benchmarks and A/Bs. |
 | `spark.sql.codegen.varka.cache.maxEntries` | `100` | Static (VARKA-18). Capacity of the JVM-wide cache of loaded fused-kernel classes, keyed on the kernel's structural shape; the least recently used class is released on eviction, bounding Metaspace by this size. `0` restores the per-task emit-and-unload lifecycle. |
 | `spark.sql.codegen.varka.warmup.enabled` | `true` | VARKA-212. When true, a newly emitted kernel serves no batch until C2 has compiled it: the shape's batches take the per-row path while a background thread runs the kernel on a copy of the first batch, and every task of the shape switches to the kernel once it runs without allocating. When false, a new kernel serves batches from the first and runs interpreted until enough batches have gone through it. |
+
+The family switches (VARKA-318), generated from `VarkaFamily` by `VarkaCoverageSuite` with the
+coverage table, and regenerated by the same command:
+
+<!-- BEGIN generated family switches -->
+| Config | Default | Covers |
+| :--- | :--- | :--- |
+| `spark.sql.codegen.varka.family.calendar.enabled` | `true` | The calendar family: day arithmetic (date_add, date_sub, datediff, unix_date, date_from_unix_date), the calendar fields (year to weekofyear), make_date, last_day, next_day, trunc, add_months and a date plus a year-month interval. |
+| `spark.sql.codegen.varka.family.interval.enabled` | `true` | The interval family: year-month interval arithmetic, negation and abs, make_ym_interval, the year and month extractions, the multiply by an int and the casts between year-month intervals and ints. |
+| `spark.sql.codegen.varka.family.time.enabled` | `true` | The time family: the TIME functions (hour, minute, second, time_trunc, time_diff, the conversions to and from micros and millis, a time plus a day-time interval) and the casts to TIME and to a day-time interval. |
+| `spark.sql.codegen.varka.family.predicate.enabled` | `true` | The predicate family: the comparisons, IN over dates and year-month intervals, IS NULL and IS NOT NULL, AND, OR and NOT, wherever they sit: a filter's predicates, so that no filter fuses, and the conditions of IF and CASE WHEN. |
+| `spark.sql.codegen.varka.family.condition.enabled` | `true` | The condition family: the conditionals IF, CASE WHEN and coalesce (the comparisons in their conditions are the predicate family's). |
+| `spark.sql.codegen.varka.family.intArithmetic.enabled` | `true` | The int arithmetic family: +, -, * and unary minus over int operands, checked under ANSI, and greatest and least. |
+<!-- END generated family switches -->
 
 The rule is registered on every `SparkSession` but does nothing while the
 config is off, so enabling the config is all that is needed:

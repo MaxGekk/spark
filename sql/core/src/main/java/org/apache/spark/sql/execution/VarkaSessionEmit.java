@@ -18,19 +18,24 @@
 package org.apache.spark.sql.execution;
 
 import java.io.Serializable;
+import java.util.EnumSet;
+import java.util.Set;
 
 import javax.annotation.Nullable;
 
 import scala.Option;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
 import org.apache.spark.sql.internal.SQLConf;
 
 /**
  * The emit settings a session chooses, resolved from its {@code SQLConf} once, when the columnar
  * rule builds an exec node - the node holds them, so a plan executed again after the conf changed
  * still emits what it was planned with - and carried to the factories and evaluators that emit
- * its kernels (VARKA-308). Each setting either overrides the base options or, unset, leaves them:
+ * its kernels (VARKA-308). Each emit setting overrides the base options or, unset, leaves them
+ * (the families switched off are not an emit setting and are passed beside the options instead):
  * a session that says nothing must not undo a variant a suite drives through the test hook, and a
  * session that sets a value, {@code false} included, must get it. The
  * executors cannot read the session's configuration, so the settings travel with the plan, and a
@@ -44,11 +49,18 @@ import org.apache.spark.sql.internal.SQLConf;
  * @param exactRefusalStatus whether a method of several refusal reasons gives each its own mask
  *        ({@code spark.sql.codegen.varka.emit.exactRefusalStatus}, VARKA-304), null to leave the
  *        base options' setting
+ * @param familiesOff the expression families the session has switched off
+ *        ({@code spark.sql.codegen.varka.family.<name>.enabled} set to false, VARKA-318). Not an
+ *        emit option - it changes which entries the compiler admits, never a kernel's bytes - so
+ *        it is not laid over the options; it travels here because the compile at planning and the
+ *        evaluator's compile in a task must decline alike, and every caller of the compiler passes
+ *        it beside {@code VarkaColumnarToRowExec.emitOptions}.
  */
-public record VarkaSessionEmit(int useAVX, @Nullable Boolean exactRefusalStatus)
+public record VarkaSessionEmit(
+    int useAVX, @Nullable Boolean exactRefusalStatus, Set<VarkaFamily> familiesOff)
     implements Serializable {
 
-  private static final long serialVersionUID = 1L;
+  private static final long serialVersionUID = 2L;
 
   /** A session that sets nothing: what a suite that builds an evaluator directly passes. */
   public static final VarkaSessionEmit DEFAULTS =
@@ -57,15 +69,27 @@ public record VarkaSessionEmit(int useAVX, @Nullable Boolean exactRefusalStatus)
   public VarkaSessionEmit {
     // SQLConf checks the same on the conf; a record built another way is held to it too.
     if (useAVX < VarkaEmitOptions.USE_AVX_UNKNOWN) {
-      throw new IllegalArgumentException("useAVX is a level from 0 or -1, got " + useAVX);
+      throw VarkaErrors.illegalArgument("useAVX is a level from 0 or -1, got " + useAVX);
     }
+    familiesOff = Set.copyOf(familiesOff);
+  }
+
+  /** The emit settings alone, with every family on. */
+  public VarkaSessionEmit(int useAVX, @Nullable Boolean exactRefusalStatus) {
+    this(useAVX, exactRefusalStatus, Set.of());
   }
 
   /** The session's settings, read from {@code conf}: the one place they are bound. */
   public static VarkaSessionEmit of(SQLConf conf) {
     Option<Object> exact = conf.varkaEmitExactRefusalStatus();
+    var off = EnumSet.noneOf(VarkaFamily.class);
+    for (VarkaFamily family : VarkaFamily.values()) {
+      if (!conf.varkaFamilyEnabled(family)) {
+        off.add(family);
+      }
+    }
     return new VarkaSessionEmit(conf.varkaEmitUseAVX(),
-        exact.isDefined() ? (Boolean) exact.get() : null);
+        exact.isDefined() ? (Boolean) exact.get() : null, off);
   }
 
   /** {@code base} with the session's settings laid over it, or {@code base} when none is set. */

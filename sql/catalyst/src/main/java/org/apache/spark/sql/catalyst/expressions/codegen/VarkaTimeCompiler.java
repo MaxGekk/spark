@@ -47,6 +47,7 @@ import org.apache.spark.sql.catalyst.expressions.TimeToMicros;
 import org.apache.spark.sql.catalyst.expressions.TimeToMillis;
 import org.apache.spark.sql.catalyst.expressions.TimeToSeconds;
 import org.apache.spark.sql.catalyst.expressions.TimeTrunc;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
@@ -256,7 +257,7 @@ final class VarkaTimeCompiler {
       if (replacement instanceof StaticInvoke si) {
         targets.put(new TimeTarget(si.staticObject(), si.functionName()), label);
       } else {
-        throw new IllegalStateException(
+        throw VarkaErrors.illegalState(
             label + " no longer replaces into a StaticInvoke but into "
                 + replacement.getClass().getSimpleName()
                 + "; VarkaTimeCompiler.TIME_TARGETS must be "

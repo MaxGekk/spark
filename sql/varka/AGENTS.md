@@ -58,9 +58,10 @@ built, what was measured and where the plan turned out wrong. Predictions writte
 before a measurement stay in the file after it, scored honestly - the project
 keeps count. Do not retro-edit a task file to look prescient; add the correction
 and say what it corrects. A cost prediction - a test's or a suite's added time, a
-check's overhead - reads the calibration table in `skills/testing-and-debugging.md` first and is
-stated at the ratio the table has observed unless the plan says why not; once scored, its line
-joins the table.
+check's overhead - reads the calibration table first (`dev/varka_calibration.py` prints it;
+`skills/testing-and-debugging.md` says how it is kept) and is stated at the ratio the table has
+observed unless the plan says why not; once scored, it joins the table as a file of its own under
+`skills/calibration/`, which `dev/varka_calibration.py --add-row` writes from the row.
 
 A milestone's file is named for the stage it is in. While it is a scope
 catalogue - numbered items with design input, no task numbers assigned yet - it
@@ -300,8 +301,9 @@ loads, benchmarks. So:
 * **A benchmark port merges with its pair** (`dev/varka_bench_pair.sh` against the merge base), or
   its description says why not and names the row that owes the pair.
 * **A change that adds test time says so**: the gate's and the nightly's affected steps, their
-  time before and after, in the description; once row 255's CI records step times, against the
-  committed budget it keeps.
+  time before and after, in the description, read against the committed budget
+  `sql/varka/ci/step-budget.tsv` (`dev/varka_ci_times.py gate <dir>` for a laptop gate or
+  nightly; a Build's check carries the same table for its CI steps).
 
 ## House rules that bite here specifically
 

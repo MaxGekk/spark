@@ -52,6 +52,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.FusedOu
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.KernelOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaLoopEmitter;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
@@ -140,7 +141,19 @@ public final class VarkaExpressionCompiler {
    */
   public static Optional<PartialVarkaProjection> compilePartial(
       Seq<NamedExpression> projectList, Seq<Attribute> childOutput, VarkaEmitOptions options) {
-    return planning(() -> classifyKernels(entries(projectList), childOutput, options).partial(),
+    return compilePartial(projectList, childOutput, options, Set.of());
+  }
+
+  /**
+   * {@link #compilePartial(Seq, Seq, VarkaEmitOptions)} with the families the session has
+   * switched off (VARKA-318), which every caller has to pass alike for the reason it passes the
+   * options alike: a node of a family that is off declines with the reason naming its switch.
+   */
+  public static Optional<PartialVarkaProjection> compilePartial(
+      Seq<NamedExpression> projectList, Seq<Attribute> childOutput, VarkaEmitOptions options,
+      Set<VarkaFamily> familiesOff) {
+    return planning(
+        () -> classifyKernels(entries(projectList), childOutput, options, familiesOff).partial(),
         () -> projectionIdentity(projectList, childOutput), options);
   }
 
@@ -157,8 +170,15 @@ public final class VarkaExpressionCompiler {
    */
   public static SortedMap<Integer, VarkaDecline> declines(
       Seq<NamedExpression> projectList, Seq<Attribute> childOutput, VarkaEmitOptions options) {
+    return declines(projectList, childOutput, options, Set.of());
+  }
+
+  /** {@link #declines(Seq, Seq, VarkaEmitOptions)} with the families switched off. */
+  public static SortedMap<Integer, VarkaDecline> declines(
+      Seq<NamedExpression> projectList, Seq<Attribute> childOutput, VarkaEmitOptions options,
+      Set<VarkaFamily> familiesOff) {
     return planning(() -> Collections.unmodifiableSortedMap(
-        classifyKernels(entries(projectList), childOutput, options).declines()),
+        classifyKernels(entries(projectList), childOutput, options, familiesOff).declines()),
         () -> projectionIdentity(projectList, childOutput), options);
   }
 
@@ -185,7 +205,14 @@ public final class VarkaExpressionCompiler {
    */
   public static Optional<CompiledVarkaPredicate> compilePredicate(
       Expression condition, Seq<Attribute> childOutput, VarkaEmitOptions options) {
-    return explainAndCompilePredicate(condition, childOutput, options).compiled();
+    return compilePredicate(condition, childOutput, options, Set.of());
+  }
+
+  /** {@link #compilePredicate(Expression, Seq, VarkaEmitOptions)} with the families off. */
+  public static Optional<CompiledVarkaPredicate> compilePredicate(
+      Expression condition, Seq<Attribute> childOutput, VarkaEmitOptions options,
+      Set<VarkaFamily> familiesOff) {
+    return explainAndCompilePredicate(condition, childOutput, options, familiesOff).compiled();
   }
 
   /** {@link #explainPredicate(Expression, Seq, VarkaEmitOptions)} under the default options. */
@@ -217,14 +244,35 @@ public final class VarkaExpressionCompiler {
   // The planning-time catch
   // ---------------------------------------------------------------------------------------------
 
-  // Test-only hook that makes every compile throw inside the catch below, as a broken invariant
-  // of the compiler would, so a suite can show what such a bug reaches the user as (VARKA-314).
-  // Static because Spark plans on one thread and runs tasks on others; reset in a finally block.
-  private static volatile boolean failForTesting = false;
+  // Test-only hook run inside the catch below before every compile, which throws as a broken
+  // invariant of the compiler would, so a suite can show what such a bug reaches the user as
+  // (VARKA-314). Static because Spark plans on one thread and runs tasks on others; reset in a
+  // finally block.
+  private static volatile @Nullable Runnable failForTesting = null;
 
   /** Sets the test-only hook that fails every compile; see {@code failForTesting}. */
   public static void setFailForTesting(boolean fail) {
-    failForTesting = fail;
+    setFailForTesting(fail ? () -> {
+      throw new IllegalArgumentException("injected Varka compiler failure");
+    } : null);
+  }
+
+  /**
+   * Sets the test-only hook to {@code failure}, run where the compile starts, or clears it with
+   * null: a suite passes a call that reaches one of Varka's own invariant sites with an argument
+   * it rejects, so the site's error crosses the planning catch as a compiler bug's would.
+   */
+  public static void setFailForTesting(@Nullable Runnable failure) {
+    failForTesting = failure;
+  }
+
+  /**
+   * Sets the test-only hook that makes every node {@code family} claims throw an internal
+   * error, as a bug in that family's lowering would, or clears it with null (VARKA-318): a suite
+   * sees the planning error name the family's switch, and the query plan once it is set.
+   */
+  public static void setFailInFamilyForTesting(@Nullable VarkaFamily family) {
+    VarkaNodeCompiler.setFailInFamilyForTesting(family);
   }
 
   /**
@@ -241,10 +289,15 @@ public final class VarkaExpressionCompiler {
       Supplier<String> identity,
       VarkaEmitOptions options) {
     try {
-      if (failForTesting) {
-        throw new IllegalArgumentException("injected Varka compiler failure");
+      Runnable failure = failForTesting;
+      if (failure != null) {
+        failure.run();
       }
       return compile.get();
+    } catch (VarkaNodeCompiler.FamilyFailure f) {
+      // A throw out of a family's lowering: the site's own error, with the family on its record
+      // and the switch that plans the query without it in its sentence (VARKA-318).
+      throw VarkaErrors.planningFailure(f.original(), identity, options, f.family());
     } catch (RuntimeException e) {
       throw VarkaErrors.planningFailure(e, identity, options);
     }
@@ -282,8 +335,9 @@ public final class VarkaExpressionCompiler {
    * the kernels are deterministic in the projection alone. See {@code VARKA-190.md} 11.
    */
   private static Classified classifyKernels(
-      List<NamedExpression> entries, Seq<Attribute> childOutput, VarkaEmitOptions options) {
-    Classified first = classify(entries, childOutput, options, Map.of());
+      List<NamedExpression> entries, Seq<Attribute> childOutput, VarkaEmitOptions options,
+      Set<VarkaFamily> off) {
+    Classified first = classify(entries, childOutput, options, off, Map.of());
     if (!options.severalKernels() || first.partial().isEmpty()) {
       return first;
     }
@@ -300,7 +354,7 @@ public final class VarkaExpressionCompiler {
           others.put(at, OTHER_KERNEL);
         }
       }
-      Classified next = classify(entries, childOutput, options, others);
+      Classified next = classify(entries, childOutput, options, off, others);
       // The entries this round fused, by projection position, to their index in its kernel.
       Map<Integer, Integer> fused = new LinkedHashMap<>();
       next.partial().ifPresent(p -> {
@@ -359,6 +413,7 @@ public final class VarkaExpressionCompiler {
       List<NamedExpression> entries,
       Seq<Attribute> childOutput,
       VarkaEmitOptions options,
+      Set<VarkaFamily> off,
       Map<Integer, String> initial) {
     // A nondeterministic entry declines the whole projection, as a nondeterministic conjunct
     // declines a predicate. A Varka node evaluates its residual entries row by row, on its row
@@ -385,7 +440,7 @@ public final class VarkaExpressionCompiler {
     // two the bisection has the last word (VARKA-236.md 3.4).
     int plannedCuts = 0;
     while (true) {
-      Asked asked = ask(entries, childOutput, demoted, options);
+      Asked asked = ask(entries, childOutput, demoted, options, off);
       if (asked.decline().isEmpty()) {
         Classified once = asked.once();
         Set<Integer> aside = new HashSet<>(bisected);
@@ -422,7 +477,7 @@ public final class VarkaExpressionCompiler {
             probe.put(position, reasonAtHi);
           }
           Optional<VarkaSizeAdmission.Decline> answer =
-              ask(entries, childOutput, probe, options).decline();
+              ask(entries, childOutput, probe, options, off).decline();
           if (answer.isPresent() && answer.get().outputs().isEmpty()) {
             hi = mid;
             reasonAtHi = answer.get().reason();
@@ -447,8 +502,9 @@ public final class VarkaExpressionCompiler {
       List<NamedExpression> entries,
       Seq<Attribute> childOutput,
       Map<Integer, String> demoted,
-      VarkaEmitOptions options) {
-    Classified once = classifyOnce(entries, childOutput, demoted, options);
+      VarkaEmitOptions options,
+      Set<VarkaFamily> off) {
+    Classified once = classifyOnce(entries, childOutput, demoted, options, off);
     return new Asked(once,
         once.partial().flatMap(partial -> VarkaSizeAdmission.admit(partial.fused(), options)));
   }
@@ -472,8 +528,9 @@ public final class VarkaExpressionCompiler {
       List<NamedExpression> entries,
       Seq<Attribute> childOutput,
       Map<Integer, String> demoted,
-      VarkaEmitOptions options) {
-    return new EntryPass(childOutput, demoted, options).run(entries);
+      VarkaEmitOptions options,
+      Set<VarkaFamily> off) {
+    return new EntryPass(childOutput, demoted, options, off).run(entries);
   }
 
   /**
@@ -485,6 +542,7 @@ public final class VarkaExpressionCompiler {
     private final Seq<Attribute> childOutput;
     private final Map<Integer, String> demoted;
     private final VarkaEmitOptions options;
+    private final Set<VarkaFamily> off;
     private final VarkaSlotTable inputs = new VarkaSlotTable();
     private final VarkaSlotTable literals = new VarkaSlotTable();
     private final List<VarkaVectorIR> outputs = new ArrayList<>();
@@ -496,11 +554,12 @@ public final class VarkaExpressionCompiler {
     private final Set<Integer> alone = new HashSet<>();
 
     EntryPass(Seq<Attribute> childOutput, Map<Integer, String> demoted,
-        VarkaEmitOptions options) {
+        VarkaEmitOptions options, Set<VarkaFamily> off) {
       this.childOutput = childOutput;
       this.demoted = demoted;
       this.options = options;
-      this.sink = new DeclineSink(childOutput, options.rangeSets());
+      this.off = off;
+      this.sink = new DeclineSink(childOutput, options.rangeSets(), off);
       this.bind = binder(childOutput);
     }
 
@@ -594,6 +653,7 @@ public final class VarkaExpressionCompiler {
       if (options.misdescribeRollback() != 2) {
         sink.truncateBounds(marks.bounds());
       }
+      sink.truncateUsed(marks.used());
       if (compiled.isPresent()) {
         sink.take(); // an entry that compiled clean; its reason is the budget, or the force
         if (forced) {
@@ -622,7 +682,7 @@ public final class VarkaExpressionCompiler {
     private boolean fitsAlone(Expression e) {
       VarkaSlotTable own = new VarkaSlotTable();
       return compileRoot(e, own, new VarkaSlotTable(),
-          new DeclineSink(childOutput, options.rangeSets()))
+          new DeclineSink(childOutput, options.rangeSets(), off))
           .map(ir -> VarkaLoopEmitter.fitsBudgets(List.of(ir), own.size(), options))
           .orElse(false);
     }
@@ -646,13 +706,21 @@ public final class VarkaExpressionCompiler {
    */
   public static Explained explainAndCompilePredicate(
       Expression condition, Seq<Attribute> childOutput, VarkaEmitOptions options) {
-    return planning(() -> predicate(condition, childOutput, options),
+    return explainAndCompilePredicate(condition, childOutput, options, Set.of());
+  }
+
+  /** {@link #explainAndCompilePredicate(Expression, Seq, VarkaEmitOptions)} with families off. */
+  public static Explained explainAndCompilePredicate(
+      Expression condition, Seq<Attribute> childOutput, VarkaEmitOptions options,
+      Set<VarkaFamily> familiesOff) {
+    return planning(() -> predicate(condition, childOutput, options, familiesOff),
         () -> "condition " + condition + " over " + childOutput.mkString("[", ", ", "]"),
         options);
   }
 
   private static Explained predicate(
-      Expression condition, Seq<Attribute> childOutput, VarkaEmitOptions options) {
+      Expression condition, Seq<Attribute> childOutput, VarkaEmitOptions options,
+      Set<VarkaFamily> off) {
     // The split hoists fused conjuncts below the residual ones, which reorders evaluation. That
     // is sound only when every conjunct is deterministic - Spark's own predicate pushdown stops
     // at the first nondeterministic conjunct (span(_.deterministic)) for the same reason: a
@@ -682,7 +750,7 @@ public final class VarkaExpressionCompiler {
     List<Expression> written = conjuncts(condition);
     Map<Integer, String> demoted = new HashMap<>();
     while (true) {
-      PredicatePass once = predicateOnce(condition, childOutput, demoted, options);
+      PredicatePass once = predicateOnce(condition, childOutput, demoted, options, off);
       Map<Integer, String> late = VarkaConjunctOrder.behindRaising(written,
           once.specs().stream().map(VarkaConjunctSpec::fused).toList());
       if (!late.isEmpty()) {
@@ -729,7 +797,7 @@ public final class VarkaExpressionCompiler {
     /** The predicate of {@code layout} over this pass's tables; see the static form. */
     CompiledVarkaPredicate build(List<List<Cond>> layout) {
       if (tables == null) {
-        throw new IllegalStateException("nothing fused");
+        throw VarkaErrors.illegalState("nothing fused");
       }
       return VarkaExpressionCompiler.build(specs, tables, layout);
     }
@@ -759,10 +827,11 @@ public final class VarkaExpressionCompiler {
       Expression condition,
       Seq<Attribute> childOutput,
       Map<Integer, String> demoted,
-      VarkaEmitOptions options) {
+      VarkaEmitOptions options,
+      Set<VarkaFamily> off) {
     VarkaSlotTable inputs = new VarkaSlotTable();
     VarkaSlotTable literals = new VarkaSlotTable();
-    DeclineSink sink = new DeclineSink(childOutput, options.rangeSets());
+    DeclineSink sink = new DeclineSink(childOutput, options.rangeSets(), off);
     List<Cond> fused = new ArrayList<>();
     List<VarkaConjunctSpec> specs = new ArrayList<>();
     UnaryOperator<Expression> bind = binder(childOutput);
@@ -985,8 +1054,10 @@ public final class VarkaExpressionCompiler {
       Expression expr, VarkaSlotTable inputs, VarkaSlotTable literals, DeclineSink sink) {
     return switch (expr) {
       case RuntimeReplaceable r -> compileRoot(r.replacement(), inputs, literals, sink);
+      // The time family's one entry outside the chain, under its switch as the chain's are.
       case StaticInvoke si when VarkaTimeCompiler.isTimeTarget(si) ->
-          VarkaTimeCompiler.compileTime(si, inputs, literals, sink, true);
+          VarkaNodeCompiler.inFamily(VarkaFamily.TIME,
+              () -> VarkaTimeCompiler.compileTime(si, inputs, literals, sink, true), si, sink);
       default -> VarkaNodeCompiler.compileNode(expr, inputs, literals, sink);
     };
   }
@@ -1000,19 +1071,20 @@ public final class VarkaExpressionCompiler {
       List<Integer> literals,
       List<VarkaInputBound> inputBounds,
       List<VarkaDerivedInput> derivedInputs,
-      List<Long> longLiterals) {
+      List<Long> longLiterals,
+      List<VarkaFamily> families) {
 
     CompiledVarkaProjection projection(List<VarkaVectorIR> outputs, List<DataType> outputTypes) {
       return new CompiledVarkaProjection(outputs, outputTypes, inputOrdinals, literals,
-          inputBounds, derivedInputs, longLiterals);
+          inputBounds, derivedInputs, longLiterals, families);
     }
   }
 
   /**
    * {@link Tables} from the compile's own: {@code inputOrdinals} and {@code derivedInputs} from
    * the input table (a derived input is interned under a negative key beside the child ordinals,
-   * see {@link VarkaDerivedInput#key}), the literal slots, and the sink's bounds and 64-bit
-   * literals.
+   * see {@link VarkaDerivedInput#key}), the literal slots, and the sink's bounds, 64-bit
+   * literals and the families the accepted entries used.
    */
   private static Tables tables(VarkaSlotTable inputs, VarkaSlotTable literals, DeclineSink sink) {
     List<Integer> keys = inputs.keys();
@@ -1029,18 +1101,20 @@ public final class VarkaExpressionCompiler {
       }
     }
     return new Tables(ordinals, literals.keys(), sink.inputBounds(inputs), derived,
-        sink.longLiteralValues());
+        sink.longLiteralValues(), sink.familiesUsed());
   }
 
   /**
-   * The sizes of a pass's four tables before an entry or conjunct: the tables are shared across
-   * the entries and append in order, so truncating to these restores the state before it, and a
-   * declining entry leaves no column or literal behind to widen the kernel's input set.
+   * The sizes of a pass's four tables, and of its list of families used, before an entry or
+   * conjunct: the tables are shared across the entries and append in order, so truncating to
+   * these restores the state before it, and a declining entry leaves no column or literal behind
+   * to widen the kernel's input set, nor a family the kernel does not hold.
    */
-  private record Marks(int inputs, int literals, int longs, int bounds) {
+  private record Marks(int inputs, int literals, int longs, int bounds, int used) {
 
     static Marks of(VarkaSlotTable inputs, VarkaSlotTable literals, DeclineSink sink) {
-      return new Marks(inputs.size(), literals.size(), sink.longMark(), sink.boundsMark());
+      return new Marks(inputs.size(), literals.size(), sink.longMark(), sink.boundsMark(),
+          sink.usedMark());
     }
 
     void restore(VarkaSlotTable inputs, VarkaSlotTable literals, DeclineSink sink) {
@@ -1048,6 +1122,7 @@ public final class VarkaExpressionCompiler {
       literals.truncate(this.literals);
       sink.truncateLong(longs);
       sink.truncateBounds(bounds);
+      sink.truncateUsed(used);
     }
   }
 

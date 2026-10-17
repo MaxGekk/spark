@@ -399,7 +399,7 @@ public final class VarkaKernelWarmup {
       var inUse = new TreeSet<String>();
       var entries = new StringBuilder();
       int listed = 0;
-      for (String line : String.valueOf(list).split("\\R")) {
+      for (String line : String.valueOf(list).split("\\R", 0)) {
         // "<id> <tier> <state> <class>.<method><descriptor> [<addresses>]"
         String[] fields = line.strip().split(" ", 5);
         if (fields.length < 4 || !fields[3].startsWith(prefix)) {

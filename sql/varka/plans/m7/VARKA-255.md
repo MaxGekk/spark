@@ -1068,3 +1068,249 @@ one-round jobs and the rule here as its first use, on a base that has it; it ser
 after those two, and a class past the cap by another margin. (C) Run, on the 9V74, a pair that
 can finish, the head against #789's tip, which measures neither owed question and is not
 recommended.
+
+### 9.4 255c: the admission job and the check sync (16 October 2026)
+
+**Admission check: `ubuntu-slim` cuts a job off at 15 minutes.** GitHub's changelog of 28
+October 2025 that introduced the runner says "Jobs that use this runner type are limited to 15
+minutes of execution time" and "Jobs exceeding this limit will be terminated and fail". 3.1 put
+`admit` on `ubuntu-slim` with a 330-minute wait, and 3.2's loop ran in `update_build_status.yml`'s
+`ubuntu-slim` job for up to 345 minutes; neither could have waited past a quarter of an hour.
+Both jobs run on `ubuntu-latest`. A slot is a slot whatever the runner (2.2: the slim jobs counted
+against the twenty), so 3.1's cost line - a waiting full run holds one slot - and prediction 1
+stand; the sync loop holds one `ubuntu-latest` slot on the base, which risk 3 already counted.
+The alternative for the loop, a slim job of 13 minutes that dispatches the workflow again while
+anything is in flight, was not taken: a run in the list every 13 minutes and a gap of a minute or
+two at each hop, against one run per episode.
+
+**The fork has forty slots, not twenty.** The owner upgraded `MaxGekk` to GitHub Pro on 14
+October, after 2.2 was measured, and a full run now has about 41 jobs. `max-parallel` 12 on the
+`Build modules` matrix is implemented as 3.1 states it (accepted on 13 October), but its premise,
+"keeping eight slots" of twenty, has moved: the PySpark matrix keeps its own `max-parallel` 20
+beside the 12 module jobs, so a full run can still take most of forty. The owner kept 12 on 16
+October, with the review's fail-open rule for unreadable runs (the job admits after five failed
+polls in a row, about ten minutes, rather than failing the Build).
+
+*Two full runs at once, the owner's request of 16 October 2026.* With forty slots the owner asked
+for at least two pull requests' CI to run side by side; one full run at a time had four pull
+requests' runs waiting behind one full run that afternoon. `dev/varka_ci_admit.py` takes
+`--concurrent N` and admits a run while fewer than N runs are ahead of it (fanned out, or waiting
+since earlier); the workflow passes 2. So that two admitted runs fit in forty, the PySpark matrix
+on a fork takes at most 6 slots beside the modules' 12, keeping a full run near twenty at its
+widest; apache/spark keeps 20 for both. Two new self-tests: a run is admitted beside one that has
+fanned out, and waits behind two runs ahead.
+
+**What landed.** `build_and_test.yml` has the `admit` job, "Admit a full-matrix run", on
+`ubuntu-latest` with a 340-minute timeout, carrying `Precompile Spark`'s old condition;
+`Precompile Spark` now needs it and runs on `(!cancelled()) && needs.admit.result ==
+'success'`. That is the second of two routes for risk 2: instead of a copy of the condition and a
+test that the copies agree, one condition decides both jobs, so an upstream edit to it conflicts
+in this file rather than drifting, and a self-test reads the file and fails if `Precompile Spark`
+stops depending on `admit`'s success or `admit` stops carrying the gates. On `apache/spark` and
+`vecbricks/varka` the job's two steps are skipped and it succeeds at once; `varka-master.yml`'s
+run never reaches it, the weekly matrix passes through it. `build_main.yml`'s job grants
+`actions: read` beside `packages: write` (a reusable workflow's job can only narrow what its
+caller grants). `Build modules`' `max-parallel` is 20 on `apache/spark` and 12 elsewhere.
+
+`dev/varka_ci_admit.py` is stdlib Python. Each poll reads the `ci-hold` label of the branch's open
+pull request on `vecbricks/varka` (named on the command line: the fork's API parent is
+`apache/spark`, so the base cannot be derived), lists the fork's `build_main.yml` runs that are
+`in_progress` or `queued`, reads each one's jobs (every page, `per_page=100`), finds the job
+named with the suffix "Admit a full-matrix run" (the API names it `Run / Admit a full-matrix
+run`, confirmed against a live run's job list), and waits while another run's `admit` has
+succeeded or is in progress with an earlier `started_at` (ties to the lower run id). A failed
+read of the label is a warning and no hold; a failed read of the runs is retried at the next
+poll. It prints the request count on each poll. A read-only poll against the fork with the
+owner's token (no run of this branch exists) took five requests and found two runs in flight,
+neither full.
+
+`update_build_status.yml` starts on `workflow_run` of "On pull request update" as well as the
+cron and dispatch, keeps one loop at a time (`concurrency: update-build-status`, not
+cancelling), repeats its pass every 120 seconds while any open pull request's fork run is not
+completed, read from the run, patches a check only when its status or conclusion differs from
+the run's, logs each pass's runs in flight, patches and requests, and at 345 minutes with a run
+still in flight dispatches itself (`actions: write`) before ending. It checks nothing out. Its
+dispatch comment naming `dev/varka_ci_queue.sh` is gone; the script itself goes in 255d.
+
+**Tests.** Test 1, the self-test (`dev/varka_ci_admit.py --self-test`, twelve unit tests and the
+doctests): a full run waits on a run that has fanned out; the earlier `admit` passes first and a
+tie goes to the lower run id; a rerun of an older run waits behind a run already waiting and the
+one fanned out; a run with no `admit` yet, a skipped, failed or queued `admit` and a completed run
+block nothing; a held pull request fails; a 131-job listing is read across two pages; the wait
+gives up at its deadline naming the run; the two exempt repositories make no request; and the
+workflow file gates `Precompile Spark` on `admit`. The `Varka docs checks` job runs it, and
+`dev/varka_ci_*.py` joins the `varka-docs` module's files so a change to the script selects that
+job (`varka_change_scope` reads such a change as `docs`; the module doctests pass). The YAML of
+the three changed workflows parses; actionlint reports nothing in `update_build_status.yml` and
+`build_main.yml`, and the same 60 findings in `build_and_test.yml` as on master. No JavaScript
+runtime is on the laptop, so the sync script was checked for balanced brackets only.
+
+**What only a real run can show** (tests 2 to 4, after the merge, since `workflow_run` and the
+Build's own jobs run from the default branch and the pushed branch respectively): that a scoped
+push skips `admit` and `Precompile Spark`; that of two full-matrix pushes a minute apart the
+second's log names the first's run and fans out within one poll of its end; that `actions: read`
+in the caller is enough to list the fork's runs and that the fork's token reads the base's pull
+requests (2.4 showed it for runs, not for pulls; a failure there is a logged warning and no
+hold); that the module matrix never shows more than 12 jobs running; that the Build check of a
+test pull request follows its run within one poll; that a pass on unchanged checks logs zero
+patches; and whether GitHub lets a completed check be patched back to `in_progress` when its run
+is rerun, which the old pass also attempted. A fork run that never completes would keep the loop
+re-dispatching every 345 minutes; none has been seen, and the log would show it.
+
+**The author's review** (`/code-review high` on the diff, 16 October) found four things, fixed in a
+second commit. The branch name reached the `admit` step's shell through a `${{ }}` expression;
+it now goes through the environment. A read of the API that kept failing - a caller without
+`actions: read`, such as `build_java25.yml` dispatched on the fork - was retried every poll for
+the whole 330 minutes and then failed the Build, and a dropped connection or a body cut short
+raised past the retry and failed it at once; every such error is now retried, and five failed
+polls in a row admit with a warning, the hold's own rule that a broken read must not stop CI.
+The branch went unquoted into the hold's `head=` query, where a `+` or `#` would miss the pull
+request. And the check sync had no error boundary around its pull-request listing or its patches,
+so one failed request ended a loop meant to run for hours; a failed patch is now logged and left
+to a later pass, a failed pass is retried, and five failed passes in a row end the loop without
+a dispatch, so a lasting fault cannot chain runs. Two things it found are the owner's: 3.2's
+request count is low, since a pass lists the check runs and reads the run of every open pull
+request, completed ones included, about 1 + 2N requests for N open pull requests, so 30 passes an
+hour reach the base's 1,000 at about 16 open; and "Re-run failed jobs" on a completed full run
+keeps the first attempt's succeeded `admit`, so its matrix fans out at once without waiting, and
+only "Re-run all jobs" queues as 3.1 describes.
+
+**Owner action 3** applies when this merges: stop starting `dev/varka_ci_queue.sh run`, `hold`
+and `drop`, since a run the script cancels is now never rerun, and a held pull request is held
+with the `ci-hold` label instead.
+
+### 9.5 255d: the step-time budget, and the laptop queue retired (16 October 2026)
+
+**What landed.** `dev/varka_ci_times.py` with `collect`, `compare` and `gate` as 3.6 describes,
+and `sql/varka/ci/step-budget.tsv`, its first version. `collect` reads runs' jobs and steps from
+the API (by default every completed run of `varka-master.yml` and `varka-fuzz.yml` on
+`vecbricks/varka`; `--created`, `--runs`, `--jobs` and `--conclusion` narrow it) and laptop
+`<step>.secs` directories, and rewrites only the lines it read. A job's own wall time is the step
+`(job)`; the runner's own steps (`Set up job`, `Complete job`, `Post ...`) are left out; a failed
+step, and every step of a failed job, is not a sample. `compare <run>` reads every completed job
+of a run, `gate <dir>` a laptop directory, and both mark a step more than 5% over the budget's
+90th percentile **and at least 30 seconds over it**: the first live `compare` marked a docs step
+of 5 s against a 90th percentile of 4 s, which the API's whole seconds make a 25% move. The CPU
+column is `-` throughout: a Build job does not record its runner's CPU (only `benchmark.yml`
+annotates it), so the budget has no per-CPU lines yet, and a CI line is read across the pool.
+`dev/varka_nightly.sh` writes `<step>.secs` and `<step>.status` beside each log, as the gate
+does, and a step whose status is not `ok` is skipped. The check sync checks out the base's
+default branch (only the tool and the budget, no credentials kept) and, when it patches a check
+to completed, appends `compare --markdown` to the check's summary after a marker, so a later
+completion replaces the table rather than adding a second; a failure of the tool leaves the
+summary as it was. Risk 4's guard, read as its invariant: the sync never checks out the pull
+request's code; a checkout of the base's own default branch is this repository's trusted code.
+
+**The first budget.** CI lines: the Varka jobs of the fork's Build runs created on 13 October
+CEST (`2026-10-12T22:00:00Z..2026-10-13T21:59:59Z`), successful jobs only, and the nightly of 12
+October (run 38222969275). Laptop lines: the twelve full gates whose `.secs` files survive in the
+worktrees of `varka-250` to `varka-311` (5 to 12 October); the four partial gates beside them
+are left out, two of them run beside a night load (`varka-269-nightly`'s `wide` 2,023 s). Master's
+own runs exist since 14 October and are the default source from the next regeneration on.
+
+**Test 9.** The self-test (nine unit tests and the doctests) plants a step 20% over its 90th
+percentile and marks it, leaves one 3% over and one 20% over the median (inside the spread)
+unmarked, does not mark a 4-second step at 9 s, skips failed jobs, steps and gate steps, and
+keeps the lines `collect` did not read. Against the API, read-only: the nightly of 12 October
+reproduces 2.7 to the second (compile 222, IR fuzzer 404, composition 43, variants 514; second
+job 299, 2,807, 124). The 13 October Varka jobs reproduce 2.7's medians to within two minutes and
+not exactly, and on more runs: 27 catalyst and 26 sql suite jobs where 2.7 counted 21, medians
+for the catalyst job, suites and option steps of 22.8, 12.1 and 5.5 minutes against 23, 14 and 6,
+and for sql 24.3, 15.8 and 7.2 against 26, 16 and 7; the assembly gate 7.1 against 7, the bench
+drivers 2.2 against 2. 2.7 did not record which runs it read (by the counts, not every run of the
+day), so the window is the difference, and the budget is the reproducible version. Its first
+`compare`, on a fork run of 16 October, marked the `Checkout and sync Spark repository` step of
+five jobs at 50 to 62 s against a 90th percentile of 41 to 46 s before the 30 s floor was added:
+the full-history checkout #806 introduced on 14 October, after the budget's window, which is the
+kind of move the budget is for.
+
+**The laptop queue retired.** `dev/varka_ci_queue.sh` is deleted. In
+`sql/varka/skills/working-in-this-repo.md` its section is in the past tense and a new one
+describes the admission job, the check sync, the 15-minute `ubuntu-slim` cap and the budget;
+`SKILLS.md` is regenerated. Two files outside the row's list named the script or the budget and
+are changed with it: `CONTRIBUTING.md`'s paragraph on the queue now describes `admit` and
+`ci-hold`, and `sql/varka/AGENTS.md`'s "Pull requests" rule names the budget file and the tool.
+`dev/varka_ci_*.py` were added to the `varka-docs` module's files in 255c, so the docs job runs
+this tool's self-test too.
+
+**What only a real run can show**: that `require('child_process')` and `python3` are available
+to `actions/github-script` on the base's runner and the table lands in a completed check's
+summary; that the base's token reads a fork run's jobs for it (the sync already reads the run
+itself that way); and prediction 9, after ten pull requests that do not change test code.
+
+**The author's review** (16 October) found the skills section stating the mark as "more than 5%
+over the budget's 90th percentile" without the 30 s floor, now stated, and added a guard so that
+only a plain owner and repository name and a numeric run id from a check's text reach the tool's
+API path. The checkout in the sync is of the base's default branch with no credentials kept, and
+the tool is called with an argument list, never through a shell.
+
+### 9.6 255e: new tests rerun, and a fix's new test failing on the base (16 October 2026)
+
+**It fits one pull request**, so 3.4 stays in this row: one script, `dev/varka_new_tests.py`, and
+two steps at the end of each Varka suite job.
+
+**What landed.** `list` reads the module's Varka suites as `dev/varka_matrix.sh` finds them
+(ScalaTest classes named `Varka...Suite`, JUnit classes under `@VarkaSuite`) and takes a test as
+new when its name is in a file the diff from `VARKA_DIFF_BASE` changes and in no Varka-named
+suite file of the base nor the base's version of a changed file: a renamed test is new, a test
+moved between files is not. A name is read as a chain of string literals joined by `+` across
+lines, which is how the long titles and display names are written; anything else - `s"..."`, a
+literal plus a value, a `@ParameterizedTest`, `@RepeatedTest` or `@TestFactory` - is reported
+`unlistable` with its file and line, as a notice in the job, and is not rerun. A class-level
+`@DisplayName` is not a test. The comparison is by name alone, so a new test that reuses another
+suite's title is missed; the runner's report names it if it matters.
+
+`rerun` runs the new tests five rounds (`--times`), one JVM a round with every new test in it,
+on the classpath and JVM options the suites step left in `target/varka-scoped`, with the memory
+sanitizer and the both-bodies check on, through `VarkaSuiteRunner`'s `-s <suite> -t <name>` (one
+`-s` per suite: a second `-s` of the same suite reran it and its report replaced the first's,
+which a local run showed). Rounds 2 to 5 set `-Dvarka.fuzz.seed` to four other seeds; a suite
+that does not read the property ignores it. Results come from the runner's JUnit reports, by
+suite and name; a failure in any round fails the step naming the test and the round, and a
+listed test that ran in no round is a notice. New tests of the timing suites (`VarkaAssemblySuite`,
+`VarkaTierWitnessSuite`, `VarkaWarmupEndToEndSuite`), which run alone and unsanitized, are listed
+but not rerun. "In the suite's JVM" of 3.4 became one JVM per round rather than five repetitions
+inside one JVM: ScalaTest's runner has no repeat, and a fresh JVM is also what a flaky warm-up
+needs to show.
+
+`fails-on-base` asks `vecbricks/varka` for the open pull request of the branch and acts only on
+the `fix` label (a fork's push build does not know its pull request; a label added after the
+push needs the job rerun). In a scratch worktree of the head it checks out from the base every
+changed path outside `src/test/` and deletes every such path the pull request adds, builds the
+module's tests there as `dev/varka_matrix.sh` does (`Test/compile`, the exported classpath and
+JVM options), runs the new tests once and passes when each fails; a test that passes fails the
+step by name; an overlay that does not compile is the notice "not shown: the tests need the fix's
+main code", and the step passes. The `dev/` scripts run from the head, so the overlay's restored
+tooling never runs.
+
+**Tests.** Test 6, the self-test (twelve unit tests and the doctests), over recorded diffs: a new
+ScalaTest test; a title concatenated over two lines; a new JUnit display name, and a class-level
+one ignored; a Java file without `@VarkaSuite` not read; a renamed test counted as new; a test
+moved to another file not new; an interpolated title reported unlistable, and one already on the
+base not reported; a parameterized JUnit test unlistable; JUnit reports matched by suite with or
+without the package; the overlay's split of changed main paths into restored and deleted, in a
+scratch repository; the timing suites left out of the rerun. The step runs the self-test before
+the rerun. Over this repository's history, `list` named exactly the tests six merged commits
+added (for example 5 in `VarkaVectorTemplateWarmupSuite` at `aa457c3797b`, 9 in the new
+`VarkaPlatformSuite` at `4b3524ada43`, 9 display names in `VarkaRangeRulesSuite` at
+`ad6009d0fbf`), and at `cb92050e6d9` one new test, a test whose line changed but whose title did not left out, and one
+`s"..."` title reported unlistable. One local round, on another worktree's exported catalyst
+build and cores 12 to 23, ran a JUnit display name and a ScalaTest name through the runner and
+read both as passed from the reports, and a name that matches nothing as not run.
+
+**What only a real run can show**: test 7 (a planted pull request labelled `fix` whose new test
+passes on master fails the step naming it; the same with a real one-line fix passes), the base
+build's time on a runner beside the suites (prediction 6: under 8 minutes), the reruns' time on
+a typical pull request (prediction 6: under 3 minutes), and that the fork's token reads the
+base's pull-request labels (a failed read is a warning and no check). Section 6's count of `fix`
+pull requests whose overlay did not compile starts with the first one.
+
+**The author's review** (16 October) found the self-test failing: a doctest of `literal_chain`
+started one character past an `s"..."` title's `s`, so it read a plain literal, and the step,
+which runs the self-test first, would have failed every Varka suite job. The doctest now starts
+at the `s`. `rerun` dropped the runner's exit status, so a suite whose fixture threw, or a JVM
+that died, left no report, every new test "ran in no round" as a notice and the step passed; a
+round that exits non-zero with no new test failed in its reports now fails the step, with a
+thirteenth unit test, and a failed or aborted round prints the end of its log, since the scratch
+directory goes with the job. The branch is quoted in the label lookup's `head=` query, a body
+that is not JSON is a warning like any failed read, and the self-test closes the files it writes.

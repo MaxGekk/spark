@@ -123,3 +123,9 @@ Every suite passed with both bodies compared: no second body disagreed with the 
 The end-to-end suites' one-body classes would need the evaluator to run a batch through both
 bodies under test - a null-free batch through the masked body too - which is a change to the
 evaluator, not to a harness. The owner made it a task of its own: row 303.
+
+**Added 16 October 2026, from `VARKA-265.md` 9.1:** the coverage run of row 265 moved `generated.md`
+from 14,745 emitted classes to 61,599 (left uncommitted there), with families VARKA-284's table
+names no reason for - `VarkaFusedFuzzTier`, and `VarkaFusedProjection_w<hash>` classes that
+`VarkaGenCoverage.family` does not fold, since their suffix starts with `w`. Reading them falls to
+rows 284 and 285, not to a new row.

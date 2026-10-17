@@ -278,6 +278,20 @@ jobs:
           if [ "$varka_scope" = "docs" ] || [ "$varka_scope" = "none" ]; then
             lint_code=false
           fi
+          # Error Prone and NullAway over Varka's Java run in the lint job (VARKA-382) for a change
+          # to the main Java of catalyst or sql/core, where the sources it checks live, to its
+          # script or to its pending list, and for every Spark change and every run with no diff:
+          # those compile sql in the MiMa step before it, so the check adds its sbt start and its
+          # javac pass. A Varka-scoped change compiles sql for it, minutes the job spends only
+          # when a file the check reads may have moved. The grep reads its whole input: under
+          # pipefail, -q's early exit could fail the echo.
+          lint_errorprone=true
+          errorprone_reads='^sql/(catalyst|core)/src/main/java/.*\.java$'
+          errorprone_reads+='|^dev/varka_errorprone\.sh$|^dev/varka_nullaway_pending\.txt$'
+          if [ "$varka_scope" != "spark" ] \
+              && ! echo "${changed_files:-}" | grep -E "$errorprone_reads" > /dev/null; then
+            lint_errorprone=false
+          fi
           varka_engine=`./dev/is-changed.py -m varka-engine`
           varka_bench=`./dev/is-changed.py -m varka-bench`
           varka_docs=`./dev/is-changed.py -m varka-docs`
@@ -321,6 +335,7 @@ jobs:
               \"lint-spark\": \"$lint_spark\",
               \"lint-code\": \"$lint_code\",
               \"lint-python\": \"$lint_python\",
+              \"lint-errorprone\": \"$lint_errorprone\",
             }"
           echo $precondition # For debugging
           # Remove `\n` to avoid "Invalid format" error
@@ -408,7 +423,9 @@ jobs:
     timeout-minutes: ${{ inputs.build_timeout_minutes }}
     strategy:
       fail-fast: false
-      max-parallel: 20
+      # On a fork one full run's modules take at most 12 job slots, leaving the rest to the
+      # small runs beside it (VARKA-255.md 3.1); apache/spark keeps 20.
+      max-parallel: ${{ github.repository == 'apache/spark' && 20 || 12 }}
       matrix:
         java:
           - ${{ inputs.java }}
@@ -642,7 +659,15 @@ jobs:
           cache-from: type=registry,ref=ghcr.io/apache/spark/apache-spark-github-action-image-pyspark-${{ env.PYSPARK_IMAGE_TO_TEST }}-cache:${{ inputs.branch }}
 
 
-  precompile:
+  # The fork's queue (VARKA-255.md 3.1): a run that will precompile Spark and fan out behind it
+  # - the module matrix, the PySpark groups, the Docker and Kubernetes jobs - waits here while
+  # another such run is ahead of it, so two full-matrix runs never share the fork's job slots,
+  # and a pull request labelled ci-hold on vecbricks/varka stops here. A Varka-scoped or
+  # documents-only run skips this job and never waits. The condition is Precompile Spark's,
+  # which now runs only when this job succeeds, so the two cannot drift apart. It runs on
+  # ubuntu-latest, not ubuntu-slim, because a slim job is cut off at 15 minutes and this one
+  # may wait hours; on apache/spark and vecbricks/varka it admits at once.
+  admit:
     needs: precondition
     if: >-
       (!cancelled()) && (
@@ -655,6 +680,35 @@ jobs:
         fromJson(needs.precondition.outputs.required).k8s-integration-tests == 'true' ||
         fromJson(needs.precondition.outputs.required).oidc-e2e == 'true' ||
         fromJson(needs.precondition.outputs.required).tpcds-1g == 'true')
+    name: "Admit a full-matrix run"
+    runs-on: ubuntu-latest
+    # The script gives up at 330 minutes and names the run it waited on.
+    timeout-minutes: 340
+    steps:
+    - name: Checkout the admission script
+      if: github.repository != 'apache/spark' && github.repository != 'vecbricks/varka'
+      uses: actions/checkout@v7
+      with:
+        ref: ${{ needs.precondition.outputs.head_sha }}
+        persist-credentials: false
+        sparse-checkout: dev/varka_ci_admit.py
+        sparse-checkout-cone-mode: false
+    - name: Wait while another full-matrix run is ahead
+      if: github.repository != 'apache/spark' && github.repository != 'vecbricks/varka'
+      # The branch name is the pusher's text, so it reaches the shell through the environment,
+      # never through an expression expanded into the script.
+      env:
+        GH_TOKEN: ${{ github.token }}
+        ADMIT_REPO: ${{ github.repository }}
+        ADMIT_RUN_ID: ${{ github.run_id }}
+        ADMIT_BRANCH: ${{ github.ref_name }}
+      run: >-
+        python3 dev/varka_ci_admit.py --repo "$ADMIT_REPO" --run-id "$ADMIT_RUN_ID"
+        --branch "$ADMIT_BRANCH" --base-repo vecbricks/varka --concurrent 2
+
+  precompile:
+    needs: [precondition, admit]
+    if: (!cancelled()) && needs.admit.result == 'success'
     name: "Precompile Spark"
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -710,7 +764,10 @@ jobs:
         --security-opt seccomp=unconfined
     strategy:
       fail-fast: false
-      max-parallel: 20
+      # On a fork the PySpark groups take at most 6 job slots, so that with the module matrix's
+      # 12 a full run stays near 20 of the fork's 40 and two admitted runs fit side by side
+      # (dev/varka_ci_admit.py --concurrent); apache/spark keeps 20.
+      max-parallel: ${{ github.repository == 'apache/spark' && 20 || 6 }}
       matrix:
         java:
           - ${{ inputs.java }}
@@ -1071,6 +1128,19 @@ jobs:
         ./dev/varka_prove.sh --install both
         ./dev/varka_prove.sh --self-test --solver both
         ./dev/varka_prove.sh --lint
+    # Error Prone and NullAway over Varka's Java under -Werror (VARKA-266, here since VARKA-382):
+    # the gate ran them alone, and pull requests merged with findings. The check reads two
+    # refs: the merge base, whose pending-class list this branch's may not outgrow, and Varka's
+    # master, whose list may have shrunk since. On a fork origin/master is not Varka's, so both
+    # are named. The script needs JDK 25 and refuses another.
+    - name: Error Prone and NullAway over Varka's Java
+      if: >-
+        inputs.java == '25' &&
+        fromJson(needs.precondition.outputs.required).lint-errorprone != 'false'
+      run: |
+        git fetch --quiet "${VARKA_UPSTREAM_URL:-https://github.com/vecbricks/varka.git}" master
+        ./dev/varka_errorprone.sh --master "$(git rev-parse FETCH_HEAD)" \
+          ${VARKA_DIFF_BASE:+--base "$VARKA_DIFF_BASE"}
     - name: Spark connect jvm client mima check
       if: fromJson(needs.precondition.outputs.required).lint-spark != 'false'
       run: ./dev/connect-jvm-client-mima-check
@@ -1342,6 +1412,20 @@ jobs:
     # red step means this change. The weekly varka-option-matrix workflow runs all of them.
     - name: The Varka suites of ${{ matrix.module }} under one emit option configuration
       run: ./dev/varka_matrix_ci.sh ${{ matrix.module }}
+    # The tests this change adds, rerun five times on the suites step's build, a seeded fuzz under
+    # four other seeds; and for a pull request labelled `fix`, its new tests run once on the merge
+    # base's main sources, where each must fail (VARKA-255.md 3.4). A run of master has no new
+    # tests. The label is read from vecbricks/varka, since a push build does not know its pull
+    # request; a label added after the push takes a rerun of the job.
+    - name: The new tests of ${{ matrix.module }}, rerun five times
+      run: |
+        python3 dev/varka_new_tests.py --self-test > target/varka-new-tests-self-test.log 2>&1 ||
+          { cat target/varka-new-tests-self-test.log; exit 1; }
+        python3 dev/varka_new_tests.py rerun ${{ matrix.module }} --times 5
+    - name: A fix's new tests of ${{ matrix.module }} fail on the merge base
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 dev/varka_new_tests.py fails-on-base ${{ matrix.module }}
 
   varka-docs:
     needs: [precondition]
@@ -1358,6 +1442,10 @@ jobs:
       run: ./dev/varka_quote_check.py
     - name: SKILLS.md's index matches the lesson files
       run: ./dev/varka_toc.py --check SKILLS.md --from sql/varka/skills
+    - name: The CI queue's admission decision, over recorded API responses
+      run: python3 dev/varka_ci_admit.py --self-test
+    - name: The step-time budget's tool, over recorded API responses
+      run: python3 dev/varka_ci_times.py --self-test
 
   # Documentation build
   docs:
