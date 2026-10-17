@@ -165,7 +165,7 @@ we run, not a proof.
 9999, so `year(d)` ran with no guard. Spark can store any 32-bit day. The solver found exactly
 that gap: past a day in the year 42400, the date decoding leaves the range it is proven for, and
 run over a cached table the kernel returned a day of the month of 2 where Spark returns 1. A
-change in review makes the assumption a check. The kernel's loop keeps a running minimum and
+proposed change makes the assumption a check. The kernel's loop keeps a running minimum and
 maximum of the days it loads, two vector operations per group of lanes, and a batch with a day
 outside the range is declined to the row engine. It reads the stored days, not the null mask,
 which would cost more than a cheap kernel's own work; a null is stored as day 0.
@@ -197,7 +197,7 @@ had hidden.
 
 In the first, Varka's columnar filter finished its batch before the projection above saw a row, so
 where Spark raised the projection's error on the first row, Varka raised the filter's on the
-second; a change in review delivers the rows before the failing one first. In the second, Varka
+second; a proposed change delivers the rows before the failing one first. In the second, Varka
 raises where Spark's default session answers, and Spark disagrees with itself: its compiled filter
 stops at a condition that is NULL, its interpreted filter goes on to the one that raises
 (SPARK-60315). A change proposed upstream would make the compiled filter raise too, which is

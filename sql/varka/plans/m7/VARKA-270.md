@@ -185,3 +185,11 @@ Prediction 1 rescored: the body without figure lines is about 2,100 words, about
 1,930. The two slots were allowed 200 together and took about 260 net of the markers they
 replaced; the third slot was filled in 10.1. **Failed**, by the same margin as before plus the
 slots' overrun; nothing was cut, since each sentence states a find or how it ended.
+
+### 10.4 Published, 17 October 2026
+
+The post went live on 17 October 2026 at https://vecbricks.github.io/where-the-checking-stops/, built from the merged Markdown (#914)
+with `dev/varka_post_page.py` and a card from Figure 3. Before publication the two phrases of
+10.3 flipped to "a proposed change": the owner moved rows 379 and 387 to milestone 8 as open
+pull requests (#874 and #911), so neither fix is merged and the post says so. The cost of the
+date check is not in the post; its pair had not returned.
