@@ -5246,6 +5246,22 @@ or by asking it at the candidate bound. The proofs then take that interval as th
 kernel and still declines one day past the exact range, with `VarkaFarDaySuite`'s edges moved to
 the new bound.
 
+### Item 103. Why the kernel warm-up gives up on small runners
+
+*Added 17 October 2026 from `m7/VARKA-322.md` and PR #900's pairs.* On a 4-core GitHub runner
+(Intel Xeon 6973P-C, run 39002664252), `VarkaColdStartBenchmark`'s warm-up arm reached a COMPILED
+verdict on only 20 of 25 shapes in three of four JVMs, and the other five were RELEASED after the
+60-second deadline; in the fourth JVM all 25 compiled. The steady-state rows after two seconds of
+batches moved from 70 to 3,876 ms between JVMs for the same code. So on a machine with few cores
+a new shape can stay on Spark's row path for its first minute and longer, depending on what the
+JIT does in that JVM. The m7 work on the warm-up's release flake (rows 295, 370, 373, 374) was in
+test JVMs on the laptop; this is the product on a small host. Establish from the JIT log of a
+runner JVM why those warm-ups miss the deadline (the compile queue and its threads, the
+`profile_predicate` cycle of item 99, the trap counts of row 370) and what the warm-up can change:
+its deadline, its call pattern, or a decline. **Done when** the record names the cause on a
+4-core runner and either the warm-up compiles at least 24 of the benchmark's 25 shapes there in
+three JVMs out of three, or the documentation states the behaviour a small host gets.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
