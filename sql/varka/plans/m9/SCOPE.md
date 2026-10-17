@@ -5245,6 +5245,16 @@ its deadline, its call pattern, or a decline. **Done when** the record names the
 4-core runner and either the warm-up compiles at least 24 of the benchmark's 25 shapes there in
 three JVMs out of three, or the documentation states the behaviour a small host gets.
 
+### Item 104. A post on the proofs alone
+
+*Added 17 October 2026 from `m7/VARKA-270.md` 9, at the coordinator's request.* Milestone 7's
+post (`m7/POST_CORRECTNESS.md`) gives the proofs one section among six. The record holds enough
+for a post of their own: Java's operators stated over integers and held to the JVM, why
+bit-vectors did not decide the divisions, Theorem 5.1 failing for the textbook's shifts, the
+bounds labelled sufficient or exact, and the refinements in Spark mode and standard mode
+(`m7/VARKA-240.md` to `VARKA-245.md`, `m7/VARKA-281.md`). **Done when** the owner chooses it and
+it is published, or the record says it is not wanted.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
