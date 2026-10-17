@@ -133,6 +133,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A decline is the entry deleted, and only a forced decline reaches the branch that has to make it so](sql/varka/skills/testing-and-debugging.md#a-decline-is-the-entry-deleted-and-only-a-forced-decline-reaches-the-branch-that-has-to-make-it-so)
 * [Under test a failure fallback fails its task, unless the test declared it](sql/varka/skills/testing-and-debugging.md#under-test-a-failure-fallback-fails-its-task-unless-the-test-declared-it)
 * [The coverage of emitted classes: one JaCoCo builder per class, and the agent into own-JVM suites](sql/varka/skills/testing-and-debugging.md#the-coverage-of-emitted-classes-one-jacoco-builder-per-class-and-the-agent-into-own-jvm-suites)
+* [How well the tests test: the emitter's branches, and PIT through ScalaTest test by test](sql/varka/skills/testing-and-debugging.md#how-well-the-tests-test-the-emitters-branches-and-pit-through-scalatest-test-by-test)
 * [A solver proves an arithmetic lowering in integers, and its verdicts are checked like output](sql/varka/skills/testing-and-debugging.md#a-solver-proves-an-arithmetic-lowering-in-integers-and-its-verdicts-are-checked-like-output)
 * [Every small tree, counted in grammar productions, beside the random fuzzer](sql/varka/skills/testing-and-debugging.md#every-small-tree-counted-in-grammar-productions-beside-the-random-fuzzer)
 * [A tree in other company: variants whose answers follow from its own](sql/varka/skills/testing-and-debugging.md#a-tree-in-other-company-variants-whose-answers-follow-from-its-own)
@@ -176,6 +177,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [With the intrinsics off C2 takes twenty seconds a loop method, and an epilogue's compile 337 MB](sql/varka/skills/the-jit.md#with-the-intrinsics-off-c2-takes-twenty-seconds-a-loop-method-and-an-epilogues-compile-337-mb)
 * [With the trap limits raised, a masked loop traps thousands of times and still reads as settled](sql/varka/skills/the-jit.md#with-the-trap-limits-raised-a-masked-loop-traps-thousands-of-times-and-still-reads-as-settled)
 * [A kernel warmed after other kernels can stay allocating, and the template prewarm guards only the int lane](sql/varka/skills/the-jit.md#a-kernel-warmed-after-other-kernels-can-stay-allocating-and-the-template-prewarm-guards-only-the-int-lane)
+* [Which tier served a call: the code list at the call's edges, JFR's events inside it](sql/varka/skills/the-jit.md#which-tier-served-a-call-the-code-list-at-the-calls-edges-jfrs-events-inside-it)
 
 #### [The Vector API and vector width](sql/varka/skills/vector-api-and-width.md)
 * [Vector API on HotSpot, Measured (JDK 25, x86-64)](sql/varka/skills/vector-api-and-width.md#vector-api-on-hotspot-measured-jdk-25-x86-64)

@@ -848,6 +848,50 @@ hook and passed by accident, one because its `intercept[Throwable]` caught whate
 * **"Ran" is a kernel method entered**, not any covered instruction: a test that builds a kernel
   and calls the wrong overload covers only the constructor.
 
+## How well the tests test: the emitter's branches, and PIT through ScalaTest test by test
+
+VARKA-265. `dev/varka_gen_coverage.sh` also writes `sql/varka/coverage/emitter.md`: the branches
+of the emitter's and the compiler's own classes under every Varka suite, from the execution file
+the generated-code report reads. `dev/varka_pit.sh` mutates emitter classes (default `Slots` and
+`Analysis`) with PIT and gives each mutant one of three verdicts - killed by a behavioural test,
+killed only by `VarkaEmittedBytesSuite`, survived - with each survivor answered in
+`sql/varka/mutation/notes.tsv`. What it took:
+
+- **PIT reaches ScalaTest with no third-party plugin.** PIT 1.30.0 (`org.pitest`, Maven Central)
+  ships JUnit 4 support only; its `TestPluginFactory` SPI takes a plugin of about 220 lines
+  (`dev/varka_pit/VarkaPitScalaTest.java`) that makes each test of a suite one unit, run alone by
+  `run(Some(name), args)` on a fresh instance. Give its configuration a priority under 10, or
+  PIT's JUnit finder is asked first. ScalaTest's `Stopper.default()` and `Filter.default()` are
+  named with a Java keyword, so Java reaches them by reflection.
+- **Empty the shape cache before every test.** A kernel cached by an earlier test was emitted by
+  the code before the mutant was swapped in, and hides the mutant from the next test.
+- **Spark's sbt exports catalyst as a jar**, so PIT finds no mutable code ("No mutations found",
+  `codePaths=[]` in its verbose log) until the jar on the minions' classpath gives way to
+  `sql/catalyst/target/scala-2.13/classes` and `--mutableCodePaths` names it. `pitest-entry` also
+  needs Commons Text in the launching JVM, which Spark's test classpath already has.
+- **PIT makes one work unit of a class**, which one minion runs alone however many threads are
+  given; `--mutationUnitSize` splits it.
+- **Run own-JVM suites inline** (`-Dvarka.ownJvm=true`): a child JVM loads the unmutated classes.
+  Leave out what answers to the JIT or the machine; `VarkaWidthAuditSuite` fails under PIT's
+  agent, and the IR fuzzer's C2 test (482 s of an 869 s coverage phase) runs with no draws.
+- **The bytes oracle kills nearly everything a behavioural suite misses**, equivalent mutants
+  included - in the first probe, 45 of the 48 one suite left - so its kill is read as a survivor,
+  and its run gets only the first run's leftovers (`dev/varka_pit/VarkaPitOnly.java`, PIT's
+  interceptor SPI); its pinned-shapes test took 48 s under load. The same holds for every test
+  tagged `PinsDefaults` (a grouping, an op count pinned at the defaults), which the plugin moves
+  from the first run to the second by its tag.
+- **Never answer a mutant from a narrow run.** Against one suite, removing javac's
+  `requireNonNull` on `pureOf`'s pattern switch survived and looked equivalent; against all 40
+  suites it is killed, since a null selector takes the switch's default arm and every pure word is
+  lost.
+- **A survivor costs the suites; a kill costs a test.** In the two-method sample a killed mutant
+  ran one test (the median) and the one survivor ran 405, so a full run's length is its survivors'
+  - the bytes-only ones included, since the first run does not kill them either.
+- **The free jar's bitwise mutators are `MATH`'s** (AND and OR exchanged, XOR to AND, the shifts
+  exchanged), one of the defaults; no other bitwise set ships free.
+- **Do not edit a shell script while it runs**: bash reads it as it goes, and the edited tail ran
+  as a syntax error after the PIT runs it had launched had finished.
+
 ## A solver proves an arithmetic lowering in integers, and its verdicts are checked like output
 
 VARKA-240 proves the int lane's multiply-high division exact with SMT solvers

@@ -917,6 +917,110 @@ are again identical to the Scala form's.
 `VarkaInExpressionBenchmark`, `VarkaFilterBenchmark`, `VarkaNarrowingBenchmark`,
 `VarkaLongLaneThroughputBenchmark` and `VarkaThroughputBenchmark`.
 
+**322c-2: the other eleven, implemented, their pairs pending** (16 October 2026, on 322c-1 at
+`c78f58a649a`). Every class 322c-1 left is Java under its name and package on 322b's base, its
+`.scala` deleted, in four commits meant as up to four pull requests of two to four classes each,
+after a commit of shared helpers: 3,086 lines of Scala to 3,364 of Java (9% more). Of 322c's
+Scala files only `VarkaArrowSessions` is left, a Scala object the Java ports call through its
+static forwarders, as the task said.
+
+* **Shared helpers first**, a commit of their own in 322a's and 322b's files, as 322c-1's review
+  proposed: `VarkaBenchmarkBase.require` and `requirementFailed` are public, so `VarkaSizeLadder`
+  drops its private copy and `VarkaColdPath`, the probe and the directive benchmark's child call
+  the same check; `VarkaSqlBenchmarkBase.clearSessions` is the clear after a benchmark makes a
+  session, which every port repeated twice or three times and `stopLeftoverSessions` now ends
+  with; `VarkaSchemaWidthBenchmark`'s `fresh()` and the size ladders' inline clears use it.
+* **`addTimerCase`**, with its first user, `VarkaColdPathBenchmark`: a case that times what it
+  brackets with a `VarkaBenchmark.Timer`, a Java wrapper of Spark's, whose body (`TimerCase`) may
+  throw the `InterruptedException` that `quiesce` and the warm-up's `awaitIdle` declare - the
+  adapter restores the interrupt and fails the case. The builder gains `outputPerIteration`,
+  which the first-run tables of both cold benchmarks set.
+* **`withEmitOptions(options, Runnable)`** on `VarkaSqlBenchmarkBase`, with its first users, the
+  cold-start and range-filter benchmarks: `VarkaArrowSessions.withEmitOptions` for a body with no
+  result, so a Java case does not return `BoxedUnit`.
+* **Sessions**: five classes built their sessions with a private copy of
+  `VarkaArrowSessions.createSession`, the same settings key for key; the filter-narrowing, IN,
+  filter, narrowing and throughput benchmarks call the shared one. The long-lane benchmark keeps
+  its own builder, which also turns `TIME` on.
+* **The directive benchmark's child** is a nested `VarkaWarmupDirectiveBenchmark.Child` with a
+  static `main`: the benchmark class inherits Spark's instance `main`, which a static one beside
+  it cannot hide, and the parent launches `Child.class.getName()`.
+* **Dry runs**: every port goes through `runCases`, so all eleven take `-Dvarka.bench.dryRun`,
+  which none of the Scala forms had. Where a check after a table needs a timed case to have run,
+  the dry run skips it and says so: the cold-path benchmark's check that the warmed kernel
+  served the steady state (its verdict line reads "not taken, a dry run times nothing", and the
+  compile section compiles one source of its own for the method-size note), and the evaluator
+  benchmark's count of batches the kernel served; both also skip it in a run filtered with
+  `-Dvarka.bench.only`. The directive benchmark has no table, and its dry run starts no child.
+
+**The proof: the names, as 322c-1's, with the cases run where a check needs them.** Core's
+`Benchmark` and `BenchmarkBase` instrumented, uncommitted, with the five lines 322c-1 used and a
+sixth: under `-Dvarka.proof.once=true`, `Benchmark.run` runs each case its minimum number of
+iterations, untimed and with no warm-up, instead of timing it, so that a check after a table
+finds the work it checks. Both forms ran through `sql/Test/runMain` pinned to cores 9 to 11, the
+Scala at `c78f58a649a` before the deletions and the Java after:
+
+* the cold-path benchmark at full size with the cases run (218 lines with the next three: 2
+  sections, 36 benchmarks with their settings, 108 cases, 18 notes);
+* the cold-start benchmark twice, its smoke run with the cases run and its full dry run (4
+  sections, 17 benchmarks, 130 cases, 29 notes); the directive benchmark's smoke run, one child
+  JVM per mode; the probe for five seconds;
+* the evaluator benchmark with the cases run, the other seven as dry runs (447 lines with the 8
+  file names: 95 sections, 100 benchmarks, 238 cases, the range filter's 6 rung notes).
+
+The outputs are identical but for two things. Spark's `Benchmark` prints a zero warm-up and
+minimum time from Java as `0 days`, `Duration.ZERO` converted, where Scala's `0.seconds` reads `0
+seconds`; the two are equal, and the results file prints neither. And a warm-up's verdict is
+`COMPILED` on one side and `RELEASED`, the warm-up giving up after its 60 seconds, on the other in
+four lines of the cold-start runs, in both directions: on three loaded cores the kernel's C2
+compile competes with the queries' own, and the full cold-path run read `RELEASED` at every rung on
+both sides. The timings inside the notes are masked in the comparison; the notes' text, the
+method sizes (2,426 to 17,242 bytes) and the range filter's rows passed are identical. Every setup
+check ran on both sides, and every check after a table on the runs with the cases run. Against the
+committed laptop files, section titles, benchmark names, case names and notes match in order for
+all ten classes with a table, the cold-start file's 180 entries with its verdict lists masked
+(the dry run takes none). The instrumentation was reverted before the commits; uninstrumented,
+the Java cold-path smoke dry run and the evaluator dry run pass.
+
+**What differs in the timed work**: none of the timed bodies changed what they run. The cases
+are `IntConsumer`s and `TimerCase`s for Scala functions, each a query of a hundred thousand to
+twenty million rows, or for the evaluator benchmark a task over 2,000 to 20,000 batches; the
+timer wrapper allocates one small object per iteration, outside the timed span.
+
+**Pending: the pairs**, on GitHub-hosted runners, once each pull request is open, the base left
+blank (the merge base, where the classes are Scala):
+
+* the cold-path benchmark: `-f class=VarkaColdPathBenchmark`; the probe has no table;
+* the cold-start benchmark: `-f class=VarkaColdStartBenchmark`; the directive benchmark has no
+  table, only the children's verdict lines, so there is nothing for a pair to compare, and it
+  rests on its smoke run's lines;
+* `-f class=VarkaRangeFilterBenchmark,VarkaFilterNarrowingBenchmark,VarkaEvaluatorOverheadBenchmark,VarkaInExpressionBenchmark`;
+* `-f class=VarkaFilterBenchmark,VarkaNarrowingBenchmark,VarkaLongLaneThroughputBenchmark,VarkaThroughputBenchmark`.
+
+Six of the ten commit a band file. **Prediction, registered before the run: no row slower by 10%
+by both the median and the best**, every timed body being the Scala one's; the first-run tables
+of the two cold benchmarks, one event per iteration with no warm-up, may spread widest.
+
+**The review's fixes** (`/code-review high` on the six commits). Eight findings, five fixed, three
+declined. (1) `stopLeftoverSessions` stopped only a registered session, where the Scala forms'
+`spark.stop()` stopped any context left running, since their default session had joined it; a
+port that failed after clearing its sessions would leave a context the next class joined,
+keeping its master. It now also stops `SparkContext.getActive`. (2) The evaluator benchmark's
+check after a table failed for the cases `-Dvarka.bench.only` dropped; it is skipped in a filtered
+run too. (3) The cold-path benchmark took a missing verdict and missing method sizes for a dry
+run; a filtered run that drops the kernel cases now says so instead of claiming a dry run. (4)
+The directive benchmark's dry run started its six child JVMs, minutes of work against the dry
+run's promise of a JVM's start; it starts none. (5) The two cold benchmarks' copies of the
+interrupt-safe wait are `VarkaSizeLadder.quiesceOrFail`, and the cold-path checks pair each plan
+with its node class in a record rather than in two lists read by index. `VarkaSizeLadder`'s
+Javadoc, which gave a reason that held while Scala benchmarks called it, now names the mains that
+are no benchmark. Declined: the evaluator check's `require` for Scala's `assert`, kept, since an
+`assert` vanishes under `-da`; one shared Varka-node predicate for the four classes that spell
+the same four classes, which their Scala forms each spelled too; and the per-class metric lookup
+`count`, seven lines in two classes. After the fixes `sql/Test/compile` and checkstyle pass, and
+the cold-path smoke dry run, the directive dry run and the evaluator benchmark filtered to its
+filter case run clean.
+
 **The split for review** (16 October 2026, after 322b's merge as #866). The fourteen ports go
 out as five pull requests. This first one carries the size ladders above and every change to
 the two bases that the other eleven need, so that the four after it touch disjoint files and

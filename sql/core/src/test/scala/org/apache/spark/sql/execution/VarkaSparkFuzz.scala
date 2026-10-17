@@ -420,6 +420,24 @@ object VarkaSparkFuzz {
     unexpectedRaise(off, VarkaExpectedErrors.Side.ROW, ansi, list)
       .orElse(unexpectedRaise(on, VarkaExpectedErrors.Side.VARKA, ansi, list))
 
+  /**
+   * Whether `kind` is two different conditions, each one the expected-errors list allows from
+   * either engine under `ansi`: the signature of two legitimate errors on rows in different
+   * partitions, where whichever task fails first decides what the query raises, on either engine
+   * and from one run to the next (VARKA-298.md 9). Such a disagreement is believed only if it
+   * repeats.
+   */
+  def racingErrors(kind: String, ansi: Boolean): Boolean = {
+    val marker = "error classes differ: "
+    val at = kind.indexOf(marker)
+    val mode = if (ansi) VarkaExpectedErrors.Mode.ANSI else VarkaExpectedErrors.Mode.LEGACY
+    val list = VarkaExpectedErrors.entries()
+    at >= 0 && kind.substring(at + marker.length).split(", ").toSeq.forall { raised =>
+      Seq(VarkaExpectedErrors.Side.ROW, VarkaExpectedErrors.Side.VARKA)
+        .forall(VarkaExpectedErrors.expected(list, raised, _, mode))
+    }
+  }
+
   /** How two outcomes differ, or None when they agree. */
   def difference(off: Outcome, on: Outcome): Option[String] = (off, on) match {
     case (Right(a), Right(b)) => if (a == b) None else Some("values differ")

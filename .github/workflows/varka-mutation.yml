@@ -1,0 +1,200 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+# The full mutation run of the emitter's Slots and Analysis (VARKA-265.md 9.2), sharded over
+# GitHub's runners instead of the owner's laptop (the owner, 16 October 2026). Each shard runs
+# dev/varka_pit.sh --shard K/N: PIT over its slice of the mutants, first with the behavioural
+# tests, then with the bytes oracle on what that left. The last job joins the shards' outputs into
+# the one report, sql/varka/mutation/verdicts.md, and keeps it as an artifact; nothing is
+# committed. Dispatch only:
+#
+#   gh workflow run varka-mutation.yml -R MaxGekk/spark --ref <branch> -f shards=8
+name: Varka mutation run
+
+on:
+  workflow_dispatch:
+    inputs:
+      shards:
+        description: 'Shards, one runner each'
+        required: false
+        default: '8'
+      threads:
+        description: 'PIT minions per shard; a runner has 4 cores and 16 GB'
+        required: false
+        default: '3'
+      heap:
+        description: 'Each minion -Xmx; three at 3g fit a runner beside PIT and metaspace'
+        required: false
+        default: '3g'
+      timeout-factor:
+        description: 'PIT timeout factor; a timed-out mutant counts as killed'
+        required: false
+        default: '4'
+      ref:
+        description: 'Commit or branch to mutate; the dispatched ref when empty'
+        required: false
+        default: ''
+
+jobs:
+  plan:
+    name: Plan the shards
+    # Never on apache/spark, whose tree has no Varka; on this project's repositories always.
+    if: github.repository != 'apache/spark'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+      sha: ${{ steps.plan.outputs.sha }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        ref: ${{ inputs.ref }}
+    # The commit is resolved once, so that every shard and the report mutate the same one even
+    # if the branch moves while they run.
+    - name: Resolve the commit and the shard list
+      id: plan
+      env:
+        SHARDS: ${{ inputs.shards }}
+      run: |
+        set -euo pipefail
+        [[ "$SHARDS" =~ ^[1-9][0-9]*$ ]] || { echo "shards must be a positive number" >&2; exit 1; }
+        echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        echo "shards=[$(seq -s, 0 $((SHARDS - 1)))]" >> "$GITHUB_OUTPUT"
+
+  shard:
+    name: "Mutation shard ${{ matrix.shard }} of ${{ inputs.shards }}"
+    needs: plan
+    runs-on: ubuntu-latest
+    # The expectation is about two hours a shard at 8 shards (VARKA-265.md 9.7); the cap stays
+    # inside GitHub's six hours, so that a shard that overruns still uploads its logs.
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        ref: ${{ needs.plan.outputs.sha }}
+    - name: Cache SBT and Maven
+      uses: actions/cache@v4
+      with:
+        path: |
+          build/apache-maven-*
+          build/*.jar
+          ~/.sbt
+        key: build-${{ hashFiles('**/pom.xml', 'project/build.properties', 'build/mvn', 'build/sbt', 'build/sbt-launch-lib.bash', 'build/spark-build-info') }}
+        restore-keys: |
+          build-
+    - name: Cache Coursier local repository
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/coursier
+        key: varka-mutation-coursier-${{ hashFiles('**/pom.xml', '**/plugins.sbt') }}
+        restore-keys: |
+          varka-mutation-coursier-
+    - name: Install Java 25
+      uses: actions/setup-java@v5
+      with:
+        distribution: zulu
+        java-version: '25'
+    - name: Install the Varka engine
+      uses: ./.github/actions/install-varka-engine
+    # The script builds catalyst's tests itself, fetches PIT's official artifacts from Maven
+    # Central and runs both PIT passes over this shard's slice. Its exit status is the step's.
+    - name: Run this shard's mutants
+      env:
+        SHARD: ${{ matrix.shard }}/${{ inputs.shards }}
+        THREADS: ${{ inputs.threads }}
+        HEAP: ${{ inputs.heap }}
+        TIMEOUT_FACTOR: ${{ inputs.timeout-factor }}
+      run: |
+        set -o pipefail
+        mkdir -p target
+        ./dev/varka_pit.sh --shard "$SHARD" --threads "$THREADS" --heap "$HEAP" \
+          --timeout-factor "$TIMEOUT_FACTOR" | tee target/varka-pit-shard.log
+    - name: Summary
+      if: always()
+      run: |
+        {
+          echo "## Mutation shard ${{ matrix.shard }} of ${{ inputs.shards }}"
+          echo '```'
+          cat target/varka-pit-shard.log 2>/dev/null || echo "no log"
+          grep -h -E '^>> (Generated|Ran)' target/varka-pit/behavioural.log \
+            target/varka-pit/bytes.log 2>/dev/null || true
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+    - name: Upload the shard's runs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: varka-mutation-shard-${{ matrix.shard }}
+        path: |
+          target/varka-pit/shard
+          target/varka-pit/scope
+          target/varka-pit/suites
+          target/varka-pit/keep.tsv
+          target/varka-pit/*.log
+          target/varka-pit/*.status
+          target/varka-pit/behavioural/mutations.xml
+          target/varka-pit/bytes/mutations.xml
+        if-no-files-found: ignore
+        retention-days: 30
+
+  report:
+    name: Join the shards into the verdicts
+    needs: [plan, shard]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        ref: ${{ needs.plan.outputs.sha }}
+    - name: Download every shard's runs
+      uses: actions/download-artifact@v4
+      with:
+        pattern: varka-mutation-shard-*
+        path: target/varka-mutation-shards
+    # The join refuses a missing or doubled shard, shards of different scopes, and a mutant in
+    # two shards; a note that matches no mutant fails the step after the report is written.
+    - name: Write the verdicts
+      run: |
+        python3 dev/varka_pit_verdicts.py --shards target/varka-mutation-shards \
+          sql/varka/mutation/verdicts.md --notes sql/varka/mutation/notes.tsv
+    - name: Summary
+      if: always()
+      run: |
+        {
+          echo "## Mutation run, ${{ inputs.shards }} shards, commit ${{ needs.plan.outputs.sha }}"
+          if [ -f sql/varka/mutation/verdicts.md ]; then
+            sed -n '/^## Verdicts by class/,/^## The mutants/p' sql/varka/mutation/verdicts.md \
+              | sed '$d'
+          else
+            echo "no report"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+    - name: Upload the verdicts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: varka-mutation-verdicts
+        path: sql/varka/mutation/verdicts.md
+        if-no-files-found: ignore
+        retention-days: 90
