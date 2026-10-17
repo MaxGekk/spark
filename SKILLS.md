@@ -133,6 +133,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A decline is the entry deleted, and only a forced decline reaches the branch that has to make it so](sql/varka/skills/testing-and-debugging.md#a-decline-is-the-entry-deleted-and-only-a-forced-decline-reaches-the-branch-that-has-to-make-it-so)
 * [Under test a failure fallback fails its task, unless the test declared it](sql/varka/skills/testing-and-debugging.md#under-test-a-failure-fallback-fails-its-task-unless-the-test-declared-it)
 * [The coverage of emitted classes: one JaCoCo builder per class, and the agent into own-JVM suites](sql/varka/skills/testing-and-debugging.md#the-coverage-of-emitted-classes-one-jacoco-builder-per-class-and-the-agent-into-own-jvm-suites)
+* [How well the tests test: the emitter's branches, and PIT through ScalaTest test by test](sql/varka/skills/testing-and-debugging.md#how-well-the-tests-test-the-emitters-branches-and-pit-through-scalatest-test-by-test)
 * [A solver proves an arithmetic lowering in integers, and its verdicts are checked like output](sql/varka/skills/testing-and-debugging.md#a-solver-proves-an-arithmetic-lowering-in-integers-and-its-verdicts-are-checked-like-output)
 * [Every small tree, counted in grammar productions, beside the random fuzzer](sql/varka/skills/testing-and-debugging.md#every-small-tree-counted-in-grammar-productions-beside-the-random-fuzzer)
 * [A tree in other company: variants whose answers follow from its own](sql/varka/skills/testing-and-debugging.md#a-tree-in-other-company-variants-whose-answers-follow-from-its-own)
