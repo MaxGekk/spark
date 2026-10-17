@@ -86,7 +86,9 @@ import org.apache.spark.sql.execution.metric.SQLMetric;
  *       steady state is on the way to; the difference from the first run is the first run's
  *       price.</li>
  *   <li><b>once compiled</b>, the warm-up arm only: the second run started only after the warm-up
- *       has its verdict, which is the query a shape's kernel serves from then on.</li>
+ *       has its verdict, which is the query a shape's kernel serves from then on. Where the verdict
+ *       is RELEASED, the warm-up gave the kernel up before C2 compiled it, and the iteration times
+ *       that kernel instead; the note after the table counts such iterations.</li>
  * </ul>
  *
  * <p>Every timed iteration starts with the JVM quiet: no warm-up queued or running, and no JIT
@@ -321,6 +323,18 @@ public class VarkaColdStartBenchmark extends VarkaSqlBenchmarkBase {
     return VarkaKernelWarmup.recentOutcomes().getLast();
   }
 
+  /**
+   * Says how many once-compiled iterations followed a RELEASED verdict: their times are of a
+   * kernel the warm-up gave up on, not of the kernel the shape serves once compiled.
+   */
+  private void noteReleased(List<String> verdicts) {
+    long released = verdicts.stream().filter(v -> v.contains("RELEASED ")).count();
+    if (released > 0) {
+      note("  " + released + " of " + verdicts.size() + " once-compiled iterations followed a "
+          + "RELEASED verdict, so they time a kernel the warm-up gave up on");
+    }
+  }
+
   private static String describe(VarkaKernelWarmup.Outcome o) {
     return o.state() + " after " + o.runNanos() / 1_000_000 + " ms and " + o.calls() + " calls";
   }
@@ -436,6 +450,7 @@ public class VarkaColdStartBenchmark extends VarkaSqlBenchmarkBase {
       runCases(benchmark);
       note("rung " + n + ": the warm-up's verdicts, one per once-compiled iteration: "
           + String.join("; ", verdicts));
+      noteReleased(verdicts);
     }
   }
 
@@ -464,6 +479,7 @@ public class VarkaColdStartBenchmark extends VarkaSqlBenchmarkBase {
       runCases(benchmark);
       note("rung " + n + " ranges: the warm-up's verdicts, one per once-compiled iteration: "
           + String.join("; ", verdicts));
+      noteReleased(verdicts);
     }
   }
 
