@@ -374,27 +374,17 @@ final class Slots {
    * op) shares that child's reference instead of recomputing it. Per-node slots are planned
    * only for the body roles that emit them - the vector-walk slots for a loop or epilogue
    * method, neither for the driver, which runs only the shared prologue.
-   */
-  static Slots plan(boolean dense, BodyMode mode, List<VarkaVectorIR> outputs,
-      List<Integer> outputIdx, Analysis analysis, int numLiterals) {
-    return plan(dense, mode, outputs, outputIdx, analysis, numLiterals, false);
-  }
-
-  /**
-   * As above; with {@code perGroup} the body gets slots only for the outputs in {@code outputIdx}
+   *
+   * <p>With {@code perGroup} the body gets slots only for the outputs in {@code outputIdx}
    * and the literals their trees reference, and every other output or literal slot is {@code -1}
    * so that an emission which reaches for one fails to build rather than reading a stale local.
    * A group's loop and epilogue methods plan this way (VARKA-87): setting up every output of the
    * kernel in every group was the term that grew each group's methods with the whole kernel
    * ({@code VARKA-87.md} 2.6.2). The driver keeps planning for every output, since it
-   * zeroes and serves them all.
+   * zeroes and serves them all. {@code group} is the loop-method group whose loop or epilogue
+   * method this plans, or {@code -1} for the driver and for the single epilogue of the form
+   * without a byte budget.
    */
-  static Slots plan(boolean dense, BodyMode mode, List<VarkaVectorIR> outputs,
-      List<Integer> outputIdx, Analysis analysis, int numLiterals, boolean perGroup) {
-    return plan(dense, mode, outputs, outputIdx, analysis, numLiterals, perGroup, -1);
-  }
-
-  /** As above, for the loop or epilogue method of loop-method group {@code group}. */
   static Slots plan(boolean dense, BodyMode mode, List<VarkaVectorIR> outputs,
       List<Integer> outputIdx, Analysis analysis, int numLiterals, boolean perGroup,
       int group) {

@@ -22,13 +22,32 @@
 # The demo needs no build of this repository: it is a spark-shell script, run the way a reader
 # runs it. The outputs committed beside the script come from here, with the runner's CPU named.
 #
-# It runs when a push changes the demo, and by hand. A hand dispatch needs the workflow on the
+# A second job runs sql/varka/demo/compiles/times.scala, the times of compiling a query again, on
+# the same distribution under JDK 25, through that directory's run.sh. Its output names the
+# runner's CPU, and a dispatch can pin it to one CPU, as benchmark.yml's expected-cpu does, so that
+# its times can be set beside a benchmark's from the same CPU. A push cannot pin: it records the
+# CPU, and a run on another CPU than the one wanted is re-run.
+#
+# It runs when a push changes a demo, and by hand. A hand dispatch needs the workflow on the
 # repository's default branch; a push needs only the branch it is pushed to.
 
 name: Varka demo
 
 on:
   workflow_dispatch:
+    inputs:
+      demo:
+        type: choice
+        description: 'Which demo to run'
+        default: all
+        options:
+          - all
+          - method_size_cliff
+          - compiles-times
+      expected-cpu:
+        type: string
+        description: 'Expected CPU model for compiles-times (e.g. "AMD EPYC 7763"). If set, the job fails early when the runner CPU does not match.'
+        default: ''
   push:
     paths:
       - 'sql/varka/demo/**'
@@ -40,6 +59,7 @@ permissions:
 
 jobs:
   demo:
+    if: ${{ inputs.demo != 'compiles-times' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -131,3 +151,85 @@ jobs:
           sql/varka/demo/method_size_cliff-jdk${{ matrix.java }}-output.txt
           sql/varka/demo/run.log
           sql/varka/demo/compile.log
+
+  compiles-times:
+    if: ${{ inputs.demo != 'method_size_cliff' }}
+    runs-on: ubuntu-latest
+    env:
+      STOCK_VERSION: 4.2.0
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+
+    - name: Install Java 25
+      uses: actions/setup-java@v5
+      with:
+        distribution: zulu
+        java-version: 25
+
+    # The pin, on the job that measures, as benchmark.yml's expected-cpu checks it: every job is a
+    # fresh VM from a pool of several CPUs. Only the CPU's name is checked; run.sh records it.
+    - name: Check the runner's CPU
+      if: ${{ inputs.expected-cpu != '' }}
+      env:
+        EXPECTED_CPU: ${{ inputs.expected-cpu }}
+      run: |
+        cpu="$(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //')"
+        if ! grep -qF "$EXPECTED_CPU" <<< "$cpu"; then
+          echo "::error::CPU mismatch! Expected '$EXPECTED_CPU' but got '$cpu'"
+          exit 1
+        fi
+
+    # The demo job's three steps.
+    - name: Restore the stock Spark distribution
+      id: cache-stock
+      uses: actions/cache/restore@v5
+      with:
+        path: ~/stock-spark
+        key: stock-spark-${{ env.STOCK_VERSION }}-hadoop3
+
+    - name: Download the stock Spark distribution
+      if: ${{ steps.cache-stock.outputs.cache-hit != 'true' }}
+      run: |
+        set -euo pipefail
+        mkdir -p ~/stock-spark && cd ~/stock-spark
+        TGZ="spark-${STOCK_VERSION}-bin-hadoop3.tgz"
+        BASE="https://dlcdn.apache.org/spark/spark-${STOCK_VERSION}"
+        curl -fsSLO "$BASE/$TGZ" || {
+          BASE="https://archive.apache.org/dist/spark/spark-${STOCK_VERSION}"
+          curl -fsSLO "$BASE/$TGZ"
+        }
+        curl -fsSLO "$BASE/$TGZ.sha512"
+        WANT="$(tr -d ' \n' < "$TGZ.sha512" | tr 'A-F' 'a-f' | grep -oE '[0-9a-f]{128}' | head -1)"
+        GOT="$(sha512sum "$TGZ" | cut -d' ' -f1)"
+        if [ -z "$WANT" ] || [ "$WANT" != "$GOT" ]; then
+          echo "::error::checksum mismatch for $TGZ (want '$WANT' got '$GOT')"
+          exit 1
+        fi
+        tar -xzf "$TGZ" && rm -f "$TGZ" "$TGZ.sha512"
+
+    - name: Save the stock Spark distribution
+      if: ${{ steps.cache-stock.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v5
+      with:
+        path: ~/stock-spark
+        key: stock-spark-${{ env.STOCK_VERSION }}-hadoop3
+
+    # run.sh writes times-jdk25-output.txt beside the script, with the run, the CPU, the pin, and
+    # the Java and Spark versions in its header, and fails if the script did not finish, leaving
+    # spark-shell's log beside it as times-jdk25.log.
+    - name: Run the times
+      env:
+        EXPECTED_CPU: ${{ inputs.expected-cpu }}
+      run: |
+        sql/varka/demo/compiles/run.sh --times \
+          "$HOME/stock-spark/spark-${STOCK_VERSION}-bin-hadoop3" "$JAVA_HOME"
+
+    - name: Upload the output
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: varka-demo-compiles-times-jdk25
+        path: |
+          sql/varka/demo/compiles/times-jdk25-output.txt
+          sql/varka/demo/compiles/times-jdk25.log
