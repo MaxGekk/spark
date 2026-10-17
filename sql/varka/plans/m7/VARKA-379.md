@@ -223,3 +223,70 @@ item 102); and the four-argument `range` defaulting to no report, which the test
 at 0001-01-15 and 9999-12-01 and a wide draw of 200,000 days either side of the epoch, so it
 never draws a day past the bound; `farDates` there wants `date_from_unix_date` values past
 42400-02-29 and before day -5394572, and int32's ends.
+
+## 10. The check folded into the kernel (17 October 2026)
+
+### 10.1 Why
+
+The pair of section 6 (VarkaThroughputBenchmark, ten rounds on GitHub runners, EPYC 7763, AVX2,
+run 38959217998) found the separate pass costly on Varka's side only: `datediff + 1` 17% slower
+by median and 11% by best, `year * 100 + month` 16% and 10%, `yearofweek` 14% and 10%,
+`weekofyear` 15% and 9%, every Janino row within 2%. Prediction 6.1 #2 (every bounded row within
+3%) failed: the pass reads every bounded column once more from memory before the kernel reads it
+again, which costs as much as a cheap kernel's own work. The owner held the pull request until
+the check sits inside the kernel's loop, on the vector the kernel already loads.
+
+### 10.2 The design
+
+The kernel already has an in-loop range check with everything this needs: `GuardedRange`, the IR
+node that passes its child through and declines the batch when a live lane is outside
+`[lo, hi]` (VARKA-102's `TIME + INTERVAL`). Its emission is two compares on the loaded vector,
+ANDed with the lane's validity word in the masked body and with the bounds mask in the epilogue,
+ORed into the method's guard mask; the mask is reduced once per method after the loop and the
+driver ORs the methods' statuses, so it is right in both bodies, in the tail, at both widths and
+across split methods, and it is priced by the size machinery (`GUARD_WEIGHT`, the emit cost
+table). So the column bound becomes that node, with no new emitter code:
+
+- The compile of one entry (a projection entry, a predicate conjunct, and `fitsAlone`'s
+  trial) ends by wrapping every `ColumnRef` of a slot the entry noted with `dayColumnBound` in
+  `GuardedRange(ColumnRef, CONTRACT_MIN_DAYS, CONTRACT_MAX_DAYS)`, before the budgets are asked,
+  so the size admission sees what the emitter will emit. Once per entry at its root rather than
+  at the three sites that note the bound: the overflow check's site (`boundedByIntMax`) answers a
+  question about operands its callers then build the node from, and a wrap that did not flow back
+  into that node would lose the guard while the overflow check stays removed.
+- The slot bounds the wrap discharges leave the sink, so they no longer reach
+  `CompiledVarkaProjection.inputBounds` and the evaluator's pre-pass. The ordinal bounds stay
+  there: `CAST(i AS INTERVAL DAY)`'s offset column sits in `date_add`'s day-offset position,
+  which admits a bare column and not a guard (`VarkaOperandPosition`), so moving it in-kernel is
+  not a one-line change and is not made here. The wrap never reaches into that position nor under
+  `IsNotNull` (which reads only validity); a noted slot whose column sits in a restricted
+  position keeps its bound for the pre-pass, though no date column can sit in one.
+- `VarkaRangeAnalysis` answers a `GuardedRange`'s own bounds for the `DAY` kind too, as it
+  already did for `INT`: a wrapped column reads as the range its guard enforces.
+- A decline is `STATUS_VALUE_RANGE`, the node's own reason, rather than the evaluator's
+  `STATUS_INPUT_BOUND`, which stays the pre-pass's.
+
+What a declined batch's outputs are worth is the same contract every in-kernel guard already
+rests on (`VarkaFusedKernel`'s status): the kernel writes its outputs and returns a non-zero
+status; `VarkaKernelRunner.invoke` throws `VarkaBatchDeclined` before the both-bodies check; and
+`VarkaEvaluatorBase.serveBatch` catches it and runs the caller's fallback for the whole batch,
+for every exec node (project, filter, columnar-to-row) and for a projection of several kernels
+(`VarkaKernelPart` rethrows naming the kernel). Nothing written before the decline is read.
+
+What changes in which batches decline. Within one entry the wrap covers every use of a noted
+column, so `year(date_add(d, i)) + year(d)` checks `d` under the `date_add` too, where the
+producer guard alone would have served a far `d` the shift brings back into range; the pre-pass
+did the same across the whole kernel, so nothing declines that did not before. A column use
+under an `IF`/`CASE` arm is checked only on the lanes the arm takes (`emitArmContext`), which the
+pre-pass could not do. The per-shape bound remains `m9/SCOPE.md` item 102.
+
+### 10.3 Predictions, registered before the build
+
+1. `emitted_bytes.json` moves for the shapes that hold a bounded date column and for no other;
+   each body method of such a kernel grows by 40 to 90 bytes for its first guarded column (the
+   guard, the mask's initialisation and the status reduction) and by 20 to 50 for each further
+   one; no entry's method count changes and no coverage row stops fusing.
+2. The re-pair of section 6's `VarkaThroughputBenchmark` against the base: no row 10% slower by
+   both median and best, and the four rows above within 5% of the base by best - the guard is
+   four vector ops a lane group on a vector already in a register, beside a decomposition of tens.
+3. The far-date suites pass unchanged in what they assert, except the status a decline carries.
