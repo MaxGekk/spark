@@ -108,8 +108,8 @@ the Varka suites and the assembly gate in about half an hour; a change to a
 shared Spark file runs Spark's full matrix.
 
 A Build that runs Spark's full matrix waits in its "Admit a full-matrix run"
-job while another full-matrix run on the same fork is ahead of it, so two never
-share the fork's job slots; scoped runs never wait. Label a pull request
+job while two other full-matrix runs on the same fork are ahead of it, so at
+most two share the fork's forty job slots; scoped runs never wait. Label a pull request
 `ci-hold` to stop its Build at that job, and rerun the failed jobs after
 removing the label to resume it.
 

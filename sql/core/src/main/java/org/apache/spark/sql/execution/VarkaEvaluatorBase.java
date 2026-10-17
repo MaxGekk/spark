@@ -57,6 +57,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrorContext;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFallbackEvent;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmup;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemorySanitizer;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemoryViolation;
@@ -283,6 +284,14 @@ public abstract class VarkaEvaluatorBase {
     return emitOptions;
   }
 
+  /**
+   * The families the session switched off (VARKA-318), which this evaluator's compiler call
+   * passes beside {@link #emitOptions()} so that it declines what the plan's compile declined.
+   */
+  protected Set<VarkaFamily> familiesOff() {
+    return sessionEmit.familiesOff();
+  }
+
   // ---- the plan ------------------------------------------------------------------------------
 
   private CompiledVarkaProjection plan() {
@@ -375,7 +384,7 @@ public abstract class VarkaEvaluatorBase {
           }
           // No runner exists, so the shape hash is the one kernelIdentity() computed from the IR.
           VarkaErrorContext ctx = errorContext(VarkaFallbackEvent.EMISSION_FAILURE, e, null,
-              VarkaErrorContext.safely(this::kernelShapeHash), null, false);
+              VarkaErrorContext.safely(this::kernelShapeHash), ownFamilies(), null, false);
           LOG.warn("Failed to emit the Varka fused kernel " + ctx.identity()
               + "; falling back to the per-row path." + VarkaFallbackAccounting.block(ctx), e);
           // A class that fails to verify or define fails here, and no class dump has it.
@@ -624,7 +633,7 @@ public abstract class VarkaEvaluatorBase {
     try {
       CompiledVarkaProjection compiled = plan();
       VarkaReproduction.write(
-          () -> errorContext(kind, failure, null, kernel.shapeHash, input, true),
+          () -> errorContext(kind, failure, null, kernel.shapeHash, ownFamilies(), input, true),
           kernel.shapeHash, failure, shapeKey(compiled), compiled.literals(),
           compiled.longLiterals(),
           maxBatchBytes -> kernel.capture(input, len, maxBatchBytes, selectionBitmaps),
@@ -693,7 +702,8 @@ public abstract class VarkaEvaluatorBase {
       // A genuine kernel error is told apart from a failure in the per-row machinery sharing the
       // try by the marker the runner wraps it in.
       VarkaErrorContext ctx = errorContext(VarkaFallbackEvent.KERNEL_FAILURE, e.getCause(),
-          e.kernel, e.shapeHash, input, e.kernel == null);
+          e.kernel, e.shapeHash, e.kernel == null ? ownFamilies() : e.families, input,
+          e.kernel == null);
       accounting().kernelFailure(e.getCause(), e.kernel, ctx);
       refuseUndeclaredFallback("the kernel " + (e.kernel != null ? e.kernel : kernelIdentity()),
           ctx);
@@ -701,8 +711,9 @@ public abstract class VarkaEvaluatorBase {
       if (!isCatchable(e)) {
         throw e;
       }
+      // The per-row machinery is no family's: its record names none.
       VarkaErrorContext ctx = errorContext(VarkaFallbackEvent.ROW_PATH_FAILURE, e, null,
-          runner != null ? runner.shapeHash : null, input, true);
+          runner != null ? runner.shapeHash : null, List.of(), input, true);
       accounting().rowPathFailure(e, ctx);
       refuseUndeclaredFallback("the per-row machinery beside " + kernelIdentity(), ctx);
     }
@@ -765,18 +776,29 @@ public abstract class VarkaEvaluatorBase {
    *
    * @param identity the further kernel that failed, as it names itself; null for this one
    * @param shapeHash the failing kernel's shape hash, or null where none is known
+   * @param families the families whose nodes the failing kernel holds (VARKA-318)
    * @param input the batch it failed on; null for a failure outside a batch
    * @param ownInputs whether the failing kernel reads this evaluator's inputs, so that their null
    *                  counts describe it; a further kernel of the projection reads others
    */
   private VarkaErrorContext errorContext(String kind, Throwable cause, @Nullable String identity,
-      @Nullable String shapeHash, @Nullable ColumnarBatch input, boolean ownInputs) {
+      @Nullable String shapeHash, List<VarkaFamily> families, @Nullable ColumnarBatch input,
+      boolean ownInputs) {
     return new VarkaErrorContext(kind,
         identity != null ? identity : VarkaErrorContext.safely(this::kernelIdentity),
         shapeHash,
         VarkaErrorContext.safely(this::renderedOptions),
+        families,
         batchFacts(input, ownInputs),
         cause);
+  }
+
+  /**
+   * The families whose nodes this evaluator's kernel holds, read off the plan already resolved
+   * and never compiling one: it is asked inside a catch, where a compile could throw.
+   */
+  private List<VarkaFamily> ownFamilies() {
+    return planResolved && plan != null ? plan.families() : List.of();
   }
 
   /** The shape hash {@link #kernelIdentity} computed from the IR; null without a plan. */

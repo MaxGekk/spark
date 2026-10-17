@@ -58,7 +58,12 @@ DOCS = [
     "sql/varka/ISSUES.md",
     "sql/varka/Varka_MVP.md",
 ]
-DOC_GLOBS = ["sql/varka/plans/*.md", "sql/varka/plans/m*/*.md", "sql/varka/skills/*.md"]
+DOC_GLOBS = [
+    "sql/varka/plans/*.md",
+    "sql/varka/plans/m*/*.md",
+    "sql/varka/skills/*.md",
+    "sql/varka/skills/calibration/*.md",
+]
 RESULT_GLOBS = [
     "sql/*/benchmarks/*.txt",
     "sql/varka/engine/benchmarks/*.txt",

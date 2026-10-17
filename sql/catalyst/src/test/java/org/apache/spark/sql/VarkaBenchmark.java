@@ -29,9 +29,9 @@ import org.apache.spark.benchmark.Benchmark;
 
 /**
  * One of Spark's {@link Benchmark}s as Java writes it: a builder in place of the constructor's
- * seven arguments, and cases that are an {@link IntConsumer} in place of a Scala function that
- * returns {@code BoxedUnit}. Spark's class still times the cases and writes the table, so the
- * results files keep the one format {@code dev/varka_bench_regen.sh}, {@code
+ * seven arguments, and cases that are an {@link IntConsumer} or a {@link TimerCase} in place of a
+ * Scala function that returns {@code BoxedUnit}. Spark's class still times the cases and writes
+ * the table, so the results files keep the one format {@code dev/varka_bench_regen.sh}, {@code
  * dev/varka_bench_diff.py} and the quote check read.
  *
  * <p>Made by {@link VarkaBenchmarkBase#benchmark}, which hands it the run's results file.
@@ -55,6 +55,60 @@ public final class VarkaBenchmark {
       body.accept((Integer) iteration);
       return BoxedUnit.UNIT;
     });
+  }
+
+  /**
+   * A case that times only what it brackets with {@link Timer#startTiming} and {@link
+   * Timer#stopTiming}, for an iteration whose setup - a fresh query, a wait for a quiet JIT - is
+   * not what it measures; run for as many iterations as the benchmark's minimum time asks.
+   */
+  public void addTimerCase(String name, TimerCase body) {
+    addTimerCase(name, 0, body);
+  }
+
+  /** {@link #addTimerCase(String, TimerCase)} for exactly {@code iterations} iterations, or as
+   *  that when it is 0. */
+  public void addTimerCase(String name, int iterations, TimerCase body) {
+    benchmark.addTimerCase(name, iterations, timer -> {
+      try {
+        body.accept(new Timer(timer));
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        throw new IllegalStateException("interrupted in case " + name, e);
+      }
+      return BoxedUnit.UNIT;
+    });
+  }
+
+  /**
+   * The body of a timer case. It may throw {@link InterruptedException}, since what it waits for
+   * before it starts timing - a quiet JIT, a kernel warm-up's verdict - declares it.
+   */
+  @FunctionalInterface
+  public interface TimerCase {
+    void accept(Timer timer) throws InterruptedException;
+  }
+
+  /** Spark's timer of one iteration, which a timer case starts and stops around what it times. */
+  public static final class Timer {
+    private final Benchmark.Timer timer;
+
+    private Timer(Benchmark.Timer timer) {
+      this.timer = timer;
+    }
+
+    /** The iteration, from 0; -1 for each run of the warm-up. */
+    public int iteration() {
+      return timer.iteration();
+    }
+
+    public void startTiming() {
+      timer.startTiming();
+    }
+
+    public void stopTiming() {
+      timer.stopTiming();
+    }
   }
 
   /**
@@ -85,6 +139,7 @@ public final class VarkaBenchmark {
     private int minIterations = 2;
     private Duration warmup = Duration.ofSeconds(2);
     private Duration minTime = Duration.ofSeconds(2);
+    private boolean outputPerIteration = false;
 
     Builder(String name, long valuesPerIteration, Option<OutputStream> output) {
       this.name = name;
@@ -119,9 +174,20 @@ public final class VarkaBenchmark {
       return this;
     }
 
+    /**
+     * Whether each iteration's time is printed to the console as it ends, for cases whose
+     * iterations are separate events, such as a query's first run; the results file gets the
+     * table only.
+     */
+    public Builder outputPerIteration(boolean outputPerIteration) {
+      this.outputPerIteration = outputPerIteration;
+      return this;
+    }
+
     public VarkaBenchmark build() {
       return new VarkaBenchmark(new Benchmark(name, valuesPerIteration, minIterations,
-          DurationConverters.toScala(warmup), DurationConverters.toScala(minTime), false, output));
+          DurationConverters.toScala(warmup), DurationConverters.toScala(minTime),
+          outputPerIteration, output));
     }
   }
 }

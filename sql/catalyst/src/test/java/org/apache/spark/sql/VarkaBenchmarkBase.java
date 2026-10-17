@@ -174,16 +174,18 @@ public abstract class VarkaBenchmarkBase extends BenchmarkBase {
   /**
    * Scala's {@code require}, for the checks a benchmark makes while it sets up. The message is
    * built before the call, so a check inside a timed loop tests its condition and throws {@link
-   * #requirementFailed} itself, keeping the loop free of string building.
+   * #requirementFailed} itself, keeping the loop free of string building. Public, so that a class
+   * of static helpers beside the benchmarks ({@code VarkaSizeLadder}, {@code VarkaColdPath}) and a
+   * probe's {@code main} fail with the same exception and prefix as the benchmarks do.
    */
-  protected static void require(boolean requirement, String message) {
+  public static void require(boolean requirement, String message) {
     if (!requirement) {
       throw requirementFailed(message);
     }
   }
 
   /** The exception Scala's {@code require} throws, with its message prefix. */
-  protected static IllegalArgumentException requirementFailed(String message) {
+  public static IllegalArgumentException requirementFailed(String message) {
     return new IllegalArgumentException("requirement failed: " + message);
   }
 

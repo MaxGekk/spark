@@ -279,9 +279,11 @@ so nothing may wait on a cron, and that one Build at a time would have ended 13 
 nine hours late (2.2): the harm is a full-matrix run taking every slot, not two runs side by side.
 
 * **`admit`** in `build_and_test.yml` runs only in a Build that will precompile Spark, and
-  `Precompile Spark` needs it to succeed. `dev/varka_ci_admit.py` waits while another fork run's
-  `admit` has succeeded (that run has fanned out) or started waiting earlier, so full runs go one
-  at a time in the order they asked and scoped runs never wait. A pull request labelled `ci-hold`
+  `Precompile Spark` needs it to succeed. `dev/varka_ci_admit.py --concurrent 2` waits while two
+  other fork runs are ahead (their `admit` has succeeded, so they have fanned out, or started
+  waiting earlier), so full runs go at most two at a time in the order they asked, and scoped
+  runs never wait. On a fork the module and PySpark matrices take at most 12 and 6 slots, so two
+  full runs fit in forty. A pull request labelled `ci-hold`
   on `vecbricks/varka` fails at `admit`; remove the label and rerun the failed jobs to resume.
   A re-push cancels a waiting run through the Build's own concurrency group.
 * **The check sync**, `update_build_status.yml` on the base, starts when notify ("On pull request

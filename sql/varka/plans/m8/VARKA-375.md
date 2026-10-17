@@ -71,6 +71,12 @@ plan's.
   more, the box signature) or the validity-reading kernel is slower by more than the band. Then
   the alternative of 3.1 is built behind an option.
 
+*Owner's decision, 16 October 2026:* `-XX:UseSVE=1` on the Neoverse N2 runner is accepted for the
+allocation half of this question. It simulates the JVM's feature set, which is what decides whether
+the fallback runs, so it answers whether the fallback allocates per iteration. The timing half, on
+a real NEON-only or SVE1 host, stays unbuilt until such a host exists; a timing read under
+`UseSVE=1` is the N2's and is recorded as such (risk 1), not as a Graviton3's or an M-series core's.
+
 ## 3. The design
 
 ### 3.1 The mechanism, if admitted
@@ -175,3 +181,10 @@ switch selection at run time, `m7` row 374's two-lane x86 fallback, and 331's bo
 ## 9. Outcome
 
 *To be written when the work lands.*
+
+### 9.1 The owner's decision on the simulation, 16 October 2026
+
+`-XX:UseSVE=1` on the Neoverse N2 runner answers the allocation half of section 2's question:
+whether `fromLong`'s fallback allocates per iteration in a validity-reading kernel. The timing
+half - whether the fallback is slower on a real NEON-only or SVE1 core - waits for such a host and
+is not built until one exists. Section 8's step 2 is the run this decision allows.

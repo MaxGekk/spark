@@ -649,9 +649,10 @@ def cast_kind(src, dst):
     if src == "dec" and dst in INTEGRAL:
         return (
             "truncation",
-            "toward zero; LEGACY exact, keeping the low bits; ANSI and TRY range-check by the exact"
-            " rule for a long-backed value (precision <= 18, row 365) and by the double rule"
-            " (Decimal.roundToNumeric) for a BigDecimal-backed one (precision > 18)",
+            "toward zero; LEGACY exact, keeping the low bits; ANSI and TRY range-check by the"
+            " double rule (Decimal.roundToNumeric over a BigDecimal-backed value) at every"
+            " precision, as Varka's fallback reads it through ArrowColumnVector (row 365, option"
+            " iii); Spark's cached row path reads a long-backed value and the exact rule",
         )
     if src == "dec" and dst == "double":
         return (
@@ -735,15 +736,16 @@ def cast_proof(src, dst):
     """How a pair is proven: exhaustion where the source has at most 32 bits; SMT for an integer
     rule over a 64-bit source; sampled regions and the fuzzer for a double source and for a
     64-bit source rounding to a floating type, which floating-point theory does not decide in
-    useful time (VARKA-241.md). A decimal to INT, SMALLINT or TINYINT is mixed: the exact rule
-    below precision 19 is an integer rule, the double rule above it is not (owner's decision A1,
-    14 October 2026)."""
+    useful time (VARKA-241.md). A decimal to INT, SMALLINT or TINYINT is mixed: LEGACY's low bits
+    are an integer rule, the ANSI and TRY range check by the double rule is not, at every precision
+    (the owner's answer to question 3 of m8/PLAN.md section 7, 16 October 2026, which superseded
+    decision A1's exact rule below precision 19)."""
     if src in ("bool", "byte", "short", "int", "date", "ym", "float"):
         return "exhaustion"
     if src == "dec" and dst in ("byte", "short", "int"):
         return (
-            "mixed: SMT (dev/varka_prove.sh) for the exact rule below precision 19, sampled regions"
-            " and the fuzzer for the double rule above it"
+            "mixed: SMT (dev/varka_prove.sh) for LEGACY's low bits, sampled regions and the fuzzer"
+            " for the ANSI and TRY range check by the double rule at every precision"
         )
     if src in ("bigint", "dt", "time", "ntz", "dec") and dst not in ("float", "double"):
         return "SMT (dev/varka_prove.sh) for the integer rule, sampled regions and the fuzzer"
