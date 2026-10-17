@@ -155,7 +155,7 @@ public final class VarkaChrono {
    * widens that interval by a bound the compiler knows, and the calendar node fuses only if the
    * result stays inside the range the lowering decomposes exactly. Spark stores any int32 day, so
    * the bound is checked rather than assumed: a compile that rests on it notes it against the
-   * column, and the evaluator declines a batch with a live day outside it (VARKA-379). Derived
+   * column, and the kernel declines a batch with a live day outside it (VARKA-379). Derived
    * from {@link LocalDate} rather than typed in, so the number cannot drift from the calendar
    * fact it states.
    */

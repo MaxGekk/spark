@@ -32,9 +32,13 @@ import org.apache.spark.sql.execution.VarkaMaybeThrows.Answered
  * the civil-from-days lowering is exact well past that range. Spark stores any int32 day count,
  * though, and a cached column can hold one: until VARKA-379 a calendar field over a day past
  * 42400-02-29 or before -5394572 was served wrong, with nothing declined. Now a compile that
- * rests on the bound notes it against the column and the evaluator checks each batch's live days
- * before the kernel runs, so every answer here is Spark's - from the kernel where the batch is
- * inside the bound, from the row engine after a declined batch where it is not.
+ * rests on the bound guards the column in the kernel, which checks each batch's live days on the
+ * vectors it loads and declines the batch with `STATUS_VALUE_RANGE` when one is outside, so every
+ * answer here is Spark's - from the kernel where the batch is inside the bound, from the row
+ * engine after a declined batch where it is not. The fixture's views hold one batch, which with
+ * the null row's masked body and the dense body without it puts every day through both bodies'
+ * tails; `VarkaColumnBoundGuardSuite` (catalyst) drives the full lane groups, both widths and
+ * split methods below the evaluator.
  *
  * The shapes are every row of `sql/varka/coverage.json` over the date, int and year-month
  * columns, so a calendar row added to the table is run here with no change to this file, and the
@@ -57,7 +61,7 @@ class VarkaFarDaySuite extends QueryTest with VarkaMaybeThrows {
   /**
    * One row of the table, and whether its domain holds the column bound: the rows whose answer
    * rests on it, which must decline a batch past it, where every other row's lowering is exact
-   * for any int day and must decline nothing on the input bound.
+   * for any int day and must decline nothing on the column bound's guard.
    */
   private case class CoverageRow(sql: String, executable: String, form: String, bounded: Boolean)
 
@@ -106,12 +110,17 @@ class VarkaFarDaySuite extends QueryTest with VarkaMaybeThrows {
     collect(plan) { case v if isVarkaNode(v) => v.metrics.get(name).map(_.value).getOrElse(0L) }
       .sum
 
-  private val inputBound = VarkaExecMetrics.reasonKey("input-bound")
+  /**
+   * The decline reason of the column bound's guard, a `GuardedRange` in the kernel. The fixture's
+   * rows hold no other range guard - the `TIME` family's are on columns this view lacks - so a
+   * count under it is the column bound's.
+   */
+  private val columnBound = VarkaExecMetrics.reasonKey("value-range")
 
   /**
    * Runs `query` on both engines: the same rows or the same error. Where Spark answered, the
    * query must have reached a Varka node, every batch it read was either served by its kernel or
-   * declined - nothing failed - and the batches declined on the input bound are returned; none
+   * declined - nothing failed - and the batches declined on the column bound are returned; none
    * where either engine raised or no batch was read.
    */
   private def check(query: String): Option[Long] = {
@@ -129,7 +138,7 @@ class VarkaFarDaySuite extends QueryTest with VarkaMaybeThrows {
         // reads no batch at all, and answers no row.
         assert(rows.isEmpty || served + declined > 0L,
           s"$query: no batch reached the kernel:\n${p.treeString}")
-        if (served + declined > 0L) Some(metric(p, inputBound)) else None
+        if (served + declined > 0L) Some(metric(p, columnBound)) else None
       case _ => None
     }
   }
@@ -145,7 +154,7 @@ class VarkaFarDaySuite extends QueryTest with VarkaMaybeThrows {
         for (e <- Seq("year(d)", "month(d)", "dayofmonth(d)")) {
           withClue(s"$e, nulls=$nulls: ") {
             assert(check(s"SELECT v, $e AS r FROM varka_far_days").exists(_ > 0L),
-              "the batch holds days past the bound, so it must decline on the input bound")
+              "the batch holds days past the bound, so it must decline on the column bound")
           }
         }
       }
@@ -172,7 +181,7 @@ class VarkaFarDaySuite extends QueryTest with VarkaMaybeThrows {
     }
   }
 
-  test("no batch declines on the input bound at the bound's own edges") {
+  test("no batch declines on the column bound at the bound's own edges") {
     for (nulls <- Seq(true, false)) {
       withDays(edgeDays, nulls) {
         for (r <- coverageRows) {

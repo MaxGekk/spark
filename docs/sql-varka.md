@@ -115,7 +115,12 @@ becomes timestamp arithmetic) decline:
   shifting upward is admitted against that wider ceiling rather than the
   enforced one (VARKA-69). A date column
   is taken to hold `0001-01-01..9999-12-31`, the project's column contract,
-  and is not checked at ingestion. The compiler bounds how far the arithmetic
+  and is not checked at ingestion. Spark stores any 32-bit day count, so
+  wherever a fused answer rests on that range the kernel checks it (VARKA-379):
+  it compares the column's values with the range as it loads them, in its own
+  loop, and declines a batch holding a live day outside it to the row path,
+  counted as `numFallbackBatchesDeclined` under the value-range reason. The
+  compiler bounds how far the arithmetic
   under a calendar function can shift such a day - literal `DATE_ADD` offsets,
   `NEXT_DAY`, `LAST_DAY`, `ADD_MONTHS` with a literal count, and their
   compositions - and an entry whose shift can leave the range is residual at

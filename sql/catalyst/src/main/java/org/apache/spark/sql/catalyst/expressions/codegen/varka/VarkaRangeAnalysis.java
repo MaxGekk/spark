@@ -18,7 +18,9 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import java.time.LocalDate;
+import java.util.IdentityHashMap;
 import java.util.OptionalLong;
+import java.util.Set;
 import java.util.function.IntConsumer;
 import java.util.function.IntUnaryOperator;
 
@@ -41,6 +43,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Int
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoundedDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntNeg;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IsNotNull;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LastDay;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Least;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
@@ -119,9 +122,10 @@ public final class VarkaRangeAnalysis {
    * The column bound: the range a bare date column is read as, 0001-01-01 to 9999-12-31. It is
    * not a fact about the data - Spark stores any int32 day count, and a cached column can hold
    * one - but a check: an answer that rests on it reports the column, the compiler notes the bound
-   * against that input, and the evaluator declines a batch with a live day outside it to the row
-   * engine before the kernel runs (VARKA-379). Until VARKA-379 it was assumed and never checked,
-   * and a calendar field over a cached column holding a far day was served wrong.
+   * against that input, and {@link #guardColumns} wraps the column in a {@link GuardedRange} over
+   * it, so the kernel declines a batch with a live day outside it to the row engine (VARKA-379).
+   * Until VARKA-379 it was assumed and never checked, and a calendar field over a cached column
+   * holding a far day was served wrong.
    */
   public static final Range CONTRACT =
       VarkaValueRange.of(VarkaChrono.CONTRACT_MIN_DAYS, VarkaChrono.CONTRACT_MAX_DAYS);
@@ -197,12 +201,12 @@ public final class VarkaRangeAnalysis {
    * literal slots through {@code literals}, and reporting to {@code columns} the kernel input
    * slot of every date column whose {@link #CONTRACT} the answer rests on. A caller that acts on
    * the answer - admits a calendar node, removes an overflow check - must have each reported
-   * column checked against {@link #CONTRACT} per batch, or the answer is an assumption. A column
-   * the answer does not rest on is not reported: one under a {@link GuardedDay}, or under a
-   * column-offset day shift, whose own result the producer guard checks. That guard is the one
-   * this analysis cannot see the absence of: the reference configuration
-   * {@code guardDayProducers=false} removes it and computes such a lane wrongly rather than
-   * declining it, by design ({@link VarkaEmitOptions#guardDayProducers}).
+   * column checked against {@link #CONTRACT} per batch ({@link #guardColumns}), or the answer is
+   * an assumption. A column the answer does not rest on is not reported: one under a
+   * {@link GuardedDay}, or under a column-offset day shift, whose own result the producer guard
+   * checks. That guard is the one this analysis cannot see the absence of: the reference
+   * configuration {@code guardDayProducers=false} removes it and computes such a lane wrongly
+   * rather than declining it, by design ({@link VarkaEmitOptions#guardDayProducers}).
    */
   public static Range range(VarkaVectorIR node, Kind kind, GuardPolicy policy,
       IntUnaryOperator literals, IntConsumer columns) {
@@ -216,7 +220,7 @@ public final class VarkaRangeAnalysis {
     }
     return switch (node) {
       // A day column is the column bound, which the answer rests on: the caller that relies on
-      // the answer has the evaluator check it per batch (`columns` names the column to it).
+      // the answer has the kernel check it per batch (`columns` names the column to it).
       case ColumnRef c -> {
         if (kind != Kind.DAY) {
           yield VarkaValueRange.UNKNOWN;
@@ -252,11 +256,11 @@ public final class VarkaRangeAnalysis {
       // check enforces: a lane outside is reported and the batch recomputed on the row engine.
       case GuardedDay n -> kind != Kind.DAY ? VarkaValueRange.UNKNOWN : NARROW;
       // A range guard's own bounds are what leaves it, whatever the child was - the same
-      // promise the day guard makes, with the bounds the node names. Answered only for the
-      // int kinds this lattice tracks; the long lane is UNKNOWN throughout, and its callers
-      // prove their bounds structurally (VARKA-102) or through a guard like this one.
-      case GuardedRange n -> kind == Kind.INT
-          ? VarkaValueRange.of(n.lo(), n.hi()) : VarkaValueRange.UNKNOWN;
+      // promise the day guard makes, with the bounds the node names - asked as days (a date
+      // column guarded by the column bound, VARKA-379) or as ints. The long lane is UNKNOWN
+      // throughout, above, and its callers prove their bounds structurally (VARKA-102) or
+      // through a guard like this one.
+      case GuardedRange n -> VarkaValueRange.of(n.lo(), n.hi());
       // A 32-bit value computed in the long lane, whose ranges this lattice does not track.
       case NarrowLane n -> VarkaValueRange.UNKNOWN;
       case Greatest n -> hull(n.left(), n.right(), kind, policy, literals, columns);
@@ -314,6 +318,94 @@ public final class VarkaRangeAnalysis {
   /** {@link #magnitude(VarkaVectorIR, IntUnaryOperator, IntConsumer)}, reporting nothing. */
   public static OptionalLong magnitude(VarkaVectorIR node, IntUnaryOperator literals) {
     return magnitude(node, literals, NO_COLUMNS);
+  }
+
+  /**
+   * {@code node} with every use of a date column in {@code slots} read through a
+   * {@link GuardedRange} over {@link #CONTRACT}: the in-kernel check of the column bound, for the
+   * columns an entry's admission rested on (VARKA-379). The guard compares the vector the kernel
+   * loads anyway, in the loop and the tail of both bodies, and its status declines the batch, so
+   * the bound costs no pass of its own over the column.
+   *
+   * <p>Two uses are left bare. An {@link IsNotNull}'s column, whose validity is all it reads and
+   * which must stay a column ({@code Analysis}). And a column in a restricted operand position
+   * ({@link VarkaOperandPosition}), none of which admits a guard; a date column cannot sit in one
+   * - each takes an int count or a derived column - but if one did, its slot is added to
+   * {@code unguarded}, and the caller keeps the evaluator's per-batch check for it. A tree the
+   * compiler shares between parents stays shared: each distinct node is rebuilt once.
+   */
+  public static VarkaVectorIR guardColumns(
+      VarkaVectorIR node, Set<Integer> slots, Set<Integer> unguarded) {
+    return slots.isEmpty() ? node : guardColumns(node, slots, unguarded, new IdentityHashMap<>());
+  }
+
+  // Identity on purpose: a child is rebuilt only where it changed, and a node is reused as the
+  // very instance it was, so a subtree the compiler shares stays one instance.
+  @SuppressWarnings("ReferenceEquality")
+  private static VarkaVectorIR guardColumns(VarkaVectorIR node, Set<Integer> slots,
+      Set<Integer> unguarded, IdentityHashMap<VarkaVectorIR, VarkaVectorIR> done) {
+    VarkaVectorIR seen = done.get(node);
+    if (seen != null) {
+      return seen;
+    }
+    VarkaVectorIR rebuilt;
+    if (node instanceof ColumnRef c) {
+      // The analysis reports only int-lane columns, the column bound being an int32 statement;
+      // a wider one would be left to the evaluator's check rather than guarded at a lane the
+      // bound does not describe.
+      if (!slots.contains(c.ordinal())) {
+        rebuilt = c;
+      } else if (c.lane() == VarkaVectorIR.LaneType.INT) {
+        rebuilt = new GuardedRange(
+            c, VarkaChrono.CONTRACT_MIN_DAYS, VarkaChrono.CONTRACT_MAX_DAYS);
+      } else {
+        unguarded.add(c.ordinal());
+        rebuilt = c;
+      }
+    } else if (node instanceof IsNotNull) {
+      rebuilt = node;
+    } else {
+      VarkaVectorIR[] children = VarkaVectorIR.childrenOf(node);
+      boolean changed = false;
+      for (int i = 0; i < children.length; i++) {
+        VarkaVectorIR child = children[i];
+        VarkaVectorIR guarded = child instanceof ColumnRef c && restricted(node, child)
+            ? bare(c, slots, unguarded)
+            : guardColumns(child, slots, unguarded, done);
+        changed |= guarded != child;
+        children[i] = guarded;
+      }
+      rebuilt = changed ? VarkaVectorIR.withChildren(node, children) : node;
+    }
+    done.put(node, rebuilt);
+    return rebuilt;
+  }
+
+  /**
+   * Whether {@code child} is one of {@code node}'s operands in a restricted position: the very
+   * instance {@code restrictedOperands} names, since an equal column elsewhere in the node is not
+   * in that position.
+   */
+  @SuppressWarnings("ReferenceEquality")
+  private static boolean restricted(VarkaVectorIR node, VarkaVectorIR child) {
+    for (VarkaOperandPosition.Restricted r : VarkaOperandPosition.restrictedOperands(node)) {
+      if (r.operand() == child) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * A column in a restricted position, which stays bare: its slot is noted if it is one the
+   * caller asked to guard. Any other operand there was taken by its own kind, and the columns
+   * under it are guarded as anywhere else.
+   */
+  private static ColumnRef bare(ColumnRef c, Set<Integer> slots, Set<Integer> unguarded) {
+    if (slots.contains(c.ordinal())) {
+      unguarded.add(c.ordinal());
+    }
+    return c;
   }
 
   private static Range field(Kind kind, long magnitude) {

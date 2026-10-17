@@ -137,8 +137,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   private val minMonths = VarkaChrono.MONTH_ARITH_MIN_MONTHS
   private val maxMonths = VarkaChrono.MONTH_ARITH_MAX_MONTHS
   /**
-   * The column bound a calendar field's answer rests on (VARKA-379): the evaluator declines a
-   * batch with a live day outside it before the kernel runs.
+   * The column bound a calendar field's answer rests on (VARKA-379): the compiler guards the
+   * column in the kernel, which declines a batch with a live day outside it (`VALUE_RANGE`).
    */
   private val dayBound =
     s"unix_date(d) BETWEEN ${VarkaChrono.CONTRACT_MIN_DAYS} AND ${VarkaChrono.CONTRACT_MAX_DAYS}"

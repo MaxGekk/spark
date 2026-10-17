@@ -299,7 +299,10 @@ final class Analysis {
      * compiler admits the expression on the strength of this check ({@code VARKA-93.md} 3.4).
      */
     DAY_RANGE(Family.REARMED, true, VarkaFusedKernel.STATUS_DAY_RANGE),
-    /** {@link GuardedRange}: the day guard's twin at either lane, with the bounds it carries. */
+    /**
+     * {@link GuardedRange}: the day guard's twin at either lane, with the bounds it carries - a
+     * value the row engine throws on, or a date column outside the column bound (VARKA-379).
+     */
     VALUE_RANGE(Family.REARMED, true, VarkaFusedKernel.STATUS_VALUE_RANGE);
 
     final Family family;

@@ -805,7 +805,7 @@ final class VarkaChronoCompiler {
   /**
    * {@code admitted}, a node {@link #rearm} rewrote and the admission then rested on: every date
    * column its interval read as {@link VarkaRangeAnalysis#CONTRACT} gets that range noted as an
-   * input bound, which the evaluator checks per batch before the kernel runs, declining a batch
+   * input bound, which the entry's compile turns into a guard in the kernel, declining a batch
    * with a live day outside it to the row engine. Without it the column bound is an assumption,
    * and a cached column holding a day past the range the lowering is exact over was served wrong
    * (VARKA-379). Asked once more, on the rewritten node, rather than collected while the rewrite

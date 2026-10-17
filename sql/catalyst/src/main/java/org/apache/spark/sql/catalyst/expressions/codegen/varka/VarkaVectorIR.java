@@ -301,7 +301,12 @@ public sealed interface VarkaVectorIR
    * lane the caller chooses: the day guard's range is the calendar's and its lane is the int
    * one by construction, where this one exists for values the row engine would <i>throw</i> on
    * rather than compute - {@code TIME + INTERVAL} past midnight is the first - so that the
-   * batch goes to the row engine, which raises the identical error on the identical row.
+   * batch goes to the row engine, which raises the identical error on the identical row. The
+   * second use is a date column the compiler admitted a calendar lowering or removed an overflow
+   * check over on the strength of the column bound ({@code VarkaRangeAnalysis.CONTRACT}): the
+   * compiler wraps each such column in this node over that bound
+   * ({@code VarkaRangeAnalysis.guardColumns}), so a batch holding a day the lowering is not exact
+   * over goes to the row engine, which computes it (VARKA-379).
    *
    * <p>The bounds are part of the node, for the reason {@link GuardedDay}'s placement is: two
    * plans with the same tree and different bounds must not share a kernel, and the shape key

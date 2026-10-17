@@ -539,7 +539,8 @@ final class VarkaNodeCompiler {
    * slot index, and the value behind it only arrives in {@code scalarArgs} at run time.
    * Conservative by construction: a no costs a check or a decline and never a wrong answer. A yes
    * removes a check, so a date column the magnitude rests on - under a {@code datediff} - gets the
-   * column bound noted in {@code sink}, which the evaluator checks per batch (VARKA-379).
+   * column bound noted in {@code sink}, which the entry's compile turns into a guard in the
+   * kernel (VARKA-379).
    */
   static boolean boundedByIntMax(VarkaVectorIR node, VarkaSlotTable literals, DeclineSink sink) {
     var columns = new ArrayList<Integer>();

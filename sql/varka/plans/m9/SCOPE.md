@@ -5233,11 +5233,12 @@ neither is worth it on the hosts that have it.
 
 *Added 16 October 2026 from `m7/VARKA-379.md` 3.1.* VARKA-379 made the date column bound a check:
 wherever an answer rests on a bare date column's range, the compiler notes 0001-01-01 to
-9999-12-31 against the column and the evaluator declines a batch with a live day outside it. That
+9999-12-31 against the column and the kernel declines a batch with a live day outside it. That
 is one constant for every shape, so days the admitted kernel computes exactly - from day -5394572
 up to 0001-01-01, and from 10000-01-01 up to 42400-02-29 for a bare field, less any literal shift
 the shape adds - now go to the row engine where master served them. The mechanism takes a bound
-per shape already (`DeclineSink.boundSlot` carries any interval): the widest interval of the
+per shape already (`DeclineSink.boundSlot` carries any interval, and the compiler wraps the column
+in a `GuardedRange` over it): the widest interval of the
 column that keeps the admitted node's interval inside the range the lowering decomposes exactly,
 found by running the range analysis's transfer functions backwards from the admission's limit,
 or by asking it at the candidate bound. The proofs then take that interval as the leaf's premise.

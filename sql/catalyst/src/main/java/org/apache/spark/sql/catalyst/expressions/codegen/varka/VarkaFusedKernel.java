@@ -75,7 +75,11 @@ public interface VarkaFusedKernel {
   /** A {@code GuardedDay}'s day outside the range the compiler re-armed. */
   int STATUS_DAY_RANGE = 1 << 4;
 
-  /** A {@code GuardedRange}'s value outside the bounds it carries. */
+  /**
+   * A {@code GuardedRange}'s value outside the bounds it carries: a value the row engine throws
+   * on, or a date column's day outside the column bound the calendar lowering rests on
+   * (VARKA-379).
+   */
   int STATUS_VALUE_RANGE = 1 << 5;
 
   /**

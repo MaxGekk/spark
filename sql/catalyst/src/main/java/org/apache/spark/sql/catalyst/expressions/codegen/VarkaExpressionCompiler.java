@@ -610,7 +610,10 @@ public final class VarkaExpressionCompiler {
       // and then takes the over-budget branch below, so the rollback it runs is the one a real
       // decline runs.
       boolean forced = options.forceResidualAt() == position + 1;
-      Optional<VarkaVectorIR> compiled = compileRoot(e, inputs, literals, sink);
+      // The date columns the entry's admission rested on are guarded in the tree now, before the
+      // budgets below see it (DeclineSink.guardDayColumns).
+      Optional<VarkaVectorIR> compiled = compileRoot(e, inputs, literals, sink)
+          .map(ir -> sink.guardDayColumns(ir, marks.bounds()));
       if (compiled.isPresent()) {
         VarkaVectorIR ir = compiled.get();
         // One kernel holds one lane: its loop, its epilogue and its stores are one species. The
@@ -681,8 +684,9 @@ public final class VarkaExpressionCompiler {
      */
     private boolean fitsAlone(Expression e) {
       VarkaSlotTable own = new VarkaSlotTable();
-      return compileRoot(e, own, new VarkaSlotTable(),
-          new DeclineSink(childOutput, options.rangeSets(), off))
+      DeclineSink ownSink = new DeclineSink(childOutput, options.rangeSets(), off);
+      return compileRoot(e, own, new VarkaSlotTable(), ownSink)
+          .map(ir -> ownSink.guardDayColumns(ir, 0))
           .map(ir -> VarkaLoopEmitter.fitsBudgets(List.of(ir), own.size(), options))
           .orElse(false);
     }
@@ -835,7 +839,9 @@ public final class VarkaExpressionCompiler {
         continue;
       }
       Marks marks = Marks.of(inputs, literals, sink);
-      Optional<Cond> compiled = VarkaConditionCompiler.compileCond(bound, inputs, literals, sink);
+      // Guarded as a projection entry is; the rebuild keeps a condition a condition.
+      Optional<Cond> compiled = VarkaConditionCompiler.compileCond(bound, inputs, literals, sink)
+          .map(c -> (Cond) sink.guardDayColumns(c, marks.bounds()));
       if (compiled.isPresent()) {
         Cond cond = compiled.get();
         // The lane rule of `compilePartial`, for conjuncts: the AND fold below would refuse a mix
