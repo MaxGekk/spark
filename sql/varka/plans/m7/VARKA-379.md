@@ -369,3 +369,110 @@ the pre-pass did. The suite's case reads another column in its condition; it is 
 family's range guards, rather than a reason of its own; the kernel cannot tell the two apart
 without a status bit for the column bound, which would be a second refusal reason on the same
 node. Prediction 10.3 #2 waits for the re-pair.
+
+## 11. A cheaper guard (17 October 2026)
+
+### 11.1 Why, and where the cost is
+
+The re-pair of section 10 (`VarkaThroughputBenchmark`, ten rounds on GitHub runners, EPYC 7763,
+AVX2, run 38994401183) took most of the pass's cost away and left a residual on Varka's side:
+`datediff + 1` 7.3% slower by median and 3.6% by best, `year * 100 + month` 6.5% and 4.0%,
+`yearofweek` 6.9% and 3.2%, `weekofyear` 5.8% and 6.9%, their Janino rows flat by best. That
+scores 10.3 #2: its first half held (no row 10% slower by both), its second failed on
+`weekofyear`, 6.9% by best against within 5% (a calibration entry, ratio about 1.4). The owner
+holds the pull request until the residual is designed out too.
+
+Where it goes, read from C2's assembly of `datediff(d, DATE'2000-01-01') + 1`'s loop methods,
+on the laptop with `-XX:UseAVX=2 -XX:MaxVectorSize=32`, the runner's instruction set: the
+benchmark's `varka_dates` holds a null every 31st row, so every batch runs the masked body, and
+there each lane group spends nine instructions turning the column's validity byte into a lane mask
+for the guard (a bounds-checked byte load, `pdep`, `vmovq`, `vpxor`, `vpsubb`, `vpmovsxbd`,
+`vpand`) beside four on the range itself (two `vpcmpgtd`, two `vpor`). The kernel's own work for
+that shape is four: a load, a subtract, an add and a store. The dense body pays the four only.
+Section 10.4's note that "each lane group now loads the column's validity word and makes a mask of
+it" was the cost, and the masked loops before the guard read no validity at all.
+
+### 11.2 The candidates
+
+1. **No validity.** A range guard over a bare int column checks the column's stored values, null
+   rows included. It removes the nine, and the masked loop reads no validity word again: the
+   liveness pass stops demanding the column's word for the guard (`Slots.guardedWord`).
+2. **Min and max, checked once.** In a loop body, the guarded vector goes into a lane-wise min and
+   a lane-wise max (`vpminsd`, `vpmaxsd`: two ops a group in place of four, and no mask), into two
+   accumulators started at `broadcast(lo)` and `broadcast(hi)`; after the loop the two compare
+   once against the bounds and fold into the guard mask the status return already reduces, so
+   the driver, the split methods and `exactRefusalStatus` read the result as before. It needs 1:
+   a min cannot be qualified by validity without a blend per group, which is the cost 1 removes.
+   It stays out of the epilogue (one pass; it keeps the compares and the bounds mask's AND, minus
+   validity) and of a guard under `IfElse` arms, whose mask is ANDed with the arm's condition and
+   keeps the compares, minus validity.
+3. **Not built, recorded.** (a) Keeping live lanes only, cheaply: OR each group's out-of-range
+   mask as bits (`toLong() << offset`) into a long and AND it with the validity word once per 64
+   rows - about three scalar ops a group instead of nine. It is the design if null rows' stored
+   values could not be relied on to be in range, which 11.3 checks. (b) The Arrow cache already
+   computes each batch's min and max date (`ArrowCachedBatchSerializer.calculateMinMaxDate`) for
+   pruning; carried into the evaluator it would make the check free for cached input, but a
+   kernel's input is not only the cache, and the stats do not reach the `ColumnarBatch` today.
+   (c) Confirming a fired cheap check exactly before declining (rerun the old pass over live lanes
+   only, serve the already written outputs when it passes) would keep 1's declines away, at the
+   price of a status bit of the column bound's own and a serve path that reads outputs after a
+   non-zero status, which no other guard does.
+
+The pair cannot tell 1 from 1+2, and both change the same batches' fate, so the choice between
+them is a laptop A/B of the kernel alone under the runner's instruction set (11.4 #2), labelled as
+such. Neither is a machine-dependent trade-off in direction - a min or a max is one op on AVX2,
+AVX-512 and NEON alike, against two compares and two ORs - so the loser is recorded here and not
+kept as an emit option.
+
+### 11.3 What 1 changes in which batches decline
+
+The pre-pass and section 10's guard read live lanes only; 1 reads null rows' stored days too. What
+a null row stores: Arrow's fixed-width vectors zero their value buffer on `allocateNew`, on
+`reAlloc` (the new part) and on `reset` (`BaseFixedWidthVector`, arrow-vector 19.0.0, the build's),
+and `setNull` clears the validity bit only. So a null the cache's row path writes through Spark's
+`ArrowWriter` is day 0, inside the bound, and 1 declines nothing there that 10 served. A far day
+under a null comes only from a producer that computed one: the cache takes an Arrow batch
+zero-copy (`ColumnarBatchToArrowCachedBatchIterator`), and a Varka kernel's output holds in a null
+lane what its lowering computed from the stored inputs (`date_add(d, i)` with `d` null holds `i`).
+Such a batch now declines and the row engine answers it: slower, never wrong, and only in the
+masked body, since the dense one runs on batches without nulls.
+
+The form is chosen structurally: an int-lane `GuardedRange` whose child is a `ColumnRef`. The
+compiler builds exactly one, the column bound (`VarkaRangeAnalysis.guardColumns`); the `TIME`
+family's range guards sit on the long lane, where AVX2 has no 64-bit min or max, and keep both
+their validity and their compares. The IR grammar draws int-lane `GuardedRange`s over columns with
+other bounds, which take the form too, and the guard verdict (`VarkaGuardSpecs`) reads a null row
+under one as a row that may decline: the reference has no value for it, and the fuzzer poisons
+null lanes with the lane's extremes.
+
+### 11.4 Predictions, registered before the build
+
+1. Emitted bytes, per loop method at the laptop's width (`dev/varka_emit.sh`), against 10.4's
+   table: every masked loop shrinks, by 60 to 100 bytes for one guarded column and 150 to 250 for
+   `datediff(d, d2) + 1`'s two, and reads no validity word; every dense loop grows by 10 to 40 for
+   one column (the accumulators' start and the fold after the loop cost more bytes than the two
+   compares save) and changes by less than 20 for two, since the second column's guard is two ops
+   into the same accumulators. No method count changes and no coverage row stops fusing.
+2. Laptop A/B, the kernel alone (`VarkaEmitDump --rounds`, 4,096-row batches, 33 nulls per column
+   and none, `-XX:UseAVX=2 -XX:MaxVectorSize=32`), against the same kernel without the guard: the
+   head's masked-loop overhead on `datediff + 1` falls by at least two thirds under 1 and by at
+   least three quarters under 1+2; the dense overhead falls by at least a third under 1+2 and does
+   not move under 1. 1+2 is built if it beats 1 on the masked loop and loses nothing on the dense.
+3. The re-pair (`VarkaThroughputBenchmark`, ten rounds, against the base): the four rows above
+   within 3% of the base by best, no row 10% slower by both median and best, the Janino rows flat.
+   That is 10.3 #2's estimate of the guard's remaining work - one or two ops a group beside a
+   decomposition of tens - at the 1.4 it scored.
+4. No suite is added; the tests added cost under 2 s.
+
+### 11.5 The consumers of the guard's emission
+
+Enumerated before the build, since each reads the guard's shape: the liveness pass's demand
+(`Slots.guardedWord`) and the scratch predicate (`guardScratch`, no park slot for the min/max
+form); the slot plan (two accumulators per distinct bound pair in a loop body that holds the form);
+`emitGuardCollect`'s validity AND and arm context; the status return under one mask and under
+`exactRefusalStatus`; the guard verdict (`VarkaGuardSpecs`) and the suites over it
+(`VarkaGuardEdgeSuite`'s edge table and its test of far days under null rows, which flips from
+served to declined in the masked body, `VarkaFarDaySuite`'s null-row cases); the price tables
+(`VarkaEmitCostTable`, `VarkaEmitCostRegister`, regenerated by `VarkaEmitCostSuite`) and the audit;
+the op-count pins (`VarkaInliningCliffSuite`'s census, `VarkaExpressionCompilerSuite`'s op cap, the
+emitter suites' counts); `emitted_bytes.json`.
