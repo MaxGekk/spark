@@ -19,9 +19,10 @@
 # over the Varka sources of sql/catalyst and sql/core, against the classpath sbt exports, writing
 # class files nothing reads. A warning fails it (-Werror). Three further checks:
 #   - NullAway treats a class as unannotated only while dev/varka_nullaway_pending.txt lists it
-#     both here and on origin/master, and checks every other class. The list only shrinks: it may
-#     not grow longer than the base's (the merge base with origin/master), and a name the base
-#     does not list must replace one it does, as a renamed or moved class does;
+#     both here and on master (origin/master, or --master), and checks every other class. The
+#     list only shrinks: it may not grow longer than the base's (the merge base with
+#     origin/master, or --base), and a name the base does not list must replace one it does, as
+#     a renamed or moved class does;
 #   - every @SuppressWarnings in those sources says why, in a // comment after it on its line or
 #     on the line above, and none suppresses NullAway over a whole class;
 #   - java and javac are the JDK the javac flags below are written for.
@@ -29,6 +30,7 @@
 #   dev/varka_errorprone.sh                         # export the classpath with sbt, then check
 #   dev/varka_errorprone.sh --classpath-file FILE   # a classpath already exported (the gate's)
 #   dev/varka_errorprone.sh --base REF              # the ref the pending list is compared with
+#   dev/varka_errorprone.sh --master REF            # Varka's master, where origin/master is not
 #
 # The jars are pinned by version and sha256 and fetched into build/varka-errorprone/ on first use.
 
@@ -43,12 +45,14 @@ LIB=$ROOT/build/varka-errorprone
 PENDING=$ROOT/dev/varka_nullaway_pending.txt
 classpath_file=""
 base=""
+master=origin/master
 
 usage() { sed -n '/^# Error Prone and NullAway/,/^# The jars/p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --classpath-file) classpath_file=$2; shift 2 ;;
     --base) base=$2; shift 2 ;;
+    --master) master=$2; shift 2 ;;
     -h|--help) usage ;;
     *) echo "unknown option: $1" >&2; usage ;;
   esac
@@ -146,11 +150,11 @@ if git cat-file -e "$base:dev/varka_nullaway_pending.txt" 2>/dev/null; then
 else
   echo "varka_errorprone: $base has no pending list; the shrink check is skipped" >&2
 fi
-# Unannotated: listed here, less what origin/master has taken off its list since the base. Such a
-# class is checked here too, so the branch fails now rather than master after the merge.
+# Unannotated: listed here, less what master has taken off its list since the base. Such a class
+# is checked here too, so the branch fails now rather than master after the merge.
 pending=$(names < "$PENDING")
 if [ -n "${base_names:-}" ] \
-    && master_names=$(git show origin/master:dev/varka_nullaway_pending.txt 2>/dev/null | names) \
+    && master_names=$(git show "$master:dev/varka_nullaway_pending.txt" 2>/dev/null | names) \
     && [ -n "$master_names" ]; then
   pending=$(comm -23 <(echo "$pending") \
     <(comm -23 <(echo "$base_names") <(echo "$master_names")))
