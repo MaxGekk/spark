@@ -85,6 +85,9 @@ jobs:
           cache-maven-local: 'true'
       - name: Install the Varka engine
         uses: ./.github/actions/install-varka-engine
+        with:
+          # Spark's Maven repository is already restored above; see the input.
+          cache: 'false'
       - name: Build Spark with Maven
         shell: |
           bash -c "if script -qec true 2>/dev/null; then script -qec bash\ {0}; else script -qe /dev/null bash {0}; fi"
@@ -208,6 +211,9 @@ jobs:
           cache-maven-local: 'true'
       - name: Install the Varka engine
         uses: ./.github/actions/install-varka-engine
+        with:
+          # Spark's Maven repository is already restored above; see the input.
+          cache: 'false'
       - name: Install Python 3.12
         uses: actions/setup-python@v7
         # We should install one Python that is higher than 3+ for SQL and Yarn because:

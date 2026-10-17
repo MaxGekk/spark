@@ -102,9 +102,8 @@ class VarkaColumnarWriteSuite extends QueryTest with VarkaSharedSessions with Va
 
   test("an ineligible projection is written as rows, as it was before") {
     cacheDates(varkaSpark)
-    // A bare int column offset fuses since VARKA-38 and int arithmetic over one since VARKA-63,
-    // so the ineligible shape here is `i % 7`: an offset built from an operator neither task
-    // lowered.
+    // A bare int column offset fuses (VARKA-38) and so does int arithmetic over one (VARKA-63),
+    // so the ineligible shape here is `i % 7`: an offset built from an operator neither lowers.
     val plan = writeToNoop(varkaSpark, "SELECT date_add(d, i % 7) AS a FROM varka_dates")
     val write = writeNode(plan)
     assert(!write.child.supportsColumnar,

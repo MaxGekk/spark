@@ -146,9 +146,9 @@ class VarkaShrinkerSuite extends SparkFunSuite {
   test("a mismatch the kernel check finds is signed by its kind, not by the exception's class " +
       "(VARKA-311)") {
     // The test above signs messages written to the classifier's taste. This one signs what a real
-    // check throws: a kernel emitted for one tree, checked against another. Until VARKA-311 the
-    // check failed through ScalaTest's assertions, whose comparison text came before the label,
-    // so these were signed "TestFailedException" and grouped by nothing.
+    // check throws: a kernel emitted for one tree, checked against another. A check failing
+    // through ScalaTest's assertions, whose comparison text comes before the label, would sign
+    // these "TestFailedException" and group them by nothing.
     val col = new ColumnRef(0)
     val lit = new LiteralSlot(0)
     val label = "seed=1 iteration=2 roots=[x]"

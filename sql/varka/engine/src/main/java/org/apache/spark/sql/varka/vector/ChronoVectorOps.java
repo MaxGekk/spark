@@ -39,15 +39,14 @@ import jdk.incubator.vector.VectorSpecies;
  * nodes reach today ({@code VarkaEmitterParityBenchmark-jdk25-results.txt}).
  *
  * <p><b>Everything in the lane path is written out by hand, with no method call of any kind.</b>
- * That is not a style choice, it is the whole validity of the measurement. The first version of
- * this file factored the decomposition into a {@code computeFields} helper returning a record of
- * four {@link IntVector}s; that helper compiled to 376 bytes of bytecode, past C2's 325-byte
- * {@code FreqInlineSize}, so it never inlined into the loop. Once it does not inline, escape
- * analysis cannot see the allocation and its consumers in one compilation unit, so the record and
- * its four vectors were really heap-allocated once per lane group - and three of the six calls to
- * a 12-byte {@code magic} helper stopped inlining too, once the enclosing method was over budget.
- * The kernel measured 225.8 M rows/s and the change was declined on that number. It was measuring
- * the cost of a Java abstraction, not the cost of sharing.
+ * That is not a style choice, it is the whole validity of the measurement. Factored into a
+ * {@code computeFields} helper returning a record of four {@link IntVector}s, the decomposition
+ * compiles to 376 bytes of bytecode, past C2's 325-byte {@code FreqInlineSize}, so it never
+ * inlines into the loop. Once it does not inline, escape analysis cannot see the allocation and
+ * its consumers in one compilation unit, so the record and its four vectors are really
+ * heap-allocated once per lane group - and three of the six calls to a 12-byte {@code magic}
+ * helper stop inlining too, once the enclosing method is over budget. That form measured
+ * 225.8 M rows/s: the cost of a Java abstraction, not the cost of sharing.
  *
  * <p>{@code VarkaLoopEmitter.emitChrono} - the path this kernel exists to model - emits zero call
  * boundaries in the lane path: every intermediate is a local and every op is a
@@ -60,7 +59,7 @@ import jdk.incubator.vector.VectorSpecies;
  *
  * <p>This is deliberately not production code and is not wired into {@code VarkaFusedKernel} -
  * the engine module cannot depend on catalyst, which owns that interface. It exists only to answer
- * that ceiling question. But it now pays what a shippable shared lowering would pay,
+ * that ceiling question. But it pays what a shippable shared lowering would pay,
  * because a ceiling has to charge both sides of the comparison the same things:
  *
  * <ul>
@@ -68,11 +67,11 @@ import jdk.incubator.vector.VectorSpecies;
  *       {@code NARROW_MAX_DAYS}), emitted once for all four fields - two compares, an OR, an AND
  *       with the row's validity, and an OR into an accumulator, with one {@code anyTrue} after
  *       the loop. Sharing the decomposition shares the guard, so a shared lowering pays one where
- *       the four-node baseline pays four; charging zero here, as the first version did, flattered
- *       the baseline instead.</li>
+ *       the four-node baseline pays four; charging zero here would flatter the baseline
+ *       instead.</li>
  *   <li><b>Four destination validity buffers</b>, one per output, since four Arrow output vectors
- *       have four physical validity buffers however correlated their contents are. The first
- *       version wrote one shared buffer, which flattered the ceiling.</li>
+ *       have four physical validity buffers however correlated their contents are. One shared
+ *       buffer would flatter the ceiling.</li>
  * </ul>
  *
  * <p>Two places where this kernel is still slightly better than what the emitter would produce,

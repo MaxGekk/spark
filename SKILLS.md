@@ -96,6 +96,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [An exact search that replaces a heuristic should keep the heuristic's answer where it is already best](sql/varka/skills/emitter-and-ir.md#an-exact-search-that-replaces-a-heuristic-should-keep-the-heuristics-answer-where-it-is-already-best)
 * [The IR's storage: flat columns behind one class, FFM rows as the alternative, Arrow at the edges](sql/varka/skills/emitter-and-ir.md#the-irs-storage-flat-columns-behind-one-class-ffm-rows-as-the-alternative-arrow-at-the-edges)
 * [A kernel's mapping is its entitlement, so size it by the column's width and not the lane's](sql/varka/skills/emitter-and-ir.md#a-kernels-mapping-is-its-entitlement-so-size-it-by-the-columns-width-and-not-the-lanes)
+* [A split filter has to keep Spark's errors, and Spark evaluates a filter in two orders](sql/varka/skills/emitter-and-ir.md#a-split-filter-has-to-keep-sparks-errors-and-spark-evaluates-a-filter-in-two-orders)
 
 #### [Testing and debugging](sql/varka/skills/testing-and-debugging.md)
 * [Buffer-Reuse Aliasing (UnsafeProjection)](sql/varka/skills/testing-and-debugging.md#buffer-reuse-aliasing-unsafeprojection)
@@ -177,6 +178,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [With the intrinsics off C2 takes twenty seconds a loop method, and an epilogue's compile 337 MB](sql/varka/skills/the-jit.md#with-the-intrinsics-off-c2-takes-twenty-seconds-a-loop-method-and-an-epilogues-compile-337-mb)
 * [With the trap limits raised, a masked loop traps thousands of times and still reads as settled](sql/varka/skills/the-jit.md#with-the-trap-limits-raised-a-masked-loop-traps-thousands-of-times-and-still-reads-as-settled)
 * [A kernel warmed after other kernels can stay allocating, and the template prewarm guards only the int lane](sql/varka/skills/the-jit.md#a-kernel-warmed-after-other-kernels-can-stay-allocating-and-the-template-prewarm-guards-only-the-int-lane)
+* [Which tier served a call: the code list at the call's edges, JFR's events inside it](sql/varka/skills/the-jit.md#which-tier-served-a-call-the-code-list-at-the-calls-edges-jfrs-events-inside-it)
 
 #### [The Vector API and vector width](sql/varka/skills/vector-api-and-width.md)
 * [Vector API on HotSpot, Measured (JDK 25, x86-64)](sql/varka/skills/vector-api-and-width.md#vector-api-on-hotspot-measured-jdk-25-x86-64)

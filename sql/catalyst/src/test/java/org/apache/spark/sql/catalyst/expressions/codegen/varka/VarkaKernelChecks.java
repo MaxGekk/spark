@@ -113,7 +113,7 @@ public final class VarkaKernelChecks {
 
     private final byte value;
 
-    /** The fills every compared batch runs at: production's first, then the old harness's. */
+    /** The fills every compared batch runs at: production's first, then the all-valid one. */
     public static final List<ValidityFill> BOTH = List.of(ZERO, ONES);
 
     ValidityFill(byte value) {

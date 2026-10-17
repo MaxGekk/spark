@@ -42,11 +42,10 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils
  * kind its slot gives it, the interval the analysis reports contains the value the reference
  * evaluator computes, on every row the runtime guards would let through.
  *
- * Before the compiler was switched over, this property test was also run against the two
- * functions the analysis replaced, and an equivalence test compared the two answer for answer
- * over the same trees (`VARKA-84.md` section 9 has the numbers); both went with the old
- * functions. Budget: `-Dvarka.range.trees` (default 10000) and `-Dvarka.range.seed` (default
- * fixed), on the fuzz suite's precedent.
+ * `VARKA-84.md` section 9 records this property test and an equivalence test run against the
+ * two functions the analysis replaced, answer for answer over the same trees. Budget:
+ * `-Dvarka.range.trees` (default 10000) and `-Dvarka.range.seed` (default fixed), on the fuzz
+ * suite's precedent.
  */
 class VarkaRangeAnalysisSuite extends SparkFunSuite with VarkaTestWatchdog {
 
@@ -84,8 +83,8 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite with VarkaTestWatchdog {
     assert(r(Long.MinValue, 0).neg() === UNKNOWN)
     assert(r(Long.MinValue, 0).abs() === UNKNOWN)
     assert(r(Long.MinValue, 0).magnitude().isEmpty)
-    // The VARKA-63 case stated of the type: two nested bounds whose product passes 2^63 used to
-    // come back small and positive; now they come back unknown, and unknown proves nothing.
+    // The VARKA-63 case stated of the type: two nested bounds whose product passes 2^63 come
+    // back unknown, not wrapped to something small and positive, and unknown proves nothing.
     val big = sym(1L << 40)
     assert(big.mul(big) === UNKNOWN)
     assert(!UNKNOWN.fitsInt())

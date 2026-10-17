@@ -232,7 +232,7 @@ object VarkaColumnarRule extends ColumnarRule with Logging {
    * say (task-21 review, second pass): `supportsColumnar` alone is satisfied by Parquet/ORC
    * vectorized scans whose OnHeap/OffHeap batches fail `canRun` on every batch - rewriting a
    * filter there pays per-row fallback at WHERE-clause frequency and splits whole-stage
-   * codegen for nothing, strictly slower than the FilterExec it replaced. `vectorTypes` is
+   * codegen for nothing, strictly slower than the FilterExec it would replace. `vectorTypes` is
    * the plan-time signal: a child declaring only Arrow vectors (or a Varka node, whose fused
    * columns are Arrow) qualifies; a child declaring non-Arrow vectors does not; a child
    * declaring nothing keeps the optimistic task-6 default and the per-batch guard decides at

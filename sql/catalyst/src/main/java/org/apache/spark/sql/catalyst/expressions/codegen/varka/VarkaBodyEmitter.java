@@ -773,8 +773,7 @@ final class VarkaBodyEmitter {
 
   /**
    * This lane group's validity word for the input segment and row already on the stack. Leaves
-   * one long. The specialised form takes no lane count, so the {@code iload} disappears with
-   * the switch it used to feed.
+   * one long. The specialised form takes no lane count, so it needs no {@code iload} of one.
    */
   private static void emitValidityRead(CodeBuilder cb, Analysis analysis, Slots s) {
     if (widthSpecialised(analysis, s)) {
@@ -1328,10 +1327,10 @@ final class VarkaBodyEmitter {
    * IR node, newline separated, in the topological order the line numbers index.
    * Recorded in {@link VarkaDebugInfo} so the mapping travels inside the class bytes.
    *
-   * <p>Nodes render through {@link VarkaVectorIR#canonicalShallow}, which exists for this: the key
-   * used to be built from {@link Record#toString}, whose format no JDK promises, and which inlined
-   * each node's whole subtree - so a shared subexpression was repeated once per parent and the key
-   * grew quadratically in the sharing the emitter is built to exploit. Children are their own line
+   * <p>Nodes render through {@link VarkaVectorIR#canonicalShallow}, which exists for this, and not
+   * through {@link Record#toString}, whose format no JDK promises and which inlines each node's
+   * whole subtree - a shared subexpression would be repeated once per parent and the key would
+   * grow quadratically in the sharing the emitter is built to exploit. Children are their own line
    * numbers here, so the key reconstructs the DAG and each node is written once.
    */
   static String renderLineMap(Analysis analysis) {

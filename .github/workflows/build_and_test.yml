@@ -1412,6 +1412,20 @@ jobs:
     # red step means this change. The weekly varka-option-matrix workflow runs all of them.
     - name: The Varka suites of ${{ matrix.module }} under one emit option configuration
       run: ./dev/varka_matrix_ci.sh ${{ matrix.module }}
+    # The tests this change adds, rerun five times on the suites step's build, a seeded fuzz under
+    # four other seeds; and for a pull request labelled `fix`, its new tests run once on the merge
+    # base's main sources, where each must fail (VARKA-255.md 3.4). A run of master has no new
+    # tests. The label is read from vecbricks/varka, since a push build does not know its pull
+    # request; a label added after the push takes a rerun of the job.
+    - name: The new tests of ${{ matrix.module }}, rerun five times
+      run: |
+        python3 dev/varka_new_tests.py --self-test > target/varka-new-tests-self-test.log 2>&1 ||
+          { cat target/varka-new-tests-self-test.log; exit 1; }
+        python3 dev/varka_new_tests.py rerun ${{ matrix.module }} --times 5
+    - name: A fix's new tests of ${{ matrix.module }} fail on the merge base
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 dev/varka_new_tests.py fails-on-base ${{ matrix.module }}
 
   varka-docs:
     needs: [precondition]

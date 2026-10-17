@@ -147,8 +147,8 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
 
   /**
    * VARKA-70's reference arm, "words per group": the masked loop reads the input words and ORs
-   * a served root's validity in per lane group, which is what shipped until VARKA-70's driver
-   * pass took both over (VARKA-70.md 3.1). Not to be read as VARKA-45's "validity OR-ed per
+   * a served root's validity in per lane group, where the shipped kernel's driver pass does both
+   * (VARKA-70.md 3.1). Not to be read as VARKA-45's "validity OR-ed per
    * group", which is the dense body's arm. Every VARKA-70 pair below is the shipped kernel
    * beside this one, adjacent, on the mixed-null arm the pass changes; the null-free arm is
    * VARKA-45's fill either way and is not paired.
@@ -966,8 +966,8 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     VarkaFusedKernel yearMonthKept = emit(List.of(new Year(new ColumnRef(0))), 1, 0, loader, 802,
         VarkaEmitOptions.DEFAULTS.withElideChronoMonth(false));
     // add_months is the widest calendar node the emitter has - it decomposes and
-    // recomposes in one loop method - and until now it had no committed number at all,
-    // which is why the leap flag's cost was argued rather than measured. One scalar arg,
+    // recomposes in one loop method - so it has a committed number, and the leap flag's cost
+    // is measured rather than argued. One scalar arg,
     // the month count, so this cannot share `chunked`.
     // VARKA-53's A/B, built the same way and for the same reason: adjacent cases, both
     // null patterns, so the two axes are measured back to back under one JIT and thermal
@@ -1039,11 +1039,10 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     VarkaFusedKernel fourSharedGeneral = emit(fourFields, 1, 0, loader, 883, generalHelpers);
     // The selection kernel: a Cond root's slot holds a selection bitmap, which is computed
     // rather than known, so VARKA-45's driver fill cannot serve it and the per-group OR
-    // stays in the dense body too. It is the shape the columnar filter runs on every batch
-    // and the one shape with no committed parity case before VARKA-46.
+    // stays in the dense body too. It is the shape the columnar filter runs on every batch.
     // The second half of VARKA-46: the same kernels with the validity OR emitted after the
-    // store, which is where it was until the compiled loop showed it as a real call in every
-    // arm. Both sides carry the width-named helpers, so this pair prices the order alone.
+    // store, where the compiled loop shows it as a real call in every arm. Both sides carry the
+    // width-named helpers, so this pair prices the order alone.
     VarkaEmitOptions orAfter = PER_GROUP_WRITE.withValidityOrFirst(false);
     VarkaFusedKernel yearOrAfter =
         emit(List.of(new Year(new ColumnRef(0))), 1, 0, loader, 887, orAfter);
@@ -1202,7 +1201,7 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     VarkaFusedKernel yearMonthDaySeparate = emit(yearMonthDay, 1, 0, loader, 807, separate);
     VarkaFusedKernel yearMonthDayShared = emit(yearMonthDay, 1, 0, loader, 808);
     VarkaFusedKernel fourSeparate = emit(fourFields, 1, 0, loader, 809, separate);
-    // `four` above is the defaults, which is the shared four-field kernel now.
+    // `four` above is the defaults, which is the shared four-field kernel.
     VarkaFusedKernel fourShared = four;
     VarkaFusedKernel fourSharedPerGroup = emit(fourFields, 1, 0, loader, 831,
         VarkaEmitOptions.DEFAULTS.withDenseValidityOnce(false));
@@ -1340,8 +1339,8 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // unconditional (VarkaEmitOptions.guardDayProducers does not reach it), because the
     // compiler's dayRange bounds a column count on the strength of it firing and cannot see
     // the option; an A/B against it would emit identical bytes. Isolating the guard's own
-    // cost would take a measurement-only option, which is not worth reintroducing the
-    // coupling this task's review removed - see VARKA-60.md 9.
+    // cost would take a measurement-only option, which is not worth the coupling it would
+    // bring back - see VARKA-60.md 9.
     var addMonthsCol = new AddMonths(col0, new ColumnRef(1));
     var addMonthsLit = new AddMonths(col0, new LiteralSlot(0));
     VarkaFusedKernel addMonthsColGuarded = emit(List.of(addMonthsCol), 2, 0, loader, 950);
@@ -1490,9 +1489,9 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
     // independently emitted nodes above. It runs through the same eachChunk walk, over the
     // same buffers, writing the same four data and four validity destinations, and pays the
     // same narrow-range guard - once, where the four-node case pays it four times, which is
-    // the saving being measured rather than an omission. The first version of this case
-    // omitted the guard, wrote one shared validity buffer and hand-copied the chunk loop;
-    // the number it produced is why VARKA-32 was first declined.
+    // the saving being measured rather than an omission. A case that omits the guard, writes
+    // one shared validity buffer or hand-copies the chunk loop measures something else
+    // (VARKA-32).
     benchmark.addCase("year+month+day+quarter, shared decomposition (hand-written ceiling)",
         it -> r.eachChunk((dataOff, validityOff, n) -> {
           int status = ChronoVectorOps.vectorFourFields(
@@ -1600,7 +1599,7 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
   // ---------------------------------------------------------------------------------------
 
   private void groupBudget(Buffers b) {
-    // VARKA-17's pair, and since VARKA-71 the A/B is the rule rather than the budget. A
+    // VARKA-17's pair, with the A/B on the rule rather than the budget (VARKA-71). A
     // shared depth-8 chain with six more ops on each of two outputs is 20 distinct nodes
     // against a budget of 16, so clause 1 splits them and the second method recomputes the
     // eight shared ops per lane group - 60 vector ops across two methods against 43 in
@@ -1707,7 +1706,7 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
 
   private void widestShape(Buffers b) {
     // Four disjoint depth-16 chains: 64 distinct ops, the cap exactly - emitted as four
-    // GROUP_BUDGET-sized loop methods since VARKA-11, which is what keeps this case honest
+    // GROUP_BUDGET-sized loop methods (VARKA-11), which is what keeps this case honest
     // in a JVM that has compiled every other kernel in this file first (see
     // VARKA-11.md section 6). The sequential version is the same 64 kernel passes.
     VarkaBenchmark benchmark = benchmark("4 outputs x depth 16 over " + numRows + " rows", numRows)
@@ -2203,7 +2202,7 @@ public class VarkaEmitterParityBenchmark extends VarkaBenchmarkBase {
           it -> calendarChunks(b, calDstData, calDstValidity, fourFieldsShared, chunk, false));
       // The masked arm, added as VARKA-70's baseline (VARKA-70.md 6, risk 2): the
       // short-batch rows are where a per-batch bitmap pass could cost more than the
-      // per-group calls it replaces, and until now every four-field row here was null-free.
+      // per-group calls it replaces, and the other four-field rows here are null-free.
       benchmark.addCase(
           "year+month+day+quarter, shared, chunk " + chunk + " (" + note + "), mixed nulls",
           it -> calendarChunks(b, calDstData, calDstValidity, fourFieldsShared, chunk, true));

@@ -28,8 +28,8 @@ import org.apache.spark.SparkFunSuite
  * The rendered files under `sql/varka/proofs/` (VARKA-240) are what `VarkaProofFiles` renders
  * from the code: the multiply-high proof's pairs from `signedMagic`, and the prelude's checks
  * from the JVM's own results. A constant that moves in the code without its proof fails here,
- * rather than leaving a proof that goes on proving the old constant. The proofs themselves run
- * under `dev/varka_prove.sh`, in the linters' job, which needs no JVM.
+ * rather than leaving a proof that goes on proving a constant the code no longer has. The proofs
+ * themselves run under `dev/varka_prove.sh`, in the linters' job, which needs no JVM.
  */
 class VarkaProofFilesSuite extends SparkFunSuite {
 

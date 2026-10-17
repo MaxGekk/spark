@@ -536,7 +536,9 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
    * The census's switches (VARKA-326): the first draw of the range (`-Dvarka.fuzz.compiledFrom`,
    * so JVMs split a range), the draws' options (`-Dvarka.fuzz.compiledOptions=defaults` takes the
    * matrix base instead of the drawn ones), and one line per history run on standard output
-   * (`-Dvarka.fuzz.census=true`) naming the class the JVM's logs call it by.
+   * (`-Dvarka.fuzz.census=true`) naming the class the JVM's logs call it by. The same switch
+   * prints, once the witness has settled, one `VARKA_COMPILED` line per history run with what its
+   * calls came to, which `dev/varka_compiled_fuzz.py` totals over the nightly's JVMs (VARKA-274).
    */
   private val compiledFrom = sys.props.get("varka.fuzz.compiledFrom").map(_.toInt).getOrElse(0)
   private val compiledBaseOptions = sys.props.get("varka.fuzz.compiledOptions").contains("defaults")
@@ -608,6 +610,32 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
   }
 
   /**
+   * One `VARKA_COMPILED` line per history run of `results`, each paired with its draw, for the
+   * nightly's reader (VARKA-274): the lane, the draw, the history, what its counted calls came to
+   * (`Tally.kind`, `-` with the witness off or no counted call), whether its warm-up settled and
+   * was confirmed, the settle and wall times in ms, an unsettled warm-up's trap reasons (`-`
+   * otherwise), and the case's label on one line. Printed after the witness has settled, since a
+   * verdict cannot be read before.
+   */
+  private def printRunLines(results: Seq[(Int, VarkaCompiledCheck.Result)],
+      witnessed: Boolean): Unit = {
+    for ((k, r) <- results; run <- r.runs().asScala if run.skipped() == null) {
+      val kind = if (witnessed && !run.countedVerdicts().isEmpty) {
+        VarkaCompiledCheck.Tally.kind(run)
+      } else "-"
+      val confirmed = witnessed && run.confirmed()
+      val traps = if (run.warmed() && !run.settled() && witnessed) {
+        VarkaTierWitness.get().trapReasons(run.className()).toString.replace(" ", "")
+      } else "-"
+      val label = r.label().replaceAll("\\s+", " ")
+      // scalastyle:off println
+      println(s"VARKA_COMPILED\t${r.lane()}\t$k\t${run.history().label}\t$kind\t" +
+        s"${run.settled()}\t$confirmed\t${run.settleMillis()}\t${run.millis()}\t$traps\t$label")
+      // scalastyle:on println
+    }
+  }
+
+  /**
    * The first `compiledDraws` draws of each lane, each run over the eight histories of
    * `VarkaCompiledCheck` - its answers compared in the interpreter, in C2's code after a warm-up,
    * across a trap and a recompile, and on the way up the tiers with C1 on - and the tier that
@@ -637,7 +665,8 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     assert(contradictions.isEmpty,
       s"this JVM is not the ${tier.label} tier the run claims: ${contradictions.mkString("; ")}")
     val tally = new VarkaCompiledCheck.Tally
-    val overrides = scala.collection.mutable.ArrayBuffer[(VarkaFuzzCase, String)]()
+    val drawOf = scala.collection.mutable.ArrayBuffer[(Int, VarkaCompiledCheck.Result)]()
+    val overrides = scala.collection.mutable.ArrayBuffer[(Int, VarkaFuzzCase, String)]()
     val draws: Seq[(Int => VarkaFuzzCase, Long)] =
       Seq((k => drawInt(k), seed), (k => drawLong(k), longSeed))
     try {
@@ -647,10 +676,11 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
         val c = if (compiledBaseOptions) drawn.withOptions(VarkaMatrix.base) else drawn
         val replay = s"-Dvarka.fuzz.seed=$drawSeed -Dvarka.fuzz.only=$k"
         if (c.options.lanesOverride() != 0) {
-          overrides += ((c, replay))
+          overrides += ((k, c, replay))
         } else {
           runCompiled(c, settings, replay).foreach { r =>
             tally.add(r)
+            drawOf += ((k, r))
             if (censusLines) {
               r.runs().forEach(run => if (run.skipped() == null) {
                 // scalastyle:off println
@@ -663,9 +693,9 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
         }
       }
       if (settings.runs(VarkaCompiledCheck.History.COLD)) {
-        for ((c, replay) <- overrides) {
+        for ((k, c, replay) <- overrides) {
           runCompiled(c, settings.withOnly(VarkaCompiledCheck.History.COLD), replay).foreach {
-            r => tally.add(r); tally.addColdOnly()
+            r => tally.add(r); tally.addColdOnly(); drawOf += ((k, r))
           }
         }
       }
@@ -681,7 +711,16 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
         notReached.foreach(why => if (requireTiers) fail(why) else info(why))
       }
     } finally {
-      VarkaTierWitness.close()
+      // In the finally, so a JVM whose test failed still gives the nightly the cases it ran; a
+      // failure here is logged, never put in place of the test's own.
+      try if (censusLines) {
+        try {
+          if (settings.witnessed) VarkaTierWitness.get().settle()
+          printRunLines(drawOf.toSeq, settings.witnessed)
+        } catch {
+          case scala.util.control.NonFatal(e) => logWarning(s"no VARKA_COMPILED lines: $e")
+        }
+      } finally VarkaTierWitness.close()
     }
   }
 

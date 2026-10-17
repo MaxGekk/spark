@@ -58,8 +58,8 @@ import org.openjdk.jmh.infra.Blackhole;
 @State(Scope.Benchmark)
 public class DateVectorOpsBenchmark {
 
-  // 32 is a batch smaller than a single 64-bit word of validity bitmap: the size range the
-  // vector loop used to skip entirely, before it was bounded per lane group rather than per word.
+  // 32 is a batch smaller than a single 64-bit word of validity bitmap: the size range a loop
+  // bounded per word rather than per lane group would skip entirely.
   @Param({"32", "10000", "1000000"})
   public int size;
 

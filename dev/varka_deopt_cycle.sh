@@ -28,8 +28,8 @@
 #   dev/varka_deopt_cycle.sh --forms group --forks 10 --fail-on-cycle   # the nightly guard
 #
 # --widths is in bytes, as the JVM's MaxVectorSize counts them: 64 is 512 bits, 16 is 128.
-# --forms: single (one epilogue over every output, the emission before VARKA-87) and group
-# (the epilogue per group, the default since). --paths: batches, the kernel's batches from its
+# --forms: single (one epilogue over every output, the reference emission) and group (the
+# epilogue per group, the default, VARKA-87). --paths: batches, the kernel's batches from its
 # first call, or warmup, the path VARKA-212 gives a new kernel - C1 kept off the class and
 # twelve thousand 32-row calls before the first batch. Each width is one sbt session with one
 # forked JVM per case and fork; the logs and the summary go under
@@ -39,8 +39,7 @@
 # reading, and the verdict is the JVM's own compile and trap log. --fail-on-cycle makes the exit
 # status 1 when any fork cycles, fails to finish, or no fork is read at all.
 # Usage text is found rather than numbered: a hard-coded range silently truncates as the
-# comment above it grows, which had already happened to four of these scripts. Ends at the
-# first line that is not a comment.
+# comment above it grows. Ends at the first line that is not a comment.
 usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
 set -euo pipefail
 outputs=12; forms=single,group; widths=64,16; forks=20; seconds=8; rows=1024; paths=batches

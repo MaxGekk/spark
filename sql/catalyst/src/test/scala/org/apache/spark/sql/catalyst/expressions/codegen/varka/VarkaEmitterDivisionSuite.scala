@@ -412,9 +412,10 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
   }
 
   test("a constant division by zero or by -1 is refused rather than emitted") {
-    // Zero has no quotient at all, and -1 overflows at Integer.MinValue - the one input where
-    // Java's `/` throws rather than answering. Both are the row engine's to raise, so the
-    // shapes are refused where they are built rather than emitted as something plausible.
+    // Zero has no quotient at all, and -1 overflows at Integer.MinValue: the true quotient,
+    // 2^31, is not an int, and Java's `/` wraps it back to Integer.MinValue without throwing
+    // (JLS 15.17.2). Both are the row engine's to answer, so the shapes are refused where they
+    // are built rather than emitted as something plausible.
     val col = new ColumnRef(0, LaneType.INT)
     val zero = intercept[IllegalArgumentException](new ConstDivide(col, 0))
     assert(zero.getMessage.contains("division by zero"), zero.getMessage)
@@ -561,22 +562,21 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // The counter above is what makes the difference explicit: the int lane spends two divides
     // and four conversions on one division, the long lane one and two.
     assert(opsOn(emitMulti(long64, 1, 0, converting)._2, "DoubleVector") === 1)
-    // The int lane's conversion form is the reference arm now; the shipped form multiplies.
+    // The int lane's conversion form is the reference arm; the shipped form multiplies.
     assert(opsOn(emitMulti(int32, 1, 0, converting.withMulHiDivide(false))._2,
       "DoubleVector") === 2)
   }
 
   test("both 64-bit division forms run through the JVM at the dividend bound: exact below " +
       "it, and above it each fails in the shape its lowering predicts") {
-    // Row 166. `ConstDivide.EXACT_DIVIDEND_BOUND` is 2^52, and until now the claim that the
-    // conversion form is exact under 2^53 and the magic form exact under 2^52 and wrong above
-    // rested on `verify_double_division.py`, a model of the lowerings, while the long-lane
-    // fuzzer's columns stop at 2^46. This drives the emitted kernels themselves over the bits
-    // no test had visited, against Java's `/`, and asserts not only where each form is right
-    // but the *shape* of how it is wrong past its bound - a failure of another shape would
-    // mean the model is wrong, which is the thing worth finding. `long_divide.smt2` proves both
-    // forms' arithmetic for every dividend under the bound (VARKA-241); this case is what holds
-    // the emitted bytecode to it.
+    // Row 166. `ConstDivide.EXACT_DIVIDEND_BOUND` is 2^52. `verify_double_division.py` models
+    // the lowerings to show the conversion form exact under 2^53 and the magic form exact under
+    // 2^52 and wrong above, and the long-lane fuzzer's columns stop at 2^46. This drives the
+    // emitted kernels themselves over bits the fuzzer does not reach, against Java's `/`, and
+    // asserts not only where each form is right but the *shape* of how it is wrong past its bound -
+    // a failure of another shape would mean the model is wrong, which is the thing worth finding.
+    // `long_divide.smt2` proves both forms' arithmetic for every dividend under the bound
+    // (VARKA-241); this case is what holds the emitted bytecode to it.
     //
     // The shapes, from `VarkaDivisionLowering`'s own account. The conversion form divides in
     // doubles: exact while the dividend is under 2^53, where a correctly rounded quotient
@@ -645,7 +645,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
   }
 
   test("a long-lane constant division refuses the divisors that have no quotient") {
-    // The int lane's refusals, restated at the width they now apply to. The -1 message names
+    // The int lane's refusals, restated at the long lane. The -1 message names
     // the lane's own most negative value, because that is the input it is about.
     val col = new ColumnRef(0, LaneType.LONG)
     val bound = ConstDivide.EXACT_DIVIDEND_BOUND
@@ -668,6 +668,18 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       emitMulti(Seq(new ConstDivide(new GuardedRange(col, -1000L, 1000L), 60, 1000L)), 1, 0))
     assert(short.getMessage.contains("the guard below it admits"), short.getMessage)
     emitMulti(Seq(new ConstDivide(new GuardedRange(col, -1000L, 1000L), 60, 1001L)), 1, 0)
+    // What the guard admits is its wider endpoint's magnitude, on either side, and a guard from
+    // Long.MIN_VALUE, whose magnitude no long holds, admits every dividend there is.
+    for ((lo, hi) <- Seq((-1000L, 5L), (-5L, 1000L))) {
+      val oneSided = intercept[IllegalArgumentException](
+        emitMulti(Seq(new ConstDivide(new GuardedRange(col, lo, hi), 60, 1000L)), 1, 0))
+      assert(oneSided.getMessage.contains("is under 1000 and the guard below it admits 1000:"),
+        oneSided.getMessage)
+    }
+    val fromMin = intercept[IllegalArgumentException](emitMulti(
+      Seq(new ConstDivide(new GuardedRange(col, Long.MinValue, 0L), 60, bound)), 1, 0))
+    assert(fromMin.getMessage.contains(s"the guard below it admits ${Long.MaxValue}:"),
+      fromMin.getMessage)
     // And a divisor the int lane cannot hold is a mistake in the tree rather than a division
     // whose every quotient is zero.
     val tooWide = intercept[IllegalArgumentException](

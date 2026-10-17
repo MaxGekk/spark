@@ -76,12 +76,12 @@ import jdk.incubator.vector.VectorSpecies;
  *       more iteration of the same body rather than as a scalar loop beside it.
  *       {@link VectorSpecies#indexInRange} builds the bounds mask; AND it into the validity
  *       mask and the group is bounded on both counts at once, so a row past the batch is
- *       neither read nor written. Two things change with it and are easy to miss: the row
- *       count is no longer a lane width, so the validity bits go through
+ *       neither read nor written. Two things come with it and are easy to miss: the
+ *       epilogue's row count is not a lane width, so the validity bits go through
  *       {@link VarkaVectorSupport#partialValidityBitsAt} and
  *       {@link VarkaVectorSupport#orPartialValidityBitsAt} (the whole-group forms derive their
  *       byte span from the width and would read one byte for a nine-row group, or write past
- *       a nominally sized bitmap); and the loop body is now mirrored in two places, which the
+ *       a nominally sized bitmap); and the loop body is mirrored in two places, which the
  *       helpers below keep down to three lines. That is the whole reason to prefer this shape
  *       to a scalar tail: a scalar tail is a second, different lowering of the same
  *       arithmetic, and it has to agree row for row. {@code DateVectorOpsTest} checks each

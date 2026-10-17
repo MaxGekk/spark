@@ -484,8 +484,8 @@ public final class VarkaEmitterFixtures {
   }
 
   /**
-   * The single masked epilogue's bytecode size in the form before VARKA-87 - the one method every
-   * output shared (VARKA-24) - whatever {@code options} says about the byte budget. The tests that
+   * The single masked epilogue's bytecode size in the single-epilogue form - one method every
+   * output shares (VARKA-24) - whatever {@code options} says about the byte budget. The tests that
    * pin where that method crossed HugeMethodLimit measure this form on purpose: the crossing is
    * the fact the per-group epilogue answers, and it stays measurable at budget 0.
    */

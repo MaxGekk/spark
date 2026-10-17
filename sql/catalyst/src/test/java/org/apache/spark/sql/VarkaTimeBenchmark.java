@@ -158,7 +158,7 @@ public class VarkaTimeBenchmark extends VarkaBenchmarkBase {
   /** The magic form of the 64-bit division, which an AVX2-only host takes without asking. */
   private static final VarkaEmitOptions MAGIC_FORM = VarkaEmitOptions.DEFAULTS.withUseAVX(2);
 
-  /** The int lane's conversion through double lanes, the reference arm since VARKA-149. */
+  /** The int lane's conversion through double lanes, the reference arm (VARKA-149). */
   private static final VarkaEmitOptions DOUBLE_ROUTE =
       VarkaEmitOptions.DEFAULTS.withMulHiDivide(false);
 
@@ -222,7 +222,7 @@ public class VarkaTimeBenchmark extends VarkaBenchmarkBase {
   }
 
   /**
-   * The split form's extracts as the emitter now lowers a division it can bound: {@code hour}
+   * The split form's extracts as the emitter lowers a division it can bound: {@code hour}
    * from the seconds under 86400, {@code minute} from the seconds after the hours under 3600, each
    * one multiply and one shift, with the same constants the hand-written arm searches for. The
    * emitted twin of that arm ({@code VARKA-102.md} 8.4).

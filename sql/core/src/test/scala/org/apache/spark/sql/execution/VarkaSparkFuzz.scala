@@ -24,7 +24,8 @@ import com.fasterxml.jackson.databind.ObjectMapper
 
 import org.apache.spark.SparkThrowable
 import org.apache.spark.sql.{DataFrame, SparkSession}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShrinker
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaCatalystGrammar,
+  VarkaShrinker}
 
 /**
  * The pure parts of the random differential against vanilla Spark (VARKA-262): a case, its
@@ -34,7 +35,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaShrinker
  *
  * A case is a list of outputs and a `WHERE` of conjuncts over twelve columns of random data.
  * The outputs and conjuncts are the `executable` column of `sql/varka/coverage.json`, so a row
- * added to the table is drawn here with no change to this file.
+ * added to the table is drawn here with no change to this file; half the compositions add nested
+ * trees of neighbouring types from `VarkaCatalystGrammar` beside them (VARKA-298).
  */
 object VarkaSparkFuzz {
 
@@ -54,7 +56,10 @@ object VarkaSparkFuzz {
    * A case. `data` is a list of rows of twelve SQL literals, in the order of `columns`. `op` is
    * `AND` or `OR`, joining the conjuncts. A `pivot` is one of the rows `data` holds, which the
    * conjuncts have been rectified to select (VARKA-297): the filtered query must return it. A
-   * `force` is the output forced to decline in a third run on Varka (VARKA-296).
+   * `force` is the output forced to decline in a third run on Varka (VARKA-296). `trees` maps the
+   * text of each output or conjunct drawn from `VarkaCatalystGrammar` to its tree (VARKA-298),
+   * which is what lets the shrinker reduce inside it; an output or conjunct not in it is a coverage
+   * row, reduced only as a whole.
    */
   final case class Case(
       outputs: Vector[String],
@@ -63,7 +68,8 @@ object VarkaSparkFuzz {
       data: Vector[Vector[String]],
       ansi: Boolean,
       pivot: Option[Vector[String]] = None,
-      force: Option[Int] = None) {
+      force: Option[Int] = None,
+      trees: Map[String, VarkaCatalystGrammar.Node] = Map.empty) {
 
     def select: String = outputs.zipWithIndex.map { case (o, k) => s"$o AS c$k" }.mkString(", ")
 
@@ -225,6 +231,12 @@ object VarkaSparkFuzz {
    * of the table's length - a uniform draw found a bug in one row after 254 of 300 compositions.
    */
   def draw(rows: Seq[CoverageRow], seed: Long, iteration: Int): Case = {
+    val drawn = drawRows(rows, seed, iteration)
+    if (nestedIteration(iteration)) withNested(drawn, seed, iteration) else drawn
+  }
+
+  /** Composition `iteration` of the coverage rows alone, before any nested tree is added. */
+  def drawRows(rows: Seq[CoverageRow], seed: Long, iteration: Int): Case = {
     val projections = rows.filter(_.form == "projection")
     val predicates = rows.filter(_.form == "predicate")
     val order = new Random(seed).shuffle(rows.indices.toVector)
@@ -255,6 +267,55 @@ object VarkaSparkFuzz {
     val pivot = if (conjuncts.nonEmpty && iteration % 3 == 1) Some(pick(rnd, data)) else None
     Case(outputs, conjuncts, op, data, ansi, pivot)
   }
+
+  /**
+   * Whether composition `iteration` adds nested trees (VARKA-298): half of them, five in a row and
+   * then five without. A run of five covers every residue of two and four and the period of ten
+   * is prime to three, so the nested ones meet both pools, the wider pool, pivots in both pools
+   * and the partition check (which only safe compositions take).
+   * `-Dvarka.sparkfuzz.nested=false` draws none, which replays a seed's compositions as they were
+   * drawn before VARKA-298 and measures what the nested ones cost.
+   */
+  def nestedIteration(iteration: Int): Boolean = nestedOn && (iteration / 5) % 2 == 1
+
+  private val nestedOn = !sys.props.get("varka.sparkfuzz.nested").contains("false")
+
+  /**
+   * `c` with one or two outputs drawn from `VarkaCatalystGrammar` and, on a filter one time in two
+   * or without one a time in three, a nested conjunct, each at a random place among the coverage
+   * rows. The trees come from a stream of their own, so the coverage rows, the data, the ANSI mode
+   * and the pivot are the ones the composition drew without them.
+   */
+  private def withNested(c: Case, seed: Long, iteration: Int): Case = {
+    val n = new java.util.Random(seed * 1000003L + iteration + NestedSalt)
+    // A tree that renders as one of the composition's coverage rows (`year(d)` is both) is not
+    // added, so that `trees` names nested trees only.
+    val taken = (c.outputs ++ c.conjuncts.map(_.sql)).toSet
+    val outputs = (0 until 1 + n.nextInt(2)).map(_ => VarkaCatalystGrammar.drawOutput(n))
+    var trees = c.trees
+    var outs = c.outputs
+    outputs.foreach { t =>
+      val at = n.nextInt(outs.size + 1)
+      if (!taken.contains(t.sql)) {
+        outs = outs.patch(at, Seq(t.sql), 0)
+        trees += t.sql -> t
+      }
+    }
+    var conjuncts = c.conjuncts
+    if (if (conjuncts.nonEmpty) n.nextBoolean() else n.nextInt(3) == 0) {
+      val p = VarkaCatalystGrammar.drawPredicate(n)
+      val at = n.nextInt(conjuncts.size + 1)
+      val negated = n.nextInt(4) == 0
+      if (!taken.contains(p.sql)) {
+        trees += p.sql -> p
+        conjuncts = conjuncts.patch(at, Seq(Conjunct(p.sql, negated)), 0)
+      }
+    }
+    c.copy(outputs = outs, conjuncts = conjuncts, trees = trees)
+  }
+
+  /** Separates the nested trees' stream from the composition's and the wider pool's. */
+  private val NestedSalt = 0x298298298L
 
   /**
    * Data for a later batch of `c`'s shape (VARKA-327): every cell of `c.data` that is not NULL
@@ -359,6 +420,24 @@ object VarkaSparkFuzz {
     unexpectedRaise(off, VarkaExpectedErrors.Side.ROW, ansi, list)
       .orElse(unexpectedRaise(on, VarkaExpectedErrors.Side.VARKA, ansi, list))
 
+  /**
+   * Whether `kind` is two different conditions, each one the expected-errors list allows from
+   * either engine under `ansi`: the signature of two legitimate errors on rows in different
+   * partitions, where whichever task fails first decides what the query raises, on either engine
+   * and from one run to the next (VARKA-298.md 9). Such a disagreement is believed only if it
+   * repeats.
+   */
+  def racingErrors(kind: String, ansi: Boolean): Boolean = {
+    val marker = "error classes differ: "
+    val at = kind.indexOf(marker)
+    val mode = if (ansi) VarkaExpectedErrors.Mode.ANSI else VarkaExpectedErrors.Mode.LEGACY
+    val list = VarkaExpectedErrors.entries()
+    at >= 0 && kind.substring(at + marker.length).split(", ").toSeq.forall { raised =>
+      Seq(VarkaExpectedErrors.Side.ROW, VarkaExpectedErrors.Side.VARKA)
+        .forall(VarkaExpectedErrors.expected(list, raised, _, mode))
+    }
+  }
+
   /** How two outcomes differ, or None when they agree. */
   def difference(off: Outcome, on: Outcome): Option[String] = (off, on) match {
     case (Right(a), Right(b)) => if (a == b) None else Some("values differ")
@@ -414,8 +493,9 @@ object VarkaSparkFuzz {
 
   /**
    * `c` reduced while `kind` still shows: the outputs, the conjuncts and the rows of data, each by
-   * ddmin, repeated until a pass changes nothing, within `maxRuns` checks. `check` returns the
-   * kind of disagreement a case shows, or None.
+   * ddmin, and between them the inside of each nested output and conjunct by
+   * `VarkaShrinker.shrinkTree` (VARKA-298), repeated until a pass changes nothing, within `maxRuns`
+   * checks. `check` returns the kind of disagreement a case shows, or None.
    */
   def shrink(c: Case, kind: String, check: Case => Option[String], maxRuns: Int = 400): Case = {
     var runs = 0
@@ -434,9 +514,24 @@ object VarkaSparkFuzz {
         best = best.copy(outputs = ddmin(best.outputs)(os =>
           os.nonEmpty && still(best.copy(outputs = os))))
       }
+      // Inside each nested output (VARKA-298): any subtree may become the output, since an output
+      // takes any type, and a node inside it only a tree of its own type.
+      for (k <- best.outputs.indices; tree <- best.trees.get(best.outputs(k))) {
+        val small = VarkaShrinker.shrinkTree(tree, VarkaCatalystGrammar.MOVES, true,
+          (t: VarkaCatalystGrammar.Node) => still(withOutput(best, k, t)))
+        if (small != tree) best = withOutput(best, k, small)
+      }
       if (best.conjuncts.nonEmpty) {
         best = best.copy(conjuncts = ddmin(best.conjuncts)(cs =>
           still(best.copy(conjuncts = cs))))
+      }
+      // Inside each nested conjunct, which stays a boolean; not under a pivot, since a conjunct was
+      // rectified to the value it has on the pivot row, and a smaller one may have another.
+      for (k <- best.conjuncts.indices if best.pivot.isEmpty;
+          tree <- best.trees.get(best.conjuncts(k).sql)) {
+        val small = VarkaShrinker.shrinkTree(tree, VarkaCatalystGrammar.MOVES, false,
+          (t: VarkaCatalystGrammar.Node) => still(withConjunct(best, k, t)))
+        if (small != tree) best = withConjunct(best, k, small)
       }
       if (best.data.size > 1) {
         // The pivot row stays: a filter rectified against it selects nothing else for certain.
@@ -447,6 +542,13 @@ object VarkaSparkFuzz {
     }
     best
   }
+
+  private def withOutput(c: Case, k: Int, t: VarkaCatalystGrammar.Node): Case =
+    c.copy(outputs = c.outputs.updated(k, t.sql), trees = c.trees + (t.sql -> t))
+
+  private def withConjunct(c: Case, k: Int, t: VarkaCatalystGrammar.Node): Case =
+    c.copy(conjuncts = c.conjuncts.updated(k, c.conjuncts(k).copy(sql = t.sql)),
+      trees = c.trees + (t.sql -> t))
 
   // ---- the reproducer file ----------------------------------------------------------------
 

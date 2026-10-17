@@ -20,7 +20,7 @@ package org.apache.spark.sql.execution
 import scala.jdk.CollectionConverters._
 
 import org.apache.spark.{SparkArithmeticException, SparkDateTimeException, SparkIllegalArgumentException}
-import org.apache.spark.sql.{QueryTest, SparkSession}
+import org.apache.spark.sql.{QueryTest, Row, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaMatrix, VarkaShapeCache}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 import org.apache.spark.sql.internal.SQLConf
@@ -155,14 +155,12 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
   }
 
   test("an int column cast to a day interval fuses as the column offset it is") {
-    // `d + INTERVAL n DAY` with a foldable `n` already fused before VARKA-38 (the analyzer folds
-    // it to a DateAdd literal). VARKA-38 left the non-foldable interval column declined -
-    // BinaryArithmeticWithDatetimeResolver rewrites it to
-    // DateAdd(d, ExtractANSIIntervalDays(intervalCol)), which had no arm - and this test
-    // pinned that. VARKA-56 gave the int-cast form its arm: CAST(i AS INTERVAL DAY) is
-    // DayTimeIntervalType(DAY, DAY), the extractor undoes the cast exactly, and the entry is
-    // VARKA-38's own column-offset node under a per-batch bound. The stored interval column,
-    // which is what VARKA-38's comment was really about, stays declined in the VARKA-56 tests.
+    // `d + INTERVAL n DAY` with a foldable `n` fuses as a DateAdd literal, which the analyzer
+    // folds it to. A non-foldable interval is rewritten by BinaryArithmeticWithDatetimeResolver
+    // to DateAdd(d, ExtractANSIIntervalDays(intervalCol)), and the int-cast form has an arm
+    // (VARKA-56): CAST(i AS INTERVAL DAY) is DayTimeIntervalType(DAY, DAY), the extractor undoes
+    // the cast exactly, and the entry is VARKA-38's column-offset node under a per-batch bound.
+    // The stored interval column stays declined, in the VARKA-56 tests.
     cacheDates(spark)
     cacheDates(varkaSpark)
     checkDifferential(spark, varkaSpark,
@@ -191,10 +189,10 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
   test("a projection that only narrows a Varka filter leaves no Project above it") {
     // The milestone's one shape where Varka was slower than stock Spark end to end. The
     // predicate reads two columns and the consumer wants one, so Spark's column pruning
-    // cannot drop the projection - it is not redundant - and before VARKA-78 a Janino
-    // `Project [d]` sat above the row-producing filter: an operator boundary out of the
-    // node's row iterator, and a row conversion over `d2` as well as `d` whose second column
-    // the projection immediately discarded.
+    // cannot drop the projection - it is not redundant. Left in place, a Janino `Project [d]`
+    // would sit above the row-producing filter: an operator boundary out of the node's row
+    // iterator, and a row conversion over `d2` as well as `d` whose second column the
+    // projection immediately discards (VARKA-78).
     cacheDatePairs(spark)
     cacheDatePairs(varkaSpark)
     try {
@@ -271,8 +269,8 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
         checkAnswer(actual, spark.sql(q))
       }
 
-      // VARKA-68 opened the month-count position to derived counts, so `d - ymm` - which is
-      // `add_months` over a negated column count - now fuses where VARKA-67 left it residual.
+      // The month-count position takes derived counts (VARKA-68), so `d - ymm` - which is
+      // `add_months` over a negated column count - fuses.
       // The far rows still decline at runtime, which is the guard doing its work on a count
       // it did not itself produce.
       val minus = varkaSpark.sql("SELECT d - ymm AS a FROM varka_dates_intervals")
@@ -397,9 +395,9 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
   test("a guard under a CASE arm condemns from the taken arm only") {
     // The cliff, end to end and in both directions. Each shape is run twice over one fixture:
     // once with the condition routing the extreme rows to the arm *without* the guarded node,
-    // where the batch must now survive, and once routing them into it, where it must still
-    // decline. Answers come from the row engine either way, so the only thing that moves is
-    // the route - which is what makes the pair a test of this task and not of the arithmetic.
+    // where the batch must survive, and once routing them into it, where it must decline.
+    // Answers come from the row engine either way, so the only thing that moves is the route -
+    // which is what makes the pair a test of the arm's qualification and not of the arithmetic.
     cacheDatesFarOffset(spark)
     cacheDatesFarOffset(varkaSpark)
     cacheIntsOverflow(spark)
@@ -808,8 +806,8 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
         s"residual (day range [${VarkaChrono.NARROW_MIN_DAYS + headroom + 1}, " +
           s"${VarkaChrono.NARROW_DECOMPOSE_MAX_DAYS + 1}]"), explained)
       assert(explained.contains("keep: fused"), explained)
-      // Downward the guard's constant still binds and the old answer stands: NARROW_MIN_DAYS
-      // is not what this task moved, so a subtraction over the same producer stays residual.
+      // Downward the guard's constant binds: NARROW_MIN_DAYS is the lower edge of both ranges,
+      // so a subtraction over the same producer stays residual.
       val below = checkDifferential(spark, varkaSpark,
         "SELECT year(date_sub(date_add(d, off), 1)) AS y, date_add(d, 1) AS keep " +
           "FROM varka_dates_narrow_ceiling ORDER BY y, keep",
@@ -949,10 +947,9 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
   }
 
   test("a mixed-eligibility projection fuses partially and matches the row engine") {
-    // Pinned as "not fused" until VARKA-12: one ineligible entry used to poison the whole
-    // projection. Now the date entry runs on the kernels, the bare `i` forwards zero-copy, and
-    // `i % 7` is evaluated per row beside them. The residual entry was `i + 1` until VARKA-63
-    // lowered int arithmetic, which left this test with nothing residual in it.
+    // One ineligible entry does not poison the whole projection (VARKA-12): the date entry runs
+    // on the kernels, the bare `i` forwards zero-copy, and `i % 7` is evaluated per row beside
+    // them. The residual entry is `i % 7` because int arithmetic like `i + 1` fuses (VARKA-63).
     cacheDates(spark)
     cacheDates(varkaSpark)
     checkDifferential(spark, varkaSpark,
@@ -990,8 +987,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
   }
 
   test("nested date expressions are fused and match the row engine") {
-    // These planned as a plain per-row Project until VARKA-10: the recursive compiler is what
-    // makes `expectFused = true` hold here at all.
+    // The recursive compiler (VARKA-10) is what makes `expectFused = true` hold here at all.
     cacheDates(spark)
     cacheDates(varkaSpark)
     checkDifferential(spark, varkaSpark,
@@ -1046,9 +1042,9 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
   }
 
   test("a projection with a bare date column fuses and forwards the column zero-copy") {
-    // Pinned as "stays unfused until VARKA-12": a bare column output compiles to nothing on
-    // purpose - emitting it would be a copy loop - and now forwards as the input's own vector
-    // instead (the `eq` assertion lives in VarkaKernelEvaluatorSuite).
+    // A bare column output compiles to nothing on purpose - emitting it would be a copy loop -
+    // and forwards as the input's own vector instead (VARKA-12; the `eq` assertion lives in
+    // VarkaKernelEvaluatorSuite).
     cacheDates(spark)
     cacheDates(varkaSpark)
     checkDifferential(spark, varkaSpark,
@@ -1213,12 +1209,10 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
     checkDifferential(spark, varkaSpark,
       "SELECT date_from_unix_date(i) AS x FROM varka_dates",
       expectFused = false)
-    // The actual argument for the task: a relabelled entry beside an ordinary one must not
-    // demote the whole projection to Janino. Before this task the relabel became a residual
-    // (per-row) entry rather than blocking `a` too - VARKA-12's per-entry eligibility already
-    // covered that - but it still cost a Janino re-evaluation of every row for `b` instead of
-    // riding the same vectorized loop as `a`; see VarkaExpressionCompilerSuite for the
-    // compiler-level proof that both entries now fuse rather than one falling to residual.
+    // A relabelled entry beside an ordinary one must not demote the whole projection to Janino,
+    // nor become a residual (per-row) entry that costs a Janino re-evaluation of every row for
+    // `b` instead of riding the same vectorized loop as `a`; see VarkaExpressionCompilerSuite
+    // for the compiler-level proof that both entries fuse.
     checkDifferential(spark, varkaSpark,
       "SELECT date_add(d, 1) AS a, unix_date(d) AS b FROM varka_dates ORDER BY a",
       expectFused = true)
@@ -1343,6 +1337,89 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
     }
   }
 
+  test("a residual conjunct that can raise sees every row Spark evaluates it on, so Varka " +
+      "raises where Spark raises and fuses only the conjuncts Spark evaluates before it") {
+    // VARKA-380, the mirror of the test above. BIGINT arithmetic does not fuse, so `(l + 1) > 0`
+    // stays in the row filter above the Varka node; under ANSI it raises on the row whose `l` is
+    // the largest BIGINT, and a fused date conjunct that rejects that row must not run first.
+    // Under LEGACY the sum wraps and raises nothing, so the date conjuncts fuse as before; a
+    // year-month sum overflows in both modes. One partition, so one error is raised first.
+    Seq(spark, varkaSpark).foreach { session =>
+      session.sql(
+        """SELECT * FROM VALUES
+          |  (5, 1L, DATE'2021-03-01', make_ym_interval(1, 0)),
+          |  (6, 9223372036854775807L, DATE'2021-12-31', make_ym_interval(178956969, 0)),
+          |  (7, 2L, DATE'2021-01-15', make_ym_interval(2, 0))
+          |AS t(i, l, d, ym)""".stripMargin)
+        .coalesce(1).createOrReplaceTempView("varka_raising_residual")
+      session.catalog.cacheTable("varka_raising_residual")
+      // The codegen order's case: `d IS NOT NULL` written first runs after `(l + 1) > 0`, which
+      // does not read `d`, so Spark raises on the row whose `d` is null.
+      session.sql(
+        """SELECT * FROM VALUES
+          |  (1L, DATE'2021-03-01'),
+          |  (9223372036854775807L, CAST(NULL AS DATE))
+          |AS t(l, d)""".stripMargin)
+        .coalesce(1).createOrReplaceTempView("varka_raising_null_test")
+      session.catalog.cacheTable("varka_raising_null_test")
+      // The fallback's case: every conjunct fuses, the kernel declines the batch on the month
+      // of 13, and the per-row fallback must evaluate `d2 IS NOT NULL` where codegen does, last.
+      session.sql(
+        """SELECT * FROM VALUES
+          |  (13, DATE'2021-12-31', CAST(NULL AS DATE)),
+          |  (5, DATE'2021-12-31', DATE'2021-01-01')
+          |AS t(i, d, d2)""".stripMargin)
+        .coalesce(1).createOrReplaceTempView("varka_raising_fallback")
+      session.catalog.cacheTable("varka_raising_fallback")
+    }
+    def plan(q: String): SparkPlan = varkaSpark.sql(q).queryExecution.executedPlan
+    val t = "FROM varka_raising_residual WHERE"
+    try {
+      withAnsi(true) {
+        // Raising first: nothing Spark evaluates after it may fuse.
+        val first = s"SELECT i $t (l + 1) > 0 AND d < DATE'2021-06-01'"
+        assertNotFused(plan(first))
+        checkSparkRaisesTheSame[SparkArithmeticException](first)
+        // Between two fused conjuncts: the first stays fused, the overflow row passes it.
+        val between = s"SELECT i $t d > DATE'2021-02-01' AND (l + 1) > 0 AND d < DATE'2021-06-01'"
+        assertFused(plan(between))
+        checkSparkRaisesTheSame[SparkArithmeticException](between)
+        // A fused conjunct written first rejects the overflow row before the sum runs, on both.
+        val rejected = s"SELECT i $t d < DATE'2021-06-01' AND (l + 1) > 0 AND i > 5 ORDER BY i"
+        assertFused(plan(rejected))
+        assert(checkSparkAnswerMaybeThrows(rejected) == VarkaMaybeThrows.Answered(Seq(Row(7))))
+        val nullTest = "SELECT l FROM varka_raising_null_test WHERE d IS NOT NULL AND (l + 1) > 0"
+        assertNotFused(plan(nullTest))
+        checkSparkRaisesTheSame[SparkArithmeticException](nullTest)
+        val fallback =
+          "SELECT i FROM varka_raising_fallback WHERE d2 IS NOT NULL AND make_date(2021, i, 1) < d"
+        assertFused(plan(fallback))
+        checkSparkRaisesTheSame[SparkDateTimeException](fallback)
+        // Without whole-stage codegen Spark evaluates the condition as written and the null test
+        // drops the row first: no error on either engine, so the fallback follows that order.
+        withBothConf(SQLConf.WHOLESTAGE_CODEGEN_ENABLED.key, "false") {
+          assertFused(plan(fallback))
+          assert(checkSparkAnswerMaybeThrows(fallback) == VarkaMaybeThrows.Answered(Seq(Row(5))))
+        }
+      }
+      withAnsi(false) {
+        val first = s"SELECT i $t (l + 1) > 0 AND d < DATE'2021-06-01' ORDER BY i"
+        assertFused(plan(first))
+        assert(checkSparkAnswerMaybeThrows(first) == VarkaMaybeThrows.Answered(Seq(Row(5), Row(7))))
+        val interval = s"SELECT i $t (ym + ym) > ym AND d < DATE'2021-06-01'"
+        checkSparkRaisesTheSame[SparkArithmeticException](interval)
+      }
+    } finally {
+      Seq(spark, varkaSpark).foreach { session =>
+        session.catalog.uncacheTable("varka_raising_residual")
+        session.catalog.uncacheTable("varka_raising_null_test")
+        session.catalog.uncacheTable("varka_raising_fallback")
+        Seq("varka_raising_residual", "varka_raising_null_test", "varka_raising_fallback")
+          .foreach(session.catalog.dropTempView)
+      }
+    }
+  }
+
   test("weekofyear matches the row engine on every day across forty year " +
       "boundaries, at Velox's fixtures, under every spelling and on the filter path") {
     // The dense sweep of the plan: every day from 1990-12-20 to 2030-01-10 built from range,
@@ -1397,7 +1474,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
         "weekday(d) + 1 AS c, dayofweek(d) AS e, weekday(d) AS f FROM varka_dates " +
         "ORDER BY a, b, c, e, f",
       expectFused = true)
-    // weekday(d) + 2 is not this node: since VARKA-63 it fuses too, but as int arithmetic over
+    // weekday(d) + 2 is not this node: it fuses too (VARKA-63), but as int arithmetic over
     // the weekday field rather than as the dedicated ISO node, and the value is what says so.
     // Reading the +1 arm as "any Add over a weekday" would silently answer +1 here.
     checkDifferential(spark, varkaSpark,
@@ -1489,13 +1566,13 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
     // The same boundary set VARKA-26's own test uses, since last_day shares emitChrono's
     // prefix and can get the same things wrong, plus two far-future century years a DATE
     // literal cannot name (the SQL parser's year field is 4 digits): 14500, not divisible by
-    // 400, and 14400, which is. emitLeapFlag's magic constants once overflowed a 32-bit lane's
-    // signed product past roughly year 12400 - silently, with no narrow boundary list catching
-    // it - so these two rows are the end-to-end companion to the exhaustive unit-level sweep
-    // in VarkaEmitterChronoSuite, over the same class of failure through actual SQL. They go
+    // 400, and 14400, which is. A leap test whose magic constants overflowed a 32-bit lane's
+    // signed product past roughly year 12400 would fail silently, with no narrow boundary list
+    // catching it, so these two rows are the end-to-end companion to the exhaustive unit-level
+    // sweep in VarkaEmitterChronoSuite, over the same class of failure through actual SQL. They go
     // through the column, not a literal expression: a literal-only date_add(DATE '...', n)
-    // constant-folds away before Varka ever sees it, which is a shape this test does not
-    // want to depend on the optimizer leaving alone.
+    // constant-folds away before Varka ever sees it, which is a shape this test does not want to
+    // depend on the optimizer leaving alone.
     val rows = Seq("2024-01-01", "2024-02-29", "2024-03-01", "2024-12-31", "1969-12-31",
       "1970-01-01", "1900-02-28", "1900-03-01", "2000-02-29", "2000-03-01", "1600-02-29",
       "1600-03-01", "0001-01-01", "9999-12-31", "2025-07-04", null)
@@ -1709,12 +1786,12 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
     cacheDates(spark)
     cacheDates(varkaSpark)
     withAnsi(true) {
-      // Each of these used to have its ANSI check removed by a bound that was wrong, so the
-      // kernel wrapped and returned a number where Spark raises. The assertion is the one that
+      // Each of these loses its ANSI check to a wrong bound, and the kernel then wraps and
+      // returns a number where Spark raises. The assertion is the one that
       // matters for a silent-wrong-answer bug: both engines must fail the same way.
       //
       //  - `quarter(d) * 536870912`: the bound is 4 * 2^29 = 2^31 exactly, one past the
-      //    largest int, which the old comparison admitted.
+      //    largest int, which a comparison against MIN_VALUE's magnitude would admit.
       //  - `datediff(date_add(d, 2147483647), d) + 1`: the shift wraps the int32 lane, so the
       //    contract width was never this datediff's bound.
       //
@@ -1727,7 +1804,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
           // residual and no Varka kernel runs. That is the outcome under test: the compiler
           // refusing, rather than a kernel wrapping.
           ("SELECT quarter(d) * 536870912 AS a FROM varka_dates ORDER BY a", false),
-          // The add fuses, with the check the bound no longer removes, and the kernel condemns
+          // The add fuses, with the check the bound does not remove, and the kernel condemns
           // the batch so the row engine can raise. This is the row that would go silent.
           ("SELECT datediff(date_add(d, 2147483647), d) + 1 AS a FROM varka_dates ORDER BY a",
             true))) {
@@ -1783,7 +1860,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
     cacheDatesNullableOffset(varkaSpark)
     for (ansi <- Seq(false, true)) {
       withAnsi(ansi) {
-        // The offset is no longer only a leaf. A null in either operand still nulls the row,
+        // The offset is an expression, not only a leaf. A null in either operand nulls the row,
         // which is the null-intolerant rule the whole date lane runs on.
         checkDifferential(spark, varkaSpark,
           "SELECT date_add(d, off + 1) AS a, date_sub(d, off - 1) AS b " +
@@ -1894,9 +1971,8 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
     }
   }
 
-  // VARKA-51 removed two tests here that drove a real out-of-range day through the
-  // then per-extraction guard; VARKA-52 restored them below, anchored on the producer the
-  // guard now lives at (the "VARKA-52" tests), so the routing is again reached with real
+  // The tests that drive a real out-of-range day through the guard are the "VARKA-52" tests
+  // below, anchored on the producer the guard lives at, so the routing is reached with real
   // data and no hook.
 
   test("a declined batch falls back with the row engine's answers, counted as its own cause") {
@@ -1989,9 +2065,8 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
   test("filters and aggregation match the row engine") {
     cacheDatesBig(spark, 1024)
     cacheDatesBig(varkaSpark, 1024)
-    // Until VARKA-21 the WHERE below pinned expectFused = false - a filter blocked fusion
-    // outright. It now fuses: the filter runs the mask kernel and the projection stacks on
-    // the compacted batches.
+    // The WHERE below fuses (VARKA-21): the filter runs the mask kernel and the projection
+    // stacks on the compacted batches.
     checkDifferential(spark, varkaSpark,
       "SELECT date_add(d, 7) AS a FROM varka_dates_big WHERE d IS NOT NULL ORDER BY a",
       expectFused = true)
@@ -2018,7 +2093,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
       "SELECT count(*) AS c FROM varka_dates_big " +
         "WHERE d BETWEEN DATE'2020-02-01' AND DATE'2020-06-01'",
       expectFused = true)
-    // IN - the task-20 lowering, now at a filter root (the benchmark's anchor shape).
+    // IN - the VARKA-20 lowering, at a filter root (the benchmark's anchor shape).
     checkDifferential(spark, varkaSpark,
       "SELECT count(*) AS c FROM varka_dates_big " +
         "WHERE d IN (DATE'2020-01-02', DATE'2020-03-04', DATE'2020-11-30')",
@@ -2126,8 +2201,8 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
     // The conjunct split would hoist the date predicate below rand(), changing which rows
     // the seeded stream sees; the compiler declines the whole predicate instead. Plan-shape
     // assertion only: an always-true rand comparison gets optimized away entirely (leaving a
-    // deterministic filter that legitimately fuses - the first version of this test learned
-    // that), and a live rand makes answers uncomparable; the reorder semantics themselves
+    // deterministic filter that legitimately fuses), and a live rand makes answers
+    // uncomparable; the reorder semantics themselves
     // are pinned in the compiler suite.
     cacheDatesBig(varkaSpark, 256)
     val plan = varkaSpark.sql(

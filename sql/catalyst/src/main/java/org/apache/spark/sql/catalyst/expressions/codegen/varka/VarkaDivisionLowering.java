@@ -32,12 +32,14 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Con
  *
  * <p>Two callers. The calendar prefix divides by a handful of constants whose dividends it can
  * bound, so its sites have a range-narrowed magic form to fall back on and come here only for
- * the double forms ({@link #emitDoubleDivide}); {@code ConstDivide} divides a dividend nothing
- * bounds, so {@link #emitConstDivide} chooses among the forms that are exact over the whole
- * lane: the multiply-high through 64-bit lanes at the int lane, the conversion through double
- * lanes, or the magic-number floor at the long lane on a host whose converts do not become
- * instructions. Every form's quotient is exact over its lane, which is why none of them is
- * followed by a carry, a guard or an overflow mask.
+ * the double forms ({@link #emitDoubleDivide}); {@code ConstDivide} divides a dividend the
+ * calendar's ranges do not bound, so {@link #emitConstDivide} chooses among the forms that are
+ * exact over what the node admits: the multiply-high through 64-bit lanes at the int lane, the
+ * conversion through double lanes, or the magic-number floor at the long lane on a host whose
+ * converts do not become instructions. At the int lane that is the whole lane; at the long lane
+ * it is a dividend under {@code ConstDivide.EXACT_DIVIDEND_BOUND}, which the node states and its
+ * caller proves ({@link ConstDivide}'s javadoc). Every form's quotient is exact over that
+ * domain, which is why none of them is followed by a carry, a guard or an overflow mask.
  */
 final class VarkaDivisionLowering {
 
@@ -121,20 +123,22 @@ final class VarkaDivisionLowering {
   }
 
   /**
-   * {@code child / divisor}, the division over a dividend nothing bounds.
+   * {@code child / divisor}, the division over a dividend the calendar's ranges do not bound.
    *
    * <p>{@link VarkaVectorIR.ConstDivide} exists for dividends the emitter cannot bound, so the
    * calendar's range-narrowed magic is not an option however {@link VarkaEmitOptions#division()}
    * is set. At the int lane it takes the multiply-high through 64-bit lanes
    * ({@link #emitMulHiDivide}, VARKA-149), which is exact over the whole lane, or - with
    * {@link VarkaEmitOptions#mulHiDivide()} off, the reference arm - the conversion through
-   * double lanes it replaced. At the long lane it is the conversion form, or the magic-number
+   * double lanes. At the long lane it is the conversion form, or the magic-number
    * form on a host whose converts do not intrinsify. The conversion is always the true divide:
    * the reciprocal is exact only for divisors a closed form admits, and choosing between them
    * per divisor is a performance question this node does not need to answer to be correct.
    *
-   * <p>No carry, no guard and no overflow mask: every form's quotient is exact over the whole
-   * lane, and dividing by a non-zero constant other than -1 cannot overflow.
+   * <p>No carry, no guard and no overflow mask: every form's quotient is exact over what the node
+   * admits - the whole int lane, and at the long lane a dividend under
+   * {@link ConstDivide#EXACT_DIVIDEND_BOUND}, the bound the node states and its caller proves -
+   * and dividing by a non-zero constant other than -1 cannot overflow.
    */
   static void emitConstDivide(CodeBuilder cb, ConstDivide n, boolean dense,
       Analysis analysis, Slots s, Set<VarkaVectorIR> computed) {

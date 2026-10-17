@@ -226,8 +226,8 @@ final class VarkaEmitCostFit {
       }
     }
 
-    // The prefix, now that every tail has a price, and the selection's store last, now that
-    // every condition has one.
+    // The prefix, once every tail has a price, and the selection's store last, once every
+    // condition has one.
     ColumnRef d = new ColumnRef(0);
     IntNeg n0 = new IntNeg(Overflow.WRAP, d);
     probe.must("prefix", List.of(n0), List.of(new Year(d)), 1, 0);
