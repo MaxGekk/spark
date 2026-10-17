@@ -168,7 +168,8 @@ class VarkaFilterRaiseOrderSuite extends QueryTest with VarkaMaybeThrows with Va
 
   test("a LIMIT the rows before the filter's raising row satisfy answers, and one they do not " +
       "raises the filter's error") {
-    def q(n: Int) = s"SELECT date_add(DATE'2021-01-01', k) AS c FROM $view WHERE y + 1 > 0 LIMIT $n"
+    def q(n: Int): String =
+      s"SELECT date_add(DATE'2021-01-01', k) AS c FROM $view WHERE y + 1 > 0 LIMIT $n"
     for (n <- 1 to 3) {
       check(q(n), classOf[VarkaFilterExec])(answers(days(1, 1 + n)))
     }
