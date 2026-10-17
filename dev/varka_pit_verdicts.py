@@ -20,6 +20,7 @@
   dev/varka_pit_verdicts.py BEHAVIOURAL.xml BYTES.xml REPORT.md [--notes NOTES.tsv]
   dev/varka_pit_verdicts.py --shards DIR REPORT.md [--notes NOTES.tsv]
   dev/varka_pit_verdicts.py --keep BEHAVIOURAL.xml KEEP.tsv
+  dev/varka_pit_verdicts.py BEHAVIOURAL.xml BYTES.xml REPORT.md --only KEEP.tsv [--notes ...]
 
 BEHAVIOURAL.xml is PIT's mutations.xml from the run of every eligible suite but the bytes
 oracle, BYTES.xml from the run of VarkaEmittedBytesSuite alone, over the same classes and
@@ -49,7 +50,9 @@ class and the mutator by their short names, the method, its descriptor, the inst
 its line for the reader, then the test that now kills it or the note that it changes no behaviour.
 The identity is the bytecode's, so an edit elsewhere in the file leaves a note matching. The report
 lists each non-behavioural mutant with its answer, or "open" where there is none yet. A note on a
-method the run mutated that matches no mutant fails the run: the code changed under it.
+method the run mutated that matches no mutant fails the run: the code changed under it. With
+--only, the run was restricted to the mutants KEEP.tsv names (dev/varka_pit.sh --only), and only
+a note on one of those can be stale.
 """
 
 import argparse
@@ -265,6 +268,7 @@ def main():
     ap.add_argument("--shards", metavar="DIR", help="join the shard directories under DIR")
     ap.add_argument("--notes")
     ap.add_argument("--scope", help="a sentence saying what the run mutated and ran")
+    ap.add_argument("--only", metavar="KEEP.tsv", help="the mutants a restricted run kept")
     args = ap.parse_args()
     if args.shards:
         if len(args.paths) != 1:
@@ -298,6 +302,16 @@ def main():
     keys = {key for _, _, key in rows}
     methods = {tuple(key.split("\t")[:2]) for key in keys}
     stale = sorted(k for k in set(notes) - keys if tuple(k.split("\t")[:2]) in methods)
+    if args.only:
+        named = set()
+        for line in open(args.only, encoding="utf-8").read().splitlines():
+            cls, method, desc, mutator, indexes = line.split("\t")
+            named.add(
+                "\t".join(
+                    [cls.rsplit(".", 1)[-1], method, desc, mutator.rsplit(".", 1)[-1], indexes]
+                )
+            )
+        stale = [k for k in stale if k in named]
     counts = collections.Counter(v for _, v, _ in rows)
     print(", ".join(f"{counts[v]} {v}" for v in VERDICTS) + f" of {len(rows)} mutants")
     if stale:
