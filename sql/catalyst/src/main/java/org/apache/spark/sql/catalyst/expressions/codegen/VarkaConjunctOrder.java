@@ -20,6 +20,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import javax.annotation.Nullable;
 
 import scala.jdk.javaapi.CollectionConverters;
 
@@ -153,8 +155,10 @@ public final class VarkaConjunctOrder {
     }
     boolean changed = true;
     while (changed) {
-      changed = demoteBehind(written, conjuncts, raises, isFused, late)
-          | demoteBehind(codegen, conjuncts, raises, isFused, late);
+      // Both orders demote in every round, so neither call may be skipped.
+      boolean byWritten = demoteBehind(written, conjuncts, raises, isFused, late);
+      boolean byCodegen = demoteBehind(codegen, conjuncts, raises, isFused, late);
+      changed = byWritten || byCodegen;
       if (!changed) {
         changed = demoteNullCheckMovers(conjuncts, raises, isFused, late);
       }
@@ -295,7 +299,7 @@ public final class VarkaConjunctOrder {
   }
 
   /** What {@code step} tests for null, or null when it is a conjunct of another kind. */
-  private static Expression nullTestOf(Step step, List<Expression> conjuncts) {
+  private static @Nullable Expression nullTestOf(Step step, List<Expression> conjuncts) {
     return switch (step) {
       case Conjunct(int index) -> nullTested(conjuncts.get(index));
       case NullCheck(Attribute column) -> column;
@@ -338,14 +342,14 @@ public final class VarkaConjunctOrder {
   }
 
   /** The tested expression of a null test codegen moves, or null for any other conjunct. */
-  private static Expression nullTested(Expression conjunct) {
+  private static @Nullable Expression nullTested(Expression conjunct) {
     return conjunct instanceof IsNotNull n && isNullIntolerant(n.child()) ? n.child() : null;
   }
 
   /** Whether codegen places the null test of {@code tested} just before {@code conjunct}. */
   private static boolean pulls(Expression conjunct, Expression tested) {
-    if (tested instanceof Attribute) {
-      return references(conjunct, (Attribute) tested);
+    if (tested instanceof Attribute column) {
+      return references(conjunct, column);
     }
     return conjunct.exists(e -> e.semanticEquals(tested));
   }
@@ -367,7 +371,7 @@ public final class VarkaConjunctOrder {
    */
   public static Expression inCodegenOrder(Expression condition) {
     List<Expression> conjuncts = VarkaExpressionCompiler.conjuncts(condition);
-    Expression folded = null;
+    @Nullable Expression folded = null;
     for (Step step : codegenOrder(conjuncts)) {
       Expression next = switch (step) {
         case Conjunct(int index) -> conjuncts.get(index);
@@ -375,7 +379,8 @@ public final class VarkaConjunctOrder {
       };
       folded = folded == null ? next : new And(folded, next);
     }
-    return folded;
+    // A condition has at least one conjunct, so the fold has at least one step.
+    return Objects.requireNonNull(folded);
   }
 
   /**
@@ -408,7 +413,8 @@ public final class VarkaConjunctOrder {
       for (Attribute reference : CollectionConverters.asJava(conjunct.references().toSeq())) {
         int found = -1;
         for (int n : notNull) {
-          if (nullTested(conjuncts.get(n)).semanticEquals(reference)) {
+          // Every index in notNull has a tested expression.
+          if (Objects.requireNonNull(nullTested(conjuncts.get(n))).semanticEquals(reference)) {
             found = n;
             break;
           }
@@ -422,7 +428,7 @@ public final class VarkaConjunctOrder {
         }
       }
       for (int n : notNull) {
-        Expression tested = nullTested(conjuncts.get(n));
+        Expression tested = Objects.requireNonNull(nullTested(conjuncts.get(n)));
         if (!placed[n] && !(tested instanceof Attribute) && pulls(conjunct, tested)) {
           placed[n] = true;
           order.add(new Conjunct(n));
@@ -510,7 +516,7 @@ public final class VarkaConjunctOrder {
    * stay off the list, since a zero divisor raises under ANSI whatever the type.
    */
   private static boolean arithmeticCannotOverflow(Object mode, DataType type) {
-    if (type == DoubleType$.MODULE$ || type == FloatType$.MODULE$) {
+    if (type.equals(DoubleType$.MODULE$) || type.equals(FloatType$.MODULE$)) {
       return true;
     }
     return type instanceof IntegralType && !EvalMode$.MODULE$.ANSI().equals(mode);
