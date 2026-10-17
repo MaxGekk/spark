@@ -177,6 +177,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [With the intrinsics off C2 takes twenty seconds a loop method, and an epilogue's compile 337 MB](sql/varka/skills/the-jit.md#with-the-intrinsics-off-c2-takes-twenty-seconds-a-loop-method-and-an-epilogues-compile-337-mb)
 * [With the trap limits raised, a masked loop traps thousands of times and still reads as settled](sql/varka/skills/the-jit.md#with-the-trap-limits-raised-a-masked-loop-traps-thousands-of-times-and-still-reads-as-settled)
 * [A kernel warmed after other kernels can stay allocating, and the template prewarm guards only the int lane](sql/varka/skills/the-jit.md#a-kernel-warmed-after-other-kernels-can-stay-allocating-and-the-template-prewarm-guards-only-the-int-lane)
+* [Which tier served a call: the code list at the call's edges, JFR's events inside it](sql/varka/skills/the-jit.md#which-tier-served-a-call-the-code-list-at-the-calls-edges-jfrs-events-inside-it)
 
 #### [The Vector API and vector width](sql/varka/skills/vector-api-and-width.md)
 * [Vector API on HotSpot, Measured (JDK 25, x86-64)](sql/varka/skills/vector-api-and-width.md#vector-api-on-hotspot-measured-jdk-25-x86-64)
