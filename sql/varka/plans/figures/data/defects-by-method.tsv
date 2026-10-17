@@ -10,7 +10,7 @@ variants	none	nothing	VARKA-278.md
 expression differential	none	nothing	VARKA-276.md
 random queries	defect	the NULL-type column	VARKA-299.md
 random queries	defect	the mirror of the filter order	VARKA-380.md
-random queries	defect	filter raised before the projection	m8/PLAN.md row 387, pull request 911
+random queries	defect	filter raised before the projection	PLAN.md row 387, pull request 911
 random queries	defect	Spark's two filters disagree	m8/PLAN.md row 386, SPARK-60315
 Spark's own tests	none	nothing	VARKA-81.md, VARKA-271.md
 coverage	gap	both loops uncompared	VARKA-285.md

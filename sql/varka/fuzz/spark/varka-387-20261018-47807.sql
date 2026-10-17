@@ -1,5 +1,5 @@
 -- VARKA-262 reproducer
--- status: known 387
+-- status: regression
 -- note: seed 20261018 iteration 47807
 -- ansi: true
 -- kind: error classes differ: DATETIME_FIELD_OUT_OF_BOUNDS.WITHOUT_SUGGESTION, INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION

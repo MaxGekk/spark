@@ -197,8 +197,8 @@ that Spark evaluates after a condition it left to Spark, so where that one raise
 query and Varka returned rows; 4 of 17,490 nested queries in a census of 35,000. Then, once the
 verdict was made deterministic (below), two more in 150,000 nested queries. In the file above,
 Varka's columnar filter finished its batch before the projection above saw a row, so where Spark
-raised the projection's error on the first row, Varka raised the filter's on the second; a
-proposed change delivers the rows before the failing one first. In the other, Varka raises where
+raised the projection's error on the first row, Varka raised the filter's on the second; the
+fix, since merged, delivers the rows before the failing one first. In the other, Varka raises where
 Spark's default session answers, and Spark disagrees with itself: its compiled filter stops at a
 condition that is NULL, its interpreted filter goes on to the one that raises (SPARK-60315). A
 change proposed upstream would make the compiled filter raise too, so that case waits for Spark's
