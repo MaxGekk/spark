@@ -29,8 +29,7 @@
 set -euo pipefail
 
 # Usage text is found rather than numbered: a hard-coded range silently truncates as the
-# comment above it grows, which had already happened to four of these scripts. Ends at the
-# first line that is not a comment.
+# comment above it grows. Ends at the first line that is not a comment.
 usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
 case "${1:-}" in -h|--help) usage 0 ;; esac
 
@@ -63,9 +62,8 @@ conflicts() {
   # `git merge-tree --write-tree` (git 2.38+): exit 1 on a conflict, the tree id
   # on the first line, then the conflicted paths up to a blank line. Not the
   # legacy three-argument form: its output is a diff, so every conflict marker
-  # arrives as `+<<<<<<< .our` and a grep for `^<<<<<<<` counts zero, always -
-  # which is how the first version of this script called #107 clean against a
-  # master it conflicted with.
+  # arrives as `+<<<<<<< .our` and a grep for `^<<<<<<<` counts zero, always,
+  # and calls clean a branch that conflicts with master.
   local out
   if out="$(git merge-tree --write-tree --name-only "$1" "$2" 2>/dev/null)"; then
     echo 0

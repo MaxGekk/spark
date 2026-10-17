@@ -397,7 +397,7 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
   /**
    * Builds and caches a `varka_dates_big` temp view with `numRows` rows, one null every 17 rows
    * to exercise null handling, and `parts` partitions (via `repartition` when > 1) so the scan
-   * fans out over several tasks (which share one cached kernel class since VARKA-18).
+   * fans out over several tasks (which share one cached kernel class, VARKA-18).
    */
   /**
    * Builds and caches `varka_dates_weekday` for VARKA-59: dates `d` and `d2` and a weekday name
@@ -497,8 +497,8 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
     session.catalog.cacheTable("varka_dates_big")
   }
 
-  /** Whether a node is one of the four Varka exec nodes (projections since VARKA-6, filters
-   * since VARKA-21). The assertions below go through this so a suite written against one node
+  /** Whether a node is one of the four Varka exec nodes (projections, VARKA-6, and filters,
+   * VARKA-21). The assertions below go through this so a suite written against one node
    * kind keeps working as the rule learns new rewrites. */
   protected def isVarkaNode(plan: SparkPlan): Boolean = plan match {
     case _: VarkaColumnarToRowExec | _: VarkaProjectExec

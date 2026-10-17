@@ -207,8 +207,8 @@ final class VarkaEmitCostAudit {
 
   /**
    * The options before the plan, at the audit's width, with the prediction on or off: the
-   * weights alone, and the prediction without the plan's margins. Neither ships since VARKA-236
-   * made the plan the default; both stay as the arms the shipped grouping is read against.
+   * weights alone, and the prediction without the plan's margins. Neither ships, since the plan
+   * is the default (VARKA-236); both stay as the arms the shipped grouping is read against.
    */
   static VarkaEmitOptions shipped(boolean predict) {
     return VarkaEmitOptions.DEFAULTS.withLanesOverride(VarkaEmitCostCorpus.LANES)

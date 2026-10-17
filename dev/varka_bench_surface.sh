@@ -146,10 +146,10 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-# The header block, found rather than hard-coded: the range used to be '17,50p' and the
-# comment above grew past it, so --help and every usage error stopped mid-sentence and dropped
-# the only paragraph documenting the mandatory LABEL=SPARK_HOME:JAVA_HOME argument - which is
-# precisely what a usage error is about. Ends at the first line that is not a comment.
+# The header block, found rather than hard-coded: a fixed range falls behind as the comment
+# above grows, and --help and every usage error then stop mid-sentence and can drop the only
+# paragraph documenting the mandatory LABEL=SPARK_HOME:JAVA_HOME argument - which is precisely
+# what a usage error is about. Ends at the first line that is not a comment.
 usage() { sed -n '17,/^[^#]/p' "$0" | sed '$d'; exit "${1:-2}"; }
 rows=500000000; partitions=1; cores=1; force=0; only=""; build=1; memory=16g; share=5; dists=()
 replace=0
@@ -239,11 +239,11 @@ jar="$(ls "$jar_dir"/varka-bench-*.jar 2>/dev/null | grep -v -- '-sources\|-test
 # two widths, reporting lanes per nanosecond, whose ratio is about 2 on a full-width unit and
 # about 1 on a double-pumped one.
 #
-# This read `Canary.compute` until 11 September 2026, which was wrong and silently so: that
-# loop is a scalar xorshift over one `long` - Canary's own javadoc calls it "the control" -
-# so MaxVectorSize cannot touch it and the ratio was 1.00 on every machine ever measured,
-# a full-width Intel Xeon 6973P-C included. Every `datapath` line committed before that date
-# is a scalar rate wearing a vector label. See VARKA-62.md 11.9.
+# Not `Canary.compute`: that loop is a scalar xorshift over one `long` - Canary's own javadoc
+# calls it "the control" - so MaxVectorSize cannot touch it and its ratio is 1.00 on every
+# machine, a full-width Intel Xeon 6973P-C included. A `datapath` line committed before 11
+# September 2026 was read from it and is a scalar rate wearing a vector label (VARKA-62.md
+# 11.9).
 last="${dists[${#dists[@]}-1]}"
 probe_java="$(echo "$last" | cut -d= -f2- | cut -d: -f2)/bin/java"
 probe() {

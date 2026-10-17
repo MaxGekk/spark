@@ -49,7 +49,7 @@ import org.apache.spark.sql.execution.VarkaProjectExec;
  * <p>The {@code runQueries} cases write to {@code noop}, and {@code noop} accepts columnar
  * batches, so their varka sides hand the kernels' own Arrow batches to the sink through {@link
  * VarkaProjectExec} - no columnar-to-row conversion is inside the measurement. That includes the
- * mixed projection, Varka-eligible since VARKA-12 (one fused entry, one forwarded, one residual).
+ * mixed projection, Varka-eligible (VARKA-12; one fused entry, one forwarded, one residual).
  * The {@code runRowQueries} cases force the row path instead ({@code toRdd}), measuring {@link
  * VarkaColumnarToRowExec}'s batch assembly plus the read back to rows - the number behind
  * VARKA-12's escape-hatch decision (assemble-then-read vs merge-at-row, {@code VARKA-12.md}
@@ -440,11 +440,11 @@ public class VarkaThroughputBenchmark extends VarkaSqlBenchmarkBase {
     runQueries(baseline, varka, "try_add over datediff (VARKA-63)",
         "SELECT try_add(datediff(d, DATE'2000-01-01'), i) AS a FROM varka_dates");
     // The same projection twice, which is the end-to-end worth of lowering arithmetic.
-    // The first row is what this case measured until VARKA-63: one fused date entry, one
-    // forwarded column, one residual - except that `i + 1` fuses now, so the projection is
-    // whole and the row prices that. The second keeps a residual entry by using an operator
-    // no arm lowers, so the partial-fusion shape the file has always tracked is still
-    // tracked. Read together they say what the residual entry costs the whole projection.
+    // The first row is one fused date entry, one forwarded column and `i + 1`, which fuses
+    // (VARKA-63), so the projection is whole and the row prices that. The second keeps a
+    // residual entry by using an operator no arm lowers, so the partial-fusion shape the
+    // file tracks is still tracked. Read together they say what the residual entry costs the
+    // whole projection.
     runQueries(baseline, varka, "mixed projection, arithmetic entry fused (VARKA-63)",
         "SELECT date_add(d, 3) AS a, i, i + 1 AS inc FROM varka_dates");
     runQueries(baseline, varka, "mixed projection (partial fusion)",

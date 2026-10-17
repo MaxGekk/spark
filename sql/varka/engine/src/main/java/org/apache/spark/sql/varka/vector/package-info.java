@@ -19,8 +19,7 @@
  * Hand-written Vector API kernels over Arrow buffers - the <b>reference semantics</b> of the
  * Varka engine.
  *
- * <p>These are no longer the execution path: since milestone 2 a whole projection is compiled
- * into one emitted loop by
+ * <p>These are not the execution path: a whole projection is compiled into one emitted loop by
  * {@code org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaLoopEmitter}, and these
  * per-operation kernels are what that emitter mirrors and what its output is checked against.
  * They are kept, and commented, as the readable statement of what a Varka loop does.

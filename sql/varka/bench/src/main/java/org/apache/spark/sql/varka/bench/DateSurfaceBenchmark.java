@@ -609,8 +609,8 @@ public final class DateSurfaceBenchmark {
    * has, however large the heap. Raising {@code --driver-memory} therefore does not help -
    * measured, 6g, 8g and 11g all failed identically - and more partitions is the fix.
    *
-   * <p>This check is kept even though {@link #buildTable} now asks for {@code MEMORY_ONLY},
-   * which removes the disk path that caused the original silence. The two are complementary:
+   * <p>This check stays beside {@link #buildTable}'s {@code MEMORY_ONLY}, which removes the
+   * disk path behind those silent runs. The two are complementary:
    * the storage level rules out one substitution, and this rules out the rest - a partially
    * cached table, or one evicted later under execution pressure.
    */

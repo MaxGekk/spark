@@ -404,7 +404,7 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
   test("the fixture builds for every drawn case, so no composition compares fixture errors") {
     // A view that raises while it is built (the cached one computes every column, the row engine
     // prunes the unused ones) makes the two sides raise whichever error their plan meets first.
-    // The draw's hostile years used to overflow the year-month columns of the view (VARKA-372).
+    // The draw's hostile years must not overflow the year-month columns of the view (VARKA-372).
     val ansiKey = org.apache.spark.sql.internal.SQLConf.ANSI_ENABLED.key
     for (it <- 0 until 600) {
       val c = draw(rows, seed, it)
@@ -473,7 +473,7 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
   }
 
   test("the wider pool leaves the compositions of the main stream as they were") {
-    // Iterations 0 and 1 draw no wide data and no pivot: their data is the old stream's.
+    // Iterations 0 and 1 draw no wide data and no pivot: their data is the main stream's.
     val c = draw(rows, seed, 0)
     assert(c.pivot.isEmpty)
     val again = draw(rows, seed, 0)

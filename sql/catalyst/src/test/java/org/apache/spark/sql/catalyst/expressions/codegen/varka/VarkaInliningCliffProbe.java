@@ -80,7 +80,7 @@ import org.apache.spark.sql.types.DataTypes;
  *
  * <p>{@code c1off} keeps C1 off the emitted class through a compiler directive, as the kernel
  * warm-up keeps it in production; the default is C1 on, the condition VARKA-198 measured under.
- * Java since VARKA-321, its timed loop the Scala form's statement for statement.
+ * Its timed loop is the Scala form's statement for statement (VARKA-321).
  */
 public final class VarkaInliningCliffProbe {
 

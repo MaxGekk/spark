@@ -578,10 +578,10 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
 
       // The two forms past the driver from a table's ceiling. Stages only where the driver is
       // over the budget, and several kernels only where one kernel cannot serve them all.
-      // Both named: the split driver is the default since `VARKA-190.md` 11.5, and each of
-      // B's kernels is a kernel whose driver fits, which is what the compiler's split makes.
-      // Both plan their size since VARKA-236 made the plan the default; the loop that reacted
-      // to each measurement in turn is the reference arm here, named `loop`, and its classes
+      // Both named: the split driver is the default (`VARKA-190.md` 11.5), and each of B's
+      // kernels is a kernel whose driver fits, which is what the compiler's split makes. Both
+      // plan their size, the plan being the default (VARKA-236); the loop that reacts to each
+      // measurement in turn is the reference arm here, named `loop`, and its classes
       // are the planned ones byte for byte (`VARKA-236.md` 9.2), so only the plan-time
       // section still runs it.
       var splitDriver = VarkaEmitOptions.DEFAULTS.withSplitDriver(true);
@@ -707,7 +707,7 @@ public class VarkaWideKernelBenchmark extends VarkaBenchmarkBase {
       section("the predicted grouping against the weights, and planned with the margins", () -> {
         var benchmark = benchmark(NUM_ROWS + " rows in " + CHUNK + "-row batches",
             NUM_ROWS).timed().build();
-        // Planned is the default since VARKA-236; the weights alone and the prediction without
+        // Planned is the default (VARKA-236); the weights alone and the prediction without
         // the plan's margins are its reference arms.
         var planned = VarkaEmitOptions.DEFAULTS;
         var predicted = planned.withPlanSize(false);

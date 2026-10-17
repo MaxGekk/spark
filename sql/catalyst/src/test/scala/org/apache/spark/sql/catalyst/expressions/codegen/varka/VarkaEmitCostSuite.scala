@@ -72,8 +72,9 @@ class VarkaEmitCostSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
   test("every feature the IR can produce has a price in both tables") {
     // A feature missing from a table makes every group holding it unpredictable, and the switch
     // then falls back to the weights for that group without a word. The expected set is
-    // enumerated from the IR's own enums, not from what the fuzz grammar draws - the grammar
-    // did not draw NarrowLane, the root of every TIME kernel, until VARKA-235 - and every record
+    // enumerated from the IR's own enums, not from what the fuzz grammar draws - a grammar can
+    // miss a node, as it missed NarrowLane, the root of every TIME kernel, before VARKA-235 -
+    // and every record
     // type of the IR must be named in it, so a node type added later fails here until priced.
     val expected = VarkaEmitCostFit.expectedFeatures().asScala.toSet
     val unnamed = irTypes().filterNot(t => expected.exists(f => f == t || f.startsWith(t + "/")))

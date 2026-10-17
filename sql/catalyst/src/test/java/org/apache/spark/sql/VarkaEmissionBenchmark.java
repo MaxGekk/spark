@@ -183,7 +183,7 @@ public class VarkaEmissionBenchmark extends VarkaBenchmarkBase {
       runCases(benchmark);
     });
 
-    // VARKA-190: kernels as wide as a real projection gets once the op cap no longer bounds
+    // VARKA-190: kernels as wide as a real projection gets when the op cap does not bound
     // them. One emission per iteration - a four-hundred-output emission is not microseconds -
     // and the byte budget set out of reach at 200 and 400 outputs, where the default would
     // decline the driver: the rungs price emission itself, which the designs past the driver's

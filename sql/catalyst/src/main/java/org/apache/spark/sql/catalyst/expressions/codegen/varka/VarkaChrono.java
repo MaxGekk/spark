@@ -140,9 +140,9 @@ public final class VarkaChrono {
    * admitted for, {@code [NARROW_MIN_DAYS, NARROW_DECOMPOSE_MAX_DAYS]}: year 42400 at the top,
    * year -12800 at the bottom. This is the bound the compiler's range analysis gives a lowered
    * {@code year}, which is what decides whether a checked multiply over it keeps its check. It
-   * was a typed-in 40000 until VARKA-84, which read the narrow range's top as year 33134 and
-   * predated {@link #NARROW_DECOMPOSE_MAX_DAYS} admitting an upward shift 9,266 years further;
-   * derived from the two constants, it cannot fall behind them again.
+   * is derived from the two constants rather than typed in, so it cannot fall behind
+   * {@link #NARROW_DECOMPOSE_MAX_DAYS}, which admits an upward shift 9,266 years past the narrow
+   * range's top of year 33134 (VARKA-84).
    */
   public static final int YEAR_FIELD_MAGNITUDE = Math.max(
       Math.abs(LocalDate.ofEpochDay(NARROW_MIN_DAYS).getYear()),
@@ -422,20 +422,18 @@ public final class VarkaChrono {
    * and {@link #YEAR_QUATERCENTENNIAL_K}.
    *
    * <p><b>This is a round-down magic, not an exact one - unlike the leap flag, which covers only
-   * the narrow day range and needs no correction.</b> The first version of
-   * this class claimed exactness "to 199728" and was wrong: that bound came from checking
-   * {@code (v * M) >> k == v / d} with arbitrary-precision arithmetic, which is the right check
+   * the narrow day range and needs no correction.</b> Checking {@code (v * M) >> k == v / d}
+   * with arbitrary-precision arithmetic reports it exact "to 199728", which is the right check
    * for the shift but silently assumes the multiply itself does not overflow. The emitter's
    * lanes are 32-bit and {@code LSHR} is unsigned, so the multiply is safe up to {@code v * M <
    * 2^32}, not {@code 2^31} - but the biased year here reaches about 50381, and {@code 50381 *
-   * 167773} is over four billion either way. The wrong constant produced a silently wrong
-   * {@code era} for exactly the inputs the month-arithmetic tests reached during development (a
-   * four-digit year plus a multi-century month offset) and nothing smaller - the failure was
-   * findable only by testing the actual range this class has to cover, not a plausible-looking
-   * subrange of it. One correction step (the same shape {@link #CENTURY_M} already uses) fixes
-   * it: {@code floor(v / d)} from this magic is short by at most one for both divisors over
-   * every dividend the callers below feed it. Proven for both shifts: with the carry each is
-   * exact to biased year 102400 and first fails at 102401 ({@code chrono_divide.smt2},
+   * 167773} is over four billion either way. Taken as exact, the constant gives a silently wrong
+   * {@code era} for a four-digit year plus a multi-century month offset and for nothing smaller,
+   * so only a test over the actual range this class has to cover finds it, not a
+   * plausible-looking subrange of it. One correction step (the same shape {@link #CENTURY_M}
+   * uses) makes it exact: {@code floor(v / d)} from this magic is short by at most one for both
+   * divisors over every dividend the callers below feed it. Proven for both shifts: with the carry
+   * each is exact to biased year 102400 and first fails at 102401 ({@code chrono_divide.smt2},
    * VARKA-242) - a hundred years short of {@link #LEAP_HASH_MAX_BIASED_YEAR}, and far past the
    * years the callers reach.
    */

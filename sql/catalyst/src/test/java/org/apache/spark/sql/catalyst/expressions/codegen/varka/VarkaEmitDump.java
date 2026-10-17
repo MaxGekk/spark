@@ -498,8 +498,8 @@ public final class VarkaEmitDump {
   /**
    * Load the class and run it {@code rounds} times over synthetic columns of the kernel's lane, so
    * a {@code -XX:CompileCommand=print} on the loop method has something to print. The output count
-   * is the projection's, not inferred from the loop methods: since VARKA-32 step B2 one loop
-   * method can hold several outputs, and a destination array sized by method count made the
+   * is the projection's, not inferred from the loop methods: one loop method can hold several
+   * outputs (VARKA-32 step B2), and a destination array sized by method count would make the
    * kernel index past it. A long-lane kernel takes 64-bit inputs holding nanoseconds of day, which
    * is inside every {@code TIME} guard and every division bound, and each output buffer has the
    * width of its Spark type - four bytes for a narrowed int, eight otherwise - so the narrowing

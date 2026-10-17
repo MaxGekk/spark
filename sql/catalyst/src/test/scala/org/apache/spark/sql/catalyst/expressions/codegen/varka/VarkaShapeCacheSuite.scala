@@ -33,9 +33,9 @@ import org.apache.spark.util.Utils
  * a wrong hit - a cached class served for a shape it was not emitted from - so the sharing
  * tests here assert both directions: equal shapes share one loaded class (constants and all
  * other non-byte-affecting context ignored), and every byte-affecting difference - structure,
- * op kind, input count, literal count - gets its own class. The milestone-3 Metaspace gate
- * moves here too: bounded by cache capacity rather than task lifetime, proven the same way as
- * `VarkaGeneratedClassLoaderSuite`'s per-task proof - weak references, now against eviction.
+ * op kind, input count, literal count - gets its own class. The Metaspace gate is here too:
+ * bounded by cache capacity rather than task lifetime, proven the same way as
+ * `VarkaGeneratedClassLoaderSuite`'s per-task proof - weak references, against eviction.
  */
 class VarkaShapeCacheSuite extends SparkFunSuite with VarkaTestWatchdog {
 
@@ -62,8 +62,8 @@ class VarkaShapeCacheSuite extends SparkFunSuite with VarkaTestWatchdog {
     new VarkaShapeKey(java.util.List.of(root), numInputs, numLiterals)
 
   /**
-   * The parent loader `VarkaShapeCache` passes on the production path. Since VARKA-23 the cache
-   * core takes it as a value rather than reading the thread's context loader itself - the facade
+   * The parent loader `VarkaShapeCache` passes on the production path. The cache core takes it
+   * as a value rather than reading the thread's context loader itself (VARKA-23) - the facade
    * owns every read of Spark's environment - so the tests name it here once.
    */
   private def parent: ClassLoader = Utils.getContextOrSparkClassLoader
@@ -216,7 +216,7 @@ class VarkaShapeCacheSuite extends SparkFunSuite with VarkaTestWatchdog {
     cache.getOrEmit(parent, keyOf(chain(bits = 0, depth = 2)), "exec")
     assert(cache.size <= 2)
     // The removal listener released the loader; with the entry unreferenced the loader (and
-    // so its class) must now be collectable - the milestone-3 form of the Metaspace proof.
+    // so its class) must be collectable - the cache's form of the Metaspace proof.
     assert(awaitCollected(evictedRef, queue),
       "the evicted loader must be collected so its class unloads from Metaspace")
   }
@@ -282,9 +282,8 @@ class VarkaShapeCacheSuite extends SparkFunSuite with VarkaTestWatchdog {
     val plain = keyOf(shape)
     val noCse =
       new VarkaShapeKey(java.util.List.of(shape), 1, 1, VarkaMatrix.base.withCse(false))
-    // Before VARKA-23 this pair could not coexist. The emitter's non-shape inputs were static
-    // hooks the key could not see, so the cache refused every lookup - hit and miss alike -
-    // while any of them was set. They are a key component now, so the variant simply misses.
+    // The emitter's non-shape inputs are a key component (VARKA-23), so this pair coexists:
+    // the variant simply misses.
     val first = cache.getOrEmit(parent, plain, "exec")
     val variant = cache.getOrEmit(parent, noCse, "exec")
     assert(!first.hit && !variant.hit)
@@ -356,11 +355,11 @@ class VarkaShapeCacheSuite extends SparkFunSuite with VarkaTestWatchdog {
   }
 
   test("every option component can change the canonical rendering") {
-    // `truncDate` was left out of canonical() from VARKA-35 until VARKA-46, so two option values
-    // differing only in the trunc lowering rendered the same string: different keys in the
-    // cache's map, one shared execution identity in the side table keyed on the hash, which is
-    // the collision the record's class doc says must not exist. Nothing failed, because nothing
-    // looked - so this walks the record's components and holds each one to it. It reflects
+    // A component left out of canonical() lets two option values differing only in it render
+    // the same string: different keys in the cache's map, one shared execution identity in the
+    // side table keyed on the hash, which is the collision the record's class doc says must not
+    // exist. Nothing would fail, because nothing looks - so this walks the record's components
+    // and holds each one to it (VARKA-46). It reflects
     // rather than listing names on purpose: a list would have to be updated by the same person
     // who forgot the field.
     val defaults = VarkaMatrix.base
@@ -422,9 +421,9 @@ class VarkaShapeCacheSuite extends SparkFunSuite with VarkaTestWatchdog {
   test("the parent class loader is part of the key: another loader gets its own entry") {
     val cache = new VarkaShapeCacheImpl(8)
     val key = keyOf(chain(bits = 5, depth = 3))
-    // Since VARKA-23 the parent is an argument rather than something the cache reads off the
-    // thread, so the two linkage contexts are named here directly. `VarkaShapeCache` is what
-    // binds it to `Utils.getContextOrSparkClassLoader` on the production path.
+    // The parent is an argument rather than something the cache reads off the thread (VARKA-23), so
+    // the two linkage contexts are named here directly. `VarkaShapeCache` is what binds it to
+    // `Utils.getContextOrSparkClassLoader` on the production path.
     val isolated = new java.net.URLClassLoader(Array.empty, parent)
     val first = cache.getOrEmit(parent, key, "sessionA")
     val second = cache.getOrEmit(isolated, key, "sessionB")

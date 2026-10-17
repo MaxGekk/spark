@@ -128,8 +128,8 @@ public class SurfaceTest {
     } finally {
       // `varka_dates` is the shared session's fixture and every other test in this class
       // reads it, so a shape left behind here fails them instead of this one. Restoring it
-      // is not tidiness: the first version of this test did not, and two unrelated tests
-      // failed with an unresolved interval column and a cache that was no longer cached.
+      // is not tidiness: without it, two unrelated tests fail with an unresolved interval
+      // column and a cache that is not cached.
       // The times table is dropped for the same reason: the residency check counts every
       // cached partition in the session, and the driver only ever caches one table.
       spark.catalog().uncacheTable("varka_times");

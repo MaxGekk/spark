@@ -58,12 +58,10 @@ import java.util.Optional;
  * {@link VarkaDebugInfoReader}, which adds the {@code SourceFile} accessor and keeps all
  * class-file parsing on the Java side.
  *
- * <p>The cross-task class cache reconciled this attribute (and the emitted
- * {@code SourceFile} name) with sharing: the bytes now describe the <i>shape</i> - the class
- * is named by its shape hash, the plan-fragment field carries {@code shape <hash>} - and the
- * per-execution identity (operator, stage, projection list) lives in
- * {@code VarkaShapeCache}'s side table, joined by that hash. The byte format here did not
- * change; only what the caller passes did.
+ * <p>Under the cross-task class cache this attribute (and the emitted {@code SourceFile} name)
+ * describes the <i>shape</i> - the class is named by its shape hash, the plan-fragment field
+ * carries {@code shape <hash>} - and the per-execution identity (operator, stage, projection
+ * list) lives in {@code VarkaShapeCache}'s side table, joined by that hash.
  */
 public final class VarkaDebugInfo {
 
