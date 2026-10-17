@@ -194,7 +194,8 @@ Done on 16 October 2026 on branch `varka-380`, based on `varka-298` (PR #871).
 
 **What was built.** `VarkaConjunctOrder` (3.2) and its call in `VarkaExpressionCompiler.predicate`;
 the five reproducers marked `status: regression` with a note naming this row; the `sparkfuzz`
-step of `dev/varka_nightly.sh` without `-Dvarka.sparkfuzz.nested=false`; `VarkaConjunctOrderSuite`
+step of `dev/varka_nightly.sh` without `-Dvarka.sparkfuzz.nested=false` (put back on 17 October
+2026, see the last paragraph of this section); `VarkaConjunctOrderSuite`
 (twelve tests) and one test in `VarkaDifferentialSuite`; a lesson in `skills/emitter-and-ir.md`.
 
 *Corrections to 1-8, from the review of the diff* (`/code-review high` on the branch, nine
@@ -351,3 +352,11 @@ gh workflow run benchmark.yml -R vecbricks/varka -f pr=<PR> -f pair=true -f roun
   Widening it is safe one expression at a time, each with a reason it cannot raise.
 * **The warmed arm and the pivot test still draw `drawRows`** (`VARKA-298.md` 9, corrections from
   its review): they avoided 9.2 and 9.3 there; 9.2 is fixed and 9.3 is row 381.
+
+**The nightly switch, put back (17 October 2026).** Row 381's census, run with the nested trees
+on this row's base, found two more wrong answers of the nested trees, rows 386 and 387: an earlier
+conjunct that is NULL does not stop Varka evaluating a later one that raises, and a filter kernel
+raises a later row's error before the projection raises an earlier row's. A nightly drawing the
+nested trees would meet one of them about two nights in three, so `dev/varka_nightly.sh` keeps
+`-Dvarka.sparkfuzz.nested=false`, its comment now naming those rows. This row's done-when is met
+except for that switch, and removing it, once 386 and 387 are fixed, closes the row.
