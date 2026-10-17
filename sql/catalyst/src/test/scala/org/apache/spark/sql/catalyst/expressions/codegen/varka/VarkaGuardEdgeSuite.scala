@@ -23,7 +23,7 @@ import scala.jdk.CollectionConverters._
 import scala.jdk.OptionConverters._
 
 import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.catalyst.expressions.{Add, Alias, AttributeReference, DateDiff => SqlDateDiff, DayOfWeek => SqlDayOfWeek, EvalMode, Expression, Literal, Month => SqlMonth, WeekDay => SqlWeekDay, Year => SqlYear}
+import org.apache.spark.sql.catalyst.expressions.{Add, Alias, AttributeReference, DateAdd => SqlDateAdd, DateDiff => SqlDateDiff, DayOfWeek => SqlDayOfWeek, EvalMode, Expression, Literal, Month => SqlMonth, WeekDay => SqlWeekDay, Year => SqlYear}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaGuardSpec.{Shift, Verdict}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
@@ -483,6 +483,52 @@ class VarkaGuardEdgeSuite extends SparkFunSuite with VarkaMatrixTests {
     }
     // Three shapes, four guarded inputs among them, eight batches each.
     assert(batches == 4 * 8, s"$batches batches")
+  }
+
+  test("VARKA-379: in a projection split across kernels, the kernel holding the guard declines " +
+      "a far day while the one before it serves") {
+    // Under the op cap (the byte budget off) with several kernels, thirty-two entries over d2,
+    // 64 ops, fill the first kernel and the calendar fields over d are the second's, the only one
+    // with the guard. A far day in d is declined by the second kernel after the first has
+    // answered; the evaluator then sends the whole batch to the row engine, which
+    // `VarkaFarDaySuite` checks end to end. Inside the bound both kernels answer as the
+    // reference evaluator does.
+    val d = AttributeReference("d", DateType)()
+    val d2 = AttributeReference("d2", DateType)()
+    val entries = (1 to 32).map(k => SqlDayOfWeek(SqlDateAdd(d2, Literal(k)))) ++
+      (1 to 12).map(k => SqlYear(SqlDateAdd(d, Literal(k))))
+    val o = VarkaMatrix.base.withMethodByteBudget(0).withSeveralKernels(true)
+      .withExactRefusalStatus(true)
+    val partial = VarkaExpressionCompiler.compilePartial(entries.map(e => Alias(e, "c")()),
+      Seq(d, d2), o).toScala.getOrElse(fail("the projection does not fuse"))
+    val kernels = partial.fused +: partial.more.asScala.toSeq
+    assert(kernels.size == 2 && partial.declines.isEmpty, s"${kernels.size} kernels, " +
+      s"declines ${partial.declines}")
+    def guarded(n: VarkaVectorIR): Boolean =
+      n.isInstanceOf[GuardedRange] || VarkaVectorIR.childrenOf(n).exists(guarded)
+    assert(kernels.map(_.outputs.asScala.exists(guarded)) == Seq(false, true),
+      "the guard belongs to the second kernel alone")
+    val bit = VarkaFusedKernel.STATUS_VALUE_RANGE
+    for ((far, want) <- Seq(false -> Seq(0, 0), true -> Seq(0, bit))) {
+      val statuses = kernels.map { k =>
+        val roots = k.outputs.asScala.toSeq
+        val numInputs = k.inputOrdinals.size
+        val className =
+          s"org.apache.spark.sql.varka.execution.VarkaColumnBound${classCounter.incrementAndGet()}"
+        val bytes = VarkaLoopEmitter.emit(className, k.outputs, numInputs, k.numLiterals, null,
+          null, o)
+        // Kernel input i reads child column inputOrdinals(i): 0 is d, 1 is d2.
+        val data = Array.tabulate(numInputs, length) { (c, i) =>
+          if (far && k.inputOrdinals.get(c) == 0 && i == 16) VarkaChrono.CONTRACT_MAX_DAYS + 1
+          else 19000 + i * 400
+        }
+        VarkaKernelCheck.runAndCompareStatus(s"kernel over ${k.inputOrdinals}, far=$far",
+          className, bytes, roots, numInputs, k.literals.asScala.map(_.intValue).toArray,
+          VarkaKernelCheck.Batch(length, Seq.fill(numInputs)((_: Int) => false), data,
+            forceMasked = false), declineAllowed = true)
+      }
+      assert(statuses == want, s"far=$far: statuses $statuses, want $want")
+    }
   }
 
   // ---------------------------------------------------------------------------------------------

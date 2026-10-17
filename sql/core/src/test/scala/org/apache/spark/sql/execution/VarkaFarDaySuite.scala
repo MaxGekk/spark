@@ -23,7 +23,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 
 import org.apache.spark.SparkArithmeticException
 import org.apache.spark.sql.QueryTest
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaChrono
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaMatrix}
 import org.apache.spark.sql.execution.VarkaMaybeThrows.Answered
 
 /**
@@ -232,6 +232,56 @@ class VarkaFarDaySuite extends QueryTest with VarkaMaybeThrows {
       withDays(Seq(0, 19000, VarkaChrono.CONTRACT_MAX_DAYS), nulls = false) {
         assert(check("SELECT v, datediff(d, d2) * 100 AS r FROM varka_far_days").contains(0L))
       }
+    }
+  }
+
+  test("a far day only on rows a CASE arm does not take is answered by the kernel") {
+    // The guard on the column is qualified by the arm it sits under, so a lane the arm is not
+    // taken for cannot condemn the batch: these rows' far days are computed and thrown away by
+    // the blend, and the kernel serves the batch. The evaluator's pass before the kernel, which
+    // this replaced, checked every live lane and declined it. A far day on a row the arm does
+    // take still declines.
+    // The condition reads `d2` alone, the row's position as a day from 19000 (2022-01-08) on: a
+    // condition over `d` itself would put an unqualified use of `d`, and so its guard, beside the
+    // arm. The arm is taken by the first two rows, the else arm reads no bounded column.
+    val arm = "CASE WHEN d2 < DATE'2022-01-10' THEN year(d) ELSE dayofweek(d2) END"
+    withDays(Seq(0, 19000, 100000000, Int.MaxValue), nulls = true) {
+      assert(check(s"SELECT v, $arm AS r FROM varka_far_days").contains(0L),
+        "a far day on a row the arm does not take declined the batch")
+    }
+    withDays(Seq(0, -100000000, 19000), nulls = true) {
+      assert(check(s"SELECT v, $arm AS r FROM varka_far_days").exists(_ > 0L),
+        "a far day on a row the arm takes must decline")
+    }
+  }
+
+  test("a far day in a projection split across two kernels declines the whole batch") {
+    // Under the op cap (the byte budget off) with several kernels, the 32 entries over d2, 64
+    // ops, fill the first kernel and the calendar fields over d are the second's, which alone
+    // carries the guard. A far day in d declines that kernel after the first has served its
+    // outputs, and the whole batch goes to the row engine: the answer is Spark's, and no kernel
+    // output of it is kept.
+    val first = (1 to 32).map(k => s"dayofweek(date_add(d2, $k)) AS w$k")
+    val second = (1 to 12).map(k => s"year(date_add(d, $k)) AS y$k")
+    val query = s"SELECT v, ${(first ++ second).mkString(", ")} FROM varka_far_days"
+    VarkaColumnarToRowExec.setEmitOptionsForTesting(
+      VarkaMatrix.base.withMethodByteBudget(0).withSeveralKernels(true))
+    try {
+      for (nulls <- Seq(false, true)) {
+        withDays(Seq(0, 19000, 100000000, 5), nulls) {
+          val explained = varkaSpark.sql(query).queryExecution.explainString(FormattedMode)
+          assert(explained.contains("kernel 2 of 2"), explained)
+          assert(check(query).exists(_ > 0L), s"nulls=$nulls: the far day did not decline")
+          // The one batch was declined as a whole: no node counts it as served.
+          val plan = runOutcome(varkaSpark, query)._2.getOrElse(fail("no plan"))
+          assert(metric(plan, "numVarkaBatches") === 0L, s"nulls=$nulls: a kernel served it")
+        }
+        withDays(Seq(0, 19000, 5), nulls) {
+          assert(check(query).contains(0L), s"nulls=$nulls: a batch inside the bound declined")
+        }
+      }
+    } finally {
+      VarkaColumnarToRowExec.setEmitOptionsForTesting(VarkaMatrix.base)
     }
   }
 }

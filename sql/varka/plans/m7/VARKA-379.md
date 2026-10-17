@@ -355,6 +355,16 @@ that configuration's 64-op cap refuses, and `VarkaEmitterChronoSuite`'s scratch 
 `year` and `month` of a bare column - so neither rests on this change, and master's scheduled
 option matrix of 11 October (run 38129966925) failed the same two in that configuration.
 
+**After review** (17 October 2026). Two tests added: `VarkaFarDaySuite` drives a far day only on
+rows a `CASE` arm does not take, which the kernel now serves where the pre-pass declined, and a
+projection split over two kernels whose second alone holds the guard, which declines the whole
+batch; `VarkaGuardEdgeSuite` runs that split's kernels below the evaluator. One correction to 10.2:
+the arm qualifies the guard only where every use of the column sits under the arm. The wrap guards
+every use of the column in the entry with one shared node, so a condition that reads the column
+itself, `CASE WHEN d < d2 THEN year(d) ...`, leaves it unqualified, and a far day there declines as
+the pre-pass did. The suite's case reads another column in its condition; it is listed for
+`guardUnderArm=false` in `matrix/skips.tsv`, where it fails by design.
+
 **Left open.** A far-day decline is counted under the value-range reason, beside the `TIME`
 family's range guards, rather than a reason of its own; the kernel cannot tell the two apart
 without a status bit for the column bound, which would be a second refusal reason on the same
