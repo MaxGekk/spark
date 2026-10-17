@@ -228,9 +228,11 @@ class VarkaFilterRaiseOrderSuite extends QueryTest with VarkaMaybeThrows with Va
   }
 
   test("a fused raising conjunct beside a residual one: the projection's earlier error") {
+    // The residual conjunct stays in a row FilterExec above the Varka filter, so the filter is
+    // always the row-out node here, its fallback evaluating the whole condition.
     check(s"SELECT make_date(2021, m1, 1) AS c FROM $view " +
       "WHERE y + 1 > 0 AND length(concat(CAST(k AS STRING), 'x')) > 0",
-      classOf[VarkaFilterExecBase])(raises(month))
+      classOf[VarkaFilterColumnarToRowExec])(raises(month))
   }
 
   test("a split predicate's raising conjunct: the projection's earlier error") {

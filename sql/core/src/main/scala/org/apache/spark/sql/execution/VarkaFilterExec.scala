@@ -243,9 +243,9 @@ private[sql] class VarkaFilterEvaluatorFactory(
     private lazy val converter = VarkaRowToColumn(outputSchema)
     private var partitionIdx: Int = 0
 
-    // The predicate's error on a row of the last batch, held back while the rows before it are
-    // consumed (see `fallback`), and raised by the iterator in place of any further batch. Never
-    // cleared: a consumer that asks again gets the error again, never a row after it.
+    // The predicate's error on a row of the batch just returned, held back while the rows before
+    // it are consumed (see `fallback`), and raised by the iterator in place of any further batch.
+    // Never cleared: a consumer that asks again gets the error again, never a row after it.
     private var pendingError: Throwable = null
 
     override def eval(
