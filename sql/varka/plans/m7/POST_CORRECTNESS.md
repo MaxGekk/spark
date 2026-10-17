@@ -161,16 +161,14 @@ store followed by a masked vector store (JDK-8388492). Varka's stores should not
 and comparing the interpreter with C2 should show a wrong value. That is a test on the JDKs and CPUs
 we run, not a proof.
 
-**One assumption about stored data is unchecked.** A date column is assumed to hold years 1 to
-9999, so `year(d)` runs with no guard. Spark can store any 32-bit day. The solver finds exactly
-that gap: past a day in the year 42400, the date decoding leaves the range it is proven for. The
-code's scalar twin already gets the day of the month wrong there, and further out it returns a
-month of 31,848. We read from the code that a cached column can reach that kernel. We have not
-run it end to end.
-
-[PENDING #874: date columns checked per batch to lie within years 1 to 9999. Once it merges, this
-paragraph becomes a closed gap: say what the check does and what it costs, or move the paragraph
-out of this section.]
+**The proofs rest on assumptions about the data.** A date column was assumed to hold years 1 to
+9999, so `year(d)` ran with no guard. Spark can store any 32-bit day. The solver found exactly
+that gap: past a day in the year 42400, the date decoding leaves the range it is proven for, and
+run over a cached table the kernel returned a day of the month of 2 where Spark returns 1. A
+change in review makes the assumption a check. The kernel's loop keeps a running minimum and
+maximum of the days it loads, two vector operations per group of lanes, and a batch with a day
+outside the range is declined to the row engine. It reads the stored days, not the null mask,
+which would cost more than a cheap kernel's own work; a null is stored as day 0.
 
 **Random tests reach only what they draw.** The bytecode writer names 39 mechanisms it uses to shape
 code. Random trees reach 29 of them. The paths that shrink a class that is too big are reached
@@ -189,9 +187,19 @@ those 17,490 disagreed, all from one bug, the mirror of the one above: Varka com
 that Spark evaluates after a condition it left to Spark, so where that one raised, Spark failed
 the query and Varka returned rows.
 
-[PENDING #908, #909: the mirror bug fixed; the 150,000-query census with nested trees and a
-deterministic error verdict found two more, rows 386 and 387, and one disagreement inside Spark
-itself, between its compiled and interpreted filters (SPARK-60315). Say how each ended.]
+That bug is fixed: a condition Spark evaluates after one that can raise is now left to Spark, so a
+row meets the conditions in Spark's order. The census itself had a flaw. Its queries ran over two
+partitions, so when rows in different partitions raised different errors, either could arrive
+first, on either engine, and the fuzzer absorbed the disagreement by rerunning three times. Now a
+query that raised runs again over one partition. With that verdict, 150,000 flat queries found no
+disagreement, and 150,000 nested ones found two the race had hidden. In the first, Varka's
+columnar filter finished its batch before the projection above saw a row, so where Spark raised
+the projection's error on the first row, Varka raised the filter's on the fourth; a change in
+review delivers the rows before the failing one first. In the second, Varka raises where Spark's
+default session answers, and Spark disagrees with itself: its compiled filter stops at a
+condition that is NULL, its interpreted filter goes on to the one that raises (SPARK-60315). A
+change proposed upstream would make the compiled filter raise too, which is Varka's answer today,
+so that row waits for Spark's decision, and the nightly draws no nested trees until it comes.
 
 Two measurements say how much of that the tests actually check. Under every Varka suite the
 bytecode writer takes 90% of its branches and the compiler 84%, and one of the writer's named
@@ -234,6 +242,9 @@ plans named here are under `sql/varka/plans/m7/`.
   `sql/varka/spark_suites/served.json` (Figure 4).
 * The JIT tiers and Figure 5: `VARKA-272.md` 9.1, `VARKA-274.md` 9.
 * Where it stops and Figure 6: `m9/SCOPE.md` item 58 (what a proof can reach), item 56
-  (JDK-8388492), `m7/PLAN.md` section 2.2 and its row 273 (the filter order), `VARKA-280.md` and
+  (JDK-8388492), pull request #874 (the date column's bound), `m7/PLAN.md`
+  section 2.2 and its row 273 (the filter order), `VARKA-380.md` (its mirror), `VARKA-381.md` 9
+  (the two censuses of 150,000), pull request #911 (the filter's batch),
+  `m8/PLAN.md` row 386, SPARK-60315 and apache/spark#59573 (Spark's two filters), `VARKA-280.md` and
   `sql/varka/coverage/reach/VarkaIrFuzzSuite.md`, `VARKA-371.md` 9.2 (2 of 1,602 on three cores),
   `VARKA-378.md` (the nightly ceiling).
