@@ -1823,6 +1823,18 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
         ctx = s"make_date over a date with its word owned under it: $twoColumns",
         options = split)
     }
+    // A filter in a group of its own over a loaded prefix: its epilogue reads no column's values
+    // and guards nothing, so the prefix's load is the one thing in it under the bounds mask.
+    checkMatrix(Seq(new Year(col), new Compare(CompareOp.GT, new Month(col), new LiteralSlot(0))),
+      1, Array(6), lengths, combos(1), ctx = "a filter over a loaded prefix", options = split)
+    // The four fields with the sharing the prefix builds on off, and without the byte budget,
+    // whose per-group methods it needs: neither materializes, and both answer as the reference.
+    for ((options, form) <- Seq(split.withShareChronoPrefix(false) -> "sharing off",
+        split.withMethodByteBudget(0) -> "no byte budget")) {
+      checkMatrix(Seq(new Year(col), new Month(col), new DayOfMonth(col), new Quarter(col)), 1,
+        Array.empty[Int], lengths, combos(1), ctx = s"four fields, one per group, $form",
+        options = options)
+    }
   }
 
   test("the scratch contract: a kernel with a materialized prefix refuses a zero address, " +

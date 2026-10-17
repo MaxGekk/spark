@@ -306,16 +306,14 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       bitmapOff.withMisdescribeWordLiveness(true))._2.nonEmpty)
   }
 
-  test("a group that loads a materialized prefix keeps no word for a guard it does not emit",
-      PinsDefaults) {
-    // The budget's rule, which is what this pins: the prediction bounds groups by default
-    // (VARKA-254), and the budget binds where it cannot and under groupBudgetUnderPrediction.
-    // Two outputs that decompose one guarded date in different loop-method groups: the first
-    // computes the prefix and stores it for the second, which loads it and emits neither the date
-    // nor the range check of the guard over it - the first group ran that check over the same
-    // lane groups. Over a bare column the guard's word is the column's, and the liveness walk kept
-    // it live for the check, so the lane group stored a word nothing loaded and the emitter's own
-    // check refused the body (VARKA-234.md 2).
+  /**
+   * Two outputs that decompose one guarded date in different loop-method groups: the first
+   * computes the prefix and stores it for the second, which loads it and emits neither the date
+   * nor the range check of the guard over it - the first group ran that check over the same lane
+   * groups. Each with its input count and the options that split it; two tests read them, one for
+   * the answers and one for the split.
+   */
+  private lazy val guardedPrefixShapes = {
     val c0 = new ColumnRef(0)
     val c1 = new ColumnRef(1)
     val guarded = new GuardedDay(c1)
@@ -323,11 +321,11 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // is visited there when the tails' writes read the word, as they do with the bitmap pass off,
     // and skipped with its guard when the pass serves them.
     val sum = new GuardedDay(new AddDays(c1, new ColumnRef(2)))
-    // Set rather than inherited, so that a change of the default cannot leave this test passing
-    // without a loaded prefix to test.
+    // Set rather than inherited, so that a change of the default cannot leave these shapes
+    // without a loaded prefix.
     val defaults = VarkaMatrix.base.withGroupBudgetUnderPrediction(true)
       .withMaterializeChronoPrefix(true)
-    val shapes = Seq(
+    Seq(
       // Under every default: last_day(c0) between the two keeps them in different groups.
       ("year, last_day and month of a guarded column",
         Seq[VarkaVectorIR](new Year(guarded), new LastDay(c0), new Month(guarded)), 2, defaults),
@@ -338,21 +336,18 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       ("day of month, last_day and month of a guarded sum",
         Seq[VarkaVectorIR](new DayOfMonth(sum), new LastDay(c0), new Month(new DayOfMonth(sum))),
         3, defaults))
-    def loops(bytes: Array[Byte]): Int =
-      VarkaEmitterTestSupport.methodNames(bytes).asScala.count(isLoop(_, true))
-    for ((name, roots, inputs, base) <- shapes; bitmap <- Seq(true, false); lanes <- Seq(4, 16)) {
+  }
+
+  test("a group that loads a materialized prefix keeps no word for a guard it does not emit") {
+    // Over a bare column the guard's word is the column's: were the liveness walk to keep it live
+    // for a check the loading group does not emit, the lane group would store a word nothing
+    // loads and the emitter's own check would refuse the body (VARKA-234.md 2). The answers, under
+    // both settings of the bitmap pass: with it off every word is live, and which loaded dates a
+    // group visits is decided apart.
+    for ((name, roots, inputs, base) <- guardedPrefixShapes; bitmap <- Seq(true, false);
+        lanes <- Seq(4, 16)) {
       val options = base.withValidityByBitmap(bitmap).withLanesOverride(lanes)
       val ctx = s"$name, bitmap pass $bitmap, $lanes lanes"
-      // More than one group, and a scratch region, so the prefix really is stored by one group
-      // and loaded by another.
-      val named = emitMulti(roots, inputs, 0, options)
-      assert(loops(named._2) >= 2, ctx)
-      val (kernel, loader) = load(named)
-      try {
-        assert(kernel.scratchBytesPerRow() > 0, s"$ctx: no prefix is materialized")
-      } finally {
-        loader.release()
-      }
       val combos = Seq(
         Seq.fill(inputs)((_: Int) => false),
         Seq.tabulate(inputs)(c => (i: Int) => (i + c) % 5 == 0),
@@ -361,6 +356,28 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase with VarkaOwnJvm {
         options = options)
       checkMatrix(roots, inputs, Array.empty[Int], Seq(17, 1031), combos, forceMasked = true,
         ctx = s"$ctx, masked", options = options)
+    }
+  }
+
+  test("the guarded-date shapes split into a group that stores the prefix and one that loads it",
+      PinsDefaults) {
+    // The budget's rule, which is what this pins: the prediction bounds groups by default
+    // (VARKA-254), and the budget binds where it cannot and under groupBudgetUnderPrediction. It
+    // is what makes the test above test a loaded prefix rather than one group computing it.
+    def loops(bytes: Array[Byte]): Int =
+      VarkaEmitterTestSupport.methodNames(bytes).asScala.count(isLoop(_, true))
+    for ((name, roots, inputs, base) <- guardedPrefixShapes; bitmap <- Seq(true, false);
+        lanes <- Seq(4, 16)) {
+      val options = base.withValidityByBitmap(bitmap).withLanesOverride(lanes)
+      val ctx = s"$name, bitmap pass $bitmap, $lanes lanes"
+      val named = emitMulti(roots, inputs, 0, options)
+      assert(loops(named._2) >= 2, ctx)
+      val (kernel, loader) = load(named)
+      try {
+        assert(kernel.scratchBytesPerRow() > 0, s"$ctx: no prefix is materialized")
+      } finally {
+        loader.release()
+      }
     }
   }
 
@@ -536,6 +553,10 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // serve it and VARKA-70's pass does not run in a dense body at all. Leaving it out would
     // leave the project's most common shape untested at both arms.
     val filter: VarkaVectorIR = new Compare(CompareOp.LT, new ColumnRef(0), new LiteralSlot(0))
+    // And a root outside the population beside one in it: the driver fills its validity on a
+    // dense batch and the bitmap pass writes it whole on a masked one, so its body keeps no
+    // accumulator while the blend's keeps one.
+    val served: VarkaVectorIR = new AddDays(new ColumnRef(0), new LiteralSlot(0))
     val lits = Array(3)
     for (lanes <- Seq(4, 8, 16)) {
       val perGroup = VarkaMatrix.base.withLanesOverride(lanes)
@@ -544,7 +565,8 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase with VarkaOwnJvm {
           Seq(blend) -> "one blend",
           Seq(filter) -> "a filter",
           Seq(blend, filter) -> "a blend beside a filter",
-          Seq(blend, blend, filter) -> "two blends beside a filter")) {
+          Seq(blend, blend, filter) -> "two blends beside a filter",
+          Seq(served, blend) -> "a blend after a root the driver writes")) {
         val (refKernel, refLoader) = load(emitMulti(roots, 1, lits.length, perGroup))
         val (wordKernel, wordLoader) = load(emitMulti(roots, 1, lits.length, byWord))
         try {

@@ -47,6 +47,11 @@ class VarkaEmitterContractSuite extends VarkaEmitterTestBase {
       VarkaEmitBudget.MAX_CHAIN_DEPTH + 1), "MAX_CHAIN_DEPTH")
     rejects(emit(new AddDays(new ColumnRef(1), new LiteralSlot(0)), 1), "column ordinal")
     rejects(emit(new AddDays(new ColumnRef(0), new LiteralSlot(1)), 1), "literal slot")
+    // Below the range as well as above it: a negative index would otherwise reach the column
+    // bitset's shift and the frame's slot arrays rather than be refused.
+    rejects(emit(new AddDays(new ColumnRef(-1), new LiteralSlot(0)), 1),
+      "column ordinal -1 outside")
+    rejects(emit(new AddDays(new ColumnRef(0), new LiteralSlot(-1)), 1), "literal slot -1 outside")
     // A column offset (VARKA-38) is legal IR - AddDays(ColumnRef, ColumnRef) does not throw;
     // see "AddDays/SubDays with a column offset (VARKA-38) match the reference
     // evaluator" above for its coverage.
@@ -62,6 +67,10 @@ class VarkaEmitterContractSuite extends VarkaEmitterTestBase {
     val disjointChains = (0 until 5).map(k => chain(13, slotBase = k * 13))
     val reference = VarkaMatrix.base.withMethodByteBudget(0)
     rejects(emitMulti(disjointChains, 1, 65, reference), "MAX_FUSED_NODES")
+    // The cap is inclusive: exactly MAX_FUSED_NODES distinct ops are one kernel.
+    val atCap = disjointChains.take(4) :+ chain(12, slotBase = 52)
+    assert(VarkaEmitBudget.MAX_FUSED_NODES === 64)
+    assert(emitMulti(atCap, 1, 64, reference)._2.nonEmpty)
     val (_, sharedOk) = emitMulti(
       disjointChains.take(4) ++ disjointChains.take(4), 1, 52, reference)
     assert(sharedOk.nonEmpty)

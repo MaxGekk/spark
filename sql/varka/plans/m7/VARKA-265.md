@@ -332,7 +332,7 @@ hours; what decides it is the number the first run leaves, which the report stat
 
 ### 9.5 Left for later
 
-* The full run's survivors, each a test or a note, after the owner's run.
+* The full run's survivors, each a test or a note, after the owner's run. Answered (9.8).
 * The two dead `Slots.plan` overloads: delete them, or leave their mutants as uncovered by
   construction; an owner's call, since it touches the emitter. Deleted (9.6).
 * `generated.md`'s new families (9.1), for rows 284 and 285. Handed to them (9.6).
@@ -446,3 +446,132 @@ its one survivor through the bytes run in 203 s; `--shards` joined them into 85 
 survived, and refused a missing shard, a doubled one and a mutant in two. The survivor is a
 removed `requireNonNull` in `pureOf`, the kind 9.2 records as killed in the sample; why it lives
 here, with both runs' tests passing, is not settled by this check, and the full run lists it.
+
+### 9.8 The full run, and every mutant no behavioural test kills answered, 17 October 2026
+
+The run is `varka-mutation.yml` run 38987633834 on vecbricks/varka at master 40e78684bc1, eight
+shards. Joined, `sql/varka/mutation/verdicts.md`: **1,760 mutants, 1,504 killed by a behavioural
+test (85%), 117 killed only by the bytes oracle (7%), 139 survived (8%), 42 of them with no
+covering test.** Of the behavioural kills 12 timed out and 3 crashed (`RUN_ERROR`); none ran out of
+memory. `Slots` is 836 of 1,006 behavioural, 92 bytes only, 78 survived; `Analysis` 668 of 754, 25
+and 61. Since the run, master has changed `Slots` in comments only and `Analysis` not at all, so
+every mutant's bytecode identity, and every note keyed on it, is the same at this branch's base.
+
+**The answers.** Each of the 256 mutants no behavioural test kills has a line in
+`sql/varka/mutation/notes.tsv`, and the report regenerated from the run's shard artifacts with
+`dev/varka_pit_verdicts.py --shards` lists none as open:
+
+| answer | mutants | what it says |
+| :--- | ---: | :--- |
+| killed by a test added or changed for it | 37 | the test, named |
+| equivalent | 157 | why the mutated code cannot change what the kernel computes |
+| structure only | 51 | why the bytes move and no answer can |
+| message only | 11 | the mutated call builds an internal error's text, and the refusal throws the same exception |
+
+The equivalents fall into five kinds: javac's `requireNonNull` on a pattern switch's selector,
+which is never null (9); a check that cannot fire, or whose failure path the mutant changes
+without its ever being taken - the two-reason refusal, the lane-mix refusal (every IR constructor
+and `laneOf` refuse a mix first), the conversion refusal (`emitLanes` never bakes the one-lane
+width `Divider` would need), the slot accessors, `assertWordAlgebraAgrees`, the null arm chain and
+the three `propagate` arms of nodes that alias their child's word (61); a demand another rule
+makes too - every `MakeDate`, `GuardedDay` and `GuardedRange` is a refusal whose word the guard
+demands, a NULL-mode node's word is demanded from the root down, and a pick's operands are
+demanded by its visit (22); a walk that loses only its stop at a node it has seen, over a DAG (13);
+and state nobody reads, or reads only through `get` (52). The structure-only ones change which
+locals a body plans, which segments it maps, or which loaded dates it visits and drops.
+
+**What the tests found.** No wrong answer in the code: every gap was a test that did not exist,
+five of them.
+
+1. *Refusals tested at one bound only* (16 mutants). Nothing fed a negative column ordinal or
+   literal slot, a range guard under `Integer.MIN_VALUE` at the int lane, or a constant division
+   over a guard whose loose side is its lower one: the one guard-bound test used a symmetric
+   guard, which no mutant of one endpoint could fail, and none used a guard from
+   `Long.MIN_VALUE`. Nor did a test emit exactly `MAX_FUSED_NODES` ops. Added to
+   `VarkaEmitterContractSuite`'s rejection test, `VarkaEmitterLongLaneSuite`'s int-bound test and
+   `VarkaEmitterDivisionSuite`'s long-lane refusal test; three of the 16 are a refusal naming the
+   value it refuses, which those tests now read.
+2. *A filter in a group of its own over a loaded prefix* (6, four of them with no covering test).
+   `epilogueReadsMask`'s last clause - an epilogue whose only masked access is a materialized
+   prefix's load - was reached only in epilogues with nothing materialized, so the test inside it
+   never ran. `VarkaEmitterChronoSuite`'s materialized-prefix test now has such a filter.
+3. *Answers filed as a pin* (11, one with no covering test). `VarkaEmitterValiditySuite`'s "a group
+   that loads a materialized prefix keeps no word for a guard it does not emit" checked the answers
+   with the bitmap pass off, the only test that does with a loaded prefix, and carried
+   `PinsDefaults` for the group split it asserts, so the run moved its answers to the bytes run
+   and read their kills as the oracle's. Split: the answers untagged, the split a pinned test of
+   its own.
+4. *The form without a byte budget, under a prefix that would cross groups* (2). The four fields
+   one per group now run without the budget, where materializing is refused, and with prefix
+   sharing off, where the mutant that materializes anyway turns out structure only.
+5. *A conditional's arms, emitted in the other order than planned* (2). The slots follow the
+   children-first order, then arm before else arm, while `IfElse` emits the else arm first, so a
+   local planned after a then-arm node's temporaries can be written before them. Two mutants that
+   step the slot counter back after a node's last temporary - the magic-form long division's, and
+   a dense range test's - put an else-arm local there; no test had such a shape.
+   `VarkaEmitterFramesSuite` has a test of two now. The same mutant on the masked range test only
+   overlaps that node's own result slots, written after its last read of the temporaries.
+
+The word-writer test gained a root the driver writes beside a blend, where the planner's `-1`
+fill matters; the mutant without it verifies and answers there, so it is a note, with that test as
+its evidence.
+
+**The review.** A reviewer agent read the diff and the notes, checked about fifty notes against
+the code and found three things, all fixed. The first draft called the stepped-back slot counters
+(item 5) structure only "by the children-first order", which `IfElse`'s emission order breaks; the
+test it proposed kills two of the three. `--only` ended every restricted run in a failure, since
+the report's stale-note check read notes on mutants the run had left out; that check now reads
+the file's mutants only, the scope line says the run was restricted, a missing file is refused,
+and a run that finds another number of mutants than the file names fails, since `VarkaPitOnly`
+matches whole lines and a misspelt identity is otherwise dropped in silence. And three refusal
+messages the new tests reach were left as message-only notes where an assertion of the refused
+value costs nothing.
+
+**What the run found about itself.** 87 of the 117 bytes-only kills are one test,
+`VarkaExpressionCompilerSuite`'s "under planSize the compiler cuts a projection past the driver's
+ceiling in one step" (`PinsDefaults`), and they include removed `requireNonNull` calls whose
+selector is never null. Rerun on the laptop over `pureOf`, `ownerOf` and `collectRefusals` against
+that suite at the runners' 3 GB, it killed the one in `collectRefusals` and let the two alike
+through: under PIT it fails for reasons of its own, not the mutant's. The plugin records no
+failure message, so why is not established; the test counts builds through the global
+`VarkaShapeCache.buildCount`. Its kills are noise in the bytes-only column, and every mutant it
+killed is answered on its own merits. A debt bullet in `m7/PLAN.md` section 10 holds it.
+
+**Correction to 9.2 and 9.7.** The sample's "javac's `requireNonNull` on `pureOf`'s pattern
+switch, killed here" was not a kill of that mutant: it is equivalent (`topoOrder` holds no null),
+and in the sample the planSize test still ran with the behavioural tests, since `PinsDefaults`
+tests left that run only after it (9.4). 9.7's open question - why it lived in the shard check - is
+answered the same way. `skills/testing-and-debugging.md`'s bullet on it is corrected.
+
+**Checking the new tests.** `dev/varka_pit.sh --only FILE` (new) mutates only the identities FILE
+lists, as `--keep` writes them. Over the 51 mutants the first tests were written for or sit beside,
+against the five changed suites, the behavioural run took 83 s and the bytes run 355 s on the
+laptop; three smaller runs checked the review's additions. Together they confirmed the 37 kills
+and the survivals the notes claim beside them - the word accumulators, materializing with sharing
+off, the guard's upper endpoint, the predicates answering true, the masked range test's slot
+counter and the canonical rendering in the division's refusal.
+
+**The matrix.** The untagged answer test now runs in every configuration of the option matrix,
+where its tag kept it out before. `dev/varka_matrix.sh --all` over the five suites changed before
+the frames test was added passed every configuration but for one test none of this changes,
+"inside a Spark task, the forms without a scratch address refuse a kernel with scratch", which
+fails under `methodByteBudget=0` and `shareChronoPrefix=false` because neither materializes the
+prefix it asserts, whatever this change does, and has no line in `sql/varka/matrix/skips.tsv`.
+
+**Test time.** The five changed suites before the frames test was added ran in 55 s at the base and
+53 s here, one sbt run each on the laptop: inside the noise. The frames test adds 1.2 s.
+
+**The predictions of 6.1 and 9.7, scored.**
+
+6. 80% or more behavioural: **held**, 85%. 8 to 15% bytes only: **missed** low, 7%, and 87 of
+   those 117 are the planSize test's. 10% or less survived: **held**, 8%. `Slots`' bytes-only share
+   above `Analysis`': **held**, 9% against 3%.
+7. The laptop's duration: **not scored**; the run went to the runners (9.7).
+8. Every shard at 8 shards in 100 to 165 minutes: **missed**, early - 63 to 106 minutes a job,
+   median about 90. The coverage phase took 2 to 4 minutes, not 7 to 11; the behavioural run 35 to
+   62 minutes with it; but the bytes run 23 to 42 minutes, not 8, since 9.7 priced the oracle alone
+   and its run also carries every `PinsDefaults` test (9.4), the planSize bisection among them.
+9. No coverage phase failed for memory, and under 1% of the mutants ended `MEMORY_ERROR` or
+   `TIMED_OUT`: **held**, 12 timed out (0.7%), none for memory.
+
+The calibration table gains prediction 8 (`skills/calibration/VARKA-265-9.7-8.md`).

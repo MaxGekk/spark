@@ -55,6 +55,11 @@
 #   --classes A,B     emitter classes to mutate, simple names in codegen.varka (Slots,Analysis)
 #   --methods m,n     mutate only these methods: every other method name of the classes, read
 #                     with javap, goes to PIT's --excludedMethods (PIT has no inclusion filter)
+#   --only FILE       mutate only the mutants FILE names, one PIT identity a line as --keep
+#                     writes them (class and mutator fully qualified, method, descriptor,
+#                     indexes, tab-separated): the check that a new test kills the mutants it was
+#                     written for. The run fails when it finds another number of mutants than
+#                     FILE has lines, and the report's stale-note check reads FILE's mutants only
 #   --suites S,T      only these suites (simple names); default every eligible one
 #   --threads N       PIT minion threads (default 8)
 #   --heap SIZE       each minion's -Xmx, in place of sbt's 4g (a runner fits three at 3g)
@@ -80,6 +85,7 @@ ROOT=$(pwd)
 OUT=$ROOT/target/varka-pit
 classes=Slots,Analysis
 methods=""
+only=""
 suites=""
 threads=8
 heap=""
@@ -97,6 +103,8 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --classes) classes="$2"; shift 2 ;;
     --methods) methods="$2"; shift 2 ;;
+    --only) [ -f "$2" ] || { echo "--only: no file $2" >&2; exit 2; }
+      only=$(realpath "$2"); shift 2 ;;
     --suites) suites="$2"; shift 2 ;;
     --threads) threads="$2"; shift 2 ;;
     --heap) heap="$2"; shift 2 ;;
@@ -251,6 +259,12 @@ if [ "$run" = 1 ]; then
   echo "Mutated: \`${classes//,/\`, \`}\`${methods:+, methods \`${methods//,/\`, \`}\`}," \
     "mutators $mutators; behavioural run: the untagged tests of ${#found[@]} catalyst suites;" \
     "the bytes oracle: VarkaEmittedBytesSuite and their PinsDefaults tests." > "$OUT/scope"
+  # Which mutants --only kept, for the report's scope and its stale-note check.
+  rm -f "$OUT/only"
+  if [ -n "$only" ]; then
+    cp "$only" "$OUT/only"
+    echo "Only the $(grep -c . "$OUT/only") mutants of --only." >> "$OUT/scope"
+  fi
 
   pit() {
     local name=$1 tests=$2 structure=$3 only=${4:-} start status
@@ -281,7 +295,15 @@ if [ "$run" = 1 ]; then
     return "$status"
   }
   behavioural=$(IFS=,; echo "${found[*]}")
-  pit behavioural "$behavioural" exclude || exit 1
+  pit behavioural "$behavioural" exclude "$only" || exit 1
+  if [ -n "$only" ]; then
+    # VarkaPitOnly matches whole lines, so a misspelt identity is a mutant silently left out.
+    found_mutants=$(grep -c "<mutation " "$OUT/behavioural/mutations.xml")
+    if [ "$found_mutants" != "$(grep -c . "$OUT/only")" ]; then
+      echo "--only names $(grep -c . "$OUT/only") mutants and the run found $found_mutants" >&2
+      exit 1
+    fi
+  fi
   if [ "$dry" = 1 ]; then
     echo "varka_pit: dry run; the mutants are in $OUT/behavioural/mutations.xml"
     exit 0
@@ -301,7 +323,9 @@ if [ "$run" = 1 ]; then
   fi
 fi
 
+only_args=()
+[ -f "$OUT/only" ] && only_args=(--only "$OUT/only")
 python3 dev/varka_pit_verdicts.py "$OUT/behavioural/mutations.xml" "$OUT/bytes/mutations.xml" \
   "$report" --notes sql/varka/mutation/notes.tsv --scope "$(cat "$OUT/scope" 2>/dev/null)" \
-  || exit 1
+  "${only_args[@]}" || exit 1
 echo "varka_pit: verdicts written to ${report#"$ROOT"/}"

@@ -880,10 +880,10 @@ killed only by `VarkaEmittedBytesSuite`, survived - with each survivor answered 
   interceptor SPI); its pinned-shapes test took 48 s under load. The same holds for every test
   tagged `PinsDefaults` (a grouping, an op count pinned at the defaults), which the plugin moves
   from the first run to the second by its tag.
-- **Never answer a mutant from a narrow run.** Against one suite, removing javac's
-  `requireNonNull` on `pureOf`'s pattern switch survived and looked equivalent; against all 40
-  suites it is killed, since a null selector takes the switch's default arm and every pure word is
-  lost.
+- **Never answer a mutant from a narrow run, nor from one kill.** Against one suite, removing
+  javac's `requireNonNull` on `pureOf`'s pattern switch survived; against all 40 suites in the
+  sample it read as killed. The selector is never null and the mutant is equivalent: the kill was
+  a test failing under PIT for reasons of its own ("Read the killing test" below).
 - **A survivor costs the suites; a kill costs a test.** In the two-method sample a killed mutant
   ran one test (the median) and the one survivor ran 405, so a full run's length is its survivors'
   - the bytes-only ones included, since the first run does not kill them either.
@@ -891,6 +891,26 @@ killed only by `VarkaEmittedBytesSuite`, survived - with each survivor answered 
   exchanged), one of the defaults; no other bitwise set ships free.
 - **Do not edit a shell script while it runs**: bash reads it as it goes, and the edited tail ran
   as a syntax error after the PIT runs it had launched had finished.
+- **Read which branch a conditional mutant took before answering it.** PIT's index is the ASM
+  tree node index plus one (labels, line numbers and frames count), so the mutated instruction is
+  node `index - 1` of the method read with `ClassReader.EXPAND_FRAMES`. `RemoveConditional`'s
+  `EQUAL_IF` ("replaced equality check with true") deletes the jump, so the code after it always
+  runs; `EQUAL_ELSE` ("with false") makes it unconditional. Which source test that is depends on
+  how javac laid the condition out: `a != b` compiles to a jump on equality, so "with true" there
+  keeps the body, and a first reading of `collectRefusals`' MUL test from the description alone
+  had it backwards (VARKA-265.md 9.8).
+- **Read the killing test of a bytes-only kill.** In the full run 87 of the 117 were one test,
+  `VarkaExpressionCompilerSuite`'s planSize bisection, killing removed `requireNonNull` calls
+  among others; rerun on the laptop it killed one of three such mutants. A test that fails for
+  reasons of its own in a mutant minion turns survivors into bytes-only kills, and in the
+  behavioural run into behavioural ones.
+- **A `PinsDefaults` test that also checks answers hides behavioural kills.** The tag moves the
+  whole test to the bytes run, so a `checkMatrix` inside it reads as the oracle; 11 of the full
+  run's bytes-only kills were one such test's answers. Split it: the pin keeps the tag, the
+  answers do not.
+- **Check that a new test kills its mutants with `--only`**: `dev/varka_pit.sh --only FILE
+  --suites ...` mutates only the identities FILE lists, one a line as `--keep` writes them, and
+  runs the named suites against them - minutes where the full run is hours.
 
 ## A solver proves an arithmetic lowering in integers, and its verdicts are checked like output
 

@@ -172,4 +172,32 @@ class VarkaEmitterFramesSuite extends VarkaEmitterTestBase {
     assert(oneGroup > 100 && several > 5,
       s"$oneGroup one-group, $several several-group and $regrouped regrouped shapes")
   }
+
+  test("a conditional emits its else arm before its then arm, and no local of the then arm's " +
+      "temporaries is live across it") {
+    // The slots follow the children-first order, which plans a conditional's then arm before its
+    // else arm, while the emission computes the else arm first. A local planned after a then-arm
+    // node's temporaries can so be written before them; these two shapes put such a local - the
+    // else arm's validity word, and the else arm's shared value read again by another output -
+    // right after the temporaries of a then-arm node, and check the answers.
+    val col1 = new ColumnRef(1)
+    val lit = new LiteralSlot(0)
+    // The magic-form long division's four vector temporaries (useAVX=2 selects the form), beside
+    // a pick whose word the conditional's own word reads after both arms, on masked batches.
+    val long0 = new ColumnRef(0, LaneType.LONG)
+    val long1 = new ColumnRef(1, LaneType.LONG)
+    val division = new IfElse(new Compare(CompareOp.LT, long0, new LiteralSlot(0, LaneType.LONG)),
+      new ConstDivide(long1, 60, ConstDivide.EXACT_DIVIDEND_BOUND), new Greatest(long0, long1))
+    // At the JVM's own width (lanes 0): this suite shares its JVM, which holds one species.
+    checkLongMatrix(Seq(division), 2, Array(1L << 40), Seq(1, 7, 64, 129), combos(2),
+      (c, i) => (1L << 40) + i.toLong * (c + 1) * (1L << 20) - (i % 5),
+      "a magic-form division in the then arm, a pick in the else arm", 0,
+      VarkaMatrix.base.withUseAVX(2))
+    // A range test's three temporaries in a dense body, beside the else arm's shared value.
+    val shared = new AddDays(col1, lit)
+    val ranged = new IfElse(new Compare(CompareOp.GT, col, lit),
+      new IfElse(new InRanges(col, java.util.List.of[Integer](0, 10)), lit, col), shared)
+    checkMatrix(Seq(ranged, shared), 2, Array(3), Seq(1, 17, 64, 1000), combos(2),
+      ctx = "a range test in the then arm, the else arm's value read again")
+  }
 }
