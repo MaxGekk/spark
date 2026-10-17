@@ -197,7 +197,7 @@ Two measurements say how much of that the tests actually check. Under every Vark
 bytecode writer takes 90% of its branches and the compiler 84%, and one of the writer's named
 mechanisms, the constant pool's decline, is reached by none. A mutation run then planted 1,760
 small faults, a flipped condition or a dropped call, in the two classes that plan every kernel
-before a byte is written. Tests that check an answer caught 86% of them. Of the other 256, 37 were
+before a byte is written. Tests that check an answer caught 85% of them. Of the other 256, 37 were
 caught by tests written after reading them, and the rest change no answer: a check that cannot
 fire, state nothing reads, or only the shape of the emitted code. No fault exposed a wrong answer;
 the five gaps were tests that did not exist.
