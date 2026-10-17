@@ -22,8 +22,10 @@ import java.nio.file.Files
 import java.time.Duration
 
 import scala.jdk.CollectionConverters._
+import scala.jdk.OptionConverters._
 import scala.util.Random
 
+import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.catalyst.expressions.Cast
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaCatalystGrammar,
   VarkaJitEvidence, VarkaKernelWarmth, VarkaKernelWarmup, VarkaShapeCache}
@@ -45,6 +47,11 @@ import org.apache.spark.sql.execution.VarkaSparkFuzz._
  * `partitionEvery`th composition with a filter also checks the
  * ternary partition on both engines. The planted-rollback test draws from a seed of its own,
  * `-Dvarka.sparkfuzz.plantedSeed`, so a run at another seed does not move it (VARKA-309).
+ *
+ * A composition in which a query raised is compared again where no task races another, so that
+ * the verdict does not depend on which of two raising partitions failed first (VARKA-381): over
+ * its rows as one partition by default, or over each row alone with
+ * `-Dvarka.sparkfuzz.errorRerun=eachRow` (`VarkaErrorRerun`).
  *
  * The shared sessions turn the kernel warm-up off, so the main test's kernels serve a shape's
  * first batch, interpreted. The warmed arm (VARKA-327) turns it on, as production runs: each
@@ -102,29 +109,6 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     disagreement(c.fixture, c.select, c.where, c.ansi, partitions, c.pivot.map(rowText), forces)
 
   /**
-   * Runs `body` with the census counters of `VarkaSparkDifferential` restored afterwards, so that
-   * the reruns of a racing disagreement are not counted as compositions.
-   */
-  private def withoutCounting[T](body: => T): T = {
-    val counters = (compared, fused, bothErrored, filtered, filteredNonEmpty, pivotFiltered,
-      pivotFilteredNonEmpty, forcedRuns, forcedApplied)
-    val seen = errorsSeen.clone()
-    try body finally {
-      compared = counters._1
-      fused = counters._2
-      bothErrored = counters._3
-      filtered = counters._4
-      filteredNonEmpty = counters._5
-      pivotFiltered = counters._6
-      pivotFilteredNonEmpty = counters._7
-      forcedRuns = counters._8
-      forcedApplied = counters._9
-      errorsSeen.clear()
-      errorsSeen ++= seen
-    }
-  }
-
-  /**
    * The outputs a composition forces: one, chosen by the iteration, or every one. A composition of
    * one output forces none: with its only output declined the plan keeps no Varka node, so the
    * plan cannot prove the force moved anything.
@@ -136,24 +120,27 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
 
   /**
    * The failure text of composition `it`, which showed `found`: the case shrunk, its reproducer
-   * written under `target/varka-sparkfuzz/`, and the kind with the reproducer in one message.
+   * written under `target/varka-sparkfuzz/`, and the kind with the reproducer in one message. The
+   * checks it runs are not counted in the census, and its note names the error rerun's arm when
+   * it is not the default, which the replay then takes (`VarkaErrorRerun.ofNote`).
    */
   private def failureText(c: Case, it: Int, partitions: Boolean, found: String): String = {
-    // A forced disagreement is shrunk with the one output that shows it forced, so the
-    // reproducer can name it; a forced kind that needs every force names none.
-    val forced = if (!found.startsWith("with an output forced")) c
-      else c.copy(force = forcesOf(c, it).find(k => kindOf(c, partitions, Seq(k)).isDefined))
-    val kind = kindOf(forced, partitions, forced.force.toSeq).getOrElse(found)
-    // A kind that no longer needs the force (the first run's was not repeatable) keeps none, so
-    // the reproducer does not name a force its kind does not depend on.
-    val start = if (kind.startsWith("with an output forced")) forced else forced.copy(force = None)
-    // A kind two listed errors can show by racing (VARKA-298.md 9.3) is kept by a candidate only
-    // if it shows twice, so that a lucky race does not pass for a smaller case.
-    val twice = racingErrors(kind, start.ansi)
-    val small = shrink(start, kind, x => kindOf(x, partitions, x.force.toSeq)
-      .filter(k => !twice || kindOf(x, partitions, x.force.toSeq).contains(k)))
-    val text = render(Reproducer("regression", s"seed $seed iteration $it", small.ansi, kind,
-      small.select, small.where, small.fixture, small.pivot.map(rowText), small.force))
+    // A kind may carry a prefix ("at two partitions only, "), so a forced one is found anywhere.
+    def isForced(kind: String): Boolean = kind.contains("with an output forced")
+    val (kind, small) = withoutCounting {
+      // A forced disagreement is shrunk with the one output that shows it forced, so the
+      // reproducer can name it; a forced kind that needs every force names none.
+      val forced = if (!isForced(found)) c
+        else c.copy(force = forcesOf(c, it).find(k => kindOf(c, partitions, Seq(k)).isDefined))
+      val kind = kindOf(forced, partitions, forced.force.toSeq).getOrElse(found)
+      // A kind that no longer needs the force (the first run's was not repeatable) keeps none, so
+      // the reproducer does not name a force its kind does not depend on.
+      val start = if (isForced(kind)) forced else forced.copy(force = None)
+      (kind, shrink(start, kind, x => kindOf(x, partitions, x.force.toSeq)))
+    }
+    val text = render(Reproducer("regression", s"seed $seed iteration $it${errorRerun.noteSuffix}",
+      small.ansi, kind, small.select, small.where, small.fixture, small.pivot.map(rowText),
+      small.force))
     val dir = getWorkspaceFilePath("sql", "core", "target", "varka-sparkfuzz")
     Files.createDirectories(dir)
     val file = dir.resolve(s"$seed-$it.sql")
@@ -169,20 +156,12 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     var nested = 0
     var nestedErrored = 0
     var nestedFailed = 0
-    // Two legitimate errors racing across partitions, which did not repeat in three reruns.
-    var raced = 0
     val range = onlyIteration.map(k => k to k).getOrElse(0 until iterations)
     for (it <- range if failures.size < maxFailures) {
       val c = rectify(draw(rows, seed, it))
       val partitions = it % partitionEvery == 0
       val errorsBefore = bothErrored
-      val result = kindOf(c, partitions, forcesOf(c, it)).filter { kind =>
-        val believed = !racingErrors(kind, c.ansi) || withoutCounting {
-          (0 until 3).forall(_ => kindOf(c, partitions, forcesOf(c, it)).isDefined)
-        }
-        if (!believed) raced += 1
-        believed
-      }
+      val result = kindOf(c, partitions, forcesOf(c, it))
       val key = (if (it % 2 == 0) "safe" else "full") + (if (c.ansi) " ANSI on" else " ANSI off")
       pool(key) = pool.getOrElse(key, (0, 0)) match {
         case (n, e) => (n + 1, e + (if (bothErrored > errorsBefore) 1 else 0))
@@ -201,7 +180,12 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     pool.foreach { case (k, (n, e)) => info(s"  $k: $n compositions, $e errored on both sides") }
     info(s"  with nested trees: $nested compositions, $nestedErrored errored on both sides, " +
       s"$nestedFailed disagreed")
-    info(s"  two listed errors that differed once and agreed on a rerun: $raced")
+    val again = errorRerun match {
+      case VarkaErrorRerun.ONE_PARTITION => "over one partition"
+      case VarkaErrorRerun.EACH_ROW => "over one partition, then row by row"
+    }
+    info(s"  compared again because a query raised: $comparedAgain, $again; of them, " +
+      s"$twoPartitionsOnly differed at two partitions only")
     errorCensus.foreach(l => info(s"  raised: $l"))
     // A warning, not a failure: which conditions a bounded run meets moves with the coverage
     // table, and a failure here would blame a pull request that only added a row (VARKA-319.md 5).
@@ -233,8 +217,7 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     var evidence = if (warmupJitEvidence) Some(VarkaJitEvidence.start()) else None
     try withWarmupDeadline(warmupDeadline) {
       for (it <- range if failures.size < 3) {
-        // The coverage rows alone: the nested trees meet the bug of VARKA-298.md 9.2 and the race
-        // of 9.3, which this arm, comparing up to five runs a composition, has no rerun for.
+        // The coverage rows alone: the nested trees meet the bug of VARKA-298.md 9.2 (row 380).
         val c = rectify(drawRows(rows, seed, it))
         if (warmupShow) {
           info(s"iteration $it: outputs ${c.outputs}, filter ${c.conjuncts.map(_.sql)} ${c.op}")
@@ -670,18 +653,6 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     assert(withTrees >= 28, s"only $withTrees of 30 nested compositions added a tree")
   }
 
-  test("only two different listed conditions read as errors racing across partitions") {
-    val two =
-      "error classes differ: ARITHMETIC_OVERFLOW, DATETIME_FIELD_OUT_OF_BOUNDS.WITHOUT_SUGGESTION"
-    assert(racingErrors(two, ansi = true))
-    assert(racingErrors(s"with an output forced to decline, $two", ansi = true))
-    // DATETIME_FIELD_OUT_OF_BOUNDS is listed under ANSI only.
-    assert(!racingErrors(two, ansi = false))
-    assert(!racingErrors("error classes differ: ARITHMETIC_OVERFLOW, DIVIDE_BY_ZERO", ansi = true))
-    assert(!racingErrors("only the row engine throws: ARITHMETIC_OVERFLOW", ansi = true))
-    assert(!racingErrors("values differ", ansi = true))
-  }
-
   private def node(t: VarkaCatalystGrammar.Type, template: String,
       children: VarkaCatalystGrammar.Node*): VarkaCatalystGrammar.Node =
     new VarkaCatalystGrammar.Node(t, template, children.asJava)
@@ -721,5 +692,116 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     val small = shrink(c, "values differ", planted)
     assert(small.conjuncts.map(_.sql) == Vector("(year(date_add(d, 3)) > l)"), small.conjuncts)
     assert(small.trees(small.conjuncts.head.sql).`type` == BOOLEAN)
+  }
+
+  // ---- errors raised in two partitions (VARKA-381) ---------------------------------------------
+
+  /** The partitions of the view `fz` as `varkaSpark` has cached it, and whether `sql` fuses. */
+  private def viewShape(sql: String): (Int, Boolean) = (
+    varkaSpark.table("fz").queryExecution.executedPlan.execute().getNumPartitions,
+    find(varkaSpark.sql(sql).queryExecution.executedPlan)(isVarkaNode).isDefined)
+
+  test("the view is two partitions, one coalesced or a row alone, and fuses in each") {
+    val c = draw(rows, seed, 0)
+    for ((view, parts) <- Seq[(DataFrame => DataFrame, Int)](
+        (identity, 2), (_.coalesce(1), 1), (_.offset(5).limit(1), 1))) {
+      cacheFixture(c.fixture, view)
+      try assert(viewShape("SELECT year(d) AS c0 FROM fz") == ((parts, true))) finally {
+        uncacheFixture()
+      }
+    }
+  }
+
+  /**
+   * Runs `body` with `fz_pause(x)` registered in both sessions, and drops it afterwards. It returns
+   * `x`; for a marked row (`x` of 13 or 7, the first row of each partition of the test below) in
+   * a task of a query over two partitions, in partition `rowWaits` of the row engine's queries
+   * and `varkaWaits` of Varka's, it first waits until the task is killed, as a task is once
+   * another task of its job has failed, at most five seconds and once per task. So the test
+   * decides which partition of a two-partition query fails first; over one partition nothing
+   * waits.
+   */
+  private def withPause[T](rowWaits: Int, varkaWaits: Int)(body: => T): T = {
+    def pause(waits: Int): Int => Int = { x =>
+      val task = org.apache.spark.TaskContext.get()
+      if ((x == 13 || x == 7) && task.numPartitions() == 2 && task.partitionId() == waits) {
+        val until = System.nanoTime() + 5000000000L
+        while (!task.isInterrupted() && System.nanoTime() < until) Thread.sleep(5)
+      }
+      x
+    }
+    spark.udf.register("fz_pause", pause(rowWaits))
+    varkaSpark.udf.register("fz_pause", pause(varkaWaits))
+    try body finally {
+      for (session <- Seq(spark, varkaSpark)) {
+        session.sql("DROP TEMPORARY FUNCTION IF EXISTS fz_pause")
+      }
+    }
+  }
+
+  test("two partitions that raise different listed conditions compare the same on every run") {
+    // Under ANSI, row 0 (partition 0) raises in `make_date` with month 13 and row 6 (partition 1)
+    // overflows `l + 1`: two listed conditions on rows in different partitions, as VARKA-298.md
+    // 9.3 met them. `fz_pause` decides which partition fails first on each engine.
+    val data = draw(rows, seed, 0).data.zipWithIndex.map { case (row, k) =>
+      row.updated(2, k match { case 0 => "13"; case 6 => "7"; case _ => "3" })
+        .updated(6, s"CAST('${if (k == 6) Long.MaxValue else 0L}' AS BIGINT)")
+    }
+    val fixture = fixtureSql(data)
+    val select = "make_date(2021, i, 1) AS c0, (l + 1) AS c1"
+    val where = Some("fz_pause(i) > 0")
+    val month = "DATETIME_FIELD_OUT_OF_BOUNDS.WITHOUT_SUGGESTION"
+    val overflow = "ARITHMETIC_OVERFLOW"
+    // The comparison before VARKA-381: one run on each engine over the two partitions.
+    def firstRun(): Option[String] = {
+      cacheFixture(fixture)
+      try withAnsi(true) {
+        assert(viewShape("SELECT year(d) AS c0 FROM fz")._1 == 2)
+        val query = querySql(select, where)
+        difference(outcome(spark, query), outcome(varkaSpark, query))
+      } finally uncacheFixture()
+    }
+    // Which partition waits on the row engine and on Varka.
+    val timings = Seq((0, 0), (0, 1), (1, 0), (1, 1))
+    val before = timings.map { case (r, v) => withPause(r, v)(firstRun()) }
+    assert(before == Seq(None, Some(s"error classes differ: $overflow, $month"),
+      Some(s"error classes differ: $month, $overflow"), None), before)
+    // The condition of the partition that does not wait, which the first run raises.
+    def firstRaised(waits: Int): String = if (waits == 0) overflow else month
+    for (rerun <- VarkaErrorRerun.values().toSeq; (r, v) <- timings; _ <- 0 until 2) {
+      val seen = errorsSeen.toMap
+      val kind = withPause(r, v) {
+        disagreement(fixture, select, where, ansi = true, partitions = false, rerun = rerun)
+      }
+      assert(kind.isEmpty, s"$rerun, waits ($r, $v): $kind")
+      val raised = errorsSeen.collect { case (key, n) if n > seen.getOrElse(key, 0) => key }.toSet
+      // Over one partition the first raising row's condition; row by row, each row's.
+      // Counted once each: the first run's condition, the first raising row's over one
+      // partition, and row by row each row's.
+      val conditions = if (rerun == VarkaErrorRerun.EACH_ROW) Set(month, overflow) else Set(month)
+      val expected = conditions.flatMap(c => Set((c, "row", "ANSI"), (c, "varka", "ANSI"))) +
+        ((firstRaised(r), "row", "ANSI")) + ((firstRaised(v), "varka", "ANSI"))
+      assert(raised == expected,
+        s"$rerun, waits ($r, $v): $raised")
+    }
+  }
+
+  test("a difference only the two partitions show keeps which side raised and not the condition") {
+    def withoutConditions(kind: String): Option[String] =
+      VarkaErrorRerun.withoutConditions(kind).toScala
+    assert(withoutConditions("only the row engine throws: ARITHMETIC_OVERFLOW")
+      .contains("only the row engine throws"))
+    assert(withoutConditions("with an output forced to decline, only Varka throws: X")
+      .contains("with an output forced to decline, only Varka throws"))
+    assert(withoutConditions("values differ").contains("values differ"))
+    assert(withoutConditions("error classes differ: X, Y").isEmpty)
+    // An unlisted condition is a finding whichever task raised it.
+    val unlisted = "unexpected error condition X from Varka under ANSI"
+    assert(withoutConditions(unlisted).contains(unlisted))
+    import VarkaErrorRerun._
+    assert(fromProperty(null) == ONE_PARTITION && fromProperty("eachRow") == EACH_ROW)
+    intercept[IllegalArgumentException](fromProperty("twice"))
+    assert(ofNote(s"seed 1 iteration 2${EACH_ROW.noteSuffix}") == EACH_ROW)
+    assert(ofNote(s"seed 1 iteration 2${ONE_PARTITION.noteSuffix}") == ONE_PARTITION)
   }
 }
