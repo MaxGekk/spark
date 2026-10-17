@@ -219,6 +219,16 @@ final class VarkaBodyEmitter {
         cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
         cb.astore(acc);
       }
+      // The min-and-max guards' accumulators start at their own bounds, so that they compare
+      // outside only once a guarded lane was (VARKA-379 11).
+      for (Map.Entry<Slots.Bounds, Integer> e : s.rangeAcc.entrySet()) {
+        for (int k = 0; k < 2; k++) {
+          cb.aload(s.species);
+          analysis.lane.pushScalar(cb, k == 0 ? e.getKey().lo() : e.getKey().hi());
+          cb.invokestatic(analysis.lane.vector, "broadcast", analysis.lane.broadcast);
+          cb.astore(e.getValue() + k);
+        }
+      }
     }
     switch (mode) {
       case LOOP -> emitVectorLoop(cb, dense, outputs, bodyOutputs, analysis, s);
@@ -226,6 +236,7 @@ final class VarkaBodyEmitter {
       case DRIVER -> throw VarkaErrors.illegalArgument("the driver is emitDriver's, not a body's");
     }
     assertWordsLive(s, mode);
+    emitRangeFold(cb, analysis, s);
     emitStatusReturn(cb, s);
     if (!s.deadRefs.isEmpty()) {
       // The input words this masked body allocated and, by the liveness pass, never read.
@@ -601,6 +612,39 @@ final class VarkaBodyEmitter {
     cb.labelBinding(clean);
     cb.loadConstant(0);
     cb.ireturn();
+  }
+
+  /**
+   * After the loop, each pair of min-and-max accumulators ({@link Slots#rangeAcc}) compared once
+   * against its bounds - a min below {@code lo} or a max above {@code hi} - and ORed into the mask
+   * the status return reduces: the body's one mask, or under {@code exactRefusalStatus} the
+   * value-range reason's, the only reason such a guard has. Nothing is emitted in a body without
+   * one. Once a method rather than once a lane group, so the guard's loop cost is the min and the
+   * max alone (VARKA-379 11).
+   */
+  private static void emitRangeFold(CodeBuilder cb, Analysis analysis, Slots s) {
+    if (s.rangeAcc.isEmpty()) {
+      return;
+    }
+    int acc = s.guardAccByReason != null
+        ? s.guardAccByReason.get(Analysis.Refusal.VALUE_RANGE) : s.guardAcc;
+    for (Map.Entry<Slots.Bounds, Integer> e : s.rangeAcc.entrySet()) {
+      cb.aload(e.getValue());
+      cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
+      analysis.lane.pushScalar(cb, e.getKey().lo());
+      cb.invokevirtual(analysis.lane.vector, "compare", analysis.lane.compareVI);
+      cb.aload(e.getValue() + 1);
+      cb.getstatic(VECTOR_OPERATORS, "GT", VO_COMPARISON);
+      analysis.lane.pushScalar(cb, e.getKey().hi());
+      cb.invokevirtual(analysis.lane.vector, "compare", analysis.lane.compareVI);
+      cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+      cb.aload(acc);
+      cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+      cb.astore(acc);
+    }
+    if (s.guardAccByReason != null) {
+      analysis.reach(VarkaEmitMechanism.GUARD_EXACT_STATUS);
+    }
   }
 
   /** The body's guard masks: the one mask, or each reason's under {@code exactRefusalStatus}. */

@@ -253,13 +253,23 @@ final class VarkaVectorWalk {
       }
       case GuardedRange n -> {
         // The day guard's twin at whichever lane the child is on, with the bounds the node
-        // carries. The value passes through; the word is the child's.
+        // carries. The value passes through; the word is the child's, except over a column's
+        // stored values, which a null row's lane is checked by too (Analysis.guardsStoredValues).
         emitValue(cb, n.child(), dense, analysis, s, computed);
         line(cb, analysis, node);
         Integer guardTmp = s.guardTmp.get(node);
-        if (guardTmp != null) {
-          emitRangeGuard(cb, node, dense ? null : s.wordRef.get(n.child()), guardTmp, dense,
-              analysis, s, n.lo(), n.hi());
+        if (analysis.accumulatesRange(node, !s.epilogue)) {
+          Integer acc = s.rangeAcc.get(new Slots.Bounds(n.lo(), n.hi()));
+          if (acc == null) {
+            // Refused by name: without its accumulators the guard would be dropped silently.
+            throw VarkaErrors.illegalState("a min-and-max guard with no accumulators planned: "
+                + node);
+          }
+          emitRangeAccumulate(cb, node, acc, analysis);
+        } else if (guardTmp != null) {
+          Integer word = dense || Analysis.guardsStoredValues(node)
+              ? null : s.wordRef.get(n.child());
+          emitRangeGuard(cb, node, word, guardTmp, dense, analysis, s, n.lo(), n.hi());
         }
       }
       case ThursdayOf n -> {
@@ -622,9 +632,11 @@ final class VarkaVectorWalk {
    * are undefined and must not condemn the batch (the node's word is the AND of every input, so a
    * null offset or a null count is covered), and with the epilogue's bounds mask, because a partial
    * group's padding lanes hold whatever the masked load left. The dense body skips the word AND:
-   * every lane is valid there. A producer used more than once is emitted once per lane group under
-   * CSE, guard included; with CSE off it is re-emitted per use, which repeats the guard - correct,
-   * merely redundant, and not a shape production emits.
+   * every lane is valid there. So does a guard over a column's stored values in every body
+   * ({@link Analysis#guardsStoredValues}); in a loop it is not emitted here at all but as a min
+   * and a max ({@link #emitRangeAccumulate}). A producer used more than once is emitted once per
+   * lane group under CSE, guard included; with CSE off it is re-emitted per use, which repeats the
+   * guard - correct, merely redundant, and not a shape production emits.
    */
   static void emitRangeGuard(CodeBuilder cb, VarkaVectorIR node, Integer word,
       int guardTmp, boolean dense, Analysis analysis, Slots s, long lo, long hi) {
@@ -640,6 +652,28 @@ final class VarkaVectorWalk {
     cb.invokevirtual(analysis.lane.vector, "compare", analysis.lane.compareVI);
     cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
     emitGuardCollect(cb, node, word, dense, analysis, s);
+  }
+
+  /**
+   * A column's range guard in a loop body ({@link Analysis#accumulatesRange}): the guarded vector,
+   * left on the operand stack for the caller, goes into the lane-wise min at {@code acc} and the
+   * lane-wise max at {@code acc + 1} ({@link Slots#rangeAcc}), two ops a lane group with no mask
+   * and no branch, where {@link #emitRangeGuard} takes two compares and two ORs and a masked body
+   * also turned the validity word into a mask. The bounds are compared once, after the loop
+   * ({@code VarkaBodyEmitter.emitRangeFold}), so a far day anywhere in the loop still declines the
+   * batch, from the same status bit (VARKA-379 11).
+   */
+  static void emitRangeAccumulate(CodeBuilder cb, VarkaVectorIR node, int acc,
+      Analysis analysis) {
+    for (int k = 0; k < 2; k++) {
+      cb.dup();
+      cb.aload(acc + k);
+      cb.swap();
+      cb.invokevirtual(analysis.lane.vector, k == 0 ? "min" : "max", analysis.lane.lanewiseVV);
+      cb.astore(acc + k);
+    }
+    analysis.reach(VarkaEmitMechanism.guard(analysis.refusals.get(node)));
+    analysis.reach(VarkaEmitMechanism.GUARD_MIN_MAX);
   }
 
   /**

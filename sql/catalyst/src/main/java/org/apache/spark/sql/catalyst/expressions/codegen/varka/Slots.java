@@ -222,6 +222,26 @@ final class Slots {
    */
   EnumMap<Analysis.Refusal, Integer> guardAccByReason;
   /**
+   * Per pair of bounds the loop body's min-and-max guards check
+   * ({@link Analysis#accumulatesRange}), the first of two vector locals: the lane-wise min of every
+   * vector guarded against those bounds, started at {@code broadcast(lo)}, and after it the
+   * lane-wise max, started at {@code broadcast(hi)}. Once after the loop, a min below {@code lo}
+   * or a max above {@code hi} becomes the lanes that fold into {@link #guardAcc}
+   * ({@code VarkaBodyEmitter.emitRangeFold}). Ordered by the bounds, so the slots do not depend on
+   * a hash order. Empty in every other body.
+   */
+  final java.util.SortedMap<Bounds, Integer> rangeAcc = new java.util.TreeMap<>();
+
+  /** A guard's inclusive bounds, as {@link #rangeAcc} keys its accumulators. */
+  record Bounds(long lo, long hi) implements Comparable<Bounds> {
+    @Override
+    public int compareTo(Bounds o) {
+      int c = Long.compare(lo, o.lo);
+      return c != 0 ? c : Long.compare(hi, o.hi);
+    }
+  }
+
+  /**
    * one {@code long} accumulator per output whose validity this body writes a word at a time, or
    * {@code -1} for an output that keeps the per-lane-group read-modify-write. Null in every body
    * that does not word-write at all, which is what keeps such a body's slot numbering - and so
@@ -595,6 +615,18 @@ final class Slots {
       for (Analysis.Refusal reason : reasons) {
         s.guardStatus |= reason.status;
       }
+      // The min-and-max accumulators, two per pair of bounds, after the masks: a body without a
+      // stored-value guard in a loop numbers every later local as it did before VARKA-379 11.
+      for (VarkaVectorIR node : body) {
+        if (analysis.accumulatesRange(node, mode == BodyMode.LOOP)) {
+          GuardedRange g = (GuardedRange) node;
+          s.rangeAcc.putIfAbsent(new Bounds(g.lo(), g.hi()), -1);
+        }
+      }
+      for (Map.Entry<Bounds, Integer> e : s.rangeAcc.entrySet()) {
+        e.setValue(slot);
+        slot += 2;
+      }
     }
     var families = EnumSet.noneOf(Analysis.Refusal.Family.class);
     for (Analysis.Refusal reason : reasons) {
@@ -712,7 +744,7 @@ final class Slots {
           // Only a reason that parks its value takes one (see Analysis.Refusal): MakeDate guards
           // out of makeDateTmp, and allocating one for it would shift every later local and
           // move the pinned bytes.
-          if (guardScratch(analysis, node, families)) {
+          if (guardScratch(analysis, node, families, mode == BodyMode.LOOP)) {
             s.guardTmp.put(node, slot++);
           }
           if (node instanceof MakeDate) {
@@ -901,29 +933,33 @@ final class Slots {
    * Whether {@code node} condemns the batch, and so needs its own validity word kept alive for
    * {@code emitGuardCollect} to qualify the condemning mask with. Read by {@link #liveWords}: a
    * node that collects into the accumulator without its word surviving the liveness pass would
-   * fail loudly in {@code loadWord}. {@link #guardScratch} is this plus a condition, so the slot
-   * planner cannot decide a node is guarded while the liveness pass decides its word is dead.
+   * fail loudly in {@code loadWord}. A guard over a column's stored values
+   * ({@link Analysis#guardsStoredValues}) qualifies by no word, so it demands none, and a masked
+   * loop whose only reader of a column's word was that guard reads no word (VARKA-379 11).
    */
   private static boolean guardedWord(Analysis analysis, VarkaVectorIR node) {
-    return analysis.refusals.containsKey(node);
+    return analysis.refusals.containsKey(node) && !Analysis.guardsStoredValues(node);
   }
 
   /**
    * Whether {@code node} needs {@link Slots#guardTmp}, the scratch local a guard parks its value in
    * before testing it: a refusing node whose reason {@link Analysis.Refusal#parksValue parks}, in a
    * body its {@link Analysis.Refusal.Family family} allows - every body for a re-armed range
-   * check, otherwise one whose emitted nodes, {@code families}, include the family. A subset of
-   * {@link #guardedWord}, and deliberately not the same question: a guarded day producer's value
-   * is on the stack when the guard runs, and {@code AddMonths} guards its count the same way, but
-   * the checked int arithmetic already parks its operands and result in
+   * check, otherwise one whose emitted nodes, {@code families}, include the family - except a
+   * guard kept as a min and a max in a loop ({@link Analysis#accumulatesRange}), which reads its
+   * value back with {@code dup}. Deliberately not the same question as {@link #guardedWord}: a
+   * guarded day producer's value is on the stack when the guard runs, and {@code AddMonths} guards
+   * its count the same way, but the checked int arithmetic already parks its operands and result in
    * {@link Slots#intArithTmp}, and {@code emitIntNeg} reads its operand back with {@code dup}, so
-   * neither ever loads this slot.
+   * neither ever loads this slot; and a stored-value guard parks its value for the compares in the
+   * epilogue and under arms while demanding no word.
    */
   private static boolean guardScratch(Analysis analysis, VarkaVectorIR node,
-      Set<Analysis.Refusal.Family> families) {
+      Set<Analysis.Refusal.Family> families, boolean loop) {
     Analysis.Refusal reason = analysis.refusals.get(node);
     return reason != null && reason.parksValue
-        && (reason.family == Analysis.Refusal.Family.REARMED || families.contains(reason.family));
+        && (reason.family == Analysis.Refusal.Family.REARMED || families.contains(reason.family))
+        && !analysis.accumulatesRange(node, loop);
   }
 
   /**
@@ -1224,8 +1260,14 @@ final class Slots {
         // The range check masks the lanes the word says are null before reporting one out of
         // range, so that word has to survive the liveness pass. It is the child's: this node
         // checks a value without changing its validity, so it forwards rather than owning one.
+        // A guard over a column's stored values masks nothing, so it demands no word
+        // (Analysis.guardsStoredValues).
         case GuardedDay g -> demand(analysis.wordOwner.get(g.days()));
-        case GuardedRange g -> demand(analysis.wordOwner.get(g.child()));
+        case GuardedRange g -> {
+          if (!Analysis.guardsStoredValues(g)) {
+            demand(analysis.wordOwner.get(g.child()));
+          }
+        }
         // The narrowing reads no word: its validity is its child's, and the one consumer of
         // that word is its root write, which demands it above unless the bitmap pass serves it.
         case NarrowLane g -> { }

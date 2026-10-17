@@ -126,7 +126,8 @@ class VarkaInliningCliffSuite extends SparkFunSuite with VarkaTestWatchdog {
     val whole = fork(outputs = 22, ceiling = 400, seconds = 2, budget = Some(0))
     assert(whole.exists(_.contains(" budget=0")), whole.take(3))
     // The census counted 99; since VARKA-379 the tails' date column carries the column bound's
-    // guard, whose two compares make it 101, still past the limit the census found.
-    assert(loops(whole) == Map("loopDense0" -> 101, "loopMasked0" -> 101), loops(whole))
+    // guard, still past the limit the census found: its min and max in the loop, the two
+    // broadcasts that start them and the two compares after the loop make it 105.
+    assert(loops(whole) == Map("loopDense0" -> 105, "loopMasked0" -> 105), loops(whole))
   }
 }

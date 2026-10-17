@@ -510,6 +510,33 @@ final class Analysis {
   }
 
   /**
+   * Whether {@code node}'s guard checks a column's stored values, null rows included: an int-lane
+   * {@link GuardedRange} directly over a {@link ColumnRef}, which is the column bound the compiler
+   * wraps a date column in (VARKA-379). Every other guard ANDs its condemning mask with the lanes'
+   * validity, so that a null lane's undefined value cannot condemn the batch; this one does not,
+   * because turning the validity word into a lane mask costs a cheap kernel more than its own work
+   * on AVX2, and a null row a Spark writer filled holds day 0, inside the bound. A far day stored
+   * under a null declines the batch to the row engine, which answers it: slower, never wrong
+   * ({@code VARKA-379.md} 11.3). The long lane keeps the qualified form: the {@code TIME} family's
+   * guards sit there, and AVX2 has no 64-bit min or max for {@link Slots#rangeAcc} to use.
+   */
+  static boolean guardsStoredValues(VarkaVectorIR node) {
+    return node instanceof GuardedRange g && g.child() instanceof ColumnRef c
+        && c.lane() == VarkaVectorIR.LaneType.INT;
+  }
+
+  /**
+   * Whether {@code node}'s guard is kept as a lane-wise min and max in a loop body
+   * ({@link Slots#rangeAcc}) rather than as two compares a lane group: a stored-value guard
+   * ({@link #guardsStoredValues}) in a loop method, where no arm qualifies it. The epilogue, one
+   * pass, keeps the compares and the bounds mask's AND; a guard under arms keeps them so its mask
+   * can be ANDed with the arm's condition, which a min cannot be without a blend.
+   */
+  boolean accumulatesRange(VarkaVectorIR node, boolean loop) {
+    return loop && guardsStoredValues(node) && armChainOf(node).isEmpty();
+  }
+
+  /**
    * Fills {@link #refusals} over the topological order, one exhaustive switch deciding every kind,
    * so that a new node type has to say whether it refuses. A column-count {@link AddMonths} is a
    * {@link Refusal#MONTH_COUNT}, not a {@link Refusal#DAY_PRODUCER}: its check is on its own month
