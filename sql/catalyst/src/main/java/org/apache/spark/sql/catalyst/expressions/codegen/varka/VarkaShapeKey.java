@@ -40,11 +40,10 @@ import java.util.List;
  * the {@code SourceFile} and the plan fragment are absent for the opposite reason: the cache
  * derives all three from this key's own hash.
  *
- * <p>{@link VarkaEmitOptions} is present, and that is what it covers. The emitter's other
- * byte-affecting inputs used to be static test hooks the key could not see, guarded by a JVM-wide
- * refusal in the cache; they are a key component now, so a variant simply gets its own entry and
- * its own class. {@link #VarkaShapeKey(List, int, int)} supplies the defaults, which is every
- * production caller.
+ * <p>{@link VarkaEmitOptions} is present, and that is what it covers: every byte-affecting
+ * input of the emitter besides the shape is a key component, so a variant simply gets its own
+ * entry and its own class. {@link #VarkaShapeKey(List, int, int)} supplies the defaults, which is
+ * every production caller.
  *
  * <p>{@code warmed} is the one component that changes the class's name and not its bytes: a
  * kernel its session warms before it serves batches ({@link VarkaKernelWarmup}) is emitted under

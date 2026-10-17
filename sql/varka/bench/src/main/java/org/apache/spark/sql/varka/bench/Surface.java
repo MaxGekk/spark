@@ -43,15 +43,13 @@ public final class Surface {
     }
 
     /**
-     * This file used to carry a {@code residualFilter} factory for.
-     * Three entries below - the two-column predicates - were held out of
-     * {@code --expect-fused} because a row-engine {@code Project} sat above the Varka filter
-     * whenever the consumer wanted fewer columns than the predicate reads, which Spark's
-     * column pruning cannot remove and the columnar rule did not take. The rule absorbs that
-     * projection into the filter node now, so the shapes fuse whole and are ordinary
-     * {@link #filter} entries again, held to the flag like every other row. The factory is
-     * gone rather than left unused: a future expected-partial shape should arrive with its
-     * own reason written beside it, not inherit one from a debt that closed.
+     * There is no factory for an entry expected to fuse only in part. The two-column
+     * predicates below would need one if a row-engine {@code Project} sat above the Varka
+     * filter whenever the consumer wants fewer columns than the predicate reads, which Spark's
+     * column pruning cannot remove; the columnar rule absorbs that projection into the filter
+     * node, so the shapes fuse whole and are ordinary {@link #filter} entries, held to
+     * {@code --expect-fused} like every other row. A future expected-partial shape should
+     * arrive with its own reason written beside it.
      */
 
     static Entry both(String expr, String pred) {

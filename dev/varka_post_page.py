@@ -113,8 +113,9 @@ def inline_figures(html, source_dir):
         if not src.endswith(".svg"):
             return match.group(0)
         if not os.path.exists(path):
-            # Loudly: a figure whose SVG is absent used to pass through as an <img> pointing
-            # at nothing, so the page shipped with a hole in it and the build still exited 0.
+            # Loudly: a figure whose SVG is absent would otherwise pass through as an <img>
+            # pointing at nothing, and the page would ship with a hole in it on a build that
+            # exits 0.
             raise SystemExit(
                 "missing figure %s - run the scripts in %s/figures"
                 % (src, figures_home(source_dir))

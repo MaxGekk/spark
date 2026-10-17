@@ -45,8 +45,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Ove
  *
  * <p>The long lane is milestone 5's subject: {@code bigint}, {@code TIME}, the timestamps and
  * day-time intervals are all built on it, and VARKA-85 made the emitter produce it before any of
- * those exist. This file is that lane's baseline, committed before VARKA-104 adds the compiler
- * arms that will let SQL reach it - the project's rule that a measurement precedes the change it
+ * those exist. This file is that lane's baseline, committed before the compiler arms that let
+ * SQL reach it (VARKA-104) - the project's rule that a measurement precedes the change it
  * is meant to judge.
  *
  * <p><b>The arithmetic the numbers are read against.</b> A 512-bit register holds sixteen int

@@ -276,7 +276,7 @@ final class VarkaEmitBudget {
    *
    * <p><b>Why bound a method at all.</b> Past a count of vector call sites C1 refuses a loop
    * method and it runs interpreted until C2 lands, so a method that grows without limit has a
-   * window in which it is very slow; {@link #CALL_SITE_BUDGET} now bounds that count for wide
+   * window in which it is very slow; {@link #CALL_SITE_BUDGET} bounds that count for wide
    * groups, and this weight budget is the coarser bound that runs before anything is built.
    * Keeping methods small also keeps each one's C2 node and inlining budgets to itself, so no
    * method's size can cost another its intrinsics.
@@ -297,11 +297,11 @@ final class VarkaEmitBudget {
    * saving; and under {@link VarkaEmitOptions#shareWholeNodes} an output that reuses whole
    * nodes may join too. {@code groupOutputs} implements both.
    *
-   * <p><b>Where the budget does not bind.</b> Since VARKA-254 the emit cost model's prediction
-   * bounds a group in this budget's place, up to {@link #FUSED_CEILING}, wherever it can: with
-   * the plan's margins, a call-site budget, and a group it prices
-   * ({@link VarkaEmitOptions#groupBudgetUnderPrediction}). The budget binds everywhere else, and
-   * under that option.
+   * <p><b>Where the budget does not bind.</b> The emit cost model's prediction bounds a group in
+   * this budget's place, up to {@link #FUSED_CEILING}, wherever it can: with the plan's margins,
+   * a call-site budget, and a group it prices
+   * ({@link VarkaEmitOptions#groupBudgetUnderPrediction}, VARKA-254). The budget binds everywhere
+   * else, and under that option.
    *
    * <p><b>What this bound is not.</b> It is not a compile-time bound. C2's compile time is
    * roughly linear in op count - about 1.1 ms per op at AVX-512, measured on a ladder from 20
@@ -345,7 +345,6 @@ final class VarkaEmitBudget {
    *
    * <p>Like every weight, it is counted net of the operands' loads, the literals' broadcasts and
    * the output's store, which a group pays once per column and per output whatever it computes.
-   * It was 31 until VARKA-254, the column's load and the output's store counted in.
    *
    * <p>This is the part of a calendar node's weight that a loop method pays <i>once</i>, however
    * many calendar outputs over the same date it holds (see {@code groupOutputs}); each node's
@@ -371,10 +370,10 @@ final class VarkaEmitBudget {
   static final int CHRONO_PREFIX_LOAD_WEIGHT = 6;
 
   /**
-   * The four task-26 fields' tails, each what its field adds past the prefix. They shared one
-   * constant at the widest (7) until VARKA-254 pinned every weight to its node's count; the
-   * shared constant over-counted {@code month} by three, which a cheap tail like
-   * {@code year(d) + k} - the shape the fused ceiling is read on - repeats per output.
+   * The four VARKA-26 fields' tails, each what its field adds past the prefix. Each is its own
+   * field's count rather than one constant at the widest (VARKA-254): a shared constant would
+   * over-count {@code month} by three, which a cheap tail like {@code year(d) + k} - the shape
+   * the fused ceiling is read on - repeats per output.
    *
    * <p>A field weighs more than {@link #GROUP_BUDGET}, so a calendar output never joins a group
    * under clause 1 of {@code groupOutputs}: it joins one under clause 2, by reusing the prefix, or
@@ -391,9 +390,9 @@ final class VarkaEmitBudget {
    * and the January-based blend, 14 in all. Its prefix elides the month step, which is why the
    * node alone emits 41 past its load and store rather than 43.
    *
-   * <p>This tail has been 73, then 55, then 51 as a whole-node weight, and twice out of three times
-   * the leap flag was the reason: the task first shipped its own leap test (19 ops), replaced it
-   * with the shared one (22), and both are gone - the helper is Huffner's perfect hash at 4 ops.
+   * <p>The leap flag is the part of this tail most sensitive to its helper: a leap test of its
+   * own costs 19 ops and the shared leap test 22, where Huffner's perfect hash, the
+   * helper used, costs 4.
    */
   static final int DAY_OF_YEAR_TAIL_WEIGHT = 14;
   static final int DAY_OF_YEAR_WEIGHT = CHRONO_PREFIX_WEIGHT + DAY_OF_YEAR_TAIL_WEIGHT;
@@ -407,9 +406,9 @@ final class VarkaEmitBudget {
    * {@code AddMonths}'s tail: the month arithmetic, the day clamp and
    * {@code emitDaysFromCivil}'s recompose. By far the heaviest tail, which is what makes it
    * the node that decides how many outputs {@link #FUSED_CEILING} admits - the four fields
-   * together weigh less than one of these. It used to borrow a field's weight on the argument
-   * that both only had to exceed the budget; under B2 the tail is summed against the ceiling, so
-   * it is counted. 81 until VARKA-254, which took out the month literal's broadcast.
+   * together weigh less than one of these. It is counted rather than borrowed from a field,
+   * although both only have to exceed the budget, because under B2 the tail is summed against
+   * the ceiling. Like every weight it leaves out the month literal's broadcast (VARKA-254).
    */
   static final int ADD_MONTHS_TAIL_WEIGHT = 80;
   static final int ADD_MONTHS_WEIGHT = CHRONO_PREFIX_WEIGHT + ADD_MONTHS_TAIL_WEIGHT;
@@ -437,9 +436,8 @@ final class VarkaEmitBudget {
    * year, the day of month, the current month's start and the next one's (clamped, per
    * {@code emitMonthStart}'s own exact-range precondition), and the blended length.
    *
-   * <p>This was 19 while {@code emitLeapFlag} needed five scratch locals threaded in for
-   * February's own branch. It is now a perfect hash taking only the year, so those five are
-   * gone along with the parameters that carried them.
+   * <p>{@code emitLeapFlag} is a perfect hash taking only the year, so February's branch needs
+   * no scratch locals of its own.
    */
   static final int LAST_DAY_TMP_COUNT = 14;
 
@@ -494,7 +492,7 @@ final class VarkaEmitBudget {
    * the way {@link #DAY_OF_YEAR_WEIGHT} is: the validity arithmetic (the clamp, the month length
    * with its leap flag, four compares) and {@code emitDaysFromCivil}'s recompose, 53 lane calls in
    * the dense body under {@code failOnError}. Read off the emitted bytes by the register in
-   * {@code VarkaEmitterBudgetSuite}, not estimated; it read 60 until VARKA-254 recounted it.
+   * {@code VarkaEmitterBudgetSuite}, not estimated (VARKA-254).
    */
   static final int MAKE_DATE_WEIGHT = 53;
 
@@ -518,7 +516,7 @@ final class VarkaEmitBudget {
    * {@code WeekOfYear}'s tail: the day-of-year tail and {@code (doy - 1) / 7 + 1} by
    * {@link VarkaChrono#WEEK_M}, 18 past a prefix that elides the month step - so
    * {@code weekofyear(d)} as a whole emits 64: the load and store, the shift's 17, the prefix's 27
-   * and this. 16 until VARKA-254, when the shift's load and store were counted twice.
+   * and this, the shift's load and store counted once (VARKA-254).
    */
   static final int WEEK_OF_YEAR_TAIL_WEIGHT = 18;
   static final int WEEK_OF_YEAR_WEIGHT = CHRONO_PREFIX_WEIGHT + WEEK_OF_YEAR_TAIL_WEIGHT;
@@ -531,14 +529,14 @@ final class VarkaEmitBudget {
 
   /**
    * What {@link VarkaVectorIR.WeekDay} weighs: {@code emitFloorMod7}'s twelve vector ops under the
-   * shipped {@link VarkaEmitOptions.FloorMod7#MAGIC} lowering and the shift around it. It weighed
-   * the flat default of 1 until VARKA-254, a sixteenth of what it emits, so a group of weekday
-   * outputs passed the group budget unseen.
+   * shipped {@link VarkaEmitOptions.FloorMod7#MAGIC} lowering and the shift around it, counted
+   * (VARKA-254): a flat weight of 1, a sixteenth of what it emits, would let a group of weekday
+   * outputs pass the group budget unseen.
    */
   static final int WEEK_DAY_WEIGHT = 15;
 
   /** What {@link VarkaVectorIR.DayOfWeek} weighs: {@link #WEEK_DAY_WEIGHT}'s floor modulus with a
-   * Sunday-based shift, one op more. The flat 1 until VARKA-254, as for {@code WeekDay}. */
+   * Sunday-based shift, one op more, counted as {@code WeekDay}'s is. */
   static final int DAY_OF_WEEK_WEIGHT = 16;
 
   /**
@@ -552,9 +550,8 @@ final class VarkaEmitBudget {
    * What {@link VarkaVectorIR.NextDay} weighs against {@link #GROUP_BUDGET}, counted the same
    * way as a calendar node: its own {@code w = k - d} subtract and the final
    * {@code d + r + 1} (two ops) plus {@code emitFloorMod7}'s twelve vector ops under the
-   * shipped {@link VarkaEmitOptions.FloorMod7#MAGIC} lowering - fifteen real vector ops, not
-   * the flat default weight of 1 the emitter used to give it. Re-count it if the lowering
-   * changes shape.
+   * shipped {@link VarkaEmitOptions.FloorMod7#MAGIC} lowering - fifteen real vector ops.
+   * Re-count it if the lowering changes shape.
    */
   static final int NEXT_DAY_WEIGHT = 15;
 
@@ -588,9 +585,9 @@ final class VarkaEmitBudget {
    * once.
    *
    * <p>Every node is named in the switch, so a node added to the IR has no weight until it is
-   * given one: {@code DayOfWeek} and {@code WeekDay} fell to a default of 1 while emitting about
-   * sixteen until VARKA-254 named them. {@code VarkaEmitterBudgetSuite}'s register holds each
-   * weight to its node's count.
+   * given one, rather than a default that would weigh a node emitting about sixteen ops as one
+   * (VARKA-254). {@code VarkaEmitterBudgetSuite}'s register holds each weight to its node's
+   * count.
    *
    * <p>This is deliberately only about <i>grouping</i>: whether outputs share a loop method is
    * {@code groupOutputs}' question, and how many a kernel may fuse is the byte budget's, with

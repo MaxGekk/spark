@@ -113,7 +113,7 @@ class VarkaInliningCliffSuite extends SparkFunSuite with VarkaTestWatchdog {
   test("under the call-site budget the probe forks twenty-two tails as two loop methods, and " +
       "with the budget off as the one method past C1 the census measured (VARKA-209)") {
     // The census of VARKA-209.md 10.1 put C1's limit between 93 and 99 vector call sites,
-    // twenty and twenty-two cheap tails in one loop method. The probe's default arm is now the
+    // twenty and twenty-two cheap tails in one loop method. The probe's default arm is the
     // production emitter, whose call-site budget splits the second shape; the `0` arm is the
     // census's own, kept so the cliff stays reproducible with the budget in place.
     def loops(lines: Seq[String]): Map[String, Int] =

@@ -111,9 +111,9 @@ public final class Canary {
   /**
    * The compute control: an xorshift recurrence from a seed that changes per call. A linear
    * recurrence would not do - C2 reassociates {@code acc * a + c} across its unrolled
-   * iterations and the chain shrinks by the unroll factor, which is how the first version of
-   * this loop reported 76 billion steps a second. Xorshift is nonlinear, so every step waits
-   * on the last and the rate is the clock's.
+   * iterations and the chain shrinks by the unroll factor, so a linear loop's rate measures the
+   * unroll rather than the clock (one such run read 76 billion steps a second). Xorshift is
+   * nonlinear, so every step waits on the last and the rate is the clock's.
    */
   private static long compute(int n, long seed) {
     long acc = seed | 1;

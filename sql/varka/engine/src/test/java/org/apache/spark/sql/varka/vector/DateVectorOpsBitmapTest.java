@@ -104,8 +104,8 @@ public class DateVectorOpsBitmapTest {
   /**
    * Every lane group the vector loop can reach must be readable and writable inside a bitmap
    * sized to the batch and nothing more - including the batches under 57 rows whose bitmap is
-   * shorter than a single 64-bit word, which is precisely the range the old word-addressed
-   * helpers could not serve. A `MemorySegment` sized to {@code bitmapBytes(length)} throws on
+   * shorter than a single 64-bit word, which is precisely the range word-addressed helpers
+   * could not serve. A `MemorySegment` sized to {@code bitmapBytes(length)} throws on
    * any overrun, so reaching the end of the loop is the assertion.
    */
   @Test

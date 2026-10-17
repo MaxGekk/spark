@@ -59,9 +59,8 @@ import org.apache.spark.sql.execution.VarkaProjectExec;
  *       no-regression proof that an over-cap list keeps stock performance on the varka
  *       session.</li>
  *   <li>Anchor: the stock-shaped {@code SELECT COUNT(*) WHERE d IN (<n>)} filter at 5/50/200/500
- *       on both sessions, tying this file's list shapes to the upstream benchmark's. Until
- *       VARKA-21 all four anchors were unfused by design (Varka rewrote projections only); the
- *       in-cap anchor now runs the mask kernel and is guarded fused, while 50/200/500 stay
+ *       on both sessions, tying this file's list shapes to the upstream benchmark's. The in-cap
+ *       anchor runs the mask kernel and is guarded fused (VARKA-21), while 50/200/500 stay
  *       declined over the literal cap.</li>
  * </ul>
  *
@@ -164,7 +163,7 @@ public class VarkaInExpressionBenchmark extends VarkaSqlBenchmarkBase {
       requireDeclined(varka, "case-when IN, 50 literals", fusedQuery(50));
       runPair(baseline, varka, "case-when IN, 50 literals, declined (over the cap)",
           fusedQuery(50));
-      // VARKA-21 flipped the in-cap anchor: the filter itself now runs the mask kernel.
+      // The in-cap anchor: the filter itself runs the mask kernel (VARKA-21).
       requireFused(varka, "filter IN anchor, 5 literals", anchorQuery(5));
       runPair(baseline, varka, "filter IN anchor, 5 literals (fused since VARKA-21)",
           anchorQuery(5));

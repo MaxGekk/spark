@@ -46,9 +46,9 @@ import org.apache.spark.sql.execution.VarkaFilterColumnarToRowExec;
  *
  * <ul>
  *   <li>{@code SELECT d ... WHERE d < d2} - the losing shape. Two columns in the predicate, one
- *       wanted. Before VARKA-78 a Janino {@code Project [d]} sat above the row-producing Varka
- *       filter, and the node converted {@code d2} to a row as well, whose value that projection
- *       discarded.</li>
+ *       wanted. Without the rule's absorption (VARKA-78) a Janino {@code Project [d]} would sit
+ *       above the row-producing Varka filter, and the node would convert {@code d2} to a row as
+ *       well, whose value that projection discards.</li>
  *   <li>{@code SELECT d, d2 ... WHERE d < d2} - the same predicate and the same selectivity with
  *       nothing to narrow, so the projection is redundant and Spark removed it long before this
  *       rule ran. This is the control: it never had a residual projection to absorb, so it must
@@ -114,7 +114,7 @@ public class VarkaNarrowingBenchmark extends VarkaSqlBenchmarkBase {
    * The rung asserts the selectivity its name claims, before anything is timed. A benchmark
    * whose rungs are mislabelled still measures a real plan over real data, so nothing fails
    * and nothing looks wrong - it just answers a question other than the one on the label, and
-   * the label is what gets quoted. The first version of this file did exactly that.
+   * the label is what gets quoted.
    */
   private static void requireSelectivity(SparkSession session, String name, int pct) {
     double selected = session.sql(COUNTED).collectAsList().getFirst().getLong(0);

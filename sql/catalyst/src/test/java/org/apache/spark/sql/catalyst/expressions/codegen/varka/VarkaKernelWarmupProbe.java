@@ -50,7 +50,6 @@ import org.apache.spark.util.Utils;
  *       for each of the two batches;</li>
  *   <li>{@code VARKA_WARMUP_DONE=status=0}.</li>
  * </ul>
- * Java since VARKA-321.
  */
 public final class VarkaKernelWarmupProbe {
 

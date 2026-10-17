@@ -209,6 +209,28 @@
           </execution>
         </executions>
       </plugin>
+      <!--
+        The default lifecycle's remaining plugins, pinned at the versions Maven 3.9.16 binds by
+        default. Unpinned, their versions come from whichever Maven `build/mvn` downloads (the
+        root pom's maven.version), so this pom alone would not say what the build resolves.
+        Pinned, it does, and CI's cache of the engine's local Maven repository can be keyed on
+        this file's hash alone (.github/actions/install-varka-engine).
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-resources-plugin</artifactId>
+        <version>3.4.0</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.5.0</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-install-plugin</artifactId>
+        <version>3.1.4</version>
+      </plugin>
     </plugins>
   </build>
 </project>

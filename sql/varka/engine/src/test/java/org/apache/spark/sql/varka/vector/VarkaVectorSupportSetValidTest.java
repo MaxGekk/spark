@@ -28,8 +28,8 @@ import org.junit.jupiter.api.Test;
 /**
  * {@link VarkaVectorSupport#setValid} (VARKA-45), which is only useful if it is bit-exact.
  *
- * <p>The emitted dense path used to zero the bitmap and then OR lane-masked words into it, which
- * leaves the bits past {@code rows} in the final byte at zero. This sets them directly, and
+ * <p>Zeroing the bitmap and then ORing lane-masked words into it leaves the bits past
+ * {@code rows} in the final byte at zero. This sets the bits directly, and
  * {@code VarkaEmitterTestBase.assertSameOutput} compares dense against masked validity byte for
  * byte - so filling the whole last byte would be a difference the differential reports as a
  * failure. Everything here is about that last byte.

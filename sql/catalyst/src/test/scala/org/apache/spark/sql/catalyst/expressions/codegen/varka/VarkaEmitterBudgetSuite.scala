@@ -60,15 +60,14 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   test("calendar siblings over one date share a loop method; plain chains, other " +
       "dates and the ceiling keep them apart", PinsDefaults) {
-    // The budget's rule, which is what this pins: since VARKA-254 the prediction bounds groups by
-    // default, and the budget binds where it cannot and under groupBudgetUnderPrediction.
-    // VARKA-32.md 10.2's table, pinned by loop-method count. Before B2 this test asserted
-    // the opposite for the four fields - one method each, "whatever GROUP_BUDGET would say" -
-    // because a method of ~180 ops was believed to be a compile cliff. 7.5 measured that away
-    // and clause 2 of groupOutputs now admits an output that reuses a prefix the group already
-    // computes, up to FUSED_CEILING. Everything clause 2 does not admit keeps today's grouping,
-    // and that half is the guard: whether a merely-shared subchain pays to merge is
-    // GROUP_BUDGET's own question (VARKA-17 measured a loss, the file since VARKA-46 shows a win;
+    // The budget's rule, which is what this pins: the prediction bounds groups by default
+    // (VARKA-254), and the budget binds where it cannot and under groupBudgetUnderPrediction.
+    // VARKA-32.md 10.2's table, pinned by loop-method count. The four fields share one method:
+    // a method of ~180 ops is not a compile cliff (VARKA-32.md 7.5), and clause 2 of
+    // groupOutputs admits an output that reuses a prefix the group already computes, up to
+    // FUSED_CEILING. Everything clause 2 does not admit keeps the budget's grouping, and that
+    // half is the guard: whether a merely-shared subchain pays to merge is GROUP_BUDGET's own
+    // question (VARKA-17 measured a loss, the parity file has shown a win since VARKA-46;
     // VARKA-43 owns it), and B2 deliberately does not answer it.
     val col = new ColumnRef(0)
     val fields = Seq[VarkaVectorIR](
@@ -102,15 +101,15 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // third group instead of rejoining year(d). Adjacent, the same three outputs take two.
     assert(loops(Seq(new Year(col), new Year(new ColumnRef(1)), new Month(col)), 2, 0) === 3)
     assert(loops(Seq(new Year(col), new Month(col), new Year(new ColumnRef(1))), 2, 0) === 2)
-    // VARKA-58's debt closes on the way: weekofyear and yearofweek decompose the same shifted
-    // day, so they share a method now rather than only the epilogue.
+    // weekofyear and yearofweek decompose the same shifted day, so they share a method rather
+    // than only the epilogue (VARKA-58's debt).
     val shift = new ThursdayOf(col)
     assert(loops(Seq(new WeekOfYear(shift), new Year(shift)), 1, 0) === 1)
   }
 
   test("whole-node reuse groups what a wider budget would, and nothing else", PinsDefaults) {
-    // The budget's rule, which is what this pins: since VARKA-254 the prediction bounds groups by
-    // default, and the budget binds where it cannot and under groupBudgetUnderPrediction.
+    // The budget's rule, which is what this pins: the prediction bounds groups by default
+    // (VARKA-254), and the budget binds where it cannot and under groupBudgetUnderPrediction.
     // Clause 2 lets an output join a group past the budget when joining lets it skip work the
     // group already does. B2 wrote that for a civil-from-days prefix; `shareWholeNodes`
     // generalises it to any node the group holds, which is the same argument - a reused prefix
@@ -588,8 +587,8 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   test("int-lane divisions over four columns take a loop method each, and a subtraction from " +
       "one joins its division", PinsDefaults) {
-    // The budget's rule, which is what this pins: since VARKA-254 the prediction bounds groups by
-    // default, and the budget binds where it cannot and under groupBudgetUnderPrediction.
+    // The budget's rule, which is what this pins: the prediction bounds groups by default
+    // (VARKA-254), and the budget binds where it cannot and under groupBudgetUnderPrediction.
     // extract(YEAR FROM ym) over four year-month interval columns: the shape a single output
     // cannot show, since one division alone forms one group whatever it weighs. Two divisions
     // weigh 22 against GROUP_BUDGET's 16, so no two share a loop method.
@@ -629,41 +628,23 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // year(d) twice is one node and the emitter already emits it once. Four fields per date
     // over as many dates as the width needs is the shape VARKA-44 measured.
     //
-    // The unshared boundary has now moved three times, each for a different reason, which is
-    // why it is re-measured here rather than reasoned about: VARKA-44 recorded 16 fits/17
-    // crosses; VARKA-51 removed the per-extraction range guard, shrinking every emitted calendar
-    // prefix, shared or not, to 18 fits/19 crosses (see VARKA-51.md section 4.1 for the
-    // numbers that replaced); VARKA-48 lets a Year node's own prefix skip the March-month step,
-    // and unshared every Year node has its own prefix, so the epilogue's four-fields-per-date
-    // shape loses one month step per date - 19 fits/20 crosses; VARKA-54's Julian map takes a
-    // division stage out of every prefix, shared or not, so unshared 20 fits (7675 bytes) and
-    // 21 crosses (8336). Shared is still at 44 - 40 outputs fit in 7087 bytes and 44 cross at
-    // 8063, down from 8630 - because the epilogue holds every output, so each date's fragment
-    // has a Month consumer and keeps the month step, and the prefix it shares got shorter by
-    // the same amount for every date. The ladder is in VARKA-54.md section 9. The limit
-    // itself is HotSpot's HugeMethodLimit, past which it gives up on compiling the method at
-    // all (interpreted, boxed vectors, on every batch whose length is not a lane multiple).
+    // The boundary moves whenever a calendar prefix changes - VARKA-44, 51, 48, 54, 223 and 239
+    // each moved it, and their plans hold the numbers - which is why it is measured here rather
+    // than reasoned about. The limit itself is HotSpot's HugeMethodLimit, past which it gives up
+    // on compiling the method at all (interpreted, boxed vectors, on every batch whose length is
+    // not a lane multiple).
     def fields(dates: Int): Seq[VarkaVectorIR] = (0 until dates).flatMap { c =>
       val col = new ColumnRef(c)
       Seq[VarkaVectorIR](new Year(col), new Month(col), new DayOfMonth(col), new Quarter(col))
     }
     val limit = VarkaEmitBudget.HUGE_METHOD_LIMIT
-    // VARKA-70 (VARKA-70.md 9): with the bitmap pass on by default, every word in these
-    // methods is dead, so epilogueMasked is epilogueDense's bytes and the crossing is the
-    // dense epilogue's - unshared 21 fits (7563) and 22 crosses (8033); shared reached
-    // 49. The per-group arm keeps the old boundaries, asserted beside.
-    //
-    // VARKA-223's review (VARKA-223.md 9.4) moved both shared crossings and neither unshared
-    // one. Four fields share one prefix, which visits their date once, and the date had kept a
-    // slot for four uses, a dup and a store per date nothing read. With the slot gone, shared
-    // 50 fit (7984) and 51 cross (8065) under the pass, and 44 fit (7895) and 45 cross (8569)
-    // in the per-group arm. An unshared prefix visits its date for every field, so the slot was
-    // read there and nothing moved.
-    //
-    // VARKA-239's elided locals (VARKA-239.md 9.4) moved both crossings under the pass, where
-    // the epilogue no longer builds the validity segments the bitmap pass writes for it:
-    // unshared 23 fit (7948) and 24 cross (8416), shared 56 fit (7570) and 57 cross (8122). The
-    // per-group arm builds and writes them, so its boundaries stand.
+    // With the bitmap pass on by default (VARKA-70), every word in these methods is dead, so
+    // epilogueMasked is epilogueDense's bytes and the crossing is the dense epilogue's; and
+    // that epilogue does not build the validity segments the pass writes for it (VARKA-239).
+    // Unshared, 23 fit (7948) and 24 cross (8416); shared, 56 fit (7570) and 57 cross (8122).
+    // A shared prefix visits its date once and keeps no slot for it (VARKA-223); an unshared
+    // one visits it for every field, so the slot is read there. The per-group arm, which
+    // builds and writes the segments, crosses earlier, asserted beside.
     assert(singleEpilogueSize(fields(6).take(23), 12, unshared) < limit)
     assert(singleEpilogueSize(fields(6), 12, unshared) > limit)
     assert(singleEpilogueSize(fields(12), 12, sharing) < limit,
@@ -675,8 +656,7 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     assert(past > limit,
       s"57 shared calendar outputs now fit in $past bytes - the pass reaches " +
         "further than this test records, so the crossings above are stale")
-    // The reference variant: the boundaries VARKA-54 left, 20/21 unshared, and 45 shared since
-    // VARKA-223's review.
+    // The reference variant: 20 fit and 21 cross unshared, 44 fit and 45 cross shared.
     val perGroupUnshared = unshared.withValidityByBitmap(false)
     val perGroupShared = sharing.withValidityByBitmap(false)
     assert(singleEpilogueSize(fields(5), 12, perGroupUnshared) < limit)
@@ -687,12 +667,12 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   test("the driver stays under HugeMethodLimit on the output ladder, with the pass " +
       "on and off, and the pass costs the 48-output driver what prediction 6 said", PinsDefaults) {
-    // Nothing measured the driver before this task; it is one method for every output and the
-    // one method every batch runs. Measured before the work: 2409 bytes at 44 outputs against
-    // the epilogue's 8058, 2624 at 48 (VARKA-70.md 6.1). The pass adds about ten bytes
+    // The driver is one method for every output and the one method every batch runs. When the
+    // pass was designed it measured 2409 bytes at 44 outputs against the epilogue's 8058 of
+    // that time, and 2624 at 48 (VARKA-70.md 6.1). The pass adds about ten bytes
     // per served single-input output - one call with its operand pushes, less the zero it
     // replaces - so the 48-output driver was predicted under 500 bytes larger. These are the
-    // unrolled driver's sizes; the driver from a table (the default since VARKA-190) is its
+    // unrolled driver's sizes; the driver from a table (the default, VARKA-190) is its
     // calls alone and passes nothing per output.
     def fields(dates: Int): Seq[VarkaVectorIR] = (0 until dates).flatMap { c =>
       val col = new ColumnRef(c)
@@ -756,13 +736,14 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       new MakeDate(new Year(col), new Month(col), new LiteralSlot(k), true)
     }
     val limit = VarkaEmitBudget.HUGE_METHOD_LIMIT
-    // The form before VARKA-87, which is what crossed: the default splits the epilogue.
+    // The single-epilogue reference form, which is what crosses: the default splits the
+    // epilogue (VARKA-87).
     val single = VarkaMatrix.base.withMethodByteBudget(0)
     def size(n: Int, method: String): Int =
       VarkaEmitterTestSupport.codeSize(emitMulti(ladder(n), 1, n, single)._2, method)
     assert(size(12, "epilogueMasked") < limit && size(13, "epilogueMasked") > limit)
-    // The dense epilogue crossed at 14 until VARKA-239 elided the validity segments it never
-    // writes: 14 outputs now fit (7923) and 15 cross (8564).
+    // The dense epilogue does not build the validity segments it never writes (VARKA-239): 14
+    // outputs fit (7923) and 15 cross (8564).
     assert(size(14, "epilogueDense") < limit && size(15, "epilogueDense") > limit)
     val at16 = VarkaEmittedClass.measure(emitMulti(ladder(16), 1, 16, single)._2)
     at16.codeLength.asScala.filter(e => isLoop(e._1)).foreach { case (m, bytes) =>
@@ -776,10 +757,10 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   test("under the byte budget a loop method sets up only its group's outputs and literals, " +
       "and answers the same (VARKA-87, step 3a)", PinsDefaults) {
-    // VARKA-87.md 2.6.2: every loop method used to materialize the destination segments of
-    // every output in the kernel and load every literal, so a group's bytes grew with the whole
-    // kernel - the term a regroup could never shrink - and past 255 locals every load took a
-    // wide prefix. Under the switch the group sets up what it writes and reads. The op count
+    // VARKA-87.md 2.6.2: a loop method that materialized the destination segments of every
+    // output in the kernel and loaded every literal would grow with the whole kernel - the term
+    // a regroup could never shrink - and past 255 locals every load would take a wide prefix.
+    // Under the switch the group sets up what it writes and reads. The op count
     // is untouched by construction, the driver is untouched, and a kernel of one group has
     // nothing to drop, so its loop methods' bytes are identical. The epilogue is step 4's.
     def ladder(n: Int): Seq[VarkaVectorIR] = (0 until n).map { k =>
@@ -894,9 +875,8 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // one. The regroup is inside emit, so emitting twice is byte-identical, and the shape
     // cache sees one emission like any other.
     val roots = VarkaHugeMethodProbe.ladder(16)
-    // The recomputing arm, so the weights alone decide the first grouping. It was four groups
-    // until VARKA-254 recounted make_date (60 to 53) and the field tails, which fit a fifth rung
-    // under the fused ceiling.
+    // The recomputing arm, so the weights alone decide the first grouping: with make_date at 53
+    // and the field tails counted (VARKA-254), five rungs fit under the fused ceiling.
     val recompute = VarkaMatrix.base.withMaterializeChronoPrefix(false)
     val atLimit = recompute.withMethodByteBudget(VarkaEmitBudget.HUGE_METHOD_LIMIT)
     val split = recompute.withMethodByteBudget(1500)
@@ -1077,7 +1057,7 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // Four depth-three trees of the family, each under the cap alone, in one group by a group
     // budget past their weight: their one loop method is refused, the group is split, and the
     // class builds with two loop methods each under the cap. A fix that declined on the refusal
-    // without regrouping would fail here, as does the JDK's exception before VARKA-219. The
+    // without regrouping would fail here, as would reading the JDK's exception as a fit. The
     // byte budget is the cap itself, so that the form is the per-group one - the legacy form's
     // single epilogue would be refused too, and no regroup shrinks it - and the split is the
     // refusal's alone: under the production budget the halves would decline on it as any
@@ -1279,8 +1259,7 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // Split at the middle: the first group computes the prefix and stores it for the second
     // (VARKA-198), the second loads it in place of the decomposition.
     val split = emitMulti(tails(22), 1, 22, measured)._2
-    // The second group read 42 sites until VARKA-239, which reloads only the prefix vectors its
-    // tails read (VARKA-239.md 9.4).
+    // The second group reloads only the prefix vectors its tails read (VARKA-239.md 9.4).
     assert(loopSites(split) === Seq("loopDense0" -> 71, "loopDense1" -> 40), loopSites(split))
     // Forty-eight tails: one group of 177 halves to 24 and 24; the first, with its stores, is
     // still over and halves again; the second loads the prefix and fits.
@@ -1322,7 +1301,7 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       bodies(emitMulti(ladder(12), 1, 12, off)._2), "the ladder is left as it was")
     val pair = loopSites(emitMulti(ladder(2), 1, 2,
       measured.withHeavyGroupOutputs(0))._2)
-    // The consumer loaded 68 sites until VARKA-239 trimmed its reloads to what it reads.
+    // The consumer reloads only what it reads (VARKA-239).
     assert(pair === Seq("loopDense0" -> (93 + Analysis.SCRATCH_VECTORS), "loopDense1" -> 66),
       pair)
     def tree(lo: Int, hi: Int): VarkaVectorIR =
@@ -1413,8 +1392,8 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   test("the call-site budget regroups only the corpus shapes with a wide group method over it, " +
       "and leaves every other shape's bytes unchanged, at both lanes (VARKA-209)", PinsDefaults) {
-    // The budget's rule, which is what this pins: since VARKA-254 the prediction bounds groups by
-    // default, and the budget binds where it cannot and under groupBudgetUnderPrediction.
+    // The budget's rule, which is what this pins: the prediction bounds groups by default
+    // (VARKA-254), and the budget binds where it cannot and under groupBudgetUnderPrediction.
     // Prediction 2 of VARKA-209.md 6.1, read as bytes rather than time: a shape whose group
     // methods are all under the budget with it off emits byte for byte the same with it on,
     // since the budget only ever adds a forced start once a method measures over it - and so

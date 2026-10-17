@@ -236,10 +236,10 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession with VarkaT
     val numBatches = 8
     val rowsPerBatch = 512
     // Every fourth row is null, so the always-true predicate below selects 384 of 512 rows
-    // and the batch takes the *compacting* path. This used to be all-selected, which was fine
-    // until VARKA-24 taught that case to forward the child's columns instead - after which an
-    // all-selected run of this test would cover forwarding (which has its own test) and leave
-    // the compaction's allocation and release, the thing this test exists for, unexercised.
+    // and the batch takes the *compacting* path. An all-selected batch forwards the child's
+    // columns instead (VARKA-24), so an all-selected run of this test would cover forwarding
+    // (which has its own test) and leave the compaction's allocation and release, the thing
+    // this test exists for, unexercised.
     val selectedPerBatch = (0 until rowsPerBatch).count(_ % 4 != 3)
     val specs = (0 until numBatches).map { b =>
       BatchSpec("arrow", Seq((0 until rowsPerBatch).map(i =>
@@ -469,7 +469,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession with VarkaT
         FilterExec(shortResidual,
           VarkaFilterColumnarToRowExec(dLess10, child,
             wholeCondition = Some(And(dLess10, shortResidual)))))
-      // The residual filter the pre stage left above a (now fused) Varka filter is not
+      // The residual filter the pre stage left above a fused Varka filter is not
       // touched again: its child is a row node.
       val residualOverFused = FilterExec(shortResidual,
         VarkaFilterColumnarToRowExec(dLess10, child))
@@ -511,10 +511,10 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession with VarkaT
   }
 
   test("a narrowing projection keeps the columnar path through the pre stage") {
-    // The bug row 145 was opened on: `SELECT i2 FROM t WHERE i > k` fuses nothing in its
-    // projection, so before this arm the only node that could narrow was the filter's to-row
-    // node, and a consumer that wanted batches was handed rows anyway. The pre stage now
-    // builds the same pair `columnarSibling` builds, so the plan stays columnar to the sink.
+    // Row 145's shape: `SELECT i2 FROM t WHERE i > k` fuses nothing in its projection, so
+    // without this arm the only node that could narrow would be the filter's to-row node, and
+    // a consumer that wanted batches would be handed rows anyway. The pre stage builds the
+    // same pair `columnarSibling` builds, so the plan stays columnar to the sink.
     val child = TestColumnarBatchPlan(Nil, Seq(attrD, intAttr))
     withSQLConf(SQLConf.VARKA_ENABLED.key -> "true") {
       val plan = ProjectExec(Seq(intAttr), FilterExec(dLess10, child))

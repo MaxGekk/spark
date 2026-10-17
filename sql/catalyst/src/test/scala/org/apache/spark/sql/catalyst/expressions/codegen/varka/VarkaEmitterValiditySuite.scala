@@ -291,9 +291,9 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // make_date: its own word is demanded unconditionally, because its guard reads it, so the
     // fault kills it and the guard's load is refused - the same direction as above, on the one
     // node that reaches its word through neither the AND family nor a root write. Pinned
-    // because that arm read its slot directly until this task's review: a raw load reaches no
-    // refusal at all, and the emission died in the class-file writer with an invalid local
-    // index instead, which is not what this injector is documented to raise.
+    // because an arm that read its slot directly would reach no refusal at all, and the
+    // emission would die in the class-file writer with an invalid local index instead, which
+    // is not what this injector is documented to raise.
     val makeDate = new MakeDate(new Year(d), new Month(d), new DayOfMonth(d), false)
     val guardLoad = intercept[IllegalStateException] {
       emitMulti(Seq[VarkaVectorIR](makeDate), 1, 0, fault)
@@ -308,8 +308,8 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   test("a group that loads a materialized prefix keeps no word for a guard it does not emit",
       PinsDefaults) {
-    // The budget's rule, which is what this pins: since VARKA-254 the prediction bounds groups by
-    // default, and the budget binds where it cannot and under groupBudgetUnderPrediction.
+    // The budget's rule, which is what this pins: the prediction bounds groups by default
+    // (VARKA-254), and the budget binds where it cannot and under groupBudgetUnderPrediction.
     // Two outputs that decompose one guarded date in different loop-method groups: the first
     // computes the prefix and stores it for the second, which loads it and emits neither the date
     // nor the range check of the guard over it - the first group ran that check over the same
@@ -397,8 +397,8 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     val nullFree = Seq(Seq[Int => Boolean](_ => false))
     val lengths = Seq(1, 7, 8, 9, 15, 16, 17, 63, 64, 65, 1000, 4095)
     // Days that stay inside the narrowed range at every index these lengths reach.
-    // `calendarDays` walks out of it past about index 1180 (i * 9973 - 400000), and since task
-    // 51 removed the per-extraction guard an out-of-range day no longer declines - it returns a
+    // `calendarDays` walks out of it past about index 1180 (i * 9973 - 400000), and with no
+    // per-extraction guard (VARKA-51) an out-of-range day does not decline - it returns a
     // plausible wrong year. That is a real hazard, but it is VARKA-52's, and a validity test
     // that trips over it is testing the wrong thing.
     def inRangeDays(c: Int, i: Int): Int = 19000 + (i % 9973)
@@ -455,10 +455,10 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // The emitter knows the lane count when it writes the bytes, so the callee can carry it and
     // the four-arm switch on the width disappears from the call. Asserted on the names in the
     // class rather than on a timing, and by exact match: "orValidityBitsAt" is a prefix of
-    // "orValidityBitsAt16", so a substring test would pass on the form this task removes.
+    // "orValidityBitsAt16", so a substring test would pass on the unspecialised form.
     val roots = Seq[VarkaVectorIR](new Year(new ColumnRef(0)))
     for ((lanes, bits) <- Seq(2 -> 64, 4 -> 128, 8 -> 256, 16 -> 512)) {
-      // Since VARKA-70 the shipped year(d) makes no per-group validity call at all - its
+      // The shipped year(d) makes no per-group validity call at all (VARKA-70) - its
       // bitmap is copied once by the driver - so the helpers this test names are reached
       // through the per-group reference variant, which is what the naming is pinned on.
       val bytes = emitMulti(roots, 1, 0,
@@ -483,7 +483,7 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // 32 int lanes is a 1024-bit shape: SVE reaches it, the Vector API has no named species
     // constant for it, and VarkaVectorSupport has no pair. The fallback is what keeps such a
     // machine correct, so it is emitted and asserted rather than reasoned about.
-    // The per-group reference arm since VARKA-70: the shipped year(d) makes no per-group
+    // The per-group reference arm (VARKA-70): the shipped year(d) makes no per-group
     // validity call, and it is the general pair's naming this test pins.
     val bytes = emitMulti(Seq[VarkaVectorIR](new Year(new ColumnRef(0))), 1, 0,
       VarkaMatrix.base.withLanesOverride(32).withValidityByBitmap(false))._2
@@ -496,8 +496,8 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   test("with the option off the emission is the pre-task form", PinsDefaults) {
     // The A/B's other arm, and the reference variant: no width anywhere - not in a callee name
-    // and not in the species - so what the benchmark compares against is what shipped before.
-    // Both of VARKA-46's arms are reached through VARKA-70's per-group reference arm now.
+    // and not in the species - which is what the benchmark compares against. Both of VARKA-46's
+    // arms are reached through VARKA-70's per-group reference arm.
     val bytes = emitMulti(Seq[VarkaVectorIR](new Year(new ColumnRef(0))), 1, 0,
       VarkaMatrix.base.withValidityByWidth(false).withValidityByBitmap(false))._2
     val called = VarkaEmitterTestSupport.invokedNames(bytes, support).asScala
@@ -795,9 +795,9 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase with VarkaOwnJvm {
   test("the validity OR before the compute answers what the OR after it answered") {
     // The order moved so C2 meets the OR helper before the body's intrinsics have spent its
     // node budget; the bytes are the same either way and the results must be. The second root
-    // is the shape that caught the first version of this: a Year over an IfElse, whose word
-    // aliases the blend's *computed* slot and so is not known before the compute - reading it
-    // early was a frame with no such local, and the verifier said so. Both settings, every
+    // is the shape that catches a premature read: a Year over an IfElse, whose word aliases
+    // the blend's *computed* slot and so is not known before the compute - reading it early is
+    // a frame with no such local, and the verifier says so. Both settings, every
     // null pattern, lengths with a partial last byte, the masked path forced. Not length 1:
     // forcing the masked path sets the null count to 1, and a null count equal to the length is
     // the all-null column by the harness's own contract (validity address 0L), which the oracle

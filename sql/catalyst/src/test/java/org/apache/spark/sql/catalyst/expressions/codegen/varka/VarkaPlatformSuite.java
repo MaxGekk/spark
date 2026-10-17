@@ -223,8 +223,8 @@ public final class VarkaPlatformSuite {
         observed(LaneType.LONG, History.RELEASED, false, true, INTERPRETED, OSR1)));
     assertEquals(List.of("history not reached: released, no case of the LONG lane was entered by "
         + "an on-stack replacement in 2 batches"), noOsr);
-    // A lane whose warm-ups never settled has not reached the history: the rule used to pass for
-    // want of a settled case, which is how an arm with the intrinsics off read as proven.
+    // A lane whose warm-ups never settled has not reached the history: a rule that passed for
+    // want of a settled case would read an arm with the intrinsics off as proven.
     var unconfirmed = VarkaCompiledCheck.notReached(Tier.C2, List.of(
         observed(LaneType.INT, History.WARM_SAME, false, true, AT_C2_AFTER)));
     assertEquals(1, unconfirmed.size(), unconfirmed.toString());
