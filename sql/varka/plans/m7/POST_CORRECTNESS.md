@@ -100,15 +100,15 @@ kernel splits a 32-bit value into two 15-bit digits:
 
 The proofs found two things. The usual recipe for magic numbers, from Hacker's Delight, does not
 always meet the theorem it is justified by: for 327,741,950 of the 32-bit divisors, its shift is
-too small for Granlund and Montgomery's condition. The first is 196,611, whose multiplier and
-shift exceed the theorem's bound by three. The numbers are still exact, for a different reason,
-and no divisor Varka uses was affected; Varka now asserts the theorem and raises the shift where it
-fails. The second find was an assumption about data. A date column was assumed to hold years 1 to
-9999, so `year(d)` ran with no guard. Spark can store any 32-bit day, and past a day in the year
-42400 the date decoding leaves the range it is proven for. Run over a cached table, the kernel
-returned a day of the month of 2 where Spark returns 1. The fix, since merged, makes the assumption a
-check inside the kernel's loop and declines the batch past it. The proofs run in about 14 minutes
-of every nightly; the slowest file takes Z3 28 seconds.
+too small for Granlund and Montgomery's condition. The first is 196,611, whose multiplier and shift
+exceed the theorem's bound by three. The numbers are still exact, for a different reason, and no
+divisor Varka uses was affected; Varka now asserts the theorem and raises the shift where it fails.
+The second find was an assumption about data. A date column was assumed to hold years 1 to 9999, so
+`year(d)` ran with no guard. Spark can store any 32-bit day, and past a day in the year 42400 the
+date decoding leaves the range it is proven for. Run over a cached table, the kernel returned a day
+of the month of 2 where Spark returns 1. The fix, since merged, makes the assumption a check inside
+the kernel's loop and declines the batch past it. The proofs run in about 14 minutes of every
+nightly; the slowest file takes Z3 28 seconds.
 
 Where it stops: the proofs cover arithmetic. The bytecode around it, null masks, validity bits,
 how outputs are split into methods, the tail of a batch, is not proven, and that is where Varka's
