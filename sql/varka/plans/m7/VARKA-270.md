@@ -209,3 +209,7 @@ new figure (`fig51.py`, from `figures/data/defects-by-method.tsv`, which names t
 each chip), where the checking stops, and the files behind the post as repository links. The body
 is about 3,300 words, the examples most of the growth over 10.1's 1,900; the owner read it and
 approved it at that length.
+
+Later the same evening #874 merged too, with `weekofyear`'s 4.6% accepted by the owner, so row 379
+is done in this milestone as well; the post's sentence on it now says the fix is merged, and the
+page was republished a third time.
