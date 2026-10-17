@@ -123,7 +123,8 @@ public final class VarkaRangeAnalysis {
    * not a fact about the data - Spark stores any int32 day count, and a cached column can hold
    * one - but a check: an answer that rests on it reports the column, the compiler notes the bound
    * against that input, and {@link #guardColumns} wraps the column in a {@link GuardedRange} over
-   * it, so the kernel declines a batch with a live day outside it to the row engine (VARKA-379).
+   * it, so the kernel declines a batch holding a day outside it to the row engine, a day stored
+   * under a null row included ({@code Analysis.guardsStoredValues}, VARKA-379).
    * Until VARKA-379 it was assumed and never checked, and a calendar field over a cached column
    * holding a far day was served wrong.
    */
@@ -323,9 +324,10 @@ public final class VarkaRangeAnalysis {
   /**
    * {@code node} with every use of a date column in {@code slots} read through a
    * {@link GuardedRange} over {@link #CONTRACT}: the in-kernel check of the column bound, for the
-   * columns an entry's admission rested on (VARKA-379). The guard compares the vector the kernel
-   * loads anyway, in the loop and the tail of both bodies, and its status declines the batch, so
-   * the bound costs no pass of its own over the column.
+   * columns an entry's admission rested on (VARKA-379). The guard reads the vector the kernel
+   * loads anyway, in the loop and the tail of both bodies - a min and a max in the loop, compared
+   * once after it - and its status declines the batch, so the bound costs no pass of its own over
+   * the column and no read of its validity.
    *
    * <p>Two uses are left bare. An {@link IsNotNull}'s column, whose validity is all it reads and
    * which must stay a column ({@code Analysis}). And a column in a restricted operand position

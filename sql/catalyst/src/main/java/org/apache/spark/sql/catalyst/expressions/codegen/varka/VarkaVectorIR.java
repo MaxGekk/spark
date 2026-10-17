@@ -306,7 +306,9 @@ public sealed interface VarkaVectorIR
    * check over on the strength of the column bound ({@code VarkaRangeAnalysis.CONTRACT}): the
    * compiler wraps each such column in this node over that bound
    * ({@code VarkaRangeAnalysis.guardColumns}), so a batch holding a day the lowering is not exact
-   * over goes to the row engine, which computes it (VARKA-379).
+   * over goes to the row engine, which computes it (VARKA-379). That use reads the column's stored
+   * days, null rows included, and folds them into a min and a max in a loop
+   * ({@code Analysis.guardsStoredValues}); every other use checks live lanes by compares.
    *
    * <p>The bounds are part of the node, for the reason {@link GuardedDay}'s placement is: two
    * plans with the same tree and different bounds must not share a kernel, and the shape key
