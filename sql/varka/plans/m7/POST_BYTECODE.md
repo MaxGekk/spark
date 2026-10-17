@@ -88,8 +88,9 @@ Spark caches generated classes by their source text, and some literals are writt
 text. A dashboard that reruns `date_add(d, 7)` as `date_add(d, 30)` gets a new string, so a new
 Janino compile, so a new class that the JIT starts again from the interpreter. Spark already
 avoids this for strings, decimals and binary values, which it passes to the class as references
-instead of writing them into the text. [Link to row 258's post, which measures what the extra
-compiles cost on Spark, when it is published.]
+instead of writing them into the text. [How Spark compiles a query, and why it compiles it
+again](https://vecbricks.github.io/how-spark-compiles-a-query/) measures what the extra compiles
+cost on Spark.
 
 Varka's emitter takes a tree with every constant replaced by a slot. `date_add(d, 7), year(d)`
 and `date_add(d, 30), year(d)` are one shape with one hash, and run on one class with a different

@@ -1,0 +1,36 @@
+Output of literals.scala (--master local[1]) on stock Spark, by run.sh.
+commit:  7be6584f988
+java:    openjdk version "25.0.4.1" 2026-08-18
+spark:   4.2.0
+
+### Classes compiled per query: a query, then a new value of each type
+query                classes  compiled
+int, first                3   GeneratedIteratorForCodegenStage1 (driver), SpecificPredicate (task), GeneratedIteratorForCodegenStage1 (task)
+    SELECT count(*) FROM t WHERE i = 5
+int, the same again       0
+    SELECT count(*) FROM t WHERE i = 5
+int, new value            3   GeneratedIteratorForCodegenStage1 (driver), SpecificPredicate (task), GeneratedIteratorForCodegenStage1 (task)
+    SELECT count(*) FROM t WHERE i = 6
+bigint, new value         3   GeneratedIteratorForCodegenStage1 (driver), SpecificPredicate (task), GeneratedIteratorForCodegenStage1 (task)
+    SELECT count(*) FROM t WHERE l = 6
+double, new value         3   GeneratedIteratorForCodegenStage1 (driver), SpecificPredicate (task), GeneratedIteratorForCodegenStage1 (task)
+    SELECT count(*) FROM t WHERE x = 6.5
+decimal, new value        0
+    SELECT count(*) FROM t WHERE m = 6.25
+date, new value           3   GeneratedIteratorForCodegenStage1 (driver), SpecificPredicate (task), GeneratedIteratorForCodegenStage1 (task)
+    SELECT count(*) FROM t WHERE d = DATE'2020-01-07'
+timestamp, new value      3   GeneratedIteratorForCodegenStage1 (driver), SpecificPredicate (task), GeneratedIteratorForCodegenStage1 (task)
+    SELECT count(*) FROM t WHERE ts = TIMESTAMP'1970-01-01 00:00:06'
+string, new value         0
+    SELECT count(*) FROM t WHERE s = '6'
+int parameter, new        3   GeneratedIteratorForCodegenStage1 (driver), SpecificPredicate (task), GeneratedIteratorForCodegenStage1 (task)
+    SELECT count(*) FROM t WHERE i = :p   (:p = 8)
+int parameter, newer      3   GeneratedIteratorForCodegenStage1 (driver), SpecificPredicate (task), GeneratedIteratorForCodegenStage1 (task)
+    SELECT count(*) FROM t WHERE i = :p   (:p = 9)
+string parameter, new     0
+    SELECT count(*) FROM t WHERE s = :p   (:p = 8)
+string parameter, newer   0
+    SELECT count(*) FROM t WHERE s = :p   (:p = 9)
+int column, string value  3   GeneratedIteratorForCodegenStage1 (driver), SpecificPredicate (task), GeneratedIteratorForCodegenStage1 (task)
+    SELECT count(*) FROM t WHERE i = :p   (:p = 10)
+### Spark 4.2.0, Java 25.0.4.1
