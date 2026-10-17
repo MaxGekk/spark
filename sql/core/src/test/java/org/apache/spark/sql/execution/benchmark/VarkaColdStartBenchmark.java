@@ -368,9 +368,14 @@ public class VarkaColdStartBenchmark extends VarkaSqlBenchmarkBase {
 
   @Override
   public void runBenchmarkSuite(String[] mainArgs) {
-    // These arms own their Arrow-backed sessions, as the ladder's do; the default session, with
-    // the default cache serializer, is never made.
+    // These arms own their Arrow-backed sessions, as the ladder's do. The default session is made
+    // and stopped first all the same, so that the arms join the JVM's second SparkContext, after
+    // one has loaded and run the classes a context starts with: what a first query costs depends
+    // on what the JVM has loaded and compiled before it, and the committed results were measured
+    // from that state, which Scala's SqlBasedBenchmark made as the benchmark object loaded.
     stopLeftoverSessions();
+    spark().stop();
+    clearSessions();
     SparkSession baseline = VarkaArrowSessions.createSession(
         "VarkaColdStart-vanilla", false, false, "local[1]");
     clearSessions();
