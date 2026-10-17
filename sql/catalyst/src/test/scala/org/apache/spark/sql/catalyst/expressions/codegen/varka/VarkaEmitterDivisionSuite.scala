@@ -668,6 +668,18 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       emitMulti(Seq(new ConstDivide(new GuardedRange(col, -1000L, 1000L), 60, 1000L)), 1, 0))
     assert(short.getMessage.contains("the guard below it admits"), short.getMessage)
     emitMulti(Seq(new ConstDivide(new GuardedRange(col, -1000L, 1000L), 60, 1001L)), 1, 0)
+    // What the guard admits is its wider endpoint's magnitude, on either side, and a guard from
+    // Long.MIN_VALUE, whose magnitude no long holds, admits every dividend there is.
+    for ((lo, hi) <- Seq((-1000L, 5L), (-5L, 1000L))) {
+      val oneSided = intercept[IllegalArgumentException](
+        emitMulti(Seq(new ConstDivide(new GuardedRange(col, lo, hi), 60, 1000L)), 1, 0))
+      assert(oneSided.getMessage.contains("is under 1000 and the guard below it admits 1000:"),
+        oneSided.getMessage)
+    }
+    val fromMin = intercept[IllegalArgumentException](emitMulti(
+      Seq(new ConstDivide(new GuardedRange(col, Long.MinValue, 0L), 60, bound)), 1, 0))
+    assert(fromMin.getMessage.contains(s"the guard below it admits ${Long.MaxValue}:"),
+      fromMin.getMessage)
     // And a divisor the int lane cannot hold is a mistake in the tree rather than a division
     // whose every quotient is zero.
     val tooWide = intercept[IllegalArgumentException](
