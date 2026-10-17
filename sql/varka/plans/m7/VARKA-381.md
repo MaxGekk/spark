@@ -233,7 +233,10 @@ Six JVMs, one per seed and arm, four pinned cores each, 50,000 compositions at s
 are the nightly's `sparkfuzz` step as it runs today (`-Dvarka.sparkfuzz.nested=false`) on this
 branch; the other three draw the nested trees, on this branch merged with `varka-380` in a scratch
 worktree that was never committed or pushed, since row 380's fix is what lets the nightly draw
-them again.
+them again. The census ran the test classes of `e3efbf17f4e` (this branch at base `c378cd4093d`);
+the merge of `varka-298` up to `509bd978907`, which brings master's changes to the compiler, came
+after it and is checked by the suites' runs (the 200-composition run among them) only. The
+timings of 9.3 #3 are of the same classes.
 
 | | without nested trees (this branch) | with nested trees (this branch and row 380) |
 |---|---|---|
@@ -304,4 +307,10 @@ warm-up sequence over one partition.
 ### 9.5 Left for later
 
 * The two findings of 9.2, for the owner to make rows.
+* **One place a finding's appearance, not its verdict, can still depend on the race.** An
+  unlisted condition seen over two partitions is kept (finding 1 above) as `at two partitions
+  only, unexpected error condition ...`, but whether it shows at all depends on whether its task
+  failed before a task raising a listed condition in the other partition, and its replay needs
+  the same race. Dropping it was worse: an unlisted condition is a finding whichever task raised
+  it. With the warmed arm's Varka-only raise (9.4), these are the two residues.
 * The calibration entry for 6.1 #3 (`skills/calibration/`).
