@@ -352,7 +352,8 @@ option matrix over the guard-relevant configurations: `exactRefusalStatus=true` 
 `guardUnderArm=false` pass; `methodByteBudget=0` fails two tests whose IR is built by hand and
 never reaches the compiler - `VarkaKernelPlanSuite`'s shared trace over 300 `date_add` nodes, which
 that configuration's 64-op cap refuses, and `VarkaEmitterChronoSuite`'s scratch refusal over
-`year` and `month` of a bare column - so neither rests on this change.
+`year` and `month` of a bare column - so neither rests on this change, and master's scheduled
+option matrix of 11 October (run 38129966925) failed the same two in that configuration.
 
 **Left open.** A far-day decline is counted under the value-range reason, beside the `TIME`
 family's range guards, rather than a reason of its own; the kernel cannot tell the two apart

@@ -37,8 +37,8 @@ import org.apache.spark.sql.execution.VarkaMaybeThrows.Answered
  * answer here is Spark's - from the kernel where the batch is inside the bound, from the row
  * engine after a declined batch where it is not. The fixture's views hold one batch, which with
  * the null row's masked body and the dense body without it puts every day through both bodies'
- * tails; `VarkaColumnBoundGuardSuite` (catalyst) drives the full lane groups, both widths and
- * split methods below the evaluator.
+ * tails; `VarkaGuardEdgeSuite` (catalyst) drives the guard in full lane groups, the tail and split
+ * methods below the evaluator.
  *
  * The shapes are every row of `sql/varka/coverage.json` over the date, int and year-month
  * columns, so a calendar row added to the table is run here with no change to this file, and the
