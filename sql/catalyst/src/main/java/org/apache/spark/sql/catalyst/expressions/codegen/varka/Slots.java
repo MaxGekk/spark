@@ -167,7 +167,7 @@ final class Slots {
    * that is what this set decides. A wider scope - the body's whole output list, which is
    * every output of the kernel, since {@link #plan} walks them all - would keep the
    * month step in a {@code year(d)} loop method merely because {@code month(d)} is another
-   * output emitted by a different method, which is the elision this task exists for.
+   * output emitted by a different method, which is the elision this set exists for.
    *
    * <p>Reading the map rather than the node being emitted is what makes the decision
    * order-independent under sharing: whichever sibling emits the prefix first, it emits the
@@ -225,7 +225,7 @@ final class Slots {
    * one {@code long} accumulator per output whose validity this body writes a word at a time, or
    * {@code -1} for an output that keeps the per-lane-group read-modify-write. Null in every body
    * that does not word-write at all, which is what keeps such a body's slot numbering - and so
-   * its bytes - exactly what it was before this task.
+   * its bytes - the same as if word writes did not exist.
    */
   int[] validityAcc;
 
@@ -374,27 +374,17 @@ final class Slots {
    * op) shares that child's reference instead of recomputing it. Per-node slots are planned
    * only for the body roles that emit them - the vector-walk slots for a loop or epilogue
    * method, neither for the driver, which runs only the shared prologue.
-   */
-  static Slots plan(boolean dense, BodyMode mode, List<VarkaVectorIR> outputs,
-      List<Integer> outputIdx, Analysis analysis, int numLiterals) {
-    return plan(dense, mode, outputs, outputIdx, analysis, numLiterals, false);
-  }
-
-  /**
-   * As above; with {@code perGroup} the body gets slots only for the outputs in {@code outputIdx}
+   *
+   * <p>With {@code perGroup} the body gets slots only for the outputs in {@code outputIdx}
    * and the literals their trees reference, and every other output or literal slot is {@code -1}
    * so that an emission which reaches for one fails to build rather than reading a stale local.
    * A group's loop and epilogue methods plan this way (VARKA-87): setting up every output of the
    * kernel in every group was the term that grew each group's methods with the whole kernel
    * ({@code VARKA-87.md} 2.6.2). The driver keeps planning for every output, since it
-   * zeroes and serves them all.
+   * zeroes and serves them all. {@code group} is the loop-method group whose loop or epilogue
+   * method this plans, or {@code -1} for the driver and for the single epilogue of the form
+   * without a byte budget.
    */
-  static Slots plan(boolean dense, BodyMode mode, List<VarkaVectorIR> outputs,
-      List<Integer> outputIdx, Analysis analysis, int numLiterals, boolean perGroup) {
-    return plan(dense, mode, outputs, outputIdx, analysis, numLiterals, perGroup, -1);
-  }
-
-  /** As above, for the loop or epilogue method of loop-method group {@code group}. */
   static Slots plan(boolean dense, BodyMode mode, List<VarkaVectorIR> outputs,
       List<Integer> outputIdx, Analysis analysis, int numLiterals, boolean perGroup,
       int group) {
@@ -857,7 +847,7 @@ final class Slots {
    * slack propagates upward through every parent that ANDs with the pick's slot. So an owner
    * that is a node's own word constrains the algebra not at all - not even by operator: two
    * operands with different owners can have equal expressions, and then a pick's {@code l | r}
-   * folds to an AND, which is what the fuzzer found the first version of this check refusing -
+   * folds to an AND, which the fuzzer found a check by operator refusing -
    * while an owner that is an input or the constant must be exactly what the algebra says, and
    * a computed word can never be either. What this leaves unchecked - an arm whose
    * {@code pureOf} rule was changed to the wrong operator - produces a wrong bitmap, which
@@ -1370,17 +1360,16 @@ final class Slots {
    * them to it), but known before any slot is numbered, which is what lets {@link #bodyUses} count
    * a fragment's visits with the key the lowering shares it by.
    *
-   * <p>The word's presence in the key is now conservative rather than load-bearing, and the reason
-   * recorded here no longer applies: {@code emitChronoPrefix} once carried the narrow-range guard,
-   * which read the node's validity word, so two nodes with different words could not share a
-   * prefix. The prefix reads no word at all today, so keying on the word cannot make a shared
-   * fragment wrong - it can only miss a share that would have been sound.
+   * <p>The word's presence in the key is conservative rather than load-bearing: the prefix reads
+   * no validity word at all, so keying on the word cannot make a shared fragment wrong - it can
+   * only miss a share that would be sound. It would be load-bearing for a prefix that read the
+   * node's word, as a range guard inside the prefix would.
    *
    * <p>It costs one, and that starts to show where {@code planWordRef} aliases every {@link Chrono}
    * extraction's word to its child's, so {@code year(d)} and {@code month(d)} agree and share, but
    * {@link AddMonths} 's word is the AND of the date's and the month count's, so a column-count
-   * {@code add_months(d, m)} is the first chrono node whose word is its own - and it no longer
-   * shares the forty-odd-op decomposition of {@code d} with {@code month(d)}. Only a masked body
+   * {@code add_months(d, m)} is the first chrono node whose word is its own - and it does not
+   * share the forty-odd-op decomposition of {@code d} with {@code month(d)}. Only a masked body
    * pays: in a dense body no word is planned at all and the child alone decides. Dropping
    * {@code word} from the key would recover the share, and is safe as far as this analysis goes,
    * but it changes emitted bytes and so wants its own measurement.
@@ -1414,7 +1403,7 @@ final class Slots {
       if (!seen.add(node)) {
         continue;
       }
-      // Without the switch the key is computed for month readers alone, as before VARKA-239.
+      // Without the switch the key is computed for month readers alone (VARKA-239's reference).
       if (isChrono(node) && (elide || tailReadsMarchMonth(node))) {
         int reads = (tailReadsMarchMonth(node) ? READS_MONTH : 0)
             | (elide ? VarkaChronoLowering.prefixReads(node, analysis.options) : 0);

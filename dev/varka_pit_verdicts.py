@@ -1,0 +1,324 @@
+#!/usr/bin/env python3
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+"""The three verdicts of a bounded mutation run (VARKA-265), from dev/varka_pit.sh's two runs.
+
+  dev/varka_pit_verdicts.py BEHAVIOURAL.xml BYTES.xml REPORT.md [--notes NOTES.tsv]
+  dev/varka_pit_verdicts.py --shards DIR REPORT.md [--notes NOTES.tsv]
+  dev/varka_pit_verdicts.py --keep BEHAVIOURAL.xml KEEP.tsv
+  dev/varka_pit_verdicts.py BEHAVIOURAL.xml BYTES.xml REPORT.md --only KEEP.tsv [--notes ...]
+
+BEHAVIOURAL.xml is PIT's mutations.xml from the run of every eligible suite but the bytes
+oracle, BYTES.xml from the run of VarkaEmittedBytesSuite alone, over the same classes and
+mutators. A mutant is
+
+* killed by a behavioural test when the first run killed it (a timeout or a crashed minion counts,
+  as PIT counts it, and the report says how many were);
+* killed only by the bytes oracle when the first run did not and the second did: the bytes moved
+  and no answer did, which is read as a survivor, since the oracle kills equivalent mutants too;
+* survived otherwise, with no test covering it or with every covering test passing.
+
+A mutant PIT could not load (`NON_VIABLE`) is left out, and a run with a mutant not started or not
+finished is refused.
+
+--shards joins a sharded run (dev/varka_pit.sh --shard K/N, as .github/workflows/varka-mutation.yml
+runs it): DIR holds one directory per shard, each a dev/varka_pit.sh --out directory with its two
+runs' mutations.xml, its `shard` file and its `scope`. The join is refused when a shard of the N is
+missing or doubled, when the shards' scopes differ, or when a mutant is in two shards; the report is
+then the one an unsharded run over the same scope writes.
+
+A mutant is the same in both runs when its class, method, descriptor, mutator and instruction
+indexes agree, which PIT derives from the bytecode alone. The second run is given only the mutants
+the first did not kill: --keep writes them, one identity a line, for dev/varka_pit/VarkaPitOnly.
+
+NOTES.tsv answers the survivors: one line per mutant, tab-separated - PIT's identity of it (the
+class and the mutator by their short names, the method, its descriptor, the instruction indexes),
+its line for the reader, then the test that now kills it or the note that it changes no behaviour.
+The identity is the bytecode's, so an edit elsewhere in the file leaves a note matching. The report
+lists each non-behavioural mutant with its answer, or "open" where there is none yet. A note on a
+method the run mutated that matches no mutant fails the run: the code changed under it. With
+--only, the run was restricted to the mutants KEEP.tsv names (dev/varka_pit.sh --only), and only
+a note on one of those can be stale.
+"""
+
+import argparse
+import collections
+import glob
+import os
+import sys
+import xml.etree.ElementTree as ET
+
+KILLS = {"KILLED", "TIMED_OUT", "MEMORY_ERROR", "RUN_ERROR"}
+# A mutant PIT could not load is no mutant; one it never started or finished means the run broke.
+NON_VIABLE = "NON_VIABLE"
+UNFINISHED = {"NOT_STARTED", "STARTED"}
+VERDICTS = ("behavioural", "bytes only", "survived")
+
+
+def mutants(path):
+    """PIT's mutants by identity: (key, fields) for each <mutation>."""
+    out = {}
+    for m in ET.parse(path).getroot().iter("mutation"):
+        f = {c.tag: (c.text or "") for c in m}
+        f["status"] = m.get("status")
+        f["indexes"] = ",".join(i.text for i in m.iter("index"))
+        key = (
+            f["mutatedClass"],
+            f["mutatedMethod"],
+            f["methodDescription"],
+            f["mutator"],
+            f["indexes"],
+        )
+        if key in out:
+            sys.exit(f"duplicate mutant {key} in {path}")
+        if f["status"] in UNFINISHED:
+            sys.exit(f"{path}: mutant {key} is {f['status']}; the run did not finish")
+        if f["status"] != NON_VIABLE:
+            out[key] = f
+    return out
+
+
+def join(parts):
+    """Several shards' mutants as one run's: a mutant in two shards means the split broke."""
+    out = {}
+    for path in parts:
+        for key, f in mutants(path).items():
+            if key in out:
+                sys.exit(f"mutant {key} is in two shards, e.g. {path}")
+            out[key] = f
+    return out
+
+
+def read_shards(root):
+    """The shard directories under ROOT: their two runs' mutations.xml paths and their scope."""
+    dirs = sorted(d for d in glob.glob(os.path.join(root, "*")) if os.path.isdir(d))
+    seen = {}
+    scopes = set()
+    for d in dirs:
+        try:
+            with open(os.path.join(d, "shard"), encoding="utf-8") as f:
+                index, count = (int(x) for x in f.read().strip().split("/"))
+            with open(os.path.join(d, "scope"), encoding="utf-8") as f:
+                scopes.add(f.read().strip())
+        except (OSError, ValueError) as e:
+            sys.exit(f"{d} is not a shard of dev/varka_pit.sh --shard: {e}")
+        if (index, count) in seen:
+            sys.exit(f"shard {index}/{count} is in both {seen[(index, count)]} and {d}")
+        seen[(index, count)] = d
+    counts = {c for _, c in seen}
+    if len(counts) != 1:
+        sys.exit(f"{root}: the shards disagree on their number, or there are none: {sorted(seen)}")
+    count = counts.pop()
+    missing = sorted(set(range(count)) - {i for i, _ in seen})
+    if missing:
+        sys.exit(f"{root}: shards {missing} of {count} are missing")
+    if len(scopes) != 1:
+        sys.exit(f"{root}: the shards ran different scopes: {sorted(scopes)}")
+    order = [seen[(i, count)] for i in range(count)]
+    behavioural = [os.path.join(d, "behavioural", "mutations.xml") for d in order]
+    bytes_ = [os.path.join(d, "bytes", "mutations.xml") for d in order]
+    return behavioural, bytes_, f"{scopes.pop()} Run in {count} shards."
+
+
+def note_key(f):
+    """A note's key: PIT's identity of the mutant, the class and mutator by their short names."""
+    return "\t".join(
+        [
+            f["mutatedClass"].rsplit(".", 1)[-1],
+            f["mutatedMethod"],
+            f["methodDescription"],
+            f["mutator"].rsplit(".", 1)[-1],
+            f["indexes"],
+        ]
+    )
+
+
+def read_notes(path):
+    notes = {}
+    if not path:
+        return notes
+    try:
+        lines = open(path, encoding="utf-8").read().splitlines()
+    except FileNotFoundError:
+        return notes
+    for line in lines:
+        if not line.strip() or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) != 7:
+            sys.exit(f"{path}: a note is five key fields, the line and the answer: {line!r}")
+        notes["\t".join(parts[:5])] = parts[6]
+    return notes
+
+
+def verdict(first, second):
+    if first["status"] in KILLS:
+        return "behavioural"
+    if second is not None and second["status"] in KILLS:
+        return "bytes only"
+    return "survived"
+
+
+def render(rows, notes, scope):
+    out = [
+        "# Mutation run: verdicts",
+        "",
+        "Generated by `dev/varka_pit.sh` (VARKA-265). Do not edit; regenerate, and answer a "
+        "mutant in `sql/varka/mutation/notes.tsv`.",
+        "",
+    ]
+    if scope:
+        out += [scope, ""]
+    out += [
+        "## Verdicts by class",
+        "",
+        "| class | mutants | behavioural | of them timed out or crashed | bytes only "
+        "| survived | of them uncovered |",
+        "| :--- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    by_class = collections.defaultdict(collections.Counter)
+    for f, v, _ in rows:
+        c = by_class[f["mutatedClass"].rsplit(".", 1)[-1].split("$")[0]]
+        c["mutants"] += 1
+        c[v] += 1
+        if v == "behavioural" and f["status"] != "KILLED":
+            c["abnormal"] += 1
+        if v == "survived" and f["status"] == "NO_COVERAGE":
+            c["uncovered"] += 1
+    total = collections.Counter()
+    for name, c in sorted(by_class.items()):
+        total.update(c)
+        out.append(
+            f"| {name} | {c['mutants']} | {c['behavioural']} | {c['abnormal']} "
+            f"| {c['bytes only']} | {c['survived']} | {c['uncovered']} |"
+        )
+    out.append(
+        f"| all | {total['mutants']} | {total['behavioural']} | {total['abnormal']} "
+        f"| {total['bytes only']} | {total['survived']} | {total['uncovered']} |"
+    )
+    out += [
+        "",
+        "## Verdicts by mutator",
+        "",
+        "| mutator | mutants | behavioural | bytes only | survived |",
+        "| :--- | ---: | ---: | ---: | ---: |",
+    ]
+    by_mutator = collections.defaultdict(collections.Counter)
+    for f, v, _ in rows:
+        c = by_mutator[f["mutator"].rsplit(".", 1)[-1]]
+        c["mutants"] += 1
+        c[v] += 1
+    for name, c in sorted(by_mutator.items()):
+        out.append(
+            f"| {name} | {c['mutants']} | {c['behavioural']} | {c['bytes only']} "
+            f"| {c['survived']} |"
+        )
+    out += [
+        "",
+        "## The mutants no behavioural test kills",
+        "",
+        "Each with its answer from `notes.tsv`: the test that now kills it, or why it changes "
+        "no behaviour. The first-run status is PIT's: `SURVIVED` ran covering tests that all "
+        "passed, `NO_COVERAGE` had none.",
+        "",
+        "| verdict | class | method | line | mutator | change | first run | answer |",
+        "| :--- | :--- | :--- | ---: | :--- | :--- | :--- | :--- |",
+    ]
+    left = [r for r in rows if r[1] != "behavioural"]
+    left.sort(key=lambda r: (r[0]["mutatedClass"], int(r[0]["lineNumber"]), r[2]))
+    for f, v, key in left:
+        answer = notes.get(key, "open")
+        out.append(
+            f"| {v} | {f['mutatedClass'].rsplit('.', 1)[-1]} | `{f['mutatedMethod']}` "
+            f"| {f['lineNumber']} | {f['mutator'].rsplit('.', 1)[-1]} "
+            f"| {f['description'].replace('|', '/')} | {f['status']} | {answer} |"
+        )
+    out.append("")
+    return "\n".join(out)
+
+
+def keep(behavioural, path):
+    """The identities of the mutants the first run did not kill, for the second run."""
+    left = [k for k, f in mutants(behavioural).items() if f["status"] not in KILLS]
+    with open(path, "w", encoding="utf-8") as out:
+        out.writelines("\t".join(k) + "\n" for k in sorted(left))
+    print(f"{len(left)} mutants left for the bytes oracle")
+    return 0
+
+
+def main():
+    if len(sys.argv) == 4 and sys.argv[1] == "--keep":
+        return keep(sys.argv[2], sys.argv[3])
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("paths", nargs="+", help="BEHAVIOURAL.xml BYTES.xml REPORT.md, or REPORT.md")
+    ap.add_argument("--shards", metavar="DIR", help="join the shard directories under DIR")
+    ap.add_argument("--notes")
+    ap.add_argument("--scope", help="a sentence saying what the run mutated and ran")
+    ap.add_argument("--only", metavar="KEEP.tsv", help="the mutants a restricted run kept")
+    args = ap.parse_args()
+    if args.shards:
+        if len(args.paths) != 1:
+            ap.error("--shards takes the report alone")
+        behavioural, bytes_, scope = read_shards(args.shards)
+        args.scope = args.scope or scope
+    elif len(args.paths) == 3:
+        behavioural, bytes_ = [args.paths[0]], [args.paths[1]]
+    else:
+        ap.error("give BEHAVIOURAL.xml BYTES.xml REPORT.md, or --shards DIR REPORT.md")
+    args.report = args.paths[-1]
+    first = join(behavioural)
+    second = join(bytes_)
+    # The second run has exactly the mutants the first did not kill.
+    missing = [k for k, f in first.items() if f["status"] not in KILLS and k not in second]
+    if missing:
+        sys.exit(
+            f"{len(missing)} mutants the first run left are not in the second, e.g. {missing[0]}"
+        )
+    extra = [k for k in second if k not in first]
+    if extra:
+        sys.exit(f"{len(extra)} mutants of the second run are not in the first, e.g. {extra[0]}")
+    notes = read_notes(args.notes)
+    rows = [(f, verdict(f, second.get(k)), note_key(f)) for k, f in first.items()]
+    text = render(rows, notes, args.scope)
+    with open(args.report, "w", encoding="utf-8") as out:
+        out.write(text)
+    # One notes file serves runs of any scope: a note is stale when this run mutated its method
+    # and no mutant matches it. A note naming the test that now kills its mutant stays, with the
+    # mutant now behavioural; one whose mutant is gone - the code changed - is stale.
+    keys = {key for _, _, key in rows}
+    methods = {tuple(key.split("\t")[:2]) for key in keys}
+    stale = sorted(k for k in set(notes) - keys if tuple(k.split("\t")[:2]) in methods)
+    if args.only:
+        named = set()
+        for line in open(args.only, encoding="utf-8").read().splitlines():
+            cls, method, desc, mutator, indexes = line.split("\t")
+            named.add(
+                "\t".join(
+                    [cls.rsplit(".", 1)[-1], method, desc, mutator.rsplit(".", 1)[-1], indexes]
+                )
+            )
+        stale = [k for k in stale if k in named]
+    counts = collections.Counter(v for _, v, _ in rows)
+    print(", ".join(f"{counts[v]} {v}" for v in VERDICTS) + f" of {len(rows)} mutants")
+    if stale:
+        print(f"{len(stale)} notes match no open mutant, e.g. {stale[0]!r}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

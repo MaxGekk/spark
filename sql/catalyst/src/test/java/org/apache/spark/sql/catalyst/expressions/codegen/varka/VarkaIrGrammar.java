@@ -579,7 +579,7 @@ public final class VarkaIrGrammar {
           // bounds rule overflow out, which is what keeps the value comparison meaningful: the
           // kernel has to answer, not decline, and the suite asserts a zero status. Drawing
           // FAIL over unbounded operands would decline most batches and check nothing - but
-          // drawing WRAP only, as this arm did until VARKA-63's review, leaves every checked
+          // drawing WRAP only would leave every checked
           // emission path outside the differential oracle: the guard accumulator, the FAIL
           // word's liveness, the TRY narrowing, and the slot numbering that the scratch
           // temporaries shift.
@@ -941,8 +941,8 @@ public final class VarkaIrGrammar {
             return a;
           }
           long d = LONG_DIVISORS[rnd.nextInt(LONG_DIVISORS.length)];
-          // The grammar has tracked this subtree's bound all along; the node now carries it,
-          // which is the whole of VARKA-147 seen from the generator's side. Plus one, because
+          // The grammar tracks this subtree's bound, and the node carries it, which is the
+          // whole of VARKA-147 seen from the generator's side. Plus one, because
           // the grammar's bound is the widest magnitude a value takes and the node's is one the
           // value stays under - a guard from -bound to +bound admits bound itself.
           return new Gen(new ConstDivide(a.node(), d, a.bound() + 1), a.bound() / Math.abs(d));

@@ -17,7 +17,9 @@
 #
 # The coverage of the classes Varka emits (VARKA-285): every Varka suite of catalyst and
 # sql/core, as the gate's wide step runs them, under the JaCoCo agent, then each emitted class
-# analysed on its own and the report written to sql/varka/coverage/generated.md.
+# analysed on its own and the report written to sql/varka/coverage/generated.md. The same run
+# covers the emitter's and the compiler's own classes, which VarkaEmitterCoverage.java reports in
+# sql/varka/coverage/emitter.md (VARKA-265).
 #
 #   dev/varka_gen_coverage.sh                 # run the suites under the agent, then the report
 #   dev/varka_gen_coverage.sh --report-only   # the report again, from the last run's data
@@ -29,7 +31,8 @@
 # own report cannot read the result, since the suites emit one class name with different bytes,
 # so dev/varka_gen_coverage/VarkaGenCoverage.java analyses each class with a builder of its own.
 # It runs as a single-file program against org.jacoco.core and ASM from the local Maven
-# repository, fetched there if missing, and catalyst's built classes: no build gains a dependency.
+# repository, fetched there if missing, and catalyst's and common/utils' built classes: no build
+# gains a dependency.
 #
 # Exit status: the suites' (a failed suite still reports the coverage it reached), else the
 # analyser's.
@@ -39,6 +42,7 @@ cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 OUT=$ROOT/target/varka-gen-coverage
 REPORT=$ROOT/sql/varka/coverage/generated.md
+EMITTER_REPORT=$ROOT/sql/varka/coverage/emitter.md
 jobs=6
 split=3
 run=1
@@ -76,9 +80,12 @@ status=0
 if [ "$run" = 1 ]; then
   rm -rf "$OUT/jacoco.exec" "$OUT/classes"
   mkdir -p "$OUT"
-  # The emitted kernels' packages and the names the suites emit under.
+  # The emitted kernels' packages and the names the suites emit under, and the compiler's classes
+  # beside the emitter's package, for the emitter report (VARKA-265).
   includes='org.apache.spark.sql.varka.*:org.apache.spark.sql.catalyst.expressions.codegen.varka.*'
   includes+=':Varka*:t:X'
+  codegen=org.apache.spark.sql.catalyst.expressions.codegen
+  includes+=":$codegen.Varka*:$codegen.CompiledVarka*:$codegen.PartialVarka*"
   agent="-javaagent:$AGENT=destfile=$OUT/jacoco.exec,append=true"
   agent+=",inclnolocationclasses=true,classdumpdir=$OUT/classes,includes=$includes"
   start=$(date +%s)
@@ -92,9 +99,17 @@ CATALYST=$ROOT/sql/catalyst/target/scala-2.13/classes
 [ -d "$CATALYST" ] || { echo "varka_gen_coverage: no catalyst classes at $CATALYST" >&2; exit 1; }
 [ -f "$OUT/jacoco.exec" ] || { echo "varka_gen_coverage: no $OUT/jacoco.exec" >&2; exit 1; }
 mkdir -p "$(dirname "$REPORT")"
-cp="$CORE:$CATALYST"
+UTILS=$ROOT/common/utils/target/scala-2.13/classes
+[ -d "$UTILS" ] || { echo "varka_gen_coverage: no common/utils classes at $UTILS" >&2; exit 1; }
+# The emitter's errors are Spark's (VarkaErrors), so a catalyst class that throws one, as the line
+# map's reader does, needs common/utils to load.
+cp="$CORE:$CATALYST:$UTILS"
 for a in asm asm-commons asm-tree; do cp+=":$M2/org/ow2/asm/$a/$ASM/$a-$ASM.jar"; done
 java -cp "$cp" dev/varka_gen_coverage/VarkaGenCoverage.java "$OUT/jacoco.exec" "$OUT/classes" \
   "$REPORT" || exit 1
 echo "varka_gen_coverage: report written to ${REPORT#"$ROOT"/}"
+# The emitter's and the compiler's own branches, from the same execution file (VARKA-265).
+java -cp "$cp" dev/varka_gen_coverage/VarkaEmitterCoverage.java "$OUT/jacoco.exec" "$CATALYST" \
+  sql/catalyst/src/main/java sql/varka/coverage/reach "$EMITTER_REPORT" || exit 1
+echo "varka_gen_coverage: report written to ${EMITTER_REPORT#"$ROOT"/}"
 exit "$status"

@@ -49,8 +49,8 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  * </ol>
  *
  * <p>The record also removes an illegal state by construction. The two mod-7 reference variants
- * used to be independent booleans that could both be set at once, where the emitter silently
- * preferred one; {@link FloorMod7} makes the choice exclusive.
+ * are one enum, {@link FloorMod7}, rather than two booleans that could both be set at once and
+ * leave the emitter to prefer one silently.
  *
  * <p><b>One field is reachable from SQL; the rest are test-only.</b>
  * {@link #useAVX} has a session configuration in front of it,
@@ -271,8 +271,8 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  * @param mulHiDivide whether an int-lane {@code ConstDivide} takes the multiply-high form
  *        through 64-bit lanes (VARKA-149): each int half widened with {@code I2L}, multiplied
  *        by Granlund and Montgomery's magic, shifted, narrowed with {@code L2I}. On, which is
- *        the default and what ships; off is the conversion through double lanes it replaced,
- *        kept as the reference arm. The long lane is unaffected either way.
+ *        the default and what ships; off is the conversion through double lanes, kept as the
+ *        reference arm. The long lane is unaffected either way.
  * @param narrowHalfSpecies how a {@code NarrowLane} root is stored. Off, the 64-bit result is
  *        converted with {@code L2I} into the int species of the lane's own width, whose low half
  *        holds the values, and stored under an int mask of that half - one species per element
@@ -290,7 +290,7 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        outputs and literals ({@code VARKA-87.md} 2.6.2), the epilogue is one method per
  *        group, the built class is measured and a group over the limit is split and the class
  *        built again, and a shape still over a limit when no split is left declines with the
- *        reason ({@link VarkaEmitDeclined}). {@code 0} is the form before VARKA-87, kept as the
+ *        reason ({@link VarkaEmitDeclined}). {@code 0} is the unmeasured form, kept as the
  *        reference the differential tests and {@code VarkaMethodSizeBenchmark}'s first arm
  *        measure against: weight groups the loop, one epilogue holds every output, nothing is
  *        measured. A small value is how a test sees a regroup or a decline on a shape of a few
@@ -347,9 +347,9 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        #heavyGroupOutputs} outputs, over {@link #callSiteBudget} - so a group the measurement
  *        would split is split before the class is built, and the common case builds once. With
  *        {@link #groupBudgetUnderPrediction} on, the weights still close groups as before and the
- *        prediction only adds closes; off, the default since VARKA-254, the prediction bounds a
+ *        prediction only adds closes; off, the default (VARKA-254), the prediction bounds a
  *        group in the group budget's place where it can, so it can also widen one. The measurement
- *        of the built class stays the last word. On by default since 3 October 2026, under the plan
+ *        of the built class stays the last word. On by default, under the plan
  *        ({@link #planSize}), whose margins it closes groups with: planned, the families it
  *        regroups ran within the control's spread of the weights' on a runner and on the laptop,
  *        where the prediction without the margins filled a method of sixty-four cheap tails to the
@@ -384,7 +384,7 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        split is decided by measurement - a class whose only methods over the budget are its
  *        drivers is built again with stages sized from the driver's measured bytes - so a class
  *        whose drivers fit is the same class, byte for byte. On by default beside
- *        {@link #severalKernels}, on the owner's decision of 30 September 2026: past the driver's
+ *        {@link #severalKernels}, on the owner's decision (VARKA-190): past the driver's
  *        ceiling one class with stages plans in one emission and keeps every output's sharing,
  *        where several kernels search for their split and recompute what they share
  *        ({@code VARKA-190.md} 11.5). Off is the driver that declines past its ceiling, kept
@@ -416,10 +416,10 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        margins ({@code VarkaEmitCostTable}), so that the class the first build makes is the one
  *        kept. The measurement still has the last word: a method measured over a limit is
  *        corrected by today's reaction, and anything left runs the size loop as the last resort.
- *        On by default since 3 October 2026, when a runner planned the split driver in half
- *        its two builds' time and several kernels in one build a kernel, and both forms planned
- *        ran as the loop's classes had ({@code VARKA-236.md} 9.3); off is the loop that
- *        reacts to each measurement in turn, kept as the reference.
+ *        On by default: on a runner the plan built the split driver in half the loop's two
+ *        builds' time and several kernels in one build a kernel, and both forms planned ran as
+ *        fast as the loop's classes ({@code VARKA-236.md} 9.3); off is the loop that reacts to
+ *        each measurement in turn, kept as the reference.
  * @param misdescribeDriverBytes a fault injector for the plan, like the two {@code misdescribe}
  *        switches: bytes taken off what the drivers built alone measure, so a test can make the
  *        plan admit a driver the build then finds over, and watch the correction. Zero in
@@ -447,12 +447,13 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        the measured limits bound the group - only while the model prices it, and with the call
  *        sites of each output the prediction admits past the budget checked whatever the group's
  *        width, since {@link #heavyGroupOutputs}' exemption assumes a narrow heavy group forms
- *        only by sharing a prefix. On is the budget binding as it did, kept as the reference.
- *        Off became the default on 12 October 2026: with the weights recounted, the budget split
- *        a weekday shape into five loop methods and ran it 31 to 33% slower, where the prediction
- *        kept two and ran within 3% of the old grouping; a mixed shape ran 14 and 25% faster than
- *        before at 256 and 128 bits; and the cost audit's corpus took 39% fewer loop methods
- *        ({@code VARKA-254.md} 9). Outside those conditions the budget binds either way.
+ *        only by sharing a prefix. On is the budget binding everywhere, kept as the reference.
+ *        Off is the default: with the recounted weights the budget splits a weekday shape into
+ *        five loop methods, which ran 31 to 33% slower than the prediction's two, and those ran
+ *        within 3% of the grouping the shape had before the recount; a mixed shape ran 14 and 25%
+ *        faster under the prediction at 256 and 128 bits; and the cost audit's corpus takes 39%
+ *        fewer loop methods ({@code VARKA-254.md} 9). Outside those conditions the budget binds
+ *        either way.
  * @param dropStackMaps a fault injector for the class file (VARKA-315), like the
  *        {@code misdescribe} switches: the class is built without its {@code StackMapTable}, so
  *        every method with a branch fails verification with "Expecting a stackmap frame at branch
@@ -1130,7 +1131,7 @@ public record VarkaEmitOptions(
 
   /**
    * The int-lane constant division's form: the multiply-high through 64-bit lanes that ships
-   * (VARKA-149), or, off, the conversion through double lanes it replaced - kept as the
+   * (VARKA-149), or, off, the conversion through double lanes - kept as the
    * reference arm the parity benchmark and the differential check it against. The long lane
    * has no wider lane to multiply into and is not affected.
    */
@@ -1241,15 +1242,13 @@ public record VarkaEmitOptions(
   /**
    * The hand-pinned rendering that reaches the shape hash - never {@code Record.toString}, whose
    * format no JDK promises, for the same reason {@code VarkaVectorIR.canonical} exists. Empty for
-   * {@link #DEFAULTS}, so a production hash is byte-identical to what it was before options
-   * existed; otherwise every field, in declaration order, so two variants can never collide.
+   * {@link #DEFAULTS}, so a production hash is the hash of the shape alone; otherwise every
+   * field, in declaration order, so two variants can never collide.
    *
-   * <p>"Every field" has not always held: {@code truncDate} was once left out
-   * 35, so two option values differing only in the {@code trunc} lowering rendered the same
-   * string and shared one execution identity in the cache's side table, which is exactly the
-   * hazard this class doc describes. {@code VarkaShapeCacheSuite} now walks the record's
-   * components and fails if one of them cannot change the rendering, so the next field cannot
-   * be forgotten the same way.
+   * <p>A field left out would let two option values differing only in it render the same string
+   * and share one execution identity in the cache's side table, which is exactly the hazard this
+   * class doc describes. {@code VarkaShapeCacheSuite} walks the record's components and fails if
+   * one of them cannot change the rendering.
    *
    * <p>It renders from {@link VarkaEmitOption#TABLE}, in its order: the 26 options that predate
    * the tags by position, then each later option's tag - a flag's when it holds the value its

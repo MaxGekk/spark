@@ -55,7 +55,7 @@ class VarkaKnownFailuresSuite extends SparkFunSuite {
     val replay = (e: VarkaKnownFailures.Entry) =>
       if (e.lane == "int") Optional.of(e.signature) else Optional.empty[VarkaFailureSignature]()
     assert(VarkaKnownFailures.stale(entries, replay(_)).asScala == Seq(entries.get(1)))
-    // A case that now fails differently is stale as well, not still known.
+    // A case that fails differently on replay is stale as well, not still known.
     val other = (_: VarkaKnownFailures.Entry) => Optional.of(new VarkaFailureSignature("a", "b"))
     assert(VarkaKnownFailures.stale(entries, other(_)) == entries)
   }

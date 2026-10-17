@@ -47,8 +47,13 @@ class VarkaEmitterContractSuite extends VarkaEmitterTestBase {
       VarkaEmitBudget.MAX_CHAIN_DEPTH + 1), "MAX_CHAIN_DEPTH")
     rejects(emit(new AddDays(new ColumnRef(1), new LiteralSlot(0)), 1), "column ordinal")
     rejects(emit(new AddDays(new ColumnRef(0), new LiteralSlot(1)), 1), "literal slot")
-    // A column offset (VARKA-38) is legal IR now - AddDays(ColumnRef, ColumnRef) no longer
-    // throws; see "AddDays/SubDays with a column offset (VARKA-38) match the reference
+    // Below the range as well as above it: a negative index would otherwise reach the column
+    // bitset's shift and the frame's slot arrays rather than be refused.
+    rejects(emit(new AddDays(new ColumnRef(-1), new LiteralSlot(0)), 1),
+      "column ordinal -1 outside")
+    rejects(emit(new AddDays(new ColumnRef(0), new LiteralSlot(-1)), 1), "literal slot -1 outside")
+    // A column offset (VARKA-38) is legal IR - AddDays(ColumnRef, ColumnRef) does not throw;
+    // see "AddDays/SubDays with a column offset (VARKA-38) match the reference
     // evaluator" above for its coverage.
     rejects(VarkaLoopEmitter.emit("t", java.util.List.of[VarkaVectorIR](), 1, 0),
       "no output chains")
@@ -62,12 +67,16 @@ class VarkaEmitterContractSuite extends VarkaEmitterTestBase {
     val disjointChains = (0 until 5).map(k => chain(13, slotBase = k * 13))
     val reference = VarkaMatrix.base.withMethodByteBudget(0)
     rejects(emitMulti(disjointChains, 1, 65, reference), "MAX_FUSED_NODES")
+    // The cap is inclusive: exactly MAX_FUSED_NODES distinct ops are one kernel.
+    val atCap = disjointChains.take(4) :+ chain(12, slotBase = 52)
+    assert(VarkaEmitBudget.MAX_FUSED_NODES === 64)
+    assert(emitMulti(atCap, 1, 64, reference)._2.nonEmpty)
     val (_, sharedOk) = emitMulti(
       disjointChains.take(4) ++ disjointChains.take(4), 1, 52, reference)
     assert(sharedOk.nonEmpty)
     assert(emitMulti(disjointChains, 1, 65)._2.nonEmpty)
-    // VARKA-11: conditions are never values. (A condition as an output ROOT became legal in
-    // VARKA-21 - it emits a selection bitmap - so only the value positions reject now.)
+    // VARKA-11: conditions are never values. (A condition as an output ROOT is legal - it emits
+    // a selection bitmap, VARKA-21 - so only the value positions reject.)
     val cmp = new Compare(CompareOp.LT, new ColumnRef(0), new ColumnRef(0))
     rejects(emitMulti(Seq(new AddDays(cmp, new LiteralSlot(0))), 1, 1), "value position")
     rejects(emitMulti(Seq(new Greatest(new ColumnRef(0), cmp)), 1, 0), "value position")
@@ -193,8 +202,8 @@ class VarkaEmitterContractSuite extends VarkaEmitterTestBase {
 
   test("the shallow rendering of every node type is pinned, like the shape hash") {
     // The line map travels inside the class bytes and is read back by tooling with no live
-    // session, so its rendering is a contract, not an implementation detail - and it used to
-    // ride Record.toString, whose format no JDK promises. One key using all 24 node types (and
+    // session, so its rendering is a contract, not an implementation detail - and not
+    // Record.toString, whose format no JDK promises. One key using all 24 node types (and
     // three CompareOps), so a change to any rendering, to the operand order, or to the
     // topological schedule fails here. If it does: make sure the change is intended, then
     // update the literal and say so in the task plan - the same rule as the pinned shape

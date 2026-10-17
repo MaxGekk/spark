@@ -27,7 +27,7 @@ import org.apache.spark.sql.varka.vector.VarkaVectorSupport
 /**
  * The driver under `VarkaEmitOptions.driverOutputTable`: its per-output work - each output's
  * validity zeroed, filled or written by the bitmap pass, and the all-null shortcut's test - read
- * from a table by one call, so the driver no longer grows with the outputs and stops capping a
+ * from a table by one call, so the driver does not grow with the outputs and does not cap a
  * kernel's width. The loop and epilogue methods are untouched, and every answer must be the
  * unrolled driver's. See `VARKA-190.md` 9.2 and 10.
  */

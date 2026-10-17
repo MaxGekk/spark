@@ -48,6 +48,14 @@ If you are about to type `// TODO`, put it in one of those three places and
 reference it from the code only if the code would be confusing without the
 pointer.
 
+**A comment describes the code as it is.** What the code used to do, which task changed it and
+when are history, and history is kept in the plans and in git; a comment that says "used to", "the
+old" or "since VARKA-<n>" makes the next reader subtract it to find the code. A task id stays as a
+pointer to the record ("the prediction bounds groups (VARKA-254)"), a regression test states the
+failure it guards against rather than the day it happened, and a reason that names a measured fact
+keeps the fact. `dev/varka_precommit.sh` flags `used to` and `the old` on the lines a commit adds
+to Varka's code.
+
 ## Plans are records, not scratch space
 
 `plans/` holds one folder per milestone, `m<n>/`, with the milestone's own documents and one
@@ -58,9 +66,10 @@ built, what was measured and where the plan turned out wrong. Predictions writte
 before a measurement stay in the file after it, scored honestly - the project
 keeps count. Do not retro-edit a task file to look prescient; add the correction
 and say what it corrects. A cost prediction - a test's or a suite's added time, a
-check's overhead - reads the calibration table in `skills/testing-and-debugging.md` first and is
-stated at the ratio the table has observed unless the plan says why not; once scored, its line
-joins the table.
+check's overhead - reads the calibration table first (`dev/varka_calibration.py` prints it;
+`skills/testing-and-debugging.md` says how it is kept) and is stated at the ratio the table has
+observed unless the plan says why not; once scored, it joins the table as a file of its own under
+`skills/calibration/`, which `dev/varka_calibration.py --add-row` writes from the row.
 
 A milestone's file is named for the stage it is in. While it is a scope
 catalogue - numbered items with design input, no task numbers assigned yet - it
@@ -124,7 +133,8 @@ each, and that list only shrinks. It is a step of the gate.
 Before committing, `dev/varka_precommit.sh` (or install it once with
 `--install-hook`) checks the staged files for the rules that slip most: a
 non-ASCII byte outside a string literal, a source line over 100 columns, a
-`TODO`/`FIXME` marker under a Varka directory, the quote check when a
+`TODO`/`FIXME` marker under a Varka directory, a comment that narrates history
+(`used to`, `the old`) in Varka's code, the quote check when a
 document changed, and `ruff check` plus `ruff format --check` on Python files
 (CI's Python linter runs both). And beside the emitter suite's curated matrices,
 `VarkaIrFuzzSuite` runs random IR trees over random columns, null patterns,

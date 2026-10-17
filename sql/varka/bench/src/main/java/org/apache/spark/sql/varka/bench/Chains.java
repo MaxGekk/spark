@@ -51,10 +51,8 @@ import java.util.List;
  * year-month interval, all int32 in one lane - and a benchmark of dates alone understates that
  * to a reader and exercises less of the compiler. <b>Every</b> entry carries a date column, an
  * int column and an interval column in one expression; one produces an interval rather than
- * consuming one. (This read "seven of the twelve" and the plan said eight; both were written
- * against the first list and neither was recounted when it was replaced.)
- * That is closer to real SQL than a chain of one type, and it is the claim the milestone
- * actually wants to make.
+ * consuming one. That is closer to real SQL than a chain of one type, and it is the claim the
+ * milestone actually wants to make.
  *
  * <p><b>Two other things follow from the arithmetic, and they are why this list exists at the
  * size it does.</b> The job-size rule of {@code DateSurfaceBenchmark} fails a row whose fixed
@@ -69,17 +67,15 @@ import java.util.List;
  * file. The numbers behind it - a per-iteration fixed cost near 18 ms, roughly 0.02 ns per
  * emitter op over a memory floor near 0.8 ns, and so 6.7 to 10.5 ns/row for the entries here -
  * come from a GitHub dispatch on 11 September 2026 whose results were never committed,
- * because that run failed the fixed-share rule and predates the change that made a failing
- * run upload its evidence. They are therefore scratch figures in the sense
- * {@code dev/varka_quote_allowlist.txt} means it, and they are written here as the reasoning
- * that chose the list rather than as measurements anyone should quote.
+ * because that run failed the fixed-share rule and uploaded no evidence. They are therefore scratch
+ * figures in the sense {@code dev/varka_quote_allowlist.txt} means it, and they are written here as
+ * the reasoning that chose the list rather than as measurements anyone should quote.
  *
- * <p><b>Most of these were impossible until the guard learned to re-arm.</b> A chain that shifts a
- * date by a
- * column of days and then by a column month count declined at compile time, because the producer
- * guard promised the whole narrowed range and the shift above it had none left; the entry at
- * 332 ops below is the shape that opened that task. Re-arming the guard admits them, which is
- * why this list is 293 to 483 emitter ops where its first version was 163 to 304.
+ * <p><b>Most of these fuse only because the guard re-arms.</b> A chain that shifts a date by a
+ * column of days and then by a column month count would decline at compile time if the producer
+ * guard promised the whole narrowed range, leaving the shift above it none; the entry at 332 ops
+ * below is that shape. Re-arming the guard admits them, which is why this list runs 293 to 483
+ * emitter ops.
  *
  * <p>One family still cannot sit above a re-armed guard: {@code weekofyear} and
  * {@code YEAROFWEEK} shift by the Thursday rule's literal three days, and a literal shift is
@@ -172,12 +168,10 @@ public final class Chains {
       new Chain("datediff(add_months(last_day(date_add(d, i)), i) + ymy, d)", 293));
 
   /**
-   * The chains. Ordered by cost, descending - which the first version of this comment denied,
-   * claiming they were interleaved by family so a shard's stride would not sort them; the list
-   * was already sorted. It is tolerable here and would not be for {@link Surface#ENTRIES}: a
-   * stride over a sorted list hands shard 0 the heaviest of every N, so the shards diverge by
-   * the list's spread, and across 293 to 483 ops that is under 1.7x where across the surface's
-   * 9 to 218 it would be an order of magnitude.
+   * The chains. Ordered by cost, descending, not interleaved by family. It is tolerable here and
+   * would not be for {@link Surface#ENTRIES}: a stride over a sorted list hands shard 0 the
+   * heaviest of every N, so the shards diverge by the list's spread, and across 293 to 483 ops that
+   * is under 1.7x where across the surface's 9 to 218 it would be an order of magnitude.
    */
   public static final List<Surface.Entry> ENTRIES =
       CHAINS.stream().map(c -> Surface.Entry.projection(c.expr())).toList();

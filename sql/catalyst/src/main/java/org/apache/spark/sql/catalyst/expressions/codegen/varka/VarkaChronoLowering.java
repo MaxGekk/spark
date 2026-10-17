@@ -434,9 +434,10 @@ final class VarkaChronoLowering {
    * {@link #emitChronoPrefix} takes the date off the operand stack, so whether the date is emitted
    * at all is the same decision as whether the prefix is.
    *
-   * <p>With {@link VarkaEmitOptions#shareChronoPrefix} off this is exactly what the four
-   * extraction arms and {@link #emitAddMonths} used to do inline, in the same order and with
-   * the same line-number marker, so the bytes are unchanged for every existing shape.
+   * <p>With {@link VarkaEmitOptions#shareChronoPrefix} off this emits the prefix once per node,
+   * in the same order and with the same line-number marker as the four extraction arms and
+   * {@link #emitAddMonths} would inline it, so the option changes no byte of a shape that shares
+   * nothing.
    */
   private static void emitChronoPrefixOnce(CodeBuilder cb, VarkaVectorIR node, boolean dense,
       Analysis analysis, Slots s, int[] t, Set<VarkaVectorIR> computed) {
@@ -922,11 +923,10 @@ final class VarkaChronoLowering {
     cb.loadConstant(-1);
     cb.invokevirtual(INT_VECTOR, "add", LANEWISE_VI);
     emitValue(cb, node.months(), dense, analysis, s, computed);
-    // The node's own word (the AND of both children's) used to be computed after this method
-    // returned, from the caller's dispatch; the guard below needs it already stored, and both
-    // children's words are ready by now (the date's from the prefix just above, the count's from
-    // the emitValue call just above), so it moves here instead - earlier than // strictly needed,
-    // but the AND itself is unchanged.
+    // The node's own word (the AND of both children's) is computed here rather than after this
+    // method returns, because the guard below needs it already stored; both children's words
+    // are ready by this point (the date's from the prefix just above, the count's from the
+    // emitValue call just above).
     if (!dense && s.ownWord.contains(node)) {
       emitAndWord(cb, s, s.wordRef.get(node), s.wordRef.get(node.days()),
           s.wordRef.get(node.months()));
@@ -1037,10 +1037,11 @@ final class VarkaChronoLowering {
    * {@code make_date} and {@code date_trunc('QUARTER')} all want to call this without doing
    * {@link #emitAddMonths}'s own month arithmetic first. Every division here is an exact magic
    * multiply because every dividend is small, unlike {@link #emitChronoPrefix}'s forward
-   * direction, which needs two round-down magics with carries. That turned out to be wrong for
-   * {@code / 400} and {@code / 100}: {@link VarkaChrono#YEAR_CENTURY_M}'s javadoc records why,
-   * and both now take the one-correction shape {@link #emitChronoPrefix}'s own {@code / 146097}
-   * and {@code / 36524} already use, via {@link #emitCarry}.
+   * direction, which needs two round-down magics with carries. The exceptions are
+   * {@code / 400} and {@code / 100}, whose dividends are not small enough
+   * ({@link VarkaChrono#YEAR_CENTURY_M}'s javadoc says why): both take the one-correction shape
+   * {@link #emitChronoPrefix}'s own {@code / 146097} and {@code / 36524} use, via
+   * {@link #emitCarry}.
    *
    * <p>{@code yy}, {@code b}, {@code era}, {@code yoe}, {@code mp}, {@code doy}, {@code doe},
    * {@code century} and {@code mask} are locals the caller owns and this method is free to
@@ -1141,9 +1142,9 @@ final class VarkaChronoLowering {
    * {@link VarkaChrono#LEAP_HASH_M}, which carries the constants, the domain and the two
    * properties that make this look wrong at a glance).
    *
-   * <p>This replaced two magic divisions with a correction carry each - 19 int-vector ops and 3
-   * mask ops, against 4 and 0 here - and with them five scratch locals and five of this
-   * method's seven parameters. Two things in it are deliberate and must survive a future
+   * <p>The alternative, two magic divisions with a correction carry each, is 19 int-vector ops
+   * and 3 mask ops, against 4 and 0 here, and needs five scratch locals and five more
+   * parameters. Two things in it are deliberate and must survive a future
    * reader: the multiply <b>overflows the lane</b>, which is the mechanism rather than a bug
    * since the identity is defined modulo 2^32; and the compare is <b>unsigned</b>
    * ({@code ULE}), because the mask keeps bits 30 and 31 and a signed compare would call every
@@ -1541,23 +1542,22 @@ final class VarkaChronoLowering {
    * years -12800 to 33134, which contains every date SQL can write but is reachable past by
    * {@code date_add}.
    *
-   * <p><b>No guard here.</b> Every {@link Chrono} node used to carry a per-lane range check on this
-   * step's input, declining the whole batch to the row engine when a lane fell outside the range
-   * above. That guard re-verified the same fact at every calendar extraction downstream of a value,
-   * including ones CSE and the calendar fragment sharing had already proven in range together -
-   * real cost with no new information on the common path. It was replaced by two halves: the
-   * compiler bounds the day shift under every calendar node and declines an entry whose interval
-   * can leave this range (literal offsets, {@code next_day}, {@code add_months}, {@code last_day},
-   * and their compositions), and the one producer it cannot bound - {@code date_add} /
-   * {@code date_sub} with a column offset - carries the check on its own result (
-   * {@code emitRangeGuard} ), once per producer instead of once per reader. This step therefore
-   * trusts its input, and the {@link VarkaEmitOptions#guardDayProducers} reference variant is the
-   * only way to hand it a day outside the range. (The month count reuses the same guard block on a
-   * separate producer and a separate range - {@code AddMonths} ' own month count against the magic
-   * multiply's bound. That one does bear on this step: when a calendar node reads an
-   * {@code add_months} result, the day decomposed here is that result, and nothing checks it at run
-   * time - it is inside the range only because {@code dayRange} bounded the count's shift at
-   * compile time, which it can do only because the count guard fires.)
+   * <p><b>No guard here.</b> A per-lane range check on this step's input, at every {@link Chrono}
+   * node, would re-verify the same fact at every extraction downstream of a value, including ones
+   * CSE and the calendar fragment sharing have already proven in range together - real cost with no
+   * new information on the common path. The range is kept by two halves instead: the compiler
+   * bounds the day shift under every calendar node and declines an entry whose interval can leave
+   * this range (literal offsets, {@code next_day}, {@code add_months}, {@code last_day}, and their
+   * compositions), and the one producer it cannot bound - {@code date_add} / {@code date_sub} with
+   * a column offset - carries the check on its own result ( {@code emitRangeGuard} ), once per
+   * producer instead of once per reader. This step therefore trusts its input, and the
+   * {@link VarkaEmitOptions#guardDayProducers} reference variant is the only way to hand it a day
+   * outside the range. (The month count reuses the same guard block on a separate producer and a
+   * separate range - {@code AddMonths} ' own month count against the magic multiply's bound. That
+   * one does bear on this step: when a calendar node reads an {@code add_months} result, the day
+   * decomposed here is that result, and nothing checks it at run time - it is inside the range only
+   * because {@code dayRange} bounded the count's shift at compile time, which it can do only
+   * because the count guard fires.)
    */
   private static void emitEra(CodeBuilder cb, int days, int era, int rem, int mask,
       Divider divider) {

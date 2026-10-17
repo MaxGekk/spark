@@ -1,0 +1,30 @@
+Output of times.scala (--master local[1]) on stock Spark, by run.sh.
+run:     https://github.com/MaxGekk/spark/actions/runs/38899204181
+commit:  ce561e49388
+cpu:     AMD EPYC 9V74 80-Core Processor
+pinned:  no (the runner is not pinned)
+java:    openjdk version "25.0.4" 2026-07-21 LTS
+spark:   4.2.0
+
+### A short query over a small cached table: the same value each time, or a new one
+SELECT count(*) FROM t WHERE <column> = <value>, 100000 rows in one partition; each arm 4 s first
+mean of 40 queries                        classes / query       ms / query  Janino ms / query
+int, the same value each time                         0.0            26.88               0.00
+int, a new value each time                            3.0            48.32              15.43
+date, a new value each time                           3.0            51.43              15.73
+string, a new value each time                         0.0            31.81               0.00
+int parameter, a new value each time                  3.0            49.19              14.28
+
+### Janino's compile time against a stage's size
+shape, each compile a new source     source chars   largest method      best ms    median ms
+projection of 1 entries id + k               4470        280 bytes         4.01         4.52
+projection of 10 entries id + k              7168        379 bytes         4.02         4.48
+projection of 25 entries id + k             11308        934 bytes         4.97         5.47
+projection of 50 entries id + k             18259       1859 bytes         6.30         6.57
+projection of 99 entries id + k             31930       3672 bytes         8.17         8.46
+aggregate of 10 sums by a key               54379        692 bytes        23.85        28.52
+aggregate of 20 sums by a key               91901       1302 bytes        29.74        30.83
+aggregate of 40 sums by a key              166946       2523 bytes        34.81        41.80
+aggregate of 60 sums by a key              243154       3743 bytes        36.37        37.18
+
+### Spark 4.2.0, Java 25.0.4

@@ -673,9 +673,9 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
    * table (`VarkaEmitOption.TABLE`) - over the option's subject where that is not the defaults,
    * in which case the arm is compared against the subject rather than the defaults (`AuditArm`).
    *
-   * The oracle above pins the defaults, and only the defaults, at two widths. That was enough
-   * while `VarkaEmitOptions` was reachable from tests alone; VARKA-121 gave one of its fields a
-   * session configuration, so a user can now ask for an emission no committed hash covers.
+   * The oracle above pins the defaults, and only the defaults, at two widths. One of
+   * `VarkaEmitOptions`' fields has a session configuration (VARKA-121), so a user can ask for
+   * an emission no committed hash covers.
    * This list is the inventory row 167 asks for, and the test below turns it into the other
    * half of the answer: which of these arms actually move the emitted bytes, and on which
    * shapes.

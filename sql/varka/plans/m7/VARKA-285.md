@@ -128,3 +128,9 @@ committed one:
 * **Per-operation sums are by line mark**: a node owns the instructions after its mark until the
   next, so a leaf owns the stores that follow it. Finer attribution would need the emitter to mark
   where a node's code ends.
+
+**Added 16 October 2026, from `VARKA-265.md` 9.1:** the coverage run of row 265 moved `generated.md`
+from 14,745 emitted classes to 61,599 (left uncommitted there), with families VARKA-284's table
+names no reason for - `VarkaFusedFuzzTier`, and `VarkaFusedProjection_w<hash>` classes that
+`VarkaGenCoverage.family` does not fold, since their suffix starts with `w`. Reading them falls to
+rows 284 and 285, not to a new row.

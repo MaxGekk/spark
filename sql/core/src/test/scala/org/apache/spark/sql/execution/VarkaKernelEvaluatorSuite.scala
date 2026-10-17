@@ -60,9 +60,9 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession with V
   private val intAttr = AttributeReference("i", IntegerType)()
   private val childOutput = Seq(attrD, intAttr)
 
-  // One fused entry, one forwarded, one residual - the task's canonical mixed projection.
-  // The residual one was `i + 1` until VARKA-63 lowered int arithmetic and it started fusing;
-  // `i % 7` is the same shape built from an operator that is still nobody's arm.
+  // One fused entry, one forwarded, one residual - the canonical mixed projection. The
+  // residual one is `i % 7`, built from an operator that is nobody's arm, since int
+  // arithmetic like `i + 1` fuses (VARKA-63).
   private val mixedList: Seq[NamedExpression] = Seq(
     Alias(DateAdd(attrD, Literal(3)), "a")(),
     intAttr,
@@ -275,7 +275,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession with V
         val kernels = evaluator(classDumpDirectory = Some(dumpDir.getAbsolutePath))
         kernels.release(kernels.project(input))
         val bytes = kernels.emittedClassBytes.get
-        // Shape-named since VARKA-18; the dump happens on hit and miss alike, so a session
+        // Shape-named (VARKA-18); the dump happens on hit and miss alike, so a session
         // that configured the directory after the shape was cached still gets its file.
         val sourceFile = VarkaDebugInfoReader.sourceFile(bytes)
         val dumped = new File(dumpDir, sourceFile.stripSuffix(".java") + ".class")
@@ -408,9 +408,9 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession with V
   }
 
   test("a declined offset and a missing ELSE report their own reasons") {
-    // A bare int column offset fuses since VARKA-38 and int arithmetic over one since VARKA-63,
+    // A bare int column offset fuses (VARKA-38) and so does int arithmetic over one (VARKA-63),
     // so the declining shape here is `i % 7`: an offset expression built from an operator
-    // neither task lowered, which is what still reaches this reason.
+    // neither lowers, which is what reaches this reason.
     val nonLiteralOffset = Seq[NamedExpression](
       Alias(DateAdd(attrD, Remainder(intAttr, Literal(7))), "shifted")(),
       Alias(DateAdd(attrD, Literal(1)), "fused")())
@@ -544,13 +544,14 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession with V
 
   test("a scratch grow that runs out of memory leaves the previous buffer " +
       "usable, and the task's cleanup closes it exactly once") {
-    // `grown` used to close the old buffer before allocating the replacement. `buffer` throws
-    // Arrow's OutOfMemoryException, a plain RuntimeException that `serveBatch` catches as a
-    // per-batch failure - so the task kept running with `derivedData(i)` holding a *closed*
-    // buffer. Arrow's close only releases the reference: `capacity()` and `memoryAddress()`
-    // stay plain field reads, so the next smaller batch found the stale capacity big enough,
-    // skipped the regrow, and had the leaf write through an address the allocator had freed;
-    // the cleanup then closed it again and took the reference count negative.
+    // A `grown` that closed the current buffer before allocating the replacement would be wrong:
+    // `buffer` throws Arrow's OutOfMemoryException, a plain RuntimeException that `serveBatch`
+    // catches as a per-batch failure - so the task would keep running with `derivedData(i)`
+    // holding a *closed* buffer. Arrow's close only releases the reference: `capacity()` and
+    // `memoryAddress()` stay plain field reads, so the next smaller batch would find the stale
+    // capacity big enough, skip the regrow, and have the leaf write through an address the
+    // allocator had freed; the cleanup would then close it again and take the reference count
+    // negative.
     //
     // The allocator here is capped so the wide batch's scratch cannot be satisfied while the
     // narrow one's can. What this asserts is the invariant, not the corruption: after the
@@ -587,7 +588,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession with V
       assert(heldAfterFirst > 0, "the narrow batch should have left its scratch allocated")
 
       // Wide enough that the data scratch alone is past the cap: the grow throws where the
-      // evaluator cannot help it, which is exactly the path that used to free the live buffer.
+      // evaluator cannot help it, which is exactly the path that would free a live buffer.
       val wideDates: Seq[java.lang.Integer] = (0 until 2000).map(i => Int.box(19000 + i))
       val wideNames = (0 until 2000).map(i => Seq("MON", "TUE", "WED")(i % 3))
       val wide = weekdayBatch(allocator, wideDates, wideNames)
@@ -598,7 +599,7 @@ class VarkaKernelEvaluatorSuite extends QueryTest with SharedSparkSession with V
       // way to the throw, so the allocator's accounting drops; allocating first cannot, so it
       // is unchanged. The reads below cannot be trusted to catch this on their own - freed
       // memory usually still holds its old contents - and the double close at task completion
-      // is now caught and logged rather than thrown, so neither of those would fail reliably.
+      // is caught and logged rather than thrown, so neither of those would fail reliably.
       assert(capped.getAllocatedMemory === heldAfterFirst,
         "the failed grow freed a buffer the evaluator still references")
 

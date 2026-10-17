@@ -30,10 +30,9 @@ import java.lang.constant.MethodTypeDesc;
  *
  * <p>The emitter reads a lane in about forty places - the loads and stores, the broadcast, the
  * arithmetic and comparison shapes, the blend, the species constant, the byte stride, the
- * array a scalar argument comes from - and supplied int32 at every one of them by assumption
- * while every node was int32. Those places now ask a {@code Lane}; the roughly one hundred and
- * forty calendar sites do not, because a calendar lowering decomposes a 32-bit epoch day and
- * has no meaning at another width, so they require {@link #INT} instead.
+ * array a scalar argument comes from - and each of those places asks a {@code Lane}. The
+ * roughly one hundred and forty calendar sites do not, because a calendar lowering decomposes
+ * a 32-bit epoch day and has no meaning at another width, so they require {@link #INT} instead.
  *
  * <p>Every descriptor that names the lane is derived from two facts - the vector class and the
  * scalar type - rather than written out per member, so a second member cannot disagree with
@@ -182,8 +181,8 @@ enum Lane {
    * takes the seven-parameter form {@link VarkaFusedKernel#run} declares; a wider lane takes
    * the same parameters plus its own scalar array, because a 64-bit literal does not fit in
    * the {@code int[]} the int lane reads. Two arrays rather than one widened array: widening
-   * would change every int32 `run` descriptor and every {@code iaload}, which is the one
-   * thing this task may not do.
+   * would change every int32 `run` descriptor and every {@code iaload}, and so the bytes of
+   * every int-lane kernel.
    */
   final MethodTypeDesc runDesc;
   /** The {@code length} parameter's slot, which the wider lane's extra array moves along. */
@@ -307,7 +306,8 @@ enum Lane {
    * exist per lane *count*: 2, 4, 8 and 16. At the int lane the two sets coincide; at the long
    * lane they do not, because a single 64-bit lane is a species that exists and a helper that
    * does not. Anything the pair of checks rejects runs on {@code SPECIES_PREFERRED} and the
-   * general helpers, which is correct at every width and no slower than before VARKA-92.
+   * general helpers, which is correct at every width and no slower than the unspecialised
+   * emission (VARKA-92).
    */
   static int emitLanes(VarkaEmitOptions options, Lane lane) {
     if (!options.validityByWidth()) {
@@ -324,7 +324,7 @@ enum Lane {
   /**
    * Whether {@link VarkaVectorSupport} carries a width-specialised validity pair for this many
    * lanes. A width without one is emitted against {@code SPECIES_PREFERRED} and the general
-   * helpers, which is correct at any width and no slower than before VARKA-92 existed.
+   * helpers, which is correct at any width and no slower than the unspecialised emission.
    */
   private static boolean hasValidityHelpers(int lanes) {
     return lanes == 2 || lanes == 4 || lanes == 8 || lanes == 16;

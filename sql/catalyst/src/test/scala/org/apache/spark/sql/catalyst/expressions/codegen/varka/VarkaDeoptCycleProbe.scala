@@ -42,7 +42,7 @@ import org.apache.spark.sql.types.DateType
  * against a timeline.
  *
  * Arguments: the output count, the form (`single` for one epilogue over every output, the
- * emission before VARKA-87; `group` for the epilogue per group, the default since), the seconds
+ * reference emission; `group` for the epilogue per group, the default, VARKA-87), the seconds
  * to run, optionally the batch length (1024, which every lane count divides), and optionally the
  * path to C2: `batches`, the batches from the first call; `warmup`, the path VARKA-212 gives a
  * new kernel - C1 kept off the class by the same compiler directive, and twelve thousand calls

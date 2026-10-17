@@ -378,6 +378,10 @@ class VarkaEmitterLongLaneSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     val wide = intercept[IllegalArgumentException](
       emitMulti(Seq(new GuardedRange(col, 0L, 1L << 40)), 1, 0))
     assert(wide.getMessage.contains("needs int bounds"), wide.getMessage)
+    // The lower bound as well: one under Integer.MIN_VALUE is refused as one over MAX_VALUE is.
+    val low = intercept[IllegalArgumentException](
+      emitMulti(Seq(new GuardedRange(col, -(1L << 40), 0L)), 1, 0))
+    assert(low.getMessage.contains("needs int bounds"), low.getMessage)
     val empty = intercept[IllegalArgumentException](new GuardedRange(col, 5L, 4L))
     assert(empty.getMessage.contains("empty range"), empty.getMessage)
   }

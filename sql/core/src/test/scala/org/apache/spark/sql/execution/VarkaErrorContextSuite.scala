@@ -119,7 +119,7 @@ class VarkaErrorContextSuite extends QueryTest with VarkaSharedSessions with Var
   test("a Varka invariant site that fails at planning reaches the user with the planning " +
       "record around it") {
     // The hook runs a real site with an argument it rejects - the range analysis's empty
-    // interval - inside the planning catch, as a compiler bug reaches it since VARKA-314b: the
+    // interval - inside the planning catch, as a compiler bug reaches it (VARKA-314b): the
     // site raises INTERNAL_ERROR with no record, and the catch adds the record around it.
     cacheDates(varkaSpark)
     VarkaExpressionCompiler.setFailForTesting(() => { new VarkaValueRange.Bounded(5, 1); () })

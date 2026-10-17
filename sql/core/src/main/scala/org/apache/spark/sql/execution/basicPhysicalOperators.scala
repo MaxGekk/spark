@@ -188,7 +188,8 @@ trait GeneratePredicateHelper extends PredicateHelper {
     // This is very perf sensitive.
     // NOTE: `FilterExec.doConsume`'s CSE branch inlines the same interleaving so it can
     // emit CSE state precomputes between the IsNotNull checks and each otherPred body.
-    // Any change to this algorithm must be mirrored there (and vice versa).
+    // Any change to this algorithm must be mirrored there (and vice versa), and in
+    // `VarkaConjunctOrder.codegenOrder`, which ports it to keep Varka's filters in this order.
     // TODO: revisit this. We can consider reordering predicates as well.
     val generatedIsNotNullChecks = new Array[Boolean](notNullPreds.length)
     val extraIsNotNullAttrs = mutable.Set[Attribute]()

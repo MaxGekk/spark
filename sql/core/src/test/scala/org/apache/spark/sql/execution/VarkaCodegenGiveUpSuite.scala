@@ -294,7 +294,7 @@ class VarkaCodegenGiveUpSuite extends QueryTest with VarkaSharedSessions with Va
     val branches = (1 to 3000).map(k => s"WHEN id = $k THEN id * $k").mkString(" ")
     val df = spark.range(0, 10).selectExpr(s"CASE $branches ELSE 0 END AS v")
     // Released Spark's behaviour: since SPARK-33301 (apache/spark#59225, 4.4.0) a stage splits such
-    // an expression into methods by default, so the stage compiles; the conf restores the old one.
+    // an expression into methods by default, so the stage compiles; the conf turns that off.
     val lines = logged(Seq(classOf[WholeStageCodegenExec].getName), Level.INFO) {
       noAqe {
         withSQLConf(SQLConf.WHOLESTAGE_SPLIT_EXPRESSIONS.key -> "false") {
