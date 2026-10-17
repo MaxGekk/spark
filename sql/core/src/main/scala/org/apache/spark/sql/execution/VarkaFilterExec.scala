@@ -152,7 +152,11 @@ private[sql] trait VarkaFilterExecBase extends UnaryExecNode with PredicateHelpe
  * untouched and the batch owns nothing.
  *
  * A batch the kernel cannot serve falls back to the per-row predicate into a fresh writable
- * batch, mirroring [[VarkaProjectExec]]'s fallback.
+ * batch, mirroring [[VarkaProjectExec]]'s fallback. Where the predicate raises on a row of that
+ * batch, the rows that passed before it leave as a shorter batch and the error is raised when the
+ * next batch is asked for (VARKA-387): Spark runs a row through the filter and the operators above
+ * it before reading the next row, so a projection above raises its own error on an earlier row
+ * first, and a `LIMIT` that is satisfied by the earlier rows never meets the error at all.
  */
 case class VarkaFilterExec(
     condition: Expression,
@@ -239,6 +243,11 @@ private[sql] class VarkaFilterEvaluatorFactory(
     private lazy val converter = VarkaRowToColumn(outputSchema)
     private var partitionIdx: Int = 0
 
+    // The predicate's error on a row of the batch just returned, held back while the rows before
+    // it are consumed (see `fallback`), and raised by the iterator in place of any further batch.
+    // Never cleared: a consumer that asks again gets the error again, never a row after it.
+    private var pendingError: Throwable = null
+
     override def eval(
         partitionIndex: Int,
         inputs: Iterator[ColumnarBatch]*): Iterator[ColumnarBatch] = {
@@ -257,6 +266,7 @@ private[sql] class VarkaFilterEvaluatorFactory(
         private var current: ColumnarBatch = null
 
         override def hasNext: Boolean = {
+          raisePending()
           val more = batches.hasNext
           if (!more) {
             releaseCurrent()
@@ -265,12 +275,22 @@ private[sql] class VarkaFilterEvaluatorFactory(
         }
 
         override def next(): ColumnarBatch = {
+          raisePending()
           releaseCurrent()
           val input = batches.next()
           numInputBatches += 1
           current = filterBatch(input)
           numOutputRows += current.numRows()
           current
+        }
+
+        // Checked before the child is asked for anything, since the child may be exhausted while
+        // an error is pending.
+        private def raisePending(): Unit = {
+          if (pendingError != null) {
+            releaseCurrent()
+            throw pendingError
+          }
         }
 
         private def releaseCurrent(): Unit = {
@@ -298,6 +318,13 @@ private[sql] class VarkaFilterEvaluatorFactory(
      * Filters the input batch row by row into a fresh writable batch - the same conversion
      * [[VarkaProjectExec]]'s fallback does, gated by the predicate. Tracked by the kernel
      * evaluator so one task-completion listener covers both kinds of output batch.
+     *
+     * When the predicate raises on a row and an earlier row passed, the loop stops there: the
+     * batch is cut to the rows that passed, no later row is read, and the error waits in
+     * `pendingError` for the iterator to raise once those rows are consumed. The operator above
+     * then meets the rows before the error, as Spark's row-at-a-time pipeline would hand them to
+     * it. With no earlier row passed, or for an error outside the predicate, the error is raised
+     * at once.
      */
     private def fallback(input: ColumnarBatch): ColumnarBatch = {
       val capacity = math.max(input.numRows(), 1)
@@ -311,9 +338,18 @@ private[sql] class VarkaFilterEvaluatorFactory(
         val writable = vectors.toArray[WritableColumnVector]
         val rows = input.rowIterator()
         var rowCount = 0
-        while (rows.hasNext) {
+        var stopped = false
+        while (!stopped && rows.hasNext) {
           val row = rows.next()
-          if (fallbackPredicate.eval(row)) {
+          val selected = try {
+            fallbackPredicate.eval(row)
+          } catch {
+            case NonFatal(e) if rowCount > 0 =>
+              pendingError = e
+              stopped = true
+              false
+          }
+          if (selected) {
             converter.convert(identityProjection(row), writable)
             rowCount += 1
           }
