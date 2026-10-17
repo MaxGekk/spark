@@ -20,7 +20,7 @@ package org.apache.spark.sql.execution
 import scala.jdk.CollectionConverters._
 
 import org.apache.spark.{SparkArithmeticException, SparkDateTimeException, SparkIllegalArgumentException}
-import org.apache.spark.sql.{QueryTest, SparkSession}
+import org.apache.spark.sql.{QueryTest, Row, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaMatrix, VarkaShapeCache}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 import org.apache.spark.sql.internal.SQLConf
@@ -1334,6 +1334,89 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
       }
     } finally {
       Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_filter_order"))
+    }
+  }
+
+  test("a residual conjunct that can raise sees every row Spark evaluates it on, so Varka " +
+      "raises where Spark raises and fuses only the conjuncts Spark evaluates before it") {
+    // VARKA-380, the mirror of the test above. BIGINT arithmetic does not fuse, so `(l + 1) > 0`
+    // stays in the row filter above the Varka node; under ANSI it raises on the row whose `l` is
+    // the largest BIGINT, and a fused date conjunct that rejects that row must not run first.
+    // Under LEGACY the sum wraps and raises nothing, so the date conjuncts fuse as before; a
+    // year-month sum overflows in both modes. One partition, so one error is raised first.
+    Seq(spark, varkaSpark).foreach { session =>
+      session.sql(
+        """SELECT * FROM VALUES
+          |  (5, 1L, DATE'2021-03-01', make_ym_interval(1, 0)),
+          |  (6, 9223372036854775807L, DATE'2021-12-31', make_ym_interval(178956969, 0)),
+          |  (7, 2L, DATE'2021-01-15', make_ym_interval(2, 0))
+          |AS t(i, l, d, ym)""".stripMargin)
+        .coalesce(1).createOrReplaceTempView("varka_raising_residual")
+      session.catalog.cacheTable("varka_raising_residual")
+      // The codegen order's case: `d IS NOT NULL` written first runs after `(l + 1) > 0`, which
+      // does not read `d`, so Spark raises on the row whose `d` is null.
+      session.sql(
+        """SELECT * FROM VALUES
+          |  (1L, DATE'2021-03-01'),
+          |  (9223372036854775807L, CAST(NULL AS DATE))
+          |AS t(l, d)""".stripMargin)
+        .coalesce(1).createOrReplaceTempView("varka_raising_null_test")
+      session.catalog.cacheTable("varka_raising_null_test")
+      // The fallback's case: every conjunct fuses, the kernel declines the batch on the month
+      // of 13, and the per-row fallback must evaluate `d2 IS NOT NULL` where codegen does, last.
+      session.sql(
+        """SELECT * FROM VALUES
+          |  (13, DATE'2021-12-31', CAST(NULL AS DATE)),
+          |  (5, DATE'2021-12-31', DATE'2021-01-01')
+          |AS t(i, d, d2)""".stripMargin)
+        .coalesce(1).createOrReplaceTempView("varka_raising_fallback")
+      session.catalog.cacheTable("varka_raising_fallback")
+    }
+    def plan(q: String): SparkPlan = varkaSpark.sql(q).queryExecution.executedPlan
+    val t = "FROM varka_raising_residual WHERE"
+    try {
+      withAnsi(true) {
+        // Raising first: nothing Spark evaluates after it may fuse.
+        val first = s"SELECT i $t (l + 1) > 0 AND d < DATE'2021-06-01'"
+        assertNotFused(plan(first))
+        checkSparkRaisesTheSame[SparkArithmeticException](first)
+        // Between two fused conjuncts: the first stays fused, the overflow row passes it.
+        val between = s"SELECT i $t d > DATE'2021-02-01' AND (l + 1) > 0 AND d < DATE'2021-06-01'"
+        assertFused(plan(between))
+        checkSparkRaisesTheSame[SparkArithmeticException](between)
+        // A fused conjunct written first rejects the overflow row before the sum runs, on both.
+        val rejected = s"SELECT i $t d < DATE'2021-06-01' AND (l + 1) > 0 AND i > 5 ORDER BY i"
+        assertFused(plan(rejected))
+        assert(checkSparkAnswerMaybeThrows(rejected) == VarkaMaybeThrows.Answered(Seq(Row(7))))
+        val nullTest = "SELECT l FROM varka_raising_null_test WHERE d IS NOT NULL AND (l + 1) > 0"
+        assertNotFused(plan(nullTest))
+        checkSparkRaisesTheSame[SparkArithmeticException](nullTest)
+        val fallback =
+          "SELECT i FROM varka_raising_fallback WHERE d2 IS NOT NULL AND make_date(2021, i, 1) < d"
+        assertFused(plan(fallback))
+        checkSparkRaisesTheSame[SparkDateTimeException](fallback)
+        // Without whole-stage codegen Spark evaluates the condition as written and the null test
+        // drops the row first: no error on either engine, so the fallback follows that order.
+        withBothConf(SQLConf.WHOLESTAGE_CODEGEN_ENABLED.key, "false") {
+          assertFused(plan(fallback))
+          assert(checkSparkAnswerMaybeThrows(fallback) == VarkaMaybeThrows.Answered(Seq(Row(5))))
+        }
+      }
+      withAnsi(false) {
+        val first = s"SELECT i $t (l + 1) > 0 AND d < DATE'2021-06-01' ORDER BY i"
+        assertFused(plan(first))
+        assert(checkSparkAnswerMaybeThrows(first) == VarkaMaybeThrows.Answered(Seq(Row(5), Row(7))))
+        val interval = s"SELECT i $t (ym + ym) > ym AND d < DATE'2021-06-01'"
+        checkSparkRaisesTheSame[SparkArithmeticException](interval)
+      }
+    } finally {
+      Seq(spark, varkaSpark).foreach { session =>
+        session.catalog.uncacheTable("varka_raising_residual")
+        session.catalog.uncacheTable("varka_raising_null_test")
+        session.catalog.uncacheTable("varka_raising_fallback")
+        Seq("varka_raising_residual", "varka_raising_null_test", "varka_raising_fallback")
+          .foreach(session.catalog.dropTempView)
+      }
     }
   }
 

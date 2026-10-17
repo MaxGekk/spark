@@ -24,7 +24,8 @@ import org.apache.spark.{PartitionEvaluator, PartitionEvaluatorFactory, SparkExc
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.{Attribute, BasePredicate, Expression, IsNotNull, NamedExpression, Predicate, PredicateHelper, SortOrder, UnsafeProjection}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, BasePredicate, Expression, IsNotNull, LeafExpression, NamedExpression, Predicate, PredicateHelper, SortOrder, UnsafeProjection}
+import org.apache.spark.sql.catalyst.expressions.codegen.{CodegenFallback, VarkaConjunctOrder}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSelectionBitmap
 import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
@@ -65,6 +66,28 @@ private[sql] trait VarkaFilterExecBase extends UnaryExecNode with PredicateHelpe
    * the conf as it stands when the plan runs, so the two cannot split the condition differently.
    */
   def sessionEmit: VarkaSessionEmit
+
+  /**
+   * What the per-row fallback evaluates: the whole condition where the rule split one, and the
+   * fused conjuncts otherwise, in the order Spark's own `FilterExec` would evaluate them here
+   * (VARKA-380). The generated predicate evaluates an `AND` tree as written, which is Spark's
+   * order when the filter is not whole-stage compiled; when it is, codegen moves the `IsNotNull`
+   * tests, and an `isnotnull(d)` written first would drop a row before a conjunct that raises on
+   * it in Spark. Whether Spark compiles the filter is `CollapseCodegenStages.supportCodegen`'s
+   * test, asked of this node: codegen on, no expression that falls back, and no more columns
+   * than `spark.sql.codegen.maxFields`.
+   */
+  protected def fallbackCondition: Expression = {
+    val whole = wholeCondition.getOrElse(condition)
+    val fallsBack = whole.exists {
+      case _: LeafExpression => false
+      case _: CodegenFallback => true
+      case _ => false
+    }
+    val compiled = conf.wholeStageEnabled && !fallsBack &&
+      !WholeStageCodegenExec.isTooManyFields(conf, child.schema)
+    if (compiled) VarkaConjunctOrder.inCodegenOrder(whole) else whole
+  }
 
   // The settings are an implementation detail of the node, not an argument a plan reader needs.
   override protected def stringArgs: Iterator[Any] =
@@ -172,7 +195,7 @@ case class VarkaFilterExec(
       VarkaExecMetrics.fromNode(metrics.getOrElse(_, null)),
       sessionEmit = sessionEmit,
       warmupEnabled = conf.varkaWarmupEnabled,
-      wholeCondition = wholeCondition)
+      wholeCondition = Some(fallbackCondition))
     if (conf.usePartitionEvaluator) {
       child.executeColumnar().mapPartitionsWithEvaluator(evaluatorFactory)
     } else {
@@ -423,7 +446,7 @@ case class VarkaFilterColumnarToRowExec(
       VarkaExecMetrics.fromNode(metrics.getOrElse(_, null)),
       sessionEmit = sessionEmit,
       warmupEnabled = conf.varkaWarmupEnabled,
-      wholeCondition = wholeCondition)
+      wholeCondition = Some(fallbackCondition))
     if (conf.usePartitionEvaluator) {
       child.executeColumnar().mapPartitionsWithEvaluator(evaluatorFactory)
     } else {
