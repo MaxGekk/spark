@@ -386,6 +386,7 @@ public final class VarkaRangeAnalysis {
    * instance {@code restrictedOperands} names, since an equal column elsewhere in the node is not
    * in that position.
    */
+  // Identity on purpose: the operand instance in the position, not an equal node.
   @SuppressWarnings("ReferenceEquality")
   private static boolean restricted(VarkaVectorIR node, VarkaVectorIR child) {
     for (VarkaOperandPosition.Restricted r : VarkaOperandPosition.restrictedOperands(node)) {

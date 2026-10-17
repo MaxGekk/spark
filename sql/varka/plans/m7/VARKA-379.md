@@ -290,3 +290,71 @@ pre-pass could not do. The per-shape bound remains `m9/SCOPE.md` item 102.
    both median and best, and the four rows above within 5% of the base by best - the guard is
    four vector ops a lane group on a vector already in a register, beside a decomposition of tens.
 3. The far-date suites pass unchanged in what they assert, except the status a decline carries.
+
+### 10.4 Outcome
+
+Built as 10.2 describes (17 October 2026). Section 6.1's predictions #2 and #3 are scored by the
+pair of 10.1, both failed: the bounded rows were 9 to 17% slower, not within 3%, and four rows
+crossed the pair's 10% threshold by median (a calibration entry, ratio 3 to 6). #1, the evaluator
+overhead benchmark's rows, was not part of the pair reported here.
+
+**What was built.** `DeclineSink.guardDayColumns`, called at the root of each projection entry,
+predicate conjunct and `fitsAlone` trial, before the budgets; `VarkaRangeAnalysis.guardColumns`,
+the rewrite; and the range analysis's `GuardedRange` arm answering days. No emitter code changed.
+The evaluator's pre-pass, `IntRangeOps` and `STATUS_INPUT_BOUND` stay for the
+`CAST(i AS INTERVAL DAY)` bound alone.
+
+**Emitted code (10.3 #1).** `emitted_bytes.json` moved for exactly the 24 coverage rows that carry
+the bound, at both widths and in the option arms built from them; none of the fuzz blocks moved,
+and no row's set of methods changed. Per method, at the laptop's width (`dev/varka_emit.sh`,
+before with the wrap disabled):
+
+| shape | dense loop | masked loop |
+|---|---|---|
+| `year(d)` | 409 to 461 | 409 to 555 |
+| `weekofyear(d)` | 622 to 674 | 622 to 768 |
+| `extract(YEAROFWEEK FROM d)` | 531 to 583 | 531 to 677 |
+| `year(d) * 100 + month(d)` | 472 to 524 | 472 to 618 |
+| `datediff(d, d2) + 1` | 167 to 252 | 167 to 440 |
+
+The dense bodies are inside the prediction (52 bytes for one column, 85 for two); the masked
+bodies are not: 146 bytes for one column and 273 for two, against at most 90 and 140. What the
+prediction missed is that these masked loops read no input validity before - the driver computes
+the outputs' validity a word at a time - and the guard has to, so that a null lane's undefined
+day cannot condemn the batch: each lane group now loads the column's validity word and makes a
+mask of it, per guarded column. The pre-pass did the same per lane group, with a byte loop.
+`year(d) * 100 + month(d)` shows the guard shared: both fields read one guarded column, one guard.
+
+**Two tests the guard's ops moved.** `VarkaInliningCliffSuite` pins the census shape of VARKA-209,
+twenty-two `year(d) + k` tails with the call-site budget off, at 99 vector call sites a loop; the
+guard's two compares make it 101, still past the C1 limit the census found, and the pin says so.
+And `VarkaExpressionCompilerSuite`'s op-cap case (VARKA-169) builds a 63-op tree over `d`, which
+with its guard is 64, the cap itself: beside `year(d)` it became the overflow entry instead of
+`month(d)`, so the legacy half of that test now puts the tree first.
+
+**Tests added.** `VarkaGuardEdgeSuite`: the column bound joins the guards' edge table (both ends
+and one past, a full lane group and the epilogue lane, valid and null, through both bodies); and a
+test that compiles `year(d)`, `datediff(d, d2) + 1` under ANSI and a kernel split one output a
+method with the guarded output last, and runs each guarded column with a far day in a full lane
+group and in the tail, in the dense body, the masked body and the masked body forced, and with far
+days only under null rows, which its masked body answers and its dense body, the nulls cleared,
+declines; the split case checks the guard's constant is in a loop method other than the first.
+`VarkaFarDaySuite` reads the value-range reason where it read the input bound; what it asserts is
+otherwise unchanged and it passes (10.3 #3 held).
+
+**Suites run.** The gate step by step, since one call cannot hold the whole of it: compile, wide
+and narrow (1,389 passed each, 34 cancelled as on every run, after the cliff pin's fix, which the
+first wide run failed on), quiet, sweep, doc, bench and quotes passed. Lint: `dev/lint-java` and
+`dev/scalastyle` passed, and Error Prone after two `ReferenceEquality` suppressions on the
+rewrite's deliberate identity tests; NullAway then stops on `VarkaEmitTrace.onEmission`, which this
+change does not touch and master has fixed since this branch's last merge of it (#889, #890). The
+option matrix over the guard-relevant configurations: `exactRefusalStatus=true` and
+`guardUnderArm=false` pass; `methodByteBudget=0` fails two tests whose IR is built by hand and
+never reaches the compiler - `VarkaKernelPlanSuite`'s shared trace over 300 `date_add` nodes, which
+that configuration's 64-op cap refuses, and `VarkaEmitterChronoSuite`'s scratch refusal over
+`year` and `month` of a bare column - so neither rests on this change.
+
+**Left open.** A far-day decline is counted under the value-range reason, beside the `TIME`
+family's range guards, rather than a reason of its own; the kernel cannot tell the two apart
+without a status bit for the column bound, which would be a second refusal reason on the same
+node. Prediction 10.3 #2 waits for the re-pair.
