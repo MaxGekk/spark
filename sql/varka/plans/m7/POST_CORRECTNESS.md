@@ -192,14 +192,17 @@ row meets the conditions in Spark's order. The census itself had a flaw. Its que
 partitions, so when rows in different partitions raised different errors, either could arrive
 first, on either engine, and the fuzzer absorbed the disagreement by rerunning three times. Now a
 query that raised runs again over one partition. With that verdict, 150,000 flat queries found no
-disagreement, and 150,000 nested ones found two the race had hidden. In the first, Varka's
-columnar filter finished its batch before the projection above saw a row, so where Spark raised
-the projection's error on the first row, Varka raised the filter's on the fourth; a change in
-review delivers the rows before the failing one first. In the second, Varka raises where Spark's
-default session answers, and Spark disagrees with itself: its compiled filter stops at a
-condition that is NULL, its interpreted filter goes on to the one that raises (SPARK-60315). A
-change proposed upstream would make the compiled filter raise too, which is Varka's answer today,
-so that row waits for Spark's decision, and the nightly draws no nested trees until it comes.
+disagreement, and another 150,000 that drew nested trees, half of them nested, found two the race
+had hidden.
+
+In the first, Varka's columnar filter finished its batch before the projection above saw a row, so
+where Spark raised the projection's error on the first row, Varka raised the filter's on the
+second; a change in review delivers the rows before the failing one first. In the second, Varka
+raises where Spark's default session answers, and Spark disagrees with itself: its compiled filter
+stops at a condition that is NULL, its interpreted filter goes on to the one that raises
+(SPARK-60315). A change proposed upstream would make the compiled filter raise too, which is
+Varka's answer today, so that row waits for Spark's decision, and the nightly draws no nested
+trees until it comes.
 
 Two measurements say how much of that the tests actually check. Under every Varka suite the
 bytecode writer takes 90% of its branches and the compiler 84%, and one of the writer's named

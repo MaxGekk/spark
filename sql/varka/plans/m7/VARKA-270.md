@@ -166,3 +166,22 @@ sentences that change when it merges. The proofs-only post is `m9/SCOPE.md` item
 Prediction 1 rescored: the definitions put the body, without figure lines and slots, at about
 1,930 words, 30 over the plan's 1,900, after four phrases were cut. **Failed, narrowly**; the
 coordinator's definitions are worth the words.
+
+### 10.3 The last two slots, 17 October 2026
+
+Filled before their pull requests merged, against 6's rule, at the coordinator's call: the
+milestone's close waits on the post, and #874 and #911 may merge today or move to milestone 8 as
+open pull requests. The date-bound paragraph in "Where does the checking stop?" became a closed
+gap: the solver's find was run end to end on a cached table (#874's record), and the check it
+describes is #874's running minimum and maximum. The census paragraph says how row 380's fix
+(#908), row 381's one-partition rerun and its two censuses of 150,000 (#909), row 387's fix (#911)
+and row 386's wait on apache/spark#59573 ended, split in two so the fix and the flaw stand apart
+from the two finds. Two phrases say "a change in review" and flip at publication: to "now checks"
+and "now delivers" if #874 and #911 have merged, or to "a change proposed" if either has moved to
+milestone 8. The cost of #874's check is not in the post; its 10-round pair (run 39038439214) was
+still running, and a sentence is owed if it returns a number worth a reader's time.
+
+Prediction 1 rescored: the body without figure lines is about 2,100 words, about 180 over 10.2's
+1,930. The two slots were allowed 200 together and took about 260 net of the markers they
+replaced; the third slot was filled in 10.1. **Failed**, by the same margin as before plus the
+slots' overrun; nothing was cut, since each sentence states a find or how it ended.
