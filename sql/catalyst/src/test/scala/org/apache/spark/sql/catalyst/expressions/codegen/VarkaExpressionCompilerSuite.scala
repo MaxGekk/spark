@@ -87,6 +87,13 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
   private def out(e: org.apache.spark.sql.catalyst.expressions.Expression): NamedExpression =
     Alias(e, "c")()
 
+  /**
+   * Kernel input `ordinal` read as a date the compile rested on the column bound for: guarded by
+   * it in the tree, which is how the kernel checks it (VARKA-379).
+   */
+  private def inBound(ordinal: Int): GuardedRange = new GuardedRange(new ColumnRef(ordinal),
+    VarkaChrono.CONTRACT_MIN_DAYS, VarkaChrono.CONTRACT_MAX_DAYS)
+
   test("a nested chain compiles recursively with literal slots in first-occurrence order") {
     val expr = DateSub(DateAdd(d, Literal(1)), Literal(2))
     val compiled = VarkaExpressionCompiler.compile(Seq(out(expr)), childOutput).get
@@ -292,17 +299,17 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
       Seq(out(Year(d)), out(Month(d)), out(DayOfMonth(d)), out(Quarter(DateAdd(d, Literal(3))))),
       childOutput).get
     assert(compiled.outputs.asScala.toSeq === Seq(
-      new IRYear(new ColumnRef(0)),
-      new IRMonth(new ColumnRef(0)),
-      new IRDayOfMonth(new ColumnRef(0)),
-      new IRQuarter(new AddDays(new ColumnRef(0), new LiteralSlot(0)))))
+      new IRYear(inBound(0)),
+      new IRMonth(inBound(0)),
+      new IRDayOfMonth(inBound(0)),
+      new IRQuarter(new AddDays(inBound(0), new LiteralSlot(0)))))
     assert(compiled.outputTypes.asScala.toSeq === Seq(IntegerType, IntegerType, IntegerType,
         IntegerType))
   }
 
   test("dayofyear compiles with an IntegerType output") {
     val compiled = VarkaExpressionCompiler.compile(Seq(out(DayOfYear(d))), childOutput).get
-    assert(compiled.outputs.asScala.toSeq === Seq(new IRDayOfYear(new ColumnRef(0))))
+    assert(compiled.outputs.asScala.toSeq === Seq(new IRDayOfYear(inBound(0))))
     assert(compiled.outputTypes.asScala.toSeq === Seq(IntegerType))
   }
 
@@ -347,7 +354,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
   test("weekofyear compiles to the week tail over the Thursday shift, IntegerType") {
     val compiled = VarkaExpressionCompiler.compile(Seq(out(WeekOfYear(d))), childOutput).get
     assert(compiled.outputs.asScala.toSeq ===
-        Seq(new IRWeekOfYear(new ThursdayOf(new ColumnRef(0)))))
+        Seq(new IRWeekOfYear(new ThursdayOf(inBound(0)))))
     assert(compiled.outputTypes.asScala.toSeq === Seq(IntegerType))
   }
 
@@ -359,7 +366,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     val extracted = Extract(Literal("WEEK"), d, WeekOfYear(d))
     val compiled = VarkaExpressionCompiler.compile(
       Seq(out(extracted), out(WeekOfYear(d))), childOutput).get
-    val pair = new IRWeekOfYear(new ThursdayOf(new ColumnRef(0)))
+    val pair = new IRWeekOfYear(new ThursdayOf(inBound(0)))
     assert(compiled.outputs.asScala.toSeq === Seq(pair, pair))
   }
 
@@ -441,7 +448,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     val viaExtract = Extract(Literal("YEAROFWEEK"), d, YearOfWeek(d))
     val compiled = VarkaExpressionCompiler.compile(
       Seq(out(viaExtract), out(WeekOfYear(d))), childOutput).get
-    val thursday = new ThursdayOf(new ColumnRef(0))
+    val thursday = new ThursdayOf(inBound(0))
     assert(compiled.outputs.asScala.toSeq === Seq(new IRYear(thursday), new IRWeekOfYear(thursday)))
     assert(compiled.outputTypes.asScala.toSeq === Seq(IntegerType, IntegerType))
     // The same admission as weekofyear's: three days short of a bare date's last shift.
@@ -486,7 +493,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
 
   test("last_day compiles with a DateType output, unlike its four siblings") {
     val compiled = VarkaExpressionCompiler.compile(Seq(out(LastDay(d))), childOutput).get
-    assert(compiled.outputs.asScala.toSeq === Seq(new IRLastDay(new ColumnRef(0))))
+    assert(compiled.outputs.asScala.toSeq === Seq(new IRLastDay(inBound(0))))
     assert(compiled.outputTypes.asScala.toSeq === Seq(DateType))
   }
 
@@ -496,8 +503,8 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
         out(DateAddYMInterval(d, Literal.create(-5, YearMonthIntervalType())))),
       childOutput).get
     assert(compiled.outputs.asScala.toSeq === Seq(
-      new IRAddMonths(new ColumnRef(0), new LiteralSlot(0)),
-      new IRAddMonths(new ColumnRef(0), new LiteralSlot(1))))
+      new IRAddMonths(inBound(0), new LiteralSlot(0)),
+      new IRAddMonths(inBound(0), new LiteralSlot(1))))
     assert(compiled.literals.asScala.toSeq === Seq(3, -5))
     assert(compiled.outputTypes.asScala.toSeq === Seq(DateType, DateType))
   }
@@ -525,7 +532,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     val compiled = VarkaExpressionCompiler.compile(
       Seq(out(AddMonths(d, i)), out(DateAddYMInterval(d, Cast(i, monthInterval)))),
       childOutput).get
-    val shared = new IRAddMonths(new ColumnRef(0), new ColumnRef(1))
+    val shared = new IRAddMonths(inBound(0), new ColumnRef(1))
     assert(compiled.outputs.asScala.toSeq === Seq(shared, shared))
     assert(compiled.inputOrdinals.asScala.toSeq === Seq(0, 2))
     assert(compiled.literals.asScala.toSeq === Nil)
@@ -1059,7 +1066,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     for (col <- Seq(ymm, ymy, ym)) {
       val compiled = VarkaExpressionCompiler.compile(
         Seq(out(DateAddYMInterval(d, col))), withIntervals).get
-      assert(compiled.outputs.asScala.toSeq === Seq(new IRAddMonths(new ColumnRef(0),
+      assert(compiled.outputs.asScala.toSeq === Seq(new IRAddMonths(inBound(0),
           new ColumnRef(1))),
         s"unit ${col.dataType.simpleString} did not compile to a column-count add_months")
       assert(compiled.outputTypes.asScala.toSeq === Seq(DateType))
@@ -1124,7 +1131,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     val bounded = VarkaExpressionCompiler.compile(
       Seq(out(Cast(Year(d), ymy.dataType))), withIntervals).get
     assert(bounded.outputs.asScala.toSeq === Seq(
-      new IntArith(IntOp.MUL, Overflow.WRAP, new IRYear(new ColumnRef(0)), new LiteralSlot(0))))
+      new IntArith(IntOp.MUL, Overflow.WRAP, new IRYear(inBound(0)), new LiteralSlot(0))))
     assert(bounded.outputTypes.asScala.toSeq === Seq(ymy.dataType))
     assert(declineReason(Cast(i, ymy.dataType), withIntervals) ===
       "checked int multiply whose operands do not rule out overflow")
@@ -1134,8 +1141,8 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // to agree.
     val inCount = VarkaExpressionCompiler.compile(
       Seq(out(DateAddYMInterval(d, Cast(Year(d), ymy.dataType)))), withIntervals).get
-    assert(inCount.outputs.asScala.toSeq === Seq(new IRAddMonths(new ColumnRef(0),
-      new IntArith(IntOp.MUL, Overflow.WRAP, new IRYear(new ColumnRef(0)),
+    assert(inCount.outputs.asScala.toSeq === Seq(new IRAddMonths(inBound(0),
+      new IntArith(IntOp.MUL, Overflow.WRAP, new IRYear(inBound(0)),
         new LiteralSlot(0)))))
     assert(declineReason(DateAddYMInterval(d, Cast(i, ymy.dataType)), withIntervals) ===
       "checked int multiply whose operands do not rule out overflow")
@@ -1149,7 +1156,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // `next_day` has no such guard.
     val compiled = VarkaExpressionCompiler.compile(
       Seq(out(DateAddYMInterval(d, UnaryMinus(ymm, false)))), withIntervals).get
-    assert(compiled.outputs.asScala.toSeq === Seq(new IRAddMonths(new ColumnRef(0),
+    assert(compiled.outputs.asScala.toSeq === Seq(new IRAddMonths(inBound(0),
       new IntNeg(Overflow.FAIL, new ColumnRef(1)))))
     assert(compiled.outputTypes.asScala.toSeq === Seq(DateType))
   }
@@ -1178,7 +1185,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // relabel cast, fuses on the same arm.
     val negCast = VarkaExpressionCompiler.compile(
       Seq(out(DateAddYMInterval(d, UnaryMinus(Cast(i, ymm.dataType))))), withIntervals).get
-    assert(negCast.outputs.asScala.toSeq === Seq(new IRAddMonths(new ColumnRef(0),
+    assert(negCast.outputs.asScala.toSeq === Seq(new IRAddMonths(inBound(0),
       new IntNeg(Overflow.FAIL, new ColumnRef(1)))))
 
     val abs = VarkaExpressionCompiler.compile(
@@ -1192,8 +1199,8 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     val mk = VarkaExpressionCompiler.compile(
       Seq(out(MakeYMInterval(Year(d), Month(d)))), withIntervals).get
     assert(mk.outputs.asScala.toSeq === Seq(new IntArith(IntOp.ADD, Overflow.WRAP,
-      new IRMonth(new ColumnRef(0)),
-      new IntArith(IntOp.MUL, Overflow.WRAP, new IRYear(new ColumnRef(0)),
+      new IRMonth(inBound(0)),
+      new IntArith(IntOp.MUL, Overflow.WRAP, new IRYear(inBound(0)),
         new LiteralSlot(0)))))
     assert(mk.outputTypes.asScala.toSeq === Seq(YearMonthIntervalType()))
     assert(declineReason(MakeYMInterval(i, i), withIntervals) ===
@@ -1379,7 +1386,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
         "quarter" -> TruncLevel.QUARTER)) {
       val compiled = VarkaExpressionCompiler.compile(
         Seq(out(TruncDate(d, Literal(spelling)))), childOutput).get
-      assert(compiled.outputs.asScala.toSeq === Seq(new IRTruncDate(new ColumnRef(0), level)),
+      assert(compiled.outputs.asScala.toSeq === Seq(new IRTruncDate(inBound(0), level)),
           spelling)
       assert(compiled.outputTypes.asScala.toSeq === Seq(DateType), spelling)
       assert(compiled.literals.asScala.isEmpty,
@@ -1430,7 +1437,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // is a ColumnRef like any other, inputOrdinals names the string column, and the note tells
     // the evaluator to fill it before the kernel. No ANSI kind: TruncDate has no error path.
     val compiled = VarkaExpressionCompiler.compile(Seq(out(TruncDate(d, dow))), withDow).get
-    assert(compiled.outputs.asScala.toSeq === Seq(new IRTruncDateDynamic(new ColumnRef(0),
+    assert(compiled.outputs.asScala.toSeq === Seq(new IRTruncDateDynamic(inBound(0),
         new ColumnRef(1))))
     assert(compiled.outputTypes.asScala.toSeq === Seq(DateType))
     assert(compiled.inputOrdinals.asScala.toSeq === Seq(0, 5))
@@ -1447,9 +1454,9 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     val both = VarkaExpressionCompiler.compile(Seq(out(TruncDate(d, dow)),
       out(TruncDate(d, Literal("MONTH"))), out(TruncDate(d2, dow))), withDow).get
     assert(both.outputs.asScala.toSeq === Seq(
-      new IRTruncDateDynamic(new ColumnRef(0), new ColumnRef(1)),
-      new IRTruncDate(new ColumnRef(0), TruncLevel.MONTH),
-      new IRTruncDateDynamic(new ColumnRef(2), new ColumnRef(1))))
+      new IRTruncDateDynamic(inBound(0), new ColumnRef(1)),
+      new IRTruncDate(inBound(0), TruncLevel.MONTH),
+      new IRTruncDateDynamic(inBound(2), new ColumnRef(1))))
     assert(both.inputOrdinals.asScala.toSeq === Seq(0, 5, 1))
     assert(both.derivedInputs.asScala.toSeq === Seq(new VarkaDerivedInput(1, 5,
         VarkaDerivedKind.TRUNC_LEVEL)))
@@ -1467,7 +1474,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // The range analysis knows the node - at most 365 days back - so year(trunc(d, fmt)) fuses.
     val composed = VarkaExpressionCompiler.compile(Seq(out(Year(TruncDate(d, dow)))), withDow).get
     assert(composed.outputs.asScala.toSeq === Seq(
-      new IRYear(new IRTruncDateDynamic(new ColumnRef(0), new ColumnRef(1)))))
+      new IRYear(new IRTruncDateDynamic(inBound(0), new ColumnRef(1)))))
   }
 
   test("declines year over a timestamp, which the analyzer casts") {
@@ -1930,7 +1937,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
       Seq(out(Add(DateDiff(d, d2), Literal(1),
           EvalMode.ANSI))), childOutput).get.outputs.asScala.toSeq ===
       Seq(new IntArith(IntOp.ADD, Overflow.WRAP,
-        new IRDateDiff(new ColumnRef(0), new ColumnRef(1)), new LiteralSlot(0))))
+        new IRDateDiff(inBound(0), inBound(1)), new LiteralSlot(0))))
     // Subtract and multiply take the same route; unary minus has no TRY spelling in Spark, so
     // its mode is only ever the two.
     assert(VarkaExpressionCompiler.compile(
@@ -1949,7 +1956,7 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // fused int field the node itself - three kinds, one arm.
     assert(VarkaExpressionCompiler.compile(
       Seq(out(Add(Year(d), i, EvalMode.LEGACY))), childOutput).get.outputs.asScala.toSeq ===
-      Seq(new IntArith(IntOp.ADD, Overflow.WRAP, new IRYear(new ColumnRef(0)),
+      Seq(new IntArith(IntOp.ADD, Overflow.WRAP, new IRYear(inBound(0)),
         new ColumnRef(1))))
   }
 
@@ -1962,9 +1969,9 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     val key = Add(Multiply(Year(d), Literal(100), EvalMode.ANSI), Month(d), EvalMode.ANSI)
     val compiled = VarkaExpressionCompiler.compile(Seq(out(key)), childOutput).get
     assert(compiled.outputs.asScala.toSeq === Seq(new IntArith(IntOp.ADD, Overflow.WRAP,
-      new IntArith(IntOp.MUL, Overflow.WRAP, new IRYear(new ColumnRef(0)),
+      new IntArith(IntOp.MUL, Overflow.WRAP, new IRYear(inBound(0)),
         new LiteralSlot(0)),
-      new IRMonth(new ColumnRef(0)))))
+      new IRMonth(inBound(0)))))
     // An int column carries no bound, so the same multiply over one keeps its declared mode -
     // and a checked multiply has no int-lane overflow test, so it declines with that reason.
     val partial = VarkaExpressionCompiler.compilePartial(
@@ -2406,8 +2413,8 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // is past HugeMethodLimit, which no regroup can shrink. The compiler asks the emitter and
     // demotes exactly that entry; the entries beside it fuse. Without the byte budget the
     // emitter serves it, into a method HotSpot never compiles, and so does the compiler - and
-    // then month(d) is the one left out, because year(d) and the tree already fill the op cap.
-    // Demoting the tree is what makes room for it.
+    // then month(d) is the one left out, because the tree, with the guard on its column's bound
+    // (VARKA-379), already fills the op cap. Demoting the tree is what makes room for it.
     val list = Seq(out(Year(d)), out(heavy(1, 32)), out(Month(d)))
     val partial = VarkaExpressionCompiler.compilePartial(list, childOutput).get
     assert(partial.specs.asScala.toSeq === Seq(new FusedOutput(0), VarkaOutputSpec.RESIDUAL,
@@ -2418,11 +2425,12 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     assert(partial.fused.outputs.size === 2)
     // Read with one kernel per projection: under the default the op cap's overflow entry fits
     // alone and is a second kernel's (VARKA-190.md 11).
-    val legacy = VarkaExpressionCompiler.compilePartial(list, childOutput,
-      VarkaMatrix.base.withMethodByteBudget(0).withSeveralKernels(false)).get
-    assert(legacy.specs.asScala.toSeq === Seq(new FusedOutput(0), new FusedOutput(1),
-        VarkaOutputSpec.RESIDUAL))
-    assert(legacy.declines.asScala(2).reason === "exceeds the emitter's fused budget")
+    // The tree is 64 ops with the guard, the cap itself, so it goes first here: beside year(d)
+    // it would be the overflow entry instead of month(d).
+    val legacy = VarkaExpressionCompiler.compilePartial(Seq(out(heavy(1, 32)), out(Month(d))),
+      childOutput, VarkaMatrix.base.withMethodByteBudget(0).withSeveralKernels(false)).get
+    assert(legacy.specs.asScala.toSeq === Seq(new FusedOutput(0), VarkaOutputSpec.RESIDUAL))
+    assert(legacy.declines.asScala(1).reason === "exceeds the emitter's fused budget")
     // The heavy output alone: nothing is left to fuse, so the projection does not fuse at all,
     // and the tools still say why.
     assert(VarkaExpressionCompiler.compilePartial(Seq(out(heavy(1, 32))), childOutput).isEmpty)

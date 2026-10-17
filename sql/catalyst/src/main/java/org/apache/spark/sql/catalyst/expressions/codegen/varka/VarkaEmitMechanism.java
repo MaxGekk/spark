@@ -78,6 +78,8 @@ enum VarkaEmitMechanism {
   GUARD_VALUE_RANGE(Family.GUARDS, "a re-armed value range guard"),
   GUARD_UNDER_ARM(Family.GUARDS, "a guard qualified by the IfElse arms its node sits under"),
   GUARD_EXACT_STATUS(Family.GUARDS, "a body folding two or more reasons into masks of their own"),
+  GUARD_MIN_MAX(Family.GUARDS,
+      "a column's range guard kept as a lane-wise min and max, compared once after the loop"),
 
   // The constant divisions, by the form taken.
   DIVIDE_MAGIC_LONG(Family.DIVISION, "a long-lane constant division by the magic form"),

@@ -198,6 +198,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [An intrinsic refusal line is not a verdict about this compile; the inlining decisions are](sql/varka/skills/vector-api-and-width.md#an-intrinsic-refusal-line-is-not-a-verdict-about-this-compile-the-inlining-decisions-are)
 * [A masked store through two lanes costs the loop, not the mask; a half species keeps the loop](sql/varka/skills/vector-api-and-width.md#a-masked-store-through-two-lanes-costs-the-loop-not-the-mask-a-half-species-keeps-the-loop)
 * [The Vector API's plain-Java fallback is a second implementation, sharing only its pre-dispatch checks](sql/varka/skills/vector-api-and-width.md#the-vector-apis-plain-java-fallback-is-a-second-implementation-sharing-only-its-pre-dispatch-checks)
+* [On AVX2 a validity word made into a lane mask costs more than a cheap kernel's own work](sql/varka/skills/vector-api-and-width.md#on-avx2-a-validity-word-made-into-a-lane-mask-costs-more-than-a-cheap-kernels-own-work)
 
 #### [Working in this repository](sql/varka/skills/working-in-this-repo.md)
 * [Repo Workflow (vecbricks/varka)](sql/varka/skills/working-in-this-repo.md#repo-workflow-vecbricksvarka)

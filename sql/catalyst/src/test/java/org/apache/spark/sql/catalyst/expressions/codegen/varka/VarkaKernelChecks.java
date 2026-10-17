@@ -21,8 +21,10 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.reflect.InvocationTargetException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -30,7 +32,9 @@ import java.util.OptionalLong;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NarrowLane;
 
 /**
@@ -708,15 +712,51 @@ public final class VarkaKernelChecks {
     }
   }
 
+  /**
+   * What the harness stores under the {@code nullOrdinal}-th null of a column the kernel reads
+   * through the column bound: the bound's two ends in turn, not the lane's. That guard reads a
+   * null row's stored day, by design (VARKA-379 11), so the lane's extremes there would decline
+   * every batch with a null and leave nothing compared; production stores day 0, which a Spark
+   * writer leaves under a null. The bound's ends are still the furthest a stored day can sit from
+   * zero without declining, so the column's other readers meet them as they met the poison.
+   */
+  static long storedUnderNull(int nullOrdinal) {
+    return (nullOrdinal & 1) == 0 ? VarkaChrono.CONTRACT_MIN_DAYS : VarkaChrono.CONTRACT_MAX_DAYS;
+  }
+
+  /** The inputs {@code roots} read through the column bound, as a bit set by ordinal. */
+  static long columnBoundColumns(List<VarkaVectorIR> roots) {
+    long columns = 0L;
+    var seen = new HashSet<VarkaVectorIR>();
+    var todo = new ArrayDeque<VarkaVectorIR>(roots);
+    while (!todo.isEmpty()) {
+      VarkaVectorIR node = todo.pop();
+      if (!seen.add(node)) {
+        continue;
+      }
+      if (node instanceof GuardedRange g && Analysis.guardsStoredValues(g)
+          && g.child() instanceof ColumnRef c) {
+        columns |= 1L << c.ordinal();
+      }
+      for (VarkaVectorIR child : VarkaVectorIR.childrenOf(node)) {
+        todo.push(child);
+      }
+    }
+    return columns;
+  }
+
   /** A batch's input buffers as a kernel's {@code run} takes them. */
   private record Inputs(long[] data, long[] validity, int[] nullCounts) { }
 
   /**
    * The batch's columns in buffers of {@code arena}. Null lanes are poisoned; a column with no
    * null reports one under {@code forceMasked}, and an all-null or null-free column hands over
-   * no bitmap, as the morsel contract says.
+   * no bitmap, as the morsel contract says. A column {@code roots} read through the column bound
+   * is poisoned with that bound's ends instead ({@link #storedUnderNull}).
    */
-  private static Inputs inputs(Arena arena, Lane lane, int numInputs) {
+  private static Inputs inputs(Arena arena, Lane lane, int numInputs,
+      List<VarkaVectorIR> roots) {
+    long boundColumns = columnBoundColumns(roots);
     int length = lane.length();
     long stride = lane.stride();
     long[] srcData = new long[numInputs];
@@ -733,7 +773,8 @@ public final class VarkaKernelChecks {
           // `MONTH_ARITH_MAX_MONTHS`, so a null lane holding its drawn value is in range by
           // construction and can never reach a guard's condemning comparison - which is the
           // one thing the fuzzer is here to reach.
-          lane.put(d, i, lane.poison(nulls));
+          lane.put(d, i, (boundColumns >>> c & 1L) != 0 ? storedUnderNull(nulls)
+              : lane.poison(nulls));
           nulls++;
         } else {
           lane.put(d, i, lane.value(c, i));
@@ -825,7 +866,7 @@ public final class VarkaKernelChecks {
     int length = lane.length();
     var roots = rootList.toArray(new VarkaVectorIR[0]);
     try (var arena = Arena.ofConfined()) {
-      var in = inputs(arena, lane, numInputs);
+      var in = inputs(arena, lane, numInputs, rootList);
       int n = roots.length;
       int runs = fills.size();
       var outs = new Outputs[runs];
@@ -957,7 +998,7 @@ public final class VarkaKernelChecks {
     var kernel = load(loader, className, bytes);
     try (var arena = Arena.ofConfined()) {
       var out = outputs(arena, lane, roots, fill);
-      run(kernel, lane, inputs(arena, lane, numInputs), out);
+      run(kernel, lane, inputs(arena, lane, numInputs, rootList), out);
       int changed = 0;
       for (var bits : out.bits()) {
         for (long b = 0; b < bits.byteSize(); b++) {

@@ -31,7 +31,10 @@ import scala.runtime.AbstractPartialFunction;
 import org.apache.spark.sql.catalyst.expressions.Attribute;
 import org.apache.spark.sql.catalyst.expressions.BoundReference;
 import org.apache.spark.sql.catalyst.expressions.Expression;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaChrono;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaRangeAnalysis;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
 
@@ -46,7 +49,9 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Lit
  * <p>The input bounds are the range facts the compile relied on: child ordinal {@code ordinal}
  * must lie in {@code [lo, hi]} for the entry being compiled. They follow the tables' rollback
  * discipline - {@link #boundsMark} before an entry, {@link #truncateBounds} when the entry
- * declines - and {@link #inputBounds} reports the survivors in kernel-input terms.
+ * declines - and {@link #inputBounds} reports the survivors in kernel-input terms. A date
+ * column's bound is the exception: the entry's compile ends by turning it into a guard in the
+ * kernel ({@link #guardDayColumns}), and it never reaches {@link #inputBounds}.
  *
  * <p>The long literal table lives here rather than beside the int one in every signature because
  * every compile arm already carries the sink, and because it is the second half of one table
@@ -69,8 +74,12 @@ final class DeclineSink {
   /** The longest rendering of an expression a decline keeps. */
   private static final int SHOWN_MAX = 80;
 
-  /** A noted range fact: child ordinal {@code ordinal} lies in {@code [lo, hi]}. */
-  private record Bound(int ordinal, int lo, int hi) {
+  /**
+   * A noted range fact: the input {@code key} names lies in {@code [lo, hi]}. The key is a child
+   * ordinal, or, where {@code slot} is set, the input's slot in the compile's input table - what
+   * an IR {@code ColumnRef} carries, so a fact the range analysis reports needs no table to note.
+   */
+  private record Bound(int key, boolean slot, int lo, int hi) {
   }
 
   private final Seq<Attribute> childOutput;
@@ -123,7 +132,53 @@ final class DeclineSink {
 
   /** Notes that child ordinal {@code ordinal} must lie in {@code [lo, hi]}. */
   void bound(int ordinal, int lo, int hi) {
-    bounds.add(new Bound(ordinal, lo, hi));
+    bounds.add(new Bound(ordinal, false, lo, hi));
+  }
+
+  /**
+   * Notes that the input in slot {@code slot} of the compile's input table must lie in
+   * {@code [lo, hi]}. Slots are stable for as long as the bound is kept: the table only appends,
+   * and a declining entry truncates the table and these bounds back to the same marks.
+   */
+  void boundSlot(int slot, int lo, int hi) {
+    bounds.add(new Bound(slot, true, lo, hi));
+  }
+
+  /**
+   * Notes the column bound, {@code VarkaRangeAnalysis.CONTRACT}, on the date column in input slot
+   * {@code slot}: the callback a compile hands the range analysis when it acts on the answer. The
+   * entry's compile ends with {@link #guardDayColumns}, which moves the check into the kernel.
+   */
+  void dayColumnBound(int slot) {
+    boundSlot(slot, VarkaChrono.CONTRACT_MIN_DAYS, VarkaChrono.CONTRACT_MAX_DAYS);
+  }
+
+  /**
+   * {@code compiled}, an entry's tree whose compile noted bounds from {@code mark} on, with every
+   * use of each column {@link #dayColumnBound} noted read through a guard over the column bound
+   * ({@code VarkaRangeAnalysis.guardColumns}), and those bounds dropped: the kernel checks them
+   * on the vectors it loads, so the evaluator does not pass over the columns before it
+   * (VARKA-379). Called once per entry at its root, before the budgets are asked, rather than
+   * where a bound is noted: the overflow check's site answers a question about operands its
+   * callers then build the node from, and a guard placed there would not reach that node. A bound
+   * the tree could not take as a guard - a column in a restricted operand position - stays for the
+   * evaluator's check. The child-ordinal bounds stay too; they are not date columns.
+   */
+  VarkaVectorIR guardDayColumns(VarkaVectorIR compiled, int mark) {
+    var slots = new LinkedHashSet<Integer>();
+    for (Bound b : bounds.subList(mark, bounds.size())) {
+      if (b.slot()) {
+        slots.add(b.key());
+      }
+    }
+    if (slots.isEmpty()) {
+      return compiled;
+    }
+    var unguarded = new LinkedHashSet<Integer>();
+    VarkaVectorIR guarded = VarkaRangeAnalysis.guardColumns(compiled, slots, unguarded);
+    bounds.subList(mark, bounds.size())
+        .removeIf(b -> b.slot() && !unguarded.contains(b.key()));
+    return guarded;
   }
 
   int boundsMark() {
@@ -166,7 +221,9 @@ final class DeclineSink {
   List<VarkaInputBound> inputBounds(VarkaSlotTable inputs) {
     var distinct = new LinkedHashSet<VarkaInputBound>();
     for (Bound b : bounds) {
-      OptionalInt index = inputs.slot(b.ordinal());
+      OptionalInt index = b.slot()
+          ? (b.key() < inputs.size() ? OptionalInt.of(b.key()) : OptionalInt.empty())
+          : inputs.slot(b.key());
       if (index.isPresent()) {
         distinct.add(new VarkaInputBound(index.getAsInt(), b.lo(), b.hi()));
       }
