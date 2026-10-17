@@ -193,8 +193,14 @@ the query and Varka returned rows.
 deterministic error verdict found two more, rows 386 and 387, and one disagreement inside Spark
 itself, between its compiled and interpreted filters (SPARK-60315). Say how each ended.]
 
-[PENDING #890: branch coverage of the bytecode writer and the compiler, and a bounded mutation
-run; which branches and mutants no test reaches.]
+Two measurements say how much of that the tests actually check. Under every Varka suite the
+bytecode writer takes 90% of its branches and the compiler 84%, and one of the writer's named
+mechanisms, the constant pool's decline, is reached by none. A mutation run then planted 1,760
+small faults, a flipped condition or a dropped call, in the two classes that plan every kernel
+before a byte is written. Tests that check an answer caught 86% of them. Of the other 256, 37 were
+caught by tests written after reading them, and the rest change no answer: a check that cannot
+fire, state nothing reads, or only the shape of the emitted code. No fault exposed a wrong answer;
+the five gaps were tests that did not exist.
 
 **Some verdicts depend on the JIT.** Varka hands a kernel real batches only after C2 has compiled it
 and it runs without allocating. Whether that happens before the deadline depends on what the JIT
