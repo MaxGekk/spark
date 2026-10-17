@@ -194,3 +194,22 @@ with `dev/varka_post_page.py` and a card from Figure 3. Before publication the t
 pull requests (#874 and #911), so neither fix was merged and the post said so; #911 merged later
 the same day, and row 387 is done in this milestone after all. The cost of the
 date check is not in the post; its pair had not returned.
+
+### 10.5 Recast for testers and republished, 17 October 2026
+
+On the owner's review of the published post ("its structure is not clear"; list the methods with
+links to their sections; refocus on professional testers and quality engineers; explain what a
+kernel is before counting them; give each method an example; replace the provenance list with
+links to the files), the post was rewritten the same day and republished at the same address.
+The shape now: a worked query that explains the kernel, the oracle, a table of the ten methods
+linking to their sections, one section per method in a fixed order (what it checks and against
+what, an example from a committed file, what it found and what it costs, where it stops), a
+section on the two kinds of verdict that could not be trusted, a defects-by-method section with a
+new figure (`fig51.py`, from `figures/data/defects-by-method.tsv`, which names the record behind
+each chip), where the checking stops, and the files behind the post as repository links. The body
+is about 3,300 words, the examples most of the growth over 10.1's 1,900; the owner read it and
+approved it at that length.
+
+Later the same evening #874 merged too, with `weekofyear`'s 4.6% accepted by the owner, so row 379
+is done in this milestone as well; the post's sentence on it now says the fix is merged, and the
+page was republished a third time.
