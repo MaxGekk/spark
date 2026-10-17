@@ -57,6 +57,8 @@
 #     the memory sanitizer (VARKA-263) sees every mapping;
 #   * SKILLS.md's generated index still matches the lesson files under
 #     sql/varka/skills/ (dev/varka_toc.py), when either changed;
+#   * the calibration table's entry files under sql/varka/skills/calibration/ are well formed
+#     (dev/varka_calibration.py --check), when one of them or the tool changed;
 #   * every number the documents quote traces to a committed results file
 #     (dev/varka_quote_check.py), when a document changed;
 #   * Python files pass `ruff check` and `ruff format --check`, the two halves of
@@ -374,6 +376,19 @@ if printf '%s\n' "${files[@]}" | grep -qE '^(SKILLS\.md|sql/varka/skills/.*\.md)
   out="$(dev/varka_toc.py --check SKILLS.md --from sql/varka/skills 2>&1)"; rc=$?
   if [ "$rc" -ne 0 ]; then
     echo "$out" | sed 's/^/contents: /'
+    findings=$((findings + rc))
+  fi
+fi
+
+# The calibration table is printed from one file per entry under sql/varka/skills/calibration/
+# (VARKA-384), so a malformed entry file - a field missing, a name that is not its task's - would
+# drop or garble its row in every plan's reading of the table without anyone seeing it.
+if printf '%s\n' "${files[@]}" \
+    | grep -qE '^(sql/varka/skills/calibration/.*|dev/varka_calibration\.py)$' \
+    && [ -x dev/varka_calibration.py ]; then
+  out="$(dev/varka_calibration.py --check 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "$out" | sed 's/^/calibration: /'
     findings=$((findings + rc))
   fi
 fi
