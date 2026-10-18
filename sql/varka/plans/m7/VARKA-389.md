@@ -321,8 +321,12 @@ fallback.
    a JVM where it ran first and found it exactly right there. Moving `ensure()` to the engine's
    first use (the shape cache's or the vector helpers' first touch, synchronously, once per JVM,
    200 to 600 ms on that thread) keeps 295's benefit in every JVM and removes this regression in
-   every JVM, benchmark included. Not yet measured in the benchmark's order; the measurement is
-   the smoke rung with the call moved, then the full file and a runner pair.
+   every JVM, benchmark included. Measured (E17, `templateWarmup()` called at the shape cache's
+   first `build`, 300 rounds, nothing else changed): the 16-entry shape COMPILED in 1.5 s twice,
+   the fastest verdict of the day, the range filters in 125 to 141 ms, the steady-state row
+   straight after the verdict at 34 ms best, the once-compiled row 45 ms. What remains for the
+   fix is the full file at both widths and a runner pair, and the order of the warm-up against
+   the query-path helpers that run vector code without a kernel.
 2. **Off by default.** Measured: the 16-entry shape compiles in 1.6 s, steady state 29 ms (E12).
    Returns VARKA-295's many-shape releases (3.6 to 8.2% of warm-ups in its fuzz arm), which 8.4a
    now reads as the same sum reached by other traps in a long-lived JVM.
