@@ -416,7 +416,8 @@ thread if it learns to run before the helpers without a race.
   not show, on master as on the fix (master's file reads 187 and 303 on those rows). It is not
   what this row was opened for and it predates the template warm-up; it is left to the owner as
   9.4 says, with the measurement that would find it.
-* **The runner pair** [FIX: pair].
+* **The runner pair**: two "Run benchmarks" dispatches of the class on the fix branch as #921
+  opened; their verdicts are added here when they land.
 * **The README's and the docs' cold-start row**, requoted from the new file: 1.6x once the
   warm-up's kernel is in (31 against 49 ms best), the first run at 0.9x on the row path, the
   verdict in about two seconds; `dev/varka_quote_check.py README.md` finds 0 orphans.
