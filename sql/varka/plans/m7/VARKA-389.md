@@ -223,7 +223,51 @@ that property reads COMPILED on the 16-entry shape in 1.6 and 1.7 s, the range f
 125 ms and the file of 28 September 48 ms. Prediction 1 was wrong twice over: not VARKA-379, and
 not one of the three it named second.
 
-### 8.4 The mechanism, as far as today's evidence reaches
+### 8.4a The mechanism, from the JIT's log (follows 8.3; supersedes 8.4 below where they differ)
+
+Two smoke runs of master under `-XX:+LogCompilation`, one with the template warm-up on (E13,
+RELEASED) and one with it off (E15, COMPILED), read at the first tier-4 compile of the warmed
+kernel's `loopDense0` and at every uncommon trap whose innermost frame is a shared template:
+
+| | warm-up on | warm-up off |
+| :--- | ---: | ---: |
+| inlined copies of `LambdaForm$Holder.constant_L` / `ImplCache.find` / `Int512Vector.lanewise` | 684 / 348 / 598 | 675 / 343 / 590 |
+| decompile counts on inlined templates | `IntVector.lanewise` 1, others | none |
+| the compile's cumulative decompile sum crosses 201 | at parse 24,100 of 120,000, inside `IntVector.lanewise` | never |
+| virtual calls left in the compile | 367 (304 in `lanewise`, 25 `add`, 23 `sub`, 6 `max`) | 0 |
+| uncommon traps with a template as innermost frame, whole run | 8, all `unstable_if` / `reinterpret`, all in the same second, the 38th | 0 |
+| first standalone tier-4 compile of `IntVector.lanewise` | the 14th second | the 14th second |
+
+So the two JVMs compile the same bytecode with the same inlining, and differ in one thing: in the
+warm-up arm the shared templates carry a decompile each. Where it comes from is the sequence. In
+both arms the benchmark's first Varka arms run without a warm-up and their interpreted calls take
+`IntVector.lanewise`, `Int512Vector.broadcast` and the operator cache past C2's invocation
+threshold, so they are compiled standalone in the 14th second from the profile of one kernel's operators. In
+the warm-up arm, the template warm-up then runs in the 38th second, when the first warmed shape queues its
+job, and its 300 rounds with every operator class interleaved take branches those standalone
+compiles never saw: `ImplCache.find` at bci 10, `lanewise` at bci 18 and 28 trap `unstable_if`
+with action `reinterpret`, which deoptimises the nmethod and adds one to each method's decompile
+count. The kernel's loop compiles seven seconds later, inlines `lanewise` about six hundred times,
+and C2 adds that one decompile once per copy (`Parse::Parse` sums each parsed method's
+`MethodData` counts into the compile): the sum reaches 201 a fifth of the way through and from
+there C2 keeps a real virtual call on every class-check miss instead of an uncommon trap
+(`VARKA-295.md` 9.6). The vector joining from such a call is not exact, the intrinsic refuses it,
+and one `int[16]` per iteration survives: the allocation the probe sees, and the boxed `add`,
+`sub` and `max` under which every allocation sample sat.
+
+This is why the cut is by width and not by machine: a group method of one output inlines each
+template about a hundred times and stays under 201 with the same decompile (E7 compiled clean
+with the warm-up on); four outputs inline it six hundred times. And why 15 October is the date:
+before #827 nothing deoptimised the templates in a one-shape JVM. The template warm-up was built
+on a JVM in which it ran before any template was compiled, VARKA-295's fuzz arm, and there it
+zeroed the class-check traps it was aimed at; in a JVM where vector code ran first, it is what
+deoptimises the templates. The round count does not matter: 100 rounds release the same way
+(E14). The benchmark takes that order by design, its unwarmed arms before the warmed one, and a
+Spark executor takes it whenever the query-path helpers (`IntRangeOps`, `SelectionVectorOps`,
+which 9.7 noted the warm-up does not cover) or a session without the warm-up run vector code
+before the first warmed shape.
+
+### 8.4 The mechanism, as far as today's evidence reaches (written before 8.4a)
 
 `VARKA-295.md` 9.6 established, from the JIT's own log, why a compiled kernel loop still boxes: a
 C2 compile sums, once per inlined copy, the class-check trap counts and the decompile counts a
@@ -266,3 +310,36 @@ output (E7) restored the verdict with the warm-up on, by dividing the multiplier
 5. **Missed.** The 28 September engine emits the same four groups and 402 call sites per method.
 6. **Open.** The fix is not chosen yet; the switch arm's steady-state row (29 ms against 48 on 28
    September) says the hold rule's bound is reachable.
+
+### 8.6 The fix: the options, with what each has measured
+
+The owner decides; the row's recommendation is the first, with the third as the measured
+fallback.
+
+1. **Run the template warm-up before any vector code, not before the first warmed shape.** The
+   warm-up only harms templates that are already compiled when it runs; VARKA-295 measured it on
+   a JVM where it ran first and found it exactly right there. Moving `ensure()` to the engine's
+   first use (the shape cache's or the vector helpers' first touch, synchronously, once per JVM,
+   200 to 600 ms on that thread) keeps 295's benefit in every JVM and removes this regression in
+   every JVM, benchmark included. Not yet measured in the benchmark's order; the measurement is
+   the smoke rung with the call moved, then the full file and a runner pair.
+2. **Off by default.** Measured: the 16-entry shape compiles in 1.6 s, steady state 29 ms (E12).
+   Returns VARKA-295's many-shape releases (3.6 to 8.2% of warm-ups in its fuzz arm), which 8.4a
+   now reads as the same sum reached by other traps in a long-lived JVM.
+3. **Raise the JVM's limits**, `-XX:PerMethodRecompilationCutoff` and `-XX:PerMethodTrapLimit`.
+   VARKA-295 measured both at 100,000 as 0 releases in 1,000. Measured here (E16, both at
+   100,000, warm-up on): the 16-entry shape COMPILED in 1.4 and 1.9 s, the range filters in 150
+   to 165 ms, and the steady-state row straight after the verdict at 16 ms best, the fastest of
+   every arm run today (29 off, 48 on 28 September, 125 master). A global JIT policy every
+   deployment would set beside `--add-modules jdk.incubator.vector`; it also covers any later
+   cause that adds a count to a shared template, which the first option does not, and it is one
+   smoke run's evidence, not a pair's.
+4. **Fewer rounds.** Measured and rejected: 100 rounds release the same way (E14), since the
+   harm is the deoptimisation, not the compile.
+5. **Narrower groups** (`heavyGroupOutputs` at 1, E7). Compiles with the warm-up on, by dividing
+   the multiplier; costs calls and prefix loads per batch for every wide shape, for good, and
+   leaves the sum one more decompile away from the cutoff.
+
+Whichever is chosen, the row adds the check that would have caught this: the 16-entry shape's
+warm-up verdict in a suite that first runs an unwarmed kernel, so the benchmark's order is the
+test's order, on a runner, with a bound on the time to COMPILED.
