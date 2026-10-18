@@ -197,6 +197,72 @@ half right: C2 declines call sites in these bodies, but the declined ones in the
 cold error paths (`AbstractSpecies::checkFailed`, 5,000 times) and a handful of sites with "no
 static binding", not a wholesale cutoff.
 
-### 8.3 The commit
+### 8.3 The commit: VARKA-295's template warm-up, `aa457c3797b`, 15 October
 
-[MORNING: B4, B5 and B8 - VARKA-279's commit, its parent, and VARKA-86 - name it.]
+Two more bisection points and two emits closed the window, and then a switch named the commit
+without a build:
+
+| Run | Engine | Verdict | What it settles |
+| :--- | :--- | :--- | :--- |
+| B4 | `e1cbfea709d`, VARKA-279, 12 October | COMPILED, 2.2 to 2.3 s | VARKA-86 and VARKA-279 are not the cause; the window is 12 to 16 October |
+| emits | 9 October, 12 October, before VARKA-379 | identical tables | the emitted class did not change in the window |
+| E12 | master, `-Dvarka.warmup.vectorTemplates=false` | COMPILED, 1.6 to 1.7 s | the Vector API template warm-up is the cause |
+
+The emit tables at the good 9 October and 12 October engines and at the bad 17 October engine
+agree to the byte: `loopDense0` 3,294 bytes, 408 Vector API call sites, no mask operation, the
+drivers 196 bytes, `run` 66. So the kernel the JIT is given is the same before and after the
+regression, and the change is in what the JVM knows when it compiles it. The one change in the
+window that touches that is `aa457c3797b`, "[VARKA-295] Warm the shared Vector API templates
+before the first kernel (#827)", merged 15 October: `VarkaVectorTemplateWarmup`, run once per JVM
+on the warm-up thread before its first job, calls every Vector API template the kernels use 300
+times with every operator class interleaved, so that the templates' call sites are profiled as
+megamorphic and the hottest templates are compiled by C2 from that mixed profile
+(`VARKA-295.md` 9.7). It ships with a property that turns it off, for measurements. Master with
+that property reads COMPILED on the 16-entry shape in 1.6 and 1.7 s, the range filters in 130 to
+145 ms, and the steady-state row straight after the verdict at 29 ms best, where master reads
+125 ms and the file of 28 September 48 ms. Prediction 1 was wrong twice over: not VARKA-379, and
+not one of the three it named second.
+
+### 8.4 The mechanism, as far as today's evidence reaches
+
+`VARKA-295.md` 9.6 established, from the JIT's own log, why a compiled kernel loop still boxes: a
+C2 compile sums, once per inlined copy, the class-check trap counts and the decompile counts a
+shared method's `MethodData` holds, and past 100 traps (`PerMethodTrapLimit`) or 201 decompiles
+(`PerMethodRecompilationCutoff`/2 + 1) it stops putting uncommon traps on class-check misses and
+keeps a real virtual call; the vector that joins from such a call is not exact, the `binaryOp`
+intrinsic refuses it, and one `int[16]` per iteration survives escape analysis. The counts come
+from the templates' standalone C2 compiles meeting another operator class and deoptimising. The
+template warm-up was built to zero those counts by making the templates' sites megamorphic before
+any standalone compile could speculate; in its reproducer, a JVM of hundreds of narrow shapes, it
+did.
+
+What it does to a wide shape is the other side of the same sum. A four-output group method of
+this kernel inlines each template hundreds of times (`VectorOperators.opKind` 170 times in
+VARKA-295's released compile, with 408 Vector API call sites per method here), so any count the
+templates carry is multiplied by hundreds, where a narrow kernel multiplies it by tens. The
+warm-up compiles the hottest templates standalone during its 300 rounds, and a template compiled
+standalone and then made not entrant, by a species or a class the warm-up did not feed it (9.7
+saw `VectorMask.fromLong` do exactly that), carries a decompile count from then on. One such count
+per copy, over hundreds of copies, is past 201 in the wide kernel's compile and under it in the
+range filter's, which is why the split is by shape, the same on every machine, and absent before
+15 October. The compilation log of the master smoke run (E13, in progress as this is written) is
+to show the sums themselves; what is already shown is the cause and its switch.
+
+Three further facts fit. The 4-core runners' "20 of 25 shapes" of 16 October (item 103) were
+#900's pairs run the day after #827 merged. The night's surfaces, single-expression kernels, were
+unaffected because they inline each template a handful of times. And splitting the groups to one
+output (E7) restored the verdict with the warm-up on, by dividing the multiplier by four.
+
+### 8.5 Predictions scored
+
+1. **Missed.** Not VARKA-379, and not VARKA-254, VARKA-296 or VARKA-86; the bisection landed on
+   VARKA-295's #827, which the list did not name.
+2. **Held.** Every tier-4 compile finished in 1.1 to 3.7 s; the C2 queue was empty at every
+   sample.
+3. **Half held.** C2 declines call sites in these bodies, but not for size: the declined sites
+   that matter are the virtual calls it keeps where a profile sum is past its limit.
+4. **Held in part, and overtaken.** The split groups compile in 2.4 to 3.3 s, but the switch
+   that names the cause compiles the unsplit kernel in 1.6 s, so the split is not the fix.
+5. **Missed.** The 28 September engine emits the same four groups and 402 call sites per method.
+6. **Open.** The fix is not chosen yet; the switch arm's steady-state row (29 ms against 48 on 28
+   September) says the hold rule's bound is reachable.
