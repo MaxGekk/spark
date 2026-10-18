@@ -408,6 +408,14 @@ thread if it learns to run before the helpers without a race.
   regression was measured against; the "once compiled" rows read 31 ms at 16 entries against 27
   and 57 ms at 100 against 42; the first run of the 16-entry shape 137 ms against stock's 119,
   the second 69 against 49.
+* **The three files side by side**, the laptop, same machine and pin, the rows the post draws:
+
+  | file | COMPILED of 71 | steady state at 2M rows, 16 / 54 / 100 entries, ms |
+  | :--- | ---: | :--- |
+  | 28 September (`5778ec020f1`) | 71 | 48 / 133 / 250 |
+  | 18 October, master (`793536853ab`) | 20 | 125 / 324 / 621 |
+  | 18 October, the fix | 71 | 41 / 105 / 186 |
+
 * **A residual, not the warm-up's.** The back-to-back section's warmed arm reads 184 ms a
   query at 54 entries and 336 at 100 against 28 September's 128 and 240, 40 to 44% slower,
   while at 16 entries it reads 49 against 47, and the same section's unwarmed Varka arm and the
@@ -422,18 +430,133 @@ thread if it learns to run before the helpers without a race.
   warm-up's kernel is in (31 against 49 ms best), the first run at 0.9x on the row path, the
   verdict in about two seconds; `dev/varka_quote_check.py README.md` finds 0 orphans.
 
+### 9.5 A second, older failure on four cores, found by the pull request's own CI
+
+The fix's Build failed its Varka sql suites job: two tests of `VarkaWarmupEndToEndSuite`, the
+ones VARKA-295 was opened on, RELEASED at the 120-second deadline on the runner, with the JIT's
+account showing the heavier loop method compiled in two seconds and still boxing. That job runs
+the suite alone in a quiet JVM, on a 4-core runner whose CPU the pool draws; the account named
+`Int256Vector`, so an AVX2 host. On the laptop the suite had passed in a fresh JVM on 24 cores,
+at 256-bit lanes too, the test JVM's preferred species here.
+
+* **Reproduced, and not this change's.** The suite pinned to four cores with
+  `-XX:MaxVectorSize=32` fails the same two tests on the fix and on master's engine alike (G1,
+  G2), and passes or fails from one run to the next on the same code: of nine runs of the
+  committed fix and its paced variants on the same four cores, four passed every test and five
+  released the same two. The job's pass of 17 October was a draw of an AVX-512 runner. It is item
+  103's "small runner" question, now on master itself, and a row of its own (row 390 proposed).
+* **Not the sums of 8.4a.** The warmed kernel's `loopDense1` compile in a failing run (G3) has
+  no trap or decompile count and crosses nothing. It keeps three virtual calls, at the inner
+  `lanewise` call of `IntVector.min(Vector)` twice and of `IntVector.max(Vector)` once, each
+  `<call ... count='-1'>`: C2 found no mature profile in the template it had inlined. The
+  passing run's compile of the same method (G13) keeps none.
+* **The mechanism, from the policy's own trace.** `-XX:+PrintTieredEvents` prints every
+  decision of `CompilationPolicy` with both queue lengths, the threshold scale `k` and the
+  method's counts; two traced runs of the suite on four cores, one passing (G13) and one
+  failing (G14a), differ in one instant. The template's first compile does not fire at 200
+  calls: C1's queue scales the tier-3 thresholds (`threshold_scale`, `k = queue / (5 x C1
+  threads) + 1`, one C1 thread on four cores), and the trace shows `k` between 1 and 6.6 while
+  Spark's first query heats up, so `max` reports at 128, 256, 384, 512 and 640 calls without
+  crossing `200 x k`. When it does cross, `transition_from_none` reads C2's queue: at most ten
+  entries (`Tier3DelayOn` 5 times two C2 threads) and the method goes to tier 3; longer and it
+  goes to tier 2, C1 code with counters and no profiling. In the passing run `max` crossed at
+  640 calls with C2's queue at 7 and went to tier 3, its profile was fed to 23,552 calls, and
+  C2 compiled it from that. In the failing run it crossed at 768 calls with C2's queue at 17 and
+  went to tier 2; its profile, created by the interpreter at 256 calls, froze at 641; at its
+  first tier-2 report, 2,689 calls, the policy sent it straight to tier 4 (`compile level=4`,
+  queues 5 and 19), and tier-4 code feeds no profile either. C2 trusts a profile only past
+  `ProfileMaturityPercentage` (20%) of the tier-4 count, 1,000 calls; at 641 the kernel's
+  compile read `count='-1'` at the template's inner call, kept the virtual call, and a vector
+  that joins from a virtual call is not exact, so the intrinsic refuses it and one vector boxes
+  per iteration. `min(Vector)` took the same path (tier 2 at 640 calls, queue 12; tier 4 at
+  3,244, profile frozen at 1,196); `min(int)`, which took tier 2 at 512 calls, was sent to tier
+  3 at its first report (2,739 calls, past the policy's "old" mark of 2,000, which turns the
+  queue feedback off), and the kernel kept no virtual call at its sites.
+
+| run | first compile at | `k` then | C2 queue then | tier | profile when C2 compiled it | kernel's virtual calls |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| G13, passed | 640 calls | 1.6 | 7 | 3 | 23,552 calls | 0 |
+| G14a, failed | 768 calls | 1.0 | 17 | 2 | 641 calls | 3 (G3's compile) |
+
+* **Why the warm-up's rounds are not where it happens.** The rounds call `max(Vector)` and
+  `min(Vector)` once each, 300 calls in all, under the scaled thresholds; their first compile
+  fires 200 to 300 ms after the rounds end, during the kernel warm-up that follows, when C2's
+  queue holds the kernel warm-up's and Spark's own compiles, 11 to 26 entries in the traces.
+  Whether the instant finds the queue above ten is the coin.
+* **What was tried, and falsified.** Pacing the rounds on C1's queue (G4) changed nothing.
+  Pacing them on C2's queue, read through the `Compiler.queue` diagnostic command, every 25
+  rounds (G6) released; every round to the policy's limit of ten passed five of five (G7) and
+  four of five (G8); every round to the policy's resume limit of four (`Tier3DelayOff` times
+  the threads) released two of five in three runs of three (G9 to G11), with the queue at most
+  7 through every round and the hold costing 203 to 288 ms, and the projection test alone
+  under the same pacing passed (G12) with `max` at tier 2 then tier 4 all the same. The hold
+  cannot reach a compile that fires after the rounds; the passes were the coin. The pacing is
+  not in this change. `-XX:Tier3DelayOn=1000`, which forbids tier 2 JVM-wide, passed once (G5),
+  as the mechanism predicts, and is a flag for every method.
+* **What would fix it, for the row.** Make the templates' first compile fall inside the
+  warm-up and at tier 3: enough calls per template to cross `200 x k` during the rounds, or to
+  pass the policy's old mark of 2,000, after which `transition_from_none` ignores C2's queue
+  and `select_task` cannot drop the method's task as stale; then hold the rounds until the
+  templates show at tier 3 or 4 in `Compiler.codelist`. Measured on four cores with
+  `-XX:+PrintTieredEvents`, ten runs, and at both lane widths on the laptop so the wide shapes
+  of 8.4 stay compiled.
+* **The pair of #921 on the runners**, dispatched before any of this: an AMD EPYC 9V74 (512-bit
+  lanes) and an AMD EPYC 7763 (256-bit lanes, four cores, the suite's failing kind of host)
+  both read 71 of 71 COMPILED in the benchmark's JVM. The benchmark's kernels come after the
+  session has cached its tables and C2's queue has drained; the suite's first warm-up comes a
+  second after the session starts. The order of events in a JVM is the variable, as it was in
+  8.4a.
+
+The compile tiers of two JVMs of the suite, from their logs, every nmethod of the run:
+
+| tier | four cores, 256-bit lanes | twenty-four cores |
+| :--- | ---: | ---: |
+| 0, native wrappers | 728 | 789 |
+| 1, C1 without profiling | 1,564 | 3,853 |
+| 2, C1 with counters only | 1,242 | 252 |
+| 3, C1 with full profiling | 6,595 | 19,648 |
+| 4, C2 | 2,007 | 6,296 |
+
+### 9.6 Every arm of the day, in one table
+
+The 16-entry shape's warm-up verdict (the end-to-end suite's 3-output shape where marked):
+
+| arm | host | verdict |
+| :--- | :--- | :--- |
+| master, 18 October | laptop, 24 cores | RELEASED |
+| before VARKA-379 | laptop, 24 cores | RELEASED |
+| 28 September engine | laptop, 24 cores | COMPILED |
+| Task 209, 29 September | laptop, 24 cores | COMPILED |
+| 9 October (VARKA-296) | laptop, 24 cores | COMPILED |
+| 12 October (VARKA-279) | laptop, 24 cores | COMPILED |
+| master, directive off | laptop, 24 cores | RELEASED |
+| master, 100 rounds | laptop, 24 cores | RELEASED |
+| master, groups of one output | laptop, 24 cores | COMPILED |
+| master, template warm-up off | laptop, 24 cores | COMPILED |
+| master, JVM limits raised | laptop, 24 cores | COMPILED |
+| the fix (warm-up before any kernel) | laptop, 24 cores | COMPILED |
+| the fix, cold-start file, both widths | laptop, 8 cores | COMPILED 71 of 71 |
+| the fix, runner pair | EPYC 9V74, 4 cores | COMPILED 71 of 71 |
+| the fix, runner pair | EPYC 7763, 4 cores | COMPILED 71 of 71 |
+| master, end-to-end suite | laptop, 4 cores, 256-bit | RELEASED |
+| the fix, end-to-end suite (G1; G13 passed, G14a released) | laptop, 4 cores, 256-bit | RELEASED |
+| the fix, end-to-end suite, `-XX:Tier3DelayOn=1000` | laptop, 4 cores, 256-bit | COMPILED |
+| the fix, paced on C1's queue, end-to-end suite | laptop, 4 cores, 256-bit | RELEASED |
+| the fix, paced on C2's queue every 25 rounds | laptop, 4 cores, 256-bit | RELEASED |
+| the fix, paced on C2's queue every round, to 10 | laptop, 4 cores, 256-bit | COMPILED twice, then RELEASED |
+| the fix, paced on C2's queue every round, to 4 | laptop, 4 cores, 256-bit | RELEASED, three of three |
+
 ### 9.4 What remains, for the owner
 
-1. **The warmed class's per-query cost at 54 to 100 entries** (9.3): +40 to 44% against 28
-   September on the back-to-back rows, absent at 16 entries, absent in the unwarmed arm, absent
-   at 2M rows. The warmed class differs from the unwarmed one in two ways: C1 is excluded for it
-   by the directive of Task 209 (29 September, the day after the file of 28 September), so its
-   drivers and epilogues reach compiled code only by C2's invocation counts, which 15 queries of
-   10 batches never cross; and its loops were compiled from the warm-up's 1,024-row probe calls
-   rather than the query's batches. The measurement that decides: the back-to-back section alone
-   (`--sections`) at 54 and 100 entries on the 28 September engine, on Task 209's, and on the fix
-   with `-XX:CompileCommand` allowing C1 on the warmed class, three runs of a few minutes each.
-   A row or an item, by the owner's reading of the close rule.
+1. **The warmed class's per-query cost at 54 to 100 entries** (9.3), measured the same
+   afternoon and **not a regression**. The full benchmark on today's laptop, pinned as the files
+   are: the 28 September engine itself reads 176 and 316 ms on the back-to-back rows at 54 and
+   100 entries, Task 209's 187 and 346, the fix 184 and 336, all within 5% of one another, where
+   the committed file of 28 September reads 128 and 240. The same engines agree with that file
+   on every other row (once compiled 27 to 41 ms, steady state 47, 133, 255 ms), so those two
+   rows moved with the day, not with the code: a machine effect on the back-to-back section
+   alone, worth a line in `skills/benchmarking.md` when it is understood, and nothing the close
+   waits on.
 2. **The warm-up's thread.** 9.1's 200 to 600 ms now land on the first query's planning thread
    and the first task's thread, once per JVM. A row can move it back to a background thread once
    it can run before the query-path helpers without a race, or decide the cost is the right one

@@ -1074,3 +1074,29 @@ warm-up (#827), and the JIT's log said why in two runs, warm-up on and off:
   `PerMethodTrapLimit` at 100,000 the same JVM compiled the wide shape in 1.4 s with the warm-up
   on and its steady state read 16 ms, the best of every arm; a global flag, so a deployment
   decision rather than a library fix, and VARKA-295 measured both at 0 releases in 1,000.
+* **On four cores the same symptom has a second, older cause: the template's first compile
+  lands at tier 2, and its profile never matures.** The tiered policy
+  (`CompilationPolicy::transition_from_none`, JDK 25) sends a method due for tier 3 to tier 2,
+  C1 code with counters and no profiling, while C2's queue is longer than `Tier3DelayOn` (5)
+  times C2's threads, ten entries on a four-core host (two C2 threads). The template's first
+  compile is late there: C1's queue scales the tier-3 thresholds (`threshold_scale`, `k` up to
+  6.6 in the trace with one C1 thread), so `IntVector.max` crossed `200 x k` at 640 to 770 calls,
+  200 to 300 ms after the template warm-up's rounds (which call it once a round), in the kernel
+  warm-up, with C2's queue at 11 to 26. Passing run: queue 7 at that instant, tier 3, profile
+  fed to 23,552 calls, kernel clean. Failing run: queue 17, tier 2, profile frozen at 641 calls,
+  then straight to tier 4 at the first tier-2 report; C2 trusts a profile only past 1,000 calls
+  (`ProfileMaturityPercentage` 20% of the tier-4 count), so the kernel's compile read `<call ...
+  count='-1'>` at the template's inner `lanewise` call and kept a virtual call, which boxes the
+  vector (`m7/VARKA-389.md` 9.5). Read it with `-XX:+PrintTieredEvents`: every decision prints
+  `queues=c1,c2`, `k=` and `mdo=`; the `[compile level=2 ...]` line of a template, and the
+  `mdo=` count under 1,000 at its `[compile level=4 ...]`, are the failure in two lines. Tell it
+  from the sums above by the tiers in the log (`<nmethod ... level='2'>`) and by the absence of
+  any `observe trap` sum in the kernel's compile. Pacing the warm-up's rounds on C2's queue
+  cannot reach it, since the compile fires after the rounds: paced every round to the policy's
+  limit the suite passed twice and released once; to the resume limit, with the queue at most 7
+  through the rounds, it released three times of three. A 4-core AVX2 runner is where CI meets
+  it, so a pass of the end-to-end warm-up suite on the pool is a draw. The way out is to make the
+  templates' first compile fall inside the warm-up and at tier 3 (enough calls to cross `200 x k`
+  or the policy's old mark of 2,000, after which the queue feedback is off for that method), and
+  to check through `Compiler.codelist` that every template is at tier 3 or 4 before the warm-up
+  returns; a row's work, measured on four cores with the trace.
