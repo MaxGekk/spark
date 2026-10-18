@@ -687,3 +687,6 @@ private class FailingKernel extends VarkaFusedKernel {
       dstData: Array[Long], dstValidity: Array[Long], scalarArgs: Array[Int], length: Int): Int =
     0
 }
+
+// A Varka-scoped change on top of the debt sweep, so that one push shows the scoped path:
+// admit and Precompile Spark skip, and the Varka suites run alone. Not for merging.
