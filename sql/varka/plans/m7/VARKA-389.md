@@ -347,3 +347,97 @@ fallback.
 Whichever is chosen, the row adds the check that would have caught this: the 16-entry shape's
 warm-up verdict in a suite that first runs an unwarmed kernel, so the benchmark's order is the
 test's order, on a runner, with a bound on the time to COMPILED.
+
+## 9. The fix: the template warm-up before any vector code
+
+Chosen by the owner on 18 October 2026, the first option of 8.6.
+
+### 9.1 The change
+
+`VarkaVectorTemplateWarmup` gains `beforeVectorCode()`: one volatile read once the warm-up has
+decided for the JVM (ran, switched off or failed), `ensure()` the first time, never throwing. It
+is called from the four places where the engine's vector code can first run in a JVM, so that
+whichever arrives first runs the warm-up on its own thread, once:
+
+* `VarkaShapeCacheImpl.build`, the driver's first emission, before any emitted class exists;
+* `VarkaShapeEntry.newKernel`, the executor's first kernel instance of a task;
+* the class initialisers of `IntRangeOps` and `SelectionVectorOps`, the query-path helpers that
+  run vector code without a kernel, which VARKA-295's 9.7 noted its warm-up did not cover;
+* the warm-up worker before its first job, as before, now a no-op in a JVM where any of the
+  three ran first.
+
+`ensure()` records what the run took and logs it once; `VarkaKernelWarmup.templateWarmupNanos()`
+reads it from there. The property `varka.warmup.vectorTemplates=false` still switches the warm-up
+off, and a JVM that decided off stays off. Nothing else changes: not the rounds, not the
+operators, not the species the warm-up feeds, not the kernels.
+
+The cost moves with it: 200 to 600 ms once per JVM, on the first query's planning thread on a
+driver and on the first task's thread on an executor, where VARKA-295 had it on the worker thread.
+The owner accepted that in choosing the option; a later row can take it back to a background
+thread if it learns to run before the helpers without a race.
+
+### 9.2 The checks
+
+* `VarkaVectorTemplateWarmupSuite`, "beforeVectorCode runs the warm-up once, on the caller's
+  thread, then is settled": the hook runs the warm-up on first call, is a no-op after, settles
+  without running when the property says off, and stays off.
+* `VarkaKernelWarmupSuite`, "a wide shape warmed after an unwarmed kernel took the templates to
+  C2 still compiles": the benchmark's order as a test, in a JVM of its own. The suite's forked
+  probe (`VarkaKernelWarmupProbe`) gains a `wide` mode: it emits the benchmark's shape at sixteen
+  entries, runs a kernel of it unwarmed for 600 batches, dense and masked in turn, so that the
+  interpreted calls take the shared templates to their standalone C2 compiles, invalidates the
+  cache, and warms a new class of the same shape; the test asserts the verdict COMPILED. A first
+  version of this check inside `VarkaWarmupEndToEndSuite` passed on master's engine as well,
+  because that suite's earlier tests had already run the template warm-up in the test JVM before
+  the unwarmed kernel, the fixed order by accident; a check for an order has to own its JVM, which
+  the probe does. It runs on every pull request's Varka suites.
+
+### 9.3 Outcome, 18 October 2026
+
+* **The suites.** `VarkaVectorTemplateWarmupSuite` and `VarkaWarmupEndToEndSuite`, 12 tests
+  pass. `VarkaKernelWarmupSuite`'s new forked check passes on the fix in 16 s, the verdict
+  COMPILED; against master's engine, the same probe and suite copied into a worktree of master,
+  it fails in 2 minutes 14 seconds, the verdict RELEASED at the probe's 120-second deadline. So
+  the check tells the two engines apart, which the in-suite version could not.
+* **The cold-start file, both widths, on the laptop** (`dev/varka_bench_regen.sh core
+  VarkaColdStartBenchmark`, canary ok, the invariants gate ok): 71 of 71 verdicts COMPILED at
+  512-bit lanes and 71 of 71 at 128-bit, where the morning's file had 20 and 51. Against the
+  file of 28 September, same machine and pin: the steady-state rows at 2M rows straight after
+  the verdict read 41, 105 and 186 ms at 16, 54 and 100 entries against 48, 133 and 250, so the
+  2.5x to 4x of the regression is gone and those rows are 15 to 25% better than the file the
+  regression was measured against; the "once compiled" rows read 31 ms at 16 entries against 27
+  and 57 ms at 100 against 42; the first run of the 16-entry shape 137 ms against stock's 119,
+  the second 69 against 49.
+* **A residual, not the warm-up's.** The back-to-back section's warmed arm reads 184 ms a
+  query at 54 entries and 336 at 100 against 28 September's 128 and 240, 40 to 44% slower,
+  while at 16 entries it reads 49 against 47, and the same section's unwarmed Varka arm and the
+  stock arm are within 1% of 28 September at every rung. So the warmed class of a wide shape
+  pays something per query at 100K rows that the unwarmed class does not and that 2M rows do
+  not show, on master as on the fix (master's file reads 187 and 303 on those rows). It is not
+  what this row was opened for and it predates the template warm-up; it is left to the owner as
+  9.4 says, with the measurement that would find it.
+* **The runner pair** [FIX: pair].
+* **The README's and the docs' cold-start row**, requoted from the new file: 1.6x once the
+  warm-up's kernel is in (31 against 49 ms best), the first run at 0.9x on the row path, the
+  verdict in about two seconds; `dev/varka_quote_check.py README.md` finds 0 orphans.
+
+### 9.4 What remains, for the owner
+
+1. **The warmed class's per-query cost at 54 to 100 entries** (9.3): +40 to 44% against 28
+   September on the back-to-back rows, absent at 16 entries, absent in the unwarmed arm, absent
+   at 2M rows. The warmed class differs from the unwarmed one in two ways: C1 is excluded for it
+   by the directive of Task 209 (29 September, the day after the file of 28 September), so its
+   drivers and epilogues reach compiled code only by C2's invocation counts, which 15 queries of
+   10 batches never cross; and its loops were compiled from the warm-up's 1,024-row probe calls
+   rather than the query's batches. The measurement that decides: the back-to-back section alone
+   (`--sections`) at 54 and 100 entries on the 28 September engine, on Task 209's, and on the fix
+   with `-XX:CompileCommand` allowing C1 on the warmed class, three runs of a few minutes each.
+   A row or an item, by the owner's reading of the close rule.
+2. **The warm-up's thread.** 9.1's 200 to 600 ms now land on the first query's planning thread
+   and the first task's thread, once per JVM. A row can move it back to a background thread once
+   it can run before the query-path helpers without a race, or decide the cost is the right one
+   to pay where it is.
+3. **The hold rule's pair**, if the owner wants one for this change: the runner pair above is a
+   verdict measurement, not a throughput pair; the steady-state rows say the fix has no
+   steady-state cost against 28 September, and a pair on a runner would say the same for a
+   4-core host.

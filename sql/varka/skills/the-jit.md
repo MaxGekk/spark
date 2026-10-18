@@ -1035,3 +1035,42 @@ batch histories and proves per compared call which tier ran it, with no diagnost
 * **The warm-up's allocation verdict fires before the epilogues are compiled.** It reads what a
   1,024-row call allocates; an epilogue running only the remainder allocates too little to show,
   so in 32 of 39 drawn kernels an epilogue was still interpreted when the verdict fired.
+
+## A template warm-up run after the templates' first compile deoptimises them, and a wide kernel sums one decompile past C2's cutoff
+
+Found by milestone 7's close, which regenerated `VarkaColdStartBenchmark` and read RELEASED on
+every projection shape of 16 to 100 entries, on the laptop and on two GitHub runners alike, where
+the file of 28 September had every shape COMPILED (`m7/VARKA-389.md`). The kernel's bytecode was
+identical before and after; the compiled loops allocated; the change was VARKA-295's template
+warm-up (#827), and the JIT's log said why in two runs, warm-up on and off:
+
+* **C2 sums an inlined method's `MethodData` counts once per copy.** `Parse::Parse` adds each
+  parsed method's trap counts and decompile count to the compile's totals, and past
+  `PerMethodTrapLimit` (100) traps or 201 decompiles (`PerMethodRecompilationCutoff`/2 + 1) the
+  compile keeps a real virtual call on every class-check miss instead of an uncommon trap. A
+  four-output group method inlines `IntVector.lanewise` about six hundred times and the operator
+  cache three hundred and fifty, so a count of one on a shared template is 600 in the kernel's
+  compile; a single-output group inlines a hundred copies and stays under. That is the whole
+  difference between the wide shapes that released and the range filters that compiled, and it
+  is machine-independent, which is how it reads the same on three CPUs.
+* **The template warm-up deoptimises templates that are already compiled.** In a JVM whose first
+  vector code was not a warm-up job (the benchmark's unwarmed arms, a session without the
+  warm-up, the query-path helpers), the templates reach their standalone C2 compiles from one
+  kernel's profile first; the warm-up's rounds then take branches those compiles never saw, eight
+  `unstable_if` traps reinterpret them in one second, and each template keeps `decompiles='1'`.
+  With the warm-up off there was not one trap in a template and not one virtual call in the
+  kernel. Run before any vector code, as VARKA-389 moved it, the warm-up has nothing to
+  deoptimise and keeps what VARKA-295 measured. The round count does not matter (100 rounds
+  released the same way); the order does.
+* **How to read it.** `-XX:+LogCompilation`, then the kernel's `<task>` for a loop method: count
+  `<virtual_call>` (367 against 0), find the first `<observe trap=... mdecompiles='201'>` and the
+  `<parse method=...>` it sits in, and tally the `<parse>` elements per method for the copies.
+  The deopt that put the count there is an `<uncommon_trap>` whose first `<jvms>` frame is the
+  template, with the compile id of the standalone nmethod. JFR's allocation samples name the
+  boxed fallbacks (`IntVector.lanewiseTemplate`, `uOpTemplate`, `blendTemplate`, `bTest`) under
+  the kernel's compiled frames; PrintInlining shows the symptom as "no static binding" on
+  `IntVector::lanewise`, not as a size cutoff.
+* **The two JVM limits are the other lever.** With `PerMethodRecompilationCutoff` and
+  `PerMethodTrapLimit` at 100,000 the same JVM compiled the wide shape in 1.4 s with the warm-up
+  on and its steady state read 16 ms, the best of every arm; a global flag, so a deployment
+  decision rather than a library fix, and VARKA-295 measured both at 0 releases in 1,000.
