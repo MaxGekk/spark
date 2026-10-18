@@ -145,4 +145,58 @@ the tag moved to the fix's merge commit.
 
 ## 8. Outcome
 
-To be written as the steps of section 5 run.
+### 8.1 The runs of 18 October, in order
+
+Every run is `VarkaColdStartBenchmark` in its smoke form (rung 16 of each section) with
+`-Dvarka.warmup.deadlineSeconds=10` and `-XX:+PrintCompilation`, on the laptop under the heavy
+lock, unless said otherwise; "verdict" is the first-query section's warm-up verdict on the 16-entry
+shape, and the range-filter shapes compiled in every run.
+
+| Run | Engine | Verdict | What it settles |
+| :--- | :--- | :--- | :--- |
+| E2 | master (`793536853ab`) | RELEASED | the regression reproduces in 3 minutes |
+| E4 | `78930efbbe3`, before VARKA-379 | RELEASED | VARKA-379 is not the cause |
+| E5 | `0914c607ff8`, 28 September | COMPILED, 2.1 to 2.7 s | the machine is not the cause |
+| E6 | `0a9ce088e21`, Task 209, 29 September | COMPILED, 1.8 to 3.1 s | the directive and the call-site budget are not the cause |
+| E10 | master, the directive switched off | RELEASED | the directive is not the cause, alone or with master's code |
+| E7 | master, `HEAVY_GROUP_OUTPUTS` 1 | COMPILED, 2.4 to 3.3 s | splitting the four-output groups restores the verdict |
+| B2 | `b72d71d727f`, VARKA-296, 9 October | COMPILED, 2.1 to 2.4 s | the change is between 9 and 16 October |
+
+The emit tool on the shape (`dev/varka_emit.sh`, sixteen `greatest(add_months(d,k),
+date_add(d,k), last_day(d))` over `d:date`) at four engines: four groups of four outputs
+everywhere; the dense loop methods 3,220 bytes and 402 Vector API call sites on 28 September,
+3,338 and 408 at Task 209, 3,294 and 408 before VARKA-379, 3,379 and 414 on master; no mask
+operation in a dense method until VARKA-379's `guardedRange` adds four. So prediction 5 fails:
+the methods' size and call-site count did not move between a kernel that compiles and one that
+does not.
+
+### 8.2 What the flight recording says
+
+A profile recording of the master smoke run (E2b), read with `jfr`:
+
+* Every one of the eight loop methods of the warmed class compiles at tier 4, successfully, in
+  1.1 to 3.7 s, within three seconds of the warm-up's start, with 35 to 39 KB of bytecode inlined
+  into each and 265 to 634 KB of machine code out; the C2 queue drains to zero every five
+  seconds and the run's longest compile is 3.71 s. Prediction 2 holds: the release is not about
+  the compile queue.
+* The allocation samples of the warm-up window sit in the loop methods, and keep landing there
+  after their compiles finished: about 120 samples per loop method in the four seconds after the
+  last compile. Their frames are the Vector API's boxed fallbacks, `IntVector.lanewiseTemplate`
+  under `IntVector.add(int)` at the kernel's literal-operand lines, `lanewiseShiftTemplate`,
+  `uOpTemplate`, `blendTemplate`, `bTest`. So the compiled loops still run part of their vector
+  work through the fallbacks, which is the allocation the probe sees and the 2.5x to 4x at
+  volume.
+* The deoptimisations of the run (876) are not the kernel's: four, all in
+  `prepareOutputValidity`, a per-batch driver helper. The averages that spike to seconds are not
+  a deopt storm of the kernel.
+
+The split run (E7) shows the same C2 finishing the job when each method carries one output
+instead of four: the fallbacks are what C2 leaves behind in a four-output body of master's
+emission, and left nothing behind in a four-output body of 9 October's. Prediction 3 was
+half right: C2 declines call sites in these bodies, but the declined ones in the log are the
+cold error paths (`AbstractSpecies::checkFailed`, 5,000 times) and a handful of sites with "no
+static binding", not a wholesale cutoff.
+
+### 8.3 The commit
+
+[MORNING: B4, B5 and B8 - VARKA-279's commit, its parent, and VARKA-86 - name it.]
