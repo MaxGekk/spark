@@ -5279,6 +5279,23 @@ its deadline, its call pattern, or a decline. **Done when** the record names the
 4-core runner and either the warm-up compiles at least 24 of the benchmark's 25 shapes there in
 three JVMs out of three, or the documentation states the behaviour a small host gets.
 
+*Extended 18 October 2026 by the close.* The same on the development laptop, so the core count is
+not the whole cause: `dev/varka_bench_regen.sh core VarkaColdStartBenchmark` on the milestone 7
+build, pinned to eight cores as on 28 September, read RELEASED on 51 of 71 verdicts after the 60
+seconds with about 56,000 calls each, where the file of 28 September had 71 COMPILED; the
+once-compiled rows read 22 to 50% slower than that file, and the steady-state row after two
+seconds of batches 150 ms best and 1,639 ms average against 46 and 60. Between the two files the
+warm-up changed in #679, #807 and #827 (row 295) and the laptop's kernel from 7.0.0-31 to
+7.0.0-38. The bisection's cheap first step: the 28 September engine's cold-start rung on today's
+machine, and today's engine's on a JVM with `-XX:+PrintCompilation`, to see whether the loop
+method is compiled late or never asked for. The close's runner pair (runs 39107597853 and
+39107602708, an AMD EPYC 7763 and a Xeon 8370C, files
+`VarkaColdStartBenchmark-jdk25-runner-*-m7-*`) read the same 51 of 71, and on all three machines
+the split is by shape: every projection shape releases, only the range-filter shapes compile; on
+the Xeon the once-compiled 16-entry row is 64 ms against 37 on 28 September. So the cause is in
+the code since 28 September, not the host, and this item is a row's work for whatever milestone
+opens next.
+
 ### Item 104. A post on the proofs alone
 
 *Added 17 October 2026 from `m7/VARKA-270.md` 9, at the coordinator's request.* Milestone 7's
@@ -5370,6 +5387,54 @@ close. **Done when** a spike installs one kernel family's code through JVMCI on 
 the reference evaluator and the fuzzers on it, and is measured against C2's kernel of the same
 shape at the sizes the cold-start and throughput benchmarks use, and the owner decides whether a
 milestone follows; or the record says which cost closed the door.
+
+### Item 106. The compiler entry points without the family switches
+
+*Added 18 October 2026 from `m7/PLAN.md` 10 by the close (`m7/VARKA-261.md` 5.4).* The compiler's
+entry points that take no family switches stay public (`m7/VARKA-318.md` 9.3); tests and tools
+call them with every family on, and a production caller that used one would ignore the user's
+switches silently. **Done when** one compile-context value carries the options and the switches
+through every compiler signature, and the switch-less entry points are gone or test-scoped.
+
+### Item 107. The admission queue keeps dead runs
+
+*Added 18 October 2026 from `m7/PLAN.md` 10 by the close.* A run whose pull request has merged, or
+whose branch has been pushed again, still counts as ahead in the admission queue until it is
+cancelled by hand; on 16 October 2026 two such runs held four pull requests' full runs for hours.
+**Done when** `dev/varka_ci_admit.py` skips a run whose pull request is closed or whose head is
+no longer its branch's, with a test of each case.
+
+### Item 108. "Re-run failed jobs" on a full run skips the queue
+
+*Added 18 October 2026 from `m7/PLAN.md` 10 by the close.* The rerun reuses the first attempt's
+admission (`m7/VARKA-255.md` 9.4), so a rerun of a full run starts its module jobs ahead of every
+queued run. **Done when** the admission job reruns with the failed jobs whenever any module job
+does, or `docs/sql-varka.md` tells the operator to use "Re-run all jobs" and says why.
+
+### Item 109. A port's timing pair near the job's cap
+
+*Added 18 October 2026 from `m7/PLAN.md` 10 by the close.* `VarkaSizeLadderBenchmark`'s pair took
+about four and a half hours of the job's 355-minute limit (#877); the next pair of a class that
+size can time out and lose every round. **Done when** the pair tooling splits a long class's pair
+across jobs by section, or records a per-class round count that keeps the pair under the cap, and
+the ladder's pair has run that way once.
+
+### Item 110. A milestone close that needs no laptop
+
+*Added 18 October 2026 from `m7/VARKA-261.md` by the close, on the owner's word.* Milestone 7's
+close spent a night and a morning of the development laptop on the README's numbers: two surface
+tables at a billion and half a billion rows, three distributions each, one JVM at a time, about
+two hours a table, then the cold-start benchmark, which waits on C2 for each of 18 shapes; a
+load-gate refusal between arms added two hours more. The numbers need that machine (a 48 to 64 GB
+driver, and a per-job constant a runner's 36 ms cannot clear under 1.4 billion rows), but the close
+does not, and the milestone 6 rule that a close regenerates the surfaces tied the two together.
+**Done when** the close is a documents-only change that can run from any machine: the README
+quotes the latest committed surface files with their date beside each span, whatever machine took
+them; surface regeneration is its own row, run when the engine changed, on the runner surface
+workflow at the row counts a 7 GB driver holds, with the laptop's billion-row files kept as the
+appendix that proves the fixed-share bound; and the cold-start row quotes the runner pair, spread
+between JVMs included (item 103), since that is what a user's cluster sees. The milestone 8 close
+is the first to run this way.
 
 ## 5. Ordering
 

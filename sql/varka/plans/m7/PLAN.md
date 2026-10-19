@@ -668,7 +668,7 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 | 83 | **Done** (`VARKA-83.md` 9, 10 October 2026): a refusing node declares its reason, an `Analysis.Refusal`, in one map filled once with the options applied; one slot rule and one liveness rule read it, replacing three sets, four per-body flags and two predicates; `emitted_bytes.json` unchanged | item 39 | medium |
 | 86 | **Done** (`VARKA-86.md` 9, 11 October 2026), the fusion dump byte-identical: the three positions the emitter checks (day offset, month count, `next_day`'s weekday) as one enum with an exhaustive admission both sides call, the month count gated in the compiler as the day offset already is, and the compiler's three copies of the int leaf rule merged; the comparison widening and the shared day-offset predicate 2.17 asked for landed with VARKA-122 and VARKA-63. One operand admission, stated once | item 39 | medium |
 | 253 | **Done** (`VARKA-253.md` 9, 10 October 2026): the forms of `run` without a scratch address are for callers outside a Spark task; inside one `VarkaScratch` refuses a kernel with scratch, so a production path cannot come to rely on the per-thread buffer; stated in `VarkaFusedKernel`'s doc and tested in `VarkaEmitterChronoSuite` | item 68 | small |
-| 222 | **Closed on the measurement** (`VARKA-222.md`, 10 October 2026): IR nodes' structural `hashCode` is 2 to 5 per cent of emission at 100 to 400 outputs and `equals` under 2, since the fused budget caps every output's subtree and record equality tries identity first; interning would save at most about 2 ms of a 40 ms emission, so the owner closed the row without a change | item 81 | small |
+| 222 | **Done, closed on the measurement** (`VARKA-222.md`, 10 October 2026): IR nodes' structural `hashCode` is 2 to 5 per cent of emission at 100 to 400 outputs and `equals` under 2, since the fused budget caps every output's subtree and record equality tries identity first; interning would save at most about 2 ms of a 40 ms emission, so the owner closed the row without a change | item 81 | small |
 | 254 | **Done** (`VARKA-254.md` 9, 12 October 2026): every grouping weight equals the lane calls its node emits alone, held by a register over every IR node, `weightOf` an exhaustive switch; `dayofweek` and `weekday` weighed 1 and emit 16 and 15. With the weights right the budget of 16 split a weekday shape five ways and slowed it by a third, so the prediction now bounds groups in its place by default (`groupBudgetUnderPrediction`): the weekday shape keeps two methods, a mixed one runs 14 and 25% faster, and the cost audit's corpus takes 39% fewer loop methods | item 63 | small to medium |
 | 255 | **Done, with two defects for the close's debt sweep** (17 October 2026, tests 2 to 4 and 7 scored on live runs: test 2's admission releases a waiting run within one poll (job 117087221257, about 2 minutes) but a scoped push still runs `admit` and `Precompile Spark` when the precondition reports `pyspark-periodic`, which the scoped override does not reset (`build_and_test.yml` line 677; run 39008460283 waited 67 minutes for a slot and precompiled for nothing); test 3 passes, though the 12-job cap is never reached, PySpark's 6 being the one that binds; test 4's check follows its run within one poll (21 to 120 s against the predicted 4 minutes) at about 240 requests an hour, but re-sends an unchanged `in_progress` status every pass while a run is rerun (103 times in job 117303119123), and a completed check is never moved back to `in_progress` by GitHub, which answers 9.4's question; test 7 cannot be observed until a pull request carries the `fix` label, while its rerun half works (3 new tests five times in 2:35, job 117326047064). Until then: `VARKA-255.md`; 255c, 255d and 255e built as three stacked branches, to merge in that order (9.4 to 9.6): 255c queues a full-matrix Build behind another inside the Build (an `admit` job `Precompile Spark` needs, `dev/varka_ci_admit.py`, `ci-hold` honoured, `Build modules` 12 at a time on forks) and syncs the base's `Build` checks from notify's completion in a loop, both on `ubuntu-latest` since `ubuntu-slim` stops a job at 15 minutes; 255d commits the step budget `sql/varka/ci/step-budget.tsv` with `dev/varka_ci_times.py`, puts its table in each completed check, has the nightly write `.secs`, and deletes `dev/varka_ci_queue.sh`; 255e reruns a pull request's new tests five times and makes a `fix` pull request's new tests fail on the merge base (`dev/varka_new_tests.py`), fitting one pull request; tests 2 to 4 and 7 wait on live runs after the merges; 255b, the second PR, runs master's head after each merge on `vecbricks/varka`, since #806 made pull requests build their own commit and nothing else builds the merged tree: a fixed set of eleven jobs (the Varka suites, engine, bench drivers, assembly gate and docs checks, the linters and the Java 25 Maven build), one run at a time with the newest push waiting; its admission check confirmed the weekly run's empty diff from its log and found three things that would have hidden failures on master - `dev/run-tests.py` testing no module when the diff base is the head, the option step comparing master with itself, and the Java linter's exemption for Spark's sources keyed on a path segment `varka` that the base's runner workspace `/__w/varka/varka/` always has (`VARKA-255.md` 2.9), and the review found two more readers of the empty diff, the docs job and the emitted-bytes step (9.2); 255a, the first of five PRs, moves the benchmark pairs and results-file regenerations to GitHub-hosted runners: `benchmark.yml` takes `pr`, `pair`, `rounds` and `base`, probes the measuring machine first and pairs both sides on one runner, and two runner A/A pairs of `VarkaRangeFilterBenchmark` took about an hour each, one passing and one failing on a bimodal 20 ms row, so a runner pair's flagged row is read against its class's runner A/A and the threshold is an input (`VARKA-255.md` 9.1); `VarkaWideKernelBenchmark`'s pair stays on the laptop; admission check: GitHub's cron ran 4 to 10 hours late in both repositories and the laptop queue has rerun nothing since 3 October, while on 13 October the fork's slots were full for only 79 minutes, all while one of two full-matrix runs held them, and one Build at a time would have ended the day almost nine hours later - so the queue becomes an admission job inside the Build that holds only a full-matrix run behind another, the check sync hangs on the pull request's push, master's head and the benchmark pairs run on the base repository's own slots, and the step-time budget reads master's runs). The CI queue off the laptop with no stored credential: the queue on the fork with its own `GITHUB_TOKEN`, the check sync on the base repository with its own; master's head run after each merge; a PR's new tests rerun several times, and a fix's new test required to fail on the base | item 76, redesigned (2.4), `m7/READING.md` 9 | medium |
 | 256 | **Done** (`VARKA-256.md` 9, 9 October 2026): `dev/varka_bench_sections.py` and `--sections` keep every other section byte for byte (tested on a real file), `dev/varka_bench_pair.sh` runs a pair in alternating rounds (identical code reads within 4.1% on every row), and the workflow takes a `sections` input. Regenerate one benchmark section, not the whole file, and run it paired against the PR's merge base in alternating batches with a threshold | item 72, `m7/READING.md` 9 | small to medium |
@@ -695,7 +695,7 @@ the survey of other engines, and 273 to 281 from reading the papers (the notes a
 | 385 | **Done on the host runners; the container jobs to the close's debt sweep** (17 October 2026, run 39017334406: the 14 jobs on host runners restore the cache and install offline with no download, at 5 to 6 s against 12 cold; the 12 container jobs, every PySpark job, lint and docs, restore it to `/github/home/.m2` while Maven reads `/root/.m2/repository`, so their offline install fails on `maven-resources-plugin` 3.4.0 and falls back to downloading, still exposed to the miss this row removes. Until then: `VARKA-385.md` 9, 16 October 2026): the engine install restores a 35 MB local Maven repository of its own, keyed on the engine pom (which now pins every plugin the build runs) and the test mode, installs offline (`-o`) on an exact hit, retries an online transfer failure twice, and saves right after a cold install; locally the offline install succeeds with no download. Done when the first CI run's log shows what `VARKA-385.md` 9 lists. The Varka engine's Maven plugins from the cache. CI's "Install the Varka engine" step skips the Maven cache and downloads its plugins on every run, and on 16 October 2026 a transient Maven Central miss of `maven-resources-plugin` 3.4.0 failed it twice (#888, #889), each costing a rerun. In milestone 7 because every full CI run of the remaining rows takes that step (section 10, the second CI entry). Restore the cache in the jobs that install the engine, or pin the engine pom's plugin versions so a cached copy is always found. **Done when** a run whose cache is warm downloads no plugin in that step, shown by its log | section 10, opened 16 October 2026 | small |
 | 270 | **Done** (published 17 October 2026 at https://vecbricks.github.io/where-the-checking-stops/, and recast for testers and republished the same day on the owner's review, `VARKA-270.md` 10.5; `VARKA-270.md` 10, pull request #914; the paragraphs on rows 379 and 387 said "a proposed change" until #874 and #911 merged the same evening, and the page was republished saying so). The milestone's own post, for JVM and database engineers: how Varka knows its answers are right, and where that stops | the plan review (2.5), item 58 | medium |
 | 288 | **Done** (`VARKA-288.md` 9.3, 12 October 2026): published as "A large CASE WHEN, split only where it has to be"; the fix 4.5 times faster than the cliff post's workaround at 300 branches and that workaround within 3% of whole-stage off, C2's inlining shown from its own log. The cliff's sequel, for the readers of "The 8000-byte cliff in Spark SQL": a large CASE WHEN inside a stage split only where its method is past 8000 bytes, as apache/spark#59225 (SPARK-33301) does it; the cliff post's workaround measured against the fix, and C2's inlining under splitting always; published once the pull request merges, naming the release (`VARKA-288.md`) | the owner, 5 October 2026 | small |
-| 261 | The closing task: 1.1 read row by row, and the README's account of how Varka is checked rewritten; then the close `CONTRIBUTING.md` asks of every milestone, in VARKA-282's shape - the documents, the issue mirror, the lessons, the oracles, the `CHANGELOG.md` entry, the tag `varka-m7`, the cleanup. The README's and `docs/sql-varka.md`'s cold-start headline (1.8x, 17 ms against 31 ms) is regenerated with the rest and states the spread between JVMs a runner shows, where the warm-up compiles a shape in some JVMs and gives it up in others (PR #900's pairs, `m9/SCOPE.md` item 103). The debt sweep takes, beside the register, what the last rows left (17 October 2026): the option-matrix test "inside a Spark task, the forms without a scratch address refuse a kernel with scratch", which fails under `methodByteBudget=0` and `shareChronoPrefix=false` with no `skips.tsv` line (found by #910); the noisy plan-size bisection test (#910); a scoped push running `admit` and `Precompile Spark` on `pyspark-periodic`, and the check sync re-sending an unchanged status while a run is rerun (row 255); and the container jobs' engine cache restored where Maven does not read it (row 385). Each is fixed or moved to `m9/SCOPE.md` | this plan | small |
+| 261 | **Done** (`VARKA-261.md` and section 11, 18 October 2026: 1.1 scored point by point with its caveats, the documents corrected, the README's account of how Varka is checked, the surfaces regenerated on the milestone 7 build and requoted, the oracles, the changelog entry, six lessons, the debt sweep's five fixes in their own pull request (#918), 91 worktrees and 355 branches removed, the tag `varka-m7`). The closing task: 1.1 read row by row, and the README's account of how Varka is checked rewritten; then the close `CONTRIBUTING.md` asks of every milestone, in VARKA-282's shape - the documents, the issue mirror, the lessons, the oracles, the `CHANGELOG.md` entry, the tag `varka-m7`, the cleanup. The README's and `docs/sql-varka.md`'s cold-start headline (1.8x, 17 ms against 31 ms) is regenerated with the rest; the regeneration found the warm-up releasing every wide shape, which became rows 389 to 391 and was fixed before the tag moved, and the row now reads 1.6x once the warm-up's kernel is in (`VARKA-389.md`, `m9/SCOPE.md` item 103). The debt sweep takes, beside the register, what the last rows left (17 October 2026): the option-matrix test "inside a Spark task, the forms without a scratch address refuse a kernel with scratch", which fails under `methodByteBudget=0` and `shareChronoPrefix=false` with no `skips.tsv` line (found by #910); the noisy plan-size bisection test (#910); a scoped push running `admit` and `Precompile Spark` on `pyspark-periodic`, and the check sync re-sending an unchanged status while a run is rerun (row 255); and the container jobs' engine cache restored where Maven does not read it (row 385). Each is fixed or moved to `m9/SCOPE.md` | this plan | small |
 
 ## 4. Ordering
 
@@ -946,16 +946,19 @@ bound (`m9/SCOPE.md` item 102), the generated-class families the coverage analys
   outcome); it passes without the sanitizer. A suite the gate always fails hides a real failure
   of the same suite. Closing it: run the suite without the sanitizer as the JIT-measuring suites
   already do (`--no-sanitizer`), or make the witness tolerate the sanitizer's trap, with a lesson in
-  `skills/the-jit.md` either way.
+  `skills/the-jit.md` either way. Swept by the close on 18 October 2026 and left open: no row owns
+  it, and `VARKA-261.md` 8 proposes it with the conjunct orders below.
 * **Spark's two conjunct orders are hand-ported** (row 380, `VarkaConjunctOrder`). Varka reproduces
   `FilterExec.generatePredicateCode`'s order and codegen's extra null checks by a port linked to
   Spark's code only by a comment, as Spark's own two copies are. An upstream change to either order
   would make Varka's demotion rule wrong silently. Closing it: a test that compares the port's order
-  with `GeneratePredicateHelper`'s on generated conditions, or one shared function upstream.
+  with `GeneratePredicateHelper`'s on generated conditions, or one shared function upstream. Swept
+  by the close on 18 October 2026 and left open, proposed in `VARKA-261.md` 8.
 * **The compiler entry points without the family switches stay public** (row 318, `VARKA-318.md`
   9.3). Tests and tools call them with every family on; a production caller that used one would
   ignore the user's switches. Closing it: one compile-context value carrying the options and the
-  switches through every compiler signature.
+  switches through every compiler signature. Swept by the close on 18 October 2026 and left open:
+  work with no row, listed in `m9/SCOPE.md`.
 * **One mutant survived both mutation passes unexplained** (row 265, its local shard check in
   #890): a removed `requireNonNull` in `Analysis.pureOf`, which the earlier sample recorded as
   killed. Swept by row 265 (`VARKA-265.md` 9.8): the mutant is equivalent, since `topoOrder` holds
@@ -969,12 +972,17 @@ bound (`m9/SCOPE.md` item 102), the generated-class families the coverage analys
   and would turn survivors into behavioural kills were it untagged. Closing it: record the failing
   assertion (`dev/varka_pit/VarkaPitScalaTest` logs no message), then make the test independent of
   what else runs in its JVM - it reads the global `VarkaShapeCache.buildCount` - or leave it out
-  of the PIT runs with that reason.
+  of the PIT runs with that reason. Swept by the close's debt pull request (`VARKA-261.md` 5.3, 18
+  October 2026): the cause was the shape cache's `invalidateAll`, which cleared the built shapes
+  but not the declined memo, so the test's second run in one JVM found its probes rethrown unbuilt;
+  the hook forgets declines too, `VarkaShapeCacheSuite` pins it, and the PIT adapter prints a
+  failing test's message into the run's log.
 * **`catalyst/Test/checkstyle` fails on master** on upstream's `StUtilsSuite.java`, whose outer
   class
   `STUtilsSuite` does not match its file name; apache/spark's master has the same mismatch. A module
   check that always fails hides a new finding of ours in that module. Closing it: upstream's fix,
-  arriving by a sync; a fork-only rename would conflict with every sync until then.
+  arriving by a sync; a fork-only rename would conflict with every sync until then. Swept by the
+  close on 18 October 2026 and left as it is, for the same reason.
 
 **In CI and tooling**
 
@@ -990,19 +998,97 @@ bound (`m9/SCOPE.md` item 102), the generated-class families the coverage analys
   transient Maven Central miss of `maven-resources-plugin` 3.4.0 (#888, #889), each costing a rerun.
   Owned by row 385, built and awaiting its first CI run: Spark's Maven cache turned out to exist in
   neither repository, so the install gets a 35 MB cache of its own, keyed on the engine pom,
-  installs offline on an exact hit and retries a transfer failure (`VARKA-385.md` 9).
+  installs offline on an exact hit and retries a transfer failure (`VARKA-385.md` 9). Its first CI
+  run showed the 12 container jobs restoring the cache where Maven never read it (`actions/cache`
+  expands `~` with `HOME`, `/github/home` in a container; Maven reads Java's `user.home`, `/root`);
+  the close's debt pull request restores to the JVM's `user.home` (`VARKA-261.md` 5.3).
 * **The admission queue keeps dead runs.** A run whose pull request has merged, or whose branch
   has been pushed again, still counts as ahead until it is cancelled by hand; on 16 October 2026 two
   such runs held four pull requests' full runs for hours. Closing it: `dev/varka_ci_admit.py` skips
-  a run whose pull request is closed or whose head is no longer its branch's.
+  a run whose pull request is closed or whose head is no longer its branch's. Swept by the close on
+  18 October 2026 and left open: work with no row, listed in `m9/SCOPE.md`.
 * **"Re-run failed jobs" on a full run skips the queue** (`VARKA-255.md` 9.4): the rerun reuses the
   first attempt's admission. Known and documented, not handled. Closing it: the admission job reruns
   with the failed jobs when any module job does, or the documentation says to use "Re-run all jobs".
+  Swept by the close on 18 October 2026 and left open, listed in `m9/SCOPE.md` with the one above.
 * **A Java port's timing pair can approach the job's cap.** `VarkaSizeLadderBenchmark`'s pair took
   about four and a half hours of the 355-minute limit (#877). The next pair of a class that size can
   time out and lose every round. Closing it: split a long class's pair across jobs by section, or
-  record a per-class round count in the pair tooling.
+  record a per-class round count in the pair tooling. Swept by the close on 18 October 2026 and
+  left open, listed in `m9/SCOPE.md`.
 * **About 80 worktrees of merged branches remain on the owner's machine** (`dev/varka_worktree.sh
   list`, 16 October 2026: 83 of 105 merged). They hold disk and make `git worktree list` and the
   merge sweeps slow to read. Closing it: `dev/varka_worktree.sh gc`, with the parked ones (row 334's
-  `varka-326`, the far-date reproduction) kept by name.
+  `varka-326`, the far-date reproduction) kept by name. Swept by the close on 18 October 2026:
+  `gc` removed 87 clean worktrees of merged pull requests with their branches, and four detached
+  clean ones went by hand; 108 local branches and 247 fork branches of merged or closed pull
+  requests were deleted; 26 worktrees remain, 13 of them dirty with a probe suite, a benchmark
+  file or a log each, listed in the close's pull request for the owner (`VARKA-261.md` 5.5).
+
+## 11. The close, 18 October 2026
+
+Opened 2 October 2026 while milestone 6 closed, closed 18 October 2026 by VARKA-261 under the
+rule of `CONTRIBUTING.md` "Finding work", in the shape `m6/VARKA-282.md` gave a close. Of the 115
+task rows in section 3, 112 read **Done** (222 closed on its measurement without a change), 2
+moved to milestone 8 on 17 October 2026 (180, promotion, as the standing cadence it is; 386,
+Spark's two filters disagreeing, waiting on apache/spark#59573), none was withdrawn, and 261 is
+this close.
+
+**1.1, item by item** (`VARKA-261.md` 5.1 holds each caveat with its evidence). (1) Every bounded
+lowering is proven: rows 240 to 245 and 281, the proofs under `sql/varka/proofs/` run in the
+linters' job under Z3 and nightly under cvc5, 45 to 47 s on 17 October's runs, the SQL-92
+fragment with Spark's eleven departures named and the lowerings restated as refinements of it.
+(2) The tests reach what they missed: vanilla Spark as the oracle at random and through its golden
+files, every IR tree to size 5, eight variants of every shape, seven JVM arms, the sanitizer in
+every suite, branch coverage of the emitter and of what it emits, and 1,760 mutants with every
+survivor answered; the warm-up flake's cause named and removed at the preferred species. (3)
+Varka's code is Java and legible: the compiler, its cache, the evaluators, the fuzz
+infrastructure and all 26 benchmarks ported with the oracle unchanged at each step, Error Prone
+and NullAway on every pull request, about 290 comments rewritten. (4) CI reaches a verdict with
+no laptop in the loop, pairs and results files on GitHub-hosted runners. (5) Seven posts, listed in
+`CHANGELOG.md`'s entry. (6) This close: the documents that named the milestone in flight
+corrected, the README's account of how Varka is checked written, the README's surfaces
+regenerated on the milestone 7 build (`d88e4a7e7f5`), the oracles regenerated and unchanged, the
+`CHANGELOG.md` entry, six lessons in the skills files, the debt sweep's five fixes (#918) in a pull
+request of their own, and the tag `varka-m7` on `ab9900cdca7`, the merge of the seventh post's
+sources behind the regression's fix, where it moved on the owner's word on 18 October from
+`793536853ab`, its first place of that morning, once the close had found the regression below;
+the worktrees and branches of merged pull requests were removed before it: 91 worktrees, 108
+local branches and 247 fork branches.
+
+**What milestone 8 still reads of this milestone's plans.** `VARKA-261.md` 7 (about 140 lessons
+owed to a later sweep, by source) and 8 (seven proposals for the owner), `m8/PLAN.md` rows 180
+and 386 with their records here, and `VARKA-295.md` 9.6 for the flake's remainder; every other
+task file of VARKA-240 to VARKA-388 is a record, read when a number or a decision is traced.
+
+**Found at the close, inside its scope.** The cold-start regeneration of step 6 released every
+projection shape of 16 to 100 entries at the warm-up's deadline, on the laptop and on two runners,
+where the file of 28 September had all 71 compiled, and the owner held the close for it. Row 389
+found the cause the same day, VARKA-295's template warm-up deoptimising the shared templates when
+it ran after other vector code, a decompile count a wide kernel sums past C2's cutoff, and moved
+the warm-up before any vector code (#921); its own CI then exposed an older coin on four-core
+hosts, a one-line wrapper's first compile landing at tier 2 when C2's queue is long, which row 391
+closed by calling the wrappers enough inside the paced rounds (#924), with row 390 making CI retry
+a listed flaky suite in a fresh JVM meanwhile (#923). The seventh post, "Two compilers, two
+queues", is what the four-core trace taught. The tag moved behind the fix.
+
+**Found at the close, outside its scope.** The laptop nightly has not run since 26 September
+2026, so row 274b's three predictions for its `compiled` step are unscored. In the surface
+regeneration the stock 4.2.0 arm ran `-ymm` and `abs(ymm)` at half its 5 October rate, which the
+README states beside the span; rerun alone the next morning the two entries were back at that rate
+(`DateSurface-spark-4.2.0-jdk25-ymm-recheck-results.txt`, seven entries, the other five within 4%
+of the night's file). The laptop's per-job constant was 28 ms that
+night against the 15 ms the README assumed, so the lightest Varka row of each file sits just over
+the 5% bound. A queue of surface arms that starts the next arm the second the previous JVM exits
+is refused by the script's own load gate; `skills/benchmarking.md` has the lesson. `CHANGELOG.md`
+is outside the docs scope of `varka_change_scope`, so a close that changes only documents and
+results files still runs the full matrix for that one file; a candidate for the next scope sweep.
+The cold-start regeneration on the laptop read RELEASED on 51 of 71 warm-up verdicts, where the
+file of 28 September on the same machine and pin had 71 COMPILED, and its once-compiled rows 22 to
+50% slower; the README's cold-start row now quotes the first-run ratios (0.8x with the warm-up,
+0.5x without) with the verdicts beside them, and `m9/SCOPE.md` item 103 carries the finding with
+its bisection's first step (`VARKA-261.md` 5.5, prediction 4); the runner pair read the same
+count on two other CPUs, split by shape, every projection shape releasing and the range filters
+compiling, so the cause is in the code since 28 September and the item is a row's work for the
+milestone that opens next. The close itself needed none of
+the laptop's time; the README's numbers did, and item 110 separates the two from milestone 8 on.

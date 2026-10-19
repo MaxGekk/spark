@@ -627,9 +627,13 @@ not have ended it either: a CPU-bound loop checks no interrupt.
 * **`VarkaTestWatchdog`**, mixed into every Varka suite, runs each test beside a watchdog thread.
   At the cap (`varka.test.watchdog.minutes`, ten) it interrupts the test thread, which ends a body
   that blocks or checks interrupts; thirty seconds later, if the test still runs, it writes every
-  thread's stack under the test's name and halts the JVM, so sbt reports the suite aborted and
-  the log's last lines say which test and what it was doing. `Thread.stop` is gone since JDK 20,
-  so a halt is what remains for a loop that will not stop.
+  thread's stack under the test's name and halts the JVM; the log's last lines say which test
+  and what it was doing. `Thread.stop` is gone since JDK 20, so a halt is what remains for a
+  loop that will not stop. sbt does not report the halted suite aborted: it waits on the forked
+  JVM's socket indefinitely, printing "Unable to read from client" (VARKA-283, which found the
+  gate's sweep step had not passed since the watchdog landed), so every gate and nightly step
+  runs under `dev/varka_deadline.sh`, which waits on the process it started, never on a name,
+  and kills the process group at its deadline.
 * **Size the cap from the slowest test on record**, not the job's limit: the width audit's census
   takes about two minutes, and the suites' CI jobs finish in eleven to seventeen minutes whole,
   so a single test past ten is a hang. A suite meant to run longer overrides `watchdogMinutes`.
@@ -1204,7 +1208,9 @@ assertion holds, so a message that indexes into an empty result throws on succes
 
 VARKA-266. `dev/varka_errorprone.sh` runs Error Prone and NullAway as a javac plugin over Varka's
 Java alone, against sbt's exported classpath, writing class files nothing reads; the gate's lint
-step runs it. Four things cost a run each to learn:
+step runs it, and since VARKA-382 so does every pull request's Build, after a finding merged
+between two green pull requests while only the gate looked (`VARKA-382.md` 9.1). Four things
+cost a run each to learn:
 
 - Error Prone's with-dependencies jar does not bundle the Checker Framework dataflow its analyses
   load (`io.github.eisop:dataflow-errorprone`); without it the plugin dies on
@@ -1386,6 +1392,29 @@ the kernel's status to `VarkaGuardSpec`'s verdict on every batch. What it took:
 To date every guarded row answers inside its domain and where it is unknown with nothing
 declined, and declines every batch outside with exactly the status the verdict calls for, in a
 projection and in a filter, at one batch per partition and at one and three rows a batch.
+
+## Spark's golden files under Varka: what the arm may touch, and what reaches a kernel
+
+From VARKA-271 (13 October 2026, `VARKA-271.md` 9 and 10). The suite runs Spark's golden SQL
+files with Varka on, through an Arrow cache, beside a cache-only arm, and compares the two.
+
+* **The Varka arm must never write golden files.** With `SPARK_GENERATE_GOLDEN_FILES=1` set the
+  parent suite rewrites every `.sql.out` from the answers it gets, which here are Varka's; the
+  suite refuses to start with the variable set, shown by a run that aborted in 3 s with no file
+  changed.
+* **A planted fault that reaches nothing proves nothing.** Every `date_add` in the golden files
+  is over literals with no `FROM`, so a misdescribed `date_add` failed no test of fourteen files;
+  before the literal lift, the one fault the suite could be shown to reach was the one under
+  which every emission raises. The lift (`VarkaArrowSource.LiftRule`) turns a `SELECT` with no
+  `FROM` into one over a 17-row relation: equal values of different types are two columns, an
+  entry stays only if every node still passes Spark's `checkInputDataTypes` (the
+  constant-argument rules live there), and nothing under a `try_` function is lifted.
+* **Served counts move run to run** (`int4.sql` served 23 and 24, `select_having.sql` 1 and 2,
+  alone as in the suite), so `served.json` is a floor: a test that served a batch fails when it
+  serves none, not when its count differs.
+* **A nested deadline must reach the command.** `dev/varka_deadline.sh` ran its command in a
+  session of its own, so an outer deadline's TERM stopped the script and left the 6 GB test JVM
+  running; it now forwards TERM and INT to the command's group.
 
 ## Cost predictions run optimistic: the calibration table
 
