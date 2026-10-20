@@ -25,6 +25,9 @@ import java.util.Random;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.AddDays;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.AddMonths;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.And;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitCount;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitOp;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitOpKind;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoundedDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
@@ -103,6 +106,8 @@ public final class VarkaIrGrammar {
 
   public static final long COLUMN_BOUND = 2500000L;
   public static final int LITERAL_BOUND = 4000;
+  /** The widest magnitude an int lane holds, the bound of a value the grammar cannot narrow. */
+  public static final long INT_LANE_BOUND = 1L << 31;
 
   /**
    * The seed both shape corpora are drawn from: {@code VarkaIrFuzzSuite} runs shape {@code k}
@@ -280,6 +285,9 @@ public final class VarkaIrGrammar {
       case ConstDivide n -> over(n.child(), v -> v / Math.abs(n.divisor()));
       case BoundedDivide n ->
           new Bounds((long) ((n.bound() - 1) / n.divisor()), guard(n.child()));
+      // A mask or a shift reaches any int; the count is at most 64.
+      case BitOp n -> new Bounds(INT_LANE_BOUND, guard(n.left(), n.right()));
+      case BitCount n -> new Bounds(Long.SIZE, guard(n.child()));
       // The dynamic form moves the date down like the literal one, whatever the level; the
       // level column contributes no day magnitude of its own, only whatever guarded producer
       // might sit under it, which `guard` picks up.
@@ -498,7 +506,7 @@ public final class VarkaIrGrammar {
         return leaf();
       }
       budget -= 1;
-      int arm = rnd.nextInt(24);
+      int arm = rnd.nextInt(26);
       switch (arm) {
         case 0: {
           Gen a = value(depth - 1);
@@ -664,6 +672,20 @@ public final class VarkaIrGrammar {
           long lo = wide ? Integer.MIN_VALUE : -bound;
           return new Gen(new GuardedRange(a.node(), lo, bound), a.bound());
         }
+        case 24: {
+          // VARKA-335's bitwise operations and shifts, the right operand a subtree or a leaf:
+          // a shift count of any value, which the lanes mask to five bits as Java does. The
+          // grammar tracks no sign, and a mask or a shift can reach any int, so the bound is the
+          // lane's own.
+          Gen a = value(depth - 1);
+          Gen b = rnd.nextBoolean() ? leaf() : value(depth - 1);
+          BitOpKind[] ops = BitOpKind.values();
+          return new Gen(new BitOp(ops[rnd.nextInt(ops.length)], a.node(), b.node()),
+              INT_LANE_BOUND);
+        }
+        case 25:
+          // bit_count, at most 64 whatever it counts.
+          return new Gen(new BitCount(value(depth - 1).node()), Long.SIZE);
         default:
           return calendar(arm, depth);
       }
@@ -907,7 +929,7 @@ public final class VarkaIrGrammar {
         return leaf();
       }
       budget -= 1;
-      switch (rnd.nextInt(9)) {
+      switch (rnd.nextInt(11)) {
         case 0:
         case 1: {
           // Add and subtract, over two subtrees or a subtree and a leaf. A checked mode only
@@ -973,6 +995,16 @@ public final class VarkaIrGrammar {
           Gen b = value(depth - 1);
           return new Gen(new Least(a.node(), b.node()), Math.max(a.bound(), b.bound()));
         }
+        case 9: {
+          // The bitwise operations and shifts (VARKA-335), which can reach any long.
+          Gen a = value(depth - 1);
+          Gen b = rnd.nextBoolean() ? leaf() : value(depth - 1);
+          BitOpKind[] ops = BitOpKind.values();
+          return new Gen(new BitOp(ops[rnd.nextInt(ops.length)], a.node(), b.node()),
+              Long.MAX_VALUE);
+        }
+        case 10:
+          return new Gen(new BitCount(value(depth - 1).node()), Long.SIZE);
         default: {
           Cond c = cond(depth - 1);
           Gen a = value(depth - 1);

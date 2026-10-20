@@ -191,4 +191,242 @@ itself (329), and the lane conversion (28).
 
 ## 9. Outcome
 
-*To be written when the work lands.*
+*19 October 2026, 335a.* Wave 0's part landed: `&`, `|`, `^`, `~` over `INT` and `BIGINT`, the
+three shifts over `INT` by a literal or a column and over `BIGINT` by a literal, `bit_count` over
+`INT` anywhere and over `BIGINT` as an output root, and both bitmap functions. 335b (section 8
+item 3) is untouched and the row stays open. Section 2's facts held on master `e6aa78e3cd5`: no
+bitwise node, `IntOp` still `{ ADD, SUB, MUL }`, no compiler arm for any of the fifteen entries;
+`i << 3` declined as an unsupported expression before the arms.
+
+**What was built**, with the departures from section 3 marked.
+
+1. **Two nodes, not three** (*departure*). `BitOp(op, left, right)` with `op` one of `AND`, `OR`,
+   `XOR`, `SHL`, `SHR`, `USHR`, both operands on the node's lane, and `BitCount(child)`. `~x`
+   compiles to `x ^ -1` with the literal on the operand's lane, which is one `lanewise` as
+   `lanewise(NOT)` would be and saves a node its twenty switch arms. `BitCount` is
+   `bitCount(x) + ((x >> 31) & 32)` at the int lane and the popcount at the long lane.
+2. **One emission for both counts** (*departure*). A shift by a literal emits as a shift by the
+   literal's broadcast vector, so `lanewise(op, Vector)` serves a literal count and a column count
+   alike, the literal's value stays out of the IR as every literal's does, and `emitShift` and its
+   callers are untouched; no lanewise-by-scalar shape was added to `Lane`. C2 emits `vpsllvd`,
+   `vpsrlvq` and kin for both on the laptop. `Lane` gained only `lanewise(Unary)`, for the popcount.
+3. **The compiler arms** are in the int arithmetic family (`intArithmetic`'s switch): the
+   operators over `INT` and `BIGINT`; a `BIGINT` shifted by an `INT` literal carries the count as
+   a long literal, the same count since the shift reads six bits of the sign-extended int; a
+   `BIGINT` shifted by anything else declines naming VARKA-28; `bit_count` of a `BIGINT` is a
+   `NarrowLane` root in `compileRoot` and declines under another node naming VARKA-28; the bitmap
+   functions are matched as the `StaticInvoke` of `BitmapExpressionUtils` their replacement is.
+4. **The bitmap lowering** is section 2 item 5's, written as one magnitude: `w = v > 0 ? v - 1 :
+   -v`, the position `w & 32767` and the bucket `v > 0 ? (w >>> 15) + 1 : -(w >>> 15)`, a compare,
+   a blend for `w` and one for the bucket, with no division and no `ConstDivide`. At
+   `Long.MIN_VALUE`, `-v` wraps to itself, the mask gives 0 as Spark's `(-v) % N` does, and
+   `w >>> 15` is `2^48`, whose negation is Java's truncating `MIN_VALUE / 32768`.
+5. **The range analysis** answers `BitOp` as unknown and `BitCount` as `[0, 64]` (*departure*: no
+   `x & k` rule, so no new claim for `range_analysis.smt2`). The count's bound is what takes the
+   check off `bit_count(i) + 1` under ANSI, which the compiler suite asserts.
+6. **The proof** is a file of its own, `sql/varka/proofs/bitmap.smt2` (*departure*: not appended
+   to the long-lane division file), rendered by `VarkaProofFiles` from Spark's `NUM_BITS`: both
+   identities for every long, the domain admitting `Long.MIN_VALUE`, and three neighbours (the
+   shift one less, the arithmetic shift, the mask a bit narrower) refuted. Its logic is `ALL`:
+   cvc5 answered the position's claim unknown at the 10 s limit under `QF_NIA`.
+7. **The sweeps** are in `VarkaEmitterBitwiseSuite`, a Scala emitter suite in its own JVM
+   (*departure*: not a JUnit `VarkaBitwiseSweepSuite`), because the nightly's sweep step selects
+   `*VarkaEmitter*Suite -- -z opt-in` and the suite's helpers are the emitter base's. Under
+   `-Dvarka.sweep=true`: every int through `~` and `bit_count` against Spark's `BitwiseNot` and
+   `BitwiseCount`, and every int through each shift with its count cycling over `[-64, 64]`,
+   against `ShiftLeft`, `ShiftRight` and `ShiftRightUnsigned`. On every build: a 2^24-int strided
+   slice of the same, and `&`, `|`, `^` over a 2^24-pair slice. A shift's two operands are 64
+   bits, past section 5's exhaustion rule, so every int meets one count per row rather than all
+   129 (*departure* from section 5 item 1's "every count" over every int, 129 times the work).
+8. **The fuzzer** draws both nodes at both lanes, the series enumerates them, and the template
+   warm-up passes `BIT_COUNT` with its other unary operators, since a kernel now calls it.
+9. **Coverage**: 18 rows in a family of their own, 137 rows from 119; the census's fused pairs
+   122 to 146 and its fully fused entries 15 to 23. The coverage table now escapes a `|` inside
+   a cell, which `i | 4096` was the first row to hold.
+
+**The registered op counts** (section 3.4), read with `dev/varka_emit.sh --table` at the
+defaults, the dump's lane-call count per kernel with its load and store: `-i`, a one-op node, is
+4, and so is every `BitOp` row (`i & j`, `i | j`, `i ^ j`, `~i`, `i << 3`, `i << j`, `i >> j`,
+`i >>> 3`, `l & l2`, `~l`, `l << 3`, `l >>> 63`), as registered; `bit_count(i)` is 6, three past a
+one-op node, so four ops as registered; `bit_count(l)` is 4, one op and the narrowing store, as
+registered; `bitmap_bit_position(l)` is 10 and `bitmap_bucket_number(l)` 13, six and nine past
+the one op of the others' count, against the registered "about eight" and "about ten" lane
+operations. C2's code for the dense loop on the laptop (`--asm`): `vpopcntd`, `vpsrad`, `vpandd`,
+`vpaddd` for `bit_count(i)` and `vpopcntq` for `bit_count(l)`, with no boxing in either; AVX2's
+form was not run, and no speed-up is claimed (section 6).
+
+**What moved with the fuzzer.** The grammar's new arms move every later draw of both lanes, as
+VARKA-235's did, and the emit cost model is fitted on those draws. A first run let them reach the
+cost corpus: every price was refit, the bytes margin moved from 0.209 to 0.171 and the sites
+margin from 0.182 to 0.204, and with them the planned grouping of shapes with no bitwise node in
+them - `VarkaEmitterBudgetSuite`'s ladder of 64 cheap tails went from 6 loop methods to 8, a
+benchmarked shape. So the cost corpus now draws without the bitwise arms
+(`VarkaIrGrammar.drawShape(rnd, false)` and its three siblings, which make the draws the grammar
+made before them), and the new features are priced on the register's probes over columns, as a
+lowering variant the grammar never draws already was (*departure*: section 4 did not foresee it).
+The table then moved by its new entries and by about a tenth of a percent on the existing prices,
+the probes' rows joining the regression; the margins, the ladder's counts and the shapes that gain
+a loop method under `predictGrouping` are master's. `emitted_bytes.json` gained the 18 rows at both
+widths; its fuzz blocks, drawn from the whole grammar, and its option-arm hashes moved, and no
+existing coverage row's bytes moved. `width_audit.json`, regenerated on the host it names, gained
+the rows: none is refused at the preferred width, and at 128 bits the bitmap rows carry the
+long-lane compare and blend refusals every long-lane row with a comparison has. Three tests of
+`VarkaIrFuzzSuite` pinned to draws of the old fuzz sequence that grow past the op cap needed new
+draws, found by scanning the same nights' seeds: (2026101303002, 4259) for the two skip tests,
+(2026101307006, 32279) for the rebuilt arm and (2026101300002, 195413) for the stranger.
+
+**The test run**: `VarkaEmitterBitwiseSuite` 9 of 9 with the full sweeps on (74 s in its own JVM,
+of which the two unary sweeps 14.2 s and the three shift sweeps 47.6 s);
+`VarkaExpressionCompilerSuite` 149 of 149 with its four new tests; the catalyst `*Varka*` suites
+with the memory sanitizer on, all passing but `VarkaTierWitnessSuite` (9.2 item 6), which passes
+with it off, and the JUnit suites among them (range rules, cast matrix, proof files) in a run of
+their own;
+`VarkaCoverageDifferentialSuite` 368 of 368 against Spark's row engine, the new rows' int-valued
+forms under a later `COALESCE` argument and `bit_count(l)` under a `CASE` arm, a `COALESCE` and an
+`AND` joining its list of positions Varka does not serve, for the reasons the rows they sit beside
+give (an int column as a `COALESCE` value, item 55, and a narrowed int, VARKA-28);
+`dev/varka_prove.sh` under both solvers; the census check; scalastyle and checkstyle.
+
+### 9.1 The predictions
+
+| | prediction | measured | |
+| :-- | :-- | :-- | :-- |
+| 1 | the census moves by 24 pairs and 8 fully fused entries | 122 to 146 pairs, 15 to 23 entries | held, exactly |
+| 2 | the int-lane `bit_count` identity holds over all 2^32 ints against `BitwiseCount` | the full sweep passed | held |
+| 3 | each unary 2^32 sweep under five minutes (about one minute estimated) | `~` and `bit_count` 14.2 s together, about 7 s each; each shift sweep about 16 s | held, at about 0.12 of the estimate |
+| 4 | the two bitmap SMT claims add under 5 s under Z3 | 0.03 s under Z3 and 0.07 s under cvc5 for the file's six checks | held |
+
+Prediction 3's estimate priced a few nanoseconds per interpreted evaluation spread over the cores;
+the sweep ran on the laptop's 24 threads beside other agents' JVMs at about 25 ns of CPU per
+evaluation, and the parallel stream kept about eleven cores busy, so the wall time fell well under
+the minute. Calibration entries `VARKA-335-6.1-3.md` and `VARKA-335-6.1-4.md`.
+
+### 9.2 What the work found
+
+1. **A dead month step in a materialized prefix** (not this row's; a proposed row below). With the
+   bitwise arms in the cost corpus, `VarkaUnreadLocalsSuite` found an unread reference local in a
+   wide shape, and it reduces to four roots of master's nodes alone, `add_months(d1, i2)`,
+   `(i0 + i2) + year(d1)`, a `ThursdayOf` and a `make_date` over a third date, grouped
+   `[0, 1], [2], [3]` with `d1`'s prefix materialized: `year(d1)` and `add_months(d1, i2)` are
+   two fragments of one date, keyed on different words, and the second to be emitted computes the
+   month step because the materialized prefix needs it (`mat.needsMonth()` in
+   `VarkaChronoLowering.emitChronoPrefixOnce`) though the first already stored it, so the step
+   lands in a local nothing reads. It disappears with `materializeChronoPrefix` off. The fix is to
+   compute the month for the store only in the fragment that stores; it is a wasted store, not a
+   wrong answer, and with the corpus restored the suite no longer reaches it, so it is recorded
+   here rather than fixed in this row.
+2. **cvc5 and `QF_NIA`**: the position's claim, a remainder of a wrapping negation, came back
+   unknown under `QF_NIA` and holds in 0.07 s under `ALL`, the first remedy the proofs' README
+   lists.
+3. **A coverage cell may hold a `|`**: the table now escapes it.
+4. **The new prices are thin.** Priced on one probe over two columns each, the `BitOp` kinds
+   come out alike and their masked methods' byte prices negative (about -96 at the int lane and
+   -155 at the long), as other probe-only variants' already are; the fit cannot tell the node
+   from its columns' reads there. A group of many bitwise nodes is then under-predicted in its
+   masked methods, which the byte budget's measurement of the built class still corrects, so it
+   costs a rebuild and not a wrong size. Pricing them on occurrences needs a corpus that holds
+   them, which is the refit this row declined; it is a question for the next refit.
+5. **The census calls the shifts `done`**: the script marks an entry done when every type it
+   admits is fused, and both are, by a literal count; the `BIGINT` shift by a column that 335b
+   owes is a form of a fused pair, so it is carried in the entries' note.
+6. **The test run with the memory sanitizer on** fails `VarkaTierWitnessSuite`'s warmed history
+   with a `speculate_null_assert` trap in `VarkaMemorySanitizer.check`; the suite measures the JIT,
+   which the sanitizer's branches change, and it passes with the sanitizer off, as the gate runs
+   it.
+
+### 9.2a Round two: stacked on row 334 and row 28, and the cost model refit (20 October 2026)
+
+*Departure, on the owner's word of 19 October 2026: the emit cost model is refit on the whole
+grammar, bitwise arms included, and the flag that kept the cost corpus on the earlier draws is
+gone.* What section 9 says above about the held corpus is the first round's record; this is what
+replaced it.
+
+**Stacked.** The branch merged `origin/master` at `0eda4cb66ce` (row 28: kernels of both lanes,
+`WidenLane` and `NarrowLane` anywhere) and then row 334's branch (`IS NULL` and `IS NOT NULL` over
+a predicate, its own grammar draw and the `IsNotNull/cond/<lane>` cost feature, and the month-step
+fix 9.2 item 1 proposed). Merge conflicts were in the exhaustive switches beside `WidenLane`, the
+compiler's root (row 28 removed the `TIME` root arm; the `bit_count(bigint)` root arm stays), the
+differential suite's declined list and the generated files, which were regenerated.
+
+**Found by the merge: the bitwise emitters took the kernel's lane, not the node's.** A kernel of
+both lanes holds int-lane nodes under a long-lane kernel and the reverse; `emitBitOp` and
+`emitBitCount` read `analysis.lane`, so a `BitCount` of an int under a long kernel called
+`LongVector.lanewise` on an `IntVector` and the class failed verification (`VarkaIrFuzzSuite`'s
+mixed-lane draw 719). Both now read `analysis.laneOf(node)`, as row 28's emitters do.
+
+**Row 28 and 335b.** With `WidenLane` and `NarrowLane` admitted anywhere, both 335b items that
+named row 28 are now a few lines each: a `BIGINT` shifted by an `INT` column is a `BitOp` over a
+widened count, and `bit_count(bigint)` under another node is a `NarrowLane` over the count. Neither
+is built here; their declines now name 335b instead of a pending row 28, and an operator between
+an `INT` and a `BIGINT` operand, which the analyzer widens with a cast, fuses through row 28's
+`WidenLane` with no change of this row's.
+
+**The refit.** On the merged corpus with the bitwise arms in it:
+
+| | master | merged base (334) | refit |
+| :-- | --: | --: | --: |
+| bytes margin | 0.209 | 0.205 | 0.155 |
+| sites margin | 0.182 | 0.176 | 0.206 |
+
+Every price moved; the bitwise nodes are priced from their occurrences in the draws. The pins that
+moved, each checked to be the refit's (the same assertions hold, only the counts or the draws
+changed): `VarkaEmitterBudgetSuite`'s 64-tail ladder, 6 to 8 loop methods with the prefix
+recomputed and 4 to 5 materialized, at every fused ceiling, one build each; the wide shapes that
+gain a loop method under `predictGrouping` with the greedy grouping, `wide long` 84 and 184 to 78
+and 82; and `VarkaIrFuzzSuite`'s op-cap draws, redrawn by the arms and found again by a scan,
+(2026101307006, 32279) for the rebuilt arm and (2026101300002, 195413) for the stranger. No
+coverage row's emitted bytes moved.
+
+**The benchmark**, on the quiet laptop after the night fuzz job (20 October 2026, 03:37 to 04:45,
+load under 1 at each start, canary ok, `powerprofilesctl` performance, battery "Not charging").
+
+*Emission* (`VarkaEmissionBenchmark`, regenerated at both widths and committed): the 64 cheap
+tails take 875 us to emit predicted (863 before) at 256 bits and 866 us (884) at 128, inside the
+file's spread, which the weights arm, untouched by the prices, shows at 1 to 5%. No row moved past
+the file's noise.
+
+*Running the kernels* (`VarkaSharedPrefixBenchmark`, which runs the ladder over a million rows;
+256-bit lanes paired with `dev/varka_bench_pair.sh` against the merged base `ca586f1dce6`, five
+alternating rounds; 128-bit lanes one run each side in the same session):
+
+| 64 tails over one date | base | refit | change |
+| :-- | :-- | :-- | :-- |
+| prefix per group, 256-bit | 6 methods, 3.0 ns/row in 5 of 5 runs | 8 methods, 3.6 ns/row in 5 of 5 | **20% slower** |
+| prefix per group, 128-bit | 6 methods, 8.1 to 8.2 ns/row | 8 methods, 9.5 to 9.6 ns/row | **17% slower** |
+| prefix once (the default), 256-bit | 4 methods, best 2.9 ns/row; 106 to 268 ns/row in 4 of 5 runs at ceiling 400 | 5 methods, 2.6 ns/row in 5 of 5 | 10% faster by best, and stable |
+| prefix once (the default), 128-bit | 4 methods, best 8.0 to 9.7 ns/row at two ceilings, 346 to 349 at two | 5 methods, best 7.0 to 7.7 ns/row | no slower by best |
+
+So the two extra methods of the recomputed arm cost about a fifth of its throughput at both
+widths, past the file's noise: the refit is materially slower there. That arm is not the default
+(`materializeChronoPrefix` is on), and on the default arm the refit is no slower. Both sides of
+the default arm fall at times into a slow mode a hundred times slower, the base more often; the
+committed master file (12 October) shows neither, so it arrived after it, and it is recorded as a
+finding (9.2a, last paragraph), not this row's. The committed `VarkaSharedPrefixBenchmark` files
+are the refit's run; one of its wide rows (ceiling 50, prefix once) caught the slow mode.
+
+**Round three, 20 October 2026: the slow mode bisected, stopped part-way** (every number in
+`results/VARKA-335-slow-mode-bisect.txt`). Five alternated rounds of the whole benchmark per
+commit, slow meaning a computed-once cell past 20 ns/row: master's 12 October commit
+`a93cb83e706` 0 of 25 cells (0 of 5 rounds), the Java port `25a1bae6893` 0/25 (0/5), the commit
+before row 28 `05242b26d2e` 10/25 (5/5), row 28 `0eda4cb66ce` 10/25 (4/5), row 334 `54bb641d947`
+20/25 (5/5), this branch's `00d9f79ec79` 3/25 (2/5). The fast mode also moved, 2.3 to 2.4 ns/row
+before to 2.7 after. So the slow mode predates rows 28, 334 and this one. A bisect over the 37
+product and harness commits between `25a1bae6893` and `05242b26d2e` found `3f6f450bd71`
+(14 October) good in three runs and was stopped there by the coordinator: the cause is in the 19
+such commits from `3f6f450bd71` to `05242b26d2e`, which hold the Vector API template warm-up
+(`aa457c3797b`, `568582a9f77`, `089f7659b1b`, `e6aa78e3cd5`). Not yet known: the commit, and the
+JIT's account of a slow round (no PrintCompilation, deoptimization or allocation log was taken).
+
+**Finding: the materialized ladder's slow mode.** At 4 or 5 loop methods with the prefix computed
+once, the 64-tail kernel runs either at 2.6 to 2.9 ns/row or at 65 to 349 ns/row, run to run, at
+both widths, on the merged base and on the refit alike; master's committed run of 12 October
+holds 2.4 and 5.0 throughout. It looks like a kernel that stopped scalar-replacing its vectors
+(the VARKA-295 family) and wants a row of its own: reproduce with `-XX:+PrintCompilation` and the
+tier witness on the base, and bisect over rows 28 and 334.
+
+### 9.3 What row 28 opens for 335b
+
+A `BIGINT` shifted by an `INT` column (the count widened in the kernel), `bit_count(bigint)` under
+another node (a narrowing inside the tree), and an operator between an `INT` and a `BIGINT`
+operand, which the analyzer widens with a cast, all wait on row 28's conversion; `bit_get`,
+`getbit` and the narrow operands on 329's byte and short lanes; `bit_count(bool)` on 331's.

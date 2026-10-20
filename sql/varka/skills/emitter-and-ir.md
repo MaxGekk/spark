@@ -608,6 +608,23 @@ a lane-generic node moves both sequences' blocks, a calendar node only the
 first, and the two long block lists moving on an int-only change is the signal
 that the long grammar was touched when it should not have been.
 
+## A new node's fuzz arm refits the emit cost model, and the refit moves groupings far from it
+
+Since VARKA-236 the grammar's draws are also the emit cost model's training corpus
+(`VarkaEmitCostCorpus.fuzz` and `wide`): the register's prices are read off the first nodes of each
+kind in the fuzz sequences, and the regression and its margins are fitted on the fuzz and wide
+shapes. So a fuzz arm for a new node, which reshuffles every later draw, refits every existing
+price and both margins, and under the default `predictGrouping` the planned grouping of shapes
+that hold no new node moves with them. VARKA-335's bitwise arms moved the bytes margin from 0.205
+to 0.155 and the sites margin from 0.176 to 0.206, and `VarkaEmitterBudgetSuite`'s 64-tail ladder
+from 6 loop methods to 8 recomputed and from 4 to 5 materialized; `VARKA-335.md` 9 has the
+benchmark of that ladder before and after.
+
+Keeping the corpus on the old draws was tried and is not the house rule: it leaves the new node
+priced on one probe over columns, which comes out thin and even negative, and the owner chose
+the refit on 19 October 2026. So a new arm refits the model, and its pull request says which
+pins moved, by how much the margins did, and what the moved groupings measure.
+
 ## A projection that only forwards columns is a selection, and the node with no kernel is the fast path
 
 Varka's eligibility question is "does any entry of this projection *fuse*", and

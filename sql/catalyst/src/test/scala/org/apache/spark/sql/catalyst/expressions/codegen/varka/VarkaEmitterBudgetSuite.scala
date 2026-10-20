@@ -324,6 +324,10 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       (new ConstDivide(c, 7), 1, 0, VarkaMatrix.base),
       (new ConstDivide(lc, 60, ConstDivide.EXACT_DIVIDEND_BOUND), 1, 0, avx2),
       (BoundedDivide.of(c, 3600, 86400), 1, 0, VarkaMatrix.base),
+      (new BitOp(BitOpKind.SHL, c, c1), 2, 0, VarkaMatrix.base),
+      (new BitOp(BitOpKind.AND, lc, lc1), 2, 0, VarkaMatrix.base),
+      (new BitCount(c), 1, 0, VarkaMatrix.base),
+      (new BitCount(lc), 1, 0, VarkaMatrix.base),
       (lt, 2, 0, VarkaMatrix.base),
       (new And(lt, new Compare(CompareOp.GT, c, l)), 2, 1, VarkaMatrix.base),
       (new Or(lt, new Compare(CompareOp.GT, c, l)), 2, 1, VarkaMatrix.base),
@@ -528,12 +532,14 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
         VarkaEmitterTestSupport.methodNames(bytes).asScala.count(isLoop(_, true))
     }
     // Under the defaults the ceilings below 400 do not move the cheap tails: their groups are the
-    // call-site budget's, the prefix recomputed taking six and materialized four. The make_date
-    // rungs are heavy enough that the ceiling decides, down to one a method at 100.
+    // call-site budget's, the prefix recomputed taking eight and materialized five. The make_date
+    // rungs are heavy enough that the ceiling decides, down to one a method at 100. The tails took
+    // six and four until VARKA-335 refitted the prices on the bitwise grammar, whose larger
+    // sites margin closes their groups earlier (`VARKA-335.md` 9).
     for (((name, ceiling, materialized), loops) <- counts) {
       val want = (name, ceiling, materialized) match {
-        case ("tails", _, false) => 6
-        case ("tails", _, true) => 4
+        case ("tails", _, false) => 8
+        case ("tails", _, true) => 5
         case (_, 400, _) => 10
         case (_, 200, _) => 20
         case _ => 60
