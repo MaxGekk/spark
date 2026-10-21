@@ -785,6 +785,14 @@ whole test `PinsDefaults` only when nothing else of it is worth running under a 
 The scheduled option matrix runs every configuration and a pull request's scoped run only the one
 its diff names, so a test added with a feature is first run under the others a day later: run the
 new suites under all of `--list` before merging a test that emits.
+The whole matrix over just those suites is one command and no longer than a lane run:
+`dev/varka_matrix.sh --all --module catalyst --suites <the new suites> -j 4` ran 25 suites under
+all 50 configurations and the defaults in about 40 minutes on a 24-core laptop (VARKA-470; `--list`
+itself builds first, so it needs the lock and a minute). A premise of the test that an option
+changes is either pinned, to `VarkaEmitOptions.DEFAULTS` or to the value it needs, with the
+reason beside it (a prefix stored across groups needs `materializeChronoPrefix` too, a checked
+add that nulls a valid input needs `checkIntOverflow` on) or listed in `sql/varka/matrix/skips.tsv`; a line there that starts
+to pass is reported stale and must go.
 A suite that emits a whole corpus under a configuration may see the emitter decline a shape
 (`VarkaEmitDeclined`, which `shareChronoPrefix=false` does for the widest shapes: each node
 decomposes its own date and the method outgrows the byte budget); catch it for that option only,

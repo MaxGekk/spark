@@ -94,10 +94,13 @@ class VarkaUnreadLocalsSuite extends VarkaEmitterTestBase {
     // may change out from under it: without sharing, or with a group budget past the shape's
     // size or no method byte budget, no group splits off to load a prefix; with the month step
     // kept (elideChronoMonth off) every fragment computes a month by the option's design, which
-    // the census counts as unread, so this case does not check that option.
+    // the census counts as unread, so this case does not check that option; with
+    // materializeChronoPrefix off no prefix is stored for a later group to load, so nothing is
+    // materialized.
     val defaults = VarkaEmitOptions.DEFAULTS
     val options = elided.withPredictGrouping(false)
       .withShareChronoPrefix(defaults.shareChronoPrefix())
+      .withMaterializeChronoPrefix(defaults.materializeChronoPrefix())
       .withGroupBudget(defaults.groupBudget())
       .withMethodByteBudget(defaults.methodByteBudget())
       .withElideChronoMonth(defaults.elideChronoMonth())
