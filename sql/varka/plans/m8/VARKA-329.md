@@ -735,3 +735,11 @@ packed boolean output is the selection word of every loop here. The census chang
 width of three existing cells (`narrow_then_full`, `full_then_narrow`, `both_in_one_loop`) from 256
 to 128 bits so that they run at 128; their 512 and 256 readings are unchanged. The `short`
 two-species cells and the two with the 64-bit byte load are new.
+
+**Not yet measured: the byte rung past the last-level cache (added in the review of 22 October
+2026).** The ladder's top rung stays at the edge of the pinned L3 for bytes, so the spike has no
+reading that is past the cache for `TINYINT`, and the 2.1 to 2.6 ratios of prediction 2 are
+unexplained. `VarkaNarrowLaneBenchmark` now has a 33554432-row rung (a 64 MB byte pair, 128 MB of
+shorts, 256 MB of ints), timed only under `-Dvarka.narrow.pastL3=true` because its columns are
+about 600 MB. It has not been run: the laptop was in use for other timing that night. It is
+`PLAN.md` row 415, and prediction 2 stays scored as in the table above until that row reads it.

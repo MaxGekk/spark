@@ -17,15 +17,19 @@
 
 package org.apache.spark.sql;
 
+import java.io.Serializable;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.invoke.SerializedLambda;
 import java.lang.management.ManagementFactory;
 import java.nio.ByteOrder;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.SplittableRandom;
 import java.util.concurrent.TimeUnit;
@@ -78,7 +82,9 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitterTestS
  * <p>Run it with {@code -XX:CompileCommand=dontinline,<this class>::loop*} so that each loop is
  * a compile unit of its own, at {@code -XX:MaxVectorSize=64}, {@code 32} and {@code 16} for the
  * three widths. {@code -Dvarka.narrow.arms=widened,native,int,scalar} (a subset)
- * keeps the second byte species of one arm out of the JVM of the other.
+ * keeps the second byte species of one arm out of the JVM of the other, and
+ * {@code -Dvarka.narrow.pastL3=true} adds the 33554432-row rung, the only one past the
+ * last-level cache for bytes (about 600 MB of columns, so a default run leaves it out).
  *
  * <pre>
  *   build/sbt catalyst/Test/runMain org.apache.spark.sql.VarkaNarrowLaneBenchmark
@@ -86,15 +92,36 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitterTestS
  */
 public class VarkaNarrowLaneBenchmark extends VarkaBenchmarkBase {
 
-  /** A rung of the ladder: a row count and what it is for. */
-  private record Rung(int numRows, String level) { }
+  /**
+   * A rung of the ladder: a row count and the bytes of a pair of columns it reads, which is what
+   * a cache level holds. An {@code optIn} rung is timed only under {@code
+   * -Dvarka.narrow.pastL3=true}: its columns are about 600 MB and a default run need not pay.
+   */
+  private record Rung(int numRows, String level, boolean optIn) {
+    Rung(int numRows, String level) {
+      this(numRows, level, false);
+    }
+  }
 
-  /** The rungs, named by the bytes of a pair of columns, which is what a cache level holds. */
+  /**
+   * The rungs. The 8388608-row rung is at the edge of a 16 MB last-level cache for bytes (a byte
+   * pair is 16 MB) and past it for shorts and ints; the 33554432-row rung is past it for all
+   * three (a byte pair is 64 MB).
+   */
   private static final List<Rung> LADDER = List.of(
       new Rung(16384, "pairs of 32 KB to 128 KB"),
       new Rung(262144, "pairs of 512 KB to 2 MB"),
       new Rung(1000000, "pairs of 2 MB to 8 MB"),
-      new Rung(8388608, "pairs of 16 MB to 64 MB"));
+      new Rung(8388608, "pairs of 16 MB to 64 MB"),
+      new Rung(33554432, "pairs of 64 MB to 256 MB", true));
+
+  private static final String PAST_L3_PROPERTY = "varka.narrow.pastL3";
+
+  /** The rungs this run times: the opt-in ones only when {@code varka.narrow.pastL3} is true. */
+  private static List<Rung> ladder() {
+    boolean pastL3 = Boolean.getBoolean(PAST_L3_PROPERTY);
+    return LADDER.stream().filter(r -> pastL3 || !r.optIn()).toList();
+  }
 
   /** Rows a timed iteration covers, so that one is long enough for a millisecond clock. */
   private static final long ROWS_PER_ITERATION = 1L << 27;
@@ -157,7 +184,7 @@ public class VarkaNarrowLaneBenchmark extends VarkaBenchmarkBase {
 
   /** A loop over columns {@code a}, {@code b} and {@code c} into {@code out}. */
   @FunctionalInterface
-  private interface Loop {
+  private interface Loop extends Serializable {
     void apply(MemorySegment a, MemorySegment b, MemorySegment c, long[] out, int n);
   }
 
@@ -465,13 +492,38 @@ public class VarkaNarrowLaneBenchmark extends VarkaBenchmarkBase {
   /** Which columns of the rung an arm reads. */
   private enum Columns { BYTES, SHORTS, INTS }
 
+  /** The groups of arms {@code -Dvarka.narrow.arms} selects among, by lower-case name. */
+  private enum Group {
+    WIDENED, NATIVE, INT, SCALAR;
+
+    String token() {
+      return name().toLowerCase(Locale.ROOT);
+    }
+  }
+
   /**
-   * One arm: the group it is selected by ({@code widened}, {@code native}, {@code int} or {@code
-   * scalar}), its case name, the loop method's name (for the code list), the loop, and the
-   * columns it reads. {@code reference} is the scalar arm of the same shape that checks it.
+   * One arm: the group it is selected by, its case name, the loop's method name (for the code
+   * list), the loop, the columns it reads, and the scalar loop of the same shape that checks it.
    */
-  private record Arm(String group, String label, String method, Loop loop, Columns columns,
-      String reference) { }
+  private record Arm(Group group, String label, String method, Loop loop, Columns columns,
+      Loop reference) {
+
+    /** An arm whose method name is the one the loop's method reference names. */
+    Arm(Group group, String label, Loop loop, Columns columns, Loop reference) {
+      this(group, label, methodOf(loop), loop, columns, reference);
+    }
+  }
+
+  /** The name of the static method a method reference to one of this class's loops names. */
+  private static String methodOf(Loop loop) {
+    try {
+      var writeReplace = loop.getClass().getDeclaredMethod("writeReplace");
+      writeReplace.setAccessible(true);
+      return ((SerializedLambda) writeReplace.invoke(loop)).getImplMethodName();
+    } catch (ReflectiveOperationException e) {
+      throw new IllegalStateException("cannot read the method a loop reference names", e);
+    }
+  }
 
   /** The columns of one rung. */
   private record Data(int numRows, MemorySegment bytes1, MemorySegment bytes2,
@@ -511,70 +563,81 @@ public class VarkaNarrowLaneBenchmark extends VarkaBenchmarkBase {
         smallInts(arena, n, 7));
   }
 
+  /** The scalar loops that check each shape's arms. */
+  private static final Loop SCALAR_BYTE = VarkaNarrowLaneBenchmark::loopScalarByte;
+  private static final Loop SCALAR_SHORT = VarkaNarrowLaneBenchmark::loopScalarShort;
+  private static final Loop SCALAR_INT = VarkaNarrowLaneBenchmark::loopScalarInt;
+  private static final Loop SCALAR_MIXED_BYTE = VarkaNarrowLaneBenchmark::loopScalarMixedByte;
+  private static final Loop SCALAR_MIXED_SHORT = VarkaNarrowLaneBenchmark::loopScalarMixedShort;
+  private static final Loop SCALAR_MAX_BYTE = VarkaNarrowLaneBenchmark::loopScalarMaxByte;
+  private static final Loop SCALAR_MAX_SHORT = VarkaNarrowLaneBenchmark::loopScalarMaxShort;
+
   private static List<Arm> arms() {
     var arms = new ArrayList<Arm>();
     // Shape 1: b1 < b2.
-    arms.add(new Arm("widened", "TINYINT b1 < b2, WIDENED", "loopWidenedByte",
-        VarkaNarrowLaneBenchmark::loopWidenedByte, Columns.BYTES, "t1"));
+    arms.add(new Arm(Group.WIDENED, "TINYINT b1 < b2, WIDENED",
+        VarkaNarrowLaneBenchmark::loopWidenedByte, Columns.BYTES, SCALAR_BYTE));
     if (Math.max(64, IS.vectorBitSize() / 4) != 128) {
-      arms.add(new Arm("widened", "TINYINT b1 < b2, WIDENED 128-bit loads", "loopWidenedByte128",
-          VarkaNarrowLaneBenchmark::loopWidenedByte128, Columns.BYTES, "t1"));
+      arms.add(new Arm(Group.WIDENED, "TINYINT b1 < b2, WIDENED 128-bit loads",
+          VarkaNarrowLaneBenchmark::loopWidenedByte128, Columns.BYTES, SCALAR_BYTE));
     }
-    arms.add(new Arm("native", "TINYINT b1 < b2, NATIVE", "loopNativeByte",
-        VarkaNarrowLaneBenchmark::loopNativeByte, Columns.BYTES, "t1"));
-    arms.add(new Arm("scalar", "TINYINT b1 < b2, scalar", "loopScalarByte",
-        VarkaNarrowLaneBenchmark::loopScalarByte, Columns.BYTES, "t1"));
-    arms.add(new Arm("widened", "SMALLINT s1 < s2, WIDENED", "loopWidenedShort",
-        VarkaNarrowLaneBenchmark::loopWidenedShort, Columns.SHORTS, "s1"));
-    arms.add(new Arm("native", "SMALLINT s1 < s2, NATIVE", "loopNativeShort",
-        VarkaNarrowLaneBenchmark::loopNativeShort, Columns.SHORTS, "s1"));
-    arms.add(new Arm("scalar", "SMALLINT s1 < s2, scalar", "loopScalarShort",
-        VarkaNarrowLaneBenchmark::loopScalarShort, Columns.SHORTS, "s1"));
-    arms.add(new Arm("int", "INT i1 < i2", "loopInt", VarkaNarrowLaneBenchmark::loopInt,
-        Columns.INTS, "i1"));
-    arms.add(new Arm("scalar", "INT i1 < i2, scalar", "loopScalarInt",
-        VarkaNarrowLaneBenchmark::loopScalarInt, Columns.INTS, "i1"));
+    arms.add(new Arm(Group.NATIVE, "TINYINT b1 < b2, NATIVE",
+        VarkaNarrowLaneBenchmark::loopNativeByte, Columns.BYTES, SCALAR_BYTE));
+    arms.add(new Arm(Group.SCALAR, "TINYINT b1 < b2, scalar",
+        VarkaNarrowLaneBenchmark::loopScalarByte, Columns.BYTES, SCALAR_BYTE));
+    arms.add(new Arm(Group.WIDENED, "SMALLINT s1 < s2, WIDENED",
+        VarkaNarrowLaneBenchmark::loopWidenedShort, Columns.SHORTS, SCALAR_SHORT));
+    arms.add(new Arm(Group.NATIVE, "SMALLINT s1 < s2, NATIVE",
+        VarkaNarrowLaneBenchmark::loopNativeShort, Columns.SHORTS, SCALAR_SHORT));
+    arms.add(new Arm(Group.SCALAR, "SMALLINT s1 < s2, scalar",
+        VarkaNarrowLaneBenchmark::loopScalarShort, Columns.SHORTS, SCALAR_SHORT));
+    arms.add(new Arm(Group.INT, "INT i1 < i2",
+        VarkaNarrowLaneBenchmark::loopInt, Columns.INTS, SCALAR_INT));
+    arms.add(new Arm(Group.SCALAR, "INT i1 < i2, scalar",
+        VarkaNarrowLaneBenchmark::loopScalarInt, Columns.INTS, SCALAR_INT));
     // Shape 2: b < i, int-driven; both arms are these operations.
-    arms.add(new Arm("widened", "TINYINT b < i (WIDENED, and NATIVE: the same operations)",
-        "loopMixedByte", VarkaNarrowLaneBenchmark::loopMixedByte, Columns.BYTES, "tm"));
-    arms.add(new Arm("scalar", "TINYINT b < i, scalar", "loopScalarMixedByte",
-        VarkaNarrowLaneBenchmark::loopScalarMixedByte, Columns.BYTES, "tm"));
-    arms.add(new Arm("widened", "SMALLINT s < i (WIDENED, and NATIVE: the same operations)",
-        "loopMixedShort", VarkaNarrowLaneBenchmark::loopMixedShort, Columns.SHORTS, "sm"));
-    arms.add(new Arm("scalar", "SMALLINT s < i, scalar", "loopScalarMixedShort",
-        VarkaNarrowLaneBenchmark::loopScalarMixedShort, Columns.SHORTS, "sm"));
+    arms.add(new Arm(Group.WIDENED, "TINYINT b < i (WIDENED, and NATIVE: the same operations)",
+        VarkaNarrowLaneBenchmark::loopMixedByte, Columns.BYTES, SCALAR_MIXED_BYTE));
+    arms.add(new Arm(Group.SCALAR, "TINYINT b < i, scalar",
+        VarkaNarrowLaneBenchmark::loopScalarMixedByte, Columns.BYTES, SCALAR_MIXED_BYTE));
+    arms.add(new Arm(Group.WIDENED, "SMALLINT s < i (WIDENED, and NATIVE: the same operations)",
+        VarkaNarrowLaneBenchmark::loopMixedShort, Columns.SHORTS, SCALAR_MIXED_SHORT));
+    arms.add(new Arm(Group.SCALAR, "SMALLINT s < i, scalar",
+        VarkaNarrowLaneBenchmark::loopScalarMixedShort, Columns.SHORTS, SCALAR_MIXED_SHORT));
     // Shape 3: greatest(b1, b2) < i.
-    arms.add(new Arm("widened", "TINYINT greatest(b1, b2) < i, WIDENED", "loopMaxWidenedByte",
-        VarkaNarrowLaneBenchmark::loopMaxWidenedByte, Columns.BYTES, "tx"));
-    arms.add(new Arm("native", "TINYINT greatest(b1, b2) < i, NATIVE", "loopMaxNativeByte",
-        VarkaNarrowLaneBenchmark::loopMaxNativeByte, Columns.BYTES, "tx"));
-    arms.add(new Arm("scalar", "TINYINT greatest(b1, b2) < i, scalar", "loopScalarMaxByte",
-        VarkaNarrowLaneBenchmark::loopScalarMaxByte, Columns.BYTES, "tx"));
-    arms.add(new Arm("widened", "SMALLINT greatest(s1, s2) < i, WIDENED", "loopMaxWidenedShort",
-        VarkaNarrowLaneBenchmark::loopMaxWidenedShort, Columns.SHORTS, "sx"));
-    arms.add(new Arm("native", "SMALLINT greatest(s1, s2) < i, NATIVE", "loopMaxNativeShort",
-        VarkaNarrowLaneBenchmark::loopMaxNativeShort, Columns.SHORTS, "sx"));
-    arms.add(new Arm("scalar", "SMALLINT greatest(s1, s2) < i, scalar", "loopScalarMaxShort",
-        VarkaNarrowLaneBenchmark::loopScalarMaxShort, Columns.SHORTS, "sx"));
+    arms.add(new Arm(Group.WIDENED, "TINYINT greatest(b1, b2) < i, WIDENED",
+        VarkaNarrowLaneBenchmark::loopMaxWidenedByte, Columns.BYTES, SCALAR_MAX_BYTE));
+    arms.add(new Arm(Group.NATIVE, "TINYINT greatest(b1, b2) < i, NATIVE",
+        VarkaNarrowLaneBenchmark::loopMaxNativeByte, Columns.BYTES, SCALAR_MAX_BYTE));
+    arms.add(new Arm(Group.SCALAR, "TINYINT greatest(b1, b2) < i, scalar",
+        VarkaNarrowLaneBenchmark::loopScalarMaxByte, Columns.BYTES, SCALAR_MAX_BYTE));
+    arms.add(new Arm(Group.WIDENED, "SMALLINT greatest(s1, s2) < i, WIDENED",
+        VarkaNarrowLaneBenchmark::loopMaxWidenedShort, Columns.SHORTS, SCALAR_MAX_SHORT));
+    arms.add(new Arm(Group.NATIVE, "SMALLINT greatest(s1, s2) < i, NATIVE",
+        VarkaNarrowLaneBenchmark::loopMaxNativeShort, Columns.SHORTS, SCALAR_MAX_SHORT));
+    arms.add(new Arm(Group.SCALAR, "SMALLINT greatest(s1, s2) < i, scalar",
+        VarkaNarrowLaneBenchmark::loopScalarMaxShort, Columns.SHORTS, SCALAR_MAX_SHORT));
     return arms;
   }
 
-  /** The scalar loop whose words check every arm of one reference shape. */
-  private static Loop referenceLoop(String reference) {
-    return switch (reference) {
-      case "t1" -> VarkaNarrowLaneBenchmark::loopScalarByte;
-      case "s1" -> VarkaNarrowLaneBenchmark::loopScalarShort;
-      case "i1" -> VarkaNarrowLaneBenchmark::loopScalarInt;
-      case "tm" -> VarkaNarrowLaneBenchmark::loopScalarMixedByte;
-      case "sm" -> VarkaNarrowLaneBenchmark::loopScalarMixedShort;
-      case "tx" -> VarkaNarrowLaneBenchmark::loopScalarMaxByte;
-      case "sx" -> VarkaNarrowLaneBenchmark::loopScalarMaxShort;
-      default -> throw new IllegalArgumentException("no reference named " + reference);
-    };
-  }
-
-  private static Set<String> selectedGroups() {
-    return Set.of(System.getProperty(ARMS_PROPERTY, "widened,native,int,scalar").split(","));
+  /**
+   * The groups {@code -Dvarka.narrow.arms} names, comma separated, white space around a name
+   * ignored; an unknown name or a name given twice is refused.
+   */
+  private static Set<Group> selectedGroups() {
+    String value = System.getProperty(ARMS_PROPERTY, "widened,native,int,scalar");
+    var groups = EnumSet.noneOf(Group.class);
+    for (String token : value.split(",", -1)) {
+      String name = token.strip();
+      Group group = Arrays.stream(Group.values()).filter(g -> g.token().equals(name))
+          .findFirst().orElseThrow(() -> new IllegalArgumentException("-D" + ARMS_PROPERTY
+              + " names \"" + name + "\", which is none of "
+              + Arrays.stream(Group.values()).map(Group::token).toList()));
+      if (!groups.add(group)) {
+        throw new IllegalArgumentException("-D" + ARMS_PROPERTY + " names " + name + " twice");
+      }
+    }
+    return groups;
   }
 
   // ---------------------------------------------------------------------------------------
@@ -583,15 +646,15 @@ public class VarkaNarrowLaneBenchmark extends VarkaBenchmarkBase {
 
   /**
    * The highest tier of {@code method}'s code in use according to {@code Compiler.codelist}, 0 if
-   * it has none, -1 if the list cannot be read. An on-stack-replacement version is not marked as
-   * one in the list, and a loop method is shared by every rung, so from the second rung on this
-   * is true on arrival: the steady drive times are what show a rung's loop is settled.
+   * it has none, -1 if the list cannot be read ({@link #requireHarness} refuses a run where it
+   * cannot, so a -1 here is a failure partway, and is never counted as settled). An
+   * on-stack-replacement version is not marked as one in the list, and a loop method is shared
+   * by every rung, so from the second rung on this is true on arrival: the steady drive times
+   * are what show a rung's loop is settled.
    */
   private static int levelInUse(String method) {
     try {
-      Object list = ManagementFactory.getPlatformMBeanServer().invoke(
-          new ObjectName("com.sun.management:type=DiagnosticCommand"), "compilerCodelist",
-          new Object[] {null}, new String[] {String[].class.getName()});
+      Object list = codeList();
       String prefix = VarkaNarrowLaneBenchmark.class.getName() + "." + method + "(";
       int level = 0;
       for (String line : String.valueOf(list).split("\\R")) {
@@ -605,6 +668,31 @@ public class VarkaNarrowLaneBenchmark extends VarkaBenchmarkBase {
     } catch (Exception | LinkageError e) {
       return -1;
     }
+  }
+
+  private static Object codeList() throws Exception {
+    return ManagementFactory.getPlatformMBeanServer().invoke(
+        new ObjectName("com.sun.management:type=DiagnosticCommand"), "compilerCodelist",
+        new Object[] {null}, new String[] {String[].class.getName()});
+  }
+
+  /**
+   * Refuses a run that cannot tell whether a loop is compiled: one where {@code
+   * Compiler.codelist} is unreadable, or where no {@code dontinline} compile command is set, so
+   * that a loop method is inlined into its caller and has no code of its own to find in the list.
+   */
+  private static void requireHarness() {
+    try {
+      codeList();
+    } catch (Exception | LinkageError e) {
+      throw new IllegalStateException("Compiler.codelist cannot be read (" + e + "), so no loop"
+          + " can be shown compiled; run on a HotSpot JVM with the DiagnosticCommand MBean", e);
+    }
+    boolean dontInline = ManagementFactory.getRuntimeMXBean().getInputArguments().stream()
+        .anyMatch(a -> a.startsWith("-XX:CompileCommand") && a.contains("dontinline"));
+    require(dontInline, "no -XX:CompileCommand=dontinline,"
+        + VarkaNarrowLaneBenchmark.class.getName().replace('.', '/') + "::loop* is set, so a"
+        + " loop may be inlined into the drive and show no code of its own in the code list");
   }
 
   private static void drive(Arm arm, MemorySegment[] cols, long[] out, int numRows, int reps) {
@@ -627,7 +715,7 @@ public class VarkaNarrowLaneBenchmark extends VarkaBenchmarkBase {
       boolean idle = VarkaEmitterTestSupport.awaitC2Idle(IDLE_WAIT_MILLIS);
       int level = levelInUse(arm.method());
       boolean steady = previous > 0 && Math.abs(took - previous) <= previous * STEADY_FRACTION;
-      if (drives >= MIN_WARM_DRIVES && idle && steady && (level == 4 || level == -1)) {
+      if (drives >= MIN_WARM_DRIVES && idle && steady && level == 4) {
         System.out.println("VarkaNarrowLaneBenchmark: " + arm.label() + " at " + numRows
             + " rows settled after " + drives + " drives, level " + level);
         return;
@@ -651,10 +739,18 @@ public class VarkaNarrowLaneBenchmark extends VarkaBenchmarkBase {
   @Override
   public void runBenchmarkSuite(String[] mainArgs) {
     var groups = selectedGroups();
-    var arms = arms().stream().filter(a -> groups.contains(a.group())).toList();
-    section("narrow-lane hand loops at " + IS.vectorBitSize() + " bits, arms " + groups
-        .stream().sorted().toList(), () -> {
-      for (Rung rung : LADDER) {
+    // The arms to time: only those a -Dvarka.bench.only names, and none in a dry run, which still
+    // builds every arm (so that a loop reference that names no method fails there).
+    var arms = arms().stream()
+        .filter(a -> groups.contains(a.group()))
+        .filter(a -> only().map(a.label()::contains).orElse(true)).toList();
+    if (dryRun() || arms.isEmpty()) {
+      return;
+    }
+    requireHarness();
+    section("narrow-lane hand loops at " + IS.vectorBitSize() + " bits, arms "
+        + groups.stream().map(Group::token).sorted().toList(), () -> {
+      for (Rung rung : ladder()) {
         runRung(rung, arms);
       }
     });
@@ -672,7 +768,7 @@ public class VarkaNarrowLaneBenchmark extends VarkaBenchmarkBase {
         MemorySegment[] cols = d.of(arm.columns());
         long[] out = new long[n / 64];
         long[] expected = new long[n / 64];
-        referenceLoop(arm.reference()).apply(cols[0], cols[1], cols[2], expected, n);
+        arm.reference().apply(cols[0], cols[1], cols[2], expected, n);
         arm.loop().apply(cols[0], cols[1], cols[2], out, n);
         require(Arrays.equals(out, expected), arm.label() + " disagrees with the scalar loop");
         var settled = new AtomicBoolean();

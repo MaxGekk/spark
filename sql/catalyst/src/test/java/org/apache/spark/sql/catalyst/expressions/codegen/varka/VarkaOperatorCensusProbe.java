@@ -102,20 +102,33 @@ public final class VarkaOperatorCensusProbe {
   /** The 64-bit byte species: a widening load that takes the int species in one or two parts. */
   private static final class Narrow64 {
     static final VectorSpecies<Byte> SPECIES = ByteVector.SPECIES_64;
-    static final int PARTS = Math.max(1, SPECIES.length() / IS.length());
+    static final int PARTS = parts(SPECIES);
   }
 
   /** The 128-bit byte species: a widening load in {@code 16 / IS.length()} parts. */
   private static final class Narrow128 {
     static final VectorSpecies<Byte> SPECIES = ByteVector.SPECIES_128;
-    static final int PARTS = SPECIES.length() / IS.length();
+    static final int PARTS = parts(SPECIES);
   }
 
   /** A short species half as wide as the preferred one, never under 64 bits. */
   private static final class NarrowShort {
     static final VectorSpecies<Short> SPECIES = VectorSpecies.of(short.class,
         VectorShape.forBitSize(Math.max(64, SS.vectorBitSize() / 2)));
-    static final int PARTS = SPECIES.length() / IS.length();
+    static final int PARTS = parts(SPECIES);
+  }
+
+  /**
+   * How many int vectors one vector of {@code narrow} widens to. A species with fewer lanes than
+   * the int species is not a whole group (the catalog does not run such an entry at that width),
+   * and it is refused here rather than counted as one part, which would read past its lanes.
+   */
+  private static int parts(VectorSpecies<?> narrow) {
+    if (narrow.length() < IS.length()) {
+      throw new IllegalStateException(narrow + " has fewer lanes than " + IS
+          + ", so it is not a whole group of the int species");
+    }
+    return narrow.length() / IS.length();
   }
 
   /** Takes the even lanes of one vector, then of the next: the de-interleave's shuffle. */
@@ -582,19 +595,18 @@ public final class VarkaOperatorCensusProbe {
   }
 
   static void op_load_b2i64() {
-    for (int i = 0; i < ROWS; i += Narrow64.SPECIES.length()) {
-      var v = ByteVector.fromArray(Narrow64.SPECIES, BA, i);
-      for (int p = 0; p < Narrow64.PARTS; p++) {
-        ((IntVector) v.convertShape(VectorOperators.B2I, IS, p))
-            .intoArray(IO, i + p * IS.length());
-      }
-    }
+    loadBytesInParts(Narrow64.SPECIES, Narrow64.PARTS);
   }
 
   static void op_load_b2i128() {
-    for (int i = 0; i < ROWS; i += Narrow128.SPECIES.length()) {
-      var v = ByteVector.fromArray(Narrow128.SPECIES, BA, i);
-      for (int p = 0; p < Narrow128.PARTS; p++) {
+    loadBytesInParts(Narrow128.SPECIES, Narrow128.PARTS);
+  }
+
+  /** Loads {@code species} of bytes and widens each into {@code parts} int vectors. */
+  private static void loadBytesInParts(VectorSpecies<Byte> species, int parts) {
+    for (int i = 0; i < ROWS; i += species.length()) {
+      var v = ByteVector.fromArray(species, BA, i);
+      for (int p = 0; p < parts; p++) {
         ((IntVector) v.convertShape(VectorOperators.B2I, IS, p))
             .intoArray(IO, i + p * IS.length());
       }

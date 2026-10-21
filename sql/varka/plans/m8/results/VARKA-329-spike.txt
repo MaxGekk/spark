@@ -281,3 +281,6 @@ item 2 other than the mixed `greatest(b1, b2) < i` (`b1 < b2 AND b2 < b3`, `CASE
 timed; item 4 (the packed boolean output) is the selection word of every loop here, as hand loops, and stays provisional until
 row 27. The runner hosts (EPYC 7763 at 256 bits, Neoverse N2 at 128) were not measured. Why NATIVE reaches 5.6x the INT arm per
 row, why the byte pair at 8388608 rows still reads 2.1x to 2.6x, and why WIDENED at 128 bits has modes.
+The byte rung past the last-level cache was NOT measured (review of 22 October 2026): every rung above stops at 8388608 rows. The
+benchmark now has a 33554432-row rung (a 64 MB byte pair) behind -Dvarka.narrow.pastL3=true; it has not been timed, because the
+laptop was in use for other timing. PLAN.md row 415 owns it: the rung at 512, 256 and 128 bits appended here, prediction 2 rescored.
