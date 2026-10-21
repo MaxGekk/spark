@@ -329,6 +329,27 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite with VarkaTestWatchdog {
     }
   }
 
+  test("table 3.4: a narrowed popcount of a bigint is 0 to 64 and a narrowed anything else is " +
+      "unknown") {
+    val l0 = new ColumnRef(0, LaneType.LONG)
+    val popcount = new NarrowLane(new BitCount(l0))
+    assert(int(popcount) === r(0, 64))
+    // Only the int kind has the answer; a day slot's guard cannot rest on a count.
+    assert(day(popcount, GuardPolicy.ARMED) === UNKNOWN)
+    // A popcount under any other node before the narrowing is not the arm's shape, and a widened
+    // arm would be unsound: the narrowing keeps the low 32 bits of whatever the node computes.
+    val wrapped = Seq[VarkaVectorIR](
+      new NarrowLane(new BitOp(BitOpKind.SHL, new BitCount(l0), l0)),
+      new NarrowLane(new IntArith(IntOp.ADD, Overflow.WRAP, new BitCount(l0), l0)),
+      new NarrowLane(l0))
+    for (node <- wrapped) {
+      assert(int(node) === UNKNOWN, node.toString)
+    }
+    // As an int-lane consumer reads it: the count plus one is bounded, so it cannot wrap.
+    assert(int(new IntArith(IntOp.ADD, Overflow.WRAP, popcount, new LiteralSlot(0)), lits(1)) ===
+      r(-1, 65))
+  }
+
   test("VARKA-379: the columns an answer rests on are reported, and only those") {
     // The column bound is checked per batch on exactly the columns reported, so a column left
     // out is an assumption again, and one reported needlessly declines batches it need not.

@@ -19,7 +19,6 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -34,6 +33,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.IntPredicate;
+import java.util.function.UnaryOperator;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -136,8 +136,15 @@ public final class VarkaEmitterMixedLaneSuite {
   private static void check(String name, List<VarkaVectorIR> roots, int numInputs,
       int[] intLits, long[] longLits, Data data, boolean declines,
       VarkaKernelChecks.SparkAnswers spark) {
+    check(name, roots, numInputs, intLits, longLits, data, declines, spark, o -> o);
+  }
+
+  /** {@link #check} on the matrix base options with {@code tweak} applied to each width's. */
+  private static void check(String name, List<VarkaVectorIR> roots, int numInputs,
+      int[] intLits, long[] longLits, Data data, boolean declines,
+      VarkaKernelChecks.SparkAnswers spark, UnaryOperator<VarkaEmitOptions> tweak) {
     for (int lanes : WIDTHS) {
-      var options = VarkaMatrixRuns.BASE.withLanesOverride(lanes);
+      var options = tweak.apply(VarkaMatrixRuns.BASE.withLanesOverride(lanes));
       var emitted = VarkaEmitterFixtures.emit(roots, numInputs,
           intLits.length + longLits.length, options);
       for (int length : LENGTHS) {
@@ -190,18 +197,19 @@ public final class VarkaEmitterMixedLaneSuite {
   }
 
   /**
-   * The bounds masks the epilogue methods of {@code roots} build: their {@code indexInRange}
-   * calls less those of the int columns' and roots' own low-half masks, which sit beside every
-   * masked {@code IntVector} load and store (a kernel with a materialized prefix would also need
-   * its prefix transfers' masked calls left out). The count is per epilogue method, so a kernel
-   * that builds the mask has one in each of the dense and the masked body.
+   * What the epilogue methods of {@code roots} do with masks: {@code [0]} the {@code indexInRange}
+   * calls, {@code [1]} the {@code IntVector} memory-segment loads and stores, each of which sits
+   * beside a low-half mask of its own, and {@code [2]} the bounds masks, the first less the
+   * second (a kernel with a materialized prefix would also need its prefix transfers' masked
+   * calls left out). The counts are over every epilogue method, so a kernel that builds the mask
+   * has one in each of the dense and the masked body.
    */
-  private static int epilogueBoundsMasks(List<VarkaVectorIR> roots, int numInputs, int literals,
+  private static int[] epilogueMasks(List<VarkaVectorIR> roots, int numInputs, int literals,
       int lanes) {
-    var options = VarkaEmitOptions.DEFAULTS.withElideUnreadLocals(true).withLanesOverride(lanes);
-    byte[] bytes = VarkaEmitterFixtures.emit(roots, numInputs, literals, options).bytes();
     int built = 0;
-    for (var method : ClassFile.of().parse(bytes).methods()) {
+    int accesses = 0;
+    for (var method : ClassFile.of().parse(emitElided(roots, numInputs, literals, lanes))
+        .methods()) {
       if (!method.methodName().stringValue().startsWith("epilogue") || method.code().isEmpty()) {
         continue;
       }
@@ -213,17 +221,28 @@ public final class VarkaEmitterMixedLaneSuite {
             built++;
           } else if (owner.equals("jdk/incubator/vector/IntVector")
               && (name.equals("fromMemorySegment") || name.equals("intoMemorySegment"))) {
-            built--;
+            accesses++;
           }
         }
       }
     }
-    return built;
+    return new int[] {built, accesses, built - accesses};
+  }
+
+  /** The options of the epilogue tests: the defaults with unread locals elided, at a width. */
+  private static VarkaEmitOptions elided(VarkaEmitOptions options) {
+    return options.withElideUnreadLocals(true);
+  }
+
+  private static byte[] emitElided(List<VarkaVectorIR> roots, int numInputs, int literals,
+      int lanes) {
+    return VarkaEmitterFixtures.emit(roots, numInputs, literals,
+        elided(VarkaEmitOptions.DEFAULTS).withLanesOverride(lanes)).bytes();
   }
 
   @Test
   @DisplayName("an epilogue builds the long bounds mask only where a long column, a long root, "
-      + "a guard or a prefix reads it")
+      + "or a guard reads it")
   void epilogueMaskOnlyWhereRead() {
     // No long column, no long root: the widened value is computed on and narrowed again, and
     // every load and store is an int one under its own low-half mask.
@@ -234,14 +253,27 @@ public final class VarkaEmitterMixedLaneSuite {
     var longColumn = List.<VarkaVectorIR>of(new IntArith(IntOp.ADD, Overflow.WRAP, narrow(L), I));
     // A long root is stored under it.
     var longRoot = List.<VarkaVectorIR>of(widen(I));
+    // A guard reads it with no long column or root: an ANSI narrowing of widened ints.
+    var guarded = List.<VarkaVectorIR>of(new IntArith(IntOp.ADD, Overflow.WRAP,
+        ansiNarrow(new Least(widened, LONG_LIT)), I));
+    // One bounds mask in each of the dense and the masked epilogue body where something reads it,
+    // none where nothing does: the count is indexInRange calls less the int loads and stores, each
+    // of which has a low-half mask of its own.
     for (int lanes : WIDTHS) {
-      assertEquals(0, epilogueBoundsMasks(intOnly, 1, 2, lanes), "int only, " + lanes + " lanes");
-      assertTrue(epilogueBoundsMasks(longColumn, 2, 0, lanes) > 0, "long column, " + lanes);
-      assertTrue(epilogueBoundsMasks(longRoot, 1, 0, lanes) > 0, "long root, " + lanes);
+      String at = " at " + lanes + " lanes";
+      assertEquals(0, epilogueMasks(intOnly, 1, 2, lanes)[2], "int only" + at);
+      assertEquals(2, epilogueMasks(longColumn, 2, 0, lanes)[2], "long column" + at);
+      assertEquals(2, epilogueMasks(longRoot, 1, 0, lanes)[2], "long root" + at);
+      assertEquals(2, epilogueMasks(guarded, 1, 2, lanes)[2], "a guard alone" + at);
     }
-    // And the kernel without the mask still answers every row.
+    // And the kernels still answer every row, emitted with the options the counts read. The ANSI
+    // one may decline a batch holding a sum past the int range, which is then not compared.
+    UnaryOperator<VarkaEmitOptions> counted = o ->
+        elided(VarkaEmitOptions.DEFAULTS).withLanesOverride(o.lanesOverride());
     check("cast(least(cast(i + 3 AS bigint), 5000000000) AS int) + i", intOnly, 1,
-        new int[] {3}, new long[] {5000000000L}, (c, i) -> value(0, i), false);
+        new int[] {3}, new long[] {5000000000L}, (c, i) -> value(0, i), false, null, counted);
+    check("ANSI cast(least(cast(i + 3 AS bigint), 5000000000) AS int) + i", guarded, 1,
+        new int[] {3}, new long[] {5000000000L}, (c, i) -> value(0, i), true, null, counted);
   }
 
   @Test
@@ -546,10 +578,12 @@ public final class VarkaEmitterMixedLaneSuite {
   @DisplayName("date - date does not decline over a null beside a value at each edge")
   void dateMinusDateNullBesideEdge() {
     int declined = VarkaFusedKernel.STATUS_VALUE_RANGE;
-    // The null date's stored lane is poisoned by the harness; only its row is invalid.
+    // The harness stores the pair under the null, so the dense run (which drops the null) sees
+    // it as valid and gives the pair's own status; the masked run must give zero. A case
+    // discriminates only where the stored pair is outside the guard.
     expectStatus("null end, start MIN", 0, Integer.MIN_VALUE, true, false, 0);
     expectStatus("end MAX, null start", Integer.MAX_VALUE, 0, false, true, 0);
-    expectStatus("null end, start at the boundary", 0, (int) MAX_DAYS, true, false, 0);
+    expectStatus("null end, start at the boundary", -1, (int) MAX_DAYS, true, false, 0);
     expectStatus("null end, start past it", 0, (int) MAX_DAYS + 1, true, false, 0);
     expectStatus("both null, extremes", Integer.MAX_VALUE, Integer.MIN_VALUE, true, true, 0);
     // The row beside the null is judged on its own: a valid overflow still declines.

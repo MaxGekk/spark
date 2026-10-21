@@ -80,7 +80,7 @@
     "operands" : [ "SubtractDates:date" ],
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled" ],
     "domain" : "CAST(unix_date(d2) AS BIGINT) - unix_date(d) BETWEEN -106751991 AND 106751991",
-    "note" : "a day-time interval in microseconds, not datediff's day count; Spark raises where the count's product overflows a long, in every mode, so the batch declines and the row engine raises. The legacy CalendarInterval result is not fused"
+    "note" : "a day-time interval in microseconds, not datediff's day count; Spark raises where the int day count overflows or its product overflows a long, in every mode, so the batch declines and the row engine raises. The legacy CalendarInterval result is not fused"
   }, {
     "sql" : "unix_date(d)",
     "executable" : "unix_date(d)",
@@ -1159,6 +1159,39 @@
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled", "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "unix_date(d) BETWEEN -719162 AND 2932896 AND unix_date(d2) BETWEEN -719162 AND 2932896",
     "note" : "computed operands: a calendar field's validity is read after its value walk"
+  }, {
+    "sql" : "coalesce(d, d2) <=> d",
+    "executable" : "coalesce(d, d2) <=> d",
+    "family" : "Predicates",
+    "form" : "predicate",
+    "catalyst" : [ "Coalesce", "EqualNullSafe" ],
+    "casts" : [ ],
+    "operands" : [ "Coalesce:date", "EqualNullSafe:date" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled", "spark.sql.codegen.varka.family.condition.enabled" ],
+    "domain" : "",
+    "note" : "an operand with a validity word of its own (it is null only where both are), so the known-true mask is not a subset of the validity the operand comparison reads"
+  }, {
+    "sql" : "greatest(d, d2) <=> d2",
+    "executable" : "greatest(d, d2) <=> d2",
+    "family" : "Predicates",
+    "form" : "predicate",
+    "catalyst" : [ "EqualNullSafe", "Greatest" ],
+    "casts" : [ ],
+    "operands" : [ "EqualNullSafe:date", "Greatest:date" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled", "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "",
+    "note" : "the same with a greatest, valid where either input is"
+  }, {
+    "sql" : "if(i > 3, d, d2) <=> d",
+    "executable" : "if(i > 3, d, d2) <=> d",
+    "family" : "Predicates",
+    "form" : "predicate",
+    "catalyst" : [ "EqualNullSafe", "GreaterThan", "If" ],
+    "casts" : [ ],
+    "operands" : [ "EqualNullSafe:date", "GreaterThan:int", "If:date" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled", "spark.sql.codegen.varka.family.condition.enabled" ],
+    "domain" : "",
+    "note" : "a choice as an operand: the validity follows the branch"
   }, {
     "sql" : "(d < d2) IS TRUE",
     "executable" : "(d < d2) IS TRUE",

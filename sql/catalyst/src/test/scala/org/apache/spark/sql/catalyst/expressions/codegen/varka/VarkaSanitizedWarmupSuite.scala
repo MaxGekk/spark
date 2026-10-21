@@ -18,12 +18,14 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import java.io.{BufferedReader, File, InputStreamReader}
+import java.lang.foreign.Arena
 import java.lang.management.ManagementFactory
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
+import scala.util.Using
 
 import jdk.incubator.vector.IntVector
 
@@ -103,11 +105,47 @@ class VarkaSanitizedWarmupSuite extends SparkFunSuite with VarkaTestWatchdog {
     assert(from >= 0 && to > from, lines.takeRight(40).mkString("\n"))
     val checked = marked(lines, CHECKED_PREFIX).getOrElse(fail("the probe counted no checks"))
     assert(checked.toLong > 0, "the sanitizer checked nothing: it did not reach the kernel")
-    val traps = lines.slice(from, to).filter { l =>
+    def trapsIn(range: Seq[String]): Seq[String] = range.filter { l =>
       l.contains("VarkaMemorySanitizer.check") && l.contains("make_not_entrant")
     }
+    val traps = trapsIn(lines.slice(from, to))
     assert(traps.isEmpty,
       s"${traps.size} compiled methods were made not entrant at the sanitizer's check:\n" +
         traps.take(3).mkString("\n"))
+    // The positive control: the same kernel called with no window is the trap the warm-up's window
+    // prevents, and the same filter must find it, or an empty list above proves nothing.
+    val windowlessFrom = lines.indexOf(WINDOWLESS_BEFORE)
+    val windowlessTo = lines.indexOf(WINDOWLESS_AFTER)
+    assert(windowlessFrom >= 0 && windowlessTo > windowlessFrom,
+      lines.takeRight(40).mkString("\n"))
+    assert(trapsIn(lines.slice(windowlessFrom, windowlessTo)).nonEmpty,
+      "a windowless call of a kernel warmed in a window did not deoptimize at the sanitizer's " +
+        "check: the trap filter does not see what it is meant to")
+  }
+
+  test("a memory violation in a warm-up is not swallowed: the wait for the warm-ups fails") {
+    assume(VarkaKernelWarmup.canWarm(), "this JVM cannot warm kernels")
+    val violating = new VarkaFusedKernel {
+      override def run(srcData: Array[Long], srcValidity: Array[Long], srcNullCount: Array[Int],
+          dstData: Array[Long], dstValidity: Array[Long], scalarArgs: Array[Int],
+          length: Int): Int = throw new VarkaMemoryViolation("a fake over-read")
+    }
+    val warmth = new VarkaKernelWarmth
+    assert(warmth.tryClaim())
+    // The warm-up copies the batch's input before start returns, so the address must be real.
+    val queued = Using.resource(Arena.ofConfined()) { arena =>
+      val data = arena.allocate(64 * 4L, 64)
+      VarkaKernelWarmup.start(warmth, "violation0000000", violating, false,
+        Array(data.address()), Array(0L), Array(0), Array(4), false, 64, 1, Array.empty[Int],
+        Array.empty[Long])
+    }
+    assert(queued, "the warm-up was not queued")
+    val thrown = intercept[VarkaMemoryViolation] {
+      VarkaKernelWarmup.awaitIdle(60000)
+    }
+    assert(thrown.getMessage === "a fake over-read")
+    assert(warmth.state() === VarkaKernelWarmth.State.RELEASED)
+    // The violation was handed over once; the next wait is quiet.
+    assert(VarkaKernelWarmup.awaitIdle(1000))
   }
 }
