@@ -382,3 +382,78 @@ the byte-width sites (2.1); a boolean column's lane beside a narrow sibling is n
 the sealed-switch sites were incomplete (5); the species-guard rule was missing (3.2); the common
 regeneration step was missing (9). Nothing is left unconfirmed except the line numbers, which are
 approximate and to be re-read at implementation.
+
+## 10. Outcome
+
+*21 October 2026. Done in part.* A BOOLEAN column is a condition leaf: filters, `NOT`, `AND`/`OR`,
+the five comparisons, `<=>`, `IF`/`CASE WHEN`/`coalesce` over booleans, `IS [NOT] NULL` on a bare
+column and `IS NULL` over a predicate all fuse, in the dense and the masked body, on the int and
+the long lane. `dev/varka_emit.sh "if(b, d, d2)" --columns b:boolean,d:date,d2:date` answered
+`unsupported predicate` before and fuses now (`(if bool:0 col:1 col:2)`, masked loop 482 bytes).
+**Not built: `CondValue` (2.6) and its hand-built tests.** It is a value node with a validity word
+of its own (the walk's `Own` words, `ownerOf`, `pureOf`, the blend) and so a second change of the
+same size as the leaf; nothing in this row consumes it (335b and 332 add the compiler arms), so it
+is a row of its own, proposed in the pull request, and the rest of the row stands without it.
+
+**Step 1 (admission).** (1) `BitVector.getTypeWidth()` is 0: its constructor passes 0 to
+`BaseFixedWidthVector` (`javap` on arrow-vector). The sites that size by it are
+`VarkaEvaluatorBase.inputWidths` (the warm-up gate's copy of a batch) and
+`VarkaKernelRunner.capture`; there is no use in the sanitizer, which registers each buffer's own
+capacity. `VarkaKernelRunner.bytesPerRow` answers 1 for a bit vector, and `capture` copies the
+bitmap's `(len + 7) / 8` bytes. (2) `Slots` shares `ColumnRef`'s locals: `srcSeg`, `srcValSeg` and
+`word` are per input ordinal, so the leaf adds none; the data word itself goes through the existing
+`cmpTmp`. What is not shared is the segment's size.
+
+**What differed from the plan.**
+
+1. **The data segment is mapped at `(len + 7) / 8` bytes, not at a lane's width a row.** Every
+   input's data was mapped at `rows * stride`; for a bit vector that is 32 times its buffer, which
+   `VarkaSegments.map` refuses under the memory sanitizer and which leaves Panama's bounds check
+   guarding nothing. Found by the review, not by the plan; `Analysis.boolInputs` marks the inputs and
+   `loadInputSegment` maps them at `validityBytes`. A new end-to-end test over a cached 100-row
+   table runs a boolean filter with the sanitizer on.
+2. **Four places count a node as "reading a column" and each needed the leaf** (analysis,
+   `treeColumns`/`bodyColumns`, `valueColumns`, and `wordOwner` for the liveness pass), plus
+   `budgetWalk` (the review). `IsNotNull.overCondition()` replaces the seven
+   `child() instanceof Cond` tests, so `b IS NOT NULL` is the column form and `(b AND p) IS NOT
+   NULL` is 334's.
+3. **No narrow lanes exist yet in the IR** (`LaneType` is `INT` and `LONG`; 329 is unmerged), so
+   "a leaf takes its sibling's narrow lane" is vacuous here; `onLongLane` is the only lift, and
+   the compiler lifts leaves with the rest of a tree (`meetOnOneLane`, `meetAll`) instead of
+   looking at a sibling.
+4. **`NULL` constants.** `CondConst(NULL)` arises from a `CASE WHEN`
+   without `ELSE` and is in the coverage table that way; `b AND NULL` is not a row, because the
+   unoptimized parse leaves a cast the compiler declines (the optimizer folds it away).
+5. **The golden corpus is unchanged** (`VARKA_GOLDEN_REGEN` wrote nothing: the corpus is the date,
+   time and interval golden files and none uses a boolean column as a condition).
+6. **The differential fixtures carry the boolean columns as derived columns** of the view
+   (`CASE WHEN rid % 4 = 3 THEN NULL ELSE rid % 2 = 0 END`, and `b2` likewise), so no VALUES row
+   changed and the other rows' partitions are untouched; the two columns hold nulls in every
+   fixture (the all-null fixture's rows are not all null in `b`, `b2`, which the plan's test did not
+   ask for).
+7. **The harness had no boolean input.** `checkMatrix` writes int data, so
+   `VarkaEmitterBoolSuite` builds its own exact-size bitmaps with ones above the length. Dropping
+   the `& v` from the masked leaf fails four of its five tests.
+8. **Suites that demand every node be drawn, priced or listed** (336's list): the IR fuzz grammar's
+   two reach tests, `VarkaWithChildrenSuite` (with a direct rebuild test), `awaitingRefit`, the
+   lane-type lists and the weight register. The register subtracts boolean inputs from its loads;
+   the leaf and the constant weigh 0, the comparison, choice and `<=>` nodes the floor 1.
+9. **Not built:** the larger seeded tree sets of 3.2 (six leaves, nightly), the batch-length edges
+   of 3.3 under the sanitizer at the emitter level (the end-to-end test covers a partial last byte
+   at one length), and an emitter-level long-lane test of a boolean beside a bigint comparison (the
+   SQL row `b AND l < l2` covers it through the evaluator).
+
+**Tests.** `VarkaEmitterBoolSuite` (own JVM, 5 tests, about 24 s): the reference held to Spark's
+`eval` over every triple of operand states for `AND`, `OR`, `NOT`, five orderings, `<=>`, `IF` and
+`coalesce`; every `AND`/`OR`/`NOT` tree over three leaves of up to four operators, one per truth
+table; the new nodes, constants and null tests over all `4^k` states at 8 lengths and 16 rotations,
+at 4, 8 and the default lanes, in the dense and the masked body.
+
+**Found by the lanesOverride=4 matrix, not by the plan.** (a) `If`, `CaseWhen` and `Coalesce` were
+claimed by two families once a boolean-typed one was a condition; the choice family now leaves a
+boolean-typed node to the predicate family, so the claims stay disjoint
+(`VarkaFamilyChainSuite`). (b) `VectorMask.xor`, which the dense boolean `=` calls, had no warm-up
+calls; the template warm-up's mask block calls it. (c) The composition fuzzer and its Spark oracle
+draw int columns, so they leave the rows that read a boolean column (and the two boolean columns)
+out; those rows are held by the differential suite and `VarkaEmitterBoolSuite`.
+

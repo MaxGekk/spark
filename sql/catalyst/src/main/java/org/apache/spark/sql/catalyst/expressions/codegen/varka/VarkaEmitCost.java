@@ -119,7 +119,7 @@ final class VarkaEmitCost {
       case BitCount n -> name + '/' + n.laneType();
       case GuardedRange n -> name + '/' + n.laneType();
       case Compare n -> name + '/' + n.op() + '/' + n.laneType();
-      case VarkaVectorIR.IsNotNull n when n.child() instanceof Cond ->
+      case VarkaVectorIR.IsNotNull n when n.overCondition() ->
           name + "/cond/" + n.laneType();
       case TruncDate n -> name + '/' + n.level();
       case MakeDate n -> name + (n.failOnError() ? "/ansi" : "/null");

@@ -99,9 +99,13 @@ final class VarkaConditionCompiler {
       VarkaSlotTable literals,
       DeclineSink sink) {
     return switch (e) {
-      case If expr -> () -> ifElse(expr, inputs, literals, sink);
+      // A choice whose branches are booleans is a condition, not a value: the predicate family's
+      // (condArm), so the two families claim disjoint nodes.
+      case If expr when !expr.dataType().equals(DataTypes.BooleanType) ->
+          () -> ifElse(expr, inputs, literals, sink);
       // With no ELSE the missing branch is a null literal, which would break the dense body's
       // all-valid invariant (`VARKA-11.md` 2.1): decline.
+      case CaseWhen c when c.dataType().equals(DataTypes.BooleanType) -> null;
       case CaseWhen c when c.elseValue().isEmpty() ->
           () -> sink.decline("CASE WHEN without an ELSE branch", c);
       // CASE WHEN with an ELSE right-folds into nested IfElse - SQL's first-match semantics is
@@ -115,6 +119,7 @@ final class VarkaConditionCompiler {
       // operand before the last must be a bare date column (the IsNotNull child restriction);
       // `nvl`/`ifnull` arrive here already rewritten to Coalesce by the optimizer, and `nvl2`
       // arrives as `If(IsNotNull(...), ...)` and rides the same condition node.
+      case Coalesce c when c.dataType().equals(DataTypes.BooleanType) -> null;
       case Coalesce c when c.children().nonEmpty() ->
           () -> compileCoalesce(CollectionConverters.asJava(c.children()), 0, inputs, literals,
               sink);
@@ -237,6 +242,80 @@ final class VarkaConditionCompiler {
     return sameLane(whole, sink, a, b) ? Optional.of(List.of(a, b)) : Optional.empty();
   }
 
+  /**
+   * The conditions of a boolean choice or comparison on one lane: as they are where they agree,
+   * all on the long lane where they do not and each has a form there, and otherwise empty with
+   * the lane's reason noted.
+   */
+  private static Optional<List<Cond>> meetAll(Expression whole, DeclineSink sink, List<Cond> in) {
+    if (in.stream().map(VarkaVectorIR::laneType).distinct().count() > 1) {
+      List<Cond> lifted = new ArrayList<>();
+      for (Cond c : in) {
+        Optional<Cond> l = onLongLane(c);
+        if (l.isEmpty()) {
+          break;
+        }
+        lifted.add(l.get());
+      }
+      if (lifted.size() == in.size()) {
+        return Optional.of(lifted);
+      }
+    }
+    return sameLane(whole, sink, in.toArray(new VarkaVectorIR[0])) ? Optional.of(in)
+        : Optional.empty();
+  }
+
+  /** The conditions {@code exprs} compile to, in order, or empty at the first that declines. */
+  private static Optional<List<Cond>> compileConds(
+      List<Expression> exprs, VarkaSlotTable inputs, VarkaSlotTable literals, DeclineSink sink) {
+    List<Cond> out = new ArrayList<>();
+    for (Expression e : exprs) {
+      Optional<Cond> c = compileCond(e, inputs, literals, sink);
+      if (c.isEmpty()) {
+        return Optional.empty();
+      }
+      out.add(c.get());
+    }
+    return Optional.of(out);
+  }
+
+  /**
+   * A boolean {@code IF}, {@code CASE WHEN} or {@code coalesce}: its branches are conditions, and
+   * the result is one (an unknown condition takes ELSE, as in Spark). {@code branches} holds the
+   * conditions and the values they choose in order, then the ELSE (null for an absent one, which
+   * is a null constant); a {@code coalesce} passes {@code isnotnull(p)} as each condition.
+   */
+  private static Optional<Cond> boolChoice(
+      Expression whole, List<Expression> tests, List<Expression> values, Expression otherwise,
+      boolean coalesce, VarkaSlotTable inputs, VarkaSlotTable literals, DeclineSink sink) {
+    // A coalesce's tests are its values: the children are compiled once.
+    List<Expression> all = new ArrayList<>(tests);
+    if (!coalesce) {
+      all.addAll(values);
+    }
+    if (otherwise != null) {
+      all.add(otherwise);
+    }
+    Optional<List<Cond>> compiled = compileConds(all, inputs, literals, sink);
+    if (compiled.isEmpty()) {
+      return Optional.empty();
+    }
+    Optional<List<Cond>> met = meetAll(whole, sink, compiled.get());
+    if (met.isEmpty()) {
+      return Optional.empty();
+    }
+    List<Cond> c = met.get();
+    int n = tests.size();
+    Cond acc = otherwise != null ? c.get(coalesce ? n : 2 * n)
+        : new VarkaVectorIR.CondConst(VarkaVectorIR.Truth.NULL, c.get(0).laneType());
+    for (int i = n - 1; i >= 0; i--) {
+      Cond value = c.get(coalesce ? i : n + i);
+      Cond test = coalesce ? new VarkaVectorIR.IsNotNull(value) : c.get(i);
+      acc = new VarkaVectorIR.CondIf(test, value, acc);
+    }
+    return Optional.of(acc);
+  }
+
   /** {@link #sameLane(Expression, DeclineSink, VarkaVectorIR...)} for the two a connective has. */
   private static boolean sameLane(
       Expression whole, DeclineSink sink, VarkaVectorIR a, VarkaVectorIR b) {
@@ -269,6 +348,17 @@ final class VarkaConditionCompiler {
       case VarkaVectorIR.Or o -> onLongLane(o.left()).flatMap(l ->
           onLongLane(o.right()).map(r -> (Cond) new VarkaVectorIR.Or(l, r)));
       case VarkaVectorIR.Not n -> onLongLane(n.child()).map(c -> (Cond) new VarkaVectorIR.Not(c));
+      case VarkaVectorIR.BoolColumn b -> Optional.of(new VarkaVectorIR.BoolColumn(
+          b.ordinal(), LaneType.LONG));
+      case VarkaVectorIR.CondConst c -> Optional.of(new VarkaVectorIR.CondConst(
+          c.value(), LaneType.LONG));
+      case VarkaVectorIR.BoolCompare c -> onLongLane(c.left()).flatMap(l ->
+          onLongLane(c.right()).map(r -> (Cond) new VarkaVectorIR.BoolCompare(c.op(), l, r)));
+      case VarkaVectorIR.BoolNullSafeEq c -> onLongLane(c.left()).flatMap(l ->
+          onLongLane(c.right()).map(r -> (Cond) new VarkaVectorIR.BoolNullSafeEq(l, r)));
+      case VarkaVectorIR.CondIf c -> onLongLane(c.cond()).flatMap(k ->
+          onLongLane(c.thenCond()).flatMap(t -> onLongLane(c.elseCond()).map(
+              e -> (Cond) new VarkaVectorIR.CondIf(k, t, e))));
       case InRanges r -> Optional.empty();
     };
   }
@@ -411,6 +501,30 @@ final class VarkaConditionCompiler {
           () -> compare(CompareOp.GE, n.left(), n.right(), inputs, literals, sink);
       case EqualTo n -> () -> compare(CompareOp.EQ, n.left(), n.right(), inputs, literals, sink);
       case EqualNullSafe n -> () -> nullSafeEqual(n, inputs, literals, sink);
+      // A BOOLEAN column or literal in condition position, and the choices over booleans.
+      case BoundReference br when br.dataType().equals(DataTypes.BooleanType) ->
+          () -> Optional.of(new VarkaVectorIR.BoolColumn(inputs.intern(br.ordinal())));
+      case Literal l when l.dataType().equals(DataTypes.BooleanType) -> () -> Optional.of(
+          new VarkaVectorIR.CondConst(l.value() == null ? VarkaVectorIR.Truth.NULL
+              : (Boolean) l.value() ? VarkaVectorIR.Truth.TRUE : VarkaVectorIR.Truth.FALSE));
+      case If i when i.dataType().equals(DataTypes.BooleanType) -> () -> boolChoice(expr,
+          List.of(i.predicate()), List.of(i.trueValue()), i.falseValue(), false, inputs, literals,
+          sink);
+      case CaseWhen cw when cw.dataType().equals(DataTypes.BooleanType) -> () -> {
+        List<Expression> tests = new ArrayList<>();
+        List<Expression> values = new ArrayList<>();
+        for (scala.Tuple2<Expression, Expression> b : CollectionConverters.asJava(cw.branches())) {
+          tests.add(b._1());
+          values.add(b._2());
+        }
+        return boolChoice(expr, tests, values, cw.elseValue().isDefined() ? cw.elseValue().get()
+            : null, false, inputs, literals, sink);
+      };
+      case Coalesce c when c.dataType().equals(DataTypes.BooleanType) -> () -> {
+        List<Expression> children = new ArrayList<>(CollectionConverters.asJava(c.children()));
+        Expression last = children.remove(children.size() - 1);
+        return boolChoice(expr, children, children, last, true, inputs, literals, sink);
+      };
       // IN over date literals: an EQ chain joined by OR, which the mask algebra
       // makes exactly SQL's IN inside a condition - a null value leaves every comparison
       // unknown, the OR of unknowns is unknown, and an unknown condition falls to ELSE.
@@ -798,6 +912,11 @@ final class VarkaConditionCompiler {
       VarkaSlotTable inputs,
       VarkaSlotTable literals,
       DeclineSink sink) {
+    if (l.dataType().equals(DataTypes.BooleanType)) {
+      return compileConds(List.of(l, r), inputs, literals, sink)
+          .flatMap(both -> meetAll(l, sink, both))
+          .map(both -> new VarkaVectorIR.BoolCompare(op, both.get(0), both.get(1)));
+    }
     Optional<VarkaVectorIR> left = operand(l, inputs, literals, sink);
     if (left.isEmpty()) {
       return Optional.empty();
@@ -831,9 +950,10 @@ final class VarkaConditionCompiler {
       Optional<Boolean> right = booleanLiteral(n.right());
       Optional<Boolean> left = booleanLiteral(n.left());
       if (right.isPresent() == left.isPresent()) {
-        return sink.decline(
-            "null-safe equality of two boolean operands that are not a predicate and a literal",
-            n);
+        // Two predicates (or two literals the optimizer left): a node of its own, total.
+        return compileConds(List.of(n.left(), n.right()), inputs, literals, sink)
+            .flatMap(both -> meetAll(n, sink, both))
+            .map(both -> new VarkaVectorIR.BoolNullSafeEq(both.get(0), both.get(1)));
       }
       Expression predicate = right.isPresent() ? n.left() : n.right();
       boolean expected = right.isPresent() ? right.get() : left.get();

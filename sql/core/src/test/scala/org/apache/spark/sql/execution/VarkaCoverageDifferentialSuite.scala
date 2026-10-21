@@ -49,7 +49,8 @@ import org.apache.spark.sql.types.{BooleanType, DataType, DateType, DayTimeInter
  * a change to this file: adding an arm without a row fails the coverage suite, adding a row
  * without correctness fails this one, and the two together are the guarantee the table makes.
  *
- * Each row runs on three fixtures over the table's twelve columns - nulls sprinkled
+ * Each row runs on three fixtures over the table's twelve columns, plus the derived BOOLEAN
+ * columns `b` and `b2` - nulls sprinkled
  * independently per column, no nulls, and every column null in every row - and under both
  * consumers a Varka node can have: rows, the plan every direct query gets, and columns, which
  * the Arrow cache builder takes when a view over the query is cached. The hand-chosen shapes in
@@ -341,7 +342,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
   // ---------------------------------------------------------------------------------------------
 
   /** Every column of a fixture, `rid` first, as the partition queries select them. */
-  private val allColumns = "rid, d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2"
+  private val allColumns = "rid, d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2"
 
   /**
    * The optimizer rules that rewrite the partitions before Varka sees them: `BooleanSimplification`
@@ -1211,7 +1212,9 @@ private object VarkaCoverageDifferentialSuite {
        |       CAST(m AS INTERVAL MONTH) AS ymm,
        |       CAST(y AS INTERVAL YEAR) AS ymy,
        |       make_ym_interval(y, mm) AS ym,
-       |       l, l2, CAST(t AS TIME(6)) AS t, CAST(t2 AS TIME(6)) AS t2, dt, dt2
+       |       l, l2, CAST(t AS TIME(6)) AS t, CAST(t2 AS TIME(6)) AS t2, dt, dt2,
+       |       CASE WHEN rid % 4 = 3 THEN NULL ELSE rid % 2 = 0 END AS b,
+       |       CASE WHEN rid % 5 = 4 THEN NULL ELSE rid % 3 = 0 END AS b2
        |FROM VALUES ${withIds.mkString(",\n  ")}
        |AS v(rid, d, d2, i, m, y, mm, l, l2, t, t2, dt, dt2)$where""".stripMargin
   }

@@ -26,6 +26,7 @@ import java.util.Arrays;
 
 import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.vector.BaseFixedWidthVector;
+import org.apache.arrow.vector.BitVector;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.IntRangeOps;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.TruncLevelLeaf;
@@ -165,6 +166,17 @@ public final class VarkaKernelRunner {
   /** Another instance of the shape's class, which no task runs: the warm-up's own. */
   public VarkaFusedKernel newKernel() {
     return entry.newKernel();
+  }
+
+  /**
+   * The bytes a row of this fixed-width vector takes, an upper bound where the vector is not
+   * byte-sized: a {@code BitVector} reports a type width of 0 (it stores one bit a row), which
+   * would size a copy of its data at nothing. One byte a row over-states the bitmap by 8x and
+   * keeps every bit the kernel reads inside it (the warm-up gate sizes its copy of a batch by it;
+   * a reproduction copies the bitmap's own {@code (len + 7) / 8} bytes).
+   */
+  public static int bytesPerRow(BaseFixedWidthVector v) {
+    return v instanceof BitVector ? 1 : v.getTypeWidth();
   }
 
   /**
@@ -440,13 +452,15 @@ public final class VarkaKernelRunner {
       boolean selectionBitmaps) {
     int n = inputOrdinals.length;
     var widths = new int[n];
+    var bits = new boolean[n];
     var dataBufs = new ArrowBuf[n];
     var validityBufs = new ArrowBuf[n];
     for (int i = 0; i < n; i++) {
       if (derived[i] == null) {
         var v = (BaseFixedWidthVector)
             ((ArrowColumnVector) input.column(inputOrdinals[i])).getValueVector();
-        widths[i] = v.getTypeWidth();
+        widths[i] = bytesPerRow(v);
+        bits[i] = v instanceof BitVector;
         dataBufs[i] = v.getDataBuffer();
         validityBufs[i] = v.getValidityBuffer();
       } else {
@@ -470,7 +484,8 @@ public final class VarkaKernelRunner {
       byte[] data = null;
       byte[] validity = null;
       if (omitted == null) {
-        data = new byte[len * widths[i]];
+        // A bit vector holds one bit a row, so its data is (len + 7) / 8 bytes.
+        data = new byte[bits[i] ? (len + 7) / 8 : len * widths[i]];
         dataBufs[i].getBytes(0, data);
         if (srcValidity[i] != 0L && srcNullCount[i] != 0) {
           validity = new byte[(int) Math.min(validityBufs[i].capacity(), ((len + 63L) / 64) * 8)];

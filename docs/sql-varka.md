@@ -489,6 +489,26 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `t <=> t2` | `predicate` |  |  | per-lane: compare to mask, mask cast |
 | `dt <=> dt2` | `predicate` |  |  | per-lane: compare to mask, mask cast |
 
+#### Boolean columns
+
+| Predicate | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `b` | none |  | a boolean column as a filter: unknown selects nothing | vector |
+| `NOT b` | `predicate` |  | the pair swapped, no code | vector |
+| `b AND d < d2` | `predicate` |  | beside a comparison, on the one lane they share | vector |
+| `b OR i = 5` | `predicate` |  | an unknown column beside a comparison | vector |
+| `b AND l < l2` | `predicate` |  | the boolean leaf takes the comparison's long lane | per-lane: compare to mask, mask logic, mask cast, mask broadcast |
+| `b = b2` | `predicate` |  | equality of two boolean columns: unknown where either is | vector |
+| `b <= b2` | `predicate` |  | an ordering over booleans, false before true: not NOT b OR b2, which is true where b is null and b2 is true | vector |
+| `b > b2` | `predicate` |  |  | vector |
+| `b <=> b2` | `predicate` |  | never unknown: two nulls are equal | vector |
+| `b IS NULL` | `predicate` |  | the column's own validity word | vector |
+| `b IS NOT NULL` | `predicate` |  | the column's own validity word | vector |
+| `(b AND d < d2) IS NULL` | `predicate` |  | a test over a predicate: the predicate is not known | vector |
+| `coalesce(b, b2)` | `predicate` |  | the first known boolean, as a condition | vector |
+| `CASE WHEN b THEN b2 ELSE d < d2 END` | `predicate` |  | a boolean choice: unknown takes ELSE | vector |
+| `CASE WHEN b THEN i > 5 END` | `predicate` |  | no ELSE: a null constant, so the body is masked-only | vector |
+
 #### Width conversions
 
 | Expression | Switches | Domain | Notes | 128-bit lanes |

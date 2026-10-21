@@ -97,6 +97,11 @@ public sealed interface VarkaVectorIR
       case IfElse n -> n.thenNode().laneType();
       case Compare n -> n.left().laneType();
       case NullSafeEqual n -> n.left().laneType();
+      case BoolColumn n -> n.lane();
+      case CondConst n -> n.lane();
+      case BoolCompare n -> n.left().laneType();
+      case CondIf n -> n.cond().laneType();
+      case BoolNullSafeEq n -> n.left().laneType();
       case And n -> n.left().laneType();
       case Or n -> n.left().laneType();
       case Not n -> n.child().laneType();
@@ -253,7 +258,8 @@ public sealed interface VarkaVectorIR
    * unknown and the degenerate single-mask form gives the same answer.
    */
   sealed interface Cond extends VarkaVectorIR
-      permits Compare, NullSafeEqual, And, Or, Not, IsNotNull, InRanges {}
+      permits Compare, NullSafeEqual, And, Or, Not, IsNotNull, InRanges, BoolColumn,
+          CondConst, BoolCompare, CondIf, BoolNullSafeEq {}
 
   /**
    * The input column at {@code ordinal}, loaded once per lane group however often it is used,
@@ -779,6 +785,90 @@ public sealed interface VarkaVectorIR
     }
   }
 
+  /** What a {@link CondConst} is: SQL's {@code TRUE}, {@code FALSE} or an unknown boolean. */
+  enum Truth { TRUE, FALSE, NULL }
+
+  /**
+   * A {@code BOOLEAN} input column read as a condition. Arrow keeps a boolean column as two
+   * bitmaps in the layout of a validity bitmap: a data bit (1 is true) and a validity bit, so
+   * the leaf reads its data word exactly as an input's validity word is read, {@code d}. With
+   * {@code v} the column's validity word, {@code kT = d & v} and {@code kF = ~d & v}: the data bit
+   * under a null slot is arbitrary (Spark's writer clears only the validity bit) and the AND with
+   * {@code v} keeps it from the answer. In a dense body, where nothing is null, the leaf is the
+   * mask {@code VectorMask.fromLong(species, d)}. The lane is the one the leaf's siblings compare
+   * in, since a connective refuses to mix lanes; the bit read does not depend on it. The
+   * one-argument form is the int lane, as {@link ColumnRef}'s is.
+   */
+  record BoolColumn(int ordinal, LaneType lane) implements Cond {
+    public BoolColumn {
+      Objects.requireNonNull(lane, "lane");
+    }
+
+    public BoolColumn(int ordinal) {
+      this(ordinal, LaneType.INT);
+    }
+  }
+
+  /**
+   * A boolean constant as a condition. The value is structure, not a slot, so it is in the shape.
+   * {@code TRUE} is known true everywhere, {@code FALSE} known false everywhere and {@code NULL}
+   * neither, which makes a null of valid inputs: a kernel holding one has no dense body, as a
+   * {@code CASE WHEN} without an {@code ELSE} has none. The lane is its siblings', as
+   * {@link BoolColumn}'s; the one-argument form is the int lane.
+   */
+  record CondConst(Truth value, LaneType lane) implements Cond {
+    public CondConst {
+      Objects.requireNonNull(value, "value");
+      Objects.requireNonNull(lane, "lane");
+    }
+
+    public CondConst(Truth value) {
+      this(value, LaneType.INT);
+    }
+  }
+
+  /**
+   * A comparison of two boolean conditions, {@code false < true}, null-intolerant like
+   * {@link Compare}. With {@code t}, {@code f} the children's known-true and known-false words
+   * and {@code k = (t1 | f1) & (t2 | f2)} the lanes where both are known: {@code EQ} is
+   * {@code kT = (t1 & t2) | (f1 & f2)}, {@code kF = (t1 & f2) | (f1 & t2)}; {@code LT} is
+   * {@code kT = f1 & t2}, {@code GT} is {@code kT = t1 & f2}, {@code LE} is {@code kT = (f1 | t2)
+   * & k} and {@code GE} is {@code kT = (t1 | f2) & k}, and for the four orderings
+   * {@code kF = k & ~kT}. It is not built from {@link And} and {@link Or}: {@code EQ} would be
+   * Kleene-correct that way, but {@code LE} and {@code GE} are not ({@code NOT a OR b} is true
+   * for {@code a = NULL, b = TRUE}, where {@code a <= b} is null).
+   */
+  record BoolCompare(CompareOp op, Cond left, Cond right) implements Cond {
+    public BoolCompare {
+      requireSameLane("a boolean comparison", left, right);
+    }
+  }
+
+  /**
+   * Choice between two conditions, {@code IF(c, t, e)} over booleans: {@code kT = (kT(c) & kT(t))
+   * | (~kT(c) & kT(e))} and {@code kF} likewise, so an unknown {@code c} takes the ELSE branch, as
+   * {@code If(null, a, b)} does. {@code CASE WHEN} and {@code coalesce} over booleans fold onto
+   * it.
+   */
+  record CondIf(Cond cond, Cond thenCond, Cond elseCond) implements Cond {
+    public CondIf {
+      requireSameLane("a boolean choice", cond, thenCond, elseCond);
+    }
+  }
+
+  /**
+   * Null-safe equality of two boolean conditions, {@code a <=> b}: total, never unknown. With
+   * {@code t}, {@code f} the known-true and known-false words and {@code k = t | f}:
+   * {@code kT = (t1 & t2) | (f1 & f2) | (~k1 & ~k2)} (both true, both false or both unknown) and
+   * {@code kF = (t1 & f2) | (f1 & t2) | (k1 ^ k2)}. The two words of a lane are complements, so
+   * a consumer that truncates the bits above the lane count reads it as any other condition.
+   */
+  record BoolNullSafeEq(Cond left, Cond right) implements Cond {
+    public BoolNullSafeEq {
+      requireSameLane("a boolean null-safe equality", left, right);
+    }
+  }
+
   /**
    * Three-valued AND: known-true where both sides are known true, known-false where either
    * side is known false.
@@ -815,7 +905,16 @@ public sealed interface VarkaVectorIR
    * {@code kF = ~kT}, what SQL's {@code (a < b) IS NOT NULL} asks (VARKA-334). A dense body has no
    * unknown lane, so there it is true, as over a column.
    */
-  record IsNotNull(VarkaVectorIR child) implements Cond {}
+  record IsNotNull(VarkaVectorIR child) implements Cond {
+    /**
+     * Whether the test is over a condition's known-ness rather than over an input's validity word.
+     * A {@link BoolColumn} is a condition, but its validity word is the column's, so a test over
+     * it is the column form, with none of the special cases a test over a larger predicate has.
+     */
+    public boolean overCondition() {
+      return child instanceof Cond && !(child instanceof BoolColumn);
+    }
+  }
 
   /**
    * Whether {@code child} lies in one of a set of ranges: true where some range
@@ -1159,6 +1258,15 @@ public sealed interface VarkaVectorIR
           "(cmp:" + n.op().name() + " " + canonical(n.left()) + " " + canonical(n.right()) + ")";
       case NullSafeEqual n ->
           "(nullSafeEq " + canonical(n.left()) + " " + canonical(n.right()) + ")";
+      case BoolColumn n -> "bool:" + n.ordinal() + laneTag(n.lane());
+      case CondConst n -> "(condConst:" + n.value().name() + laneTag(n.lane()) + ")";
+      case BoolCompare n ->
+          "(boolCmp:" + n.op().name() + " " + canonical(n.left()) + " "
+              + canonical(n.right()) + ")";
+      case CondIf n -> "(condIf " + canonical(n.cond()) + " " + canonical(n.thenCond()) + " "
+          + canonical(n.elseCond()) + ")";
+      case BoolNullSafeEq n ->
+          "(boolNullSafeEq " + canonical(n.left()) + " " + canonical(n.right()) + ")";
       case And n -> "(and " + canonical(n.left()) + " " + canonical(n.right()) + ")";
       case Or n -> "(or " + canonical(n.left()) + " " + canonical(n.right()) + ")";
       case Not n -> "(not " + canonical(n.child()) + ")";
@@ -1239,6 +1347,14 @@ public sealed interface VarkaVectorIR
       case Compare n -> "(cmp:" + n.op().name() + " " + lineOf.applyAsInt(n.left()) + " "
           + lineOf.applyAsInt(n.right()) + ")";
       case NullSafeEqual n -> "(nullSafeEq " + lineOf.applyAsInt(n.left()) + " "
+          + lineOf.applyAsInt(n.right()) + ")";
+      case BoolColumn n -> "bool:" + n.ordinal() + laneTag(n.lane());
+      case CondConst n -> "(condConst:" + n.value().name() + laneTag(n.lane()) + ")";
+      case BoolCompare n -> "(boolCmp:" + n.op().name() + " " + lineOf.applyAsInt(n.left()) + " "
+          + lineOf.applyAsInt(n.right()) + ")";
+      case CondIf n -> "(condIf " + lineOf.applyAsInt(n.cond()) + " "
+          + lineOf.applyAsInt(n.thenCond()) + " " + lineOf.applyAsInt(n.elseCond()) + ")";
+      case BoolNullSafeEq n -> "(boolNullSafeEq " + lineOf.applyAsInt(n.left()) + " "
           + lineOf.applyAsInt(n.right()) + ")";
       case And n -> "(and " + lineOf.applyAsInt(n.left()) + " "
           + lineOf.applyAsInt(n.right()) + ")";
@@ -1335,6 +1451,11 @@ public sealed interface VarkaVectorIR
       case IfElse n -> new VarkaVectorIR[] {n.cond(), n.thenNode(), n.elseNode()};
       case Compare n -> new VarkaVectorIR[] {n.left(), n.right()};
       case NullSafeEqual n -> new VarkaVectorIR[] {n.left(), n.right()};
+      case BoolColumn n -> new VarkaVectorIR[0];
+      case CondConst n -> new VarkaVectorIR[0];
+      case BoolCompare n -> new VarkaVectorIR[] {n.left(), n.right()};
+      case CondIf n -> new VarkaVectorIR[] {n.cond(), n.thenCond(), n.elseCond()};
+      case BoolNullSafeEq n -> new VarkaVectorIR[] {n.left(), n.right()};
       case And n -> new VarkaVectorIR[] {n.left(), n.right()};
       case Or n -> new VarkaVectorIR[] {n.left(), n.right()};
       case Not n -> new VarkaVectorIR[] {n.child()};
@@ -1399,6 +1520,11 @@ public sealed interface VarkaVectorIR
       case IfElse n -> new IfElse(asCond(children[0]), children[1], children[2]);
       case Compare n -> new Compare(n.op(), children[0], children[1]);
       case NullSafeEqual n -> new NullSafeEqual(children[0], children[1]);
+      case BoolColumn n -> n;
+      case CondConst n -> n;
+      case BoolCompare n -> new BoolCompare(n.op(), asCond(children[0]), asCond(children[1]));
+      case CondIf n -> new CondIf(asCond(children[0]), asCond(children[1]), asCond(children[2]));
+      case BoolNullSafeEq n -> new BoolNullSafeEq(asCond(children[0]), asCond(children[1]));
       case And n -> new And(asCond(children[0]), asCond(children[1]));
       case Or n -> new Or(asCond(children[0]), asCond(children[1]));
       case Not n -> new Not(asCond(children[0]));

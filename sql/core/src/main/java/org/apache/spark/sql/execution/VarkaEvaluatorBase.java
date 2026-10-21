@@ -34,6 +34,7 @@ import scala.jdk.javaapi.CollectionConverters;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.BaseFixedWidthVector;
 import org.apache.arrow.vector.BigIntVector;
+import org.apache.arrow.vector.BitVector;
 import org.apache.arrow.vector.DateDayVector;
 import org.apache.arrow.vector.DurationVector;
 import org.apache.arrow.vector.IntVector;
@@ -875,8 +876,8 @@ public abstract class VarkaEvaluatorBase {
     for (int i = 0; i < widths.length; i++) {
       widths[i] = derivedInput[i]
           ? 4
-          : ((BaseFixedWidthVector) ((ArrowColumnVector) input.column(inputOrdinals[i]))
-              .getValueVector()).getTypeWidth();
+          : VarkaKernelRunner.bytesPerRow((BaseFixedWidthVector)
+              ((ArrowColumnVector) input.column(inputOrdinals[i])).getValueVector());
     }
     return widths;
   }
@@ -943,6 +944,8 @@ public abstract class VarkaEvaluatorBase {
         case TimeNanoVector v -> !derivedInput[i] && v.getValueCount() == rows;
         case DurationVector v -> !derivedInput[i] && v.getValueCount() == rows;
         case VarCharVector v -> derivedInput[i] && v.getValueCount() == rows;
+        // A boolean column: a data bitmap in the layout of a validity bitmap (BoolColumn).
+        case BitVector v -> !derivedInput[i] && v.getValueCount() == rows;
         default -> false;
       };
       if (!ok) {

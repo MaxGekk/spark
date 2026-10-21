@@ -1601,7 +1601,8 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
   }
 
   test("fuses null-safe equality over value operands, composes it over a predicate and a " +
-      "boolean literal, declines the rest and a bare boolean output") {
+      "boolean literal, takes two predicates as a node, declines the rest and a bare boolean " +
+      "output") {
     def ifThen(cond: Expression): Option[CompiledVarkaProjection] =
       VarkaExpressionCompiler.compile(
         Seq(out(If(cond, d2, DateAdd(d, Literal(1))))), childOutput).toScala
@@ -1623,7 +1624,17 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // A null literal operand (Spark's NullPropagation rewrites it to IS NULL before Varka) and
     // two predicates compared with each other wait for their own forms.
     assert(ifThen(EqualNullSafe(d, Literal(null, DateType))).isEmpty)
-    assert(ifThen(EqualNullSafe(LessThan(d, d2), GreaterThan(d, d2))).isEmpty)
+    // Two predicates compared with each other are the boolean null-safe equality (VARKA-331),
+    // and a boolean column is a condition leaf, on its own kernel input.
+    val gt = new Compare(CompareOp.GT, c0, c1)
+    assert(ifThen(EqualNullSafe(LessThan(d, d2), GreaterThan(d, d2))).get
+      .outputs.asScala.head.asInstanceOf[IfElse].cond() ===
+      new VarkaVectorIR.BoolNullSafeEq(lt, gt))
+    val flag = AttributeReference("flag", org.apache.spark.sql.types.BooleanType)()
+    val flagged = VarkaExpressionCompiler.compile(
+      Seq(out(If(flag, d2, DateAdd(d, Literal(1))))), childOutput :+ flag).get
+    assert(flagged.outputs.asScala.head.asInstanceOf[IfElse].cond() ===
+      new VarkaVectorIR.BoolColumn(0))
     // Each decline names its reason, the first note a declined entry carries.
     def reason(cond: Expression): String = {
       // A second output that fuses, so that the declined one is reported beside a plan.
@@ -1634,8 +1645,6 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     }
     assert(reason(EqualNullSafe(d, Literal(null, DateType))) ===
       "null-safe equality with a null literal")
-    assert(reason(EqualNullSafe(LessThan(d, d2), GreaterThan(d, d2))) ===
-      "null-safe equality of two boolean operands that are not a predicate and a literal")
     // Types outside the lane set wait on their own rows (strings, floating point, narrow ints).
     val s = AttributeReference("s", StringType)()
     val x = AttributeReference("x", DoubleType)()

@@ -104,6 +104,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A split filter has to keep Spark's errors, and Spark evaluates a filter in two orders](sql/varka/skills/emitter-and-ir.md#a-split-filter-has-to-keep-sparks-errors-and-spark-evaluates-a-filter-in-two-orders)
 * [An edge the emission skips must be skipped by every plan that walks the tree](sql/varka/skills/emitter-and-ir.md#an-edge-the-emission-skips-must-be-skipped-by-every-plan-that-walks-the-tree)
 * [The one comparison that is not null-intolerant is total, and needs three things a comparison does not](sql/varka/skills/emitter-and-ir.md#the-one-comparison-that-is-not-null-intolerant-is-total-and-needs-three-things-a-comparison-does-not)
+* [A BOOLEAN column is a condition leaf that reads two bitmaps, and "is it a column?" has four answers](sql/varka/skills/emitter-and-ir.md#a-boolean-column-is-a-condition-leaf-that-reads-two-bitmaps-and-is-it-a-column-has-four-answers)
 
 #### [Testing and debugging](sql/varka/skills/testing-and-debugging.md)
 * [Buffer-Reuse Aliasing (UnsafeProjection)](sql/varka/skills/testing-and-debugging.md#buffer-reuse-aliasing-unsafeprojection)
