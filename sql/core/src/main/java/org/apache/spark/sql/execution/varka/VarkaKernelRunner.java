@@ -169,11 +169,12 @@ public final class VarkaKernelRunner {
   }
 
   /**
-   * The bytes a row of this fixed-width vector takes, an upper bound where the vector is not
-   * byte-sized: a {@code BitVector} reports a type width of 0 (it stores one bit a row), which
-   * would size a copy of its data at nothing. One byte a row over-states the bitmap by 8x and
-   * keeps every bit the kernel reads inside it (the warm-up gate sizes its copy of a batch by it;
-   * a reproduction copies the bitmap's own {@code (len + 7) / 8} bytes).
+   * The width a reproduction records for this fixed-width vector: its type width, or 1 for a
+   * {@code BitVector}, which reports 0 (it stores one bit a row) and would size the replay's copy
+   * of its data at nothing. One byte a row over-states the bitmap eight times, which is safe for a
+   * replay's allocation and for the batch cap; the data itself is the bitmap's own
+   * {@code (len + 7) / 8} bytes. The warm-up does not use this: it reads 0 as one bit a row
+   * ({@code VarkaKernelWarmup.BIT_WIDTH}).
    */
   public static int bytesPerRow(BaseFixedWidthVector v) {
     return v instanceof BitVector ? 1 : v.getTypeWidth();

@@ -876,8 +876,9 @@ public abstract class VarkaEvaluatorBase {
     for (int i = 0; i < widths.length; i++) {
       widths[i] = derivedInput[i]
           ? 4
-          : VarkaKernelRunner.bytesPerRow((BaseFixedWidthVector)
-              ((ArrowColumnVector) input.column(inputOrdinals[i])).getValueVector());
+          // A BitVector's type width is 0, which the warm-up reads as one bit a row (BIT_WIDTH).
+          : ((BaseFixedWidthVector) ((ArrowColumnVector) input.column(inputOrdinals[i]))
+              .getValueVector()).getTypeWidth();
     }
     return widths;
   }

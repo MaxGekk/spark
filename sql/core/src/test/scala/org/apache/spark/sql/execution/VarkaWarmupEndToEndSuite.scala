@@ -25,9 +25,9 @@ import scala.jdk.CollectionConverters._
 
 import org.scalatest.exceptions.TestFailedException
 
-import org.apache.spark.sql.{DataFrame, QueryTest, Row}
+import org.apache.spark.sql.{DataFrame, QueryTest, Row, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaJitEvidence,
-  VarkaKernelWarmth, VarkaKernelWarmup, VarkaShapeCache}
+  VarkaKernelWarmth, VarkaKernelWarmup, VarkaMemorySanitizer, VarkaShapeCache}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.util.QueryExecutionListener
@@ -113,10 +113,11 @@ class VarkaWarmupEndToEndSuite extends QueryTest with VarkaSharedSessions with V
    * Runs the query twice on the Varka session with the warm-up on, waiting for the warm-up's
    * verdict in between, and checks both runs against the row engine and which path served them.
    */
-  private def checkWarmup(query: String): Unit = {
-    cacheDatesBig(spark, numRows)
+  private def checkWarmup(
+      query: String, cache: SparkSession => Unit = cacheDatesBig(_, numRows)): Unit = {
+    cache(spark)
     val expected = spark.sql(query).collect().toSeq
-    cacheDatesBig(varkaSpark, numRows)
+    cache(varkaSpark)
     withWarmup {
       // A shape another suite emitted is a class this JVM has already met; start from a new one.
       VarkaShapeCache.invalidateAll()
@@ -212,6 +213,22 @@ class VarkaWarmupEndToEndSuite extends QueryTest with VarkaSharedSessions with V
 
   test("a filter's first query takes the row path and its next one the compiled kernel") {
     checkWarmup("SELECT i FROM varka_dates_big WHERE date_add(d, 30) > DATE'2020-07-01'")
+  }
+
+  test("a boolean column's warm-up copies its bitmap, not a byte a row, inside the sanitizer") {
+    // A bit vector's data buffer holds (rows + 7) / 8 bytes: 1,250 for a 10,000-row batch. A
+    // warm-up that copied a byte a row would read 10,000 bytes out of it, which the sanitizer
+    // refuses.
+    assume(VarkaMemorySanitizer.ENABLED, "run with -Dvarka.sanitizeMemory=true")
+    checkWarmup("SELECT i FROM varka_bools_big WHERE b AND (NOT b2 OR i > 50)", { session =>
+      val rows = (0 until numRows).map { i =>
+        (if (i % 7 == 3) null: java.lang.Boolean else Boolean.box(i % 2 == 0),
+          if (i % 5 == 4) null: java.lang.Boolean else Boolean.box(i % 3 == 0), i)
+      }
+      session.createDataFrame(rows).toDF("b", "b2", "i")
+        .createOrReplaceTempView("varka_bools_big")
+      session.catalog.cacheTable("varka_bools_big")
+    })
   }
 
   test("a columnar consumer's first write takes the row path and its next one the kernel") {

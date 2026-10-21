@@ -167,14 +167,16 @@ public record VarkaReproduction(
    * One kernel input as the kernel read it. Arrays, so the record's equality is identity on them;
    * compare a parsed file's inputs by their content.
    *
-   * @param width bytes per value: the Arrow vector's type width, or 4 for a derived input
+   * @param width bytes per value: the Arrow vector's type width, 4 for a derived input, or 1 for
+   *        a boolean column, whose data is a bitmap of {@code (rows + 7) / 8} bytes
    * @param dataCapacity the capacity of the buffer the data came from, which the sanitizer
    *        registers an input at
    * @param validityCapacity the validity buffer's capacity; 0 where the kernel was given none
    * @param nullCount the null count the kernel was given
    * @param derived whether the row engine's parser computed it into the task's scratch, which
    *        the runner guards at its nominal size rather than registering at a capacity
-   * @param data the values, {@code rows * width} bytes; null when the batch was left out
+   * @param data the values, {@code rows * width} bytes (a boolean column's bitmap, {@code (rows +
+   *        7) / 8}); null when the batch was left out
    * @param validity the validity words the kernel can read; null when it was given none (no
    *        nulls, or every row null) or the batch was left out
    */
