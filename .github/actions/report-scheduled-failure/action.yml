@@ -19,22 +19,20 @@
 
 name: 'Report a failed scheduled run'
 description: >-
-  Open an issue for a scheduled workflow run that has a failed job, or comment on the
-  workflow's open issue if it has one (dev/varka_scheduled_failure.py holds the rule).
-  A job counts when it failed or timed out, or when it was cancelled and its check-run
-  annotations do not positively identify a deliberate cancel (a newer run replacing it, or a
-  person); an unknown text, none, or an unreadable reply reports it, so a rewording on GitHub's
-  side never drops a red night. If the jobs the caller needs failed but the run lists no
-  failed job, the issue is still opened or updated.
+  Open an issue for a scheduled workflow run that has a failed or cancelled job, or comment on
+  the workflow's open issue if it has one (dev/varka_scheduled_failure.py holds the rule).
+  Every job that failed, timed out or was cancelled is listed; a cancelled one carries a note
+  that a person, a newer run or a timeout may have cancelled it. If the jobs the caller needs
+  failed or were cancelled but the run lists none, the issue is still opened or updated.
   Run it as the last job of a scheduled workflow, after a checkout that includes dev/; it uses
-  the job's own token (github.token), so the job needs the issues: write, actions: read and
-  checks: read permissions. It closes nothing. If GitHub cannot be reached after three tries
-  the report goes to the job summary and the job fails.
+  the job's own token (github.token), so the job needs the issues: write and actions: read
+  permissions. It closes nothing. If GitHub cannot be reached (three tries per call, six
+  minutes in all) the report goes to the job summary and the job fails.
 inputs:
   needs:
     description: >-
-      toJSON(needs) of the calling job; the script takes failure from it if a needed job
-      failed, so a run whose jobs listing shows no failed job is reported anyway.
+      toJSON(needs) of the calling job; a failed or cancelled need is reported even if the
+      jobs listing shows no failed or cancelled job.
     required: true
 runs:
   using: composite
@@ -46,10 +44,11 @@ runs:
         REPO: ${{ github.repository }}
         WORKFLOW: ${{ github.workflow }}
         RUN_ID: ${{ github.run_id }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         SHA: ${{ github.sha }}
         NEEDS: ${{ inputs.needs }}
       run: |
         python3 dev/varka_scheduled_failure.py --apply --repo "$REPO" \
-          --workflow "$WORKFLOW" --run-url "$RUN_URL" --sha "$SHA" --run-id "$RUN_ID" \
-          --needs-json "$NEEDS" --date "$(date -u +%F)"
+          --workflow "$WORKFLOW" --run-url "$RUN_URL" --run-attempt "$RUN_ATTEMPT" \
+          --sha "$SHA" --run-id "$RUN_ID" --needs-json "$NEEDS" --date "$(date -u +%F)"
