@@ -35,6 +35,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDerivedKind;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFusedKernel;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmth;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmup;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemorySanitizer;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemoryViolation;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaReproduction;
@@ -166,6 +167,16 @@ public final class VarkaKernelRunner {
   /** Another instance of the shape's class, which no task runs: the warm-up's own. */
   public VarkaFusedKernel newKernel() {
     return entry.newKernel();
+  }
+
+  /**
+   * The width the warm-up reads for this fixed-width vector: its type width, or
+   * {@link VarkaKernelWarmup#BIT_WIDTH} for a {@code BitVector}, whose bitmap it reads as one bit
+   * a row. The two widths are one place's answer to "how wide is this input", {@link
+   * #bytesPerRow} being the other's, so neither is read from {@code getTypeWidth} alone.
+   */
+  public static int warmupWidth(BaseFixedWidthVector v) {
+    return v instanceof BitVector ? VarkaKernelWarmup.BIT_WIDTH : v.getTypeWidth();
   }
 
   /**

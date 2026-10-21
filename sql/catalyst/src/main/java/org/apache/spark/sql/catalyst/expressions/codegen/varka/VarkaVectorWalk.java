@@ -1133,11 +1133,6 @@ final class VarkaVectorWalk {
     cb.lor();
   }
 
-  /** {@code t | f}: the lanes a condition's pair knows. */
-  private static void emitKnown(CodeBuilder cb, int t, int f) {
-    emitOr(cb, t, f);
-  }
-
   /** {@code ~x} of the long on the stack. */
   private static void emitNot(CodeBuilder cb) {
     cb.loadConstant(-1L);
@@ -1215,8 +1210,8 @@ final class VarkaVectorWalk {
       return;
     }
     // k: the lanes where both sides are known; kF = k & ~kT for the four orderings.
-    emitKnown(cb, t1, f1);
-    emitKnown(cb, t2, f2);
+    emitOr(cb, t1, f1);
+    emitOr(cb, t2, f2);
     cb.land();
     cb.lstore(s.cmpTmp);
     switch (n.op()) {
@@ -1374,9 +1369,9 @@ final class VarkaVectorWalk {
           emitAnd(cb, t1, t2);
           emitAnd(cb, f1, f2);
           cb.lor();
-          emitKnown(cb, t1, f1);
+          emitOr(cb, t1, f1);
           emitNot(cb);
-          emitKnown(cb, t2, f2);
+          emitOr(cb, t2, f2);
           emitNot(cb);
           cb.land();
           cb.lor();
@@ -1385,8 +1380,8 @@ final class VarkaVectorWalk {
           emitAnd(cb, t1, f2);
           emitAnd(cb, f1, t2);
           cb.lor();
-          emitKnown(cb, t1, f1);
-          emitKnown(cb, t2, f2);
+          emitOr(cb, t1, f1);
+          emitOr(cb, t2, f2);
           cb.lxor();
           cb.lor();
           cb.lstore(s.kf.get(node));
@@ -1474,7 +1469,7 @@ final class VarkaVectorWalk {
         // the ~ (VARKA-334). A dense body takes the arm below: no lane is unknown there.
         emitCond(cb, c, false, analysis, s, computed);
         line(cb, analysis, node);
-        emitKnown(cb, s.kt.get(c), s.kf.get(c));
+        emitOr(cb, s.kt.get(c), s.kf.get(c));
         cb.lstore(s.kt.get(node));
         emitNot(cb, s.kt.get(node));
         cb.lstore(s.kf.get(node));

@@ -25,7 +25,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import org.apache.spark.SparkThrowable
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaCatalystGrammar,
-  VarkaShrinker}
+  VarkaCoverageRows, VarkaShrinker}
 
 /**
  * The pure parts of the random differential against vanilla Spark (VARKA-262): a case, its
@@ -111,9 +111,6 @@ object VarkaSparkFuzz {
        |FROM VALUES ${valueRows.mkString(",\n  ")}
        |AS v(d, d2, i, m, y, mm, l, l2, t, t2, dt, dt2)""".stripMargin
 
-  /** The BOOLEAN columns of the coverage table, which this fuzzer's twelve-column fixture lacks. */
-  private val booleanColumn = "\\bb2?\\b".r
-
   /**
    * The coverage table's rows, except those that read a BOOLEAN column: the fixture's batches and
    * its oracle draw the twelve columns above, and a boolean input is a bitmap. Those rows are held
@@ -123,7 +120,7 @@ object VarkaSparkFuzz {
   def coverageRows(file: java.io.File): Seq[CoverageRow] =
     new ObjectMapper().readTree(file).get("expressions").elements().asScala.toSeq.map { e =>
       CoverageRow(e.get("sql").asText(), e.get("executable").asText(), e.get("form").asText())
-    }.filterNot(r => booleanColumn.findFirstIn(r.executable).isDefined)
+    }.filterNot(r => VarkaCoverageRows.readsBoolean(r.executable))
 
   /** The families the coverage table names, which the expected-errors list's rows cite. */
   def coverageFamilies(file: java.io.File): Set[String] =

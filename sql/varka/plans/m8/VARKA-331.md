@@ -524,3 +524,11 @@ out; those rows are held by the differential suite and `VarkaEmitterBoolSuite`.
    emission. Recorded here.
 9. **`CondValue`, the condition-to-value bridge, is row 460** in `PLAN.md`, with its dependants:
    335b's `bit_count(bool)`, 332's boolean casts and 27's boolean outputs, and the design of 2.6.
+10. **Review follow-ups.** `inputOrdinal` names every non-input node instead of a `default`;
+    `VarkaEmitCost.kindOf` gives `BoolColumn`, `CondConst`, `BoolCompare`, `CondIf` and
+    `BoolNullSafeEq` the lane (and, for the comparison, op) suffix `Compare` and `ColumnRef` carry,
+    still unpriced and so still on the awaiting-refit list; the warm-up's input width is
+    `VarkaKernelRunner.warmupWidth`, beside `bytesPerRow`; the boolean-row filter is one
+    `VarkaCoverageRows.readsBoolean`. The emitter suite sweeps long-lane boolean leaves; a column
+    at both lanes in one kernel needs a value output the suite's selection harness cannot read, and
+    stays with the differential suite's mixed-lane test, which now also asserts a kernel served.

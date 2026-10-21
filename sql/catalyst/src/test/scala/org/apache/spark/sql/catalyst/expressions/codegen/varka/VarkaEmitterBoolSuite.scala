@@ -96,9 +96,17 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
           for (fill <- VarkaKernelCheck.bothFills) {
             val outs = roots.map(_ =>
               makeOutput(arena, length, outputValidityBytes(options, length), fill))
-            val status = kernel.run(data.map(_.address()), valid.map(_.address()), nullCounts,
-              roots.map(_ => 0L).toArray, outs.map(_._2.address()).toArray, Array.empty[Int],
-              length, VarkaEmitterTestSupport.scratch(kernel, length))
+            val scratch = VarkaEmitterTestSupport.scratch(kernel, length)
+            // A kernel holding a long-lane root is a 64-bit-lane kernel, which has its own entry.
+            val status = if (roots.exists(r => VarkaVectorIR.emissionLane(r) == LaneType.LONG)) {
+              kernel.run(data.map(_.address()), valid.map(_.address()), nullCounts,
+                roots.map(_ => 0L).toArray, outs.map(_._2.address()).toArray, Array.empty[Int],
+                Array.empty[Long], length, scratch)
+            } else {
+              kernel.run(data.map(_.address()), valid.map(_.address()), nullCounts,
+                roots.map(_ => 0L).toArray, outs.map(_._2.address()).toArray, Array.empty[Int],
+                length, scratch)
+            }
             assert(status === 0, s"$ctx: declined (length $length, offset $off, $fill)")
             for (row <- 0 until length; (root, o) <- roots.zipWithIndex) {
               val ints = Array.tabulate(k)(c => if (dataBit(stateOf(c, row))) 1 else 0)
@@ -223,6 +231,20 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // kernel keeps a dense body (the special case of a test over a predicate is not taken).
     val bytes = emitMulti(Seq(new IsNotNull(b0)), 1, 0)._2
     assert(VarkaEmitterTestSupport.codeSize(bytes, "loopDense0") > 0)
+  }
+
+  test("boolean leaves on the long lane") {
+    // A boolean column's lane is the lane of what it meets (a long comparison beside it), so
+    // the kernels below drive their loop at the long species while the bitmaps are unchanged.
+    val Seq(l0, l1, l2) = (0 until 3).map(new BoolColumn(_, LaneType.LONG))
+    val long = Seq(l0, new And(l0, new Not(l1)), new BoolCompare(CompareOp.LT, l0, l1),
+      new BoolNullSafeEq(l0, l1), new CondIf(l0, l1, l2),
+      new Or(new CondConst(Truth.NULL, LaneType.LONG), l2))
+    long.foreach(r => assert(VarkaVectorIR.emissionLane(r) === LaneType.LONG, r.toString))
+    sweep(long, 3, "long-lane leaves")
+    // One column at both lanes in one kernel needs a value output (a WidenLane over an int-lane
+    // IF), which this suite's selection harness cannot read; the differential suite's mixed-lane
+    // test holds that case to Spark's rows.
   }
 
   test("four leaves, every combination, for the connectives and a comparison tree") {

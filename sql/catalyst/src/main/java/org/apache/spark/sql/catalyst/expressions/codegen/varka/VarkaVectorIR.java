@@ -146,7 +146,13 @@ public sealed interface VarkaVectorIR
     return switch (node) {
       case ColumnRef c -> c.ordinal();
       case BoolColumn b -> b.ordinal();
-      default -> -1;
+      case LiteralSlot _, IntArith _, IntNeg _, ConstDivide _, BoundedDivide _, BitOp _,
+          BitCount _, Greatest _, Least _, IfElse _, Compare _, NullSafeEqual _, CondConst _,
+          BoolCompare _, CondIf _, BoolNullSafeEq _, And _, Or _, Not _, IsNotNull _,
+          InRanges _, AddDays _, SubDays _, DateDiff _, GuardedDay _, GuardedRange _, WidenLane _,
+          NarrowLane _, DayOfWeek _, WeekDay _, DayOfWeekIso _, NextDay _, ThursdayOf _,
+          AddMonths _, MakeDate _, Year _, Month _, DayOfMonth _, Quarter _, DayOfYear _,
+          LastDay _, TruncDate _, TruncDateDynamic _, WeekOfYear _ -> -1;
     };
   }
 

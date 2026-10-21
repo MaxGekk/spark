@@ -77,11 +77,10 @@ class VarkaCoverageCompositionFuzzSuite
   // The rows that read a BOOLEAN column are out of this fuzzer: its batches draw int columns and
   // its oracle builds int attributes, and a boolean input is a bitmap. They are held to the row
   // engine by `VarkaCoverageDifferentialSuite` and to the reference by `VarkaEmitterBoolSuite`.
-  private val booleanColumn = "\\bb2?\\b".r
-  private def readsBoolean(row: VarkaCoverageRows.Row): Boolean =
-    booleanColumn.findFirstIn(row.executable).isDefined
-  private def projections = table.projections.filterNot(readsBoolean)
-  private def predicates = table.predicates.filterNot(readsBoolean)
+  private def projections =
+    table.projections.filterNot(r => VarkaCoverageRows.readsBoolean(r.executable))
+  private def predicates =
+    table.predicates.filterNot(r => VarkaCoverageRows.readsBoolean(r.executable))
 
   private def resolve(sql: String): Expression = VarkaCoverageRows.resolve(sql, columns)
 
