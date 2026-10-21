@@ -1475,6 +1475,8 @@ jobs:
       run: ./dev/varka_census.py --check
     - name: Nothing cites a moved catalogue path
       run: ./dev/varka_catalogue_move.sh --check 8 9
+    - name: The scheduled-failure reporter's issue and comment decisions
+      run: python3 dev/varka_scheduled_failure_test.py
     - name: The CI queue's admission decision, over recorded API responses
       run: python3 dev/varka_ci_admit.py --self-test
     - name: The step-time budget's tool, over recorded API responses
