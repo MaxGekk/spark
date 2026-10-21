@@ -19,33 +19,36 @@
 
 name: 'Report a failed scheduled run'
 description: >-
-  Open an issue for a scheduled workflow run that has a failed job, or comment on the
-  workflow's open issue if it has one (dev/varka_scheduled_failure.py holds the rule).
-  Run it as the last job of a scheduled workflow, after a checkout that includes dev/,
-  with GH_TOKEN set to the job's token; the job needs the issues: write and actions: read
-  permissions. It closes nothing.
+  Open an issue for a scheduled workflow run that has a failed or cancelled job, or comment on
+  the workflow's open issue if it has one (dev/varka_scheduled_failure.py holds the rule).
+  Every job that failed, timed out or was cancelled is listed; a cancelled one carries a note
+  that a person, a newer run or a timeout may have cancelled it. If the jobs the caller needs
+  failed or were cancelled but the run lists none, the issue is still opened or updated.
+  Run it as the last job of a scheduled workflow, after a checkout that includes dev/; it uses
+  the job's own token (github.token), so the job needs the issues: write and actions: read
+  permissions. It closes nothing. If GitHub cannot be reached (three tries per call, six
+  minutes in all) the report goes to the job summary and the job fails.
+inputs:
+  needs:
+    description: >-
+      toJSON(needs) of the calling job; a failed or cancelled need is reported even if the
+      jobs listing shows no failed or cancelled job.
+    required: true
 runs:
   using: composite
   steps:
-    - name: List the run's jobs
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-        REPO: ${{ github.repository }}
-        RUN_ID: ${{ github.run_id }}
-      run: |
-        # One JSON object per job, every page; the weekly matrix has well over 100 jobs.
-        gh api --paginate "repos/${REPO}/actions/runs/${RUN_ID}/jobs?per_page=100" \
-          --jq '.jobs[] | {name, conclusion, html_url}' > "${RUNNER_TEMP}/run-jobs.ndjson"
     - name: Open or update the issue
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
         REPO: ${{ github.repository }}
         WORKFLOW: ${{ github.workflow }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         SHA: ${{ github.sha }}
+        NEEDS: ${{ inputs.needs }}
       run: |
         python3 dev/varka_scheduled_failure.py --apply --repo "$REPO" \
-          --workflow "$WORKFLOW" --run-url "$RUN_URL" --sha "$SHA" \
-          --date "$(date -u +%F)" --jobs-file "${RUNNER_TEMP}/run-jobs.ndjson"
+          --workflow "$WORKFLOW" --run-url "$RUN_URL" --run-attempt "$RUN_ATTEMPT" \
+          --sha "$SHA" --run-id "$RUN_ID" --needs-json "$NEEDS" --date "$(date -u +%F)"
