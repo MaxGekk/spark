@@ -190,8 +190,8 @@ public class VarkaSharedPrefixBenchmark extends VarkaBenchmarkBase {
    * drive so that what the drive requested is compiled and installed. The wait is bounded: an arm
    * that does not settle within {@link #WARM_WAIT_MILLIS} says so on the console, with the level
    * each of its loop methods had, and is timed as it is. An arm whose C2 compile fails or is
-   * refused, as the call-site budget off arm's single loop method is, ends that way too, and its
-   * cell says so.
+   * refused is exempt from the level condition ({@code c2Expected}) and settles on drive
+   * times alone, as the call-site budget off arm's single loop method does.
    */
   private static void driveToCompiledCode(String title, Arm arm, MemorySegment data, long[] dst,
       long[] dstValidity, int[] literals) {

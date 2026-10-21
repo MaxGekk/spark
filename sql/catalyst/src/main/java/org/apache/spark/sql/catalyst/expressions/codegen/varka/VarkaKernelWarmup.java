@@ -365,7 +365,7 @@ public final class VarkaKernelWarmup {
     }
     String queue = VarkaVectorTemplateWarmup.compilerQueueText();
     if (queue == null) {
-      state.append("compile queue unavailable: ");
+      state.append("compile queue unavailable; ");
     } else {
       // Limit 0, the one-argument split's own: trailing empty lines are dropped.
       String[] lines = queue.split("\\R", 0);

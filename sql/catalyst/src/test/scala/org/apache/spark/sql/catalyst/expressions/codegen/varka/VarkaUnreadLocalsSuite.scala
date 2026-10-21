@@ -129,25 +129,30 @@ class VarkaUnreadLocalsSuite extends VarkaEmitterTestBase {
     // (elideChronoMonth off) every fragment computes a month by the option's design, which the
     // census counts as unread; and the double-precision dividers emit vector ops the census finds
     // unread, which is not yet explained (VARKA-412). A configuration that changes one is
-    // cancelled here: the case with that option put back would be the defaults' run again.
+    // cancelled here: the case with that option put back would be the defaults' run again. The
+    // premise option materializeChronoPrefix is the reference form's (recomputePrefix).
     val defaults = VarkaEmitOptions.DEFAULTS
     val base = VarkaMatrix.base
     val changed = Seq(
       "shareChronoPrefix" -> (base.shareChronoPrefix() != defaults.shareChronoPrefix()),
       "groupBudget" -> (base.groupBudget() != defaults.groupBudget()),
       "methodByteBudget" -> (base.methodByteBudget() != defaults.methodByteBudget()),
+      "materializeChronoPrefix" ->
+        (base.materializeChronoPrefix() != defaults.materializeChronoPrefix()),
       "elideChronoMonth" -> (base.elideChronoMonth() != defaults.elideChronoMonth()),
       "division" -> (base.division() != defaults.division())).filter(_._2).map(_._1)
     assume(changed.isEmpty, s"the configuration changes ${changed.mkString(", ")}, which this " +
       "case's premise depends on")
-    // Emitted at the width the JVM's species is established at, so that the class can be loaded
-    // under any configuration (VARKA-246): the matrix's lanes override where one is set, else the
-    // preferred width.
+    // The census reads the class emitted at the corpus's width. The prefix check loads a class,
+    // which the JVM's one species per lane type allows only at the width it is established at
+    // (VARKA-246): emitted again at that width, the matrix's lanes override where one is set,
+    // else the preferred width.
     val options = elided.withPredictGrouping(false)
-      .withLanesOverride(VarkaSpeciesGuard.establishedIntLanes())
     val bytes = VarkaLoopEmitter.emit(name, roots.asJava, 3, 0, null, null, options)
+    val loaded = VarkaLoopEmitter.emit(name, roots.asJava, 3, 0, null, null,
+      options.withLanesOverride(VarkaSpeciesGuard.establishedIntLanes()))
     // The case needs a prefix materialized across groups, which a grouping change could remove.
-    val (kernel, loader) = load((name, bytes))
+    val (kernel, loader) = load((name, loaded))
     try {
       assert(kernel.scratchBytesPerRow() > 0, "no prefix is materialized")
     } finally {

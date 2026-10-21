@@ -118,7 +118,7 @@ public final class VarkaSpeciesGuard {
    * established at: the matrix's lanes override where a configuration sets one, else {@link
    * #preferredIntLanes}. A test that loads a class it emitted at another width puts a second
    * species beside the established one, which {@link #check} refuses. An override with no named
-   * species (32 lanes on a 512-bit host) falls back to the preferred width, which this does not
+   * species (such as 32 int lanes) falls back to the preferred width, which this does not
    * model; no matrix configuration sets one.
    */
   public static int establishedIntLanes() {

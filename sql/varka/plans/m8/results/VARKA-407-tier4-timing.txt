@@ -34,8 +34,8 @@ the earlier version (3 of 16 runs slow against 0 of 10), only both from master (
 No arm printed "did not settle". No slow cell in the ten runs.
 
 == phase 3: do a real session's first queries run in tier 3 after the warm-up? ==
-(Measured on jars that still carried the warm-up wait of phase 1, which was dropped afterwards; the
-wait is only in the "change jar" runs below, and the answer was the same on master's jar for 4 and 16 entries.)
+(The "change jar" runs below, the 1-entry run among them, carry the warm-up wait of phase 1, which was
+dropped afterwards; the 4- and 16-entry runs were also made on master's jar and agree.)
 Method: a local[2] session (VarkaArrowSessions.createSession, Varka on, the kernel warm-up off), 100,000 cached
 dates with one null in 31 (so the kernels run their masked loops), the same query every time over 1, 4 and 16
 entries of the size ladder, 60 to 100 queries, -XX:+PrintCompilation, master's catalyst jar and the jar with the
