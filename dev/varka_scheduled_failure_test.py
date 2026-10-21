@@ -231,8 +231,8 @@ class Decision(unittest.TestCase):
         self.assertEqual(vsf.needs_result_of(needs("success", "failure", "cancelled")), "failure")
         self.assertEqual(vsf.needs_result_of(needs("success", "cancelled")), "cancelled")
         self.assertEqual(vsf.needs_result_of(needs("success", "skipped")), "other")
-        self.assertEqual(vsf.needs_result_of(""), "other")
-        for bad in ("{", "[1]", '{"a": 3}', '{"a": {}}', "null"):
+        self.assertEqual(vsf.needs_result_of("{}"), "other")
+        for bad in ("", "{", "[1]", '{"a": 3}', '{"a": {}}', "null"):
             self.assertEqual(vsf.needs_result_of(bad), "failure", bad)
 
     def test_a_run_attempt_is_not_a_longer_attempt(self):
@@ -369,6 +369,37 @@ class Writes(unittest.TestCase):
         vsf.act(("comment", 7, "C"), make_gh(github), True, "Varka fuzz", RUN + "/attempts/2")
         self.assertEqual(len(github.comments), 2, "attempt 2 posts its own comment")
 
+    def test_a_hung_label_endpoint_does_not_eat_the_budget(self):
+        github = FakeGitHub(fail={"label list": 99, "label create": 99})
+        create(github)
+        self.assertEqual(verbs(github).count("label list"), 1)
+        self.assertEqual(verbs(github).count("label create"), 1)
+        self.assertEqual(len(github.issues), 1)
+
+    def test_a_failed_nested_comment_opens_no_second_issue(self):
+        github = FakeGitHub(labels=[vsf.LABEL], fail={"issue create": 1, "issue comment": 9},
+                            issues=[issue(4, vsf.marker("Varka fuzz"))])  # fmt: skip
+        with self.assertRaises(vsf.GhError):
+            create(github)
+        self.assertEqual(len(github.issues), 1)
+        self.assertEqual(verbs(github).count("issue create"), 1)
+
+    def test_the_final_attempt_is_checked_for_having_landed(self):
+        github = FakeGitHub(labels=[vsf.LABEL])
+        real_call, state = github.__call__, {"n": 0}
+
+        def lose_third(command, input=None, **kwargs):
+            if command[1:3] == ["issue", "comment"]:
+                state["n"] += 1
+                if state["n"] == vsf.GH_ATTEMPTS:  # the last reply is lost, the comment landed
+                    real_call(command, input, **kwargs)
+                return subprocess.CompletedProcess(command, 1, "", "502")
+            return real_call(command, input, **kwargs)
+
+        vsf.act(("comment", 7, f"Run: {ATTEMPT}\n"), make_gh(lose_third), True, "Varka fuzz",
+                ATTEMPT)  # fmt: skip
+        self.assertEqual(len(github.comments), 1)
+
     def test_an_issue_that_appeared_meanwhile_gets_a_comment(self):
         github = FakeGitHub(labels=[vsf.LABEL], fail={"issue create": 1},
                             issues=[issue(4, vsf.marker("Varka fuzz"))])  # fmt: skip
@@ -445,13 +476,21 @@ class Cli(unittest.TestCase):
         github, _ = self.run_main(["--run-id", "5", "--apply", "--needs-json", needs], github)
         self.assertEqual(len(github.issues), 1)
         self.assertIn("showed no failed or cancelled job", github.issues[0]["body"])
+        green = json.dumps({"fuzz": {"result": "success"}})
         github = FakeGitHub(labels=[vsf.LABEL], jobs=[])
-        github, _ = self.run_main(["--run-id", "5", "--apply"], github)
+        github, _ = self.run_main(["--run-id", "5", "--apply", "--needs-json", green], github)
         self.assertEqual(github.issues, [])
 
-    def test_unparseable_needs_still_report(self):
-        github = FakeGitHub(labels=[vsf.LABEL], jobs=[])
-        github, _ = self.run_main(["--run-id", "5", "--apply", "--needs-json", "{"], github)
+    def test_unparseable_or_empty_needs_still_report(self):
+        for needs in ("{", ""):
+            github = FakeGitHub(labels=[vsf.LABEL], jobs=[])
+            github, _ = self.run_main(["--run-id", "5", "--apply", "--needs-json", needs], github)
+            self.assertEqual(len(github.issues), 1)
+
+    def test_an_unreadable_jobs_listing_still_reports_a_failed_need(self):
+        github = FakeGitHub(labels=[vsf.LABEL], fail={"api": 9})
+        needs = json.dumps({"fuzz": {"result": "failure"}})
+        github, _ = self.run_main(["--run-id", "5", "--apply", "--needs-json", needs], github)
         self.assertEqual(len(github.issues), 1)
 
     def test_a_missing_option_is_a_usage_error(self):
@@ -465,14 +504,14 @@ class Cli(unittest.TestCase):
     def test_gh_failure_writes_the_summary_and_exits_non_zero(self):
         with tempfile.TemporaryDirectory() as tmp:
             summary = os.path.join(tmp, "summary.md")
-            github = FakeGitHub(fail={"api": 9})
+            github = FakeGitHub(labels=[vsf.LABEL], fail={"issue create": 9})
             with self.assertRaises(SystemExit) as caught:
-                self.run_main(["--run-id", "5", "--apply"], github, summary)
+                self.run_main(["--run-id", "5", "--apply", "--needs-json", ""], github, summary)
             self.assertIn("Could not report", str(caught.exception.code))
             with open(summary, encoding="utf-8") as handle:
                 text = handle.read()
         self.assertIn(RUN, text)
-        self.assertIn("needs other", text)
+        self.assertIn("needs failure", text)
 
 
 if __name__ == "__main__":

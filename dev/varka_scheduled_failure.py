@@ -42,8 +42,8 @@ priority waiting request for build-test-... exists" for a newer run (MaxGekk/spa
 cancelled runs. A text list would drift and a dropped red night costs more than a line.
 
 If the needs result (--needs-json, toJSON(needs): the worst of failure, cancelled and the
-rest; unparseable counts as failure) is failure or cancelled but the jobs listing shows no
-reportable job (it lags), the issue is still opened or commented, saying so.
+rest; unparseable or empty counts as failure) is failure or cancelled but the jobs listing shows no
+reportable job (it lags, or could not be read), the issue is still opened or commented, saying so.
 
 The jobs come from the Actions API (--run-id) or, in tests, a file (--jobs-file) of JSON
 objects, one per line or in a {"jobs": [...]} document. Every gh call has a 60 second timeout
@@ -52,7 +52,8 @@ that the failed attempt did not land: the run URL with its /attempts/<n> (so a r
 same run is a new report) is already in the issue or comment. No gh call starts after 6
 minutes, inside the report job's 10. After the final failure of a gh call the report goes to
 $GITHUB_STEP_SUMMARY and the script exits non-zero. The label is created only when missing and
-never blocks the issue ("already exists" is success); if it fails the issue says it has none.
+never blocks the issue (one try per call; "already exists" is success); if it fails the issue
+says it has none. After each failed write, even the last, the issue or comment is looked for.
 Without --apply nothing is changed and the open issues are not read (see --issues-file).
 """
 
@@ -83,7 +84,11 @@ class GhError(Exception):
     """A gh call that never succeeded."""
 
 
-class OutOfTime(GhError):
+class GaveUp(GhError):
+    """Stop retrying: the failure is final (a write that cannot be repeated blindly)."""
+
+
+class OutOfTime(GaveUp):
     """The total deadline passed; no further gh call is started."""
 
 
@@ -113,7 +118,7 @@ def read_jobs(text):
 def needs_result_of(needs_json):
     """'failure', 'cancelled' or 'other' from toJSON(needs); unparseable counts as failure."""
     try:
-        results = [n["result"] for n in json.loads(needs_json or "{}").values()]
+        results = [n["result"] for n in json.loads(needs_json).values()]
     except (ValueError, TypeError, KeyError, AttributeError):
         return "failure"
     return "failure" if "failure" in results else "cancelled" if "cancelled" in results else "other"
@@ -130,7 +135,9 @@ def job_lines(jobs):
     return lines
 
 
-NO_JOB_NOTE = "The run's jobs listing showed no failed or cancelled job (it can lag); see the run."
+NO_JOB_NOTE = (
+    "The jobs listing showed no failed or cancelled job (it can lag) or failed; see the run."
+)
 
 
 def belongs_to(issue, workflow):
@@ -200,8 +207,8 @@ class Gh:
                 self.sleep(GH_BACKOFF_SECONDS * attempt)
         raise GhError(f"gh {' '.join(args)} failed {attempts} time(s):\n{result.stderr[-600:]}")
 
-    def json(self, args):
-        return json.loads(self(args) or "[]")
+    def json(self, args, retry=True):
+        return json.loads(self(args, retry=retry) or "[]")
 
     def jobs_of_run(self, run_id):
         path = f"repos/{self.repo}/actions/runs/{run_id}/jobs?per_page=100"
@@ -223,36 +230,39 @@ class Gh:
     def ensure_label(self):
         """True if the label exists afterwards; created only when missing, never overwritten."""
         try:
-            found = self.json(["label", "list", "--search", LABEL, "--json", "name"])
+            found = self.json(["label", "list", "--search", LABEL, "--json", "name"], retry=False)
             if any(entry.get("name") == LABEL for entry in found):
                 return True
         except (GhError, ValueError, AttributeError):
             pass  # unknown: try to create it; an existing label makes that fail harmlessly
         try:
             self(["label", "create", LABEL, "--color", LABEL_COLOR,
-                  "--description", LABEL_DESCRIPTION])  # fmt: skip
+                  "--description", LABEL_DESCRIPTION], retry=False)  # fmt: skip
             return True
         except GhError as error:
             print(f"the label could not be created: {error}")
             return "already exists" in str(error)
 
     def write(self, command, text, landed):
-        """Run a write, retrying; a retry first asks landed() whether the failed attempt took."""
+        """Run a write, retrying; after each failure landed() says whether the attempt took."""
         for attempt in range(1, GH_ATTEMPTS + 1):
             try:
                 self(command, text, retry=False)
                 return
+            except GaveUp:
+                raise
             except GhError as error:
-                if attempt == GH_ATTEMPTS or isinstance(error, OutOfTime):
-                    raise
-            self.sleep(GH_BACKOFF_SECONDS * attempt)
+                failure = error
+            if attempt < GH_ATTEMPTS:
+                self.sleep(GH_BACKOFF_SECONDS * attempt)
             try:
                 if landed():
                     return
-            except OutOfTime:
+            except GaveUp:
                 raise
             except (GhError, ValueError):
-                pass  # unreadable: treat as not landed and try again
+                pass  # unreadable: treat as not landed
+        raise failure
 
     def comment(self, number, text, run_ref):
         def landed():
@@ -275,7 +285,10 @@ class Gh:
                 print("the failed attempt had created the issue; not creating another")
                 return True
             if mine:  # an issue appeared meanwhile: report there, not in a second one
-                self.comment(min(i["number"] for i in mine), text, run_ref)
+                try:
+                    self.comment(min(i["number"] for i in mine), text, run_ref)
+                except GhError as error:  # a locked issue: do not open a second one instead
+                    raise GaveUp(str(error)) from error
                 return True
             return False
 
@@ -313,7 +326,13 @@ def read_file(path):
 def execute(args, **kwargs):
     """Decide and, with --apply, act; GhError when GitHub cannot be reached."""
     gh = Gh(args.repo, **kwargs)
-    jobs = read_jobs(read_file(args.jobs_file)) if args.jobs_file else gh.jobs_of_run(args.run_id)
+    try:
+        jobs = (
+            read_jobs(read_file(args.jobs_file)) if args.jobs_file else gh.jobs_of_run(args.run_id)
+        )
+    except GhError as error:  # the needs result still says the run is red
+        print(f"the jobs could not be listed: {error}")
+        jobs = []
     if args.issues_file:
         issues = json.loads(read_file(args.issues_file) or "[]")
     elif args.apply:
