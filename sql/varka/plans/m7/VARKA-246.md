@@ -178,6 +178,16 @@ All four lane-related configurations (`lanesOverride=4`, `lanesOverride=16`,
 defaults. The prediction in section 6.1 that the guard finds no violation "at 512, 256 or 128
 bits" was about the defaults; it said nothing of the matrix, which is where it failed.
 
+### 9.3 Correction after row 410, 21 October 2026
+
+9.1's sentence that all four lane-related configurations pass "over every catalyst suite" held on
+256-bit runners, where it was measured. On a 512-bit host `lanesOverride=4` failed three tests
+with one JVM and 35 with `--split 2` (27 on the CI runner): two suites emitted at the JVM's own
+width, `VarkaEmitterFramesSuite` through a lane count of 0 and `VarkaUnreadLocalsSuite` through a
+gate on the preferred width, and the guard blames whichever suite runs second. Row 410 fixed
+both (`m8/PLAN.md`); the guard is unchanged. Of 9.1's list, `lanesOverride=16`,
+`narrowHalfSpecies=true` and `validityByWidth=false` passed at 512 bits before row 410 as well.
+
 ### 9.2 Review of #685 (`/code-review high`), 9 October 2026
 
 Fixed in the PR: the child's timeout never fired (the read loop ends only when the child does; a

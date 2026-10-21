@@ -113,6 +113,19 @@ public final class VarkaSpeciesGuard {
     return preferred(VECTOR_PREFIX + "IntVector") / Integer.SIZE;
   }
 
+  /**
+   * The int lanes every kernel of this JVM is emitted at, and so the width its species is
+   * established at: the matrix's lanes override where a configuration sets one, else {@link
+   * #preferredIntLanes}. A test that loads a class it emitted at another width puts a second
+   * species beside the established one, which {@link #check} refuses. An override with no named
+   * species (32 lanes on a 512-bit host) falls back to the preferred width, which this does not
+   * model; no matrix configuration sets one.
+   */
+  public static int establishedIntLanes() {
+    int override = VarkaMatrixRuns.BASE.lanesOverride();
+    return override != 0 ? override : preferredIntLanes();
+  }
+
   /** The species constants {@code bytes} names that are not their vector class's preferred. */
   public static List<String> secondSpecies(byte[] bytes) {
     var found = new ArrayList<String>();

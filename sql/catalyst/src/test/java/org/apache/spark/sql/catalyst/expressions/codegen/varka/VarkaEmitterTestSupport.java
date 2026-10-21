@@ -446,41 +446,69 @@ public final class VarkaEmitterTestSupport {
 
   /**
    * Waits for at most {@code maxMillis} until C2 has nothing queued and nothing compiling, and
-   * returns whether it has: true too where the JVM does not let the load be read (the benchmark
-   * then has nothing to wait for). It reads the {@code Compiler.queue} diagnostic command every
-   * 10 ms, each reading a safepoint, so it is for the gaps between timed runs.
+   * returns whether it has. A load that cannot be read counts as not idle, so a JVM that does not
+   * serve the diagnostic command shows as a wait that ran out and not as a quiet compiler. It
+   * reads the {@code Compiler.queue} diagnostic command every 10 ms, each reading a safepoint, so
+   * it is for the gaps between timed runs. An interrupt does not end the wait, which would let
+   * the caller's next wait spin without sleeping; the flag is set again when the wait ends.
    */
   public static boolean awaitC2Idle(long maxMillis) {
     long deadline = System.nanoTime() + maxMillis * 1_000_000L;
-    while (true) {
-      int load = c2Load();
-      if (load <= 0) {
-        return true;
+    boolean interrupted = false;
+    try {
+      while (true) {
+        if (c2Load() == 0) {
+          return true;
+        }
+        if (System.nanoTime() >= deadline) {
+          return false;
+        }
+        try {
+          Thread.sleep(10);
+        } catch (InterruptedException e) {
+          interrupted = true;
+        }
       }
-      if (System.nanoTime() >= deadline) {
-        return false;
-      }
-      try {
-        Thread.sleep(10);
-      } catch (InterruptedException e) {
+    } finally {
+      if (interrupted) {
         Thread.currentThread().interrupt();
-        return false;
       }
     }
   }
 
   /** Methods queued for C2 plus those its threads are compiling, or -1 if unreadable. */
   private static int c2Load() {
-    try {
-      Object reply = java.lang.management.ManagementFactory.getPlatformMBeanServer().invoke(
-          new javax.management.ObjectName("com.sun.management:type=DiagnosticCommand"),
-          "compilerQueue", new Object[] {null}, new String[] {String[].class.getName()});
-      String text = String.valueOf(reply);
-      long compiling = text.lines().map(String::strip)
-          .filter(l -> l.startsWith("C2 CompilerThread")).count();
-      return VarkaVectorTemplateWarmup.c2QueueLength(text) + (int) compiling;
-    } catch (Exception | LinkageError e) {
-      return -1;
+    String text = VarkaVectorTemplateWarmup.compilerQueueText();
+    return text == null ? -1 : VarkaVectorTemplateWarmup.c2QueueLength(text)
+        + VarkaVectorTemplateWarmup.c2Compiling(text);
+  }
+
+  /**
+   * The level of each dense loop method {@code kernelClass} declares, as the code list shows it
+   * now: the highest level among the method's versions in use, 4 for C2's code, 1 to 3 for C1's,
+   * 0 where none is installed. A version made by on-stack replacement is not told from a
+   * standard one here (the list does not mark it; {@link VarkaTierWitness} does, from a JFR
+   * stream), so a loop that C2 compiled only for a loop already running reads as 4, and a loop C2
+   * inlined into its caller as lower than that. The code list is the JVM's own and current.
+   */
+  public static java.util.Map<String, Integer> loopLevels(Class<?> kernelClass) {
+    var levels = new java.util.TreeMap<String, Integer>();
+    for (java.lang.reflect.Method m : kernelClass.getDeclaredMethods()) {
+      if (VarkaMethodNames.isLoop(m.getName(), true)) {
+        levels.put(m.getName(), 0);
+      }
     }
+    for (VarkaTierWitness.CodeEntry e : VarkaTierWitness.parse(
+        VarkaTierWitness.readCodeList(), kernelClass.getName())) {
+      if (e.inUse() && levels.containsKey(e.method())) {
+        levels.merge(e.method(), e.level(), Math::max);
+      }
+    }
+    return levels;
+  }
+
+  /** Whether every loop of {@code levels}, as {@link #loopLevels} reads them, is C2 code. */
+  public static boolean allLoopsC2(java.util.Map<String, Integer> levels) {
+    return !levels.isEmpty() && levels.values().stream().allMatch(l -> l == 4);
   }
 }

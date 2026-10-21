@@ -363,18 +363,16 @@ public final class VarkaKernelWarmup {
             .append('/').append(pool.getUsage().getMax() >> 20).append(" MB; ");
       }
     }
-    try {
-      Object queue = ManagementFactory.getPlatformMBeanServer().invoke(
-          new ObjectName("com.sun.management:type=DiagnosticCommand"), "compilerQueue",
-          new Object[] {null}, new String[] {String[].class.getName()});
+    String queue = VarkaVectorTemplateWarmup.compilerQueueText();
+    if (queue == null) {
+      state.append("compile queue unavailable: ");
+    } else {
       // Limit 0, the one-argument split's own: trailing empty lines are dropped.
-      String[] lines = String.valueOf(queue).split("\\R", 0);
+      String[] lines = queue.split("\\R", 0);
       state.append("compile queue of ").append(lines.length).append(" lines: ");
       for (int i = 0; i < Math.min(lines.length, 12); i++) {
         state.append(lines[i].strip()).append(" | ");
       }
-    } catch (Exception | LinkageError e) {
-      state.append("compile queue unavailable: ").append(e);
     }
     if (kernelClass != null) {
       appendKernelCode(state, kernelClass);

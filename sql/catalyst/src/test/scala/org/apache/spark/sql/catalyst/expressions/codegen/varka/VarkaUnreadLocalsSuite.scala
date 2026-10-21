@@ -43,13 +43,41 @@ class VarkaUnreadLocalsSuite extends VarkaEmitterTestBase {
     .withElideUnreadLocals(true)
   private val built = elided.withElideUnreadLocals(false)
 
-  // Each options value's classes, emitted once and shared by the tests that read them.
-  private val emitted = mutable.Map.empty[VarkaEmitOptions, Seq[(String, Array[Byte])]]
+  /** A corpus shape the emitter declined, with the decline. */
+  private case class Declined(family: String, label: String, decline: VarkaEmitDeclined)
+
+  /** The corpus under one options value: the classes emitted, and the shapes declined. */
+  private case class Emitted(classes: Seq[(String, Array[Byte])], declined: Seq[Declined])
+
+  // Each options value's corpus, emitted once and shared by the tests that read it.
+  private val emitted = mutable.Map.empty[VarkaEmitOptions, Emitted]
+
+  /**
+   * Whether `d` is a size decline of the kind the emitter documents: some outputs' own groups are
+   * over the method byte budget and nothing else is over a limit (no class-file cap, parameter
+   * slot or constant pool count). `VarkaEmitDeclined` carries no list of findings, only the
+   * message that joins them with "; " and closes with a clause naming the outputs that cannot be
+   * regrouped smaller, so this reads the message by those parts.
+   */
+  private def isByteBudgetDecline(d: VarkaEmitDeclined): Boolean = {
+    val findings = d.getMessage.split("; ").filterNot(_.contains("cannot be regrouped smaller"))
+    !d.outputs().isEmpty && findings.nonEmpty &&
+      findings.forall(f => f.contains(" bytes, over the method budget of "))
+  }
+
+  /**
+   * The declines a corpus family may have under `options`, by family: without prefix sharing each
+   * node decomposes its own date, the widest wide shapes' methods outgrow the byte budget and the
+   * emitter declines them, as documented (VARKA-411); under any other options the whole corpus is
+   * emitted.
+   */
+  private def tolerated(options: VarkaEmitOptions): Map[String, Int] =
+    if (options.shareChronoPrefix()) Map.empty else Map("wide int" -> 1, "wide long" -> 1)
 
   /** Every corpus shape's class under `options`, labelled with the shape's family and index. */
-  private def classes(options: VarkaEmitOptions): Seq[(String, Array[Byte])] =
-    emitted.getOrElseUpdate(options, {
-      val declined = mutable.Buffer.empty[String]
+  private def classes(options: VarkaEmitOptions): Seq[(String, Array[Byte])] = {
+    val e = emitted.getOrElseUpdate(options, {
+      val declined = mutable.Buffer.empty[Declined]
       val out = corpus.flatMap { s =>
         val label = s"${s.family} ${s.index}"
         try {
@@ -57,19 +85,24 @@ class VarkaUnreadLocalsSuite extends VarkaEmitterTestBase {
             "org.apache.spark.sql.varka.execution.VarkaUnreadLocals", s.roots, s.numInputs,
             s.numLiterals, null, null, options))
         } catch {
-          // Without sharing each node decomposes its own date, so the widest shape's method
-          // outgrows the byte budget and the emitter declines it, as documented (VARKA-411).
-          // Only that decline, and only for the odd shape, is tolerated: every other option
-          // emits the whole corpus.
-          case d: VarkaEmitDeclined
-              if !options.shareChronoPrefix() && d.getMessage.contains("method budget") =>
-            declined += label
+          case d: VarkaEmitDeclined if isByteBudgetDecline(d) =>
+            declined += Declined(s.family, label, d)
             None
         }
       }
-      assert(declined.size * 10 < corpus.size, s"${declined.size} shapes declined: $declined")
-      out
+      Emitted(out, declined.toSeq)
     })
+    // Checked outside the cache, so that a failure is reported on every call without emitting the
+    // corpus again.
+    val allowed = tolerated(options)
+    for ((family, ds) <- e.declined.groupBy(_.family)) {
+      assert(ds.size <= allowed.getOrElse(family, 0),
+        s"${ds.size} shapes of $family declined for the method byte budget under " +
+          s"${options.canonical()}, ${allowed.getOrElse(family, 0)} allowed: " +
+          ds.map(d => s"${d.label}: ${d.decline.getMessage}"))
+    }
+    e.classes
+  }
 
   /** The census of every unread reference local over the corpus under `options`, by kind. */
   private def census(options: VarkaEmitOptions): Map[String, Int] =
@@ -90,37 +123,35 @@ class VarkaUnreadLocalsSuite extends VarkaEmitterTestBase {
       new ThursdayOf(c(1)),
       new Quarter(c(1)))
     val name = "org.apache.spark.sql.varka.execution.VarkaUnreadLocals"
-    // The case is a fact of the emit defaults on the options below, which a matrix configuration
-    // may change out from under it: without sharing, or with a group budget past the shape's
-    // size or no method byte budget, no group splits off to load a prefix; with the month step
-    // kept (elideChronoMonth off) every fragment computes a month by the option's design, which
-    // the census counts as unread; and the double-precision dividers emit vector ops the census
-    // finds unread, which is not yet explained (VARKA-412), so this case checks neither.
+    // The case is a fact of the emit defaults on five options, which a matrix configuration may
+    // change out from under it: without sharing, or with a group budget past the shape's size or
+    // no method byte budget, no group splits off to load a prefix; with the month step kept
+    // (elideChronoMonth off) every fragment computes a month by the option's design, which the
+    // census counts as unread; and the double-precision dividers emit vector ops the census finds
+    // unread, which is not yet explained (VARKA-412). A configuration that changes one is
+    // cancelled here: the case with that option put back would be the defaults' run again.
     val defaults = VarkaEmitOptions.DEFAULTS
+    val base = VarkaMatrix.base
+    val changed = Seq(
+      "shareChronoPrefix" -> (base.shareChronoPrefix() != defaults.shareChronoPrefix()),
+      "groupBudget" -> (base.groupBudget() != defaults.groupBudget()),
+      "methodByteBudget" -> (base.methodByteBudget() != defaults.methodByteBudget()),
+      "elideChronoMonth" -> (base.elideChronoMonth() != defaults.elideChronoMonth()),
+      "division" -> (base.division() != defaults.division())).filter(_._2).map(_._1)
+    assume(changed.isEmpty, s"the configuration changes ${changed.mkString(", ")}, which this " +
+      "case's premise depends on")
+    // Emitted at the width the JVM's species is established at, so that the class can be loaded
+    // under any configuration (VARKA-246): the matrix's lanes override where one is set, else the
+    // preferred width.
     val options = elided.withPredictGrouping(false)
-      .withShareChronoPrefix(defaults.shareChronoPrefix())
-      .withGroupBudget(defaults.groupBudget())
-      .withMethodByteBudget(defaults.methodByteBudget())
-      .withElideChronoMonth(defaults.elideChronoMonth())
-      .withDivision(defaults.division())
+      .withLanesOverride(VarkaSpeciesGuard.establishedIntLanes())
     val bytes = VarkaLoopEmitter.emit(name, roots.asJava, 3, 0, null, null, options)
     // The case needs a prefix materialized across groups, which a grouping change could remove.
-    // Reading that needs the class loaded, which only a JVM whose established species is the
-    // corpus's width allows (VARKA-246): the matrix's lanes override where a configuration sets
-    // one (every other kernel of the JVM is emitted at it), else the preferred width. A runner
-    // of any other width checks the census alone.
-    val jvmLanes = if (VarkaMatrix.base.lanesOverride() != 0) {
-      VarkaMatrix.base.lanesOverride()
-    } else {
-      VarkaSpeciesGuard.preferredIntLanes()
-    }
-    if (jvmLanes == VarkaEmitCostCorpus.LANES) {
-      val (kernel, loader) = load((name, bytes))
-      try {
-        assert(kernel.scratchBytesPerRow() > 0, "no prefix is materialized")
-      } finally {
-        loader.release()
-      }
+    val (kernel, loader) = load((name, bytes))
+    try {
+      assert(kernel.scratchBytesPerRow() > 0, "no prefix is materialized")
+    } finally {
+      loader.release()
     }
     val unread = VarkaUnreadLocalsTrim.census(bytes).asScala
     assert(unread.isEmpty, unread.mkString("; "))

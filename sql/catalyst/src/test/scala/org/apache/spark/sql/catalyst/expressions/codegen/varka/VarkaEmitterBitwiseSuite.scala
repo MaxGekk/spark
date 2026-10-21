@@ -82,7 +82,7 @@ class VarkaEmitterBitwiseSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // -1, and a count of 65, which masks to 1 at this lane.
     for (lanes <- Seq(2, 8)) {
       checkLongMatrix(roots, 2, Array(-1L, 65L), Seq(1, 7, 64, 129), combos(2), values,
-        "bitwise", lanes)
+        "bitwise", Some(lanes))
     }
   }
 

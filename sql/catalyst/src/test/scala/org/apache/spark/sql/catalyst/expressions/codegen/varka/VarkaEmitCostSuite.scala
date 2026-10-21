@@ -267,7 +267,7 @@ class VarkaEmitCostSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       checkLongMatrix(divisions, 1, (0 until 40).map(k => k * 1_000_003L - 17L).toArray,
         Seq(1, 7, 17, 64, 129), combos(1),
         (_: Int, i: Int) => ((i * 7_919_000_003L) % bound) * (if (i % 2 == 0) 1 else -1),
-        "long divisions, predicted", lanes, predicted)
+        "long divisions, predicted", Some(lanes), predicted)
     }
   }
 }

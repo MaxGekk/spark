@@ -34,6 +34,8 @@ the earlier version (3 of 16 runs slow against 0 of 10), only both from master (
 No arm printed "did not settle". No slow cell in the ten runs.
 
 == phase 3: do a real session's first queries run in tier 3 after the warm-up? ==
+(Measured on jars that still carried the warm-up wait of phase 1, which was dropped afterwards; the
+wait is only in the "change jar" runs below, and the answer was the same on master's jar for 4 and 16 entries.)
 Method: a local[2] session (VarkaArrowSessions.createSession, Varka on, the kernel warm-up off), 100,000 cached
 dates with one null in 31 (so the kernels run their masked loops), the same query every time over 1, 4 and 16
 entries of the size ladder, 60 to 100 queries, -XX:+PrintCompilation, master's catalyst jar and the jar with the
@@ -60,3 +62,21 @@ methods), so those loops run interpreted until C2's OSR compile lands, 0.4 to 3.
 == not established ==
 Why the tier-4 request of a left-alone arm comes late (the benchmark change makes it moot), why the 4 s between
 the request and the compile start in row 406's log, and why the arm's C2 code was replaced at 65 s in phase 1.
+
+== 21 October 2026: the settling condition reads the tier ==
+A review of the merged change found that its steady test (two drive times within 30 percent, C2 idle) cannot
+tell C1 code from C2's: an arm stuck in tier-3 code takes the same time every drive. The benchmark now also
+requires every dense loop method of the arm's kernel to hold level-4 code in the code list (the DiagnosticCommand
+MBean's compilerCodelist, lines "<compile id> <level> <state> <class.method(signature)> [addresses]", state 0 in
+use), and the C2 idle reading counts an unreadable queue as busy. phases 1 and 2 above were measured before this
+condition; the timed cells of a settled arm are C2 code by it now, and were by the evidence of their rates then.
+Check on the laptop (catalyst/Test/runMain org.apache.spark.sql.VarkaSharedPrefixBenchmark with
+-Dvarka.bench.only="ceiling 100: 5 groups", the first shape's prefix-once arm at 100 ceiling):
+  default JIT:                  settled, no console line; 3.0 ns/row (a run beside other agents' load)
+  -XX:TieredStopAtLevel=3 added: "did not settle in 60000 ms (13 drives, the last 4471 ms after 4978 ms, C2 idle,
+                                loop levels {loopDense0=3, loopDense1=3, loopDense2=3, loopDense3=3, loopDense4=3});
+                                its cell may be timed in lower-tier code" (5032 ns/row): steady and idle, so the
+                                earlier condition would have passed it; the level reading reports it.
+  The full benchmark with the condition (one run, load 5 to 8): every arm settled but the call-site budget off arm
+  of the first shape, whose one wide loop method (loopDense0) stays at level 0, in the interpreter, after 159 drives
+  and a minute with C2 idle (255 ns/row). That arm is exempt from the level condition in the benchmark.

@@ -67,7 +67,7 @@ class VarkaEmitterLongLaneSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
         new And(new Compare(CompareOp.GT, col, lit), new IsNotNull(col1)),
         new Or(new Not(new Compare(CompareOp.EQ, col, col1)), new IsNotNull(col))))
     for (lanes <- Seq(2, 8); (name, roots) <- cases) {
-      checkLongMatrix(roots, 2, lits, Seq(1, 7, 64, 129), combos(2), values, name, lanes)
+      checkLongMatrix(roots, 2, lits, Seq(1, 7, 64, 129), combos(2), values, name, Some(lanes))
     }
   }
 
@@ -104,23 +104,23 @@ class VarkaEmitterLongLaneSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       // lane - so both leave the batch computed and the extremes are fair game.
       for (mode <- Seq(Overflow.WRAP, Overflow.NULL); op <- Seq(IntOp.ADD, IntOp.SUB)) {
         checkLongMatrix(Seq(new IntArith(op, mode, a, b)), 2, noLits, lengths, combos(2),
-          extremeLong, s"$op $mode over the long extremes", lanes)
+          extremeLong, s"$op $mode over the long extremes", Some(lanes))
       }
       checkLongMatrix(Seq(new IntArith(IntOp.MUL, Overflow.WRAP, a, b)), 2, noLits, lengths,
-        combos(2), extremeLong, "MUL WRAP over the long extremes", lanes)
+        combos(2), extremeLong, "MUL WRAP over the long extremes", Some(lanes))
       // Negation's own extreme: `-Long.MinValue` is `Long.MinValue`, which WRAP publishes and
       // the checked form refuses.
       checkLongMatrix(Seq[VarkaVectorIR](new IntNeg(Overflow.WRAP, a)), 1, noLits, lengths,
-        combos(1), extremeLong, "neg WRAP over the long extremes", lanes)
+        combos(1), extremeLong, "neg WRAP over the long extremes", Some(lanes))
       // FAIL condemns the batch instead of answering it, so its matrix arm runs over operands
       // no add or subtract can push out of range; the status assertion inside the matrix is
       // then the claim that it did not condemn one anyway.
       for (op <- Seq(IntOp.ADD, IntOp.SUB)) {
         checkLongMatrix(Seq(new IntArith(op, Overflow.FAIL, a, b)), 2, noLits, lengths,
-          combos(2), smallLong, s"$op FAIL inside the long range", lanes)
+          combos(2), smallLong, s"$op FAIL inside the long range", Some(lanes))
       }
       checkLongMatrix(Seq[VarkaVectorIR](new IntNeg(Overflow.FAIL, a)), 1, noLits, lengths,
-        combos(1), smallLong, "neg FAIL inside the long range", lanes)
+        combos(1), smallLong, "neg FAIL inside the long range", Some(lanes))
     }
     // The two refusals the int lane pins, re-pinned at this one: a checked multiply has no
     // correct emission at either lane - the 128-bit product VARKA-104 needs is missing at both
