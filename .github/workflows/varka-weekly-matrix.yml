@@ -107,4 +107,4 @@ jobs:
     - name: Report the failure
       uses: ./.github/actions/report-scheduled-failure
       with:
-        needs-result: ${{ contains(needs.*.result, 'failure') && 'failure' || 'cancelled' }}
+        needs: ${{ toJSON(needs) }}

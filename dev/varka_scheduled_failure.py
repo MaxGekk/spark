@@ -18,7 +18,7 @@
 """Report a failed scheduled workflow run as a GitHub issue.
 
     dev/varka_scheduled_failure.py --workflow "Varka fuzz" --run-url URL --sha SHA \\
-        --run-id 123 --needs-result failure --date 2026-10-20 --repo vecbricks/varka --apply
+        --run-id 123 --needs-json "$NEEDS" --date 2026-10-20 --repo vecbricks/varka --apply
     python3 dev/varka_scheduled_failure_test.py      # the tests
 
 A red scheduled run has no author to see it, so nobody read the weekly matrix while it failed
@@ -44,15 +44,20 @@ listing is its check-run id), and the rule fails SAFE: a cancelled job is NOT re
 an annotation positively identifies a concurrency or user cancel (DELIBERATE_CANCEL_TEXTS), and
 not when any annotation says "maximum execution time". Any other text, no annotation and an
 unreadable reply all report the job, the last with the note "could not read why it was
-cancelled": a reworded GitHub text costs one extra line, never a dropped red night. A run
-that fails at startup runs no job and so reports nothing. Reading is bounded: at most 20
-cancelled jobs are read, in at most 3 minutes; the rest are reported unread, the jobs past
-the cap as one summary line.
+cancelled": a reworded GitHub text costs one extra line, never a dropped red night. Observed on
+real runs: "Canceling since a higher priority waiting request for <group> exists" (concurrency)
+and "The run was canceled by @<user>." (a person); "The operation was canceled." comes with
+both and proves nothing. Not observed: a timeout's "has exceeded the maximum execution time"
+(GitHub's documented text) and a lost runner. A run that fails at startup runs no job and so
+reports nothing. Reading is bounded: at most 20 cancelled jobs are read, in at most 3
+minutes, each gh call for at most 60 seconds. If every job read was a deliberate cancel the
+rest are taken as the same (a person cancelling a run of 100 jobs reports nothing); otherwise
+the rest are reported unread, the jobs past the cap as one summary line.
 
-When the caller's needs say failure (--needs-result failure) but no job is reportable (the
-listing lags, or covers only the latest attempt), the issue is still opened or commented,
-saying that the listing showed none: a red run is never ended by a green reporter. Needs that
-say only cancelled and show only deliberate cancels report nothing.
+When the caller's needs say failure (--needs-json, the action's toJSON(needs)) but no job is
+reportable (the listing lags, or covers only the latest attempt), the issue is still opened or
+commented, saying that the listing showed none: a red run is never ended by a green
+reporter. Needs that say only cancelled and show only deliberate cancels report nothing.
 
 The jobs come from the Actions API (--run-id), or from a file for tests (--jobs-file): one
 JSON object per line ({"id", "name", "conclusion", "html_url"}) or one {"jobs": [...]}
@@ -81,21 +86,24 @@ FAILED = ("failure", "timed_out")
 TIMEOUT_TEXT = "maximum execution time"
 # Annotation texts (lower case) that say a cancelled job was cancelled on purpose. Only these
 # make a cancelled job unreportable; any other text, or none, is reported, so a rewording on
-# GitHub's side fails safe. Sources: "Canceling since a higher priority waiting request for
-# <group> exists" is written when a newer run of the same concurrency group replaces this one;
-# "canceled by" / "cancelling since" are the forms of a cancel by a person and of the older
-# concurrency text. Check them against a real run before adding another.
+# GitHub's side fails safe. Both were observed on real runs (fixtures in the test file):
+#  * "Canceling since a higher priority waiting request for <group> exists": a newer run of
+#    the same concurrency group replaced the run (MaxGekk/spark run 39552258555).
+#  * "The run was canceled by @<user>.": a person cancelled the run (vecbricks/varka run
+#    37290363433).
+# Seen on both and so no evidence of intent: "The operation was canceled." Not found in any
+# run searched: a job past its timeout-minutes ("... has exceeded the maximum execution time
+# of N minutes", GitHub's documented text, so it is also checked for) and a lost runner.
 DELIBERATE_CANCEL_TEXTS = (
-    "higher priority waiting request",
-    "canceled by",
-    "canceling since",
-    "cancelling since",
+    "canceling since a higher priority waiting request for ",
+    "the run was canceled by @",
 )
 MAX_ANNOTATION_READS = 20
 ANNOTATION_BUDGET_SECONDS = 180
 MAX_JOBS_LISTED = 40
 GH_ATTEMPTS = 3
 GH_BACKOFF_SECONDS = 2
+GH_CALL_TIMEOUT_SECONDS = 60
 
 
 class GhError(Exception):
@@ -152,7 +160,7 @@ def reportable_jobs(jobs, annotations_of, clock=time.monotonic):
     cancelled job whose reason cannot be read, or was not read within the cap and the time
     budget, is reported with a note, never dropped.
     """
-    out, started, read, beyond = [], clock(), 0, 0
+    out, started, read, beyond, all_deliberate = [], clock(), 0, 0, True
     for job in jobs:
         if job.get("conclusion") in FAILED:
             out.append(job)
@@ -163,22 +171,29 @@ def reportable_jobs(jobs, annotations_of, clock=time.monotonic):
             read += 1
             if clock() - started > ANNOTATION_BUDGET_SECONDS:
                 out.append({**job, "why": "not read, out of time"})
+                all_deliberate = False
                 continue
             try:
                 messages = annotations_of(job)
             except (GhError, ValueError):
                 out.append({**job, "why": "could not read why it was cancelled"})
+                all_deliberate = False
                 continue
             if is_deliberate_cancel(messages):
                 print(f"not reported, cancelled on purpose: {code(job.get('name', '?'))}")
             else:
+                all_deliberate = False
                 why = (
                     "timeout"
                     if any(TIMEOUT_TEXT in (m or "").lower() for m in messages)
                     else ("cancelled for an unrecognised reason")
                 )
                 out.append({**job, "why": why})
-    if beyond:
+    if beyond and all_deliberate:
+        # Every job read was a deliberate cancel (a person cancelled a big run, or a newer run
+        # replaced it): the rest of the same run is taken to be the same.
+        print(f"not reported, {beyond} more cancelled jobs, taken as deliberate like the rest")
+    elif beyond:
         out.append({"name": f"{beyond} more cancelled jobs", "conclusion": "cancelled",
                     "why": "not read"})  # fmt: skip
     return out
@@ -223,7 +238,15 @@ def issue_body(workflow, run_url, sha, failed, note=""):
 def belongs_to(issue, workflow):
     if marker(workflow) in (issue.get("body") or ""):
         return True
-    return (issue.get("title") or "").startswith(f"Scheduled run failed: {one_line(workflow)} (")
+    name = re.escape(one_line(workflow))
+    shape = rf"Scheduled run failed: {name} \(first red \d{{4}}-\d{{2}}-\d{{2}}\)"
+    return re.fullmatch(shape, issue.get("title") or "") is not None
+
+
+def needs_result_of(needs_json):
+    """'failure', 'cancelled' or '' from toJSON(needs): the worst result of the needed jobs."""
+    results = [(n or {}).get("result") for n in json.loads(needs_json or "{}").values()]
+    return "failure" if "failure" in results else "cancelled" if "cancelled" in results else ""
 
 
 NO_JOB_NOTE = (
@@ -264,9 +287,16 @@ def gh(args, repo, stdin=None, runner=subprocess.run, sleep=time.sleep, retry=Tr
     attempts = GH_ATTEMPTS if retry else 1
     for attempt in range(1, attempts + 1):
         try:
-            result = runner(command, capture_output=True, text=True, check=False, input=stdin)
+            result = runner(
+                command, capture_output=True, text=True, check=False, input=stdin,
+                timeout=GH_CALL_TIMEOUT_SECONDS,
+            )  # fmt: skip
         except OSError as error:  # gh is not installed
             result = subprocess.CompletedProcess(command, 127, "", str(error))
+        except subprocess.TimeoutExpired:  # a hung connection counts as a failed attempt
+            result = subprocess.CompletedProcess(
+                command, 124, "", f"timed out after {GH_CALL_TIMEOUT_SECONDS} s"
+            )
         if result.returncode == 0:
             return result.stdout
         if attempt < attempts:
@@ -439,7 +469,7 @@ def execute(args, **kwargs):
     act(decision, args.repo, args.apply, args.workflow, args.run_url, **kwargs)
 
 
-def main():
+def main(argv=None, **kwargs):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--workflow")
     parser.add_argument("--run-url")
@@ -449,21 +479,22 @@ def main():
     parser.add_argument("--jobs-file", help="the run's jobs as gh prints them, instead of --run-id")
     parser.add_argument("--issues-file", help="open labelled issues as JSON; gh when absent")
     parser.add_argument(
-        "--needs-result",
+        "--needs-json",
         default="",
-        choices=["", "failure", "cancelled"],
-        help="what the jobs this one needs ended as; failure reports even if no job is listed",
+        help="toJSON(needs) of the calling job; a failed need reports even if no job is listed",
     )
     parser.add_argument("--repo", default="vecbricks/varka")
     parser.add_argument("--apply", action="store_true", help="change GitHub; dry run otherwise")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     for need in ("workflow", "run_url", "sha", "date"):
         if not getattr(args, need):
             parser.error(f"--{need.replace('_', '-')} is required")
     if not (args.jobs_file or args.run_id):
         parser.error("--run-id or --jobs-file is required")
+    args.needs_result = ""
     try:
-        execute(args)
+        args.needs_result = needs_result_of(args.needs_json)
+        execute(args, **kwargs)
     except (GhError, ValueError, OSError, AttributeError, TypeError, KeyError) as error:
         message = (
             f"Could not report the failed scheduled run of {code(args.workflow)}: {error}\n"

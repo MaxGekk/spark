@@ -31,10 +31,10 @@ description: >-
   checks: read permissions. It closes nothing. If GitHub cannot be reached after three tries
   the report goes to the job summary and the job fails.
 inputs:
-  needs-result:
+  needs:
     description: >-
-      'failure' if a job this one needs failed, else 'cancelled'; with 'failure' a run whose
-      jobs listing shows no failed job is reported anyway.
+      toJSON(needs) of the calling job; the script takes failure from it if a needed job
+      failed, so a run whose jobs listing shows no failed job is reported anyway.
     required: true
 runs:
   using: composite
@@ -48,8 +48,8 @@ runs:
         RUN_ID: ${{ github.run_id }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         SHA: ${{ github.sha }}
-        NEEDS_RESULT: ${{ inputs.needs-result }}
+        NEEDS: ${{ inputs.needs }}
       run: |
         python3 dev/varka_scheduled_failure.py --apply --repo "$REPO" \
           --workflow "$WORKFLOW" --run-url "$RUN_URL" --sha "$SHA" --run-id "$RUN_ID" \
-          --needs-result "$NEEDS_RESULT" --date "$(date -u +%F)"
+          --needs-json "$NEEDS" --date "$(date -u +%F)"
