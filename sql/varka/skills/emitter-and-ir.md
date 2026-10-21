@@ -1043,6 +1043,18 @@ cannot be planned around, so the dispatch takes the masked body for every batch
 those was a wrong answer (a later group read the scratch nobody wrote) that only an independent
 review found; a new skip is checked against both before it lands.
 
+The same census also finds a value computed for a reader the emission does not build. The unread
+`IntVector.sub` that a pin hid under `division=DOUBLE_RECIP` and `DOUBLE_DIV` (VARKA-411) came from
+two remainders (the Julian map's century scratch and the year-of-era century's) that only the magic
+form's round-down carry reads; the exact double quotients emit no carry, and the remainders were
+computed regardless (VARKA-412). A pin that hides a census finding is a diagnosis owed, not a fix.
+Find the store with `javap -c -p` on the emitted bytes (the census names the method and op; its
+numbers index the op list, not bytecode offsets; a store is dead when nothing in the method loads
+its slot), then give the emitter the same condition the reader has: compute the value inside the
+condition that emits its reader (`emitRemainderCarry`), so the two cannot drift apart. A test of
+that fix needs a shape per site, since a sibling node that loads a shared prefix slot (DayOfYear,
+WeekOfYear and TruncDate all load the carry scratch) hides a dead store beside it.
+
 ## The one comparison that is not null-intolerant is total, and needs three things a comparison does not
 
 `a <=> b` (VARKA-336) is true where both operands are null, so it is the first comparison whose
