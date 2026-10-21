@@ -123,14 +123,14 @@ class VarkaUnreadLocalsSuite extends VarkaEmitterTestBase {
       new ThursdayOf(c(1)),
       new Quarter(c(1)))
     val name = "org.apache.spark.sql.varka.execution.VarkaUnreadLocals"
-    // The case is a fact of the emit defaults on five options, which a matrix configuration may
+    // The case is a fact of the emit defaults on four options, which a matrix configuration may
     // change out from under it: without sharing, or with a group budget past the shape's size or
-    // no method byte budget, no group splits off to load a prefix; with the month step kept
+    // no method byte budget, no group splits off to load a prefix; and with the month step kept
     // (elideChronoMonth off) every fragment computes a month by the option's design, which the
-    // census counts as unread; and the double-precision dividers emit vector ops the census finds
-    // unread, which is not yet explained (VARKA-412). A configuration that changes one is
-    // cancelled here: the case with that option put back would be the defaults' run again. The
-    // premise option materializeChronoPrefix is the reference form's (recomputePrefix).
+    // census counts as unread. A configuration that changes one is cancelled here: the case with
+    // that option put back would be the defaults' run again. The premise option
+    // materializeChronoPrefix is the reference form's (recomputePrefix). The division does not
+    // matter: the double dividers' unread remainders are no longer emitted (VARKA-412).
     val defaults = VarkaEmitOptions.DEFAULTS
     val base = VarkaMatrix.base
     val changed = Seq(
@@ -139,8 +139,8 @@ class VarkaUnreadLocalsSuite extends VarkaEmitterTestBase {
       "methodByteBudget" -> (base.methodByteBudget() != defaults.methodByteBudget()),
       "materializeChronoPrefix" ->
         (base.materializeChronoPrefix() != defaults.materializeChronoPrefix()),
-      "elideChronoMonth" -> (base.elideChronoMonth() != defaults.elideChronoMonth()),
-      "division" -> (base.division() != defaults.division())).filter(_._2).map(_._1)
+      "elideChronoMonth" -> (base.elideChronoMonth() != defaults.elideChronoMonth()))
+      .filter(_._2).map(_._1)
     assume(changed.isEmpty, s"the configuration changes ${changed.mkString(", ")}, which this " +
       "case's premise depends on")
     // The census reads the class emitted at the corpus's width. The prefix check loads a class,
@@ -160,6 +160,38 @@ class VarkaUnreadLocalsSuite extends VarkaEmitterTestBase {
     }
     val unread = VarkaUnreadLocalsTrim.census(bytes).asScala
     assert(unread.isEmpty, unread.mkString("; "))
+  }
+
+  test("no divider stores the century's remainder for a carry it does not emit") {
+    // The double dividers' quotients are exact, so the round-down carry is not emitted and the
+    // remainder only the carry reads must not be computed either (VARKA-412). Two sites compute
+    // such a remainder, and each is reached by its own shape and option, so that a fix at one
+    // cannot hide the other: the Julian map of the calendar prefix (a Quarter reads the prefix
+    // and nothing recomposes) and the recomposition of a shifted date (an AddMonths under the
+    // century-then-year prefix, whose own century remainder is read afterwards). An AddMonths
+    // under the Julian map reaches both.
+    val c = (k: Int) => new ColumnRef(k)
+    val shapes = Seq[(String, Seq[VarkaVectorIR], Boolean)](
+      ("Julian map only", Seq(new Quarter(c(0))), true),
+      ("recomposition only", Seq(new AddMonths(c(0), c(1))), false),
+      ("both", Seq(new AddMonths(c(0), c(1))), true))
+    // The census counts what the options in play build, which a matrix configuration may change
+    // out from under the case: the month step kept (elideChronoMonth off), no shared prefix, or
+    // a group budget or method byte budget that splits the shape differently. The case pins them
+    // to the emit defaults and sets the Julian map and the division itself.
+    val defaults = VarkaEmitOptions.DEFAULTS
+    val pinned = elided.withShareChronoPrefix(defaults.shareChronoPrefix())
+      .withGroupBudget(defaults.groupBudget())
+      .withMethodByteBudget(defaults.methodByteBudget())
+      .withElideChronoMonth(defaults.elideChronoMonth())
+    for ((site, roots, julianMap) <- shapes; division <- VarkaEmitOptions.Division.values()) {
+      val options = pinned.withJulianMap(julianMap).withDivision(division)
+      val bytes = VarkaLoopEmitter.emit(
+        "org.apache.spark.sql.varka.execution.VarkaUnreadLocals", roots.asJava, 2, 0, null, null,
+        options)
+      val unread = VarkaUnreadLocalsTrim.census(bytes).asScala
+      assert(unread.isEmpty, s"$site, $division: " + unread.mkString("; "))
+    }
   }
 
   test("every shared slot of every loop and epilogue method in the cost corpus is read") {
