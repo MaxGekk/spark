@@ -102,6 +102,8 @@ varka_docs_regexes = (
     r"dev/varka_toc\.py$",
     # The CI tools whose self-tests the docs job runs (VARKA-255.md 5).
     r"dev/varka_ci_[a-z_]+\.py$",
+    # The scheduled-failure reporter and its tests, which the docs job runs.
+    r"dev/varka_scheduled_failure(_test)?\.py$",
     # The census's inputs, which its --check renders again (VARKA-328): the registry it reads
     # every name from and the coverage table its fused claims rest on, beside the two tools.
     r"dev/varka_census\.py$",

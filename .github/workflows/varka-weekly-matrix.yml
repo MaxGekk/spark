@@ -83,8 +83,8 @@ jobs:
   report-failure:
     name: Report a failed run
     # Only a scheduled run, since a person who dispatches one sees its result; only on the
-    # project's own repository, where issues are on; and for a failed or cancelled job, a
-    # job past its timeout-minutes ending as cancelled.
+    # project's own repository, where issues are on; and when a job failed or was cancelled.
+    # The script lists every failed, timed-out or cancelled job, a cancelled one with a note.
     needs: [run-build]
     if: >-
       always() && github.event_name == 'schedule' && github.repository == 'vecbricks/varka'
@@ -104,3 +104,5 @@ jobs:
           dev
     - name: Report the failure
       uses: ./.github/actions/report-scheduled-failure
+      with:
+        needs: ${{ toJSON(needs) }}

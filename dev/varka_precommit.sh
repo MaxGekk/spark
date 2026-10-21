@@ -339,9 +339,8 @@ fi
 
 # The benchmark diff carries its own check of the one thing a reader cannot see
 # it get wrong: a row key that collides silently drops a row from the requote,
-# which is the closing step of every regeneration. The scheduled-failure reporter's
-# selftest holds its issue/comment decision, which no run exercises until a night goes red.
-for tool in varka_bench_diff varka_bench_gate varka_scheduled_failure; do
+# which is the closing step of every regeneration.
+for tool in varka_bench_diff varka_bench_gate; do
   if printf '%s\n' "${files[@]}" | grep -qx "dev/$tool.py"; then
     if ! out="$(python3 "dev/$tool.py" --selftest 2>&1)"; then
       echo "$out" | sed "s|^|$tool selftest: |"
@@ -349,6 +348,15 @@ for tool in varka_bench_diff varka_bench_gate varka_scheduled_failure; do
     fi
   fi
 done
+
+# The scheduled-failure reporter's tests hold its issue/comment decision, which no run
+# exercises until a night goes red.
+if printf '%s\n' "${files[@]}" | grep -qE '^dev/varka_scheduled_failure(_test)?\.py$'; then
+  if ! out="$(python3 dev/varka_scheduled_failure_test.py 2>&1)"; then
+    echo "$out" | sed "s|^|varka_scheduled_failure tests: |"
+    findings=$((findings + 1))
+  fi
+fi
 
 # This script's own check, for the same reason: the column rule answers differently per
 # language, and a change to it is invisible until a commit in some other worktree fires.
