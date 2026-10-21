@@ -400,7 +400,7 @@ is a row of its own, proposed in the pull request, and the rest of the row stand
 `VarkaEvaluatorBase.inputWidths` (the warm-up gate's copy of a batch) and
 `VarkaKernelRunner.capture`; there is no use in the sanitizer, which registers each buffer's own
 capacity. `VarkaKernelRunner.bytesPerRow` answers 1 for a bit vector, and `capture` copies the
-bitmap's `(len + 7) / 8` bytes. (2) `Slots` shares `ColumnRef`'s locals: `srcSeg`, `srcValSeg` and
+bitmap's `(len + 7) / 8` bytes. *The warm-up must not use that 1: see "Review of 21 October" below.* (2) `Slots` shares `ColumnRef`'s locals: `srcSeg`, `srcValSeg` and
 `word` are per input ordinal, so the leaf adds none; the data word itself goes through the existing
 `cmpTmp`. What is not shared is the segment's size.
 
@@ -457,3 +457,70 @@ calls; the template warm-up's mask block calls it. (c) The composition fuzzer an
 draw int columns, so they leave the rows that read a boolean column (and the two boolean columns)
 out; those rows are held by the differential suite and `VarkaEmitterBoolSuite`.
 
+**Review of 21 October 2026 (an independent `/code-review high` of the branch), and what it changed.**
+
+1. **The warm-up read a boolean input a byte a row (memory safety).** The gate sized its copy of a
+   batch by `bytesPerRow`, which answers 1 for a bit vector, so `VarkaKernelWarmup.Job` mapped
+   `rows * 1` bytes out of a data buffer of `(rows + 7) / 8` and tiled the bitmap by bytes where it
+   repeats at a bit offset. A boolean input is now `VarkaKernelWarmup.BIT_WIDTH` (0, a
+   `BitVector`'s own type width): its copy is tiled with `tileValidity`, bit by bit, its slices
+   start at `start / 8` bytes, and the null-row fill is skipped (a bit under a null row is a
+   boolean like any other). Nothing in the repository reached the copy under the sanitizer, since
+   the copy ran outside any window; `VarkaWarmupGate.startWarmup` now opens one around the fill
+   and the copy, so that the sanitizer sees it. **Proof:** `VarkaWarmupEndToEndSuite`'s "a boolean
+   column's warm-up copies its bitmap, not a byte a row, inside the sanitizer" (a 40000-row cached
+   table of four 10000-row batches, warm-up on, `-Dvarka.sanitizeMemory=true`) fails on the old copy
+   with `a mapping of 10000 bytes ... leaves every registered buffer; the nearest is input data 0
+   ... for 1250 bytes` and passes on the new one (the first and second run give Spark's rows, the
+   second on the compiled kernel). The reproduction's replay (`VarkaReplay`) was read and is
+   correct as it stands: it allocates `max(dataCapacity, rows * width)` and copies the `(rows + 7)
+   / 8` bytes `capture` recorded, over-allocating a bitmap eight times and registering the
+   buffer's real capacity; `bytesOf` over-states a bitmap eight times, which only makes the batch
+   cap conservative. The two javadocs now say so. `bytesPerRow` keeps its 1 for the reproduction
+   alone.
+2. **`IF(b, l, l2)` and `CASE WHEN b THEN l ELSE l2 END` were declined** because `ifElse` and
+   `caseWhen` only asked `sameLane`, and a boolean leaf has no sibling to take a lane from. They now
+   lift the condition with `onLongLane` when both values are on the long lane
+   (`onValueLane`), which also fuses a long-lane choice under an int comparison
+   (`IF(i < 5, l, l2)`); a long condition over int values is still declined, as it has no int form.
+   `coalesce` over values was not affected: its tests are `IsNotNull` over a column, on the
+   column's own lane. Tests: `VarkaExpressionCompilerSuite` ("a boolean column chooses between long
+   values") and three coverage rows, `IF(b, d, d2)`, `IF(b, l, l2)` and `CASE WHEN b THEN l ELSE
+   l2 END`, which the differential suite runs against Spark.
+   **Found by the review of these fixes: a boolean column at two lanes in one kernel.** With the lift
+   above in place, `WHERE IF(b, l, l2) > 0 AND IF(b, d, d2) > DATE'2020-01-01'` holds `b` as a
+   long-lane leaf and as an int-lane one, and `Analysis` refused it with "column 0 is read at both
+   the LONG and the INT lane" (an internal error, not a decline). A boolean column's data is a
+   bitmap of the same size at either lane, so the lane that check guards (it sizes a value
+   column's data segment) does not apply: `registerInput` takes no lane for a `BoolColumn`.
+   `VarkaCoverageDifferentialSuite` has the query ("a boolean column read at the int and the long
+   lane in one query answers Spark's").
+3. `meetOnOneLane` is a call of `meetAll(List.of(a, b))`.
+4. `boolChoice` no longer takes a `coalesce` flag: `boolChoice` (`IF`, `CASE WHEN`) and
+   `boolCoalesce` each compile their operands and meet their lanes, and `foldChoice` is the one
+   right fold over (test, value) pairs and an ELSE; `coalesce` supplies `IsNotNull(value)` as each
+   test.
+5. `Analysis.registerInput` is shared by the `ColumnRef` and `BoolColumn` arms, and
+   `VarkaVectorIR.inputOrdinal(node)` (the ordinal of an input leaf, else -1) replaces the two
+   hand-written tests in `Slots` (`valueColumns`, the tree and body column sets). **Disagreed with
+   one part:** `epilogueReadsMask` stays `ColumnRef`-only, because it asks which readers use the
+   epilogue's bounds mask, and a `BoolColumn` reads its data word by the lane count
+   (`loadDataBits`, as a validity word is read) and never touches the mask; adding it would build a
+   mask nothing reads. A comment there says so.
+6. `VarkaVectorWalk` has `emitNot` (of the stack and of a local) and `emitOr` beside `emitAnd` and
+   `emitKnown`; the boolean comparison, `<=>`, the leaf, `IS [NOT] NULL` over a condition and the
+   choice use them. The emitted instructions are the same sequences.
+7. **Whether the mask warm-up should hold `xor` only for a boolean kernel.** No. The template
+   warm-up runs once per JVM, not per kernel (`VarkaVectorTemplateWarmup`'s class comment), so the
+   `.xor(tail)` added to the shared mask expression costs one more mask call per lane in that one
+   pass, inside the pass's existing pace budget. A boolean-only block would need a
+   second, conditional entry (the first boolean kernel would trigger it after the JVM's pass has
+   ended, a cold start for exactly the method it exists to warm) and a flag on every kernel to
+   decide it. Kept as it is.
+8. **A constructor with no default lane for `BoolColumn` and `CondConst`.** Not done:
+   `ColumnRef` and `LiteralSlot` have the same one-argument int form, the compiler builds a
+   `BoolColumn` at one site and the lift sets the lane, and the many hand-built test trees would
+   all change for a rule the lane check (`Analysis`, per node) already enforces at the first
+   emission. Recorded here.
+9. **`CondValue`, the condition-to-value bridge, is row 460** in `PLAN.md`, with its dependants:
+   335b's `bit_count(bool)`, 332's boolean casts and 27's boolean outputs, and the design of 2.6.

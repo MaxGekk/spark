@@ -138,6 +138,19 @@ public sealed interface VarkaVectorIR
   }
 
   /**
+   * The input ordinal a leaf reads, or -1 for a node that is not an input leaf: a {@link ColumnRef}
+   * or a {@link BoolColumn}. Every place that asks "which column does this node read" goes through
+   * here, so a third kind of input leaf is added in one place.
+   */
+  static int inputOrdinal(VarkaVectorIR node) {
+    return switch (node) {
+      case ColumnRef c -> c.ordinal();
+      case BoolColumn b -> b.ordinal();
+      default -> -1;
+    };
+  }
+
+  /**
    * The lane an emission with this root drives its loop at: the long lane wherever the root's
    * tree holds a node on it, and the int lane otherwise. A tree of one lane drives at that lane.
    * A tree that holds both - a {@link NarrowLane} root over a long computation, a

@@ -1091,6 +1091,33 @@ final class Analysis {
     return new WordExpr.Or(a, b);
   }
 
+  /**
+   * Records a leaf that reads input {@code ordinal}: the ordinal must be one of the kernel's
+   * inputs, and every leaf of a column agrees on the {@code leafLane} that sizes its data segment.
+   * The leaf covers its own column and nothing else, and has height 0 and no skip. A boolean
+   * column passes null: its data is a bitmap of the same size at either lane, so two leaves of one
+   * column may sit at different lanes ({@code IF(b, l, l2)} beside {@code IF(b, d, d2)}).
+   */
+  private void registerInput(
+      VarkaVectorIR node, int ordinal, VarkaVectorIR.LaneType leafLane) {
+    if (ordinal < 0 || ordinal >= numInputs) {
+      throw VarkaErrors.illegalArgument(
+          "column ordinal " + ordinal + " outside [0, " + numInputs + ")");
+    }
+    if (leafLane != null) {
+      VarkaVectorIR.LaneType had = inputLanes.putIfAbsent(ordinal, leafLane);
+      if (had != null && had != leafLane) {
+        throw VarkaErrors.illegalArgument("column " + ordinal + " is read at both the "
+            + had + " and the " + leafLane + " lane");
+      }
+    }
+    long set = 1L << ordinal;
+    columns.put(node, set);
+    height.put(node, 0);
+    skipping.put(node, false);
+    referencedColumns |= set;
+  }
+
   private void analyze(VarkaVectorIR node) {
     // The lane rule, enforced per node. `laneOf` reads the output roots only, so this is the
     // sole defence against a node further down disagreeing - which would emit one lane's
@@ -1110,22 +1137,7 @@ final class Analysis {
       requireOperand(r.position(), r.operand(), r.name());
     }
     switch (node) {
-      case ColumnRef c -> {
-        if (c.ordinal() < 0 || c.ordinal() >= numInputs) {
-          throw VarkaErrors.illegalArgument(
-              "column ordinal " + c.ordinal() + " outside [0, " + numInputs + ")");
-        }
-        VarkaVectorIR.LaneType had = inputLanes.putIfAbsent(c.ordinal(), c.lane());
-        if (had != null && had != c.lane()) {
-          throw VarkaErrors.illegalArgument("column " + c.ordinal() + " is read at both the "
-              + had + " and the " + c.lane() + " lane");
-        }
-        long set = 1L << c.ordinal();
-        columns.put(node, set);
-        height.put(node, 0);
-        skipping.put(node, false);
-        referencedColumns |= set;
-      }
+      case ColumnRef c -> registerInput(node, c.ordinal(), c.lane());
       case LiteralSlot l -> {
         if (l.index() < 0 || l.index() >= numLiterals) {
           throw VarkaErrors.illegalArgument(
@@ -1263,21 +1275,8 @@ final class Analysis {
       // set; shortcutApplies excludes a condition root, so no shortcut changes.
       case NullSafeEqual n -> analyzeOp(node, true, n.left(), n.right());
       case BoolColumn c -> {
-        if (c.ordinal() < 0 || c.ordinal() >= numInputs) {
-          throw VarkaErrors.illegalArgument(
-              "column ordinal " + c.ordinal() + " outside [0, " + numInputs + ")");
-        }
-        VarkaVectorIR.LaneType had = inputLanes.putIfAbsent(c.ordinal(), c.lane());
-        if (had != null && had != c.lane()) {
-          throw VarkaErrors.illegalArgument("column " + c.ordinal() + " is read at both the "
-              + had + " and the " + c.lane() + " lane");
-        }
-        long set = 1L << c.ordinal();
-        columns.put(node, set);
-        height.put(node, 0);
-        skipping.put(node, false);
-        referencedColumns |= set;
-        boolInputs |= set;
+        registerInput(node, c.ordinal(), null);
+        boolInputs |= 1L << c.ordinal();
       }
       case CondConst c -> {
         columns.put(node, 0L);

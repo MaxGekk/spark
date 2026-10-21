@@ -512,18 +512,16 @@ final class Slots {
     if (elide && (mode == BodyMode.LOOP || mode == BodyMode.EPILOGUE)) {
       valueColumns = 0L;
       for (Map.Entry<VarkaVectorIR, Integer> e : bodyUses.entrySet()) {
-        if (e.getKey() instanceof ColumnRef c && e.getValue() > 0) {
-          valueColumns |= 1L << c.ordinal();
-        } else if (e.getKey() instanceof BoolColumn b && e.getValue() > 0) {
-          valueColumns |= 1L << b.ordinal();
+        int ordinal = VarkaVectorIR.inputOrdinal(e.getKey());
+        if (ordinal >= 0 && e.getValue() > 0) {
+          valueColumns |= 1L << ordinal;
         }
       }
     }
     long treeColumns = 0L;
     long bodyColumns = 0L;
     for (VarkaVectorIR node : tree) {
-      int ordinal = node instanceof ColumnRef c ? c.ordinal()
-          : node instanceof BoolColumn b ? b.ordinal() : -1;
+      int ordinal = VarkaVectorIR.inputOrdinal(node);
       if (ordinal >= 0) {
         treeColumns |= 1L << ordinal;
         if (body.contains(node)) {
@@ -1208,6 +1206,8 @@ final class Slots {
       return true;
     }
     for (Map.Entry<VarkaVectorIR, Integer> e : bodyUses.entrySet()) {
+      // Only a ColumnRef: it is loaded under the epilogue's mask. A BoolColumn reads its data bits
+      // as a word by the lane count, as a validity word is read, and never touches the mask.
       if (e.getKey() instanceof ColumnRef c && e.getValue() > 0
           && analysis.laneOf(c) == analysis.lane) {
         return true;

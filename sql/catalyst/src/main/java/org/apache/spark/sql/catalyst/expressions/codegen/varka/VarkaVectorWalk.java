@@ -1126,19 +1126,34 @@ final class VarkaVectorWalk {
     cb.land();
   }
 
+  /** {@code a | b} of two long locals. */
+  private static void emitOr(CodeBuilder cb, int a, int b) {
+    cb.lload(a);
+    cb.lload(b);
+    cb.lor();
+  }
+
   /** {@code t | f}: the lanes a condition's pair knows. */
   private static void emitKnown(CodeBuilder cb, int t, int f) {
-    cb.lload(t);
-    cb.lload(f);
-    cb.lor();
+    emitOr(cb, t, f);
+  }
+
+  /** {@code ~x} of the long on the stack. */
+  private static void emitNot(CodeBuilder cb) {
+    cb.loadConstant(-1L);
+    cb.lxor();
+  }
+
+  /** {@code ~x} of a long local. */
+  private static void emitNot(CodeBuilder cb, int local) {
+    cb.lload(local);
+    emitNot(cb);
   }
 
   /** {@code (c & a) | (~c & b)} of three long locals. */
   private static void emitChoice(CodeBuilder cb, int c, int a, int b) {
     emitAnd(cb, c, a);
-    cb.lload(c);
-    cb.loadConstant(-1L);
-    cb.lxor();
+    emitNot(cb, c);
     cb.lload(b);
     cb.land();
     cb.lor();
@@ -1208,16 +1223,12 @@ final class VarkaVectorWalk {
       case LT -> emitAnd(cb, f1, t2);
       case GT -> emitAnd(cb, t1, f2);
       case LE -> {
-        cb.lload(f1);
-        cb.lload(t2);
-        cb.lor();
+        emitOr(cb, f1, t2);
         cb.lload(s.cmpTmp);
         cb.land();
       }
       case GE -> {
-        cb.lload(t1);
-        cb.lload(f2);
-        cb.lor();
+        emitOr(cb, t1, f2);
         cb.lload(s.cmpTmp);
         cb.land();
       }
@@ -1225,9 +1236,7 @@ final class VarkaVectorWalk {
     }
     cb.lstore(kt);
     cb.lload(s.cmpTmp);
-    cb.lload(kt);
-    cb.loadConstant(-1L);
-    cb.lxor();
+    emitNot(cb, kt);
     cb.land();
     cb.lstore(kf);
   }
@@ -1317,9 +1326,7 @@ final class VarkaVectorWalk {
           loadWord(cb, s, s.word[n.ordinal()]);
           cb.land();
           cb.lstore(s.kt.get(node));
-          cb.lload(s.cmpTmp);
-          cb.loadConstant(-1L);
-          cb.lxor();
+          emitNot(cb, s.cmpTmp);
           loadWord(cb, s, s.word[n.ordinal()]);
           cb.land();
           cb.lstore(s.kf.get(node));
@@ -1368,11 +1375,9 @@ final class VarkaVectorWalk {
           emitAnd(cb, f1, f2);
           cb.lor();
           emitKnown(cb, t1, f1);
-          cb.loadConstant(-1L);
-          cb.lxor();
+          emitNot(cb);
           emitKnown(cb, t2, f2);
-          cb.loadConstant(-1L);
-          cb.lxor();
+          emitNot(cb);
           cb.land();
           cb.lor();
           cb.lstore(s.kt.get(node));
@@ -1469,13 +1474,9 @@ final class VarkaVectorWalk {
         // the ~ (VARKA-334). A dense body takes the arm below: no lane is unknown there.
         emitCond(cb, c, false, analysis, s, computed);
         line(cb, analysis, node);
-        cb.lload(s.kt.get(c));
-        cb.lload(s.kf.get(c));
-        cb.lor();
+        emitKnown(cb, s.kt.get(c), s.kf.get(c));
         cb.lstore(s.kt.get(node));
-        cb.lload(s.kt.get(node));
-        cb.loadConstant(-1L);
-        cb.lxor();
+        emitNot(cb, s.kt.get(node));
         cb.lstore(s.kf.get(node));
       }
       case IsNotNull n -> {

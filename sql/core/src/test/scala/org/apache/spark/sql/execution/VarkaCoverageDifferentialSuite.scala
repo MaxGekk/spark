@@ -550,6 +550,22 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
     }
   }
 
+  test("a boolean column read at the int and the long lane in one query answers Spark's") {
+    // The leaf takes the lane of what it meets, so one query can hold it on both: the shapes
+    // below decline or fuse, and either way the rows are Spark's.
+    val fixture = "varka_coverage_mixed"
+    Seq(
+      s"SELECT rid, IF(b, l, l2) AS x, IF(b, d, d2) AS y FROM $fixture",
+      s"SELECT rid FROM $fixture WHERE IF(b, l, l2) > 0 AND IF(b, d, d2) > DATE'2020-01-01'",
+      s"SELECT rid FROM $fixture WHERE b AND l < l2 AND d < d2",
+      s"SELECT rid, CASE WHEN b THEN l ELSE l2 END AS x, CASE WHEN b THEN d ELSE d2 END AS y " +
+        s"FROM $fixture").foreach { query =>
+      val expected = spark.sql(query).collect().toSeq
+      val actual = varkaSpark.sql(query).collect().toSeq
+      QueryTest.sameRows(expected, actual).foreach(d => fail(s"$query differs from Spark's:\n$d"))
+    }
+  }
+
   test("the partition oracle fails a filter that answers unknown where it should answer false") {
     // No kernel can be broken this way on purpose, so the fault is planted in the answers: a
     // filter that swapped known-false and unknown would return Spark's `IS NULL` rows for

@@ -509,6 +509,14 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `CASE WHEN b THEN b2 ELSE d < d2 END` | `predicate` |  | a boolean choice: unknown takes ELSE | vector |
 | `CASE WHEN b THEN i > 5 END` | `predicate` |  | no ELSE: a null constant, so the body is masked-only | vector |
 
+#### Boolean columns choosing values
+
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `IF(b, d, d2)` | `condition` |  | the int lane | vector |
+| `IF(b, l, l2)` | `condition` |  | the leaf is lifted to the long lane of the values | per-lane: blend, mask broadcast |
+| `CASE WHEN b THEN l ELSE l2 END` | `condition` |  | likewise, per branch | per-lane: blend, mask broadcast |
+
 #### Width conversions
 
 | Expression | Switches | Domain | Notes | 128-bit lanes |

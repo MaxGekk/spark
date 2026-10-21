@@ -432,6 +432,13 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("CASE WHEN b THEN b2 ELSE d < d2 END", "a boolean choice: unknown takes ELSE"),
       Row("CASE WHEN b THEN i > 5 END", "no ELSE: a null constant, so the body is masked-only"))),
 
+    // A boolean column as the condition of a choice between numbers: the leaf reads no lane of
+    // its own, so it takes the lane of the values it chooses between.
+    Family("Boolean columns choosing values", predicates = false, Seq(
+      Row("IF(b, d, d2)", "the int lane"),
+      Row("IF(b, l, l2)", "the leaf is lifted to the long lane of the values"),
+      Row("CASE WHEN b THEN l ELSE l2 END", "likewise, per branch"))),
+
     // Both lanes in one kernel (VARKA-28): the casts between int and bigint, and the widening
     // Catalyst's type coercion puts under every operator that meets the two.
     Family("Width conversions", predicates = false, Seq(

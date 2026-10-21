@@ -1600,6 +1600,23 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     assert(partial.declines.asScala(0).reason === "unsupported expression")
   }
 
+  test("a boolean column chooses between long values: the leaf takes the values' lane") {
+    val flag = AttributeReference("flag", org.apache.spark.sql.types.BooleanType)()
+    val l = AttributeReference("l", LongType)()
+    val l2 = AttributeReference("l2", LongType)()
+    val output = Seq(flag, l, l2)
+    // The condition has no operand to take a lane from, and the values are on the long lane.
+    assert(ir(If(flag, l, l2), output) === "(if bool:0:long col:1:long col:2:long)")
+    assert(ir(CaseWhen(Seq((flag, l)), Some(l2)), output) ===
+      "(if bool:0:long col:1:long col:2:long)")
+    // Two branches, the second condition a comparison on the long lane already.
+    assert(fuses(CaseWhen(Seq((flag, l), (LessThan(l, l2), l2)), Some(l)), output))
+    // Long values under an int condition lift it as well; int values under a long condition do
+    // not come down.
+    assert(fuses(If(LessThan(i, Literal(5)), l, l2), Seq(i, l, l2)))
+    assert(!fuses(If(LessThan(l, l2), d, d2), Seq(l, l2, d, d2)))
+  }
+
   test("fuses null-safe equality over value operands, composes it over a predicate and a " +
       "boolean literal, takes two predicates as a node, declines the rest and a bare boolean " +
       "output") {

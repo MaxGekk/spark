@@ -218,17 +218,30 @@ class VarkaWarmupEndToEndSuite extends QueryTest with VarkaSharedSessions with V
   test("a boolean column's warm-up copies its bitmap, not a byte a row, inside the sanitizer") {
     // A bit vector's data buffer holds (rows + 7) / 8 bytes: 1,250 for a 10,000-row batch. A
     // warm-up that copied a byte a row would read 10,000 bytes out of it, which the sanitizer
-    // refuses.
+    // refuses. The second batch size is not a multiple of eight, so the bitmap repeats at a bit
+    // offset in the warm-up's snapshot.
     assume(VarkaMemorySanitizer.ENABLED, "run with -Dvarka.sanitizeMemory=true")
-    checkWarmup("SELECT i FROM varka_bools_big WHERE b AND (NOT b2 OR i > 50)", { session =>
-      val rows = (0 until numRows).map { i =>
-        (if (i % 7 == 3) null: java.lang.Boolean else Boolean.box(i % 2 == 0),
-          if (i % 5 == 4) null: java.lang.Boolean else Boolean.box(i % 3 == 0), i)
-      }
-      session.createDataFrame(rows).toDF("b", "b2", "i")
-        .createOrReplaceTempView("varka_bools_big")
-      session.catalog.cacheTable("varka_bools_big")
-    })
+    for (batchSize <- Seq(10000, 10003)) {
+      val view = s"varka_bools_big_$batchSize"
+      val checkedBefore = VarkaMemorySanitizer.checked()
+      checkWarmup(s"SELECT i FROM $view WHERE b AND (NOT b2 OR i > 50)", { session =>
+        val key = SQLConf.COLUMN_BATCH_SIZE.key
+        session.conf.set(key, batchSize.toString)
+        try {
+          val rows = (0 until numRows).map { i =>
+            (if (i % 7 == 3) null: java.lang.Boolean else Boolean.box(i % 2 == 0),
+              if (i % 5 == 4) null: java.lang.Boolean else Boolean.box(i % 3 == 0), i)
+          }
+          session.createDataFrame(rows).toDF("b", "b2", "i").createOrReplaceTempView(view)
+          session.catalog.cacheTable(view)
+          session.sql(s"SELECT count(*) FROM $view").collect()
+        } finally {
+          session.conf.unset(key)
+        }
+      })
+      assert(VarkaMemorySanitizer.checked() > checkedBefore,
+        "the warm-up and the kernel mapped nothing in a sanitizer window")
+    }
   }
 
   test("a columnar consumer's first write takes the row path and its next one the kernel") {

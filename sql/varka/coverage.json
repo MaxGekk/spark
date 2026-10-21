@@ -1855,6 +1855,39 @@
     "domain" : "",
     "note" : "no ELSE: a null constant, so the body is masked-only"
   }, {
+    "sql" : "IF(b, d, d2)",
+    "executable" : "IF(b, d, d2)",
+    "family" : "Boolean columns choosing values",
+    "form" : "projection",
+    "catalyst" : [ "If" ],
+    "casts" : [ ],
+    "operands" : [ "If:date" ],
+    "switches" : [ "spark.sql.codegen.varka.family.condition.enabled" ],
+    "domain" : "",
+    "note" : "the int lane"
+  }, {
+    "sql" : "IF(b, l, l2)",
+    "executable" : "IF(b, l, l2)",
+    "family" : "Boolean columns choosing values",
+    "form" : "projection",
+    "catalyst" : [ "If" ],
+    "casts" : [ ],
+    "operands" : [ "If:bigint" ],
+    "switches" : [ "spark.sql.codegen.varka.family.condition.enabled" ],
+    "domain" : "",
+    "note" : "the leaf is lifted to the long lane of the values"
+  }, {
+    "sql" : "CASE WHEN b THEN l ELSE l2 END",
+    "executable" : "CASE WHEN b THEN l ELSE l2 END",
+    "family" : "Boolean columns choosing values",
+    "form" : "projection",
+    "catalyst" : [ "CaseWhen" ],
+    "casts" : [ ],
+    "operands" : [ "CaseWhen:bigint" ],
+    "switches" : [ "spark.sql.codegen.varka.family.condition.enabled" ],
+    "domain" : "",
+    "note" : "likewise, per branch"
+  }, {
     "sql" : "CAST(i AS BIGINT)",
     "executable" : "CAST(i AS BIGINT)",
     "family" : "Width conversions",
