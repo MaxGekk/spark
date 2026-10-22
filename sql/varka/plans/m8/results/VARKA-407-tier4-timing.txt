@@ -80,3 +80,24 @@ Check on the laptop (catalyst/Test/runMain org.apache.spark.sql.VarkaSharedPrefi
   The full benchmark with the condition (one run, load 5 to 8): every arm settled but the call-site budget off arm
   of the first shape, whose one wide loop method (loopDense0) stays at level 0, in the interpreter, after 159 drives
   and a minute with C2 idle (255 ns/row). That arm is exempt from the level condition in the benchmark.
+
+== 22 October 2026 (row 441): phase 2 again with the tier-reading condition ==
+Same method as phase 2 (VarkaSharedPrefixBenchmark whole, a 512-bit run and a 256-bit run in turn, five rounds,
+JVM pinned `taskset -c 0,12,13,14,15,1,2,3`, java launched directly with the Test javaOptions, both agent locks held),
+now with the condition that every dense loop method of an arm holds level-4 code. Merge `cc7287b48f7`
+(master `e18c8937384` and the row 440 branch), 22 October 00:00 to 00:46 CEST, in a gap between another
+agent's non-measured test runs; before each run the script waited for a 1-minute load below 3 and no other java
+(every run started with none: java_running=0 in the ten "before" records; the 1-minute load at the start was 1.10
+to 3.10, 3.10 at one run; power profile "performance" and battery "Not charging" before and after all ten).
+First shape (64 cheap tails), ns/row of the four prefix-once ceilings (400/200/100/50) and "every group split":
+512 bit (rounds 1..5)
+  2.6 2.6 2.6 2.7 2.7 | 2.6 2.6 2.6 2.6 2.6 | 2.6 2.6 2.6 2.6 2.6 | 2.5 2.6 2.6 2.6 2.6 | 2.5 2.6 2.6 2.6 2.6
+256 bit (rounds 1..5)
+  4.0 4.0 4.0 4.0 4.0 | 3.8 3.9 3.9 3.9 3.9 | 3.8 3.9 3.9 3.9 3.9 | 4.0 4.0 4.0 4.0 4.0 | 4.0 4.0 4.0 4.0 4.0
+Second shape (60 make_date outputs), the same five cells per run, 512 bit: 15.6 to 16.0, 17.5 to 19.5, 35.1 to 38.5
+(three rungs) in every round; 256 bit: 24.1 to 24.7, 25.9 to 32.4, 50.9 to 59.9; no cell outside those bands.
+The exempt arm (call-site budget off, first shape, one wide loop method held in the interpreter): 239 to 245 ns/row at
+512 bit and 464 to 475 at 256 bit, as in the phase 1 note ("always 240 to 490"); it printed nothing, as the row expects.
+Result: no run printed "did not settle" (grep over the ten logs), no slow cell in the ten runs (fast mode 2.5 to 2.7
+at 512 bit, 3.8 to 4.0 at 256 bit, against 2.5 to 2.9 and 3.9 to 4.2 in phase 2 without the level condition).
+The row's done-when is met; the condition costs nothing visible in the timed cells.
