@@ -34,9 +34,10 @@ import java.util.List;
  * @param anchor the {@code VectorSupport} function whose inlining decision the verdict needs
  * @param rows the plan rows whose designs use the operator
  * @param minBits the smallest preferred species, in bits, the loop is meaningful at
+ * @param maxBits the largest preferred species, in bits, the loop is meaningful at
  */
 public record VarkaOperatorCensusCatalog(String name, String family, String loop, String operator,
-    String anchor, String rows, int minBits) {
+    String anchor, String rows, int minBits, int maxBits) {
 
   /** The entry whose name is {@code name}. */
   public static VarkaOperatorCensusCatalog named(String name) {
@@ -65,8 +66,13 @@ public record VarkaOperatorCensusCatalog(String name, String family, String loop
 
   private static VarkaOperatorCensusCatalog wide(String lane, String operator, String family,
       String loop, String anchor, String rows, int minBits) {
+    return between(lane, operator, family, loop, anchor, rows, minBits, Integer.MAX_VALUE);
+  }
+
+  private static VarkaOperatorCensusCatalog between(String lane, String operator, String family,
+      String loop, String anchor, String rows, int minBits, int maxBits) {
     return new VarkaOperatorCensusCatalog(lane + "." + operator, family, loop, operator, anchor,
-        rows, minBits);
+        rows, minBits, maxBits);
   }
 
   /** Every entry, in the order the table lists them. */
@@ -93,8 +99,27 @@ public record VarkaOperatorCensusCatalog(String name, String family, String loop
       of("short", "LSHL", LANEWISE, "shift.short", "broadcastInt", "329, 330"),
       of("short", "LSHR", LANEWISE, "shift.short", "broadcastInt", "329, 330"),
       of("short", "ASHR", LANEWISE, "shift.short", "broadcastInt", "329, 330"),
+      of("byte", "AND", LANEWISE, "bin.byte", "binaryOp", "329, 330, 335"),
+      of("byte", "OR", LANEWISE, "bin.byte", "binaryOp", "329, 330, 335"),
+      of("byte", "XOR", LANEWISE, "bin.byte", "binaryOp", "329, 330, 335"),
+      of("byte", "MIN", LANEWISE, "bin.byte", "binaryOp", "329, 330, 335"),
+      of("byte", "MAX", LANEWISE, "bin.byte", "binaryOp", "329, 330, 335"),
+      of("byte", "NEG", LANEWISE, "un.byte", "unaryOp", "329, 330"),
+      of("byte", "ABS", LANEWISE, "un.byte", "unaryOp", "329, 330"),
+      of("byte", "GT", LANEWISE, "cmp.byte", "compare", "329, 330"),
+      of("byte", "BLEND", LANEWISE, "blend.byte", "blend", "329, 330"),
+      of("short", "AND", LANEWISE, "bin.short", "binaryOp", "329, 330, 335"),
+      of("short", "OR", LANEWISE, "bin.short", "binaryOp", "329, 330, 335"),
+      of("short", "XOR", LANEWISE, "bin.short", "binaryOp", "329, 330, 335"),
+      of("short", "MIN", LANEWISE, "bin.short", "binaryOp", "329, 330, 335"),
+      of("short", "MAX", LANEWISE, "bin.short", "binaryOp", "329, 330, 335"),
+      of("short", "NEG", LANEWISE, "un.short", "unaryOp", "329, 330"),
+      of("short", "ABS", LANEWISE, "un.short", "unaryOp", "329, 330"),
+      of("short", "GT", LANEWISE, "cmp.short", "compare", "329, 330"),
+      of("short", "BLEND", LANEWISE, "blend.short", "blend", "329, 330"),
       of("byte", "B2I", WIDENING, "conv.B2I", "convert", "329, 330"),
       of("short", "S2I", WIDENING, "conv.S2I", "convert", "329, 330"),
+      of("byte", "B2S", WIDENING, "conv.B2S", "convert", "329, 330"),
       of("int", "I2B", WIDENING, "conv.I2B", "convert", "329, 330"),
       of("int", "I2S", WIDENING, "conv.I2S", "convert", "329, 330"),
       of("long", "L2D", CONVERSIONS, "conv.L2D", "convert", "30, 343, 344"),
@@ -109,6 +134,9 @@ public record VarkaOperatorCensusCatalog(String name, String family, String loop
       of("float", "F2I", CONVERSIONS, "conv.F2I", "convert", "343, 344"),
       of("double", "D2I", CONVERSIONS, "conv.D2I", "convert", "343, 344"),
       wide("int", "B2I_load", WIDENING, "load.b2i", "convert", "329, 330", 256),
+      between("int", "B2I_load64", WIDENING, "load.b2i64", "convert", "329, 330", 0, 256),
+      of("int", "B2I_load128", WIDENING, "load.b2i128", "convert", "329, 330"),
+      of("int", "S2I_load", WIDENING, "load.s2i", "convert", "329, 330"),
       of("float", "EQ", FLOAT_COMPARES, "cmp.float", "compare", "341"),
       of("float", "LT", FLOAT_COMPARES, "cmp.float", "compare", "341"),
       of("float", "LE", FLOAT_COMPARES, "cmp.float", "compare", "341"),
@@ -151,13 +179,19 @@ public record VarkaOperatorCensusCatalog(String name, String family, String loop
       of("int", "toLong", MASKS, "mask.toLong.int", "maskReductionCoerced", "331, 375, 27"),
       of("long", "fromLong", MASKS, "mask.fromLong.long", "fromBitsCoerced", "331, 375, 27"),
       of("long", "toLong", MASKS, "mask.toLong.long", "maskReductionCoerced", "331, 375, 27"),
-      wide("byte", "narrow_then_full", TWO_SPECIES, "two.narrow+two.full", "binaryOp", "329", 256),
-      wide("byte", "full_then_narrow", TWO_SPECIES, "two.full+two.narrow", "binaryOp", "329", 256),
-      wide("byte", "both_in_one_loop", TWO_SPECIES, "two.mixed", "binaryOp", "329", 256),
+      wide("byte", "narrow_then_full", TWO_SPECIES, "two.narrow+two.full", "binaryOp", "329", 128),
+      wide("byte", "full_then_narrow", TWO_SPECIES, "two.full+two.narrow", "binaryOp", "329", 128),
+      wide("byte", "both_in_one_loop", TWO_SPECIES, "two.mixed", "binaryOp", "329", 128),
       wide("byte", "widen_then_full", TWO_SPECIES, "load.b2i+two.full", "binaryOp", "329", 256),
       wide("byte", "full_then_widen", TWO_SPECIES, "two.full+load.b2i", "binaryOp", "329", 256),
+      between("byte", "widen64_then_full", TWO_SPECIES, "load.b2i64+two.full", "binaryOp", "329",
+          0, 256),
+      between("byte", "full_then_widen64", TWO_SPECIES, "two.full+load.b2i64", "binaryOp", "329",
+          0, 256),
+      of("short", "widen_then_full", TWO_SPECIES, "load.s2i+two.fullshort", "binaryOp", "329"),
+      of("short", "full_then_widen", TWO_SPECIES, "two.fullshort+load.s2i", "binaryOp", "329"),
       new VarkaOperatorCensusCatalog("planted.box", PLANTED, "planted.box", "",
-          "load", "", 0),
+          "load", "", 0, Integer.MAX_VALUE),
       new VarkaOperatorCensusCatalog("planted.fallback", PLANTED, "bin.long", "ADD",
-          "binaryOp", "", 0));
+          "binaryOp", "", 0, Integer.MAX_VALUE));
 }

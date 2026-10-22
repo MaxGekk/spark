@@ -1,0 +1,286 @@
+VARKA-329 step 1: the hand-loop spike (TINYINT and SMALLINT compared as a selection, WIDENED against NATIVE).
+Run 21 to 22 October 2026 (23:42 to 01:50 CEST) on the laptop: AMD Ryzen AI 9 HX PRO 370 (Zen 5, AVX-512 on 256-bit
+units), OpenJDK 25.0.4.1+1-1-26.04.4-Ubuntu, Linux 7.0.0-38-generic, power profile `performance` and battery "Not
+charging" before and after every run. Caches: L1d 48 KB and L2 1 MB a core, L3 24 MB in two complexes (16 MB for cpus 0-3 and 12-15, which the pin uses, and 8 MB
+for the other eight cores, which it does not).
+Code: master e18c8937384 plus the working tree of this commit (the benchmark class, the census change, which no loop
+here uses, and for the 4 `-chk` runs the check of the compiled code described below); no emitter or IR code is touched. Class: sql/catalyst/src/test/java/org/apache/spark/sql/VarkaNarrowLaneBenchmark.java.
+
+== command and pins ==
+One JVM per run, launched directly with the Test javaOptions of `show catalyst/Test/javaOptions` (minus the second -Xmx4g)
+and the Test fullClasspath, both read by sbt from the compiled tree:
+  flock heavy.lock flock heavy2.lock taskset -c 0,12,13,14,15,1,2,3 java -Xmx4g <Test javaOptions> -XX:MaxVectorSize=<64|32|16> \
+    -XX:CompileCommand=quiet "-XX:CompileCommand=dontinline,org.apache.spark.sql.VarkaNarrowLaneBenchmark::loop*" \
+    -Dvarka.narrow.arms=<widened,int,scalar | native,int,scalar | widened,native,int,scalar> \
+    -cp <Test classpath> org.apache.spark.sql.VarkaNarrowLaneBenchmark
+(-XX:MaxVectorSize 64, 32, 16 give the 512-, 256- and 128-bit species; the widths are the species', not the datapath's.)
+Before each run: 1-minute load under 3 and no other java (the script waits up to 5 minutes; every run started inside that),
+both agent locks held for the whole JVM. Start and end times, loads and power state of each run are in "runs" below.
+Each loop is a method of its own (dontinline), writes 64 rows to a long (one bit a row) with no tail, and is checked
+against the scalar loop's words before it is timed. Row counts are multiples of 64, so this is the loop, not the epilogue,
+and no validity bits or nulls are read.
+Harness (VARKA-407's rule): each arm is driven at its own turn, just before it is timed, for at least 8 drives and then
+until two consecutive drives are within 30 percent, with C2 idle after each drive and the loop method at level 4 in
+Compiler.codelist. The 8 runs named `-fin` and `-chk` print one line per arm and rung: 568 lines, every one "level 4",
+none "did not settle"; the 17 earlier runs ran the same rule before the print was added (and before the rung titles were
+renamed), and none printed "did not settle". The check is weak in two ways: the code list does not mark an on-stack
+replacement version, and a loop method is shared by every rung, so from the second rung on it is true on arrival; the steady
+drive times are what show a rung settled. Every arm's words are checked against the scalar loop's before timing (in the
+interpreter); the 4 `-chk` runs also check them after the arm is driven to compiled code, and none disagreed.
+Timed: Spark's Benchmark, at least 3 iterations after a 1 s warm-up, 1 s minimum; an iteration is 2^27 rows (repeats of the
+same column pair): Best Time is 1 ms for the fastest cell (NATIVE TINYINT at 512 bits, 16384 rows) and 3 to 130 ms for the
+others, and the Rate column is the figure used. The last rung is not "past L3" for bytes here: a byte pair at 8388608 rows
+is 16 MB, plus 1 MB of output words, against the 16 MB L3 of the pinned complex, so it is at that cache's edge; the short
+pair (32 MB) and int pair (64 MB) are past it.
+Arms: WIDENED = byte (short) load through the species a quarter (half) as wide as the int species (64 bits least), B2I (S2I)
+to the int species in parts, int compare, toLong; at 128 bits the byte species is 64 bits (8 lanes, 2 parts). NATIVE =
+preferred byte (short) species load, byte (short) compare, one toLong per group of lanes (1, 2, 4 groups a word at 512, 256,
+128 bits for bytes). INT = the same predicate on INT columns. scalar = a Java loop packing the same word.
+
+== runs (25; `w<bits>-<wid|nat|all>-<round>`; wid = WIDENED+INT+scalar, nat = NATIVE+INT+scalar, all = every arm in one JVM) ==
+w128-all-chk   arms=widened,native,int,scalar  start 2026-10-22T01:39:12 load1  1.06  end 01:42:00 load1  1.00  exit 0  performance / Not charging
+w128-all-fin   arms=widened,native,int,scalar  start 2026-10-22T01:14:37 load1  1.58  end 01:17:25 load1  1.14  exit 0  performance / Not charging
+w128-all-r1    arms=widened,native,int,scalar  start 2026-10-22T00:46:23 load1  2.77  end 00:49:12 load1  1.14  exit 0  performance / Not charging
+w128-all-r2    arms=widened,native,int,scalar  start 2026-10-22T01:08:03 load1  1.24  end 01:10:52 load1  1.10  exit 0  performance / Not charging
+w128-nat-r1    arms=native,int,scalar          start 2026-10-22T00:23:50 load1  1.89  end 00:25:42 load1  1.14  exit 0  performance / Not charging
+w128-nat-r2    arms=native,int,scalar          start 2026-10-22T01:03:20 load1  1.25  end 01:05:12 load1  1.00  exit 0  performance / Not charging
+w128-wid-chk   arms=widened,int,scalar         start 2026-10-22T01:42:01 load1  1.00  end 01:44:17 load1  1.00  exit 0  performance / Not charging
+w128-wid-fin   arms=widened,int,scalar         start 2026-10-22T01:11:58 load1  2.82  end 01:14:15 load1  1.17  exit 0  performance / Not charging
+w128-wid-r1    arms=widened,int,scalar         start 2026-10-22T00:16:04 load1  2.28  end 00:18:20 load1  1.14  exit 0  performance / Not charging
+w128-wid-r2    arms=widened,int,scalar         start 2026-10-22T01:00:47 load1  1.10  end 01:03:03 load1  1.19  exit 0  performance / Not charging
+w128-wid-r3    arms=widened,int,scalar         start 2026-10-22T01:05:29 load1  0.94  end 01:07:45 load1  1.00  exit 0  performance / Not charging
+w256-all-chk   arms=widened,native,int,scalar  start 2026-10-22T01:36:24 load1  1.01  end 01:39:12 load1  1.06  exit 0  performance / Not charging
+w256-all-fin   arms=widened,native,int,scalar  start 2026-10-22T01:21:19 load1  1.82  end 01:24:07 load1  1.04  exit 0  performance / Not charging
+w256-all-r1    arms=widened,native,int,scalar  start 2026-10-22T00:39:36 load1  2.34  end 00:42:24 load1  1.15  exit 0  performance / Not charging
+w256-nat-r1    arms=native,int,scalar          start 2026-10-22T00:10:38 load1  2.43  end 00:12:29 load1  1.21  exit 0  performance / Not charging
+w256-nat-r2    arms=native,int,scalar          start 2026-10-22T00:58:38 load1  1.64  end 01:00:29 load1  1.10  exit 0  performance / Not charging
+w256-wid-r1    arms=widened,int,scalar         start 2026-10-22T00:00:11 load1  2.26  end 00:02:26 load1  1.35  exit 0  performance / Not charging
+w256-wid-r2    arms=widened,int,scalar         start 2026-10-22T00:56:01 load1  1.07  end 00:58:17 load1  1.07  exit 0  performance / Not charging
+w512-all-chk   arms=widened,native,int,scalar  start 2026-10-22T01:33:44 load1  1.31  end 01:36:24 load1  1.01  exit 0  performance / Not charging
+w512-all-fin   arms=widened,native,int,scalar  start 2026-10-22T01:18:03 load1  2.04  end 01:20:42 load1  1.31  exit 0  performance / Not charging
+w512-all-r1    arms=widened,native,int,scalar  start 2026-10-22T00:33:42 load1  2.74  end 00:36:22 load1  1.10  exit 0  performance / Not charging
+w512-nat-r1    arms=native,int,scalar          start 2026-10-21T23:48:14 load1  2.36  end 23:50:05 load1  1.30  exit 0  performance / Not charging
+w512-nat-r2    arms=native,int,scalar          start 2026-10-22T00:54:10 load1  1.20  end 00:56:01 load1  1.07  exit 0  performance / Not charging
+w512-wid-r1    arms=widened,int,scalar         start 2026-10-21T23:42:07 load1  2.38  end 23:44:14 load1  1.16  exit 0  performance / Not charging
+w512-wid-r2    arms=widened,int,scalar         start 2026-10-22T00:52:02 load1  2.84  end 00:54:10 load1  1.20  exit 0  performance / Not charging
+
+== results: G rows/s, from the separate-JVM runs ==
+Selection words, `b1 < b2` first; `greatest(b1,b2) < i` is int-driven (the byte maximum is taken in the part-width byte
+species before the widening under NATIVE, on ints after it under WIDENED). INT and scalar are the first column pair's.
+Cells are medians of the runs; N/W med is NATIVE over WIDENED by medians and N/W best by the highest rate of each arm (the
+plan's minimum rule). Rates are rows per second, so 27.0 is 0.037 ns a row. At 128 bits the WIDENED loops have run-to-run
+modes (below), so the two ratios differ there.
+
+--- 512 bits (2 widened-arm and 2 native-arm separate-JVM runs; G rows/s; medians of the runs, and the ratio of the best rates in the last column)
+shape                              rows  WIDENED   NATIVE  N/W med N/W best    INT  scalar
+TINYINT b1 < b2                   16384     26.9    150.6     5.60     5.58   26.8     1.6
+TINYINT b1 < b2                  262144     26.6    137.0     5.14     5.21   16.3     1.6
+TINYINT b1 < b2                 1000000     25.9     64.3     2.48     2.47   15.2     1.6
+TINYINT b1 < b2                 8388608     22.3     47.0     2.11     2.09    6.3     1.6
+SMALLINT s1 < s2                  16384     26.2     51.7     1.97     1.96   26.8     1.4
+SMALLINT s1 < s2                 262144     25.7     40.3     1.57     1.61   16.3     1.4
+SMALLINT s1 < s2                1000000     23.4     29.4     1.26     1.25   15.2     1.4
+SMALLINT s1 < s2                8388608     13.7     14.8     1.08     1.08    6.3     1.4
+TINYINT greatest(b1,b2) < i       16384     25.4     25.7     1.01     1.00   26.8     1.1
+TINYINT greatest(b1,b2) < i      262144     20.3     20.5     1.01     1.01   16.3     1.1
+TINYINT greatest(b1,b2) < i     1000000     17.7     18.5     1.04     1.06   15.2     1.1
+TINYINT greatest(b1,b2) < i     8388608      7.6      7.6     0.99     1.00    6.3     1.0
+SMALLINT greatest(s1,s2) < i      16384     23.5     22.3     0.95     0.93   26.8     1.0
+SMALLINT greatest(s1,s2) < i     262144     15.3     15.4     1.01     1.01   16.3     1.0
+SMALLINT greatest(s1,s2) < i    1000000     14.8     13.6     0.92     0.92   15.2     1.0
+SMALLINT greatest(s1,s2) < i    8388608      6.1      6.1     0.99     0.99    6.3     1.0
+TINYINT b < i, G rows/s by rung: 16384: 29.1, 262144: 24.5, 1000000: 22.4, 8388608: 9.9
+SMALLINT b < i, G rows/s by rung: 16384: 29.3, 262144: 21.5, 1000000: 18.6, 8388608: 8.8
+
+--- 256 bits (2 widened-arm and 2 native-arm separate-JVM runs; G rows/s; medians of the runs, and the ratio of the best rates in the last column)
+shape                              rows  WIDENED   NATIVE  N/W med N/W best    INT  scalar
+TINYINT b1 < b2                   16384     16.5     76.9     4.66     4.85   14.3     1.6
+TINYINT b1 < b2                  262144     16.4     79.7     4.87     4.87   13.0     1.6
+TINYINT b1 < b2                 1000000     16.0     58.4     3.65     3.67   12.3     1.6
+TINYINT b1 < b2                 8388608     14.8     38.4     2.60     2.59    5.9     1.6
+SMALLINT s1 < s2                  16384     14.3     33.6     2.34     2.34   14.3     1.4
+SMALLINT s1 < s2                 262144     14.4     32.3     2.24     2.26   13.0     1.4
+SMALLINT s1 < s2                1000000     13.6     28.4     2.09     2.10   12.3     1.4
+SMALLINT s1 < s2                8388608     11.5     13.9     1.21     1.20    5.9     1.4
+TINYINT greatest(b1,b2) < i       16384      8.4      8.0     0.96     0.96   14.3     1.1
+TINYINT greatest(b1,b2) < i      262144      8.3      8.0     0.96     0.96   13.0     1.1
+TINYINT greatest(b1,b2) < i     1000000      8.2      7.8     0.95     0.95   12.3     1.1
+TINYINT greatest(b1,b2) < i     8388608      6.1      6.0     0.98     0.99    5.9     1.1
+SMALLINT greatest(s1,s2) < i      16384      9.1      9.4     1.03     1.03   14.3     1.0
+SMALLINT greatest(s1,s2) < i     262144      8.7      9.0     1.04     1.03   13.0     1.0
+SMALLINT greatest(s1,s2) < i    1000000      8.3      8.5     1.02     1.03   12.3     1.0
+SMALLINT greatest(s1,s2) < i    8388608      5.6      5.6     0.99     1.00    5.9     1.0
+WIDENED 128-bit loads / WIDENED (byte b1 < b2), medians: 16384: 1.10, 262144: 1.12, 1000000: 1.13, 8388608: 1.12
+TINYINT b < i, G rows/s by rung: 16384: 14.6, 262144: 13.9, 1000000: 13.6, 8388608: 8.5
+SMALLINT b < i, G rows/s by rung: 16384: 13.6, 262144: 12.9, 1000000: 12.6, 8388608: 8.2
+
+--- 128 bits (5 widened-arm and 2 native-arm separate-JVM runs; G rows/s; medians of the runs, and the ratio of the best rates in the last column)
+shape                              rows  WIDENED   NATIVE  N/W med N/W best    INT  scalar
+TINYINT b1 < b2                   16384      7.3     43.4     5.92     5.92    7.2     1.6
+TINYINT b1 < b2                  262144      7.3     43.0     5.91     5.89    7.1     1.6
+TINYINT b1 < b2                 1000000      7.1     38.3     5.41     5.42    7.0     1.6
+TINYINT b1 < b2                 8388608      7.2     30.6     4.27     4.50    5.7     1.6
+SMALLINT s1 < s2                  16384      5.8     14.6     2.51     2.04    7.2     1.4
+SMALLINT s1 < s2                 262144      5.8     14.5     2.51     2.02    7.1     1.4
+SMALLINT s1 < s2                1000000      5.7     14.2     2.48     2.00    7.0     1.4
+SMALLINT s1 < s2                8388608      5.7     11.7     2.06     1.69    5.7     1.4
+TINYINT greatest(b1,b2) < i       16384      5.4      7.0     1.29     1.15    7.2     1.1
+TINYINT greatest(b1,b2) < i      262144      5.3      6.9     1.30     1.14    7.1     1.1
+TINYINT greatest(b1,b2) < i     1000000      5.2      6.8     1.29     1.14    7.0     1.1
+TINYINT greatest(b1,b2) < i     8388608      4.7      5.5     1.18     1.08    5.7     1.0
+SMALLINT greatest(s1,s2) < i      16384      4.8      5.1     1.07     1.01    7.2     1.1
+SMALLINT greatest(s1,s2) < i     262144      4.7      5.0     1.07     1.00    7.1     1.0
+SMALLINT greatest(s1,s2) < i    1000000      4.6      4.9     1.06     1.00    7.0     1.0
+SMALLINT greatest(s1,s2) < i    8388608      4.2      4.3     1.04     1.00    5.7     1.0
+WIDENED 128-bit loads / WIDENED (byte b1 < b2), medians: 16384: 0.99, 262144: 0.99, 1000000: 0.97, 8388608: 0.99
+TINYINT b < i, G rows/s by rung: 16384: 7.6, 262144: 7.6, 1000000: 7.5, 8388608: 6.5
+SMALLINT b < i, G rows/s by rung: 16384: 5.6, 262144: 5.6, 1000000: 5.5, 8388608: 5.1
+
+`b < i` has one arm: NATIVE and WIDENED are the same operations (widen at the load or the compare, nothing computed in the
+byte lane before), so only WIDENED is timed and it stands for both.
+
+== raw rates of the headline cells over all 25 runs (separate and all-arms JVMs), G rows/s ==
+ 512 bits  TINYINT b1 < b2, WIDENED                  16384 rows  n= 5  min  26.71  median  26.77  max  27.03 G rows/s
+ 512 bits  TINYINT b1 < b2, WIDENED                 262144 rows  n= 5  min  26.49  median  26.67  max  26.69 G rows/s
+ 512 bits  TINYINT b1 < b2, WIDENED                1000000 rows  n= 5  min  25.69  median  26.16  max  26.31 G rows/s
+ 512 bits  TINYINT b1 < b2, WIDENED                8388608 rows  n= 5  min  21.92  median  22.62  max  22.95 G rows/s
+ 512 bits  TINYINT b1 < b2, NATIVE                   16384 rows  n= 5  min 147.87  median 150.39  max 150.68 G rows/s
+ 512 bits  TINYINT b1 < b2, NATIVE                  262144 rows  n= 5  min 135.13  median 138.55  max 139.00 G rows/s
+ 512 bits  TINYINT b1 < b2, NATIVE                 1000000 rows  n= 5  min  63.42  median  64.03  max  66.68 G rows/s
+ 512 bits  TINYINT b1 < b2, NATIVE                 8388608 rows  n= 5  min  46.47  median  46.84  max  47.18 G rows/s
+ 512 bits  SMALLINT s1 < s2, WIDENED                 16384 rows  n= 5  min  25.88  median  26.08  max  26.59 G rows/s
+ 512 bits  SMALLINT s1 < s2, WIDENED                262144 rows  n= 5  min  25.27  median  25.40  max  25.98 G rows/s
+ 512 bits  SMALLINT s1 < s2, WIDENED               1000000 rows  n= 5  min  23.25  median  23.36  max  24.61 G rows/s
+ 512 bits  SMALLINT s1 < s2, WIDENED               8388608 rows  n= 5  min  13.63  median  13.67  max  13.74 G rows/s
+ 512 bits  SMALLINT s1 < s2, NATIVE                  16384 rows  n= 5  min  50.14  median  50.45  max  52.15 G rows/s
+ 512 bits  SMALLINT s1 < s2, NATIVE                 262144 rows  n= 5  min  36.59  median  38.88  max  41.77 G rows/s
+ 512 bits  SMALLINT s1 < s2, NATIVE                1000000 rows  n= 5  min  28.83  median  29.32  max  30.68 G rows/s
+ 512 bits  SMALLINT s1 < s2, NATIVE                8388608 rows  n= 5  min  14.76  median  14.91  max  15.09 G rows/s
+ 512 bits  TINYINT greatest(b1, b2) < i, WIDENED     16384 rows  n= 5  min  25.01  median  25.17  max  25.70 G rows/s
+ 512 bits  TINYINT greatest(b1, b2) < i, WIDENED    262144 rows  n= 5  min  19.96  median  20.37  max  21.10 G rows/s
+ 512 bits  TINYINT greatest(b1, b2) < i, WIDENED   1000000 rows  n= 5  min  17.59  median  17.74  max  18.21 G rows/s
+ 512 bits  TINYINT greatest(b1, b2) < i, WIDENED   8388608 rows  n= 5  min   7.54  median   7.61  max   7.70 G rows/s
+ 512 bits  TINYINT greatest(b1, b2) < i, NATIVE      16384 rows  n= 5  min  25.70  median  25.76  max  26.34 G rows/s
+ 512 bits  TINYINT greatest(b1, b2) < i, NATIVE     262144 rows  n= 5  min  20.43  median  20.46  max  21.10 G rows/s
+ 512 bits  TINYINT greatest(b1, b2) < i, NATIVE    1000000 rows  n= 5  min  17.89  median  18.09  max  18.87 G rows/s
+ 512 bits  TINYINT greatest(b1, b2) < i, NATIVE    8388608 rows  n= 5  min   7.46  median   7.52  max   7.62 G rows/s
+ 512 bits  INT i1 < i2                               16384 rows  n= 7  min  26.39  median  26.89  max  27.14 G rows/s
+ 512 bits  INT i1 < i2                              262144 rows  n= 7  min  16.11  median  16.27  max  16.90 G rows/s
+ 512 bits  INT i1 < i2                             1000000 rows  n= 7  min  14.12  median  15.48  max  15.87 G rows/s
+ 512 bits  INT i1 < i2                             8388608 rows  n= 7  min   5.96  median   6.28  max   6.50 G rows/s
+ 256 bits  TINYINT b1 < b2, WIDENED                  16384 rows  n= 5  min  16.39  median  16.43  max  16.54 G rows/s
+ 256 bits  TINYINT b1 < b2, WIDENED                 262144 rows  n= 5  min  16.33  median  16.37  max  16.38 G rows/s
+ 256 bits  TINYINT b1 < b2, WIDENED                1000000 rows  n= 5  min  15.85  median  15.98  max  16.00 G rows/s
+ 256 bits  TINYINT b1 < b2, WIDENED                8388608 rows  n= 5  min  14.63  median  14.95  max  15.44 G rows/s
+ 256 bits  TINYINT b1 < b2, NATIVE                   16384 rows  n= 5  min  73.56  median  79.11  max  80.20 G rows/s
+ 256 bits  TINYINT b1 < b2, NATIVE                  262144 rows  n= 5  min  79.57  median  79.79  max  80.05 G rows/s
+ 256 bits  TINYINT b1 < b2, NATIVE                 1000000 rows  n= 5  min  57.99  median  58.72  max  59.39 G rows/s
+ 256 bits  TINYINT b1 < b2, NATIVE                 8388608 rows  n= 5  min  37.04  median  38.15  max  38.79 G rows/s
+ 256 bits  SMALLINT s1 < s2, WIDENED                 16384 rows  n= 5  min  13.88  median  14.25  max  14.39 G rows/s
+ 256 bits  SMALLINT s1 < s2, WIDENED                262144 rows  n= 5  min  14.06  median  14.39  max  14.42 G rows/s
+ 256 bits  SMALLINT s1 < s2, WIDENED               1000000 rows  n= 5  min  13.28  median  13.60  max  13.65 G rows/s
+ 256 bits  SMALLINT s1 < s2, WIDENED               8388608 rows  n= 5  min  11.35  median  11.50  max  11.57 G rows/s
+ 256 bits  SMALLINT s1 < s2, NATIVE                  16384 rows  n= 5  min  32.96  median  33.64  max  33.84 G rows/s
+ 256 bits  SMALLINT s1 < s2, NATIVE                 262144 rows  n= 5  min  30.56  median  31.93  max  32.62 G rows/s
+ 256 bits  SMALLINT s1 < s2, NATIVE                1000000 rows  n= 5  min  28.19  median  28.30  max  28.65 G rows/s
+ 256 bits  SMALLINT s1 < s2, NATIVE                8388608 rows  n= 5  min  13.91  median  13.93  max  14.08 G rows/s
+ 256 bits  TINYINT greatest(b1, b2) < i, WIDENED     16384 rows  n= 5  min   8.36  median   8.38  max   8.41 G rows/s
+ 256 bits  TINYINT greatest(b1, b2) < i, WIDENED    262144 rows  n= 5  min   8.28  median   8.32  max   8.35 G rows/s
+ 256 bits  TINYINT greatest(b1, b2) < i, WIDENED   1000000 rows  n= 5  min   8.13  median   8.16  max   8.23 G rows/s
+ 256 bits  TINYINT greatest(b1, b2) < i, WIDENED   8388608 rows  n= 5  min   6.12  median   6.14  max   6.17 G rows/s
+ 256 bits  TINYINT greatest(b1, b2) < i, NATIVE      16384 rows  n= 5  min   7.99  median   8.00  max   8.04 G rows/s
+ 256 bits  TINYINT greatest(b1, b2) < i, NATIVE     262144 rows  n= 5  min   7.94  median   7.95  max   7.99 G rows/s
+ 256 bits  TINYINT greatest(b1, b2) < i, NATIVE    1000000 rows  n= 5  min   7.73  median   7.80  max   7.82 G rows/s
+ 256 bits  TINYINT greatest(b1, b2) < i, NATIVE    8388608 rows  n= 5  min   5.99  median   6.05  max   6.09 G rows/s
+ 256 bits  INT i1 < i2                               16384 rows  n= 7  min  14.23  median  14.28  max  14.33 G rows/s
+ 256 bits  INT i1 < i2                              262144 rows  n= 7  min  12.89  median  12.93  max  13.06 G rows/s
+ 256 bits  INT i1 < i2                             1000000 rows  n= 7  min  12.25  median  12.38  max  12.69 G rows/s
+ 256 bits  INT i1 < i2                             8388608 rows  n= 7  min   5.86  median   6.10  max   6.15 G rows/s
+ 128 bits  TINYINT b1 < b2, WIDENED                  16384 rows  n= 9  min   7.17  median   7.33  max   7.37 G rows/s
+ 128 bits  TINYINT b1 < b2, WIDENED                 262144 rows  n= 9  min   7.11  median   7.28  max   7.33 G rows/s
+ 128 bits  TINYINT b1 < b2, WIDENED                1000000 rows  n= 9  min   6.95  median   7.06  max   7.12 G rows/s
+ 128 bits  TINYINT b1 < b2, WIDENED                8388608 rows  n= 9  min   6.87  median   7.07  max   7.19 G rows/s
+ 128 bits  TINYINT b1 < b2, NATIVE                   16384 rows  n= 6  min  42.35  median  42.89  max  43.66 G rows/s
+ 128 bits  TINYINT b1 < b2, NATIVE                  262144 rows  n= 6  min  42.86  median  43.15  max  43.30 G rows/s
+ 128 bits  TINYINT b1 < b2, NATIVE                 1000000 rows  n= 6  min  38.11  median  38.69  max  38.89 G rows/s
+ 128 bits  TINYINT b1 < b2, NATIVE                 8388608 rows  n= 6  min  28.00  median  29.68  max  32.35 G rows/s
+ 128 bits  SMALLINT s1 < s2, WIDENED                 16384 rows  n= 9  min   5.78  median   5.80  max   7.21 G rows/s
+ 128 bits  SMALLINT s1 < s2, WIDENED                262144 rows  n= 9  min   5.72  median   5.77  max   7.21 G rows/s
+ 128 bits  SMALLINT s1 < s2, WIDENED               1000000 rows  n= 9  min   5.71  median   5.73  max   7.11 G rows/s
+ 128 bits  SMALLINT s1 < s2, WIDENED               8388608 rows  n= 9  min   5.35  median   5.64  max   6.90 G rows/s
+ 128 bits  SMALLINT s1 < s2, NATIVE                  16384 rows  n= 6  min  14.51  median  14.54  max  14.68 G rows/s
+ 128 bits  SMALLINT s1 < s2, NATIVE                 262144 rows  n= 6  min  14.27  median  14.56  max  14.82 G rows/s
+ 128 bits  SMALLINT s1 < s2, NATIVE                1000000 rows  n= 6  min  13.93  median  13.99  max  14.25 G rows/s
+ 128 bits  SMALLINT s1 < s2, NATIVE                8388608 rows  n= 6  min  11.63  median  11.72  max  11.83 G rows/s
+ 128 bits  TINYINT greatest(b1, b2) < i, WIDENED     16384 rows  n= 9  min   5.35  median   6.07  max   6.12 G rows/s
+ 128 bits  TINYINT greatest(b1, b2) < i, WIDENED    262144 rows  n= 9  min   5.30  median   6.03  max   6.07 G rows/s
+ 128 bits  TINYINT greatest(b1, b2) < i, WIDENED   1000000 rows  n= 9  min   5.19  median   5.90  max   5.98 G rows/s
+ 128 bits  TINYINT greatest(b1, b2) < i, WIDENED   8388608 rows  n= 9  min   4.68  median   5.10  max   5.15 G rows/s
+ 128 bits  TINYINT greatest(b1, b2) < i, NATIVE      16384 rows  n= 6  min   6.93  median   6.97  max   6.99 G rows/s
+ 128 bits  TINYINT greatest(b1, b2) < i, NATIVE     262144 rows  n= 6  min   6.81  median   6.86  max   6.90 G rows/s
+ 128 bits  TINYINT greatest(b1, b2) < i, NATIVE    1000000 rows  n= 6  min   6.64  median   6.70  max   6.77 G rows/s
+ 128 bits  TINYINT greatest(b1, b2) < i, NATIVE    8388608 rows  n= 6  min   5.47  median   5.51  max   5.54 G rows/s
+ 128 bits  INT i1 < i2                               16384 rows  n=11  min   7.16  median   7.20  max   7.23 G rows/s
+ 128 bits  INT i1 < i2                              262144 rows  n=11  min   7.01  median   7.08  max   7.10 G rows/s
+ 128 bits  INT i1 < i2                             1000000 rows  n=11  min   6.92  median   6.95  max   6.99 G rows/s
+ 128 bits  INT i1 < i2                             8388608 rows  n=11  min   5.14  median   5.74  max   5.80 G rows/s
+
+== one JVM or several, and the run-to-run modes ==
+The all-arms runs (one JVM with WIDENED, NATIVE and INT loops: the two-species case of the plan) agree with the separate runs
+to within 10 percent in every cell at 512 and 256 bits except one (`b < i` at 16384 rows and 512 bits, 11 percent). Nothing
+boxed and nothing slowed 6x to 13x: no second-species penalty was seen in any run.
+At 128 bits the WIDENED loops are bimodal from JVM to JVM, in two cells that move opposite ways. SMALLINT `s1 < s2` WIDENED
+reads 5.8 G rows/s in 6 of 9 JVMs (w128-wid-r1, r2, r3 and w128-all-r2, fin, chk) and 7.2 G, equal to the INT arm, in 3
+(w128-wid-fin, w128-wid-chk, w128-all-r1). TINYINT `greatest(b1,b2) < i` WIDENED reads 6.1 G in
+5 JVMs (the all-arms runs and w128-wid-r1) and 5.4 G in 4 (w128-wid-r2, r3, fin, chk). All four rungs of a cell move together,
+so it is a property of the JVM's compile, not of a rung; the cause was not looked for (no PrintAssembly). NATIVE and INT do not
+show it. The medians in the tables sit on the more common mode, the best-rate ratios on the faster one, and both are given.
+WIDENED with 128-bit byte loads (4 parts at 128 bits, 2 at 256) against the 64-bit form, medians over the separate runs: 1.10 to
+1.13 at 256 bits and 0.97 to 0.99 at 128 bits (1.02 to 1.05 in the all-arms JVMs): a gain at 256 bits, none the runs separate
+from noise at 128.
+
+== census (sql/varka/operator_census.json, one run at 00:29, on the same tree) ==
+Every new cell reads I (intrinsic, 0.0 bytes a row) at 512, 256 and 128 bits: byte and short AND, OR, XOR, MIN, MAX, NEG, ABS,
+GT, BLEND; byte B2S; int B2I_load128 (at 512 it is the existing B2I_load's shape); int S2I_load; int B2I_load64 at 256 and 128
+(skipped at 512: a 64-bit byte species is not a whole group of a 16-lane int species); the two-species cells short
+widen_then_full and full_then_widen at all three widths, byte widen64_then_full and full_then_widen64 at 256 and 128, and the
+three byte two-species cells with no conversion, which were skipped at 128 and now read I there. That is 26 new cells (3 of
+them skipped at 512) and 3 cells that changed from skipped to measured at 128 bits. Nothing reads F or I+A. The runner (EPYC
+7763, Neoverse N2) columns of these cells are owed to the next varka-width-audit.yml dispatch.
+
+== predictions of VARKA-329.md 3.3, scored ==
+1 byte compare in cache (16384 rows) at 512 and 256 bits, NATIVE/WIDENED in 1.5..4.0: 5.58 and 4.85 by best rates (5.60 and
+  4.66 by medians). ABOVE the ceiling (a finding): the lane ratio of 4 is not the ceiling because WIDENED costs what an INT
+  compare costs per row (26.9 against 26.8 at 512; 16.5 against 14.3 at 256) and NATIVE is a further 5.6x past the INT arm. The
+  lower bound holds. The mechanism was not read off assembly.
+2 8388608 rows, ratio in 0.85..1.3: SMALLINT 1.08 (512) and 1.20 (256) hold; TINYINT 2.09 (512) and 2.59 (256) do not. The byte
+  pair (16 MB plus 1 MB of output) is at the edge of the pinned complex's 16 MB L3, not past it, so the premise "8388608 and up
+  is past the last-level cache" is false for bytes here; why the ratio is 2.1 to 2.6 and not about 1 is not established. At 128
+  bits neither type is memory-bound at this rung (INT arm 5.7 G against WIDENED 7.2 G) and the ratios are 4.50 and 1.69 (best)
+  or 4.27 and 2.06 (median).
+3 mixed int-driven (`greatest(b1,b2) < i`), ratio in 0.85..1.3 at every rung and width: HOLDS on the plan's rule (best rates):
+  0.92 to 1.06 at 512, 0.95 to 1.03 at 256, 1.00 to 1.15 at 128 bits. By medians the 128-bit TINYINT cells are 1.29, 1.30, 1.29
+  and 1.18 (the WIDENED arm's slower mode), at the edge of the band; SMALLINT is 1.04 to 1.07. `b < i` is one arm by construction.
+4 SMALLINT in cache, 1.2..2.0, and 0.85..1.3 past it: 512: 1.96, 1.57 to 1.61, 1.25 hold, 1.08 past it holds; 256: 2.34, 2.24
+  to 2.26, 2.09 to 2.10 are ABOVE 2.0, 1.20 past it holds; 128: 2.0 by best rates (2.04, 2.02, 2.00; 1.69 at 8388608) and 2.5 by
+  medians, at or above the ceiling, and 2.06 (median) at 8388608 outside the past-cache band.
+5 128 bits, ceilings 4.0 (bytes) and 2.0 (shorts): bytes 5.92, 5.89, 5.42, 4.50 (best) are ABOVE; shorts 2.04, 2.02, 2.00, 1.69
+  (best) are at the ceiling and 2.5 by medians above it (the INT arm and WIDENED short at 128 bits are compute-bound at every
+  rung). The release rate of row 374 does not apply to hand loops (no warm-up, no emitted kernel); it is reported beside the
+  emitted 128-bit numbers.
+6 two-species case: no allocation and no refusal: HOLDS. Census cells all I at all three widths; the all-arms JVMs (a part-width
+  and a full byte species, and a 64- or 128-bit and a full short species) show no slowdown against the separate JVMs.
+7 tiering artefact: HOLDS for this harness. 568 arm-rung settles at level 4 in the 8 runs that print, none unsettled; the INT
+  arm at 16384 rows read 26.4 to 27.1 G in all seven 512-bit runs that ran it (28's read 24786.7 then 1160.7); run order (all-arms
+  against separate JVMs) moved no cell by more than 10 percent apart from the one at 512 bits and the 128-bit modes above.
+
+== not established ==
+Whether the emitted kernels keep these ratios: this has no validity bits, no nulls, no masked epilogue, no narrow-column store
+(only the selection word), and the emitter has no 32- or 64-lane validity helper pair yet (VARKA-329.md 2.3). The shapes of 3.4
+item 2 other than the mixed `greatest(b1, b2) < i` (`b1 < b2 AND b2 < b3`, `CASE WHEN`, `greatest(b1, b2, b3)`) were not
+timed; item 4 (the packed boolean output) is the selection word of every loop here, as hand loops, and stays provisional until
+row 27. The runner hosts (EPYC 7763 at 256 bits, Neoverse N2 at 128) were not measured. Why NATIVE reaches 5.6x the INT arm per
+row, why the byte pair at 8388608 rows still reads 2.1x to 2.6x, and why WIDENED at 128 bits has modes.
+The byte rung past the last-level cache was NOT measured (review of 22 October 2026): every rung above stops at 8388608 rows. The
+benchmark now has a 33554432-row rung (a 64 MB byte pair) behind -Dvarka.narrow.pastL3=true; it has not been timed, because the
+laptop was in use for other timing. PLAN.md row 415 owns it: the rung at 512, 256 and 128 bits appended here, prediction 2 rescored.
