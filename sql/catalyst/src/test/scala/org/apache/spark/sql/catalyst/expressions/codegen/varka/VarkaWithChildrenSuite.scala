@@ -51,7 +51,9 @@ class VarkaWithChildrenSuite extends SparkFunSuite {
       Option(c.getPermittedSubclasses).map(_.toSeq).getOrElse(Seq(c))
     }.filter(_.isRecord).map(_.getSimpleName).toSet
     // The null-safe equality is in no grammar yet (VARKA-336 6): it is rebuilt directly below.
-    val undrawn = permitted -- seen - "NullSafeEqual"
+    // The boolean-column nodes (VARKA-331) are rebuilt directly below.
+    val undrawn = permitted -- seen - "NullSafeEqual" - "BoolColumn" - "CondConst" -
+      "BoolCompare" - "CondIf" - "BoolNullSafeEq"
     assert(undrawn.isEmpty, s"the grammars never drew: ${undrawn.toSeq.sorted.mkString(", ")}")
   }
 
@@ -62,6 +64,19 @@ class VarkaWithChildrenSuite extends SparkFunSuite {
     assert(VarkaVectorIR.withChildren(node, VarkaVectorIR.childrenOf(node): _*) == node)
     assert(VarkaVectorIR.withChildren(node, other, col) == new NullSafeEqual(other, col))
     intercept[Exception](VarkaVectorIR.withChildren(node, col, new ColumnRef(1, LaneType.LONG)))
+  }
+
+  test("the boolean-column nodes are rebuilt over their own children, and refuse a mixed pair") {
+    val a = new BoolColumn(0)
+    val b = new BoolColumn(1)
+    val c = new BoolColumn(2)
+    val nodes = Seq[VarkaVectorIR](a, new CondConst(Truth.NULL),
+      new BoolCompare(CompareOp.LE, a, b), new CondIf(a, b, c), new BoolNullSafeEq(a, b))
+    for (node <- nodes) {
+      assert(VarkaVectorIR.withChildren(node, VarkaVectorIR.childrenOf(node): _*) == node)
+    }
+    assert(VarkaVectorIR.withChildren(nodes(2), b, a) == new BoolCompare(CompareOp.LE, b, a))
+    intercept[Exception](VarkaVectorIR.withChildren(nodes(4), a, new BoolColumn(1, LaneType.LONG)))
   }
 
   test("a replacement is rebuilt in place, the node's other fields kept") {

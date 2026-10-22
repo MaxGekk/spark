@@ -64,6 +64,11 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     new BitCount(intCol),
     new Compare(CompareOp.LT, intCol, intLit),
     new NullSafeEqual(intCol, intLit),
+    new BoolColumn(0),
+    new CondConst(Truth.TRUE),
+    new BoolCompare(CompareOp.LE, new BoolColumn(0), new BoolColumn(1)),
+    new CondIf(new BoolColumn(0), new BoolColumn(1), new BoolColumn(2)),
+    new BoolNullSafeEq(new BoolColumn(0), new BoolColumn(1)),
     new And(new IsNotNull(intCol), new IsNotNull(intCol)),
     new Or(new IsNotNull(intCol), new IsNotNull(intCol)),
     new Not(new IsNotNull(intCol)),
@@ -92,7 +97,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
   private val derivesItsLane: Set[Class[_]] = Set(
     classOf[IntArith], classOf[IntNeg], classOf[Greatest], classOf[Least], classOf[IfElse],
     classOf[Compare], classOf[NullSafeEqual], classOf[And], classOf[Or], classOf[Not],
-    classOf[IsNotNull],
+    classOf[IsNotNull], classOf[BoolCompare], classOf[CondIf], classOf[BoolNullSafeEq],
     classOf[ConstDivide], classOf[GuardedRange], classOf[BitOp], classOf[BitCount])
 
   /** Every concrete node type the sealed hierarchy permits, nested interfaces expanded. */
@@ -136,6 +141,10 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
       new IfElse(new Compare(CompareOp.GT, longCol, longLit), longCol, longLit),
       new Compare(CompareOp.EQ, longCol, longLit),
       new NullSafeEqual(longCol, longLit),
+      new BoolColumn(0, LaneType.LONG),
+      new CondConst(Truth.FALSE, LaneType.LONG),
+      new BoolCompare(CompareOp.GE, new BoolColumn(0, LaneType.LONG),
+        new BoolColumn(1, LaneType.LONG)),
       new IsNotNull(longCol),
       new Not(new IsNotNull(longCol)),
       new And(new IsNotNull(longCol), new Compare(CompareOp.LT, longCol, longLit)),
@@ -198,7 +207,8 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     // epoch days, so every one of them has to appear above.
     val covered = refusals.map(_._1.toLowerCase(Locale.ROOT)).toSet
     val calendarNodes = everyIntNode
-      .filterNot(n => n.isInstanceOf[ColumnRef] || n.isInstanceOf[LiteralSlot])
+      .filterNot(n => n.isInstanceOf[ColumnRef] || n.isInstanceOf[LiteralSlot] ||
+        n.isInstanceOf[BoolColumn] || n.isInstanceOf[CondConst])
       .filterNot(n => derivesItsLane.contains(n.getClass))
       // The narrowing is INT by construction too, but over a long child rather than over epoch
       // days; what it refuses is an int child, which the narrowing test below pins.
@@ -324,6 +334,14 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
         case "Least" => new Least(c, c1)
         case "Compare" => new Compare(CompareOp.LT, c, c1)
         case "NullSafeEqual" => new NullSafeEqual(c, c1)
+        case "BoolColumn" => new BoolColumn(0, lane)
+        case "CondConst" => new CondConst(Truth.TRUE, lane)
+        case "BoolCompare" => new BoolCompare(CompareOp.EQ, new BoolColumn(0, lane),
+          new BoolColumn(1, lane))
+        case "CondIf" => new CondIf(new BoolColumn(0, lane), new BoolColumn(1, lane),
+          new BoolColumn(0, lane))
+        case "BoolNullSafeEq" => new BoolNullSafeEq(new BoolColumn(0, lane),
+          new BoolColumn(1, lane))
         case "And" => new And(new IsNotNull(c), new IsNotNull(c1))
         case "Or" => new Or(new IsNotNull(c), new IsNotNull(c1))
         case "Not" => new Not(new IsNotNull(c))
@@ -384,6 +402,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     // is refused by its constructor, which is why it never reaches the emitter.
     assert(atLong === Set("ColumnRef", "LiteralSlot", "IntArith", "IntNeg", "Greatest", "Least",
       "Compare", "NullSafeEqual", "And", "Or", "Not", "IsNotNull", "IfElse", "ConstDivide",
+      "BoolColumn", "CondConst", "BoolCompare", "CondIf", "BoolNullSafeEq",
       "GuardedRange", "NarrowLane", "WidenLane", "BitOp", "BitCount"),
       "the long lane serves the lane-generic subset, VARKA-88's division, VARKA-102's guard, " +
         "the two conversions, which build over the other lane's child whatever the row, and " +

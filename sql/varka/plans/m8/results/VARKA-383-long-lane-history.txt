@@ -332,3 +332,50 @@ With the flag (30 s):
   log: 0 profile_predicate records, 240 runtime deoptimisations (unstable_if 87, class_check 71,
   bimorphic_or_optimized_type_check 28, array_check 27), 7497 nmethod compiles
   (9.2's default run: 398, 167 profile_predicate, 8161).
+
+Profiled loop predication off, the 144-draw long lane at both widths (VARKA-383.md 9.4), 21 October 2026
+Question: does -XX:-UseProfiledLoopPredicate take the whole 144-draw long lane under 3 of 144 at both
+widths? Registered reading: under 3 at a width means profile-based loop predication explains that width's
+long-lane releases; 8 or more means it does not; 3 to 7 means six more forks at that width first.
+
+Machine record
+  commit        e18c8937384 (master, branch varka-383-night), working tree clean (target/ only)
+  idle gate     built first (dev/varka_matrix.sh --module catalyst --list, 2 min, under heavy.lock);
+                gate at 23:28 to 23:29 CEST, 3 checks of 30 s: 1-minute load 1.39 at the pass (below 2),
+                no java process other than this agent's own shell matching "java" in its argument text
+  before run    23:29:19 CEST: load average 1.28 4.00 7.70; powerprofilesctl get: performance;
+                battery status: Not charging; pgrep -x java: none; sanitizer OFF
+  after run     23:33:27 CEST: load average 1.77 2.85 6.35; powerprofilesctl get: performance;
+                battery status: Not charging; pgrep -x java: none
+  during run    both shared heavy slots held by the command (4 minutes, 23:29 to 23:33: no draw sat
+                out a 30 s release window, so the run was short; 9.1's was 54 minutes)
+  forks         12 forks, 0 wrong answers in 780 kernels compared, 2 draws skipped (declined or
+                repeated), kernel under test fast in 12 of 12 (1.2 to 1.4 ns a row at 512 bits, 1.9 to
+                2.5 at 256 bits)
+
+Command (one measured run under both slots)
+  flock heavy.lock flock heavy2.lock dev/varka_kernel_history.sh --after 64 --forks 6 --widths 64,32 \
+    --prewarm on --jvms 2 --cpus 3 --cpu-base 12 --deadline 30 \
+    --jvm -XX:+UnlockDiagnosticVMOptions --jvm -XX:-UseProfiledLoopPredicate \
+    --out target/varka-kernel-history/383-night-flag
+  Seed 20260903 + fork, 2 JVMs, cores 12 to 17: the first reading's. Raw logs and summary.txt are
+  under target/varka-kernel-history/383-night-flag (not committed).
+
+Releases of the history's kernels at the 30 s deadline, prewarm on, flag set
+(released / warmed; first = 9.1's reading without the flag)
+
+                    position 0    1 to 3       4 to 15        16 to 63
+  512 bits long flag   -          0 / 12       0 / 36         0 / 144 (0 C2)
+  512 bits long first  -          0 / 12       5 / 36         42 / 144 (41 C2)
+  512 bits int  flag   0 / 6      0 / 6        0 / 36         0 / 144
+  512 bits int  first  0 / 6      0 / 6        0 / 36         17 / 144 (11 C2)
+  256 bits long flag   -          0 / 12       0 / 36         0 / 144 (0 C2)
+  256 bits long first  -          1 / 12       6 / 36         38 / 144 (38 C2)
+  256 bits int  flag   0 / 6      0 / 6        0 / 36         0 / 144
+  256 bits int  first  0 / 6      0 / 6        0 / 36         43 / 144 (43 C2)
+
+Verdict by the registered reading: 0 of 144 at 512 bits and 0 of 144 at 256 bits, both under 3:
+profile-based loop predication explains the long-lane releases at both widths. The six-more-forks
+arm was not needed. The same-night baseline (no flags) was not run: the first reading's load
+(2.82 to 0.36, idle) is the same condition as this one's (1.28 at the start), so the machine
+record does not show a different load to separate.

@@ -119,7 +119,10 @@ final class VarkaEmitCost {
       case BitCount n -> name + '/' + n.laneType();
       case GuardedRange n -> name + '/' + n.laneType();
       case Compare n -> name + '/' + n.op() + '/' + n.laneType();
-      case VarkaVectorIR.IsNotNull n when n.child() instanceof Cond ->
+      case VarkaVectorIR.BoolColumn n -> name + '/' + n.lane();
+      case VarkaVectorIR.CondConst n -> name + '/' + n.lane();
+      case VarkaVectorIR.BoolCompare n -> name + '/' + n.op() + '/' + n.laneType();
+      case VarkaVectorIR.IsNotNull n when n.overCondition() ->
           name + "/cond/" + n.laneType();
       case TruncDate n -> name + '/' + n.level();
       case MakeDate n -> name + (n.failOnError() ? "/ansi" : "/null");
@@ -132,7 +135,8 @@ final class VarkaEmitCost {
     return node instanceof VarkaVectorIR.Greatest || node instanceof VarkaVectorIR.Least
         || node instanceof VarkaVectorIR.IfElse || node instanceof VarkaVectorIR.IsNotNull
         || node instanceof VarkaVectorIR.And || node instanceof VarkaVectorIR.Or
-        || node instanceof VarkaVectorIR.Not;
+        || node instanceof VarkaVectorIR.Not || node instanceof VarkaVectorIR.CondIf
+        || node instanceof VarkaVectorIR.BoolNullSafeEq;
   }
 
   /**

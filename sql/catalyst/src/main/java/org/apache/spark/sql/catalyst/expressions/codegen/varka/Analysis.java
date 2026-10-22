@@ -37,10 +37,15 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Add
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.And;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitCount;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitOp;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolColumn;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolCompare;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolNullSafeEq;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoundedDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondConst;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondIf;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DateDiff;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfMonth;
@@ -473,6 +478,12 @@ final class Analysis {
   private final Map<VarkaVectorIR, Integer> height = new HashMap<>();
   /** The union of every node's columns: unreferenced inputs get no locals and no state. */
   long referencedColumns = 0L;
+
+  /**
+   * The inputs read as a {@link BoolColumn}: their data buffer is a bitmap of one bit a row, so it
+   * is mapped at {@code (length + 7) / 8} bytes and not at a lane's width a row.
+   */
+  long boolInputs = 0L;
   private int opNodes = 0;
 
   Analysis(int numInputs, int numLiterals, VarkaEmitOptions options, Lane lane) {
@@ -687,6 +698,11 @@ final class Analysis {
         case BitCount n -> { }
         case Compare n -> { }
         case NullSafeEqual n -> { }
+        case BoolColumn n -> { }
+        case BoolCompare n -> { }
+        case CondIf n -> { }
+        case BoolNullSafeEq n -> { }
+        case CondConst n -> { }
         case And n -> { }
         case Or n -> { }
         case Not n -> { }
@@ -740,7 +756,7 @@ final class Analysis {
    */
   void planWordAlgebra() {
     for (VarkaVectorIR node : topoOrder) {
-      if (node instanceof Cond) {
+      if (node instanceof Cond && !(node instanceof BoolColumn)) {
         continue;
       }
       wordOwner.put(node, ownerOf(node));
@@ -951,6 +967,7 @@ final class Analysis {
   private WordOwner ownerOf(VarkaVectorIR node) {
     return switch (node) {
       case ColumnRef c -> new WordOwner.Input(c.ordinal());
+      case BoolColumn c -> new WordOwner.Input(c.ordinal());
       case LiteralSlot l -> WordOwner.Const.ALL_TRUE;
       case AddDays n -> andOwner(node, n.days(), n.offset());
       case SubDays n -> andOwner(node, n.days(), n.offset());
@@ -1003,6 +1020,7 @@ final class Analysis {
   private WordExpr pureOf(VarkaVectorIR node) {
     return switch (node) {
       case ColumnRef c -> new WordExpr.Input(c.ordinal());
+      case BoolColumn c -> new WordExpr.Input(c.ordinal());
       case LiteralSlot l -> WordExpr.Const.ALL_TRUE;
       case AddDays n -> andExpr(pureWord.get(n.days()), pureWord.get(n.offset()));
       case SubDays n -> andExpr(pureWord.get(n.days()), pureWord.get(n.offset()));
@@ -1073,6 +1091,33 @@ final class Analysis {
     return new WordExpr.Or(a, b);
   }
 
+  /**
+   * Records a leaf that reads input {@code ordinal}: the ordinal must be one of the kernel's
+   * inputs, and every leaf of a column agrees on the {@code leafLane} that sizes its data segment.
+   * The leaf covers its own column and nothing else, and has height 0 and no skip. A boolean
+   * column passes null: its data is a bitmap of the same size at either lane, so two leaves of one
+   * column may sit at different lanes ({@code IF(b, l, l2)} beside {@code IF(b, d, d2)}).
+   */
+  private void registerInput(
+      VarkaVectorIR node, int ordinal, VarkaVectorIR.LaneType leafLane) {
+    if (ordinal < 0 || ordinal >= numInputs) {
+      throw VarkaErrors.illegalArgument(
+          "column ordinal " + ordinal + " outside [0, " + numInputs + ")");
+    }
+    if (leafLane != null) {
+      VarkaVectorIR.LaneType had = inputLanes.putIfAbsent(ordinal, leafLane);
+      if (had != null && had != leafLane) {
+        throw VarkaErrors.illegalArgument("column " + ordinal + " is read at both the "
+            + had + " and the " + leafLane + " lane");
+      }
+    }
+    long set = 1L << ordinal;
+    columns.put(node, set);
+    height.put(node, 0);
+    skipping.put(node, false);
+    referencedColumns |= set;
+  }
+
   private void analyze(VarkaVectorIR node) {
     // The lane rule, enforced per node. `laneOf` reads the output roots only, so this is the
     // sole defence against a node further down disagreeing - which would emit one lane's
@@ -1092,22 +1137,7 @@ final class Analysis {
       requireOperand(r.position(), r.operand(), r.name());
     }
     switch (node) {
-      case ColumnRef c -> {
-        if (c.ordinal() < 0 || c.ordinal() >= numInputs) {
-          throw VarkaErrors.illegalArgument(
-              "column ordinal " + c.ordinal() + " outside [0, " + numInputs + ")");
-        }
-        VarkaVectorIR.LaneType had = inputLanes.putIfAbsent(c.ordinal(), c.lane());
-        if (had != null && had != c.lane()) {
-          throw VarkaErrors.illegalArgument("column " + c.ordinal() + " is read at both the "
-              + had + " and the " + c.lane() + " lane");
-        }
-        long set = 1L << c.ordinal();
-        columns.put(node, set);
-        height.put(node, 0);
-        skipping.put(node, false);
-        referencedColumns |= set;
-      }
+      case ColumnRef c -> registerInput(node, c.ordinal(), c.lane());
       case LiteralSlot l -> {
         if (l.index() < 0 || l.index() >= numLiterals) {
           throw VarkaErrors.illegalArgument(
@@ -1244,6 +1274,22 @@ final class Analysis {
       // A known answer from a null input (two nulls are equal), the flag IfElse and the picks
       // set; shortcutApplies excludes a condition root, so no shortcut changes.
       case NullSafeEqual n -> analyzeOp(node, true, n.left(), n.right());
+      case BoolColumn c -> {
+        registerInput(node, c.ordinal(), null);
+        boolInputs |= 1L << c.ordinal();
+      }
+      case CondConst c -> {
+        columns.put(node, 0L);
+        height.put(node, 0);
+        skipping.put(node, false);
+        // An unknown from valid inputs: the one thing a dense body cannot hold.
+        if (c.value() == VarkaVectorIR.Truth.NULL) {
+          nullsFromValidInputs = true;
+        }
+      }
+      case BoolCompare n -> analyzeOp(node, false, n.left(), n.right());
+      case CondIf n -> analyzeOp(node, true, n.cond(), n.thenCond(), n.elseCond());
+      case BoolNullSafeEq n -> analyzeOp(node, true, n.left(), n.right());
       case And n -> analyzeOp(node, false, n.left(), n.right());
       case Or n -> analyzeOp(node, false, n.left(), n.right());
       case Not n -> analyzeOp(node, false, n.child());
@@ -1266,7 +1312,7 @@ final class Analysis {
         // skips = true states the semantics - known output from a null input - though a
         // Cond only reaches a root through IfElse, which already marks skipping.
         analyzeOp(node, true, n.child());
-        if (n.child() instanceof Cond) {
+        if (n.overCondition()) {
           nullTestsOverCond.add(n);
         }
       }
@@ -1295,7 +1341,9 @@ final class Analysis {
       // condition children are legal carry them in Cond-typed record fields already, except
       // IsNotNull, whose one child is a column or a condition (its arm in analyze checks which).
       if (child instanceof Cond && !(node instanceof IfElse) && !(node instanceof And)
-          && !(node instanceof Or) && !(node instanceof Not) && !(node instanceof IsNotNull)) {
+          && !(node instanceof Or) && !(node instanceof Not) && !(node instanceof IsNotNull)
+          && !(node instanceof BoolCompare) && !(node instanceof CondIf)
+          && !(node instanceof BoolNullSafeEq)) {
         requireValue(child, "child of " + node.getClass().getSimpleName());
       }
       operands.add(child);
