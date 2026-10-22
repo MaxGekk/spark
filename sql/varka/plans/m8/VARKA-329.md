@@ -559,7 +559,10 @@ to an existing row.
   engine under row 30's design for division and the existing constant-divisor lowerings, with no
   narrow-lane form here.
 * A narrow `Cast` to or from any type, and the casts' modes (332). Narrow arithmetic whose
-  operand is a cast to a wider type is that type's arithmetic.
+  operand is a cast to a wider type is that type's arithmetic; the lift 329 built serves the
+  int lane's form of it (`y1 + i` is an int add over a widened load), while a mixed narrow
+  expression such as `y1 - s1`, whose byte operand Catalyst promotes with `Cast(y1 AS SMALLINT)`,
+  waits for 332's narrow-to-narrow cast and declines to the row engine until then.
 * `bit_get`, `getbit`, narrow bitwise and `bit_count` (335b).
 * A narrow lane in a kernel driven at the long lane (an eighth-of-species load); only the cast
   composes it (332).
@@ -856,8 +859,10 @@ word, so it needs no widening load and fuses at every width, while the same row'
 partition tests select the narrow column and decline.
 ### 9.4 Outcome of row 330: the narrow arithmetic in three modes (22 October 2026)
 
-Built on the lanes of step 2, merged into the row's branch at the checkpoint commit `33996c315d9`,
-in the worktree `varka-330-arith`. No new IR node: a narrow `Add`, `Subtract`, `Multiply` or
+Built on the lanes of step 2 in the worktree `varka-330-arith`: the row's branch took the lane
+branch in at the checkpoint commit `33996c315d9` and again, as its final form, at `588dffea06a`
+(the lane's `62f7af53577`, `1689f255cca` and `281f63b9707`), with the row's suites rerun after
+both. No new IR node: a narrow `Add`, `Subtract`, `Multiply` or
 `UnaryMinus` compiles to `IntArith(op, mode, left, right)` or `IntNeg(mode, child)` on the node's
 own lane, and `abs` to `IfElse(Compare(LT, x, 0), IntNeg(mode, x), x)` - Spark's own ANSI lowering,
 built from nodes that exist. The mode is the node's: `LEGACY` is `Overflow.WRAP`, `ANSI`
@@ -880,10 +885,11 @@ other checked node.
 **NATIVE.** The byte and short lane operations do the arithmetic. `LEGACY` wraps in the lane.
 `ANSI`'s check is one more lanewise and a compare - `ADD != SADD` for the sum and `SUB != SSUB` for
 the difference, the saturating operator picked by the op - and a lane set in that mask declines
-the batch; `TRY` turns the same mask into cleared validity bits. A checked multiply widens to the
-next lane (byte to short, short to int), where the product is exact, and compares against the
-narrow range there; this is the one native shape that pays for a conversion, the two-species case
-the census counts.
+the batch; `TRY` turns the same mask into cleared validity bits. A checked multiply leaves the
+lane: `VarkaVectorIR.holdsCheckedNarrowMultiply` drives its kernel at the int lane on either arm,
+where the product of two narrow operands is exact, so the check is the same int compare against
+the narrow range; this is the one narrow shape whose kernel is wider than its operands, the
+two-species case of 2.4.
 
 **Proofs.** Four files under `sql/varka/proofs/`, rendered by `VarkaProofFiles` and held to their
 committed text by `VarkaProofFilesSuite`: `narrow_wrap.smt2` (16 checks: the shift pair is the
@@ -912,11 +918,11 @@ itself: a chain answers at its root and under every non-ring consumer, a checked
 its first overflowing node, and a TRY chain nulls the overflowing row and keeps its neighbours.
 `VarkaCoverageDifferentialSuite` holds the same 16 rows to Spark end to end - both consumers, the
 three domain partitions, ANSI's four positions - with `VarkaGuardSpecs` reading the narrow check at
-its own lane on both arms; the suite's 714 tests are green in 5 m 8 s at the matrix base. The
-new suite's 20 checked-mode tests are on `matrix/skips.tsv`'s `checkIntOverflow=false` list,
-where the option's promise - the same node cheaper - is that a checked node wraps; under
-`lanesOverride=4` and `validityByWidth=false` the suite passes, those declines being the
-arm's answer.
+its own lane on both arms; before the final merge the suite's 744 tests were green in 5 m 8 s at
+the matrix base, and after it the suite's 786 tests are green in 4 m 27 s. The new suite's 20
+checked-mode tests are on `matrix/skips.tsv`'s `checkIntOverflow=false` list, where the option's
+promise - the same node cheaper - is that a checked node wraps; under `lanesOverride=4` and
+`validityByWidth=false` the suite passes, those declines being the arm's answer.
 
 **The first sweep, timed.** `SMALLINT` `+` in `LEGACY` on the widened arm, the cheapest of the 18,
 ran as the suite's opt-in test with `-Dvarka.sweep.filter` naming it alone, under both agent locks
@@ -951,23 +957,23 @@ and the refusal is the compiler's own: `VarkaLoopEmitter.narrowRefusal` is what 
 value it cannot widen, and at four int lanes the byte species below would be 32 bits, a constant
 the Vector API does not declare. The oracle records that reason in the row rather than a body that
 could not load; the eight `SMALLINT` rows emit, four shorts being a named 64-bit species. No
-existing row moved.
+existing row moved. `sql/varka/width_audit.json` pins the same rows per width: the 16 shapes add
+48 lines at 512, 256 and 128 bits, the eight byte rows refused at 128 with that same reason and
+nothing else changed.
 
-**Findings and limits.** Three things are recorded where a reader meets them rather than left to be
-discovered. First, a `CASE WHEN` whose condition is an int-lane comparison (`rid < 0`) and whose
-values are on the byte or short lane is refused: `VarkaConditionCompiler.caseWhen` asks `sameLane`
-after compiling both, and the only lifting it does is a value to the long lane, so a byte or short
-value under an int-lane condition has no int form to meet it - the narrow face of `m9/SCOPE.md` item
-55, "int values as the branches of `if`, `coalesce` and `greatest`", one type over. The
-differential suite lists that position (`CaseArm`) for all 16 rows in `ansiDeclined`, so the record
-says which positions serve a row and which do not. Second, the six `try_` rows' `rid < 0 AND ...`
-position leaves a row `FilterExec` above the kernel, since the int-lane conjunct and the narrow
-comparison cannot share one Varka filter, and is listed the same way under `FalseAnd`. Neither is a
-correctness gap; both are the edge of the served set. Third, the measurement 4.5 asks for -
-`VarkaNarrowLaneBenchmark`'s arithmetic shapes in this row's own pull request, with their three
-predictions, the checked multiply's widening cost on the native arm among them - is in neither this
-row's brief nor 4.6's done-when list, so it is not carried here; the shapes and the predictions stay
-in 4.5 for the row that prices the narrow arithmetic (352's refit).
+**Findings and limits.** Two things are recorded where a reader meets them rather than left to be
+discovered. First, before the lane's lift landed, a `CASE WHEN` whose condition was an int-lane
+comparison (`rid < 0`) and whose values were on the byte or short lane was refused, as was a
+`try_` row's `rid < 0 AND ...`: `VarkaConditionCompiler.caseWhen` asked `sameLane` after compiling
+both and lifted a value to the long lane only. The lift (`VarkaConditionCompiler.onIntLane` and the
+`Cast(narrow AS INT)` arm, 329's `1689f255cca`) serves both, so the differential suite's
+`ansiDeclined` now holds no position of these 16 rows except the checked rows' false AND, which
+declines for the reason every check under an AND does (`m9/SCOPE.md` item 96); the `try_` forms
+fuse in that position too. The other record is a commitment rather than a finding: the measurement
+4.5 asks for (`VarkaNarrowLaneBenchmark`'s arithmetic shapes in this row's own pull request, with
+their three predictions, the checked multiply's widening cost on the native arm among them) is in
+neither this row's brief nor 4.6's done-when list, so it is not carried here; the shapes and the
+predictions stay in 4.5 for the row that prices the narrow arithmetic (352's refit).
 
 Three things were found on the way, all in this row's own code. The reduction's shift is now taken
 from the lane the value is emitted at rather than from the int lane: the int lane's `32 - w` also
@@ -978,11 +984,24 @@ narrow node is a ring node like a wrapping one, or an intermediate under a non-r
 the exact int (`127Y + 1Y` read as 128 rather than -128) instead of wrapping at its lane's width
 the way the option promises the same node cheaper. And the edges fixture had no row inside the
 short product's range - every other row's `300 * -400` is out of it - so its inside partition was
-empty; one row of small shorts fixes it. Two limits are kept rather than worked around: no narrow
-`CAST` fuses, so `y1 + 1` (which analysis spells `Add(Cast(y1 AS INT), 1)`) declines and no row of
-this row covers it, as 4.5 says; and a checked narrow multiply drives its kernel at the int lane on
-either arm (`VarkaVectorIR.holdsCheckedNarrowMultiply`), the two-species case of 2.4, whose cost is
-left to the measurement the row's shapes need and this row does not carry. That drive widens
-even on the native arm, so at four int lanes a checked byte multiply declines there too, with
-the refusal a widened byte load gets; the suite reads a decline as the arm's answer exactly
-when the width cannot widen the node's lane.
+empty; one row of small shorts fixes it. One limit is kept rather than worked around: a checked
+narrow multiply drives its kernel at the int lane on either arm
+(`VarkaVectorIR.holdsCheckedNarrowMultiply`), the two-species case of 2.4, whose cost is left to
+the measurement the row's shapes need and this row does not carry. That drive widens even on the
+native arm, so at four int lanes a checked byte multiply declines there too, with the refusal a
+widened byte load gets; the suite reads a decline as the arm's answer exactly when the width
+cannot widen the node's lane. The `CAST` limit the row first recorded is gone with the lift:
+`y1 + 1`, which analysis spells `Add(Cast(y1 AS INT), 1)`, compiles as an int add over a widened
+narrow load by 329's `Cast(narrow AS INT)` arm, and so does `y1 + i`; at four int lanes the byte
+rows decline there too, the same species refusal as any widened byte load.
+
+**The independent review.** A read-only review of the row's diff found no lowering defect and
+confirmed the proofs and the exhaustion tests. It found three statements that had not followed the
+lane's final form - the native-arm paragraph above, `docs/sql-varka.md`'s byte-multiply note
+(widened to `int`, not `short`) and `VarkaVectorWalk`'s comment claiming a saturating narrow
+multiply - and one test oracle that had stayed lane-blind: `VarkaGuardSpecs.overflows` compared a
+narrow `FAIL` node's exact result against the int lane's bounds while `bound` had learned the
+node's own lane, so both now read `laneBounds`. A fourth finding is latent and recorded for the
+cast row rather than fixed here: a non-root `NarrowLane` in an int-driven kernel emits no
+narrowing today (`Analysis.laneOf`), which the stored-narrow construction's roots keep harmless;
+`PLAN.md`'s row 332 now carries it.

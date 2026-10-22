@@ -734,9 +734,8 @@ final class Analysis {
    * values needs one reduction only at its first non-ring reader - a compare, an {@code abs}, a
    * range guard, a widening, an {@code IfElse}, a store - and a chain {@code (a + b) * c - d}
    * over bytes is therefore int adds and multiplies and no interior narrowing at all
-   * ({@code VARKA-329.md} 4.2). A store reduces by its own conversion, so a root needs none; and
-   * a checked node is not a ring node, because its range compare reads the exact narrow value,
-   * which is what keeps an overflowing intermediate from hiding behind a later wrap.
+   * ({@code VARKA-329.md} 4.2). A store reduces by its own conversion, so a root needs none; a
+   * checked node is not a ring node ({@link #isNarrowRing}).
    *
    * <p>Only the widened arm's emission needs these reductions; on the narrow lane the lane
    * operation is the reduction and {@code emitWrapToNarrow} emits nothing.

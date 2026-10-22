@@ -596,9 +596,9 @@ final class VarkaVectorWalk {
     // it a reference arm rather than a setting. `MUL` is different in kind - there is no
     // correct checked emission for it at all, so "off" cannot mean "the same node, cheaper".
     // A reader who generalises this into the `NULL` and `IntNeg` arms breaks the benchmark.
-    // A narrow multiply is the exception that keeps the argument: its product of two narrow
-    // operands is exact in the int lane, and on the narrow lane it is the saturating form, so
-    // both arms can check it.
+    // A narrow checked multiply is the exception that keeps the argument, but not by computing
+    // in the lane: its kernel is driven at the int lane on both arms, where the product of two
+    // narrow operands is exact and the range compare is sound.
     if (n.op() == IntOp.MUL && n.mode() != Overflow.WRAP && !narrow) {
       throw VarkaErrors.illegalArgument("a checked multiply has no int-lane overflow test: " + n);
     }

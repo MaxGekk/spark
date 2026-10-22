@@ -272,7 +272,7 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
         domain = Some("CAST(y1 AS INT) + CAST(y2 AS INT) BETWEEN -128 AND 127")),
       Row("y1 - y2", "checked subtraction at the byte's width",
         domain = Some("CAST(y1 AS INT) - CAST(y2 AS INT) BETWEEN -128 AND 127")),
-      Row("y1 * y2", "a byte multiply wraps natively and is widened to short for its check",
+      Row("y1 * y2", "a byte multiply wraps natively and is widened to int for its check",
         domain = Some("CAST(y1 AS INT) * CAST(y2 AS INT) BETWEEN -128 AND 127")),
       Row("-y1", "negation raises on -128 only", domain = Some("y1 > -128")),
       Row("abs(y1)", "`abs(-128Y)` is out of range, and wraps back to -128 in the legacy mode",

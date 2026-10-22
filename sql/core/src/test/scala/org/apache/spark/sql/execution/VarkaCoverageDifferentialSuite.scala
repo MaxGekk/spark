@@ -677,14 +677,12 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
   private def standIn(t: DataType, caseArm: Boolean): Option[String] = t match {
     case DateType => Some("d2")
     case IntegerType => Some(if (caseArm) "year(d2)" else "i")
-    case ByteType => Some("y2")
-    case ShortType => Some("s2")
-    case LongType => Some("l2")
-    // The narrow twins: the fixture's second column of each type, which the value rows choose
-    // between (VARKA-329). A CASE arm beside a narrow expression is the int guard `rid < 0` and
+    // The narrow twins (VARKA-329): the fixture's second column of each type, which the value
+    // rows choose between. A CASE arm beside a narrow expression is the int guard `rid < 0` and
     // a narrow branch, which the compiler widens to the int lane and stores narrow.
     case ByteType => Some("y2")
     case ShortType => Some("s2")
+    case LongType => Some("l2")
     case _: TimeType => Some("t2")
     case _: DayTimeIntervalType => Some("dt2")
     case YearMonthIntervalType(start, end) if start == end =>
@@ -768,31 +766,17 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
       "left side rejected (m9/SCOPE.md item 96)"
     val checkedRight = Seq("make_date(2021, i, 1)", "add_months(d, i)", "d + ym", "d - ym",
       "ym - ymm", "i + 1", "year(d) + i")
-    // The narrow arithmetic's rows (VARKA-330). A CASE's condition is an int-lane comparison
-    // (`rid < 0`) while its values are on the byte or short lane, and a CASE refuses a mix of
-    // lanes: the int rows' values share their condition's lane, the long rows' guard is `lrid`,
-    // and a narrow value has no int form to lift the condition to (the native arm would need a
-    // mask conversion between the species). COALESCE takes a bare narrow column - VARKA-329's
-    // value leaf - so that position is served. The checked rows' AND is the `unqualified` reason
-    // above, the edges fixture's lane overflowing whichever node the check sits on; a `try_` row
-    // has no check, and its AND is declined because the int-lane `rid < 0` conjunct and the
-    // narrow comparison cannot share one Varka filter, so the rule leaves a row filter above the
-    // kernel and no kernel serves the whole query.
+    // The narrow arithmetic's rows (VARKA-330) decline no position of their own. CASE and
+    // COALESCE are served by VARKA-329's lift - an int-lane condition takes a narrow branch
+    // lifted to the int lane and stored narrow, and a bare narrow column is a value leaf - and
+    // so is a `try_` row's AND, whose narrow comparison lifts beside the int conjunct. The
+    // checked rows' AND is the `unqualified` reason above: the edges fixture's lane overflows
+    // whichever node the check sits on.
     val narrowChecked = Seq("y1 + y2", "y1 - y2", "y1 * y2", "-y1", "abs(y1)",
       "s1 + s2", "s1 - s2", "s1 * s2", "-s1", "abs(s1)")
-    val narrowTry = Seq("try_add(y1, y2)", "try_subtract(y1, y2)", "try_multiply(y1, y2)",
-      "try_add(s1, s2)", "try_subtract(s1, s2)", "try_multiply(s1, s2)")
-    val narrowCase = "the CASE's condition is an int-lane comparison (`rid < 0`) and its values " +
-      "are on the byte or short lane, which `VarkaConditionCompiler.caseWhen` refuses when it " +
-      "asks `sameLane`: it lifts a value to the long lane only, so a narrow value under an " +
-      "int-lane condition has no int form to meet it - the narrow face of `m9/SCOPE.md` item 55"
-    val narrowAnd = "the int-lane `rid < 0` conjunct and the narrow comparison cannot share one " +
-      "Varka filter, so the rule leaves a row filter above the kernel"
     intValued.map(sql => (sql, CoalesceTail) -> intCoalesce).toMap ++
       Seq(CaseArm, CoalesceTail, FalseAnd).map(p => (dayCast, p) -> columnBound) ++
-      (checkedRight ++ narrowChecked).map(sql => (sql, FalseAnd) -> unqualified) ++
-      (narrowChecked ++ narrowTry).map(sql => (sql, CaseArm) -> narrowCase) ++
-      narrowTry.map(sql => (sql, FalseAnd) -> narrowAnd)
+      (checkedRight ++ narrowChecked).map(sql => (sql, FalseAnd) -> unqualified)
   }
 
   /** What the ANSI form found for one row, and where a kernel served it or both engines raised. */
