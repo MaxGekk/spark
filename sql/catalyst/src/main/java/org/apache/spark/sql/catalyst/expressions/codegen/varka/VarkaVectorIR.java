@@ -75,7 +75,8 @@ public sealed interface VarkaVectorIR
    * why the lane rides the IR rather than being inferred from the type above it.
    *
    * <p>The declaration order is the width order, {@code BYTE < SHORT < INT < LONG}, which the
-   * conversion nodes and the emitter's lane rules read through {@link #isNarrow()}.
+   * conversion nodes read through {@link #isWiderThan(LaneType)} and the emitter's lane rules
+   * through {@link #isNarrow()}.
    */
   enum LaneType {
     BYTE, SHORT, INT, LONG;
@@ -83,6 +84,15 @@ public sealed interface VarkaVectorIR
     /** Whether this lane is one of the two narrow ones, {@code BYTE} or {@code SHORT}. */
     public boolean isNarrow() {
       return this == BYTE || this == SHORT;
+    }
+
+    /**
+     * Whether this lane's values are wider than {@code other}'s, which is the declaration order,
+     * narrowest first - the order the conversion nodes' rules are written in, and the reason the
+     * constants are declared as they are.
+     */
+    public boolean isWiderThan(LaneType other) {
+      return compareTo(other) > 0;
     }
   }
 
@@ -456,7 +466,7 @@ public sealed interface VarkaVectorIR
   record WidenLane(VarkaVectorIR child, LaneType target) implements VarkaVectorIR {
     public WidenLane {
       Objects.requireNonNull(target, "target");
-      if (child.laneType().ordinal() >= target.ordinal()) {
+      if (!target.isWiderThan(child.laneType())) {
         throw VarkaErrors.illegalArgument("widenLane takes a child on a lane narrower than "
             + target + ", not " + child.laneType() + ", from a "
             + child.getClass().getSimpleName());
@@ -498,7 +508,7 @@ public sealed interface VarkaVectorIR
   record NarrowLane(VarkaVectorIR child, LaneType target) implements VarkaVectorIR {
     public NarrowLane {
       Objects.requireNonNull(target, "target");
-      if (child.laneType().ordinal() <= target.ordinal()) {
+      if (!child.laneType().isWiderThan(target)) {
         throw VarkaErrors.illegalArgument("narrowLane takes a child on a lane wider than "
             + target + ", not " + child.laneType() + ", from a "
             + child.getClass().getSimpleName());
