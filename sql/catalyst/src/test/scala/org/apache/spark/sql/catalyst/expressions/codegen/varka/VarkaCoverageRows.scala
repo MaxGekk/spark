@@ -34,6 +34,15 @@ object VarkaCoverageRows {
 
   case class Row(executable: String, predicate: Boolean)
 
+  private val booleanColumn = "\\bb2?\\b".r
+
+  /**
+   * Whether an executable row reads one of the table's BOOLEAN columns, `b` or `b2`. The fuzzers
+   * that draw int columns leave these rows out: a boolean input is a bitmap their batches and
+   * oracles do not build.
+   */
+  def readsBoolean(executable: String): Boolean = booleanColumn.findFirstIn(executable).isDefined
+
   case class Table(columns: Seq[Attribute], projections: Seq[Row], predicates: Seq[Row])
 
   /** The table at `path`, the committed file the coverage suite keeps. */

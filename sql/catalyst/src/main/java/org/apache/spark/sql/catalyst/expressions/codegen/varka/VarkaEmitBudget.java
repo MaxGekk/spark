@@ -596,7 +596,8 @@ final class VarkaEmitBudget {
   static int weightOf(VarkaVectorIR node) {
     return switch (node) {
       // The leaves' loads and broadcasts are paid once per column and literal, not per node.
-      case ColumnRef _, LiteralSlot _ -> 0;
+      // A boolean column and a constant are leaves: a data word read and a constant, no lane call.
+      case ColumnRef _, LiteralSlot _, BoolColumn _, CondConst _ -> 0;
       // One lanewise op, plus the four the sign test costs where there is one.
       case IntArith n -> n.mode() == Overflow.WRAP ? 1 : 5;
       // The multiply by -1, plus one compare where the mode checks.
@@ -607,7 +608,7 @@ final class VarkaEmitBudget {
           NarrowLane _, Compare _, NullSafeEqual _ -> 1;
       // The connectives emit only mask calls, which no weight counts; 1 is a floor, so that a
       // connective is never free to join any group.
-      case And _, Or _, Not _, IsNotNull _ -> 1;
+      case And _, Or _, Not _, IsNotNull _, BoolCompare _, BoolNullSafeEq _, CondIf _ -> 1;
       // Emitted as one loop whatever the number of ranges: a start mask and a body of scalar
       // compares, three lane calls past the column's load. Its time grows with the ranges; its
       // code does not.

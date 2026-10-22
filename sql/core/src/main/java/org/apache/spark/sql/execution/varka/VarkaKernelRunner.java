@@ -26,6 +26,7 @@ import java.util.Arrays;
 
 import org.apache.arrow.memory.ArrowBuf;
 import org.apache.arrow.vector.BaseFixedWidthVector;
+import org.apache.arrow.vector.BitVector;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.IntRangeOps;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.TruncLevelLeaf;
@@ -34,6 +35,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDerivedKind;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFusedKernel;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmth;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmup;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemorySanitizer;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemoryViolation;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaReproduction;
@@ -165,6 +167,28 @@ public final class VarkaKernelRunner {
   /** Another instance of the shape's class, which no task runs: the warm-up's own. */
   public VarkaFusedKernel newKernel() {
     return entry.newKernel();
+  }
+
+  /**
+   * The width the warm-up reads for this fixed-width vector: its type width, or
+   * {@link VarkaKernelWarmup#BIT_WIDTH} for a {@code BitVector}, whose bitmap it reads as one bit
+   * a row. The two widths are one place's answer to "how wide is this input", {@link
+   * #bytesPerRow} being the other's, so neither is read from {@code getTypeWidth} alone.
+   */
+  public static int warmupWidth(BaseFixedWidthVector v) {
+    return v instanceof BitVector ? VarkaKernelWarmup.BIT_WIDTH : v.getTypeWidth();
+  }
+
+  /**
+   * The width a reproduction records for this fixed-width vector: its type width, or 1 for a
+   * {@code BitVector}, which reports 0 (it stores one bit a row) and would size the replay's copy
+   * of its data at nothing. One byte a row over-states the bitmap eight times, which is safe for a
+   * replay's allocation and for the batch cap; the data itself is the bitmap's own
+   * {@code (len + 7) / 8} bytes. The warm-up does not use this: it reads 0 as one bit a row
+   * ({@code VarkaKernelWarmup.BIT_WIDTH}).
+   */
+  public static int bytesPerRow(BaseFixedWidthVector v) {
+    return v instanceof BitVector ? 1 : v.getTypeWidth();
   }
 
   /**
@@ -440,13 +464,15 @@ public final class VarkaKernelRunner {
       boolean selectionBitmaps) {
     int n = inputOrdinals.length;
     var widths = new int[n];
+    var bits = new boolean[n];
     var dataBufs = new ArrowBuf[n];
     var validityBufs = new ArrowBuf[n];
     for (int i = 0; i < n; i++) {
       if (derived[i] == null) {
         var v = (BaseFixedWidthVector)
             ((ArrowColumnVector) input.column(inputOrdinals[i])).getValueVector();
-        widths[i] = v.getTypeWidth();
+        widths[i] = bytesPerRow(v);
+        bits[i] = v instanceof BitVector;
         dataBufs[i] = v.getDataBuffer();
         validityBufs[i] = v.getValidityBuffer();
       } else {
@@ -470,7 +496,8 @@ public final class VarkaKernelRunner {
       byte[] data = null;
       byte[] validity = null;
       if (omitted == null) {
-        data = new byte[len * widths[i]];
+        // A bit vector holds one bit a row, so its data is (len + 7) / 8 bytes.
+        data = new byte[bits[i] ? (len + 7) / 8 : len * widths[i]];
         dataBufs[i].getBytes(0, data);
         if (srcValidity[i] != 0L && srcNullCount[i] != 0) {
           validity = new byte[(int) Math.min(validityBufs[i].capacity(), ((len + 63L) / 64) * 8)];
