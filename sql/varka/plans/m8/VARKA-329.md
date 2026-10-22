@@ -752,7 +752,7 @@ benchmark, the runner hosts' columns and row 415's past-L3 rung are as 9.2 left 
 spike's verdicts stand.
 
 **The shared pieces.** `LaneType` gained `BYTE` and `SHORT` ahead of `INT`, and `isNarrow()` is
-`ordinal() < INT.ordinal()`, so `WidenLane`'s target-is-wider rule and `NarrowLane`'s
+`BYTE` or `SHORT`, so `WidenLane`'s target-is-wider rule and `NarrowLane`'s
 child-is-wider rule hold unchanged. `Lane` gained its two rows: `ByteVector` at 8 bits and
 `ShortVector` at 16, a stride of one and two bytes, a scalar-array class for the literal table, and
 `hasSpecies(lanes)` refusing a species below 64 bits, which is what makes a widened byte load need
@@ -842,8 +842,9 @@ because drawing the types is row 352's.
 
 **The suites.** `VarkaEmitterNarrowSuite` (8 tests in their own JVM) runs both arms over every
 byte length and tail, the whole byte square through every comparison, a range set, `greatest`,
-`least` and a choice, a narrow column beside an int one, and a narrow-typed root stored through a
-`NarrowLane` - each against `VarkaReference` through `VarkaKernelCheck.runAndCompareNarrow`;
+`least` and a choice, a narrow column beside an int one, a narrow-typed root stored through a
+`NarrowLane` and int values past the byte and short ranges truncated by that store - each against
+`VarkaReference` through `VarkaKernelCheck.runAndCompareNarrow`;
 where a configuration has no species for the widening load it asserts the refusal instead of
 emitting, and the bigint refusal is pinned the same way, so the option matrix can run it under
 every configuration. `VarkaExpressionCompilerSuite` holds the compiler-level guard of the same
@@ -863,7 +864,7 @@ stale and are gone: an `IS NOT NULL` row's null-test `CASE` reads only the colum
 word, so it needs no widening load and fuses at every width, while the same row's projection and
 partition tests select the narrow column and decline.
 
-**The review.** One independent read of the final diff found three things, fixed in their own
+**The review.** One independent read of the diff found three things, fixed in their own
 commits. `onIntLane` returned a narrow boolean leaf - a boolean column, a boolean constant, a
 compare of two conditions, a null-safe equality of them, a choice between them - unchanged, and a
 caller then built an `And` over it and a lifted sibling, whose constructor refuses a mix by
@@ -881,3 +882,12 @@ and `emitNarrowTypeStore` refuses a narrow-driven kernel rather than naming a sp
 have. Running the compiler suite for the new guard also caught an expectation the earlier lift had
 left stale: `sh <=> sh` was held to decline beside the strings and doubles, and it fuses now, so
 the test pins the fused shape.
+
+**The second read.** A read of the fixed diff found no bug and three smaller things, all in. The
+store unit test's data stayed inside the byte range, so the store's truncation was never exercised
+through emitted code: it now also stores int values past the byte and the short range, and the
+reference's truncation has to agree row by row. The width audit's prose called its declines the
+emitter's, where the shapes are declined by the compiler before the probe runs; the suite's
+comments and the description recorded in `width_audit.json` now say so, and a regeneration moved
+that one field and no measurement. And `isNarrow()` was described above as an ordinal comparison
+where the code names `BYTE` or `SHORT`.
