@@ -581,7 +581,7 @@
     "operands" : [ "Multiply:byte" ],
     "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
     "domain" : "CAST(y1 AS INT) * CAST(y2 AS INT) BETWEEN -128 AND 127",
-    "note" : "a byte multiply wraps natively and is widened to short for its check"
+    "note" : "a byte multiply wraps natively and is widened to int for its check"
   }, {
     "sql" : "-y1",
     "executable" : "-y1",
