@@ -106,7 +106,13 @@ class VarkaEmitterNullSafeSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     val shapes: Seq[(String, VarkaVectorIR, Int)] = Seq(
       ("a checked sum against a column", new NullSafeEqual(sum, c2), 3),
       ("a column against a sum with a literal", new NullSafeEqual(c0, shifted), 2),
-      ("two computed operands", new NullSafeEqual(sum, shifted), 2))
+      ("two computed operands", new NullSafeEqual(sum, shifted), 2),
+      // Operands whose validity word is not an input's: valid where either input is, and where
+      // the choice's chosen branch is.
+      ("a greatest against a column", new NullSafeEqual(new Greatest(c0, c1), c2), 3),
+      ("a column against a least", new NullSafeEqual(c2, new Least(c0, c1)), 3),
+      ("a choice against a column",
+        new NullSafeEqual(new IfElse(new Compare(CompareOp.LT, c0, c1), c0, c1), c2), 3))
     for ((width, options) <- widths; (name, root, inputs) <- shapes) {
       checkMatrix(Seq(root), inputs, Array(1), Seq(1, 17, 64, 65, 130), combos(inputs),
         data = pairs, ctx = s"$name at $width", options = options)

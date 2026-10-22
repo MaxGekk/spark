@@ -140,8 +140,11 @@ class VarkaEmitterBitwiseSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       Int.MaxValue)
     val edges = Array(0L, 1L, -1L, Long.MaxValue, Long.MinValue, 1L << 32, -(1L << 32) - 1,
       0x5555555555555555L, 0xAAAAAAAAAAAAAAAAL, Long.MinValue + 1)
-    def value(i: Int): Long = edges(i % edges.length) + (i / edges.length)
-    // Every value meets every count over the batch: the value cycles faster than the count.
+    // A cross product: the value cycles faster than the count, so the first edges.length *
+    // intCounts.length rows pair every edge with every count, and the second pass does the same
+    // for each edge plus one (the tail rows are a third pass).
+    val pass = edges.length * intCounts.length
+    def value(i: Int): Long = edges(i % edges.length) + (i / pass)
     def intCount(i: Int): Int = intCounts((i / edges.length) % intCounts.length)
     val expected: Seq[(Long, Int) => Long] = Seq(
       (v, c) => v << c, (v, c) => v >> c, (v, c) => v >>> c,

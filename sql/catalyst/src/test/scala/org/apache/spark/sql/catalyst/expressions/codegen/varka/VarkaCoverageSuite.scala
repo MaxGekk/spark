@@ -168,8 +168,9 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
         + "raises", domain = Some(s"i BETWEEN -$dayLimit AND $dayLimit")),
       Row("datediff(d2, d)"),
       Row("d2 - d", "a day-time interval in microseconds, not datediff's day count; Spark raises " +
-        "where the count's product overflows a long, in every mode, so the batch declines and " +
-        "the row engine raises. The legacy CalendarInterval result is not fused",
+        "where the int day count overflows or its product overflows a long, in every mode, so " +
+        "the batch declines and the row engine raises. The legacy CalendarInterval result is " +
+        "not fused",
         domain = Some("CAST(unix_date(d2) AS BIGINT) - unix_date(d) BETWEEN " +
           s"-$maxDateDiffDays AND $maxDateDiffDays")),
       Row("unix_date(d)"),
@@ -352,6 +353,11 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
         "computed operands: a calendar field's validity is read after its value walk",
         domain = Some(s"$dayBound AND unix_date(d2) BETWEEN ${VarkaChrono.CONTRACT_MIN_DAYS} " +
           s"AND ${VarkaChrono.CONTRACT_MAX_DAYS}")),
+      Row("coalesce(d, d2) <=> d",
+        "an operand with a validity word of its own (it is null only where both are), so the "
+          + "known-true mask is not a subset of the validity the operand comparison reads"),
+      Row("greatest(d, d2) <=> d2", "the same with a greatest, valid where either input is"),
+      Row("if(i > 3, d, d2) <=> d", "a choice as an operand: the validity follows the branch"),
       Row("(d < d2) IS TRUE",
         "the predicate and its own validity: true where the comparison is true, false where it "
           + "is false or unknown"),
