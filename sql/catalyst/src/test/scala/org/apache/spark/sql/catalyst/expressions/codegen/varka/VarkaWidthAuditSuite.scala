@@ -72,7 +72,7 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
   private val widthsBytes = Seq(16, 32, 64)
 
   /**
-   * One width's answers: what C2 refused per shape, and what the emitter declined before C2
+   * One width's answers: what C2 refused per shape, and what the compiler declined before C2
    * saw it, keyed by the same shape name. The two are different kinds of answer - a decline is
    * no lowering at all, a refusal is a per-lane fallback - and both are pinned (VARKA-329).
    */
@@ -140,7 +140,7 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
           current = Some(name)
           refusals.getOrElseUpdate(name, mutable.LinkedHashSet.empty)
         }
-        // The emitter's decline belongs to the shape whose markers it sits between, and it is
+        // The compiler's decline belongs to the shape whose markers it sits between, and it is
         // printed instead of a C2 refusal, so no `** ` line follows it.
         VarkaProbeOutput.after(line, DECLINED_PREFIX).foreach { reason =>
           current.foreach(name => declined(name) = reason.trim)
@@ -284,8 +284,8 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
         "retry, and 'unbox failed', a vector reaching a call as a heap object once the shared " +
         "templates have seen other kernels - are not verdicts and are not recorded: they " +
         "depend on JIT timing in the probe and moved between runs of an unchanged tree. An " +
-        "empty list is a shape C2 refused nothing in. A shape the emitter declines at a width " +
-        "has no call for C2 to judge and is recorded as 'declined: <the emitter's reason>' " +
+        "empty list is a shape C2 refused nothing in. A shape the compiler declines at a width " +
+        "has no call for C2 to judge and is recorded as 'declined: <the compiler's reason>' " +
         "instead; VARKA-329's byte widening load is the first, below eight int lanes. The " +
         "census is a property of the CPU and the JDK, so the host is part of the record."),
       "host" -> ordered(

@@ -54,7 +54,7 @@ object VarkaWidthAuditProbe {
   val SHAPE_BEGIN_PREFIX = "VARKA_AUDIT_SHAPE_BEGIN "
   val SHAPE_END_PREFIX = "VARKA_AUDIT_SHAPE_END "
   val SHAPE_NAME_END = " VARKA_AUDIT_NAME_END"
-  /** A shape this width has no lowering for, with the emitter's reason (VARKA-329). */
+  /** A shape this width has no lowering for, with the compiler's reason (VARKA-329). */
   val DECLINED_PREFIX = "VARKA_AUDIT_DECLINED "
   val DONE = "VARKA_AUDIT_DONE"
 
