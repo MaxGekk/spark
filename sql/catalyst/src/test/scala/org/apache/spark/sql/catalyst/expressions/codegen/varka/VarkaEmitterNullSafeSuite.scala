@@ -130,7 +130,7 @@ class VarkaEmitterNullSafeSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     def longs(c: Int, i: Int): Long = pairs(c, i).toLong * (if (i % 5 == 0) 3L else 1L)
     for (lanes <- Seq(2, 4, 8); root <- roots) {
       checkLongMatrix(Seq(root), 2, Array.empty[Long], tailLengths, combos(2), longs,
-        ctx = s"bigint ${root.getClass.getSimpleName} at $lanes lanes", lanes = lanes)
+        ctx = s"bigint ${root.getClass.getSimpleName} at $lanes lanes", lanes = Some(lanes))
     }
   }
 

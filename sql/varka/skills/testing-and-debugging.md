@@ -759,20 +759,30 @@ second species at the others.
 A test that must hold under every configuration emits with `VarkaMatrix.base`, lanes included. The
 guard registers the first size each vector class uses, and the matrix's `lanesOverride=4` makes
 that size 128 bits for ints, so a test that fixes its own width (`withLanesOverride(16)`) conflicts
-with it on any host, and one that asks for the JVM's own (a `lanes` argument of 0 to
-`checkLongMatrix`, a gate on the preferred width alone) conflicts on a host whose preferred width
-differs from the configuration's. Which suite is blamed depends on which ran first: a runner's
-order failed 27 tests of other suites in CI that a laptop's order, with the same cause, blamed on
-three (VARKA-410). To find the culprits, run the configuration with `-Dvarka.speciesGuard=off` and
-a temporary line in `VarkaSpeciesGuard.check` that appends suite, class and the sizes the bytes use
-(`secondSpecies`, or `sizesUsed` made visible) to a file, then read the suites outside
-`VarkaOwnJvm` whose sizes differ from the configuration's; a one-suite run passes, so only the
-shared JVM finds them. Pass the matrix's lane count where the
-test only needs a width (`VarkaMatrix.base.lanesOverride()`), and where it pins one on purpose,
-load the class only when the JVM's established width is that one (the override where a
-configuration sets one, else the preferred width) and check the emitted bytes alone otherwise.
-Run the lane configurations with `--split 1`, `2` and `3` and under `-XX:MaxVectorSize=32`: the
-split moves which suites share a JVM.
+with it under every configuration but `lanesOverride=16`, where 16 lanes is the established width
+(and on a 512-bit host, where 16 lanes is the preferred one, at the defaults). One that asks for
+the JVM's own (a gate on the preferred width alone) conflicts on a host whose preferred width
+differs from the configuration's. `checkLongMatrix` takes the matrix's width unless a test names
+one (`lanes = Some(n)`, as a sweep of widths does), and `VarkaSpeciesGuard.establishedIntLanes()`
+is the width to emit at where a test loads what it emits.
+
+Which suite is blamed depends on which ran first: a runner's order failed 27 tests of other suites
+in CI that a laptop's order, with the same cause, blamed on three (VARKA-410), and a `--split`
+only reorders which suites share a JVM and so who is blamed, not whether one is. To find the
+culprits, run the configuration in the guard's report mode (`-Dvarka.speciesGuard=report
+-Dvarka.speciesGuard.report=<file>`, above). It is not enough by itself under `lanesOverride=4` on a 512-bit host: the report lists the
+classes that name a species other than the preferred one, and there that is every kernel of every
+suite, at 128 bits, while the culprit, a suite that emits for the JVM's own width, names the
+preferred species and is not listed. Read the file for what is absent: the suites outside
+`VarkaOwnJvm` that emit and do not appear, or a suite that appears with a size that differs from
+the configuration's. A temporary line in `VarkaSpeciesGuard.check` that appends every class's
+sizes (`sizesUsed` made visible) with `-Dvarka.speciesGuard=off` lists the preferred ones too.
+A one-suite run passes, so only the shared JVM finds them. Pass the matrix's lane count where the
+test only needs a width (the default of `checkLongMatrix`, or `VarkaMatrix.base.lanesOverride()`),
+and where it pins one on purpose, load the class only when the JVM's established width is that one
+(`establishedIntLanes()`) and check the emitted bytes alone otherwise. Run the lane configurations
+with `--split 1`, `2` and `3` and under `-XX:MaxVectorSize=32`: the split moves which suites share
+a JVM.
 
 A test that pins an emitted shape (a prefix stored by one loop method and loaded by another, a
 census of unread locals) must pin the options the shape depends on, not take them from
@@ -780,8 +790,11 @@ census of unread locals) must pin the options the shape depends on, not take the
 budget past the shape or drops the method byte budget leaves no group to load a prefix, and a
 test that asserts the prefix is materialized fails there while the emitter is right (VARKA-411).
 Set those options from `VarkaEmitOptions.DEFAULTS` in the test, with the reason beside them, and
-keep every other option from the matrix, so the lane and cost configurations still run it. Tag the
-whole test `PinsDefaults` only when nothing else of it is worth running under a configuration.
+keep every other option from the matrix, so the lane and cost configurations still run it. Where
+the pinned run under a configuration that changes a pinned option would repeat the defaults' run,
+cancel the case there instead (`assume`, as the unread-locals month-once case does), so that a
+green result does not claim a coverage it lacks. Tag the whole test `PinsDefaults` only when
+nothing else of it is worth running under a configuration.
 The scheduled option matrix runs every configuration and a pull request's scoped run only the one
 its diff names, so a test added with a feature is first run under the others a day later: run the
 new suites under all of `--list` before merging a test that emits.

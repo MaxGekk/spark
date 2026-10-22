@@ -1404,7 +1404,7 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     val data = (_: Int, i: Int) => ((i * 7_919_000_003L) % bound) * (if (i % 2 == 0) 1 else -1)
     for (lanes <- Seq(2, 8)) {
       checkLongMatrix(roots, 1, lits, Seq(1, 7, 17, 64, 129), combos(1), data,
-        "long lane split on call sites", lanes)
+        "long lane split on call sites", Some(lanes))
     }
   }
 

@@ -488,7 +488,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
         new ConstDivide(new ColumnRef(0, LaneType.LONG), d, ConstDivide.EXACT_DIVIDEND_BOUND))
       val vs = dividendsAround(d)
       checkLongMatrix(root, 1, Array.empty[Long], Seq(1, 7, 17, 64, 129), combos(1),
-        (_, i) => vs(i % vs.length), s"long divc/$d", lanes, converting)
+        (_, i) => vs(i % vs.length), s"long divc/$d", Some(lanes), converting)
     }
     assert(col.divisor() === 1)
   }
@@ -508,7 +508,7 @@ class VarkaEmitterDivisionSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
         new ConstDivide(new ColumnRef(0, LaneType.LONG), d, ConstDivide.EXACT_DIVIDEND_BOUND))
       val vs = dividendsAround(d)
       checkLongMatrix(root, 1, Array.empty[Long], Seq(1, 7, 17, 64, 129), combos(1),
-        (_, i) => vs(i % vs.length), s"avx2 divc/$d", lanes, avx2)
+        (_, i) => vs(i % vs.length), s"avx2 divc/$d", Some(lanes), avx2)
     }
   }
 
