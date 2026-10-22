@@ -44,8 +44,8 @@ The site list, with its guard today (production sites only):
 | :--- | :--- | :--- |
 | `VarkaVectorIR.java` | the `LaneType` member and the leaves that read the type | exhaustive switch |
 | `Lane.java` | species constant, width, stride, vector class, conversions | `Lane.of` throws |
-| `VarkaNodeCompiler.java` | `laneOf` (Spark `DataType` to lane), leaf construction, `inputLane` | exhaustive switch |
-| `VarkaExpressionCompiler.java`, `VarkaConditionCompiler.java` | the expression and condition dispatch | exhaustive switch, per node kind |
+| `VarkaNodeCompiler.java` | `laneOf` (Spark `DataType` to lane), leaf construction, `inputLane` | none: an unknown type is an empty `Optional`, a decline |
+| `VarkaExpressionCompiler.java`, `VarkaConditionCompiler.java` | the expression and condition dispatch | none: a fall-through decline, whose reason names the shape but not the missing type |
 | `Analysis.java` | which nodes are admitted, input lanes, the guards a node arms | exhaustive switch |
 | `VarkaBodyEmitter.java`, `VarkaLoopEmitter.java`, `VarkaVectorWalk.java` | the emitted code, per node kind | exhaustive switch |
 | `VarkaReference.java` | the scalar semantics the fuzzers compare against | none |
@@ -74,9 +74,10 @@ Half a day including the tests.
 **2.2 The evaluator's Arrow knowledge moves into one table.** `isArrowBacked` and
 `allocateVector` are today two per-type arms in two files, and the first has a `default`. A
 `LaneArrow` record, one per `LaneType`, holding the Arrow vector class, the read and write
-accessors and the accept predicate, populated by one exhaustive switch beside the evaluator
-(it stays in `sql/core`, where the Arrow classes are), gives the type one more registration point
-of the first kind. `isArrowBacked` becomes a lookup, and its `default` disappears. A day.
+accessors and the accept predicate, populated by one exhaustive switch beside the evaluator (it
+stays in `sql/core`, beside the two functions that read it), gives the type one more
+registration point of the first kind. `isArrowBacked` becomes a lookup, and its `default`
+disappears. A day.
 
 **2.3 A checklist script.** `dev/varka_new_lane.py --check <LANE>` walks a curated site list - the
 "no guard" rows of section 1 - and reports each site with no case for the lane, `file:line` and
@@ -124,3 +125,8 @@ where a reader already looks.
 It does not generate the emitter arms from a table. The narrow store's conversion and species
 selection in `VarkaBodyEmitter` are logic, not boilerplate, and a generator would hide it. It also
 does not touch the per-kind exhaustive switches: they are the model the other sites should follow.
+
+It must survive the floating split: row 341 divides `Lane` into an integral and a floating half
+(`m8/PLAN.md` 2.3), and a registration point that assumes integral descriptors would have to be
+rebuilt for `DOUBLE` and `FLOAT`. The `Lane` entry carries the descriptor family, and the
+evaluator's table carries the Arrow vector, so neither assumes an integral lane.

@@ -1,6 +1,8 @@
 # Adding a type to Varka
 
-Milestone 8 adds seven types, and four are still ahead. This page is the path a type takes
+Milestone 8 adds seven types: two have landed in part, and four have not started (`TIMESTAMP_NTZ`,
+`DOUBLE`, `FLOAT` and `DECIMAL`; `BOOLEAN` has its conditions and not yet the condition-to-value
+bridge, row 460). This page is the path a type takes
 through the engine, in the order the code runs, with the file named for each step and a command
 that says whether the step is done.
 
@@ -95,8 +97,8 @@ Check: `build/sbt 'catalyst/testOnly *VarkaIrFuzzSuite'` and
 
 **9. Admit it in and out of Arrow.** `isArrowBacked` for the vector the type arrives in,
 `allocateVector` for the vector it is written to, and `VarkaKernelRunner` for any input whose
-width is not its type's (a bitmap is a byte a row of validity). The sanitizer registers the rows
-a call can reach, not the allocation's padding.
+stored width is not its type's (a bitmap is one bit a row, and its Arrow vector reports a type
+width of zero). The sanitizer registers the rows a call can reach, not the allocation's padding.
 Check: `build/sbt 'sql/testOnly *VarkaKernelEvaluatorSuite *VarkaWarmupEndToEndSuite
 *VarkaMemorySanitizerEndToEndSuite'`.
 
@@ -127,9 +129,10 @@ Check: the benchmark's own results file, and the row's numbers against it.
 
 **14. Run the matrix over the new emitting suites.** A new emitting suite runs under every
 configuration, not only the one a PR's scoped CI run picks:
-`dev/varka_matrix.sh --all --module catalyst --suites <the new suites> -j 4`, about 40 minutes,
-plus the defaults. A test whose premise an option changes pins it, cancels under it, or gets a
-line in `sql/varka/matrix/skips.tsv` with the reason.
+`dev/varka_matrix.sh --all --module catalyst --suites <the new suites> -j 4`, or `--module sql`
+for the suites that live in `sql/core`, about 40 minutes, plus the defaults. A test whose premise
+an option changes pins it, cancels under it, or gets a line in `sql/varka/matrix/skips.tsv` with
+the reason.
 Check: the matrix's table - every row `fail 0`, `unfused 0`, and no stale skip line.
 
 **15. The linters, before the push.** `./dev/varka_errorprone.sh --master "$(git rev-parse
@@ -142,8 +145,13 @@ Check: their exit codes, reported in the pull request.
 Three kinds of site exist (see `plans/m8/VARKA-474.md` 1): exhaustive switches, which the compiler
 checks; runtime checks such as `Lane.of`, which throw when a kernel of the new type first runs;
 and sites with no guard at all - the cost model, the census, the coverage rows, the fuzz grammar,
-the reference evaluator, the width audit's shapes. Steps 7 to 12 are those sites, and their check
-commands are the only thing that will notice a miss.
+the reference evaluator, the width audit's shapes. Between them sit the decline sites:
+`VarkaNodeCompiler.laneOf` returns an empty `Optional` for a type it does not know, and the
+expression and condition compilers fall through to a decline with a reason. A decline is the right
+answer for an unsupported shape, but for a *new type* it is indistinguishable from "not implemented
+yet" unless the reason names the type, so steps 4 and 5 are where a missing arm costs an hour of
+confusion. Steps 7 to 12 are the unguarded sites, and their check commands are the only thing that
+will notice a miss.
 
 Two of today's guards are weaker than they look. `VarkaEvaluatorBase.isArrowBacked` ends its
 `switch` over Arrow vector classes with `default -> false`, so a lane that reaches it is declined
