@@ -190,7 +190,8 @@ public sealed interface VarkaVectorIR
     if (lanes.contains(LaneType.LONG)) {
       return LaneType.LONG;
     }
-    if (lanes.contains(LaneType.INT) || !options.narrowLanes()) {
+    if (lanes.contains(LaneType.INT) || !options.narrowLanes()
+        || holdsCheckedNarrowMultiply(root)) {
       return LaneType.INT;
     }
     // A tree that mixes the two narrow lanes has no single narrow species, and converting
@@ -200,6 +201,41 @@ public sealed interface VarkaVectorIR
       return LaneType.INT;
     }
     return lanes.contains(LaneType.SHORT) ? LaneType.SHORT : LaneType.BYTE;
+  }
+
+  /**
+   * Whether {@code root}'s tree holds a checked narrow multiply - an {@code ANSI} or
+   * {@code TRY} {@link IntOp#MUL} over {@code TINYINT} or {@code SMALLINT} operands.
+   *
+   * <p>Such a tree is driven at the int lane under either narrow arm. The check needs the exact
+   * product, and the Vector API cannot widen a full narrow species into the next one: a
+   * {@code B2S} conversion takes the source's lanes in targets of the target species' width, so a
+   * 64-lane {@code ByteVector} at 512 bits has no 64-lane {@code ShortVector} to convert into,
+   * and the check would have to be taken part by part with the masks recombined across species.
+   * The int lane has the exact product of two narrow operands for free - a byte product is at
+   * most 2^14 and a short one at most 2^30 - so one int multiply and the node lane's own range
+   * compare is the check ({@code VARKA-329.md} 4.2). The native arm therefore serves the
+   * wrapping multiply and takes its checked form through the widened lowering; the benchmark
+   * reports what that costs.
+   */
+  private static boolean holdsCheckedNarrowMultiply(VarkaVectorIR root) {
+    return holdsCheckedNarrowMultiply(root, new HashSet<>());
+  }
+
+  private static boolean holdsCheckedNarrowMultiply(VarkaVectorIR node, Set<VarkaVectorIR> seen) {
+    if (!seen.add(node)) {
+      return false;
+    }
+    if (node instanceof IntArith n && n.op() == IntOp.MUL && n.mode() != Overflow.WRAP
+        && n.laneType().isNarrow()) {
+      return true;
+    }
+    for (VarkaVectorIR child : childrenOf(node)) {
+      if (holdsCheckedNarrowMultiply(child, seen)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** The lanes {@code root}'s tree holds, which is what {@link #emissionLane} decides on. */

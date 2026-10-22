@@ -554,6 +554,16 @@ final class VarkaVectorWalk {
    * the compiler declines a checked multiply outright and only {@code WRAP} reaches here.
    * That is wider than VARKA-63.md 3.3 assumed; see the correction there.
    *
+   * <p>The narrow lanes check differently, because they overflow at their own width
+   * ({@code VARKA-329.md} 4.2, 4.3). A checked narrow node at the int lane - the widened arm,
+   * and the arm a tree holding a checked narrow multiply is driven at under either option - has
+   * the exact int result of two narrow operands and tests it against the node lane's own range:
+   * one compare at each end, then the mode's disposal. On the narrow lane the check is
+   * `add != sadd` (`sub != ssub`), the saturating operation being the one the wrap differs from
+   * exactly where the exact result leaves the range. A wrapping narrow node on the int lane
+   * leaves its int result unreduced where a ring consumer can take it, and reduces it with the
+   * shift pair where it cannot ({@link Analysis#wrapAt}).
+   *
    * <p>Where the mask goes is what separates the two checked modes. {@code FAIL} folds it into
    * the batch's condemning accumulator through {@link #emitGuardCollect}, so the batch declines
    * and the row engine raises Spark's own error. {@code NULL} clears those lanes from the
@@ -575,6 +585,7 @@ final class VarkaVectorWalk {
       case SUB -> "sub";
       case MUL -> "mul";
     };
+    boolean narrow = n.laneType().isNarrow();
     // Before the scratch-slot test, because the refusal is about the node and not about how
     // this body was configured: with `checkIntOverflow` off there is no scratch, and a checked
     // multiply would otherwise slip through as a plain wrapping one.
@@ -585,15 +596,23 @@ final class VarkaVectorWalk {
     // it a reference arm rather than a setting. `MUL` is different in kind - there is no
     // correct checked emission for it at all, so "off" cannot mean "the same node, cheaper".
     // A reader who generalises this into the `NULL` and `IntNeg` arms breaks the benchmark.
-    if (n.op() == IntOp.MUL && n.mode() != Overflow.WRAP) {
+    // A narrow multiply is the exception that keeps the argument: its product of two narrow
+    // operands is exact in the int lane, and on the narrow lane it is the saturating form, so
+    // both arms can check it.
+    if (n.op() == IntOp.MUL && n.mode() != Overflow.WRAP && !narrow) {
       throw VarkaErrors.illegalArgument("a checked multiply has no int-lane overflow test: " + n);
     }
     int[] tmp = s.intArithTmp.get(n);
     if (tmp == null) {
       // WRAP, or the check switched off for the A/B: the plain lanewise op, whose word is the
-      // operands' AND like every other null-intolerant binary node.
+      // operands' AND like every other null-intolerant binary node. A wrapping narrow node on
+      // the int lane leaves its int result unreduced for a ring consumer, and reduces it here
+      // where the first consumer that is not one reads it.
       emitAndValidatedOp(cb, n, n.left(), n.right(), op, lane.lanewiseVV, dense,
           analysis, s, computed);
+      if (narrow && analysis.wrapAt.contains(n)) {
+        emitWrapToNarrow(cb, lane, n.laneType());
+      }
       return;
     }
     int a = tmp[0];
@@ -609,6 +628,11 @@ final class VarkaVectorWalk {
     cb.astore(a);
     if (!dense && s.ownWord.contains(n)) {
       emitAndWord(cb, s, s.wordRef.get(n), s.wordRef.get(n.left()), s.wordRef.get(n.right()));
+    }
+    if (narrow) {
+      emitNarrowOverflowMask(cb, n, lane, a, b, r, dense, analysis, s);
+      cb.aload(r);
+      return;
     }
     // The two XORs, whose operands differ between ADD and SUB, then the AND and the sign test.
     cb.aload(a);
@@ -629,11 +653,84 @@ final class VarkaVectorWalk {
   }
 
   /**
+   * The overflow mask of a checked narrow arithmetic node, left on the operand stack for
+   * {@link #emitOverflowMask}: the operands and the result are in {@code a}, {@code b} and
+   * {@code r}.
+   *
+   * <p>At the int lane the result is exact, so the mask is the two compares against the node
+   * lane's own range. On the narrow lane it is the saturating difference - {@code add != sadd},
+   * {@code sub != ssub} - one lanewise op, one compare. {@code MUL} never takes the second form:
+   * its tree is driven at the int lane for exactly this reason
+   * ({@code VarkaVectorIR#holdsCheckedNarrowMultiply}), so reaching there is a bug in the lane
+   * decision rather than a node to lower.
+   */
+  private static void emitNarrowOverflowMask(CodeBuilder cb, IntArith n, Lane lane, int a, int b,
+      int r, boolean dense, Analysis analysis, Slots s) {
+    if (!lane.isNarrow()) {
+      Lane of = Lane.of(n.laneType());
+      cb.aload(r);
+      cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
+      lane.pushScalar(cb, of.mostNegative());
+      cb.invokevirtual(lane.vector, "compare", lane.compareVI);
+      cb.aload(r);
+      cb.getstatic(VECTOR_OPERATORS, "GT", VO_COMPARISON);
+      lane.pushScalar(cb, of.mostPositive());
+      cb.invokevirtual(lane.vector, "compare", lane.compareVI);
+      cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+    } else {
+      if (n.op() == IntOp.MUL) {
+        throw VarkaErrors.illegalArgument(
+            "a checked narrow multiply is emitted at the int lane: " + n);
+      }
+      cb.aload(a);
+      cb.aload(b);
+      cb.getstatic(VECTOR_OPERATORS, n.op() == IntOp.ADD ? "SADD" : "SSUB", VO_BINARY);
+      cb.swap();
+      cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryV);
+      cb.aload(r);
+      cb.getstatic(VECTOR_OPERATORS, "NE", VO_COMPARISON);
+      cb.swap();
+      cb.invokevirtual(lane.vector, "compare", lane.compareVV);
+    }
+    emitOverflowMask(cb, n.mode(), n, dense, analysis, s);
+  }
+
+  /**
+   * Reduces the value on the stack from the lane it is emitted at to {@code type}'s width and
+   * sign-extends it back: a shift left by the spare bits of that lane and an arithmetic shift
+   * right by the same count. From the int lane that pair is Spark's wrap at the narrow width
+   * ({@code signExtend(r mod 2^w)}, which {@code narrow_wrap.smt2} checks over every pair of
+   * narrow values); the int lane's own 32-bit wraparound cannot change the answer, because
+   * reducing mod 2^8 or 2^16 and then reducing mod 2^32 first agree. From the narrow lane itself
+   * there is nothing to do - the lane operation already wrapped - so the pair is skipped rather
+   * than emitted with a zero count.
+   */
+  private static void emitWrapToNarrow(CodeBuilder cb, Lane lane, VarkaVectorIR.LaneType type) {
+    int shift = lane.bits - Lane.of(type).bits;
+    if (shift == 0) {
+      return;
+    }
+    cb.getstatic(VECTOR_OPERATORS, "LSHL", VO_BINARY);
+    cb.loadConstant(shift);
+    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryI);
+    cb.getstatic(VECTOR_OPERATORS, "ASHR", VO_BINARY);
+    cb.loadConstant(shift);
+    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryI);
+  }
+
+  /**
    * {@code IntNeg}, emitted as a multiply by -1 so it needs no unary descriptor: the two agree on
    * every lane, {@link Integer#MIN_VALUE} included, where both return the input. That single value
    * is the whole of the overflow test, so the check is one compare rather than the four ops
    * {@link #emitIntArith} needs, and it reads the operand rather than the result - no scratch slot
    * at all.
+   *
+   * <p>A narrow negation tests its operand against its own lane's minimum, which is the node's
+   * and not the emitted lane's: under the widened arm the value is an int in the int lane, but
+   * {@code -(-128Y)} is the value that overflows, not {@code -Integer.MIN_VALUE}. A wrapping
+   * narrow negation on the int lane is the int negate of the exact operand, which for
+   * {@code -128} is 128 rather than -128, so it reduces where a consumer cannot take the
+   * unreduced value.
    */
   private static void emitIntNeg(CodeBuilder cb, IntNeg n, boolean dense, Analysis analysis,
       Slots s, Set<VarkaVectorIR> computed) {
@@ -645,12 +742,15 @@ final class VarkaVectorWalk {
     if (checked) {
       cb.dup();
       cb.getstatic(VECTOR_OPERATORS, "EQ", VO_COMPARISON);
-      lane.pushScalar(cb, lane.mostNegative());
+      lane.pushScalar(cb, Lane.of(n.laneType()).mostNegative());
       cb.invokevirtual(lane.vector, "compare", lane.compareVI);
       emitOverflowMask(cb, n.mode(), n, dense, analysis, s);
     }
     lane.pushScalar(cb, -1);
     cb.invokevirtual(lane.vector, "mul", lane.lanewiseVI);
+    if (n.laneType().isNarrow() && analysis.wrapAt.contains(n)) {
+      emitWrapToNarrow(cb, lane, n.laneType());
+    }
   }
 
   /**

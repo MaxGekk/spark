@@ -162,6 +162,18 @@ From VARKA-119 (19 September 2026), which gave `VarkaIrFuzzSuite` the long lane.
   its batch on a value three bounds below zero. The int harness clamps; the long one floors. A
   decline in a null-free batch is the harness's problem before it is the emitter's.
 
+## A narrow column read as an int is unsigned
+
+An `UnsafeRow` gives a `ByteType` or `ShortType` field a slot as wide as the type, and `getInt` reads
+four bytes from that slot whatever the type is. Where the bytes after the value are zero the read is
+the eight-bit value *unsigned*: `-128` comes back as `128`, while `127` comes back as itself, so the
+mistake looks like a data problem in exactly the rows that exercise a bound. VARKA-330's domain check
+read the narrow columns that way and predicted an int overflow for `127Y + -128Y` (which is `-1`)
+while the kernel answered it; the guard spec, the reference evaluator and the emitter were all
+right, and the fixtures only got the blame. Read a narrow column at its own width - `getByte`,
+`getShort` - and, when a value that should be small arrives larger, suspect the width before the
+data.
+
 ## A fixture that fills undefined memory decides what its whole matrix can catch
 
 - Arrow leaves the data under a null slot undefined, and the emitted loop loads every

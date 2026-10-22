@@ -743,3 +743,137 @@ unexplained. `VarkaNarrowLaneBenchmark` now has a 33554432-row rung (a 64 MB byt
 shorts, 256 MB of ints), timed only under `-Dvarka.narrow.pastL3=true` because its columns are
 about 600 MB. It has not been run: the laptop was in use for other timing that night. It is
 `PLAN.md` row 415, and prediction 2 stays scored as in the table above until that row reads it.
+
+### 9.3 Outcome of row 330: the narrow arithmetic in three modes (22 October 2026)
+
+Built on the lanes of step 2, merged into the row's branch at the checkpoint commit `33996c315d9`,
+in the worktree `varka-330-arith`. No new IR node: a narrow `Add`, `Subtract`, `Multiply` or
+`UnaryMinus` compiles to `IntArith(op, mode, left, right)` or `IntNeg(mode, child)` on the node's
+own lane, and `abs` to `IfElse(Compare(LT, x, 0), IntNeg(mode, x), x)` - Spark's own ANSI lowering,
+built from nodes that exist. The mode is the node's: `LEGACY` is `Overflow.WRAP`, `ANSI`
+`Overflow.FAIL` and `TRY` `Overflow.NULL`.
+
+**WIDENED, the default arm.** Everything is computed in the int lane over sign-extended narrow
+values. Under `LEGACY` the reduction is deferred to the first non-ring consumer: `Analysis.wrapAt`
+marks every unchecked narrow `IntArith`/`IntNeg` whose parent is not one of the ring nodes, and
+`VarkaVectorWalk.emitWrapToNarrow` reduces it with the lane's shift pair, `(x << s) >>a s` with
+`s = 32 - w` read from the lane. A checked node is not a ring node, so an ANSI or TRY node reduces
+and checks at itself, which is Spark's per-node rule - `(b1 + b2) - b3` raises on the sum alone.
+The check is the int result against the lane's range: `GuardedRange` under ANSI, which declines the
+batch and lets the row engine raise, and the same compare into the output's validity under TRY,
+ANDed with the operands' validity. The multiply needs no special case here: the product of two
+narrow operands is exact in the int lane (at most 2^30), so the same range form checks it. The
+one correction in `Analysis` is that the int arm's "a checked multiply never reaches the emitter"
+rule now reads the lane: a checked narrow multiply does reach it, and needs its refusal like any
+other checked node.
+
+**NATIVE.** The byte and short lane operations do the arithmetic. `LEGACY` wraps in the lane.
+`ANSI`'s check is one more lanewise and a compare - `ADD != SADD` for the sum and `SUB != SSUB` for
+the difference, the saturating operator picked by the op - and a lane set in that mask declines
+the batch; `TRY` turns the same mask into cleared validity bits. A checked multiply widens to the
+next lane (byte to short, short to int), where the product is exact, and compares against the
+narrow range there; this is the one native shape that pays for a conversion, the two-species case
+the census counts.
+
+**Proofs.** Four files under `sql/varka/proofs/`, rendered by `VarkaProofFiles` and held to their
+committed text by `VarkaProofFilesSuite`: `narrow_wrap.smt2` (16 checks: the shift pair is the
+sign extension of the low `w` bits for every int, the ring operations commute with it, and the
+logical shift and the shift by `s - 1` are refuted as the wrap), `narrow_overflow.smt2` (14
+checks: `add != sadd` and `sub != ssub` are set exactly where the exact result leaves the range,
+with the result's sign and the other operator's saturating form refuted), `narrow_range.smt2` (12
+checks: the compiler's `r < min || r > max` is Spark's `checkOverflow` for a narrow result,
+`<=`/`>=` refuted at the end each names, and the checked multiply's test in the widened lane is
+the same test), and `narrow_deferred.smt2` (12 checks: the deferral law
+`wrap(u op v) = wrap(wrap(u) op wrap(v))` for `+`, `-` and `*` at both widths, the int lane's ends
+as the law's fixpoints, and a compare refuted as a ring node, so it forces the wrap). Each file is
+`(set-logic ALL)` because it reasons over bit-vectors and takes the integer prelude;
+`dev/varka_prove.sh --solver both` is green, every check holding under Z3 and cvc5 in hundredths
+of a second.
+
+**Tests.** `VarkaEmitterNarrowArithSuite` (its own JVM, `VarkaOwnJvm`) is the arithmetic's gate.
+The named cases go through columns, never literals, at lengths 1 to 129 under four null patterns
+on both arms: `-(-128Y)`, `abs(-128Y)`, `127Y + 1Y`, `-128Y - 1Y`, `-128Y * -1Y`, `127Y * 127Y` and
+the short twins, each in `LEGACY`, `ANSI` and `TRY`. `TINYINT` is exhaustive over every operand
+pair (2^16 rows in one batch) for every operator, mode and arm; `SMALLINT` runs a 2^24-row slice
+on every build and all 2^32 pairs opt-in in slices of 2^16 rows with the second operand constant,
+and each sweep holds the null rows, the answers and one row in 256 to Spark's own expression
+evaluation. The suite also holds the check's byte cost where it is emitted, and the deferral
+itself: a chain answers at its root and under every non-ring consumer, a checked chain declines at
+its first overflowing node, and a TRY chain nulls the overflowing row and keeps its neighbours.
+`VarkaCoverageDifferentialSuite` holds the same 16 rows to Spark end to end - both consumers, the
+three domain partitions, ANSI's four positions - with `VarkaGuardSpecs` reading the narrow check at
+its own lane on both arms; the suite's 714 tests are green in 5 m 8 s at the matrix base. The
+new suite's 20 checked-mode tests are on `matrix/skips.tsv`'s `checkIntOverflow=false` list,
+where the option's promise - the same node cheaper - is that a checked node wraps; under
+`lanesOverride=4` and `validityByWidth=false` the suite passes, those declines being the
+arm's answer.
+
+**The first sweep, timed.** `SMALLINT` `+` in `LEGACY` on the widened arm, the cheapest of the 18,
+ran as the suite's opt-in test with `-Dvarka.sweep.filter` naming it alone, under both agent locks
+and a one-minute load under 3 before the JVM: 65,536 batches of 2^16 rows, each a constant short
+against every short, all answered, **1106 s** (18 min 26 s) for the whole 2^32, with 16,777,216
+rows held to Spark's own `eval` - one row in 256, the reference evaluator holding every row of
+every batch. On a held batch the oracle costs 43.4 ms against 20.3 ms for the kernel and the
+reference together, so at the sweep's sampling it is half a percent of the time. At that rate 330's
+18 sweeps are 5 h 32 min and the milestone's sixty 18 h 26 min - 24 times and 82 times the thirteen
+and a half minutes `m7/PLAN.md` 1 took for every int32 lowering's sweep together. The machine, the
+command, both printed lines and the arithmetic are in `results/VARKA-330-sweep.txt`, and the budget
+is in `PLAN.md` 10.3 item 5. The rate is the cheapest operator's in the cheapest mode, so the total
+is a floor, and 4.4's cut - one arm per operator and mode, the SMT having proved the formulas -
+remains the owner's if 5.5 hours for 330 alone is too much.
+
+**Coverage and census.** The 16 rows - `y1 + y2`, `y1 - y2`, `y1 * y2`, `-y1`, `abs(y1)` and the six
+`try_` forms, each with the short twin - are the coverage table's first `TINYINT` and `SMALLINT`
+pairs. `VARKA_COVERAGE_REGEN=true build/sbt 'catalyst/testOnly *VarkaCoverageSuite'` rewrote
+`coverage.json` (16 rows, 182 lines) and `docs/sql-varka.md` (21 lines), and the regen run's ten
+tests passed; the check the same suite makes of the committed files passes afterwards.
+`m8/census_curated.txt` gained the eight lines the pairs make fused (`+`, `-`, `*`, `abs`,
+`negative`, `try_add`, `try_subtract`, `try_multiply` over `byte,short`; `*` was fused for `int`
+alone), `census.tsv` was regenerated by `dev/varka_census.py`, and `--check` is green. The registry
+counts 164 fused pairs over its 13 types, 23 of them fused for every admitted type; `TINYINT` and
+`SMALLINT` are 8 of their 75 pairs each, where neither had one, against `INT` 31 of 90 and `BIGINT`
+28 of 86.
+
+The bytes oracle pins the same 16 rows at both widths, its column list extended with the narrow
+four - appended after the boolean pair, so no existing row's input ordinals move. At 512 bits they
+emit on the widened arm as any int kernel does. At 128 bits the eight `TINYINT` rows are refused,
+and the refusal is the compiler's own: `VarkaLoopEmitter.narrowRefusal` is what demotes a narrow
+value it cannot widen, and at four int lanes the byte species below would be 32 bits, a constant
+the Vector API does not declare. The oracle records that reason in the row rather than a body that
+could not load; the eight `SMALLINT` rows emit, four shorts being a named 64-bit species. No
+existing row moved.
+
+**Findings and limits.** Three things are recorded where a reader meets them rather than left to be
+discovered. First, a `CASE WHEN` whose condition is an int-lane comparison (`rid < 0`) and whose
+values are on the byte or short lane is refused: `VarkaConditionCompiler.caseWhen` asks `sameLane`
+after compiling both, and the only lifting it does is a value to the long lane, so a byte or short
+value under an int-lane condition has no int form to meet it - the narrow face of `m9/SCOPE.md` item
+55, "int values as the branches of `if`, `coalesce` and `greatest`", one type over. The
+differential suite lists that position (`CaseArm`) for all 16 rows in `ansiDeclined`, so the record
+says which positions serve a row and which do not. Second, the six `try_` rows' `rid < 0 AND ...`
+position leaves a row `FilterExec` above the kernel, since the int-lane conjunct and the narrow
+comparison cannot share one Varka filter, and is listed the same way under `FalseAnd`. Neither is a
+correctness gap; both are the edge of the served set. Third, the measurement 4.5 asks for -
+`VarkaNarrowLaneBenchmark`'s arithmetic shapes in this row's own pull request, with their three
+predictions, the checked multiply's widening cost on the native arm among them - is in neither this
+row's brief nor 4.6's done-when list, so it is not carried here; the shapes and the predictions stay
+in 4.5 for the row that prices the narrow arithmetic (352's refit).
+
+Three things were found on the way, all in this row's own code. The reduction's shift is now taken
+from the lane the value is emitted at rather than from the int lane: the int lane's `32 - w` also
+happens to be a no-op on a byte or short vector, because Java masks a shift count to the lane's
+width, so the native arm emitted two useless operations and the code was right by accident; it now
+skips the pair where the emitted lane is the node's own. With `checkIntOverflow` off, a checked
+narrow node is a ring node like a wrapping one, or an intermediate under a non-ring consumer kept
+the exact int (`127Y + 1Y` read as 128 rather than -128) instead of wrapping at its lane's width
+the way the option promises the same node cheaper. And the edges fixture had no row inside the
+short product's range - every other row's `300 * -400` is out of it - so its inside partition was
+empty; one row of small shorts fixes it. Two limits are kept rather than worked around: no narrow
+`CAST` fuses, so `y1 + 1` (which analysis spells `Add(Cast(y1 AS INT), 1)`) declines and no row of
+this row covers it, as 4.5 says; and a checked narrow multiply drives its kernel at the int lane on
+either arm (`VarkaVectorIR.holdsCheckedNarrowMultiply`), the two-species case of 2.4, whose cost is
+left to the measurement the row's shapes need and this row does not carry. That drive widens
+even on the native arm, so at four int lanes a checked byte multiply declines there too, with
+the refusal a widened byte load gets; the suite reads a decline as the arm's answer exactly
+when the width cannot widen the node's lane.
+

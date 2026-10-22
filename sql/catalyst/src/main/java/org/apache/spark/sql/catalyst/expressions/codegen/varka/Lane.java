@@ -301,6 +301,21 @@ enum Lane {
   }
 
   /**
+   * The largest value of this lane, the other end of {@link #mostNegative}. The pair is the
+   * range a checked narrow node tests its result against: a byte result is Spark's answer only
+   * between them, and the int-lane value of a widened narrow operation is exact before the
+   * test, which is what makes the two compares a complete check.
+   */
+  long mostPositive() {
+    return switch (laneType) {
+      case BYTE -> Byte.MAX_VALUE;
+      case SHORT -> Short.MAX_VALUE;
+      case INT -> Integer.MAX_VALUE;
+      case LONG -> Long.MAX_VALUE;
+    };
+  }
+
+  /**
    * Whether the Vector API names a species constant for this many of this lane's elements.
    * It declares {@code SPECIES_64} through {@code SPECIES_512} and nothing else, so the
    * question is whether the product is one of those four widths - which is 2 to 16 lanes at

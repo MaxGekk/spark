@@ -80,6 +80,20 @@ object VarkaKernelCheck {
     VarkaKernelChecks.runAndCompare(context, className, bytes, roots.asJava, numInputs, lits,
       batch.toJava, declineAllowed, answers(spark))
 
+  /** [[VarkaKernelChecks.runAndCompareNarrow]]: the columns stored narrow (VARKA-329). */
+  def runAndCompareNarrow(context: String, className: String, bytes: Array[Byte],
+      roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Int], batch: Batch,
+      declineAllowed: Boolean = false, spark: Option[VarkaSparkOracle] = None): Boolean =
+    VarkaKernelChecks.runAndCompareNarrow(context, className, bytes, roots.asJava, numInputs,
+      lits, batch.toJava, declineAllowed, answers(spark))
+
+  /** [[VarkaKernelChecks.runLoadedNarrow]]: the columns stored narrow, on a loaded kernel. */
+  def runLoadedNarrow(context: String, kernel: VarkaFusedKernel, roots: Seq[VarkaVectorIR],
+      numInputs: Int, lits: Array[Int], batch: Batch, declineAllowed: Boolean = false,
+      spark: Option[VarkaSparkOracle] = None): Int =
+    VarkaKernelChecks.runLoadedNarrow(context, kernel, roots.asJava, numInputs, lits,
+      batch.toJava, declineAllowed, answers(spark), VarkaKernelChecks.CallHook.NONE)
+
   /** [[VarkaKernelChecks.runOwnBody]]: both fills unless `fills` says otherwise. */
   def runOwnBody(context: String, className: String, bytes: Array[Byte],
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Int], batch: Batch,

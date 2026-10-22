@@ -15,7 +15,11 @@
     "dt" : "interval day to second",
     "dt2" : "interval day to second",
     "b" : "boolean",
-    "b2" : "boolean"
+    "b2" : "boolean",
+    "y1" : "tinyint",
+    "y2" : "tinyint",
+    "s1" : "smallint",
+    "s2" : "smallint"
   },
   "expressions" : [ {
     "sql" : "date_add(d, 3)",
@@ -545,6 +549,182 @@
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled", "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
     "domain" : "unix_date(d) BETWEEN -719162 AND 2932896 AND i <= 2147483647 - year(d)",
     "note" : "checked under ANSI; the lower bound is out of reach, since a year is at least 1"
+  }, {
+    "sql" : "y1 + y2",
+    "executable" : "y1 + y2",
+    "family" : "Narrow arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "Add" ],
+    "casts" : [ ],
+    "operands" : [ "Add:byte" ],
+    "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "CAST(y1 AS INT) + CAST(y2 AS INT) BETWEEN -128 AND 127",
+    "note" : "addition at the byte's own width (VARKA-330): checked under ANSI, wrapping under the legacy mode as Spark does; the domain is the exact sum in the int lane"
+  }, {
+    "sql" : "y1 - y2",
+    "executable" : "y1 - y2",
+    "family" : "Narrow arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "Subtract" ],
+    "casts" : [ ],
+    "operands" : [ "Subtract:byte" ],
+    "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "CAST(y1 AS INT) - CAST(y2 AS INT) BETWEEN -128 AND 127",
+    "note" : "checked subtraction at the byte's width"
+  }, {
+    "sql" : "y1 * y2",
+    "executable" : "y1 * y2",
+    "family" : "Narrow arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "Multiply" ],
+    "casts" : [ ],
+    "operands" : [ "Multiply:byte" ],
+    "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "CAST(y1 AS INT) * CAST(y2 AS INT) BETWEEN -128 AND 127",
+    "note" : "a byte multiply wraps natively and is widened to short for its check"
+  }, {
+    "sql" : "-y1",
+    "executable" : "-y1",
+    "family" : "Narrow arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "UnaryMinus" ],
+    "casts" : [ ],
+    "operands" : [ "UnaryMinus:byte" ],
+    "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "y1 > -128",
+    "note" : "negation raises on -128 only"
+  }, {
+    "sql" : "abs(y1)",
+    "executable" : "abs(y1)",
+    "family" : "Narrow arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "Abs" ],
+    "casts" : [ ],
+    "operands" : [ "Abs:byte" ],
+    "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "y1 > -128",
+    "note" : "`abs(-128Y)` is out of range, and wraps back to -128 in the legacy mode"
+  }, {
+    "sql" : "try_add(y1, y2)",
+    "executable" : "try_add(y1, y2)",
+    "family" : "Narrow arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "Add", "TryAdd" ],
+    "casts" : [ ],
+    "operands" : [ "Add:byte", "TryAdd:byte" ],
+    "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "",
+    "note" : "an overflowing lane is null, so the kernel declines nothing"
+  }, {
+    "sql" : "try_subtract(y1, y2)",
+    "executable" : "try_subtract(y1, y2)",
+    "family" : "Narrow arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "Subtract", "TrySubtract" ],
+    "casts" : [ ],
+    "operands" : [ "Subtract:byte", "TrySubtract:byte" ],
+    "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "",
+    "note" : "an overflowing lane is null"
+  }, {
+    "sql" : "try_multiply(y1, y2)",
+    "executable" : "try_multiply(y1, y2)",
+    "family" : "Narrow arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "Multiply", "TryMultiply" ],
+    "casts" : [ ],
+    "operands" : [ "Multiply:byte", "TryMultiply:byte" ],
+    "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "",
+    "note" : "an overflowing lane is null"
+  }, {
+    "sql" : "s1 + s2",
+    "executable" : "s1 + s2",
+    "family" : "Narrow arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "Add" ],
+    "casts" : [ ],
+    "operands" : [ "Add:short" ],
+    "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "CAST(s1 AS INT) + CAST(s2 AS INT) BETWEEN -32768 AND 32767",
+    "note" : "addition at the short's own width, the SMALLINT twin of `y1 + y2`"
+  }, {
+    "sql" : "s1 - s2",
+    "executable" : "s1 - s2",
+    "family" : "Narrow arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "Subtract" ],
+    "casts" : [ ],
+    "operands" : [ "Subtract:short" ],
+    "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "CAST(s1 AS INT) - CAST(s2 AS INT) BETWEEN -32768 AND 32767",
+    "note" : "checked subtraction at the short's width"
+  }, {
+    "sql" : "s1 * s2",
+    "executable" : "s1 * s2",
+    "family" : "Narrow arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "Multiply" ],
+    "casts" : [ ],
+    "operands" : [ "Multiply:short" ],
+    "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "CAST(s1 AS INT) * CAST(s2 AS INT) BETWEEN -32768 AND 32767",
+    "note" : "a short multiply wraps natively and is widened to int for its check"
+  }, {
+    "sql" : "-s1",
+    "executable" : "-s1",
+    "family" : "Narrow arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "UnaryMinus" ],
+    "casts" : [ ],
+    "operands" : [ "UnaryMinus:short" ],
+    "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "s1 > -32768",
+    "note" : "negation raises on -32768 only"
+  }, {
+    "sql" : "abs(s1)",
+    "executable" : "abs(s1)",
+    "family" : "Narrow arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "Abs" ],
+    "casts" : [ ],
+    "operands" : [ "Abs:short" ],
+    "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "s1 > -32768",
+    "note" : "`abs(-32768S)` is out of range, and wraps back in the legacy mode"
+  }, {
+    "sql" : "try_add(s1, s2)",
+    "executable" : "try_add(s1, s2)",
+    "family" : "Narrow arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "Add", "TryAdd" ],
+    "casts" : [ ],
+    "operands" : [ "Add:short", "TryAdd:short" ],
+    "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "",
+    "note" : "an overflowing lane is null"
+  }, {
+    "sql" : "try_subtract(s1, s2)",
+    "executable" : "try_subtract(s1, s2)",
+    "family" : "Narrow arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "Subtract", "TrySubtract" ],
+    "casts" : [ ],
+    "operands" : [ "Subtract:short", "TrySubtract:short" ],
+    "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "",
+    "note" : "an overflowing lane is null"
+  }, {
+    "sql" : "try_multiply(s1, s2)",
+    "executable" : "try_multiply(s1, s2)",
+    "family" : "Narrow arithmetic",
+    "form" : "projection",
+    "catalyst" : [ "Multiply", "TryMultiply" ],
+    "casts" : [ ],
+    "operands" : [ "Multiply:short", "TryMultiply:short" ],
+    "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "",
+    "note" : "an overflowing lane is null"
   }, {
     "sql" : "i & 255",
     "executable" : "i & 255",

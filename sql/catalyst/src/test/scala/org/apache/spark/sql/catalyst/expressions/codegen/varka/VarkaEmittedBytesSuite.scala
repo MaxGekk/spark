@@ -34,8 +34,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaIrGrammar._
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
-import org.apache.spark.sql.types.{BooleanType, DateType, DayTimeIntervalType, IntegerType, LongType,
-  TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{BooleanType, ByteType, DateType, DayTimeIntervalType,
+  IntegerType, LongType, ShortType, TimeType, YearMonthIntervalType}
 
 /**
  * The emitted-bytes oracle (VARKA-85, step 1): what the emitter produces for every shape, pinned
@@ -93,7 +93,14 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
   // BOOLEAN columns, as conditions: two so a comparison can be column against column.
   private val b = AttributeReference("b", BooleanType)()
   private val b2 = AttributeReference("b2", BooleanType)()
-  private val columns: Seq[Attribute] = Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2)
+  // The narrow lanes' columns (VARKA-329, VARKA-330), as `VarkaCoverageSuite` declares them:
+  // TINYINT and SMALLINT, two of each so an operation can be column against column.
+  private val y1 = AttributeReference("y1", ByteType)()
+  private val y2 = AttributeReference("y2", ByteType)()
+  private val s1 = AttributeReference("s1", ShortType)()
+  private val s2 = AttributeReference("s2", ShortType)()
+  private val columns: Seq[Attribute] =
+    Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2, y1, y2, s1, s2)
 
   private val className = "org.apache.spark.sql.varka.execution.VarkaEmittedBytesOracle"
 
@@ -138,6 +145,14 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
     // emission's, which for a narrowing root (an int output computed in the long lane) is the
     // long lane.
     val options = emitOptions(roots, lanes, arm)
+    // A width the compiler refuses for this shape is the shape's answer at that width, recorded
+    // with the compiler's own reason: a narrow value widened at four int lanes has no eight-bit
+    // species to widen from, so `fitsBudgets` demotes the shape before `emit` sees it
+    // (VARKA-330). Emitting anyway would pin a `getstatic` for a constant no vector class has.
+    VarkaLoopEmitter.narrowRefusal(roots.asJava, options).toScala match {
+      case Some(reason) => return Seq("<declined>" -> sha(reason))
+      case None =>
+    }
     val bytes =
       try {
         VarkaLoopEmitter.emit(className, roots.asJava, numInputs, numLiterals, null, null, options)

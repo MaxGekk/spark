@@ -467,6 +467,22 @@ public final class VarkaKernelChecks {
             declineAllowed, spark, ValidityFill.BOTH))[0] == 0;
   }
 
+  /**
+   * {@link #runAndCompare} for a kernel whose columns are stored narrow (VARKA-329): each column
+   * at its own lane's width - a byte one byte a row, a short two, an int four - each output at
+   * its root's, through the int entry point, with {@link VarkaReference#value} as the oracle. A
+   * column's lane is the one the roots read it at, so a tree of narrow leaves alone drives the
+   * narrow lane and one that also reads an int column drives the int lane.
+   */
+  public static boolean runAndCompareNarrow(String context, String className, byte[] bytes,
+      List<VarkaVectorIR> roots, int numInputs, int[] lits, Batch batch, boolean declineAllowed,
+      SparkAnswers spark) {
+    return bodies(context, numInputs, batch.length(), batch.nulls(), batch.forceMasked(),
+        (label, nulls, forced) -> runOne(label, className, bytes, roots, numInputs,
+            new StoredNarrowLane(batch.withNulls(nulls, forced), lits, roots), declineAllowed,
+            spark, ValidityFill.BOTH))[0] == 0;
+  }
+
   /** {@link #runAndCompareStatus} for a kernel of both lanes. */
   public static int runAndCompareMixedStatus(String context, String className, byte[] bytes,
       List<VarkaVectorIR> roots, int numInputs, int[] intLits, long[] longLits, LongBatch batch,
@@ -531,6 +547,18 @@ public final class VarkaKernelChecks {
       boolean declineAllowed, CallHook hook) {
     return runLoaded(context, kernel, roots, numInputs, longLane(batch, lits, NO_INT_LITS, roots),
         declineAllowed, null, ValidityFill.BOTH, hook);
+  }
+
+  /**
+   * {@link #runLoaded} with the columns stored narrow (VARKA-329), for the sweeps that run
+   * thousands of batches on one class: {@link #runAndCompareNarrow} loads the class again for
+   * every batch, which a 2^32-row sweep cannot afford.
+   */
+  public static int runLoadedNarrow(String context, VarkaFusedKernel kernel,
+      List<VarkaVectorIR> roots, int numInputs, int[] lits, Batch batch, boolean declineAllowed,
+      SparkAnswers spark, CallHook hook) {
+    return runLoaded(context, kernel, roots, numInputs,
+        new StoredNarrowLane(batch, lits, roots), declineAllowed, spark, ValidityFill.BOTH, hook);
   }
 
   /**
@@ -640,7 +668,7 @@ public final class VarkaKernelChecks {
    * sentinel an unwritten output keeps, the {@code run} overload, the reference's overload, and
    * how an output is read back. {@link #runOne} is the one harness both lanes go through.
    */
-  private sealed interface Lane permits IntLane, LongLane, MixedLane {
+  private sealed interface Lane permits IntLane, LongLane, MixedLane, StoredNarrowLane {
     int length();
 
     boolean[][] nulls();
@@ -924,6 +952,150 @@ public final class VarkaKernelChecks {
     @Override public long got(MemorySegment out, int i, VarkaVectorIR root) {
       return outputStride(root) == 4L ? out.get(ValueLayout.JAVA_INT, i * 4L)
           : out.get(ValueLayout.JAVA_LONG, i * 8L);
+    }
+  }
+
+  /**
+   * Columns stored narrow (VARKA-329): a byte column one byte a row, a short one two, an int one
+   * four, each at the lane the roots read it at, through the int entry point - the narrow lanes
+   * and the int lane share it, and only the long lane has its own. The drawn values are the
+   * command's ints, narrowed on the way into a narrow column and sign-extended on the way out,
+   * which is what {@link VarkaReference#value} reads back from the reference's row.
+   *
+   * <p>A narrow lane has no value outside its domain to poison or to seed an output with, so
+   * {@link #poison} and {@link #sentinel} take its extremes and a batch must draw enough rows that
+   * an unwritten one is caught by a neighbour's value. Every null of a column takes a different
+   * extreme, as at the wider lanes.
+   */
+  private record StoredNarrowLane(Batch batch, int[] lits, VarkaVectorIR.LaneType[] columnLanes,
+      int[] rowInts) implements Lane {
+    StoredNarrowLane(Batch batch, int[] lits, List<VarkaVectorIR> roots) {
+      this(batch, lits, VarkaKernelChecks.columnLanes(roots, batch.data().length),
+          new int[batch.data().length]);
+    }
+
+    /** Bytes of a value at {@code lane}: the lane's width, which is also its stride. */
+    private static long width(VarkaVectorIR.LaneType lane) {
+      return switch (lane) {
+        case BYTE -> 1L;
+        case SHORT -> 2L;
+        case INT -> 4L;
+        case LONG -> 8L;
+      };
+    }
+
+    /** {@code v} as {@code lane} stores it, sign-extended: the value the reference reads back. */
+    private static long narrow(VarkaVectorIR.LaneType lane, long v) {
+      return switch (lane) {
+        case BYTE -> (byte) v;
+        case SHORT -> (short) v;
+        case INT -> (int) v;
+        case LONG -> v;
+      };
+    }
+
+    @Override public int length() {
+      return batch.length();
+    }
+
+    @Override public boolean[][] nulls() {
+      return batch.nulls();
+    }
+
+    @Override public boolean forceMasked() {
+      return batch.forceMasked();
+    }
+
+    @Override public long stride() {
+      return 1L;
+    }
+
+    @Override public long columnStride(int c) {
+      return width(columnLanes[c]);
+    }
+
+    @Override public long outputStride(VarkaVectorIR root) {
+      return width(root.laneType());
+    }
+
+    @Override public long value(int c, int i) {
+      return narrow(columnLanes[c], batch.data()[c][i]);
+    }
+
+    @Override public void putColumn(int c, MemorySegment d, int i, long v) {
+      putAt(columnLanes[c], d, i, v);
+    }
+
+    @Override public void putOutput(VarkaVectorIR root, MemorySegment d, int i, long v) {
+      putAt(root.laneType(), d, i, v);
+    }
+
+    @Override public void put(MemorySegment d, int i, long v) {
+      putAt(VarkaVectorIR.LaneType.INT, d, i, v);
+    }
+
+    private static void putAt(VarkaVectorIR.LaneType lane, MemorySegment d, int i, long v) {
+      switch (lane) {
+        case BYTE -> d.set(ValueLayout.JAVA_BYTE, i, (byte) v);
+        case SHORT -> d.set(ValueLayout.JAVA_SHORT, i * 2L, (short) v);
+        case INT -> d.set(ValueLayout.JAVA_INT, i * 4L, (int) v);
+        case LONG -> d.set(ValueLayout.JAVA_LONG, i * 8L, v);
+      }
+    }
+
+    @Override public long poison(int nullOrdinal) {
+      return (nullOrdinal & 1) == 0 ? Byte.MIN_VALUE : Byte.MAX_VALUE;
+    }
+
+    @Override public long poisonColumn(int c, int nullOrdinal) {
+      boolean low = (nullOrdinal & 1) == 0;
+      return switch (columnLanes[c]) {
+        case BYTE -> low ? Byte.MIN_VALUE : Byte.MAX_VALUE;
+        case SHORT -> low ? Short.MIN_VALUE : Short.MAX_VALUE;
+        default -> VarkaEmitterFixtures.poison(nullOrdinal);
+      };
+    }
+
+    @Override public long sentinel() {
+      return Byte.MIN_VALUE;
+    }
+
+    @Override public long sentinelOutput(VarkaVectorIR root) {
+      return switch (root.laneType()) {
+        case BYTE -> Byte.MIN_VALUE;
+        case SHORT -> Short.MIN_VALUE;
+        default -> 0xDEADBEEF;
+      };
+    }
+
+    @Override public int run(VarkaFusedKernel kernel, long[] srcData, long[] srcValidity,
+        int[] nullCounts, long[] outData, long[] outValidity, long scratch) {
+      return kernel.run(srcData, srcValidity, nullCounts, outData, outValidity, lits, length(),
+          scratch);
+    }
+
+    @Override public OptionalLong reference(VarkaVectorIR root, long[] values, boolean[] isNull) {
+      for (int c = 0; c < values.length; c++) {
+        rowInts[c] = (int) values[c];
+      }
+      OptionalInt v = VarkaReference.value(root, rowInts, isNull, lits);
+      return v.isPresent() ? OptionalLong.of(v.getAsInt()) : OptionalLong.empty();
+    }
+
+    @Override public VarkaReference.Truth reference(Cond cond, long[] values, boolean[] isNull) {
+      for (int c = 0; c < values.length; c++) {
+        rowInts[c] = (int) values[c];
+      }
+      return VarkaReference.cond(cond, rowInts, isNull, lits);
+    }
+
+    @Override public long got(MemorySegment out, int i, VarkaVectorIR root) {
+      return switch (root.laneType()) {
+        case BYTE -> out.get(ValueLayout.JAVA_BYTE, i);
+        case SHORT -> out.get(ValueLayout.JAVA_SHORT, i * 2L);
+        case INT -> out.get(ValueLayout.JAVA_INT, i * 4L);
+        case LONG -> out.get(ValueLayout.JAVA_LONG, i * 8L);
+      };
     }
   }
 

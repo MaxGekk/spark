@@ -333,8 +333,22 @@ public final class VarkaGuardSpecs {
       case MONTH_COUNT ->
           pair(VarkaChrono.MONTH_ARITH_MIN_MONTHS, VarkaChrono.MONTH_ARITH_MAX_MONTHS);
       case MAKE_DATE -> pair(VarkaChrono.MAKE_DATE_MIN_YEAR, VarkaChrono.MAKE_DATE_MAX_YEAR);
-      case INT_OVERFLOW -> isLong ? pair(Long.MIN_VALUE, Long.MAX_VALUE)
-          : pair(Integer.MIN_VALUE, Integer.MAX_VALUE);
+      case INT_OVERFLOW -> {
+        // A narrow node's check is its own lane's range on both arms (VARKA-330): the widened arm
+        // compares the int-lane result against it and the native arm compares the lane operation
+        // against its saturating form, and the same rows leave the same range either way.
+        LaneType lane = switch (node) {
+          case IntArith n -> n.laneType();
+          case IntNeg n -> n.laneType();
+          default -> isLong ? LaneType.LONG : LaneType.INT;
+        };
+        yield switch (lane) {
+          case BYTE -> pair(Byte.MIN_VALUE, Byte.MAX_VALUE);
+          case SHORT -> pair(Short.MIN_VALUE, Short.MAX_VALUE);
+          case INT -> pair(Integer.MIN_VALUE, Integer.MAX_VALUE);
+          case LONG -> pair(Long.MIN_VALUE, Long.MAX_VALUE);
+        };
+      }
       case VALUE_RANGE -> {
         if (!(node instanceof GuardedRange g)) {
           throw new IllegalArgumentException("a value range on " + node);

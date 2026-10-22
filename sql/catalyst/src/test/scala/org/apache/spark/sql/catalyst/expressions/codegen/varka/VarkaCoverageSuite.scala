@@ -100,8 +100,16 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   // BOOLEAN columns, as conditions: two so a comparison can be column against column.
   private val b = AttributeReference("b", BooleanType)()
   private val b2 = AttributeReference("b2", BooleanType)()
+  // The narrow lanes' columns (VARKA-329, VARKA-330): TINYINT and SMALLINT, two of each so an
+  // operation can be column against column. They are named apart from the fixture's `y`, which
+  // is a year count.
+  private val y1 = AttributeReference("y1", ByteType)()
+  private val y2 = AttributeReference("y2", ByteType)()
+  private val s1 = AttributeReference("s1", ShortType)()
+  private val s2 = AttributeReference("s2", ShortType)()
 
-  private val columns: Seq[Attribute] = Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2)
+  private val columns: Seq[Attribute] =
+    Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2, y1, y2, s1, s2)
 
   /**
    * One documented expression. `sql` is both what the table prints and what the check
@@ -255,6 +263,33 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("-i", "checked under ANSI", domain = Some(s"i > ${Int.MinValue}")),
       Row("year(d) + i", "checked under ANSI; the lower bound is out of reach, since a year is "
         + "at least 1", domain = Some(s"$dayBound AND i <= ${Int.MaxValue} - year(d)")))),
+
+    Family("Narrow arithmetic", predicates = false, Seq(
+      Row("y1 + y2", "addition at the byte's own width (VARKA-330): checked under ANSI, wrapping "
+        + "under the legacy mode as Spark does; the domain is the exact sum in the int lane",
+        domain = Some("CAST(y1 AS INT) + CAST(y2 AS INT) BETWEEN -128 AND 127")),
+      Row("y1 - y2", "checked subtraction at the byte's width",
+        domain = Some("CAST(y1 AS INT) - CAST(y2 AS INT) BETWEEN -128 AND 127")),
+      Row("y1 * y2", "a byte multiply wraps natively and is widened to short for its check",
+        domain = Some("CAST(y1 AS INT) * CAST(y2 AS INT) BETWEEN -128 AND 127")),
+      Row("-y1", "negation raises on -128 only", domain = Some("y1 > -128")),
+      Row("abs(y1)", "`abs(-128Y)` is out of range, and wraps back to -128 in the legacy mode",
+        domain = Some("y1 > -128")),
+      Row("try_add(y1, y2)", "an overflowing lane is null, so the kernel declines nothing"),
+      Row("try_subtract(y1, y2)", "an overflowing lane is null"),
+      Row("try_multiply(y1, y2)", "an overflowing lane is null"),
+      Row("s1 + s2", "addition at the short's own width, the SMALLINT twin of `y1 + y2`",
+        domain = Some("CAST(s1 AS INT) + CAST(s2 AS INT) BETWEEN -32768 AND 32767")),
+      Row("s1 - s2", "checked subtraction at the short's width",
+        domain = Some("CAST(s1 AS INT) - CAST(s2 AS INT) BETWEEN -32768 AND 32767")),
+      Row("s1 * s2", "a short multiply wraps natively and is widened to int for its check",
+        domain = Some("CAST(s1 AS INT) * CAST(s2 AS INT) BETWEEN -32768 AND 32767")),
+      Row("-s1", "negation raises on -32768 only", domain = Some("s1 > -32768")),
+      Row("abs(s1)", "`abs(-32768S)` is out of range, and wraps back in the legacy mode",
+        domain = Some("s1 > -32768")),
+      Row("try_add(s1, s2)", "an overflowing lane is null"),
+      Row("try_subtract(s1, s2)", "an overflowing lane is null"),
+      Row("try_multiply(s1, s2)", "an overflowing lane is null"))),
 
     Family("Bitwise and shifts", predicates = false, Seq(
       Row("i & 255"),
@@ -1096,7 +1131,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
         "ymm" -> "interval month", "ymy" -> "interval year", "ym" -> "interval year to month",
         "l" -> "bigint", "l2" -> "bigint", "t" -> "time(6)", "t2" -> "time(6)",
         "dt" -> "interval day to second", "dt2" -> "interval day to second",
-        "b" -> "boolean", "b2" -> "boolean"),
+        "b" -> "boolean", "b2" -> "boolean",
+        "y1" -> "tinyint", "y2" -> "tinyint", "s1" -> "smallint", "s2" -> "smallint"),
       "expressions" -> rows.asJava,
       "catalyst_classes_admitted" -> (admittedByCompiler -- infrastructure).toSeq.sorted.asJava)
     new ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(doc) + "\n"

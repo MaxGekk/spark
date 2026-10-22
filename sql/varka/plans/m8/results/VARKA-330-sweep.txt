@@ -1,0 +1,56 @@
+VARKA-330: the first 2^32 sweep, timed for the milestone's sweep budget (PLAN.md 10.3 item 5).
+Run 22 October 2026 (start 21:36:21, end 22:00:28 CEST) on the laptop: AMD Ryzen AI 9 HX PRO 370
+(Zen 5,
+AVX-512 on 256-bit units, 12 cores and 24 threads), OpenJDK 25.0.4.1+1-1-26.04.4-Ubuntu, Linux
+7.0.0-38-generic, power profile `performance` and governor `performance`.
+Code: master 94c4e70aebd (which includes the narrow lanes of 329, merged at 33996c315d9) plus this
+row's working tree - the narrow arithmetic of the compiler, the IR's emission lane, Analysis's wrap
+set, the walk's reduction and check, the reference and the kernel checks, and the suite below. No
+benchmark or census code is on the path a sweep takes. Two corrections landed after the run, both
+leaving this arm's emitted code unchanged: the reduction's shift is now taken from the lane it is
+emitted at (the int lane's 32 - w is what this arm still emits), and a checked narrow node became a
+ring node when `checkIntOverflow` is off, which this arm and mode do not read.
+
+== command ==
+  flock heavy.lock flock heavy2.lock build/sbt -batch "project catalyst" \
+    'set Test/javaOptions ++= Seq("-Dvarka.ownJvm=true", "-Dvarka.sweep=true",
+      "-Dvarka.sweep.filter=SMALLINT + LEGACY the widened arm,oracle",
+      "-Dspark.test.timeout=7200", "-Dvarka.test.watchdog.minutes=180",
+      "-Dspark.ui.enabled=false")' 'testOnly *VarkaEmitterNarrowArithSuite'
+Before the JVM: a 1-minute load under 3 and no other java, waited for in the launcher's own loop;
+both agent locks were held for the whole run. The filter is the suite's own
+`-Dvarka.sweep.filter`, which names the one sweep timed and the oracle-share test; the child JVM
+runs the rest of the suite (32 tests) but cancels the other 17 opt-in sweeps.
+
+== the sweep (`SMALLINT` `+`, `LEGACY`, the WIDENED arm, at VarkaMatrix.base) ==
+  SMALLINT + LEGACY the widened arm: 65536 batches (65536 answered) in 1106 s, 16777216 rows held to Spark
+Every 2^16-row batch answers: the second operand is one short value and the first runs over every
+short, so the 65536 batches are the whole 2^32. The reference evaluator holds every row of every
+batch; Spark's own `eval` holds one row in 256 (16,777,216 rows, each batch's own slice).
+
+== the oracle's share, one 2^16-row batch, three rounds ==
+  the oracle's share the widened arm: 2^16 rows in 20274 us without the oracle and 43405 us with it
+So on a batch that is held to Spark the oracle more than doubles the work (43.4 ms against 20.3 ms),
+and at the sweep's one batch in 256 its mean cost is 23.1 / 256 = 0.09 ms of the 16.9 ms a batch
+takes, half a percent of the sweep. The soft measurement of the kernel and the reference (20.3 ms a
+batch) is above the sweep's own mean (1106 s / 65536 = 16.9 ms), which is the timing test's cold
+start and its batch construction, not a difference of work.
+
+== the budget ==
+  one sweep of 2^32                    1106 s   18 min 26 s
+  330's 18 sweeps (3 operators x 3 modes x 2 arms)
+                                      19908 s    5 h 32 min
+  the milestone's sixty sweeps        66360 s   18 h 26 min
+The extrapolation is the flat rate of this sweep, which is the cheapest of the 18: `+` in `LEGACY`
+neither checks nor nulls, so ANSI's and TRY's sweeps pay the check's compare and the mask, and `*`
+pays a widening on the native arm. The number is a floor, and the plan's cut stands open if the
+owner judges 5.5 hours too much for 330 alone: SMT makes the 2^32 sweeps redundant for the formulas
+(VARKA-329.md 4.4), so one arm per operator and mode is what a cut would keep.
+Against m7: that milestone swept every int32 lowering in thirteen and a half minutes (m7/PLAN.md 1);
+330 alone is 24 times that, and the milestone's sixty are 82 times it.
+
+== exit ==
+  [info] Total number of tests run: 32
+  [info] Tests: succeeded 32, failed 0, canceled 17, ignored 0, pending 0
+  [info] All tests passed.
+  22:00:28 sbt exit=0 after 1214 s

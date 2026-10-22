@@ -116,6 +116,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A metric that can say "not reported": two sums in one value, rendered by a custom type](sql/varka/skills/testing-and-debugging.md#a-metric-that-can-say-not-reported-two-sums-in-one-value-rendered-by-a-custom-type)
 * [Independent Reference Evaluators as Test Oracles](sql/varka/skills/testing-and-debugging.md#independent-reference-evaluators-as-test-oracles)
 * [A second lane gets a second fuzz corpus, and its reach set comes from the constructors](sql/varka/skills/testing-and-debugging.md#a-second-lane-gets-a-second-fuzz-corpus-and-its-reach-set-comes-from-the-constructors)
+* [A narrow column read as an int is unsigned](sql/varka/skills/testing-and-debugging.md#a-narrow-column-read-as-an-int-is-unsigned)
 * [A fixture that fills undefined memory decides what its whole matrix can catch](sql/varka/skills/testing-and-debugging.md#a-fixture-that-fills-undefined-memory-decides-what-its-whole-matrix-can-catch)
 * [Testing Under AQE](sql/varka/skills/testing-and-debugging.md#testing-under-aqe)
 * [A closed `ArrowBuf` still answers `capacity()` and `memoryAddress()`](sql/varka/skills/testing-and-debugging.md#a-closed-arrowbuf-still-answers-capacity-and-memoryaddress)

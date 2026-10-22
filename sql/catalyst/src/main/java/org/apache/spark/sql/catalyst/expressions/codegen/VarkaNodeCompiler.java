@@ -25,6 +25,7 @@ import java.util.function.Supplier;
 
 import javax.annotation.Nullable;
 
+import org.apache.spark.sql.catalyst.expressions.Abs;
 import org.apache.spark.sql.catalyst.expressions.Add;
 import org.apache.spark.sql.catalyst.expressions.BitmapExpressionUtils;
 import org.apache.spark.sql.catalyst.expressions.BitwiseAnd;
@@ -59,6 +60,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Bit
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CompareOp;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
@@ -392,6 +394,17 @@ final class VarkaNodeCompiler {
           () -> intArith(IntOp.SUB, a.evalMode(), a.left(), a.right(), a, inputs, literals, sink);
       case Multiply a when isInt(a) ->
           () -> intArith(IntOp.MUL, a.evalMode(), a.left(), a.right(), a, inputs, literals, sink);
+      // The narrow lanes' arithmetic (VARKA-330): a `TINYINT` or `SMALLINT` operation wraps at
+      // its own width, and its three modes are Spark's there rather than at 32 bits. The result
+      // type is the left operand's, so both operands are of the node's narrow type after
+      // analysis; a hand-built tree that pairs two lanes declines in `arithOver` instead of
+      // building a node whose constructor would throw.
+      case Add a when isNarrow(a) -> () -> narrowArith(
+          IntOp.ADD, a.evalMode(), a.left(), a.right(), a, inputs, literals, sink);
+      case Subtract a when isNarrow(a) -> () -> narrowArith(
+          IntOp.SUB, a.evalMode(), a.left(), a.right(), a, inputs, literals, sink);
+      case Multiply a when isNarrow(a) -> () -> narrowArith(
+          IntOp.MUL, a.evalMode(), a.left(), a.right(), a, inputs, literals, sink);
       // The two casts between the int and the long lane (VARKA-28), and with them every
       // implicit promotion Catalyst's type coercion inserts where an int meets a bigint:
       // `i < l` arrives as `CAST(i AS BIGINT) < l`. Widening is a sign extension, exact in every
@@ -411,6 +424,29 @@ final class VarkaNodeCompiler {
             boolean checked = n.failOnError() && !boundedByIntMax(x, literals, sink);
             return (VarkaVectorIR) new IntNeg(checked ? Overflow.FAIL : Overflow.WRAP, x);
           });
+      // A narrow negation is the same node at its own width (VARKA-330): `-(-128Y)` is the byte
+      // that the negation cannot represent, so the check is on the lane's minimum. Spark has no
+      // try_negative here either, so the mode is WRAP or FAIL; ANSI always keeps the check,
+      // since a narrow column's range contains the minimum that overflows.
+      case UnaryMinus n when isNarrow(n) -> () -> narrowOperand(
+          n.child(), laneOf(n.dataType()).orElseThrow(), inputs, literals, sink)
+          .map(x -> (VarkaVectorIR) new IntNeg(
+              n.failOnError() ? Overflow.FAIL : Overflow.WRAP, x));
+      // `abs` over a narrow lane, composed from the nodes that already exist: Spark's
+      // `x < 0 ? negateExact(x) : x` is an `IfElse` over a `Compare` and an `IntNeg`, and its
+      // legacy form is the same pick with the wrapping negate, which is `(byte) Math.abs(x)` -
+      // `abs(-128Y)` is `-128Y` there. Under ANSI the negate's own check fires on the lane's
+      // minimum, which is negative, so the arm the condition picks is exactly the arm that
+      // raises and no valid lane is condemned. There is no try_abs in Spark.
+      case Abs a when isNarrow(a) -> () -> {
+        LaneType lane = laneOf(a.dataType()).orElseThrow();
+        return narrowOperand(a.child(), lane, inputs, literals, sink).map(x -> {
+          Cond negative = new Compare(CompareOp.LT, x, slot(0, lane, literals));
+          VarkaVectorIR negated = new IntNeg(
+              a.failOnError() ? Overflow.FAIL : Overflow.WRAP, x);
+          return (VarkaVectorIR) new IfElse(negative, negated, x);
+        });
+      };
       // The bitwise family (VARKA-335): one lane-wise operation at the operand's width, which
       // neither overflows nor nulls a valid lane, so the evaluation mode does not reach it.
       case BitwiseAnd b when onBitLane(b) ->
@@ -582,6 +618,15 @@ final class VarkaNodeCompiler {
 
   private static boolean isInt(Expression e) {
     return DataTypes.IntegerType.equals(e.dataType());
+  }
+
+  /**
+   * Whether {@code e} is one of the narrow types, {@code tinyint} or {@code smallint}: its values
+   * are ints in a narrow lane, so its arithmetic wraps at eight or sixteen bits rather than at
+   * the int lane's thirty-two.
+   */
+  private static boolean isNarrow(Expression e) {
+    return laneOf(e.dataType()).filter(LaneType::isNarrow).isPresent();
   }
 
   /**
@@ -819,12 +864,65 @@ final class VarkaNodeCompiler {
   }
 
   /**
+   * {@link #intArith} for the narrow lanes (VARKA-330): the operands are the node's own narrow
+   * type, so a `TINYINT` add is a byte add. Reads them through {@link #compileNode}, which is
+   * where the narrow leaves (a column, a literal) and nested narrow arithmetic live; an operand
+   * on another lane declines with its lane in the reason rather than reaching a constructor that
+   * would throw, since a hand-built tree can pair them.
+   */
+  private static Optional<VarkaVectorIR> narrowArith(
+      IntOp op,
+      Object mode,
+      Expression l,
+      Expression r,
+      Expression whole,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
+      DeclineSink sink) {
+    LaneType lane = laneOf(whole.dataType()).orElseThrow();
+    int mark = literals.size();
+    Optional<VarkaVectorIR> x = narrowOperand(l, lane, inputs, literals, sink);
+    if (x.isEmpty()) {
+      return x;
+    }
+    Optional<VarkaVectorIR> y = narrowOperand(r, lane, inputs, literals, sink);
+    if (y.isEmpty()) {
+      return y;
+    }
+    return arithOver(op, overflowOf(mode), x.get(), y.get(), whole, literals, mark, sink);
+  }
+
+  /**
+   * An operand of narrow arithmetic: a value on {@code lane}, or empty with the reason if the
+   * expression compiles to another lane's value. A {@code TINYINT} column, its literal and a
+   * nested narrow operation all come back through {@link #compileNode}, which owns those arms.
+   */
+  private static Optional<VarkaVectorIR> narrowOperand(
+      Expression e, LaneType lane, VarkaSlotTable inputs, VarkaSlotTable literals,
+      DeclineSink sink) {
+    Optional<VarkaVectorIR> ir = compileNode(e, inputs, literals, sink);
+    if (ir.isPresent() && ir.get().laneType() != lane) {
+      return sink.decline("a narrow arithmetic operand on the " + ir.get().laneType()
+          + " lane, not the " + lane + " one", e);
+    }
+    return ir;
+  }
+
+  /**
    * The overflow decision, shared by the int arithmetic arms and the interval ones so that the
    * bound rule and the checked-multiply refusal are stated once rather than in two places that
    * can drift. A checked operation whose operands' bounds rule out overflow needs no check at all
    * and emits as {@code WRAP} - fewer ops, and the only way a checked multiply fuses; an int lane
    * has no cheap overflow test for {@code *}, so one that keeps its check declines and
    * {@code literals} is rolled back to {@code mark} so a declining entry leaves no slot behind.
+   *
+   * <p>A narrow node keeps the mode it was given ({@code VARKA-329.md} 2.1, review 9.1). The
+   * proof {@link #cannotOverflow} runs is against the int32 range, and two narrow operands always
+   * satisfy it, so rewriting their {@code FAIL} to {@code WRAP} would turn `127Y + 1Y` under ANSI
+   * into a silent wrap. Their bound is the node lane's own, and it is the emitter that applies it:
+   * the narrowed arm's range compare, or the native arm's saturating difference
+   * ({@code VARKA-329.md} 4.2, 4.3). A narrow multiply therefore never declines for overflow
+   * either, its product being exact at the int lane.
    */
   static Optional<VarkaVectorIR> arithOver(
       IntOp op,
@@ -835,10 +933,17 @@ final class VarkaNodeCompiler {
       VarkaSlotTable literals,
       int mark,
       DeclineSink sink) {
-    Overflow overflow = declared != Overflow.WRAP && cannotOverflow(op, x, y, literals, sink)
+    if (x.laneType() != y.laneType()) {
+      literals.truncate(mark);
+      return sink.decline("arithmetic operands on the " + x.laneType() + " and the "
+          + y.laneType() + " lanes", whole);
+    }
+    boolean narrow = x.laneType().isNarrow();
+    Overflow overflow = !narrow && declared != Overflow.WRAP
+        && cannotOverflow(op, x, y, literals, sink)
         ? Overflow.WRAP
         : declared;
-    if (op == IntOp.MUL && overflow != Overflow.WRAP) {
+    if (op == IntOp.MUL && overflow != Overflow.WRAP && !narrow) {
       literals.truncate(mark);
       return sink.decline("checked int multiply whose operands do not rule out overflow", whole);
     }

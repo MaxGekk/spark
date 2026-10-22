@@ -251,6 +251,7 @@ public final class VarkaLoopEmitter {
     }
     analysis.collectArmContexts(outputs);
     analysis.collectRefusals();
+    analysis.collectWraps();
     analysis.planWordAlgebra();
     analysis.planBitmapPass(outputs);
     return analysis;
