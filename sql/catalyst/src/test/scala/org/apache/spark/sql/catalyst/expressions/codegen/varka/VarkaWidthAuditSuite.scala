@@ -71,8 +71,13 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
   /** The widths asked for, in bytes as the JVM names them; a host caps what it cannot do. */
   private val widthsBytes = Seq(16, 32, 64)
 
+  /**
+   * One width's answers: what C2 refused per shape, and what the emitter declined before C2
+   * saw it, keyed by the same shape name. The two are different kinds of answer - a decline is
+   * no lowering at all, a refusal is a per-lane fallback - and both are pinned (VARKA-329).
+   */
   private case class Census(preferredBits: Int, useAVX: Int, refusals: Map[String, Seq[String]],
-      unattributed: Seq[String])
+      declined: Map[String, String], unattributed: Seq[String])
 
   private val cpuModel: String = {
     val info = new File("/proc/cpuinfo")
@@ -115,6 +120,7 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
       new InputStreamReader(process.getInputStream, StandardCharsets.UTF_8))
     val refusals = mutable.LinkedHashMap.empty[String, mutable.LinkedHashSet[String]]
     val unattributed = mutable.LinkedHashSet.empty[String]
+    val declined = mutable.LinkedHashMap.empty[String, String]
     var current: Option[String] = None
     var bits = -1
     var useAVX = VarkaEmitOptions.USE_AVX_UNKNOWN
@@ -133,6 +139,11 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
         VarkaProbeOutput.between(line, SHAPE_BEGIN_PREFIX, SHAPE_NAME_END).foreach { name =>
           current = Some(name)
           refusals.getOrElseUpdate(name, mutable.LinkedHashSet.empty)
+        }
+        // The emitter's decline belongs to the shape whose markers it sits between, and it is
+        // printed instead of a C2 refusal, so no `** ` line follows it.
+        VarkaProbeOutput.after(line, DECLINED_PREFIX).foreach { reason =>
+          current.foreach(name => declined(name) = reason.trim)
         }
         if (VarkaProbeOutput.has(line, SHAPE_END_PREFIX)) {
           current = None
@@ -160,7 +171,8 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
       s"the audit probe failed (exit ${process.exitValue()}); its last lines:\n" +
         tail.mkString("\n"))
     assert(bits > 0, "the audit probe never reported its preferred vector width")
-    Census(bits, useAVX, refusals.map { case (k, v) => k -> v.toSeq }.toMap, unattributed.toSeq)
+    Census(bits, useAVX, refusals.map { case (k, v) => k -> v.toSeq }.toMap,
+      declined.toMap, unattributed.toSeq)
   }
 
   private lazy val atPreferred: Census = audit(None)
@@ -195,9 +207,21 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
    */
   private def isRefusal(line: String): Boolean = line.startsWith("not supported")
 
-  /** A census's verdict lines per shape: what the file pins and what two runs must agree on. */
-  private def verdicts(census: Census): Map[String, Seq[String]] =
-    census.refusals.map { case (name, lines) => name -> lines.filter(isRefusal) }
+  /** How a decline is written into the census beside the `not supported` lines. */
+  private def declinedLine(reason: String): String = "declined: " + reason
+
+  /**
+   * A census's verdict lines per shape: what the file pins and what two runs must agree on. A
+   * shape the emitter declined has one line of its own, its reason, and no refusal lines; the
+   * two kinds share the map because the table renders a row's width from its shape's entry.
+   */
+  private def verdicts(census: Census): Map[String, Seq[String]] = {
+    val names = census.refusals.keySet ++ census.declined.keySet
+    names.map { name =>
+      name -> (census.refusals.getOrElse(name, Seq.empty).filter(isRefusal) ++
+        census.declined.get(name).map(declinedLine))
+    }.toMap
+  }
 
   /**
    * The one refusal a host class is known to have at its own width, and the emitter already
@@ -218,9 +242,16 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
       line.contains("ismask=0") &&
       (line.contains("etype2=double") || line.contains("etype2=long"))
 
-  test("at the host's preferred width, C2 has a lowering for every Vector API call in every " +
-      "shape, the 64-bit converts below AVX-512 excepted") {
+  test("at the host's preferred width, every shape is emitted and C2 has a lowering for every " +
+      "Vector API call in it, the 64-bit converts below AVX-512 excepted") {
     val census = atPreferred
+    // A decline at the preferred width would mean a coverage row the default emission cannot
+    // serve on the host it runs on, which no width choice explains.
+    assert(census.declined.isEmpty,
+      s"on $cpuModel at ${census.preferredBits} bits (UseAVX ${census.useAVX}), the emitter " +
+        s"declined ${census.declined.size} shape(s):\n" + census.declined.map {
+          case (name, reason) => s"  $name: $reason"
+        }.mkString("\n"))
     val refused = census.refusals.map { case (name, ops) =>
       name -> ops.filter(o => isRefusal(o) && !knownBelowAvx512(census, o))
     }.filter { case (name, ops) => ops.nonEmpty && !name.contains(magicForm) }
@@ -253,8 +284,10 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
         "retry, and 'unbox failed', a vector reaching a call as a heap object once the shared " +
         "templates have seen other kernels - are not verdicts and are not recorded: they " +
         "depend on JIT timing in the probe and moved between runs of an unchanged tree. An " +
-        "empty list is a shape C2 refused nothing in. The census is a property of the CPU " +
-        "and the JDK, so the host is part of the record."),
+        "empty list is a shape C2 refused nothing in. A shape the emitter declines at a width " +
+        "has no call for C2 to judge and is recorded as 'declined: <the emitter's reason>' " +
+        "instead; VARKA-329's byte widening load is the first, below eight int lanes. The " +
+        "census is a property of the CPU and the JDK, so the host is part of the record."),
       "host" -> ordered(
         "cpu" -> cpuModel,
         "arch" -> System.getProperty("os.arch"),

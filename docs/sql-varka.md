@@ -526,6 +526,48 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `IF(b, l, l2)` | `condition` |  | the leaf is lifted to the long lane of the values | per-lane: blend, mask broadcast |
 | `CASE WHEN b THEN l ELSE l2 END` | `condition` |  | likewise, per branch | per-lane: blend, mask broadcast |
 
+#### TINYINT columns
+
+| Predicate | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `y1 < y2` | `predicate` |  | two narrow columns: each load widens its part-width species into the int lane, and the compare is the int lane's | not emitted: a BYTE column has no widening load at 4 int lanes |
+| `y1 <= y2` | `predicate` |  | the other ordering, so that every comparison has a row of its own | not emitted: a BYTE column has no widening load at 4 int lanes |
+| `y1 >= y2` | `predicate` |  |  | not emitted: a BYTE column has no widening load at 4 int lanes |
+| `y1 = 5Y` | `predicate` |  | a narrow column against a narrow literal, stored as the same width | not emitted: a BYTE column has no widening load at 4 int lanes |
+| `y1 IS NOT NULL` | `predicate` |  | the column's own validity word | not emitted: a BYTE column has no widening load at 4 int lanes |
+| `y1 IN (1Y, 2Y, 3Y, -1Y)` | `predicate` |  | a range set over a narrow column | not emitted: a BYTE column has no widening load at 4 int lanes |
+| `y1 IN (11 to 16 byte literals)` | `predicate` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | not emitted: a BYTE column has no widening load at 4 int lanes |
+
+#### TINYINT columns choosing values
+
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `CASE WHEN y1 > y2 THEN y1 ELSE y2 END` | `predicate`, `condition` |  | the output is stored at the column's own width, whichever arm computed it | not emitted: a BYTE column has no widening load at 4 int lanes |
+| `if(y1 IS NULL, 5Y, y1)` | `predicate`, `condition` |  | a narrow literal in the ELSE: the stored value is one byte a row and the missing row takes the constant | not emitted: a BYTE column has no widening load at 4 int lanes |
+| `greatest(y1, y2)` | `intArithmetic` |  |  | not emitted: a BYTE column has no widening load at 4 int lanes |
+| `least(y1, y2)` | `intArithmetic` |  |  | not emitted: a BYTE column has no widening load at 4 int lanes |
+
+#### SMALLINT columns
+
+| Predicate | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `s1 < s2` | `predicate` |  | the two-byte twin of the TINYINT comparison | vector |
+| `s1 <= s2` | `predicate` |  |  | vector |
+| `s1 >= s2` | `predicate` |  |  | vector |
+| `s1 = 5S` | `predicate` |  | a SMALLINT column against a SMALLINT literal | vector |
+| `s1 IS NOT NULL` | `predicate` |  |  | vector |
+| `s1 IN (1S, 2S, 3S, -1S)` | `predicate` |  |  | vector |
+| `s1 IN (11 to 16 short literals)` | `predicate` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | vector |
+
+#### SMALLINT columns choosing values
+
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `CASE WHEN s1 > s2 THEN s1 ELSE s2 END` | `predicate`, `condition` |  | two bytes a row at the store | vector |
+| `if(s1 IS NULL, 5S, s1)` | `predicate`, `condition` |  | the two-byte twin of the TINYINT constant choice | vector |
+| `greatest(s1, s2)` | `intArithmetic` |  |  | vector |
+| `least(s1, s2)` | `intArithmetic` |  |  | vector |
+
 #### Width conversions
 
 | Expression | Switches | Domain | Notes | 128-bit lanes |

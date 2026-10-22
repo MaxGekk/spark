@@ -37,7 +37,8 @@ import org.apache.spark.sql.execution.VarkaMaybeThrows.{difference => outcomeDif
 import org.apache.spark.sql.execution.columnar.InMemoryTableScanExec
 import org.apache.spark.sql.execution.varka.{VarkaFallbackAccounting, VarkaKernelRunner}
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.types.{BooleanType, DataType, DateType, DayTimeIntervalType, IntegerType, LongType, TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType,
+  DayTimeIntervalType, IntegerType, LongType, ShortType, TimeType, YearMonthIntervalType}
 
 /**
  * Every row of the published coverage table, run through both engines (VARKA-120).
@@ -49,8 +50,9 @@ import org.apache.spark.sql.types.{BooleanType, DataType, DateType, DayTimeInter
  * a change to this file: adding an arm without a row fails the coverage suite, adding a row
  * without correctness fails this one, and the two together are the guarantee the table makes.
  *
- * Each row runs on three fixtures over the table's twelve columns, plus the derived BOOLEAN
- * columns `b` and `b2` - nulls sprinkled
+ * Each row runs on three fixtures over the table's twelve source columns, plus the derived
+ * BOOLEAN columns `b` and `b2` and the TINYINT and SMALLINT columns `y1`, `y2`, `s1` and `s2`
+ * (VARKA-329) - nulls sprinkled
  * independently per column, no nulls, and every column null in every row - and under both
  * consumers a Varka node can have: rows, the plan every direct query gets, and columns, which
  * the Arrow cache builder takes when a view over the query is cached. The hand-chosen shapes in
@@ -342,7 +344,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
   // ---------------------------------------------------------------------------------------------
 
   /** Every column of a fixture, `rid` first, as the partition queries select them. */
-  private val allColumns = "rid, d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2"
+  private val allColumns =
+    "rid, d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2, y1, y2, s1, s2"
 
   /**
    * The optimizer rules that rewrite the partitions before Varka sees them: `BooleanSimplification`
@@ -623,6 +626,11 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
     case DateType => Some("d2")
     case IntegerType => Some(if (caseArm) "year(d2)" else "i")
     case LongType => Some("l2")
+    // The narrow twins: the fixture's second column of each type, which the value rows choose
+    // between (VARKA-329). A CASE arm beside a narrow expression is the int guard `rid < 0` and
+    // a narrow branch, which the compiler widens to the int lane and stores narrow.
+    case ByteType => Some("y2")
+    case ShortType => Some("s2")
     case _: TimeType => Some("t2")
     case _: DayTimeIntervalType => Some("dt2")
     case YearMonthIntervalType(start, end) if start == end =>
@@ -1234,7 +1242,15 @@ private object VarkaCoverageDifferentialSuite {
        |       make_ym_interval(y, mm) AS ym,
        |       l, l2, CAST(t AS TIME(6)) AS t, CAST(t2 AS TIME(6)) AS t2, dt, dt2,
        |       CASE WHEN rid % 4 = 3 THEN NULL ELSE rid % 2 = 0 END AS b,
-       |       CASE WHEN rid % 5 = 4 THEN NULL ELSE rid % 3 = 0 END AS b2
+       |       CASE WHEN rid % 5 = 4 THEN NULL ELSE rid % 3 = 0 END AS b2,
+       |       CASE WHEN rid % 7 = 6 THEN NULL
+       |            ELSE CAST(rid * 37 % 251 - 125 AS TINYINT) END AS y1,
+       |       CASE WHEN rid % 3 = 2 THEN NULL
+       |            ELSE CAST(rid * 53 % 253 - 126 AS TINYINT) END AS y2,
+       |       CASE WHEN rid % 6 = 5 THEN NULL
+       |            ELSE CAST(rid * 4099 % 65003 - 32501 AS SMALLINT) END AS s1,
+       |       CASE WHEN rid % 4 = 1 THEN NULL
+       |            ELSE CAST(rid * 8191 % 65003 - 32501 AS SMALLINT) END AS s2
        |FROM VALUES ${withIds.mkString(",\n  ")}
        |AS v(rid, d, d2, i, m, y, mm, l, l2, t, t2, dt, dt2)$where""".stripMargin
   }

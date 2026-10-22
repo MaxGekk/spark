@@ -43,6 +43,16 @@ object VarkaCoverageRows {
    */
   def readsBoolean(executable: String): Boolean = booleanColumn.findFirstIn(executable).isDefined
 
+  private val narrowColumn = "\\b(y1|y2|s1|s2)\\b".r
+
+  /**
+   * Whether an executable row reads one of the table's narrow columns, `y1` and `y2` (TINYINT) or
+   * `s1` and `s2` (SMALLINT, VARKA-329). The fuzzers that draw int and long columns leave these
+   * rows out for {@link #readsBoolean}'s reason and one more: a narrow column is one or two bytes
+   * a row, which their batches and oracles do not build. Drawing the narrow types is VARKA-352's.
+   */
+  def readsNarrow(executable: String): Boolean = narrowColumn.findFirstIn(executable).isDefined
+
   case class Table(columns: Seq[Attribute], projections: Seq[Row], predicates: Seq[Row])
 
   /** The table at `path`, the committed file the coverage suite keeps. */

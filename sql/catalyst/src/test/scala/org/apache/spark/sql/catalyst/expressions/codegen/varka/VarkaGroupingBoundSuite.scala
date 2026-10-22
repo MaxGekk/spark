@@ -55,8 +55,8 @@ class VarkaGroupingBoundSuite extends VarkaEmitterTestBase {
   private def compositions: Seq[VarkaEmitCostCorpus.Shape] = {
     val rnd = new Random(20261001L)
     (0 until 60).flatMap { i =>
-      val picked = Seq.fill(20 + rnd.nextInt(181))(
-        table.projections(rnd.nextInt(table.projections.size)))
+      val drawn = table.projections.filterNot(r => VarkaCoverageRows.readsNarrow(r.executable))
+      val picked = Seq.fill(20 + rnd.nextInt(181))(drawn(rnd.nextInt(drawn.size)))
       val list = picked.zipWithIndex.map { case (row, k) =>
         Alias(VarkaCoverageRows.resolve(row.executable, table.columns), s"c$k")()
       }

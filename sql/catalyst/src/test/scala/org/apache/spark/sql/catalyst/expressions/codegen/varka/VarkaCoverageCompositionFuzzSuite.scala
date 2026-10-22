@@ -72,15 +72,19 @@ class VarkaCoverageCompositionFuzzSuite
   /** The coverage table's columns and rows, from the committed file the coverage suite keeps. */
   private lazy val table =
     VarkaCoverageRows.read(getWorkspaceFilePath("sql", "varka", "coverage.json"))
-  private def columns =
-    table.columns.filterNot(_.dataType == org.apache.spark.sql.types.BooleanType)
+  private def columns = table.columns.filterNot(c =>
+    c.dataType == org.apache.spark.sql.types.BooleanType ||
+      c.dataType == org.apache.spark.sql.types.ByteType ||
+      c.dataType == org.apache.spark.sql.types.ShortType)
   // The rows that read a BOOLEAN column are out of this fuzzer: its batches draw int columns and
   // its oracle builds int attributes, and a boolean input is a bitmap. They are held to the row
   // engine by `VarkaCoverageDifferentialSuite` and to the reference by `VarkaEmitterBoolSuite`.
   private def projections =
-    table.projections.filterNot(r => VarkaCoverageRows.readsBoolean(r.executable))
+    table.projections.filterNot(r =>
+      VarkaCoverageRows.readsBoolean(r.executable) || VarkaCoverageRows.readsNarrow(r.executable))
   private def predicates =
-    table.predicates.filterNot(r => VarkaCoverageRows.readsBoolean(r.executable))
+    table.predicates.filterNot(r =>
+      VarkaCoverageRows.readsBoolean(r.executable) || VarkaCoverageRows.readsNarrow(r.executable))
 
   private def resolve(sql: String): Expression = VarkaCoverageRows.resolve(sql, columns)
 
