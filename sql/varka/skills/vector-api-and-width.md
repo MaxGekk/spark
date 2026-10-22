@@ -489,12 +489,17 @@ bytes a row for the laptop.
 | family | lane | operators | 512 | 256 | 128 | rows |
 |---|---|---|---|---|---|---|
 | byte and short lanewise | byte | `ADD`, `SUB`, `MUL`, `SADD`, `SSUB` | I | I | I | 329, 330 |
-| byte and short lanewise | byte | `EQ`, `LT`, `LE` | I | I | I | 329, 330 |
+| byte and short lanewise | byte | `EQ`, `LT`, `LE`, `GT` | I | I | I | 329, 330 |
+| byte and short lanewise | byte | `AND`, `OR`, `XOR`, `MIN`, `MAX` | I | I | I | 329, 330, 335 |
+| byte and short lanewise | byte | `NEG`, `ABS`, `BLEND` | I | I | I | 329, 330 |
 | byte and short lanewise | byte | `LSHL`, `LSHR`, `ASHR` | I | I | I | 329, 330 |
 | byte and short lanewise | short | `ADD`, `SUB`, `MUL`, `SADD`, `SSUB` | I | I | I | 329, 330 |
-| byte and short lanewise | short | `EQ`, `LT`, `LE` | I | I | I | 329, 330 |
+| byte and short lanewise | short | `EQ`, `LT`, `LE`, `GT` | I | I | I | 329, 330 |
+| byte and short lanewise | short | `AND`, `OR`, `XOR`, `MIN`, `MAX` | I | I | I | 329, 330, 335 |
+| byte and short lanewise | short | `NEG`, `ABS`, `BLEND` | I | I | I | 329, 330 |
 | byte and short lanewise | short | `LSHL`, `LSHR`, `ASHR` | I | I | I | 329, 330 |
 | widening and narrowing | byte | `B2I` | I | I | I | 329, 330 |
+| widening and narrowing | byte | `B2S` | I | I | I | 329, 330 |
 | widening and narrowing | short | `S2I` | I | I | I | 329, 330 |
 | widening and narrowing | int | `I2B`, `I2S` | I | I | I | 329, 330 |
 | conversions | long | `L2D` | I | I | I | 30, 343, 344 |
@@ -509,6 +514,9 @@ bytes a row for the laptop.
 | conversions | float | `F2I` | I | I | I | 343, 344 |
 | conversions | double | `D2I` | I | I | I | 343, 344 |
 | widening and narrowing | int | `B2I_load` | I | I | - | 329, 330 |
+| widening and narrowing | int | `B2I_load64` (a 64-bit byte load, in one or two parts) | - | I | I | 329, 330 |
+| widening and narrowing | int | `B2I_load128` (a 128-bit byte load, in one to four parts) | I | I | I | 329, 330 |
+| widening and narrowing | int | `S2I_load` | I | I | I | 329, 330 |
 | floating compares | float | `EQ`, `LT`, `LE` | I | I | I | 341 |
 | floating compares | float | `IS_NAN` | I | I | I | 341 |
 | fused multiply-add | float | `FMA` | I | I | I | 30, 346, 366 |
@@ -523,9 +531,11 @@ bytes a row for the laptop.
 | masks | byte | `fromLong`, `toLong` | I | I | I | 331, 375, 27 |
 | masks | int | `fromLong`, `toLong` | I | I | I | 331, 375, 27 |
 | masks | long | `fromLong`, `toLong` | I | I | F | 331, 375, 27 |
-| two species | byte | `narrow_then_full`, `full_then_narrow`, `both_in_one_loop` | I | I | - | 329 |
+| two species | byte | `narrow_then_full`, `full_then_narrow`, `both_in_one_loop` | I | I | I | 329 |
 | two species | byte | `widen_then_full` | I | I | - | 329 |
 | two species | byte | `full_then_widen` | I | I | - | 329 |
+| two species | byte | `widen64_then_full`, `full_then_widen64` | - | I | I | 329 |
+| two species | short | `widen_then_full`, `full_then_widen` | I | I | I | 329 |
 
 The runner columns (workflow run 39400866095, 20 October 2026, Zulu 25.0.4+7; every other cell in
 the table reads as on the laptop):
@@ -560,6 +570,13 @@ What it says on the laptop (AMD Ryzen AI 9 HX PRO 370, JDK 25.0.4.1):
   `D2F`, `I2D`, `L2F`, `I2L`, `L2I` and `D2I` also meet `rearrangeOp`, `compare`, `blend` and
   `fromBitsCoerced` in the same tree, which is how C2 selects a part, while `L2D`, `D2L`, `I2F`
   and `F2I` are the `convert` alone.
+* **The narrow cells that were missing read `I` on the laptop at every width** (VARKA-329 step 1,
+  21 October 2026): byte and short `AND`, `OR`, `XOR`, `MIN`, `MAX`, `NEG`, `ABS`, `GT` and
+  `BLEND`, `B2S`, the short widening load, and both 128-bit byte forms, a 64-bit load converted in
+  two parts (`B2I_load64`, skipped at 512, where it is not a whole group) and a 128-bit load
+  converted in up to four (`B2I_load128`). So the widening byte load has an intrinsic form at 128
+  bits, and the two-species cells with no conversion run there too. The runner columns of these
+  cells come from the next `varka-width-audit.yml` dispatch.
 * **`L2D` and `D2L` are intrinsic here, and this CPU has AVX-512DQ**; `x86.ad` is expected to
   refuse the same cells on the AVX2 runner, and its column, when it is added, will say whether it
   does.
