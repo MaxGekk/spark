@@ -53,7 +53,18 @@ import java.lang.constant.MethodTypeDesc;
 // Its fields are ClassDesc and MethodTypeDesc, immutable JDK values the checker cannot tell are.
 @SuppressWarnings("ImmutableEnumChecker")
 enum Lane {
-  /** 32-bit lanes: dates, ints, year-month intervals - every shape the compiler admits today. */
+  /**
+   * 8-bit lanes: a {@code TINYINT} column, stored a byte a row. Under
+   * {@link VarkaEmitOptions#narrowLanes()} a kernel whose every value is narrow computes in this
+   * lane; otherwise the lane names only how a byte column is stored and loaded, and the value is
+   * widened to the int lane once at its load.
+   */
+  BYTE(VarkaVectorIR.LaneType.BYTE, "jdk.incubator.vector.ByteVector", Byte.SIZE,
+      ConstantDescs.CD_byte),
+  /** 16-bit lanes: a {@code SMALLINT} column, stored two bytes a row; see {@link #BYTE}. */
+  SHORT(VarkaVectorIR.LaneType.SHORT, "jdk.incubator.vector.ShortVector", Short.SIZE,
+      ConstantDescs.CD_short),
+  /** 32-bit lanes: dates, ints, year-month intervals. */
   INT(VarkaVectorIR.LaneType.INT, "jdk.incubator.vector.IntVector", Integer.SIZE,
       ConstantDescs.CD_int),
   /**
@@ -142,7 +153,12 @@ enum Lane {
     this.compareVV = MethodTypeDesc.of(VECTOR_MASK, VO_COMPARISON, VECTOR);
     this.compareVI = MethodTypeDesc.of(VECTOR_MASK, VO_COMPARISON, scalar);
     this.blend = MethodTypeDesc.of(vector, VECTOR, VECTOR_MASK);
-    if (scalar.equals(ConstantDescs.CD_int)) {
+    // The scalar arrays are the ones `VarkaFusedKernel.run` declares: an `int[]` at the int lane
+    // and at the narrow ones, whose literals arrive as ints and are narrowed by
+    // {@link #narrowScalar} before they reach a byte or short descriptor, and a `long[]` at the
+    // long lane. A narrow lane gets no array of its own for the reason the int lane shares one:
+    // every literal the compiler folds is an int, and a byte literal is one of those.
+    if (!scalar.equals(ConstantDescs.CD_long)) {
       this.runDesc = MethodTypeDesc.of(ConstantDescs.CD_int, LONG_ARRAY, LONG_ARRAY, INT_ARRAY,
           LONG_ARRAY, LONG_ARRAY, INT_ARRAY, ConstantDescs.CD_int);
       this.pLongArgs = -1;
@@ -163,9 +179,17 @@ enum Lane {
     this.pScratch = this.pLength + 1;
     this.firstLocalScratch = this.pLength + 3;
     this.localWidth = scalar.equals(ConstantDescs.CD_long) ? 2 : 1;
-    this.preferredLanes = bits == Integer.SIZE
-        ? jdk.incubator.vector.IntVector.SPECIES_PREFERRED.length()
-        : jdk.incubator.vector.LongVector.SPECIES_PREFERRED.length();
+    this.preferredLanes = switch (laneType) {
+      case BYTE -> jdk.incubator.vector.ByteVector.SPECIES_PREFERRED.length();
+      case SHORT -> jdk.incubator.vector.ShortVector.SPECIES_PREFERRED.length();
+      case INT -> jdk.incubator.vector.IntVector.SPECIES_PREFERRED.length();
+      case LONG -> jdk.incubator.vector.LongVector.SPECIES_PREFERRED.length();
+    };
+  }
+
+  /** Whether this is one of the two narrow lanes. */
+  boolean isNarrow() {
+    return laneType.isNarrow();
   }
 
   /** The lane a node's type names. */
@@ -246,14 +270,34 @@ enum Lane {
   void pushScalar(CodeBuilder cb, long value) {
     if (localWidth == 2) {
       cb.loadConstant(value);
-    } else {
-      cb.loadConstant((int) value);
+      return;
+    }
+    cb.loadConstant((int) value);
+    narrowScalar(cb);
+  }
+
+  /**
+   * Narrows the int on the stack to this lane's scalar type, for a byte or short descriptor's
+   * scalar argument. A scalar argument arrives from the {@code int[]} the int lane also reads,
+   * so a narrow lane narrows it where it is pushed; the int and long lanes leave the stack as
+   * it is, which is what keeps every existing kernel's bytes unchanged.
+   */
+  void narrowScalar(CodeBuilder cb) {
+    if (laneType == VarkaVectorIR.LaneType.BYTE) {
+      cb.i2b();
+    } else if (laneType == VarkaVectorIR.LaneType.SHORT) {
+      cb.i2s();
     }
   }
 
   /** The most negative value of this lane: the one input a negate cannot represent. */
   long mostNegative() {
-    return localWidth == 2 ? Long.MIN_VALUE : Integer.MIN_VALUE;
+    return switch (laneType) {
+      case BYTE -> Byte.MIN_VALUE;
+      case SHORT -> Short.MIN_VALUE;
+      case INT -> Integer.MIN_VALUE;
+      case LONG -> Long.MIN_VALUE;
+    };
   }
 
   /**

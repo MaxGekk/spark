@@ -561,6 +561,25 @@ final class VarkaConditionCompiler {
         }
         return compileInList(inSet.child(), elements, inSet, inputs, literals, sink);
       };
+      // IN over narrow literals (VARKA-329): the same EQ chain. A tinyint or smallint value is
+      // an int in a narrower lane, so the elements are read as ints and the chain's slots take
+      // the value's own lane.
+      case In in when onNarrowLane(in.value().dataType()) -> () -> {
+        List<OptionalInt> elements = new ArrayList<>();
+        for (Expression element : CollectionConverters.asJava(in.list())) {
+          elements.add(narrowValue(element));
+        }
+        return compileInList(in.value(), elements, in, inputs, literals, sink);
+      };
+      case InSet inSet when onNarrowLane(inSet.child().dataType()) -> () -> {
+        List<OptionalInt> elements = new ArrayList<>();
+        for (Object element : CollectionConverters.asJava(inSet.hset())) {
+          elements.add(element instanceof Byte b ? OptionalInt.of(b.intValue())
+              : element instanceof Short s ? OptionalInt.of(s.intValue())
+              : OptionalInt.empty());
+        }
+        return compileInList(inSet.child(), elements, inSet, inputs, literals, sink);
+      };
       case And and -> () -> {
         Optional<Cond> left = compileCond(and.left(), inputs, literals, sink);
         if (left.isEmpty()) {
@@ -609,6 +628,28 @@ final class VarkaConditionCompiler {
 
   private static boolean isDateOrInterval(DataType dataType) {
     return dataType.equals(DataTypes.DateType) || dataType instanceof YearMonthIntervalType;
+  }
+
+  /** Whether {@code dataType} is one of the narrow lanes' types: {@code tinyint} or
+   * {@code smallint}. */
+  private static boolean onNarrowLane(DataType dataType) {
+    return VarkaNodeCompiler.laneOf(dataType).filter(LaneType::isNarrow).isPresent();
+  }
+
+  /**
+   * The int a narrow literal holds, as {@link #literalDays} reads a date's: values of a narrow
+   * type are ints in a narrower lane, so an {@code IN} list of them folds to ints exactly.
+   */
+  private static OptionalInt narrowValue(Expression e) {
+    if (e instanceof Literal l) {
+      if (l.value() instanceof Byte b) {
+        return OptionalInt.of(b.intValue());
+      }
+      if (l.value() instanceof Short s) {
+        return OptionalInt.of(s.intValue());
+      }
+    }
+    return OptionalInt.empty();
   }
 
   /**
@@ -666,7 +707,8 @@ final class VarkaConditionCompiler {
     List<Cond> leaves = new ArrayList<>();
     for (int d : days) {
       leaves.add(new Compare(
-          CompareOp.EQ, compiledValue.get(), VarkaNodeCompiler.intSlot(d, literals)));
+          CompareOp.EQ, compiledValue.get(),
+          VarkaNodeCompiler.slot(d, compiledValue.get().laneType(), literals)));
     }
     return Optional.of(balancedOr(leaves));
   }
@@ -938,6 +980,13 @@ final class VarkaConditionCompiler {
     }
     Optional<VarkaVectorIR> right = operand(cmp.right(), inputs, literals, sink);
     if (right.isEmpty()) {
+      return Optional.empty();
+    }
+    // A narrow column compared with an int literal, which is what `smallint_col > 5` becomes
+    // when a suite hands the compiler the unresolved tree, is two lanes in one comparison. The
+    // IR has no conversion for it here (VARKA-329 leaves `CAST(smallint AS int)` to its own
+    // row), so the conjunct declines with the lane's reason rather than throwing.
+    if (!sameLane(cmp, sink, left.get(), right.get())) {
       return Optional.empty();
     }
     return Optional.of(new Compare(op, left.get(), right.get()));

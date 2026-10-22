@@ -266,7 +266,7 @@ class VarkaCoverageCompositionFuzzSuite
       patternsOf: Int => Seq[Int => Boolean] = poisonedPatterns): Boolean = {
     val numInputs = plan.inputOrdinals.size
     kernelCounter += 1
-    kernelsByLane(plan.lane) = kernelsByLane.getOrElse(plan.lane, 0) + 1
+    kernelsByLane(plan.lane(opts)) = kernelsByLane.getOrElse(plan.lane(opts), 0) + 1
     val className = s"org.apache.spark.sql.varka.execution.VarkaCompositionWide$kernelCounter"
     val bytes = kernelBytes.getOrElse(VarkaLoopEmitter.emit(className, plan.outputs, numInputs,
       plan.numLiterals, null, null, opts))
@@ -287,7 +287,7 @@ class VarkaCoverageCompositionFuzzSuite
     val forceMasked = !poisoned && length > 1 && rnd.nextBoolean()
     def intValue(i: Int, scale: Int): Int = intInput(plan, i, scale, rnd)
     val roots = plan.outputs.asScala.toSeq
-    def attempt(scale: Int): Boolean = if (plan.lane == LaneType.LONG) {
+    def attempt(scale: Int): Boolean = if (plan.lane(opts) == LaneType.LONG) {
       val data = Array.tabulate(numInputs) { i =>
         val dataType = inputs(plan.inputOrdinals.get(i)).dataType
         Array.fill(length)(drawLong(rnd, dataType, scale))
@@ -319,7 +319,9 @@ class VarkaCoverageCompositionFuzzSuite
       if (scale > 0) redrawn += 1
       attempt(scale)
     }
-    if (compared) comparedByLane(plan.lane) = comparedByLane.getOrElse(plan.lane, 0) + 1
+    if (compared) {
+      comparedByLane(plan.lane(opts)) = comparedByLane.getOrElse(plan.lane(opts), 0) + 1
+    }
     compared
   }
 
@@ -550,7 +552,7 @@ class VarkaCoverageCompositionFuzzSuite
   private def compiledCase(sql: String, plan: CompiledVarkaProjection, opts: VarkaEmitOptions,
       rnd: Random): VarkaFuzzCase = {
     val n = plan.inputOrdinals.size
-    val isLong = plan.lane == LaneType.LONG
+    val isLong = plan.lane(opts) == LaneType.LONG
     val length = Seq(64, 100, 257, 1000)(rnd.nextInt(4))
     val nulls = Array.fill(n)(Array.tabulate(length)(i => i % 5 != 4 && rnd.nextInt(3) == 0))
     val lits = if (isLong) plan.longLiterals.asScala.map(_.longValue).toArray
@@ -577,8 +579,8 @@ class VarkaCoverageCompositionFuzzSuite
     val data = answered.getOrElse(fail(s"$sql: a guard declined each of three attempts"))
     val level = (0 until n).find(i =>
       plan.derivedAt(i).toScala.exists(_.kind == VarkaDerivedKind.TRUNC_LEVEL)).getOrElse(-1)
-    new VarkaFuzzCase(plan.lane, plan.outputs, n, lits, length, nulls, data, false, opts, -1,
-      level, s"coverage row $sql, ${plan.lane} lane, $length rows")
+    new VarkaFuzzCase(plan.lane(opts), plan.outputs, n, lits, length, nulls, data, false, opts,
+      -1, level, s"coverage row $sql, ${plan.lane(opts)} lane, $length rows")
   }
 
   /**
@@ -699,7 +701,7 @@ class VarkaCoverageCompositionFuzzSuite
       // the int table it would index is the truncated copy of the long one, too short for the slot.
       // `VarkaEmitterMixedLaneSuite` and the IR fuzzer's mixed corpus run such kernels instead.
       val oneTable = rowKernels.filter { case (_, p) =>
-        p.literals.isEmpty || (p.longLiterals.isEmpty && p.lane == LaneType.INT)
+        p.literals.isEmpty || (p.longLiterals.isEmpty && p.lane(opts) == LaneType.INT)
       }
       val kernels = coverageRow match {
         case Some(sql) =>
@@ -708,7 +710,7 @@ class VarkaCoverageCompositionFuzzSuite
         case None =>
           val perLane = coverageCompiled.map(_.toInt).getOrElse(4)
           LaneType.values.toSeq.flatMap { lane =>
-            new Random(seed ^ 274L ^ lane.ordinal).shuffle(oneTable.filter(_._2.lane == lane))
+            new Random(seed ^ 274L ^ lane.ordinal).shuffle(oneTable.filter(_._2.lane(opts) == lane))
               .take(perLane)
           }
       }
@@ -869,7 +871,7 @@ class VarkaCoverageCompositionFuzzSuite
       def run(code: Array[Byte], allNull: Boolean, fill: Option[VarkaKernelChecks.ValidityFill])
           : Unit = {
         val context = s"kernel of $sql at $width, ${if (allNull) "every row null" else "no nulls"}"
-        if (plan.lane == LaneType.LONG) {
+        if (plan.lane(opts) == LaneType.LONG) {
           val batch = longBatch(allNull)
           fill match {
             case Some(f) => VarkaKernelCheck.runOwnBodyLong(context, className, code, roots,
@@ -891,7 +893,7 @@ class VarkaCoverageCompositionFuzzSuite
       // the rewrite's own list of writers, so a writer the rewrite misses shows here.
       def written(code: Array[Byte], allNull: Boolean, fill: VarkaKernelChecks.ValidityFill)
           : Int =
-        if (plan.lane == LaneType.LONG) {
+        if (plan.lane(opts) == LaneType.LONG) {
           VarkaKernelCheck.validityBytesWrittenLong(className, code, roots, numInputs, longLits,
             longBatch(allNull), fill, intLits)
         } else {

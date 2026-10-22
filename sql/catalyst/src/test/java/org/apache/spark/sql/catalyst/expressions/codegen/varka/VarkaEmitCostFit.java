@@ -89,6 +89,16 @@ final class VarkaEmitCostFit {
   /** How many distinct nodes of each kind the register reads, at most. */
   static final int READINGS = 9;
 
+  /**
+   * The lanes the cost model prices, and so the lanes its expected features and probes are
+   * enumerated over. The narrow lanes (VARKA-329) are unpriced until VARKA-352's refit: no
+   * grammar draws them before then, so there is no data to fit, and a group holding one is
+   * marked unpredictable by {@code VarkaEmitCost.Tally.count} and answered by the weights.
+   */
+  static final List<LaneType> PRICED_LANES = Arrays.stream(LaneType.values())
+      .filter(lane -> !lane.isNarrow())
+      .toList();
+
   /** The register's prices and the probe groups they were read from. */
   record Register(Map<String, double[]> prices, List<Group> probes) {}
 
@@ -101,7 +111,8 @@ final class VarkaEmitCostFit {
    * IR's own enums rather than from what a grammar happens to draw: both tables must price all
    * of them, or a group holding the missing one is silently unpredictable. A lowering variant
    * the emitter refuses - an int-lane checked multiply has no overflow test - is left out, since
-   * no group can hold it.
+   * no group can hold it. The lane variants are over {@link #PRICED_LANES} only: a feature of a
+   * narrow lane is unpriced until VARKA-352's refit.
    */
   static Set<String> expectedFeatures() {
     Set<String> f = new TreeSet<>();
@@ -129,7 +140,7 @@ final class VarkaEmitCostFit {
 
   private static Set<String> enumeratedFeatures() {
     Set<String> f = new TreeSet<>();
-    for (LaneType lane : LaneType.values()) {
+    for (LaneType lane : PRICED_LANES) {
       f.add(VarkaEmitCost.FIXED + lane);
       f.add(VarkaEmitCost.OUTPUT + lane);
       f.add(VarkaEmitCost.SELECTION + lane);
@@ -181,7 +192,7 @@ final class VarkaEmitCostFit {
     List<Group> rows = new ArrayList<>();
     Probe probe = new Probe(prices, rows);
 
-    for (LaneType lane : LaneType.values()) {
+    for (LaneType lane : PRICED_LANES) {
       ColumnRef c0 = new ColumnRef(0, lane);
       ColumnRef c1 = new ColumnRef(1, lane);
       IntNeg n0 = new IntNeg(Overflow.WRAP, c0);
@@ -251,7 +262,7 @@ final class VarkaEmitCostFit {
         .orElseThrow().get(1);
     probe.commit("prefix/load", List.of(probe.solve(Optional.empty(), loads).orElseThrow(
         () -> new IllegalStateException("the prefix/load probe read no single new feature"))));
-    for (LaneType lane : LaneType.values()) {
+    for (LaneType lane : PRICED_LANES) {
       probe.must("selection " + lane, List.of(),
           List.of(new Compare(CompareOp.LT, new ColumnRef(0, lane), new ColumnRef(1, lane))),
           2, 0);

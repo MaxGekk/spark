@@ -321,13 +321,16 @@ final class VarkaBodyEmitter {
       List<VarkaVectorIR> outputs, List<Integer> prologueOutputs, Analysis analysis, Slots s) {
     for (int o : prologueOutputs) {
       VarkaVectorIR root = outputs.get(o);
-      // An int-valued root of a kernel driven at the long lane - a narrowing root, or any int
-      // root of a kernel that converts between lanes - is an int column, four bytes a row.
-      if (!(root instanceof Cond) && analysis.lane == Lane.LONG
-          && root.laneType() == VarkaVectorIR.LaneType.INT) {
-        loadNarrowedSegment(cb, analysis, P_DST_DATA, o, s.dstSeg[o]);
-      } else if (!(root instanceof Cond)) {
-        loadSegment(cb, P_DST_DATA, o, s.dataBytes, s.dstSeg[o]);
+      if (!(root instanceof Cond)) {
+        // An output whose stored lane is not the emission's - an int-valued root of a kernel
+        // driven at the long lane, or a narrow root of one driven at the int lane - writes its
+        // own width a row, not the driving lane's.
+        Lane stored = Lane.of(root.laneType());
+        if (stored != analysis.lane) {
+          loadNarrowedSegment(cb, analysis, P_DST_DATA, o, s.dstSeg[o], stored);
+        } else {
+          loadSegment(cb, P_DST_DATA, o, s.dataBytes, s.dstSeg[o]);
+        }
       }
       // Under elideUnreadLocals a loop or epilogue body maps no validity segment for an output
       // whose validity it never writes: the driver filled it or the bitmap pass wrote it.
@@ -525,13 +528,14 @@ final class VarkaBodyEmitter {
       if (scalarArg[j] < 0) {
         continue; // a literal no output of this body reads (per-group planning, VARKA-87)
       }
-      cb.aload(lane == Lane.INT ? P_SCALAR_ARGS : lane.scalarArgsSlot());
+      cb.aload(lane.scalarArgsSlot());
       cb.loadConstant(j);
       lane.arrayLoad(cb);
       lane.storeScalar(cb, scalarArg[j]);
       if (broadcastSlot != null) {
         cb.aload(s.species(lane));
         lane.loadScalar(cb, scalarArg[j]);
+        lane.narrowScalar(cb);
         cb.invokestatic(lane.vector, "broadcast", lane.broadcast);
         cb.astore(broadcastSlot[j]);
       }
@@ -954,6 +958,39 @@ final class VarkaBodyEmitter {
   }
 
   /**
+   * A narrow root of a kernel driven at the int lane: {@code [int vector] -> []}, one or two
+   * bytes a row at {@code (long) i * stride}, converted with {@code I2B} or {@code I2S} into the
+   * narrow species of the int species' width - the same species the widening load reads - and
+   * stored whole in a loop body, under the mask of its first {@code lanes} lanes in an epilogue.
+   * The truncation is Spark's {@code CAST(int AS TINYINT)} under {@code LEGACY}, which is what a
+   * {@code TINYINT} expression's result is.
+   */
+  private static void emitNarrowTypeStore(
+      CodeBuilder cb, Lane stored, Analysis analysis, Slots s, int o) {
+    String species = stored.speciesField(analysis.lanes);
+    cb.getstatic(VECTOR_OPERATORS, stored == Lane.BYTE ? "I2B" : "I2S", VO_CONVERSION);
+    cb.getstatic(stored.vector, species, VECTOR_SPECIES);
+    cb.loadConstant(0);
+    cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
+    cb.checkcast(stored.vector);
+    cb.aload(s.dstSeg[o]);
+    cb.iload(s.iVar);
+    cb.i2l();
+    cb.loadConstant(stored.byteStride);
+    cb.lmul();
+    cb.getstatic(BYTE_ORDER, "LITTLE_ENDIAN", BYTE_ORDER);
+    if (s.epilogue) {
+      cb.getstatic(stored.vector, species, VECTOR_SPECIES);
+      cb.loadConstant(0);
+      cb.iload(s.lanes);
+      cb.invokeinterface(VECTOR_SPECIES, "indexInRange", INDEX_IN_RANGE);
+      cb.invokevirtual(stored.vector, "intoMemorySegment", stored.intoMemorySegmentMasked);
+    } else {
+      cb.invokevirtual(stored.vector, "intoMemorySegment", stored.intoMemorySegmentDense);
+    }
+  }
+
+  /**
    * The store of an int vector whose low half holds the lane group's rows, in a kernel driven at
    * the long lane: {@code [int vector] -> []}, four bytes a row at {@code (long) i * 4}, under the
    * mask of the int species' first {@code lanes} lanes - or whole, in the loop of a kernel that
@@ -1090,8 +1127,13 @@ final class VarkaBodyEmitter {
         emitRootValidityOr(cb, dense, analysis, s, o, root);
       }
       emitValue(cb, root, dense, analysis, s, computed);
+      Lane stored = Lane.of(root.laneType());
       if (analysis.narrowsAtStore(root)) {
         emitNarrowStore(cb, analysis, s, o);
+      } else if (stored.isNarrow() && stored != analysis.lane) {
+        // A narrow root of a kernel driven at the int lane: the value is computed widened and
+        // stored back at its own width.
+        emitNarrowTypeStore(cb, stored, analysis, s, o);
       } else if (analysis.laneOf(root) != analysis.lane) {
         emitLowHalfStore(cb, analysis, s, o);
       } else {
@@ -1427,13 +1469,14 @@ final class VarkaBodyEmitter {
    * lane's stride.
    */
   private static void loadNarrowedSegment(
-      CodeBuilder cb, Analysis analysis, int arrayParam, int index, int destSlot) {
+      CodeBuilder cb, Analysis analysis, int arrayParam, int index, int destSlot,
+      Lane stored) {
     cb.aload(arrayParam);
     cb.loadConstant(index);
     cb.laload();
     cb.iload(analysis.lane.pLength);
     cb.i2l();
-    cb.loadConstant(4L);
+    cb.loadConstant(stored.byteStride);
     cb.lmul();
     cb.invokestatic(SUPPORT, "ofAddress", OF_ADDRESS);
     cb.astore(destSlot);
@@ -1448,7 +1491,7 @@ final class VarkaBodyEmitter {
       // A boolean column's data is a bitmap, the size of its validity bitmap, whatever the lane.
       loadSegment(cb, P_SRC_DATA, i, s.validityBytes, s.srcSeg[i]);
     } else if (analysis.inputLane(i) != analysis.lane) {
-      loadNarrowedSegment(cb, analysis, P_SRC_DATA, i, s.srcSeg[i]);
+      loadNarrowedSegment(cb, analysis, P_SRC_DATA, i, s.srcSeg[i], analysis.inputLane(i));
     } else {
       loadSegment(cb, P_SRC_DATA, i, s.dataBytes, s.srcSeg[i]);
     }

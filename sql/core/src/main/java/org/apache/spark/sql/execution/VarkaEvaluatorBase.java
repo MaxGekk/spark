@@ -39,7 +39,9 @@ import org.apache.arrow.vector.DateDayVector;
 import org.apache.arrow.vector.DurationVector;
 import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.IntervalYearVector;
+import org.apache.arrow.vector.SmallIntVector;
 import org.apache.arrow.vector.TimeNanoVector;
+import org.apache.arrow.vector.TinyIntVector;
 import org.apache.arrow.vector.ValueVector;
 import org.apache.arrow.vector.VarCharVector;
 
@@ -440,9 +442,9 @@ public abstract class VarkaEvaluatorBase {
       VarkaInputBound b = declared.get(i);
       bounds[i] = new VarkaKernelRunner.Bound(b.inputIndex(), b.lo(), b.hi());
     }
-    return new VarkaKernelRunner(entry, compiled.lane(), inputOrdinals, derived, bounds,
-        compiled.outputs().size(), ints(compiled.literals()), longs(compiled.longLiterals()),
-        scratch(), accounting(), RUNNER_HOOKS);
+    return new VarkaKernelRunner(entry, compiled.lane(emitOptions()), inputOrdinals, derived,
+        bounds, compiled.outputs().size(), ints(compiled.literals()),
+        longs(compiled.longLiterals()), scratch(), accounting(), RUNNER_HOOKS);
   }
 
   private static int[] ints(List<Integer> values) {
@@ -944,6 +946,9 @@ public abstract class VarkaEvaluatorBase {
         case TimeNanoVector v -> !derivedInput[i] && v.getValueCount() == rows;
         case DurationVector v -> !derivedInput[i] && v.getValueCount() == rows;
         case VarCharVector v -> derivedInput[i] && v.getValueCount() == rows;
+        // A narrow column's one or two bytes a row (VARKA-329), read at its own lane.
+        case TinyIntVector v -> !derivedInput[i] && v.getValueCount() == rows;
+        case SmallIntVector v -> !derivedInput[i] && v.getValueCount() == rows;
         // A boolean column: a data bitmap in the layout of a validity bitmap (BoolColumn).
         case BitVector v -> !derivedInput[i] && v.getValueCount() == rows;
         default -> false;

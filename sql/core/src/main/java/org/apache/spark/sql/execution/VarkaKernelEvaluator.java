@@ -31,6 +31,8 @@ import org.apache.arrow.vector.BaseFixedWidthVector;
 import org.apache.arrow.vector.DateDayVector;
 import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.IntervalYearVector;
+import org.apache.arrow.vector.SmallIntVector;
+import org.apache.arrow.vector.TinyIntVector;
 import org.apache.arrow.vector.ValueVector;
 
 import org.apache.spark.internal.SparkLogger;
@@ -513,6 +515,12 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
       vector = new DateDayVector(name, allocator);
     } else if (dataType.equals(DataTypes.IntegerType)) {
       vector = new IntVector(name, allocator);
+    } else if (dataType.equals(DataTypes.ByteType)) {
+      // The narrow lane's one-byte destination (VARKA-329): the kernel stores the int lane's
+      // values into it as bytes, once, at the root of a tinyint output.
+      vector = new TinyIntVector(name, allocator);
+    } else if (dataType.equals(DataTypes.ShortType)) {
+      vector = new SmallIntVector(name, allocator);
     } else if (dataType instanceof YearMonthIntervalType) {
       // The unit rides on the Spark type and never on the buffer, so every year-month unit writes
       // one vector class; the row path reads it back through the accessor ArrowColumnVector has.

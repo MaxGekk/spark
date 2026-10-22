@@ -615,6 +615,16 @@ public final class VarkaExpressionCompiler {
           .map(ir -> sink.guardDayColumns(ir, marks.bounds()));
       if (compiled.isPresent()) {
         VarkaVectorIR ir = compiled.get();
+        // A narrow value the emission's width cannot widen - a TINYINT column at fewer than
+        // eight int lanes, or one with no baked lane count - declines here with its own reason
+        // rather than as a budget breach, since `fitsBudgets` refuses the kernel too.
+        Optional<String> narrow = VarkaLoopEmitter.narrowRefusal(List.of(ir), options);
+        if (narrow.isPresent()) {
+          marks.restore(inputs, literals, sink);
+          sink.take();
+          sink.note(narrow.get(), e);
+          return residual(position);
+        }
         // One kernel is driven at one lane: its loop, its epilogue and its driving stores are that
         // lane's species. The first fused entry fixes the lane and an entry driven at the other is
         // demoted to residual with a reason that says so - checked here, before the budgets,
@@ -622,11 +632,12 @@ public final class VarkaExpressionCompiler {
         // mismatch reported as a budget breach sends a reader hunting a chain-depth problem that
         // is not there. An entry that converts between lanes is driven at the long lane
         // (VARKA-28), so it joins a long kernel and not an int one.
-        LaneType lane = VarkaVectorIR.emissionLane(ir);
-        if (!outputs.isEmpty() && lane != VarkaVectorIR.emissionLane(outputs.get(0))) {
+        LaneType lane = VarkaVectorIR.emissionLane(ir, options);
+        if (!outputs.isEmpty()
+            && lane != VarkaVectorIR.emissionLane(outputs.get(0), options)) {
           marks.restore(inputs, literals, sink);
           sink.take();
-          sink.note(laneMismatch(lane, VarkaVectorIR.emissionLane(outputs.get(0))), e);
+          sink.note(laneMismatch(lane, VarkaVectorIR.emissionLane(outputs.get(0), options)), e);
           return residual(position);
         }
         // An accepted entry must also fit the emitter's structural budgets together with the
@@ -854,6 +865,14 @@ public final class VarkaExpressionCompiler {
           .map(c -> (Cond) sink.guardDayColumns(c, marks.bounds()));
       if (compiled.isPresent()) {
         Cond cond = compiled.get();
+        Optional<String> narrow = VarkaLoopEmitter.narrowRefusal(List.of(cond), options);
+        if (narrow.isPresent()) {
+          marks.restore(inputs, literals, sink);
+          sink.take();
+          sink.note(narrow.get(), bound);
+          specs.add(new VarkaConjunctSpec(conjunct, false, sink.take()));
+          continue;
+        }
         // The lane rule of `compilePartial`, for conjuncts: the AND fold below would refuse a mix
         // by construction. Conjuncts of the two lanes meet on the long one, the int ones
         // compared widened (VARKA-28); one with no long-lane form is declined with the lane's

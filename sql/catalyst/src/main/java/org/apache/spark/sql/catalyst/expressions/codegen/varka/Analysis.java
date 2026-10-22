@@ -913,6 +913,16 @@ final class Analysis {
     return lanes == 0 ? 0 : lanes * 2;
   }
 
+  /** The largest value {@code of} holds; {@link Lane#mostNegative} is the other end. */
+  private static long mostPositive(Lane of) {
+    return switch (of.laneType) {
+      case BYTE -> Byte.MAX_VALUE;
+      case SHORT -> Short.MAX_VALUE;
+      case INT -> Integer.MAX_VALUE;
+      case LONG -> Long.MAX_VALUE;
+    };
+  }
+
   /**
    * How many literal slots {@code of}'s table has: {@link #numLiterals} in a single-lane kernel,
    * whose one table is its lane's, and in a kernel that converts between lanes one past the
@@ -1121,11 +1131,20 @@ final class Analysis {
   private void analyze(VarkaVectorIR node) {
     // The lane rule, enforced per node. `laneOf` reads the output roots only, so this is the
     // sole defence against a node further down disagreeing - which would emit one lane's
-    // descriptors over the other's data. An int-lane emission holds no long-lane node; a
-    // long-lane emission may hold int-lane nodes, which the IR's constructors admit only below
-    // a conversion, and which `laneOf` emits at the int species. The IR's own constructors make
-    // any other mix unbuildable; this is what catches one built another way.
-    if (lane == Lane.INT && node.laneType() != VarkaVectorIR.LaneType.INT) {
+    // descriptors over the other's data. A narrow-lane emission - the NATIVE arm, whose every
+    // value is narrow - holds nothing else. An int-lane emission holds int nodes and the narrow
+    // ones, which it widens once at their loads; it holds no long-lane node. A long-lane
+    // emission may hold int-lane nodes, which the IR's constructors admit only below a
+    // conversion, and which `laneOf` emits at the int species; a narrow node there has no
+    // lowering, since widening one to the long lane would go through the int species of the
+    // narrow species' part width. The IR's own constructors make any other mix unbuildable; this
+    // is what catches one built another way.
+    boolean fits = switch (lane) {
+      case BYTE, SHORT -> node.laneType() == lane.laneType;
+      case INT -> node.laneType() != VarkaVectorIR.LaneType.LONG;
+      case LONG -> !node.laneType().isNarrow();
+    };
+    if (!fits) {
       throw VarkaErrors.illegalArgument("a " + node.laneType() + " node in a "
           + lane.laneType + " emission: " + node.getClass().getSimpleName());
     }
@@ -1169,12 +1188,21 @@ final class Analysis {
       case WidenLane n -> analyzeOp(node, false, n.child());
       case NarrowLane n -> analyzeOp(node, false, n.child());
       case GuardedRange n -> {
-        // At the int lane the bounds have to be what the lane can compare against; the long
-        // lane holds any bound. Refused here, where the tree is, rather than at the push.
-        if (n.laneType() == VarkaVectorIR.LaneType.INT
-            && (n.lo() < Integer.MIN_VALUE || n.hi() > Integer.MAX_VALUE)) {
-          throw VarkaErrors.illegalArgument(
-              "a range guard at the int lane needs int bounds: " + node);
+        // At a narrow or the int lane the bounds have to be what the lane can compare against;
+        // the long lane holds any bound. Refused here, where the tree is, rather than at the
+        // push, which would narrow a bound silently.
+        if (n.laneType() != VarkaVectorIR.LaneType.LONG) {
+          Lane of = Lane.of(n.laneType());
+          if (n.lo() < of.mostNegative() || n.hi() > mostPositive(of)) {
+            String name = switch (n.laneType()) {
+              case BYTE -> "byte";
+              case SHORT -> "short";
+              case INT -> "int";
+              case LONG -> "long";
+            };
+            throw VarkaErrors.illegalArgument("a range guard at the " + name + " lane needs "
+                + name + " bounds: " + node);
+          }
         }
         analyzeOp(node, false, n.child());
       }

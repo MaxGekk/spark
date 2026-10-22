@@ -98,7 +98,8 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
               makeOutput(arena, length, outputValidityBytes(options, length), fill))
             val scratch = VarkaEmitterTestSupport.scratch(kernel, length)
             // A kernel holding a long-lane root is a 64-bit-lane kernel, which has its own entry.
-            val status = if (roots.exists(r => VarkaVectorIR.emissionLane(r) == LaneType.LONG)) {
+            val status = if (roots.exists(r =>
+              VarkaVectorIR.emissionLane(r, options) == LaneType.LONG)) {
               kernel.run(data.map(_.address()), valid.map(_.address()), nullCounts,
                 roots.map(_ => 0L).toArray, outs.map(_._2.address()).toArray, Array.empty[Int],
                 Array.empty[Long], length, scratch)
@@ -240,7 +241,9 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     val long = Seq(l0, new And(l0, new Not(l1)), new BoolCompare(CompareOp.LT, l0, l1),
       new BoolNullSafeEq(l0, l1), new CondIf(l0, l1, l2),
       new Or(new CondConst(Truth.NULL, LaneType.LONG), l2))
-    long.foreach(r => assert(VarkaVectorIR.emissionLane(r) === LaneType.LONG, r.toString))
+    long.foreach(r =>
+      assert(VarkaVectorIR.emissionLane(r, VarkaEmitOptions.DEFAULTS) === LaneType.LONG,
+        r.toString))
     sweep(long, 3, "long-lane leaves")
     // One column at both lanes in one kernel needs a value output (a WidenLane over an int-lane
     // IF), which this suite's selection harness cannot read; the differential suite's mixed-lane

@@ -120,7 +120,11 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
   private def emitOptions(roots: Seq[VarkaVectorIR], lanes: Int,
       arm: VarkaEmitOptions => VarkaEmitOptions): VarkaEmitOptions = {
     val laneCount =
-      if (VarkaVectorIR.emissionLane(roots.head) == LaneType.LONG) lanes / 2 else lanes
+      if (VarkaVectorIR.emissionLane(roots.head, VarkaMatrix.base) == LaneType.LONG) {
+        lanes / 2
+      } else {
+        lanes
+      }
     arm(VarkaMatrix.base.withLanesOverride(laneCount))
   }
 

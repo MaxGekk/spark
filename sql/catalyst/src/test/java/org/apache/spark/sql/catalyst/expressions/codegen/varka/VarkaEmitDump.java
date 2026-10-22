@@ -258,7 +258,8 @@ public final class VarkaEmitDump {
       for (int ordinal : fused.inputOrdinals()) {
         inputs.add(childOutput.get(ordinal));
       }
-      runHot(bytes, fused, inputs, args.rounds(), args.nulls(), args.rows());
+      runHot(bytes, fused, inputs, args.rounds(), args.nulls(), args.rows(),
+          options);
     }
   }
 
@@ -513,7 +514,7 @@ public final class VarkaEmitDump {
    * -XX:+PrintCompilation} run of the VARKA-70 review needed.
    */
   private static void runHot(byte[] bytes, CompiledVarkaProjection fused, List<Attribute> inputs,
-      int rounds, int nulls, int rows) {
+      int rounds, int nulls, int rows, VarkaEmitOptions options) {
     for (var a : inputs) {
       if (a.dataType().equals(DataTypes.ShortType) || a.dataType().equals(DataTypes.ByteType)) {
         report("(--rounds skipped: synthetic data is int32 only, and a short or byte column is "
@@ -525,7 +526,7 @@ public final class VarkaEmitDump {
     int outputs = fused.outputs().size();
     int[] literals = fused.literals().stream().mapToInt(Integer::intValue).toArray();
     long[] longArgs = fused.longLiterals().stream().mapToLong(Long::longValue).toArray();
-    boolean isLong = fused.lane() == VarkaVectorIR.LaneType.LONG;
+    boolean isLong = fused.lane(options) == VarkaVectorIR.LaneType.LONG;
     long inputBytes = isLong ? 8L : 4L;
     VarkaFusedKernel kernel;
     try {

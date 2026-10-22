@@ -1195,7 +1195,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       s"outputs=${p.outputs.asScala.mkString("|")} types=${p.outputTypes.asScala.mkString("|")} " +
         s"in=${p.inputOrdinals.asScala.mkString(",")} lit=${p.literals.asScala.mkString(",")} " +
         s"bounds=${bounds.mkString("|")} derived=${derived.mkString("|")} " +
-        s"longs=${p.longLiterals.asScala.mkString(",")} lane=${p.lane} n=${p.numLiterals} " +
+        s"longs=${p.longLiterals.asScala.mkString(",")} " +
+        s"lane=${p.lane(VarkaEmitOptions.DEFAULTS)} n=${p.numLiterals} " +
         s"derivedAt=${derivedAt.mkString("|")}"
     }
     def spec(s: VarkaOutputSpec): String = s match {

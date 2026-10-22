@@ -1027,7 +1027,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
     }
     assert(kernel.derivedInputs.isEmpty,
       "a derived input is the row engine's own map of a column, which this verdict does not model")
-    val long = kernel.lane == LaneType.LONG
+    val long = kernel.lane(options) == LaneType.LONG
     val guards = new VarkaGuardSpec.Guards(kernel.outputs.asScala.toSeq,
       kernel.inputOrdinals.size, kernel.numLiterals, options, long)
     val lits: Array[Long] =
