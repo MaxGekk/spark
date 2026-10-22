@@ -425,6 +425,10 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite with VarkaTestWatchdog {
       case x: Not => cond(x.child())
       case x: IsNotNull => value(x.child(), Kind.DAY)
       case x: InRanges => value(x.child(), Kind.DAY)
+      case _: BoolColumn | _: CondConst =>
+      case x: BoolCompare => cond(x.left()); cond(x.right())
+      case x: BoolNullSafeEq => cond(x.left()); cond(x.right())
+      case x: CondIf => cond(x.cond()); cond(x.thenCond()); cond(x.elseCond())
     }
     val rootKind = root match {
       case _: DateDiff | _: Year | _: Month | _: DayOfMonth | _: Quarter | _: DayOfYear |
@@ -517,6 +521,11 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite with VarkaTestWatchdog {
       case x: Not => goCond(x.child(), armed)
       case x: IsNotNull => go(x.child(), armed)
       case x: InRanges => go(x.child(), armed)
+      case _: BoolColumn | _: CondConst => true
+      case x: BoolCompare => goCond(x.left(), armed) && goCond(x.right(), armed)
+      case x: BoolNullSafeEq => goCond(x.left(), armed) && goCond(x.right(), armed)
+      case x: CondIf =>
+        goCond(x.cond(), armed) && goCond(x.thenCond(), armed) && goCond(x.elseCond(), armed)
     }
     go(node, armed)
   }

@@ -19,10 +19,10 @@ rlike	RLike	predicateExpressions	out	STRING input or output: owner's decision, 1
 regexp_like	RLike	predicateExpressions	out	STRING input or output: owner's decision, 14 October 2026							
 regexp	RLike	predicateExpressions	out	STRING input or output: owner's decision, 14 October 2026							
 equal_null	EqualNull	predicateExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	bool		bool,byte,short,float,double,dec,ntz	semantics	336,331,329,341,338,359	null-tolerant: item 34; bool is 331's BoolNullSafeEq, byte/short 329, float/double 341, ntz 338, dec 359
-and	And	predicateExpressions	in		bool	bool		bool	plumbing	331,27	fused today as a condition, not over a BOOLEAN column or as an output
+and	And	predicateExpressions	in		bool	bool		bool	plumbing	331,27	fused as a condition, over a BOOLEAN column too (331); a BOOLEAN output waits on 27
 in	In	predicateExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	bool	date,ym	bool,byte,short,float,double,dec,ntz	plumbing	333,341,348,359	NaN equals NaN in Spark's IN
-not	Not	predicateExpressions	in		bool	bool		bool	plumbing	331,27	fused today as a condition, not over a BOOLEAN column or as an output
-or	Or	predicateExpressions	in		bool	bool		bool	plumbing	331,27	fused today as a condition, not over a BOOLEAN column or as an output
+not	Not	predicateExpressions	in		bool	bool		bool	plumbing	331,27	fused as a condition, over a BOOLEAN column too (331); a BOOLEAN output waits on 27
+or	Or	predicateExpressions	in		bool	bool		bool	plumbing	331,27	fused as a condition, over a BOOLEAN column too (331); a BOOLEAN output waits on 27
 <=>	EqualNullSafe	predicateExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	bool		bool,byte,short,float,double,dec,ntz	semantics	336,331,329,341,338,359	null-tolerant: item 34; bool is 331's BoolNullSafeEq, byte/short 329, float/double 341, ntz 338, dec 359
 =	EqualTo	predicateExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	bool	int,bigint,date,time,ym,dt	bool,byte,short,float,double,dec,ntz	semantics	341,348,359	Spark's NaN and -0.0 rules on floats
 ==	EqualTo	predicateExpressions	in		bool,byte,short,int,bigint,float,double,dec,date,ntz,time,ym,dt	bool	int,bigint,date,time,ym,dt	bool,byte,short,float,double,dec,ntz	semantics	341,348,359	alias of =

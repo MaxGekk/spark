@@ -28,11 +28,16 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.And
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitCount;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitOpKind;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolColumn;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolCompare;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolNullSafeEq;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoundedDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CompareOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondConst;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondIf;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DateDiff;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfMonth;
@@ -245,6 +250,10 @@ public final class VarkaIrGrammar {
       // Conditions carry no day value of their own, but their operands hold producers.
       case Compare n -> new Bounds(0L, guard(n.left(), n.right()));
       case NullSafeEqual n -> new Bounds(0L, guard(n.left(), n.right()));
+      case BoolColumn _, CondConst _ -> new Bounds(0L, 0L);
+      case BoolCompare n -> new Bounds(0L, guard(n.left(), n.right()));
+      case BoolNullSafeEq n -> new Bounds(0L, guard(n.left(), n.right()));
+      case CondIf n -> new Bounds(0L, guard(n.cond(), n.thenCond(), n.elseCond()));
       case And n -> new Bounds(0L, guard(n.left(), n.right()));
       case Or n -> new Bounds(0L, guard(n.left(), n.right()));
       case Not n -> new Bounds(0L, guard(n.child()));

@@ -1664,8 +1664,26 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     assert(partial.declines.asScala(0).reason === "unsupported expression")
   }
 
+  test("a boolean column chooses between long values: the leaf takes the values' lane") {
+    val flag = AttributeReference("flag", org.apache.spark.sql.types.BooleanType)()
+    val l = AttributeReference("l", LongType)()
+    val l2 = AttributeReference("l2", LongType)()
+    val output = Seq(flag, l, l2)
+    // The condition has no operand to take a lane from, and the values are on the long lane.
+    assert(ir(If(flag, l, l2), output) === "(if bool:0:long col:1:long col:2:long)")
+    assert(ir(CaseWhen(Seq((flag, l)), Some(l2)), output) ===
+      "(if bool:0:long col:1:long col:2:long)")
+    // Two branches, the second condition a comparison on the long lane already.
+    assert(fuses(CaseWhen(Seq((flag, l), (LessThan(l, l2), l2)), Some(l)), output))
+    // Long values under an int condition lift it as well; int values under a long condition do
+    // not come down.
+    assert(fuses(If(LessThan(i, Literal(5)), l, l2), Seq(i, l, l2)))
+    assert(!fuses(If(LessThan(l, l2), d, d2), Seq(l, l2, d, d2)))
+  }
+
   test("fuses null-safe equality over value operands, composes it over a predicate and a " +
-      "boolean literal, declines the rest and a bare boolean output") {
+      "boolean literal, takes two predicates as a node, declines the rest and a bare boolean " +
+      "output") {
     def ifThen(cond: Expression): Option[CompiledVarkaProjection] =
       VarkaExpressionCompiler.compile(
         Seq(out(If(cond, d2, DateAdd(d, Literal(1))))), childOutput).toScala
@@ -1687,7 +1705,17 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     // A null literal operand (Spark's NullPropagation rewrites it to IS NULL before Varka) and
     // two predicates compared with each other wait for their own forms.
     assert(ifThen(EqualNullSafe(d, Literal(null, DateType))).isEmpty)
-    assert(ifThen(EqualNullSafe(LessThan(d, d2), GreaterThan(d, d2))).isEmpty)
+    // Two predicates compared with each other are the boolean null-safe equality (VARKA-331),
+    // and a boolean column is a condition leaf, on its own kernel input.
+    val gt = new Compare(CompareOp.GT, c0, c1)
+    assert(ifThen(EqualNullSafe(LessThan(d, d2), GreaterThan(d, d2))).get
+      .outputs.asScala.head.asInstanceOf[IfElse].cond() ===
+      new VarkaVectorIR.BoolNullSafeEq(lt, gt))
+    val flag = AttributeReference("flag", org.apache.spark.sql.types.BooleanType)()
+    val flagged = VarkaExpressionCompiler.compile(
+      Seq(out(If(flag, d2, DateAdd(d, Literal(1))))), childOutput :+ flag).get
+    assert(flagged.outputs.asScala.head.asInstanceOf[IfElse].cond() ===
+      new VarkaVectorIR.BoolColumn(0))
     // Each decline names its reason, the first note a declined entry carries.
     def reason(cond: Expression): String = {
       // A second output that fuses, so that the declined one is reported beside a plan.
@@ -1698,8 +1726,6 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     }
     assert(reason(EqualNullSafe(d, Literal(null, DateType))) ===
       "null-safe equality with a null literal")
-    assert(reason(EqualNullSafe(LessThan(d, d2), GreaterThan(d, d2))) ===
-      "null-safe equality of two boolean operands that are not a predicate and a literal")
     // Types outside the lane set wait on their own rows (strings, floating point, narrow ints).
     val s = AttributeReference("s", StringType)()
     val x = AttributeReference("x", DoubleType)()

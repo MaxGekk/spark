@@ -54,8 +54,10 @@ import java.util.SortedMap;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolColumn;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondConst;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
 
 /**
@@ -1885,7 +1887,8 @@ public final class VarkaLoopEmitter {
       return memo;
     }
     int height;
-    if (node instanceof ColumnRef || node instanceof LiteralSlot) {
+    if (node instanceof ColumnRef || node instanceof LiteralSlot || node instanceof BoolColumn
+        || node instanceof CondConst) {
       height = 0;
     } else {
       opNodes[0]++;
