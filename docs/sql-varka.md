@@ -308,7 +308,7 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `date_sub(d, 5)` | `calendar` |  |  | vector |
 | `d + CAST(i AS INTERVAL DAY)` | `calendar` | `i BETWEEN -106751991 AND 106751991` | the day-interval spelling of a column offset; past the bound the cast itself throws in every mode, so the batch declines and the row engine raises | vector |
 | `datediff(d2, d)` | `calendar` |  |  | vector |
-| `d2 - d` | `calendar` | `CAST(unix_date(d2) AS BIGINT) - unix_date(d) BETWEEN -106751991 AND 106751991` | a day-time interval in microseconds, not datediff's day count; Spark raises where the count's product overflows a long, in every mode, so the batch declines and the row engine raises. The legacy CalendarInterval result is not fused | per-lane: compare to mask, mask logic, mask broadcast, mask test |
+| `d2 - d` | `calendar` | `CAST(unix_date(d2) AS BIGINT) - unix_date(d) BETWEEN -106751991 AND 106751991` | a day-time interval in microseconds, not datediff's day count; Spark raises where the int day count overflows or its product overflows a long, in every mode, so the batch declines and the row engine raises. The legacy CalendarInterval result is not fused | per-lane: compare to mask, mask logic, mask broadcast, mask test |
 | `unix_date(d)` | `calendar` |  |  | vector |
 | `date_from_unix_date(unix_date(d))` | `calendar` |  |  | vector |
 
@@ -441,6 +441,9 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `d <=> d2 OR i = 5` | `predicate` |  | beside a three-valued condition, which it never makes unknown | vector |
 | `equal_null(d, d2)` | `predicate` |  | the function form, a replacement of the operator | vector |
 | `year(d) <=> month(d2)` | `calendar`, `predicate` | `unix_date(d) BETWEEN -719162 AND 2932896 AND unix_date(d2) BETWEEN -719162 AND 2932896` | computed operands: a calendar field's validity is read after its value walk | vector |
+| `coalesce(d, d2) <=> d` | `predicate`, `condition` |  | an operand with a validity word of its own (it is null only where both are), so the known-true mask is not a subset of the validity the operand comparison reads | vector |
+| `greatest(d, d2) <=> d2` | `predicate`, `intArithmetic` |  | the same with a greatest, valid where either input is | vector |
+| `if(i > 3, d, d2) <=> d` | `predicate`, `condition` |  | a choice as an operand: the validity follows the branch | vector |
 | `(d < d2) IS TRUE` | `predicate` |  | the predicate and its own validity: true where the comparison is true, false where it is false or unknown | vector |
 | `(d < d2) IS NOT FALSE` | `predicate` |  | the negation of IS FALSE, which is the predicate negated and then tested for validity | vector |
 | `(d < d2) IS NOT TRUE` | `predicate` |  | the negation of IS TRUE: false exactly where the comparison is true | vector |

@@ -37,12 +37,17 @@ public final class VarkaSanitizedWarmupProbe {
 
   public static final String BEFORE = "VARKA_SANITIZED_WARMUP_BEFORE";
   public static final String AFTER = "VARKA_SANITIZED_WARMUP_AFTER";
+  public static final String WINDOWLESS_BEFORE = "VARKA_SANITIZED_WARMUP_WINDOWLESS_BEFORE";
+  public static final String WINDOWLESS_AFTER = "VARKA_SANITIZED_WARMUP_WINDOWLESS_AFTER";
   public static final String CLASS_PREFIX = "VARKA_SANITIZED_WARMUP_CLASS=";
   public static final String STATE_PREFIX = "VARKA_SANITIZED_WARMUP_STATE=";
   public static final String CHECKED_PREFIX = "VARKA_SANITIZED_WARMUP_CHECKED=";
 
-  /** Calls made in the window after the verdict. */
+  /** Calls made in the window after the verdict, and then again with no window. */
   public static final int CALLS = 200;
+
+  /** Windowless calls of the positive control: far more than {@link #CALLS}, still milliseconds. */
+  public static final int WINDOWLESS_CALLS = 5000;
 
   private static final int ROWS = 1024;
 
@@ -77,8 +82,16 @@ public final class VarkaSanitizedWarmupProbe {
             dstValidity, scratch -> kernel.run(src, validity, nullCounts, dstData, dstValidity,
                 literals, ROWS, scratch));
       }
+      System.out.println(AFTER);
+      System.out.println(WINDOWLESS_BEFORE);
+      // The warm-up's verdict is COMPILED, so the first windowless call already meets the trap;
+      // the long run only covers a C2 whose installed code lands a little after the verdict.
+      for (int k = 0; k < WINDOWLESS_CALLS; k++) {
+        kernel.run(src, validity, nullCounts, dstData, dstValidity, literals, ROWS,
+            VarkaEmitterTestSupport.scratch(kernel, ROWS));
+      }
+      System.out.println(WINDOWLESS_AFTER);
     }
-    System.out.println(AFTER);
     System.out.println(CHECKED_PREFIX + (VarkaMemorySanitizer.checked() - checkedBefore));
   }
 }
