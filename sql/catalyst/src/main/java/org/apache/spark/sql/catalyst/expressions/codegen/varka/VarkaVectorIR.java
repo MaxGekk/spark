@@ -269,16 +269,16 @@ public sealed interface VarkaVectorIR
    * <p>As an output root a condition is a <i>selection bitmap</i>,
    * and the rule at the root is written down once, here: <b>unknown is false</b>. A row is
    * selected exactly where the condition is known true - SQL's {@code WHERE} semantics, where
-   * a NULL predicate drops the row - and the emitter gets it for free for every condition but
-   * one kind: the known-true mask is a subset of the operands' validity by construction, except
-   * for a <i>total</i> condition such as {@link NullSafeEqual}, which is true where both operands
-   * are null and so is not confined to valid lanes. Whoever reads a condition's mask against a
-   * validity word (a selection bitmap, a validity AND) must not assume the subset for those.
-   * Interior semantics are
-   * unchanged: {@code IfElse} still distinguishes unknown from known false (both take ELSE
-   * today, but validity follows the branch), and the known-false mask keeps {@link Not} a
-   * zero-cost slot swap. In the emitter's dense body every input is valid, so no lane is
-   * unknown and the degenerate single-mask form gives the same answer.
+   * a NULL predicate drops the row - and the emitter gets it for free for every condition but the
+   * <i>total</i> ones: the known-true mask is a subset of the operands' validity by construction,
+   * except for a condition such as {@link NullSafeEqual} (true where both operands are null) or
+   * {@link IsNotNull} (never unknown) and a {@link Not} of either, which is not confined to valid
+   * lanes. Whoever reads a condition's mask against a validity word (a selection bitmap, a
+   * validity AND) must not assume the subset for those. Interior semantics are unchanged:
+   * {@code IfElse} still distinguishes unknown from known false (both take ELSE today, but
+   * validity follows the branch), and the known-false mask keeps {@link Not} a zero-cost slot
+   * swap. In the emitter's dense body every input is valid, so no lane is unknown and the
+   * degenerate single-mask form gives the same answer.
    */
   sealed interface Cond extends VarkaVectorIR
       permits Compare, NullSafeEqual, And, Or, Not, IsNotNull, InRanges, BoolColumn,

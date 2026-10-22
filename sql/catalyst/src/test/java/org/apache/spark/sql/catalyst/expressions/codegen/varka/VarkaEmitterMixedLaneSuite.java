@@ -266,10 +266,10 @@ public final class VarkaEmitterMixedLaneSuite {
       assertEquals(2, epilogueMasks(longRoot, 1, 0, lanes)[2], "long root" + at);
       assertEquals(2, epilogueMasks(guarded, 1, 2, lanes)[2], "a guard alone" + at);
     }
-    // And the kernels still answer every row, emitted with the options the counts read. The ANSI
-    // one may decline a batch holding a sum past the int range, which is then not compared.
-    UnaryOperator<VarkaEmitOptions> counted = o ->
-        elided(VarkaEmitOptions.DEFAULTS).withLanesOverride(o.lanesOverride());
+    // And the kernels still answer every row, emitted with the matrix's options plus the one the
+    // counts read. The ANSI one may decline a batch holding a sum past the int range, which is
+    // then not compared.
+    UnaryOperator<VarkaEmitOptions> counted = VarkaEmitterMixedLaneSuite::elided;
     check("cast(least(cast(i + 3 AS bigint), 5000000000) AS int) + i", intOnly, 1,
         new int[] {3}, new long[] {5000000000L}, (c, i) -> value(0, i), false, null, counted);
     check("ANSI cast(least(cast(i + 3 AS bigint), 5000000000) AS int) + i", guarded, 1,

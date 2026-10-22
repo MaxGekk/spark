@@ -46,6 +46,9 @@ public final class VarkaSanitizedWarmupProbe {
   /** Calls made in the window after the verdict, and then again with no window. */
   public static final int CALLS = 200;
 
+  /** Windowless calls of the positive control: far more than {@link #CALLS}, still milliseconds. */
+  public static final int WINDOWLESS_CALLS = 5000;
+
   private static final int ROWS = 1024;
 
   public static void main(String[] args) throws InterruptedException {
@@ -81,7 +84,9 @@ public final class VarkaSanitizedWarmupProbe {
       }
       System.out.println(AFTER);
       System.out.println(WINDOWLESS_BEFORE);
-      for (int k = 0; k < CALLS; k++) {
+      // The warm-up's verdict is COMPILED, so the first windowless call already meets the trap;
+      // the long run only covers a C2 whose installed code lands a little after the verdict.
+      for (int k = 0; k < WINDOWLESS_CALLS; k++) {
         kernel.run(src, validity, nullCounts, dstData, dstValidity, literals, ROWS,
             VarkaEmitterTestSupport.scratch(kernel, ROWS));
       }

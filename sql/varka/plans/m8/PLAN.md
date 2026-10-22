@@ -933,12 +933,13 @@ reading settles four of them:
 * **335.** `bit_count` is a 64-bit popcount of the sign-extended value (`BitwiseCount` calls
   `Long.bitCount` on the widened byte, short or int), so `pop32(x) + ((x >> 31) & 32)` serves byte,
   short and int on the int lane, the native byte arm pays a widening, and `bit_count(bigint)` under
-  another node was built by 335b (20 October 2026, `VARKA-335.md` 9.4) once row 28 landed; on AVX2 the JDK already emits the nibble-table algorithm (about 1.75
-  instructions per int row by the reading's count) and one instruction only with VPOPCNTDQ, so the
-  row claims no speed-up for the count alone; Velox and Gluten ship the wrong rule. A `TINYINT` or
-  `SMALLINT` shift is an int shift over a cast, a long shift by a column is mixed width, and the
-  vector shifts mask the count as Java does. The bitmap functions are two blended ANDs and a signed
-  shift; `Long.MIN_VALUE` is a test.
+  another node was built by 335b (20 October 2026, `VARKA-335.md` 9.4) once row 28 landed; on AVX2
+  the JDK already emits the nibble-table algorithm (about 1.75 instructions per int row by the
+  reading's count) and one instruction only with VPOPCNTDQ, so the row claims no speed-up for
+  the count alone; Velox and Gluten ship the wrong rule. A `TINYINT` or `SMALLINT` shift is an int
+  shift over a cast, a long shift by a column is mixed width, and the vector shifts mask the count
+  as Java does. The bitmap functions are two blended ANDs and a signed shift; `Long.MIN_VALUE` is
+  a test.
 * **336, item 34 answered.** `<=>` is a condition node over the validity words, `kT = (vA & vB & E)
   | ~(vA | vB)`, the same kind as 334's `IS NOT NULL` over a predicate, so 336 follows 334 and no
   null-tolerant value node is added. `p IS TRUE` parses to `EqualNullSafe(p, true)`, so the node

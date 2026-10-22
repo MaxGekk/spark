@@ -140,12 +140,18 @@ class VarkaSanitizedWarmupSuite extends SparkFunSuite with VarkaTestWatchdog {
         Array.empty[Long])
     }
     assert(queued, "the warm-up was not queued")
-    val thrown = intercept[VarkaMemoryViolation] {
-      VarkaKernelWarmup.awaitIdle(60000)
+    try {
+      val thrown = intercept[VarkaMemoryViolation] {
+        VarkaKernelWarmup.awaitIdle(60000)
+      }
+      assert(thrown.getMessage === "a fake over-read")
+      assert(warmth.state() === VarkaKernelWarmth.State.RELEASED)
+      // The violation was handed over once; the next wait is quiet.
+      assert(VarkaKernelWarmup.awaitIdle(1000))
+    } finally {
+      // The violation queue is process-wide: a failed assertion above must not leave it for an
+      // unrelated suite's wait.
+      try VarkaKernelWarmup.awaitIdle(60000) catch { case _: VarkaMemoryViolation => }
     }
-    assert(thrown.getMessage === "a fake over-read")
-    assert(warmth.state() === VarkaKernelWarmth.State.RELEASED)
-    // The violation was handed over once; the next wait is quiet.
-    assert(VarkaKernelWarmup.awaitIdle(1000))
   }
 }

@@ -330,10 +330,13 @@ public final class VarkaKernelWarmup {
    * Waits until no warm-up is queued or running, or the timeout passes, and says which. For
    * benchmarks and tests that need the JVM quiet, or a shape's verdict, before they go on.
    *
-   * <p>Throws the first {@link VarkaMemoryViolation} a warm-up ended with since the last call (the
+   * <p>Throws a {@link VarkaMemoryViolation} a warm-up ended with since the last call (the
    * sanitizer found the warm-up's kernel mapping memory outside its job's buffers): a violation is
    * not a kernel failure and never a fallback, and the warm-up thread has no task to fail, so the
-   * caller that waits for the warm-ups is the one that fails.
+   * caller that waits for the warm-ups is the one that fails. Every pending violation is taken at
+   * once, the first thrown and the rest attached to it as suppressed exceptions, so none reaches a
+   * later, unrelated call. A JVM that never waits keeps them all, as a violation is a defect the
+   * suites abort on and a production run has the sanitizer off.
    */
   public static boolean awaitIdle(long timeoutMillis) throws InterruptedException {
     long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
@@ -349,10 +352,14 @@ public final class VarkaKernelWarmup {
   }
 
   private static void throwViolation() {
-    VarkaMemoryViolation violation = VIOLATIONS.poll();
-    if (violation != null) {
-      throw violation;
+    VarkaMemoryViolation first = VIOLATIONS.poll();
+    if (first == null) {
+      return;
     }
+    for (VarkaMemoryViolation next = VIOLATIONS.poll(); next != null; next = VIOLATIONS.poll()) {
+      first.addSuppressed(next);
+    }
+    throw first;
   }
 
   // What the JIT was doing when the last warm-up was released at its deadline; see jitState.
@@ -518,11 +525,15 @@ public final class VarkaKernelWarmup {
         // Job.run handles the kernel's own failures; this is what escaped it, and a thread that
         // serves every shape in the JVM must outlive one job whatever that was.
         job.warmth.release();
+        String kernelName = VarkaShapeCacheImpl.sourceFileFor(job.shapeHash);
         if (t instanceof VarkaMemoryViolation violation) {
           VIOLATIONS.add(violation);
+          LOG.warn("Varka kernel warm-up of " + kernelName
+              + " ended on a memory violation, which the next awaitIdle throws.", t);
+        } else {
+          LOG.warn("Varka kernel warm-up of " + kernelName
+              + " failed; the shape serves batches without one.", t);
         }
-        LOG.warn("Varka kernel warm-up of " + VarkaShapeCacheImpl.sourceFileFor(job.shapeHash)
-            + " failed; the shape serves batches without one.", t);
       } finally {
         job.close();
         PENDING.decrementAndGet();
@@ -594,10 +605,10 @@ public final class VarkaKernelWarmup {
         for (int i = 0; i < numInputs; i++) {
           boolean bits = widths[i] == BIT_WIDTH;
           MemorySegment data = bits
-              ? alloc(validityBytes(SNAPSHOT_ROWS + SLICE_STRIDE), validityBytes(SNAPSHOT_ROWS),
+              ? alloc(validityBytes(SNAPSHOT_ROWS + SLICE_STRIDE), wordBytes(SNAPSHOT_ROWS),
                   SLICE_STRIDE)
               : allocRows(SNAPSHOT_ROWS, widths[i]);
-          MemorySegment validity = alloc(validityBytes(SNAPSHOT_ROWS), SLICE_STRIDE);
+          MemorySegment validity = allocValidity(SNAPSHOT_ROWS);
           if (batchNullCount[i] == 0) {
             tileValues(batchData[i], widths[i], length, data);
             validity.fill((byte) -1);
@@ -639,7 +650,7 @@ public final class VarkaKernelWarmup {
         this.dstValidity = new long[numOutputs];
         for (int o = 0; o < numOutputs; o++) {
           dstData[o] = allocRows(MAX_CALL_ROWS, 8).address();
-          dstValidity[o] = alloc(validityBytes(MAX_CALL_ROWS), SLICE_STRIDE).address();
+          dstValidity[o] = allocValidity(MAX_CALL_ROWS).address();
         }
         // The probe's argument sets: the dense driver's with every count at zero, the masked
         // driver's with each input's validity when the shape is nullable. A masked count is one
@@ -662,7 +673,7 @@ public final class VarkaKernelWarmup {
         this.probeDstValidity = new long[numOutputs];
         for (int o = 0; o < numOutputs; o++) {
           probeDstData[o] = allocRows(PROBE_ROWS, 8).address();
-          probeDstValidity[o] = alloc(validityBytes(PROBE_ROWS), SLICE_STRIDE).address();
+          probeDstValidity[o] = allocValidity(PROBE_ROWS).address();
         }
         // Sized for the longest call, the probe's; a warm-up call passes the same region.
         int perRow = kernel.scratchBytesPerRow();
@@ -674,9 +685,12 @@ public final class VarkaKernelWarmup {
       }
     }
 
-    /** Allocates from the job's arena, with no padding to register. */
-    private MemorySegment alloc(long bytes, long alignment) {
-      return alloc(bytes, bytes, alignment);
+    /**
+     * A validity bitmap of {@code rows} bits: the whole words a batch's bitmap registers, in an
+     * allocation with one spare word that is not registered.
+     */
+    private MemorySegment allocValidity(int rows) {
+      return alloc(validityBytes(rows), wordBytes(rows), SLICE_STRIDE);
     }
 
     /** {@code rows} rows of {@code width} bytes, registered without the padding rows. */
@@ -735,6 +749,7 @@ public final class VarkaKernelWarmup {
       long lastProbeBytes = -1;
       State outcome = State.RELEASED;
       String why = null;
+      VarkaMemoryViolation violation = null;
       try {
         while (true) {
           if (warmth.state() != State.WARMING) {
@@ -785,14 +800,17 @@ public final class VarkaKernelWarmup {
             break;
           }
         }
+      } catch (VarkaMemoryViolation v) {
+        // Not a failure of the kernel to fall back from: it goes to the worker loop, which logs it
+        // and keeps it for awaitIdle, once the outcome below is recorded.
+        warmth.release();
+        violation = v;
+        why = "a memory violation";
       } catch (Throwable t) {
         warmth.release();
         LOG.warn("The Varka kernel " + VarkaShapeCacheImpl.sourceFileFor(shapeHash)
             + " failed during its warm-up; the shape serves batches without one.", t);
-        // A memory violation is not a failure of the kernel to fall back from: it goes to the
-        // worker loop, which keeps it for awaitIdle.
-        if (t instanceof VarkaMemoryViolation
-            || (!(t instanceof Exception) && !(t instanceof LinkageError))) {
+        if (!(t instanceof Exception) && !(t instanceof LinkageError)) {
           throw t;
         }
         why = "the kernel failed";
@@ -807,6 +825,9 @@ public final class VarkaKernelWarmup {
         event.calls = calls;
         event.rows = rowsRun;
         event.commit();
+      }
+      if (violation != null) {
+        throw violation;
       }
       String kernelName = VarkaShapeCacheImpl.sourceFileFor(shapeHash);
       long millis = TimeUnit.NANOSECONDS.toMillis(finished - started);
@@ -879,9 +900,14 @@ public final class VarkaKernelWarmup {
     return ((validity.get(ValueLayout.JAVA_BYTE, r >>> 3) >>> (r & 7)) & 1) != 0;
   }
 
-  /** Whole 64-bit words covering {@code rows} bits, plus one spare word. */
+  /** Whole 64-bit words covering {@code rows} bits: what a batch's bitmap registers. */
+  private static long wordBytes(int rows) {
+    return (rows + 63L) / 64 * 8;
+  }
+
+  /** {@link #wordBytes} plus one spare word, which a job allocates but does not register. */
   private static long validityBytes(int rows) {
-    return ((rows + 63L) / 64 + 1) * 8;
+    return wordBytes(rows) + 8;
   }
 
   /**
