@@ -21,6 +21,7 @@ import java.time.LocalDate
 
 import org.apache.spark.sql.{QueryTest, Row, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
+import org.apache.spark.sql.catalyst.util.DateTimeConstants
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.{DateType, IntegerType, StructField, StructType}
 
@@ -34,7 +35,7 @@ import org.apache.spark.sql.types.{DateType, IntegerType, StructField, StructTyp
  */
 class VarkaDateMinusDateSuite extends QueryTest with VarkaMaybeThrows with VarkaTestWatchdog {
 
-  private val maxDays = Long.MaxValue / 86400000000L
+  private val maxDays = Long.MaxValue / DateTimeConstants.MICROS_PER_DAY
 
   private def day(n: Long): LocalDate = LocalDate.ofEpochDay(n)
 

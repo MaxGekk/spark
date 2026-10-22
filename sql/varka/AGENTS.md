@@ -383,7 +383,11 @@ loads, benchmarks. So:
   `VarkaSegments.map` or the engine's `VarkaVectorSupport.ofAddress` (the pre-commit hook rejects
   a raw `.reinterpret(`), and a buffer Varka allocates under the flag leaves room for the canary.
   Benchmarks and the JIT-measuring suites run with it off (`--no-sanitizer`), since its branches
-  change what C2 compiles. A violation is not a kernel failure and is never a fallback.
+  change what C2 compiles. The kernel warm-up (`VarkaKernelWarmup`) runs each job in a window of
+  its own over its own arena, registered at the rows a call can reach and not at the allocation's
+  padding, so the code C2 compiles from it keeps the branch a batch in a window takes
+  (`VarkaSanitizedWarmupSuite`). A violation is not a kernel failure and is never a fallback: in a
+  warm-up it ends the job and is handed to the next `VarkaKernelWarmup.awaitIdle`, which throws it.
 * The ghost fallback is a correctness contract: a Varka failure degrades to the
   row engine and never fails a query. Anything that can return a *wrong* answer
   rather than fail - a cache key, for one - gets its own differential coverage,

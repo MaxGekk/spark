@@ -47,6 +47,7 @@ public record VarkaOperatorCensusCatalog(String name, String family, String loop
 
 
   private static final String LANEWISE = "byte and short lanewise";
+  private static final String LONG_LANEWISE = "long lanewise";
   private static final String WIDENING = "byte and short widening, narrowing";
   private static final String CONVERSIONS = "conversions";
   private static final String LANE_WIDTH = "lane width";
@@ -99,6 +100,7 @@ public record VarkaOperatorCensusCatalog(String name, String family, String loop
       of("short", "LSHL", LANEWISE, "shift.short", "broadcastInt", "329, 330"),
       of("short", "LSHR", LANEWISE, "shift.short", "broadcastInt", "329, 330"),
       of("short", "ASHR", LANEWISE, "shift.short", "broadcastInt", "329, 330"),
+      of("long", "MUL", LONG_LANEWISE, "bin.long", "binaryOp", "28, 39"),
       of("byte", "AND", LANEWISE, "bin.byte", "binaryOp", "329, 330, 335"),
       of("byte", "OR", LANEWISE, "bin.byte", "binaryOp", "329, 330, 335"),
       of("byte", "XOR", LANEWISE, "bin.byte", "binaryOp", "329, 330, 335"),
