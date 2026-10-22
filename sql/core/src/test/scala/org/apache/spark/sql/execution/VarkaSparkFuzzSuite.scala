@@ -148,78 +148,60 @@ class VarkaSparkFuzzSuite extends VarkaSparkDifferential {
     s"$kind (seed $seed, iteration $it), reproducer written to $file:\n$text"
   }
 
-  /**
-   * Runs `body` with the overflow check pinned on, whatever the option matrix set. Every
-   * composition in this suite is held to the row engine's answer, and `checkIntOverflow=false`
-   * makes a checked arithmetic node emit as `LEGACY` by design: the option prices the check,
-   * trading the answer for it, so a composition that overflows disagrees with the row engine and
-   * the agreement is not a property of the emitted code under it. The option is a variant the
-   * differential prices, never a setting production ships, and the pin is what
-   * `VarkaEmitterNullSafeSuite` does with it (VARKA-470).
-   */
-  private def withCheckedOverflow[T](body: => T): T = {
-    val previous = VarkaColumnarToRowExec.currentEmitOptions
-    VarkaColumnarToRowExec.setEmitOptionsForTesting(previous.withCheckIntOverflow(true))
-    try body finally VarkaColumnarToRowExec.setEmitOptionsForTesting(previous)
-  }
-
   test(s"random compositions agree with the row engine (seed $seed, $iterations of them)") {
-    withCheckedOverflow {
-      val failures = scala.collection.mutable.ArrayBuffer.empty[String]
-      val pool = scala.collection.mutable.TreeMap.empty[String, (Int, Int)]
-      // The compositions with nested trees (VARKA-298), those of them that errored on both sides,
-      // and those that disagreed.
-      var nested = 0
-      var nestedErrored = 0
-      var nestedFailed = 0
-      val range = onlyIteration.map(k => k to k).getOrElse(0 until iterations)
-      for (it <- range if failures.size < maxFailures) {
-        val c = rectify(draw(rows, seed, it))
-        val partitions = it % partitionEvery == 0
-        val errorsBefore = bothErrored
-        val result = kindOf(c, partitions, forcesOf(c, it))
-        val key = (if (it % 2 == 0) "safe" else "full") + (if (c.ansi) " ANSI on" else " ANSI off")
-        pool(key) = pool.getOrElse(key, (0, 0)) match {
-          case (n, e) => (n + 1, e + (if (bothErrored > errorsBefore) 1 else 0))
-        }
-        if (c.trees.nonEmpty) {
-          nested += 1
-          if (bothErrored > errorsBefore) nestedErrored += 1
-          if (result.isDefined) nestedFailed += 1
-        }
-        result.foreach { found =>
-          if (firstFailure.isEmpty) firstFailure = Some(it)
-          failures += failureText(c, it, partitions, found)
-        }
+    val failures = scala.collection.mutable.ArrayBuffer.empty[String]
+    val pool = scala.collection.mutable.TreeMap.empty[String, (Int, Int)]
+    // The compositions with nested trees (VARKA-298), those of them that errored on both sides,
+    // and those that disagreed.
+    var nested = 0
+    var nestedErrored = 0
+    var nestedFailed = 0
+    val range = onlyIteration.map(k => k to k).getOrElse(0 until iterations)
+    for (it <- range if failures.size < maxFailures) {
+      val c = rectify(draw(rows, seed, it))
+      val partitions = it % partitionEvery == 0
+      val errorsBefore = bothErrored
+      val result = kindOf(c, partitions, forcesOf(c, it))
+      val key = (if (it % 2 == 0) "safe" else "full") + (if (c.ansi) " ANSI on" else " ANSI off")
+      pool(key) = pool.getOrElse(key, (0, 0)) match {
+        case (n, e) => (n + 1, e + (if (bothErrored > errorsBefore) 1 else 0))
       }
-      info(s"compared $compared, fused $fused, both errored $bothErrored")
-      pool.foreach { case (k, (n, e)) => info(s"  $k: $n compositions, $e errored on both sides") }
-      info(s"  with nested trees: $nested compositions, $nestedErrored errored on both sides, " +
-        s"$nestedFailed disagreed")
-      val again = errorRerun match {
-        case VarkaErrorRerun.ONE_PARTITION => "over one partition"
-        case VarkaErrorRerun.EACH_ROW => "over one partition, then row by row"
+      if (c.trees.nonEmpty) {
+        nested += 1
+        if (bothErrored > errorsBefore) nestedErrored += 1
+        if (result.isDefined) nestedFailed += 1
       }
-      info(s"  compared again because a query raised: $comparedAgain, $again; of them, " +
-        s"$twoPartitionsOnly differed at two partitions only")
-      errorCensus.foreach(l => info(s"  raised: $l"))
-      // A warning, not a failure: which conditions a bounded run meets moves with the
-      // coverage table, and a failure here would blame a pull request that only added a row
-      // (VARKA-319.md 5).
-      unusedExpectedErrors.foreach(e => info(s"  expected error never raised in this run: $e"))
-      info(s"filters returning a row: $filteredNonEmpty of $filtered, with a pivot " +
-        s"$pivotFilteredNonEmpty of $pivotFiltered")
-      info(s"outputs forced to decline: $forcedRuns, of which $forcedApplied changed the plan")
-      // A force that silently stopped moving the plan would compare nothing. One that lands on an
-      // output already residual (the one-lane rule) or in a plan with no Varka project node moves
-      // nothing, which leaves well over a quarter that do.
-      if (forcedRuns >= 50) {
-        assert(forcedApplied * 4 >= forcedRuns,
-          s"only $forcedApplied of $forcedRuns forced outputs changed the plan")
+      result.foreach { found =>
+        if (firstFailure.isEmpty) firstFailure = Some(it)
+        failures += failureText(c, it, partitions, found)
       }
-      info(s"first disagreement at iteration ${firstFailure.getOrElse("none")}")
-      assert(failures.isEmpty, failures.mkString("\n"))
     }
+    info(s"compared $compared, fused $fused, both errored $bothErrored")
+    pool.foreach { case (k, (n, e)) => info(s"  $k: $n compositions, $e errored on both sides") }
+    info(s"  with nested trees: $nested compositions, $nestedErrored errored on both sides, " +
+      s"$nestedFailed disagreed")
+    val again = errorRerun match {
+      case VarkaErrorRerun.ONE_PARTITION => "over one partition"
+      case VarkaErrorRerun.EACH_ROW => "over one partition, then row by row"
+    }
+    info(s"  compared again because a query raised: $comparedAgain, $again; of them, " +
+      s"$twoPartitionsOnly differed at two partitions only")
+    errorCensus.foreach(l => info(s"  raised: $l"))
+    // A warning, not a failure: which conditions a bounded run meets moves with the coverage
+    // table, and a failure here would blame a pull request that only added a row (VARKA-319.md 5).
+    unusedExpectedErrors.foreach(e => info(s"  expected error never raised in this run: $e"))
+    info(s"filters returning a row: $filteredNonEmpty of $filtered, with a pivot " +
+      s"$pivotFilteredNonEmpty of $pivotFiltered")
+    info(s"outputs forced to decline: $forcedRuns, of which $forcedApplied changed the plan")
+    // A force that silently stopped moving the plan would compare nothing. One that lands on an
+    // output already residual (the one-lane rule) or in a plan with no Varka project node moves
+    // nothing, which leaves well over a quarter that do.
+    if (forcedRuns >= 50) {
+      assert(forcedApplied * 4 >= forcedRuns,
+        s"only $forcedApplied of $forcedRuns forced outputs changed the plan")
+    }
+    info(s"first disagreement at iteration ${firstFailure.getOrElse("none")}")
+    assert(failures.isEmpty, failures.mkString("\n"))
   }
 
   test(s"random compositions agree with the row engine on both sides of the warm-up handover " +
