@@ -123,12 +123,107 @@
         "bytes_per_row" : 0.0,
         "intrinsics" : [ "load", "binaryOp", "store" ]
       },
+      "byte.AND" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "byte.OR" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "byte.XOR" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "byte.MIN" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "byte.MAX" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "byte.NEG" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "unaryOp", "store" ]
+      },
+      "byte.ABS" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "unaryOp", "store" ]
+      },
+      "byte.GT" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ]
+      },
+      "byte.BLEND" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ]
+      },
+      "short.AND" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "short.OR" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "short.XOR" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "short.MIN" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "short.MAX" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "short.NEG" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "unaryOp", "store" ]
+      },
+      "short.ABS" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "unaryOp", "store" ]
+      },
+      "short.GT" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ]
+      },
+      "short.BLEND" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ]
+      },
       "byte.B2I" : {
         "verdict" : "I",
         "bytes_per_row" : 0.0,
         "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "binaryOp", "rearrangeOp", "blend", "store" ]
       },
       "short.S2I" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "binaryOp", "rearrangeOp", "blend", "store" ]
+      },
+      "byte.B2S" : {
         "verdict" : "I",
         "bytes_per_row" : 0.0,
         "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "binaryOp", "rearrangeOp", "blend", "store" ]
@@ -201,6 +296,21 @@
       "int.B2I_load" : {
         "verdict" : "-",
         "skipped" : "needs a preferred species of 256 bits or more"
+      },
+      "int.B2I_load64" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "binaryOp", "rearrangeOp", "blend", "store" ]
+      },
+      "int.B2I_load128" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "binaryOp", "rearrangeOp", "blend", "store" ]
+      },
+      "int.S2I_load" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "convert", "store" ]
       },
       "float.EQ" : {
         "verdict" : "I",
@@ -427,16 +537,19 @@
         "failed" : [ "compare", "maskReductionCoerced" ]
       },
       "byte.narrow_then_full" : {
-        "verdict" : "-",
-        "skipped" : "needs a preferred species of 256 bits or more"
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
       },
       "byte.full_then_narrow" : {
-        "verdict" : "-",
-        "skipped" : "needs a preferred species of 256 bits or more"
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
       },
       "byte.both_in_one_loop" : {
-        "verdict" : "-",
-        "skipped" : "needs a preferred species of 256 bits or more"
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
       },
       "byte.widen_then_full" : {
         "verdict" : "-",
@@ -445,6 +558,26 @@
       "byte.full_then_widen" : {
         "verdict" : "-",
         "skipped" : "needs a preferred species of 256 bits or more"
+      },
+      "byte.widen64_then_full" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "binaryOp", "rearrangeOp", "blend", "store" ]
+      },
+      "byte.full_then_widen64" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store", "convert", "fromBitsCoerced", "compare", "rearrangeOp", "blend" ]
+      },
+      "short.widen_then_full" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "convert", "store", "binaryOp" ]
+      },
+      "short.full_then_widen" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store", "convert" ]
       }
     },
     "256" : {
@@ -563,12 +696,107 @@
         "bytes_per_row" : 0.0,
         "intrinsics" : [ "load", "binaryOp", "store" ]
       },
+      "byte.AND" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "byte.OR" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "byte.XOR" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "byte.MIN" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "byte.MAX" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "byte.NEG" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "unaryOp", "store" ]
+      },
+      "byte.ABS" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "unaryOp", "store" ]
+      },
+      "byte.GT" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ]
+      },
+      "byte.BLEND" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ]
+      },
+      "short.AND" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "short.OR" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "short.XOR" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "short.MIN" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "short.MAX" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "short.NEG" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "unaryOp", "store" ]
+      },
+      "short.ABS" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "unaryOp", "store" ]
+      },
+      "short.GT" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ]
+      },
+      "short.BLEND" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ]
+      },
       "byte.B2I" : {
         "verdict" : "I",
         "bytes_per_row" : 0.0,
         "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "binaryOp", "rearrangeOp", "blend", "store" ]
       },
       "short.S2I" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "binaryOp", "rearrangeOp", "blend", "store" ]
+      },
+      "byte.B2S" : {
         "verdict" : "I",
         "bytes_per_row" : 0.0,
         "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "binaryOp", "rearrangeOp", "blend", "store" ]
@@ -639,6 +867,21 @@
         "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "binaryOp", "rearrangeOp", "blend", "store" ]
       },
       "int.B2I_load" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "convert", "store" ]
+      },
+      "int.B2I_load64" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "convert", "store" ]
+      },
+      "int.B2I_load128" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "binaryOp", "rearrangeOp", "blend", "store" ]
+      },
+      "int.S2I_load" : {
         "verdict" : "I",
         "bytes_per_row" : 0.0,
         "intrinsics" : [ "load", "convert", "store" ]
@@ -878,6 +1121,26 @@
         "verdict" : "I",
         "bytes_per_row" : 0.0,
         "intrinsics" : [ "load", "binaryOp", "store", "convert" ]
+      },
+      "byte.widen64_then_full" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "convert", "store", "binaryOp" ]
+      },
+      "byte.full_then_widen64" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store", "convert" ]
+      },
+      "short.widen_then_full" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "convert", "store", "binaryOp" ]
+      },
+      "short.full_then_widen" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store", "convert" ]
       }
     },
     "512" : {
@@ -996,12 +1259,107 @@
         "bytes_per_row" : 0.0,
         "intrinsics" : [ "load", "binaryOp", "store" ]
       },
+      "byte.AND" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "byte.OR" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "byte.XOR" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "byte.MIN" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "byte.MAX" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "byte.NEG" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "unaryOp", "store" ]
+      },
+      "byte.ABS" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "unaryOp", "store" ]
+      },
+      "byte.GT" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ]
+      },
+      "byte.BLEND" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ]
+      },
+      "short.AND" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "short.OR" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "short.XOR" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "short.MIN" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "short.MAX" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store" ]
+      },
+      "short.NEG" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "unaryOp", "store" ]
+      },
+      "short.ABS" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "unaryOp", "store" ]
+      },
+      "short.GT" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ]
+      },
+      "short.BLEND" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "compare", "blend", "store" ]
+      },
       "byte.B2I" : {
         "verdict" : "I",
         "bytes_per_row" : 0.0,
         "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "binaryOp", "rearrangeOp", "blend", "store" ]
       },
       "short.S2I" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "binaryOp", "rearrangeOp", "blend", "store" ]
+      },
+      "byte.B2S" : {
         "verdict" : "I",
         "bytes_per_row" : 0.0,
         "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "binaryOp", "rearrangeOp", "blend", "store" ]
@@ -1072,6 +1430,20 @@
         "intrinsics" : [ "load", "convert", "fromBitsCoerced", "compare", "binaryOp", "rearrangeOp", "blend", "store" ]
       },
       "int.B2I_load" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "convert", "store" ]
+      },
+      "int.B2I_load64" : {
+        "verdict" : "-",
+        "skipped" : "needs a preferred species of 256 bits or less"
+      },
+      "int.B2I_load128" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "convert", "store" ]
+      },
+      "int.S2I_load" : {
         "verdict" : "I",
         "bytes_per_row" : 0.0,
         "intrinsics" : [ "load", "convert", "store" ]
@@ -1307,6 +1679,24 @@
         "intrinsics" : [ "load", "convert", "store", "binaryOp" ]
       },
       "byte.full_then_widen" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "binaryOp", "store", "convert" ]
+      },
+      "byte.widen64_then_full" : {
+        "verdict" : "-",
+        "skipped" : "needs a preferred species of 256 bits or less"
+      },
+      "byte.full_then_widen64" : {
+        "verdict" : "-",
+        "skipped" : "needs a preferred species of 256 bits or less"
+      },
+      "short.widen_then_full" : {
+        "verdict" : "I",
+        "bytes_per_row" : 0.0,
+        "intrinsics" : [ "load", "convert", "store", "binaryOp" ]
+      },
+      "short.full_then_widen" : {
         "verdict" : "I",
         "bytes_per_row" : 0.0,
         "intrinsics" : [ "load", "binaryOp", "store", "convert" ]
