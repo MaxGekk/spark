@@ -353,6 +353,20 @@ class VarkaEmitterNarrowSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       checkValues(s"a choice stored narrow $arm", Seq(stored), 4, Array.empty[Int], length,
         data, row => row % 13 == 4, false, options)
     }
+    // The store truncates as it narrows: a value past the target's range keeps its low bits,
+    // which is the I2B/I2S the store emits, and the reference's `(byte)`/`(short)` has to agree
+    // row by row. Spark's byte typing never hands the store such a value, so the roots are hand
+    // built; what they pin is the store's width and truncation, not a Spark shape.
+    val toByte: VarkaVectorIR = new NarrowLane(new ColumnRef(0, LaneType.INT), LaneType.BYTE)
+    val toShort: VarkaVectorIR = new NarrowLane(new ColumnRef(0, LaneType.INT), LaneType.SHORT)
+    def outOfByte(row: Int): Int = ((row * 37) % 1024) - 512
+    def outOfShort(row: Int): Int = ((row * 7919) % 200000) - 100000
+    for ((arm, options) <- arms) {
+      checkValues(s"an int value stored byte $arm", Seq(toByte), 1, Array.empty[Int], length,
+        Array(Array.tabulate(length)(outOfByte)), _ => false, false, options)
+      checkValues(s"an int value stored short $arm", Seq(toShort), 1, Array.empty[Int], length,
+        Array(Array.tabulate(length)(outOfShort)), _ => false, false, options)
+    }
   }
 
   test("the reference narrows a stored byte and short as the lane does") {
