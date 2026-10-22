@@ -99,6 +99,38 @@ public final class VarkaOperatorCensusProbe {
         VectorShape.forBitSize(Math.max(64, BS.vectorBitSize() / 4)));
   }
 
+  /** The 64-bit byte species: a widening load that takes the int species in one or two parts. */
+  private static final class Narrow64 {
+    static final VectorSpecies<Byte> SPECIES = ByteVector.SPECIES_64;
+    static final int PARTS = parts(SPECIES);
+  }
+
+  /** The 128-bit byte species: a widening load in {@code 16 / IS.length()} parts. */
+  private static final class Narrow128 {
+    static final VectorSpecies<Byte> SPECIES = ByteVector.SPECIES_128;
+    static final int PARTS = parts(SPECIES);
+  }
+
+  /** A short species half as wide as the preferred one, never under 64 bits. */
+  private static final class NarrowShort {
+    static final VectorSpecies<Short> SPECIES = VectorSpecies.of(short.class,
+        VectorShape.forBitSize(Math.max(64, SS.vectorBitSize() / 2)));
+    static final int PARTS = parts(SPECIES);
+  }
+
+  /**
+   * How many int vectors one vector of {@code narrow} widens to. A species with fewer lanes than
+   * the int species is not a whole group (the catalog does not run such an entry at that width),
+   * and it is refused here rather than counted as one part, which would read past its lanes.
+   */
+  private static int parts(VectorSpecies<?> narrow) {
+    if (narrow.length() < IS.length()) {
+      throw new IllegalStateException(narrow + " has fewer lanes than " + IS
+          + ", so it is not a whole group of the int species");
+    }
+    return narrow.length() / IS.length();
+  }
+
   /** Takes the even lanes of one vector, then of the next: the de-interleave's shuffle. */
   private static final VectorShuffle<Long> DEINTERLEAVE =
       VectorShuffle.fromOp(LS, i -> 2 * i);
@@ -173,6 +205,34 @@ public final class VarkaOperatorCensusProbe {
     for (int i = 0; i < ROWS; i += SS.length()) {
       ShortVector.fromArray(SS, SA, i).lanewise(BinOp.OP, ShortVector.fromArray(SS, SB, i))
           .intoArray(SO, i);
+    }
+  }
+
+  static void op_un_byte() {
+    for (int i = 0; i < ROWS; i += BS.length()) {
+      ByteVector.fromArray(BS, BA, i).lanewise(UnOp.OP).intoArray(BO, i);
+    }
+  }
+
+  static void op_un_short() {
+    for (int i = 0; i < ROWS; i += SS.length()) {
+      ShortVector.fromArray(SS, SA, i).lanewise(UnOp.OP).intoArray(SO, i);
+    }
+  }
+
+  static void op_blend_byte() {
+    for (int i = 0; i < ROWS; i += BS.length()) {
+      var a = ByteVector.fromArray(BS, BA, i);
+      var b = ByteVector.fromArray(BS, BB, i);
+      a.blend(b, a.compare(VectorOperators.LT, b)).intoArray(BO, i);
+    }
+  }
+
+  static void op_blend_short() {
+    for (int i = 0; i < ROWS; i += SS.length()) {
+      var a = ShortVector.fromArray(SS, SA, i);
+      var b = ShortVector.fromArray(SS, SB, i);
+      a.blend(b, a.compare(VectorOperators.LT, b)).intoArray(SO, i);
     }
   }
 
@@ -320,6 +380,16 @@ public final class VarkaOperatorCensusProbe {
       for (int p = 0; p < 2; p++) {
         ((IntVector) v.convertShape(ConvOp.OP, IS, p))
             .intoArray(IO, i + p * (SS.length() / 2));
+      }
+    }
+  }
+
+  static void op_conv_B2S() {
+    for (int i = 0; i < ROWS; i += BS.length()) {
+      var v = ByteVector.fromArray(BS, BA, i);
+      for (int p = 0; p < 2; p++) {
+        ((ShortVector) v.convertShape(ConvOp.OP, SS, p))
+            .intoArray(SO, i + p * (BS.length() / 2));
       }
     }
   }
@@ -524,6 +594,42 @@ public final class VarkaOperatorCensusProbe {
     }
   }
 
+  static void op_load_b2i64() {
+    loadBytesInParts(Narrow64.SPECIES, Narrow64.PARTS);
+  }
+
+  static void op_load_b2i128() {
+    loadBytesInParts(Narrow128.SPECIES, Narrow128.PARTS);
+  }
+
+  /** Loads {@code species} of bytes and widens each into {@code parts} int vectors. */
+  private static void loadBytesInParts(VectorSpecies<Byte> species, int parts) {
+    for (int i = 0; i < ROWS; i += species.length()) {
+      var v = ByteVector.fromArray(species, BA, i);
+      for (int p = 0; p < parts; p++) {
+        ((IntVector) v.convertShape(VectorOperators.B2I, IS, p))
+            .intoArray(IO, i + p * IS.length());
+      }
+    }
+  }
+
+  static void op_load_s2i() {
+    for (int i = 0; i < ROWS; i += NarrowShort.SPECIES.length()) {
+      var v = ShortVector.fromArray(NarrowShort.SPECIES, SA, i);
+      for (int p = 0; p < NarrowShort.PARTS; p++) {
+        ((IntVector) v.convertShape(VectorOperators.S2I, IS, p))
+            .intoArray(IO, i + p * IS.length());
+      }
+    }
+  }
+
+  static void op_two_fullshort() {
+    for (int i = 0; i < ROWS; i += SS.length()) {
+      ShortVector.fromArray(SS, SA, i).lanewise(VectorOperators.SUSUB,
+          ShortVector.fromArray(SS, SB, i)).intoArray(SO, i);
+    }
+  }
+
   static void op_two_narrow() {
     for (int i = 0; i < ROWS; i += Narrow.SPECIES.length()) {
       ByteVector.fromArray(Narrow.SPECIES, BA, i).lanewise(VectorOperators.SUSUB,
@@ -562,6 +668,15 @@ public final class VarkaOperatorCensusProbe {
         case "bin.byte" -> op_bin_byte();
         case "bin.short" -> op_bin_short();
         case "bin.int" -> op_bin_int();
+        case "un.byte" -> op_un_byte();
+        case "un.short" -> op_un_short();
+        case "blend.byte" -> op_blend_byte();
+        case "blend.short" -> op_blend_short();
+        case "conv.B2S" -> op_conv_B2S();
+        case "load.b2i64" -> op_load_b2i64();
+        case "load.b2i128" -> op_load_b2i128();
+        case "load.s2i" -> op_load_s2i();
+        case "two.fullshort" -> op_two_fullshort();
         case "bin.long" -> op_bin_long();
         case "bin.float" -> op_bin_float();
         case "bin.double" -> op_bin_double();
@@ -641,6 +756,12 @@ public final class VarkaOperatorCensusProbe {
     if (bits < entry.minBits()) {
       System.out.println(SKIP_PREFIX + "needs a preferred species of " + entry.minBits()
           + " bits or more");
+      System.out.println(DONE_PREFIX + entry.name());
+      return;
+    }
+    if (bits > entry.maxBits()) {
+      System.out.println(SKIP_PREFIX + "needs a preferred species of " + entry.maxBits()
+          + " bits or less");
       System.out.println(DONE_PREFIX + entry.name());
       return;
     }

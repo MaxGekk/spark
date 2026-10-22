@@ -643,3 +643,103 @@ the `LEGACY` WIDENED cell and the live-lane qualification (4.1, 4.2), the folded
 cases (4.4) and the `bit_count` correction (5) were wrong or imprecise. Nothing is left as an
 unconfirmed claim except that the `Lane`/`preferredLanes` and walk edits are the implementer's to
 read at the time.
+
+### 9.2 Outcome of step 1: the census extension and the hand-loop spike (22 October 2026)
+
+Step 1 of section 8 ran on the laptop on master `e18c8937384` with nothing emitted: the census gained
+the cells below and the spike is hand-written Vector API loops (`VarkaNarrowLaneBenchmark`, no
+emitter, no IR change). The record is `results/VARKA-329-spike.txt` (commands, pins, the 25 runs'
+load and power state, every rung and width, the predictions scored); the verdict follows. All
+numbers are for the laptop (AVX-512 on 256-bit units) alone: the EPYC 7763 at 256 bits and the
+Neoverse N2 at 128 bits, whose widths decide the default (3.5), are not measured, and the runner
+columns of the new census cells, which section 8 counts in this step, are owed to the next
+`varka-width-audit.yml` dispatch (it needs the branch pushed).
+
+**Census (`sql/varka/operator_census.json`).** 26 new cells and 3 that changed from skipped to
+measured, all `I` with no allocation at 512, 256 and 128 bits: byte and short `AND`, `OR`, `XOR`,
+`MIN`, `MAX`, `NEG`, `ABS`, `GT` and a `blend` cell, `B2S`, the short widening load (`S2I_load`), the
+byte load as a 64-bit species converted in parts (`B2I_load64`, skipped at 512, where it is not a
+whole group) and as a 128-bit species (`B2I_load128`), the two-species cases for the short load and
+for the 64-bit byte load, and the three byte two-species cells with no conversion, which now run at
+128 bits. So **2.3's open question is answered on this host: the widened byte load at 128 bits has
+two intrinsic whole-group forms, option (a) (a 64-bit load in two parts) and option (b) (a 128-bit
+load in four), and neither declines.** The long `MUL` has no cell and is unchanged.
+
+**What the 128-bit byte load costs.** Nothing measurable against an int column. The widened byte
+compare reads 7.3 G rows/s at 128 bits against 7.2 for the same predicate over `INT` columns (26.9
+against 26.8 at 512, 16.5 against 14.3 at 256), so a byte column loaded as ints is read at the
+speed of an int column. The 128-bit-load form (b) is 10 to 13 percent faster than the 64-bit form
+(a) at 256 bits and within noise of it at 128 (0.97 to 0.99 in the separate runs, 1.02 to 1.05 in
+the all-arms ones). The widened loops at 128 bits are bimodal from JVM to JVM (a `SMALLINT` compare
+at 5.8 G in 6 of 9 JVMs and at the INT arm's 7.2 in 3; the mixed byte shape at 6.1 in 5 and 5.4 in
+4), cause not looked for, so the 128-bit ratios below come as a range.
+
+**Verdict per width** (NATIVE over WIDENED, pure-narrow `b1 < b2` as a selection, medians of the
+runs, rungs 16384 to 8388608 rows; the byte pair is 16 MB at the last rung, at the edge of the
+16 MB L3 of the cores the runs were pinned to):
+
+| | `TINYINT` | `SMALLINT` | mixed, int-driven (`greatest(b1, b2) < i`), by best rates |
+| :-- | :-- | :-- | :-- |
+| 512 bits | 5.6, 5.1, 2.5, 2.1 | 2.0, 1.6, 1.3, 1.1 | 0.92 to 1.06 |
+| 256 bits | 4.7, 4.9, 3.7, 2.6 | 2.3, 2.2, 2.1, 1.2 | 0.95 to 1.03 |
+| 128 bits | 5.9, 5.9, 5.4, 4.3 | 2.5, 2.5, 2.5, 2.1 (2.0, 2.0, 2.0, 1.7 by best rates) | 1.00 to 1.15 (1.18 to 1.30 for bytes by medians) |
+
+For the one shape measured, a compare of two narrow columns into a selection word, the arms favour
+**NATIVE wherever every value in the kernel is narrow, by 2x to 6x for bytes and 1.1x to 2.5x for
+shorts, at all three widths**, and tie at 512 and 256 bits wherever an int value is present (the
+byte value is converted at the load or at the mix and the narrow lane has nothing left to save); at
+128 bits NATIVE keeps up to 1.3x there for bytes. The smallest NATIVE gains are the shorts at 512
+bits past the cache (1.08) and at 256 (1.20), where both arms move the same bytes. The scalar loop
+is 1.0 to 1.7 G rows/s throughout, 4x to 90x below the vector arms. These loops write one selection
+word and nothing else: no validity bits, no nulls, no masked epilogue and no narrow store.
+
+**Predictions of 3.3, scored** (full table in the record): 1 fails high (5.58 and 4.85 against a
+ceiling of 4.0: the widened arm costs what an int compare costs, so the lane ratio is not the
+ceiling); 2 holds for `SMALLINT` (1.08, 1.20) and fails for `TINYINT` (2.09, 2.59), because the
+byte pair at 8388608 rows is at the edge of the L3, not past it, and fails at 128 bits where
+nothing is memory bound; 3 holds at every rung and width on the plan's rule, at the edge of the
+band for bytes at 128 bits by medians; 4 holds at 512 bits and fails high at 256, and is at or
+above its ceiling at 128; 5 fails high for bytes at 128 bits (4.5 to 5.9 against 4.0) and sits at
+the ceiling for shorts (2.0 by best rates, 2.5 by medians); 6 holds (no allocation and no refusal,
+and no second-species slowdown in the all-arms JVMs); 7 holds (568 arm and rung settles at level 4
+in the 8 runs that print them, none unsettled, no cell moved with run order by more than 10
+percent apart from one at 512 bits and the 128-bit modes). **Corrections to this plan:** the
+rungs' cache levels in 3.3 and 3.4 are wrong on this machine (the byte pair at 8388608 rows is
+16 MB, the short pair 32 MB, the int pair 64 MB, against a 16 MB L3 for the pinned cores), so a
+rung past L3 for bytes needs 33554432 rows or more; and for the mixed shape `b < i` the two arms
+are the same operations by construction (2.3 said as much), so they differ only in a kernel that
+computes in the byte lane before the mix, which the spike measured as `greatest(b1, b2) < i`.
+
+**What B2 should build first, and why.** (1) The shared pieces, which both arms need (the two
+`LaneType` members, `Lane` rows, `isArrowBacked` and `allocateVector` cases, the leaves). (2) **The
+NATIVE emission for all-narrow kernels, as the first arm**: it is where the numbers are (2x to 6x),
+it needs only operators the census reads `I` (byte and short compare, `MIN`, `MAX`, `blend`, load
+and store), and it needs no conversion, so it avoids the 128-bit widening question altogether; its
+64-row group is a whole selection word at 512 bits and two or four of them at 256 and 128. (3) The
+WIDENED emission second, for kernels with an int value and as the option's losing arm in the matrix:
+the part-width load plus `B2I`/`S2I`, with form (b), the 128-bit load, at 256 bits and form (a) or
+(b) at 128 (the runs do not separate them there). The first checkpoint of B2 is the emitted NATIVE
+byte compare measured against this record's NATIVE and INT columns, because three things the hand
+loops leave out can eat the margin: the validity word for 32- and 64-row groups (2.3: whether
+`validityBitsAt` has helpers for those counts, and what the general fallback costs), the masked
+epilogue, and a narrow store. If the emitted kernel keeps less than about half of the hand loop's
+ratio, the margin is in those and not in the lane. The default (3.5) is not decided here: it waits
+for the runner hosts, and the laptop alone points to NATIVE for all-narrow kernels at every width.
+
+**Deviations from the step as filed.** The spike's results are committed as the text record above,
+not as `sql/catalyst/benchmarks/` files from `dev/varka_bench_regen.sh` (28's `Hand28.java` spike did
+the same; the regenerated files belong to the emitted arms of B2). The benchmark has one arm for
+`b < i`, with `greatest(b1, b2) < i` added as the shape on which the arms differ; 3.4's other
+choice shapes (`b1 < b2 AND b2 < b3`, `CASE WHEN`, `greatest(b1, b2, b3)`) were not timed, and its
+packed boolean output is the selection word of every loop here. The census change moved the minimum
+width of three existing cells (`narrow_then_full`, `full_then_narrow`, `both_in_one_loop`) from 256
+to 128 bits so that they run at 128; their 512 and 256 readings are unchanged. The `short`
+two-species cells and the two with the 64-bit byte load are new.
+
+**Not yet measured: the byte rung past the last-level cache (added in the review of 22 October
+2026).** The ladder's top rung stays at the edge of the pinned L3 for bytes, so the spike has no
+reading that is past the cache for `TINYINT`, and the 2.1 to 2.6 ratios of prediction 2 are
+unexplained. `VarkaNarrowLaneBenchmark` now has a 33554432-row rung (a 64 MB byte pair, 128 MB of
+shorts, 256 MB of ints), timed only under `-Dvarka.narrow.pastL3=true` because its columns are
+about 600 MB. It has not been run: the laptop was in use for other timing that night. It is
+`PLAN.md` row 415, and prediction 2 stays scored as in the table above until that row reads it.
