@@ -737,7 +737,7 @@ final class VarkaVectorTemplateWarmup {
      */
     private static <E> long masks(VectorSpecies<E> s, VectorMask<E> m, VectorMask<E> tail,
         long bits) {
-      return m.toLong() + (m.anyTrue() ? 1 : 0) + m.and(tail).or(tail.not()).trueCount()
+      return m.toLong() + (m.anyTrue() ? 1 : 0) + m.and(tail).or(tail.not()).xor(tail).trueCount()
           + VectorMask.fromLong(s, bits).toLong() + s.indexInRange(0, s.length() / 2 + 1).toLong()
           + s.loopBound(BYTES);
     }

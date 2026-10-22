@@ -97,8 +97,11 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   private val t2 = AttributeReference("t2", TimeType(6))()
   private val dt = AttributeReference("dt", DayTimeIntervalType())()
   private val dt2 = AttributeReference("dt2", DayTimeIntervalType())()
+  // BOOLEAN columns, as conditions: two so a comparison can be column against column.
+  private val b = AttributeReference("b", BooleanType)()
+  private val b2 = AttributeReference("b2", BooleanType)()
 
-  private val columns: Seq[Attribute] = Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2)
+  private val columns: Seq[Attribute] = Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2)
 
   /**
    * One documented expression. `sql` is both what the table prints and what the check
@@ -421,6 +424,33 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("equal_null(l, l2)"),
       Row("t <=> t2"),
       Row("dt <=> dt2"))),
+
+    // A BOOLEAN column is a condition leaf: the data bitmap and the validity bitmap are both
+    // read as words, so every connective, comparison and choice composes with it.
+    Family("Boolean columns", predicates = true, Seq(
+      Row("b", "a boolean column as a filter: unknown selects nothing"),
+      Row("NOT b", "the pair swapped, no code"),
+      Row("b AND d < d2", "beside a comparison, on the one lane they share"),
+      Row("b OR i = 5", "an unknown column beside a comparison"),
+      Row("b AND l < l2", "the boolean leaf takes the comparison's long lane"),
+      Row("b = b2", "equality of two boolean columns: unknown where either is"),
+      Row("b <= b2", "an ordering over booleans, false before true: not NOT b OR b2, which "
+        + "is true where b is null and b2 is true"),
+      Row("b > b2"),
+      Row("b <=> b2", "never unknown: two nulls are equal"),
+      Row("b IS NULL", "the column's own validity word"),
+      Row("b IS NOT NULL", "the column's own validity word"),
+      Row("(b AND d < d2) IS NULL", "a test over a predicate: the predicate is not known"),
+      Row("coalesce(b, b2)", "the first known boolean, as a condition"),
+      Row("CASE WHEN b THEN b2 ELSE d < d2 END", "a boolean choice: unknown takes ELSE"),
+      Row("CASE WHEN b THEN i > 5 END", "no ELSE: a null constant, so the body is masked-only"))),
+
+    // A boolean column as the condition of a choice between numbers: the leaf reads no lane of
+    // its own, so it takes the lane of the values it chooses between.
+    Family("Boolean columns choosing values", predicates = false, Seq(
+      Row("IF(b, d, d2)", "the int lane"),
+      Row("IF(b, l, l2)", "the leaf is lifted to the long lane of the values"),
+      Row("CASE WHEN b THEN l ELSE l2 END", "likewise, per branch"))),
 
     // Both lanes in one kernel (VARKA-28): the casts between int and bigint, and the widening
     // Catalyst's type coercion puts under every operator that meets the two.
@@ -1059,7 +1089,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
         "d" -> "date", "d2" -> "date", "i" -> "int",
         "ymm" -> "interval month", "ymy" -> "interval year", "ym" -> "interval year to month",
         "l" -> "bigint", "l2" -> "bigint", "t" -> "time(6)", "t2" -> "time(6)",
-        "dt" -> "interval day to second", "dt2" -> "interval day to second"),
+        "dt" -> "interval day to second", "dt2" -> "interval day to second",
+        "b" -> "boolean", "b2" -> "boolean"),
       "expressions" -> rows.asJava,
       "catalyst_classes_admitted" -> (admittedByCompiler -- infrastructure).toSeq.sorted.asJava)
     new ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(doc) + "\n"

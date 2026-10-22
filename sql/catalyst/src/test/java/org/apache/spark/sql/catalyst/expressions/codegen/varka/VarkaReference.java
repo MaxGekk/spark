@@ -262,6 +262,25 @@ public final class VarkaReference {
     }
   }
 
+  private static Truth constant(CondConst n) {
+    return switch (n.value()) {
+      case TRUE -> Truth.TRUE;
+      case FALSE -> Truth.FALSE;
+      case NULL -> Truth.UNKNOWN;
+    };
+  }
+
+  /**
+   * A comparison of two booleans, {@code false < true}, unknown where either side is: the
+   * definition, by ordinal, and not the emitted word formulas.
+   */
+  private static Truth boolCompare(CompareOp op, Truth l, Truth r) {
+    if (l == Truth.UNKNOWN || r == Truth.UNKNOWN) {
+      return Truth.UNKNOWN;
+    }
+    return Truth.of(compare(op, l.isTrue() ? 1 : 0, r.isTrue() ? 1 : 0));
+  }
+
   /** Kleene three-valued logic over the int lane. */
   public static Truth cond(Cond cond, int[] row, boolean[] isNull, int[] lits) {
     return switch (cond) {
@@ -285,6 +304,18 @@ public final class VarkaReference {
             ? l.isEmpty() && r.isEmpty()
             : l.getAsInt() == r.getAsInt());
       }
+      // A boolean column: the data bit is meaningful only where the slot is valid, so an arbitrary
+      // bit under a null stays out of the answer by construction here, as in the kernel.
+      case BoolColumn n -> isNull[n.ordinal()] ? Truth.UNKNOWN : Truth.of(row[n.ordinal()] != 0);
+      case CondConst n -> constant(n);
+      case BoolCompare(var op, var left, var right) -> boolCompare(op,
+          cond(left, row, isNull, lits), cond(right, row, isNull, lits));
+      // Written from the meaning of `<=>`: equal when both unknown or both the same value.
+      case BoolNullSafeEq(var left, var right) ->
+          Truth.of(cond(left, row, isNull, lits) == cond(right, row, isNull, lits));
+      case CondIf(var c, var t, var e) ->
+          cond(c, row, isNull, lits).isTrue() ? cond(t, row, isNull, lits)
+              : cond(e, row, isNull, lits);
       case And(var left, var right) ->
           and(cond(left, row, isNull, lits), cond(right, row, isNull, lits));
       case Or(var left, var right) ->
@@ -455,6 +486,15 @@ public final class VarkaReference {
             ? l.isEmpty() && r.isEmpty()
             : l.getAsLong() == r.getAsLong());
       }
+      case BoolColumn n -> isNull[n.ordinal()] ? Truth.UNKNOWN : Truth.of(row[n.ordinal()] != 0);
+      case CondConst n -> constant(n);
+      case BoolCompare(var op, var left, var right) -> boolCompare(op,
+          longCond(left, row, isNull, lits), longCond(right, row, isNull, lits));
+      case BoolNullSafeEq(var left, var right) ->
+          Truth.of(longCond(left, row, isNull, lits) == longCond(right, row, isNull, lits));
+      case CondIf(var c, var t, var e) ->
+          longCond(c, row, isNull, lits).isTrue() ? longCond(t, row, isNull, lits)
+              : longCond(e, row, isNull, lits);
       case And(var left, var right) ->
           and(longCond(left, row, isNull, lits), longCond(right, row, isNull, lits));
       case Or(var left, var right) ->
