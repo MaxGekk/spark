@@ -85,10 +85,14 @@ public final class VarkaReference {
       // A range guard changes no value; a lane outside it declines the batch, which the suites
       // assert on the status rather than on a value this evaluator could spell.
       case GuardedRange g -> value(g.child(), row, isNull, lits);
-      // A conversion reads rows of the other lane: a narrowing root alone is a long-lane shape,
-      // answered by `longValue`, and any tree that holds a conversion by `mixedValue`.
-      case NarrowLane n -> throw new IllegalArgumentException(
+      // A conversion reads rows of the other lane: a narrowing to the int lane alone is a
+      // long-lane shape, answered by `longValue`, and any tree that holds one by `mixedValue`.
+      case NarrowLane n when !n.target().isNarrow() -> throw new IllegalArgumentException(
           "a narrowing is evaluated through longValue or mixedValue: " + n);
+      // A narrow-typed value computed on the int lane and narrowed once at its store
+      // (VARKA-329): the reference narrows it the way the store does, a truncation to the
+      // output lane, so a wrapped answer still has to agree row by row.
+      case NarrowLane n -> map(n.child(), row, isNull, lits, v -> narrow(n.target(), v));
       // Widening a narrow child into the int lane changes no value: the column's stored byte or
       // short sign-extends to the drawn int, which is the row this evaluator reads (VARKA-329).
       // A widening into the long lane is still the mixed evaluator's.
@@ -640,6 +644,15 @@ public final class VarkaReference {
       IntFn f) {
     var v = value(child, row, isNull, lits);
     return v.isEmpty() ? v : OptionalInt.of(f.apply(v.getAsInt()));
+  }
+
+  /** {@code v} as a store to {@code target} keeps it, sign-extended: its truncation (VARKA-329). */
+  static int narrow(VarkaVectorIR.LaneType target, int v) {
+    return switch (target) {
+      case BYTE -> (byte) v;
+      case SHORT -> (short) v;
+      case INT, LONG -> v;
+    };
   }
 
   /** {@code f} of two operands, left first; null where either is, the right not evaluated past
