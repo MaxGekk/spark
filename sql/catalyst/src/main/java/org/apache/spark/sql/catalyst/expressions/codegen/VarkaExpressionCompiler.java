@@ -837,6 +837,19 @@ public final class VarkaExpressionCompiler {
     return new CompiledVarkaPredicate(specs, tables.projection(roots, types), clauses);
   }
 
+  /** {@code conds} all on the long lane, or empty at the first that has no form there. */
+  private static Optional<List<Cond>> liftAllLong(List<Cond> conds) {
+    List<Cond> lifted = new ArrayList<>();
+    for (Cond c : conds) {
+      Optional<Cond> l = VarkaConditionCompiler.onLongLane(c);
+      if (l.isEmpty()) {
+        return Optional.empty();
+      }
+      lifted.add(l.get());
+    }
+    return Optional.of(lifted);
+  }
+
   private static PredicatePass predicateOnce(
       Expression condition,
       Seq<Attribute> childOutput,
@@ -886,27 +899,27 @@ public final class VarkaExpressionCompiler {
         if (!fused.isEmpty() && cond.laneType() != fused.get(0).laneType()) {
           boolean noLong = fused.stream().noneMatch(c -> c.laneType() == LaneType.LONG)
               && cond.laneType() != LaneType.LONG;
-          Optional<Cond> lifted = noLong
+          // The int lift has a form for every condition, so it always commits; the long one has
+          // none for a range set and commits only when every condition has one.
+          Optional<Cond> liftedCond = noLong
               ? Optional.of(VarkaConditionCompiler.onIntLane(cond))
               : VarkaConditionCompiler.onLongLane(cond);
-          List<Cond> liftedFused = new ArrayList<>();
-          for (Cond f : fused) {
-            if (noLong) {
-              liftedFused.add(VarkaConditionCompiler.onIntLane(f));
-            } else {
-              VarkaConditionCompiler.onLongLane(f).ifPresent(liftedFused::add);
-            }
-          }
-          if (lifted.isPresent() && liftedFused.size() == fused.size()) {
-            cond = lifted.get();
-            before = liftedFused;
+          Optional<List<Cond>> liftedFused = noLong
+              ? Optional.of(VarkaConditionCompiler.onIntLaneAll(fused))
+              : liftAllLong(fused);
+          if (liftedCond.isPresent() && liftedFused.isPresent()) {
+            cond = liftedCond.get();
+            before = liftedFused.get();
             liftedBefore = true;
           }
         }
-        if (!before.isEmpty() && cond.laneType() != before.get(0).laneType()) {
+        // Every conjunct of the meeting lane, not just the first: a lift that missed one would
+        // otherwise reach the AND fold, whose constructor refuses the mix by throwing.
+        LaneType meeting = cond.laneType();
+        if (!before.isEmpty() && before.stream().anyMatch(b -> b.laneType() != meeting)) {
           marks.restore(inputs, literals, sink);
           sink.take();
-          sink.note(laneMismatch(cond.laneType(), fused.get(0).laneType()), bound);
+          sink.note(laneMismatch(meeting, fused.get(0).laneType()), bound);
           specs.add(new VarkaConjunctSpec(conjunct, false, sink.take()));
           continue;
         }
