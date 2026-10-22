@@ -104,21 +104,11 @@ object VarkaWidthAuditProbe {
 
   private def runHot(shape: Shape, k: Int, loader: VarkaGeneratedClassLoader): Unit = {
     val className = CLASS_PREFIX + k
-    val bytes =
-      try {
-        VarkaLoopEmitter.emit(className, shape.roots.asJava, shape.numInputs,
-          shape.numLiterals, null, null, shape.options)
-      } catch {
-        // A width where the shape has no lowering at all. The emitter declines it before C2
-        // sees a vector call, so there is no verdict to read: the reason is recorded instead
-        // (VARKA-329: a byte widening load needs eight int lanes, and a 128-bit host has four).
-        case d: VarkaEmitDeclined =>
-          // scalastyle:off println
-          println(DECLINED_PREFIX + d.getMessage)
-          System.out.flush()
-          // scalastyle:on println
-          return
-      }
+    // A shape a width has no lowering for is a `Declined` entry, decided by the compiler before
+    // this probe runs; one that reaches the emitter and still declines is a budget the forced
+    // width was not meant to test, and fails the audit rather than being pinned as its answer.
+    val bytes = VarkaLoopEmitter.emit(className, shape.roots.asJava, shape.numInputs,
+      shape.numLiterals, null, null, shape.options)
     loader.defineGeneratedClass(className, bytes)
     val kernel = loader.loadClass(className).getConstructor().newInstance()
       .asInstanceOf[VarkaFusedKernel]
