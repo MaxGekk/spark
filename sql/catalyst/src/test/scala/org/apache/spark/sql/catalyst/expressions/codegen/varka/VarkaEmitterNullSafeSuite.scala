@@ -106,7 +106,13 @@ class VarkaEmitterNullSafeSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     val shapes: Seq[(String, VarkaVectorIR, Int)] = Seq(
       ("a checked sum against a column", new NullSafeEqual(sum, c2), 3),
       ("a column against a sum with a literal", new NullSafeEqual(c0, shifted), 2),
-      ("two computed operands", new NullSafeEqual(sum, shifted), 2))
+      ("two computed operands", new NullSafeEqual(sum, shifted), 2),
+      // Operands whose validity word is not an input's: valid where either input is, and where
+      // the choice's chosen branch is.
+      ("a greatest against a column", new NullSafeEqual(new Greatest(c0, c1), c2), 3),
+      ("a column against a least", new NullSafeEqual(c2, new Least(c0, c1)), 3),
+      ("a choice against a column",
+        new NullSafeEqual(new IfElse(new Compare(CompareOp.LT, c0, c1), c0, c1), c2), 3))
     // The premise is the checked add: with `checkIntOverflow` off a NULL-mode add answers the
     // wrapped number where Spark answers null (the option's documented behaviour), so no sum
     // nulls a valid input. The option is pinned on, whatever the matrix configuration sets.

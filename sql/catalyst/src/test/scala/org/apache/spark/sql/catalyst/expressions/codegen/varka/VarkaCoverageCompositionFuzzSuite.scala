@@ -692,13 +692,12 @@ class VarkaCoverageCompositionFuzzSuite
         row.executable -> VarkaExpressionCompiler.compilePredicate(resolve(row.executable),
           columns, opts).toScala.getOrElse(fail(s"${row.executable} did not fuse alone")).fused
       }
-      // A kernel that reads both literal tables (VARKA-28) has no form in the compiled check's
-      // case, which holds one; `VarkaEmitterMixedLaneSuite` and the IR fuzzer's mixed corpus run
-      // such kernels instead.
-      // A long-lane kernel is driven by its long table alone, so one that also reads an int slot
-      // (`shiftright(l, i ^ 5)`: the count's `5` is an int-lane literal under a widening) is the
-      // same mixed case, whichever table is empty; the sample of rows reached it once the table
-      // grew.
+      // The compiled check's case carries one literal table: `VarkaFuzzCase.lits`, which the check
+      // passes as the lane's table and, truncated to int, as the other lane's. A kernel that reads
+      // both tables is left out, and so is a long-lane kernel that reads an int slot (the count of
+      // `shiftright(l, i ^ 5)` is an int-lane literal under a widening), whichever table is empty:
+      // the int table it would index is the truncated copy of the long one, too short for the slot.
+      // `VarkaEmitterMixedLaneSuite` and the IR fuzzer's mixed corpus run such kernels instead.
       val oneTable = rowKernels.filter { case (_, p) =>
         p.literals.isEmpty || (p.longLiterals.isEmpty && p.lane == LaneType.INT)
       }

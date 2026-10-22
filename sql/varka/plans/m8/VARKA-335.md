@@ -502,8 +502,10 @@ counts and are unchanged; what is new is the widening, which a test at each of t
   by a widened int column, a shift by a widened narrowed popcount of its own value, an XOR with a
   widened int expression of a narrowed popcount, and the narrowed popcount) over 10 long edge values
   (both extremes, -1, 0, 1, a bit at 32, the alternating patterns) against 13 counts (-1, 0, 1, 31,
-  32, 33, 63, 64, 65, 127, 128, `Int.MinValue`, `Int.MaxValue`), every value meeting every count
-  twice, under all sixteen pairs of the four null patterns, against `v << c`, `v >> c`, `v >>> c`
+  32, 33, 63, 64, 65, 127, 128, `Int.MinValue`, `Int.MaxValue`), a true cross product (130 rows
+  of every edge against every count, then 130 of every edge plus one against every count, as the
+  21 October review asked; the first version paired the pure edges with one count only), under
+  all sixteen pairs of the four null patterns, against `v << c`, `v >> c`, `v >>> c`
   and `Long.bitCount` computed in the test.
 * `VarkaDifferentialSuite`, against the row engine end to end: 9 values (the same edges, two values
   just past the int range, and a null) crossed with 14 counts (the 13 and a null), ten
@@ -524,7 +526,18 @@ positions, which a kernel now serves, and its int-valued list gained the two row
 
 **Not touched, as asked.** `bit_get`, `getbit`, the `TINYINT`, `SMALLINT` and `BOOLEAN` operands
 and `bit_count(bool)` wait on rows 329 and 331; the row stays open for them. No fuzz-grammar draw
-was added: the grammar draws `BitOp` and `BitCount` over any value of the lane, so the new shapes
-were already reachable at the IR level and the fuzzers ran at their default iterations unchanged.
-The cost model was not refit: the shapes are compositions of priced nodes.
+was added, and **the shapes are not reachable by the fuzzers**, which an earlier version of this
+section claimed (corrected on 21 October 2026): `VarkaIrGrammar` draws `BitOp` and `BitCount` only
+inside the pure-int `Shapes` and the pure-long `LongShapes`, and its mixed-lane long-valued arms
+are the widening, the long grammar over long columns, add and subtract, `greatest` and `least`,
+and `IfElse`; a `BitOp` over a `WidenLane` count is drawn by none. The shapes are covered by the
+three tests above and the three coverage rows; the draw is row 432, taken with 352's refit since a
+production reprices the model. The cost model was not refit: the shapes are compositions of priced
+nodes.
+
+**No speed figure for the 128-bit refusals.** The 128-bit entries of `width_audit.json` for these
+rows list the refusals every masked long-lane row carries at two long lanes; this row measured no
+fused-against-row-engine rate at 128 bits for them, so it claims none there. The speed claims of
+the long-lane work are those of the widths that were measured, and no row yet owns a 128-bit
+speed figure for the shifts and `bit_count`.
 
