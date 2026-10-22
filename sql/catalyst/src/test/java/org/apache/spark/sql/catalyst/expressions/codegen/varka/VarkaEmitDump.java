@@ -438,6 +438,7 @@ public final class VarkaEmitDump {
   private static DataType columnType(String spec) {
     String t = spec.trim().toLowerCase(Locale.ROOT);
     return switch (t) {
+      case "boolean", "bool" -> DataTypes.BooleanType;
       case "date" -> DataTypes.DateType;
       case "int", "integer" -> DataTypes.IntegerType;
       case "short", "smallint" -> DataTypes.ShortType;

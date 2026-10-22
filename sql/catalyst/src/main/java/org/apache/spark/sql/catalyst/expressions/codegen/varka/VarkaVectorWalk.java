@@ -31,10 +31,16 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Add
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.And;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitCount;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitOp;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolColumn;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolCompare;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolNullSafeEq;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoundedDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CompareOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondConst;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondIf;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DateDiff;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfMonth;
@@ -66,6 +72,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Sub
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ThursdayOf;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.TruncDate;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.TruncDateDynamic;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Truth;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WeekDay;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WeekOfYear;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WidenLane;
@@ -1104,6 +1111,131 @@ final class VarkaVectorWalk {
     cb.invokevirtual(lane.vector, "compare", lane.compareVV);
   }
 
+  /** Leaves this lane group's data bits of a boolean column: one long, lane 0 in bit 0. */
+  private static void loadDataBits(CodeBuilder cb, BoolColumn n, Analysis analysis, Slots s) {
+    cb.aload(s.srcSeg(n.ordinal()));
+    cb.iload(s.iVar);
+    cb.i2l();
+    VarkaBodyEmitter.emitValidityRead(cb, analysis, s);
+  }
+
+  /** {@code a & b} of two long locals. */
+  private static void emitAnd(CodeBuilder cb, int a, int b) {
+    cb.lload(a);
+    cb.lload(b);
+    cb.land();
+  }
+
+  /** {@code a | b} of two long locals. */
+  private static void emitOr(CodeBuilder cb, int a, int b) {
+    cb.lload(a);
+    cb.lload(b);
+    cb.lor();
+  }
+
+  /** {@code ~x} of the long on the stack. */
+  private static void emitNot(CodeBuilder cb) {
+    cb.loadConstant(-1L);
+    cb.lxor();
+  }
+
+  /** {@code ~x} of a long local. */
+  private static void emitNot(CodeBuilder cb, int local) {
+    cb.lload(local);
+    emitNot(cb);
+  }
+
+  /** {@code (c & a) | (~c & b)} of three long locals. */
+  private static void emitChoice(CodeBuilder cb, int c, int a, int b) {
+    emitAnd(cb, c, a);
+    emitNot(cb, c);
+    cb.lload(b);
+    cb.land();
+    cb.lor();
+  }
+
+  /** A dense boolean comparison of two masks: nothing is unknown, so it is plain logic. */
+  private static void emitDenseBoolCompare(CodeBuilder cb, CompareOp op, int l, int r) {
+    switch (op) {
+      case EQ -> {
+        cb.aload(l);
+        cb.aload(r);
+        cb.invokevirtual(VECTOR_MASK, "xor", MASK_BINARY);
+        cb.invokevirtual(VECTOR_MASK, "not", MASK_UNARY);
+      }
+      case LT -> {
+        cb.aload(l);
+        cb.invokevirtual(VECTOR_MASK, "not", MASK_UNARY);
+        cb.aload(r);
+        cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
+      }
+      case LE -> {
+        cb.aload(l);
+        cb.invokevirtual(VECTOR_MASK, "not", MASK_UNARY);
+        cb.aload(r);
+        cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+      }
+      case GT -> {
+        cb.aload(l);
+        cb.aload(r);
+        cb.invokevirtual(VECTOR_MASK, "not", MASK_UNARY);
+        cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
+      }
+      case GE -> {
+        cb.aload(l);
+        cb.aload(r);
+        cb.invokevirtual(VECTOR_MASK, "not", MASK_UNARY);
+        cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+      }
+    }
+  }
+
+  /** A masked boolean comparison: the formulas of {@link BoolCompare}, on the pairs' words. */
+  private static void emitBoolCompare(CodeBuilder cb, BoolCompare n, Slots s) {
+    int t1 = s.kt.get(n.left());
+    int f1 = s.kf.get(n.left());
+    int t2 = s.kt.get(n.right());
+    int f2 = s.kf.get(n.right());
+    int kt = s.kt.get(n);
+    int kf = s.kf.get(n);
+    if (n.op() == CompareOp.EQ) {
+      emitAnd(cb, t1, t2);
+      emitAnd(cb, f1, f2);
+      cb.lor();
+      cb.lstore(kt);
+      emitAnd(cb, t1, f2);
+      emitAnd(cb, f1, t2);
+      cb.lor();
+      cb.lstore(kf);
+      return;
+    }
+    // k: the lanes where both sides are known; kF = k & ~kT for the four orderings.
+    emitOr(cb, t1, f1);
+    emitOr(cb, t2, f2);
+    cb.land();
+    cb.lstore(s.cmpTmp);
+    switch (n.op()) {
+      case LT -> emitAnd(cb, f1, t2);
+      case GT -> emitAnd(cb, t1, f2);
+      case LE -> {
+        emitOr(cb, f1, t2);
+        cb.lload(s.cmpTmp);
+        cb.land();
+      }
+      case GE -> {
+        emitOr(cb, t1, f2);
+        cb.lload(s.cmpTmp);
+        cb.land();
+      }
+      case EQ -> throw VarkaErrors.illegalState("EQ is emitted above");
+    }
+    cb.lstore(kt);
+    cb.lload(s.cmpTmp);
+    emitNot(cb, kt);
+    cb.land();
+    cb.lstore(kf);
+  }
+
   /**
    * Emits a condition node: in the dense body a single {@code VectorMask} local (every input
    * lane is valid, so known-true is the comparison itself and known-false its complement); in
@@ -1171,6 +1303,114 @@ final class VarkaVectorWalk {
           cb.lstore(s.kf.get(node));
         }
       }
+      case BoolColumn n -> {
+        line(cb, analysis, node);
+        // The data word of this lane group: the column's data buffer is a bitmap in the layout
+        // of a validity bitmap, so it is read by the same helper, from the data segment.
+        if (dense) {
+          cb.aload(s.species(analysis.laneOf(node)));
+          loadDataBits(cb, n, analysis, s);
+          cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+          cb.astore(s.condMask.get(node));
+        } else {
+          // kT = d & v; kF = ~d & v. The data bit under a null slot is arbitrary and v clears it.
+          // The ~ sets the bits above the lane count, which every consumer truncates.
+          loadDataBits(cb, n, analysis, s);
+          cb.lstore(s.cmpTmp);
+          cb.lload(s.cmpTmp);
+          loadWord(cb, s, s.word[n.ordinal()]);
+          cb.land();
+          cb.lstore(s.kt.get(node));
+          emitNot(cb, s.cmpTmp);
+          loadWord(cb, s, s.word[n.ordinal()]);
+          cb.land();
+          cb.lstore(s.kf.get(node));
+        }
+      }
+      case CondConst n -> {
+        boolean isTrue = n.value() == Truth.TRUE;
+        if (dense) {
+          cb.aload(s.species(analysis.laneOf(node)));
+          cb.loadConstant(isTrue ? -1L : 0L);
+          cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+          cb.astore(s.condMask.get(node));
+        } else {
+          cb.loadConstant(isTrue ? -1L : 0L);
+          cb.lstore(s.kt.get(node));
+          cb.loadConstant(n.value() == Truth.FALSE ? -1L : 0L);
+          cb.lstore(s.kf.get(node));
+        }
+      }
+      case BoolCompare n -> {
+        emitCond(cb, n.left(), dense, analysis, s, computed);
+        emitCond(cb, n.right(), dense, analysis, s, computed);
+        line(cb, analysis, node);
+        if (dense) {
+          emitDenseBoolCompare(cb, n.op(), s.condMask.get(n.left()), s.condMask.get(n.right()));
+          cb.astore(s.condMask.get(node));
+        } else {
+          emitBoolCompare(cb, n, s);
+        }
+      }
+      case BoolNullSafeEq n -> {
+        emitCond(cb, n.left(), dense, analysis, s, computed);
+        emitCond(cb, n.right(), dense, analysis, s, computed);
+        line(cb, analysis, node);
+        if (dense) {
+          emitDenseBoolCompare(cb, CompareOp.EQ, s.condMask.get(n.left()),
+              s.condMask.get(n.right()));
+          cb.astore(s.condMask.get(node));
+        } else {
+          int t1 = s.kt.get(n.left());
+          int f1 = s.kf.get(n.left());
+          int t2 = s.kt.get(n.right());
+          int f2 = s.kf.get(n.right());
+          // k = known words; kT = (t1 & t2) | (f1 & f2) | (~k1 & ~k2).
+          emitAnd(cb, t1, t2);
+          emitAnd(cb, f1, f2);
+          cb.lor();
+          emitOr(cb, t1, f1);
+          emitNot(cb);
+          emitOr(cb, t2, f2);
+          emitNot(cb);
+          cb.land();
+          cb.lor();
+          cb.lstore(s.kt.get(node));
+          // kF = (t1 & f2) | (f1 & t2) | (k1 ^ k2): one known and the other not, or opposite.
+          emitAnd(cb, t1, f2);
+          emitAnd(cb, f1, t2);
+          cb.lor();
+          emitOr(cb, t1, f1);
+          emitOr(cb, t2, f2);
+          cb.lxor();
+          cb.lor();
+          cb.lstore(s.kf.get(node));
+        }
+      }
+      case CondIf n -> {
+        emitCond(cb, n.cond(), dense, analysis, s, computed);
+        emitCond(cb, n.thenCond(), dense, analysis, s, computed);
+        emitCond(cb, n.elseCond(), dense, analysis, s, computed);
+        line(cb, analysis, node);
+        if (dense) {
+          // (c & t) | (~c & e): an unknown condition takes ELSE, and a dense body has none.
+          cb.aload(s.condMask.get(n.cond()));
+          cb.aload(s.condMask.get(n.thenCond()));
+          cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
+          cb.aload(s.condMask.get(n.cond()));
+          cb.invokevirtual(VECTOR_MASK, "not", MASK_UNARY);
+          cb.aload(s.condMask.get(n.elseCond()));
+          cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
+          cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+          cb.astore(s.condMask.get(node));
+        } else {
+          // The condition's known-true word picks THEN, everything else takes ELSE; kF likewise.
+          emitChoice(cb, s.kt.get(n.cond()), s.kt.get(n.thenCond()), s.kt.get(n.elseCond()));
+          cb.lstore(s.kt.get(node));
+          emitChoice(cb, s.kt.get(n.cond()), s.kf.get(n.thenCond()), s.kf.get(n.elseCond()));
+          cb.lstore(s.kf.get(node));
+        }
+      }
       case And n -> {
         emitCond(cb, n.left(), dense, analysis, s, computed);
         emitCond(cb, n.right(), dense, analysis, s, computed);
@@ -1222,19 +1462,16 @@ final class VarkaVectorWalk {
         // Masked: kT/kF are the child's, swapped - pure slot aliasing, planned, no code.
       }
       case InRanges n -> emitInRanges(cb, n, dense, analysis, s, computed);
-      case IsNotNull n when !dense && n.child() instanceof Cond c -> {
+      case IsNotNull n when !dense && n.overCondition() -> {
+        Cond c = (Cond) n.child();
         // Over a condition: known where it is known true or known false. kT = kT(c) | kF(c),
         // kF = ~kT - total, like the column form, and with the same truncation argument for
         // the ~ (VARKA-334). A dense body takes the arm below: no lane is unknown there.
         emitCond(cb, c, false, analysis, s, computed);
         line(cb, analysis, node);
-        cb.lload(s.kt.get(c));
-        cb.lload(s.kf.get(c));
-        cb.lor();
+        emitOr(cb, s.kt.get(c), s.kf.get(c));
         cb.lstore(s.kt.get(node));
-        cb.lload(s.kt.get(node));
-        cb.loadConstant(-1L);
-        cb.lxor();
+        emitNot(cb, s.kt.get(node));
         cb.lstore(s.kf.get(node));
       }
       case IsNotNull n -> {
@@ -1253,9 +1490,11 @@ final class VarkaVectorWalk {
           // every consumer truncates (`fromLong` reads species-length bits,
           // `orValidityBitsAt` applies its lane mask) - the same invariant IfElse's ~kT
           // already relies on.
-          loadWord(cb, s, s.wordRef.get(n.child()));
+          int ref = n.child() instanceof BoolColumn b ? s.word[b.ordinal()]
+              : s.wordRef.get(n.child());
+          loadWord(cb, s, ref);
           cb.lstore(s.kt.get(node));
-          loadWord(cb, s, s.wordRef.get(n.child()));
+          loadWord(cb, s, ref);
           cb.loadConstant(-1L);
           cb.lxor();
           cb.lstore(s.kf.get(node));

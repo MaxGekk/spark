@@ -13,7 +13,9 @@
     "t" : "time(6)",
     "t2" : "time(6)",
     "dt" : "interval day to second",
-    "dt2" : "interval day to second"
+    "dt2" : "interval day to second",
+    "b" : "boolean",
+    "b2" : "boolean"
   },
   "expressions" : [ {
     "sql" : "date_add(d, 3)",
@@ -1764,6 +1766,204 @@
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : ""
+  }, {
+    "sql" : "b",
+    "executable" : "b",
+    "family" : "Boolean columns",
+    "form" : "predicate",
+    "catalyst" : [ ],
+    "casts" : [ ],
+    "operands" : [ ],
+    "switches" : [ ],
+    "domain" : "",
+    "note" : "a boolean column as a filter: unknown selects nothing"
+  }, {
+    "sql" : "NOT b",
+    "executable" : "NOT b",
+    "family" : "Boolean columns",
+    "form" : "predicate",
+    "catalyst" : [ "Not" ],
+    "casts" : [ ],
+    "operands" : [ ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "domain" : "",
+    "note" : "the pair swapped, no code"
+  }, {
+    "sql" : "b AND d < d2",
+    "executable" : "b AND d < d2",
+    "family" : "Boolean columns",
+    "form" : "predicate",
+    "catalyst" : [ "And", "LessThan" ],
+    "casts" : [ ],
+    "operands" : [ "LessThan:date" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "domain" : "",
+    "note" : "beside a comparison, on the one lane they share"
+  }, {
+    "sql" : "b OR i = 5",
+    "executable" : "b OR i = 5",
+    "family" : "Boolean columns",
+    "form" : "predicate",
+    "catalyst" : [ "EqualTo", "Or" ],
+    "casts" : [ ],
+    "operands" : [ "EqualTo:int" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "domain" : "",
+    "note" : "an unknown column beside a comparison"
+  }, {
+    "sql" : "b AND l < l2",
+    "executable" : "b AND l < l2",
+    "family" : "Boolean columns",
+    "form" : "predicate",
+    "catalyst" : [ "And", "LessThan" ],
+    "casts" : [ ],
+    "operands" : [ "LessThan:bigint" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "domain" : "",
+    "note" : "the boolean leaf takes the comparison's long lane"
+  }, {
+    "sql" : "b = b2",
+    "executable" : "b = b2",
+    "family" : "Boolean columns",
+    "form" : "predicate",
+    "catalyst" : [ "EqualTo" ],
+    "casts" : [ ],
+    "operands" : [ ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "domain" : "",
+    "note" : "equality of two boolean columns: unknown where either is"
+  }, {
+    "sql" : "b <= b2",
+    "executable" : "b <= b2",
+    "family" : "Boolean columns",
+    "form" : "predicate",
+    "catalyst" : [ "LessThanOrEqual" ],
+    "casts" : [ ],
+    "operands" : [ ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "domain" : "",
+    "note" : "an ordering over booleans, false before true: not NOT b OR b2, which is true where b is null and b2 is true"
+  }, {
+    "sql" : "b > b2",
+    "executable" : "b > b2",
+    "family" : "Boolean columns",
+    "form" : "predicate",
+    "catalyst" : [ "GreaterThan" ],
+    "casts" : [ ],
+    "operands" : [ ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "domain" : "",
+    "note" : ""
+  }, {
+    "sql" : "b <=> b2",
+    "executable" : "b <=> b2",
+    "family" : "Boolean columns",
+    "form" : "predicate",
+    "catalyst" : [ "EqualNullSafe" ],
+    "casts" : [ ],
+    "operands" : [ ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "domain" : "",
+    "note" : "never unknown: two nulls are equal"
+  }, {
+    "sql" : "b IS NULL",
+    "executable" : "b IS NULL",
+    "family" : "Boolean columns",
+    "form" : "predicate",
+    "catalyst" : [ "IsNull" ],
+    "casts" : [ ],
+    "operands" : [ ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "domain" : "",
+    "note" : "the column's own validity word"
+  }, {
+    "sql" : "b IS NOT NULL",
+    "executable" : "b IS NOT NULL",
+    "family" : "Boolean columns",
+    "form" : "predicate",
+    "catalyst" : [ "IsNotNull" ],
+    "casts" : [ ],
+    "operands" : [ ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "domain" : "",
+    "note" : "the column's own validity word"
+  }, {
+    "sql" : "(b AND d < d2) IS NULL",
+    "executable" : "(b AND d < d2) IS NULL",
+    "family" : "Boolean columns",
+    "form" : "predicate",
+    "catalyst" : [ "And", "IsNull", "LessThan" ],
+    "casts" : [ ],
+    "operands" : [ "LessThan:date" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "domain" : "",
+    "note" : "a test over a predicate: the predicate is not known"
+  }, {
+    "sql" : "coalesce(b, b2)",
+    "executable" : "coalesce(b, b2)",
+    "family" : "Boolean columns",
+    "form" : "predicate",
+    "catalyst" : [ "Coalesce" ],
+    "casts" : [ ],
+    "operands" : [ ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "domain" : "",
+    "note" : "the first known boolean, as a condition"
+  }, {
+    "sql" : "CASE WHEN b THEN b2 ELSE d < d2 END",
+    "executable" : "CASE WHEN b THEN b2 ELSE d < d2 END",
+    "family" : "Boolean columns",
+    "form" : "predicate",
+    "catalyst" : [ "CaseWhen", "LessThan" ],
+    "casts" : [ ],
+    "operands" : [ "LessThan:date" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "domain" : "",
+    "note" : "a boolean choice: unknown takes ELSE"
+  }, {
+    "sql" : "CASE WHEN b THEN i > 5 END",
+    "executable" : "CASE WHEN b THEN i > 5 END",
+    "family" : "Boolean columns",
+    "form" : "predicate",
+    "catalyst" : [ "CaseWhen", "GreaterThan" ],
+    "casts" : [ ],
+    "operands" : [ "GreaterThan:int" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "domain" : "",
+    "note" : "no ELSE: a null constant, so the body is masked-only"
+  }, {
+    "sql" : "IF(b, d, d2)",
+    "executable" : "IF(b, d, d2)",
+    "family" : "Boolean columns choosing values",
+    "form" : "projection",
+    "catalyst" : [ "If" ],
+    "casts" : [ ],
+    "operands" : [ "If:date" ],
+    "switches" : [ "spark.sql.codegen.varka.family.condition.enabled" ],
+    "domain" : "",
+    "note" : "the int lane"
+  }, {
+    "sql" : "IF(b, l, l2)",
+    "executable" : "IF(b, l, l2)",
+    "family" : "Boolean columns choosing values",
+    "form" : "projection",
+    "catalyst" : [ "If" ],
+    "casts" : [ ],
+    "operands" : [ "If:bigint" ],
+    "switches" : [ "spark.sql.codegen.varka.family.condition.enabled" ],
+    "domain" : "",
+    "note" : "the leaf is lifted to the long lane of the values"
+  }, {
+    "sql" : "CASE WHEN b THEN l ELSE l2 END",
+    "executable" : "CASE WHEN b THEN l ELSE l2 END",
+    "family" : "Boolean columns choosing values",
+    "form" : "projection",
+    "catalyst" : [ "CaseWhen" ],
+    "casts" : [ ],
+    "operands" : [ "CaseWhen:bigint" ],
+    "switches" : [ "spark.sql.codegen.varka.family.condition.enabled" ],
+    "domain" : "",
+    "note" : "likewise, per branch"
   }, {
     "sql" : "CAST(i AS BIGINT)",
     "executable" : "CAST(i AS BIGINT)",

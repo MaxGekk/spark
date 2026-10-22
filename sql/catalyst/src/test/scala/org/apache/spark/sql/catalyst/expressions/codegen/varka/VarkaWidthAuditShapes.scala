@@ -28,7 +28,7 @@ import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeRef
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
-import org.apache.spark.sql.types.{DateType, DayTimeIntervalType, IntegerType, LongType, TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{BooleanType, DateType, DayTimeIntervalType, IntegerType, LongType, TimeType, YearMonthIntervalType}
 
 /**
  * The shapes the width audit (VARKA-153) asks C2 about: every row of the coverage table as the
@@ -70,7 +70,10 @@ object VarkaWidthAuditShapes {
   private val t2 = AttributeReference("t2", TimeType(6))()
   private val dt = AttributeReference("dt", DayTimeIntervalType())()
   private val dt2 = AttributeReference("dt2", DayTimeIntervalType())()
-  private val columns: Seq[Attribute] = Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2)
+  // BOOLEAN columns, as conditions: two so a comparison can be column against column.
+  private val b = AttributeReference("b", BooleanType)()
+  private val b2 = AttributeReference("b2", BooleanType)()
+  private val columns: Seq[Attribute] = Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2)
 
   /** The row as the optimizer would hand it to the compiler; `VarkaEmittedBytesSuite`'s rule. */
   private def asCatalystClaims(expr: Expression, catalyst: Set[String]): Expression = expr match {

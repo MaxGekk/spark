@@ -24,6 +24,7 @@ import org.apache.spark.internal.SparkLogger;
 import org.apache.spark.internal.SparkLoggerFactory;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmth;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelWarmup;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMemorySanitizer;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.vectorized.ColumnarBatch;
 
@@ -81,6 +82,9 @@ public final class VarkaWarmupGate {
   private void startWarmup(ColumnarBatch input) {
     int len = input.numRows();
     boolean settled = false;
+    // The copy maps the batch's own memory, so under the memory sanitizer it runs in a window with
+    // the inputs registered, as a kernel call does (VARKA-263); off, this is two returns.
+    VarkaMemorySanitizer.begin();
     try {
       runner.fill(input, len);
       VarkaKernelWarmup.start(runner.warmth, runner.shapeHash, runner.newKernel(),
@@ -99,6 +103,7 @@ public final class VarkaWarmupGate {
       LOG.warn("Could not start the warm-up of the Varka SIMD kernels " + kernelIdentity.get()
           + "; its batches run the kernel from now on.", e);
     } finally {
+      VarkaMemorySanitizer.end();
       if (!settled) {
         runner.warmth.release();
       }
