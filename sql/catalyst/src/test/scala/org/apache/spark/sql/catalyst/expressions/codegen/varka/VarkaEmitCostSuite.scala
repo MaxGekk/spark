@@ -80,7 +80,8 @@ class VarkaEmitCostSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // Nodes whose price waits for the next refit of the model (VARKA-352). A group holding one is
     // unpredictable, so the budget answers it by the weights (VarkaEmitBudget); the entry leaves
     // this list the day the node is priced, and fails here if it is priced while still listed.
-    val awaitingRefit = Set("NullSafeEqual")
+    val awaitingRefit = Set("NullSafeEqual", "BoolColumn", "CondConst", "BoolCompare", "CondIf",
+      "BoolNullSafeEq")
     assert(awaitingRefit.forall(t => !expected.exists(f => f == t || f.startsWith(t + "/"))),
       s"${awaitingRefit.toSeq.sorted} is priced: take it off the list of nodes awaiting a refit")
     val unnamed = irTypes().filterNot(awaitingRefit.contains)

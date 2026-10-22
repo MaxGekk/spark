@@ -127,6 +127,13 @@ public final class VarkaKernelWarmup {
    */
   static final int SLICE_ROWS = 32;
 
+  /**
+   * The width of an input that stores one bit a row, a {@code BitVector}'s own type width: its
+   * data is a bitmap in the layout of a validity bitmap, so the copy tiles it bit by bit and a
+   * slice starts at {@code start / 8} bytes, as a validity bitmap's does.
+   */
+  public static final int BIT_WIDTH = 0;
+
   /** Slices start on 64-row boundaries, so a slice's validity address is word-aligned. */
   private static final int SLICE_STRIDE = 64;
 
@@ -275,7 +282,8 @@ public final class VarkaKernelWarmup {
    * full, so that a later batch can claim the shape, and having released {@code warmth} when the
    * batch is empty or this JVM cannot warm at all. A throw leaves {@code warmth} to the caller.
    *
-   * @param srcWidths the bytes per row of each input's data, four or eight.
+   * @param srcWidths the bytes per row of each input's data, four or eight, or {@link #BIT_WIDTH}
+   *        for a boolean column's bitmap.
    * @param nullable whether any input of the shape is nullable, so that a batch can reach the
    *        kernel's masked driver and the warm-up must compile it too.
    * @param kernel an instance of the shape's class for the warm-up's own use; kernels keep no
@@ -561,16 +569,20 @@ public final class VarkaKernelWarmup {
         long[] dataBase = new long[numInputs];
         long[] validityBase = new long[numInputs];
         for (int i = 0; i < numInputs; i++) {
-          MemorySegment data =
-              alloc((long) (SNAPSHOT_ROWS + SLICE_STRIDE) * widths[i], SLICE_STRIDE);
+          boolean bits = widths[i] == BIT_WIDTH;
+          MemorySegment data = alloc(bits ? validityBytes(SNAPSHOT_ROWS + SLICE_STRIDE)
+              : (long) (SNAPSHOT_ROWS + SLICE_STRIDE) * widths[i], SLICE_STRIDE);
           MemorySegment validity = alloc(validityBytes(SNAPSHOT_ROWS), SLICE_STRIDE);
           if (batchNullCount[i] == 0) {
-            tileData(batchData[i], widths[i], length, data);
+            tileValues(batchData[i], widths[i], length, data);
             validity.fill((byte) -1);
           } else if (partlyNull(batchNullCount[i], length)) {
-            tileData(batchData[i], widths[i], length, data);
+            tileValues(batchData[i], widths[i], length, data);
             tileValidity(batchValidity[i], length, validity);
-            fillNullRows(data, widths[i], validity);
+            // A bit under a null row is a boolean like any other, so a bitmap keeps what it has.
+            if (!bits) {
+              fillNullRows(data, widths[i], validity);
+            }
           }
           // An input that is all null keeps zeroed values and bits: it has no valid value.
           dataBase[i] = data.address();
@@ -584,7 +596,8 @@ public final class VarkaKernelWarmup {
           int slice = v / 2;
           int start = slice * SLICE_STRIDE;
           for (int i = 0; i < numInputs; i++) {
-            srcData[v][i] = dataBase[i] + (long) start * widths[i];
+            srcData[v][i] = dataBase[i] + (widths[i] == BIT_WIDTH ? start / 8L
+                : (long) start * widths[i]);
             // The dense driver's calls leave every count at zero. The masked driver's pass each
             // input with validity on every other slice, alternating between inputs, so that
             // every slice has one input with nulls and every input is seen both ways.
@@ -828,6 +841,19 @@ public final class VarkaKernelWarmup {
   /** Whole 64-bit words covering {@code rows} bits, plus one spare word. */
   private static long validityBytes(int rows) {
     return ((rows + 63L) / 64 + 1) * 8;
+  }
+
+  /**
+   * {@link #tileData} for a value input, {@link #tileValidity} for a bitmap: a boolean column's
+   * data holds {@code (length + 7) / 8} bytes, and a batch of other than a multiple of eight rows
+   * repeats at a bit offset.
+   */
+  private static void tileValues(long address, int width, int length, MemorySegment dst) {
+    if (width != BIT_WIDTH) {
+      tileData(address, width, length, dst);
+    } else if (address != 0L) {
+      tileValidity(address, length, dst);
+    }
   }
 
   /** Fills {@code dst}'s first {@link #SNAPSHOT_ROWS} rows with the batch's, repeated. */

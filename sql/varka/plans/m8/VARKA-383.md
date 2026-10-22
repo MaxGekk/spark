@@ -757,3 +757,50 @@ predicated on a profile the next iterations violate); the candidates are a loop 
 bound is not read again (a counted `for` over a constant lane count) or a `loopBound` taken once into a
 final. Arm A (conversions `L2D`, `D2L`) stays unbuilt. R1 and R2 on runners remain gated on the
 owner's go-ahead. The row is not Done.
+
+### 9.4 Outcome of the predicate flag on the 144-draw long lane (21 October 2026)
+
+The question 9.3 left: does `-XX:+UnlockDiagnosticVMOptions -XX:-UseProfiledLoopPredicate` take the
+whole 144-draw long lane under 3 of 144 at both widths? Read on the idle laptop on master
+`e18c8937384` (1-minute load 1.28 at the start and 1.77 at the end after a 1.39 pass of the idle
+gate, power profile `performance` at both ends, no other JVM before or after, memory sanitizer off),
+12 forks with 9.1's seed, cores and pins, the same 144 long draws per width: `dev/varka_kernel_history.sh
+--after 64 --forks 6 --widths 64,32 --prewarm on --jvms 2 --cpus 3 --cpu-base 12 --deadline 30 --jvm
+-XX:+UnlockDiagnosticVMOptions --jvm -XX:-UseProfiledLoopPredicate`. 4 minutes (no draw sat out a
+release window; 9.1's took 54), 0 wrong answers in 780 kernels, the kernel under test fast in 12 of
+12. Raw readings, command and machine record: `results/VARKA-383-long-lane-history.txt`.
+
+| prewarm on, long lane, released of warmed | 1 to 3 | 4 to 15 | 16 to 63 |
+|---|---|---|---|
+| 512 bits, flag set | 0 of 12 | 0 of 36 | **0 of 144** |
+| 512 bits, 9.1 without the flag | 0 of 12 | 5 of 36 | 42 of 144 |
+| 256 bits (`MaxVectorSize=32`), flag set | 0 of 12 | 0 of 36 | **0 of 144** |
+| 256 bits, 9.1 without the flag | 1 of 12 | 6 of 36 | 38 of 144 |
+
+The int lane, which 9.1 read at 17 of 144 (512 bits) and 43 of 144 (256 bits) past position 15,
+released 0 of 144 at each width with the flag; position 0 released 0 of 6 at each width.
+
+**Verdict by the registered reading: 0 of 144 at each width is under 3, so profile-based loop
+predication explains the long-lane releases at both widths.** The 3-to-7 arm (six more forks) was
+not entered. The flag removes the int lane's 256-bit releases too, so the same flag clears the
+43 of 144 that 9.1 flagged for half (b) (no trap census was taken for the int lane, so the trap
+itself is not shown there). The readings are one night's, on the laptop; the 256-bit
+arm is the 512-bit host with `MaxVectorSize=32`, not an AVX2 runner, so whether a runner at
+`UseAVX=2` releases for the same reason is not read. A same-night run without the flag was not
+made: 9.1's load (2.82 falling to 0.36) and this one's (1.28) are the same idle condition, so there
+was nothing to separate. What this run does not say: the flag's cost on the steady-state speed of
+the other kernels (257's item 61 measured one; here every kernel was fast, 1.2 to 1.4 ns a row at
+512 bits, 1.9 to 2.5 at 256 bits, but that is the kernel under test, not a pairs' benchmark), and
+why the profile at the backedge never settles for the 42 released draws.
+
+Predictions this speaks to: 9.3's item (1), the 144-draw reading with the flag, is answered at
+both widths. 9.1's prediction 2 (the long lane reproduces with the prewarm on) still holds for the
+default JVM; this reading says the reproduction is the loop predicate's. The flag is a diagnosis,
+not the fix: a product cannot depend on a user setting a diagnostic flag.
+
+**What the row asks next.** (1) A source-level loop shape that keeps C2 from predicating the main
+vector loop on a profile it then violates, tested on the 144-draw reading without the flag (the
+candidates of 9.3: a counted `for` over a constant lane count, or `loopBound` taken once into a
+final); (2) the flag's cost on the pairs, read beside it only if a shape is not found; (3) R1 and R2
+on runners stay gated on the owner's go-ahead, and now also need only the unflagged long lane and
+the shape's effect. Arm A (conversions `L2D`, `D2L`) stays unbuilt. The row is not Done.

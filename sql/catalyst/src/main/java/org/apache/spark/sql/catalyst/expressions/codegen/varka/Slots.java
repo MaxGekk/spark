@@ -44,10 +44,15 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Add
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.And;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitCount;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitOp;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolColumn;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolCompare;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolNullSafeEq;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoundedDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondConst;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondIf;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DateDiff;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfMonth;
@@ -507,18 +512,20 @@ final class Slots {
     if (elide && (mode == BodyMode.LOOP || mode == BodyMode.EPILOGUE)) {
       valueColumns = 0L;
       for (Map.Entry<VarkaVectorIR, Integer> e : bodyUses.entrySet()) {
-        if (e.getKey() instanceof ColumnRef c && e.getValue() > 0) {
-          valueColumns |= 1L << c.ordinal();
+        int ordinal = VarkaVectorIR.inputOrdinal(e.getKey());
+        if (ordinal >= 0 && e.getValue() > 0) {
+          valueColumns |= 1L << ordinal;
         }
       }
     }
     long treeColumns = 0L;
     long bodyColumns = 0L;
     for (VarkaVectorIR node : tree) {
-      if (node instanceof ColumnRef c) {
-        treeColumns |= 1L << c.ordinal();
+      int ordinal = VarkaVectorIR.inputOrdinal(node);
+      if (ordinal >= 0) {
+        treeColumns |= 1L << ordinal;
         if (body.contains(node)) {
-          bodyColumns |= 1L << c.ordinal();
+          bodyColumns |= 1L << ordinal;
         }
       }
     }
@@ -1154,7 +1161,7 @@ final class Slots {
       // The one edge of this node the emission does not follow, or null.
       VarkaVectorIR skipped = null;
       if (node instanceof IsNotNull isNotNull
-          && (!(isNotNull.child() instanceof Cond) || dense)) {
+          && (!isNotNull.overCondition() || dense)) {
         // Over a column, widened or not, it reads the word, and over a condition in a dense body
         // it is constant true; only a masked body lowers a condition child, to read its masks.
         skipped = isNotNull.child();
@@ -1199,6 +1206,8 @@ final class Slots {
       return true;
     }
     for (Map.Entry<VarkaVectorIR, Integer> e : bodyUses.entrySet()) {
+      // Only a ColumnRef: it is loaded under the epilogue's mask. A BoolColumn reads its data bits
+      // as a word by the lane count, as a validity word is read, and never touches the mask.
       if (e.getKey() instanceof ColumnRef c && e.getValue() > 0
           && analysis.laneOf(c) == analysis.lane) {
         return true;
@@ -1243,7 +1252,7 @@ final class Slots {
   /** Whether {@code nodes} hold an {@link IsNotNull} over a condition. */
   private static boolean holdsNullTestOverCond(Set<VarkaVectorIR> nodes) {
     for (VarkaVectorIR node : nodes) {
-      if (node instanceof IsNotNull n && n.child() instanceof Cond) {
+      if (node instanceof IsNotNull n && n.overCondition()) {
         return true;
       }
     }
@@ -1270,7 +1279,7 @@ final class Slots {
       if (!nodes.add(n)) {
         continue;
       }
-      if (dense && n instanceof IsNotNull isNotNull && isNotNull.child() instanceof Cond) {
+      if (dense && n instanceof IsNotNull isNotNull && isNotNull.overCondition()) {
         continue;
       }
       VarkaVectorIR loaded = loadedPrefixDate(analysis, group, n);
@@ -1359,10 +1368,16 @@ final class Slots {
           demand(analysis.wordOwner.get(c.left()));
           demand(analysis.wordOwner.get(c.right()));
         }
+        // The leaf reads its column's validity word beside the data word.
+        case BoolColumn c -> demand(analysis.wordOwner.get(c));
+        case CondConst c -> { }
+        case BoolCompare c -> { }
+        case CondIf c -> { }
+        case BoolNullSafeEq c -> { }
         // A condition child has no word: it computes its masks from its own operands' words,
         // which its own arm demands.
         case IsNotNull c -> {
-          if (!(c.child() instanceof Cond)) {
+          if (!c.overCondition()) {
             demand(analysis.wordOwner.get(c.child()));
           }
         }
@@ -1500,6 +1515,11 @@ final class Slots {
         case BitCount x -> { }
         case Compare x -> { }
         case NullSafeEqual x -> { }
+        case BoolColumn x -> { }
+        case CondConst x -> { }
+        case BoolCompare x -> { }
+        case CondIf x -> { }
+        case BoolNullSafeEq x -> { }
         case And x -> { }
         case Or x -> { }
         case Not x -> { }
@@ -1583,7 +1603,7 @@ final class Slots {
       // condition under an IsNotNull. And under elideUnreadLocals a date whose materialized
       // prefix the group loads and does not visit is never emitted, so a tail under it reads no
       // month and no vector of any prefix here.
-      if (dense && node instanceof IsNotNull isNotNull && isNotNull.child() instanceof Cond) {
+      if (dense && node instanceof IsNotNull isNotNull && isNotNull.overCondition()) {
         continue;
       }
       VarkaVectorIR skipped = elide ? loadedPrefixDate(analysis, s.group, node) : null;

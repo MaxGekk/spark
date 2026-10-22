@@ -1090,3 +1090,37 @@ table prints each row's width-audit verdict ("not audited" until the audit has t
 leaves the docs table stale, which only the matrix's run of `VarkaCoverageSuite` reports. The
 golden corpus (`VARKA_GOLDEN_REGEN`) moves only if it holds a statement of the new form; this
 row's did not.
+
+## A BOOLEAN column is a condition leaf that reads two bitmaps, and "is it a column?" has four answers
+
+`BoolColumn` (VARKA-331) is the first `Cond` that is also an input. Arrow's `BitVector` keeps its
+data in the layout of a validity bitmap, so the masked leaf is `kT = d & v`, `kF = ~d & v` with
+`d = validityBitsAt<N>(dataSegment, row)` and `v` the column's own validity word: no mask
+conversion, no new helper, and the data bit under a null is cleared by the `& v` (Spark's writer
+clears only the validity bit). The dense leaf is `VectorMask.fromLong(species, d)`. What the code
+had to learn, because every one of these asked "is this node a column?" and meant something else:
+
+* **A leaf that is a `Cond` has no `wordRef`** (the planner skips conditions), so the walk reads
+  `s.word[ordinal]` directly, and `Analysis.planWordAlgebra` must not skip it: `wordOwner` gives
+  the leaf `Input(ordinal)` so that liveness (`demand`) keeps the column's word alive.
+* **Four places count a node as "reading a column"**: `Analysis.analyze` (`referencedColumns`,
+  `inputLanes`), `Slots` `treeColumns`/`bodyColumns` (skipped columns) and `valueColumns` (the data
+  segment under `elideUnreadLocals`: a column read only for its validity maps no data segment),
+  and `bodyUses` (which does not follow the edge of a bare-column `IsNotNull`). Missing the second
+  leaves the data segment `-1` and fails with a null local at run time, not at build time.
+* **`b IS [NOT] NULL` is the column form**, not row 334's test over a predicate:
+  `IsNotNull.overCondition()` is `child instanceof Cond && !(child instanceof BoolColumn)`, used at
+  every site that special-cases a test over a condition (analysis, the walk, `Slots` five times,
+  the cost kind), so a bare column keeps its dense body.
+* **`BitVector.getTypeWidth()` is 0** (its constructor passes 0 to `BaseFixedWidthVector`), so any
+  site that sizes an input by it sizes a boolean's data at nothing: `inputWidths` (the warm-up
+  gate's copy of a batch) and the reproduction capture. `VarkaKernelRunner.bytesPerRow` answers 1
+  for a bit vector, an over-count that keeps every bit the kernel reads inside the copy.
+* **The lane of a leaf with no value is its siblings'.** The compiler builds `BoolColumn` and
+  `CondConst` on the int lane and `meetOnOneLane`/`onLongLane` lift them with the rest of a tree;
+  no leaf looks at its sibling. The int harness (`checkMatrix`) writes int data, so
+  `VarkaEmitterBoolSuite` builds its own data and validity bitmaps; dropping the `& v` from the
+  masked leaf fails four of its five tests (a mutation check worth repeating for a new leaf).
+* **A weight test that charges one lane load per input** counts a boolean leaf as -1: it loads no
+  vector. The register subtracts boolean inputs from the loads; the leaf weighs 0 and the
+  comparison, choice and `<=>` nodes weigh the connectives' floor 1.

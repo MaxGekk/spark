@@ -868,7 +868,7 @@ final class VarkaBodyEmitter {
    * This lane group's validity word for the input segment and row already on the stack. Leaves
    * one long. The specialised form takes no lane count, so it needs no {@code iload} of one.
    */
-  private static void emitValidityRead(CodeBuilder cb, Analysis analysis, Slots s) {
+  static void emitValidityRead(CodeBuilder cb, Analysis analysis, Slots s) {
     if (widthSpecialised(analysis, s)) {
       cb.invokestatic(SUPPORT, "validityBitsAt" + analysis.lanes, VALIDITY_BITS_AT_WIDTH);
     } else {
@@ -1444,7 +1444,10 @@ final class VarkaBodyEmitter {
    * int column of a kernel driven at the long lane four bytes a row, which is all its buffer has.
    */
   private static void loadInputSegment(CodeBuilder cb, Analysis analysis, Slots s, int i) {
-    if (analysis.inputLane(i) != analysis.lane) {
+    if ((analysis.boolInputs >>> i & 1L) != 0) {
+      // A boolean column's data is a bitmap, the size of its validity bitmap, whatever the lane.
+      loadSegment(cb, P_SRC_DATA, i, s.validityBytes, s.srcSeg[i]);
+    } else if (analysis.inputLane(i) != analysis.lane) {
       loadNarrowedSegment(cb, analysis, P_SRC_DATA, i, s.srcSeg[i]);
     } else {
       loadSegment(cb, P_SRC_DATA, i, s.dataBytes, s.srcSeg[i]);

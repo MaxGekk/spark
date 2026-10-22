@@ -57,6 +57,29 @@ class VarkaMemorySanitizerEndToEndSuite
     }
   }
 
+  test("a boolean column's kernel maps its one-bit-a-row data inside the buffer") {
+    withSanitizer {
+      // A bit vector's data buffer holds (rows + 7) / 8 bytes, a thirty-second of what a lane's
+      // width a row would map; 100 rows leave a partial last byte and a partial last group.
+      val rows = (0 until 100).map { i =>
+        (if (i % 7 == 3) null: java.lang.Boolean else Boolean.box(i % 2 == 0),
+          if (i % 5 == 4) null: java.lang.Boolean else Boolean.box(i % 3 == 0), i)
+      }
+      for (session <- Seq(spark, varkaSpark)) {
+        session.createDataFrame(rows).toDF("b", "b2", "i").createOrReplaceTempView("varka_bools")
+        session.catalog.cacheTable("varka_bools")
+      }
+      val query = "SELECT i FROM varka_bools WHERE b AND (NOT b2 OR i > 50) ORDER BY i"
+      val expected = spark.sql(query)
+      val before = VarkaMemorySanitizer.checked()
+      val actual = varkaSpark.sql(query)
+      assertFused(actual.queryExecution.executedPlan)
+      checkAnswer(actual, expected)
+      assertKernelsRan(actual.queryExecution.executedPlan)
+      assert(VarkaMemorySanitizer.checked() > before, "the kernel mapped nothing in a window")
+    }
+  }
+
   test("a mapping one byte past a registered buffer fails through the engine's ofAddress") {
     withSanitizer {
       val buf = ArrowUtils.rootAllocator.buffer(64L)

@@ -382,3 +382,153 @@ the byte-width sites (2.1); a boolean column's lane beside a narrow sibling is n
 the sealed-switch sites were incomplete (5); the species-guard rule was missing (3.2); the common
 regeneration step was missing (9). Nothing is left unconfirmed except the line numbers, which are
 approximate and to be re-read at implementation.
+
+## 10. Outcome
+
+*21 October 2026. Done in part.* A BOOLEAN column is a condition leaf: filters, `NOT`, `AND`/`OR`,
+the five comparisons, `<=>`, `IF`/`CASE WHEN`/`coalesce` over booleans, `IS [NOT] NULL` on a bare
+column and `IS NULL` over a predicate all fuse, in the dense and the masked body, on the int and
+the long lane. `dev/varka_emit.sh "if(b, d, d2)" --columns b:boolean,d:date,d2:date` answered
+`unsupported predicate` before and fuses now (`(if bool:0 col:1 col:2)`, masked loop 482 bytes).
+**Not built: `CondValue` (2.6) and its hand-built tests.** It is a value node with a validity word
+of its own (the walk's `Own` words, `ownerOf`, `pureOf`, the blend) and so a second change of the
+same size as the leaf; nothing in this row consumes it (335b and 332 add the compiler arms), so it
+is a row of its own, proposed in the pull request, and the rest of the row stands without it.
+
+**Step 1 (admission).** (1) `BitVector.getTypeWidth()` is 0: its constructor passes 0 to
+`BaseFixedWidthVector` (`javap` on arrow-vector). The sites that size by it are
+`VarkaEvaluatorBase.inputWidths` (the warm-up gate's copy of a batch) and
+`VarkaKernelRunner.capture`; there is no use in the sanitizer, which registers each buffer's own
+capacity. `VarkaKernelRunner.bytesPerRow` answers 1 for a bit vector, and `capture` copies the
+bitmap's `(len + 7) / 8` bytes. *The warm-up must not use that 1: see "Review of 21 October" below.* (2) `Slots` shares `ColumnRef`'s locals: `srcSeg`, `srcValSeg` and
+`word` are per input ordinal, so the leaf adds none; the data word itself goes through the existing
+`cmpTmp`. What is not shared is the segment's size.
+
+**What differed from the plan.**
+
+1. **The data segment is mapped at `(len + 7) / 8` bytes, not at a lane's width a row.** Every
+   input's data was mapped at `rows * stride`; for a bit vector that is 32 times its buffer, which
+   `VarkaSegments.map` refuses under the memory sanitizer and which leaves Panama's bounds check
+   guarding nothing. Found by the review, not by the plan; `Analysis.boolInputs` marks the inputs and
+   `loadInputSegment` maps them at `validityBytes`. A new end-to-end test over a cached 100-row
+   table runs a boolean filter with the sanitizer on.
+2. **Four places count a node as "reading a column" and each needed the leaf** (analysis,
+   `treeColumns`/`bodyColumns`, `valueColumns`, and `wordOwner` for the liveness pass), plus
+   `budgetWalk` (the review). `IsNotNull.overCondition()` replaces the seven
+   `child() instanceof Cond` tests, so `b IS NOT NULL` is the column form and `(b AND p) IS NOT
+   NULL` is 334's.
+3. **No narrow lanes exist yet in the IR** (`LaneType` is `INT` and `LONG`; 329 is unmerged), so
+   "a leaf takes its sibling's narrow lane" is vacuous here; `onLongLane` is the only lift, and
+   the compiler lifts leaves with the rest of a tree (`meetOnOneLane`, `meetAll`) instead of
+   looking at a sibling.
+4. **`NULL` constants.** `CondConst(NULL)` arises from a `CASE WHEN`
+   without `ELSE` and is in the coverage table that way; `b AND NULL` is not a row, because the
+   unoptimized parse leaves a cast the compiler declines (the optimizer folds it away).
+5. **The golden corpus is unchanged** (`VARKA_GOLDEN_REGEN` wrote nothing: the corpus is the date,
+   time and interval golden files and none uses a boolean column as a condition).
+6. **The differential fixtures carry the boolean columns as derived columns** of the view
+   (`CASE WHEN rid % 4 = 3 THEN NULL ELSE rid % 2 = 0 END`, and `b2` likewise), so no VALUES row
+   changed and the other rows' partitions are untouched; the two columns hold nulls in every
+   fixture (the all-null fixture's rows are not all null in `b`, `b2`, which the plan's test did not
+   ask for).
+7. **The harness had no boolean input.** `checkMatrix` writes int data, so
+   `VarkaEmitterBoolSuite` builds its own exact-size bitmaps with ones above the length. Dropping
+   the `& v` from the masked leaf fails four of its five tests.
+8. **Suites that demand every node be drawn, priced or listed** (336's list): the IR fuzz grammar's
+   two reach tests, `VarkaWithChildrenSuite` (with a direct rebuild test), `awaitingRefit`, the
+   lane-type lists and the weight register. The register subtracts boolean inputs from its loads;
+   the leaf and the constant weigh 0, the comparison, choice and `<=>` nodes the floor 1.
+9. **Not built:** the larger seeded tree sets of 3.2 (six leaves, nightly), the batch-length edges
+   of 3.3 under the sanitizer at the emitter level (the end-to-end test covers a partial last byte
+   at one length), and an emitter-level long-lane test of a boolean beside a bigint comparison (the
+   SQL row `b AND l < l2` covers it through the evaluator).
+
+**Tests.** `VarkaEmitterBoolSuite` (own JVM, 5 tests, about 24 s): the reference held to Spark's
+`eval` over every triple of operand states for `AND`, `OR`, `NOT`, five orderings, `<=>`, `IF` and
+`coalesce`; every `AND`/`OR`/`NOT` tree over three leaves of up to four operators, one per truth
+table; the new nodes, constants and null tests over all `4^k` states at 8 lengths and 16 rotations,
+at 4, 8 and the default lanes, in the dense and the masked body.
+
+**Found by the lanesOverride=4 matrix, not by the plan.** (a) `If`, `CaseWhen` and `Coalesce` were
+claimed by two families once a boolean-typed one was a condition; the choice family now leaves a
+boolean-typed node to the predicate family, so the claims stay disjoint
+(`VarkaFamilyChainSuite`). (b) `VectorMask.xor`, which the dense boolean `=` calls, had no warm-up
+calls; the template warm-up's mask block calls it. (c) The composition fuzzer and its Spark oracle
+draw int columns, so they leave the rows that read a boolean column (and the two boolean columns)
+out; those rows are held by the differential suite and `VarkaEmitterBoolSuite`.
+
+**Review of 21 October 2026 (an independent `/code-review high` of the branch), and what it changed.**
+
+1. **The warm-up read a boolean input a byte a row (memory safety).** The gate sized its copy of a
+   batch by `bytesPerRow`, which answers 1 for a bit vector, so `VarkaKernelWarmup.Job` mapped
+   `rows * 1` bytes out of a data buffer of `(rows + 7) / 8` and tiled the bitmap by bytes where it
+   repeats at a bit offset. A boolean input is now `VarkaKernelWarmup.BIT_WIDTH` (0, a
+   `BitVector`'s own type width): its copy is tiled with `tileValidity`, bit by bit, its slices
+   start at `start / 8` bytes, and the null-row fill is skipped (a bit under a null row is a
+   boolean like any other). Nothing in the repository reached the copy under the sanitizer, since
+   the copy ran outside any window; `VarkaWarmupGate.startWarmup` now opens one around the fill
+   and the copy, so that the sanitizer sees it. **Proof:** `VarkaWarmupEndToEndSuite`'s "a boolean
+   column's warm-up copies its bitmap, not a byte a row, inside the sanitizer" (a 40000-row cached
+   table of four 10000-row batches, warm-up on, `-Dvarka.sanitizeMemory=true`) fails on the old copy
+   with `a mapping of 10000 bytes ... leaves every registered buffer; the nearest is input data 0
+   ... for 1250 bytes` and passes on the new one (the first and second run give Spark's rows, the
+   second on the compiled kernel). The reproduction's replay (`VarkaReplay`) was read and is
+   correct as it stands: it allocates `max(dataCapacity, rows * width)` and copies the `(rows + 7)
+   / 8` bytes `capture` recorded, over-allocating a bitmap eight times and registering the
+   buffer's real capacity; `bytesOf` over-states a bitmap eight times, which only makes the batch
+   cap conservative. The two javadocs now say so. `bytesPerRow` keeps its 1 for the reproduction
+   alone.
+2. **`IF(b, l, l2)` and `CASE WHEN b THEN l ELSE l2 END` were declined** because `ifElse` and
+   `caseWhen` only asked `sameLane`, and a boolean leaf has no sibling to take a lane from. They now
+   lift the condition with `onLongLane` when both values are on the long lane
+   (`onValueLane`), which also fuses a long-lane choice under an int comparison
+   (`IF(i < 5, l, l2)`); a long condition over int values is still declined, as it has no int form.
+   `coalesce` over values was not affected: its tests are `IsNotNull` over a column, on the
+   column's own lane. Tests: `VarkaExpressionCompilerSuite` ("a boolean column chooses between long
+   values") and three coverage rows, `IF(b, d, d2)`, `IF(b, l, l2)` and `CASE WHEN b THEN l ELSE
+   l2 END`, which the differential suite runs against Spark.
+   **Found by the review of these fixes: a boolean column at two lanes in one kernel.** With the lift
+   above in place, `WHERE IF(b, l, l2) > 0 AND IF(b, d, d2) > DATE'2020-01-01'` holds `b` as a
+   long-lane leaf and as an int-lane one, and `Analysis` refused it with "column 0 is read at both
+   the LONG and the INT lane" (an internal error, not a decline). A boolean column's data is a
+   bitmap of the same size at either lane, so the lane that check guards (it sizes a value
+   column's data segment) does not apply: `registerInput` takes no lane for a `BoolColumn`.
+   `VarkaCoverageDifferentialSuite` has the query ("a boolean column read at the int and the long
+   lane in one query answers Spark's").
+3. `meetOnOneLane` is a call of `meetAll(List.of(a, b))`.
+4. `boolChoice` no longer takes a `coalesce` flag: `boolChoice` (`IF`, `CASE WHEN`) and
+   `boolCoalesce` each compile their operands and meet their lanes, and `foldChoice` is the one
+   right fold over (test, value) pairs and an ELSE; `coalesce` supplies `IsNotNull(value)` as each
+   test.
+5. `Analysis.registerInput` is shared by the `ColumnRef` and `BoolColumn` arms, and
+   `VarkaVectorIR.inputOrdinal(node)` (the ordinal of an input leaf, else -1) replaces the two
+   hand-written tests in `Slots` (`valueColumns`, the tree and body column sets). **Disagreed with
+   one part:** `epilogueReadsMask` stays `ColumnRef`-only, because it asks which readers use the
+   epilogue's bounds mask, and a `BoolColumn` reads its data word by the lane count
+   (`loadDataBits`, as a validity word is read) and never touches the mask; adding it would build a
+   mask nothing reads. A comment there says so.
+6. `VarkaVectorWalk` has `emitNot` (of the stack and of a local) and `emitOr` beside `emitAnd` and
+   `emitKnown`; the boolean comparison, `<=>`, the leaf, `IS [NOT] NULL` over a condition and the
+   choice use them. The emitted instructions are the same sequences.
+7. **Whether the mask warm-up should hold `xor` only for a boolean kernel.** No. The template
+   warm-up runs once per JVM, not per kernel (`VarkaVectorTemplateWarmup`'s class comment), so the
+   `.xor(tail)` added to the shared mask expression costs one more mask call per lane in that one
+   pass, inside the pass's existing pace budget. A boolean-only block would need a
+   second, conditional entry (the first boolean kernel would trigger it after the JVM's pass has
+   ended, a cold start for exactly the method it exists to warm) and a flag on every kernel to
+   decide it. Kept as it is.
+8. **A constructor with no default lane for `BoolColumn` and `CondConst`.** Not done:
+   `ColumnRef` and `LiteralSlot` have the same one-argument int form, the compiler builds a
+   `BoolColumn` at one site and the lift sets the lane, and the many hand-built test trees would
+   all change for a rule the lane check (`Analysis`, per node) already enforces at the first
+   emission. Recorded here.
+9. **`CondValue`, the condition-to-value bridge, is row 460** in `PLAN.md`, with its dependants:
+   335b's `bit_count(bool)`, 332's boolean casts and 27's boolean outputs, and the design of 2.6.
+10. **Review follow-ups.** `inputOrdinal` names every non-input node instead of a `default`;
+    `VarkaEmitCost.kindOf` gives `BoolColumn`, `CondConst`, `BoolCompare`, `CondIf` and
+    `BoolNullSafeEq` the lane (and, for the comparison, op) suffix `Compare` and `ColumnRef` carry,
+    still unpriced and so still on the awaiting-refit list; the warm-up's input width is
+    `VarkaKernelRunner.warmupWidth`, beside `bytesPerRow`; the boolean-row filter is one
+    `VarkaCoverageRows.readsBoolean`. The emitter suite sweeps long-lane boolean leaves; a column
+    at both lanes in one kernel needs a value output the suite's selection harness cannot read, and
+    stays with the differential suite's mixed-lane test, which now also asserts a kernel served.

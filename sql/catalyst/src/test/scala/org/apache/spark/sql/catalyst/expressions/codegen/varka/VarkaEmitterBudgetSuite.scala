@@ -330,6 +330,13 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       (new BitCount(lc), 1, 0, VarkaMatrix.base),
       (lt, 2, 0, VarkaMatrix.base),
       (new NullSafeEqual(c, c1), 2, 0, VarkaMatrix.base),
+      (new BoolColumn(0), 1, 0, VarkaMatrix.base),
+      (new And(new BoolColumn(0), new CondConst(Truth.NULL)), 1, 0, VarkaMatrix.base),
+      (new BoolCompare(CompareOp.LE, new BoolColumn(0), new BoolColumn(1)), 2, 0,
+        VarkaMatrix.base),
+      (new CondIf(new BoolColumn(0), new BoolColumn(1), new BoolColumn(2)), 3, 0,
+        VarkaMatrix.base),
+      (new BoolNullSafeEq(new BoolColumn(0), new BoolColumn(1)), 2, 0, VarkaMatrix.base),
       (new And(lt, new Compare(CompareOp.GT, c, l)), 2, 1, VarkaMatrix.base),
       (new Or(lt, new Compare(CompareOp.GT, c, l)), 2, 1, VarkaMatrix.base),
       (new Not(lt), 2, 0, VarkaMatrix.base),
@@ -366,12 +373,13 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     def elidesMonthStep(n: VarkaVectorIR): Boolean =
       VarkaEmitBudget.isChrono(n) && !VarkaChronoLowering.tailReadsMarchMonth(n)
     def isConnective(n: VarkaVectorIR): Boolean = n match {
-      case _: And | _: Or | _: Not | _: IsNotNull => true
+      case _: And | _: Or | _: Not | _: IsNotNull | _: BoolCompare | _: CondIf |
+          _: BoolNullSafeEq => true
       case _ => false
     }
     // What a node is expected to emit of a shape's lane calls.
     def emits(n: VarkaVectorIR): Int = n match {
-      case _: ColumnRef | _: LiteralSlot => 0
+      case _: ColumnRef | _: LiteralSlot | _: BoolColumn | _: CondConst => 0
       case _ if isConnective(n) => 0
       case _ if elidesMonthStep(n) => VarkaEmitBudget.weightOf(n) - monthStep
       case _ => VarkaEmitBudget.weightOf(n)
@@ -385,7 +393,9 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       // A condition's store is a mask call, and IS NOT NULL reads its column's validity, never
       // its values, so neither pays a lane call there.
       val store = if (root.isInstanceOf[Cond]) 0 else 1
-      val loads = if (root.isInstanceOf[IsNotNull]) 0 else inputs
+      // A boolean column reads its data word as bits, not as a vector load.
+      val loads = if (root.isInstanceOf[IsNotNull]) 0
+        else inputs - all.collect { case b: BoolColumn => b.ordinal }.size
       val overhead = loads + lits + store
       val expected = all.toSeq.map(emits).sum
       val emitted = laneCalls(emitMulti(Seq(root), inputs, lits, options)._2) - overhead
