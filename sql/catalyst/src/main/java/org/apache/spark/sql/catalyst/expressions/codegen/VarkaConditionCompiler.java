@@ -152,11 +152,20 @@ final class VarkaConditionCompiler {
     if (elseNode.isEmpty()) {
       return Optional.empty();
     }
-    Cond lifted = onValueLane(cond.get(), thenNode.get(), elseNode.get());
-    if (!sameLane(expr, sink, lifted, thenNode.get(), elseNode.get())) {
+    Cond lifted = cond.get();
+    VarkaVectorIR then = thenNode.get();
+    VarkaVectorIR otherwise = elseNode.get();
+    if (anyLane(LaneType.LONG, lifted, then, otherwise)) {
+      lifted = onValueLane(lifted, then, otherwise);
+    } else if (anyLane(LaneType.INT, lifted, then, otherwise)) {
+      lifted = onIntLane(lifted);
+      then = onIntValue(then);
+      otherwise = onIntValue(otherwise);
+    }
+    if (!sameLane(expr, sink, lifted, then, otherwise)) {
       return Optional.empty();
     }
-    return Optional.of(new IfElse(lifted, thenNode.get(), elseNode.get()));
+    return Optional.of(storedNarrow(new IfElse(lifted, then, otherwise), expr.dataType()));
   }
 
   /**
@@ -191,20 +200,32 @@ final class VarkaConditionCompiler {
       nodes.add(values.get(i).get());
     }
     nodes.add(compiledElse.get());
+    // One lane for the whole fold, decided once from every condition and value: the branches are
+    // nested choices, so a branch lifted on its own would meet an unlifted sibling.
+    boolean longLane = anyLane(LaneType.LONG, nodes.toArray(new VarkaVectorIR[0]));
+    boolean intLane = !longLane && anyLane(LaneType.INT, nodes.toArray(new VarkaVectorIR[0]));
     VarkaVectorIR[] lifted = new VarkaVectorIR[nodes.size()];
     for (int i = 0; i < branches.size(); i++) {
-      lifted[2 * i] = onValueLane(conds.get(i).get(), values.get(i).get(), compiledElse.get());
-      lifted[2 * i + 1] = values.get(i).get();
+      Cond cond = conds.get(i).get();
+      VarkaVectorIR value = values.get(i).get();
+      if (longLane) {
+        cond = onValueLane(cond, value, compiledElse.get());
+      } else if (intLane) {
+        cond = onIntLane(cond);
+        value = onIntValue(value);
+      }
+      lifted[2 * i] = cond;
+      lifted[2 * i + 1] = value;
     }
-    lifted[nodes.size() - 1] = compiledElse.get();
+    lifted[nodes.size() - 1] = intLane ? onIntValue(compiledElse.get()) : compiledElse.get();
     if (!sameLane(expr, sink, lifted)) {
       return Optional.empty();
     }
-    VarkaVectorIR rest = compiledElse.get();
+    VarkaVectorIR rest = lifted[nodes.size() - 1];
     for (int i = branches.size() - 1; i >= 0; i--) {
-      rest = new IfElse((Cond) lifted[2 * i], values.get(i).get(), rest);
+      rest = new IfElse((Cond) lifted[2 * i], lifted[2 * i + 1], rest);
     }
-    return Optional.of(rest);
+    return Optional.of(storedNarrow(rest, expr.dataType()));
   }
 
   /**
@@ -221,6 +242,83 @@ final class VarkaConditionCompiler {
       return onLongLane(cond).orElse(cond);
     }
     return cond;
+  }
+
+  /** Whether any of {@code nodes} is on {@code lane}. */
+  private static boolean anyLane(LaneType lane, VarkaVectorIR... nodes) {
+    for (VarkaVectorIR node : nodes) {
+      if (node.laneType() == lane) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * {@code node} on the int lane: a narrow value widened to it, any other value as it is. The
+   * widening is exact in every mode and the emitter's load already widens a narrow column, so
+   * the conversion names the lane the value is emitted at and costs no instruction; it is what
+   * makes a narrow branch of an int-lane choice - `CASE WHEN rid < 0 THEN y1 ELSE y2 END` - an
+   * int-lane value stored narrow, the widened arm of VARKA-329.
+   */
+  private static VarkaVectorIR onIntValue(VarkaVectorIR node) {
+    return node.laneType().isNarrow()
+        ? new VarkaVectorIR.WidenLane(node, LaneType.INT) : node;
+  }
+
+  /**
+   * {@code node} as the value of a narrow-typed expression is stored: computed on the int lane
+   * and narrowed once at its store, which is a {@link VarkaVectorIR.NarrowLane} to the output's
+   * lane that nothing else reads. A choice whose guard is int-typed - `CASE WHEN rid < 0 THEN y1
+   * ELSE y2 END` - has its narrow branches widened to choose on the int lane ({@link
+   * #onIntValue}), and this is what makes the root store one byte or two a row instead of a
+   * whole int lane; a node already on a narrow lane, or one whose type is not narrow, is
+   * returned as it is (VARKA-329).
+   */
+  private static VarkaVectorIR storedNarrow(VarkaVectorIR node, DataType type) {
+    Optional<LaneType> narrow = VarkaNodeCompiler.laneOf(type).filter(LaneType::isNarrow);
+    if (narrow.isEmpty() || node.laneType() != LaneType.INT) {
+      return node;
+    }
+    return new VarkaVectorIR.NarrowLane(node, narrow.get());
+  }
+
+  /**
+   * {@code cond} on the int lane, which every narrow condition has: its value operands widen
+   * ({@link #onIntValue}) and its structure is unchanged, since a sign extension keeps every
+   * value and its order and a validity word is the column's whichever lane reads it. A
+   * comparison and a null-safe equality widen their two operands, a range set its child, and a
+   * test or a connective its condition. This is how a narrow predicate joins an int one in one
+   * kernel - the WHERE of `rid < 0 AND (y1 < y2)`, the guard of `CASE WHEN rid < 0 THEN y1 ELSE
+   * y2 END` - instead of the long lift that would give the kernel a long lane a narrow value has
+   * no lowering for (VARKA-329). The conditions that are always on the int or the long lane
+   * (the boolean leaves, a constant and a choice between them) are returned as they are; a
+   * narrow one of those is unbuildable, and one returned unchanged fails the lane check rather
+   * than being emitted at the wrong lane.
+   */
+  static Cond onIntLane(Cond cond) {
+    if (!cond.laneType().isNarrow()) {
+      return cond;
+    }
+    return switch (cond) {
+      case Compare c -> new Compare(c.op(), onIntValue(c.left()), onIntValue(c.right()));
+      case VarkaVectorIR.NullSafeEqual c ->
+          new VarkaVectorIR.NullSafeEqual(onIntValue(c.left()), onIntValue(c.right()));
+      case VarkaVectorIR.IsNotNull n -> n.child() instanceof Cond c
+          ? new VarkaVectorIR.IsNotNull(onIntLane(c))
+          : new VarkaVectorIR.IsNotNull(onIntValue(n.child()));
+      case InRanges r -> new InRanges(onIntValue(r.child()), r.bounds());
+      case VarkaVectorIR.And a ->
+          new VarkaVectorIR.And(onIntLane(a.left()), onIntLane(a.right()));
+      case VarkaVectorIR.Or o ->
+          new VarkaVectorIR.Or(onIntLane(o.left()), onIntLane(o.right()));
+      case VarkaVectorIR.Not n -> new VarkaVectorIR.Not(onIntLane(n.child()));
+      case VarkaVectorIR.BoolColumn b -> b;
+      case VarkaVectorIR.CondConst c -> c;
+      case VarkaVectorIR.BoolCompare c -> c;
+      case VarkaVectorIR.BoolNullSafeEq c -> c;
+      case VarkaVectorIR.CondIf c -> c;
+    };
   }
 
   /**
@@ -257,6 +355,12 @@ final class VarkaConditionCompiler {
    */
   private static Optional<List<Cond>> meetAll(Expression whole, DeclineSink sink, List<Cond> in) {
     if (in.stream().map(VarkaVectorIR::laneType).distinct().count() > 1) {
+      // A narrow condition beside an int one - `rid < 0 AND (y1 < y2)`, or two narrow types -
+      // joins it on the int lane (VARKA-329): the long lift below would give the kernel a long
+      // lane a narrow value has no lowering for.
+      if (in.stream().noneMatch(c -> c.laneType() == LaneType.LONG)) {
+        return Optional.of(in.stream().map(VarkaConditionCompiler::onIntLane).toList());
+      }
       List<Cond> lifted = new ArrayList<>();
       for (Cond c : in) {
         Optional<Cond> l = onLongLane(c);

@@ -403,6 +403,14 @@ final class VarkaNodeCompiler {
       case Cast c when DataTypes.LongType.equals(c.dataType()) && isInt(c.child()) ->
           () -> intOperand(c.child(), inputs, literals, sink)
               .map(x -> (VarkaVectorIR) new WidenLane(x));
+      // A narrow value promoted to the int lane, which is what Catalyst's coercion inserts where
+      // a TINYINT or SMALLINT meets an int - `greatest(y1, y2) < i` arrives as
+      // `CAST(greatest(y1, y2) AS INT) < i`, and `y1 + i` as an int add of the cast (VARKA-329).
+      // The widening is a sign extension, exact in every mode, and the emitter's load already
+      // reads the narrow column into the int species, so the conversion costs no instruction.
+      case Cast c when isInt(c) && isNarrow(c.child()) ->
+          () -> compileNode(c.child(), inputs, literals, sink)
+              .map(x -> (VarkaVectorIR) new WidenLane(x, LaneType.INT));
       case UnaryMinus n when isInt(n) ->
           // Spark has no try_negative, so the mode is only ever WRAP or FAIL here. Negation
           // overflows on exactly one value, `Int.MinValue`, so any bound at all rules it out and
@@ -582,6 +590,14 @@ final class VarkaNodeCompiler {
 
   private static boolean isInt(Expression e) {
     return DataTypes.IntegerType.equals(e.dataType());
+  }
+
+  /**
+   * Whether {@code e}'s type is one a narrow lane carries: a {@code TINYINT} or a
+   * {@code SMALLINT}.
+   */
+  private static boolean isNarrow(Expression e) {
+    return laneOf(e.dataType()).filter(LaneType::isNarrow).isPresent();
   }
 
   /**

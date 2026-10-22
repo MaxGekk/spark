@@ -874,18 +874,28 @@ public final class VarkaExpressionCompiler {
           continue;
         }
         // The lane rule of `compilePartial`, for conjuncts: the AND fold below would refuse a mix
-        // by construction. Conjuncts of the two lanes meet on the long one, the int ones
-        // compared widened (VARKA-28); one with no long-lane form is declined with the lane's
-        // reason.
+        // by construction. Conjuncts of two lanes meet on the long one, the int ones compared
+        // widened (VARKA-28), and a narrow conjunct beside an int one joins it on the int lane,
+        // its value operands widened, where the long lift would give the kernel a long lane a
+        // narrow value has no lowering for - `rid < 0 AND (y1 < y2)` (VARKA-329); one with no
+        // form on the meeting lane is declined with the lane's reason.
         // The fused conjuncts as this one would leave them: lifted with it where the lanes
         // differ, and committed only once the budget below takes them.
         List<Cond> before = fused;
         boolean liftedBefore = false;
         if (!fused.isEmpty() && cond.laneType() != fused.get(0).laneType()) {
-          Optional<Cond> lifted = VarkaConditionCompiler.onLongLane(cond);
+          boolean noLong = fused.stream().noneMatch(c -> c.laneType() == LaneType.LONG)
+              && cond.laneType() != LaneType.LONG;
+          Optional<Cond> lifted = noLong
+              ? Optional.of(VarkaConditionCompiler.onIntLane(cond))
+              : VarkaConditionCompiler.onLongLane(cond);
           List<Cond> liftedFused = new ArrayList<>();
           for (Cond f : fused) {
-            VarkaConditionCompiler.onLongLane(f).ifPresent(liftedFused::add);
+            if (noLong) {
+              liftedFused.add(VarkaConditionCompiler.onIntLane(f));
+            } else {
+              VarkaConditionCompiler.onLongLane(f).ifPresent(liftedFused::add);
+            }
           }
           if (lifted.isPresent() && liftedFused.size() == fused.size()) {
             cond = lifted.get();
