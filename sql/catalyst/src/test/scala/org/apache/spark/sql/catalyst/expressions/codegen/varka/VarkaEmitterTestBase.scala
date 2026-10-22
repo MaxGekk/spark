@@ -329,9 +329,12 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
       patternCombos: Seq[Seq[Int => Boolean]],
       data: (Int, Int) => Long,
       ctx: String,
-      lanes: Int,
+      lanes: Option[Int] = None,
       base: VarkaEmitOptions = VarkaMatrix.base): Unit = {
-    val options = base.withLanesOverride(lanes)
+    // Unless a test names a width of its own, as a sweep of widths does, the matrix's wins: a
+    // fixed one would put a second species beside a configuration's (VARKA-246).
+    val laneCount = lanes.getOrElse(base.lanesOverride())
+    val options = base.withLanesOverride(laneCount)
     val (kernel, loader) = load(emitMulti(roots, numInputs, lits.length, options))
     try {
       for (length <- caseLengths; (combo, comboId) <- patternCombos.zipWithIndex) {
@@ -351,7 +354,7 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
               dstData.toArray, outs.map(_._2.address()).toArray,
               Array.empty[Int], lits, length, VarkaEmitterTestSupport.scratch(kernel, length))
             assert(status === 0,
-              s"$ctx at $lanes lanes: the kernel declined a batch it should have computed " +
+              s"$ctx at $laneCount lanes: the kernel declined a batch it should have computed " +
                 s"(length $length, combo $comboId, $fill, status $status)")
             for (i <- 0 until length) {
               val row = (0 until numInputs).map { c =>
@@ -360,7 +363,7 @@ trait VarkaEmitterTestBase extends SparkFunSuite with VarkaTestWatchdog {
               for ((root, o) <- roots.zipWithIndex) {
                 val bit = (outs(o)._2.get(ValueLayout.JAVA_BYTE, i / 8L) & (1 << (i % 8))) != 0
                 val where =
-                  s"$ctx at $lanes lanes, len=$length combo=$comboId out=$o row=$i fill=$fill"
+                  s"$ctx at $laneCount lanes, len=$length combo=$comboId out=$o row=$i fill=$fill"
                 root match {
                   case c: Cond =>
                     val expected = evalCondLong(c, row, lits).contains(true)

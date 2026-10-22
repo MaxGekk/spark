@@ -193,3 +193,12 @@ property's name was written twice (one constant); the child classpath preferred
 the registry is first-come, so the class that adds the second size is the one blamed; the message
 now names the size already established, and the class doc says so.
 
+### 9.3 Correction after row 410, 21 October 2026
+
+9.1's sentence that all four lane-related configurations pass "over every catalyst suite" held on
+256-bit runners, where it was measured. On a 512-bit host `lanesOverride=4` failed three tests
+with one JVM and 35 with `--split 2` (27 on the CI runner): two suites emitted at the JVM's own
+width, `VarkaEmitterFramesSuite` through a lane count of 0 and `VarkaUnreadLocalsSuite` through a
+gate on the preferred width, and the guard blames whichever suite runs second. Row 410 fixed
+both (`m8/PLAN.md`); the guard is unchanged. Of 9.1's list, `lanesOverride=16`,
+`narrowHalfSpecies=true` and `validityByWidth=false` passed at 512 bits before row 410 as well.

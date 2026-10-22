@@ -25,7 +25,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import scala.collection.immutable.Seq;
 
@@ -81,7 +80,11 @@ public class VarkaSharedPrefixBenchmark extends VarkaBenchmarkBase {
   private static final int NUM_ROWS = 1_000_000;
   private static final int CHUNK = 1024;
 
-  /** Drives an arm gets at least before it is timed; see {@link #driveToCompiledCode}. */
+  /**
+   * Drives an arm gets at least before it is timed; see {@link #driveToCompiledCode}. The bound
+   * is a number of drives, not of calls: how many invocations of a loop method the JIT waits for
+   * depends on C2's queue, so what ends the warm-up is the level read from the code list.
+   */
   private static final int MIN_WARM_DRIVES = 8;
   /** How far two drives' times may differ for the code to count as unchanged between them. */
   private static final double STEADY_FRACTION = 0.3;
@@ -104,9 +107,13 @@ public class VarkaSharedPrefixBenchmark extends VarkaBenchmarkBase {
   /** An emitted kernel and the loop methods it has: its groups. */
   private record Emitted(VarkaFusedKernel kernel, int groups) { }
 
-  /** One arm of a shape: its label, whether the prefix is materialized, and its kernel. */
-  private record Arm(
-      String label, boolean materialized, int groups, VarkaFusedKernel kernel, long scratch) { }
+  /**
+   * One arm of a shape: its label, whether the prefix is materialized, and its kernel; {@code
+   * c2Expected} is false for the one arm whose loop method no compiler takes, which runs in the
+   * interpreter (loop level 0 in the code list) however long it is driven.
+   */
+  private record Arm(String label, boolean materialized, int groups, VarkaFusedKernel kernel,
+      long scratch, boolean c2Expected) { }
 
   private static CompiledVarkaProjection compile(List<String> sqls) {
     var exprs = new ArrayList<NamedExpression>();
@@ -161,38 +168,47 @@ public class VarkaSharedPrefixBenchmark extends VarkaBenchmarkBase {
     return status;
   }
 
+  /** One drive of {@code arm} over the whole column, which must not decline a batch. */
+  private static void driveChecked(String title, Arm arm, MemorySegment data, long[] dst,
+      long[] dstValidity, int[] literals) {
+    require(drive(arm.kernel(), arm.scratch(), data, dst, dstValidity, literals) == 0,
+        title + " at " + arm.label() + ", materialized " + arm.materialized()
+            + ", declined a batch");
+  }
+
   /**
-   * Drives {@code arm} over the whole column until its drive time is steady with C2 idle, so that
-   * the timed run measures C2's code and not the C1 code that stands in until C2's compile is
-   * requested and done. The tier is not read: 8 drives are 7,800 calls, past the 5,000
-   * invocations after which the JIT asks for C2 whatever its backedge counts.
+   * Drives {@code arm} over the whole column until the timed run will measure C2's code: every
+   * dense loop method of its kernel holds level-4 code in the code list, C2 has nothing queued or
+   * compiling, and the last two drives took the same time. Neither fact is enough alone. An arm
+   * left in C1 code takes the same time every drive, and one drive is 977 calls of each loop
+   * method, short of the invocations after which HotSpot asks for C2 (the point is scaled by
+   * C2's queue length at that moment), so an arm driven once and left stood in C1 code for as long
+   * as 37 seconds, into its timed run, at 65 to 349 ns/row against 2.7. And code that has just
+   * reached level 4 can still be replaced while its drive is timed.
    *
-   * <p>One drive is 977 calls of each loop method, short of the 5,000 invocations after which the
-   * JIT asks for C2 whatever its backedge counts, and whether it asks at a call below that
-   * depends on the length of C2's queue at the moment: an arm that was driven once and left
-   * stood in C1 code for as long as 37 seconds, into its timed run, at 65 to 349 ns/row against
-   * 2.7. So the arm is driven at least {@link #MIN_WARM_DRIVES} times, with C2 left idle after
-   * each drive so that what the drive requested is compiled and installed, and then until a drive
-   * takes about as long as the one before it (the JIT's code, C1 or C2, does not change between
-   * two drives). The wait is bounded: an arm that does not settle within {@link
-   * #WARM_WAIT_MILLIS} says so on the console and is timed as it is. An arm whose C2 compile fails
-   * or is refused settles in the code it has, as the call-site budget off arm does.
+   * <p>So the arm is driven at least {@link #MIN_WARM_DRIVES} times, with C2 left idle after each
+   * drive so that what the drive requested is compiled and installed. The wait is bounded: an arm
+   * that does not settle within {@link #WARM_WAIT_MILLIS} says so on the console, with the level
+   * each of its loop methods had, and is timed as it is. An arm whose C2 compile fails or is
+   * refused is exempt from the level condition ({@code c2Expected}) and settles on drive
+   * times alone, as the call-site budget off arm's single loop method does.
    */
   private static void driveToCompiledCode(String title, Arm arm, MemorySegment data, long[] dst,
       long[] dstValidity, int[] literals) {
     long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(WARM_WAIT_MILLIS);
+    Class<?> kernelClass = arm.kernel().getClass();
     long previous = 0;
     int drives = 0;
     while (true) {
       long start = System.nanoTime();
-      require(drive(arm.kernel(), arm.scratch(), data, dst, dstValidity, literals) == 0,
-          title + " at " + arm.label() + ", materialized " + arm.materialized()
-              + ", declined a batch");
+      driveChecked(title, arm, data, dst, dstValidity, literals);
       long took = System.nanoTime() - start;
       drives++;
       boolean idle = VarkaEmitterTestSupport.awaitC2Idle(IDLE_WAIT_MILLIS);
+      var levels = VarkaEmitterTestSupport.loopLevels(kernelClass);
+      boolean topTier = !arm.c2Expected() || VarkaEmitterTestSupport.allLoopsC2(levels);
       boolean steady = previous > 0 && Math.abs(took - previous) <= previous * STEADY_FRACTION;
-      if (drives >= MIN_WARM_DRIVES && idle && steady) {
+      if (drives >= MIN_WARM_DRIVES && idle && topTier && steady) {
         return;
       }
       if (System.nanoTime() > deadline) {
@@ -200,7 +216,8 @@ public class VarkaSharedPrefixBenchmark extends VarkaBenchmarkBase {
             + ", materialized " + arm.materialized() + " did not settle in " + WARM_WAIT_MILLIS
             + " ms (" + drives + " drives, the last " + TimeUnit.NANOSECONDS.toMillis(took)
             + " ms after " + TimeUnit.NANOSECONDS.toMillis(previous) + " ms, C2 "
-            + (idle ? "idle" : "busy") + "); its cell may be timed in C1 code");
+            + (idle ? "idle" : "busy") + ", loop levels " + levels
+            + "); its cell may be timed in lower-tier code");
         return;
       }
       previous = took;
@@ -242,17 +259,17 @@ public class VarkaSharedPrefixBenchmark extends VarkaBenchmarkBase {
                       .withMaterializeChronoPrefix(materialized));
               long scratch = VarkaEmitterTestSupport.scratch(e.kernel(), CHUNK);
               arms.add(new Arm("fused ceiling " + c, materialized, e.groups(), e.kernel(),
-                  scratch));
+                  scratch, true));
             }
           }
           addBudgetArm(arms, fused, loader, s, "call-site budget off",
               VarkaEmitOptions.DEFAULTS.withCallSiteBudget(0));
           addBudgetArm(arms, fused, loader, s, "every group split",
               VarkaEmitOptions.DEFAULTS.withHeavyGroupOutputs(0));
+          // Every arm is driven once before the first is timed, so that one that declines a
+          // batch fails the run at its start and not minutes in.
           for (Arm arm : arms) {
-            require(drive(arm.kernel(), arm.scratch(), data, dst, dstValidity, literals) == 0,
-                title + " at " + arm.label() + ", materialized " + arm.materialized()
-                    + ", declined a batch");
+            driveChecked(title, arm, data, dst, dstValidity, literals);
           }
           var benchmark = benchmark(title + " over " + NUM_ROWS + " rows", NUM_ROWS)
               .timed().build();
@@ -263,9 +280,12 @@ public class VarkaSharedPrefixBenchmark extends VarkaBenchmarkBase {
             // The arm is brought to C2's code when its own turn comes, not before the first
             // arm is timed: an arm that was left for the minutes the others take was found in
             // C1 code again.
-            var settled = new AtomicBoolean();
+            // The body runs on this thread alone, and its first call is a warm-up run
+            // (iteration -1, more than once), so a plain flag marks the first.
+            boolean[] settled = new boolean[1];
             benchmark.addTimerCase(name, timer -> {
-              if (settled.compareAndSet(false, true)) {
+              if (!settled[0]) {
+                settled[0] = true;
                 driveToCompiledCode(title, arm, data, dst, dstValidity, literals);
               }
               timer.startTiming();
@@ -273,7 +293,7 @@ public class VarkaSharedPrefixBenchmark extends VarkaBenchmarkBase {
               timer.stopTiming();
             });
           }
-          benchmark.run();
+          runCases(benchmark);
         }
       });
     }
@@ -283,7 +303,10 @@ public class VarkaSharedPrefixBenchmark extends VarkaBenchmarkBase {
       VarkaGeneratedClassLoader loader, int s, String label, VarkaEmitOptions options) {
     Emitted e = emit(fused, loader, s + "_" + label, options);
     long scratch = VarkaEmitterTestSupport.scratch(e.kernel(), CHUNK);
+    // A kernel of one loop method, as the first shape has with the budget off, holds all 64 cheap
+    // tails in the wide method that stays in the interpreter: its level is 0 after 159 drives.
+    boolean c2Expected = e.groups() > 1;
     arms.add(new Arm("fused ceiling " + CEILINGS.get(0) + ", " + label, true, e.groups(),
-        e.kernel(), scratch));
+        e.kernel(), scratch, c2Expected));
   }
 }

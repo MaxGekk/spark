@@ -510,7 +510,10 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       new LastDay(c0), new Month(c1))
     // The three groups, and a prefix shared between them, are the emit defaults' grouping of
     // these roots: a matrix configuration that stops sharing, raises the group budget past the
-    // shape or drops the method byte budget leaves no group to load a prefix (VARKA-411).
+    // shape or drops the method byte budget leaves no group to load a prefix (VARKA-411), and
+    // grouping under prediction and a materialized prefix are the case itself. Other options
+    // (elideChronoMonth, division) are not pinned: the assertion below checks the premise, a
+    // prefix materialized, under the configurations they come with.
     val defaults = VarkaEmitOptions.DEFAULTS
     val options = VarkaMatrix.base.withGroupBudgetUnderPrediction(true)
       .withMaterializeChronoPrefix(true)

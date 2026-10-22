@@ -462,16 +462,46 @@ final class VarkaVectorTemplateWarmup {
 
   /** C2's queue length now, or -1 where the diagnostic command is unavailable or fails. */
   static int c2QueueLengthNow() {
+    String text = compilerQueueText();
+    return text == null ? -1 : c2QueueLength(text);
+  }
+
+  /**
+   * The {@code Compiler.queue} diagnostic command's text: what each compiler thread is compiling
+   * and the methods waiting for C1 and for C2. Null where the command is unavailable or fails.
+   */
+  static @Nullable String compilerQueueText() {
     if (DIAGNOSTIC_COMMAND == null) {
-      return -1;
+      return null;
     }
     try {
       Object reply = ManagementFactory.getPlatformMBeanServer().invoke(DIAGNOSTIC_COMMAND,
           "compilerQueue", new Object[] {null}, new String[] {String[].class.getName()});
-      return c2QueueLength(String.valueOf(reply));
+      return String.valueOf(reply);
     } catch (Exception | LinkageError e) {
-      return -1;
+      return null;
     }
+  }
+
+  /**
+   * How many top-tier compiler threads the {@code Compiler.queue} text lists as compiling: the
+   * non-blank lines of its "Current compiles:" section that are not a C1 thread's, as
+   * {@code C2 CompilerThread1  2074  4  pkg.Class::method (891 bytes)}.
+   */
+  static int c2Compiling(String queueText) {
+    boolean inCurrent = false;
+    int n = 0;
+    for (String line : queueText.lines().toList()) {
+      String t = line.strip();
+      if (t.startsWith("Current compiles")) {
+        inCurrent = true;
+      } else if (inCurrent && t.endsWith("compile queue:")) {
+        break;
+      } else if (inCurrent && !t.isEmpty() && !t.startsWith("C1 ")) {
+        n++;
+      }
+    }
+    return n;
   }
 
   /**
