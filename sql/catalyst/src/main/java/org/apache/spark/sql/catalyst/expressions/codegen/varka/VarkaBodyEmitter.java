@@ -967,7 +967,10 @@ final class VarkaBodyEmitter {
    */
   private static void emitNarrowTypeStore(
       CodeBuilder cb, Lane stored, Analysis analysis, Slots s, int o) {
-    String species = stored.speciesField(analysis.lanes);
+    // The narrow species of the int species' width, which is the species the value's int
+    // vector has: the driving width's own in a kernel at the int lane, and twice it in one that
+    // converts between lanes, whose int values fill a species of that width.
+    String species = stored.speciesField(analysis.lanesOf(Lane.INT));
     cb.getstatic(VECTOR_OPERATORS, stored == Lane.BYTE ? "I2B" : "I2S", VO_CONVERSION);
     cb.getstatic(stored.vector, species, VECTOR_SPECIES);
     cb.loadConstant(0);
@@ -1128,7 +1131,12 @@ final class VarkaBodyEmitter {
       }
       emitValue(cb, root, dense, analysis, s, computed);
       Lane stored = Lane.of(root.laneType());
-      if (analysis.narrowsAtStore(root)) {
+      if (root instanceof NarrowLane narrowRoot && narrowRoot.target().isNarrow()) {
+        // A narrow-typed value computed on the int lane - a choice one of whose guards or
+        // branches is int-typed (VARKA-329): the value arrived widened and is truncated once,
+        // here, into the narrow species of the int species' width.
+        emitNarrowTypeStore(cb, stored, analysis, s, o);
+      } else if (analysis.narrowsAtStore(root)) {
         emitNarrowStore(cb, analysis, s, o);
       } else if (stored.isNarrow() && stored != analysis.lane) {
         // A narrow root of a kernel driven at the int lane: the value is computed widened and

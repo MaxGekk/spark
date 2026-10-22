@@ -89,6 +89,10 @@ public final class VarkaReference {
       // answered by `longValue`, and any tree that holds a conversion by `mixedValue`.
       case NarrowLane n -> throw new IllegalArgumentException(
           "a narrowing is evaluated through longValue or mixedValue: " + n);
+      // Widening a narrow child into the int lane changes no value: the column's stored byte or
+      // short sign-extends to the drawn int, which is the row this evaluator reads (VARKA-329).
+      // A widening into the long lane is still the mixed evaluator's.
+      case WidenLane n when n.target() == LaneType.INT -> value(n.child(), row, isNull, lits);
       case WidenLane n -> throw new IllegalArgumentException(
           "a widening is evaluated through mixedValue: " + n);
       case DateDiff(var end, var start) -> both(end, start, row, isNull, lits, (e, s) -> e - s);

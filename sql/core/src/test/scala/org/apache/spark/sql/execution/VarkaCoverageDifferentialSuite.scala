@@ -37,7 +37,8 @@ import org.apache.spark.sql.execution.VarkaMaybeThrows.{difference => outcomeDif
 import org.apache.spark.sql.execution.columnar.InMemoryTableScanExec
 import org.apache.spark.sql.execution.varka.{VarkaFallbackAccounting, VarkaKernelRunner}
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType,
+  DayTimeIntervalType, IntegerType, LongType, ShortType, TimeType, YearMonthIntervalType}
 
 /**
  * Every row of the published coverage table, run through both engines (VARKA-120).
@@ -49,8 +50,8 @@ import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, Da
  * a change to this file: adding an arm without a row fails the coverage suite, adding a row
  * without correctness fails this one, and the two together are the guarantee the table makes.
  *
- * Each row runs on three fixtures over the table's sixteen columns, plus the derived BOOLEAN
- * columns `b` and `b2` - nulls sprinkled
+ * Each row runs on three fixtures over the table's sixteen source columns, plus the derived
+ * BOOLEAN columns `b` and `b2` - nulls sprinkled
  * independently per column, no nulls, and every column null in every row - and under both
  * consumers a Varka node can have: rows, the plan every direct query gets, and columns, which
  * the Arrow cache builder takes when a view over the query is cached. The hand-chosen shapes in
@@ -679,6 +680,11 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
     case ByteType => Some("y2")
     case ShortType => Some("s2")
     case LongType => Some("l2")
+    // The narrow twins: the fixture's second column of each type, which the value rows choose
+    // between (VARKA-329). A CASE arm beside a narrow expression is the int guard `rid < 0` and
+    // a narrow branch, which the compiler widens to the int lane and stores narrow.
+    case ByteType => Some("y2")
+    case ShortType => Some("s2")
     case _: TimeType => Some("t2")
     case _: DayTimeIntervalType => Some("dt2")
     case YearMonthIntervalType(start, end) if start == end =>

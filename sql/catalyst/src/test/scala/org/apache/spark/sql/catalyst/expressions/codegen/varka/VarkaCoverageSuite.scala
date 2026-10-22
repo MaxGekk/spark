@@ -100,9 +100,11 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   // BOOLEAN columns, as conditions: two so a comparison can be column against column.
   private val b = AttributeReference("b", BooleanType)()
   private val b2 = AttributeReference("b2", BooleanType)()
-  // The narrow lanes' columns (VARKA-329, VARKA-330): TINYINT and SMALLINT, two of each so an
-  // operation can be column against column. They are named apart from the fixture's `y`, which
-  // is a year count.
+  // The narrow lanes' columns (VARKA-329, VARKA-330): TINYINT and SMALLINT, two of each so a
+  // comparison or an operation can be column against column. They are named apart from the
+  // fixture's `y`, which is a year count. A narrow column is stored at its own width; the
+  // default arm computes it on the int lane and the native arm (`narrowLanes`) on the narrow
+  // lane, where every value is narrow.
   private val y1 = AttributeReference("y1", ByteType)()
   private val y2 = AttributeReference("y2", ByteType)()
   private val s1 = AttributeReference("s1", ShortType)()
@@ -492,6 +494,52 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("IF(b, d, d2)", "the int lane"),
       Row("IF(b, l, l2)", "the leaf is lifted to the long lane of the values"),
       Row("CASE WHEN b THEN l ELSE l2 END", "likewise, per branch"))),
+
+    // TINYINT columns (VARKA-329): a narrow column is stored at its own width and read by a
+    // widening load on the default arm, and the compare, the range set and the choice are the
+    // int lane's; under `narrowLanes` the same tree runs on the byte lane instead.
+    Family("TINYINT columns", predicates = true, Seq(
+      Row("y1 < y2", "two narrow columns: each load widens its part-width species into the int " +
+        "lane, and the compare is the int lane's"),
+      Row("y1 <= y2", "the other ordering, so that every comparison has a row of its own"),
+      Row("y1 >= y2"),
+      Row("y1 = 5Y", "a narrow column against a narrow literal, stored as the same width"),
+      Row("y1 IS NOT NULL", "the column's own validity word"),
+      Row("y1 IN (1Y, 2Y, 3Y, -1Y)", "a range set over a narrow column"),
+      // Over `spark.sql.optimizer.inSetConversionThreshold` (10 by default) the optimizer
+      // rewrites the list to an `InSet`, which fuses up to the compiler's own cap of 16.
+      Row("y1 IN (11 to 16 byte literals)",
+        "an IN list this long arrives from the optimizer as an InSet and fuses the same way",
+        Some(InSet(y1, (1 to 11).map(v => v.toByte.asInstanceOf[Any]).toSet)),
+        Some((1 to 11).map(v => s"${v}Y").mkString("y1 IN (", ", ", ")"))))),
+
+    Family("TINYINT columns choosing values", predicates = false, Seq(
+      Row("CASE WHEN y1 > y2 THEN y1 ELSE y2 END",
+        "the output is stored at the column's own width, whichever arm computed it"),
+      Row("if(y1 IS NULL, 5Y, y1)", "a narrow literal in the ELSE: the stored value is one " +
+        "byte a row and the missing row takes the constant"),
+      Row("greatest(y1, y2)"),
+      Row("least(y1, y2)"))),
+
+    // The SMALLINT twins of the seven rows above.
+    Family("SMALLINT columns", predicates = true, Seq(
+      Row("s1 < s2", "the two-byte twin of the TINYINT comparison"),
+      Row("s1 <= s2"),
+      Row("s1 >= s2"),
+      Row("s1 = 5S", "a SMALLINT column against a SMALLINT literal"),
+      Row("s1 IS NOT NULL"),
+      Row("s1 IN (1S, 2S, 3S, -1S)"),
+      Row("s1 IN (11 to 16 short literals)",
+        "an IN list this long arrives from the optimizer as an InSet and fuses the same way",
+        Some(InSet(s1, (1 to 11).map(v => v.toShort.asInstanceOf[Any]).toSet)),
+        Some((1 to 11).map(v => s"${v}S").mkString("s1 IN (", ", ", ")"))))),
+
+    // The SMALLINT twins of the four choice rows above.
+    Family("SMALLINT columns choosing values", predicates = false, Seq(
+      Row("CASE WHEN s1 > s2 THEN s1 ELSE s2 END", "two bytes a row at the store"),
+      Row("if(s1 IS NULL, 5S, s1)", "the two-byte twin of the TINYINT constant choice"),
+      Row("greatest(s1, s2)"),
+      Row("least(s1, s2)"))),
 
     // Both lanes in one kernel (VARKA-28): the casts between int and bigint, and the widening
     // Catalyst's type coercion puts under every operator that meets the two.
@@ -1006,15 +1054,19 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
    * `not supported` line is a refusal, and it names its construction; the census file carries
    * those lines alone, since C2's other two kinds prove nothing about the final code and vary
    * between runs (`VarkaWidthAuditSuite.isRefusal`, VARKA-154). The filter here is kept so a
-   * census written before that change still renders the same column.
+   * census written before that change still renders the same column. A `declined` line is the
+   * stronger answer - the emitter has no lowering for the row at that width, so no kernel ran
+   * (VARKA-329) - and it is rendered with its reason.
    */
   private def narrowVerdict(sql: String): String = widthAudit match {
     case None => "not audited"
     case Some((_, narrow)) => narrow.get(sql) match {
       case None => "not audited"
       case Some(lines) =>
+        val declined = lines.filter(_.startsWith("declined: ")).map(_.stripPrefix("declined: "))
         val refused = lines.filter(_.startsWith("not supported"))
-        if (refused.isEmpty) "vector"
+        if (declined.nonEmpty) s"not emitted: ${declined.distinct.mkString(", ")}"
+        else if (refused.isEmpty) "vector"
         else s"per-lane: ${refused.map(constructionOf).distinct.mkString(", ")}"
     }
   }

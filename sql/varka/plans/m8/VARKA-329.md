@@ -744,7 +744,117 @@ shorts, 256 MB of ints), timed only under `-Dvarka.narrow.pastL3=true` because i
 about 600 MB. It has not been run: the laptop was in use for other timing that night. It is
 `PLAN.md` row 415, and prediction 2 stays scored as in the table above until that row reads it.
 
-### 9.3 Outcome of row 330: the narrow arithmetic in three modes (22 October 2026)
+### 9.3 What was built (22 October 2026)
+
+Row 329 was built in `varka-329-lane` from master `94c4e70aebd`, in section 8's order: the shared
+pieces, then NATIVE, then WIDENED, then the rows and the oracles. Nothing is timed here: 2.4's
+benchmark, the runner hosts' columns and row 415's past-L3 rung are as 9.2 left them, and the
+spike's verdicts stand.
+
+**The shared pieces.** `LaneType` gained `BYTE` and `SHORT` ahead of `INT`, and `isNarrow()` is
+`ordinal() < INT.ordinal()`, so `WidenLane`'s target-is-wider rule and `NarrowLane`'s
+child-is-wider rule hold unchanged. `Lane` gained its two rows: `ByteVector` at 8 bits and
+`ShortVector` at 16, a stride of one and two bytes, a scalar-array class for the literal table, and
+`hasSpecies(lanes)` refusing a species below 64 bits, which is what makes a widened byte load need
+eight int lanes and a widened short load four. `VarkaVectorIR`'s leaves and loads are typed by the
+column's lane, `emissionLane` picks LONG over INT over the narrow lane and the narrow lane only
+where every value is narrow and `narrowLanes` is on, and `Analysis.inputLane` (the column's) is kept
+apart from `laneOf` (the value's), which is the plan's 2.2 mechanism. `VarkaEvaluatorBase` allocates
+and reads back a `ByteVector`/`ShortVector` output, and the validity words are the column's
+whichever lane reads them. Every existing shape's emitted bytes are unchanged: 2.6's requirement is
+met by the option's default, not by a second lowering.
+
+**The option.** `VarkaEmitOptions.narrowLanes`, a `Flag` tagged `nativeNarrow`, default false.
+False is WIDENED - the narrow column read with a widening load into the int species of the same
+lane count, computed as an int, truncated once at the store - and true is NATIVE, 2.2's narrow
+species throughout, for a tree whose every value is narrow; a tree with one int value in it drives
+at the int lane under either arm, which is 9.2's verdict. The plan's `WIDENED` and `NATIVE` are
+this one flag, and WIDENED is the default, so the flag names the arm it switches on.
+
+**The loads and the store.** A narrow column of an int-driven kernel is read with one widening
+load per lane group: the narrow species of the int species' width, `B2I` or `S2I` into the int
+species, whole in the loop body and masked by the first `s.lanes` lanes in the epilogue. A narrow
+value is written with `I2B` or `I2S` into the same narrow species from the int vector and stored
+whole or masked - one or two bytes a row - which is Spark's `CAST(int AS TINYINT)` under `LEGACY`,
+the mode a TINYINT expression's result is defined by. A shape conversion whose two sides are
+emitted at one lane is no instruction at all, so the widening a load already did is free.
+
+**The int-lane lift.** A narrow condition or branch beside an int one does not widen to the long
+lane: the long lift of 2.2's mixed rule would give the kernel a long lane holding a narrow value,
+which has no lowering. `VarkaConditionCompiler.onIntLane` widens the value operands of a narrow
+condition to the int lane (a sign extension, exact in every mode, and a validity word is the
+column's either way), `onIntValue` does the same for a value, and `storedNarrow` wraps an int-lane
+root of a narrow-typed expression in a `NarrowLane` to the output's lane so the store is narrow.
+The lift reaches the connective (meetAll), IF, CASE WHEN, and the conjuncts of a filter, and
+`VarkaNodeCompiler` gained the `CAST(narrow AS INT)` Catalyst inserts where a narrow column meets
+an int. So `CASE WHEN rid < 0 THEN y1 ELSE y2 END`, `if(y1 IS NULL, 5Y, y1)`, and the WHERE of
+`rid < 0 AND (y1 < y2)` fuse and store narrow; a tree whose every value is narrow is untouched and
+keeps its own arm. The wrap fixed a wrong answer the ANSI form of `VarkaCoverageDifferentialSuite`
+caught: the lifted choice's root was still typed INT, so the int store wrote four bytes a row into
+a one-byte output and `CASE WHEN rid < 0 THEN greatest(y1, y2) ELSE y2 END` answered -73 for
+Spark's -1.
+
+**The refusals.** `VarkaLoopEmitter.narrowRefusal` names the three shapes a kernel cannot emit: a
+narrow value under a bigint kernel, a narrow column with no baked int lane count
+(`validityByWidth` off), and a narrow column whose species does not exist at the int lane count
+(under eight int lanes for bytes, under four for shorts). The compiler asks it before it admits a
+kernel and declines with the reason; `width_audit.json` records the verdict per width (at 128 bits,
+four int lanes, the eleven TINYINT rows are `declined: a BYTE column has no widening load at 4 int
+lanes` and the eleven SMALLINT rows are audited, their species having 64 bits; at 256 and 512 bits
+every narrow row is audited with no refusal at all), `VarkaWidthAuditSuite` asserts the refusal is
+absent at the preferred width, and `emitted_bytes.json` records a refused width as `<declined>`
+rather than omitting it, so a narrowing of a supported width that starts declining fails the
+oracle. The bigint refusal has its own assertion in `VarkaEmitterNarrowSuite`, which pins the
+message for a narrow value widened to the long lane under both arms and holds the same choice on
+the int lane to the width's own refusals, never to that one.
+
+**The rows.** 22 rows in `coverage.json`, 11 a type: 7 predicates (`y1 < y2`, `<=`, `>=`, `= 5Y`,
+`IS NOT NULL`, a short `IN` list, and an `IN` list of eleven literals, which arrives as an `InSet`)
+and 4 value shapes (the `CASE`/`greatest`/`least` choices and `if(y1 IS NULL, 5Y, y1)`), the
+SMALLINT twins. The `docs/sql-varka.md` table gained the four families and the narrow verdict at
+128 bits, and `census_curated.txt` names byte and short on the rows the census gained: `if`,
+`when`, `isnull`, `isnotnull`, `in`, `in_set`, `=`, `==`, `>`, `>=`, `<`, `<=`, `greatest` and
+`least`, all row 329's.
+
+**What the rows do not cover, by rule or by scope.** A bare narrow column fuses nothing, as for
+every type, so the load row is `y1 < y2` and the constant choice is `if(...)`; a value `CASE WHEN`
+without an ELSE declines, the existing rule, so the choice rows have one; a null narrow literal is
+claimed by no arm; `<=>` and `equal_null` over narrow columns are unclaimed, which is row 336's
+family; and a narrow value in a long-lane kernel has no lowering at all, so no row mixes them. The
+emit cost model has no price for a narrow feature, so a prediction over a narrow shape is
+"unknown" and the grouping falls back to a building measurement; pricing the two lanes is row
+352's, with the fuzzers' draw of them.
+
+**The oracles and the driver.** `VARKA_COVERAGE_REGEN` (coverage.json and the docs table),
+`dev/varka_census.py` (the census TSV), `VARKA_AUDIT_REGEN` (width_audit.json),
+`VARKA_BYTES_REGEN` (emitted_bytes.json) and `VARKA_COVERAGE_REGEN` again, in that order and each
+with its own tool: the first coverage run is what the census and the audit read.
+`VARKA_GOLDEN_REGEN` exited 0 with no diff, so the golden corpus and the seven Spark input files
+hold no TINYINT or SMALLINT text and 8's claim that they do is wrong - the corpus needed no change,
+and the row's Spark-level proof is `VarkaCoverageDifferentialSuite`'s, whose fixture gained the four
+narrow columns `y1`, `y2`, `s1` and `s2`, and whose composing fuzzers leave the narrow rows out
+because drawing the types is row 352's.
+
+**The suites.** `VarkaEmitterNarrowSuite` (7 tests in their own JVM) runs both arms over every
+byte length and tail, the whole byte square through every comparison, a range set, `greatest`,
+`least` and a choice, and a narrow column beside an int one, all against `VarkaReference` through
+`VarkaKernelCheck.runAndCompareNarrow`; where a configuration has no species for the widening load
+it asserts the refusal instead of emitting, and the bigint refusal is pinned the same way, so the
+option matrix can run it under every configuration.
+
+**The matrices.** `VarkaEmitterNarrowSuite` passes its seven tests under all 51 of the option
+matrix's configurations and the defaults (`dev/varka_matrix.sh --all --module catalyst --suites
+VarkaEmitterNarrowSuite -j 4`: 364 tests, none failed or cancelled), the refusal taking the place
+of an emission where a configuration has no species for the widening load; `narrowLanes=true` is
+one of them, so the native arm is run at every width. `VarkaCoverageDifferentialSuite` passes all
+744 of its tests at the defaults, at `lanesOverride=16` and under `narrowLanes=true`. Under
+`validityByWidth=false` and `lanesOverride=4` the rows that need a widening load decline and the
+row engine answers them, and `skips.tsv` holds the 48 and the 24 tests that fail for that reason;
+a stale line fails the run, so the list cannot rot. Three of the lines the first run had were
+stale and are gone: an `IS NOT NULL` row's null-test `CASE` reads only the column's validity
+word, so it needs no widening load and fuses at every width, while the same row's projection and
+partition tests select the narrow column and decline.
+### 9.4 Outcome of row 330: the narrow arithmetic in three modes (22 October 2026)
 
 Built on the lanes of step 2, merged into the row's branch at the checkpoint commit `33996c315d9`,
 in the worktree `varka-330-arith`. No new IR node: a narrow `Add`, `Subtract`, `Multiply` or
@@ -876,4 +986,3 @@ left to the measurement the row's shapes need and this row does not carry. That 
 even on the native arm, so at four int lanes a checked byte multiply declines there too, with
 the refusal a widened byte load gets; the suite reads a decline as the arm's answer exactly
 when the width cannot widen the node's lane.
-

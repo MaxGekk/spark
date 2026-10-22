@@ -94,7 +94,9 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
   private val b = AttributeReference("b", BooleanType)()
   private val b2 = AttributeReference("b2", BooleanType)()
   // The narrow lanes' columns (VARKA-329, VARKA-330), as `VarkaCoverageSuite` declares them:
-  // TINYINT and SMALLINT, two of each so an operation can be column against column.
+  // TINYINT and SMALLINT, two of each so a comparison or an operation can be column against
+  // column. The rows are pinned at both widths, and the widened arm's load declines at four int
+  // lanes for a byte column, which the oracle records as that arm's answer.
   private val y1 = AttributeReference("y1", ByteType)()
   private val y2 = AttributeReference("y2", ByteType)()
   private val s1 = AttributeReference("s1", ShortType)()
@@ -145,13 +147,13 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
     // emission's, which for a narrowing root (an int output computed in the long lane) is the
     // long lane.
     val options = emitOptions(roots, lanes, arm)
-    // A width the compiler refuses for this shape is the shape's answer at that width, recorded
-    // with the compiler's own reason: a narrow value widened at four int lanes has no eight-bit
-    // species to widen from, so `fitsBudgets` demotes the shape before `emit` sees it
-    // (VARKA-330). Emitting anyway would pin a `getstatic` for a constant no vector class has.
-    VarkaLoopEmitter.narrowRefusal(roots.asJava, options).toScala match {
-      case Some(reason) => return Seq("<declined>" -> sha(reason))
-      case None =>
+    // A narrow value the lane count cannot widen has no lowering, and the compiler refuses the
+    // row before an emission (VARKA-329): at four int lanes a byte column would need a
+    // `SPECIES_32` no vector class has. Record the compiler's answer rather than a class that
+    // cannot link, as the arms' declines are recorded below.
+    val narrowRefusal = VarkaLoopEmitter.narrowRefusal(roots.asJava, options)
+    if (narrowRefusal.isPresent()) {
+      return Seq("<declined>" -> sha(narrowRefusal.get()))
     }
     val bytes =
       try {
@@ -393,7 +395,21 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
   private def pinnedArms: Seq[(String, VarkaEmitOptions => VarkaEmitOptions)] =
     Seq(VarkaEmitOptions.USE_AVX_UNKNOWN, 0, 1, 2, 3).map { level =>
       s"useAVX=$level" -> ((o: VarkaEmitOptions) => o.withUseAVX(level))
-    } ++ subjectArms ++ referenceArms
+    } ++ subjectArms ++ laneArms ++ referenceArms
+
+  /**
+   * The narrow-lane option's two arms, both pinned (VARKA-329): the default arm is what the
+   * per-row hashes above are emitted under, and the native arm is an emission no per-row hash
+   * covers, since the rows there are the defaults'. A machine option has no session
+   * configuration, so it is reachable from tests only, which is exactly why the oracle has to
+   * pin it: a refactor of the narrow lane must move a hash here rather than slip through.
+   */
+  private def laneArms: Seq[(String, VarkaEmitOptions => VarkaEmitOptions)] =
+    Seq("narrowLanes=true", "narrowLanes=false").map { name =>
+      val arm = optionArms.find(_.name == name).getOrElse(
+        fail(s"the options table has no arm $name to pin"))
+      arm.name -> arm.arm
+    }
 
   /**
    * The reference forms whose frames span the kernel, pinned beside the selectable arms: the
@@ -498,8 +514,9 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
         "configuration reaches, and per value of each option the defaults never reach, over " +
         "the options under which it acts (validityOrFirst); and per reference form whose " +
         "frames span the kernel (groupLocalSlots=false, methodByteBudget=0), which no session " +
-        "selects but where a per-body slot rule can move bytes unseen. The rest of " +
-        "VarkaEmitOptions is test-only."),
+        "selects but where a per-body slot rule can move bytes unseen; and per value of the " +
+        "narrow-lane option (narrowLanes), which picks the lane a tree whose every value is " +
+        "narrow is emitted at (VARKA-329). The rest of VarkaEmitOptions is test-only."),
       "coverage_rows_skipped" -> skipped.asJava,
       "lanes" -> ordered(perWidth: _*),
       "option_arms" -> armHashes)
