@@ -30,7 +30,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaKernelWarmu
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrix.PinsDefaults
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMethodNames.isStage
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, ColumnRef, Compare, CompareOp, ConstDivide, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedRange, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NarrowLane, NextDay => IRNextDay, Not => IRNot, NullSafeEqual => IRNullSafeEqual, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, WidenLane, Year => IRYear}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.{AddDays, AddMonths => IRAddMonths, And => IRAnd, BoolCompare, ColumnRef, Compare, CompareOp, ConstDivide, DateDiff => IRDateDiff, DayOfMonth => IRDayOfMonth, DayOfWeek => IRDayOfWeek, DayOfWeekIso, DayOfYear => IRDayOfYear, Greatest => IRGreatest, GuardedRange, IfElse, IntArith, IntNeg, IntOp, IsNotNull => IRIsNotNull, LaneType, LastDay => IRLastDay, Least => IRLeast, LiteralSlot, MakeDate => IRMakeDate, Month => IRMonth, NarrowLane, NextDay => IRNextDay, Not => IRNot, NullSafeEqual => IRNullSafeEqual, Or => IROr, Overflow, Quarter => IRQuarter, SubDays, ThursdayOf, TruncDate => IRTruncDate, TruncDateDynamic => IRTruncDateDynamic, TruncLevel, WeekDay => IRWeekDay, WeekOfYear => IRWeekOfYear, WidenLane, Year => IRYear}
 import org.apache.spark.sql.catalyst.expressions.objects.StaticInvoke
 import org.apache.spark.sql.catalyst.optimizer.ReplaceExpressions
 import org.apache.spark.sql.catalyst.plans.logical.{OneRowRelation, Project}
@@ -1727,16 +1727,24 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     }
     assert(reason(EqualNullSafe(d, Literal(null, DateType))) ===
       "null-safe equality with a null literal")
-    // Types outside the lane set wait on their own rows (strings, floating point, narrow ints).
+    // Types outside the lane set wait on their own rows (strings, floating point).
     val s = AttributeReference("s", StringType)()
     val x = AttributeReference("x", DoubleType)()
-    for (operand <- Seq[Expression](s, x, sh)) {
+    for (operand <- Seq[Expression](s, x)) {
       val partial = VarkaExpressionCompiler.compilePartial(
         Seq(out(If(EqualNullSafe(operand, operand), d2, DateAdd(d, Literal(1)))),
           out(DateAdd(d, Literal(1)))),
         childOutput ++ Seq(s, x)).get
       assert(partial.declines.asScala.contains(0), operand.dataType.toString)
     }
+    // A narrow column's null-safe equality is a kernel over the int lane with its operands
+    // widened, the shared pieces of VARKA-329 admitting it; its coverage rows are row 336's.
+    val narrowEq = VarkaExpressionCompiler.compile(
+      Seq(out(If(EqualNullSafe(sh, sh), d2, DateAdd(d, Literal(1))))), childOutput).get
+    val shortCol = new ColumnRef(0, LaneType.SHORT)
+    assert(narrowEq.outputs.asScala.head.asInstanceOf[IfElse].cond() ===
+      new IRNullSafeEqual(
+        new WidenLane(shortCol, LaneType.INT), new WidenLane(shortCol, LaneType.INT)))
     // A comparison as a projection output is a boolean column - out of scope, interior only.
     assert(VarkaExpressionCompiler.compile(
       Seq(out(LessThan(d, d2))), childOutput).isEmpty)
@@ -2007,6 +2015,28 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     assert(predicate.fused.outputs.asScala.toSeq === Seq(new VarkaVectorIR.And(
       new Compare(CompareOp.LT, new ColumnRef(0), new ColumnRef(1)),
       new IRIsNotNull(new ColumnRef(0)))))
+  }
+
+  test("a boolean equality of two narrow conditions lifts into an int-lane conjunction") {
+    // A comparison of two boolean conditions is a mask over them, so one over two narrow
+    // comparisons is itself narrow - `compare` builds the BoolCompare with narrow operands -
+    // and its AND with an int conjunct needs the mask lifted to the int lane (VARKA-329).
+    // Returning the mask unchanged would build an AND of two lanes, whose constructor throws
+    // where the compiler should fuse or decline.
+    val mask = EqualTo(
+      LessThan(by, Literal(3.toByte, ByteType)),
+      LessThanOrEqual(by, Literal(5.toByte, ByteType)))
+    val condition = org.apache.spark.sql.catalyst.expressions.And(mask, LessThan(d, d2))
+    val predicate = VarkaExpressionCompiler.compilePredicate(condition, childOutput).get
+    assert(predicate.specs.asScala.forall(_.fused))
+    val byte = new ColumnRef(0, LaneType.BYTE)
+    assert(predicate.fused.outputs.asScala.toSeq === Seq(new IRAnd(
+      new BoolCompare(CompareOp.EQ,
+        new Compare(CompareOp.LT, new WidenLane(byte, LaneType.INT),
+          new WidenLane(new LiteralSlot(0, LaneType.BYTE), LaneType.INT)),
+        new Compare(CompareOp.LE, new WidenLane(byte, LaneType.INT),
+          new WidenLane(new LiteralSlot(1, LaneType.BYTE), LaneType.INT))),
+      new Compare(CompareOp.LT, new ColumnRef(1), new ColumnRef(2)))))
   }
 
   test("a declining conjunct rolls the shared tables back") {

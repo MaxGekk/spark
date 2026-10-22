@@ -967,6 +967,13 @@ final class VarkaBodyEmitter {
    */
   private static void emitNarrowTypeStore(
       CodeBuilder cb, Lane stored, Analysis analysis, Slots s, int o) {
+    if (analysis.lane.isNarrow()) {
+      // The species named below is the int species' width, which a narrow-driven kernel does not
+      // have: its every value is already narrow and nothing widens, so a narrow-typed root there
+      // is a producer this store was not built for (VARKA-329).
+      throw VarkaErrors.illegalState("a narrow-typed store names the int lane's species, and "
+          + "this kernel is driven at the " + analysis.lane + " lane");
+    }
     // The narrow species of the int species' width, which is the species the value's int
     // vector has: the driving width's own in a kernel at the int lane, and twice it in one that
     // converts between lanes, whose int values fill a species of that width.

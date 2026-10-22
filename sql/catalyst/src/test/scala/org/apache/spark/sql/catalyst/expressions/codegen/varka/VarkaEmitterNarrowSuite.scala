@@ -328,6 +328,33 @@ class VarkaEmitterNarrowSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     }
   }
 
+  test("a narrow-typed value computed on the int lane is stored narrow") {
+    // The shape `storedNarrow` builds for a narrow-typed choice whose guard is int-typed: the
+    // branches widen into the int lane, the root narrows once at its store, and one byte a row
+    // comes out. Storing four bytes there is the answer a batch of these rows got wrong before
+    // the store knew the root's target (VARKA-329); the reference narrows with the store, so a
+    // wrong width shows row by row.
+    val guard: Cond = new Compare(CompareOp.LT,
+      new ColumnRef(2, LaneType.INT), new ColumnRef(3, LaneType.INT))
+    val stored: VarkaVectorIR = new NarrowLane(new IfElse(guard,
+      new WidenLane(byteCol, LaneType.INT), new WidenLane(byteCol2, LaneType.INT)),
+      LaneType.BYTE)
+    val length = 300
+    def first(row: Int): Int = ((row * 7) % 256) - 128
+    def second(row: Int): Int = 127 - ((row * 11) % 256)
+    def left(row: Int): Int = (row % 5) - 2
+    def right(row: Int): Int = ((row * 3) % 7) - 3
+    val data = Array(
+      Array.tabulate(length)(first), Array.tabulate(length)(second),
+      Array.tabulate(length)(left), Array.tabulate(length)(right))
+    for ((arm, options) <- arms) {
+      // Both arms: an int node in the tree drives this kernel at the int lane either way, so the
+      // shape is the same one and the option only decides how the leaves are read.
+      checkValues(s"a choice stored narrow $arm", Seq(stored), 4, Array.empty[Int], length,
+        data, row => row % 13 == 4, false, options)
+    }
+  }
+
   test("the reference narrows a stored byte and short as the lane does") {
     // The oracle itself: a value written at a narrow width reads back sign-extended, which is
     // what the suites above rest on.

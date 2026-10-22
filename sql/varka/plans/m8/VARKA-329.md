@@ -784,18 +784,21 @@ emitted at one lane is no instruction at all, so the widening a load already did
 
 **The int-lane lift.** A narrow condition or branch beside an int one does not widen to the long
 lane: the long lift of 2.2's mixed rule would give the kernel a long lane holding a narrow value,
-which has no lowering. `VarkaConditionCompiler.onIntLane` widens the value operands of a narrow
-condition to the int lane (a sign extension, exact in every mode, and a validity word is the
-column's either way), `onIntValue` does the same for a value, and `storedNarrow` wraps an int-lane
-root of a narrow-typed expression in a `NarrowLane` to the output's lane so the store is narrow.
-The lift reaches the connective (meetAll), IF, CASE WHEN, and the conjuncts of a filter, and
+which has no lowering. `VarkaConditionCompiler.onIntLane` puts a condition on the int lane, where
+every condition has a form: it widens the value operands of a narrow one (a sign extension, exact
+in every mode, and a validity word is the column's either way), names the int lane for a boolean
+leaf, and lifts what a condition built over conditions is built from - the mirror of `onLongLane`
+for the long lane. `onIntValue` widens a value, and `storedNarrow` wraps an int-lane root of a
+narrow-typed expression in a `NarrowLane` to the output's lane so the store is narrow. The lift
+reaches the connective (meetAll), IF, CASE WHEN, and the conjuncts of a filter, and
 `VarkaNodeCompiler` gained the `CAST(narrow AS INT)` Catalyst inserts where a narrow column meets
-an int. So `CASE WHEN rid < 0 THEN y1 ELSE y2 END`, `if(y1 IS NULL, 5Y, y1)`, and the WHERE of
-`rid < 0 AND (y1 < y2)` fuse and store narrow; a tree whose every value is narrow is untouched and
-keeps its own arm. The wrap fixed a wrong answer the ANSI form of `VarkaCoverageDifferentialSuite`
-caught: the lifted choice's root was still typed INT, so the int store wrote four bytes a row into
-a one-byte output and `CASE WHEN rid < 0 THEN greatest(y1, y2) ELSE y2 END` answered -73 for
-Spark's -1.
+an int. So `CASE WHEN rid < 0 THEN y1 ELSE y2 END`, `if(y1 IS NULL, 5Y, y1)`,
+`WHERE rid < 0 AND (y1 < y2)` and a boolean condition over narrow ones,
+`WHERE (y1 < y2) = (y1 <= y2)`, fuse and store narrow; a tree whose every value is narrow is
+untouched and keeps its own arm. The wrap fixed a wrong answer the ANSI form of
+`VarkaCoverageDifferentialSuite` caught: the lifted choice's root was still typed INT, so the int
+store wrote four bytes a row into a one-byte output and `CASE WHEN rid < 0 THEN greatest(y1, y2)
+ELSE y2 END` answered -73 for Spark's -1.
 
 **The refusals.** `VarkaLoopEmitter.narrowRefusal` names the three shapes a kernel cannot emit: a
 narrow value under a bigint kernel, a narrow column with no baked int lane count
@@ -822,8 +825,10 @@ SMALLINT twins. The `docs/sql-varka.md` table gained the four families and the n
 **What the rows do not cover, by rule or by scope.** A bare narrow column fuses nothing, as for
 every type, so the load row is `y1 < y2` and the constant choice is `if(...)`; a value `CASE WHEN`
 without an ELSE declines, the existing rule, so the choice rows have one; a null narrow literal is
-claimed by no arm; `<=>` and `equal_null` over narrow columns are unclaimed, which is row 336's
-family; and a narrow value in a long-lane kernel has no lowering at all, so no row mixes them. The
+claimed by no arm; `<=>` and `equal_null` over narrow columns have no coverage row, which is row
+336's family, though the shared pieces already fuse them - `sh <=> sh` compiles to the null-safe
+equality over widened operands, pinned in `VarkaExpressionCompilerSuite`; and a narrow value in a
+long-lane kernel has no lowering at all, so no row mixes them. The
 emit cost model has no price for a narrow feature, so a prediction over a narrow shape is
 "unknown" and the grouping falls back to a building measurement; pricing the two lanes is row
 352's, with the fuzzers' draw of them.
@@ -838,16 +843,19 @@ and the row's Spark-level proof is `VarkaCoverageDifferentialSuite`'s, whose fix
 narrow columns `y1`, `y2`, `s1` and `s2`, and whose composing fuzzers leave the narrow rows out
 because drawing the types is row 352's.
 
-**The suites.** `VarkaEmitterNarrowSuite` (7 tests in their own JVM) runs both arms over every
+**The suites.** `VarkaEmitterNarrowSuite` (8 tests in their own JVM) runs both arms over every
 byte length and tail, the whole byte square through every comparison, a range set, `greatest`,
-`least` and a choice, and a narrow column beside an int one, all against `VarkaReference` through
-`VarkaKernelCheck.runAndCompareNarrow`; where a configuration has no species for the widening load
-it asserts the refusal instead of emitting, and the bigint refusal is pinned the same way, so the
-option matrix can run it under every configuration.
+`least` and a choice, a narrow column beside an int one, and a narrow-typed root stored through a
+`NarrowLane` - each against `VarkaReference` through `VarkaKernelCheck.runAndCompareNarrow`;
+where a configuration has no species for the widening load it asserts the refusal instead of
+emitting, and the bigint refusal is pinned the same way, so the option matrix can run it under
+every configuration. `VarkaExpressionCompilerSuite` holds the compiler-level guard of the same
+shape: a boolean equality of two narrow comparisons ANDed with an int conjunct compiles to the
+lifted `BoolCompare`, where returning the mask unchanged built a node whose constructor throws.
 
-**The matrices.** `VarkaEmitterNarrowSuite` passes its seven tests under all 51 of the option
+**The matrices.** `VarkaEmitterNarrowSuite` passes its eight tests under all 51 of the option
 matrix's configurations and the defaults (`dev/varka_matrix.sh --all --module catalyst --suites
-VarkaEmitterNarrowSuite -j 4`: 364 tests, none failed or cancelled), the refusal taking the place
+VarkaEmitterNarrowSuite -j 4`: 416 tests, none failed or cancelled), the refusal taking the place
 of an emission where a configuration has no species for the widening load; `narrowLanes=true` is
 one of them, so the native arm is run at every width. `VarkaCoverageDifferentialSuite` passes all
 744 of its tests at the defaults, at `lanesOverride=16` and under `narrowLanes=true`. Under
@@ -857,6 +865,26 @@ a stale line fails the run, so the list cannot rot. Three of the lines the first
 stale and are gone: an `IS NOT NULL` row's null-test `CASE` reads only the column's validity
 word, so it needs no widening load and fuses at every width, while the same row's projection and
 partition tests select the narrow column and decline.
+
+**The review.** One independent read of the final diff found three things, fixed in their own
+commits. `onIntLane` returned a narrow boolean leaf - a boolean column, a boolean constant, a
+compare of two conditions, a null-safe equality of them, a choice between them - unchanged, and a
+caller then built an `And` over it and a lifted sibling, whose constructor refuses a mix by
+throwing: a query such as `IF(((y1 < y2) = (y1 <= y2)) AND rid < 0, 1, 2)` would have answered
+with an internal error instead of fusing or declining. The lift now names the int lane for those
+leaves and lifts what they are built from, as `onLongLane` does, so every condition has an
+int-lane form and none reaches the fold unlifted. The conjunct path checked only the first
+fused condition after a lift and now checks every one, so a partial lift cannot reach the AND
+fold. And the width-audit probe caught `VarkaEmitDeclined` and printed its message as the width's
+answer, which would have pinned a budget decline as a width verdict; the catch is gone, so a shape
+the forced width cannot emit fails the audit. The reviewer's smaller points are also in: a unit
+test pins the narrow-typed store root - a choice computed on the int lane under a `NarrowLane` to
+the byte lane, the shape the ANSI form caught - with a reference that narrows as the store does,
+and `emitNarrowTypeStore` refuses a narrow-driven kernel rather than naming a species it does not
+have. Running the compiler suite for the new guard also caught an expectation the earlier lift had
+left stale: `sh <=> sh` was held to decline beside the strings and doubles, and it fuses now, so
+the test pins the fused shape.
+
 ### 9.4 Outcome of row 330: the narrow arithmetic in three modes (22 October 2026)
 
 Built on the lanes of step 2 in the worktree `varka-330-arith`: the row's branch took the lane

@@ -284,17 +284,17 @@ final class VarkaConditionCompiler {
   }
 
   /**
-   * {@code cond} on the int lane, which every narrow condition has: its value operands widen
-   * ({@link #onIntValue}) and its structure is unchanged, since a sign extension keeps every
-   * value and its order and a validity word is the column's whichever lane reads it. A
-   * comparison and a null-safe equality widen their two operands, a range set its child, and a
-   * test or a connective its condition. This is how a narrow predicate joins an int one in one
-   * kernel - the WHERE of `rid < 0 AND (y1 < y2)`, the guard of `CASE WHEN rid < 0 THEN y1 ELSE
-   * y2 END` - instead of the long lift that would give the kernel a long lane a narrow value has
-   * no lowering for (VARKA-329). The conditions that are always on the int or the long lane
-   * (the boolean leaves, a constant and a choice between them) are returned as they are; a
-   * narrow one of those is unbuildable, and one returned unchanged fails the lane check rather
-   * than being emitted at the wrong lane.
+   * {@code cond} on the int lane, which every condition has: its value operands widen
+   * ({@link #onIntValue}) and a boolean leaf names the int lane, since a sign extension keeps
+   * every value and its order and a validity word is the column's whichever lane reads it. A
+   * comparison and a null-safe equality widen their two operands, a range set its child, a test
+   * or a connective its condition, and a comparison of two conditions, a null-safe test of them
+   * or a choice between them lifts every condition it is built from. This is how a narrow
+   * predicate joins an int one in one kernel - the WHERE of `rid < 0 AND (y1 < y2)`, the guard of
+   * `CASE WHEN rid < 0 THEN y1 ELSE y2 END` - instead of the long lift that would give the kernel
+   * a long lane a narrow value has no lowering for (VARKA-329). A condition already on the int
+   * or the long lane is itself, so the caller may pass a whole connective and take the result
+   * without checking the lanes again.
    */
   static Cond onIntLane(Cond cond) {
     if (!cond.laneType().isNarrow()) {
@@ -304,6 +304,7 @@ final class VarkaConditionCompiler {
       case Compare c -> new Compare(c.op(), onIntValue(c.left()), onIntValue(c.right()));
       case VarkaVectorIR.NullSafeEqual c ->
           new VarkaVectorIR.NullSafeEqual(onIntValue(c.left()), onIntValue(c.right()));
+      // Over a condition the test lifts with it; over a column it reads the column widened.
       case VarkaVectorIR.IsNotNull n -> n.child() instanceof Cond c
           ? new VarkaVectorIR.IsNotNull(onIntLane(c))
           : new VarkaVectorIR.IsNotNull(onIntValue(n.child()));
@@ -313,12 +314,21 @@ final class VarkaConditionCompiler {
       case VarkaVectorIR.Or o ->
           new VarkaVectorIR.Or(onIntLane(o.left()), onIntLane(o.right()));
       case VarkaVectorIR.Not n -> new VarkaVectorIR.Not(onIntLane(n.child()));
-      case VarkaVectorIR.BoolColumn b -> b;
-      case VarkaVectorIR.CondConst c -> c;
-      case VarkaVectorIR.BoolCompare c -> c;
-      case VarkaVectorIR.BoolNullSafeEq c -> c;
-      case VarkaVectorIR.CondIf c -> c;
+      case VarkaVectorIR.BoolColumn b -> new VarkaVectorIR.BoolColumn(b.ordinal(), LaneType.INT);
+      case VarkaVectorIR.CondConst c -> new VarkaVectorIR.CondConst(c.value(), LaneType.INT);
+      // A mask compared with a mask, at the lane its operands lift to, as on the long lane.
+      case VarkaVectorIR.BoolCompare c ->
+          new VarkaVectorIR.BoolCompare(c.op(), onIntLane(c.left()), onIntLane(c.right()));
+      case VarkaVectorIR.BoolNullSafeEq c ->
+          new VarkaVectorIR.BoolNullSafeEq(onIntLane(c.left()), onIntLane(c.right()));
+      case VarkaVectorIR.CondIf c -> new VarkaVectorIR.CondIf(
+          onIntLane(c.cond()), onIntLane(c.thenCond()), onIntLane(c.elseCond()));
     };
+  }
+
+  /** {@code conds} on the int lane, each through {@link #onIntLane}. */
+  static List<Cond> onIntLaneAll(List<Cond> conds) {
+    return conds.stream().map(VarkaConditionCompiler::onIntLane).toList();
   }
 
   /**
@@ -359,7 +369,7 @@ final class VarkaConditionCompiler {
       // joins it on the int lane (VARKA-329): the long lift below would give the kernel a long
       // lane a narrow value has no lowering for.
       if (in.stream().noneMatch(c -> c.laneType() == LaneType.LONG)) {
-        return Optional.of(in.stream().map(VarkaConditionCompiler::onIntLane).toList());
+        return Optional.of(onIntLaneAll(in));
       }
       List<Cond> lifted = new ArrayList<>();
       for (Cond c : in) {
