@@ -937,6 +937,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
    * batch size.
    */
   private val edges: (String, String) = {
+    // scalastyle:off argcount
     def row(d: String = "DATE'2024-01-31'", i: String = "3", m: String = "0", y: String = "0",
         mm: String = "0", t: String = "TIME'12:34:56.789'", t2: String = "TIME'00:00:00'",
         y1: String = "3", y2: String = "4", s1: String = "300", s2: String = "-400"): String =
@@ -945,6 +946,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
         "INTERVAL '0 00:00:00' DAY TO SECOND, " +
         s"CAST($y1 AS TINYINT), CAST($y2 AS TINYINT), " +
         s"CAST($s1 AS SMALLINT), CAST($s2 AS SMALLINT))"
+    // scalastyle:on argcount
     // A row whose `ym` is `months`, through the view's `make_ym_interval(y, mm)`; Java's
     // truncating division and remainder agree in sign, so the two parts add back to the count.
     def ymRow(months: Long, m: String = "0"): String =

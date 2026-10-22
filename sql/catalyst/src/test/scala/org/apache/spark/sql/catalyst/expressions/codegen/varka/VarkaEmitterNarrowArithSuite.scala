@@ -596,8 +596,10 @@ class VarkaEmitterNarrowArithSuite extends VarkaEmitterTestBase with VarkaOwnJvm
           val rows = VarkaKernelCheck.sparkComparisons.get - before
           // Printed rather than logged: the child JVM's log does not reach the log of the run
           // that started it, and its output does, which is where a timed sweep is read.
+          // scalastyle:off println
           println(s"$where: $ran batches ($took answered) in $seconds s, " +
             s"$rows rows held to Spark")
+          // scalastyle:on println
       }
     }
   }
@@ -627,8 +629,10 @@ class VarkaEmitterNarrowArithSuite extends VarkaEmitterTestBase with VarkaOwnJvm
             without += t1 - t0
             withOracle += t2 - t1
           }
+          // scalastyle:off println
           println(s"$where: 2^16 rows in ${without / 3000} us without the oracle and " +
             s"${withOracle / 3000} us with it")
+          // scalastyle:on println
         }
       }
     }
