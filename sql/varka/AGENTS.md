@@ -20,6 +20,12 @@ Adding an expression is the most common change here and has its own recipe:
 says whether that step is done. Step 7 is the coverage table, and it cannot be
 skipped quietly - the suite fails until the new expression is documented.
 
+Adding a type is the milestone's own change and has its own path:
+`ADDING_A_TYPE.md`, fifteen numbered steps from the lane's facts to the matrix run, each ending in
+a command whose result says whether the step is done. Its closing section names the sites no guard
+catches - the cost model, the census, the coverage rows, the fuzz grammar, the reference evaluator
+- so the reader knows which steps the compiler checks and which only the command does.
+
 ## Open work is recorded, never left as a marker
 
 **The Varka code carries no `TODO` or `FIXME` comments, and should not start.**
