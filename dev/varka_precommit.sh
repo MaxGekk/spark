@@ -61,6 +61,10 @@
 #     (dev/varka_calibration.py --check), when one of them or the tool changed;
 #   * every number the documents quote traces to a committed results file
 #     (dev/varka_quote_check.py), when a document changed;
+#   * a milestone plan's rows hold against the tree (dev/varka_plan_lint.py), when a plan
+#     file changed: a filled provenance cell, no row number twice, and every results file,
+#     plan section and row number a row cites exists; the run-head check needs `gh`, so the
+#     hook runs it offline and the docs job, which has a token, runs it whole;
 #   * Python files pass `ruff check` and `ruff format --check`, the two halves of
 #     CI's Python linter (dev/lint-python runs both; a hand-wrapped script that
 #     passes the first still fails the second). A missing ruff is itself a
@@ -423,6 +427,18 @@ if [ "$docs_changed" -eq 1 ] && [ -x dev/varka_quote_check.py ]; then
   out="$(dev/varka_quote_check.py 2>&1)"; rc=$?
   if [ "$rc" -ne 0 ]; then
     echo "$out" | grep -E 'ORPHAN|orphan' | sed 's/^/quote check: /'
+    findings=$((findings + rc))
+  fi
+fi
+
+# A row is the only record of why a change exists, and nothing else checks what it cites
+# (VARKA-473): a run whose head is another commit, a results file never committed, a section
+# that moved, a repeated row number. The run-head check needs `gh`; the docs job runs it whole.
+if printf '%s\n' "${files[@]}" | grep -qE '^sql/varka/plans/.*/PLAN\.md$' \
+    && [ -x dev/varka_plan_lint.py ]; then
+  out="$(dev/varka_plan_lint.py --check --offline 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "$out" | sed 's/^/plan lint: /'
     findings=$((findings + rc))
   fi
 fi
