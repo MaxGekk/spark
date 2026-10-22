@@ -1,0 +1,77 @@
+VARKA-408: what C1's refusal of the large masked loops costs a real session's first queries, and whether splitting the loops pays.
+Run 22 October 2026, 01:00 to 01:30 CEST, on the laptop (AMD Zen 5, JDK 25.0.4.1), merge cc7287b48f7 (master e18c8937384 and
+the row 440 branch). Each run is a fresh JVM pinned `taskset -c 0,12,13,14,15,1,2,3`, both agent locks held, launched directly
+with the Test javaOptions and -XX:+PrintCompilation; before it the script waited for a 1-minute load below 3 and no other java
+(all 18 runs began with java=0, the highest load at a start 2.77; power profile performance, battery "Not charging" before and
+after every run; all 18 exited 0).
+
+Method. The driver below is FirstQueryDriver (a scratch class; the lines it printed are in the table). A local[2] session
+(VarkaArrowSessions.createSession, Varka on, kernel warm-up off, as row 407's phase 3), VarkaSizeLadder.cacheDates with 100,000
+dates (one null in 31, so the kernels run their masked loops), then the ladder's rung query of n entries
+(greatest(add_months(d,k), date_add(d,k), last_day(d))) run 60 times in a row, each timed. The split arm sets the fused
+ceiling to 50 (default 400) through VarkaColumnarToRowExec.setEmitOptionsForTesting, which splits each loop into more,
+smaller methods: at 4 entries the masked loop methods are 1.3 to 1.6 KB instead of 3.7 KB. Three rounds, the two arms
+swapped every round, at n = 4, 16 and 64.
+
+Refusals read from the JIT log ("COMPILE SKIPPED: out of virtual registers in LIR generator", lines counted for the
+loopMasked/epilogueMasked methods): default arm, 3 methods at 4 entries (3693 bytes), 7 at 16 (3.5 to 3.8 KB), 19 to 23 at 64.
+The split arm does not remove them: C1 still refuses the epilogueMasked methods of 1.3 to 1.6 KB (3 to 5 at 4 entries,
+7 to 10 at 16, 8 to 11 at 64), so the refusal is not a size bound of 3.5 KB and a smaller loop method alone does not avoid it
+(at ceiling 100 two methods were still refused at 4 entries, at 50 none of the loopMasked ones).
+
+Results, medians of three runs, ms. q0 is the first query, sum10/sum30/sum60 the time of the first 10/30/60 queries,
+steady the median of the last 20 queries, t4 the time from the first query's start to the first tier-4 compile of a
+loopMasked method.
+  entries  arm       q0     sum10   sum30   sum60   steady  t4
+  4        default   589    1360    2765    3931    25      1.2 to 1.4 s
+  4        split     625    1543    3091    3847    25      1.7 s
+  16       default   851    2554    6467    8485    70      2.6 to 2.8 s
+  16       split     849    2957    6877    7747    28      4.4 s
+  64       default   1424   6278    18705   25996   86-128  8.0 s
+  64       split     1572   7478    21459   22747   41      13.9 to 14.5 s
+Run-to-run spread of q0 within an arm: 554-602 (4), 813-887 (16), 1397-1430 and 1555-1599 (64).
+
+Reading. The first query is 0.6 s (4 entries) to 1.4 s (64) in both arms, which is planning, emission and class
+definition, not the interpreter. The interpreter window of the refused loops is the time to the first tier-4 compile
+of a loop method, 1.2 to 1.4 s at 4 entries, 2.6 to 2.8 s at 16, 8 s at 64, and splitting makes it longer, not shorter
+(1.7 s, 4.4 s, 14 s): more methods, each needing its own invocations, and the refused ones stay interpreted. The first ten
+queries cost 13 to 19 percent more with the loops split (1543 against 1360 ms, 2957 against 2554, 7478 against 6278); by
+the sixtieth the split arm is ahead at 16 and 64 entries (7747 against 8485, 22747 against 25996) because its steady
+state is lower, a different fact.
+
+Decision. Splitting the loops below the refusal size does not pay for the first queries, and C1's refusal is not
+avoided by it: no change to the emitted loop size is recommended for this row. Not tested here, and not ruled out by it:
+a warm-up of the loop's shape, and a lower OSR threshold. Out of scope, seen here: the default arm's steady state at 16
+and 64 entries after 60 queries is 70 and 86 to 128 ms against 28 and 41 ms for the split arm, so at those sizes the
+default is not yet in its final code after 60 queries (or it settles in a slower mode); not investigated.
+
+Driver (org.apache.spark.sql.execution.benchmark.FirstQueryDriver, args: entries, ceiling (0 = default), queries):
+  package org.apache.spark.sql.execution.benchmark;
+  
+  import org.apache.spark.sql.SparkSession;
+  import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
+  import org.apache.spark.sql.execution.VarkaColumnarToRowExec$;
+  
+  /** args: entries ceiling(0 = default) queries. Prints one line per query: index, start ms, ms. */
+  public class FirstQueryDriver {
+    public static void main(String[] a) throws Exception {
+      int n = Integer.parseInt(a[0]);
+      int ceiling = Integer.parseInt(a[1]);
+      int queries = Integer.parseInt(a[2]);
+      SparkSession s = VarkaArrowSessions.createSession("first-query", true, false, "local[2]");
+      VarkaSizeLadder.cacheDates(s, 100_000);
+      if (ceiling > 0) {
+        VarkaColumnarToRowExec$.MODULE$.setEmitOptionsForTesting(
+            VarkaEmitOptions.DEFAULTS.withFusedCeiling(ceiling));
+      }
+      String q = VarkaSizeLadder.query(n);
+      long t0 = System.nanoTime();
+      for (int i = 0; i < queries; i++) {
+        long t = System.nanoTime();
+        s.sql(q).write().format("noop").mode("overwrite").save();
+        long e = System.nanoTime();
+        System.out.println("Q " + i + " " + java.lang.management.ManagementFactory.getRuntimeMXBean().getUptime() + " " + (e - t) / 1_000_000.0);
+      }
+      s.stop();
+    }
+  }
