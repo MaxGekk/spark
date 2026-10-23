@@ -284,3 +284,35 @@ row, why the byte pair at 8388608 rows still reads 2.1x to 2.6x, and why WIDENED
 The byte rung past the last-level cache was NOT measured (review of 22 October 2026): every rung above stops at 8388608 rows. The
 benchmark now has a 33554432-row rung (a 64 MB byte pair) behind -Dvarka.narrow.pastL3=true; it has not been timed, because the
 laptop was in use for other timing. PLAN.md row 415 owns it: the rung at 512, 256 and 128 bits appended here, prediction 2 rescored.
+
+== Row 415: the past-L3 rung, 33,554,432 rows (23 October 2026) ==
+Code: master 3dac916bd75 plus the row 473 change (neither touches the benchmark or the engine).
+Same command as above with -Dvarka.narrow.pastL3=true and -Dvarka.narrow.arms=widened,native,int,scalar,
+one JVM per width, pinned to cores 0,12,13,14,15,1,2,3, both locks held. 02:34 to 02:44 CEST, each run
+starting at a 1-minute load of 1.00 to 1.03 with no other java, power profile `performance`, battery
+"Not charging"; every case settled at level 4 (8 drives).
+
+Best Time, one 33,554,432-row pass; rate is M rows/s (best time is the minimum, which is what
+prediction 2's "re-run by minimum" asks for).
+                       512 bits            256 bits            128 bits
+  TINYINT WIDENED      22453.5 (6 ms)      15747.7 (9 ms)       6723.0 (20 ms)
+  TINYINT WIDENED128   -                   17305.2 (8 ms)       6924.5 (19 ms)
+  TINYINT NATIVE       24885.6 (5 ms)      23852.5 (6 ms)      22917.6 (6 ms)
+  SMALLINT WIDENED     11537.2 (12 ms)      8960.4 (15 ms)       5589.2 (24 ms)
+  SMALLINT NATIVE      11739.2 (11 ms)     10171.2 (13 ms)      11143.1 (12 ms)
+  INT i1 < i2           5391.6 (25 ms)      5000.7 (27 ms)       5808.1 (23 ms)
+  scalar (byte pair)    1586.3 (85 ms)      1586.0 (85 ms)       1684.2 (80 ms)
+
+NATIVE/WIDENED at this rung: bytes 1.11 / 1.51 / 3.41, shorts 1.02 / 1.13 / 1.99 (512 / 256 / 128 bits).
+The 8,388,608-row rung read 2.1 / 2.6 / 4.3 (bytes) and 1.1 / 1.2 / 2.1 (shorts) in 9.2.
+
+Reading. The widened byte pair moves 64 MB a pass, and its rate past the L3 stays 22.5 G rows/s at
+512 bits, 4.2x the int pair's 5.4 G (256 MB a pass): the narrow *storage* is the win past the cache,
+not the lane. NATIVE keeps an advantage the prediction expected to vanish: 1.5x at 256 bits and 3.4x
+at 128, where the widened arm's 64-bit load and two-part conversion cost 20 ms against 6.
+
+Prediction 2 rescored. 512 bits: holds for both types (1.11 and 1.02 are inside 0.85 to 1.3).
+256 bits: fails high for bytes (1.51) and holds for shorts (1.13). 128 bits: fails high for both
+(3.41 and 1.99). Every ratio here is of minima, as the prediction requires for one above 1.3.
+So the post-cache convergence prediction holds only at the widest host; on this 256-bit-datapath
+laptop the native lane's advantage is not an in-cache artifact at 256 or 128 bits.
