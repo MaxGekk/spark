@@ -293,9 +293,10 @@ final class VarkaVectorWalk {
         if (!analysis.narrowsAtStore(node)) {
           Lane target = Lane.of(n.target());
           if (target.isNarrow() && analysis.laneOf(n.child()) == Lane.INT) {
-            // An int value wrapped to TINYINT or SMALLINT away from a store: no one-lane
-            // conversion exists, so truncate through the narrow species and sign-extend back.
-            emitNarrowTruncation(cb, target, analysis);
+            // An int value wrapped to TINYINT or SMALLINT away from a store: it stays in the int
+            // lane, reduced to the narrow width and sign-extended back by the shift pair a
+            // wrapping narrow node reduces with.
+            emitWrapToNarrow(cb, Lane.INT, n.target());
           } else {
             emitShapeConversion(cb, analysis.laneOf(n.child()), analysis.laneOf(node), analysis);
           }
@@ -416,6 +417,11 @@ final class VarkaVectorWalk {
           cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
         }
         cb.invokevirtual(lane.vector, "blend", lane.blend);
+        // A narrow pick passes its arms' unreduced int values through - a blend commutes with
+        // the reduction - and reduces once here where its reader is not a ring node.
+        if (n.laneType().isNarrow() && analysis.wrapAt.contains(n)) {
+          emitWrapToNarrow(cb, lane, n.laneType());
+        }
         if (!dense && s.ownWord.contains(node)) {
           // valid = (kT & validThen) | (~kT & validElse), the chosen branch's validity.
           cb.lload(s.kt.get(n.cond()));
@@ -507,27 +513,6 @@ final class VarkaVectorWalk {
     cb.loadConstant(0);
     cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
     cb.checkcast(to.vector);
-  }
-
-  /**
-   * The int vector on the stack truncated to {@code target}'s width and sign-extended back into
-   * the int lanes: {@code I2B}/{@code I2S}, part 0, into a narrow species of at least the int
-   * species' element count - the group's lanes land in part 0 whatever the species' width, the
-   * rest zeroed - and {@code B2I}/{@code S2I}, part 0, back. What a {@link
-   * VarkaVectorIR.NarrowLane} with a narrow target means away from a store, where the value
-   * would otherwise flow untruncated (VARKA-329).
-   */
-  private static void emitNarrowTruncation(CodeBuilder cb, Lane target, Analysis analysis) {
-    cb.getstatic(VECTOR_OPERATORS, target == Lane.BYTE ? "I2B" : "I2S", VO_CONVERSION);
-    cb.getstatic(target.vector, target.speciesField(analysis.widenLanes(target)), VECTOR_SPECIES);
-    cb.loadConstant(0);
-    cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
-    cb.checkcast(target.vector);
-    cb.getstatic(VECTOR_OPERATORS, target == Lane.BYTE ? "B2I" : "S2I", VO_CONVERSION);
-    emitConstantSpecies(cb, Lane.INT, analysis);
-    cb.loadConstant(0);
-    cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
-    cb.checkcast(Lane.INT.vector);
   }
 
   /**
@@ -768,8 +753,12 @@ final class VarkaVectorWalk {
   }
 
   /**
-   * {@code IntNeg}, emitted as a multiply by -1 so it needs no unary descriptor: the two agree on
-   * every lane, {@link Integer#MIN_VALUE} included, where both return the input. That single value
+   * {@code IntNeg}, emitted on the int and long lanes as a multiply by -1, and on a narrow node as
+   * the lanewise {@code NEG}: the two agree on every lane, {@link Integer#MIN_VALUE} included,
+   * where both return the input. A narrow node takes {@code NEG} because x86 has no byte
+   * multiply, so a {@code ByteVector} multiply is an eight-instruction sequence where {@code NEG}
+   * is one subtract from zero; whether the int and long lanes gain from it too is unmeasured, and
+   * their emitted bytes stay as they are until it is. That single value
    * is the whole of the overflow test, so the check is one compare rather than the four ops
    * {@link #emitIntArith} needs, and it reads the operand rather than the result - no scratch slot
    * at all.
@@ -779,7 +768,9 @@ final class VarkaVectorWalk {
    * {@code -(-128Y)} is the value that overflows, not {@code -Integer.MIN_VALUE}. A wrapping
    * narrow negation on the int lane is the int negate of the exact operand, which for
    * {@code -128} is 128 rather than -128, so it reduces where a consumer cannot take the
-   * unreduced value.
+   * unreduced value. A narrow {@code abs} is the same node with the lanewise {@code ABS}: the
+   * same check on the same operand, and at the int lane a reduction of its own result wherever
+   * it is read ({@link Analysis#wrapAt}).
    */
   private static void emitIntNeg(CodeBuilder cb, IntNeg n, boolean dense, Analysis analysis,
       Slots s, Set<VarkaVectorIR> computed) {
@@ -795,8 +786,15 @@ final class VarkaVectorWalk {
       cb.invokevirtual(lane.vector, "compare", lane.compareVI);
       emitOverflowMask(cb, n.mode(), n, dense, analysis, s);
     }
-    lane.pushScalar(cb, -1);
-    cb.invokevirtual(lane.vector, "mul", lane.lanewiseVI);
+    if (n.laneType().isNarrow()) {
+      cb.getstatic(VECTOR_OPERATORS, n.abs() ? "ABS" : "NEG", VO_UNARY);
+      cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseUnary);
+    } else if (n.abs()) {
+      throw VarkaErrors.illegalArgument("abs is a narrow lane's node only: " + n);
+    } else {
+      lane.pushScalar(cb, -1);
+      cb.invokevirtual(lane.vector, "mul", lane.lanewiseVI);
+    }
     if (n.laneType().isNarrow() && analysis.wrapAt.contains(n)) {
       emitWrapToNarrow(cb, lane, n.laneType());
     }

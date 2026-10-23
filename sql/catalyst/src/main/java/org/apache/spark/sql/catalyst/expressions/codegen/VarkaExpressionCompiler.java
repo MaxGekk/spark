@@ -626,18 +626,32 @@ public final class VarkaExpressionCompiler {
           return residual(position);
         }
         // One kernel is driven at one lane: its loop, its epilogue and its driving stores are that
-        // lane's species. The first fused entry fixes the lane and an entry driven at the other is
-        // demoted to residual with a reason that says so - checked here, before the budgets,
+        // lane's species. The entries fused so far fix it, and an entry no lane serves beside them
+        // is demoted to residual with a reason that says so - checked here, before the budgets,
         // because `fitsBudgets` would refuse the mix too but only answers yes or no, and a lane
         // mismatch reported as a budget breach sends a reader hunting a chain-depth problem that
-        // is not there. An entry that converts between lanes is driven at the long lane
-        // (VARKA-28), so it joins a long kernel and not an int one.
-        LaneType lane = VarkaVectorIR.emissionLane(ir, options);
-        if (!outputs.isEmpty()
-            && lane != VarkaVectorIR.emissionLane(outputs.get(0), options)) {
+        // is not there. A narrow entry beside an int one shares the int lane
+        // (`VarkaVectorIR.kernelLane`); a long entry shares no lane with either. An entry that
+        // converts between lanes is driven at the long lane (VARKA-28), so it joins a long kernel
+        // and not an int one.
+        List<VarkaVectorIR> with = new ArrayList<>(outputs);
+        with.add(ir);
+        if (!outputs.isEmpty() && VarkaVectorIR.kernelLane(with, options).isEmpty()) {
           marks.restore(inputs, literals, sink);
           sink.take();
-          sink.note(laneMismatch(lane, VarkaVectorIR.emissionLane(outputs.get(0), options)), e);
+          sink.note(laneMismatch(VarkaVectorIR.emissionLane(ir, options),
+              VarkaVectorIR.kernelLane(outputs, options).orElseThrow()), e);
+          return residual(position);
+        }
+        // Joining can move the kernel from a narrow lane to the int lane, where its narrow
+        // entries need the widening load this width may not have. The entry that moves it is
+        // the one demoted, and its reason says why, though it may hold no narrow value itself.
+        Optional<String> joined = VarkaLoopEmitter.narrowRefusal(with, options);
+        if (joined.isPresent()) {
+          marks.restore(inputs, literals, sink);
+          sink.take();
+          sink.note("joining drives the kernel's narrow entries at the int lane, where "
+              + joined.get(), e);
           return residual(position);
         }
         // An accepted entry must also fit the emitter's structural budgets together with the
@@ -645,8 +659,6 @@ public final class VarkaExpressionCompiler {
         // time, where a breach can only become a silent per-batch fallback - no decline reason,
         // and EXPLAIN still claims fusion. So the compiler mirrors them and demotes the
         // overflowing entry to residual.
-        List<VarkaVectorIR> with = new ArrayList<>(outputs);
-        with.add(ir);
         if (!forced && VarkaLoopEmitter.fitsBudgets(with, inputs.size(), options)) {
           sink.take();
           outputs.add(ir);

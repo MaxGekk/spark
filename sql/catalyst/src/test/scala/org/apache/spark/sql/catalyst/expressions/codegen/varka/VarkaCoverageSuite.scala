@@ -103,8 +103,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   // The narrow lanes' columns (VARKA-329, VARKA-330): TINYINT and SMALLINT, two of each so a
   // comparison or an operation can be column against column. They are named apart from the
   // fixture's `y`, which is a year count. A narrow column is stored at its own width; the
-  // default arm computes it on the int lane and the native arm (`narrowLanes`) on the narrow
-  // lane, where every value is narrow.
+  // native arm (`narrowLanes`, the default) computes it on the narrow lane where every value is
+  // narrow, and the widened arm and any int-driven kernel on the int lane.
   private val y1 = AttributeReference("y1", ByteType)()
   private val y2 = AttributeReference("y2", ByteType)()
   private val s1 = AttributeReference("s1", ShortType)()
@@ -495,12 +495,12 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("IF(b, l, l2)", "the leaf is lifted to the long lane of the values"),
       Row("CASE WHEN b THEN l ELSE l2 END", "likewise, per branch"))),
 
-    // TINYINT columns (VARKA-329): a narrow column is stored at its own width and read by a
-    // widening load on the default arm, and the compare, the range set and the choice are the
-    // int lane's; under `narrowLanes` the same tree runs on the byte lane instead.
+    // TINYINT columns (VARKA-329): a narrow column is stored at its own width and, on the
+    // default native arm, the compare, the range set and the choice run on the byte lane; with
+    // `narrowLanes` off the same tree reads it by a widening load and runs on the int lane.
     Family("TINYINT columns", predicates = true, Seq(
-      Row("y1 < y2", "two narrow columns: each load widens the narrow species of the int " +
-        "width, or the next width up in its parts, and the compare is the int lane's"),
+      Row("y1 < y2", "two narrow columns compared at the byte lane; with narrowLanes off each " +
+        "load widens into the int lane, in parts where the int width needs them"),
       Row("y1 <= y2", "the other ordering, so that every comparison has a row of its own"),
       Row("y1 >= y2"),
       Row("y1 = 5Y", "a narrow column against a narrow literal, stored as the same width"),

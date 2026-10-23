@@ -587,8 +587,9 @@ final class VarkaVectorTemplateWarmup {
       VectorSpecies<Integer> is = IntVector.SPECIES_PREFERRED;
       VectorSpecies<Long> ls = LongVector.SPECIES_PREFERRED;
       VectorSpecies<Double> ds = DoubleVector.SPECIES_PREFERRED;
-      // The species a widened kernel - the default arm - loads and stores a narrow column at,
-      // where it is not the preferred one the narrow blocks warm (VARKA-329).
+      // The species a widened kernel - an int-driven one that reads a narrow column, or any
+      // narrow kernel with narrowLanes off - loads and stores a narrow column at, where it is
+      // not the preferred one the narrow blocks warm (VARKA-329).
       VectorSpecies<Byte> bw = widenedSpecies(Lane.BYTE, byte.class, bs);
       VectorSpecies<Short> sw = widenedSpecies(Lane.SHORT, short.class, ss);
       int[] ia = new int[is.length()];
@@ -757,10 +758,10 @@ final class VarkaVectorTemplateWarmup {
         VectorMask<Byte> m = a.compare(VectorOperators.LT, b);
         IntVector widened =
             (IntVector) c.convertShape(VectorOperators.B2I, IntVector.SPECIES_PREFERRED, 0);
-        // The narrow arithmetic (VARKA-330): the lane's add, subtract and multiply, the multiply
-        // by a scalar -1 the emitter negates with (an abs is a compare and a blend over it), the
-        // saturating operators the ANSI overflow check compares against, and the mask calls a
-        // range test makes - fromLong is the masked body's guard collect.
+        // The narrow arithmetic (VARKA-330): the lane's add, subtract and multiply, the lanewise
+        // NEG and ABS the emitter negates and takes abs with, the saturating operators the ANSI
+        // overflow check compares against, and the mask calls a range test makes - fromLong is
+        // the masked body's guard collect.
         ByteVector sum = a.add(b);
         ByteVector satAdd = a.lanewise(VectorOperators.SADD, b);
         VectorMask<Byte> inRange = sum.compare(VectorOperators.EQ, satAdd);
@@ -768,7 +769,9 @@ final class VarkaVectorTemplateWarmup {
             + ByteVector.broadcast(s, (byte) 5).lane(0)
             + m.not().toLong() + m.or(tail).toLong()
             + sum.lane(0) + a.sub(b).lane(0) + a.mul(b).lane(0)
-            + a.mul((byte) -1).lane(1) + VectorMask.fromLong(s, 0x5L).and(inRange).toLong()
+            + a.lanewise(VectorOperators.NEG).lane(1)
+            + a.lanewise(VectorOperators.ABS).lane(1)
+            + VectorMask.fromLong(s, 0x5L).and(inRange).toLong()
             + a.lanewise(VectorOperators.SSUB, b).lane(0)
             + a.compare(VectorOperators.GT, (byte) 0).toLong()
             + (inRange.anyTrue() ? 1 : 0) + inRange.and(tail).toLong();
@@ -798,7 +801,9 @@ final class VarkaVectorTemplateWarmup {
             + ShortVector.broadcast(s, (short) 5).lane(0)
             + m.not().toLong() + m.or(tail).toLong()
             + sum.lane(0) + a.sub(b).lane(0) + a.mul(b).lane(0)
-            + a.mul((short) -1).lane(1) + VectorMask.fromLong(s, 0x5L).and(inRange).toLong()
+            + a.lanewise(VectorOperators.NEG).lane(1)
+            + a.lanewise(VectorOperators.ABS).lane(1)
+            + VectorMask.fromLong(s, 0x5L).and(inRange).toLong()
             + a.lanewise(VectorOperators.SSUB, b).lane(0)
             + a.compare(VectorOperators.GT, (short) 0).toLong()
             + (inRange.anyTrue() ? 1 : 0) + inRange.and(tail).toLong();
@@ -839,10 +844,11 @@ final class VarkaVectorTemplateWarmup {
         ByteVector a = ByteVector.fromMemorySegment(w, seg, 0, ByteOrder.LITTLE_ENDIAN);
         ByteVector b = ByteVector.fromMemorySegment(w, seg, w.length(), ByteOrder.LITTLE_ENDIAN);
         ByteVector c = ByteVector.fromMemorySegment(w, seg, 512, ByteOrder.LITTLE_ENDIAN, tail);
-        // The species' own compare, blend and saturating operator, and the mask calls a
-        // selection and a guard make, which a kernel reaches at this species too.
+        // The species' own compare, blend, saturating operator and unary NEG and ABS, and the
+        // mask calls a selection and a guard make, which a kernel reaches at this species too.
         VectorMask<Byte> m = a.compare(VectorOperators.LT, b);
         acc += a.blend(b, m).lane(0) + a.lanewise(VectorOperators.SADD, b).lane(0)
+            + a.lanewise(VectorOperators.NEG).lane(0) + a.lanewise(VectorOperators.ABS).lane(0)
             + a.compare(VectorOperators.GT, (byte) 0).toLong()
             + m.and(tail).toLong() + m.or(tail).toLong() + m.not().toLong();
         for (int part = 0; part < parts; part++) {
@@ -871,6 +877,7 @@ final class VarkaVectorTemplateWarmup {
             ShortVector.fromMemorySegment(w, seg, 512, ByteOrder.LITTLE_ENDIAN, tail);
         VectorMask<Short> m = a.compare(VectorOperators.LT, b);
         acc += a.blend(b, m).lane(0) + a.lanewise(VectorOperators.SADD, b).lane(0)
+            + a.lanewise(VectorOperators.NEG).lane(0) + a.lanewise(VectorOperators.ABS).lane(0)
             + a.compare(VectorOperators.GT, (short) 0).toLong()
             + m.and(tail).toLong() + m.or(tail).toLong() + m.not().toLong();
         for (int part = 0; part < parts; part++) {
