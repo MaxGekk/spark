@@ -298,11 +298,14 @@ public class VarkaNarrowEmitBenchmark extends VarkaBenchmarkBase {
 
   /**
    * Emits {@code shape} under {@code arm} and loads it, or returns empty with the reason the
-   * emitter declined it. The class name carries the shape and not the arm: each arm has a loader
-   * of its own, so the same name may be defined in both, and two arms' bytes become comparable
-   * by {@link Arrays#equals} - a name that differed would show up in the constant pool.
+   * emitter declined it. The class name carries both the shape and the arm: the settle gate reads
+   * a kernel's compile levels from the JVM's code list by class name alone
+   * ({@link VarkaEmitterTestSupport#loopLevels}), so two classes sharing one name would have
+   * their loops' levels merged, and the WIDENED arm's level 4 could stand for a NATIVE loop still
+   * at C1. The int-driven shape's byte comparison emits its own copies under one neutral name
+   * instead ({@link #requireIntDrivenSameBytes}).
    */
-  private Optional<Emitted> emit(int shapeId, Shape shape, Arm arm,
+  private Optional<Emitted> emit(String name, Shape shape, Arm arm,
       VarkaGeneratedClassLoader loader) {
     var options = arm.options();
     Optional<String> refusal = VarkaLoopEmitter.narrowRefusal(shape.roots(), options);
@@ -311,18 +314,19 @@ public class VarkaNarrowEmitBenchmark extends VarkaBenchmarkBase {
           + " declined: " + refusal.get());
       return Optional.empty();
     }
-    String name = "org.apache.spark.sql.varka.bench.NarrowEmit" + shapeId;
-    byte[] bytes;
-    try {
-      bytes = VarkaLoopEmitter.emit(name, shape.roots(), shape.inputLanes().length, 0,
-          null, null, options);
-    } catch (IllegalArgumentException e) {
-      System.out.println("VarkaNarrowEmitBenchmark: " + shape.label() + ", " + arm
-          + " declined at emit: " + e.getMessage());
-      return Optional.empty();
-    }
+    byte[] bytes = VarkaLoopEmitter.emit(name, shape.roots(), shape.inputLanes().length, 0,
+        null, null, options);
     return Optional.of(new Emitted(defineKernel(loader, name, bytes), bytes));
   }
+
+  /** One arm's kernel name: the shape and the arm, so that no two kernels share one. */
+  private static String kernelName(int shapeId, Arm arm) {
+    return "org.apache.spark.sql.varka.bench.NarrowEmit" + shapeId + arm.name().charAt(0);
+  }
+
+  /** The name both arms are emitted under when the byte-identity check compares them. */
+  private static final String SAME_BYTES_NAME =
+      "org.apache.spark.sql.varka.bench.NarrowEmitSame";
 
   // -------------------------------------------------------------------------------------------
   // Calling a kernel
@@ -518,7 +522,8 @@ public class VarkaNarrowEmitBenchmark extends VarkaBenchmarkBase {
       for (int a = 0; a < arms.size(); a++) {
         loaders[a] = new VarkaGeneratedClassLoader(getClass().getClassLoader());
         for (int s = 0; s < allShapes.size(); s++) {
-          emitted[s][a] = emit(s, allShapes.get(s), arms.get(a), loaders[a]);
+          emitted[s][a] = emit(kernelName(s, arms.get(a)), allShapes.get(s), arms.get(a),
+              loaders[a]);
         }
       }
       requireIntDrivenSameBytes(allShapes.get(INT_DRIVEN), arms, emitted[INT_DRIVEN]);
@@ -544,12 +549,17 @@ public class VarkaNarrowEmitBenchmark extends VarkaBenchmarkBase {
    * The int-driven shape (c) expects one kernel from both arms: the tree holds an int value, so
    * the arm does not reach the narrow lane. Identical class bytes are what "one kernel" means,
    * and a difference here would mean an option changed the bytecode of a shape it should not.
+   * The timed kernels are named per arm, and class bytes carry the name in the constant pool, so
+   * this emits the shape once more under each arm under one neutral name and compares those.
    */
   private static void requireIntDrivenSameBytes(Shape shape, List<Arm> arms,
       Optional<Emitted>[] emitted) {
     var bytes = new ArrayList<byte[]>();
     for (int a = 0; a < arms.size(); a++) {
-      emitted[a].ifPresent(e -> bytes.add(e.bytes()));
+      if (emitted[a].isPresent()) {
+        bytes.add(VarkaLoopEmitter.emit(SAME_BYTES_NAME, shape.roots(),
+            shape.inputLanes().length, 0, null, null, arms.get(a).options()));
+      }
     }
     for (int k = 1; k < bytes.size(); k++) {
       require(Arrays.equals(bytes.get(0), bytes.get(k)), "the arms' bytes differ for "

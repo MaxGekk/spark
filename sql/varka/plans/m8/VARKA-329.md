@@ -950,35 +950,43 @@ int-driven `b < i`, `e CASE WHEN y1 < y2 THEN y1 ELSE y2 END` as a `TINYINT` sto
 packed-boolean shape `d` is the selection word of every compare root and so has no separate
 kernel), emits it with the arm's option set, loads it, checks the whole batch against
 `VarkaReference`, and times it at 16384, 262144 and 1000000 rows, with 8388608 and 33554432 under
-opt-in properties. Ten runs on the laptop at 512, 256 and 128 bits, WIDENED and NATIVE both in one
-JVM and each alone; the record, with commands, pins, the load and power state of every run and
-every table, is `results/VARKA-329-emit-arm.txt`.
+opt-in properties. Fourteen runs on the laptop at 512, 256 and 128 bits, WIDENED and NATIVE both
+in one JVM and each alone; the record, with commands, pins, the load and power state of every run
+and every table, is `results/VARKA-329-emit-arm.txt`.
 
 **Verdict** (NATIVE over WIDENED, medians, G rows/s in parentheses):
 
 | shape | 512 bits | 256 bits | 128 bits |
 | :-- | :-- | :-- | :-- |
-| byte compare into a selection | 4.05, 3.88, 2.32 (104.0, 99.2, 58.3) | 3.02, 3.03, 2.91 (48.6, 49.0, 45.0) | NATIVE only: 36.1, 35.4, 34.3; WIDENED declines |
-| the add-then-compare chain | 3.99, 3.84, 2.33 | 2.56, 2.67, 2.54 | NATIVE only: 35.5, 36.3, 33.9 |
-| mixed `b < i`, int-driven | 1.00 at every rung; the arms' bytes are identical | 1.00, identical bytes | both arms decline |
-| `CASE ... TINYINT` store | 4.44, 3.69, 2.24 (86.5, 72.1, 42.5) | 4.67, 4.01, 2.21 | NATIVE only: 59.7, 53.6, 41.1 |
+| byte compare into a selection | 4.08, 3.88, 2.32 (104.1, 99.0, 58.4) | 3.06, 3.05, 2.91 (49.0, 48.7, 44.8) | NATIVE only: 36.1, 36.2, 34.0; WIDENED declines |
+| the add-then-compare chain | 4.04, 3.84, 2.34 | 2.55, 2.64, 2.53 | NATIVE only: 35.6, 36.1, 33.9 |
+| mixed `b < i`, int-driven | 1.00, 1.00, 0.99; the arms' bytes are identical | 1.00 at every rung, identical bytes | both arms decline |
+| `CASE ... TINYINT` store | 4.57, 3.38, 2.24 (89.1, 65.8, 42.6) | 4.35, 3.52, 2.22 | NATIVE only: 57.7, 55.9, 41.2 |
 
-Past the cache the compare reads 1.58 at 8388608 rows (a 16 MB byte pair, the edge of the pinned
-complex's 16 MB L3) and 1.17 at 33554432 (64 MB); the chain 1.68 and 1.24; the store 1.47 and
-1.05. The two-species arrangement costs nothing measurable: the separate-arm JVMs at 512 bits
-agree with the all-arms ones to within 1 percent.
+Past the cache the compare reads 1.65 at 8388608 rows (a 16 MB byte pair, the edge of the pinned
+complex's 16 MB L3) and 1.15 at 33554432 (64 MB); the chain 1.68 and 1.24; the store 1.45 and
+1.04. The two-species arrangement shows no measurable cost: the separate-arm JVMs at 512 bits
+agree with the all-arms ones on the compare within 1 percent, inside the store cell's run-to-run
+spread.
 
-**Does the emitted kernel reproduce the hand-loop advantage?** The WIDENED arm, yes: 25.7, 25.6,
-25.2 against the hand loop's 26.9, 26.6, 25.9 G rows/s at 512 bits and 16.1, 16.2, 15.4 against
-16.5, 16.4, 16.0 at 256, within 2 to 4 percent. The NATIVE arm keeps 62 to 94 percent of the hand
-loop's advantage, not all of it: 4.05 against 5.60 at 512 bits in L1, 3.02 against 4.66 at 256,
+The first campaign of ten runs was rerun. Its settle gate read a kernel's compile levels from the
+JVM's code list by class name, and both arms' classes carried the same name in their own loaders,
+so the gate could read one arm's level 4 for the other's loop still at C1; the review of this
+section found it. Each arm's class is now named for its arm, and the rerun's 306 settles all read
+level 4 with none unsettled; its 512-bit medians reproduce the first campaign's to within the cell
+spreads, the store's 262144-row cell being bimodal at 62 to 88 G rows/s.
+
+**Does the emitted kernel reproduce the hand-loop advantage?** The WIDENED arm, yes: 25.5, 25.5,
+25.2 against the hand loop's 26.9, 26.6, 25.9 G rows/s at 512 bits and 16.0, 16.0, 15.4 against
+16.5, 16.4, 16.0 at 256, within a twentieth. The NATIVE arm keeps 63 to 94 percent of the hand
+loop's advantage, not all of it: 4.08 against 5.60 at 512 bits in L1, 3.06 against 4.66 at 256,
 and 94 percent at the L3 rung. The gap is the fixed work a group of the emitted loop does and the
 hand loops do not - the validity word, the general validity fallback at the 64- and 32-lane byte
 species, the loop bounds and the epilogue - which is where 9.2 said to look if the margin went
 missing. It did not go missing to that degree: 9.2's threshold was that an emitted kernel keeping
 less than about half of the hand loop's ratio would put the margin outside the lane, and the
-smallest kept fraction is 0.62. The NATIVE lane is still worth 2.5x to 4.7x for a pure byte shape,
-and the default rule of 3.5 is not contradicted on this host at 512 or 256 bits.
+smallest kept fraction is 0.63. The NATIVE lane is still worth 2.5x to 4.6x for a pure byte shape
+in cache, and the default rule of 3.5 is not contradicted on this host at 512 or 256 bits.
 
 **The 128-bit finding, and it is not a timing.** At 128 bits the WIDENED arm declines every
 `TINYINT` shape that reads a value, with the reason the emitter names: "a BYTE column has no
@@ -996,14 +1004,16 @@ with the row engine on 128-bit hosts. That choice is question 1's, and nothing h
 default.
 
 **Predictions of 3.3, scored on the emitted arms** (detail in the record). 1 holds at 256 bits
-(3.02 inside the 1.5 to 4.0 band) and is touched at 512 (4.05, against the hand loop's 5.60). 2
-holds at the rung that is genuinely past the cache (1.17 and 1.24 at 33554432 rows) and is above
-the band at 8388608, which is at the L3 edge, not past it. 3 holds: the mixed shape is one kernel
-in both arms. 4 is not measured, the shapes here are `TINYINT`. 5 has no emitted ratio to bound at
-128 bits, because WIDENED declines. 6 holds at 512 and 256 and is decided at 128 by the census
-cell that does not exist. 7 holds: 210 case settles over the ten runs, every one at eight drives
-and level 4, none unsettled, no cell moved with run order (largest run-to-run spread 14 percent,
-which is why the tables are medians).
+(3.06 and 3.05 inside the 1.5 to 4.0 band) and is touched at 512 (4.08 and 3.88, against the hand
+loop's 5.60). 2 holds at the rung that is genuinely past the cache (1.15 and 1.24 at 33554432
+rows) and is above the band at 8388608, which is at the L3 edge, not past it. 3 holds: the mixed
+shape is one kernel in both arms, 1.00 everywhere but 1000000 rows at 512, which reads 0.99. 4 is
+not measured, the shapes here are `TINYINT`. 5 has no emitted ratio to bound at 128 bits, because
+WIDENED declines every shape there. 6 holds at 512 and 256 and is decided at 128 by the census
+cell that does not exist. 7 holds: 306 case settles over the fourteen runs, 304 at eight drives
+and two at nine, all at level 4, none unsettled, and the gate's class lookup is per arm. The
+run-to-run spread reaches 42 percent in the store's 262144-row cell (62.4 to 88.4 G rows/s) and
+26 percent in the compare's WIDENED cell at 256 bits, which is why the tables are medians.
 
 **Still owed.** The runner hosts' columns at 256 and 128 bits (the EPYC 7763 and the Neoverse N2),
 `SMALLINT` on these shapes, the null and masked-epilogue path (no batch here has a null), and row
