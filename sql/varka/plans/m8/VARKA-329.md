@@ -945,6 +945,7 @@ record their comments cite; each was fixed or answered as stated.
     model enumerates all five lanes. Row 476 of the milestone plan still owns the measurement
     of the first narrow kernel on a fresh JVM.
 
+
 ### 9.5 Outcome of step 2: the emitted arms measured (23 October 2026)
 
 Step 2 is the measurement 9.2 owed: the same shapes through `VarkaLoopEmitter` and
@@ -1035,3 +1036,61 @@ run-to-run spread reaches 42 percent in the store's 262144-row cell (62.4 to 88.
 arithmetic chain's timed rungs use bytes in [-64, 63] because the arms disagree on overflow until
 row 330's deferred wrap; the run prints that disagreement (100 + 100: WIDENED selects nothing,
 NATIVE selects the row) rather than hiding it.
+
+### 9.6 Outcome of step 3: the part-form widening load at 128 bits (23 October 2026)
+
+At 128 bits a `TINYINT` column had no widening load: the wide arm read the narrow species of the
+int species' own width, and a 32-bit byte species does not exist, so every byte-driven shape
+declined. Either the emitter learned the part-width load at 4 int lanes, or the mixed narrow shapes
+stayed with the row engine; the emitter now learns it, in the 64-bit two-part form (9.2's option
+(a), `B2I_load64`), and the decline is gone.
+
+**What it does.** `Lane.widenLanes` names the species a widening load reads: the narrow species of
+the int species' own width where it exists, and otherwise the next width up, so eight and sixteen
+int lanes keep their bytes and four int lanes - and two, on a 64-bit host - read the next species
+up: an eight-lane 64-bit byte load converted in two parts, four at two int lanes.
+`Analysis.narrowGroups` is that load's part count, the kernel's rather than a body's because every
+body's loop must agree on the iteration it covers. The loop computes the groups of one iteration,
+each group's narrow load reading the whole iteration's species once from the iteration's first row
+and converting its own part (`Slots.rowGroup`); the bound rounds down to a whole iteration and the
+remainder goes through the masked epilogue one group at a time. A narrow store whose species is
+wider than a group is always masked, since the last iteration has no next group to write over the
+lanes past its own. Form (b), the 128-bit four-part load, is not used: the spike measured it
+within noise of (a) at 128 bits (0.97 to 0.99 of it) and 10 to 13 percent faster at 256, where the
+emitter already reads the int width's own species.
+
+**Artifacts and tests.** `width_audit.json`'s 128-bit column loses the ten `declined: a BYTE column
+has no widening load at 4 int lanes` cells and names them; `emitted_bytes.json` gains the 128-bit
+`TINYINT` method hashes; `VarkaFamilySwitchSuite`'s recorded
+declines and the 28 `lanesOverride=4` lines of `matrix/skips.tsv` follow, because those tests now
+pass; coverage and the docs' 128-bit column are regenerated.
+
+**Measured** (`VarkaNarrowEmitBenchmark`, the benchmark of step 2, six runs at
+`-XX:MaxVectorSize=16`, both locks, the idle gate and the pinned cores; the record is
+`results/VARKA-329-partload.txt`; G rows/s, medians, the rungs 16384, 262144 and 1000000 in cache):
+
+| shape | WIDENED | NATIVE | N/W |
+| :-- | :-- | :-- | :-- |
+| compare, in cache | 5.2, 5.1, 5.1 | 36.3, 36.5, 34.3 | 6.97x, 7.10x, 6.77x |
+| compare, past L3 | 5.0 / 2.2 (8388608), 4.8 (33554432) | 30.0, 20.5 | 6.0x / 13.6x, 4.23x |
+| add-then-compare chain, in cache | 2.3, 2.3, 2.2 | 35.8, 36.2, 33.7 | 15.66x, 15.99x, 15.03x |
+| that chain, past L3 | 2.2, 2.2 | 28.5, 20.6 | 12.93x, 9.37x |
+| mixed `b < i`, in cache | 5.6, 5.5, 5.4 | 5.6, 5.5, 5.5 | 1.00x at every rung |
+| `CASE ... TINYINT` store, in cache | 3.7, 3.7, 3.6 | 56.1, 57.6, 41.1 | 15.24x, 15.70x, 11.27x |
+| that store, past L3 | 3.6, 3.3 | 19.1, 14.4 | 5.36x, 4.39x |
+
+**Verdict.** The decline is gone and the mixed shape now runs at the int lane's own rate with the
+same class bytes in both arms, where both arms declined before. But wherever every value is narrow,
+NATIVE is 4.2x to 16x faster, far outside prediction 5's ceiling of 4.0 and past the 1.3 band in
+which 3.5 keeps WIDENED the default. That is the lane's ratio (16 byte lanes against 4 int lanes)
+and not a tuning miss: the emitted compare keeps 0.70 to 0.72 of the hand loop's WIDENED rate at
+128 bits (5.2, 5.1, 5.1 against 7.3, 7.3, 7.1 G rows/s in `results/VARKA-329-spike.txt`). So
+3.5's per-width default now has its 128-bit case, and the choice is the owner's (question 1,
+section 8); nothing here changes the default. One measured fact is not explained: the chain reads
+2.2 to 2.3 G rows/s in every JVM, and the compare falls to the same plateau in one of the five JVMs
+that run WIDENED, from the 262144-row rung on - 9.2's 128-bit bimodality, with the compiled loops
+not profiled here; the record lists both under "not established at 128 bits". One latent deviation
+sits below this width and no test draws it: at two int lanes a kernel reading both a byte and a
+short column sizes the short load by the byte column's four parts, so it reads an eight-lane
+128-bit short species where a four-lane one would do - legal above the platform's maximum, where
+the Vector API falls back, so a cost on a 64-bit host and not a wrong answer.

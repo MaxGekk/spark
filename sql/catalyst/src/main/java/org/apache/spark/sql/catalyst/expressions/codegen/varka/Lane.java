@@ -325,6 +325,28 @@ enum Lane {
   }
 
   /**
+   * The lane count of the species a widening load of this narrow lane reads at a kernel driven
+   * at {@code intLanes} int lanes, or 0 where no whole-group form exists. It is the int species'
+   * own count wherever the narrow species of that width exists - a byte at eight int lanes is
+   * one 64-bit load, a short at four int lanes is one too - and otherwise the next width up,
+   * whose parts each become one int group: a byte at four int lanes would need a 32-bit species,
+   * which the Vector API does not have, so it reads an eight-lane 64-bit load converted in two
+   * parts ({@code B2I_load64} in the census, VARKA-329). A kernel whose load spans more than one
+   * group computes that many groups an iteration.
+   */
+  static int widenLanes(int intLanes, Lane narrow) {
+    if (intLanes <= 0) {
+      return 0;
+    }
+    for (int lanes = intLanes; lanes <= 64; lanes *= 2) {
+      if (narrow.hasSpecies(lanes)) {
+        return lanes;
+      }
+    }
+    return 0;
+  }
+
+  /**
    * Refuses an emission on any lane but the int one. The calendar kernels - about a hundred
    * and forty of the emitter's per-lane sites - decompose a 32-bit epoch day with constants
    * and shifts chosen for that width, so they have no meaning at another. They keep the int

@@ -231,6 +231,46 @@ public sealed interface VarkaVectorIR
   }
 
   /**
+   * The narrow lanes {@code root}'s tree reads as values: a narrow column leaf, which a widening
+   * load spans parts of. A narrow column read only for its validity word - the {@code y1 IS NOT
+   * NULL} of a predicate - reads the bitmap and loads no species, so it is not one, and neither
+   * is a narrow literal, which is broadcast rather than loaded. The emitter's part-form load and
+   * the analysis's iteration shape both rest on this answer.
+   */
+  static Set<LaneType> narrowValuesIn(VarkaVectorIR root) {
+    Set<LaneType> lanes = EnumSet.noneOf(LaneType.class);
+    narrowValuesIn(root, lanes, new HashSet<>());
+    return lanes;
+  }
+
+  private static void narrowValuesIn(VarkaVectorIR node, Set<LaneType> lanes,
+      Set<VarkaVectorIR> seen) {
+    if (!seen.add(node)) {
+      return;
+    }
+    if (node instanceof IsNotNull n) {
+      // Over a condition the word is computed from the condition's operands, which may read
+      // values; over a value it is the input validity words alone.
+      if (n.child() instanceof Cond c && !(c instanceof BoolColumn)) {
+        narrowValuesIn(c, lanes, seen);
+      }
+      return;
+    }
+    if (node instanceof ColumnRef c) {
+      if (c.laneType().isNarrow()) {
+        lanes.add(c.laneType());
+      }
+      return;
+    }
+    if (node instanceof LiteralSlot || node instanceof BoolColumn) {
+      return;
+    }
+    for (VarkaVectorIR child : childrenOf(node)) {
+      narrowValuesIn(child, lanes, seen);
+    }
+  }
+
+  /**
    * Refuses a child on any lane but the int one. The calendar lowerings decompose a 32-bit
    * epoch day: a wider value reaching them would be reinterpreted rather than converted, so it
    * has to be narrowed by a node above them instead.

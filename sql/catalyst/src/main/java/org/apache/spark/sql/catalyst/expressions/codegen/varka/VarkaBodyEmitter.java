@@ -508,6 +508,16 @@ final class VarkaBodyEmitter {
       cb.invokestatic(MATH, "max", MATH_INT_PAIR);
     }
     cb.istore(s.loopBound);
+    int groups = analysis.narrowGroups();
+    if (groups > 1) {
+      // A narrow load reads a whole iteration's rows in one species of {@code groups * lanes}
+      // lanes, so the loop stops where that whole load still fits: the bound rounds down to a
+      // whole iteration, and the rows past it are the epilogue's (VARKA-329).
+      cb.iload(s.loopBound);
+      cb.loadConstant(-(groups * analysis.lanes));
+      cb.iand();
+      cb.istore(s.loopBound);
+    }
   }
 
   /** The literals the body reads, hoisted out of the loop, and broadcast where it wants vectors. */
@@ -710,7 +720,10 @@ final class VarkaBodyEmitter {
       }
     }
 
-    // (6) The lane-group loop: for (i = 0; i < loopBound; i += lanes).
+    // (6) The lane-group loop: for (i = 0; i < loopBound; i += groups * lanes), one lane group
+    // a part. A narrowing load that spans more than one group reads its whole species once
+    // an iteration, so the loop computes that many groups, each from the load's own part.
+    int groups = analysis.narrowGroups();
     cb.loadConstant(0);
     cb.istore(s.iVar);
     Label loopTop = cb.newLabel();
@@ -720,12 +733,16 @@ final class VarkaBodyEmitter {
     cb.iload(s.loopBound);
     cb.if_icmpge(loopEnd);
 
-    emitLaneGroup(cb, dense, outputs, outputIdx, analysis, s);
+    for (int g = 0; g < groups; g++) {
+      s.rowGroup = g;
+      emitLaneGroup(cb, dense, outputs, outputIdx, analysis, s);
 
-    cb.iload(s.iVar);
-    cb.iload(s.lanes);
-    cb.iadd();
-    cb.istore(s.iVar);
+      cb.iload(s.iVar);
+      cb.iload(s.lanes);
+      cb.iadd();
+      cb.istore(s.iVar);
+    }
+    s.rowGroup = 0;
     cb.goto_(loopTop);
     cb.labelBinding(loopEnd);
   }
@@ -739,9 +756,12 @@ final class VarkaBodyEmitter {
    * and the stores take. Nothing between a load and a store is masked, exactly as in the
    * loop.
    *
-   * <p>A kernel that converts between lanes is the exception to "no back edge": its loop stops a
-   * long lane group early, so its epilogue runs this body in a loop of its own, up to twice
-   * ({@code emitMixedEpilogue}), the first time over a whole group.
+   * <p>A kernel whose loop stops early is the exception to "no back edge": its epilogue runs
+   * this body in a loop of its own ({@code emitMixedEpilogue}). A kernel that converts between
+   * lanes stops a long lane group early and runs it up to twice, the first time over a whole
+   * group; one whose narrowing load spans more than one int group stops on a whole iteration and
+   * runs one group per pass, up to {@code analysis.narrowGroups()} times (two at four int lanes,
+   * four at two).
    *
    * <p>The masked load is not an optimization here: the data segment is sized to
    * {@code length * 4}, so an unmasked load of the last partial group would run off the end
@@ -767,7 +787,7 @@ final class VarkaBodyEmitter {
 
     cb.iload(s.loopBound);
     cb.istore(s.iVar);
-    if (analysis.mixed()) {
+    if (analysis.mixed() || analysis.narrowGroups() > 1) {
       emitMixedEpilogue(cb, dense, outputs, outputIdx, analysis, s);
       return;
     }
@@ -791,10 +811,13 @@ final class VarkaBodyEmitter {
   }
 
   /**
-   * The epilogue of a kernel that converts between lanes. Its loop leaves up to two long lane
-   * groups (see {@code emitSpecies}), so the masked lane group runs once per group, starting at
-   * {@code loopBound}. Each time, {@code lanes} is the rows that group covers, at most a long
-   * lane group, and the bounds mask is rebuilt for it.
+   * The epilogue of a kernel whose loop computes more than one int group an iteration: one that
+   * converts between lanes, whose loop leaves up to two long lane groups (see {@code emitSpecies}),
+   * or one whose narrowing load spans more than one group, whose loop stops on a whole iteration
+   * of them. The masked lane group runs once per group, starting at {@code loopBound}. Each time,
+   * {@code lanes} is the rows that group covers - at most the driving lane's own group, the long
+   * lane's for a mixed kernel and the int lane's for one whose narrowing load spans more than one
+   * - and the bounds mask is rebuilt for it.
    */
   private static void emitMixedEpilogue(CodeBuilder cb, boolean dense,
       List<VarkaVectorIR> outputs, List<Integer> outputIdx, Analysis analysis, Slots s) {
@@ -960,10 +983,11 @@ final class VarkaBodyEmitter {
   /**
    * A narrow root of a kernel driven at the int lane: {@code [int vector] -> []}, one or two
    * bytes a row at {@code (long) i * stride}, converted with {@code I2B} or {@code I2S} into the
-   * narrow species of the int species' width - the same species the widening load reads - and
-   * stored whole in a loop body, under the mask of its first {@code lanes} lanes in an epilogue.
-   * The truncation is Spark's {@code CAST(int AS TINYINT)} under {@code LEGACY}, which is what a
-   * {@code TINYINT} expression's result is.
+   * narrow species the widening load reads - part 0 holds the group's lanes whatever its width -
+   * and stored whole in a loop body where that species is no wider than a group, under the mask
+   * of its first {@code lanes} lanes otherwise and in an epilogue. The truncation is Spark's
+   * {@code CAST(int AS TINYINT)} under {@code LEGACY}, which is what a {@code TINYINT}
+   * expression's result is.
    */
   private static void emitNarrowTypeStore(
       CodeBuilder cb, Lane stored, Analysis analysis, Slots s, int o) {
@@ -974,10 +998,13 @@ final class VarkaBodyEmitter {
       throw VarkaErrors.illegalState("a narrow-typed store names the int lane's species, and "
           + "this kernel is driven at the " + analysis.lane + " lane");
     }
-    // The narrow species of the int species' width, which is the species the value's int
-    // vector has: the driving width's own in a kernel at the int lane, and twice it in one that
-    // converts between lanes, whose int values fill a species of that width.
-    String species = stored.speciesField(analysis.lanesOf(Lane.INT));
+    // The narrow species the widening load reads, which {@code convertShape} fills from part 0
+    // whatever its width: the int species' own in a kernel at the int lane, twice it in one
+    // that converts between lanes, whose int values fill a species of that width - and one
+    // width up where the int width has no narrow species of its own, as a byte at four int
+    // lanes has none (VARKA-329).
+    int speciesLanes = analysis.widenLanes(stored);
+    String species = stored.speciesField(speciesLanes);
     cb.getstatic(VECTOR_OPERATORS, stored == Lane.BYTE ? "I2B" : "I2S", VO_CONVERSION);
     cb.getstatic(stored.vector, species, VECTOR_SPECIES);
     cb.loadConstant(0);
@@ -989,7 +1016,10 @@ final class VarkaBodyEmitter {
     cb.loadConstant(stored.byteStride);
     cb.lmul();
     cb.getstatic(BYTE_ORDER, "LITTLE_ENDIAN", BYTE_ORDER);
-    if (s.epilogue) {
+    if (s.epilogue || speciesLanes > analysis.lanesOf(Lane.INT)) {
+      // The mask is not the epilogue's alone: a narrow species wider than the int group writes
+      // past the group's own rows, and in the last iteration there is no next group to write
+      // over them - so a store of such a species is always under the mask of the group's lanes.
       cb.getstatic(stored.vector, species, VECTOR_SPECIES);
       cb.loadConstant(0);
       cb.iload(s.lanes);
