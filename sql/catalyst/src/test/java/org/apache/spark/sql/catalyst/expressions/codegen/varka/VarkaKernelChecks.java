@@ -467,6 +467,16 @@ public final class VarkaKernelChecks {
             declineAllowed, spark, ValidityFill.BOTH))[0] == 0;
   }
 
+  /** {@link #runAndCompareStatus} for a kernel of both lanes. */
+  public static int runAndCompareMixedStatus(String context, String className, byte[] bytes,
+      List<VarkaVectorIR> roots, int numInputs, int[] intLits, long[] longLits, LongBatch batch,
+      boolean declineAllowed) {
+    int[] statuses = bodies(context, numInputs, batch.length(), batch.nulls(),
+        batch.forceMasked(), (label, nulls, forced) -> runOne(label, className, bytes, roots,
+            numInputs, new MixedLane(batch.withNulls(nulls, forced), intLits, longLits, roots),
+            declineAllowed, null, ValidityFill.BOTH));
+    return statuses[0] != 0 ? statuses[0] : statuses[1];
+  }
   /**
    * {@link #runAndCompare} for a kernel whose columns are stored narrow (VARKA-329): each column
    * at its own lane's width - a byte one byte a row, a short two, an int four - each output at
@@ -483,16 +493,6 @@ public final class VarkaKernelChecks {
             spark, ValidityFill.BOTH))[0] == 0;
   }
 
-  /** {@link #runAndCompareStatus} for a kernel of both lanes. */
-  public static int runAndCompareMixedStatus(String context, String className, byte[] bytes,
-      List<VarkaVectorIR> roots, int numInputs, int[] intLits, long[] longLits, LongBatch batch,
-      boolean declineAllowed) {
-    int[] statuses = bodies(context, numInputs, batch.length(), batch.nulls(),
-        batch.forceMasked(), (label, nulls, forced) -> runOne(label, className, bytes, roots,
-            numInputs, new MixedLane(batch.withNulls(nulls, forced), intLits, longLits, roots),
-            declineAllowed, null, ValidityFill.BOTH));
-    return statuses[0] != 0 ? statuses[0] : statuses[1];
-  }
 
   /** {@link #runEachBodyStatus} for a kernel of both lanes. */
   public static List<Integer> runEachBodyMixedStatus(String context, String className,

@@ -772,7 +772,18 @@ final class Analysis {
     return switch (node) {
       case IntArith n -> loweredUnchecked(n.laneType(), n.mode());
       case IntNeg n -> loweredUnchecked(n.laneType(), n.mode());
-      default -> false;
+      // Written out rather than defaulted (sql/varka/AGENTS.md): a new narrow node is a compile
+      // error here, so its author decides whether its value commutes with the reduction - a
+      // narrow AND, OR or XOR does, a compare or a shift right does not - instead of falling
+      // into "not ring" and leaving an unreduced int value for its readers.
+      case ColumnRef _, LiteralSlot _, WidenLane _, NarrowLane _, AddDays _, SubDays _,
+          AddMonths _, MakeDate _, GuardedDay _, GuardedRange _, NextDay _,
+          TruncDateDynamic _, DateDiff _, Greatest _, Least _, IfElse _, DayOfWeek _,
+          WeekDay _, DayOfWeekIso _, ThursdayOf _, Year _, Month _, DayOfMonth _, Quarter _,
+          DayOfYear _, LastDay _, TruncDate _, WeekOfYear _, ConstDivide _, BoundedDivide _,
+          BitOp _, BitCount _, Compare _, NullSafeEqual _, BoolColumn _, BoolCompare _,
+          CondIf _, BoolNullSafeEq _, CondConst _, And _, Or _, Not _, IsNotNull _,
+          InRanges _ -> false;
     };
   }
 

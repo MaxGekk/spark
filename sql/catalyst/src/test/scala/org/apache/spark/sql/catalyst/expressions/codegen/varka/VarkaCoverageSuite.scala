@@ -542,6 +542,17 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("greatest(s1, s2)"),
       Row("least(s1, s2)"))),
 
+    // A narrow value meeting an int one (VARKA-329): Catalyst's coercion casts the narrow side
+    // to int, and the cast is the column's widening load, so these are int kernels reading a
+    // narrow column - the arm no narrow-with-narrow row reaches.
+    Family("TINYINT and SMALLINT widened to int", predicates = true, Seq(
+      Row("y1 < i", "the byte column widened on its load, compared at the int lane"),
+      Row("s1 = i", "the short twin, an equality"))),
+    Family("TINYINT and SMALLINT widened to int, as values", predicates = false, Seq(
+      Row("y1 + i", "an int add over a widened byte load, checked under ANSI as any int add is",
+        domain = Some(s"CAST(y1 AS BIGINT) + i BETWEEN ${Int.MinValue} AND ${Int.MaxValue}")),
+      Row("CAST(s1 AS INT)", "the widening alone, stored four bytes a row"))),
+
     // Both lanes in one kernel (VARKA-28): the casts between int and bigint, and the widening
     // Catalyst's type coercion puts under every operator that meets the two.
     Family("Width conversions", predicates = false, Seq(

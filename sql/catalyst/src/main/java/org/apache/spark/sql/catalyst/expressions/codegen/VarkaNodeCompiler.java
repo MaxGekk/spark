@@ -241,6 +241,13 @@ final class VarkaNodeCompiler {
     return fallback(expr, inputs, literals, sink);
   }
 
+  /** Whether {@code ir} is a narrow read widened to the int lane, which its load does. */
+  private static boolean isNarrowLoadWidening(Object ir) {
+    return ir instanceof WidenLane w && w.target() == LaneType.INT
+        && (w.child() instanceof ColumnRef || w.child() instanceof LiteralSlot)
+        && w.child().laneType().isNarrow();
+  }
+
   /**
    * Runs {@code lowering}, of {@code family} and claimed for {@code expr}, under the family's
    * switch (VARKA-318): a family the session has switched off declines the node with the reason
@@ -268,8 +275,11 @@ final class VarkaNodeCompiler {
       if (built.isEmpty() || read) {
         return built;
       }
-      if (relabel && (built.get() instanceof ColumnRef || built.get() instanceof LiteralSlot)) {
-        // A relabel: the read itself, no family's operation.
+      if (relabel && (built.get() instanceof ColumnRef || built.get() instanceof LiteralSlot
+          || isNarrowLoadWidening(built.get()))) {
+        // A relabel: the read itself, no family's operation. A TINYINT or SMALLINT read widened
+        // to the int lane is one too: the widening is the column's load (VARKA-329), and no
+        // instruction stands for the cast.
         return built;
       }
       if (relabel && sink.off(family)) {

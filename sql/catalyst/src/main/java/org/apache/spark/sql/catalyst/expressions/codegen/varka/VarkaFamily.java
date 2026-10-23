@@ -66,9 +66,10 @@ public enum VarkaFamily {
   CONDITION("condition", "condition", "the conditionals IF, CASE WHEN and coalesce (the"
       + " comparisons in their conditions are the predicate family's)"),
   /** The int arithmetic arm of {@code VarkaNodeCompiler}, the int-bigint casts among it. */
-  INT_ARITHMETIC("int arithmetic", "intArithmetic", "+, -, * and unary minus over int"
-      + " operands, checked under ANSI, greatest and least, and the casts between int and"
-      + " bigint");
+  INT_ARITHMETIC("int arithmetic", "intArithmetic", "+, -, * and unary minus over int,"
+      + " tinyint and smallint operands and abs over the narrow two, checked under ANSI,"
+      + " greatest and least, the casts between int and bigint, and a tinyint or smallint"
+      + " widened to int");
 
   /** The prefix every family's switch shares. */
   public static final String SWITCH_PREFIX = "spark.sql.codegen.varka.family.";

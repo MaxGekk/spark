@@ -23,9 +23,9 @@
 ; The claim: outside(r) holds at exactly the ints that are not values of the narrow
 ; type, which is r differing from the sign extension of its low w bits. The sat checks
 ; place both ends inside and one past each end outside, and the neighbours narrow the
-; compares to <= and >=, which is wrong at the end each names. The native arm multiplies
-; a checked narrow pair in the next lane up (byte in short, short in int); the same
-; compare over that lane's values, which is where the product lands, is the same test.
+; compares to <= and >=, which is wrong at the end each names. A checked narrow multiply
+; is formed in the int lane on either arm (VarkaVectorIR.holdsCheckedNarrowMultiply), so
+; these checks cover it too.
 ;
 ; The logic is ALL because the file reasons over bit-vectors.
 ;
@@ -80,13 +80,6 @@
 (check-sat)
 (pop 1)
 
-(echo "narrow_range: the native arm's multiply, in the 16-bit lane, is checked by the same mask: expect unsat")
-(push 1)
-(declare-const p (_ BitVec 16))
-(assert (not (= (or (bvslt p #xff80) (bvsgt p #x007f)) (not (= p ((_ sign_extend 8) ((_ extract 7 0) p)))))))
-(check-sat)
-(pop 1)
-
 (echo "narrow_range: the widened arm's mask is the ints that are not short values: expect unsat")
 (push 1)
 (declare-const r (_ BitVec 32))
@@ -129,12 +122,5 @@
 (declare-const r (_ BitVec 32))
 (assert (= r #x00007fff))
 (assert (not (= (or (bvslt r #xffff8000) (bvsge r #x00007fff)) (or (bvslt r #xffff8000) (bvsgt r #x00007fff)))))
-(check-sat)
-(pop 1)
-
-(echo "narrow_range: the native arm's multiply, in the 32-bit lane, is checked by the same mask: expect unsat")
-(push 1)
-(declare-const p (_ BitVec 32))
-(assert (not (= (or (bvslt p #xffff8000) (bvsgt p #x00007fff)) (not (= p ((_ sign_extend 16) ((_ extract 15 0) p)))))))
 (check-sat)
 (pop 1)

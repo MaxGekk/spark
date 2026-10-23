@@ -51,8 +51,8 @@ a reader who wants the reasoning finds it in `VARKA-102.md` 8.3.
     $ dev/varka_emit.sh "hour(t)" --columns "t:time(6)"
     entry  0  hour(t)                                   FusedOutput(0)
     inputs (child ordinals, in kernel order): 0
-    output 0 IR: (narrow (divc:3600000000000 col:0:long))
-    shape hash: 77c00bd3f4c58b17  options: (defaults)
+    output 0 IR: (narrow:INT (divc:3600000000000 col:0:long))
+    shape hash: 02015ba9cbb89693  options: (defaults)
 
 That one line of IR is the whole expression. `VarkaVectorIR` is a sealed
 interface of small records - a column reference, a constant division, a

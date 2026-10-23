@@ -10,7 +10,7 @@ bool	dec	yes	yes	yes	select	1 or 0; DECIMAL(p, s) with p = s overflows	exhaustio
 byte	bool	yes	yes	yes	test	x != 0 (a NaN is true)	exhaustion		332
 byte	byte	yes	yes	yes	identity		exhaustion		332
 byte	short	yes	yes	yes	widening	sign extension, exact	exhaustion		332
-byte	int	yes	yes	yes	widening	sign extension, exact	exhaustion		332
+byte	int	yes	yes	yes	widening	sign extension, exact	exhaustion	every mode: exact, the column's widening load (VARKA-329)	332
 byte	bigint	yes	yes	yes	widening	sign extension, exact	exhaustion		332,28
 byte	float	yes	yes	yes	widening	exact	exhaustion		343
 byte	double	yes	yes	yes	widening	exact	exhaustion		343
@@ -20,7 +20,7 @@ byte	dt	yes	yes	yes	scale up	times the unit, exact: no value of the source overf
 short	bool	yes	yes	yes	test	x != 0 (a NaN is true)	exhaustion		332
 short	byte	yes	yes	yes	narrowing	LEGACY wraps; ANSI raises CAST_OVERFLOW; TRY nulls	exhaustion		332
 short	short	yes	yes	yes	identity		exhaustion		332
-short	int	yes	yes	yes	widening	sign extension, exact	exhaustion		332
+short	int	yes	yes	yes	widening	sign extension, exact	exhaustion	every mode: exact, the column's widening load (VARKA-329)	332
 short	bigint	yes	yes	yes	widening	sign extension, exact	exhaustion		332,28
 short	float	yes	yes	yes	widening	exact	exhaustion		343
 short	double	yes	yes	yes	widening	exact	exhaustion		343
