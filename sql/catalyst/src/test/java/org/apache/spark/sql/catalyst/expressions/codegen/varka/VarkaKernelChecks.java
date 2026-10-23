@@ -467,17 +467,6 @@ public final class VarkaKernelChecks {
             declineAllowed, spark, ValidityFill.BOTH))[0] == 0;
   }
 
-  /** {@link #runAndCompareStatus} for a kernel of both lanes. */
-  public static int runAndCompareMixedStatus(String context, String className, byte[] bytes,
-      List<VarkaVectorIR> roots, int numInputs, int[] intLits, long[] longLits, LongBatch batch,
-      boolean declineAllowed) {
-    int[] statuses = bodies(context, numInputs, batch.length(), batch.nulls(),
-        batch.forceMasked(), (label, nulls, forced) -> runOne(label, className, bytes, roots,
-            numInputs, new MixedLane(batch.withNulls(nulls, forced), intLits, longLits, roots),
-            declineAllowed, null, ValidityFill.BOTH));
-    return statuses[0] != 0 ? statuses[0] : statuses[1];
-  }
-
   /**
    * {@link #runAndCompare} for a kernel whose columns are stored narrow (VARKA-329): each column
    * at its own lane's width - a byte one byte a row, a short two, an int four - each output at
@@ -492,6 +481,17 @@ public final class VarkaKernelChecks {
         (label, nulls, forced) -> runOne(label, className, bytes, roots, numInputs,
             new StoredNarrowLane(batch.withNulls(nulls, forced), lits, roots), declineAllowed,
             spark, ValidityFill.BOTH))[0] == 0;
+  }
+
+  /** {@link #runAndCompareStatus} for a kernel of both lanes. */
+  public static int runAndCompareMixedStatus(String context, String className, byte[] bytes,
+      List<VarkaVectorIR> roots, int numInputs, int[] intLits, long[] longLits, LongBatch batch,
+      boolean declineAllowed) {
+    int[] statuses = bodies(context, numInputs, batch.length(), batch.nulls(),
+        batch.forceMasked(), (label, nulls, forced) -> runOne(label, className, bytes, roots,
+            numInputs, new MixedLane(batch.withNulls(nulls, forced), intLits, longLits, roots),
+            declineAllowed, null, ValidityFill.BOTH));
+    return statuses[0] != 0 ? statuses[0] : statuses[1];
   }
 
   /** {@link #runEachBodyStatus} for a kernel of both lanes. */
@@ -547,6 +547,18 @@ public final class VarkaKernelChecks {
       boolean declineAllowed, CallHook hook) {
     return runLoaded(context, kernel, roots, numInputs, longLane(batch, lits, NO_INT_LITS, roots),
         declineAllowed, null, ValidityFill.BOTH, hook);
+  }
+
+  /**
+   * {@link #runLoaded} with the columns stored narrow (VARKA-329), for the sweeps that run
+   * thousands of batches on one class: {@link #runAndCompareNarrow} loads the class again for
+   * every batch, which a 2^32-row sweep cannot afford.
+   */
+  public static int runLoadedNarrow(String context, VarkaFusedKernel kernel,
+      List<VarkaVectorIR> roots, int numInputs, int[] lits, Batch batch, boolean declineAllowed,
+      SparkAnswers spark, CallHook hook) {
+    return runLoaded(context, kernel, roots, numInputs,
+        new StoredNarrowLane(batch, lits, roots), declineAllowed, spark, ValidityFill.BOTH, hook);
   }
 
   /**

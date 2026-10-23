@@ -78,6 +78,10 @@ final class VarkaProofFiles {
     files.put("range_calendar.smt2", rangeCalendar());
     files.put("time_bounds.smt2", timeBounds());
     files.put("bitmap.smt2", bitmap());
+    files.put("narrow_wrap.smt2", narrowWrap());
+    files.put("narrow_overflow.smt2", narrowOverflow());
+    files.put("narrow_range.smt2", narrowRange());
+    files.put("narrow_deferred.smt2", narrowDeferred());
     files.put("ym_divide.smt2", ymDivide());
     files.put("refinement.smt2", VarkaRefinementFile.render());
     return files;
@@ -2236,6 +2240,356 @@ final class VarkaProofFiles {
     }
     lines.add(")))");
     check(out, what + ", on " + eqs.size() + " operand sets", "unsat", lines);
+  }
+
+  // -----------------------------------------------------------------------------------------
+  // The narrow lanes' arithmetic (VARKA-330).
+  // -----------------------------------------------------------------------------------------
+
+  /** The two lanes a narrow value is stored in, whose wrap and checks this section states. */
+  private static final List<Lane> NARROW_LANES = List.of(Lane.BYTE, Lane.SHORT);
+
+  /**
+   * {@code narrow_wrap.smt2}: the emitter's reduction of an int-lane value to a narrow lane, a
+   * shift left by the lane's spare bits and an arithmetic shift right by the same count
+   * ({@code VarkaVectorWalk.emitWrapToNarrow}), is Spark's wrap - sign extension of the int's
+   * low {@code w} bits - for every int. And adding, subtracting or multiplying two widened
+   * operands and then reducing is computing the operation at the narrow width, which is what
+   * lets the widened arm leave an interior result unreduced. The shift is read off the lane as
+   * the emitter derives it.
+   */
+  static String narrowWrap() {
+    var out = new StringBuilder(LICENSE);
+    out.append("""
+        ; The narrow lanes' wrap (VARKA-330). A byte or short result is signExtend(r mod 2^w) of
+        ; the exact result r, which is what Spark's ByteExactNumeric and ShortExactNumeric
+        ; answer (VARKA-329.md 4.1). The widened arm computes at the int lane and reduces here
+        ; where a consumer that is not a ring operation reads the value:
+        ;
+        ;   wrap(x) = (x << s) >>a s,   s = 32 - w        VarkaVectorWalk.emitWrapToNarrow
+        ;
+        ; w is the lane's width, 8 or 16, and s is read from the lane here. The first claim is
+        ; that the pair is the sign extension of the low w bits for every int; the next three
+        ; that the ring operations commute with it, so reducing once at the end of a chain of
+        ; adds, subtracts and multiplies agrees with reducing at every node. Beside them, that
+        ; the domain admits the lane's two ends, and the neighbours: the logical shift and the
+        ; shift one less are not the wrap.
+        ;
+        ; The logic is ALL because the file reasons over bit-vectors.
+        """);
+    out.append(rendered("ALL"));
+    for (Lane lane : NARROW_LANES) {
+      int w = lane.bits;
+      String kind = lane.laneType.name().toLowerCase(Locale.ROOT);
+      String wide = "(declare-const x (_ BitVec 32))";
+      String a = "(declare-const a (_ BitVec " + w + "))";
+      String b = "(declare-const b (_ BitVec " + w + "))";
+      check(out, "narrow_wrap: the shift pair is sign extension of the low " + w
+          + " bits for every int", "unsat", List.of(wide,
+          "(assert (not (= " + shiftPair("x", lane) + " " + narrowWrap("x", lane) + ")))"));
+      for (String op : List.of("bvadd", "bvsub", "bvmul")) {
+        String name = op.substring(2).toLowerCase(Locale.ROOT);
+        String at32 = "(" + op + " ((_ sign_extend " + (32 - w) + ") a) ((_ sign_extend "
+            + (32 - w) + ") b))";
+        check(out, "narrow_wrap: the int lane's " + name + ", reduced, is the " + kind + "'s "
+            + name, "unsat", List.of(a, b,
+            "(assert (not (= " + shiftPair(at32, lane) + " "
+                + narrowWrap("(" + op + " a b)", lane) + ")))"));
+      }
+      String min = bvLiteral(lane.mostNegative(), w);
+      String max = bvLiteral(lane.mostPositive(), w);
+      check(out, "narrow_wrap: the domain admits both ends of the " + kind
+          + ", whose sum wraps to -1", "sat", List.of(a, b,
+          "(assert (= a " + min + "))", "(assert (= b " + max + "))",
+          "(assert (= (bvadd a b) " + bvLiteral(-1, w) + "))"));
+      String s = bvLiteral(32 - w, 32);
+      check(out, "narrow_wrap: with the logical shift it is not", "sat", List.of(wide,
+          "(assert (not (= (bvlshr (bvshl x " + s + ") " + s + ") " + narrowWrap("x", lane)
+              + ")))"));
+      check(out, "narrow_wrap: with the shift one less it is not", "sat", List.of(wide,
+          "(assert (not (= " + shiftPair("x", lane, 32 - w - 1) + " " + narrowWrap("x", lane)
+              + ")))"));
+      check(out, "narrow_wrap: with the shift one more it is not", "sat", List.of(wide,
+          "(assert (not (= " + shiftPair("x", lane, 32 - w + 1) + " " + narrowWrap("x", lane)
+              + ")))"));
+    }
+    return out.toString();
+  }
+
+  /**
+   * {@code narrow_overflow.smt2}: the native arm's checked add and subtract, whose mask is
+   * {@code add != sadd} ({@code sub != ssub}) on the narrow lane, holds at exactly the lanes
+   * where the exact result leaves the type's range. The exact result is formed one bit wider,
+   * where the sum of two narrow values cannot wind. Each operator's saturating form is the
+   * Vector API's {@code SADD}/{@code SSUB}, modelled by its own overflow predicate; the claim
+   * is the comparison of the wrapping and saturating results against the exact one, not the
+   * modellings against each other. Beside them the domain's ends, and the neighbours: the
+   * result's sign alone is not the test, nor is the other operator's saturating form.
+   */
+  static String narrowOverflow() {
+    var out = new StringBuilder(LICENSE);
+    out.append("""
+        ; The checked narrow add and subtract on the native arm (VARKA-330, VARKA-329.md 4.3).
+        ; The lanes are the narrow ones, so the wrapping operator is the lane's own add or
+        ; subtract, and the mask is one more lanewise - the saturating form - and a compare:
+        ;
+        ;   overflow(a, b) = bvadd(a, b) != sadd(a, b)          subtract with ssub
+        ;
+        ; The claims: that mask is set at exactly the lanes where the exact result leaves
+        ; [-2^(w-1), 2^(w-1) - 1]. The exact result is formed in a lane one bit wider, where
+        ; the sum of two w-bit values cannot wrap, so "outside the range" there is a comparison
+        ; and not another way of stating the overflow. The saturating forms are SMT-LIB's
+        ; signed-overflow predicate and the saturated constant, which is what the Vector API's
+        ; SADD and SSUB compute. Beside the claims, the domain's ends, and the neighbours: the
+        ; result's sign alone is not the mask, and the other operator's saturating form is not
+        ; the mask either.
+        ;
+        ; The logic is ALL because the file reasons over bit-vectors.
+        """);
+    out.append(rendered("ALL"));
+    for (Lane lane : NARROW_LANES) {
+      int w = lane.bits;
+      String kind = lane.laneType.name().toLowerCase(Locale.ROOT);
+      List<String> decl = List.of("(declare-const a (_ BitVec " + w + "))",
+          "(declare-const b (_ BitVec " + w + "))");
+      String min = bvLiteral(lane.mostNegative(), w);
+      String max = bvLiteral(lane.mostPositive(), w);
+      String zero = bvLiteral(0, w);
+      String exactSum = "(bvadd " + signExtendWider("a", w) + " " + signExtendWider("b", w) + ")";
+      String exactDiff = "(bvsub " + signExtendWider("a", w) + " " + signExtendWider("b", w) + ")";
+      String outsideSum = "(or (bvslt " + exactSum + " " + bvLiteral(lane.mostNegative(), w + 1)
+          + ") (bvsgt " + exactSum + " " + bvLiteral(lane.mostPositive(), w + 1) + "))";
+      String outsideDiff = "(or (bvslt " + exactDiff + " " + bvLiteral(lane.mostNegative(), w + 1)
+          + ") (bvsgt " + exactDiff + " " + bvLiteral(lane.mostPositive(), w + 1) + "))";
+      String sadd = "(ite (bvsaddo a b) (ite (bvslt a " + zero + ") " + min + " " + max
+          + ") (bvadd a b))";
+      String ssub = "(ite (bvssubo a b) (ite (bvslt a " + zero + ") " + min + " " + max
+          + ") (bvsub a b))";
+      check(out, "narrow_overflow: the " + kind + " sum's mask is the exact sum leaving the range",
+          "unsat", append(decl, "(assert (not (= (not (= (bvadd a b) " + sadd + ")) "
+              + outsideSum + ")))"));
+      check(out, "narrow_overflow: the " + kind
+          + " difference's mask is the exact one leaving the range", "unsat",
+          append(decl, "(assert (not (= (not (= (bvsub a b) " + ssub + ")) " + outsideDiff
+              + ")))"));
+      check(out, "narrow_overflow: the domain admits the top of the " + kind + " range, where "
+          + "nothing overflows", "sat", append(decl, List.of("(assert (= a " + max + "))",
+              "(assert (= b " + zero + "))",
+              "(assert (= (bvadd a b) " + sadd + "))")));
+      check(out, "narrow_overflow: one past the top is outside the range, and the " + kind
+          + "'s add and sadd differ", "sat", append(decl, List.of("(assert (= a " + max + "))",
+              "(assert (= b " + bvLiteral(1, w) + "))",
+              "(assert (not (= (bvadd a b) " + sadd + ")))",
+              "(assert (= " + exactSum + " " + bvLiteral(lane.mostPositive() + 1, w + 1) + "))")));
+      check(out, "narrow_overflow: one past the bottom of the " + kind + " range is outside it, "
+          + "and subtract differs", "sat", append(decl, List.of(
+              "(assert (= a " + min + "))", "(assert (= b " + bvLiteral(1, w) + "))",
+              "(assert (not (= (bvsub a b) " + ssub + ")))")));
+      check(out, "narrow_overflow: the result's sign alone is not the sum's mask", "sat",
+          append(decl, List.of("(assert (not " + outsideSum + "))",
+              "(assert (bvslt (bvadd a b) " + zero + "))")));
+      check(out, "narrow_overflow: the other operator's saturating form is not the sum's mask",
+          "sat", append(decl, List.of("(assert (not " + outsideSum + "))",
+              "(assert (not (= (bvadd a b) " + ssub + ")))")));
+    }
+    return out.toString();
+  }
+
+  /**
+   * {@code narrow_range.smt2}: the widened arm's checked forms compare the exact int result
+   * against the type's range - {@code LT} the minimum and {@code GT} the maximum - and that
+   * mask holds at exactly the ints that are not values of the narrow type. The ends are tested
+   * inclusive, so the claims cover a mask made non-strict at either end being wrong there. For
+   * the native arm's checked multiply, whose product is formed in the next lane up, the same
+   * compare over that lane's values is the same test.
+   */
+  static String narrowRange() {
+    var out = new StringBuilder(LICENSE);
+    out.append("""
+        ; The checked narrow forms on the widened arm (VARKA-330, VARKA-329.md 4.2). The int
+        ; lane's result of two narrow operands is exact, so the node's own check is two compares
+        ; against the type's range, whose ends are the lane's (Lane.mostNegative and
+        ; mostPositive, read here):
+        ;
+        ;   outside(r) = r < min || r > max
+        ;
+        ; The claim: outside(r) holds at exactly the ints that are not values of the narrow
+        ; type, which is r differing from the sign extension of its low w bits. The sat checks
+        ; place both ends inside and one past each end outside, and the neighbours narrow the
+        ; compares to <= and >=, which is wrong at the end each names. The native arm multiplies
+        ; a checked narrow pair in the next lane up (byte in short, short in int); the same
+        ; compare over that lane's values, which is where the product lands, is the same test.
+        ;
+        ; The logic is ALL because the file reasons over bit-vectors.
+        """);
+    out.append(rendered("ALL"));
+    for (Lane lane : NARROW_LANES) {
+      int w = lane.bits;
+      String kind = lane.laneType.name().toLowerCase(Locale.ROOT);
+      String decl = "(declare-const r (_ BitVec 32))";
+      String lo = bvLiteral(lane.mostNegative(), 32);
+      String hi = bvLiteral(lane.mostPositive(), 32);
+      String outside = outside("r", lane.mostNegative(), lane.mostPositive(), 32);
+      check(out, "narrow_range: the widened arm's mask is the ints that are not " + kind
+          + " values", "unsat", List.of(decl,
+          "(assert (not (= " + outside + " (not (= r " + narrowWrap("r", lane) + ")))))"));
+      check(out, "narrow_range: the " + kind + " range admits both of its ends", "sat", List.of(
+          "(declare-const bottom (_ BitVec 32))", "(declare-const top (_ BitVec 32))",
+          "(assert (= bottom " + lo + "))", "(assert (= top " + hi + "))",
+          "(assert (not " + outside("bottom", lane.mostNegative(), lane.mostPositive(), 32)
+              + "))",
+          "(assert (not " + outside("top", lane.mostNegative(), lane.mostPositive(), 32)
+              + "))"));
+      check(out, "narrow_range: one past each end of the " + kind + " is outside it", "sat",
+          List.of("(declare-const below (_ BitVec 32))",
+              "(declare-const above (_ BitVec 32))",
+              "(assert (= below " + bvLiteral(lane.mostNegative() - 1, 32) + "))",
+              "(assert (= above " + bvLiteral(lane.mostPositive() + 1, 32) + "))",
+              "(assert " + outside("below", lane.mostNegative(), lane.mostPositive(), 32) + ")",
+              "(assert " + outside("above", lane.mostNegative(), lane.mostPositive(), 32) + ")"));
+      check(out, "narrow_range: with <= at the bottom the mask is not the " + kind
+          + "'s values", "sat", List.of(decl, "(assert (= r " + lo + "))",
+          "(assert (not (= (or (bvsle r " + lo + ") (bvsgt r " + hi + ")) " + outside + ")))"));
+      check(out, "narrow_range: with >= at the top the mask is not the " + kind + "'s values",
+          "sat", List.of(decl, "(assert (= r " + hi + "))",
+              "(assert (not (= (or (bvslt r " + lo + ") (bvsge r " + hi + ")) " + outside
+                  + ")))"));
+      int wider = w * 2;
+      String p = "(declare-const p (_ BitVec " + wider + "))";
+      String inWider = outside("p", lane.mostNegative(), lane.mostPositive(), wider);
+      check(out, "narrow_range: the native arm's multiply, in the " + wider
+          + "-bit lane, is checked by the same mask", "unsat", List.of(p,
+          "(assert (not (= " + inWider + " (not (= p " + signExtendLow("p", w, wider)
+              + ")))))"));
+    }
+    return out.toString();
+  }
+
+  /**
+   * {@code narrow_deferred.smt2}: under LEGACY an interior ring node of the widened arm keeps
+   * its int result unreduced, and the first consumer that is not a ring operation reduces it.
+   * The claim is the law that makes the deferral sound - reducing after an add, a subtract or a
+   * multiply equals reducing the operands first and then reducing, for every int pair - so a
+   * chain of ring operations and a chain that reduces at every node answer the same. The sat
+   * checks show the edges are ints the law covers, and that a compare is not in the ring: its
+   * result on an unreduced operand differs from its result on the reduced one.
+   */
+  static String narrowDeferred() {
+    var out = new StringBuilder(LICENSE);
+    out.append("""
+        ; The deferred wrap of the widened arm under LEGACY (VARKA-330, VARKA-329.md 4.2). Only
+        ; +, -, *, the bitwise operations and a left shift commute with reduction mod 2^w; every
+        ; other consumer - a compare, abs, a greatest, a widening, an IfElse's condition, the
+        ; store - reads the reduced value, so the wrap happens there and not at the interior
+        ; node:
+        ;
+        ;   wrap(u op v) = wrap(wrap(u) op wrap(v))        op in { +, -, * }
+        ;
+        ; for every int u and v: the wrap is a ring homomorphism onto the w-bit values, and the
+        ; int lane's own wraparound is a second reduction that does not change the residue.
+        ; Induction over a tree of ring nodes follows. The sat checks place the law at the int
+        ; lane's ends and show the set is not larger: a compare of an unreduced value differs
+        ; from the compare of its reduction, which is why it forces the wrap.
+        ;
+        ; The logic is ALL because the file reasons over bit-vectors.
+        """);
+    out.append(rendered("ALL"));
+    for (Lane lane : NARROW_LANES) {
+      int w = lane.bits;
+      String kind = lane.laneType.name().toLowerCase(Locale.ROOT);
+      List<String> decl = List.of("(declare-const u (_ BitVec 32))",
+          "(declare-const v (_ BitVec 32))");
+      for (String op : List.of("bvadd", "bvsub", "bvmul")) {
+        String name = op.substring(2).toLowerCase(Locale.ROOT);
+        String deferred = "(" + op + " u v)";
+        String perNode = "(" + op + " " + narrowWrap("u", lane) + " " + narrowWrap("v", lane)
+            + ")";
+        check(out, "narrow_deferred: reducing after the int lane's " + name + " is reducing "
+            + "the operands first, at " + w + " bits", "unsat", append(decl,
+            "(assert (not (= " + narrowWrap(deferred, lane) + " " + narrowWrap(perNode, lane)
+                + ")))"));
+      }
+      String max = bvLiteral(lane.mostPositive(), 32);
+      String min = bvLiteral(lane.mostNegative(), 32);
+      String intMin = bvLiteral(Integer.MIN_VALUE, 32);
+      String intMax = bvLiteral(Integer.MAX_VALUE, 32);
+      check(out, "narrow_deferred: the law holds at the int lane's two ends, over " + kind
+          + " bounds", "sat", append(decl, List.of("(assert (= u " + intMin + "))",
+              "(assert (= v " + intMax + "))",
+              "(assert (= " + narrowWrap("(bvmul u v)", lane) + " "
+                  + narrowWrap("(bvmul " + narrowWrap("u", lane) + " " + narrowWrap("v", lane)
+                      + ")", lane) + "))")));
+      check(out, "narrow_deferred: a compare is not in the ring, and an unreduced value "
+          + "changes it", "sat", append(decl, List.of("(declare-const c (_ BitVec 32))",
+              "(assert (= u " + bvLiteral(lane.mostPositive() + 1, 32) + "))",
+              "(assert (= c " + bvLiteral(0, 32) + "))",
+              "(assert (not (= (bvslt u c) (bvslt " + narrowWrap("u", lane) + " c))))")));
+      check(out, "narrow_deferred: the " + kind + " bounds are ints the law leaves alone", "sat",
+          List.of("(declare-const s (_ BitVec 32))", "(declare-const t (_ BitVec 32))",
+              "(assert (= s " + min + "))", "(assert (= t " + max + "))",
+              "(assert (= " + narrowWrap("s", lane) + " s))",
+              "(assert (= " + narrowWrap("t", lane) + " t))"));
+    }
+    return out.toString();
+  }
+
+  /** {@code x}'s low {@code from} bits, sign-extended to a {@code to}-bit lane. */
+  private static String signExtendLow(String x, int from, int to) {
+    return "((_ sign_extend " + (to - from) + ") ((_ extract " + (from - 1) + " 0) " + x + "))";
+  }
+
+  /** The narrow wrap: {@code x}'s low {@code w} bits, sign-extended to the int lane. */
+  private static String narrowWrap(String x, Lane lane) {
+    return signExtendLow(x, lane.bits, 32);
+  }
+
+  /** {@code x} as a w-bit operand widened into the lane one bit wider than {@code w}. */
+  private static String signExtendWider(String x, int w) {
+    return "((_ sign_extend 1) " + x + ")";
+  }
+
+  /** The emitter's wrap of {@code x}: left by {@code s}, then arithmetically right by it. */
+  private static String shiftPair(String x, Lane lane, int shift) {
+    String s = bvLiteral(shift, 32);
+    return "(bvashr (bvshl " + x + " " + s + ") " + s + ")";
+  }
+
+  /** {@link #shiftPair} with the lane's own count, {@code 32 - w}. */
+  private static String shiftPair(String x, Lane lane) {
+    return shiftPair(x, lane, 32 - lane.bits);
+  }
+
+  /** {@code x} outside {@code [min, max]}, two {@code bits}-wide compares. */
+  private static String outside(String x, long min, long max, int bits) {
+    String lo = bvLiteral(min, bits);
+    String hi = bvLiteral(max, bits);
+    return "(or (bvslt " + x + " " + lo + ") (bvsgt " + x + " " + hi + "))";
+  }
+
+  /**
+   * A {@code bits}-wide SMT-LIB bit-vector literal holding {@code v} in two's complement:
+   * hexadecimal where the width is a whole number of hex digits, binary otherwise, as the
+   * exact results one bit wider than a lane need.
+   */
+  private static String bvLiteral(long v, int bits) {
+    long masked = v & ((1L << bits) - 1);
+    if (bits % 4 == 0) {
+      return String.format("#x%0" + (bits / 4) + "x", masked);
+    }
+    String binary = Long.toBinaryString(masked);
+    return "#b" + "0".repeat(bits - binary.length()) + binary;
+  }
+
+  /** The declarations followed by one assertion. */
+  private static List<String> append(List<String> decl, String assertion) {
+    return append(decl, List.of(assertion));
+  }
+
+  /** The declarations followed by the assertions. */
+  private static List<String> append(List<String> decl, List<String> assertions) {
+    var all = new ArrayList<>(decl);
+    all.addAll(assertions);
+    return all;
   }
 
   // -----------------------------------------------------------------------------------------

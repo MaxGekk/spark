@@ -53,7 +53,7 @@ or|bool|bool||plumbing|331,27|fused as a condition, over a BOOLEAN column too (3
 <|ALL|bool|int,bigint,date,time,ym,dt,byte,short|semantics|341,348,359,329|Spark's NaN ordering on floats
 <=|ALL|bool|int,bigint,date,time,ym,dt,byte,short|semantics|341,348,359,329|Spark's NaN ordering on floats
 !|bool|bool||plumbing|331,27|alias of not
-abs|NUM,IVL|same|ym|semantics|330,104,103,342,348,359|the minimum value overflows: wraps or throws
+abs|NUM,IVL|same|byte,short,ym|semantics|330,104,103,342,348,359|the minimum value overflows: wraps or throws
 greatest|ALL|same|date,bigint,time,byte,short|semantics|333,341,348,359,329|NaN is the greatest float
 least|ALL|same|date,bigint,byte,short|semantics|333,341,348,359,329|NaN is the greatest float
 acos|double|double||ulp|367,356|Math
@@ -82,7 +82,7 @@ log1p|double|double||ulp|367,358|StrictMath
 log2|double|double||ulp|367,358|StrictMath.log over a constant
 ln|double|double||ulp|367,358|StrictMath
 mod|NUM|same||semantics|30,95,104,346,349,363|integral is semantics (zero divisor); floating by the one-FMA remainder (346)
-negative|NUM,IVL|same|int,ym|semantics|330,104,103,342,348,359|the minimum value overflows
+negative|NUM,IVL|same|byte,short,int,ym|semantics|330,104,103,342,348,359|the minimum value overflows
 pmod|NUM|same||semantics|30,104,346,363|integral is semantics (item 33's sign rule; pmod(-1, Int.MinValue) is Int.MaxValue, SPARK-59934); floating by the one-FMA remainder (346)
 positive|NUM,IVL|same||plumbing|333|rewritten to its child
 pow|double|double||ulp|367,358|StrictMath; fused behind the guard on fdlibm's weak branch, its exact exponents as exact nodes (358)
@@ -101,17 +101,17 @@ tan|double|double||ulp|367,356|Math
 cot|double|double||ulp|367,356|1 / Math.tan
 tanh|double|double||ulp|367,357|Math
 width_bucket|double,IVL,time|bigint||semantics|344|bucket arithmetic over doubles
-+|NUM,IVL|same|int|semantics|330,104,103,342,349,360|integral overflow modes; decimal result scale; date and timestamp sums are other classes
--|NUM,IVL|same|int,ym|semantics|330,104,103,342,349,360|date, timestamp and time differences are other classes
-*|NUM|same|int~|semantics|330,95,104,342,349,361,362|fused for int in `year(d) * 2`; interval products are other classes
++|NUM,IVL|same|byte,short,int|semantics|330,104,103,342,349,360|integral overflow modes; decimal result scale; date and timestamp sums are other classes
+-|NUM,IVL|same|byte,short,int,ym|semantics|330,104,103,342,349,360|date, timestamp and time differences are other classes
+*|NUM|same|byte,short,int~|semantics|330,95,104,342,349,361,362|fused for int in `year(d) * 2`; interval products are other classes
 /|double,dec!|same||semantics|342|zero divisor null or error; decimal division is out of milestone 8
 div|INTEGRAL,dec!,IVL|bigint||semantics|30,104,103|zero divisor null or error; over INT a long-lane divide over two widening casts (corrects item 33); a decimal div divides decimals, out of milestone 8
 %|NUM|same||semantics|30,95,104,346,349,363|integral is semantics (zero divisor); floating by the one-FMA remainder (346)
-try_add|NUM,IVL|same||semantics|330,104,103,342,349,360|overflow gives null
+try_add|NUM,IVL|same|byte,short|semantics|330,104,103,342,349,360|overflow gives null
 try_divide|double,dec!|same||semantics|342|zero divisor gives null; decimal division is out of milestone 8
 try_mod|NUM|same||semantics|30,104,346,363|floating by the one-FMA remainder (346)
-try_subtract|NUM,IVL|same||semantics|330,104,103,342,349,360|overflow gives null
-try_multiply|NUM|same||semantics|330,104,342,349,361,362|overflow gives null
+try_subtract|NUM,IVL|same|byte,short|semantics|330,104,103,342,349,360|overflow gives null
+try_multiply|NUM|same|byte,short|semantics|330,104,342,349,361,362|overflow gives null
 shiftleft|int,bigint|same|int,bigint|done||item 32; byte and short widen to int first; a bigint shifted by an int column fuses (335b, 20 October 2026), the count widened to the long lane
 shiftright|int,bigint|same|int,bigint|done||item 32; a bigint shifted by an int column fuses (335b, 20 October 2026)
 shiftrightunsigned|int,bigint|same|int,bigint|done||item 32; a bigint shifted by an int column fuses (335b, 20 October 2026)

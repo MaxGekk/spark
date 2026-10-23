@@ -739,9 +739,21 @@ final class VarkaVectorTemplateWarmup {
         VectorMask<Byte> m = a.compare(VectorOperators.LT, b);
         IntVector widened =
             (IntVector) c.convertShape(VectorOperators.B2I, IntVector.SPECIES_PREFERRED, 0);
+        // The narrow arithmetic (VARKA-330): the lane's add, subtract, multiply, negate and
+        // absolute value, the saturating operators the ANSI overflow check compares against,
+        // and the mask calls a range test makes. The scalar multiply is what the emitter calls
+        // for a negation, which is why both forms are here.
+        ByteVector sum = a.add(b);
+        ByteVector satAdd = a.lanewise(VectorOperators.SADD, b);
+        VectorMask<Byte> inRange = sum.compare(VectorOperators.EQ, satAdd);
         acc += a.blend(b, m).lane(0) + a.min(b).lane(0) + a.max(b).lane(0) + widened.lane(0)
             + ByteVector.broadcast(s, (byte) 5).lane(0)
-            + m.not().toLong() + m.or(tail).toLong();
+            + m.not().toLong() + m.or(tail).toLong()
+            + sum.lane(0) + a.sub(b).lane(0) + a.mul(b).lane(0) + a.neg().lane(0)
+            + a.mul((byte) -1).lane(1) + a.abs().lane(0)
+            + a.lanewise(VectorOperators.SSUB, b).lane(0)
+            + a.compare(VectorOperators.GT, (byte) 0).toLong()
+            + (inRange.anyTrue() ? 1 : 0) + inRange.and(tail).toLong();
         a.intoMemorySegment(seg, 1024, ByteOrder.LITTLE_ENDIAN);
         a.intoMemorySegment(seg, 1088, ByteOrder.LITTLE_ENDIAN, tail);
       }
@@ -761,9 +773,17 @@ final class VarkaVectorTemplateWarmup {
         VectorMask<Short> m = a.compare(VectorOperators.LT, b);
         IntVector widened =
             (IntVector) c.convertShape(VectorOperators.S2I, IntVector.SPECIES_PREFERRED, 0);
+        ShortVector sum = a.add(b);
+        ShortVector satAdd = a.lanewise(VectorOperators.SADD, b);
+        VectorMask<Short> inRange = sum.compare(VectorOperators.EQ, satAdd);
         acc += a.blend(b, m).lane(0) + a.min(b).lane(0) + a.max(b).lane(0) + widened.lane(0)
             + ShortVector.broadcast(s, (short) 5).lane(0)
-            + m.not().toLong() + m.or(tail).toLong();
+            + m.not().toLong() + m.or(tail).toLong()
+            + sum.lane(0) + a.sub(b).lane(0) + a.mul(b).lane(0) + a.neg().lane(0)
+            + a.mul((short) -1).lane(1) + a.abs().lane(0)
+            + a.lanewise(VectorOperators.SSUB, b).lane(0)
+            + a.compare(VectorOperators.GT, (short) 0).toLong()
+            + (inRange.anyTrue() ? 1 : 0) + inRange.and(tail).toLong();
         a.intoMemorySegment(seg, 1024, ByteOrder.LITTLE_ENDIAN);
         a.intoMemorySegment(seg, 1088, ByteOrder.LITTLE_ENDIAN, tail);
       }

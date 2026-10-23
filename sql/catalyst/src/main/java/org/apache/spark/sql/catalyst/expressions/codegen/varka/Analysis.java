@@ -652,13 +652,15 @@ final class Analysis {
           }
         }
         case MakeDate n -> refuse(node, Refusal.MAKE_DATE);
-        // MUL is excluded for a different reason than NULL: a checked one never reaches here at
-        // all, because the compiler declines it and emitIntArith throws if it ever did - so this
-        // guard is defensive rather than load-bearing; the invariant is stated in three places
-        // (here, the throw, and the compiler's decline) and all three must move together if it
-        // is ever widened.
+        // A checked MUL at the int lane never reaches here: the emitter has no int-lane test for
+        // it, so the compiler declines it and emitIntArith throws if one ever did - the guard is
+        // defensive rather than load-bearing there. A narrow MUL is the exception and the reason
+        // this condition reads the lane: its product of two narrow operands is exact in the int
+        // lane, so the widened arm checks it with the lane's own range compare, and the native
+        // arm would widen it - either way it needs its refusal like any other checked node.
         case IntArith n -> {
-          if (options.checkIntOverflow() && n.mode() == Overflow.FAIL && n.op() != IntOp.MUL) {
+          if (options.checkIntOverflow() && n.mode() == Overflow.FAIL
+              && (n.op() != IntOp.MUL || n.laneType().isNarrow())) {
             refuse(node, Refusal.INT_OVERFLOW);
           }
         }
@@ -721,6 +723,62 @@ final class Analysis {
         }
       }
     }
+  }
+
+  /**
+   * The narrow ring nodes whose value this emission reduces where it is computed, rather than
+   * leaving the unreduced int to a consumer that can take it: an add, subtract, multiply or
+   * negate over {@code TINYINT} or {@code SMALLINT} operands whose check this emission does not
+   * emit, whose result some node that is not another ring node reads. Reduction modulo the
+   * narrow width is a ring homomorphism, so an int operation chain over sign-extended narrow
+   * values needs one reduction only at its first non-ring reader - a compare, an {@code abs}, a
+   * range guard, a widening, an {@code IfElse}, a store - and a chain {@code (a + b) * c - d}
+   * over bytes is therefore int adds and multiplies and no interior narrowing at all
+   * ({@code VARKA-329.md} 4.2). A store reduces by its own conversion, so a root needs none; a
+   * checked node is not a ring node ({@link #isNarrowRing}).
+   *
+   * <p>Only the widened arm's emission needs these reductions; on the narrow lane the lane
+   * operation is the reduction and {@code emitWrapToNarrow} emits nothing.
+   */
+  final Set<VarkaVectorIR> wrapAt = new HashSet<>();
+
+  /** Fills {@link #wrapAt}; called with {@link #collectRefusals()} once every root is analyzed. */
+  void collectWraps() {
+    for (VarkaVectorIR parent : topoOrder) {
+      boolean ring = isNarrowRing(parent);
+      if (ring) {
+        continue;
+      }
+      for (VarkaVectorIR child : childrenOf(parent)) {
+        if (isNarrowRing(child)) {
+          wrapAt.add(child);
+        }
+      }
+    }
+  }
+
+  /**
+   * Whether {@code node} is one of the operations reduction modulo a narrow width commutes with:
+   * a narrow add, subtract, multiply or negate whose check is not emitted, which is a
+   * {@code LEGACY} one and also a {@code FAIL} or {@code NULL} one under an emission that turned
+   * {@code checkIntOverflow} off - that arm promises the same node cheaper, so the checked node
+   * reduces at its lane's width exactly as a wrapping one does, where the plain int operation
+   * alone would leave the exact value of, say, {@code 127Y + 1Y}. A checked node is not a ring
+   * node, because its range compare reads the exact narrow value, which is what keeps an
+   * overflowing intermediate from hiding behind a later wrap. No node of the int or long lanes
+   * is one either: their reductions are the lane's own.
+   */
+  private boolean isNarrowRing(VarkaVectorIR node) {
+    return switch (node) {
+      case IntArith n -> loweredUnchecked(n.laneType(), n.mode());
+      case IntNeg n -> loweredUnchecked(n.laneType(), n.mode());
+      default -> false;
+    };
+  }
+
+  /** Whether a node of {@code lane} declared {@code mode} wraps in the emitted kernel. */
+  private boolean loweredUnchecked(VarkaVectorIR.LaneType lane, Overflow mode) {
+    return lane.isNarrow() && (mode == Overflow.WRAP || !options.checkIntOverflow());
   }
 
   /** Adds {@code node} and everything under it to {@code into}, each node once. */

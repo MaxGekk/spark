@@ -126,10 +126,14 @@ public final class VarkaReference {
         if (c.isEmpty()) {
           yield c;
         }
-        int v = c.getAsInt();
+        // The exact negation in a long: the lane's most negative value negates one past its
+        // maximum, which WRAP reduces back to itself and FAIL reports (VARKA-330).
+        long exact = -(long) c.getAsInt();
+        LaneType lane = n.laneType();
         yield switch (n.mode()) {
-          case WRAP -> OptionalInt.of(-v);
-          case FAIL, NULL -> v == Integer.MIN_VALUE ? OptionalInt.empty() : OptionalInt.of(-v);
+          case WRAP -> OptionalInt.of((int) reduce(lane, exact));
+          case FAIL, NULL -> exact < laneMin(lane) || exact > laneMax(lane)
+              ? OptionalInt.empty() : OptionalInt.of((int) exact);
         };
       }
       // Java's own `/`, which is the definition the node claims to compute: the oracle divides
@@ -240,6 +244,12 @@ public final class VarkaReference {
    * batch rather than returning a value, so a row that overflows has no expected value at all; the
    * suite asserts the status, and reaching this arm with an overflowing row means the kernel did
    * not decline when it had to.
+   *
+   * <p>The arithmetic is done in a {@code long}, which holds the exact result of every operand
+   * pair on every lane below the long one, and the result is then taken at the node's own lane
+   * (VARKA-330): reduction mod 2^w under WRAP, the lane's range under FAIL and NULL. A narrow
+   * operand pair cannot overflow an int, so this is Spark's own {@code ByteExactNumeric} rule -
+   * the sum in an int, against the byte's range - restated where the lanes share one evaluator.
    */
   private static OptionalInt intArith(IntArith n, int[] row, boolean[] isNull, int[] lits) {
     var l = value(n.left(), row, isNull, lits);
@@ -252,22 +262,45 @@ public final class VarkaReference {
     }
     int a = l.getAsInt();
     int b = r.getAsInt();
+    LaneType lane = n.laneType();
+    long exact = switch (n.op()) {
+      case ADD -> (long) a + b;
+      case SUB -> (long) a - b;
+      case MUL -> (long) a * b;
+    };
     if (n.mode() == Overflow.WRAP) {
-      return OptionalInt.of(switch (n.op()) {
-        case ADD -> a + b;
-        case SUB -> a - b;
-        case MUL -> a * b;
-      });
+      return OptionalInt.of((int) reduce(lane, exact));
     }
-    try {
-      return OptionalInt.of(switch (n.op()) {
-        case ADD -> Math.addExact(a, b);
-        case SUB -> Math.subtractExact(a, b);
-        case MUL -> Math.multiplyExact(a, b);
-      });
-    } catch (ArithmeticException e) {
-      return OptionalInt.empty();
-    }
+    return exact < laneMin(lane) || exact > laneMax(lane) ? OptionalInt.empty()
+        : OptionalInt.of((int) exact);
+  }
+
+  private static long laneMin(LaneType lane) {
+    return switch (lane) {
+      case BYTE -> Byte.MIN_VALUE;
+      case SHORT -> Short.MIN_VALUE;
+      case INT -> Integer.MIN_VALUE;
+      case LONG -> throw new IllegalArgumentException("a long-lane arithmetic node");
+    };
+  }
+
+  private static long laneMax(LaneType lane) {
+    return switch (lane) {
+      case BYTE -> Byte.MAX_VALUE;
+      case SHORT -> Short.MAX_VALUE;
+      case INT -> Integer.MAX_VALUE;
+      case LONG -> throw new IllegalArgumentException("a long-lane arithmetic node");
+    };
+  }
+
+  /** {@code exact} reduced mod 2^w of {@code lane}: the wrapping store a narrow lane makes. */
+  private static long reduce(LaneType lane, long exact) {
+    return switch (lane) {
+      case BYTE -> (byte) exact;
+      case SHORT -> (short) exact;
+      case INT -> (int) exact;
+      case LONG -> exact;
+    };
   }
 
   private static Truth constant(CondConst n) {

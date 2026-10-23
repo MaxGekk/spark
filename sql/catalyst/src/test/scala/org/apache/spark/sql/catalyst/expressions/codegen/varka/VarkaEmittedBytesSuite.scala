@@ -93,10 +93,10 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
   // BOOLEAN columns, as conditions: two so a comparison can be column against column.
   private val b = AttributeReference("b", BooleanType)()
   private val b2 = AttributeReference("b2", BooleanType)()
-  // TINYINT and SMALLINT columns (VARKA-329), two of each, as `VarkaCoverageSuite` declares
-  // them: the rows are pinned at both widths, and at four int lanes the widened arm's byte
-  // load reads a 64-bit species and converts it in two parts, so its methods have their own
-  // hashes there rather than a decline.
+  // TINYINT and SMALLINT columns (VARKA-329, VARKA-330), two of each, as `VarkaCoverageSuite`
+  // declares them: the rows are pinned at both widths, and at four int lanes the widened
+  // arm's byte load reads a 64-bit species and converts it in two parts, so its methods
+  // have their own hashes there rather than a decline.
   private val y1 = AttributeReference("y1", ByteType)()
   private val y2 = AttributeReference("y2", ByteType)()
   private val s1 = AttributeReference("s1", ShortType)()
@@ -152,7 +152,7 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
     // name. Record the compiler's answer rather than a class that cannot link, as the arms'
     // declines are recorded below.
     val narrowRefusal = VarkaLoopEmitter.narrowRefusal(roots.asJava, options)
-    if (narrowRefusal.isPresent) {
+    if (narrowRefusal.isPresent()) {
       return Seq("<declined>" -> sha(narrowRefusal.get()))
     }
     val bytes =

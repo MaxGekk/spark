@@ -18,7 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import org.apache.spark.sql.catalyst.expressions.{Attribute, BindReferences, Expression, GenericInternalRow, RuntimeReplaceable}
-import org.apache.spark.sql.types.{DataType, DateType, DayTimeIntervalType, IntegerType, LongType, TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{ByteType, DataType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, TimeType, YearMonthIntervalType}
 
 /**
  * Spark's own answer for each output of a compiled kernel (VARKA-276): the Catalyst expression the
@@ -30,7 +30,8 @@ import org.apache.spark.sql.types.{DataType, DateType, DayTimeIntervalType, Inte
  * `outputs(o)` is output `o`'s expression and `inputs(i)` the attribute kernel input `i` reads.
  * A lane value becomes Catalyst's internal value of the input's type, which for every type a
  * kernel reads is the lane value itself: days for a date, months for a year-month interval,
- * nanoseconds for a `TIME`, microseconds for a day-time interval.
+ * nanoseconds for a `TIME`, microseconds for a day-time interval, and the byte or short a narrow
+ * lane carries sign-extended into the row's `Long` (VARKA-329).
  */
 class VarkaSparkOracle(outputs: Seq[Expression], inputs: Seq[Attribute]) {
 
@@ -53,6 +54,8 @@ class VarkaSparkOracle(outputs: Seq[Expression], inputs: Seq[Attribute]) {
     val values = row.zip(types).map {
       case (None, _) => null
       case (Some(v), DateType | IntegerType | _: YearMonthIntervalType) => v.toInt
+      case (Some(v), ByteType) => v.toByte
+      case (Some(v), ShortType) => v.toShort
       case (Some(v), LongType | _: TimeType | _: DayTimeIntervalType) => v
       case (_, t) => throw new IllegalArgumentException(s"no kernel input of type $t")
     }
@@ -60,6 +63,8 @@ class VarkaSparkOracle(outputs: Seq[Expression], inputs: Seq[Attribute]) {
       bound(o).eval(new GenericInternalRow(values.toArray[Any])) match {
         case null => VarkaSparkOracle.Null
         case b: Boolean => VarkaSparkOracle.Value(if (b) 1L else 0L)
+        case b: Byte => VarkaSparkOracle.Value(b.toLong)
+        case s: Short => VarkaSparkOracle.Value(s.toLong)
         case i: Int => VarkaSparkOracle.Value(i.toLong)
         case l: Long => VarkaSparkOracle.Value(l)
         case other => throw new IllegalArgumentException(

@@ -367,6 +367,27 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `-i` | `intArithmetic` | `i > -2147483648` | checked under ANSI | vector |
 | `year(d) + i` | `calendar`, `intArithmetic` | `unix_date(d) BETWEEN -719162 AND 2932896 AND i <= 2147483647 - year(d)` | checked under ANSI; the lower bound is out of reach, since a year is at least 1 | vector |
 
+#### Narrow arithmetic
+
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `y1 + y2` | `intArithmetic` | `CAST(y1 AS INT) + CAST(y2 AS INT) BETWEEN -128 AND 127` | addition at the byte's own width (VARKA-330): checked under ANSI, wrapping under the legacy mode as Spark does; the domain is the exact sum in the int lane | vector |
+| `y1 - y2` | `intArithmetic` | `CAST(y1 AS INT) - CAST(y2 AS INT) BETWEEN -128 AND 127` | checked subtraction at the byte's width | vector |
+| `y1 * y2` | `intArithmetic` | `CAST(y1 AS INT) * CAST(y2 AS INT) BETWEEN -128 AND 127` | a byte multiply wraps natively and is widened to int for its check | vector |
+| `-y1` | `intArithmetic` | `y1 > -128` | negation raises on -128 only | vector |
+| `abs(y1)` | `intArithmetic` | `y1 > -128` | `abs(-128Y)` is out of range, and wraps back to -128 in the legacy mode | vector |
+| `try_add(y1, y2)` | `intArithmetic` |  | an overflowing lane is null, so the kernel declines nothing | vector |
+| `try_subtract(y1, y2)` | `intArithmetic` |  | an overflowing lane is null | vector |
+| `try_multiply(y1, y2)` | `intArithmetic` |  | an overflowing lane is null | vector |
+| `s1 + s2` | `intArithmetic` | `CAST(s1 AS INT) + CAST(s2 AS INT) BETWEEN -32768 AND 32767` | addition at the short's own width, the SMALLINT twin of `y1 + y2` | vector |
+| `s1 - s2` | `intArithmetic` | `CAST(s1 AS INT) - CAST(s2 AS INT) BETWEEN -32768 AND 32767` | checked subtraction at the short's width | vector |
+| `s1 * s2` | `intArithmetic` | `CAST(s1 AS INT) * CAST(s2 AS INT) BETWEEN -32768 AND 32767` | a short multiply wraps natively and is widened to int for its check | vector |
+| `-s1` | `intArithmetic` | `s1 > -32768` | negation raises on -32768 only | vector |
+| `abs(s1)` | `intArithmetic` | `s1 > -32768` | `abs(-32768S)` is out of range, and wraps back in the legacy mode | vector |
+| `try_add(s1, s2)` | `intArithmetic` |  | an overflowing lane is null | vector |
+| `try_subtract(s1, s2)` | `intArithmetic` |  | an overflowing lane is null | vector |
+| `try_multiply(s1, s2)` | `intArithmetic` |  | an overflowing lane is null | vector |
+
 #### Bitwise and shifts
 
 | Expression | Switches | Domain | Notes | 128-bit lanes |

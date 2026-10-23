@@ -50,9 +50,8 @@ import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType,
  * a change to this file: adding an arm without a row fails the coverage suite, adding a row
  * without correctness fails this one, and the two together are the guarantee the table makes.
  *
- * Each row runs on three fixtures over the table's twelve source columns, plus the derived
- * BOOLEAN columns `b` and `b2` and the TINYINT and SMALLINT columns `y1`, `y2`, `s1` and `s2`
- * (VARKA-329) - nulls sprinkled
+ * Each row runs on three fixtures over the table's sixteen source columns, plus the derived
+ * BOOLEAN columns `b` and `b2` - nulls sprinkled
  * independently per column, no nulls, and every column null in every row - and under both
  * consumers a Varka node can have: rows, the plan every direct query gets, and columns, which
  * the Arrow cache builder takes when a view over the query is cached. The hand-chosen shapes in
@@ -106,14 +105,19 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
 
   /**
    * The three fixtures, each a view with the table's columns: `d`, `d2` (dates), `i` (int),
-   * `ymm`, `ymy`, `ym` (the three year-month interval units), and the long lane's `l`, `l2`
+   * `ymm`, `ymy`, `ym` (the three year-month interval units), the long lane's `l`, `l2`
    * (bigint, across its range), `t`, `t2` (`TIME(6)`) and `dt`, `dt2` (day-time intervals of
-   * both signs) - built through SQL because an interval column has no plain Scala literal. The
+   * both signs), and the narrow lanes' `y1`, `y2` (`TINYINT`) and `s1`, `s2` (`SMALLINT`) -
+   * built through SQL because an interval column has no plain Scala literal. The
    * dates are the ones the other fixtures use
    * - leap days, a 31st, 1969-12-31, the dates the table's `IN` rows name, 2021 dates for its
    * `year(d) = 2021` rows, a far date inside the contract - `d2` is shifted against `d` or
    * equal to it, `i` stays in 1..12 (inside the day-offset guard, and a valid month for
-   * `make_date(2021, i, 1)`), and the month counts stay inside the emitter's guard.
+   * `make_date(2021, i, 1)`), and the month counts stay inside the emitter's guard. The narrow
+   * pairs stay inside their type under `+`, `-`, `*` and the negation: the form that compares
+   * the two engines runs under the session's ANSI mode, where a pair that leaves the type is an
+   * error on the row engine rather than an answer to compare (the narrow rows' domains are cut
+   * on the `edges` fixture, which holds the values that leave it).
    */
   private val fixtures: Seq[(String, String)] = {
     // `i` stays in 1..12: it doubles as the month of `make_date(2021, i, 1)`, and under the
@@ -123,72 +127,113 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
     val dense = Seq(
       "(DATE'2024-01-31', DATE'2024-02-29',  3,   3,  1,  2, CAST('5000000000' AS BIGINT), " +
         "CAST('1' AS BIGINT), TIME'12:34:56.789', TIME'00:00:00', " +
-        "INTERVAL '1 02:03:04.5' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND)",
+        "INTERVAL '1 02:03:04.5' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND, " +
+        "CAST(3 AS TINYINT), CAST(4 AS TINYINT), " +
+        "CAST(18 AS SMALLINT), CAST(-4 AS SMALLINT))",
       "(DATE'2024-02-29', DATE'2024-02-29',  1, -14, -2,  0, CAST('-5000000000' AS BIGINT), " +
         "CAST('-5000000000' AS BIGINT), TIME'00:00:00', TIME'23:59:59.999999', " +
-        "INTERVAL '-3 00:00:00.000001' DAY TO SECOND, INTERVAL '0 00:00:01' DAY TO SECOND)",
+        "INTERVAL '-3 00:00:00.000001' DAY TO SECOND, INTERVAL '0 00:00:01' DAY TO SECOND, " +
+        "NULL, NULL, " +
+        "NULL, NULL)",
       "(DATE'2023-12-27', DATE'2024-01-02', 12,  24,  3,  1, " +
         "CAST('9223372036854775807' AS BIGINT), CAST('-9223372036854775808' AS BIGINT), " +
         "TIME'23:59:59.999999', TIME'12:34:56.789', INTERVAL '100000 00:00:00' DAY TO SECOND, " +
-        "INTERVAL '-100000 00:00:00' DAY TO SECOND)",
+        "INTERVAL '-100000 00:00:00' DAY TO SECOND, " +
+        "CAST(-11 AS TINYINT), CAST(11 AS TINYINT), " +
+        "CAST(-181 AS SMALLINT), CAST(181 AS SMALLINT))",
       "(DATE'2021-01-01', DATE'2020-12-31',  4,   0,  0, 11, CAST('0' AS BIGINT), " +
         "CAST('0' AS BIGINT), TIME'06:00:00', TIME'06:00:00', " +
-        "INTERVAL '0 00:00:00' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND)",
+        "INTERVAL '0 00:00:00' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND, " +
+        "CAST(10 AS TINYINT), CAST(-11 AS TINYINT), " +
+        "CAST(100 AS SMALLINT), CAST(3 AS SMALLINT))",
       "(DATE'2021-06-01', DATE'2021-06-01',  6,   7,  2,  3, CAST('2147483648' AS BIGINT), " +
         "CAST('2147483647' AS BIGINT), TIME'12:00:00', TIME'12:00:00.000001', " +
-        "INTERVAL '7 12:00:00' DAY TO SECOND, INTERVAL '7 12:00:00' DAY TO SECOND)",
+        "INTERVAL '7 12:00:00' DAY TO SECOND, INTERVAL '7 12:00:00' DAY TO SECOND, " +
+        "CAST(-11 AS TINYINT), NULL, " +
+        "CAST(-181 AS SMALLINT), NULL)",
       "(DATE'2021-03-15', DATE'2021-03-14', 11,   1,  1,  5, CAST('-1' AS BIGINT), " +
         "CAST('1' AS BIGINT), TIME'01:02:03.456', TIME'01:02:03.457', " +
-        "INTERVAL '-0 00:00:00.5' DAY TO SECOND, INTERVAL '0 00:00:00.5' DAY TO SECOND)",
+        "INTERVAL '-0 00:00:00.5' DAY TO SECOND, INTERVAL '0 00:00:00.5' DAY TO SECOND, " +
+        "CAST(11 AS TINYINT), CAST(11 AS TINYINT), " +
+        "CAST(181 AS SMALLINT), CAST(-1 AS SMALLINT))",
       "(DATE'1969-12-31', DATE'1970-01-01',  5,  -1,  0,  0, CAST('42' AS BIGINT), " +
         "CAST('-42' AS BIGINT), TIME'18:00:00', TIME'06:00:00', " +
-        "INTERVAL '1 00:00:00' DAY TO SECOND, INTERVAL '-1 00:00:00' DAY TO SECOND)",
+        "INTERVAL '1 00:00:00' DAY TO SECOND, INTERVAL '-1 00:00:00' DAY TO SECOND, " +
+        "CAST(0 AS TINYINT), CAST(0 AS TINYINT), " +
+        "CAST(0 AS SMALLINT), CAST(0 AS SMALLINT))",
       "(DATE'2000-02-29', DATE'1999-12-31',  2,  12,  4,  6, CAST('-2147483649' AS BIGINT), " +
         "CAST('-2147483648' AS BIGINT), TIME'09:30:00', TIME'09:29:59.999', " +
-        "INTERVAL '0 00:00:00.000001' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND)",
+        "INTERVAL '0 00:00:00.000001' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND, " +
+        "CAST(5 AS TINYINT), CAST(-6 AS TINYINT), " +
+        "CAST(60 AS SMALLINT), CAST(-7 AS SMALLINT))",
       "(DATE'9999-12-01', DATE'0001-01-15',  7,   5,  1,  1, CAST('12345678901234' AS BIGINT), " +
         "CAST('12345678901234' AS BIGINT), TIME'12:34:56.789', TIME'12:34:56.789', " +
-        "INTERVAL '2 00:00:00' DAY TO SECOND, INTERVAL '2 00:00:00' DAY TO SECOND)",
+        "INTERVAL '2 00:00:00' DAY TO SECOND, INTERVAL '2 00:00:00' DAY TO SECOND, " +
+        "CAST(-1 AS TINYINT), CAST(1 AS TINYINT), " +
+        "CAST(-1 AS SMALLINT), CAST(1 AS SMALLINT))",
       "(DATE'2021-11-01', DATE'2021-11-01',  9, 100,  2,  4, CAST('7' AS BIGINT), " +
         "CAST('11' AS BIGINT), TIME'00:00:00.000001', TIME'00:00:00', " +
-        "INTERVAL '0 00:01:00' DAY TO SECOND, INTERVAL '0 00:00:59' DAY TO SECOND)")
+        "INTERVAL '0 00:01:00' DAY TO SECOND, INTERVAL '0 00:00:59' DAY TO SECOND, " +
+        "CAST(9 AS TINYINT), CAST(7 AS TINYINT), " +
+        "CAST(8191 AS SMALLINT), CAST(2 AS SMALLINT))")
     val allNullRow =
-      "(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)"
+      "(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, " +
+        "NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)"
     val mixed = Seq(
       "(DATE'2024-01-31', DATE'2024-02-29',  3,   3,  1,  2, CAST('5000000000' AS BIGINT), " +
         "CAST('1' AS BIGINT), TIME'12:34:56.789', TIME'00:00:00', " +
-        "INTERVAL '1 02:03:04.5' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND)",
+        "INTERVAL '1 02:03:04.5' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND, " +
+        "CAST(3 AS TINYINT), CAST(4 AS TINYINT), " +
+        "CAST(18 AS SMALLINT), CAST(-4 AS SMALLINT))",
       "(NULL,             DATE'2024-02-29',  1, -14, -2,  0, NULL, " +
         "CAST('-5000000000' AS BIGINT), TIME'00:00:00', TIME'23:59:59.999999', " +
-        "INTERVAL '-3 00:00:00.000001' DAY TO SECOND, INTERVAL '0 00:00:01' DAY TO SECOND)",
+        "INTERVAL '-3 00:00:00.000001' DAY TO SECOND, INTERVAL '0 00:00:01' DAY TO SECOND, " +
+        "NULL, NULL, " +
+        "NULL, NULL)",
       "(DATE'2023-12-27', NULL,             12,  24,  3,  1, " +
         "CAST('9223372036854775807' AS BIGINT), CAST('-9223372036854775808' AS BIGINT), " +
         "TIME'23:59:59.999999', TIME'12:34:56.789', INTERVAL '100000 00:00:00' DAY TO SECOND, " +
-        "INTERVAL '-100000 00:00:00' DAY TO SECOND)",
+        "INTERVAL '-100000 00:00:00' DAY TO SECOND, " +
+        "CAST(-11 AS TINYINT), CAST(11 AS TINYINT), " +
+        "CAST(-181 AS SMALLINT), CAST(181 AS SMALLINT))",
       "(DATE'2021-01-01', DATE'2020-12-31', NULL, 0,  0, 11, CAST('0' AS BIGINT), " +
         "CAST('0' AS BIGINT), NULL, TIME'06:00:00', INTERVAL '0 00:00:00' DAY TO SECOND, " +
-        "INTERVAL '0 00:00:00' DAY TO SECOND)",
+        "INTERVAL '0 00:00:00' DAY TO SECOND, " +
+        "CAST(10 AS TINYINT), CAST(-11 AS TINYINT), " +
+        "CAST(100 AS SMALLINT), CAST(3 AS SMALLINT))",
       "(DATE'2021-06-01', DATE'2021-06-01',  6, NULL, 2,  3, CAST('2147483648' AS BIGINT), " +
         "CAST('2147483647' AS BIGINT), TIME'12:00:00', TIME'12:00:00.000001', " +
-        "INTERVAL '7 12:00:00' DAY TO SECOND, INTERVAL '7 12:00:00' DAY TO SECOND)",
+        "INTERVAL '7 12:00:00' DAY TO SECOND, INTERVAL '7 12:00:00' DAY TO SECOND, " +
+        "CAST(-11 AS TINYINT), NULL, " +
+        "CAST(-181 AS SMALLINT), NULL)",
       "(DATE'2021-03-15', DATE'2021-03-14', 11,   1, NULL, 5, CAST('-1' AS BIGINT), " +
         "CAST('1' AS BIGINT), TIME'01:02:03.456', TIME'01:02:03.457', NULL, " +
-        "INTERVAL '0 00:00:00.5' DAY TO SECOND)",
+        "INTERVAL '0 00:00:00.5' DAY TO SECOND, " +
+        "CAST(11 AS TINYINT), CAST(11 AS TINYINT), " +
+        "CAST(181 AS SMALLINT), CAST(-1 AS SMALLINT))",
       "(DATE'1969-12-31', DATE'1970-01-01',  5,  -1,  0, NULL, CAST('42' AS BIGINT), " +
         "CAST('-42' AS BIGINT), TIME'18:00:00', TIME'06:00:00', " +
-        "INTERVAL '1 00:00:00' DAY TO SECOND, INTERVAL '-1 00:00:00' DAY TO SECOND)",
+        "INTERVAL '1 00:00:00' DAY TO SECOND, INTERVAL '-1 00:00:00' DAY TO SECOND, " +
+        "CAST(0 AS TINYINT), CAST(0 AS TINYINT), " +
+        "CAST(0 AS SMALLINT), CAST(0 AS SMALLINT))",
       allNullRow,
       "(DATE'9999-12-01', DATE'0001-01-15',  7,   5,  1,  1, CAST('-2147483649' AS BIGINT), " +
         "NULL, TIME'09:30:00', TIME'09:29:59.999', INTERVAL '0 00:00:00.000001' DAY TO SECOND, " +
-        "INTERVAL '0 00:00:00' DAY TO SECOND)",
+        "INTERVAL '0 00:00:00' DAY TO SECOND, " +
+        "CAST(5 AS TINYINT), CAST(-6 AS TINYINT), " +
+        "CAST(60 AS SMALLINT), CAST(-7 AS SMALLINT))",
       "(DATE'2021-11-01', DATE'2021-11-01',  9, 100,  2,  4, CAST('12345678901234' AS BIGINT), " +
         "CAST('12345678901234' AS BIGINT), TIME'12:34:56.789', TIME'12:34:56.789', " +
-        "INTERVAL '2 00:00:00' DAY TO SECOND, INTERVAL '2 00:00:00' DAY TO SECOND)")
+        "INTERVAL '2 00:00:00' DAY TO SECOND, INTERVAL '2 00:00:00' DAY TO SECOND, " +
+        "CAST(-1 AS TINYINT), CAST(1 AS TINYINT), " +
+        "CAST(-1 AS SMALLINT), CAST(1 AS SMALLINT))")
     val allNull = Seq.fill(8)(
       "(CAST(NULL AS DATE), CAST(NULL AS DATE), CAST(NULL AS INT), CAST(NULL AS INT), " +
         "CAST(NULL AS INT), CAST(NULL AS INT), CAST(NULL AS BIGINT), CAST(NULL AS BIGINT), " +
         "CAST(NULL AS TIME(6)), CAST(NULL AS TIME(6)), " +
-        "CAST(NULL AS INTERVAL DAY TO SECOND), CAST(NULL AS INTERVAL DAY TO SECOND))")
+        "CAST(NULL AS INTERVAL DAY TO SECOND), CAST(NULL AS INTERVAL DAY TO SECOND), " +
+        "CAST(NULL AS TINYINT), CAST(NULL AS TINYINT), " +
+        "CAST(NULL AS SMALLINT), CAST(NULL AS SMALLINT))")
     // Each row gets its position as `rid`, so the partition test can tell rows apart by id -
     // the all-null fixture's rows are otherwise identical.
     def view(values: Seq[String], where: String = ""): String =
@@ -205,9 +250,11 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
   }
 
   /**
-   * The ANSI form's fixture: one row at the extremes of every column's type beside one ordinary
-   * row. Under ANSI, the extremes make the rows that can overflow or leave a range raise, so the
-   * form can tell a skipped position from an evaluated one. Column `i` at `Int.MaxValue` is not
+   * The ANSI form's fixture: one row at the extremes of every column's type beside a second row
+   * that carries the narrow columns' other bound, so the byte and short arithmetic has a
+   * raising row for each of its two directions. Under ANSI, the extremes make the rows that can
+   * overflow or leave a range raise, so the form can tell a skipped position from an evaluated
+   * one. Column `i` at `Int.MaxValue` is not
    * a valid month, so `make_date(2021, i, 1)` raises too, which is a fair cell: both engines
    * must raise it alone and neither where it is skipped.
    *
@@ -222,11 +269,16 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
         "CAST('9223372036854775807' AS BIGINT), CAST('-9223372036854775808' AS BIGINT), " +
         "TIME'23:59:59.999999', TIME'00:00:00', " +
         "INTERVAL '106751991 04:00:54.775807' DAY TO SECOND, " +
-        "INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND)",
+        "INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND, " +
+        "CAST(-128 AS TINYINT), CAST(-128 AS TINYINT), " +
+        "CAST(-32768 AS SMALLINT), CAST(-32768 AS SMALLINT))",
       "(DATE'2024-02-29', DATE'2024-01-31', 3, 3, 1, 2, CAST('5000000000' AS BIGINT), " +
         "CAST('1' AS BIGINT), TIME'12:34:56.789', TIME'00:00:00', " +
-        "INTERVAL '1 02:03:04.5' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND)",
-      "(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)")
+        "INTERVAL '1 02:03:04.5' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND, " +
+        "CAST(127 AS TINYINT), CAST(-128 AS TINYINT), " +
+        "CAST(32767 AS SMALLINT), CAST(-32768 AS SMALLINT))",
+      "(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, " +
+        "NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)")
     // `lrid` is `rid` as a BIGINT, the guard of a long-lane expression: one kernel holds one
     // lane, so `CASE WHEN rid < 0 THEN greatest(l, l2) ...` mixes the int and long lanes and is
     // never fused, where `CASE WHEN lrid < 0 ...` is.
@@ -625,12 +677,12 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
   private def standIn(t: DataType, caseArm: Boolean): Option[String] = t match {
     case DateType => Some("d2")
     case IntegerType => Some(if (caseArm) "year(d2)" else "i")
-    case LongType => Some("l2")
-    // The narrow twins: the fixture's second column of each type, which the value rows choose
-    // between (VARKA-329). A CASE arm beside a narrow expression is the int guard `rid < 0` and
+    // The narrow twins (VARKA-329): the fixture's second column of each type, which the value
+    // rows choose between. A CASE arm beside a narrow expression is the int guard `rid < 0` and
     // a narrow branch, which the compiler widens to the int lane and stores narrow.
     case ByteType => Some("y2")
     case ShortType => Some("s2")
+    case LongType => Some("l2")
     case _: TimeType => Some("t2")
     case _: DayTimeIntervalType => Some("dt2")
     case YearMonthIntervalType(start, end) if start == end =>
@@ -714,9 +766,17 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
       "left side rejected (m9/SCOPE.md item 96)"
     val checkedRight = Seq("make_date(2021, i, 1)", "add_months(d, i)", "d + ym", "d - ym",
       "ym - ymm", "i + 1", "year(d) + i")
+    // The narrow arithmetic's rows (VARKA-330) decline no position of their own. CASE and
+    // COALESCE are served by VARKA-329's lift - an int-lane condition takes a narrow branch
+    // lifted to the int lane and stored narrow, and a bare narrow column is a value leaf - and
+    // so is a `try_` row's AND, whose narrow comparison lifts beside the int conjunct. The
+    // checked rows' AND is the `unqualified` reason above: the edges fixture's lane overflows
+    // whichever node the check sits on.
+    val narrowChecked = Seq("y1 + y2", "y1 - y2", "y1 * y2", "-y1", "abs(y1)",
+      "s1 + s2", "s1 - s2", "s1 * s2", "-s1", "abs(s1)")
     intValued.map(sql => (sql, CoalesceTail) -> intCoalesce).toMap ++
       Seq(CaseArm, CoalesceTail, FalseAnd).map(p => (dayCast, p) -> columnBound) ++
-      checkedRight.map(sql => (sql, FalseAnd) -> unqualified)
+      (checkedRight ++ narrowChecked).map(sql => (sql, FalseAnd) -> unqualified)
   }
 
   /** What the ANSI form found for one row, and where a kernel served it or both engines raised. */
@@ -877,11 +937,16 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
    * batch size.
    */
   private val edges: (String, String) = {
+    // scalastyle:off argcount
     def row(d: String = "DATE'2024-01-31'", i: String = "3", m: String = "0", y: String = "0",
-        mm: String = "0", t: String = "TIME'12:34:56.789'", t2: String = "TIME'00:00:00'"): String =
+        mm: String = "0", t: String = "TIME'12:34:56.789'", t2: String = "TIME'00:00:00'",
+        y1: String = "3", y2: String = "4", s1: String = "300", s2: String = "-400"): String =
       s"($d, DATE'2024-02-29', $i, $m, $y, $mm, CAST('5000000000' AS BIGINT), " +
         s"CAST('1' AS BIGINT), $t, $t2, INTERVAL '1 02:03:04.5' DAY TO SECOND, " +
-        "INTERVAL '0 00:00:00' DAY TO SECOND)"
+        "INTERVAL '0 00:00:00' DAY TO SECOND, " +
+        s"CAST($y1 AS TINYINT), CAST($y2 AS TINYINT), " +
+        s"CAST($s1 AS SMALLINT), CAST($s2 AS SMALLINT))"
+    // scalastyle:on argcount
     // A row whose `ym` is `months`, through the view's `make_ym_interval(y, mm)`; Java's
     // truncating division and remainder agree in sign, so the two parts add back to the count.
     def ymRow(months: Long, m: String = "0"): String =
@@ -903,7 +968,16 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
         ymRow(Int.MaxValue), ymRow(Int.MaxValue, m = "-1"), row(m = Int.MinValue.toString),
         row(t = "TIME'00:00:00'", t2 = "TIME'23:59:59.999999'"),
         row(t = "TIME'23:59:59.999999'", t2 = "TIME'00:00:00.000001'"),
-        "(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
+        // The narrow lanes' bounds, for the arithmetic's domains: a sum and a product that
+        // leave the type, a difference that leaves it in the other direction, and the minimum
+        // that negation and `abs` refuse. The short product needs a row of its own inside the
+        // range: the other rows' `300 * -400` is out of it.
+        row(s1 = "100", s2 = "3"),
+        row(y1 = "-128", y2 = "-128", s1 = "-32768", s2 = "-32768"),
+        row(y1 = "127", y2 = "-128", s1 = "32767", s2 = "-32768"),
+        row(y1 = "NULL", y2 = "NULL", s1 = "NULL", s2 = "NULL"),
+        "(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, " +
+        "NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
         row(i = "NULL"), row(d = "NULL"), row(m = "NULL", y = "NULL", mm = "NULL"),
         row(t = "NULL", t2 = "NULL"))
     "varka_coverage_edges" -> VarkaCoverageDifferentialSuite.fixtureView(rows)
@@ -1051,7 +1125,14 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
       .executeCollect().toSeq.map { r =>
         ordinals.map { o =>
           if (r.isNullAt(o)) None else Some(types(o) match {
-            case DateType | IntegerType | _: YearMonthIntervalType => r.getInt(o).toLong
+            // A narrow type is an int in a narrower lane (VARKA-329): the kernel's check reads
+            // the sign-extended value, so the verdict does too. The bytes are read at their own
+            // width: an `UnsafeRow`'s slot for a byte is one byte, and a four-byte read of it
+            // takes the eight-bit value unsigned, so -128 would come back as 128.
+            case DateType | IntegerType | _: YearMonthIntervalType =>
+              r.getInt(o).toLong
+            case ByteType => r.getByte(o).toLong
+            case ShortType => r.getShort(o).toLong
             case LongType | _: TimeType | _: DayTimeIntervalType => r.getLong(o)
             case other => fail(s"no lane reads a $other input")
           })
@@ -1231,7 +1312,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
 private object VarkaCoverageDifferentialSuite {
 
   /**
-   * A fixture's view over `values`, rows of the twelve source columns in parentheses, each
+   * A fixture's view over `values`, rows of the sixteen source columns in parentheses, each
    * given its position as an int `rid` that no coverage row names; `where` filters the rows.
    */
   def fixtureView(values: Seq[String], where: String = ""): String = {
@@ -1241,17 +1322,10 @@ private object VarkaCoverageDifferentialSuite {
        |       CAST(y AS INTERVAL YEAR) AS ymy,
        |       make_ym_interval(y, mm) AS ym,
        |       l, l2, CAST(t AS TIME(6)) AS t, CAST(t2 AS TIME(6)) AS t2, dt, dt2,
+       |       y1, y2, s1, s2,
        |       CASE WHEN rid % 4 = 3 THEN NULL ELSE rid % 2 = 0 END AS b,
-       |       CASE WHEN rid % 5 = 4 THEN NULL ELSE rid % 3 = 0 END AS b2,
-       |       CASE WHEN rid % 7 = 6 THEN NULL
-       |            ELSE CAST(rid * 37 % 251 - 125 AS TINYINT) END AS y1,
-       |       CASE WHEN rid % 3 = 2 THEN NULL
-       |            ELSE CAST(rid * 53 % 253 - 126 AS TINYINT) END AS y2,
-       |       CASE WHEN rid % 6 = 5 THEN NULL
-       |            ELSE CAST(rid * 4099 % 65003 - 32501 AS SMALLINT) END AS s1,
-       |       CASE WHEN rid % 4 = 1 THEN NULL
-       |            ELSE CAST(rid * 8191 % 65003 - 32501 AS SMALLINT) END AS s2
+       |       CASE WHEN rid % 5 = 4 THEN NULL ELSE rid % 3 = 0 END AS b2
        |FROM VALUES ${withIds.mkString(",\n  ")}
-       |AS v(rid, d, d2, i, m, y, mm, l, l2, t, t2, dt, dt2)$where""".stripMargin
+       |AS v(rid, d, d2, i, m, y, mm, l, l2, t, t2, dt, dt2, y1, y2, s1, s2)$where""".stripMargin
   }
 }

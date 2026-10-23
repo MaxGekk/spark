@@ -2321,13 +2321,12 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
       Seq(out(DateAdd(d, Multiply(i, Literal(7), EvalMode.LEGACY)))), childOutput).isPresent)
   }
 
-  test("declines a long add, a short column, a divide, a modulo and a mixed operand") {
-    // All four reach the same reason, and that is the point: the arms are guarded on
-    // `dataType == IntegerType`, so anything else never enters them and declines as the
+  test("declines a long add, a divide, a modulo and a mixed operand") {
+    // All four reach the same reason, and that is the point: the arithmetic arms are guarded on
+    // the int and narrow types, so anything else never enters them and declines as the
     // unsupported expression it is, rather than through an arithmetic-specific message.
     for (e <- Seq(
         Add(Cast(i, LongType), Literal(1L), EvalMode.LEGACY),
-        Add(sh, Literal(1.toShort), EvalMode.LEGACY),
         Divide(i, Literal(2), EvalMode.LEGACY),
         Remainder(i, Literal(7)),
         // An operand of the wrong type inside an arm the compiler does take. `intOperand` has
@@ -2342,6 +2341,10 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
           s"$e should be residual")
       assert(partial.declines.asScala(0).reason === "unsupported expression", s"$e")
     }
+    // A SMALLINT add is not among them: VARKA-330 lowers the narrow lanes' arithmetic, so it
+    // fuses beside the date add instead of declining as an unsupported expression.
+    assert(VarkaExpressionCompiler.compile(
+      Seq(out(Add(sh, Literal(1.toShort), EvalMode.LEGACY))), childOutput).isPresent)
   }
 
   test("int arithmetic is admitted as a day offset, and a calendar node over it is " +
