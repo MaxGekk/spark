@@ -293,7 +293,7 @@ public final class VarkaRangeAnalysis {
       case WeekDay n -> field(kind, WEEK_DAY_MAGNITUDE);
       case IntArith n -> kind != Kind.INT ? VarkaValueRange.UNKNOWN
           : arith(n, policy, literals, columns);
-      case IntNeg n -> kind != Kind.INT ? VarkaValueRange.UNKNOWN
+      case IntNeg n -> kind != Kind.INT || n.abs() ? VarkaValueRange.UNKNOWN
           : range(n.child(), Kind.INT, policy, literals, columns).neg();
       // A constant division only ever shrinks a range, so a bounded child stays bounded and an
       // unbounded one is no worse off - which is the point of the node: it needs no bound to be

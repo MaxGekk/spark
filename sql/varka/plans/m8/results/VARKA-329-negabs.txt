@@ -1,0 +1,63 @@
+VARKA-329 review fixes (VARKA-329.md 9.8, 989-8 and 989-12): a TINYINT negation and abs, before and after
+they became one lanewise NEG or ABS.
+Run 23 October 2026 (20:31 to 20:45 CEST) on the laptop: AMD Ryzen AI 9 HX PRO 370 (Zen 5, AVX-512 on 256-bit
+units), OpenJDK 25.0.4.1+1-1-26.04.4-Ubuntu, Linux 7.0.0-38-generic.
+
+== code ==
+Before: `varka-review-fixes-2` at de8cc490d35 with the benchmark's two new shapes added, built as that tree's
+compiler builds them: -y1 a multiply by -1, abs(y1) IfElse(y1 < 0, -y1, y1) over a literal 0.
+After: `varka-review-fixes-3`, the tree of the commit that adds this file (its last edits touched comments, tests and
+skip lines, no emission): -y1 a lanewise NEG, abs(y1) the negation node with its abs flag,
+a lanewise ABS. Class: sql/catalyst/src/test/java/org/apache/spark/sql/VarkaNarrowEmitBenchmark.java.
+
+== command ==
+As results/VARKA-329-emit-arm.txt: one JVM per run with the Test javaOptions and classpath of each tree,
+  taskset -c 0,12,13,14,15,1,2,3 flock heavy.lock flock heavy2.lock \
+    java -Xmx4g <Test javaOptions> --add-modules=jdk.incubator.vector -XX:MaxVectorSize=<64|32> \
+      -XX:CompileCommand=quiet "-XX:CompileCommand=dontinline,org.apache.spark.sql.varka.bench.NarrowEmit*::loop*" \
+      -cp <Test classpath> org.apache.spark.sql.VarkaNarrowEmitBenchmark
+both arms in one JVM (the default), one run per tree and width, before then after, no other JVM running. Every
+case settled after 8 drives with its loops at level 4. Shape e (the CASE store) is in neither change and is the
+control: it reads the same on both trees, within 7 %.
+
+== results, M rows/s (higher is faster) ==
+512 bits (-XX:MaxVectorSize=64)
+rows      shape                     arm        before      after    after/before
+16384     e: CASE store (control)   WIDENED   19317.7    19299.7    1.00
+16384     e: CASE store (control)   NATIVE    93456.1    92833.7    0.99
+16384     f: -y1                    WIDENED   35130.7    37097.9    1.06
+16384     f: -y1                    NATIVE    57883.2   187699.0    3.24
+16384     g: abs(y1)                WIDENED   19254.1    27560.8    1.43
+16384     g: abs(y1)                NATIVE    54416.1   185179.8    3.40
+262144    f: -y1                    WIDENED   35493.4    37700.7    1.06
+262144    f: -y1                    NATIVE    58549.0   125008.4    2.14
+262144    g: abs(y1)                WIDENED   19483.3    27911.3    1.43
+262144    g: abs(y1)                NATIVE    51820.8   124232.9    2.40
+1000000   f: -y1                    WIDENED   34717.4    36980.8    1.07
+1000000   f: -y1                    NATIVE    55978.4    64611.9    1.15
+1000000   g: abs(y1)                WIDENED   18680.1    27195.6    1.46
+1000000   g: abs(y1)                NATIVE    52762.9    64964.9    1.23
+
+256 bits (-XX:MaxVectorSize=32)
+16384     e: CASE store (control)   WIDENED   18859.5    18911.9    1.00
+16384     e: CASE store (control)   NATIVE    85242.7    89626.5    1.05
+16384     f: -y1                    WIDENED   33889.4    36586.9    1.08
+16384     f: -y1                    NATIVE    55903.7   169552.0    3.03
+16384     g: abs(y1)                WIDENED   18302.6    26393.2    1.44
+16384     g: abs(y1)                NATIVE    53119.2   163208.6    3.07
+262144    f: -y1                    WIDENED   33284.6    37552.2    1.13
+262144    f: -y1                    NATIVE    56950.1   122971.6    2.16
+262144    g: abs(y1)                WIDENED   18037.2    26628.7    1.48
+262144    g: abs(y1)                NATIVE    53197.6   113999.5    2.14
+1000000   f: -y1                    WIDENED   34181.8    36556.3    1.07
+1000000   f: -y1                    NATIVE    55134.5    64130.1    1.16
+1000000   g: abs(y1)                WIDENED   18008.1    26104.7    1.45
+1000000   g: abs(y1)                NATIVE    50483.4    63381.6    1.26
+
+== reading ==
+On the native arm, the default since row 478, a byte negation and abs run 3.0x to 3.4x faster in L1 and about
+2.1x to 2.4x at 512 KB, at both widths: the byte multiply x86 lacks is gone (NEG is a subtract from zero) and abs
+is one ABS instead of a compare, a multiply and a blend. At 2 MB the store becomes memory bound and the gain falls
+to 1.15x to 1.26x. On the widened arm abs gains 1.43x to 1.48x everywhere (the compare and blend go; the int
+multiply was already cheap), and the negation 1.06x to 1.13x. No cell is slower. One run per cell: the gains are
+far outside the control's 7 % spread, but the exact ratios are not repeated.

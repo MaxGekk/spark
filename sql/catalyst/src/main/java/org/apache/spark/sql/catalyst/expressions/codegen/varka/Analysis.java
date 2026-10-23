@@ -212,9 +212,10 @@ final class Analysis {
    * below keeps true; a kernel that converts between lanes is driven at the long lane, and its
    * int-lane nodes are emitted at the int species of the same width ({@link #laneOf}).
    *
-   * <p>It is read from the first output root, and {@link #analyze}'s refusal below is what
-   * makes that safe: no node of an int-lane emission may be on the long lane, so a mixed tree is
-   * rejected there rather than emitted with one lane's descriptors over the other's data.
+   * <p>It is the roots' shared lane ({@link VarkaVectorIR#kernelLane}), and {@link #analyze}'s
+   * refusal below is what makes a tree safe on it: no node of an int-lane emission may be on the
+   * long lane, so a mixed tree is rejected there rather than emitted with one lane's descriptors
+   * over the other's data.
    */
   final Lane lane;
 
@@ -729,13 +730,14 @@ final class Analysis {
    * The narrow ring nodes whose value this emission reduces where it is computed, rather than
    * leaving the unreduced int to a consumer that can take it: an add, subtract, multiply or
    * negate over {@code TINYINT} or {@code SMALLINT} operands whose check this emission does not
-   * emit, whose result some node that is not another ring node reads. Reduction modulo the
-   * narrow width is a ring homomorphism, so an int operation chain over sign-extended narrow
-   * values needs one reduction only at its first non-ring reader - a compare, an {@code abs}, a
-   * range guard, a widening, an {@code IfElse}, a store - and a chain {@code (a + b) * c - d}
-   * over bytes is therefore int adds and multiplies and no interior narrowing at all
-   * ({@code VARKA-329.md} 4.2). A store reduces by its own conversion, so a root needs none; a
-   * checked node is not a ring node ({@link #isNarrowRing}).
+   * emit, or a narrow pick, whose result some node that is not another ring node reads.
+   * Reduction modulo the narrow width is a ring homomorphism, and a blend only picks lanes, so
+   * an int operation chain over sign-extended narrow values needs one reduction only at its
+   * first non-ring reader - a compare, an {@code abs}, a range guard, a widening, a store - and
+   * a chain {@code (a + b) * c - d} over bytes is therefore int adds and multiplies and no
+   * interior narrowing at all ({@code VARKA-329.md} 4.2). A store reduces by its own conversion,
+   * so a root needs none; a checked node is not a ring node ({@link #isNarrowRing}). A wrapping
+   * {@code abs} is in this set wherever it is: its result is not a ring value.
    *
    * <p>Only the widened arm's emission needs these reductions; on the narrow lane the lane
    * operation is the reduction and {@code emitWrapToNarrow} emits nothing.
@@ -745,6 +747,11 @@ final class Analysis {
   /** Fills {@link #wrapAt}; called with {@link #collectRefusals()} once every root is analyzed. */
   void collectWraps() {
     for (VarkaVectorIR parent : topoOrder) {
+      // A wrapping narrow `abs` at the int lane leaves 128 for -128, which no reader may take:
+      // it is not congruent-safe as an operand, so it reduces its own result wherever it is.
+      if (parent instanceof IntNeg n && n.abs() && loweredUnchecked(n.laneType(), n.mode())) {
+        wrapAt.add(parent);
+      }
       boolean ring = isNarrowRing(parent);
       if (ring) {
         continue;
@@ -759,7 +766,8 @@ final class Analysis {
 
   /**
    * Whether {@code node} is one of the operations reduction modulo a narrow width commutes with:
-   * a narrow add, subtract, multiply or negate whose check is not emitted, which is a
+   * a narrow pick ({@code IfElse}), or a narrow add, subtract, multiply or negate whose check is
+   * not emitted, which is a
    * {@code LEGACY} one and also a {@code FAIL} or {@code NULL} one under an emission that turned
    * {@code checkIntOverflow} off - that arm promises the same node cheaper, so the checked node
    * reduces at its lane's width exactly as a wrapping one does, where the plain int operation
@@ -771,14 +779,17 @@ final class Analysis {
   private boolean isNarrowRing(VarkaVectorIR node) {
     return switch (node) {
       case IntArith n -> loweredUnchecked(n.laneType(), n.mode());
-      case IntNeg n -> loweredUnchecked(n.laneType(), n.mode());
+      case IntNeg n -> !n.abs() && loweredUnchecked(n.laneType(), n.mode());
+      // A blend picks lanes and so commutes with the reduction: a narrow pick of two unreduced
+      // arms reduces once, where its own reader needs it, rather than once in each arm.
+      case IfElse n -> n.laneType().isNarrow();
       // Written out rather than defaulted (sql/varka/AGENTS.md): a new narrow node is a compile
       // error here, so its author decides whether its value commutes with the reduction - a
       // narrow AND, OR or XOR does, a compare or a shift right does not - instead of falling
       // into "not ring" and leaving an unreduced int value for its readers.
       case ColumnRef _, LiteralSlot _, WidenLane _, NarrowLane _, AddDays _, SubDays _,
           AddMonths _, MakeDate _, GuardedDay _, GuardedRange _, NextDay _,
-          TruncDateDynamic _, DateDiff _, Greatest _, Least _, IfElse _, DayOfWeek _,
+          TruncDateDynamic _, DateDiff _, Greatest _, Least _, DayOfWeek _,
           WeekDay _, DayOfWeekIso _, ThursdayOf _, Year _, Month _, DayOfMonth _, Quarter _,
           DayOfYear _, LastDay _, TruncDate _, WeekOfYear _, ConstDivide _, BoundedDivide _,
           BitOp _, BitCount _, Compare _, NullSafeEqual _, BoolColumn _, BoolCompare _,

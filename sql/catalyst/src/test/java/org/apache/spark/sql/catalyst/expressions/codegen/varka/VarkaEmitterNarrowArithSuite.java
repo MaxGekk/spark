@@ -28,6 +28,7 @@ import java.util.Optional;
 import java.util.function.IntBinaryOperator;
 import java.util.function.IntPredicate;
 import java.util.function.UnaryOperator;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -450,8 +451,8 @@ public final class VarkaEmitterNarrowArithSuite {
       assertEquals(expected[1], refusedShort, "short at " + lanes + " int lanes");
     }
     // A width with no baked lane count names no species: validityByWidth off always refuses.
-    VarkaEmitOptions noWidth = VarkaEmitOptions.DEFAULTS.toBuilder().validityByWidth(false)
-        .build();
+    VarkaEmitOptions noWidth = VarkaEmitOptions.DEFAULTS.toBuilder().narrowLanes(false)
+        .validityByWidth(false).build();
     assertTrue(VarkaLoopEmitter.narrowRefusal(List.of(byteCol), noWidth).isPresent());
     assertTrue(VarkaLoopEmitter.narrowRefusal(List.of(shortCol), noWidth).isPresent());
     // The native arm computes in the narrow lane itself, so nothing has to widen at any width.
@@ -466,7 +467,7 @@ public final class VarkaEmitterNarrowArithSuite {
   }
 
   private static VarkaEmitOptions widened(int lanes) {
-    return VarkaEmitOptions.DEFAULTS.toBuilder().lanesOverride(lanes).build();
+    return VarkaEmitOptions.DEFAULTS.toBuilder().narrowLanes(false).lanesOverride(lanes).build();
   }
 
   // -------------------------------------------------------------------------------------------
@@ -715,6 +716,22 @@ public final class VarkaEmitterNarrowArithSuite {
           GreaterThan$.MODULE$.apply(c, CHAIN_COLS.get(3)), CHAIN_COLS.get(0),
           CHAIN_COLS.get(1))));
 
+  /**
+   * A narrow pick passes the chain's unreduced value through and reduces once, where its reader
+   * is not a ring node: at the store as a root, before abs under one. LEGACY only: the chain is a
+   * branch here, which Spark evaluates only on the rows the condition picks it for, so an
+   * overflow elsewhere raises nothing and the checked chains' tests do not apply.
+   */
+  private static final List<ChainShape> PICK_SHAPES = List.of(
+      new ChainShape("picked by a choice", c -> pick(c)),
+      new ChainShape("picked by a choice under abs", c -> Abs$.MODULE$.apply(pick(c), false)));
+
+  /** The chain or the second column, as the fourth column and the first compare. */
+  private static Expression pick(Expression chain) {
+    return If$.MODULE$.apply(GreaterThan$.MODULE$.apply(CHAIN_COLS.get(3), CHAIN_COLS.get(0)),
+        chain, CHAIN_COLS.get(1));
+  }
+
   private static Expression chain(Enumeration.Value mode) {
     return Subtract$.MODULE$.apply(
         Multiply$.MODULE$.apply(
@@ -735,7 +752,8 @@ public final class VarkaEmitterNarrowArithSuite {
   @DisplayName("a LEGACY chain answers at its root and under every non-ring consumer, both arms")
   public void legacyChainAnswersUnderEveryNonRingConsumer() {
     for (Arm arm : ARMS) {
-      for (ChainShape shape : CHAIN_SHAPES) {
+      for (ChainShape shape : Stream.concat(CHAIN_SHAPES.stream(), PICK_SHAPES.stream())
+          .toList()) {
         for (ChainData data : CHAIN_DATA) {
           String where = "the chain " + shape.name() + " (" + data.name() + ") LEGACY "
               + arm.name();

@@ -46,11 +46,15 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Con
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Greatest;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.InRanges;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntNeg;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IsNotNull;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Least;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NarrowLane;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Overflow;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WidenLane;
 
 /**
@@ -313,6 +317,34 @@ public final class VarkaEmitterNarrowSuite {
     Cond cmp = new Compare(CompareOp.LT, BYTE_COL, BYTE_COL_2);
     assertEquals(LaneType.INT, VarkaVectorIR.emissionLane(cmp, WIDENED));
     assertEquals(LaneType.BYTE, VarkaVectorIR.emissionLane(cmp, NATIVE));
+  }
+
+  @Test
+  @DisplayName("roots that prefer different lanes share the int lane unless one is long")
+  public void rootsThatPreferDifferentLanesShareTheIntLane() {
+    VarkaVectorIR byteSum = new IntArith(IntOp.ADD, Overflow.WRAP, BYTE_COL, BYTE_COL_2);
+    VarkaVectorIR shortAbs = new IntNeg(Overflow.WRAP, new ColumnRef(2, LaneType.SHORT), true);
+    VarkaVectorIR intCol = new ColumnRef(3, LaneType.INT);
+    VarkaVectorIR intSum = new IntArith(IntOp.ADD, Overflow.WRAP, intCol, intCol);
+    assertEquals(Optional.of(LaneType.BYTE), VarkaVectorIR.kernelLane(List.of(byteSum), NATIVE));
+    // Each root alone would run native; together they have no one narrow species, and the int
+    // lane serves both through the widened lowering, as it serves an int root beside them.
+    assertEquals(Optional.of(LaneType.INT),
+        VarkaVectorIR.kernelLane(List.of(byteSum, shortAbs), NATIVE));
+    assertEquals(Optional.of(LaneType.INT),
+        VarkaVectorIR.kernelLane(List.of(byteSum, intSum), NATIVE));
+    assertEquals(Optional.empty(), VarkaVectorIR.kernelLane(
+        List.of(byteSum, new ColumnRef(4, LaneType.LONG)), NATIVE));
+    int length = 300;
+    int[][] data = {tabulate(length, row -> ((row * 7) % 256) - 128),
+      tabulate(length, row -> 127 - ((row * 11) % 256)),
+      tabulate(length, row -> row % 3 == 0 ? Short.MIN_VALUE : ((row * 4099) % 65536) - 32768),
+      tabulate(length, row -> row * 1000003)};
+    for (Arm arm : ARMS) {
+      checkValues("a byte sum, a short abs and an int sum in one kernel " + arm.name(),
+          List.of(byteSum, shortAbs, intSum), 4, new int[0], length, data, row -> row % 9 == 2,
+          false, arm.options());
+    }
   }
 
   @Test

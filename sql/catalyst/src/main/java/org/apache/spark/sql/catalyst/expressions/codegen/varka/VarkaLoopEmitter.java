@@ -181,15 +181,12 @@ public final class VarkaLoopEmitter {
     }
     // The emission lane, not the root's: a NarrowLane root is a 32-bit column computed in the
     // 64-bit lane its child is on, and the loop runs at the child's species. A narrow root of the
-    // NATIVE arm is the same: the loop runs at the narrow lane its values are on.
-    Lane lane = Lane.of(VarkaVectorIR.emissionLane(outputs.get(0), options));
-    for (VarkaVectorIR output : outputs) {
-      if (VarkaVectorIR.emissionLane(output, options) != lane.laneType) {
-        throw VarkaErrors.illegalArgument("outputs mix lanes: " + lane.laneType + " and "
-            + VarkaVectorIR.emissionLane(output, options));
-      }
-    }
-    return lane;
+    // NATIVE arm is the same: the loop runs at the narrow lane its values are on, unless another
+    // root drives the kernel at the int lane, where it takes the widened lowering.
+    return Lane.of(VarkaVectorIR.kernelLane(outputs, options).orElseThrow(
+        () -> VarkaErrors.illegalArgument("outputs mix lanes: " + outputs.stream()
+            .map(o -> VarkaVectorIR.emissionLane(o, options).toString()).distinct()
+            .collect(java.util.stream.Collectors.joining(" and ")))));
   }
 
   /** {@link Lane#emitLanes}, for the suite that checks a baked width against what the JVM has. */
@@ -1334,7 +1331,7 @@ public final class VarkaLoopEmitter {
         record != null ? lane -> new VarkaEmitCost.Tally(lane, record.prices(), record.keepCounts())
             : predict ? lane -> new VarkaEmitCost.Tally(lane, VarkaEmitCostTable.PRICES, false)
             : null;
-    VarkaVectorIR.LaneType lane = VarkaVectorIR.emissionLane(outputs.get(0), options);
+    VarkaVectorIR.LaneType lane = laneOf(outputs, options).laneType;
     Supplier<GroupOps> newGroup = () -> new GroupOps(options.shareChronoPrefix(), materialize,
         earlier, lane, newTally == null ? null : newTally.apply(lane));
     GroupOps group = newGroup.get();
@@ -1477,7 +1474,7 @@ public final class VarkaLoopEmitter {
       int n = outputs.size();
       boolean materialize = options.materializeChronoPrefix() && options.methodByteBudget() > 0;
       boolean predict = options.predictGrouping() && options.methodByteBudget() > 0;
-      VarkaVectorIR.LaneType lane = VarkaVectorIR.emissionLane(outputs.get(0), options);
+      VarkaVectorIR.LaneType lane = laneOf(outputs, options).laneType;
       // Every output before the current start, walked as one group: its prefixes are what a
       // group starting there finds computed earlier.
       GroupOps before = new GroupOps(options.shareChronoPrefix(), materialize, new HashSet<>(),
@@ -1630,7 +1627,7 @@ public final class VarkaLoopEmitter {
     outputs = List.copyOf(outputs);
     boolean materialize = options.materializeChronoPrefix() && options.methodByteBudget() > 0;
     boolean predict = options.predictGrouping() && options.methodByteBudget() > 0;
-    VarkaVectorIR.LaneType lane = VarkaVectorIR.emissionLane(outputs.get(0), options);
+    VarkaVectorIR.LaneType lane = laneOf(outputs, options).laneType;
     GroupOps before = new GroupOps(options.shareChronoPrefix(), materialize, new HashSet<>(),
         lane, null);
     for (int o = 0; o < from; o++) {
@@ -1840,11 +1837,8 @@ public final class VarkaLoopEmitter {
         || narrowRefusal(outputs, options).isPresent()) {
       return false;
     }
-    for (VarkaVectorIR output : outputs) {
-      if (VarkaVectorIR.emissionLane(output, options)
-          != VarkaVectorIR.emissionLane(outputs.get(0), options)) {
-        return false;
-      }
+    if (VarkaVectorIR.kernelLane(outputs, options).isEmpty()) {
+      return false;
     }
     java.util.HashMap<VarkaVectorIR, Integer> heights = new java.util.HashMap<>();
     int[] opNodes = {0};
@@ -1873,6 +1867,10 @@ public final class VarkaLoopEmitter {
    */
   public static Optional<String> narrowRefusal(
       List<VarkaVectorIR> outputs, VarkaEmitOptions options) {
+    // The kernel's lane, not each root's: a native narrow root beside an int one is driven at the
+    // int lane and needs the widening load. Where no lane serves the roots, which the lane check
+    // refuses on its own, each root is judged at its own.
+    Optional<VarkaVectorIR.LaneType> kernel = VarkaVectorIR.kernelLane(outputs, options);
     for (VarkaVectorIR root : outputs) {
       Set<VarkaVectorIR.LaneType> lanes = VarkaVectorIR.lanesIn(root);
       boolean narrow = lanes.contains(VarkaVectorIR.LaneType.BYTE)
@@ -1880,7 +1878,8 @@ public final class VarkaLoopEmitter {
       if (!narrow) {
         continue;
       }
-      VarkaVectorIR.LaneType drive = VarkaVectorIR.emissionLane(root, options);
+      VarkaVectorIR.LaneType drive =
+          kernel.orElseGet(() -> VarkaVectorIR.emissionLane(root, options));
       if (drive.isNarrow()) {
         continue;
       }

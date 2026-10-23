@@ -767,7 +767,8 @@ and reads back a `ByteVector`/`ShortVector` output, and the validity words are t
 whichever lane reads them. Every existing shape's emitted bytes are unchanged: 2.6's requirement is
 met by the option's default, not by a second lowering.
 
-**The option.** `VarkaEmitOptions.narrowLanes`, a `Flag` tagged `nativeNarrow`, default false.
+**The option.** `VarkaEmitOptions.narrowLanes`, a `Flag` tagged `nativeNarrow`, default false
+(superseded by row 478: default true, tagged `widenedNarrow` for the off arm).
 False is WIDENED - the narrow column read with a widening load into the int species of the same
 lane count, computed as an int, truncated once at the store - and true is NATIVE, 2.2's narrow
 species throughout, for a tree whose every value is narrow; a tree with one int value in it drives
@@ -1288,11 +1289,11 @@ row.
 | 989-5 | `narrow_range.smt2` proved a byte multiply in a 16-bit lane the emitter never uses | bucket 2: the check removed, the width read from `Lane.INT` |
 | 989-6 | the oracle-share timing's filter cancelled the test on the arm it did not name | bucket 1: it skips that arm |
 | 989-7 | `weightOf` weighs a wrapped narrow node 1 where it emits 3 | bucket 3 |
-| 989-8 | narrow `abs` is a compare, a negate and a blend, null-skipping | bucket 3: one lanewise `ABS` |
-| 989-9 | the checked narrow multiply's int drive is per root, so the native arm splits a projection | bucket 3: decided per kernel, needed once NATIVE is the default |
+| 989-8 | narrow `abs` is a compare, a negate and a blend, null-skipping | bucket 3: one lanewise `ABS`, the negation node with an `abs` flag |
+| 989-9 | the checked narrow multiply's int drive is per root, so the native arm splits a projection | bucket 3: `VarkaVectorIR.kernelLane` decides per kernel, needed once NATIVE is the default |
 | 989-10 | the 18 always-on 2^24 SMALLINT slices cost about 78 s a build | the owner's decision: the slice is row 330's own done-when |
 | 989-11, 987-8 | the warm-up feeds the preferred narrow species, not the ones widened kernels use; dead `neg`/`abs`; no narrow `fromLong` | bucket 2: the reach gate models the `widenLanes` species, the warm-up warms them |
-| 989-12 | negation is `mul` by -1, eight instructions on bytes where `NEG` is one | bucket 3 |
+| 989-12 | negation is `mul` by -1, eight instructions on bytes where `NEG` is one | bucket 3 on the narrow lanes; the int and long lanes are row 482, measured first |
 | 989-13 | `arithOver`'s narrow exception is dead and its javadoc false; no narrow range in `VarkaRangeAnalysis` | row 480 |
 | 989-14 | four comments still said a checked multiply never reaches the overflow mask | bucket 1 |
 | 989-15, 987-15 | `default` arms and `instanceof` ladders over the sealed IR in `isNarrowRing`, `laneBounds`, `narrowValuesIn`, `needsNarrowSpecies` | bucket 2: exhaustive switches, the two walks side by side |
@@ -1311,7 +1312,42 @@ Refuted on verification: #989's masked body untested, literal-slot leak and NULL
 Cut by the reviews' fifteen-finding caps and taken as they fall: the pull request and the
 benchmark naming a SQL conf that does not exist - `narrowLanes` is an emit option no session
 setting reaches (bucket 1: the javadoc corrected; the commit message cannot be); the two
-truncation helpers, the five special cases of the checked narrow multiply and the narrow CASE
-truncated and widened again inside a larger expression (bucket 3); the moved
-`runAndCompareMixedStatus` and the canonical-rendering note (bucket 2). Row 476's done-when
+truncation helpers and the narrow CASE reduced in each branch rather than once (bucket 3); the
+five special cases of the checked narrow multiply (row 481, which needs a `NULL` mode on
+`GuardedRange`); the moved `runAndCompareMixedStatus` and the canonical-rendering note (bucket 2). Row 476's done-when
 presumed the narrow species were covered; bucket 2 is what makes that true.
+
+### 9.9 Bucket 3 and row 478: the native arm as the default (23 October 2026)
+
+`narrowLanes` ships true, tagged `widenedNarrow` for the off arm. Before the flip, the lane a
+kernel drives at is decided once over all its roots (`VarkaVectorIR.kernelLane`): roots that agree
+keep their lane, roots that differ with no long one share the int lane, and a long root beside
+another shares none. Without it the flip would have sent the second entry of `SELECT y1 + y2,
+i + 1` to the row engine (989-9). The compiler, the budget mirror, the emitter and
+`CompiledVarkaProjection` all read it, and an entry that moves a native kernel to the int lane
+where this width cannot widen is demoted with a reason that says so.
+
+The emission changes: a narrow negation is the lanewise `NEG` (989-12; the int and long lanes are
+row 482); a narrow `abs` is the negation node with an `abs` flag, one lanewise `ABS`, which at the
+int lane reduces its own result and is not a ring node (989-8); a narrow `IfElse` is a ring node,
+so a pick of two unreduced arms reduces once where its reader needs it; a `NarrowLane` to a narrow
+target away from a store reduces by the shift pair, and the second truncation helper is gone; the
+grouping weights count a wrapping narrow node's shift pair (989-7).
+
+Measured (`results/VARKA-329-negabs.txt`): on the native arm a byte negation and abs run 3.0x to
+3.4x faster in L1 and 2.1x to 2.4x at 512 KB at both 512 and 256 bits, and 1.15x to 1.26x at 2 MB
+where the store is memory bound; on the widened arm abs gains 1.43x to 1.48x and the negation
+1.06x to 1.13x; the control shape is unchanged.
+
+The bytes oracle moved only for the narrow coverage rows (34 at each width) and the aggregate
+option-arm digests. Under `validityByWidth=false` the native arm needs no baked lane count, so 52
+skip lines of the differential suite went stale and are removed; the rows that still decline there
+are the checked multiplies (driven at the int lane, row 481) and the rows that read a narrow column
+beside an int value. The matrix over the narrow, arithmetic, family and oracle suites and the
+differential suite passes at the defaults, `narrowLanes=false`, `lanesOverride=4` and
+`validityByWidth=false` with nothing unfused.
+
+Left as they were, by design or to a row: an entry demoted for joining is not retried in a kernel
+of its own (row 480, as for a lane mismatch); an int entry moves the kernel's native narrow entries
+to the widened lowering, the mixed shape the arms tie on (9.5); and the IR fuzzers draw no narrow
+arithmetic, narrow choice or `abs`, which row 352 owns.

@@ -397,10 +397,11 @@ public sealed interface VarkaEmitOption
       new Flag("narrowHalfSpecies", Reason.REFERENCE, false,
           VarkaEmitOptions::narrowHalfSpecies, Builder::narrowHalfSpecies, POSITIONAL),
       // A machine choice rather than a reference form: the arm that wins depends on the host's
-      // vector width (VARKA-329.md 9.2). Its tag keeps the default's rendering empty, so every
-      // existing kernel keeps its shape hash and its bytes.
-      new Flag("narrowLanes", Reason.MACHINE, false,
-          VarkaEmitOptions::narrowLanes, Builder::narrowLanes, new FlagTag("nativeNarrow", true)),
+      // vector width (VARKA-329.md 9.2). The native arm is the default, faster on every measured
+      // all-narrow shape (9.6); the widened one is the losing arm, kept and fuzzed in the
+      // matrix. Its tag keeps the default's rendering empty.
+      new Flag("narrowLanes", Reason.MACHINE, true, VarkaEmitOptions::narrowLanes,
+          Builder::narrowLanes, new FlagTag("widenedNarrow", false)),
       new Count("methodByteBudget", Reason.KNOB, VarkaEmitBudget.HUGE_METHOD_LIMIT,
           VarkaEmitOptions::methodByteBudget, Builder::methodByteBudget, POSITIONAL,
           List.of(0, 8000, 1000, 2000, 4000), List.of(0, 8000)),
