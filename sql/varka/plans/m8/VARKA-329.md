@@ -1111,5 +1111,9 @@ record their comments cite; each was fixed or answered as stated.
     long-lane emission still declines: Analysis admits no narrow node there at all, so a lifted
     validity-only conjunct beside a bigint one stays with the row engine. The width audit, its
     128-bit column and the emitted bytes were regenerated.
-15. The template warm-up leaves the narrow species and their conversions cold. Filed as row 476
-    of the milestone plan; the warm-up is unchanged.
+15. The template warm-up left the narrow species and their conversions cold. The reach gate
+    (`VarkaWarmupReachSuite`) counts every method the rows' kernels call, so the warm-up now
+    has a byte and a short block - the lanes' loads, stores, compare, blend, min, max,
+    broadcast and widening conversion, and the mask calls a selection makes - and the reach
+    model enumerates all five lanes. Row 476 of the milestone plan still owns the measurement
+    of the first narrow kernel on a fresh JVM.
