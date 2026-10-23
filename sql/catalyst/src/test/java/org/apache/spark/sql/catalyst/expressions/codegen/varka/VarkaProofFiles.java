@@ -2399,9 +2399,10 @@ final class VarkaProofFiles {
    * {@code narrow_range.smt2}: the widened arm's checked forms compare the exact int result
    * against the type's range - {@code LT} the minimum and {@code GT} the maximum - and that
    * mask holds at exactly the ints that are not values of the narrow type. The ends are tested
-   * inclusive, so the claims cover a mask made non-strict at either end being wrong there. For
-   * the native arm's checked multiply, whose product is formed in the next lane up, the same
-   * compare over that lane's values is the same test.
+   * inclusive, so the claims cover a mask made non-strict at either end being wrong there. A
+   * checked narrow multiply is formed in the int lane on either arm
+   * ({@code VarkaVectorIR.holdsCheckedNarrowMultiply}), so these checks are its proof too; the
+   * lane width is read from {@link Lane#INT}, the lane the emitter forms it in.
    */
   static String narrowRange() {
     var out = new StringBuilder(LICENSE);
@@ -2416,37 +2417,40 @@ final class VarkaProofFiles {
         ; The claim: outside(r) holds at exactly the ints that are not values of the narrow
         ; type, which is r differing from the sign extension of its low w bits. The sat checks
         ; place both ends inside and one past each end outside, and the neighbours narrow the
-        ; compares to <= and >=, which is wrong at the end each names. The native arm multiplies
-        ; a checked narrow pair in the next lane up (byte in short, short in int); the same
-        ; compare over that lane's values, which is where the product lands, is the same test.
+        ; compares to <= and >=, which is wrong at the end each names. A checked narrow multiply
+        ; is formed in the int lane on either arm (VarkaVectorIR.holdsCheckedNarrowMultiply), so
+        ; these checks cover it too.
         ;
         ; The logic is ALL because the file reasons over bit-vectors.
         """);
     out.append(rendered("ALL"));
     for (Lane lane : NARROW_LANES) {
-      int w = lane.bits;
+      int bits = Lane.INT.bits;
       String kind = lane.laneType.name().toLowerCase(Locale.ROOT);
-      String decl = "(declare-const r (_ BitVec 32))";
-      String lo = bvLiteral(lane.mostNegative(), 32);
-      String hi = bvLiteral(lane.mostPositive(), 32);
-      String outside = outside("r", lane.mostNegative(), lane.mostPositive(), 32);
+      String decl = "(declare-const r (_ BitVec " + bits + "))";
+      String lo = bvLiteral(lane.mostNegative(), bits);
+      String hi = bvLiteral(lane.mostPositive(), bits);
+      String outside = outside("r", lane.mostNegative(), lane.mostPositive(), bits);
       check(out, "narrow_range: the widened arm's mask is the ints that are not " + kind
           + " values", "unsat", List.of(decl,
           "(assert (not (= " + outside + " (not (= r " + narrowWrap("r", lane) + ")))))"));
       check(out, "narrow_range: the " + kind + " range admits both of its ends", "sat", List.of(
-          "(declare-const bottom (_ BitVec 32))", "(declare-const top (_ BitVec 32))",
+          "(declare-const bottom (_ BitVec " + bits + "))",
+          "(declare-const top (_ BitVec " + bits + "))",
           "(assert (= bottom " + lo + "))", "(assert (= top " + hi + "))",
-          "(assert (not " + outside("bottom", lane.mostNegative(), lane.mostPositive(), 32)
+          "(assert (not " + outside("bottom", lane.mostNegative(), lane.mostPositive(), bits)
               + "))",
-          "(assert (not " + outside("top", lane.mostNegative(), lane.mostPositive(), 32)
+          "(assert (not " + outside("top", lane.mostNegative(), lane.mostPositive(), bits)
               + "))"));
       check(out, "narrow_range: one past each end of the " + kind + " is outside it", "sat",
-          List.of("(declare-const below (_ BitVec 32))",
-              "(declare-const above (_ BitVec 32))",
-              "(assert (= below " + bvLiteral(lane.mostNegative() - 1, 32) + "))",
-              "(assert (= above " + bvLiteral(lane.mostPositive() + 1, 32) + "))",
-              "(assert " + outside("below", lane.mostNegative(), lane.mostPositive(), 32) + ")",
-              "(assert " + outside("above", lane.mostNegative(), lane.mostPositive(), 32) + ")"));
+          List.of("(declare-const below (_ BitVec " + bits + "))",
+              "(declare-const above (_ BitVec " + bits + "))",
+              "(assert (= below " + bvLiteral(lane.mostNegative() - 1, bits) + "))",
+              "(assert (= above " + bvLiteral(lane.mostPositive() + 1, bits) + "))",
+              "(assert " + outside("below", lane.mostNegative(), lane.mostPositive(), bits)
+                  + ")",
+              "(assert " + outside("above", lane.mostNegative(), lane.mostPositive(), bits)
+                  + ")"));
       check(out, "narrow_range: with <= at the bottom the mask is not the " + kind
           + "'s values", "sat", List.of(decl, "(assert (= r " + lo + "))",
           "(assert (not (= (or (bvsle r " + lo + ") (bvsgt r " + hi + ")) " + outside + ")))"));
@@ -2454,13 +2458,6 @@ final class VarkaProofFiles {
           "sat", List.of(decl, "(assert (= r " + hi + "))",
               "(assert (not (= (or (bvslt r " + lo + ") (bvsge r " + hi + ")) " + outside
                   + ")))"));
-      int wider = w * 2;
-      String p = "(declare-const p (_ BitVec " + wider + "))";
-      String inWider = outside("p", lane.mostNegative(), lane.mostPositive(), wider);
-      check(out, "narrow_range: the native arm's multiply, in the " + wider
-          + "-bit lane, is checked by the same mask", "unsat", List.of(p,
-          "(assert (not (= " + inWider + " (not (= p " + signExtendLow("p", w, wider)
-              + ")))))"));
     }
     return out.toString();
   }

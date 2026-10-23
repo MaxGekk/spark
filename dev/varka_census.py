@@ -782,6 +782,8 @@ FUSED_CASTS = {
     ("int", "dt"): "DAY unit, only as date_add's offset (d + CAST(i AS INTERVAL DAY))",
     ("int", "bigint"): "every mode",
     ("bigint", "int"): "LEGACY and ANSI; TRY's null waits on row 332",
+    ("byte", "int"): "every mode: exact, the column's widening load (VARKA-329)",
+    ("short", "int"): "every mode: exact, the column's widening load (VARKA-329)",
 }
 
 # The mode a coverage row's cast runs in, to the legal() answer that admits it.

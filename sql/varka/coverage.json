@@ -2387,6 +2387,50 @@
     "domain" : "",
     "note" : ""
   }, {
+    "sql" : "y1 < i",
+    "executable" : "y1 < i",
+    "family" : "TINYINT and SMALLINT widened to int",
+    "form" : "predicate",
+    "catalyst" : [ "Cast", "LessThan" ],
+    "casts" : [ "byte>int:ansi" ],
+    "operands" : [ "Cast:byte", "LessThan:int" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "domain" : "",
+    "note" : "the byte column widened on its load, compared at the int lane"
+  }, {
+    "sql" : "s1 = i",
+    "executable" : "s1 = i",
+    "family" : "TINYINT and SMALLINT widened to int",
+    "form" : "predicate",
+    "catalyst" : [ "Cast", "EqualTo" ],
+    "casts" : [ "short>int:ansi" ],
+    "operands" : [ "Cast:short", "EqualTo:int" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "domain" : "",
+    "note" : "the short twin, an equality"
+  }, {
+    "sql" : "y1 + i",
+    "executable" : "y1 + i",
+    "family" : "TINYINT and SMALLINT widened to int, as values",
+    "form" : "projection",
+    "catalyst" : [ "Add", "Cast" ],
+    "casts" : [ "byte>int:ansi" ],
+    "operands" : [ "Add:int", "Cast:byte" ],
+    "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "CAST(y1 AS BIGINT) + i BETWEEN -2147483648 AND 2147483647",
+    "note" : "an int add over a widened byte load, checked under ANSI as any int add is"
+  }, {
+    "sql" : "CAST(s1 AS INT)",
+    "executable" : "CAST(s1 AS INT)",
+    "family" : "TINYINT and SMALLINT widened to int, as values",
+    "form" : "projection",
+    "catalyst" : [ "Cast" ],
+    "casts" : [ "short>int:ansi" ],
+    "operands" : [ "Cast:short" ],
+    "switches" : [ ],
+    "domain" : "",
+    "note" : "the widening alone, stored four bytes a row"
+  }, {
     "sql" : "CAST(i AS BIGINT)",
     "executable" : "CAST(i AS BIGINT)",
     "family" : "Width conversions",

@@ -72,6 +72,31 @@ public record CompiledVarkaProjection(
       throw VarkaErrors.illegalArgument(
           "a kernel driven at the int lane reads no long literal table");
     }
+    // An output's element width has two sources: the emitter maps and stores the destination at
+    // the root's lane, and the evaluator allocates the Arrow vector from the Spark type. They
+    // agree because every compiler arm builds matching roots, and nothing downstream checks it:
+    // a mismatch writes past a narrower vector or stores a byte a row into a wider one, with no
+    // throw. So it is checked once here, where both are known (VARKA-329). A condition root is
+    // stored as a bitmap whatever its lane and is not a value width.
+    if (outputs.size() == outputTypes.size()) {
+      for (int i = 0; i < outputs.size(); i++) {
+        VarkaVectorIR root = outputs.get(i);
+        if (root instanceof VarkaVectorIR.Cond) {
+          continue;
+        }
+        int stored = switch (root.laneType()) {
+          case BYTE -> 1;
+          case SHORT -> 2;
+          case INT -> 4;
+          case LONG -> 8;
+        };
+        if (stored != outputTypes.get(i).defaultSize()) {
+          throw VarkaErrors.illegalArgument("output " + i + " is stored " + stored
+              + " bytes a row at the " + root.laneType() + " lane, but its type "
+              + outputTypes.get(i).simpleString() + " is " + outputTypes.get(i).defaultSize());
+        }
+      }
+    }
   }
 
   /**

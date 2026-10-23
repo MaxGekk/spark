@@ -38,6 +38,7 @@ import jdk.incubator.vector.VectorOperators;
 import jdk.incubator.vector.VectorOperators.Binary;
 import jdk.incubator.vector.VectorOperators.Comparison;
 import jdk.incubator.vector.VectorOperators.Unary;
+import jdk.incubator.vector.VectorShape;
 import jdk.incubator.vector.VectorSpecies;
 
 import org.apache.spark.internal.SparkLogger;
@@ -586,6 +587,10 @@ final class VarkaVectorTemplateWarmup {
       VectorSpecies<Integer> is = IntVector.SPECIES_PREFERRED;
       VectorSpecies<Long> ls = LongVector.SPECIES_PREFERRED;
       VectorSpecies<Double> ds = DoubleVector.SPECIES_PREFERRED;
+      // The species a widened kernel - the default arm - loads and stores a narrow column at,
+      // where it is not the preferred one the narrow blocks warm (VARKA-329).
+      VectorSpecies<Byte> bw = widenedSpecies(Lane.BYTE, byte.class, bs);
+      VectorSpecies<Short> sw = widenedSpecies(Lane.SHORT, short.class, ss);
       int[] ia = new int[is.length()];
       int[] ib = new int[is.length()];
       long[] la = new long[ls.length()];
@@ -621,6 +626,12 @@ final class VarkaVectorTemplateWarmup {
         }
         if (ss.length() <= Long.SIZE) {
           acc += shorts(ss, segment);
+        }
+        if (bw != null) {
+          acc += widenedBytes(bw, is, segment);
+        }
+        if (sw != null) {
+          acc += widenedShorts(sw, is, segment);
         }
         acc += conversions(is, ls, ds, ia, la, da);
         // After every round, the last included: one round's burst can put the queue over the
@@ -746,18 +757,18 @@ final class VarkaVectorTemplateWarmup {
         VectorMask<Byte> m = a.compare(VectorOperators.LT, b);
         IntVector widened =
             (IntVector) c.convertShape(VectorOperators.B2I, IntVector.SPECIES_PREFERRED, 0);
-        // The narrow arithmetic (VARKA-330): the lane's add, subtract, multiply, negate and
-        // absolute value, the saturating operators the ANSI overflow check compares against,
-        // and the mask calls a range test makes. The scalar multiply is what the emitter calls
-        // for a negation, which is why both forms are here.
+        // The narrow arithmetic (VARKA-330): the lane's add, subtract and multiply, the multiply
+        // by a scalar -1 the emitter negates with (an abs is a compare and a blend over it), the
+        // saturating operators the ANSI overflow check compares against, and the mask calls a
+        // range test makes - fromLong is the masked body's guard collect.
         ByteVector sum = a.add(b);
         ByteVector satAdd = a.lanewise(VectorOperators.SADD, b);
         VectorMask<Byte> inRange = sum.compare(VectorOperators.EQ, satAdd);
         acc += a.blend(b, m).lane(0) + a.min(b).lane(0) + a.max(b).lane(0) + widened.lane(0)
             + ByteVector.broadcast(s, (byte) 5).lane(0)
             + m.not().toLong() + m.or(tail).toLong()
-            + sum.lane(0) + a.sub(b).lane(0) + a.mul(b).lane(0) + a.neg().lane(0)
-            + a.mul((byte) -1).lane(1) + a.abs().lane(0)
+            + sum.lane(0) + a.sub(b).lane(0) + a.mul(b).lane(0)
+            + a.mul((byte) -1).lane(1) + VectorMask.fromLong(s, 0x5L).and(inRange).toLong()
             + a.lanewise(VectorOperators.SSUB, b).lane(0)
             + a.compare(VectorOperators.GT, (byte) 0).toLong()
             + (inRange.anyTrue() ? 1 : 0) + inRange.and(tail).toLong();
@@ -786,13 +797,90 @@ final class VarkaVectorTemplateWarmup {
         acc += a.blend(b, m).lane(0) + a.min(b).lane(0) + a.max(b).lane(0) + widened.lane(0)
             + ShortVector.broadcast(s, (short) 5).lane(0)
             + m.not().toLong() + m.or(tail).toLong()
-            + sum.lane(0) + a.sub(b).lane(0) + a.mul(b).lane(0) + a.neg().lane(0)
-            + a.mul((short) -1).lane(1) + a.abs().lane(0)
+            + sum.lane(0) + a.sub(b).lane(0) + a.mul(b).lane(0)
+            + a.mul((short) -1).lane(1) + VectorMask.fromLong(s, 0x5L).and(inRange).toLong()
             + a.lanewise(VectorOperators.SSUB, b).lane(0)
             + a.compare(VectorOperators.GT, (short) 0).toLong()
             + (inRange.anyTrue() ? 1 : 0) + inRange.and(tail).toLong();
         a.intoMemorySegment(seg, 1024, ByteOrder.LITTLE_ENDIAN);
         a.intoMemorySegment(seg, 1088, ByteOrder.LITTLE_ENDIAN, tail);
+      }
+      return acc;
+    }
+
+    /**
+     * The species a widened kernel reads a column of {@code lane} at for the preferred int
+     * species ({@link Lane#widenLanes}), or null where it is the preferred species itself, which
+     * {@link #bytes} and {@link #shorts} already warm, or where no form exists.
+     */
+    private static <E> @Nullable VectorSpecies<E> widenedSpecies(Lane lane, Class<E> element,
+        VectorSpecies<E> preferred) {
+      int lanes = Lane.widenLanes(IntVector.SPECIES_PREFERRED.length(), lane);
+      if (lanes == 0 || lanes == preferred.length()) {
+        return null;
+      }
+      return VectorSpecies.of(element, VectorShape.forBitSize(lanes * lane.bits));
+    }
+
+    /**
+     * The calls a widened kernel makes on a {@code TINYINT} column at the species it loads it
+     * at: the dense and masked loads, the widening {@code B2I} at every part a lane group can
+     * take (two at four int lanes, where one load spans two groups), the {@code I2B} truncation
+     * back and the dense and masked stores of the narrowed value. These go to that species'
+     * classes - a Byte64 where the preferred byte species is wider - which {@link #bytes} never
+     * reaches.
+     */
+    private static long widenedBytes(VectorSpecies<Byte> w, VectorSpecies<Integer> is,
+        MemorySegment seg) {
+      VectorMask<Byte> tail = w.indexInRange(0, w.length() / 2 + 1);
+      int parts = Math.max(1, w.length() / is.length());
+      long acc = 0;
+      for (int r = 0; r < THIN_CALLS_PER_ROUND; r++) {
+        ByteVector a = ByteVector.fromMemorySegment(w, seg, 0, ByteOrder.LITTLE_ENDIAN);
+        ByteVector b = ByteVector.fromMemorySegment(w, seg, w.length(), ByteOrder.LITTLE_ENDIAN);
+        ByteVector c = ByteVector.fromMemorySegment(w, seg, 512, ByteOrder.LITTLE_ENDIAN, tail);
+        // The species' own compare, blend and saturating operator, and the mask calls a
+        // selection and a guard make, which a kernel reaches at this species too.
+        VectorMask<Byte> m = a.compare(VectorOperators.LT, b);
+        acc += a.blend(b, m).lane(0) + a.lanewise(VectorOperators.SADD, b).lane(0)
+            + a.compare(VectorOperators.GT, (byte) 0).toLong()
+            + m.and(tail).toLong() + m.or(tail).toLong() + m.not().toLong();
+        for (int part = 0; part < parts; part++) {
+          IntVector widened = (IntVector) a.convertShape(VectorOperators.B2I, is, part);
+          ByteVector back = (ByteVector) widened.convertShape(VectorOperators.I2B, w, 0);
+          acc += widened.lane(0) + back.lane(0);
+          back.intoMemorySegment(seg, 1024, ByteOrder.LITTLE_ENDIAN);
+          back.intoMemorySegment(seg, 1088, ByteOrder.LITTLE_ENDIAN, tail);
+        }
+        acc += c.lane(0) + (tail.anyTrue() ? 1 : 0);
+      }
+      return acc;
+    }
+
+    /** {@link #widenedBytes}: the {@code SMALLINT} lane, two bytes a row. */
+    private static long widenedShorts(VectorSpecies<Short> w, VectorSpecies<Integer> is,
+        MemorySegment seg) {
+      VectorMask<Short> tail = w.indexInRange(0, w.length() / 2 + 1);
+      int parts = Math.max(1, w.length() / is.length());
+      long acc = 0;
+      for (int r = 0; r < THIN_CALLS_PER_ROUND; r++) {
+        ShortVector a = ShortVector.fromMemorySegment(w, seg, 0, ByteOrder.LITTLE_ENDIAN);
+        ShortVector b =
+            ShortVector.fromMemorySegment(w, seg, 2L * w.length(), ByteOrder.LITTLE_ENDIAN);
+        ShortVector c =
+            ShortVector.fromMemorySegment(w, seg, 512, ByteOrder.LITTLE_ENDIAN, tail);
+        VectorMask<Short> m = a.compare(VectorOperators.LT, b);
+        acc += a.blend(b, m).lane(0) + a.lanewise(VectorOperators.SADD, b).lane(0)
+            + a.compare(VectorOperators.GT, (short) 0).toLong()
+            + m.and(tail).toLong() + m.or(tail).toLong() + m.not().toLong();
+        for (int part = 0; part < parts; part++) {
+          IntVector widened = (IntVector) a.convertShape(VectorOperators.S2I, is, part);
+          ShortVector back = (ShortVector) widened.convertShape(VectorOperators.I2S, w, 0);
+          acc += widened.lane(0) + back.lane(0);
+          back.intoMemorySegment(seg, 1024, ByteOrder.LITTLE_ENDIAN);
+          back.intoMemorySegment(seg, 1088, ByteOrder.LITTLE_ENDIAN, tail);
+        }
+        acc += c.lane(0) + (tail.anyTrue() ? 1 : 0);
       }
       return acc;
     }

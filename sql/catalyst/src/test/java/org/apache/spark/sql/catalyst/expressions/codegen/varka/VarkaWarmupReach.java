@@ -53,6 +53,7 @@ import jdk.incubator.vector.DoubleVector;
 import jdk.incubator.vector.IntVector;
 import jdk.incubator.vector.LongVector;
 import jdk.incubator.vector.ShortVector;
+import jdk.incubator.vector.VectorShape;
 import jdk.incubator.vector.VectorSpecies;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -126,7 +127,13 @@ final class VarkaWarmupReach {
 
   /**
    * The classes a receiver of one lane type can be in this JVM: the vector, the mask and the
-   * species class of the lane's preferred species, the receivers the warm-up feeds.
+   * species class of the lane's preferred species, and for a narrow lane those of the species a
+   * widened kernel loads and stores it at - the one {@link Lane#widenLanes} names for the
+   * preferred int species, a Byte64 or Short128 where the preferred narrow species is wider
+   * (VARKA-329). The widened arm is the default, so those are the classes production kernels
+   * dispatch to. The bytes do not say which arm emitted a call, so a narrow call stands for both
+   * species: a call only the native arm makes is counted at the widened species too, and the
+   * warm-up warms it there - an over-count, cheap, and preferred to a cold site the gate misses.
    */
   private static List<Class<?>> receivers(Class<?> lane) {
     VectorSpecies<?> s = lane == ByteVector.class ? ByteVector.SPECIES_PREFERRED
@@ -134,7 +141,28 @@ final class VarkaWarmupReach {
         : lane == IntVector.class ? IntVector.SPECIES_PREFERRED
         : lane == LongVector.class ? LongVector.SPECIES_PREFERRED
         : DoubleVector.SPECIES_PREFERRED;
-    return List.of(s.zero().getClass(), s.maskAll(true).getClass(), s.getClass());
+    var out = new ArrayList<Class<?>>(
+        List.of(s.zero().getClass(), s.maskAll(true).getClass(), s.getClass()));
+    Lane narrow = lane == ByteVector.class ? Lane.BYTE
+        : lane == ShortVector.class ? Lane.SHORT : null;
+    if (narrow != null) {
+      VectorSpecies<?> w = widenedSpecies(narrow);
+      if (w != null && w != s) {
+        out.addAll(List.of(w.zero().getClass(), w.maskAll(true).getClass(), w.getClass()));
+      }
+    }
+    return out;
+  }
+
+  /** The species a widened kernel reads {@code narrow} at in this JVM, or null if none. */
+  static VectorSpecies<?> widenedSpecies(Lane narrow) {
+    int lanes = Lane.widenLanes(IntVector.SPECIES_PREFERRED.length(), narrow);
+    if (lanes == 0) {
+      return null;
+    }
+    VectorShape shape = VectorShape.forBitSize(lanes * narrow.bits);
+    return narrow == Lane.BYTE ? VectorSpecies.of(byte.class, shape)
+        : VectorSpecies.of(short.class, shape);
   }
 
   private static Class<?> ownerClass(Call call) throws ClassNotFoundException {

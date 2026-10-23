@@ -284,26 +284,79 @@ public sealed interface VarkaVectorIR
     if (!seen.add(node)) {
       return;
     }
-    if (node instanceof IsNotNull n) {
+    // A switch with no default (sql/varka/AGENTS.md): a node that reads a narrow column's values
+    // itself must be named here, or the loop's iteration would be sized without its load.
+    switch (node) {
       // Over a condition the word is computed from the condition's operands, which may read
       // values; over a value it is the input validity words alone.
-      if (n.child() instanceof Cond c && !(c instanceof BoolColumn)) {
-        narrowValuesIn(c, lanes, seen);
+      case IsNotNull n -> {
+        if (n.child() instanceof Cond c && !(c instanceof BoolColumn)) {
+          narrowValuesIn(c, lanes, seen);
+        }
       }
-      return;
-    }
-    if (node instanceof ColumnRef c) {
-      if (c.laneType().isNarrow()) {
-        lanes.add(c.laneType());
+      case ColumnRef c -> {
+        if (c.laneType().isNarrow()) {
+          lanes.add(c.laneType());
+        }
       }
-      return;
+      case LiteralSlot _, BoolColumn _, CondConst _ -> { }
+      case WidenLane _, NarrowLane _, AddDays _, SubDays _, AddMonths _, MakeDate _,
+          IntArith _, IntNeg _, GuardedDay _, GuardedRange _, NextDay _, TruncDateDynamic _,
+          DateDiff _, Greatest _, Least _, IfElse _, DayOfWeek _, WeekDay _, DayOfWeekIso _,
+          ThursdayOf _, Year _, Month _, DayOfMonth _, Quarter _, DayOfYear _, LastDay _,
+          TruncDate _, WeekOfYear _, ConstDivide _, BoundedDivide _, BitOp _, BitCount _,
+          Compare _, NullSafeEqual _, BoolCompare _, CondIf _, BoolNullSafeEq _, And _, Or _,
+          Not _, InRanges _ -> {
+        for (VarkaVectorIR child : childrenOf(node)) {
+          narrowValuesIn(child, lanes, seen);
+        }
+      }
     }
-    if (node instanceof LiteralSlot || node instanceof BoolColumn) {
-      return;
+  }
+
+
+  /**
+   * Whether {@code root}'s lowering names a narrow species somewhere: a narrow column read as a
+   * value (widened once at its load), or a conversion into a narrow lane (the truncation into
+   * the narrow species). A narrow column read only for its validity word - the
+   * {@code y1 IS NOT NULL} of a predicate - needs neither.
+   *
+   * <p>The walk is per node rather than {@link VarkaVectorIR#lanesIn}'s per tree because a
+   * narrow <i>type</i> in the tree is not the same question: validity is a bit a row, whatever
+   * the lane, and only a value crosses the species.
+   */
+  static boolean needsNarrowSpecies(VarkaVectorIR root) {
+    return needsNarrowSpecies(root, new HashSet<>());
+  }
+
+  private static boolean needsNarrowSpecies(VarkaVectorIR node, Set<VarkaVectorIR> seen) {
+    if (!seen.add(node)) {
+      return false;
     }
-    for (VarkaVectorIR child : childrenOf(node)) {
-      narrowValuesIn(child, lanes, seen);
-    }
+    // A switch with no default, as narrowValuesIn's: the two walks decide the refusal and the
+    // loop's iteration, and must name the same nodes.
+    return switch (node) {
+      // Over a condition the word is computed from the condition's operands, which may read
+      // values; over a value it is the input validity words alone.
+      case IsNotNull n -> n.child() instanceof Cond c && !(c instanceof BoolColumn)
+          && needsNarrowSpecies(c, seen);
+      case ColumnRef c -> c.laneType().isNarrow();
+      case LiteralSlot l -> l.laneType().isNarrow();
+      case BoolColumn _, CondConst _ -> false;
+      case NarrowLane n -> n.target().isNarrow() || needsNarrowSpecies(n.child(), seen);
+      case WidenLane _, AddDays _, SubDays _, AddMonths _, MakeDate _, IntArith _, IntNeg _,
+          GuardedDay _, GuardedRange _, NextDay _, TruncDateDynamic _, DateDiff _, Greatest _,
+          Least _, IfElse _, DayOfWeek _, WeekDay _, DayOfWeekIso _, ThursdayOf _, Year _,
+          Month _, DayOfMonth _, Quarter _, DayOfYear _, LastDay _, TruncDate _, WeekOfYear _,
+          ConstDivide _, BoundedDivide _, BitOp _, BitCount _, Compare _, NullSafeEqual _,
+          BoolCompare _, CondIf _, BoolNullSafeEq _, And _, Or _, Not _, InRanges _ -> {
+        boolean any = false;
+        for (VarkaVectorIR child : childrenOf(node)) {
+          any |= needsNarrowSpecies(child, seen);
+        }
+        yield any;
+      }
+    };
   }
 
   /**

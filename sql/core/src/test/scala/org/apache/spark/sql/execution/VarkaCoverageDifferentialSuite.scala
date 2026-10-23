@@ -51,8 +51,9 @@ import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType,
  * without correctness fails this one, and the two together are the guarantee the table makes.
  *
  * Each row runs on three fixtures over the table's sixteen source columns, plus the derived
- * BOOLEAN columns `b` and `b2` - nulls sprinkled
- * independently per column, no nulls, and every column null in every row - and under both
+ * BOOLEAN columns `b` and `b2` - nulls sprinkled per column, with a narrow pair null on the
+ * left only and another on the right only, no nulls, and every column null in every row - and
+ * under both
  * consumers a Varka node can have: rows, the plan every direct query gets, and columns, which
  * the Arrow cache builder takes when a view over the query is cached. The hand-chosen shapes in
  * `VarkaDifferentialSuite` (extreme offsets, overflow, cache conversion) stay there; this is the
@@ -133,8 +134,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
       "(DATE'2024-02-29', DATE'2024-02-29',  1, -14, -2,  0, CAST('-5000000000' AS BIGINT), " +
         "CAST('-5000000000' AS BIGINT), TIME'00:00:00', TIME'23:59:59.999999', " +
         "INTERVAL '-3 00:00:00.000001' DAY TO SECOND, INTERVAL '0 00:00:01' DAY TO SECOND, " +
-        "NULL, NULL, " +
-        "NULL, NULL)",
+        "CAST(-2 AS TINYINT), CAST(6 AS TINYINT), " +
+        "CAST(-300 AS SMALLINT), CAST(7 AS SMALLINT))",
       "(DATE'2023-12-27', DATE'2024-01-02', 12,  24,  3,  1, " +
         "CAST('9223372036854775807' AS BIGINT), CAST('-9223372036854775808' AS BIGINT), " +
         "TIME'23:59:59.999999', TIME'12:34:56.789', INTERVAL '100000 00:00:00' DAY TO SECOND, " +
@@ -145,12 +146,12 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
         "CAST('0' AS BIGINT), TIME'06:00:00', TIME'06:00:00', " +
         "INTERVAL '0 00:00:00' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND, " +
         "CAST(10 AS TINYINT), CAST(-11 AS TINYINT), " +
-        "CAST(100 AS SMALLINT), CAST(3 AS SMALLINT))",
+        "CAST(4 AS SMALLINT), CAST(3 AS SMALLINT))",
       "(DATE'2021-06-01', DATE'2021-06-01',  6,   7,  2,  3, CAST('2147483648' AS BIGINT), " +
         "CAST('2147483647' AS BIGINT), TIME'12:00:00', TIME'12:00:00.000001', " +
         "INTERVAL '7 12:00:00' DAY TO SECOND, INTERVAL '7 12:00:00' DAY TO SECOND, " +
-        "CAST(-11 AS TINYINT), NULL, " +
-        "CAST(-181 AS SMALLINT), NULL)",
+        "CAST(-11 AS TINYINT), CAST(9 AS TINYINT), " +
+        "CAST(-181 AS SMALLINT), CAST(3 AS SMALLINT))",
       "(DATE'2021-03-15', DATE'2021-03-14', 11,   1,  1,  5, CAST('-1' AS BIGINT), " +
         "CAST('1' AS BIGINT), TIME'01:02:03.456', TIME'01:02:03.457', " +
         "INTERVAL '-0 00:00:00.5' DAY TO SECOND, INTERVAL '0 00:00:00.5' DAY TO SECOND, " +
@@ -165,7 +166,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
         "CAST('-2147483648' AS BIGINT), TIME'09:30:00', TIME'09:29:59.999', " +
         "INTERVAL '0 00:00:00.000001' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND, " +
         "CAST(5 AS TINYINT), CAST(-6 AS TINYINT), " +
-        "CAST(60 AS SMALLINT), CAST(-7 AS SMALLINT))",
+        "CAST(5 AS SMALLINT), CAST(-7 AS SMALLINT))",
       "(DATE'9999-12-01', DATE'0001-01-15',  7,   5,  1,  1, CAST('12345678901234' AS BIGINT), " +
         "CAST('12345678901234' AS BIGINT), TIME'12:34:56.789', TIME'12:34:56.789', " +
         "INTERVAL '2 00:00:00' DAY TO SECOND, INTERVAL '2 00:00:00' DAY TO SECOND, " +
@@ -188,8 +189,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
       "(NULL,             DATE'2024-02-29',  1, -14, -2,  0, NULL, " +
         "CAST('-5000000000' AS BIGINT), TIME'00:00:00', TIME'23:59:59.999999', " +
         "INTERVAL '-3 00:00:00.000001' DAY TO SECOND, INTERVAL '0 00:00:01' DAY TO SECOND, " +
-        "NULL, NULL, " +
-        "NULL, NULL)",
+        "NULL, CAST(-61 AS TINYINT), " +
+        "NULL, CAST(300 AS SMALLINT))",
       "(DATE'2023-12-27', NULL,             12,  24,  3,  1, " +
         "CAST('9223372036854775807' AS BIGINT), CAST('-9223372036854775808' AS BIGINT), " +
         "TIME'23:59:59.999999', TIME'12:34:56.789', INTERVAL '100000 00:00:00' DAY TO SECOND, " +
@@ -200,7 +201,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
         "CAST('0' AS BIGINT), NULL, TIME'06:00:00', INTERVAL '0 00:00:00' DAY TO SECOND, " +
         "INTERVAL '0 00:00:00' DAY TO SECOND, " +
         "CAST(10 AS TINYINT), CAST(-11 AS TINYINT), " +
-        "CAST(100 AS SMALLINT), CAST(3 AS SMALLINT))",
+        "CAST(4 AS SMALLINT), CAST(3 AS SMALLINT))",
       "(DATE'2021-06-01', DATE'2021-06-01',  6, NULL, 2,  3, CAST('2147483648' AS BIGINT), " +
         "CAST('2147483647' AS BIGINT), TIME'12:00:00', TIME'12:00:00.000001', " +
         "INTERVAL '7 12:00:00' DAY TO SECOND, INTERVAL '7 12:00:00' DAY TO SECOND, " +
@@ -221,7 +222,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
         "NULL, TIME'09:30:00', TIME'09:29:59.999', INTERVAL '0 00:00:00.000001' DAY TO SECOND, " +
         "INTERVAL '0 00:00:00' DAY TO SECOND, " +
         "CAST(5 AS TINYINT), CAST(-6 AS TINYINT), " +
-        "CAST(60 AS SMALLINT), CAST(-7 AS SMALLINT))",
+        "CAST(5 AS SMALLINT), CAST(-7 AS SMALLINT))",
       "(DATE'2021-11-01', DATE'2021-11-01',  9, 100,  2,  4, CAST('12345678901234' AS BIGINT), " +
         "CAST('12345678901234' AS BIGINT), TIME'12:34:56.789', TIME'12:34:56.789', " +
         "INTERVAL '2 00:00:00' DAY TO SECOND, INTERVAL '2 00:00:00' DAY TO SECOND, " +
@@ -749,7 +750,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
       "-i", "year(d) + i", "CAST(ymm AS INT)", "CAST(ymy AS INT)", "hour(t)", "minute(t2)",
       "second(t)", "hour(t) + 1", "CAST(time_to_millis(t) AS INT)", "i & 255", "i | 4096",
       "i ^ 21845", "~i", "i << 3", "shiftright(i, i)", "i >>> 28", "bit_count(i)", "bit_count(l)",
-      "bit_count(l) + 1")
+      "bit_count(l) + 1", "y1 + i", "CAST(s1 AS INT)")
     // `CAST(i AS INTERVAL DAY)` throws past `INTERVAL_DAY_LIMIT_DAYS`, so the compiler puts a
     // bound on `i` that the evaluator checks before the kernel runs; the bound belongs to the
     // column, not to the arm reading it, and the extremes row's `Int.MaxValue` declines the
