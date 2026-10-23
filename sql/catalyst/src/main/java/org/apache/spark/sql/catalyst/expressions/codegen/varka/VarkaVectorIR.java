@@ -23,6 +23,7 @@ import java.util.Set;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.function.ToIntFunction;
 
 /**
@@ -186,14 +187,14 @@ public sealed interface VarkaVectorIR
    * int species of the same width (`VARKA-28.md` 9).
    *
    * <p>A tree whose every value is narrow drives at the narrow lane under
-   * {@link VarkaEmitOptions#narrowLanes()}, and at the int lane under the default, which widens
-   * the values once at their loads: the IR says the tree computes {@code TINYINT} values, and the
-   * option says which species the emitter names for them. A tree that holds both narrow lanes
-   * has no single narrow species and drives at the int lane either way.
+   * {@link VarkaEmitOptions#narrowLanes()}, the default, and at the int lane with it off, which
+   * widens the values once at their loads: the IR says the tree computes {@code TINYINT} values,
+   * and the option says which species the emitter names for them. A tree that holds both narrow
+   * lanes has no single narrow species and drives at the int lane either way.
    *
-   * <p>The emitter, its budget mirror and the compiled plan all read this rather than
-   * {@link #laneType()} when they ask which species a kernel is, so the three cannot disagree
-   * about it.
+   * <p>This is one root's preference. A kernel of several roots is driven at
+   * {@link #kernelLane}, which the emitter, its budget mirror and the compiled plan all read
+   * rather than {@link #laneType()}, so the three cannot disagree about it.
    */
   static LaneType emissionLane(VarkaVectorIR root, VarkaEmitOptions options) {
     Set<LaneType> lanes = lanesIn(root);
@@ -211,6 +212,27 @@ public sealed interface VarkaVectorIR
       return LaneType.INT;
     }
     return lanes.contains(LaneType.SHORT) ? LaneType.SHORT : LaneType.BYTE;
+  }
+
+  /**
+   * The lane a kernel of these roots drives its loop at, or empty when no one lane serves them
+   * all: the lane every root's {@link #emissionLane} names where they agree, and the int lane
+   * where they differ but none is the long lane. Every narrow tree has a lowering at the int lane
+   * - the widened one, which the off arm uses for all of them - so a native narrow root beside
+   * an int one, beside a root of the other narrow lane, or beside a tree holding a checked narrow
+   * multiply joins them there rather than splitting the projection. A narrow or int root beside a
+   * long one has no shared lane: the long lane admits no narrow node, and an int root is a long
+   * kernel's only through a conversion its own tree holds.
+   */
+  static Optional<LaneType> kernelLane(List<VarkaVectorIR> roots, VarkaEmitOptions options) {
+    Set<LaneType> lanes = EnumSet.noneOf(LaneType.class);
+    for (VarkaVectorIR root : roots) {
+      lanes.add(emissionLane(root, options));
+    }
+    if (lanes.size() <= 1) {
+      return lanes.stream().findFirst();
+    }
+    return lanes.contains(LaneType.LONG) ? Optional.empty() : Optional.of(LaneType.INT);
   }
 
   /**
@@ -721,8 +743,21 @@ public sealed interface VarkaVectorIR
    * still -128. A guard written against a constant rather than against the node's lane is wrong
    * on both sides - it misses the overflow it exists for, and condemns a value the wider lane
    * represents exactly.
+   *
+   * <p>With {@code abs} set the node is {@code abs(child)} instead, a narrow lane's only: Spark's
+   * {@code x < 0 ? -x : x}, the negation taken where the operand is negative. It shares the
+   * negation's one overflowing input and its check, and its validity is the child's, so the two
+   * are one node with one flag, emitted as one lanewise {@code ABS} rather than a compare, a
+   * negation and a blend. Where the negation commutes with reduction modulo the narrow width,
+   * {@code abs} does not - {@code abs(-128)} and {@code abs(128)} differ - so a wrapping
+   * {@code abs} at the int lane is never a ring node and reduces its own result.
    */
-  record IntNeg(Overflow mode, VarkaVectorIR child) implements VarkaVectorIR {}
+  record IntNeg(Overflow mode, VarkaVectorIR child, boolean abs) implements VarkaVectorIR {
+    /** A negation. */
+    public IntNeg(Overflow mode, VarkaVectorIR child) {
+      this(mode, child, false);
+    }
+  }
 
   /**
    * {@code child / divisor} by a compile-time constant, truncating toward zero the way Java's
@@ -1545,7 +1580,8 @@ public sealed interface VarkaVectorIR
           + canonical(n.year()) + " " + canonical(n.month()) + " " + canonical(n.day()) + ")";
       case IntArith n -> "(int:" + n.op().name() + ":" + n.mode().name() + " "
           + canonical(n.left()) + " " + canonical(n.right()) + ")";
-      case IntNeg n -> "(neg:" + n.mode().name() + " " + canonical(n.child()) + ")";
+      case IntNeg n -> "(" + (n.abs() ? "abs:" : "neg:") + n.mode().name() + " "
+          + canonical(n.child()) + ")";
       case ConstDivide n -> "(divc:" + n.divisor() + " " + canonical(n.child()) + ")";
       case BoundedDivide n ->
           "(divb:" + n.divisor() + "/" + n.bound() + " " + canonical(n.child()) + ")";
@@ -1644,7 +1680,8 @@ public sealed interface VarkaVectorIR
           + lineOf.applyAsInt(n.day()) + ")";
       case IntArith n -> "(int:" + n.op().name() + ":" + n.mode().name() + " "
           + lineOf.applyAsInt(n.left()) + " " + lineOf.applyAsInt(n.right()) + ")";
-      case IntNeg n -> "(neg:" + n.mode().name() + " " + lineOf.applyAsInt(n.child()) + ")";
+      case IntNeg n -> "(" + (n.abs() ? "abs:" : "neg:") + n.mode().name() + " "
+          + lineOf.applyAsInt(n.child()) + ")";
       case ConstDivide n -> "(divc:" + n.divisor() + " " + lineOf.applyAsInt(n.child()) + ")";
       case BoundedDivide n ->
           "(divb:" + n.divisor() + "/" + n.bound() + " " + lineOf.applyAsInt(n.child()) + ")";
@@ -1781,7 +1818,7 @@ public sealed interface VarkaVectorIR
       case IsNotNull n -> new IsNotNull(children[0]);
       case InRanges n -> new InRanges(children[0], n.bounds());
       case IntArith n -> new IntArith(n.op(), n.mode(), children[0], children[1]);
-      case IntNeg n -> new IntNeg(n.mode(), children[0]);
+      case IntNeg n -> new IntNeg(n.mode(), children[0], n.abs());
       case ConstDivide n -> new ConstDivide(children[0], n.divisor(), n.dividendBound());
       case BoundedDivide n -> new BoundedDivide(
           children[0], n.divisor(), n.bound(), n.multiplier(), n.shift());

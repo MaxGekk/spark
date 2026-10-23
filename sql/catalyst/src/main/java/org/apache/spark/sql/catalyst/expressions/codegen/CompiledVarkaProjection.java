@@ -67,8 +67,8 @@ public record CompiledVarkaProjection(
     // the same side as an int one here. The defaults answer the lane for the narrow trees: the
     // arm chooses between INT and a narrow lane, and both read the int table.
     if (!longLiterals.isEmpty() && !outputs.isEmpty()
-        && VarkaVectorIR.emissionLane(outputs.get(0), VarkaEmitOptions.DEFAULTS)
-            != LaneType.LONG) {
+        && VarkaVectorIR.kernelLane(outputs, VarkaEmitOptions.DEFAULTS)
+            .filter(l -> l == LaneType.LONG).isEmpty()) {
       throw VarkaErrors.illegalArgument(
           "a kernel driven at the int lane reads no long literal table");
     }
@@ -100,14 +100,16 @@ public record CompiledVarkaProjection(
   }
 
   /**
-   * The lane the kernel's loop runs at, and so the {@code run} overload the evaluator calls: every
-   * root's emission lane, which is the root's own except for a narrowing root, whose 32-bit column
-   * is computed in the 64-bit lane ({@code VarkaVectorIR.emissionLane}). The options are the
-   * caller's because the narrow arm's lane is theirs ({@link VarkaEmitOptions#narrowLanes()}), and
-   * they are the options the shape is keyed on.
+   * The lane the kernel's loop runs at, and so the {@code run} overload the evaluator calls: the
+   * roots' shared emission lane, which is a root's own except for a narrowing root, whose 32-bit
+   * column is computed in the 64-bit lane, and a native narrow root beside an int one, which runs
+   * at the int lane ({@code VarkaVectorIR.kernelLane}). The options are the caller's because the
+   * narrow arm's lane is theirs ({@link VarkaEmitOptions#narrowLanes()}), and they are the options
+   * the shape is keyed on.
    */
   public LaneType lane(VarkaEmitOptions options) {
-    return VarkaVectorIR.emissionLane(outputs.get(0), options);
+    return VarkaVectorIR.kernelLane(outputs, options).orElseThrow(
+        () -> VarkaErrors.illegalArgument("outputs mix the long lane with another: " + outputs));
   }
 
   /**

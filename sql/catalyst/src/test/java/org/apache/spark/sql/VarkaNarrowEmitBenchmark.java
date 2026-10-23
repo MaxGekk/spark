@@ -48,6 +48,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Com
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntNeg;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Overflow;
@@ -62,7 +63,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Wid
  * <p>The IR is built by hand and passed through {@link VarkaLoopEmitter#emit}, so what is timed
  * is the code the evaluator would run: the widening loads or the narrow species of the arm, the
  * validity words, the selection bitmap, the loop bounds and the epilogue. The shapes are row
- * 329's four, all over {@code TINYINT} columns:
+ * 329's four and two unary ones, all over {@code TINYINT} columns:
  *
  * <ul>
  *   <li>(a) {@code y1 < y2} as a selection: the compare of two {@code TINYINT} columns, both
@@ -83,6 +84,9 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Wid
  *   <li>(e) {@code CASE WHEN y1 < y2 THEN y1 ELSE y2 END}: the store shape the spike lacked, a
  *       narrow value written one byte a row, under a narrow blend (NATIVE) or an int choice
  *       narrowed once at its store (WIDENED).</li>
+ *   <li>(f) {@code -y1} and (g) {@code abs(y1)}, LEGACY, stored narrow: the unary arithmetic,
+ *       one lanewise {@code NEG} or {@code ABS} in either arm since the review fixes of #987 and
+ *       #989 (a multiply by -1, and a compare, a negation and a blend, before them).</li>
  * </ul>
  *
  * <p>Every arm's answer is compared with {@link VarkaReference} before it is timed, over a batch
@@ -162,9 +166,9 @@ public class VarkaNarrowEmitBenchmark extends VarkaBenchmarkBase {
   // -------------------------------------------------------------------------------------------
 
   /**
-   * The two arms of {@code narrowLanes}: WIDENED (the default, false) computes a narrow value in
-   * the int species and narrows once at its store; NATIVE (true) computes in the narrow species
-   * where every value in the tree is narrow.
+   * The two arms of {@code narrowLanes}: WIDENED (false) computes a narrow value in the int
+   * species and narrows once at its store; NATIVE (true, the default since row 478) computes in
+   * the narrow species where every value in the tree is narrow.
    */
   private enum Arm {
     WIDENED(false),
@@ -208,10 +212,14 @@ public class VarkaNarrowEmitBenchmark extends VarkaBenchmarkBase {
 
   /**
    * One shape: its label, its roots, the rung column each input ordinal reads and that column's
-   * stored lane. No shape reads a literal, so the literal table is empty everywhere.
+   * stored lane, and the literal table its roots read, empty but for a composed abs.
    */
   private record Shape(String label, List<VarkaVectorIR> roots, int[] columns,
-      LaneType[] inputLanes) { }
+      LaneType[] inputLanes, int[] literals) {
+    Shape(String label, List<VarkaVectorIR> roots, int[] columns, LaneType[] inputLanes) {
+      this(label, roots, columns, inputLanes, NO_LITS);
+    }
+  }
 
   private static List<Shape> shapes() {
     var y1 = new ColumnRef(0, LaneType.BYTE);
@@ -235,7 +243,16 @@ public class VarkaNarrowEmitBenchmark extends VarkaBenchmarkBase {
             new int[] {B1, INTS}, new LaneType[] {LaneType.BYTE, LaneType.INT}),
         new Shape("e: CASE WHEN y1 < y2 THEN y1 ELSE y2 END, TINYINT store",
             List.of(new IfElse(compare, y1, y2)),
-            new int[] {B1, B2}, new LaneType[] {LaneType.BYTE, LaneType.BYTE}));
+            new int[] {B1, B2}, new LaneType[] {LaneType.BYTE, LaneType.BYTE}),
+        // The negation and abs a TINYINT column's unary arithmetic is, LEGACY, stored narrow.
+        new Shape("f: -y1, TINYINT store", List.of(new IntNeg(Overflow.WRAP, y1)),
+            new int[] {B1}, new LaneType[] {LaneType.BYTE}),
+        // abs is the negation node with its flag: one lanewise ABS. It replaced the composition
+        // IfElse(y1 < 0, -y1, y1), a compare, a negation and a blend, which the run before the
+        // change timed (results/VARKA-329-negabs.txt).
+        new Shape("g: abs(y1), TINYINT store",
+            List.of(new IntNeg(Overflow.WRAP, y1, true)),
+            new int[] {B1}, new LaneType[] {LaneType.BYTE}));
   }
 
   /** The int-driven shape, whose two arms must emit the same class bytes. */
@@ -315,7 +332,8 @@ public class VarkaNarrowEmitBenchmark extends VarkaBenchmarkBase {
           + " declined: " + refusal.get());
       return Optional.empty();
     }
-    byte[] bytes = VarkaLoopEmitter.emit(name, shape.roots(), shape.inputLanes().length, 0,
+    byte[] bytes = VarkaLoopEmitter.emit(name, shape.roots(), shape.inputLanes().length,
+        shape.literals().length,
         null, null, options);
     return Optional.of(new Emitted(defineKernel(loader, name, bytes), bytes));
   }
@@ -348,16 +366,17 @@ public class VarkaNarrowEmitBenchmark extends VarkaBenchmarkBase {
    * allocations inside the timed loop, which at the smallest rung would outweigh the kernel.
    */
   private record Invocation(long[] srcData, long[] srcValidity, int[] nullCounts,
-      long[] dstData, long[] dstValidity, int length) {
+      long[] dstData, long[] dstValidity, int[] lits, int length) {
 
     static Invocation of(Shape shape, Data d, Outputs out, int n) {
       int inputs = shape.columns().length;
       return new Invocation(sourceAddresses(shape, d), new long[inputs], new int[inputs],
-          new long[] {out.data().address()}, new long[] {out.bits().address()}, n);
+          new long[] {out.data().address()}, new long[] {out.bits().address()},
+          shape.literals(), n);
     }
 
     int run(VarkaFusedKernel kernel, long scratch) {
-      return kernel.run(srcData, srcValidity, nullCounts, dstData, dstValidity, NO_LITS, length,
+      return kernel.run(srcData, srcValidity, nullCounts, dstData, dstValidity, lits, length,
           scratch);
     }
   }
@@ -404,11 +423,11 @@ public class VarkaNarrowEmitBenchmark extends VarkaBenchmarkBase {
       }
       boolean got = bit(out.bits(), i);
       if (selection) {
-        boolean want = VarkaReference.cond((Cond) root, row, isNull, NO_LITS).isTrue();
+        boolean want = VarkaReference.cond((Cond) root, row, isNull, shape.literals()).isTrue();
         require(got == want, context + ": selection row " + i + " differs (want " + want
             + ", got " + got + ")");
       } else {
-        OptionalInt want = VarkaReference.value(root, row, isNull, NO_LITS);
+        OptionalInt want = VarkaReference.value(root, row, isNull, shape.literals());
         require(got == want.isPresent(), context + ": validity of row " + i + " differs");
         if (want.isPresent()) {
           int value = out.data().get(ValueLayout.JAVA_BYTE, i);

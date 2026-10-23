@@ -290,14 +290,14 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        constant; at count 0 the store is the masked form either way. The A/B is
  *        {@code VARKA-156.md}'s.
  * @param narrowLanes how the emitter names the lane of a tree whose every value is narrow - a
- *        {@code TINYINT} or {@code SMALLINT} column and the narrow nodes over it. On, the kernel
- *        is driven at the narrow lane and computes in 8- or 16-bit species; off, which is the
- *        default, the values are widened once at their loads and the kernel is driven at the int
- *        lane as every int kernel is ({@code VARKA-329.md} 2.1). The tree means the same in both,
- *        so the two are each other's reference and the model's draws do not depend on it. The
- *        default is the form whose bytes are the int lane's, since the widened arm reuses every
- *        int lowering and leaves every existing kernel's bytes as it was; which arm wins is a
- *        property of the host's vector width, which is why the option exists at all.
+ *        {@code TINYINT} or {@code SMALLINT} column and the narrow nodes over it. On, which is
+ *        the default, the kernel is driven at the narrow lane and computes in 8- or 16-bit
+ *        species; off, the values are widened once at their loads and the kernel is driven at
+ *        the int lane as every int kernel is ({@code VARKA-329.md} 2.1). The tree means the same
+ *        in both, so the two are each other's reference and the model's draws do not depend on
+ *        it. The native arm is the default because it is faster on every measured all-narrow
+ *        shape, 2x to 16x by the width (9.5, 9.6); a kernel that also holds an int value runs at
+ *        the int lane under either, and the widened arm stays the losing arm the matrix runs.
  * @param methodByteBudget the bytecode length every emitted method is held to, by default
  *        {@code VarkaEmitBudget.HUGE_METHOD_LIMIT}, the length past which HotSpot never
  *        compiles a method: a group's loop and epilogue methods set up only that group's
@@ -637,7 +637,7 @@ public record VarkaEmitOptions(
           true, true, true, true, true, true, true, true, true, true, true,
           0,
           TruncDateForm.SUBTRACT, FloorMod7.MAGIC, Division.MAGIC, USE_AVX_UNKNOWN,
-          false, false, true, true, false, true, false, false,
+          false, false, true, true, false, true, false, true,
           VarkaEmitBudget.HUGE_METHOD_LIMIT,
           true, true, true, true,
           VarkaEmitBudget.CALL_SITE_BUDGET, VarkaEmitBudget.HEAVY_GROUP_OUTPUTS,

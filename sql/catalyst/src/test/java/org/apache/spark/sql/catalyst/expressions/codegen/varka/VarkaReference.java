@@ -126,9 +126,9 @@ public final class VarkaReference {
         if (c.isEmpty()) {
           yield c;
         }
-        // The exact negation in a long: the lane's most negative value negates one past its
-        // maximum, which WRAP reduces back to itself and FAIL reports (VARKA-330).
-        long exact = -(long) c.getAsInt();
+        // The exact negation or magnitude in a long: the lane's most negative value negates one
+        // past its maximum, which WRAP reduces back to itself and FAIL reports (VARKA-330).
+        long exact = n.abs() ? Math.abs((long) c.getAsInt()) : -(long) c.getAsInt();
         LaneType lane = n.laneType();
         yield switch (n.mode()) {
           case WRAP -> OptionalInt.of((int) reduce(lane, exact));

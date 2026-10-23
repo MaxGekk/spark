@@ -113,7 +113,7 @@ final class VarkaEmitCost {
       case ColumnRef n -> name + '/' + n.lane();
       case LiteralSlot n -> name + '/' + n.lane();
       case IntArith n -> name + '/' + n.op() + '/' + n.mode() + '/' + n.laneType();
-      case IntNeg n -> name + '/' + n.mode() + '/' + n.laneType();
+      case IntNeg n -> name + (n.abs() ? "/abs/" : "/") + n.mode() + '/' + n.laneType();
       case ConstDivide n -> name + '/' + n.laneType() + (n.divisor() < 0 ? "/neg" : "/pos");
       case BitOp n -> name + '/' + n.op() + '/' + n.laneType();
       case BitCount n -> name + '/' + n.laneType();

@@ -171,6 +171,7 @@ public final class VarkaCanonicalIr {
       case "int" -> new IntArith(IntOp.valueOf(parts[1]), Overflow.valueOf(parts[2]), node(),
           node());
       case "neg" -> new IntNeg(Overflow.valueOf(parts[1]), node());
+      case "abs" -> new IntNeg(Overflow.valueOf(parts[1]), node(), true);
       case "divc" -> {
         long divisor = Long.parseLong(parts[1]);
         VarkaVectorIR child = node();
