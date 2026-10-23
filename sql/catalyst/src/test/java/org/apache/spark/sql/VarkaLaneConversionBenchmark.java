@@ -152,7 +152,7 @@ public class VarkaLaneConversionBenchmark extends VarkaBenchmarkBase {
         long[] validity = {dstValidity.address()};
         // A kernel driven at the int lane has the seven-argument `run`, one at the long lane the
         // eight-argument one with its long table.
-        Run run = VarkaVectorIR.emissionLane(arm.root()) == LaneType.INT
+        Run run = VarkaVectorIR.emissionLane(arm.root(), VarkaEmitOptions.DEFAULTS) == LaneType.INT
             ? kernel -> kernel.run(src, noValidity, noNulls, dsts, validity, new int[0], numRows)
             : kernel -> kernel.run(src, noValidity, noNulls, dsts, validity, new int[0],
                 new long[0], numRows);

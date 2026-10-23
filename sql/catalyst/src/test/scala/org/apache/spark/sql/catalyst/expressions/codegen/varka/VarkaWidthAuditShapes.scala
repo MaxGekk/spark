@@ -28,7 +28,8 @@ import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeRef
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
-import org.apache.spark.sql.types.{BooleanType, DateType, DayTimeIntervalType, IntegerType, LongType, TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{BooleanType, ByteType, DateType, DayTimeIntervalType,
+  IntegerType, LongType, ShortType, TimeType, YearMonthIntervalType}
 
 /**
  * The shapes the width audit (VARKA-153) asks C2 about: every row of the coverage table as the
@@ -43,16 +44,30 @@ import org.apache.spark.sql.types.{BooleanType, DateType, DayTimeIntervalType, I
  */
 object VarkaWidthAuditShapes {
 
+  /**
+   * One audited thing: a kernel the probe emits and runs, or a coverage row this JVM's width
+   * refuses to compile - a narrow column whose widening load the width cannot name, which is
+   * an answer about the row rather than an error (VARKA-329). Since the part-form widening
+   * load, every audited width names one, so no row takes this branch today: it describes the
+   * mechanism, not the current census.
+   */
+  sealed trait Entry {
+    def name: String
+  }
+
   /** One kernel to audit: its roots, their input and literal counts, and its emit options. */
   case class Shape(
       name: String,
       roots: Seq[VarkaVectorIR],
       numInputs: Int,
       numLiterals: Int,
-      options: VarkaEmitOptions = VarkaEmitOptions.DEFAULTS) {
+      options: VarkaEmitOptions = VarkaEmitOptions.DEFAULTS) extends Entry {
     /** The lane the kernel runs at: a narrowing root is an int computed in the long lane. */
-    def lane: LaneType = VarkaVectorIR.emissionLane(roots.head)
+    def lane: LaneType = VarkaVectorIR.emissionLane(roots.head, options)
   }
+
+  /** A coverage row the compiler declines at this width, with its reason. */
+  case class Declined(name: String, reason: String) extends Entry
 
   // The coverage table's columns, as `VarkaCoverageSuite` declares them.
   private val d = AttributeReference("d", DateType)()
@@ -73,7 +88,13 @@ object VarkaWidthAuditShapes {
   // BOOLEAN columns, as conditions: two so a comparison can be column against column.
   private val b = AttributeReference("b", BooleanType)()
   private val b2 = AttributeReference("b2", BooleanType)()
-  private val columns: Seq[Attribute] = Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2)
+  // TINYINT and SMALLINT columns (VARKA-329), as `VarkaCoverageSuite` declares them.
+  private val y1 = AttributeReference("y1", ByteType)()
+  private val y2 = AttributeReference("y2", ByteType)()
+  private val s1 = AttributeReference("s1", ShortType)()
+  private val s2 = AttributeReference("s2", ShortType)()
+  private val columns: Seq[Attribute] =
+    Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2, y1, y2, s1, s2)
 
   /** The row as the optimizer would hand it to the compiler; `VarkaEmittedBytesSuite`'s rule. */
   private def asCatalystClaims(expr: Expression, catalyst: Set[String]): Expression = expr match {
@@ -83,12 +104,14 @@ object VarkaWidthAuditShapes {
   }
 
   /**
-   * Every row of `coverage.json` as a kernel, through the compiler, keyed by the row's SQL. A
-   * row that does not fuse is an error here rather than a skip: `VarkaCoverageSuite` asserts
-   * that every row fuses, so a row missing from the audit would be a row the table claims and
-   * this file silently stopped asking about.
+   * Every row of `coverage.json` as a kernel, through the compiler, keyed by the row's SQL, or
+   * as a decline where this width has no lowering for it. At the host's preferred width no row
+   * declines and a missing row would be an error, since `VarkaCoverageSuite` holds that every
+   * row fuses; a width the row's load cannot be named at is a real answer about that width -
+   * the audit's job - so it is recorded with the compiler's reason instead
+   * (`VarkaWidthAuditSuite` asserts the preferred width has none).
    */
-  def coverageRows(coverageJson: File): Seq[Shape] = {
+  def coverageRows(coverageJson: File): Seq[Entry] = {
     val doc = new ObjectMapper().readTree(coverageJson)
     doc.get("expressions").elements().asScala.toSeq.map { e =>
       val sql = e.get("sql").asText()
@@ -104,12 +127,22 @@ object VarkaWidthAuditShapes {
         } else {
           VarkaExpressionCompiler.compile(Seq(Alias(resolved, "c")()), columns).toScala
         }
-      val c = compiled.getOrElse(
-        throw new IllegalStateException(
-          s"coverage row does not fuse, so it cannot be audited: $sql"))
-      Shape(sql, c.outputs.asScala.toSeq, c.inputOrdinals.size, c.numLiterals)
+      compiled match {
+        case Some(c) => Shape(sql, c.outputs.asScala.toSeq, c.inputOrdinals.size, c.numLiterals)
+        case None => Declined(sql, declineReason(form, resolved))
+      }
     }
   }
+
+  /** Why the compiler declined a row at this width, from the compile that explains one. */
+  private def declineReason(form: String, resolved: Expression): String =
+    if (form == "predicate") {
+      VarkaExpressionCompiler.explainPredicate(resolved, columns).asScala
+        .flatMap(_.decline.toScala).map(_.reason).mkString("; ")
+    } else {
+      VarkaExpressionCompiler.declines(Seq(Alias(resolved, "c")()), columns).asScala
+        .values.map(_.reason).mkString("; ")
+    }
 
   /**
    * The constructions the rows do not reach. Each is one thing the emitter builds from a
@@ -154,5 +187,5 @@ object VarkaWidthAuditShapes {
         Seq(new ConstDivide(ic, 3600)), 1, 0))
   }
 
-  def all(coverageJson: File): Seq[Shape] = coverageRows(coverageJson) ++ constructions
+  def all(coverageJson: File): Seq[Entry] = coverageRows(coverageJson) ++ constructions
 }

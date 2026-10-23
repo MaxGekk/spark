@@ -289,6 +289,15 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        only at a baked lane count, since the half of the preferred species has no named
  *        constant; at count 0 the store is the masked form either way. The A/B is
  *        {@code VARKA-156.md}'s.
+ * @param narrowLanes how the emitter names the lane of a tree whose every value is narrow - a
+ *        {@code TINYINT} or {@code SMALLINT} column and the narrow nodes over it. On, the kernel
+ *        is driven at the narrow lane and computes in 8- or 16-bit species; off, which is the
+ *        default, the values are widened once at their loads and the kernel is driven at the int
+ *        lane as every int kernel is ({@code VARKA-329.md} 2.1). The tree means the same in both,
+ *        so the two are each other's reference and the model's draws do not depend on it. The
+ *        default is the form whose bytes are the int lane's, since the widened arm reuses every
+ *        int lowering and leaves every existing kernel's bytes as it was; which arm wins is a
+ *        property of the host's vector width, which is why the option exists at all.
  * @param methodByteBudget the bytecode length every emitted method is held to, by default
  *        {@code VarkaEmitBudget.HUGE_METHOD_LIMIT}, the length past which HotSpot never
  *        compiles a method: a group's loop and epilogue methods set up only that group's
@@ -498,6 +507,7 @@ public record VarkaEmitOptions(
     boolean validityByWord,
     boolean mulHiDivide,
     boolean narrowHalfSpecies,
+    boolean narrowLanes,
     int methodByteBudget,
     boolean rangeSets,
     boolean splitConditions,
@@ -627,7 +637,7 @@ public record VarkaEmitOptions(
           true, true, true, true, true, true, true, true, true, true, true,
           0,
           TruncDateForm.SUBTRACT, FloorMod7.MAGIC, Division.MAGIC, USE_AVX_UNKNOWN,
-          false, false, true, true, false, true, false,
+          false, false, true, true, false, true, false, false,
           VarkaEmitBudget.HUGE_METHOD_LIMIT,
           true, true, true, true,
           VarkaEmitBudget.CALL_SITE_BUDGET, VarkaEmitBudget.HEAVY_GROUP_OUTPUTS,
@@ -711,6 +721,7 @@ public record VarkaEmitOptions(
       b.validityByWord = validityByWord;
       b.mulHiDivide = mulHiDivide;
       b.narrowHalfSpecies = narrowHalfSpecies;
+      b.narrowLanes = narrowLanes;
       b.methodByteBudget = methodByteBudget;
       b.rangeSets = rangeSets;
       b.splitConditions = splitConditions;
@@ -762,6 +773,7 @@ public record VarkaEmitOptions(
     private boolean validityByWord;
     private boolean mulHiDivide;
     private boolean narrowHalfSpecies;
+    private boolean narrowLanes;
     private int methodByteBudget;
     private boolean rangeSets;
     private boolean splitConditions;
@@ -912,6 +924,11 @@ public record VarkaEmitOptions(
       return this;
     }
 
+    public Builder narrowLanes(boolean narrowLanes) {
+      this.narrowLanes = narrowLanes;
+      return this;
+    }
+
     public Builder methodByteBudget(int methodByteBudget) {
       this.methodByteBudget = methodByteBudget;
       return this;
@@ -1024,9 +1041,10 @@ public record VarkaEmitOptions(
           validityByWidth, validityOrFirst, validityByBitmap, checkIntOverflow,
           lanesOverride, truncDate, floorMod7, division, useAVX, misdescribeAdd,
           misdescribeWordLiveness, guardUnderArm, shareWholeNodes, validityByWord,
-          mulHiDivide, narrowHalfSpecies, methodByteBudget, rangeSets, splitConditions,
-          groupLocalSlots, materializeChronoPrefix, callSiteBudget, heavyGroupOutputs,
-          predictGrouping, driverOutputTable, exactGrouping, splitDriver, severalKernels,
+          mulHiDivide, narrowHalfSpecies, narrowLanes, methodByteBudget, rangeSets,
+          splitConditions, groupLocalSlots, materializeChronoPrefix, callSiteBudget,
+          heavyGroupOutputs, predictGrouping, driverOutputTable, exactGrouping, splitDriver,
+          severalKernels,
           elideUnreadLocals, planSize, misdescribeDriverBytes, forceResidualAt,
           misdescribeRollback, exactRefusalStatus, groupBudgetUnderPrediction, dropStackMaps,
           misdescribeDataBytes);

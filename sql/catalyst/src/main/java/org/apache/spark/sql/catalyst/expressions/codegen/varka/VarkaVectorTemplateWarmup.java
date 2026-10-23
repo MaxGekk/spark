@@ -28,9 +28,11 @@ import java.util.function.IntSupplier;
 import javax.annotation.Nullable;
 import javax.management.ObjectName;
 
+import jdk.incubator.vector.ByteVector;
 import jdk.incubator.vector.DoubleVector;
 import jdk.incubator.vector.IntVector;
 import jdk.incubator.vector.LongVector;
+import jdk.incubator.vector.ShortVector;
 import jdk.incubator.vector.VectorMask;
 import jdk.incubator.vector.VectorOperators;
 import jdk.incubator.vector.VectorOperators.Binary;
@@ -73,7 +75,7 @@ import org.apache.spark.internal.SparkLoggerFactory;
  * template has already recorded, which is why it runs before any of the engine's vector code. It
  * feeds the templates receivers of the preferred species only. A call that throws (an
  * unsupported shape on some CPU) ends the warm-up there: the int, long and double groups run in
- * that order, the conversions last, and the rest stay cold.
+ * that order, the two narrow ones next, the conversions last, and the rest stay cold.
  *
  * <p><b>Paced on C2's queue, and heavy enough on the wrappers.</b> HotSpot's tiered policy compiles
  * a method due for its profiling tier at tier 2 instead, C1 code with counters and no profiling,
@@ -579,6 +581,8 @@ final class VarkaVectorTemplateWarmup {
     }
 
     static long run() {
+      VectorSpecies<Byte> bs = ByteVector.SPECIES_PREFERRED;
+      VectorSpecies<Short> ss = ShortVector.SPECIES_PREFERRED;
       VectorSpecies<Integer> is = IntVector.SPECIES_PREFERRED;
       VectorSpecies<Long> ls = LongVector.SPECIES_PREFERRED;
       VectorSpecies<Double> ds = DoubleVector.SPECIES_PREFERRED;
@@ -609,6 +613,8 @@ final class VarkaVectorTemplateWarmup {
         acc += ints(is, ia, ib, segment);
         acc += longs(ls, la, lb, segment);
         acc += doubles(ds, da, db);
+        acc += bytes(bs, segment);
+        acc += shorts(ss, segment);
         acc += conversions(is, ls, ds, ia, la, da);
         // After every round, the last included: one round's burst can put the queue over the
         // limit on a small host. See the class doc, "Paced on C2's queue".
@@ -709,6 +715,57 @@ final class VarkaVectorTemplateWarmup {
           acc += a.compare(op, b).toLong();
         }
         acc += masks(s, m, tail, acc);
+      }
+      return acc;
+    }
+
+    /**
+     * A narrow lane's calls (VARKA-329): a byte or short column is loaded from its own stride
+     * and widened to the int lane, and a value compared or selected in the lane is stored back
+     * truncated. The dense and masked loads and stores of the lane, its compare, blend, min,
+     * max and broadcast, the widening {@code B2I}/{@code S2I} conversion, and the three mask
+     * calls a selection makes - {@code toLong}, {@code not} and {@code or}. One block a lane;
+     * the masked forms are the epilogue's, so their mask is a remainder, not all true.
+     */
+    private static long bytes(VectorSpecies<Byte> s, MemorySegment seg) {
+      VectorMask<Byte> tail = s.indexInRange(0, s.length() / 2 + 1);
+      long acc = 0;
+      for (int r = 0; r < THIN_CALLS_PER_ROUND; r++) {
+        ByteVector a = ByteVector.fromMemorySegment(s, seg, 0, ByteOrder.LITTLE_ENDIAN);
+        ByteVector b =
+            ByteVector.fromMemorySegment(s, seg, s.length(), ByteOrder.LITTLE_ENDIAN);
+        ByteVector c =
+            ByteVector.fromMemorySegment(s, seg, 512, ByteOrder.LITTLE_ENDIAN, tail);
+        VectorMask<Byte> m = a.compare(VectorOperators.LT, b);
+        IntVector widened =
+            (IntVector) c.convertShape(VectorOperators.B2I, IntVector.SPECIES_PREFERRED, 0);
+        acc += a.blend(b, m).lane(0) + a.min(b).lane(0) + a.max(b).lane(0) + widened.lane(0)
+            + ByteVector.broadcast(s, (byte) 5).lane(0)
+            + m.not().toLong() + m.or(tail).toLong();
+        a.intoMemorySegment(seg, 1024, ByteOrder.LITTLE_ENDIAN);
+        a.intoMemorySegment(seg, 1088, ByteOrder.LITTLE_ENDIAN, tail);
+      }
+      return acc;
+    }
+
+    /** {@link #bytes}: the {@code SMALLINT} lane, two bytes a row. */
+    private static long shorts(VectorSpecies<Short> s, MemorySegment seg) {
+      VectorMask<Short> tail = s.indexInRange(0, s.length() / 2 + 1);
+      long acc = 0;
+      for (int r = 0; r < THIN_CALLS_PER_ROUND; r++) {
+        ShortVector a = ShortVector.fromMemorySegment(s, seg, 0, ByteOrder.LITTLE_ENDIAN);
+        ShortVector b =
+            ShortVector.fromMemorySegment(s, seg, 2L * s.length(), ByteOrder.LITTLE_ENDIAN);
+        ShortVector c =
+            ShortVector.fromMemorySegment(s, seg, 512, ByteOrder.LITTLE_ENDIAN, tail);
+        VectorMask<Short> m = a.compare(VectorOperators.LT, b);
+        IntVector widened =
+            (IntVector) c.convertShape(VectorOperators.S2I, IntVector.SPECIES_PREFERRED, 0);
+        acc += a.blend(b, m).lane(0) + a.min(b).lane(0) + a.max(b).lane(0) + widened.lane(0)
+            + ShortVector.broadcast(s, (short) 5).lane(0)
+            + m.not().toLong() + m.or(tail).toLong();
+        a.intoMemorySegment(seg, 1024, ByteOrder.LITTLE_ENDIAN);
+        a.intoMemorySegment(seg, 1088, ByteOrder.LITTLE_ENDIAN, tail);
       }
       return acc;
     }

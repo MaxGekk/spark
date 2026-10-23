@@ -173,6 +173,14 @@ final class VarkaVectorWalk {
     switch (node) {
       case ColumnRef c -> {
         line(cb, analysis, node);
+        // The lane the column is stored at, which is not the lane its value is computed in for
+        // an int column of a long-driven kernel (low half) or a narrow column of an int-driven
+        // one (widening load). Under NATIVE the two agree and the plain load below runs.
+        Lane stored = analysis.inputLane(c.ordinal());
+        if (stored.isNarrow() && stored != lane) {
+          emitNarrowLoad(cb, c, stored, analysis, s);
+          break;
+        }
         if (lane != analysis.lane) {
           emitLowHalfLoad(cb, c, s);
           break;
@@ -198,6 +206,7 @@ final class VarkaVectorWalk {
         } else {
           cb.aload(s.species(lane));
           lane.loadScalar(cb, s.scalarArgs(lane)[l.index()]);
+          lane.narrowScalar(cb);
           cb.invokestatic(lane.vector, "broadcast", lane.broadcast);
         }
       }
@@ -266,29 +275,30 @@ final class VarkaVectorWalk {
         }
       }
       case WidenLane n -> {
-        // Sign extension of the int lanes that hold the group's rows, the low half of the int
-        // species, into the long species: one `I2L`, part 0. The word is the child's.
+        // Sign extension of the lanes that hold the group's rows into the target's species: one
+        // `I2L` for the int-to-long cast, part 0. A conversion whose two sides are emitted at
+        // one lane - an int-driven kernel's narrow-to-int widening, whose child the load already
+        // widened - is no instruction at all. The word is the child's.
         emitValue(cb, n.child(), dense, analysis, s, computed);
         line(cb, analysis, node);
-        cb.getstatic(VECTOR_OPERATORS, "I2L", VO_CONVERSION);
-        emitConstantSpecies(cb, Lane.LONG, analysis);
-        cb.loadConstant(0);
-        cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
-        cb.checkcast(Lane.LONG.vector);
+        emitShapeConversion(cb, analysis.laneOf(n.child()), analysis.laneOf(node), analysis);
       }
       case NarrowLane n -> {
-        // At a root nothing else reads, the value stays in the long lane and narrows at the
-        // store (`emitNarrowStore`). Anywhere else its consumer computes in the int lane, so it
-        // narrows here: one `L2I`, part 0, the low 32 bits of each long lane into the low half
-        // of the int species, whose upper half is then zero. The word is the child's.
+        // At a root nothing else reads, the value stays in the wider lane and narrows at the
+        // store (`emitNarrowStore`). Anywhere else its consumer computes at the target's lane,
+        // so it narrows here: one `L2I`, part 0, the low 32 bits of each long lane into the low
+        // half of the int species, whose upper half is then zero. The word is the child's.
         emitValue(cb, n.child(), dense, analysis, s, computed);
         line(cb, analysis, node);
         if (!analysis.narrowsAtStore(node)) {
-          cb.getstatic(VECTOR_OPERATORS, "L2I", VO_CONVERSION);
-          emitConstantSpecies(cb, Lane.INT, analysis);
-          cb.loadConstant(0);
-          cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
-          cb.checkcast(Lane.INT.vector);
+          Lane target = Lane.of(n.target());
+          if (target.isNarrow() && analysis.laneOf(n.child()) == Lane.INT) {
+            // An int value wrapped to TINYINT or SMALLINT away from a store: no one-lane
+            // conversion exists, so truncate through the narrow species and sign-extend back.
+            emitNarrowTruncation(cb, target, analysis);
+          } else {
+            emitShapeConversion(cb, analysis.laneOf(n.child()), analysis.laneOf(node), analysis);
+          }
         }
       }
       case GuardedRange n -> {
@@ -470,6 +480,108 @@ final class VarkaVectorWalk {
     cb.iload(s.lanes);
     cb.invokeinterface(VECTOR_SPECIES, "indexInRange", INDEX_IN_RANGE);
     cb.invokestatic(Lane.INT.vector, "fromMemorySegment", Lane.INT.fromMemorySegmentMasked);
+  }
+
+  /**
+   * The value on the stack, of lane {@code from}, as lane {@code to}: {@code I2L} and
+   * {@code L2I}, part 0, each into the target species of the width the emission bakes. The two
+   * lanes the IR converts between are the int and the long one; a narrow value is widened once at
+   * its load and narrowed once at its store, so a conversion node over one names the lane it is
+   * already emitted at and emits nothing, and any other pair is a lowering this emitter has not
+   * built.
+   */
+  private static void emitShapeConversion(
+      CodeBuilder cb, Lane from, Lane to, Analysis analysis) {
+    if (from == to) {
+      return;
+    }
+    String op = from == Lane.INT && to == Lane.LONG ? "I2L"
+        : from == Lane.LONG && to == Lane.INT ? "L2I"
+        : null;
+    if (op == null) {
+      throw VarkaErrors.illegalArgument(
+          "no conversion from the " + from + " lane to the " + to + " lane");
+    }
+    cb.getstatic(VECTOR_OPERATORS, op, VO_CONVERSION);
+    emitConstantSpecies(cb, to, analysis);
+    cb.loadConstant(0);
+    cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
+    cb.checkcast(to.vector);
+  }
+
+  /**
+   * The int vector on the stack truncated to {@code target}'s width and sign-extended back into
+   * the int lanes: {@code I2B}/{@code I2S}, part 0, into a narrow species of at least the int
+   * species' element count - the group's lanes land in part 0 whatever the species' width, the
+   * rest zeroed - and {@code B2I}/{@code S2I}, part 0, back. What a {@link
+   * VarkaVectorIR.NarrowLane} with a narrow target means away from a store, where the value
+   * would otherwise flow untruncated (VARKA-329).
+   */
+  private static void emitNarrowTruncation(CodeBuilder cb, Lane target, Analysis analysis) {
+    cb.getstatic(VECTOR_OPERATORS, target == Lane.BYTE ? "I2B" : "I2S", VO_CONVERSION);
+    cb.getstatic(target.vector, target.speciesField(analysis.widenLanes(target)), VECTOR_SPECIES);
+    cb.loadConstant(0);
+    cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
+    cb.checkcast(target.vector);
+    cb.getstatic(VECTOR_OPERATORS, target == Lane.BYTE ? "B2I" : "S2I", VO_CONVERSION);
+    emitConstantSpecies(cb, Lane.INT, analysis);
+    cb.loadConstant(0);
+    cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
+    cb.checkcast(Lane.INT.vector);
+  }
+
+  /**
+   * A narrow column in a kernel driven at the int lane: the group's rows loaded from their own
+   * stride into a narrow species and sign-extended into the int species, part 0. The species is
+   * the narrow one of the int species' width wherever it exists - as many narrow lanes as the
+   * int species has, which is the width {@code convertShape} reads a part from. Where it does
+   * not - a byte column at four int lanes would need a 32-bit species - the load reads the next
+   * width up, and each of its parts is one int group: the loop computes as many groups an
+   * iteration as the load has parts, every group reads the same whole load starting at the
+   * iteration's first row, and its own part selects its rows ({@link Slots#rowGroup}). In a loop
+   * body the load is whole, like {@link #emitLowHalfLoad}'s; in the epilogue it is under the mask
+   * of the species' first {@code lanes} lanes and reads part 0. The offset is
+   * {@code (long) i * stride}, a linear function of the induction variable that C2 folds into the
+   * address.
+   */
+  private static void emitNarrowLoad(
+      CodeBuilder cb, ColumnRef c, Lane stored, Analysis analysis, Slots s) {
+    int groups = analysis.narrowGroups();
+    // One whole iteration's rows in one species wherever the load has to span more than a
+    // group: every narrow lane of the body reads the same rows and each group takes its part.
+    int loadLanes =
+        groups > 1 ? groups * analysis.lanesOf(Lane.INT) : analysis.widenLanes(stored);
+    // A load with more parts than one int group: the loop's every group of an iteration loads
+    // the same rows and takes its own part; the epilogue's one group takes part 0.
+    boolean parts = groups > 1 && !s.epilogue;
+    String species = stored.speciesField(loadLanes);
+    cb.getstatic(stored.vector, species, VECTOR_SPECIES);
+    cb.aload(s.srcSeg(c.ordinal()));
+    cb.iload(s.iVar);
+    if (parts) {
+      // The iteration's first row, from this group's own: every part is a block of the
+      // destination species' lanes, so part 0 of one load is the iteration's first group.
+      cb.loadConstant(s.rowGroup * analysis.lanes);
+      cb.isub();
+    }
+    cb.i2l();
+    cb.loadConstant(stored.byteStride);
+    cb.lmul();
+    cb.getstatic(BYTE_ORDER, "LITTLE_ENDIAN", BYTE_ORDER);
+    if (s.epilogue) {
+      cb.getstatic(stored.vector, species, VECTOR_SPECIES);
+      cb.loadConstant(0);
+      cb.iload(s.lanes);
+      cb.invokeinterface(VECTOR_SPECIES, "indexInRange", INDEX_IN_RANGE);
+      cb.invokestatic(stored.vector, "fromMemorySegment", stored.fromMemorySegmentMasked);
+    } else {
+      cb.invokestatic(stored.vector, "fromMemorySegment", stored.fromMemorySegmentDense);
+    }
+    cb.getstatic(VECTOR_OPERATORS, stored == Lane.BYTE ? "B2I" : "S2I", VO_CONVERSION);
+    emitConstantSpecies(cb, Lane.INT, analysis);
+    cb.loadConstant(parts ? s.rowGroup : 0);
+    cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
+    cb.checkcast(Lane.INT.vector);
   }
 
   /**
@@ -1038,10 +1150,10 @@ final class VarkaVectorWalk {
     String table = analysis.rangeTables.get(n);
     line(cb, analysis, n);
     cb.astore(value);
-    // An all-false mask to start from: no lane is below the int minimum.
+    // An all-false mask to start from: no lane is below its own lane's minimum.
     cb.aload(value);
     cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
-    lane.pushScalar(cb, Integer.MIN_VALUE);
+    lane.pushScalar(cb, lane.mostNegative());
     cb.invokevirtual(lane.vector, "compare", lane.compareVI);
     cb.astore(mask);
     cb.loadConstant(0);
@@ -1060,6 +1172,7 @@ final class VarkaVectorWalk {
     cb.getstatic(analysis.owner, table, intArray);
     cb.iload(index);
     cb.iaload();
+    lane.narrowScalar(cb);
     cb.invokevirtual(lane.vector, "compare", lane.compareVI);
     cb.aload(value);
     cb.getstatic(VECTOR_OPERATORS, "LE", VO_COMPARISON);
@@ -1068,6 +1181,7 @@ final class VarkaVectorWalk {
     cb.loadConstant(1);
     cb.iadd();
     cb.iaload();
+    lane.narrowScalar(cb);
     cb.invokevirtual(lane.vector, "compare", lane.compareVI);
     cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
     cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);

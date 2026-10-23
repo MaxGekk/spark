@@ -19,6 +19,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen;
 import java.util.List;
 import java.util.Optional;
 
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
@@ -61,9 +62,13 @@ public record CompiledVarkaProjection(
     // kernel driven at the int lane reads only the int table, so a long literal beside one would
     // mean an entry of the other lane left its literals behind when it was demoted, which the
     // per-entry rollback rules out. A kernel driven at the long lane may read both: the long table
-    // and, where it converts between lanes (VARKA-28), the int table of its int values.
+    // and, where it converts between lanes (VARKA-28), the int table of its int values. A narrow
+    // kernel reads only the int table too, under either of the narrow arm's options, so it is on
+    // the same side as an int one here. The defaults answer the lane for the narrow trees: the
+    // arm chooses between INT and a narrow lane, and both read the int table.
     if (!longLiterals.isEmpty() && !outputs.isEmpty()
-        && VarkaVectorIR.emissionLane(outputs.get(0)) == LaneType.INT) {
+        && VarkaVectorIR.emissionLane(outputs.get(0), VarkaEmitOptions.DEFAULTS)
+            != LaneType.LONG) {
       throw VarkaErrors.illegalArgument(
           "a kernel driven at the int lane reads no long literal table");
     }
@@ -72,10 +77,12 @@ public record CompiledVarkaProjection(
   /**
    * The lane the kernel's loop runs at, and so the {@code run} overload the evaluator calls: every
    * root's emission lane, which is the root's own except for a narrowing root, whose 32-bit column
-   * is computed in the 64-bit lane ({@code VarkaVectorIR.emissionLane}).
+   * is computed in the 64-bit lane ({@code VarkaVectorIR.emissionLane}). The options are the
+   * caller's because the narrow arm's lane is theirs ({@link VarkaEmitOptions#narrowLanes()}), and
+   * they are the options the shape is keyed on.
    */
-  public LaneType lane() {
-    return VarkaVectorIR.emissionLane(outputs.get(0));
+  public LaneType lane(VarkaEmitOptions options) {
+    return VarkaVectorIR.emissionLane(outputs.get(0), options);
   }
 
   /**

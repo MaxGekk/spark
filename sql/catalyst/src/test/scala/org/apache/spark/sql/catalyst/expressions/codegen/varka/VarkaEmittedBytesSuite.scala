@@ -34,8 +34,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaIrGrammar._
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
-import org.apache.spark.sql.types.{BooleanType, DateType, DayTimeIntervalType, IntegerType, LongType,
-  TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{BooleanType, ByteType, DateType, DayTimeIntervalType,
+  IntegerType, LongType, ShortType, TimeType, YearMonthIntervalType}
 
 /**
  * The emitted-bytes oracle (VARKA-85, step 1): what the emitter produces for every shape, pinned
@@ -93,7 +93,16 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
   // BOOLEAN columns, as conditions: two so a comparison can be column against column.
   private val b = AttributeReference("b", BooleanType)()
   private val b2 = AttributeReference("b2", BooleanType)()
-  private val columns: Seq[Attribute] = Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2)
+  // TINYINT and SMALLINT columns (VARKA-329), two of each, as `VarkaCoverageSuite` declares
+  // them: the rows are pinned at both widths, and at four int lanes the widened arm's byte
+  // load reads a 64-bit species and converts it in two parts, so its methods have their own
+  // hashes there rather than a decline.
+  private val y1 = AttributeReference("y1", ByteType)()
+  private val y2 = AttributeReference("y2", ByteType)()
+  private val s1 = AttributeReference("s1", ShortType)()
+  private val s2 = AttributeReference("s2", ShortType)()
+  private val columns: Seq[Attribute] =
+    Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2, y1, y2, s1, s2)
 
   private val className = "org.apache.spark.sql.varka.execution.VarkaEmittedBytesOracle"
 
@@ -120,7 +129,11 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
   private def emitOptions(roots: Seq[VarkaVectorIR], lanes: Int,
       arm: VarkaEmitOptions => VarkaEmitOptions): VarkaEmitOptions = {
     val laneCount =
-      if (VarkaVectorIR.emissionLane(roots.head) == LaneType.LONG) lanes / 2 else lanes
+      if (VarkaVectorIR.emissionLane(roots.head, VarkaMatrix.base) == LaneType.LONG) {
+        lanes / 2
+      } else {
+        lanes
+      }
     arm(VarkaMatrix.base.withLanesOverride(laneCount))
   }
 
@@ -134,6 +147,14 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
     // emission's, which for a narrowing root (an int output computed in the long lane) is the
     // long lane.
     val options = emitOptions(roots, lanes, arm)
+    // A narrow value the lane count cannot widen has no lowering, and the compiler refuses the
+    // row before an emission (VARKA-329): a width that bakes no int lane count has no species to
+    // name. Record the compiler's answer rather than a class that cannot link, as the arms'
+    // declines are recorded below.
+    val narrowRefusal = VarkaLoopEmitter.narrowRefusal(roots.asJava, options)
+    if (narrowRefusal.isPresent) {
+      return Seq("<declined>" -> sha(narrowRefusal.get()))
+    }
     val bytes =
       try {
         VarkaLoopEmitter.emit(className, roots.asJava, numInputs, numLiterals, null, null, options)
@@ -374,7 +395,21 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
   private def pinnedArms: Seq[(String, VarkaEmitOptions => VarkaEmitOptions)] =
     Seq(VarkaEmitOptions.USE_AVX_UNKNOWN, 0, 1, 2, 3).map { level =>
       s"useAVX=$level" -> ((o: VarkaEmitOptions) => o.withUseAVX(level))
-    } ++ subjectArms ++ referenceArms
+    } ++ subjectArms ++ laneArms ++ referenceArms
+
+  /**
+   * The narrow-lane option's two arms, both pinned (VARKA-329): the default arm is what the
+   * per-row hashes above are emitted under, and the native arm is an emission no per-row hash
+   * covers, since the rows there are the defaults'. A machine option has no session
+   * configuration, so it is reachable from tests only, which is exactly why the oracle has to
+   * pin it: a refactor of the narrow lane must move a hash here rather than slip through.
+   */
+  private def laneArms: Seq[(String, VarkaEmitOptions => VarkaEmitOptions)] =
+    Seq("narrowLanes=true", "narrowLanes=false").map { name =>
+      val arm = optionArms.find(_.name == name).getOrElse(
+        fail(s"the options table has no arm $name to pin"))
+      arm.name -> arm.arm
+    }
 
   /**
    * The reference forms whose frames span the kernel, pinned beside the selectable arms: the
@@ -479,8 +514,9 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
         "configuration reaches, and per value of each option the defaults never reach, over " +
         "the options under which it acts (validityOrFirst); and per reference form whose " +
         "frames span the kernel (groupLocalSlots=false, methodByteBudget=0), which no session " +
-        "selects but where a per-body slot rule can move bytes unseen. The rest of " +
-        "VarkaEmitOptions is test-only."),
+        "selects but where a per-body slot rule can move bytes unseen; and per value of the " +
+        "narrow-lane option (narrowLanes), which picks the lane a tree whose every value is " +
+        "narrow is emitted at (VARKA-329). The rest of VarkaEmitOptions is test-only."),
       "coverage_rows_skipped" -> skipped.asJava,
       "lanes" -> ordered(perWidth: _*),
       "option_arms" -> armHashes)

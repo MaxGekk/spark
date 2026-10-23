@@ -240,6 +240,29 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     }
   }
 
+  test("a range set over a narrow child refuses a bound the child's lane cannot hold") {
+    val byteCol = new ColumnRef(0, LaneType.BYTE)
+    val shortCol = new ColumnRef(0, LaneType.SHORT)
+    // The emitter narrows each bound into the child's lane; a bound outside it would be
+    // compared truncated, a wrong answer rather than a decline, so the node refuses it.
+    val tooSmall = intercept[IllegalArgumentException] {
+      new InRanges(byteCol, java.util.List.of(Integer.valueOf(-129), Integer.valueOf(5)))
+    }
+    assert(tooSmall.getMessage.contains("byte bounds"), tooSmall.getMessage)
+    val tooLarge = intercept[IllegalArgumentException] {
+      new InRanges(byteCol, java.util.List.of(Integer.valueOf(-5), Integer.valueOf(128)))
+    }
+    assert(tooLarge.getMessage.contains("byte bounds"), tooLarge.getMessage)
+    intercept[IllegalArgumentException] {
+      new InRanges(shortCol, java.util.List.of(Integer.valueOf(-32769), Integer.valueOf(0)))
+    }
+    // The lane's own extremes and every int bound are what the lanes can hold.
+    new InRanges(byteCol, java.util.List.of(Integer.valueOf(-128), Integer.valueOf(127)))
+    new InRanges(shortCol, java.util.List.of(Integer.valueOf(-32768), Integer.valueOf(32767)))
+    new InRanges(intCol,
+      java.util.List.of(Integer.valueOf(Integer.MIN_VALUE), Integer.valueOf(5)))
+  }
+
   test("the int lane renders as nothing, so no shape hash committed before it moved") {
     // The rendering drives the emitted class's name and the committed hashes in
     // VarkaShapeCacheSuite, so the int lane has to be invisible in it - the same elision
@@ -417,14 +440,16 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     // converts where it is, and the kernel holds both lanes.
     val narrowed = new NarrowLane(longCol)
     assert(narrowed.laneType() === LaneType.INT)
-    assert(VarkaVectorIR.emissionLane(narrowed) === LaneType.LONG)
-    assert(VarkaVectorIR.emissionLane(longCol) === LaneType.LONG)
-    assert(VarkaVectorIR.emissionLane(intCol) === LaneType.INT)
-    assert(VarkaVectorIR.canonical(narrowed) === s"(narrow ${VarkaVectorIR.canonical(longCol)})")
+    assert(VarkaVectorIR.emissionLane(narrowed, VarkaEmitOptions.DEFAULTS) === LaneType.LONG)
+    assert(VarkaVectorIR.emissionLane(longCol, VarkaEmitOptions.DEFAULTS) === LaneType.LONG)
+    assert(VarkaVectorIR.emissionLane(intCol, VarkaEmitOptions.DEFAULTS) === LaneType.INT)
+    assert(VarkaVectorIR.canonical(narrowed) ===
+      s"(narrow:INT ${VarkaVectorIR.canonical(longCol)})")
     val overInt = intercept[IllegalArgumentException](new NarrowLane(intCol))
-    assert(overInt.getMessage.contains("narrowLane takes a LONG child"), overInt.getMessage)
+    assert(overInt.getMessage.contains("narrowLane takes a child on a lane wider than INT"),
+      overInt.getMessage)
     val interior = new IntArith(IntOp.ADD, Overflow.WRAP, narrowed, intLit)
-    assert(VarkaVectorIR.emissionLane(interior) === LaneType.LONG)
+    assert(VarkaVectorIR.emissionLane(interior, VarkaEmitOptions.DEFAULTS) === LaneType.LONG)
     VarkaLoopEmitter.emit("VarkaInteriorNarrowKernel", Seq[VarkaVectorIR](interior).asJava,
       1, 1, null, null, VarkaMatrix.base)
   }

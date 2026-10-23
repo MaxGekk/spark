@@ -27,7 +27,10 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -67,12 +70,24 @@ import org.apache.spark.sql.internal.SQLConf$;
  * non-leaf nodes - and the compiler's record ({@code CompiledVarkaProjection.families}) is held
  * to that reading too, since a kernel failure's warning and the coverage table's switch column
  * name it.
+ *
+ * <p>A row the emission width itself cannot serve declines before any family is consulted: a
+ * narrow value under a bigint kernel has no lowering, and a width that bakes no int lane count
+ * cannot name the species a narrow load reads, so the row engine answers it (VARKA-329). The
+ * committed width census, {@code sql/varka/width_audit.json}, records which
+ * rows decline at which width and why; only a decline recorded there, shape and reason both, is
+ * admitted here, so a row declining for any other reason still fails.
  */
 @VarkaSuite
 public final class VarkaFamilySwitchSuite {
 
-  /** One coverage row: its SQL, whether it is a filter's conjunct, and its resolved tree. */
-  private record Row(String sql, boolean predicate, Expression expr) {}
+  /**
+   * One coverage row: its SQL, the name the width census keys it by, whether it is a filter's
+   * conjunct, and its resolved tree. The two names differ where a row is a short spelling of a
+   * longer expression: the census keys "y1 IN (11 to 16 byte literals)" by that description,
+   * while the row's SQL is the eleven literals it stands for.
+   */
+  private record Row(String sql, String censusName, boolean predicate, Expression expr) {}
 
   /**
    * What the compiler made of a row: present IR and families when it fused, else the reason.
@@ -83,10 +98,14 @@ public final class VarkaFamilySwitchSuite {
 
   private static final VarkaEmitOptions OPTIONS = VarkaMatrixRuns.BASE;
 
+  /** The prefix the width census gives a shape the compiler declines at that width. */
+  private static final String DECLINED = "declined: ";
+
   // Read once for the class: JUnit builds an instance per test, and the rows' resolution through
   // the analyzer is most of the suite's time.
   private static Seq<Attribute> columns;
   private static List<Row> rows;
+  private static Map<String, Set<String>> recordedDeclines;
 
   @BeforeAll
   static void readCoverage() throws IOException {
@@ -106,11 +125,66 @@ public final class VarkaFamilySwitchSuite {
       if (sql.isEmpty()) {
         sql = row.get("sql").asText();
       }
-      read.add(new Row(sql, "predicate".equals(row.get("form").asText()),
+      read.add(new Row(sql, row.get("sql").asText(),
+          "predicate".equals(row.get("form").asText()),
           VarkaSqlResolve.parse(sql, columns)));
     }
     rows = List.copyOf(read);
     assertTrue(rows.size() > 80, rows.size() + " coverage rows read");
+    readRecordedDeclines(Path.of(home, "sql", "varka", "width_audit.json"));
+  }
+
+  /**
+   * Reads the committed width census's declines into {@link #recordedDeclines}, shape to the
+   * reasons recorded for it across the census's widths. The emitter's decline is a function of
+   * the shape and the width alone, not of the CPU, and the reason names the int lane count, so
+   * a reason recorded in any width's column is the expectation at exactly that width on any
+   * host. No width records one since the part-form widening load gave four int lanes a byte
+   * load (VARKA-329), so the allowance admits nothing today; it stays because a future decline
+   * at a width is exactly what it must explain, and a missing census admits nothing, which
+   * fails the declines it would have explained rather than passing them silently.
+   */
+  private static void readRecordedDeclines(Path census) throws IOException {
+    var recorded = new HashMap<String, Set<String>>();
+    if (Files.exists(census)) {
+      for (JsonNode column : new ObjectMapper().readTree(Files.readString(census)).get("widths")) {
+        for (var shape : column.properties()) {
+          for (JsonNode verdict : shape.getValue()) {
+            String line = verdict.asText();
+            if (line.startsWith(DECLINED)) {
+              recorded.computeIfAbsent(shape.getKey(), k -> new HashSet<>())
+                  .add(line.substring(DECLINED.length()));
+            }
+          }
+        }
+      }
+    }
+    recordedDeclines = Map.copyOf(recorded);
+  }
+
+  /**
+   * Whether the width census records this row declining with exactly this reason. Only recorded
+   * pairs are admitted: a row declining with a reason the census never records for it is a
+   * regression and still fails.
+   */
+  private static boolean isRecordedDecline(
+      Map<String, Set<String>> recorded, Row row, Outcome on) {
+    return on.reason()
+        .map(reason -> recorded.getOrDefault(row.censusName(), Set.of()).contains(reason))
+        .orElse(false);
+  }
+
+  /**
+   * Whether the configuration itself explains the decline: with no baked lane count
+   * ({@code validityByWidth} off) a narrow column has no species to widen into, and every
+   * narrow row declines before any family is consulted. The committed census records declines
+   * per width, which cannot express a configuration, so the option is read here; any other
+   * reason still fails.
+   */
+  private static boolean isConfigurationDecline(Outcome on) {
+    return !OPTIONS.validityByWidth()
+        && on.reason().filter(r -> r.equals(
+            "a narrow column needs a baked int lane count to be widened")).isPresent();
   }
 
   private Outcome compile(Row row, Set<VarkaFamily> off) {
@@ -197,7 +271,11 @@ public final class VarkaFamilySwitchSuite {
       Outcome on = compile(row, Set.of());
       Claims claims = claims(row);
       if (on.kernel().isEmpty()) {
-        failures.add("`" + row.sql() + "` does not fuse with every family on: " + on.reason());
+        // A row the width cannot serve declines before any family is consulted; the census
+        // records which rows those are, and why.
+        if (!isRecordedDecline(recordedDeclines, row, on) && !isConfigurationDecline(on)) {
+          failures.add("`" + row.sql() + "` does not fuse with every family on: " + on.reason());
+        }
         continue;
       }
       // The record holds every sure family, and a cast's family only where the cast computed.
@@ -222,6 +300,30 @@ public final class VarkaFamilySwitchSuite {
     assertEquals(List.of(), failures);
     // Each switch is seen to work on something, or this test proves nothing about it.
     assertEquals(EnumSet.allOf(VarkaFamily.class), declined.keySet(), declined.toString());
+  }
+
+  @Test
+  @DisplayName("a width decline is admitted only where the census records it, with its reason")
+  void onlyRecordedWidthDeclinesAreAdmitted() {
+    // The allowance's guard, proved in both directions on a synthetic census: a recorded pair
+    // passes, and the same shape with another reason, another shape or an empty census fails.
+    // The reason is the one the committed census carried for `y1 < y2` at 128 bits before the
+    // part-form widening load made that width emit it (VARKA-329).
+    String reason = "a BYTE column has no widening load at 4 int lanes";
+    Row row = rows.stream().filter(r -> r.censusName().equals("y1 < y2"))
+        .findFirst().orElseThrow();
+    var decline = new Outcome(Optional.empty(), List.of(), Optional.of(reason));
+    var recorded = Map.of("y1 < y2", Set.of(reason), "y1 <= y2", Set.of(reason));
+    assertTrue(isRecordedDecline(recorded, row, decline));
+    assertTrue(!isRecordedDecline(recorded, row, new Outcome(Optional.empty(), List.of(),
+        Optional.of("a narrow column needs a baked int lane count to be widened"))));
+    Row unrecorded = rows.stream()
+        .filter(r -> !recorded.containsKey(r.censusName())).findFirst().orElseThrow();
+    assertTrue(!isRecordedDecline(recorded, unrecorded, decline));
+    assertTrue(!isRecordedDecline(Map.of(), row, decline));
+    // The committed census records no decline for the pair: the shape fuses at 128 bits now, so
+    // the allowance explains no decline the emitter produces rather than a stale one.
+    assertTrue(!isRecordedDecline(recordedDeclines, row, decline));
   }
 
   @Test
@@ -258,7 +360,8 @@ public final class VarkaFamilySwitchSuite {
       }
     }
     // Nested, the innermost family is the one named: the calendar's year under int arithmetic.
-    Row nested = new Row("year(d) + 1", false, VarkaSqlResolve.parse("year(d) + 1", columns));
+    Row nested = new Row("year(d) + 1", "year(d) + 1", false,
+        VarkaSqlResolve.parse("year(d) + 1", columns));
     VarkaNodeCompiler.setFailInFamilyForTesting(VarkaFamily.CALENDAR);
     try {
       String message = assertThrows(SparkIllegalArgumentException.class,
@@ -271,7 +374,8 @@ public final class VarkaFamilySwitchSuite {
     // The comparison in a CASE WHEN's condition is the predicate family's, reached from inside
     // the condition family's lowering, and its failure is named as the predicate family's.
     String caseWhen = "CASE WHEN d < d2 THEN d ELSE d2 END";
-    Row conditional = new Row(caseWhen, false, VarkaSqlResolve.parse(caseWhen, columns));
+    Row conditional = new Row(caseWhen, caseWhen, false,
+        VarkaSqlResolve.parse(caseWhen, columns));
     VarkaNodeCompiler.setFailInFamilyForTesting(VarkaFamily.PREDICATE);
     try {
       String message = assertThrows(SparkIllegalArgumentException.class,
@@ -289,7 +393,7 @@ public final class VarkaFamilySwitchSuite {
     // The time family claims every 64-bit column; with it off, a comparison of two bigint or two
     // TIME columns is still the predicate family's alone and fuses.
     for (String sql : List.of("l > l2", "t < t2")) {
-      Outcome off = compile(new Row(sql, true, VarkaSqlResolve.parse(sql, columns)),
+      Outcome off = compile(new Row(sql, sql, true, VarkaSqlResolve.parse(sql, columns)),
           Set.of(VarkaFamily.TIME));
       assertTrue(off.kernel().isPresent(), sql + ": " + off);
       assertEquals(List.of(VarkaFamily.PREDICATE), off.families(), sql);
@@ -298,7 +402,7 @@ public final class VarkaFamilySwitchSuite {
     var withT3 = new ArrayList<Attribute>(CollectionConverters.asJava(columns));
     withT3.add(VarkaSqlResolve.column("t3", CatalystSqlParser$.MODULE$.parseDataType("time(3)")));
     Seq<Attribute> wider = CollectionConverters.asScala(withT3).toSeq();
-    Row relabel = new Row("t < t3", true, VarkaSqlResolve.parse("t < t3", wider));
+    Row relabel = new Row("t < t3", "t < t3", true, VarkaSqlResolve.parse("t < t3", wider));
     Outcome off = compile(relabel, Set.of(VarkaFamily.TIME), wider);
     assertTrue(off.kernel().isPresent(), off.toString());
     assertEquals(List.of(VarkaFamily.PREDICATE), off.families());

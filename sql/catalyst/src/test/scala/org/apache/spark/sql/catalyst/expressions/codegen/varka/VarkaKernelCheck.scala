@@ -80,6 +80,13 @@ object VarkaKernelCheck {
     VarkaKernelChecks.runAndCompare(context, className, bytes, roots.asJava, numInputs, lits,
       batch.toJava, declineAllowed, answers(spark))
 
+  /** [[VarkaKernelChecks.runAndCompareNarrow]]: the columns stored narrow (VARKA-329). */
+  def runAndCompareNarrow(context: String, className: String, bytes: Array[Byte],
+      roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Int], batch: Batch,
+      declineAllowed: Boolean = false): Boolean =
+    VarkaKernelChecks.runAndCompareNarrow(context, className, bytes, roots.asJava, numInputs,
+      lits, batch.toJava, declineAllowed, null)
+
   /** [[VarkaKernelChecks.runOwnBody]]: both fills unless `fills` says otherwise. */
   def runOwnBody(context: String, className: String, bytes: Array[Byte],
       roots: Seq[VarkaVectorIR], numInputs: Int, lits: Array[Int], batch: Batch,

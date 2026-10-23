@@ -139,7 +139,8 @@ public final class VarkaCanonicalIr {
         long lo = number();
         yield new GuardedRange(child, lo, number());
       }
-      case "narrow" -> new NarrowLane(node());
+      case "widen" -> new WidenLane(node(), lane(parts));
+      case "narrow" -> new NarrowLane(node(), lane(parts));
       case "dateDiff" -> new DateDiff(node(), node());
       case "cmp" -> new Compare(CompareOp.valueOf(parts[1]), node(), node());
       case "nullSafeEq" -> new NullSafeEqual(node(), node());
@@ -187,6 +188,14 @@ public final class VarkaCanonicalIr {
     };
     expect(")");
     return node;
+  }
+
+  /** A conversion head's target lane, as in {@code widen:LONG} or {@code narrow:BYTE}. */
+  private static LaneType lane(String[] parts) {
+    if (parts.length != 2) {
+      throw new IllegalArgumentException("a conversion names its target lane: " + parts[0]);
+    }
+    return LaneType.valueOf(parts[1]);
   }
 
   /** {@code col:N} or {@code lit:N}, each with {@code :long} on the long lane. */

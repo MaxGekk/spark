@@ -526,6 +526,48 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `IF(b, l, l2)` | `condition` |  | the leaf is lifted to the long lane of the values | per-lane: blend, mask broadcast |
 | `CASE WHEN b THEN l ELSE l2 END` | `condition` |  | likewise, per branch | per-lane: blend, mask broadcast |
 
+#### TINYINT columns
+
+| Predicate | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `y1 < y2` | `predicate` |  | two narrow columns: each load widens the narrow species of the int width, or the next width up in its parts, and the compare is the int lane's | vector |
+| `y1 <= y2` | `predicate` |  | the other ordering, so that every comparison has a row of its own | vector |
+| `y1 >= y2` | `predicate` |  |  | vector |
+| `y1 = 5Y` | `predicate` |  | a narrow column against a narrow literal, stored as the same width | vector |
+| `y1 IS NOT NULL` | `predicate` |  | the column's own validity word | vector |
+| `y1 IN (1Y, 2Y, 3Y, -1Y)` | `predicate` |  | an IN list over a narrow column, lowered to an equality chain | vector |
+| `y1 IN (11 to 16 byte literals)` | `predicate` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | vector |
+
+#### TINYINT columns choosing values
+
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `CASE WHEN y1 > y2 THEN y1 ELSE y2 END` | `predicate`, `condition` |  | the output is stored at the column's own width, whichever arm computed it | vector |
+| `if(y1 IS NULL, 5Y, y1)` | `predicate`, `condition` |  | a narrow literal in the ELSE: the stored value is one byte a row and the missing row takes the constant | vector |
+| `greatest(y1, y2)` | `intArithmetic` |  |  | vector |
+| `least(y1, y2)` | `intArithmetic` |  |  | vector |
+
+#### SMALLINT columns
+
+| Predicate | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `s1 < s2` | `predicate` |  | the two-byte twin of the TINYINT comparison | vector |
+| `s1 <= s2` | `predicate` |  |  | vector |
+| `s1 >= s2` | `predicate` |  |  | vector |
+| `s1 = 5S` | `predicate` |  | a SMALLINT column against a SMALLINT literal | vector |
+| `s1 IS NOT NULL` | `predicate` |  |  | vector |
+| `s1 IN (1S, 2S, 3S, -1S)` | `predicate` |  |  | vector |
+| `s1 IN (11 to 16 short literals)` | `predicate` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | vector |
+
+#### SMALLINT columns choosing values
+
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `CASE WHEN s1 > s2 THEN s1 ELSE s2 END` | `predicate`, `condition` |  | two bytes a row at the store | vector |
+| `if(s1 IS NULL, 5S, s1)` | `predicate`, `condition` |  | the two-byte twin of the TINYINT constant choice | vector |
+| `greatest(s1, s2)` | `intArithmetic` |  |  | vector |
+| `least(s1, s2)` | `intArithmetic` |  |  | vector |
+
 #### Width conversions
 
 | Expression | Switches | Domain | Notes | 128-bit lanes |

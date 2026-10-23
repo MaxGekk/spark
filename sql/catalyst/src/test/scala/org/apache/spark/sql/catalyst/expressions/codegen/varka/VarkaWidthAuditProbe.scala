@@ -26,7 +26,8 @@ import jdk.incubator.vector.IntVector
 
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaWidthAuditShapes.Shape
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaWidthAuditShapes.{
+  Declined, Entry, Shape}
 
 /**
  * The child process behind [[VarkaWidthAuditSuite]] (VARKA-153). Launched in a forked JVM under
@@ -53,6 +54,8 @@ object VarkaWidthAuditProbe {
   val SHAPE_BEGIN_PREFIX = "VARKA_AUDIT_SHAPE_BEGIN "
   val SHAPE_END_PREFIX = "VARKA_AUDIT_SHAPE_END "
   val SHAPE_NAME_END = " VARKA_AUDIT_NAME_END"
+  /** A shape this width has no lowering for, with the compiler's reason (VARKA-329). */
+  val DECLINED_PREFIX = "VARKA_AUDIT_DECLINED "
   val DONE = "VARKA_AUDIT_DONE"
 
   /** The prefix every emitted class is named with; the `PrintIntrinsics` directive matches it. */
@@ -72,17 +75,24 @@ object VarkaWidthAuditProbe {
     // scalastyle:off println
     println(PREFERRED_BITS_PREFIX + IntVector.SPECIES_PREFERRED.vectorBitSize())
     println(USE_AVX_PREFIX + VarkaEmitOptions.HOST_USE_AVX)
-    val shapes = VarkaWidthAuditShapes.all(new File(args(0)))
+    val entries: Seq[Entry] = VarkaWidthAuditShapes.all(new File(args(0)))
       .filter(s => args.length == 1 || s.name.contains(args(1)))
     val loader = new VarkaGeneratedClassLoader(getClass.getClassLoader)
     try {
-      shapes.zipWithIndex.foreach { case (shape, k) =>
+      entries.zipWithIndex.foreach { case (entry, k) =>
         // The name holds spaces, so it is closed with a mark the reader stops at: a compiler
         // thread's record can run into the line (`VarkaProbeOutput`).
-        println(SHAPE_BEGIN_PREFIX + shape.name + SHAPE_NAME_END)
+        println(SHAPE_BEGIN_PREFIX + entry.name + SHAPE_NAME_END)
         System.out.flush()
-        runHot(shape, k, loader)
-        println(SHAPE_END_PREFIX + shape.name)
+        entry match {
+          case shape: Shape => runHot(shape, k, loader)
+          // The compiler refused the row at this width, so there is no kernel to emit or run;
+          // the reason is the width's answer and the parent pins it beside the refusals.
+          case Declined(_, reason) =>
+            println(DECLINED_PREFIX + reason)
+            System.out.flush()
+        }
+        println(SHAPE_END_PREFIX + entry.name)
         System.out.flush()
       }
     } finally {
@@ -94,6 +104,9 @@ object VarkaWidthAuditProbe {
 
   private def runHot(shape: Shape, k: Int, loader: VarkaGeneratedClassLoader): Unit = {
     val className = CLASS_PREFIX + k
+    // A shape a width has no lowering for is a `Declined` entry, decided by the compiler before
+    // this probe runs; one that reaches the emitter and still declines is a budget the forced
+    // width was not meant to test, and fails the audit rather than being pinned as its answer.
     val bytes = VarkaLoopEmitter.emit(className, shape.roots.asJava, shape.numInputs,
       shape.numLiterals, null, null, shape.options)
     loader.defineGeneratedClass(className, bytes)

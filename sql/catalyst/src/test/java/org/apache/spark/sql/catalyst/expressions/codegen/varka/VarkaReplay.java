@@ -136,7 +136,7 @@ public record VarkaReplay(VarkaFailureSignature expected, Optional<VarkaFailureS
         return done(file, notes);
       }
       try {
-        run(kernel, VarkaVectorIR.emissionLane(outputs.get(0)), file, notes);
+        run(kernel, VarkaVectorIR.emissionLane(outputs.get(0), options), file, notes);
       } catch (Throwable t) {
         notes.add("the kernel threw");
         return failed(file, notes, t);
@@ -263,11 +263,12 @@ public record VarkaReplay(VarkaFailureSignature expected, Optional<VarkaFailureS
         int[] ints = file.intLiterals().stream().mapToInt(Integer::intValue).toArray();
         long[] longs = file.longLiterals().stream().mapToLong(Long::longValue).toArray();
         long scratchAddress = scratch == null ? 0L : scratch.memoryAddress();
-        // One overload per lane, as the runner picks it.
-        int status = lane == VarkaVectorIR.LaneType.INT
-            ? kernel.run(srcData, srcValidity, nullCounts, dst, dstValid, ints, len,
+        // One overload per lane, picked as the runner picks it: the long entry only at the long
+        // lane, the int entry (which the narrow lanes share) at every other.
+        int status = lane == VarkaVectorIR.LaneType.LONG
+            ? kernel.run(srcData, srcValidity, nullCounts, dst, dstValid, ints, longs, len,
                 scratchAddress)
-            : kernel.run(srcData, srcValidity, nullCounts, dst, dstValid, ints, longs, len,
+            : kernel.run(srcData, srcValidity, nullCounts, dst, dstValid, ints, len,
                 scratchAddress);
         VarkaMemorySanitizer.verifyCanaries();
         notes.add(status == 0 ? "the kernel returned"

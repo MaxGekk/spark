@@ -175,17 +175,18 @@ public final class VarkaLoopEmitter {
    * converts between lanes is driven at the long lane (VARKA-28). `analyze` re-checks every node
    * below them against this.
    */
-  private static Lane laneOf(List<VarkaVectorIR> outputs) {
+  private static Lane laneOf(List<VarkaVectorIR> outputs, VarkaEmitOptions options) {
     if (outputs.isEmpty()) {
       throw VarkaErrors.illegalArgument("no output chains to emit");
     }
     // The emission lane, not the root's: a NarrowLane root is a 32-bit column computed in the
-    // 64-bit lane its child is on, and the loop runs at the child's species.
-    Lane lane = Lane.of(VarkaVectorIR.emissionLane(outputs.get(0)));
+    // 64-bit lane its child is on, and the loop runs at the child's species. A narrow root of the
+    // NATIVE arm is the same: the loop runs at the narrow lane its values are on.
+    Lane lane = Lane.of(VarkaVectorIR.emissionLane(outputs.get(0), options));
     for (VarkaVectorIR output : outputs) {
-      if (VarkaVectorIR.emissionLane(output) != lane.laneType) {
+      if (VarkaVectorIR.emissionLane(output, options) != lane.laneType) {
         throw VarkaErrors.illegalArgument("outputs mix lanes: " + lane.laneType + " and "
-            + VarkaVectorIR.emissionLane(output));
+            + VarkaVectorIR.emissionLane(output, options));
       }
     }
     return lane;
@@ -244,7 +245,8 @@ public final class VarkaLoopEmitter {
    */
   private static Analysis analyze(List<VarkaVectorIR> outputs, int numInputs, int numLiterals,
       VarkaEmitOptions options) {
-    Analysis analysis = new Analysis(numInputs, numLiterals, options, laneOf(outputs));
+    Analysis analysis = new Analysis(numInputs, numLiterals, options, laneOf(outputs, options));
+    analysis.planNarrowGroups(outputs);
     for (VarkaVectorIR root : outputs) {
       analysis.analyzeRoot(root);
     }
@@ -1331,7 +1333,7 @@ public final class VarkaLoopEmitter {
         record != null ? lane -> new VarkaEmitCost.Tally(lane, record.prices(), record.keepCounts())
             : predict ? lane -> new VarkaEmitCost.Tally(lane, VarkaEmitCostTable.PRICES, false)
             : null;
-    VarkaVectorIR.LaneType lane = VarkaVectorIR.emissionLane(outputs.get(0));
+    VarkaVectorIR.LaneType lane = VarkaVectorIR.emissionLane(outputs.get(0), options);
     Supplier<GroupOps> newGroup = () -> new GroupOps(options.shareChronoPrefix(), materialize,
         earlier, lane, newTally == null ? null : newTally.apply(lane));
     GroupOps group = newGroup.get();
@@ -1474,7 +1476,7 @@ public final class VarkaLoopEmitter {
       int n = outputs.size();
       boolean materialize = options.materializeChronoPrefix() && options.methodByteBudget() > 0;
       boolean predict = options.predictGrouping() && options.methodByteBudget() > 0;
-      VarkaVectorIR.LaneType lane = VarkaVectorIR.emissionLane(outputs.get(0));
+      VarkaVectorIR.LaneType lane = VarkaVectorIR.emissionLane(outputs.get(0), options);
       // Every output before the current start, walked as one group: its prefixes are what a
       // group starting there finds computed earlier.
       GroupOps before = new GroupOps(options.shareChronoPrefix(), materialize, new HashSet<>(),
@@ -1627,7 +1629,7 @@ public final class VarkaLoopEmitter {
     outputs = List.copyOf(outputs);
     boolean materialize = options.materializeChronoPrefix() && options.methodByteBudget() > 0;
     boolean predict = options.predictGrouping() && options.methodByteBudget() > 0;
-    VarkaVectorIR.LaneType lane = VarkaVectorIR.emissionLane(outputs.get(0));
+    VarkaVectorIR.LaneType lane = VarkaVectorIR.emissionLane(outputs.get(0), options);
     GroupOps before = new GroupOps(options.shareChronoPrefix(), materialize, new HashSet<>(),
         lane, null);
     for (int o = 0; o < from; o++) {
@@ -1826,16 +1828,20 @@ public final class VarkaLoopEmitter {
    * <p>The lane agreement {@link #laneOf} demands is checked on the same terms and for the
    * same reason: one class holds one species, so outputs on different lanes are two kernels,
    * and a caller that learned that from an exception at {@code emit} would have learned it too
-   * late to record why.
+   * late to record why. {@link #narrowRefusal} is checked here as well: a narrow value the chosen
+   * species cannot widen at this lane count has no lowering, and the compiler demotes the entry
+   * with the reason rather than reaching {@code emit} with it.
    */
   public static boolean fitsBudgets(java.util.List<VarkaVectorIR> outputs, int numInputs,
       VarkaEmitOptions options) {
     boolean capOps = options.methodByteBudget() == 0;
-    if (numInputs > MAX_INPUTS || outputs.isEmpty()) {
+    if (numInputs > MAX_INPUTS || outputs.isEmpty()
+        || narrowRefusal(outputs, options).isPresent()) {
       return false;
     }
     for (VarkaVectorIR output : outputs) {
-      if (VarkaVectorIR.emissionLane(output) != VarkaVectorIR.emissionLane(outputs.get(0))) {
+      if (VarkaVectorIR.emissionLane(output, options)
+          != VarkaVectorIR.emissionLane(outputs.get(0), options)) {
         return false;
       }
     }
@@ -1848,6 +1854,102 @@ public final class VarkaLoopEmitter {
       }
     }
     return true;
+  }
+
+  /**
+   * Why this kernel cannot be emitted over the narrow values it holds, or empty when it can.
+   *
+   * <p>Under {@link VarkaEmitOptions#narrowLanes()} a kernel whose every value is narrow computes
+   * in the narrow species itself, so nothing has to be converted. Otherwise a narrow column is
+   * read with one widening load per iteration, and that load needs a narrow species wider than
+   * or as wide as the int group: the narrow species of the int species' width where it exists -
+   * eight byte lanes at eight int lanes, four short lanes at four - and otherwise the next width
+   * up, whose parts each become one int group ({@link Lane#widenLanes}): a byte at four int
+   * lanes would need a 32-bit species the Vector API does not have, so it reads an eight-lane
+   * 64-bit load whose two parts are the iteration's two int groups. A width with no baked lane
+   * count - {@code validityByWidth} off - cannot name the species at all, and the entry
+   * declines: the row engine answers it.
+   */
+  public static Optional<String> narrowRefusal(
+      List<VarkaVectorIR> outputs, VarkaEmitOptions options) {
+    for (VarkaVectorIR root : outputs) {
+      Set<VarkaVectorIR.LaneType> lanes = VarkaVectorIR.lanesIn(root);
+      boolean narrow = lanes.contains(VarkaVectorIR.LaneType.BYTE)
+          || lanes.contains(VarkaVectorIR.LaneType.SHORT);
+      if (!narrow) {
+        continue;
+      }
+      VarkaVectorIR.LaneType drive = VarkaVectorIR.emissionLane(root, options);
+      if (drive.isNarrow()) {
+        continue;
+      }
+      if (drive == VarkaVectorIR.LaneType.LONG) {
+        // Analysis admits no narrow node in a long-lane emission, not even one read only for
+        // its validity word, so the entry declines here rather than failing at emit.
+        return Optional.of("a narrow value under a bigint kernel has no lowering");
+      }
+      if (!needsNarrowSpecies(root)) {
+        // A narrow column whose only use is a validity word - `y1 IS NOT NULL` - reads no
+        // value and needs no narrow species, so it emits at this int lane count. Refusing it
+        // would name a load the tree never emits.
+        continue;
+      }
+      int intLanes = Lane.emitLanes(options, Lane.INT);
+      if (intLanes == 0) {
+        return Optional.of("a narrow column needs a baked int lane count to be widened");
+      }
+      for (VarkaVectorIR.LaneType type : lanes) {
+        if (type.isNarrow() && Lane.widenLanes(intLanes, Lane.of(type)) == 0) {
+          return Optional.of("a " + type + " column has no widening load at "
+              + intLanes + " int lanes");
+        }
+      }
+    }
+    return Optional.empty();
+  }
+
+  /**
+   * Whether {@code root}'s lowering names a narrow species somewhere: a narrow column read as a
+   * value (widened once at its load), or a conversion into a narrow lane (the truncation into
+   * the narrow species). A narrow column read only for its validity word - the
+   * {@code y1 IS NOT NULL} of a predicate - needs neither.
+   *
+   * <p>The walk is per node rather than {@link VarkaVectorIR#lanesIn}'s per tree because a
+   * narrow <i>type</i> in the tree is not the same question: validity is a bit a row, whatever
+   * the lane, and only a value crosses the species.
+   */
+  private static boolean needsNarrowSpecies(VarkaVectorIR root) {
+    return needsNarrowSpecies(root, new HashSet<>());
+  }
+
+  private static boolean needsNarrowSpecies(VarkaVectorIR node, Set<VarkaVectorIR> seen) {
+    if (!seen.add(node)) {
+      return false;
+    }
+    if (node instanceof VarkaVectorIR.IsNotNull n) {
+      // Over a condition the word is computed from the condition's operands, which may read
+      // values; over a value it is the input validity words alone.
+      return n.child() instanceof VarkaVectorIR.Cond c
+          && !(c instanceof VarkaVectorIR.BoolColumn) && needsNarrowSpecies(c, seen);
+    }
+    if (node instanceof VarkaVectorIR.ColumnRef c) {
+      return c.laneType().isNarrow();
+    }
+    if (node instanceof VarkaVectorIR.LiteralSlot l) {
+      return l.laneType().isNarrow();
+    }
+    if (node instanceof VarkaVectorIR.BoolColumn) {
+      return false;
+    }
+    if (node instanceof VarkaVectorIR.NarrowLane n) {
+      return n.target().isNarrow() || needsNarrowSpecies(n.child(), seen);
+    }
+    for (VarkaVectorIR child : VarkaVectorIR.childrenOf(node)) {
+      if (needsNarrowSpecies(child, seen)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

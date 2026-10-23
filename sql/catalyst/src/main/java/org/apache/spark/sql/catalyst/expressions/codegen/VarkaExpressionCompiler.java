@@ -615,6 +615,16 @@ public final class VarkaExpressionCompiler {
           .map(ir -> sink.guardDayColumns(ir, marks.bounds()));
       if (compiled.isPresent()) {
         VarkaVectorIR ir = compiled.get();
+        // A narrow value the emission's width cannot widen - a TINYINT column at fewer than
+        // eight int lanes, or one with no baked lane count - declines here with its own reason
+        // rather than as a budget breach, since `fitsBudgets` refuses the kernel too.
+        Optional<String> narrow = VarkaLoopEmitter.narrowRefusal(List.of(ir), options);
+        if (narrow.isPresent()) {
+          marks.restore(inputs, literals, sink);
+          sink.take();
+          sink.note(narrow.get(), e);
+          return residual(position);
+        }
         // One kernel is driven at one lane: its loop, its epilogue and its driving stores are that
         // lane's species. The first fused entry fixes the lane and an entry driven at the other is
         // demoted to residual with a reason that says so - checked here, before the budgets,
@@ -622,11 +632,12 @@ public final class VarkaExpressionCompiler {
         // mismatch reported as a budget breach sends a reader hunting a chain-depth problem that
         // is not there. An entry that converts between lanes is driven at the long lane
         // (VARKA-28), so it joins a long kernel and not an int one.
-        LaneType lane = VarkaVectorIR.emissionLane(ir);
-        if (!outputs.isEmpty() && lane != VarkaVectorIR.emissionLane(outputs.get(0))) {
+        LaneType lane = VarkaVectorIR.emissionLane(ir, options);
+        if (!outputs.isEmpty()
+            && lane != VarkaVectorIR.emissionLane(outputs.get(0), options)) {
           marks.restore(inputs, literals, sink);
           sink.take();
-          sink.note(laneMismatch(lane, VarkaVectorIR.emissionLane(outputs.get(0))), e);
+          sink.note(laneMismatch(lane, VarkaVectorIR.emissionLane(outputs.get(0), options)), e);
           return residual(position);
         }
         // An accepted entry must also fit the emitter's structural budgets together with the
@@ -826,6 +837,19 @@ public final class VarkaExpressionCompiler {
     return new CompiledVarkaPredicate(specs, tables.projection(roots, types), clauses);
   }
 
+  /** {@code conds} all on the long lane, or empty at the first that has no form there. */
+  private static Optional<List<Cond>> liftAllLong(List<Cond> conds) {
+    List<Cond> lifted = new ArrayList<>();
+    for (Cond c : conds) {
+      Optional<Cond> l = VarkaConditionCompiler.onLongLane(c);
+      if (l.isEmpty()) {
+        return Optional.empty();
+      }
+      lifted.add(l.get());
+    }
+    return Optional.of(lifted);
+  }
+
   private static PredicatePass predicateOnce(
       Expression condition,
       Seq<Attribute> childOutput,
@@ -849,42 +873,61 @@ public final class VarkaExpressionCompiler {
         continue;
       }
       Marks marks = Marks.of(inputs, literals, sink);
+      String budgetReason = "exceeds the emitter's fused budget";
       // Guarded as a projection entry is; the rebuild keeps a condition a condition.
       Optional<Cond> compiled = VarkaConditionCompiler.compileCond(bound, inputs, literals, sink)
           .map(c -> (Cond) sink.guardDayColumns(c, marks.bounds()));
       if (compiled.isPresent()) {
         Cond cond = compiled.get();
+        Optional<String> narrow = VarkaLoopEmitter.narrowRefusal(List.of(cond), options);
+        if (narrow.isPresent()) {
+          marks.restore(inputs, literals, sink);
+          sink.take();
+          sink.note(narrow.get(), bound);
+          specs.add(new VarkaConjunctSpec(conjunct, false, sink.take()));
+          continue;
+        }
         // The lane rule of `compilePartial`, for conjuncts: the AND fold below would refuse a mix
-        // by construction. Conjuncts of the two lanes meet on the long one, the int ones
-        // compared widened (VARKA-28); one with no long-lane form is declined with the lane's
-        // reason.
+        // by construction. Conjuncts of two lanes meet on the long one, the int ones compared
+        // widened (VARKA-28), and a narrow conjunct beside an int one joins it on the int lane,
+        // its value operands widened, where the long lift would give the kernel a long lane a
+        // narrow value has no lowering for - `rid < 0 AND (y1 < y2)` (VARKA-329); one with no
+        // form on the meeting lane is declined with the lane's reason.
         // The fused conjuncts as this one would leave them: lifted with it where the lanes
         // differ, and committed only once the budget below takes them.
         List<Cond> before = fused;
         boolean liftedBefore = false;
         if (!fused.isEmpty() && cond.laneType() != fused.get(0).laneType()) {
-          Optional<Cond> lifted = VarkaConditionCompiler.onLongLane(cond);
-          List<Cond> liftedFused = new ArrayList<>();
-          for (Cond f : fused) {
-            VarkaConditionCompiler.onLongLane(f).ifPresent(liftedFused::add);
-          }
-          if (lifted.isPresent() && liftedFused.size() == fused.size()) {
-            cond = lifted.get();
-            before = liftedFused;
+          boolean noLong = fused.stream().noneMatch(c -> c.laneType() == LaneType.LONG)
+              && cond.laneType() != LaneType.LONG;
+          // The int lift has a form for every condition, so it always commits; the long one has
+          // none for a range set and commits only when every condition has one.
+          Optional<Cond> liftedCond = noLong
+              ? Optional.of(VarkaConditionCompiler.onIntLane(cond))
+              : VarkaConditionCompiler.onLongLane(cond);
+          Optional<List<Cond>> liftedFused = noLong
+              ? Optional.of(VarkaConditionCompiler.onIntLaneAll(fused))
+              : liftAllLong(fused);
+          if (liftedCond.isPresent() && liftedFused.isPresent()) {
+            cond = liftedCond.get();
+            before = liftedFused.get();
             liftedBefore = true;
           }
         }
-        if (!before.isEmpty() && cond.laneType() != before.get(0).laneType()) {
+        // Every conjunct of the meeting lane, not just the first: a lift that missed one would
+        // otherwise reach the AND fold, whose constructor refuses the mix by throwing.
+        LaneType meeting = cond.laneType();
+        if (!before.isEmpty() && before.stream().anyMatch(b -> b.laneType() != meeting)) {
           marks.restore(inputs, literals, sink);
           sink.take();
-          sink.note(laneMismatch(cond.laneType(), fused.get(0).laneType()), bound);
+          sink.note(laneMismatch(meeting, fused.get(0).laneType()), bound);
           specs.add(new VarkaConjunctSpec(conjunct, false, sink.take()));
           continue;
         }
         List<Cond> with = new ArrayList<>(before);
         with.add(cond);
-        if (VarkaLoopEmitter.fitsBudgets(
-            List.of(VarkaConditionCompiler.andFold(with)), inputs.size(), options)) {
+        Cond candidate = VarkaConditionCompiler.andFold(with);
+        if (VarkaLoopEmitter.fitsBudgets(List.of(candidate), inputs.size(), options)) {
           sink.take();
           if (liftedBefore) {
             fused.clear();
@@ -894,11 +937,15 @@ public final class VarkaExpressionCompiler {
           specs.add(new VarkaConjunctSpec(conjunct, true, Optional.empty()));
           continue;
         }
+        // fitsBudgets also fails through narrowRefusal, whose reason is the one to record;
+        // the budget message is only for the budgets proper.
+        budgetReason = VarkaLoopEmitter.narrowRefusal(List.of(candidate), options)
+            .orElse(budgetReason);
       }
       marks.restore(inputs, literals, sink);
       if (compiled.isPresent()) {
         sink.take();
-        sink.note("exceeds the emitter's fused budget", bound);
+        sink.note(budgetReason, bound);
       }
       // A declining conjunct always leaves a reason: every empty compileCond notes one.
       specs.add(new VarkaConjunctSpec(conjunct, false, sink.take()));

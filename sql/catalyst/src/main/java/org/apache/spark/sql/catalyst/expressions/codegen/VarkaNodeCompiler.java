@@ -314,7 +314,8 @@ final class VarkaNodeCompiler {
   }
 
   /**
-   * The date leaves: a date column, a date literal and the identity date cast. First in the
+   * The column leaves: a date column, a date literal, the identity date cast, and the narrow ones
+   * (a bare {@code tinyint} or {@code smallint} column and its literal, VARKA-329). First in the
    * chain, ahead of every family.
    */
   private static VarkaFamilyArm leafArm(
@@ -325,6 +326,21 @@ final class VarkaNodeCompiler {
     return switch (e) {
       case BoundReference br when DataTypes.DateType.equals(br.dataType()) ->
           () -> Optional.of(columnRef(br, inputs));
+      // A narrow column is read at its own lane: the input's data segment is one or two bytes a
+      // row, and the emitter widens each loaded value to the int lane (VARKA-329). The leaf is
+      // the only place a narrow lane enters the IR from a Spark type, so a kernel's lane is
+      // decided by which columns it reads.
+      case BoundReference br when DataTypes.ByteType.equals(br.dataType()) ->
+          () -> Optional.of(columnRef(br, inputs, LaneType.BYTE));
+      case BoundReference br when DataTypes.ShortType.equals(br.dataType()) ->
+          () -> Optional.of(columnRef(br, inputs, LaneType.SHORT));
+      // A narrow literal's value fits an int exactly, so it takes a slot in the same
+      // per-distinct-value table, on the narrow lane the comparison with a column needs.
+      case Literal l when l.value() instanceof Byte b && DataTypes.ByteType.equals(l.dataType()) ->
+          () -> Optional.of(slot(b.intValue(), LaneType.BYTE, literals));
+      case Literal l when l.value() instanceof Short s
+          && DataTypes.ShortType.equals(l.dataType()) ->
+          () -> Optional.of(slot(s.intValue(), LaneType.SHORT, literals));
       // A date literal's value is already an epoch-day int, so it takes a slot in the shared
       // per-distinct-value table like a folded day offset does - what makes
       // `d < DATE'...'` and `greatest(d, DATE'...')` reachable at all. A null-valued Literal is
@@ -361,9 +377,9 @@ final class VarkaNodeCompiler {
       // Spark's greatest/least are n-ary; the null-skipping algebra is associative, so a left
       // fold into the binary IR nodes is exact.
       case Greatest g -> () -> VarkaConditionCompiler.foldPick(
-          g.children(), inputs, literals, sink, VarkaNodeCompiler::greatest);
+          g, g.children(), inputs, literals, sink, VarkaNodeCompiler::greatest);
       case Least l -> () -> VarkaConditionCompiler.foldPick(
-          l.children(), inputs, literals, sink, VarkaNodeCompiler::least);
+          l, l.children(), inputs, literals, sink, VarkaNodeCompiler::least);
       // extract(DAYOFWEEK_ISO) / date_part('DOW_ISO'): the analyzer spells them Add(WeekDay(d), 1),
       // and so does a hand-written weekday(d) + 1. One narrow arm, either operand order, and
       // nothing else: integer arithmetic over an output is out of scope for this compiler. Int32
@@ -387,6 +403,14 @@ final class VarkaNodeCompiler {
       case Cast c when DataTypes.LongType.equals(c.dataType()) && isInt(c.child()) ->
           () -> intOperand(c.child(), inputs, literals, sink)
               .map(x -> (VarkaVectorIR) new WidenLane(x));
+      // A narrow value promoted to the int lane, which is what Catalyst's coercion inserts where
+      // a TINYINT or SMALLINT meets an int - `greatest(y1, y2) < i` arrives as
+      // `CAST(greatest(y1, y2) AS INT) < i`, and `y1 + i` as an int add of the cast (VARKA-329).
+      // The widening is a sign extension, exact in every mode, and the emitter's load already
+      // reads the narrow column into the int species, so the conversion costs no instruction.
+      case Cast c when isInt(c) && isNarrow(c.child()) ->
+          () -> compileNode(c.child(), inputs, literals, sink)
+              .map(x -> (VarkaVectorIR) new WidenLane(x, LaneType.INT));
       case UnaryMinus n when isInt(n) ->
           // Spark has no try_negative, so the mode is only ever WRAP or FAIL here. Negation
           // overflows on exactly one value, `Int.MinValue`, so any bound at all rules it out and
@@ -569,6 +593,14 @@ final class VarkaNodeCompiler {
   }
 
   /**
+   * Whether {@code e}'s type is one a narrow lane carries: a {@code TINYINT} or a
+   * {@code SMALLINT}.
+   */
+  private static boolean isNarrow(Expression e) {
+    return laneOf(e.dataType()).filter(LaneType::isNarrow).isPresent();
+  }
+
+  /**
    * What no arm claimed: a column of another type declines by its type, a
    * {@code RuntimeReplaceable} compiles what would run, and anything else declines as
    * unsupported.
@@ -597,9 +629,17 @@ final class VarkaNodeCompiler {
    * int side is what the leaf arms admit - a date, an int and a year-month interval are all one
    * 32-bit lane - and the long side is milestone 5's: {@code bigint}, {@code TIME} (nanoseconds
    * of day) and a day-time interval (microseconds) are one 64-bit lane ({@code VARKA-29.md} 3.1).
-   * The two timestamp types are that lane physically and are deliberately absent.
+   * The two timestamp types are that lane physically and are deliberately absent. The narrow
+   * lanes are milestone 8's ({@code VARKA-329.md} 2.2): a {@code tinyint} is one byte a row and a
+   * {@code smallint} two, each read as its own lane and widened to the int lane for computation.
    */
   static Optional<LaneType> laneOf(DataType dataType) {
+    if (DataTypes.ByteType.equals(dataType)) {
+      return Optional.of(LaneType.BYTE);
+    }
+    if (DataTypes.ShortType.equals(dataType)) {
+      return Optional.of(LaneType.SHORT);
+    }
     if (DataTypes.IntegerType.equals(dataType) || DataTypes.DateType.equals(dataType)
         || dataType instanceof YearMonthIntervalType) {
       return Optional.of(LaneType.INT);
@@ -824,11 +864,21 @@ final class VarkaNodeCompiler {
   /**
    * Interns {@code value} into the per-distinct-value literal table and wraps it as a
    * {@code LiteralSlot} on the int lane. Every folded constant the compiler admits is an int - a
-   * day count, a month count, a date's epoch day - so this is the one place a literal's lane is
-   * chosen, as {@link #columnRef} is for a column's.
+   * day count, a month count, a date's epoch day - so this is where a literal's lane is chosen,
+   * as {@link #columnRef} is for a column's; {@link #slot} is its lane-taking form.
    */
   static LiteralSlot intSlot(int value, VarkaSlotTable literals) {
-    return new LiteralSlot(literals.intern(value), LaneType.INT);
+    return slot(value, LaneType.INT, literals);
+  }
+
+  /**
+   * {@link #intSlot} on {@code lane}: a {@code tinyint} or {@code smallint} literal, whose value
+   * fits an int and so shares the value table with the int literals of the same number. The slot
+   * carries the lane because a comparison's two operands must agree on one, and the narrow
+   * column's leaf is on the narrow lane.
+   */
+  static LiteralSlot slot(int value, LaneType lane, VarkaSlotTable literals) {
+    return new LiteralSlot(literals.intern(value), lane);
   }
 
   /**

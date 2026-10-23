@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.List;
@@ -67,13 +68,33 @@ public sealed interface VarkaVectorIR
             VarkaVectorIR.NarrowLane {
 
   /**
-   * The physical lane a node's value occupies: {@code INT} is a 32-bit lane, {@code LONG} a
-   * 64-bit one. It is a property of the representation and not of the Spark type - {@code DATE}
-   * is epoch days, {@code INT} is an int and a year-month interval is a month count, and all
-   * three are the same 32-bit lane - which is why the lane rides the IR rather than being
-   * inferred from the type above it.
+   * The physical lane a node's value occupies: {@code BYTE} is an 8-bit lane, {@code SHORT} a
+   * 16-bit one, {@code INT} a 32-bit one and {@code LONG} a 64-bit one. It is a property of the
+   * representation and not of the Spark type - {@code DATE} is epoch days, {@code INT} is an int
+   * and a year-month interval is a month count, and all three are the same 32-bit lane - which is
+   * why the lane rides the IR rather than being inferred from the type above it.
+   *
+   * <p>The declaration order is the width order, {@code BYTE < SHORT < INT < LONG}, which the
+   * conversion nodes read through {@link #isWiderThan(LaneType)} and the emitter's lane rules
+   * through {@link #isNarrow()}.
    */
-  enum LaneType { INT, LONG }
+  enum LaneType {
+    BYTE, SHORT, INT, LONG;
+
+    /** Whether this lane is one of the two narrow ones, {@code BYTE} or {@code SHORT}. */
+    public boolean isNarrow() {
+      return this == BYTE || this == SHORT;
+    }
+
+    /**
+     * Whether this lane's values are wider than {@code other}'s, which is the declaration order,
+     * narrowest first - the order the conversion nodes' rules are written in, and the reason the
+     * constants are declared as they are.
+     */
+    public boolean isWiderThan(LaneType other) {
+      return compareTo(other) > 0;
+    }
+  }
 
   /**
    * The lane this node's value occupies, carried by the leaves and derived everywhere else. A
@@ -106,14 +127,14 @@ public sealed interface VarkaVectorIR
       case Or n -> n.left().laneType();
       case Not n -> n.child().laneType();
       case IsNotNull n -> n.child().laneType();
-      case InRanges n -> LaneType.INT;
+      case InRanges n -> n.child().laneType();
       case AddDays n -> LaneType.INT;
       case SubDays n -> LaneType.INT;
       case DateDiff n -> LaneType.INT;
       case GuardedDay n -> LaneType.INT;
       case GuardedRange n -> n.child().laneType();
-      case WidenLane n -> LaneType.LONG;
-      case NarrowLane n -> LaneType.INT;
+      case WidenLane n -> n.target();
+      case NarrowLane n -> n.target();
       case DayOfWeek n -> LaneType.INT;
       case WeekDay n -> LaneType.INT;
       case DayOfWeekIso n -> LaneType.INT;
@@ -162,28 +183,91 @@ public sealed interface VarkaVectorIR
    * A tree that holds both - a {@link NarrowLane} root over a long computation, a
    * {@link WidenLane} under a long one, or a narrowing below another node - is driven at the long
    * lane, one row a long lane per iteration, and its int-lane values occupy the low half of the
-   * int species of the same width (`VARKA-28.md` 9). The emitter, its budget mirror and the
-   * compiled plan all read this rather than {@link #laneType()} when they ask which species a
-   * kernel is, so the three cannot disagree about it.
+   * int species of the same width (`VARKA-28.md` 9).
+   *
+   * <p>A tree whose every value is narrow drives at the narrow lane under
+   * {@link VarkaEmitOptions#narrowLanes()}, and at the int lane under the default, which widens
+   * the values once at their loads: the IR says the tree computes {@code TINYINT} values, and the
+   * option says which species the emitter names for them. A tree that holds both narrow lanes
+   * has no single narrow species and drives at the int lane either way.
+   *
+   * <p>The emitter, its budget mirror and the compiled plan all read this rather than
+   * {@link #laneType()} when they ask which species a kernel is, so the three cannot disagree
+   * about it.
    */
-  static LaneType emissionLane(VarkaVectorIR root) {
-    return holdsLong(root, new HashSet<>()) ? LaneType.LONG : LaneType.INT;
+  static LaneType emissionLane(VarkaVectorIR root, VarkaEmitOptions options) {
+    Set<LaneType> lanes = lanesIn(root);
+    if (lanes.contains(LaneType.LONG)) {
+      return LaneType.LONG;
+    }
+    if (lanes.contains(LaneType.INT) || !options.narrowLanes()) {
+      return LaneType.INT;
+    }
+    // A tree that mixes the two narrow lanes has no single narrow species, and converting
+    // between them is a node the compiler does not build for this row: it runs on the int lane,
+    // as every narrow tree does under WIDENED. `lanes` is never empty.
+    if (lanes.contains(LaneType.SHORT) && lanes.contains(LaneType.BYTE)) {
+      return LaneType.INT;
+    }
+    return lanes.contains(LaneType.SHORT) ? LaneType.SHORT : LaneType.BYTE;
   }
 
-  /** Whether {@code node}'s tree holds a long-lane node, memoised over the DAG on {@code seen}. */
-  private static boolean holdsLong(VarkaVectorIR node, Set<VarkaVectorIR> seen) {
+  /** The lanes {@code root}'s tree holds, which is what {@link #emissionLane} decides on. */
+  static Set<LaneType> lanesIn(VarkaVectorIR root) {
+    Set<LaneType> lanes = EnumSet.noneOf(LaneType.class);
+    lanesIn(root, lanes, new HashSet<>());
+    return lanes;
+  }
+
+  /** Adds every lane {@code node}'s tree holds to {@code lanes}, memoised on {@code seen}. */
+  private static void lanesIn(VarkaVectorIR node, Set<LaneType> lanes, Set<VarkaVectorIR> seen) {
     if (!seen.add(node)) {
-      return false;
+      return;
     }
-    if (node.laneType() == LaneType.LONG) {
-      return true;
+    lanes.add(node.laneType());
+    for (VarkaVectorIR child : childrenOf(node)) {
+      lanesIn(child, lanes, seen);
+    }
+  }
+
+  /**
+   * The narrow lanes {@code root}'s tree reads as values: a narrow column leaf, which a widening
+   * load spans parts of. A narrow column read only for its validity word - the {@code y1 IS NOT
+   * NULL} of a predicate - reads the bitmap and loads no species, so it is not one, and neither
+   * is a narrow literal, which is broadcast rather than loaded. The emitter's part-form load and
+   * the analysis's iteration shape both rest on this answer.
+   */
+  static Set<LaneType> narrowValuesIn(VarkaVectorIR root) {
+    Set<LaneType> lanes = EnumSet.noneOf(LaneType.class);
+    narrowValuesIn(root, lanes, new HashSet<>());
+    return lanes;
+  }
+
+  private static void narrowValuesIn(VarkaVectorIR node, Set<LaneType> lanes,
+      Set<VarkaVectorIR> seen) {
+    if (!seen.add(node)) {
+      return;
+    }
+    if (node instanceof IsNotNull n) {
+      // Over a condition the word is computed from the condition's operands, which may read
+      // values; over a value it is the input validity words alone.
+      if (n.child() instanceof Cond c && !(c instanceof BoolColumn)) {
+        narrowValuesIn(c, lanes, seen);
+      }
+      return;
+    }
+    if (node instanceof ColumnRef c) {
+      if (c.laneType().isNarrow()) {
+        lanes.add(c.laneType());
+      }
+      return;
+    }
+    if (node instanceof LiteralSlot || node instanceof BoolColumn) {
+      return;
     }
     for (VarkaVectorIR child : childrenOf(node)) {
-      if (holdsLong(child, seen)) {
-        return true;
-      }
+      narrowValuesIn(child, lanes, seen);
     }
-    return false;
   }
 
   /**
@@ -200,6 +284,18 @@ public sealed interface VarkaVectorIR
         throw VarkaErrors.illegalArgument(what + " takes int lanes, not " + child.laneType()
             + ", from a " + child.getClass().getSimpleName());
       }
+    }
+  }
+
+  /**
+   * Refuses a child on the long lane, admitting the int lane and the two narrow ones: a node
+   * that reads one value against a constant - the range set is the one - carries the value's own
+   * lane, whichever of the three its type names, and compares it at that lane's width.
+   */
+  private static void requireNarrowOrInt(String what, VarkaVectorIR child) {
+    if (child.laneType() == LaneType.LONG) {
+      throw VarkaErrors.illegalArgument(what + " takes a narrow or int child, not "
+          + child.laneType() + ", from a " + child.getClass().getSimpleName());
     }
   }
 
@@ -400,15 +496,26 @@ public sealed interface VarkaVectorIR
    * long species' width: a kernel holding it is driven at the long lane, so its int values fill
    * the low half of their species and the conversion takes exactly them (`VARKA-28.md` 9).
    *
-   * <p>The child must be on the int lane: a widening of a long lane is the identity and would
-   * only hide a missing narrowing somewhere below it.
+   * <p>The child must be on a strictly narrower lane than {@code target}: a widening to the same
+   * lane or to a narrower one is the identity or a narrowing and would only hide a missing
+   * conversion somewhere below it. The target is carried rather than inferred so that the
+   * narrow lanes' convert-then-compute lowerings - a {@code TINYINT} multiply widened to the int
+   * lane, a {@code CAST(byte AS int)} - need no node of their own; with no target given it is
+   * the long lane, the int-to-long cast this node was introduced for.
    */
-  record WidenLane(VarkaVectorIR child) implements VarkaVectorIR {
+  record WidenLane(VarkaVectorIR child, LaneType target) implements VarkaVectorIR {
     public WidenLane {
-      if (child.laneType() != LaneType.INT) {
-        throw VarkaErrors.illegalArgument("widenLane takes an INT child, not "
-            + child.laneType() + ", from a " + child.getClass().getSimpleName());
+      Objects.requireNonNull(target, "target");
+      if (!target.isWiderThan(child.laneType())) {
+        throw VarkaErrors.illegalArgument("widenLane takes a child on a lane narrower than "
+            + target + ", not " + child.laneType() + ", from a "
+            + child.getClass().getSimpleName());
       }
+    }
+
+    /** {@code child} widened to the long lane, the int-to-long cast. */
+    public WidenLane(VarkaVectorIR child) {
+      this(child, LaneType.LONG);
     }
   }
 
@@ -432,15 +539,25 @@ public sealed interface VarkaVectorIR
    * raises Spark's own error on the row. So does {@code bit_count} of a {@code BIGINT}, over a
    * {@link BitCount}, which is at most 64.
    *
-   * <p>The child must be on the long lane: a narrowing of an int lane is the identity and would
-   * only hide a missing widening somewhere below it.
+   * <p>The child must be on a strictly wider lane than {@code target}: a narrowing to the same
+   * lane or to a wider one is the identity or a widening and would only hide a missing
+   * conversion somewhere below it. With no target given it is the int lane, the long-to-int cast
+   * this node was introduced for; a narrow target is the wrap of a computed int value at a
+   * {@code TINYINT} or {@code SMALLINT} store.
    */
-  record NarrowLane(VarkaVectorIR child) implements VarkaVectorIR {
+  record NarrowLane(VarkaVectorIR child, LaneType target) implements VarkaVectorIR {
     public NarrowLane {
-      if (child.laneType() != LaneType.LONG) {
-        throw VarkaErrors.illegalArgument("narrowLane takes a LONG child, not "
-            + child.laneType() + ", from a " + child.getClass().getSimpleName());
+      Objects.requireNonNull(target, "target");
+      if (!child.laneType().isWiderThan(target)) {
+        throw VarkaErrors.illegalArgument("narrowLane takes a child on a lane wider than "
+            + target + ", not " + child.laneType() + ", from a "
+            + child.getClass().getSimpleName());
       }
+    }
+
+    /** {@code child} narrowed to the int lane, the long-to-int cast. */
+    public NarrowLane(VarkaVectorIR child) {
+      this(child, LaneType.INT);
     }
   }
 
@@ -957,13 +1074,27 @@ public sealed interface VarkaVectorIR
    */
   record InRanges(VarkaVectorIR child, List<Integer> bounds) implements Cond {
     public InRanges {
-      requireInt("inRanges", child);
+      requireNarrowOrInt("inRanges", child);
       bounds = List.copyOf(bounds);
       if (bounds.isEmpty() || bounds.size() % 2 != 0) {
         throw VarkaErrors.illegalArgument(
             "a range set needs pairs of bounds, got " + bounds.size());
       }
+      Lane of = Lane.of(child.laneType());
       for (int i = 0; i < bounds.size(); i += 2) {
+        // The emitter narrows each bound into the child's lane, so a bound the lane cannot hold
+        // would be compared against its truncated value. Refused here, where the tree is, as the
+        // analysis refuses a guarded range's bounds at a narrow or the int lane.
+        if (bounds.get(i) < of.mostNegative() || bounds.get(i + 1) > of.mostPositive()) {
+          String name = switch (child.laneType()) {
+            case BYTE -> "byte";
+            case SHORT -> "short";
+            case INT -> "int";
+            case LONG -> "long";
+          };
+          throw VarkaErrors.illegalArgument("a range set at the " + name + " lane needs " + name
+              + " bounds: [" + bounds.get(i) + ", " + bounds.get(i + 1) + "]");
+        }
         if (bounds.get(i) > bounds.get(i + 1)) {
           throw VarkaErrors.illegalArgument("an empty range in a range set: [" + bounds.get(i)
               + ", " + bounds.get(i + 1) + "]");
@@ -1274,8 +1405,8 @@ public sealed interface VarkaVectorIR
       case GuardedDay n -> "(guardedDay " + canonical(n.days()) + ")";
       case GuardedRange n -> "(guardedRange " + canonical(n.child()) + " " + n.lo() + " "
           + n.hi() + ")";
-      case WidenLane n -> "(widen " + canonical(n.child()) + ")";
-      case NarrowLane n -> "(narrow " + canonical(n.child()) + ")";
+      case WidenLane n -> "(widen:" + n.target().name() + " " + canonical(n.child()) + ")";
+      case NarrowLane n -> "(narrow:" + n.target().name() + " " + canonical(n.child()) + ")";
       case DateDiff n -> "(dateDiff " + canonical(n.end()) + " " + canonical(n.start()) + ")";
       case Compare n ->
           "(cmp:" + n.op().name() + " " + canonical(n.left()) + " " + canonical(n.right()) + ")";
@@ -1363,8 +1494,10 @@ public sealed interface VarkaVectorIR
       case GuardedDay n -> "(guardedDay " + lineOf.applyAsInt(n.days()) + ")";
       case GuardedRange n -> "(guardedRange " + lineOf.applyAsInt(n.child()) + " " + n.lo()
           + " " + n.hi() + ")";
-      case WidenLane n -> "(widen " + lineOf.applyAsInt(n.child()) + ")";
-      case NarrowLane n -> "(narrow " + lineOf.applyAsInt(n.child()) + ")";
+      case WidenLane n -> "(widen:" + n.target().name() + " "
+          + lineOf.applyAsInt(n.child()) + ")";
+      case NarrowLane n -> "(narrow:" + n.target().name() + " "
+          + lineOf.applyAsInt(n.child()) + ")";
       case DateDiff n -> "(dateDiff " + lineOf.applyAsInt(n.end()) + " "
           + lineOf.applyAsInt(n.start()) + ")";
       case Compare n -> "(cmp:" + n.op().name() + " " + lineOf.applyAsInt(n.left()) + " "
@@ -1519,8 +1652,8 @@ public sealed interface VarkaVectorIR
       case SubDays n -> new SubDays(children[0], children[1]);
       case GuardedDay n -> new GuardedDay(children[0]);
       case GuardedRange n -> new GuardedRange(children[0], n.lo(), n.hi());
-      case WidenLane n -> new WidenLane(children[0]);
-      case NarrowLane n -> new NarrowLane(children[0]);
+      case WidenLane n -> new WidenLane(children[0], n.target());
+      case NarrowLane n -> new NarrowLane(children[0], n.target());
       case DateDiff n -> new DateDiff(children[0], children[1]);
       case DayOfWeek n -> new DayOfWeek(children[0]);
       case WeekDay n -> new WeekDay(children[0]);

@@ -48,9 +48,11 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 
+import jdk.incubator.vector.ByteVector;
 import jdk.incubator.vector.DoubleVector;
 import jdk.incubator.vector.IntVector;
 import jdk.incubator.vector.LongVector;
+import jdk.incubator.vector.ShortVector;
 import jdk.incubator.vector.VectorSpecies;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -118,16 +120,18 @@ final class VarkaWarmupReach {
 
   // --- what HotSpot counts ---------------------------------------------------------------------
 
-  /** The three lane types the engine emits vectors of, by their vector class. */
-  private static final List<Class<?>> LANES =
-      List.of(IntVector.class, LongVector.class, DoubleVector.class);
+  /** The five lane types the engine emits vectors of, by their vector class. */
+  private static final List<Class<?>> LANES = List.of(ByteVector.class, ShortVector.class,
+      IntVector.class, LongVector.class, DoubleVector.class);
 
   /**
    * The classes a receiver of one lane type can be in this JVM: the vector, the mask and the
    * species class of the lane's preferred species, the receivers the warm-up feeds.
    */
   private static List<Class<?>> receivers(Class<?> lane) {
-    VectorSpecies<?> s = lane == IntVector.class ? IntVector.SPECIES_PREFERRED
+    VectorSpecies<?> s = lane == ByteVector.class ? ByteVector.SPECIES_PREFERRED
+        : lane == ShortVector.class ? ShortVector.SPECIES_PREFERRED
+        : lane == IntVector.class ? IntVector.SPECIES_PREFERRED
         : lane == LongVector.class ? LongVector.SPECIES_PREFERRED
         : DoubleVector.SPECIES_PREFERRED;
     return List.of(s.zero().getClass(), s.maskAll(true).getClass(), s.getClass());
