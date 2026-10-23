@@ -172,6 +172,19 @@ public final class VarkaFamilySwitchSuite {
         .orElse(false);
   }
 
+  /**
+   * Whether the configuration itself explains the decline: with no baked lane count
+   * ({@code validityByWidth} off) a narrow column has no species to widen into, and every
+   * narrow row declines before any family is consulted. The committed census records declines
+   * per width, which cannot express a configuration, so the option is read here; any other
+   * reason still fails.
+   */
+  private static boolean isConfigurationDecline(Outcome on) {
+    return !OPTIONS.validityByWidth()
+        && on.reason().filter(r -> r.equals(
+            "a narrow column needs a baked int lane count to be widened")).isPresent();
+  }
+
   private Outcome compile(Row row, Set<VarkaFamily> off) {
     return compile(row, off, columns);
   }
@@ -258,7 +271,7 @@ public final class VarkaFamilySwitchSuite {
       if (on.kernel().isEmpty()) {
         // A row the width cannot serve declines before any family is consulted; the census
         // records which rows those are, and why.
-        if (!isRecordedDecline(recordedDeclines, row, on)) {
+        if (!isRecordedDecline(recordedDeclines, row, on) && !isConfigurationDecline(on)) {
           failures.add("`" + row.sql() + "` does not fuse with every family on: " + on.reason());
         }
         continue;
