@@ -291,7 +291,14 @@ final class VarkaVectorWalk {
         emitValue(cb, n.child(), dense, analysis, s, computed);
         line(cb, analysis, node);
         if (!analysis.narrowsAtStore(node)) {
-          emitShapeConversion(cb, analysis.laneOf(n.child()), analysis.laneOf(node), analysis);
+          Lane target = Lane.of(n.target());
+          if (target.isNarrow() && analysis.laneOf(n.child()) == Lane.INT) {
+            // An int value wrapped to TINYINT or SMALLINT away from a store: no one-lane
+            // conversion exists, so truncate through the narrow species and sign-extend back.
+            emitNarrowTruncation(cb, target, analysis);
+          } else {
+            emitShapeConversion(cb, analysis.laneOf(n.child()), analysis.laneOf(node), analysis);
+          }
         }
       }
       case GuardedRange n -> {
@@ -500,6 +507,26 @@ final class VarkaVectorWalk {
     cb.loadConstant(0);
     cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
     cb.checkcast(to.vector);
+  }
+
+  /**
+   * The int vector on the stack truncated to {@code target}'s width and sign-extended back into
+   * the int lanes: {@code I2B}/{@code I2S}, part 0, into a narrow species of the same element
+   * count as the int species - so exactly the group's lanes - and {@code B2I}/{@code S2I},
+   * part 0, back. What a {@link VarkaVectorIR.NarrowLane} with a narrow target means away from
+   * a store, where the value would otherwise flow untruncated (VARKA-329).
+   */
+  private static void emitNarrowTruncation(CodeBuilder cb, Lane target, Analysis analysis) {
+    cb.getstatic(VECTOR_OPERATORS, target == Lane.BYTE ? "I2B" : "I2S", VO_CONVERSION);
+    cb.getstatic(target.vector, target.speciesField(analysis.lanes), VECTOR_SPECIES);
+    cb.loadConstant(0);
+    cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
+    cb.checkcast(target.vector);
+    cb.getstatic(VECTOR_OPERATORS, target == Lane.BYTE ? "B2I" : "S2I", VO_CONVERSION);
+    emitConstantSpecies(cb, Lane.INT, analysis);
+    cb.loadConstant(0);
+    cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
+    cb.checkcast(Lane.INT.vector);
   }
 
   /**

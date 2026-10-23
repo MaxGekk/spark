@@ -377,9 +377,9 @@ final class VarkaNodeCompiler {
       // Spark's greatest/least are n-ary; the null-skipping algebra is associative, so a left
       // fold into the binary IR nodes is exact.
       case Greatest g -> () -> VarkaConditionCompiler.foldPick(
-          g.children(), inputs, literals, sink, VarkaNodeCompiler::greatest);
+          g, g.children(), inputs, literals, sink, VarkaNodeCompiler::greatest);
       case Least l -> () -> VarkaConditionCompiler.foldPick(
-          l.children(), inputs, literals, sink, VarkaNodeCompiler::least);
+          l, l.children(), inputs, literals, sink, VarkaNodeCompiler::least);
       // extract(DAYOFWEEK_ISO) / date_part('DOW_ISO'): the analyzer spells them Add(WeekDay(d), 1),
       // and so does a hand-written weekday(d) + 1. One narrow arm, either operand order, and
       // nothing else: integer arithmetic over an output is out of scope for this compiler. Int32

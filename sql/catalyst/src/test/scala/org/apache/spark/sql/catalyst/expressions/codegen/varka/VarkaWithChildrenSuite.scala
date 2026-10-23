@@ -25,8 +25,10 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 
 /**
  * `VarkaVectorIR.withChildren` is the inverse of `childrenOf` (VARKA-277): rebuilding a node over
- * its own children gives the node back, for every node type either grammar can draw, and a
- * replacement that does not type is refused by the constructor and not accepted silently.
+ * its own children gives the node back, for every node type any grammar can draw - the narrow
+ * conversion draw included, whose target-carrying conversions a one-argument rebuild would
+ * silently change (VARKA-329) - and a replacement that does not type is refused by the
+ * constructor and not accepted silently.
  */
 class VarkaWithChildrenSuite extends SparkFunSuite {
 
@@ -39,8 +41,10 @@ class VarkaWithChildrenSuite extends SparkFunSuite {
       val int = drawShape(shapeRandom(FUZZ_SEED, k))
       val long = drawLongShape(shapeRandom(LONG_FUZZ_SEED, k))
       val mixed = drawMixedShape(shapeRandom(MIXED_FUZZ_SEED, k))
-      for (root <- (int.roots.asScala ++ long.roots.asScala ++ mixed.roots.asScala);
-          node <- nodes(root)) {
+      val narrow = drawNarrowShape(shapeRandom(NARROW_FUZZ_SEED, k))
+      val drawn = int.roots.asScala ++ long.roots.asScala ++ mixed.roots.asScala ++
+        narrow.roots.asScala
+      for (root <- drawn; node <- nodes(root)) {
         val rebuilt = VarkaVectorIR.withChildren(node, VarkaVectorIR.childrenOf(node): _*)
         assert(rebuilt == node, s"${VarkaVectorIR.canonical(node)} rebuilt as " +
           VarkaVectorIR.canonical(rebuilt))
@@ -55,6 +59,26 @@ class VarkaWithChildrenSuite extends SparkFunSuite {
     val undrawn = permitted -- seen - "NullSafeEqual" - "BoolColumn" - "CondConst" -
       "BoolCompare" - "CondIf" - "BoolNullSafeEq"
     assert(undrawn.isEmpty, s"the grammars never drew: ${undrawn.toSeq.sorted.mkString(", ")}")
+  }
+
+  test("a conversion keeps its target when rebuilt, and its rendering names it") {
+    val col = new ColumnRef(0)
+    val longCol = new ColumnRef(1, LaneType.LONG)
+    val byte = new NarrowLane(col, LaneType.BYTE)
+    val short = new NarrowLane(col, LaneType.SHORT)
+    val nodes = Seq[VarkaVectorIR](byte, short, new WidenLane(byte, LaneType.INT),
+      new NarrowLane(longCol, LaneType.INT), new NarrowLane(longCol, LaneType.BYTE))
+    for (node <- nodes) {
+      val rebuilt = VarkaVectorIR.withChildren(node, VarkaVectorIR.childrenOf(node): _*)
+      assert(rebuilt == node, s"${VarkaVectorIR.canonical(node)} rebuilt as " +
+        VarkaVectorIR.canonical(rebuilt))
+    }
+    // Two targets over one child are two conversions, and their renderings say so: the shape
+    // hash, the class name and the executions identity all read the rendering (VARKA-329).
+    assert(VarkaVectorIR.canonical(new WidenLane(byte, LaneType.INT)) !=
+      VarkaVectorIR.canonical(new WidenLane(byte, LaneType.LONG)))
+    assert(VarkaVectorIR.canonical(new NarrowLane(longCol, LaneType.INT)) !=
+      VarkaVectorIR.canonical(new NarrowLane(longCol, LaneType.BYTE)))
   }
 
   test("a null-safe equality is rebuilt over its own children, and refuses a mixed pair") {

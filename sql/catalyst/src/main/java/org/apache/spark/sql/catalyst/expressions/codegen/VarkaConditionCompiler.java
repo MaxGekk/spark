@@ -552,6 +552,7 @@ final class VarkaConditionCompiler {
 
   /** {@code greatest} and {@code least}: every operand compiled, then folded from the left. */
   static Optional<VarkaVectorIR> foldPick(
+      Expression whole,
       scala.collection.immutable.Seq<Expression> children,
       VarkaSlotTable inputs,
       VarkaSlotTable literals,
@@ -570,6 +571,12 @@ final class VarkaConditionCompiler {
       }
     }
     if (!all || compiled.isEmpty()) {
+      return Optional.empty();
+    }
+    // The operand widths have to agree: the pick nodes are lane-wise, so a narrow lane beside an
+    // int one has no lowering. Declined with the lane's reason rather than thrown, as compare
+    // does for its two operands.
+    if (!sameLane(whole, sink, compiled.toArray(VarkaVectorIR[]::new))) {
       return Optional.empty();
     }
     VarkaVectorIR folded = compiled.get(0);
@@ -1148,6 +1155,11 @@ final class VarkaConditionCompiler {
     }
     Optional<VarkaVectorIR> right = operand(n.right(), inputs, literals, sink);
     if (right.isEmpty()) {
+      return Optional.empty();
+    }
+    // The two operands' widths have to agree, as they do for compare: NullSafeEqual is lane-wise,
+    // and a narrow lane beside an int one has no lowering. Declined, not thrown.
+    if (!sameLane(n, sink, left.get(), right.get())) {
       return Optional.empty();
     }
     return Optional.of(new VarkaVectorIR.NullSafeEqual(left.get(), right.get()));

@@ -1040,7 +1040,7 @@ public final class VarkaKernelChecks {
       return switch (columnLanes[c]) {
         case BYTE -> low ? Byte.MIN_VALUE : Byte.MAX_VALUE;
         case SHORT -> low ? Short.MIN_VALUE : Short.MAX_VALUE;
-        default -> VarkaEmitterFixtures.poison(nullOrdinal);
+        case INT, LONG -> VarkaEmitterFixtures.poison(nullOrdinal);
       };
     }
 
@@ -1052,7 +1052,7 @@ public final class VarkaKernelChecks {
       return switch (root.laneType()) {
         case BYTE -> Byte.MIN_VALUE;
         case SHORT -> Short.MIN_VALUE;
-        default -> 0xDEADBEEF;
+        case INT, LONG -> 0xDEADBEEF;
       };
     }
 

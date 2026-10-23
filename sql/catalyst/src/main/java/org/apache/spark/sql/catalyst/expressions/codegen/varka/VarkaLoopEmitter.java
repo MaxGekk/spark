@@ -1882,7 +1882,15 @@ public final class VarkaLoopEmitter {
         continue;
       }
       if (drive == VarkaVectorIR.LaneType.LONG) {
+        // Analysis admits no narrow node in a long-lane emission, not even one read only for
+        // its validity word, so the entry declines here rather than failing at emit.
         return Optional.of("a narrow value under a bigint kernel has no lowering");
+      }
+      if (!needsNarrowSpecies(root)) {
+        // A narrow column whose only use is a validity word - `y1 IS NOT NULL` - reads no
+        // value and needs no narrow species, so it emits at this int lane count. Refusing it
+        // would name a load the tree never emits.
+        continue;
       }
       int intLanes = Lane.emitLanes(options, Lane.INT);
       if (intLanes == 0) {
@@ -1896,6 +1904,50 @@ public final class VarkaLoopEmitter {
       }
     }
     return Optional.empty();
+  }
+
+  /**
+   * Whether {@code root}'s lowering names a narrow species somewhere: a narrow column read as a
+   * value (widened once at its load), or a conversion into a narrow lane (the truncation into
+   * the narrow species). A narrow column read only for its validity word - the
+   * {@code y1 IS NOT NULL} of a predicate - needs neither.
+   *
+   * <p>The walk is per node rather than {@link VarkaVectorIR#lanesIn}'s per tree because a
+   * narrow <i>type</i> in the tree is not the same question: validity is a bit a row, whatever
+   * the lane, and only a value crosses the species.
+   */
+  private static boolean needsNarrowSpecies(VarkaVectorIR root) {
+    return needsNarrowSpecies(root, new HashSet<>());
+  }
+
+  private static boolean needsNarrowSpecies(VarkaVectorIR node, Set<VarkaVectorIR> seen) {
+    if (!seen.add(node)) {
+      return false;
+    }
+    if (node instanceof VarkaVectorIR.IsNotNull n) {
+      // Over a condition the word is computed from the condition's operands, which may read
+      // values; over a value it is the input validity words alone.
+      return n.child() instanceof VarkaVectorIR.Cond c
+          && !(c instanceof VarkaVectorIR.BoolColumn) && needsNarrowSpecies(c, seen);
+    }
+    if (node instanceof VarkaVectorIR.ColumnRef c) {
+      return c.laneType().isNarrow();
+    }
+    if (node instanceof VarkaVectorIR.LiteralSlot l) {
+      return l.laneType().isNarrow();
+    }
+    if (node instanceof VarkaVectorIR.BoolColumn) {
+      return false;
+    }
+    if (node instanceof VarkaVectorIR.NarrowLane n) {
+      return n.target().isNarrow() || needsNarrowSpecies(n.child(), seen);
+    }
+    for (VarkaVectorIR child : VarkaVectorIR.childrenOf(node)) {
+      if (needsNarrowSpecies(child, seen)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

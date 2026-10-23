@@ -891,3 +891,52 @@ emitter's, where the shapes are declined by the compiler before the probe runs; 
 comments and the description recorded in `width_audit.json` now say so, and a regeneration moved
 that one field and no measurement. And `isNarrow()` was described above as an ordinal comparison
 where the code names `BYTE` or `SHORT`.
+
+### 9.4 Review of 23 October 2026
+
+A `/code-review high` of the row's diff found fifteen things. The numbered list below is the
+record their comments cite; each was fixed or answered as stated.
+
+1. `withChildren` rebuilt `WidenLane`/`NarrowLane` through the one-argument constructors and
+   dropped the target. The rebuild passes the target, and the withChildren round trip and the
+   narrow-draw test pin it.
+2. The canonical renderings omitted the target, so two conversions shared a shape hash, class
+   name and executions identity. They render `(widen:TARGET ...)` and `(narrow:TARGET ...)`, and
+   the lane-type suite pins the rendering.
+3. `VarkaReplay` picked the entry point by `lane == INT`, while the runner dispatches by
+   `lane == LONG`; a BYTE or SHORT kernel threw. The replay dispatches as the runner does, and
+   `VarkaReproductionSuite.narrowKernelReplays` replays a BYTE kernel.
+4. `NullSafeEqual` was built without the lane guard `compare` has, so a mixed-lane pair threw
+   instead of declining. It declines with the lane's reason, and the compiler suite pins it.
+5. The `greatest`/`least` fold had no lane check for the same reason. It declines, and the
+   compiler suite pins the reason.
+6. `InRanges` checked pairing, order and disjointness but not the bounds against the child's
+   lane, and the emitter narrowed an out-of-range bound silently. The constructor refuses a
+   bound the lane cannot hold, and `VarkaLaneTypeSuite` pins both refusals and the accepted
+   extremes.
+7. `predicateOnce` recorded the fused-budget message whenever `fitsBudgets` failed, including a
+   narrow refusal. It records the refusal's own reason and keeps the budget message otherwise.
+8. The coverage writer's `columns` map lacked y1, y2, s1 and s2, which 22 rows read. The map
+   names them, and the coverage table is regenerated.
+9. The IR grammar drew only the one-argument conversions. `drawNarrowShape` draws target-carrying
+   `WidenLane` and `NarrowLane` nodes into BYTE, SHORT and INT; the withChildren and round-trip
+   tests consume it, and the emitter fuzzer's committed sequences keep no narrow species because
+   not every host's width names one.
+10. A narrow-target `NarrowLane` away from a root emitted the untruncated value while the
+    reference truncates. The walk truncates through the narrow species (`I2B`/`I2S`) and
+    sign-extends back, and a narrow-suite test pins the emitted answer against the reference.
+11. Two `LaneType` switches ended in `default ->`. They list the lanes explicitly.
+12. The preferred-width audit asserted no decline, which fails on a 128-bit host for the declines
+    the committed census records there. The assertion admits a decline only where the census
+    records it for that width, with its reason; a unit test proves both directions, and a forced
+    128-bit census on any capable host compares live declines with the file's 128-bit column.
+13. The narrow emitter suite returned early when `narrowRefusal` fired, so two configurations
+    skipped every check silently. The suite cancels through `assume` with the refusal named, the
+    matrix carries a `declines` line per configuration, and a refusal for any other reason fails.
+14. `narrowRefusal` refused a narrow column read only for its validity word. The refusal now asks
+    per node whether a narrow species is named, so `y1 IS NOT NULL` emits at four int lanes. A
+    long-lane emission still declines: Analysis admits no narrow node there at all, so a lifted
+    validity-only conjunct beside a bigint one stays with the row engine. The width audit, its
+    128-bit column and the emitted bytes were regenerated.
+15. The template warm-up leaves the narrow species and their conversions cold. Filed as row 476
+    of the milestone plan; the warm-up is unchanged.

@@ -534,8 +534,8 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `y1 <= y2` | `predicate` |  | the other ordering, so that every comparison has a row of its own | not emitted: a BYTE column has no widening load at 4 int lanes |
 | `y1 >= y2` | `predicate` |  |  | not emitted: a BYTE column has no widening load at 4 int lanes |
 | `y1 = 5Y` | `predicate` |  | a narrow column against a narrow literal, stored as the same width | not emitted: a BYTE column has no widening load at 4 int lanes |
-| `y1 IS NOT NULL` | `predicate` |  | the column's own validity word | not emitted: a BYTE column has no widening load at 4 int lanes |
-| `y1 IN (1Y, 2Y, 3Y, -1Y)` | `predicate` |  | a range set over a narrow column | not emitted: a BYTE column has no widening load at 4 int lanes |
+| `y1 IS NOT NULL` | `predicate` |  | the column's own validity word | vector |
+| `y1 IN (1Y, 2Y, 3Y, -1Y)` | `predicate` |  | an IN list over a narrow column, lowered to an equality chain | not emitted: a BYTE column has no widening load at 4 int lanes |
 | `y1 IN (11 to 16 byte literals)` | `predicate` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | not emitted: a BYTE column has no widening load at 4 int lanes |
 
 #### TINYINT columns choosing values

@@ -93,24 +93,32 @@ class VarkaEmitterNarrowSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
   }
 
   /**
-   * Whether the compiler refuses this shape under `options`, because the narrow species of the
-   * int species' width does not exist: `lanesOverride=4` asks for a 32-bit byte species, which
-   * the Vector API does not have, and `validityByWidth=false` bakes no lane count for the
-   * conversion to read. The emitter would name a constant the class lacks
-   * (`ByteVector.SPECIES_32`), so the refusal is the answer, and the suite pins it here instead
+   * Cancels the test when the compiler refuses this shape under `options`, because the narrow
+   * species of the int species' width does not exist: `lanesOverride=4` asks for a 32-bit byte
+   * species, which the Vector API does not have, and `validityByWidth=false` bakes no lane count
+   * for the conversion to read. The emitter would name a constant the class lacks
+   * (`ByteVector.SPECIES_32`), so the refusal is the answer, and the suite cancels here instead
    * of emitting; the compiler asks the same question, and an option matrix configuration that
    * declines a narrow kernel answers it with the row engine (VARKA-329).
+   *
+   * <p>The cancel is not a silent skip: it names the refusal, and `sql/varka/matrix/skips.tsv`
+   * carries a `declines` line for each configuration that reaches it, so the matrix's own report
+   * records the same verdict rather than an unfused test. Only the two missing-species refusals
+   * are expected; a refusal for any other reason fails the test, since a skip would hide a
+   * newly refused shape behind a configuration that was not supposed to reach it.
    */
-  private def refusedForNoSpecies(
-      roots: Seq[VarkaVectorIR], options: VarkaEmitOptions): Boolean =
+  private def refuseForNoSpecies(
+      roots: Seq[VarkaVectorIR], options: VarkaEmitOptions): Unit =
     VarkaLoopEmitter.narrowRefusal(roots.asJava, options).toScala match {
       case Some(reason) =>
         assert(
           reason == "a narrow column needs a baked int lane count to be widened" ||
             reason.matches("a (BYTE|SHORT) column has no widening load at \\d+ int lanes"),
           s"unexpected refusal: $reason")
-        true
-      case None => false
+        assume(false, s"this configuration has no narrow species for the shape ($reason), so " +
+          "the compiler declines it and the row engine answers; the matrix records the " +
+          "decline in sql/varka/matrix/skips.tsv (VARKA-329)")
+      case None =>
     }
 
   private def put(lane: LaneType, seg: MemorySegment, row: Int, v: Int): Unit = lane match {
@@ -134,9 +142,7 @@ class VarkaEmitterNarrowSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       value: (Int, Int) => Int,
       isNull: (Int, Int) => Boolean,
       options: VarkaEmitOptions): Unit = {
-    if (refusedForNoSpecies(roots, options)) {
-      return
-    }
+    refuseForNoSpecies(roots, options)
     val (kernel, _) = load(emitMulti(roots, lanes.size, 0, options))
     val bytes = (length + 7) / 8
     val arena = Arena.ofConfined()
@@ -193,9 +199,7 @@ class VarkaEmitterNarrowSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       pattern: Int => Boolean,
       forceMasked: Boolean,
       options: VarkaEmitOptions): Unit = {
-    if (refusedForNoSpecies(roots, options)) {
-      return
-    }
+    refuseForNoSpecies(roots, options)
     val (className, bytes) = emitMulti(roots, numInputs, lits.length, options)
     val batch = Batch(length, Seq.fill(numInputs)(pattern), data, forceMasked)
     assert(VarkaKernelCheck.runAndCompareNarrow(
@@ -239,6 +243,27 @@ class VarkaEmitterNarrowSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       reason == "a narrow column needs a baked int lane count to be widened" ||
         reason.matches("a (BYTE|SHORT) column has no widening load at \\d+ int lanes")),
       intRefusal)
+  }
+
+  test("a validity-only narrow column needs no species at int lanes, not at the bigint lane") {
+    // An IsNotNull over a value reads that input's validity word and never its data, so at an
+    // int emission it needs no narrow species, whatever the lane count or width. A long-lane
+    // emission holds no narrow node at all - Analysis's lane rule - so a narrow conjunct lifted
+    // beside a bigint one declines and the row engine answers it, as does the value form of the
+    // same widening.
+    val validityOnly: Cond = new IsNotNull(byteCol)
+    val lifted: Cond = new IsNotNull(new WidenLane(byteCol, LaneType.LONG))
+    val value: VarkaVectorIR = new WidenLane(byteCol, LaneType.LONG)
+    assert(VarkaVectorIR.emissionLane(validityOnly, widened) === LaneType.INT)
+    assert(VarkaVectorIR.emissionLane(lifted, widened) === LaneType.LONG)
+    for ((arm, options) <- arms) {
+      assert(VarkaLoopEmitter.narrowRefusal(List[VarkaVectorIR](validityOnly).asJava, options)
+        .toScala.isEmpty, arm)
+      assert(VarkaLoopEmitter.narrowRefusal(List[VarkaVectorIR](lifted).asJava, options)
+        .toScala === Some("a narrow value under a bigint kernel has no lowering"), arm)
+      assert(VarkaLoopEmitter.narrowRefusal(List[VarkaVectorIR](value).asJava, options)
+        .toScala === Some("a narrow value under a bigint kernel has no lowering"), arm)
+    }
   }
 
   test("a byte column round-trips every value at every length and tail, in both arms") {
@@ -366,6 +391,28 @@ class VarkaEmitterNarrowSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
         Array(Array.tabulate(length)(outOfByte)), _ => false, false, options)
       checkValues(s"an int value stored short $arm", Seq(toShort), 1, Array.empty[Int], length,
         Array(Array.tabulate(length)(outOfShort)), _ => false, false, options)
+    }
+  }
+
+  test("an int value narrowed away from a store truncates as the store would") {
+    // The shape a drawn narrow root wraps itself in (`VarkaIrGrammar.converted`, VARKA-329
+    // finding 9): an int value cut to a byte or short and widened back, with the root's store
+    // reading an int lane and so doing no narrowing of its own. The walk's conversion is the
+    // only truncation in that kernel, and the reference's `(byte)`/`(short)` is the oracle.
+    val length = 300
+    def outOfByte(row: Int): Int = ((row * 37) % 1024) - 512
+    def outOfShort(row: Int): Int = ((row * 7919) % 200000) - 100000
+    val toByte = new WidenLane(new NarrowLane(new ColumnRef(0, LaneType.INT), LaneType.BYTE),
+      LaneType.INT)
+    val toShort = new WidenLane(new NarrowLane(new ColumnRef(0, LaneType.INT), LaneType.SHORT),
+      LaneType.INT)
+    for ((arm, options) <- arms) {
+      checkValues(s"an int value narrowed to byte away from a store $arm", Seq(toByte), 1,
+        Array.empty[Int], length, Array(Array.tabulate(length)(outOfByte)), _ => false, false,
+        options)
+      checkValues(s"an int value narrowed to short away from a store $arm", Seq(toShort), 1,
+        Array.empty[Int], length, Array(Array.tabulate(length)(outOfShort)), _ => false, false,
+        options)
     }
   }
 

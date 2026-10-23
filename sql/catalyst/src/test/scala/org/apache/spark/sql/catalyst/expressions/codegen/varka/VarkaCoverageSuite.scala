@@ -476,7 +476,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("y1 >= y2"),
       Row("y1 = 5Y", "a narrow column against a narrow literal, stored as the same width"),
       Row("y1 IS NOT NULL", "the column's own validity word"),
-      Row("y1 IN (1Y, 2Y, 3Y, -1Y)", "a range set over a narrow column"),
+      Row("y1 IN (1Y, 2Y, 3Y, -1Y)",
+        "an IN list over a narrow column, lowered to an equality chain"),
       // Over `spark.sql.optimizer.inSetConversionThreshold` (10 by default) the optimizer
       // rewrites the list to an `InSet`, which fuses up to the compiler's own cap of 16.
       Row("y1 IN (11 to 16 byte literals)",
@@ -1154,7 +1155,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
         "ymm" -> "interval month", "ymy" -> "interval year", "ym" -> "interval year to month",
         "l" -> "bigint", "l2" -> "bigint", "t" -> "time(6)", "t2" -> "time(6)",
         "dt" -> "interval day to second", "dt2" -> "interval day to second",
-        "b" -> "boolean", "b2" -> "boolean"),
+        "b" -> "boolean", "b2" -> "boolean",
+        "y1" -> "tinyint", "y2" -> "tinyint", "s1" -> "smallint", "s2" -> "smallint"),
       "expressions" -> rows.asJava,
       "catalyst_classes_admitted" -> (admittedByCompiler -- infrastructure).toSeq.sorted.asJava)
     new ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(doc) + "\n"

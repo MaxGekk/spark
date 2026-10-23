@@ -300,6 +300,16 @@ enum Lane {
     };
   }
 
+  /** The largest value of this lane; {@link #mostNegative} is the other end. */
+  long mostPositive() {
+    return switch (laneType) {
+      case BYTE -> Byte.MAX_VALUE;
+      case SHORT -> Short.MAX_VALUE;
+      case INT -> Integer.MAX_VALUE;
+      case LONG -> Long.MAX_VALUE;
+    };
+  }
+
   /**
    * Whether the Vector API names a species constant for this many of this lane's elements.
    * It declares {@code SPECIES_64} through {@code SPECIES_512} and nothing else, so the

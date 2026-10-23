@@ -242,14 +242,57 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
       line.contains("ismask=0") &&
       (line.contains("etype2=double") || line.contains("etype2=long"))
 
+  /**
+   * The declines the committed census records for one width, shape to the reason the file keeps
+   * behind its `declined:` prefix, the same shape a live census's `declined` map has. Empty when
+   * the file or the width is absent. The emitter's decline is a
+   * function of the shape and the width alone, not of the CPU, so the 128-bit column a 512-bit
+   * host recorded is the expectation a 128-bit host's own probe is held to: four int lanes have
+   * no 32-bit byte species, so a TINYINT value has no widening load there (VARKA-329).
+   */
+  private def recordedDeclines(bits: Int): Map[String, String] = {
+    val path = getWorkspaceFilePath("sql", "varka", "width_audit.json")
+    if (!Files.exists(path)) {
+      return Map.empty
+    }
+    val widths = new ObjectMapper()
+      .readTree(new String(Files.readAllBytes(path), StandardCharsets.UTF_8)).get("widths")
+    Option(widths).flatMap(w => Option(w.get(bits.toString))).map { at =>
+      at.fieldNames().asScala.flatMap { shape =>
+        at.get(shape).asScala.map(_.asText()).collectFirst {
+          case line if line.startsWith("declined: ") => shape -> line.stripPrefix("declined: ")
+        }
+      }.toMap
+    }.getOrElse(Map.empty)
+  }
+
+  /**
+   * The declines at one width that the committed census does not record there, shape and reason
+   * both. The subtraction is one-directional on purpose: a shape the emitter stopped declining
+   * is a stale file for the next regeneration, not a failure of a host that cannot compare the
+   * whole census, while an unrecorded decline - another shape, another reason, or any decline
+   * at a width the file records none for - is exactly the regression the preferred-width test
+   * exists to catch. "A decline is admitted only where the census records it" proves both
+   * directions; the 128-bit test below applies it to a real four-int-lane census.
+   */
+  private def unexplainedDeclines(
+      declined: Map[String, String], recorded: Map[String, String]): Map[String, String] =
+    declined.filter { case (shape, line) => recorded.get(shape) != Some(line) }
+
   test("at the host's preferred width, every shape is emitted and C2 has a lowering for every " +
       "Vector API call in it, the 64-bit converts below AVX-512 excepted") {
     val census = atPreferred
     // A decline at the preferred width would mean a coverage row the default emission cannot
-    // serve on the host it runs on, which no width choice explains.
-    assert(census.declined.isEmpty,
+    // serve on the host it runs on, which no width choice explains - unless the committed
+    // census records that decline for this width, which is what a 128-bit host sees: the
+    // width has no byte species for the widening load, and the file says so per shape. The
+    // recorded set is empty at a wider host's preferred width, so every decline still fails.
+    val recorded = recordedDeclines(census.preferredBits)
+    val unexplained = unexplainedDeclines(census.declined, recorded)
+    assert(unexplained.isEmpty,
       s"on $cpuModel at ${census.preferredBits} bits (UseAVX ${census.useAVX}), the emitter " +
-        s"declined ${census.declined.size} shape(s):\n" + census.declined.map {
+        s"declined ${census.declined.size} shape(s), and the committed census records " +
+        s"${recorded.size} for this width; unexplained:\n" + unexplained.map {
           case (name, reason) => s"  $name: $reason"
         }.mkString("\n"))
     val refused = census.refusals.map { case (name, ops) =>
@@ -355,5 +398,39 @@ class VarkaWidthAuditSuite extends SparkFunSuite with VarkaTestWatchdog {
         }
       }
     }
+  }
+
+  test("a decline is admitted only where the census records it, with its reason") {
+    // The preferred-width test's allowance, proved in both directions without needing a
+    // 128-bit host: a recorded decline passes, and a new shape, a different reason or an empty
+    // record each fail. The reason is the one the file carries for `y1 < y2` at 128 bits.
+    val reason = "a BYTE column has no widening load at 4 int lanes"
+    val recorded = Map("y1 < y2" -> reason, "y1 = 5Y" -> reason)
+    assert(unexplainedDeclines(recorded, recorded).isEmpty)
+    assert(unexplainedDeclines(recorded + ("y1 <= y2" -> reason), recorded) ===
+      Map("y1 <= y2" -> reason))
+    assert(unexplainedDeclines(
+      Map("y1 < y2" -> "a narrow column needs a baked int lane count to be widened"),
+      recorded).nonEmpty)
+    assert(unexplainedDeclines(recorded, Map.empty) === recorded)
+  }
+
+  test("a forced 128-bit census declines only what the census records for 128 bits") {
+    // What the preferred-width test does on a host whose own width is 128 bits, done here on
+    // any host that can be asked for it: the real four-int-lane probe against the file's
+    // 128-bit column, declines included. A decline is the emitter's verdict, not C2's, so a
+    // host with a wider datapath measures what the recording host measured. The recorded set
+    // is asserted non-empty, so an empty map on both sides cannot pass for agreement.
+    val census = byWidth.toMap.getOrElse(128, cancel(
+      "this host cannot be asked for 128-bit vectors, so its 128-bit declines are not measured"))
+    val recorded = recordedDeclines(128)
+    val unexplained = unexplainedDeclines(census.declined, recorded)
+    assert(unexplained.isEmpty,
+      "at 128 bits the emitter declined shapes the census does not record:\n" +
+        unexplained.map { case (name, reason) => s"  $name: $reason" }.mkString("\n") +
+        "\nsql/varka/width_audit.json records for that width:\n" +
+        recorded.map { case (name, reason) => s"  $name: $reason" }.mkString("\n"))
+    assert(recorded.nonEmpty && census.declined.nonEmpty,
+      "the 128-bit column records no decline, so this test proves nothing about the allowance")
   }
 }

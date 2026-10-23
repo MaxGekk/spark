@@ -1040,7 +1040,21 @@ public sealed interface VarkaVectorIR
         throw VarkaErrors.illegalArgument(
             "a range set needs pairs of bounds, got " + bounds.size());
       }
+      Lane of = Lane.of(child.laneType());
       for (int i = 0; i < bounds.size(); i += 2) {
+        // The emitter narrows each bound into the child's lane, so a bound the lane cannot hold
+        // would be compared against its truncated value. Refused here, where the tree is, as the
+        // analysis refuses a guarded range's bounds at a narrow or the int lane.
+        if (bounds.get(i) < of.mostNegative() || bounds.get(i + 1) > of.mostPositive()) {
+          String name = switch (child.laneType()) {
+            case BYTE -> "byte";
+            case SHORT -> "short";
+            case INT -> "int";
+            case LONG -> "long";
+          };
+          throw VarkaErrors.illegalArgument("a range set at the " + name + " lane needs " + name
+              + " bounds: [" + bounds.get(i) + ", " + bounds.get(i + 1) + "]");
+        }
         if (bounds.get(i) > bounds.get(i + 1)) {
           throw VarkaErrors.illegalArgument("an empty range in a range set: [" + bounds.get(i)
               + ", " + bounds.get(i + 1) + "]");
@@ -1351,8 +1365,8 @@ public sealed interface VarkaVectorIR
       case GuardedDay n -> "(guardedDay " + canonical(n.days()) + ")";
       case GuardedRange n -> "(guardedRange " + canonical(n.child()) + " " + n.lo() + " "
           + n.hi() + ")";
-      case WidenLane n -> "(widen " + canonical(n.child()) + ")";
-      case NarrowLane n -> "(narrow " + canonical(n.child()) + ")";
+      case WidenLane n -> "(widen:" + n.target().name() + " " + canonical(n.child()) + ")";
+      case NarrowLane n -> "(narrow:" + n.target().name() + " " + canonical(n.child()) + ")";
       case DateDiff n -> "(dateDiff " + canonical(n.end()) + " " + canonical(n.start()) + ")";
       case Compare n ->
           "(cmp:" + n.op().name() + " " + canonical(n.left()) + " " + canonical(n.right()) + ")";
@@ -1440,8 +1454,10 @@ public sealed interface VarkaVectorIR
       case GuardedDay n -> "(guardedDay " + lineOf.applyAsInt(n.days()) + ")";
       case GuardedRange n -> "(guardedRange " + lineOf.applyAsInt(n.child()) + " " + n.lo()
           + " " + n.hi() + ")";
-      case WidenLane n -> "(widen " + lineOf.applyAsInt(n.child()) + ")";
-      case NarrowLane n -> "(narrow " + lineOf.applyAsInt(n.child()) + ")";
+      case WidenLane n -> "(widen:" + n.target().name() + " "
+          + lineOf.applyAsInt(n.child()) + ")";
+      case NarrowLane n -> "(narrow:" + n.target().name() + " "
+          + lineOf.applyAsInt(n.child()) + ")";
       case DateDiff n -> "(dateDiff " + lineOf.applyAsInt(n.end()) + " "
           + lineOf.applyAsInt(n.start()) + ")";
       case Compare n -> "(cmp:" + n.op().name() + " " + lineOf.applyAsInt(n.left()) + " "
@@ -1596,8 +1612,8 @@ public sealed interface VarkaVectorIR
       case SubDays n -> new SubDays(children[0], children[1]);
       case GuardedDay n -> new GuardedDay(children[0]);
       case GuardedRange n -> new GuardedRange(children[0], n.lo(), n.hi());
-      case WidenLane n -> new WidenLane(children[0]);
-      case NarrowLane n -> new NarrowLane(children[0]);
+      case WidenLane n -> new WidenLane(children[0], n.target());
+      case NarrowLane n -> new NarrowLane(children[0], n.target());
       case DateDiff n -> new DateDiff(children[0], children[1]);
       case DayOfWeek n -> new DayOfWeek(children[0]);
       case WeekDay n -> new WeekDay(children[0]);

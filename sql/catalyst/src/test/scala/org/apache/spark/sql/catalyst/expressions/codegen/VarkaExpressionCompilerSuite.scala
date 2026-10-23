@@ -23,7 +23,7 @@ import scala.jdk.OptionConverters._
 import org.apache.spark.{SparkArithmeticException, SparkFunSuite}
 import org.apache.spark.sql.catalyst.analysis.BinaryArithmeticWithDatetimeResolver
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry
-import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, AttributeReference, CaseWhen, Cast, Coalesce, Concat, CurrentTime, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, DivideYMInterval, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, ExtractANSIIntervalMonths, ExtractANSIIntervalYears, GreaterThan, Greatest, HoursOfTime, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeTime, MakeYMInterval, MinutesOfTime, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Rand, Remainder, SecondsOfTime, SecondsOfTimeWithFraction, Subtract, SubtractDates, SubtractTimes, TimeAddInterval, TimeDiff, TimeExpression, TimeFromMicros, TimeFromMillis, TimeFromSeconds, TimestampAddInterval, TimeToMicros, TimeToMillis, TimeToSeconds, TimeTrunc, ToTime, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
+import org.apache.spark.sql.catalyst.expressions.{Abs, Add, AddMonths, Alias, And, Attribute, AttributeReference, BoundReference, CaseWhen, Cast, Coalesce, Concat, CurrentTime, DateAdd, DateAddYMInterval, DateDiff, DateFromUnixDate, DateSub, DayOfMonth, DayOfWeek, DayOfYear, Divide, DivideYMInterval, EqualNullSafe, EqualTo, EvalMode, Expression, Extract, ExtractANSIIntervalDays, ExtractANSIIntervalMonths, ExtractANSIIntervalYears, GreaterThan, Greatest, HoursOfTime, If, In, InSet, IsNotNull, IsNull, LastDay, Least, LessThan, LessThanOrEqual, Literal, MakeDate, MakeTime, MakeYMInterval, MinutesOfTime, Month, Multiply, MultiplyYMInterval, NamedExpression, NextDay, Not, NumericEvalContext, Nvl, Nvl2, Or, Quarter, Rand, Remainder, SecondsOfTime, SecondsOfTimeWithFraction, Subtract, SubtractDates, SubtractTimes, TimeAddInterval, TimeDiff, TimeExpression, TimeFromMicros, TimeFromMillis, TimeFromSeconds, TimestampAddInterval, TimeToMicros, TimeToMillis, TimeToSeconds, TimeTrunc, ToTime, TruncDate, UnaryMinus, UnixDate, Upper, WeekDay, WeekOfYear, Year, YearOfWeek}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.{ForwardedOutput, FusedOutput, KernelOutput}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaDerivedKind, VarkaEmitOptions, VarkaEmitterTestSupport, VarkaLoopEmitter, VarkaMatrix, VarkaShapeCache, VarkaVectorIR}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaKernelWarmup, VarkaShapeKey}
@@ -2015,6 +2015,33 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     assert(predicate.fused.outputs.asScala.toSeq === Seq(new VarkaVectorIR.And(
       new Compare(CompareOp.LT, new ColumnRef(0), new ColumnRef(1)),
       new IRIsNotNull(new ColumnRef(0)))))
+  }
+
+  test("a null-safe equality over two lanes declines rather than throws") {
+    // EqualNullSafe is lane-wise and its constructor refuses a mixed pair; without the
+    // compiler's lane guard the mix reaches it and planning throws instead of the entry going
+    // to the row engine with its reason (VARKA-329, finding 4).
+    val laneReason = "one kernel holds one lane, and this mixes the SHORT and INT lanes"
+    assert(declineReason(org.apache.spark.sql.catalyst.expressions.If(
+      EqualNullSafe(sh, i), d2, DateAdd(d, Literal(1)))) === laneReason)
+  }
+
+  test("a pick over a mixed-lane pair declines rather than throws") {
+    // greatest and least are typed, so Spark requires their inputs to have one type - and one
+    // type is one lane - which is why the pair is handed to the fold directly: a short column's
+    // leaf and a date add, which is an int-lane value. The fold asks the guard over the
+    // compiled operands, since a lowering may put two of them on different lanes, and a mix
+    // that reached the pick's constructor would throw (VARKA-329, finding 5).
+    val sink = new DeclineSink(childOutput, false)
+    val folded = VarkaConditionCompiler.foldPick(
+      BoundReference(3, ShortType, true),
+      Seq(BoundReference(3, ShortType, true),
+        DateAdd(BoundReference(0, DateType, true), Literal(1))),
+      new VarkaSlotTable, new VarkaSlotTable, sink,
+      (left: VarkaVectorIR, right: VarkaVectorIR) => new IRGreatest(left, right))
+    assert(folded.isEmpty)
+    assert(sink.take().get.reason ===
+      "one kernel holds one lane, and this mixes the SHORT and INT lanes")
   }
 
   test("a boolean equality of two narrow conditions lifts into an int-lane conjunction") {

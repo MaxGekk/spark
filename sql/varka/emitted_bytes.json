@@ -1956,7 +1956,15 @@
           "<declined>" : "f7976f02d8d92df6"
         },
         "y1 IS NOT NULL" : {
-          "<declined>" : "f7976f02d8d92df6"
+          "<class>" : "2a53295ac2cde372",
+          "<init>()V" : "e2c903051ec05d17",
+          "run([J[J[I[J[J[II)I" : "f09c0a347f43e9ec",
+          "runDense([J[J[I[J[J[II)I" : "f364498e4adc7815",
+          "loopDense0([J[J[I[J[J[II)I" : "709fb9fe012c688f",
+          "epilogueDense0([J[J[I[J[J[II)I" : "f0055845e9ccc420",
+          "runMasked([J[J[I[J[J[II)I" : "de0cd7b0a0788246",
+          "loopMasked0([J[J[I[J[J[II)I" : "bfe43871256ca1db",
+          "epilogueMasked0([J[J[I[J[J[II)I" : "c25415354f5d56b9"
         },
         "y1 IN (1Y, 2Y, 3Y, -1Y)" : {
           "<declined>" : "f7976f02d8d92df6"
@@ -5004,31 +5012,31 @@
   },
   "option_arms" : {
     "useAVX=-1" : {
-      "4" : "0344b0bd57a0b2fe",
+      "4" : "e3c8f1e419bbdb6a",
       "16" : "2b09c56d35566998"
     },
     "useAVX=0" : {
-      "4" : "6999dbb94556afea",
+      "4" : "f869d6b063710c16",
       "16" : "16a6e1baebac1e68"
     },
     "useAVX=1" : {
-      "4" : "6999dbb94556afea",
+      "4" : "f869d6b063710c16",
       "16" : "16a6e1baebac1e68"
     },
     "useAVX=2" : {
-      "4" : "6999dbb94556afea",
+      "4" : "f869d6b063710c16",
       "16" : "16a6e1baebac1e68"
     },
     "useAVX=3" : {
-      "4" : "0344b0bd57a0b2fe",
+      "4" : "e3c8f1e419bbdb6a",
       "16" : "2b09c56d35566998"
     },
     "validityOrFirst=true over denseValidityOnce=false,validityByBitmap=false" : {
-      "4" : "680f8a7f436f4c5e",
+      "4" : "91ab5d1abcec38a2",
       "16" : "1f60de812b33fa19"
     },
     "validityOrFirst=false over denseValidityOnce=false,validityByBitmap=false" : {
-      "4" : "34a729c59ac1703f",
+      "4" : "117bf64436b916e9",
       "16" : "4116a0566f91c8d8"
     },
     "narrowLanes=true" : {
@@ -5036,15 +5044,15 @@
       "16" : "e54d13c07dd418a3"
     },
     "narrowLanes=false" : {
-      "4" : "0344b0bd57a0b2fe",
+      "4" : "e3c8f1e419bbdb6a",
       "16" : "2b09c56d35566998"
     },
     "groupLocalSlots=false" : {
-      "4" : "28832fb75af6021a",
+      "4" : "bbdda40c5701f57f",
       "16" : "930c9c283aa2935e"
     },
     "methodByteBudget=0" : {
-      "4" : "5aa0e79e731968fb",
+      "4" : "c951752792a9e30a",
       "16" : "3172e9092ceb1f88"
     }
   }

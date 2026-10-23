@@ -913,16 +913,6 @@ final class Analysis {
     return lanes == 0 ? 0 : lanes * 2;
   }
 
-  /** The largest value {@code of} holds; {@link Lane#mostNegative} is the other end. */
-  private static long mostPositive(Lane of) {
-    return switch (of.laneType) {
-      case BYTE -> Byte.MAX_VALUE;
-      case SHORT -> Short.MAX_VALUE;
-      case INT -> Integer.MAX_VALUE;
-      case LONG -> Long.MAX_VALUE;
-    };
-  }
-
   /**
    * How many literal slots {@code of}'s table has: {@link #numLiterals} in a single-lane kernel,
    * whose one table is its lane's, and in a kernel that converts between lanes one past the
@@ -1193,7 +1183,7 @@ final class Analysis {
         // push, which would narrow a bound silently.
         if (n.laneType() != VarkaVectorIR.LaneType.LONG) {
           Lane of = Lane.of(n.laneType());
-          if (n.lo() < of.mostNegative() || n.hi() > mostPositive(of)) {
+          if (n.lo() < of.mostNegative() || n.hi() > of.mostPositive()) {
             String name = switch (n.laneType()) {
               case BYTE -> "byte";
               case SHORT -> "short";
