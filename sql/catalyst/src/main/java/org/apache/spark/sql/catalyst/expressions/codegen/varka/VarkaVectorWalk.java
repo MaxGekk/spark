@@ -598,8 +598,10 @@ final class VarkaVectorWalk {
    *
    * <p>{@code MUL} has no such test in int lanes - the honest check needs the 64-bit product,
    * or a division the lane loop must not do (VARKA-11.md priced lanewise DIV at 8x) - so
-   * the compiler declines a checked multiply outright and only {@code WRAP} reaches here.
-   * That is wider than VARKA-63.md 3.3 assumed; see the correction there.
+   * the compiler declines a checked int multiply outright and only {@code WRAP} reaches here
+   * from the int lane. That is wider than VARKA-63.md 3.3 assumed; see the correction there.
+   * A checked narrow multiply does reach here, emitted at the int lane on either arm, where its
+   * exact product fits and is range-checked against the narrow lane (below).
    *
    * <p>The narrow lanes check differently, because they overflow at their own width
    * ({@code VARKA-329.md} 4.2, 4.3). A checked narrow node at the int lane - the widened arm,
@@ -894,10 +896,12 @@ final class VarkaVectorWalk {
     // The two sibling impossibilities are refused earlier, not by a throw at this same site: a
     // NULL IntNeg never reaches emission at all, because analyze() throws on it while walking
     // every root (Spark has no try_negative, so this can only mean a bug upstream); a checked
-    // MUL is declined by the compiler and, failing that, throws inside emitIntArith itself
-    // before this method would ever see it. Three refusals, three places, one invariant - a
-    // future refactor that unifies the overflow dispatch across IntArith and IntNeg has to
-    // keep all three in view, not assume the shape of one implies the others.
+    // int MUL is declined by the compiler and, failing that, throws inside emitIntArith itself
+    // before this method would ever see it. A checked narrow MUL is the exception: it is
+    // driven at the int lane on either arm and arrives here through emitNarrowOverflowMask
+    // (VARKA-330), so op == MUL cannot be asserted at this site. A future refactor that unifies
+    // the overflow dispatch across IntArith and IntNeg has to keep all of these in view, not
+    // assume the shape of one implies the others.
     //
     // "Refused" is a claim about this class, not about a running query: `VarkaKernelEvaluator`
     // catches an IllegalArgumentException out of `emit` as an emission failure and drops the

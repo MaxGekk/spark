@@ -59,10 +59,10 @@ import org.apache.spark.sql.types.ByteType;
 import org.apache.spark.sql.types.ShortType;
 
 /**
- * `TINYINT` and `SMALLINT` arithmetic in Spark's three evaluation modes, on both of 329's arms
- * (VARKA-330, `VARKA-329.md` 4): `LEGACY` wraps at the type's own width, `ANSI` declines the
- * batch Spark raises on, and `TRY` nulls the row it would raise on, for `+`, `-`, `*`, the
- * negation, `abs` and the `try_` forms. The expressions go through
+ * `TINYINT` and `SMALLINT` arithmetic in Spark's three evaluation modes, on both of
+ * VARKA-329's arms (VARKA-330, `VARKA-329.md` 4): `LEGACY` wraps at the type's own width,
+ * `ANSI` declines the batch Spark raises on, and `TRY` nulls the row it would raise on, for `+`,
+ * `-`, `*`, the negation, `abs` and the `try_` forms. The expressions go through
  * {@link VarkaExpressionCompiler} and the emitted class, so each check holds the compiler's
  * admission, the emitter and the evaluator at once, and every row is held to
  * {@link VarkaSparkOracle}, Spark's own `eval`.
@@ -159,9 +159,22 @@ public final class VarkaEmitterNarrowArithSuite {
   private static final Mode ANSI = new Mode("ANSI", EvalMode.ANSI());
   private static final Mode TRY = new Mode("TRY", EvalMode.TRY());
 
-  private static final List<Arm> ARMS = List.of(
-      new Arm("the widened arm", VarkaMatrixRuns.BASE),
-      new Arm("the native arm", VarkaMatrixRuns.BASE.toBuilder().narrowLanes(true).build()));
+  /**
+   * The two arms, each with `narrowLanes` set explicitly rather than left to the matrix's base:
+   * under the matrix's `narrowLanes=true` configuration the base is the native arm, and an
+   * unpinned "widened arm" would run the native lowering twice under the widened arm's name.
+   */
+  private static final Arm WIDENED_ARM =
+      new Arm("the widened arm", VarkaMatrixRuns.BASE.toBuilder().narrowLanes(false).build());
+  private static final Arm NATIVE_ARM =
+      new Arm("the native arm", VarkaMatrixRuns.BASE.toBuilder().narrowLanes(true).build());
+
+  /**
+   * Both arms, the native one first: a configuration that cannot widen (`validityByWidth=false`)
+   * cancels a test at the widened arm's decline, and running the native arm before it keeps that
+   * arm's kernels checked in such a configuration rather than cancelled with it.
+   */
+  private static final List<Arm> ARMS = List.of(NATIVE_ARM, WIDENED_ARM);
 
   /** The lengths the named cases run at: every length to 129, the 64-tail ladder's top included. */
   private static final int[] LADDER = ladder();
@@ -281,11 +294,13 @@ public final class VarkaEmitterNarrowArithSuite {
   }
 
   /**
-   * Compiles `expr` over `attrs` at `options` and emits it, or returns empty where the arm's lane
-   * count cannot widen `lane`; the demotion is then asserted to be that refusal and not a
-   * decline of another kind.
+   * Compiles `expr` over `attrs` at `options` and emits it. Where the arm's lane count cannot widen
+   * `lane` the compiler demotes the entry and the row engine answers it, so the test is cancelled
+   * naming that refusal - as `VarkaEmitterNarrowSuite` does - rather than passing with no kernel
+   * run; a decline of any other kind fails it. A cancelled test shows in the matrix report's
+   * cancelled column, where a silent pass would not.
    */
-  private static Optional<EmittedClass> emitArm(Expression expr, List<Attribute> attrs,
+  private static EmittedClass emitArm(Expression expr, List<Attribute> attrs,
       LaneType lane, VarkaEmitOptions options, String where) {
     NamedExpression entry = VarkaSqlResolve.named(expr, "c");
     var entries = CollectionConverters.asScala(List.of(entry)).toSeq();
@@ -295,7 +310,11 @@ public final class VarkaEmitterNarrowArithSuite {
     if (plan.isEmpty()) {
       assertTrue(cannotWiden(options, lane), where + ": " + expr.sql()
           + " did not compile, and not because the width cannot widen the " + lane + " lane");
-      return Optional.empty();
+      assumeTrue(false, where + ": this configuration cannot widen the " + lane + " lane ("
+          + VarkaLoopEmitter.narrowRefusal(List.of(new ColumnRef(0, lane)),
+              options.toBuilder().narrowLanes(false).build()).orElseThrow()
+          + "), so the compiler declines the entry and the row engine answers it; the matrix "
+          + "records the decline in sql/varka/matrix/skips.tsv (VARKA-329)");
     }
     CompiledVarkaProjection p = plan.get();
     String className =
@@ -307,8 +326,8 @@ public final class VarkaEmitterNarrowArithSuite {
         p.inputOrdinals().stream().map(attrs::get).toList()).toSeq();
     var oracle = new VarkaSparkOracle(exprSeq, inputAttrs);
     int[] lits = p.literals().stream().mapToInt(Integer::intValue).toArray();
-    return Optional.of(new EmittedClass(className, bytes, p.outputs(),
-        p.inputOrdinals().size(), lits, oracle));
+    return new EmittedClass(className, bytes, p.outputs(), p.inputOrdinals().size(), lits,
+        oracle);
   }
 
   private static final java.util.concurrent.atomic.AtomicInteger CLASS_COUNTER =
@@ -385,12 +404,8 @@ public final class VarkaEmitterNarrowArithSuite {
   private static List<Run> namedRuns(Named c, LaneType lane, List<Attribute> attrs, Mode mode,
       VarkaEmitOptions options, String where) {
     Expression expr = c.expression(attrs, mode.evalMode());
-    Optional<EmittedClass> plan = emitArm(expr, attrs, lane, options, where);
+    EmittedClass emitted = emitArm(expr, attrs, lane, options, where);
     var runs = new ArrayList<Run>();
-    if (plan.isEmpty()) {
-      return runs;
-    }
-    EmittedClass emitted = plan.get();
     withKernel(emitted, kernel -> {
       for (int length : LADDER) {
         for (NullPattern np : NULL_PATTERNS) {
@@ -522,12 +537,8 @@ public final class VarkaEmitterNarrowArithSuite {
         for (Mode mode : List.of(LEGACY, ANSI)) {
           for (Unary u : lc.unary()) {
             String where = u.label() + " " + mode.name() + " " + arm.name();
-            Optional<EmittedClass> plan = emitArm(u.expression(lc.attrs(), mode.checked()),
+            EmittedClass emitted = emitArm(u.expression(lc.attrs(), mode.checked()),
                 lc.attrs(), lc.lane(), arm.options(), where);
-            if (plan.isEmpty()) {
-              continue;
-            }
-            EmittedClass emitted = plan.get();
             withKernel(emitted, kernel -> {
               for (int length : LADDER) {
                 for (NullPattern np : NULL_PATTERNS) {
@@ -600,7 +611,7 @@ public final class VarkaEmitterNarrowArithSuite {
     return new Batch(length, new boolean[2][length], data, false);
   }
 
-  private static Optional<EmittedClass> byteRoot(String op, Mode mode, VarkaEmitOptions options,
+  private static EmittedClass byteRoot(String op, Mode mode, VarkaEmitOptions options,
       String where) {
     return emitArm(new Named(op, op, 0, 0).expression(BYTE_COLS, mode.evalMode()), BYTE_COLS,
         LaneType.BYTE, options, where);
@@ -618,11 +629,9 @@ public final class VarkaEmitterNarrowArithSuite {
     for (Arm arm : ARMS) {
       for (String op : OPS) {
         String where = "TINYINT " + op + " LEGACY " + arm.name();
-        Optional<EmittedClass> emitted = byteRoot(op, LEGACY, arm.options(), where);
-        if (emitted.isPresent()) {
-          assertTrue(answered(emitted.get(), byteSquare(), where + ", the square"),
-              where + ": the kernel declined a LEGACY square, which overflows at no pair");
-        }
+        EmittedClass emitted = byteRoot(op, LEGACY, arm.options(), where);
+        assertTrue(answered(emitted, byteSquare(), where + ", the square"),
+            where + ": the kernel declined a LEGACY square, which overflows at no pair");
       }
     }
   }
@@ -633,11 +642,9 @@ public final class VarkaEmitterNarrowArithSuite {
     for (Arm arm : ARMS) {
       for (String op : OPS) {
         String where = "TINYINT " + op + " TRY " + arm.name();
-        Optional<EmittedClass> emitted = byteRoot(op, TRY, arm.options(), where);
-        if (emitted.isPresent()) {
-          assertTrue(answered(emitted.get(), byteSquare(), where + ", the square"),
-              where + ": the kernel declined a TRY square, where Spark answers a null");
-        }
+        EmittedClass emitted = byteRoot(op, TRY, arm.options(), where);
+        assertTrue(answered(emitted, byteSquare(), where + ", the square"),
+            where + ": the kernel declined a TRY square, where Spark answers a null");
       }
     }
   }
@@ -648,16 +655,14 @@ public final class VarkaEmitterNarrowArithSuite {
     for (Arm arm : ARMS) {
       for (String op : OPS) {
         String where = "TINYINT " + op + " ANSI " + arm.name();
-        Optional<EmittedClass> emitted = byteRoot(op, ANSI, arm.options(), where);
-        if (emitted.isPresent()) {
-          // The square holds 127 + 1 and its kin, so Spark raises on a row of it under every
-          // operator and the batch must decline rather than wrap. The in-range square must
-          // answer, which is what shows the range compare does not condemn unconditionally.
-          assertFalse(answered(emitted.get(), byteSquare(), where + ", the square"),
-              where + ": the kernel answered a square with an overflowing row");
-          assertTrue(answered(emitted.get(), inRangeSquare(op), where + ", the in-range square"),
-              where + ": the kernel declined an in-range square");
-        }
+        EmittedClass emitted = byteRoot(op, ANSI, arm.options(), where);
+        // The square holds 127 + 1 and its kin, so Spark raises on a row of it under every
+        // operator and the batch must decline rather than wrap. The in-range square must
+        // answer, which is what shows the range compare does not condemn unconditionally.
+        assertFalse(answered(emitted, byteSquare(), where + ", the square"),
+            where + ": the kernel answered a square with an overflowing row");
+        assertTrue(answered(emitted, inRangeSquare(op), where + ", the in-range square"),
+            where + ": the kernel declined an in-range square");
       }
     }
   }
@@ -682,12 +687,8 @@ public final class VarkaEmitterNarrowArithSuite {
         for (Mode mode : List.of(LEGACY, ANSI)) {
           boolean checked = mode.checked();
           String where = "TINYINT " + op + " " + mode.name() + " " + arm.name();
-          Optional<EmittedClass> plan = emitArm(new Unary("v", op, -128).expression(BYTE_COLS,
+          EmittedClass emitted = emitArm(new Unary("v", op, -128).expression(BYTE_COLS,
               checked), BYTE_COLS, LaneType.BYTE, arm.options(), where);
-          if (plan.isEmpty()) {
-            continue;
-          }
-          EmittedClass emitted = plan.get();
           assertTrue(answered(emitted, aboveBatch, where + ", the values above the minimum"),
               where + ": the kernel declined a batch with no overflowing value");
           boolean allAnswered = answered(emitted, allBatch, where + ", every value");
@@ -738,12 +739,8 @@ public final class VarkaEmitterNarrowArithSuite {
         for (ChainData data : CHAIN_DATA) {
           String where = "the chain " + shape.name() + " (" + data.name() + ") LEGACY "
               + arm.name();
-          Optional<EmittedClass> plan = emitArm(shape.consumer().apply(chain(EvalMode.LEGACY())),
+          EmittedClass emitted = emitArm(shape.consumer().apply(chain(EvalMode.LEGACY())),
               CHAIN_COLS, LaneType.BYTE, arm.options(), where);
-          if (plan.isEmpty()) {
-            continue;
-          }
-          EmittedClass emitted = plan.get();
           withKernel(emitted, kernel -> {
             for (int n : LADDER) {
               for (NullPattern np : NULL_PATTERNS) {
@@ -778,12 +775,8 @@ public final class VarkaEmitterNarrowArithSuite {
     for (Arm arm : ARMS) {
       for (ChainShape shape : CHAIN_SHAPES) {
         String where = "the chain " + shape.name() + " ANSI " + arm.name();
-        Optional<EmittedClass> plan = emitArm(shape.consumer().apply(chain(EvalMode.ANSI())),
+        EmittedClass emitted = emitArm(shape.consumer().apply(chain(EvalMode.ANSI())),
             CHAIN_COLS, LaneType.BYTE, arm.options(), where);
-        if (plan.isEmpty()) {
-          continue;
-        }
-        EmittedClass emitted = plan.get();
         withKernel(emitted, kernel -> {
           int n = 64;
           // 40 + 100 is 140 at the first node, out of range, though the later nodes and the
@@ -810,12 +803,8 @@ public final class VarkaEmitterNarrowArithSuite {
     for (Arm arm : ARMS) {
       for (ChainShape shape : CHAIN_SHAPES) {
         String where = "the chain " + shape.name() + " TRY " + arm.name();
-        Optional<EmittedClass> plan = emitArm(shape.consumer().apply(chain(EvalMode.TRY())),
+        EmittedClass emitted = emitArm(shape.consumer().apply(chain(EvalMode.TRY())),
             CHAIN_COLS, LaneType.BYTE, arm.options(), where);
-        if (plan.isEmpty()) {
-          continue;
-        }
-        EmittedClass emitted = plan.get();
         withKernel(emitted, kernel -> {
           int n = 64;
           // Row `i` overflows at the first node exactly when `i` is odd, so every overflowing
@@ -908,12 +897,8 @@ public final class VarkaEmitterNarrowArithSuite {
   private static void shortSweep(Mode mode, String op, VarkaEmitOptions options,
       List<Integer> operands, int oracleEvery, String arm) {
     String where = "SMALLINT " + op + " " + mode.name() + " " + arm;
-    Optional<EmittedClass> plan = emitArm(new Named(op, op, 0, 0).expression(SHORT_COLS,
+    EmittedClass emitted = emitArm(new Named(op, op, 0, 0).expression(SHORT_COLS,
         mode.evalMode()), SHORT_COLS, LaneType.SHORT, options, where);
-    if (plan.isEmpty()) {
-      return;
-    }
-    EmittedClass emitted = plan.get();
     withKernel(emitted, kernel -> {
       long started = System.nanoTime();
       Sweep result = sweepShort(emitted, kernel, operands, oracleEvery,
@@ -943,12 +928,7 @@ public final class VarkaEmitterNarrowArithSuite {
     String where = "SMALLINT " + op + " " + mode.name() + " " + arm.name();
     assumeTrue(sweeps(where), "-Dvarka.sweep.filter does not name '" + where + "'");
     Expression expr = new Named(op, op, 0, 0).expression(SHORT_COLS, mode.evalMode());
-    Optional<EmittedClass> plan = emitArm(expr, SHORT_COLS, LaneType.SHORT, arm.options(), where);
-    if (plan.isEmpty()) {
-      assumeTrue(false, where + ": the emitter cannot widen the SHORT lane at this width");
-      return;
-    }
-    EmittedClass emitted = plan.get();
+    EmittedClass emitted = emitArm(expr, SHORT_COLS, LaneType.SHORT, arm.options(), where);
     var operands = new ArrayList<Integer>();
     for (int v : ALL_SHORTS) {
       operands.add(v);
@@ -980,15 +960,16 @@ public final class VarkaEmitterNarrowArithSuite {
     Arrays.fill(data[0], 1);
     data[1] = ALL_SHORTS;
     Batch b = new Batch(length, new boolean[2][length], data, false);
+    boolean timed = false;
     for (Arm arm : ARMS) {
       String where = "the oracle's share " + arm.name();
-      assumeTrue(sweeps(where), "-Dvarka.sweep.filter does not name '" + where + "'");
-      Optional<EmittedClass> plan = emitArm(new Named("+", "+", 0, 0).expression(SHORT_COLS,
-          EvalMode.LEGACY()), SHORT_COLS, LaneType.SHORT, arm.options(), where);
-      if (plan.isEmpty()) {
+      // A filter that names one arm times that arm alone; the other is skipped, not the test.
+      if (!sweeps(where)) {
         continue;
       }
-      EmittedClass emitted = plan.get();
+      timed = true;
+      EmittedClass emitted = emitArm(new Named("+", "+", 0, 0).expression(SHORT_COLS,
+          EvalMode.LEGACY()), SHORT_COLS, LaneType.SHORT, arm.options(), where);
       withKernel(emitted, kernel -> {
         long without = 0L;
         long withOracle = 0L;
@@ -1005,6 +986,7 @@ public final class VarkaEmitterNarrowArithSuite {
             + " us without the oracle and " + withOracle / 3000 + " us with it");
       });
     }
+    assumeTrue(timed, "-Dvarka.sweep.filter names neither arm of the oracle's share");
   }
 
   // -------------------------------------------------------------------------------------------
@@ -1014,219 +996,219 @@ public final class VarkaEmitterNarrowArithSuite {
   @Test
   @DisplayName("a 2^24-row SMALLINT + slice in LEGACY agrees with Spark on the widened arm")
   public void a2Pow24RowSmallintAddSliceInLegacyOnTheWidenedArm() {
-    sliceSweep(LEGACY, "+", ARMS.get(0));
+    sliceSweep(LEGACY, "+", WIDENED_ARM);
   }
 
   @Test
   @DisplayName("a 2^24-row SMALLINT + slice in LEGACY agrees with Spark on the native arm")
   public void a2Pow24RowSmallintAddSliceInLegacyOnTheNativeArm() {
-    sliceSweep(LEGACY, "+", ARMS.get(1));
+    sliceSweep(LEGACY, "+", NATIVE_ARM);
   }
 
   @Test
   @DisplayName("a 2^24-row SMALLINT - slice in LEGACY agrees with Spark on the widened arm")
   public void a2Pow24RowSmallintSubtractSliceInLegacyOnTheWidenedArm() {
-    sliceSweep(LEGACY, "-", ARMS.get(0));
+    sliceSweep(LEGACY, "-", WIDENED_ARM);
   }
 
   @Test
   @DisplayName("a 2^24-row SMALLINT - slice in LEGACY agrees with Spark on the native arm")
   public void a2Pow24RowSmallintSubtractSliceInLegacyOnTheNativeArm() {
-    sliceSweep(LEGACY, "-", ARMS.get(1));
+    sliceSweep(LEGACY, "-", NATIVE_ARM);
   }
 
   @Test
   @DisplayName("a 2^24-row SMALLINT * slice in LEGACY agrees with Spark on the widened arm")
   public void a2Pow24RowSmallintMultiplySliceInLegacyOnTheWidenedArm() {
-    sliceSweep(LEGACY, "*", ARMS.get(0));
+    sliceSweep(LEGACY, "*", WIDENED_ARM);
   }
 
   @Test
   @DisplayName("a 2^24-row SMALLINT * slice in LEGACY agrees with Spark on the native arm")
   public void a2Pow24RowSmallintMultiplySliceInLegacyOnTheNativeArm() {
-    sliceSweep(LEGACY, "*", ARMS.get(1));
+    sliceSweep(LEGACY, "*", NATIVE_ARM);
   }
 
   @Test
   @DisplayName("a 2^24-row SMALLINT + slice in ANSI agrees with Spark on the widened arm")
   public void a2Pow24RowSmallintAddSliceInAnsiOnTheWidenedArm() {
-    sliceSweep(ANSI, "+", ARMS.get(0));
+    sliceSweep(ANSI, "+", WIDENED_ARM);
   }
 
   @Test
   @DisplayName("a 2^24-row SMALLINT + slice in ANSI agrees with Spark on the native arm")
   public void a2Pow24RowSmallintAddSliceInAnsiOnTheNativeArm() {
-    sliceSweep(ANSI, "+", ARMS.get(1));
+    sliceSweep(ANSI, "+", NATIVE_ARM);
   }
 
   @Test
   @DisplayName("a 2^24-row SMALLINT - slice in ANSI agrees with Spark on the widened arm")
   public void a2Pow24RowSmallintSubtractSliceInAnsiOnTheWidenedArm() {
-    sliceSweep(ANSI, "-", ARMS.get(0));
+    sliceSweep(ANSI, "-", WIDENED_ARM);
   }
 
   @Test
   @DisplayName("a 2^24-row SMALLINT - slice in ANSI agrees with Spark on the native arm")
   public void a2Pow24RowSmallintSubtractSliceInAnsiOnTheNativeArm() {
-    sliceSweep(ANSI, "-", ARMS.get(1));
+    sliceSweep(ANSI, "-", NATIVE_ARM);
   }
 
   @Test
   @DisplayName("a 2^24-row SMALLINT * slice in ANSI agrees with Spark on the widened arm")
   public void a2Pow24RowSmallintMultiplySliceInAnsiOnTheWidenedArm() {
-    sliceSweep(ANSI, "*", ARMS.get(0));
+    sliceSweep(ANSI, "*", WIDENED_ARM);
   }
 
   @Test
   @DisplayName("a 2^24-row SMALLINT * slice in ANSI agrees with Spark on the native arm")
   public void a2Pow24RowSmallintMultiplySliceInAnsiOnTheNativeArm() {
-    sliceSweep(ANSI, "*", ARMS.get(1));
+    sliceSweep(ANSI, "*", NATIVE_ARM);
   }
 
   @Test
   @DisplayName("a 2^24-row SMALLINT + slice in TRY agrees with Spark on the widened arm")
   public void a2Pow24RowSmallintAddSliceInTryOnTheWidenedArm() {
-    sliceSweep(TRY, "+", ARMS.get(0));
+    sliceSweep(TRY, "+", WIDENED_ARM);
   }
 
   @Test
   @DisplayName("a 2^24-row SMALLINT + slice in TRY agrees with Spark on the native arm")
   public void a2Pow24RowSmallintAddSliceInTryOnTheNativeArm() {
-    sliceSweep(TRY, "+", ARMS.get(1));
+    sliceSweep(TRY, "+", NATIVE_ARM);
   }
 
   @Test
   @DisplayName("a 2^24-row SMALLINT - slice in TRY agrees with Spark on the widened arm")
   public void a2Pow24RowSmallintSubtractSliceInTryOnTheWidenedArm() {
-    sliceSweep(TRY, "-", ARMS.get(0));
+    sliceSweep(TRY, "-", WIDENED_ARM);
   }
 
   @Test
   @DisplayName("a 2^24-row SMALLINT - slice in TRY agrees with Spark on the native arm")
   public void a2Pow24RowSmallintSubtractSliceInTryOnTheNativeArm() {
-    sliceSweep(TRY, "-", ARMS.get(1));
+    sliceSweep(TRY, "-", NATIVE_ARM);
   }
 
   @Test
   @DisplayName("a 2^24-row SMALLINT * slice in TRY agrees with Spark on the widened arm")
   public void a2Pow24RowSmallintMultiplySliceInTryOnTheWidenedArm() {
-    sliceSweep(TRY, "*", ARMS.get(0));
+    sliceSweep(TRY, "*", WIDENED_ARM);
   }
 
   @Test
   @DisplayName("a 2^24-row SMALLINT * slice in TRY agrees with Spark on the native arm")
   public void a2Pow24RowSmallintMultiplySliceInTryOnTheNativeArm() {
-    sliceSweep(TRY, "*", ARMS.get(1));
+    sliceSweep(TRY, "*", NATIVE_ARM);
   }
 
   @Test
-  @DisplayName("every SMALLINT pair for + in LEGACY on the widened arm"
+  @DisplayName("every SMALLINT pair for + in LEGACY on the widened arm "
       + "(opt-in: -Dvarka.sweep=true)")
   public void everySmallintPairForAddInLegacyOnTheWidenedArm() {
-    fullSweep(LEGACY, "+", ARMS.get(0));
+    fullSweep(LEGACY, "+", WIDENED_ARM);
   }
 
   @Test
   @DisplayName("every SMALLINT pair for + in LEGACY on the native arm (opt-in: -Dvarka.sweep=true)")
   public void everySmallintPairForAddInLegacyOnTheNativeArm() {
-    fullSweep(LEGACY, "+", ARMS.get(1));
+    fullSweep(LEGACY, "+", NATIVE_ARM);
   }
 
   @Test
-  @DisplayName("every SMALLINT pair for - in LEGACY on the widened arm"
+  @DisplayName("every SMALLINT pair for - in LEGACY on the widened arm "
       + "(opt-in: -Dvarka.sweep=true)")
   public void everySmallintPairForSubtractInLegacyOnTheWidenedArm() {
-    fullSweep(LEGACY, "-", ARMS.get(0));
+    fullSweep(LEGACY, "-", WIDENED_ARM);
   }
 
   @Test
   @DisplayName("every SMALLINT pair for - in LEGACY on the native arm (opt-in: -Dvarka.sweep=true)")
   public void everySmallintPairForSubtractInLegacyOnTheNativeArm() {
-    fullSweep(LEGACY, "-", ARMS.get(1));
+    fullSweep(LEGACY, "-", NATIVE_ARM);
   }
 
   @Test
-  @DisplayName("every SMALLINT pair for * in LEGACY on the widened arm"
+  @DisplayName("every SMALLINT pair for * in LEGACY on the widened arm "
       + "(opt-in: -Dvarka.sweep=true)")
   public void everySmallintPairForMultiplyInLegacyOnTheWidenedArm() {
-    fullSweep(LEGACY, "*", ARMS.get(0));
+    fullSweep(LEGACY, "*", WIDENED_ARM);
   }
 
   @Test
   @DisplayName("every SMALLINT pair for * in LEGACY on the native arm (opt-in: -Dvarka.sweep=true)")
   public void everySmallintPairForMultiplyInLegacyOnTheNativeArm() {
-    fullSweep(LEGACY, "*", ARMS.get(1));
+    fullSweep(LEGACY, "*", NATIVE_ARM);
   }
 
   @Test
   @DisplayName("every SMALLINT pair for + in ANSI on the widened arm (opt-in: -Dvarka.sweep=true)")
   public void everySmallintPairForAddInAnsiOnTheWidenedArm() {
-    fullSweep(ANSI, "+", ARMS.get(0));
+    fullSweep(ANSI, "+", WIDENED_ARM);
   }
 
   @Test
   @DisplayName("every SMALLINT pair for + in ANSI on the native arm (opt-in: -Dvarka.sweep=true)")
   public void everySmallintPairForAddInAnsiOnTheNativeArm() {
-    fullSweep(ANSI, "+", ARMS.get(1));
+    fullSweep(ANSI, "+", NATIVE_ARM);
   }
 
   @Test
   @DisplayName("every SMALLINT pair for - in ANSI on the widened arm (opt-in: -Dvarka.sweep=true)")
   public void everySmallintPairForSubtractInAnsiOnTheWidenedArm() {
-    fullSweep(ANSI, "-", ARMS.get(0));
+    fullSweep(ANSI, "-", WIDENED_ARM);
   }
 
   @Test
   @DisplayName("every SMALLINT pair for - in ANSI on the native arm (opt-in: -Dvarka.sweep=true)")
   public void everySmallintPairForSubtractInAnsiOnTheNativeArm() {
-    fullSweep(ANSI, "-", ARMS.get(1));
+    fullSweep(ANSI, "-", NATIVE_ARM);
   }
 
   @Test
   @DisplayName("every SMALLINT pair for * in ANSI on the widened arm (opt-in: -Dvarka.sweep=true)")
   public void everySmallintPairForMultiplyInAnsiOnTheWidenedArm() {
-    fullSweep(ANSI, "*", ARMS.get(0));
+    fullSweep(ANSI, "*", WIDENED_ARM);
   }
 
   @Test
   @DisplayName("every SMALLINT pair for * in ANSI on the native arm (opt-in: -Dvarka.sweep=true)")
   public void everySmallintPairForMultiplyInAnsiOnTheNativeArm() {
-    fullSweep(ANSI, "*", ARMS.get(1));
+    fullSweep(ANSI, "*", NATIVE_ARM);
   }
 
   @Test
   @DisplayName("every SMALLINT pair for + in TRY on the widened arm (opt-in: -Dvarka.sweep=true)")
   public void everySmallintPairForAddInTryOnTheWidenedArm() {
-    fullSweep(TRY, "+", ARMS.get(0));
+    fullSweep(TRY, "+", WIDENED_ARM);
   }
 
   @Test
   @DisplayName("every SMALLINT pair for + in TRY on the native arm (opt-in: -Dvarka.sweep=true)")
   public void everySmallintPairForAddInTryOnTheNativeArm() {
-    fullSweep(TRY, "+", ARMS.get(1));
+    fullSweep(TRY, "+", NATIVE_ARM);
   }
 
   @Test
   @DisplayName("every SMALLINT pair for - in TRY on the widened arm (opt-in: -Dvarka.sweep=true)")
   public void everySmallintPairForSubtractInTryOnTheWidenedArm() {
-    fullSweep(TRY, "-", ARMS.get(0));
+    fullSweep(TRY, "-", WIDENED_ARM);
   }
 
   @Test
   @DisplayName("every SMALLINT pair for - in TRY on the native arm (opt-in: -Dvarka.sweep=true)")
   public void everySmallintPairForSubtractInTryOnTheNativeArm() {
-    fullSweep(TRY, "-", ARMS.get(1));
+    fullSweep(TRY, "-", NATIVE_ARM);
   }
 
   @Test
   @DisplayName("every SMALLINT pair for * in TRY on the widened arm (opt-in: -Dvarka.sweep=true)")
   public void everySmallintPairForMultiplyInTryOnTheWidenedArm() {
-    fullSweep(TRY, "*", ARMS.get(0));
+    fullSweep(TRY, "*", WIDENED_ARM);
   }
 
   @Test
   @DisplayName("every SMALLINT pair for * in TRY on the native arm (opt-in: -Dvarka.sweep=true)")
   public void everySmallintPairForMultiplyInTryOnTheNativeArm() {
-    fullSweep(TRY, "*", ARMS.get(1));
+    fullSweep(TRY, "*", NATIVE_ARM);
   }
 }

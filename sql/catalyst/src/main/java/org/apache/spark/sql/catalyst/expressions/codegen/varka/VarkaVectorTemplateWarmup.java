@@ -613,8 +613,15 @@ final class VarkaVectorTemplateWarmup {
         acc += ints(is, ia, ib, segment);
         acc += longs(ls, la, lb, segment);
         acc += doubles(ds, da, db);
-        acc += bytes(bs, segment);
-        acc += shorts(ss, segment);
+        // A mask's toLong holds 64 lanes, which a byte species passes above 512 bits and a short
+        // one above 1024; there the narrow block would throw and end the round, so it is left
+        // out rather than costing the int, long and double templates their warm-up.
+        if (bs.length() <= Long.SIZE) {
+          acc += bytes(bs, segment);
+        }
+        if (ss.length() <= Long.SIZE) {
+          acc += shorts(ss, segment);
+        }
         acc += conversions(is, ls, ds, ia, la, da);
         // After every round, the last included: one round's burst can put the queue over the
         // limit on a small host. See the class doc, "Paced on C2's queue".
