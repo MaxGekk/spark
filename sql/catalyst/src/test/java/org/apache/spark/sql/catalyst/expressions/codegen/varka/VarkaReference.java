@@ -496,8 +496,8 @@ public final class VarkaReference {
       return OptionalLong.of(switch (n.op()) {
         case ADD -> Math.addExact(a, b);
         case SUB -> Math.subtractExact(a, b);
-        // No checked multiply exists at either lane - the int one has no 64-bit product to test
-        // with and the long one would need 128 bits, which is VARKA-104's.
+        // No checked multiply exists at the long lane: it would need 128 bits, which is
+        // VARKA-104's. The int lane's checked multiply is a narrow one's, evaluated by intArith.
         case MUL -> throw new IllegalArgumentException(
             "a checked multiply has no long-lane overflow test: " + n);
       });

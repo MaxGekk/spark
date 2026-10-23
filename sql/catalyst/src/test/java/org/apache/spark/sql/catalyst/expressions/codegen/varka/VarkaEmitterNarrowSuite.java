@@ -24,6 +24,7 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.IntBinaryOperator;
@@ -196,7 +197,10 @@ public final class VarkaEmitterNarrowSuite {
    * Runs the condition {@code roots} over columns of the given lanes and compares every row's
    * selection bit with {@link VarkaReference}. A condition's output is its validity bitmap alone,
    * so the data address is 0, as the kernel contract says; the columns are stored at their lanes'
-   * widths, which is how a narrow column sits beside an int one.
+   * widths, which is how a narrow column sits beside an int one. A batch with no null runs twice,
+   * through the dense body and again with its null counts forced to one over the full bitmap, so
+   * the masked body is held to the reference on the same rows; a batch with nulls takes the masked
+   * body only, as production does.
    */
   private static void checkConds(String ctx, List<? extends VarkaVectorIR> roots,
       List<LaneType> lanes, int length, IntBinaryOperator value, RowNulls isNull,
@@ -235,32 +239,44 @@ public final class VarkaEmitterNarrowSuite {
       long outBytes = VarkaEmitterFixtures.outputValidityBytes(options, length);
       long[] dataAddrs = data.stream().mapToLong(MemorySegment::address).toArray();
       long[] validAddrs = valid.stream().mapToLong(MemorySegment::address).toArray();
-      for (ValidityFill fill : ValidityFill.BOTH) {
-        var outs = new ArrayList<Output>();
-        for (int o = 0; o < kernelRoots.size(); o++) {
-          outs.add(VarkaEmitterFixtures.makeOutput(arena, length, outBytes, fill));
-        }
-        long[] outData = outs.stream().mapToLong(out -> out.data().address()).toArray();
-        long[] outValid = outs.stream().mapToLong(out -> out.validity().address()).toArray();
-        int status = kernel.run(dataAddrs, validAddrs, nullCounts, outData, outValid, new int[0],
-            length, VarkaEmitterTestSupport.scratch(kernel, length));
-        assertEquals(0, status, ctx + ": declined (length " + length + ", " + fill + ")");
-        for (int row = 0; row < length; row++) {
-          var ints = new int[lanes.size()];
-          var nulls = new boolean[lanes.size()];
-          for (int c = 0; c < lanes.size(); c++) {
-            nulls[c] = isNull.test(c, row);
-            ints[c] = nulls[c] ? 0 : narrow(lanes.get(c), value.applyAsInt(c, row));
-          }
+      var bodies = new ArrayList<int[]>();
+      bodies.add(nullCounts);
+      // A forced mask at one row is indistinguishable from an all-null column, which the kernel's
+      // all-null shortcut may answer without writing, so one-row batches keep the dense body only.
+      if (Arrays.stream(nullCounts).allMatch(n -> n == 0) && length > 1) {
+        var forced = new int[lanes.size()];
+        Arrays.fill(forced, 1);
+        bodies.add(forced);
+      }
+      for (int[] counts : bodies) {
+        for (ValidityFill fill : ValidityFill.BOTH) {
+          var outs = new ArrayList<Output>();
           for (int o = 0; o < kernelRoots.size(); o++) {
-            boolean want = VarkaReference.cond((Cond) kernelRoots.get(o), ints, nulls, new int[0])
-                .isTrue();
-            boolean got =
-                (outs.get(o).validity().get(ValueLayout.JAVA_BYTE, (row / 8)) & (1 << (row % 8)))
-                    != 0;
-            assertEquals(want, got, ctx + ": cond " + o + " "
-                + VarkaVectorIR.canonical(kernelRoots.get(o)) + " row " + row + " of " + length
-                + " " + fill);
+            outs.add(VarkaEmitterFixtures.makeOutput(arena, length, outBytes, fill));
+          }
+          long[] outData = outs.stream().mapToLong(out -> out.data().address()).toArray();
+          long[] outValid = outs.stream().mapToLong(out -> out.validity().address()).toArray();
+          String body = counts == nullCounts ? "" : ", masked body forced";
+          int status = kernel.run(dataAddrs, validAddrs, counts, outData, outValid, new int[0],
+              length, VarkaEmitterTestSupport.scratch(kernel, length));
+          assertEquals(0, status, ctx + ": declined (length " + length + ", " + fill + body + ")");
+          for (int row = 0; row < length; row++) {
+            var ints = new int[lanes.size()];
+            var nulls = new boolean[lanes.size()];
+            for (int c = 0; c < lanes.size(); c++) {
+              nulls[c] = isNull.test(c, row);
+              ints[c] = nulls[c] ? 0 : narrow(lanes.get(c), value.applyAsInt(c, row));
+            }
+            for (int o = 0; o < kernelRoots.size(); o++) {
+              boolean want = VarkaReference.cond((Cond) kernelRoots.get(o), ints, nulls, new int[0])
+                  .isTrue();
+              boolean got =
+                  (outs.get(o).validity().get(ValueLayout.JAVA_BYTE, (row / 8)) & (1 << (row % 8)))
+                      != 0;
+              assertEquals(want, got, ctx + ": cond " + o + " "
+                  + VarkaVectorIR.canonical(kernelRoots.get(o)) + " row " + row + " of " + length
+                  + " " + fill + body);
+            }
           }
         }
       }
@@ -537,6 +553,11 @@ public final class VarkaEmitterNarrowSuite {
     IntUnaryOperator shortValue = row -> ((row * 7919) % 65536) - 32768;
     for (int length : List.of(1, 7, 8, 9, 17, 31, 33, 65)) {
       for (NullPattern np : patterns(length)) {
+        // checkConds forces the masked body itself on a null-free batch, so the pattern that
+        // only forces the mask would repeat the no-null run.
+        if (np.forceMasked()) {
+          continue;
+        }
         RowNulls nulls = (c, row) -> np.isNull().test(row);
         checkConds("a byte compare at two int lanes (" + np.name() + ", length " + length + ")",
             List.of(byteCmp), List.of(LaneType.BYTE, LaneType.BYTE), length,
@@ -576,12 +597,15 @@ public final class VarkaEmitterNarrowSuite {
     IntUnaryOperator shortValue = row -> ((row * 7919) % 65536) - 32768;
     for (var forced : List.of(new Arm("four int lanes", FOUR_LANES),
         new Arm("two int lanes", TWO_LANES))) {
-      checkConds("a byte body and a short body in one kernel at " + forced.name(),
-          List.of(byteCmp, shortCmp),
-          List.of(LaneType.BYTE, LaneType.BYTE, LaneType.SHORT, LaneType.SHORT), 300,
-          (c, row) -> c < 2 ? byteValue.applyAsInt(row + c * 13)
-              : shortValue.applyAsInt(row + c * 13),
-          (c, row) -> row % 11 == 5, forced.options());
+      // With nulls (the masked body) and without (the dense body, then the masked one forced).
+      for (RowNulls nulls : List.<RowNulls>of((c, row) -> row % 11 == 5, (c, row) -> false)) {
+        checkConds("a byte body and a short body in one kernel at " + forced.name(),
+            List.of(byteCmp, shortCmp),
+            List.of(LaneType.BYTE, LaneType.BYTE, LaneType.SHORT, LaneType.SHORT), 300,
+            (c, row) -> c < 2 ? byteValue.applyAsInt(row + c * 13)
+                : shortValue.applyAsInt(row + c * 13),
+            nulls, forced.options());
+      }
     }
   }
 
