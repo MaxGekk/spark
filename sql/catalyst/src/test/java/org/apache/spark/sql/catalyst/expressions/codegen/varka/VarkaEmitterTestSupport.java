@@ -457,7 +457,7 @@ public final class VarkaEmitterTestSupport {
     boolean interrupted = false;
     try {
       while (true) {
-        if (c2Load() == 0) {
+        if (VarkaKernelWarmup.c2Load() == 0) {
           return true;
         }
         if (System.nanoTime() >= deadline) {
@@ -474,13 +474,6 @@ public final class VarkaEmitterTestSupport {
         Thread.currentThread().interrupt();
       }
     }
-  }
-
-  /** Methods queued for C2 plus those its threads are compiling, or -1 if unreadable. */
-  private static int c2Load() {
-    String text = VarkaVectorTemplateWarmup.compilerQueueText();
-    return text == null ? -1 : VarkaVectorTemplateWarmup.c2QueueLength(text)
-        + VarkaVectorTemplateWarmup.c2Compiling(text);
   }
 
   /**

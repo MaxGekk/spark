@@ -362,6 +362,20 @@ public final class VarkaKernelWarmup {
     throw first;
   }
 
+  /**
+   * Methods queued for C2 plus those its threads are compiling, or -1 where the compile queue
+   * cannot be read: the load the template warm-up paces itself against, for benchmarks and tests
+   * that wait for the compilation their timing depends on to finish before they measure. A load
+   * that cannot be read counts as not idle, so a JVM that does not serve the diagnostic command
+   * shows as a wait that ran out and not as a quiet compiler.
+   */
+  public static int c2Load() {
+    String text = VarkaVectorTemplateWarmup.compilerQueueText();
+    return text == null ? -1
+        : VarkaVectorTemplateWarmup.c2QueueLength(text)
+            + VarkaVectorTemplateWarmup.c2Compiling(text);
+  }
+
   // What the JIT was doing when the last warm-up was released at its deadline; see jitState.
   private static volatile String lastReleaseJitState = "";
 

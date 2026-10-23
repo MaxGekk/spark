@@ -1,0 +1,265 @@
+VARKA-329 step 2: the emitted narrow kernels (TINYINT compared, chained and stored, WIDENED against NATIVE
+through VarkaLoopEmitter and VarkaFusedKernel).
+Run 23 October 2026 (03:27 to 03:41 CEST) on the laptop: AMD Ryzen AI 9 HX PRO 370 (Zen 5, AVX-512 on 256-bit
+units), OpenJDK 25.0.4.1+1-1-26.04.4-Ubuntu, Linux 7.0.0-38-generic, power profile `performance` and battery "Not
+charging" before and after every run. Caches: L1d 48 KB and L2 1 MB a core, L3 24 MB in two complexes (16 MB for
+cpus 0-3 and 12-15, which the pin uses, and 8 MB for the other eight cores, which it does not).
+Code: branch `varka-329-emitbench` at d299abf5dbf (row 329's lane branch merged) plus this work's commits (the
+benchmark class and its review fix; no emitter or IR code is touched). Class:
+sql/catalyst/src/test/java/org/apache/spark/sql/VarkaNarrowEmitBenchmark.java.
+
+== command and pins ==
+One JVM per run, launched directly with the Test javaOptions of `show catalyst/Test/javaOptions`, the Test
+fullClasspath of `export catalyst/Test/fullClasspath`, and `--add-modules=jdk.incubator.vector`:
+  taskset -c 0,12,13,14,15,1,2,3 \
+  flock /home/max/proj/.varka-locks/heavy.lock flock /home/max/proj/.varka-locks/heavy2.lock \
+    java -Xmx4g <Test javaOptions> --add-modules=jdk.incubator.vector -XX:MaxVectorSize=<64|32|16> \
+      -XX:CompileCommand=quiet \
+      "-XX:CompileCommand=dontinline,org.apache.spark.sql.varka.bench.NarrowEmit*::loop*" \
+      -Dvarka.narrow.emit.arms=<widened,native | widened | native> [-Dvarka.narrow.emit.bigRungs=true] \
+      [-Dvarka.narrow.emit.pastL3=true] -cp <Test classpath> \
+      org.apache.spark.sql.VarkaNarrowEmitBenchmark
+(-XX:MaxVectorSize 64, 32, 16 give the 512-, 256- and 128-bit species; the widths are the species', not the
+datapath's. On JDK 25 the CompileCommand class pattern is dotted, not slashed: a '/' beside '::' is a parse error.
+The command keeps each emitted loop method out of its driver so that Compiler.codelist has a level of its own to
+report.) Before each run: no other java and a 1-minute load under 3 (waited for up to 10 minutes; every run started
+inside that), both agent locks held for the whole JVM. Start and end times, loads and power state of each run are in
+"runs" below.
+
+== shapes and arms ==
+The IR is built by hand and emitted through VarkaLoopEmitter.emit with the option set of the arm; the kernel is
+loaded with VarkaGeneratedClassLoader and called with the same arrays the evaluator passes, a byte column one byte
+a row and an int column four. All four shapes are TINYINT:
+  a  y1 < y2, a selection: two byte columns, one compare, the output the packed selection bitmap.
+  b  (y1 + y2) < y1, a selection: three nodes (two leaves, a WRAP add, a compare). The columns hold bytes in
+     [-64, 63], so no byte sum overflows and the arms and the reference can agree before row 330's deferred wrap
+     (the overflow probe below shows what happens where they cannot).
+  c  b < i, mixed and int-driven: a byte column widened to INT against an INT column. The tree holds an int value,
+     so both arms emit the int lane; the run checks that the two arms' class bytes are identical (they are).
+  d  the packed boolean output of a byte compare: the same kernel as (a). A boolean output in the IR is a condition
+     root, whose only write is the selection bitmap, so the fourth shape and the first are one emitted kernel
+     (VARKA-329.md 9.2 said as much); there is no separate kernel to emit or time.
+  e  CASE WHEN y1 < y2 THEN y1 ELSE y2 END, a TINYINT store: the store shape the spike lacked, a narrow value
+     written one byte a row.
+WIDENED (the default, narrowLanes=false) computes in the int species: a byte column is loaded as the byte species
+of the int species' width - 16 lanes (128 bits) at 512, 8 lanes (64 bits) at 256, and none at 128, where the 4-lane
+byte species would be 32 bits and does not exist - B2I to the int species, int compare and arithmetic, and a store
+narrowed once at the write. NATIVE (narrowLanes=true) computes in the byte species where every value is narrow:
+64 lanes at 512 (one whole selection word a group), 32 at 256 (half a word), 16 at 128. The byte lane count is 0 at
+512 and 256 because no width-specialised validity pair exists for 64 or 32 lanes, so those arms run the general
+validity path; at 128 bits the 16-lane pair is specialised.
+
+== harness and checks ==
+Row 407's rule, driven by VarkaEmitterTestSupport.awaitC2Idle/loopLevels/allLoopsC2: each arm at its own turn, just
+before it is timed, for at least 8 drives and then until two consecutive drives are within 30 percent, with C2 idle
+after each drive and every dense loop method of the kernel at level 4. The gate reads a class's compile levels from
+the JVM's code list by class name alone (VarkaTierWitness.parse), so each arm's kernel class is named for its arm
+(NarrowEmit<shape>W and NarrowEmit<shape>N): two classes sharing one name would merge their loops' levels, and one
+arm's level 4 could stand for the other's loop still at C1. A first campaign of ten runs (02:58 to 03:09) named
+both arms' classes alike and was superseded for that reason; the fourteen runs below are the rerun. Their medians
+agree with the first campaign's to within the cell spreads (the three in-cache 512-bit cells within 1 percent but
+the store's, which moved 3.0 and -8.7 percent inside its own spread; the two big rungs within 4 percent).
+All 306 case settles over the 14 runs read level 4, 304 at eight drives and two at nine drives, and none printed
+"did not settle".
+Every arm's whole batch is compared with VarkaReference before it is timed (the interpreter) and again after the
+code is compiled; 612 comparisons, all agreeing. A selection root is compared a row at a time against the
+reference's truth, a store root against the reference's value and validity, with the empty output validity read as
+no nulls. The int-driven shape's byte-identity check emits the shape once more under each arm under one neutral
+class name (class bytes carry the name in the constant pool) and compares the two with Arrays.equals.
+Timed: Spark's Benchmark, at least 3 iterations after a 1 s warm-up, 1 s minimum; an iteration is 2^27 rows
+(repeats of the same column pair), which is 134.2 M rows at every rung but the 1000000-row one, where the integer
+division gives 134 repeats and 134.0 M rows; the Rate column is built from n times the repeats and is the figure
+used. Rows are multiples of 64, so no loop has a tail. The timing path allocates nothing (the call arrays are made
+once a case).
+
+== runs (14; `f<bits>-<arms>-<round>`; wid = WIDENED only, nat = NATIVE only, all = both in one JVM) ==
+f512-all-1       arms=widened,native  start 2026-10-23T03:27:06 load1 0.80  end 03:28:06 load1 0.89  exit 0  performance / Not charging 79%
+f512-all-2       arms=widened,native  start 2026-10-23T03:28:06 load1 0.89  end 03:29:06 load1 0.96  exit 0  performance / Not charging 79%
+f512-all-big1    arms=widened,native  start 2026-10-23T03:29:06 load1 0.96  end 03:30:20 load1 1.01  exit 0  performance / Not charging 79%  (adds the 8388608-row rung)
+f256-all-1       arms=widened,native  start 2026-10-23T03:30:20 load1 1.01  end 03:31:20 load1 1.06  exit 0  performance / Not charging 79%
+f256-all-2       arms=widened,native  start 2026-10-23T03:31:20 load1 1.06  end 03:32:20 load1 0.95  exit 0  performance / Not charging 79%
+f128-all-1       arms=widened,native  start 2026-10-23T03:32:22 load1 0.88  end 03:32:45 load1 1.04  exit 0  performance / Not charging 79%
+f128-all-2       arms=widened,native  start 2026-10-23T03:32:45 load1 1.04  end 03:33:14 load1 0.91  exit 0  performance / Not charging 79%
+f512-wid-1       arms=widened         start 2026-10-23T03:33:14 load1 0.91  end 03:33:49 load1 0.85  exit 0  performance / Not charging 79%
+f512-nat-1       arms=native          start 2026-10-23T03:33:50 load1 0.85  end 03:34:25 load1 0.82  exit 0  performance / Not charging 79%
+f512-all-past1   arms=widened,native  start 2026-10-23T03:34:25 load1 0.82  end 03:36:13 load1 1.00  exit 0  performance / Not charging 79%  (adds the 8388608- and 33554432-row rungs)
+f256-all-3       arms=widened,native  start 2026-10-23T03:36:37 load1 0.72  end 03:37:37 load1 0.87  exit 0  performance / Not charging 79%
+f256-all-4       arms=widened,native  start 2026-10-23T03:37:37 load1 0.87  end 03:38:37 load1 0.89  exit 0  performance / Not charging 79%
+f512-all-3       arms=widened,native  start 2026-10-23T03:38:37 load1 0.89  end 03:39:32 load1 0.92  exit 0  performance / Not charging 79%
+f512-all-4       arms=widened,native  start 2026-10-23T03:39:32 load1 0.92  end 03:40:32 load1 1.13  exit 0  performance / Not charging 79%
+
+== results: G rows/s, medians of the runs of each width; N/W is NATIVE over WIDENED by medians ==
+512 bits (8 JVMs: six all-arms runs and one arm-only run per arm; n=7 an arm cell at the three in-cache rungs,
+n=2 at 8388608 and n=1 at 33554432; `-` is an arm that declined):
+shape                              rows  WIDENED   NATIVE   N/W
+a  y1 < y2                      16384     25.5    104.1    4.08
+a  y1 < y2                     262144     25.5     99.0    3.88
+a  y1 < y2                    1000000     25.2     58.4    2.32
+a  y1 < y2                    8388608     22.1     36.4    1.65
+a  y1 < y2                   33554432     20.0     23.0    1.15
+b  (y1 + y2) < y1               16384     25.1    101.6    4.04
+b  (y1 + y2) < y1              262144     25.4     97.4    3.84
+b  (y1 + y2) < y1             1000000     25.0     58.4    2.34
+b  (y1 + y2) < y1             8388608     22.2     37.3    1.68
+b  (y1 + y2) < y1            33554432     17.0     21.1    1.24
+c  b < i, int-driven            16384     30.0     30.0    1.00
+c  b < i, int-driven           262144     25.1     25.2    1.00
+c  b < i, int-driven          1000000     23.1     22.9    0.99
+c  b < i, int-driven          8388608     10.7     10.7    1.00
+c  b < i, int-driven         33554432      9.3      9.3    1.00
+e  CASE ... TINYINT store       16384     19.5     89.1    4.57
+e  CASE ... TINYINT store      262144     19.5     65.8    3.38
+e  CASE ... TINYINT store     1000000     19.0     42.6    2.24
+e  CASE ... TINYINT store      8388608     15.8     22.9    1.45
+e  CASE ... TINYINT store     33554432     14.1     14.7    1.04
+
+256 bits (4 all-arms runs, n=4 a cell):
+shape                              rows  WIDENED   NATIVE   N/W
+a  y1 < y2                      16384     16.0     49.0    3.06
+a  y1 < y2                     262144     16.0     48.7    3.05
+a  y1 < y2                    1000000     15.4     44.8    2.91
+b  (y1 + y2) < y1               16384     17.3     44.1    2.55
+b  (y1 + y2) < y1              262144     17.3     45.8    2.64
+b  (y1 + y2) < y1             1000000     16.6     42.0    2.53
+c  b < i, int-driven            16384     17.6     17.5    1.00
+c  b < i, int-driven           262144     17.0     17.1    1.00
+c  b < i, int-driven          1000000     16.9     16.9    1.00
+e  CASE ... TINYINT store       16384     19.1     83.1    4.35
+e  CASE ... TINYINT store      262144     19.3     67.9    3.52
+e  CASE ... TINYINT store     1000000     18.9     41.9    2.22
+
+128 bits (2 runs, NATIVE only; WIDENED declined every shape and NATIVE declined shape c):
+shape                              rows  WIDENED   NATIVE   N/W
+a  y1 < y2                      16384        -     36.1      -
+a  y1 < y2                     262144        -     36.2      -
+a  y1 < y2                    1000000        -     34.0      -
+b  (y1 + y2) < y1               16384        -     35.6      -
+b  (y1 + y2) < y1              262144        -     36.1      -
+b  (y1 + y2) < y1             1000000        -     33.9      -
+e  CASE ... TINYINT store       16384        -     57.7      -
+e  CASE ... TINYINT store      262144        -     55.9      -
+e  CASE ... TINYINT store     1000000        -     41.2      -
+
+Separate-arm JVMs at 512 bits agree with the all-arms ones on shape a: NATIVE 104.1 / 99.5 / 59.0 against the
+all-arms medians 104.3 / 98.6 / 58.4 (0.2, 0.8 and 1.0 percent; G rows/s at 16384 / 262144 / 1000000), WIDENED
+within 0.5 percent. That is inside the store cell's run-to-run spread below, so no two-species cost is claimed.
+
+== a second host: the EPYC 7763 at 256 bits (a GitHub-hosted runner, 23 October 2026) ==
+The same benchmark, shapes and arms on a GitHub-hosted runner: run 39915371624 through
+.github/workflows/benchmark.yml, head 9679df08971 (refs/pull/988/head), OpenJDK 25.0.4.1 Zulu
+25.36+205-CA on Linux 6.17.0-1022-azure, -XX:MaxVectorSize=32 (the 256-bit species) with bigRungs and
+pastL3, one JVM, one run. The datapath probe read 44.9 / 90.1 / 90.1 lane-ops/ns at 128 / 256 / 512
+bits (256:128 = 2.01, 512:256 = 1.00), so the host's execution width is 256-bit; its cache sizes,
+sleep states and any steal are the runner's, and nothing was pinned. One run gives no median, so the
+figures are that run's Rate column, and no arm declined a shape.
+
+G rows/s; N/W is NATIVE over WIDENED:
+shape                              rows  WIDENED   NATIVE   N/W
+a  y1 < y2                        16384     6.2     21.1    3.40
+a  y1 < y2                       262144     6.2     21.0    3.39
+a  y1 < y2                      1000000     6.2     21.3    3.43
+a  y1 < y2                      8388608     6.2     21.3    3.43
+a  y1 < y2                     33554432     6.0     15.3    2.53
+b  (y1 + y2) < y1                 16384     7.0     20.3    2.92
+b  (y1 + y2) < y1                262144     6.9     21.1    3.05
+b  (y1 + y2) < y1               1000000     7.0     21.3    3.06
+b  (y1 + y2) < y1               8388608     7.0     21.5    3.09
+b  (y1 + y2) < y1              33554432     6.7     16.0    2.38
+c  b < i, int-driven              16384     7.4      7.5    1.00
+c  b < i, int-driven             262144     7.4      7.5    1.00
+c  b < i, int-driven            1000000     7.5      7.5    0.99
+c  b < i, int-driven            8388608     5.3      5.3    1.00
+c  b < i, int-driven           33554432     5.0      4.9    0.98
+e  CASE ... TINYINT store         16384     5.7     30.5    5.39
+e  CASE ... TINYINT store        262144     5.6     20.8    3.70
+e  CASE ... TINYINT store       1000000     5.6     18.8    3.36
+e  CASE ... TINYINT store       8388608     5.6     17.5    3.12
+e  CASE ... TINYINT store      33554432     5.3     12.2    2.30
+
+Prediction 1 of 3.3 holds on this host for the compare: 3.40, 3.39, 3.43 and 3.43 at the four
+in-cache rungs, inside the 1.5 to 4.0 band; the store's 5.39 at 16384 rows is outside it but is not
+the compare the prediction bounds. Prediction 2 is not scored at 33554432 rows: the rung's 2.53
+would need the runner's cache sizes to say whether it is past the cache, and the probe does not
+measure them. The direction of 3.5 holds on a second host: NATIVE is the faster arm on every
+all-narrow shape, and the mixed shape ties (0.98 to 1.00). The arithmetic overflow probe reproduced
+exactly as on the laptop (the section below).
+
+== refusals at 128 bits (printed by the run, not inferred) ==
+  a, WIDENED: a BYTE column has no widening load at 4 int lanes
+  b, WIDENED: a BYTE column has no widening load at 4 int lanes
+  c, WIDENED: a BYTE column has no widening load at 4 int lanes
+  e, WIDENED: a BYTE column has no widening load at 4 int lanes
+  c, NATIVE: a BYTE column has no widening load at 4 int lanes
+Shape c refuses under NATIVE too because it is int-driven: the byte column is widened at a load whatever the arm,
+and at 4 int lanes the byte species would be 32 bits, which the Vector API does not have. So on a 128-bit host
+(the Neoverse N2 CI runner) the default arm has no emission at all for any TINYINT kernel that reads a value, and
+the row engine answers; NATIVE serves the all-narrow shapes only. The census's two 128-bit byte-load forms
+(B2I_load64 and B2I_load128, 9.2) load a 64- or 128-bit byte species and convert in parts, which is more than one
+int group an iteration; the emitter computes one group an iteration by design, so it cannot use either. 2.3's
+question is answered for the intrinsics and not for this emitter.
+
+== against the hand-loop spike (results/VARKA-329-spike.txt, TINYINT b1 < b2, medians; the same rungs) ==
+                 hand W    emitted W   hand N    emitted N   hand N/W  emitted N/W  emitted/hand ratio
+512   16384        26.9       25.5      150.6      104.1        5.60       4.08          0.73
+512   262144       26.6       25.5      137.0       99.0        5.14       3.88          0.75
+512   1000000      25.9       25.2       64.3       58.4        2.48       2.32          0.94
+512   8388608      22.3       22.1       47.0       36.4        2.11       1.65          0.78
+256   16384        16.5       16.0       76.9       49.0        4.66       3.06          0.66
+256   262144       16.4       16.0       79.7       48.7        4.87       3.05          0.63
+256   1000000      16.0       15.4       58.4       44.8        3.65       2.91          0.80
+128   16384         7.3          -       43.4       36.1        5.92          -             -
+128   262144        7.3          -       43.0       36.2        5.91          -             -
+128   1000000       7.1          -       38.3       34.0        5.41          -             -
+The emitted WIDENED arm reproduces the hand loop to within 5.5 percent at 512 and 256 bits (the widest gap is
+16384 rows at 512 bits, 25.5 against 26.9, 5.2 percent; the narrowest 262144 rows at 256, 16.0 against 16.4). The emitted NATIVE arm
+keeps 63 to 94 percent of the hand loop's advantage: the loss is in the fixed work a group of the emitted loop does
+and the hand loops do not - the validity words, the general validity fallback at the 64- and 32-lane byte species,
+and the loop's bounds and epilogue - and it is largest at 256 bits in cache (63 to 66 percent), where a NATIVE
+group is 32 rows and the selection is half a word. 9.2's threshold ("if the emitted kernel keeps less than about
+half of the hand loop's ratio, the margin is in those and not in the lane") is not crossed: the smallest kept
+fraction is 0.63.
+
+== predictions of 3.3, scored on the emitted arms ==
+1. Byte compare in L1 and L2, NATIVE over WIDENED between 1.5 and 4.0: holds at 256 bits (3.06 at 16384 rows and
+   3.05 at 262144, inside the band); at 512 it reads 4.08 and 3.88, at the ceiling and just above it as the
+   spike's hand loops were (5.60). The bound that failed for the hand loop is met by the emitted kernel at 256
+   bits and touched at 512.
+2. Past the last-level cache, the ratio within 0.85 to 1.3: the 8388608-row rung is not past L3 for bytes (a
+   16 MB byte pair against the pinned complex's 16 MB), and there the ratio is 1.65 for the compare and 1.68 for
+   the chain, above the band; at 33554432 rows (a 64 MB pair, past the cache) it is 1.15 and 1.24, inside the
+   band. So the prediction holds at the rung that is genuinely past the cache; the 8388608-row rung is at its
+   edge, the correction 9.2 already made.
+3. Mixed int-driven `b < i` within 0.85 to 1.3 at every rung and width: 1.00 at every 512- and 256-bit rung but
+   1000000 rows at 512, which reads 0.99 (23.1 against 22.9 G rows/s); the two arms' class bytes are identical at
+   both widths; at 128 bits both arms decline by name.
+4. SMALLINT: not measured here, the four shapes of this step are TINYINT. The spike's numbers stand.
+5. At 128 bits, the ceiling of 4.0 for bytes: there is no emitted ratio to bound, because WIDENED declines every
+   shape and NATIVE declines the int-driven one. What the emitted arm reads at 128 bits is 34 to 36 G rows/s for
+   the compare, 83 to 89 percent of the hand loop's NATIVE rate.
+6. The two-species case: holds at 512 and 256 - no refusal, both arms in one JVM, and the separate-arm JVMs within
+   1 percent of the all-arms ones. At 128 bits the census cells decide, and one of them (the widening load at 4 int
+   lanes) does not exist, which is the refusal above.
+7. The tiering artefact: holds - 306 settles over the fourteen runs, 304 at eight drives and two at nine, all at
+   level 4, none unsettled, and the gate's class lookup is per arm so one arm's level cannot stand for the
+   other's. The run-to-run spread reaches 42 percent in the store cell
+   at 262144 rows (62.4 to 88.4 G rows/s, a per-run ratio of 3.2 to 4.5) and 26 percent in shape a's WIDENED cell
+   at 256 bits (12.9 to 16.2), which is why the tables are medians and the store ratio is quoted to two decimals.
+
+== the arithmetic overflow probe (what shape b does not measure) ==
+Sixty-four rows of 100 and 100, emitted shape b, both arms, one run each:
+  WIDENED: status 0, the first four selection bits 0000 (an int add says 200 < 100 is false)
+  NATIVE:  status 0, the first four selection bits 1111 (the byte add wraps to -56, and -56 < 100 is true)
+VarkaReference adds in ints, so it sides with WIDENED; Spark's own answer is the wrapped one. That is row 330's
+deferred wrap (VARKA-329.md 4.2), which is why shape b's timed rungs use bytes in [-64, 63] and the probe is not a
+result: it is the demonstration that the two arms cannot be compared on overflow data until 330 lands.
+
+== not established ==
+- Nulls and validity: no batch has a null (the validity addresses are 0 and the null counts 0), so every timed
+  call takes the kernel's dense path; the masked path is not timed. The store shape's output is checked all-valid.
+- SMALLINT, the shapes with a tail (every rung is a multiple of 64, so no epilogue runs), and the other choice
+  shapes of 3.4.
+- The Neoverse N2 at 128 bits: the second runner host, whose width decides the default (3.5), is not measured; the
+  128-bit refusals above are the laptop's, and they are code facts, not timings.
+- Why the emitted NATIVE arm is below the hand loop: the run did not profile it. The validity word and the general
+  fallback at 64- and 32-lane species are the candidates, not a finding.
+- Allocation: not instrumented here; the census cells of 9.2 are the record for it.
