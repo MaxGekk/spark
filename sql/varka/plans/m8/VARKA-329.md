@@ -899,13 +899,16 @@ where the code names `BYTE` or `SHORT`.
 
 Built on the lanes of step 2 in the worktree `varka-330-arith`: the row's branch took the lane
 branch in at the checkpoint commit `33996c315d9`, again at `588dffea06a` (the lane's
-`62f7af53577`, `1689f255cca` and `281f63b9707`) and once more at `d9233c94299` (the lane's
-`c4cf280ca20`, `edea39e876b`, `20166917090`, `d033d3bbcc0` and `5584744d138`, the last a plan
-edit alone), rerunning the row's suites and regenerating the pins after each merge. No new IR node: a narrow `Add`, `Subtract`, `Multiply` or
-`UnaryMinus` compiles to `IntArith(op, mode, left, right)` or `IntNeg(mode, child)` on the node's
-own lane, and `abs` to `IfElse(Compare(LT, x, 0), IntNeg(mode, x), x)` - Spark's own ANSI lowering,
-built from nodes that exist. The mode is the node's: `LEGACY` is `Overflow.WRAP`, `ANSI`
-`Overflow.FAIL` and `TRY` `Overflow.NULL`.
+`62f7af53577`, `1689f255cca` and `281f63b9707`), at `d9233c94299` (the lane's `c4cf280ca20`,
+`edea39e876b`, `20166917090`, `d033d3bbcc0` and `5584744d138`, the last a plan edit alone) and
+once more at `9c7ca399df4` (the lane's `97c69a80403`, `68bc97a0b1f` and `69bc86a414c`, the last
+a plan edit, with master's `50b5c4185ce`, `8f7fdd9a7b5`, `52101acab00` and `3dac916bd75` that
+the lane merged in), rerunning the row's suites and regenerating the pins after each merge, the
+last regeneration changing no file. No new IR node: a narrow `Add`, `Subtract`, `Multiply` or
+`UnaryMinus` compiles to `IntArith(op, mode, left, right)` or `IntNeg(mode, child)` on the
+node's own lane, and `abs` to `IfElse(Compare(LT, x, 0), IntNeg(mode, x), x)` - Spark's own
+ANSI lowering, built from nodes that exist. The mode is the node's: `LEGACY` is
+`Overflow.WRAP`, `ANSI` `Overflow.FAIL` and `TRY` `Overflow.NULL`.
 
 **WIDENED, the default arm.** Everything is computed in the int lane over sign-extended narrow
 values. Under `LEGACY` the reduction is deferred to the first non-ring consumer: `Analysis.wrapAt`
@@ -957,8 +960,9 @@ itself: a chain answers at its root and under every non-ring consumer, a checked
 its first overflowing node, and a TRY chain nulls the overflowing row and keeps its neighbours.
 `VarkaCoverageDifferentialSuite` holds the same 16 rows to Spark end to end - both consumers, the
 three domain partitions, ANSI's four positions - with `VarkaGuardSpecs` reading the narrow check at
-its own lane on both arms; after the final merge the suite's 786 tests are green in 6 m 36 s at the
-matrix base, and under `narrowLanes=true` too. The new suite's 20 checked-mode tests are on
+its own lane on both arms; the suite's 786 tests are green at the matrix base, in 396 s before the
+last merge and 514 s after it beside the five configurations, and under `narrowLanes=true` too.
+The new suite's 20 checked-mode tests are on
 `matrix/skips.tsv`'s `checkIntOverflow=false` list, where the option's promise - the same node
 cheaper - is that a checked node wraps, and the narrow rows' differential tests are listed under
 the three configurations that answer them differently: `checkIntOverflow=false` (26 tests, the
@@ -966,8 +970,11 @@ wrapped value where Spark raises), `validityByWidth=false` (26, no baked int lan
 narrow column from) and `lanesOverride=4` (13, the eight `TINYINT` rows, a four-lane int species
 having no 32-bit byte species). All three configurations then pass, those declines being the arm's
 answer. The row's four catalyst suites rerun as the whole catalyst matrix under all 51 option
-configurations and the defaults, three JVMs each: every configuration exits 0, 73 tests answered
-and 22 canceled against the defaults' 76 and 19, with no test unfused and no skip line stale.
+configurations and the defaults, three JVMs each: every configuration exits 0, with no test
+unfused and no skip line stale. The defaults answer 76 and cancel 19; most configurations answer
+73 and cancel 22, and the two that turn on their own skip lines cancel them as well:
+`checkIntOverflow=false` answers 49 and cancels 46, `methodByteBudget=0` answers 71 and
+cancels 24.
 
 **The first sweep, timed.** `SMALLINT` `+` in `LEGACY` on the widened arm, the cheapest of the 18,
 ran as the suite's opt-in test with `-Dvarka.sweep.filter` naming it alone, under both agent locks
