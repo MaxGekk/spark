@@ -2044,6 +2044,24 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
       "one kernel holds one lane, and this mixes the SHORT and INT lanes")
   }
 
+  test("a narrow conjunct lifted beside a bigint one records the missing lowering") {
+    // The narrow comparison alone is emittable at 16 int lanes; lifted beside a bigint conjunct
+    // to the long lane it is not, so the candidate fails the budget check through
+    // narrowRefusal, and the decline records that reason rather than the fused budget
+    // (VARKA-329, finding 7). The lane count is pinned: at four the comparison alone has no
+    // byte species, and the first note would be that refusal instead of the lifted one.
+    val options = VarkaMatrix.base.withLanesOverride(16).withValidityByWidth(true)
+    val ll = AttributeReference("ll", LongType)()
+    val pred = And(GreaterThan(ll, Literal(0L)),
+      GreaterThan(by, Literal(0.toByte, ByteType)))
+    val compiled = VarkaExpressionCompiler.compilePredicate(pred, childOutput :+ ll, options)
+      .toScala
+    assert(compiled.isDefined, "the bigint conjunct should still fuse")
+    assert(compiled.get.specs.asScala.size === 2)
+    assert(compiled.get.specs.asScala(1).decline.get.reason ===
+      "a narrow value under a bigint kernel has no lowering")
+  }
+
   test("a boolean equality of two narrow conditions lifts into an int-lane conjunction") {
     // A comparison of two boolean conditions is a mask over them, so one over two narrow
     // comparisons is itself narrow - `compare` builds the BoolCompare with narrow operands -
