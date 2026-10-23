@@ -1475,6 +1475,13 @@ jobs:
       run: ./dev/varka_census.py --check
     - name: Nothing cites a moved catalogue path
       run: ./dev/varka_catalogue_move.sh --check 8 9
+    # A milestone row is the record of why a change exists (VARKA-473): its provenance cell, the
+    # files and sections it cites, the rows it names and the head of a run it quotes are checked
+    # against the tree, with the run head read through `gh`.
+    - name: The milestone's records match the tree
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: ./dev/varka_plan_lint.py --check
     - name: The scheduled-failure reporter's issue and comment decisions
       run: python3 dev/varka_scheduled_failure_test.py
     - name: The CI queue's admission decision, over recorded API responses
