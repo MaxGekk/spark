@@ -300,12 +300,7 @@ enum Lane {
     };
   }
 
-  /**
-   * The largest value of this lane, the other end of {@link #mostNegative}. The pair is the
-   * range a checked narrow node tests its result against: a byte result is Spark's answer only
-   * between them, and the int-lane value of a widened narrow operation is exact before the
-   * test, which is what makes the two compares a complete check.
-   */
+  /** The largest value of this lane; {@link #mostNegative} is the other end. */
   long mostPositive() {
     return switch (laneType) {
       case BYTE -> Byte.MAX_VALUE;

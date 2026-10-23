@@ -127,6 +127,13 @@ public final class VarkaIrGrammar {
    */
   public static final long FUZZ_SEED = 20260903L;
 
+  /**
+   * The seed of {@link #drawNarrowShape}: a sequence of its own, like the long and mixed ones, so
+   * that drawing it moves neither committed corpus. Nothing pins it; it is fixed so the
+   * withChildren and round-trip tests draw the same narrow conversions on every run.
+   */
+  public static final long NARROW_FUZZ_SEED = 20261023L;
+
   // The generator's magnitude bounds saturate rather than wrap, in *every* arm that combines
   // two of them - `boundsOf` and the generator alike. Four nested multiplies of a column's own
   // bound pass 2^63, and a bound that came back negative would let `fitsUnderChrono` admit an
@@ -409,6 +416,76 @@ public final class VarkaIrGrammar {
       roots = distinct(drawn);
     }
     return new Drawn(roots, numInputs, numLiterals, smallOrdinal, levelOrdinal);
+  }
+
+  /**
+   * A shape whose value roots carry target-carrying conversions into the narrow lanes: a
+   * {@code NarrowLane} to BYTE or SHORT, alone or under a {@code WidenLane} back to the int
+   * lane, and a {@code WidenLane} to INT. It exists for the withChildren and round-trip tests:
+   * the emitter fuzzer's committed sequences must not draw a narrow species, which not every
+   * host's width names, but rebuilding these needs no species at all - and a rebuild through
+   * the one-argument constructor defaults a {@code NarrowLane} to INT, which is not the
+   * conversion this node holds (VARKA-329).
+   *
+   * <p>The conversion wraps a whole root rather than sitting inside the drawn tree: the lane
+   * rules of the other nodes (a comparison's two operands, a connective's conditions, a range
+   * set's child) refuse a narrow operand beside an int one at construction, so a conversion
+   * drawn in an operand position would leave the grammar unable to build most trees. A
+   * condition root is left as it is - a conversion is a value's.
+   */
+  public static Drawn drawNarrowShape(Random rnd) {
+    int numInputs = 1 + rnd.nextInt(3);
+    int numLiterals = rnd.nextInt(3);
+    int smallOrdinal = numInputs > 1 ? numInputs - 1 : -1;
+    int levelOrdinal = numInputs > 2 ? numInputs - 2 : -1;
+    var shapes = new Shapes(rnd, numInputs, numLiterals, smallOrdinal, levelOrdinal);
+    int depth = 1 + rnd.nextInt(4);
+    List<VarkaVectorIR> roots;
+    if (rnd.nextInt(5) == 0) {
+      roots = List.of(shapes.cond(depth));
+    } else {
+      int count = 1 + rnd.nextInt(3);
+      var drawn = new ArrayList<VarkaVectorIR>();
+      for (int i = 0; i < count; i++) {
+        drawn.add(converted(shapes.value(depth).node(), rnd));
+      }
+      roots = distinct(drawn);
+    }
+    return new Drawn(roots, numInputs, numLiterals, smallOrdinal, levelOrdinal);
+  }
+
+  /**
+   * {@code root} under one target-carrying conversion into a lane it does not already occupy: a
+   * narrowing, alone or under a widening, plus the widening of a byte root to SHORT. Each target
+   * is one a one-argument rebuild would change: those constructors default a {@code WidenLane}
+   * to LONG and a {@code NarrowLane} to INT, so only a target-carrying rebuild keeps them
+   * (VARKA-329 finding 1).
+   */
+  private static VarkaVectorIR converted(VarkaVectorIR root, Random rnd) {
+    LaneType[] narrower = switch (root.laneType()) {
+      case BYTE -> new LaneType[0];
+      case SHORT -> new LaneType[] {LaneType.BYTE};
+      case INT -> new LaneType[] {LaneType.BYTE, LaneType.SHORT};
+      case LONG -> new LaneType[] {LaneType.BYTE, LaneType.SHORT, LaneType.INT};
+    };
+    if (narrower.length == 0) {
+      return new WidenLane(root, LaneType.SHORT);
+    }
+    LaneType target = narrower[rnd.nextInt(narrower.length)];
+    VarkaVectorIR narrow = new NarrowLane(root, target);
+    int form = rnd.nextInt(target == LaneType.BYTE ? 3 : 2);
+    if (form == 0) {
+      return narrow;
+    }
+    LaneType out = switch (target) {
+      case BYTE -> form == 1 ? LaneType.SHORT : LaneType.INT;
+      case SHORT -> LaneType.INT;
+      case INT -> LaneType.LONG;
+      // Unreachable: a narrowing target is always below the root's lane, and a LONG root is
+      // the widest. The arm keeps the switch exhaustive over the enum.
+      case LONG -> LaneType.LONG;
+    };
+    return new WidenLane(narrow, out);
   }
 
   /**
@@ -1060,7 +1137,7 @@ public final class VarkaIrGrammar {
     public VarkaVectorIR root(int depth) {
       Gen v = value(depth);
       if (v.bound() <= Integer.MAX_VALUE && rnd.nextInt(3) == 0) {
-        return new NarrowLane(v.node());
+        return new NarrowLane(v.node(), LaneType.INT);
       }
       return v.node();
     }
@@ -1227,16 +1304,16 @@ public final class VarkaIrGrammar {
         case 0: {
           // The LEGACY narrowing: the low 32 bits, of any value.
           Gen a = longValue(depth - 1);
-          return new Gen(new NarrowLane(a.node()), intBound(a.bound()));
+          return new Gen(new NarrowLane(a.node(), LaneType.INT), intBound(a.bound()));
         }
         case 1: {
           // The ANSI narrowing, over a value that fits.
           Gen a = longValue(depth - 1);
           if (a.bound() > INT_MAX) {
-            return new Gen(new NarrowLane(a.node()), INT_MAX + 1);
+            return new Gen(new NarrowLane(a.node(), LaneType.INT), INT_MAX + 1);
           }
           return new Gen(new NarrowLane(new GuardedRange(a.node(), Integer.MIN_VALUE,
-              Integer.MAX_VALUE)), a.bound());
+              Integer.MAX_VALUE), LaneType.INT), a.bound());
         }
         case 2: {
           // The int lane's own grammar, over the int columns.
@@ -1280,7 +1357,7 @@ public final class VarkaIrGrammar {
         case 1: {
           // The widening, exact over every int.
           Gen a = intValue(depth - 1);
-          return new Gen(new WidenLane(a.node()), a.bound());
+          return new Gen(new WidenLane(a.node(), LaneType.LONG), a.bound());
         }
         case 2: {
           // The long lane's own grammar, over the long columns.
@@ -1369,7 +1446,7 @@ public final class VarkaIrGrammar {
       }
       Gen narrowed = intValue(0);
       Gen a = longValue(Math.max(0, depth - 1));
-      VarkaVectorIR narrow = new NarrowLane(a.node());
+      VarkaVectorIR narrow = new NarrowLane(a.node(), LaneType.INT);
       if (rnd.nextBoolean()) {
         return narrow;
       }
@@ -1385,7 +1462,8 @@ public final class VarkaIrGrammar {
       }
       CompareOp[] ops = CompareOp.values();
       CompareOp op = ops[rnd.nextInt(ops.length)];
-      VarkaVectorIR narrow = new NarrowLane(longValue(Math.max(0, depth - 1)).node());
+      VarkaVectorIR narrow = new NarrowLane(longValue(Math.max(0, depth - 1)).node(),
+          LaneType.INT);
       return new Compare(op, narrow, intValue(Math.max(0, depth - 1)).node());
     }
   }

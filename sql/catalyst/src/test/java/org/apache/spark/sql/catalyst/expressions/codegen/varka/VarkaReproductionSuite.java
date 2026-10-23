@@ -150,6 +150,13 @@ public final class VarkaReproductionSuite {
             emit(parsed, drawn.numInputs(), drawn.numLiterals()), "long shape " + k);
       }
     }
+    for (int k = 0; k < 400; k++) {
+      var drawn = VarkaIrGrammar.drawNarrowShape(
+          VarkaIrGrammar.shapeRandom(VarkaIrGrammar.NARROW_FUZZ_SEED, k));
+      assertEquals(hash(drawn.roots(), drawn.numInputs(), drawn.numLiterals()),
+          hash(reparsed(drawn.roots()), drawn.numInputs(), drawn.numLiterals()),
+          "narrow shape " + k);
+    }
     var wide = VarkaIrGrammar.drawWideShape(new Random(315));
     assertEquals(hash(wide.roots(), wide.numInputs(), wide.numLiterals()),
         hash(reparsed(wide.roots()), wide.numInputs(), wide.numLiterals()));
@@ -305,6 +312,28 @@ public final class VarkaReproductionSuite {
     VarkaReproduction file = sample(null);
     var e = assertThrows(IllegalArgumentException.class, () -> VarkaReplay.of(file));
     assertTrue(e.getMessage().contains("not to its shape hash"), e.getMessage());
+  }
+
+  @Test
+  @DisplayName("a replay of a narrow kernel calls its int entry, as the runner does")
+  void narrowKernelReplays() {
+    var options = VarkaEmitOptions.DEFAULTS.toBuilder().narrowLanes(true).build();
+    var outputs = List.<VarkaVectorIR>of(new ColumnRef(0, LaneType.BYTE));
+    var key = new VarkaShapeKey(outputs, 1, 0, options);
+    String hash = VarkaShapeCacheImpl.shapeHash(key);
+    var call = new VarkaReproduction.KernelCall(4, 0, List.of(1), List.of(
+        new VarkaReproduction.Input(1, 4, 8, 0, false, new byte[] {-1, 0, 1, 127}, null)),
+        null, false);
+    var file = new VarkaReproduction(new VarkaFailureSignature("NoSuchMethodError", "x"),
+        VarkaFallbackEvent.KERNEL_FAILURE, "", "", "", false, hash, 1, 0, false,
+        VarkaErrorContext.renderOptions(options),
+        List.of(VarkaVectorIR.canonical(outputs.get(0))), List.of(), List.of(), call, null);
+    var replay = VarkaReplay.of(file);
+    // A BYTE kernel implements the int lane's seven-argument entry only, so the replay picks
+    // the entry by the lane being LONG, as the runner does, and a long entry would throw.
+    assertTrue(replay.actual().isEmpty(), String.join("\n", replay.report()));
+    assertTrue(replay.notes().contains("the kernel returned"),
+        String.join("\n", replay.report()));
   }
 
   @Test

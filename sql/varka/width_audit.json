@@ -248,7 +248,7 @@
       "y1 >= y2" : [ "declined: a BYTE column has no widening load at 4 int lanes" ],
       "y1 IN (11 to 16 byte literals)" : [ "declined: a BYTE column has no widening load at 4 int lanes" ],
       "y1 IN (1Y, 2Y, 3Y, -1Y)" : [ "declined: a BYTE column has no widening load at 4 int lanes" ],
-      "y1 IS NOT NULL" : [ "declined: a BYTE column has no widening load at 4 int lanes" ],
+      "y1 IS NOT NULL" : [ ],
       "year(d)" : [ ],
       "year(d) * 2" : [ ],
       "year(d) + i" : [ ],

@@ -873,6 +873,7 @@ public final class VarkaExpressionCompiler {
         continue;
       }
       Marks marks = Marks.of(inputs, literals, sink);
+      String budgetReason = "exceeds the emitter's fused budget";
       // Guarded as a projection entry is; the rebuild keeps a condition a condition.
       Optional<Cond> compiled = VarkaConditionCompiler.compileCond(bound, inputs, literals, sink)
           .map(c -> (Cond) sink.guardDayColumns(c, marks.bounds()));
@@ -925,8 +926,8 @@ public final class VarkaExpressionCompiler {
         }
         List<Cond> with = new ArrayList<>(before);
         with.add(cond);
-        if (VarkaLoopEmitter.fitsBudgets(
-            List.of(VarkaConditionCompiler.andFold(with)), inputs.size(), options)) {
+        Cond candidate = VarkaConditionCompiler.andFold(with);
+        if (VarkaLoopEmitter.fitsBudgets(List.of(candidate), inputs.size(), options)) {
           sink.take();
           if (liftedBefore) {
             fused.clear();
@@ -936,11 +937,15 @@ public final class VarkaExpressionCompiler {
           specs.add(new VarkaConjunctSpec(conjunct, true, Optional.empty()));
           continue;
         }
+        // fitsBudgets also fails through narrowRefusal, whose reason is the one to record;
+        // the budget message is only for the budgets proper.
+        budgetReason = VarkaLoopEmitter.narrowRefusal(List.of(candidate), options)
+            .orElse(budgetReason);
       }
       marks.restore(inputs, literals, sink);
       if (compiled.isPresent()) {
         sink.take();
-        sink.note("exceeds the emitter's fused budget", bound);
+        sink.note(budgetReason, bound);
       }
       // A declining conjunct always leaves a reason: every empty compileCond notes one.
       specs.add(new VarkaConjunctSpec(conjunct, false, sink.take()));
