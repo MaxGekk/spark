@@ -914,6 +914,54 @@ final class Analysis {
   }
 
   /**
+   * The lane count of the narrow species a widening load of {@code narrow} reads at this
+   * emission's int species, or 0 where no whole-group form exists; see
+   * {@link Lane#widenLanes}.
+   */
+  int widenLanes(Lane narrow) {
+    return Lane.widenLanes(lanesOf(Lane.INT), narrow);
+  }
+
+  /**
+   * How many int lane groups one loop iteration of this emission computes, set by
+   * {@link #planNarrowGroups}; see there.
+   */
+  private int narrowGroups = 1;
+
+  /**
+   * Sizes the iteration from the narrow lanes the roots read as values (
+   * {@link VarkaVectorIR#narrowValuesIn}): the widest part count any of them loads at, so that
+   * a kernel driven at four int lanes reads a byte column as an eight-lane 64-bit species and
+   * converts it in two parts, one an int group, while a kernel driven at two reads a byte
+   * column in four parts and a short column in two. At eight and sixteen int lanes the narrow
+   * species of the int species' own width exists and this is one. The count is the kernel's,
+   * not a body's, because the loads of every body read the same species and every body's loop
+   * has to agree on the iteration it covers; a group whose output reads no narrow column still
+   * computes its own rows. A narrow column read only for its validity word loads no species and
+   * leaves the iteration at one group, as {@link VarkaLoopEmitter#narrowRefusal} lets it emit. A
+   * kernel not driven at the int lane answers one: a narrow value has no lowering in a
+   * long-lane kernel, and a narrow-driven kernel has no widening load.
+   */
+  void planNarrowGroups(List<VarkaVectorIR> outputs) {
+    if (lane != Lane.INT || lanes == 0) {
+      narrowGroups = 1;
+      return;
+    }
+    int groups = 1;
+    for (VarkaVectorIR root : outputs) {
+      for (VarkaVectorIR.LaneType type : VarkaVectorIR.narrowValuesIn(root)) {
+        groups = Math.max(groups, widenLanes(Lane.of(type)) / lanes);
+      }
+    }
+    narrowGroups = groups;
+  }
+
+  /** The iteration's int group count, from {@link #planNarrowGroups}. */
+  int narrowGroups() {
+    return narrowGroups;
+  }
+
+  /**
    * How many literal slots {@code of}'s table has: {@link #numLiterals} in a single-lane kernel,
    * whose one table is its lane's, and in a kernel that converts between lanes one past the
    * highest slot its nodes read in that table, since each lane indexes its own.

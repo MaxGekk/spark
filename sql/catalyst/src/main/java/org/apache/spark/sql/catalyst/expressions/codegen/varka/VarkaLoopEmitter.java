@@ -246,6 +246,7 @@ public final class VarkaLoopEmitter {
   private static Analysis analyze(List<VarkaVectorIR> outputs, int numInputs, int numLiterals,
       VarkaEmitOptions options) {
     Analysis analysis = new Analysis(numInputs, numLiterals, options, laneOf(outputs, options));
+    analysis.planNarrowGroups(outputs);
     for (VarkaVectorIR root : outputs) {
       analysis.analyzeRoot(root);
     }
@@ -1860,13 +1861,14 @@ public final class VarkaLoopEmitter {
    *
    * <p>Under {@link VarkaEmitOptions#narrowLanes()} a kernel whose every value is narrow computes
    * in the narrow species itself, so nothing has to be converted. Otherwise a narrow column is
-   * read with one widening load per lane group, and that load needs the narrow species of the
-   * int species' width: eight bytes for a four-lane int species is a 32-bit shape the Vector API
-   * does not have, and the emitter computes one group per iteration, so the 64- and 128-bit byte
-   * loads whose conversions the census measures fit two or four int groups cannot be used. A
-   * width with no baked lane count - {@code validityByWidth} off - cannot name the species at
-   * all. Under either, the entry declines and the row engine answers it; at the default width of
-   * an AVX-512 or AVX2 host the int species has 16 or 8 lanes, and both narrow species exist.
+   * read with one widening load per iteration, and that load needs a narrow species wider than
+   * or as wide as the int group: the narrow species of the int species' width where it exists -
+   * eight byte lanes at eight int lanes, four short lanes at four - and otherwise the next width
+   * up, whose parts each become one int group ({@link Lane#widenLanes}): a byte at four int
+   * lanes would need a 32-bit species the Vector API does not have, so it reads an eight-lane
+   * 64-bit load whose two parts are the iteration's two int groups. A width with no baked lane
+   * count - {@code validityByWidth} off - cannot name the species at all, and the entry
+   * declines: the row engine answers it.
    */
   public static Optional<String> narrowRefusal(
       List<VarkaVectorIR> outputs, VarkaEmitOptions options) {
@@ -1897,7 +1899,7 @@ public final class VarkaLoopEmitter {
         return Optional.of("a narrow column needs a baked int lane count to be widened");
       }
       for (VarkaVectorIR.LaneType type : lanes) {
-        if (type.isNarrow() && !Lane.of(type).hasSpecies(intLanes)) {
+        if (type.isNarrow() && Lane.widenLanes(intLanes, Lane.of(type)) == 0) {
           return Optional.of("a " + type + " column has no widening load at "
               + intLanes + " int lanes");
         }

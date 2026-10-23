@@ -56,6 +56,14 @@ class VarkaEmitterNarrowSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     "the widened arm" -> widened,
     "the native arm" -> native)
 
+  /**
+   * The widened arm forced to four and two int lanes: the widths a 128-bit host and a host whose
+   * widest vector is 64 bits emit at with no override, where a widening load spans two or four
+   * parts and no other suite draws the width.
+   */
+  private val fourLanes: VarkaEmitOptions = widened.toBuilder.lanesOverride(4).build()
+  private val twoLanes: VarkaEmitOptions = widened.toBuilder.lanesOverride(2).build()
+
   private val byteCol: VarkaVectorIR = new ColumnRef(0, LaneType.BYTE)
   private val byteCol2: VarkaVectorIR = new ColumnRef(1, LaneType.BYTE)
   private val shortCol: VarkaVectorIR = new ColumnRef(0, LaneType.SHORT)
@@ -93,29 +101,27 @@ class VarkaEmitterNarrowSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
   }
 
   /**
-   * Cancels the test when the compiler refuses this shape under `options`, because the narrow
-   * species of the int species' width does not exist: `lanesOverride=4` asks for a 32-bit byte
-   * species, which the Vector API does not have, and `validityByWidth=false` bakes no lane count
-   * for the conversion to read. The emitter would name a constant the class lacks
-   * (`ByteVector.SPECIES_32`), so the refusal is the answer, and the suite cancels here instead
-   * of emitting; the compiler asks the same question, and an option matrix configuration that
-   * declines a narrow kernel answers it with the row engine (VARKA-329).
+   * Cancels the test when the compiler bakes no int lane count at all, which is the one
+   * configuration left that cannot name a narrow species: `validityByWidth=false` bakes no lane
+   * count for the conversion to read. A width where the narrow species of the int species' own
+   * width does not exist no longer refuses - `lanesOverride=4` asks for a 32-bit byte species
+   * the Vector API does not have, and the emitter reads the next width up in its parts instead
+   * (VARKA-329) - so those shapes emit and are checked against the reference like any other.
    *
    * <p>The cancel is not a silent skip: it names the refusal, and `sql/varka/matrix/skips.tsv`
    * carries a `declines` line for each configuration that reaches it, so the matrix's own report
-   * records the same verdict rather than an unfused test. Only the two missing-species refusals
-   * are expected; a refusal for any other reason fails the test, since a skip would hide a
-   * newly refused shape behind a configuration that was not supposed to reach it.
+   * records the same verdict rather than an unfused test. Only the missing-lane-count refusal is
+   * expected; a refusal for any other reason fails the test, since a skip would hide a newly
+   * refused shape behind a configuration that was not supposed to reach it.
    */
   private def refuseForNoSpecies(
       roots: Seq[VarkaVectorIR], options: VarkaEmitOptions): Unit =
     VarkaLoopEmitter.narrowRefusal(roots.asJava, options).toScala match {
       case Some(reason) =>
         assert(
-          reason == "a narrow column needs a baked int lane count to be widened" ||
-            reason.matches("a (BYTE|SHORT) column has no widening load at \\d+ int lanes"),
+          reason == "a narrow column needs a baked int lane count to be widened",
           s"unexpected refusal: $reason")
-        assume(false, s"this configuration has no narrow species for the shape ($reason), so " +
+        assume(false, s"this configuration bakes no narrow species for the shape ($reason), so " +
           "the compiler declines it and the row engine answers; the matrix records the " +
           "decline in sql/varka/matrix/skips.tsv (VARKA-329)")
       case None =>
@@ -232,16 +238,15 @@ class VarkaEmitterNarrowSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
         .toScala === Some("a narrow value under a bigint kernel has no lowering"), arm)
     }
     // The same choice on the int lane is the widened arm's ordinary shape: where a configuration
-    // has no species for the widening load it is refused, but for that width and never for the
-    // long lane, which is the distinction this test pins.
+    // bakes no lane count it is refused, but for that width and never for the long lane, which
+    // is the distinction this test pins.
     val intNarrow: VarkaVectorIR = new IfElse(
       new Compare(CompareOp.LT, new ColumnRef(1, LaneType.INT), new ColumnRef(2, LaneType.INT)),
       new WidenLane(byteCol, LaneType.INT), new WidenLane(byteCol, LaneType.INT))
     val intRefusal =
       VarkaLoopEmitter.narrowRefusal(List[VarkaVectorIR](intNarrow).asJava, widened).toScala
-    assert(intRefusal.forall(reason =>
-      reason == "a narrow column needs a baked int lane count to be widened" ||
-        reason.matches("a (BYTE|SHORT) column has no widening load at \\d+ int lanes")),
+    assert(intRefusal.forall(
+      _ == "a narrow column needs a baked int lane count to be widened"),
       intRefusal)
   }
 
@@ -332,8 +337,9 @@ class VarkaEmitterNarrowSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   test("a narrow column read beside an int column is widened on load") {
     // The shape the compiler builds for an int-lane kernel that also reads a byte column: the
-    // byte leaf widens into the int lane inside an int-lane tree, so its load is the part-width
-    // species' and the widening itself is an identity.
+    // byte leaf widens into the int lane inside an int-lane tree, so its load is one narrow
+    // species - the int width's, or one width up read in parts - and the widening itself is an
+    // identity.
     val mixedCmp: Cond = new Compare(CompareOp.LT,
       new WidenLane(byteCol, LaneType.INT), new ColumnRef(1, LaneType.INT))
     val mixedValue: VarkaVectorIR = new IfElse(new Compare(CompareOp.GT,
@@ -413,6 +419,57 @@ class VarkaEmitterNarrowSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       checkValues(s"an int value narrowed to short away from a store $arm", Seq(toShort), 1,
         Array.empty[Int], length, Array(Array.tabulate(length)(outOfShort)), _ => false, false,
         options)
+    }
+  }
+
+  test("a forced two-int-lane emission serves both narrow loads in parts") {
+    // The width a host whose widest vector is 64 bits emits at with no override (Lane.hasSpecies
+    // refuses a species below 64 bits): a byte load is an eight-lane 64-bit species converted in
+    // four parts, a short load a four-lane one in two, and a narrow store's species is wider
+    // than its group, so it is always masked. No other suite draws this width, and the reference
+    // is the oracle on every length and null pattern.
+    val byteCmp: Cond = new Compare(CompareOp.LT, byteCol, byteCol2)
+    val shortCmp: Cond = new Compare(CompareOp.LT, shortCol, shortCol2)
+    def byteValue(row: Int): Int = ((row * 7) % 256) - 128
+    def shortValue(row: Int): Int = ((row * 7919) % 65536) - 32768
+    for (length <- Seq(1, 7, 8, 9, 17, 31, 33, 65);
+        (name, isNullAt, _) <- patterns(length)) {
+      val nulls = (c: Int, row: Int) => isNullAt(row)
+      checkConds(s"a byte compare at two int lanes ($name, length $length)", Seq(byteCmp),
+        Seq(LaneType.BYTE, LaneType.BYTE), length,
+        (c, row) => if (c == 0) byteValue(row) else byteValue(row + 13), nulls, twoLanes)
+      checkConds(s"a short compare at two int lanes ($name, length $length)", Seq(shortCmp),
+        Seq(LaneType.SHORT, LaneType.SHORT), length,
+        (c, row) => if (c == 0) shortValue(row) else shortValue(row + 13), nulls, twoLanes)
+    }
+    val stored: VarkaVectorIR =
+      new IfElse(new Compare(CompareOp.GT, byteCol, byteCol2), byteCol, byteCol2)
+    val length = 301
+    for ((name, isNullAt, forced) <- patterns(length)) {
+      checkValues(s"a byte store at two int lanes ($name)", Seq(stored), 2, Array.empty[Int],
+        length, Array(Array.tabulate(length)(byteValue),
+          Array.tabulate(length)(i => byteValue(i + 13))), isNullAt, forced, twoLanes)
+    }
+  }
+
+  test("a kernel reading both narrow lanes sizes its iteration by the wider load") {
+    // The iteration's group count is a max over the narrow lanes the kernel reads as values: at
+    // four int lanes a byte load spans two groups where a short load spans one, so a kernel with
+    // both bodies must run two groups and give the short body its rows through a part. Picking
+    // the first or the narrowest lane instead would size the byte load's species one width down
+    // and read past the batch at the last iteration. Both forced widths are used because the
+    // default one bakes sixteen int lanes, where every load is whole and a max cannot be told
+    // from a min.
+    val byteCmp: Cond = new Compare(CompareOp.LT, byteCol, byteCol2)
+    val shortCmp: Cond = new Compare(CompareOp.LT,
+      new ColumnRef(2, LaneType.SHORT), new ColumnRef(3, LaneType.SHORT))
+    def byteValue(row: Int): Int = ((row * 7) % 256) - 128
+    def shortValue(row: Int): Int = ((row * 7919) % 65536) - 32768
+    for ((name, options) <- Seq("four int lanes" -> fourLanes, "two int lanes" -> twoLanes)) {
+      checkConds(s"a byte body and a short body in one kernel at $name", Seq(byteCmp, shortCmp),
+        Seq(LaneType.BYTE, LaneType.BYTE, LaneType.SHORT, LaneType.SHORT), 300,
+        (c, row) => if (c < 2) byteValue(row + c * 13) else shortValue(row + c * 13),
+        (_, row) => row % 11 == 5, options)
     }
   }
 
