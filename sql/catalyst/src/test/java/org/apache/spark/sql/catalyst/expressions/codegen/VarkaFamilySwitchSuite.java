@@ -71,9 +71,10 @@ import org.apache.spark.sql.internal.SQLConf$;
  * to that reading too, since a kernel failure's warning and the coverage table's switch column
  * name it.
  *
- * <p>A row the emission width itself cannot serve declines before any family is consulted: at
- * four int lanes a BYTE column has no 32-bit species to widen into, and the row engine answers
- * it (VARKA-329). The committed width census, {@code sql/varka/width_audit.json}, records which
+ * <p>A row the emission width itself cannot serve declines before any family is consulted: a
+ * narrow value under a bigint kernel has no lowering, and a width that bakes no int lane count
+ * cannot name the species a narrow load reads, so the row engine answers it (VARKA-329). The
+ * committed width census, {@code sql/varka/width_audit.json}, records which
  * rows decline at which width and why; only a decline recorded there, shape and reason both, is
  * admitted here, so a row declining for any other reason still fails.
  */
@@ -138,9 +139,10 @@ public final class VarkaFamilySwitchSuite {
    * reasons recorded for it across the census's widths. The emitter's decline is a function of
    * the shape and the width alone, not of the CPU, and the reason names the int lane count, so
    * a reason recorded in any width's column is the expectation at exactly that width on any
-   * host: four int lanes have no 32-bit BYTE species to widen a column into (VARKA-329). A
-   * missing census admits nothing, which fails the declines it would have explained rather
-   * than passing them silently.
+   * host. No width records one since the part-form widening load gave four int lanes a byte
+   * load (VARKA-329), so the allowance admits nothing today; it stays because a future decline
+   * at a width is exactly what it must explain, and a missing census admits nothing, which
+   * fails the declines it would have explained rather than passing them silently.
    */
   private static void readRecordedDeclines(Path census) throws IOException {
     var recorded = new HashMap<String, Set<String>>();
@@ -305,7 +307,8 @@ public final class VarkaFamilySwitchSuite {
   void onlyRecordedWidthDeclinesAreAdmitted() {
     // The allowance's guard, proved in both directions on a synthetic census: a recorded pair
     // passes, and the same shape with another reason, another shape or an empty census fails.
-    // The reason is the one the committed census carries for `y1 < y2` at 128 bits.
+    // The reason is the one the committed census carried for `y1 < y2` at 128 bits before the
+    // part-form widening load made that width emit it (VARKA-329).
     String reason = "a BYTE column has no widening load at 4 int lanes";
     Row row = rows.stream().filter(r -> r.censusName().equals("y1 < y2"))
         .findFirst().orElseThrow();
@@ -318,9 +321,9 @@ public final class VarkaFamilySwitchSuite {
         .filter(r -> !recorded.containsKey(r.censusName())).findFirst().orElseThrow();
     assertTrue(!isRecordedDecline(recorded, unrecorded, decline));
     assertTrue(!isRecordedDecline(Map.of(), row, decline));
-    // The committed census carries the pair, so the allowance explains the decline
-    // lanesOverride=4 really produces rather than a fabricated one.
-    assertTrue(isRecordedDecline(recordedDeclines, row, decline));
+    // The committed census records no decline for the pair: the shape fuses at 128 bits now, so
+    // the allowance explains no decline the emitter produces rather than a stale one.
+    assertTrue(!isRecordedDecline(recordedDeclines, row, decline));
   }
 
   @Test

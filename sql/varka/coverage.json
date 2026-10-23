@@ -2154,7 +2154,7 @@
     "operands" : [ "LessThan:byte" ],
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
-    "note" : "two narrow columns: each load widens its part-width species into the int lane, and the compare is the int lane's"
+    "note" : "two narrow columns: each load widens the narrow species of the int width, or the next width up in its parts, and the compare is the int lane's"
   }, {
     "sql" : "y1 <= y2",
     "executable" : "y1 <= y2",

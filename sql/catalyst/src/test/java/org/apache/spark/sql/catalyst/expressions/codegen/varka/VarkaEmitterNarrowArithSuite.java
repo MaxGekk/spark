@@ -426,13 +426,11 @@ public final class VarkaEmitterNarrowArithSuite {
           VarkaLoopEmitter.narrowRefusal(List.of(byteCol), widened(lanes)).isPresent();
       boolean refusedShort =
           VarkaLoopEmitter.narrowRefusal(List.of(shortCol), widened(lanes)).isPresent();
-      // Two int lanes are 64 bits, so the byte species would be 16 bits and the short one 32:
-      // the Vector API names neither. Four lanes hold a 64-bit short species and no byte one.
-      boolean[] expected = switch (lanes) {
-        case 2 -> new boolean[] {true, true};
-        case 4 -> new boolean[] {true, false};
-        default -> new boolean[] {false, false};
-      };
+      // At every baked width up to sixteen int lanes both narrow loads are served: where the int
+      // width has no narrow species of its own - a byte at four lanes, either lane at two - the
+      // load reads the next width up and converts it in parts (VARKA-329's part-form load), so
+      // neither lane is refused.
+      boolean[] expected = new boolean[] {false, false};
       assertEquals(expected[0], refusedByte, "byte at " + lanes + " int lanes");
       assertEquals(expected[1], refusedShort, "short at " + lanes + " int lanes");
     }
