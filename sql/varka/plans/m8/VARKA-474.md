@@ -52,6 +52,7 @@ The site list, with its guard today (production sites only):
 | `VarkaEvaluatorBase.java` | `isArrowBacked`: the Arrow vector the type arrives in | `default -> false` |
 | `VarkaKernelEvaluator.java` | `allocateVector`: the Arrow vector the type is written to | exhaustive switch |
 | `VarkaKernelRunner.java`, `VarkaWarmupGate.java` | a bitmap input's width and the warm-up's copy | none (the `BitVector` case) |
+| `VarkaVectorTemplateWarmup.java` | the lane's blocks: every Vector API method a kernel of the type calls, warmed `THIN_CALLS_PER_ROUND` times a round | `VarkaWarmupReachSuite` fails naming each method the kernels reach fewer than 2,000 times |
 | `VarkaIrGrammar.java` | the IR fuzzer's draw | none |
 | `VarkaCoverageRows.scala`, `coverage.json`, `docs/sql-varka.md` | the coverage row that makes the type count | the coverage suite fails on an undocumented expression, not on a type |
 | `VarkaOperatorCensusCatalog.java` | the census cells the new operators need | none |
@@ -80,8 +81,8 @@ registration point of the first kind. `isArrowBacked` becomes a lookup, and its 
 disappears. A day.
 
 **2.3 A checklist script.** `dev/varka_new_lane.py --check <LANE>` walks a curated site list - the
-"no guard" rows of section 1 - and reports each site with no case for the lane, `file:line` and
-what the site does. It cannot prove the case is right; it proves the site was looked at. Wired into
+"no guard" rows of section 1, and the warm-up's typed blocks - and reports each site with no
+case for the lane, `file:line` and what the site does. It cannot prove the case is right; it proves the site was looked at. Wired into
 CI when the diff touches `LaneType` or `Lane`, it runs in seconds. A day.
 
 Success criterion: a new type touches the `LaneType` member, one `Lane` entry, one `LaneArrow`

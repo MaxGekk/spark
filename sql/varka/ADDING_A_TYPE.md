@@ -85,24 +85,33 @@ Check: the family's emitter suite, and the bytes oracle: regenerate
 `VARKA_BYTES_REGEN=true build/sbt 'catalyst/testOnly *VarkaEmittedBytesSuite'` and see that only
 the new shapes moved in `sql/varka/emitted_bytes.json`.
 
-**7. Add the reference semantics.** `VarkaReference` computes the node scalar-wise; the IR fuzzer
+**7. Warm it.** The template warm-up runs once per JVM and calls, a `THIN_CALLS_PER_ROUND`
+block per lane, every Vector API method a kernel of the type reaches; a method left cold is
+the failure CI names. Add the type's methods to `VarkaVectorTemplateWarmup`'s block for its
+lane - the loads, the stores, the compares, the operators the emitted kernels call and the
+mask methods - and add a block beside the others when the lane has none.
+Check: `build/sbt 'catalyst/testOnly *VarkaWarmupReachSuite'` - it fails listing every
+method a kernel reaches and the warm-up calls fewer than 2,000 times, so it passes only
+when the new lane is warm.
+
+**8. Add the reference semantics.** `VarkaReference` computes the node scalar-wise; the IR fuzzer
 compares the kernel against it. A node the reference does not know is a node the fuzzer cannot
 check.
 Check: `build/sbt 'catalyst/testOnly *VarkaIrFuzzSuite'`.
 
-**8. Let the fuzzers draw it.** `VarkaIrGrammar` for the IR fuzzer, and the Spark-level fuzzer's
+**9. Let the fuzzers draw it.** `VarkaIrGrammar` for the IR fuzzer, and the Spark-level fuzzer's
 fixture for the type's columns.
 Check: `build/sbt 'catalyst/testOnly *VarkaIrFuzzSuite'` and
 `build/sbt 'sql/testOnly *VarkaSparkFuzzSuite'`.
 
-**9. Admit it in and out of Arrow.** `isArrowBacked` for the vector the type arrives in,
+**10. Admit it in and out of Arrow.** `isArrowBacked` for the vector the type arrives in,
 `allocateVector` for the vector it is written to, and `VarkaKernelRunner` for any input whose
 stored width is not its type's (a bitmap is one bit a row, and its Arrow vector reports a type
 width of zero). The sanitizer registers the rows a call can reach, not the allocation's padding.
 Check: `build/sbt 'sql/testOnly *VarkaKernelEvaluatorSuite *VarkaWarmupEndToEndSuite
 *VarkaMemorySanitizerEndToEndSuite'`.
 
-**10. Give it coverage rows.** A load, a comparison, a choice and an output in
+**11. Give it coverage rows.** A load, a comparison, a choice and an output in
 `VarkaCoverageRows.scala` - without them the type does not count as fused, whatever the emitter
 does. Regenerate in this order: `VARKA_COVERAGE_REGEN=true build/sbt 'catalyst/testOnly
 *VarkaCoverageSuite'`, then `VARKA_AUDIT_REGEN=true build/sbt 'catalyst/testOnly
@@ -111,23 +120,23 @@ does. Regenerate in this order: `VARKA_COVERAGE_REGEN=true build/sbt 'catalyst/t
 in `coverage.json`, `docs/sql-varka.md`, `width_audit.json` and `emitted_bytes.json`.
 Check: `python3 dev/varka_census.py --check`.
 
-**11. Census the operators the type needs.** New operators get a cell in
+**12. Census the operators the type needs.** New operators get a cell in
 `VarkaOperatorCensusCatalog`, measured on the laptop by
 `VARKA_CENSUS_REGEN=true build/sbt 'catalyst/testOnly *VarkaOperatorCensusSuite'`; the runner
 columns come from the next `varka-width-audit.yml` dispatch, which needs the branch pushed.
 Check: `python3 dev/varka_census.py --check` and the census suite.
 
-**12. Price it.** `VarkaEmitCost.kindOf` names a node's cost feature; a node that falls to
+**13. Price it.** `VarkaEmitCost.kindOf` names a node's cost feature; a node that falls to
 `default` is priced as its class name alone, which lumps unlike emissions together. New nodes
 join the awaiting-refit list (row 352) until the model is refitted.
 Check: `build/sbt 'catalyst/testOnly *VarkaEmitCostSuite'`.
 
-**13. Benchmark it.** A new feature family gets its own benchmark class beside
+**14. Benchmark it.** A new feature family gets its own benchmark class beside
 `VarkaLaneConversionBenchmark`, on `VarkaBenchmarkBase`, every arm driven to level-4 code before
 it is timed (row 407's harness rule). Results are committed, not quoted.
 Check: the benchmark's own results file, and the row's numbers against it.
 
-**14. Run the matrix over the new emitting suites.** A new emitting suite runs under every
+**15. Run the matrix over the new emitting suites.** A new emitting suite runs under every
 configuration, not only the one a PR's scoped CI run picks:
 `dev/varka_matrix.sh --all --module catalyst --suites <the new suites> -j 4`, or `--module sql`
 for the suites that live in `sql/core`, about 40 minutes, plus the defaults. A test whose premise
@@ -135,7 +144,7 @@ an option changes pins it, cancels under it, or gets a line in `sql/varka/matrix
 the reason.
 Check: the matrix's table - every row `fail 0`, `unfused 0`, and no stale skip line.
 
-**15. The linters, before the push.** `./dev/varka_errorprone.sh --master "$(git rev-parse
+**16. The linters, before the push.** `./dev/varka_errorprone.sh --master "$(git rev-parse
 origin/master)"`, `./dev/lint-java`, `./dev/lint-scala`, `python3 dev/varka_census.py --check`,
 the 100-column and non-ASCII scans, and the pre-commit hook.
 Check: their exit codes, reported in the pull request.
@@ -150,7 +159,7 @@ the reference evaluator, the width audit's shapes. Between them sit the decline 
 expression and condition compilers fall through to a decline with a reason. A decline is the right
 answer for an unsupported shape, but for a *new type* it is indistinguishable from "not implemented
 yet" unless the reason names the type, so steps 4 and 5 are where a missing arm costs an hour of
-confusion. Steps 7 to 12 are the unguarded sites, and their check commands are the only thing that
+confusion. Steps 8 to 13 are the unguarded sites, and their check commands are the only thing that
 will notice a miss.
 
 Two of today's guards are weaker than they look. `VarkaEvaluatorBase.isArrowBacked` ends its
