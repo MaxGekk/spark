@@ -1410,6 +1410,11 @@ jobs:
         key: varka-scoped-times-${{ matrix.module }}-${{ github.run_id }}
         restore-keys: |
           varka-scoped-times-${{ matrix.module }}-
+    # The lane walk of the docs job (VARKA-474 2.3), here too: the files it reads are Varka
+    # sources, whose changes run this job and not the docs one. It runs in a second.
+    - name: Every lane and type is wired where no compiler checks
+      if: matrix.module == 'catalyst'
+      run: ./dev/varka_new_lane.py --check
     - name: Run the Varka suites of ${{ matrix.module }}
       run: ./dev/varka_scoped_suites.sh ${{ matrix.module }}
     # The catalyst suites include the emitted-bytes oracle, VarkaEmittedBytesSuite, which has
@@ -1475,6 +1480,12 @@ jobs:
       run: ./dev/varka_census.py --check
     - name: Nothing cites a moved catalogue path
       run: ./dev/varka_catalogue_move.sh --check 8 9
+    # Every lane and Spark type is wired at the sites no compiler checks (VARKA-474 2.3): per
+    # lane its admission, the template warm-up, a fuzz-grammar leaf and a benchmark; per type a
+    # coverage column, the width audit and the census; a gap a later row owns printed as owed.
+    # The varka-scoped catalyst job runs it too, for the source changes that do not run this job.
+    - name: Every lane and type is wired where no compiler checks
+      run: ./dev/varka_new_lane.py --check
     # A milestone row is the record of why a change exists (VARKA-473): its provenance cell, the
     # files and sections it cites, the rows it names and the head of a run it quotes are checked
     # against the tree, with the run head read through `gh`.

@@ -61,6 +61,8 @@
 #     (dev/varka_calibration.py --check), when one of them or the tool changed;
 #   * every number the documents quote traces to a committed results file
 #     (dev/varka_quote_check.py), when a document changed;
+#   * every lane is wired at the sites no compiler checks (dev/varka_new_lane.py --check), when
+#     the lane's members, its admission, the script or a site it walks changed;
 #   * a milestone plan's rows hold against the tree (dev/varka_plan_lint.py), when a plan
 #     file changed: a filled provenance cell, no row number twice, and every results file,
 #     plan section and row number a row cites exists; the run-head check needs `gh`, so the
@@ -421,6 +423,24 @@ if printf '%s\n' "${files[@]}" | grep -qE "$census_inputs"; then
       findings=$((findings + 1))
     }
   done
+fi
+
+# A lane is wired at sites no compiler checks (VARKA-474 2.3): a change to the lane's members,
+# its compiler admission, the script or a site it walks re-runs the walk, so a site a new lane
+# misses is a line here rather than a silent decline at run time.
+lane_inputs='^(dev/varka_new_lane\.py|sql/varka/plans/m8/census\.tsv'
+lane_inputs+='|sql/catalyst/src/main/java/org/apache/spark/sql/catalyst/expressions/codegen'
+lane_inputs+='/(VarkaNodeCompiler|varka/VarkaVectorIR|varka/Lane|varka/VarkaVectorTemplateWarmup)'
+lane_inputs+='\.java|sql/catalyst/src/test/.*/(VarkaIrGrammar\.java|VarkaCoverageSuite\.scala'
+lane_inputs+='|VarkaWidthAuditShapes\.scala)'
+lane_inputs+='|sql/(catalyst|core)/src/test/java/.*/Varka[A-Za-z]*Benchmark\.java)$'
+if printf '%s\n' "${files[@]}" | grep -qE "$lane_inputs" && [ -x dev/varka_new_lane.py ]; then
+  # The whole report on a failure: its lines name the lane or type, and a failure of the script
+  # itself (a moved file, a renamed column) prints no "missing" line at all.
+  out="$(dev/varka_new_lane.py --check 2>&1)" || {
+    echo "$out" | grep -v ': no site is missing' | sed 's/^/new lane: /'
+    findings=$((findings + 1))
+  }
 fi
 
 if [ "$docs_changed" -eq 1 ] && [ -x dev/varka_quote_check.py ]; then

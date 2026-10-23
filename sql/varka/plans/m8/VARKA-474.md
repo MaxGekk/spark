@@ -38,7 +38,8 @@ Three kinds of guard exist, and only the first is a compile error:
   ignore the rest. A new type is absent from them silently; the tests that would notice are the
   fuzzers and the matrix, and only if a draw reaches the new type.
 
-The site list, with its guard today (production sites only):
+The site list, with its guard on 22 October 2026 (production sites only; section 7 has each
+guard after the refactor):
 
 | Site | What it holds for the new type | Guard today |
 | :--- | :--- | :--- |
@@ -131,3 +132,55 @@ It must survive the floating split: row 341 divides `Lane` into an integral and 
 (`m8/PLAN.md` 2.3), and a registration point that assumes integral descriptors would have to be
 rebuilt for `DOUBLE` and `FLOAT`. The `Lane` entry carries the descriptor family, and the
 evaluator's table carries the Arrow vector, so neither assumes an integral lane.
+
+## 7. Outcome (23 October 2026)
+
+Rows 329 and 330 had merged, so the order of section 4 held. The three changes landed in one pull
+request; no emitted byte moved.
+
+**2.1** `Lane.of` is a switch over `LaneType` with no `default`. `VarkaLaneTypeSuite` checks that
+each entry names its own constant back.
+
+**2.2** `VarkaLaneArrow`, beside the evaluator in `sql/core`, holds each lane's Arrow vectors in one
+switch over `LaneType`: per vector, the class, the Spark types stored in it and how a destination
+is built. `isArrowBacked` admits a lane's vector through it, and `allocateVector` builds a
+destination from it. Two points the plan's wording got wrong are settled in the code. The admission
+switch keeps a `default`: Arrow's vector classes are not a sealed set, so an unknown class must
+still refuse the batch. What changed is that the classes that arm admits come from the per-lane
+switch, so a lane cannot compile without naming them. And two admitted vectors belong to no lane -
+a boolean column's `BitVector` and a derived input's `VarCharVector` - so they stay named cases in
+`isArrowBacked`, beside the table. The read and write accessors the plan put in the record have no
+reader and were left out. The Spark-type-to-lane knowledge now sits in `laneOf` (catalyst) and in
+this table (sql/core); row 475's registry is where they become one.
+
+**2.3** `dev/varka_new_lane.py --check [LANE...]` reads the lanes from the code - the `LaneType`
+members, each lane's Vector API class from `Lane`, its Spark types from `laneOf` - and walks the
+sites no compiler checks: per lane, `laneOf`'s admission, the template warm-up's load of the lane's
+vector class, a fuzz-grammar leaf and a benchmark that reads the lane; per Spark type, a coverage
+column, a width-audit column and a census entry fused today. The per-type sites are what catch a
+new type on an existing lane: `TIMESTAMP_NTZ` added to the long lane in `laneOf` with nothing else
+is reported missing at all three. Its one table is the census name of each Spark type, and a type
+`laneOf` admits that the table lacks is a finding. A gap a later row owns is printed as owed:
+today the fuzz grammar draws no `BYTE` or `SHORT` leaf, which row 352 owns. It runs in the
+pre-commit hook when a lane's inputs or a walked site change, in the docs job beside the census
+check, and in the varka-scoped catalyst job, since its inputs are Varka sources whose changes do
+not run the docs job (a source file cannot join the docs job's trigger list: a change of only
+such files would then count as documents and skip the suites).
+
+Section 1's table, read again: `VarkaReference` and `VarkaIrGrammar` switch exhaustively over
+`LaneType` for their per-lane parts, so the compiler checks them; the cost model and the census
+catalog are keyed by node kind and need no arm for a lane. `allocateVector` was an if-chain ending
+in a throw, not an exhaustive switch. After this row the sites stand as:
+
+| Site | Guard after this row |
+| :--- | :--- |
+| `Lane.java` (`Lane.of`) | exhaustive switch |
+| `VarkaLaneArrow.java` (`isArrowBacked`, `allocateVector`) | exhaustive switch over the lanes; `BitVector` and `VarCharVector` named |
+| `VarkaNodeCompiler.laneOf` | the script (admission); a decline that names no type until row 475 |
+| `VarkaReference.java`, `VarkaIrGrammar.java` | exhaustive switches for the per-lane parts; the script for a grammar leaf |
+| `VarkaCoverageSuite.scala`, `VarkaWidthAuditShapes.scala`, `census.tsv` | the script, per Spark type |
+| `VarkaVectorTemplateWarmup.java` | the script for a load of the lane's vector; `VarkaWarmupReachSuite` for every method |
+| `VarkaEmitCost.java`, `VarkaOperatorCensusCatalog.java` | keyed by node kind: a new node's arm, not a new lane's |
+
+Run over the four lanes and their eight Spark types: no site is missing but the grammar leaf of
+`BYTE` and `SHORT`, owed to row 352.

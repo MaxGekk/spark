@@ -28,11 +28,6 @@ import scala.jdk.javaapi.CollectionConverters;
 
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.BaseFixedWidthVector;
-import org.apache.arrow.vector.DateDayVector;
-import org.apache.arrow.vector.IntVector;
-import org.apache.arrow.vector.IntervalYearVector;
-import org.apache.arrow.vector.SmallIntVector;
-import org.apache.arrow.vector.TinyIntVector;
 import org.apache.arrow.vector.ValueVector;
 
 import org.apache.spark.internal.SparkLogger;
@@ -57,12 +52,7 @@ import org.apache.spark.sql.execution.vectorized.OffHeapColumnVector;
 import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector;
 import org.apache.spark.sql.execution.vectorized.WritableColumnVector;
 import org.apache.spark.sql.types.DataType;
-import org.apache.spark.sql.types.DataTypes;
-import org.apache.spark.sql.types.DayTimeIntervalType;
 import org.apache.spark.sql.types.StructType;
-import org.apache.spark.sql.types.TimeType;
-import org.apache.spark.sql.types.YearMonthIntervalType;
-import org.apache.spark.sql.util.ArrowUtils;
 import org.apache.spark.sql.vectorized.ColumnVector;
 import org.apache.spark.sql.vectorized.ColumnarBatch;
 
@@ -499,8 +489,9 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
   // ---- the destination vectors ---------------------------------------------------------------
 
   /**
-   * Allocates one destination Arrow vector: a {@code DateDayVector} for a date output, an {@code
-   * IntVector} for a {@code datediff} day count. The fused loop writes its validity and data
+   * Allocates one destination Arrow vector, the one {@link VarkaLaneArrow} names for the output's
+   * type: a {@code DateDayVector} for a date output, an {@code IntVector} for a {@code datediff}
+   * day count, a {@code TinyIntVector} for a tinyint. The fused loop writes its validity and data
    * buffers directly (zero copy), and every valid row's bit is set exactly once per batch however
    * the kernel gets there: an output whose validity is a pure AND or OR of the input bitmaps has
    * its whole bitmap written by the driver's bitmap pass, and the outputs that keep the per-group
@@ -509,33 +500,12 @@ public class VarkaKernelEvaluator extends VarkaEvaluatorBase {
    */
   private BaseFixedWidthVector allocateVector(
       DataType dataType, int ordinal, int len, BufferAllocator allocator) {
-    String name = "varka" + ordinal;
-    ValueVector vector;
-    if (dataType.equals(DataTypes.DateType)) {
-      vector = new DateDayVector(name, allocator);
-    } else if (dataType.equals(DataTypes.IntegerType)) {
-      vector = new IntVector(name, allocator);
-    } else if (dataType.equals(DataTypes.ByteType)) {
-      // The narrow lane's one-byte destination (VARKA-329): the kernel stores the int lane's
-      // values into it as bytes, once, at the root of a tinyint output.
-      vector = new TinyIntVector(name, allocator);
-    } else if (dataType.equals(DataTypes.ShortType)) {
-      vector = new SmallIntVector(name, allocator);
-    } else if (dataType instanceof YearMonthIntervalType) {
-      // The unit rides on the Spark type and never on the buffer, so every year-month unit writes
-      // one vector class; the row path reads it back through the accessor ArrowColumnVector has.
-      vector = new IntervalYearVector(name, allocator);
-    } else if (dataType.equals(DataTypes.LongType) || dataType instanceof TimeType
-        || dataType instanceof DayTimeIntervalType) {
-      // The long lane's destinations, built from the same Arrow field Spark's own writer would
-      // build for the type - BigIntVector, TimeNanoVector with the precision in its field metadata,
-      // DurationVector in microseconds - so the row path reads them back through the accessors
-      // ArrowColumnVector has, and the cache serializer sees the field it expects. A destination is
-      // needed even where no long arithmetic fuses: greatest, least and CASE WHEN produce a long
-      // column.
-      vector = ArrowUtils.toArrowField(name, dataType, true, null, false,
-          org.apache.spark.sql.types.Metadata.empty(), false).createVector(allocator);
-    } else {
+    // The lane's table names the vector a type is written to (VARKA-474 2.2): the long lane's
+    // three from the Arrow field Spark's own writer builds, so the row path and the cache
+    // serializer read them back as they expect. A destination is needed even where no arithmetic
+    // fuses: greatest, least and CASE WHEN produce a column of their type.
+    ValueVector vector = VarkaLaneArrow.allocate("varka" + ordinal, dataType, allocator);
+    if (vector == null) {
       throw VarkaErrors.illegalState("no Varka output vector for " + dataType);
     }
     var fixed = (BaseFixedWidthVector) vector;

@@ -22,8 +22,9 @@ The two types added under this milestone touched these files; the counts are fro
 
 The list is long because a type is not one feature: it is a lane in the IR, leaves that read it,
 a rendering in the emitter, a way in and out of Arrow, and rows in the census and the coverage
-table. What is missing today is a single place that says so; `plans/m8/VARKA-474.md` is the plan
-to add it, and the steps below are the list until it lands.
+table. The compiler lists the sites that are exhaustive switches; `dev/varka_new_lane.py --check
+<LANE>` lists the ones that are not (`plans/m8/VARKA-474.md`), and the steps below are the order to
+take them in.
 
 ## Where to read first
 
@@ -31,15 +32,18 @@ In this order, because each file names the next:
 
 1. `VarkaVectorIR.java` - the `LaneType` member and the leaves that read a column of the type.
 2. `Lane.java` - the runtime facts of a lane: its Vector API class and species constants, its
-   width in bits and bytes, its conversions. `Lane.of` maps a `LaneType` to its entry.
+   width in bits and bytes, its conversions. `Lane.of` maps a `LaneType` to its entry, a switch
+   with no `default`.
 3. `VarkaNodeCompiler.java` - `laneOf` (Spark `DataType` to lane), and where a leaf is built.
 4. `Analysis.java` - which nodes are admitted, on which lane their inputs are read, and the
    guards a node arms.
 5. `VarkaBodyEmitter.java`, `VarkaLoopEmitter.java`, `VarkaVectorWalk.java` - the emitted code,
    per node kind. The body emitter is the dense body, the loop emitter the groups, and the walk
    the node dispatch they share.
-6. `VarkaEvaluatorBase.java` - `isArrowBacked`, where an Arrow column becomes a kernel input.
-   `VarkaKernelEvaluator.java` - `allocateVector`, where an output goes back to Arrow.
+6. `VarkaLaneArrow.java` - the Arrow vectors each lane reads and writes, one switch over
+   `LaneType`, which `isArrowBacked` (`VarkaEvaluatorBase.java`, where an Arrow column becomes a
+   kernel input) and `allocateVector` (`VarkaKernelEvaluator.java`, where an output goes back to
+   Arrow) both read.
 7. `VarkaReference.java` - the scalar semantics the fuzzers compare against.
 8. `VarkaIrGrammar.java` - what the IR fuzzer can draw.
 9. `VarkaCoverageRows.scala` - the rows that make the type count as fused, and the two files
@@ -57,7 +61,8 @@ numbers (width in bits, bytes a row) its new entry carries.
 
 **2. Add the lane's facts.** A new `LaneType` member, its `Lane` entry - the vector class name,
 the species constants, the stride, the conversions - and the matching arms in every `switch` over
-`LaneType`. The switches have no `default`, so the compiler lists the sites.
+`LaneType`, `Lane.of` and `VarkaLaneArrow.of` among them. The switches have no `default`, so the
+compiler lists the sites.
 Check: `build/sbt catalyst/compile` - it fails at each missing case, and passes when they are all
 there.
 
@@ -104,9 +109,12 @@ fixture for the type's columns.
 Check: `build/sbt 'catalyst/testOnly *VarkaIrFuzzSuite'` and
 `build/sbt 'sql/testOnly *VarkaSparkFuzzSuite'`.
 
-**10. Admit it in and out of Arrow.** `isArrowBacked` for the vector the type arrives in,
-`allocateVector` for the vector it is written to, and `VarkaKernelRunner` for any input whose
-stored width is not its type's (a bitmap is one bit a row, and its Arrow vector reports a type
+**10. Admit it in and out of Arrow.** The lane's entry in `VarkaLaneArrow.of`: each Arrow vector
+class the lane's types arrive in and are written to, the Spark types stored in it, and how a
+destination of it is built. `isArrowBacked` and `allocateVector` read the entry, so a lane cannot
+compile without one. A vector that belongs to no lane - a boolean column's `BitVector`, a derived
+input's string - is a named case in `isArrowBacked` instead. `VarkaKernelRunner` handles any input
+whose stored width is not its type's (a bitmap is one bit a row, and its Arrow vector reports a type
 width of zero). The sanitizer registers the rows a call can reach, not the allocation's padding.
 Check: `build/sbt 'sql/testOnly *VarkaKernelEvaluatorSuite *VarkaWarmupEndToEndSuite
 *VarkaMemorySanitizerEndToEndSuite'`.
@@ -146,23 +154,24 @@ Check: the matrix's table - every row `fail 0`, `unfused 0`, and no stale skip l
 
 **16. The linters, before the push.** `./dev/varka_errorprone.sh --master "$(git rev-parse
 origin/master)"`, `./dev/lint-java`, `./dev/lint-scala`, `python3 dev/varka_census.py --check`,
-the 100-column and non-ASCII scans, and the pre-commit hook.
+`dev/varka_new_lane.py --check`, the 100-column and non-ASCII scans, and the pre-commit hook.
 Check: their exit codes, reported in the pull request.
 
 ## What the guards do not catch
 
-Three kinds of site exist (see `plans/m8/VARKA-474.md` 1): exhaustive switches, which the compiler
-checks; runtime checks such as `Lane.of`, which throw when a kernel of the new type first runs;
-and sites with no guard at all - the cost model, the census, the coverage rows, the fuzz grammar,
-the reference evaluator, the width audit's shapes. Between them sit the decline sites:
-`VarkaNodeCompiler.laneOf` returns an empty `Optional` for a type it does not know, and the
-expression and condition compilers fall through to a decline with a reason. A decline is the right
-answer for an unsupported shape, but for a *new type* it is indistinguishable from "not implemented
-yet" unless the reason names the type, so steps 4 and 5 are where a missing arm costs an hour of
-confusion. Steps 8 to 13 are the unguarded sites, and their check commands are the only thing that
-will notice a miss.
+Two kinds of site exist (see `plans/m8/VARKA-474.md` 1). Exhaustive switches the compiler checks:
+the IR's per-kind dispatch, `Lane.of`, `VarkaLaneArrow.of`, and the per-lane switches of the
+reference evaluator and the fuzz grammar. And sites a new lane compiles without, which
+`dev/varka_new_lane.py --check <LANE>` walks: per lane, `laneOf`'s admission, the template warm-up,
+a fuzz-grammar leaf and a benchmark; per Spark type on the lane, a coverage column, the width
+audit's shapes and the census, so a new type on an existing lane is checked once `laneOf` admits
+it. It prints each site with no case, and a gap a later row owns as owed to that row. Sites keyed by
+node kind rather than by lane - the cost model's feature names, the census catalog of operators -
+need no arm for a new lane, only for its new nodes (steps 12 and 13).
 
-Two of today's guards are weaker than they look. `VarkaEvaluatorBase.isArrowBacked` ends its
-`switch` over Arrow vector classes with `default -> false`, so a lane that reaches it is declined
-on every batch and the symptom is a slow query; and `Lane.of` throws at run time rather than
-failing the build. Plan `VARKA-474.md` replaces both with compile-time registration points.
+Between them sit the decline sites: `VarkaNodeCompiler.laneOf` returns an empty `Optional` for a
+type it does not know, and the expression and condition compilers fall through to a decline with a
+reason. A decline is the right answer for an unsupported shape, but for a *new type* it is
+indistinguishable from "not implemented yet" unless the reason names the type, so steps 4 and 5
+are where a missing arm costs an hour of confusion; row 475's type registry is where the decline
+names the type.

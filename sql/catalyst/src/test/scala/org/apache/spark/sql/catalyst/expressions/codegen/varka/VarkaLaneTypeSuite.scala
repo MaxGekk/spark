@@ -277,6 +277,17 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     assert(VarkaShapeCacheImpl.shapeHash(intKey) !== VarkaShapeCacheImpl.shapeHash(longKey))
   }
 
+  test("every lane type has exactly one lane, and the lane names it back") {
+    // Lane.of is a switch with no default, so a missing entry is a compile error; this checks
+    // the entries the switch holds point at the right constants (VARKA-474 2.1).
+    for (laneType <- VarkaVectorIR.LaneType.values()) {
+      assert(Lane.of(laneType).laneType === laneType)
+    }
+    for (lane <- Lane.values()) {
+      assert(Lane.of(lane.laneType) === lane)
+    }
+  }
+
   test("every descriptor the lane derives is the one the Vector API declares") {
     // The emitter builds its descriptors from two facts - the vector class and the scalar type -
     // instead of writing one table per lane, so nothing but this test stands between a wrong
