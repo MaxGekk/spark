@@ -940,3 +940,74 @@ record their comments cite; each was fixed or answered as stated.
     128-bit column and the emitted bytes were regenerated.
 15. The template warm-up leaves the narrow species and their conversions cold. Filed as row 476
     of the milestone plan; the warm-up is unchanged.
+
+### 9.5 Outcome of step 2: the emitted arms measured (23 October 2026)
+
+Step 2 is the measurement 9.2 owed: the same shapes through `VarkaLoopEmitter` and
+`VarkaFusedKernel`, under both arms of `narrowLanes`, instead of hand-written loops.
+`VarkaNarrowEmitBenchmark` builds the IR by hand (a `y1 < y2` selection, `b (y1 + y2) < y1`, an
+int-driven `b < i`, `e CASE WHEN y1 < y2 THEN y1 ELSE y2 END` as a `TINYINT` store; the plan's
+packed-boolean shape `d` is the selection word of every compare root and so has no separate
+kernel), emits it with the arm's option set, loads it, checks the whole batch against
+`VarkaReference`, and times it at 16384, 262144 and 1000000 rows, with 8388608 and 33554432 under
+opt-in properties. Ten runs on the laptop at 512, 256 and 128 bits, WIDENED and NATIVE both in one
+JVM and each alone; the record, with commands, pins, the load and power state of every run and
+every table, is `results/VARKA-329-emit-arm.txt`.
+
+**Verdict** (NATIVE over WIDENED, medians, G rows/s in parentheses):
+
+| shape | 512 bits | 256 bits | 128 bits |
+| :-- | :-- | :-- | :-- |
+| byte compare into a selection | 4.05, 3.88, 2.32 (104.0, 99.2, 58.3) | 3.02, 3.03, 2.91 (48.6, 49.0, 45.0) | NATIVE only: 36.1, 35.4, 34.3; WIDENED declines |
+| the add-then-compare chain | 3.99, 3.84, 2.33 | 2.56, 2.67, 2.54 | NATIVE only: 35.5, 36.3, 33.9 |
+| mixed `b < i`, int-driven | 1.00 at every rung; the arms' bytes are identical | 1.00, identical bytes | both arms decline |
+| `CASE ... TINYINT` store | 4.44, 3.69, 2.24 (86.5, 72.1, 42.5) | 4.67, 4.01, 2.21 | NATIVE only: 59.7, 53.6, 41.1 |
+
+Past the cache the compare reads 1.58 at 8388608 rows (a 16 MB byte pair, the edge of the pinned
+complex's 16 MB L3) and 1.17 at 33554432 (64 MB); the chain 1.68 and 1.24; the store 1.47 and
+1.05. The two-species arrangement costs nothing measurable: the separate-arm JVMs at 512 bits
+agree with the all-arms ones to within 1 percent.
+
+**Does the emitted kernel reproduce the hand-loop advantage?** The WIDENED arm, yes: 25.7, 25.6,
+25.2 against the hand loop's 26.9, 26.6, 25.9 G rows/s at 512 bits and 16.1, 16.2, 15.4 against
+16.5, 16.4, 16.0 at 256, within 2 to 4 percent. The NATIVE arm keeps 62 to 94 percent of the hand
+loop's advantage, not all of it: 4.05 against 5.60 at 512 bits in L1, 3.02 against 4.66 at 256,
+and 94 percent at the L3 rung. The gap is the fixed work a group of the emitted loop does and the
+hand loops do not - the validity word, the general validity fallback at the 64- and 32-lane byte
+species, the loop bounds and the epilogue - which is where 9.2 said to look if the margin went
+missing. It did not go missing to that degree: 9.2's threshold was that an emitted kernel keeping
+less than about half of the hand loop's ratio would put the margin outside the lane, and the
+smallest kept fraction is 0.62. The NATIVE lane is still worth 2.5x to 4.7x for a pure byte shape,
+and the default rule of 3.5 is not contradicted on this host at 512 or 256 bits.
+
+**The 128-bit finding, and it is not a timing.** At 128 bits the WIDENED arm declines every
+`TINYINT` shape that reads a value, with the reason the emitter names: "a BYTE column has no
+widening load at 4 int lanes" (the 4-lane byte species would be 32 bits). NATIVE declines the
+mixed `b < i` for the same reason, because an int value in the tree forces the int lane and the
+widening load whatever the arm. The census's two 128-bit byte-load forms of 9.2 (`B2I_load64`,
+`B2I_load128`) convert in parts and span more than one int group an iteration, and the emitter
+computes one group an iteration by design, so it cannot use either: 2.3's question is answered for
+the intrinsics and not for this emitter. The consequence is for the CI hosts and for 3.5: on a
+128-bit host (the Neoverse N2 runner) the default arm has no emission at all for a byte column
+read as a value - not only for the all-narrow shapes, where NATIVE serves, but for the mixed ones,
+where nothing does - and the row engine answers. A per-width default alone does not cover that
+case; either the emitter learns the part-width load at 4 int lanes or the mixed narrow shapes stay
+with the row engine on 128-bit hosts. That choice is question 1's, and nothing here changes the
+default.
+
+**Predictions of 3.3, scored on the emitted arms** (detail in the record). 1 holds at 256 bits
+(3.02 inside the 1.5 to 4.0 band) and is touched at 512 (4.05, against the hand loop's 5.60). 2
+holds at the rung that is genuinely past the cache (1.17 and 1.24 at 33554432 rows) and is above
+the band at 8388608, which is at the L3 edge, not past it. 3 holds: the mixed shape is one kernel
+in both arms. 4 is not measured, the shapes here are `TINYINT`. 5 has no emitted ratio to bound at
+128 bits, because WIDENED declines. 6 holds at 512 and 256 and is decided at 128 by the census
+cell that does not exist. 7 holds: 210 case settles over the ten runs, every one at eight drives
+and level 4, none unsettled, no cell moved with run order (largest run-to-run spread 14 percent,
+which is why the tables are medians).
+
+**Still owed.** The runner hosts' columns at 256 and 128 bits (the EPYC 7763 and the Neoverse N2),
+`SMALLINT` on these shapes, the null and masked-epilogue path (no batch here has a null), and row
+415's hand-loop past-L3 rung, which this benchmark's 33554432-row reading does not replace. The
+arithmetic chain's timed rungs use bytes in [-64, 63] because the arms disagree on overflow until
+row 330's deferred wrap; the run prints that disagreement (100 + 100: WIDENED selects nothing,
+NATIVE selects the row) rather than hiding it.
