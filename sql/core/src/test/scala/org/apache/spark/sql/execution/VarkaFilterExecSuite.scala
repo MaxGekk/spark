@@ -26,7 +26,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.test.SharedSparkSession
-import org.apache.spark.sql.types.{DateType, IntegerType, ShortType}
+import org.apache.spark.sql.types.{DateType, DoubleType, IntegerType}
 import org.apache.spark.sql.util.ArrowUtils
 import org.apache.spark.sql.vectorized.ColumnarBatch
 
@@ -48,11 +48,12 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession with VarkaT
    * list that carries it, kept separate from the two-column one several tests below number
    * their ordinals against. The tests whose subject is the *split* between fused and residual
    * conjuncts use these: VARKA-122 made a bare int column compare in the kernel, so `i > 5`
-   * stopped being an example of something that cannot fuse.
+   * stopped being an example of something that cannot fuse, and VARKA-329 retired the
+   * smallint's `sh > 5S` the same way; a double column is read by no kernel today.
    */
-  private val shortAttr = AttributeReference("sh", ShortType)()
-  private val withShort: Seq[Attribute] = Seq(attrD, intAttr, shortAttr)
-  private val shortResidual = GreaterThan(shortAttr, Literal(5.toShort))
+  private val doubleAttr = AttributeReference("f", DoubleType)()
+  private val withDouble: Seq[Attribute] = Seq(attrD, intAttr, doubleAttr)
+  private val doubleResidual = GreaterThan(doubleAttr, Literal(5.0d))
 
   /** `d < DATE(epoch day 10)`: the workhorse predicate of these tests. */
   private def dLess10 = LessThan(attrD, Literal(10, DateType))
@@ -407,41 +408,41 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession with VarkaT
 
   test("EXPLAIN reports the predicate's conjuncts through the fusion report") {
     val fused = VarkaFusionReport.predicateLines(And(dLess10, IsNotNull(attrD)),
-      withShort)
+      withDouble)
     assert(fused === Seq("(d < DATE '1970-01-11'): fused", "(d IS NOT NULL): fused"))
     val mixed = VarkaFusionReport.predicateLines(
-      And(dLess10, shortResidual), withShort)
+      And(dLess10, doubleResidual), withDouble)
     assert(mixed.head === "(d < DATE '1970-01-11'): fused")
-    assert(mixed(1).startsWith("(sh > 5S): residual (non-date column of type smallint"))
+    assert(mixed(1).startsWith("(f > 5.0D): residual (non-date column of type double"))
     // A filter no conjunct of which fuses still says why, conjunct by conjunct.
-    val none = VarkaFusionReport.predicateLines(shortResidual, withShort)
-    assert(none.size == 1 && none.head.startsWith("(sh > 5S): residual (non-date column"), none)
+    val none = VarkaFusionReport.predicateLines(doubleResidual, withDouble)
+    assert(none.size == 1 && none.head.startsWith("(f > 5.0D): residual (non-date column"), none)
   }
 
   test("a nondeterministic filter is declined with its reason, conjunct by conjunct") {
     val lines = VarkaFusionReport.predicateLines(
-      And(dLess10, GreaterThan(Rand(Literal(7L)), Literal(0.5))), withShort)
+      And(dLess10, GreaterThan(Rand(Literal(7L)), Literal(0.5))), withDouble)
     assert(lines.size == 2, lines)
     assert(lines.forall(_.contains("residual (the condition is nondeterministic")), lines)
     assert(VarkaExpressionCompiler.compilePredicate(
-      And(dLess10, GreaterThan(Rand(Literal(7L)), Literal(0.5))), withShort).isEmpty)
+      And(dLess10, GreaterThan(Rand(Literal(7L)), Literal(0.5))), withDouble).isEmpty)
   }
 
   test("VarkaColumnarRule: the pre stage rewrites an eligible filter, splitting conjuncts") {
-    val child = TestColumnarBatchPlan(Nil, withShort)
+    val child = TestColumnarBatchPlan(Nil, withDouble)
     val eligible = FilterExec(dLess10, child)
-    val mixed = FilterExec(And(dLess10, shortResidual), child)
-    val ineligible = FilterExec(shortResidual, child)
+    val mixed = FilterExec(And(dLess10, doubleResidual), child)
+    val ineligible = FilterExec(doubleResidual, child)
     val rowChild = FilterExec(dLess10, ColumnarToRowExec(child))
 
     withSQLConf(SQLConf.VARKA_ENABLED.key -> "true") {
       assert(VarkaColumnarRule.preColumnarTransitions(eligible) ===
         VarkaFilterExec(dLess10, child))
-      // The mixed predicate splits: the fused conjunct in the Varka node, the int conjunct
+      // The mixed predicate splits: the fused conjunct in the Varka node, the double conjunct
       // in a row FilterExec above it - which then sees only the surviving rows. The Varka
       // node keeps the whole condition for the batches its kernel cannot serve.
       assert(VarkaColumnarRule.preColumnarTransitions(mixed) ===
-        FilterExec(shortResidual, VarkaFilterExec(dLess10, child, Some(mixed.condition))))
+        FilterExec(doubleResidual, VarkaFilterExec(dLess10, child, Some(mixed.condition))))
       assert(VarkaColumnarRule.preColumnarTransitions(ineligible) === ineligible)
       // A row child is left for the post stage, which absorbs the transition.
       assert(VarkaColumnarRule.preColumnarTransitions(rowChild) === rowChild)
@@ -452,7 +453,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession with VarkaT
   }
 
   test("VarkaColumnarRule: the post stage fuses the transition, or absorbs one") {
-    val child = TestColumnarBatchPlan(Nil, withShort)
+    val child = TestColumnarBatchPlan(Nil, withDouble)
     withSQLConf(SQLConf.VARKA_ENABLED.key -> "true") {
       // The transition the pre-stage node received is fused into the row-out filter.
       assert(VarkaColumnarRule.postColumnarTransitions(
@@ -464,14 +465,14 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession with VarkaT
         VarkaFilterColumnarToRowExec(dLess10, child))
       // The split applies there too.
       assert(VarkaColumnarRule.postColumnarTransitions(
-        FilterExec(And(dLess10, shortResidual),
+        FilterExec(And(dLess10, doubleResidual),
           ColumnarToRowExec(child))) ===
-        FilterExec(shortResidual,
+        FilterExec(doubleResidual,
           VarkaFilterColumnarToRowExec(dLess10, child,
-            wholeCondition = Some(And(dLess10, shortResidual)))))
+            wholeCondition = Some(And(dLess10, doubleResidual)))))
       // The residual filter the pre stage left above a fused Varka filter is not
       // touched again: its child is a row node.
-      val residualOverFused = FilterExec(shortResidual,
+      val residualOverFused = FilterExec(doubleResidual,
         VarkaFilterColumnarToRowExec(dLess10, child))
       assert(VarkaColumnarRule.postColumnarTransitions(residualOverFused)
         === residualOverFused)
@@ -544,7 +545,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession with VarkaT
     // the eligibility arm first and must keep a kernel of its own; only a projection that
     // fuses nothing reaches the narrowing arm. Asserted rather than left to the reader,
     // because the arms are adjacent and a reordering would silently take a kernel away.
-    val child = TestColumnarBatchPlan(Nil, withShort)
+    val child = TestColumnarBatchPlan(Nil, withDouble)
     withSQLConf(SQLConf.VARKA_ENABLED.key -> "true") {
       val computed = Seq(Alias(DateAdd(attrD, Literal(3)), "add")())
       val pre = VarkaColumnarRule.preColumnarTransitions(
@@ -590,7 +591,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession with VarkaT
   }
 
   test("VarkaColumnarRule: a Varka projection stacks on a Varka filter in one pre pass") {
-    val child = TestColumnarBatchPlan(Nil, withShort)
+    val child = TestColumnarBatchPlan(Nil, withDouble)
     val plan = ProjectExec(
       Seq(Alias(DateAdd(attrD, Literal(3)), "add")()),
       FilterExec(dLess10, child))
@@ -603,7 +604,7 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession with VarkaT
     // With a residual conjunct the stack breaks by design: the row FilterExec sits between.
     val mixedPlan = ProjectExec(
       Seq(Alias(DateAdd(attrD, Literal(3)), "add")()),
-      FilterExec(And(dLess10, shortResidual), child))
+      FilterExec(And(dLess10, doubleResidual), child))
     withSQLConf(SQLConf.VARKA_ENABLED.key -> "true") {
       val rewritten = VarkaColumnarRule.preColumnarTransitions(mixedPlan)
       assert(rewritten.isInstanceOf[ProjectExec])
