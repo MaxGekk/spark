@@ -1065,7 +1065,156 @@ cast row rather than fixed here: a non-root `NarrowLane` in an int-driven kernel
 narrowing today (`Analysis.laneOf`), which the stored-narrow construction's roots keep harmless;
 `PLAN.md`'s row 332 now carries it.
 
-### 9.5 Review of 23 October 2026
+### 9.5 Outcome of step 2: the emitted arms measured (23 October 2026)
+
+Step 2 is the measurement 9.2 owed: the same shapes through `VarkaLoopEmitter` and
+`VarkaFusedKernel`, under both arms of `narrowLanes`, instead of hand-written loops.
+`VarkaNarrowEmitBenchmark` builds the IR by hand (a `y1 < y2` selection, `b (y1 + y2) < y1`, an
+int-driven `b < i`, `e CASE WHEN y1 < y2 THEN y1 ELSE y2 END` as a `TINYINT` store; the plan's
+packed-boolean shape `d` is the selection word of every compare root and so has no separate
+kernel), emits it with the arm's option set, loads it, checks the whole batch against
+`VarkaReference`, and times it at 16384, 262144 and 1000000 rows, with 8388608 and 33554432 under
+opt-in properties. Fourteen runs on the laptop at 512, 256 and 128 bits, WIDENED and NATIVE both
+in one JVM and each alone; the record, with commands, pins, the load and power state of every run
+and every table, is `results/VARKA-329-emit-arm.txt`.
+
+**Verdict** (NATIVE over WIDENED, medians, G rows/s in parentheses):
+
+| shape | 512 bits | 256 bits | 128 bits |
+| :-- | :-- | :-- | :-- |
+| byte compare into a selection | 4.08, 3.88, 2.32 (104.1, 99.0, 58.4) | 3.06, 3.05, 2.91 (49.0, 48.7, 44.8) | NATIVE only: 36.1, 36.2, 34.0; WIDENED declines |
+| the add-then-compare chain | 4.04, 3.84, 2.34 | 2.55, 2.64, 2.53 | NATIVE only: 35.6, 36.1, 33.9 |
+| mixed `b < i`, int-driven | 1.00, 1.00, 0.99; the arms' bytes are identical | 1.00 at every rung, identical bytes | both arms decline |
+| `CASE ... TINYINT` store | 4.57, 3.38, 2.24 (89.1, 65.8, 42.6) | 4.35, 3.52, 2.22 | NATIVE only: 57.7, 55.9, 41.2 |
+
+Past the cache the compare reads 1.65 at 8388608 rows (a 16 MB byte pair, the edge of the pinned
+complex's 16 MB L3) and 1.15 at 33554432 (64 MB); the chain 1.68 and 1.24; the store 1.45 and
+1.04. The two-species arrangement shows no measurable cost: the separate-arm JVMs at 512 bits
+agree with the all-arms ones on the compare within 1 percent, inside the store cell's run-to-run
+spread.
+
+**A second host.** The benchmark was dispatched on the fixed head and ran on a GitHub-hosted AMD
+EPYC 7763 at 256 bits (run 39915371624, head `9679df08971`; the record's "a second host" section
+has the tables and the probe). NATIVE over WIDENED there is 3.40, 3.39, 3.43 and 3.43 at the four
+in-cache rungs of the compare and 2.53 at 33554432 rows; 2.92, 3.05, 3.06, 3.09 and 2.38 on the
+chain; 5.39, 3.70, 3.36, 3.12 and 2.30 on the store; and the mixed shape ties (0.98 to 1.00).
+Prediction 1 holds on the compare at every in-cache rung, prediction 2 is not scored at the top
+rung because the runner's cache sizes are not probed, and 3.5's direction - NATIVE for every
+all-narrow shape - holds on a second host. The arithmetic overflow probe reproduced: WIDENED
+selects nothing, NATIVE selects the row.
+
+The first campaign of ten runs was rerun. Its settle gate read a kernel's compile levels from the
+JVM's code list by class name, and both arms' classes carried the same name in their own loaders,
+so the gate could read one arm's level 4 for the other's loop still at C1; the review of this
+section found it. Each arm's class is now named for its arm, and the rerun's 306 settles all read
+level 4 with none unsettled; its 512-bit medians reproduce the first campaign's to within the cell
+spreads, the store's 262144-row cell being bimodal at 62 to 88 G rows/s.
+
+**Does the emitted kernel reproduce the hand-loop advantage?** The WIDENED arm, yes: 25.5, 25.5,
+25.2 against the hand loop's 26.9, 26.6, 25.9 G rows/s at 512 bits and 16.0, 16.0, 15.4 against
+16.5, 16.4, 16.0 at 256, within 5.5 percent. The NATIVE arm keeps 63 to 94 percent of the hand
+loop's advantage, not all of it: 4.08 against 5.60 at 512 bits in L1, 3.06 against 4.66 at 256,
+and 94 percent at the L3 rung. The gap is the fixed work a group of the emitted loop does and the
+hand loops do not - the validity word, the general validity fallback at the 64- and 32-lane byte
+species, the loop bounds and the epilogue - which is where 9.2 said to look if the margin went
+missing. It did not go missing to that degree: 9.2's threshold was that an emitted kernel keeping
+less than about half of the hand loop's ratio would put the margin outside the lane, and the
+smallest kept fraction is 0.63. The NATIVE lane is still worth 2.5x to 4.6x for a pure byte shape
+in L1 and L2, and the default rule of 3.5 is not contradicted on this host at 512 or 256 bits.
+
+**The 128-bit finding, and it is not a timing.** At 128 bits the WIDENED arm declines every
+`TINYINT` shape that reads a value, with the reason the emitter names: "a BYTE column has no
+widening load at 4 int lanes" (the 4-lane byte species would be 32 bits). NATIVE declines the
+mixed `b < i` for the same reason, because an int value in the tree forces the int lane and the
+widening load whatever the arm. The census's two 128-bit byte-load forms of 9.2 (`B2I_load64`,
+`B2I_load128`) convert in parts and span more than one int group an iteration, and the emitter
+computes one group an iteration by design, so it cannot use either: 2.3's question is answered for
+the intrinsics and not for this emitter. The consequence is for the CI hosts and for 3.5: on a
+128-bit host (the Neoverse N2 runner) the default arm has no emission at all for a byte column
+read as a value - not only for the all-narrow shapes, where NATIVE serves, but for the mixed ones,
+where nothing does - and the row engine answers. A per-width default alone does not cover that
+case; either the emitter learns the part-width load at 4 int lanes or the mixed narrow shapes stay
+with the row engine on 128-bit hosts. That choice is question 1's, and nothing here changes the
+default.
+
+**Predictions of 3.3, scored on the emitted arms** (detail in the record). 1 holds at 256 bits
+(3.06 and 3.05 inside the 1.5 to 4.0 band) and is touched at 512 (4.08 and 3.88, against the hand
+loop's 5.60). 2 holds at the rung that is genuinely past the cache (1.15 and 1.24 at 33554432
+rows) and is above the band at 8388608, which is at the L3 edge, not past it. 3 holds: the mixed
+shape is one kernel in both arms, 1.00 everywhere but 1000000 rows at 512, which reads 0.99. 4 is
+not measured, the shapes here are `TINYINT`. 5 has no emitted ratio to bound at 128 bits, because
+WIDENED declines every shape there. 6 holds at 512 and 256 and is decided at 128 by the census
+cell that does not exist. 7 holds: 306 case settles over the fourteen runs, 304 at eight drives
+and two at nine, all at level 4, none unsettled, and the gate's class lookup is per arm. The
+run-to-run spread reaches 42 percent in the store's 262144-row cell (62.4 to 88.4 G rows/s) and
+26 percent in the compare's WIDENED cell at 256 bits, which is why the tables are medians.
+
+**Still owed.** The Neoverse N2's columns at 128 bits (the other runner host),
+`SMALLINT` on these shapes, the null and masked-epilogue path (no batch here has a null), and row
+415's hand-loop past-L3 rung, which this benchmark's 33554432-row reading does not replace. The
+arithmetic chain's timed rungs use bytes in [-64, 63] because the arms disagree on overflow until
+row 330's deferred wrap; the run prints that disagreement (100 + 100: WIDENED selects nothing,
+NATIVE selects the row) rather than hiding it.
+
+### 9.6 Outcome of step 3: the part-form widening load at 128 bits (23 October 2026)
+
+At 128 bits a `TINYINT` column had no widening load: the wide arm read the narrow species of the
+int species' own width, and a 32-bit byte species does not exist, so every byte-driven shape
+declined. Either the emitter learned the part-width load at 4 int lanes, or the mixed narrow shapes
+stayed with the row engine; the emitter now learns it, in the 64-bit two-part form (9.2's option
+(a), `B2I_load64`), and the decline is gone.
+
+**What it does.** `Lane.widenLanes` names the species a widening load reads: the narrow species of
+the int species' own width where it exists, and otherwise the next width up, so eight and sixteen
+int lanes keep their bytes and four int lanes - and two, on a 64-bit host - read the next species
+up: an eight-lane 64-bit byte load converted in two parts, four at two int lanes.
+`Analysis.narrowGroups` is that load's part count, the kernel's rather than a body's because every
+body's loop must agree on the iteration it covers. The loop computes the groups of one iteration,
+each group's narrow load reading the whole iteration's species once from the iteration's first row
+and converting its own part (`Slots.rowGroup`); the bound rounds down to a whole iteration and the
+remainder goes through the masked epilogue one group at a time. A narrow store whose species is
+wider than a group is always masked, since the last iteration has no next group to write over the
+lanes past its own. Form (b), the 128-bit four-part load, is not used: the spike measured it
+within noise of (a) at 128 bits (0.97 to 0.99 of it) and 10 to 13 percent faster at 256, where the
+emitter already reads the int width's own species.
+
+**Artifacts and tests.** `width_audit.json`'s 128-bit column loses the ten `declined: a BYTE column
+has no widening load at 4 int lanes` cells and names them; `emitted_bytes.json` gains the 128-bit
+`TINYINT` method hashes; `VarkaFamilySwitchSuite`'s recorded
+declines and the 28 `lanesOverride=4` lines of `matrix/skips.tsv` follow, because those tests now
+pass; coverage and the docs' 128-bit column are regenerated.
+
+**Measured** (`VarkaNarrowEmitBenchmark`, the benchmark of step 2, six runs at
+`-XX:MaxVectorSize=16`, both locks, the idle gate and the pinned cores; the record is
+`results/VARKA-329-partload.txt`; G rows/s, medians, the rungs 16384, 262144 and 1000000 in cache):
+
+| shape | WIDENED | NATIVE | N/W |
+| :-- | :-- | :-- | :-- |
+| compare, in cache | 5.2, 5.1, 5.1 | 36.3, 36.5, 34.3 | 6.97x, 7.10x, 6.77x |
+| compare, past L3 | 5.0 / 2.2 (8388608), 4.8 (33554432) | 30.0, 20.5 | 6.0x / 13.6x, 4.23x |
+| add-then-compare chain, in cache | 2.3, 2.3, 2.2 | 35.8, 36.2, 33.7 | 15.66x, 15.99x, 15.03x |
+| that chain, past L3 | 2.2, 2.2 | 28.5, 20.6 | 12.93x, 9.37x |
+| mixed `b < i`, in cache | 5.6, 5.5, 5.4 | 5.6, 5.5, 5.5 | 1.00x at every rung |
+| `CASE ... TINYINT` store, in cache | 3.7, 3.7, 3.6 | 56.1, 57.6, 41.1 | 15.24x, 15.70x, 11.27x |
+| that store, past L3 | 3.6, 3.3 | 19.1, 14.4 | 5.36x, 4.39x |
+
+**Verdict.** The decline is gone and the mixed shape now runs at the int lane's own rate with the
+same class bytes in both arms, where both arms declined before. But wherever every value is narrow,
+NATIVE is 4.2x to 16x faster, far outside prediction 5's ceiling of 4.0 and past the 1.3 band in
+which 3.5 keeps WIDENED the default. That is the lane's ratio (16 byte lanes against 4 int lanes)
+and not a tuning miss: the emitted compare keeps 0.70 to 0.72 of the hand loop's WIDENED rate at
+128 bits (5.2, 5.1, 5.1 against 7.3, 7.3, 7.1 G rows/s in `results/VARKA-329-spike.txt`). So
+3.5's per-width default now has its 128-bit case, and the choice is the owner's (question 1,
+section 8); nothing here changes the default. One measured fact is not explained: the chain reads
+2.2 to 2.3 G rows/s in every JVM, and the compare falls to the same plateau in one of the five JVMs
+that run WIDENED, from the 262144-row rung on - 9.2's 128-bit bimodality, with the compiled loops
+not profiled here; the record lists both under "not established at 128 bits". One latent deviation
+sits below this width and no test draws it: at two int lanes a kernel reading both a byte and a
+short column sizes the short load by the byte column's four parts, so it reads an eight-lane
+128-bit short species where a four-lane one would do - legal above the platform's maximum, where
+the Vector API falls back, so a cost on a 64-bit host and not a wrong answer.
+
+### 9.7 Review of 23 October 2026
 
 A `/code-review high` of the row's diff found fifteen things. The numbered list below is the
 record their comments cite; each was fixed or answered as stated.
