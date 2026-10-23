@@ -972,7 +972,9 @@ the three configurations that answer them differently: `checkIntOverflow=false` 
 wrapped value where Spark raises), `validityByWidth=false` (26, no baked int lane count to widen a
 narrow column from) and `lanesOverride=4` (13, the eight `TINYINT` rows, a four-lane int species
 having no 32-bit byte species). All three configurations then pass, those declines being the arm's
-answer. The row's four catalyst suites rerun as the whole catalyst matrix under all 51 option
+answer. *Superseded on 23 October 2026 by 9.6's part-form load, which gives four int lanes a byte
+lowering: the 13 `lanesOverride=4` lines, and the 28 of row 329 a merge brought back, are gone
+(9.8, 989-1).* The row's four catalyst suites rerun as the whole catalyst matrix under all 51 option
 configurations and the defaults, three JVMs each: every configuration exits 0, with no test
 unfused and no skip line stale. The defaults answer 76 and cancel 19; most configurations answer
 73 and cancel 22, and the two that turn on their own skip lines cancel them as well:
@@ -1011,8 +1013,8 @@ counts 164 fused pairs over its 13 types, 23 of them fused for every admitted ty
 
 The bytes oracle pins the same 16 rows at both widths, its column list extended with the narrow
 four - appended after the boolean pair, so no existing row's input ordinals move. At 512 bits they
-emit on the widened arm as any int kernel does. At 128 bits the eight `TINYINT` rows are refused,
-and the refusal is the compiler's own: `VarkaLoopEmitter.narrowRefusal` is what demotes a narrow
+emit on the widened arm as any int kernel does. At 128 bits the eight `TINYINT` rows were refused
+(*until 9.6's part-form load, after which they emit; 9.8*), and the refusal was the compiler's own: `VarkaLoopEmitter.narrowRefusal` is what demotes a narrow
 value it cannot widen, and at four int lanes the byte species below would be 32 bits, a constant
 the Vector API does not declare. The oracle records that reason in the row rather than a body that
 could not load; the eight `SMALLINT` rows emit, four shorts being a named 64-bit species. No
@@ -1047,8 +1049,8 @@ empty; one row of small shorts fixes it. One limit is kept rather than worked ar
 narrow multiply drives its kernel at the int lane on either arm
 (`VarkaVectorIR.holdsCheckedNarrowMultiply`), the two-species case of 2.4, whose cost is left to
 the measurement the row's shapes need and this row does not carry. That drive widens even on the
-native arm, so at four int lanes a checked byte multiply declines there too, with the refusal a
-widened byte load gets; the suite reads a decline as the arm's answer exactly when the width
+native arm, so where a widened byte load is refused - at the time of writing four int lanes,
+since 9.6 only a width with no baked lane count - a checked byte multiply declines there too; the suite reads a decline as the arm's answer exactly when the width
 cannot widen the node's lane. The `CAST` limit the row first recorded is gone with the lift:
 `y1 + 1`, which analysis spells `Add(Cast(y1 AS INT), 1)`, compiles as an int add over a widened
 narrow load by 329's `Cast(narrow AS INT)` arm, and so does `y1 + i`; at four int lanes the byte
@@ -1266,3 +1268,50 @@ record their comments cite; each was fixed or answered as stated.
     broadcast and widening conversion, and the mask calls a selection makes - and the reach
     model enumerates all five lanes. Row 476 of the milestone plan still owns the measurement
     of the first narrow kernel on a fresh JVM.
+
+### 9.8 Two `/code-review max` reviews of 23 October 2026: #987 and #989, combined
+
+After both pull requests merged, each was reviewed at maximum effort, #987 against its squash
+commit `a2fbcc74bb8` and #989 against `793f8b748b3`. Neither found a wrong answer reachable from
+SQL. Each kept fifteen findings; three describe the same defect from both sides, and one of #987's
+was already fixed by #989. "First" is the pull request that fixes it: the review fixes (bucket 1,
+this record's pull request), the bytes-neutral refactors after it (bucket 2), the narrow emission
+changes that move emitted bytes, landed with row 478 so the oracles move once (bucket 3), or a
+row.
+
+| Finding | What | Disposition |
+| :-- | :-- | :-- |
+| 989-1 | 41 `lanesOverride=4` skip lines with a reason 9.6 made false: 28 a merge brought back, 13 new | bucket 1: removed, the configuration run on the tree; 9.4's three statements marked superseded |
+| 989-2, 987-7 | no fixture row with a narrow pair null on the left only; the "no nulls" fixture held narrow NULLs | bucket 2: a left-null pair in `mixed`, no narrow NULL in `dense` |
+| 989-3 | the arithmetic suite's widened arm took the matrix base, so `narrowLanes=true` ran the native arm twice | bucket 1: both arms pinned |
+| 989-4 | an arm that cannot widen passed with no kernel run | bucket 1: it cancels, naming the refusal |
+| 989-5 | `narrow_range.smt2` proved a byte multiply in a 16-bit lane the emitter never uses | bucket 2: the check removed, the width read from `Lane.INT` |
+| 989-6 | the oracle-share timing's filter cancelled the test on the arm it did not name | bucket 1: it skips that arm |
+| 989-7 | `weightOf` weighs a wrapped narrow node 1 where it emits 3 | bucket 3 |
+| 989-8 | narrow `abs` is a compare, a negate and a blend, null-skipping | bucket 3: one lanewise `ABS` |
+| 989-9 | the checked narrow multiply's int drive is per root, so the native arm splits a projection | bucket 3: decided per kernel, needed once NATIVE is the default |
+| 989-10 | the 18 always-on 2^24 SMALLINT slices cost about 78 s a build | the owner's decision: the slice is row 330's own done-when |
+| 989-11, 987-8 | the warm-up feeds the preferred narrow species, not the ones widened kernels use; dead `neg`/`abs`; no narrow `fromLong` | bucket 2: the reach gate models the `widenLanes` species, the warm-up warms them |
+| 989-12 | negation is `mul` by -1, eight instructions on bytes where `NEG` is one | bucket 3 |
+| 989-13 | `arithOver`'s narrow exception is dead and its javadoc false; no narrow range in `VarkaRangeAnalysis` | row 480 |
+| 989-14 | four comments still said a checked multiply never reaches the overflow mask | bucket 1 |
+| 989-15, 987-15 | `default` arms and `instanceof` ladders over the sealed IR in `isNarrowRing`, `laneBounds`, `narrowValuesIn`, `needsNarrowSpecies` | bucket 2: exhaustive switches, the two walks side by side |
+| 987-1, 987-4, 987-5 | at four int lanes every group stores masked, reloads the iteration's narrow load, and the body repeats in int-only groups unpriced | row 479 |
+| 987-2, 987-10 | a narrow entry first in a projection demotes later bigint entries; a validity-only narrow read declines a bigint kernel | row 480 |
+| 987-3 | narrow arithmetic computed at int width with no wrap | fixed by #989 (`wrapAt`, the lane-relative reference) |
+| 987-6 | the new `CAST(narrow AS INT)` arm has no coverage row | bucket 2 |
+| 987-9 | a TINYINT condition choosing SMALLINT values declines | row 332, the narrow-to-narrow cast |
+| 987-11 | an output's width has two unchecked sources | bucket 2: `CompiledVarkaProjection` checks them |
+| 987-12 | the narrow suite's condition harness never held the masked body to the reference on a null-free batch, and one byte and short test never ran the dense body | bucket 1: both bodies run |
+| 987-13 | the byte warm-up block throws above 512 bits and ends the round | bucket 1: the narrow blocks are skipped there |
+| 987-14 | the `CAST(narrow AS INT)` coercion inserts is charged to the int-arithmetic family switch, though it emits nothing, and `VarkaFamily`'s text omits it | bucket 2: the cast is a relabel, as a `TIME` precision cast is |
+
+Refuted on verification: #989's masked body untested, literal-slot leak and NULL `IntNeg` drift;
+#987's composition-fuzz lane filter, the reference-narrows test and a coalesce lane mismatch.
+Cut by the reviews' fifteen-finding caps and taken as they fall: the pull request and the
+benchmark naming a SQL conf that does not exist - `narrowLanes` is an emit option no session
+setting reaches (bucket 1: the javadoc corrected; the commit message cannot be); the two
+truncation helpers, the five special cases of the checked narrow multiply and the narrow CASE
+truncated and widened again inside a larger expression (bucket 3); the moved
+`runAndCompareMixedStatus` and the canonical-rendering note (bucket 2). Row 476's done-when
+presumed the narrow species were covered; bucket 2 is what makes that true.

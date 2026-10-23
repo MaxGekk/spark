@@ -54,8 +54,9 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Ove
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WidenLane;
 
 /**
- * What row 329's narrow lane costs through the real emitter, under the two arms of
- * {@code spark.sql.codegen.varka.emit.narrowLanes}: the measurement the hand-loop spike
+ * What row 329's narrow lane costs through the real emitter, under the two arms of the emit
+ * option {@code VarkaEmitOptions.narrowLanes} (not a SQL conf: no session setting reaches it, so a
+ * production kernel is the widened arm): the measurement the hand-loop spike
  * ({@link VarkaNarrowLaneBenchmark}, {@code results/VARKA-329-spike.txt}) could not make.
  *
  * <p>The IR is built by hand and passed through {@link VarkaLoopEmitter#emit}, so what is timed

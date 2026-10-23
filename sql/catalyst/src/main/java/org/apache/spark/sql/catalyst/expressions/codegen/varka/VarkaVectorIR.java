@@ -686,7 +686,9 @@ public sealed interface VarkaVectorIR
    * {@code left OP right} over two lanes of one width - Spark's {@code Add}, {@code Subtract}
    * and {@code Multiply}. The node's lane is its operands', which the constructor requires to
    * agree; the emitter serves the int lane, where both operands and the result are
-   * {@code IntegerType}. The
+   * {@code IntegerType}, and the narrow lanes, where they are {@code TINYINT} or
+   * {@code SMALLINT} and the node wraps or is checked at that width even when the widened arm
+   * computes it in the int lane (VARKA-330). The int lane's
    * operands are int-valued nodes - a fused field such as {@link Year} or {@link DateDiff}, an
    * {@code IntegerType} column, an int literal, or nested arithmetic - never a date, which is
    * what separates this from {@link AddDays}, whose left operand is a date and whose result is
@@ -712,10 +714,13 @@ public sealed interface VarkaVectorIR
    * so a negation never nulls a valid lane, and the emitter rejects {@link Overflow#NULL}
    * here rather than emitting a form nothing can produce.
    *
-   * <p>The one overflowing input is the lane's most negative value, whose negation is itself:
-   * {@link Integer#MIN_VALUE} at the int lane, {@link Long#MIN_VALUE} at a wider one. A guard
-   * written against a constant rather than against the lane is wrong on both sides - it misses
-   * the overflow it exists for, and condemns a value the wider lane represents exactly.
+   * <p>The one overflowing input is the node's lane's most negative value, whose negation is
+   * itself: {@link Integer#MIN_VALUE} at the int lane, {@link Long#MIN_VALUE} at the long one,
+   * -128 and -32768 at the narrow ones. The lane is the node's, not the emitted one: the widened
+   * arm computes a narrow negation in the int lane, where {@code -(-128)} is 128 and the guard is
+   * still -128. A guard written against a constant rather than against the node's lane is wrong
+   * on both sides - it misses the overflow it exists for, and condemns a value the wider lane
+   * represents exactly.
    */
   record IntNeg(Overflow mode, VarkaVectorIR child) implements VarkaVectorIR {}
 
