@@ -973,6 +973,16 @@ complex's 16 MB L3) and 1.15 at 33554432 (64 MB); the chain 1.68 and 1.24; the s
 agree with the all-arms ones on the compare within 1 percent, inside the store cell's run-to-run
 spread.
 
+**A second host.** The benchmark was dispatched on the fixed head and ran on a GitHub-hosted AMD
+EPYC 7763 at 256 bits (run 39915371624, head `9679df08971`; the record's "a second host" section
+has the tables and the probe). NATIVE over WIDENED there is 3.40, 3.39, 3.43 and 3.43 at the four
+in-cache rungs of the compare and 2.53 at 33554432 rows; 2.92, 3.05, 3.06, 3.09 and 2.38 on the
+chain; 5.39, 3.70, 3.36, 3.12 and 2.30 on the store; and the mixed shape ties (0.98 to 1.00).
+Prediction 1 holds on the compare at every in-cache rung, prediction 2 is not scored at the top
+rung because the runner's cache sizes are not probed, and 3.5's direction - NATIVE for every
+all-narrow shape - holds on a second host. The arithmetic overflow probe reproduced: WIDENED
+selects nothing, NATIVE selects the row.
+
 The first campaign of ten runs was rerun. Its settle gate read a kernel's compile levels from the
 JVM's code list by class name, and both arms' classes carried the same name in their own loaders,
 so the gate could read one arm's level 4 for the other's loop still at C1; the review of this
@@ -1019,7 +1029,7 @@ and two at nine, all at level 4, none unsettled, and the gate's class lookup is 
 run-to-run spread reaches 42 percent in the store's 262144-row cell (62.4 to 88.4 G rows/s) and
 26 percent in the compare's WIDENED cell at 256 bits, which is why the tables are medians.
 
-**Still owed.** The runner hosts' columns at 256 and 128 bits (the EPYC 7763 and the Neoverse N2),
+**Still owed.** The Neoverse N2's columns at 128 bits (the other runner host),
 `SMALLINT` on these shapes, the null and masked-epilogue path (no batch here has a null), and row
 415's hand-loop past-L3 rung, which this benchmark's 33554432-row reading does not replace. The
 arithmetic chain's timed rungs use bytes in [-64, 63] because the arms disagree on overflow until
