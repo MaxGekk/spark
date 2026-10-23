@@ -47,7 +47,9 @@ object VarkaWidthAuditShapes {
   /**
    * One audited thing: a kernel the probe emits and runs, or a coverage row this JVM's width
    * refuses to compile - a narrow column whose widening load the width cannot name, which is
-   * an answer about the row rather than an error (VARKA-329).
+   * an answer about the row rather than an error (VARKA-329). Since the part-form widening
+   * load, every audited width names one, so no row takes this branch today: it describes the
+   * mechanism, not the current census.
    */
   sealed trait Entry {
     def name: String

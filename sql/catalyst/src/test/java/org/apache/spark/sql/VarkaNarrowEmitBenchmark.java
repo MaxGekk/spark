@@ -66,8 +66,9 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Wid
  * <ul>
  *   <li>(a) {@code y1 < y2} as a selection: the compare of two {@code TINYINT} columns, both
  *       operands narrow, written as a packed selection bitmap. WIDENED reads each column through
- *       the byte species of a fraction of the int species' width and compares ints; NATIVE reads
- *       and compares in the preferred byte species.</li>
+ *       a narrow species of the int species' width or, where the Vector API has none, one width
+ *       up in its parts, and compares ints; NATIVE reads and compares in the preferred byte
+ *       species.</li>
  *   <li>(b) {@code (y1 + y2) < y1}: the same compare with a narrow add under it (row 330's
  *       arithmetic, measured here in its LEGACY wrapping mode on data where no byte addition
  *       overflows, the only data on which the two arms and the reference can agree before 330's
@@ -98,10 +99,12 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Wid
  * <p>Run it with {@code -XX:MaxVectorSize=64}, {@code 32} and {@code 16} for the 512-, 256- and
  * 128-bit widths. {@code -Dvarka.narrow.emit.arms=widened} or {@code =native} keeps one arm's
  * species out of the other's JVM (the two-species hazard of {@code VARKA-376.md}); the default
- * runs both in one JVM, which is that hazard's arrangement. At 128 bits the WIDENED arm declines
- * every shape by name (a byte column has no 32-bit species to widen from), and the run records
- * that rather than a number. A {@code -XX:CompileCommand=dontinline,<generated class>::*} keeps
- * a loop method out of its driver, so that the code list has a level of its own to report.
+ * runs both in one JVM, which is that hazard's arrangement. At 128 bits a byte column has no
+ * 32-bit species to widen from, so the WIDENED arm reads a 64-bit byte species in two parts, two
+ * int groups an iteration, and the run records numbers for the default arm at that width too
+ * (VARKA-329.md 9.6). A
+ * {@code -XX:CompileCommand=dontinline,<generated class>::*} keeps a loop method out of its
+ * driver, so that the code list has a level of its own to report.
  *
  * <pre>
  *   build/sbt "catalyst/Test/runMain org.apache.spark.sql.VarkaNarrowEmitBenchmark"

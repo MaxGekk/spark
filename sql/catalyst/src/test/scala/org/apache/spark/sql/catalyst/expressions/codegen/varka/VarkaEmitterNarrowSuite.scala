@@ -93,29 +93,27 @@ class VarkaEmitterNarrowSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
   }
 
   /**
-   * Cancels the test when the compiler refuses this shape under `options`, because the narrow
-   * species of the int species' width does not exist: `lanesOverride=4` asks for a 32-bit byte
-   * species, which the Vector API does not have, and `validityByWidth=false` bakes no lane count
-   * for the conversion to read. The emitter would name a constant the class lacks
-   * (`ByteVector.SPECIES_32`), so the refusal is the answer, and the suite cancels here instead
-   * of emitting; the compiler asks the same question, and an option matrix configuration that
-   * declines a narrow kernel answers it with the row engine (VARKA-329).
+   * Cancels the test when the compiler bakes no int lane count at all, which is the one
+   * configuration left that cannot name a narrow species: `validityByWidth=false` bakes no lane
+   * count for the conversion to read. A width where the narrow species of the int species' own
+   * width does not exist no longer refuses - `lanesOverride=4` asks for a 32-bit byte species
+   * the Vector API does not have, and the emitter reads the next width up in its parts instead
+   * (VARKA-329) - so those shapes emit and are checked against the reference like any other.
    *
    * <p>The cancel is not a silent skip: it names the refusal, and `sql/varka/matrix/skips.tsv`
    * carries a `declines` line for each configuration that reaches it, so the matrix's own report
-   * records the same verdict rather than an unfused test. Only the two missing-species refusals
-   * are expected; a refusal for any other reason fails the test, since a skip would hide a
-   * newly refused shape behind a configuration that was not supposed to reach it.
+   * records the same verdict rather than an unfused test. Only the missing-lane-count refusal is
+   * expected; a refusal for any other reason fails the test, since a skip would hide a newly
+   * refused shape behind a configuration that was not supposed to reach it.
    */
   private def refuseForNoSpecies(
       roots: Seq[VarkaVectorIR], options: VarkaEmitOptions): Unit =
     VarkaLoopEmitter.narrowRefusal(roots.asJava, options).toScala match {
       case Some(reason) =>
         assert(
-          reason == "a narrow column needs a baked int lane count to be widened" ||
-            reason.matches("a (BYTE|SHORT) column has no widening load at \\d+ int lanes"),
+          reason == "a narrow column needs a baked int lane count to be widened",
           s"unexpected refusal: $reason")
-        assume(false, s"this configuration has no narrow species for the shape ($reason), so " +
+        assume(false, s"this configuration bakes no narrow species for the shape ($reason), so " +
           "the compiler declines it and the row engine answers; the matrix records the " +
           "decline in sql/varka/matrix/skips.tsv (VARKA-329)")
       case None =>
@@ -232,16 +230,15 @@ class VarkaEmitterNarrowSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
         .toScala === Some("a narrow value under a bigint kernel has no lowering"), arm)
     }
     // The same choice on the int lane is the widened arm's ordinary shape: where a configuration
-    // has no species for the widening load it is refused, but for that width and never for the
-    // long lane, which is the distinction this test pins.
+    // bakes no lane count it is refused, but for that width and never for the long lane, which
+    // is the distinction this test pins.
     val intNarrow: VarkaVectorIR = new IfElse(
       new Compare(CompareOp.LT, new ColumnRef(1, LaneType.INT), new ColumnRef(2, LaneType.INT)),
       new WidenLane(byteCol, LaneType.INT), new WidenLane(byteCol, LaneType.INT))
     val intRefusal =
       VarkaLoopEmitter.narrowRefusal(List[VarkaVectorIR](intNarrow).asJava, widened).toScala
-    assert(intRefusal.forall(reason =>
-      reason == "a narrow column needs a baked int lane count to be widened" ||
-        reason.matches("a (BYTE|SHORT) column has no widening load at \\d+ int lanes")),
+    assert(intRefusal.forall(
+      _ == "a narrow column needs a baked int lane count to be widened"),
       intRefusal)
   }
 
@@ -332,8 +329,9 @@ class VarkaEmitterNarrowSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
 
   test("a narrow column read beside an int column is widened on load") {
     // The shape the compiler builds for an int-lane kernel that also reads a byte column: the
-    // byte leaf widens into the int lane inside an int-lane tree, so its load is the part-width
-    // species' and the widening itself is an identity.
+    // byte leaf widens into the int lane inside an int-lane tree, so its load is one narrow
+    // species - the int width's, or one width up read in parts - and the widening itself is an
+    // identity.
     val mixedCmp: Cond = new Compare(CompareOp.LT,
       new WidenLane(byteCol, LaneType.INT), new ColumnRef(1, LaneType.INT))
     val mixedValue: VarkaVectorIR = new IfElse(new Compare(CompareOp.GT,

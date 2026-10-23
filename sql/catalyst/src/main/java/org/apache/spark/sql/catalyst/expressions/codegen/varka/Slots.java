@@ -143,6 +143,13 @@ final class Slots {
   int[] intScalarArg;
   int[] intBroadcastSlot;
   int iVar;
+  /**
+   * Which of a loop iteration's int lane groups this body emission is emitting: 0, or the
+   * group's index where a widening load spans more than one group. It selects the part a
+   * narrow load converts from one whole load of the iteration's rows ({@link #iVar} is the
+   * group's own first row); an epilogue emits one group an iteration and leaves it at 0.
+   */
+  int rowGroup;
   int byteOffset;
   int cmpTmp;
   int maskTmp;

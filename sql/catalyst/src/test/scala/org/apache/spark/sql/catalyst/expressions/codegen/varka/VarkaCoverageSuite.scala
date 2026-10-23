@@ -470,8 +470,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     // widening load on the default arm, and the compare, the range set and the choice are the
     // int lane's; under `narrowLanes` the same tree runs on the byte lane instead.
     Family("TINYINT columns", predicates = true, Seq(
-      Row("y1 < y2", "two narrow columns: each load widens its part-width species into the int " +
-        "lane, and the compare is the int lane's"),
+      Row("y1 < y2", "two narrow columns: each load widens the narrow species of the int " +
+        "width, or the next width up in its parts, and the compare is the int lane's"),
       Row("y1 <= y2", "the other ordering, so that every comparison has a row of its own"),
       Row("y1 >= y2"),
       Row("y1 = 5Y", "a narrow column against a narrow literal, stored as the same width"),

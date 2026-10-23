@@ -223,3 +223,85 @@ result: it is the demonstration that the two arms cannot be compared on overflow
 - Why the emitted NATIVE arm is below the hand loop: the run did not profile it. The validity word and the general
   fallback at 64- and 32-lane species are the candidates, not a finding.
 - Allocation: not instrumented here; the census cells of 9.2 are the record for it.
+
+== 128 bits after the part-form widening load (23 October 2026, 08:28 to 08:40 CEST) ==
+The same command, pin, harness and host as above, at -XX:MaxVectorSize=16, with the part-form
+widening load in the worktree (VARKA-329.md 9.6): at four int lanes a byte column is loaded as an
+eight-lane 64-bit species and converted in two parts, one part an int group, instead of the 32-bit
+byte species the Vector API does not have. WIDENED now emits every shape; NATIVE is unchanged.
+Six runs on branch `varka-329-widen128` on top of ae80f236089 plus that change:
+f128-all-1    08:28:26-08:29:26  load1 1.17
+f128-all-2    08:30:26-08:31:22  load1 0.41
+f128-wid-1    08:32:22-08:32:58  load1 0.51  (WIDENED only)
+f128-nat-1    08:33:58-08:34:33  load1 0.62  (NATIVE only)
+f128-all-big1 08:35:33-08:36:53  load1 0.25  (adds the 8388608-row rung)
+f128-all-past1 08:37:53-08:39:45 load1 0.29  (adds the 8388608- and 33554432-row rungs)
+Every run exit 0, with the `performance` profile and the battery discharging before and after (52 to
+51, 51 to 50, 50 to 50, 50 to 49, 49 to 48, 48 to 47 percent). No run printed a refusal: WIDENED
+and NATIVE both emit all four shapes, and shape c's two arms still emit identical class bytes. 144
+case settles over the six runs, 143 at eight drives and one at nine, all at level 4, none
+unsettled; every batch was compared with VarkaReference before and after compilation as above,
+with no mismatch.
+
+G rows/s, medians of the runs of each arm; n=5 a cell at the three in-cache rungs (both all-arms
+runs, the arm's own run, f128-all-big1 and f128-all-past1), n=2 at 8388608 (big1 and past1) and
+n=1 at 33554432 (past1); N/W is NATIVE over WIDENED by medians:
+shape                              rows  WIDENED   NATIVE   N/W
+a  y1 < y2                      16384     5.2     36.3    6.97
+a  y1 < y2                     262144     5.1     36.5    7.10
+a  y1 < y2                    1000000     5.1     34.3    6.77
+a  y1 < y2                    8388608  5.0/2.2    30.0    6.0/13.6
+a  y1 < y2                   33554432     4.8     20.5    4.23
+b  (y1 + y2) < y1               16384     2.3     35.8   15.66
+b  (y1 + y2) < y1              262144     2.3     36.2   15.99
+b  (y1 + y2) < y1             1000000     2.2     33.7   15.03
+b  (y1 + y2) < y1             8388608     2.2     28.5   12.93
+b  (y1 + y2) < y1            33554432     2.2     20.6    9.37
+c  b < i, int-driven            16384     5.6      5.6    1.00
+c  b < i, int-driven           262144     5.5      5.5    1.00
+c  b < i, int-driven          1000000     5.4      5.5    1.00
+c  b < i, int-driven          8388608     5.2      5.1    0.97
+c  b < i, int-driven         33554432     5.3      5.3    1.00
+e  CASE ... TINYINT store       16384     3.7     56.1   15.24
+e  CASE ... TINYINT store      262144     3.7     57.6   15.70
+e  CASE ... TINYINT store     1000000     3.6     41.1   11.27
+e  CASE ... TINYINT store     8388608     3.6     19.1    5.36
+e  CASE ... TINYINT store    33554432     3.3     14.4    4.39
+
+The compare's 8388608-row cell gives two readings rather than a median of two modes: f128-all-past1
+read 5.0 and f128-all-big1 2.2. f128-all-big1's WIDENED compare read 5.2 at 16384 rows and then
+2.3, 2.3 and 2.2 at the three larger rungs, while the other four JVMs that run WIDENED read 5.0 to
+5.2 at every in-cache rung; 262144 rows is 512 KB a column pair, in L2, so the drop is not a memory
+effect. It is the 128-bit bimodality 9.2 records from JVM to JVM, cause not looked for. The
+add-then-compare chain read 2.2 to 2.3 in every JVM at every rung, the store 3.3 to 3.7, and the
+mixed shape 5.2 to 5.6.
+
+Against the hand loop's 128-bit readings above, the emitted WIDENED compare keeps 0.70 to 0.72 of
+the hand loop (5.2, 5.1, 5.1 against 7.3, 7.3, 7.1) and the emitted NATIVE compare 0.84 to 0.90
+(36.3, 36.5, 34.3 against 43.4, 43.0, 38.3); at 512 and 256 bits the emitted WIDENED arm kept 0.95
+and 0.97. The NATIVE arm reproduces the first campaign's 128-bit readings (36.1, 36.2, 34.0 for
+the compare, 35.6, 36.1, 33.9 for the chain, 57.7, 55.9, 41.2 for the store), so the new WIDENED
+numbers are comparable with the old NATIVE ones.
+
+Prediction 5 of 3.3, scored at 128 bits: the ceiling of 4.0 for bytes is exceeded, not met - 6.8 to
+7.1 for the compare in cache, 15.0 to 16.0 for the chain and 11.3 to 15.7 for the store, and 4.2 to
+6.0 and 4.4 to 5.4 for the compare and the store past L3 (the store's 5.36 at 8388608 is at the
+16 MB L3 edge, its 4.39 at 33554432 past it) - and the chain stays at 9.4 past the cache, compute
+bound. Prediction 3 holds: the mixed shape is one kernel in both arms, 0.97 to 1.00 at every rung.
+Prediction 6 is answered for this width: the census's B2I_load64 cell is the form the emitter now
+uses at four int lanes, no shape or arm refuses at 128 bits, and the two-species JVM costs the
+mixed shape nothing (5.4 to 5.6 in the all-arms runs against 5.5 to 5.6 in the arm-only ones).
+Row 374's 128-bit release rate, which PLAN.md 10.3 item 4 asks beside every 128-bit number, is 41
+to 43 of the first 100 compositions at the warm-up deadline (`m7/VARKA-374.md`), caused by the long
+lane's two-lane masks; these kernels use no long lane (their species are 8- or 16-lane bytes and
+4-lane ints) and every timed loop above settled at level 4.
+
+== not established at 128 bits ==
+- The epilogue: every rung is a multiple of 8 rows, so the part-form loop's main path runs whole and
+  the masked epilogue (and its part-0 load) is not timed here; the narrow suite and the coverage
+  rows, whose lengths are not multiples of 8, are where it runs.
+- Nulls and validity, as above: no batch has a null, so only the dense path is timed.
+- The add chain's 2.2 to 2.3 G rows/s plateau in every JVM, and the compare's slow mode in
+  f128-all-big1: measured, not explained. The run did not profile the compiled loops.
+- The runner hosts at 128 bits (the Neoverse N2) and the widths at which a per-width default would
+  be decided (3.5): the numbers here are the laptop's.

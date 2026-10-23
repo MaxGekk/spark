@@ -511,14 +511,15 @@ final class VarkaVectorWalk {
 
   /**
    * The int vector on the stack truncated to {@code target}'s width and sign-extended back into
-   * the int lanes: {@code I2B}/{@code I2S}, part 0, into a narrow species of the same element
-   * count as the int species - so exactly the group's lanes - and {@code B2I}/{@code S2I},
-   * part 0, back. What a {@link VarkaVectorIR.NarrowLane} with a narrow target means away from
-   * a store, where the value would otherwise flow untruncated (VARKA-329).
+   * the int lanes: {@code I2B}/{@code I2S}, part 0, into a narrow species of at least the int
+   * species' element count - the group's lanes land in part 0 whatever the species' width, the
+   * rest zeroed - and {@code B2I}/{@code S2I}, part 0, back. What a {@link
+   * VarkaVectorIR.NarrowLane} with a narrow target means away from a store, where the value
+   * would otherwise flow untruncated (VARKA-329).
    */
   private static void emitNarrowTruncation(CodeBuilder cb, Lane target, Analysis analysis) {
     cb.getstatic(VECTOR_OPERATORS, target == Lane.BYTE ? "I2B" : "I2S", VO_CONVERSION);
-    cb.getstatic(target.vector, target.speciesField(analysis.lanes), VECTOR_SPECIES);
+    cb.getstatic(target.vector, target.speciesField(analysis.widenLanes(target)), VECTOR_SPECIES);
     cb.loadConstant(0);
     cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
     cb.checkcast(target.vector);
@@ -531,19 +532,38 @@ final class VarkaVectorWalk {
 
   /**
    * A narrow column in a kernel driven at the int lane: the group's rows loaded from their own
-   * stride into the narrow species of the int species' width - as many narrow lanes as the int
-   * species has, which is the width {@code convertShape} reads a part from - and sign-extended
-   * into the int species, part 0. In a loop body the load is whole, like {@link
-   * #emitLowHalfLoad}'s; in the epilogue it is under the mask of the narrow species' first
-   * {@code lanes} lanes. The offset is {@code (long) i * stride}, a linear function of the
-   * induction variable that C2 folds into the address.
+   * stride into a narrow species and sign-extended into the int species, part 0. The species is
+   * the narrow one of the int species' width wherever it exists - as many narrow lanes as the
+   * int species has, which is the width {@code convertShape} reads a part from. Where it does
+   * not - a byte column at four int lanes would need a 32-bit species - the load reads the next
+   * width up, and each of its parts is one int group: the loop computes as many groups an
+   * iteration as the load has parts, every group reads the same whole load starting at the
+   * iteration's first row, and its own part selects its rows ({@link Slots#rowGroup}). In a loop
+   * body the load is whole, like {@link #emitLowHalfLoad}'s; in the epilogue it is under the mask
+   * of the species' first {@code lanes} lanes and reads part 0. The offset is
+   * {@code (long) i * stride}, a linear function of the induction variable that C2 folds into the
+   * address.
    */
   private static void emitNarrowLoad(
       CodeBuilder cb, ColumnRef c, Lane stored, Analysis analysis, Slots s) {
-    String species = stored.speciesField(analysis.lanes);
+    int groups = analysis.narrowGroups();
+    // One whole iteration's rows in one species wherever the load has to span more than a
+    // group: every narrow lane of the body reads the same rows and each group takes its part.
+    int loadLanes =
+        groups > 1 ? groups * analysis.lanesOf(Lane.INT) : analysis.widenLanes(stored);
+    // A load with more parts than one int group: the loop's every group of an iteration loads
+    // the same rows and takes its own part; the epilogue's one group takes part 0.
+    boolean parts = groups > 1 && !s.epilogue;
+    String species = stored.speciesField(loadLanes);
     cb.getstatic(stored.vector, species, VECTOR_SPECIES);
     cb.aload(s.srcSeg(c.ordinal()));
     cb.iload(s.iVar);
+    if (parts) {
+      // The iteration's first row, from this group's own: every part is a block of the
+      // destination species' lanes, so part 0 of one load is the iteration's first group.
+      cb.loadConstant(s.rowGroup * analysis.lanes);
+      cb.isub();
+    }
     cb.i2l();
     cb.loadConstant(stored.byteStride);
     cb.lmul();
@@ -559,7 +579,7 @@ final class VarkaVectorWalk {
     }
     cb.getstatic(VECTOR_OPERATORS, stored == Lane.BYTE ? "B2I" : "S2I", VO_CONVERSION);
     emitConstantSpecies(cb, Lane.INT, analysis);
-    cb.loadConstant(0);
+    cb.loadConstant(parts ? s.rowGroup : 0);
     cb.invokevirtual(VECTOR, "convertShape", CONVERT_SHAPE);
     cb.checkcast(Lane.INT.vector);
   }
