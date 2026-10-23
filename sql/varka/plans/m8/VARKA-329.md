@@ -978,7 +978,7 @@ spreads, the store's 262144-row cell being bimodal at 62 to 88 G rows/s.
 
 **Does the emitted kernel reproduce the hand-loop advantage?** The WIDENED arm, yes: 25.5, 25.5,
 25.2 against the hand loop's 26.9, 26.6, 25.9 G rows/s at 512 bits and 16.0, 16.0, 15.4 against
-16.5, 16.4, 16.0 at 256, within a twentieth. The NATIVE arm keeps 63 to 94 percent of the hand
+16.5, 16.4, 16.0 at 256, within 5.5 percent. The NATIVE arm keeps 63 to 94 percent of the hand
 loop's advantage, not all of it: 4.08 against 5.60 at 512 bits in L1, 3.06 against 4.66 at 256,
 and 94 percent at the L3 rung. The gap is the fixed work a group of the emitted loop does and the
 hand loops do not - the validity word, the general validity fallback at the 64- and 32-lane byte
@@ -986,7 +986,7 @@ species, the loop bounds and the epilogue - which is where 9.2 said to look if t
 missing. It did not go missing to that degree: 9.2's threshold was that an emitted kernel keeping
 less than about half of the hand loop's ratio would put the margin outside the lane, and the
 smallest kept fraction is 0.63. The NATIVE lane is still worth 2.5x to 4.6x for a pure byte shape
-in cache, and the default rule of 3.5 is not contradicted on this host at 512 or 256 bits.
+in L1 and L2, and the default rule of 3.5 is not contradicted on this host at 512 or 256 bits.
 
 **The 128-bit finding, and it is not a timing.** At 128 bits the WIDENED arm declines every
 `TINYINT` shape that reads a value, with the reason the emitter names: "a BYTE column has no

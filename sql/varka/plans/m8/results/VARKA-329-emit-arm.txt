@@ -170,7 +170,7 @@ question is answered for the intrinsics and not for this emitter.
 128   16384         7.3          -       43.4       36.1        5.92          -             -
 128   262144        7.3          -       43.0       36.2        5.91          -             -
 128   1000000       7.1          -       38.3       34.0        5.41          -             -
-The emitted WIDENED arm reproduces the hand loop to within a twentieth at 512 and 256 bits (the widest gap is
+The emitted WIDENED arm reproduces the hand loop to within 5.5 percent at 512 and 256 bits (the widest gap is
 16384 rows at 512 bits, 25.5 against 26.9, 5.2 percent; the narrowest 262144 rows at 256, 16.0 against 16.4). The emitted NATIVE arm
 keeps 63 to 94 percent of the hand loop's advantage: the loss is in the fixed work a group of the emitted loop does
 and the hand loops do not - the validity words, the general validity fallback at the 64- and 32-lane byte species,
@@ -202,7 +202,7 @@ fraction is 0.63.
 7. The tiering artefact: holds - 306 settles over the fourteen runs, 304 at eight drives and two at nine, all at
    level 4, none unsettled, and the gate's class lookup is per arm so one arm's level cannot stand for the
    other's. The run-to-run spread reaches 42 percent in the store cell
-   at 262144 rows (62.4 to 88.4 G rows/s, a per-run ratio of 3.1 to 4.5) and 26 percent in shape a's WIDENED cell
+   at 262144 rows (62.4 to 88.4 G rows/s, a per-run ratio of 3.2 to 4.5) and 26 percent in shape a's WIDENED cell
    at 256 bits (12.9 to 16.2), which is why the tables are medians and the store ratio is quoted to two decimals.
 
 == the arithmetic overflow probe (what shape b does not measure) ==
