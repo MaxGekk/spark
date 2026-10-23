@@ -360,6 +360,26 @@ def rerunnable(found):
     return [(s, n) for s, n in found if s.rsplit(".", 1)[-1] not in TIMING_SUITES]
 
 
+def in_share(found, build_dir):
+    """The new tests of the suites this CI job ran, where the job is one of several that split
+    the module (`job-suites` in the build directory, dev/varka_scoped_suites.sh --shard); every
+    new test when the job ran them all.
+
+    >>> d = tempfile.mkdtemp()
+    >>> in_share([("p.A", "x"), ("p.B", "y")], d)
+    [('p.A', 'x'), ('p.B', 'y')]
+    >>> _ = open(os.path.join(d, "job-suites"), "w").write("B\\n")
+    >>> in_share([("p.A", "x"), ("p.B", "y")], d)
+    [('p.B', 'y')]
+    """
+    path = os.path.join(build_dir, "job-suites")
+    if not os.path.exists(path):
+        return found
+    with open(path, encoding="utf-8") as f:
+        mine = {line.strip() for line in f if line.strip()}
+    return [(s, n) for s, n in found if s.rsplit(".", 1)[-1] in mine]
+
+
 def report_unlistable(unlistable):
     for path, line, raw in unlistable:
         say(
@@ -375,6 +395,7 @@ def cmd_rerun(args):
         return 0
     found, unlistable = listing(args.module, base)
     report_unlistable(unlistable)
+    found = in_share(found, args.build_dir)
     tests = rerunnable(found)
     for suite, name in sorted(set(found) - set(tests)):
         say("::notice::%s: %s is in a timing suite, which runs alone; not rerun" % (suite, name))
@@ -504,7 +525,7 @@ def cmd_fails_on_base(args):
         say("== #%s is labelled %s: its new tests must fail on the merge base" % (pr, FIX_LABEL))
     found, unlistable = listing(args.module, base)
     report_unlistable(unlistable)
-    tests = rerunnable(found)
+    tests = rerunnable(in_share(found, args.build_dir))
     if not tests:
         say("fails-on-base: %s has no new test to run on the base" % args.module)
         return 0
