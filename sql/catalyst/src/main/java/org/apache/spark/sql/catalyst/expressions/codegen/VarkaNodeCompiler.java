@@ -60,7 +60,6 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Bit
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CompareOp;
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
@@ -450,21 +449,14 @@ final class VarkaNodeCompiler {
           n.child(), laneOf(n.dataType()).orElseThrow(), inputs, literals, sink)
           .map(x -> (VarkaVectorIR) new IntNeg(
               n.failOnError() ? Overflow.FAIL : Overflow.WRAP, x));
-      // `abs` over a narrow lane, composed from the nodes that already exist: Spark's
-      // `x < 0 ? negateExact(x) : x` is an `IfElse` over a `Compare` and an `IntNeg`, and its
-      // legacy form is the same pick with the wrapping negate, which is `(byte) Math.abs(x)` -
-      // `abs(-128Y)` is `-128Y` there. Under ANSI the negate's own check fires on the lane's
-      // minimum, which is negative, so the arm the condition picks is exactly the arm that
-      // raises and no valid lane is condemned. There is no try_abs in Spark.
-      case Abs a when isNarrow(a) -> () -> {
-        LaneType lane = laneOf(a.dataType()).orElseThrow();
-        return narrowOperand(a.child(), lane, inputs, literals, sink).map(x -> {
-          Cond negative = new Compare(CompareOp.LT, x, slot(0, lane, literals));
-          VarkaVectorIR negated = new IntNeg(
-              a.failOnError() ? Overflow.FAIL : Overflow.WRAP, x);
-          return (VarkaVectorIR) new IfElse(negative, negated, x);
-        });
-      };
+      // `abs` over a narrow lane is the negation's node with its `abs` flag: Spark's
+      // `x < 0 ? negateExact(x) : x`, whose legacy form is `(byte) Math.abs(x)` - `abs(-128Y)`
+      // is `-128Y` there. Its one overflowing input is the negation's, the lane's minimum, so
+      // under ANSI the check is the negation's too. There is no try_abs in Spark.
+      case Abs a when isNarrow(a) -> () -> narrowOperand(
+          a.child(), laneOf(a.dataType()).orElseThrow(), inputs, literals, sink)
+          .map(x -> (VarkaVectorIR) new IntNeg(
+              a.failOnError() ? Overflow.FAIL : Overflow.WRAP, x, true));
       // The bitwise family (VARKA-335): one lane-wise operation at the operand's width, which
       // neither overflows nor nulls a valid lane, so the evaluation mode does not reach it.
       case BitwiseAnd b when onBitLane(b) ->

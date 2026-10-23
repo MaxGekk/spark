@@ -551,7 +551,7 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 
 | Predicate | Switches | Domain | Notes | 128-bit lanes |
 |---|---|---|---|---|
-| `y1 < y2` | `predicate` |  | two narrow columns: each load widens the narrow species of the int width, or the next width up in its parts, and the compare is the int lane's | vector |
+| `y1 < y2` | `predicate` |  | two narrow columns compared at the byte lane; with narrowLanes off each load widens into the int lane, in parts where the int width needs them | vector |
 | `y1 <= y2` | `predicate` |  | the other ordering, so that every comparison has a row of its own | vector |
 | `y1 >= y2` | `predicate` |  |  | vector |
 | `y1 = 5Y` | `predicate` |  | a narrow column against a narrow literal, stored as the same width | vector |

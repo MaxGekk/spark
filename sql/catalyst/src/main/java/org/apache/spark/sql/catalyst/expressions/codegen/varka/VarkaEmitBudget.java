@@ -598,14 +598,19 @@ final class VarkaEmitBudget {
       // The leaves' loads and broadcasts are paid once per column and literal, not per node.
       // A boolean column and a constant are leaves: a data word read and a constant, no lane call.
       case ColumnRef _, LiteralSlot _, BoolColumn _, CondConst _ -> 0;
-      // One lanewise op, plus the four the sign test costs where there is one.
-      case IntArith n -> n.mode() == Overflow.WRAP ? 1 : 5;
-      // The multiply by -1, plus one compare where the mode checks.
-      case IntNeg n -> n.mode() == Overflow.WRAP ? 1 : 2;
+      // One lanewise op, plus the four the sign test costs where there is one. A wrapping narrow
+      // node is the op and, at the int lane where it reduces (Analysis.wrapAt), the shift pair:
+      // the larger form, as below, since the arm and the readers are not known here.
+      case IntArith n -> n.mode() != Overflow.WRAP ? 5 : n.laneType().isNarrow() ? 3 : 1;
+      // The negation or abs, plus one compare where the mode checks, plus the shift pair a
+      // wrapping narrow one may reduce with.
+      case IntNeg n -> n.mode() != Overflow.WRAP ? 2 : n.laneType().isNarrow() ? 3 : 1;
       // One lanewise op each: the add or subtract, the min or max, the blend (its condition is a
       // node of its own), the narrowing conversion, the compare.
-      case AddDays _, SubDays _, DateDiff _, Greatest _, Least _, IfElse _, WidenLane _,
+      case AddDays _, SubDays _, DateDiff _, Greatest _, Least _, WidenLane _,
           NarrowLane _, Compare _, NullSafeEqual _ -> 1;
+      // The blend, plus the shift pair a narrow pick may reduce with at the int lane.
+      case IfElse n -> n.laneType().isNarrow() ? 3 : 1;
       // The connectives emit only mask calls, which no weight counts; 1 is a floor, so that a
       // connective is never free to join any group.
       case And _, Or _, Not _, IsNotNull _, BoolCompare _, BoolNullSafeEq _, CondIf _ -> 1;
