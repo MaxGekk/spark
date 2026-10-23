@@ -1291,7 +1291,7 @@ row.
 | 989-7 | `weightOf` weighs a wrapped narrow node 1 where it emits 3 | bucket 3 |
 | 989-8 | narrow `abs` is a compare, a negate and a blend, null-skipping | bucket 3: one lanewise `ABS`, the negation node with an `abs` flag |
 | 989-9 | the checked narrow multiply's int drive is per root, so the native arm splits a projection | bucket 3: `VarkaVectorIR.kernelLane` decides per kernel, needed once NATIVE is the default |
-| 989-10 | the 18 always-on 2^24 SMALLINT slices cost about 78 s a build | the owner's decision: the slice is row 330's own done-when |
+| 989-10 | the 18 always-on 2^24 SMALLINT slices cost about 78 s a build | kept always on, the owner's decision of 23 October 2026: the slices are row 330's own done-when |
 | 989-11, 987-8 | the warm-up feeds the preferred narrow species, not the ones widened kernels use; dead `neg`/`abs`; no narrow `fromLong` | bucket 2: the reach gate models the `widenLanes` species, the warm-up warms them |
 | 989-12 | negation is `mul` by -1, eight instructions on bytes where `NEG` is one | bucket 3 on the narrow lanes; the int and long lanes are row 482, measured first |
 | 989-13 | `arithOver`'s narrow exception is dead and its javadoc false; no narrow range in `VarkaRangeAnalysis` | row 480 |
