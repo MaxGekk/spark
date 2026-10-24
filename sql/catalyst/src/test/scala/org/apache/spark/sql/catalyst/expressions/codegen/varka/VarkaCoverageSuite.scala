@@ -854,7 +854,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   test("docs/sql-varka.md carries the generated coverage table and family switches") {
     val doc = getWorkspaceFilePath("docs", "sql-varka.md")
     val text = Files.readString(doc)
-    val blocks = Seq(tableMarks -> render(), switchMarks -> renderSwitches())
+    val blocks = Seq(tableMarks -> render(), switchMarks -> renderSwitches(),
+      verificationMarks -> verificationCounts())
     if (regen) {
       Files.writeString(doc, blocks.foldLeft(text) { case (t, (marks, rendered)) =>
         replaceBetween(t, marks, rendered)
@@ -1037,12 +1038,197 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     "ExtractANSIIntervalMonths" ->
       "the result is a ByteType, and Varka has neither a byte lane nor an Arrow vector for one")
 
+  // --- how each row is verified (VARKA-490) ----------------------------------------------------
+
+  /**
+   * How a row's kernel is verified beyond the differential suites every row runs in: a section
+   * of `sql/varka/proofs/refinement.smt2` that refines it against the specification, a lowering
+   * proof under `sql/varka/proofs/`, a test that sweeps its whole input domain against Spark or
+   * the reference, or a planned row that owes it. `Differential` is the differential suites
+   * alone, counted as the gap it is. The suite below fails a name that does not exist, so an
+   * entry cannot outlive what it cites.
+   */
+  private sealed trait Verified {
+    def render: String
+  }
+
+  /** A refinement in `refinement.smt2`, named as the file echoes it. */
+  private case class Refined(name: String) extends Verified {
+    def render: String = s"refinement: $name"
+  }
+
+  /** A lowering proof file under `sql/varka/proofs/`. */
+  private case class Proved(file: String) extends Verified {
+    def render: String = s"proof: $file"
+  }
+
+  /** A test that runs in every build and sweeps the row's whole input domain. */
+  private case class Exhausted(suite: String, test: String) extends Verified {
+    def render: String = s"exhaustive: $suite, $test"
+  }
+
+  private case object Differential extends Verified {
+    def render: String = "differential"
+  }
+
+  /** A row of `sql/varka/plans/m8/PLAN.md` that will verify it. */
+  private case class Owed(row: Int) extends Verified {
+    def render: String = s"owed: row $row"
+  }
+
+  /** Each family's verification, where its rows share one; the others are `Differential`. */
+  private val familyVerified: Map[String, Verified] = Map(
+    "Narrow arithmetic" -> Owed(490),
+    "Boolean columns" -> Exhausted("VarkaEmitterBoolSuite",
+      "boolean comparisons, null-safe equality, choice and constants over every leaf state"),
+    "Boolean columns choosing values" -> Exhausted("VarkaEmitterBoolSuite",
+      "boolean comparisons, null-safe equality, choice and constants over every leaf state"))
+
+  private val bytePairs = Exhausted("VarkaEmitterNarrowSuite",
+    "every byte pair gives the reference's answer through every comparison and choice")
+  private val connectives = Exhausted("VarkaEmitterBoolSuite",
+    "every And/Or/Not tree over three boolean columns")
+
+  /** The rows that differ from their family's entry, by their SQL. */
+  private val rowVerified: Map[String, Verified] = Map(
+    "date_add(d, 3)" -> Refined("date_add(d, i)"),
+    "date_add(d, i)" -> Refined("date_add(d, i)"),
+    // `date_sub(d, k)` is `date_add(d, -k)` (STANDARD.md 5); the refinement holds for every k.
+    "date_sub(d, 5)" -> Refined("date_add(d, i)"),
+    "d + CAST(i AS INTERVAL DAY)" -> Refined("d + CAST(i AS INTERVAL DAY)"),
+    "datediff(d2, d)" -> Refined("datediff(a, b)"),
+    "year(d)" -> Refined("year(d), month(d), day(d)"),
+    "month(d)" -> Refined("year(d), month(d), day(d)"),
+    "day(d)" -> Refined("year(d), month(d), day(d)"),
+    "dayofweek(d)" -> Refined("weekday(d), dayofweek(d)"),
+    "weekday(d)" -> Refined("weekday(d), dayofweek(d)"),
+    "make_date(2021, i, 1)" -> Refined("make_date(y, m, dd)"),
+    "add_months(d, 3)" -> Refined("d + ym, add_months(d, i)"),
+    "add_months(d, i)" -> Refined("d + ym, add_months(d, i)"),
+    "d + INTERVAL 3 MONTH" -> Refined("d + ym, add_months(d, i)"),
+    "d + ym" -> Refined("d + ym, add_months(d, i)"),
+    "d - ym" -> Refined("d - ym"),
+    "abs(ym)" -> Refined("abs(ym)"),
+    "ym - ymm" -> Refined("a - b"),
+    "make_ym_interval(year(d), month(d)) * 2" -> Refined("a * 2"),
+    "CAST(ymy AS INT)" -> Owed(490),
+    "CAST(ym AS INTERVAL YEAR)" -> Owed(490),
+    "ym / 12" -> Proved("ym_divide.smt2"),
+    "ym / -7" -> Proved("ym_divide.smt2"),
+    "extract(YEAR FROM ym)" -> Refined("extract(YEAR FROM ym)"),
+    "extract(YEAR FROM ym) - 1" -> Refined("extract(YEAR FROM ym)"),
+    "i + 1" -> Refined("a + b"),
+    "i - 1" -> Refined("a - b"),
+    "year(d) * 2" -> Refined("a * 2"),
+    "-i" -> Refined("-a"),
+    "year(d) + i" -> Refined("a + b"),
+    "bitmap_bucket_number(l)" -> Proved("bitmap.smt2"),
+    "bitmap_bit_position(l)" -> Proved("bitmap.smt2"),
+    "b" -> Differential,
+    "NOT b" -> connectives,
+    "b AND d < d2" -> connectives,
+    "b OR i = 5" -> connectives,
+    "b AND l < l2" -> connectives,
+    "b IS NULL" -> Differential,
+    "b IS NOT NULL" -> Differential,
+    "(b AND d < d2) IS NULL" -> connectives,
+    "y1 < y2" -> bytePairs,
+    "y1 <= y2" -> bytePairs,
+    "y1 >= y2" -> bytePairs,
+    "y1 IN (1Y, 2Y, 3Y, -1Y)" -> bytePairs,
+    "y1 IN (11 to 16 byte literals)" -> bytePairs,
+    "CASE WHEN y1 > y2 THEN y1 ELSE y2 END" -> bytePairs,
+    "greatest(y1, y2)" -> bytePairs,
+    "least(y1, y2)" -> bytePairs,
+    "CAST(time_to_millis(t) AS INT)" -> Owed(490),
+    "CAST(time_to_millis(t) AS INT) > i" -> Owed(490),
+    "hour(t) = 12" -> Refined("hour(t), minute(t)"),
+    "t - t2" -> Refined("t - t2"),
+    "hour(t)" -> Refined("hour(t), minute(t)"),
+    "hour(t) + 1" -> Refined("hour(t), minute(t)"),
+    "minute(t2)" -> Refined("hour(t), minute(t)"),
+    "second(t)" -> Refined("second(t)"),
+    "time_from_micros(time_to_micros(t))" -> Refined("time_from_micros(k)"),
+    "t + INTERVAL '0 00:00:00' DAY TO SECOND" -> Refined("t + dt"))
+
+  private def verifiedOf(family: Family, row: Row): Verified =
+    rowVerified.getOrElse(row.sql, familyVerified.getOrElse(family.title, Differential))
+
+  test("every row names how it is verified, and what it names exists") {
+    val titles = families.map(_.title).toSet
+    val sqls = families.flatMap(_.rows).map(_.sql).toSet
+    assert((familyVerified.keySet -- titles).isEmpty,
+      s"familyVerified names no family: ${(familyVerified.keySet -- titles).toSeq.sorted}")
+    assert((rowVerified.keySet -- sqls).isEmpty,
+      s"rowVerified names no row: ${(rowVerified.keySet -- sqls).toSeq.sorted}")
+    val refinement = Files.readString(getWorkspaceFilePath("sql", "varka", "proofs",
+      "refinement.smt2"))
+    val plan = Files.readString(getWorkspaceFilePath("sql", "varka", "plans", "m8", "PLAN.md"))
+    val testRoots = Seq(getWorkspaceFilePath("sql", "catalyst", "src", "test"))
+    def suiteSource(name: String): Option[String] = testRoots.iterator.flatMap { root =>
+      Files.walk(root).iterator().asScala.filter { p =>
+        val f = p.getFileName.toString
+        f == s"$name.scala" || f == s"$name.java"
+      }
+    }.nextOption().map(Files.readString)
+    val wrong = families.flatMap { family =>
+      family.rows.flatMap { row =>
+        val problem = verifiedOf(family, row) match {
+          case Refined(name) if !refinement.contains("(echo \"" + name) =>
+            Some(s"refinement.smt2 echoes no refinement named `$name`")
+          case Proved(file) if !Files.exists(getWorkspaceFilePath("sql", "varka", "proofs",
+              file)) =>
+            Some(s"sql/varka/proofs/$file does not exist")
+          case Exhausted(suite, test) => suiteSource(suite) match {
+            case None => Some(s"no test source defines $suite")
+            case Some(src) if !src.contains(test) => Some(s"$suite has no test `$test`")
+            // An opt-in sweep runs in no build, so it verifies nothing a merge relies on.
+            case Some(src) if src.linesIterator.exists(l => l.contains(test) &&
+                l.contains("opt-in")) =>
+              Some(s"$suite's `$test` is opt-in, and runs in no build")
+            case _ => None
+          }
+          case Owed(n) if !plan.linesIterator.exists(_.startsWith(s"| $n |")) =>
+            Some(s"PLAN.md has no row $n")
+          case _ => None
+        }
+        problem.map(p => s"${row.sql}: $p")
+      }
+    }
+    assert(wrong.isEmpty, "rows whose verification does not hold:\n  " + wrong.mkString("\n  "))
+  }
+
+  /**
+   * The ledger's counts per census type and kind, for the documentation: a row counts once for
+   * each type among its operands.
+   */
+  private def verificationCounts(): String = {
+    val kinds = Seq("refinement", "proof", "exhaustive", "owed", "differential")
+    def kind(v: Verified): String = v.render.takeWhile(_ != ':')
+    val counts = families.flatMap { family =>
+      family.rows.flatMap { row =>
+        val types = operandsOf(row).map(_.split(":")(1)).distinct
+        types.map(t => t -> kind(verifiedOf(family, row)))
+      }
+    }.groupBy(_._1).view.mapValues(_.groupBy(_._2).view.mapValues(_.size).toMap).toMap
+    val sb = new StringBuilder("| Type | Rows | " + kinds.mkString(" | ") + " |\n")
+    sb.append("| :--- |" + " ---: |" * (kinds.size + 1) + "\n")
+    counts.keys.toSeq.sorted.foreach { t =>
+      val c = counts(t)
+      sb.append(s"| `$t` | ${c.values.sum} | " + kinds.map(k => c.getOrElse(k, 0)).mkString(" | ") +
+        " |\n")
+    }
+    sb.toString
+  }
+
   // --- rendering --------------------------------------------------------------------------
 
   private val tableMarks =
     ("<!-- BEGIN generated coverage table -->", "<!-- END generated coverage table -->")
   private val switchMarks =
     ("<!-- BEGIN generated family switches -->", "<!-- END generated family switches -->")
+  private val verificationMarks =
+    ("<!-- BEGIN generated verification counts -->", "<!-- END generated verification counts -->")
 
   /**
    * The width audit's census (`sql/varka/width_audit.json`, VARKA-153), read for one column of
@@ -1183,7 +1369,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
           "operands" -> operandsOf(row).asJava,
           "switches" -> switchesOf(family, row).map(_.switchKey).asJava,
           "domain" -> row.domain.getOrElse(""),
-          "note" -> row.note)
+          "note" -> row.note,
+          "verified" -> verifiedOf(family, row).render)
       }
     }
     val doc = ordered(
