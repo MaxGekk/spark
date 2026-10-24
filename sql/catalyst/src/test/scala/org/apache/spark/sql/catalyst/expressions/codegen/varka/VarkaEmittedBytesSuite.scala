@@ -129,7 +129,8 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
   private def emitOptions(roots: Seq[VarkaVectorIR], lanes: Int,
       arm: VarkaEmitOptions => VarkaEmitOptions): VarkaEmitOptions = {
     val laneCount =
-      if (VarkaVectorIR.emissionLane(roots.head, VarkaMatrix.base) == LaneType.LONG) {
+      if (VarkaKernelPlan.driveOf(roots.asJava, VarkaMatrix.base).filter(_ == LaneType.LONG)
+          .isPresent) {
         lanes / 2
       } else {
         lanes
@@ -151,9 +152,9 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
     // row before an emission (VARKA-329): a width that bakes no int lane count has no species to
     // name. Record the compiler's answer rather than a class that cannot link, as the arms'
     // declines are recorded below.
-    val narrowRefusal = VarkaLoopEmitter.narrowRefusal(roots.asJava, options)
-    if (narrowRefusal.isPresent()) {
-      return Seq("<declined>" -> sha(narrowRefusal.get()))
+    val refusal = VarkaKernelPlan.refusalOf(roots.asJava, options)
+    if (refusal.isPresent()) {
+      return Seq("<declined>" -> sha(refusal.get()))
     }
     val bytes =
       try {

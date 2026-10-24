@@ -2046,8 +2046,8 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
 
   test("a narrow conjunct lifted beside a bigint one records the missing lowering") {
     // The narrow comparison alone is emittable at 16 int lanes; lifted beside a bigint conjunct
-    // to the long lane it is not, so the candidate fails the budget check through
-    // narrowRefusal, and the decline records that reason rather than the fused budget
+    // to the long lane it is not, so the candidate fails the budget check through the kernel
+    // plan's refusal, and the decline records that reason rather than the fused budget
     // (VARKA-329, finding 7). The lane count is pinned: at four the comparison alone has no
     // byte species, and the first note would be that refusal instead of the lifted one.
     val options = VarkaMatrix.base.withLanesOverride(16).withValidityByWidth(true)

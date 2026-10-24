@@ -39,6 +39,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoad
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitterTestSupport;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFusedKernel;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelPlan;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaLoopEmitter;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaReference;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
@@ -326,7 +327,8 @@ public class VarkaNarrowEmitBenchmark extends VarkaBenchmarkBase {
   private Optional<Emitted> emit(String name, Shape shape, Arm arm,
       VarkaGeneratedClassLoader loader) {
     var options = arm.options();
-    Optional<String> refusal = VarkaLoopEmitter.narrowRefusal(shape.roots(), options);
+    Optional<String> refusal = VarkaKernelPlan.of(shape.roots(), options).refusal()
+        .map(VarkaKernelPlan.Refusal::reason);
     if (refusal.isPresent()) {
       System.out.println("VarkaNarrowEmitBenchmark: " + shape.label() + ", " + arm
           + " declined: " + refusal.get());
