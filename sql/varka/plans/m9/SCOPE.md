@@ -5492,6 +5492,32 @@ not run. Nothing is left to report. The arm either drops `-XX:+StressDuplicateBa
 with this item named beside it, or builds its fastdebug JDK from a 25u that carries the fix. **Done
 when** the `platform` step is green on a night.
 
+### Item 114. The JDK after row 396: 27 at run time, a 25u backport, 29 as the base
+
+*Added 24 October 2026 from row 396's investigation (`m8/results/VARKA-396-report.md`), on the
+owner's word.* JDK 25's C2 miscompiles `VectorMask.fromLong(s, m.toLong())` on x86 without AVX-512
+mask registers: `VectorLongToMaskNode::Ideal` casts the mask under a `VectorStoreMask` where
+canonical booleans are needed, so a select takes its ELSE branch on every true lane. Varka meets it
+in every predicated select over columns with no nulls; row 491 keeps the emitter off the pattern
+on JDK 25. `openjdk/jdk25u` still has the rule; mainline has rewritten it, and item 56 lists the
+mask-cast change JDK-8370863 with fix version 27. This item is what follows on the JDK side.
+
+1. **Verify JDK 27.** Run `m8/results/VARKA-396/Fold396.java` and the shrunk Varka case under
+   `-XX:UseAVX=2` on a JDK 27 build; a pass with the guard of row 491 off is the evidence. The
+   trial is item 56's: release-25 class files run on 27, so it needs no build change.
+2. **If 27 is fixed, support it at run time.** Varka keeps building for 25; the guard of row 491
+   is lifted where the running JDK is 27 or later, so an AVX2-only host on 27 gets the
+   `fromLong` lowering back. The JDKs the guard applies to are stated in one place, beside the
+   guard.
+3. **On 25, ask OpenJDK for a backport**, citing JDK-8370863 and `Fold396.java`: an outward post,
+   filed by the owner if at all. The guard stays on 25 until a 25u release carries the fix.
+4. **JDK 29 as the migration target.** JDK 25 is the long-term release Spark deploys on, and 26
+   and 27 are not; the base moves at 29, the next long-term release (September 2027), with
+   Spark's own JDK support. Not before.
+
+**Done when** step 1 has a committed result, the guard's JDK range follows it, and the backport
+request is filed or declined by the owner.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads

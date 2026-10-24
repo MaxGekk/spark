@@ -108,15 +108,15 @@ casts the `VectorMaskToLong`'s input itself, which on AVX2 is the `VectorStoreMa
 is boolean to boolean and correct. Which change rewrote it, and whether as a fix, is not yet
 established; `jdk25u` still has the bug.
 
-## 3. Next
+## 3. Next (decided 24 October 2026)
 
-1. The six recent fuzz cases replayed with the fix on (running).
-2. A report to OpenJDK with `Fold396.java`, asking for the fix in JDK 25 updates: the owner's to
-   file (JBS needs an account, and it is an outward post).
-3. A Varka-side guard, the owner's decision: decline fusion on hosts without mask registers
-   until the JDK is fixed; or emit the select without the round trip where `kT` is the compare
-   (blend by the compare's own mask), which removes the pattern rather than the hosts; or keep
-   fusing and document the bug.
+1. The six recent fuzz cases replayed with the fix on in the fastdebug build (running).
+2. **Row 491**, the owner's choice of guard: the emitter stops writing the round trip on targets
+   without mask registers, so Varka is correct on JDK 25 whatever the host.
+3. **`m9/SCOPE.md` item 114**: verify JDK 27 under AVX2, support it at run time and lift the guard
+   there if it passes, ask for a 25u backport (the owner's to file), and move the base at JDK 29.
+4. The investigation's report: `results/VARKA-396-report.md`, with the reproducers and the
+   HotSpot fix in `results/VARKA-396/`.
 
 ## 4. Done when
 
