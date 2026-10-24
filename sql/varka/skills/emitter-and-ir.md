@@ -720,10 +720,11 @@ bytes oracle's coverage keys prove it: three rows added, none moved.
 What made it small, and what to carry to the next width change:
 
 - **Ask what the emission lane is, not what the root's lane is.** A kernel is one
-  species, and until this node every root's lane was the species. `emissionLane`
-  answers "the child's lane for a narrowing root, the root's otherwise", and the
-  three places that choose the species - `laneOf`, `fitsBudgets`, the
-  compiler's mixed-lane check - ask it. The root's own `laneType()` stays `INT`,
+  species, and until this node every root's lane was the species. A root's
+  emission lane is "the child's lane for a narrowing root, the root's otherwise",
+  and since VARKA-488 one `VarkaKernelPlan` per kernel decides the species from
+  all its roots; the compiler, `fitsBudgets`, the emitter and the compiled
+  projection read it. The root's own `laneType()` stays `INT`,
   which is what the evaluator's output allocation and the tree-building
   constructors need to see.
 - **The two costly things were both avoidable.** A second `IntVector` species in
@@ -761,7 +762,8 @@ What made it small, and what to carry to the next width change:
   `src/main` fixed the first four and missed the last two, which then sent a
   long-lane kernel through the int entry point. Enumerate readers with a
   whole-tree `git grep` and have every harness ask the one accessor
-  (`emissionLane`, or the compiled projection's `lane`) rather than keep a copy.
+  (the kernel's `VarkaKernelPlan`, or the compiled projection's `lane`) rather than
+  keep a copy.
   And sequence the regenerations: the audit and the oracle read the coverage
   rows from `sql/varka/coverage.json`, which `VarkaCoverageSuite` writes, so in
   one combined run they audited the old rows and passed; run the coverage suite

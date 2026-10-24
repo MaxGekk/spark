@@ -947,7 +947,6 @@ final class Analysis {
     return plan.mixed();
   }
 
-
   /**
    * Whether {@code node} is a narrowing that stays in the long lane until its root's store: an
    * output root that no other node reads. Anywhere else a narrowing converts where it is, since
@@ -1211,16 +1210,16 @@ final class Analysis {
   }
 
   private void analyze(VarkaVectorIR node) {
-    // The lane rule, enforced per node. The plan reads the output roots only, so this is the
-    // sole defence against a node further down disagreeing - which would emit one lane's
-    // descriptors over the other's data. A narrow-lane emission - the NATIVE arm, whose every
-    // value is narrow - holds nothing else. An int-lane emission holds int nodes and the narrow
-    // ones, which it widens once at their loads; it holds no long-lane node. A long-lane
-    // emission may hold int-lane nodes, which the IR's constructors admit only below a
-    // conversion, and which `laneOf` emits at the int species; a narrow node there has no
-    // lowering, since widening one to the long lane would go through the int species of the
-    // narrow species' part width. The IR's own constructors make any other mix unbuildable; this
-    // is what catches one built another way.
+    // The lane rule, enforced per node, against a node disagreeing with the drive lane - which
+    // would emit one lane's descriptors over the other's data. The plan refuses a narrow value
+    // under a long kernel before this runs; the rest is caught here. A narrow-lane emission -
+    // the NATIVE arm, whose every value is narrow - holds nothing else. An int-lane emission
+    // holds int nodes and the narrow ones, which it widens once at their loads; it holds no
+    // long-lane node. A long-lane emission may hold int-lane nodes, which the IR's constructors
+    // admit only below a conversion, and which `laneOf` emits at the int species; a narrow node
+    // there has no lowering, since widening one to the long lane would go through the int
+    // species of the narrow species' part width. The IR's own constructors make any other mix
+    // unbuildable; this is what catches one built another way.
     boolean fits = switch (lane) {
       case BYTE, SHORT -> node.laneType() == lane.laneType;
       case INT -> node.laneType() != VarkaVectorIR.LaneType.LONG;

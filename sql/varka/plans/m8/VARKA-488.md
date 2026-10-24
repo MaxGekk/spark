@@ -115,4 +115,44 @@ the catalyst defaults gate, the linters.
 
 ## 4. Outcome
 
-To be written as the work lands.
+*24 October 2026. Done.* `VarkaKernelPlan` is in `varka/`, built by `of(roots, options)`, and the
+compiler's admission, `fitsBudgets`, the emitter with `Analysis`, and `CompiledVarkaProjection`
+read it. `kernelLane` and the per-root `emissionLane` moved from `VarkaVectorIR` into the plan
+(the per-root step package-private, for the unit tests that ask about one root's lane);
+`VarkaLoopEmitter.narrowRefusal` and the emitter's private `laneOf` are gone. `Analysis` takes
+the plan in its constructor and answers `mixed`, `laneOf(node)`, `narrowsAtStore`, `inputLane`,
+`lanesOf` and `narrowGroups` from it; its `operands`, `roots`, `mixed` and `rootsAnalyzed` state
+went with the derivations. The refusal texts are unchanged, now each produced by the plan with
+its kind (`NARROW` or `LANE_MISMATCH`), and the compiler adds only the "joining drives ..."
+prefix it always added.
+
+**Three commits, each byte-identical,** as section 1 planned: the plan beside the old code with
+the equivalence test; every consumer reading it; the old functions, the equivalence test and the
+first-root test sites removed. The equivalence test held the plan to `kernelLane`,
+`narrowRefusal` and `Analysis` - the drive lane, the refusal text, `mixed`, `narrowGroups`,
+`lanes`, `lanesOf`, every node's lane and every input's - over 2,400 random kernels of six
+grammars, 2,000 joined pairs and every coverage row, and the compiler's admission of one entry
+after another, under all 52 configurations of the option matrix. It took 87 s at the defaults
+against under 30 s predicted (the coverage rows are compiled from SQL, which the estimate did
+not price), and lived only until the last commit.
+
+**Not moved, as decided.** `wrapAt` stays in `Analysis`. Two lane-mismatch checks stay with the
+compiler arms, since they guard building one node over two lanes inside one root, not the
+kernel's lane: `VarkaConditionCompiler`'s operand check, and the predicate path's check before it
+folds conjuncts with `AND`, which now takes its text from the plan's `laneMismatchReason`.
+
+**Behaviour at the edges.** The emitter refuses a kernel the plan refuses, so a direct caller
+that hands it a narrow value it cannot widen fails at `planOf` with the plan's reason rather than
+later in emission; the compiler never hands it one. `CompiledVarkaProjection.lane` names the
+plan's reason when it throws.
+
+**Review (24 October 2026).** One read-only review found no behaviour change. Applied: the
+lane-mismatch search walked every prefix again for each refused entry, quadratic in the outputs;
+it is one pass now. An import left unused, an orphaned javadoc, the mismatch text kept in two
+places, `Refusal`'s unread root, two stale comments and the emitter skill's notes were fixed.
+
+**Measured.** The catalyst defaults gate passes (873 tests) and the sql defaults gate (1310);
+`emitted_bytes.json`, `coverage.json` and `width_audit.json` are byte-identical. The option
+matrix over the twelve suites the change touches found one test that asserted the drive lane
+under `validityByWidth=false`, where the plan now refuses the int-lane kernel for the missing
+lane count; the test accepts that refusal as the int lane's answer, which is what it is.

@@ -46,8 +46,8 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Wid
  */
 public final class VarkaKernelPlan {
 
-  /** Why no kernel of these roots can be emitted, and the root that cannot join the others. */
-  public record Refusal(Kind kind, String reason, VarkaVectorIR root) {}
+  /** Why no kernel of these roots can be emitted. */
+  public record Refusal(Kind kind, String reason) {}
 
   /** What refused a kernel. */
   public enum Kind {
@@ -70,7 +70,7 @@ public final class VarkaKernelPlan {
       Set<VarkaVectorIR> storeNarrowings, Map<Integer, LaneType> inputLanes, int narrowGroups) {
     this.refusal = refusal;
     this.drive = drive;
-    this.lane = drive == null ? null : Lane.of(drive);
+    this.lane = Lane.of(drive);
     this.lanes = lanes;
     this.mixed = mixed;
     this.storeNarrowings = storeNarrowings;
@@ -130,8 +130,13 @@ public final class VarkaKernelPlan {
         Map.copyOf(inputLanes), narrowGroups(roots, lane, lanes));
   }
 
+  /**
+   * A plan with no lanes. Its lane fields hold placeholders that no caller can read: every
+   * accessor of them throws while the refusal is present.
+   */
   private static VarkaKernelPlan refused(Refusal refusal) {
-    return new VarkaKernelPlan(Optional.of(refusal), null, 0, false, Set.of(), Map.of(), 0);
+    return new VarkaKernelPlan(Optional.of(refusal), LaneType.INT, 0, false, Set.of(), Map.of(),
+        0);
   }
 
   // -------------------------------------------------------------------------------------------
@@ -190,6 +195,11 @@ public final class VarkaKernelPlan {
     for (VarkaVectorIR root : roots) {
       lanes.add(emissionLane(root, options));
     }
+    return lanesShare(lanes);
+  }
+
+  /** The lane roots of these emission lanes share: theirs where one, the int lane but for long. */
+  private static Optional<LaneType> lanesShare(Set<LaneType> lanes) {
     if (lanes.size() <= 1) {
       return lanes.stream().findFirst();
     }
@@ -264,7 +274,7 @@ public final class VarkaKernelPlan {
         // Analysis admits no narrow node in a long-lane emission, not even one read only for
         // its validity word, so the entry declines here rather than failing at emit.
         return Optional.of(new Refusal(Kind.NARROW,
-            "a narrow value under a bigint kernel has no lowering", root));
+            "a narrow value under a bigint kernel has no lowering"));
       }
       if (!VarkaVectorIR.needsNarrowSpecies(root)) {
         // A narrow column whose only use is a validity word - `y1 IS NOT NULL` - reads no
@@ -275,12 +285,12 @@ public final class VarkaKernelPlan {
       int intLanes = Lane.emitLanes(options, Lane.INT);
       if (intLanes == 0) {
         return Optional.of(new Refusal(Kind.NARROW,
-            "a narrow column needs a baked int lane count to be widened", root));
+            "a narrow column needs a baked int lane count to be widened"));
       }
       for (LaneType type : lanes) {
         if (type.isNarrow() && Lane.widenLanes(intLanes, Lane.of(type)) == 0) {
           return Optional.of(new Refusal(Kind.NARROW,
-              "a " + type + " column has no widening load at " + intLanes + " int lanes", root));
+              "a " + type + " column has no widening load at " + intLanes + " int lanes"));
         }
       }
     }
@@ -290,19 +300,30 @@ public final class VarkaKernelPlan {
   /**
    * The refusal of roots no one lane serves: the first root that no lane serves beside the roots
    * before it, which is the entry the compiler is admitting when it asks, named with its own lane
-   * and the lane of the kernel it would join.
+   * and the lane of the kernel it would join. One walk: each root's lane is taken once.
    */
   private static Refusal laneMismatch(List<VarkaVectorIR> roots, VarkaEmitOptions options) {
-    for (int k = 1; k < roots.size(); k++) {
-      if (kernelLane(roots.subList(0, k + 1), options).isEmpty()) {
-        VarkaVectorIR entry = roots.get(k);
-        LaneType kernel = kernelLane(roots.subList(0, k), options).orElseThrow();
-        return new Refusal(Kind.LANE_MISMATCH, "the " + emissionLane(entry, options)
-            + " lane in a kernel on the " + kernel + " lane: one kernel holds one lane",
-            entry);
+    Set<LaneType> before = EnumSet.noneOf(LaneType.class);
+    for (VarkaVectorIR root : roots) {
+      LaneType entry = emissionLane(root, options);
+      Set<LaneType> with = EnumSet.copyOf(before);
+      with.add(entry);
+      if (lanesShare(with).isEmpty()) {
+        return new Refusal(Kind.LANE_MISMATCH,
+            laneMismatchReason(entry, lanesShare(before).orElseThrow()));
       }
+      before = with;
     }
     throw VarkaErrors.illegalState("no lane serves " + roots + ", and every prefix has one");
+  }
+
+  /**
+   * The reason an entry of lane {@code entry} records when the kernel it would join is on
+   * {@code kernel}: the plan's, and the predicate path's for a conjunct of the other lane.
+   */
+  public static String laneMismatchReason(LaneType entry, LaneType kernel) {
+    return "the " + entry + " lane in a kernel on the " + kernel
+        + " lane: one kernel holds one lane";
   }
 
   /**

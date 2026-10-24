@@ -329,10 +329,8 @@ public final class VarkaEmitterNarrowSuite {
     assertEquals(Optional.of(LaneType.BYTE), VarkaKernelPlan.driveOf(List.of(byteSum), NATIVE));
     // Each root alone would run native; together they have no one narrow species, and the int
     // lane serves both through the widened lowering, as it serves an int root beside them.
-    assertEquals(Optional.of(LaneType.INT),
-        VarkaKernelPlan.driveOf(List.of(byteSum, shortAbs), NATIVE));
-    assertEquals(Optional.of(LaneType.INT),
-        VarkaKernelPlan.driveOf(List.of(byteSum, intSum), NATIVE));
+    assertDrivesAtTheIntLane(List.of(byteSum, shortAbs));
+    assertDrivesAtTheIntLane(List.of(byteSum, intSum));
     assertEquals(Optional.empty(), VarkaKernelPlan.driveOf(
         List.of(byteSum, new ColumnRef(4, LaneType.LONG)), NATIVE));
     int length = 300;
@@ -344,6 +342,21 @@ public final class VarkaEmitterNarrowSuite {
       checkValues("a byte sum, a short abs and an int sum in one kernel " + arm.name(),
           List.of(byteSum, shortAbs, intSum), 4, new int[0], length, data, row -> row % 9 == 2,
           false, arm.options());
+    }
+  }
+
+  /**
+   * The plan of {@code roots} on the native arm drives at the int lane: it does, or it is refused
+   * because this configuration bakes no int lane count to widen at, a refusal only an int-lane
+   * kernel meets.
+   */
+  private static void assertDrivesAtTheIntLane(List<VarkaVectorIR> roots) {
+    VarkaKernelPlan plan = VarkaKernelPlan.of(roots, NATIVE);
+    if (plan.refusal().isPresent()) {
+      assertEquals("a narrow column needs a baked int lane count to be widened",
+          plan.refusal().get().reason());
+    } else {
+      assertEquals(LaneType.INT, plan.drive());
     }
   }
 

@@ -111,7 +111,7 @@ public record CompiledVarkaProjection(
     VarkaKernelPlan plan = VarkaKernelPlan.of(outputs, options);
     if (plan.refusal().isPresent()) {
       throw VarkaErrors.illegalArgument(
-          "outputs mix the long lane with another: " + outputs);
+          "no kernel of these outputs: " + plan.refusal().get().reason() + ": " + outputs);
     }
     return plan.drive();
   }

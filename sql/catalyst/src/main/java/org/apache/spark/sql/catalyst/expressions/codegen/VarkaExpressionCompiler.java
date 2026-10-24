@@ -916,7 +916,7 @@ public final class VarkaExpressionCompiler {
         if (!before.isEmpty() && before.stream().anyMatch(b -> b.laneType() != meeting)) {
           marks.restore(inputs, literals, sink);
           sink.take();
-          sink.note(laneMismatch(meeting, fused.get(0).laneType()), bound);
+          sink.note(VarkaKernelPlan.laneMismatchReason(meeting, fused.get(0).laneType()), bound);
           specs.add(new VarkaConjunctSpec(conjunct, false, sink.take()));
           continue;
         }
@@ -1206,7 +1206,6 @@ public final class VarkaExpressionCompiler {
     return List.copyOf(CollectionConverters.asJava(projectList));
   }
 
-  /** The reason an entry of one lane records when the kernel is already on the other. */
   /**
    * Why {@code entry} cannot join the kernel {@code with} holds it in, or empty when it can: the
    * plan of the entry alone, then the plan of the kernel with it, whose narrow refusal says the
@@ -1222,11 +1221,6 @@ public final class VarkaExpressionCompiler {
     return VarkaKernelPlan.of(with, options).refusal().map(r ->
         r.kind() == VarkaKernelPlan.Kind.LANE_MISMATCH ? r.reason()
             : "joining drives the kernel's narrow entries at the int lane, where " + r.reason());
-  }
-
-  private static String laneMismatch(LaneType entry, LaneType kernel) {
-    return "the " + entry + " lane in a kernel on the " + kernel
-        + " lane: one kernel holds one lane";
   }
 
   /** The {@code AND} spine of a condition, in query order: the split the predicate works. */
