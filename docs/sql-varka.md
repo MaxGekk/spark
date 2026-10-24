@@ -662,6 +662,31 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 
 <!-- END generated coverage table -->
 
+### How each row is verified
+
+Every row above runs in the differential suites, which compare the fused kernel with Spark's
+row engine on generated data. Beyond that, each row names how it is verified, in
+`sql/varka/coverage.json`'s `verified` field: a refinement in `sql/varka/proofs/refinement.smt2`
+(the kernel proved equal to the SQL specification, with Spark's departures named), a lowering
+proof under `sql/varka/proofs/`, a test that sweeps the row's whole input domain, a planned row
+that owes it, or `differential`, the differential suites alone. `VarkaCoverageSuite` fails a row
+whose entry names something that does not exist. The counts, per column type of the row's
+operands (a row counts once for each type it reads):
+
+<!-- BEGIN generated verification counts -->
+| Type | Rows | refinement | proof | exhaustive | owed | differential |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `bigint` | 41 | 0 | 2 | 0 | 2 | 37 |
+| `bool` | 19 | 0 | 0 | 10 | 0 | 9 |
+| `byte` | 23 | 0 | 0 | 0 | 8 | 15 |
+| `date` | 81 | 17 | 0 | 0 | 0 | 64 |
+| `dt` | 11 | 2 | 0 | 0 | 0 | 9 |
+| `int` | 68 | 14 | 2 | 0 | 1 | 51 |
+| `short` | 23 | 0 | 0 | 0 | 8 | 15 |
+| `time` | 28 | 6 | 0 | 0 | 2 | 20 |
+| `ym` | 24 | 7 | 2 | 0 | 2 | 13 |
+<!-- END generated verification counts -->
+
 ## Glossary
 
 Varka's code and documents lean on about two dozen words that mean something
