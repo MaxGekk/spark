@@ -262,3 +262,87 @@ the family compilers and is cheaper after 3.3; 3.5 touches `VarkaVectorIR` and t
 
 Settled by the revision: `VARLEN` and `COMPOSITE` are not declared ahead of the rows that build
 them (3.5).
+
+## 9. What 3.1 to 3.3 taught (revision of 24 October 2026)
+
+Written after the conformance contract (row 484, #1006), the cast register's check (row 486,
+#1008) and the kernel plan (row 488, not yet merged). Each row found the same kind of defect: a fact
+about a type written down in more than one place, by hand, and the copies disagreeing with each
+other or with the compiler while every test passed.
+
+### 9.1 Findings
+
+1. **Every hand-kept register had drifted.** The census claimed no fused operator over `bool`
+   while fifteen fuse, since row 331 left the claims out; when 484 added them the census refused
+   every one, because `VarkaCoverageSuite` credited `bool` to any boolean operand, so a
+   comparison's own result counted and a boolean column did not. Three cast claims were
+   wrong, and `m8/PLAN.md` row 332 said `CAST(ymy AS INT)` declines while a coverage row fused it
+   (486). The existing checks ran one way: a claimed fusion has a coverage row, never an
+   unclaimed one declines.
+2. **What fuses is a fact of the form, not the type pair.** `dt -> dt` fuses for 36 of its 90
+   form pairs (every target ending in `SECOND`), `ym -> int` for two of three sources. A
+   register keyed by type pair cannot say that; a file the compiler writes per form can, and
+   486 made `casts.tsv` such a derivation.
+3. **The facts of a type live in many lists, in Python, Java and Scala.** The census type names are
+   in `dev/varka_census.py` and in `VarkaCoverageSuite`; a type's SQL target is in
+   `VarkaTypeConformance`'s `CAST_TARGETS` and its forms in `VarkaCastMatrixSuite`'s `TYPES`; the
+   landed types in the census's `CONFORMANCE_SUITE` and `EXISTING`; a type's input arm in
+   `VarkaSparkOracle`; its test storage layout in `VarkaKernelChecks` (484 added the bit-stored
+   boolean there); its species in `VarkaVectorTemplateWarmup` and the reach model
+   `VarkaWarmupReach`. A new type is added to each by hand, and a list it is missing from fails
+   nothing until a reviewer notices.
+4. **A lane was derived in eight places, four of them tests.** 488 made `VarkaKernelPlan` the
+   one function, and found the four test sites reading a kernel's lane from its first root,
+   which is what production stopped doing in the narrow lanes' review; read that way,
+   `VarkaReplay` would pick the wrong entry point for a native narrow root beside an int one. A
+   harness that recomputes what production computes drifts as production code did.
+5. **The byte oracles pin acceptance only.** `emitted_bytes.json`, `coverage.json` and
+   `width_audit.json` say nothing about what the compiler refuses: a refactor that stopped
+   refusing a kernel would move no byte. 488's method held: build the new code beside the old,
+   prove the two equivalent over a corpus under every configuration, move the consumers one at
+   a time with the oracles run after each, delete the old code and the equivalence test last.
+6. **A new IR node reaches about twenty places** (section 2 counted them), most of them exhaustive
+   switches asking one small property: whether reduction modulo a narrow width commutes with it
+   (`Analysis.isNarrowRing`), whether it is pure, whether it skips a null input, its budget weight,
+   its cost kind, its children and its rebuild, its reach in three fuzzer grammars. Exhaustiveness
+   is the safety net and stays; spelling the net out in every pass is the cost.
+
+### 9.2 What changes
+
+1. **3.4's registry is the one source of a type's facts, and the tools read it.** Beyond the
+   admission answer, the census name and the species, an entry holds what finding 3 lists: the
+   Spark type and its forms (field ranges, precisions), the storage layout (width, bit-packed or
+   not), the conformance values and the oracle's conversion. A test writes the registry to a
+   committed file, as `VarkaCastMatrixSuite` writes `casts_fused.tsv`, and the Python tools read
+   that file instead of keeping their lists. 3.4's done-when gains: `CAST_TARGETS`, the cast
+   suite's `TYPES`, the census's type lists and the oracle's per-type arms read the registry,
+   and the test harness takes load layouts and lanes from the registry and the kernel plan,
+   never from code of its own.
+2. **Representation apart from semantics, before the floats.** `LaneType` is a storage width;
+   the date, time and interval types already take their meaning from their nodes, not their
+   lane. The floats bring a value domain with its own ordering (NaN, both zeros) and decimal a
+   representation of two longs. The lane-generic nodes - comparison, choice, null tests, `IN`,
+   load, store - take the representation and a small per-type semantics table (ordering,
+   equality, overflow), so a type adds rows, as section 4's first two rules ask. It lands with
+   the `Lane` split of section 5, in row 341's first step.
+3. **Node properties as a descriptor, not switches in every pass** (new row 489). Each IR node
+   supplies one record of its properties - ring under narrow reduction, pure, skips nulls,
+   budget weight, cost kind - and the passes read the property they need. The record is
+   required at construction, so a new node still cannot compile without deciding each property,
+   and most of finding 6's twenty places become two or three. Before decimal, whose lane
+   pair adds nodes (359 to 362).
+4. **Every capability register is generated from the compiler.** 486 did the casts; row 487
+   does the census, starting from substituting a column of each type into the coverage rows.
+   People review the diff of a generated file rather than edit a claim, and a coverage row stays
+   the end-to-end proof against Spark.
+5. **Refactors of the compiler carry an equivalence test** while old and new code coexist, as
+   finding 5 describes, whenever what they change can refuse.
+
+### 9.3 Sequencing, amended
+
+| When | Change |
+| :--- | :--- |
+| next | 3.4 with 9.2.1's wider done-when; row 487 beside it |
+| with floats (341) | 9.2.2, with the `Lane` split |
+| before decimal (347, 359) | row 489, 9.2.3 |
+| continuous | 9.2.4 and 9.2.5 in every review |
