@@ -53,6 +53,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Com
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondConst;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondIf;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondValue;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DateDiff;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfMonth;
@@ -1452,6 +1453,9 @@ final class Slots {
         case BitOp x -> { }
         case BitCount x -> { }
         case IfElse x -> { }
+        // Its word is the condition's two known words ORed, and the condition demands its
+        // operands' words in its own arms; its own word is demanded like any value node's.
+        case CondValue x -> { }
         case And x -> { }
         case Or x -> { }
         case Not x -> { }
@@ -1490,6 +1494,8 @@ final class Slots {
           demand(analysis.wordOwner.get(x.right())); }
         case IfElse x -> { demand(analysis.wordOwner.get(x.thenNode()));
           demand(analysis.wordOwner.get(x.elseNode())); }
+        // Computed from the condition's masks, which load the words its leaves demand already.
+        case CondValue x -> { }
         case MakeDate x -> { demand(analysis.wordOwner.get(x.year()));
           demand(analysis.wordOwner.get(x.month()));
           demand(analysis.wordOwner.get(x.day())); }

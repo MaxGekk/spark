@@ -611,6 +611,9 @@ final class VarkaEmitBudget {
           NarrowLane _, Compare _, NullSafeEqual _ -> 1;
       // The blend, plus the shift pair a narrow pick may reduce with at the int lane.
       case IfElse n -> n.laneType().isNarrow() ? 3 : 1;
+      // The broadcast 0 and the add of 1 under the known-true mask; its validity, the OR of the
+      // two known words, is scalar.
+      case CondValue _ -> 2;
       // The connectives emit only mask calls, which no weight counts; 1 is a floor, so that a
       // connective is never free to join any group.
       case And _, Or _, Not _, IsNotNull _, BoolCompare _, BoolNullSafeEq _, CondIf _ -> 1;

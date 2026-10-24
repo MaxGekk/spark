@@ -150,6 +150,10 @@ public final class VarkaCanonicalIr {
       case "isNotNull" -> new IsNotNull(node());
       case "inRanges" -> new InRanges(node(), ranges(next()));
       case "if" -> new IfElse(cond(), node(), node());
+      case "condValue" -> {
+        Cond c = cond();
+        yield new CondValue(c, c.laneType());
+      }
       case "greatest" -> new Greatest(node(), node());
       case "least" -> new Least(node(), node());
       case "dayOfWeek" -> new DayOfWeek(node());

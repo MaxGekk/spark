@@ -29,6 +29,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Add
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.AddMonths;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondValue;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DateDiff;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfMonth;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfWeek;
@@ -311,6 +312,9 @@ public final class VarkaRangeAnalysis {
       // answered where it is narrowed, by the NarrowLane arm above.
       case BitCount n -> kind != Kind.INT || n.laneType() != VarkaVectorIR.LaneType.INT
           ? VarkaValueRange.UNKNOWN : VarkaValueRange.of(0, Long.SIZE);
+      // A condition as a value is 0 or 1 where it is known; an unknown row is null, whose value
+      // no consumer reads.
+      case CondValue n -> kind != Kind.INT ? VarkaValueRange.UNKNOWN : VarkaValueRange.of(0, 1);
       // A condition has no value of its own.
       case Cond c -> VarkaValueRange.UNKNOWN;
     };

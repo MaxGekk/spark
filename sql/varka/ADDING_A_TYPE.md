@@ -1,10 +1,10 @@
 # Adding a type to Varka
 
 Milestone 8 adds seven types: two have landed in part, and four have not started (`TIMESTAMP_NTZ`,
-`DOUBLE`, `FLOAT` and `DECIMAL`; `BOOLEAN` has its conditions and not yet the condition-to-value
-bridge, row 460). This page is the path a type takes
-through the engine, in the order the code runs, with the file named for each step and a command
-that says whether the step is done.
+`DOUBLE`, `FLOAT` and `DECIMAL`; `BOOLEAN` has its conditions and the condition-to-value bridge,
+`CondValue` (row 460), but no compiler arm yet reads a boolean as a value). This page is the path a
+type takes through the engine, in the order the code runs, with the file named for each step and a
+command that says whether the step is done.
 
 Read [the architecture guide](../../docs/sql-varka.md) first, at least its glossary - *lane*,
 *word*, *morsel* and *epilogue* mean something specific here - and skim

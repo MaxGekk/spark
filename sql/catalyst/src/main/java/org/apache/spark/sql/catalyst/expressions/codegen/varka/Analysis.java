@@ -46,6 +46,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Com
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondConst;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondIf;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondValue;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DateDiff;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfMonth;
@@ -270,7 +271,11 @@ final class Analysis {
    * {@code Varka_Project_Stage3.java:7} resolves to an IR node without a live session.
    */
   final Map<VarkaVectorIR, Integer> lineNumbers = new HashMap<>();
-  /** Whether the subtree holds a null-skipping node (IfElse, Greatest, Least). */
+  /**
+   * Whether the subtree holds a node with a known output from a null input: the null-skipping
+   * values (IfElse, Greatest, Least) and the conditions that can be known over a null (And, Or,
+   * IsNotNull, CondIf, BoolNullSafeEq, NullSafeEqual). The all-null shortcut reads it.
+   */
   final Map<VarkaVectorIR, Boolean> skipping = new HashMap<>();
   /**
    * Why a node refuses a batch at run time. A refusing node computes a mask of the lanes its
@@ -683,6 +688,7 @@ final class Analysis {
         case Greatest n -> { }
         case Least n -> { }
         case IfElse n -> { }
+        case CondValue n -> { }
         case DayOfWeek n -> { }
         case WeekDay n -> { }
         case DayOfWeekIso n -> { }
@@ -794,7 +800,7 @@ final class Analysis {
           DayOfYear _, LastDay _, TruncDate _, WeekOfYear _, ConstDivide _, BoundedDivide _,
           BitOp _, BitCount _, Compare _, NullSafeEqual _, BoolColumn _, BoolCompare _,
           CondIf _, BoolNullSafeEq _, CondConst _, And _, Or _, Not _, IsNotNull _,
-          InRanges _ -> false;
+          InRanges _, CondValue _ -> false;
     };
   }
 
@@ -1188,8 +1194,13 @@ final class Analysis {
       case WeekOfYear n -> pureWord.get(n.days());
       // A blend by the known-true mask, and a word ANDed with a computed validity test.
       case IfElse n -> null;
+      // The condition's known words, kt | kf: a function of the condition's operands' values,
+      // not of their bitmaps alone.
+      case CondValue n -> null;
       case MakeDate n -> null;
-      default -> null;
+      // A condition has no validity word; its known-true and known-false words are its own.
+      case Compare _, NullSafeEqual _, CondConst _, BoolCompare _, CondIf _, BoolNullSafeEq _,
+          And _, Or _, Not _, IsNotNull _, InRanges _ -> null;
     };
   }
 
@@ -1416,6 +1427,10 @@ final class Analysis {
       case Greatest n -> analyzeOp(node, true, n.left(), n.right());
       case Least n -> analyzeOp(node, true, n.left(), n.right());
       case IfElse n -> analyzeOp(node, true, n.cond(), n.thenNode(), n.elseNode());
+      // Null exactly where its condition is unknown: a known answer from a null input is the
+      // condition's own flag (And, Or, the null-safe equality, the null test, CondIf), and so is
+      // a null from valid inputs (CondConst(NULL)).
+      case CondValue n -> analyzeOp(node, false, n.cond());
       case Compare n -> analyzeOp(node, false, n.left(), n.right());
       // A known answer from a null input (two nulls are equal), the flag IfElse and the picks
       // set; shortcutApplies excludes a condition root, so no shortcut changes.
@@ -1436,8 +1451,11 @@ final class Analysis {
       case BoolCompare n -> analyzeOp(node, false, n.left(), n.right());
       case CondIf n -> analyzeOp(node, true, n.cond(), n.thenCond(), n.elseCond());
       case BoolNullSafeEq n -> analyzeOp(node, true, n.left(), n.right());
-      case And n -> analyzeOp(node, false, n.left(), n.right());
-      case Or n -> analyzeOp(node, false, n.left(), n.right());
+      // Known over a null input where the other side decides: NULL AND FALSE is false, NULL OR
+      // TRUE is true. A condition root never takes the all-null shortcut, which is the one
+      // reader of the flag; a value over a condition (IfElse, CondValue) inherits it here.
+      case And n -> analyzeOp(node, true, n.left(), n.right());
+      case Or n -> analyzeOp(node, true, n.left(), n.right());
       case Not n -> analyzeOp(node, false, n.child());
       case InRanges n -> {
         // One static table per distinct range set, named in the order the sets are met.
@@ -1455,8 +1473,9 @@ final class Analysis {
           throw VarkaErrors.illegalArgument(
               "IsNotNull child must be a ColumnRef, a widened one or a Cond, got " + n.child());
         }
-        // skips = true states the semantics - known output from a null input - though a
-        // Cond only reaches a root through IfElse, which already marks skipping.
+        // skips = true states the semantics - known output from a null input - for the value
+        // over a condition that reaches a root: IfElse, which marks skipping itself, and
+        // CondValue, which inherits it.
         analyzeOp(node, true, n.child());
         if (n.overCondition()) {
           nullTestsOverCond.add(n);
@@ -1489,7 +1508,7 @@ final class Analysis {
       if (child instanceof Cond && !(node instanceof IfElse) && !(node instanceof And)
           && !(node instanceof Or) && !(node instanceof Not) && !(node instanceof IsNotNull)
           && !(node instanceof BoolCompare) && !(node instanceof CondIf)
-          && !(node instanceof BoolNullSafeEq)) {
+          && !(node instanceof BoolNullSafeEq) && !(node instanceof CondValue)) {
         requireValue(child, "child of " + node.getClass().getSimpleName());
       }
       operands.add(child);

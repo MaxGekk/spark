@@ -163,6 +163,12 @@ public final class VarkaReference {
           pick(value(left, row, isNull, lits), value(right, row, isNull, lits), Math::min);
       case IfElse(var c, var thenNode, var elseNode) -> cond(c, row, isNull, lits).isTrue()
           ? value(thenNode, row, isNull, lits) : value(elseNode, row, isNull, lits);
+      // CAST(c AS INT): null where the condition is unknown, unlike IF(c, 1, 0).
+      case CondValue n -> switch (cond(n.cond(), row, isNull, lits)) {
+        case TRUE -> OptionalInt.of(1);
+        case FALSE -> OptionalInt.of(0);
+        case UNKNOWN -> OptionalInt.empty();
+      };
       case Cond c -> throw new IllegalArgumentException("condition " + c + " evaluated as a value");
     };
   }
@@ -425,6 +431,11 @@ public final class VarkaReference {
       // Unknown takes the else branch, as at the int lane and as CASE WHEN does.
       case IfElse(var c, var thenNode, var elseNode) -> longCond(c, row, isNull, lits).isTrue()
           ? longValue(thenNode, row, isNull, lits) : longValue(elseNode, row, isNull, lits);
+      case CondValue n -> switch (longCond(n.cond(), row, isNull, lits)) {
+        case TRUE -> OptionalLong.of(1);
+        case FALSE -> OptionalLong.of(0);
+        case UNKNOWN -> OptionalLong.empty();
+      };
       case BoundedDivide n -> throw new IllegalArgumentException(
           "a bounded division is an int-lane node: " + n);
       // Java's long operators: the shifts mask their count to six bits.

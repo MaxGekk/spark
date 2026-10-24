@@ -450,10 +450,12 @@ final class VarkaBodyEmitter {
    * Whether the driver emits the all-null shortcut - return iff every output reads at least one
    * all-null column. Only in the masked driver (the dense body has nothing null; the loop and
    * epilogue methods never run when it fires), only when every output reads a column, and only
-   * for null-intolerant outputs: a null-skipping subtree ({@code greatest}, {@code IfElse}) can
-   * be valid over an all-null column. A {@code Cond} root is excluded outright: an OR over one
-   * all-null column and one live one still selects rows, which the zeroed bitmap the shortcut
-   * leaves behind would deny. The loop needs no shortcut to be correct there.
+   * for null-intolerant outputs: a subtree with a known output from a null input
+   * ({@code greatest}, {@code IfElse}, a {@code CondValue} over {@code AND} or {@code OR}) can be
+   * valid over an all-null column ({@link Analysis#skipping}). A {@code Cond} root is excluded
+   * outright: an OR over one all-null column and one live one still selects rows, which the
+   * zeroed bitmap the shortcut leaves behind would deny. The loop needs no shortcut to be
+   * correct there.
    */
   private static boolean shortcutApplies(boolean dense, List<VarkaVectorIR> outputs,
       Analysis analysis) {
