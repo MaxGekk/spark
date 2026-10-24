@@ -34,8 +34,10 @@ a curated row nor an exclusion, a curated name the registry no longer has, a cla
 census that the source does not define, an entry line in a registry section the parser did not
 read, a type claimed as fused for a class that takes no operand of that type in any row of
 `sql/varka/coverage.json` (each row lists its classes' operand types, so `year(d) = 2021 AND
-i > 0` supports a date claim for Year and no int one; VARKA-328), and a cast pair the matrix marks
-fused that no row casts, or one a row casts that it does not mark. A type marked `~` is fused only
+i > 0` supports a date claim for Year and no int one; VARKA-328), and a cast pair the compiler
+fuses that no row casts, or one a row casts that it does not fuse. Which casts fuse is not
+curated: VarkaCastMatrixSuite asks the compiler and writes m8/casts_fused.tsv, from which
+casts.tsv's fused_today is derived (VARKA-486). A type marked `~` is fused only
 over a derived operand, and its note must quote the coverage row that shows it. The cast aliases'
 source types are not curated: they are the sources `legal()` allows.
 So the census is regenerated, not edited, and a registry change upstream shows up here.
@@ -770,32 +772,70 @@ def cast_rows(src, dst):
     return "332"
 
 
-# The pairs Varka fuses today, each a cast arm of the compiler (VarkaIntervalCompiler,
-# VarkaTimeCompiler, VarkaNodeCompiler) and a coverage row casting that pair: in part, as the
-# note says. `cast_errors` holds the two to each other (VARKA-328).
-FUSED_CASTS = {
-    ("ym", "ym"): "MONTH end field only (CAST(ymy AS INTERVAL MONTH), ym - ymm)",
-    ("dt", "dt"): "SECOND end field only (dt < INTERVAL '0' SECOND)",
-    ("time", "time"): "widening precision only",
-    ("int", "ym"): "MONTH unit only (CAST(i AS INTERVAL MONTH))",
-    ("ym", "int"): "MONTH-ended source only",
-    ("int", "dt"): "DAY unit, only as date_add's offset (d + CAST(i AS INTERVAL DAY))",
-    ("int", "bigint"): "every mode",
-    ("bigint", "int"): "LEGACY and ANSI; TRY's null waits on row 332",
-    ("byte", "int"): "every mode: exact, the column's widening load (VARKA-329)",
-    ("short", "int"): "every mode: exact, the column's widening load (VARKA-329)",
+# What the compiler fuses, per form pair and mode: written by VarkaCastMatrixSuite, which compiles
+# every legal cast between two forms of the thirteen types (each interval field range, three time
+# precisions, two decimals) and fails when the compiler's answers move from the file (VARKA-486).
+# casts.tsv's fused_today is derived from it, so a claim cannot drift from the compiler.
+CASTS_FUSED = "sql/varka/plans/m8/casts_fused.tsv"
+FUSED_MODES = ["legacy", "ansi", "try"]
+
+# The pairs that fuse only inside another operator, never as a bare cast over a column, each with
+# the coverage row that shows it. The probe must say the pair declines; one that starts to fuse
+# bare leaves this list.
+CONTEXT_CASTS = {
+    ("int", "dt"): "only as date_add's offset: d + CAST(i AS INTERVAL DAY)",
 }
+
+
+def casts_fused(root=ROOT):
+    """Per (from, to): the form pairs probed and, per mode, how many of them fuse.
+
+    >>> import tempfile
+    >>> with tempfile.TemporaryDirectory() as d:
+    ...     path = os.path.join(d, CASTS_FUSED)
+    ...     os.makedirs(os.path.dirname(path))
+    ...     with open(path, "w") as f:
+    ...         _ = f.write("from\\tto\\tfrom_type\\tto_type\\tlegacy\\tansi\\ttry\\n")
+    ...         _ = f.write("ym\\tint\\tY\\tINT\\tfused\\tfused\\tfused\\n")
+    ...         _ = f.write("ym\\tint\\tYM\\tINT\\tdeclined\\tdeclined\\tdeclined\\n")
+    ...     casts_fused(d)
+    {('ym', 'int'): (2, {'legacy': 1, 'ansi': 1, 'try': 1})}
+    """
+    out = {}
+    with open(os.path.join(root, CASTS_FUSED), encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    for line in lines[1:]:
+        src, dst, _, _, *answers = line.split("\t")
+        forms, fused = out.get((src, dst), (0, dict.fromkeys(FUSED_MODES, 0)))
+        for mode, answer in zip(FUSED_MODES, answers):
+            fused[mode] += answer == "fused"
+        out[(src, dst)] = (forms + 1, fused)
+    return out
+
+
+def fused_cells(probe, src, dst):
+    """casts.tsv's fused_today and fused_forms for one pair: the modes in which some form fuses,
+    and "all" when every form fuses in each of them, else how many do in the best mode."""
+    if (src, dst) in CONTEXT_CASTS:
+        return "", "context: " + CONTEXT_CASTS[(src, dst)]
+    forms, fused = probe.get((src, dst), (0, {}))
+    modes = [m for m in FUSED_MODES if fused.get(m)]
+    if not modes:
+        return "", ""
+    best = max(fused[m] for m in modes)
+    every = all(fused[m] == forms for m in modes)
+    return ",".join(m.upper() for m in modes), "all" if every else f"{best} of {forms}"
+
 
 # The mode a coverage row's cast runs in, to the legal() answer that admits it.
 MODE_LEGAL = {"legacy": 0, "ansi": 1, "try": 1}
 
 
-def cast_errors(cov):
-    """Comet's four-way rule over the matrix and the coverage table, per mode: a pair marked fused
-    has a coverage row casting it; a row's cast is legal in its mode and not an identity, which
-    the analyzer removes before a cast exists; and a pair a row casts is marked fused. The rows
-    resolve under ANSI, Spark's default, so a pair fused only in another mode cannot be claimed
-    until a row runs in it."""
+def cast_errors(cov, probe):
+    """Comet's four-way rule over the probe and the coverage table, per mode: a pair the compiler
+    fuses has a coverage row casting it; a row's cast is legal in its mode and not an identity,
+    which the analyzer removes before a cast exists; and a pair a row casts fuses in that mode, or
+    fuses only inside another operator (CONTEXT_CASTS), where the probe must find it declined."""
     errors = []
     cast = cov["#casts"]
     for src, dst, mode in sorted(cast):
@@ -803,19 +843,22 @@ def cast_errors(cov):
             errors.append(f"a coverage row casts {src} to {dst} under {mode}, where it is illegal")
         elif cast_kind(src, dst)[0] == "identity":
             errors.append(f"a coverage row casts {src} to {dst}, an identity")
-        elif (src, dst) not in FUSED_CASTS:
-            errors.append(f"a coverage row casts {src} to {dst}; mark it in FUSED_CASTS")
-    for src, dst in FUSED_CASTS:
-        if not any((src, dst) == (s, d) for s, d, _ in cast):
-            errors.append(f"cast {src} to {dst} is marked fused and no coverage row casts it")
+        elif (src, dst) not in CONTEXT_CASTS and not probe.get((src, dst), (0, {}))[1].get(mode):
+            errors.append(f"a coverage row casts {src} to {dst} under {mode}, which never fuses")
+    for (src, dst), (_, fused) in sorted(probe.items()):
+        if any(fused.values()) and not any((src, dst) == (s, d) for s, d, _ in cast):
+            errors.append(f"the compiler fuses cast {src} to {dst} and no coverage row casts it")
+        if (src, dst) in CONTEXT_CASTS and any(fused.values()):
+            errors.append(f"cast {src} to {dst} fuses bare: take it off CONTEXT_CASTS")
     return errors
 
 
 CAST_HEADER = ["from", "to", "legacy", "ansi", "try", "kind", "semantics", "proof"]
-CAST_HEADER += ["fused_today", "rows"]
+CAST_HEADER += ["fused_today", "rows", "fused_forms"]
 
 
 def cast_matrix():
+    probe = casts_fused()
     out = []
     for src in ORDER:
         for dst in ORDER:
@@ -825,7 +868,7 @@ def cast_matrix():
             kind, note = cast_kind(src, dst)
             if kind == "?":
                 raise SystemExit(f"cast {src} -> {dst} is legal but has no kind")
-            fused = FUSED_CASTS.get((src, dst), "")
+            fused, forms = fused_cells(probe, src, dst)
             out.append(
                 [
                     src,
@@ -838,6 +881,7 @@ def cast_matrix():
                     cast_proof(src, dst),
                     fused,
                     cast_rows(src, dst),
+                    forms,
                 ]
             )
     return out
@@ -924,7 +968,7 @@ def main():
         if failed or args.self_test:
             return 1 if failed else 0
     out, errors = build()
-    errors += cast_errors(coverage_index())
+    errors += cast_errors(coverage_index(), casts_fused())
     errors += conformance_errors()
     if errors:
         for e in errors:
