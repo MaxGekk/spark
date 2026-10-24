@@ -1118,7 +1118,6 @@ public final class VarkaKernelChecks {
     }
   }
 
-  /** Each of {@code numInputs} columns' lane as {@code roots} read it; the long lane if unread. */
   /** The inputs {@code roots} read through a {@link BoolColumn}: the bit-stored columns. */
   static boolean[] bitColumns(List<VarkaVectorIR> roots, int numInputs) {
     var bits = new boolean[numInputs];
@@ -1139,6 +1138,7 @@ public final class VarkaKernelChecks {
     return bits;
   }
 
+  /** Each of {@code numInputs} columns' lane as {@code roots} read it; the long lane if unread. */
   static VarkaVectorIR.LaneType[] columnLanes(List<VarkaVectorIR> roots, int numInputs) {
     var lanes = new VarkaVectorIR.LaneType[numInputs];
     Arrays.fill(lanes, VarkaVectorIR.LaneType.LONG);

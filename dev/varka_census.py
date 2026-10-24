@@ -861,7 +861,8 @@ def cast_summary(rows):
 # Every landed type is held to the conformance contract (VARKA-484, VARKA-475.md 3.1): a suite
 # Varka<Name>ConformanceSuite over VarkaTypeConformance, or an entry here naming the row that
 # owes it. A landed type is one Varka reads today: the three this milestone has added and the
-# six laneOf admitted before it.
+# six laneOf admitted before it. A type the committed census marks fused anywhere has landed
+# too, so a new type must be added here (with its suite or owner) when its first claim lands.
 CONFORMANCE_DIR = (
     "sql/catalyst/src/test/java/org/apache/spark/sql/catalyst/expressions/codegen/varka"
 )
@@ -892,6 +893,13 @@ def conformance_errors(root=ROOT):
     ['short (SmallInt) is a landed type with no VarkaSmallIntConformanceSuite and no owing row']
     """
     errors = []
+    census = os.path.join(root, OUT)
+    if os.path.exists(census):
+        with open(census) as f:
+            rows = [line.rstrip("\n").split("\t") for line in f][1:]
+        fused = {t for r in rows if len(r) > 7 for t in r[7].split(",") if t}
+        for t in sorted(fused - CONFORMANCE_SUITE.keys()):
+            errors.append(f"{t} is fused in the census and missing from CONFORMANCE_SUITE")
     for t, name in CONFORMANCE_SUITE.items():
         suite = f"Varka{name}ConformanceSuite"
         present = os.path.exists(os.path.join(root, CONFORMANCE_DIR, suite + ".java"))

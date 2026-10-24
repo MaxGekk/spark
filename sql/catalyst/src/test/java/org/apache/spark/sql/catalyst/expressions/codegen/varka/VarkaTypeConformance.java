@@ -33,6 +33,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -603,11 +604,25 @@ public abstract class VarkaTypeConformance {
 
   /**
    * A {@code casts.tsv} pair: the target, its {@code fused_today} text and its owners. The text
-   * names the modes it fuses in, or "every mode"; an empty one fuses in none.
+   * opens with the modes it fuses in, "every mode" or a list such as "LEGACY and ANSI", up to a
+   * colon or semicolon; an empty one fuses in none. Any other text (a pair fused for one unit or
+   * one form only) fails rather than being guessed at: the pair needs a form this reads first.
    */
-  private record CastPair(String to, String fusedToday, String rows) {
+  private record CastPair(String from, String to, String fusedToday, String rows) {
+    private static final Pattern MODES =
+        Pattern.compile("(LEGACY|ANSI|TRY)( and (LEGACY|ANSI|TRY))*");
+
     boolean fusedIn(Mode mode) {
-      return fusedToday.contains("every mode") || fusedToday.contains(mode.name());
+      if (fusedToday.isEmpty()) {
+        return false;
+      }
+      String head = fusedToday.split("[:;]", 2)[0].trim();
+      if (head.equals("every mode")) {
+        return true;
+      }
+      assertTrue(MODES.matcher(head).matches(), "casts.tsv " + from + " -> " + to
+          + ": fused_today \"" + fusedToday + "\" names no modes the contract can read");
+      return List.of(head.split(" and ")).contains(mode.name());
     }
   }
 
@@ -647,7 +662,7 @@ public abstract class VarkaTypeConformance {
     /** The pairs from {@code from}, its identity cast left out: the analyzer removes that one. */
     static List<CastPair> casts(String from) {
       return CASTS.stream().filter(f -> f[0].equals(from) && !f[1].equals(from))
-          .map(f -> new CastPair(f[1], f[8], f[9])).toList();
+          .map(f -> new CastPair(f[0], f[1], f[8], f[9])).toList();
     }
 
     static CastPair cast(String from, String to) {

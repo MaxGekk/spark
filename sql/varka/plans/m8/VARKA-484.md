@@ -111,4 +111,64 @@ catalyst defaults gate; the linters.
 
 ## 6. Outcome
 
-To be written as the work lands.
+*24 October 2026. Done.* `VarkaTypeConformance` holds the seven checks of section 2 and
+generates the fixtures of section 1; `VarkaTinyIntConformanceSuite`,
+`VarkaSmallIntConformanceSuite` and `VarkaBooleanConformanceSuite` supply the descriptors. At the
+defaults `TINYINT` and `SMALLINT` pass six checks with the cast row cancelled (owed to row 332 and
+the rows `casts.tsv` names; the casts that fuse today, `byte` and `short` to `int`, ran and
+agreed), and `BOOLEAN` passes five, overflow among them as a check of the census alone (it lists no
+arithmetic for `bool`), with the round trip cancelled (row 27) and the cast row cancelled (row
+332). `dev/varka_census.py --check` now runs `conformance_errors()`, and its
+doctest proves that a removed suite fails it; the six earlier types are owed to row 485.
+
+**Drift the contract found on its first run**, each fixed in the registers rather than skipped:
+
+1. *The boolean claims of decision 2.* The census marked no operator fused over `bool`; it now
+   claims `=`, `==`, `<`, `<=`, `>`, `>=`, `<=>`, `and`, `or`, `not`, `isnull`, `isnotnull`, `if`,
+   `when` and `coalesce`. The census refused every one at first: `VarkaCoverageSuite` credited
+   `bool` to an operand of boolean type whatever it was, so a comparison's own result counted and
+   a column did not. It now credits `bool` only to a column (an `Attribute`).
+2. *Rows the coverage table lacked.* With the credit fixed, no coverage row backed `<` or `>=` over
+   two boolean columns, nor `<=>` or `coalesce` over two narrow ones, all of which the compiler
+   fuses. Six rows were added: `b < b2`, `b >= b2`, `y1 <=> y2`, `s1 <=> s2`, `coalesce(y1, y2)`
+   and `coalesce(s1, s2)`, and the census claims `<=>` and `coalesce` for `byte` and `short`.
+
+**Deviations from the plan.**
+
+- Section 4 predicted that `coverage.json`, `emitted_bytes.json` and `width_audit.json` stay
+  byte-identical. The six rows of drift 2 add their entries to all three, and the aggregate
+  digests of `emitted_bytes.json` move with them; no existing row's bytes changed.
+- The "row engine" of `VARKA-475.md` 3.1 is, as section 1 said, Spark's own `eval` through
+  `VarkaSparkOracle`, which gained a `BooleanType` input arm.
+- A value root must have a null row only when Spark's expression is null-intolerant, not
+  whenever a null pattern exists: `if(x IS NULL, <lit>, x)` is never null, and the first rule
+  failed it.
+- A boolean column is read through a bit-stored column in the harness (`VarkaKernelChecks`'s
+  `bitColumns`), its data bit under a null set on alternate null rows, so a kernel that reads
+  the bit without the validity fails.
+
+**The rule bites.** With the `TINYINT` values cut to `{5}`, four checks fail, each naming the
+fixture rather than the kernel: load and ordering ("never makes it true, so a constant kernel
+would pass"), null handling ("never makes it false") and overflow ("never overflows it").
+
+**Measured.** In the defaults run the suites take 16.0 s (`TINYINT`), 16.8 s (`SMALLINT`) and
+0.25 s (`BOOLEAN`) against under 30 s each predicted, 33 s together against 90 s (ratio 0.37, in
+the calibration table). Most of a narrow suite is its own JVM's start and the emitter warming.
+
+**Matrix.** The catalyst option matrix over the three suites and `VarkaCoverageSuite` passes under
+every configuration but `checkIntOverflow=false`, whose overflow check fails by design in both
+narrow suites (two skip lines, as for `VarkaEmitterNarrowArithSuite`). The sql option matrix over
+`VarkaCoverageDifferentialSuite` is clean in all 52 runs (819 tests at the defaults), the six new
+rows included.
+
+**Review (24 October 2026).** One read-only review before the push found no way for a wrong
+kernel to pass. Applied: the cast row read `fused_today` by searching its free text for a mode's
+name, so `bigint -> int`'s "LEGACY and ANSI; TRY's null waits on row 332" read as fused in TRY;
+it now reads "every mode" or a list of modes before a colon or semicolon, and fails naming the
+pair on any other text (the unit-only interval pairs), which row 485 must put in that form
+before its `INT` and interval suites read them. The census check's list of landed types was
+kept by hand; a type the census marks fused anywhere now counts as landed, so `float`'s first
+claim fails the check until it has a suite or an owner. A javadoc moved back to its method.
+Left: a decline on a narrow column is cancelled when the configuration could not widen the
+column, judged on the column rather than the form. That is deliberate: `validityByWidth=false`
+declines a narrow column even with native lanes on, which is what the cancellation is for.
