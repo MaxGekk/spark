@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.sql.varka.vector;
+package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -28,15 +28,18 @@ import jdk.incubator.vector.LongVector;
 import jdk.incubator.vector.ShortVector;
 import jdk.incubator.vector.VectorMask;
 import jdk.incubator.vector.VectorSpecies;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
  * {@link VarkaMaskOps} sets lane {@code i} exactly where bit {@code i} of the word is, for every
  * lane type at every shape the platform has, over the words that matter (all ones, none, each bit
  * alone, and random words with bits above the lane count), each compared lane by lane with the
- * word's own bits.
+ * word's own bits. It runs in a JVM of its own, since a species other than the preferred one would
+ * leave the shared Vector API templates profiled for it in the JVM's later suites.
  */
-public class VarkaMaskOpsTest {
+@VarkaSuite(ownJvm = true)
+public final class VarkaMaskOpsSuite {
 
   private static <E> void check(String what, VectorSpecies<E> s,
       BiFunction<VectorSpecies<E>, Long, VectorMask<E>> maskOf) {
@@ -60,7 +63,8 @@ public class VarkaMaskOpsTest {
   }
 
   @Test
-  public void everyLaneTypeAndShapeSetsTheWordsBits() {
+  @DisplayName("every lane type at every shape sets the lanes the word's bits name")
+  void everyLaneTypeAndShapeSetsTheWordsBits() {
     for (VectorSpecies<Long> s : new VectorSpecies[] {LongVector.SPECIES_64,
         LongVector.SPECIES_128, LongVector.SPECIES_256, LongVector.SPECIES_512}) {
       check("long", s, VarkaMaskOps::longMask);

@@ -415,7 +415,7 @@ final class VarkaVectorWalk {
         } else {
           cb.aload(s.species(lane));
           cb.lload(s.kt.get(n.cond()));
-          emitMaskOfWord(cb, lane, analysis);
+          emitMaskOfWord(cb, lane, s.species(lane), analysis);
         }
         cb.invokevirtual(lane.vector, "blend", lane.blend);
         // A narrow pick passes its arms' unreduced int values through - a blend commutes with
@@ -451,7 +451,7 @@ final class VarkaVectorWalk {
         } else {
           cb.aload(s.species(lane));
           cb.lload(s.kt.get(n.cond()));
-          emitMaskOfWord(cb, lane, analysis);
+          emitMaskOfWord(cb, lane, s.species(lane), analysis);
         }
         cb.invokevirtual(lane.vector, "add", lane.lanewiseVIMasked);
         if (!dense && s.ownWord.contains(node)) {
@@ -1099,7 +1099,7 @@ final class VarkaVectorWalk {
     if (!dense && word != null && word != WORD_ALL_TRUE) {
       cb.aload(s.species);
       loadWord(cb, s, word);
-      emitMaskOfWord(cb, analysis.lane, analysis);
+      emitMaskOfWord(cb, analysis.lane, s.species, analysis);
       cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
     }
     emitArmContext(cb, node, dense, analysis, s);
@@ -1180,7 +1180,7 @@ final class VarkaVectorWalk {
           cb.loadConstant(-1L);
           cb.lxor();
         }
-        emitMaskOfWord(cb, analysis.lane, analysis);
+        emitMaskOfWord(cb, analysis.lane, s.species, analysis);
       }
       cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
     }
@@ -1202,26 +1202,99 @@ final class VarkaVectorWalk {
 
   /**
    * {@code [species, word] -> [mask]}: a condition or validity word of the masked body as a mask of
-   * {@code lane}'s species, lane {@code i} set where bit {@code i} is. Through the engine's
-   * {@code VarkaMaskOps} by default, which broadcasts the word, ANDs it with each lane's bit and
-   * compares against zero; {@code VectorMask.fromLong} under {@code fromLongMasks}, which JDK 25's
-   * C2 miscompiles on x86 without AVX-512 mask registers when the word folds to a mask's
-   * {@code toLong} - a known-true word over columns with no nulls (VARKA-396, VARKA-491). Every
-   * word-to-mask conversion of the masked body goes through here; a constant or a bitmap read from
-   * memory cannot fold to a mask's {@code toLong} and keeps {@code fromLong}.
+   * {@code lane}'s species, held in local {@code species}, lane {@code i} set where bit {@code i}
+   * is. By default it broadcasts the word, ANDs it with each lane's bit and compares against zero;
+   * under {@code fromLongMasks}, {@code VectorMask.fromLong}, which JDK 25's C2 miscompiles on x86
+   * without AVX-512 mask registers when the word folds to a mask's {@code toLong} - a known-true
+   * word over columns with no nulls (VARKA-396, VARKA-491). Every word-to-mask conversion of the
+   * masked body goes through here; a constant or a bitmap read from memory cannot fold to a mask's
+   * {@code toLong} and keeps {@code fromLong}.
+   *
+   * <p>The calls are {@link VarkaMaskOps}'s, written out at the site rather than called: a wide
+   * kernel's C2 compile is past its inlining budget, and only the Vector API's own methods are
+   * inlined past it, so a call to a helper stays a call and its mask is allocated on every
+   * iteration. The two must stay the same sequence; {@code VarkaMaskOpsSuite} checks the helper's
+   * answers and the template warm-up runs the helper for the calls' sake.
    */
-  static void emitMaskOfWord(CodeBuilder cb, Lane lane, Analysis analysis) {
+  static void emitMaskOfWord(CodeBuilder cb, Lane lane, int species, Analysis analysis) {
     if (analysis.options.fromLongMasks()) {
       cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
       return;
     }
-    String method = switch (lane.laneType) {
-      case LONG -> "longMask";
-      case INT -> "intMask";
-      case SHORT -> "shortMask";
-      case BYTE -> "byteMask";
-    };
-    cb.invokestatic(MASK_OPS, method, FROM_LONG);
+    // A narrow lane with more lanes than its element has bits (or a width not baked) spreads the
+    // word's bytes or shorts first, which is right at any lane count.
+    int lanes = analysis.lanesOf(lane);
+    if (lane.bits < Integer.SIZE && (lanes == 0 || lanes > lane.bits)) {
+      emitSpreadMaskOfWord(cb, lane, species, lanes);
+      return;
+    }
+    if (lane != Lane.LONG) {
+      cb.l2i();
+      lane.narrowScalar(cb);
+    }
+    cb.invokestatic(lane.vector, "broadcast", lane.broadcast);     // [word vector]
+    cb.aload(species);
+    lane.pushScalar(cb, 1);
+    cb.invokestatic(lane.vector, "broadcast", lane.broadcast);     // [w, ones]
+    cb.getstatic(VECTOR_OPERATORS, "LSHL", VO_BINARY);
+    emitLaneIndex(cb, lane, species);                              // [w, ones, LSHL, iota]
+    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryV);   // [w, lane bits]
+    emitNonZero(cb, lane);
+  }
+
+  /**
+   * {@link #emitMaskOfWord} where a lane's bit is past its element's: lane {@code j} reads bit
+   * {@code j % bits} of the word's {@code j / bits}-th byte or short, which a long broadcast of
+   * the word, reinterpreted at the lane and rearranged by {@code j / bits}, puts in lane {@code j}.
+   */
+  private static void emitSpreadMaskOfWord(CodeBuilder cb, Lane lane, int species, int lanes) {
+    String longSpecies = Lane.LONG.speciesField(lanes == 0 ? 0 : lanes * lane.bits / Long.SIZE);
+    cb.getstatic(Lane.LONG.vector, longSpecies, VECTOR_SPECIES);  // [species, word, long species]
+    cb.dup_x2();
+    cb.pop();                                                      // [species, long species, word]
+    cb.invokestatic(Lane.LONG.vector, "broadcast", Lane.LONG.broadcast);
+    cb.invokevirtual(Lane.LONG.vector, lane == Lane.BYTE ? "reinterpretAsBytes"
+        : "reinterpretAsShorts", MethodTypeDesc.of(lane.vector));   // [species, chunks]
+    cb.swap();
+    cb.pop();                                                      // [chunks]
+    emitLaneIndex(cb, lane, species);                              // [chunks, iota]
+    cb.dup();
+    cb.getstatic(VECTOR_OPERATORS, "LSHR", VO_BINARY);
+    lane.pushScalar(cb, Integer.numberOfTrailingZeros(lane.bits));
+    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryI);   // [chunks, iota, iota/bits]
+    cb.invokevirtual(lane.vector, "toShuffle", TO_SHUFFLE);
+    cb.swap();
+    cb.dup_x2();
+    cb.pop();                                                      // [iota, chunks, shuffle]
+    cb.invokevirtual(lane.vector, "rearrange", MethodTypeDesc.of(lane.vector, VECTOR_SHUFFLE));
+    cb.swap();                                                     // [spread, iota]
+    cb.getstatic(VECTOR_OPERATORS, "AND", VO_ASSOCIATIVE);
+    lane.pushScalar(cb, lane.bits - 1);
+    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryI);   // [spread, iota % bits]
+    cb.aload(species);
+    lane.pushScalar(cb, 1);
+    cb.invokestatic(lane.vector, "broadcast", lane.broadcast);
+    cb.swap();                                                     // [spread, ones, iota % bits]
+    cb.getstatic(VECTOR_OPERATORS, "LSHL", VO_BINARY);
+    cb.swap();
+    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryV);   // [spread, lane bits]
+    emitNonZero(cb, lane);
+  }
+
+  /** {@code -> [iota]}: lane {@code i} of {@code lane}'s species holding {@code i}. */
+  private static void emitLaneIndex(CodeBuilder cb, Lane lane, int species) {
+    cb.aload(species);
+    cb.invokestatic(lane.vector, "zero", MethodTypeDesc.of(lane.vector, VECTOR_SPECIES));
+    cb.iconst_1();
+    cb.invokevirtual(lane.vector, "addIndex", MethodTypeDesc.of(lane.vector, ConstantDescs.CD_int));
+  }
+
+  /** {@code [word lanes, lane bits] -> [mask]}: where the word's lane has its lane's bit. */
+  private static void emitNonZero(CodeBuilder cb, Lane lane) {
+    cb.invokevirtual(lane.vector, "and", lane.lanewiseVV);
+    cb.getstatic(VECTOR_OPERATORS, "NE", VO_COMPARISON);
+    lane.pushScalar(cb, 0);
+    cb.invokevirtual(lane.vector, "compare", lane.compareVI);
   }
 
   /**
@@ -1253,7 +1326,7 @@ final class VarkaVectorWalk {
     loadWord(cb, s, s.wordRef.get(left));
     cb.loadConstant(-1L);
     cb.lxor();
-    emitMaskOfWord(cb, lane, analysis);
+    emitMaskOfWord(cb, lane, s.species(lane), analysis);
     cb.invokevirtual(lane.vector, "blend", lane.blend);
     cb.aload(tmp[1]);
     cb.aload(tmp[0]);
@@ -1261,7 +1334,7 @@ final class VarkaVectorWalk {
     loadWord(cb, s, s.wordRef.get(right));
     cb.loadConstant(-1L);
     cb.lxor();
-    emitMaskOfWord(cb, lane, analysis);
+    emitMaskOfWord(cb, lane, s.species(lane), analysis);
     cb.invokevirtual(lane.vector, "blend", lane.blend);
     cb.invokevirtual(lane.vector, op, lane.lanewiseVV);
     if (s.ownWord.contains(node)) {

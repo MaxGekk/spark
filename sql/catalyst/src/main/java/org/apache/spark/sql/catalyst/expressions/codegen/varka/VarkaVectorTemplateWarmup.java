@@ -671,7 +671,7 @@ final class VarkaVectorTemplateWarmup {
             + IntVector.broadcast(s, 5).lane(0) + IntVector.zero(s).lane(0)
             + a.add(4, m).lane(0) + a.sub(4).lane(0) + a.min(4).lane(0) + a.max(4).lane(0)
             + a.or(4).lane(0) + a.lanewise(VectorOperators.BIT_COUNT).lane(0)
-            + masks(s, m, tail, acc);
+            + masks(s, m, tail, acc) + VarkaMaskOps.intMask(s, acc).toLong();
         a.intoMemorySegment(seg, 0, ByteOrder.LITTLE_ENDIAN);
         a.intoMemorySegment(seg, 64, ByteOrder.LITTLE_ENDIAN, tail);
         acc += IntVector.fromMemorySegment(s, seg, 0, ByteOrder.LITTLE_ENDIAN).lane(0)
@@ -708,7 +708,8 @@ final class VarkaVectorTemplateWarmup {
             + LongVector.broadcast(s, 5L).lane(0) + LongVector.zero(s).lane(0)
             + a.and(1L).lane(0) + a.mul(4L).lane(0) + a.or(4L).lane(0)
             + a.lanewise(VectorOperators.NEG, m).lane(0)
-            + a.lanewise(VectorOperators.BIT_COUNT).lane(0) + masks(s, m, tail, acc);
+            + a.lanewise(VectorOperators.BIT_COUNT).lane(0) + masks(s, m, tail, acc)
+            + VarkaMaskOps.longMask(s, acc).toLong();
         a.intoMemorySegment(seg, 128, ByteOrder.LITTLE_ENDIAN);
         a.intoMemorySegment(seg, 256, ByteOrder.LITTLE_ENDIAN, tail);
         acc += LongVector.fromMemorySegment(s, seg, 128, ByteOrder.LITTLE_ENDIAN).lane(0)
@@ -760,8 +761,8 @@ final class VarkaVectorTemplateWarmup {
             (IntVector) c.convertShape(VectorOperators.B2I, IntVector.SPECIES_PREFERRED, 0);
         // The narrow arithmetic (VARKA-330): the lane's add, subtract and multiply, the lanewise
         // NEG and ABS the emitter negates and takes abs with, the saturating operators the ANSI
-        // overflow check compares against, and the mask calls a range test makes - fromLong is
-        // the masked body's guard collect.
+        // overflow check compares against, and the mask calls a range test makes - fromLong of
+        // a constant, and VarkaMaskOps of a word, the masked body's (VARKA-491).
         ByteVector sum = a.add(b);
         ByteVector satAdd = a.lanewise(VectorOperators.SADD, b);
         VectorMask<Byte> inRange = sum.compare(VectorOperators.EQ, satAdd);
@@ -772,6 +773,7 @@ final class VarkaVectorTemplateWarmup {
             + a.lanewise(VectorOperators.NEG).lane(1)
             + a.lanewise(VectorOperators.ABS).lane(1)
             + VectorMask.fromLong(s, 0x5L).and(inRange).toLong()
+            + VarkaMaskOps.byteMask(s, acc).and(inRange).toLong()
             + a.lanewise(VectorOperators.SSUB, b).lane(0)
             + a.compare(VectorOperators.GT, (byte) 0).toLong()
             + (inRange.anyTrue() ? 1 : 0) + inRange.and(tail).toLong();
@@ -804,6 +806,7 @@ final class VarkaVectorTemplateWarmup {
             + a.lanewise(VectorOperators.NEG).lane(1)
             + a.lanewise(VectorOperators.ABS).lane(1)
             + VectorMask.fromLong(s, 0x5L).and(inRange).toLong()
+            + VarkaMaskOps.shortMask(s, acc).and(inRange).toLong()
             + a.lanewise(VectorOperators.SSUB, b).lane(0)
             + a.compare(VectorOperators.GT, (short) 0).toLong()
             + (inRange.anyTrue() ? 1 : 0) + inRange.and(tail).toLong();

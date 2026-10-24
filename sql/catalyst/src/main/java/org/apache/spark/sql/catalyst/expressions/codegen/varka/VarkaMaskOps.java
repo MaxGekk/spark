@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.spark.sql.varka.vector;
+package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import jdk.incubator.vector.ByteVector;
 import jdk.incubator.vector.IntVector;
@@ -39,9 +39,15 @@ import jdk.incubator.vector.VectorSpecies;
  * to fold. A byte or short species with more lanes than its element has bits first spreads the
  * word's bytes or shorts across the lanes, through a long broadcast reinterpreted and rearranged.
  *
- * <p>Each takes the arguments {@code fromLong} takes, so an emitter site swaps one static call
- * for the other. The species is a constant at every call site the emitter writes, so the
- * lane-bit and shuffle vectors are loop invariants C2 hoists out of the kernel's loop.
+ * <p>The emitter writes these calls out at each site rather than calling a method here
+ * ({@code VarkaVectorWalk.emitMaskOfWord}, which says why), and the two must stay the same
+ * sequence: this class is the readable form, the one its suite checks, and the one the template
+ * warm-up runs. The species is a constant at every site, so the lane-bit and shuffle vectors are
+ * loop invariants C2 hoists out of the kernel's loop.
+ *
+ * <p>It lives here rather than beside the engine's kernels for {@link SelectionVectorOps}'s
+ * reason: the engine module is a test-scope dependency, and {@link VarkaVectorTemplateWarmup},
+ * which must run these methods before any kernel inlines them, is production code.
  */
 public final class VarkaMaskOps {
 

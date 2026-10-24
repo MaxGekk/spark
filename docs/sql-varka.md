@@ -411,8 +411,8 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `shiftrightunsigned(l, 63)` | `intArithmetic` |  |  | vector |
 | `bit_count(l)` | `intArithmetic` |  | a count computed in the long lane and narrowed to the int Spark types it as | vector |
 | `bit_count(l) + 1` | `intArithmetic` |  | the narrowed count feeding int arithmetic; the sum cannot overflow, the count being at most 64 | per-lane: mask broadcast, load or store |
-| `bitmap_bucket_number(l)` | `intArithmetic` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
-| `bitmap_bit_position(l)` | `intArithmetic` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
+| `bitmap_bucket_number(l)` | `intArithmetic` |  |  | per-lane: compare to mask, blend, mask cast |
+| `bitmap_bit_position(l)` | `intArithmetic` |  |  | per-lane: compare to mask, blend, mask cast |
 
 #### Choice and nulls
 
@@ -546,8 +546,8 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | Expression | Switches | Domain | Notes | 128-bit lanes |
 |---|---|---|---|---|
 | `IF(b, d, d2)` | `condition` |  | the int lane | vector |
-| `IF(b, l, l2)` | `condition` |  | the leaf is lifted to the long lane of the values | per-lane: blend, mask broadcast |
-| `CASE WHEN b THEN l ELSE l2 END` | `condition` |  | likewise, per branch | per-lane: blend, mask broadcast |
+| `IF(b, l, l2)` | `condition` |  | the leaf is lifted to the long lane of the values | per-lane: blend, mask broadcast, compare to mask |
+| `CASE WHEN b THEN l ELSE l2 END` | `condition` |  | likewise, per branch | per-lane: blend, mask broadcast, compare to mask |
 
 #### TINYINT columns
 
@@ -615,7 +615,7 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 |---|---|---|---|---|
 | `CAST(i AS BIGINT)` | `intArithmetic` |  | a sign extension, exact in every mode | per-lane: mask broadcast, mask test |
 | `CAST(time_to_millis(t) AS INT)` | `time`, `intArithmetic` | `time_to_millis(t) BETWEEN -2147483648 AND 2147483647` | a bigint narrowed to an int: under ANSI a value past the int range declines and the row engine raises CAST_OVERFLOW, and the legacy mode keeps the low 32 bits, as Spark does; a day's milliseconds always fit | per-lane: compare to mask, mask logic, mask broadcast, mask test |
-| `greatest(i, l)` | `intArithmetic` |  | type coercion widens the int, and the pick is the long lane's | per-lane: blend, mask broadcast, load or store, mask test |
+| `greatest(i, l)` | `intArithmetic` |  | type coercion widens the int, and the pick is the long lane's | per-lane: compare to mask, blend, mask broadcast, load or store, mask test |
 | `CASE WHEN i < l THEN i ELSE l END` | `predicate`, `condition`, `intArithmetic` |  | the widened int in a condition and in a branch of a long-valued conditional | per-lane: compare to mask, blend, mask cast, mask broadcast, load or store, mask test |
 
 #### Width conversion predicates
@@ -634,12 +634,12 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 
 | Expression | Switches | Domain | Notes | 128-bit lanes |
 |---|---|---|---|---|
-| `greatest(l, l2)` | `intArithmetic` |  |  | per-lane: blend, mask broadcast |
-| `least(l, 5000000000)` | `intArithmetic` |  |  | per-lane: blend, mask broadcast |
-| `CASE WHEN l < l2 THEN l ELSE l2 END` | `predicate`, `condition` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
-| `if(l IS NULL, l2, l)` | `predicate`, `condition` |  |  | per-lane: mask broadcast, mask logic, blend |
-| `greatest(t, t2)` | `intArithmetic` |  |  | per-lane: blend, mask broadcast |
-| `CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END` | `predicate`, `condition` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
+| `greatest(l, l2)` | `intArithmetic` |  |  | per-lane: compare to mask, blend |
+| `least(l, 5000000000)` | `intArithmetic` |  |  | per-lane: compare to mask, blend |
+| `CASE WHEN l < l2 THEN l ELSE l2 END` | `predicate`, `condition` |  |  | per-lane: compare to mask, blend, mask cast |
+| `if(l IS NULL, l2, l)` | `predicate`, `condition` |  |  | per-lane: mask broadcast, mask logic, blend, compare to mask |
+| `greatest(t, t2)` | `intArithmetic` |  |  | per-lane: compare to mask, blend |
+| `CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END` | `predicate`, `condition` |  |  | per-lane: compare to mask, blend, mask cast |
 
 #### Time arithmetic
 
@@ -651,7 +651,7 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `time_trunc('MINUTE', t)` | `time` |  |  | vector |
 | `time_trunc('MILLISECOND', t2)` | `time` |  |  | vector |
 | `hour(t)` | `time` |  | an int computed in the 64-bit lane and narrowed at the kernel's store; under another expression it narrows where it is | vector |
-| `hour(t) + 1` | `time`, `intArithmetic` | `hour(t) < 2147483647` | the extract narrowed inside the tree, under an int add checked under ANSI; the check cannot fire, since an hour is at most 23 | per-lane: mask logic, mask broadcast, mask test, load or store |
+| `hour(t) + 1` | `time`, `intArithmetic` | `hour(t) < 2147483647` | the extract narrowed inside the tree, under an int add checked under ANSI; the check cannot fire, since an hour is at most 23 | per-lane: mask logic, mask broadcast, mask test, compare to mask, load or store |
 | `minute(t2)` | `time` |  |  | vector |
 | `second(t)` | `time` |  |  | vector |
 | `time_to_millis(t)` | `time` |  |  | vector |

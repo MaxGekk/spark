@@ -262,6 +262,16 @@ done
 echo "== ${#configs[@]} configuration(s) and the defaults, $total suites," \
   "$split JVM(s) a module and one for each suite that runs alone, $jobs JVMs at a time"
 
+# The JVM flags a JUnit suite that runs alone asks its child for (@VarkaSuite(jvmFlags = {...}),
+# VARKA-491), one a line: its JVM here takes them in the child's place, after the run's own
+# options, so a flag given twice is the suite's. A Scala suite has none.
+own_jvm_flags() {
+  local module=$1 suite=$2 file
+  file="${module_root[$module]}/java/${suite//.//}.java"
+  [ -f "$file" ] || return 0
+  grep -E "$JAVA_OWN" "$file" | grep -oE 'jvmFlags *= *\{[^}]*\}' | grep -oE '"[^"]*"' | tr -d '"'
+}
+
 # One JVM's suites under one configuration, in runs/<configuration>/<module>[-<k>]/. The runner
 # takes ScalaTest's Runner's arguments and runs the JUnit suites after the ScalaTest ones, then
 # prints one Suites: and one Tests: line over both, which the report reads (VARKA-312).
@@ -275,8 +285,9 @@ run_one() {
   local suite line
   line=$(sed -n "$((part + 1))p" "$OUT/shards/$module")
   if [[ "$line" == "@own "* ]]; then
-    own=(-Dvarka.ownJvm=true)
     line=${line#@own }
+    mapfile -t own < <(own_jvm_flags "$module" "$line")
+    own+=(-Dvarka.ownJvm=true)
   fi
   for suite in $line; do suites+=(-s "$suite"); done
   rm -rf "$dir"; mkdir -p "$dir/tmp"
