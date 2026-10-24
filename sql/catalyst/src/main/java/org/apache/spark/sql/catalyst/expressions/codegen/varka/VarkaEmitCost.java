@@ -127,17 +127,21 @@ final class VarkaEmitCost {
           name + "/cond/" + n.laneType();
       case TruncDate n -> name + '/' + n.level();
       case MakeDate n -> name + (n.failOnError() ? "/ansi" : "/null");
-      default -> isValueGeneric(node) ? name + '/' + node.laneType() : name;
+      // The lane-generic nodes whose lowering follows their lane, beyond those named above.
+      case VarkaVectorIR.Greatest _, VarkaVectorIR.Least _, VarkaVectorIR.IfElse _,
+          VarkaVectorIR.IsNotNull _, VarkaVectorIR.And _, VarkaVectorIR.Or _, VarkaVectorIR.Not _,
+          VarkaVectorIR.CondIf _, VarkaVectorIR.BoolNullSafeEq _ -> name + '/' + node.laneType();
+      // One lowering whatever their operands: the record name alone.
+      case VarkaVectorIR.AddDays _, VarkaVectorIR.SubDays _, VarkaVectorIR.DateDiff _,
+          VarkaVectorIR.GuardedDay _, VarkaVectorIR.WidenLane _, VarkaVectorIR.NarrowLane _,
+          VarkaVectorIR.DayOfWeek _, VarkaVectorIR.WeekDay _, VarkaVectorIR.DayOfWeekIso _,
+          VarkaVectorIR.NextDay _, VarkaVectorIR.ThursdayOf _, VarkaVectorIR.AddMonths _,
+          VarkaVectorIR.Year _, VarkaVectorIR.Month _, VarkaVectorIR.DayOfMonth _,
+          VarkaVectorIR.Quarter _, VarkaVectorIR.DayOfYear _, VarkaVectorIR.LastDay _,
+          VarkaVectorIR.TruncDateDynamic _, VarkaVectorIR.WeekOfYear _,
+          VarkaVectorIR.BoundedDivide _, VarkaVectorIR.NullSafeEqual _,
+          VarkaVectorIR.InRanges _ -> name;
     };
-  }
-
-  /** The lane-generic nodes whose lowering follows their lane, beyond those named above. */
-  private static boolean isValueGeneric(VarkaVectorIR node) {
-    return node instanceof VarkaVectorIR.Greatest || node instanceof VarkaVectorIR.Least
-        || node instanceof VarkaVectorIR.IfElse || node instanceof VarkaVectorIR.IsNotNull
-        || node instanceof VarkaVectorIR.And || node instanceof VarkaVectorIR.Or
-        || node instanceof VarkaVectorIR.Not || node instanceof VarkaVectorIR.CondIf
-        || node instanceof VarkaVectorIR.BoolNullSafeEq;
   }
 
   /**

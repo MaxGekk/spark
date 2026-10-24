@@ -94,10 +94,17 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
             if (isNullState(s)) nullCounts(c) += 1
           }
           for (fill <- VarkaKernelCheck.bothFills) {
-            // Room for a long value a row; a condition root's data address is 0L by the kernel
-            // contract, so a write through it faults.
-            val outs = roots.map(_ =>
-              makeOutput(arena, 2 * length, outputValidityBytes(options, length), fill))
+            // Exactly a row's width at the root's lane, so a store past the batch faults; a
+            // condition root's data address is 0L by the kernel contract, so a write through it
+            // faults too.
+            val outs = roots.map { root =>
+              val ints = if (!root.isInstanceOf[Cond] && root.laneType() == LaneType.LONG) {
+                2 * length
+              } else {
+                length
+              }
+              makeOutput(arena, ints, outputValidityBytes(options, length), fill)
+            }
             val dstData = roots.zip(outs).map { case (root, out) =>
               if (root.isInstanceOf[Cond]) 0L else out._1.address()
             }.toArray
@@ -126,8 +133,13 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
                   val want = VarkaReference.cond(c, ints, nulls, Array.empty[Int]).isTrue
                   assert(bit === want, where)
                 case v if v.laneType() == LaneType.LONG =>
-                  val want = VarkaReference.longValue(v, ints.map(_.toLong), nulls,
-                    Array.empty[Long])
+                  // A tree of both lanes (an int-lane value widened) is answered lane by lane.
+                  val want = if (VarkaVectorIR.lanesIn(v).size() > 1) {
+                    VarkaReference.mixedValue(v, ints.map(_.toLong), nulls, Array.empty[Int],
+                      Array.empty[Long])
+                  } else {
+                    VarkaReference.longValue(v, ints.map(_.toLong), nulls, Array.empty[Long])
+                  }
                   assert(bit === want.isPresent, s"$where: validity (want $want)")
                   if (want.isPresent) {
                     assert(outs(o)._1.get(ValueLayout.JAVA_LONG, row * 8L) === want.getAsLong,
@@ -285,6 +297,7 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
   /** `node` with every boolean leaf on the long lane, and so every condition over them. */
   private def onLong(node: VarkaVectorIR): VarkaVectorIR = node match {
     case b: BoolColumn => new BoolColumn(b.ordinal(), LaneType.LONG)
+    case c: CondConst => new CondConst(c.value(), LaneType.LONG)
     case n => VarkaVectorIR.withChildren(n, VarkaVectorIR.childrenOf(n).map(onLong): _*)
   }
 
@@ -305,6 +318,9 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
         b0 -> lx,
         new Not(b0) -> expressions.Not(lx),
         new And(b0, b1) -> expressions.And(lx, ly),
+        new Or(b0, b1) -> expressions.Or(lx, ly),
+        new And(b0, new CondConst(Truth.NULL)) -> expressions.And(lx, trueOf(None)),
+        new CondConst(Truth.NULL) -> trueOf(None),
         new BoolCompare(CompareOp.LT, b0, b1) -> expressions.LessThan(lx, ly),
         new BoolNullSafeEq(b0, b1) -> expressions.EqualNullSafe(lx, ly),
         new CondIf(b0, b1, b2) -> expressions.If(lx, ly, lz),
@@ -373,6 +389,11 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       assert(VarkaVectorIR.emissionLane(r, VarkaEmitOptions.DEFAULTS) === LaneType.LONG,
         r.toString))
     sweep(long, 3, "long-lane condition values")
+    // An int-lane condition value widened into a kernel driven at the long lane: the int species
+    // of the long group's width, and the mask read off a word sized for the long group.
+    sweep(Seq(new WidenLane(new CondValue(new Or(b0, new Not(b1)), LaneType.INT)),
+      new IntArith(IntOp.ADD, Overflow.WRAP, new WidenLane(new CondValue(b0, LaneType.INT)),
+        v(l2))), 3, "a widened int-lane condition value")
   }
 
   test("a condition that is unknown from valid inputs keeps a condition value's kernel " +
@@ -384,7 +405,10 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     sweep(Seq(unknown), 1, "unknown from valid inputs")
     val known = new CondValue(b0, LaneType.INT)
     assert(names(known).contains("loopDense0"), names(known).mkString(", "))
-    // The constructor holds the value's lane to its condition's.
+    // The constructor holds the value's lane to its condition's, and refuses a narrow lane,
+    // which no test lowers yet.
     intercept[IllegalArgumentException](new CondValue(b0, LaneType.LONG))
+    intercept[IllegalArgumentException](
+      new CondValue(new BoolColumn(0, LaneType.BYTE), LaneType.BYTE))
   }
 }

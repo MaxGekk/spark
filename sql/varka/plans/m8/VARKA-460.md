@@ -99,33 +99,52 @@ generator-reach lists (`VarkaIrFuzzSuite`), the rebuild list (`VarkaWithChildren
 tree, the lane-derivation set and the emittable-lane table (`VarkaLaneTypeSuite`), the weight
 register (`VarkaEmitterBudgetSuite`), and the raw-throw scan (`VarkaInternalErrorSuite`, which
 caught a bare `IllegalArgumentException` in the constructor). The `default ->` arms over IR
-nodes were read by hand: `Analysis.ownerOf` (an own word), `Analysis.pureOf` (no pure
-expression, now named), `Slots.planWordRef` (an own slot) and `VarkaEmitCost.kindOf` (now named)
-are all right for the node.
+nodes were read by hand: `Analysis.ownerOf` (an own word) and `Slots.planWordRef` (an own slot)
+are right for the node and stay; `Analysis.pureOf` and `VarkaEmitCost.kindOf`, which this row
+touches, lost theirs and name every node (sql/varka/AGENTS.md's rule for a touched switch), with
+the same answers as before. `VarkaShrinker`, on section 2's list, needed nothing: it rebuilds
+through `childrenOf` and `withChildren`, which have their arms.
 
 **Not done here, as section 1 planned.** No compiler arm, no grammar production (the IR fuzzer's
 reach lists name the node as out, with the boolean nodes, until row 352's refit), no cost-table
-price (listed as awaiting the refit).
+price (listed as awaiting the refit). The narrow lanes are refused by the constructor rather
+than left untested (review below).
 
-**Tests.** `VarkaEmitterBoolSuite` gained six tests and its harness reads a value root: the
-reference against Spark's `Cast(c, IntegerType)` and `Cast(c, LongType)` over every state of
-seven conditions (and `IF(c, 1, 0)` answering 0 where the cast answers null); kernels over every
-leaf state at four lanes, eight lanes and the default width, masked and dense, int and long;
-`CondValue` under `IntArith`, `BitCount`, `IfElse` and `Greatest`, and one condition read as a
-value and as a condition in one kernel; a `CondConst(NULL)` tree keeping the kernel masked-only.
-A planted fault (validity `kT` alone) fails four of the first five.
+**Tests.** `VarkaEmitterBoolSuite` gained six tests and its harness reads a value root, its
+output sized to the root's lane so a store past the batch faults: the reference against Spark's
+`Cast(c, IntegerType)` and `Cast(c, LongType)` over every state of ten conditions, `OR` and a
+`NULL` constant among them (and `IF(c, 1, 0)` answering 0 where the cast answers null); kernels
+over every leaf state at four lanes, eight lanes and the default width, masked and dense, int and
+long, and an int-lane `CondValue` widened into a long-driven kernel; `CondValue` under `IntArith`,
+`BitCount`, `IfElse` and `Greatest`, and one condition read as a value and as a condition in one
+kernel; a `CondConst(NULL)` tree keeping the kernel masked-only; `CondValue` over `AND` and `OR`
+alone in its kernel over an all-null column. A planted fault (validity `kT` alone) failed four of
+the first five; the sixth was written after them and fails when `And` and `Or` are put back to
+not skipping (review below).
 
-**Measured.** The first five tests take 2.0 s in the defaults gate against the 30 s predicted (ratio
-0.07, in the calibration table). The catalyst defaults gate passes (854 tests), and
+**Measured.** The first five tests took 2.0 s in the defaults gate against the 30 s predicted
+(ratio 0.07, in the calibration table, which scores the prediction as made); the six take 2.8 s
+in the gate after the review. The catalyst defaults gate passes (855 tests), and
 `emitted_bytes.json`, `coverage.json` and `width_audit.json` are unchanged.
 
 **Review (24 October 2026).** One read-only review before the push found a silent wrong answer:
 the masked driver's all-null shortcut returns a batch as null when every root reads a column
-that is null on every row, and trusts `skipping` for a value root. `And` and `Or` are analyzed
+that is null on every row, and trusts `skipping` for a value root. `And` and `Or` were analyzed
 as not skipping (a condition root never takes the shortcut), so `CondValue(Or(b0, b1))` alone in
 a kernel, with `b0` null throughout and `b1` true on a row, answered null where Spark's
 `CAST(NULL OR TRUE AS INT)` is 1. The first sweeps missed it because every kernel there also held
-a root that turns the shortcut off. A sixth test runs `CondValue` over `AND` and `OR` alone in
-its kernel and failed as described; `CondValue` now analyzes as skipping, as `IsNotNull` does,
-and the test passes. Narrow lanes stay untested (section 1): `CondValue` over a byte or short
-condition builds and takes `pushScalar`'s narrowing, and no row asks for it yet.
+a root that turns the shortcut off. The sixth test runs `CondValue` over `AND` and `OR` alone in
+its kernel and failed as described. The first fix made `CondValue` skip on every condition.
+
+**Review of the pull request (`/code-review high`, 24 October 2026).** Nine findings, no wrong
+answer in the emitted code. Applied: the root cause rather than the first fix - `And` and `Or`
+analyze as skipping, which no existing kernel reads (the flag's one reader excludes a condition
+root, and the one value over a condition before this row, `IfElse`, skips itself), and
+`CondValue` inherits the flag, so `CAST(b AS INT)` over a column keeps the shortcut; the
+harness's outputs sized by lane (all were sized for a long, which hid an int root's overrun);
+the narrow lanes refused in the constructor until a row tests them; `OR` and the `NULL` constant
+held to Spark's cast; a widened int-lane `CondValue` in a long-driven kernel; the defaults
+removed from the two touched switches; the comments that named `IfElse` as the only value over a
+condition. Left: the fuzzers' reach (row 352, as for the other boolean nodes), and the masked
+body rebuilding the known-true mask per consumer of one condition, as `IfElse` already does - a
+cost to measure when the boolean casts land, not a defect.
