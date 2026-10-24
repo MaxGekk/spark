@@ -343,7 +343,7 @@ public abstract class VarkaTypeConformance {
     if (!lane.isNarrow()) {
       return;
     }
-    Optional<String> refusal = VarkaLoopEmitter.narrowRefusal(List.of(new ColumnRef(0, lane)),
+    Optional<String> refusal = VarkaKernelPlan.refusalOf(List.of(new ColumnRef(0, lane)),
         VarkaMatrixRuns.BASE.toBuilder().narrowLanes(false).build());
     assumeTrue(refusal.isEmpty(), f + ": this configuration cannot widen the " + lane
         + " lane (" + refusal.orElse("") + "), so the compiler declines it and the row engine "

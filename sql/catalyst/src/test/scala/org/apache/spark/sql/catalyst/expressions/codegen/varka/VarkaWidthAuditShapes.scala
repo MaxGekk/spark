@@ -63,7 +63,7 @@ object VarkaWidthAuditShapes {
       numLiterals: Int,
       options: VarkaEmitOptions = VarkaEmitOptions.DEFAULTS) extends Entry {
     /** The lane the kernel runs at: a narrowing root is an int computed in the long lane. */
-    def lane: LaneType = VarkaVectorIR.emissionLane(roots.head, options)
+    def lane: LaneType = VarkaKernelPlan.of(roots.asJava, options).drive()
   }
 
   /** A coverage row the compiler declines at this width, with its reason. */

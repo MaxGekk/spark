@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFusedKernel;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelPlan;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaLoopEmitter;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
@@ -152,7 +153,8 @@ public class VarkaLaneConversionBenchmark extends VarkaBenchmarkBase {
         long[] validity = {dstValidity.address()};
         // A kernel driven at the int lane has the seven-argument `run`, one at the long lane the
         // eight-argument one with its long table.
-        Run run = VarkaVectorIR.emissionLane(arm.root(), VarkaEmitOptions.DEFAULTS) == LaneType.INT
+        Run run = VarkaKernelPlan.of(List.of(arm.root()), VarkaEmitOptions.DEFAULTS).drive()
+            == LaneType.INT
             ? kernel -> kernel.run(src, noValidity, noNulls, dsts, validity, new int[0], numRows)
             : kernel -> kernel.run(src, noValidity, noNulls, dsts, validity, new int[0],
                 new long[0], numRows);

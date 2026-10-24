@@ -281,16 +281,16 @@ public final class VarkaEmitterNarrowArithSuite {
   }
 
   /**
-   * Whether the arm's lane count cannot widen `lane` (VARKA-329's `narrowRefusal`): the widened
-   * arm reads a narrow column with the narrow species of the int species' width, which the
-   * Vector API does not have for a four-lane int species, and a width with no baked lane count
-   * names no species at all. The question is asked of a widened drive on the native arm too,
+   * Whether the arm's lane count cannot widen `lane` (the kernel plan's narrow refusal): the
+   * widened arm reads a narrow column with the narrow species of the int species' width, which
+   * the Vector API does not have for a four-lane int species, and a width with no baked lane
+   * count names no species at all. The question is asked of a widened drive on the native arm too,
    * because a checked narrow multiply is driven at the int lane on either arm (VARKA-329.md 2.4)
    * and meets the same refusal there. The compiler demotes such an entry and the row engine
    * answers it, which is what the checks below assert instead of running.
    */
   private static boolean cannotWiden(VarkaEmitOptions options, LaneType lane) {
-    return VarkaLoopEmitter.narrowRefusal(List.of(new ColumnRef(0, lane)),
+    return VarkaKernelPlan.refusalOf(List.of(new ColumnRef(0, lane)),
         options.toBuilder().narrowLanes(false).build()).isPresent();
   }
 
@@ -312,7 +312,7 @@ public final class VarkaEmitterNarrowArithSuite {
       assertTrue(cannotWiden(options, lane), where + ": " + expr.sql()
           + " did not compile, and not because the width cannot widen the " + lane + " lane");
       assumeTrue(false, where + ": this configuration cannot widen the " + lane + " lane ("
-          + VarkaLoopEmitter.narrowRefusal(List.of(new ColumnRef(0, lane)),
+          + VarkaKernelPlan.refusalOf(List.of(new ColumnRef(0, lane)),
               options.toBuilder().narrowLanes(false).build()).orElseThrow()
           + "), so the compiler declines the entry and the row engine answers it; the matrix "
           + "records the decline in sql/varka/matrix/skips.tsv (VARKA-329)");
@@ -427,7 +427,7 @@ public final class VarkaEmitterNarrowArithSuite {
   }
 
   // -------------------------------------------------------------------------------------------
-  // The width rule (VARKA-329's narrowRefusal), which the arms rest on
+  // The width rule (the kernel plan's narrow refusal), which the arms rest on
   // -------------------------------------------------------------------------------------------
 
   @Test
@@ -439,9 +439,9 @@ public final class VarkaEmitterNarrowArithSuite {
     VarkaVectorIR shortCol = new ColumnRef(0, LaneType.SHORT);
     for (int lanes : new int[] {2, 4, 8, 16}) {
       boolean refusedByte =
-          VarkaLoopEmitter.narrowRefusal(List.of(byteCol), widened(lanes)).isPresent();
+          VarkaKernelPlan.refusalOf(List.of(byteCol), widened(lanes)).isPresent();
       boolean refusedShort =
-          VarkaLoopEmitter.narrowRefusal(List.of(shortCol), widened(lanes)).isPresent();
+          VarkaKernelPlan.refusalOf(List.of(shortCol), widened(lanes)).isPresent();
       // At every baked width up to sixteen int lanes both narrow loads are served: where the int
       // width has no narrow species of its own - a byte at four lanes, either lane at two - the
       // load reads the next width up and converts it in parts (VARKA-329's part-form load), so
@@ -453,15 +453,15 @@ public final class VarkaEmitterNarrowArithSuite {
     // A width with no baked lane count names no species: validityByWidth off always refuses.
     VarkaEmitOptions noWidth = VarkaEmitOptions.DEFAULTS.toBuilder().narrowLanes(false)
         .validityByWidth(false).build();
-    assertTrue(VarkaLoopEmitter.narrowRefusal(List.of(byteCol), noWidth).isPresent());
-    assertTrue(VarkaLoopEmitter.narrowRefusal(List.of(shortCol), noWidth).isPresent());
+    assertTrue(VarkaKernelPlan.refusalOf(List.of(byteCol), noWidth).isPresent());
+    assertTrue(VarkaKernelPlan.refusalOf(List.of(shortCol), noWidth).isPresent());
     // The native arm computes in the narrow lane itself, so nothing has to widen at any width.
     for (int lanes : new int[] {0, 2, 4, 8, 16}) {
       VarkaEmitOptions nativeArm = VarkaEmitOptions.DEFAULTS.toBuilder().narrowLanes(true)
           .lanesOverride(lanes).build();
-      assertTrue(VarkaLoopEmitter.narrowRefusal(List.of(byteCol), nativeArm).isEmpty(),
+      assertTrue(VarkaKernelPlan.refusalOf(List.of(byteCol), nativeArm).isEmpty(),
           "native at " + lanes + " int lanes");
-      assertTrue(VarkaLoopEmitter.narrowRefusal(List.of(shortCol), nativeArm).isEmpty(),
+      assertTrue(VarkaKernelPlan.refusalOf(List.of(shortCol), nativeArm).isEmpty(),
           "native at " + lanes + " int lanes");
     }
   }

@@ -169,24 +169,23 @@ public final class VarkaLoopEmitter {
   }
 
   /**
-   * The lane every output root's kernel is driven at, which they must agree on. The roots are the
-   * emission's outputs, and a class is driven at one species: its loop and its epilogue are that
-   * species', so two roots driven at different lanes are two kernels rather than one. A root that
-   * converts between lanes is driven at the long lane (VARKA-28). `analyze` re-checks every node
-   * below them against this.
+   * The plan of the kernel the output roots form (VARKA-488): the lane it is driven at, which
+   * they must agree on, and the lanes of its nodes and inputs. A class is driven at one species:
+   * its loop and its epilogue are that species', so two roots driven at different lanes are two
+   * kernels rather than one, and the compiler declines the entry that would mix them before it
+   * reaches here; a caller that hands such roots over directly is refused with the lanes they
+   * name. A root that converts between lanes is driven at the long lane (VARKA-28).
    */
-  private static Lane laneOf(List<VarkaVectorIR> outputs, VarkaEmitOptions options) {
+  private static VarkaKernelPlan planOf(List<VarkaVectorIR> outputs, VarkaEmitOptions options) {
     if (outputs.isEmpty()) {
       throw VarkaErrors.illegalArgument("no output chains to emit");
     }
-    // The emission lane, not the root's: a NarrowLane root is a 32-bit column computed in the
-    // 64-bit lane its child is on, and the loop runs at the child's species. A narrow root of the
-    // NATIVE arm is the same: the loop runs at the narrow lane its values are on, unless another
-    // root drives the kernel at the int lane, where it takes the widened lowering.
-    return Lane.of(VarkaVectorIR.kernelLane(outputs, options).orElseThrow(
-        () -> VarkaErrors.illegalArgument("outputs mix lanes: " + outputs.stream()
-            .map(o -> VarkaVectorIR.emissionLane(o, options).toString()).distinct()
-            .collect(java.util.stream.Collectors.joining(" and ")))));
+    VarkaKernelPlan plan = VarkaKernelPlan.of(outputs, options);
+    plan.refusal().ifPresent(r -> {
+      throw VarkaErrors.illegalArgument(r.kind() == VarkaKernelPlan.Kind.LANE_MISMATCH
+          ? VarkaKernelPlan.mixedLanes(outputs, options) : r.reason());
+    });
+    return plan;
   }
 
   /** {@link Lane#emitLanes}, for the suite that checks a baked width against what the JVM has. */
@@ -242,8 +241,7 @@ public final class VarkaLoopEmitter {
    */
   private static Analysis analyze(List<VarkaVectorIR> outputs, int numInputs, int numLiterals,
       VarkaEmitOptions options) {
-    Analysis analysis = new Analysis(numInputs, numLiterals, options, laneOf(outputs, options));
-    analysis.planNarrowGroups(outputs);
+    Analysis analysis = new Analysis(numInputs, numLiterals, options, planOf(outputs, options));
     for (VarkaVectorIR root : outputs) {
       analysis.analyzeRoot(root);
     }
@@ -1331,7 +1329,7 @@ public final class VarkaLoopEmitter {
         record != null ? lane -> new VarkaEmitCost.Tally(lane, record.prices(), record.keepCounts())
             : predict ? lane -> new VarkaEmitCost.Tally(lane, VarkaEmitCostTable.PRICES, false)
             : null;
-    VarkaVectorIR.LaneType lane = laneOf(outputs, options).laneType;
+    VarkaVectorIR.LaneType lane = planOf(outputs, options).drive();
     Supplier<GroupOps> newGroup = () -> new GroupOps(options.shareChronoPrefix(), materialize,
         earlier, lane, newTally == null ? null : newTally.apply(lane));
     GroupOps group = newGroup.get();
@@ -1474,7 +1472,7 @@ public final class VarkaLoopEmitter {
       int n = outputs.size();
       boolean materialize = options.materializeChronoPrefix() && options.methodByteBudget() > 0;
       boolean predict = options.predictGrouping() && options.methodByteBudget() > 0;
-      VarkaVectorIR.LaneType lane = laneOf(outputs, options).laneType;
+      VarkaVectorIR.LaneType lane = planOf(outputs, options).drive();
       // Every output before the current start, walked as one group: its prefixes are what a
       // group starting there finds computed earlier.
       GroupOps before = new GroupOps(options.shareChronoPrefix(), materialize, new HashSet<>(),
@@ -1627,7 +1625,7 @@ public final class VarkaLoopEmitter {
     outputs = List.copyOf(outputs);
     boolean materialize = options.materializeChronoPrefix() && options.methodByteBudget() > 0;
     boolean predict = options.predictGrouping() && options.methodByteBudget() > 0;
-    VarkaVectorIR.LaneType lane = laneOf(outputs, options).laneType;
+    VarkaVectorIR.LaneType lane = planOf(outputs, options).drive();
     GroupOps before = new GroupOps(options.shareChronoPrefix(), materialize, new HashSet<>(),
         lane, null);
     for (int o = 0; o < from; o++) {
@@ -1823,21 +1821,16 @@ public final class VarkaLoopEmitter {
    * - no task-16 decline reason, and EXPLAIN still claims fusion. Checked here instead, the
    * offending entry is demoted to residual with a recorded reason.
    *
-   * <p>The lane agreement {@link #laneOf} demands is checked on the same terms and for the
-   * same reason: one class holds one species, so outputs on different lanes are two kernels,
-   * and a caller that learned that from an exception at {@code emit} would have learned it too
-   * late to record why. {@link #narrowRefusal} is checked here as well: a narrow value the chosen
-   * species cannot widen at this lane count has no lowering, and the compiler demotes the entry
-   * with the reason rather than reaching {@code emit} with it.
+   * <p>The kernel's plan is checked on the same terms and for the same reason: a plan that
+   * refuses the outputs - two lanes in one class, which holds one species, or a narrow value
+   * this width cannot widen - has nothing to emit, and a caller that learned that from an
+   * exception at {@code emit} would have learned it too late to record why.
    */
   public static boolean fitsBudgets(java.util.List<VarkaVectorIR> outputs, int numInputs,
       VarkaEmitOptions options) {
     boolean capOps = options.methodByteBudget() == 0;
     if (numInputs > MAX_INPUTS || outputs.isEmpty()
-        || narrowRefusal(outputs, options).isPresent()) {
-      return false;
-    }
-    if (VarkaVectorIR.kernelLane(outputs, options).isEmpty()) {
+        || VarkaKernelPlan.of(outputs, options).refusal().isPresent()) {
       return false;
     }
     java.util.HashMap<VarkaVectorIR, Integer> heights = new java.util.HashMap<>();
@@ -1849,63 +1842,6 @@ public final class VarkaLoopEmitter {
       }
     }
     return true;
-  }
-
-  /**
-   * Why this kernel cannot be emitted over the narrow values it holds, or empty when it can.
-   *
-   * <p>Under {@link VarkaEmitOptions#narrowLanes()} a kernel whose every value is narrow computes
-   * in the narrow species itself, so nothing has to be converted. Otherwise a narrow column is
-   * read with one widening load per iteration, and that load needs a narrow species wider than
-   * or as wide as the int group: the narrow species of the int species' width where it exists -
-   * eight byte lanes at eight int lanes, four short lanes at four - and otherwise the next width
-   * up, whose parts each become one int group ({@link Lane#widenLanes}): a byte at four int
-   * lanes would need a 32-bit species the Vector API does not have, so it reads an eight-lane
-   * 64-bit load whose two parts are the iteration's two int groups. A width with no baked lane
-   * count - {@code validityByWidth} off - cannot name the species at all, and the entry
-   * declines: the row engine answers it.
-   */
-  public static Optional<String> narrowRefusal(
-      List<VarkaVectorIR> outputs, VarkaEmitOptions options) {
-    // The kernel's lane, not each root's: a native narrow root beside an int one is driven at the
-    // int lane and needs the widening load. Where no lane serves the roots, which the lane check
-    // refuses on its own, each root is judged at its own.
-    Optional<VarkaVectorIR.LaneType> kernel = VarkaVectorIR.kernelLane(outputs, options);
-    for (VarkaVectorIR root : outputs) {
-      Set<VarkaVectorIR.LaneType> lanes = VarkaVectorIR.lanesIn(root);
-      boolean narrow = lanes.contains(VarkaVectorIR.LaneType.BYTE)
-          || lanes.contains(VarkaVectorIR.LaneType.SHORT);
-      if (!narrow) {
-        continue;
-      }
-      VarkaVectorIR.LaneType drive =
-          kernel.orElseGet(() -> VarkaVectorIR.emissionLane(root, options));
-      if (drive.isNarrow()) {
-        continue;
-      }
-      if (drive == VarkaVectorIR.LaneType.LONG) {
-        // Analysis admits no narrow node in a long-lane emission, not even one read only for
-        // its validity word, so the entry declines here rather than failing at emit.
-        return Optional.of("a narrow value under a bigint kernel has no lowering");
-      }
-      if (!VarkaVectorIR.needsNarrowSpecies(root)) {
-        // A narrow column whose only use is a validity word - `y1 IS NOT NULL` - reads no
-        // value and needs no narrow species, so it emits at this int lane count. Refusing it
-        // would name a load the tree never emits.
-        continue;
-      }
-      int intLanes = Lane.emitLanes(options, Lane.INT);
-      if (intLanes == 0) {
-        return Optional.of("a narrow column needs a baked int lane count to be widened");
-      }
-      for (VarkaVectorIR.LaneType type : lanes) {
-        if (type.isNarrow() && Lane.widenLanes(intLanes, Lane.of(type)) == 0) {
-          return Optional.of("a " + type + " column has no widening load at "
-              + intLanes + " int lanes");
-        }
-      }
-    }
-    return Optional.empty();
   }
 
   /**
