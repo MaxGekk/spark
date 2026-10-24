@@ -16,7 +16,8 @@
 # limitations under the License.
 #
 # One module's Varka suites under the defaults, as CI's varka-scoped job runs them
-# (VARKA-287.md 3.1):
+# (VARKA-287.md 3.1), or with --shard I/N one job's share of them, as CI's sharded jobs do
+# (VARKA-483):
 #
 #   dev/varka_scoped_suites.sh catalyst
 #   dev/varka_scoped_suites.sh sql          # the Varka suites and ArrowCachedBatchSerializerSuite
@@ -44,7 +45,9 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-module=${1:?usage: dev/varka_scoped_suites.sh catalyst|sql}
+module=${1:?usage: dev/varka_scoped_suites.sh catalyst|sql [--shard I/N]}
+shard=""
+[ "${2:-}" = --shard ] && shard=${3:?--shard takes I/N, I counted from zero}
 extra=()
 case "$module" in
   catalyst) timing=VarkaAssemblySuite,VarkaTierWitnessSuite ;;
@@ -54,8 +57,49 @@ case "$module" in
   *) echo "unknown module: $module" >&2; exit 2 ;;
 esac
 matrix=${VARKA_MATRIX:-dev/varka_matrix.sh}   # the runner; a test puts a stub here
+
+# --shard I/N: this job runs its share of the module's suites, one of N jobs that split them by
+# the committed weights in sql/varka/ci/suite-times.tsv (dev/varka_suite_shards.py --job), so
+# that every job of a run computes the same split from its own checkout. The share's simple
+# names go to target/varka-scoped/job-suites, which the job's later steps read - the option
+# configuration (dev/varka_matrix_ci.sh) and the new tests (dev/varka_new_tests.py) - so each
+# runs over the suites this job ran. The log prints a digest of the whole split: two jobs of one
+# run that print different digests saw different inputs.
+only=()
+mkdir -p target/varka-scoped
+# The cache restores this directory, so a share left by an earlier sharded run goes first.
+rm -f target/varka-scoped/job-suites
+if [ -n "$shard" ]; then
+  mapfile -t all < <("$matrix" --defaults --list-suites --module "$module" "${extra[@]}" \
+    | sed 's/^@own //')
+  [ ${#all[@]} -gt 0 ] || { echo "the runner listed no suite of $module" >&2; exit 1; }
+  weights=sql/varka/ci/suite-times.tsv
+  count=${shard#*/}
+  digest=$(for ((k = 0; k < count; k++)); do
+      echo "== $k"; python3 dev/varka_suite_shards.py --job "$k/$count" "$weights" "${all[@]}"
+    done | md5sum | cut -c1-12)
+  mapfile -t mine < <(python3 dev/varka_suite_shards.py --job "$shard" "$weights" "${all[@]}")
+  printf '%s\n' "${mine[@]##*.}" > target/varka-scoped/job-suites
+  echo "== job $shard of $module's Varka suites: ${#mine[@]} of ${#all[@]}," \
+    "split digest $digest: $(tr '\n' ' ' < target/varka-scoped/job-suites)"
+  # The JIT-measuring suites run below only where they fall in this share, and the extra suite
+  # only where it does.
+  timing=$({ grep -xF -f <(tr , '\n' <<< "$timing") target/varka-scoped/job-suites || true; } \
+    | paste -sd, -)
+  kept=()
+  for e in "${extra[@]}"; do
+    [ "$e" = --extra-suite ] && continue
+    grep -qxF "${e##*.}" target/varka-scoped/job-suites && kept+=(--extra-suite "$e")
+  done
+  extra=("${kept[@]}")
+  rest=$({ grep -vxF -f <(tr , '\n' <<< "${timing:-@none}") target/varka-scoped/job-suites \
+    || true; } | paste -sd, -)
+  [ -n "$rest" ] || { echo "job $shard of $module has no suite but the JIT-measuring ones" >&2
+    exit 1; }
+  only=(--suites "$rest")
+fi
 "$matrix" --defaults --module "$module" --split 2 -j 2 --sbt-arg -Phive \
-  --out target/varka-scoped --skip-suites "$timing" "${extra[@]}"
+  --out target/varka-scoped --skip-suites "${timing:-@none}" "${only[@]}" "${extra[@]}"
 
 # The suites that measure the JIT may be given a fresh JVM when they fail, since what they
 # measure is decided per JVM: a suite in this list that fails is run again, alone, in a new JVM,
@@ -100,7 +144,8 @@ is_flaky() {        # whether $1 heads an entry of the list
 out=target/varka-scoped-quiet
 suites=$timing
 attempt=0
-until quiet "$out" "$suites"; do
+# A share with no JIT-measuring suite skips the step.
+[ -z "$suites" ] || until quiet "$out" "$suites"; do
   failed=$(failed_suites "$out")
   for s in $failed; do
     is_flaky "$s" || { echo "$s failed and is not a suite CI retries" >&2; exit 1; }
@@ -121,7 +166,7 @@ done
 # loaded cores C1's `released` history was not reached in two runs of three at one compiled
 # draw, because the case's body had no loop method or C1 installed nothing in 200 batches
 # (VARKA-272.md 9.6). Those arms keep their strict rules over 20 draws in the nightly.
-if [ "$module" = catalyst ]; then
+if [ "$module" = catalyst ] && { [ -z "$shard" ] || [ "${shard%/*}" = 0 ]; }; then
   dev/varka_platform.sh --arms int --iterations 20 --draws 1 --skip-build \
     --build-dir target/varka-scoped --out target/varka-scoped-platform
 fi

@@ -59,6 +59,14 @@ else
   dev/varka_matrix.sh --module "$module" --sbt-arg -Phive --list > /dev/null || exit 1
   reuse=(--skip-build)
 fi
+# A sharded job (dev/varka_scoped_suites.sh --shard) ran its share of the module's suites, named
+# in job-suites; the configuration runs over the same share, here and on the merge base, so that
+# the jobs of a run cover the module once between them and the base is compared like for like.
+# Every job picks the same configuration, since the pick reads only the branch and its base.
+only=()
+if [ -s "$scoped/job-suites" ]; then
+  only=(--suites "$(paste -sd, "$scoped/job-suites")")
+fi
 if [ "$no_change" = true ]; then
   mapfile -t picked < <(python3 dev/varka_matrix_pick.py "$OUT/configurations" "$head")
   picked[1]="no change to measure, the merge base is the head; the hash of commit $head"
@@ -72,7 +80,7 @@ if [ -z "$config" ]; then
 fi
 echo "== $module under $config: ${picked[1]}" | tee -a "$SUMMARY"
 
-dev/varka_matrix.sh --module "$module" "${reuse[@]}" --config "$config" -j 2 \
+dev/varka_matrix.sh --module "$module" "${reuse[@]}" "${only[@]}" --config "$config" -j 2 \
   > "$OUT/report.txt" 2>&1
 status=$?
 cat "$OUT/report.txt"
@@ -105,7 +113,7 @@ if [ ! -x "$worktree/dev/varka_matrix.sh" ]; then
   exit 1
 fi
 (cd "$worktree" &&
-  dev/varka_matrix.sh --module "$module" --sbt-arg -Phive --config "$config" -j 2) \
+  dev/varka_matrix.sh --module "$module" --sbt-arg -Phive "${only[@]}" --config "$config" -j 2) \
   > "$OUT/report-base.txt" 2>&1
 cat "$OUT/report-base.txt"
 failures "$OUT/report-base.txt" > "$OUT/failures-base.txt"

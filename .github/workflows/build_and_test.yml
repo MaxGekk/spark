@@ -1346,16 +1346,20 @@ jobs:
   # This job needs the branch's full history: the quote check accepts a number that appears
   # in any committed version of a results file - plans quote the figure a change moved away
   # from (VARKA-106.md, section 2).
-  # The Varka suites alone, for a change confined to Varka's files (VARKA-160). Two jobs in
-  # parallel, one per module, each the sbt build of that module's tests and its `*Varka*`
-  # suites; the sql job adds the Arrow cache serializer's suite, which is Varka's without the
-  # name. What a full run of the matrix costs for the same change is the measurement the task
+  # The Varka suites alone, for a change confined to Varka's files (VARKA-160). Five jobs in
+  # parallel, three for catalyst and two for sql (VARKA-483), each the sbt build of its module's
+  # tests and its share of the module's `*Varka*` suites, split by the committed weights in
+  # sql/varka/ci/suite-times.tsv so that every job computes the same split; the sql jobs add the
+  # Arrow cache serializer's suite, which is Varka's without the name, to whichever share it
+  # falls in. A job's later steps - the option configuration, the new tests - run over the
+  # suites it ran, so between them the jobs cover the module once. One job per module took 47
+  # to 49 minutes for catalyst and 29 to 40 for sql on 23 October 2026. What a full run of the matrix costs for the same change is the measurement the task
   # records: this pair is meant to finish in about a third of its wall time and a fraction of
   # its job-minutes, and the precondition's verdict is what a reader checks when it does not.
   varka-scoped:
     needs: [precondition]
     if: fromJson(needs.precondition.outputs.required).varka-scoped == 'true'
-    name: "Varka suites: ${{ matrix.module }}"
+    name: "Varka suites: ${{ matrix.module }} ${{ matrix.part }}"
     runs-on: ubuntu-latest
     # The suites under the defaults, then one option configuration, and on its failure the same
     # on the merge base, which builds a second tree.
@@ -1365,7 +1369,25 @@ jobs:
       matrix:
         include:
           - module: catalyst
+            shard: 0/3
+            part: 1 of 3
+            slug: 1of3
+          - module: catalyst
+            shard: 1/3
+            part: 2 of 3
+            slug: 2of3
+          - module: catalyst
+            shard: 2/3
+            part: 3 of 3
+            slug: 3of3
           - module: sql
+            shard: 0/2
+            part: 1 of 2
+            slug: 1of2
+          - module: sql
+            shard: 1/2
+            part: 2 of 2
+            slug: 2of2
     steps:
     - name: Bootstrap composite actions
       uses: actions/checkout@v6
@@ -1401,22 +1423,37 @@ jobs:
       uses: ./.github/actions/record-runner-platform
       with:
         dir: target
-    # The suites' JUnit times from this module's previous run, which the runner balances its
-    # JVMs by (VARKA-287.md 3.1); saved under this run's key, restored from the latest.
+    # The suites' JUnit times from this share's previous run, which the runner balances the
+    # job's JVMs by (VARKA-287.md 3.1); saved under this run's key, restored from the latest. Only
+    # the JVMs inside a job read them: the split between jobs reads the committed weights, since
+    # two jobs need not restore the same entry.
     - name: Cache the Varka suites' times
       uses: actions/cache@v4
       with:
         path: target/varka-scoped
-        key: varka-scoped-times-${{ matrix.module }}-${{ github.run_id }}
+        key: varka-scoped-times-${{ matrix.module }}-${{ matrix.slug }}-${{ github.run_id }}
         restore-keys: |
+          varka-scoped-times-${{ matrix.module }}-${{ matrix.slug }}-
           varka-scoped-times-${{ matrix.module }}-
     # The lane walk of the docs job (VARKA-474 2.3), here too: the files it reads are Varka
     # sources, whose changes run this job and not the docs one. It runs in a second.
     - name: Every lane and type is wired where no compiler checks
-      if: matrix.module == 'catalyst'
+      if: matrix.module == 'catalyst' && matrix.shard == '0/3'
       run: ./dev/varka_new_lane.py --check
-    - name: Run the Varka suites of ${{ matrix.module }}
-      run: ./dev/varka_scoped_suites.sh ${{ matrix.module }}
+    - name: Run the Varka suites of ${{ matrix.module }}, ${{ matrix.part }}
+      run: ./dev/varka_scoped_suites.sh ${{ matrix.module }} --shard ${{ matrix.shard }}
+    # The share's JUnit reports, from which the committed weights are refreshed
+    # (dev/varka_suite_shards.py --update-weights) when the jobs' times drift apart.
+    - name: Upload the Varka suites' JUnit reports
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: varka-scoped-junit-${{ matrix.module }}-${{ matrix.slug }}
+        path: |
+          target/varka-scoped/runs/defaults/*/junit/*.xml
+          target/varka-scoped-quiet*/runs/defaults/*/junit/*.xml
+        if-no-files-found: ignore
+        retention-days: 14
     # The catalyst suites include the emitted-bytes oracle, VarkaEmittedBytesSuite, which has
     # just passed: the emitter produces exactly what sql/varka/emitted_bytes.json pins. Whether
     # this change moved that file is then the difference between a refactor the oracle proves
@@ -1426,7 +1463,9 @@ jobs:
       if: matrix.module == 'catalyst'
       run: |
         base="${VARKA_DIFF_BASE:-}"
-        if [ -z "$base" ]; then
+        if ! grep -qx VarkaEmittedBytesSuite target/varka-scoped/job-suites; then
+          echo "emitted bytes: the oracle ran in another share of the catalyst suites"
+        elif [ -z "$base" ]; then
           echo "emitted bytes: the oracle passed; no diff base to compare the pinned file against"
         elif [ "$(git rev-parse "$base^{commit}")" = "$(git rev-parse HEAD)" ]; then
           # A run of master (VARKA-255.md 2.9): its merge base is itself, so nothing to compare.

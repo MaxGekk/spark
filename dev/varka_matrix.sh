@@ -23,6 +23,7 @@
 #   dev/varka_matrix.sh --config cse=false --config groupBudget=8 -j 2
 #   dev/varka_matrix.sh --all -j 8                     # every configuration, eight at a time
 #   dev/varka_matrix.sh --list                         # print the configurations and stop
+#   dev/varka_matrix.sh --defaults --list-suites --module sql   # print a module's suites, no build
 #   dev/varka_matrix.sh --all --skip-build             # reuse the last build and classpath
 #   dev/varka_matrix.sh --all -j 8 --deadline 06:30    # start no JVM after 06:30
 #   dev/varka_matrix.sh --all --shard 3/12 -j 2        # every 12th configuration from the 3rd
@@ -71,6 +72,7 @@ OUT=$ROOT/target/varka-matrix
 jobs=1
 build=1
 list=0
+list_suites=0
 deadline=""
 modules=(sql catalyst)
 shard=""
@@ -98,6 +100,7 @@ while [ $# -gt 0 ]; do
     --deadline) deadline=$(date -d "$2" +%s) || exit 2
       [ "$deadline" -lt "$(date +%s)" ] && deadline=$(date -d "tomorrow $2" +%s); shift 2 ;;
     --list) list=1; shift ;;
+    --list-suites) list_suites=1; shift ;;
     --module) modules=("$2"); shift 2 ;;
     --shard) shard="$2"; shift 2 ;;
     --sbt-arg) sbt_args+=("$2"); shift 2 ;;
@@ -131,6 +134,55 @@ EXCLUDED=(
 
 # The gate runs every suite; the matrix leaves out the ones above.
 [ "$defaults_only" = 1 ] && EXCLUDED=()
+
+# Every concrete Varka suite of a module, by its source file, minus the exclusions and the
+# --suites / --skip-suites filters, one fully qualified name a line: the ScalaTest classes named
+# Varka...Suite under src/test/scala, and the JUnit classes named Varka...Suite under @VarkaSuite
+# in src/test/java (VARKA-312). Each module runs in JVMs of its own, as sbt runs it: a shape a
+# catalyst suite compiled must not already be warm when a SQL suite asks for its first query.
+# A suite that runs in a JVM of its own (VarkaOwnJvm, or @VarkaSuite(ownJvm = true)) is marked
+# "@own " before its name: it gets a runner JVM to itself, below.
+module_suites() {
+  local root=$1 class_re=$2 marker=$3 own_re=$4 file pkg cls entry skip own
+  [ -d "$root" ] || return 0
+  while IFS= read -r file; do
+    [ -n "$marker" ] && ! grep -qE "$marker" "$file" && continue
+    own=""
+    grep -qE "$own_re" "$file" && own="@own "
+    pkg=$(sed -n 's/^package \([^;]*\);\{0,1\}$/\1/p' "$file" | head -1)
+    for cls in $(grep -oE "$class_re" "$file" | awk '{print $NF}'); do
+      skip=0
+      for entry in "${EXCLUDED[@]}"; do [ "${entry%%:*}" = "$cls" ] && skip=1; done
+      [ -n "$only_suites" ] && ! [[ ",$only_suites," == *",$cls,"* ]] && skip=1
+      [ -n "$skip_suites" ] && [[ ",$skip_suites," == *",$cls,"* ]] && skip=1
+      [ "$skip" = 0 ] && echo "$own$pkg.$cls"
+    done
+  done < <(grep -rlE "$class_re" "$root" | sort)
+}
+SCALA_SUITE='^class Varka[A-Za-z0-9]*Suite\b'
+JAVA_SUITE='^(public )?(final )?class Varka[A-Za-z0-9]*Suite\b'
+SCALA_OWN='^[^/*]*\b(with|extends) VarkaOwnJvm\b'
+JAVA_OWN='^@VarkaSuite\(.*ownJvm *= *true'
+declare -A module_root=([catalyst]=sql/catalyst/src/test [sql]=sql/core/src/test)
+# A module's suites as the run below takes them: the Varka-name search, then the --extra-suite
+# entries for the module.
+found_suites() {
+  local module=$1 extra
+  module_suites "${module_root[$module]}/scala" "$SCALA_SUITE" "" "$SCALA_OWN"
+  module_suites "${module_root[$module]}/java" "$JAVA_SUITE" '^@VarkaSuite\b' "$JAVA_OWN"
+  for extra in "${extra_suites[@]}"; do
+    [ "${extra%%:*}" = "$module" ] && echo "${extra#*:}"
+  done
+  return 0
+}
+# --list-suites prints them, one fully qualified name a line, "@own " before a suite that runs
+# alone, and stops: it reads the sources only, so it needs no build. CI's sharded jobs split
+# this list (dev/varka_scoped_suites.sh --shard).
+if [ "$list_suites" = 1 ]; then
+  for module in "${modules[@]}"; do found_suites "$module"; done
+  exit 0
+fi
+
 BUILD=${build_dir:-$OUT}
 mkdir -p "$OUT" "$BUILD"
 if [ "$build" = 1 ]; then
@@ -184,35 +236,6 @@ if [ -n "$shard" ]; then
   configs=("${kept[@]}")
 fi
 
-# Every concrete Varka suite of a module, by its source file, minus the exclusions and the
-# --suites / --skip-suites filters, one fully qualified name a line: the ScalaTest classes named
-# Varka...Suite under src/test/scala, and the JUnit classes named Varka...Suite under @VarkaSuite
-# in src/test/java (VARKA-312). Each module runs in JVMs of its own, as sbt runs it: a shape a
-# catalyst suite compiled must not already be warm when a SQL suite asks for its first query.
-# A suite that runs in a JVM of its own (VarkaOwnJvm, or @VarkaSuite(ownJvm = true)) is marked
-# "@own " before its name: it gets a runner JVM to itself, below.
-module_suites() {
-  local root=$1 class_re=$2 marker=$3 own_re=$4 file pkg cls entry skip own
-  [ -d "$root" ] || return 0
-  while IFS= read -r file; do
-    [ -n "$marker" ] && ! grep -qE "$marker" "$file" && continue
-    own=""
-    grep -qE "$own_re" "$file" && own="@own "
-    pkg=$(sed -n 's/^package \([^;]*\);\{0,1\}$/\1/p' "$file" | head -1)
-    for cls in $(grep -oE "$class_re" "$file" | awk '{print $NF}'); do
-      skip=0
-      for entry in "${EXCLUDED[@]}"; do [ "${entry%%:*}" = "$cls" ] && skip=1; done
-      [ -n "$only_suites" ] && ! [[ ",$only_suites," == *",$cls,"* ]] && skip=1
-      [ -n "$skip_suites" ] && [[ ",$skip_suites," == *",$cls,"* ]] && skip=1
-      [ "$skip" = 0 ] && echo "$own$pkg.$cls"
-    done
-  done < <(grep -rlE "$class_re" "$root" | sort)
-}
-SCALA_SUITE='^class Varka[A-Za-z0-9]*Suite\b'
-JAVA_SUITE='^(public )?(final )?class Varka[A-Za-z0-9]*Suite\b'
-SCALA_OWN='^[^/*]*\b(with|extends) VarkaOwnJvm\b'
-JAVA_OWN='^@VarkaSuite\(.*ownJvm *= *true'
-declare -A module_root=([catalyst]=sql/catalyst/src/test [sql]=sql/core/src/test)
 # Each module's suites over --split JVMs, longest first by the previous run's JUnit times: one
 # line of space-separated suites per JVM, in shards/<module>. A suite that runs in a JVM of its own
 # takes a line of its own, first, marked "@own ", and its JVM runs it directly
@@ -225,12 +248,7 @@ declare -A module_root=([catalyst]=sql/catalyst/src/test [sql]=sql/core/src/test
 mkdir -p "$OUT/shards"
 total=0
 for module in "${modules[@]}"; do
-  mapfile -t found < <(module_suites "${module_root[$module]}/scala" "$SCALA_SUITE" "" \
-      "$SCALA_OWN";
-    module_suites "${module_root[$module]}/java" "$JAVA_SUITE" '^@VarkaSuite\b' "$JAVA_OWN")
-  for extra in "${extra_suites[@]}"; do
-    [ "${extra%%:*}" = "$module" ] && found+=("${extra#*:}")
-  done
+  mapfile -t found < <(found_suites "$module")
   total=$((total + ${#found[@]}))
   shared=()
   for suite in "${found[@]}"; do [[ "$suite" == "@own "* ]] || shared+=("$suite"); done
