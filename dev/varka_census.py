@@ -858,13 +858,66 @@ def cast_summary(rows):
     return "\n".join(lines) + "\n"
 
 
+# Every landed type is held to the conformance contract (VARKA-484, VARKA-475.md 3.1): a suite
+# Varka<Name>ConformanceSuite over VarkaTypeConformance, or an entry here naming the row that
+# owes it. A landed type is one Varka reads today: the three this milestone has added and the
+# six laneOf admitted before it.
+CONFORMANCE_DIR = (
+    "sql/catalyst/src/test/java/org/apache/spark/sql/catalyst/expressions/codegen/varka"
+)
+CONFORMANCE_SUITE = {
+    "bool": "Boolean",
+    "byte": "TinyInt",
+    "short": "SmallInt",
+    "int": "Int",
+    "bigint": "BigInt",
+    "date": "Date",
+    "time": "Time",
+    "ym": "YearMonthInterval",
+    "dt": "DayTimeInterval",
+}
+CONFORMANCE_OWED = {t: "485" for t in EXISTING}
+
+
+def conformance_errors(root=ROOT):
+    """A landed type with neither a conformance suite nor an owner, or an owner and a suite.
+
+    >>> import tempfile
+    >>> with tempfile.TemporaryDirectory() as d:
+    ...     os.makedirs(os.path.join(d, CONFORMANCE_DIR))
+    ...     for t in ("bool", "byte"):
+    ...         name = f"Varka{CONFORMANCE_SUITE[t]}ConformanceSuite.java"
+    ...         open(os.path.join(d, CONFORMANCE_DIR, name), "w").close()
+    ...     conformance_errors(d)
+    ['short (SmallInt) is a landed type with no VarkaSmallIntConformanceSuite and no owing row']
+    """
+    errors = []
+    for t, name in CONFORMANCE_SUITE.items():
+        suite = f"Varka{name}ConformanceSuite"
+        present = os.path.exists(os.path.join(root, CONFORMANCE_DIR, suite + ".java"))
+        if not present and t not in CONFORMANCE_OWED:
+            errors.append(f"{t} ({name}) is a landed type with no {suite} and no owing row")
+        if present and t in CONFORMANCE_OWED:
+            owner = CONFORMANCE_OWED[t]
+            errors.append(f"{t} has {suite}: take it off CONFORMANCE_OWED (row {owner})")
+    return errors
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--check", action="store_true", help="fail if the committed file is stale")
     ap.add_argument("--summary", action="store_true", help="print the counts only")
+    ap.add_argument("--self-test", action="store_true", help="run the doctests and stop")
     args = ap.parse_args()
+    if args.self_test or args.check:
+        import doctest
+
+        failed, _ = doctest.testmod()
+        if failed or args.self_test:
+            return 1 if failed else 0
     out, errors = build()
     errors += cast_errors(coverage_index())
+    errors += conformance_errors()
     if errors:
         for e in errors:
             print("census: " + e, file=sys.stderr)

@@ -531,6 +531,8 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `b = b2` | `predicate` |  | equality of two boolean columns: unknown where either is | vector |
 | `b <= b2` | `predicate` |  | an ordering over booleans, false before true: not NOT b OR b2, which is true where b is null and b2 is true | vector |
 | `b > b2` | `predicate` |  |  | vector |
+| `b < b2` | `predicate` |  | the other strict ordering: true only for false then true | vector |
+| `b >= b2` | `predicate` |  |  | vector |
 | `b <=> b2` | `predicate` |  | never unknown: two nulls are equal | vector |
 | `b IS NULL` | `predicate` |  | the column's own validity word | vector |
 | `b IS NOT NULL` | `predicate` |  | the column's own validity word | vector |
@@ -556,6 +558,7 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `y1 >= y2` | `predicate` |  |  | vector |
 | `y1 = 5Y` | `predicate` |  | a narrow column against a narrow literal, stored as the same width | vector |
 | `y1 IS NOT NULL` | `predicate` |  | the column's own validity word | vector |
+| `y1 <=> y2` | `predicate` |  | never unknown: two nulls are equal | vector |
 | `y1 IN (1Y, 2Y, 3Y, -1Y)` | `predicate` |  | an IN list over a narrow column, lowered to an equality chain | vector |
 | `y1 IN (11 to 16 byte literals)` | `predicate` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | vector |
 
@@ -567,6 +570,7 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `if(y1 IS NULL, 5Y, y1)` | `predicate`, `condition` |  | a narrow literal in the ELSE: the stored value is one byte a row and the missing row takes the constant | vector |
 | `greatest(y1, y2)` | `intArithmetic` |  |  | vector |
 | `least(y1, y2)` | `intArithmetic` |  |  | vector |
+| `coalesce(y1, y2)` | `condition` |  | the first non-null of two narrow columns | vector |
 
 #### SMALLINT columns
 
@@ -577,6 +581,7 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `s1 >= s2` | `predicate` |  |  | vector |
 | `s1 = 5S` | `predicate` |  | a SMALLINT column against a SMALLINT literal | vector |
 | `s1 IS NOT NULL` | `predicate` |  |  | vector |
+| `s1 <=> s2` | `predicate` |  |  | vector |
 | `s1 IN (1S, 2S, 3S, -1S)` | `predicate` |  |  | vector |
 | `s1 IN (11 to 16 short literals)` | `predicate` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | vector |
 
@@ -588,6 +593,7 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `if(s1 IS NULL, 5S, s1)` | `predicate`, `condition` |  | the two-byte twin of the TINYINT constant choice | vector |
 | `greatest(s1, s2)` | `intArithmetic` |  |  | vector |
 | `least(s1, s2)` | `intArithmetic` |  |  | vector |
+| `coalesce(s1, s2)` | `condition` |  |  | vector |
 
 #### TINYINT and SMALLINT widened to int
 
