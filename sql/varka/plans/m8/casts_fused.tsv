@@ -1,0 +1,366 @@
+from	to	from_type	to_type	legacy	ansi	try
+bool	byte	BOOLEAN	TINYINT	declined	declined	declined
+bool	short	BOOLEAN	SMALLINT	declined	declined	declined
+bool	int	BOOLEAN	INT	declined	declined	declined
+bool	bigint	BOOLEAN	BIGINT	declined	declined	declined
+bool	float	BOOLEAN	FLOAT	declined	declined	declined
+bool	double	BOOLEAN	DOUBLE	declined	declined	declined
+bool	dec	BOOLEAN	DECIMAL(10,2)	declined	declined	declined
+bool	dec	BOOLEAN	DECIMAL(30,4)	declined	declined	declined
+byte	bool	TINYINT	BOOLEAN	declined	declined	declined
+byte	short	TINYINT	SMALLINT	declined	declined	declined
+byte	int	TINYINT	INT	fused	fused	fused
+byte	bigint	TINYINT	BIGINT	declined	declined	declined
+byte	float	TINYINT	FLOAT	declined	declined	declined
+byte	double	TINYINT	DOUBLE	declined	declined	declined
+byte	dec	TINYINT	DECIMAL(10,2)	declined	declined	declined
+byte	dec	TINYINT	DECIMAL(30,4)	declined	declined	declined
+byte	ym	TINYINT	INTERVAL YEAR	declined	declined	declined
+byte	ym	TINYINT	INTERVAL YEAR TO MONTH	declined	declined	declined
+byte	ym	TINYINT	INTERVAL MONTH	declined	declined	declined
+byte	dt	TINYINT	INTERVAL DAY	declined	declined	declined
+byte	dt	TINYINT	INTERVAL DAY TO HOUR	declined	declined	declined
+byte	dt	TINYINT	INTERVAL DAY TO MINUTE	declined	declined	declined
+byte	dt	TINYINT	INTERVAL DAY TO SECOND	declined	declined	declined
+byte	dt	TINYINT	INTERVAL HOUR	declined	declined	declined
+byte	dt	TINYINT	INTERVAL HOUR TO MINUTE	declined	declined	declined
+byte	dt	TINYINT	INTERVAL HOUR TO SECOND	declined	declined	declined
+byte	dt	TINYINT	INTERVAL MINUTE	declined	declined	declined
+byte	dt	TINYINT	INTERVAL MINUTE TO SECOND	declined	declined	declined
+byte	dt	TINYINT	INTERVAL SECOND	declined	declined	declined
+short	bool	SMALLINT	BOOLEAN	declined	declined	declined
+short	byte	SMALLINT	TINYINT	declined	declined	declined
+short	int	SMALLINT	INT	fused	fused	fused
+short	bigint	SMALLINT	BIGINT	declined	declined	declined
+short	float	SMALLINT	FLOAT	declined	declined	declined
+short	double	SMALLINT	DOUBLE	declined	declined	declined
+short	dec	SMALLINT	DECIMAL(10,2)	declined	declined	declined
+short	dec	SMALLINT	DECIMAL(30,4)	declined	declined	declined
+short	ym	SMALLINT	INTERVAL YEAR	declined	declined	declined
+short	ym	SMALLINT	INTERVAL YEAR TO MONTH	declined	declined	declined
+short	ym	SMALLINT	INTERVAL MONTH	declined	declined	declined
+short	dt	SMALLINT	INTERVAL DAY	declined	declined	declined
+short	dt	SMALLINT	INTERVAL DAY TO HOUR	declined	declined	declined
+short	dt	SMALLINT	INTERVAL DAY TO MINUTE	declined	declined	declined
+short	dt	SMALLINT	INTERVAL DAY TO SECOND	declined	declined	declined
+short	dt	SMALLINT	INTERVAL HOUR	declined	declined	declined
+short	dt	SMALLINT	INTERVAL HOUR TO MINUTE	declined	declined	declined
+short	dt	SMALLINT	INTERVAL HOUR TO SECOND	declined	declined	declined
+short	dt	SMALLINT	INTERVAL MINUTE	declined	declined	declined
+short	dt	SMALLINT	INTERVAL MINUTE TO SECOND	declined	declined	declined
+short	dt	SMALLINT	INTERVAL SECOND	declined	declined	declined
+int	bool	INT	BOOLEAN	declined	declined	declined
+int	byte	INT	TINYINT	declined	declined	declined
+int	short	INT	SMALLINT	declined	declined	declined
+int	bigint	INT	BIGINT	fused	fused	fused
+int	float	INT	FLOAT	declined	declined	declined
+int	double	INT	DOUBLE	declined	declined	declined
+int	dec	INT	DECIMAL(10,2)	declined	declined	declined
+int	dec	INT	DECIMAL(30,4)	declined	declined	declined
+int	ym	INT	INTERVAL YEAR	declined	declined	declined
+int	ym	INT	INTERVAL YEAR TO MONTH	fused	fused	fused
+int	ym	INT	INTERVAL MONTH	fused	fused	fused
+int	dt	INT	INTERVAL DAY	declined	declined	declined
+int	dt	INT	INTERVAL DAY TO HOUR	declined	declined	declined
+int	dt	INT	INTERVAL DAY TO MINUTE	declined	declined	declined
+int	dt	INT	INTERVAL DAY TO SECOND	declined	declined	declined
+int	dt	INT	INTERVAL HOUR	declined	declined	declined
+int	dt	INT	INTERVAL HOUR TO MINUTE	declined	declined	declined
+int	dt	INT	INTERVAL HOUR TO SECOND	declined	declined	declined
+int	dt	INT	INTERVAL MINUTE	declined	declined	declined
+int	dt	INT	INTERVAL MINUTE TO SECOND	declined	declined	declined
+int	dt	INT	INTERVAL SECOND	declined	declined	declined
+bigint	bool	BIGINT	BOOLEAN	declined	declined	declined
+bigint	byte	BIGINT	TINYINT	declined	declined	declined
+bigint	short	BIGINT	SMALLINT	declined	declined	declined
+bigint	int	BIGINT	INT	fused	fused	declined
+bigint	float	BIGINT	FLOAT	declined	declined	declined
+bigint	double	BIGINT	DOUBLE	declined	declined	declined
+bigint	dec	BIGINT	DECIMAL(10,2)	declined	declined	declined
+bigint	dec	BIGINT	DECIMAL(30,4)	declined	declined	declined
+bigint	ym	BIGINT	INTERVAL YEAR	declined	declined	declined
+bigint	ym	BIGINT	INTERVAL YEAR TO MONTH	declined	declined	declined
+bigint	ym	BIGINT	INTERVAL MONTH	declined	declined	declined
+bigint	dt	BIGINT	INTERVAL DAY	declined	declined	declined
+bigint	dt	BIGINT	INTERVAL DAY TO HOUR	declined	declined	declined
+bigint	dt	BIGINT	INTERVAL DAY TO MINUTE	declined	declined	declined
+bigint	dt	BIGINT	INTERVAL DAY TO SECOND	declined	declined	declined
+bigint	dt	BIGINT	INTERVAL HOUR	declined	declined	declined
+bigint	dt	BIGINT	INTERVAL HOUR TO MINUTE	declined	declined	declined
+bigint	dt	BIGINT	INTERVAL HOUR TO SECOND	declined	declined	declined
+bigint	dt	BIGINT	INTERVAL MINUTE	declined	declined	declined
+bigint	dt	BIGINT	INTERVAL MINUTE TO SECOND	declined	declined	declined
+bigint	dt	BIGINT	INTERVAL SECOND	declined	declined	declined
+float	bool	FLOAT	BOOLEAN	declined	declined	declined
+float	byte	FLOAT	TINYINT	declined	declined	declined
+float	short	FLOAT	SMALLINT	declined	declined	declined
+float	int	FLOAT	INT	declined	declined	declined
+float	bigint	FLOAT	BIGINT	declined	declined	declined
+float	double	FLOAT	DOUBLE	declined	declined	declined
+float	dec	FLOAT	DECIMAL(10,2)	declined	declined	declined
+float	dec	FLOAT	DECIMAL(30,4)	declined	declined	declined
+double	bool	DOUBLE	BOOLEAN	declined	declined	declined
+double	byte	DOUBLE	TINYINT	declined	declined	declined
+double	short	DOUBLE	SMALLINT	declined	declined	declined
+double	int	DOUBLE	INT	declined	declined	declined
+double	bigint	DOUBLE	BIGINT	declined	declined	declined
+double	float	DOUBLE	FLOAT	declined	declined	declined
+double	dec	DOUBLE	DECIMAL(10,2)	declined	declined	declined
+double	dec	DOUBLE	DECIMAL(30,4)	declined	declined	declined
+dec	bool	DECIMAL(10,2)	BOOLEAN	declined	declined	declined
+dec	bool	DECIMAL(30,4)	BOOLEAN	declined	declined	declined
+dec	byte	DECIMAL(10,2)	TINYINT	declined	declined	declined
+dec	byte	DECIMAL(30,4)	TINYINT	declined	declined	declined
+dec	short	DECIMAL(10,2)	SMALLINT	declined	declined	declined
+dec	short	DECIMAL(30,4)	SMALLINT	declined	declined	declined
+dec	int	DECIMAL(10,2)	INT	declined	declined	declined
+dec	int	DECIMAL(30,4)	INT	declined	declined	declined
+dec	bigint	DECIMAL(10,2)	BIGINT	declined	declined	declined
+dec	bigint	DECIMAL(30,4)	BIGINT	declined	declined	declined
+dec	float	DECIMAL(10,2)	FLOAT	declined	declined	declined
+dec	float	DECIMAL(30,4)	FLOAT	declined	declined	declined
+dec	double	DECIMAL(10,2)	DOUBLE	declined	declined	declined
+dec	double	DECIMAL(30,4)	DOUBLE	declined	declined	declined
+dec	dec	DECIMAL(10,2)	DECIMAL(30,4)	declined	declined	declined
+dec	dec	DECIMAL(30,4)	DECIMAL(10,2)	declined	declined	declined
+dec	ym	DECIMAL(10,2)	INTERVAL YEAR	declined	declined	declined
+dec	ym	DECIMAL(10,2)	INTERVAL YEAR TO MONTH	declined	declined	declined
+dec	ym	DECIMAL(10,2)	INTERVAL MONTH	declined	declined	declined
+dec	ym	DECIMAL(30,4)	INTERVAL YEAR	declined	declined	declined
+dec	ym	DECIMAL(30,4)	INTERVAL YEAR TO MONTH	declined	declined	declined
+dec	ym	DECIMAL(30,4)	INTERVAL MONTH	declined	declined	declined
+dec	dt	DECIMAL(10,2)	INTERVAL DAY	declined	declined	declined
+dec	dt	DECIMAL(10,2)	INTERVAL DAY TO HOUR	declined	declined	declined
+dec	dt	DECIMAL(10,2)	INTERVAL DAY TO MINUTE	declined	declined	declined
+dec	dt	DECIMAL(10,2)	INTERVAL DAY TO SECOND	declined	declined	declined
+dec	dt	DECIMAL(10,2)	INTERVAL HOUR	declined	declined	declined
+dec	dt	DECIMAL(10,2)	INTERVAL HOUR TO MINUTE	declined	declined	declined
+dec	dt	DECIMAL(10,2)	INTERVAL HOUR TO SECOND	declined	declined	declined
+dec	dt	DECIMAL(10,2)	INTERVAL MINUTE	declined	declined	declined
+dec	dt	DECIMAL(10,2)	INTERVAL MINUTE TO SECOND	declined	declined	declined
+dec	dt	DECIMAL(10,2)	INTERVAL SECOND	declined	declined	declined
+dec	dt	DECIMAL(30,4)	INTERVAL DAY	declined	declined	declined
+dec	dt	DECIMAL(30,4)	INTERVAL DAY TO HOUR	declined	declined	declined
+dec	dt	DECIMAL(30,4)	INTERVAL DAY TO MINUTE	declined	declined	declined
+dec	dt	DECIMAL(30,4)	INTERVAL DAY TO SECOND	declined	declined	declined
+dec	dt	DECIMAL(30,4)	INTERVAL HOUR	declined	declined	declined
+dec	dt	DECIMAL(30,4)	INTERVAL HOUR TO MINUTE	declined	declined	declined
+dec	dt	DECIMAL(30,4)	INTERVAL HOUR TO SECOND	declined	declined	declined
+dec	dt	DECIMAL(30,4)	INTERVAL MINUTE	declined	declined	declined
+dec	dt	DECIMAL(30,4)	INTERVAL MINUTE TO SECOND	declined	declined	declined
+dec	dt	DECIMAL(30,4)	INTERVAL SECOND	declined	declined	declined
+date	bool	DATE	BOOLEAN	declined	illegal	illegal
+date	byte	DATE	TINYINT	declined	illegal	illegal
+date	short	DATE	SMALLINT	declined	illegal	illegal
+date	int	DATE	INT	declined	illegal	illegal
+date	bigint	DATE	BIGINT	declined	illegal	illegal
+date	float	DATE	FLOAT	declined	illegal	illegal
+date	double	DATE	DOUBLE	declined	illegal	illegal
+date	dec	DATE	DECIMAL(10,2)	declined	illegal	illegal
+date	dec	DATE	DECIMAL(30,4)	declined	illegal	illegal
+date	ntz	DATE	TIMESTAMP_NTZ	declined	declined	declined
+ntz	date	TIMESTAMP_NTZ	DATE	declined	declined	declined
+ntz	time	TIMESTAMP_NTZ	TIME(0)	declined	declined	declined
+ntz	time	TIMESTAMP_NTZ	TIME(3)	declined	declined	declined
+ntz	time	TIMESTAMP_NTZ	TIME(6)	declined	declined	declined
+time	byte	TIME(0)	TINYINT	declined	declined	declined
+time	byte	TIME(3)	TINYINT	declined	declined	declined
+time	byte	TIME(6)	TINYINT	declined	declined	declined
+time	short	TIME(0)	SMALLINT	declined	declined	declined
+time	short	TIME(3)	SMALLINT	declined	declined	declined
+time	short	TIME(6)	SMALLINT	declined	declined	declined
+time	int	TIME(0)	INT	declined	declined	declined
+time	int	TIME(3)	INT	declined	declined	declined
+time	int	TIME(6)	INT	declined	declined	declined
+time	bigint	TIME(0)	BIGINT	declined	declined	declined
+time	bigint	TIME(3)	BIGINT	declined	declined	declined
+time	bigint	TIME(6)	BIGINT	declined	declined	declined
+time	dec	TIME(0)	DECIMAL(10,2)	declined	declined	declined
+time	dec	TIME(0)	DECIMAL(30,4)	declined	declined	declined
+time	dec	TIME(3)	DECIMAL(10,2)	declined	declined	declined
+time	dec	TIME(3)	DECIMAL(30,4)	declined	declined	declined
+time	dec	TIME(6)	DECIMAL(10,2)	declined	declined	declined
+time	dec	TIME(6)	DECIMAL(30,4)	declined	declined	declined
+time	ntz	TIME(0)	TIMESTAMP_NTZ	declined	declined	declined
+time	ntz	TIME(3)	TIMESTAMP_NTZ	declined	declined	declined
+time	ntz	TIME(6)	TIMESTAMP_NTZ	declined	declined	declined
+time	time	TIME(0)	TIME(3)	fused	fused	fused
+time	time	TIME(0)	TIME(6)	fused	fused	fused
+time	time	TIME(3)	TIME(0)	declined	declined	declined
+time	time	TIME(3)	TIME(6)	fused	fused	fused
+time	time	TIME(6)	TIME(0)	declined	declined	declined
+time	time	TIME(6)	TIME(3)	declined	declined	declined
+ym	byte	INTERVAL YEAR	TINYINT	declined	declined	declined
+ym	byte	INTERVAL YEAR TO MONTH	TINYINT	declined	declined	declined
+ym	byte	INTERVAL MONTH	TINYINT	declined	declined	declined
+ym	short	INTERVAL YEAR	SMALLINT	declined	declined	declined
+ym	short	INTERVAL YEAR TO MONTH	SMALLINT	declined	declined	declined
+ym	short	INTERVAL MONTH	SMALLINT	declined	declined	declined
+ym	int	INTERVAL YEAR	INT	fused	fused	fused
+ym	int	INTERVAL YEAR TO MONTH	INT	declined	declined	declined
+ym	int	INTERVAL MONTH	INT	fused	fused	fused
+ym	bigint	INTERVAL YEAR	BIGINT	declined	declined	declined
+ym	bigint	INTERVAL YEAR TO MONTH	BIGINT	declined	declined	declined
+ym	bigint	INTERVAL MONTH	BIGINT	declined	declined	declined
+ym	dec	INTERVAL YEAR	DECIMAL(10,2)	declined	declined	declined
+ym	dec	INTERVAL YEAR	DECIMAL(30,4)	declined	declined	declined
+ym	dec	INTERVAL YEAR TO MONTH	DECIMAL(10,2)	declined	declined	declined
+ym	dec	INTERVAL YEAR TO MONTH	DECIMAL(30,4)	declined	declined	declined
+ym	dec	INTERVAL MONTH	DECIMAL(10,2)	declined	declined	declined
+ym	dec	INTERVAL MONTH	DECIMAL(30,4)	declined	declined	declined
+ym	ym	INTERVAL YEAR	INTERVAL YEAR TO MONTH	fused	fused	fused
+ym	ym	INTERVAL YEAR	INTERVAL MONTH	fused	fused	fused
+ym	ym	INTERVAL YEAR TO MONTH	INTERVAL YEAR	fused	fused	fused
+ym	ym	INTERVAL YEAR TO MONTH	INTERVAL MONTH	fused	fused	fused
+ym	ym	INTERVAL MONTH	INTERVAL YEAR	fused	fused	fused
+ym	ym	INTERVAL MONTH	INTERVAL YEAR TO MONTH	fused	fused	fused
+dt	byte	INTERVAL DAY	TINYINT	declined	declined	declined
+dt	byte	INTERVAL DAY TO HOUR	TINYINT	declined	declined	declined
+dt	byte	INTERVAL DAY TO MINUTE	TINYINT	declined	declined	declined
+dt	byte	INTERVAL DAY TO SECOND	TINYINT	declined	declined	declined
+dt	byte	INTERVAL HOUR	TINYINT	declined	declined	declined
+dt	byte	INTERVAL HOUR TO MINUTE	TINYINT	declined	declined	declined
+dt	byte	INTERVAL HOUR TO SECOND	TINYINT	declined	declined	declined
+dt	byte	INTERVAL MINUTE	TINYINT	declined	declined	declined
+dt	byte	INTERVAL MINUTE TO SECOND	TINYINT	declined	declined	declined
+dt	byte	INTERVAL SECOND	TINYINT	declined	declined	declined
+dt	short	INTERVAL DAY	SMALLINT	declined	declined	declined
+dt	short	INTERVAL DAY TO HOUR	SMALLINT	declined	declined	declined
+dt	short	INTERVAL DAY TO MINUTE	SMALLINT	declined	declined	declined
+dt	short	INTERVAL DAY TO SECOND	SMALLINT	declined	declined	declined
+dt	short	INTERVAL HOUR	SMALLINT	declined	declined	declined
+dt	short	INTERVAL HOUR TO MINUTE	SMALLINT	declined	declined	declined
+dt	short	INTERVAL HOUR TO SECOND	SMALLINT	declined	declined	declined
+dt	short	INTERVAL MINUTE	SMALLINT	declined	declined	declined
+dt	short	INTERVAL MINUTE TO SECOND	SMALLINT	declined	declined	declined
+dt	short	INTERVAL SECOND	SMALLINT	declined	declined	declined
+dt	int	INTERVAL DAY	INT	declined	declined	declined
+dt	int	INTERVAL DAY TO HOUR	INT	declined	declined	declined
+dt	int	INTERVAL DAY TO MINUTE	INT	declined	declined	declined
+dt	int	INTERVAL DAY TO SECOND	INT	declined	declined	declined
+dt	int	INTERVAL HOUR	INT	declined	declined	declined
+dt	int	INTERVAL HOUR TO MINUTE	INT	declined	declined	declined
+dt	int	INTERVAL HOUR TO SECOND	INT	declined	declined	declined
+dt	int	INTERVAL MINUTE	INT	declined	declined	declined
+dt	int	INTERVAL MINUTE TO SECOND	INT	declined	declined	declined
+dt	int	INTERVAL SECOND	INT	declined	declined	declined
+dt	bigint	INTERVAL DAY	BIGINT	declined	declined	declined
+dt	bigint	INTERVAL DAY TO HOUR	BIGINT	declined	declined	declined
+dt	bigint	INTERVAL DAY TO MINUTE	BIGINT	declined	declined	declined
+dt	bigint	INTERVAL DAY TO SECOND	BIGINT	declined	declined	declined
+dt	bigint	INTERVAL HOUR	BIGINT	declined	declined	declined
+dt	bigint	INTERVAL HOUR TO MINUTE	BIGINT	declined	declined	declined
+dt	bigint	INTERVAL HOUR TO SECOND	BIGINT	declined	declined	declined
+dt	bigint	INTERVAL MINUTE	BIGINT	declined	declined	declined
+dt	bigint	INTERVAL MINUTE TO SECOND	BIGINT	declined	declined	declined
+dt	bigint	INTERVAL SECOND	BIGINT	declined	declined	declined
+dt	dec	INTERVAL DAY	DECIMAL(10,2)	declined	declined	declined
+dt	dec	INTERVAL DAY	DECIMAL(30,4)	declined	declined	declined
+dt	dec	INTERVAL DAY TO HOUR	DECIMAL(10,2)	declined	declined	declined
+dt	dec	INTERVAL DAY TO HOUR	DECIMAL(30,4)	declined	declined	declined
+dt	dec	INTERVAL DAY TO MINUTE	DECIMAL(10,2)	declined	declined	declined
+dt	dec	INTERVAL DAY TO MINUTE	DECIMAL(30,4)	declined	declined	declined
+dt	dec	INTERVAL DAY TO SECOND	DECIMAL(10,2)	declined	declined	declined
+dt	dec	INTERVAL DAY TO SECOND	DECIMAL(30,4)	declined	declined	declined
+dt	dec	INTERVAL HOUR	DECIMAL(10,2)	declined	declined	declined
+dt	dec	INTERVAL HOUR	DECIMAL(30,4)	declined	declined	declined
+dt	dec	INTERVAL HOUR TO MINUTE	DECIMAL(10,2)	declined	declined	declined
+dt	dec	INTERVAL HOUR TO MINUTE	DECIMAL(30,4)	declined	declined	declined
+dt	dec	INTERVAL HOUR TO SECOND	DECIMAL(10,2)	declined	declined	declined
+dt	dec	INTERVAL HOUR TO SECOND	DECIMAL(30,4)	declined	declined	declined
+dt	dec	INTERVAL MINUTE	DECIMAL(10,2)	declined	declined	declined
+dt	dec	INTERVAL MINUTE	DECIMAL(30,4)	declined	declined	declined
+dt	dec	INTERVAL MINUTE TO SECOND	DECIMAL(10,2)	declined	declined	declined
+dt	dec	INTERVAL MINUTE TO SECOND	DECIMAL(30,4)	declined	declined	declined
+dt	dec	INTERVAL SECOND	DECIMAL(10,2)	declined	declined	declined
+dt	dec	INTERVAL SECOND	DECIMAL(30,4)	declined	declined	declined
+dt	dt	INTERVAL DAY	INTERVAL DAY TO HOUR	declined	declined	declined
+dt	dt	INTERVAL DAY	INTERVAL DAY TO MINUTE	declined	declined	declined
+dt	dt	INTERVAL DAY	INTERVAL DAY TO SECOND	fused	fused	fused
+dt	dt	INTERVAL DAY	INTERVAL HOUR	declined	declined	declined
+dt	dt	INTERVAL DAY	INTERVAL HOUR TO MINUTE	declined	declined	declined
+dt	dt	INTERVAL DAY	INTERVAL HOUR TO SECOND	fused	fused	fused
+dt	dt	INTERVAL DAY	INTERVAL MINUTE	declined	declined	declined
+dt	dt	INTERVAL DAY	INTERVAL MINUTE TO SECOND	fused	fused	fused
+dt	dt	INTERVAL DAY	INTERVAL SECOND	fused	fused	fused
+dt	dt	INTERVAL DAY TO HOUR	INTERVAL DAY	declined	declined	declined
+dt	dt	INTERVAL DAY TO HOUR	INTERVAL DAY TO MINUTE	declined	declined	declined
+dt	dt	INTERVAL DAY TO HOUR	INTERVAL DAY TO SECOND	fused	fused	fused
+dt	dt	INTERVAL DAY TO HOUR	INTERVAL HOUR	declined	declined	declined
+dt	dt	INTERVAL DAY TO HOUR	INTERVAL HOUR TO MINUTE	declined	declined	declined
+dt	dt	INTERVAL DAY TO HOUR	INTERVAL HOUR TO SECOND	fused	fused	fused
+dt	dt	INTERVAL DAY TO HOUR	INTERVAL MINUTE	declined	declined	declined
+dt	dt	INTERVAL DAY TO HOUR	INTERVAL MINUTE TO SECOND	fused	fused	fused
+dt	dt	INTERVAL DAY TO HOUR	INTERVAL SECOND	fused	fused	fused
+dt	dt	INTERVAL DAY TO MINUTE	INTERVAL DAY	declined	declined	declined
+dt	dt	INTERVAL DAY TO MINUTE	INTERVAL DAY TO HOUR	declined	declined	declined
+dt	dt	INTERVAL DAY TO MINUTE	INTERVAL DAY TO SECOND	fused	fused	fused
+dt	dt	INTERVAL DAY TO MINUTE	INTERVAL HOUR	declined	declined	declined
+dt	dt	INTERVAL DAY TO MINUTE	INTERVAL HOUR TO MINUTE	declined	declined	declined
+dt	dt	INTERVAL DAY TO MINUTE	INTERVAL HOUR TO SECOND	fused	fused	fused
+dt	dt	INTERVAL DAY TO MINUTE	INTERVAL MINUTE	declined	declined	declined
+dt	dt	INTERVAL DAY TO MINUTE	INTERVAL MINUTE TO SECOND	fused	fused	fused
+dt	dt	INTERVAL DAY TO MINUTE	INTERVAL SECOND	fused	fused	fused
+dt	dt	INTERVAL DAY TO SECOND	INTERVAL DAY	declined	declined	declined
+dt	dt	INTERVAL DAY TO SECOND	INTERVAL DAY TO HOUR	declined	declined	declined
+dt	dt	INTERVAL DAY TO SECOND	INTERVAL DAY TO MINUTE	declined	declined	declined
+dt	dt	INTERVAL DAY TO SECOND	INTERVAL HOUR	declined	declined	declined
+dt	dt	INTERVAL DAY TO SECOND	INTERVAL HOUR TO MINUTE	declined	declined	declined
+dt	dt	INTERVAL DAY TO SECOND	INTERVAL HOUR TO SECOND	fused	fused	fused
+dt	dt	INTERVAL DAY TO SECOND	INTERVAL MINUTE	declined	declined	declined
+dt	dt	INTERVAL DAY TO SECOND	INTERVAL MINUTE TO SECOND	fused	fused	fused
+dt	dt	INTERVAL DAY TO SECOND	INTERVAL SECOND	fused	fused	fused
+dt	dt	INTERVAL HOUR	INTERVAL DAY	declined	declined	declined
+dt	dt	INTERVAL HOUR	INTERVAL DAY TO HOUR	declined	declined	declined
+dt	dt	INTERVAL HOUR	INTERVAL DAY TO MINUTE	declined	declined	declined
+dt	dt	INTERVAL HOUR	INTERVAL DAY TO SECOND	fused	fused	fused
+dt	dt	INTERVAL HOUR	INTERVAL HOUR TO MINUTE	declined	declined	declined
+dt	dt	INTERVAL HOUR	INTERVAL HOUR TO SECOND	fused	fused	fused
+dt	dt	INTERVAL HOUR	INTERVAL MINUTE	declined	declined	declined
+dt	dt	INTERVAL HOUR	INTERVAL MINUTE TO SECOND	fused	fused	fused
+dt	dt	INTERVAL HOUR	INTERVAL SECOND	fused	fused	fused
+dt	dt	INTERVAL HOUR TO MINUTE	INTERVAL DAY	declined	declined	declined
+dt	dt	INTERVAL HOUR TO MINUTE	INTERVAL DAY TO HOUR	declined	declined	declined
+dt	dt	INTERVAL HOUR TO MINUTE	INTERVAL DAY TO MINUTE	declined	declined	declined
+dt	dt	INTERVAL HOUR TO MINUTE	INTERVAL DAY TO SECOND	fused	fused	fused
+dt	dt	INTERVAL HOUR TO MINUTE	INTERVAL HOUR	declined	declined	declined
+dt	dt	INTERVAL HOUR TO MINUTE	INTERVAL HOUR TO SECOND	fused	fused	fused
+dt	dt	INTERVAL HOUR TO MINUTE	INTERVAL MINUTE	declined	declined	declined
+dt	dt	INTERVAL HOUR TO MINUTE	INTERVAL MINUTE TO SECOND	fused	fused	fused
+dt	dt	INTERVAL HOUR TO MINUTE	INTERVAL SECOND	fused	fused	fused
+dt	dt	INTERVAL HOUR TO SECOND	INTERVAL DAY	declined	declined	declined
+dt	dt	INTERVAL HOUR TO SECOND	INTERVAL DAY TO HOUR	declined	declined	declined
+dt	dt	INTERVAL HOUR TO SECOND	INTERVAL DAY TO MINUTE	declined	declined	declined
+dt	dt	INTERVAL HOUR TO SECOND	INTERVAL DAY TO SECOND	fused	fused	fused
+dt	dt	INTERVAL HOUR TO SECOND	INTERVAL HOUR	declined	declined	declined
+dt	dt	INTERVAL HOUR TO SECOND	INTERVAL HOUR TO MINUTE	declined	declined	declined
+dt	dt	INTERVAL HOUR TO SECOND	INTERVAL MINUTE	declined	declined	declined
+dt	dt	INTERVAL HOUR TO SECOND	INTERVAL MINUTE TO SECOND	fused	fused	fused
+dt	dt	INTERVAL HOUR TO SECOND	INTERVAL SECOND	fused	fused	fused
+dt	dt	INTERVAL MINUTE	INTERVAL DAY	declined	declined	declined
+dt	dt	INTERVAL MINUTE	INTERVAL DAY TO HOUR	declined	declined	declined
+dt	dt	INTERVAL MINUTE	INTERVAL DAY TO MINUTE	declined	declined	declined
+dt	dt	INTERVAL MINUTE	INTERVAL DAY TO SECOND	fused	fused	fused
+dt	dt	INTERVAL MINUTE	INTERVAL HOUR	declined	declined	declined
+dt	dt	INTERVAL MINUTE	INTERVAL HOUR TO MINUTE	declined	declined	declined
+dt	dt	INTERVAL MINUTE	INTERVAL HOUR TO SECOND	fused	fused	fused
+dt	dt	INTERVAL MINUTE	INTERVAL MINUTE TO SECOND	fused	fused	fused
+dt	dt	INTERVAL MINUTE	INTERVAL SECOND	fused	fused	fused
+dt	dt	INTERVAL MINUTE TO SECOND	INTERVAL DAY	declined	declined	declined
+dt	dt	INTERVAL MINUTE TO SECOND	INTERVAL DAY TO HOUR	declined	declined	declined
+dt	dt	INTERVAL MINUTE TO SECOND	INTERVAL DAY TO MINUTE	declined	declined	declined
+dt	dt	INTERVAL MINUTE TO SECOND	INTERVAL DAY TO SECOND	fused	fused	fused
+dt	dt	INTERVAL MINUTE TO SECOND	INTERVAL HOUR	declined	declined	declined
+dt	dt	INTERVAL MINUTE TO SECOND	INTERVAL HOUR TO MINUTE	declined	declined	declined
+dt	dt	INTERVAL MINUTE TO SECOND	INTERVAL HOUR TO SECOND	fused	fused	fused
+dt	dt	INTERVAL MINUTE TO SECOND	INTERVAL MINUTE	declined	declined	declined
+dt	dt	INTERVAL MINUTE TO SECOND	INTERVAL SECOND	fused	fused	fused
+dt	dt	INTERVAL SECOND	INTERVAL DAY	declined	declined	declined
+dt	dt	INTERVAL SECOND	INTERVAL DAY TO HOUR	declined	declined	declined
+dt	dt	INTERVAL SECOND	INTERVAL DAY TO MINUTE	declined	declined	declined
+dt	dt	INTERVAL SECOND	INTERVAL DAY TO SECOND	fused	fused	fused
+dt	dt	INTERVAL SECOND	INTERVAL HOUR	declined	declined	declined
+dt	dt	INTERVAL SECOND	INTERVAL HOUR TO MINUTE	declined	declined	declined
+dt	dt	INTERVAL SECOND	INTERVAL HOUR TO SECOND	fused	fused	fused
+dt	dt	INTERVAL SECOND	INTERVAL MINUTE	declined	declined	declined
+dt	dt	INTERVAL SECOND	INTERVAL MINUTE TO SECOND	fused	fused	fused
