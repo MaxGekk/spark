@@ -1421,10 +1421,12 @@ final class Analysis {
       case Greatest n -> analyzeOp(node, true, n.left(), n.right());
       case Least n -> analyzeOp(node, true, n.left(), n.right());
       case IfElse n -> analyzeOp(node, true, n.cond(), n.thenNode(), n.elseNode());
-      // Null exactly where its condition is unknown. It adds no known answer of its own from a
-      // null input (a condition that has one, a null-safe equality, carries the flag already),
-      // and no null from valid inputs (a condition that makes one, CondConst(NULL), sets it).
-      case CondValue n -> analyzeOp(node, false, n.cond());
+      // Null exactly where its condition is unknown, and a condition can be known over a null
+      // input - NULL OR TRUE, NULL AND FALSE - which And and Or do not flag, since a condition
+      // root never takes the all-null shortcut. As a value it can, so skips = true keeps the
+      // shortcut from nulling a batch whose condition is known. A null from valid inputs is the
+      // condition's own flag (CondConst(NULL) sets it).
+      case CondValue n -> analyzeOp(node, true, n.cond());
       case Compare n -> analyzeOp(node, false, n.left(), n.right());
       // A known answer from a null input (two nulls are equal), the flag IfElse and the picks
       // set; shortcutApplies excludes a condition root, so no shortcut changes.

@@ -351,6 +351,18 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       3, "values over conditions")
   }
 
+  test("a condition as a value over AND or OR is known over an all-null column, each alone in " +
+      "its kernel") {
+    // Alone, so that no other root turns the driver's all-null shortcut off: NULL OR TRUE is
+    // 1 and NULL AND FALSE is 0, and a kernel that took the shortcut would answer null.
+    def v(c: Cond): CondValue = new CondValue(c, LaneType.INT)
+    for (root <- Seq[VarkaVectorIR](v(new Or(b0, b1)), v(new And(b0, b1)),
+        new IntArith(IntOp.ADD, Overflow.WRAP, v(new Or(b0, b1)), v(b1)),
+        new BitCount(v(new And(b0, new Not(b1)))))) {
+      sweep(Seq(root), 2, s"${VarkaVectorIR.canonical(root)} alone")
+    }
+  }
+
   test("a condition as a value on the long lane") {
     val Seq(l0, l1, l2) = (0 until 3).map(new BoolColumn(_, LaneType.LONG))
     def v(c: Cond): CondValue = new CondValue(c, LaneType.LONG)

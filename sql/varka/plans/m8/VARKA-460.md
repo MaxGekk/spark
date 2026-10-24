@@ -107,14 +107,25 @@ are all right for the node.
 reach lists name the node as out, with the boolean nodes, until row 352's refit), no cost-table
 price (listed as awaiting the refit).
 
-**Tests.** `VarkaEmitterBoolSuite` gained five tests and its harness reads a value root: the
+**Tests.** `VarkaEmitterBoolSuite` gained six tests and its harness reads a value root: the
 reference against Spark's `Cast(c, IntegerType)` and `Cast(c, LongType)` over every state of
 seven conditions (and `IF(c, 1, 0)` answering 0 where the cast answers null); kernels over every
 leaf state at four lanes, eight lanes and the default width, masked and dense, int and long;
 `CondValue` under `IntArith`, `BitCount`, `IfElse` and `Greatest`, and one condition read as a
 value and as a condition in one kernel; a `CondConst(NULL)` tree keeping the kernel masked-only.
-A planted fault (validity `kT` alone) fails four of the five.
+A planted fault (validity `kT` alone) fails four of the first five.
 
-**Measured.** The five tests take 2.0 s in the defaults gate against the 30 s predicted (ratio
+**Measured.** The first five tests take 2.0 s in the defaults gate against the 30 s predicted (ratio
 0.07, in the calibration table). The catalyst defaults gate passes (854 tests), and
 `emitted_bytes.json`, `coverage.json` and `width_audit.json` are unchanged.
+
+**Review (24 October 2026).** One read-only review before the push found a silent wrong answer:
+the masked driver's all-null shortcut returns a batch as null when every root reads a column
+that is null on every row, and trusts `skipping` for a value root. `And` and `Or` are analyzed
+as not skipping (a condition root never takes the shortcut), so `CondValue(Or(b0, b1))` alone in
+a kernel, with `b0` null throughout and `b1` true on a row, answered null where Spark's
+`CAST(NULL OR TRUE AS INT)` is 1. The first sweeps missed it because every kernel there also held
+a root that turns the shortcut off. A sixth test runs `CondValue` over `AND` and `OR` alone in
+its kernel and failed as described; `CondValue` now analyzes as skipping, as `IsNotNull` does,
+and the test passes. Narrow lanes stay untested (section 1): `CondValue` over a byte or short
+condition builds and takes `pushScalar`'s narrowing, and no row asks for it yet.
