@@ -13,85 +13,88 @@ skip lines, no emission): -y1 a lanewise NEG, abs(y1) the negation node with its
 a lanewise ABS. Class: sql/catalyst/src/test/java/org/apache/spark/sql/VarkaNarrowEmitBenchmark.java.
 
 == command ==
-As results/VARKA-329-emit-arm.txt: one JVM per run with the Test javaOptions and classpath of each tree,
+As results/VARKA-329-emit-arm.txt: one JVM per run with the Test classpath of each tree and none of its Test
+javaOptions (both runs passed an empty list),
   taskset -c 0,12,13,14,15,1,2,3 flock heavy.lock flock heavy2.lock \
-    java -Xmx4g <Test javaOptions> --add-modules=jdk.incubator.vector -XX:MaxVectorSize=<64|32|16> \
+    java -Xmx4g --add-modules=jdk.incubator.vector -XX:MaxVectorSize=<64|32|16> \
       -XX:CompileCommand=quiet "-XX:CompileCommand=dontinline,org.apache.spark.sql.varka.bench.NarrowEmit*::loop*" \
       -cp <Test classpath> org.apache.spark.sql.VarkaNarrowEmitBenchmark
 both arms in one JVM (the default), no other JVM running and the load under 1.5 at each start. The 24 October
 runs go repetition by repetition, each width in turn and before then after within it, so a drift of the machine
 falls on both trees. Every case settled after 8 drives with its loops at level 4. Shape e (the CASE store) is in
-neither change and is the control: its medians read the same on both trees, within 5 %.
+neither change and is the control: its medians read the same on both trees within 6 %, the after tree lower in
+eight of its eighteen cells (0.95 at worst, 16384 rows on the native arm at 512 and 256 bits).
 
 == results, M rows/s (higher is faster), median of three runs (min-max) ==
 512 bits (-XX:MaxVectorSize=64)
-rows      shape                     arm        before (min-max)         after (min-max)      after/before
-16384     e: CASE store (control)   WIDENED     19313 (19312-19603)     19467 (19454-19480)  1.01
-16384     e: CASE store (control)   NATIVE      86739 (85205-88253)     82196 (81137-82447)  0.95
-16384     f: -y1                    WIDENED     35474 (35354-35582)     37554 (37356-37566)  1.06
-16384     f: -y1                    NATIVE      58178 (58017-58593)    190058 (189800-190947) 3.27
-16384     g: abs(y1)                WIDENED     19357 (19284-19443)     27890 (27743-27896)  1.44
-16384     g: abs(y1)                NATIVE      55003 (54611-55344)    190234 (188672-190234) 3.46
-262144    e: CASE store (control)   WIDENED     19442 (19424-19500)     19033 (18969-19555)  0.98
-262144    e: CASE store (control)   NATIVE      77448 (73012-81577)     76342 (73614-79659)  0.99
-262144    f: -y1                    WIDENED     35822 (35772-35890)     37721 (37683-37749)  1.05
-262144    f: -y1                    NATIVE      59082 (59002-59252)    124923 (124504-125214) 2.11
-262144    g: abs(y1)                WIDENED     19502 (19495-19573)     27970 (27961-28031)  1.43
-262144    g: abs(y1)                NATIVE      55526 (55436-55655)    124465 (124148-124761) 2.24
-1000000   e: CASE store (control)   WIDENED     19061 (18888-19066)     18998 (18902-19063)  1.00
-1000000   e: CASE store (control)   NATIVE      42694 (41626-42737)     42530 (42379-42624)  1.00
-1000000   f: -y1                    WIDENED     35066 (35034-35107)     37091 (36764-37316)  1.06
-1000000   f: -y1                    NATIVE      56753 (56242-56924)     65193 (65175-65656)  1.15
-1000000   g: abs(y1)                WIDENED     18760 (18747-18769)     27309 (27286-27361)  1.46
-1000000   g: abs(y1)                NATIVE      53186 (53158-53709)     64424 (63292-65217)  1.21
+rows      shape                     arm        before (min-max)           after (min-max)         after/before
+16384     e: CASE store (control)   WIDENED     19313 (19312-19603)       19467 (19454-19480)     1.01
+16384     e: CASE store (control)   NATIVE      86739 (85205-88253)       82196 (81137-82447)     0.95
+16384     f: -y1                    WIDENED     35474 (35354-35582)       37554 (37356-37566)     1.06
+16384     f: -y1                    NATIVE      58178 (58017-58593)      190058 (189800-190947)   3.27
+16384     g: abs(y1)                WIDENED     19357 (19284-19443)       27890 (27743-27896)     1.44
+16384     g: abs(y1)                NATIVE      55003 (54611-55344)      190234 (188672-190234)   3.46
+262144    e: CASE store (control)   WIDENED     19442 (19424-19500)       19033 (18969-19555)     0.98
+262144    e: CASE store (control)   NATIVE      77448 (73012-81577)       76342 (73614-79659)     0.99
+262144    f: -y1                    WIDENED     35822 (35772-35890)       37721 (37683-37749)     1.05
+262144    f: -y1                    NATIVE      59082 (59002-59252)      124923 (124504-125214)   2.11
+262144    g: abs(y1)                WIDENED     19502 (19495-19573)       27970 (27961-28031)     1.43
+262144    g: abs(y1)                NATIVE      55526 (55436-55655)      124465 (124148-124761)   2.24
+1000000   e: CASE store (control)   WIDENED     19061 (18888-19066)       18998 (18902-19063)     1.00
+1000000   e: CASE store (control)   NATIVE      42694 (41626-42737)       42530 (42379-42624)     1.00
+1000000   f: -y1                    WIDENED     35066 (35034-35107)       37091 (36764-37316)     1.06
+1000000   f: -y1                    NATIVE      56753 (56242-56924)       65193 (65175-65656)     1.15
+1000000   g: abs(y1)                WIDENED     18760 (18747-18769)       27309 (27286-27361)     1.46
+1000000   g: abs(y1)                NATIVE      53186 (53158-53709)       64424 (63292-65217)     1.21
 
 256 bits (-XX:MaxVectorSize=32)
-rows      shape                     arm        before (min-max)         after (min-max)      after/before
-16384     e: CASE store (control)   WIDENED     19136 (19094-19166)     19106 (19045-19168)  1.00
-16384     e: CASE store (control)   NATIVE      86294 (75731-92249)     82203 (76973-89813)  0.95
-16384     f: -y1                    WIDENED     34326 (34167-34478)     36758 (36418-36995)  1.07
-16384     f: -y1                    NATIVE      57673 (56792-57764)    172613 (171558-173170) 2.99
-16384     g: abs(y1)                WIDENED     18648 (18531-18679)     26526 (26418-26541)  1.42
-16384     g: abs(y1)                NATIVE      52927 (52785-52929)    163615 (161987-164229) 3.09
-262144    e: CASE store (control)   WIDENED     19365 (19201-19400)     19324 (18468-19434)  1.00
-262144    e: CASE store (control)   NATIVE      72291 (59286-74254)     70288 (58295-75685)  0.97
-262144    f: -y1                    WIDENED     34844 (34622-34928)     37386 (37319-37413)  1.07
-262144    f: -y1                    NATIVE      58110 (58024-58196)    123474 (123270-123549) 2.12
-262144    g: abs(y1)                WIDENED     18531 (18503-18578)     26757 (26387-26944)  1.44
-262144    g: abs(y1)                NATIVE      53330 (53013-53400)    120282 (107996-121730) 2.26
-1000000   e: CASE store (control)   WIDENED     18668 (18523-18812)     18846 (18825-18909)  1.01
-1000000   e: CASE store (control)   NATIVE      41865 (41413-42454)     41439 (40735-41869)  0.99
-1000000   f: -y1                    WIDENED     34450 (34214-34522)     36735 (36723-36900)  1.07
-1000000   f: -y1                    NATIVE      56017 (55390-56054)     64436 (64078-64722)  1.15
-1000000   g: abs(y1)                WIDENED     18372 (18184-18380)     26348 (26196-26365)  1.43
-1000000   g: abs(y1)                NATIVE      50893 (50504-50897)     64357 (64128-64447)  1.26
+rows      shape                     arm        before (min-max)           after (min-max)         after/before
+16384     e: CASE store (control)   WIDENED     19136 (19094-19166)       19106 (19045-19168)     1.00
+16384     e: CASE store (control)   NATIVE      86294 (75731-92249)       82203 (76973-89813)     0.95
+16384     f: -y1                    WIDENED     34326 (34167-34478)       36758 (36418-36995)     1.07
+16384     f: -y1                    NATIVE      57673 (56792-57764)      172613 (171558-173170)   2.99
+16384     g: abs(y1)                WIDENED     18648 (18531-18679)       26526 (26418-26541)     1.42
+16384     g: abs(y1)                NATIVE      52927 (52785-52929)      163615 (161987-164229)   3.09
+262144    e: CASE store (control)   WIDENED     19365 (19201-19400)       19324 (18468-19434)     1.00
+262144    e: CASE store (control)   NATIVE      72291 (59286-74254)       70288 (58295-75685)     0.97
+262144    f: -y1                    WIDENED     34844 (34622-34928)       37386 (37319-37413)     1.07
+262144    f: -y1                    NATIVE      58110 (58024-58196)      123474 (123270-123549)   2.12
+262144    g: abs(y1)                WIDENED     18531 (18503-18578)       26757 (26387-26944)     1.44
+262144    g: abs(y1)                NATIVE      53330 (53013-53400)      120282 (107996-121730)   2.26
+1000000   e: CASE store (control)   WIDENED     18668 (18523-18812)       18846 (18825-18909)     1.01
+1000000   e: CASE store (control)   NATIVE      41865 (41413-42454)       41439 (40735-41869)     0.99
+1000000   f: -y1                    WIDENED     34450 (34214-34522)       36735 (36723-36900)     1.07
+1000000   f: -y1                    NATIVE      56017 (55390-56054)       64436 (64078-64722)     1.15
+1000000   g: abs(y1)                WIDENED     18372 (18184-18380)       26348 (26196-26365)     1.43
+1000000   g: abs(y1)                NATIVE      50893 (50504-50897)       64357 (64128-64447)     1.26
 
 128 bits (-XX:MaxVectorSize=16)
-rows      shape                     arm        before (min-max)         after (min-max)      after/before
-16384     e: CASE store (control)   WIDENED      3664 (3635-3667)        3652 (3634-3652)    1.00
-16384     e: CASE store (control)   NATIVE      56801 (56609-57473)     57987 (56577-58630)  1.02
-16384     f: -y1                    WIDENED      5420 (5417-5436)        5564 (5492-5600)    1.03
-16384     f: -y1                    NATIVE      30743 (30419-30925)    105567 (104775-108410) 3.43
-16384     g: abs(y1)                WIDENED      3840 (3824-3840)        4592 (4577-4607)    1.20
-16384     g: abs(y1)                NATIVE      28126 (27909-28192)    104748 (102357-106347) 3.72
-262144    e: CASE store (control)   WIDENED      3670 (3649-3676)        3645 (3629-3652)    0.99
-262144    e: CASE store (control)   NATIVE      58502 (50844-59392)     56475 (51536-58122)  0.97
-262144    f: -y1                    WIDENED      5477 (5454-5477)        5520 (5495-5548)    1.01
-262144    f: -y1                    NATIVE      30824 (30751-30916)     98906 (98824-99947)  3.21
-262144    g: abs(y1)                WIDENED      3842 (3819-3843)        4565 (4556-4575)    1.19
-262144    g: abs(y1)                NATIVE      28297 (28295-28458)    101588 (97751-103099) 3.59
-1000000   e: CASE store (control)   WIDENED      3636 (3630-3651)        3652 (3649-3661)    1.00
-1000000   e: CASE store (control)   NATIVE      40965 (40757-40998)     40902 (40719-40962)  1.00
-1000000   f: -y1                    WIDENED      5390 (5386-5404)        5544 (5517-5545)    1.03
-1000000   f: -y1                    NATIVE      30531 (30475-30593)     61964 (61891-62140)  2.03
-1000000   g: abs(y1)                WIDENED      3831 (3801-3838)        4561 (4552-4566)    1.19
-1000000   g: abs(y1)                NATIVE      28051 (28041-28187)     61831 (61692-62119)  2.20
+rows      shape                     arm        before (min-max)           after (min-max)         after/before
+16384     e: CASE store (control)   WIDENED      3664 (3635-3667)          3652 (3634-3652)       1.00
+16384     e: CASE store (control)   NATIVE      56801 (56609-57473)       57987 (56577-58630)     1.02
+16384     f: -y1                    WIDENED      5420 (5417-5436)          5564 (5492-5600)       1.03
+16384     f: -y1                    NATIVE      30743 (30419-30925)      105567 (104775-108410)   3.43
+16384     g: abs(y1)                WIDENED      3840 (3824-3840)          4592 (4577-4607)       1.20
+16384     g: abs(y1)                NATIVE      28126 (27909-28192)      104748 (102357-106347)   3.72
+262144    e: CASE store (control)   WIDENED      3670 (3649-3676)          3645 (3629-3652)       0.99
+262144    e: CASE store (control)   NATIVE      58502 (50844-59392)       56475 (51536-58122)     0.97
+262144    f: -y1                    WIDENED      5477 (5454-5477)          5520 (5495-5548)       1.01
+262144    f: -y1                    NATIVE      30824 (30751-30916)       98906 (98824-99947)     3.21
+262144    g: abs(y1)                WIDENED      3842 (3819-3843)          4565 (4556-4575)       1.19
+262144    g: abs(y1)                NATIVE      28297 (28295-28458)      101588 (97751-103099)    3.59
+1000000   e: CASE store (control)   WIDENED      3636 (3630-3651)          3652 (3649-3661)       1.00
+1000000   e: CASE store (control)   NATIVE      40965 (40757-40998)       40902 (40719-40962)     1.00
+1000000   f: -y1                    WIDENED      5390 (5386-5404)          5544 (5517-5545)       1.03
+1000000   f: -y1                    NATIVE      30531 (30475-30593)       61964 (61891-62140)     2.03
+1000000   g: abs(y1)                WIDENED      3831 (3801-3838)          4561 (4552-4566)       1.19
+1000000   g: abs(y1)                NATIVE      28051 (28041-28187)       61831 (61692-62119)     2.20
 
 == reading ==
 On the native arm, the default since row 478, a byte negation and abs run 3.0x to 3.5x faster in L1 at 512 and 256
 bits and 3.4x to 3.7x at 128 bits, 2.1x to 2.3x at 512 KB (3.2x to 3.6x at 128 bits), and 1.15x to 1.26x at 2 MB,
 where the store is memory bound (2.0x to 2.2x at 128 bits): the byte multiply x86 lacks is gone (NEG is a subtract
 from zero) and abs is one ABS instead of a compare, a multiply and a blend. On the widened arm abs gains 1.42x to
-1.46x at 512 and 256 bits and 1.19x to 1.20x at 128, and the negation 1.01x to 1.07x. No cell is slower. The three
-runs of a cell agree within 4 % on shapes f and g, except one run 10 % low (g, native, 256 bits, 262144 rows),
-against gains far larger; the 23 October single runs of f and g fall within 7 % of these medians.
+1.46x at 512 and 256 bits and 1.19x to 1.20x at 128, and the negation 1.01x to 1.07x. No f or g cell is slower. Each
+run of an f or g cell lies within 4 % of its cell's median, except one run 10 % low (g, native, 256 bits, 262144
+rows), against gains far larger; the 23 October single runs of f and g fall within 7 % of these medians. The after
+tree was rebuilt after the 23 October runs, at the commit that first added this file.
