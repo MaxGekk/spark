@@ -192,14 +192,19 @@ enum Lane {
     return laneType.isNarrow();
   }
 
-  /** The lane a node's type names. */
+  /**
+   * The lane a node's type names. A switch with no {@code default} (sql/varka/AGENTS.md), so a new
+   * {@code LaneType} member does not compile until it has its entry here, the one place every
+   * consumer asks (VARKA-474 2.1). Each entry is the constant whose {@link #laneType} is that
+   * member, which {@code VarkaLaneTypeSuite} checks both ways.
+   */
   static Lane of(VarkaVectorIR.LaneType laneType) {
-    for (Lane lane : values()) {
-      if (lane.laneType == laneType) {
-        return lane;
-      }
-    }
-    throw VarkaErrors.illegalArgument("unsupported lane type " + laneType);
+    return switch (laneType) {
+      case BYTE -> BYTE;
+      case SHORT -> SHORT;
+      case INT -> INT;
+      case LONG -> LONG;
+    };
   }
 
   /**

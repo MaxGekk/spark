@@ -22,9 +22,9 @@ skipped quietly - the suite fails until the new expression is documented.
 
 Adding a type is the milestone's own change and has its own path:
 `ADDING_A_TYPE.md`, fifteen numbered steps from the lane's facts to the matrix run, each ending in
-a command whose result says whether the step is done. Its closing section names the sites no guard
-catches - the cost model, the census, the coverage rows, the fuzz grammar, the reference evaluator
-- so the reader knows which steps the compiler checks and which only the command does.
+a command whose result says whether the step is done. Its closing section says which sites the
+compiler checks and which it does not; `dev/varka_new_lane.py --check <LANE>` walks the second kind
+and prints each one a lane is missing.
 
 ## Open work is recorded, never left as a marker
 

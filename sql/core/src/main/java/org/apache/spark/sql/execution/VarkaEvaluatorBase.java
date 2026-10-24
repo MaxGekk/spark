@@ -33,15 +33,7 @@ import scala.jdk.javaapi.CollectionConverters;
 
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.BaseFixedWidthVector;
-import org.apache.arrow.vector.BigIntVector;
 import org.apache.arrow.vector.BitVector;
-import org.apache.arrow.vector.DateDayVector;
-import org.apache.arrow.vector.DurationVector;
-import org.apache.arrow.vector.IntVector;
-import org.apache.arrow.vector.IntervalYearVector;
-import org.apache.arrow.vector.SmallIntVector;
-import org.apache.arrow.vector.TimeNanoVector;
-import org.apache.arrow.vector.TinyIntVector;
 import org.apache.arrow.vector.ValueVector;
 import org.apache.arrow.vector.VarCharVector;
 
@@ -906,9 +898,8 @@ public abstract class VarkaEvaluatorBase {
 
   /**
    * Whether the kernel can run over this batch: every referenced column must be an Arrow vector
-   * of a class the kernels read - four bytes wide ({@code DateDayVector}, {@code IntVector},
-   * {@code IntervalYearVector}) or eight ({@code BigIntVector}, {@code TimeNanoVector},
-   * {@code DurationVector}) - holding exactly the batch's rows, no more - or, for an input the
+   * of a class a lane reads ({@link VarkaLaneArrow}, the one table of them) holding exactly the
+   * batch's rows, no more - or a boolean column's {@code BitVector}, or, for an input the
    * evaluator derives, an Arrow {@code VarCharVector} of the same row count, the one string vector
    * the Arrow cache produces and the derived leaf reads; the large and view string vectors refuse
    * the batch like any other column type.
@@ -921,8 +912,8 @@ public abstract class VarkaEvaluatorBase {
    * it from the kernels would mean counting nulls over {@code [0, len)} here instead.
    *
    * <p>Arrow's vector classes are not a sealed set, so the {@code switch} below ends in a
-   * {@code default}; the admitted list is by vector class rather than by Spark type, so admitting
-   * a type is exactly one more case.
+   * {@code default}; but what that arm admits is {@link VarkaLaneArrow}'s table, a switch over the
+   * lanes with no {@code default}, so a lane cannot be added without naming its vectors there.
    */
   private boolean isArrowBacked(ColumnarBatch input) {
     int rows = input.numRows();
@@ -932,26 +923,12 @@ public abstract class VarkaEvaluatorBase {
       }
       ValueVector vector = column.getValueVector();
       boolean ok = switch (vector) {
-        // A year-month interval is a count of months in an int32 buffer whatever its unit, and
-        // IntervalYearVector is a BaseFixedWidthVector of width four - the same buffer layout the
-        // kernels already read.
-        case DateDayVector v -> !derivedInput[i] && v.getValueCount() == rows;
-        case IntVector v -> !derivedInput[i] && v.getValueCount() == rows;
-        case IntervalYearVector v -> !derivedInput[i] && v.getValueCount() == rows;
-        // The long lane's three (VARKA-29): a bigint, a TIME(p) - nanoseconds of day at every
-        // precision - and a day-time interval in microseconds. The timestamp vectors are
-        // deliberately not here: the compiler never builds a leaf for them, so admitting them
-        // would only decline the batch one layer later.
-        case BigIntVector v -> !derivedInput[i] && v.getValueCount() == rows;
-        case TimeNanoVector v -> !derivedInput[i] && v.getValueCount() == rows;
-        case DurationVector v -> !derivedInput[i] && v.getValueCount() == rows;
+        // The two vectors that belong to no lane: a derived input's string, and a boolean
+        // column's data bitmap, in the layout of a validity bitmap (BoolColumn).
         case VarCharVector v -> derivedInput[i] && v.getValueCount() == rows;
-        // A narrow column's one or two bytes a row (VARKA-329), read at its own lane.
-        case TinyIntVector v -> !derivedInput[i] && v.getValueCount() == rows;
-        case SmallIntVector v -> !derivedInput[i] && v.getValueCount() == rows;
-        // A boolean column: a data bitmap in the layout of a validity bitmap (BoolColumn).
         case BitVector v -> !derivedInput[i] && v.getValueCount() == rows;
-        default -> false;
+        default -> !derivedInput[i] && VarkaLaneArrow.reads(vector)
+            && vector.getValueCount() == rows;
       };
       if (!ok) {
         return false;
