@@ -110,8 +110,8 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
             }.toArray
             val scratch = VarkaEmitterTestSupport.scratch(kernel, length)
             // A kernel holding a long-lane root is a 64-bit-lane kernel, which has its own entry.
-            val status = if (roots.exists(r =>
-              VarkaVectorIR.emissionLane(r, options) == LaneType.LONG)) {
+            val status = if (VarkaKernelPlan.of(java.util.List.of(roots: _*), options).drive() ==
+                LaneType.LONG) {
               kernel.run(data.map(_.address()), valid.map(_.address()), nullCounts,
                 dstData, outs.map(_._2.address()).toArray, Array.empty[Int],
                 Array.empty[Long], length, scratch)
@@ -278,7 +278,7 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       new BoolNullSafeEq(l0, l1), new CondIf(l0, l1, l2),
       new Or(new CondConst(Truth.NULL, LaneType.LONG), l2))
     long.foreach(r =>
-      assert(VarkaVectorIR.emissionLane(r, VarkaEmitOptions.DEFAULTS) === LaneType.LONG,
+      assert(VarkaKernelPlan.emissionLane(r, VarkaEmitOptions.DEFAULTS) === LaneType.LONG,
         r.toString))
     sweep(long, 3, "long-lane leaves")
     // One column at both lanes in one kernel needs a value output (a WidenLane over an int-lane
@@ -386,7 +386,7 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       v(new BoolNullSafeEq(l0, l1)), v(new CondIf(l0, l1, l2)),
       new IntArith(IntOp.ADD, Overflow.WRAP, v(l0), v(l1)), new BitCount(v(l2)))
     long.foreach(r =>
-      assert(VarkaVectorIR.emissionLane(r, VarkaEmitOptions.DEFAULTS) === LaneType.LONG,
+      assert(VarkaKernelPlan.emissionLane(r, VarkaEmitOptions.DEFAULTS) === LaneType.LONG,
         r.toString))
     sweep(long, 3, "long-lane condition values")
     // An int-lane condition value widened into a kernel driven at the long lane: the int species

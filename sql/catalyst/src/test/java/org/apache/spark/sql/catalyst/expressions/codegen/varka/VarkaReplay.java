@@ -136,7 +136,7 @@ public record VarkaReplay(VarkaFailureSignature expected, Optional<VarkaFailureS
         return done(file, notes);
       }
       try {
-        run(kernel, VarkaVectorIR.emissionLane(outputs.get(0), options), file, notes);
+        run(kernel, VarkaKernelPlan.of(outputs, options).drive(), file, notes);
       } catch (Throwable t) {
         notes.add("the kernel threw");
         return failed(file, notes, t);
