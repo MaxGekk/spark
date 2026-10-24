@@ -32,14 +32,16 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link VarkaMaskOps} sets lane {@code i} exactly where bit {@code i} of the word is, for every
- * lane type at every shape the platform has, over the words that matter (all ones, none, each bit
- * alone, and random words with bits above the lane count), each compared lane by lane with the
- * word's own bits. It runs in a JVM of its own, since a species other than the preferred one would
- * leave the shared Vector API templates profiled for it in the JVM's later suites.
+ * The word-to-mask form the emitter writes out at each masked-body site, in its Java form ({@code
+ * VarkaVectorTemplateWarmup.Rounds.longMask} and its siblings, VARKA-491), sets lane {@code i}
+ * exactly where bit {@code i} of the word is, for every lane type at every shape the platform has,
+ * over the words that matter (all ones, none, each bit alone, and random words with bits above the
+ * lane count), each compared lane by lane with the word's own bits. It runs in a JVM of its own,
+ * since a species other than the preferred one would leave the shared Vector API templates profiled
+ * for it in the JVM's later suites.
  */
 @VarkaSuite(ownJvm = true)
-public final class VarkaMaskOpsSuite {
+public final class VarkaMaskFormSuite {
 
   private static <E> void check(String what, VectorSpecies<E> s,
       BiFunction<VectorSpecies<E>, Long, VectorMask<E>> maskOf) {
@@ -67,19 +69,25 @@ public final class VarkaMaskOpsSuite {
   void everyLaneTypeAndShapeSetsTheWordsBits() {
     for (VectorSpecies<Long> s : new VectorSpecies[] {LongVector.SPECIES_64,
         LongVector.SPECIES_128, LongVector.SPECIES_256, LongVector.SPECIES_512}) {
-      check("long", s, VarkaMaskOps::longMask);
+      check("long", s, VarkaVectorTemplateWarmup.Rounds::longMask);
     }
     for (VectorSpecies<Integer> s : new VectorSpecies[] {IntVector.SPECIES_64,
         IntVector.SPECIES_128, IntVector.SPECIES_256, IntVector.SPECIES_512}) {
-      check("int", s, VarkaMaskOps::intMask);
+      check("int", s, VarkaVectorTemplateWarmup.Rounds::intMask);
     }
     for (VectorSpecies<Short> s : new VectorSpecies[] {ShortVector.SPECIES_64,
         ShortVector.SPECIES_128, ShortVector.SPECIES_256, ShortVector.SPECIES_512}) {
-      check("short", s, VarkaMaskOps::shortMask);
+      if (s.length() <= Short.SIZE) {
+        check("short", s, VarkaVectorTemplateWarmup.Rounds::shortMask);
+      }
+      check("short spread", s, VarkaVectorTemplateWarmup.Rounds::shortMaskSpread);
     }
     for (VectorSpecies<Byte> s : new VectorSpecies[] {ByteVector.SPECIES_64,
         ByteVector.SPECIES_128, ByteVector.SPECIES_256, ByteVector.SPECIES_512}) {
-      check("byte", s, VarkaMaskOps::byteMask);
+      if (s.length() <= Byte.SIZE) {
+        check("byte", s, VarkaVectorTemplateWarmup.Rounds::byteMask);
+      }
+      check("byte spread", s, VarkaVectorTemplateWarmup.Rounds::byteMaskSpread);
     }
   }
 }

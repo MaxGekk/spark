@@ -1210,11 +1210,12 @@ final class VarkaVectorWalk {
    * masked body goes through here; a constant or a bitmap read from memory cannot fold to a mask's
    * {@code toLong} and keeps {@code fromLong}.
    *
-   * <p>The calls are {@link VarkaMaskOps}'s, written out at the site rather than called: a wide
-   * kernel's C2 compile is past its inlining budget, and only the Vector API's own methods are
-   * inlined past it, so a call to a helper stays a call and its mask is allocated on every
-   * iteration. The two must stay the same sequence; {@code VarkaMaskOpsSuite} checks the helper's
-   * answers and the template warm-up runs the helper for the calls' sake.
+   * <p>The calls are those of {@code VarkaVectorTemplateWarmup.Rounds.longMask} and its siblings,
+   * written out at the site rather than called: a wide kernel's C2 compile is past its inlining
+   * budget, and only the Vector API's own methods are inlined past it, so a call to a helper stays
+   * a call and its mask is allocated on every iteration. The two must stay the same sequence;
+   * {@code VarkaMaskFormSuite} checks the warm-up's methods' answers, and the warm-up's calling
+   * them is what warms the templates these sites inline.
    */
   static void emitMaskOfWord(CodeBuilder cb, Lane lane, int species, Analysis analysis) {
     if (analysis.options.fromLongMasks()) {

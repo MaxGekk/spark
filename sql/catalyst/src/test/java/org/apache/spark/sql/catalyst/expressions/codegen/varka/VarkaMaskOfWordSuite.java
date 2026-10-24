@@ -41,7 +41,7 @@ import scala.jdk.javaapi.CollectionConverters;
  * No emitted kernel turns a computed word into a mask with {@code VectorMask.fromLong}
  * (VARKA-491). JDK 25's C2 miscompiles {@code fromLong(s, m.toLong())} on x86 without AVX-512
  * mask registers (VARKA-396), and a masked body's known-true word is exactly that round trip when
- * its columns have no nulls; the emitter builds every such mask with {@code VarkaMaskOps}'s calls
+ * its columns have no nulls; the emitter builds every such mask by broadcast, AND and compare
  * instead. This suite holds the emitted bytes to that, so a new site cannot bring the
  * round trip back: over every coverage row's kernel, at the defaults and under each configuration
  * of the option matrix, each {@code fromLong} must take a constant, a bitmap read through

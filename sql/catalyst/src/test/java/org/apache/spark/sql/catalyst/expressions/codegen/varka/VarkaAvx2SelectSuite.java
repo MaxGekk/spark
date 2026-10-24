@@ -35,7 +35,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Lan
  * {@code VectorMask.fromLong(s, m.toLong())} on x86 without AVX-512 mask registers. A masked body
  * whose condition's columns have no nulls in a lane group makes that round trip under
  * {@code fromLongMasks}: C2-compiled, its select takes the ELSE branch on every true lane. At the
- * defaults the emitter builds the mask with {@code VarkaMaskOps}'s calls. This suite runs each case
+ * defaults the emitter builds the mask by broadcast, AND and compare. This suite runs each case
  * through the compiled histories of {@link VarkaCompiledCheck} in a JVM of its own started with
  * {@code -XX:UseAVX=2}, so an AVX-512 host checks it too; a JVM that is not x86 ignores the flag.
  *
