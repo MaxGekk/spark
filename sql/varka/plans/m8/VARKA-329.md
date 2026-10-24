@@ -1334,10 +1334,11 @@ so a pick of two unreduced arms reduces once where its reader needs it; a `Narro
 target away from a store reduces by the shift pair, and the second truncation helper is gone; the
 grouping weights count a wrapping narrow node's shift pair (989-7).
 
-Measured (`results/VARKA-329-negabs.txt`): on the native arm a byte negation and abs run 3.0x to
-3.4x faster in L1 and 2.1x to 2.4x at 512 KB at both 512 and 256 bits, and 1.15x to 1.26x at 2 MB
-where the store is memory bound; on the widened arm abs gains 1.43x to 1.48x and the negation
-1.06x to 1.13x; the control shape is unchanged.
+Measured (`results/VARKA-329-negabs.txt`, three runs a cell): on the native arm a byte negation
+and abs run 3.0x to 3.5x faster in L1 and 2.1x to 2.3x at 512 KB at both 512 and 256 bits, and
+1.15x to 1.26x at 2 MB where the store is memory bound; at 128 bits 3.4x to 3.7x, 3.2x to 3.6x
+and 2.0x to 2.2x. On the widened arm abs gains 1.42x to 1.46x (1.19x to 1.20x at 128 bits) and
+the negation 1.01x to 1.07x; the control shape, in neither change, moves 0.95x to 1.02x.
 
 The bytes oracle moved only for the narrow coverage rows (34 at each width) and the aggregate
 option-arm digests. Under `validityByWidth=false` the native arm needs no baked lane count, so 52
