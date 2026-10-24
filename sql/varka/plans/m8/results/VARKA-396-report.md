@@ -184,7 +184,9 @@ Decided by the owner, 24 October 2026:
    backport, citing JDK-8370863 and the reproducer, if the owner files it; make JDK 29, the next
    long-term release, the migration target.
 
-Open: the report to OpenJDK (an outward post, the owner's); the regression tests the row's
+Reported to OpenJDK by the owner on 24 October 2026 through bugreport.java.com, reference
+`efdbbe29-dfaf-419b-a3c2-084dfb421bc5` (`VARKA-396/bugreport.md` holds the text); the JBS id follows when triage
+posts it. Open: the regression tests the row's
 done-when asks for, one per shrunk case under the history that failed; a runner fuzz night passing
 the compiled test once the guard lands.
 

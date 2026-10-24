@@ -1,7 +1,7 @@
 # JDK bug report, ready to paste into https://bugreport.java.com/bugreport/
 
-*Prepared 24 October 2026 from row 396's investigation (`../VARKA-396-report.md`). Not submitted:
-filing is the owner's.* Each section below is one field of the form; paste the text under its
+*Prepared 24 October 2026 from row 396's investigation (`../VARKA-396-report.md`), and submitted
+by the owner the same day: reference `efdbbe29-dfaf-419b-a3c2-084dfb421bc5`.* Each section below is one field of the form; paste the text under its
 heading.
 
 ## Category

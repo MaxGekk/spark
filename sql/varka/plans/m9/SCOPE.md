@@ -5509,14 +5509,17 @@ mask-cast change JDK-8370863 with fix version 27. This item is what follows on t
    is lifted where the running JDK is 27 or later, so an AVX2-only host on 27 gets the
    `fromLong` lowering back. The JDKs the guard applies to are stated in one place, beside the
    guard.
-3. **On 25, ask OpenJDK for a backport**, citing JDK-8370863 and `Fold396.java`: an outward post,
-   filed by the owner if at all. The guard stays on 25 until a 25u release carries the fix.
+3. **On 25, a fix in a 25u release.** The owner reported the bug on 24 October 2026 through
+   bugreport.java.com (reference `efdbbe29-dfaf-419b-a3c2-084dfb421bc5`; text in
+   `m8/results/VARKA-396/bugreport.md`), asking for a fix or a backport of JDK-8370863's rule
+   to 25 updates. Follow the JBS bug it becomes; the guard stays on 25 until a 25u release
+   carries the fix.
 4. **JDK 29 as the migration target.** JDK 25 is the long-term release Spark deploys on, and 26
    and 27 are not; the base moves at 29, the next long-term release (September 2027), with
    Spark's own JDK support. Not before.
 
-**Done when** step 1 has a committed result, the guard's JDK range follows it, and the backport
-request is filed or declined by the owner.
+**Done when** step 1 has a committed result, the guard's JDK range follows it, and the JBS bug
+from step 3 is resolved or its 25u status recorded.
 
 ## 5. Ordering
 
