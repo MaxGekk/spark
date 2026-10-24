@@ -18,6 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -239,6 +240,11 @@ public final class VarkaCastMatrixSuite {
     }
     List<String> committed = Files.exists(file)
         ? Files.readAllLines(file, StandardCharsets.UTF_8) : List.of();
+    if (committed.equals(fresh)) {
+      return;
+    }
+    // The lines that differ, for the message; a file that differs only in order or by a repeated
+    // line lists none of them, and fails all the same.
     var moved = new ArrayList<String>();
     for (String line : fresh) {
       if (!committed.contains(line)) {
@@ -250,7 +256,7 @@ public final class VarkaCastMatrixSuite {
         moved.add("file: " + line);
       }
     }
-    assertTrue(moved.isEmpty(), "the compiler's casts moved from " + FUSED_FILE + ":\n  "
+    fail("the compiler's casts moved from " + FUSED_FILE + ":\n  "
         + String.join("\n  ", moved) + "\nRegenerate it, then the census, with\n  " + REGEN
         + "\n  dev/varka_census.py");
   }

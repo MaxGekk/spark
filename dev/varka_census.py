@@ -788,7 +788,7 @@ CONTEXT_CASTS = {
 
 
 def casts_fused(root=ROOT):
-    """Per (from, to): the form pairs probed and, per mode, how many of them fuse.
+    """Per (from, to) and per mode: how many of its form pairs are legal, and how many fuse.
 
     >>> import tempfile
     >>> with tempfile.TemporaryDirectory() as d:
@@ -799,32 +799,41 @@ def casts_fused(root=ROOT):
     ...         _ = f.write("ym\\tint\\tY\\tINT\\tfused\\tfused\\tfused\\n")
     ...         _ = f.write("ym\\tint\\tYM\\tINT\\tdeclined\\tdeclined\\tdeclined\\n")
     ...     casts_fused(d)
-    {('ym', 'int'): (2, {'legacy': 1, 'ansi': 1, 'try': 1})}
+    {('ym', 'int'): ({'legacy': 2, 'ansi': 2, 'try': 2}, {'legacy': 1, 'ansi': 1, 'try': 1})}
     """
     out = {}
     with open(os.path.join(root, CASTS_FUSED), encoding="utf-8") as f:
         lines = f.read().splitlines()
     for line in lines[1:]:
         src, dst, _, _, *answers = line.split("\t")
-        forms, fused = out.get((src, dst), (0, dict.fromkeys(FUSED_MODES, 0)))
+        legal_forms, fused = out.get((src, dst), ({m: 0 for m in FUSED_MODES}, {}))
+        fused = fused or dict.fromkeys(FUSED_MODES, 0)
         for mode, answer in zip(FUSED_MODES, answers):
+            legal_forms[mode] += answer != "illegal"
             fused[mode] += answer == "fused"
-        out[(src, dst)] = (forms + 1, fused)
+        out[(src, dst)] = (legal_forms, fused)
     return out
 
 
 def fused_cells(probe, src, dst):
     """casts.tsv's fused_today and fused_forms for one pair: the modes in which some form fuses,
-    and "all" when every form fuses in each of them, else how many do in the best mode."""
+    and "all" when every form legal in each of them fuses there, else how many do per mode
+    ("2 of 3", or "LEGACY 2 of 3, ANSI 1 of 3" where the modes differ)."""
     if (src, dst) in CONTEXT_CASTS:
         return "", "context: " + CONTEXT_CASTS[(src, dst)]
-    forms, fused = probe.get((src, dst), (0, {}))
+    legal_forms, fused = probe.get((src, dst), ({}, {}))
     modes = [m for m in FUSED_MODES if fused.get(m)]
     if not modes:
         return "", ""
-    best = max(fused[m] for m in modes)
-    every = all(fused[m] == forms for m in modes)
-    return ",".join(m.upper() for m in modes), "all" if every else f"{best} of {forms}"
+    if all(fused[m] == legal_forms[m] for m in modes):
+        return ",".join(m.upper() for m in modes), "all"
+    counts = {m: f"{fused[m]} of {legal_forms[m]}" for m in modes}
+    forms = (
+        next(iter(counts.values()))
+        if len(set(counts.values())) == 1
+        else ", ".join(f"{m.upper()} {c}" for m, c in counts.items())
+    )
+    return ",".join(m.upper() for m in modes), forms
 
 
 # The mode a coverage row's cast runs in, to the legal() answer that admits it.
@@ -843,13 +852,16 @@ def cast_errors(cov, probe):
             errors.append(f"a coverage row casts {src} to {dst} under {mode}, where it is illegal")
         elif cast_kind(src, dst)[0] == "identity":
             errors.append(f"a coverage row casts {src} to {dst}, an identity")
-        elif (src, dst) not in CONTEXT_CASTS and not probe.get((src, dst), (0, {}))[1].get(mode):
+        elif (src, dst) not in CONTEXT_CASTS and not probe.get((src, dst), ({}, {}))[1].get(mode):
             errors.append(f"a coverage row casts {src} to {dst} under {mode}, which never fuses")
     for (src, dst), (_, fused) in sorted(probe.items()):
         if any(fused.values()) and not any((src, dst) == (s, d) for s, d, _ in cast):
             errors.append(f"the compiler fuses cast {src} to {dst} and no coverage row casts it")
         if (src, dst) in CONTEXT_CASTS and any(fused.values()):
             errors.append(f"cast {src} to {dst} fuses bare: take it off CONTEXT_CASTS")
+    for src, dst in CONTEXT_CASTS:
+        if not any((src, dst) == (s, d) for s, d, _ in cast):
+            errors.append(f"cast {src} to {dst} is in CONTEXT_CASTS and no coverage row casts it")
     return errors
 
 

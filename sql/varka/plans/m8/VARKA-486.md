@@ -47,7 +47,8 @@ checked over the same forms.
 **`casts.tsv` derives `fused_today` from that file.** `dev/varka_census.py` reads
 `casts_fused.tsv` and writes each pair's `fused_today` as the modes in which some form fuses
 (`LEGACY,ANSI,TRY`, or a subset, or empty), and a new last column, `fused_forms`: `all` when
-every legal form fuses in those modes, otherwise `n of m`, the detail being in `casts_fused.tsv`.
+every form legal in each of those modes fuses there, otherwise `n of m` per mode, the detail
+being in `casts_fused.tsv`.
 `FUSED_CASTS` goes. What stays by hand is `CONTEXT_CASTS`, the pairs that fuse only inside
 another operator (`int -> dt` today), each with the coverage row that shows it; the check
 requires the probe to say such a pair declines bare, so a pair that starts to fuse bare must
@@ -56,12 +57,16 @@ leave the list.
 **Why generating the claim is not circular.** The two directions of drift both fail:
 - the compiler changes (a pair starts or stops fusing): the suite fails in CI until the file is
   regenerated, and the regeneration shows in the diff;
-- someone edits `casts.tsv` or `casts_fused.tsv` by hand: `dev/varka_census.py --check` fails in
-  the pre-commit hook and the docs job, the census being stale against its inputs.
+- someone edits `casts.tsv` by hand: `dev/varka_census.py --check` fails in the pre-commit hook
+  and the docs job, the file being stale against its inputs. A hand edit of `casts_fused.tsv`
+  itself, with the census regenerated after it, passes the hook and fails the suite in CI, which
+  compares the file line for line.
 
 And the human gate stays: `cast_errors` still requires a coverage row for every fused pair and
 fails on a row casting an unfused one, so a new fusion forces a coverage row (which runs the cast
-end to end against Spark) and a lost one fails the row that still casts it.
+end to end against Spark) and a lost one fails the row that still casts it. `coverage.json`
+records a row's casts by type pair and mode, not by form, so this check is per pair; a row whose
+form declines fails `VarkaCoverageSuite` itself, which requires every row to fuse.
 
 **The conformance contract reads the form.** `VarkaTypeConformance`'s cast check looks up its
 exact form pair and mode in `casts_fused.tsv`, instead of reading `fused_today`'s text. A form
@@ -138,3 +143,11 @@ against under 20 s predicted, a ratio of 0.08 (in the calibration table). The op
 cancelled under each configuration, as it pins the defaults), and the catalyst defaults gate
 passes (873 tests). `coverage.json`, `emitted_bytes.json`, `width_audit.json` and `census.tsv`
 are unchanged.
+
+**Review (24 October 2026).** One read-only review before the push found no way for the register
+to drift unnoticed. Applied: a `CONTEXT_CASTS` pair must have a coverage row casting it (the hand
+list had lost that check in the move); the suite compares the file line for line, so a repeated
+or reordered line fails rather than passing a set comparison; `fused_forms` counts only the forms
+legal in each mode, and names the modes when their counts differ; section 1 says which check
+catches a hand edit of `casts_fused.tsv`. Left as a stated limit: the coverage-row check is per
+pair, since `coverage.json` records casts without their forms.
