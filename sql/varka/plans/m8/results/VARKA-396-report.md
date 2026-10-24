@@ -148,7 +148,11 @@ In the local JDK 25 fastdebug build, behind an environment switch:
 | `Split396` (the round trip's mask read directly) | wrong | right |
 | The shrunk Varka case through the compiled check | 3 of 3 rounds fail | 0 of 3 fail |
 
-No HotSpot assertion fires with the fix. The patch is
+No HotSpot assertion fires with the fix. Of the six recent fuzz cases replayed in the fixed build,
+two pass with the history they failed in reached (202610221/8 `quiet-guard`, 202610231/1
+`recompiled`); three pass with that history unreached under fastdebug, which proves nothing; one
+stopped at an unrelated debug-only assertion in the AVX2 long `max` over `greatest(x, x)`. The
+patch is
 `target/repro/jdk25-long-to-mask-fix.diff` on the investigation branch.
 
 **Upstream.** A search of the JDK bug tracker found no report of this rule. `openjdk/jdk25u` master

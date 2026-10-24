@@ -103,7 +103,12 @@ AVX-512.
 the `VectorStoreMask` itself where the target has no mask registers (both are boolean vectors of
 the same length), with `Ideal`'s peeling branch disabled: the three programs pass under AVX2, the
 shrunk Varka case passes three rounds of three where it failed three of three, and no assertion
-fires. OpenJDK mainline (`openjdk/jdk` master, read 24 October 2026) has rewritten the rule: it
+fires. Of the six recent fuzz cases replayed in the fixed fastdebug build, 202610221/8
+(`quiet-guard`) and 202610231/1 (`recompiled`) pass with every history reached; 202610241/10,
+202610240/7 and 202610243/4 pass with the history each failed in unreached under fastdebug's
+slower compiles, which proves nothing; 202610222/1 stopped at an unrelated debug-only assertion
+in the AVX2 long `max` (`c2_MacroAssembler_x86.cpp:1096`, `greatest(x, x)` with both operands in
+one register, whose result is right). OpenJDK mainline (`openjdk/jdk` master, read 24 October 2026) has rewritten the rule: it
 casts the `VectorMaskToLong`'s input itself, which on AVX2 is the `VectorStoreMask`, so the cast
 is boolean to boolean and correct. Which change rewrote it, and whether as a fix, is not yet
 established; `jdk25u` still has the bug.
