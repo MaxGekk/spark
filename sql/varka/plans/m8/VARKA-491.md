@@ -34,63 +34,51 @@ makes the round trip.
 
 **Two cheaper forms were tried and fail.** Passing `kT | ~laneBits` (the bits `fromLong` drops
 anyway) does not stop the fold under `-XX:UseAVX=2` - C2 removes the OR - and an addition would be
-removed by `AndIL_sum_and_mask` by design. A form that hides the round trip from C2 is not
-available; a form that does not go through `VectorLongToMask` is.
+removed by `AndIL_sum_and_mask` by design. Both mix the word with constants, which C2 folds. What
+it cannot fold is a value it does not know: a static field that is not final.
 
 ## 2. Design
 
-**One helper for every word-to-mask conversion of the masked body.** `VarkaVectorWalk` emits
-`maskOf(word)` where it emits `fromLong(species, word)` today, at the first five sites of the
-table; the rest keep `fromLong`, since nothing can fold a constant or a bitmap read from memory
-into a compare. `maskOf` is the broadcast form:
+**Every masked-body word goes to `fromLong` XORed with a zero C2 cannot fold.** `VarkaVectorWalk`
+emits `fromLong(species, word ^ VarkaOpaqueZero.zero)` at the first five sites of the table (the
+picks' two conversions counted as one site); the rest keep `fromLong` of their constant or bitmap.
+`VarkaOpaqueZero.zero` is a public, non-final static `long`, zero and never written. HotSpot folds
+only final fields (and `@Stable` ones) into constants, so the `XorL` stays in the graph, the input
+of `VectorLongToMask` is never a `VectorMaskToLong`, and the rule cannot apply. The cost is a load,
+which C2 lifts out of the loop, and one XOR a site; each site keeps `fromLong`'s single call.
 
-```java
-lane.broadcast(word).and(LANE_BITS).compare(NE, 0)   // LANE_BITS: lane i holds 1 << i
-```
+The XOR goes on every word, not only on those that can carry a `toLong`: the call count and the
+bytes of a site then do not depend on its operands, which the emit cost model needs (below), and
+the emitter needs no analysis of where a word came from. `fromLongMasks` (reason `MISCOMPILED`,
+never drawn by the fuzzer or the option matrix) emits the bare `fromLong` for the A/B.
 
-which never reaches `VectorLongToMask`, so the rule cannot apply. At the int lane the word is
-narrowed to an int first (the lane count is at most 16, so the bits fit); `LANE_BITS` is a static
-constant per species of the emitted class, built in its static initialiser, as the range tables
-are.
-
-**Where it applies: decided by measurement, object if wrong.** Two choices:
-
-1. *Everywhere.* The emitted bytes stay one per shape whatever the host, as the shape hashes and
-   `emitted_bytes.json` assume. On AVX2 `fromLong` already lowers to a broadcast, an AND and a
-   compare, so the form should cost nothing there; on AVX-512, where `fromLong` is one `kmov`, it
-   is three instructions for each conversion.
-2. *Only below AVX-512*, keyed on `VarkaEmitOptions.useAVX`. The bytes on an AVX-512 host stay as
-   they are; but `useAVX` is not the host's level by default, on purpose, so the choice would need
-   the host's level in the emitter's defaults, which the shape hashes then have to carry.
-
-The row measures choice 1's cost on the laptop (AVX-512) and on a GitHub-hosted AVX2 runner,
-with the masked-body rows of `VarkaEmitterParityBenchmark` (its results files under
-`sql/catalyst/benchmarks/`, laptop and EPYC 7763 runner) and the boolean and
-narrow choice rows, and takes choice 1 unless the AVX-512 cost is material (over 2% on a masked
-row). The prediction, written before the run: under 1% on AVX2, a few percent on AVX-512's masked
-select rows, nothing on dense rows.
+**Two forms were built and measured before this one, and lost** (section 6): the broadcast form
+`broadcast(word).and(laneBits).compare(NE, 0)`, which never reaches `VectorLongToMask`; and, for
+conditions, the comparison's own mask ANDed with `fromLong` of the operands' validity words, with
+the broadcast form left for the words that carry a `toLong` anyway. Both cost through the emit cost
+model as much as at their sites.
 
 ## 3. Tests
 
-1. **The shrunk cases of row 396 as regression tests**, in a new `VarkaAvx2SelectSuite`: each
-   case's kernel through `VarkaCompiledCheck` under the history that failed, asserting the answers;
-   it runs in its own JVM under `-XX:UseAVX=2` (on any x86 host, AVX2 being a subset), and once
-   without the flag. Before the change it fails, which the row records.
-2. **The emitted bytes hold no `fromLong` of a word in a masked body**: a check over the emitted
-   classes of the coverage rows that the five sites call `maskOf`'s sequence and no `fromLong`
-   with a non-constant argument, so a new site cannot reintroduce the shape.
-3. The catalyst defaults gate, the option matrix over the touched suites, and a runner fuzz night
-   (the nightly at seeds 202610190 to 202610243) passing the compiled test, which row 396's
-   done-when asks for.
+1. **The shrunk cases of row 396 as regression tests**, in `VarkaAvx2SelectSuite`: each case's
+   kernel through `VarkaCompiledCheck`, which must reach the history the case failed in (a case
+   that does not reach it in three tries is cancelled, not passed); the suite runs in its own JVM
+   under `-XX:UseAVX=2` (`@VarkaSuite(jvmFlags)`, which `dev/varka_matrix.sh` honours too). Under
+   `fromLongMasks` the long cases of 24 and 19 October fail, as row 396's report records.
+2. **No emitted kernel hands `fromLong` a word a `toLong` reaches**: `VarkaMaskOfWordSuite` runs an
+   ASM data-flow pass over every coverage row's kernel, at the defaults and under each option
+   matrix configuration, marking each long a `toLong` reaches and clearing the mark at an XOR with
+   `VarkaOpaqueZero.zero`; `emitToDrivingLane`'s lane change, whose lane counts differ, is the one
+   exception. Under `fromLongMasks` it finds the round trip, so it is not vacuous.
+3. The catalyst defaults gate, and a runner fuzz night (the nightly at seeds 202610190 to
+   202610243) passing the compiled test, which row 396's done-when asks for.
 
-`emitted_bytes.json` moves for every shape with a masked select, and is regenerated; `coverage.json`
-and `width_audit.json` do not, unless the width audit's census sees the new calls.
+`emitted_bytes.json`, the emit cost table and its audit, and the width audit are regenerated.
 
 ## 4. Predictions and costs
 
-The emitter change is the five sites and one helper: half a day. The regression suite and the
-byte check: half a day. The measurement on two machines: a day, most of it waiting for the
-runner. No change to what any kernel answers on AVX-512.
+The emitter change is one helper at five sites. The regression suite and the byte check: half a
+day. No change to what any kernel answers on AVX-512.
 
 ## 5. Done when
 
@@ -100,4 +88,23 @@ fuzz night passes the compiled test; the cost is measured on both instruction se
 
 ## 6. Outcome
 
-To be written as the work lands.
+**The broadcast form cost 15-46% on 16 laptop parity rows** (`VarkaEmitterParityBenchmark`, 5
+rounds a side against the merge base `be2ec226e7d`, 24 October 2026), for two reasons the emitted
+bytes showed. The `IfElse` blend kernels behind the "validity writes per body" rows grew by about
+500 bytes. And the null-free calendar rows with `shareChronoPrefix` off, which hold no conversion at
+all, went from two loop methods to four: about seven calls a site made the emit cost model's
+call-site fit worse, its regenerated `SITES_MARGIN` rose from 0.206 to 0.286, and the planner
+closed groups earlier. The base emitter with the regenerated table and base's margins emits base's
+classes, byte for byte.
+
+**The comparison-mask form brought the blend kernels to 2% over base but `SITES_MARGIN` to
+0.439**: a site cost 0 or 2 calls by whether its operands are nullable, and 7 where it fell back to
+the broadcast form, which the per-kind prices cannot see. A cost feature for the fallback brought
+it to 0.347; the rest needed the emitter's analysis in the cost model.
+
+**The opaque XOR restores the cost model**: `SITES_MARGIN` 0.206 and `BYTES_MARGIN` 0.156 against
+base's 0.206 and 0.155, base's list of wide shapes that gain a loop method, and the calendar
+kernels' classes the same size as base's, two loop methods each. The blend kernels are 114 bytes
+over base.
+
+The pair on the opaque form, and the runner pair and fuzz night: to be written.

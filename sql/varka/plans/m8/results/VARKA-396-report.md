@@ -181,7 +181,9 @@ Decided by the owner, 24 October 2026:
    anyway - after a review of every `fromLong` the emitter writes. The emitter's `useAVX` option
    is not the host's level by default, on purpose (shape hashes and the committed emitted bytes
    describe no one machine), so the row decides between the safe form everywhere, measured on
-   AVX-512, and a host-dependent choice for this one lowering.
+   AVX-512, and a host-dependent choice for this one lowering. Row 491 measured that form and
+   two others; it ships `fromLong` of the word XORed with a zero C2 cannot fold, on every host
+   (`VARKA-491.md` 2 and 6).
 2. **The JDK plan (next milestone):** run the reproducer and the Varka case on JDK 27 under AVX2;
    if 27 is fixed, support it at run time (Varka keeps building for 25; release-25 class files
    run on 27) and lift the guard there; on JDK 25 keep the guard and ask OpenJDK for a 25u

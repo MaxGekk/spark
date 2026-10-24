@@ -281,20 +281,6 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
    * `Vector`, not `VectorMask` - which is what a weight counts. The dense body where there is
    * one; a shape that builds only a masked body (an output that can null a lane) is read there.
    */
-  /** The `addIndex` calls of the method `laneCalls` reads: one per word-to-mask conversion. */
-  private def addIndexCalls(bytes: Array[Byte]): Int = {
-    val method = if (VarkaEmitterTestSupport.methodNames(bytes).contains("loopDense0")) {
-      "loopDense0"
-    } else {
-      "loopMasked0"
-    }
-    Seq("IntVector", "LongVector").map { v =>
-      val owner = s"jdk.incubator.vector.$v"
-      VarkaEmitterTestSupport.invocationCount(bytes, method, owner) -
-        VarkaEmitterTestSupport.invocationCount(bytes, method, owner, java.util.List.of("addIndex"))
-    }.sum
-  }
-
   private def laneCalls(bytes: Array[Byte]): Int =
     vectorOps(bytes, if (VarkaEmitterTestSupport.methodNames(bytes).contains("loopDense0")) {
       "loopDense0"
@@ -312,10 +298,6 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     //  - a connective emits only mask calls, so it emits nothing a weight counts, and its weight
     //    is the floor of 1, asserted as such;
     //  - a leaf weighs 0, its load or broadcast being the overhead.
-    // And a masked body that turns a guard's word into a mask does it by broadcast, AND and
-    // compare with the lane bits it builds (VARKA-491): seven lane calls of overhead for each,
-    // counted by its one addIndex, which no node's weight counts, the weights pricing the dense
-    // body.
     // Every record the sealed IR permits needs a row, so a node added to the IR without one fails
     // here, and a lowering change that moves a count fails here naming the node to recount.
     val c = new ColumnRef(0)
@@ -415,11 +397,9 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       // A boolean column reads its data word as bits, not as a vector load.
       val loads = if (root.isInstanceOf[IsNotNull]) 0
         else inputs - all.collect { case b: BoolColumn => b.ordinal }.size
-      val bytes = emitMulti(Seq(root), inputs, lits, options)._2
-      val maskOfWord = 7 * addIndexCalls(bytes)
-      val overhead = loads + lits + store + maskOfWord
+      val overhead = loads + lits + store
       val expected = all.toSeq.map(emits).sum
-      val emitted = laneCalls(bytes) - overhead
+      val emitted = laneCalls(emitMulti(Seq(root), inputs, lits, options)._2) - overhead
       assert(emitted === expected,
         s"${VarkaVectorIR.canonical(root)} emits $emitted lane calls past its loads and store, " +
           s"and its nodes weigh $expected: recount " +
@@ -564,15 +544,14 @@ class VarkaEmitterBudgetSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
         VarkaEmitterTestSupport.methodNames(bytes).asScala.count(isLoop(_, true))
     }
     // Under the defaults the ceilings below 400 do not move the cheap tails: their groups are the
-    // call-site budget's, the prefix recomputed taking seven and materialized four. The make_date
+    // call-site budget's, the prefix recomputed taking eight and materialized five. The make_date
     // rungs are heavy enough that the ceiling decides, down to one a method at 100. The tails took
     // six and four until VARKA-335 refitted the prices on the bitwise grammar, whose larger
-    // sites margin closes their groups earlier (`VARKA-335.md` 9), and eight and five until
-    // VARKA-491's refit, after the masked body's word-to-mask conversion was written out.
+    // sites margin closes their groups earlier (`VARKA-335.md` 9).
     for (((name, ceiling, materialized), loops) <- counts) {
       val want = (name, ceiling, materialized) match {
-        case ("tails", _, false) => 7
-        case ("tails", _, true) => 4
+        case ("tails", _, false) => 8
+        case ("tails", _, true) => 5
         case (_, 400, _) => 10
         case (_, 200, _) => 20
         case _ => 60

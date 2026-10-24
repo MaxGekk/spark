@@ -71,6 +71,7 @@ final class VarkaDescriptors {
   static final ClassDesc SUPPORT =
       ClassDesc.of("org.apache.spark.sql.varka.vector.VarkaVectorSupport");
   static final ClassDesc FUSED_KERNEL = ClassDesc.of(VarkaFusedKernel.class.getName());
+  static final ClassDesc OPAQUE_ZERO = ClassDesc.of(VarkaOpaqueZero.class.getName());
 
   static final ClassDesc LONG_ARRAY = ConstantDescs.CD_long.arrayType();
   static final ClassDesc INT_ARRAY = ConstantDescs.CD_int.arrayType();
@@ -219,10 +220,6 @@ final class VarkaDescriptors {
   static final MethodTypeDesc MASK_BINARY = MethodTypeDesc.of(VECTOR_MASK, VECTOR_MASK);
   static final MethodTypeDesc ANY_TRUE = MethodTypeDesc.of(ConstantDescs.CD_boolean);
   static final MethodTypeDesc MASK_UNARY = MethodTypeDesc.of(VECTOR_MASK);
-  /** {@code VectorShuffle}, which a narrow word-to-mask conversion spreads the word with. */
-  static final ClassDesc VECTOR_SHUFFLE = ClassDesc.of("jdk.incubator.vector.VectorShuffle");
-  /** {@code VectorShuffle V.toShuffle()}. */
-  static final MethodTypeDesc TO_SHUFFLE = MethodTypeDesc.of(VECTOR_SHUFFLE);
 
   // Parameter slots of `run` (instance method: `this` is slot 0, finding 11's lesson).
   static final int P_SRC_DATA = 1;

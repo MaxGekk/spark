@@ -459,12 +459,10 @@ class VarkaEmitterChronoSuite extends VarkaEmitterTestBase {
     def ops(root: VarkaVectorIR, inputs: Int, literals: Int = 0,
         method: String = "loopDense0"): Int =
       laneOps(emitMulti(Seq(root), inputs, literals, VarkaMatrix.base)._2, method)
-    // The masked loops pay seven more since VARKA-491: the guard's word becomes a mask by
-    // broadcast, AND and compare with the lane bits it builds, where fromLong was a mask call.
     val counts = Seq(
       ("make_date ANSI, dense loop", ops(makeDateAnsi, 3), 57),
-      ("make_date ANSI, masked loop", ops(makeDateAnsi, 3, method = "loopMasked0"), 64),
-      ("make_date NULL, masked loop", ops(makeDateNull, 3, method = "loopMasked0"), 64),
+      ("make_date ANSI, masked loop", ops(makeDateAnsi, 3, method = "loopMasked0"), 57),
+      ("make_date NULL, masked loop", ops(makeDateNull, 3, method = "loopMasked0"), 57),
       ("add_months", ops(new AddMonths(col, new LiteralSlot(0)), 1, literals = 1), 112),
       ("dayofyear", ops(new DayOfYear(col), 1), 43))
     val table = counts.map { case (n, got, want) => s"$n=$got (registered $want)" }

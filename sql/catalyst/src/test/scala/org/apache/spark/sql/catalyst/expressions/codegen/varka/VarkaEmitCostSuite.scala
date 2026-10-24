@@ -220,11 +220,8 @@ class VarkaEmitCostSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // measurement never splits a group, and the prediction still closes one a method early - a
     // prediction near the budget erring high, where the greedy close is one erring low. Long 78
     // left the list with the same redraw, and long 84 and 184 joined it; VARKA-335's bitwise
-    // arms redrew the wide shapes and refitted the prices again, and long 78 and 82 were its.
-    // VARKA-491 wrote the masked body's word-to-mask conversion out at each site, which moved
-    // its price and refitted the rest, and long 7, 175 and 184 are its.
-    assert(gained.result() === Seq("wide long 7: 16 -> 17", "wide long 175: 127 -> 128",
-      "wide long 184: 46 -> 48"))
+    // arms redrew the wide shapes and refitted the prices again, and long 78 and 82 are its.
+    assert(gained.result() === Seq("wide long 78: 13 -> 14", "wide long 82: 71 -> 72"))
   }
 
   test("a decline no grouping can avoid is not built again under the weights") {

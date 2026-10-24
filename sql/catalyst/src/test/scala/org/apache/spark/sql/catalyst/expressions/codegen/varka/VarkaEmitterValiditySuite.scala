@@ -778,8 +778,7 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // per-method cost twice, and no rule could be fitted across that.
     //
     // It does not happen. All four rungs emit one masked loop method and the body grows by a
-    // steady ~180 bytes per write (~130 until VARKA-491 wrote each select's word-to-mask
-    // conversion out at the site). So the k=3 step is a property of how the JVM runs these
+    // steady ~130 bytes per write. So the k=3 step is a property of how the JVM runs these
     // bytes, not of which bytes are emitted - which is what points at VARKA-46's mechanism, the
     // caller's node count crossing C2's inlining cutoff so that one more OR call stops being
     // inlined. The word writer has no call at that site to refuse, and its curve is smooth.
@@ -802,7 +801,7 @@ class VarkaEmitterValiditySuite extends VarkaEmitterTestBase with VarkaOwnJvm {
       VarkaEmitterTestSupport.codeSize(
         emitMulti(rung(k), 1, 4, VarkaMatrix.base)._2, "loopMasked0"))
     val steps = bytes.sliding(2).map(p => p(1) - p(0)).toSeq
-    assert(steps.forall(step => step > 150 && step < 210),
+    assert(steps.forall(step => step > 100 && step < 160),
       s"the rungs should grow by one write's worth of bytes each: $bytes (steps $steps)")
   }
 

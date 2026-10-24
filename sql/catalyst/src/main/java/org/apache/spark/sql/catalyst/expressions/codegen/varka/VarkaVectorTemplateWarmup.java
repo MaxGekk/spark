@@ -556,7 +556,7 @@ final class VarkaVectorTemplateWarmup {
    * incubator module is first touched inside {@link #ensure}'s guard when the warm-up runs, and
    * never by the initializer of the class the engine's hooks call.
    */
-  static final class Rounds {
+  private static final class Rounds {
 
     private static final int BYTES = 4096;
 
@@ -671,7 +671,7 @@ final class VarkaVectorTemplateWarmup {
             + IntVector.broadcast(s, 5).lane(0) + IntVector.zero(s).lane(0)
             + a.add(4, m).lane(0) + a.sub(4).lane(0) + a.min(4).lane(0) + a.max(4).lane(0)
             + a.or(4).lane(0) + a.lanewise(VectorOperators.BIT_COUNT).lane(0)
-            + masks(s, m, tail, acc) + intMask(s, acc).toLong();
+            + masks(s, m, tail, acc);
         a.intoMemorySegment(seg, 0, ByteOrder.LITTLE_ENDIAN);
         a.intoMemorySegment(seg, 64, ByteOrder.LITTLE_ENDIAN, tail);
         acc += IntVector.fromMemorySegment(s, seg, 0, ByteOrder.LITTLE_ENDIAN).lane(0)
@@ -708,8 +708,7 @@ final class VarkaVectorTemplateWarmup {
             + LongVector.broadcast(s, 5L).lane(0) + LongVector.zero(s).lane(0)
             + a.and(1L).lane(0) + a.mul(4L).lane(0) + a.or(4L).lane(0)
             + a.lanewise(VectorOperators.NEG, m).lane(0)
-            + a.lanewise(VectorOperators.BIT_COUNT).lane(0) + masks(s, m, tail, acc)
-            + longMask(s, acc).toLong();
+            + a.lanewise(VectorOperators.BIT_COUNT).lane(0) + masks(s, m, tail, acc);
         a.intoMemorySegment(seg, 128, ByteOrder.LITTLE_ENDIAN);
         a.intoMemorySegment(seg, 256, ByteOrder.LITTLE_ENDIAN, tail);
         acc += LongVector.fromMemorySegment(s, seg, 128, ByteOrder.LITTLE_ENDIAN).lane(0)
@@ -761,8 +760,8 @@ final class VarkaVectorTemplateWarmup {
             (IntVector) c.convertShape(VectorOperators.B2I, IntVector.SPECIES_PREFERRED, 0);
         // The narrow arithmetic (VARKA-330): the lane's add, subtract and multiply, the lanewise
         // NEG and ABS the emitter negates and takes abs with, the saturating operators the ANSI
-        // overflow check compares against, and the mask calls a range test makes - fromLong of
-        // a constant, and byteMask of a word, the masked body's (VARKA-491).
+        // overflow check compares against, and the mask calls a range test makes - fromLong is
+        // the masked body's guard collect.
         ByteVector sum = a.add(b);
         ByteVector satAdd = a.lanewise(VectorOperators.SADD, b);
         VectorMask<Byte> inRange = sum.compare(VectorOperators.EQ, satAdd);
@@ -773,8 +772,6 @@ final class VarkaVectorTemplateWarmup {
             + a.lanewise(VectorOperators.NEG).lane(1)
             + a.lanewise(VectorOperators.ABS).lane(1)
             + VectorMask.fromLong(s, 0x5L).and(inRange).toLong()
-            + byteMaskSpread(s, acc).and(inRange).toLong()
-            + (s.length() <= Byte.SIZE ? byteMask(s, acc).toLong() : 0)
             + a.lanewise(VectorOperators.SSUB, b).lane(0)
             + a.compare(VectorOperators.GT, (byte) 0).toLong()
             + (inRange.anyTrue() ? 1 : 0) + inRange.and(tail).toLong();
@@ -807,8 +804,6 @@ final class VarkaVectorTemplateWarmup {
             + a.lanewise(VectorOperators.NEG).lane(1)
             + a.lanewise(VectorOperators.ABS).lane(1)
             + VectorMask.fromLong(s, 0x5L).and(inRange).toLong()
-            + shortMaskSpread(s, acc).and(inRange).toLong()
-            + (s.length() <= Short.SIZE ? shortMask(s, acc).toLong() : 0)
             + a.lanewise(VectorOperators.SSUB, b).lane(0)
             + a.compare(VectorOperators.GT, (short) 0).toLong()
             + (inRange.anyTrue() ? 1 : 0) + inRange.and(tail).toLong();
@@ -855,9 +850,7 @@ final class VarkaVectorTemplateWarmup {
         acc += a.blend(b, m).lane(0) + a.lanewise(VectorOperators.SADD, b).lane(0)
             + a.lanewise(VectorOperators.NEG).lane(0) + a.lanewise(VectorOperators.ABS).lane(0)
             + a.compare(VectorOperators.GT, (byte) 0).toLong()
-            + m.and(tail).toLong() + m.or(tail).toLong() + m.not().toLong()
-            + byteMaskSpread(w, acc).toLong()
-            + (w.length() <= Byte.SIZE ? byteMask(w, acc).toLong() : 0);
+            + m.and(tail).toLong() + m.or(tail).toLong() + m.not().toLong();
         for (int part = 0; part < parts; part++) {
           IntVector widened = (IntVector) a.convertShape(VectorOperators.B2I, is, part);
           ByteVector back = (ByteVector) widened.convertShape(VectorOperators.I2B, w, 0);
@@ -886,9 +879,7 @@ final class VarkaVectorTemplateWarmup {
         acc += a.blend(b, m).lane(0) + a.lanewise(VectorOperators.SADD, b).lane(0)
             + a.lanewise(VectorOperators.NEG).lane(0) + a.lanewise(VectorOperators.ABS).lane(0)
             + a.compare(VectorOperators.GT, (short) 0).toLong()
-            + m.and(tail).toLong() + m.or(tail).toLong() + m.not().toLong()
-            + shortMaskSpread(w, acc).toLong()
-            + (w.length() <= Short.SIZE ? shortMask(w, acc).toLong() : 0);
+            + m.and(tail).toLong() + m.or(tail).toLong() + m.not().toLong();
         for (int part = 0; part < parts; part++) {
           IntVector widened = (IntVector) a.convertShape(VectorOperators.S2I, is, part);
           ShortVector back = (ShortVector) widened.convertShape(VectorOperators.I2S, w, 0);
@@ -917,91 +908,6 @@ final class VarkaVectorTemplateWarmup {
             + l.reinterpretAsDoubles().reinterpretAsLongs().lane(0);
       }
       return acc;
-    }
-
-    // -------------------------------------------------------------------------------------------
-    // A word's bits as a mask, without VectorMask.fromLong (VARKA-491)
-    // -------------------------------------------------------------------------------------------
-
-    // JDK 25's C2 miscompiles VectorMask.fromLong(s, m.toLong()) on x86 without AVX-512 mask
-    // registers (VARKA-396): VectorLongToMaskNode::Ideal folds the round trip into a cast that
-    // keeps the mask encoding where canonical booleans are needed, and a blend by the result takes
-    // its other input on every true lane. A masked body's known-true word is that round trip when
-    // its columns have no nulls, so the emitter builds those masks as these methods do: broadcast
-    // the word, AND it with each lane's bit, compare against zero; a byte or short species with
-    // more lanes than its element has bits first spreads the word's bytes or shorts across the
-    // lanes, through a long broadcast reinterpreted and rearranged (the Spread forms). The emitter
-    // writes the calls out at each site (VarkaVectorWalk.emitMaskOfWord, which says why), and the
-    // two must stay the same sequence: these are its readable form, the one VarkaMaskFormSuite
-    // checks, and the warm-up's calls of it, which must be written here for the reach suite to
-    // count them.
-
-    /** {@code word}'s low {@code s.length()} bits as a mask of the long species {@code s}. */
-    static VectorMask<Long> longMask(VectorSpecies<Long> s, long word) {
-      LongVector bits = LongVector.broadcast(s, 1L)
-          .lanewise(VectorOperators.LSHL, LongVector.zero(s).addIndex(1));
-      return LongVector.broadcast(s, word).and(bits).compare(VectorOperators.NE, 0L);
-    }
-
-    /** {@code word}'s low {@code s.length()} bits (at most 16) as a mask of the int species. */
-    static VectorMask<Integer> intMask(VectorSpecies<Integer> s, long word) {
-      IntVector bits = IntVector.broadcast(s, 1)
-          .lanewise(VectorOperators.LSHL, IntVector.zero(s).addIndex(1));
-      return IntVector.broadcast(s, (int) word).and(bits).compare(VectorOperators.NE, 0);
-    }
-
-    /**
-     * {@code word}'s low {@code s.length()} bits as a mask of the short species {@code s}, which
-     * has at most 16 lanes. The emitter writes this form where the class bakes such a width.
-     */
-    static VectorMask<Short> shortMask(VectorSpecies<Short> s, long word) {
-      ShortVector lane = ShortVector.zero(s).addIndex(1);
-      ShortVector bits = ShortVector.broadcast(s, (short) 1).lanewise(VectorOperators.LSHL, lane);
-      return ShortVector.broadcast(s, (short) word).and(bits).compare(VectorOperators.NE, 0);
-    }
-
-    /**
-     * {@link #shortMask} at any lane count: lane j reads short j / 16 of the word, bit j % 16. The
-     * emitter writes this form where the width is past 16 lanes or not baked.
-     */
-    static VectorMask<Short> shortMaskSpread(VectorSpecies<Short> s, long word) {
-      ShortVector lane = ShortVector.zero(s).addIndex(1);
-      ShortVector chunks = LongVector.broadcast(longSpecies(s.vectorShape()), word)
-          .reinterpretAsShorts();
-      ShortVector spread = chunks.rearrange(lane.lanewise(VectorOperators.LSHR, 4).toShuffle());
-      ShortVector bits = ShortVector.broadcast(s, (short) 1)
-          .lanewise(VectorOperators.LSHL, lane.lanewise(VectorOperators.AND, (short) 15));
-      return spread.and(bits).compare(VectorOperators.NE, 0);
-    }
-
-    /**
-     * {@code word}'s low {@code s.length()} bits as a mask of the byte species {@code s}, which
-     * has at most 8 lanes. The emitter writes this form where the class bakes such a width.
-     */
-    static VectorMask<Byte> byteMask(VectorSpecies<Byte> s, long word) {
-      ByteVector lane = ByteVector.zero(s).addIndex(1);
-      ByteVector bits = ByteVector.broadcast(s, (byte) 1).lanewise(VectorOperators.LSHL, lane);
-      return ByteVector.broadcast(s, (byte) word).and(bits).compare(VectorOperators.NE, 0);
-    }
-
-    /**
-     * {@link #byteMask} at any lane count: lane j reads byte j / 8 of the word, bit j % 8. The
-     * emitter writes this form where the width is past 8 lanes or not baked.
-     */
-    static VectorMask<Byte> byteMaskSpread(VectorSpecies<Byte> s, long word) {
-      ByteVector lane = ByteVector.zero(s).addIndex(1);
-      ByteVector chunks = LongVector.broadcast(longSpecies(s.vectorShape()), word)
-          .reinterpretAsBytes();
-      ByteVector spread = chunks.rearrange(lane.lanewise(VectorOperators.LSHR, 3).toShuffle());
-      ByteVector bits = ByteVector.broadcast(s, (byte) 1)
-          .lanewise(VectorOperators.LSHL, lane.lanewise(VectorOperators.AND, (byte) 7));
-      return spread.and(bits).compare(VectorOperators.NE, 0);
-    }
-
-    /** The long species of {@code shape}, which a narrow species' word is broadcast through. */
-    private static VectorSpecies<Long> longSpecies(VectorShape shape) {
-      return LongVector.SPECIES_MAX.vectorShape() == shape ? LongVector.SPECIES_MAX
-          : VectorSpecies.of(long.class, shape);
     }
 
     /**
