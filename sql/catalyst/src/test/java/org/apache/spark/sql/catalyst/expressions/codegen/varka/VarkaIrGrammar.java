@@ -38,6 +38,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Com
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondConst;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondIf;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondValue;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DateDiff;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfMonth;
@@ -306,6 +307,8 @@ public final class VarkaIrGrammar {
       // A mask or a shift reaches any int; the count is at most 64.
       case BitOp n -> new Bounds(INT_LANE_BOUND, guard(n.left(), n.right()));
       case BitCount n -> new Bounds(Long.SIZE, guard(n.child()));
+      // A condition as a value is 0 or 1; its condition's operands may hold producers.
+      case CondValue n -> new Bounds(1L, guard(n.cond()));
       // The dynamic form moves the date down like the literal one, whatever the level; the
       // level column contributes no day magnitude of its own, only whatever guarded producer
       // might sit under it, which `guard` picks up.

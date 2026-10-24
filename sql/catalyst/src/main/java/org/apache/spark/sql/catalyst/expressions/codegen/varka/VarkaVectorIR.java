@@ -58,8 +58,9 @@ import java.util.function.ToIntFunction;
 public sealed interface VarkaVectorIR
     permits VarkaVectorIR.ColumnRef, VarkaVectorIR.LiteralSlot,
             VarkaVectorIR.AddDays, VarkaVectorIR.SubDays, VarkaVectorIR.DateDiff,
-            VarkaVectorIR.IfElse, VarkaVectorIR.Greatest, VarkaVectorIR.Least,
-            VarkaVectorIR.DayOfWeek, VarkaVectorIR.WeekDay, VarkaVectorIR.DayOfWeekIso,
+            VarkaVectorIR.IfElse, VarkaVectorIR.CondValue, VarkaVectorIR.Greatest,
+            VarkaVectorIR.Least, VarkaVectorIR.DayOfWeek, VarkaVectorIR.WeekDay,
+            VarkaVectorIR.DayOfWeekIso,
             VarkaVectorIR.NextDay, VarkaVectorIR.ThursdayOf, VarkaVectorIR.Chrono,
             VarkaVectorIR.AddMonths, VarkaVectorIR.MakeDate,
             VarkaVectorIR.IntArith, VarkaVectorIR.IntNeg, VarkaVectorIR.ConstDivide,
@@ -117,6 +118,7 @@ public sealed interface VarkaVectorIR
       case Greatest n -> n.left().laneType();
       case Least n -> n.left().laneType();
       case IfElse n -> n.thenNode().laneType();
+      case CondValue n -> n.lane();
       case Compare n -> n.left().laneType();
       case NullSafeEqual n -> n.left().laneType();
       case BoolColumn n -> n.lane();
@@ -169,7 +171,8 @@ public sealed interface VarkaVectorIR
       case ColumnRef c -> c.ordinal();
       case BoolColumn b -> b.ordinal();
       case LiteralSlot _, IntArith _, IntNeg _, ConstDivide _, BoundedDivide _, BitOp _,
-          BitCount _, Greatest _, Least _, IfElse _, Compare _, NullSafeEqual _, CondConst _,
+          BitCount _, Greatest _, Least _, IfElse _, CondValue _, Compare _, NullSafeEqual _,
+          CondConst _,
           BoolCompare _, CondIf _, BoolNullSafeEq _, And _, Or _, Not _, IsNotNull _,
           InRanges _, AddDays _, SubDays _, DateDiff _, GuardedDay _, GuardedRange _, WidenLane _,
           NarrowLane _, DayOfWeek _, WeekDay _, DayOfWeekIso _, NextDay _, ThursdayOf _,
@@ -324,9 +327,9 @@ public sealed interface VarkaVectorIR
       case LiteralSlot _, BoolColumn _, CondConst _ -> { }
       case WidenLane _, NarrowLane _, AddDays _, SubDays _, AddMonths _, MakeDate _,
           IntArith _, IntNeg _, GuardedDay _, GuardedRange _, NextDay _, TruncDateDynamic _,
-          DateDiff _, Greatest _, Least _, IfElse _, DayOfWeek _, WeekDay _, DayOfWeekIso _,
-          ThursdayOf _, Year _, Month _, DayOfMonth _, Quarter _, DayOfYear _, LastDay _,
-          TruncDate _, WeekOfYear _, ConstDivide _, BoundedDivide _, BitOp _, BitCount _,
+          DateDiff _, Greatest _, Least _, IfElse _, CondValue _, DayOfWeek _, WeekDay _,
+          DayOfWeekIso _, ThursdayOf _, Year _, Month _, DayOfMonth _, Quarter _, DayOfYear _,
+          LastDay _, TruncDate _, WeekOfYear _, ConstDivide _, BoundedDivide _, BitOp _, BitCount _,
           Compare _, NullSafeEqual _, BoolCompare _, CondIf _, BoolNullSafeEq _, And _, Or _,
           Not _, InRanges _ -> {
         for (VarkaVectorIR child : childrenOf(node)) {
@@ -368,7 +371,8 @@ public sealed interface VarkaVectorIR
       case NarrowLane n -> n.target().isNarrow() || needsNarrowSpecies(n.child(), seen);
       case WidenLane _, AddDays _, SubDays _, AddMonths _, MakeDate _, IntArith _, IntNeg _,
           GuardedDay _, GuardedRange _, NextDay _, TruncDateDynamic _, DateDiff _, Greatest _,
-          Least _, IfElse _, DayOfWeek _, WeekDay _, DayOfWeekIso _, ThursdayOf _, Year _,
+          Least _, IfElse _, CondValue _, DayOfWeek _, WeekDay _, DayOfWeekIso _, ThursdayOf _,
+          Year _,
           Month _, DayOfMonth _, Quarter _, DayOfYear _, LastDay _, TruncDate _, WeekOfYear _,
           ConstDivide _, BoundedDivide _, BitOp _, BitCount _, Compare _, NullSafeEqual _,
           BoolCompare _, CondIf _, BoolNullSafeEq _, And _, Or _, Not _, InRanges _ -> {
@@ -1266,6 +1270,22 @@ public sealed interface VarkaVectorIR
   }
 
   /**
+   * A condition as a value, Spark's {@code CAST(c AS INT)} (or {@code BIGINT} on the long lane):
+   * 1 where {@code cond} is known true, 0 where it is known false, and null where it is unknown,
+   * so its validity word is {@code kt | kf}. Not {@code IF(c, 1, 0)}, which takes the ELSE arm
+   * under an unknown condition and answers 0. The emitted form is a broadcast 0 with 1 added
+   * under the known-true mask (`VARKA-460.md` 5).
+   */
+  record CondValue(Cond cond, LaneType lane) implements VarkaVectorIR {
+    public CondValue {
+      if (cond.laneType() != lane) {
+        throw VarkaErrors.illegalArgument(
+            "CondValue at " + lane + " over a condition at " + cond.laneType());
+      }
+    }
+  }
+
+  /**
    * Spark's null-skipping {@code greatest} over two operands: null only where both
    * inputs are null; where one side is null the other's value is taken, so the lane math is a
    * substitute-then-max.
@@ -1557,6 +1577,7 @@ public sealed interface VarkaVectorIR
       case InRanges n -> "(inRanges " + canonical(n.child()) + " " + n.renderBounds() + ")";
       case IfElse n -> "(if " + canonical(n.cond()) + " " + canonical(n.thenNode()) + " "
           + canonical(n.elseNode()) + ")";
+      case CondValue n -> "(condValue " + canonical(n.cond()) + ")";
       case Greatest n -> "(greatest " + canonical(n.left()) + " " + canonical(n.right()) + ")";
       case Least n -> "(least " + canonical(n.left()) + " " + canonical(n.right()) + ")";
       case DayOfWeek n -> "(dayOfWeek " + canonical(n.days()) + ")";
@@ -1652,6 +1673,7 @@ public sealed interface VarkaVectorIR
           + " ranges)";
       case IfElse n -> "(if " + lineOf.applyAsInt(n.cond()) + " "
           + lineOf.applyAsInt(n.thenNode()) + " " + lineOf.applyAsInt(n.elseNode()) + ")";
+      case CondValue n -> "(condValue " + lineOf.applyAsInt(n.cond()) + ")";
       case Greatest n -> "(greatest " + lineOf.applyAsInt(n.left()) + " "
           + lineOf.applyAsInt(n.right()) + ")";
       case Least n -> "(least " + lineOf.applyAsInt(n.left()) + " "
@@ -1736,6 +1758,7 @@ public sealed interface VarkaVectorIR
       case Greatest n -> new VarkaVectorIR[] {n.left(), n.right()};
       case Least n -> new VarkaVectorIR[] {n.left(), n.right()};
       case IfElse n -> new VarkaVectorIR[] {n.cond(), n.thenNode(), n.elseNode()};
+      case CondValue n -> new VarkaVectorIR[] {n.cond()};
       case Compare n -> new VarkaVectorIR[] {n.left(), n.right()};
       case NullSafeEqual n -> new VarkaVectorIR[] {n.left(), n.right()};
       case BoolColumn n -> new VarkaVectorIR[0];
@@ -1805,6 +1828,7 @@ public sealed interface VarkaVectorIR
       case Greatest n -> new Greatest(children[0], children[1]);
       case Least n -> new Least(children[0], children[1]);
       case IfElse n -> new IfElse(asCond(children[0]), children[1], children[2]);
+      case CondValue n -> new CondValue(asCond(children[0]), n.lane());
       case Compare n -> new Compare(n.op(), children[0], children[1]);
       case NullSafeEqual n -> new NullSafeEqual(children[0], children[1]);
       case BoolColumn n -> n;

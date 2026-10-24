@@ -46,6 +46,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Com
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondConst;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondIf;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondValue;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DateDiff;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfMonth;
@@ -683,6 +684,7 @@ final class Analysis {
         case Greatest n -> { }
         case Least n -> { }
         case IfElse n -> { }
+        case CondValue n -> { }
         case DayOfWeek n -> { }
         case WeekDay n -> { }
         case DayOfWeekIso n -> { }
@@ -794,7 +796,7 @@ final class Analysis {
           DayOfYear _, LastDay _, TruncDate _, WeekOfYear _, ConstDivide _, BoundedDivide _,
           BitOp _, BitCount _, Compare _, NullSafeEqual _, BoolColumn _, BoolCompare _,
           CondIf _, BoolNullSafeEq _, CondConst _, And _, Or _, Not _, IsNotNull _,
-          InRanges _ -> false;
+          InRanges _, CondValue _ -> false;
     };
   }
 
@@ -1188,6 +1190,9 @@ final class Analysis {
       case WeekOfYear n -> pureWord.get(n.days());
       // A blend by the known-true mask, and a word ANDed with a computed validity test.
       case IfElse n -> null;
+      // The condition's known words, kt | kf: a function of the condition's operands' values,
+      // not of their bitmaps alone.
+      case CondValue n -> null;
       case MakeDate n -> null;
       default -> null;
     };
@@ -1416,6 +1421,10 @@ final class Analysis {
       case Greatest n -> analyzeOp(node, true, n.left(), n.right());
       case Least n -> analyzeOp(node, true, n.left(), n.right());
       case IfElse n -> analyzeOp(node, true, n.cond(), n.thenNode(), n.elseNode());
+      // Null exactly where its condition is unknown. It adds no known answer of its own from a
+      // null input (a condition that has one, a null-safe equality, carries the flag already),
+      // and no null from valid inputs (a condition that makes one, CondConst(NULL), sets it).
+      case CondValue n -> analyzeOp(node, false, n.cond());
       case Compare n -> analyzeOp(node, false, n.left(), n.right());
       // A known answer from a null input (two nulls are equal), the flag IfElse and the picks
       // set; shortcutApplies excludes a condition root, so no shortcut changes.
@@ -1489,7 +1498,7 @@ final class Analysis {
       if (child instanceof Cond && !(node instanceof IfElse) && !(node instanceof And)
           && !(node instanceof Or) && !(node instanceof Not) && !(node instanceof IsNotNull)
           && !(node instanceof BoolCompare) && !(node instanceof CondIf)
-          && !(node instanceof BoolNullSafeEq)) {
+          && !(node instanceof BoolNullSafeEq) && !(node instanceof CondValue)) {
         requireValue(child, "child of " + node.getClass().getSimpleName());
       }
       operands.add(child);

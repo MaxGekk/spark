@@ -41,6 +41,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Com
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondConst;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondIf;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CondValue;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DateDiff;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfMonth;
@@ -433,6 +434,30 @@ final class VarkaVectorWalk {
           loadWord(cb, s, s.wordRef.get(n.elseNode()));
           cb.land();
           cb.lor();
+          storeWord(cb, s, s.wordRef.get(node));
+        }
+      }
+      case CondValue n -> {
+        emitCond(cb, n.cond(), dense, analysis, s, computed);
+        line(cb, analysis, node);
+        // zero.add(1, kT): 1 where the condition is known true, 0 elsewhere. An unknown lane
+        // holds 0 and is null by the word below, so only the known-false lanes read the 0.
+        cb.aload(s.species(lane));
+        lane.pushScalar(cb, 0);
+        cb.invokestatic(lane.vector, "broadcast", lane.broadcast);
+        lane.pushScalar(cb, 1);
+        if (dense) {
+          cb.aload(s.condMask.get(n.cond()));
+        } else {
+          cb.aload(s.species(lane));
+          cb.lload(s.kt.get(n.cond()));
+          cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+        }
+        cb.invokevirtual(lane.vector, "add", lane.lanewiseVIMasked);
+        if (!dense && s.ownWord.contains(node)) {
+          // valid = kT | kF: known either way. The dense body has no unknown lane (a condition
+          // that makes one from valid inputs keeps the kernel masked-only).
+          emitOr(cb, s.kt.get(n.cond()), s.kf.get(n.cond()));
           storeWord(cb, s, s.wordRef.get(node));
         }
       }

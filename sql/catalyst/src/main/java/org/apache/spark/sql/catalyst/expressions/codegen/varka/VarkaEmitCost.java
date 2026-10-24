@@ -121,6 +121,7 @@ final class VarkaEmitCost {
       case Compare n -> name + '/' + n.op() + '/' + n.laneType();
       case VarkaVectorIR.BoolColumn n -> name + '/' + n.lane();
       case VarkaVectorIR.CondConst n -> name + '/' + n.lane();
+      case VarkaVectorIR.CondValue n -> name + '/' + n.lane();
       case VarkaVectorIR.BoolCompare n -> name + '/' + n.op() + '/' + n.laneType();
       case VarkaVectorIR.IsNotNull n when n.overCondition() ->
           name + "/cond/" + n.laneType();

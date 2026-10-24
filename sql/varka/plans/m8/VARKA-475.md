@@ -20,7 +20,7 @@ The target space, by the standard's categories:
 | :--- | :--- | :--- | :--- |
 | Exact numeric | BYTE, SHORT, INT, LONG, DECIMAL(p,s) | two lanes; narrow and decimal in flight | m8 |
 | Approximate numeric | FLOAT, DOUBLE | none | m8 |
-| Boolean | BOOLEAN | conditions only; `CondValue` is row 460 | m8 |
+| Boolean | BOOLEAN | conditions; values through `CondValue` (row 460), no compiler arm yet | m8 |
 | Datetime | DATE, TIME, TIMESTAMP, TIMESTAMP_NTZ | DATE, TIME | NTZ in m8; LTZ out by decision |
 | Interval | YEAR-MONTH, DAY-TIME | both | done |
 | Character, binary | STRING, CHAR, VARCHAR, BINARY | none | out of m8; m9 item 3 |

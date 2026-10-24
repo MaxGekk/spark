@@ -69,6 +69,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     new BoolCompare(CompareOp.LE, new BoolColumn(0), new BoolColumn(1)),
     new CondIf(new BoolColumn(0), new BoolColumn(1), new BoolColumn(2)),
     new BoolNullSafeEq(new BoolColumn(0), new BoolColumn(1)),
+    new CondValue(new BoolColumn(0), LaneType.INT),
     new And(new IsNotNull(intCol), new IsNotNull(intCol)),
     new Or(new IsNotNull(intCol), new IsNotNull(intCol)),
     new Not(new IsNotNull(intCol)),
@@ -98,7 +99,8 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     classOf[IntArith], classOf[IntNeg], classOf[Greatest], classOf[Least], classOf[IfElse],
     classOf[Compare], classOf[NullSafeEqual], classOf[And], classOf[Or], classOf[Not],
     classOf[IsNotNull], classOf[BoolCompare], classOf[CondIf], classOf[BoolNullSafeEq],
-    classOf[ConstDivide], classOf[GuardedRange], classOf[BitOp], classOf[BitCount])
+    classOf[ConstDivide], classOf[GuardedRange], classOf[BitOp], classOf[BitCount],
+    classOf[CondValue])
 
   /** Every concrete node type the sealed hierarchy permits, nested interfaces expanded. */
   private def concreteNodeTypes(root: Class[_]): Set[Class[_]] =
@@ -376,6 +378,7 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
           new BoolColumn(0, lane))
         case "BoolNullSafeEq" => new BoolNullSafeEq(new BoolColumn(0, lane),
           new BoolColumn(1, lane))
+        case "CondValue" => new CondValue(new BoolColumn(0, lane), lane)
         case "And" => new And(new IsNotNull(c), new IsNotNull(c1))
         case "Or" => new Or(new IsNotNull(c), new IsNotNull(c1))
         case "Not" => new Not(new IsNotNull(c))
@@ -436,11 +439,12 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     // is refused by its constructor, which is why it never reaches the emitter.
     assert(atLong === Set("ColumnRef", "LiteralSlot", "IntArith", "IntNeg", "Greatest", "Least",
       "Compare", "NullSafeEqual", "And", "Or", "Not", "IsNotNull", "IfElse", "ConstDivide",
-      "BoolColumn", "CondConst", "BoolCompare", "CondIf", "BoolNullSafeEq",
+      "BoolColumn", "CondConst", "BoolCompare", "CondIf", "BoolNullSafeEq", "CondValue",
       "GuardedRange", "NarrowLane", "WidenLane", "BitOp", "BitCount"),
       "the long lane serves the lane-generic subset, VARKA-88's division, VARKA-102's guard, " +
-        "the two conversions, which build over the other lane's child whatever the row, and " +
-        "VARKA-335's bitwise operations, and VARKA-336's null-safe equality")
+        "the two conversions, which build over the other lane's child whatever the row, " +
+        "VARKA-335's bitwise operations, VARKA-336's null-safe equality and VARKA-460's " +
+        "condition as a value")
   }
 
   test("a narrowing is an int over a long child, and a kernel that holds one is driven at the " +

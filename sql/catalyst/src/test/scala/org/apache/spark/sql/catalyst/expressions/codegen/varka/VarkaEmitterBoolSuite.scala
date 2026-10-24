@@ -22,7 +22,7 @@ import org.apache.spark.sql.catalyst.expressions
 import org.apache.spark.sql.catalyst.expressions.{Expression, Literal}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaReference.{Truth => Tri}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
-import org.apache.spark.sql.types.BooleanType
+import org.apache.spark.sql.types.{BooleanType, IntegerType, LongType}
 
 /**
  * A BOOLEAN column as a condition (the boolean leaf, constants, comparisons, choice and null-safe
@@ -52,12 +52,12 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
   private def isNullState(state: Int): Boolean = state >= 2
 
   /**
-   * Runs `roots` (conditions, so selection outputs) over `k` boolean leaves, one row per
-   * combination of `states`, rotated by every offset in `offsets`, at each length, and compares
-   * each row's selection bit with the reference.
+   * Runs `roots` over `k` boolean leaves, one row per combination of `states`, rotated by every
+   * offset in `offsets`, at each length, and compares each row with the reference: a condition's
+   * selection bit, or a value's validity bit and, where valid, its value at the root's lane.
    */
   private def check(
-      roots: Seq[Cond],
+      roots: Seq[VarkaVectorIR],
       k: Int,
       states: Seq[Int],
       lengths: Seq[Int],
@@ -94,29 +94,53 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
             if (isNullState(s)) nullCounts(c) += 1
           }
           for (fill <- VarkaKernelCheck.bothFills) {
+            // Room for a long value a row; a condition root's data address is 0L by the kernel
+            // contract, so a write through it faults.
             val outs = roots.map(_ =>
-              makeOutput(arena, length, outputValidityBytes(options, length), fill))
+              makeOutput(arena, 2 * length, outputValidityBytes(options, length), fill))
+            val dstData = roots.zip(outs).map { case (root, out) =>
+              if (root.isInstanceOf[Cond]) 0L else out._1.address()
+            }.toArray
             val scratch = VarkaEmitterTestSupport.scratch(kernel, length)
             // A kernel holding a long-lane root is a 64-bit-lane kernel, which has its own entry.
             val status = if (roots.exists(r =>
               VarkaVectorIR.emissionLane(r, options) == LaneType.LONG)) {
               kernel.run(data.map(_.address()), valid.map(_.address()), nullCounts,
-                roots.map(_ => 0L).toArray, outs.map(_._2.address()).toArray, Array.empty[Int],
+                dstData, outs.map(_._2.address()).toArray, Array.empty[Int],
                 Array.empty[Long], length, scratch)
             } else {
               kernel.run(data.map(_.address()), valid.map(_.address()), nullCounts,
-                roots.map(_ => 0L).toArray, outs.map(_._2.address()).toArray, Array.empty[Int],
+                dstData, outs.map(_._2.address()).toArray, Array.empty[Int],
                 length, scratch)
             }
             assert(status === 0, s"$ctx: declined (length $length, offset $off, $fill)")
             for (row <- 0 until length; (root, o) <- roots.zipWithIndex) {
               val ints = Array.tabulate(k)(c => if (dataBit(stateOf(c, row))) 1 else 0)
               val nulls = Array.tabulate(k)(c => isNullState(stateOf(c, row)))
-              val want = VarkaReference.cond(root, ints, nulls, Array.empty[Int]).isTrue
-              val got = (outs(o)._2.get(ValueLayout.JAVA_BYTE, row / 8L) & (1 << (row % 8))) != 0
-              assert(got === want, s"$ctx: root $o ${VarkaVectorIR.canonical(root)} length " +
+              val bit = (outs(o)._2.get(ValueLayout.JAVA_BYTE, row / 8L) & (1 << (row % 8))) != 0
+              def where: String = s"$ctx: root $o ${VarkaVectorIR.canonical(root)} length " +
                 s"$length offset $off row $row states " +
-                s"${(0 until k).map(c => stateOf(c, row)).mkString(",")} $fill (of $combos)")
+                s"${(0 until k).map(c => stateOf(c, row)).mkString(",")} $fill (of $combos)"
+              root match {
+                case c: Cond =>
+                  val want = VarkaReference.cond(c, ints, nulls, Array.empty[Int]).isTrue
+                  assert(bit === want, where)
+                case v if v.laneType() == LaneType.LONG =>
+                  val want = VarkaReference.longValue(v, ints.map(_.toLong), nulls,
+                    Array.empty[Long])
+                  assert(bit === want.isPresent, s"$where: validity (want $want)")
+                  if (want.isPresent) {
+                    assert(outs(o)._1.get(ValueLayout.JAVA_LONG, row * 8L) === want.getAsLong,
+                      s"$where: value")
+                  }
+                case v =>
+                  val want = VarkaReference.value(v, ints, nulls, Array.empty[Int])
+                  assert(bit === want.isPresent, s"$where: validity (want $want)")
+                  if (want.isPresent) {
+                    assert(outs(o)._1.get(ValueLayout.JAVA_INT, row * 4L) === want.getAsInt,
+                      s"$where: value")
+                  }
+              }
             }
           }
         } finally {
@@ -131,8 +155,8 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
   private val tailLengths = Seq(1, 7, 8, 9, 17, 63, 64, 65)
 
   /** The sweep for `k` leaves: a length that holds every combination and short tails, rotated. */
-  private def sweep(roots: Seq[Cond], k: Int, ctx: String, widthSet: Seq[(String, VarkaEmitOptions)]
-      = widths): Unit = {
+  private def sweep(roots: Seq[VarkaVectorIR], k: Int, ctx: String,
+      widthSet: Seq[(String, VarkaEmitOptions)] = widths): Unit = {
     val full = Math.pow(allStates.size, k).toInt + 13
     for ((w, options) <- widthSet) {
       check(roots, k, allStates, tailLengths :+ full, 0 until 16, options, s"$ctx at $w")
@@ -253,5 +277,102 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
   test("four leaves, every combination, for the connectives and a comparison tree") {
     val root = new Or(new And(b0, new Not(b1)), new BoolCompare(CompareOp.GE, b2, b3))
     sweep(Seq(root), 4, "four leaves", Seq(widths.last))
+  }
+
+  // The condition as a value (VARKA-460): CondValue is CAST(c AS INT), or BIGINT on the long
+  // lane - 1, 0, or null where the condition is unknown, which IF(c, 1, 0) is not.
+
+  /** `node` with every boolean leaf on the long lane, and so every condition over them. */
+  private def onLong(node: VarkaVectorIR): VarkaVectorIR = node match {
+    case b: BoolColumn => new BoolColumn(b.ordinal(), LaneType.LONG)
+    case n => VarkaVectorIR.withChildren(n, VarkaVectorIR.childrenOf(n).map(onLong): _*)
+  }
+
+  test("the reference answers a condition as a value as Spark's cast does, for every state of " +
+      "each operand") {
+    val tri = Seq[Option[Boolean]](Some(true), Some(false), None)
+    def leaf(v: Option[Boolean]): (Int, Boolean) = (if (v.contains(true)) 1 else 0, v.isEmpty)
+    def want(e: Expression): Option[Long] = Option(e.eval(null)).map {
+      case i: java.lang.Integer => i.longValue
+      case l: java.lang.Long => l.longValue
+    }
+    for (x <- tri; y <- tri; z <- tri) {
+      val Seq((xi, xn), (yi, yn), (zi, zn)) = Seq(x, y, z).map(leaf)
+      val row = Array(xi, yi, zi)
+      val nulls = Array(xn, yn, zn)
+      val Seq(lx, ly, lz) = Seq(x, y, z).map(trueOf)
+      val pairs: Seq[(Cond, Expression)] = Seq(
+        b0 -> lx,
+        new Not(b0) -> expressions.Not(lx),
+        new And(b0, b1) -> expressions.And(lx, ly),
+        new BoolCompare(CompareOp.LT, b0, b1) -> expressions.LessThan(lx, ly),
+        new BoolNullSafeEq(b0, b1) -> expressions.EqualNullSafe(lx, ly),
+        new CondIf(b0, b1, b2) -> expressions.If(lx, ly, lz),
+        new IsNotNull(b0) -> expressions.IsNotNull(lx))
+      for ((c, e) <- pairs) {
+        val ctx = s"${VarkaVectorIR.canonical(c)} at $x $y $z"
+        val int = VarkaReference.value(new CondValue(c, LaneType.INT), row, nulls,
+          Array.empty[Int])
+        assert((if (int.isPresent) Some(int.getAsInt.toLong) else None) ===
+          want(expressions.Cast(e, IntegerType)), ctx)
+        val longCond = onLong(c).asInstanceOf[Cond]
+        val long = VarkaReference.longValue(new CondValue(longCond, LaneType.LONG),
+          row.map(_.toLong), nulls, Array.empty[Long])
+        assert((if (long.isPresent) Some(long.getAsLong) else None) ===
+          want(expressions.Cast(e, LongType)), ctx + " (long)")
+        // And it is not IF(c, 1, 0), which answers 0 where the condition is unknown.
+        if (x.isEmpty && c == b0) {
+          assert(want(expressions.If(lx, Literal(1), Literal(0))) === Some(0L))
+          assert(!int.isPresent)
+        }
+      }
+    }
+  }
+
+  test("a condition as a value over every leaf state, in both bodies at every width") {
+    def v(c: Cond): CondValue = new CondValue(c, LaneType.INT)
+    sweep(Seq(v(b0), v(new Not(b0)), v(new IsNotNull(b0)), v(new And(b0, b1)),
+      v(new Or(b0, new Not(b1)))), 2, "condition as a value")
+    sweep(Seq(v(new BoolCompare(CompareOp.LT, b0, b1)), v(new BoolNullSafeEq(b0, b1)),
+      v(new CondIf(b0, b1, b2)), v(new CondConst(Truth.TRUE)), v(new CondConst(Truth.FALSE))),
+      3, "comparison, choice and constants as values")
+  }
+
+  test("a condition as a value feeds the value operators the casts and bit_count will build on") {
+    def v(c: Cond): CondValue = new CondValue(c, LaneType.INT)
+    sweep(Seq(
+      new IntArith(IntOp.ADD, Overflow.WRAP, v(b0), v(b1)),
+      new IntArith(IntOp.SUB, Overflow.FAIL, v(b0), v(new Not(b1))),
+      new BitCount(v(b0)),
+      new IfElse(b2, v(b0), v(b1)),
+      new Greatest(v(b0), v(b1)),
+      // One condition read as a value twice and as a condition once: the CSE'd mask serves all.
+      new IntArith(IntOp.MUL, Overflow.WRAP, v(b0), new IfElse(b0, v(b1), v(b2)))),
+      3, "values over conditions")
+  }
+
+  test("a condition as a value on the long lane") {
+    val Seq(l0, l1, l2) = (0 until 3).map(new BoolColumn(_, LaneType.LONG))
+    def v(c: Cond): CondValue = new CondValue(c, LaneType.LONG)
+    val long = Seq(v(l0), v(new Not(l1)), v(new BoolCompare(CompareOp.GE, l0, l1)),
+      v(new BoolNullSafeEq(l0, l1)), v(new CondIf(l0, l1, l2)),
+      new IntArith(IntOp.ADD, Overflow.WRAP, v(l0), v(l1)), new BitCount(v(l2)))
+    long.foreach(r =>
+      assert(VarkaVectorIR.emissionLane(r, VarkaEmitOptions.DEFAULTS) === LaneType.LONG,
+        r.toString))
+    sweep(long, 3, "long-lane condition values")
+  }
+
+  test("a condition that is unknown from valid inputs keeps a condition value's kernel " +
+      "masked-only, and one that is not keeps the dense body") {
+    def names(r: VarkaVectorIR): Seq[String] = methodNames(emitMulti(Seq(r), 1, 0))
+    val unknown = new CondValue(new And(b0, new CondConst(Truth.NULL)), LaneType.INT)
+    assert(!names(unknown).exists(_.startsWith("loopDense")), names(unknown).mkString(", "))
+    assert(!names(unknown).exists(_.startsWith("epilogueDense")), names(unknown).mkString(", "))
+    sweep(Seq(unknown), 1, "unknown from valid inputs")
+    val known = new CondValue(b0, LaneType.INT)
+    assert(names(known).contains("loopDense0"), names(known).mkString(", "))
+    // The constructor holds the value's lane to its condition's.
+    intercept[IllegalArgumentException](new CondValue(b0, LaneType.LONG))
   }
 }
