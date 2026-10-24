@@ -676,15 +676,15 @@ operands (a row counts once for each type it reads):
 <!-- BEGIN generated verification counts -->
 | Type | Rows | refinement | proof | exhaustive | owed | differential |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `bigint` | 41 | 1 | 2 | 3 | 2 | 33 |
-| `bool` | 19 | 0 | 0 | 17 | 0 | 2 |
-| `byte` | 23 | 0 | 0 | 8 | 8 | 7 |
-| `date` | 81 | 18 | 0 | 4 | 0 | 59 |
+| `bigint` | 41 | 0 | 2 | 0 | 2 | 37 |
+| `bool` | 19 | 0 | 0 | 10 | 0 | 9 |
+| `byte` | 23 | 0 | 0 | 0 | 8 | 15 |
+| `date` | 81 | 17 | 0 | 0 | 0 | 64 |
 | `dt` | 11 | 2 | 0 | 0 | 0 | 9 |
-| `int` | 68 | 16 | 2 | 2 | 1 | 47 |
+| `int` | 68 | 14 | 2 | 0 | 1 | 51 |
 | `short` | 23 | 0 | 0 | 0 | 8 | 15 |
-| `time` | 28 | 8 | 0 | 0 | 2 | 18 |
-| `ym` | 24 | 8 | 2 | 0 | 2 | 12 |
+| `time` | 28 | 6 | 0 | 0 | 2 | 20 |
+| `ym` | 24 | 7 | 2 | 0 | 2 | 13 |
 <!-- END generated verification counts -->
 
 ## Glossary

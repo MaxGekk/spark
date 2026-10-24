@@ -1052,9 +1052,13 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     def render: String
   }
 
-  /** A refinement in `refinement.smt2`, named as the file echoes it. */
-  private case class Refined(name: String) extends Verified {
-    def render: String = s"refinement: $name"
+  /**
+   * Refinements in `refinement.smt2`, named as the file echoes them: one for a row the
+   * refinement states whole, and one per operation for a row that composes several, each of
+   * which must be refined.
+   */
+  private case class Refined(names: String*) extends Verified {
+    def render: String = s"refinement: ${names.mkString("; ")}"
   }
 
   /** A lowering proof file under `sql/varka/proofs/`. */
@@ -1071,7 +1075,10 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     def render: String = "differential"
   }
 
-  /** A row of `sql/varka/plans/m8/PLAN.md` that will verify it. */
+  /**
+   * A row of `sql/varka/plans/m8/PLAN.md` that will verify it, and that is not done: a row
+   * marked done with an entry still owed to it fails the check.
+   */
   private case class Owed(row: Int) extends Verified {
     def render: String = s"owed: row $row"
   }
@@ -1081,20 +1088,22 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     "Narrow arithmetic" -> Owed(490),
     "Boolean columns" -> Exhausted("VarkaEmitterBoolSuite",
       "boolean comparisons, null-safe equality, choice and constants over every leaf state"),
-    "Boolean columns choosing values" -> Exhausted("VarkaEmitterBoolSuite",
-      "boolean comparisons, null-safe equality, choice and constants over every leaf state"))
+    // The value picks over a date or a long column are not swept: only the condition is.
+    "Boolean columns choosing values" -> Differential)
 
-  private val bytePairs = Exhausted("VarkaEmitterNarrowSuite",
-    "every byte pair gives the reference's answer through every comparison and choice")
+  // VarkaEmitterNarrowSuite's byte square sweeps every TINYINT pair through the comparisons and
+  // the picks, but over values only, with no null row, and its IN is a range set where the rows
+  // build an equality chain and a hash set; so the TINYINT rows stay differential here.
   private val connectives = Exhausted("VarkaEmitterBoolSuite",
     "every And/Or/Not tree over three boolean columns")
+  private val nullTests = Exhausted("VarkaEmitterBoolSuite",
+    "IS [NOT] NULL over a bare boolean column is its validity word")
 
   /** The rows that differ from their family's entry, by their SQL. */
   private val rowVerified: Map[String, Verified] = Map(
     "date_add(d, 3)" -> Refined("date_add(d, i)"),
     "date_add(d, i)" -> Refined("date_add(d, i)"),
-    // `date_sub(d, k)` is `date_add(d, -k)` (STANDARD.md 5); the refinement holds for every k.
-    "date_sub(d, 5)" -> Refined("date_add(d, i)"),
+    // `date_sub` lowers to its own node (SubDays), which no refinement states.
     "d + CAST(i AS INTERVAL DAY)" -> Refined("d + CAST(i AS INTERVAL DAY)"),
     "datediff(d2, d)" -> Refined("datediff(a, b)"),
     "year(d)" -> Refined("year(d), month(d), day(d)"),
@@ -1102,6 +1111,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     "day(d)" -> Refined("year(d), month(d), day(d)"),
     "dayofweek(d)" -> Refined("weekday(d), dayofweek(d)"),
     "weekday(d)" -> Refined("weekday(d), dayofweek(d)"),
+    // The refinement's echo states DAYOFWEEK_ISO as weekday's tail plus one.
+    "extract(DAYOFWEEK_ISO FROM d)" -> Refined("weekday(d), dayofweek(d)"),
     "make_date(2021, i, 1)" -> Refined("make_date(y, m, dd)"),
     "add_months(d, 3)" -> Refined("d + ym, add_months(d, i)"),
     "add_months(d, i)" -> Refined("d + ym, add_months(d, i)"),
@@ -1110,45 +1121,41 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     "d - ym" -> Refined("d - ym"),
     "abs(ym)" -> Refined("abs(ym)"),
     "ym - ymm" -> Refined("a - b"),
-    "make_ym_interval(year(d), month(d)) * 2" -> Refined("a * 2"),
+    // `make_ym_interval(year(d), month(d)) * 2`: no refinement states make_ym_interval.
     "CAST(ymy AS INT)" -> Owed(490),
     "CAST(ym AS INTERVAL YEAR)" -> Owed(490),
     "ym / 12" -> Proved("ym_divide.smt2"),
     "ym / -7" -> Proved("ym_divide.smt2"),
     "extract(YEAR FROM ym)" -> Refined("extract(YEAR FROM ym)"),
-    "extract(YEAR FROM ym) - 1" -> Refined("extract(YEAR FROM ym)"),
+    "extract(YEAR FROM ym) - 1" -> Refined("extract(YEAR FROM ym)", "a - b"),
     "i + 1" -> Refined("a + b"),
     "i - 1" -> Refined("a - b"),
-    "year(d) * 2" -> Refined("a * 2"),
+    "year(d) * 2" -> Refined("year(d), month(d), day(d)", "a * 2"),
     "-i" -> Refined("-a"),
-    "year(d) + i" -> Refined("a + b"),
+    "year(d) + i" -> Refined("year(d), month(d), day(d)", "a + b"),
     "bitmap_bucket_number(l)" -> Proved("bitmap.smt2"),
     "bitmap_bit_position(l)" -> Proved("bitmap.smt2"),
-    "b" -> Differential,
+    "b" -> connectives,
     "NOT b" -> connectives,
-    "b AND d < d2" -> connectives,
-    "b OR i = 5" -> connectives,
-    "b AND l < l2" -> connectives,
-    "b IS NULL" -> Differential,
-    "b IS NOT NULL" -> Differential,
-    "(b AND d < d2) IS NULL" -> connectives,
-    "y1 < y2" -> bytePairs,
-    "y1 <= y2" -> bytePairs,
-    "y1 >= y2" -> bytePairs,
-    "y1 IN (1Y, 2Y, 3Y, -1Y)" -> bytePairs,
-    "y1 IN (11 to 16 byte literals)" -> bytePairs,
-    "CASE WHEN y1 > y2 THEN y1 ELSE y2 END" -> bytePairs,
-    "greatest(y1, y2)" -> bytePairs,
-    "least(y1, y2)" -> bytePairs,
+    // A boolean beside a date, int or long comparison: the connective is swept over the
+    // comparison as a three-state leaf, and the comparison itself only differentially.
+    "b AND d < d2" -> Differential,
+    "b OR i = 5" -> Differential,
+    "b AND l < l2" -> Differential,
+    "(b AND d < d2) IS NULL" -> Differential,
+    "CASE WHEN b THEN b2 ELSE d < d2 END" -> Differential,
+    "CASE WHEN b THEN i > 5 END" -> Differential,
+    "b IS NULL" -> nullTests,
+    "b IS NOT NULL" -> nullTests,
     "CAST(time_to_millis(t) AS INT)" -> Owed(490),
     "CAST(time_to_millis(t) AS INT) > i" -> Owed(490),
-    "hour(t) = 12" -> Refined("hour(t), minute(t)"),
+    // `hour(t) = 12`: the comparison has no refinement.
     "t - t2" -> Refined("t - t2"),
     "hour(t)" -> Refined("hour(t), minute(t)"),
-    "hour(t) + 1" -> Refined("hour(t), minute(t)"),
+    "hour(t) + 1" -> Refined("hour(t), minute(t)", "a + b"),
     "minute(t2)" -> Refined("hour(t), minute(t)"),
     "second(t)" -> Refined("second(t)"),
-    "time_from_micros(time_to_micros(t))" -> Refined("time_from_micros(k)"),
+    // `time_from_micros(time_to_micros(t))`: time_to_micros has no refinement.
     "t + INTERVAL '0 00:00:00' DAY TO SECOND" -> Refined("t + dt"))
 
   private def verifiedOf(family: Family, row: Row): Verified =
@@ -1174,28 +1181,54 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     val wrong = families.flatMap { family =>
       family.rows.flatMap { row =>
         val problem = verifiedOf(family, row) match {
-          case Refined(name) if !refinement.contains("(echo \"" + name) =>
-            Some(s"refinement.smt2 echoes no refinement named `$name`")
+          case Refined(names @ _*) if names.exists(n => !echoes(refinement, n)) =>
+            Some("refinement.smt2 echoes no refinement named " +
+              names.filterNot(echoes(refinement, _)).map(n => s"`$n`").mkString(", "))
           case Proved(file) if !Files.exists(getWorkspaceFilePath("sql", "varka", "proofs",
               file)) =>
             Some(s"sql/varka/proofs/$file does not exist")
           case Exhausted(suite, test) => suiteSource(suite) match {
             case None => Some(s"no test source defines $suite")
-            case Some(src) if !src.contains(test) => Some(s"$suite has no test `$test`")
+            case Some(src) if !declares(src, test) => Some(s"$suite declares no test `$test`")
             // An opt-in sweep runs in no build, so it verifies nothing a merge relies on.
-            case Some(src) if src.linesIterator.exists(l => l.contains(test) &&
-                l.contains("opt-in")) =>
+            case Some(src) if optIn(src, test) =>
               Some(s"$suite's `$test` is opt-in, and runs in no build")
             case _ => None
           }
-          case Owed(n) if !plan.linesIterator.exists(_.startsWith(s"| $n |")) =>
-            Some(s"PLAN.md has no row $n")
+          case Owed(n) => plan.linesIterator.find(_.startsWith(s"| $n |")) match {
+            case None => Some(s"PLAN.md has no row $n")
+            case Some(line) if line.startsWith(s"| $n | **Done**") =>
+              Some(s"PLAN.md marks row $n done, and the row is still owed to it")
+            case _ => None
+          }
           case _ => None
         }
         problem.map(p => s"${row.sql}: $p")
       }
     }
     assert(wrong.isEmpty, "rows whose verification does not hold:\n  " + wrong.mkString("\n  "))
+  }
+
+  /** Whether `refinement.smt2` echoes a refinement named exactly `name`. */
+  private def echoes(refinement: String, name: String): Boolean =
+    Seq(",", ":").exists(end => refinement.contains("(echo \"" + name + end))
+
+  /**
+   * Whether `src` declares a test whose name begins with `test`: a ScalaTest `test("...")` or a
+   * JUnit `@DisplayName("...")`, not a mention in a comment or a body.
+   */
+  private def declares(src: String, test: String): Boolean =
+    src.contains("test(\"" + test) || src.contains("@DisplayName(\"" + test)
+
+  /**
+   * Whether the test `src` declares as `test` is an opt-in sweep: its declaration, which may span
+   * lines joined by `+`, says so, or its body asks for the sweep property before it runs.
+   */
+  private def optIn(src: String, test: String): Boolean = {
+    val at = Seq("test(\"" + test, "@DisplayName(\"" + test).map(src.indexOf).filter(_ >= 0).min
+    val declaration = src.substring(at, math.min(src.length, at + 600))
+    val head = declaration.takeWhile(_ != '{')
+    head.contains("opt-in") || declaration.take(head.length + 300).contains("varka.sweep")
   }
 
   /**

@@ -56,7 +56,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled" ],
     "domain" : "",
     "note" : "",
-    "verified" : "refinement: date_add(d, i)"
+    "verified" : "differential"
   }, {
     "sql" : "d + CAST(i AS INTERVAL DAY)",
     "executable" : "d + CAST(i AS INTERVAL DAY)",
@@ -212,7 +212,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled" ],
     "domain" : "",
     "note" : "",
-    "verified" : "differential"
+    "verified" : "refinement: weekday(d), dayofweek(d)"
   }, {
     "sql" : "weekofyear(d)",
     "executable" : "weekofyear(d)",
@@ -404,7 +404,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled", "spark.sql.codegen.varka.family.interval.enabled" ],
     "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : "a checked multiply, so bounded operands again: `ym * 2` over a stored interval column declines",
-    "verified" : "refinement: a * 2"
+    "verified" : "differential"
   }, {
     "sql" : "abs(ym)",
     "executable" : "abs(ym)",
@@ -536,7 +536,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.interval.enabled", "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
     "domain" : "extract(YEAR FROM ym) > -2147483648",
     "note" : "the quotient feeding further int arithmetic, checked under ANSI; the check cannot fire, since the quotient is within +/-178956970",
-    "verified" : "refinement: extract(YEAR FROM ym)"
+    "verified" : "refinement: extract(YEAR FROM ym); a - b"
   }, {
     "sql" : "i + 1",
     "executable" : "i + 1",
@@ -572,7 +572,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled", "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
     "domain" : "unix_date(d) BETWEEN -719162 AND 2932896",
     "note" : "a multiply is checked, and only bounded operands take the check off: `i * 2` over a bare int column declines",
-    "verified" : "refinement: a * 2"
+    "verified" : "refinement: year(d), month(d), day(d); a * 2"
   }, {
     "sql" : "-i",
     "executable" : "-i",
@@ -596,7 +596,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.calendar.enabled", "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
     "domain" : "unix_date(d) BETWEEN -719162 AND 2932896 AND i <= 2147483647 - year(d)",
     "note" : "checked under ANSI; the lower bound is out of reach, since a year is at least 1",
-    "verified" : "refinement: a + b"
+    "verified" : "refinement: year(d), month(d), day(d); a + b"
   }, {
     "sql" : "y1 + y2",
     "executable" : "y1 + y2",
@@ -2132,7 +2132,7 @@
     "switches" : [ ],
     "domain" : "",
     "note" : "a boolean column as a filter: unknown selects nothing",
-    "verified" : "differential"
+    "verified" : "exhaustive: VarkaEmitterBoolSuite, every And/Or/Not tree over three boolean columns"
   }, {
     "sql" : "NOT b",
     "executable" : "NOT b",
@@ -2156,7 +2156,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "beside a comparison, on the one lane they share",
-    "verified" : "exhaustive: VarkaEmitterBoolSuite, every And/Or/Not tree over three boolean columns"
+    "verified" : "differential"
   }, {
     "sql" : "b OR i = 5",
     "executable" : "b OR i = 5",
@@ -2168,7 +2168,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "an unknown column beside a comparison",
-    "verified" : "exhaustive: VarkaEmitterBoolSuite, every And/Or/Not tree over three boolean columns"
+    "verified" : "differential"
   }, {
     "sql" : "b AND l < l2",
     "executable" : "b AND l < l2",
@@ -2180,7 +2180,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "the boolean leaf takes the comparison's long lane",
-    "verified" : "exhaustive: VarkaEmitterBoolSuite, every And/Or/Not tree over three boolean columns"
+    "verified" : "differential"
   }, {
     "sql" : "b = b2",
     "executable" : "b = b2",
@@ -2264,7 +2264,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "the column's own validity word",
-    "verified" : "differential"
+    "verified" : "exhaustive: VarkaEmitterBoolSuite, IS [NOT] NULL over a bare boolean column is its validity word"
   }, {
     "sql" : "b IS NOT NULL",
     "executable" : "b IS NOT NULL",
@@ -2276,7 +2276,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "the column's own validity word",
-    "verified" : "differential"
+    "verified" : "exhaustive: VarkaEmitterBoolSuite, IS [NOT] NULL over a bare boolean column is its validity word"
   }, {
     "sql" : "(b AND d < d2) IS NULL",
     "executable" : "(b AND d < d2) IS NULL",
@@ -2288,7 +2288,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "a test over a predicate: the predicate is not known",
-    "verified" : "exhaustive: VarkaEmitterBoolSuite, every And/Or/Not tree over three boolean columns"
+    "verified" : "differential"
   }, {
     "sql" : "coalesce(b, b2)",
     "executable" : "coalesce(b, b2)",
@@ -2312,7 +2312,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "a boolean choice: unknown takes ELSE",
-    "verified" : "exhaustive: VarkaEmitterBoolSuite, boolean comparisons, null-safe equality, choice and constants over every leaf state"
+    "verified" : "differential"
   }, {
     "sql" : "CASE WHEN b THEN i > 5 END",
     "executable" : "CASE WHEN b THEN i > 5 END",
@@ -2324,7 +2324,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "no ELSE: a null constant, so the body is masked-only",
-    "verified" : "exhaustive: VarkaEmitterBoolSuite, boolean comparisons, null-safe equality, choice and constants over every leaf state"
+    "verified" : "differential"
   }, {
     "sql" : "IF(b, d, d2)",
     "executable" : "IF(b, d, d2)",
@@ -2336,7 +2336,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.condition.enabled" ],
     "domain" : "",
     "note" : "the int lane",
-    "verified" : "exhaustive: VarkaEmitterBoolSuite, boolean comparisons, null-safe equality, choice and constants over every leaf state"
+    "verified" : "differential"
   }, {
     "sql" : "IF(b, l, l2)",
     "executable" : "IF(b, l, l2)",
@@ -2348,7 +2348,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.condition.enabled" ],
     "domain" : "",
     "note" : "the leaf is lifted to the long lane of the values",
-    "verified" : "exhaustive: VarkaEmitterBoolSuite, boolean comparisons, null-safe equality, choice and constants over every leaf state"
+    "verified" : "differential"
   }, {
     "sql" : "CASE WHEN b THEN l ELSE l2 END",
     "executable" : "CASE WHEN b THEN l ELSE l2 END",
@@ -2360,7 +2360,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.condition.enabled" ],
     "domain" : "",
     "note" : "likewise, per branch",
-    "verified" : "exhaustive: VarkaEmitterBoolSuite, boolean comparisons, null-safe equality, choice and constants over every leaf state"
+    "verified" : "differential"
   }, {
     "sql" : "y1 < y2",
     "executable" : "y1 < y2",
@@ -2372,7 +2372,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "two narrow columns compared at the byte lane; with narrowLanes off each load widens into the int lane, in parts where the int width needs them",
-    "verified" : "exhaustive: VarkaEmitterNarrowSuite, every byte pair gives the reference's answer through every comparison and choice"
+    "verified" : "differential"
   }, {
     "sql" : "y1 <= y2",
     "executable" : "y1 <= y2",
@@ -2384,7 +2384,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "the other ordering, so that every comparison has a row of its own",
-    "verified" : "exhaustive: VarkaEmitterNarrowSuite, every byte pair gives the reference's answer through every comparison and choice"
+    "verified" : "differential"
   }, {
     "sql" : "y1 >= y2",
     "executable" : "y1 >= y2",
@@ -2396,7 +2396,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "",
-    "verified" : "exhaustive: VarkaEmitterNarrowSuite, every byte pair gives the reference's answer through every comparison and choice"
+    "verified" : "differential"
   }, {
     "sql" : "y1 = 5Y",
     "executable" : "y1 = 5Y",
@@ -2444,7 +2444,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "an IN list over a narrow column, lowered to an equality chain",
-    "verified" : "exhaustive: VarkaEmitterNarrowSuite, every byte pair gives the reference's answer through every comparison and choice"
+    "verified" : "differential"
   }, {
     "sql" : "y1 IN (11 to 16 byte literals)",
     "executable" : "y1 IN (1Y, 2Y, 3Y, 4Y, 5Y, 6Y, 7Y, 8Y, 9Y, 10Y, 11Y)",
@@ -2456,7 +2456,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "an IN list this long arrives from the optimizer as an InSet and fuses the same way",
-    "verified" : "exhaustive: VarkaEmitterNarrowSuite, every byte pair gives the reference's answer through every comparison and choice"
+    "verified" : "differential"
   }, {
     "sql" : "CASE WHEN y1 > y2 THEN y1 ELSE y2 END",
     "executable" : "CASE WHEN y1 > y2 THEN y1 ELSE y2 END",
@@ -2468,7 +2468,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled", "spark.sql.codegen.varka.family.condition.enabled" ],
     "domain" : "",
     "note" : "the output is stored at the column's own width, whichever arm computed it",
-    "verified" : "exhaustive: VarkaEmitterNarrowSuite, every byte pair gives the reference's answer through every comparison and choice"
+    "verified" : "differential"
   }, {
     "sql" : "if(y1 IS NULL, 5Y, y1)",
     "executable" : "if(y1 IS NULL, 5Y, y1)",
@@ -2492,7 +2492,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
     "domain" : "",
     "note" : "",
-    "verified" : "exhaustive: VarkaEmitterNarrowSuite, every byte pair gives the reference's answer through every comparison and choice"
+    "verified" : "differential"
   }, {
     "sql" : "least(y1, y2)",
     "executable" : "least(y1, y2)",
@@ -2504,7 +2504,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
     "domain" : "",
     "note" : "",
-    "verified" : "exhaustive: VarkaEmitterNarrowSuite, every byte pair gives the reference's answer through every comparison and choice"
+    "verified" : "differential"
   }, {
     "sql" : "coalesce(y1, y2)",
     "executable" : "coalesce(y1, y2)",
@@ -2828,7 +2828,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.time.enabled", "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "the TIME extract narrowed inside the predicate",
-    "verified" : "refinement: hour(t), minute(t)"
+    "verified" : "differential"
   }, {
     "sql" : "(i = 5 AND l = l2) IS NOT NULL",
     "executable" : "(i = 5 AND l = l2) IS NOT NULL",
@@ -3008,7 +3008,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.time.enabled", "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
     "domain" : "hour(t) < 2147483647",
     "note" : "the extract narrowed inside the tree, under an int add checked under ANSI; the check cannot fire, since an hour is at most 23",
-    "verified" : "refinement: hour(t), minute(t)"
+    "verified" : "refinement: hour(t), minute(t); a + b"
   }, {
     "sql" : "minute(t2)",
     "executable" : "minute(t2)",
@@ -3080,7 +3080,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.time.enabled" ],
     "domain" : "time_to_micros(t) BETWEEN 0 AND 86399999999",
     "note" : "the same guard over the microsecond count",
-    "verified" : "refinement: time_from_micros(k)"
+    "verified" : "differential"
   }, {
     "sql" : "t + INTERVAL '0 00:00:00' DAY TO SECOND",
     "executable" : "t + INTERVAL '0 00:00:00' DAY TO SECOND",
