@@ -273,8 +273,9 @@ other or with the compiler while every test passed.
 ### 9.1 Findings
 
 1. **Every hand-kept register had drifted.** The census claimed no fused operator over `bool`
-   while a dozen fuse, because `VarkaCoverageSuite` credited `bool` to any boolean operand, so
-   a comparison's own result counted and a boolean column did not (484). Three cast claims were
+   while fifteen fuse, since row 331 left the claims out; when 484 added them the census refused
+   every one, because `VarkaCoverageSuite` credited `bool` to any boolean operand, so a
+   comparison's own result counted and a boolean column did not. Three cast claims were
    wrong, and `m8/PLAN.md` row 332 said `CAST(ymy AS INT)` declines while a coverage row fused it
    (486). The existing checks ran one way: a claimed fusion has a coverage row, never an
    unclaimed one declines.
@@ -282,28 +283,29 @@ other or with the compiler while every test passed.
    form pairs (every target ending in `SECOND`), `ym -> int` for two of three sources. A
    register keyed by type pair cannot say that; a file the compiler writes per form can, and
    486 made `casts.tsv` such a derivation.
-3. **The facts of a type live in many lists, in two languages.** The census type names are in
-   `dev/varka_census.py` and in Java; a type's SQL target is in `VarkaTypeConformance`'s
-   `CAST_TARGETS` and its forms in `VarkaCastMatrixSuite`'s `TYPES`; the landed types in the
-   census's `CONFORMANCE_SUITE` and `EXISTING`; a type's input arm in `VarkaSparkOracle`; its
-   test storage layout in `VarkaKernelChecks` (484 added the bit-stored boolean there); its
-   species in `VarkaWarmupGate`. A new type is added to each by hand, and a list it is missing
-   from fails nothing until a reviewer notices.
-4. **A lane was derived in six places, tests included.** 488 made `VarkaKernelPlan` the one
-   function, and found four test sites that read a kernel's lane from its first root, which is
-   what production stopped doing in the narrow lanes' review; `VarkaReplay` was wrong for a
-   native narrow root beside an int one. A harness that recomputes what production computes
-   drifts as production code did.
+3. **The facts of a type live in many lists, in Python, Java and Scala.** The census type names are
+   in `dev/varka_census.py` and in `VarkaCoverageSuite`; a type's SQL target is in
+   `VarkaTypeConformance`'s `CAST_TARGETS` and its forms in `VarkaCastMatrixSuite`'s `TYPES`; the
+   landed types in the census's `CONFORMANCE_SUITE` and `EXISTING`; a type's input arm in
+   `VarkaSparkOracle`; its test storage layout in `VarkaKernelChecks` (484 added the bit-stored
+   boolean there); its species in `VarkaVectorTemplateWarmup` and the reach model
+   `VarkaWarmupReach`. A new type is added to each by hand, and a list it is missing from fails
+   nothing until a reviewer notices.
+4. **A lane was derived in eight places, four of them tests.** 488 made `VarkaKernelPlan` the
+   one function, and found the four test sites reading a kernel's lane from its first root,
+   which is what production stopped doing in the narrow lanes' review; read that way,
+   `VarkaReplay` would pick the wrong entry point for a native narrow root beside an int one. A
+   harness that recomputes what production computes drifts as production code did.
 5. **The byte oracles pin acceptance only.** `emitted_bytes.json`, `coverage.json` and
    `width_audit.json` say nothing about what the compiler refuses: a refactor that stopped
    refusing a kernel would move no byte. 488's method held: build the new code beside the old,
-   prove the two equivalent over a corpus under every configuration, move the consumers one
-   commit at a time, delete the old code and the equivalence test last.
-6. **A new IR node costs about twenty exhaustive switches** (section 2 counted them), most of
-   them asking one small property: whether reduction modulo a narrow width commutes with it
-   (`Analysis.isNarrowRing`), whether it is pure, whether it skips a null input, its budget
-   weight, its cost kind, its children and its rebuild, its reach in three fuzzer grammars.
-   Exhaustiveness is the safety net and stays; spelling the net out in every pass is the cost.
+   prove the two equivalent over a corpus under every configuration, move the consumers one at
+   a time with the oracles run after each, delete the old code and the equivalence test last.
+6. **A new IR node reaches about twenty places** (section 2 counted them), most of them exhaustive
+   switches asking one small property: whether reduction modulo a narrow width commutes with it
+   (`Analysis.isNarrowRing`), whether it is pure, whether it skips a null input, its budget weight,
+   its cost kind, its children and its rebuild, its reach in three fuzzer grammars. Exhaustiveness
+   is the safety net and stays; spelling the net out in every pass is the cost.
 
 ### 9.2 What changes
 
@@ -327,7 +329,7 @@ other or with the compiler while every test passed.
    supplies one record of its properties - ring under narrow reduction, pure, skips nulls,
    budget weight, cost kind - and the passes read the property they need. The record is
    required at construction, so a new node still cannot compile without deciding each property,
-   and the twenty switches of finding 6 become two or three places. Before decimal, whose lane
+   and most of finding 6's twenty places become two or three. Before decimal, whose lane
    pair adds nodes (359 to 362).
 4. **Every capability register is generated from the compiler.** 486 did the casts; row 487
    does the census, starting from substituting a column of each type into the coverage rows.
