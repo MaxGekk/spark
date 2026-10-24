@@ -61,25 +61,64 @@ its epilogue; the same after the chain run over other species and element types;
 copies of the body, each deoptimized in its middle with vectors and masks live. A JBS search
 (24 October) found no report that matches: JDK-8386154 is a wrong mask result on AVX-512 only.
 
-## 2. Next
+## 2. The cause (24 October 2026)
 
-1. **Trap or compile.** The shrunk case alone through `VarkaCompiledCheck.run`, no earlier draws
-   in the JVM, printing the raw failure and the history's verdicts: whether the kernel trapped in
-   the compared call, and whether the case needs the earlier draws' profiles.
-2. **The wrong value's shape.** The failing row's want and got against the other branch's value,
-   a neighbour lane's, an earlier batch's: which names the link of the chain.
-3. **The emitted class itself** in a bare warm-then-compare loop, then cut it down: segments made
-   in the method (`VarkaVectorSupport.ofAddress`, which escape analysis eliminates), the validity
-   helpers, until it is a JDK-only program.
-4. **The cause, and a report to OpenJDK** with that program if it is C2's.
+**A C2 transform, wrong on targets without mask registers.** `VectorMask.fromLong(s, bits)` masks
+its argument to the lane count in Java (`bits & (-1L >>> (64 - laneCount))`) before its intrinsic,
+so `fromLong(s, m.toLong())` reaches C2 as `VectorLongToMask (AndL (VectorMaskToLong
+(VectorStoreMask m)) 0xF)`. `VectorLongToMaskNode::Ideal` (`opto/vectornode.cpp`, JDK 25 GA and
+`openjdk/jdk25u` master) folds that pattern into `VectorMaskCast`, and on a target whose masks are
+vectors (AVX2) it first peels the `VectorStoreMask` off and casts the mask under it:
 
-**Mitigation is the owner's decision.** The shape is every predicated select, so the emitter
-cannot avoid it. The options, once the cause is named: decline fusion on hosts without AVX-512
-(the row engine answers; no speedup there); keep fusing and document a JVM flag that fixes every
-case, after measuring its cost (each candidate above is JVM-wide, and escape analysis off undoes
-the Vector API's box elimination); or wait for a JDK fix with one of the two in place.
+```cpp
+if (dst_type->isa_vectmask() == nullptr) {
+  if (src->Opcode() != Op_VectorStoreMask) return nullptr;
+  src = src->in(1);                       // the compare's mask: 64-bit lanes of 0 / -1
+}
+...
+return new VectorMaskCastNode(src, dst_type);   // dst_type: a vector of BOOLEANs
+```
 
-## 3. Done when
+There `VectorLongToMask` yields a vector of canonical booleans (0 or 1 a byte), which the
+`VectorLoadMask` after it widens with `0 - b`. The cast keeps the mask encoding instead, so a true
+lane arrives as `0xFF`, the load mask makes it `1`, and `blendvpd`, which reads the sign bit,
+takes it as false: every true lane of the select picks the ELSE value. A mask written to a
+`boolean[]` shows the non-canonical byte: it prints `true` and is not equal to `true`.
+
+**Why Varka meets it.** A masked body reads each column's validity word as `-1` when the column
+has no nulls (`ldc -1` on the branch the warm-up takes; the other branch becomes an uncommon
+trap), so the known-true word `kT = toLong(compare) & v0 & v1` folds to `toLong(compare)`, and
+`blend(..., fromLong(kT))` is the round trip. Every predicated select over all-valid columns has
+it. That is why traps forbidden, escape analysis or incremental inlining off (each changes what
+folds) hid it, and why batches with nulls did not fail.
+
+**Reproduced without Varka.** `Fold396.java` (a loop of `blend(fromLong(toLong(a > b)))` over
+`LongVector.SPECIES_256`) and `Split396.java` (`toLong` alone and `fromLong` alone correct, the
+round trip wrong) fail under `-XX:UseAVX=2` once C2 compiles them, on OpenJDK 25.0.4.1 and on a
+fastdebug JDK 25 GA build, and pass under AVX-512. The emitted class driven in a bare loop over
+the shrunk batch (`Bare396.java`) fails from call 22,407 of 300,000 under AVX2 and never under
+AVX-512.
+
+**The fix, tested.** In the fastdebug build, an `Identity` for `VectorLongToMaskNode` that returns
+the `VectorStoreMask` itself where the target has no mask registers (both are boolean vectors of
+the same length), with `Ideal`'s peeling branch disabled: the three programs pass under AVX2, the
+shrunk Varka case passes three rounds of three where it failed three of three, and no assertion
+fires. OpenJDK mainline (`openjdk/jdk` master, read 24 October 2026) has rewritten the rule: it
+casts the `VectorMaskToLong`'s input itself, which on AVX2 is the `VectorStoreMask`, so the cast
+is boolean to boolean and correct. Which change rewrote it, and whether as a fix, is not yet
+established; `jdk25u` still has the bug.
+
+## 3. Next
+
+1. The six recent fuzz cases replayed with the fix on (running).
+2. A report to OpenJDK with `Fold396.java`, asking for the fix in JDK 25 updates: the owner's to
+   file (JBS needs an account, and it is an outward post).
+3. A Varka-side guard, the owner's decision: decline fusion on hosts without mask registers
+   until the JDK is fixed; or emit the select without the round trip where `kT` is the compare
+   (blend by the compare's own mask), which removes the pattern rather than the hosts; or keep
+   fusing and document the bug.
+
+## 4. Done when
 
 As row 396 says: the cases reproduced and their cause named; each fixed, or kept from the
 emitter with the JDK bug recorded; each shrunk case a regression test under the history that
