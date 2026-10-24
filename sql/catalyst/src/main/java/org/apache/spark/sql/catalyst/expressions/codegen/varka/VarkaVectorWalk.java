@@ -415,7 +415,7 @@ final class VarkaVectorWalk {
         } else {
           cb.aload(s.species(lane));
           cb.lload(s.kt.get(n.cond()));
-          cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+          emitMaskOfWord(cb, lane, analysis);
         }
         cb.invokevirtual(lane.vector, "blend", lane.blend);
         // A narrow pick passes its arms' unreduced int values through - a blend commutes with
@@ -451,7 +451,7 @@ final class VarkaVectorWalk {
         } else {
           cb.aload(s.species(lane));
           cb.lload(s.kt.get(n.cond()));
-          cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+          emitMaskOfWord(cb, lane, analysis);
         }
         cb.invokevirtual(lane.vector, "add", lane.lanewiseVIMasked);
         if (!dense && s.ownWord.contains(node)) {
@@ -1099,7 +1099,7 @@ final class VarkaVectorWalk {
     if (!dense && word != null && word != WORD_ALL_TRUE) {
       cb.aload(s.species);
       loadWord(cb, s, word);
-      cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+      emitMaskOfWord(cb, analysis.lane, analysis);
       cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
     }
     emitArmContext(cb, node, dense, analysis, s);
@@ -1180,7 +1180,7 @@ final class VarkaVectorWalk {
           cb.loadConstant(-1L);
           cb.lxor();
         }
-        cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+        emitMaskOfWord(cb, analysis.lane, analysis);
       }
       cb.invokevirtual(VECTOR_MASK, "and", MASK_BINARY);
     }
@@ -1198,6 +1198,30 @@ final class VarkaVectorWalk {
     cb.dup_x2();                                        // [species, word, species]
     cb.pop();                                           // [species, word]
     cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+  }
+
+  /**
+   * {@code [species, word] -> [mask]}: a condition or validity word of the masked body as a mask of
+   * {@code lane}'s species, lane {@code i} set where bit {@code i} is. Through the engine's
+   * {@code VarkaMaskOps} by default, which broadcasts the word, ANDs it with each lane's bit and
+   * compares against zero; {@code VectorMask.fromLong} under {@code fromLongMasks}, which JDK 25's
+   * C2 miscompiles on x86 without AVX-512 mask registers when the word folds to a mask's
+   * {@code toLong} - a known-true word over columns with no nulls (VARKA-396, VARKA-491). Every
+   * word-to-mask conversion of the masked body goes through here; a constant or a bitmap read from
+   * memory cannot fold to a mask's {@code toLong} and keeps {@code fromLong}.
+   */
+  static void emitMaskOfWord(CodeBuilder cb, Lane lane, Analysis analysis) {
+    if (analysis.options.fromLongMasks()) {
+      cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+      return;
+    }
+    String method = switch (lane.laneType) {
+      case LONG -> "longMask";
+      case INT -> "intMask";
+      case SHORT -> "shortMask";
+      case BYTE -> "byteMask";
+    };
+    cb.invokestatic(MASK_OPS, method, FROM_LONG);
   }
 
   /**
@@ -1229,7 +1253,7 @@ final class VarkaVectorWalk {
     loadWord(cb, s, s.wordRef.get(left));
     cb.loadConstant(-1L);
     cb.lxor();
-    cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+    emitMaskOfWord(cb, lane, analysis);
     cb.invokevirtual(lane.vector, "blend", lane.blend);
     cb.aload(tmp[1]);
     cb.aload(tmp[0]);
@@ -1237,7 +1261,7 @@ final class VarkaVectorWalk {
     loadWord(cb, s, s.wordRef.get(right));
     cb.loadConstant(-1L);
     cb.lxor();
-    cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
+    emitMaskOfWord(cb, lane, analysis);
     cb.invokevirtual(lane.vector, "blend", lane.blend);
     cb.invokevirtual(lane.vector, op, lane.lanewiseVV);
     if (s.ownWord.contains(node)) {

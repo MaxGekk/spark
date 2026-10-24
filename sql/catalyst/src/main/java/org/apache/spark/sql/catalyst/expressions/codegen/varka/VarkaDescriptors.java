@@ -70,6 +70,9 @@ final class VarkaDescriptors {
       ClassDesc.ofDescriptor("Ljdk/incubator/vector/VectorOperators$Conversion;");
   static final ClassDesc SUPPORT =
       ClassDesc.of("org.apache.spark.sql.varka.vector.VarkaVectorSupport");
+  /** The engine's word-to-mask conversions that avoid {@code fromLong} (VARKA-491). */
+  static final ClassDesc MASK_OPS =
+      ClassDesc.of("org.apache.spark.sql.varka.vector.VarkaMaskOps");
   static final ClassDesc FUSED_KERNEL = ClassDesc.of(VarkaFusedKernel.class.getName());
 
   static final ClassDesc LONG_ARRAY = ConstantDescs.CD_long.arrayType();

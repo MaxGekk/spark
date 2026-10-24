@@ -46,11 +46,11 @@ class VarkaMatrixSuite extends SparkFunSuite with VarkaTestWatchdog {
     }
   }
 
-  test("the configurations cover every option but the fault injectors") {
+  test("the configurations cover every option the fuzzer draws") {
     val named = VarkaMatrix.configurations.filterNot(_.startsWith(VarkaMatrix.ARROW_BATCH_SIZE))
       .map(_.split(",").last.takeWhile(_ != '=')).toSet
     val expected = VarkaEmitOption.TABLE.asScala
-      .filter(_.reason != VarkaEmitOption.Reason.FAULT_INJECTOR).map(_.name).toSet
+      .filter(_.reason.drawn).map(_.name).toSet
     assert(named === expected)
     assert(VarkaMatrix.configurations.contains("lanesOverride=4"))
     assert(VarkaMatrix.configurations.contains("division=DOUBLE_DIV"))

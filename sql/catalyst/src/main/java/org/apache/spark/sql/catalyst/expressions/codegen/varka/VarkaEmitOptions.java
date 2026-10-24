@@ -480,6 +480,15 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        {@code IndexOutOfBoundsException} inside the kernel. What a reproduction file's tests
  *        plant for a sanitizer violation and for a run-time exception in a kernel. Zero in
  *        production.
+ * @param fromLongMasks whether the masked body turns a condition word into a mask with
+ *        {@code VectorMask.fromLong}, rather than by broadcasting the word, ANDing it with the
+ *        lane bits and comparing against zero (VARKA-491). JDK 25's C2 miscompiles
+ *        {@code fromLong(s, m.toLong())} on x86 without AVX-512 mask registers - a select by the
+ *        result takes its ELSE branch on every true lane (VARKA-396) - and a masked body's
+ *        known-true word folds to exactly that when its columns have no nulls. False, the
+ *        broadcast form, is right on every host and JDK; true is the losing arm, one {@code kmov}
+ *        on AVX-512 where the broadcast form is three instructions, kept for the A/B and for the
+ *        JDKs that fix the rule ({@code m9/SCOPE.md} item 114).
  */
 public record VarkaEmitOptions(
     int groupBudget,
@@ -528,7 +537,8 @@ public record VarkaEmitOptions(
     boolean exactRefusalStatus,
     boolean groupBudgetUnderPrediction,
     boolean dropStackMaps,
-    int misdescribeDataBytes) {
+    int misdescribeDataBytes,
+    boolean fromLongMasks) {
 
   /**
    * The three mod-7 lowerings. {@link #MAGIC} is what ships: two 15-bit digit-sum folds followed
@@ -641,7 +651,7 @@ public record VarkaEmitOptions(
           VarkaEmitBudget.HUGE_METHOD_LIMIT,
           true, true, true, true,
           VarkaEmitBudget.CALL_SITE_BUDGET, VarkaEmitBudget.HEAVY_GROUP_OUTPUTS,
-          true, true, true, true, true, true, true, 0, 0, 0, false, false, false, 0);
+          true, true, true, true, true, true, true, 0, 0, 0, false, false, false, 0, false);
 
   public VarkaEmitOptions {
     if (groupBudget < 1) {
@@ -743,6 +753,7 @@ public record VarkaEmitOptions(
       b.groupBudgetUnderPrediction = groupBudgetUnderPrediction;
       b.dropStackMaps = dropStackMaps;
       b.misdescribeDataBytes = misdescribeDataBytes;
+      b.fromLongMasks = fromLongMasks;
     return b;
   }
 
@@ -795,6 +806,7 @@ public record VarkaEmitOptions(
     private boolean groupBudgetUnderPrediction;
     private boolean dropStackMaps;
     private int misdescribeDataBytes;
+    private boolean fromLongMasks;
 
     private Builder() {
     }
@@ -1034,6 +1046,11 @@ public record VarkaEmitOptions(
       return this;
     }
 
+    public Builder fromLongMasks(boolean fromLong) {
+      this.fromLongMasks = fromLong;
+      return this;
+    }
+
     public VarkaEmitOptions build() {
       return new VarkaEmitOptions(
           groupBudget, fusedCeiling, cse, shareChronoPrefix, denseValidityOnce,
@@ -1047,7 +1064,7 @@ public record VarkaEmitOptions(
           severalKernels,
           elideUnreadLocals, planSize, misdescribeDriverBytes, forceResidualAt,
           misdescribeRollback, exactRefusalStatus, groupBudgetUnderPrediction, dropStackMaps,
-          misdescribeDataBytes);
+          misdescribeDataBytes, fromLongMasks);
     }
   }
 
