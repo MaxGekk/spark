@@ -32,6 +32,7 @@ import java.util.OptionalLong;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaGeneratedClassLoader;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolColumn;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
@@ -966,11 +967,17 @@ public final class VarkaKernelChecks {
    * {@link #poison} and {@link #sentinel} take its extremes and a batch must draw enough rows that
    * an unwritten one is caught by a neighbour's value. Every null of a column takes a different
    * extreme, as at the wider lanes.
+   *
+   * <p>A column the roots read through a {@link BoolColumn} is a {@code BOOLEAN} column, stored
+   * as Arrow stores one: a bit a row, set where the drawn value is not zero. Under a null its
+   * data bit alternates, so half the nulls carry a set bit, as Spark's writer may leave one
+   * (it clears only the validity bit).
    */
   private record StoredNarrowLane(Batch batch, int[] lits, VarkaVectorIR.LaneType[] columnLanes,
-      int[] rowInts) implements Lane {
+      boolean[] bitColumns, int[] rowInts) implements Lane {
     StoredNarrowLane(Batch batch, int[] lits, List<VarkaVectorIR> roots) {
       this(batch, lits, VarkaKernelChecks.columnLanes(roots, batch.data().length),
+          VarkaKernelChecks.bitColumns(roots, batch.data().length),
           new int[batch.data().length]);
     }
 
@@ -1011,7 +1018,8 @@ public final class VarkaKernelChecks {
     }
 
     @Override public long columnStride(int c) {
-      return width(columnLanes[c]);
+      // A bit column's buffer is over-allocated at a byte a row; the kernel reads its bytes.
+      return bitColumns[c] ? 1L : width(columnLanes[c]);
     }
 
     @Override public long outputStride(VarkaVectorIR root) {
@@ -1019,11 +1027,19 @@ public final class VarkaKernelChecks {
     }
 
     @Override public long value(int c, int i) {
-      return narrow(columnLanes[c], batch.data()[c][i]);
+      return bitColumns[c] ? (batch.data()[c][i] != 0 ? 1L : 0L)
+          : narrow(columnLanes[c], batch.data()[c][i]);
     }
 
     @Override public void putColumn(int c, MemorySegment d, int i, long v) {
-      putAt(columnLanes[c], d, i, v);
+      if (bitColumns[c]) {
+        long off = i / 8L;
+        int bit = 1 << (i % 8);
+        int b = d.get(ValueLayout.JAVA_BYTE, off);
+        d.set(ValueLayout.JAVA_BYTE, off, (byte) (v != 0 ? b | bit : b & ~bit));
+      } else {
+        putAt(columnLanes[c], d, i, v);
+      }
     }
 
     @Override public void putOutput(VarkaVectorIR root, MemorySegment d, int i, long v) {
@@ -1049,6 +1065,9 @@ public final class VarkaKernelChecks {
 
     @Override public long poisonColumn(int c, int nullOrdinal) {
       boolean low = (nullOrdinal & 1) == 0;
+      if (bitColumns[c]) {
+        return low ? 0L : 1L;
+      }
       return switch (columnLanes[c]) {
         case BYTE -> low ? Byte.MIN_VALUE : Byte.MAX_VALUE;
         case SHORT -> low ? Short.MIN_VALUE : Short.MAX_VALUE;
@@ -1097,6 +1116,26 @@ public final class VarkaKernelChecks {
         case LONG -> out.get(ValueLayout.JAVA_LONG, i * 8L);
       };
     }
+  }
+
+  /** The inputs {@code roots} read through a {@link BoolColumn}: the bit-stored columns. */
+  static boolean[] bitColumns(List<VarkaVectorIR> roots, int numInputs) {
+    var bits = new boolean[numInputs];
+    var seen = new HashSet<VarkaVectorIR>();
+    var todo = new ArrayDeque<VarkaVectorIR>(roots);
+    while (!todo.isEmpty()) {
+      VarkaVectorIR node = todo.pop();
+      if (!seen.add(node)) {
+        continue;
+      }
+      if (node instanceof BoolColumn b && b.ordinal() < numInputs) {
+        bits[b.ordinal()] = true;
+      }
+      for (VarkaVectorIR child : VarkaVectorIR.childrenOf(node)) {
+        todo.push(child);
+      }
+    }
+    return bits;
   }
 
   /** Each of {@code numInputs} columns' lane as {@code roots} read it; the long lane if unread. */

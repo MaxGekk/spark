@@ -480,6 +480,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("b <= b2", "an ordering over booleans, false before true: not NOT b OR b2, which "
         + "is true where b is null and b2 is true"),
       Row("b > b2"),
+      Row("b < b2", "the other strict ordering: true only for false then true"),
+      Row("b >= b2"),
       Row("b <=> b2", "never unknown: two nulls are equal"),
       Row("b IS NULL", "the column's own validity word"),
       Row("b IS NOT NULL", "the column's own validity word"),
@@ -505,6 +507,7 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("y1 >= y2"),
       Row("y1 = 5Y", "a narrow column against a narrow literal, stored as the same width"),
       Row("y1 IS NOT NULL", "the column's own validity word"),
+      Row("y1 <=> y2", "never unknown: two nulls are equal"),
       Row("y1 IN (1Y, 2Y, 3Y, -1Y)",
         "an IN list over a narrow column, lowered to an equality chain"),
       // Over `spark.sql.optimizer.inSetConversionThreshold` (10 by default) the optimizer
@@ -520,27 +523,30 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("if(y1 IS NULL, 5Y, y1)", "a narrow literal in the ELSE: the stored value is one " +
         "byte a row and the missing row takes the constant"),
       Row("greatest(y1, y2)"),
-      Row("least(y1, y2)"))),
+      Row("least(y1, y2)"),
+      Row("coalesce(y1, y2)", "the first non-null of two narrow columns"))),
 
-    // The SMALLINT twins of the seven rows above.
+    // The SMALLINT twins of the eight rows above.
     Family("SMALLINT columns", predicates = true, Seq(
       Row("s1 < s2", "the two-byte twin of the TINYINT comparison"),
       Row("s1 <= s2"),
       Row("s1 >= s2"),
       Row("s1 = 5S", "a SMALLINT column against a SMALLINT literal"),
       Row("s1 IS NOT NULL"),
+      Row("s1 <=> s2"),
       Row("s1 IN (1S, 2S, 3S, -1S)"),
       Row("s1 IN (11 to 16 short literals)",
         "an IN list this long arrives from the optimizer as an InSet and fuses the same way",
         Some(InSet(s1, (1 to 11).map(v => v.toShort.asInstanceOf[Any]).toSet)),
         Some((1 to 11).map(v => s"${v}S").mkString("s1 IN (", ", ", ")"))))),
 
-    // The SMALLINT twins of the four choice rows above.
+    // The SMALLINT twins of the five choice rows above.
     Family("SMALLINT columns choosing values", predicates = false, Seq(
       Row("CASE WHEN s1 > s2 THEN s1 ELSE s2 END", "two bytes a row at the store"),
       Row("if(s1 IS NULL, 5S, s1)", "the two-byte twin of the TINYINT constant choice"),
       Row("greatest(s1, s2)"),
-      Row("least(s1, s2)"))),
+      Row("least(s1, s2)"),
+      Row("coalesce(s1, s2)"))),
 
     // A narrow value meeting an int one (VARKA-329): Catalyst's coercion casts the narrow side
     // to int, and the cast is the column's widening load, so these are int kernels reading a
@@ -1225,8 +1231,9 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
    * the census credits a class with (VARKA-328). A class is credited only with the types its own
    * node takes, so `year(d) = 2021 AND i > 0` credits `Year` with a date and the comparisons with
    * an int, where the column types the whole row reads would credit `Year` with the int as well.
-   * A condition's `BOOLEAN` is left out: no lane holds a `BOOLEAN` value until row 331, and an
-   * `AND`'s or an `IF`'s condition credited as one would let a `bool` claim pass.
+   * A `BOOLEAN` operand is credited only where it is a boolean column: an `AND`'s or an `IF`'s
+   * condition that is a comparison would otherwise let a `bool` claim pass with no boolean column
+   * in the row, while `b = b2` and `NOT b` are what row 331 fuses over one (VARKA-484).
    */
   private def operandsOf(row: Row): Seq[String] = expressionOf(row).collect {
     case e: Expression if !infrastructure.contains(e.getClass.getSimpleName) =>
@@ -1236,7 +1243,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
         case r: InheritAnalysisRules => r.parameters
         case _ => e.children
       }
-      operands.flatMap(c => censusType(c.dataType)).filterNot(_ == "bool")
+      operands.flatMap(c => censusType(c.dataType).filter(t => t != "bool" ||
+          c.isInstanceOf[Attribute]))
         .map(t => s"${e.getClass.getSimpleName}:$t")
   }.flatten.distinct.sorted
 

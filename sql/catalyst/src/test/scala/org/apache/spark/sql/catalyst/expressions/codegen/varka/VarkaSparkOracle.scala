@@ -18,7 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import org.apache.spark.sql.catalyst.expressions.{Attribute, BindReferences, Expression, GenericInternalRow, RuntimeReplaceable}
-import org.apache.spark.sql.types.{ByteType, DataType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, TimeType, YearMonthIntervalType}
 
 /**
  * Spark's own answer for each output of a compiled kernel (VARKA-276): the Catalyst expression the
@@ -30,8 +30,9 @@ import org.apache.spark.sql.types.{ByteType, DataType, DateType, DayTimeInterval
  * `outputs(o)` is output `o`'s expression and `inputs(i)` the attribute kernel input `i` reads.
  * A lane value becomes Catalyst's internal value of the input's type, which for every type a
  * kernel reads is the lane value itself: days for a date, months for a year-month interval,
- * nanoseconds for a `TIME`, microseconds for a day-time interval, and the byte or short a narrow
- * lane carries sign-extended into the row's `Long` (VARKA-329).
+ * nanoseconds for a `TIME`, microseconds for a day-time interval, the byte or short a narrow
+ * lane carries sign-extended into the row's `Long` (VARKA-329), and a `BOOLEAN` column's bit as
+ * 1 or 0 (VARKA-484).
  */
 class VarkaSparkOracle(outputs: Seq[Expression], inputs: Seq[Attribute]) {
 
@@ -54,6 +55,7 @@ class VarkaSparkOracle(outputs: Seq[Expression], inputs: Seq[Attribute]) {
     val values = row.zip(types).map {
       case (None, _) => null
       case (Some(v), DateType | IntegerType | _: YearMonthIntervalType) => v.toInt
+      case (Some(v), BooleanType) => v != 0L
       case (Some(v), ByteType) => v.toByte
       case (Some(v), ShortType) => v.toShort
       case (Some(v), LongType | _: TimeType | _: DayTimeIntervalType) => v

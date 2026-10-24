@@ -414,6 +414,8 @@ fi
 # while a plan still cites a path the scope catalogue moved away from.
 census_inputs='^(dev/varka_census\.py|dev/varka_catalogue_move\.sh|sql/varka/coverage\.json'
 census_inputs+='|sql/varka/plans/.*'
+census_inputs+='|sql/catalyst/src/test/java/org/apache/spark/sql/catalyst/expressions/codegen/varka'
+census_inputs+='/Varka[A-Za-z]*Conformance(Suite)?\.java'
 census_inputs+='|sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis'
 census_inputs+='/FunctionRegistry\.scala)$'
 if printf '%s\n' "${files[@]}" | grep -qE "$census_inputs"; then

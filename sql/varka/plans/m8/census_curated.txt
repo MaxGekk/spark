@@ -26,8 +26,8 @@
 # every former hard entry its construction, m8/PLAN.md 2.7). Rows are milestone 8's task numbers (m8/PLAN.md 3).
 
 [registered]
-coalesce|ALL|same|date|plumbing|333,329,331,338,341,348,359|item 55 adds the int branches
-if|ALL|same|date,bigint,byte,short|plumbing|333,329,331,338,341,348,359|
+coalesce|ALL|same|bool,date,byte,short|plumbing|333,329,331,338,341,348,359|item 55 adds the int branches
+if|ALL|same|bool,date,bigint,byte,short|plumbing|333,329,331,338,341,348,359|
 ifnull|ALL|same|date|plumbing|333,359|rewritten to coalesce by the optimizer
 nanvl|FLOAT|same||semantics|341|NaN test and blend
 nullif|ALL|same||plumbing|333,359|rewritten to if(a = b, null, a)
@@ -35,23 +35,23 @@ nullifzero|NUM|same||plumbing|333,359|rewritten to if(a = 0, null, a)
 nvl|ALL|same|date|plumbing|333,359|rewritten to coalesce by the optimizer
 nvl2|ALL|same||plumbing|333,359|rewritten to if(a IS NOT NULL, b, c)
 zeroifnull|NUM|same||plumbing|333,359|rewritten to coalesce(a, 0)
-when|ALL|same|date,bigint,dt,byte,short|plumbing|333,359,329|the CASE WHEN entry; item 94, in row 333, adds the missing ELSE
+when|ALL|same|bool,date,bigint,dt,byte,short|plumbing|333,359,329|the CASE WHEN entry; item 94, in row 333, adds the missing ELSE
 between|ALL|bool||plumbing|333|rewritten to two comparisons and an AND; no coverage row yet
 isnan|FLOAT|bool||plumbing|341|
-isnull|ALL|bool|int,bigint,date,time,ym,dt,byte,short|plumbing|333,334,359,329|a validity read; item 93 over a predicate
-isnotnull|ALL|bool|int,bigint,date,time,ym,dt,byte,short|plumbing|333,334,359,329|a validity read; item 93 over a predicate
+isnull|ALL|bool|bool,int,bigint,date,time,ym,dt,byte,short|plumbing|333,334,359,329|a validity read; item 93 over a predicate
+isnotnull|ALL|bool|bool,int,bigint,date,time,ym,dt,byte,short|plumbing|333,334,359,329|a validity read; item 93 over a predicate
 equal_null|ALL|bool||semantics|336,331,329,341,338,359|null-tolerant: item 34; bool is 331's BoolNullSafeEq, byte/short 329, float/double 341, ntz 338, dec 359
-and|bool|bool||plumbing|331,27|fused as a condition, over a BOOLEAN column too (331); a BOOLEAN output waits on 27
+and|bool|bool|bool|done|331,27|fused as a condition, over a BOOLEAN column too (331); a BOOLEAN output is row 27
 in|ALL|bool|date,ym,byte,short|plumbing|333,341,348,359,329|NaN equals NaN in Spark's IN
-not|bool|bool||plumbing|331,27|fused as a condition, over a BOOLEAN column too (331); a BOOLEAN output waits on 27
-or|bool|bool||plumbing|331,27|fused as a condition, over a BOOLEAN column too (331); a BOOLEAN output waits on 27
-<=>|ALL|bool||semantics|336,331,329,341,338,359|null-tolerant: item 34; bool is 331's BoolNullSafeEq, byte/short 329, float/double 341, ntz 338, dec 359
-=|ALL|bool|int,bigint,date,time,ym,dt,byte,short|semantics|341,348,359,329|Spark's NaN and -0.0 rules on floats
-==|ALL|bool|int,bigint,date,time,ym,dt,byte,short|semantics|341,348,359,329|alias of =
->|ALL|bool|int,bigint,date,time,ym,dt,byte,short|semantics|341,348,359,329|Spark's NaN ordering on floats
->=|ALL|bool|int,bigint,date,time,ym,dt,byte,short|semantics|341,348,359,329|Spark's NaN ordering on floats
-<|ALL|bool|int,bigint,date,time,ym,dt,byte,short|semantics|341,348,359,329|Spark's NaN ordering on floats
-<=|ALL|bool|int,bigint,date,time,ym,dt,byte,short|semantics|341,348,359,329|Spark's NaN ordering on floats
+not|bool|bool|bool|done|331,27|fused as a condition, over a BOOLEAN column too (331); a BOOLEAN output is row 27
+or|bool|bool|bool|done|331,27|fused as a condition, over a BOOLEAN column too (331); a BOOLEAN output is row 27
+<=>|ALL|bool|bool,byte,short|semantics|336,331,329,341,338,359|null-tolerant: item 34; bool is 331's BoolNullSafeEq, byte/short 329, float/double 341, ntz 338, dec 359
+=|ALL|bool|bool,int,bigint,date,time,ym,dt,byte,short|semantics|341,348,359,329|Spark's NaN and -0.0 rules on floats
+==|ALL|bool|bool,int,bigint,date,time,ym,dt,byte,short|semantics|341,348,359,329|alias of =
+>|ALL|bool|bool,int,bigint,date,time,ym,dt,byte,short|semantics|341,348,359,329|Spark's NaN ordering on floats
+>=|ALL|bool|bool,int,bigint,date,time,ym,dt,byte,short|semantics|341,348,359,329|Spark's NaN ordering on floats
+<|ALL|bool|bool,int,bigint,date,time,ym,dt,byte,short|semantics|341,348,359,329|Spark's NaN ordering on floats
+<=|ALL|bool|bool,int,bigint,date,time,ym,dt,byte,short|semantics|341,348,359,329|Spark's NaN ordering on floats
 !|bool|bool||plumbing|331,27|alias of not
 abs|NUM,IVL|same|byte,short,ym|semantics|330,104,103,342,348,359|the minimum value overflows: wraps or throws
 greatest|ALL|same|date,bigint,time,byte,short|semantics|333,341,348,359,329|NaN is the greatest float

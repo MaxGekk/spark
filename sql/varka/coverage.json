@@ -1964,7 +1964,7 @@
     "form" : "predicate",
     "catalyst" : [ "Not" ],
     "casts" : [ ],
-    "operands" : [ ],
+    "operands" : [ "Not:bool" ],
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "the pair swapped, no code"
@@ -1975,7 +1975,7 @@
     "form" : "predicate",
     "catalyst" : [ "And", "LessThan" ],
     "casts" : [ ],
-    "operands" : [ "LessThan:date" ],
+    "operands" : [ "And:bool", "LessThan:date" ],
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "beside a comparison, on the one lane they share"
@@ -1986,7 +1986,7 @@
     "form" : "predicate",
     "catalyst" : [ "EqualTo", "Or" ],
     "casts" : [ ],
-    "operands" : [ "EqualTo:int" ],
+    "operands" : [ "EqualTo:int", "Or:bool" ],
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "an unknown column beside a comparison"
@@ -1997,7 +1997,7 @@
     "form" : "predicate",
     "catalyst" : [ "And", "LessThan" ],
     "casts" : [ ],
-    "operands" : [ "LessThan:bigint" ],
+    "operands" : [ "And:bool", "LessThan:bigint" ],
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "the boolean leaf takes the comparison's long lane"
@@ -2008,7 +2008,7 @@
     "form" : "predicate",
     "catalyst" : [ "EqualTo" ],
     "casts" : [ ],
-    "operands" : [ ],
+    "operands" : [ "EqualTo:bool" ],
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "equality of two boolean columns: unknown where either is"
@@ -2019,7 +2019,7 @@
     "form" : "predicate",
     "catalyst" : [ "LessThanOrEqual" ],
     "casts" : [ ],
-    "operands" : [ ],
+    "operands" : [ "LessThanOrEqual:bool" ],
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "an ordering over booleans, false before true: not NOT b OR b2, which is true where b is null and b2 is true"
@@ -2030,7 +2030,29 @@
     "form" : "predicate",
     "catalyst" : [ "GreaterThan" ],
     "casts" : [ ],
-    "operands" : [ ],
+    "operands" : [ "GreaterThan:bool" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "domain" : "",
+    "note" : ""
+  }, {
+    "sql" : "b < b2",
+    "executable" : "b < b2",
+    "family" : "Boolean columns",
+    "form" : "predicate",
+    "catalyst" : [ "LessThan" ],
+    "casts" : [ ],
+    "operands" : [ "LessThan:bool" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "domain" : "",
+    "note" : "the other strict ordering: true only for false then true"
+  }, {
+    "sql" : "b >= b2",
+    "executable" : "b >= b2",
+    "family" : "Boolean columns",
+    "form" : "predicate",
+    "catalyst" : [ "GreaterThanOrEqual" ],
+    "casts" : [ ],
+    "operands" : [ "GreaterThanOrEqual:bool" ],
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : ""
@@ -2041,7 +2063,7 @@
     "form" : "predicate",
     "catalyst" : [ "EqualNullSafe" ],
     "casts" : [ ],
-    "operands" : [ ],
+    "operands" : [ "EqualNullSafe:bool" ],
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "never unknown: two nulls are equal"
@@ -2052,7 +2074,7 @@
     "form" : "predicate",
     "catalyst" : [ "IsNull" ],
     "casts" : [ ],
-    "operands" : [ ],
+    "operands" : [ "IsNull:bool" ],
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "the column's own validity word"
@@ -2063,7 +2085,7 @@
     "form" : "predicate",
     "catalyst" : [ "IsNotNull" ],
     "casts" : [ ],
-    "operands" : [ ],
+    "operands" : [ "IsNotNull:bool" ],
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "the column's own validity word"
@@ -2074,7 +2096,7 @@
     "form" : "predicate",
     "catalyst" : [ "And", "IsNull", "LessThan" ],
     "casts" : [ ],
-    "operands" : [ "LessThan:date" ],
+    "operands" : [ "And:bool", "LessThan:date" ],
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "a test over a predicate: the predicate is not known"
@@ -2085,7 +2107,7 @@
     "form" : "predicate",
     "catalyst" : [ "Coalesce" ],
     "casts" : [ ],
-    "operands" : [ ],
+    "operands" : [ "Coalesce:bool" ],
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "the first known boolean, as a condition"
@@ -2096,7 +2118,7 @@
     "form" : "predicate",
     "catalyst" : [ "CaseWhen", "LessThan" ],
     "casts" : [ ],
-    "operands" : [ "LessThan:date" ],
+    "operands" : [ "CaseWhen:bool", "LessThan:date" ],
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "a boolean choice: unknown takes ELSE"
@@ -2107,7 +2129,7 @@
     "form" : "predicate",
     "catalyst" : [ "CaseWhen", "GreaterThan" ],
     "casts" : [ ],
-    "operands" : [ "GreaterThan:int" ],
+    "operands" : [ "CaseWhen:bool", "GreaterThan:int" ],
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "no ELSE: a null constant, so the body is masked-only"
@@ -2118,7 +2140,7 @@
     "form" : "projection",
     "catalyst" : [ "If" ],
     "casts" : [ ],
-    "operands" : [ "If:date" ],
+    "operands" : [ "If:bool", "If:date" ],
     "switches" : [ "spark.sql.codegen.varka.family.condition.enabled" ],
     "domain" : "",
     "note" : "the int lane"
@@ -2129,7 +2151,7 @@
     "form" : "projection",
     "catalyst" : [ "If" ],
     "casts" : [ ],
-    "operands" : [ "If:bigint" ],
+    "operands" : [ "If:bigint", "If:bool" ],
     "switches" : [ "spark.sql.codegen.varka.family.condition.enabled" ],
     "domain" : "",
     "note" : "the leaf is lifted to the long lane of the values"
@@ -2140,7 +2162,7 @@
     "form" : "projection",
     "catalyst" : [ "CaseWhen" ],
     "casts" : [ ],
-    "operands" : [ "CaseWhen:bigint" ],
+    "operands" : [ "CaseWhen:bigint", "CaseWhen:bool" ],
     "switches" : [ "spark.sql.codegen.varka.family.condition.enabled" ],
     "domain" : "",
     "note" : "likewise, per branch"
@@ -2199,6 +2221,17 @@
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : "the column's own validity word"
+  }, {
+    "sql" : "y1 <=> y2",
+    "executable" : "y1 <=> y2",
+    "family" : "TINYINT columns",
+    "form" : "predicate",
+    "catalyst" : [ "EqualNullSafe" ],
+    "casts" : [ ],
+    "operands" : [ "EqualNullSafe:byte" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "domain" : "",
+    "note" : "never unknown: two nulls are equal"
   }, {
     "sql" : "y1 IN (1Y, 2Y, 3Y, -1Y)",
     "executable" : "y1 IN (1Y, 2Y, 3Y, -1Y)",
@@ -2266,6 +2299,17 @@
     "domain" : "",
     "note" : ""
   }, {
+    "sql" : "coalesce(y1, y2)",
+    "executable" : "coalesce(y1, y2)",
+    "family" : "TINYINT columns choosing values",
+    "form" : "projection",
+    "catalyst" : [ "Coalesce" ],
+    "casts" : [ ],
+    "operands" : [ "Coalesce:byte" ],
+    "switches" : [ "spark.sql.codegen.varka.family.condition.enabled" ],
+    "domain" : "",
+    "note" : "the first non-null of two narrow columns"
+  }, {
     "sql" : "s1 < s2",
     "executable" : "s1 < s2",
     "family" : "SMALLINT columns",
@@ -2317,6 +2361,17 @@
     "catalyst" : [ "IsNotNull" ],
     "casts" : [ ],
     "operands" : [ "IsNotNull:short" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
+    "domain" : "",
+    "note" : ""
+  }, {
+    "sql" : "s1 <=> s2",
+    "executable" : "s1 <=> s2",
+    "family" : "SMALLINT columns",
+    "form" : "predicate",
+    "catalyst" : [ "EqualNullSafe" ],
+    "casts" : [ ],
+    "operands" : [ "EqualNullSafe:short" ],
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled" ],
     "domain" : "",
     "note" : ""
@@ -2384,6 +2439,17 @@
     "casts" : [ ],
     "operands" : [ "Least:short" ],
     "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "",
+    "note" : ""
+  }, {
+    "sql" : "coalesce(s1, s2)",
+    "executable" : "coalesce(s1, s2)",
+    "family" : "SMALLINT columns choosing values",
+    "form" : "projection",
+    "catalyst" : [ "Coalesce" ],
+    "casts" : [ ],
+    "operands" : [ "Coalesce:short" ],
+    "switches" : [ "spark.sql.codegen.varka.family.condition.enabled" ],
     "domain" : "",
     "note" : ""
   }, {
