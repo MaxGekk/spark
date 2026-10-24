@@ -53,6 +53,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.KernelO
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelPlan;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaLoopEmitter;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Cond;
@@ -615,43 +616,25 @@ public final class VarkaExpressionCompiler {
           .map(ir -> sink.guardDayColumns(ir, marks.bounds()));
       if (compiled.isPresent()) {
         VarkaVectorIR ir = compiled.get();
-        // A narrow value the emission's width cannot widen - a TINYINT column at fewer than
-        // eight int lanes, or one with no baked lane count - declines here with its own reason
-        // rather than as a budget breach, since `fitsBudgets` refuses the kernel too.
-        Optional<String> narrow = VarkaLoopEmitter.narrowRefusal(List.of(ir), options);
-        if (narrow.isPresent()) {
-          marks.restore(inputs, literals, sink);
-          sink.take();
-          sink.note(narrow.get(), e);
-          return residual(position);
-        }
-        // One kernel is driven at one lane: its loop, its epilogue and its driving stores are that
-        // lane's species. The entries fused so far fix it, and an entry no lane serves beside them
-        // is demoted to residual with a reason that says so - checked here, before the budgets,
-        // because `fitsBudgets` would refuse the mix too but only answers yes or no, and a lane
-        // mismatch reported as a budget breach sends a reader hunting a chain-depth problem that
-        // is not there. A narrow entry beside an int one shares the int lane
-        // (`VarkaVectorIR.kernelLane`); a long entry shares no lane with either. An entry that
-        // converts between lanes is driven at the long lane (VARKA-28), so it joins a long kernel
-        // and not an int one.
+        // The kernel's plan decides whether the entry can join it (VARKA-488): first the entry
+        // alone - a narrow value the emission's width cannot widen, a TINYINT column at fewer
+        // than eight int lanes or with no baked lane count - then the kernel with it. One kernel
+        // is driven at one lane, so an entry no lane serves beside the entries fused so far is
+        // demoted with a reason that says so, checked before the budgets because `fitsBudgets`
+        // only answers yes or no, and a lane mismatch reported as a budget breach sends a reader
+        // hunting a chain-depth problem that is not there. A narrow entry beside an int one
+        // shares the int lane, a long entry shares no lane with either, and an entry that
+        // converts between lanes is driven at the long lane (VARKA-28). Joining can also move
+        // the kernel from a narrow lane to the int lane, where its narrow entries need the
+        // widening load this width may not have: the entry that moves it is the one demoted,
+        // and its reason says why, though it may hold no narrow value itself.
         List<VarkaVectorIR> with = new ArrayList<>(outputs);
         with.add(ir);
-        if (!outputs.isEmpty() && VarkaVectorIR.kernelLane(with, options).isEmpty()) {
+        Optional<String> refused = admission(ir, with, options);
+        if (refused.isPresent()) {
           marks.restore(inputs, literals, sink);
           sink.take();
-          sink.note(laneMismatch(VarkaVectorIR.emissionLane(ir, options),
-              VarkaVectorIR.kernelLane(outputs, options).orElseThrow()), e);
-          return residual(position);
-        }
-        // Joining can move the kernel from a narrow lane to the int lane, where its narrow
-        // entries need the widening load this width may not have. The entry that moves it is
-        // the one demoted, and its reason says why, though it may hold no narrow value itself.
-        Optional<String> joined = VarkaLoopEmitter.narrowRefusal(with, options);
-        if (joined.isPresent()) {
-          marks.restore(inputs, literals, sink);
-          sink.take();
-          sink.note("joining drives the kernel's narrow entries at the int lane, where "
-              + joined.get(), e);
+          sink.note(refused.get(), e);
           return residual(position);
         }
         // An accepted entry must also fit the emitter's structural budgets together with the
@@ -891,7 +874,8 @@ public final class VarkaExpressionCompiler {
           .map(c -> (Cond) sink.guardDayColumns(c, marks.bounds()));
       if (compiled.isPresent()) {
         Cond cond = compiled.get();
-        Optional<String> narrow = VarkaLoopEmitter.narrowRefusal(List.of(cond), options);
+        Optional<String> narrow = VarkaKernelPlan.of(List.of(cond), options).refusal()
+            .map(VarkaKernelPlan.Refusal::reason);
         if (narrow.isPresent()) {
           marks.restore(inputs, literals, sink);
           sink.take();
@@ -949,10 +933,10 @@ public final class VarkaExpressionCompiler {
           specs.add(new VarkaConjunctSpec(conjunct, true, Optional.empty()));
           continue;
         }
-        // fitsBudgets also fails through narrowRefusal, whose reason is the one to record;
+        // fitsBudgets also fails through the plan's refusal, whose reason is the one to record;
         // the budget message is only for the budgets proper.
-        budgetReason = VarkaLoopEmitter.narrowRefusal(List.of(candidate), options)
-            .orElse(budgetReason);
+        budgetReason = VarkaKernelPlan.of(List.of(candidate), options).refusal()
+            .map(VarkaKernelPlan.Refusal::reason).orElse(budgetReason);
       }
       marks.restore(inputs, literals, sink);
       if (compiled.isPresent()) {
@@ -1223,6 +1207,23 @@ public final class VarkaExpressionCompiler {
   }
 
   /** The reason an entry of one lane records when the kernel is already on the other. */
+  /**
+   * Why {@code entry} cannot join the kernel {@code with} holds it in, or empty when it can: the
+   * plan of the entry alone, then the plan of the kernel with it, whose narrow refusal says the
+   * joining is what moved the kernel to the int lane.
+   */
+  private static Optional<String> admission(VarkaVectorIR entry, List<VarkaVectorIR> with,
+      VarkaEmitOptions options) {
+    Optional<VarkaKernelPlan.Refusal> alone =
+        VarkaKernelPlan.of(List.of(entry), options).refusal();
+    if (alone.isPresent()) {
+      return Optional.of(alone.get().reason());
+    }
+    return VarkaKernelPlan.of(with, options).refusal().map(r ->
+        r.kind() == VarkaKernelPlan.Kind.LANE_MISMATCH ? r.reason()
+            : "joining drives the kernel's narrow entries at the int lane, where " + r.reason());
+  }
+
   private static String laneMismatch(LaneType entry, LaneType kernel) {
     return "the " + entry + " lane in a kernel on the " + kernel
         + " lane: one kernel holds one lane";

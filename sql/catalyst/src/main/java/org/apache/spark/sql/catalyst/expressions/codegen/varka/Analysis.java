@@ -20,7 +20,6 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 import static org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.childrenOf;
 import static org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaChronoLowering.chronoChild;
 import static org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaChronoLowering.tailReadsMarchMonth;
-import static org.apache.spark.sql.catalyst.expressions.codegen.varka.Lane.emitLanes;
 import static org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitBudget.*;
 
 import java.util.ArrayList;
@@ -213,12 +212,19 @@ final class Analysis {
    * below keeps true; a kernel that converts between lanes is driven at the long lane, and its
    * int-lane nodes are emitted at the int species of the same width ({@link #laneOf}).
    *
-   * <p>It is the roots' shared lane ({@link VarkaVectorIR#kernelLane}), and {@link #analyze}'s
+   * <p>It is the plan's drive lane ({@link VarkaKernelPlan#drive}), and {@link #analyze}'s
    * refusal below is what makes a tree safe on it: no node of an int-lane emission may be on the
    * long lane, so a mixed tree is rejected there rather than emitted with one lane's descriptors
    * over the other's data.
    */
   final Lane lane;
+
+  /**
+   * The kernel's plan (VARKA-488), which decided {@link #lane} and decides each node's and each
+   * input's lane, whether the kernel converts between lanes and the iteration's int groups: the
+   * methods below that answer those read it rather than deriving them.
+   */
+  private final VarkaKernelPlan plan;
 
   /**
    * The static table each {@link InRanges} node reads its bounds from, by the field name the
@@ -247,15 +253,10 @@ final class Analysis {
    * Cleared with each grouping's materialized prefixes, which the count reads.
    */
   final Map<List<Object>, Map<VarkaVectorIR, Integer>> bodyUses = new HashMap<>();
-  /** The output roots: a narrowing root that nothing else reads narrows at its store. */
-  final Set<VarkaVectorIR> roots = new HashSet<>();
-  /** Every node some other node reads, which tells a narrowing root read elsewhere apart. */
-  private final Set<VarkaVectorIR> operands = new HashSet<>();
-  /** Whether the kernel converts between lanes, decided once the roots are analyzed. */
-  private Boolean mixed;
-  /** Set once every root is analyzed, the first pass after which {@link #mixed} may be asked. */
-  private boolean rootsAnalyzed;
-  /** Each referenced input's lane, which a kernel that converts between lanes maps it at. */
+  /**
+   * Each referenced input's lane as its leaves read it, so that two leaves reading one column at
+   * two lanes are refused; the lane it is mapped at is the plan's ({@link #inputLane}).
+   */
   private final Map<Integer, VarkaVectorIR.LaneType> inputLanes = new HashMap<>();
   /** Per distinct node, the bitset of input ordinals its subtree references. */
   final Map<VarkaVectorIR, Long> columns = new HashMap<>();
@@ -492,12 +493,13 @@ final class Analysis {
   long boolInputs = 0L;
   private int opNodes = 0;
 
-  Analysis(int numInputs, int numLiterals, VarkaEmitOptions options, Lane lane) {
+  Analysis(int numInputs, int numLiterals, VarkaEmitOptions options, VarkaKernelPlan plan) {
     this.numInputs = numInputs;
     this.numLiterals = numLiterals;
     this.options = options;
-    this.lane = lane;
-    this.lanes = emitLanes(options, lane);
+    this.plan = plan;
+    this.lane = plan.lane();
+    this.lanes = plan.lanes();
     this.divider = Divider.of(this);
   }
 
@@ -505,7 +507,6 @@ final class Analysis {
     // A Cond root is legal: it emits this output's selection bitmap into dstValidity, with the
     // dstData slot unused (see the class doc). Value positions below a root still reject
     // conditions via requireValue.
-    roots.add(root);
     analyze(root);
     if (height.get(root) > MAX_CHAIN_DEPTH) {
       throw VarkaErrors.illegalArgument(
@@ -532,7 +533,6 @@ final class Analysis {
    * than being checked at the guard.
    */
   void collectArmContexts(List<VarkaVectorIR> outputs) {
-    rootsAnalyzed = true;
     for (VarkaVectorIR root : outputs) {
       assignArmChain(root, List.of());
     }
@@ -941,24 +941,12 @@ final class Analysis {
    * node that is emitted as an int vector - every int-lane node but a narrowing root that nothing
    * else reads, whose value stays in the long lane until its store. False for every single-lane
    * kernel and for a kernel whose only int-lane nodes are narrowing roots, such as the
-   * {@code TIME} extracts'.
-   * Asked once the roots are analyzed, and answered from then on.
+   * {@code TIME} extracts'. The plan's answer.
    */
   boolean mixed() {
-    if (mixed == null) {
-      if (!rootsAnalyzed) {
-        throw VarkaErrors.illegalState("the lanes are asked before every root is analyzed");
-      }
-      boolean any = false;
-      if (lane == Lane.LONG) {
-        for (VarkaVectorIR node : topoOrder) {
-          any |= node.laneType() == VarkaVectorIR.LaneType.INT && !narrowsAtStore(node);
-        }
-      }
-      mixed = any;
-    }
-    return mixed;
+    return plan.mixed();
   }
+
 
   /**
    * Whether {@code node} is a narrowing that stays in the long lane until its root's store: an
@@ -966,7 +954,7 @@ final class Analysis {
    * its consumer computes in the int lane.
    */
   boolean narrowsAtStore(VarkaVectorIR node) {
-    return node instanceof NarrowLane && roots.contains(node) && !operands.contains(node);
+    return plan.narrowsAtStore(node);
   }
 
   /**
@@ -975,16 +963,12 @@ final class Analysis {
    * kernel that converts between lanes the node's own, a narrowing at its store excepted.
    */
   Lane laneOf(VarkaVectorIR node) {
-    if (!mixed() || narrowsAtStore(node)) {
-      return lane;
-    }
-    return Lane.of(node.laneType());
+    return plan.laneOf(node);
   }
 
   /** The lane input {@code ordinal} is read at, which sizes its data segment. */
   Lane inputLane(int ordinal) {
-    VarkaVectorIR.LaneType laneType = inputLanes.get(ordinal);
-    return laneType == null ? lane : Lane.of(laneType);
+    return plan.inputLane(ordinal);
   }
 
   /**
@@ -993,10 +977,7 @@ final class Analysis {
    * same width, twice the long lanes.
    */
   int lanesOf(Lane of) {
-    if (of == lane) {
-      return lanes;
-    }
-    return lanes == 0 ? 0 : lanes * 2;
+    return plan.lanesOf(of);
   }
 
   /**
@@ -1009,42 +990,14 @@ final class Analysis {
   }
 
   /**
-   * How many int lane groups one loop iteration of this emission computes, set by
-   * {@link #planNarrowGroups}; see there.
+   * How many int lane groups one loop iteration of this emission computes: the widest part count
+   * any narrow value the roots read loads at ({@link VarkaKernelPlan}), so that a kernel driven at
+   * four int lanes reads a byte column as an eight-lane 64-bit species and converts it in two
+   * parts. The count is the kernel's, not a body's, because every body's loop has to agree on the
+   * iteration it covers.
    */
-  private int narrowGroups = 1;
-
-  /**
-   * Sizes the iteration from the narrow lanes the roots read as values (
-   * {@link VarkaVectorIR#narrowValuesIn}): the widest part count any of them loads at, so that
-   * a kernel driven at four int lanes reads a byte column as an eight-lane 64-bit species and
-   * converts it in two parts, one an int group, while a kernel driven at two reads a byte
-   * column in four parts and a short column in two. At eight and sixteen int lanes the narrow
-   * species of the int species' own width exists and this is one. The count is the kernel's,
-   * not a body's, because the loads of every body read the same species and every body's loop
-   * has to agree on the iteration it covers; a group whose output reads no narrow column still
-   * computes its own rows. A narrow column read only for its validity word loads no species and
-   * leaves the iteration at one group, as {@link VarkaLoopEmitter#narrowRefusal} lets it emit. A
-   * kernel not driven at the int lane answers one: a narrow value has no lowering in a
-   * long-lane kernel, and a narrow-driven kernel has no widening load.
-   */
-  void planNarrowGroups(List<VarkaVectorIR> outputs) {
-    if (lane != Lane.INT || lanes == 0) {
-      narrowGroups = 1;
-      return;
-    }
-    int groups = 1;
-    for (VarkaVectorIR root : outputs) {
-      for (VarkaVectorIR.LaneType type : VarkaVectorIR.narrowValuesIn(root)) {
-        groups = Math.max(groups, widenLanes(Lane.of(type)) / lanes);
-      }
-    }
-    narrowGroups = groups;
-  }
-
-  /** The iteration's int group count, from {@link #planNarrowGroups}. */
   int narrowGroups() {
-    return narrowGroups;
+    return plan.narrowGroups();
   }
 
   /**
@@ -1258,7 +1211,7 @@ final class Analysis {
   }
 
   private void analyze(VarkaVectorIR node) {
-    // The lane rule, enforced per node. `laneOf` reads the output roots only, so this is the
+    // The lane rule, enforced per node. The plan reads the output roots only, so this is the
     // sole defence against a node further down disagreeing - which would emit one lane's
     // descriptors over the other's data. A narrow-lane emission - the NATIVE arm, whose every
     // value is narrow - holds nothing else. An int-lane emission holds int nodes and the narrow
@@ -1511,7 +1464,6 @@ final class Analysis {
           && !(node instanceof BoolNullSafeEq) && !(node instanceof CondValue)) {
         requireValue(child, "child of " + node.getClass().getSimpleName());
       }
-      operands.add(child);
       analyze(child);
       set |= columns.get(child);
       maxChildHeight = Math.max(maxChildHeight, height.get(child));

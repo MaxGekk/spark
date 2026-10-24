@@ -39,7 +39,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Lan
  * refusing a kernel {@code narrowRefusal} refuses would move no byte. This suite pins the
  * refusal side and the lanes: over random kernels of every grammar, pairs of them, and every
  * coverage row, the plan
- * answers what {@code kernelLane}, {@code narrowRefusal} and {@link Analysis} answer, and the
+ * answers what {@code kernelLane} and {@code narrowRefusal} answer, and the
  * compiler's admission of one entry after another decides the same with either. It runs under the
  * matrix's configuration, since the lanes turn on {@code narrowLanes}, {@code validityByWidth}
  * and {@code lanesOverride}. It is deleted with {@code kernelLane} and {@code narrowRefusal}.
@@ -120,29 +120,30 @@ public final class VarkaKernelPlanEquivalenceSuite {
   }
 
   @Test
-  @DisplayName("the plan answers what kernelLane, narrowRefusal and Analysis answer")
+  @DisplayName("the plan answers what kernelLane and narrowRefusal answer")
   void lanes() {
     var wrong = new ArrayList<String>();
-    int analyzed = 0;
+    int planned = 0;
     for (Kernel k : corpus()) {
       String disagreement = compare(k);
       if (disagreement == null) {
         continue;
       }
       if (disagreement.isEmpty()) {
-        analyzed++;
+        planned++;
       } else if (wrong.size() < 20) {
         wrong.add(k.name() + ": " + disagreement);
       }
     }
     assertTrue(wrong.isEmpty(), "the plan disagrees:\n  " + String.join("\n  ", wrong));
-    assertTrue(analyzed > 1000, "only " + analyzed + " kernels reached Analysis");
+    assertTrue(planned > 1000, "only " + planned + " kernels were emittable");
   }
 
   /**
    * The first way the plan and the derivations it replaces differ on {@code k}, empty when
-   * they agree and the kernel reached {@code Analysis}, or null when they agree on a refusal or
-   * the kernel is one {@code Analysis} itself rejects.
+   * they agree on an emittable kernel, or null when they agree on a refusal. The node and input
+   * lanes are not compared: {@code Analysis} reads them from the plan, and the emitted-bytes
+   * oracle holds what it emits with them.
    */
   private static String compare(Kernel k) {
     VarkaKernelPlan plan = VarkaKernelPlan.of(k.roots(), OPTIONS);
@@ -160,43 +161,6 @@ public final class VarkaKernelPlanEquivalenceSuite {
     }
     if (plan.drive() != kernel.get()) {
       return "kernel lane " + kernel.get() + ", the plan's " + plan.drive();
-    }
-    Analysis a = new Analysis(k.numInputs(), k.numLiterals(), OPTIONS, Lane.of(kernel.get()));
-    try {
-      a.planNarrowGroups(k.roots());
-      for (VarkaVectorIR root : k.roots()) {
-        a.analyzeRoot(root);
-      }
-      a.collectArmContexts(k.roots());
-    } catch (RuntimeException e) {
-      // A kernel the analysis rejects (too deep, a column at two lanes) is the emitter's to
-      // refuse, not a lane decision; the plan is not asked about it.
-      return null;
-    }
-    if (a.mixed() != plan.mixed()) {
-      return "mixed " + a.mixed() + ", the plan's " + plan.mixed();
-    }
-    if (a.narrowGroups() != plan.narrowGroups()) {
-      return "narrow groups " + a.narrowGroups() + ", the plan's " + plan.narrowGroups();
-    }
-    if (a.lanes != plan.lanes()) {
-      return "lanes " + a.lanes + ", the plan's " + plan.lanes();
-    }
-    for (Lane l : List.of(Lane.INT, Lane.LONG)) {
-      if (a.lanesOf(l) != plan.lanesOf(l)) {
-        return "lanes of " + l + " " + a.lanesOf(l) + ", the plan's " + plan.lanesOf(l);
-      }
-    }
-    for (VarkaVectorIR node : a.topoOrder) {
-      if (a.laneOf(node) != plan.laneOf(node)
-          || a.narrowsAtStore(node) != plan.narrowsAtStore(node)) {
-        return "node " + node + " at " + a.laneOf(node) + ", the plan's " + plan.laneOf(node);
-      }
-    }
-    for (int i = 0; i < k.numInputs(); i++) {
-      if (a.inputLane(i) != plan.inputLane(i)) {
-        return "input " + i + " at " + a.inputLane(i) + ", the plan's " + plan.inputLane(i);
-      }
     }
     return "";
   }

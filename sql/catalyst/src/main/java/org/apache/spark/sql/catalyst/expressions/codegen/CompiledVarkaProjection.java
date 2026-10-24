@@ -22,6 +22,7 @@ import java.util.Optional;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelPlan;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.types.DataType;
@@ -67,8 +68,7 @@ public record CompiledVarkaProjection(
     // the same side as an int one here. The defaults answer the lane for the narrow trees: the
     // arm chooses between INT and a narrow lane, and both read the int table.
     if (!longLiterals.isEmpty() && !outputs.isEmpty()
-        && VarkaVectorIR.kernelLane(outputs, VarkaEmitOptions.DEFAULTS)
-            .filter(l -> l == LaneType.LONG).isEmpty()) {
+        && !drivesLong(VarkaKernelPlan.of(outputs, VarkaEmitOptions.DEFAULTS))) {
       throw VarkaErrors.illegalArgument(
           "a kernel driven at the int lane reads no long literal table");
     }
@@ -108,8 +108,17 @@ public record CompiledVarkaProjection(
    * the shape is keyed on.
    */
   public LaneType lane(VarkaEmitOptions options) {
-    return VarkaVectorIR.kernelLane(outputs, options).orElseThrow(
-        () -> VarkaErrors.illegalArgument("outputs mix the long lane with another: " + outputs));
+    VarkaKernelPlan plan = VarkaKernelPlan.of(outputs, options);
+    if (plan.refusal().isPresent()) {
+      throw VarkaErrors.illegalArgument(
+          "outputs mix the long lane with another: " + outputs);
+    }
+    return plan.drive();
+  }
+
+  /** Whether a plan drives its kernel at the long lane; a refused one drives at none. */
+  private static boolean drivesLong(VarkaKernelPlan plan) {
+    return plan.refusal().isEmpty() && plan.drive() == LaneType.LONG;
   }
 
   /**
