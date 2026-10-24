@@ -1845,63 +1845,6 @@ public final class VarkaLoopEmitter {
   }
 
   /**
-   * Why this kernel cannot be emitted over the narrow values it holds, or empty when it can.
-   *
-   * <p>Under {@link VarkaEmitOptions#narrowLanes()} a kernel whose every value is narrow computes
-   * in the narrow species itself, so nothing has to be converted. Otherwise a narrow column is
-   * read with one widening load per iteration, and that load needs a narrow species wider than
-   * or as wide as the int group: the narrow species of the int species' width where it exists -
-   * eight byte lanes at eight int lanes, four short lanes at four - and otherwise the next width
-   * up, whose parts each become one int group ({@link Lane#widenLanes}): a byte at four int
-   * lanes would need a 32-bit species the Vector API does not have, so it reads an eight-lane
-   * 64-bit load whose two parts are the iteration's two int groups. A width with no baked lane
-   * count - {@code validityByWidth} off - cannot name the species at all, and the entry
-   * declines: the row engine answers it.
-   */
-  public static Optional<String> narrowRefusal(
-      List<VarkaVectorIR> outputs, VarkaEmitOptions options) {
-    // The kernel's lane, not each root's: a native narrow root beside an int one is driven at the
-    // int lane and needs the widening load. Where no lane serves the roots, which the lane check
-    // refuses on its own, each root is judged at its own.
-    Optional<VarkaVectorIR.LaneType> kernel = VarkaVectorIR.kernelLane(outputs, options);
-    for (VarkaVectorIR root : outputs) {
-      Set<VarkaVectorIR.LaneType> lanes = VarkaVectorIR.lanesIn(root);
-      boolean narrow = lanes.contains(VarkaVectorIR.LaneType.BYTE)
-          || lanes.contains(VarkaVectorIR.LaneType.SHORT);
-      if (!narrow) {
-        continue;
-      }
-      VarkaVectorIR.LaneType drive =
-          kernel.orElseGet(() -> VarkaVectorIR.emissionLane(root, options));
-      if (drive.isNarrow()) {
-        continue;
-      }
-      if (drive == VarkaVectorIR.LaneType.LONG) {
-        // Analysis admits no narrow node in a long-lane emission, not even one read only for
-        // its validity word, so the entry declines here rather than failing at emit.
-        return Optional.of("a narrow value under a bigint kernel has no lowering");
-      }
-      if (!VarkaVectorIR.needsNarrowSpecies(root)) {
-        // A narrow column whose only use is a validity word - `y1 IS NOT NULL` - reads no
-        // value and needs no narrow species, so it emits at this int lane count. Refusing it
-        // would name a load the tree never emits.
-        continue;
-      }
-      int intLanes = Lane.emitLanes(options, Lane.INT);
-      if (intLanes == 0) {
-        return Optional.of("a narrow column needs a baked int lane count to be widened");
-      }
-      for (VarkaVectorIR.LaneType type : lanes) {
-        if (type.isNarrow() && Lane.widenLanes(intLanes, Lane.of(type)) == 0) {
-          return Optional.of("a " + type + " column has no widening load at "
-              + intLanes + " int lanes");
-        }
-      }
-    }
-    return Optional.empty();
-  }
-
-  /**
    * How the bitmap pass classified the value roots of this shape under
    * {@code options}: {@code [served, declined]}, where a declined root is one whose word is a
    * pure expression that mixes AND and OR, which no chain of one operator can fold into the

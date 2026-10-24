@@ -455,16 +455,16 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     // converts where it is, and the kernel holds both lanes.
     val narrowed = new NarrowLane(longCol)
     assert(narrowed.laneType() === LaneType.INT)
-    assert(VarkaVectorIR.emissionLane(narrowed, VarkaEmitOptions.DEFAULTS) === LaneType.LONG)
-    assert(VarkaVectorIR.emissionLane(longCol, VarkaEmitOptions.DEFAULTS) === LaneType.LONG)
-    assert(VarkaVectorIR.emissionLane(intCol, VarkaEmitOptions.DEFAULTS) === LaneType.INT)
+    assert(VarkaKernelPlan.emissionLane(narrowed, VarkaEmitOptions.DEFAULTS) === LaneType.LONG)
+    assert(VarkaKernelPlan.emissionLane(longCol, VarkaEmitOptions.DEFAULTS) === LaneType.LONG)
+    assert(VarkaKernelPlan.emissionLane(intCol, VarkaEmitOptions.DEFAULTS) === LaneType.INT)
     assert(VarkaVectorIR.canonical(narrowed) ===
       s"(narrow:INT ${VarkaVectorIR.canonical(longCol)})")
     val overInt = intercept[IllegalArgumentException](new NarrowLane(intCol))
     assert(overInt.getMessage.contains("narrowLane takes a child on a lane wider than INT"),
       overInt.getMessage)
     val interior = new IntArith(IntOp.ADD, Overflow.WRAP, narrowed, intLit)
-    assert(VarkaVectorIR.emissionLane(interior, VarkaEmitOptions.DEFAULTS) === LaneType.LONG)
+    assert(VarkaKernelPlan.emissionLane(interior, VarkaEmitOptions.DEFAULTS) === LaneType.LONG)
     VarkaLoopEmitter.emit("VarkaInteriorNarrowKernel", Seq[VarkaVectorIR](interior).asJava,
       1, 1, null, null, VarkaMatrix.base)
   }

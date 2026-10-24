@@ -103,7 +103,7 @@ public record CompiledVarkaProjection(
    * The lane the kernel's loop runs at, and so the {@code run} overload the evaluator calls: the
    * roots' shared emission lane, which is a root's own except for a narrowing root, whose 32-bit
    * column is computed in the 64-bit lane, and a native narrow root beside an int one, which runs
-   * at the int lane ({@code VarkaVectorIR.kernelLane}). The options are the caller's because the
+   * at the int lane ({@code VarkaKernelPlan.drive}). The options are the caller's because the
    * narrow arm's lane is theirs ({@link VarkaEmitOptions#narrowLanes()}), and they are the options
    * the shape is keyed on.
    */

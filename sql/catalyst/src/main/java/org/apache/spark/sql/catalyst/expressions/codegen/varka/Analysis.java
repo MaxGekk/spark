@@ -206,7 +206,7 @@ final class Analysis {
    */
   final int lanes;
   /**
-   * The lane this emission drives its loop at ({@link VarkaVectorIR#emissionLane}): the species of
+   * The lane this emission drives its loop at ({@link VarkaKernelPlan#drive}): the species of
    * its loop bound, its lane count, its validity helpers and its {@code run} descriptor. One per
    * emitted class. Every node of a single-lane emission is on it, which {@link #analyze}'s refusal
    * below keeps true; a kernel that converts between lanes is driven at the long lane, and its

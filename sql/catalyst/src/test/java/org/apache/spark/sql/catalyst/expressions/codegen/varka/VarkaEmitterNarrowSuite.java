@@ -170,7 +170,7 @@ public final class VarkaEmitterNarrowSuite {
    * refused shape behind a configuration that was not supposed to reach it.
    */
   private static void refuseForNoSpecies(List<VarkaVectorIR> roots, VarkaEmitOptions options) {
-    Optional<String> reason = VarkaLoopEmitter.narrowRefusal(roots, options);
+    Optional<String> reason = VarkaKernelPlan.refusalOf(roots, options);
     if (reason.isPresent()) {
       assertEquals("a narrow column needs a baked int lane count to be widened", reason.get(),
           "unexpected refusal: " + reason.get());
@@ -307,16 +307,16 @@ public final class VarkaEmitterNarrowSuite {
   @Test
   @DisplayName("the option picks the narrow lane only where every value is narrow")
   public void theOptionPicksTheNarrowLane() {
-    assertEquals(LaneType.INT, VarkaVectorIR.emissionLane(BYTE_COL, WIDENED));
-    assertEquals(LaneType.BYTE, VarkaVectorIR.emissionLane(BYTE_COL, NATIVE));
-    assertEquals(LaneType.INT, VarkaVectorIR.emissionLane(SHORT_COL, WIDENED));
-    assertEquals(LaneType.SHORT, VarkaVectorIR.emissionLane(SHORT_COL, NATIVE));
+    assertEquals(LaneType.INT, VarkaKernelPlan.emissionLane(BYTE_COL, WIDENED));
+    assertEquals(LaneType.BYTE, VarkaKernelPlan.emissionLane(BYTE_COL, NATIVE));
+    assertEquals(LaneType.INT, VarkaKernelPlan.emissionLane(SHORT_COL, WIDENED));
+    assertEquals(LaneType.SHORT, VarkaKernelPlan.emissionLane(SHORT_COL, NATIVE));
     // A comparison of two narrow columns is itself narrow - its lane is its left operand's -
     // so the native arm takes it to the narrow lane too, and only the widened arm's int lane
     // stands between the leaves and the mask.
     Cond cmp = new Compare(CompareOp.LT, BYTE_COL, BYTE_COL_2);
-    assertEquals(LaneType.INT, VarkaVectorIR.emissionLane(cmp, WIDENED));
-    assertEquals(LaneType.BYTE, VarkaVectorIR.emissionLane(cmp, NATIVE));
+    assertEquals(LaneType.INT, VarkaKernelPlan.emissionLane(cmp, WIDENED));
+    assertEquals(LaneType.BYTE, VarkaKernelPlan.emissionLane(cmp, NATIVE));
   }
 
   @Test
@@ -326,14 +326,14 @@ public final class VarkaEmitterNarrowSuite {
     VarkaVectorIR shortAbs = new IntNeg(Overflow.WRAP, new ColumnRef(2, LaneType.SHORT), true);
     VarkaVectorIR intCol = new ColumnRef(3, LaneType.INT);
     VarkaVectorIR intSum = new IntArith(IntOp.ADD, Overflow.WRAP, intCol, intCol);
-    assertEquals(Optional.of(LaneType.BYTE), VarkaVectorIR.kernelLane(List.of(byteSum), NATIVE));
+    assertEquals(Optional.of(LaneType.BYTE), VarkaKernelPlan.driveOf(List.of(byteSum), NATIVE));
     // Each root alone would run native; together they have no one narrow species, and the int
     // lane serves both through the widened lowering, as it serves an int root beside them.
     assertEquals(Optional.of(LaneType.INT),
-        VarkaVectorIR.kernelLane(List.of(byteSum, shortAbs), NATIVE));
+        VarkaKernelPlan.driveOf(List.of(byteSum, shortAbs), NATIVE));
     assertEquals(Optional.of(LaneType.INT),
-        VarkaVectorIR.kernelLane(List.of(byteSum, intSum), NATIVE));
-    assertEquals(Optional.empty(), VarkaVectorIR.kernelLane(
+        VarkaKernelPlan.driveOf(List.of(byteSum, intSum), NATIVE));
+    assertEquals(Optional.empty(), VarkaKernelPlan.driveOf(
         List.of(byteSum, new ColumnRef(4, LaneType.LONG)), NATIVE));
     int length = 300;
     int[][] data = {tabulate(length, row -> ((row * 7) % 256) - 128),
@@ -359,7 +359,7 @@ public final class VarkaEmitterNarrowSuite {
         new WidenLane(BYTE_COL, LaneType.LONG));
     for (Arm arm : ARMS) {
       assertEquals(Optional.of("a narrow value under a bigint kernel has no lowering"),
-          VarkaLoopEmitter.narrowRefusal(List.of(longNarrow), arm.options()), arm.name());
+          VarkaKernelPlan.refusalOf(List.of(longNarrow), arm.options()), arm.name());
     }
     // The same choice on the int lane is the widened arm's ordinary shape: where a configuration
     // bakes no lane count it is refused, but for that width and never for the long lane, which
@@ -368,7 +368,7 @@ public final class VarkaEmitterNarrowSuite {
         new Compare(CompareOp.LT, new ColumnRef(1, LaneType.INT),
             new ColumnRef(2, LaneType.INT)),
         new WidenLane(BYTE_COL, LaneType.INT), new WidenLane(BYTE_COL, LaneType.INT));
-    Optional<String> intRefusal = VarkaLoopEmitter.narrowRefusal(List.of(intNarrow), WIDENED);
+    Optional<String> intRefusal = VarkaKernelPlan.refusalOf(List.of(intNarrow), WIDENED);
     assertTrue(intRefusal.isEmpty()
             || intRefusal.get().equals(
                 "a narrow column needs a baked int lane count to be widened"),
@@ -387,15 +387,15 @@ public final class VarkaEmitterNarrowSuite {
     Cond validityOnly = new IsNotNull(BYTE_COL);
     Cond lifted = new IsNotNull(new WidenLane(BYTE_COL, LaneType.LONG));
     VarkaVectorIR value = new WidenLane(BYTE_COL, LaneType.LONG);
-    assertEquals(LaneType.INT, VarkaVectorIR.emissionLane(validityOnly, WIDENED));
-    assertEquals(LaneType.LONG, VarkaVectorIR.emissionLane(lifted, WIDENED));
+    assertEquals(LaneType.INT, VarkaKernelPlan.emissionLane(validityOnly, WIDENED));
+    assertEquals(LaneType.LONG, VarkaKernelPlan.emissionLane(lifted, WIDENED));
     for (Arm arm : ARMS) {
-      assertTrue(VarkaLoopEmitter.narrowRefusal(List.of(validityOnly), arm.options()).isEmpty(),
+      assertTrue(VarkaKernelPlan.refusalOf(List.of(validityOnly), arm.options()).isEmpty(),
           arm.name());
       assertEquals(Optional.of("a narrow value under a bigint kernel has no lowering"),
-          VarkaLoopEmitter.narrowRefusal(List.of(lifted), arm.options()), arm.name());
+          VarkaKernelPlan.refusalOf(List.of(lifted), arm.options()), arm.name());
       assertEquals(Optional.of("a narrow value under a bigint kernel has no lowering"),
-          VarkaLoopEmitter.narrowRefusal(List.of(value), arm.options()), arm.name());
+          VarkaKernelPlan.refusalOf(List.of(value), arm.options()), arm.name());
     }
   }
 

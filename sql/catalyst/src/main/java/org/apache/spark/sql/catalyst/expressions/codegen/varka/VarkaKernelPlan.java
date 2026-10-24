@@ -17,6 +17,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import java.util.ArrayDeque;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -25,8 +26,12 @@ import java.util.Optional;
 import java.util.Set;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NarrowLane;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Overflow;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WidenLane;
 
 /**
  * The lanes of one kernel, decided once from its roots and the emit options (VARKA-488,
@@ -78,7 +83,7 @@ public final class VarkaKernelPlan {
     if (roots.isEmpty()) {
       throw VarkaErrors.illegalArgument("no output chains to plan");
     }
-    Optional<LaneType> kernel = VarkaVectorIR.kernelLane(roots, options);
+    Optional<LaneType> kernel = kernelLane(roots, options);
     Optional<Refusal> narrow = narrowRefusal(roots, kernel, options);
     if (narrow.isPresent()) {
       return refused(narrow.get());
@@ -130,6 +135,103 @@ public final class VarkaKernelPlan {
   }
 
   // -------------------------------------------------------------------------------------------
+  // The drive lane
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * The lane an emission with this root drives its loop at: the long lane wherever the root's
+   * tree holds a node on it, and the int lane otherwise. A tree of one lane drives at that lane.
+   * A tree that holds both - a {@link NarrowLane} root over a long computation, a
+   * {@link WidenLane} under a long one, or a narrowing below another node - is driven at the long
+   * lane, one row a long lane per iteration, and its int-lane values occupy the low half of the
+   * int species of the same width (`VARKA-28.md` 9).
+   *
+   * <p>A tree whose every value is narrow drives at the narrow lane under
+   * {@link VarkaEmitOptions#narrowLanes()}, the default, and at the int lane with it off, which
+   * widens the values once at their loads: the IR says the tree computes {@code TINYINT} values,
+   * and the option says which species the emitter names for them. A tree that holds both narrow
+   * lanes has no single narrow species and drives at the int lane either way.
+   *
+   * <p>This is one root's preference. A kernel of several roots is driven at
+   * {@link #kernelLane}, which the plan's {@link #drive()} is, so that every consumer reads one
+   * lane rather than a root's {@code laneType()}.
+   */
+  static LaneType emissionLane(VarkaVectorIR root, VarkaEmitOptions options) {
+    Set<LaneType> lanes = VarkaVectorIR.lanesIn(root);
+    if (lanes.contains(LaneType.LONG)) {
+      return LaneType.LONG;
+    }
+    if (lanes.contains(LaneType.INT) || !options.narrowLanes()
+        || holdsCheckedNarrowMultiply(root)) {
+      return LaneType.INT;
+    }
+    // A tree that mixes the two narrow lanes has no single narrow species, and converting
+    // between them is a node the compiler does not build for this row: it runs on the int lane,
+    // as every narrow tree does under WIDENED. `lanes` is never empty.
+    if (lanes.contains(LaneType.SHORT) && lanes.contains(LaneType.BYTE)) {
+      return LaneType.INT;
+    }
+    return lanes.contains(LaneType.SHORT) ? LaneType.SHORT : LaneType.BYTE;
+  }
+
+  /**
+   * The lane a kernel of these roots drives its loop at, or empty when no one lane serves them
+   * all: the lane every root's {@link #emissionLane} names where they agree, and the int lane
+   * where they differ but none is the long lane. Every narrow tree has a lowering at the int lane
+   * - the widened one, which the off arm uses for all of them - so a native narrow root beside
+   * an int one, beside a root of the other narrow lane, or beside a tree holding a checked narrow
+   * multiply joins them there rather than splitting the projection. A narrow or int root beside a
+   * long one has no shared lane: the long lane admits no narrow node, and an int root is a long
+   * kernel's only through a conversion its own tree holds.
+   */
+  private static Optional<LaneType> kernelLane(List<VarkaVectorIR> roots,
+      VarkaEmitOptions options) {
+    Set<LaneType> lanes = EnumSet.noneOf(LaneType.class);
+    for (VarkaVectorIR root : roots) {
+      lanes.add(emissionLane(root, options));
+    }
+    if (lanes.size() <= 1) {
+      return lanes.stream().findFirst();
+    }
+    return lanes.contains(LaneType.LONG) ? Optional.empty() : Optional.of(LaneType.INT);
+  }
+
+  /**
+   * Whether {@code root}'s tree holds a checked narrow multiply - an {@code ANSI} or
+   * {@code TRY} {@link IntOp#MUL} over {@code TINYINT} or {@code SMALLINT} operands.
+   *
+   * <p>Such a tree is driven at the int lane under either narrow arm. The check needs the exact
+   * product, and the Vector API cannot widen a full narrow species into the next one: a
+   * {@code B2S} conversion takes the source's lanes in targets of the target species' width, so a
+   * 64-lane {@code ByteVector} at 512 bits has no 64-lane {@code ShortVector} to convert into,
+   * and the check would have to be taken part by part with the masks recombined across species.
+   * The int lane has the exact product of two narrow operands for free - a byte product is at
+   * most 2^14 and a short one at most 2^30 - so one int multiply and the node lane's own range
+   * compare is the check ({@code VARKA-329.md} 4.2). The native arm therefore serves the
+   * wrapping multiply and takes its checked form through the widened lowering; the benchmark
+   * reports what that costs.
+   */
+  private static boolean holdsCheckedNarrowMultiply(VarkaVectorIR root) {
+    return holdsCheckedNarrowMultiply(root, new HashSet<>());
+  }
+
+  private static boolean holdsCheckedNarrowMultiply(VarkaVectorIR node, Set<VarkaVectorIR> seen) {
+    if (!seen.add(node)) {
+      return false;
+    }
+    if (node instanceof IntArith n && n.op() == IntOp.MUL && n.mode() != Overflow.WRAP
+        && n.laneType().isNarrow()) {
+      return true;
+    }
+    for (VarkaVectorIR child : VarkaVectorIR.childrenOf(node)) {
+      if (holdsCheckedNarrowMultiply(child, seen)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // -------------------------------------------------------------------------------------------
   // The refusals
   // -------------------------------------------------------------------------------------------
 
@@ -154,7 +256,7 @@ public final class VarkaKernelPlan {
       if (!narrow) {
         continue;
       }
-      LaneType drive = kernel.orElseGet(() -> VarkaVectorIR.emissionLane(root, options));
+      LaneType drive = kernel.orElseGet(() -> emissionLane(root, options));
       if (drive.isNarrow()) {
         continue;
       }
@@ -192,10 +294,10 @@ public final class VarkaKernelPlan {
    */
   private static Refusal laneMismatch(List<VarkaVectorIR> roots, VarkaEmitOptions options) {
     for (int k = 1; k < roots.size(); k++) {
-      if (VarkaVectorIR.kernelLane(roots.subList(0, k + 1), options).isEmpty()) {
+      if (kernelLane(roots.subList(0, k + 1), options).isEmpty()) {
         VarkaVectorIR entry = roots.get(k);
-        LaneType kernel = VarkaVectorIR.kernelLane(roots.subList(0, k), options).orElseThrow();
-        return new Refusal(Kind.LANE_MISMATCH, "the " + VarkaVectorIR.emissionLane(entry, options)
+        LaneType kernel = kernelLane(roots.subList(0, k), options).orElseThrow();
+        return new Refusal(Kind.LANE_MISMATCH, "the " + emissionLane(entry, options)
             + " lane in a kernel on the " + kernel + " lane: one kernel holds one lane",
             entry);
       }
@@ -209,7 +311,7 @@ public final class VarkaKernelPlan {
    */
   static String mixedLanes(List<VarkaVectorIR> roots, VarkaEmitOptions options) {
     return "outputs mix lanes: " + roots.stream()
-        .map(o -> VarkaVectorIR.emissionLane(o, options).toString()).distinct()
+        .map(o -> emissionLane(o, options).toString()).distinct()
         .collect(java.util.stream.Collectors.joining(" and "));
   }
 
@@ -234,6 +336,17 @@ public final class VarkaKernelPlan {
       }
     }
     return groups;
+  }
+
+  /** The reason no kernel of {@code roots} can be emitted, or empty when one can. */
+  static Optional<String> refusalOf(List<VarkaVectorIR> roots, VarkaEmitOptions options) {
+    return of(roots, options).refusal().map(Refusal::reason);
+  }
+
+  /** The lane a kernel of {@code roots} drives at, or empty when none can be emitted. */
+  static Optional<LaneType> driveOf(List<VarkaVectorIR> roots, VarkaEmitOptions options) {
+    VarkaKernelPlan plan = of(roots, options);
+    return plan.refusal().isPresent() ? Optional.empty() : Optional.of(plan.drive());
   }
 
   /** Why no kernel of these roots can be emitted, or empty when one can. */

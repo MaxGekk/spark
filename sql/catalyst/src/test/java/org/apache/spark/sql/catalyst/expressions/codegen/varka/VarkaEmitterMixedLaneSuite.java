@@ -394,14 +394,14 @@ public final class VarkaEmitterMixedLaneSuite {
   @DisplayName("a kernel of both lanes is driven at the long lane, and a single-lane kernel at "
       + "its own")
   void drivingLane() {
-    assertEquals(LaneType.LONG, VarkaVectorIR.emissionLane(widen(I), VarkaEmitOptions.DEFAULTS));
-    assertEquals(LaneType.LONG, VarkaVectorIR.emissionLane(
+    assertEquals(LaneType.LONG, VarkaKernelPlan.emissionLane(widen(I), VarkaEmitOptions.DEFAULTS));
+    assertEquals(LaneType.LONG, VarkaKernelPlan.emissionLane(
         new IntArith(IntOp.ADD, Overflow.WRAP, narrow(L), I), VarkaEmitOptions.DEFAULTS));
-    assertEquals(LaneType.LONG, VarkaVectorIR.emissionLane(narrow(L), VarkaEmitOptions.DEFAULTS));
-    assertEquals(LaneType.INT, VarkaVectorIR.emissionLane(new IntArith(IntOp.ADD,
+    assertEquals(LaneType.LONG, VarkaKernelPlan.emissionLane(narrow(L), VarkaEmitOptions.DEFAULTS));
+    assertEquals(LaneType.INT, VarkaKernelPlan.emissionLane(new IntArith(IntOp.ADD,
         Overflow.WRAP, I, I2), VarkaEmitOptions.DEFAULTS));
     assertEquals(LaneType.LONG,
-        VarkaVectorIR.emissionLane(new Compare(CompareOp.LT, L, L), VarkaEmitOptions.DEFAULTS));
+        VarkaKernelPlan.emissionLane(new Compare(CompareOp.LT, L, L), VarkaEmitOptions.DEFAULTS));
   }
 
   @Test
