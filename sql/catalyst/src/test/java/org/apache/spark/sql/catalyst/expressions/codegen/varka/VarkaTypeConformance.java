@@ -33,7 +33,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -72,11 +71,12 @@ import org.apache.spark.sql.types.DataTypes;
  * same expression, in both bodies and at both output validity fills.
  *
  * <p>Whether a form must fuse is the registers' word, not this class's: a form whose census entry
- * (or, for a cast, {@code casts.tsv} pair) marks the type fused today must compile and agree; one
- * it does not mark must decline, and is owed to the rows the register names. A check whose forms
- * all hold passes; one with an owed form is cancelled naming the owners, after its fused forms
- * have run. A form that fuses where the register says it does not, or declines where it says it
- * does, fails: the register has drifted from the compiler.
+ * (or, for a cast, its form pair in {@code casts_fused.tsv}, which the compiler writes) marks the
+ * type fused today must compile and agree; one it does not mark must decline, and is owed to the
+ * rows the register names. A check whose forms all hold passes; one with an owed form is
+ * cancelled naming the owners, after its fused forms have run. A form that fuses where the
+ * register says it does not, or declines where it says it does, fails: the register has drifted
+ * from the compiler.
  *
  * <p>Every check also holds its fixture to what a hand-written one missed in the narrow lanes'
  * reviews (`VARKA-329.md` 9.8): each condition root is true on some row and false on another,
@@ -288,7 +288,8 @@ public abstract class VarkaTypeConformance {
     }
     if (f.register().startsWith("cast:")) {
       CastPair pair = Registers.cast(census, f.register().substring(5));
-      return pair.fusedIn(f.mode()) ? Optional.empty() : Optional.of(pair.rows());
+      return pair.fusedIn(f.mode(), type().spark(), result) ? Optional.empty()
+          : Optional.of(pair.rows());
     }
     CensusEntry e = Registers.census(f.register());
     return e.fused().contains(census) ? Optional.empty() : Optional.of(e.rows());
@@ -603,26 +604,17 @@ public abstract class VarkaTypeConformance {
   private record CensusEntry(Set<String> types, Set<String> fused, String rows) {}
 
   /**
-   * A {@code casts.tsv} pair: the target, its {@code fused_today} text and its owners. The text
-   * opens with the modes it fuses in, "every mode" or a list such as "LEGACY and ANSI", up to a
-   * colon or semicolon; an empty one fuses in none. Any other text (a pair fused for one unit or
-   * one form only) fails rather than being guessed at: the pair needs a form this reads first.
+   * A {@code casts.tsv} pair: the target and the rows that own its gaps. Whether a form of it
+   * fuses is {@code casts_fused.tsv}'s answer for that form pair and mode (VARKA-486), which the
+   * compiler writes; a form pair the file lacks fails rather than being guessed at.
    */
-  private record CastPair(String from, String to, String fusedToday, String rows) {
-    private static final Pattern MODES =
-        Pattern.compile("(LEGACY|ANSI|TRY)( and (LEGACY|ANSI|TRY))*");
-
-    boolean fusedIn(Mode mode) {
-      if (fusedToday.isEmpty()) {
-        return false;
-      }
-      String head = fusedToday.split("[:;]", 2)[0].trim();
-      if (head.equals("every mode")) {
-        return true;
-      }
-      assertTrue(MODES.matcher(head).matches(), "casts.tsv " + from + " -> " + to
-          + ": fused_today \"" + fusedToday + "\" names no modes the contract can read");
-      return List.of(head.split(" and ")).contains(mode.name());
+  private record CastPair(String from, String to, String rows) {
+    boolean fusedIn(Mode mode, DataType source, DataType target) {
+      String key = source.sql() + ">" + target.sql();
+      String[] answers = Registers.FUSED.get(key);
+      assertTrue(answers != null, "casts_fused.tsv has no line for " + from + " -> " + to + " ("
+          + key + "): add the form to VarkaCastMatrixSuite's TYPES and regenerate it");
+      return answers[mode.ordinal()].equals("fused");
     }
   }
 
@@ -630,6 +622,8 @@ public abstract class VarkaTypeConformance {
   private static final class Registers {
     private static final Map<String, CensusEntry> CENSUS = new HashMap<>();
     private static final List<String[]> CASTS = new ArrayList<>();
+    /** {@code casts_fused.tsv} by {@code <from type>><to type>}: the LEGACY, ANSI, TRY answers. */
+    private static final Map<String, String[]> FUSED = new HashMap<>();
 
     static {
       for (String[] f : tsv("census.tsv")) {
@@ -637,6 +631,9 @@ public abstract class VarkaTypeConformance {
             Set.of(f[7].isEmpty() ? new String[0] : f[7].split(",")), f[10]));
       }
       CASTS.addAll(tsv("casts.tsv"));
+      for (String[] f : tsv("casts_fused.tsv")) {
+        FUSED.put(f[2] + ">" + f[3], new String[] {f[4], f[5], f[6]});
+      }
     }
 
     /** The data lines of {@code m8/<name>}, split on tabs with empty fields kept. */
@@ -662,7 +659,7 @@ public abstract class VarkaTypeConformance {
     /** The pairs from {@code from}, its identity cast left out: the analyzer removes that one. */
     static List<CastPair> casts(String from) {
       return CASTS.stream().filter(f -> f[0].equals(from) && !f[1].equals(from))
-          .map(f -> new CastPair(f[0], f[1], f[8], f[9])).toList();
+          .map(f -> new CastPair(f[0], f[1], f[9])).toList();
     }
 
     static CastPair cast(String from, String to) {
