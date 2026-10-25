@@ -150,8 +150,9 @@ public final class VarkaMatrixRuns {
   private static final List<Integer> LANE_COUNTS = List.of(4, 16);
 
   /**
-   * Every configuration, in table order: each non-default arm of each option but the fault
-   * injectors - a flag's other value, an enum's other constants, a count's audit values - and
+   * Every configuration, in table order: each non-default arm of each option the fuzzer draws
+   * ({@code Reason.drawn}: not a fault injector or a miscompiled form) - a flag's other value,
+   * an enum's other constants, a count's audit values - and
    * the lane counts above. Derived from the table, so a new option joins with its entry. Then
    * the batch-size axis, which changes the sessions' cached batches rather than an option.
    *
@@ -164,7 +165,7 @@ public final class VarkaMatrixRuns {
     VarkaEmitOptions defaults = VarkaEmitOptions.DEFAULTS;
     var out = new ArrayList<String>();
     for (VarkaEmitOption option : VarkaEmitOption.TABLE) {
-      if (option.reason() == VarkaEmitOption.Reason.FAULT_INJECTOR) {
+      if (!option.reason().drawn()) {
         continue;
       }
       List<String> arms = option.arms().stream()

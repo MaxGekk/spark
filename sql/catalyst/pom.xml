@@ -98,6 +98,13 @@
       <artifactId>byte-buddy-agent</artifactId>
       <scope>test</scope>
     </dependency>
+    <!-- VarkaMaskOfWordSuite's data-flow pass over emitted kernels; sbt has it transitively. -->
+    <dependency>
+      <groupId>org.ow2.asm</groupId>
+      <artifactId>asm-analysis</artifactId>
+      <version>${asm.version}</version>
+      <scope>test</scope>
+    </dependency>
 
     <dependency>
       <groupId>org.apache.spark</groupId>

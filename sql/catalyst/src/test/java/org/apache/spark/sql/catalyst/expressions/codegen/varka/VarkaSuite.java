@@ -83,4 +83,12 @@ public @interface VarkaSuite {
    * in the child only, so the parent never reinterprets the child's verdict.
    */
   boolean ownJvm() default false;
+
+  /**
+   * Flags an {@link #ownJvm} class's child JVM starts with after the parent's own, so the last
+   * of a flag wins: {@code -XX:UseAVX=2} runs the class under AVX2 on an AVX-512 host. The
+   * option matrix, which runs such a class in a JVM of its own without a child, gives that JVM
+   * these flags instead ({@code dev/varka_matrix.sh}), so write them on one line.
+   */
+  String[] jvmFlags() default {};
 }

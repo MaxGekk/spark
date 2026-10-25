@@ -1,0 +1,57 @@
+diff --git a/src/hotspot/share/opto/vectornode.cpp b/src/hotspot/share/opto/vectornode.cpp
+index 2b40ca771..c57e30120 100644
+--- a/src/hotspot/share/opto/vectornode.cpp
++++ b/src/hotspot/share/opto/vectornode.cpp
+@@ -1925,6 +1925,26 @@ Node* VectorMaskToLongNode::Identity(PhaseGVN* phase) {
+   return this;
+ }
+ 
++Node* VectorLongToMaskNode::Identity(PhaseGVN* phase) {
++  // VARKA-396 experiment: VectorLongToMask (AndL (VectorMaskToLong (VectorStoreMask m)) all-lanes)
++  // ==> VectorStoreMask m, on a target without mask registers, where both are boolean vectors.
++  const TypeVect* dst_type = bottom_type()->is_vect();
++  if (getenv("VARKA_FIX_LONG_TO_MASK") != nullptr && dst_type->isa_vectmask() == nullptr &&
++      in(1)->Opcode() == Op_AndL &&
++      in(1)->in(1)->Opcode() == Op_VectorMaskToLong &&
++      in(1)->in(2)->bottom_type()->isa_long() &&
++      in(1)->in(2)->bottom_type()->is_long()->is_con() &&
++      in(1)->in(2)->bottom_type()->is_long()->get_con() == ((1L << dst_type->length()) - 1)) {
++    Node* store = in(1)->in(1)->in(1);
++    if (store->Opcode() == Op_VectorStoreMask &&
++        store->bottom_type()->is_vect()->length() == dst_type->length() &&
++        store->bottom_type()->is_vect()->element_basic_type() == dst_type->element_basic_type()) {
++      return store;
++    }
++  }
++  return this;
++}
++
+ Node* VectorLongToMaskNode::Ideal(PhaseGVN* phase, bool can_reshape) {
+   const TypeVect* dst_type = bottom_type()->is_vect();
+   if (in(1)->Opcode() == Op_AndL &&
+@@ -1939,6 +1959,13 @@ Node* VectorLongToMaskNode::Ideal(PhaseGVN* phase, bool can_reshape) {
+        if (src->Opcode() != Op_VectorStoreMask) {
+          return nullptr;
+        }
++       // VARKA-396 experiment: on a target without mask registers this node yields a vector of
++       // canonical booleans (0/1). A VectorMaskCast of the mask under the VectorStoreMask keeps
++       // the mask encoding (0/-1), which the VectorLoadMask after this node then misreads; the
++       // VectorStoreMask itself is the right replacement, which Identity returns.
++       if (getenv("VARKA_FIX_LONG_TO_MASK") != nullptr) {
++         return nullptr;
++       }
+        src = src->in(1);
+      }
+      const TypeVect* src_type = src->bottom_type()->is_vect();
+diff --git a/src/hotspot/share/opto/vectornode.hpp b/src/hotspot/share/opto/vectornode.hpp
+index e72c3880c..9d3087842 100644
+--- a/src/hotspot/share/opto/vectornode.hpp
++++ b/src/hotspot/share/opto/vectornode.hpp
+@@ -1404,6 +1404,7 @@ class VectorLongToMaskNode : public VectorNode {
+     VectorNode(mask, ty) {
+   }
+   virtual int Opcode() const;
++  virtual Node* Identity(PhaseGVN* phase);
+   virtual Node* Ideal(PhaseGVN* phase, bool can_reshape);
+ };
+ 

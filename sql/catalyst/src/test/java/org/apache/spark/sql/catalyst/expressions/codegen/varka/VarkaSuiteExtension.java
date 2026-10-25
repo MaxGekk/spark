@@ -231,7 +231,8 @@ public final class VarkaSuiteExtension
       body = () -> {
         invoked[0] = true;
         invocation.skip();
-        return answerFromChild(childResults(testClass.getName(), minutes), test);
+        return answerFromChild(
+            childResults(testClass.getName(), minutes, List.of(suite.jvmFlags())), test);
       };
     } else {
       body = () -> {
@@ -296,13 +297,14 @@ public final class VarkaSuiteExtension
   /**
    * The child JVM's results for {@code className}, running the child on the first call. The
    * child may run for the class's per-test cap less a minute ({@code capMinutes}, 0 for no cap),
-   * the same cap its tests have in the child.
+   * the same cap its tests have in the child, and starts with {@code jvmFlags} after the parent's.
    */
-  private static VarkaChildJvm.Results childResults(String className, long capMinutes) {
+  private static VarkaChildJvm.Results childResults(String className, long capMinutes,
+      List<String> jvmFlags) {
     return CHILDREN.computeIfAbsent(className, c -> {
       try {
         return VarkaChildJvm.run(c, VarkaSuiteRunner.class.getName(), List.of("-oW", "-s", c),
-            "-u", VarkaChildJvm.budgetMinutes(capMinutes));
+            "-u", VarkaChildJvm.budgetMinutes(capMinutes), jvmFlags);
       } catch (Exception e) {
         throw new IllegalStateException("could not run " + c + " in a JVM of its own", e);
       }
