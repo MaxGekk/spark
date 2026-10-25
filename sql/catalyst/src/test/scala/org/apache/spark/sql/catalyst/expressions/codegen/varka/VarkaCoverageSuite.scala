@@ -35,7 +35,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.{Forwar
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 import org.apache.spark.sql.catalyst.util.DateTimeConstants.{MICROS_PER_DAY, NANOS_PER_DAY, NANOS_PER_MICROS, NANOS_PER_MILLIS}
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DayTimeIntervalType, DecimalType, DoubleType, FloatType, IntegerType, LongType, ShortType, TimestampNTZType, TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, TimeType, YearMonthIntervalType}
 import org.apache.spark.util.Utils
 
 /**
@@ -1428,23 +1428,9 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     new ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(doc) + "\n"
   }
 
-  /** A type's name in milestone 8's census and cast matrix (`dev/varka_census.py`), if any. */
-  private def censusType(t: DataType): Option[String] = t match {
-    case BooleanType => Some("bool")
-    case ByteType => Some("byte")
-    case ShortType => Some("short")
-    case IntegerType => Some("int")
-    case LongType => Some("bigint")
-    case FloatType => Some("float")
-    case DoubleType => Some("double")
-    case _: DecimalType => Some("dec")
-    case DateType => Some("date")
-    case TimestampNTZType => Some("ntz")
-    case _: TimeType => Some("time")
-    case _: YearMonthIntervalType => Some("ym")
-    case _: DayTimeIntervalType => Some("dt")
-    case _ => None
-  }
+  /** A type's name in milestone 8's census and cast matrix, if any: the type registry's. */
+  private def censusType(t: DataType): Option[String] =
+    VarkaTypes.of(t).toScala.flatMap(id => Option(VarkaTypes.info(id).census))
 
   /**
    * The operand types of each class in a row, as `Class:type` in the census's type names: what

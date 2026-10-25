@@ -28,7 +28,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.BiFunction;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
@@ -44,11 +43,6 @@ import org.apache.spark.sql.internal.SQLConf;
 import org.apache.spark.sql.internal.SQLConf$;
 import org.apache.spark.sql.types.DataType;
 import org.apache.spark.sql.types.DataTypes;
-import org.apache.spark.sql.types.DayTimeIntervalType;
-import org.apache.spark.sql.types.DayTimeIntervalType$;
-import org.apache.spark.sql.types.TimeType;
-import org.apache.spark.sql.types.YearMonthIntervalType;
-import org.apache.spark.sql.types.YearMonthIntervalType$;
 
 /**
  * Milestone 8's cast matrix ({@code sql/varka/plans/m8/casts.tsv}, written by
@@ -76,34 +70,13 @@ public final class VarkaCastMatrixSuite {
    */
   private static final Map<String, DataType[]> TYPES = new LinkedHashMap<>();
 
+  // The type registry's census types and forms, in its order (VARKA-494).
   static {
-    TYPES.put("bool", new DataType[] {DataTypes.BooleanType});
-    TYPES.put("byte", new DataType[] {DataTypes.ByteType});
-    TYPES.put("short", new DataType[] {DataTypes.ShortType});
-    TYPES.put("int", new DataType[] {DataTypes.IntegerType});
-    TYPES.put("bigint", new DataType[] {DataTypes.LongType});
-    TYPES.put("float", new DataType[] {DataTypes.FloatType});
-    TYPES.put("double", new DataType[] {DataTypes.DoubleType});
-    TYPES.put("dec", new DataType[] {
-        DataTypes.createDecimalType(10, 2), DataTypes.createDecimalType(30, 4)});
-    TYPES.put("date", new DataType[] {DataTypes.DateType});
-    TYPES.put("ntz", new DataType[] {DataTypes.TimestampNTZType});
-    TYPES.put("time", new DataType[] {new TimeType(0), new TimeType(3), new TimeType(6)});
-    TYPES.put("ym", fields(YearMonthIntervalType$.MODULE$.YEAR(),
-        YearMonthIntervalType$.MODULE$.MONTH(), YearMonthIntervalType::new));
-    TYPES.put("dt", fields(DayTimeIntervalType$.MODULE$.DAY(),
-        DayTimeIntervalType$.MODULE$.SECOND(), DayTimeIntervalType::new));
-  }
-
-  /** An interval type in every field range from {@code first} to {@code last}. */
-  private static DataType[] fields(byte first, byte last, BiFunction<Byte, Byte, DataType> type) {
-    var out = new ArrayList<DataType>();
-    for (byte start = first; start <= last; start++) {
-      for (byte end = start; end <= last; end++) {
-        out.add(type.apply(start, end));
+    for (VarkaTypes.Info i : VarkaTypes.all()) {
+      if (i.census() != null) {
+        TYPES.put(i.census(), i.forms().toArray(new DataType[0]));
       }
     }
-    return out.toArray(new DataType[0]);
   }
 
   /** The three modes' legality of one pair, as {@code casts.tsv} writes it. */

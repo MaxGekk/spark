@@ -592,13 +592,18 @@ public abstract class VarkaTypeConformance {
   private static final List<String> ARITHMETIC = List.of("+", "-", "*", "negative", "abs",
       "try_add", "try_subtract", "try_multiply");
 
-  /** Each census type as a cast target's SQL, for the cast row. */
-  private static final Map<String, String> CAST_TARGETS = Map.ofEntries(
-      Map.entry("bool", "BOOLEAN"), Map.entry("byte", "TINYINT"), Map.entry("short", "SMALLINT"),
-      Map.entry("int", "INT"), Map.entry("bigint", "BIGINT"), Map.entry("float", "FLOAT"),
-      Map.entry("double", "DOUBLE"), Map.entry("dec", "DECIMAL(10, 2)"),
-      Map.entry("date", "DATE"), Map.entry("ntz", "TIMESTAMP_NTZ"), Map.entry("time", "TIME"),
-      Map.entry("ym", "INTERVAL MONTH"), Map.entry("dt", "INTERVAL DAY"));
+  /** Each census type as a cast target's SQL, for the cast row: the type registry's. */
+  private static final Map<String, String> CAST_TARGETS = castTargets();
+
+  private static Map<String, String> castTargets() {
+    var out = new HashMap<String, String>();
+    for (VarkaTypes.Info i : VarkaTypes.all()) {
+      if (i.census() != null) {
+        out.put(i.census(), i.sql());
+      }
+    }
+    return Map.copyOf(out);
+  }
 
   /** A census entry: the types it admits, those it fuses today, and the rows that own the rest. */
   private record CensusEntry(Set<String> types, Set<String> fused, String rows) {}

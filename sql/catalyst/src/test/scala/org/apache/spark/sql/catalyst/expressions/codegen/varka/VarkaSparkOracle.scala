@@ -17,8 +17,10 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
+import scala.jdk.OptionConverters._
+
 import org.apache.spark.sql.catalyst.expressions.{Attribute, BindReferences, Expression, GenericInternalRow, RuntimeReplaceable}
-import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.DataType
 
 /**
  * Spark's own answer for each output of a compiled kernel (VARKA-276): the Catalyst expression the
@@ -50,16 +52,27 @@ class VarkaSparkOracle(outputs: Seq[Expression], inputs: Seq[Attribute]) {
 
   private val types: Seq[DataType] = inputs.map(_.dataType)
 
+  /**
+   * Each input's bits a row as the type registry records them (VARKA-494), for a type a kernel
+   * reads - on a lane, or as a condition's bitmap - and 0 for any other, which no kernel input
+   * holds: the stored long is the type's internal value at that width.
+   */
+  private val storage: Seq[Int] = types.map { t =>
+    VarkaTypes.of(t).toScala.map(VarkaTypes.info).filter { i =>
+      i.lane.isPresent || i.admission.isInstanceOf[VarkaTypes.Admission.AsCondition]
+    }.map(_.storageBits).getOrElse(0)
+  }
+
   /** Spark's answer for output `o` on a row of lane values, `None` for a null input. */
   def answer(o: Int, row: Seq[Option[Long]]): VarkaSparkOracle.Answer = {
-    val values = row.zip(types).map {
-      case (None, _) => null
-      case (Some(v), DateType | IntegerType | _: YearMonthIntervalType) => v.toInt
-      case (Some(v), BooleanType) => v != 0L
-      case (Some(v), ByteType) => v.toByte
-      case (Some(v), ShortType) => v.toShort
-      case (Some(v), LongType | _: TimeType | _: DayTimeIntervalType) => v
-      case (_, t) => throw new IllegalArgumentException(s"no kernel input of type $t")
+    val values = row.zip(types).zip(storage).map {
+      case ((None, _), _) => null
+      case ((Some(v), _), 1) => v != 0L
+      case ((Some(v), _), 8) => v.toByte
+      case ((Some(v), _), 16) => v.toShort
+      case ((Some(v), _), 32) => v.toInt
+      case ((Some(v), _), 64) => v
+      case ((_, t), _) => throw new IllegalArgumentException(s"no kernel input of type $t")
     }
     try {
       bound(o).eval(new GenericInternalRow(values.toArray[Any])) match {
