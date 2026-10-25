@@ -83,8 +83,24 @@ B keeps one option meaning one thing across the integer types; A is simpler and 
 `CAST(bigint AS INT)` does today. *The owner chose B (25 October 2026):* the option is a priced
 check (`Reason.PRICED_CHECK`), which exists so the A/B can price every ANSI and TRY int check
 against the arithmetic it protects, and a cast was never in its scope; `guardDayProducers` is the
-precedent for a priced option over a range guard. The one condition sits in `narrowArith`, where
-the node's shape is decided.
+precedent for a priced option over a range guard.
+
+*Where the condition acts, to settle before the code (the advisor's review of the choice):* the
+plan first put it in `narrowArith`, at compile time, but every precedent acts at emit time on IR
+that does not change - `INT_OVERFLOW` is gated in `Analysis` on an `IntArith(FAIL)` the compiler
+always builds, `guardDayProducers` removes a `GuardedDay`'s check at emit, and
+`VarkaArithmeticBenchmark` prices the option by emitting the same tree under `UNCHECKED_ARM`.
+Emit time is the lean: `GuardedRange` carries a family beside its mode (an overflow check, not a
+cast's range check, which the child's type cannot tell apart - `CAST(l + 1 AS INT)` is a
+`GuardedRange` over long arithmetic), `Analysis` registers a marked guard as `INT_OVERFLOW` under
+`checkIntOverflow`, and the shift pair after it is skipped only where that same refusal decides
+the guard (`emitIntNeg`'s pattern, where `analysis.refusals` decides both). It keeps the option
+acting in one place for every node and the status bit `INT_OVERFLOW`, which retires prediction
+6.1.2. If `Analysis` cannot register the marked guard without special cases (c) to (e) coming
+back, the condition goes to compile time instead, and section 3.1 then states that the option acts
+at compile time for this node alone and what the off arm's tree is. The six skip lines cover the
+TRY rows too (`try_multiply(y1, y2)`, `try_multiply(s1, s2)`), so the `NULL` mode leaves none
+stale.
 
 ### 3.3 What is deliberately unchanged
 
