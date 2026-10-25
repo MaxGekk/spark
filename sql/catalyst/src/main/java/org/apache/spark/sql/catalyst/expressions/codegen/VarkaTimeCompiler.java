@@ -83,10 +83,6 @@ import org.apache.spark.unsafe.types.UTF8String;
  */
 final class VarkaTimeCompiler {
 
-
-  private static final String TIMESTAMP_OUT_OF_MILESTONE =
-      "a timestamp column is outside milestone 5";
-
   /**
    * Every {@code TIME} is a count of nanoseconds of day, which is the bound its divisions
    * state.
@@ -160,9 +156,6 @@ final class VarkaTimeCompiler {
       // IR's constructors refuse a tree that mixes it with the int lane anyway.
       case BoundReference br when VarkaNodeCompiler.onLongLane(br.dataType()) ->
           () -> Optional.of(VarkaNodeCompiler.columnRef(br, inputs, LaneType.LONG));
-      // Ahead of the generic "non-date column" decline, so the reason is the decision.
-      case BoundReference br when isTimestamp(br.dataType()) ->
-          () -> sink.decline(TIMESTAMP_OUT_OF_MILESTONE, br);
       // The long lane's literals, beside the int ones: the value is already the long the lane
       // holds, so `l > 5000000000`, `t < TIME'12:00'` and `dt > INTERVAL '1' DAY` take a slot.
       case Literal l when l.value() instanceof Long
@@ -213,17 +206,6 @@ final class VarkaTimeCompiler {
   /** The number of TIME expressions the table holds, one key each. */
   static int timeTargetCount() {
     return TIME_TARGETS.size();
-  }
-
-  /**
-   * Whether the type is one of the two timestamps, which milestone 5 leaves out by decision
-   * ({@code m9/SCOPE.md} item 31): a zoned {@code TIMESTAMP}'s differences and interval additions
-   * are computed on local date-times in the session zone and are not lane arithmetic, and the
-   * NTZ family, whose arithmetic would be plain, waits with it. The decline names the milestone
-   * so EXPLAIN shows a decision rather than a gap.
-   */
-  private static boolean isTimestamp(DataType dataType) {
-    return dataType.equals(DataTypes.TimestampType) || dataType.equals(DataTypes.TimestampNTZType);
   }
 
   private static Map<TimeTarget, String> timeTargets() {

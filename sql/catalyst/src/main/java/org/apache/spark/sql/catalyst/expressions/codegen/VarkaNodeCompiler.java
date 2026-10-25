@@ -647,10 +647,13 @@ final class VarkaNodeCompiler {
       VarkaSlotTable inputs,
       VarkaSlotTable literals,
       DeclineSink sink) {
-    // A column of any other type: eligible to be forwarded as a whole entry, never to be read by
-    // the int32 lanes of a kernel.
+    // A column no arm read: eligible to be forwarded as a whole entry. A type the registry holds
+    // and no lane reads names its type and why - the row that builds an owed one, the decision
+    // for a declined one (VARKA-494); any other column, an int one in a position that takes no
+    // bare int among them, keeps the general reason.
     if (e instanceof BoundReference br) {
-      return sink.decline("non-date column of type " + br.dataType().simpleString(), br);
+      return sink.decline(VarkaTypes.declineReason(br.dataType())
+          .orElse("non-date column of type " + br.dataType().simpleString()), br);
     }
     // Defensive: a real query never carries an unreplaced RuntimeReplaceable this far (the
     // optimizer's ReplaceExpressions runs long before physical planning), but hand-built
