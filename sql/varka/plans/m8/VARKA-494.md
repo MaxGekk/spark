@@ -17,14 +17,15 @@ design checked against the code and made into steps.
    `laneOf` and `VarkaLaneArrow` agree except a column reaching a kernel.
 2. **A type with no arm declines as something else.** A column `laneOf` does not know reaches
    `VarkaNodeCompiler.fallback` (`:655`) and declines as "non-date column of type double" - true
-   of a `DOUBLE`, but it says neither that the type is planned nor which row builds it, and the
-   same words cover the zoned `TIMESTAMP`, which is out by decision. `ADDING_A_TYPE.md` ("What the
+   of a `DOUBLE`, but it says neither that the type is planned nor which row builds it. Only the
+   two timestamps are named, by `isTimestamp`'s "outside milestone 5", a reason that is out of
+   date for `TIMESTAMP_NTZ` and does not say why the zoned type is out. `ADDING_A_TYPE.md` ("What the
    guards do not catch") names this as the hour lost per missing arm.
 3. **The type facts the tools need are kept in six more lists, by hand** (`VARKA-475.md` 9.1,
    finding 3, rechecked here):
    - `dev/varka_census.py:65-70` - `EXISTING`, `NEW`, `ORDER`, and `CONFORMANCE_SUITE` (`:925`);
    - `dev/varka_new_lane.py:70` - `CENSUS_NAME`, Spark class to census name;
-   - `VarkaCoverageSuite.censusType` (`T`, `.../varka/VarkaCoverageSuite.scala:1430`);
+   - `VarkaCoverageSuite.censusType` (`T`, `.../varka/VarkaCoverageSuite.scala:1432`);
    - `VarkaTypeConformance.CAST_TARGETS` (`T`, `.../varka/VarkaTypeConformance.java:596`), each
      census name as SQL;
    - `VarkaCastMatrixSuite.TYPES` (`T`, `.../varka/VarkaCastMatrixSuite.java:77`), each census
@@ -32,7 +33,7 @@ design checked against the code and made into steps.
    - `VarkaSparkOracle` (`T`, `.../varka/VarkaSparkOracle.scala:57-61`), a stored value to a Spark
      value by type.
    `VarkaKernelChecks` derives a test column's storage from its lane (`:871`, `:895`) and
-   `VarkaWarmupReach` the species a type reaches (`:593`); both are per-lane code where the fact
+   `VarkaWarmupReach` the species a type reaches (`widenedSpecies`, `:158`); both are per-lane code where the fact
    is per type. Rows 484 and 486 found these lists disagreeing with each other and with the
    compiler while every test passed (`VARKA-475.md` 9.1, finding 1).
 4. **Most type tests are not admission and stay.** The compilers test Spark types in 48 places
@@ -147,7 +148,7 @@ census, the coverage suite, the cast suite and the conformance contract see it f
 
 1. No emitted byte moves, no fused form moves: the registry answers what `laneOf` answered.
 2. Step 1's equality test finds at least one list that disagrees; each is fixed in the list's
-   favour or the registry's, and said in section 9.
+   favour or the registry's, and said in section 10.
 3. The decline text changes for every column of an owed or declined type: EXPLAIN and the
    fallback metrics' reasons read differently, and nothing else does.
 
