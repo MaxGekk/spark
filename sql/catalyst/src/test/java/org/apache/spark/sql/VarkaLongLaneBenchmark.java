@@ -35,6 +35,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Con
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Greatest;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntNeg;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
@@ -120,6 +121,15 @@ public class VarkaLongLaneBenchmark extends VarkaBenchmarkBase {
     return data;
   }
 
+  /** {@code x = -(x + y)}, {@code depth} times from {@code x = column}. */
+  private static VarkaVectorIR negChain(VarkaVectorIR x, VarkaVectorIR y, int depth) {
+    VarkaVectorIR out = x;
+    for (int k = 0; k < depth; k++) {
+      out = new IntNeg(Overflow.WRAP, new IntArith(IntOp.ADD, Overflow.WRAP, out, y));
+    }
+    return out;
+  }
+
   private static List<Shape> shapes(LaneType lane) {
     var c = new ColumnRef(0, lane);
     var c1 = new ColumnRef(1, lane);
@@ -134,6 +144,12 @@ public class VarkaLongLaneBenchmark extends VarkaBenchmarkBase {
             List.of(new IntArith(IntOp.ADD, Overflow.FAIL, c, l))),
         new Shape("column * column, wrapping",
             List.of(new IntArith(IntOp.MUL, Overflow.WRAP, c, c1))),
+        // Negation, which these lanes emit as a multiply by -1 (VARKA-482). Alone it is as
+        // fast as the copy above: one load and one store bound the loop and hide the multiply.
+        // The chain of eight negations of a sum is bound by its dependent operations instead,
+        // so a cheaper negation shows there.
+        new Shape("-column, wrapping", List.of(new IntNeg(Overflow.WRAP, c))),
+        new Shape("eight times x = -(x + column2), wrapping", List.of(negChain(c, c1, 8))),
         new Shape("greatest(column, column)", List.of(new Greatest(c, c1))),
         new Shape("a comparison, as a selection", List.of(new Compare(CompareOp.LT, c, c1))),
         new Shape("CASE WHEN c < c2 THEN c ELSE literal END",
