@@ -271,6 +271,22 @@ scope_file() {
     [ "$range" = "$start" ] && count=1
     for ((i = 0; i < count; i++)); do written["$f:$((start + i))"]=1; done
   done < <(git diff -U0 "$diff_base" -- "$f" | sed -n 's/^@@ -[^ ]* +\([0-9,]*\) @@.*/\1/p')
+  # During a merge a line is the commit's only if the other side lacks it too: the lines the
+  # merge brings in were checked on the side that wrote them.
+  if [ "$diff_base" = "--cached" ] && merge_head="$(git rev-parse -q --verify MERGE_HEAD)"; then
+    local -A theirs=()
+    while IFS= read -r range; do
+      start="${range%%,*}"; count="${range##*,}"
+      [ "$range" = "$start" ] && count=1
+      for ((i = 0; i < count; i++)); do theirs["$((start + i))"]=1; done
+    done < <(git diff -U0 --cached "$merge_head" -- "$f" \
+      | sed -n 's/^@@ -[^ ]* +\([0-9,]*\) @@.*/\1/p')
+    local key
+    for key in "${!written[@]}"; do
+      [[ "$key" == "$f:"* ]] || continue
+      [ -n "${theirs["${key#"$f:"}"]:-}" ] || unset 'written[$key]'
+    done
+  fi
 }
 wrote_line() { # file line
   [ "$scoped" -eq 0 ] && return 0

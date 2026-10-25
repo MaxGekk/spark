@@ -93,22 +93,28 @@ class Change:
         self.range = None
         self.new = set()
         self.written = {}
+        # Each parent the change is measured against: one, or during a merge both, since the
+        # lines a merge brings in from the other side are not the commit's.
+        self.bases = []
         if argv and argv[0] == "--range":
             self.range = argv[1]
             status = git("diff", "--name-status", "--diff-filter=ACMR", self.range)
-            self.base_args = [self.range]
+            self.bases = [[self.range]]
         elif argv and argv[0] == "--working-tree":
             status = git("diff", "--name-status", "--diff-filter=ACMR", "HEAD")
             for f in git("ls-files", "--others", "--exclude-standard").split():
                 status += f"A\t{f}\n"
-            self.base_args = ["HEAD"]
+            self.bases = [["HEAD"]]
         elif argv and argv[0] != "--cached":
             self.scoped = False
             self.files = [f for f in argv if os.path.isfile(os.path.join(ROOT, f))]
             return
         else:
             status = git("diff", "--cached", "--name-status", "--diff-filter=ACMR")
-            self.base_args = ["--cached"]
+            self.bases = [["--cached"]]
+            merge_head = git("rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).strip()
+            if merge_head:
+                self.bases.append(["--cached", merge_head])
         self.files = []
         for line in status.splitlines():
             kind, _, path = line.partition("\t")
@@ -116,17 +122,27 @@ class Change:
             self.files.append(path)
             if kind.startswith("A"):
                 self.new.add(path)
+        if len(self.bases) > 1:
+            # A file the other side already has is not this merge's, and neither is it new.
+            theirs = git("diff", "--name-status", "--diff-filter=ACMR", *self.bases[1])
+            changed = {line.split("\t")[-1] for line in theirs.splitlines()}
+            added = {line.split("\t")[-1] for line in theirs.splitlines() if line[:1] == "A"}
+            self.files = [f for f in self.files if f in changed]
+            self.new &= added
 
     def wrote(self, path, lineno):
         if not self.scoped or path in self.new:
             return True
         if path not in self.written:
-            lines = set()
-            diff = git("diff", "-U0", *self.base_args, "--", path, check=False)
-            for m in re.finditer(r"^@@ -\S+ \+(\d+)(?:,(\d+))? @@", diff, re.M):
-                start, count = int(m.group(1)), int(m.group(2) or "1")
-                lines.update(range(start, start + count))
-            self.written[path] = lines
+            written = None
+            for base in self.bases:
+                lines = set()
+                diff = git("diff", "-U0", *base, "--", path, check=False)
+                for m in re.finditer(r"^@@ -\S+ \+(\d+)(?:,(\d+))? @@", diff, re.M):
+                    start, count = int(m.group(1)), int(m.group(2) or "1")
+                    lines.update(range(start, start + count))
+                written = lines if written is None else written & lines
+            self.written[path] = written or set()
         return lineno in self.written[path]
 
     def is_new(self, path):
@@ -610,6 +626,28 @@ def selftest():
             "shell:shell-java-opts",
             True,
         )
+        # A merge: a file the other side brings in is not the merge's, however it breaks a rule.
+        sh("git", "checkout", "-q", "-b", "side")
+        write("m/src/main/java/FromSide.java", "class FromSide {}\n")
+        sh("git", "add", "-A")
+        sh("git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "side")
+        sh("git", "checkout", "-q", "-")
+        write("m/src/main/java/Ours.java", lic + "class Ours {}\n")
+        sh("git", "add", "-A")
+        sh("git", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "ours")
+        sh("git", "merge", "-q", "--no-commit", "--no-ff", "side")
+        saved_root = ROOT
+        globals()["ROOT"] = tmp
+        try:
+            got = any("FromSide" in f for f in rule_license_header(Change(["--cached"])))
+        finally:
+            globals()["ROOT"] = saved_root
+        if got:
+            print("varka_lint selftest: a file a merge brings in: expected False, got True")
+            fails += 1
+        cases.append("a file a merge brings in")
+        sh("git", "merge", "--abort")
+        sh("git", "reset", "-q", "--hard", "HEAD~1")
         case(
             "a Guava import in Varka code",
             {"m/src/main/java/VarkaX.java": lic + "import com.google.common.base.X;\n"},
