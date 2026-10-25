@@ -3,13 +3,18 @@
 ## 0. What exists now (admission check)
 
 From the code at `608686315e7` (25 October 2026; paths under
-`sql/catalyst/src/main/java/org/apache/spark/sql/catalyst/expressions/codegen/` unless named):
+`sql/catalyst/src/main/java/org/apache/spark/sql/catalyst/expressions/codegen/` unless named).
+This row comes after row 494, the type registry (`VARKA-494.md`), by the owner's decision of 25
+October 2026; items 1 and 6 describe the code as it is today and what 494 changes in it.
 
 1. **The type is declined by name, in one place.** `VarkaNodeCompiler.laneOf` (`:675`) has no arm
    for `TimestampNTZType`, its javadoc saying both timestamp types are "deliberately absent", and
    `VarkaTimeCompiler.isTimestamp` (`:225`) declines a column of either with
-   `TIMESTAMP_OUT_OF_MILESTONE` ("a timestamp column is outside milestone 5"). Every other site
-   keys on `laneOf` or `onLongLane`: once `laneOf` answers `LONG`, the long-lane column leaf
+   `TIMESTAMP_OUT_OF_MILESTONE` ("a timestamp column is outside milestone 5"). Row 494 replaces
+   both with the registry: `TIMESTAMP_NTZ` becomes an entry whose admission is `Owed("338")`,
+   declining with its name and this row, and the zoned type a `Declined` entry. Every other site
+   keys on the lane answer: once the NTZ entry's admission is `OnLane(LONG)`, the long-lane
+   column leaf
    (`VarkaTimeCompiler.java:161`), the long-literal slot (`:168`, an NTZ literal's value is
    already a `Long`), the comparisons, `IN`, the choice nodes and the null tests take an NTZ value
    as they take a `TIME` one. No arm keys on "any long-lane type" for an operator Spark types
@@ -50,10 +55,11 @@ From the code at `608686315e7` (25 October 2026; paths under
 6. **The tests that pin the decline.** `VarkaExpressionCompilerSuite` "a timestamp column
    declines with the milestone's reason, in both forms" (`:2569`) and `VarkaLongLaneSuite` "a
    timestamp comparison stays on the row engine" (`sql/core`, `:250`) run over `ts` and `ntz`;
-   their NTZ halves flip to fused, their zoned halves stay. `VarkaVectorProjectionSuite` groups
-   NTZ with the long types for its fixture already. `VarkaCastMatrixSuite` and
-   `VarkaTypeConformance` name `ntz` and wait for it; `m8/casts_fused.tsv` moves when the three
-   pairs of section 2.3 fuse.
+   after 494 they pin the registry's words (NTZ owed to this row, the zoned type's decision),
+   and this row flips their NTZ halves to fused; the zoned halves stay.
+   `VarkaVectorProjectionSuite` groups NTZ with the long types for its fixture already.
+   `VarkaCastMatrixSuite` and `VarkaTypeConformance` name `ntz` and wait for it;
+   `m8/casts_fused.tsv` moves when the three pairs of section 2.3 fuse.
 7. **The date fields stay declined, as row 340 needs.** `year(ntz)` arrives as
    `Year(CAST(ntz AS DATE))` (`GetDateField` is `ImplicitCastInputTypes`), so the cast of 2.3
    sits under every date field. `VarkaChronoCompiler.calendarInput` admits a child only when
@@ -67,13 +73,10 @@ From the code at `608686315e7` (25 October 2026; paths under
 
 ### What differs from the row text and the milestone plan
 
-- **The registry is not built first.** `VARKA-475.md` 5 orders its kernel plan (3.3) and type
-  registry (3.4) before this row, because "the four consumers would otherwise have to agree on
-  by hand" on a long decomposed into the int32 calendar prefix. The kernel plan is row 488, done
-  (24 October 2026), and it is what made the consumers agree; the decomposition is row 340's,
-  not this row's. With the milestone's focus on the new types (owner, 22 October 2026), this row
-  adds one arm to `laneOf` and the registry row absorbs it when it replaces `laneOf`. The arm is
-  the same one line whichever lands first.
+- **After the registry.** `VARKA-475.md` 5 orders its type registry before this row; row 494
+  builds it, and this row's admission is then one entry's change (494's 2.5): the
+  `TIMESTAMP_NTZ` entry's admission from `Owed("338")` to `OnLane(LONG)`, its storage and Arrow
+  vector, and the regenerated `types.tsv`.
 - **Row 332 is not needed.** Section 4's order puts this row "after 28 and 332", for 332's cast
   harness. That harness is now row 486's `VarkaCastMatrixSuite` and row 484's conformance
   contract, both done; 332's own casts are the integral and interval ones, and none is on this
@@ -95,14 +98,14 @@ NTZ joins the long lane: microseconds since the epoch, signed, eight bytes a row
 signed long. No new `LaneType`, no new `Lane` entry, no new species, so nothing in the emitter
 or the warm-up changes for the value itself.
 
-1. `laneOf` gains `TimestampNTZType` in its long arm, and its javadoc says why the zoned type
-   stays out (its arithmetic is in the session zone, not lane arithmetic).
-2. `isTimestamp` becomes the zoned type alone, and its decline reason drops "milestone 5" for
-   the decision it records: "a zoned timestamp column, whose arithmetic is in the session zone".
-3. `VarkaLaneArrow.of(LONG)` gains `TimeStampMicroVector` for `TimestampNTZType::equals` through
-   `fromField`; its comment loses "the timestamp vectors are deliberately not here".
-4. `readsColumnOf` then admits NTZ, so `VarkaArrowSource` feeds NTZ columns to the kernels in
-   the `sql` suites; that is the end-to-end path the coverage rows run through.
+1. The `TIMESTAMP_NTZ` entry in `VarkaTypes` (row 494): its admission from `Owed("338")` to
+   `OnLane(LONG)`, and `sql/varka/types.tsv` regenerated. The zoned `TIMESTAMP` keeps its
+   `Declined` entry.
+2. `VarkaLaneArrow` gains `TimeStampMicroVector` for the NTZ id through `fromField`, its storage
+   the entry's eight bytes; its comment loses "the timestamp vectors are deliberately not here".
+3. `readsColumnOf` then admits NTZ, since it asks the registry, so `VarkaArrowSource` feeds NTZ
+   columns to the kernels in the `sql` suites; that is the end-to-end path the coverage rows run
+   through.
 
 ### 2.2 What fuses by that alone
 
@@ -149,7 +152,8 @@ Vector API does not have; it stays 340's to measure as an arm if the census find
 The oracle is Spark's own evaluation, through the reference evaluator and the differential
 suites, as for every landed type.
 
-1. **`VarkaTimestampNtzConformanceSuite`** over row 484's contract, values from
+1. **`VarkaTimestampNtzConformanceSuite`** over row 484's contract, named in the NTZ entry's
+   `conformance` field (494) in place of its owing row, values from
    `integralValues(Long.MIN_VALUE, Long.MAX_VALUE)` plus the day edges `+-106,751,991 * 86.4e9`
    and the first micros past them: load, round trip, nulls, ordering, choice and its row of the
    cast matrix. The overflow check's exemption widens from `BOOLEAN` to the types with no
@@ -171,8 +175,8 @@ suites, as for every landed type.
 5. **The fuzzers**: the IR grammar's long leaf already covers the lane; the Spark fuzzer's
    fixture gains an NTZ column over the conformance values.
 6. **The generated files** regenerated in ADDING_A_TYPE's order: `coverage.json`, the docs table,
-   `width_audit.json`, `emitted_bytes.json`, `m8/casts_fused.tsv`; only new rows and shapes may
-   move.
+   `width_audit.json`, `emitted_bytes.json`, `m8/casts_fused.tsv`, `types.tsv`; only new rows
+   and shapes may move.
 7. **The matrix** over the new conformance suite and the changed suites (step 15).
 
 ## 4. Predictions and costs
@@ -195,13 +199,13 @@ row 377's.
 
 | file | what |
 |---|---|
-| `VarkaNodeCompiler.java` | `laneOf`'s arm; the casts; `floorDivLong` |
-| `VarkaTimeCompiler.java` | `isTimestamp` for the zoned type alone; the reason |
+| `varka/VarkaTypes.java` | the NTZ entry's admission |
+| `VarkaNodeCompiler.java` | the casts; `floorDivLong` |
 | `sql/core/.../VarkaLaneArrow.java` | `TimeStampMicroVector` |
 | `sql/varka/proofs/long_divide.smt2`, `VarkaProofFiles.java` | the floor-division claim |
 | tests | the conformance suite, coverage rows, the edges, the two flipped tests, the fuzz fixture |
 | generated | `coverage.json`, `docs/sql-varka.md`, `width_audit.json` |
-| generated | `emitted_bytes.json`, `m8/casts_fused.tsv` |
+| generated | `emitted_bytes.json`, `m8/casts_fused.tsv`, `sql/varka/types.tsv` |
 | `sql/varka/plans/m8/PLAN.md` | rows 338 and 340, 2.6's note that the division moved |
 
 ## 6. Out of this row
@@ -217,8 +221,7 @@ NTZ function of 339 and 340 until those rows, each with the reason naming the ro
 
 ## 8. Questions for the owner
 
-None. The one departure from an earlier plan, building this row before 475's registry, is
-section 0's, decided by the milestone's focus on the new types.
+None.
 
 ## 9. Done when
 
