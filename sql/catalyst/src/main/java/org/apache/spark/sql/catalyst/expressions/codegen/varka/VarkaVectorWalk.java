@@ -779,12 +779,13 @@ final class VarkaVectorWalk {
 
   /**
    * {@code IntNeg}, emitted as the lanewise {@code NEG}, one subtract from zero, on every lane: a
-   * multiply by -1 agrees with it on every lane, {@link Integer#MIN_VALUE} included, where both
-   * return the input, but costs a multiply - eight instructions on x86's byte lanes, which have no
-   * byte multiply, and an emulated sequence on an AVX2 host's long lane, which has no 64-bit
-   * multiply. The overflowing value, the lane's minimum, is the whole of the overflow test, so the
-   * check is one compare rather than the four ops {@link #emitIntArith} needs, and it reads the
-   * operand rather than the result - no scratch slot at all.
+   * multiply by -1 agrees with it on every lane, the lane's minimum ({@link Integer#MIN_VALUE},
+   * {@link Long#MIN_VALUE}) included, where both return the input, but costs a multiply - eight
+   * instructions on x86's byte lanes, which have no byte multiply, and an emulated sequence on an
+   * AVX2 host's long lane, which has no 64-bit multiply. The overflowing value, the lane's minimum,
+   * is the whole of the overflow test, so the check is one compare rather than the four ops
+   * {@link #emitIntArith} needs, and it reads the operand rather than the result - no scratch slot
+   * at all.
    *
    * <p>A narrow negation tests its operand against its own lane's minimum, which is the node's
    * and not the emitted lane's: under the widened arm the value is an int in the int lane, but

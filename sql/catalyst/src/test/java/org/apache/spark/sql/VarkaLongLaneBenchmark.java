@@ -144,10 +144,10 @@ public class VarkaLongLaneBenchmark extends VarkaBenchmarkBase {
             List.of(new IntArith(IntOp.ADD, Overflow.FAIL, c, l))),
         new Shape("column * column, wrapping",
             List.of(new IntArith(IntOp.MUL, Overflow.WRAP, c, c1))),
-        // Negation, which these lanes emit as a multiply by -1 (VARKA-482). Alone it is as
-        // fast as the copy above: one load and one store bound the loop and hide the multiply.
-        // The chain of eight negations of a sum is bound by its dependent operations instead,
-        // so a cheaper negation shows there.
+        // Negation (VARKA-482). Alone it is as fast as the copy above: one load and one store
+        // bound the loop and hide the operation. The chain of eight negations of a sum is bound
+        // by its dependent operations instead, so a costlier negation shows there - as the
+        // multiply by -1 it once was did on an AVX2 host's long lane.
         new Shape("-column, wrapping", List.of(new IntNeg(Overflow.WRAP, c))),
         new Shape("eight times x = -(x + column2), wrapping", List.of(negChain(c, c1, 8))),
         new Shape("greatest(column, column)", List.of(new Greatest(c, c1))),
