@@ -59,15 +59,27 @@ OUT = "sql/varka/plans/m8/census.tsv"
 CURATED = "sql/varka/plans/m8/census_curated.txt"
 SOURCES = ["sql/catalyst/src/main/scala", "sql/catalyst/src/main/java", "sql/api/src/main/scala"]
 
-# The type set, owner's decision of 14 October 2026. EXISTING are the types `laneOf` admits
-# today (VarkaNodeCompiler.laneOf: int, date and year-month intervals on the int lane; bigint,
-# TIME and day-time intervals on the long lane); NEW are the ones this milestone adds.
+TYPES = "sql/varka/types.tsv"
+
+
+def types_rows(root=ROOT):
+    """The type registry's rows, a dict per id, from its committed table (`sql/varka/types.tsv`,
+    written by `VarkaTypesSuite` from `VarkaTypes`, VARKA-494)."""
+    with open(os.path.join(root, TYPES), encoding="utf-8") as f:
+        lines = [line.rstrip("\n") for line in f if line.strip() and not line.startswith("#")]
+    header = lines[0].split("\t")
+    return [dict(zip(header, line.split("\t"))) for line in lines[1:]]
+
+
+# The census's types and their order are the registry's: every type it names.
+ORDER = [r["census"] for r in types_rows() if r["census"] != "-"]
+# The milestone's split of them, owner's decision of 14 October 2026: EXISTING are the types a
+# lane read before milestone 8, NEW the ones it adds. A judgement about the milestone, not a fact
+# of a type, so it stays here; conformance_errors() holds the two to the registry's set.
 EXISTING = ["int", "date", "ym", "bigint", "time", "dt"]
 # "dec" is DECIMAL up to precision 38 (owner's decision, 14 October 2026): an unscaled long up to
 # precision 18 and a 128-bit lane pair above it.
 NEW = ["bool", "byte", "short", "float", "double", "dec", "ntz"]
-ORDER = ["bool", "byte", "short", "int", "bigint", "float", "double", "dec"]
-ORDER += ["date", "ntz", "time", "ym", "dt"]
 GROUPS = {
     "INTEGRAL": ["byte", "short", "int", "bigint"],
     "FLOAT": ["float", "double"],
@@ -915,25 +927,19 @@ def cast_summary(rows):
 
 
 # Every landed type is held to the conformance contract (VARKA-484, VARKA-475.md 3.1): a suite
-# Varka<Name>ConformanceSuite over VarkaTypeConformance, or an entry here naming the row that
-# owes it. A landed type is one Varka reads today: the three this milestone has added and the
-# six laneOf admitted before it. A type the committed census marks fused anywhere has landed
-# too, so a new type must be added here (with its suite or owner) when its first claim lands.
+# Varka<Name>ConformanceSuite over VarkaTypeConformance, or the row that owes it, both named in
+# the type registry (VarkaTypes' conformance). A landed type is one Varka reads today. A type the
+# committed census marks fused anywhere has landed too, so a new type's registry entry must name
+# its suite or owner when its first claim lands.
 CONFORMANCE_DIR = (
     "sql/catalyst/src/test/java/org/apache/spark/sql/catalyst/expressions/codegen/varka"
 )
-CONFORMANCE_SUITE = {
-    "bool": "Boolean",
-    "byte": "TinyInt",
-    "short": "SmallInt",
-    "int": "Int",
-    "bigint": "BigInt",
-    "date": "Date",
-    "time": "Time",
-    "ym": "YearMonthInterval",
-    "dt": "DayTimeInterval",
+# Each landed type's conformance suite, `Varka<name>ConformanceSuite`, and the row that owes a
+# suite not yet written: the registry's `conformance` and `conformance_row` columns.
+CONFORMANCE_SUITE = {r["census"]: r["conformance"] for r in types_rows() if r["conformance"] != "-"}
+CONFORMANCE_OWED = {
+    r["census"]: r["conformance_row"] for r in types_rows() if r["conformance_row"] != "-"
 }
-CONFORMANCE_OWED = {t: "485" for t in EXISTING}
 
 
 def conformance_errors(root=ROOT):
@@ -949,6 +955,8 @@ def conformance_errors(root=ROOT):
     ['short (SmallInt) is a landed type with no VarkaSmallIntConformanceSuite and no owing row']
     """
     errors = []
+    if sorted(EXISTING + NEW) != sorted(ORDER):
+        errors.append(f"EXISTING and NEW are not the registry's census types {ORDER}")
     census = os.path.join(root, OUT)
     if os.path.exists(census):
         with open(census) as f:

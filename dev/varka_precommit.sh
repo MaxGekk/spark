@@ -462,6 +462,7 @@ fi
 # files stale moves the milestone's headline without anyone seeing it. The catalogue check fails
 # while a plan still cites a path the scope catalogue moved away from.
 census_inputs='^(dev/varka_census\.py|dev/varka_catalogue_move\.sh|sql/varka/coverage\.json'
+census_inputs+='|sql/varka/types\.tsv'
 census_inputs+='|sql/varka/plans/.*'
 census_inputs+='|sql/catalyst/src/test/java/org/apache/spark/sql/catalyst/expressions/codegen/varka'
 census_inputs+='/Varka[A-Za-z]*Conformance(Suite)?\.java'
@@ -479,9 +480,9 @@ fi
 # A lane is wired at sites no compiler checks (VARKA-474 2.3): a change to the lane's members,
 # its compiler admission, the script or a site it walks re-runs the walk, so a site a new lane
 # misses is a line here rather than a silent decline at run time.
-lane_inputs='^(dev/varka_new_lane\.py|sql/varka/plans/m8/census\.tsv'
+lane_inputs='^(dev/varka_new_lane\.py|sql/varka/plans/m8/census\.tsv|sql/varka/types\.tsv'
 lane_inputs+='|sql/catalyst/src/main/java/org/apache/spark/sql/catalyst/expressions/codegen'
-lane_inputs+='/(VarkaNodeCompiler|varka/VarkaVectorIR|varka/Lane|varka/VarkaVectorTemplateWarmup)'
+lane_inputs+='/(varka/VarkaTypes|varka/VarkaVectorIR|varka/Lane|varka/VarkaVectorTemplateWarmup)'
 lane_inputs+='\.java|sql/catalyst/src/test/.*/(VarkaIrGrammar\.java|VarkaCoverageSuite\.scala'
 lane_inputs+='|VarkaWidthAuditShapes\.scala)'
 lane_inputs+='|sql/(catalyst|core)/src/test/java/.*/Varka[A-Za-z]*Benchmark\.java)$'
