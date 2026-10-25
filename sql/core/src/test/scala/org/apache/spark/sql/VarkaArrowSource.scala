@@ -28,6 +28,7 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Alias, AttributeReference, Expression, Literal,
   NamedExpression, TryEval}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes
 import org.apache.spark.sql.catalyst.plans.logical.{Command, Limit, LocalRelation, LogicalPlan,
   OneRowRelation, Project}
 import org.apache.spark.sql.catalyst.rules.Rule
@@ -79,7 +80,7 @@ object VarkaArrowSource {
 
   /** Whether a relation has a column a Varka kernel can read. */
   def varkaTyped(plan: LogicalPlan): Boolean =
-    plan.output.exists(a => VarkaExpressionCompiler.readsColumnOf(a.dataType))
+    plan.output.exists(a => VarkaTypes.lane(a.dataType).isPresent)
 
   // Set while the cache rule plans a relation's cached copy: that plan goes through the
   // optimizer too, and the rule must not wrap the relation inside its own copy.
@@ -214,7 +215,7 @@ object VarkaArrowSource {
     }
 
     private def liftable(e: Expression): Boolean = e match {
-      case l: Literal => l.value != null && VarkaExpressionCompiler.readsColumnOf(l.dataType)
+      case l: Literal => l.value != null && VarkaTypes.lane(l.dataType).isPresent
       case _ => false
     }
   }

@@ -48,6 +48,7 @@ import org.apache.spark.sql.catalyst.expressions.TimeToMillis;
 import org.apache.spark.sql.catalyst.expressions.TimeToSeconds;
 import org.apache.spark.sql.catalyst.expressions.TimeTrunc;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
@@ -154,12 +155,13 @@ final class VarkaTimeCompiler {
       // 29). As with the interval leaf, Spark's own typing decides where such a value may
       // appear - never in a date or an int position - so the leaf cannot put one there, and the
       // IR's constructors refuse a tree that mixes it with the int lane anyway.
-      case BoundReference br when VarkaNodeCompiler.onLongLane(br.dataType()) ->
+      case BoundReference br
+          when VarkaTypes.lane(br.dataType()).orElse(null) == LaneType.LONG ->
           () -> Optional.of(VarkaNodeCompiler.columnRef(br, inputs, LaneType.LONG));
       // The long lane's literals, beside the int ones: the value is already the long the lane
       // holds, so `l > 5000000000`, `t < TIME'12:00'` and `dt > INTERVAL '1' DAY` take a slot.
       case Literal l when l.value() instanceof Long
-          && VarkaNodeCompiler.onLongLane(l.dataType()) ->
+          && VarkaTypes.lane(l.dataType()).orElse(null) == LaneType.LONG ->
           () -> Optional.of(sink.longSlot((Long) l.value()));
       // TIME's precision cast. A `TIME(p)` value is stored truncated to `p` digits and
       // `Cast.castToTime` truncates again to the target precision, so a cast to an equal or wider

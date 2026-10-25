@@ -444,7 +444,7 @@ final class VarkaNodeCompiler {
       // try_negative here either, so the mode is WRAP or FAIL; ANSI always keeps the check,
       // since a narrow column's range contains the minimum that overflows.
       case UnaryMinus n when isNarrow(n) -> () -> narrowOperand(
-          n.child(), laneOf(n.dataType()).orElseThrow(), inputs, literals, sink)
+          n.child(), VarkaTypes.lane(n.dataType()).orElseThrow(), inputs, literals, sink)
           .map(x -> (VarkaVectorIR) new IntNeg(
               n.failOnError() ? Overflow.FAIL : Overflow.WRAP, x));
       // `abs` over a narrow lane is the negation's node with its `abs` flag: Spark's
@@ -452,7 +452,7 @@ final class VarkaNodeCompiler {
       // is `-128Y` there. Its one overflowing input is the negation's, the lane's minimum, so
       // under ANSI the check is the negation's too. There is no try_abs in Spark.
       case Abs a when isNarrow(a) -> () -> narrowOperand(
-          a.child(), laneOf(a.dataType()).orElseThrow(), inputs, literals, sink)
+          a.child(), VarkaTypes.lane(a.dataType()).orElseThrow(), inputs, literals, sink)
           .map(x -> (VarkaVectorIR) new IntNeg(
               a.failOnError() ? Overflow.FAIL : Overflow.WRAP, x, true));
       // The bitwise family (VARKA-335): one lane-wise operation at the operand's width, which
@@ -634,7 +634,7 @@ final class VarkaNodeCompiler {
    * sixteen bits rather than at the int lane's thirty-two.
    */
   private static boolean isNarrow(Expression e) {
-    return laneOf(e.dataType()).filter(LaneType::isNarrow).isPresent();
+    return VarkaTypes.lane(e.dataType()).filter(LaneType::isNarrow).isPresent();
   }
 
   /**
@@ -662,20 +662,6 @@ final class VarkaNodeCompiler {
       return compileNode(r.replacement(), inputs, literals, sink);
     }
     return sink.decline("unsupported expression", e);
-  }
-
-  /**
-   * The lane a Spark type's values occupy in a kernel, or empty for a type no kernel reads: the
-   * type registry's answer ({@link VarkaTypes#lane}, VARKA-494), which holds why each type is on
-   * its lane or on none.
-   */
-  static Optional<LaneType> laneOf(DataType dataType) {
-    return VarkaTypes.lane(dataType);
-  }
-
-  /** Whether {@code dataType} is one of the types the 64-bit lane carries. */
-  static boolean onLongLane(DataType dataType) {
-    return laneOf(dataType).filter(lane -> lane == LaneType.LONG).isPresent();
   }
 
   /**
@@ -872,7 +858,7 @@ final class VarkaNodeCompiler {
       VarkaSlotTable inputs,
       VarkaSlotTable literals,
       DeclineSink sink) {
-    LaneType lane = laneOf(whole.dataType()).orElseThrow();
+    LaneType lane = VarkaTypes.lane(whole.dataType()).orElseThrow();
     int mark = literals.size();
     Optional<VarkaVectorIR> x = narrowOperand(l, lane, inputs, literals, sink);
     if (x.isEmpty()) {
