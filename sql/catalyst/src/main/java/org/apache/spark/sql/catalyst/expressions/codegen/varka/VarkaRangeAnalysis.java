@@ -215,6 +215,16 @@ public final class VarkaRangeAnalysis {
    */
   public static Range range(VarkaVectorIR node, Kind kind, GuardPolicy policy,
       IntUnaryOperator literals, IntConsumer columns) {
+    // A narrow column holds its type's values by representation, null rows included, so its
+    // range is the type's and rests on no per-batch check: what a cast of it to INT carries into
+    // the int lane, where it rules out the overflow of `CAST(y AS INT) * CAST(y2 AS INT)` for both
+    // narrow types (32768^2 < 2^31). Only the column: narrow arithmetic is not ranged here, which
+    // is what keeps a checked narrow operation's check ({@code VarkaNodeCompiler.arithOver}).
+    if (node instanceof ColumnRef c && kind == Kind.INT && c.lane().isNarrow()) {
+      return c.lane() == VarkaVectorIR.LaneType.BYTE
+          ? VarkaValueRange.of(Byte.MIN_VALUE, Byte.MAX_VALUE)
+          : VarkaValueRange.of(Short.MIN_VALUE, Short.MAX_VALUE);
+    }
     // A leaf on a wider lane has neither of the two things this analysis reads: the epoch-day
     // contract is an int32 statement, and `literals` hands back an int, which cannot carry a
     // 64-bit constant. Answering UNKNOWN is the safe direction - it keeps every guard the

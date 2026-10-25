@@ -389,14 +389,14 @@ public final class VarkaEmitterNarrowSuite {
   }
 
   @Test
-  @DisplayName("a validity-only narrow column needs no species at int lanes, not at the "
-      + "bigint lane")
+  @DisplayName("a validity-only narrow column needs no species at any lane, a narrow value does "
+      + "at the bigint lane")
   public void validityOnlyNarrowColumnNeedsNoSpecies() {
-    // An IsNotNull over a value reads that input's validity word and never its data, so at an
-    // int emission it needs no narrow species, whatever the lane count or width. A long-lane
-    // emission holds no narrow node at all - Analysis's lane rule - so a narrow conjunct lifted
-    // beside a bigint one declines and the row engine answers it, as does the value form of the
-    // same widening.
+    // An IsNotNull over a value reads that input's validity word and never its data, so it needs
+    // no narrow species at any lane count or width, the bigint lane's included: the word is a bit
+    // per row at every lane (VARKA-480), so a null test lifted beside a bigint conjunct fuses. A
+    // narrow value has no lowering at the long lane, so the value form of the same widening
+    // declines and the row engine answers it.
     Cond validityOnly = new IsNotNull(BYTE_COL);
     Cond lifted = new IsNotNull(new WidenLane(BYTE_COL, LaneType.LONG));
     VarkaVectorIR value = new WidenLane(BYTE_COL, LaneType.LONG);
@@ -405,8 +405,10 @@ public final class VarkaEmitterNarrowSuite {
     for (Arm arm : ARMS) {
       assertTrue(VarkaKernelPlan.refusalOf(List.of(validityOnly), arm.options()).isEmpty(),
           arm.name());
-      assertEquals(Optional.of("a narrow value under a bigint kernel has no lowering"),
-          VarkaKernelPlan.refusalOf(List.of(lifted), arm.options()), arm.name());
+      // The lifted test reads the word alone, one bit per row at every lane, so a bigint kernel
+      // takes it (VARKA-480); a narrow value under one still has no lowering.
+      assertTrue(VarkaKernelPlan.refusalOf(List.of(lifted), arm.options()).isEmpty(),
+          arm.name());
       assertEquals(Optional.of("a narrow value under a bigint kernel has no lowering"),
           VarkaKernelPlan.refusalOf(List.of(value), arm.options()), arm.name());
     }

@@ -2062,6 +2062,20 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
       "a narrow value under a bigint kernel has no lowering")
   }
 
+  test("a narrow column's null test beside a bigint conjunct fuses in the bigint kernel") {
+    // VARKA-480: a null test reads the narrow column's validity word alone, one bit per row at
+    // every lane, so it joins the conjunction lifted to the long lane, where the narrow value of
+    // the test above still declines. Which conjuncts of `isnotnull(y) AND ... AND y = 3` fuse
+    // moves with it: the null test now fuses beside the bigint ones.
+    val options = VarkaMatrix.base.withLanesOverride(16).withValidityByWidth(true)
+    val ll = AttributeReference("ll", LongType)()
+    val pred = And(GreaterThan(ll, Literal(0L)), IsNotNull(by))
+    val compiled = VarkaExpressionCompiler.compilePredicate(pred, childOutput :+ ll, options)
+      .toScala
+    assert(compiled.isDefined, "the bigint conjunct should fuse")
+    assert(compiled.get.specs.asScala.map(_.fused) === Seq(true, true))
+  }
+
   test("a boolean equality of two narrow conditions lifts into an int-lane conjunction") {
     // A comparison of two boolean conditions is a mask over them, so one over two narrow
     // comparisons is itself narrow - `compare` builds the BoolCompare with narrow operands -
@@ -2580,25 +2594,33 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
     }
   }
 
-  test("a projection that mixes lanes fuses the first lane and names the lane for the other") {
-    val partial = VarkaExpressionCompiler.compilePartial(
-      Seq(out(Greatest(Seq(d, d2))), out(Greatest(Seq(l, l2))), out(DateAdd(d, Literal(1)))),
-      withLong).get
-    assert(partial.specs.asScala.toSeq === Seq(new FusedOutput(0), VarkaOutputSpec.RESIDUAL,
+  test("a projection that mixes lanes fuses each lane in a kernel of its own") {
+    // VARKA-480: an entry no lane beside the others serves, which plans alone, is set aside for
+    // another kernel as an entry over the budgets is, rather than left to the row engine.
+    val entries =
+      Seq(out(Greatest(Seq(d, d2))), out(Greatest(Seq(l, l2))), out(DateAdd(d, Literal(1))))
+    val partial = VarkaExpressionCompiler.compilePartial(entries, withLong).get
+    assert(partial.specs.asScala.toSeq === Seq(new FusedOutput(0), new KernelOutput(1, 0),
         new FusedOutput(1)))
-    assert(partial.declines.asScala(1).reason === laneReason)
-    // The demoted entry left nothing behind: no long literal, no long input.
+    assert(partial.declines.isEmpty)
+    // The first kernel holds nothing of the long entry: no long literal, no long input.
     assert(partial.fused.longLiterals.asScala.toSeq === Nil)
     assert(partial.fused.inputOrdinals.asScala.toSeq === Seq(0, 1))
     assert(partial.fused.lane(VarkaEmitOptions.DEFAULTS) === LaneType.INT)
-    // The first entry fixes the lane, whichever lane it is.
+    assert(partial.more.asScala.map(_.lane(VarkaEmitOptions.DEFAULTS)) === Seq(LaneType.LONG))
+    // The first entry fixes the first kernel's lane, whichever lane it is.
     val longFirst = VarkaExpressionCompiler.compilePartial(
       Seq(out(Greatest(Seq(l, Literal(3L)))), out(Greatest(Seq(d, d2)))), withLong).get
-    assert(longFirst.specs.asScala.toSeq === Seq(new FusedOutput(0), VarkaOutputSpec.RESIDUAL))
-    assert(longFirst.declines.asScala(1).reason ===
-      "the INT lane in a kernel on the LONG lane: one kernel holds one lane")
+    assert(longFirst.specs.asScala.toSeq === Seq(new FusedOutput(0), new KernelOutput(1, 0)))
     assert(longFirst.fused.literals.asScala.toSeq === Nil)
     assert(longFirst.fused.longLiterals.asScala.toSeq === Seq(3L))
+    // With one kernel only, the entry the first lane does not serve is the row engine's, and its
+    // reason names the lanes.
+    val single = VarkaExpressionCompiler.compilePartial(entries, withLong,
+      VarkaEmitOptions.DEFAULTS.withSeveralKernels(false)).get
+    assert(single.specs.asScala.toSeq === Seq(new FusedOutput(0), VarkaOutputSpec.RESIDUAL,
+        new FusedOutput(1)))
+    assert(single.declines.asScala(1).reason === laneReason)
   }
 
   test("a predicate that mixes lanes fuses every conjunct on the long lane, the int ones widened") {

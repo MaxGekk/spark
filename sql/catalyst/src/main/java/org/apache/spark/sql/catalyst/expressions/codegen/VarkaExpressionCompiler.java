@@ -550,7 +550,8 @@ public final class VarkaExpressionCompiler {
     private final DeclineSink sink;
     private final UnaryOperator<Expression> bind;
     private final SortedMap<Integer, VarkaDecline> declines = new TreeMap<>();
-    // Entries over the budgets beside the others that fit them alone: another kernel's.
+    // Entries that fit a kernel alone but not beside the others - over the budgets, or on a lane
+    // the others do not share (VARKA-480) - and so another kernel's.
     private final Set<Integer> alone = new HashSet<>();
 
     EntryPass(Seq<Attribute> childOutput, Map<Integer, String> demoted,
@@ -630,11 +631,17 @@ public final class VarkaExpressionCompiler {
         // and its reason says why, though it may hold no narrow value itself.
         List<VarkaVectorIR> with = new ArrayList<>(outputs);
         with.add(ir);
-        Optional<String> refused = admission(ir, with, options);
+        Optional<Admission> refused = admission(ir, with, options);
         if (refused.isPresent()) {
           marks.restore(inputs, literals, sink);
           sink.take();
-          sink.note(refused.get(), e);
+          sink.note(refused.get().reason(), e);
+          // An entry that plans alone and is refused only beside the others - a bigint entry
+          // after a narrow or an int one, say - is set aside for a kernel of its own, as an
+          // entry over the budgets is (VARKA-480).
+          if (refused.get().joining()) {
+            alone.add(position);
+          }
           return residual(position);
         }
         // An accepted entry must also fit the emitter's structural budgets together with the
@@ -1207,20 +1214,27 @@ public final class VarkaExpressionCompiler {
   }
 
   /**
+   * Why an entry cannot join its kernel, and whether it is the joining that fails: the entry
+   * plans alone and is refused only beside the others, so a kernel of its own can take it.
+   */
+  private record Admission(String reason, boolean joining) { }
+
+  /**
    * Why {@code entry} cannot join the kernel {@code with} holds it in, or empty when it can: the
    * plan of the entry alone, then the plan of the kernel with it, whose narrow refusal says the
    * joining is what moved the kernel to the int lane.
    */
-  private static Optional<String> admission(VarkaVectorIR entry, List<VarkaVectorIR> with,
+  private static Optional<Admission> admission(VarkaVectorIR entry, List<VarkaVectorIR> with,
       VarkaEmitOptions options) {
     Optional<VarkaKernelPlan.Refusal> alone =
         VarkaKernelPlan.of(List.of(entry), options).refusal();
     if (alone.isPresent()) {
-      return Optional.of(alone.get().reason());
+      return Optional.of(new Admission(alone.get().reason(), false));
     }
-    return VarkaKernelPlan.of(with, options).refusal().map(r ->
+    return VarkaKernelPlan.of(with, options).refusal().map(r -> new Admission(
         r.kind() == VarkaKernelPlan.Kind.LANE_MISMATCH ? r.reason()
-            : "joining drives the kernel's narrow entries at the int lane, where " + r.reason());
+            : "joining drives the kernel's narrow entries at the int lane, where " + r.reason(),
+        true));
   }
 
   /** The {@code AND} spine of a condition, in query order: the split the predicate works. */

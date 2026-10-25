@@ -105,15 +105,24 @@ class VarkaCoverageCompositionFuzzSuite
 
   /**
    * The reasons a composition may decline an entry that fuses alone: a size decline, whose
-   * reason names a budget; the one-lane rule - a kernel holds one lane, so a projection
-   * that mixes the int and the long lane fuses the first lane it meets and leaves the other,
-   * which `VARKA-29.md` pins and VARKA-28's width conversion is to lift; and, for a conjunct,
+   * reason names a budget; the one-lane rule under `severalKernels=false` - a kernel holds one
+   * lane, so a projection that mixes the int and the long lane fuses the first lane it meets and
+   * leaves the other, which `VARKA-29.md` pins and which the default answers with a kernel per
+   * lane (VARKA-480); and, for a conjunct,
    * the order rule of VARKA-380, which demotes one Spark evaluates after a residual conjunct
    * that can raise. Any other reason on an admitted row is a finding.
    */
-  private def isCompositionDecline(reason: String): Boolean =
-    reason.contains("budget") || reason.contains("one kernel holds one lane") ||
+  private def isCompositionDecline(reason: String, laneRule: Boolean = true): Boolean =
+    reason.contains("budget") || (laneRule && reason.contains("one kernel holds one lane")) ||
       reason.contains(VarkaConjunctOrder.OUT_OF_ORDER)
+
+  /**
+   * A projection's entries: the one-lane rule holds only with several kernels off, since with
+   * them an entry no lane beside the others serves fuses in a kernel of its own (VARKA-480), so
+   * the reason there would hide a regression.
+   */
+  private def isProjectionDecline(reason: String, c: VarkaCompositionCase): Boolean =
+    isCompositionDecline(reason, laneRule = !c.options.severalKernels())
 
   /**
    * The finding of a failed check on a line of its own, and the case after it: the signature of a
@@ -159,7 +168,7 @@ class VarkaCoverageCompositionFuzzSuite
       finding("entries neither fused nor declined, or both", c))
     declined.foreach { case (i, d) =>
       assert(d.reason.nonEmpty, finding(s"entry $i declined without a reason", c))
-      assert(isCompositionDecline(d.reason),
+      assert(isProjectionDecline(d.reason, c),
         finding(s"entry $i, which fuses alone, declined for '${d.reason}'", c))
     }
   }
@@ -446,7 +455,7 @@ class VarkaCoverageCompositionFuzzSuite
     assert(fused.size + declined.size == list.size && (fused & declined.keySet).isEmpty,
       finding("entries neither fused nor declined, or both", c))
     declined.foreach { case (i, d) =>
-      assert(isCompositionDecline(d.reason),
+      assert(isProjectionDecline(d.reason, c),
         finding(s"entry $i, which fuses alone, declined for '${d.reason}'", c))
     }
     partial.foreach { p =>

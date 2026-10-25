@@ -74,9 +74,18 @@ None needs an emit option: no emitted code changes for a shape that fuses today.
 admits a shape that declined before, and the shape emits through the paths it already uses (a
 second kernel, the validity word, an unchecked multiply).
 
+*Correction (25 October 2026, while writing the range change):* one emitted shape that fuses today
+does change. With a narrow column's range known, ANSI int arithmetic over widened narrow columns -
+`CAST(y1 AS INT) + CAST(y2 AS INT)`, say - is proved unable to overflow and drops its check, so
+such a row's bytes move (fewer operations, the same answers). Still no option: it is the existing
+bound-removes-the-check rule applied to a bound it now has.
+
 ### 3.2 What is deliberately unchanged
 
-The predicate path's single kernel; narrow values under a `BIGINT` kernel (a value read still
+The predicate path's single kernel (*correction, 25 October 2026, from the review:* its
+conjuncts are not unchanged - the null test of a narrow column lifted beside a bigint conjunct now
+fuses in the bigint kernel, so which conjuncts of `isnotnull(y) AND isnotnull(l) AND y = 3 AND
+l > 0` fuse moves, the answers the same; a test pins it); narrow values under a `BIGINT` kernel (a value read still
 declines); the checked narrow multiply and its `!narrow` MUL decline (row 481); the narrow
 part-form loads (row 479).
 
@@ -153,4 +162,23 @@ to fused kernels and admission is what is measured. The reach report
 
 ## 9. Outcome
 
-(Written when the work lands.)
+Built 25 October 2026, the three admissions as section 3.1 describes, with two corrections recorded
+in 3.1 and 3.2 (ANSI int arithmetic over widened narrow columns drops its check; a narrow null test
+beside a bigint conjunct now fuses in a predicate's kernel).
+
+Predictions, scored:
+
+1. The four new coverage rows fuse (`CAST(y1 AS INT) * CAST(y2 AS INT)`, its `SMALLINT` twin,
+   `if(y1 IS NULL, l, l2)` and its twin), and no existing row stopped fusing: `VarkaCoverageSuite`
+   passes, which fails a row that declines without a declared reason. Held.
+2. The composed projection gains a kernel: the regenerated reach report reads "1 of 138 projection
+   compilations needed more than one kernel". Held. (The report had been stale since it covered 65
+   projection rows; it now covers 137, which is most of its diff.)
+3. The narrow rows' domain predicates fuse where they declined: the differential suite passes with
+   them. One position does not take the new product rows, a later `COALESCE` argument, where
+   Varka compiles no bare int column as a value (`m9/SCOPE.md` item 55); the two rows join the
+   ANSI form's list of int-valued rows that decline there.
+
+Tests: the catalyst suites pass (219 on the first run, 183 on the rerun of the touched ones), the sql
+suites pass (925), the gate and the linters are in the PR. Not done: the proofs' transcription of the
+narrow column bound (risk 3), owed to row 490's register.

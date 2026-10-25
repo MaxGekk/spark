@@ -608,6 +608,8 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 |---|---|---|---|---|
 | `y1 + i` | `intArithmetic` | `CAST(y1 AS BIGINT) + i BETWEEN -2147483648 AND 2147483647` | an int add over a widened byte load, checked under ANSI as any int add is | vector |
 | `CAST(s1 AS INT)` | none |  | the widening alone, stored four bytes a row | vector |
+| `CAST(y1 AS INT) * CAST(y2 AS INT)` | `intArithmetic` |  | an int multiply that cannot overflow, the byte columns' range bounding the product by 2^14, so it needs no check (VARKA-480) | vector |
+| `CAST(s1 AS INT) * CAST(s2 AS INT)` | `intArithmetic` |  | the short twin: a product of at most 2^30 | vector |
 
 #### Width conversions
 
@@ -638,6 +640,8 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `least(l, 5000000000)` | `intArithmetic` |  |  | per-lane: blend, mask broadcast |
 | `CASE WHEN l < l2 THEN l ELSE l2 END` | `predicate`, `condition` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
 | `if(l IS NULL, l2, l)` | `predicate`, `condition` |  |  | per-lane: mask broadcast, mask logic, blend |
+| `if(y1 IS NULL, l, l2)` | `predicate`, `condition` |  | a byte column read for its validity alone, which joins the bigint kernel: the word is a bit per row at every lane (VARKA-480) | per-lane: mask broadcast, mask logic, blend |
+| `if(s1 IS NULL, l, l2)` | `predicate`, `condition` |  | the short twin | per-lane: mask broadcast, mask logic, blend |
 | `greatest(t, t2)` | `intArithmetic` |  |  | per-lane: blend, mask broadcast |
 | `CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END` | `predicate`, `condition` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
 
@@ -676,13 +680,13 @@ operands (a row counts once for each type it reads):
 <!-- BEGIN generated verification counts -->
 | Type | Rows | refinement | proof | exhaustive | owed | differential |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `bigint` | 41 | 0 | 2 | 0 | 2 | 37 |
+| `bigint` | 43 | 0 | 2 | 0 | 2 | 39 |
 | `bool` | 19 | 0 | 0 | 10 | 0 | 9 |
-| `byte` | 23 | 0 | 0 | 0 | 8 | 15 |
+| `byte` | 25 | 0 | 0 | 0 | 8 | 17 |
 | `date` | 81 | 17 | 0 | 0 | 0 | 64 |
 | `dt` | 11 | 2 | 0 | 0 | 0 | 9 |
-| `int` | 68 | 14 | 2 | 0 | 1 | 51 |
-| `short` | 23 | 0 | 0 | 0 | 8 | 15 |
+| `int` | 70 | 14 | 2 | 0 | 1 | 53 |
+| `short` | 25 | 0 | 0 | 0 | 8 | 17 |
 | `time` | 28 | 6 | 0 | 0 | 2 | 20 |
 | `ym` | 24 | 7 | 2 | 0 | 2 | 13 |
 <!-- END generated verification counts -->
