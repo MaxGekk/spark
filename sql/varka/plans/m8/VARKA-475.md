@@ -346,3 +346,6 @@ other or with the compiler while every test passed.
 | with floats (341) | 9.2.2, with the `Lane` split |
 | before decimal (347, 359) | row 489, 9.2.3 |
 | continuous | 9.2.4 and 9.2.5 in every review |
+
+*25 October 2026:* 3.4 with 9.2.1 is row 494 (`VARKA-494.md`), built before `TIMESTAMP_NTZ`
+by the owner's decision.
