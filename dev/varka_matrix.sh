@@ -26,7 +26,7 @@
 #   dev/varka_matrix.sh --defaults --list-suites --module sql   # print a module's suites, no build
 #   dev/varka_matrix.sh --all --skip-build             # reuse the last build and classpath
 #   dev/varka_matrix.sh --all -j 8 --deadline 06:30    # start no JVM after 06:30
-#   dev/varka_matrix.sh --all --shard 3/12 -j 2        # every 12th configuration from the 3rd
+#   dev/varka_matrix.sh --all --shard 3/12 -j 2        # shard 3 of 12, split by measured time
 #   dev/varka_matrix.sh --module sql --config cse=false --sbt-arg -Phive   # as the PR job runs
 #   dev/varka_matrix.sh --defaults --split 4 -j 8 --jvm-arg -XX:MaxVectorSize=16   # as the gate
 #
@@ -229,11 +229,24 @@ else
   if [ "${configs[0]}" = "ALL" ]; then mapfile -t configs < "$OUT/configurations"; fi
 fi
 if [ -n "$shard" ]; then
-  # --shard I/N keeps the configurations at positions I, I + N, I + 2N, ... (from zero).
-  index=${shard%/*} count=${shard#*/}
-  kept=()
-  for k in "${!configs[@]}"; do (( k % count == index )) && kept+=("${configs[$k]}"); done
-  configs=("${kept[@]}")
+  if [ -s sql/varka/matrix/seconds.tsv ]; then
+    # --shard I/N keeps shard I of the configurations split longest first by their measured
+    # weight (VARKA-493): each job then takes about the same time, where kept by position one
+    # took twice another. The weights are committed; a configuration they lack weighs the median.
+    # The split is captured before it is read: inside a process substitution its failure would
+    # leave the shard with no configuration and the job running only its defaults, green.
+    split_out=$(printf '%s\n' "${configs[@]}" \
+      | python3 dev/varka_matrix_shards.py split "$shard" sql/varka/matrix/seconds.tsv) \
+      || { echo "could not split the configurations for shard $shard" >&2; exit 1; }
+    configs=()
+    [ -n "$split_out" ] && mapfile -t configs <<< "$split_out"
+  else
+    # With no weights, the positions I, I + N, I + 2N, ... (from zero).
+    index=${shard%/*} count=${shard#*/}
+    kept=()
+    for k in "${!configs[@]}"; do (( k % count == index )) && kept+=("${configs[$k]}"); done
+    configs=("${kept[@]}")
+  fi
 fi
 
 # Each module's suites over --split JVMs, longest first by the previous run's JUnit times: one

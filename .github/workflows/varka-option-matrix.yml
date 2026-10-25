@@ -17,7 +17,8 @@
 
 # The option configuration matrix, every configuration (VARKA-248.md 3.2.8). The Varka suites
 # rerun once per configuration - the emit defaults with one option changed, carried by every
-# kernel they emit - in twelve jobs of about four configurations each, every job with its own
+# kernel they emit - in twelve jobs of four or five configurations each, split longest first by
+# their measured weights (sql/varka/matrix/seconds.tsv, VARKA-493), every job with its own
 # defaults run, which the declining check compares fused batches with. A pull request runs one
 # configuration in its varka-scoped jobs; this runs all of them once a week, so a configuration
 # no pull request has drawn lately is still checked. See dev/varka_matrix.sh.

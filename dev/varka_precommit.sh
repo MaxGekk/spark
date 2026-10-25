@@ -395,7 +395,7 @@ fi
 # The benchmark diff carries its own check of the one thing a reader cannot see
 # it get wrong: a row key that collides silently drops a row from the requote,
 # which is the closing step of every regeneration.
-for tool in varka_bench_diff varka_bench_gate varka_lint varka_msg_check; do
+for tool in varka_bench_diff varka_bench_gate varka_lint varka_msg_check varka_matrix_shards; do
   if printf '%s\n' "${files[@]}" | grep -qx "dev/$tool.py"; then
     if ! out="$(python3 "dev/$tool.py" --selftest 2>&1)"; then
       echo "$out" | sed "s|^|$tool selftest: |"
