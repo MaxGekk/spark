@@ -53,6 +53,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaRangeAnalysis;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaOperandPosition;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitCount;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitOp;
@@ -72,9 +73,6 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Ove
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WidenLane;
 import org.apache.spark.sql.types.DataType;
 import org.apache.spark.sql.types.DataTypes;
-import org.apache.spark.sql.types.DayTimeIntervalType;
-import org.apache.spark.sql.types.TimeType;
-import org.apache.spark.sql.types.YearMonthIntervalType;
 
 /**
  * The recursive node compiler of the Varka expression compiler: the chain of families that
@@ -664,30 +662,12 @@ final class VarkaNodeCompiler {
   }
 
   /**
-   * The lane a Spark type's values occupy in a kernel, or empty for a type no kernel reads. The
-   * int side is what the leaf arms admit - a date, an int and a year-month interval are all one
-   * 32-bit lane - and the long side is milestone 5's: {@code bigint}, {@code TIME} (nanoseconds
-   * of day) and a day-time interval (microseconds) are one 64-bit lane ({@code VARKA-29.md} 3.1).
-   * The two timestamp types are that lane physically and are deliberately absent. The narrow
-   * lanes are milestone 8's ({@code VARKA-329.md} 2.2): a {@code tinyint} is one byte a row and a
-   * {@code smallint} two, each read as its own lane and widened to the int lane for computation.
+   * The lane a Spark type's values occupy in a kernel, or empty for a type no kernel reads: the
+   * type registry's answer ({@link VarkaTypes#lane}, VARKA-494), which holds why each type is on
+   * its lane or on none.
    */
   static Optional<LaneType> laneOf(DataType dataType) {
-    if (DataTypes.ByteType.equals(dataType)) {
-      return Optional.of(LaneType.BYTE);
-    }
-    if (DataTypes.ShortType.equals(dataType)) {
-      return Optional.of(LaneType.SHORT);
-    }
-    if (DataTypes.IntegerType.equals(dataType) || DataTypes.DateType.equals(dataType)
-        || dataType instanceof YearMonthIntervalType) {
-      return Optional.of(LaneType.INT);
-    }
-    if (DataTypes.LongType.equals(dataType) || dataType instanceof TimeType
-        || dataType instanceof DayTimeIntervalType) {
-      return Optional.of(LaneType.LONG);
-    }
-    return Optional.empty();
+    return VarkaTypes.lane(dataType);
   }
 
   /** Whether {@code dataType} is one of the types the 64-bit lane carries. */
