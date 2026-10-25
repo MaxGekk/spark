@@ -42,16 +42,21 @@
 #   * no TODO or FIXME marker under sql/varka or in a Varka source directory
 #     (sql/varka/AGENTS.md: open work is recorded in a plan, never left as a
 #     marker);
-#   * no comment that narrates history - `used to` or `the old`, case-insensitive, in the
-#     comment part of a line the commit adds to a Varka source file (Scala, Java, Python or
-#     shell under a Varka directory or named Varka*), since a comment describes the code as it
-#     is and history lives in the plans and git (sql/varka/AGENTS.md). Two phrases only: in a
-#     sample of Varka's comments nearly every hit of them was history, where "no longer" and
-#     "previously" describe behaviour as often. The instrumental "is used to select" passes. A
-#     present-tense "the old" (the old year of an ISO week) is reported, and is worded another
-#     way ("the earlier year"). Markdown is out, since plans narrate on purpose and name the
-#     phrases; so is dev/, as for the TODO check, which also keeps this script's own pattern
-#     from tripping it;
+#   * no comment that narrates history - `used to`, `the old` or `since VARKA-<n>`,
+#     case-insensitive, in the comment part of a line the commit adds to a Varka source file
+#     (Scala, Java, Python or shell under a Varka directory or named Varka*), since a comment
+#     describes the code as it is and history lives in the plans and git (sql/varka/AGENTS.md).
+#     Three phrases only: in a sample of Varka's comments nearly every hit of them was history,
+#     where "no longer" and "previously" describe behaviour as often. The instrumental "is used
+#     to select" passes. A present-tense "the old" (the old year of an ISO week) is reported,
+#     and is worded another way ("the earlier year"). Markdown is out, since plans narrate on
+#     purpose and name the phrases; so is dev/, as for the TODO check, which also keeps this
+#     script's own pattern from tripping it;
+#   * the rules of dev/varka_lint.py, which need more than a line's regex: a license header on a
+#     new source file, a third-party import no file of its module had, a new file no CI module
+#     claims, the integrity of the matrix's skip list, "task N" for VARKA-N, repeated benchmark
+#     case ids, a Varka conf without a binding policy, two shell traps and Guava in Varka code
+#     (VARKA-492; VARKA_LINT_SKIP=rule[,rule] skips named rules for one commit);
 #   * no raw `.reinterpret(` in the main Scala or Java of a Varka class: an address is mapped
 #     through VarkaSegments.map (catalyst) or VarkaVectorSupport.ofAddress (the engine), so that
 #     the memory sanitizer (VARKA-263) sees every mapping;
@@ -76,7 +81,8 @@
 #   dev/varka_precommit.sh                 # the staged files
 #   dev/varka_precommit.sh --working-tree  # staged, unstaged and untracked
 #   dev/varka_precommit.sh FILE...         # these files
-#   dev/varka_precommit.sh --install-hook  # run it from .git/hooks/pre-commit
+#   dev/varka_precommit.sh --range A..B    # the files and lines a range of commits writes
+#   dev/varka_precommit.sh --install-hook  # install the pre-commit, commit-msg and pre-push hooks
 #   dev/varka_precommit.sh --selftest      # check the column and history rules' cases
 #
 # Exit status is the number of findings.
@@ -179,6 +185,9 @@ if [ "${1:-}" = "--selftest" ]; then
   bare git -C "$repo" checkout -q -- VarkaOld.java
   printf 'int x = 1; // The kernel used to copy.\n' >> "$repo/VarkaOld.java"
   scope_case "an added trailing comment with 'used to'" yes "narrates history"
+  bare git -C "$repo" checkout -q -- VarkaOld.java
+  printf '// Fused since VARKA-21.\n' >> "$repo/VarkaOld.java"
+  scope_case "an added 'since VARKA-n'" yes "narrates history"
 
   if [ "$outer_head" != "$(bare git -C "$root" rev-parse HEAD 2>/dev/null || echo none)" ]; then
     echo "varka_precommit selftest: the fixture moved this repository's HEAD"
@@ -193,11 +202,26 @@ if [ "${1:-}" = "--install-hook" ]; then
   # hook must find this script through the worktree it runs in, never through the path of the
   # worktree that installed it: a hardcoded root breaks every worktree's commits the day that
   # one is removed (which is exactly what happened when the merged task worktrees were pruned).
-  hook="$(git rev-parse --git-path hooks)/pre-commit"
-  printf '#!/usr/bin/env bash\nexec "$(git rev-parse --show-toplevel)/dev/varka_precommit.sh"\n' \
-    > "$hook"
-  chmod +x "$hook"
-  echo "installed $hook"
+  # The commit-msg hook checks the message's attribution (dev/varka_msg_check.py), and the
+  # pre-push hook refuses a branch pushed to vecbricks/varka and re-runs both checks over what
+  # is pushed (dev/varka_prepush.sh). A worktree whose branch predates a script skips its hook.
+  hooks="$(git rev-parse --git-path hooks)"
+  install_hook() { # name command
+    # A hook this script did not write is kept beside it rather than lost.
+    if [ -f "$hooks/$1" ] && ! grep -q 'dev/varka_' "$hooks/$1"; then
+      mv "$hooks/$1" "$hooks/$1.before-varka"
+      echo "kept the existing $1 hook as $hooks/$1.before-varka"
+    fi
+    printf '#!/usr/bin/env bash\ntop="$(git rev-parse --show-toplevel)"\n%s\n' "$2" \
+      > "$hooks/$1"
+    chmod +x "$hooks/$1"
+    echo "installed $hooks/$1"
+  }
+  install_hook pre-commit 'exec "$top/dev/varka_precommit.sh"'
+  install_hook commit-msg \
+    '[ -x "$top/dev/varka_msg_check.py" ] || exit 0; exec "$top/dev/varka_msg_check.py" commit "$1"'
+  install_hook pre-push \
+    '[ -x "$top/dev/varka_prepush.sh" ] || exit 0; exec "$top/dev/varka_prepush.sh" "$@"'
   exit 0
 fi
 
@@ -206,11 +230,19 @@ fi
 # a request to see everything in it.
 scoped=1
 diff_base="--cached"
-if [ "$#" -gt 0 ] && [ "$1" != "--working-tree" ]; then
+lint_mode=("--cached")
+if [ "${1:-}" = "--range" ]; then
+  [ -n "${2:-}" ] || usage
+  diff_base="$2"
+  lint_mode=("--range" "$2")
+  mapfile -t files < <(git diff --name-only --diff-filter=ACMR "$2")
+elif [ "$#" -gt 0 ] && [ "$1" != "--working-tree" ]; then
   files=("$@")
   scoped=0
+  lint_mode=("$@")
 elif [ "${1:-}" = "--working-tree" ]; then
   diff_base="HEAD"
+  lint_mode=("--working-tree")
   mapfile -t files < <({ git diff --name-only --diff-filter=ACM HEAD; git ls-files --others --exclude-standard; } | sort -u)
 else
   mapfile -t files < <(git diff --cached --name-only --diff-filter=ACM)
@@ -303,8 +335,9 @@ for f in "${files[@]}"; do
     # "that's", and at the start of a comment line, where a wrapped sentence puts it.
     while IFS= read -r hit; do
       wrote_line "$f" "$hit" \
-        && note "$f:$hit: a comment that narrates history ('used to', 'the old'); say what the \
-code does, and leave the history to the plan and git (sql/varka/AGENTS.md)"
+        && note "$f:$hit: a comment that narrates history ('used to', 'the old', \
+'since VARKA-n'); say what the code does, and leave the history to the plan and git \
+(sql/varka/AGENTS.md)"
     done < <(perl -ne '
       my $c;
       if (/^\s*(?:\/\/|\/?\*|#)(.*)$/) { $c = $1 } elsif (/(?:\/\/|#)(.*)$/) { $c = $1 }
@@ -312,7 +345,7 @@ code does, and leave the history to the plan and git (sql/varka/AGENTS.md)"
       my $u = $c;
       $u =~ s/\b(?:is|are|be|been|being|was|were|it.s|that.s)\s+(?:\w+\s+)?used to\b//gi;
       $u =~ s/^\s*used to\b//i;
-      print "$.\n" if $u =~ /\bused to\b/i || $c =~ /\bthe old\b/i;
+      print "$.\n" if $u =~ /\bused to\b/i || $c =~ /\bthe old\b/i || $c =~ /\bsince VARKA-\d+/i;
     ' "$f")
   fi
   if [[ "$f" == */src/main/* && "$f" =~ \.(scala|java)$ ]] \
@@ -346,7 +379,7 @@ fi
 # The benchmark diff carries its own check of the one thing a reader cannot see
 # it get wrong: a row key that collides silently drops a row from the requote,
 # which is the closing step of every regeneration.
-for tool in varka_bench_diff varka_bench_gate; do
+for tool in varka_bench_diff varka_bench_gate varka_lint varka_msg_check; do
   if printf '%s\n' "${files[@]}" | grep -qx "dev/$tool.py"; then
     if ! out="$(python3 "dev/$tool.py" --selftest 2>&1)"; then
       echo "$out" | sed "s|^|$tool selftest: |"
@@ -451,6 +484,13 @@ if [ "$docs_changed" -eq 1 ] && [ -x dev/varka_quote_check.py ]; then
     echo "$out" | grep -E 'ORPHAN|orphan' | sed 's/^/quote check: /'
     findings=$((findings + rc))
   fi
+fi
+
+# The structured rules (VARKA-492), over the same files and, when scoped, the same lines.
+if [ -x dev/varka_lint.py ]; then
+  while IFS= read -r hit; do
+    [ -n "$hit" ] && note "$hit"
+  done < <(dev/varka_lint.py "${lint_mode[@]}" 2>&1)
 fi
 
 # A row is the only record of why a change exists, and nothing else checks what it cites
