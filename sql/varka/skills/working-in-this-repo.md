@@ -59,6 +59,16 @@ these files by `dev/varka_toc.py`.
   installing worktree's path: the earlier form hardcoded one worktree, and
   pruning the merged worktrees (`dev/varka_worktree.sh gc`) deleted it and
   broke commits in every remaining worktree at once.
+- The same `--install-hook` installs two more hooks (VARKA-492): commit-msg, which holds a
+  message to the one `Generated-by: <tool> (<model>)` attribution line, and pre-push, which
+  refuses a branch pushed to vecbricks/varka and re-runs both checks over the pushed commits,
+  since `--no-verify`, a rebase or a cherry-pick skips the commit-time hooks. The structured
+  rules live in `dev/varka_lint.py`; a finding answered another way (a new dependency now
+  declared in the pom) passes with `VARKA_LINT_SKIP=<rule>` for that one commit. A pull
+  request's text has its own check, `dev/varka_msg_check.py pr --title T --body-file F`, which
+  the docs job also runs on the open pull request: the template's headings verbatim,
+  soft-wrapped paragraphs, a title of at most 80 characters, and a "Why" that opens with the
+  reason rather than a task id.
 - `VarkaIrFuzzSuite` fuzzes the emitter: random IR over random null patterns, lengths
   and option variants against the shared reference evaluator, reproducible by seed
   and iteration.

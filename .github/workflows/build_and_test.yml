@@ -1538,6 +1538,28 @@ jobs:
       run: python3 dev/varka_ci_admit.py --self-test
     - name: The step-time budget's tool, over recorded API responses
       run: python3 dev/varka_ci_times.py --self-test
+    # The house rules a commit's hooks check (VARKA-492): the tools' own cases, and then the
+    # rules themselves over what the hooks of a committer who never installed them did not see -
+    # the branch's commit messages and its pull request's title and body.
+    - name: The house rules' checks pass their own cases
+      run: |
+        python3 dev/varka_lint.py --selftest
+        python3 dev/varka_msg_check.py --selftest
+        dev/varka_precommit.sh --selftest
+    - name: The branch's commit messages and its pull request follow the house rules
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        # The branch's own commits: not Varka's master's, and not Apache Spark's, which a sync
+        # of upstream brings in and which follow their own rules. On a fork origin/master is
+        # Apache Spark's, so both are fetched by URL.
+        git fetch -q https://github.com/vecbricks/varka.git master:refs/varka/master
+        git fetch -q https://github.com/apache/spark.git master:refs/apache/master || true
+        base="$(git merge-base HEAD refs/varka/master 2> /dev/null || true)"
+        if [ -n "$base" ] && [ "$base" != "$(git rev-parse HEAD)" ]; then
+          python3 dev/varka_msg_check.py range "$base..HEAD" --not refs/varka/master refs/apache/master
+        fi
+        python3 dev/varka_msg_check.py pr --this-branch
 
   # Documentation build
   docs:
