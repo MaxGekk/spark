@@ -84,7 +84,18 @@ public sealed interface VarkaEmitOption
      * reason fired - and never an answer or whether a batch is declined. Off by default, because
      * the report costs the loop something production need not pay.
      */
-    DIAGNOSTIC
+    DIAGNOSTIC,
+    /**
+     * A form some JVMs miscompile: the one it replaced, kept for the A/B that priced the
+     * replacement and for the checks that need it set. The fuzzer and the option matrix never
+     * draw one, since they run on hosts where it computes wrong answers.
+     */
+    MISCOMPILED;
+
+    /** Whether the fuzzer, its steering and the option matrix vary an option of this reason. */
+    public boolean drawn() {
+      return this != FAULT_INJECTOR && this != MISCOMPILED;
+    }
   }
 
   /** How an option reaches {@code canonical()}. */
@@ -461,7 +472,14 @@ public sealed interface VarkaEmitOption
           new FlagTag("dropStackMaps", true)),
       new Count("misdescribeDataBytes", Reason.FAULT_INJECTOR, 0,
           VarkaEmitOptions::misdescribeDataBytes, Builder::misdescribeDataBytes,
-          new CountTag("misdescribeDataBytes="), List.of(), List.of()));
+          new CountTag("misdescribeDataBytes="), List.of(), List.of()),
+      // JDK 25 miscompiles fromLong of a mask's toLong on AVX2 (VARKA-396), so by default the
+      // masked body ANDs each word with an all-ones C2 cannot fold first, behind a guard that
+      // folds away on hosts with mask registers; the bare fromLong is the arm, kept for the A/B and
+      // for the JDKs that fix the rule (VARKA-491). Its tag keeps the default's rendering empty.
+      new Flag("fromLongMasks", Reason.MISCOMPILED, false,
+          VarkaEmitOptions::fromLongMasks, Builder::fromLongMasks,
+          new FlagTag("fromLongMasks", true)));
 
   /** The option with this name. */
   static VarkaEmitOption named(String name) {

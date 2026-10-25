@@ -143,6 +143,15 @@ public final class VarkaChildJvm {
    */
   public static Results run(String suite, String mainClass, List<String> arguments,
       String reportFlag, OptionalLong budget) throws Exception {
+    return run(suite, mainClass, arguments, reportFlag, budget, List.of());
+  }
+
+  /**
+   * {@link #run(String, String, List, String, OptionalLong)} with {@code jvmFlags} after the
+   * parent's arguments, so that HotSpot, which takes the last of a repeated flag, takes these.
+   */
+  public static Results run(String suite, String mainClass, List<String> arguments,
+      String reportFlag, OptionalLong budget, List<String> jvmFlags) throws Exception {
     File report = Files.createTempDirectory("varka-own-jvm").toFile();
     File javaBin = new File(new File(System.getProperty("java.home"), "bin"), "java");
     var command = new ArrayList<String>();
@@ -159,6 +168,7 @@ public final class VarkaChildJvm {
         command.add(a);
       }
     }
+    command.addAll(jvmFlags);
     command.add("-D" + PROPERTY + "=true");
     command.add("-cp");
     command.add(classpath());

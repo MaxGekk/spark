@@ -5492,6 +5492,62 @@ not run. Nothing is left to report. The arm either drops `-XX:+StressDuplicateBa
 with this item named beside it, or builds its fastdebug JDK from a 25u that carries the fix. **Done
 when** the `platform` step is green on a night.
 
+### Item 114. The JDK after row 396: 27 at run time, a 25u backport, 29 as the base
+
+*Added 24 October 2026 from row 396's investigation (`m8/results/VARKA-396-report.md`), on the
+owner's word.* JDK 25's C2 miscompiles `VectorMask.fromLong(s, m.toLong())` on x86 without AVX-512
+mask registers: `VectorLongToMaskNode::Ideal` casts the mask under a `VectorStoreMask` where
+canonical booleans are needed, so a select takes its ELSE branch on every true lane. Varka meets it
+in every predicated select over columns with no nulls; row 491 keeps the emitter off the pattern
+on JDK 25. `openjdk/jdk25u` still has the rule; mainline has rewritten it, and item 56 lists the
+mask-cast change JDK-8370863 with fix version 27. This item is what follows on the JDK side.
+
+1. **Verify JDK 27.** Run `m8/results/VARKA-396/Fold396.java` and the shrunk Varka case under
+   `-XX:UseAVX=2` on a JDK 27 build; a pass with the guard of row 491 off is the evidence. The
+   trial is item 56's: release-25 class files run on 27, so it needs no build change.
+2. **If 27 is fixed, support it at run time.** Varka keeps building for 25; the guard of row 491
+   is lifted where the running JDK is 27 or later, so an AVX2-only host on 27 gets the
+   `fromLong` lowering back. The JDKs the guard applies to are stated in one place, beside the
+   guard.
+3. **On 25, a fix in a 25u release.** The owner reported the bug on 24 October 2026 through
+   bugreport.java.com (reference `efdbbe29-dfaf-419b-a3c2-084dfb421bc5`; text in
+   `m8/results/VARKA-396/bugreport.md`), asking for a fix or a backport of JDK-8370863's rule
+   to 25 updates. Follow the JBS bug it becomes; the guard stays on 25 until a 25u release
+   carries the fix.
+4. **JDK 29 as the migration target.** JDK 25 is the long-term release Spark deploys on, and 26
+   and 27 are not; the base moves at 29, the next long-term release (September 2027), with
+   Spark's own JDK support. Not before.
+
+**Done when** step 1 has a committed result, the guard's JDK range follows it, and the JBS bug
+from step 3 is resolved or its 25u status recorded.
+
+### Item 115. Row 491's guard on AVX-512 hosts without AVX512VL or AVX512BW
+
+*Added 25 October 2026 from row 491's review, on the owner's word.* Row 491 guards every word the
+masked body hands `VectorMask.fromLong` with `word & (VarkaMaskGuard.ones | VarkaMaskGuard.OPEN)`,
+and `OPEN` folds the guard away where `UseAVX` is 3. C2 types a mask as a mask register only where
+`match_rule_supported_vector_masked` allows it (`share/opto/type.cpp` `TypeVect::makemask`), and on
+x86 that needs AVX512VL for species narrower than 512 bits and AVX512BW for byte and short lanes
+(`cpu/x86/x86.ad`). A host with AVX-512F but without them - Knights Landing and Knights Mill, which
+JDK 25 still supports - reports `UseAVX` 3, so the guard folds away while C2's rule can still fire:
+on a forced narrower lane count, or on the byte and short lanes milestone 8 adds.
+
+1. **Reproduce it in a public cloud.** No Xeon Phi is needed: on an Intel AVX-512 host,
+   `-XX:+UnlockDiagnosticVMOptions -XX:+UseKNLSetting` makes HotSpot treat the CPU as Knights
+   family and clear AVX512BW, AVX512VL and DQ (`cpu/x86/vm_version_x86.cpp`, the
+   `is_knights_family()` branch). The flag has no effect on AMD, so the laptop cannot run it; an
+   Intel runner can (the fork's runners include Xeon Platinum 8573C). Run
+   `m8/results/VARKA-396/Fold396.java` and `VarkaAvx2SelectSuite`'s cases under it, at the
+   preferred width and under `-XX:MaxVectorSize=32` and `16`, and at a byte or short lane once
+   one exists.
+2. **If the rule fires, close the gap.** `OPEN` has to follow what C2 does rather than `UseAVX`
+   alone: from the JVM's CPU feature list if it can be read in process, or from a probe kernel
+   that checks whether the round trip survives. The bytes stay host-independent, as row 491's
+   do; only `OPEN`'s value changes.
+
+**Done when** step 1 has a committed result on an Intel host under `UseKNLSetting`, and either the
+rule does not fire there or `OPEN` covers the case, with a test under that flag.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads

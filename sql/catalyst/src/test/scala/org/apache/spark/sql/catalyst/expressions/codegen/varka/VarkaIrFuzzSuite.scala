@@ -134,18 +134,18 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
 
   /** The options `randomOptions` draws, in the order it draws them. */
   private val fuzzedOptions = VarkaEmitOption.TABLE.asScala.toSeq
-    .filter(_.reason != VarkaEmitOption.Reason.FAULT_INJECTOR)
+    .filter(_.reason.drawn)
     .sortBy(o => "with" + o.name.head.toUpper + o.name.tail)
 
   /**
    * A random variant of the options record, drawn from the options table: every option but the
-   * fault injectors, in the order of their `with*` setters' names, a boolean as a coin, an enum
-   * as one of its constants, and an int one time in five from the values its table entry lists -
-   * a lanes override from the powers of two, the AVX level from the levels either side of 3
-   * where the 64-bit division changes lowering, the method byte budget from off, the HotSpot
-   * limit and the smaller budgets that bring the size machinery down to the widths drawn here
-   * (VARKA-238), and the other budgets from small values. The order is fixed so that a seed
-   * recorded in a failure keeps drawing the same options.
+   * fault injectors and the miscompiled forms (`Reason.drawn`), in the order of their `with*`
+   * setters' names, a boolean as a coin, an enum as one of its constants, and an int one time in
+   * five from the values its table entry lists - a lanes override from the powers of two, the AVX
+   * level from the levels either side of 3 where the 64-bit division changes lowering, the method
+   * byte budget from off, the HotSpot limit and the smaller budgets that bring the size machinery
+   * down to the widths drawn here (VARKA-238), and the other budgets from small values. The order
+   * is fixed so that a seed recorded in a failure keeps drawing the same options.
    */
   private def randomOptions(rnd: Random): VarkaEmitOptions = {
     var opts = VarkaMatrix.base
