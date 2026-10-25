@@ -154,49 +154,57 @@ public final class VarkaTypes {
    * from a Spark type to the table; every other question goes through it.
    */
   public static Optional<VarkaTypeId> of(DataType dataType) {
+    return Optional.ofNullable(idOf(dataType));
+  }
+
+  /**
+   * {@link #of} without the {@code Optional}, for the evaluator, which asks once per output
+   * vector it builds and allocates nothing more to ask.
+   */
+  public static @Nullable VarkaTypeId idOf(DataType dataType) {
     if (DataTypes.BooleanType.equals(dataType)) {
-      return Optional.of(VarkaTypeId.BOOLEAN);
+      return VarkaTypeId.BOOLEAN;
     }
     if (DataTypes.ByteType.equals(dataType)) {
-      return Optional.of(VarkaTypeId.BYTE);
+      return VarkaTypeId.BYTE;
     }
     if (DataTypes.ShortType.equals(dataType)) {
-      return Optional.of(VarkaTypeId.SHORT);
+      return VarkaTypeId.SHORT;
     }
     if (DataTypes.IntegerType.equals(dataType)) {
-      return Optional.of(VarkaTypeId.INT);
+      return VarkaTypeId.INT;
     }
     if (DataTypes.LongType.equals(dataType)) {
-      return Optional.of(VarkaTypeId.LONG);
+      return VarkaTypeId.LONG;
     }
     if (DataTypes.FloatType.equals(dataType)) {
-      return Optional.of(VarkaTypeId.FLOAT);
+      return VarkaTypeId.FLOAT;
     }
     if (DataTypes.DoubleType.equals(dataType)) {
-      return Optional.of(VarkaTypeId.DOUBLE);
+      return VarkaTypeId.DOUBLE;
     }
     if (dataType instanceof DecimalType) {
-      return Optional.of(VarkaTypeId.DECIMAL);
+      return VarkaTypeId.DECIMAL;
     }
     if (DataTypes.DateType.equals(dataType)) {
-      return Optional.of(VarkaTypeId.DATE);
+      return VarkaTypeId.DATE;
     }
     if (dataType instanceof TimeType) {
-      return Optional.of(VarkaTypeId.TIME);
+      return VarkaTypeId.TIME;
     }
     if (DataTypes.TimestampNTZType.equals(dataType)) {
-      return Optional.of(VarkaTypeId.TIMESTAMP_NTZ);
+      return VarkaTypeId.TIMESTAMP_NTZ;
     }
     if (dataType instanceof YearMonthIntervalType) {
-      return Optional.of(VarkaTypeId.YM_INTERVAL);
+      return VarkaTypeId.YM_INTERVAL;
     }
     if (dataType instanceof DayTimeIntervalType) {
-      return Optional.of(VarkaTypeId.DT_INTERVAL);
+      return VarkaTypeId.DT_INTERVAL;
     }
     if (DataTypes.TimestampType.equals(dataType)) {
-      return Optional.of(VarkaTypeId.TIMESTAMP);
+      return VarkaTypeId.TIMESTAMP;
     }
-    return Optional.empty();
+    return null;
   }
 
   /** The facts about {@code id}. */
