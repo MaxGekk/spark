@@ -125,7 +125,7 @@ class VarkaEmitterLongLaneSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     // The two refusals the int lane pins, re-pinned at this one: a checked multiply has no
     // correct emission at either lane - the 128-bit product VARKA-104 needs is missing at both
     // - and `try_negative` is not a Spark function, so a NULL negate is a shape nothing can
-    // produce and is refused rather than lowered into a multiply by -1.
+    // produce and is refused rather than lowered into a plain negation.
     for (mode <- Seq(Overflow.FAIL, Overflow.NULL)) {
       val refused = intercept[IllegalArgumentException] {
         emitMulti(Seq[VarkaVectorIR](new IntArith(IntOp.MUL, mode, a, b)), 2, 0)

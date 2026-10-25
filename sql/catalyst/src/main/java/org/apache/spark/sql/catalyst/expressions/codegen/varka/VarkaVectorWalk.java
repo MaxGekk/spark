@@ -778,12 +778,11 @@ final class VarkaVectorWalk {
   }
 
   /**
-   * {@code IntNeg}, emitted on the int and long lanes as a multiply by -1, and on a narrow node as
-   * the lanewise {@code NEG}: the two agree on every lane, {@link Integer#MIN_VALUE} included,
-   * where both return the input. A narrow node takes {@code NEG} because x86 has no byte
-   * multiply, so a {@code ByteVector} multiply is an eight-instruction sequence where {@code NEG}
-   * is one subtract from zero; whether the int and long lanes gain from it too is unmeasured, and
-   * their emitted bytes stay as they are until it is. That single value
+   * {@code IntNeg}, emitted as the lanewise {@code NEG}, one subtract from zero, on every lane: a
+   * multiply by -1 agrees with it on every lane, the lane's minimum ({@link Integer#MIN_VALUE},
+   * {@link Long#MIN_VALUE}) included, where both return the input, but costs a multiply - eight
+   * instructions on x86's byte lanes, which have no byte multiply, and an emulated sequence on an
+   * AVX2 host's long lane, which has no 64-bit multiply. The overflowing value, the lane's minimum,
    * is the whole of the overflow test, so the check is one compare rather than the four ops
    * {@link #emitIntArith} needs, and it reads the operand rather than the result - no scratch slot
    * at all.
@@ -811,15 +810,11 @@ final class VarkaVectorWalk {
       cb.invokevirtual(lane.vector, "compare", lane.compareVI);
       emitOverflowMask(cb, n.mode(), n, dense, analysis, s);
     }
-    if (n.laneType().isNarrow()) {
-      cb.getstatic(VECTOR_OPERATORS, n.abs() ? "ABS" : "NEG", VO_UNARY);
-      cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseUnary);
-    } else if (n.abs()) {
+    if (n.abs() && !n.laneType().isNarrow()) {
       throw VarkaErrors.illegalArgument("abs is a narrow lane's node only: " + n);
-    } else {
-      lane.pushScalar(cb, -1);
-      cb.invokevirtual(lane.vector, "mul", lane.lanewiseVI);
     }
+    cb.getstatic(VECTOR_OPERATORS, n.abs() ? "ABS" : "NEG", VO_UNARY);
+    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseUnary);
     if (n.laneType().isNarrow() && analysis.wrapAt.contains(n)) {
       emitWrapToNarrow(cb, lane, n.laneType());
     }

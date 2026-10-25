@@ -1,0 +1,83 @@
+ median     best  row
+  -11.4%    -6.4%  [262144 rows - both arms in L3] column + literal, ANSI checked, int64 lanes  <-- the median's alone
+  -10.4%    +0.3%  [262144 rows - both arms in L3] column * column, wrapping, int32 lanes  <-- the median's alone
+  -10.0%    +1.3%  [262144 rows - both arms in L3] greatest(column, column), int32 lanes  <-- the median's alone
+   -4.6%    +5.3%  [16384 rows - both arms in L2] column + literal, ANSI checked, int32 lanes
+   -4.6%    -2.0%  [262144 rows - both arms in L3] a comparison, as a selection, int32 lanes
+   -4.1%    -1.8%  [16384 rows - both arms in L2] column + literal, ANSI checked, int64 lanes
+   -3.2%    -3.4%  [262144 rows - both arms in L3] eight times x = -(x + column2), wrapping, int64 lanes
+   -2.6%    +0.5%  [262144 rows - both arms in L3] column + literal, wrapping, int32 lanes
+   -1.0%    -3.1%  [1000000 rows - the long arm leaves L3] CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes
+   -1.0%    +0.7%  [1000000 rows - the long arm leaves L3] eight times x = -(x + column2), wrapping, int32 lanes
+   -0.9%    +0.2%  [1000000 rows - the long arm leaves L3] a column, copied, int32 lanes
+   -0.8%    +0.1%  [1000000 rows - the long arm leaves L3] a comparison, as a selection, int32 lanes
+   -0.8%    +0.3%  [8388608 rows - both arms past L3] eight times x = -(x + column2), wrapping, int64 lanes
+   -0.8%    +0.2%  [8388608 rows - both arms past L3] column + column, wrapping, int32 lanes
+   -0.8%    +0.9%  [262144 rows - both arms in L3] column + literal, wrapping, int64 lanes
+   -0.7%    +2.7%  [1000000 rows - the long arm leaves L3] a comparison, as a selection, int64 lanes
+   -0.6%    -1.9%  [1000000 rows - the long arm leaves L3] column * column, wrapping, int32 lanes
+   -0.5%    +0.0%  [8388608 rows - both arms past L3] CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes
+   -0.5%    -0.8%  [1000000 rows - the long arm leaves L3] column + literal, wrapping, int32 lanes
+   -0.3%    -0.8%  [1000000 rows - the long arm leaves L3] greatest(column, column), int32 lanes
+   -0.3%    +0.4%  [8388608 rows - both arms past L3] greatest(column, column), int32 lanes
+   -0.3%    -0.6%  [1000000 rows - the long arm leaves L3] column + column, wrapping, int32 lanes
+   -0.3%    +0.1%  [8388608 rows - both arms past L3] column * column, wrapping, int32 lanes
+   -0.3%    +1.1%  [16384 rows - both arms in L2] eight times x = -(x + column2), wrapping, int64 lanes
+   -0.3%    +0.9%  [262144 rows - both arms in L3] -column, wrapping, int64 lanes
+   -0.2%    +0.7%  [1000000 rows - the long arm leaves L3] -column, wrapping, int32 lanes
+   -0.2%    -0.3%  [8388608 rows - both arms past L3] -column, wrapping, int64 lanes
+   -0.2%    -0.1%  [8388608 rows - both arms past L3] greatest(column, column), int64 lanes
+   -0.2%    -0.1%  [8388608 rows - both arms past L3] column + column, wrapping, int64 lanes
+   -0.1%    +0.1%  [8388608 rows - both arms past L3] column * column, wrapping, int64 lanes
+   -0.0%    +0.4%  [8388608 rows - both arms past L3] CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes
+   -0.0%    -0.2%  [8388608 rows - both arms past L3] column + literal, ANSI checked, int64 lanes
+   -0.0%    -0.8%  [1000000 rows - the long arm leaves L3] column + literal, ANSI checked, int32 lanes
+   +0.0%    -1.0%  [16384 rows - both arms in L2] column + literal, wrapping, int64 lanes
+   +0.0%    -2.9%  [16384 rows - both arms in L2] column + column, wrapping, int32 lanes
+   +0.0%    -1.4%  [16384 rows - both arms in L2] column * column, wrapping, int32 lanes
+   +0.0%    +2.0%  [16384 rows - both arms in L2] -column, wrapping, int32 lanes
+   +0.0%    -3.4%  [16384 rows - both arms in L2] a comparison, as a selection, int32 lanes
+   +0.2%    +0.2%  [8388608 rows - both arms past L3] a column, copied, int64 lanes
+   +0.2%    +1.3%  [1000000 rows - the long arm leaves L3] eight times x = -(x + column2), wrapping, int64 lanes
+   +0.2%    -0.7%  [8388608 rows - both arms past L3] a comparison, as a selection, int64 lanes
+   +0.2%    -0.0%  [8388608 rows - both arms past L3] column + literal, wrapping, int64 lanes
+   +0.3%    +0.0%  [1000000 rows - the long arm leaves L3] CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes
+   +0.4%    +0.5%  [262144 rows - both arms in L3] CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes
+   +0.5%    -0.2%  [1000000 rows - the long arm leaves L3] column + column, wrapping, int64 lanes
+   +0.5%    -1.1%  [262144 rows - both arms in L3] a column, copied, int64 lanes
+   +0.5%    +0.2%  [1000000 rows - the long arm leaves L3] greatest(column, column), int64 lanes
+   +0.5%    +0.3%  [262144 rows - both arms in L3] column + column, wrapping, int32 lanes
+   +0.5%    +0.5%  [16384 rows - both arms in L2] eight times x = -(x + column2), wrapping, int32 lanes
+   +0.6%    +0.5%  [8388608 rows - both arms past L3] a column, copied, int32 lanes
+   +0.7%    +1.5%  [8388608 rows - both arms past L3] eight times x = -(x + column2), wrapping, int32 lanes
+   +0.7%    +0.7%  [8388608 rows - both arms past L3] -column, wrapping, int32 lanes
+   +0.7%    +1.0%  [8388608 rows - both arms past L3] a comparison, as a selection, int32 lanes
+   +0.7%    +0.5%  [8388608 rows - both arms past L3] column + literal, wrapping, int32 lanes
+   +0.8%    +0.7%  [8388608 rows - both arms past L3] column + literal, ANSI checked, int32 lanes
+   +0.8%    -0.4%  [262144 rows - both arms in L3] column * column, wrapping, int64 lanes
+   +0.9%    -1.1%  [16384 rows - both arms in L2] -column, wrapping, int64 lanes
+   +1.2%    -2.8%  [16384 rows - both arms in L2] CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes
+   +1.2%    -2.8%  [16384 rows - both arms in L2] greatest(column, column), int32 lanes
+   +1.3%    +0.2%  [1000000 rows - the long arm leaves L3] column * column, wrapping, int64 lanes
+   +1.4%    +1.0%  [262144 rows - both arms in L3] column + column, wrapping, int64 lanes
+   +1.4%    +0.0%  [16384 rows - both arms in L2] a comparison, as a selection, int64 lanes
+   +1.5%    +6.5%  [1000000 rows - the long arm leaves L3] column + literal, ANSI checked, int64 lanes
+   +1.8%    +8.4%  [1000000 rows - the long arm leaves L3] a column, copied, int64 lanes
+   +1.8%    +0.0%  [16384 rows - both arms in L2] column + literal, wrapping, int32 lanes
+   +1.9%    -1.1%  [16384 rows - both arms in L2] a column, copied, int64 lanes
+   +1.9%    -1.7%  [262144 rows - both arms in L3] greatest(column, column), int64 lanes
+   +2.1%    +8.6%  [1000000 rows - the long arm leaves L3] -column, wrapping, int64 lanes
+   +2.2%    +0.6%  [262144 rows - both arms in L3] CASE WHEN c < c2 THEN c ELSE literal END, int32 lanes
+   +2.3%    +3.9%  [262144 rows - both arms in L3] -column, wrapping, int32 lanes
+   +2.4%    +0.6%  [262144 rows - both arms in L3] a column, copied, int32 lanes
+   +2.4%    +7.4%  [1000000 rows - the long arm leaves L3] column + literal, wrapping, int64 lanes
+   +3.6%    -2.1%  [16384 rows - both arms in L2] a column, copied, int32 lanes
+   +3.9%    +0.0%  [262144 rows - both arms in L3] column + literal, ANSI checked, int32 lanes
+   +5.4%    +0.7%  [262144 rows - both arms in L3] eight times x = -(x + column2), wrapping, int32 lanes
+   +8.4%   -11.2%  [16384 rows - both arms in L2] column * column, wrapping, int64 lanes
+   +8.4%   -11.7%  [16384 rows - both arms in L2] greatest(column, column), int64 lanes
+   +8.4%    -9.8%  [16384 rows - both arms in L2] column + column, wrapping, int64 lanes
+   +9.2%   -10.2%  [16384 rows - both arms in L2] CASE WHEN c < c2 THEN c ELSE literal END, int64 lanes
+  +14.9%    +0.8%  [262144 rows - both arms in L3] a comparison, as a selection, int64 lanes  <-- the median's alone
+
+80 rows, 0 slower and 0 faster by 10% or more by both the median and the best, of 5 base and 5 head runs; the widest change either way is 14.9% by median and 11.7% by best
