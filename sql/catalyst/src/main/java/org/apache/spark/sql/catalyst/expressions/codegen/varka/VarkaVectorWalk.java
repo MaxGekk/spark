@@ -1205,19 +1205,23 @@ final class VarkaVectorWalk {
 
   /**
    * {@code [species, word] -> [mask]}: a condition or validity word of the masked body as a mask of
-   * the species, lane {@code i} set where bit {@code i} is, by {@code VectorMask.fromLong} of the
-   * word XORed with {@link VarkaOpaqueZero#zero}. JDK 25's C2 miscompiles {@code fromLong} of a
-   * mask's {@code toLong} on x86 without AVX-512 mask registers (VARKA-396), and a masked body's
-   * known-true word is that round trip once its columns have no nulls, which C2 learns from the
-   * profile; the XOR with a field C2 cannot fold keeps the pair from forming (VARKA-491). Every
-   * word-to-mask conversion of the masked body goes through here, whether or not its word can
-   * carry a {@code toLong}, so each costs the same load and XOR. Under {@code fromLongMasks} the
+   * the species, lane {@code i} set where bit {@code i} is, by {@code VectorMask.fromLong} of
+   * {@code word & (VarkaMaskGuard.ones | VarkaMaskGuard.OPEN)}. JDK 25's C2 miscompiles
+   * {@code fromLong} of a mask's {@code toLong} on x86 without AVX-512 mask registers (VARKA-396),
+   * and a masked body's known-true word is that round trip once its columns have no nulls, which
+   * C2 learns from the profile. On such a host {@code OPEN} is zero and the AND with a field C2
+   * cannot fold keeps the pair from forming; elsewhere it is all ones and C2 folds the guard away
+   * (VARKA-491). Every word-to-mask conversion of the masked body goes through here, whether or not
+   * its word can carry a {@code toLong}, so each has the same bytes; words made with {@code toLong}
+   * that never become a mask, such as a filter's, pay nothing. Under {@code fromLongMasks} the
    * word goes to {@code fromLong} as it is.
    */
   static void emitMaskOfWord(CodeBuilder cb, Analysis analysis) {
     if (!analysis.options.fromLongMasks()) {
-      cb.getstatic(OPAQUE_ZERO, "zero", ConstantDescs.CD_long);
-      cb.lxor();
+      cb.getstatic(MASK_GUARD, "ones", ConstantDescs.CD_long);
+      cb.getstatic(MASK_GUARD, "OPEN", ConstantDescs.CD_long);
+      cb.lor();
+      cb.land();
     }
     cb.invokestatic(VECTOR_MASK, "fromLong", FROM_LONG);
   }

@@ -48,22 +48,25 @@ import scala.jdk.javaapi.CollectionConverters;
  * No emitted kernel hands {@code VectorMask.fromLong} a word computed from a mask's
  * {@code toLong} (VARKA-491). JDK 25's C2 miscompiles {@code fromLong(s, m.toLong())} on x86
  * without AVX-512 mask registers (VARKA-396), and a masked body's known-true word becomes that
- * round trip once its columns have no nulls, which C2 learns from the profile; the emitter XORs
- * every masked-body word with {@code VarkaOpaqueZero.zero}, a field C2 cannot fold, before
- * {@code fromLong}. This suite holds the emitted bytes to that, so a new site cannot bring the
- * round trip back: over every coverage row's kernel, at the defaults and under each configuration
- * of the option matrix, a data-flow pass marks every long that a {@code toLong} reaches, through
- * locals, arithmetic and branches, and clears the mark where the long is XORed with that field.
- * Each {@code fromLong} must take an unmarked long - a constant, a bitmap read, what {@code ~},
- * {@code &} and {@code |} make of them, or a word XORed with the field - or be the lane change of
+ * round trip once its columns have no nulls, which C2 learns from the profile; the emitter ANDs
+ * every word it hands {@code fromLong} with {@code VarkaMaskGuard.ones | VarkaMaskGuard.OPEN},
+ * which C2 cannot fold where {@code OPEN} is zero. This suite holds the emitted bytes to that, so
+ * a new site cannot bring the round trip back: over every coverage row's kernel, at the defaults
+ * and under each configuration of the option matrix, a data-flow pass marks every long that a
+ * {@code toLong} reaches, through locals, arithmetic and branches, and clears the mark where the
+ * long is ANDed with that guard. Each {@code fromLong} must take an unmarked long - a constant, a
+ * bitmap read, what {@code ~}, {@code &} and {@code |} make of them, or a word ANDed with the
+ * guard - or be the lane change of
  * a kernel that converts between lanes, whose lane counts differ, which the rule requires to be
- * equal. Anything else fails, naming the configuration, the row and the method.
+ * equal. Anything else fails, naming the configuration, the row and the method. The pass stays
+ * within one method: a word made in one emitted method and read by {@code fromLong} in another,
+ * which no kernel does today, would pass unseen.
  */
 @VarkaSuite
 public final class VarkaMaskOfWordSuite {
 
   private static final String VECTOR_MASK = "jdk/incubator/vector/VectorMask";
-  private static final String OPAQUE_ZERO = Type.getInternalName(VarkaOpaqueZero.class);
+  private static final String MASK_GUARD = Type.getInternalName(VarkaMaskGuard.class);
   private static final AtomicInteger CLASSES = new AtomicInteger();
 
   /** The coverage rows' kernels as the compiler builds them, with their names. */
@@ -80,26 +83,30 @@ public final class VarkaMaskOfWordSuite {
     return out;
   }
 
+  /** Which part of the guard {@code VarkaMaskGuard.ones | VarkaMaskGuard.OPEN} a value is. */
+  private enum Part { NONE, ONES, OPEN, GUARD }
+
   /**
    * A value of the data-flow pass: ASM's basic value, whether a {@code toLong} reaches it, and
-   * whether it is {@code VarkaOpaqueZero.zero}.
+   * which part of the guard it is.
    */
-  private record Marked(BasicValue basic, boolean fromToLong, boolean opaque) implements Value {
+  private record Marked(BasicValue basic, boolean fromToLong, Part part) implements Value {
     @Override
     public int getSize() {
       return basic.getSize();
     }
 
     static Marked of(BasicValue basic, boolean fromToLong) {
-      return basic == null ? null : new Marked(basic, fromToLong, false);
+      return basic == null ? null : new Marked(basic, fromToLong, Part.NONE);
     }
   }
 
   /**
    * ASM's basic interpreter, with a mark on every value a {@code VectorMask.toLong} result flows
    * into. Conservative: a unary or binary operation on a marked value is marked, and a merge of
-   * two values is marked where either is - except an XOR with {@code VarkaOpaqueZero.zero}, the
-   * emitter's guard, whose result C2 cannot see is the word.
+   * two values is marked where either is - except an AND with the emitter's guard,
+   * {@code VarkaMaskGuard.ones | VarkaMaskGuard.OPEN}, whose result C2 cannot see is the word on
+   * the hosts where the guard matters.
    */
   private static final class ToLongFlow extends Interpreter<Marked> {
     private final BasicInterpreter basic = new BasicInterpreter();
@@ -116,15 +123,18 @@ public final class VarkaMaskOfWordSuite {
     @Override
     public Marked newOperation(AbstractInsnNode insn) throws AnalyzerException {
       BasicValue value = basic.newOperation(insn);
-      boolean opaque = insn instanceof FieldInsnNode f && f.getOpcode() == Opcodes.GETSTATIC
-          && f.owner.equals(OPAQUE_ZERO) && f.name.equals("zero");
-      return value == null ? null : new Marked(value, false, opaque);
+      Part part = Part.NONE;
+      if (insn instanceof FieldInsnNode f && f.getOpcode() == Opcodes.GETSTATIC
+          && f.owner.equals(MASK_GUARD)) {
+        part = f.name.equals("ones") ? Part.ONES : f.name.equals("OPEN") ? Part.OPEN : Part.NONE;
+      }
+      return value == null ? null : new Marked(value, false, part);
     }
 
     @Override
     public Marked copyOperation(AbstractInsnNode insn, Marked value) throws AnalyzerException {
       BasicValue copy = basic.copyOperation(insn, value.basic());
-      return copy == null ? null : new Marked(copy, value.fromToLong(), value.opaque());
+      return copy == null ? null : new Marked(copy, value.fromToLong(), value.part());
     }
 
     @Override
@@ -135,9 +145,15 @@ public final class VarkaMaskOfWordSuite {
     @Override
     public Marked binaryOperation(AbstractInsnNode insn, Marked a, Marked b)
         throws AnalyzerException {
-      boolean guarded = insn.getOpcode() == Opcodes.LXOR && (a.opaque() || b.opaque());
-      return Marked.of(basic.binaryOperation(insn, a.basic(), b.basic()),
-          !guarded && (a.fromToLong() || b.fromToLong()));
+      BasicValue value = basic.binaryOperation(insn, a.basic(), b.basic());
+      boolean onesOrOpen = a.part() == Part.ONES && b.part() == Part.OPEN
+          || a.part() == Part.OPEN && b.part() == Part.ONES;
+      if (insn.getOpcode() == Opcodes.LOR && onesOrOpen) {
+        return new Marked(value, false, Part.GUARD);
+      }
+      boolean guarded = insn.getOpcode() == Opcodes.LAND
+          && (a.part() == Part.GUARD || b.part() == Part.GUARD);
+      return Marked.of(value, !guarded && (a.fromToLong() || b.fromToLong()));
     }
 
     @Override
@@ -163,9 +179,9 @@ public final class VarkaMaskOfWordSuite {
     public Marked merge(Marked a, Marked b) {
       BasicValue merged = basic.merge(a.basic(), b.basic());
       boolean fromToLong = a.fromToLong() || b.fromToLong();
-      boolean opaque = a.opaque() && b.opaque();
-      return merged.equals(a.basic()) && fromToLong == a.fromToLong() && opaque == a.opaque() ? a
-          : new Marked(merged, fromToLong, opaque);
+      Part part = a.part() == b.part() ? a.part() : Part.NONE;
+      return merged.equals(a.basic()) && fromToLong == a.fromToLong() && part == a.part() ? a
+          : new Marked(merged, fromToLong, part);
     }
   }
 
@@ -295,10 +311,22 @@ public final class VarkaMaskOfWordSuite {
 
   @Test
   @Tag(VarkaSuite.PINS_DEFAULTS)
-  @DisplayName("the opaque zero every masked-body word is XORed with is zero")
-  void opaqueZeroIsZero() {
+  @DisplayName("the opaque all-ones every word fromLong reads is ANDed with is all ones")
+  void guardOnesAreOnes() {
     // Public and mutable so that no JIT folds it; a write anywhere would corrupt every mask.
-    assertTrue(VarkaOpaqueZero.zero == 0L, "VarkaOpaqueZero.zero is " + VarkaOpaqueZero.zero);
+    assertTrue(VarkaMaskGuard.ones == -1L, "VarkaMaskGuard.ones is " + VarkaMaskGuard.ones);
+  }
+
+  @Test
+  @DisplayName("the guard is on for x86 below AVX-512 and folds away elsewhere")
+  void guardFollowsTheLevel() {
+    for (int level = 0; level <= 2; level++) {
+      assertTrue(VarkaMaskGuard.openFor(level) == 0L, "level " + level);
+    }
+    assertTrue(VarkaMaskGuard.openFor(3) == -1L, "AVX-512");
+    assertTrue(VarkaMaskGuard.openFor(VarkaEmitOptions.USE_AVX_UNKNOWN) == -1L, "no flag");
+    assertTrue(VarkaMaskGuard.OPEN == VarkaMaskGuard.openFor(VarkaEmitOptions.HOST_USE_AVX),
+        "OPEN is not this host's: " + VarkaMaskGuard.OPEN);
   }
 
   @Test

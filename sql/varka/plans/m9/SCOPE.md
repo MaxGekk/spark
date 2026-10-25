@@ -5521,6 +5521,33 @@ mask-cast change JDK-8370863 with fix version 27. This item is what follows on t
 **Done when** step 1 has a committed result, the guard's JDK range follows it, and the JBS bug
 from step 3 is resolved or its 25u status recorded.
 
+### Item 115. Row 491's guard on AVX-512 hosts without AVX512VL or AVX512BW
+
+*Added 25 October 2026 from row 491's review, on the owner's word.* Row 491 guards every word the
+masked body hands `VectorMask.fromLong` with `word & (VarkaMaskGuard.ones | VarkaMaskGuard.OPEN)`,
+and `OPEN` folds the guard away where `UseAVX` is 3. C2 types a mask as a mask register only where
+`match_rule_supported_vector_masked` allows it (`share/opto/type.cpp` `TypeVect::makemask`), and on
+x86 that needs AVX512VL for species narrower than 512 bits and AVX512BW for byte and short lanes
+(`cpu/x86/x86.ad`). A host with AVX-512F but without them - Knights Landing and Knights Mill, which
+JDK 25 still supports - reports `UseAVX` 3, so the guard folds away while C2's rule can still fire:
+on a forced narrower lane count, or on the byte and short lanes milestone 8 adds.
+
+1. **Reproduce it in a public cloud.** No Xeon Phi is needed: on an Intel AVX-512 host,
+   `-XX:+UnlockDiagnosticVMOptions -XX:+UseKNLSetting` makes HotSpot treat the CPU as Knights
+   family and clear AVX512BW, AVX512VL and DQ (`cpu/x86/vm_version_x86.cpp`, the
+   `is_knights_family()` branch). The flag has no effect on AMD, so the laptop cannot run it; an
+   Intel runner can (the fork's runners include Xeon Platinum 8573C). Run
+   `m8/results/VARKA-396/Fold396.java` and `VarkaAvx2SelectSuite`'s cases under it, at the
+   preferred width and under `-XX:MaxVectorSize=32` and `16`, and at a byte or short lane once
+   one exists.
+2. **If the rule fires, close the gap.** `OPEN` has to follow what C2 does rather than `UseAVX`
+   alone: from the JVM's CPU feature list if it can be read in process, or from a probe kernel
+   that checks whether the round trip survives. The bytes stay host-independent, as row 491's
+   do; only `OPEN`'s value changes.
+
+**Done when** step 1 has a committed result on an Intel host under `UseKNLSetting`, and either the
+rule does not fire there or `OPEN` covers the case, with a test under that flag.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads

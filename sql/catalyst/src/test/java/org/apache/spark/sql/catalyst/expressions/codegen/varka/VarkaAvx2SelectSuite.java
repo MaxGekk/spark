@@ -35,8 +35,9 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Lan
  * {@code VectorMask.fromLong(s, m.toLong())} on x86 without AVX-512 mask registers. A masked body
  * whose condition's columns have no nulls in a lane group makes that round trip under
  * {@code fromLongMasks}: C2-compiled, its select takes the ELSE branch on every true lane. At the
- * defaults the emitter XORs the word with a zero C2 cannot fold first. This suite runs each case
- * through the compiled histories of {@link VarkaCompiledCheck} in a JVM of its own started with
+ * defaults the emitter ANDs the word with an all-ones C2 cannot fold first, on the hosts where
+ * the miscompile can happen ({@code VarkaMaskGuard.OPEN}). This suite runs each case through the
+ * compiled histories of {@link VarkaCompiledCheck} in a JVM of its own started with
  * {@code -XX:UseAVX=2}, so an AVX-512 host checks it too; a JVM that is not x86 ignores the flag.
  *
  * <p>The cases are the shrinks the fuzzer printed, trees, options and batch as written there:
@@ -139,6 +140,7 @@ public final class VarkaAvx2SelectSuite {
       // checked all the same.
       int useAvx = Integer.parseInt(hotspot.getVMOption("UseAVX").getValue());
       assertTrue(useAvx <= 2, "UseAVX=" + useAvx + " in the AVX2 child");
+      assertTrue(VarkaMaskGuard.OPEN == 0L, "the mask guard is open in the AVX2 child");
     }
   }
 

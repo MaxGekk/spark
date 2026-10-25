@@ -481,13 +481,14 @@ import com.sun.management.HotSpotDiagnosticMXBean;
  *        plant for a sanitizer violation and for a run-time exception in a kernel. Zero in
  *        production.
  * @param fromLongMasks whether the masked body hands {@code VectorMask.fromLong} its words as they
- *        are, rather than XORed with {@code VarkaOpaqueZero.zero} (VARKA-491). JDK 25's C2
- *        miscompiles {@code fromLong(s, m.toLong())} on x86 without AVX-512 mask registers - a
- *        select by the result takes its ELSE branch on every true lane (VARKA-396) - and a masked
- *        body's known-true word folds to exactly that when its columns have no nulls. False, the
- *        XOR with a zero C2 cannot fold, is right on every host and JDK; true is the losing arm,
- *        a load and an XOR a site cheaper, kept for the A/B and for the JDKs that fix the rule
- *        ({@code m9/SCOPE.md} item 114).
+ *        are, rather than ANDed with {@code VarkaMaskGuard.ones | VarkaMaskGuard.OPEN}
+ *        (VARKA-491). JDK 25's C2 miscompiles {@code fromLong(s, m.toLong())} on x86 without
+ *        AVX-512 mask registers - a select by the result takes its ELSE branch on every true lane
+ *        (VARKA-396) - and a masked body's known-true word folds to exactly that when its columns
+ *        have no nulls. False, the AND with an all-ones C2 cannot fold where the guard is on and
+ *        folds away where it is off, is right on every host and JDK; true is the losing arm, an
+ *        AND a site cheaper on x86 below AVX-512, kept for the A/B and for the JDKs that fix the
+ *        rule ({@code m9/SCOPE.md} item 114).
  */
 public record VarkaEmitOptions(
     int groupBudget,

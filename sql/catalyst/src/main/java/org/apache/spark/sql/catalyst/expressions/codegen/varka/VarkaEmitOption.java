@@ -474,9 +474,9 @@ public sealed interface VarkaEmitOption
           VarkaEmitOptions::misdescribeDataBytes, Builder::misdescribeDataBytes,
           new CountTag("misdescribeDataBytes="), List.of(), List.of()),
       // JDK 25 miscompiles fromLong of a mask's toLong on AVX2 (VARKA-396), so by default the
-      // masked body XORs each word with a zero C2 cannot fold first; the bare fromLong is the
-      // arm, kept for the A/B and for the JDKs that fix the rule (VARKA-491). Its tag keeps the
-      // default's rendering empty.
+      // masked body ANDs each word with an all-ones C2 cannot fold first, behind a guard that
+      // folds away on hosts with mask registers; the bare fromLong is the arm, kept for the A/B and
+      // for the JDKs that fix the rule (VARKA-491). Its tag keeps the default's rendering empty.
       new Flag("fromLongMasks", Reason.MISCOMPILED, false,
           VarkaEmitOptions::fromLongMasks, Builder::fromLongMasks,
           new FlagTag("fromLongMasks", true)));

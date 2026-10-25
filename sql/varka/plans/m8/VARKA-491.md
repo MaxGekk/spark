@@ -39,24 +39,41 @@ it cannot fold is a value it does not know: a static field that is not final.
 
 ## 2. Design
 
-**Every masked-body word goes to `fromLong` XORed with a zero C2 cannot fold.** `VarkaVectorWalk`
-emits `fromLong(species, word ^ VarkaOpaqueZero.zero)` at the first five sites of the table (the
-picks' two conversions counted as one site); the rest keep `fromLong` of their constant or bitmap.
-`VarkaOpaqueZero.zero` is a public, non-final static `long`, zero and never written. HotSpot folds
-only final fields (and `@Stable` ones) into constants, so the `XorL` stays in the graph, the input
-of `VectorLongToMask` is never a `VectorMaskToLong`, and the rule cannot apply. The cost is a load,
-which C2 lifts out of the loop, and one XOR a site; each site keeps `fromLong`'s single call.
+**Every word the masked body hands `fromLong` is ANDed with an all-ones C2 cannot fold, behind a
+guard that folds away where the miscompile cannot happen.** `VarkaVectorWalk.emitMaskOfWord` emits
+`fromLong(species, word & (VarkaMaskGuard.ones | VarkaMaskGuard.OPEN))` at the first five sites of
+the table (the picks' two conversions counted as one site); the rest keep `fromLong` of their
+constant or bitmap. `VarkaMaskGuard.ones` is a public, non-final static `long`, all ones and never
+written: HotSpot folds only final fields (and `@Stable` ones) into constants. `OPEN` is a
+`static final long`, zero on x86 below AVX-512 (`UseAVX` under 3) and all ones elsewhere, which C2
+does fold. Where it is zero, `ones | 0` is `ones`, and the input of `VectorLongToMask` is an
+`AndL` with a value C2 does not know; the rule matches only an `AndL` of a `VectorMaskToLong` with
+the all-lanes constant, so it cannot apply. C2 still bounds the word through the AND, so it needs
+no zero-extension: on AVX2 the guard costs one `and` a site. Where `OPEN` is all ones, the guard
+folds to `word` and the kernel compiles as base's. Elsewhere than x86 the rule cannot apply
+either: C2 has `fromLong` on aarch64 only with SVE2 bitperm and on RISC-V only with RVV, both with
+mask registers. An AVX-512 host without AVX512VL or AVX512BW (Knights Landing) types some masks
+as vectors yet reports `UseAVX` 3; `m9/SCOPE.md` item 115 tests that case.
 
-The XOR goes on every word, not only on those that can carry a `toLong`: the call count and the
-bytes of a site then do not depend on its operands, which the emit cost model needs (below), and
-the emitter needs no analysis of where a word came from. `fromLongMasks` (reason `MISCOMPILED`,
-never drawn by the fuzzer or the option matrix) emits the bare `fromLong` for the A/B.
+The guard goes on every word a `fromLong` reads, not only on those that can carry a `toLong`: the
+bytes of a site then do not depend on its operands, which the emit cost model needs, and the
+emitter needs no analysis of where a word came from. A word made with `toLong` that never becomes
+a mask, as in a filter predicate, pays nothing.
 
-**Two forms were built and measured before this one, and lost** (section 6): the broadcast form
+The guard is a constant of the running JVM, not an emit option, so the bytes are the same on every
+host: the committed byte and cost tables, and the shape hash, do not depend on the machine, which
+matters because the fork's runners are a mix of AVX2 and AVX-512 hosts. `fromLongMasks` (reason
+`MISCOMPILED`, never drawn by the fuzzer or the option matrix) emits the bare `fromLong` for the
+A/B.
+
+**Four forms were built and measured before this one, and lost** (section 6): the broadcast form
 `broadcast(word).and(laneBits).compare(NE, 0)`, which never reaches `VectorLongToMask`; and, for
 conditions, the comparison's own mask ANDed with `fromLong` of the operands' validity words, with
 the broadcast form left for the words that carry a `toLong` anyway. Both cost through the emit cost
-model as much as at their sites.
+model as much as at their sites. The third XORed every word at its `fromLong` with an opaque zero,
+with no guard, which cost AVX-512 hosts the XOR for nothing and AVX2 hosts a zero-extension as
+well. The fourth XORed the guard into each word at its `toLong`, which a filter's comparisons pay
+too.
 
 ## 3. Tests
 
@@ -67,9 +84,11 @@ model as much as at their sites.
    `fromLongMasks` the long cases of 24 and 19 October fail, as row 396's report records.
 2. **No emitted kernel hands `fromLong` a word a `toLong` reaches**: `VarkaMaskOfWordSuite` runs an
    ASM data-flow pass over every coverage row's kernel, at the defaults and under each option
-   matrix configuration, marking each long a `toLong` reaches and clearing the mark at an XOR with
-   `VarkaOpaqueZero.zero`; `emitToDrivingLane`'s lane change, whose lane counts differ, is the one
-   exception. Under `fromLongMasks` it finds the round trip, so it is not vacuous.
+   matrix configuration, marking each long a `toLong` reaches and clearing the mark at an AND with
+   `VarkaMaskGuard.ones | VarkaMaskGuard.OPEN`. `emitToDrivingLane`'s lane change, whose lane
+   counts differ, is the one exception. Under `fromLongMasks` it finds the round trip, so it is
+   not vacuous. The pass stays within one method. A test pins `OPEN` to zero below `UseAVX` 3 on
+   x86 and all ones elsewhere, and `VarkaAvx2SelectSuite` checks it is zero in its AVX2 JVM.
 3. The catalyst defaults gate, and a runner fuzz night (the nightly at seeds 202610190 to
    202610243) passing the compiled test, which row 396's done-when asks for.
 
@@ -105,6 +124,36 @@ it to 0.347; the rest needed the emitter's analysis in the cost model.
 **The opaque XOR restores the cost model**: `SITES_MARGIN` 0.206 and `BYTES_MARGIN` 0.156 against
 base's 0.206 and 0.155, base's list of wide shapes that gain a loop method, and the calendar
 kernels' classes the same size as base's, two loop methods each. The blend kernels are 114 bytes
-over base.
+over base. The shipped AND guard keeps that: `SITES_MARGIN` 0.206 and `BYTES_MARGIN` 0.157, and
+every kernel of `emitted_bytes.json` has base's methods, so the planner splits nothing differently.
 
-The pair on the opaque form, and the runner pair and fuzz night: to be written.
+**On AVX-512 the opaque form cost 1-8% on the mixed-null blend rows** (laptop pair, 5 rounds a
+side against `be2ec226e7d`, 25 October 2026). Of 239 rows none moved by 10% by both the median and
+the best, and the 16 rows the broadcast form slowed are back within noise; but all twelve "validity
+write(s) per body, mixed nulls" rows were slower by the median, from 1.3% to 7.6%, and the rounds
+of the two widest, "1 validity write(s) per body, width-named helpers" and "4 validity write(s) per
+body, one write per word", do not overlap with base's. Rows the change does not touch moved by up
+to 3%, which is this pair's noise.
+
+**The cost on AVX-512 is the XOR executing, which the guard removes.** The opaque form's twelve
+"validity write(s) per body, mixed nulls" rows were all slower; in the same JVM the bare `fromLong`
+ran 1-13% faster on the eight rows tried, in each of three rounds (25 October 2026). A twin XORing
+with a literal `0L`, which C2 folds, ran as fast as the bare form, so the extra bytes cost nothing;
+and the XOR timed again after the bare form was as slow, so the order did not either. The compiled
+1-write loop showed the same inlining, the same two-vector unrolling and the load of `zero` lifted
+out of the loop; what the XOR added on every vector was two instructions on the way from the
+comparison to the blend, the `xor` and a `movzx`: the word's upper bits, provably zero after the
+AND with a 16-bit validity load, are not once XORed with an unknown. In a body of about 25
+instructions a vector, that is the 8% measured. Hence the guard: on AVX-512 it folds the XOR away.
+
+**On AVX2 the AND costs about half what the XOR did, and the guard leaves filters alone.** Under
+`-XX:UseAVX=2` on the laptop, three rounds with each form timed twice in one JVM (25 October 2026),
+the 1- to 4-write blend kernels with mixed nulls ran 2.9-9.0% faster with the AND guard than with
+the XOR at `fromLong`; the bare `fromLong`, wrong on AVX2 but a floor for the cost, was 0-8% faster
+than the AND. Null-free, the forms were within noise. An earlier try XORed the guard into each word
+at its `toLong` instead, which also dropped the zero-extension (4.1-5.6% over the XOR at
+`fromLong` in its own rounds) but put the guard on every comparison, a filter's too: TPC-DS q3's
+48 ranges, 96 comparisons, grew by about 770 bytes and no longer fitted one method, which
+`VarkaSplitConditionFusionSuite` caught.
+
+The pair on the guarded form, and the runner pair and fuzz night: to be written.

@@ -115,12 +115,14 @@ established; `jdk25u` still has the bug.
 
 ## 3. Next (decided 24 October 2026)
 
-1. The six recent fuzz cases replayed with the fix on in the fastdebug build (running).
+1. The six recent fuzz cases replayed with the fix on in the fastdebug build: done, section 2.
 2. **Reported to OpenJDK** by the owner on 24 October 2026 through bugreport.java.com, reference
    `efdbbe29-dfaf-419b-a3c2-084dfb421bc5` (the text is `results/VARKA-396/bugreport.md`); the JBS id follows
    when triage posts it.
 3. **Row 491**, the owner's choice of guard: the emitter stops writing the round trip on targets
-   without mask registers, so Varka is correct on JDK 25 whatever the host.
+   without mask registers, so Varka is correct on JDK 25 whatever the host. It ships an AND of
+   every word `fromLong` reads with an all-ones C2 cannot fold, which folds away on AVX-512 hosts
+   (`VARKA-491.md` 2 and 6; 25 October 2026), on the same branch as this row.
 4. **`m9/SCOPE.md` item 114**: verify JDK 27 under AVX2, support it at run time and lift the guard
    there if it passes, ask for a 25u backport (the owner's to file), and move the base at JDK 29.
 5. The investigation's report: `results/VARKA-396-report.md`, with the reproducers and the
