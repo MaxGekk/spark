@@ -33,6 +33,9 @@ From the code at `608686315e7` (25 October 2026; paths under
    checked-multiply decline, `VarkaNodeCompiler.java:956`), so the cast cannot be a `MUL` in
    `FAIL` mode; it is a `WRAP` multiply under the guard, exact by the guard's bounds, the way
    `CAST(bigint AS INT)` builds its guard directly (`VarkaNodeCompiler.narrowing`, `:601`).
+   That precedent declines TRY outright, leaving its null to row 332; this row does not wait,
+   since the guard's fallback already nulls on the right row, and 332 or 481 can lift
+   `narrowing`'s TRY decline the same way.
 5. **`TIMESTAMP_NTZ` to `DATE` is a floor division the long lane cannot do exactly today.**
    Spark computes `microsToDays(t, UTC)`, the epoch day of the UTC local date, which is
    `floorDiv(t, 86,400,000,000)`. The long lane's `ConstDivide` truncates and is exact only
@@ -51,6 +54,16 @@ From the code at `608686315e7` (25 October 2026; paths under
    NTZ with the long types for its fixture already. `VarkaCastMatrixSuite` and
    `VarkaTypeConformance` name `ntz` and wait for it; `m8/casts_fused.tsv` moves when the three
    pairs of section 2.3 fuse.
+7. **The date fields stay declined, as row 340 needs.** `year(ntz)` arrives as
+   `Year(CAST(ntz AS DATE))` (`GetDateField` is `ImplicitCastInputTypes`), so the cast of 2.3
+   sits under every date field. `VarkaChronoCompiler.calendarInput` admits a child only when
+   `dayRange` bounds it inside the int32 prefix, and "an unknown producer declines"; the cast's
+   `NarrowLane` has no day range (`VarkaRangeAnalysis`, the `NarrowLane` arm), so the fields
+   decline until 340 gives the cast its range or a `GuardedDay`.
+8. **The conformance overflow check has no NTZ form.** `VarkaTypeConformance.overflow` builds
+   `x + y`, `x - y`, `x * y`, `-x`, `abs(x)` and the `try_` functions, none legal Spark over two
+   NTZ values; only `BOOLEAN` is exempt today, by asserting the census lists no arithmetic for
+   it.
 
 ### What differs from the row text and the milestone plan
 
@@ -138,9 +151,11 @@ suites, as for every landed type.
 
 1. **`VarkaTimestampNtzConformanceSuite`** over row 484's contract, values from
    `integralValues(Long.MIN_VALUE, Long.MAX_VALUE)` plus the day edges `+-106,751,991 * 86.4e9`
-   and the first micros past them: load, round trip, nulls, ordering, choice, its row of the
-   cast matrix, and the overflow check through `DATE` to NTZ in the three modes. Its literal
-   rendering is the one detail the fixture must settle (NTZ has no `%d` literal form).
+   and the first micros past them: load, round trip, nulls, ordering, choice and its row of the
+   cast matrix. The overflow check's exemption widens from `BOOLEAN` to the types with no
+   `+`, `-` and `*` (0.8), with the same assertion that the census lists none for them; NTZ's
+   own arithmetic is 339's, and its overflow is tested there. The literal rendering is the one
+   detail the fixture must settle (NTZ has no `%d` literal form).
 2. **Coverage rows**, ADDING_A_TYPE step 11: a load, a comparison against a literal and against
    a column, `IN`, a choice, a null test, an output, both casts and a `DATE` and NTZ comparison;
    each runs through the differential suite at every position.
@@ -150,6 +165,7 @@ suites, as for every landed type.
    DATE)` at `Long.MIN_VALUE`, `Long.MAX_VALUE`, `-1`, `0`, `+-86,400,000,000` and their
    neighbours, against `java.time` (`LocalDateTime.ofEpochSecond(...).toLocalDate().toEpochDay()`)
    as well as Spark.
+   And `year(ntz)` declines with its reason (0.7), pinned so that 340 sees the change it makes.
 4. **The flipped tests** of 0.6: the NTZ halves assert fused and the same answers; the zoned
    halves keep their decline with its new reason.
 5. **The fuzzers**: the IR grammar's long leaf already covers the lane; the Spark fuzzer's
@@ -208,9 +224,9 @@ section 0's, decided by the milestone's focus on the new types.
 
 Row 338's text holds: each form of 2.2 and both casts fuse with coverage rows; `DATE` to NTZ is
 guarded at `+-106,751,991` days, raising under LEGACY and ANSI and null under TRY, with
-`try_cast` tested at `+-106,751,991` and `+-106,751,992`. And: the conformance suite passes with
-its arithmetic forms cancelled naming 339; the floor division is proven over the whole long range
-and pinned at `Long.MIN_VALUE` and `Long.MAX_VALUE`; `dev/varka_census.py --check` and
+`try_cast` tested at `+-106,751,991` and `+-106,751,992`. And: the conformance suite passes, its
+overflow check exempt as `BOOLEAN`'s is (0.8); the floor division is proven over the whole
+long range and pinned at `Long.MIN_VALUE` and `Long.MAX_VALUE`; `dev/varka_census.py --check` and
 `dev/varka_new_lane.py --check` pass; no existing shape's bytes move.
 
 ## 10. Outcome
