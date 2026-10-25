@@ -432,8 +432,7 @@ class VarkaEmitterArithmeticSuite extends VarkaEmitterTestBase {
     }
     // Negation has only the two modes: Spark has no `try_negative`, and the emitter refuses a
     // NULL one rather than lowering a form nothing can produce - pinned here, because a
-    // silently accepted one would multiply by -1 and answer Int.MinValue where the oracle
-    // says null.
+    // silently accepted one would negate and answer Int.MinValue where the oracle says null.
     checkMatrix(Seq[VarkaVectorIR](new IntNeg(Overflow.WRAP, a)), 1, Array.empty[Int],
       caseLengths, Seq(Seq(nullPatterns(0)._2), Seq(nullPatterns(1)._2), Seq(nullPatterns(3)._2)),
       data = extreme, ctx = "neg WRAP over the extremes")
