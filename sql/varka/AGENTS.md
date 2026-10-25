@@ -59,8 +59,8 @@ when are history, and history is kept in the plans and in git; a comment that sa
 old" or "since VARKA-<n>" makes the next reader subtract it to find the code. A task id stays as a
 pointer to the record ("the prediction bounds groups (VARKA-254)"), a regression test states the
 failure it guards against rather than the day it happened, and a reason that names a measured fact
-keeps the fact. `dev/varka_precommit.sh` flags `used to` and `the old` on the lines a commit adds
-to Varka's code.
+keeps the fact. `dev/varka_precommit.sh` flags `used to`, `the old` and `since VARKA-<n>` on the
+lines a commit adds to Varka's code.
 
 ## Plans are records, not scratch space
 
@@ -140,9 +140,17 @@ Before committing, `dev/varka_precommit.sh` (or install it once with
 `--install-hook`) checks the staged files for the rules that slip most: a
 non-ASCII byte outside a string literal, a source line over 100 columns, a
 `TODO`/`FIXME` marker under a Varka directory, a comment that narrates history
-(`used to`, `the old`) in Varka's code, the quote check when a
-document changed, and `ruff check` plus `ruff format --check` on Python files
-(CI's Python linter runs both). And beside the emitter suite's curated matrices,
+(`used to`, `the old`, `since VARKA-<n>`) in Varka's code, the quote check when a
+document changed, `ruff check` plus `ruff format --check` on Python files
+(CI's Python linter runs both), and the rules of `dev/varka_lint.py`: a license
+header on a new source file, a third-party import its module never had (Maven may
+lack what sbt resolves transitively), a new file no CI module claims, the skip
+list's integrity, `task N` for `VARKA-N`, repeated benchmark case ids, a Varka conf
+without a binding policy, two shell traps and Guava in Varka code. The hook also
+installs a commit-msg check of the attribution line and a pre-push check that
+refuses a branch pushed to vecbricks/varka and re-checks what is pushed; check a
+pull request's title and body with `dev/varka_msg_check.py pr --title ... --body-file
+...` before opening it (VARKA-492). And beside the emitter suite's curated matrices,
 `VarkaIrFuzzSuite` runs random IR trees over random columns, null patterns,
 lengths and `VarkaEmitOptions` variants against the shared
 `VarkaReferenceEvaluator`; a failure names its seed and iteration and replays
