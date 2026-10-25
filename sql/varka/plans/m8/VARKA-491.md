@@ -156,4 +156,15 @@ at its `toLong` instead, which also dropped the zero-extension (4.1-5.6% over th
 48 ranges, 96 comparisons, grew by about 770 bytes and no longer fitted one method, which
 `VarkaSplitConditionFusionSuite` caught.
 
-The pair on the guarded form, and the runner pair and fuzz night: to be written.
+**The AND guard costs AVX-512 nothing measurable.** The laptop pair on it (5 rounds a side
+against `be2ec226e7d`, 25 October 2026) has none of 239 rows slower by 10% by both the median and
+the best, and 2 faster; the twelve mixed-null blend rows the opaque form slowed are from 1.3%
+slower to 10.7% faster by the median, and the slowest rows, calendar and `dayofweek` kernels at 4
+to 6%, hold no select. The runner pair (run 40175762601, AMD EPYC 9V45, AVX-512) agrees: none of
+239 slower by 10% by both, 3 faster, the blend rows within 4.4% either way.
+
+**A runner fuzz night passes the compiled test on AVX2.** The six nights that failed from 19 to 24
+October, seed bases 20261019 to 20261024 with four JVMs each, ran on the branch on fork runners
+(run 40176688855, 25 October 2026): every job on an AMD EPYC 7763 with `UseAVX=2` and
+`MaxVectorSize=32`, and all 24 JVMs passed, the compiled-history test among them (seed 202610190,
+for one, reached 18 int-lane and 17 long-lane cases over the compiled histories).
