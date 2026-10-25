@@ -157,7 +157,7 @@ shape, and the range-filter shapes compiled in every run.
 | E2 | master (`793536853ab`) | RELEASED | the regression reproduces in 3 minutes |
 | E4 | `78930efbbe3`, before VARKA-379 | RELEASED | VARKA-379 is not the cause |
 | E5 | `0914c607ff8`, 28 September | COMPILED, 2.1 to 2.7 s | the machine is not the cause |
-| E6 | `0a9ce088e21`, Task 209, 29 September | COMPILED, 1.8 to 3.1 s | the directive and the call-site budget are not the cause |
+| E6 | `0a9ce088e21`, VARKA-209, 29 September | COMPILED, 1.8 to 3.1 s | the directive and the call-site budget are not the cause |
 | E10 | master, the directive switched off | RELEASED | the directive is not the cause, alone or with master's code |
 | E7 | master, `HEAVY_GROUP_OUTPUTS` 1 | COMPILED, 2.4 to 3.3 s | splitting the four-output groups restores the verdict |
 | B2 | `b72d71d727f`, VARKA-296, 9 October | COMPILED, 2.1 to 2.4 s | the change is between 9 and 16 October |
@@ -165,7 +165,7 @@ shape, and the range-filter shapes compiled in every run.
 The emit tool on the shape (`dev/varka_emit.sh`, sixteen `greatest(add_months(d,k),
 date_add(d,k), last_day(d))` over `d:date`) at four engines: four groups of four outputs
 everywhere; the dense loop methods 3,220 bytes and 402 Vector API call sites on 28 September,
-3,338 and 408 at Task 209, 3,294 and 408 before VARKA-379, 3,379 and 414 on master; no mask
+3,338 and 408 at VARKA-209, 3,294 and 408 before VARKA-379, 3,379 and 414 on master; no mask
 operation in a dense method until VARKA-379's `guardedRange` adds four. So prediction 5 fails:
 the methods' size and call-site count did not move between a kernel that compiles and one that
 does not.
@@ -552,7 +552,7 @@ The 16-entry shape's warm-up verdict (the end-to-end suite's 3-output shape wher
 | master, 18 October | laptop, 24 cores | RELEASED |
 | before VARKA-379 | laptop, 24 cores | RELEASED |
 | 28 September engine | laptop, 24 cores | COMPILED |
-| Task 209, 29 September | laptop, 24 cores | COMPILED |
+| VARKA-209, 29 September | laptop, 24 cores | COMPILED |
 | 9 October (VARKA-296) | laptop, 24 cores | COMPILED |
 | 12 October (VARKA-279) | laptop, 24 cores | COMPILED |
 | master, directive off | laptop, 24 cores | RELEASED |
@@ -577,7 +577,7 @@ The 16-entry shape's warm-up verdict (the end-to-end suite's 3-output shape wher
 1. **The warmed class's per-query cost at 54 to 100 entries** (9.3), measured the same
    afternoon and **not a regression**. The full benchmark on today's laptop, pinned as the files
    are: the 28 September engine itself reads 176 and 316 ms on the back-to-back rows at 54 and
-   100 entries, Task 209's 187 and 346, the fix 184 and 336, all within 5% of one another, where
+   100 entries, VARKA-209's 187 and 346, the fix 184 and 336, all within 5% of one another, where
    the committed file of 28 September reads 128 and 240. The same engines agree with that file
    on every other row (once compiled 27 to 41 ms, steady state 47, 133, 255 ms), so those two
    rows moved with the day, not with the code: a machine effect on the back-to-back section

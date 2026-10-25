@@ -27,7 +27,7 @@
 # halted - the halt is meant to fail the suite, and instead the step hung (VARKA-283) - and a
 # plain timeout(1) would signal sbt alone and leave its forked JVMs running.
 set -uo pipefail
-case "${1:-}" in ''|-h|--help) sed -n '19,30p' "$0"; exit 2 ;; esac
+case "${1:-}" in ''|-h|--help) sed -n '19,/^[^#]/p' "$0" | sed '$d'; exit 2 ;; esac
 secs="$1"; shift
 [[ "$secs" =~ ^[0-9]+$ ]] || { echo "the deadline is a number of seconds, got '$secs'" >&2; exit 2; }
 [ "$#" -gt 0 ] || { echo "no command to run" >&2; exit 2; }
