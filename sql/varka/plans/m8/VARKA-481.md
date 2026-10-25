@@ -80,7 +80,11 @@ REARMED family, which no option turns off (`:333-336`). Two choices:
   stay.
 
 B keeps one option meaning one thing across the integer types; A is simpler and is what
-`CAST(bigint AS INT)` does today. The plan takes B unless the owner prefers A.
+`CAST(bigint AS INT)` does today. *The owner chose B (25 October 2026):* the option is a priced
+check (`Reason.PRICED_CHECK`), which exists so the A/B can price every ANSI and TRY int check
+against the arithmetic it protects, and a cast was never in its scope; `guardDayProducers` is the
+precedent for a priced option over a range guard. The one condition sits in `narrowArith`, where
+the node's shape is decided.
 
 ### 3.3 What is deliberately unchanged
 
