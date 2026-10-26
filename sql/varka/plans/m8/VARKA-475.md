@@ -144,6 +144,8 @@ consumers would otherwise have to agree on by hand.
 
 ### 3.4 A type registry: `VarkaTypes`
 
+*Built as row 494 (`VARKA-494.md` 10, 26 October 2026).*
+
 A closed `VarkaTypeId` enum - BOOLEAN, BYTE, SHORT, INT, LONG, FLOAT, DOUBLE, DECIMAL, DATE, TIME,
 TIMESTAMP_NTZ, YM_INTERVAL, DT_INTERVAL - with `of(DataType)` in one function, replacing `laneOf`
 and its siblings. Each id carries a small descriptor record, and only what has a reader today:
