@@ -1,0 +1,96 @@
+================================================================================================
+TIMESTAMP_NTZ comparison, no nulls
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+TIMESTAMP_NTZ comparison, no nulls over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                   107            114           6         18.8          53.3       1.0X
+varka on                                                                      95            104           8         21.1          47.5       1.1X
+
+
+================================================================================================
+TIMESTAMP_NTZ arithmetic chain, no nulls
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+TIMESTAMP_NTZ arithmetic chain, no nulls over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                         554            565           8          3.6         277.2       1.0X
+varka on                                                                           556            559           3          3.6         277.9       1.0X
+
+
+================================================================================================
+TIMESTAMP_NTZ cast to DATE, no nulls
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+TIMESTAMP_NTZ cast to DATE, no nulls over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                     139            157          18         14.4          69.6       1.0X
+varka on                                                                       137            156          15         14.6          68.6       1.0X
+
+
+================================================================================================
+TIMESTAMP_NTZ choice, no nulls
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+TIMESTAMP_NTZ choice, no nulls over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+---------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                99            102           2         20.1          49.7       1.0X
+varka on                                                                  98            100           3         20.5          48.8       1.0X
+
+
+================================================================================================
+TIMESTAMP_NTZ comparison, one row in ten null
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+TIMESTAMP_NTZ comparison, one row in ten null over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                               82             85           2         24.4          40.9       1.0X
+varka on                                                                                 82             83           2         24.5          40.8       1.0X
+
+
+================================================================================================
+TIMESTAMP_NTZ arithmetic chain, one row in ten null
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+TIMESTAMP_NTZ arithmetic chain, one row in ten null over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                                    420            426           5          4.8         210.0       1.0X
+varka on                                                                                      416            416           1          4.8         207.8       1.0X
+
+
+================================================================================================
+TIMESTAMP_NTZ cast to DATE, one row in ten null
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+TIMESTAMP_NTZ cast to DATE, one row in ten null over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                                132            139           5         15.2          66.0       1.0X
+varka on                                                                                  131            139           6         15.3          65.3       1.0X
+
+
+================================================================================================
+TIMESTAMP_NTZ choice, one row in ten null
+================================================================================================
+
+OpenJDK 64-Bit Server VM 25.0.5+8-LTS on Linux 6.17.0-1022-azure
+AMD EPYC 7763 64-Core Processor
+TIMESTAMP_NTZ choice, one row in ten null over 2000000 Arrow-cached rows:  Best Time(ms)   Avg Time(ms)   Stdev(ms)    Rate(M/s)   Per Row(ns)   Relative
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+spark row path (varka off)                                                           97            103           5         20.6          48.5       1.0X
+varka on                                                                             96            103           6         20.7          48.2       1.0X
+
+
