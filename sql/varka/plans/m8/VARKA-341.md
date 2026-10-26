@@ -39,9 +39,10 @@ about each premise is below, with the file and line it rests on.
    model, `longValue` and `intValue` over `long[]` rows (`VarkaReference.java:397`). A `DOUBLE`
    column would reach Spark's `eval` as a `Long`. Row 475's 9.2.1 names the oracle's conversion as
    a registry fact; this row adds it.
-7. **Spark's ordering is IEEE's with two fixes.** `SQLOrderingUtil.compareDoubles`
+7. **Spark's ordering is IEEE's compare with NaN placed.** `SQLOrderingUtil.compareDoubles`
    (`sql/catalyst/.../util/SQLOrderingUtil.scala:28`) is `if (x == y) 0 else
-   Double.compare(x, y)`: `-0.0` equals `0.0`, NaN equals NaN and is greater than everything.
+   Double.compare(x, y)`: NaN equals NaN and is greater than everything, and `-0.0` equals `0.0`,
+   as IEEE's `==` has it and `Double.compare` and the vector `max` do not.
    `Greatest` and `Least` fold with `ordering.gt` and `ordering.lt` (`arithmetic.scala:1462`,
    `:1367`), so the first of two equal operands stays. `In` compares with `ordering.equiv`
    (`predicates.scala:528`). `InSet` looks the value up in a Scala set, whose numeric equality
@@ -52,9 +53,9 @@ about each premise is below, with the file and line it rests on.
    NaN, and its left otherwise (`:449`).
 9. **No Varka node sees `NormalizeNaNAndZero`.** `NormalizeFloatingNumbers` wraps the keys of an
    equi-join and of a window's partition (`optimizer/NormalizeFloatingNumbers.scala:60-100`), and
-   grouping keys at physical planning; a join, an exchange and a window evaluate those keys, never
-   a `Project` or `Filter`. The canonicalisation node of 2.7 has no end-to-end reader until `hash`
-   (row 337) puts it in a projection.
+   grouping keys at physical planning; a join, an exchange, a window and an aggregate evaluate
+   those keys, never a `Project` or `Filter`. The canonicalisation node of 2.7 has no end-to-end
+   reader until `hash` (row 337) puts it in a projection.
 10. **The bytes oracle's fuzz shapes are sequences with seeds of their own.**
     `VarkaEmittedBytesSuite.scala:272-298` draws the int, the long and the mixed sequences from
     `FUZZ_SEED`, `LONG_FUZZ_SEED` and `MIXED_FUZZ_SEED`, so a floating sequence with a seed of its
@@ -65,9 +66,9 @@ about each premise is below, with the file and line it rests on.
     `m7` row 374), on the laptop and the AVX2 runner alike. `VarkaWidthAuditSuite` records a forced
     128-bit census's refusals, so those shapes go into `width_audit.json` as recorded refusals, not
     as a failure.
-12. **The baseline comes first.** Row 377 (planned) owns one benchmark class per new type family,
-    each "committed before the family's first lane row", measured on the unchanged code in its own
-    pull request; the floating class is not written.
+12. **The baseline comes first.** Row 377 owns one benchmark class per new type family, each
+    "committed before the family's first lane row", measured on the unchanged code in its own pull
+    request. *26 October 2026:* the floating class is committed with its EPYC 7763 results (#1035).
 
 ### What differs from the row text and the milestone plan
 
@@ -212,9 +213,10 @@ entries. About five days after the baseline.
 4. **The semantics** (2.5) with the table test, then the conformance suites and coverage rows.
 5. **The fuzzers, the generated files, CI.**
 
-Dependencies: #1031 (the long-lane conformance harness, `hasArithmetic`); row 497 if it lands
-first (one `IN` arm); row 500 before the coverage rows, whose literals the quote check would
-otherwise read as measurements.
+Dependencies: #1031 (the long-lane conformance harness, `hasArithmetic`) before the conformance
+suites; row 497 if it lands first (one `IN` arm). The coverage rows' literals keep one integer digit
+(`1.5`), since the quote check reads a number like `12.5` as a measurement; row 500 skips only a
+clock time's seconds.
 
 | file | what |
 |---|---|
