@@ -963,7 +963,9 @@ def conformance_errors(root=ROOT):
             rows = [line.rstrip("\n").split("\t") for line in f][1:]
         fused = {t for r in rows if len(r) > 7 for t in r[7].split(",") if t}
         for t in sorted(fused - CONFORMANCE_SUITE.keys()):
-            errors.append(f"{t} is fused in the census and missing from CONFORMANCE_SUITE")
+            errors.append(
+                f"{t} is fused in the census and its VarkaTypes entry names no conformance"
+            )
     for t, name in CONFORMANCE_SUITE.items():
         suite = f"Varka{name}ConformanceSuite"
         present = os.path.exists(os.path.join(root, CONFORMANCE_DIR, suite + ".java"))
@@ -971,7 +973,7 @@ def conformance_errors(root=ROOT):
             errors.append(f"{t} ({name}) is a landed type with no {suite} and no owing row")
         if present and t in CONFORMANCE_OWED:
             owner = CONFORMANCE_OWED[t]
-            errors.append(f"{t} has {suite}: take it off CONFORMANCE_OWED (row {owner})")
+            errors.append(f"{t} has {suite}: its VarkaTypes entry still says row {owner} owes it")
     return errors
 
 

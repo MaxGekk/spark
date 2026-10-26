@@ -202,6 +202,6 @@ public final class VarkaTypesSuite {
     if (t instanceof ArrowType.Interval) {
       return 32;
     }
-    throw new AssertionError("no fixed width for " + t);
+    return fail("no fixed width for " + t);
   }
 }

@@ -249,8 +249,9 @@ class VarkaLongLaneSuite extends QueryTest with VarkaSharedSessions with VarkaTe
   }
 
   test("a timestamp comparison stays on the row engine and answers what the row engine does") {
-    // Both timestamp types are the same eight-byte lane physically and are outside this
-    // milestone by decision; a predicate on one alone fuses nothing, and beside a date
+    // Both timestamp types are the same eight-byte lane physically and no lane reads either yet
+    // - the zoned one by decision, TIMESTAMP_NTZ until row 338 (VarkaTypes); a predicate on one
+    // alone fuses nothing, and beside a date
     // conjunct it stays as the residual row filter above the Varka node. The rows straddle a
     // DST transition in the session zone, which is the case a wrongly admitted zoned kernel
     // would get wrong - on these rows there is nothing to get wrong yet, since no kernel runs.

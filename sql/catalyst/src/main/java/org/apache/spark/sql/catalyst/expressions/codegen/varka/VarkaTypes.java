@@ -209,7 +209,7 @@ public final class VarkaTypes {
 
   /** The facts about {@code id}. */
   public static Info info(VarkaTypeId id) {
-    return TABLE.get(id);
+    return Objects.requireNonNull(TABLE.get(id), "every id has an entry");
   }
 
   /** Every entry, in the id's order. */

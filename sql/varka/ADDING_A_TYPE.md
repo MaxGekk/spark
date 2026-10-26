@@ -80,9 +80,10 @@ Check: `build/sbt 'catalyst/testOnly *VarkaLaneTypeSuite'`; extend it with the n
 stride and lane.
 
 **4. Teach the compiler.** The type's registry entry - its admission to `OnLane`, which is what the
-compiler's leaves and the evaluator read, and `types.tsv` regenerated with `VARKA_TYPES_REGEN=true
-build/sbt 'catalyst/testOnly *VarkaTypesSuite'` - then the leaf construction in `VarkaNodeCompiler`
-and the family that claims the type's expressions (`VarkaExpressionCompiler`,
+compiler's leaves read, with the type's arm in `VarkaLaneArrow.of` naming its Arrow vector (step 10;
+`VarkaLaneArrowSuite` fails while the two disagree), and `types.tsv` regenerated with
+`VARKA_TYPES_REGEN=true build/sbt 'catalyst/testOnly *VarkaTypesSuite'` - then the leaf construction
+in `VarkaNodeCompiler` and the family that claims the type's expressions (`VarkaExpressionCompiler`,
 `VarkaConditionCompiler`, or a `Varka*Compiler` they chain). A type that must decline says why, with
 the reason enumerating what it needs - the decline reasons are what a reader sees when a query does
 not fuse.

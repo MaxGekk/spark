@@ -887,12 +887,15 @@ public final class VarkaKernelChecks {
       return 8L;
     }
 
+    // A mixed kernel holds int and long values only (a narrow value under a long kernel is
+    // refused), and the putters below lay out four or eight bytes accordingly.
     @Override public long columnStride(int c) {
-      return width(columnLanes[c]);
+      return width(intColumn(c) ? VarkaVectorIR.LaneType.INT : VarkaVectorIR.LaneType.LONG);
     }
 
     @Override public long outputStride(VarkaVectorIR root) {
-      return width(root.laneType());
+      return width(root.laneType() == VarkaVectorIR.LaneType.INT
+          ? VarkaVectorIR.LaneType.INT : VarkaVectorIR.LaneType.LONG);
     }
 
     @Override public long value(int c, int i) {

@@ -1071,7 +1071,10 @@ attributes alone did not answer:
   projection node lists every projection entry as fused, forwarded (naming the
   child column) or residual with the compiler's decline reason - "unsupported
   expression", "CASE WHEN without an ELSE branch", "non-date column of
-  type ..." - in the query's own column names. Since VARKA-38, a `date_add`/
+  type ..." - in the query's own column names. A column of a type Varka plans
+  but does not read yet names the type and the task that builds it ("a double
+  column: the DOUBLE lane is row 341's"), and the zoned `TIMESTAMP` the
+  decision that keeps it out (VARKA-494). Since VARKA-38, a `date_add`/
   `date_sub` day offset that is neither a foldable literal nor a supported
   column gets its own reasons: "non-integer day offset column of type ..."
   for a `ShortType`/`ByteType` column, "day offset is not a foldable literal,
