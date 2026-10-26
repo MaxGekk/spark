@@ -186,8 +186,9 @@ public final class VarkaKernelPlan {
    * - the widened one, which the off arm uses for all of them - so a native narrow root beside
    * an int one, beside a root of the other narrow lane, or beside a tree holding a checked narrow
    * multiply joins them there rather than splitting the projection. A narrow or int root beside a
-   * long one has no shared lane: the long lane admits no narrow node, and an int root is a long
-   * kernel's only through a conversion its own tree holds.
+   * long one has no shared lane: the long lane admits no narrow value, and an int root is a long
+   * kernel's only through a conversion its own tree holds; such a root takes a kernel of its own
+   * (VARKA-480).
    */
   private static Optional<LaneType> kernelLane(List<VarkaVectorIR> roots,
       VarkaEmitOptions options) {
@@ -270,17 +271,18 @@ public final class VarkaKernelPlan {
       if (drive.isNarrow()) {
         continue;
       }
+      if (!VarkaVectorIR.needsNarrowSpecies(root)) {
+        // A narrow column whose only use is a validity word - `y1 IS NOT NULL`, or the same
+        // test lifted to a bigint kernel's lane - reads no value and needs no narrow species,
+        // so it emits at the kernel's lane whichever that is: the word is one bit per row at
+        // every lane. Refusing it would name a load the tree never emits.
+        continue;
+      }
       if (drive == LaneType.LONG) {
-        // Analysis admits no narrow node in a long-lane emission, not even one read only for
-        // its validity word, so the entry declines here rather than failing at emit.
+        // Analysis admits no narrow value in a long-lane emission, so the entry declines here
+        // rather than failing at emit.
         return Optional.of(new Refusal(Kind.NARROW,
             "a narrow value under a bigint kernel has no lowering"));
-      }
-      if (!VarkaVectorIR.needsNarrowSpecies(root)) {
-        // A narrow column whose only use is a validity word - `y1 IS NOT NULL` - reads no
-        // value and needs no narrow species, so it emits at this int lane count. Refusing it
-        // would name a load the tree never emits.
-        continue;
       }
       int intLanes = Lane.emitLanes(options, Lane.INT);
       if (intLanes == 0) {

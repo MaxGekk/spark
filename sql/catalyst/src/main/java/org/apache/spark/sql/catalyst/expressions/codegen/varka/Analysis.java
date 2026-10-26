@@ -247,6 +247,15 @@ final class Analysis {
    * ({@code Slots.bodyUses}, VARKA-223).
    */
   final Set<VarkaVectorIR> analyzed = new HashSet<>();
+
+  /**
+   * The narrow columns a long-lane emission reads for their validity word alone, as
+   * {@code IsNotNull(WidenLane(column))}: the one narrow node such an emission may hold, since the
+   * word is a bit per row at every lane and the column's data is never loaded. The plan refuses
+   * any narrow value under a long kernel, so a narrow column reached any other way still fails
+   * the lane rule.
+   */
+  private final Set<VarkaVectorIR> validityOnlyNarrow = new HashSet<>();
   /**
    * {@code Slots.bodyUses} per group body, keyed by the body's outputs and whether it is dense:
    * a group's loop and epilogue methods visit the same nodes, so the count is made once for both.
@@ -1216,14 +1225,16 @@ final class Analysis {
     // the NATIVE arm, whose every value is narrow - holds nothing else. An int-lane emission
     // holds int nodes and the narrow ones, which it widens once at their loads; it holds no
     // long-lane node. A long-lane emission may hold int-lane nodes, which the IR's constructors
-    // admit only below a conversion, and which `laneOf` emits at the int species; a narrow node
+    // admit only below a conversion, and which `laneOf` emits at the int species; a narrow value
     // there has no lowering, since widening one to the long lane would go through the int
-    // species of the narrow species' part width. The IR's own constructors make any other mix
-    // unbuildable; this is what catches one built another way.
+    // species of the narrow species' part width. A narrow column read for its validity word
+    // alone is the exception (`validityOnlyNarrow`): the word is a bit per row at every lane.
+    // The IR's own constructors make any other mix unbuildable; this is what catches one built
+    // another way.
     boolean fits = switch (lane) {
       case BYTE, SHORT -> node.laneType() == lane.laneType;
       case INT -> node.laneType() != VarkaVectorIR.LaneType.LONG;
-      case LONG -> !node.laneType().isNarrow();
+      case LONG -> !node.laneType().isNarrow() || validityOnlyNarrow.contains(node);
     };
     if (!fits) {
       throw VarkaErrors.illegalArgument("a " + node.laneType() + " node in a "
@@ -1424,6 +1435,10 @@ final class Analysis {
         if (!(column instanceof ColumnRef) && !(n.child() instanceof Cond)) {
           throw VarkaErrors.illegalArgument(
               "IsNotNull child must be a ColumnRef, a widened one or a Cond, got " + n.child());
+        }
+        if (lane == Lane.LONG && n.child() instanceof WidenLane
+            && column.laneType().isNarrow()) {
+          validityOnlyNarrow.add(column);
         }
         // skips = true states the semantics - known output from a null input - for the value
         // over a condition that reaches a root: IfElse, which marks skipping itself, and

@@ -2430,4 +2430,31 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
       Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_shift_counts"))
     }
   }
+
+  test("a projection of a narrow entry and then a bigint one answers from a kernel per lane") {
+    // VARKA-480: the first entry drives the first kernel at the byte or the int lane, which the
+    // bigint entry cannot share, so the bigint entry fuses in a second kernel rather than going
+    // to the row engine. Nulls in each column and in both, and bytes whose sum does not overflow.
+    val rows = Seq("(CAST(-50 AS TINYINT), 0L)", "(CAST(50 AS TINYINT), 4294967296L)",
+      "(CAST(NULL AS TINYINT), -5L)", "(CAST(7 AS TINYINT), CAST(NULL AS BIGINT))",
+      "(CAST(NULL AS TINYINT), CAST(NULL AS BIGINT))")
+    Seq(spark, varkaSpark).foreach { session =>
+      session.sql(s"SELECT y, l FROM VALUES ${rows.mkString(", ")} AS v(y, l)")
+        .coalesce(1).createOrReplaceTempView("varka_narrow_long")
+      session.catalog.cacheTable("varka_narrow_long")
+    }
+    try {
+      // The bigint entry is a long-lane choice, which the compiler fuses; it fuses no bigint
+      // arithmetic.
+      Seq("y + y AS a, greatest(l, 5000000000) AS b",
+          "CAST(y AS INT) + 1 AS a, greatest(l, 5000000000) AS b").foreach { select =>
+        val query = s"SELECT $select FROM varka_narrow_long"
+        checkDifferential(spark, varkaSpark, query, expectFused = true)
+        assert(varkaSpark.sql(query).queryExecution.explainString(FormattedMode)
+          .contains("kernel 2 of 2"), s"$query: expected a kernel per lane")
+      }
+    } finally {
+      Seq(spark, varkaSpark).foreach(_.catalog.uncacheTable("varka_narrow_long"))
+    }
+  }
 }

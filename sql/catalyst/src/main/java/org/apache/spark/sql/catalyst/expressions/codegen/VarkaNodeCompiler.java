@@ -894,13 +894,15 @@ final class VarkaNodeCompiler {
    * has no cheap overflow test for {@code *}, so one that keeps its check declines and
    * {@code literals} is rolled back to {@code mark} so a declining entry leaves no slot behind.
    *
-   * <p>A narrow node keeps the mode it was given ({@code VARKA-329.md} 2.1, review 9.1). The
-   * proof {@link #cannotOverflow} runs is against the int32 range, and two narrow operands always
-   * satisfy it, so rewriting their {@code FAIL} to {@code WRAP} would turn `127Y + 1Y` under ANSI
-   * into a silent wrap. Their bound is the node lane's own, and it is the emitter that applies it:
-   * the narrowed arm's range compare, or the native arm's saturating difference
-   * ({@code VARKA-329.md} 4.2, 4.3). A narrow multiply therefore never declines for overflow
-   * either, its product being exact at the int lane.
+   * <p>A narrow node keeps the mode it was given ({@code VARKA-329.md} 2.1, review 9.1): the
+   * proof {@link #cannotOverflow} runs asks the range of the candidate node, which is on the
+   * operands' narrow lane, and the range analysis does not range narrow arithmetic, so the proof
+   * fails and a checked narrow operation keeps its check. Its bound is the node lane's own, and it
+   * is the emitter that applies it: the narrowed arm's range compare, or the native arm's
+   * saturating difference ({@code VARKA-329.md} 4.2, 4.3). Were narrow arithmetic ranged, the int32
+   * proof would hold for every narrow pair and turn `127Y + 1Y` under ANSI into a silent wrap;
+   * {@code VarkaEmitterNarrowArithSuite} pins that it raises. A narrow multiply never declines for
+   * overflow either, its product being exact at the int lane.
    */
   static Optional<VarkaVectorIR> arithOver(
       IntOp op,
@@ -917,8 +919,7 @@ final class VarkaNodeCompiler {
           + y.laneType() + " lanes", whole);
     }
     boolean narrow = x.laneType().isNarrow();
-    Overflow overflow = !narrow && declared != Overflow.WRAP
-        && cannotOverflow(op, x, y, literals, sink)
+    Overflow overflow = declared != Overflow.WRAP && cannotOverflow(op, x, y, literals, sink)
         ? Overflow.WRAP
         : declared;
     if (op == IntOp.MUL && overflow != Overflow.WRAP && !narrow) {
