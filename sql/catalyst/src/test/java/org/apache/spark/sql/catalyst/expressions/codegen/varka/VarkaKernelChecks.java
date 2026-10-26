@@ -887,12 +887,15 @@ public final class VarkaKernelChecks {
       return 8L;
     }
 
+    // A mixed kernel holds int and long values only (a narrow value under a long kernel is
+    // refused), and the putters below lay out four or eight bytes accordingly.
     @Override public long columnStride(int c) {
-      return intColumn(c) ? 4L : 8L;
+      return width(intColumn(c) ? VarkaVectorIR.LaneType.INT : VarkaVectorIR.LaneType.LONG);
     }
 
     @Override public long outputStride(VarkaVectorIR root) {
-      return root.laneType() == VarkaVectorIR.LaneType.INT ? 4L : 8L;
+      return width(root.laneType() == VarkaVectorIR.LaneType.INT
+          ? VarkaVectorIR.LaneType.INT : VarkaVectorIR.LaneType.LONG);
     }
 
     @Override public long value(int c, int i) {
@@ -979,16 +982,6 @@ public final class VarkaKernelChecks {
       this(batch, lits, VarkaKernelChecks.columnLanes(roots, batch.data().length),
           VarkaKernelChecks.bitColumns(roots, batch.data().length),
           new int[batch.data().length]);
-    }
-
-    /** Bytes of a value at {@code lane}: the lane's width, which is also its stride. */
-    private static long width(VarkaVectorIR.LaneType lane) {
-      return switch (lane) {
-        case BYTE -> 1L;
-        case SHORT -> 2L;
-        case INT -> 4L;
-        case LONG -> 8L;
-      };
     }
 
     /** {@code v} as {@code lane} stores it, sign-extended: the value the reference reads back. */
@@ -1136,6 +1129,15 @@ public final class VarkaKernelChecks {
       }
     }
     return bits;
+  }
+
+  /**
+   * Bytes of a value at {@code lane}, which is also its stride: production's own figure
+   * ({@code Lane.byteStride}), so the harness lays a buffer out as the emitter addresses it rather
+   * than by a table of its own (VARKA-494).
+   */
+  static long width(VarkaVectorIR.LaneType lane) {
+    return org.apache.spark.sql.catalyst.expressions.codegen.varka.Lane.of(lane).byteStride;
   }
 
   /** Each of {@code numInputs} columns' lane as {@code roots} read it; the long lane if unread. */

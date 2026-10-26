@@ -47,6 +47,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 
 import jdk.incubator.vector.ByteVector;
 import jdk.incubator.vector.DoubleVector;
@@ -121,9 +122,30 @@ final class VarkaWarmupReach {
 
   // --- what HotSpot counts ---------------------------------------------------------------------
 
-  /** The five lane types the engine emits vectors of, by their vector class. */
-  private static final List<Class<?>> LANES = List.of(ByteVector.class, ShortVector.class,
-      IntVector.class, LongVector.class, DoubleVector.class);
+  /**
+   * The lane types the engine emits vectors of, by their vector class: each lane the type
+   * registry says some type's kernels reach (VARKA-494), in width order, and the double lane, which
+   * no type is read on and the long lane's divisions convert through.
+   */
+  private static final List<Class<?>> LANES = lanes();
+
+  private static List<Class<?>> lanes() {
+    var reached = new TreeSet<VarkaVectorIR.LaneType>();
+    for (VarkaTypes.Info i : VarkaTypes.all()) {
+      reached.addAll(i.lanes());
+    }
+    var out = new ArrayList<Class<?>>();
+    for (VarkaVectorIR.LaneType lane : reached) {
+      out.add(switch (lane) {
+        case BYTE -> ByteVector.class;
+        case SHORT -> ShortVector.class;
+        case INT -> IntVector.class;
+        case LONG -> LongVector.class;
+      });
+    }
+    out.add(DoubleVector.class);
+    return List.copyOf(out);
+  }
 
   /**
    * The classes a receiver of one lane type can be in this JVM: the vector, the mask and the

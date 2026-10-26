@@ -413,10 +413,11 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession with VarkaT
     val mixed = VarkaFusionReport.predicateLines(
       And(dLess10, doubleResidual), withDouble)
     assert(mixed.head === "(d < DATE '1970-01-11'): fused")
-    assert(mixed(1).startsWith("(f > 5.0D): residual (non-date column of type double"))
+    assert(mixed(1).startsWith(
+      "(f > 5.0D): residual (a double column: the DOUBLE lane is row 341's"))
     // A filter no conjunct of which fuses still says why, conjunct by conjunct.
     val none = VarkaFusionReport.predicateLines(doubleResidual, withDouble)
-    assert(none.size == 1 && none.head.startsWith("(f > 5.0D): residual (non-date column"), none)
+    assert(none.size == 1 && none.head.startsWith("(f > 5.0D): residual (a double column"), none)
   }
 
   test("a nondeterministic filter is declined with its reason, conjunct by conjunct") {

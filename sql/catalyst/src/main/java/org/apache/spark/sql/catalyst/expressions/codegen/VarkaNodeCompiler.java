@@ -53,6 +53,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaRangeAnalysis;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaOperandPosition;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitCount;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BitOp;
@@ -70,11 +71,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Lit
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.NarrowLane;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Overflow;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WidenLane;
-import org.apache.spark.sql.types.DataType;
 import org.apache.spark.sql.types.DataTypes;
-import org.apache.spark.sql.types.DayTimeIntervalType;
-import org.apache.spark.sql.types.TimeType;
-import org.apache.spark.sql.types.YearMonthIntervalType;
 
 /**
  * The recursive node compiler of the Varka expression compiler: the chain of families that
@@ -446,7 +443,7 @@ final class VarkaNodeCompiler {
       // try_negative here either, so the mode is WRAP or FAIL; ANSI always keeps the check,
       // since a narrow column's range contains the minimum that overflows.
       case UnaryMinus n when isNarrow(n) -> () -> narrowOperand(
-          n.child(), laneOf(n.dataType()).orElseThrow(), inputs, literals, sink)
+          n.child(), VarkaTypes.lane(n.dataType()).orElseThrow(), inputs, literals, sink)
           .map(x -> (VarkaVectorIR) new IntNeg(
               n.failOnError() ? Overflow.FAIL : Overflow.WRAP, x));
       // `abs` over a narrow lane is the negation's node with its `abs` flag: Spark's
@@ -454,7 +451,7 @@ final class VarkaNodeCompiler {
       // is `-128Y` there. Its one overflowing input is the negation's, the lane's minimum, so
       // under ANSI the check is the negation's too. There is no try_abs in Spark.
       case Abs a when isNarrow(a) -> () -> narrowOperand(
-          a.child(), laneOf(a.dataType()).orElseThrow(), inputs, literals, sink)
+          a.child(), VarkaTypes.lane(a.dataType()).orElseThrow(), inputs, literals, sink)
           .map(x -> (VarkaVectorIR) new IntNeg(
               a.failOnError() ? Overflow.FAIL : Overflow.WRAP, x, true));
       // The bitwise family (VARKA-335): one lane-wise operation at the operand's width, which
@@ -636,7 +633,7 @@ final class VarkaNodeCompiler {
    * sixteen bits rather than at the int lane's thirty-two.
    */
   private static boolean isNarrow(Expression e) {
-    return laneOf(e.dataType()).filter(LaneType::isNarrow).isPresent();
+    return VarkaTypes.lane(e.dataType()).filter(LaneType::isNarrow).isPresent();
   }
 
   /**
@@ -649,10 +646,13 @@ final class VarkaNodeCompiler {
       VarkaSlotTable inputs,
       VarkaSlotTable literals,
       DeclineSink sink) {
-    // A column of any other type: eligible to be forwarded as a whole entry, never to be read by
-    // the int32 lanes of a kernel.
+    // A column no arm read: eligible to be forwarded as a whole entry. A type the registry holds
+    // and no lane reads names its type and why - the row that builds an owed one, the decision
+    // for a declined one (VARKA-494); any other column, an int one in a position that takes no
+    // bare int among them, keeps the general reason.
     if (e instanceof BoundReference br) {
-      return sink.decline("non-date column of type " + br.dataType().simpleString(), br);
+      return sink.decline(VarkaTypes.declineReason(br.dataType())
+          .orElse("non-date column of type " + br.dataType().simpleString()), br);
     }
     // Defensive: a real query never carries an unreplaced RuntimeReplaceable this far (the
     // optimizer's ReplaceExpressions runs long before physical planning), but hand-built
@@ -661,38 +661,6 @@ final class VarkaNodeCompiler {
       return compileNode(r.replacement(), inputs, literals, sink);
     }
     return sink.decline("unsupported expression", e);
-  }
-
-  /**
-   * The lane a Spark type's values occupy in a kernel, or empty for a type no kernel reads. The
-   * int side is what the leaf arms admit - a date, an int and a year-month interval are all one
-   * 32-bit lane - and the long side is milestone 5's: {@code bigint}, {@code TIME} (nanoseconds
-   * of day) and a day-time interval (microseconds) are one 64-bit lane ({@code VARKA-29.md} 3.1).
-   * The two timestamp types are that lane physically and are deliberately absent. The narrow
-   * lanes are milestone 8's ({@code VARKA-329.md} 2.2): a {@code tinyint} is one byte a row and a
-   * {@code smallint} two, each read as its own lane and widened to the int lane for computation.
-   */
-  static Optional<LaneType> laneOf(DataType dataType) {
-    if (DataTypes.ByteType.equals(dataType)) {
-      return Optional.of(LaneType.BYTE);
-    }
-    if (DataTypes.ShortType.equals(dataType)) {
-      return Optional.of(LaneType.SHORT);
-    }
-    if (DataTypes.IntegerType.equals(dataType) || DataTypes.DateType.equals(dataType)
-        || dataType instanceof YearMonthIntervalType) {
-      return Optional.of(LaneType.INT);
-    }
-    if (DataTypes.LongType.equals(dataType) || dataType instanceof TimeType
-        || dataType instanceof DayTimeIntervalType) {
-      return Optional.of(LaneType.LONG);
-    }
-    return Optional.empty();
-  }
-
-  /** Whether {@code dataType} is one of the types the 64-bit lane carries. */
-  static boolean onLongLane(DataType dataType) {
-    return laneOf(dataType).filter(lane -> lane == LaneType.LONG).isPresent();
   }
 
   /**
@@ -889,7 +857,7 @@ final class VarkaNodeCompiler {
       VarkaSlotTable inputs,
       VarkaSlotTable literals,
       DeclineSink sink) {
-    LaneType lane = laneOf(whole.dataType()).orElseThrow();
+    LaneType lane = VarkaTypes.lane(whole.dataType()).orElseThrow();
     int mark = literals.size();
     Optional<VarkaVectorIR> x = narrowOperand(l, lane, inputs, literals, sink);
     if (x.isEmpty()) {
