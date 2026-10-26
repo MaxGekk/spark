@@ -28,7 +28,7 @@ import org.apache.spark.SparkArithmeticException
 import org.apache.spark.sql.{QueryTest, Row, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, IsNotNull, IsNull, NamedExpression}
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, VarkaExpressionCompiler}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaFallbackEvent, VarkaGuardSpec, VarkaJfrTestSupport, VarkaMatrix, VarkaTestWatchdog}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaFallbackEvent, VarkaGuardSpec, VarkaJfrTestSupport, VarkaMatrix, VarkaTestWatchdog, VarkaTypes}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaGuardSpec.Verdict
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType
 import org.apache.spark.sql.catalyst.optimizer.{BooleanSimplification, InferFiltersFromConstraints, NullDownPropagation, NullPropagation}
@@ -657,11 +657,9 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
   private val FalseAnd = "the right side of a false AND"
   private val TrueOr = "the right side of a true OR"
 
-  /** Whether values of `t` live on Varka's long lane rather than its int lane. */
-  private def onLongLane(t: DataType): Boolean = t match {
-    case LongType | _: TimeType | _: DayTimeIntervalType => true
-    case _ => false
-  }
+  /** Whether values of `t` live on Varka's long lane: the type registry's answer. */
+  private def onLongLane(t: DataType): Boolean =
+    VarkaTypes.lane(t).toScala.contains(LaneType.LONG)
 
   /**
    * A value of the extremes fixture of `t`'s type that never raises, to stand beside an

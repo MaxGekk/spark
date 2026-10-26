@@ -18,7 +18,6 @@ package org.apache.spark.sql.execution;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.function.Predicate;
 import javax.annotation.Nullable;
 
 import org.apache.arrow.memory.BufferAllocator;
@@ -32,32 +31,28 @@ import org.apache.arrow.vector.TimeNanoVector;
 import org.apache.arrow.vector.TinyIntVector;
 import org.apache.arrow.vector.ValueVector;
 
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypeId;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes;
 import org.apache.spark.sql.types.DataType;
-import org.apache.spark.sql.types.DataTypes;
-import org.apache.spark.sql.types.DayTimeIntervalType;
 import org.apache.spark.sql.types.Metadata;
-import org.apache.spark.sql.types.TimeType;
-import org.apache.spark.sql.types.YearMonthIntervalType;
 import org.apache.spark.sql.util.ArrowUtils;
 
 /**
- * The Arrow vectors each lane's columns arrive in and its outputs are written to: the evaluator's
+ * The Arrow vector each type's columns arrive in and its outputs are written to: the evaluator's
  * one table of them (VARKA-474 2.2), read by {@code VarkaEvaluatorBase.isArrowBacked} to admit a
  * batch and by {@code VarkaKernelEvaluator.allocateVector} to build a destination.
  *
- * <p>The table is one switch over {@code LaneType} with no {@code default}, so a new lane does not
- * compile until it names its vectors here. Before it, the two functions held the list twice, the
- * admission in a switch over vector classes whose {@code default -> false} declined a lane nobody
- * had wired on every batch, which reads as a slow query rather than an error. That switch keeps a
- * {@code default}, since Arrow's vector classes are not a sealed set, but what it admits is now
- * this table's.
+ * <p>The table is one switch over the type registry's ids ({@code VarkaTypeId}, VARKA-494) with
+ * no {@code default}, so a new type does not compile until it says which vector, if any, holds it
+ * here, and which Spark type a vector stores is the registry's answer rather than a second list.
+ * Before it, the two functions held the list twice, the admission in a switch over vector classes
+ * whose {@code default -> false} declined a lane nobody had wired on every batch, which reads as
+ * a slow query rather than an error. That switch keeps a {@code default}, since Arrow's vector
+ * classes are not a sealed set, but what it admits is now this table's.
  *
  * <p>Two vectors the evaluator admits belong to no lane, and stay named in {@code isArrowBacked}:
  * a boolean column's {@code BitVector}, read as two bitmaps rather than lane values, and the
- * {@code VarCharVector} a derived input arrives in. Which lane a Spark type is on is also known to
- * {@code VarkaNodeCompiler.laneOf} in catalyst; the two agree by the suites, and row 475's type
- * registry is where they become one.
+ * {@code VarCharVector} a derived input arrives in.
  */
 final class VarkaLaneArrow {
 
@@ -71,45 +66,42 @@ final class VarkaLaneArrow {
   }
 
   /**
-   * One Arrow vector class a lane reads and writes: the class, which Spark types are stored in
-   * it, and how a destination of it is built.
+   * The Arrow vector class a type's lane reads and writes, the type's id, and how a destination of
+   * it is built.
    */
-  record Vector(Class<? extends ValueVector> vectorClass, Predicate<DataType> stores,
-      Allocate allocate) {
+  record Vector(VarkaTypeId id, Class<? extends ValueVector> vectorClass, Allocate allocate) {
   }
 
   /**
-   * The vectors of one lane. A lane's Spark types share its width and its buffer layout, so each
-   * vector is a fixed-width one the kernels address directly.
+   * The vector a type's columns are read from and its outputs written to, or null for a type no
+   * lane reads: each is a fixed-width vector the kernels address directly.
    */
-  static List<Vector> of(LaneType lane) {
-    return switch (lane) {
+  static @Nullable Vector of(VarkaTypeId id) {
+    return switch (id) {
       // A narrow column's one or two bytes a row (VARKA-329); the kernel stores into it at the
       // type's own width.
-      case BYTE -> List.of(new Vector(TinyIntVector.class, DataTypes.ByteType::equals,
-          (name, type, allocator) -> new TinyIntVector(name, allocator)));
-      case SHORT -> List.of(new Vector(SmallIntVector.class, DataTypes.ShortType::equals,
-          (name, type, allocator) -> new SmallIntVector(name, allocator)));
+      case BYTE -> new Vector(id, TinyIntVector.class,
+          (name, type, allocator) -> new TinyIntVector(name, allocator));
+      case SHORT -> new Vector(id, SmallIntVector.class,
+          (name, type, allocator) -> new SmallIntVector(name, allocator));
+      case DATE -> new Vector(id, DateDayVector.class,
+          (name, type, allocator) -> new DateDayVector(name, allocator));
+      case INT -> new Vector(id, IntVector.class,
+          (name, type, allocator) -> new IntVector(name, allocator));
       // A year-month interval is a count of months in an int32 buffer whatever its unit, which
       // rides on the Spark type and never on the buffer, so every unit is one vector class.
-      case INT -> List.of(
-          new Vector(DateDayVector.class, DataTypes.DateType::equals,
-              (name, type, allocator) -> new DateDayVector(name, allocator)),
-          new Vector(IntVector.class, DataTypes.IntegerType::equals,
-              (name, type, allocator) -> new IntVector(name, allocator)),
-          new Vector(IntervalYearVector.class, type -> type instanceof YearMonthIntervalType,
-              (name, type, allocator) -> new IntervalYearVector(name, allocator)));
+      case YM_INTERVAL -> new Vector(id, IntervalYearVector.class,
+          (name, type, allocator) -> new IntervalYearVector(name, allocator));
       // The long lane's three (VARKA-29): a bigint, a TIME(p) - nanoseconds of day at every
       // precision - and a day-time interval in microseconds, each built from the Arrow field
       // Spark's own writer builds for the type, so TimeNanoVector carries the precision in its
-      // field metadata and the row path reads all three back through ArrowColumnVector. The
-      // timestamp vectors are deliberately not here: the compiler builds no leaf for them.
-      case LONG -> List.of(
-          new Vector(BigIntVector.class, DataTypes.LongType::equals, VarkaLaneArrow::fromField),
-          new Vector(TimeNanoVector.class, type -> type instanceof TimeType,
-              VarkaLaneArrow::fromField),
-          new Vector(DurationVector.class, type -> type instanceof DayTimeIntervalType,
-              VarkaLaneArrow::fromField));
+      // field metadata and the row path reads all three back through ArrowColumnVector.
+      case LONG -> new Vector(id, BigIntVector.class, VarkaLaneArrow::fromField);
+      case TIME -> new Vector(id, TimeNanoVector.class, VarkaLaneArrow::fromField);
+      case DT_INTERVAL -> new Vector(id, DurationVector.class, VarkaLaneArrow::fromField);
+      // Read by no lane: a boolean is two bitmaps (named in isArrowBacked) and is not written
+      // yet (row 27); the others are owed to their rows or declined by decision (VarkaTypes).
+      case BOOLEAN, FLOAT, DOUBLE, DECIMAL, TIMESTAMP_NTZ, TIMESTAMP -> null;
     };
   }
 
@@ -118,13 +110,16 @@ final class VarkaLaneArrow {
         .createVector(allocator);
   }
 
-  /** Every lane's vectors, in lane order, built once: the admission reads it on every batch. */
+  /** Every type's vector, in the id's order, built once: the admission reads it on every batch. */
   private static final Vector[] ALL = all();
 
   private static Vector[] all() {
     List<Vector> out = new ArrayList<>();
-    for (LaneType lane : LaneType.values()) {
-      out.addAll(of(lane));
+    for (VarkaTypeId id : VarkaTypeId.values()) {
+      Vector v = of(id);
+      if (v != null) {
+        out.add(v);
+      }
     }
     return out.toArray(new Vector[0]);
   }
@@ -149,8 +144,9 @@ final class VarkaLaneArrow {
    */
   static @Nullable ValueVector allocate(String name, DataType dataType,
       BufferAllocator allocator) {
+    VarkaTypeId id = VarkaTypes.idOf(dataType);
     for (Vector v : ALL) {
-      if (v.stores().test(dataType)) {
+      if (v.id() == id) {
         return v.allocate().create(name, dataType, allocator);
       }
     }

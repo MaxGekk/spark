@@ -22,20 +22,19 @@
 
 A new lane touches its `LaneType` member, one `Lane` entry, one `VarkaLaneArrow` entry, its IR
 leaves and emitter arms, and its tests. The members, entries and arms are exhaustive switches, so
-the compiler lists every one a new lane misses. The sites below are not: each compiles without
-the lane and ignores it silently, so this script walks them. Per lane: the compiler's admission
-(`laneOf` maps a Spark type to it), the template warm-up's load of the lane's vector class, a fuzz
+the compiler lists every one a new lane misses. The sites below are not: each compiles without the
+lane and ignores it silently, so this script walks them. Per lane: the compiler's admission (the
+registry puts a Spark type on it), the template warm-up's load of the lane's vector class, a fuzz
 grammar leaf and a benchmark. Per Spark type on the lane: a coverage column, a width-audit column
-and a census entry fused today, so a new type on an existing lane - `TIMESTAMP_NTZ` on the long
-lane - is checked too, though the lane's own sites are already wired. It prints each site with no
-case, with the file and what the site does. It cannot prove a case is right; it proves the site
-was looked at. A type starts here at `laneOf`: until `laneOf` admits it, nothing knows of it.
+and a census entry fused today, so a new type on an existing lane - `TIMESTAMP_NTZ` on the long lane
+- is checked too, though the lane's own sites are already wired. It prints each site with no case,
+with the file and what the site does. It cannot prove a case is right; it proves the site was looked
+at. A type starts here at the registry: until it is on a lane, nothing knows of it.
 
 The lanes are read from the code, not listed here: the `LaneType` members from `VarkaVectorIR`,
-each lane's Vector API class from `Lane`, and the Spark types on each lane from
-`VarkaNodeCompiler.laneOf`, the compiler's admission. The one table this script keeps is the
-census's name for each Spark type, and a type `laneOf` admits that the table lacks is itself a
-finding, so a new type cannot pass without being named.
+each lane's Vector API class from `Lane`, and the Spark types on each lane, with their census
+names, from the type registry's committed table, `sql/varka/types.tsv` (`VarkaTypes`, the
+compiler's admission).
 
 Sites keyed by IR node kind rather than by lane - the cost model's feature names, the census
 catalog of operators, the reference evaluator and the fuzz grammar's per-kind switches - need no
@@ -55,28 +54,17 @@ CODEGEN_TEST = "sql/catalyst/src/test/java/org/apache/spark/sql/catalyst/express
 CODEGEN_SCALA_TEST = "sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/expressions/codegen"
 IR = f"{CODEGEN}/varka/VarkaVectorIR.java"
 LANE = f"{CODEGEN}/varka/Lane.java"
-NODE_COMPILER = f"{CODEGEN}/VarkaNodeCompiler.java"
+REGISTRY = f"{CODEGEN}/varka/VarkaTypes.java"
 WARMUP = f"{CODEGEN}/varka/VarkaVectorTemplateWarmup.java"
 GRAMMAR = f"{CODEGEN_TEST}/varka/VarkaIrGrammar.java"
 COVERAGE_SUITE = f"{CODEGEN_SCALA_TEST}/varka/VarkaCoverageSuite.scala"
 WIDTH_AUDIT = f"{CODEGEN_SCALA_TEST}/varka/VarkaWidthAuditShapes.scala"
 CENSUS = "sql/varka/plans/m8/census.tsv"
+TYPES = "sql/varka/types.tsv"
 BENCHMARKS = [
     "sql/catalyst/src/test/java/org/apache/spark/sql",
     "sql/core/src/test/java/org/apache/spark/sql",
 ]
-
-# The census's name for each Spark type a lane carries (dev/varka_census.py's type set).
-CENSUS_NAME = {
-    "ByteType": "byte",
-    "ShortType": "short",
-    "IntegerType": "int",
-    "DateType": "date",
-    "YearMonthIntervalType": "ym",
-    "LongType": "bigint",
-    "TimeType": "time",
-    "DayTimeIntervalType": "dt",
-}
 
 # (site, lane) -> the row that owns the gap.
 OWED = {
@@ -108,18 +96,20 @@ def vector_classes():
 
 
 def spark_types():
-    """Each lane's Spark types, from the conditions of laneOf's returns."""
-    src = read(NODE_COMPILER)
-    m = re.search(r"static Optional<LaneType> laneOf\(DataType dataType\) \{(.*?)\n  \}", src, re.S)
-    if not m:
-        sys.exit(f"{NODE_COMPILER}: no laneOf(DataType) found")
+    """Each lane's Spark types: the type registry's entries read on a lane, from its committed
+    table (`sql/varka/types.tsv`, written by `VarkaTypesSuite` from `VarkaTypes`)."""
     out = {}
-    for cond, lane in re.findall(
-        r"if \((.*?)\)\s*\{\s*return Optional\.of\(LaneType\.([A-Z_]+)\);", m.group(1), re.S
-    ):
-        names = re.findall(r"DataTypes\.(\w+)|instanceof (\w+)", cond)
-        out.setdefault(lane, []).extend(a or b for a, b in names)
+    for row in types_rows():
+        if row["admission"] == "on_lane":
+            out.setdefault(row["lane"], []).extend(row["spark"].split(","))
     return out
+
+
+def types_rows():
+    """The registry's rows, a dict per id, from `sql/varka/types.tsv`."""
+    lines = [line for line in read(TYPES).splitlines() if line and not line.startswith("#")]
+    header = lines[0].split("\t")
+    return [dict(zip(header, line.split("\t"))) for line in lines[1:]]
 
 
 def call_args(src, start):
@@ -225,13 +215,14 @@ def check(lanes_wanted):
         if lane not in vectors:
             print(f"{LANE}: no Lane constant names LaneType.{lane}")
             missing += 1
+    census_name = {}
+    for row in types_rows():
+        for t in row["spark"].split(","):
+            census_name[t] = row["census"]
     for lane, names in types.items():
         for t in names:
-            if t not in CENSUS_NAME:
-                print(
-                    f"dev/varka_new_lane.py: laneOf puts {t} on {lane}, and CENSUS_NAME has no "
-                    "census name for it"
-                )
+            if census_name.get(t, "-") == "-":
+                print(f"{TYPES}: {t} is on {lane} and has no census name")
                 missing += 1
 
     leaves = grammar_leaf_lanes()
@@ -253,8 +244,8 @@ def check(lanes_wanted):
         lane_sites = [
             (
                 "compiler admission",
-                NODE_COMPILER,
-                "laneOf maps a Spark type to the lane",
+                REGISTRY,
+                "the type registry puts a Spark type on the lane",
                 bool(lane_spark),
             ),
             (
@@ -282,7 +273,7 @@ def check(lanes_wanted):
         # Each Spark type's own sites: a new type on an existing lane is checked here, since
         # the lane's sites above are already wired by the types before it.
         for t in lane_spark:
-            name = CENSUS_NAME.get(t)
+            name = census_name.get(t)
             type_sites = [
                 (
                     "coverage table",
