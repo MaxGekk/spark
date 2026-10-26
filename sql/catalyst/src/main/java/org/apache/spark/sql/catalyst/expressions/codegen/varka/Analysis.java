@@ -1231,10 +1231,14 @@ final class Analysis {
     // alone is the exception (`validityOnlyNarrow`): the word is a bit per row at every lane.
     // The IR's own constructors make any other mix unbuildable; this is what catches one built
     // another way.
+    // A floating lane holds no type yet (VARKA-341's split comes before its admission): an
+    // emission of one holds only its own lane, and no integral emission holds a floating node.
     boolean fits = switch (lane) {
-      case BYTE, SHORT -> node.laneType() == lane.laneType;
-      case INT -> node.laneType() != VarkaVectorIR.LaneType.LONG;
-      case LONG -> !node.laneType().isNarrow() || validityOnlyNarrow.contains(node);
+      case BYTE, SHORT, FLOAT, DOUBLE -> node.laneType() == lane.laneType;
+      case INT -> node.laneType() != VarkaVectorIR.LaneType.LONG
+          && !node.laneType().isFloating();
+      case LONG -> (!node.laneType().isNarrow() || validityOnlyNarrow.contains(node))
+          && !node.laneType().isFloating();
     };
     if (!fits) {
       throw VarkaErrors.illegalArgument("a " + node.laneType() + " node in a "
@@ -1291,6 +1295,8 @@ final class Analysis {
               case SHORT -> "short";
               case INT -> "int";
               case LONG -> "long";
+              case FLOAT -> "float";
+              case DOUBLE -> "double";
             };
             throw VarkaErrors.illegalArgument("a range guard at the " + name + " lane needs "
                 + name + " bounds: " + node);
