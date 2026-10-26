@@ -751,7 +751,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
       "-i", "year(d) + i", "CAST(ymm AS INT)", "CAST(ymy AS INT)", "hour(t)", "minute(t2)",
       "second(t)", "hour(t) + 1", "CAST(time_to_millis(t) AS INT)", "i & 255", "i | 4096",
       "i ^ 21845", "~i", "i << 3", "shiftright(i, i)", "i >>> 28", "bit_count(i)", "bit_count(l)",
-      "bit_count(l) + 1", "y1 + i", "CAST(s1 AS INT)")
+      "bit_count(l) + 1", "y1 + i", "CAST(s1 AS INT)", "CAST(y1 AS INT) * CAST(y2 AS INT)",
+      "CAST(s1 AS INT) * CAST(s2 AS INT)")
     // `CAST(i AS INTERVAL DAY)` throws past `INTERVAL_DAY_LIMIT_DAYS`, so the compiler puts a
     // bound on `i` that the evaluator checks before the kernel runs; the bound belongs to the
     // column, not to the arm reading it, and the extremes row's `Int.MaxValue` declines the

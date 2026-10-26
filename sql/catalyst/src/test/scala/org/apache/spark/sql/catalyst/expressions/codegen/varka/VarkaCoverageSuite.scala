@@ -565,7 +565,10 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     Family("TINYINT and SMALLINT widened to int, as values", predicates = false, Seq(
       Row("y1 + i", "an int add over a widened byte load, checked under ANSI as any int add is",
         domain = Some(s"CAST(y1 AS BIGINT) + i BETWEEN ${Int.MinValue} AND ${Int.MaxValue}")),
-      Row("CAST(s1 AS INT)", "the widening alone, stored four bytes a row"))),
+      Row("CAST(s1 AS INT)", "the widening alone, stored four bytes a row"),
+      Row("CAST(y1 AS INT) * CAST(y2 AS INT)", "an int multiply that cannot overflow, the byte "
+        + "columns' range bounding the product by 2^14, so it needs no check (VARKA-480)"),
+      Row("CAST(s1 AS INT) * CAST(s2 AS INT)", "the short twin: a product of at most 2^30"))),
 
     // Both lanes in one kernel (VARKA-28): the casts between int and bigint, and the widening
     // Catalyst's type coercion puts under every operator that meets the two.
@@ -596,6 +599,9 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("least(l, 5000000000)"),
       Row("CASE WHEN l < l2 THEN l ELSE l2 END"),
       Row("if(l IS NULL, l2, l)"),
+      Row("if(y1 IS NULL, l, l2)", "a byte column read for its validity alone, which joins the "
+        + "bigint kernel: the word is a bit per row at every lane (VARKA-480)"),
+      Row("if(s1 IS NULL, l, l2)", "the short twin"),
       Row("greatest(t, t2)"),
       Row("CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END"))),
 

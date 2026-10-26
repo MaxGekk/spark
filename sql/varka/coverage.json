@@ -2724,6 +2724,30 @@
     "note" : "the widening alone, stored four bytes a row",
     "verified" : "differential"
   }, {
+    "sql" : "CAST(y1 AS INT) * CAST(y2 AS INT)",
+    "executable" : "CAST(y1 AS INT) * CAST(y2 AS INT)",
+    "family" : "TINYINT and SMALLINT widened to int, as values",
+    "form" : "projection",
+    "catalyst" : [ "Cast", "Multiply" ],
+    "casts" : [ "byte>int:ansi" ],
+    "operands" : [ "Cast:byte", "Multiply:int" ],
+    "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "",
+    "note" : "an int multiply that cannot overflow, the byte columns' range bounding the product by 2^14, so it needs no check (VARKA-480)",
+    "verified" : "differential"
+  }, {
+    "sql" : "CAST(s1 AS INT) * CAST(s2 AS INT)",
+    "executable" : "CAST(s1 AS INT) * CAST(s2 AS INT)",
+    "family" : "TINYINT and SMALLINT widened to int, as values",
+    "form" : "projection",
+    "catalyst" : [ "Cast", "Multiply" ],
+    "casts" : [ "short>int:ansi" ],
+    "operands" : [ "Cast:short", "Multiply:int" ],
+    "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
+    "domain" : "",
+    "note" : "the short twin: a product of at most 2^30",
+    "verified" : "differential"
+  }, {
     "sql" : "CAST(i AS BIGINT)",
     "executable" : "CAST(i AS BIGINT)",
     "family" : "Width conversions",
@@ -2902,6 +2926,30 @@
     "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled", "spark.sql.codegen.varka.family.condition.enabled" ],
     "domain" : "",
     "note" : "",
+    "verified" : "differential"
+  }, {
+    "sql" : "if(y1 IS NULL, l, l2)",
+    "executable" : "if(y1 IS NULL, l, l2)",
+    "family" : "Long-lane choice",
+    "form" : "projection",
+    "catalyst" : [ "If", "IsNull" ],
+    "casts" : [ ],
+    "operands" : [ "If:bigint", "IsNull:byte" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled", "spark.sql.codegen.varka.family.condition.enabled" ],
+    "domain" : "",
+    "note" : "a byte column read for its validity alone, which joins the bigint kernel: the word is a bit per row at every lane (VARKA-480)",
+    "verified" : "differential"
+  }, {
+    "sql" : "if(s1 IS NULL, l, l2)",
+    "executable" : "if(s1 IS NULL, l, l2)",
+    "family" : "Long-lane choice",
+    "form" : "projection",
+    "catalyst" : [ "If", "IsNull" ],
+    "casts" : [ ],
+    "operands" : [ "If:bigint", "IsNull:short" ],
+    "switches" : [ "spark.sql.codegen.varka.family.predicate.enabled", "spark.sql.codegen.varka.family.condition.enabled" ],
+    "domain" : "",
+    "note" : "the short twin",
     "verified" : "differential"
   }, {
     "sql" : "greatest(t, t2)",
