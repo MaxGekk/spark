@@ -63,8 +63,11 @@ import org.apache.spark.sql.types.DataTypes;
  * of {@code long_divide.smt2}, run here at the long range's extremes and at the day's boundaries,
  * against Spark and against {@code java.time}. And a date field of an NTZ value still declines,
  * which row 340 changes.
+ *
+ * <p>In its own JVM: each cast runs a kernel of both lanes, whose int species is the long species'
+ * width beside the int lane's own.
  */
-@VarkaSuite
+@VarkaSuite(ownJvm = true)
 public final class VarkaTimestampNtzCastSuite {
 
   private static final long DAY = DateTimeConstants.MICROS_PER_DAY;

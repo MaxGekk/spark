@@ -29,8 +29,11 @@ import org.apache.spark.sql.types.DataTypes;
  * the long range's extremes and their neighbours, zero and one each way, and the edges of the
  * days a {@code DATE} converts to without overflow, {@code +-106,751,991} days, with the first
  * microsecond past each.
+ *
+ * <p>In its own JVM: a cast to {@code DATE} runs a kernel of both lanes, whose int species is the
+ * long species' width beside the int lane's own.
  */
-@VarkaSuite
+@VarkaSuite(ownJvm = true)
 public final class VarkaTimestampNtzConformanceSuite extends VarkaTypeConformance {
 
   private static final long MICROS_PER_DAY = 86_400_000_000L;
