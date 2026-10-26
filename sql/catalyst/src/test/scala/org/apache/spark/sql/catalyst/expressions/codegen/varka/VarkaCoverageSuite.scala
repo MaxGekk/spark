@@ -35,7 +35,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.{Forwar
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 import org.apache.spark.sql.catalyst.util.DateTimeConstants.{MICROS_PER_DAY, NANOS_PER_DAY, NANOS_PER_MICROS, NANOS_PER_MILLIS}
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, TimestampNTZType, TimeType, YearMonthIntervalType}
 import org.apache.spark.util.Utils
 
 /**
@@ -109,9 +109,13 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   private val y2 = AttributeReference("y2", ByteType)()
   private val s1 = AttributeReference("s1", ShortType)()
   private val s2 = AttributeReference("s2", ShortType)()
+  // TIMESTAMP_NTZ columns (VARKA-338), microseconds on the long lane, two so a comparison can be
+  // column against column.
+  private val ntz = AttributeReference("ntz", TimestampNTZType)()
+  private val ntz2 = AttributeReference("ntz2", TimestampNTZType)()
 
   private val columns: Seq[Attribute] =
-    Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2, y1, y2, s1, s2)
+    Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2, y1, y2, s1, s2, ntz, ntz2)
 
   /**
    * One documented expression. `sql` is both what the table prints and what the check
@@ -166,6 +170,10 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   private def dayOf(nanosPerUnit: Long): Long = (NANOS_PER_DAY - 1) / nanosPerUnit
   /** The largest day count whose microseconds are a long: `date - date`'s range guard. */
   private val maxDateDiffDays = Long.MaxValue / MICROS_PER_DAY
+  /** The days `CAST(d AS TIMESTAMP_NTZ)` converts without overflow: the cast's range guard. */
+  private val ntzDayBound = s"unix_date(d) BETWEEN -$maxDateDiffDays AND $maxDateDiffDays"
+  /** An NTZ literal of the fixtures' range, on a DST night that a zoned value would skip. */
+  private def ntzLiteral(hour: Int): String = f"TIMESTAMP_NTZ '2021-03-14 $hour%02d:00:00'"
 
   private val families: Seq[Family] = Seq(
     Family("Day arithmetic", predicates = false, Seq(
@@ -590,6 +598,41 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("if(l IS NULL, l2, l)"),
       Row("greatest(t, t2)"),
       Row("CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END"))),
+
+    // TIMESTAMP_NTZ on the long lane (VARKA-338): microseconds since the epoch with no zone,
+    // compared and chosen by the long lane's nodes as a bigint is; its arithmetic is row 339's.
+    Family("TIMESTAMP_NTZ columns", predicates = true, Seq(
+      Row("ntz < ntz2"),
+      Row("ntz <= ntz2"),
+      Row("ntz > ntz2"),
+      Row("ntz >= ntz2"),
+      Row("ntz = ntz2"),
+      Row(s"ntz = ${ntzLiteral(2)}", "an NTZ literal takes a slot in the long lane's table"),
+      Row("ntz <=> ntz2", "null-safe equality at the long lane"),
+      Row(s"ntz IN (${ntzLiteral(1)}, ${ntzLiteral(3)})"),
+      Row("ntz IN (11 to 16 NTZ literals)",
+        "an IN list this long arrives from the optimizer as an InSet and fuses the same way",
+        Some(InSet(ntz, (1 to 11).map(h => (h * 3600000000L).asInstanceOf[Any]).toSet)),
+        executable = Some((1 to 11).map(h =>
+          f"TIMESTAMP_NTZ '1970-01-01 $h%02d:00:00'").mkString("ntz IN (", ", ", ")"))),
+      Row("ntz IS NULL"),
+      Row("ntz IS NOT NULL"),
+      Row("d < ntz", "type coercion casts the date to TIMESTAMP_NTZ, its midnight; the day is " +
+        "guarded so that the multiply is exact, and a batch with a day past it goes to the row " +
+        "engine, which raises", domain = Some(ntzDayBound)),
+      Row("CAST(ntz AS DATE) = d", "the UTC date of the count: an exact floor division by the " +
+        "microseconds of a day, a shift and a bounded division, for every count"))),
+
+    Family("TIMESTAMP_NTZ columns choosing values", predicates = false, Seq(
+      Row("greatest(ntz, ntz2)"),
+      Row("least(ntz, ntz2)"),
+      Row("CASE WHEN ntz < ntz2 THEN ntz ELSE ntz2 END"),
+      Row("if(ntz IS NULL, ntz2, ntz)"),
+      Row("coalesce(ntz, ntz2)"),
+      Row("CAST(d AS TIMESTAMP_NTZ)", "Spark multiplies with multiplyExact in every mode, so " +
+        "a day past the bound raises under LEGACY and ANSI and is null under TRY, on the row " +
+        "engine the guard sends its batch to", domain = Some(ntzDayBound)),
+      Row("CAST(ntz AS DATE)", "cannot fail: every quotient is a day an int holds"))),
 
     Family("Time arithmetic", predicates = false, Seq(
       Row("t - t2", "a day-time interval, the nanosecond difference divided by a thousand"),
@@ -1135,6 +1178,11 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     "year(d) + i" -> Refined("year(d), month(d), day(d)", "a + b"),
     "bitmap_bucket_number(l)" -> Proved("bitmap.smt2"),
     "bitmap_bit_position(l)" -> Proved("bitmap.smt2"),
+    // The casts with TIMESTAMP_NTZ (VARKA-338): the floor division proven over every long, and
+    // the guarded multiply against multiplyExact over every int day.
+    "CAST(ntz AS DATE)" -> Proved("long_divide.smt2"),
+    "CAST(d AS TIMESTAMP_NTZ)" -> Exhausted("VarkaTimestampNtzCastSuite",
+      "the DATE to NTZ lowering is Math.multiplyExact over every int day, in every mode"),
     "b" -> connectives,
     "NOT b" -> connectives,
     // A boolean beside a date, int or long comparison: the connective is swept over the
@@ -1416,13 +1464,9 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
         "the row engine. An empty domain means every input of the column types is answered. " +
         "The switches are the family settings that keep the row off Varka, the families whose " +
         "nodes its kernel holds; empty for a row that compiles to a bare column read."),
+      // Each column's type as SQL, which the readers parse back (`VarkaCoverageRows.read`).
       "columns" -> ordered(
-        "d" -> "date", "d2" -> "date", "i" -> "int",
-        "ymm" -> "interval month", "ymy" -> "interval year", "ym" -> "interval year to month",
-        "l" -> "bigint", "l2" -> "bigint", "t" -> "time(6)", "t2" -> "time(6)",
-        "dt" -> "interval day to second", "dt2" -> "interval day to second",
-        "b" -> "boolean", "b2" -> "boolean",
-        "y1" -> "tinyint", "y2" -> "tinyint", "s1" -> "smallint", "s2" -> "smallint"),
+        columns.map(a => a.name -> a.dataType.sql.toLowerCase(java.util.Locale.ROOT)): _*),
       "expressions" -> rows.asJava,
       "catalyst_classes_admitted" -> (admittedByCompiler -- infrastructure).toSeq.sorted.asJava)
     new ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(doc) + "\n"

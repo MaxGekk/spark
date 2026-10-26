@@ -248,20 +248,24 @@ class VarkaLongLaneSuite extends QueryTest with VarkaSharedSessions with VarkaTe
     }
   }
 
-  test("a timestamp comparison stays on the row engine and answers what the row engine does") {
-    // Both timestamp types are the same eight-byte lane physically and no lane reads either yet
-    // - the zoned one by decision, TIMESTAMP_NTZ until row 338 (VarkaTypes); a predicate on one
-    // alone fuses nothing, and beside a date
-    // conjunct it stays as the residual row filter above the Varka node. The rows straddle a
-    // DST transition in the session zone, which is the case a wrongly admitted zoned kernel
-    // would get wrong - on these rows there is nothing to get wrong yet, since no kernel runs.
+  test("a zoned timestamp comparison stays on the row engine, and an NTZ one fuses") {
+    // Both timestamp types are the same eight-byte count physically. The zoned one is read by no
+    // lane, by decision (VarkaTypes): a predicate on it alone fuses nothing, and beside a date
+    // conjunct it stays as the residual row filter above the Varka node. TIMESTAMP_NTZ is read
+    // on the long lane (VARKA-338), so its predicate fuses alone and beside the date conjunct.
+    // The rows straddle a DST transition in the session zone, which is the case a wrongly
+    // admitted zoned kernel would get wrong, and which an NTZ value, having no zone, ignores.
     withSQLConf("spark.sql.session.timeZone" -> "America/Los_Angeles") {
       fixtures.foreach { case (fixture, _) =>
         for ((col, prefix) <- Seq("ts" -> "TIMESTAMP", "ntz" -> "TIMESTAMP_NTZ")) {
           val alone = s"SELECT l FROM $fixture WHERE $col > $prefix'2021-03-14 02:00:00'"
           val aloneActual = varkaSpark.sql(alone)
           withClue(s"$fixture: $alone") {
-            assertNotFused(aloneActual.queryExecution.executedPlan)
+            if (col == "ntz") {
+              assertFused(aloneActual.queryExecution.executedPlan)
+            } else {
+              assertNotFused(aloneActual.queryExecution.executedPlan)
+            }
             checkAnswer(aloneActual, spark.sql(alone))
           }
           val beside = s"SELECT l FROM $fixture WHERE d > d2 AND $col > " +

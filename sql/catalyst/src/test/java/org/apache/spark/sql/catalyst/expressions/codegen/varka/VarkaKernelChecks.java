@@ -551,6 +551,18 @@ public final class VarkaKernelChecks {
   }
 
   /**
+   * {@link #runLoadedLong} for a kernel that may hold both lanes, with {@code intLits} its int
+   * literal table, every row also compared with Spark's answer (the conformance contract's long
+   * lane).
+   */
+  public static int runLoadedLong(String context, VarkaFusedKernel kernel,
+      List<VarkaVectorIR> roots, int numInputs, long[] lits, int[] intLits, LongBatch batch,
+      boolean declineAllowed, SparkAnswers spark, CallHook hook) {
+    return runLoaded(context, kernel, roots, numInputs, longLane(batch, lits, intLits, roots),
+        declineAllowed, spark, ValidityFill.BOTH, hook);
+  }
+
+  /**
    * {@link #runLoaded} with the columns stored narrow (VARKA-329), for the sweeps that run
    * thousands of batches on one class: {@link #runAndCompareNarrow} loads the class again for
    * every batch, which a 2^32-row sweep cannot afford.

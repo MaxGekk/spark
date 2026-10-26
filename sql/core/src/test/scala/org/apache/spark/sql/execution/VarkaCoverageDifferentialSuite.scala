@@ -33,12 +33,14 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaGuardSpec.Ve
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType
 import org.apache.spark.sql.catalyst.optimizer.{BooleanSimplification, InferFiltersFromConstraints, NullDownPropagation, NullPropagation}
 import org.apache.spark.sql.catalyst.plans.logical.Project
+import org.apache.spark.sql.catalyst.util.DateTimeConstants
 import org.apache.spark.sql.execution.VarkaMaybeThrows.{difference => outcomeDifference, Answered, Raised}
 import org.apache.spark.sql.execution.columnar.InMemoryTableScanExec
 import org.apache.spark.sql.execution.varka.{VarkaFallbackAccounting, VarkaKernelRunner}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType,
-  DayTimeIntervalType, IntegerType, LongType, ShortType, TimeType, YearMonthIntervalType}
+  DayTimeIntervalType, IntegerType, LongType, ShortType, TimestampNTZType, TimeType,
+  YearMonthIntervalType}
 
 /**
  * Every row of the published coverage table, run through both engines (VARKA-120).
@@ -682,6 +684,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
     case ByteType => Some("y2")
     case ShortType => Some("s2")
     case LongType => Some("l2")
+    case TimestampNTZType => Some("ntz2")
     case _: TimeType => Some("t2")
     case _: DayTimeIntervalType => Some("dt2")
     case YearMonthIntervalType(start, end) if start == end =>
@@ -962,6 +965,10 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
         row(d = "DATE'9999-12-31'", i = i.toString)) ++
       around(VarkaChrono.CONTRACT_MIN_DAYS, VarkaChrono.CONTRACT_MAX_DAYS).map(v =>
         row(d = s"date_from_unix_date($v)")) ++
+      // The days a DATE converts to TIMESTAMP_NTZ without overflow, and one past each end.
+      around(-VarkaCoverageDifferentialSuite.lastNtzDay,
+        VarkaCoverageDifferentialSuite.lastNtzDay).map(v =>
+        row(d = s"date_from_unix_date($v)")) ++
       (around(minMonths, maxMonths) ++ around(-maxMonths, -minMonths)).map(ymRow(_)) ++
       Seq(ymRow(Int.MinValue), ymRow(Int.MinValue, m = "1"), ymRow(Int.MinValue + 1L),
         ymRow(Int.MaxValue), ymRow(Int.MaxValue, m = "-1"), row(m = Int.MinValue.toString),
@@ -1035,10 +1042,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
       "a day's milliseconds, under 86400000, always fit an int",
     "CAST(time_to_millis(t) AS INT) > i" ->
       "a day's milliseconds, under 86400000, always fit an int",
-    "hour(t) + 1" -> "an hour is at most 23, so the checked add cannot overflow",
-    "d2 - d" -> ("the fixture's dates are inside the calendar, under three million days apart, " +
-      "far inside the 106751991 days the multiply allows; VarkaDateMinusDateSuite takes the " +
-      "dates past it"))
+    "hour(t) + 1" -> "an hour is at most 23, so the checked add cannot overflow")
 
   /** The statuses as the fallback accounting names them. */
   private def describe(statuses: Seq[Int]): String =
@@ -1132,7 +1136,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
               r.getInt(o).toLong
             case ByteType => r.getByte(o).toLong
             case ShortType => r.getShort(o).toLong
-            case LongType | _: TimeType | _: DayTimeIntervalType => r.getLong(o)
+            case LongType | TimestampNTZType | _: TimeType | _: DayTimeIntervalType =>
+              r.getLong(o)
             case other => fail(s"no lane reads a $other input")
           })
         }
@@ -1310,12 +1315,24 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
 
 private object VarkaCoverageDifferentialSuite {
 
+  /** The last day whose midnight is a long count of microseconds: the NTZ cast's bound. */
+  val lastNtzDay: Long = Long.MaxValue / DateTimeConstants.MICROS_PER_DAY
+
   /**
    * A fixture's view over `values`, rows of the sixteen source columns in parentheses, each
    * given its position as an int `rid` that no coverage row names; `where` filters the rows.
+   * The TIMESTAMP_NTZ columns are derived: `ntz` is `d` at the time of day `t`, `ntz2` is `d2`
+   * at `t2`, so they span the calendar and are null where a source is. A day the conversion
+   * cannot take, which only the edges fixture holds, gives the epoch rather than an error, and
+   * not a null: over a null `ntz` the optimizer's `isnotnull(ntz)` conjunct would decide whether
+   * `d < ntz` is evaluated at all, and the two engines need not take the conjuncts in one order.
    */
   def fixtureView(values: Seq[String], where: String = ""): String = {
     val withIds = values.zipWithIndex.map { case (v, rid) => s"($rid, ${v.stripPrefix("(")}" }
+    def ntz(day: String, time: String): String =
+      s"CASE WHEN abs(unix_date($day)) < $lastNtzDay " +
+        s"THEN CAST($day AS TIMESTAMP_NTZ) + ($time - TIME'00:00:00') " +
+        s"WHEN $day IS NOT NULL THEN TIMESTAMP_NTZ '1970-01-01 00:00:00' END"
     s"""SELECT rid, d, d2, i,
        |       CAST(m AS INTERVAL MONTH) AS ymm,
        |       CAST(y AS INTERVAL YEAR) AS ymy,
@@ -1323,7 +1340,9 @@ private object VarkaCoverageDifferentialSuite {
        |       l, l2, CAST(t AS TIME(6)) AS t, CAST(t2 AS TIME(6)) AS t2, dt, dt2,
        |       y1, y2, s1, s2,
        |       CASE WHEN rid % 4 = 3 THEN NULL ELSE rid % 2 = 0 END AS b,
-       |       CASE WHEN rid % 5 = 4 THEN NULL ELSE rid % 3 = 0 END AS b2
+       |       CASE WHEN rid % 5 = 4 THEN NULL ELSE rid % 3 = 0 END AS b2,
+       |       ${ntz("d", "t")} AS ntz,
+       |       ${ntz("d2", "t2")} AS ntz2
        |FROM VALUES ${withIds.mkString(",\n  ")}
        |AS v(rid, d, d2, i, m, y, mm, l, l2, t, t2, dt, dt2, y1, y2, s1, s2)$where""".stripMargin
   }
