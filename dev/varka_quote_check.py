@@ -24,9 +24,10 @@ benchmark results file? (sql/varka/AGENTS.md, "Measurements, not adjectives".)
   dev/varka_quote_check.py --update-allowlist   # accept today's orphans, with a reason
 
 A quote is a number with two or more integer digits and one to three decimals
-(3452.2, 481.7, 4785.665) that is not a percentage, a ratio suffixed with x, or
-part of a version. That shape is what benchmark rates and JMH scores look like
-and what section numbers, versions and op counts do not. Each one must appear
+(3452.2, 481.7, 4785.665) that is not a percentage, a ratio suffixed with x,
+part of a version, or the seconds of a clock time after a colon. That shape is
+what benchmark rates and JMH scores look like and what section numbers,
+versions and op counts do not. Each one must appear
 in a results file under sql/*/benchmarks/ or sql/varka/engine/benchmarks/ (or a
 demo's committed output under sql/varka/demo/, or a spike's under sql/varka/spikes/*/results/),
 either as committed now or in any committed version of those files (plans
@@ -75,7 +76,8 @@ RESULT_GLOBS = [
     "sql/varka/spikes/*/results/*.txt",
 ]
 ALLOWLIST = "dev/varka_quote_allowlist.txt"
-QUOTE = re.compile(r"(?<![\w.\-])(\d{2,}\.\d{1,3})(?![\w.%]|\s*x\b|\s*x\)|\s*x,|\s*x\.)")
+# A number right after a colon is the seconds of a clock time (`TIME'12:34:56.789'`), not a rate.
+QUOTE = re.compile(r"(?<![\w.\-:])(\d{2,}\.\d{1,3})(?![\w.%]|\s*x\b|\s*x\)|\s*x,|\s*x\.)")
 
 
 def root():

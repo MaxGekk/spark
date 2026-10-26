@@ -105,7 +105,7 @@ varka_docs_regexes = (
     # The scheduled-failure reporter and its tests, which the docs job runs.
     r"dev/varka_scheduled_failure(_test)?\.py$",
     # The house rules' checks, whose cases the docs job runs (VARKA-492).
-    r"dev/varka_(lint|msg_check)\.py$",
+    r"dev/varka_(lint|msg_check|matrix_shards)\.py$",
     r"dev/varka_(precommit|prepush)\.sh$",
     # The census's inputs, which its --check renders again (VARKA-328): the registry it reads
     # every name from and the coverage table its fused claims rest on, beside the two tools.
