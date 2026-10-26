@@ -2580,17 +2580,22 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
       "day-time interval narrowed to a coarser end field, which truncates")
   }
 
-  test("a timestamp column declines with the milestone's reason, in both forms") {
-    for (col <- Seq(ts, ntz)) {
+  test("a timestamp column declines with its type's reason from the registry, in both forms") {
+    // The zoned type is out by decision and NTZ is owed to row 338 (VarkaTypes, VARKA-494); each
+    // reason names the type, so EXPLAIN tells a decision from a gap.
+    val reasons = Seq(
+      ts -> ("a timestamp column: its arithmetic is in the session time zone, which is not " +
+        "lane arithmetic"),
+      ntz -> "a timestamp_ntz column: the TIMESTAMP_NTZ lane is row 338's")
+    for ((col, reason) <- reasons) {
       val predicate = VarkaExpressionCompiler.compilePredicate(
         And(GreaterThan(d, d2), GreaterThan(col, col)), withLong).get
       assert(predicate.specs.asScala.toSeq.map(_.fused) === Seq(true, false))
-      assert(predicate.specs.get(1).decline.get.reason ===
-          "a timestamp column is outside milestone 5")
+      assert(predicate.specs.get(1).decline.get.reason === reason)
       val projection = VarkaExpressionCompiler.compilePartial(
         Seq(out(DateAdd(d, Literal(1))), out(Greatest(Seq(col, col)))), withLong).get
       assert(projection.specs.asScala.toSeq === Seq(new FusedOutput(0), VarkaOutputSpec.RESIDUAL))
-      assert(projection.declines.asScala(1).reason === "a timestamp column is outside milestone 5")
+      assert(projection.declines.asScala(1).reason === reason)
     }
   }
 

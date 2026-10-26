@@ -30,23 +30,29 @@ take them in.
 
 In this order, because each file names the next:
 
-1. `VarkaVectorIR.java` - the `LaneType` member and the leaves that read a column of the type.
-2. `Lane.java` - the runtime facts of a lane: its Vector API class and species constants, its
+1. `VarkaTypes.java` and `VarkaTypeId.java` - the type registry, the one place a type is
+   registered: its id, the lane it is read on or why it is read on none, its census name and SQL
+   spelling, its storage width, the forms the tests probe, the lanes its kernels reach and its
+   conformance suite. `VarkaTypesSuite` writes it to `sql/varka/types.tsv`, which the Python
+   tools read.
+2. `VarkaVectorIR.java` - the `LaneType` member and the leaves that read a column of the type.
+3. `Lane.java` - the runtime facts of a lane: its Vector API class and species constants, its
    width in bits and bytes, its conversions. `Lane.of` maps a `LaneType` to its entry, a switch
    with no `default`.
-3. `VarkaNodeCompiler.java` - `laneOf` (Spark `DataType` to lane), and where a leaf is built.
-4. `Analysis.java` - which nodes are admitted, on which lane their inputs are read, and the
+4. `VarkaNodeCompiler.java` - where a leaf is built, and the decline a column of a type no lane
+   reads takes, with the registry's reason.
+5. `Analysis.java` - which nodes are admitted, on which lane their inputs are read, and the
    guards a node arms.
-5. `VarkaBodyEmitter.java`, `VarkaLoopEmitter.java`, `VarkaVectorWalk.java` - the emitted code,
+6. `VarkaBodyEmitter.java`, `VarkaLoopEmitter.java`, `VarkaVectorWalk.java` - the emitted code,
    per node kind. The body emitter is the dense body, the loop emitter the groups, and the walk
    the node dispatch they share.
-6. `VarkaLaneArrow.java` - the Arrow vectors each lane reads and writes, one switch over
-   `LaneType`, which `isArrowBacked` (`VarkaEvaluatorBase.java`, where an Arrow column becomes a
+7. `VarkaLaneArrow.java` - the Arrow vector each type is read from and written to, one switch over
+   `VarkaTypeId`, which `isArrowBacked` (`VarkaEvaluatorBase.java`, where an Arrow column becomes a
    kernel input) and `allocateVector` (`VarkaKernelEvaluator.java`, where an output goes back to
    Arrow) both read.
-7. `VarkaReference.java` - the scalar semantics the fuzzers compare against.
-8. `VarkaIrGrammar.java` - what the IR fuzzer can draw.
-9. `VarkaCoverageRows.scala` - the rows that make the type count as fused, and the two files
+8. `VarkaReference.java` - the scalar semantics the fuzzers compare against.
+9. `VarkaIrGrammar.java` - what the IR fuzzer can draw.
+10. `VarkaCoverageRows.scala` - the rows that make the type count as fused, and the two files
    they generate.
 
 ## The path
@@ -55,14 +61,16 @@ In this order, because each file names the next:
 existing lane (`TIMESTAMP_NTZ` is a 64-bit count, `DATE` is already on the int lane) or needs a
 new one (`BOOLEAN`'s bitmap, `DECIMAL`'s 128-bit pair). A type that fits an existing lane may
 still need its own *stored* width: `TINYINT` is computed on the int lane and stored a byte a row.
-Write the answer down in the row before the code: it decides every later step.
-Check: read `VarkaVectorIR.LaneType` and `Lane` and say which entry the type uses, or which two
-numbers (width in bits, bytes a row) its new entry carries.
+Write the answer down in the row before the code: it decides every later step. A type milestone
+8 plans already has a registry entry whose admission is `Owed` with its row; the work ends by
+turning that into `OnLane`.
+Check: read `VarkaTypes`, `VarkaVectorIR.LaneType` and `Lane` and say which entry the type uses,
+or which two numbers (width in bits, bytes a row) its new entry carries.
 
-**2. Add the lane's facts.** A new `LaneType` member, its `Lane` entry - the vector class name,
-the species constants, the stride, the conversions - and the matching arms in every `switch` over
-`LaneType`, `Lane.of` and `VarkaLaneArrow.of` among them. The switches have no `default`, so the
-compiler lists the sites.
+**2. Add the lane's facts.** A new `LaneType` member, its `Lane` entry - the vector class name, the
+species constants, the stride, the conversions - and the matching arms in every `switch` over
+`LaneType` and `VarkaTypeId`, `Lane.of` and `VarkaLaneArrow.of` among them. The switches have no
+`default`, so the compiler lists the sites.
 Check: `build/sbt catalyst/compile` - it fails at each missing case, and passes when they are all
 there.
 
@@ -71,12 +79,15 @@ A leaf that is also a condition (`BoolColumn`) carries its two words instead.
 Check: `build/sbt 'catalyst/testOnly *VarkaLaneTypeSuite'`; extend it with the new member's width,
 stride and lane.
 
-**4. Teach the compiler.** `laneOf` in `VarkaNodeCompiler`, the leaf construction beside it, and
-the family that claims the type's expressions (`VarkaExpressionCompiler`,
-`VarkaConditionCompiler`, or a `Varka*Compiler` they chain). A type that must decline says why,
-with the reason enumerating what it needs - the decline reasons are what a reader sees when a
-query does not fuse.
-Check: `build/sbt 'catalyst/testOnly *VarkaExpressionCompilerSuite'`.
+**4. Teach the compiler.** The type's registry entry - its admission to `OnLane`, which is what the
+compiler's leaves read, with the type's arm in `VarkaLaneArrow.of` naming its Arrow vector (step 10;
+`VarkaLaneArrowSuite` fails while the two disagree), and `types.tsv` regenerated with
+`VARKA_TYPES_REGEN=true build/sbt 'catalyst/testOnly *VarkaTypesSuite'` - then the leaf construction
+in `VarkaNodeCompiler` and the family that claims the type's expressions (`VarkaExpressionCompiler`,
+`VarkaConditionCompiler`, or a `Varka*Compiler` they chain). A type that must decline says why, with
+the reason enumerating what it needs - the decline reasons are what a reader sees when a query does
+not fuse.
+Check: `build/sbt 'catalyst/testOnly *VarkaTypesSuite *VarkaExpressionCompilerSuite'`.
 
 **5. Teach the analysis.** Which nodes are admitted on the new lane, the lane the inputs are read
 at, and any guard the node arms (an overflow check, a range guard). A guarded node parks its
@@ -160,18 +171,18 @@ Check: their exit codes, reported in the pull request.
 ## What the guards do not catch
 
 Two kinds of site exist (see `plans/m8/VARKA-474.md` 1). Exhaustive switches the compiler checks:
-the IR's per-kind dispatch, `Lane.of`, `VarkaLaneArrow.of`, and the per-lane switches of the
-reference evaluator and the fuzz grammar. And sites a new lane compiles without, which
-`dev/varka_new_lane.py --check <LANE>` walks: per lane, `laneOf`'s admission, the template warm-up,
-a fuzz-grammar leaf and a benchmark; per Spark type on the lane, a coverage column, the width
-audit's shapes and the census, so a new type on an existing lane is checked once `laneOf` admits
-it. It prints each site with no case, and a gap a later row owns as owed to that row. Sites keyed by
-node kind rather than by lane - the cost model's feature names, the census catalog of operators -
-need no arm for a new lane, only for its new nodes (steps 12 and 13).
+the IR's per-kind dispatch, `Lane.of`, the registry's entries and `VarkaLaneArrow.of` (both over
+`VarkaTypeId`), and the per-lane switches of the reference evaluator and the fuzz grammar. And
+sites a new lane compiles without, which `dev/varka_new_lane.py --check <LANE>` walks: per lane,
+the registry's admission, the template warm-up, a fuzz-grammar leaf and a benchmark; per Spark
+type on the lane, a coverage column, the width audit's shapes and the census, so a new type on an
+existing lane is checked once the registry puts it on the lane. It prints each site with no case,
+and a gap a later row owns as owed to that row. Sites keyed by node kind rather than by lane -
+the cost model's feature names, the census catalog of operators - need no arm for a new lane, only
+for its new nodes (steps 12 and 13).
 
-Between them sit the decline sites: `VarkaNodeCompiler.laneOf` returns an empty `Optional` for a
-type it does not know, and the expression and condition compilers fall through to a decline with a
-reason. A decline is the right answer for an unsupported shape, but for a *new type* it is
-indistinguishable from "not implemented yet" unless the reason names the type, so steps 4 and 5
-are where a missing arm costs an hour of confusion; row 475's type registry is where the decline
-names the type.
+Between them sit the decline sites. A column of a type the registry holds and no lane reads
+declines with the type's name and the registry's reason - the row that builds an owed type, the
+decision for a declined one (`plans/m8/VARKA-494.md`) - so a planned type is told apart from an
+unsupported shape. A type the registry does not hold, and every shape the compilers do not claim,
+falls through to a decline with the compiler's general reason.

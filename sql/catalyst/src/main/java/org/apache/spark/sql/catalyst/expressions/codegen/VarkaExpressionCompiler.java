@@ -231,15 +231,6 @@ public final class VarkaExpressionCompiler {
     return explainAndCompilePredicate(condition, childOutput, options).specs();
   }
 
-  /**
-   * Whether a kernel can read a column of {@code dataType}: one of the int lane's types (date,
-   * int, year-month interval) or the long lane's (bigint, TIME, day-time interval). A test
-   * harness that feeds Varka asks this rather than keeping its own list, so the two cannot drift.
-   */
-  public static boolean readsColumnOf(DataType dataType) {
-    return VarkaNodeCompiler.laneOf(dataType).isPresent();
-  }
-
   // ---------------------------------------------------------------------------------------------
   // The planning-time catch
   // ---------------------------------------------------------------------------------------------

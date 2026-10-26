@@ -55,6 +55,7 @@ import org.apache.spark.sql.catalyst.expressions.Or;
 import org.apache.spark.sql.catalyst.expressions.RuntimeReplaceable;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
@@ -276,7 +277,7 @@ final class VarkaConditionCompiler {
    * returned as it is (VARKA-329).
    */
   private static VarkaVectorIR storedNarrow(VarkaVectorIR node, DataType type) {
-    Optional<LaneType> narrow = VarkaNodeCompiler.laneOf(type).filter(LaneType::isNarrow);
+    Optional<LaneType> narrow = VarkaTypes.lane(type).filter(LaneType::isNarrow);
     if (narrow.isEmpty() || node.laneType() != LaneType.INT) {
       return node;
     }
@@ -685,14 +686,18 @@ final class VarkaConditionCompiler {
       // IN over narrow literals (VARKA-329): the same EQ chain. A tinyint or smallint value is
       // an int in a narrower lane, so the elements are read as ints and the chain's slots take
       // the value's own lane.
-      case In in when onNarrowLane(in.value().dataType()) -> () -> {
+      case In in
+          when VarkaTypes.lane(in.value().dataType()).filter(LaneType::isNarrow).isPresent() ->
+          () -> {
         List<OptionalInt> elements = new ArrayList<>();
         for (Expression element : CollectionConverters.asJava(in.list())) {
           elements.add(narrowValue(element));
         }
         return compileInList(in.value(), elements, in, inputs, literals, sink);
       };
-      case InSet inSet when onNarrowLane(inSet.child().dataType()) -> () -> {
+      case InSet inSet
+          when VarkaTypes.lane(inSet.child().dataType()).filter(LaneType::isNarrow).isPresent() ->
+          () -> {
         List<OptionalInt> elements = new ArrayList<>();
         for (Object element : CollectionConverters.asJava(inSet.hset())) {
           elements.add(element instanceof Byte b ? OptionalInt.of(b.intValue())
@@ -749,12 +754,6 @@ final class VarkaConditionCompiler {
 
   private static boolean isDateOrInterval(DataType dataType) {
     return dataType.equals(DataTypes.DateType) || dataType instanceof YearMonthIntervalType;
-  }
-
-  /** Whether {@code dataType} is one of the narrow lanes' types: {@code tinyint} or
-   * {@code smallint}. */
-  private static boolean onNarrowLane(DataType dataType) {
-    return VarkaNodeCompiler.laneOf(dataType).filter(LaneType::isNarrow).isPresent();
   }
 
   /**
