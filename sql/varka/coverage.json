@@ -3154,7 +3154,7 @@
     "switches" : [ "spark.sql.codegen.varka.family.intArithmetic.enabled" ],
     "domain" : "unix_date(d) BETWEEN -106751991 AND 106751991",
     "note" : "Spark multiplies with multiplyExact in every mode, so a day past the bound raises under LEGACY and ANSI and is null under TRY, on the row engine the guard sends its batch to",
-    "verified" : "exhaustive: VarkaTimestampNtzCastSuite, the DATE to NTZ lowering is Math.multiplyExact over every int day, in every mode"
+    "verified" : "exhaustive: VarkaTimestampNtzCastSuite, the guard of DATE to NTZ admits exactly the days multiplyExact converts"
   }, {
     "sql" : "CAST(ntz AS DATE)",
     "executable" : "CAST(ntz AS DATE)",

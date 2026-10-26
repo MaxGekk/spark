@@ -707,8 +707,8 @@ final class VarkaConditionCompiler {
         return compileInList(inSet.child(), elements, inSet, inputs, literals, sink);
       };
       // IN over TIMESTAMP_NTZ literals (VARKA-338): the same EQ chain at the long lane, each
-      // literal's microseconds a slot in the long table. The bigint IN is not here: it is the
-      // bigint rows' (the "long arithmetic and IN stay declined" test).
+      // literal's microseconds a slot in the long table. A bigint IN takes the same chain but is
+      // left declined here, for the rows that build the bigint operations (rows 104 and 102).
       case In in when DataTypes.TimestampNTZType.equals(in.value().dataType()) -> () -> {
         List<OptionalLong> elements = new ArrayList<>();
         for (Expression element : CollectionConverters.asJava(in.list())) {

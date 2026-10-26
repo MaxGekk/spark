@@ -1179,10 +1179,11 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
     "bitmap_bucket_number(l)" -> Proved("bitmap.smt2"),
     "bitmap_bit_position(l)" -> Proved("bitmap.smt2"),
     // The casts with TIMESTAMP_NTZ (VARKA-338): the floor division proven over every long, and
-    // the guarded multiply against multiplyExact over every int day.
+    // the multiply's guard and factor, read from the compiled tree, held to multiplyExact over
+    // every int day (the kernel itself runs at the guard's edges).
     "CAST(ntz AS DATE)" -> Proved("long_divide.smt2"),
     "CAST(d AS TIMESTAMP_NTZ)" -> Exhausted("VarkaTimestampNtzCastSuite",
-      "the DATE to NTZ lowering is Math.multiplyExact over every int day, in every mode"),
+      "the guard of DATE to NTZ admits exactly the days multiplyExact converts"),
     "b" -> connectives,
     "NOT b" -> connectives,
     // A boolean beside a date, int or long comparison: the connective is swept over the

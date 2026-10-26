@@ -272,7 +272,11 @@ class VarkaLongLaneSuite extends QueryTest with VarkaSharedSessions with VarkaTe
             s"$prefix'2021-03-14 02:00:00'"
           val besideActual = varkaSpark.sql(beside)
           withClue(s"$fixture: $beside") {
-            assertFused(besideActual.queryExecution.executedPlan)
+            val plan = besideActual.queryExecution.executedPlan
+            assertFused(plan)
+            // A conjunct the kernel does not take is a row filter above the Varka node.
+            val residual = collect(plan) { case f: FilterExec => f }
+            assert(residual.isEmpty === (col == "ntz"), plan.treeString)
             checkAnswer(besideActual, spark.sql(beside))
           }
         }

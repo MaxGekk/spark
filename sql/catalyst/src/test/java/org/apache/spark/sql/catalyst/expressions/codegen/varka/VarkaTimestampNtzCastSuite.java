@@ -104,7 +104,7 @@ public final class VarkaTimestampNtzCastSuite {
   // -------------------------------------------------------------------------------------------
 
   @Test
-  @DisplayName("the DATE to NTZ lowering is Math.multiplyExact over every int day, in every mode")
+  @DisplayName("the guard of DATE to NTZ admits exactly the days multiplyExact converts")
   void dateToNtzExhausted() {
     for (Expression cast : modes("d", "TIMESTAMP_NTZ")) {
       CompiledVarkaProjection plan = compile(cast).orElseThrow(() ->

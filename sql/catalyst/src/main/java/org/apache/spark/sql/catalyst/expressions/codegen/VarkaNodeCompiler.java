@@ -638,10 +638,11 @@ final class VarkaNodeCompiler {
    * {@code CAST(d AS TIMESTAMP_NTZ)}: the day widened to the long lane and multiplied by the
    * microseconds of a day, which is Spark's {@code daysToMicros(d, UTC)}. Spark computes it with
    * {@code Math.multiplyExact} in every evaluation mode, so a day past {@link #LAST_NTZ_DAY}
-   * raises under LEGACY and ANSI and is null under TRY ({@code try_cast} catches the throw). The
-   * long lane has no checked multiply, so the day is guarded instead: a batch holding a live day
-   * outside the bound goes to the row engine, which raises or nulls on that row, and inside it
-   * the wrapping multiply is exact. Under TRY that is a correct answer computed slower.
+   * raises under LEGACY and ANSI and is null under TRY ({@code try_cast} catches the throw), and
+   * so does one before {@code -LAST_NTZ_DAY}. The long lane has no checked multiply, so the day is
+   * guarded instead: a batch holding a live day outside the bound goes to the row engine, which
+   * raises or nulls on that row, and inside it the wrapping multiply is exact. Under TRY that is a
+   * correct answer computed slower.
    */
   private static Optional<VarkaVectorIR> ntzOfDate(
       Cast c,
@@ -678,26 +679,32 @@ final class VarkaNodeCompiler {
   }
 
   /**
-   * {@code Math.floorDiv(x, divisor)} over every long {@code x}, for a positive divisor whose odd
-   * part keeps the shifted dividend inside {@link ConstDivide}'s exact range (`VARKA-338.md`
+   * {@code Math.floorDiv(x, divisor)} over every long {@code x}, for a positive even divisor: a
+   * power of two is the shift alone, and any other needs its odd part to keep the shifted dividend
+   * inside {@link ConstDivide}'s exact range (`VARKA-338.md`
    * 2.3, `long_divide.smt2`). The divisor is {@code 2^k * m} with {@code m} odd: an arithmetic
    * shift right by {@code k} is the floor division by {@code 2^k} and leaves a magnitude of at
    * most {@code 2^(63 - k)}; a negative value is then moved down by {@code m - 1}, so that the
    * truncating {@code ConstDivide} by {@code m} floors; and two floor divisions by positive
    * integers are one, by their product. {@code 86,400,000,000 = 2^13 * 10,546,875}, whose shifted
-   * magnitude is under {@code 2^50 + 2^24}.
+   * magnitude is under {@code 2^50 + 2^24}. An odd divisor is refused: unshifted, the dividend
+   * is every long, past that range.
    */
   static VarkaVectorIR floorDivLong(VarkaVectorIR x, long divisor, DeclineSink sink) {
+    if (divisor <= 0 || (divisor & 1) == 1) {
+      throw VarkaErrors.illegalArgument("no exact floor division of a long by " + divisor
+          + ": the divisor must be positive and even");
+    }
     int k = Long.numberOfTrailingZeros(divisor);
     long odd = divisor >> k;
-    long bound = (1L << (63 - k)) + odd;
-    if (divisor <= 0 || k == 0 || bound > ConstDivide.EXACT_DIVIDEND_BOUND) {
-      throw VarkaErrors.illegalArgument("no exact floor division of a long by " + divisor
-          + ": its odd part leaves the shifted dividend past the exact range");
-    }
     VarkaVectorIR y = new BitOp(BitOpKind.SHR, x, sink.longSlot(k));
     if (odd == 1) {
       return y;
+    }
+    long bound = (1L << (63 - k)) + odd;
+    if (bound > ConstDivide.EXACT_DIVIDEND_BOUND) {
+      throw VarkaErrors.illegalArgument("no exact floor division of a long by " + divisor
+          + ": its odd part leaves the shifted dividend past the exact range");
     }
     VarkaVectorIR down = new BitOp(BitOpKind.AND, new BitOp(BitOpKind.SHR, y, sink.longSlot(63)),
         sink.longSlot(1 - odd));

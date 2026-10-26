@@ -2568,9 +2568,8 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
 
   test("a zoned timestamp column declines with its type's reason, and an NTZ one fuses") {
     // The zoned type is out by decision (VarkaTypes, VARKA-494), and its reason names the type,
-    // so EXPLAIN tells a decision from a gap. NTZ is read on the long lane (VARKA-338): the same
-    // shapes fuse, the comparison as a conjunct of its own and the greatest in a second kernel
-    // beside the date entry's int lane.
+    // so EXPLAIN tells a decision from a gap. NTZ is read on the long lane (VARKA-338): its
+    // comparison and its greatest each fuse into a kernel driven at the long lane.
     val reason =
       "a timestamp column: its arithmetic is in the session time zone, which is not lane arithmetic"
     val predicate = VarkaExpressionCompiler.compilePredicate(

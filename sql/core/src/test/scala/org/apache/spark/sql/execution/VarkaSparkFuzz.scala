@@ -94,7 +94,8 @@ object VarkaSparkFuzz {
    * largest ones that still fit, so the interval operations of a composition are what overflow.
    * The TIMESTAMP_NTZ columns are derived, `ntz` from `d` at the time `t` and `ntz2` from `d2` at
    * `t2`, as the differential suite derives them; every date drawn here converts without
-   * overflow, so the draw, and the cases a seed reproduces, are what they were.
+   * overflow. The cells drawn are what they were; which coverage rows a seed's compositions take
+   * follows the table, and a stored reproducer replays its own text.
    */
   def fixtureSql(data: Seq[Seq[String]]): String =
     fixtureRows(data.map(_.mkString("(", ", ", ")")))
