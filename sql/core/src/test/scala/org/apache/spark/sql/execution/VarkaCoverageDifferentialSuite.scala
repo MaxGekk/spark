@@ -1325,8 +1325,10 @@ private object VarkaCoverageDifferentialSuite {
    * The TIMESTAMP_NTZ columns are derived: `ntz` is `d` at the time of day `t`, `ntz2` is `d2`
    * at `t2`, so they span the calendar and are null where a source is. A day the conversion
    * cannot take, which only the edges fixture holds, gives the epoch rather than an error, and
-   * not a null: over a null `ntz` the optimizer's `isnotnull(ntz)` conjunct would decide whether
-   * `d < ntz` is evaluated at all, and the two engines need not take the conjuncts in one order.
+   * not a null. The expected session's cache is cleared after every test (`SparkSessionBinder`)
+   * while Varka's is not, so from a suite's second test the row engine plans over the raw rows:
+   * it inlines `ntz`'s CASE, infers no `isnotnull(ntz)`, and raises on the cast that Varka's
+   * cached plan never evaluates (VARKA-498). With `ntz` never null the cast runs on both sides.
    */
   def fixtureView(values: Seq[String], where: String = ""): String = {
     val withIds = values.zipWithIndex.map { case (v, rid) => s"($rid, ${v.stripPrefix("(")}" }
