@@ -3036,8 +3036,8 @@
     "note" : "",
     "verified" : "differential"
   }, {
-    "sql" : "ntz = TIMESTAMP_NTZ '2021-03-14 02:00:00'",
-    "executable" : "ntz = TIMESTAMP_NTZ '2021-03-14 02:00:00'",
+    "sql" : "ntz = TIMESTAMP_NTZ '2021-06-01 12:00:00'",
+    "executable" : "ntz = TIMESTAMP_NTZ '2021-06-01 12:00:00'",
     "family" : "TIMESTAMP_NTZ columns",
     "form" : "predicate",
     "catalyst" : [ "EqualTo" ],
@@ -3060,8 +3060,8 @@
     "note" : "null-safe equality at the long lane",
     "verified" : "differential"
   }, {
-    "sql" : "ntz IN (TIMESTAMP_NTZ '2021-03-14 01:00:00', TIMESTAMP_NTZ '2021-03-14 03:00:00')",
-    "executable" : "ntz IN (TIMESTAMP_NTZ '2021-03-14 01:00:00', TIMESTAMP_NTZ '2021-03-14 03:00:00')",
+    "sql" : "ntz IN (TIMESTAMP_NTZ '2021-06-01 12:00:00', TIMESTAMP_NTZ '1969-12-31 18:00:00')",
+    "executable" : "ntz IN (TIMESTAMP_NTZ '2021-06-01 12:00:00', TIMESTAMP_NTZ '1969-12-31 18:00:00')",
     "family" : "TIMESTAMP_NTZ columns",
     "form" : "predicate",
     "catalyst" : [ "In" ],

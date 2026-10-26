@@ -654,9 +654,9 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `ntz > ntz2` | `predicate` |  |  | per-lane: compare to mask, mask cast |
 | `ntz >= ntz2` | `predicate` |  |  | per-lane: compare to mask, mask cast |
 | `ntz = ntz2` | `predicate` |  |  | per-lane: compare to mask, mask cast |
-| `ntz = TIMESTAMP_NTZ '2021-03-14 02:00:00'` | `predicate` |  | an NTZ literal takes a slot in the long lane's table | per-lane: compare to mask, mask cast |
+| `ntz = TIMESTAMP_NTZ '2021-06-01 12:00:00'` | `predicate` |  | an NTZ literal takes a slot in the long lane's table | per-lane: compare to mask, mask cast |
 | `ntz <=> ntz2` | `predicate` |  | null-safe equality at the long lane | per-lane: compare to mask, mask cast |
-| `ntz IN (TIMESTAMP_NTZ '2021-03-14 01:00:00', TIMESTAMP_NTZ '2021-03-14 03:00:00')` | `predicate` |  |  | per-lane: compare to mask, mask logic, mask cast |
+| `ntz IN (TIMESTAMP_NTZ '2021-06-01 12:00:00', TIMESTAMP_NTZ '1969-12-31 18:00:00')` | `predicate` |  |  | per-lane: compare to mask, mask logic, mask cast |
 | `ntz IN (11 to 16 NTZ literals)` | `predicate` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | per-lane: compare to mask, mask logic, mask cast |
 | `ntz IS NULL` | `predicate` |  |  | per-lane: mask broadcast, mask logic, mask cast |
 | `ntz IS NOT NULL` | `predicate` |  |  | per-lane: mask cast, mask broadcast |

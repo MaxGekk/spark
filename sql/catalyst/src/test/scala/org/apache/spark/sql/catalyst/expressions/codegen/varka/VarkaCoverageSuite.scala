@@ -172,8 +172,13 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   private val maxDateDiffDays = Long.MaxValue / MICROS_PER_DAY
   /** The days `CAST(d AS TIMESTAMP_NTZ)` converts without overflow: the cast's range guard. */
   private val ntzDayBound = s"unix_date(d) BETWEEN -$maxDateDiffDays AND $maxDateDiffDays"
-  /** An NTZ literal of the fixtures' range, on a DST night that a zoned value would skip. */
-  private def ntzLiteral(hour: Int): String = f"TIMESTAMP_NTZ '2021-03-14 $hour%02d:00:00'"
+  /**
+   * NTZ literals the differential fixtures hold (a date column at a time column's value): under
+   * one-row batches the cache's statistics drop every batch a literal cannot match, and a literal
+   * no row holds would leave no batch for a kernel.
+   */
+  private val ntzHeld = "TIMESTAMP_NTZ '2021-06-01 12:00:00'"
+  private val ntzHeld2 = "TIMESTAMP_NTZ '1969-12-31 18:00:00'"
 
   private val families: Seq[Family] = Seq(
     Family("Day arithmetic", predicates = false, Seq(
@@ -613,9 +618,9 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("ntz > ntz2"),
       Row("ntz >= ntz2"),
       Row("ntz = ntz2"),
-      Row(s"ntz = ${ntzLiteral(2)}", "an NTZ literal takes a slot in the long lane's table"),
+      Row(s"ntz = $ntzHeld", "an NTZ literal takes a slot in the long lane's table"),
       Row("ntz <=> ntz2", "null-safe equality at the long lane"),
-      Row(s"ntz IN (${ntzLiteral(1)}, ${ntzLiteral(3)})"),
+      Row(s"ntz IN ($ntzHeld, $ntzHeld2)"),
       Row("ntz IN (11 to 16 NTZ literals)",
         "an IN list this long arrives from the optimizer as an InSet and fuses the same way",
         Some(InSet(ntz, (1 to 11).map(h => (h * 3600000000L).asInstanceOf[Any]).toSet)),

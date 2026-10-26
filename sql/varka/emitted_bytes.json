@@ -2739,7 +2739,7 @@
           "loopMasked0([J[J[I[J[J[I[JI)I" : "c36e014d3a95a570",
           "epilogueMasked0([J[J[I[J[J[I[JI)I" : "05a02d21629dbe66"
         },
-        "ntz = TIMESTAMP_NTZ '2021-03-14 02:00:00'" : {
+        "ntz = TIMESTAMP_NTZ '2021-06-01 12:00:00'" : {
           "<class>" : "1a6be0d5ae87cd3c",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[I[JI)I" : "d5145bab352f2868",
@@ -2761,7 +2761,7 @@
           "loopMasked0([J[J[I[J[J[I[JI)I" : "3c656f19670c7ccb",
           "epilogueMasked0([J[J[I[J[J[I[JI)I" : "3f405115e44fe465"
         },
-        "ntz IN (TIMESTAMP_NTZ '2021-03-14 01:00:00', TIMESTAMP_NTZ '2021-03-14 03:00:00')" : {
+        "ntz IN (TIMESTAMP_NTZ '2021-06-01 12:00:00', TIMESTAMP_NTZ '1969-12-31 18:00:00')" : {
           "<class>" : "1a6be0d5ae87cd3c",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[I[JI)I" : "d5145bab352f2868",
@@ -5814,7 +5814,7 @@
           "loopMasked0([J[J[I[J[J[I[JI)I" : "5ea74549dfe367dd",
           "epilogueMasked0([J[J[I[J[J[I[JI)I" : "e64da696bf4e2a32"
         },
-        "ntz = TIMESTAMP_NTZ '2021-03-14 02:00:00'" : {
+        "ntz = TIMESTAMP_NTZ '2021-06-01 12:00:00'" : {
           "<class>" : "1a6be0d5ae87cd3c",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[I[JI)I" : "d5145bab352f2868",
@@ -5836,7 +5836,7 @@
           "loopMasked0([J[J[I[J[J[I[JI)I" : "c269b123210efefa",
           "epilogueMasked0([J[J[I[J[J[I[JI)I" : "300b508e6fe84a7e"
         },
-        "ntz IN (TIMESTAMP_NTZ '2021-03-14 01:00:00', TIMESTAMP_NTZ '2021-03-14 03:00:00')" : {
+        "ntz IN (TIMESTAMP_NTZ '2021-06-01 12:00:00', TIMESTAMP_NTZ '1969-12-31 18:00:00')" : {
           "<class>" : "1a6be0d5ae87cd3c",
           "<init>()V" : "e2c903051ec05d17",
           "run([J[J[I[J[J[I[JI)I" : "d5145bab352f2868",
@@ -6156,48 +6156,48 @@
   },
   "option_arms" : {
     "useAVX=-1" : {
-      "4" : "b60048845b33707f",
-      "16" : "5d82003f1887710f"
+      "4" : "769a68b928a6a990",
+      "16" : "187f6d713dbe0f35"
     },
     "useAVX=0" : {
-      "4" : "14c671c32bca536c",
-      "16" : "a8761d06dbae96a7"
+      "4" : "8e66abdf98e044aa",
+      "16" : "1811488080a1792f"
     },
     "useAVX=1" : {
-      "4" : "14c671c32bca536c",
-      "16" : "a8761d06dbae96a7"
+      "4" : "8e66abdf98e044aa",
+      "16" : "1811488080a1792f"
     },
     "useAVX=2" : {
-      "4" : "14c671c32bca536c",
-      "16" : "a8761d06dbae96a7"
+      "4" : "8e66abdf98e044aa",
+      "16" : "1811488080a1792f"
     },
     "useAVX=3" : {
-      "4" : "b60048845b33707f",
-      "16" : "5d82003f1887710f"
+      "4" : "769a68b928a6a990",
+      "16" : "187f6d713dbe0f35"
     },
     "validityOrFirst=true over denseValidityOnce=false,validityByBitmap=false" : {
-      "4" : "e2188d73217e32b3",
-      "16" : "73183cb7f42e2504"
+      "4" : "551c1123e6a7a0ff",
+      "16" : "d2691a3664657feb"
     },
     "validityOrFirst=false over denseValidityOnce=false,validityByBitmap=false" : {
-      "4" : "71fa87cd94289173",
-      "16" : "d4adc340881e4caf"
+      "4" : "00f8d2b009c287bb",
+      "16" : "13f40b5759c7376e"
     },
     "narrowLanes=true" : {
-      "4" : "b60048845b33707f",
-      "16" : "5d82003f1887710f"
+      "4" : "769a68b928a6a990",
+      "16" : "187f6d713dbe0f35"
     },
     "narrowLanes=false" : {
-      "4" : "ec435eece46ae7bc",
-      "16" : "9fa83440da1ffaf1"
+      "4" : "bdbb5904bbddc095",
+      "16" : "551a8219217cf0f2"
     },
     "groupLocalSlots=false" : {
-      "4" : "c62902496edd3330",
-      "16" : "530738fb37c8394e"
+      "4" : "55b5487122d37742",
+      "16" : "7d4de5d67884f4bf"
     },
     "methodByteBudget=0" : {
-      "4" : "9ffbd9309d40c7ca",
-      "16" : "7c204b487fdaaca7"
+      "4" : "1aab83619b49810e",
+      "16" : "5949108109bcc088"
     }
   }
 }
