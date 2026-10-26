@@ -240,13 +240,12 @@ two widths across kinds (2.4), naming row 343.
 
 ## 8. Questions for the owner
 
-1. **The mixed-kind scope of 2.4.** Recommended: `DOUBLE` with the 64-bit integral lane and `FLOAT`
-   with the 32-bit one in 341, the other mixes declined until 343 builds the conversions. The
-   alternative, every mix in 341, needs a conversion of a mask between widths that no node does
-   today.
-2. **The baseline first.** Recommended: row 377's floating class as its own pull request before
-   341's first commit, as row 377 says. The alternative is 341 measuring its own baseline in the
-   same pull request, which the house rule for baselines does not allow.
+Answered by the owner on 26 October 2026:
+
+1. **The mixed-kind scope of 2.4:** `DOUBLE` with the 64-bit integral lane and `FLOAT` with the
+   32-bit one in this row; the other mixes decline until 343 builds the conversions.
+2. **The baseline first:** row 377's floating class lands as its own pull request before this
+   row's first commit.
 
 ## 9. Done when
 
