@@ -44,7 +44,12 @@ The checks, one per line of the row:
   * run heads: a row that cites exactly one Actions run and exactly one commit
     has the run's `head_sha` read through `gh api` and compared with the commit;
     with two runs or two commits the pairing is a guess, so the row is left
-    unchecked rather than reported.
+    unchecked rather than reported;
+  * state: a row of the default plan whose work has a commit in the branch's
+    history - a `[VARKA-<n>]` subject that does not plan the row or file it -
+    opens with its state in bold, `**Done**`, `**Done in part**` or
+    `**Started**`, so a count of the milestone can tell finished rows from part
+    done ones; a started row says in its text what is left.
 
 The default file is `sql/varka/plans/m8/PLAN.md`; the other milestone plans are
 read for the row numbers a citation may name. The exit status is the number of
@@ -71,6 +76,28 @@ ROW_CITE = re.compile(r"\brows? (\d{2,4}[a-z]?)(?: to (\d{2,4}[a-z]?))?(?: and (
 RUN_CITE = re.compile(r"\brun (\d{9,12})\b")
 SHA_CITE = re.compile(r"`([0-9a-f]{7,40})`")
 HEADING = re.compile(r"^#{1,4}\s+(\d+(?:\.\d+)*)[.:\s]")
+WORK_SUBJECT = re.compile(r"^\[VARKA-(\d+)[a-z]?\] (.*)$")
+# A commit that plans a row or files one in the table is not work on it.
+NOT_WORK = re.compile(
+    r"^(?:Plan\b|Re-?plan\b|Rework the plan\b|Add (?:\w+ )?(?:plan )?rows?\b|File \w+ rows?\b)"
+)
+STATES = ("**Done**", "**Done in part**", "**Started**")
+
+
+def work_commits():
+    """Row number -> the subjects of the commits in HEAD's history that do work on it."""
+    out = subprocess.run(
+        ["git", "-C", TOP, "log", "--format=%s", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    work = {}
+    for subject in out.splitlines():
+        m = WORK_SUBJECT.match(subject)
+        if m and not NOT_WORK.match(m.group(2)):
+            work.setdefault(int(m.group(1)), []).append(m.group(2))
+    return work
 
 
 def tree_files():
@@ -192,6 +219,7 @@ def main():
     findings = []
     unchecked = 0
     heads = {}
+    work = work_commits()
     for plan in plans:
         path = os.path.join(TOP, plan)
         if not os.path.isfile(path):
@@ -210,6 +238,11 @@ def main():
                 )
         for rid, entries in rows.items():
             for line, body, provenance, _ in entries:
+                if plan == DEFAULT_PLAN and rid in work and not body.startswith(STATES):
+                    findings.append(
+                        f"{plan}:{line}: row {rid} has merged work ({work[rid][0]!r}) and does "
+                        f"not open with its state, **Done**, **Done in part** or **Started**"
+                    )
                 if not provenance.strip():
                     findings.append(f"{plan}:{line}: row {rid} has an empty provenance cell")
                 cited = body + " " + provenance
