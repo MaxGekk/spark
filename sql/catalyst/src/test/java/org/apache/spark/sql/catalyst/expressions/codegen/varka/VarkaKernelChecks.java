@@ -551,6 +551,17 @@ public final class VarkaKernelChecks {
   }
 
   /**
+   * {@link #runLoadedLong} with the int literal table of a kernel of both lanes and every row also
+   * held to {@code spark}, Spark's own answer, as {@link #runLoadedNarrow} holds the int lane's.
+   */
+  public static int runLoadedLong(String context, VarkaFusedKernel kernel,
+      List<VarkaVectorIR> roots, int numInputs, long[] lits, int[] intLits, LongBatch batch,
+      boolean declineAllowed, SparkAnswers spark, CallHook hook) {
+    return runLoaded(context, kernel, roots, numInputs, longLane(batch, lits, intLits, roots),
+        declineAllowed, spark, ValidityFill.BOTH, hook);
+  }
+
+  /**
    * {@link #runLoaded} with the columns stored narrow (VARKA-329), for the sweeps that run
    * thousands of batches on one class: {@link #runAndCompareNarrow} loads the class again for
    * every batch, which a 2^32-row sweep cannot afford.
@@ -841,7 +852,12 @@ public final class VarkaKernelChecks {
     }
 
     @Override public OptionalLong reference(VarkaVectorIR root, long[] values, boolean[] isNull) {
-      return VarkaReference.longValue(root, values, isNull, lits);
+      OptionalLong v = VarkaReference.longValue(root, values, isNull, lits);
+      // A narrowing root stores the low 32 bits of its child (NarrowLane), which is the
+      // value got() reads back and Spark's LEGACY cast: the reference answers the child in full,
+      // so the store's truncation is applied here.
+      return root instanceof NarrowLane && v.isPresent() ? OptionalLong.of((int) v.getAsLong())
+          : v;
     }
 
     @Override public VarkaReference.Truth reference(Cond cond, long[] values, boolean[] isNull) {

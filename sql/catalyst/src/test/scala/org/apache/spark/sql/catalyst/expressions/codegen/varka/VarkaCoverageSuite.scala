@@ -230,6 +230,9 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row("ym - ymm", "exact in every mode: a difference outside the month count's int declines",
         domain = Some("CAST(ym AS BIGINT) - CAST(ymm AS BIGINT) BETWEEN "
           + s"${Int.MinValue} AND ${Int.MaxValue}")),
+      Row("ym + ym", "the sum, exact in every mode as the difference is",
+        domain = Some("CAST(ym AS BIGINT) + CAST(ym AS BIGINT) BETWEEN "
+          + s"${Int.MinValue} AND ${Int.MaxValue}")),
       Row("CAST(ymy AS INTERVAL MONTH)"),
       Row("CAST(i AS INTERVAL MONTH)",
         "a relabel of the count; `CAST(i AS INTERVAL YEAR)` multiplies by twelve, checked, and "
@@ -263,6 +266,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
         "a multiply is checked, and only bounded operands take the check off: `i * 2` over "
           + "a bare int column declines", domain = Some(dayBound)),
       Row("-i", "checked under ANSI", domain = Some(s"i > ${Int.MinValue}")),
+      Row("try_add(i, 1)", "an overflowing lane is null, so the kernel declines nothing"),
+      Row("try_subtract(i, 1)", "an overflowing lane is null"),
       Row("year(d) + i", "checked under ANSI; the lower bound is out of reach, since a year is "
         + "at least 1", domain = Some(s"$dayBound AND i <= ${Int.MaxValue} - year(d)")))),
 
@@ -337,7 +342,13 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
           + "own validity (VARKA-336)"),
       Row("coalesce(d, d2)"),
       Row("greatest(d, d2)"),
-      Row("least(d, d2)"))),
+      Row("least(d, d2)"),
+      // The year-month interval is a month count on the int lane, chosen as a date is.
+      Row("if(ym IS NULL, INTERVAL '1-2' YEAR TO MONTH, ym)"),
+      Row("CASE WHEN ym IS NULL THEN INTERVAL '1-2' YEAR TO MONTH ELSE ym END"),
+      Row("coalesce(ym, INTERVAL '1-2' YEAR TO MONTH)"),
+      Row("greatest(ym, INTERVAL '1-2' YEAR TO MONTH)"),
+      Row("least(ym, INTERVAL '-1-2' YEAR TO MONTH)"))),
 
     Family("Predicates", predicates = true, Seq(
       Row("d IS NULL"),
@@ -595,7 +606,16 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
         + "bigint kernel: the word is a bit per row at every lane (VARKA-480)"),
       Row("if(s1 IS NULL, l, l2)", "the short twin"),
       Row("greatest(t, t2)"),
-      Row("CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END"))),
+      Row("CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END"),
+      Row("coalesce(l, l2)"),
+      Row("least(t, t2)"),
+      Row("CASE WHEN t < t2 THEN t ELSE t2 END"),
+      Row("if(t < t2, t, t2)"),
+      Row("coalesce(t, t2)"),
+      Row("greatest(dt, dt2)"),
+      Row("least(dt, dt2)"),
+      Row("if(dt < dt2, dt, dt2)"),
+      Row("coalesce(dt, dt2)"))),
 
     Family("Time arithmetic", predicates = false, Seq(
       Row("t - t2", "a day-time interval, the nanosecond difference divided by a thousand"),

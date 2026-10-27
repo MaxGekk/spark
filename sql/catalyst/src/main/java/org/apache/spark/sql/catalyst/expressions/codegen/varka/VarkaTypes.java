@@ -268,10 +268,10 @@ public final class VarkaTypes {
           new Conformance.Suite("SmallInt"));
       case INT -> new Info(id, "int", "INT", new Admission.OnLane(LaneType.INT), 32,
           List.of(DataTypes.IntegerType), List.of(LaneType.INT),
-          new Conformance.Owed("Int", "485"));
+          new Conformance.Suite("Int"));
       case LONG -> new Info(id, "bigint", "BIGINT", new Admission.OnLane(LaneType.LONG), 64,
           List.of(DataTypes.LongType), List.of(LaneType.LONG),
-          new Conformance.Owed("BigInt", "485"));
+          new Conformance.Suite("BigInt"));
       case FLOAT -> new Info(id, "float", "FLOAT", new Admission.Owed("341"), 32,
           List.of(DataTypes.FloatType), List.of(), new Conformance.NotLanded());
       case DOUBLE -> new Info(id, "double", "DOUBLE", new Admission.Owed("341"), 64,
@@ -283,22 +283,22 @@ public final class VarkaTypes {
           List.of(), new Conformance.NotLanded());
       case DATE -> new Info(id, "date", "DATE", new Admission.OnLane(LaneType.INT), 32,
           List.of(DataTypes.DateType), List.of(LaneType.INT),
-          new Conformance.Owed("Date", "485"));
+          new Conformance.Suite("Date"));
       case TIME -> new Info(id, "time", "TIME", new Admission.OnLane(LaneType.LONG), 64,
           List.of(new TimeType(0), new TimeType(3), new TimeType(6)), List.of(LaneType.LONG),
-          new Conformance.Owed("Time", "485"));
+          new Conformance.Suite("Time"));
       case TIMESTAMP_NTZ -> new Info(id, "ntz", "TIMESTAMP_NTZ", new Admission.Owed("338"), 64,
           List.of(DataTypes.TimestampNTZType), List.of(), new Conformance.NotLanded());
       case YM_INTERVAL -> new Info(id, "ym", "INTERVAL MONTH",
           new Admission.OnLane(LaneType.INT), 32,
           fields(YearMonthIntervalType$.MODULE$.YEAR(), YearMonthIntervalType$.MODULE$.MONTH(),
               YearMonthIntervalType::new),
-          List.of(LaneType.INT), new Conformance.Owed("YearMonthInterval", "485"));
+          List.of(LaneType.INT), new Conformance.Suite("YearMonthInterval"));
       case DT_INTERVAL -> new Info(id, "dt", "INTERVAL DAY",
           new Admission.OnLane(LaneType.LONG), 64,
           fields(DayTimeIntervalType$.MODULE$.DAY(), DayTimeIntervalType$.MODULE$.SECOND(),
               DayTimeIntervalType::new),
-          List.of(LaneType.LONG), new Conformance.Owed("DayTimeInterval", "485"));
+          List.of(LaneType.LONG), new Conformance.Suite("DayTimeInterval"));
       // The zoned type is the same eight bytes as the others on the long lane, but its
       // differences and interval additions are computed on local date-times in the session time
       // zone, which is not lane arithmetic (`m9/SCOPE.md` item 31).

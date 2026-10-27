@@ -948,7 +948,7 @@ def conformance_errors(root=ROOT):
     >>> import tempfile
     >>> with tempfile.TemporaryDirectory() as d:
     ...     os.makedirs(os.path.join(d, CONFORMANCE_DIR))
-    ...     for t in ("bool", "byte"):
+    ...     for t in sorted(CONFORMANCE_SUITE.keys() - {"short"}):
     ...         name = f"Varka{CONFORMANCE_SUITE[t]}ConformanceSuite.java"
     ...         open(os.path.join(d, CONFORMANCE_DIR, name), "w").close()
     ...     conformance_errors(d)
