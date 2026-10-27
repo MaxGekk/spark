@@ -538,15 +538,30 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
   }.sorted
 
   /**
-   * `expected`, the row engine's side of a comparison, once its plan is checked to read the
-   * same cached tables as `actual`, Varka's side. Both are meant to answer over the same cached
-   * batches: a row engine whose cache was lost reads the inlined plan instead, which can raise or
-   * round where the cached scan does not, so a difference between the plans would go unseen.
+   * Checks that `expected`, the row engine's side of a comparison, reads the same cached tables
+   * as `actual`, Varka's side. Both are meant to answer over the same cached batches: a row
+   * engine whose cache was lost reads the inlined plan instead, which can raise or round where
+   * the cached scan does not, so a difference between the plans would go unseen. With
+   * `mustRead`, the plans must read at least one cached table as well, so that two sides that
+   * both lost the cache do not pass as agreeing - unless the optimizer folded the query to no
+   * rows, so that the plan reads nothing at all (`WHERE (d IS NULL) IS NULL`).
    */
-  protected def sameCacheReads(expected: SparkPlan, actual: SparkPlan, what: String): Unit = {
-    assert(cachedReads(expected) == cachedReads(actual),
-      s"$what: the row engine reads the cached tables ${cachedReads(expected)}, Varka " +
+  protected def sameCacheReads(
+      expected: SparkPlan, actual: SparkPlan, what: String, mustRead: Boolean = false): Unit = {
+    val reads = cachedReads(expected)
+    assert(reads == cachedReads(actual),
+      s"$what: the row engine reads the cached tables $reads, Varka " +
         s"${cachedReads(actual)}:\n${expected.treeString}")
+    assert(!mustRead || reads.nonEmpty || readsNoRows(expected),
+      s"$what: neither side reads a cached table:\n${expected.treeString}")
+  }
+
+  /** Whether every leaf of `plan` is an empty relation, as an optimizer-folded query's are. */
+  private def readsNoRows(plan: SparkPlan): Boolean = collect(plan) {
+    case leaf if leaf.children.isEmpty => leaf
+  }.forall {
+    case l: LocalTableScanExec => l.rows.isEmpty
+    case leaf => leaf.isInstanceOf[EmptyRelationExec]
   }
 
   /** The row engine's answer to `query`, checked by [[sameCacheReads]] against `actual`'s. */
@@ -554,15 +569,24 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
     expectedOf(spark.sql(query), actual, query)
 
   /**
-   * The row engine's rows for `query`, its plan checked by [[sameCacheReads]] against the plan
-   * Varka gives the same query, for a comparison that holds Varka's rows rather than its frame.
+   * The row engine's rows for `query`, its plan checked by [[sameCacheReads]] against
+   * `varkaPlan`, the plan Varka ran the same query with, for a comparison that holds Varka's
+   * rows rather than its frame.
    */
+  protected def expectedRows(query: String, varkaPlan: SparkPlan): Seq[Row] = {
+    val expected = spark.sql(query)
+    sameCacheReads(expected.queryExecution.executedPlan, varkaPlan, query, mustRead = true)
+    expected.collect().toSeq
+  }
+
+  /** As the other form, with Varka's plan for `query` built here. */
   protected def expectedRows(query: String): Seq[Row] =
-    expectedSql(query, varkaSpark.sql(query)).collect().toSeq
+    expectedRows(query, varkaSpark.sql(query).queryExecution.executedPlan)
 
   /** `expected`, checked by [[sameCacheReads]] against `actual`. */
   protected def expectedOf(expected: DataFrame, actual: DataFrame, what: String): DataFrame = {
-    sameCacheReads(expected.queryExecution.executedPlan, actual.queryExecution.executedPlan, what)
+    sameCacheReads(expected.queryExecution.executedPlan, actual.queryExecution.executedPlan, what,
+      mustRead = true)
     expected
   }
 }

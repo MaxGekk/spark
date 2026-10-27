@@ -365,7 +365,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
         assert(cached.isDefined, "expected the view to be served from the cache")
         assert(cached.get.find(isColumnarVarkaNode).isDefined,
           s"expected a columnar Varka node under the cache:\n${cached.get.treeString}")
-        checkAnswer(varkaSpark.table(view), spark.table(view))
+        val served = varkaSpark.table(view)
+        checkAnswer(served, expectedOf(spark.table(view), served, view))
       }
     } finally {
       for (session <- Seq(spark, varkaSpark)) session.catalog.uncacheTable(view)
@@ -588,7 +589,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
         val rows = actual.collect().toSeq
         // Read after the run: the metric counts the batches the kernel served.
         val served = kernelServed(plan)
-        val wrong = QueryTest.sameRows(expectedRows(query), rows).map(d =>
+        val wrong = QueryTest.sameRows(expectedRows(query, plan), rows).map(d =>
           s"$query differs from Spark's:\n$d")
         (served, s"$query:\n${plan.treeString}", wrong.toSeq)
       }
@@ -1324,18 +1325,16 @@ private object VarkaCoverageDifferentialSuite {
    * given its position as an int `rid` that no coverage row names; `where` filters the rows.
    * The TIMESTAMP_NTZ columns are derived: `ntz` is `d` at the time of day `t`, `ntz2` is `d2`
    * at `t2`, so they span the calendar and are null where a source is. A day the conversion
-   * cannot take, which only the edges fixture holds, gives the epoch rather than an error, and
-   * not a null. The expected session's cache is cleared after every test (`SparkSessionBinder`)
-   * while Varka's is not, so from a suite's second test the row engine plans over the raw rows:
-   * it inlines `ntz`'s CASE, infers no `isnotnull(ntz)`, and raises on the cast that Varka's
-   * cached plan never evaluates (VARKA-498). With `ntz` never null the cast runs on both sides.
+   * cannot take, which only the edges fixture holds, gives a null rather than an error. Both
+   * sides read the cached view ([[sameCacheReads]]), so neither evaluates the CASE again: an
+   * uncached row engine would inline it, infer no `isnotnull(ntz)`, and raise on a cast the
+   * cached plans never evaluate (VARKA-498).
    */
   def fixtureView(values: Seq[String], where: String = ""): String = {
     val withIds = values.zipWithIndex.map { case (v, rid) => s"($rid, ${v.stripPrefix("(")}" }
     def ntz(day: String, time: String): String =
       s"CASE WHEN abs(unix_date($day)) < $lastNtzDay " +
-        s"THEN CAST($day AS TIMESTAMP_NTZ) + ($time - TIME'00:00:00') " +
-        s"WHEN $day IS NOT NULL THEN TIMESTAMP_NTZ '1970-01-01 00:00:00' END"
+        s"THEN CAST($day AS TIMESTAMP_NTZ) + ($time - TIME'00:00:00') END"
     s"""SELECT rid, d, d2, i,
        |       CAST(m AS INTERVAL MONTH) AS ymm,
        |       CAST(y AS INTERVAL YEAR) AS ymy,
