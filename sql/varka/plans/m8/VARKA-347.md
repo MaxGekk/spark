@@ -86,11 +86,15 @@ line it rests on.
     on x86 only with AVX-512, VL below 512 bits (`x86.ad:1833-1836`), and lowered to rearranges and
     a blend elsewhere (`vectorIntrinsics.cpp:2724-2739`); `compress` takes a data-dependent mask,
     not the constant even-lane one, and has no splice. All three read arrays, not segments.
-12. **`compress` needs AVX2 with BMI2 and four long lanes on x86, and SVE on Arm, not "not
-    NEON".** `x86.ad:1349-1355` refuses `CompressV` below AVX2, and its case in
-    `x86.ad:1868-1875` falls through to `Op_VectorLongToMask` (`:1876-1882`), which refuses when
-    `UseAVX < 3 && !supports_bmi2()`. At 128 bits the AVX2 EPYC reads `long.compress` as `F` (the
-    two-lane mask refusal of m7 row 374). `aarch64_vector.ad:176-180` refuses it only when
+12. **`compress` needs AVX2 with BMI2 on x86, and SVE on Arm, not "not NEON".**
+    `x86.ad:1349-1355` refuses `CompressV` below AVX2, and its case in `x86.ad:1868-1875` refuses
+    it only below 128 bits or for a subword type without VBMI2, then falls through to
+    `Op_VectorLongToMask` (`:1876-1882`), which refuses when `UseAVX < 3 && !supports_bmi2()`. So
+    the lane count is no condition of `CompressV` on longs. At two long lanes (128 bits) `compress`
+    is still the fallback on x86, because its mask is: `x86.ad:1734-1744` refuses
+    `VectorLoadMask`, `VectorMaskCast` and `VectorStoreMask` at `vlen == 2`, the refusal m7 row 374
+    found, and `long.dec_compress` at 128 bits lists `compressExpandOp`, `compare`, `rearrangeOp`
+    and `blend` as failed. `aarch64_vector.ad:176-180` refuses it only when
     `UseSVE == 0`. The Neoverse N2 runner has SVE, and its census cells read `I` for all three at
     128 bits (`results/VARKA-376-census-neoverse-n2.json`). A host with NEON and no SVE is not in
     the census.
@@ -116,8 +120,9 @@ column" here. The design needs no new `LaneType`.
   clause is then met.
 - **The scale is checked with the bit width** (items 2, 3): a field at another scale is read
   rounded by Spark and wrong by a kernel.
-- **"No `compress` on NEON" is "no `compress` without SVE", and on x86 it needs BMI2 and four
-  long lanes** (item 12), and the census does not
+- **"No `compress` on NEON" is "no `compress` without SVE", and on x86 it needs AVX2 with BMI2,
+  and more than two long lanes, since x86 C2 lowers no two-lane mask** (item 12), and the census
+  does not
   cover the de-interleave as the row builds it (item 11), so step 2 adds those cells first.
 - **The cache arm has no version tag to add** (item 6): the format would carry the layout as a
   tagged field, as it carries the nanosecond structs. And it is a reader change for every consumer
@@ -172,8 +177,11 @@ names for two species of one lane type.
   constant even-lane mask; for the check, the same with the odd mask. Its op count is not known
   until step 2's cell; expected to lose to `rearrange`, which JDK 25 builds as two
   one-vector permutes and a blend (item 0.11).
-- **The two-vector `selectFrom`** is built only if step 2's cell reads `I` on the AVX2 runner; it
-  has a native form only under AVX-512, and it is not in the census.
+- **The two-vector `selectFrom`** is built only if the assembly (`dev/varka_emit.sh --asm`) on the
+  AVX2 runner shows it lowered to fewer instructions than the `rearrange` form, or the measurement
+  of section 4 times it faster there. Its census cell cannot decide it: it has a native form only
+  under AVX-512, and where it has none C2 lowers it inside the intrinsic to rearranges and a
+  blend while the decision still reads intrinsic (10.1 item 2).
 - **The shuffle-free check**, an arm over either form: a second load of the same rows at byte
   offset 8 gives `(hi0, lo1, hi1, ...)`, aligned with `a`'s `(lo0, hi0, lo1, ...)`, so
   `a8.compare(NE, a.lanewise(ASHR, 63))` under the even mask checks every high word with no
@@ -359,6 +367,22 @@ does not carry, each naming its row.
 
 ## 8. Questions for the owner
 
+Answered by the owner on 27 October 2026, after the advisor's review of the recommendations:
+
+1. **(b), with a threshold:** the cache layout is built, as a row of its own, only if the `BIGINT`
+   kernel beats the best sixteen-byte form by at least 1.5 times past L3 and loses nothing in L2,
+   at both 256 and 128 bits.
+2. **(a):** this row carries 348's equal-scale comparisons and null tests; the null tests read
+   validity only and are there for the coverage rows.
+3. **(a), `UpToPrecision`,** admitting the long lane for precision up to 18 only; the int arm of
+   2.3 stays an emission choice behind its option, not a second threshold. The admission reads the
+   `DecimalType` instance, since `VarkaTypes.lane` resolves through the type id alone today.
+4. **Row 27's rule, not (a) as first written:** a decimal kernel fuses at two long lanes as the
+   long filters do, unless 4.4's reading shows a loss the filters do not have; a decline there is
+   a recorded refusal with a scope item.
+
+The questions as they were put:
+
 1. **The cache layout.** (a) Build it in this row, off by default, as the row text says. (b)
    Measure first: the `BIGINT` kernel is its kernel side (4.1), so build it only if that beats the
    best de-interleave by a margin the owner names (2 times past L3 is the prediction), as a row of
@@ -389,4 +413,88 @@ matrix pass.
 
 ## 10. Outcome
 
-(Written when the work lands.)
+(Written when the work lands; step 2's reading is below.)
+
+### 10.1 Step 2: the census cells, on the laptop
+
+*27 October 2026, at `475322b11ca`, before any of the row's code. The laptop column of
+`sql/varka/operator_census.json` (AMD Ryzen AI 9 HX PRO 370, JDK 25.0.4.1, species of 512, 256 and
+128 bits); the runner columns wait on a `varka-width-audit.yml` dispatch on the branch.*
+
+**What was built.** Fourteen cells in `VarkaOperatorCensusCatalog`. Ten are new probe loops that
+read Arrow's sixteen-byte slots from native memory, mapped once a call through `VarkaSegments.map`
+as a kernel maps its input once a batch, in the forms of 2.2 and 2.3; four are the check's
+operators alone, on arrays, in the existing loops. The verdict and allocation are read as row 376
+reads every cell (`VARKA-376.md` 9).
+
+| cell | what the loop does | 512 | 256 | 128 | bytes a row at 128 |
+| :-- | :-- | :-- | :-- | :-- | :-- |
+| `long.dec_rearrange` | 2.2's `rearrange`: the low words of `a` and `b` | I | I | F | 220 |
+| `long.dec_selectFrom2` | the two-vector `selectFrom`, index vector 0, 2, 4, ... | I | I | I | 0 |
+| `long.dec_compress` | `compress` under the constant even mask, `b`'s half placed by `unslice(n / 2)`, `or` | I | I | F | 236 |
+| `long.dec_check_rearrange` | the `rearrange` form with its check: the odd shuffle for the high words, `hi != lo >> 63` and `lo` outside `10^18 - 1`, gathered in a mask from `fromLong(0)` and tested once by `anyTrue` | I | I | F | 584 |
+| `long.dec_check_rearrange_masked` | the same under the validity word's `fromLong` mask | I | I | F | 648 |
+| `long.dec_check_compress` | the `compress` form with its check, the high words under the odd mask | I | I | F | 664 |
+| `long.dec_check_offset` | the shuffle-free check: loads at byte offset 8, compares under the even mask, the precision on `rearrange`'s low words | I | I | F | 544 |
+| `long.dec_check_offset_masked` | the same with each row's validity bit spread to its even lane (`Long.expand`) | I | I | F | 672 |
+| `long.dec_tail` | the epilogue: both loads under `indexInRange`, the store under one | I | I | F | 220 |
+| `int.dec_int_splice` | 2.3's int arm: two `rearrange` de-interleaves, `L2I` parts 0 and -1, `or` | I | I | F | 220 |
+| `long.NE`, `long.GT`, `long.LT` | the check's compares alone | I | I | F | 92 |
+| `long.ASHR` | the sign shift alone | I | I | I | 0 |
+
+At 512 and 256 bits every cell is intrinsic. The ten slot cells allocate under a tenth of a byte
+a row, which is the segment each call maps (one object a call of 1024 rows), not the loop; the
+four array cells allocate nothing.
+
+**What it says.**
+
+1. **At 128 bits on x86 every form is the fallback but one.** Everything that makes or reads a
+   two-lane long mask falls back, as item 11 and `m7` row 374 have it, and the check's compares
+   do alone (`long.NE`, `GT`, `LT`; the census had no signed long compare, `VARKA-375.md` 0). The
+   exception is the two-vector `selectFrom`, which `x86.ad` (`:1833-1836`) matches as one
+   instruction on an AVX-512VL CPU below 512 bits, and whose loop needs no mask. Its low words
+   alone do not make a load: the check still needs a compare, so a decimal kernel at two long
+   lanes on x86 is the fallback whatever the form, and question 4 stands.
+2. **An `I` for the two-vector `selectFrom` does not mean native.** Where `x86.ad` refuses
+   `SelectFromTwoVector`, C2 lowers it inside the intrinsic to two rearranges, an `and` and a
+   blend (`vectorIntrinsics.cpp:2724-2739` and its lowering at `:2617`), and the decision still
+   reads `(intrinsic)`. So the rule 2.2 had, built only if the cell reads `I` on the AVX2
+   runner, cannot tell the two apart: on the EPYC 7763, which has no AVX-512, an `I` can only be the
+   lowered form, the `rearrange` form's work plus the index wrapping. Step 3 needs the
+   assembly (`dev/varka_emit.sh --asm`) or the measurement for it, not the cell, and 2.2 now
+   decides the form by those.
+3. **`compress`'s fallback at 128 bits is in both halves**: `compressExpandOp`, and the
+   `unslice` splice's `compare`, `rearrangeOp` and `blend`. Whether AVX2 with BMI2 lowers both at
+   256 bits is the EPYC column's cell (item 12).
+4. **The masked shuffle-free check builds three masks per output vector** (two spread validity
+   words and the row word for the precision check) where the masked `rearrange` check builds one;
+   all are intrinsic here at 512 and 256. That is counted from the loop, not timed.
+5. **What this means for 2.2's default form.** On the laptop the census separates no form at 512
+   and 256 bits: all are intrinsic and allocation-free, so the default is the measurement's
+   (section 4), with `rearrange` as 2.2 has it until then. The runner columns can still remove a
+   form at 256 bits on AVX2 (`compress`, by item 12) or at 128 bits on the Neoverse N2.
+
+**Departures from step 2's list.** A `rearrange` cell from the slots was added beside the
+existing array cell, so the forms are read on one footing; and the check's compares and shift
+were added as cells of their own, so that a fallback in a form's cell can be told from one in its
+check. The two masked loops are written out rather than shared with the dense ones through a
+helper: with a helper, the inlining the suite reads showed no C2 compile of the loop at 128 bits.
+And the suite's second-species tell is narrowed to a shape's own class (`Long256Vector` and the
+like), as `skills/vector-api-and-width.md` defines it: C2's printer keys a call site by its chain
+of bcis, and the segment loads print "callee changed to `LongVector::fromMemorySegment`" with one
+species in the JVM, which the wider pattern read as a second species in every slot cell. The
+narrowed tell trips in none of the two-species cells either, at any width: the printer says
+"callee changed to" only when one chain of bcis meets two callees, and those loops call each
+species from its own site. So the suite asserts only the tell's absence in one-species cells.
+
+**What the cells do not cover.** The shuffle-free check's masked load at byte offset 8 in the
+last full group of a batch (2.2) has no cell: the offset cells load unmasked, reading the 64
+bytes of padding past the slots. And the cells' shuffles and masks (`EVEN`, `ODD`, `EVEN_LANES`,
+the bound) are `static final` constants, which C2 can fold, while 2.2 builds them in the kernel's
+prologue from `SPECIES_PREFERRED`; the measurement of section 4 reads the kernel's form.
+
+**Against the plan's citations.** Item 12 said `compress` on x86 needs four long lanes, citing
+`x86.ad:1868-1875`, which refuse `CompressV` only below 128 bits (and a subword type without
+VBMI2) before falling through to the BMI2 check; the two-lane refusal is the mask lowering of row
+374 (`x86.ad:1734-1744`), which the cells' `failed` lists show. Item 12 and the list above are
+corrected to that. The other line references of items 11 and 12 match the JDK source.

@@ -5513,7 +5513,12 @@ mask-cast change JDK-8370863 with fix version 27. This item is what follows on t
    bugreport.java.com (reference `efdbbe29-dfaf-419b-a3c2-084dfb421bc5`; text in
    `m8/results/VARKA-396/bugreport.md`), asking for a fix or a backport of JDK-8370863's rule
    to 25 updates. Follow the JBS bug it becomes; the guard stays on 25 until a 25u release
-   carries the fix.
+   carries the fix. *27 October 2026:* the report became JDK-8395878, closed the same day as a
+   duplicate of JDK-8378968, "C2 VectorAVX AVX2: wrong result, bad optimization in
+   `VectorLongToMaskNode::Ideal`" (filed 2 March 2026, affects 20 on, fixed in 27 on 16 March
+   2026). Its fix caused JDK-8380290, an AArch64 SVE assert on `VectorMaskCast`, also fixed in 27,
+   so a backport carries both. No 25u backport of JDK-8378968 is recorded yet; the next step is to
+   ask for one on the 25u list, naming both issues. Step 1's trial on JDK 27 now tests that fix.
 4. **JDK 29 as the migration target.** JDK 25 is the long-term release Spark deploys on, and 26
    and 27 are not; the base moves at 29, the next long-term release (September 2027), with
    Spark's own JDK support. Not before.
