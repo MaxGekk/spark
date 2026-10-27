@@ -127,7 +127,7 @@ class VarkaTimeArithmeticSuite extends QueryTest with VarkaMaybeThrows with Vark
       val actual = varkaSpark.sql(query)
       val plan = actual.queryExecution.executedPlan
       assertFused(plan)
-      checkAnswer(actual, spark.sql(query))
+      checkAnswer(actual, expectedSql(query, actual))
       assertKernelsRan(plan)
     }
     val view = "varka_time_out"
@@ -212,7 +212,7 @@ class VarkaTimeArithmeticSuite extends QueryTest with VarkaMaybeThrows with Vark
     val actual = varkaSpark.sql(query)
     val plan = actual.queryExecution.executedPlan
     assertFused(plan)
-    checkAnswer(actual, spark.sql(query))
+    checkAnswer(actual, expectedSql(query, actual))
     assertKernelsRan(plan)
     val node = plan.collectFirst { case v if isVarkaNode(v) => v }.get
     val declined = node.metrics.get("numFallbackBatchesDeclined").map(_.value).getOrElse(0L)
@@ -236,7 +236,7 @@ class VarkaTimeArithmeticSuite extends QueryTest with VarkaMaybeThrows with Vark
     val actual = varkaSpark.sql(query)
     val plan = actual.queryExecution.executedPlan
     assertFused(plan)
-    checkAnswer(actual, spark.sql(query))
+    checkAnswer(actual, expectedSql(query, actual))
     val node = plan.collectFirst { case v if isVarkaNode(v) => v }.get
     val declined = node.metrics.get("numFallbackBatchesDeclined").map(_.value).getOrElse(0L)
     assert(declined > 0L, s"expected the crossing batch to decline, metrics: ${node.metrics}")
@@ -275,7 +275,7 @@ class VarkaTimeArithmeticSuite extends QueryTest with VarkaMaybeThrows with Vark
     val query = s"SELECT hour(t) + 1 AS h, minute(t) AS m FROM $day"
     val actual = varkaSpark.sql(query)
     assertFused(actual.queryExecution.executedPlan)
-    checkAnswer(actual, spark.sql(query))
+    checkAnswer(actual, expectedSql(query, actual))
   }
 
   test("time_to_millis, time_to_micros and the time_from_* conversions agree with the row " +

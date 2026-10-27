@@ -325,8 +325,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
   private def checkRowConsumer(row: CoverageRow, fixture: String): Unit = {
     val query = queryFor(row, fixture)
     val context = s"row consumer, $fixture, ${row.family}: ${row.sql}"
-    val expected = spark.sql(query)
     val actual = varkaSpark.sql(query)
+    val expected = expectedSql(query, actual)
     val plan = actual.queryExecution.executedPlan
     withClue(context) {
       assertFused(plan)
@@ -500,7 +500,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
       row: CoverageRow, fixture: String, mustFuse: Boolean = false): Seq[String] = {
     val p = row.executable
     def query(where: String): String = s"SELECT $allColumns FROM $fixture WHERE $where"
-    def onSpark(where: String): Seq[Row] = spark.sql(query(where)).collect().toSeq
+    def onSpark(where: String): Seq[Row] = expectedRows(query(where))
     // Varka's answer, from a Varka filter whose kernel served the batches: a filter the rule
     // left to Spark, or one that declined, would make the comparison Spark against itself.
     // `fused = false` is a filter the optimizer removed or turned into a null test over a
@@ -527,7 +527,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
     (onVarka(p), onVarka(s"NOT ($p)"), onVarka(unknown, fuses(unknown))) match {
       case (Right(t), Right(f), Right(u)) =>
         partitionFindings(t, f, u, onSpark(p), onSpark(s"NOT ($p)"), onSpark(unknown),
-          spark.sql(s"SELECT $allColumns FROM $fixture").collect().toSeq) ++
+          expectedRows(s"SELECT $allColumns FROM $fixture")) ++
           // The known rows, as a filter of their own: Spark's, and exactly the true and false.
           (onVarka(known, fuses(known)) match {
             case Right(k) =>
@@ -586,7 +586,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
         val rows = actual.collect().toSeq
         // Read after the run: the metric counts the batches the kernel served.
         val served = kernelServed(plan)
-        val wrong = QueryTest.sameRows(spark.sql(query).collect().toSeq, rows).map(d =>
+        val wrong = QueryTest.sameRows(expectedRows(query), rows).map(d =>
           s"$query differs from Spark's:\n$d")
         (served, s"$query:\n${plan.treeString}", wrong.toSeq)
       }
@@ -617,7 +617,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
       s"SELECT rid FROM $fixture WHERE b AND l < l2 AND d < d2",
       s"SELECT rid, CASE WHEN b THEN l ELSE l2 END AS x, CASE WHEN b THEN d ELSE d2 END AS y " +
         s"FROM $fixture").map { query =>
-      val expected = spark.sql(query).collect().toSeq
+      val expected = expectedRows(query)
       val df = varkaSpark.sql(query)
       val actual = df.collect().toSeq
       QueryTest.sameRows(expected, actual).foreach(d => fail(s"$query differs from Spark's:\n$d"))
@@ -795,7 +795,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
         case Some(q) =>
           val (varka, plan) = runOutcome(varkaSpark, q)
           val served = varka.isInstanceOf[Answered] && plan.exists(kernelServed)
-          val difference = outcomeDifference(outcome(spark, q), varka)
+          val difference = outcomeDifference(expectedOutcome(q, plan), varka)
           val reach = if (position == Alone || !strict) None
           else if (served && declined.isDefined) {
             Some("served by a kernel, but on the declined list: remove the stale entry")
@@ -1199,9 +1199,9 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
       val view = partitionView(k, partition)
       val q = query(view)
       val where = s"$partition the domain, in $form"
-      val expected = outcome(spark, q)
       val ((actual, plan), events) =
         VarkaJfrTestSupport.withJfrRecording(classOf[VarkaFallbackEvent])(runOutcome(varkaSpark, q))
+      val expected = expectedOutcome(q, plan)
       val fallbacks = events.filter(VarkaJfrTestSupport.isEvent(_, classOf[VarkaFallbackEvent]))
       val statuses = fallbacks.filter(_.getString("cause") == VarkaFallbackEvent.RANGE_DECLINED)
         .map(_.getInt("status"))
@@ -1298,7 +1298,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
       withBothConf(SQLConf.IN_MEMORY_PARTITION_PRUNING.key, "false") {
         VarkaJfrTestSupport.withJfrRecording(classOf[VarkaFallbackEvent])(runOutcome(varkaSpark, q))
       }
-    assert(outcomeDifference(outcome(spark, q), actual).isEmpty)
+    assert(outcomeDifference(expectedOutcome(q, plan), actual).isEmpty)
     assert(!events.exists(VarkaJfrTestSupport.isEvent(_, classOf[VarkaFallbackEvent])))
     assert(plan.exists(kernelServed), plan.map(_.treeString).getOrElse("(no plan)"))
     val days = spark.sql(q).queryExecution.executedPlan.executeCollect()

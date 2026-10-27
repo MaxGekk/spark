@@ -47,14 +47,27 @@ trait VarkaMaybeThrows extends QueryTest with VarkaSharedSessions {
     runOutcome(session, query)._1
 
   /**
+   * The row engine's outcome for `query`, its plan checked by [[sameCacheReads]] against
+   * `varkaPlan`, the plan Varka ran the same query with, when both got as far as a plan.
+   */
+  protected def expectedOutcome(query: String, varkaPlan: Option[SparkPlan]): Outcome = {
+    val (onSpark, sparkPlan) = runOutcome(spark, query)
+    for (expected <- sparkPlan; actual <- varkaPlan) sameCacheReads(expected, actual, query)
+    onSpark
+  }
+
+  /**
    * Runs `query` on the row engine and on Varka, fails the test with how Varka's outcome differs
    * from Spark's, and returns the outcome they share - rows or one error - so that the caller
-   * can still say which it expected. It compares outcomes only: whether a kernel served the query
-   * is the caller's to assert, since a comparison no kernel took part in holds Spark to itself.
+   * can still say which it expected. Both plans must read the same cached tables
+   * ([[sameCacheReads]]); beyond that it compares outcomes only: whether a kernel served the
+   * query is the caller's to assert, since a comparison no kernel took part in holds Spark to
+   * itself.
    */
   protected def checkSparkAnswerMaybeThrows(query: String): Outcome = {
-    val onSpark = outcome(spark, query)
-    difference(onSpark, outcome(varkaSpark, query)).foreach(d => fail(s"$query\n$d"))
+    val (onVarka, varkaPlan) = runOutcome(varkaSpark, query)
+    val onSpark = expectedOutcome(query, varkaPlan)
+    difference(onSpark, onVarka).foreach(d => fail(s"$query\n$d"))
     onSpark
   }
 

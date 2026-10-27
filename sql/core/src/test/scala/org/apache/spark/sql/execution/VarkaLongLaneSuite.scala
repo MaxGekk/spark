@@ -135,8 +135,8 @@ class VarkaLongLaneSuite extends QueryTest with VarkaSharedSessions with VarkaTe
    * a fused long output into an Arrow batch.
    */
   private def checkFused(query: String, fixture: String, predicate: Boolean): Unit = {
-    val expected = spark.sql(query)
     val actual = varkaSpark.sql(query)
+    val expected = expectedSql(query, actual)
     val plan = actual.queryExecution.executedPlan
     withClue(s"row consumer, $fixture: $query") {
       assertFused(plan)
@@ -243,7 +243,7 @@ class VarkaLongLaneSuite extends QueryTest with VarkaSharedSessions with VarkaTe
       val actual = varkaSpark.sql(query)
       withClue(s"$fixture: $query") {
         assertFused(actual.queryExecution.executedPlan)
-        checkAnswer(actual, spark.sql(query))
+        checkAnswer(actual, expectedSql(query, actual))
       }
     }
   }
@@ -262,14 +262,14 @@ class VarkaLongLaneSuite extends QueryTest with VarkaSharedSessions with VarkaTe
           val aloneActual = varkaSpark.sql(alone)
           withClue(s"$fixture: $alone") {
             assertNotFused(aloneActual.queryExecution.executedPlan)
-            checkAnswer(aloneActual, spark.sql(alone))
+            checkAnswer(aloneActual, expectedSql(alone, aloneActual))
           }
           val beside = s"SELECT l FROM $fixture WHERE d > d2 AND $col > " +
             s"$prefix'2021-03-14 02:00:00'"
           val besideActual = varkaSpark.sql(beside)
           withClue(s"$fixture: $beside") {
             assertFused(besideActual.queryExecution.executedPlan)
-            checkAnswer(besideActual, spark.sql(beside))
+            checkAnswer(besideActual, expectedSql(beside, besideActual))
           }
         }
       }
@@ -286,7 +286,7 @@ class VarkaLongLaneSuite extends QueryTest with VarkaSharedSessions with VarkaTe
       val actual = varkaSpark.sql(query)
       withClue(s"$fixture: $query") {
         assertFused(actual.queryExecution.executedPlan)
-        checkAnswer(actual, spark.sql(query))
+        checkAnswer(actual, expectedSql(query, actual))
       }
     }
   }
