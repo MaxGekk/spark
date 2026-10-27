@@ -792,7 +792,10 @@ final class Slots {
           if (cse && bodyUses.getOrDefault(node, 0) > 1 && !(node instanceof LiteralSlot)) {
             s.sharedSlot.put(node, slot++);
           }
-          if (!dense && (node instanceof Greatest || node instanceof Least)) {
+          // A floating pick reads each operand twice, so it parks both in either body, where an
+          // integral pick needs them only to null-skip in the masked one.
+          if ((!dense || node.laneType().isFloating())
+              && (node instanceof Greatest || node instanceof Least)) {
             s.pairTmp.put(node, new int[] {slot++, slot++});
           }
           // The overflow check reads both operands and the result after the lanewise op has
@@ -881,6 +884,9 @@ final class Slots {
           if (node instanceof InRanges) {
             s.rangeTmp.put(node, new int[] {slot++, slot++, slot++});
           }
+          if (isFloatingCompare(node)) {
+            s.pairTmp.put(node, new int[] {slot++, slot++});
+          }
           s.condMask.put(node, slot++);
         } else {
           if (node instanceof Not n) {
@@ -890,6 +896,9 @@ final class Slots {
           } else {
             if (node instanceof InRanges) {
               s.rangeTmp.put(node, new int[] {slot++, slot++, slot++});
+            }
+            if (isFloatingCompare(node)) {
+              s.pairTmp.put(node, new int[] {slot++, slot++});
             }
             s.kt.put(node, slot);
             slot += 2;
@@ -1643,5 +1652,14 @@ final class Slots {
           && !s.liveWordOwners.contains(own) ? DEAD_WORD : owner;
     }
     return new FragmentKey(FragmentKind.CHRONO_PREFIX, chronoChild(node), word);
+  }
+
+  /**
+   * Whether {@code node} compares at a floating lane, whose lowering reads each operand twice
+   * ({@code VarkaVectorWalk.emitFloatingCompare}) and so parks both in a pair of locals.
+   */
+  private static boolean isFloatingCompare(VarkaVectorIR node) {
+    return (node instanceof VarkaVectorIR.Compare || node instanceof VarkaVectorIR.NullSafeEqual)
+        && node.laneType().isFloating();
   }
 }

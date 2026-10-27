@@ -230,6 +230,33 @@ clock time's seconds.
 | generated | `coverage.json`, `docs/sql-varka.md`, `width_audit.json`, `emitted_bytes.json` |
 | generated | `types.tsv`, `census.tsv`, `casts_fused.tsv` |
 
+### 5.1 Steps 3 and 4 as built (27 October 2026)
+
+Where the code departs from 2.4 to 2.7, and what is still owed:
+
+- **`isnan` is no new IR node.** It is `x = NaN` under the lane's `=`, made total as
+  `(x = NaN) IS NOT NULL AND x = NaN`, and `nanvl(a, b)` is `IfElse` over it. The answer is 2.5's;
+  the cost feature of 2.7 has no node to attach to, and the compare's weight
+  (`VarkaEmitBudget.FLOATING_ORDER_WEIGHT`) covers it.
+- **No literal-specialised compares yet.** Every floating compare, against a literal or not, takes
+  the general formula of 2.5. The specialised forms, and their table rows, are owed by 9.
+- **No mixed-kind kernel yet.** A `DOUBLE` root beside a `LONG` one takes a kernel of its own in a
+  projection, and a floating conjunct beside one that an integral lane reads stays a row filter.
+  The mask crossing of 2.4 (`VectorMask.cast`) is the step after these two.
+- **No warm-up blocks yet**: `dev/varka_new_lane.py` lists them as owed.
+- **The harnesses still read the literal table by `LaneType.LONG`**: `VarkaCompiledCheck`,
+  `VarkaReplay`, `VarkaVariantChecks`, the coverage differential and its fuzz, the bytes suite,
+  `VarkaEmitDump`, the IR fuzz, the width audit probe and the time benchmark; and
+  `VarkaReference` refuses a floating node. They are switched to the lane's width, and the
+  reference taught 2.6's ordering, with the coverage rows, after #1031 merges. Until then the new
+  bits conversion of 2.2 is read only by `VarkaTypesSuite`.
+- **The end-to-end suite runs its filters with the cache's batch pruning off.** Spark's batch
+  statistics leave NaN out, so a filter that matches a NaN row can prune that row's batch on both
+  sides (SPARK-58482), and the kernel would never see the rows it is tested on.
+- **Not floating gaps:** a `BOOLEAN` output and a `CASE` with no `ELSE` fuse on no lane yet (the
+  latter is row 333), so the suite shows a condition's three values through a `CASE` with an
+  `ELSE`.
+
 ## 6. Out of this row
 
 Arithmetic (342), casts (343), rounding (344), the math family (345 to 358), the canonicalisation
