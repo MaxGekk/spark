@@ -147,6 +147,51 @@ public final class VarkaTypes {
       return admission instanceof Admission.OnLane(LaneType lane)
           ? Optional.of(lane) : Optional.empty();
     }
+
+    /**
+     * The value Spark's row holds for a lane value whose bits, sign-extended to a long, are
+     * {@code bits}: the integral types' boxed value at their width, a floating type's value
+     * with those bits, and a condition's {@code Boolean}. The tests' oracles hand it to
+     * Spark's {@code eval}, which reads a {@code DOUBLE} input as a {@code Double} and would
+     * fail on the {@code Long} a width switch makes of it.
+     */
+    public Object sparkValue(long bits) {
+      if (admission instanceof Admission.AsCondition) {
+        return bits != 0L;
+      }
+      return switch (lane().orElseThrow(() -> noLane())) {
+        case BYTE -> (byte) bits;
+        case SHORT -> (short) bits;
+        case INT -> (int) bits;
+        case LONG -> bits;
+        case FLOAT -> Float.intBitsToFloat((int) bits);
+        case DOUBLE -> Double.longBitsToDouble(bits);
+      };
+    }
+
+    /**
+     * {@link #sparkValue}'s inverse: the lane bits, sign-extended to a long, of a value Spark's
+     * row or {@code eval} gives for the type. A floating value's bits are its raw ones, so a
+     * NaN's payload and a zero's sign survive the round trip.
+     */
+    public long bits(Object sparkValue) {
+      return switch (sparkValue) {
+        case Boolean b when admission instanceof Admission.AsCondition -> b ? 1L : 0L;
+        case Float f when lane().orElse(null) == LaneType.FLOAT -> Float.floatToRawIntBits(f);
+        case Double d when lane().orElse(null) == LaneType.DOUBLE ->
+            Double.doubleToRawLongBits(d);
+        case Byte b when lane().orElse(null) == LaneType.BYTE -> b;
+        case Short h when lane().orElse(null) == LaneType.SHORT -> h;
+        case Integer i when lane().orElse(null) == LaneType.INT -> i;
+        case Long l when lane().orElse(null) == LaneType.LONG -> l;
+        default -> throw VarkaErrors.illegalArgument("a " + sparkValue.getClass().getSimpleName()
+            + " is not a " + sql + " value on a lane");
+      };
+    }
+
+    private RuntimeException noLane() {
+      return VarkaErrors.illegalArgument(sql + " is read on no lane");
+    }
   }
 
   /**
@@ -272,10 +317,12 @@ public final class VarkaTypes {
       case LONG -> new Info(id, "bigint", "BIGINT", new Admission.OnLane(LaneType.LONG), 64,
           List.of(DataTypes.LongType), List.of(LaneType.LONG),
           new Conformance.Suite("BigInt"));
-      case FLOAT -> new Info(id, "float", "FLOAT", new Admission.Owed("341"), 32,
-          List.of(DataTypes.FloatType), List.of(), new Conformance.NotLanded());
-      case DOUBLE -> new Info(id, "double", "DOUBLE", new Admission.Owed("341"), 64,
-          List.of(DataTypes.DoubleType), List.of(), new Conformance.NotLanded());
+      case FLOAT -> new Info(id, "float", "FLOAT", new Admission.OnLane(LaneType.FLOAT), 32,
+          List.of(DataTypes.FloatType), List.of(LaneType.FLOAT),
+          new Conformance.Owed("Float", "341"));
+      case DOUBLE -> new Info(id, "double", "DOUBLE", new Admission.OnLane(LaneType.DOUBLE), 64,
+          List.of(DataTypes.DoubleType), List.of(LaneType.DOUBLE),
+          new Conformance.Owed("Double", "341"));
       // Every precision is sixteen bytes a row in Arrow (`ArrowUtils.toArrowType`); the tests
       // probe one form on each side of the 64-bit boundary at precision 18.
       case DECIMAL -> new Info(id, "dec", "DECIMAL(10, 2)", new Admission.Owed("347"), 128,

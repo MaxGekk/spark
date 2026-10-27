@@ -414,10 +414,19 @@ class VarkaFilterExecSuite extends QueryTest with SharedSparkSession with VarkaT
       And(dLess10, doubleResidual), withDouble)
     assert(mixed.head === "(d < DATE '1970-01-11'): fused")
     assert(mixed(1).startsWith(
-      "(f > 5.0D): residual (a double column: the DOUBLE lane is row 341's"))
+      "(f > 5.0D): residual (a comparison of floating values, which needs Spark's NaN and"),
+      mixed)
     // A filter no conjunct of which fuses still says why, conjunct by conjunct.
     val none = VarkaFusionReport.predicateLines(doubleResidual, withDouble)
-    assert(none.size == 1 && none.head.startsWith("(f > 5.0D): residual (a double column"), none)
+    assert(none.size == 1 &&
+      none.head.startsWith("(f > 5.0D): residual (a comparison of floating values"), none)
+    // A floating null test fuses as a choice's condition, but as a filter's conjunct it stays
+    // with the row filter, so the date conjunct beside it keeps the kernel's integral lane.
+    val nullTest = VarkaFusionReport.predicateLines(
+      And(IsNotNull(doubleAttr), dLess10), withDouble)
+    assert(nullTest === Seq("(f IS NOT NULL): residual (a condition on the DOUBLE lane in a " +
+      "filter: its kernel meets on an integral lane, and a mask crossing from a floating lane " +
+      "is not built: (f IS NOT NULL))", "(d < DATE '1970-01-11'): fused"), nullTest)
   }
 
   test("a nondeterministic filter is declined with its reason, conjunct by conjunct") {
