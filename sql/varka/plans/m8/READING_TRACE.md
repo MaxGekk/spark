@@ -279,7 +279,8 @@ The dropped items, and the missing part of each partly one. Each entry: the reco
 search terms that found nothing (or only an unrelated hit, named), and a proposal. A proposal
 is a new row only for Varka's own work that serves this milestone's done-when list (the new
 types, their casts and expressions); "row edit" means a clause in an existing row, which needs no
-new number. Nothing below has been added; the owner decides.
+new number. Items 1 to 9 were added to their rows on 27 October 2026 at the owner's word; the
+rest has not been added, and the owner decides.
 
 **Fixtures and tests for this milestone's rows.**
 
