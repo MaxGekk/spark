@@ -108,6 +108,8 @@ public final class VarkaKernelPlan {
       }
       if (node instanceof ColumnRef c) {
         inputLanes.putIfAbsent(c.ordinal(), c.lane());
+      } else if (node instanceof VarkaVectorIR.DecimalColumn d) {
+        inputLanes.putIfAbsent(d.ordinal(), d.lane());
       }
       for (VarkaVectorIR child : VarkaVectorIR.childrenOf(node)) {
         operands.add(child);

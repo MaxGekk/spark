@@ -75,6 +75,8 @@ public final class VarkaReference {
     return switch (node) {
       case ColumnRef c -> isNull[c.ordinal()] ? OptionalInt.empty()
           : OptionalInt.of(row[c.ordinal()]);
+      case DecimalColumn c ->
+          throw new IllegalArgumentException("a decimal column is on the long lane: " + c);
       case LiteralSlot l -> OptionalInt.of(lits[l.index()]);
       case AddDays(var days, var offset) -> both(days, offset, row, isNull, lits, (d, o) -> d + o);
       case SubDays(var days, var offset) -> both(days, offset, row, isNull, lits, (d, o) -> d - o);
@@ -404,6 +406,11 @@ public final class VarkaReference {
       long[] lits) {
     return switch (node) {
       case ColumnRef c -> isNull[c.ordinal()] ? OptionalLong.empty()
+          : OptionalLong.of(row[c.ordinal()]);
+      // The unscaled value, the slot's low word. Whether the slot holds a value of the type at
+      // all reads its high word, which a row of lane values does not carry; the slot table of
+      // VarkaDecimalLoadSuite checks that against Spark's column reader.
+      case DecimalColumn c -> isNull[c.ordinal()] ? OptionalLong.empty()
           : OptionalLong.of(row[c.ordinal()]);
       case LiteralSlot l -> OptionalLong.of(lits[l.index()]);
       case IntArith n -> longArith(n, row, isNull, lits);

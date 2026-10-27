@@ -48,6 +48,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Day
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfWeek;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfWeekIso;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfYear;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DecimalColumn;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Greatest;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedDay;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
@@ -199,6 +200,7 @@ final class VarkaVectorWalk {
               lane.fromMemorySegmentDense);
         }
       }
+      case DecimalColumn c -> emitDecimalLoad(cb, c, dense, analysis, s);
       case LiteralSlot l -> {
         line(cb, analysis, node);
         int[] broadcast = s.broadcastSlots(lane);
@@ -511,6 +513,111 @@ final class VarkaVectorWalk {
     cb.iload(s.lanes);
     cb.invokeinterface(VECTOR_SPECIES, "indexInRange", INDEX_IN_RANGE);
     cb.invokestatic(Lane.INT.vector, "fromMemorySegment", Lane.INT.fromMemorySegmentMasked);
+  }
+
+  /** The bytes of one Arrow decimal slot: the low word, then the high word. */
+  static final long DECIMAL_SLOT_BYTES = 16L;
+
+  /**
+   * A {@link DecimalColumn}: the group's low words, left on the operand stack, with its slots
+   * checked.
+   *
+   * <p>A lane group of {@code n} rows is {@code 2n} longs of slots, laid out
+   * {@code (lo0, hi0, lo1, hi1, ...)}, so it is two vectors: {@code a} at the group's first slot
+   * and {@code b} one vector further on, each holding half the rows. The two-vector
+   * {@code rearrange} under the prologue's even-lane shuffle takes lanes {@code 0, 2, 4, ...} of
+   * {@code a} and then of {@code b} - the low words, in row order - and the odd-lane shuffle the
+   * high words the same way ({@code Slots#decimalShuffle}). In the epilogue both loads are masked
+   * to the {@code 2 * lanes} longs of the remaining rows, so neither reads past the batch.
+   *
+   * <p>The check condemns a lane whose high word is not {@code lo >> 63} or whose low word is
+   * outside {@code [-(10^p - 1), 10^p - 1]}: the odd shuffle, a shift and three compares, ORed
+   * into one mask, which {@link #emitGuardCollect} qualifies by the column's validity word in a
+   * masked body, so a null slot never declines, and folds into the body's accumulator, tested once
+   * the body is done.
+   */
+  private static void emitDecimalLoad(CodeBuilder cb, DecimalColumn c, boolean dense,
+      Analysis analysis, Slots s) {
+    Lane lane = Lane.LONG;
+    int[] halves = s.decimalTmp.get(c);
+    Integer low = s.guardTmp.get(c);
+    if (analysis.laneOf(c) != lane || analysis.lane != lane) {
+      throw VarkaErrors.illegalState("a decimal column read in a " + analysis.lane
+          + " emission: " + VarkaVectorIR.canonical(c));
+    }
+    if (halves == null || low == null || s.decimalShuffle == null) {
+      // Refused by name: without its locals the check would be dropped silently.
+      throw VarkaErrors.illegalState("a decimal column with no locals planned: "
+          + VarkaVectorIR.canonical(c));
+    }
+    line(cb, analysis, c);
+    for (int half = 0; half < 2; half++) {
+      cb.aload(s.species);
+      cb.aload(s.srcSeg(c.ordinal()));
+      cb.iload(s.iVar);
+      cb.i2l();
+      cb.loadConstant(DECIMAL_SLOT_BYTES);
+      cb.lmul();
+      if (half == 1) {
+        cb.aload(s.species);
+        cb.invokeinterface(VECTOR_SPECIES, "vectorByteSize", SPECIES_LENGTH);
+        cb.i2l();
+        cb.ladd();
+      }
+      cb.getstatic(BYTE_ORDER, "LITTLE_ENDIAN", BYTE_ORDER);
+      if (s.epilogue) {
+        // The longs of the remaining rows' slots that this vector covers: from 0 in `a`, from
+        // the vector's length in `b`, up to 2 * lanes.
+        cb.aload(s.species);
+        if (half == 0) {
+          cb.loadConstant(0);
+        } else {
+          cb.aload(s.species);
+          cb.invokeinterface(VECTOR_SPECIES, "length", SPECIES_LENGTH);
+        }
+        cb.iload(s.lanes);
+        cb.iconst_1();
+        cb.ishl();
+        cb.invokeinterface(VECTOR_SPECIES, "indexInRange", INDEX_IN_RANGE);
+        cb.invokestatic(lane.vector, "fromMemorySegment", lane.fromMemorySegmentMasked);
+      } else {
+        cb.invokestatic(lane.vector, "fromMemorySegment", lane.fromMemorySegmentDense);
+      }
+      cb.astore(halves[half]);
+    }
+    // lo = a.rearrange(EVEN, b), parked for the check and left on the stack for the parent.
+    emitRearrange(cb, halves, s.decimalShuffle[0]);
+    cb.dup();
+    cb.astore(low);
+    // hi.compare(NE, lo >> 63)
+    emitRearrange(cb, halves, s.decimalShuffle[1]);
+    cb.getstatic(VECTOR_OPERATORS, "NE", VO_COMPARISON);
+    cb.aload(low);
+    cb.getstatic(VECTOR_OPERATORS, "ASHR", VO_BINARY);
+    cb.loadConstant((long) (Long.SIZE - 1));
+    cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseBinaryI());
+    cb.invokevirtual(lane.vector, "compare", lane.compareVV);
+    // | lo > 10^p - 1 | lo < -(10^p - 1)
+    long bound = c.bound();
+    cb.aload(low);
+    cb.getstatic(VECTOR_OPERATORS, "GT", VO_COMPARISON);
+    cb.loadConstant(bound);
+    cb.invokevirtual(lane.vector, "compare", lane.compareVI);
+    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+    cb.aload(low);
+    cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
+    cb.loadConstant(-bound);
+    cb.invokevirtual(lane.vector, "compare", lane.compareVI);
+    cb.invokevirtual(VECTOR_MASK, "or", MASK_BINARY);
+    emitGuardCollect(cb, c, dense ? null : s.wordRef.get(c), dense, analysis, s);
+  }
+
+  /** {@code a.rearrange(shuffle, b)} over the two parked halves of a decimal lane group. */
+  private static void emitRearrange(CodeBuilder cb, int[] halves, int shuffle) {
+    cb.aload(halves[0]);
+    cb.aload(shuffle);
+    cb.aload(halves[1]);
+    cb.invokevirtual(LONG_VECTOR, "rearrange", REARRANGE_TWO);
   }
 
   /**

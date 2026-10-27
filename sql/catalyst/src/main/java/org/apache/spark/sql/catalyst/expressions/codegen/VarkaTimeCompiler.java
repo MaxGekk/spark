@@ -156,6 +156,15 @@ final class VarkaTimeCompiler {
       // with the interval leaf, Spark's own typing decides where such a value may appear - never
       // in a date or an int position - so the leaf cannot put one there, and the IR's
       // constructors refuse a tree that mixes it with the int lane anyway.
+      // A decimal column the registry puts on the long lane (VARKA-347) is not a long column:
+      // its sixteen-byte slots are read by its own leaf, with the check Spark's reader makes,
+      // and no operator over that leaf is compiled yet, so it declines here, ahead of the long
+      // column's arm below, which would read the slots as eight-byte longs. Its comparisons
+      // and null tests are row 348's, which VARKA-347 carries (its plan's 2.5).
+      case BoundReference br when br.dataType() instanceof DecimalType
+          && VarkaTypes.lane(br.dataType()).isPresent() ->
+          () -> sink.decline("a " + br.dataType().simpleString() + " column: the operators "
+              + "over a decimal are row 348's", br);
       case BoundReference br
           when VarkaTypes.lane(br.dataType()).orElse(null) == LaneType.LONG ->
           () -> Optional.of(VarkaNodeCompiler.columnRef(br, inputs, LaneType.LONG));

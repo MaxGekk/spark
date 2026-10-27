@@ -142,6 +142,7 @@ public final class VarkaWordCensus {
   static W pure(VarkaVectorIR n, boolean coalesce, boolean absorb) {
     return switch (n) {
       case ColumnRef c -> new In(c.ordinal());
+      case DecimalColumn c -> new In(c.ordinal());
       case LiteralSlot l -> CONSTANT;
       case AddDays x -> andW(pure(x.days(), coalesce, absorb), pure(x.offset(), coalesce, absorb),
           absorb);

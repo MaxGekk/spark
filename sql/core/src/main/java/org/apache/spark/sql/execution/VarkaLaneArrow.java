@@ -23,6 +23,7 @@ import javax.annotation.Nullable;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.BigIntVector;
 import org.apache.arrow.vector.DateDayVector;
+import org.apache.arrow.vector.DecimalVector;
 import org.apache.arrow.vector.DurationVector;
 import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.IntervalYearVector;
@@ -31,6 +32,7 @@ import org.apache.arrow.vector.TimeNanoVector;
 import org.apache.arrow.vector.TimeStampMicroVector;
 import org.apache.arrow.vector.TinyIntVector;
 import org.apache.arrow.vector.ValueVector;
+import org.apache.arrow.vector.types.pojo.ArrowType;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypeId;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes;
@@ -68,9 +70,10 @@ final class VarkaLaneArrow {
 
   /**
    * The Arrow vector class a type's lane reads and writes, the type's id, and how a destination of
-   * it is built.
+   * it is built, or null for a type whose columns are read and never written.
    */
-  record Vector(VarkaTypeId id, Class<? extends ValueVector> vectorClass, Allocate allocate) {
+  record Vector(VarkaTypeId id, Class<? extends ValueVector> vectorClass,
+      @Nullable Allocate allocate) {
   }
 
   /**
@@ -103,9 +106,13 @@ final class VarkaLaneArrow {
       case TIME -> new Vector(id, TimeNanoVector.class, VarkaLaneArrow::fromField);
       case DT_INTERVAL -> new Vector(id, DurationVector.class, VarkaLaneArrow::fromField);
       case TIMESTAMP_NTZ -> new Vector(id, TimeStampMicroVector.class, VarkaLaneArrow::fromField);
+      // Sixteen bytes a row at every precision, read on the long lane up to precision 18
+      // (VARKA-347) once the field passes decimalFieldMatches. Not written: a decimal output is
+      // row 157's store, so the entry builds no destination.
+      case DECIMAL -> new Vector(id, DecimalVector.class, null);
       // Read by no lane: a boolean is two bitmaps (named in isArrowBacked) and is not written
       // yet (row 27); the others are owed to their rows or declined by decision (VarkaTypes).
-      case BOOLEAN, FLOAT, DOUBLE, DECIMAL, TIMESTAMP -> null;
+      case BOOLEAN, FLOAT, DOUBLE, TIMESTAMP -> null;
     };
   }
 
@@ -143,15 +150,36 @@ final class VarkaLaneArrow {
   }
 
   /**
+   * Whether a column {@code vector} holds as a kernel input of the expected decimal scale reads as
+   * the leaf does: anything but a {@code DecimalVector} when {@code scale} is negative, the input
+   * being no decimal; otherwise a {@code DecimalVector} whose field says 128 bits and that scale.
+   * Arrow Java reads any decimal field narrower than 256 bits at sixteen bytes a row, so a
+   * {@code Decimal(p, s, 64)} field from another writer would be read at the wrong stride, and a
+   * field at another scale is read rounded by Spark and unscaled by the leaf; both take the row
+   * path. A {@code Decimal256Vector} is another class, which {@link #reads} refuses already. A
+   * field read: the field and its type are the vector's own, so a batch allocates nothing here.
+   */
+  static boolean decimalFieldMatches(ValueVector vector, int scale) {
+    if (!(vector instanceof DecimalVector)) {
+      return scale < 0;
+    }
+    return scale >= 0
+        && vector.getField().getType() instanceof ArrowType.Decimal type
+        && type.getBitWidth() == 128 && type.getScale() == scale;
+  }
+
+  /**
    * An empty destination vector for an output of {@code dataType}, or null where no lane stores
-   * the type - a boolean output, which the kernels do not write yet (row 27).
+   * the type - a boolean output, which the kernels do not write yet (row 27), and a decimal one,
+   * which is row 157's.
    */
   static @Nullable ValueVector allocate(String name, DataType dataType,
       BufferAllocator allocator) {
     VarkaTypeId id = VarkaTypes.idOf(dataType);
     for (Vector v : ALL) {
       if (v.id() == id) {
-        return v.allocate().create(name, dataType, allocator);
+        Allocate allocate = v.allocate();
+        return allocate == null ? null : allocate.create(name, dataType, allocator);
       }
     }
     return null;

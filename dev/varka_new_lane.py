@@ -78,6 +78,9 @@ OWED = {
     ("template warm-up", "DOUBLE"): "row 341 (the floating lanes, after their split)",
     ("fuzz grammar", "DOUBLE"): "row 341 (the floating lanes, after their split)",
     ("benchmark", "DOUBLE"): "row 341 (the floating lanes, after their split)",
+    ("coverage table", "DecimalType"): "row 347 (its first reader and coverage rows, step 5)",
+    ("width audit", "DecimalType"): "row 347 (its first reader and coverage rows, step 5)",
+    ("census", "DecimalType"): "row 347 (its first reader and coverage rows, step 5)",
 }
 
 
@@ -110,10 +113,11 @@ def vector_classes():
 
 def spark_types():
     """Each lane's Spark types: the type registry's entries read on a lane, from its committed
-    table (`sql/varka/types.tsv`, written by `VarkaTypesSuite` from `VarkaTypes`)."""
+    table (`sql/varka/types.tsv`, written by `VarkaTypesSuite` from `VarkaTypes`). A decimal is
+    read on its lane up to a precision (`up_to_precision`), and is checked there like the rest."""
     out = {}
     for row in types_rows():
-        if row["admission"] == "on_lane":
+        if row["admission"] in ("on_lane", "up_to_precision"):
             out.setdefault(row["lane"], []).extend(row["spark"].split(","))
     return out
 

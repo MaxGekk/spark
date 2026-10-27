@@ -390,3 +390,69 @@ matrix pass.
 ## 10. Outcome
 
 (Written when the work lands.)
+
+### 10.2 Step 3: the leaf, the check, the registry and the Arrow admission
+
+*27 October 2026, on master at `a5ed9235723`. Step 2's census cells (10.1, on their own branch)
+are not needed by this step's code.*
+
+**What was built.** `DecimalColumn(ordinal, lane, precision)` in `VarkaVectorIR`, on the long lane
+and precision 1 to 18, rendering as `dec:<ordinal>:long:p<precision>`. `Analysis` records it in
+`decimalInputs`, which `loadInputSegment` tests first and maps at `length * 16` bytes, and refuses
+one column read both as it and as a `ColumnRef`. The walk loads `a` at `i * 16` and `b` a vector
+further on, both under `indexInRange` masks over `2 * lanes` longs in the epilogue, takes the low
+words by `a.rearrange(EVEN, b)` and the high words by the odd shuffle, and condemns a lane with
+`hi != lo >> 63`, `lo > 10^p - 1` or `lo < -(10^p - 1)` through `emitGuardCollect`: under the
+column's word in the masked body, folded into the body's accumulator and tested once at its end.
+The reason is `Refusal.DECIMAL_SLOT` (re-armed, unconditional), its bit `STATUS_DECIMAL_SLOT = 1
+<< 6`, named `decimal-slot` in `VarkaFallbackAccounting` and `docs/sql-varka.md`, its mechanism
+`GUARD_DECIMAL_SLOT`. The registry's `DECIMAL` is `UpToPrecision(LONG, 18, "359")`, lanes `LONG`
+and `INT`, conformance `Owed("Decimal", "348")`; `types.tsv` is regenerated. `VarkaLaneArrow` maps
+`DECIMAL` to `DecimalVector` with no allocator, and `isArrowBacked` holds a decimal input's field
+to `bitWidth == 128` and the column's scale (`decimalFieldMatches`).
+
+**Departures from 2.1, 2.2 and 2.4.**
+
+1. **The compiler declines a decimal column for now.** Once `VarkaTypes.lane` answers `LONG` for
+   `DECIMAL(10, 2)`, the long column arm of `VarkaTimeCompiler` would build a `ColumnRef` over it
+   and read its slots at eight bytes a row: a wrong answer, not a decline. A decimal arm ahead of
+   it declines with "the operators over a decimal are row 348's" until step 5 builds the reader.
+2. **The shuffles are `VectorShuffle.iota(species, start, 2, false)`**, built once a body after the
+   accumulators, not `fromOp`, which would take a lambda in emitted code. Without the wrap an index
+   past the first vector is partially wrapped and selects from the second, so the shuffle is the
+   census's `DEINTERLEAVE` (`AbstractShuffle.partiallyWrapIndex` in the JDK 25 source).
+3. **The evaluator reads each decimal input's scale from the child's attribute**, not from the
+   compiler as 2.4 has it: the attribute is the column the input reads, and
+   `CompiledVarkaProjection` stays as it is.
+4. **`Info.lane()`, which carries no precision, answers `LONG` for the decimal**, so `types.tsv`,
+   `VarkaLaneArrowSuite` and the oracles read it as on a lane; only `lane(DataType)` and
+   `declineReason(DataType)` read the precision and the scale. `dev/varka_new_lane.py` reads the new
+   `up_to_precision` admission as it reads `on_lane`, and owes `DecimalType`'s coverage column,
+   width-audit shape and census entry to step 5.
+5. **`IsNotNull` over the leaf is not admitted yet.** The null test reads the word alone, while
+   analyzing the leaf beneath it arms the slot check, which Spark's `IS NULL` never makes; step 5
+   decides the form with the reader.
+6. **Not built here, as the order has it:** the leaf at the int lane (step 4, its constructor
+   refuses `INT` today), the fuzz sequence (`VarkaIrFuzzSuite` and `VarkaEmitCostSuite` list the
+   node as out of the grammar and awaiting row 352's refit), the warm-up's shuffle calls and the
+   cost feature's price.
+
+**The slot table** (`VarkaDecimalLoadSuite`, `ownJvm`): at 2, 4 and 8 long lanes, precision 1, 9,
+10 and 18, lengths 1 and 3 (no loop at all), 37 (the last row in the epilogue at every width) and
+64, both bodies, with nulls
+on every third row holding a random low word under a random or all-ones high word. Each declining
+slot - `10^p`, `-10^p`, high word 0 under a negative low word, -1 under a positive one, 1 over 5
+and over 0, and the long's two extremes under the wrong sign - is planted in the first group, a
+middle one and the last row, valid and then null; the bounds `10^p - 1` and `-(10^p - 1)`, 0 and
+-1 are planted the same way. The oracle reads the same `DecimalVector` through
+`ArrowColumnVector.getDecimal`: the kernel declines with `STATUS_DECIMAL_SLOT` exactly where some
+valid row raises, and answers every valid row's unscaled value otherwise, over the leaf alone and
+under a long add and as both operands of one (its shared local). All pass, as does an all-null
+batch of bad slots. `emitted_bytes.json`, `coverage.json`, `docs/sql-varka.md`'s table and
+`width_audit.json` do not move.
+
+**Where this meets #1054** (the floating lanes, open): `VarkaLaneArrow.of`'s null line, which both
+change; `VarkaTypesSuite.declineNamesTheType`, which #1054 rewrites to expect `DECIMAL(10, 2)` to
+decline naming row 347 and which this step leaves alone, so after both merge that assertion is
+the one to drop (the decimal facts are in `decimalLaneReadsThePrecision`); `types.tsv`, a line
+each; and `dev/varka_new_lane.py`'s `OWED`, where both append.

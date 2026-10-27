@@ -52,6 +52,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Day
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfWeek;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfWeekIso;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfYear;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DecimalColumn;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Greatest;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedDay;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
@@ -338,7 +339,14 @@ final class Analysis {
      * {@link GuardedRange}: the day guard's twin at either lane, with the bounds it carries - a
      * value the row engine throws on, or a date column outside the column bound (VARKA-379).
      */
-    VALUE_RANGE(Family.REARMED, true, VarkaFusedKernel.STATUS_VALUE_RANGE);
+    VALUE_RANGE(Family.REARMED, true, VarkaFusedKernel.STATUS_VALUE_RANGE),
+    /**
+     * {@link DecimalColumn}: a valid slot whose high word is not its low word's sign, or whose
+     * value has more digits than the precision, which Spark's column reader raises on
+     * (VARKA-347). Unconditional, as the range guards are: without it the leaf would compute
+     * where Spark raises. It parks its low words while it compares them.
+     */
+    DECIMAL_SLOT(Family.REARMED, true, VarkaFusedKernel.STATUS_DECIMAL_SLOT);
 
     final Family family;
     final boolean parksValue;
@@ -500,6 +508,16 @@ final class Analysis {
    * is mapped at {@code (length + 7) / 8} bytes and not at a lane's width a row.
    */
   long boolInputs = 0L;
+  /**
+   * The inputs read as a {@link DecimalColumn}: their data buffer is Arrow's sixteen-byte decimal
+   * slots, so it is mapped at {@code length * 16} bytes and not at the long lane's eight a row.
+   */
+  long decimalInputs = 0L;
+  /**
+   * The inputs read as a {@link ColumnRef}, kept beside {@link #decimalInputs} so that one
+   * column read both as a decimal and as a plain long, two strides over one buffer, is refused.
+   */
+  private long valueInputs = 0L;
   private int opNodes = 0;
 
   Analysis(int numInputs, int numLiterals, VarkaEmitOptions options, VarkaKernelPlan plan) {
@@ -686,6 +704,7 @@ final class Analysis {
         }
         case GuardedDay n -> refuse(node, Refusal.DAY_RANGE);
         case GuardedRange n -> refuse(node, Refusal.VALUE_RANGE);
+        case DecimalColumn n -> refuse(node, Refusal.DECIMAL_SLOT);
         // Everything else computes every lane it is given. Written out rather than defaulted.
         case ColumnRef n -> { }
         case LiteralSlot n -> { }
@@ -802,8 +821,8 @@ final class Analysis {
       // error here, so its author decides whether its value commutes with the reduction - a
       // narrow AND, OR or XOR does, a compare or a shift right does not - instead of falling
       // into "not ring" and leaving an unreduced int value for its readers.
-      case ColumnRef _, LiteralSlot _, WidenLane _, NarrowLane _, AddDays _, SubDays _,
-          AddMonths _, MakeDate _, GuardedDay _, GuardedRange _, NextDay _,
+      case ColumnRef _, DecimalColumn _, LiteralSlot _, WidenLane _, NarrowLane _, AddDays _,
+          SubDays _, AddMonths _, MakeDate _, GuardedDay _, GuardedRange _, NextDay _,
           TruncDateDynamic _, DateDiff _, Greatest _, Least _, DayOfWeek _,
           WeekDay _, DayOfWeekIso _, ThursdayOf _, Year _, Month _, DayOfMonth _, Quarter _,
           DayOfYear _, LastDay _, TruncDate _, WeekOfYear _, ConstDivide _, BoundedDivide _,
@@ -1062,6 +1081,7 @@ final class Analysis {
   private WordOwner ownerOf(VarkaVectorIR node) {
     return switch (node) {
       case ColumnRef c -> new WordOwner.Input(c.ordinal());
+      case DecimalColumn c -> new WordOwner.Input(c.ordinal());
       case BoolColumn c -> new WordOwner.Input(c.ordinal());
       case LiteralSlot l -> WordOwner.Const.ALL_TRUE;
       case AddDays n -> andOwner(node, n.days(), n.offset());
@@ -1115,6 +1135,7 @@ final class Analysis {
   private WordExpr pureOf(VarkaVectorIR node) {
     return switch (node) {
       case ColumnRef c -> new WordExpr.Input(c.ordinal());
+      case DecimalColumn c -> new WordExpr.Input(c.ordinal());
       case BoolColumn c -> new WordExpr.Input(c.ordinal());
       case LiteralSlot l -> WordExpr.Const.ALL_TRUE;
       case AddDays n -> andExpr(pureWord.get(n.days()), pureWord.get(n.offset()));
@@ -1218,6 +1239,18 @@ final class Analysis {
     referencedColumns |= set;
   }
 
+  /**
+   * Refuses a column read both as a {@link DecimalColumn} and as a {@link ColumnRef}: both are on
+   * the long lane, so {@link #registerInput}'s lane rule admits them, but one maps the buffer at
+   * sixteen bytes a row and the other at eight.
+   */
+  private void requireOneStride(int ordinal) {
+    if ((decimalInputs & valueInputs & 1L << ordinal) != 0) {
+      throw VarkaErrors.illegalArgument("column " + ordinal
+          + " is read both as a decimal and as a long column");
+    }
+  }
+
   private void analyze(VarkaVectorIR node) {
     // The lane rule, enforced per node, against a node disagreeing with the drive lane - which
     // would emit one lane's descriptors over the other's data. The plan refuses a narrow value
@@ -1252,7 +1285,16 @@ final class Analysis {
       requireOperand(r.position(), r.operand(), r.name());
     }
     switch (node) {
-      case ColumnRef c -> registerInput(node, c.ordinal(), c.lane());
+      case ColumnRef c -> {
+        registerInput(node, c.ordinal(), c.lane());
+        valueInputs |= 1L << c.ordinal();
+        requireOneStride(c.ordinal());
+      }
+      case DecimalColumn c -> {
+        registerInput(node, c.ordinal(), c.lane());
+        decimalInputs |= 1L << c.ordinal();
+        requireOneStride(c.ordinal());
+      }
       case LiteralSlot l -> {
         if (l.index() < 0 || l.index() >= numLiterals) {
           throw VarkaErrors.illegalArgument(

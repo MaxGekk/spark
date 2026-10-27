@@ -87,6 +87,13 @@ public interface VarkaFusedKernel {
   int STATUS_VALUE_RANGE = 1 << 5;
 
   /**
+   * A {@code DecimalColumn}'s valid slot that holds no value of its type: a high word that is not
+   * the low word's sign, or more digits than the precision (VARKA-347). Spark's column reader
+   * raises on such a slot, so the row engine raises it again.
+   */
+  int STATUS_DECIMAL_SLOT = 1 << 6;
+
+  /**
    * Runs the fused loop over one batch.
    *
    * @param srcData address of each input column's values, by ordinal - int32 at this entry
