@@ -324,7 +324,7 @@ final class VarkaDivisionLowering {
       cb.getstatic(VECTOR_OPERATORS, "ASHR", VO_BINARY);
       // The long lane's shift count is a long, as every scalar convenience of that lane is.
       cb.loadConstant((long) magic.shift());
-      cb.invokevirtual(LONG_VECTOR, "lanewise", Lane.LONG.lanewiseBinaryI); // [.., q']
+      cb.invokevirtual(LONG_VECTOR, "lanewise", Lane.LONG.integral().lanewiseBinaryI()); // [.., q']
       cb.getstatic(VECTOR_OPERATORS, "L2I", VO_CONVERSION);
       cb.getstatic(INT_VECTOR, species, VECTOR_SPECIES);
       cb.loadConstant(-half);

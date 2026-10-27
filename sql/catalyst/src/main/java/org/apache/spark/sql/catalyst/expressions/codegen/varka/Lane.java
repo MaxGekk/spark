@@ -24,6 +24,8 @@ import java.lang.constant.ClassDesc;
 import java.lang.constant.ConstantDescs;
 import java.lang.constant.MethodTypeDesc;
 
+import javax.annotation.Nullable;
+
 /**
  * Everything about an emission that names its lane's width, in one place, so that adding a
  * lane extends this enum instead of reworking the emitter.
@@ -75,7 +77,31 @@ enum Lane {
    * epoch day.
    */
   LONG(VarkaVectorIR.LaneType.LONG, "jdk.incubator.vector.LongVector", Long.SIZE,
-      ConstantDescs.CD_long);
+      ConstantDescs.CD_long),
+  /**
+   * 32-bit floating lanes: a {@code FLOAT} column (VARKA-341). No type is read here yet; the
+   * entry exists so that every switch over the lanes says what a floating lane does.
+   */
+  FLOAT(VarkaVectorIR.LaneType.FLOAT, "jdk.incubator.vector.FloatVector", Float.SIZE,
+      ConstantDescs.CD_float),
+  /** 64-bit floating lanes: a {@code DOUBLE} column (VARKA-341); see {@link #FLOAT}. */
+  DOUBLE(VarkaVectorIR.LaneType.DOUBLE, "jdk.incubator.vector.DoubleVector", Double.SIZE,
+      ConstantDescs.CD_double);
+
+  /**
+   * What only an integral lane has: the bitwise and shift shapes, the popcount, and the range a
+   * negation and a range guard read. A floating lane has none of them, so the emitter asks
+   * {@link #integral()} for them, which refuses a floating lane, rather than branching on the
+   * lane's kind (`VARKA-475.md` 4, rule 2).
+   *
+   * @param lanewiseBinaryV {@code V V.lanewise(VectorOperators.Binary, Vector)} - XOR and AND
+   * @param lanewiseBinaryI {@code V V.lanewise(VectorOperators.Binary, scalar)} - the shifts
+   * @param lanewiseUnary {@code V V.lanewise(VectorOperators.Unary)} - the popcount
+   * @param mostNegative the lane's most negative value: the one input a negate cannot represent
+   * @param mostPositive the lane's largest value
+   */
+  record Integral(MethodTypeDesc lanewiseBinaryV, MethodTypeDesc lanewiseBinaryI,
+      MethodTypeDesc lanewiseUnary, long mostNegative, long mostPositive) {}
 
   final VarkaVectorIR.LaneType laneType;
   /** The lane's vector class: the receiver of every load, store and lanewise call. */
@@ -84,8 +110,6 @@ enum Lane {
   final int bits;
   /** The scalar type a lane holds, as a literal argument and as an array element. */
   final ClassDesc scalar;
-  /** The array a runtime scalar argument arrives in - {@code int[]} at the int lane. */
-  final ClassDesc scalarArray;
   /**
    * The lane's width in bytes, as the multiplier both address computations use: the data
    * segment is {@code length * byteStride} and a lane group starts at {@code i * byteStride}.
@@ -111,12 +135,8 @@ enum Lane {
   final MethodTypeDesc lanewiseVI;
   /** {@code V V.add/sub(scalar, VectorMask)}. */
   final MethodTypeDesc lanewiseVIMasked;
-  /** {@code V V.lanewise(VectorOperators.Binary, Vector)} - XOR and AND. */
-  final MethodTypeDesc lanewiseBinaryV;
-  /** {@code V V.lanewise(VectorOperators.Binary, scalar)} - the shifts. */
-  final MethodTypeDesc lanewiseBinaryI;
-  /** {@code V V.lanewise(VectorOperators.Unary)} - the popcount. */
-  final MethodTypeDesc lanewiseUnary;
+  /** The integral lane's own facts, or null at a floating lane; read through {@link #integral}. */
+  private final @Nullable Integral integral;
   /** {@code VectorMask V.compare(VectorOperators.Comparison, Vector)} - erased. */
   final MethodTypeDesc compareVV;
   /** {@code VectorMask V.compare(VectorOperators.Comparison, scalar)}. */
@@ -132,7 +152,6 @@ enum Lane {
     this.vector = ClassDesc.of(vectorClass);
     this.bits = bits;
     this.scalar = scalar;
-    this.scalarArray = scalar.arrayType();
     this.byteStride = bits / Byte.SIZE;
     this.broadcast = MethodTypeDesc.of(vector, VECTOR_SPECIES, scalar);
     this.fromMemorySegmentDense = MethodTypeDesc.of(vector, VECTOR_SPECIES, MEMORY_SEGMENT,
@@ -147,25 +166,31 @@ enum Lane {
     this.lanewiseVVWrong = MethodTypeDesc.of(vector, vector);
     this.lanewiseVI = MethodTypeDesc.of(vector, scalar);
     this.lanewiseVIMasked = MethodTypeDesc.of(vector, scalar, VECTOR_MASK);
-    this.lanewiseBinaryV = MethodTypeDesc.of(vector, VO_BINARY, VECTOR);
-    this.lanewiseBinaryI = MethodTypeDesc.of(vector, VO_BINARY, scalar);
-    this.lanewiseUnary = MethodTypeDesc.of(vector, VO_UNARY);
+    this.integral = switch (laneType) {
+      case BYTE -> integral(vector, scalar, Byte.MIN_VALUE, Byte.MAX_VALUE);
+      case SHORT -> integral(vector, scalar, Short.MIN_VALUE, Short.MAX_VALUE);
+      case INT -> integral(vector, scalar, Integer.MIN_VALUE, Integer.MAX_VALUE);
+      case LONG -> integral(vector, scalar, Long.MIN_VALUE, Long.MAX_VALUE);
+      case FLOAT, DOUBLE -> null;
+    };
     this.compareVV = MethodTypeDesc.of(VECTOR_MASK, VO_COMPARISON, VECTOR);
     this.compareVI = MethodTypeDesc.of(VECTOR_MASK, VO_COMPARISON, scalar);
     this.blend = MethodTypeDesc.of(vector, VECTOR, VECTOR_MASK);
-    // The scalar arrays are the ones `VarkaFusedKernel.run` declares: an `int[]` at the int lane
-    // and at the narrow ones, whose literals arrive as ints and are narrowed by
+    // The scalar arrays are the ones `VarkaFusedKernel.run` declares: an `int[]` at the 32-bit
+    // and narrower lanes, whose literals arrive as ints and are narrowed by
     // {@link #narrowScalar} before they reach a byte or short descriptor, and a `long[]` at the
-    // long lane. A narrow lane gets no array of its own for the reason the int lane shares one:
-    // every literal the compiler folds is an int, and a byte literal is one of those.
-    if (!scalar.equals(ConstantDescs.CD_long)) {
+    // 64-bit ones. A narrow lane gets no array of its own for the reason the int lane shares one:
+    // every literal the compiler folds is an int, and a byte literal is one of those. A floating
+    // lane's literals are their bits in the table of their width (VARKA-341 2.3), so the choice
+    // is the width's, not the scalar's: a `double` scalar takes the `long[]`.
+    if (bits != Long.SIZE) {
       this.runDesc = MethodTypeDesc.of(ConstantDescs.CD_int, LONG_ARRAY, LONG_ARRAY, INT_ARRAY,
           LONG_ARRAY, LONG_ARRAY, INT_ARRAY, ConstantDescs.CD_int);
       this.pLongArgs = -1;
       this.pLength = P_SCALAR_ARGS + 1;
     } else {
       this.runDesc = MethodTypeDesc.of(ConstantDescs.CD_int, LONG_ARRAY, LONG_ARRAY, INT_ARRAY,
-          LONG_ARRAY, LONG_ARRAY, INT_ARRAY, scalarArray, ConstantDescs.CD_int);
+          LONG_ARRAY, LONG_ARRAY, INT_ARRAY, LONG_ARRAY, ConstantDescs.CD_int);
       this.pLongArgs = P_SCALAR_ARGS + 1;
       this.pLength = P_SCALAR_ARGS + 2;
     }
@@ -178,13 +203,30 @@ enum Lane {
         this.runDesc.insertParameterTypes(this.runDesc.parameterCount(), ConstantDescs.CD_long);
     this.pScratch = this.pLength + 1;
     this.firstLocalScratch = this.pLength + 3;
-    this.localWidth = scalar.equals(ConstantDescs.CD_long) ? 2 : 1;
+    this.localWidth = bits == Long.SIZE ? 2 : 1;
     this.preferredLanes = switch (laneType) {
       case BYTE -> jdk.incubator.vector.ByteVector.SPECIES_PREFERRED.length();
       case SHORT -> jdk.incubator.vector.ShortVector.SPECIES_PREFERRED.length();
       case INT -> jdk.incubator.vector.IntVector.SPECIES_PREFERRED.length();
       case LONG -> jdk.incubator.vector.LongVector.SPECIES_PREFERRED.length();
+      case FLOAT -> jdk.incubator.vector.FloatVector.SPECIES_PREFERRED.length();
+      case DOUBLE -> jdk.incubator.vector.DoubleVector.SPECIES_PREFERRED.length();
     };
+  }
+
+  private static Integral integral(ClassDesc vector, ClassDesc scalar, long min, long max) {
+    return new Integral(MethodTypeDesc.of(vector, VO_BINARY, VECTOR),
+        MethodTypeDesc.of(vector, VO_BINARY, scalar), MethodTypeDesc.of(vector, VO_UNARY), min,
+        max);
+  }
+
+  /** The integral lane's facts; a floating lane has none, and asking it is a refusal. */
+  Integral integral() {
+    if (integral == null) {
+      throw VarkaErrors.illegalState("the " + laneType + " lane is floating and has no "
+          + "integral operation: no shift, bitwise operation, popcount or integer range");
+    }
+    return integral;
   }
 
   /** Whether this is one of the two narrow lanes. */
@@ -204,6 +246,8 @@ enum Lane {
       case SHORT -> SHORT;
       case INT -> INT;
       case LONG -> LONG;
+      case FLOAT -> FLOAT;
+      case DOUBLE -> DOUBLE;
     };
   }
 
@@ -273,6 +317,7 @@ enum Lane {
    * so callers pass the lane's own rather than a fixed one.
    */
   void pushScalar(CodeBuilder cb, long value) {
+    integral();
     if (localWidth == 2) {
       cb.loadConstant(value);
       return;
@@ -288,6 +333,7 @@ enum Lane {
    * it is, which is what keeps every existing kernel's bytes unchanged.
    */
   void narrowScalar(CodeBuilder cb) {
+    integral();
     if (laneType == VarkaVectorIR.LaneType.BYTE) {
       cb.i2b();
     } else if (laneType == VarkaVectorIR.LaneType.SHORT) {
@@ -297,22 +343,12 @@ enum Lane {
 
   /** The most negative value of this lane: the one input a negate cannot represent. */
   long mostNegative() {
-    return switch (laneType) {
-      case BYTE -> Byte.MIN_VALUE;
-      case SHORT -> Short.MIN_VALUE;
-      case INT -> Integer.MIN_VALUE;
-      case LONG -> Long.MIN_VALUE;
-    };
+    return integral().mostNegative();
   }
 
   /** The largest value of this lane; {@link #mostNegative} is the other end. */
   long mostPositive() {
-    return switch (laneType) {
-      case BYTE -> Byte.MAX_VALUE;
-      case SHORT -> Short.MAX_VALUE;
-      case INT -> Integer.MAX_VALUE;
-      case LONG -> Long.MAX_VALUE;
-    };
+    return integral().mostPositive();
   }
 
   /**
