@@ -28,7 +28,6 @@ import javax.annotation.Nullable;
 import org.apache.spark.sql.catalyst.expressions.Abs;
 import org.apache.spark.sql.catalyst.expressions.Add;
 import org.apache.spark.sql.catalyst.expressions.BinaryArithmetic;
-import org.apache.spark.sql.catalyst.expressions.BinaryComparison;
 import org.apache.spark.sql.catalyst.expressions.BitmapExpressionUtils;
 import org.apache.spark.sql.catalyst.expressions.BitwiseAnd;
 import org.apache.spark.sql.catalyst.expressions.BitwiseCount;
@@ -41,8 +40,12 @@ import org.apache.spark.sql.catalyst.expressions.Cast;
 import org.apache.spark.sql.catalyst.expressions.Coalesce;
 import org.apache.spark.sql.catalyst.expressions.DivideDTInterval;
 import org.apache.spark.sql.catalyst.expressions.DivideYMInterval;
+import org.apache.spark.sql.catalyst.expressions.EqualNullSafe;
+import org.apache.spark.sql.catalyst.expressions.EqualTo;
 import org.apache.spark.sql.catalyst.expressions.EvalMode$;
 import org.apache.spark.sql.catalyst.expressions.Expression;
+import org.apache.spark.sql.catalyst.expressions.GreaterThan;
+import org.apache.spark.sql.catalyst.expressions.GreaterThanOrEqual;
 import org.apache.spark.sql.catalyst.expressions.Greatest;
 import org.apache.spark.sql.catalyst.expressions.If;
 import org.apache.spark.sql.catalyst.expressions.In;
@@ -51,6 +54,8 @@ import org.apache.spark.sql.catalyst.expressions.IsNaN;
 import org.apache.spark.sql.catalyst.expressions.IsNotNull;
 import org.apache.spark.sql.catalyst.expressions.IsNull;
 import org.apache.spark.sql.catalyst.expressions.Least;
+import org.apache.spark.sql.catalyst.expressions.LessThan;
+import org.apache.spark.sql.catalyst.expressions.LessThanOrEqual;
 import org.apache.spark.sql.catalyst.expressions.Literal;
 import org.apache.spark.sql.catalyst.expressions.Multiply;
 import org.apache.spark.sql.catalyst.expressions.MultiplyDTInterval;
@@ -334,7 +339,11 @@ final class VarkaNodeCompiler {
     if (!touchesFloating(e) || e instanceof BoundReference || e instanceof Literal
         || e instanceof If || e instanceof CaseWhen || e instanceof Coalesce
         || e instanceof IsNull || e instanceof IsNotNull || e instanceof RuntimeReplaceable
-        || e instanceof BinaryComparison || e instanceof Greatest || e instanceof Least
+        // The six comparisons by name rather than as BinaryComparison, so that a comparison
+        // class Spark adds later declines until someone has written its lowering.
+        || e instanceof EqualTo || e instanceof EqualNullSafe || e instanceof LessThan
+        || e instanceof LessThanOrEqual || e instanceof GreaterThan
+        || e instanceof GreaterThanOrEqual || e instanceof Greatest || e instanceof Least
         || e instanceof In || e instanceof InSet || e instanceof IsNaN || e instanceof NaNvl) {
       return Optional.empty();
     }

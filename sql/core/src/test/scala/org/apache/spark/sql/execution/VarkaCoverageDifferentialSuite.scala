@@ -1344,11 +1344,13 @@ private object VarkaCoverageDifferentialSuite {
    * The floating columns of a fixture (VARKA-341), `x`, `x2` (`DOUBLE`) and `f`, `f2` (`FLOAT`),
    * as SELECT entries: Spark's special values, each column's picked by the int under `picks`, in
    * `0 until floatingPicks`, and null where that is. Over the same pick the pairs meet NaN
-   * against NaN and against both infinities, a NaN with its sign bit set against the canonical
-   * one, both zeros both ways round, an equal pair, the extremes and the smallest subnormal;
-   * `1.5` and `-2.5` are the literals the coverage rows name. Other NaN payloads cannot be
-   * written in SQL: `VarkaFloatingLaneSuite` builds them from their bits, and the catalyst
-   * fuzzers draw them.
+   * against NaN and against negative infinity, a NaN with its sign bit set against the
+   * canonical one, both zeros both ways round, the two infinities, an equal pair, the extremes
+   * and the smallest subnormal; `1.5`, `-2.5` and `0.0` are literals the coverage rows name.
+   * Every ordered pair of the special values, NaN against positive infinity among them, is
+   * `VarkaFloatingLaneSuite`'s, and the Spark fuzz picks each column by a different value.
+   * Other NaN payloads cannot be written in SQL: `VarkaFloatingLaneSuite` builds them from
+   * their bits, and the catalyst fuzzers draw them.
    */
   def floatingColumns(picks: Seq[String]): String = {
     def dbl(v: String): String = v match {

@@ -191,16 +191,19 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
    * (`D` or `F`, so that a literal is of the column's type and needs no cast): the comparisons,
    * `<=>`, `isnan`, the null tests, a literal on the right and `IN` in both its forms. The
    * column pairs meet NaN against NaN and against every other value, and both zeros both ways
-   * round, in the differential fixtures.
+   * round, in the differential fixtures. Both `IN` lists hold `0.0` and NaN, so the fixtures'
+   * `-0.0` and NaNs of either sign are in them, as Spark's equality says.
    */
   private def floatingPredicates(a: String, b: String, suffix: String,
       dataType: DataType): Seq[Row] = {
-    // Eleven literals of one integer digit, past the optimizer's InSet threshold of ten.
-    val many = (0 to 9).map(k => s"$k.5$suffix") :+ s"-2.5$suffix"
-    val manyValues: Set[Any] = dataType match {
-      case DoubleType => ((0 to 9).map(k => k + 0.5) :+ -2.5).toSet
-      case _ => ((0 to 9).map(k => k + 0.5f) :+ -2.5f).toSet
-    }
+    // SQL has no NaN literal: the cast is one the optimizer folds, as `VarkaSqlResolve` does.
+    val nan = s"CAST('NaN' AS ${dataType.sql})"
+    // The value of `v` in the column's type.
+    def value(v: Double): Any = if (dataType == DoubleType) v else v.toFloat
+    // Eleven literals of one integer digit or NaN, past the optimizer's InSet threshold of ten.
+    val manyNumbers = (1 to 8).map(k => k + 0.5) ++ Seq(-2.5, 0.0)
+    val many = manyNumbers.map(v => s"$v$suffix") :+ nan
+    val manyValues: Set[Any] = (manyNumbers :+ Double.NaN).map(value).toSet
     val column = if (a == x.name) x else f
     Seq(
       Row(s"$a < $b"),
@@ -212,7 +215,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
       Row(s"$a <=> $b", "null-safe equality under the lane's own equality"),
       Row(s"$a < 1.5$suffix", "the literal is its bits in the table of the lane's width"),
       Row(s"$a = 1.5$suffix"),
-      Row(s"$a IN (1.5$suffix, -2.5$suffix)", "an equality chain under the lane's equality"),
+      Row(s"$a IN (1.5$suffix, -2.5$suffix, 0.0$suffix, $nan)",
+        "an equality chain under the lane's equality"),
       Row(s"$a IN (11 literals)",
         "an IN list this long arrives from the optimizer as an InSet and fuses the same way",
         Some(InSet(column, manyValues)), executable = Some(many.mkString(s"$a IN (", ", ", ")"))),
@@ -953,14 +957,8 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   }
 
   test("the table documents every expression the compiler admits") {
-    // A row documents its classes and their expression superclasses, so the floating lanes'
-    // admission of every `BinaryComparison` is documented by the comparisons' rows (VARKA-341).
     val documented = families.flatMap(_.rows).flatMap { row =>
-      expressionOf(row).flatMap { e =>
-        Iterator.iterate[Class[_]](e.getClass)(_.getSuperclass)
-          .takeWhile(c => c != null && classOf[Expression].isAssignableFrom(c))
-          .map(_.getSimpleName)
-      }
+      expressionOf(row).collect { case e: Expression => e.getClass.getSimpleName }
     }.toSet
     val missing =
       (admittedByCompiler -- infrastructure -- matchedOnlyToDecline.keySet -- documented)

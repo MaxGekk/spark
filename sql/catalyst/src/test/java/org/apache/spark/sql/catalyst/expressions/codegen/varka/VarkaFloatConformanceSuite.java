@@ -24,8 +24,8 @@ import org.apache.spark.sql.types.DataTypes;
  * the same values as {@link VarkaDoubleConformanceSuite}'s at single precision, two NaN payloads
  * included.
  *
- * <p>The arithmetic and the casts are row 342's and 343's, and those checks are cancelled naming
- * their rows once their fused forms have run.
+ * <p>The arithmetic and the casts are cancelled as {@link VarkaDoubleConformanceSuite}'s are,
+ * naming the rows the census entry or the {@code casts.tsv} pair gives each form.
  */
 @VarkaSuite
 public final class VarkaFloatConformanceSuite extends VarkaTypeConformance {

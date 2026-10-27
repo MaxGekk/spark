@@ -37,18 +37,20 @@ import org.apache.spark.sql.internal.SQLConf
 trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with VarkaTestWatchdog {
   import VarkaSparkFuzz._
 
+  /** A reference to one of the fixture's floating columns, `x`, `x2`, `f` or `f2`. */
+  private val floatingColumn = """\b(x|x2|f|f2)\b""".r
+
   /**
-   * Both sessions read the cached fixture without the batch pruning of its column statistics.
-   * The statistics leave NaN out (SPARK-58482), so a filter that a NaN row of the floating
-   * columns passes, `NOT (x < 1.5D)`, prunes that row's batch on both sides: the two engines
-   * agree, and the check that the pivot row is selected fails on Spark's answer, not Varka's.
+   * Runs `body` with both sessions reading the cached fixture without the batch pruning of its
+   * column statistics when `sqls` read a floating column, and as they are otherwise. The
+   * statistics leave NaN out (SPARK-58482), so a filter that a NaN row passes, `NOT (x < 1.5D)`,
+   * prunes that row's batch on both sides: the two engines agree, and the check that the pivot
+   * row is selected fails on Spark's answer, not Varka's. Every other case keeps the pruning, so
+   * a stored reproducer replays under the settings it was found under.
    */
-  override protected def beforeAll(): Unit = {
-    super.beforeAll()
-    for (session <- Seq(spark, varkaSpark)) {
-      session.conf.set(SQLConf.IN_MEMORY_PARTITION_PRUNING.key, "false")
-    }
-  }
+  private def withFloatingPruningOff[T](sqls: Seq[String])(body: => T): T =
+    if (!sqls.exists(floatingColumn.findFirstIn(_).isDefined)) body
+    else withBothConf(SQLConf.IN_MEMORY_PARTITION_PRUNING.key, "false")(body)
 
   /** Plans of the Varka session, over the checks run, that took a Varka node. */
   protected var fused = 0
@@ -237,10 +239,11 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
       pivot: Option[String] = None,
       forces: Seq[Int] = Nil,
       rerun: VarkaErrorRerun = errorRerun): Option[String] = {
-    def check(view: DataFrame => DataFrame, pivotHere: Option[String]): Option[String] = {
-      cacheFixture(fixture, view)
-      try checkOnce(select, where, ansi, partitions, pivotHere, forces) finally uncacheFixture()
-    }
+    def check(view: DataFrame => DataFrame, pivotHere: Option[String]): Option[String] =
+      withFloatingPruningOff(select +: where.toSeq) {
+        cacheFixture(fixture, view)
+        try checkOnce(select, where, ansi, partitions, pivotHere, forces) finally uncacheFixture()
+      }
     val before = counters
     raisedInCheck = false
     val first = check(identity, pivot)
@@ -418,7 +421,7 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
       }
     }
     counts.compositions += 1
-    try withAnsi(c.ansi) {
+    try withFloatingPruningOff(c.select +: c.where.toSeq)(withAnsi(c.ansi) {
       withVarkaWarmup(counts) {
         val off = cacheAndAsk(c.fixture)
         var found: Option[String] = None
@@ -462,7 +465,7 @@ trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with Var
             pivot = false)
         })
       }
-    } finally {
+    }) finally {
       uncacheFixture()
     }
   }

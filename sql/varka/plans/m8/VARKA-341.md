@@ -254,27 +254,32 @@ Where the code departs from 2.4 to 2.7, and what is still owed:
   registry's conversion of 2.2 and compares its answer by raw bits.
 - **Coverage rows**: 40, in four families (`DOUBLE` and `FLOAT` columns, as predicates and as
   values): the six comparisons, `<=>`, a literal on the right, `IN` in both its forms, `isnan`, the
-  null tests, `greatest`, `least`, `nanvl`, `CASE`, `IF` and `coalesce`. The differential
-  fixtures derive `x`, `x2`, `f`, `f2` from `rid` (`floatingColumns`): NaN against NaN, a NaN with
-  its sign bit set, both zeros both ways round, both infinities, the extremes and the smallest
-  subnormal; other NaN payloads have no SQL spelling, so the composition fuzz draws them as bits
+  null tests, `greatest`, `least`, `nanvl`, `CASE`, `IF` and `coalesce`. Both `IN` lists hold
+  `0.0` and NaN, written `CAST('NaN' AS DOUBLE)`, which `VarkaSqlResolve` folds as the optimizer
+  does. The differential fixtures derive `x`, `x2`, `f`, `f2` from `rid` (`floatingColumns`): NaN
+  against NaN and against negative infinity, a NaN with its sign bit set, both zeros both ways
+  round, the two infinities, the extremes and the smallest subnormal; every ordered pair of them is
+  `VarkaFloatingLaneSuite`'s. Other NaN payloads have no SQL spelling, so the composition fuzz draws them as bits
   and `VarkaFloatingLaneSuite` builds them. The ANSI form guards a floating row with `xrid` or
   `frid`, and the CASE-condition form gives a floating condition floating arms, since a mask
-  does not cross the kinds yet. The table's check counts a documented class's expression
-  superclasses, so the comparisons document the `BinaryComparison` arm. Every integral shape's
+  does not cross the kinds yet. `floatingDecline` admits the six comparison classes by name, not
+  `BinaryComparison`, so the table's check sees concrete classes and a comparison Spark adds later
+  declines. Every integral shape's
   bytes are unchanged; the oracle gains the 40 shapes and the `option_arms` digests move with
   them. The width audit records the 128-bit double refusals, the census marks `float` and
   `double` fused for the 18 entries the rows show, `isnan` and `nanvl` done, and
   `dev/varka_new_lane.py` owes nothing at the types.
 - **Conformance**: `VarkaDoubleConformanceSuite` and `VarkaFloatConformanceSuite` run the
   contract's load, round trip, ordering and choice over the special values' bits, two NaN
-  payloads included; null handling, the cast row and overflow are cancelled naming rows 342 and
-  343, whose arithmetic and casts they need.
+  payloads included; null handling, the cast row and overflow are cancelled naming the rows the
+  registers give each form: the operator's census entry's whole rows column, 342 among them, and
+  the cast pair's, 343 for most and 346, 350 and 364 for the cast to `dec`.
 - **The end-to-end suite runs its filters with the cache's batch pruning off.** Spark's batch
   statistics leave NaN out, so a filter that matches a NaN row can prune that row's batch on both
-  sides (SPARK-58482), and the kernel would never see the rows it is tested on. The Spark fuzz's
-  sessions run without it for the same reason: `NOT (x < 1.5D)` pruned its NaN pivot row on both
-  sides. The floating suite also caches its fixtures again before each test, a workaround for
+  sides (SPARK-58482), and the kernel would never see the rows it is tested on. The Spark fuzz
+  and its reproducer replay turn it off for the same reason, only for a case whose SQL reads a
+  floating column: `NOT (x < 1.5D)` pruned its NaN pivot row on both sides. Every other case, and
+  so every stored reproducer, runs with it on as recorded. The floating suite also caches its fixtures again before each test, a workaround for
   the expected session losing its cache (row 501, fixed by #1058); it comes out once #1058 merges.
 - **Still owed by this row:** the fuzz grammar's floating sequence (3.4), the warm-up blocks and
   the benchmark (`dev/varka_new_lane.py` lists all three), with the literal-specialised compares

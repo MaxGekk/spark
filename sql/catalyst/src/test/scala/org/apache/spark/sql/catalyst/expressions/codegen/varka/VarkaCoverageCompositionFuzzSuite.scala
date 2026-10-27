@@ -290,11 +290,11 @@ class VarkaCoverageCompositionFuzzSuite
    * Runs one compiled kernel, at its lane, against the reference evaluator over `inputs`, the
    * attributes its input ordinals index. Each input is drawn from its own domain: a derived input
    * from its kind's codes, a bounded input across its bound, an int-lane input within thirty
-   * thousand either side of zero, a long-lane one by its type (`drawLong`). A batch a guard
-   * declines is drawn again twice, nearer zero each time and a bounded input clamped into its
-   * bound, the last within one to three, which no guard declines; each attempt keeps the length
-   * and null patterns. The test then asserts that
-   * every kernel was compared. Returns whether the kernel was.
+   * thousand either side of zero, a long-lane one by its type (`drawLong`), and a floating input
+   * at either lane from its special values (`floatingInput`). A batch a guard declines is drawn
+   * again twice, nearer zero each time and a bounded input clamped into its bound, the last
+   * within one to three, which no guard declines; each attempt keeps the length and null
+   * patterns. The test then asserts that every kernel was compared. Returns whether the kernel was.
    *
    * With `poisoned`, the batch's shape is not drawn but fixed (VARKA-138), `poisonedPatterns`,
    * and it runs through the masked body alone, at both fills: its other body would be the same
@@ -335,7 +335,7 @@ class VarkaCoverageCompositionFuzzSuite
     def attempt(scale: Int): Boolean = if (plan.lane(opts).bits() == java.lang.Long.SIZE) {
       val data = Array.tabulate(numInputs) { i =>
         val dataType = inputs(plan.inputOrdinals.get(i)).dataType
-        Array.fill(length)(drawLong(rnd, dataType, scale))
+        Array.fill(length)(floatingInput(dataType, rnd).getOrElse(drawLong(rnd, dataType, scale)))
       }
       val lits = plan.longLiterals.asScala.map(_.longValue).toArray
       // A kernel of both lanes (VARKA-28) reads the int table beside the long one.

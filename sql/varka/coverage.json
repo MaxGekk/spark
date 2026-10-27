@@ -3328,8 +3328,8 @@
     "note" : "",
     "verified" : "differential"
   }, {
-    "sql" : "x IN (1.5D, -2.5D)",
-    "executable" : "x IN (1.5D, -2.5D)",
+    "sql" : "x IN (1.5D, -2.5D, 0.0D, CAST('NaN' AS DOUBLE))",
+    "executable" : "x IN (1.5D, -2.5D, 0.0D, CAST('NaN' AS DOUBLE))",
     "family" : "DOUBLE columns",
     "form" : "predicate",
     "catalyst" : [ "In" ],
@@ -3341,7 +3341,7 @@
     "verified" : "differential"
   }, {
     "sql" : "x IN (11 literals)",
-    "executable" : "x IN (0.5D, 1.5D, 2.5D, 3.5D, 4.5D, 5.5D, 6.5D, 7.5D, 8.5D, 9.5D, -2.5D)",
+    "executable" : "x IN (1.5D, 2.5D, 3.5D, 4.5D, 5.5D, 6.5D, 7.5D, 8.5D, -2.5D, 0.0D, CAST('NaN' AS DOUBLE))",
     "family" : "DOUBLE columns",
     "form" : "predicate",
     "catalyst" : [ "InSet" ],
@@ -3568,8 +3568,8 @@
     "note" : "",
     "verified" : "differential"
   }, {
-    "sql" : "f IN (1.5F, -2.5F)",
-    "executable" : "f IN (1.5F, -2.5F)",
+    "sql" : "f IN (1.5F, -2.5F, 0.0F, CAST('NaN' AS FLOAT))",
+    "executable" : "f IN (1.5F, -2.5F, 0.0F, CAST('NaN' AS FLOAT))",
     "family" : "FLOAT columns",
     "form" : "predicate",
     "catalyst" : [ "In" ],
@@ -3581,7 +3581,7 @@
     "verified" : "differential"
   }, {
     "sql" : "f IN (11 literals)",
-    "executable" : "f IN (0.5F, 1.5F, 2.5F, 3.5F, 4.5F, 5.5F, 6.5F, 7.5F, 8.5F, 9.5F, -2.5F)",
+    "executable" : "f IN (1.5F, 2.5F, 3.5F, 4.5F, 5.5F, 6.5F, 7.5F, 8.5F, -2.5F, 0.0F, CAST('NaN' AS FLOAT))",
     "family" : "FLOAT columns",
     "form" : "predicate",
     "catalyst" : [ "InSet" ],
@@ -3868,5 +3868,5 @@
     "note" : "a zero interval on purpose: this fixture reaches both ends of the day, so any other constant crosses midnight on some row, where Spark raises an error rather than a value. The sum is still guarded to the day - the domain adds the interval's microseconds, 0 here, to the time's; the crossing case, and a column interval, are VarkaTimeArithmeticSuite's",
     "verified" : "refinement: t + dt"
   } ],
-  "catalyst_classes_admitted" : [ "Abs", "Add", "AddMonths", "And", "BinaryComparison", "BitwiseAnd", "BitwiseCount", "BitwiseNot", "BitwiseOr", "BitwiseXor", "CaseWhen", "Cast", "Coalesce", "DateAdd", "DateAddYMInterval", "DateDiff", "DateFromUnixDate", "DateSub", "DayOfMonth", "DayOfWeek", "DayOfYear", "DivideYMInterval", "EqualNullSafe", "EqualTo", "ExtractANSIIntervalDays", "ExtractANSIIntervalMonths", "ExtractANSIIntervalYears", "GreaterThan", "GreaterThanOrEqual", "Greatest", "If", "In", "InSet", "IsNaN", "IsNotNull", "IsNull", "LastDay", "Least", "LessThan", "LessThanOrEqual", "MakeDate", "MakeYMInterval", "Month", "Multiply", "MultiplyYMInterval", "NaNvl", "NextDay", "Not", "Or", "Quarter", "ShiftLeft", "ShiftRight", "ShiftRightUnsigned", "Subtract", "SubtractDates", "TruncDate", "UnaryMinus", "UnixDate", "WeekDay", "WeekOfYear", "Year", "YearOfWeek" ]
+  "catalyst_classes_admitted" : [ "Abs", "Add", "AddMonths", "And", "BitwiseAnd", "BitwiseCount", "BitwiseNot", "BitwiseOr", "BitwiseXor", "CaseWhen", "Cast", "Coalesce", "DateAdd", "DateAddYMInterval", "DateDiff", "DateFromUnixDate", "DateSub", "DayOfMonth", "DayOfWeek", "DayOfYear", "DivideYMInterval", "EqualNullSafe", "EqualTo", "ExtractANSIIntervalDays", "ExtractANSIIntervalMonths", "ExtractANSIIntervalYears", "GreaterThan", "GreaterThanOrEqual", "Greatest", "If", "In", "InSet", "IsNaN", "IsNotNull", "IsNull", "LastDay", "Least", "LessThan", "LessThanOrEqual", "MakeDate", "MakeYMInterval", "Month", "Multiply", "MultiplyYMInterval", "NaNvl", "NextDay", "Not", "Or", "Quarter", "ShiftLeft", "ShiftRight", "ShiftRightUnsigned", "Subtract", "SubtractDates", "TruncDate", "UnaryMinus", "UnixDate", "WeekDay", "WeekOfYear", "Year", "YearOfWeek" ]
 }

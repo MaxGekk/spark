@@ -688,7 +688,7 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `x <=> x2` | `predicate` |  | null-safe equality under the lane's own equality | per-lane: compare to mask, mask cast, mask logic |
 | `x < 1.5D` | `predicate` |  | the literal is its bits in the table of the lane's width | per-lane: compare to mask, mask cast, mask logic, mask broadcast |
 | `x = 1.5D` | `predicate` |  |  | per-lane: compare to mask, mask cast, mask logic |
-| `x IN (1.5D, -2.5D)` | `predicate` |  | an equality chain under the lane's equality | per-lane: compare to mask, mask cast, mask logic |
+| `x IN (1.5D, -2.5D, 0.0D, CAST('NaN' AS DOUBLE))` | `predicate` |  | an equality chain under the lane's equality | per-lane: compare to mask, mask cast, mask logic |
 | `x IN (11 literals)` | `predicate` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | per-lane: compare to mask, mask cast, mask logic |
 | `isnan(x)` | `predicate` |  | never null: false on a null row | per-lane: compare to mask, mask cast, mask logic, mask broadcast |
 | `x IS NULL` | `predicate` |  |  | per-lane: mask broadcast, mask logic, mask cast |
@@ -718,7 +718,7 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `f <=> f2` | `predicate` |  | null-safe equality under the lane's own equality | vector |
 | `f < 1.5F` | `predicate` |  | the literal is its bits in the table of the lane's width | vector |
 | `f = 1.5F` | `predicate` |  |  | vector |
-| `f IN (1.5F, -2.5F)` | `predicate` |  | an equality chain under the lane's equality | vector |
+| `f IN (1.5F, -2.5F, 0.0F, CAST('NaN' AS FLOAT))` | `predicate` |  | an equality chain under the lane's equality | vector |
 | `f IN (11 literals)` | `predicate` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | vector |
 | `isnan(f)` | `predicate` |  | never null: false on a null row | vector |
 | `f IS NULL` | `predicate` |  |  | vector |
