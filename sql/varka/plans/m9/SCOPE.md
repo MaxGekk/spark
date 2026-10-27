@@ -5581,6 +5581,17 @@ in step with the code, and the compiler as a whole.
 **Done when** the spike's theorem is checked in CI with its pin to the code, its cost is recorded,
 and the owner has decided from it whether steps 2 and 3 use Lean.
 
+### Item 117. A year-month `time_bucket` over `TIMESTAMP_NTZ`
+
+*Added 27 October 2026 on the owner's word, from row 339's plan (`m8/VARKA-339.md` 8).* Row 339
+fuses `time_bucket` over a day-time width and declines a year-month width by name: the milestone
+plan names only the day-time form, and no coverage row, TPC query or fuzz grammar uses a month
+width. The form needs the year and month of the NTZ's day and two `AddMonths` over the origin's
+day, so it rests on row 339's `ntzDay` and the month forms' whole-range sweep.
+
+**Done when** `time_bucket(INTERVAL 'n' MONTH, ntz[, origin])` fuses with Spark's answer at every
+origin, proven over the sweep row 339 builds, or the record says why it stays declined.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
