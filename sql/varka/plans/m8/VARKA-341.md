@@ -281,9 +281,16 @@ Where the code departs from 2.4 to 2.7, and what is still owed:
   floating column: `NOT (x < 1.5D)` pruned its NaN pivot row on both sides. Every other case, and
   so every stored reproducer, runs with it on as recorded. The floating suite also caches its fixtures again before each test, a workaround for
   the expected session losing its cache (row 501, fixed by #1058); it comes out once #1058 merges.
-- **Still owed by this row:** the fuzz grammar's floating sequence (3.4), the warm-up blocks and
-  the benchmark (`dev/varka_new_lane.py` lists all three), with the literal-specialised compares
-  and the mask crossing above.
+- **The warm-up blocks** (2.7): `VarkaVectorTemplateWarmup`'s double block gains, and a float
+  block makes, a floating column's calls - the dense and masked stores and loads, a literal's
+  `broadcast`, the `IS_NAN` test, the `EQ`, `LE` and `GE` compares Spark's order is built from,
+  the mask joins and the pick's `blend` - `THIN_CALLS_PER_ROUND` times a round.
+  `VarkaWarmupReach` gives the float lane its own receivers; it had fallen back to the double
+  lane's, so the float kernels' calls were named by their abstract owner and their mask calls
+  credited to the double lane's mask.
+- **Still owed by this row:** the fuzz grammar's floating sequence (3.4) and the benchmark
+  (`dev/varka_new_lane.py` lists both), with the literal-specialised compares and the mask
+  crossing above.
 - **Not floating gaps:** a `BOOLEAN` output and a `CASE` with no `ELSE` fuse on no lane yet (the
   latter is row 333), so the suite shows a condition's three values through a `CASE` with an
   `ELSE`.
