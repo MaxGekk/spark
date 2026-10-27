@@ -5513,7 +5513,12 @@ mask-cast change JDK-8370863 with fix version 27. This item is what follows on t
    bugreport.java.com (reference `efdbbe29-dfaf-419b-a3c2-084dfb421bc5`; text in
    `m8/results/VARKA-396/bugreport.md`), asking for a fix or a backport of JDK-8370863's rule
    to 25 updates. Follow the JBS bug it becomes; the guard stays on 25 until a 25u release
-   carries the fix.
+   carries the fix. *27 October 2026:* the report became JDK-8395878, closed the same day as a
+   duplicate of JDK-8378968, "C2 VectorAVX AVX2: wrong result, bad optimization in
+   `VectorLongToMaskNode::Ideal`" (filed 2 March 2026, affects 20 on, fixed in 27 on 16 March
+   2026). Its fix caused JDK-8380290, an AArch64 SVE assert on `VectorMaskCast`, also fixed in 27,
+   so a backport carries both. No 25u backport of JDK-8378968 is recorded yet; the next step is to
+   ask for one on the 25u list, naming both issues. Step 1's trial on JDK 27 now tests that fix.
 4. **JDK 29 as the migration target.** JDK 25 is the long-term release Spark deploys on, and 26
    and 27 are not; the base moves at 29, the next long-term release (September 2027), with
    Spark's own JDK support. Not before.
@@ -5547,6 +5552,50 @@ on a forced narrower lane count, or on the byte and short lanes milestone 8 adds
 
 **Done when** step 1 has a committed result on an Intel host under `UseKNLSetting`, and either the
 rule does not fire there or `OPEN` covers the case, with a test under that flag.
+
+### Item 116. Lean 4 where the SMT proofs stop: division by any constant, then 128-bit decimals
+
+*Added 27 October 2026 on the owner's word.* The proofs of `sql/varka/proofs/` are SMT-LIB
+instances, one per divisor or per coverage row, rendered from the code by `VarkaProofFiles` and
+decided by Z3 and cvc5. That fits a bounded claim and fails a parametric or nonlinear one: the
+multiply-high division is proven only for the divisors on a hand-kept list (row 496's subject),
+`ym_divide.smt2` records that a symbolic divisor "was out of reach for Z3 in 50 s", and the
+README says a proof that multiplies two unknowns "needs its own design". A proof assistant states
+such a claim once, for all inputs.
+
+1. **A spike: the signed multiply-high division in Lean 4 with Mathlib.** State `signedMagic`'s
+   algorithm in Lean and prove that its constants give the exact truncated quotient for every
+   64-bit divisor in its domain and every dividend within `ConstDivide.EXACT_DIVIDEND_BOUND`,
+   then the 32-bit form. First find whether Mathlib already holds the Granlund-Montgomery
+   theorem. Lean proves a model of the Java, not the Java, so a test renders the code's constants
+   for sample divisors and checks them against the model's `#eval`, as `VarkaProofFiles` pins the
+   SMT files. Measure the proof's size and the CI cost (Mathlib's cache is several gigabytes).
+   The toolchain (`elan`, from the leanprover organisation) and Mathlib are downloads that need
+   the owner's yes before the spike starts.
+2. **If the spike lands, the 128-bit decimal arithmetic** (rows 359 to 364): the limb product,
+   the rescale with `ROUND_HALF_UP`, the division of a 128-bit value by a 64-bit constant, each a
+   product of unknowns that the SMT design cannot decide.
+3. **Perhaps the calendar's decomposition and its inverse** for every integer day, if
+   `refinement.smt2` assumes them rather than proves them; to be read first.
+
+Not for Lean: the floating forms (Lean has no proven IEEE-754 double with rounding, and the
+floating ordering is a finite claim SMT decides; exhaustive sweeps over every float and ULP bounds
+serve the math rows), the per-shape checks of emitted kernels, which the rendered SMT files keep
+in step with the code, and the compiler as a whole.
+
+**Done when** the spike's theorem is checked in CI with its pin to the code, its cost is recorded,
+and the owner has decided from it whether steps 2 and 3 use Lean.
+
+### Item 117. A year-month `time_bucket` over `TIMESTAMP_NTZ`
+
+*Added 27 October 2026 on the owner's word, from row 339's plan (`m8/VARKA-339.md` 8).* Row 339
+fuses `time_bucket` over a day-time width and declines a year-month width by name: the milestone
+plan names only the day-time form, and no coverage row, TPC query or fuzz grammar uses a month
+width. The form needs the year and month of the NTZ's day and two `AddMonths` over the origin's
+day, so it rests on row 339's `ntzDay` and the month forms' whole-range sweep.
+
+**Done when** `time_bucket(INTERVAL 'n' MONTH, ntz[, origin])` fuses with Spark's answer at every
+origin, proven over the sweep row 339 builds, or the record says why it stays declined.
 
 ## 5. Ordering
 
