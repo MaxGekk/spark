@@ -207,7 +207,7 @@ final class VarkaVectorWalk {
         } else {
           cb.aload(s.species(lane));
           lane.loadScalar(cb, s.scalarArgs(lane)[l.index()]);
-          lane.narrowScalar(cb);
+          lane.literalScalar(cb);
           cb.invokestatic(lane.vector, "broadcast", lane.broadcast);
         }
       }
