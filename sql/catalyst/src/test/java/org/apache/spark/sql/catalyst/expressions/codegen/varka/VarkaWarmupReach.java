@@ -51,6 +51,7 @@ import java.util.TreeSet;
 
 import jdk.incubator.vector.ByteVector;
 import jdk.incubator.vector.DoubleVector;
+import jdk.incubator.vector.FloatVector;
 import jdk.incubator.vector.IntVector;
 import jdk.incubator.vector.LongVector;
 import jdk.incubator.vector.ShortVector;
@@ -141,6 +142,8 @@ final class VarkaWarmupReach {
         case SHORT -> ShortVector.class;
         case INT -> IntVector.class;
         case LONG -> LongVector.class;
+        case FLOAT -> FloatVector.class;
+        case DOUBLE -> DoubleVector.class;
       });
     }
     out.add(DoubleVector.class);

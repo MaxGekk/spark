@@ -697,13 +697,13 @@ final class VarkaVectorWalk {
     cb.aload(a);
     cb.getstatic(VECTOR_OPERATORS, "XOR", VO_ASSOCIATIVE);
     cb.aload(n.op() == IntOp.ADD ? r : b);
-    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryV);
+    cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseBinaryV());
     cb.getstatic(VECTOR_OPERATORS, "AND", VO_ASSOCIATIVE);
     cb.aload(n.op() == IntOp.ADD ? b : a);
     cb.getstatic(VECTOR_OPERATORS, "XOR", VO_ASSOCIATIVE);
     cb.aload(r);
-    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryV);
-    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryV);
+    cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseBinaryV());
+    cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseBinaryV());
     cb.getstatic(VECTOR_OPERATORS, "LT", VO_COMPARISON);
     lane.pushScalar(cb, 0);
     cb.invokevirtual(lane.vector, "compare", lane.compareVI);
@@ -745,7 +745,7 @@ final class VarkaVectorWalk {
       cb.aload(b);
       cb.getstatic(VECTOR_OPERATORS, n.op() == IntOp.ADD ? "SADD" : "SSUB", VO_BINARY);
       cb.swap();
-      cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryV);
+      cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseBinaryV());
       cb.aload(r);
       cb.getstatic(VECTOR_OPERATORS, "NE", VO_COMPARISON);
       cb.swap();
@@ -771,10 +771,10 @@ final class VarkaVectorWalk {
     }
     cb.getstatic(VECTOR_OPERATORS, "LSHL", VO_BINARY);
     cb.loadConstant(shift);
-    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryI);
+    cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseBinaryI());
     cb.getstatic(VECTOR_OPERATORS, "ASHR", VO_BINARY);
     cb.loadConstant(shift);
-    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryI);
+    cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseBinaryI());
   }
 
   /**
@@ -814,7 +814,7 @@ final class VarkaVectorWalk {
       throw VarkaErrors.illegalArgument("abs is a narrow lane's node only: " + n);
     }
     cb.getstatic(VECTOR_OPERATORS, n.abs() ? "ABS" : "NEG", VO_UNARY);
-    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseUnary);
+    cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseUnary());
     if (n.laneType().isNarrow() && analysis.wrapAt.contains(n)) {
       emitWrapToNarrow(cb, lane, n.laneType());
     }
@@ -845,7 +845,7 @@ final class VarkaVectorWalk {
     // [left, right, op] -> [left, op, right], the receiver's argument order.
     cb.swap();
     Lane lane = analysis.laneOf(n);
-    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryV);
+    cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseBinaryV());
     if (!dense && s.ownWord.contains(n)) {
       emitAndWord(cb, s, s.wordRef.get(n), s.wordRef.get(n.left()), s.wordRef.get(n.right()));
     }
@@ -865,16 +865,17 @@ final class VarkaVectorWalk {
     Lane lane = analysis.laneOf(n);
     if (lane == Lane.LONG) {
       cb.getstatic(VECTOR_OPERATORS, "BIT_COUNT", VO_UNARY);
-      cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseUnary);
+      cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseUnary());
       return;
     }
     cb.dup();                                                       // [x, x]
     cb.getstatic(VECTOR_OPERATORS, "BIT_COUNT", VO_UNARY);
-    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseUnary);  // [x, pop32(x)]
+    cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseUnary());  // [x, pop32(x)]
     cb.swap();                                                      // [pop32(x), x]
     cb.getstatic(VECTOR_OPERATORS, "ASHR", VO_BINARY);
     cb.loadConstant(Integer.SIZE - 1);
-    cb.invokevirtual(lane.vector, "lanewise", lane.lanewiseBinaryI);  // [pop32(x), x >> 31]
+    // [pop32(x), x >> 31]
+    cb.invokevirtual(lane.vector, "lanewise", lane.integral().lanewiseBinaryI());
     cb.loadConstant(Integer.SIZE);
     cb.invokevirtual(lane.vector, "and", lane.lanewiseVI);          // [pop32(x), high]
     cb.invokevirtual(lane.vector, "add", lane.lanewiseVV);

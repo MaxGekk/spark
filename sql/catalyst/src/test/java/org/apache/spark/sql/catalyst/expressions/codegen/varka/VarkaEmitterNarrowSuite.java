@@ -142,7 +142,7 @@ public final class VarkaEmitterNarrowSuite {
     return switch (lane) {
       case BYTE -> (byte) v;
       case SHORT -> (short) v;
-      case INT, LONG -> v;
+      case INT, LONG, FLOAT, DOUBLE -> v;
     };
   }
 
@@ -150,8 +150,8 @@ public final class VarkaEmitterNarrowSuite {
     return switch (lane) {
       case BYTE -> 1L;
       case SHORT -> 2L;
-      case INT -> 4L;
-      case LONG -> 8L;
+      case INT, FLOAT -> 4L;
+      case LONG, DOUBLE -> 8L;
     };
   }
 
@@ -184,8 +184,8 @@ public final class VarkaEmitterNarrowSuite {
     switch (lane) {
       case BYTE -> seg.set(ValueLayout.JAVA_BYTE, row, (byte) v);
       case SHORT -> seg.set(ValueLayout.JAVA_SHORT, row * 2L, (short) v);
-      case INT -> seg.set(ValueLayout.JAVA_INT, row * 4L, v);
-      case LONG -> seg.set(ValueLayout.JAVA_LONG, row * 8L, v);
+      case INT, FLOAT -> seg.set(ValueLayout.JAVA_INT, row * 4L, v);
+      case LONG, DOUBLE -> seg.set(ValueLayout.JAVA_LONG, row * 8L, v);
     }
   }
 
