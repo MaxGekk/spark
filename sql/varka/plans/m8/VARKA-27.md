@@ -456,11 +456,11 @@ The eight new rows also run the per-row test and the ANSI form, for which a `BOO
 trip is `if(x IS NULL, true, x)` and `coalesce(x, false)`, and passes; and every condition form
 with a register entry also runs as a value, under the same entry, so a value over an operator the
 census marks fused must fuse, and one it owes must decline. All four conformance suites pass with
-the twins; their only cancelled checks are the cast rows owed to rows 332, 340, 343, 350 and 364,
-as before, now also listing the value twins. A boolean value is held to both fixture rules (true
-and false somewhere, null where null-intolerant). For this `VarkaKernelChecks` learned the
-`BoolOutput` root: its data is a bitmap of whole words pre-filled with stale bits the driver must
-zero, registered with the sanitizer at whole words (`BIT_STRIDE`), compared row by row with the
+the twins; their only cancelled checks are the cast rows owed to rows 28, 103, 332, 340, 343,
+350 and 364, as before, now also listing the value twins. A boolean value is held to both fixture
+rules (true and false somewhere, null where null-intolerant). For this `VarkaKernelChecks` learned
+the `BoolOutput` root: its data is a bitmap of whole words pre-filled with stale bits the driver
+must zero, registered with the sanitizer at whole words (`BIT_STRIDE`), compared row by row with the
 data bit as the known-true answer and the validity as the known one, held to zero past the last
 row, and folded into the answer digest. Inverting the data compare fails six tests of
 `VarkaBooleanConformanceSuite` and `VarkaEmitterMixedLaneSuite`.
@@ -472,7 +472,8 @@ row, and folded into the answer digest. Inverting the data compare fails six tes
   `VarkaMemorySanitizerEndToEndSuite` runs `b AND b2`, `(i > 50) OR b` and `b <=> b2` over 100
   rows under the sanitizer (3.6's end to end at a length not a multiple of 64). Both, and the
   differential, run under `-Dvarka.checkBothBodies` and the sanitizer in the defaults gate below,
-  which puts both flags on every JVM; that is where a bit output's both-bodies check runs.
+  which puts both flags on every JVM; that is where a bit output's both-bodies check runs. The
+  check is exercised there, not asserted: no test counts that the compare ran.
 - `VarkaEmitterBoolSuite`'s writers gain a fifth, `validityByWord` with
   `denseValidityOnce(false)`.
 - `VarkaEmitterMixedLaneSuite` runs boolean outputs in kernels of both lanes, whose epilogue is
@@ -507,6 +508,8 @@ land coverage rows on master; the files are regenerated again after they merge.
 `-Dvarka.checkBothBodies` on every JVM) ran 2468 tests over both modules with one failure, the
 golden corpus before its regeneration, which then passes. Every one of the 136 predicate rows
 answers as Spark does as a boolean output, row for row on every fixture under both consumers, with
-a kernel serving it but for the bare column `b`, which runs on Spark's projection. The 136 output
+a kernel serving it but for the bare column `b`, which runs on Spark's projection. The
+exemption for an output Spark folds to a constant never fires under the exclusions: run once with
+it removed, all 136 tests pass. The 136 output
 tests take 28.3 s, against prediction 4.4's 60 s for 123: a ratio of 0.47, since each test's
 queries are small and the fixtures stay cached across them.
