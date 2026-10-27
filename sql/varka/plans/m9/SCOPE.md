@@ -5229,6 +5229,14 @@ where the species has two lanes, with the reason in `EXPLAIN`. **Done when** one
 built and the 128-bit warm-up arm releases no kernel for this cause, or the record says why
 neither is worth it on the hosts that have it.
 
+*27 October 2026, the first measurement against Spark:* row 27's baseline
+(`sql/core/benchmarks/VarkaBooleanOutputBenchmark-jdk25-runner-epyc7763-128bit-results.txt`, its
+filter controls, EPYC 7763 at `-XX:MaxVectorSize=16`) has the fused filter
+`(d < d2) AND (l < l2)` at 0.8X of Spark's row path with no nulls and 1.3X with nulls, and
+`l < l2` at 1.1X, against 3.0X to 3.4X and 1.7X to 1.9X at 256 bits. So a shape Varka fuses today
+is slower than the row engine on this host, and rows 27 and 347 decided to fuse long kernels at two
+lanes only where they lose nothing the filters do not: this item's verdict decides those too.
+
 ### Item 102. A date column's bound per shape, not the calendar's 0001 to 9999
 
 *Added 16 October 2026 from `m7/VARKA-379.md` 3.1.* VARKA-379 made the date column bound a check:
