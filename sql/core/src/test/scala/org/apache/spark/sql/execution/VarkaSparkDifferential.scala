@@ -37,6 +37,19 @@ import org.apache.spark.sql.internal.SQLConf
 trait VarkaSparkDifferential extends QueryTest with VarkaSharedSessions with VarkaTestWatchdog {
   import VarkaSparkFuzz._
 
+  /**
+   * Both sessions read the cached fixture without the batch pruning of its column statistics.
+   * The statistics leave NaN out (SPARK-58482), so a filter that a NaN row of the floating
+   * columns passes, `NOT (x < 1.5D)`, prunes that row's batch on both sides: the two engines
+   * agree, and the check that the pivot row is selected fails on Spark's answer, not Varka's.
+   */
+  override protected def beforeAll(): Unit = {
+    super.beforeAll()
+    for (session <- Seq(spark, varkaSpark)) {
+      session.conf.set(SQLConf.IN_MEMORY_PARTITION_PRUNING.key, "false")
+    }
+  }
+
   /** Plans of the Varka session, over the checks run, that took a Varka node. */
   protected var fused = 0
   protected var compared = 0

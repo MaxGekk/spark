@@ -433,7 +433,8 @@ public abstract class VarkaTypeConformance {
         plan.numLiterals(), null, null, VarkaMatrixRuns.BASE);
     int[] lits = plan.literals().stream().mapToInt(Integer::intValue).toArray();
     long[] longLits = plan.longLiterals().stream().mapToLong(Long::longValue).toArray();
-    boolean onLong = plan.lane(VarkaMatrixRuns.BASE) == LaneType.LONG;
+    // The long harness at every 64-bit lane, DOUBLE's bits included.
+    boolean onLong = plan.lane(VarkaMatrixRuns.BASE).bits() == Long.SIZE;
     return Optional.of(new Compiled(className, bytes, plan.outputs(), plan.inputOrdinals(),
         onLong, lits, longLits, outputs));
   }

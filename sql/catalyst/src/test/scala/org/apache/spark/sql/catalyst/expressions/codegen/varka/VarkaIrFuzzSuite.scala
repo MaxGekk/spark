@@ -347,7 +347,8 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
    * `emitOrSkip` counts and skips, and true once the rows are compared.
    */
   private def run(c: VarkaFuzzCase): Boolean = {
-    val long = c.lane == LaneType.LONG
+    // The long harness at every 64-bit lane, DOUBLE's bits included.
+    val long = c.lane.bits() == java.lang.Long.SIZE
     val className = "org.apache.spark.sql.varka.execution.VarkaFusedFuzz" +
       s"${if (long) "Long" else ""}${classCounter.addAndGet(1)}"
     def emitWith(o: VarkaEmitOptions): Array[Byte] = VarkaLoopEmitter.emitTraced(

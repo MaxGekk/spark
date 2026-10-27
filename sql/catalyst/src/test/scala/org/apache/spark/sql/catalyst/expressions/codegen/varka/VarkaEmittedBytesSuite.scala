@@ -32,9 +32,8 @@ import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeRef
   Expression, In, InSet, Literal}
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaIrGrammar._
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
-import org.apache.spark.sql.types.{BooleanType, ByteType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, TimestampNTZType, TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{BooleanType, ByteType, DateType, DayTimeIntervalType, DoubleType, FloatType, IntegerType, LongType, ShortType, TimestampNTZType, TimeType, YearMonthIntervalType}
 
 /**
  * The emitted-bytes oracle (VARKA-85, step 1): what the emitter produces for every shape, pinned
@@ -103,8 +102,13 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
   // TIMESTAMP_NTZ columns (VARKA-338), as `VarkaCoverageSuite` declares them.
   private val ntz = AttributeReference("ntz", TimestampNTZType)()
   private val ntz2 = AttributeReference("ntz2", TimestampNTZType)()
-  private val columns: Seq[Attribute] =
-    Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2, y1, y2, s1, s2, ntz, ntz2)
+  // The floating columns (VARKA-341), as `VarkaCoverageSuite` declares them.
+  private val x = AttributeReference("x", DoubleType)()
+  private val x2 = AttributeReference("x2", DoubleType)()
+  private val f = AttributeReference("f", FloatType)()
+  private val f2 = AttributeReference("f2", FloatType)()
+  private val columns: Seq[Attribute] = Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2,
+    y1, y2, s1, s2, ntz, ntz2, x, x2, f, f2)
 
   private val className = "org.apache.spark.sql.varka.execution.VarkaEmittedBytesOracle"
 
@@ -131,8 +135,9 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
   private def emitOptions(roots: Seq[VarkaVectorIR], lanes: Int,
       arm: VarkaEmitOptions => VarkaEmitOptions): VarkaEmitOptions = {
     val laneCount =
-      if (VarkaKernelPlan.driveOf(roots.asJava, VarkaMatrix.base).filter(_ == LaneType.LONG)
-          .isPresent) {
+      // Half the lanes at every 64-bit drive, DOUBLE's included.
+      if (VarkaKernelPlan.driveOf(roots.asJava, VarkaMatrix.base)
+          .filter(_.bits() == java.lang.Long.SIZE).isPresent) {
         lanes / 2
       } else {
         lanes

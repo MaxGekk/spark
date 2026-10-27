@@ -398,7 +398,8 @@ public final class VarkaCompiledCheck {
       this.emit = emit;
       this.s = s;
       this.h = h;
-      this.isLong = c.lane() == LaneType.LONG;
+      // The long entry and table at every 64-bit lane, DOUBLE's bits included.
+      this.isLong = c.lane().bits() == Long.SIZE;
       this.numInputs = c.numInputs();
       this.drawn = new Cols(c.length(), c.data(), c.nulls(), c.forceMasked());
       this.witness = s.witnessed() ? VarkaTierWitness.get() : null;

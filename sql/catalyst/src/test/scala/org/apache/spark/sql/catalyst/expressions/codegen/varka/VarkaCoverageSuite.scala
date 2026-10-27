@@ -35,7 +35,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.{Forwar
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 import org.apache.spark.sql.catalyst.util.DateTimeConstants.{MICROS_PER_DAY, NANOS_PER_DAY, NANOS_PER_MICROS, NANOS_PER_MILLIS}
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, TimestampNTZType, TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DayTimeIntervalType, DoubleType, FloatType, IntegerType, LongType, ShortType, TimestampNTZType, TimeType, YearMonthIntervalType}
 import org.apache.spark.util.Utils
 
 /**
@@ -113,9 +113,15 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   // column against column.
   private val ntz = AttributeReference("ntz", TimestampNTZType)()
   private val ntz2 = AttributeReference("ntz2", TimestampNTZType)()
+  // The floating lanes' columns (VARKA-341): DOUBLE `x`, `x2` and FLOAT `f`, `f2`, two of each
+  // so a comparison or a pick can be column against column.
+  private val x = AttributeReference("x", DoubleType)()
+  private val x2 = AttributeReference("x2", DoubleType)()
+  private val f = AttributeReference("f", FloatType)()
+  private val f2 = AttributeReference("f2", FloatType)()
 
-  private val columns: Seq[Attribute] =
-    Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2, y1, y2, s1, s2, ntz, ntz2)
+  private val columns: Seq[Attribute] = Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2,
+    y1, y2, s1, s2, ntz, ntz2, x, x2, f, f2)
 
   /**
    * One documented expression. `sql` is both what the table prints and what the check
@@ -179,6 +185,50 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
    */
   private val ntzHeld = "TIMESTAMP_NTZ '2021-06-01 12:00:00'"
   private val ntzHeld2 = "TIMESTAMP_NTZ '1969-12-31 18:00:00'"
+
+  /**
+   * The predicate rows of a floating column pair, `a` and `b`, whose literals carry `suffix`
+   * (`D` or `F`, so that a literal is of the column's type and needs no cast): the comparisons,
+   * `<=>`, `isnan`, the null tests, a literal on the right and `IN` in both its forms. The
+   * column pairs meet NaN against NaN and against every other value, and both zeros both ways
+   * round, in the differential fixtures.
+   */
+  private def floatingPredicates(a: String, b: String, suffix: String,
+      dataType: DataType): Seq[Row] = {
+    // Eleven literals of one integer digit, past the optimizer's InSet threshold of ten.
+    val many = (0 to 9).map(k => s"$k.5$suffix") :+ s"-2.5$suffix"
+    val manyValues: Set[Any] = dataType match {
+      case DoubleType => ((0 to 9).map(k => k + 0.5) :+ -2.5).toSet
+      case _ => ((0 to 9).map(k => k + 0.5f) :+ -2.5f).toSet
+    }
+    val column = if (a == x.name) x else f
+    Seq(
+      Row(s"$a < $b"),
+      Row(s"$a <= $b"),
+      Row(s"$a > $b"),
+      Row(s"$a >= $b"),
+      Row(s"$a = $b", "NaN equals NaN, and -0.0 equals 0.0"),
+      Row(s"$a <> $b"),
+      Row(s"$a <=> $b", "null-safe equality under the lane's own equality"),
+      Row(s"$a < 1.5$suffix", "the literal is its bits in the table of the lane's width"),
+      Row(s"$a = 1.5$suffix"),
+      Row(s"$a IN (1.5$suffix, -2.5$suffix)", "an equality chain under the lane's equality"),
+      Row(s"$a IN (11 literals)",
+        "an IN list this long arrives from the optimizer as an InSet and fuses the same way",
+        Some(InSet(column, manyValues)), executable = Some(many.mkString(s"$a IN (", ", ", ")"))),
+      Row(s"isnan($a)", "never null: false on a null row"),
+      Row(s"$a IS NULL"),
+      Row(s"$a IS NOT NULL"))
+  }
+
+  /** The value rows of a floating column pair: the picks, which move bits and order them. */
+  private def floatingChoices(a: String, b: String): Seq[Row] = Seq(
+    Row(s"greatest($a, $b)", "Spark's order, the first of two equal operands kept"),
+    Row(s"least($a, $b)"),
+    Row(s"nanvl($a, $b)", "an IF over isnan, null where the first operand is"),
+    Row(s"CASE WHEN $a < $b THEN $a ELSE $b END"),
+    Row(s"if($a IS NULL, $b, $a)"),
+    Row(s"coalesce($a, $b)"))
 
   private val families: Seq[Family] = Seq(
     Family("Day arithmetic", predicates = false, Seq(
@@ -645,6 +695,16 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
         "engine the guard sends its batch to", domain = Some(ntzDayBound)),
       Row("CAST(ntz AS DATE)", "cannot fail: every quotient is a day an int holds"))),
 
+    // DOUBLE and FLOAT on their own lanes (VARKA-341), in Spark's order: NaN equals NaN and is
+    // above every other value, and -0.0 equals 0.0. A comparison is the IEEE compare corrected
+    // for NaN, and every pick moves the bits, so a NaN's payload and a zero's sign pass
+    // through. The literals are ones the differential fixtures hold.
+    Family("DOUBLE columns", predicates = true, floatingPredicates("x", "x2", "D",
+      DoubleType)),
+    Family("DOUBLE columns choosing values", predicates = false, floatingChoices("x", "x2")),
+    Family("FLOAT columns", predicates = true, floatingPredicates("f", "f2", "F", FloatType)),
+    Family("FLOAT columns choosing values", predicates = false, floatingChoices("f", "f2")),
+
     Family("Time arithmetic", predicates = false, Seq(
       Row("t - t2", "a day-time interval, the nanosecond difference divided by a thousand"),
       Row("time_diff('HOUR', t, t2)",
@@ -893,8 +953,14 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   }
 
   test("the table documents every expression the compiler admits") {
+    // A row documents its classes and their expression superclasses, so the floating lanes'
+    // admission of every `BinaryComparison` is documented by the comparisons' rows (VARKA-341).
     val documented = families.flatMap(_.rows).flatMap { row =>
-      expressionOf(row).collect { case e: Expression => e.getClass.getSimpleName }
+      expressionOf(row).flatMap { e =>
+        Iterator.iterate[Class[_]](e.getClass)(_.getSuperclass)
+          .takeWhile(c => c != null && classOf[Expression].isAssignableFrom(c))
+          .map(_.getSimpleName)
+      }
     }.toSet
     val missing =
       (admittedByCompiler -- infrastructure -- matchedOnlyToDecline.keySet -- documented)
