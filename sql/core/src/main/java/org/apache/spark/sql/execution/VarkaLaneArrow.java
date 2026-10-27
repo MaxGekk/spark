@@ -25,6 +25,8 @@ import org.apache.arrow.vector.BigIntVector;
 import org.apache.arrow.vector.DateDayVector;
 import org.apache.arrow.vector.DecimalVector;
 import org.apache.arrow.vector.DurationVector;
+import org.apache.arrow.vector.Float4Vector;
+import org.apache.arrow.vector.Float8Vector;
 import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.IntervalYearVector;
 import org.apache.arrow.vector.SmallIntVector;
@@ -106,13 +108,17 @@ final class VarkaLaneArrow {
       case TIME -> new Vector(id, TimeNanoVector.class, VarkaLaneArrow::fromField);
       case DT_INTERVAL -> new Vector(id, DurationVector.class, VarkaLaneArrow::fromField);
       case TIMESTAMP_NTZ -> new Vector(id, TimeStampMicroVector.class, VarkaLaneArrow::fromField);
+      // The floating lanes (VARKA-341): IEEE 754 values in four- and eight-byte buffers, built
+      // from Spark's own field as the long lane's are.
+      case FLOAT -> new Vector(id, Float4Vector.class, VarkaLaneArrow::fromField);
+      case DOUBLE -> new Vector(id, Float8Vector.class, VarkaLaneArrow::fromField);
       // Sixteen bytes a row at every precision, read on the long lane up to precision 18
       // (VARKA-347) once the field passes decimalFieldMatches. Not written: a decimal output is
       // row 157's store, so the entry builds no destination.
       case DECIMAL -> new Vector(id, DecimalVector.class, null);
       // Read by no lane: a boolean is two bitmaps (named in isArrowBacked) and is not written
-      // yet (row 27); the others are owed to their rows or declined by decision (VarkaTypes).
-      case BOOLEAN, FLOAT, DOUBLE, TIMESTAMP -> null;
+      // yet (row 27); the timestamp is declined by decision (VarkaTypes).
+      case BOOLEAN, TIMESTAMP -> null;
     };
   }
 

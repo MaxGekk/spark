@@ -1264,8 +1264,8 @@ final class Analysis {
     // alone is the exception (`validityOnlyNarrow`): the word is a bit per row at every lane.
     // The IR's own constructors make any other mix unbuildable; this is what catches one built
     // another way.
-    // A floating lane holds no type yet (VARKA-341's split comes before its admission): an
-    // emission of one holds only its own lane, and no integral emission holds a floating node.
+    // A floating emission holds only its own lane's nodes, and no integral emission holds a
+    // floating one: the two kinds meet only through a cast, which no kernel builds yet.
     boolean fits = switch (lane) {
       case BYTE, SHORT, FLOAT, DOUBLE -> node.laneType() == lane.laneType;
       case INT -> node.laneType() != VarkaVectorIR.LaneType.LONG

@@ -18,6 +18,7 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -169,15 +170,13 @@ public final class VarkaTypesSuite {
   @Test
   @DisplayName("a column of an owed, declined or condition-only type declines naming its type")
   void declineNamesTheType() {
-    assertEquals("a double column: the DOUBLE lane is row 341's",
-        VarkaTypes.declineReason(DataTypes.DoubleType).orElseThrow());
     assertEquals("a timestamp column: its arithmetic is in the session time zone, which is not "
         + "lane arithmetic", VarkaTypes.declineReason(DataTypes.TimestampType).orElseThrow());
     assertEquals("a boolean column read as a value, which row 27 builds; it is read as a "
         + "condition", VarkaTypes.declineReason(DataTypes.BooleanType).orElseThrow());
-    assertEquals("a float column: the FLOAT lane is row 341's",
-        VarkaTypes.declineReason(DataTypes.FloatType).orElseThrow());
     assertTrue(VarkaTypes.declineReason(DataTypes.IntegerType).isEmpty());
+    assertTrue(VarkaTypes.declineReason(DataTypes.DoubleType).isEmpty());
+    assertTrue(VarkaTypes.declineReason(DataTypes.FloatType).isEmpty());
     assertTrue(VarkaTypes.declineReason(DataTypes.TimestampNTZType).isEmpty());
     assertTrue(VarkaTypes.declineReason(DataTypes.StringType).isEmpty());
   }
@@ -213,6 +212,32 @@ public final class VarkaTypesSuite {
         + "milestone plan's 2.8)", VarkaTypes.declineReason(negative).orElseThrow());
     // The id-level answer, which carries no precision, is the lane of the admitted ones.
     assertEquals(LaneType.LONG, VarkaTypes.info(VarkaTypeId.DECIMAL).lane().orElse(null));
+  }
+
+  @Test
+  @DisplayName("a lane's bits are Spark's value of the type and back, a NaN's payload and a "
+      + "zero's sign kept")
+  void sparkValueRoundTrips() {
+    Info dbl = VarkaTypes.info(VarkaTypeId.DOUBLE);
+    Info flt = VarkaTypes.info(VarkaTypeId.FLOAT);
+    long payloadNaN = 0x7ff8_0000_0000_0123L;
+    assertEquals(Double.longBitsToDouble(payloadNaN), dbl.sparkValue(payloadNaN));
+    assertEquals(payloadNaN, dbl.bits(Double.longBitsToDouble(payloadNaN)));
+    assertEquals(Long.MIN_VALUE, dbl.bits(-0.0d));
+    assertEquals(-0.0d, dbl.sparkValue(Long.MIN_VALUE));
+    // A float's bits arrive sign-extended from the int table, as a negative float's are.
+    long negativeZero = Float.floatToRawIntBits(-0.0f);
+    assertEquals(-0.0f, flt.sparkValue(negativeZero));
+    assertEquals(negativeZero, flt.bits(-0.0f));
+    assertEquals(1.5f, flt.sparkValue(Float.floatToRawIntBits(1.5f)));
+    assertEquals(-3, VarkaTypes.info(VarkaTypeId.INT).sparkValue(-3L));
+    assertEquals((byte) -128, VarkaTypes.info(VarkaTypeId.BYTE).sparkValue(-128L));
+    assertEquals(true, VarkaTypes.info(VarkaTypeId.BOOLEAN).sparkValue(1L));
+    assertEquals(7L, VarkaTypes.info(VarkaTypeId.LONG).bits(7L));
+    // A value of another type is refused, not converted: a Long is not a DOUBLE's value.
+    assertThrows(IllegalArgumentException.class, () -> dbl.bits(7L));
+    assertThrows(IllegalArgumentException.class,
+        () -> VarkaTypes.info(VarkaTypeId.DECIMAL).sparkValue(0L));
   }
 
   /** The bits a row of a fixed-width Arrow type, as Spark's writer lays it out. */

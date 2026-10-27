@@ -54,7 +54,9 @@ public final class VarkaKernelPlan {
     /** A narrow value the drive lane cannot lower or this width cannot widen. */
     NARROW,
     /** Two roots no one lane serves: a long root beside a narrow or int one. */
-    LANE_MISMATCH
+    LANE_MISMATCH,
+    /** A condition root on a floating lane, which no filter kernel joins yet. */
+    FLOATING_CONDITION
   }
 
   private final Optional<Refusal> refusal;
@@ -82,6 +84,10 @@ public final class VarkaKernelPlan {
   public static VarkaKernelPlan of(List<VarkaVectorIR> roots, VarkaEmitOptions options) {
     if (roots.isEmpty()) {
       throw VarkaErrors.illegalArgument("no output chains to plan");
+    }
+    Optional<Refusal> floating = floatingConditionRefusal(roots);
+    if (floating.isPresent()) {
+      return refused(floating.get());
     }
     Optional<LaneType> kernel = kernelLane(roots, options);
     Optional<Refusal> narrow = narrowRefusal(roots, kernel, options);
@@ -165,6 +171,14 @@ public final class VarkaKernelPlan {
    */
   static LaneType emissionLane(VarkaVectorIR root, VarkaEmitOptions options) {
     Set<LaneType> lanes = VarkaVectorIR.lanesIn(root);
+    // A floating tree holds its one lane: no node converts between a floating lane and another
+    // yet, and the IR's constructors refuse a mix, so the tree drives where its values are.
+    if (lanes.contains(LaneType.DOUBLE)) {
+      return LaneType.DOUBLE;
+    }
+    if (lanes.contains(LaneType.FLOAT)) {
+      return LaneType.FLOAT;
+    }
     if (lanes.contains(LaneType.LONG)) {
       return LaneType.LONG;
     }
@@ -201,12 +215,18 @@ public final class VarkaKernelPlan {
     return lanesShare(lanes);
   }
 
-  /** The lane roots of these emission lanes share: theirs where one, the int lane but for long. */
+  /**
+   * The lane roots of these emission lanes share: theirs where one, the int lane but for long. A
+   * floating root shares with no root of another lane: it would join one only through a mask
+   * crossing between the kinds, which is not built (VARKA-341 2.4), so it takes a kernel of its
+   * own.
+   */
   private static Optional<LaneType> lanesShare(Set<LaneType> lanes) {
     if (lanes.size() <= 1) {
       return lanes.stream().findFirst();
     }
-    return lanes.contains(LaneType.LONG) ? Optional.empty() : Optional.of(LaneType.INT);
+    return lanes.contains(LaneType.LONG) || lanes.stream().anyMatch(LaneType::isFloating)
+        ? Optional.empty() : Optional.of(LaneType.INT);
   }
 
   /**
@@ -296,6 +316,26 @@ public final class VarkaKernelPlan {
           return Optional.of(new Refusal(Kind.NARROW,
               "a " + type + " column has no widening load at " + intLanes + " int lanes"));
         }
+      }
+    }
+    return Optional.empty();
+  }
+
+  /**
+   * The refusal of a condition root on a floating lane: a filter's conjunct such as
+   * {@code d IS NOT NULL}. A filter kernel's conjuncts meet on one lane, and the other conjuncts
+   * of a filter that reads a {@code DOUBLE} column are mostly integral - the date or bigint tests
+   * beside it - so a floating conjunct fused first would leave them no lane to meet on and send
+   * them to the row filter. It declines instead, keeping the filter's kernel as it was before the
+   * type was read; it joins the kernel when a mask crosses between the kinds. A choice's floating
+   * condition is no root, so a projection's {@code CASE WHEN d IS NULL THEN ...} still fuses.
+   */
+  private static Optional<Refusal> floatingConditionRefusal(List<VarkaVectorIR> roots) {
+    for (VarkaVectorIR root : roots) {
+      if (root instanceof VarkaVectorIR.Cond && root.laneType().isFloating()) {
+        return Optional.of(new Refusal(Kind.FLOATING_CONDITION, "a condition on the "
+            + root.laneType() + " lane in a filter: its kernel meets on an integral lane, and "
+            + "a mask crossing from a floating lane is not built"));
       }
     }
     return Optional.empty();
