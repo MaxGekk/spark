@@ -268,6 +268,15 @@ public final class VarkaExpressionCompiler {
   }
 
   /**
+   * The units {@code time_diff} and {@code time_trunc} accept, each with its nanoseconds, as
+   * {@code VarkaTimeCompiler} reads them: a suite compiles every unit from here, not only the
+   * ones a coverage row names, so a unit added to the table is tested without a row (VARKA-496).
+   */
+  public static Map<String, Long> timeUnitsForTesting() {
+    return VarkaTimeCompiler.NANOS_PER_TIME_UNIT;
+  }
+
+  /**
    * {@code compile}'s result, or the internal error a throw out of it becomes (VARKA-314). The
    * compiler runs at planning time - on the driver for {@code VarkaColumnarRule}, in a task for
    * an evaluator's own compile - and nothing above it catches: a broken invariant fails the
