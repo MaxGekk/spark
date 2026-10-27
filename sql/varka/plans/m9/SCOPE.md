@@ -5597,6 +5597,54 @@ day, so it rests on row 339's `ntzDay` and the month forms' whole-range sweep.
 **Done when** `time_bucket(INTERVAL 'n' MONTH, ntz[, origin])` fuses with Spark's answer at every
 origin, proven over the sweep row 339 builds, or the record says why it stays declined.
 
+### Item 120. Never slower than Spark: a gate per width
+
+*Added 27 October 2026 on the owner's word, from the day's review of what Varka should improve.*
+The rule that a fused shape is not slower than Spark's row path lives only in reviewers' heads:
+row 27's baseline found `(d < d2) AND (l < l2)` at 0.8X on the EPYC 7763 at 128 bits only because
+its filter control happened to time it, and m8 row 503 then declined that case. Run every coverage
+row's kernel against the row path, nightly, at 128 and 256 bits on the runners and at the laptop's
+widths, from one committed benchmark class driven by `coverage.json`, and fail where a row is below
+1.0X by more than the noise band the benchmark's own reruns give. **Done when** the nightly runs,
+its results are committed per width, and a shape below 1.0X fails it with its row named or is
+declined by a recorded refusal (as row 503 does); items 101 and 119 are its remedies.
+
+### Item 121. Generated files that concurrent pull requests do not hand-merge
+
+*Added 27 October 2026 on the owner's word.* `coverage.json`, `emitted_bytes.json`,
+`width_audit.json`, `types.tsv`, `census.tsv`, `casts_fused.tsv` and the docs table are each one
+file every type row regenerates, so nearly every merge of master into an open pull request
+conflicts in them, and the resolution is to take a side and regenerate by hand. Either regenerate
+them in CI on the merge result (a job that commits the regenerated files, or that fails a pull
+request whose files are stale with the command to run), or shard each by family or row so that two
+rows touch different files. **Done when** two pull requests that each add coverage rows merge with
+master in either order without a conflict in a generated file, and a stale file fails CI with its
+regeneration command.
+
+### Item 122. The option matrix only where a change can move it
+
+*Added 27 October 2026 on the owner's word.* A pull request's option matrix is twelve jobs of
+about three hours whatever it changes, and with the PR build's sixteen it fills the fork's 40 slots
+with two pull requests in flight. Select the matrix's suites from the changed files, as the
+`Varka suites` jobs already split by module: a plan-only change runs none, a test-harness change
+the whole matrix, an emitter change the emitter and differential suites under every
+configuration. **Done when** the selection is a committed rule with a test, a plan-only pull
+request dispatches no matrix, and the nightly still runs the whole matrix so a selection gap shows
+within a day.
+
+### Item 123. A register of the upstream behaviours Varka depends on or works around
+
+*Added 27 October 2026 on the owner's word.* Varka's answers and tests rest on facts of Spark and
+the JDK that a version change can move: SPARK-58482's batch pruning, which leaves NaN out of a
+cached batch's statistics (the floating suites run with pruning off because of it); the JIT's
+messageless `ArithmeticException` once a `Math.*Exact` site has trapped enough (the error
+comparison's tolerance); JDK-8378968's mask miscompile behind `VarkaMaskGuard`; Spark's type
+coercion that wraps division and the math functions in casts to double. Keep one register, each
+entry with the version that has it, the upstream issue, the Varka code that depends on it and the
+test that pins it, so an upgrade of Spark or the JDK has a list to recheck. Row 504 covers the
+entries its checks work around; this item is the register as a whole. **Done when** the register
+exists, each entry names its pinning test, and the JDK and Spark upgrade checklists read it.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
