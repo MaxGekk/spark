@@ -2582,23 +2582,29 @@ class VarkaExpressionCompilerSuite extends SparkFunSuite with VarkaTestWatchdog 
       "day-time interval narrowed to a coarser end field, which truncates")
   }
 
-  test("a timestamp column declines with its type's reason from the registry, in both forms") {
-    // The zoned type is out by decision and NTZ is owed to row 338 (VarkaTypes, VARKA-494); each
-    // reason names the type, so EXPLAIN tells a decision from a gap.
-    val reasons = Seq(
-      ts -> ("a timestamp column: its arithmetic is in the session time zone, which is not " +
-        "lane arithmetic"),
-      ntz -> "a timestamp_ntz column: the TIMESTAMP_NTZ lane is row 338's")
-    for ((col, reason) <- reasons) {
-      val predicate = VarkaExpressionCompiler.compilePredicate(
-        And(GreaterThan(d, d2), GreaterThan(col, col)), withLong).get
-      assert(predicate.specs.asScala.toSeq.map(_.fused) === Seq(true, false))
-      assert(predicate.specs.get(1).decline.get.reason === reason)
-      val projection = VarkaExpressionCompiler.compilePartial(
-        Seq(out(DateAdd(d, Literal(1))), out(Greatest(Seq(col, col)))), withLong).get
-      assert(projection.specs.asScala.toSeq === Seq(new FusedOutput(0), VarkaOutputSpec.RESIDUAL))
-      assert(projection.declines.asScala(1).reason === reason)
-    }
+  test("a zoned timestamp column declines with its type's reason, and an NTZ one fuses") {
+    // The zoned type is out by decision (VarkaTypes, VARKA-494), and its reason names the type,
+    // so EXPLAIN tells a decision from a gap. NTZ is read on the long lane (VARKA-338): its
+    // comparison and its greatest each fuse into a kernel driven at the long lane.
+    val reason =
+      "a timestamp column: its arithmetic is in the session time zone, which is not lane arithmetic"
+    val predicate = VarkaExpressionCompiler.compilePredicate(
+      And(GreaterThan(d, d2), GreaterThan(ts, ts)), withLong).get
+    assert(predicate.specs.asScala.toSeq.map(_.fused) === Seq(true, false))
+    assert(predicate.specs.get(1).decline.get.reason === reason)
+    val projection = VarkaExpressionCompiler.compilePartial(
+      Seq(out(DateAdd(d, Literal(1))), out(Greatest(Seq(ts, ts)))), withLong).get
+    assert(projection.specs.asScala.toSeq === Seq(new FusedOutput(0), VarkaOutputSpec.RESIDUAL))
+    assert(projection.declines.asScala(1).reason === reason)
+
+    val ntzPredicate = VarkaExpressionCompiler.compilePredicate(
+      GreaterThan(ntz, Literal(0L, TimestampNTZType)), withLong).get
+    assert(ntzPredicate.specs.asScala.toSeq.map(_.fused) === Seq(true))
+    assert(ntzPredicate.fused.lane(VarkaEmitOptions.DEFAULTS) === LaneType.LONG)
+    val ntzProjection = VarkaExpressionCompiler.compilePartial(
+      Seq(out(Greatest(Seq(ntz, ntz)))), withLong).get
+    assert(ntzProjection.specs.asScala.toSeq === Seq(new FusedOutput(0)))
+    assert(ntzProjection.fused.lane(VarkaEmitOptions.DEFAULTS) === LaneType.LONG)
   }
 
   test("a projection that mixes lanes fuses each lane in a kernel of its own") {
