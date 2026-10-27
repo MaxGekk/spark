@@ -1,8 +1,10 @@
 # Adding a type to Varka
 
-Milestone 8 adds seven types: two have landed in part, and four have not started (`TIMESTAMP_NTZ`,
-`DOUBLE`, `FLOAT` and `DECIMAL`; `BOOLEAN` has its conditions and the condition-to-value bridge,
-`CondValue` (row 460), but no compiler arm yet reads a boolean as a value). This page is the path a
+Milestone 8 adds seven types: three have landed in part - `TINYINT`, `SMALLINT` and
+`TIMESTAMP_NTZ`, the last on the long lane with its comparisons, choice and casts with `DATE` and
+its arithmetic and fields still to come (rows 339 and 340) - and three have not started (`DOUBLE`,
+`FLOAT` and `DECIMAL`); `BOOLEAN` has its conditions and the condition-to-value bridge,
+`CondValue` (row 460), but no compiler arm yet reads a boolean as a value. This page is the path a
 type takes through the engine, in the order the code runs, with the file named for each step and a
 command that says whether the step is done.
 
@@ -52,8 +54,8 @@ In this order, because each file names the next:
    Arrow) both read.
 8. `VarkaReference.java` - the scalar semantics the fuzzers compare against.
 9. `VarkaIrGrammar.java` - what the IR fuzzer can draw.
-10. `VarkaCoverageRows.scala` - the rows that make the type count as fused, and the two files
-   they generate.
+10. `VarkaCoverageSuite.scala` - the rows that make the type count as fused, and the two files
+   they generate; `VarkaCoverageRows.scala` reads the table back for the fuzzers.
 
 ## The path
 
@@ -131,8 +133,13 @@ Check: `build/sbt 'sql/testOnly *VarkaKernelEvaluatorSuite *VarkaWarmupEndToEndS
 *VarkaMemorySanitizerEndToEndSuite'`.
 
 **11. Give it coverage rows.** A load, a comparison, a choice and an output in
-`VarkaCoverageRows.scala` - without them the type does not count as fused, whatever the emitter
-does. Regenerate in this order: `VARKA_COVERAGE_REGEN=true build/sbt 'catalyst/testOnly
+`VarkaCoverageSuite.scala` - without them the type does not count as fused, whatever the emitter
+does. A type with no column in the table yet needs one in five places: `VarkaCoverageSuite`'s
+`columns`, which `coverage.json`'s column map is written from; the copies `VarkaEmittedBytesSuite`
+and `VarkaWidthAuditShapes` keep (a row over a column the bytes suite lacks is listed in
+`coverage_rows_skipped` rather than hashed, and the width audit's probe fails on it); and the
+fixtures of `VarkaCoverageDifferentialSuite` and `VarkaSparkFuzz`, which may derive the column from
+existing ones, as the `TIMESTAMP_NTZ` columns are derived from a date and a time. Regenerate in this order: `VARKA_COVERAGE_REGEN=true build/sbt 'catalyst/testOnly
 *VarkaCoverageSuite'`, then `VARKA_AUDIT_REGEN=true build/sbt 'catalyst/testOnly
 *VarkaWidthAuditSuite'`, then `VARKA_BYTES_REGEN=true build/sbt 'catalyst/testOnly
 *VarkaEmittedBytesSuite'`, then `VarkaCoverageSuite` again, and check that only the new rows moved

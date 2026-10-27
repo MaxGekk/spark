@@ -290,6 +290,43 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     }
   }
 
+  test("the floating lanes are a kind of their own: no widening, no integral operation") {
+    // VARKA-341 2.1: FLOAT and DOUBLE are 32 and 64 bits wide like INT and LONG, but no lane
+    // widens into or out of them, so WidenLane and NarrowLane refuse a floating operand, and a
+    // floating lane has no shift, bitwise operation, popcount or integer range to give.
+    import VarkaVectorIR.LaneType._
+    assert(Seq(BYTE, SHORT, INT, LONG).forall(!_.isFloating))
+    assert(Seq(FLOAT, DOUBLE).forall(_.isFloating))
+    assert(Seq(BYTE, SHORT, INT, LONG, FLOAT, DOUBLE).map(_.bits) === Seq(8, 16, 32, 64, 32, 64))
+    for (a <- VarkaVectorIR.LaneType.values(); b <- VarkaVectorIR.LaneType.values()
+         if a.isFloating || b.isFloating) {
+      assert(!a.isWiderThan(b), s"$a is wider than $b")
+    }
+    assert(LONG.isWiderThan(INT) && INT.isWiderThan(SHORT) && SHORT.isWiderThan(BYTE))
+    val col = new VarkaVectorIR.ColumnRef(0, INT)
+    intercept[Exception](new VarkaVectorIR.WidenLane(col, DOUBLE))
+    intercept[Exception](
+      new VarkaVectorIR.NarrowLane(new VarkaVectorIR.ColumnRef(0, DOUBLE), INT))
+    for (lane <- Seq(Lane.FLOAT, Lane.DOUBLE)) {
+      val e = intercept[Exception](lane.integral())
+      assert(e.getMessage.contains("floating"), e.getMessage)
+    }
+    assert(Lane.FLOAT.vector === ClassDesc.of("jdk.incubator.vector.FloatVector"))
+    assert(Lane.DOUBLE.vector === ClassDesc.of("jdk.incubator.vector.DoubleVector"))
+  }
+
+  test("a lane's literal table and local width follow its width, not its scalar") {
+    // A double literal is its bits in the long table and a float literal its bits in the int one
+    // (VARKA-341 2.3), so the 64-bit lanes share one `run` descriptor and the 32-bit lanes the
+    // other, and no existing kernel's descriptor moves.
+    assert(Lane.DOUBLE.runDesc === Lane.LONG.runDesc)
+    assert(Lane.FLOAT.runDesc === Lane.INT.runDesc)
+    assert(Lane.DOUBLE.localWidth === 2 && Lane.FLOAT.localWidth === 1)
+    assert(Lane.DOUBLE.byteStride === 8L && Lane.FLOAT.byteStride === 4L)
+    assert(Lane.DOUBLE.speciesField(8) === "SPECIES_512")
+    assert(Lane.FLOAT.speciesField(16) === "SPECIES_512")
+  }
+
   test("every descriptor the lane derives is the one the Vector API declares") {
     // The emitter builds its descriptors from two facts - the vector class and the scalar type -
     // instead of writing one table per lane, so nothing but this test stands between a wrong
@@ -323,8 +360,8 @@ class VarkaLaneTypeSuite extends SparkFunSuite with VarkaTestWatchdog {
     assert(lane.lanewiseVVWrong === MethodTypeDesc.of(v, v), "the misdescribe hook's wrong shape")
     assert(lane.lanewiseVI === MethodTypeDesc.of(v, int))
     assert(lane.lanewiseVIMasked === MethodTypeDesc.of(v, int, mask))
-    assert(lane.lanewiseBinaryV === MethodTypeDesc.of(v, binary, vector))
-    assert(lane.lanewiseBinaryI === MethodTypeDesc.of(v, binary, int))
+    assert(lane.integral().lanewiseBinaryV === MethodTypeDesc.of(v, binary, vector))
+    assert(lane.integral().lanewiseBinaryI === MethodTypeDesc.of(v, binary, int))
     assert(lane.compareVV === MethodTypeDesc.of(mask, comparison, vector))
     assert(lane.compareVI === MethodTypeDesc.of(mask, comparison, int))
     assert(lane.blend === MethodTypeDesc.of(v, vector, mask))
