@@ -150,3 +150,9 @@ workaround. Running with AVX-512 (UseAVX=3) avoids it.
 ## Frequency
 
 Always, once the method is C2-compiled, on targets without AVX-512 mask registers.
+
+## Outcome
+
+Filed 24 October 2026; it became JDK-8395878, closed on 27 October 2026 as a duplicate of
+JDK-8378968 ("C2 VectorAVX AVX2: wrong result, bad optimization in VectorLongToMaskNode::Ideal"),
+fixed in JDK 27. `m9/SCOPE.md` item 114 follows the 25u backport.
