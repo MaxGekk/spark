@@ -649,8 +649,10 @@ any reader, and the null test must check the slots. It does: `Analysis` admits a
 leaf's load and check under the test and drops its value, in the masked body and in the dense
 one, whose rows are all valid. A null slot is never read, by Spark or by the kernel.
 
-**The owner's decision of 10.2 finding 3, taken: the slot check is not narrowed by the arms
-above it.** `Analysis.armChainOf` answers the empty chain for a `DecimalColumn`. Spark reads a
+**10.2 finding 3, decided: the slot check is not narrowed by the arms above it** (the owner
+confirmed this on 27 October 2026, after step 5 had built it: a decline is always Spark's answer,
+and a narrower check would need a proof that Spark never reads the column in any plan shape).
+`Analysis.armChainOf` answers the empty chain for a `DecimalColumn`. Spark reads a
 column where its code is first referenced: a filter's generated code reads every column its
 predicate references before the predicate, so a bad slot under a `CASE` arm Spark does not take
 still raises there, and narrowing the check by the arm would answer where Spark raises. Declining
@@ -699,3 +701,20 @@ literals, passes over every golden file (789 tests, none failed, 1,058 s on the 
 adds the 17 rows and moves only the `option_arms` digests, which cover every shape;
 `width_audit.json` adds them at every width. `VarkaLiteralLiftSuite`, `VarkaGoldenExclusionsSuite`,
 `VarkaWarmupReachSuite`, the family suites and `VarkaTypesSuite` pass.
+
+**At 128 bits** (`width_audit.json` on the laptop, `MaxVectorSize=16`): every decimal row's kernel
+is the Java fallback for its two-lane long operations, the two-vector `rearrange` among them
+(`op=shuffle/rearrange vlen=2`), beside the compares, blends and mask casts every two-lane long
+kernel refuses; at 256 and 512 bits C2 refuses nothing in them. That is item 0.11's reading at
+the row's first reader, and question 4's decision waits on step 6's measurement of it.
+
+**Found on the way, fixed here.** `VarkaEmitterBudgetSuite`'s weight test had no row for
+`DecimalColumn`, a step 3 omission, and the leaf's weight of 8 counted its two mask `or` calls,
+which are not lane calls, and not its second load: it is 7, which moves no shape's bytes. A null
+test over a decimal of precision above 18 now declines naming row 359, as a comparison does.
+
+**Left by this step.** Section 3 item 2's end-to-end test, a declined batch whose bad slot
+reaches the row path and raises `NUMERIC_VALUE_OUT_OF_RANGE` there, is built in neither step 3
+nor this one; the slot table and the condition table are its oracles at the IR level until it
+is. It needs an Arrow source that writes a slot Spark's writer never writes, and is step 6's,
+beside the measurement's own fixtures.

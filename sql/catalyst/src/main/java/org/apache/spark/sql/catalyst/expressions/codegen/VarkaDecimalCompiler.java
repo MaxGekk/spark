@@ -106,7 +106,11 @@ final class VarkaDecimalCompiler {
   static Optional<VarkaVectorIR> nullTested(Expression whole, Expression child,
       VarkaSlotTable inputs, DeclineSink sink) {
     Expression column = stripWidening(child);
-    if (column instanceof BoundReference br && VarkaTypes.lane(br.dataType()).isPresent()) {
+    if (column instanceof BoundReference br) {
+      if (VarkaTypes.lane(br.dataType()).isEmpty()) {
+        return sink.decline(VarkaTypes.declineReason(br.dataType())
+            .orElse("a decimal column on no lane"), whole);
+      }
       return Optional.of(column(br, inputs));
     }
     return sink.decline("a null test over a decimal that is not a column", whole);
