@@ -236,7 +236,9 @@ class VarkaCoverageCompositionFuzzSuite
    * `TIME` inside the day in nanoseconds, the domain every long-lane guard assumes, and in whole
    * units of its precision, the only values a `TIME(p)` column holds (VARKA-276: drawn to the
    * nanosecond, a `TIME(6)` value was one Spark truncates on its first arithmetic); a day-time
-   * interval and a `BIGINT` within 2^45 and 2^40 of zero, then nearer at each step.
+   * interval and a `BIGINT` within 2^45 and 2^40 of zero, then nearer at each step. A
+   * `TIMESTAMP_NTZ` is drawn as a `BIGINT` is, within about twelve days of the epoch; its
+   * extremes are `VarkaTimestampNtzConformanceSuite`'s and `VarkaTimestampNtzCastSuite`'s.
    */
   private def drawLong(rnd: Random, dataType: DataType, scale: Int): Long = {
     def timeUnit(t: TimeType): Long = math.pow(10, 9 - t.precision).toLong

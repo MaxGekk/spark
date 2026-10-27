@@ -1267,3 +1267,18 @@ facts decide what a count of calls means to the policy:
 
 `TieredOldPercentage` is a diagnostic flag: `HotSpotDiagnosticMXBean.getVMOption` reports it as
 absent unless the JVM runs with `-XX:+UnlockDiagnosticVMOptions`.
+
+## An overflowing `Math.*Exact` loses its message once its site has trapped enough
+
+Found by `VarkaTimestampNtzSuite` failing under one option configuration on CI: Spark's row engine
+raised `ArithmeticException("long overflow")` on one session and the same exception with a null
+message on the other, for the same overflowing `CAST(d AS TIMESTAMP_NTZ)`. C2 compiles
+`Math.multiplyExact` and its kin as an intrinsic whose overflow branch is an uncommon trap
+(`inline_math_mathExact`, `opto/library_call.cpp`); once that site has trapped too often, and
+under the default `-XX:+OmitStackTraceInFastThrow`, it throws the JVM's preallocated
+`ArithmeticException_instance()`, which has no message and no stack trace. So an overflow's
+message depends on how hot its call site is, not on what computed it, and a test that runs the
+same overflow several times can see both forms in one JVM. A differential that compares raised
+errors must allow a missing message on an otherwise equal `ArithmeticException`
+(`VarkaMaybeThrows.sameError`) or run its JVM with `-XX:-OmitStackTraceInFastThrow`; the other
+fast-thrown exceptions (`/ by zero`, a null pointer, an index out of bounds) behave the same way.

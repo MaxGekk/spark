@@ -158,8 +158,8 @@ date	float	DATE	FLOAT	declined	illegal	illegal
 date	double	DATE	DOUBLE	declined	illegal	illegal
 date	dec	DATE	DECIMAL(10,2)	declined	illegal	illegal
 date	dec	DATE	DECIMAL(30,4)	declined	illegal	illegal
-date	ntz	DATE	TIMESTAMP_NTZ	declined	declined	declined
-ntz	date	TIMESTAMP_NTZ	DATE	declined	declined	declined
+date	ntz	DATE	TIMESTAMP_NTZ	fused	fused	fused
+ntz	date	TIMESTAMP_NTZ	DATE	fused	fused	fused
 ntz	time	TIMESTAMP_NTZ	TIME(0)	declined	declined	declined
 ntz	time	TIMESTAMP_NTZ	TIME(3)	declined	declined	declined
 ntz	time	TIMESTAMP_NTZ	TIME(6)	declined	declined	declined
