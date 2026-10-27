@@ -143,8 +143,9 @@ object VarkaMaybeThrows {
         t.asInstanceOf[Throwable].getMessage, t.getClass.getName)
     }.getOrElse {
       val root = chain.last
-      Raised(root.getClass.getName, null, Map.empty, String.valueOf(root.getMessage),
-        root.getClass.getName)
+      // The message as it is, null included: the JVM's preallocated ArithmeticException has
+      // none, and sameError tells that case apart only by a real null.
+      Raised(root.getClass.getName, null, Map.empty, root.getMessage, root.getClass.getName)
     }
   }
 
