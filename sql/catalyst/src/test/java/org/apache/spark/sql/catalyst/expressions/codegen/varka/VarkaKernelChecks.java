@@ -341,7 +341,9 @@ public final class VarkaKernelChecks {
    * {@code lits} as the long literal table, and the long-lane reference. A narrowing root stores
    * four bytes a row, so its output is read at that width and sign-extended: a value that did not
    * fit 32 bits then differs from the evaluator's 64-bit answer instead of being truncated on both
-   * sides.
+   * sides. Only the conformance entry point, {@link #runLoadedLong} with Spark's answers,
+   * truncates the reference too (see {@code LongLane}); this one does not, even with
+   * {@code spark} given.
    */
   public static boolean runAndCompareLong(String context, String className, byte[] bytes,
       List<VarkaVectorIR> roots, int numInputs, long[] lits, LongBatch batch,
@@ -425,7 +427,7 @@ public final class VarkaKernelChecks {
   private static Lane longLane(LongBatch batch, long[] lits, int[] intLits,
       List<VarkaVectorIR> roots) {
     return holdsBothLanes(roots) ? new MixedLane(batch, intLits, lits, roots)
-        : new LongLane(batch, lits);
+        : new LongLane(batch, lits, false);
   }
 
   /** Whether {@code roots} hold a value of each lane; see {@link #longLane}. */
@@ -553,12 +555,16 @@ public final class VarkaKernelChecks {
   /**
    * {@link #runLoadedLong} for a kernel that may hold both lanes, with {@code intLits} its int
    * literal table, every row also compared with Spark's answer (the conformance contract's long
-   * lane).
+   * lane). The one long-lane entry point whose reference truncates a narrowing root to its low 32
+   * bits, as the store and Spark's LEGACY {@code CAST(x AS INT)} do; every other leaves a value
+   * that does not fit to show as a difference ({@code LongLane}).
    */
   public static int runLoadedLong(String context, VarkaFusedKernel kernel,
       List<VarkaVectorIR> roots, int numInputs, long[] lits, int[] intLits, LongBatch batch,
       boolean declineAllowed, SparkAnswers spark, CallHook hook) {
-    return runLoaded(context, kernel, roots, numInputs, longLane(batch, lits, intLits, roots),
+    return runLoaded(context, kernel, roots, numInputs,
+        holdsBothLanes(roots) ? new MixedLane(batch, intLits, lits, roots)
+            : new LongLane(batch, lits, true),
         declineAllowed, spark, ValidityFill.BOTH, hook);
   }
 
@@ -813,7 +819,7 @@ public final class VarkaKernelChecks {
   }
 
   /** The 64-bit lane, whose narrowing roots store four bytes a row. */
-  private record LongLane(LongBatch batch, long[] lits) implements Lane {
+  private record LongLane(LongBatch batch, long[] lits, boolean truncateNarrow) implements Lane {
     @Override public int length() {
       return batch.length();
     }
@@ -854,11 +860,15 @@ public final class VarkaKernelChecks {
 
     @Override public OptionalLong reference(VarkaVectorIR root, long[] values, boolean[] isNull) {
       OptionalLong v = VarkaReference.longValue(root, values, isNull, lits);
-      // A narrowing root stores the low 32 bits of its child (NarrowLane), which is the
-      // value got() reads back and Spark's LEGACY cast: the reference answers the child in full,
-      // so the store's truncation is applied here.
-      return root instanceof NarrowLane && v.isPresent() ? OptionalLong.of((int) v.getAsLong())
-          : v;
+      // A narrowing root stores the low 32 bits of its child (NarrowLane), which got() reads
+      // back, and the reference answers the child in full. Everywhere but the conformance path
+      // the two are left to differ: the IR series adds a NarrowLane root wherever its bound
+      // analysis says the value fits an int, so a value that does not shows as a difference.
+      // The conformance path (truncateNarrow) holds every row to Spark's answer, and there a
+      // root whose value can leave the int range is a LEGACY CAST(x AS INT) of a long, which
+      // keeps the low 32 bits as the store does (an ANSI one raises, and is declined).
+      return truncateNarrow && root instanceof NarrowLane && v.isPresent()
+          ? OptionalLong.of((int) v.getAsLong()) : v;
     }
 
     @Override public VarkaReference.Truth reference(Cond cond, long[] values, boolean[] isNull) {

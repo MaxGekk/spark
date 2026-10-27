@@ -25,7 +25,8 @@ import org.apache.spark.sql.types.DataType;
  * <p>A year-month interval is a count of months, any int. The column is {@code INTERVAL MONTH},
  * the type registry's spelling, whose casts to {@code INT} fuse. Interval arithmetic raises on
  * overflow whatever the mode, so its LEGACY forms decline the batches Spark raises on as the ANSI
- * ones do.
+ * ones do. The null handling check's {@code x + y} therefore draws half the int range, whose
+ * sums all fit: over the extremes nearly every batch raises and its null patterns go unread.
  */
 @VarkaSuite
 public final class VarkaYearMonthIntervalConformanceSuite extends VarkaTypeConformance {
@@ -34,6 +35,7 @@ public final class VarkaYearMonthIntervalConformanceSuite extends VarkaTypeConfo
   protected ConformanceType type() {
     return new ConformanceType("ym", DataType.fromDDL("INTERVAL MONTH"), "INTERVAL MONTH",
         v -> "INTERVAL '" + v + "' MONTH", integralValues(Integer.MIN_VALUE, Integer.MAX_VALUE),
-        new long[] {1, -1}, new PairForm("x + y", "+"));
+        new long[] {1, -1},
+        new PairForm("x + y", "+", halfRange(Integer.MIN_VALUE, Integer.MAX_VALUE)));
   }
 }

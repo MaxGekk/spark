@@ -29,8 +29,12 @@ import org.apache.spark.sql.types.DataTypes;
  * as ({@link VarkaChrono#CONTRACT_MIN_DAYS}); the epoch and its neighbours sit between them. Two
  * dates have no arithmetic of their own type, so the null handling check takes {@code datediff},
  * and the overflow check finds no operator the census admits for the type.
+ *
+ * <p>In its own JVM: its cast to {@code TIMESTAMP_NTZ} runs a kernel of both lanes (VARKA-338),
+ * and under the option matrix's lane-pinning configurations that kernel uses an int species of a
+ * size the int-lane suites do not, a second one a shared JVM refuses ({@link VarkaSpeciesGuard}).
  */
-@VarkaSuite
+@VarkaSuite(ownJvm = true)
 public final class VarkaDateConformanceSuite extends VarkaTypeConformance {
 
   @Override

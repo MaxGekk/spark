@@ -138,10 +138,18 @@ public abstract class VarkaTypeConformance {
   }
 
   /**
-   * A form over the two columns that is null where either is and has a value elsewhere, and the
-   * census entry that says whether it fuses.
+   * A form over the two columns that is null where either is and has a value elsewhere, the
+   * census entry that says whether it fuses, and the values its fixture draws, or null for the
+   * type's own. A pair that raises on overflow in every mode (interval arithmetic) takes values
+   * whose every pair stays in range ({@link #halfRange}): over the type's extremes Spark raises
+   * on a row of nearly every batch, the kernel declines each such batch, and the null patterns
+   * would be compared on almost no row.
    */
-  protected record PairForm(String sql, String register) {}
+  protected record PairForm(String sql, String register, long[] values) {
+    public PairForm(String sql, String register) {
+      this(sql, register, null);
+    }
+  }
 
   /** The type this suite holds to the contract. */
   protected abstract ConformanceType type();
@@ -159,6 +167,15 @@ public abstract class VarkaTypeConformance {
   /** The integral values a fixture draws: the extremes, their neighbours, zero and one each way. */
   protected static long[] integralValues(long min, long max) {
     return new long[] {min, min + 1, -1, 0, 1, max - 1, max};
+  }
+
+  /**
+   * {@link #integralValues} between half of {@code min} and half of {@code max}: the sum or the
+   * difference of any two of them is between {@code min} and {@code max}, so a pair form over
+   * them never overflows.
+   */
+  protected static long[] halfRange(long min, long max) {
+    return integralValues(min / 2, max / 2);
   }
 
   // -------------------------------------------------------------------------------------------
@@ -199,7 +216,8 @@ public abstract class VarkaTypeConformance {
           condition("x <=> y", "<=>"), condition("x IS NULL", "isnull")));
     } else {
       PairForm pair = t.pair();
-      run(List.of(value(pair.sql(), pair.register()).legacy(), condition("x = y", "="),
+      run(List.of(value(pair.sql(), pair.register()).legacy().over(pair.values()),
+          condition("x = y", "="),
           condition("x <=> y", "<=>"), condition("x IS NULL", "isnull")));
     }
   }
@@ -257,8 +275,9 @@ public abstract class VarkaTypeConformance {
    * The type's own arithmetic at its extremes, each operator the census admits for the type. An
    * interval's arithmetic raises on overflow in every mode, which Spark's answer shows and the
    * kernel is held to. A type the census admits for none of them ({@code BOOLEAN}, {@code DATE},
-   * {@code TIME}) has no overflow to check, and that is stated rather than skipped: a census row
-   * that admits one gives the check its first form here.
+   * {@code TIME}, and {@code TIMESTAMP_NTZ}, which has no arithmetic of its own type until row 339
+   * adds its interval arithmetic) has no overflow to check, and that is stated rather than
+   * skipped: a census row that admits one gives the check its first form here.
    */
   @Test
   @DisplayName("overflow: LEGACY wraps, ANSI declines what Spark raises on, TRY nulls it")
@@ -294,19 +313,41 @@ public abstract class VarkaTypeConformance {
   /**
    * One expression a check runs: its SQL over {@code x} and {@code y}, its kind, the register
    * entry that says whether it fuses ({@code null} for a bare column, which every type reads),
-   * the mode, and whether it is meant to reach the type's overflow.
+   * the mode, whether it is meant to reach the type's overflow, and the values its fixture draws
+   * ({@code null} for the type's own).
    */
-  private record Form(String sql, Kind kind, String register, Mode mode, boolean overflowing) {
+  private record Form(String sql, Kind kind, String register, Mode mode, boolean overflowing,
+      long[] values) {
+    Form(String sql, Kind kind, String register, Mode mode, boolean overflowing) {
+      this(sql, kind, register, mode, overflowing, null);
+    }
+
     Form legacy() {
       return in(Mode.LEGACY);
     }
 
     Form in(Mode m) {
-      return new Form(sql, kind, register, m, overflowing);
+      return new Form(sql, kind, register, m, overflowing, values);
     }
 
     Form reachingOverflow() {
-      return new Form(sql, kind, register, mode, true);
+      return new Form(sql, kind, register, mode, true, values);
+    }
+
+    /** This form over {@code v} rather than the type's values; {@code null} keeps them. */
+    Form over(long[] v) {
+      return new Form(sql, kind, register, mode, overflowing, v);
+    }
+
+    /**
+     * Whether Spark raising on the fixture is the point of the form, so that the batches the
+     * kernel answers need not discriminate it: an overflow form, and an ANSI cast, which raises
+     * on the values outside its target's range. Over the type's extremes a narrowing one raises
+     * on a row of every batch but a tail of one null row, so it is held to declining them; its
+     * LEGACY and TRY twins answer the same fixture and are held to the rule.
+     */
+    boolean meantToRaise() {
+      return overflowing || (mode == Mode.ANSI && register != null && register.startsWith("cast:"));
     }
 
     @Override public String toString() {
@@ -356,6 +397,12 @@ public abstract class VarkaTypeConformance {
    * The gaps the census cannot state, by type and operator, with the row that owns each: its
    * claims are not per mode, and these operators fuse over two columns in LEGACY while the
    * compiler declines their checked form under ANSI.
+   *
+   * <p>The key has no mode or operand shape, so an entry owes every ANSI form of its operator
+   * over the type. When the checked form fuses - row 95's bounded ANSI {@code int *} - the check
+   * reports it as drift ("fuses, and the register owes it"): remove the entry then, and if the
+   * new form fuses only for some operands, key the gap more narrowly rather than letting it owe
+   * the forms that now fuse.
    */
   private static final Map<String, String> CHECKED_GAPS = Map.of(
       "int *", "95 (a checked int multiply has no int-lane overflow test)");
@@ -506,10 +553,11 @@ public abstract class VarkaTypeConformance {
     }
   }
 
-  private List<Row> rows(boolean withNulls) {
+  private List<Row> rows(Form f, boolean withNulls) {
+    long[] values = f.values() != null ? f.values() : type().values();
     var rows = new ArrayList<Row>();
-    for (long a : type().values()) {
-      for (long b : type().values()) {
+    for (long a : values) {
+      for (long b : values) {
         for (int pattern = 0; pattern < (withNulls ? 4 : 1); pattern++) {
           rows.add(new Row(a, b, (pattern & 1) != 0, (pattern & 2) != 0));
         }
@@ -566,13 +614,17 @@ public abstract class VarkaTypeConformance {
   private void check(Form f, Compiled c) {
     var oracle = new VarkaSparkOracle(CollectionConverters.asScala(c.outputs()).toSeq(),
         CollectionConverters.asScala(c.inputs().stream().map(columns()::get).toList()).toSeq());
-    List<Row> all = rows(true);
+    List<Row> all = rows(f, true);
     requireTheFixtureDiscriminates(f, c, oracle, all);
+    var answered = new Seen[c.outputs().size()];
+    for (int o = 0; o < answered.length; o++) {
+      answered[o] = new Seen();
+    }
     var loaded = VarkaEmitterFixtures.load(new VarkaEmitterFixtures.Emitted(c.className(),
         c.bytes()));
     try {
       int n = 0;
-      for (LongBatch b : batches(all, rows(false), c.inputs())) {
+      for (LongBatch b : batches(all, rows(f, false), c.inputs())) {
         String ctx = getClass().getSimpleName() + " " + f + " batch " + n++ + " length "
             + b.length();
         boolean raises = raises(oracle, c, b);
@@ -583,9 +635,74 @@ public abstract class VarkaTypeConformance {
                 c.inputs().size(), c.lits(), intBatch(b), raises, answers(oracle), CallHook.NONE);
         assertEquals(raises, status != 0, ctx + ": the kernel " + (status != 0 ? "declined"
             : "answered") + " a batch on which Spark " + (raises ? "raises" : "does not raise"));
+        if (status == 0) {
+          see(answered, oracle, c, b);
+        }
       }
     } finally {
       loaded.loader().release();
+    }
+    if (!f.meantToRaise()) {
+      for (int o = 0; o < answered.length; o++) {
+        requireDiscriminates(f, c, o, f + " output " + o + " (" + oracle.sql(o)
+            + ") over the batches the kernel answered, not those Spark raises on", answered[o]);
+      }
+    }
+  }
+
+  /** What Spark answers an output over some rows: the answers a constant kernel could not give. */
+  private static final class Seen {
+    boolean sawTrue;
+    boolean sawFalse;
+    boolean sawValue;
+    boolean sawNull;
+    boolean sawNullFromValid;
+    boolean sawRaise;
+
+    void see(VarkaSparkOracle.Answer answer, boolean bothValid) {
+      if (answer instanceof VarkaSparkOracle.Value v) {
+        sawValue = true;
+        sawTrue |= v.v() == 1L;
+        sawFalse |= v.v() == 0L;
+      } else if (answer instanceof VarkaSparkOracle.Raised) {
+        sawRaise = true;
+      } else {
+        sawNull = true;
+        sawNullFromValid |= bothValid;
+      }
+    }
+  }
+
+  /** Spark's answers over the rows of {@code b}, added to {@code seen} output by output. */
+  private static void see(Seen[] seen, VarkaSparkOracle oracle, Compiled c, LongBatch b) {
+    for (int i = 0; i < b.length(); i++) {
+      var row = new ArrayList<Option<Object>>();
+      boolean bothValid = true;
+      for (int col = 0; col < c.inputs().size(); col++) {
+        bothValid &= !b.nulls()[col][i];
+        row.add(b.nulls()[col][i] ? Option.empty() : Option.apply((Object) b.data()[col][i]));
+      }
+      var seq = CollectionConverters.asScala(row).toList();
+      for (int o = 0; o < seen.length; o++) {
+        seen[o].see(oracle.answer(o, seq), bothValid);
+      }
+    }
+  }
+
+  /**
+   * Each condition root true on a row and false on another, each value root valid on a row and,
+   * where Spark's expression is null-intolerant, null on another.
+   */
+  private static void requireDiscriminates(Form f, Compiled c, int o, String at, Seen s) {
+    if (f.kind() == Kind.CONDITION) {
+      assertTrue(s.sawTrue && s.sawFalse, at + ": the rows never make it "
+          + (s.sawTrue ? "false" : "true") + ", so a constant kernel would pass");
+    } else {
+      assertTrue(s.sawValue, at + ": the rows never give it a value");
+      // A null-intolerant expression is null exactly where an input is; one that can mask a
+      // null (IF, coalesce) need not be null anywhere, and so is not asked to be.
+      assertTrue(s.sawNull || !c.outputs().get(o).nullIntolerant(),
+          at + ": the rows never make it null");
     }
   }
 
@@ -594,46 +711,24 @@ public abstract class VarkaTypeConformance {
    * is true on a row and false on another, each value root valid on a row and, where Spark's
    * expression is null-intolerant, null on another; a form meant to reach the type's overflow
    * does (raises in ANSI, nulls a row of valid inputs in TRY; its LEGACY twin runs over the same
-   * fixture, which the ANSI form shows reaches the overflow).
+   * fixture, which the ANSI form shows reaches the overflow). A form whose raising is not its
+   * point is held to the same rule again over the batches the kernel answered ({@link #check}),
+   * since a batch Spark raises on is declined and compares no row.
    */
   private void requireTheFixtureDiscriminates(Form f, Compiled c, VarkaSparkOracle oracle,
       List<Row> rows) {
     for (int o = 0; o < c.outputs().size(); o++) {
-      boolean sawTrue = false;
-      boolean sawFalse = false;
-      boolean sawValue = false;
-      boolean sawNull = false;
-      boolean sawNullFromValid = false;
-      boolean sawRaise = false;
+      var s = new Seen();
       for (Row r : rows) {
-        var answer = oracle.answer(o, rowOf(r, c.inputs()));
-        if (answer instanceof VarkaSparkOracle.Value v) {
-          sawValue = true;
-          sawTrue |= v.v() == 1L;
-          sawFalse |= v.v() == 0L;
-        } else if (answer instanceof VarkaSparkOracle.Raised) {
-          sawRaise = true;
-        } else {
-          sawNull = true;
-          sawNullFromValid |= !r.xNull() && !r.yNull();
-        }
+        s.see(oracle.answer(o, rowOf(r, c.inputs())), !r.xNull() && !r.yNull());
       }
-      String at = f + " output " + o + " (" + oracle.sql(o) + ")";
-      if (f.kind() == Kind.CONDITION) {
-        assertTrue(sawTrue && sawFalse, at + ": the fixture never makes it "
-            + (sawTrue ? "false" : "true") + ", so a constant kernel would pass");
-      } else {
-        assertTrue(sawValue, at + ": the fixture never gives it a value");
-        // A null-intolerant expression is null exactly where an input is; one that can mask a
-        // null (IF, coalesce) need not be null anywhere, and so is not asked to be.
-        assertTrue(sawNull || !c.outputs().get(o).nullIntolerant(),
-            at + ": the fixture never makes it null");
-      }
+      String at = f + " output " + o + " (" + oracle.sql(o) + ") over the fixture";
+      requireDiscriminates(f, c, o, at, s);
       if (f.overflowing() && f.mode() == Mode.ANSI) {
-        assertTrue(sawRaise, at + ": the fixture never overflows it");
+        assertTrue(s.sawRaise, at + ": the fixture never overflows it");
       }
       if (f.overflowing() && f.mode() == Mode.TRY) {
-        assertTrue(sawNullFromValid, at + ": the fixture never overflows it to a null");
+        assertTrue(s.sawNullFromValid, at + ": the fixture never overflows it to a null");
       }
     }
   }

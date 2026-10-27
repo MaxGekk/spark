@@ -213,7 +213,7 @@ entries. About five days after the baseline.
 4. **The semantics** (2.5) with the table test, then the conformance suites and coverage rows.
 5. **The fuzzers, the generated files, CI.**
 
-Dependencies: #1031 (the long-lane conformance harness, `hasArithmetic`) before the conformance
+Dependencies: #1031 (the long-lane conformance harness and its pair form) before the conformance
 suites; row 497 if it lands first (one `IN` arm). The coverage rows' literals keep one integer digit
 (`1.5`), since the quote check reads a number like `12.5` as a measurement; row 500 skips only a
 clock time's seconds.

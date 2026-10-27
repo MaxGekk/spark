@@ -29,7 +29,8 @@ import org.apache.spark.sql.types.DayTimeIntervalType;
  * {@code INTERVAL DAY TO SECOND}, the form that holds every microsecond (an {@code INTERVAL DAY}
  * holds whole days), and a literal is spelled in it by Spark's own formatter. Interval arithmetic
  * raises on overflow whatever the mode, so its LEGACY forms decline the batches Spark raises on
- * as the ANSI ones do.
+ * as the ANSI ones do. The null handling check's {@code x + y} therefore draws half the long
+ * range, whose sums all fit: over the extremes nearly every batch raises.
  *
  * <p>In its own JVM, as the long-lane emitter suites are: under the option matrix's lane-pinning
  * configurations its kernels use an int species of a size the int-lane suites do not, and a
@@ -47,6 +48,6 @@ public final class VarkaDayTimeIntervalConformanceSuite extends VarkaTypeConform
         v -> IntervalUtils$.MODULE$.toDayTimeIntervalString(v,
             IntervalStringStyles$.MODULE$.ANSI_STYLE(), TYPE.startField(), TYPE.endField()),
         integralValues(Long.MIN_VALUE, Long.MAX_VALUE), new long[] {1, -1},
-        new PairForm("x + y", "+"));
+        new PairForm("x + y", "+", halfRange(Long.MIN_VALUE, Long.MAX_VALUE)));
   }
 }
