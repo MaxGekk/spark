@@ -549,6 +549,19 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `IF(b, l, l2)` | `condition` |  | the leaf is lifted to the long lane of the values | per-lane: blend, mask broadcast |
 | `CASE WHEN b THEN l ELSE l2 END` | `condition` |  | likewise, per branch | per-lane: blend, mask broadcast |
 
+#### Boolean outputs
+
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `d2 > d` | `predicate` |  | a date comparison as a column, on the int lane; `d < d2` as an output | vector |
+| `l2 > l` | `predicate` |  | the long lane's comparison as a column | per-lane: compare to mask, mask cast |
+| `y2 > y1` | `predicate` |  | the byte lane's, at the narrow lane where every value is narrow | vector |
+| `NOT b2` | `predicate` |  | a boolean column negated: the pair swapped and written as two bitmaps | vector |
+| `b AND b2` | `predicate` |  | a connective: false where either is false, even beside an unknown | vector |
+| `(d < d2) OR b` | `predicate` |  | a comparison beside a boolean column on the lane they share | vector |
+| `l2 <=> l` | `predicate` |  | null-safe equality is never unknown, so its validity is all ones | per-lane: compare to mask, mask cast |
+| `CASE WHEN b THEN b2 END` | `predicate` |  | no ELSE: a null constant where b is not true, so the kernel is masked-only | vector |
+
 #### TINYINT columns
 
 | Predicate | Switches | Domain | Notes | 128-bit lanes |
@@ -710,10 +723,10 @@ operands (a row counts once for each type it reads):
 <!-- BEGIN generated verification counts -->
 | Type | Rows | refinement | proof | exhaustive | owed | differential |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `bigint` | 43 | 0 | 2 | 0 | 2 | 39 |
-| `bool` | 19 | 0 | 0 | 10 | 0 | 9 |
-| `byte` | 25 | 0 | 0 | 0 | 8 | 17 |
-| `date` | 84 | 17 | 0 | 1 | 0 | 66 |
+| `bigint` | 45 | 0 | 2 | 0 | 2 | 41 |
+| `bool` | 23 | 0 | 0 | 13 | 0 | 10 |
+| `byte` | 26 | 0 | 0 | 0 | 8 | 18 |
+| `date` | 86 | 17 | 0 | 1 | 0 | 68 |
 | `dt` | 11 | 2 | 0 | 0 | 0 | 9 |
 | `int` | 70 | 14 | 2 | 0 | 1 | 53 |
 | `ntz` | 19 | 0 | 1 | 0 | 0 | 18 |

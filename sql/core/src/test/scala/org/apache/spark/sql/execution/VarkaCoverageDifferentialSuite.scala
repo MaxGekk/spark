@@ -647,6 +647,95 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
   }
 
   // ---------------------------------------------------------------------------------------------
+  // Every predicate row as a boolean output (VARKA-27)
+  // ---------------------------------------------------------------------------------------------
+
+  /** Whether a predicate row is a bare column, which a projection forwards rather than fuses. */
+  private def isBareColumn(sql: String): Boolean = sql.matches("[a-z][a-z0-9_]*")
+
+  /**
+   * Whether Spark's optimizer folded the output `c` of `query` to a constant, leaving nothing
+   * for Varka to fuse: over a column it knows to be non-nullable, `d IS NULL` is false.
+   */
+  private def folded(query: String): Boolean =
+    spark.sql(query).queryExecution.optimizedPlan.exists(_.expressions.exists {
+      case a: org.apache.spark.sql.catalyst.expressions.Alias => a.name == "c" && a.child.foldable
+      case _ => false
+    })
+
+  /**
+   * One predicate row as `SELECT rid, (p) AS c` on one fixture, under both consumers: the rows
+   * Varka answers must be Spark's, a true, a false and a null each kept apart (a row compares
+   * `[rid, null]` with `[rid, false]` as different), and a kernel must have served the whole
+   * projection - but for a bare boolean column, which fuses nothing beside the forwarded `rid`
+   * and so must leave Spark's projection to run, and for an output Spark folded to a constant.
+   */
+  private def outputFindings(row: CoverageRow, fixture: String): Seq[String] = {
+    val query = s"SELECT rid, (${row.executable}) AS c FROM $fixture"
+    val bare = isBareColumn(row.executable)
+    val mustServe = !bare && !folded(query)
+    val df = varkaSpark.sql(query)
+    val actual = df.collect().toSeq
+    val plan = df.queryExecution.executedPlan
+    val rowFindings = QueryTest.sameRows(spark.sql(query).collect().toSeq, actual)
+      .map(d => s"$query differs from Spark's:\n$d").toSeq ++
+      Option.when(bare && find(plan)(isVarkaNode).isDefined)(
+        s"$query: a bare column ran on a Varka node, not Spark's projection:\n" +
+          plan.treeString) ++
+      Option.when(mustServe && !kernelServed(plan))(
+        s"$query: no kernel served all of it:\n${plan.treeString}")
+    // The columnar consumer: the Arrow cache builder stores the BOOLEAN column the kernel wrote.
+    val view = "varka_coverage_bool_out"
+    for (session <- Seq(spark, varkaSpark)) {
+      session.sql(query).createOrReplaceTempView(view)
+      session.catalog.cacheTable(view)
+    }
+    val columnarFindings = try {
+      val cached = varkaSpark.table(view).queryExecution.executedPlan.collectFirst {
+        case scan: InMemoryTableScanExec => scan.relation.cachedPlan
+      }
+      QueryTest.sameRows(spark.table(view).collect().toSeq, varkaSpark.table(view).collect().toSeq)
+        .map(d => s"columnar consumer of $query differs from Spark's:\n$d").toSeq ++
+        Option.when(mustServe && !cached.exists(_.find(isColumnarVarkaNode).isDefined))(
+          s"columnar consumer of $query: no columnar Varka node under the cache:\n" +
+            cached.map(_.treeString).getOrElse("(not cached)"))
+    } finally {
+      for (session <- Seq(spark, varkaSpark)) session.catalog.uncacheTable(view)
+    }
+    rowFindings ++ columnarFindings
+  }
+
+  rows.filter(_.form == "predicate").foreach { row =>
+    test(s"${row.family}: ${row.sql} as a boolean output matches the row engine") {
+      // Under the partition oracle's exclusions, so that the predicate reaches Varka as written:
+      // `NullDownPropagation` would turn `(d < d2) IS NULL` into null tests on the columns, and
+      // `NullPropagation` fold a null-safe row's null test (`isNullSafe`).
+      val rules = if (isNullSafe(row.executable)) nullSafeRewrites else partitionRewrites
+      val findings = withBothConf(SQLConf.OPTIMIZER_EXCLUDED_RULES.key, rules) {
+        fixtures.flatMap { case (fixture, _) =>
+          outputFindings(row, fixture).map(f => s"$fixture: $f")
+        }
+      }
+      assert(findings.isEmpty, findings.mkString("\n"))
+    }
+  }
+
+  test("the boolean output check fails a null answered as false, and a bare column fused") {
+    // No kernel answers a null as false on purpose, so the fault is planted in the answers: a
+    // kernel that wrote the validity as the data would give `[rid, false]` for Spark's
+    // `[rid, null]`, which the row comparison must report.
+    val fixture = "varka_coverage_mixed"
+    val query = s"SELECT rid, (d < d2) AS c FROM $fixture"
+    val want = spark.sql(query).collect().toSeq
+    assert(want.exists(_.isNullAt(1)), "the planted fault needs a null answer")
+    val planted = want.map(r => if (r.isNullAt(1)) Row(r.getInt(0), false) else r)
+    assert(QueryTest.sameRows(want, planted).isDefined)
+    assert(isBareColumn("b") && !isBareColumn("NOT b") && !isBareColumn("b <=> b2"))
+    assert(folded(s"SELECT rid, (rid IS NULL) AS c FROM $fixture"))
+    assert(!folded(query))
+  }
+
+  // ---------------------------------------------------------------------------------------------
   // The ANSI form (VARKA-138)
   // ---------------------------------------------------------------------------------------------
 
@@ -690,6 +779,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
     case YearMonthIntervalType(start, end) if start == end =>
       Some(if (start == YearMonthIntervalType.YEAR) "ymy" else "ymm")
     case _: YearMonthIntervalType => Some("ym")
+    // A boolean output (VARKA-27): the fixture's second boolean column, non-null on both rows.
+    case BooleanType => Some("b2")
     case _ => None
   }
 
@@ -719,8 +810,13 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
           FalseAnd -> Some(s"SELECT rid $from WHERE $guard < 0 AND ($e)"),
           TrueOr -> Some(s"SELECT rid $from WHERE $guard >= 0 OR ($e)"))
       case _ =>
-        val t = spark.sql(s"SELECT $e AS v $from").schema.head.dataType
-        val guard = if (onLongLane(t)) "lrid" else "rid"
+        val analyzed = spark.sql(s"SELECT $e AS v $from").queryExecution.analyzed
+        val t = analyzed.schema.head.dataType
+        // A boolean output has no lane of its own: its condition takes its operands', so the
+        // guard is the long one where the condition reads a long-lane column.
+        val longCondition = t == BooleanType && analyzed.expressions.exists(
+          _.references.exists(a => onLongLane(a.dataType)))
+        val guard = if (onLongLane(t) || longCondition) "lrid" else "rid"
         Seq(
           Alone -> Some(s"SELECT $e AS v $from"),
           CaseArm -> standIn(t, caseArm = true).map(c =>

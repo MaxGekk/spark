@@ -437,8 +437,8 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
   /**
    * The ways a boolean output's two bitmaps are written (`VARKA-27.md` 2.2), each at every width
    * of the sweep: per lane group or a word at a time, the dense validity filled by the driver or
-   * written per group, and the driver from its table or unrolled, where the data bitmap's zero
-   * is emitted differently.
+   * written per group (under either writer), and the driver from its table or unrolled, where
+   * the data bitmap's zero is emitted differently.
    */
   private val writers: Seq[(String, VarkaEmitOptions => VarkaEmitOptions)] = Seq(
     "per group" -> (o => o),
@@ -446,7 +446,10 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     "per group, unrolled driver, no dense fill" ->
       (o => o.toBuilder.driverOutputTable(false).denseValidityOnce(false).build()),
     "by word, unrolled driver" ->
-      (o => o.toBuilder.validityByWord(true).driverOutputTable(false).build()))
+      (o => o.toBuilder.validityByWord(true).driverOutputTable(false).build()),
+    // The word writer with the dense validity written per group rather than by the driver.
+    "by word, no dense fill" ->
+      (o => o.toBuilder.validityByWord(true).denseValidityOnce(false).build()))
 
   private val writerWidths: Seq[(String, VarkaEmitOptions)] =
     for ((w, base) <- widths; (name, f) <- writers) yield (s"$w, $name", f(base))
