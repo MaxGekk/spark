@@ -17,7 +17,11 @@
 
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.lang.management.ManagementFactory;
+import java.nio.ByteOrder;
 
 import jdk.incubator.vector.ByteVector;
 import jdk.incubator.vector.DoubleVector;
@@ -538,6 +542,253 @@ public final class VarkaOperatorCensusProbe {
     }
   }
 
+  /**
+   * The decimal load's input: Arrow's sixteen-byte decimal slots, low word first, in native memory
+   * as a kernel finds them. A vector {@code a} loaded at slot {@code i} holds
+   * {@code (lo0, hi0, lo1, hi1, ...)}, half a group of rows; {@code b}, one vector further on,
+   * holds the other half.
+   * Each loop maps the address afresh, as a kernel maps its input once a batch, and the buffer has
+   * a vector of padding past the last slot so that the offset loads, which read eight bytes past
+   * their group, stay inside it. The values are in precision and their high words are the low
+   * words' signs, so the checks below never fire. It sits in a holder so that only the decimal
+   * entries allocate it.
+   */
+  private static final class Slots {
+    static final long BYTES = ROWS * 16L + 64;
+    static final long ADDRESS = fill(Arena.global().allocate(BYTES, 64)).address();
+
+    /** The low words, then the high words, of the slots in two vectors. */
+    static final VectorShuffle<Long> EVEN = DEINTERLEAVE;
+    static final VectorShuffle<Long> ODD = VectorShuffle.fromOp(LS, i -> 2 * i + 1);
+
+    /** The two-vector {@code selectFrom}'s index vector: 0, 2, 4, ... across both inputs. */
+    static final LongVector EVEN_INDEX = LongVector.zero(LS).addIndex(2);
+
+    /** The even lanes, where a slot's low word sits in an interleaved vector. */
+    static final VectorMask<Long> EVEN_LANES = VectorMask.fromLong(LS, EVEN_BITS);
+
+    /** The largest unscaled value of a {@code DECIMAL(18, s)}: 10^18 - 1. */
+    static final long BOUND = 999_999_999_999_999_999L;
+
+    /** The rows a vector of {@code n} longs covers in one of {@code a} and {@code b}. */
+    static final int HALF = LS.length() / 2;
+
+    private static MemorySegment fill(MemorySegment slots) {
+      for (int i = 0; i < ROWS; i++) {
+        long lo = i * 7L - 3000;
+        slots.set(ValueLayout.JAVA_LONG, i * 16L, lo);
+        slots.set(ValueLayout.JAVA_LONG, i * 16L + 8, lo >> 63);
+      }
+      return slots;
+    }
+
+    static MemorySegment map() {
+      return VarkaSegments.map(ADDRESS, BYTES);
+    }
+
+    static LongVector load(MemorySegment slots, long offset) {
+      return LongVector.fromMemorySegment(LS, slots, offset, ByteOrder.LITTLE_ENDIAN);
+    }
+  }
+
+  /** Every other bit of a word: the even lanes of a mask, or a validity word spread to them. */
+  private static final long EVEN_BITS = 0x5555_5555_5555_5555L;
+
+  /** Where a check's verdict goes, so that C2 cannot remove the check. */
+  private static volatile boolean DECLINED;
+
+  /** The decimal load's low words by the two-vector {@code rearrange}, from the slots. */
+  static void op_dec_rearrange() {
+    var slots = Slots.map();
+    for (int i = 0; i < ROWS; i += LS.length()) {
+      var a = Slots.load(slots, i * 16L);
+      var b = Slots.load(slots, i * 16L + LS.vectorByteSize());
+      a.rearrange(Slots.EVEN, b).intoArray(LO, i);
+    }
+  }
+
+  /**
+   * The low words by the two-vector {@code selectFrom}: the index vector picks lanes 0, 2, 4, ...
+   * of {@code a} then {@code b}.
+   */
+  static void op_dec_selectFrom2() {
+    var slots = Slots.map();
+    for (int i = 0; i < ROWS; i += LS.length()) {
+      var a = Slots.load(slots, i * 16L);
+      var b = Slots.load(slots, i * 16L + LS.vectorByteSize());
+      Slots.EVEN_INDEX.selectFrom(a, b).intoArray(LO, i);
+    }
+  }
+
+  /**
+   * The low words by {@code compress} under the constant even-lane mask: each vector's low words
+   * packed into its lower half, and {@code b}'s moved to the upper half by {@code unslice}.
+   */
+  static void op_dec_compress() {
+    var slots = Slots.map();
+    for (int i = 0; i < ROWS; i += LS.length()) {
+      var a = Slots.load(slots, i * 16L);
+      var b = Slots.load(slots, i * 16L + LS.vectorByteSize());
+      a.compress(Slots.EVEN_LANES).or(b.compress(Slots.EVEN_LANES).unslice(Slots.HALF))
+          .intoArray(LO, i);
+    }
+  }
+
+  /**
+   * The load with its check, by {@code rearrange}: the high words gathered as the low words are,
+   * a slot declining when its high word is not its low word's sign or its low word is outside the
+   * precision. The mismatches are gathered in a mask across the loop and tested once at its end,
+   * as the kernel does.
+   */
+  static void op_dec_check_rearrange() {
+    var slots = Slots.map();
+    var bad = VectorMask.fromLong(LS, 0L);
+    for (int i = 0; i < ROWS; i += LS.length()) {
+      var a = Slots.load(slots, i * 16L);
+      var b = Slots.load(slots, i * 16L + LS.vectorByteSize());
+      var lo = a.rearrange(Slots.EVEN, b);
+      var hi = a.rearrange(Slots.ODD, b);
+      bad = bad.or(hi.compare(VectorOperators.NE, lo.lanewise(VectorOperators.ASHR, 63))
+          .or(lo.compare(VectorOperators.GT, Slots.BOUND))
+          .or(lo.compare(VectorOperators.LT, -Slots.BOUND)));
+      lo.intoArray(LO, i);
+    }
+    DECLINED = bad.anyTrue();
+  }
+
+  /**
+   * The same check in the masked body: only the rows the validity word marks valid can decline.
+   * The loop repeats the dense one rather than sharing it through a helper, because the suite
+   * prints inlining only for the {@code op_*} methods and reads the loop's C2 compile there, so
+   * the loop must be the {@code op_*} method's own code.
+   */
+  static void op_dec_check_rearrange_masked() {
+    var slots = Slots.map();
+    var bad = VectorMask.fromLong(LS, 0L);
+    for (int i = 0; i < ROWS; i += LS.length()) {
+      var a = Slots.load(slots, i * 16L);
+      var b = Slots.load(slots, i * 16L + LS.vectorByteSize());
+      var lo = a.rearrange(Slots.EVEN, b);
+      var hi = a.rearrange(Slots.ODD, b);
+      var valid = VectorMask.fromLong(LS, WORDS[i >>> 6] >>> (i & 63));
+      bad = bad.or(hi.compare(VectorOperators.NE, lo.lanewise(VectorOperators.ASHR, 63))
+          .or(lo.compare(VectorOperators.GT, Slots.BOUND))
+          .or(lo.compare(VectorOperators.LT, -Slots.BOUND)).and(valid));
+      lo.intoArray(LO, i);
+    }
+    DECLINED = bad.anyTrue();
+  }
+
+  /** The load with its check, by {@code compress}: the high words under the odd-lane mask. */
+  static void op_dec_check_compress() {
+    var slots = Slots.map();
+    var odd = Slots.EVEN_LANES.not();
+    var bad = VectorMask.fromLong(LS, 0L);
+    for (int i = 0; i < ROWS; i += LS.length()) {
+      var a = Slots.load(slots, i * 16L);
+      var b = Slots.load(slots, i * 16L + LS.vectorByteSize());
+      var lo = a.compress(Slots.EVEN_LANES).or(b.compress(Slots.EVEN_LANES).unslice(Slots.HALF));
+      var hi = a.compress(odd).or(b.compress(odd).unslice(Slots.HALF));
+      bad = bad.or(hi.compare(VectorOperators.NE, lo.lanewise(VectorOperators.ASHR, 63))
+          .or(lo.compare(VectorOperators.GT, Slots.BOUND))
+          .or(lo.compare(VectorOperators.LT, -Slots.BOUND)));
+      lo.intoArray(LO, i);
+    }
+    DECLINED = bad.anyTrue();
+  }
+
+  /**
+   * The shuffle-free check: a second load of the same slots eight bytes on puts each high word in
+   * the lane of its own low word, so an even lane compares a high word with its low word's sign
+   * and no lane crosses. It takes two offset loads and two compares per output vector; the low
+   * words still come from the {@code rearrange}, whose precision check stays as it is.
+   */
+  static void op_dec_check_offset() {
+    var slots = Slots.map();
+    var bad = VectorMask.fromLong(LS, 0L);
+    for (int i = 0; i < ROWS; i += LS.length()) {
+      long at = i * 16L;
+      long next = at + LS.vectorByteSize();
+      var a = Slots.load(slots, at);
+      var b = Slots.load(slots, next);
+      var lo = a.rearrange(Slots.EVEN, b);
+      bad = bad.or(Slots.load(slots, at + 8)
+          .compare(VectorOperators.NE, a.lanewise(VectorOperators.ASHR, 63))
+          .or(Slots.load(slots, next + 8)
+              .compare(VectorOperators.NE, b.lanewise(VectorOperators.ASHR, 63)))
+          .and(Slots.EVEN_LANES)
+          .or(lo.compare(VectorOperators.GT, Slots.BOUND))
+          .or(lo.compare(VectorOperators.LT, -Slots.BOUND)));
+      lo.intoArray(LO, i);
+    }
+    DECLINED = bad.anyTrue();
+  }
+
+  /**
+   * The shuffle-free check in the masked body. Its compares run over the interleaved lanes, two
+   * a row, so each row's validity bit is first spread to its even lane ({@code Long.expand}), once
+   * for {@code a}'s rows and once for {@code b}'s; the precision check takes the word as it is.
+   */
+  static void op_dec_check_offset_masked() {
+    var slots = Slots.map();
+    var bad = VectorMask.fromLong(LS, 0L);
+    for (int i = 0; i < ROWS; i += LS.length()) {
+      long at = i * 16L;
+      long next = at + LS.vectorByteSize();
+      long word = WORDS[i >>> 6];
+      var a = Slots.load(slots, at);
+      var b = Slots.load(slots, next);
+      var lo = a.rearrange(Slots.EVEN, b);
+      var inA = VectorMask.fromLong(LS, Long.expand(word >>> (i & 63), EVEN_BITS));
+      var inB = VectorMask.fromLong(LS, Long.expand(word >>> ((i + Slots.HALF) & 63), EVEN_BITS));
+      var valid = VectorMask.fromLong(LS, word >>> (i & 63));
+      bad = bad.or(Slots.load(slots, at + 8)
+          .compare(VectorOperators.NE, a.lanewise(VectorOperators.ASHR, 63)).and(inA)
+          .or(Slots.load(slots, next + 8)
+              .compare(VectorOperators.NE, b.lanewise(VectorOperators.ASHR, 63)).and(inB))
+          .or(lo.compare(VectorOperators.GT, Slots.BOUND)
+              .or(lo.compare(VectorOperators.LT, -Slots.BOUND)).and(valid)));
+      lo.intoArray(LO, i);
+    }
+    DECLINED = bad.anyTrue();
+  }
+
+  /**
+   * The epilogue's form: both vectors loaded under {@code indexInRange} masks over the slots'
+   * longs and the low words stored under one over the rows. The limit stops one row short of the
+   * buffer, so the last group of every call is partial.
+   */
+  static void op_dec_tail() {
+    var slots = Slots.map();
+    int limit = ROWS - 1;
+    for (int i = 0; i < ROWS; i += LS.length()) {
+      var a = LongVector.fromMemorySegment(LS, slots, i * 16L, ByteOrder.LITTLE_ENDIAN,
+          LS.indexInRange(2 * i, 2 * limit));
+      var b = LongVector.fromMemorySegment(LS, slots, i * 16L + LS.vectorByteSize(),
+          ByteOrder.LITTLE_ENDIAN, LS.indexInRange(2 * i + LS.length(), 2 * limit));
+      a.rearrange(Slots.EVEN, b).intoArray(LO, i, LS.indexInRange(i, limit));
+    }
+  }
+
+  /**
+   * The int arm's load: two long de-interleaves, each narrowed by {@code L2I} into one half of an
+   * int vector (part 0 the lower half, part -1 the upper, the other half zero), spliced by an
+   * {@code or} into one int vector of twice the lanes.
+   */
+  static void op_dec_int_splice() {
+    var slots = Slots.map();
+    long vector = LS.vectorByteSize();
+    for (int i = 0; i < ROWS; i += IS.length()) {
+      long at = i * 16L;
+      var lo0 = Slots.load(slots, at).rearrange(Slots.EVEN, Slots.load(slots, at + vector));
+      var lo1 = Slots.load(slots, at + 2 * vector)
+          .rearrange(Slots.EVEN, Slots.load(slots, at + 3 * vector));
+      var low = (IntVector) lo0.convertShape(VectorOperators.L2I, IS, 0);
+      var high = (IntVector) lo1.convertShape(VectorOperators.L2I, IS, -1);
+      low.or(high).intoArray(IO, i);
+    }
+  }
+
   static void op_mask_fromLong_byte() {
     for (int i = 0; i < ROWS; i += BS.length()) {
       var a = ByteVector.fromArray(BS, BA, i);
@@ -712,6 +963,16 @@ public final class VarkaOperatorCensusProbe {
         case "deint.rearrange2" -> op_deint_rearrange2();
         case "deint.selectFrom" -> op_deint_selectFrom();
         case "deint.compress" -> op_deint_compress();
+        case "dec.rearrange" -> op_dec_rearrange();
+        case "dec.selectFrom2" -> op_dec_selectFrom2();
+        case "dec.compress" -> op_dec_compress();
+        case "dec.check.rearrange" -> op_dec_check_rearrange();
+        case "dec.check.rearrange.masked" -> op_dec_check_rearrange_masked();
+        case "dec.check.compress" -> op_dec_check_compress();
+        case "dec.check.offset" -> op_dec_check_offset();
+        case "dec.check.offset.masked" -> op_dec_check_offset_masked();
+        case "dec.tail" -> op_dec_tail();
+        case "dec.int.splice" -> op_dec_int_splice();
         case "mask.fromLong.byte" -> op_mask_fromLong_byte();
         case "mask.toLong.byte" -> op_mask_toLong_byte();
         case "mask.fromLong.int" -> op_mask_fromLong_int();
