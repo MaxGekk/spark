@@ -5583,6 +5583,13 @@ floating ordering is a finite claim SMT decides; exhaustive sweeps over every fl
 serve the math rows), the per-shape checks of emitted kernels, which the rendered SMT files keep
 in step with the code, and the compiler as a whole.
 
+*A concrete case for the spike, noted 27 October 2026 from row 496 (`m8/PLAN.md`).* The int
+lane's divisors are open: `ym / d` divides by the query's own literal, so no corpus bounds them
+and row 496's check, which holds the long lane's closed set to `long_divide.smt2`, cannot close
+the int lane. The coverage rows already build -7, which `VarkaProofFiles.INT_DIVISORS` lacks, so
+`int_mulhi_divide.smt2` does not state that division; it is exact only by the theorem
+`MulHiMagic` asserts when it builds the constants. The spike's 32-bit form closes it for every divisor.
+
 **Done when** the spike's theorem is checked in CI with its pin to the code, its cost is recorded,
 and the owner has decided from it whether steps 2 and 3 use Lean.
 
