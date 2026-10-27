@@ -390,12 +390,32 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
 
   rows.foreach { row =>
     test(s"${row.family}: ${row.sql} matches the row engine under both consumers") {
-      fixtures.foreach { case (fixture, _) =>
-        checkRowConsumer(row, fixture)
-        checkColumnarConsumer(row, fixture)
+      withFloatingPruningOff(row) {
+        fixtures.foreach { case (fixture, _) =>
+          checkRowConsumer(row, fixture)
+          checkColumnarConsumer(row, fixture)
+        }
       }
     }
   }
+
+  /** A reference to a floating column of the fixtures: `x`, `x2`, `f`, `f2`, `xrid`, `frid`. */
+  private val floatingColumn = """\b(x|x2|f|f2|xrid|frid)\b""".r
+
+  /**
+   * Runs `body` with both sessions reading the cached fixtures without the batch pruning of
+   * their column statistics when `row` reads a floating column. The statistics leave NaN out
+   * (SPARK-58482): a batch whose only value is NaN records an empty range, so a filter a NaN
+   * row passes, `x IN (..., NaN)`, prunes that batch, and at one row a batch
+   * (`arrowBatchSize=1`) the kernel never sees the row the test is about. The expected side
+   * may also plan over the uncached rows, which prunes nothing, so the two answers would
+   * differ on a fact about the cache, not about either engine. The wrap is not a workaround
+   * for a lost cache: with both sides cached they would agree on the pruned answer and leave
+   * the NaN row untested.
+   */
+  private def withFloatingPruningOff[T](row: CoverageRow)(body: => T): T =
+    if (floatingColumn.findFirstIn(row.executable).isEmpty) body
+    else withBothConf(SQLConf.IN_MEMORY_PARTITION_PRUNING.key, "false")(body)
 
   // ---------------------------------------------------------------------------------------------
   // The partition oracle (VARKA-138)
