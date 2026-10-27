@@ -70,6 +70,14 @@ BENCHMARKS = [
 OWED = {
     ("fuzz grammar", "BYTE"): "row 352 (the fuzzers across types)",
     ("fuzz grammar", "SHORT"): "row 352 (the fuzzers across types)",
+    ("compiler admission", "FLOAT"): "row 341 (the floating lanes, after their split)",
+    ("template warm-up", "FLOAT"): "row 341 (the floating lanes, after their split)",
+    ("fuzz grammar", "FLOAT"): "row 341 (the floating lanes, after their split)",
+    ("benchmark", "FLOAT"): "row 341 (the floating lanes, after their split)",
+    ("compiler admission", "DOUBLE"): "row 341 (the floating lanes, after their split)",
+    ("template warm-up", "DOUBLE"): "row 341 (the floating lanes, after their split)",
+    ("fuzz grammar", "DOUBLE"): "row 341 (the floating lanes, after their split)",
+    ("benchmark", "DOUBLE"): "row 341 (the floating lanes, after their split)",
 }
 
 
@@ -80,10 +88,15 @@ def read(path):
 
 def lane_types():
     """The LaneType members, in declaration order."""
-    m = re.search(r"enum LaneType\s*\{\s*([A-Z_,\s]+);", read(IR))
+    # The members up to the first `;`, each a bare name or a name with constructor arguments
+    # (`INT(Kind.INTEGRAL, 32)`): the names are what stands at the start of each.
+    m = re.search(r"enum LaneType\s*\{([^;]*);", read(IR))
     if not m:
         sys.exit(f"{IR}: no `enum LaneType` member list found")
-    return [t.strip() for t in m.group(1).split(",") if t.strip()]
+    names = re.findall(r"(?:^|,)\s*([A-Z_][A-Z0-9_]*)\s*(?:\(|,|$)", m.group(1))
+    if not names:
+        sys.exit(f"{IR}: no `enum LaneType` member list found")
+    return names
 
 
 def vector_classes():

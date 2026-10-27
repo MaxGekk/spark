@@ -87,8 +87,8 @@ public record CompiledVarkaProjection(
         int stored = switch (root.laneType()) {
           case BYTE -> 1;
           case SHORT -> 2;
-          case INT -> 4;
-          case LONG -> 8;
+          case INT, FLOAT -> 4;
+          case LONG, DOUBLE -> 8;
         };
         if (stored != outputTypes.get(i).defaultSize()) {
           throw VarkaErrors.illegalArgument("output " + i + " is stored " + stored

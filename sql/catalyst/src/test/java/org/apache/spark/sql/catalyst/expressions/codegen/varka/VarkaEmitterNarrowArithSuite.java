@@ -267,6 +267,7 @@ public final class VarkaEmitterNarrowArithSuite {
       case SHORT -> new long[] {Short.MIN_VALUE, Short.MAX_VALUE};
       case INT -> new long[] {Integer.MIN_VALUE, Integer.MAX_VALUE};
       case LONG -> new long[] {Long.MIN_VALUE, Long.MAX_VALUE};
+      case FLOAT, DOUBLE -> throw new IllegalArgumentException("no integer bounds at " + lane);
     };
   }
 
