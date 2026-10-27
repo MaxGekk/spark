@@ -33,6 +33,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.LongFunction;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -78,6 +79,11 @@ import org.apache.spark.sql.types.DataTypes;
  * register says it does not, or declines where it says it does, fails: the register has drifted
  * from the compiler.
  *
+ * <p>A type is read at the lane the type registry names for it, and a check runs at the lane its
+ * kernel is driven at: the int lane's batches for a narrow, int-lane or condition type, the long
+ * lane's 64-bit batches for a long-lane one, with both literal tables where a kernel converts
+ * between the two (a cast to {@code DATE}).
+ *
  * <p>Every check also holds its fixture to what a hand-written one missed in the narrow lanes'
  * reviews (`VARKA-329.md` 9.8): each condition root is true on some row and false on another,
  * each value root is valid on some row and, where it can be null, null on another, so that a
@@ -93,18 +99,34 @@ public abstract class VarkaTypeConformance {
    * What the checks read of a type: its census name, its Spark type and SQL spelling, a literal's
    * spelling for one of its values, and its values, from which every fixture is generated.
    */
-  protected record ConformanceType(String census, DataType spark, String sql, String literal,
-      long[] values) {
+  protected record ConformanceType(String census, DataType spark, String sql,
+      LongFunction<String> literal, long[] values) {
+    /** A type whose literal is a format of its value, {@code %dS} for a {@code SMALLINT}. */
+    protected ConformanceType(String census, DataType spark, String sql, String format,
+        long[] values) {
+      this(census, spark, sql, v -> String.format(format, v), values);
+    }
+
     boolean isBoolean() {
       return spark.equals(DataTypes.BooleanType);
     }
 
-    /** The lane a column of the type is read at by default, for the width's refusal. */
+    /**
+     * Whether Spark has the arithmetic the overflow check builds - {@code +}, {@code -},
+     * {@code *}, negation and {@code abs} - over two values of the type. A {@code BOOLEAN} has
+     * none, and a {@code TIMESTAMP_NTZ} has none of these: its subtraction is an interval and its
+     * addition takes one ({@code SubtractTimestamps}, {@code TimestampAddInterval}).
+     */
+    boolean hasArithmetic() {
+      return !spark.equals(DataTypes.BooleanType) && !spark.equals(DataTypes.TimestampNTZType);
+    }
+
+    /**
+     * The lane a column of the type is read at, the registry's; a {@code BOOLEAN}, read as a
+     * condition and on no lane, is counted with the int lane, as its bitmaps' words are.
+     */
     LaneType lane() {
-      if (spark.equals(DataTypes.ByteType)) {
-        return LaneType.BYTE;
-      }
-      return spark.equals(DataTypes.ShortType) ? LaneType.SHORT : LaneType.INT;
+      return VarkaTypes.lane(spark).orElse(LaneType.INT);
     }
   }
 
@@ -153,8 +175,15 @@ public abstract class VarkaTypeConformance {
       run(List.of(condition("x AND y", "and"), condition("x OR y", "or"),
           condition("x <=> y", "<=>"), condition("x IS NULL", "isnull")));
     } else {
-      run(List.of(value("x + y", "+").legacy(), condition("x = y", "="),
-          condition("x <=> y", "<=>"), condition("x IS NULL", "isnull")));
+      // The null-intolerant value is an addition where the type has one; `x = y` is the
+      // null-intolerant form of every type.
+      var forms = new ArrayList<Form>();
+      if (t.hasArithmetic()) {
+        forms.add(value("x + y", "+").legacy());
+      }
+      forms.addAll(List.of(condition("x = y", "="), condition("x <=> y", "<=>"),
+          condition("x IS NULL", "isnull")));
+      run(forms);
     }
   }
 
@@ -205,7 +234,7 @@ public abstract class VarkaTypeConformance {
   @Test
   @DisplayName("overflow: LEGACY wraps, ANSI declines what Spark raises on, TRY nulls it")
   void overflow() {
-    if (type().isBoolean()) {
+    if (!type().hasArithmetic()) {
       // Not applicable, and stated rather than skipped: the census must list no arithmetic for
       // the type, so a row that adds one fails here until the type has an overflow check.
       for (String op : ARITHMETIC) {
@@ -271,7 +300,7 @@ public abstract class VarkaTypeConformance {
   }
 
   private String lit(long v) {
-    return String.format(type().literal(), v);
+    return type().literal().apply(v);
   }
 
   /**
@@ -301,9 +330,13 @@ public abstract class VarkaTypeConformance {
 
   private static final AtomicInteger CLASS_COUNTER = new AtomicInteger();
 
-  /** One compiled form: the emitted class, its roots, and the expressions Spark answers. */
+  /**
+   * One compiled form: the emitted class, its roots, whether its kernel is driven at the long
+   * lane, its int and long literal tables, and the expressions Spark answers.
+   */
   private record Compiled(String className, byte[] bytes, List<VarkaVectorIR> roots,
-      List<Integer> inputs, int[] lits, List<Expression> outputs) {}
+      List<Integer> inputs, boolean onLong, int[] lits, long[] longLits,
+      List<Expression> outputs) {}
 
   /**
    * Runs every form of a check: each that fuses is held to the reference and to Spark, each the
@@ -399,8 +432,10 @@ public abstract class VarkaTypeConformance {
     byte[] bytes = VarkaLoopEmitter.emit(className, plan.outputs(), plan.inputOrdinals().size(),
         plan.numLiterals(), null, null, VarkaMatrixRuns.BASE);
     int[] lits = plan.literals().stream().mapToInt(Integer::intValue).toArray();
-    return Optional.of(new Compiled(className, bytes, plan.outputs(), plan.inputOrdinals(), lits,
-        outputs));
+    long[] longLits = plan.longLiterals().stream().mapToLong(Long::longValue).toArray();
+    boolean onLong = plan.lane(VarkaMatrixRuns.BASE) == LaneType.LONG;
+    return Optional.of(new Compiled(className, bytes, plan.outputs(), plan.inputOrdinals(),
+        onLong, lits, longLits, outputs));
   }
 
   /** The fixture's rows: every pair of the type's values under every null pattern of a pair. */
@@ -429,24 +464,45 @@ public abstract class VarkaTypeConformance {
   /** Lengths that reach a single row, a partial lane group, whole groups and the epilogue. */
   private static final int[] TAILS = {1, 7, 8, 9, 17, 63, 64, 65};
 
+  /**
+   * One batch's columns over the kernel's inputs, at full width: each lane's batch is built from
+   * it, the int lane's narrowing every value to 32 bits, which holds every value of a type read
+   * there.
+   */
+  private record Cols(int length, boolean[][] nulls, long[][] data) {
+    Batch ints() {
+      var ints = new int[data.length][length];
+      for (int c = 0; c < data.length; c++) {
+        for (int i = 0; i < length; i++) {
+          ints[c][i] = (int) data[c][i];
+        }
+      }
+      return new Batch(length, nulls, ints, false);
+    }
+
+    VarkaKernelChecks.LongBatch longs() {
+      return new VarkaKernelChecks.LongBatch(length, nulls, data, false);
+    }
+  }
+
   /** {@code rows} from {@code offset} on, cycled to {@code length}, over the kernel's inputs. */
-  private static Batch batch(List<Row> rows, int offset, int length, List<Integer> inputs) {
+  private static Cols batch(List<Row> rows, int offset, int length, List<Integer> inputs) {
     var nulls = new boolean[inputs.size()][length];
-    var data = new int[inputs.size()][length];
+    var data = new long[inputs.size()][length];
     for (int c = 0; c < inputs.size(); c++) {
       int column = inputs.get(c);
       for (int i = 0; i < length; i++) {
         Row r = rows.get((offset + i) % rows.size());
         nulls[c][i] = r.isNull(column);
-        data[c][i] = (int) r.value(column);
+        data[c][i] = r.value(column);
       }
     }
-    return new Batch(length, nulls, data, false);
+    return new Cols(length, nulls, data);
   }
 
   /** Every batch a form runs: the fixture whole at several offsets, its tails, and dense. */
-  private static List<Batch> batches(List<Row> all, List<Row> dense, List<Integer> inputs) {
-    var out = new ArrayList<Batch>();
+  private static List<Cols> batches(List<Row> all, List<Row> dense, List<Integer> inputs) {
+    var out = new ArrayList<Cols>();
     for (int offset : new int[] {0, 1, 5}) {
       out.add(batch(all, offset, all.size(), inputs));
     }
@@ -468,12 +524,15 @@ public abstract class VarkaTypeConformance {
         c.bytes()));
     try {
       int n = 0;
-      for (Batch b : batches(all, rows(false), c.inputs())) {
+      for (Cols b : batches(all, rows(false), c.inputs())) {
         String ctx = getClass().getSimpleName() + " " + f + " batch " + n++ + " length "
             + b.length();
         boolean raises = raises(oracle, c, b);
-        int status = VarkaKernelChecks.runLoadedNarrow(ctx, loaded.kernel(), c.roots(),
-            c.inputs().size(), c.lits(), b, raises, answers(oracle), CallHook.NONE);
+        int status = c.onLong()
+            ? VarkaKernelChecks.runLoadedLong(ctx, loaded.kernel(), c.roots(), c.inputs().size(),
+                c.longLits(), c.lits(), b.longs(), raises, answers(oracle), CallHook.NONE)
+            : VarkaKernelChecks.runLoadedNarrow(ctx, loaded.kernel(), c.roots(),
+                c.inputs().size(), c.lits(), b.ints(), raises, answers(oracle), CallHook.NONE);
         assertEquals(raises, status != 0, ctx + ": the kernel " + (status != 0 ? "declined"
             : "answered") + " a batch on which Spark " + (raises ? "raises" : "does not raise"));
       }
@@ -541,12 +600,11 @@ public abstract class VarkaTypeConformance {
   }
 
   /** Whether Spark raises on some row of {@code b}: the batch an ANSI kernel must decline. */
-  private static boolean raises(VarkaSparkOracle oracle, Compiled c, Batch b) {
+  private static boolean raises(VarkaSparkOracle oracle, Compiled c, Cols b) {
     for (int i = 0; i < b.length(); i++) {
       var row = new ArrayList<Option<Object>>();
       for (int col = 0; col < c.inputs().size(); col++) {
-        row.add(b.nulls()[col][i] ? Option.empty()
-            : Option.apply((Object) (long) b.data()[col][i]));
+        row.add(b.nulls()[col][i] ? Option.empty() : Option.apply((Object) b.data()[col][i]));
       }
       var seq = CollectionConverters.asScala(row).toList();
       for (int o = 0; o < c.outputs().size(); o++) {

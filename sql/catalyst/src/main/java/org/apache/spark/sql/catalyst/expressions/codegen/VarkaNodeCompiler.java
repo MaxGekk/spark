@@ -61,6 +61,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Bit
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.CompareOp;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ConstDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IfElse;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
@@ -422,6 +423,15 @@ final class VarkaNodeCompiler {
       case Cast c when DataTypes.LongType.equals(c.dataType()) && isInt(c.child()) ->
           () -> intOperand(c.child(), inputs, literals, sink)
               .map(x -> (VarkaVectorIR) new WidenLane(x));
+      // The casts between DATE and TIMESTAMP_NTZ (VARKA-338), and with them the coercion that
+      // makes `d < ntz` a comparison of `CAST(d AS TIMESTAMP_NTZ)` with the NTZ value. Neither
+      // reads the session zone: Spark converts at UTC both ways. The identity cast is its child.
+      case Cast c when isNtz(c) && DataTypes.DateType.equals(c.child().dataType()) ->
+          () -> ntzOfDate(c, inputs, literals, sink);
+      case Cast c when DataTypes.DateType.equals(c.dataType()) && isNtz(c.child()) ->
+          () -> dateOfNtz(c, inputs, literals, sink);
+      case Cast c when isNtz(c) && isNtz(c.child()) ->
+          () -> compileNode(c.child(), inputs, literals, sink);
       // A narrow value promoted to the int lane, which is what Catalyst's coercion inserts where
       // a TINYINT or SMALLINT meets an int - `greatest(y1, y2) < i` arrives as
       // `CAST(greatest(y1, y2) AS INT) < i`, and `y1 + i` as an int add of the cast (VARKA-329).
@@ -613,6 +623,96 @@ final class VarkaNodeCompiler {
           ? new GuardedRange(x, Integer.MIN_VALUE, Integer.MAX_VALUE) : x;
       return Optional.of((VarkaVectorIR) new NarrowLane(guarded));
     });
+  }
+
+  /** Microseconds in a day: a {@code DATE}'s unit in a {@code TIMESTAMP_NTZ}'s. */
+  private static final long MICROS_PER_DAY = 86_400_000_000L;
+
+  /**
+   * The last day whose midnight is a long count of microseconds, and so the bound of the days
+   * {@code CAST(d AS TIMESTAMP_NTZ)} converts without overflow: {@code Long.MAX_VALUE / 86.4e9}.
+   */
+  private static final long LAST_NTZ_DAY = Long.MAX_VALUE / MICROS_PER_DAY;
+
+  /**
+   * {@code CAST(d AS TIMESTAMP_NTZ)}: the day widened to the long lane and multiplied by the
+   * microseconds of a day, which is Spark's {@code daysToMicros(d, UTC)}. Spark computes it with
+   * {@code Math.multiplyExact} in every evaluation mode, so a day past {@link #LAST_NTZ_DAY}
+   * raises under LEGACY and ANSI and is null under TRY ({@code try_cast} catches the throw), and
+   * so does one before {@code -LAST_NTZ_DAY}. The long lane has no checked multiply, so the day is
+   * guarded instead: a batch holding a live day outside the bound goes to the row engine, which
+   * raises or nulls on that row, and inside it the wrapping multiply is exact. Under TRY that is a
+   * correct answer computed slower.
+   */
+  private static Optional<VarkaVectorIR> ntzOfDate(
+      Cast c,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
+      DeclineSink sink) {
+    return compileNode(c.child(), inputs, literals, sink).flatMap(d -> {
+      if (d.laneType() != LaneType.INT) {
+        return sink.decline("a date operand that is not on the int lane", c);
+      }
+      VarkaVectorIR day = new GuardedRange(new WidenLane(d), -LAST_NTZ_DAY, LAST_NTZ_DAY);
+      return Optional.of((VarkaVectorIR) new IntArith(IntOp.MUL, Overflow.WRAP, day,
+          sink.longSlot(MICROS_PER_DAY)));
+    });
+  }
+
+  /**
+   * {@code CAST(ntz AS DATE)}: the UTC date of the microsecond count, Spark's
+   * {@code microsToDays(t, UTC)}, which is {@code floorDiv(t, 86.4e9)} ({@link #floorDivLong}).
+   * Every quotient is a day in {@code [-106,751,992, 106,751,991]}, so the narrowing to the int
+   * lane is exact, and the cast cannot fail in any mode.
+   */
+  private static Optional<VarkaVectorIR> dateOfNtz(
+      Cast c,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
+      DeclineSink sink) {
+    return compileNode(c.child(), inputs, literals, sink).flatMap(t -> {
+      if (t.laneType() != LaneType.LONG) {
+        return sink.decline("a timestamp_ntz operand that is not on the long lane", c);
+      }
+      return Optional.of((VarkaVectorIR) new NarrowLane(floorDivLong(t, MICROS_PER_DAY, sink)));
+    });
+  }
+
+  /**
+   * {@code Math.floorDiv(x, divisor)} over every long {@code x}, for a positive even divisor: a
+   * power of two is the shift alone, and any other needs its odd part to keep the shifted dividend
+   * inside {@link ConstDivide}'s exact range (`VARKA-338.md`
+   * 2.3, `long_divide.smt2`). The divisor is {@code 2^k * m} with {@code m} odd: an arithmetic
+   * shift right by {@code k} is the floor division by {@code 2^k} and leaves a magnitude of at
+   * most {@code 2^(63 - k)}; a negative value is then moved down by {@code m - 1}, so that the
+   * truncating {@code ConstDivide} by {@code m} floors; and two floor divisions by positive
+   * integers are one, by their product. {@code 86,400,000,000 = 2^13 * 10,546,875}, whose shifted
+   * magnitude is under {@code 2^50 + 2^24}. An odd divisor is refused: unshifted, the dividend
+   * is every long, past that range.
+   */
+  static VarkaVectorIR floorDivLong(VarkaVectorIR x, long divisor, DeclineSink sink) {
+    if (divisor <= 0 || (divisor & 1) == 1) {
+      throw VarkaErrors.illegalArgument("no exact floor division of a long by " + divisor
+          + ": the divisor must be positive and even");
+    }
+    int k = Long.numberOfTrailingZeros(divisor);
+    long odd = divisor >> k;
+    VarkaVectorIR y = new BitOp(BitOpKind.SHR, x, sink.longSlot(k));
+    if (odd == 1) {
+      return y;
+    }
+    long bound = (1L << (63 - k)) + odd;
+    if (bound > ConstDivide.EXACT_DIVIDEND_BOUND) {
+      throw VarkaErrors.illegalArgument("no exact floor division of a long by " + divisor
+          + ": its odd part leaves the shifted dividend past the exact range");
+    }
+    VarkaVectorIR down = new BitOp(BitOpKind.AND, new BitOp(BitOpKind.SHR, y, sink.longSlot(63)),
+        sink.longSlot(1 - odd));
+    return new ConstDivide(new IntArith(IntOp.ADD, Overflow.WRAP, y, down), odd, bound);
+  }
+
+  private static boolean isNtz(Expression e) {
+    return DataTypes.TimestampNTZType.equals(e.dataType());
   }
 
   private static VarkaVectorIR greatest(VarkaVectorIR left, VarkaVectorIR right) {
