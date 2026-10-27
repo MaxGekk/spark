@@ -716,6 +716,25 @@ final class VarkaConditionCompiler {
         }
         return compileInList(inSet.child(), elements, inSet, inputs, literals, sink);
       };
+      // IN over TIMESTAMP_NTZ literals (VARKA-338): the same EQ chain at the long lane, each
+      // literal's microseconds a slot in the long table. A bigint IN takes the same chain but is
+      // left declined here, for the rows that build the bigint operations (rows 104 and 102).
+      case In in when DataTypes.TimestampNTZType.equals(in.value().dataType()) -> () -> {
+        List<OptionalLong> elements = new ArrayList<>();
+        for (Expression element : CollectionConverters.asJava(in.list())) {
+          elements.add(element instanceof Literal l && l.value() instanceof Long micros
+              ? OptionalLong.of(micros) : OptionalLong.empty());
+        }
+        return compileLongInList(in.value(), elements, in, inputs, literals, sink);
+      };
+      case InSet inSet when DataTypes.TimestampNTZType.equals(inSet.child().dataType()) -> () -> {
+        List<OptionalLong> elements = new ArrayList<>();
+        for (Object element : CollectionConverters.asJava(inSet.hset())) {
+          elements.add(element instanceof Long micros ? OptionalLong.of(micros)
+              : OptionalLong.empty());
+        }
+        return compileLongInList(inSet.child(), elements, inSet, inputs, literals, sink);
+      };
       case And and -> () -> {
         Optional<Cond> left = compileCond(and.left(), inputs, literals, sink);
         if (left.isEmpty()) {
@@ -839,6 +858,48 @@ final class VarkaConditionCompiler {
       leaves.add(new Compare(
           CompareOp.EQ, compiledValue.get(),
           VarkaNodeCompiler.slot(d, compiledValue.get().laneType(), literals)));
+    }
+    return Optional.of(balancedOr(leaves));
+  }
+
+  /**
+   * {@link #compileInList} at the long lane: the same dedup, sort, cap and balanced fold, over
+   * long literals, each in a slot of the long table.
+   */
+  private static Optional<Cond> compileLongInList(
+      Expression value,
+      List<OptionalLong> elements,
+      Expression whole,
+      VarkaSlotTable inputs,
+      VarkaSlotTable literals,
+      DeclineSink sink) {
+    TreeSet<Long> values = new TreeSet<>();
+    for (OptionalLong element : elements) {
+      if (element.isEmpty()) {
+        sink.note("IN list has a null or non-literal element", whole);
+        return Optional.empty();
+      }
+      values.add(element.getAsLong());
+    }
+    if (values.isEmpty()) {
+      sink.note("IN list has a null or non-literal element", whole);
+      return Optional.empty();
+    }
+    if (values.size() > VarkaNodeCompiler.MAX_IN_LITERALS) {
+      sink.note("IN list longer than the fused cap of " + VarkaNodeCompiler.MAX_IN_LITERALS, whole);
+      return Optional.empty();
+    }
+    Optional<VarkaVectorIR> compiledValue = VarkaNodeCompiler.compileNode(
+        value, inputs, literals, sink);
+    if (compiledValue.isEmpty()) {
+      return Optional.empty();
+    }
+    if (compiledValue.get().laneType() != LaneType.LONG) {
+      return sink.decline("an IN value that is not on the long lane", whole);
+    }
+    List<Cond> leaves = new ArrayList<>();
+    for (long v : values) {
+      leaves.add(new Compare(CompareOp.EQ, compiledValue.get(), sink.longSlot(v)));
     }
     return Optional.of(balancedOr(leaves));
   }

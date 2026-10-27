@@ -167,8 +167,6 @@ public final class VarkaTypesSuite {
   void declineNamesTheType() {
     assertEquals("a decimal(10,2) column: the DECIMAL lane is row 347's",
         VarkaTypes.declineReason(DataTypes.createDecimalType(10, 2)).orElseThrow());
-    assertEquals("a timestamp_ntz column: the TIMESTAMP_NTZ lane is row 338's",
-        VarkaTypes.declineReason(DataTypes.TimestampNTZType).orElseThrow());
     assertEquals("a timestamp column: its arithmetic is in the session time zone, which is not "
         + "lane arithmetic", VarkaTypes.declineReason(DataTypes.TimestampType).orElseThrow());
     assertEquals("a boolean column read as a value, which row 27 builds; it is read as a "
@@ -176,6 +174,7 @@ public final class VarkaTypesSuite {
     assertTrue(VarkaTypes.declineReason(DataTypes.IntegerType).isEmpty());
     assertTrue(VarkaTypes.declineReason(DataTypes.DoubleType).isEmpty());
     assertTrue(VarkaTypes.declineReason(DataTypes.FloatType).isEmpty());
+    assertTrue(VarkaTypes.declineReason(DataTypes.TimestampNTZType).isEmpty());
     assertTrue(VarkaTypes.declineReason(DataTypes.StringType).isEmpty());
   }
 
