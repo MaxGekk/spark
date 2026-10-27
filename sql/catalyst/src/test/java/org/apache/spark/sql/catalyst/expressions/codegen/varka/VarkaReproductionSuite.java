@@ -30,9 +30,11 @@ import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Random;
+import java.util.Set;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -96,7 +98,38 @@ public final class VarkaReproductionSuite {
             new ColumnRef(0), new LiteralSlot(1)),
         new NarrowLane(new ConstDivide(new GuardedRange(
             new IntArith(IntOp.ADD, Overflow.WRAP, x, new LiteralSlot(0, LaneType.LONG)),
-            -1000L, 86_400_000_000_000L), 1000L, ConstDivide.EXACT_DIVIDEND_BOUND)));
+            -1000L, 86_400_000_000_000L), 1000L, ConstDivide.EXACT_DIVIDEND_BOUND)),
+        // A decimal column beside an int one widened to its lane.
+        new IntArith(IntOp.ADD, Overflow.WRAP, new DecimalColumn(2, LaneType.LONG, 9),
+            new WidenLane(new ColumnRef(0), LaneType.LONG)),
+        new CondValue(new NullSafeEqual(new ColumnRef(0), new LiteralSlot(0)), LaneType.INT),
+        new BitCount(new BitOp(BitOpKind.XOR, new ColumnRef(0), new LiteralSlot(0))));
+  }
+
+  /**
+   * The node types the parser has no arm for yet, so no round trip reaches them: the boolean
+   * value nodes, whose parse arms the owner is turning into a row of their own. Listed by name so
+   * that the completeness check below fails on any other node type left without an entry, and on
+   * one of these once a tree above reaches it.
+   */
+  private static final Set<Class<?>> NOT_PARSED_YET = Set.of(BoolColumn.class, CondConst.class,
+      BoolCompare.class, CondIf.class, BoolNullSafeEq.class);
+
+  /** The records under {@code type}, through its sealed subinterfaces. */
+  private static void nodeTypes(Class<?> type, Set<Class<?>> out) {
+    if (type.isSealed()) {
+      Arrays.stream(type.getPermittedSubclasses()).forEach(t -> nodeTypes(t, out));
+    } else {
+      out.add(type);
+    }
+  }
+
+  /** The node types of {@code node}'s tree. */
+  private static void reached(VarkaVectorIR node, Set<Class<?>> out) {
+    out.add(node.getClass());
+    for (VarkaVectorIR child : VarkaVectorIR.childrenOf(node)) {
+      reached(child, out);
+    }
   }
 
   private static void assertRoundTrips(VarkaVectorIR tree) {
@@ -126,6 +159,20 @@ public final class VarkaReproductionSuite {
   void everyNodeTypeRoundTrips() {
     assertRoundTrips(everyNodeType());
     theRest().forEach(VarkaReproductionSuite::assertRoundTrips);
+    // Complete over the sealed interface, so a new node type fails here until a tree above
+    // reaches it or it is listed as not parsed yet.
+    Set<Class<?>> all = new HashSet<>();
+    nodeTypes(VarkaVectorIR.class, all);
+    Set<Class<?>> got = new HashSet<>();
+    reached(everyNodeType(), got);
+    theRest().forEach(t -> reached(t, got));
+    Set<Class<?>> missing = new HashSet<>(all);
+    missing.removeAll(got);
+    missing.removeAll(NOT_PARSED_YET);
+    assertTrue(missing.isEmpty(), () -> "node types no round trip reaches: " + missing);
+    Set<Class<?>> stale = new HashSet<>(NOT_PARSED_YET);
+    stale.retainAll(got);
+    assertTrue(stale.isEmpty(), () -> "node types listed as not parsed yet but reached: " + stale);
   }
 
   @Test
@@ -172,6 +219,12 @@ public final class VarkaReproductionSuite {
     // Two spaces read as one token boundary, and the re-rendering catches the difference.
     assertThrows(IllegalArgumentException.class,
         () -> VarkaCanonicalIr.parse("(addDays  col:0 lit:0)"));
+    // A decimal leaf names its lane and precision, on the long lane and from 1 to 18.
+    assertThrows(IllegalArgumentException.class, () -> VarkaCanonicalIr.parse("dec:0:long"));
+    assertThrows(IllegalArgumentException.class, () -> VarkaCanonicalIr.parse("dec:0:int:p9"));
+    assertThrows(IllegalArgumentException.class,
+        () -> VarkaCanonicalIr.parse("dec:0:long:p19"));
+    assertThrows(IllegalArgumentException.class, () -> VarkaCanonicalIr.parse("dec:0:long:9"));
   }
 
   private static VarkaReproduction sample(VarkaReproduction.KernelCall call) {

@@ -235,10 +235,10 @@ public final class VarkaRangeAnalysis {
       return VarkaValueRange.UNKNOWN;
     }
     return switch (node) {
-      // A day column is the column bound, which the answer rests on: the caller that relies on
-      // the answer has the kernel check it per batch (`columns` names the column to it).
       // A long-lane leaf, answered UNKNOWN above; listed so that the switch stays exhaustive.
       case DecimalColumn c -> VarkaValueRange.UNKNOWN;
+      // A day column is the column bound, which the answer rests on: the caller that relies on
+      // the answer has the kernel check it per batch (`columns` names the column to it).
       case ColumnRef c -> {
         if (kind != Kind.DAY) {
           yield VarkaValueRange.UNKNOWN;

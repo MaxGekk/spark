@@ -18,17 +18,24 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
+import java.lang.classfile.ClassFile;
+import java.lang.classfile.MethodModel;
+import java.lang.classfile.attribute.CodeAttribute;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.function.IntFunction;
+import java.util.function.LongUnaryOperator;
+import java.util.stream.IntStream;
 
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.DecimalVector;
@@ -37,11 +44,13 @@ import org.junit.jupiter.api.Test;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DecimalColumn;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntArith;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.IntOp;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LiteralSlot;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Overflow;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.WidenLane;
 import org.apache.spark.sql.types.Decimal;
 import org.apache.spark.sql.util.ArrowUtils;
 import org.apache.spark.sql.vectorized.ArrowColumnVector;
@@ -119,7 +128,7 @@ public final class VarkaDecimalLoadSuite {
 
   /** The rows a planted slot is tried at: the first group, a middle one and the last row. */
   private static int[] positions(int length) {
-    return java.util.stream.IntStream.of(0, length / 2, length - 1).distinct().toArray();
+    return IntStream.of(0, length / 2, length - 1).distinct().toArray();
   }
 
   /** The slots each of which must decline the batch where it is valid. */
@@ -175,39 +184,83 @@ public final class VarkaDecimalLoadSuite {
     return new SparkReading(unscaled, raised);
   }
 
-  /** The kernel's answer: its status, then each row's value and validity. */
-  private record KernelAnswer(int status, long[] values, boolean[] valid) { }
+  /** The kernel's answer: its status, then each row's value and validity, per output. */
+  private record KernelAnswer(int status, long[][] values, boolean[][] valid) { }
 
   private static KernelAnswer run(VarkaFusedKernel kernel, DecimalVector v, long[] literals) {
+    return run(kernel, v, null, 1, literals);
+  }
+
+  /**
+   * Runs {@code kernel} over the decimal column {@code v} at ordinal 0 and, when {@code ints} is
+   * not null, an int column at ordinal 1 holding those values, all valid, with {@code outputs}
+   * long outputs.
+   */
+  private static KernelAnswer run(VarkaFusedKernel kernel, DecimalVector v, int[] ints,
+      int outputs, long[] literals) {
     int length = v.getValueCount();
     int nulls = v.getNullCount();
-    long[] srcData = {v.getDataBuffer().memoryAddress()};
-    long[] srcValidity = {nulls == length ? 0L : v.getValidityBuffer().memoryAddress()};
-    int[] nullCounts = {nulls};
+    int inputs = ints == null ? 1 : 2;
+    long wordBytes = ((length + 63) / 64) * 8L;
     try (var arena = Arena.ofConfined()) {
-      MemorySegment out = arena.allocate(length * 8L, 64);
-      MemorySegment outValid = arena.allocate(((length + 63) / 64) * 8L, 64);
-      long[] outData = {out.address()};
-      long[] outValidity = {outValid.address()};
-      int status = VarkaKernelChecks.sanitized(kernel, length, new long[] {16L},
-          new long[] {8L}, srcData, srcValidity, outData, outValidity,
+      long[] srcData = new long[inputs];
+      long[] srcValidity = new long[inputs];
+      int[] nullCounts = new int[inputs];
+      long[] inStride = new long[inputs];
+      srcData[0] = v.getDataBuffer().memoryAddress();
+      srcValidity[0] = nulls == length ? 0L : v.getValidityBuffer().memoryAddress();
+      nullCounts[0] = nulls;
+      inStride[0] = 16L;
+      if (ints != null) {
+        MemorySegment data = arena.allocate(Math.max(1, length) * 4L, 64);
+        MemorySegment valid = arena.allocate(wordBytes, 64);
+        for (int i = 0; i < length; i++) {
+          data.set(ValueLayout.JAVA_INT, i * 4L, ints[i]);
+        }
+        valid.fill((byte) -1);
+        srcData[1] = data.address();
+        srcValidity[1] = valid.address();
+        inStride[1] = 4L;
+      }
+      long[] outData = new long[outputs];
+      long[] outValidity = new long[outputs];
+      long[] outStride = new long[outputs];
+      MemorySegment[] out = new MemorySegment[outputs];
+      MemorySegment[] outValid = new MemorySegment[outputs];
+      for (int o = 0; o < outputs; o++) {
+        out[o] = arena.allocate(length * 8L, 64);
+        outValid[o] = arena.allocate(wordBytes, 64);
+        outData[o] = out[o].address();
+        outValidity[o] = outValid[o].address();
+        outStride[o] = 8L;
+      }
+      int status = VarkaKernelChecks.sanitized(kernel, length, inStride, outStride, srcData,
+          srcValidity, outData, outValidity,
           scratch -> kernel.run(srcData, srcValidity, nullCounts, outData, outValidity,
               new int[0], literals, length, scratch));
-      long[] values = new long[length];
-      boolean[] valid = new boolean[length];
-      for (int i = 0; i < length; i++) {
-        values[i] = out.get(ValueLayout.JAVA_LONG, i * 8L);
-        valid[i] = (outValid.get(ValueLayout.JAVA_LONG, (i >>> 6) * 8L) >>> (i & 63) & 1L) != 0;
+      long[][] values = new long[outputs][length];
+      boolean[][] validRows = new boolean[outputs][length];
+      for (int o = 0; o < outputs; o++) {
+        for (int i = 0; i < length; i++) {
+          values[o][i] = out[o].get(ValueLayout.JAVA_LONG, i * 8L);
+          validRows[o][i] =
+              (outValid[o].get(ValueLayout.JAVA_LONG, (i >>> 6) * 8L) >>> (i & 63) & 1L) != 0;
+        }
       }
-      return new KernelAnswer(status, values, valid);
+      return new KernelAnswer(status, values, validRows);
     }
   }
 
   /** {@code roots} over one decimal column at {@code lanes} long lanes, loaded. */
   private static VarkaEmitterFixtures.Loaded kernel(List<VarkaVectorIR> roots, int literals,
       int lanes) {
-    var options = VarkaMatrixRuns.BASE.withLanesOverride(lanes);
-    var emitted = VarkaEmitterFixtures.emit(roots, 1, literals, options);
+    return kernel(roots, 1, literals, VarkaMatrixRuns.BASE.withLanesOverride(lanes));
+  }
+
+  /** {@code roots} over {@code inputs} columns under {@code options}, loaded. */
+  private static VarkaEmitterFixtures.Loaded kernel(List<VarkaVectorIR> roots, int inputs,
+      int literals, VarkaEmitOptions options) {
+    var emitted = VarkaEmitterFixtures.emit(roots, inputs, literals, options);
     List<String> errors = VarkaEmitterTestSupport.verify(emitted.bytes());
     assertTrue(errors.isEmpty(), () -> "the class does not verify: " + errors);
     return VarkaEmitterFixtures.load(emitted);
@@ -218,7 +271,7 @@ public final class VarkaDecimalLoadSuite {
    * and holds it to Spark's reading; returns whether the batch declined.
    */
   private static boolean check(String context, VarkaFusedKernel kernel, Batch b, int precision,
-      long[] literals, java.util.function.LongUnaryOperator f) {
+      long[] literals, LongUnaryOperator f) {
     try (BufferAllocator allocator =
         ArrowUtils.rootAllocator().newChildAllocator("varka-decimal-load", 0, Long.MAX_VALUE);
         DecimalVector v = vector(b, precision, allocator)) {
@@ -232,9 +285,10 @@ public final class VarkaDecimalLoadSuite {
       assertEquals(0, got.status(), () -> context + ": Spark's reader reads every row");
       for (int i = 0; i < b.length(); i++) {
         int row = i;
-        assertEquals(!b.nulls()[i], got.valid()[i], () -> context + ": validity of row " + row);
+        assertEquals(!b.nulls()[i], got.valid()[0][i],
+            () -> context + ": validity of row " + row);
         if (!b.nulls()[i]) {
-          assertEquals(f.applyAsLong(expected.unscaled()[i]), got.values()[i],
+          assertEquals(f.applyAsLong(expected.unscaled()[i]), got.values()[0][i],
               () -> context + ": row " + row);
         }
       }
@@ -246,8 +300,8 @@ public final class VarkaDecimalLoadSuite {
    * The slot table over {@code roots}: an in-precision batch, the bounds, garbage under nulls, and
    * every declining slot planted at each position, valid (declines) and null (does not).
    */
-  private static void slotTable(String name, java.util.function.IntFunction<List<VarkaVectorIR>>
-      roots, int literals, long[] literalValues, java.util.function.LongUnaryOperator f) {
+  private static void slotTable(String name, IntFunction<List<VarkaVectorIR>>
+      roots, int literals, long[] literalValues, LongUnaryOperator f) {
     int declined = 0;
     for (int lanes : WIDTHS) {
       for (int precision : PRECISIONS) {
@@ -258,14 +312,14 @@ public final class VarkaDecimalLoadSuite {
             String at = name + " at " + lanes + " long lanes, precision " + precision
                 + ", length " + length + (masked ? ", with nulls" : ", no null");
             long seed = 31L * lanes + 7L * precision + length + (masked ? 1 : 0);
-            assertTrue(!check(at, k, batch(length, precision, masked, seed), precision,
+            assertFalse(check(at, k, batch(length, precision, masked, seed), precision,
                 literalValues, f), at + ": an in-precision batch must not decline");
             for (int row : positions(length)) {
               for (Slot slot : passing(precision)) {
                 Batch b = batch(length, precision, masked, seed);
                 b.slots()[row] = slot;
                 b.nulls()[row] = false;
-                assertTrue(!check(at + ", " + slot + " at row " + row, k, b, precision,
+                assertFalse(check(at + ", " + slot + " at row " + row, k, b, precision,
                     literalValues, f), at + ": a slot at the bound passes");
               }
               for (Slot slot : declining(precision)) {
@@ -278,7 +332,7 @@ public final class VarkaDecimalLoadSuite {
                 declined++;
                 // The same slot under a null is never read, by Spark or by the kernel.
                 b.nulls()[row] = true;
-                assertTrue(!check(context + " under a null", k, b, precision, literalValues, f),
+                assertFalse(check(context + " under a null", k, b, precision, literalValues, f),
                     context + ": a null slot must not decline");
               }
             }
@@ -314,6 +368,184 @@ public final class VarkaDecimalLoadSuite {
     }, 0, new long[0], x -> x + x);
   }
 
+  /** {@code b} as a vector, read by the kernel; the vector is closed before the answer returns. */
+  private static KernelAnswer runBatch(VarkaFusedKernel k, Batch b, int precision, int[] ints,
+      int outputs, long[] literals) {
+    try (BufferAllocator allocator =
+        ArrowUtils.rootAllocator().newChildAllocator("varka-decimal-load", 0, Long.MAX_VALUE);
+        DecimalVector v = vector(b, precision, allocator)) {
+      return run(k, v, ints, outputs, literals);
+    }
+  }
+
+  /** {@code length} in-precision slots, row 5 null and holding zero when {@code masked}. */
+  private static Batch plain(int length, boolean masked, long value) {
+    var slots = new Slot[length];
+    var nulls = new boolean[length];
+    for (int i = 0; i < length; i++) {
+      slots[i] = Slot.of(value + i);
+      nulls[i] = masked && i == 5;
+    }
+    if (masked) {
+      slots[5] = Slot.of(0L);
+    }
+    return new Batch(slots, nulls);
+  }
+
+  @Test
+  @DisplayName("under exactRefusalStatus a body of the slot check and a range guard names the "
+      + "reason that fired, and by default both")
+  void twoReasonsUnderExactStatus() {
+    int precision = 9;
+    var roots = List.<VarkaVectorIR>of(
+        new GuardedRange(new DecimalColumn(0, LaneType.LONG, precision), -1000L, 1000L));
+    int slot = VarkaFusedKernel.STATUS_DECIMAL_SLOT;
+    int range = VarkaFusedKernel.STATUS_VALUE_RANGE;
+    // A wrong high word over a low word inside the range, so that only the slot check fires.
+    Slot badSlot = new Slot(5L, 1L);
+    Slot farValue = Slot.of(5000L);
+    for (int lanes : WIDTHS) {
+      for (boolean exact : new boolean[] {false, true}) {
+        var options = VarkaMatrixRuns.BASE.withLanesOverride(lanes).withExactRefusalStatus(exact);
+        VarkaFusedKernel k = kernel(roots, 1, 0, options).kernel();
+        for (boolean masked : new boolean[] {false, true}) {
+          for (int row : new int[] {0, 36}) {
+            String at = lanes + " long lanes, exact " + exact + ", masked " + masked + ", row "
+                + row;
+            assertEquals(0, runBatch(k, plain(37, masked, -10L), precision, null, 1,
+                new long[0]).status(), at);
+            Batch b = plain(37, masked, -10L);
+            b.slots()[row] = badSlot;
+            assertEquals(exact ? slot : slot | range,
+                runBatch(k, b, precision, null, 1, new long[0]).status(), at + ", a bad slot");
+            b = plain(37, masked, -10L);
+            b.slots()[row] = farValue;
+            assertEquals(exact ? range : slot | range,
+                runBatch(k, b, precision, null, 1, new long[0]).status(), at + ", a far value");
+            b.slots()[row == 0 ? 36 : 0] = badSlot;
+            assertEquals(slot | range,
+                runBatch(k, b, precision, null, 1, new long[0]).status(), at + ", both");
+          }
+        }
+      }
+    }
+  }
+
+  @Test
+  @DisplayName("a kernel split into groups by the method byte budget loads and checks the leaf "
+      + "in each group's body")
+  void perGroupBodiesUnderTheBudget() {
+    int precision = 18;
+    int outputs = 6;
+    var d = new DecimalColumn(0, LaneType.LONG, precision);
+    var roots = new ArrayList<VarkaVectorIR>();
+    long[] literals = new long[outputs];
+    for (int o = 0; o < outputs; o++) {
+      roots.add(new IntArith(IntOp.ADD, Overflow.WRAP, d, new LiteralSlot(o, LaneType.LONG)));
+      literals[o] = 100L * (o + 1);
+    }
+    for (int lanes : WIDTHS) {
+      var whole = VarkaMatrixRuns.BASE.withLanesOverride(lanes).withSeveralKernels(false);
+      // Halfway between the longest method of one output's class and of the six outputs' unsplit
+      // one: a group of one fits, and the six need more than one group.
+      int budget = (longestMethod(VarkaEmitterFixtures.emit(roots.subList(0, 1), 1, 1, whole)
+          .bytes()) + longestMethod(VarkaEmitterFixtures.emit(roots, 1, outputs, whole).bytes()))
+          / 2;
+      var options = whole.withMethodByteBudget(budget);
+      var emitted = VarkaEmitterFixtures.emit(roots, 1, outputs, options);
+      List<String> loops = VarkaEmitterTestSupport.methodNames(emitted.bytes()).stream()
+          .filter(m -> m.startsWith("loopDense")).toList();
+      assertTrue(loops.size() >= 2,
+          () -> "no split at " + lanes + " lanes under " + budget + " bytes: " + loops);
+      for (String loop : loops) {
+        assertTrue(VarkaEmitterTestSupport.invocationCount(emitted.bytes(), loop,
+            "jdk.incubator.vector.VectorShuffle", List.of()) > 0,
+            () -> loop + " builds no decimal shuffle at " + lanes + " lanes");
+      }
+      VarkaFusedKernel k = kernel(roots, 1, outputs, options).kernel();
+      for (int length : LENGTHS) {
+        for (boolean masked : new boolean[] {false, true}) {
+          String at = lanes + " long lanes, length " + length + ", masked " + masked;
+          Batch b = batch(length, precision, masked, 17L * lanes + length);
+          KernelAnswer got = runBatch(k, b, precision, null, outputs, literals);
+          assertEquals(0, got.status(), at);
+          for (int o = 0; o < outputs; o++) {
+            for (int i = 0; i < length; i++) {
+              if (!b.nulls()[i]) {
+                assertEquals(b.slots()[i].lo() + literals[o], got.values()[o][i],
+                    at + ", output " + o + ", row " + i);
+              }
+            }
+          }
+          for (int row : positions(length)) {
+            Batch bad = batch(length, precision, masked, 17L * lanes + length);
+            bad.slots()[row] = new Slot(5L, 1L);
+            bad.nulls()[row] = false;
+            assertEquals(VarkaFusedKernel.STATUS_DECIMAL_SLOT,
+                runBatch(k, bad, precision, null, outputs, literals).status(),
+                at + ", a bad slot at row " + row);
+          }
+        }
+      }
+    }
+  }
+
+  /** The bytecode length of the class's longest method. */
+  private static int longestMethod(byte[] bytes) {
+    int longest = 0;
+    for (MethodModel m : ClassFile.of().parse(bytes).methods()) {
+      if (m.code().orElse(null) instanceof CodeAttribute code) {
+        longest = Math.max(longest, code.codeLength());
+      }
+    }
+    return longest;
+  }
+
+  @Test
+  @DisplayName("an int column widened beside the leaf takes the mixed epilogue and keeps the check")
+  void mixedLanesBesideTheLeaf() {
+    for (int precision : PRECISIONS) {
+      var roots = List.<VarkaVectorIR>of(new IntArith(IntOp.ADD, Overflow.WRAP,
+          new DecimalColumn(0, LaneType.LONG, precision),
+          new WidenLane(new ColumnRef(1), LaneType.LONG)));
+      for (int lanes : WIDTHS) {
+        var options = VarkaMatrixRuns.BASE.withLanesOverride(lanes);
+        assertTrue(VarkaKernelPlan.of(roots, options).mixed(), "not a mixed kernel");
+        VarkaFusedKernel k = kernel(roots, 2, 0, options).kernel();
+        for (int length : LENGTHS) {
+          int[] ints = IntStream.range(0, length).map(i -> i * 7919 - 50_000).toArray();
+          for (boolean masked : new boolean[] {false, true}) {
+            String at = "precision " + precision + ", " + lanes + " long lanes, length " + length
+                + ", masked " + masked;
+            long seed = 13L * lanes + precision + length;
+            Batch b = batch(length, precision, masked, seed);
+            KernelAnswer got = runBatch(k, b, precision, ints, 1, new long[0]);
+            assertEquals(0, got.status(), at);
+            for (int i = 0; i < length; i++) {
+              assertEquals(!b.nulls()[i], got.valid()[0][i], at + ", validity of row " + i);
+              if (!b.nulls()[i]) {
+                assertEquals(b.slots()[i].lo() + ints[i], got.values()[0][i], at + ", row " + i);
+              }
+            }
+            for (int row : positions(length)) {
+              for (Slot slot : declining(precision)) {
+                Batch bad = batch(length, precision, masked, seed);
+                bad.slots()[row] = slot;
+                bad.nulls()[row] = false;
+                assertEquals(VarkaFusedKernel.STATUS_DECIMAL_SLOT,
+                    runBatch(k, bad, precision, ints, 1, new long[0]).status(),
+                    at + ", " + slot + " at row " + row);
+                bad.nulls()[row] = true;
+                assertEquals(0, runBatch(k, bad, precision, ints, 1, new long[0]).status(),
+                    at + ", " + slot + " under a null at row " + row);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   @Test
   @DisplayName("an all-null batch reads no slot and does not decline")
   void allNull() {
@@ -325,7 +557,7 @@ public final class VarkaDecimalLoadSuite {
         slots[i] = new Slot(power(9), 1L);
         nulls[i] = true;
       }
-      assertTrue(!check("all null at " + lanes + " lanes", k, new Batch(slots, nulls), 9,
+      assertFalse(check("all null at " + lanes + " lanes", k, new Batch(slots, nulls), 9,
           new long[0], x -> x));
     }
   }

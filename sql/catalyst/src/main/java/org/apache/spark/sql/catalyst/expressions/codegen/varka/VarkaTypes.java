@@ -381,14 +381,15 @@ public final class VarkaTypes {
           new Conformance.Owed("Double", "341"));
       // Every precision is sixteen bytes a row in Arrow (`ArrowUtils.toArrowType`); the tests
       // probe one form on each side of the 64-bit boundary at precision 18. Up to it a value is
-      // an unscaled long on the long lane (VARKA-347), and the int lane is an emission choice
-      // for precision up to 9, which the warm-up reaches; the pair above it is row 359's. The
-      // contract's ordering, choice and cast checks have no form before row 348.
+      // an unscaled long on the long lane (VARKA-347); the pair above it is row 359's. The int
+      // lane, an emission choice for precision up to 9, joins the lanes when step 4 of the row
+      // builds that arm: until then a decimal leaf refuses it, so no kernel loads one there.
+      // The contract's ordering, choice and cast checks have no form before row 348.
       case DECIMAL -> new Info(id, "dec", "DECIMAL(10, 2)",
           new Admission.UpToPrecision(LaneType.LONG, VarkaVectorIR.DecimalColumn.MAX_LONG_PRECISION,
               "359"),
           128, List.of(DataTypes.createDecimalType(10, 2), DataTypes.createDecimalType(30, 4)),
-          List.of(LaneType.LONG, LaneType.INT), new Conformance.Owed("Decimal", "348"));
+          List.of(LaneType.LONG), new Conformance.Owed("Decimal", "348"));
       case DATE -> new Info(id, "date", "DATE", new Admission.OnLane(LaneType.INT), 32,
           List.of(DataTypes.DateType), List.of(LaneType.INT),
           new Conformance.Owed("Date", "485"));

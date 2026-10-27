@@ -516,9 +516,9 @@ column's word in the masked body, folded into the body's accumulator and tested 
 The reason is `Refusal.DECIMAL_SLOT` (re-armed, unconditional), its bit `STATUS_DECIMAL_SLOT = 1
 << 6`, named `decimal-slot` in `VarkaFallbackAccounting` and `docs/sql-varka.md`, its mechanism
 `GUARD_DECIMAL_SLOT`. The registry's `DECIMAL` is `UpToPrecision(LONG, 18, "359")`, lanes `LONG`
-and `INT`, conformance `Owed("Decimal", "348")`; `types.tsv` is regenerated. `VarkaLaneArrow` maps
-`DECIMAL` to `DecimalVector` with no allocator, and `isArrowBacked` holds a decimal input's field
-to `bitWidth == 128` and the column's scale (`decimalFieldMatches`).
+(departure 7), conformance `Owed("Decimal", "348")`; `types.tsv` is regenerated. `VarkaLaneArrow`
+maps `DECIMAL` to `DecimalVector` with no allocator, and `isArrowBacked` holds a decimal input's
+field to `bitWidth == 128` and the column's scale (`decimalFieldMatches`).
 
 **Departures from 2.1, 2.2 and 2.4.**
 
@@ -545,6 +545,12 @@ to `bitWidth == 128` and the column's scale (`decimalFieldMatches`).
    refuses `INT` today), the fuzz sequence (`VarkaIrFuzzSuite` and `VarkaEmitCostSuite` list the
    node as out of the grammar and awaiting row 352's refit), the warm-up's shuffle calls and the
    cost feature's price.
+7. **The registry lists the long lane alone**, not `LONG` and `INT` as 2.4 has it: a decimal leaf
+   refuses the int lane until step 4 builds that arm, so a listed `INT` would name a lane no
+   decimal kernel loads in. Step 4 adds it back with the arm.
+8. **Neither `Info.sparkValue` nor `Info.bits` answers for the decimal**, at the merge with #1054:
+   both read the id's lane, which is now `LONG`, while a decimal's lane bits are an unscaled value
+   and Spark's value is a `Decimal` at a scale the id does not carry. Both refuse it, as before.
 
 **The slot table** (`VarkaDecimalLoadSuite`, `ownJvm`): at 2, 4 and 8 long lanes, precision 1, 9,
 10 and 18, lengths 1 and 3 (no loop at all), 37 (the last row in the epilogue at every width) and
@@ -565,3 +571,43 @@ which now maps `FLOAT`, `DOUBLE` and `DECIMAL` and leaves `BOOLEAN` and `TIMESTA
 `VarkaTypesSuite.declineNamesTheType`, whose assertion that `DECIMAL(10, 2)` declines naming row
 347 is dropped (the decimal facts are in `decimalLaneReadsThePrecision`); `types.tsv`,
 regenerated; and `dev/varka_new_lane.py`'s `OWED`, which keeps both rows' entries.
+
+**The review's findings, and what was done** (27 October 2026, after the merge):
+
+1. **The golden suite's Arrow source keeps decimals out until step 5.** With the registry admitting
+   `decimal(p <= 18)`, `VarkaArrowSource.varkaTyped` would have cached every relation with a
+   decimal column through the Arrow cache, and the lift would have tried decimal literals. Neither
+   reaches a kernel: the compiler declines every operator over a decimal (departure 1), and the
+   lift keeps an entry only if the compiler fuses it. So the change would only have moved Spark's
+   row path onto the Arrow cache for the decimal-only relations. One explicit gate,
+   `VarkaArrowSource.sourced`, admits a type on a lane but not a decimal, for both paths. Step 5
+   drops the decimal clause with the reader. The suites were not run without the gate. With it,
+   `VarkaLiteralLiftSuite` and `VarkaGoldenExclusionsSuite` pass and the golden suite's Varka arm
+   passes over every golden file (789 tests, none failed, 1,098 s on the laptop).
+2. **The canonical IR parses the decimal leaf** (`dec:N:long:pP`; a missing precision, the int
+   lane and precision 19 are refused). `everyNodeTypeRoundTrips` also reaches `WidenLane`,
+   `NullSafeEqual`, `CondValue`, `BitOp` and `BitCount`, which it did not, and now checks that it
+   is complete: it collects the records under the sealed `VarkaVectorIR` and fails on any that no
+   tree reaches. The five boolean value nodes (`BoolColumn`, `CondConst`, `BoolCompare`, `CondIf`,
+   `BoolNullSafeEq`) have no parse arm at all; they are listed by name as not parsed yet, the
+   owner turning that gap into a row of its own, and the check fails if a tree reaches one of them
+   while it is still listed.
+3. **For the owner at step 5: the slot check is narrowed by the arms above the leaf.** Under
+   `guardUnderArm`, on by default, the condemning mask is ANDed with the `IfElse` arms the leaf sits
+   under (`VarkaVectorWalk.emitArmContext`), so a bad slot on a row whose arm is not taken does not
+   decline the batch. That matches Spark, which reads a column under `CASE WHEN` only where the arm
+   is taken, so the row engine raises on the same rows. Declining whatever the arm would be strictly
+   safer, and costs batches that Spark answers. Left as it is; step 5, which builds the first
+   operators that put the leaf under an arm, takes the decision.
+4. **The registry lists `LONG` alone** (departure 7); `types.tsv` regenerates with that one
+   column changed.
+5. **Three tests in `VarkaDecimalLoadSuite`**, all at 2, 4 and 8 long lanes:
+   `twoReasonsUnderExactStatus` runs the leaf under a `GuardedRange`, a body of two reasons, and
+   holds the status to the reason that fired under `exactRefusalStatus` and to both bits without
+   it; `perGroupBodiesUnderTheBudget` splits six outputs over the leaf into groups with a method
+   byte budget, checks that every group's loop builds the shuffles, and runs the slot cases; and
+   `mixedLanesBesideTheLeaf` runs `d + widen(i)`, a kernel the plan marks mixed, which takes
+   `emitMixedEpilogue`, through the slot table. None is owed to a later step.
+6. `VarkaKernelPlan` reads an input leaf's ordinal through `VarkaVectorIR.inputOrdinal`. That also
+   records a boolean column's lane, which nothing sizes by, since `loadInputSegment` tests a
+   boolean column first. `emitted_bytes.json` does not move.
