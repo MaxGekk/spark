@@ -154,6 +154,7 @@ public final class VarkaCanonicalIr {
         Cond c = cond();
         yield new CondValue(c, c.laneType());
       }
+      case "bool-out" -> new BoolOutput(cond());
       case "greatest" -> new Greatest(node(), node());
       case "least" -> new Least(node(), node());
       case "dayOfWeek" -> new DayOfWeek(node());

@@ -25,6 +25,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaKernelPlan;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType;
+import org.apache.spark.sql.types.BooleanType;
 import org.apache.spark.sql.types.DataType;
 
 /**
@@ -82,6 +83,14 @@ public record CompiledVarkaProjection(
       for (int i = 0; i < outputs.size(); i++) {
         VarkaVectorIR root = outputs.get(i);
         if (root instanceof VarkaVectorIR.Cond) {
+          continue;
+        }
+        // A boolean output is two bitmaps, which only a BOOLEAN column's BitVector holds.
+        if (root instanceof VarkaVectorIR.BoolOutput) {
+          if (!(outputTypes.get(i) instanceof BooleanType)) {
+            throw VarkaErrors.illegalArgument("output " + i + " is a boolean output, but its "
+                + "type is " + outputTypes.get(i).simpleString());
+          }
           continue;
         }
         int stored = switch (root.laneType()) {

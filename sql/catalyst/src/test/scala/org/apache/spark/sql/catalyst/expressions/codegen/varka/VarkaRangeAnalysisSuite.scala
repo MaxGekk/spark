@@ -420,6 +420,7 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite with VarkaTestWatchdog {
         case x: Least => value(x.left(), kind); value(x.right(), kind)
         case x: IfElse => cond(x.cond()); value(x.thenNode(), kind); value(x.elseNode(), kind)
         case x: CondValue => cond(x.cond())
+        case x: BoolOutput => cond(x.cond())
         case x: DateDiff => value(x.end(), Kind.DAY); value(x.start(), Kind.DAY)
         case x: Year => value(x.days(), Kind.DAY)
         case x: Month => value(x.days(), Kind.DAY)
@@ -524,6 +525,7 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite with VarkaTestWatchdog {
       case x: IfElse =>
         goCond(x.cond(), armed) && go(x.thenNode(), armed) && go(x.elseNode(), armed)
       case x: CondValue => goCond(x.cond(), armed)
+      case x: BoolOutput => goCond(x.cond(), armed)
       case x: DayOfWeek => go(x.days(), armed)
       case x: DayOfWeekIso => go(x.days(), armed)
       case x: WeekDay => go(x.days(), armed)

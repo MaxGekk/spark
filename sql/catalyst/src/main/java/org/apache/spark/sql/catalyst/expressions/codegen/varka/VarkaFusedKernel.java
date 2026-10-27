@@ -43,6 +43,12 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
  * discipline above doubles as the selection invariant: a row the loop never writes reads as
  * unselected.
  *
+ * <p>Boolean outputs: an output whose IR root is a {@code BoolOutput} writes two bitmaps, an
+ * Arrow {@code BitVector}'s (VARKA-27). Its {@code dstData} is a bitmap of whole 64-bit words,
+ * {@code ((length + 63) / 64) * 8} bytes, which the kernel zeroes and may store a word at a
+ * time: a set bit means the condition is known true for that row. Its {@code dstValidity} is
+ * set where the condition is known, true or false, so an unknown row is null, never false.
+ *
  * <p>Status, and why {@code run} returns one: a lowering may be correct only over
  * part of its input domain - the narrowed civil-from-days variant is valid over a bounded day
  * range, and nothing at compile time can bound a column's values. Such a kernel detects the

@@ -96,7 +96,10 @@ public final class VarkaReproductionSuite {
             new ColumnRef(0), new LiteralSlot(1)),
         new NarrowLane(new ConstDivide(new GuardedRange(
             new IntArith(IntOp.ADD, Overflow.WRAP, x, new LiteralSlot(0, LaneType.LONG)),
-            -1000L, 86_400_000_000_000L), 1000L, ConstDivide.EXACT_DIVIDEND_BOUND)));
+            -1000L, 86_400_000_000_000L), 1000L, ConstDivide.EXACT_DIVIDEND_BOUND)),
+        // Over comparisons: the parser reads no boolean-column leaf yet.
+        new BoolOutput(new Or(new Not(new IsNotNull(new ColumnRef(0))),
+            new Compare(CompareOp.LT, new ColumnRef(1), new LiteralSlot(0)))));
   }
 
   private static void assertRoundTrips(VarkaVectorIR tree) {
@@ -331,6 +334,40 @@ public final class VarkaReproductionSuite {
     var replay = VarkaReplay.of(file);
     // A BYTE kernel implements the int lane's seven-argument entry only, so the replay picks
     // the entry by the lane being LONG, as the runner does, and a long entry would throw.
+    assertTrue(replay.actual().isEmpty(), String.join("\n", replay.report()));
+    assertTrue(replay.notes().contains("the kernel returned"),
+        String.join("\n", replay.report()));
+  }
+
+  @Test
+  @DisplayName("a replayed boolean output records its width as the bit marker and writes whole "
+      + "words of data, as the runner allocates them")
+  void bitOutputReplays() {
+    var outputs = List.<VarkaVectorIR>of(new BoolOutput(
+        new Compare(CompareOp.LT, new ColumnRef(0), new ColumnRef(1))));
+    var key = new VarkaShapeKey(outputs, 2, 0, VarkaEmitOptions.DEFAULTS);
+    String hash = VarkaShapeCacheImpl.shapeHash(key);
+    // 100 rows: two words of data, the second partial, which the kernel may store whole.
+    int rows = 100;
+    var random = new Random(27);
+    byte[] a = new byte[rows * 4];
+    byte[] b = new byte[rows * 4];
+    random.nextBytes(a);
+    random.nextBytes(b);
+    var call = new VarkaReproduction.KernelCall(rows, 0,
+        List.of(VarkaReproduction.KernelCall.BIT_OUTPUT), List.of(
+            new VarkaReproduction.Input(4, rows * 4, 0, 0, false, a, null),
+            new VarkaReproduction.Input(4, rows * 4, 0, 0, false, b, null)), null, false);
+    var written = new VarkaReproduction(new VarkaFailureSignature("IndexOutOfBoundsException",
+        "x"), VarkaFallbackEvent.KERNEL_FAILURE, "", "", "", false, hash, 2, 0, false,
+        VarkaErrorContext.renderOptions(VarkaEmitOptions.DEFAULTS),
+        List.of(VarkaVectorIR.canonical(outputs.get(0))), List.of(), List.of(), call, null);
+    // The marker reads back from the file's text, and is not the selection bitmap's 0.
+    VarkaReproduction file = VarkaReproduction.parse(written.render());
+    assertEquals(List.of(-1), file.call().outputWidths());
+    assertEquals(16L, VarkaReproduction.KernelCall.outputDataBytes(-1, rows));
+    // rows * -1 bytes before the marker: the replay could not allocate the output at all.
+    var replay = VarkaReplay.of(file);
     assertTrue(replay.actual().isEmpty(), String.join("\n", replay.report()));
     assertTrue(replay.notes().contains("the kernel returned"),
         String.join("\n", replay.report()));

@@ -110,6 +110,12 @@ final class VarkaDescriptors {
       ConstantDescs.CD_void, LONG_ARRAY, LONG_ARRAY, INT_ARRAY, ConstantDescs.CD_String,
       ConstantDescs.CD_int);
   /**
+   * {@code void VarkaVectorSupport.zeroBitOutputData(long[], String, int)}: the zero of every
+   * boolean output's data bitmap, from a table of their ordinals, under {@code driverOutputTable}.
+   */
+  static final MethodTypeDesc ZERO_BIT_OUTPUT_DATA = MethodTypeDesc.of(
+      ConstantDescs.CD_void, LONG_ARRAY, ConstantDescs.CD_String, ConstantDescs.CD_int);
+  /**
    * {@code boolean VarkaVectorSupport.everyOutputReadsAnAllNullColumn(int[], String, int)}: the
    * masked driver's all-null shortcut read from a table, under {@code driverOutputTable}.
    */

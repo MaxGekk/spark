@@ -168,7 +168,7 @@ public final class VarkaTypesSuite {
         VarkaTypes.declineReason(DataTypes.DoubleType).orElseThrow());
     assertEquals("a timestamp column: its arithmetic is in the session time zone, which is not "
         + "lane arithmetic", VarkaTypes.declineReason(DataTypes.TimestampType).orElseThrow());
-    assertEquals("a boolean column read as a value, which row 27 builds; it is read as a "
+    assertEquals("a boolean column read as a value, which row 332 builds; it is read as a "
         + "condition", VarkaTypes.declineReason(DataTypes.BooleanType).orElseThrow());
     assertEquals("a float column: the FLOAT lane is row 341's",
         VarkaTypes.declineReason(DataTypes.FloatType).orElseThrow());

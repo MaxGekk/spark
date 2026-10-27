@@ -1,6 +1,6 @@
 # Written by VarkaTypesSuite from VarkaTypes (VARKA-494); regenerate with VARKA_TYPES_REGEN=true build/sbt 'catalyst/testOnly *VarkaTypesSuite'
 id	spark	census	sql	admission	lane	row	storage_bits	lanes	conformance	conformance_row
-BOOLEAN	BooleanType	bool	BOOLEAN	as_condition	-	27	1	-	Boolean	-
+BOOLEAN	BooleanType	bool	BOOLEAN	as_condition	-	332	1	-	Boolean	-
 BYTE	ByteType	byte	TINYINT	on_lane	BYTE	-	8	BYTE,INT	TinyInt	-
 SHORT	ShortType	short	SMALLINT	on_lane	SHORT	-	16	SHORT,INT	SmallInt	-
 INT	IntegerType	int	INT	on_lane	INT	-	32	INT	Int	485

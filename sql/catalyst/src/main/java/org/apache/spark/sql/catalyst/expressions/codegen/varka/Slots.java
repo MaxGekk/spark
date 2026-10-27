@@ -47,6 +47,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Bit
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolColumn;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolCompare;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolNullSafeEq;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoundedDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
@@ -282,6 +283,14 @@ final class Slots {
    * its bytes - the same as if word writes did not exist.
    */
   int[] validityAcc;
+
+  /**
+   * The data bitmap's accumulator of each {@link BoolOutput} root this body writes a word at a
+   * time, beside its {@link #validityAcc}, or {@code -1} for every other output. Null in every
+   * body with no such root, so an emission without a boolean output numbers its slots, and so
+   * emits its bytes, as before the node existed (`VARKA-27.md` 2.2).
+   */
+  int[] dataAcc;
 
   /**
    * Per guarded node: the local the guarded vector is parked in while the guard compares it,
@@ -732,6 +741,17 @@ final class Slots {
             Arrays.fill(s.validityAcc, -1);
           }
           s.validityAcc[o] = slot;
+          slot += 2;
+        }
+      }
+      // After every validity accumulator, so those keep the numbers they had.
+      for (int o : outputIdx) {
+        if (outputs.get(o) instanceof BoolOutput) {
+          if (s.dataAcc == null) {
+            s.dataAcc = new int[outputs.size()];
+            Arrays.fill(s.dataAcc, -1);
+          }
+          s.dataAcc[o] = slot;
           slot += 2;
         }
       }
@@ -1223,8 +1243,9 @@ final class Slots {
     }
     for (int o : outputIdx) {
       VarkaVectorIR root = outputs.get(o);
+      // A boolean output writes bitmaps, which the lane count truncates, as a Cond root does.
       if (!(root instanceof Cond) && !(root instanceof NarrowLane)
-          && analysis.laneOf(root) == analysis.lane) {
+          && !(root instanceof BoolOutput) && analysis.laneOf(root) == analysis.lane) {
         return true;
       }
     }
@@ -1456,6 +1477,8 @@ final class Slots {
         // Its word is the condition's two known words ORed, and the condition demands its
         // operands' words in its own arms; its own word is demanded like any value node's.
         case CondValue x -> { }
+        // The same word as CondValue's, kt | kf, demanded by the root write (liveWords).
+        case BoolOutput x -> { }
         case And x -> { }
         case Or x -> { }
         case Not x -> { }
@@ -1496,6 +1519,7 @@ final class Slots {
           demand(analysis.wordOwner.get(x.elseNode())); }
         // Computed from the condition's masks, which load the words its leaves demand already.
         case CondValue x -> { }
+        case BoolOutput x -> { }
         case MakeDate x -> { demand(analysis.wordOwner.get(x.year()));
           demand(analysis.wordOwner.get(x.month()));
           demand(analysis.wordOwner.get(x.day())); }

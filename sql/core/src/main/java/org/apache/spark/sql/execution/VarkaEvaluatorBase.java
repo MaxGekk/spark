@@ -584,12 +584,16 @@ public abstract class VarkaEvaluatorBase {
         columns[o] = new VarkaOwnedArrowColumnVector(vector);
         owned.add(columns[o]);
         kernel.dstData[o] = vector.getDataBuffer().memoryAddress();
-        kernel.dstWidth[o] = vector.getTypeWidth();
+        // A boolean output's BitVector has a type width of 0, which means a selection bitmap
+        // with no data; its data is a bitmap of whole words, which the marker says (VARKA-27).
+        kernel.dstWidth[o] = vector instanceof BitVector
+            ? VarkaReproduction.KernelCall.BIT_OUTPUT : vector.getTypeWidth();
         kernel.dstValidity[o] = vector.getValidityBuffer().memoryAddress();
         if (VarkaMemorySanitizer.ENABLED) {
-          // The kernel's own bytes: len values, and the validity bitmap to its last whole word.
+          // The kernel's own bytes: len values (a bit output's bitmap to its last whole word),
+          // and the validity bitmap to its last whole word.
           VarkaMemorySanitizer.guard("output data", o, vector.getDataBuffer(),
-              (long) len * vector.getTypeWidth());
+              VarkaReproduction.KernelCall.outputDataBytes(kernel.dstWidth[o], len));
           VarkaMemorySanitizer.guard("output validity", o, vector.getValidityBuffer(),
               ((len + 63) / 64) * 8L);
         }

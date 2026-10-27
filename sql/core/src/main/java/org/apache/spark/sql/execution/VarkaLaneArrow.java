@@ -22,6 +22,7 @@ import javax.annotation.Nullable;
 
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.BigIntVector;
+import org.apache.arrow.vector.BitVector;
 import org.apache.arrow.vector.DateDayVector;
 import org.apache.arrow.vector.DurationVector;
 import org.apache.arrow.vector.IntVector;
@@ -53,7 +54,9 @@ import org.apache.spark.sql.util.ArrowUtils;
  *
  * <p>Two vectors the evaluator admits belong to no lane, and stay named in {@code isArrowBacked}:
  * a boolean column's {@code BitVector}, read as two bitmaps rather than lane values, and the
- * {@code VarCharVector} a derived input arrives in.
+ * {@code VarCharVector} a derived input arrives in. The {@code BitVector} is in the table as
+ * well, as BOOLEAN's output vector, but {@link #reads} leaves it out, so its admission stays the
+ * evaluator's own.
  */
 final class VarkaLaneArrow {
 
@@ -67,15 +70,17 @@ final class VarkaLaneArrow {
   }
 
   /**
-   * The Arrow vector class a type's lane reads and writes, the type's id, and how a destination of
-   * it is built.
+   * The Arrow vector class a type's lane reads and writes (for BOOLEAN, which no lane reads, the
+   * one its outputs are written to), the type's id, and how a destination of it is built.
    */
   record Vector(VarkaTypeId id, Class<? extends ValueVector> vectorClass, Allocate allocate) {
   }
 
   /**
    * The vector a type's columns are read from and its outputs written to, or null for a type no
-   * lane reads: each is a fixed-width vector the kernels address directly.
+   * kernel stores: each is a fixed-width vector the kernels address directly. BOOLEAN's is an
+   * output vector only, a bitmap of whole words, so {@link #reads} leaves it out: its columns are
+   * read as conditions, admitted by name in {@code isArrowBacked}.
    */
   static @Nullable Vector of(VarkaTypeId id) {
     return switch (id) {
@@ -103,9 +108,13 @@ final class VarkaLaneArrow {
       case TIME -> new Vector(id, TimeNanoVector.class, VarkaLaneArrow::fromField);
       case DT_INTERVAL -> new Vector(id, DurationVector.class, VarkaLaneArrow::fromField);
       case TIMESTAMP_NTZ -> new Vector(id, TimeStampMicroVector.class, VarkaLaneArrow::fromField);
-      // Read by no lane: a boolean is two bitmaps (named in isArrowBacked) and is not written
-      // yet (row 27); the others are owed to their rows or declined by decision (VarkaTypes).
-      case BOOLEAN, FLOAT, DOUBLE, DECIMAL, TIMESTAMP -> null;
+      // Read by no lane - a boolean column is two bitmaps, admitted by name in isArrowBacked -
+      // but written: a boolean output's data bitmap holds the known-true rows and its validity
+      // the known ones (VARKA-27), the only vector Spark's ArrowColumnVector reads a BOOLEAN from.
+      case BOOLEAN -> new Vector(id, BitVector.class,
+          (name, type, allocator) -> new BitVector(name, allocator));
+      // Owed to their rows or declined by decision (VarkaTypes).
+      case FLOAT, DOUBLE, DECIMAL, TIMESTAMP -> null;
     };
   }
 
@@ -114,14 +123,20 @@ final class VarkaLaneArrow {
         .createVector(allocator);
   }
 
-  /** Every type's vector, in the id's order, built once: the admission reads it on every batch. */
-  private static final Vector[] ALL = all();
+  /** Every type's vector, in the id's order, built once: an output's allocation reads it. */
+  private static final Vector[] ALL = all(false);
 
-  private static Vector[] all() {
+  /**
+   * The vectors of the types a lane reads, which the admission reads on every batch: every entry
+   * but an output-only one, BOOLEAN's, as the type registry says.
+   */
+  private static final Vector[] LANES = all(true);
+
+  private static Vector[] all(boolean lanesOnly) {
     List<Vector> out = new ArrayList<>();
     for (VarkaTypeId id : VarkaTypeId.values()) {
       Vector v = of(id);
-      if (v != null) {
+      if (v != null && (!lanesOnly || VarkaTypes.info(id).lane().isPresent())) {
         out.add(v);
       }
     }
@@ -129,12 +144,12 @@ final class VarkaLaneArrow {
   }
 
   /**
-   * Whether a lane reads {@code vector}: an instance of one of the table's classes, as the type
-   * patterns this replaced matched. A loop over a few entries, so a batch's admission allocates
-   * nothing.
+   * Whether a lane reads {@code vector}: an instance of one of the lane types' classes, as the type
+   * patterns this replaced matched. A {@code BitVector} is not one, being BOOLEAN's output vector.
+   * A loop over a few entries, so a batch's admission allocates nothing.
    */
   static boolean reads(ValueVector vector) {
-    for (Vector v : ALL) {
+    for (Vector v : LANES) {
       if (v.vectorClass().isInstance(vector)) {
         return true;
       }
@@ -144,7 +159,7 @@ final class VarkaLaneArrow {
 
   /**
    * An empty destination vector for an output of {@code dataType}, or null where no lane stores
-   * the type - a boolean output, which the kernels do not write yet (row 27).
+   * the type.
    */
   static @Nullable ValueVector allocate(String name, DataType dataType,
       BufferAllocator allocator) {

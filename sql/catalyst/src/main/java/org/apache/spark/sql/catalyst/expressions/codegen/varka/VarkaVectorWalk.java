@@ -34,6 +34,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Bit
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolColumn;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolCompare;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolNullSafeEq;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoolOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.BoundedDivide;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.ColumnRef;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Compare;
@@ -461,6 +462,9 @@ final class VarkaVectorWalk {
           storeWord(cb, s, s.wordRef.get(node));
         }
       }
+      // A root only, written by VarkaBodyEmitter.emitBoolOutput; Analysis refuses it below one.
+      case BoolOutput b -> throw VarkaErrors.illegalState(
+          "boolean output in a value position survived validation: " + b);
       case Cond c -> throw VarkaErrors.illegalState(
           "condition node in a value position survived validation: " + c);
     }
