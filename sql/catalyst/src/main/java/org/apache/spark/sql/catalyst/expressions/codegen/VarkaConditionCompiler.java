@@ -369,7 +369,7 @@ final class VarkaConditionCompiler {
       // A narrow condition beside an int one - `rid < 0 AND (y1 < y2)`, or two narrow types -
       // joins it on the int lane (VARKA-329): the long lift below would give the kernel a long
       // lane a narrow value has no lowering for.
-      if (in.stream().noneMatch(c -> c.laneType() == LaneType.LONG)) {
+      if (in.stream().allMatch(c -> c.laneType() == LaneType.INT || c.laneType().isNarrow())) {
         return Optional.of(onIntLaneAll(in));
       }
       List<Cond> lifted = new ArrayList<>();
@@ -468,6 +468,12 @@ final class VarkaConditionCompiler {
   static Optional<Cond> onLongLane(Cond cond) {
     if (cond.laneType() == VarkaVectorIR.LaneType.LONG) {
       return Optional.of(cond);
+    }
+    // A floating condition - a null test of a FLOAT or DOUBLE value - has no long-lane form: a
+    // floating value is not a narrower integer to widen, and a mask crossing between a floating
+    // lane and an integral one is not built yet (VARKA-341 2.4).
+    if (cond.laneType().isFloating()) {
+      return Optional.empty();
     }
     return switch (cond) {
       case Compare c -> Optional.of(new Compare(c.op(), new VarkaVectorIR.WidenLane(c.left()),
@@ -607,6 +613,10 @@ final class VarkaConditionCompiler {
     // arrive unreplaced; real queries never do.
     if (expr instanceof RuntimeReplaceable r) {
       return compileCond(r.replacement(), inputs, literals, sink);
+    }
+    Optional<String> floating = VarkaNodeCompiler.floatingDecline(expr);
+    if (floating.isPresent()) {
+      return sink.decline(floating.get(), expr);
     }
     Supplier<Optional<Cond>> arm;
     try {

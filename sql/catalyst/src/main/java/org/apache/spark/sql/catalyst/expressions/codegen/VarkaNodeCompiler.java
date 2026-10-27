@@ -27,6 +27,8 @@ import javax.annotation.Nullable;
 
 import org.apache.spark.sql.catalyst.expressions.Abs;
 import org.apache.spark.sql.catalyst.expressions.Add;
+import org.apache.spark.sql.catalyst.expressions.BinaryArithmetic;
+import org.apache.spark.sql.catalyst.expressions.BinaryComparison;
 import org.apache.spark.sql.catalyst.expressions.BitmapExpressionUtils;
 import org.apache.spark.sql.catalyst.expressions.BitwiseAnd;
 import org.apache.spark.sql.catalyst.expressions.BitwiseCount;
@@ -34,19 +36,33 @@ import org.apache.spark.sql.catalyst.expressions.BitwiseNot;
 import org.apache.spark.sql.catalyst.expressions.BitwiseOr;
 import org.apache.spark.sql.catalyst.expressions.BitwiseXor;
 import org.apache.spark.sql.catalyst.expressions.BoundReference;
+import org.apache.spark.sql.catalyst.expressions.CaseWhen;
 import org.apache.spark.sql.catalyst.expressions.Cast;
+import org.apache.spark.sql.catalyst.expressions.Coalesce;
+import org.apache.spark.sql.catalyst.expressions.DivideDTInterval;
+import org.apache.spark.sql.catalyst.expressions.DivideYMInterval;
 import org.apache.spark.sql.catalyst.expressions.EvalMode$;
 import org.apache.spark.sql.catalyst.expressions.Expression;
 import org.apache.spark.sql.catalyst.expressions.Greatest;
+import org.apache.spark.sql.catalyst.expressions.If;
+import org.apache.spark.sql.catalyst.expressions.In;
+import org.apache.spark.sql.catalyst.expressions.InSet;
+import org.apache.spark.sql.catalyst.expressions.IsNaN;
+import org.apache.spark.sql.catalyst.expressions.IsNotNull;
+import org.apache.spark.sql.catalyst.expressions.IsNull;
 import org.apache.spark.sql.catalyst.expressions.Least;
 import org.apache.spark.sql.catalyst.expressions.Literal;
 import org.apache.spark.sql.catalyst.expressions.Multiply;
+import org.apache.spark.sql.catalyst.expressions.MultiplyDTInterval;
+import org.apache.spark.sql.catalyst.expressions.MultiplyYMInterval;
+import org.apache.spark.sql.catalyst.expressions.NaNvl;
 import org.apache.spark.sql.catalyst.expressions.RuntimeReplaceable;
 import org.apache.spark.sql.catalyst.expressions.ShiftLeft;
 import org.apache.spark.sql.catalyst.expressions.ShiftRight;
 import org.apache.spark.sql.catalyst.expressions.ShiftRightUnsigned;
 import org.apache.spark.sql.catalyst.expressions.Subtract;
 import org.apache.spark.sql.catalyst.expressions.UnaryMinus;
+import org.apache.spark.sql.catalyst.expressions.UnaryPositive;
 import org.apache.spark.sql.catalyst.expressions.objects.StaticInvoke;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDerivedKind;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
@@ -218,6 +234,10 @@ final class VarkaNodeCompiler {
       VarkaSlotTable inputs,
       VarkaSlotTable literals,
       DeclineSink sink) {
+    Optional<String> floating = floatingDecline(expr);
+    if (floating.isPresent()) {
+      return sink.decline(floating.get(), expr);
+    }
     for (Family family : FAMILIES) {
       VarkaFamilyArm arm;
       try {
@@ -295,6 +315,56 @@ final class VarkaNodeCompiler {
     return e instanceof BoundReference || e instanceof Literal;
   }
 
+  /**
+   * Why {@code e} declines because it reads or makes a {@code FLOAT} or {@code DOUBLE} value
+   * that no lowering serves yet, or empty. The floating lanes serve the nodes that move a value's
+   * bits - a column, a literal, a null test and the choices, {@code IF}, {@code CASE WHEN} and
+   * {@code coalesce} - whose answers are the same bits whatever the value means. Every other
+   * node over a floating value needs the value's meaning: a comparison needs Spark's ordering,
+   * in which NaN equals NaN and {@code -0.0} equals {@code 0.0}, unlike the vector compare and
+   * {@code max}; arithmetic and the casts are rows of their own. So the list is of what is
+   * served, not of what is refused, and a node no one has thought of declines. Both compile
+   * entries ask it before any arm claims, so no arm sees a floating operand it was not written
+   * for. A {@link RuntimeReplaceable} passes, to be asked again as its replacement.
+   */
+  static Optional<String> floatingDecline(Expression e) {
+    if (!touchesFloating(e) || e instanceof BoundReference || e instanceof Literal
+        || e instanceof If || e instanceof CaseWhen || e instanceof Coalesce
+        || e instanceof IsNull || e instanceof IsNotNull || e instanceof RuntimeReplaceable) {
+      return Optional.empty();
+    }
+    String what = switch (e) {
+      case BinaryComparison _, Greatest _, Least _, In _, InSet _, IsNaN _, NaNvl _ ->
+          "a comparison of floating values, which needs Spark's NaN and signed-zero ordering "
+              + "(row 341's next step)";
+      case Cast _ -> "a cast to or from a floating type (row 343)";
+      // The interval products and quotients by a floating factor are arithmetic too.
+      case BinaryArithmetic _, UnaryMinus _, UnaryPositive _, Abs _, MultiplyYMInterval _,
+          DivideYMInterval _, MultiplyDTInterval _, DivideDTInterval _ ->
+          "floating arithmetic (row 342)";
+      default -> "an operation over floating values that no floating lowering serves";
+    };
+    return Optional.of(what);
+  }
+
+  /** Whether {@code e} or one of its operands is of a floating type. */
+  private static boolean touchesFloating(Expression e) {
+    if (isFloating(e.dataType())) {
+      return true;
+    }
+    var children = e.children().iterator();
+    while (children.hasNext()) {
+      if (isFloating(children.next().dataType())) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean isFloating(org.apache.spark.sql.types.DataType t) {
+    return DataTypes.FloatType.equals(t) || DataTypes.DoubleType.equals(t);
+  }
+
   /** The chain, for the suite that holds no node is claimed twice. */
   static List<Family> families() {
     return FAMILIES;
@@ -322,9 +392,10 @@ final class VarkaNodeCompiler {
   }
 
   /**
-   * The column leaves: a date column, a date literal, the identity date cast, and the narrow ones
-   * (a bare {@code tinyint} or {@code smallint} column and its literal, VARKA-329). First in the
-   * chain, ahead of every family.
+   * The column leaves: a date column, a date literal, the identity date cast, the narrow ones
+   * (a bare {@code tinyint} or {@code smallint} column and its literal, VARKA-329) and the
+   * floating ones (a bare {@code float} or {@code double} column and its literal, VARKA-341).
+   * First in the chain, ahead of every family.
    */
   private static VarkaFamilyArm leafArm(
       Expression e,
@@ -342,6 +413,19 @@ final class VarkaNodeCompiler {
           () -> Optional.of(columnRef(br, inputs, LaneType.BYTE));
       case BoundReference br when DataTypes.ShortType.equals(br.dataType()) ->
           () -> Optional.of(columnRef(br, inputs, LaneType.SHORT));
+      // A floating column is read at its own lane (VARKA-341), and a floating literal is its
+      // bits in the table of its width: a float's in the int table, a double's in the long one,
+      // which the emitter reinterprets where it broadcasts the literal.
+      case BoundReference br when DataTypes.FloatType.equals(br.dataType()) ->
+          () -> Optional.of(columnRef(br, inputs, LaneType.FLOAT));
+      case BoundReference br when DataTypes.DoubleType.equals(br.dataType()) ->
+          () -> Optional.of(columnRef(br, inputs, LaneType.DOUBLE));
+      case Literal l when l.value() instanceof Float f
+          && DataTypes.FloatType.equals(l.dataType()) ->
+          () -> Optional.of(slot(Float.floatToRawIntBits(f), LaneType.FLOAT, literals));
+      case Literal l when l.value() instanceof Double d
+          && DataTypes.DoubleType.equals(l.dataType()) ->
+          () -> Optional.of(sink.longSlot(Double.doubleToRawLongBits(d), LaneType.DOUBLE));
       // A narrow literal's value fits an int exactly, so it takes a slot in the same
       // per-distinct-value table, on the narrow lane the comparison with a column needs.
       case Literal l when l.value() instanceof Byte b && DataTypes.ByteType.equals(l.dataType()) ->
