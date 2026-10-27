@@ -28,8 +28,7 @@ import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeRef
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
-import org.apache.spark.sql.types.{BooleanType, ByteType, DateType, DayTimeIntervalType,
-  IntegerType, LongType, ShortType, TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{BooleanType, ByteType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, TimestampNTZType, TimeType, YearMonthIntervalType}
 
 /**
  * The shapes the width audit (VARKA-153) asks C2 about: every row of the coverage table as the
@@ -93,8 +92,11 @@ object VarkaWidthAuditShapes {
   private val y2 = AttributeReference("y2", ByteType)()
   private val s1 = AttributeReference("s1", ShortType)()
   private val s2 = AttributeReference("s2", ShortType)()
+  // TIMESTAMP_NTZ columns (VARKA-338), as `VarkaCoverageSuite` declares them.
+  private val ntz = AttributeReference("ntz", TimestampNTZType)()
+  private val ntz2 = AttributeReference("ntz2", TimestampNTZType)()
   private val columns: Seq[Attribute] =
-    Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2, y1, y2, s1, s2)
+    Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2, y1, y2, s1, s2, ntz, ntz2)
 
   /** The row as the optimizer would hand it to the compiler; `VarkaEmittedBytesSuite`'s rule. */
   private def asCatalystClaims(expr: Expression, catalyst: Set[String]): Expression = expr match {

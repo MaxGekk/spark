@@ -92,6 +92,10 @@ object VarkaSparkFuzz {
    * row engine prunes the unused ones) makes a composition compare which of two legitimate errors
    * came first, and about a tenth of the compositions did (VARKA-372). The hostile years are the
    * largest ones that still fit, so the interval operations of a composition are what overflow.
+   * The TIMESTAMP_NTZ columns are derived, `ntz` from `d` at the time `t` and `ntz2` from `d2` at
+   * `t2`, as the differential suite derives them; every date drawn here converts without
+   * overflow. The cells drawn are what they were; which coverage rows a seed's compositions take
+   * follows the table, and a stored reproducer replays its own text.
    */
   def fixtureSql(data: Seq[Seq[String]]): String =
     fixtureRows(data.map(_.mkString("(", ", ", ")")))
@@ -107,7 +111,9 @@ object VarkaSparkFuzz {
        |            THEN CAST(y AS INTERVAL YEAR) END AS ymy,
        |       CASE WHEN 12L * y + mm BETWEEN -2147483648L AND 2147483647L
        |            THEN make_ym_interval(y, mm) END AS ym,
-       |       l, l2, CAST(t AS TIME(6)) AS t, CAST(t2 AS TIME(6)) AS t2, dt, dt2
+       |       l, l2, CAST(t AS TIME(6)) AS t, CAST(t2 AS TIME(6)) AS t2, dt, dt2,
+       |       CAST(d AS TIMESTAMP_NTZ) + (t - TIME'00:00:00') AS ntz,
+       |       CAST(d2 AS TIMESTAMP_NTZ) + (t2 - TIME'00:00:00') AS ntz2
        |FROM VALUES ${valueRows.mkString(",\n  ")}
        |AS v(d, d2, i, m, y, mm, l, l2, t, t2, dt, dt2)""".stripMargin
 

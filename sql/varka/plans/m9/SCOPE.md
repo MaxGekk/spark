@@ -5553,6 +5553,39 @@ on a forced narrower lane count, or on the byte and short lanes milestone 8 adds
 **Done when** step 1 has a committed result on an Intel host under `UseKNLSetting`, and either the
 rule does not fire there or `OPEN` covers the case, with a test under that flag.
 
+### Item 116. Lean 4 where the SMT proofs stop: division by any constant, then 128-bit decimals
+
+*Added 27 October 2026 on the owner's word.* The proofs of `sql/varka/proofs/` are SMT-LIB
+instances, one per divisor or per coverage row, rendered from the code by `VarkaProofFiles` and
+decided by Z3 and cvc5. That fits a bounded claim and fails a parametric or nonlinear one: the
+multiply-high division is proven only for the divisors on a hand-kept list (row 496's subject),
+`ym_divide.smt2` records that a symbolic divisor "was out of reach for Z3 in 50 s", and the
+README says a proof that multiplies two unknowns "needs its own design". A proof assistant states
+such a claim once, for all inputs.
+
+1. **A spike: the signed multiply-high division in Lean 4 with Mathlib.** State `signedMagic`'s
+   algorithm in Lean and prove that its constants give the exact truncated quotient for every
+   64-bit divisor in its domain and every dividend within `ConstDivide.EXACT_DIVIDEND_BOUND`,
+   then the 32-bit form. First find whether Mathlib already holds the Granlund-Montgomery
+   theorem. Lean proves a model of the Java, not the Java, so a test renders the code's constants
+   for sample divisors and checks them against the model's `#eval`, as `VarkaProofFiles` pins the
+   SMT files. Measure the proof's size and the CI cost (Mathlib's cache is several gigabytes).
+   The toolchain (`elan`, from the leanprover organisation) and Mathlib are downloads that need
+   the owner's yes before the spike starts.
+2. **If the spike lands, the 128-bit decimal arithmetic** (rows 359 to 364): the limb product,
+   the rescale with `ROUND_HALF_UP`, the division of a 128-bit value by a 64-bit constant, each a
+   product of unknowns that the SMT design cannot decide.
+3. **Perhaps the calendar's decomposition and its inverse** for every integer day, if
+   `refinement.smt2` assumes them rather than proves them; to be read first.
+
+Not for Lean: the floating forms (Lean has no proven IEEE-754 double with rounding, and the
+floating ordering is a finite claim SMT decides; exhaustive sweeps over every float and ULP bounds
+serve the math rows), the per-shape checks of emitted kernels, which the rendered SMT files keep
+in step with the code, and the compiler as a whole.
+
+**Done when** the spike's theorem is checked in CI with its pin to the code, its cost is recorded,
+and the owner has decided from it whether steps 2 and 3 use Lean.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads

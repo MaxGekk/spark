@@ -150,11 +150,12 @@ final class VarkaTimeCompiler {
       VarkaSlotTable literals,
       DeclineSink sink) {
     return switch (e) {
-      // The long lane's column leaf: a `bigint`, a `TIME(p)` and a day-time interval are one
-      // eight-byte lane, holding the value, nanoseconds of day and microseconds respectively (task
-      // 29). As with the interval leaf, Spark's own typing decides where such a value may
-      // appear - never in a date or an int position - so the leaf cannot put one there, and the
-      // IR's constructors refuse a tree that mixes it with the int lane anyway.
+      // The long lane's column leaf: a `bigint`, a `TIME(p)`, a day-time interval and a
+      // `TIMESTAMP_NTZ` are one eight-byte lane, holding the value, nanoseconds of day,
+      // microseconds and microseconds since the epoch respectively (VARKA-29, VARKA-338). As
+      // with the interval leaf, Spark's own typing decides where such a value may appear - never
+      // in a date or an int position - so the leaf cannot put one there, and the IR's
+      // constructors refuse a tree that mixes it with the int lane anyway.
       case BoundReference br
           when VarkaTypes.lane(br.dataType()).orElse(null) == LaneType.LONG ->
           () -> Optional.of(VarkaNodeCompiler.columnRef(br, inputs, LaneType.LONG));

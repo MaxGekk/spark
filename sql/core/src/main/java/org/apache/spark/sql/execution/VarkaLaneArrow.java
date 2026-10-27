@@ -28,6 +28,7 @@ import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.IntervalYearVector;
 import org.apache.arrow.vector.SmallIntVector;
 import org.apache.arrow.vector.TimeNanoVector;
+import org.apache.arrow.vector.TimeStampMicroVector;
 import org.apache.arrow.vector.TinyIntVector;
 import org.apache.arrow.vector.ValueVector;
 
@@ -92,16 +93,19 @@ final class VarkaLaneArrow {
       // rides on the Spark type and never on the buffer, so every unit is one vector class.
       case YM_INTERVAL -> new Vector(id, IntervalYearVector.class,
           (name, type, allocator) -> new IntervalYearVector(name, allocator));
-      // The long lane's three (VARKA-29): a bigint, a TIME(p) - nanoseconds of day at every
-      // precision - and a day-time interval in microseconds, each built from the Arrow field
-      // Spark's own writer builds for the type, so TimeNanoVector carries the precision in its
-      // field metadata and the row path reads all three back through ArrowColumnVector.
+      // The long lane's four: a bigint, a TIME(p) - nanoseconds of day at every precision - a
+      // day-time interval and a TIMESTAMP_NTZ, both in microseconds, each built from the Arrow
+      // field Spark's own writer builds for the type, so TimeNanoVector carries the precision in
+      // its field metadata and the row path reads all four back through ArrowColumnVector. An
+      // NTZ column is a TimeStampMicroVector, a class apart from the zoned type's
+      // TimeStampMicroTZVector, so this entry admits no zoned column.
       case LONG -> new Vector(id, BigIntVector.class, VarkaLaneArrow::fromField);
       case TIME -> new Vector(id, TimeNanoVector.class, VarkaLaneArrow::fromField);
       case DT_INTERVAL -> new Vector(id, DurationVector.class, VarkaLaneArrow::fromField);
+      case TIMESTAMP_NTZ -> new Vector(id, TimeStampMicroVector.class, VarkaLaneArrow::fromField);
       // Read by no lane: a boolean is two bitmaps (named in isArrowBacked) and is not written
       // yet (row 27); the others are owed to their rows or declined by decision (VarkaTypes).
-      case BOOLEAN, FLOAT, DOUBLE, DECIMAL, TIMESTAMP_NTZ, TIMESTAMP -> null;
+      case BOOLEAN, FLOAT, DOUBLE, DECIMAL, TIMESTAMP -> null;
     };
   }
 
