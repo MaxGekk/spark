@@ -198,6 +198,7 @@ the pre-commit hook also checks. Groups below are in file order.
 * [A warmed kernel measured through another entry can run code the verdict never read](sql/varka/skills/the-jit.md#a-warmed-kernel-measured-through-another-entry-can-run-code-the-verdict-never-read)
 * [A second kernel class through the default `run` did not leave the first kernel on code that boxes](sql/varka/skills/the-jit.md#a-second-kernel-class-through-the-default-run-did-not-leave-the-first-kernel-on-code-that-boxes)
 * [HotSpot counts calls per dispatched method, and stops counting a callee C2 has inlined](sql/varka/skills/the-jit.md#hotspot-counts-calls-per-dispatched-method-and-stops-counting-a-callee-c2-has-inlined)
+* [An overflowing `Math.*Exact` loses its message once its site has trapped enough](sql/varka/skills/the-jit.md#an-overflowing-mathexact-loses-its-message-once-its-site-has-trapped-enough)
 
 #### [The Vector API and vector width](sql/varka/skills/vector-api-and-width.md)
 * [Vector API on HotSpot, Measured (JDK 25, x86-64)](sql/varka/skills/vector-api-and-width.md#vector-api-on-hotspot-measured-jdk-25-x86-64)
