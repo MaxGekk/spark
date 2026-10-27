@@ -584,81 +584,20 @@ final class VarkaEmitBudget {
    * is written as {@link #CHRONO_PREFIX_WEIGHT} plus a tail: {@code GroupOps} counts the prefix
    * once.
    *
-   * <p>Every node is named in the switch, so a node added to the IR has no weight until it is
-   * given one, rather than a default that would weigh a node emitting about sixteen ops as one
-   * (VARKA-254). {@code VarkaEmitterBudgetSuite}'s register holds each weight to its node's
-   * count.
+   * <p>Each node states its weight in its {@link VarkaVectorIR#props()}, which has no default, so
+   * a node added to the IR has no weight until it is given one, rather than a default that would
+   * weigh a node emitting about sixteen ops as one (VARKA-254). Weight approximates lane ops,
+   * counted over every vector type the lowering touches; a node with two lowerings whose choice
+   * cannot be asked here - this runs while the groups are formed, before an {@code Analysis}
+   * exists - is weighed at the larger. {@code VarkaEmitterBudgetSuite}'s register holds each
+   * weight to its node's count.
    *
    * <p>This is deliberately only about <i>grouping</i>: whether outputs share a loop method is
    * {@code groupOutputs}' question, and how many a kernel may fuse is the byte budget's, with
    * {@link #MAX_FUSED_NODES} counting nodes only where that budget is off.
    */
   static int weightOf(VarkaVectorIR node) {
-    return switch (node) {
-      // The leaves' loads and broadcasts are paid once per column and literal, not per node.
-      // A boolean column and a constant are leaves: a data word read and a constant, no lane call.
-      case ColumnRef _, LiteralSlot _, BoolColumn _, CondConst _ -> 0;
-      // One lanewise op, plus the four the sign test costs where there is one. A wrapping narrow
-      // node is the op and, at the int lane where it reduces (Analysis.wrapAt), the shift pair:
-      // the larger form, as below, since the arm and the readers are not known here.
-      case IntArith n -> n.mode() != Overflow.WRAP ? 5 : n.laneType().isNarrow() ? 3 : 1;
-      // The negation or abs, plus one compare where the mode checks, plus the shift pair a
-      // wrapping narrow one may reduce with.
-      case IntNeg n -> n.mode() != Overflow.WRAP ? 2 : n.laneType().isNarrow() ? 3 : 1;
-      // One lanewise op each: the add or subtract, the min or max, the blend (its condition is a
-      // node of its own), the narrowing conversion, the compare.
-      case AddDays _, SubDays _, DateDiff _, Greatest _, Least _, WidenLane _,
-          NarrowLane _, Compare _, NullSafeEqual _ -> 1;
-      // The blend, plus the shift pair a narrow pick may reduce with at the int lane.
-      case IfElse n -> n.laneType().isNarrow() ? 3 : 1;
-      // The broadcast 0 and the add of 1 under the known-true mask; its validity, the OR of the
-      // two known words, is scalar.
-      case CondValue _ -> 2;
-      // The connectives emit only mask calls, which no weight counts; 1 is a floor, so that a
-      // connective is never free to join any group.
-      case And _, Or _, Not _, IsNotNull _, BoolCompare _, BoolNullSafeEq _, CondIf _ -> 1;
-      // Emitted as one loop whatever the number of ranges: a start mask and a body of scalar
-      // compares, three lane calls past the column's load. Its time grows with the ranges; its
-      // code does not.
-      case InRanges _ -> 3;
-      case GuardedDay _, GuardedRange _ -> GUARD_WEIGHT;
-      case DayOfWeek _ -> DAY_OF_WEEK_WEIGHT;
-      case WeekDay _ -> WEEK_DAY_WEIGHT;
-      case DayOfWeekIso _ -> DAY_OF_WEEK_ISO_WEIGHT;
-      case NextDay _ -> NEXT_DAY_WEIGHT;
-      case ThursdayOf _ -> THURSDAY_OF_WEIGHT;
-      case MakeDate _ -> MAKE_DATE_WEIGHT;
-      case AddMonths _ -> ADD_MONTHS_WEIGHT;
-      case Year _ -> CHRONO_PREFIX_WEIGHT + YEAR_TAIL_WEIGHT;
-      case Month _ -> CHRONO_PREFIX_WEIGHT + MONTH_TAIL_WEIGHT;
-      case DayOfMonth _ -> CHRONO_PREFIX_WEIGHT + DAY_OF_MONTH_TAIL_WEIGHT;
-      case Quarter _ -> CHRONO_PREFIX_WEIGHT + QUARTER_TAIL_WEIGHT;
-      case DayOfYear _ -> DAY_OF_YEAR_WEIGHT;
-      case LastDay _ -> LAST_DAY_WEIGHT;
-      case WeekOfYear _ -> WEEK_OF_YEAR_WEIGHT;
-      case TruncDate n -> switch (n.level()) {
-        case MONTH -> TRUNC_MONTH_WEIGHT;
-        case YEAR -> TRUNC_YEAR_WEIGHT;
-        case QUARTER -> TRUNC_QUARTER_WEIGHT;
-      };
-      case TruncDateDynamic _ -> TRUNC_DYNAMIC_WEIGHT;
-      // Weight approximates lane ops, as every entry above does, counted over every vector type
-      // the lowering touches. Each lane has two forms, and which one emits cannot be asked here -
-      // `weightOf` runs while the groups are formed, before an `Analysis` exists - so the larger
-      // is used. Over-weighing costs an extra loop method on a host that did not need one;
-      // under-weighing puts more work in a method than the budget means, which the byte and
-      // call-site budgets correct only when the built class measures over them.
-      case ConstDivide n -> n.laneType() == VarkaVectorIR.LaneType.LONG
-          ? LONG_CONST_DIVIDE_WEIGHT
-          : INT_CONST_DIVIDE_WEIGHT + (n.divisor() < 0 ? 1 : 0);
-      // The single multiply-high and its shift.
-      case BoundedDivide _ -> 2;
-      // One lanewise op: the logical operation, or the shift by its count's vector.
-      case BitOp _ -> 1;
-      // The popcount alone at the long lane; at the int lane the popcount, the sign shift, the
-      // mask and the add of the widening's 32 high bits.
-      case BitCount n -> n.laneType() == VarkaVectorIR.LaneType.LONG ? 1 : 4;
-    };
+    return node.props().weight();
   }
 
   /** Whether {@code node} runs a civil-from-days decomposition, and so weighs

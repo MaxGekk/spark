@@ -73,26 +73,7 @@ public enum VarkaOperandPosition {
 
   /** Whether this position takes {@code node}. */
   public boolean admits(VarkaVectorIR node) {
-    return switch (node) {
-      case ColumnRef _ -> true;
-      case LiteralSlot _ -> switch (this) {
-        case DAY_OFFSET, MONTH_COUNT, WEEKDAY -> true;
-        case TRUNC_LEVEL -> false;
-      };
-      case IntArith _, IntNeg _ -> switch (this) {
-        case DAY_OFFSET, MONTH_COUNT -> true;
-        case WEEKDAY, TRUNC_LEVEL -> false;
-      };
-      case AddDays _, SubDays _, DateDiff _, IfElse _, Greatest _, Least _, DayOfWeek _,
-           WeekDay _, DayOfWeekIso _, NextDay _, ThursdayOf _, AddMonths _, MakeDate _,
-           ConstDivide _, BoundedDivide _, BitOp _, BitCount _, GuardedDay _, GuardedRange _,
-           WidenLane _,
-           NarrowLane _, Year _, Month _, DayOfMonth _, Quarter _, DayOfYear _, LastDay _,
-           TruncDate _, TruncDateDynamic _, WeekOfYear _,
-           Compare _, NullSafeEqual _, And _, Or _, Not _, IsNotNull _, InRanges _,
-           BoolColumn _, CondConst _, BoolCompare _, CondIf _, BoolNullSafeEq _,
-           CondValue _ -> false;
-    };
+    return node.props().fills().contains(this);
   }
 
   /** What this position takes, for a refusal; {@link #admits} in words. */
@@ -106,25 +87,6 @@ public enum VarkaOperandPosition {
 
   /** The operands of {@code node} that sit in a restricted position; none for most nodes. */
   public static List<Restricted> restrictedOperands(VarkaVectorIR node) {
-    return switch (node) {
-      case AddDays n -> List.of(
-          new Restricted(DAY_OFFSET, n.offset(), "date_add's day offset"));
-      case SubDays n -> List.of(
-          new Restricted(DAY_OFFSET, n.offset(), "date_sub's day offset"));
-      case AddMonths n -> List.of(
-          new Restricted(MONTH_COUNT, n.months(), "add_months' month count"));
-      case NextDay n -> List.of(
-          new Restricted(WEEKDAY, n.offset(), "next_day's weekday"));
-      case TruncDateDynamic n -> List.of(
-          new Restricted(TRUNC_LEVEL, n.level(), "trunc's level"));
-      case ColumnRef _, LiteralSlot _, DateDiff _, IfElse _, Greatest _, Least _, DayOfWeek _,
-           WeekDay _, DayOfWeekIso _, ThursdayOf _, MakeDate _, IntArith _, IntNeg _,
-           ConstDivide _, BoundedDivide _, BitOp _, BitCount _, GuardedDay _, GuardedRange _,
-           WidenLane _,
-           NarrowLane _, Year _, Month _, DayOfMonth _, Quarter _, DayOfYear _, LastDay _,
-           TruncDate _, WeekOfYear _, Compare _, NullSafeEqual _, And _, Or _, Not _, IsNotNull _,
-           InRanges _, BoolColumn _, CondConst _, BoolCompare _, CondIf _, BoolNullSafeEq _,
-           CondValue _ -> List.of();
-    };
+    return node.props().restricted();
   }
 }

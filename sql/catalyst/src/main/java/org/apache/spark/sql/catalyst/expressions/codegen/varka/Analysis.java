@@ -31,6 +31,8 @@ import java.util.Map;
 import java.util.Set;
 
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaDivisionLowering.Divider;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaNodeProps.Ring;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaNodeProps.Validity;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.AddDays;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.AddMonths;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.And;
@@ -792,24 +794,12 @@ final class Analysis {
    * is one either: their reductions are the lane's own.
    */
   private boolean isNarrowRing(VarkaVectorIR node) {
-    return switch (node) {
-      case IntArith n -> loweredUnchecked(n.laneType(), n.mode());
-      case IntNeg n -> !n.abs() && loweredUnchecked(n.laneType(), n.mode());
-      // A blend picks lanes and so commutes with the reduction: a narrow pick of two unreduced
-      // arms reduces once, where its own reader needs it, rather than once in each arm.
-      case IfElse n -> n.laneType().isNarrow();
-      // Written out rather than defaulted (sql/varka/AGENTS.md): a new narrow node is a compile
-      // error here, so its author decides whether its value commutes with the reduction - a
-      // narrow AND, OR or XOR does, a compare or a shift right does not - instead of falling
-      // into "not ring" and leaving an unreduced int value for its readers.
-      case ColumnRef _, LiteralSlot _, WidenLane _, NarrowLane _, AddDays _, SubDays _,
-          AddMonths _, MakeDate _, GuardedDay _, GuardedRange _, NextDay _,
-          TruncDateDynamic _, DateDiff _, Greatest _, Least _, DayOfWeek _,
-          WeekDay _, DayOfWeekIso _, ThursdayOf _, Year _, Month _, DayOfMonth _, Quarter _,
-          DayOfYear _, LastDay _, TruncDate _, WeekOfYear _, ConstDivide _, BoundedDivide _,
-          BitOp _, BitCount _, Compare _, NullSafeEqual _, BoolColumn _, BoolCompare _,
-          CondIf _, BoolNullSafeEq _, CondConst _, And _, Or _, Not _, IsNotNull _,
-          InRanges _, CondValue _ -> false;
+    // The node says which kind of ring node it is, if any (VarkaNodeProps.Ring); whether a
+    // narrow arithmetic's check is emitted is this emission's question.
+    return switch (node.props().ring()) {
+      case Ring.Never _ -> false;
+      case Ring.Pick _ -> node.laneType().isNarrow();
+      case Ring.Arith a -> loweredUnchecked(node.laneType(), a.mode());
     };
   }
 
@@ -844,10 +834,10 @@ final class Analysis {
 
   /**
    * Fills {@link #wordOwner} and {@link #pureWord} over the topological order, children
-   * first, so every node sees its children's entries. The owner rules are
-   * {@code Slots.planWordRef}'s, case for case; the purity rules are the word algebra each
-   * emission arm implements - AND for the null-intolerant nodes, OR for the null-skipping
-   * pick, an alias for every unary node, and nothing for a node that computes its word.
+   * first, so every node sees its children's entries. The owners, the purity rules and
+   * {@code Slots.planWordRef} fold one answer, the node's {@link VarkaNodeProps.Validity} - AND
+   * for the null-intolerant nodes, OR for the null-skipping pick, an alias for every unary node,
+   * and nothing for a node that computes its word - so the three cannot disagree on a node.
    */
   void planWordAlgebra() {
     for (VarkaVectorIR node : topoOrder) {
@@ -1060,49 +1050,26 @@ final class Analysis {
   }
 
   private WordOwner ownerOf(VarkaVectorIR node) {
-    return switch (node) {
-      case ColumnRef c -> new WordOwner.Input(c.ordinal());
-      case BoolColumn c -> new WordOwner.Input(c.ordinal());
-      case LiteralSlot l -> WordOwner.Const.ALL_TRUE;
-      case AddDays n -> andOwner(node, n.days(), n.offset());
-      case SubDays n -> andOwner(node, n.days(), n.offset());
-      case NextDay n -> andOwner(node, n.days(), n.offset());
-      case TruncDateDynamic n -> andOwner(node, n.days(), n.level());
-      case AddMonths n -> andOwner(node, n.days(), n.months());
-      case DateDiff n -> andOwner(node, n.end(), n.start());
-      case IntArith n -> n.mode() == Overflow.NULL
-          ? new WordOwner.Own(node)
-          : andOwner(node, n.left(), n.right());
-      case IntNeg n -> wordOwner.get(n.child());
-      case ConstDivide n -> wordOwner.get(n.child());
-      case BoundedDivide n -> wordOwner.get(n.child());
-      case BitOp n -> andOwner(node, n.left(), n.right());
-      case BitCount n -> wordOwner.get(n.child());
-      case DayOfWeek n -> wordOwner.get(n.days());
-      case WeekDay n -> wordOwner.get(n.days());
-      case DayOfWeekIso n -> wordOwner.get(n.days());
-      case ThursdayOf n -> wordOwner.get(n.days());
-      case GuardedDay n -> wordOwner.get(n.days());
-      case GuardedRange n -> wordOwner.get(n.child());
-      case WidenLane n -> wordOwner.get(n.child());
-      case NarrowLane n -> wordOwner.get(n.child());
-      case Year n -> wordOwner.get(n.days());
-      case Month n -> wordOwner.get(n.days());
-      case DayOfMonth n -> wordOwner.get(n.days());
-      case Quarter n -> wordOwner.get(n.days());
-      case DayOfYear n -> wordOwner.get(n.days());
-      case LastDay n -> wordOwner.get(n.days());
-      case TruncDate n -> wordOwner.get(n.days());
-      case WeekOfYear n -> wordOwner.get(n.days());
-      // Greatest/Least (OR), IfElse (blend) and MakeDate always compute their own word.
-      default -> new WordOwner.Own(node);
+    return switch (node.props().validity()) {
+      case Validity.Input in -> new WordOwner.Input(in.ordinal());
+      case Validity.AllTrue _ -> WordOwner.Const.ALL_TRUE;
+      // A unary node aliases its child's owner; a wider one folds its operands' owners.
+      case Validity.Strict _ -> {
+        VarkaVectorIR[] children = childrenOf(node);
+        WordOwner owner = wordOwner.get(children[0]);
+        for (int i = 1; i < children.length; i++) {
+          owner = andOwner(node, owner, wordOwner.get(children[i]));
+        }
+        yield owner;
+      }
+      // An OR of the operands' words (Greatest, Least), a blend, a word computed from values:
+      // each is the node's own word.
+      case Validity.SkipsNull _, Validity.Own _, Validity.NoWord _ -> new WordOwner.Own(node);
     };
   }
 
   /** {@code Slots.andRef}'s folding over owners: all-true drops out, equal operands collapse. */
-  private WordOwner andOwner(VarkaVectorIR node, VarkaVectorIR a, VarkaVectorIR b) {
-    WordOwner wa = wordOwner.get(a);
-    WordOwner wb = wordOwner.get(b);
+  private static WordOwner andOwner(VarkaVectorIR node, WordOwner wa, WordOwner wb) {
     if (wa == WordOwner.Const.ALL_TRUE) {
       return wb;
     }
@@ -1113,55 +1080,32 @@ final class Analysis {
   }
 
   private WordExpr pureOf(VarkaVectorIR node) {
-    return switch (node) {
-      case ColumnRef c -> new WordExpr.Input(c.ordinal());
-      case BoolColumn c -> new WordExpr.Input(c.ordinal());
-      case LiteralSlot l -> WordExpr.Const.ALL_TRUE;
-      case AddDays n -> andExpr(pureWord.get(n.days()), pureWord.get(n.offset()));
-      case SubDays n -> andExpr(pureWord.get(n.days()), pureWord.get(n.offset()));
-      case NextDay n -> andExpr(pureWord.get(n.days()), pureWord.get(n.offset()));
-      case TruncDateDynamic n -> andExpr(pureWord.get(n.days()), pureWord.get(n.level()));
-      case AddMonths n -> andExpr(pureWord.get(n.days()), pureWord.get(n.months()));
-      case DateDiff n -> andExpr(pureWord.get(n.end()), pureWord.get(n.start()));
-      // WRAP and FAIL are a pure AND of the operands' bitmaps, so the driver's pass can
-      // write such a root's validity once per batch. NULL is not a function of the input
-      // bitmaps at all - its overflow mask comes from the values - which is the boundary
-      // IfElse and MakeDate sit on, and the null below is what keeps it off the pass.
-      case IntArith n -> n.mode() == Overflow.NULL
-          ? null
-          : andExpr(pureWord.get(n.left()), pureWord.get(n.right()));
-      case IntNeg n -> pureWord.get(n.child());
-      case ConstDivide n -> pureWord.get(n.child());
-      case BoundedDivide n -> pureWord.get(n.child());
-      case BitOp n -> andExpr(pureWord.get(n.left()), pureWord.get(n.right()));
-      case BitCount n -> pureWord.get(n.child());
-      case Greatest n -> orExpr(pureWord.get(n.left()), pureWord.get(n.right()));
-      case Least n -> orExpr(pureWord.get(n.left()), pureWord.get(n.right()));
-      case DayOfWeek n -> pureWord.get(n.days());
-      case WeekDay n -> pureWord.get(n.days());
-      case DayOfWeekIso n -> pureWord.get(n.days());
-      case ThursdayOf n -> pureWord.get(n.days());
-      case GuardedDay n -> pureWord.get(n.days());
-      case GuardedRange n -> pureWord.get(n.child());
-      case WidenLane n -> pureWord.get(n.child());
-      case NarrowLane n -> pureWord.get(n.child());
-      case Year n -> pureWord.get(n.days());
-      case Month n -> pureWord.get(n.days());
-      case DayOfMonth n -> pureWord.get(n.days());
-      case Quarter n -> pureWord.get(n.days());
-      case DayOfYear n -> pureWord.get(n.days());
-      case LastDay n -> pureWord.get(n.days());
-      case TruncDate n -> pureWord.get(n.days());
-      case WeekOfYear n -> pureWord.get(n.days());
-      // A blend by the known-true mask, and a word ANDed with a computed validity test.
-      case IfElse n -> null;
-      // The condition's known words, kt | kf: a function of the condition's operands' values,
-      // not of their bitmaps alone.
-      case CondValue n -> null;
-      case MakeDate n -> null;
-      // A condition has no validity word; its known-true and known-false words are its own.
-      case Compare _, NullSafeEqual _, CondConst _, BoolCompare _, CondIf _, BoolNullSafeEq _,
-          And _, Or _, Not _, IsNotNull _, InRanges _ -> null;
+    return switch (node.props().validity()) {
+      case Validity.Input in -> new WordExpr.Input(in.ordinal());
+      case Validity.AllTrue _ -> WordExpr.Const.ALL_TRUE;
+      // WRAP and FAIL arithmetic is strict, a pure AND of the operands' bitmaps, so the driver's
+      // pass can write such a root's validity once per batch; a unary node is its child's word.
+      case Validity.Strict _ -> {
+        VarkaVectorIR[] children = childrenOf(node);
+        WordExpr word = pureWord.get(children[0]);
+        for (int i = 1; i < children.length; i++) {
+          word = andExpr(word, pureWord.get(children[i]));
+        }
+        yield word;
+      }
+      case Validity.SkipsNull _ -> {
+        VarkaVectorIR[] children = childrenOf(node);
+        WordExpr word = pureWord.get(children[0]);
+        for (int i = 1; i < children.length; i++) {
+          word = orExpr(word, pureWord.get(children[i]));
+        }
+        yield word;
+      }
+      // A word computed from values - NULL arithmetic's overflow mask, a blend by the known-true
+      // mask, make_date's existence test, a condition's known words - is not a function of the
+      // input bitmaps at all, and the null is what keeps such a root off the pass. A condition
+      // has no validity word.
+      case Validity.Own _, Validity.NoWord _ -> null;
     };
   }
 
