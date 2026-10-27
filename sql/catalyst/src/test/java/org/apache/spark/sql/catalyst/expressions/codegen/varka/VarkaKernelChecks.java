@@ -551,8 +551,9 @@ public final class VarkaKernelChecks {
   }
 
   /**
-   * {@link #runLoadedLong} with the int literal table of a kernel of both lanes and every row also
-   * held to {@code spark}, Spark's own answer, as {@link #runLoadedNarrow} holds the int lane's.
+   * {@link #runLoadedLong} for a kernel that may hold both lanes, with {@code intLits} its int
+   * literal table, every row also compared with Spark's answer (the conformance contract's long
+   * lane).
    */
   public static int runLoadedLong(String context, VarkaFusedKernel kernel,
       List<VarkaVectorIR> roots, int numInputs, long[] lits, int[] intLits, LongBatch batch,
@@ -1005,8 +1006,9 @@ public final class VarkaKernelChecks {
       return switch (lane) {
         case BYTE -> (byte) v;
         case SHORT -> (short) v;
-        case INT -> (int) v;
-        case LONG -> v;
+        // A floating lane's value is its bits at its width (VARKA-341 2.3).
+        case INT, FLOAT -> (int) v;
+        case LONG, DOUBLE -> v;
       };
     }
 
@@ -1063,8 +1065,8 @@ public final class VarkaKernelChecks {
       switch (lane) {
         case BYTE -> d.set(ValueLayout.JAVA_BYTE, i, (byte) v);
         case SHORT -> d.set(ValueLayout.JAVA_SHORT, i * 2L, (short) v);
-        case INT -> d.set(ValueLayout.JAVA_INT, i * 4L, (int) v);
-        case LONG -> d.set(ValueLayout.JAVA_LONG, i * 8L, v);
+        case INT, FLOAT -> d.set(ValueLayout.JAVA_INT, i * 4L, (int) v);
+        case LONG, DOUBLE -> d.set(ValueLayout.JAVA_LONG, i * 8L, v);
       }
     }
 
@@ -1080,7 +1082,7 @@ public final class VarkaKernelChecks {
       return switch (columnLanes[c]) {
         case BYTE -> low ? Byte.MIN_VALUE : Byte.MAX_VALUE;
         case SHORT -> low ? Short.MIN_VALUE : Short.MAX_VALUE;
-        case INT, LONG -> VarkaEmitterFixtures.poison(nullOrdinal);
+        case INT, LONG, FLOAT, DOUBLE -> VarkaEmitterFixtures.poison(nullOrdinal);
       };
     }
 
@@ -1092,7 +1094,7 @@ public final class VarkaKernelChecks {
       return switch (root.laneType()) {
         case BYTE -> Byte.MIN_VALUE;
         case SHORT -> Short.MIN_VALUE;
-        case INT, LONG -> 0xDEADBEEF;
+        case INT, LONG, FLOAT, DOUBLE -> 0xDEADBEEF;
       };
     }
 
@@ -1121,8 +1123,8 @@ public final class VarkaKernelChecks {
       return switch (root.laneType()) {
         case BYTE -> out.get(ValueLayout.JAVA_BYTE, i);
         case SHORT -> out.get(ValueLayout.JAVA_SHORT, i * 2L);
-        case INT -> out.get(ValueLayout.JAVA_INT, i * 4L);
-        case LONG -> out.get(ValueLayout.JAVA_LONG, i * 8L);
+        case INT, FLOAT -> out.get(ValueLayout.JAVA_INT, i * 4L);
+        case LONG, DOUBLE -> out.get(ValueLayout.JAVA_LONG, i * 8L);
       };
     }
   }

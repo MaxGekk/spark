@@ -287,8 +287,9 @@ public final class VarkaTypes {
       case TIME -> new Info(id, "time", "TIME", new Admission.OnLane(LaneType.LONG), 64,
           List.of(new TimeType(0), new TimeType(3), new TimeType(6)), List.of(LaneType.LONG),
           new Conformance.Suite("Time"));
-      case TIMESTAMP_NTZ -> new Info(id, "ntz", "TIMESTAMP_NTZ", new Admission.Owed("338"), 64,
-          List.of(DataTypes.TimestampNTZType), List.of(), new Conformance.NotLanded());
+      case TIMESTAMP_NTZ -> new Info(id, "ntz", "TIMESTAMP_NTZ",
+          new Admission.OnLane(LaneType.LONG), 64, List.of(DataTypes.TimestampNTZType),
+          List.of(LaneType.LONG), new Conformance.Suite("TimestampNtz"));
       case YM_INTERVAL -> new Info(id, "ym", "INTERVAL MONTH",
           new Admission.OnLane(LaneType.INT), 32,
           fields(YearMonthIntervalType$.MODULE$.YEAR(), YearMonthIntervalType$.MODULE$.MONTH(),

@@ -662,6 +662,36 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `if(dt < dt2, dt, dt2)` | `predicate`, `condition` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
 | `coalesce(dt, dt2)` | `condition` |  |  | per-lane: blend, mask broadcast |
 
+#### TIMESTAMP_NTZ columns
+
+| Predicate | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `ntz < ntz2` | `predicate` |  |  | per-lane: compare to mask, mask cast |
+| `ntz <= ntz2` | `predicate` |  |  | per-lane: compare to mask, mask cast |
+| `ntz > ntz2` | `predicate` |  |  | per-lane: compare to mask, mask cast |
+| `ntz >= ntz2` | `predicate` |  |  | per-lane: compare to mask, mask cast |
+| `ntz = ntz2` | `predicate` |  |  | per-lane: compare to mask, mask cast |
+| `ntz = TIMESTAMP_NTZ '2021-06-01 12:00:00'` | `predicate` |  | an NTZ literal takes a slot in the long lane's table | per-lane: compare to mask, mask cast |
+| `ntz <=> ntz2` | `predicate` |  | null-safe equality at the long lane | per-lane: compare to mask, mask cast |
+| `ntz IN (TIMESTAMP_NTZ '2021-06-01 12:00:00', TIMESTAMP_NTZ '1969-12-31 18:00:00')` | `predicate` |  |  | per-lane: compare to mask, mask logic, mask cast |
+| `ntz IN (11 to 16 NTZ literals)` | `predicate` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | per-lane: compare to mask, mask logic, mask cast |
+| `ntz IS NULL` | `predicate` |  |  | per-lane: mask broadcast, mask logic, mask cast |
+| `ntz IS NOT NULL` | `predicate` |  |  | per-lane: mask cast, mask broadcast |
+| `d < ntz` | `predicate`, `intArithmetic` | `unix_date(d) BETWEEN -106751991 AND 106751991` | type coercion casts the date to TIMESTAMP_NTZ, its midnight; the day is guarded so that the multiply is exact, and a batch with a day past it goes to the row engine, which raises | per-lane: compare to mask, mask logic, mask cast, mask broadcast, mask test, load or store |
+| `CAST(ntz AS DATE) = d` | `predicate`, `intArithmetic` |  | the UTC date of the count: an exact floor division by the microseconds of a day, a shift and a bounded division, for every count | per-lane: mask broadcast, load or store |
+
+#### TIMESTAMP_NTZ columns choosing values
+
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `greatest(ntz, ntz2)` | `intArithmetic` |  |  | per-lane: blend, mask broadcast |
+| `least(ntz, ntz2)` | `intArithmetic` |  |  | per-lane: blend, mask broadcast |
+| `CASE WHEN ntz < ntz2 THEN ntz ELSE ntz2 END` | `predicate`, `condition` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
+| `if(ntz IS NULL, ntz2, ntz)` | `predicate`, `condition` |  |  | per-lane: mask broadcast, mask logic, blend |
+| `coalesce(ntz, ntz2)` | `condition` |  |  | per-lane: blend, mask broadcast |
+| `CAST(d AS TIMESTAMP_NTZ)` | `intArithmetic` | `unix_date(d) BETWEEN -106751991 AND 106751991` | Spark multiplies with multiplyExact in every mode, so a day past the bound raises under LEGACY and ANSI and is null under TRY, on the row engine the guard sends its batch to | per-lane: compare to mask, mask logic, mask broadcast, mask test |
+| `CAST(ntz AS DATE)` | `intArithmetic` |  | cannot fail: every quotient is a day an int holds | vector |
+
 #### Time arithmetic
 
 | Expression | Switches | Domain | Notes | 128-bit lanes |
@@ -700,9 +730,10 @@ operands (a row counts once for each type it reads):
 | `bigint` | 44 | 0 | 2 | 0 | 2 | 40 |
 | `bool` | 19 | 0 | 0 | 10 | 0 | 9 |
 | `byte` | 25 | 0 | 0 | 0 | 8 | 17 |
-| `date` | 81 | 17 | 0 | 0 | 0 | 64 |
+| `date` | 84 | 17 | 0 | 1 | 0 | 66 |
 | `dt` | 15 | 2 | 0 | 0 | 0 | 13 |
 | `int` | 72 | 14 | 2 | 0 | 1 | 55 |
+| `ntz` | 19 | 0 | 1 | 0 | 0 | 18 |
 | `short` | 25 | 0 | 0 | 0 | 8 | 17 |
 | `time` | 32 | 6 | 0 | 0 | 2 | 24 |
 | `ym` | 30 | 7 | 2 | 0 | 2 | 19 |

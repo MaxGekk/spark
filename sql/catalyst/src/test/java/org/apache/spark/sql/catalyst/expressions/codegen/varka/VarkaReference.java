@@ -287,6 +287,8 @@ public final class VarkaReference {
       case SHORT -> Short.MIN_VALUE;
       case INT -> Integer.MIN_VALUE;
       case LONG -> throw new IllegalArgumentException("a long-lane arithmetic node");
+      case FLOAT, DOUBLE -> throw new IllegalArgumentException(
+          "integer arithmetic at a floating lane (" + lane + ")");
     };
   }
 
@@ -296,6 +298,8 @@ public final class VarkaReference {
       case SHORT -> Short.MAX_VALUE;
       case INT -> Integer.MAX_VALUE;
       case LONG -> throw new IllegalArgumentException("a long-lane arithmetic node");
+      case FLOAT, DOUBLE -> throw new IllegalArgumentException(
+          "integer arithmetic at a floating lane (" + lane + ")");
     };
   }
 
@@ -306,6 +310,8 @@ public final class VarkaReference {
       case SHORT -> (short) exact;
       case INT -> (int) exact;
       case LONG -> exact;
+      case FLOAT, DOUBLE -> throw new IllegalArgumentException(
+          "integer arithmetic at a floating lane (" + lane + ")");
     };
   }
 
@@ -695,7 +701,7 @@ public final class VarkaReference {
     return switch (target) {
       case BYTE -> (byte) v;
       case SHORT -> (short) v;
-      case INT, LONG -> v;
+      case INT, LONG, FLOAT, DOUBLE -> v;
     };
   }
 

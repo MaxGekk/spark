@@ -234,4 +234,99 @@ long range and pinned at `Long.MIN_VALUE` and `Long.MAX_VALUE`; `dev/varka_censu
 
 ## 10. Outcome
 
-(Written when the work lands.)
+Built 26 October 2026 on `varka-338`: the lane and casts, the review fixes, a merge with row 480's
+master, and the two NTZ suites moved to JVMs of their own.
+
+### 10.1 What landed
+
+1. **The lane (2.1).** The registry's `TIMESTAMP_NTZ` entry is `OnLane(LONG)` with conformance
+   `Suite("TimestampNtz")`, and `VarkaLaneArrow.of` reads it from `TimeStampMicroVector`, a class
+   apart from the zoned type's `TimeStampMicroTZVector`. The zoned `TIMESTAMP` keeps its `Declined`
+   entry.
+2. **The forms of 2.2.** The comparisons, `<=>`, the null tests, `greatest`, `least`, `CASE`, `IF`
+   and `coalesce` fused by the long lane's nodes alone, as 0.1 predicted. `IN` did not (10.2, item
+   2). `d < ntz` fuses once the cast does.
+3. **The casts (2.3).** `CAST(d AS TIMESTAMP_NTZ)` is `IntArith(MUL, WRAP,
+   GuardedRange(WidenLane(d), -106751991, 106751991), slot(86400000000))` in all three modes;
+   `CAST(ntz AS DATE)` is `NarrowLane(floorDivLong(t, 86400000000))`, a shift by 13, the move of a
+   negative value down by 10,546,874 and a `ConstDivide` by 10,546,875 under the bound `2^50 +
+   10,546,875`. The identity cast is its child. `casts_fused.tsv` marks both pairs fused in LEGACY,
+   ANSI and TRY.
+4. **Proofs (2.4).** `long_divide.smt2` adds 10,546,875 to the divisors whose `ConstDivide` is
+   proven exact, and four claims over every long: the shift by 63 is the sign, the composition is
+   `Math.floorDiv(x, 86.4e9)`, its dividend is under the stated bound, and its quotient fits an int.
+   Both solvers hold the file (983 checks; Z3 32 s, cvc5 9 s). `verify_double_division.py` has the
+   row too. `VarkaTimestampNtzCastSuite` holds the guard and factor the compiler builds to
+   `multiplyExact` over every int day, runs `multiplyExact` itself over a million days at each end
+   of the guard and in the middle, and runs the kernels at the guard's edges in every mode.
+5. **Tests (3).** `VarkaTimestampNtzConformanceSuite` passes its six checks that apply (its cast row
+   is cancelled for the casts to `TIME`, owed to 340, after the `DATE` one runs). Nineteen coverage
+   rows in two families. `VarkaTimestampNtzSuite` runs the casts through queries: `try_cast` at a
+   day past the guard declines one batch of three and nulls the row, `CAST` raises in LEGACY and
+   ANSI, and the cast to `DATE` answers java.time's day at the long range's ends. `year(ntz)`
+   declines with "day producer the calendar range analysis does not bound", pinned for 340. The
+   flipped tests of 0.6 hold their NTZ halves fused and their zoned halves declined, the long-lane
+   one now checking which conjunct the kernel took.
+6. **Generated files (3.6).** `coverage.json`, the docs tables, `width_audit.json`,
+   `emitted_bytes.json`, `casts_fused.tsv`, `casts.tsv`, `census.tsv` and `types.tsv`, regenerated
+   again after the merge with row 480.
+
+### 10.2 What differed from the plan
+
+1. **Row 484's contract ran int-lane kernels only.** 0 and 3.1 took it as done for any type: its
+   batches were `int[][]`, its kernels ran through `runLoadedNarrow` with the int literal table, and
+   its lane came from a three-type ladder. `VarkaTypeConformance` now builds full-width batches and
+   runs a kernel driven at the long lane through a `runLoadedLong` that also compares with Spark,
+   with both literal tables; the lane is the registry's and a literal's spelling a function, since
+   NTZ has no `%d` form. The three existing suites behave as before. Row 485's six suites now have
+   their harness (its row says so).
+2. **`IN` needed an arm.** `IN` and `InSet` compile only for the int lanes' types, and the bigint
+   `IN` is left declined on purpose by a test, for the bigint operation rows. NTZ has a long-lane
+   twin of the EQ chain of its own (`compileLongInList`).
+3. **The overflow exemption** is `hasArithmetic`, false for `BOOLEAN` and `TIMESTAMP_NTZ`, with the
+   census assertion kept; the null-handling check drops its `x + y` form for such a type.
+4. **The new divisor's past-the-bound check.** `long_divide.smt2` also states, per divisor, the
+   first dividend past `2^53` where the conversion form goes wrong. For 10,546,875 both solvers find
+   it still exact there; the claim is a fact about the TIME divisors and is skipped for this one,
+   whose caller states a bound near `2^50`.
+5. **The exhaustion is of the lowering's arithmetic, not of a kernel over `2^32` rows.** A kernel
+   run per day compared row by row would take hours; the compiled tree's guard and factor are read
+   and checked over every day by the 128-bit product's high half, and `multiplyExact` itself over
+   three windows. The coverage entry names it so.
+6. **The coverage table's columns had five homes.** The column map in `coverage.json` was written by
+   hand; it is now derived from `VarkaCoverageSuite.columns`. `VarkaEmittedBytesSuite` and
+   `VarkaWidthAuditShapes` keep copies (a column the bytes suite lacked put the NTZ rows in
+   `coverage_rows_skipped` silently), and the differential and Spark fuzz fixtures build the
+   columns. `ADDING_A_TYPE.md` step 11 lists the five.
+7. **The fixtures derive the NTZ columns** from a date and a time. In the differential suite a day
+   the cast cannot take gives the epoch rather than a null: over a null `ntz` the optimizer's
+   `isnotnull(ntz)` conjunct decides whether `d < ntz` is evaluated, Spark raised where Varka's
+   filter answered, and the two engines need not take conjuncts in one order.
+8. **`d2 - d` lost its total domain.** The new edge rows at `+-106,751,992` days put it outside its
+   domain; the entry is gone and its outside partition is checked.
+9. **The census doctest** counted the landed types by hand and broke on a new one; it now builds
+   every suite but one.
+
+### 10.3 Predictions (4)
+
+1. **No existing shape's bytes move: held.** Only new shapes were added; the `option_arms` digests,
+   each over every shape, moved with them. The same held after the merge with row 480.
+2. **`varka_new_lane.py --check` passes for `TimestampNTZType`: held** (3 sites checked).
+3. **The census counts NTZ fused for 2.2's operators and the two casts: held,** 16 of its 54
+   entries, the rest owed to 337, 339, 340 and the other types' rows.
+
+### 10.4 Verification
+
+The gate before the merge: every step ok in 1674 s (wide 1534 s, narrow 1551 s). After the merge
+with row 480: every step ok in 1777 s (wide 1613 s, narrow 1649 s).
+
+The option matrix over the new and changed catalyst suites, all 51 configurations and the defaults,
+failed five tests under `lanesOverride=4` and `narrowHalfSpecies=true`: the two NTZ suites' kernels
+of both lanes need an int species of the long species' width, which the shared test JVM refuses
+beside the one it holds (VARKA-246). The suites now run in JVMs of their own, as the narrow
+conformance suites do; those two configurations are still to be rerun. The sql suites
+(`VarkaTimestampNtzSuite`, `VarkaLongLaneSuite`, `VarkaCoverageDifferentialSuite`) ran under 29 of
+the 52 configurations before the run was stopped: no NTZ test failed; under `validityByWidth=false`
+two narrow rows of row 480, `CAST(y1 AS INT) * CAST(y2 AS INT)` and its `SMALLINT` twin, failed,
+which this row does not touch. The rest of the matrix is owed. The review agent's findings, none of
+them a wrong answer, are fixed.

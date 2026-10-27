@@ -81,6 +81,11 @@ import org.apache.spark.sql.types.DataTypes;
  * register says it does not, or declines where it says it does, fails: the register has drifted
  * from the compiler.
  *
+ * <p>A type is read at the lane the type registry names for it, and a check runs at the lane its
+ * kernel is driven at: the int lane's batches for a narrow, int-lane or condition type, the long
+ * lane's 64-bit batches for a long-lane one, with both literal tables where a kernel converts
+ * between the two (a cast to {@code DATE}).
+ *
  * <p>Every check also holds its fixture to what a hand-written one missed in the narrow lanes'
  * reviews (`VARKA-329.md` 9.8): each condition root is true on some row and false on another,
  * each value root is valid on some row and, where it can be null, null on another, so that a
@@ -123,7 +128,10 @@ public abstract class VarkaTypeConformance {
       return spark.equals(DataTypes.BooleanType);
     }
 
-    /** The lane a column of the type is read at by default, for the width's refusal. */
+    /**
+     * The lane a column of the type is read at, the registry's; a {@code BOOLEAN}, read as a
+     * condition and on no lane, is counted with the int lane, as its bitmaps' words are.
+     */
     LaneType lane() {
       return VarkaTypes.lane(spark).orElse(LaneType.INT);
     }
