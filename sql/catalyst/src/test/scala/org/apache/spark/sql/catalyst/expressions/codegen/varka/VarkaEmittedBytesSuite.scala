@@ -34,7 +34,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaIrGrammar._
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
-import org.apache.spark.sql.types.{BooleanType, ByteType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, TimestampNTZType, TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{BooleanType, ByteType, DateType, DayTimeIntervalType, DecimalType, IntegerType, LongType, ShortType, TimestampNTZType, TimeType, YearMonthIntervalType}
 
 /**
  * The emitted-bytes oracle (VARKA-85, step 1): what the emitter produces for every shape, pinned
@@ -103,8 +103,13 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
   // TIMESTAMP_NTZ columns (VARKA-338), as `VarkaCoverageSuite` declares them.
   private val ntz = AttributeReference("ntz", TimestampNTZType)()
   private val ntz2 = AttributeReference("ntz2", TimestampNTZType)()
-  private val columns: Seq[Attribute] =
-    Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2, y1, y2, s1, s2, ntz, ntz2)
+  // DECIMAL columns (VARKA-347), as `VarkaCoverageSuite` declares them.
+  private val d9 = AttributeReference("d9", DecimalType(9, 2))()
+  private val d9b = AttributeReference("d9b", DecimalType(9, 2))()
+  private val d18 = AttributeReference("d18", DecimalType(18, 2))()
+  private val d18b = AttributeReference("d18b", DecimalType(18, 2))()
+  private val columns: Seq[Attribute] = Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2,
+    y1, y2, s1, s2, ntz, ntz2, d9, d9b, d18, d18b)
 
   private val className = "org.apache.spark.sql.varka.execution.VarkaEmittedBytesOracle"
 

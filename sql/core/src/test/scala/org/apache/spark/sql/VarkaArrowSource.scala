@@ -38,7 +38,6 @@ import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanHelper
 import org.apache.spark.sql.execution.columnar.{ArrowCachedBatchSerializer, CachedRDDBuilder,
   InMemoryRelation, InMemoryTableScanExec}
 import org.apache.spark.sql.execution.datasources.{HadoopFsRelation, LogicalRelation}
-import org.apache.spark.sql.types.{DataType, DecimalType}
 import org.apache.spark.sql.util.QueryExecutionListener
 import org.apache.spark.storage.StorageLevel
 
@@ -79,18 +78,12 @@ object VarkaArrowSource {
     // usually the shape's only one. Off, the kernels run before C2 compiles them.
     .set("spark.sql.codegen.varka.warmup.enabled", "false")
 
-  /** Whether a relation has a column a Varka kernel can read. */
-  def varkaTyped(plan: LogicalPlan): Boolean = plan.output.exists(a => sourced(a.dataType))
-
   /**
-   * Whether the source serves a column of `dataType`: a type on a lane, but not yet a decimal.
-   * The registry admits a decimal of precision up to 18 on the long lane (VARKA-347 step 3),
-   * while the compiler still declines every operator over one until step 5 builds the reader,
-   * so a cached or lifted decimal would only move Spark's row path onto the Arrow cache.
-   * Step 5 drops the exception with the reader (`VARKA-347.md` 10.2).
+   * Whether a relation has a column a Varka kernel can read: a type on a lane, a decimal of
+   * precision up to 18 among them, whose comparisons and null tests fuse (VARKA-347).
    */
-  def sourced(dataType: DataType): Boolean =
-    VarkaTypes.lane(dataType).isPresent && !dataType.isInstanceOf[DecimalType]
+  def varkaTyped(plan: LogicalPlan): Boolean =
+    plan.output.exists(a => VarkaTypes.lane(a.dataType).isPresent)
 
   // Set while the cache rule plans a relation's cached copy: that plan goes through the
   // optimizer too, and the rule must not wrap the relation inside its own copy.
@@ -225,7 +218,7 @@ object VarkaArrowSource {
     }
 
     private def liftable(e: Expression): Boolean = e match {
-      case l: Literal => l.value != null && sourced(l.dataType)
+      case l: Literal => l.value != null && VarkaTypes.lane(l.dataType).isPresent
       case _ => false
     }
   }

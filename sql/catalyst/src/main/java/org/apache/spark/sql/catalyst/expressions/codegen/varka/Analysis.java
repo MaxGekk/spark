@@ -598,9 +598,16 @@ final class Analysis {
    * The arm chain to qualify {@code node}'s guard by: empty where the guard stays
    * unqualified. Behind {@link VarkaEmitOptions#guardUnderArm} so the change is measurable
    * against its own absence, the way every other guard decision here is.
+   *
+   * <p>A {@link DecimalColumn}'s slot check is never qualified (VARKA-347). Its failure is a read
+   * of the column, not of a value an arm computes, and Spark reads a column where it first
+   * references it: a filter's generated code evaluates every column its predicate references
+   * before the predicate ({@code FilterExec.genPredicate}), so a bad slot in an arm Spark does not
+   * take still raises there. Declining whatever the arm is never computes where Spark raises, and
+   * it costs only batches holding a slot Spark's own writer never writes.
    */
   List<ArmStep> armChainOf(VarkaVectorIR node) {
-    if (!options.guardUnderArm()) {
+    if (!options.guardUnderArm() || node instanceof DecimalColumn) {
       return List.of();
     }
     List<ArmStep> chain = armChain.get(node);
@@ -1479,10 +1486,13 @@ final class Analysis {
         // a condition child's masks, which the condition lowering computes first. A column read
         // through a widening is the same word: an int column's IS NOT NULL in a long-lane
         // condition (VARKA-28).
+        // A decimal column's word is a column's too; its leaf is emitted under the test all the
+        // same, for the slot check Spark's IS NULL makes by reading the value (VARKA-347).
         VarkaVectorIR column = n.child() instanceof WidenLane w ? w.child() : n.child();
-        if (!(column instanceof ColumnRef) && !(n.child() instanceof Cond)) {
-          throw VarkaErrors.illegalArgument(
-              "IsNotNull child must be a ColumnRef, a widened one or a Cond, got " + n.child());
+        if (!(column instanceof ColumnRef) && !(n.child() instanceof DecimalColumn)
+            && !(n.child() instanceof Cond)) {
+          throw VarkaErrors.illegalArgument("IsNotNull child must be a ColumnRef, a widened one, "
+              + "a DecimalColumn or a Cond, got " + n.child());
         }
         if (lane == Lane.LONG && n.child() instanceof WidenLane
             && column.laneType().isNarrow()) {

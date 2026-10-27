@@ -1329,6 +1329,8 @@ private object VarkaCoverageDifferentialSuite {
    * while Varka's is not, so from a suite's second test the row engine plans over the raw rows:
    * it inlines `ntz`'s CASE, infers no `isnotnull(ntz)`, and raises on the cast that Varka's
    * cached plan never evaluates (VARKA-498). With `ntz` never null the cast runs on both sides.
+   * The DECIMAL columns are derived too, from the bigints: `d9` and `d18` from `l`, `d9b` and
+   * `d18b` from `l2`.
    */
   def fixtureView(values: Seq[String], where: String = ""): String = {
     val withIds = values.zipWithIndex.map { case (v, rid) => s"($rid, ${v.stripPrefix("(")}" }
@@ -1336,6 +1338,11 @@ private object VarkaCoverageDifferentialSuite {
       s"CASE WHEN abs(unix_date($day)) < $lastNtzDay " +
         s"THEN CAST($day AS TIMESTAMP_NTZ) + ($time - TIME'00:00:00') " +
         s"WHEN $day IS NOT NULL THEN TIMESTAMP_NTZ '1970-01-01 00:00:00' END"
+    // A DECIMAL(p, 2) column (VARKA-347) is the bigint's last p digits as hundredths: an exact
+    // product that always fits the type, null where the bigint is, and of both signs.
+    def decimal(long: String, precision: Int): String =
+      s"CAST(CAST($long % ${BigInt(10).pow(precision)} AS DECIMAL(${precision + 1}, 0)) * 0.01 " +
+        s"AS DECIMAL($precision, 2))"
     s"""SELECT rid, d, d2, i,
        |       CAST(m AS INTERVAL MONTH) AS ymm,
        |       CAST(y AS INTERVAL YEAR) AS ymy,
@@ -1345,7 +1352,11 @@ private object VarkaCoverageDifferentialSuite {
        |       CASE WHEN rid % 4 = 3 THEN NULL ELSE rid % 2 = 0 END AS b,
        |       CASE WHEN rid % 5 = 4 THEN NULL ELSE rid % 3 = 0 END AS b2,
        |       ${ntz("d", "t")} AS ntz,
-       |       ${ntz("d2", "t2")} AS ntz2
+       |       ${ntz("d2", "t2")} AS ntz2,
+       |       ${decimal("l", 9)} AS d9,
+       |       ${decimal("l2", 9)} AS d9b,
+       |       ${decimal("l", 18)} AS d18,
+       |       ${decimal("l2", 18)} AS d18b
        |FROM VALUES ${withIds.mkString(",\n  ")}
        |AS v(rid, d, d2, i, m, y, mm, l, l2, t, t2, dt, dt2, y1, y2, s1, s2)$where""".stripMargin
   }

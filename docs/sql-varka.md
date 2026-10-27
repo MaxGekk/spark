@@ -236,7 +236,8 @@ untouched input columns are forwarded zero-copy, and the remaining entries run
 the standard row path per row, merged with the kernel outputs (VARKA-12).
 
 Explicitly out of scope are `CalendarInterval` (a struct of months, days and
-microseconds), `DayTimeIntervalType` (int64 microseconds), strings, decimals and
+microseconds), `DayTimeIntervalType` (int64 microseconds), strings, decimals (but
+for the equal-scale comparisons and null tests of precision up to 18, VARKA-347) and
 nested/complex types. Day offsets are int32, whether a literal, a column or
 arithmetic over them.
 
@@ -675,6 +676,28 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `CAST(d AS TIMESTAMP_NTZ)` | `intArithmetic` | `unix_date(d) BETWEEN -106751991 AND 106751991` | Spark multiplies with multiplyExact in every mode, so a day past the bound raises under LEGACY and ANSI and is null under TRY, on the row engine the guard sends its batch to | per-lane: compare to mask, mask logic, mask broadcast, mask test |
 | `CAST(ntz AS DATE)` | `intArithmetic` |  | cannot fail: every quotient is a day an int holds | vector |
 
+#### DECIMAL columns
+
+| Predicate | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `d9 < d9b` | `predicate` |  | two DECIMAL(9, 2) values compare as their unscaled longs | per-lane: compare to mask, mask cast, other, blend, mask logic, mask broadcast, mask test |
+| `d9 <= d9b` | `predicate` |  |  | per-lane: compare to mask, mask cast, other, blend, mask logic, mask broadcast, mask test |
+| `d9 > d9b` | `predicate` |  |  | per-lane: compare to mask, mask cast, other, blend, mask logic, mask broadcast, mask test |
+| `d9 >= d9b` | `predicate` |  |  | per-lane: compare to mask, mask cast, other, blend, mask logic, mask broadcast, mask test |
+| `d9 = d9b` | `predicate` |  |  | per-lane: compare to mask, mask cast, other, blend, mask logic, mask broadcast, mask test |
+| `d9 <> d9b` | `predicate` |  | the NOT of the equality | per-lane: compare to mask, mask cast, other, blend, mask logic, mask broadcast, mask test |
+| `d9 <=> d9b` | `predicate` |  | null-safe equality at the long lane | per-lane: compare to mask, mask cast, other, blend, mask logic, mask broadcast, mask test |
+| `d9 = 0.42` | `predicate` |  | the literal is cast to the column's DECIMAL(9, 2) and its unscaled long takes a slot in the long table | per-lane: compare to mask, mask cast, other, blend, mask logic, mask broadcast, mask test |
+| `d9 < d18` | `predicate` |  | type coercion casts d9 to DECIMAL(18, 2), which keeps every unscaled value: the cast is the column | per-lane: compare to mask, mask cast, other, blend, mask logic, mask broadcast, mask test |
+| `d18 < d18b` | `predicate` |  |  | per-lane: compare to mask, mask cast, other, blend, mask logic, mask broadcast, mask test |
+| `d18 = d18b` | `predicate` |  |  | per-lane: compare to mask, mask cast, other, blend, mask logic, mask broadcast, mask test |
+| `d18 <=> d18b` | `predicate` |  |  | per-lane: compare to mask, mask cast, other, blend, mask logic, mask broadcast, mask test |
+| `d18 >= 123456789012.34` | `predicate` |  | a literal of fourteen digits | per-lane: compare to mask, mask cast, other, blend, mask logic, mask broadcast, mask test |
+| `d9 IS NULL` | `predicate` |  | a validity read; the slots are checked too, since Spark's null test reads a valid row's value and raises on a slot outside the precision | per-lane: compare to mask, mask cast, other, blend, mask logic, mask broadcast, mask test |
+| `d9 IS NOT NULL` | `predicate` |  |  | per-lane: compare to mask, mask cast, other, blend, mask logic, mask broadcast, mask test |
+| `d18 IS NULL` | `predicate` |  |  | per-lane: compare to mask, mask cast, other, blend, mask logic, mask broadcast, mask test |
+| `d18 IS NOT NULL` | `predicate` |  |  | per-lane: compare to mask, mask cast, other, blend, mask logic, mask broadcast, mask test |
+
 #### Time arithmetic
 
 | Expression | Switches | Domain | Notes | 128-bit lanes |
@@ -714,6 +737,7 @@ operands (a row counts once for each type it reads):
 | `bool` | 19 | 0 | 0 | 10 | 0 | 9 |
 | `byte` | 25 | 0 | 0 | 0 | 8 | 17 |
 | `date` | 84 | 17 | 0 | 1 | 0 | 66 |
+| `dec` | 17 | 0 | 0 | 0 | 0 | 17 |
 | `dt` | 11 | 2 | 0 | 0 | 0 | 9 |
 | `int` | 70 | 14 | 2 | 0 | 1 | 53 |
 | `ntz` | 19 | 0 | 1 | 0 | 0 | 18 |

@@ -82,9 +82,9 @@ OWED = {
     ("coverage table", "DoubleType"): "row 341 (the floating lanes' coverage rows)",
     ("width audit", "DoubleType"): "row 341 (the floating lanes' coverage rows)",
     ("census", "DoubleType"): "row 341 (the floating lanes' coverage rows)",
-    ("coverage table", "DecimalType"): "row 347 (its first reader and coverage rows, step 5)",
-    ("width audit", "DecimalType"): "row 347 (its first reader and coverage rows, step 5)",
-    ("census", "DecimalType"): "row 347 (its first reader and coverage rows, step 5)",
+    # A decimal pair counts fused only when it fuses at every precision up to 38 (m8/PLAN.md 2.8),
+    # so the comparisons and null tests row 347 fuses up to precision 18 are a note, not a claim.
+    ("census", "DecimalType"): "row 359 (a decimal pair fused at every precision, PLAN.md 2.8)",
 }
 
 

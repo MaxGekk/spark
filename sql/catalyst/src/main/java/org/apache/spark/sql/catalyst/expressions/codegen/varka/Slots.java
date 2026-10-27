@@ -1191,9 +1191,11 @@ final class Slots {
       // The one edge of this node the emission does not follow, or null.
       VarkaVectorIR skipped = null;
       if (node instanceof IsNotNull isNotNull
-          && (!isNotNull.overCondition() || dense)) {
+          && (!isNotNull.overCondition() || dense)
+          && !(isNotNull.child() instanceof DecimalColumn)) {
         // Over a column, widened or not, it reads the word, and over a condition in a dense body
         // it is constant true; only a masked body lowers a condition child, to read its masks.
+        // A decimal column is visited all the same, in both bodies, for its slot check.
         skipped = isNotNull.child();
       } else if (isChrono(node)) {
         VarkaVectorIR date = chronoChild(node);

@@ -133,3 +133,4 @@ sql/varka/plans/m5/VARKA-118.md	11.17	a section number of VARKA-62.md, not a rat
 sql/varka/plans/m5/VARKA-118.md	11.18	a section number of VARKA-62.md, not a rate - the tool cannot tell the two apart
 sql/varka/plans/m5/VARKA-164.md	11.17	a section number of VARKA-62.md, not a rate - the tool cannot tell the two apart
 sql/varka/plans/m7/READING.md	99.81	a transcription's share of its PDF's text-layer characters, not a measured rate
+docs/sql-varka.md	123456789012.34	not a measurement: a decimal literal in the coverage table's row `d18 >= 123456789012.34` (VARKA-347)
