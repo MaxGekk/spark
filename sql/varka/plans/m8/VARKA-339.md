@@ -207,6 +207,14 @@ quotient fits an int) and guarded to the calendar's range, which `calendarInput`
 batch holding a timestamp before 1 March -12800 or after 15 August 33134 goes to the row engine.
 One helper in `VarkaNodeCompiler`, beside `floorDivLong`, for 340.
 
+*27 October 2026 (`VARKA-340.md` 2.1):* the helper is 340's guarded form,
+`GuardedRange(NarrowLane(floorDivLong(t, D)), NARROW_MIN_DAYS + 365, NARROW_MAX_DAYS)`, not a
+`GuardedDay`: the week forms and a field over `trunc` need a year of room below the floor. A
+timestamp from 1 March -12800 to 28 February -12799 now goes to the row engine too. The month
+forms are admitted over it as over `GuardedDay` (`addMonths` takes its day through
+`calendarInput`, `VarkaChronoCompiler.java:325`); the sweep of 3.5 runs over the days it admits
+and the day-guard edges of 3.4 are its bounds and one past each.
+
 ### 2.5 `time_bucket` over a day-time width (time family)
 
 The width `b` and origin `o` must be literals (Spark makes them foldable; a null declines).
