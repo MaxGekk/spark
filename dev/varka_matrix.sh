@@ -26,7 +26,7 @@
 #   dev/varka_matrix.sh --defaults --list-suites --module sql   # print a module's suites, no build
 #   dev/varka_matrix.sh --all --skip-build             # reuse the last build and classpath
 #   dev/varka_matrix.sh --all -j 8 --deadline 06:30    # start no JVM after 06:30
-#   dev/varka_matrix.sh --all --shard 3/12 -j 2        # shard 3 of 12, split by measured time
+#   dev/varka_matrix.sh --all --shard 3/18 -j 2        # shard 3 of 18, split by measured time
 #   dev/varka_matrix.sh --module sql --config cse=false --sbt-arg -Phive   # as the PR job runs
 #   dev/varka_matrix.sh --defaults --split 4 -j 8 --jvm-arg -XX:MaxVectorSize=16   # as the gate
 #
