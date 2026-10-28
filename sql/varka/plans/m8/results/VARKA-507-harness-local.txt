@@ -20,3 +20,9 @@ the 1 MB page, kept as they are:
   VarkaCoverageDifferentialSuite     as is 315 s and 327 s, off 322 s and 308 s
   VarkaDifferentialSuite             as is 75 s, off 76 s
   VarkaSparkFuzzSuite                as is 102 s, off 88 s
+
+The CI jobs' split weights (sql/varka/ci/suite-times.tsv) refreshed from Build run 40765830095,
+this change's own varka-scoped jobs: 150 suites, 4483 s in all against the 1778 s the file
+held, the largest corrections VarkaEmittedBytesSuite 39 s to 332, VarkaHugeMethodSuite 15 s to
+154 and VarkaOperatorCensusSuite 31 s to 186, which had put twice the suite time on one
+catalyst job as on another.
