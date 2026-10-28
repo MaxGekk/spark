@@ -26,10 +26,11 @@ the runner's four cores, and takes units longest first onto its lightest lane un
 reaches the target. The defaults are a configuration like any other, named `defaults`.
 
 A unit's weight is its suites' seconds, from `sql/varka/matrix/suite-seconds.tsv` where a
-suite is listed there (written by `times` from a fanned-out run's JUnit reports) and from the
-pull-request jobs' `sql/varka/ci/suite-times.tsv` otherwise, times the configuration's weight
-over the defaults (`sql/varka/matrix/seconds.tsv`), plus a JVM's start. A suite neither file
-lists weighs the median, so a new suite is placed as an ordinary one.
+suite is listed there (written by `times` from a fanned-out run's JUnit reports, each suite's
+median over the configurations) and from the pull-request jobs' `sql/varka/ci/suite-times.tsv`
+otherwise, times the configuration's weight over the defaults (`sql/varka/matrix/seconds.tsv`),
+plus a JVM's start. A suite neither file lists weighs the median, so a new suite is placed as
+an ordinary one.
 
   dev/varka_matrix_bins.py plan --configurations FILE --suites MODULE=FILE... \\
       [--target SECONDS] > bins.json          # the job matrix, {"include": [...]}
@@ -45,6 +46,7 @@ import json
 import re
 import statistics
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -160,23 +162,28 @@ def plan(configurations, suites, suite_seconds, suite_times, config_weights, lan
 
 
 def times(junit_dirs):
-    """Each suite's seconds under the defaults, the slowest of its runs, from JUnit reports
-    under `<dir>/defaults/<module>-...`."""
-    seen = {}
+    """Each suite's seconds, the median over the configurations that ran it, the defaults among
+    them, from JUnit reports under `<dir>/<configuration>/<module>-.../junit`. The configurations'
+    runs land on the pool's mix of runners, so the median is a run's typical cost of the suite
+    rather than the cost on the fastest or the slowest machine."""
+    per_config = {}
     for d in junit_dirs:
-        for xml in Path(d).glob("**/defaults/*/junit/TEST-*.xml"):
+        for xml in Path(d).glob("**/*/*/junit/TEST-*.xml"):
             head = xml.read_text(encoding="utf-8", errors="replace")[:4000]
-            m = re.search(r'<testsuite[^>]*\bname="([^"]+)"[^>]*\btime="([0-9.]+)"', head)
-            if not m:
-                m2 = re.search(r'<testsuite[^>]*\btime="([0-9.]+)"[^>]*\bname="([^"]+)"', head)
-                if not m2:
-                    continue
-                name, seconds = m2.group(2), float(m2.group(1))
-            else:
-                name, seconds = m.group(1), float(m.group(2))
-            simple = name.rsplit(".", 1)[-1]
-            seen[simple] = max(seen.get(simple, 0.0), seconds)
-    return seen
+            tag = re.search(r"<testsuite\b[^>]*>", head)
+            if not tag:
+                continue
+            name = re.search(r'\bname="([^"]+)"', tag.group(0))
+            seconds = re.search(r'\btime="([0-9.]+)"', tag.group(0))
+            if not name or not seconds:
+                continue
+            config = xml.parent.parent.parent.name
+            key = (name.group(1).rsplit(".", 1)[-1], config)
+            per_config[key] = per_config.get(key, 0.0) + float(seconds.group(1))
+    runs = {}
+    for (suite, _), seconds in per_config.items():
+        runs.setdefault(suite, []).append(seconds)
+    return {suite: statistics.median(seconds) for suite, seconds in runs.items()}
 
 
 class SelfTest(unittest.TestCase):
@@ -221,6 +228,26 @@ class SelfTest(unittest.TestCase):
         got = units([], suites, suite_weight(weights, {}), {}, 320.0)
         self.assertTrue(all(u[3] <= 320.0 + 100.0 for u in got), got)
         self.assertEqual(sorted(s for u in got for s in u[2]), sorted(weights))
+
+    def test_times_are_the_median_over_configurations(self):
+        def report(root, config, leaf, suite, seconds):
+            d = Path(root, "runs", config, leaf, "junit")
+            d.mkdir(parents=True, exist_ok=True)
+            # ScalaTest writes the attributes on the line after the tag, hostname before name.
+            Path(d, f"TEST-org.x.{suite}.xml").write_text(
+                f'<?xml version="1.0"?>\n<testsuite\n hostname="h" name="org.x.{suite}"'
+                f' time="{seconds}" tests="1">\n</testsuite>\n',
+                encoding="utf-8",
+            )
+
+        with tempfile.TemporaryDirectory() as root:
+            report(root, "defaults", "sql-b000-0", "A", 10)
+            report(root, "x=1", "sql-b001-0", "A", 30)
+            # One configuration's two leaves of a suite add up before the median.
+            report(root, "y=2", "sql-b002-0", "A", 15)
+            report(root, "y=2", "sql-b003-0", "A", 25)
+            report(root, "x=1", "sql-b001-0", "B", 4)
+            self.assertEqual(times([root]), {"A": 30.0, "B": 4.0})
 
     def test_a_suite_no_file_lists_weighs_the_median(self):
         w = suite_weight({}, {"A": 10.0, "B": 30.0, "C": 50.0})
