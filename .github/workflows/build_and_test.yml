@@ -1440,6 +1440,31 @@ jobs:
     - name: Every lane and type is wired where no compiler checks
       if: matrix.module == 'catalyst' && matrix.shard == '0/3'
       run: ./dev/varka_new_lane.py --check
+    # The option matrix dispatched on this commit takes its test classes from here rather than
+    # compiling them again (VARKA-507, dev/varka_matrix_reuse.py): the first sql job builds sql's
+    # test classes, whose classpath holds catalyst's too, as the matrix's build job would, and
+    # archives them before its suites run. The suites step's own build then finds nothing to do.
+    # The three steps are an optimization of another workflow, so none of them fails this job.
+    - name: Build the test classes for the option matrix
+      if: matrix.module == 'sql' && matrix.shard == '0/2'
+      continue-on-error: true
+      run: |
+        ./dev/varka_matrix.sh --defaults --module sql --build-only --sbt-arg -Phive \
+          --out target/varka-scoped
+        ./dev/varka_matrix_archive.sh pack target/varka-scoped target/varka-matrix-build.tar
+    - name: Upload the test classes for the option matrix
+      if: matrix.module == 'sql' && matrix.shard == '0/2'
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: varka-option-matrix-build
+        path: target/varka-matrix-build.tar
+        retention-days: 1
+        compression-level: 1
+    - name: Remove the archive of the test classes
+      if: matrix.module == 'sql' && matrix.shard == '0/2'
+      continue-on-error: true
+      run: rm -f target/varka-matrix-build.tar
     - name: Run the Varka suites of ${{ matrix.module }}, ${{ matrix.part }}
       run: ./dev/varka_scoped_suites.sh ${{ matrix.module }} --shard ${{ matrix.shard }}
     # The share's JUnit reports, from which the committed weights are refreshed
