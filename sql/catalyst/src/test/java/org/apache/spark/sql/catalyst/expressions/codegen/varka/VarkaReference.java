@@ -30,6 +30,7 @@ import java.util.function.LongBinaryOperator;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.*;
 import org.apache.spark.sql.catalyst.util.DateTimeUtils;
 import org.apache.spark.sql.catalyst.util.DateTimeUtils$;
+import org.apache.spark.sql.catalyst.util.SQLOrderingUtil;
 
 /**
  * The reference evaluator (VARKA-11): an independent implementation of the IR's semantics -
@@ -47,6 +48,13 @@ import org.apache.spark.sql.catalyst.util.DateTimeUtils$;
  * the reason it has no meaning on that lane (VARKA-310). Operands are evaluated left to right and
  * a null operand ends the evaluation, so an operand that would throw is never reached past a null
  * before it.
+ *
+ * <p>A floating lane's rows and literals are its values' raw bits: a {@code FLOAT}'s in the int
+ * row, a {@code DOUBLE}'s in the long one (VARKA-341). Its comparisons, {@code <=>},
+ * {@code greatest} and {@code least} order the values by Spark's own
+ * {@code SQLOrderingUtil.compareFloats} and {@code compareDoubles} - NaN equal to NaN and above
+ * every other value, {@code -0.0} equal to {@code 0.0} - and every other node moves the bits, so
+ * a NaN's payload and a zero's sign reach the answer as they are and are compared bit for bit.
  */
 public final class VarkaReference {
 
@@ -157,6 +165,14 @@ public final class VarkaReference {
       });
       // BitwiseCount's definition: the popcount of the value widened to a long.
       case BitCount n -> map(n.child(), row, isNull, lits, v -> Long.bitCount((long) v));
+      // At the FLOAT lane by Spark's ordering, the first of two equal operands kept: the bits of
+      // `greatest(-0.0, 0.0)` are -0.0's, and of two NaNs the first's.
+      case Greatest(var left, var right) when node.laneType() == LaneType.FLOAT ->
+          pick(value(left, row, isNull, lits), value(right, row, isNull, lits),
+              (a, b) -> compareFloatBits(b, a) > 0 ? b : a);
+      case Least(var left, var right) when node.laneType() == LaneType.FLOAT ->
+          pick(value(left, row, isNull, lits), value(right, row, isNull, lits),
+              (a, b) -> compareFloatBits(b, a) < 0 ? b : a);
       case Greatest(var left, var right) ->
           pick(value(left, row, isNull, lits), value(right, row, isNull, lits), Math::max);
       case Least(var left, var right) ->
@@ -346,7 +362,9 @@ public final class VarkaReference {
         if (r.isEmpty()) {
           yield Truth.UNKNOWN;
         }
-        yield Truth.of(compare(op, l.getAsInt(), r.getAsInt()));
+        yield Truth.of(left.laneType() == LaneType.FLOAT
+            ? ordered(op, compareFloatBits(l.getAsInt(), r.getAsInt()))
+            : compare(op, l.getAsInt(), r.getAsInt()));
       }
       // Written from the meaning of `<=>`, not from the emitted formula: two nulls are equal, a
       // null and a value are not, two values are equal when they are. Never unknown.
@@ -355,7 +373,9 @@ public final class VarkaReference {
         var r = value(right, row, isNull, lits);
         yield Truth.of(l.isEmpty() || r.isEmpty()
             ? l.isEmpty() && r.isEmpty()
-            : l.getAsInt() == r.getAsInt());
+            : left.laneType() == LaneType.FLOAT
+                ? compareFloatBits(l.getAsInt(), r.getAsInt()) == 0
+                : l.getAsInt() == r.getAsInt());
       }
       // A boolean column: the data bit is meaningful only where the slot is valid, so an arbitrary
       // bit under a null stays out of the answer by construction here, as in the kernel.
@@ -432,6 +452,13 @@ public final class VarkaReference {
       case NarrowLane n -> longValue(n.child(), row, isNull, lits);
       case WidenLane n -> throw new IllegalArgumentException(
           "a widening reads int rows, and is evaluated through mixedValue: " + n);
+      // At the DOUBLE lane by Spark's ordering, the first of two equal operands kept.
+      case Greatest(var left, var right) when node.laneType() == LaneType.DOUBLE ->
+          pick(longValue(left, row, isNull, lits), longValue(right, row, isNull, lits),
+              (a, b) -> compareDoubleBits(b, a) > 0 ? b : a);
+      case Least(var left, var right) when node.laneType() == LaneType.DOUBLE ->
+          pick(longValue(left, row, isNull, lits), longValue(right, row, isNull, lits),
+              (a, b) -> compareDoubleBits(b, a) < 0 ? b : a);
       case Greatest(var left, var right) ->
           pick(longValue(left, row, isNull, lits), longValue(right, row, isNull, lits), Math::max);
       case Least(var left, var right) ->
@@ -537,14 +564,18 @@ public final class VarkaReference {
         if (r.isEmpty()) {
           yield Truth.UNKNOWN;
         }
-        yield Truth.of(compare(op, l.getAsLong(), r.getAsLong()));
+        yield Truth.of(left.laneType() == LaneType.DOUBLE
+            ? ordered(op, compareDoubleBits(l.getAsLong(), r.getAsLong()))
+            : compare(op, l.getAsLong(), r.getAsLong()));
       }
       case NullSafeEqual(var left, var right) -> {
         var l = longValue(left, row, isNull, lits);
         var r = longValue(right, row, isNull, lits);
         yield Truth.of(l.isEmpty() || r.isEmpty()
             ? l.isEmpty() && r.isEmpty()
-            : l.getAsLong() == r.getAsLong());
+            : left.laneType() == LaneType.DOUBLE
+                ? compareDoubleBits(l.getAsLong(), r.getAsLong()) == 0
+                : l.getAsLong() == r.getAsLong());
       }
       case BoolColumn n -> isNull[n.ordinal()] ? Truth.UNKNOWN : Truth.of(row[n.ordinal()] != 0);
       case CondConst n -> constant(n);
@@ -742,6 +773,27 @@ public final class VarkaReference {
       case GE -> l >= r;
       case EQ -> l == r;
     };
+  }
+
+  /** {@code op} over the sign of an ordering's answer, {@code c}. */
+  private static boolean ordered(CompareOp op, int c) {
+    return switch (op) {
+      case LT -> c < 0;
+      case LE -> c <= 0;
+      case GT -> c > 0;
+      case GE -> c >= 0;
+      case EQ -> c == 0;
+    };
+  }
+
+  /** Spark's order of two FLOAT values given by their bits: the definition, quoted. */
+  private static int compareFloatBits(int a, int b) {
+    return SQLOrderingUtil.compareFloats(Float.intBitsToFloat(a), Float.intBitsToFloat(b));
+  }
+
+  /** Spark's order of two DOUBLE values given by their bits. */
+  private static int compareDoubleBits(long a, long b) {
+    return SQLOrderingUtil.compareDoubles(Double.longBitsToDouble(a), Double.longBitsToDouble(b));
   }
 
   private static boolean inRanges(int v, List<Integer> bounds) {

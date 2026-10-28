@@ -35,7 +35,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.{Forwar
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 import org.apache.spark.sql.catalyst.util.DateTimeConstants.{MICROS_PER_DAY, NANOS_PER_DAY, NANOS_PER_MICROS, NANOS_PER_MILLIS}
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DayTimeIntervalType, IntegerType, LongType, ShortType, TimestampNTZType, TimeType, YearMonthIntervalType}
+import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType, DayTimeIntervalType, DoubleType, FloatType, IntegerType, LongType, ShortType, TimestampNTZType, TimeType, YearMonthIntervalType}
 import org.apache.spark.util.Utils
 
 /**
@@ -113,9 +113,15 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
   // column against column.
   private val ntz = AttributeReference("ntz", TimestampNTZType)()
   private val ntz2 = AttributeReference("ntz2", TimestampNTZType)()
+  // The floating lanes' columns (VARKA-341): DOUBLE `x`, `x2` and FLOAT `f`, `f2`, two of each
+  // so a comparison or a pick can be column against column.
+  private val x = AttributeReference("x", DoubleType)()
+  private val x2 = AttributeReference("x2", DoubleType)()
+  private val f = AttributeReference("f", FloatType)()
+  private val f2 = AttributeReference("f2", FloatType)()
 
-  private val columns: Seq[Attribute] =
-    Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2, y1, y2, s1, s2, ntz, ntz2)
+  private val columns: Seq[Attribute] = Seq(d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2,
+    y1, y2, s1, s2, ntz, ntz2, x, x2, f, f2)
 
   /**
    * One documented expression. `sql` is both what the table prints and what the check
@@ -179,6 +185,54 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
    */
   private val ntzHeld = "TIMESTAMP_NTZ '2021-06-01 12:00:00'"
   private val ntzHeld2 = "TIMESTAMP_NTZ '1969-12-31 18:00:00'"
+
+  /**
+   * The predicate rows of a floating column pair, `a` and `b`, whose literals carry `suffix`
+   * (`D` or `F`, so that a literal is of the column's type and needs no cast): the comparisons,
+   * `<=>`, `isnan`, the null tests, a literal on the right and `IN` in both its forms. The
+   * column pairs meet NaN against NaN and against every other value, and both zeros both ways
+   * round, in the differential fixtures. Both `IN` lists hold `0.0` and NaN, so the fixtures'
+   * `-0.0` and NaNs of either sign are in them, as Spark's equality says.
+   */
+  private def floatingPredicates(a: String, b: String, suffix: String,
+      dataType: DataType): Seq[Row] = {
+    // SQL has no NaN literal: the cast is one the optimizer folds, as `VarkaSqlResolve` does.
+    val nan = s"CAST('NaN' AS ${dataType.sql})"
+    // The value of `v` in the column's type.
+    def value(v: Double): Any = if (dataType == DoubleType) v else v.toFloat
+    // Eleven literals of one integer digit or NaN, past the optimizer's InSet threshold of ten.
+    val manyNumbers = (1 to 8).map(k => k + 0.5) ++ Seq(-2.5, 0.0)
+    val many = manyNumbers.map(v => s"$v$suffix") :+ nan
+    val manyValues: Set[Any] = (manyNumbers :+ Double.NaN).map(value).toSet
+    val column = if (a == x.name) x else f
+    Seq(
+      Row(s"$a < $b"),
+      Row(s"$a <= $b"),
+      Row(s"$a > $b"),
+      Row(s"$a >= $b"),
+      Row(s"$a = $b", "NaN equals NaN, and -0.0 equals 0.0"),
+      Row(s"$a <> $b"),
+      Row(s"$a <=> $b", "null-safe equality under the lane's own equality"),
+      Row(s"$a < 1.5$suffix", "the literal is its bits in the table of the lane's width"),
+      Row(s"$a = 1.5$suffix"),
+      Row(s"$a IN (1.5$suffix, -2.5$suffix, 0.0$suffix, $nan)",
+        "an equality chain under the lane's equality"),
+      Row(s"$a IN (11 literals)",
+        "an IN list this long arrives from the optimizer as an InSet and fuses the same way",
+        Some(InSet(column, manyValues)), executable = Some(many.mkString(s"$a IN (", ", ", ")"))),
+      Row(s"isnan($a)", "never null: false on a null row"),
+      Row(s"$a IS NULL"),
+      Row(s"$a IS NOT NULL"))
+  }
+
+  /** The value rows of a floating column pair: the picks, which move bits and order them. */
+  private def floatingChoices(a: String, b: String): Seq[Row] = Seq(
+    Row(s"greatest($a, $b)", "Spark's order, the first of two equal operands kept"),
+    Row(s"least($a, $b)"),
+    Row(s"nanvl($a, $b)", "an IF over isnan, null where the first operand is"),
+    Row(s"CASE WHEN $a < $b THEN $a ELSE $b END"),
+    Row(s"if($a IS NULL, $b, $a)"),
+    Row(s"coalesce($a, $b)"))
 
   private val families: Seq[Family] = Seq(
     Family("Day arithmetic", predicates = false, Seq(
@@ -664,6 +718,16 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
         "a day past the bound raises under LEGACY and ANSI and is null under TRY, on the row " +
         "engine the guard sends its batch to", domain = Some(ntzDayBound)),
       Row("CAST(ntz AS DATE)", "cannot fail: every quotient is a day an int holds"))),
+
+    // DOUBLE and FLOAT on their own lanes (VARKA-341), in Spark's order: NaN equals NaN and is
+    // above every other value, and -0.0 equals 0.0. A comparison is the IEEE compare corrected
+    // for NaN, and every pick moves the bits, so a NaN's payload and a zero's sign pass
+    // through. The literals are ones the differential fixtures hold.
+    Family("DOUBLE columns", predicates = true, floatingPredicates("x", "x2", "D",
+      DoubleType)),
+    Family("DOUBLE columns choosing values", predicates = false, floatingChoices("x", "x2")),
+    Family("FLOAT columns", predicates = true, floatingPredicates("f", "f2", "F", FloatType)),
+    Family("FLOAT columns choosing values", predicates = false, floatingChoices("f", "f2")),
 
     Family("Time arithmetic", predicates = false, Seq(
       Row("t - t2", "a day-time interval, the nanosecond difference divided by a thousand"),
