@@ -168,6 +168,7 @@ EXCLUDED=(
   "VarkaEmitOptionSuite:checks the defaults themselves"
   "VarkaMatrixSuite:checks the matrix's own machinery, not an answer"
   "VarkaSuiteHarnessSuite:checks the JUnit face of the matrix's machinery, not an answer"
+  "VarkaHarnessParitySuite:checks that the answer harness plans as a session does, not an answer"
   "VarkaReachSuite:checks the matrix's reach filter, not an answer"
   "VarkaAssemblySuite:reads the JIT's output, not an answer"
   "VarkaWarmupEndToEndSuite:times a kernel's compilation, which a loaded machine moves"

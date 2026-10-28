@@ -41,12 +41,13 @@ A trait in sql/core's tests, `VarkaExpressionDifferential`, with no `SparkSessio
    exception is the answer for that row.
 4. **Varka's answer.** The production evaluators on the batch: `VarkaKernelEvaluator.project`
    (columnar consumer) and `projectFused` (row consumer) for a projection,
-   `VarkaFilterEvaluator.filterMask` for a predicate, each built with the full constructor and
-   `VarkaMatrix.base` as the session's emit options - not the four-argument suite constructor,
-   which pins `VarkaSessionEmit.DEFAULTS`, so that the option matrix reaches every harness test
-   (`sql/varka/AGENTS.md`, a test starts from `VarkaMatrix.base`) - under
-   `TaskContext.setTaskContext(TaskContext.empty())`. How the harness reads each kernel call's
-   status word is open (section 6).
+   `VarkaFilterEvaluator.filterCompact` for a predicate, each through `serveBatch` as the exec
+   nodes run them, under `TaskContext.setTaskContext(TaskContext.empty())`. The suite
+   constructor's `VarkaSessionEmit.DEFAULTS` lays no session setting over the base options; the
+   base itself is `VarkaColumnarToRowExec`'s test hook, which the harness sets to
+   `VarkaMatrix.base`, so the option matrix reaches every harness test (`sql/varka/AGENTS.md`, a
+   test starts from `VarkaMatrix.base`). A declined batch is the row path's, Spark's by
+   construction; the status word, for the domains, is the JFR fallback event's (section 6).
 5. **The comparison.** Values compared as `VarkaSparkOracle` compares them (raw bits for the
    floating types); a batch the kernel declined must be one Spark's row path answers or raises
    on, as the row path would; a batch it answered must hold no row Spark raises on.
@@ -67,16 +68,19 @@ One `VarkaSharedSessions` suite, small, a test a path rather than a test a row:
 
 ## 4. What the harness must prove about itself
 
-- **A planted kernel fails it.** `misdescribeAdd=true` makes `date_add` answer wrong; the
-  harness, run on the `date_add` row under that option, must fail.
+- **A planted kernel fails it.** With `checkIntOverflow=false` a checked int add wraps, so the
+  kernel answers `Int.MaxValue + 1` where Spark raises `ARITHMETIC_OVERFLOW`; the harness must
+  report that row (the fault the end-to-end suite's ANSI form plants). `misdescribeAdd` does not
+  serve: it fails the kernel rather than answering wrong.
 - **Its expression is the session's.** For every coverage row, once per build in a test that
   plans but does not execute (`df.queryExecution.optimizedPlan`), the expression the harness
   optimizes equals the one in the session's optimized plan. This test keeps a session but
   executes nothing, so it costs planning only, and it fails the day the two optimizers part. It
   compiles no kernel, so row 507's record names no configuration for it and the matrix runs it
   once, at the defaults.
-- **Its batch is the cache's.** For one fixture, the Arrow vectors the harness writes equal the
-  ones the Arrow cache builder produces for the same rows.
+- **Its batch is the cache's.** By construction: the harness writes and reads its batches with
+  the cache serializer's own two iterators (`VarkaCacheBatches`), so there is no second writer to
+  compare.
 
 ## 5. Steps
 
@@ -91,13 +95,13 @@ One `VarkaSharedSessions` suite, small, a test a path rather than a test a row:
 
 ## 6. Open questions
 
-- **The optimizer's expression rules.** `SparkOptimizer` is in sql/core and adds rules to the
-  catalyst optimizer; the harness can build it without a session only if none of its rules needs
-  one. Step 1 settles it, and section 4's equality test catches a difference either way.
-- **The status word.** `project` and `projectFused` consume each kernel call's status and fall
-  back on a decline; the harness needs it per batch for the domains. Either a seam in main code
-  (the evaluator handing its last statuses to a test hook) or the JFR fallback event the
-  end-to-end suite reads now, which cost 0.8% of its profile. Step 1 picks.
+- **The optimizer's expression rules.** Settled in step 1: `SparkOptimizer` builds over an
+  in-memory `SessionCatalog` with the builtin functions, and `VarkaHarnessParitySuite` finds
+  all 1,011 of the coverage table's expressions on its three fixtures equal to a session's.
+- **The status word.** Settled in step 1: every decline goes through
+  `VarkaFallbackAccounting.declinedBatch` and its JFR fallback event, which carries the status
+  per batch, so the domains read the event in-process as the end-to-end suite does, with no
+  seam in main code.
 - **ANSI mode and the session's conf.** The expression's behaviour under ANSI is read from
   `SQLConf.get`; the harness sets it per test through `withSQLConf`, as catalyst's own suites do.
 - **The row consumer's residual pass.** `projectFused` leaves residual entries to the row node;
