@@ -99,8 +99,8 @@ class VarkaFloatingLaneSuite extends QueryTest with VarkaSharedSessions with Var
   /** One query on every fixture: fused, the same answer bit for bit, and a kernel ran. */
   private def checkFused(query: String): Unit = fixtures.foreach { case (fixture, _) =>
     val q = query.replace("$t", fixture)
-    val expected = spark.sql(q)
     val actual = varkaSpark.sql(q)
+    val expected = expectedSql(q, actual)
     val plan = actual.queryExecution.executedPlan
     withClue(s"$fixture: $q") {
       assertFused(plan)
@@ -120,7 +120,7 @@ class VarkaFloatingLaneSuite extends QueryTest with VarkaSharedSessions with Var
     val actual = varkaSpark.sql(q)
     withClue(s"$fixture: $q") {
       assertNotFused(actual.queryExecution.executedPlan)
-      checkAnswer(actual, spark.sql(q))
+      checkAnswer(actual, expectedSql(q, actual))
     }
   }
 
@@ -209,7 +209,7 @@ class VarkaFloatingLaneSuite extends QueryTest with VarkaSharedSessions with Var
         val actual = varkaSpark.sql(q)
         withClue(q) {
           assertFused(actual.queryExecution.executedPlan)
-          checkAnswer(actual, spark.sql(q))
+          checkAnswer(actual, expectedSql(q, actual))
         }
       }
     }
