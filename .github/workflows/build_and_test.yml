@@ -1465,8 +1465,25 @@ jobs:
       if: matrix.module == 'sql' && matrix.shard == '0/2'
       continue-on-error: true
       run: rm -f target/varka-matrix-build.tar
+    # The sql suites record, as they run at the defaults, which option configurations move each
+    # test (VarkaTestReach), so that the option matrix dispatched on this commit runs a
+    # configuration only over the tests it moves (VARKA-507). The catalyst suites do not: their
+    # tree suites emit hundreds of thousands of kernels, which a record would emit again under
+    # every configuration, and they filter their own trees instead (VarkaReach).
     - name: Run the Varka suites of ${{ matrix.module }}, ${{ matrix.part }}
-      run: ./dev/varka_scoped_suites.sh ${{ matrix.module }} --shard ${{ matrix.shard }}
+      run: |
+        if [ "${{ matrix.module }}" = sql ]; then
+          export VARKA_REACH_RECORD=$PWD/target/varka-reach.tsv
+        fi
+        ./dev/varka_scoped_suites.sh ${{ matrix.module }} --shard ${{ matrix.shard }}
+    - name: Upload the record of which configurations move each test
+      if: matrix.module == 'sql'
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: varka-matrix-reach-${{ matrix.module }}-${{ matrix.slug }}
+        path: target/varka-reach.tsv
+        retention-days: 1
     # The share's JUnit reports, from which the committed weights are refreshed
     # (dev/varka_suite_shards.py --update-weights) when the jobs' times drift apart.
     - name: Upload the Varka suites' JUnit reports

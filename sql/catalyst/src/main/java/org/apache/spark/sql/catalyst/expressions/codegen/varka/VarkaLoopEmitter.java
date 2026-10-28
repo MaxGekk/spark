@@ -336,6 +336,7 @@ public final class VarkaLoopEmitter {
     if (outputs.isEmpty()) {
       throw VarkaErrors.illegalArgument("no output chains to emit");
     }
+    VarkaCompileObserver.emitted(outputs, numInputs, numLiterals, options);
     // The planner and the body emitters index the outputs per method, so a caller's list that is
     // not random access - a Scala List seen through asJava, as the tools pass it - would make every
     // lookup a walk and the emission quadratic in the width for that reason alone. The shape

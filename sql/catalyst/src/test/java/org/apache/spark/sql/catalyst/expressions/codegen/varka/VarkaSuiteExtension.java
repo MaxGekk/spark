@@ -106,6 +106,10 @@ public final class VarkaSuiteExtension
   @Override
   public void beforeAll(ExtensionContext context) {
     checkShape(context.getRequiredTestClass());
+    // The option matrix's reach recording, where the run asks for one, and the suite's window,
+    // which takes what it compiles outside a test as every one of its tests' (VarkaTestReach).
+    VarkaTestReach.install();
+    VarkaTestReach.suiteBegin(context.getRequiredTestClass().getSimpleName());
     if (VarkaMemorySanitizer.ENABLED) {
       context.getStore(NAMESPACE).put(ARROW_BEFORE,
           ArrowUtils.rootAllocator().getAllocatedMemory());
@@ -114,6 +118,7 @@ public final class VarkaSuiteExtension
 
   @Override
   public void afterAll(ExtensionContext context) {
+    VarkaTestReach.suiteEnd(context.getRequiredTestClass().getSimpleName());
     Long before = context.getStore(NAMESPACE).get(ARROW_BEFORE, Long.class);
     if (before == null) {
       return;
