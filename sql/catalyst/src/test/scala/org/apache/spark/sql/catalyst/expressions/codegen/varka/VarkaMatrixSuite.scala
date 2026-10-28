@@ -56,6 +56,18 @@ class VarkaMatrixSuite extends SparkFunSuite with VarkaTestWatchdog {
     assert(VarkaMatrix.configurations.contains("division=DOUBLE_DIV"))
   }
 
+  test("an arm that emits what the defaults or another arm emits does not run") {
+    // Catches: the four useAVX levels run as four configurations when they are two emissions,
+    // one of them the defaults' (VarkaEmittedBytesSuite holds the bytes to that).
+    val levels = VarkaMatrix.configurations.filter(_.startsWith("useAVX="))
+    assert(levels === Seq("useAVX=2"))
+    val configs = VarkaMatrix.configurations
+    assert(configs.distinct === configs)
+    assert(configs.map(VarkaMatrix.parse).map(VarkaMatrixRuns.emissionKey).distinct.size ===
+      configs.filterNot(_.startsWith(VarkaMatrix.ARROW_BATCH_SIZE)).size + 1,
+      "two configurations emit alike")
+  }
+
   test("the batch-size axis changes no emit option and names its rows (VARKA-301)") {
     for (rows <- VarkaMatrix.ARROW_BATCH_SIZES) {
       val config = s"${VarkaMatrix.ARROW_BATCH_SIZE}=$rows"

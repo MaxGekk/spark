@@ -330,8 +330,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
   private def checkRowConsumer(row: CoverageRow, fixture: String): Unit = {
     val query = queryFor(row, fixture)
     val context = s"row consumer, $fixture, ${row.family}: ${row.sql}"
-    val expected = spark.sql(query)
     val actual = varkaSpark.sql(query)
+    val expected = expectedSql(query, actual)
     val plan = actual.queryExecution.executedPlan
     withClue(context) {
       assertFused(plan)
@@ -368,7 +368,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
         assert(cached.isDefined, "expected the view to be served from the cache")
         assert(cached.get.find(isColumnarVarkaNode).isDefined,
           s"expected a columnar Varka node under the cache:\n${cached.get.treeString}")
-        checkAnswer(varkaSpark.table(view), spark.table(view))
+        val served = varkaSpark.table(view)
+        checkAnswer(served, expectedOf(spark.table(view), served, view))
       }
     } finally {
       for (session <- Seq(spark, varkaSpark)) session.catalog.uncacheTable(view)
@@ -525,7 +526,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
       row: CoverageRow, fixture: String, mustFuse: Boolean = false): Seq[String] = {
     val p = row.executable
     def query(where: String): String = s"SELECT $allColumns FROM $fixture WHERE $where"
-    def onSpark(where: String): Seq[Row] = spark.sql(query(where)).collect().toSeq
+    def onSpark(where: String): Seq[Row] = expectedRows(query(where))
     // Varka's answer, from a Varka filter whose kernel served the batches: a filter the rule
     // left to Spark, or one that declined, would make the comparison Spark against itself.
     // `fused = false` is a filter the optimizer removed or turned into a null test over a
@@ -552,7 +553,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
     (onVarka(p), onVarka(s"NOT ($p)"), onVarka(unknown, fuses(unknown))) match {
       case (Right(t), Right(f), Right(u)) =>
         partitionFindings(t, f, u, onSpark(p), onSpark(s"NOT ($p)"), onSpark(unknown),
-          spark.sql(s"SELECT $allColumns FROM $fixture").collect().toSeq) ++
+          expectedRows(s"SELECT $allColumns FROM $fixture")) ++
           // The known rows, as a filter of their own: Spark's, and exactly the true and false.
           (onVarka(known, fuses(known)) match {
             case Right(k) =>
@@ -612,7 +613,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
         val rows = actual.collect().toSeq
         // Read after the run: the metric counts the batches the kernel served.
         val served = kernelServed(plan)
-        val wrong = QueryTest.sameRows(spark.sql(query).collect().toSeq, rows).map(d =>
+        val wrong = QueryTest.sameRows(expectedRows(query, plan), rows).map(d =>
           s"$query differs from Spark's:\n$d")
         (served, s"$query:\n${plan.treeString}", wrong.toSeq)
       }
@@ -643,7 +644,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
       s"SELECT rid FROM $fixture WHERE b AND l < l2 AND d < d2",
       s"SELECT rid, CASE WHEN b THEN l ELSE l2 END AS x, CASE WHEN b THEN d ELSE d2 END AS y " +
         s"FROM $fixture").map { query =>
-      val expected = spark.sql(query).collect().toSeq
+      val expected = expectedRows(query)
       val df = varkaSpark.sql(query)
       val actual = df.collect().toSeq
       QueryTest.sameRows(expected, actual).foreach(d => fail(s"$query differs from Spark's:\n$d"))
@@ -832,7 +833,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
         case Some(q) =>
           val (varka, plan) = runOutcome(varkaSpark, q)
           val served = varka.isInstanceOf[Answered] && plan.exists(kernelServed)
-          val difference = outcomeDifference(outcome(spark, q), varka)
+          val difference = outcomeDifference(expectedOutcome(q, plan), varka)
           val reach = if (position == Alone || !strict) None
           else if (served && declined.isDefined) {
             Some("served by a kernel, but on the declined list: remove the stale entry")
@@ -1242,9 +1243,9 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
       val view = partitionView(k, partition)
       val q = query(view)
       val where = s"$partition the domain, in $form"
-      val expected = outcome(spark, q)
       val ((actual, plan), events) =
         VarkaJfrTestSupport.withJfrRecording(classOf[VarkaFallbackEvent])(runOutcome(varkaSpark, q))
+      val expected = expectedOutcome(q, plan)
       val fallbacks = events.filter(VarkaJfrTestSupport.isEvent(_, classOf[VarkaFallbackEvent]))
       val statuses = fallbacks.filter(_.getString("cause") == VarkaFallbackEvent.RANGE_DECLINED)
         .map(_.getInt("status"))
@@ -1341,7 +1342,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
       withBothConf(SQLConf.IN_MEMORY_PARTITION_PRUNING.key, "false") {
         VarkaJfrTestSupport.withJfrRecording(classOf[VarkaFallbackEvent])(runOutcome(varkaSpark, q))
       }
-    assert(outcomeDifference(outcome(spark, q), actual).isEmpty)
+    assert(outcomeDifference(expectedOutcome(q, plan), actual).isEmpty)
     assert(!events.exists(VarkaJfrTestSupport.isEvent(_, classOf[VarkaFallbackEvent])))
     assert(plan.exists(kernelServed), plan.map(_.treeString).getOrElse("(no plan)"))
     val days = spark.sql(q).queryExecution.executedPlan.executeCollect()
@@ -1401,11 +1402,10 @@ private object VarkaCoverageDifferentialSuite {
    * given its position as an int `rid` that no coverage row names; `where` filters the rows.
    * The TIMESTAMP_NTZ columns are derived: `ntz` is `d` at the time of day `t`, `ntz2` is `d2`
    * at `t2`, so they span the calendar and are null where a source is. A day the conversion
-   * cannot take, which only the edges fixture holds, gives the epoch rather than an error, and
-   * not a null. The expected session's cache is cleared after every test (`SparkSessionBinder`)
-   * while Varka's is not, so from a suite's second test the row engine plans over the raw rows:
-   * it inlines `ntz`'s CASE, infers no `isnotnull(ntz)`, and raises on the cast that Varka's
-   * cached plan never evaluates (VARKA-498). With `ntz` never null the cast runs on both sides.
+   * cannot take, which only the edges fixture holds, gives a null rather than an error. Both
+   * sides read the cached view ([[sameCacheReads]]), so neither evaluates the CASE again: an
+   * uncached row engine would inline it, infer no `isnotnull(ntz)`, and raise on a cast the
+   * cached plans never evaluate (VARKA-498).
    *
    * The floating columns are derived too (VARKA-341), `floatingColumns` picked by `rid`, null
    * where `d`, `d2`, `i` and `l2` are.
@@ -1414,8 +1414,7 @@ private object VarkaCoverageDifferentialSuite {
     val withIds = values.zipWithIndex.map { case (v, rid) => s"($rid, ${v.stripPrefix("(")}" }
     def ntz(day: String, time: String): String =
       s"CASE WHEN abs(unix_date($day)) < $lastNtzDay " +
-        s"THEN CAST($day AS TIMESTAMP_NTZ) + ($time - TIME'00:00:00') " +
-        s"WHEN $day IS NOT NULL THEN TIMESTAMP_NTZ '1970-01-01 00:00:00' END"
+        s"THEN CAST($day AS TIMESTAMP_NTZ) + ($time - TIME'00:00:00') END"
     val floating = floatingColumns(Seq("d", "d2", "i", "l2").map(c =>
       s"CASE WHEN $c IS NOT NULL THEN rid % $floatingPicks END"))
     s"""SELECT rid, d, d2, i,

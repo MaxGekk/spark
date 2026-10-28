@@ -1395,7 +1395,8 @@ batches, an entry that did not fuse, or a slow kernel.
    this batch; falling back to the per-row path.", the same `Varka context:` block (`kind:
    kernel-failure`, shape hash, options, the batch's rows and nulls, the cause) and "Wrote a
    reproduction of this Varka failure (...) to <file>; replay it with dev/varka_emit.sh --replay
-   <file>".
+   <file>". The warning comes once per kernel in each task's evaluator: a kernel that fails on
+   every batch logs the rest at debug, and the fallback metrics count every batch.
 3. On a checkout, `dev/varka_emit.sh --replay <file>` rebuilds the kernel from the file's IR and
    options, runs it over the recorded batch and prints `REPRODUCED: the same signature` with exit
    0 when it fails the same way. It exits 1 when it does not (a fixed emitter, or an edited

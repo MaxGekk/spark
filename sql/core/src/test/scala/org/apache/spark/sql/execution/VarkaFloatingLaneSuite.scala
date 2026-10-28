@@ -140,19 +140,6 @@ class VarkaFloatingLaneSuite extends QueryTest with VarkaSharedSessions with Var
     cacheFixtures(varkaSpark)
   }
 
-  // The shared binder clears the row engine's cache after every test and leaves Varka's (row
-  // 501), so the fixtures are cached again for the row engine before each one. Both sides then
-  // read the same cache and prune its batches by the same statistics; Spark's statistics skip
-  // NaN, so `x = NaN` prunes every batch of a cached table, which Varka answers as Spark does.
-  override protected def beforeEach(): Unit = {
-    super.beforeEach()
-    names.foreach { name =>
-      if (!spark.catalog.isCached(name)) {
-        spark.catalog.cacheTable(name)
-      }
-    }
-  }
-
   /** The answer's cells, floating ones as their raw bits, so a NaN's payload and a sign count. */
   private def bits(df: DataFrame): Seq[Seq[Any]] = df.collect().toSeq.map(_.toSeq.map {
     case d: Double => ("double", java.lang.Double.doubleToRawLongBits(d))
@@ -169,14 +156,15 @@ class VarkaFloatingLaneSuite extends QueryTest with VarkaSharedSessions with Var
   private def checkFused(query: String): Unit = names.foreach { fixture =>
     val q = query.replace("$t", fixture)
     withBothConf(SQLConf.IN_MEMORY_PARTITION_PRUNING.key, "false") {
-      val expected = spark.sql(q)
       val actual = varkaSpark.sql(q)
+      val expected = expectedSql(q, actual)
       val plan = actual.queryExecution.executedPlan
       withClue(s"$fixture: $q") {
         assertFused(plan)
         checkAnswer(actual, expected)
         assert(bits(actual).sortBy(_.toString) === bits(expected).sortBy(_.toString))
-        // After the answer: the metric counts the batches the action above ran.
+        // After the answer: the metric counts the batches the action above ran. With pruning
+        // off the scan hands every batch on, so a kernel runs even where nothing is selected.
         assertKernelsRan(plan)
       }
     }
@@ -188,7 +176,7 @@ class VarkaFloatingLaneSuite extends QueryTest with VarkaSharedSessions with Var
     val actual = varkaSpark.sql(q)
     withClue(s"$fixture: $q") {
       assertNotFused(actual.queryExecution.executedPlan)
-      checkAnswer(actual, spark.sql(q))
+      checkAnswer(actual, expectedSql(q, actual))
     }
   }
 
@@ -323,7 +311,7 @@ class VarkaFloatingLaneSuite extends QueryTest with VarkaSharedSessions with Var
         val actual = varkaSpark.sql(q)
         withClue(q) {
           assertFused(actual.queryExecution.executedPlan)
-          checkAnswer(actual, spark.sql(q))
+          checkAnswer(actual, expectedSql(q, actual))
         }
       }
     }
