@@ -68,7 +68,7 @@ public final class VarkaCastMatrixSuite {
    * compiler's answer depends on the form: it fuses a day-time cast whose target ends in
    * {@code SECOND} and no other.
    */
-  private static final Map<String, DataType[]> TYPES = new LinkedHashMap<>();
+  static final Map<String, DataType[]> TYPES = new LinkedHashMap<>();
 
   // The type registry's census types and forms, in its order (VARKA-494).
   static {
@@ -80,7 +80,7 @@ public final class VarkaCastMatrixSuite {
   }
 
   /** The three modes' legality of one pair, as {@code casts.tsv} writes it. */
-  private record Legality(boolean legacy, boolean ansi, boolean tryCast) {
+  record Legality(boolean legacy, boolean ansi, boolean tryCast) {
     static final Legality NONE = new Legality(false, false, false);
 
     static Legality of(DataType from, DataType to) {
@@ -160,18 +160,33 @@ public final class VarkaCastMatrixSuite {
    * records what production fuses.
    */
   private static boolean fuses(DataType from, DataType to, String mode) {
-    Attribute x = VarkaSqlResolve.column("x", from);
-    var cols = CollectionConverters.asScala(List.<Attribute>of(x)).toSeq();
-    String sql = (mode.equals("try") ? "try_cast" : "CAST") + "(x AS " + to.sql() + ")";
-    SQLConf conf = SQLConf.get().clone();
-    conf.setConfString(SQLConf.ANSI_ENABLED().key(), mode.equals("legacy") ? "false" : "true");
-    Expression e = SQLConf$.MODULE$.withExistingConf(conf, () -> VarkaSqlResolve.parse(sql, cols));
+    var cols = castColumns(from);
+    Expression e = castExpression(cols, to, mode);
     if (to.equals(DataTypes.BooleanType)) {
       var p = VarkaExpressionCompiler.compilePredicate(e, cols, VarkaEmitOptions.DEFAULTS);
       return p.isPresent() && p.get().residualConjuncts().isEmpty();
     }
     var entry = CollectionConverters.asScala(List.of(VarkaSqlResolve.named(e, "c"))).toSeq();
     return VarkaExpressionCompiler.compile(entry, cols, VarkaEmitOptions.DEFAULTS).isPresent();
+  }
+
+  /** The one column {@link #castExpression} casts, {@code x} of type {@code from}. */
+  static scala.collection.immutable.Seq<Attribute> castColumns(DataType from) {
+    return CollectionConverters.asScala(List.<Attribute>of(VarkaSqlResolve.column("x", from)))
+        .toSeq();
+  }
+
+  /**
+   * {@code CAST(x AS to)}, or {@code try_cast} for the {@code try} mode, over {@code cols}'s one
+   * column, analysed with ANSI off for {@code legacy} and on otherwise: the cast as the matrix
+   * asks the compiler about it, which {@code VarkaDivisorProofSuite} also compiles.
+   */
+  static Expression castExpression(
+      scala.collection.immutable.Seq<Attribute> cols, DataType to, String mode) {
+    String sql = (mode.equals("try") ? "try_cast" : "CAST") + "(x AS " + to.sql() + ")";
+    SQLConf conf = SQLConf.get().clone();
+    conf.setConfString(SQLConf.ANSI_ENABLED().key(), mode.equals("legacy") ? "false" : "true");
+    return SQLConf$.MODULE$.withExistingConf(conf, () -> VarkaSqlResolve.parse(sql, cols));
   }
 
   /** The file's lines as the compiler answers them today: every legal cast of two forms. */
