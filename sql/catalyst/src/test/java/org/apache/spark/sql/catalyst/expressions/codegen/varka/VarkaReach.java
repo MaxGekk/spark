@@ -33,7 +33,10 @@ import java.util.function.Function;
  * these inputs, and every configuration still meets every tree. The caller says which options the
  * defaults run gave the case, by deriving them from {@link VarkaEmitOptions#DEFAULTS} the way it
  * derives the case's own from {@code VarkaMatrix.base}: a fuzzer that draws options per case draws
- * them again over the defaults. Options that are equal need no second emission.
+ * them again over the defaults. Options that are equal need no second emission. Equal bytes are
+ * enough only where nothing reads the options as the kernel runs: {@code VarkaKernelChecks} reads
+ * none, while {@code VarkaCompiledCheck} and Spark's evaluator read {@code exactRefusalStatus}, so
+ * the fuzzer, which runs its cases through the first, compares options alone.
  *
  * <p>The filter is a caller's choice, made where a test asserts that its cases agree with the
  * reference: a test that expects a planted fault to be found must run its cases. It is off in the

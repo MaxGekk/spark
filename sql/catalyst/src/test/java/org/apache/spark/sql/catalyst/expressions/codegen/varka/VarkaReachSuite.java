@@ -20,6 +20,7 @@ package org.apache.spark.sql.catalyst.expressions.codegen.varka;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.util.List;
 import java.util.function.Function;
@@ -77,9 +78,8 @@ public final class VarkaReachSuite {
   @DisplayName("equal options are the defaults run's case without a second emission")
   void equalOptionsNeedNoEmission() {
     var tally = new VarkaReach.Tally();
-    Function<VarkaEmitOptions, byte[]> refuse = o -> {
-      throw new AssertionError("emitted although the options are the defaults run's");
-    };
+    Function<VarkaEmitOptions, byte[]> refuse =
+        o -> fail("emitted although the options are the defaults run's");
     assertTrue(VarkaReach.ranAtDefaults(PLANTED, true, VarkaEmitOptions.DEFAULTS,
         VarkaEmitOptions.DEFAULTS, new byte[] {1}, refuse, tally));
     assertEquals(1, tally.skipped());
