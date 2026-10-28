@@ -15,12 +15,15 @@
 # limitations under the License.
 #
 
-# The option configuration matrix, every configuration (VARKA-248.md 3.2.8). The Varka suites
-# rerun once per configuration - the emit defaults with one option changed, carried by every
-# kernel they emit - in twelve jobs of four or five configurations each, split longest first by
-# their measured weights (sql/varka/matrix/seconds.tsv, VARKA-493), every job with its own
-# defaults run, which the declining check compares fused batches with. A pull request runs one
-# configuration in its varka-scoped jobs; this runs all of them once a week, so a configuration
+# The option configuration matrix, every configuration (VARKA-248.md 3.2.8). The Varka suites rerun
+# once per configuration - the emit defaults with one option changed, carried by every kernel they
+# emit - in eighteen jobs of two or three configurations each, split longest first by their measured
+# weights (sql/varka/matrix/seconds.tsv, VARKA-493), every job with its own defaults run, which the
+# declining check compares fused batches with. Eighteen, not fewer: a job takes about 2.5 times as
+# long on an EPYC 7763 as on a 9V45, and at twelve jobs a shard of five configurations was on course
+# for 3 h 40 min there, inside the 240-minute cap by minutes; at eighteen the slowest job is about 2
+# h 30 min on a 7763. Fourteen or sixteen jobs still leave a shard with four. A pull request runs
+# one configuration in its varka-scoped jobs; this runs all of them once a week, so a configuration
 # no pull request has drawn lately is still checked. See dev/varka_matrix.sh.
 name: Varka option matrix
 
@@ -33,7 +36,7 @@ on:
 
 jobs:
   matrix:
-    name: "Option matrix: shard ${{ matrix.shard }} of 12"
+    name: "Option matrix: shard ${{ matrix.shard }} of 18"
     # Never on apache/spark, whose tree has no Varka; on this project's repositories always.
     if: github.repository != 'apache/spark'
     runs-on: ubuntu-latest
@@ -41,7 +44,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
     steps:
     - name: Checkout
       uses: actions/checkout@v6
@@ -84,13 +87,13 @@ jobs:
         mkdir -p target
         # The small-tree series at size 4, which pull requests no longer run (VARKA-269 9): every
         # configuration meets every tree to size 4, IfElse included.
-        ./dev/varka_matrix.sh --all --shard ${{ matrix.shard }}/12 -j 2 --sbt-arg -Phive \
+        ./dev/varka_matrix.sh --all --shard ${{ matrix.shard }}/18 -j 2 --sbt-arg -Phive \
           --jvm-arg -Dvarka.series.size=4 | tee target/varka-matrix-report.txt
     - name: Summary
       if: always()
       run: |
         {
-          echo "## Option matrix, shard ${{ matrix.shard }} of 12"
+          echo "## Option matrix, shard ${{ matrix.shard }} of 18"
           echo '```'
           sed -n '/^configuration/,$p' target/varka-matrix-report.txt 2>/dev/null || echo "no report"
           echo '```'
