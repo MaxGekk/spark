@@ -28,10 +28,8 @@ import org.apache.spark.SparkArithmeticException
 import org.apache.spark.sql.{QueryTest, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.NamedExpression
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, VarkaExpressionCompiler}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaFallbackEvent, VarkaGuardSpec, VarkaJfrTestSupport, VarkaMatrix, VarkaTestWatchdog, VarkaTypes}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaFallbackEvent, VarkaGuardSpec, VarkaJfrTestSupport, VarkaTestWatchdog}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaGuardSpec.Verdict
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType
-import org.apache.spark.sql.catalyst.plans.logical.Project
 import org.apache.spark.sql.catalyst.util.DateTimeConstants
 import org.apache.spark.sql.execution.VarkaMaybeThrows.{difference => outcomeDifference, Answered, Raised}
 import org.apache.spark.sql.execution.columnar.InMemoryTableScanExec
@@ -103,45 +101,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
   /** The three answer fixtures, shared with the harness's suite (VARKA-509). */
   private val fixtures: Seq[(String, String)] = VarkaCoverageDifferentialSuite.fixtures
 
-  /**
-   * The ANSI form's fixture: one row at the extremes of every column's type beside a second row
-   * that carries the narrow columns' other bound, so the byte and short arithmetic has a
-   * raising row for each of its two directions. Under ANSI, the extremes make the rows that can
-   * overflow or leave a range raise, so the form can tell a skipped position from an evaluated
-   * one. Column `i` at `Int.MaxValue` is not
-   * a valid month, so `make_date(2021, i, 1)` raises too, which is a fair cell: both engines
-   * must raise it alone and neither where it is skipped.
-   *
-   * The two rows hold no null, so `coalesce(<column>, e)` never needs `e` on Spark. A third row
-   * of nulls is filtered out again by `rid`, which keeps every column nullable: over a column
-   * Spark knows to be non-nullable the optimizer would fold that COALESCE to the column, and
-   * Varka would never see `e` (the dense fixture's trick above).
-   */
-  private val extremes: (String, String) = {
-    val rows = Seq(
-      "(DATE'9999-12-31', DATE'0001-01-01', 2147483647, -2147483648, 178956970, 7, " +
-        "CAST('9223372036854775807' AS BIGINT), CAST('-9223372036854775808' AS BIGINT), " +
-        "TIME'23:59:59.999999', TIME'00:00:00', " +
-        "INTERVAL '106751991 04:00:54.775807' DAY TO SECOND, " +
-        "INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND, " +
-        "CAST(-128 AS TINYINT), CAST(-128 AS TINYINT), " +
-        "CAST(-32768 AS SMALLINT), CAST(-32768 AS SMALLINT))",
-      "(DATE'2024-02-29', DATE'2024-01-31', 3, 3, 1, 2, CAST('5000000000' AS BIGINT), " +
-        "CAST('1' AS BIGINT), TIME'12:34:56.789', TIME'00:00:00', " +
-        "INTERVAL '1 02:03:04.5' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND, " +
-        "CAST(127 AS TINYINT), CAST(-128 AS TINYINT), " +
-        "CAST(32767 AS SMALLINT), CAST(-32768 AS SMALLINT))",
-      "(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, " +
-        "NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)")
-    // `lrid` is `rid` as a BIGINT, the guard of a long-lane expression: one kernel holds one
-    // lane, so `CASE WHEN rid < 0 THEN greatest(l, l2) ...` mixes the int and long lanes and is
-    // never fused, where `CASE WHEN lrid < 0 ...` is.
-    val view = VarkaCoverageDifferentialSuite.fixtureView(rows, "\nWHERE rid < 2")
-    // `xrid` and `frid` are its DOUBLE and FLOAT twins (VARKA-341): a floating kernel holds no
-    // integral value until a mask crosses between the kinds.
-    "varka_coverage_extremes" -> (s"SELECT *, CAST(rid AS BIGINT) AS lrid, " +
-      s"CAST(rid AS DOUBLE) AS xrid, CAST(rid AS FLOAT) AS frid FROM ($view)")
-  }
+  /** The ANSI form's fixture, shared with the harness's suite (VARKA-509). */
+  private val extremes: (String, String) = VarkaCoverageDifferentialSuite.extremes
 
   private def cacheFixtures(session: SparkSession): Unit = {
     fixtures.foreach { case (name, sql) =>
@@ -288,43 +249,20 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
 
   private val extremesTable = extremes._1
 
-  /** The positions of the ANSI form; every one but the first is one Spark skips on both rows. */
-  private val Alone = "alone"
-  private val CaseArm = "the untaken arm of a CASE"
-  private val CoalesceTail = "a later COALESCE argument"
-  private val FalseAnd = "the right side of a false AND"
-  private val TrueOr = "the right side of a true OR"
+  // Each row's ANSI form - where Spark evaluates it and where it skips it, and the reach check
+  // of the skipped positions with its declined list - runs below the session, in
+  // VarkaCoverageHarnessSuite and VarkaAnsiForm (VARKA-509). The two tests below keep the error
+  // comparison a user meets, VarkaMaybeThrows' over a session.
 
   /**
-   * The extremes fixture's `rid` at the lane of `t`, the type registry's answer: `lrid` for the
-   * long lane, `xrid` and `frid` for the floating ones, `rid` for every other, so a guard and
-   * the expression it guards share a kernel.
-   */
-  private def guardOf(t: DataType): String = VarkaTypes.lane(t).toScala match {
-    case Some(LaneType.LONG) => "lrid"
-    case Some(LaneType.DOUBLE) => "xrid"
-    case Some(LaneType.FLOAT) => "frid"
-    case _ => "rid"
-  }
-
-  /**
-   * A value of the extremes fixture of `t`'s type that never raises, to stand beside an
-   * expression of that type in a CASE (`caseArm`) or ahead of it in a COALESCE: a column, which
-   * is non-null on both rows, so a COALESCE that starts with one never needs its second
-   * argument. Where the fixture has the type's family but not its exact fields or precision -
-   * `t - t2` is an HOUR TO SECOND interval beside `dt2`'s DAY TO SECOND - Spark widens the
-   * expression to the common type with a cast, which is still evaluated only where `e` is.
-   * Varka compiles a bare int column as no value, so the int CASE's other arm is `year(d2)`, an
-   * int the kernel computes and that cannot raise; the int COALESCE keeps the bare column, and
-   * the declined list says why it is not fused. The same column is what the false AND's right
-   * side compares `e` with (`caseArm` false), where a bare int column is an operand Varka takes.
+   * A value of the extremes fixture of `t`'s type that never raises, which the domains' filters
+   * compare an expression with (`caseArm` false): a column, non-null on both rows. Where the
+   * fixture has the type's family but not its exact fields, Spark widens the expression to the
+   * common type with a cast. `VarkaAnsiForm.standIn` is the harness's copy, for the ANSI form.
    */
   private def standIn(t: DataType, caseArm: Boolean): Option[String] = t match {
     case DateType => Some("d2")
     case IntegerType => Some(if (caseArm) "year(d2)" else "i")
-    // The narrow twins (VARKA-329): the fixture's second column of each type, which the value
-    // rows choose between. A CASE arm beside a narrow expression is the int guard `rid < 0` and
-    // a narrow branch, which the compiler widens to the int lane and stores narrow.
     case ByteType => Some("y2")
     case ShortType => Some("s2")
     case LongType => Some("l2")
@@ -337,160 +275,6 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
       Some(if (start == YearMonthIntervalType.YEAR) "ymy" else "ymm")
     case _: YearMonthIntervalType => Some("ym")
     case _ => None
-  }
-
-  /**
-   * The ANSI form's queries for a row: each position and its query, or None where the position
-   * cannot be written for the row. A projection `e` runs alone, in the untaken arm of
-   * `CASE WHEN rid < 0`, after a column in a COALESCE, and compared with a column behind
-   * `rid < 0`;
-   * a predicate `p` behind `rid < 0 AND` and `rid >= 0 OR`. `rid` is 0 and 1, so each guard
-   * decides every row, and Spark never evaluates the guarded side. Where the guard and the
-   * guarded side form one Varka expression - the CASE, the OR, the AND of a predicate - the
-   * guard is `lrid` for a long-lane expression, so the two share a lane.
-   */
-  private def ansiQueries(row: CoverageRow): Seq[(String, Option[String])] = {
-    val e = row.executable
-    val from = s"FROM $extremesTable"
-    row.form match {
-      case "predicate" =>
-        // The predicate's own columns, analyzed as a projection so no filter of the fixture's
-        // view joins them.
-        val read = spark.sql(s"SELECT ($e) AS v $from").queryExecution.analyzed match {
-          case Project(list, _) => list.flatMap(_.references.toSeq)
-          case other => fail(s"expected a projection, got\n$other")
-        }
-        val guard = read.map(a => guardOf(a.dataType)).find(_ != "rid").getOrElse("rid")
-        Seq(
-          FalseAnd -> Some(s"SELECT rid $from WHERE $guard < 0 AND ($e)"),
-          TrueOr -> Some(s"SELECT rid $from WHERE $guard >= 0 OR ($e)"))
-      case _ =>
-        val t = spark.sql(s"SELECT $e AS v $from").schema.head.dataType
-        val guard = guardOf(t)
-        Seq(
-          Alone -> Some(s"SELECT $e AS v $from"),
-          CaseArm -> standIn(t, caseArm = true).map(c =>
-            s"SELECT CASE WHEN $guard < 0 THEN $e ELSE $c END AS v $from"),
-          CoalesceTail -> standIn(t, caseArm = false).map(c =>
-            s"SELECT coalesce($c, $e) AS v $from"),
-          // `e = <column>`, not `e IS NOT NULL`: Varka fuses no IS NOT NULL over a computed
-          // value, so Spark's own filter would evaluate `e` above the kernel.
-          FalseAnd -> standIn(t, caseArm = false).map(c =>
-            s"SELECT rid $from WHERE $guard < 0 AND ($e) = $c"))
-    }
-  }
-
-  /**
-   * The positions where Varka does not serve a row's expression, with the reason, keyed by the
-   * row's `sql` and the position. A skipped position not served by a kernel is a check that
-   * compared Spark with itself, so it must be listed here; a listed one that is served fails as
-   * stale. Checked under the defaults only: what a configuration of the option matrix fuses is
-   * the matrix's own business, and the outcomes are compared under every configuration.
-   */
-  private val ansiDeclined: Map[(String, String), String] = {
-    val intCoalesce = "Varka's COALESCE takes only a bare date column before its last operand, " +
-      "and compiles no bare int column as a value (m9/SCOPE.md item 55)"
-    val intValued = Seq("datediff(d2, d)", "unix_date(d)", "year(d)", "month(d)", "day(d)",
-      "quarter(d)", "dayofyear(d)", "dayofweek(d)", "weekday(d)",
-      "extract(DAYOFWEEK_ISO FROM d)", "weekofyear(d)", "extract(YEAROFWEEK FROM d)",
-      "extract(YEAR FROM ym)", "extract(YEAR FROM ym) - 1", "i + 1", "i - 1", "year(d) * 2",
-      "-i", "year(d) + i", "CAST(ymm AS INT)", "CAST(ymy AS INT)", "hour(t)", "minute(t2)",
-      "second(t)", "hour(t) + 1", "CAST(time_to_millis(t) AS INT)", "i & 255", "i | 4096",
-      "i ^ 21845", "~i", "i << 3", "shiftright(i, i)", "i >>> 28", "bit_count(i)", "bit_count(l)",
-      "bit_count(l) + 1", "y1 + i", "CAST(s1 AS INT)", "CAST(y1 AS INT) * CAST(y2 AS INT)",
-      "CAST(s1 AS INT) * CAST(s2 AS INT)", "try_add(i, 1)", "try_subtract(i, 1)")
-    // `CAST(i AS INTERVAL DAY)` throws past `INTERVAL_DAY_LIMIT_DAYS`, so the compiler puts a
-    // bound on `i` that the evaluator checks before the kernel runs; the bound belongs to the
-    // column, not to the arm reading it, and the extremes row's `Int.MaxValue` declines the
-    // batch wherever the expression sits (m9/SCOPE.md item 96).
-    val dayCast = "d + CAST(i AS INTERVAL DAY)"
-    val columnBound = "the offset column's bound is checked per batch whichever arm reads it, " +
-      "and Int.MaxValue is past it, so the batch declines (m9/SCOPE.md item 96)"
-    // A check that condemns the batch - an overflow, a field out of range, a date leaving the
-    // range the calendar lowering is exact over - is qualified by the condition of a CASE arm
-    // it sits under (`guardUnderArm`), but not by the left side of an AND: the kernel computes
-    // the right side on every lane, and the extremes row's lane condemns the batch although
-    // `rid < 0` already rejected it (m9/SCOPE.md item 96).
-    val unqualified = "a check on the right side of an AND condemns the batch from a lane the " +
-      "left side rejected (m9/SCOPE.md item 96)"
-    val checkedRight = Seq("make_date(2021, i, 1)", "add_months(d, i)", "d + ym", "d - ym",
-      "ym - ymm", "ym + ym", "i + 1", "year(d) + i")
-    // The narrow arithmetic's rows (VARKA-330) decline no position of their own. CASE and
-    // COALESCE are served by VARKA-329's lift - an int-lane condition takes a narrow branch
-    // lifted to the int lane and stored narrow, and a bare narrow column is a value leaf - and
-    // so is a `try_` row's AND, whose narrow comparison lifts beside the int conjunct. The
-    // checked rows' AND is the `unqualified` reason above: the edges fixture's lane overflows
-    // whichever node the check sits on.
-    val narrowChecked = Seq("y1 + y2", "y1 - y2", "y1 * y2", "-y1", "abs(y1)",
-      "s1 + s2", "s1 - s2", "s1 * s2", "-s1", "abs(s1)")
-    intValued.map(sql => (sql, CoalesceTail) -> intCoalesce).toMap ++
-      Seq(CaseArm, CoalesceTail, FalseAnd).map(p => (dayCast, p) -> columnBound) ++
-      (checkedRight ++ narrowChecked).map(sql => (sql, FalseAnd) -> unqualified)
-  }
-
-  /** What the ANSI form found for one row, and where a kernel served it or both engines raised. */
-  private case class AnsiResult(findings: Seq[String], served: Seq[String], raised: Seq[String])
-
-  /** The ANSI form for one row. */
-  private def ansiCheck(row: CoverageRow): AnsiResult = {
-    val strict = VarkaMatrix.config.isEmpty
-    val results = ansiQueries(row).map { case (position, query) =>
-      val declined = ansiDeclined.get((row.sql, position))
-      query match {
-        case None =>
-          val finding = Option.when(strict && declined.isEmpty)(
-            s"$position: no column of the expression's type, and not on the declined list")
-          (finding.toSeq, None, None)
-        case Some(q) =>
-          val (varka, plan) = runOutcome(varkaSpark, q)
-          val served = varka.isInstanceOf[Answered] && plan.exists(kernelServed)
-          val difference = outcomeDifference(expectedOutcome(q, plan), varka)
-          val reach = if (position == Alone || !strict) None
-          else if (served && declined.isDefined) {
-            Some("served by a kernel, but on the declined list: remove the stale entry")
-          } else if (!served && declined.isEmpty) {
-            val node = if (plan.exists(find(_)(isVarkaNode).isDefined)) {
-              "a Varka node that served no batch, or left part of the query to the row engine"
-            } else {
-              "no Varka node"
-            }
-            Some(s"not served by a kernel ($node), and not on the declined list:\n" +
-              plan.map(_.treeString).getOrElse("(no plan)"))
-          } else {
-            None
-          }
-          ((difference ++ reach).map(f => s"$position: $q\n$f").toSeq,
-            Option.when(served)(position),
-            Option.when(difference.isEmpty && varka.isInstanceOf[Raised])(position))
-      }
-    }
-    AnsiResult(results.flatMap(_._1), results.flatMap(_._2), results.flatMap(_._3))
-  }
-
-  rows.foreach { row =>
-    test(s"${row.family}: ${row.sql} raises under ANSI only where the row engine does") {
-      // The in-memory scan prunes a batch whose statistics rule a filter out, and `rid < 0`
-      // rules out every batch: pruned, the guarded side would never meet a kernel and the
-      // check would pass by never running.
-      val result = withAnsi(enabled = true) {
-        withBothConf(SQLConf.IN_MEMORY_PARTITION_PRUNING.key, "false")(ansiCheck(row))
-      }
-      def list(positions: Seq[String]): String =
-        if (positions.isEmpty) "none" else positions.mkString(", ")
-      info(s"served by a kernel in: ${list(result.served)}")
-      info(s"raised by both engines in: ${list(result.raised)}")
-      assert(result.findings.isEmpty, result.findings.mkString("\n\n"))
-    }
-  }
-
-  test("the ANSI form's declined list names only positions its reach check reads") {
-    // An entry for a row the table lacks, for a position the row's form never runs, or for the
-    // lone position, which has no reach check, could never go stale.
-    val unread = ansiDeclined.keys.filterNot { case (sql, position) =>
-      position != Alone && rows.find(_.sql == sql).exists(row =>
-        ansiQueries(row).exists { case (p, q) => p == position && q.isDefined })
-    }
-    assert(unread.isEmpty, s"declined entries no reach check reads: $unread")
   }
 
   test("the ANSI form fails a raise where the row engine skips, and a missing one") {
@@ -965,6 +749,46 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
 }
 
 private object VarkaCoverageDifferentialSuite {
+
+  /**
+   * The ANSI form's fixture: one row at the extremes of every column's type beside a second row
+   * that carries the narrow columns' other bound, so the byte and short arithmetic has a
+   * raising row for each of its two directions. Under ANSI, the extremes make the rows that can
+   * overflow or leave a range raise, so the form can tell a skipped position from an evaluated
+   * one. Column `i` at `Int.MaxValue` is not
+   * a valid month, so `make_date(2021, i, 1)` raises too, which is a fair cell: both engines
+   * must raise it alone and neither where it is skipped.
+   *
+   * The two rows hold no null, so `coalesce(<column>, e)` never needs `e` on Spark. A third row
+   * of nulls is filtered out again by `rid`, which keeps every column nullable: over a column
+   * Spark knows to be non-nullable the optimizer would fold that COALESCE to the column, and
+   * Varka would never see `e` (the dense fixture's trick above).
+   */
+  lazy val extremes: (String, String) = {
+    val rows = Seq(
+      "(DATE'9999-12-31', DATE'0001-01-01', 2147483647, -2147483648, 178956970, 7, " +
+        "CAST('9223372036854775807' AS BIGINT), CAST('-9223372036854775808' AS BIGINT), " +
+        "TIME'23:59:59.999999', TIME'00:00:00', " +
+        "INTERVAL '106751991 04:00:54.775807' DAY TO SECOND, " +
+        "INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND, " +
+        "CAST(-128 AS TINYINT), CAST(-128 AS TINYINT), " +
+        "CAST(-32768 AS SMALLINT), CAST(-32768 AS SMALLINT))",
+      "(DATE'2024-02-29', DATE'2024-01-31', 3, 3, 1, 2, CAST('5000000000' AS BIGINT), " +
+        "CAST('1' AS BIGINT), TIME'12:34:56.789', TIME'00:00:00', " +
+        "INTERVAL '1 02:03:04.5' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND, " +
+        "CAST(127 AS TINYINT), CAST(-128 AS TINYINT), " +
+        "CAST(32767 AS SMALLINT), CAST(-32768 AS SMALLINT))",
+      "(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, " +
+        "NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)")
+    // `lrid` is `rid` as a BIGINT, the guard of a long-lane expression: one kernel holds one
+    // lane, so `CASE WHEN rid < 0 THEN greatest(l, l2) ...` mixes the int and long lanes and is
+    // never fused, where `CASE WHEN lrid < 0 ...` is.
+    val view = fixtureView(rows, "\nWHERE rid < 2")
+    // `xrid` and `frid` are its DOUBLE and FLOAT twins (VARKA-341): a floating kernel holds no
+    // integral value until a mask crosses between the kinds.
+    "varka_coverage_extremes" -> (s"SELECT *, CAST(rid AS BIGINT) AS lrid, " +
+      s"CAST(rid AS DOUBLE) AS xrid, CAST(rid AS FLOAT) AS frid FROM ($view)")
+  }
 
   /**
    * The three fixtures, each a view with the table's columns: `d`, `d2` (dates), `i` (int),

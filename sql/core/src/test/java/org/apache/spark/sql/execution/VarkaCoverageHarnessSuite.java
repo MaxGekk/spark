@@ -312,6 +312,47 @@ public final class VarkaCoverageHarnessSuite {
         String.join("\n", findings));
   }
 
+  // ---------------------------------------------------------------------------------------------
+  // The ANSI form (VARKA-138, VARKA-317)
+  // ---------------------------------------------------------------------------------------------
+
+  private static final VarkaHarnessPlans.Fixture EXTREMES = VarkaHarnessPlans.fixture(
+      VarkaCoverageDifferentialSuite$.MODULE$.extremes()._2());
+
+  @TestFactory
+  Stream<DynamicTest> ansiForm() {
+    return ROWS.stream().map(row -> DynamicTest.dynamicTest(row.family() + ": " + row.sql()
+        + " raises under ANSI only where the row engine does", () -> {
+          SQLConf conf = conf(true);
+          List<String> findings = withConf(conf, () -> VarkaAnsiForm.check(row, EXTREMES, conf,
+              VarkaMatrixRuns.CONFIG.isEmpty()));
+          assertTrue(findings.isEmpty(), String.join("\n\n", findings));
+        }));
+  }
+
+  @Test
+  @DisplayName("the ANSI form's declined list names only positions its reach check reads")
+  void ansiDeclinedListIsRead() {
+    // An entry for a row the table lacks, for a position the row's form never runs, or for the
+    // lone position, which has no reach check, could never go stale.
+    SQLConf conf = conf(true);
+    var unread = new ArrayList<String>();
+    withConf(conf, () -> {
+      for (String key : VarkaAnsiForm.DECLINED.keySet()) {
+        String[] parts = key.split("\t", 2);
+        boolean read = !parts[1].equals(VarkaAnsiForm.ALONE) && ROWS.stream()
+            .filter(r -> r.sql().equals(parts[0]))
+            .anyMatch(r -> VarkaAnsiForm.queries(r, EXTREMES).getOrDefault(parts[1],
+                java.util.Optional.empty()).isPresent());
+        if (!read) {
+          unread.add(key);
+        }
+      }
+      return null;
+    });
+    assertTrue(unread.isEmpty(), "declined entries no reach check reads: " + unread);
+  }
+
   @Test
   @DisplayName("a kernel planted to answer an overflowing row fails the harness")
   void plantedKernelFails() {
