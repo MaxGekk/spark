@@ -347,6 +347,7 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `make_ym_interval(year(d), month(d)) * 2` | `calendar`, `interval` | `unix_date(d) BETWEEN -719162 AND 2932896` | a checked multiply, so bounded operands again: `ym * 2` over a stored interval column declines | vector |
 | `abs(ym)` | `interval` | `ym > INTERVAL '-178956970-8' YEAR TO MONTH` | interval arithmetic is exact in every mode: the one count whose negation overflows declines | vector |
 | `ym - ymm` | `interval` | `CAST(ym AS BIGINT) - CAST(ymm AS BIGINT) BETWEEN -2147483648 AND 2147483647` | exact in every mode: a difference outside the month count's int declines | vector |
+| `ym + ym` | `interval` | `CAST(ym AS BIGINT) + CAST(ym AS BIGINT) BETWEEN -2147483648 AND 2147483647` | the sum, exact in every mode as the difference is | vector |
 | `CAST(ymy AS INTERVAL MONTH)` | none |  |  | vector |
 | `CAST(i AS INTERVAL MONTH)` | none |  | a relabel of the count; `CAST(i AS INTERVAL YEAR)` multiplies by twelve, checked, and declines over a bare int column | vector |
 | `CAST(ymm AS INT)` | none |  | a relabel of a MONTH-ended interval; a YEAR-ended one divides by twelve | vector |
@@ -365,6 +366,8 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `i - 1` | `intArithmetic` | `i > -2147483648` | checked under ANSI | vector |
 | `year(d) * 2` | `calendar`, `intArithmetic` | `unix_date(d) BETWEEN -719162 AND 2932896` | a multiply is checked, and only bounded operands take the check off: `i * 2` over a bare int column declines | vector |
 | `-i` | `intArithmetic` | `i > -2147483648` | checked under ANSI | vector |
+| `try_add(i, 1)` | `intArithmetic` |  | an overflowing lane is null, so the kernel declines nothing | vector |
+| `try_subtract(i, 1)` | `intArithmetic` |  | an overflowing lane is null | vector |
 | `year(d) + i` | `calendar`, `intArithmetic` | `unix_date(d) BETWEEN -719162 AND 2932896 AND i <= 2147483647 - year(d)` | checked under ANSI; the lower bound is out of reach, since a year is at least 1 | vector |
 
 #### Narrow arithmetic
@@ -427,6 +430,11 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `coalesce(d, d2)` | `condition` |  |  | vector |
 | `greatest(d, d2)` | `intArithmetic` |  |  | vector |
 | `least(d, d2)` | `intArithmetic` |  |  | vector |
+| `if(ym IS NULL, INTERVAL '1-2' YEAR TO MONTH, ym)` | `predicate`, `condition` |  |  | vector |
+| `CASE WHEN ym IS NULL THEN INTERVAL '1-2' YEAR TO MONTH ELSE ym END` | `predicate`, `condition` |  |  | vector |
+| `coalesce(ym, INTERVAL '1-2' YEAR TO MONTH)` | `condition` |  |  | vector |
+| `greatest(ym, INTERVAL '1-2' YEAR TO MONTH)` | `intArithmetic` |  |  | vector |
+| `least(ym, INTERVAL '-1-2' YEAR TO MONTH)` | `intArithmetic` |  |  | vector |
 
 #### Predicates
 
@@ -644,6 +652,15 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `if(s1 IS NULL, l, l2)` | `predicate`, `condition` |  | the short twin | per-lane: mask broadcast, mask logic, blend |
 | `greatest(t, t2)` | `intArithmetic` |  |  | per-lane: blend, mask broadcast |
 | `CASE WHEN dt > INTERVAL '0' SECOND THEN dt ELSE dt2 END` | `predicate`, `condition` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
+| `coalesce(l, l2)` | `condition` |  |  | per-lane: blend, mask broadcast |
+| `least(t, t2)` | `intArithmetic` |  |  | per-lane: blend, mask broadcast |
+| `CASE WHEN t < t2 THEN t ELSE t2 END` | `predicate`, `condition` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
+| `if(t < t2, t, t2)` | `predicate`, `condition` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
+| `coalesce(t, t2)` | `condition` |  |  | per-lane: blend, mask broadcast |
+| `greatest(dt, dt2)` | `intArithmetic` |  |  | per-lane: blend, mask broadcast |
+| `least(dt, dt2)` | `intArithmetic` |  |  | per-lane: blend, mask broadcast |
+| `if(dt < dt2, dt, dt2)` | `predicate`, `condition` |  |  | per-lane: compare to mask, blend, mask cast, mask broadcast |
+| `coalesce(dt, dt2)` | `condition` |  |  | per-lane: blend, mask broadcast |
 
 #### TIMESTAMP_NTZ columns
 
@@ -710,16 +727,16 @@ operands (a row counts once for each type it reads):
 <!-- BEGIN generated verification counts -->
 | Type | Rows | refinement | proof | exhaustive | owed | differential |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `bigint` | 43 | 0 | 2 | 0 | 2 | 39 |
+| `bigint` | 44 | 0 | 2 | 0 | 2 | 40 |
 | `bool` | 19 | 0 | 0 | 10 | 0 | 9 |
 | `byte` | 25 | 0 | 0 | 0 | 8 | 17 |
 | `date` | 84 | 17 | 0 | 1 | 0 | 66 |
-| `dt` | 11 | 2 | 0 | 0 | 0 | 9 |
-| `int` | 70 | 14 | 2 | 0 | 1 | 53 |
+| `dt` | 15 | 2 | 0 | 0 | 0 | 13 |
+| `int` | 72 | 14 | 2 | 0 | 1 | 55 |
 | `ntz` | 19 | 0 | 1 | 0 | 0 | 18 |
 | `short` | 25 | 0 | 0 | 0 | 8 | 17 |
-| `time` | 28 | 6 | 0 | 0 | 2 | 20 |
-| `ym` | 24 | 7 | 2 | 0 | 2 | 13 |
+| `time` | 32 | 6 | 0 | 0 | 2 | 24 |
+| `ym` | 30 | 7 | 2 | 0 | 2 | 19 |
 <!-- END generated verification counts -->
 
 ## Glossary
