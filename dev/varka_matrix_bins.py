@@ -21,9 +21,9 @@ runs, packed into CI jobs of about the same length.
 
 A unit is one runner JVM: a suite that runs alone (`@own` in `dev/varka_matrix.sh
 --list-suites`), or a group of a module's other suites under one configuration, cut so that no
-group outweighs a lane. A bin is one CI job with two lanes, two JVMs at a time on the runner's
-four cores, and takes units longest first onto its lighter lane until both lanes reach the
-target. The defaults are a configuration like any other, named `defaults`.
+group outweighs a lane. A bin is one CI job with two lanes (`--lanes`), two JVMs at a time on
+the runner's four cores, and takes units longest first onto its lightest lane until every lane
+reaches the target. The defaults are a configuration like any other, named `defaults`.
 
 A unit's weight is its suites' seconds, from `sql/varka/matrix/suite-seconds.tsv` where a
 suite is listed there (written by `times` from a fanned-out run's JUnit reports) and from the
@@ -125,28 +125,28 @@ def units(configurations, suites, weight, config_weights, lane):
     return out
 
 
-def pack(all_units, lane):
-    """Bins of two lanes each, units longest first onto the lighter lane, a bin closed when a
-    unit would take its lighter lane past the target; a unit longer than a lane takes a bin."""
+def pack(all_units, lane, lanes=LANES):
+    """Bins of `lanes` lanes each, units longest first onto the lightest lane, a bin closed when
+    a unit would take its lightest lane past the target; a unit longer than a lane takes a bin."""
     bins = []
     for unit in sorted(all_units, key=lambda u: (-u[3], u[0], u[1], u[2])):
         placed = False
         for b in bins:
-            lanes = b["lanes"]
-            k = min(range(LANES), key=lambda i: lanes[i])
-            if lanes[k] + unit[3] <= lane:
-                lanes[k] += unit[3]
+            loads = b["lanes"]
+            k = min(range(lanes), key=lambda i: loads[i])
+            if loads[k] + unit[3] <= lane:
+                loads[k] += unit[3]
                 b["units"].append(unit)
                 placed = True
                 break
         if not placed:
-            bins.append({"lanes": [unit[3]] + [0.0] * (LANES - 1), "units": [unit]})
+            bins.append({"lanes": [unit[3]] + [0.0] * (lanes - 1), "units": [unit]})
     return bins
 
 
-def plan(configurations, suites, suite_seconds, suite_times, config_weights, lane):
+def plan(configurations, suites, suite_seconds, suite_times, config_weights, lane, lanes=LANES):
     weight = suite_weight(suite_seconds, suite_times)
-    bins = pack(units(configurations, suites, weight, config_weights, lane), lane)
+    bins = pack(units(configurations, suites, weight, config_weights, lane), lane, lanes)
     include = []
     for k, b in enumerate(bins):
         include.append(
@@ -210,6 +210,11 @@ class SelfTest(unittest.TestCase):
         # The long unit fills one lane alone; the short ones share the other.
         self.assertEqual(sorted(bins[0]["lanes"]), [50.0, 920.0])
 
+    def test_three_lanes_take_a_third_unit_before_a_new_bin(self):
+        units = [("defaults", "sql", [s], 100.0) for s in "ABC"]
+        self.assertEqual(len(pack(units, 100.0)), 2)
+        self.assertEqual(len(pack(units, 100.0, lanes=3)), 1)
+
     def test_shared_suites_split_into_groups_no_heavier_than_a_lane(self):
         suites = [("sql", [(f"S{i}", False) for i in range(10)])]
         weights = {f"S{i}": 100.0 for i in range(10)}
@@ -239,6 +244,12 @@ def main(argv):
         default=480.0,
         help="a lane's seconds on a fast runner (default 480)",
     )
+    p.add_argument(
+        "--lanes",
+        type=int,
+        default=LANES,
+        help=f"JVMs a bin runs at a time (default {LANES})",
+    )
     t = sub.add_parser("times")
     t.add_argument("dirs", nargs="+")
     args = parser.parse_args(argv)
@@ -262,6 +273,7 @@ def main(argv):
         read_tsv(SUITE_TIMES),
         read_tsv(CONFIG_WEIGHTS),
         args.target,
+        args.lanes,
     )
     json.dump(out, sys.stdout)
     print()
