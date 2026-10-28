@@ -681,6 +681,31 @@ class VarkaEmittedBytesSuite extends SparkFunSuite with VarkaTestWatchdog {
     }
   }
 
+  test("an arm the option matrix runs in another's place emits that arm's bytes") {
+    // The matrix runs one configuration per emission (VarkaMatrixRuns.emissionKey): an arm whose
+    // key is another's is left out, so its bytes must be the key's on every shape the oracle
+    // holds, at both widths. Catches: a new reader of a field the key folds away, which would
+    // make the matrix skip an emission no other configuration produces.
+    val folded = optionArms.filter(_.subject.isEmpty).filter { a =>
+      val options = a.arm(VarkaMatrix.base)
+      VarkaMatrixRuns.emissionKey(options) != options
+    }
+    assert(folded.map(_.name).toSet === Set("useAVX=0", "useAVX=1", "useAVX=3"))
+    folded.foreach { a =>
+      val key = (o: VarkaEmitOptions) => VarkaMatrixRuns.emissionKey(a.arm(o))
+      widths.foreach { w =>
+        assert(armDigest(a.arm, w) === armDigest(key, w), s"${a.name} at $w lanes")
+      }
+    }
+    // The comparison can fail: the level that stands for the others emits other bytes than the
+    // defaults do, so the matrix keeps it.
+    val level = VarkaMatrixRuns.FALLBACK_USE_AVX
+    widths.foreach { w =>
+      assert(armDigest(_.withUseAVX(level), w) !== armDigest(identity, w),
+        s"useAVX=$level emits the defaults' bytes at $w lanes")
+    }
+  }
+
   test("validityOrFirst moves nothing at the defaults and moves the bytes over its subject " +
       "(VARKA-247)") {
     // Over the coverage rows and 200 fuzz shapes per lane at both widths, the set the audit

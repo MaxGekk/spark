@@ -95,6 +95,8 @@ jobs:
           sed -n '/^configuration/,$p' target/varka-matrix-report.txt 2>/dev/null || echo "no report"
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
+    # The JUnit reports give each suite's time under each configuration, which the run logs do
+    # not: what a change to the matrix's cost is measured by.
     - name: Upload the run logs
       if: always()
       uses: actions/upload-artifact@v4
@@ -105,6 +107,7 @@ jobs:
           target/platform.txt
           target/varka-matrix/runs/*/*/run.log
           target/varka-matrix/runs/*/*/fused.tsv
+          target/varka-matrix/runs/*/*/junit/*.xml
         if-no-files-found: ignore
         retention-days: 30
 
