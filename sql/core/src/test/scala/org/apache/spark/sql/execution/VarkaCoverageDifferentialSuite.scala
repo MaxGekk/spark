@@ -25,20 +25,19 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import org.scalatest.exceptions.TestFailedException
 
 import org.apache.spark.SparkArithmeticException
-import org.apache.spark.sql.{QueryTest, Row, SparkSession}
-import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, IsNotNull, IsNull, NamedExpression}
+import org.apache.spark.sql.{QueryTest, SparkSession}
+import org.apache.spark.sql.catalyst.expressions.NamedExpression
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, VarkaExpressionCompiler}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaFallbackEvent, VarkaGuardSpec, VarkaJfrTestSupport, VarkaMatrix, VarkaTestWatchdog, VarkaTypes}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaGuardSpec.Verdict
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType
-import org.apache.spark.sql.catalyst.optimizer.{BooleanSimplification, InferFiltersFromConstraints, NullDownPropagation, NullPropagation}
 import org.apache.spark.sql.catalyst.plans.logical.Project
 import org.apache.spark.sql.catalyst.util.DateTimeConstants
 import org.apache.spark.sql.execution.VarkaMaybeThrows.{difference => outcomeDifference, Answered, Raised}
 import org.apache.spark.sql.execution.columnar.InMemoryTableScanExec
 import org.apache.spark.sql.execution.varka.{VarkaFallbackAccounting, VarkaKernelRunner}
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType,
+import org.apache.spark.sql.types.{ByteType, DataType, DateType,
   DayTimeIntervalType, DoubleType, FloatType, IntegerType, LongType, ShortType,
   TimestampNTZType, TimeType, YearMonthIntervalType}
 
@@ -46,31 +45,26 @@ import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType,
  * Every row of the published coverage table, run through both engines (VARKA-120).
  *
  * `VarkaCoverageSuite` proves each row of `sql/varka/coverage.json` compiles to a fused kernel
- * and that the table names every expression the compiler admits. This suite proves the kernel
- * behind each row answers what the row engine answers. It reads the committed JSON and nothing
- * else, so a row added to the coverage suite and regenerated into the file is run here without
- * a change to this file: adding an arm without a row fails the coverage suite, adding a row
- * without correctness fails this one, and the two together are the guarantee the table makes.
+ * and that the table names every expression the compiler admits. This suite and
+ * `VarkaCoverageHarnessSuite` prove the kernel behind each row answers what the row engine
+ * answers. Both read the committed JSON and nothing else, so a row added to the coverage suite
+ * and regenerated into the file is run without a change to either: adding an arm without a row
+ * fails the coverage suite, adding a row without correctness fails these, and together they are
+ * the guarantee the table makes.
  *
- * Each row runs on three fixtures over the table's sixteen source columns, plus the derived
- * BOOLEAN columns `b` and `b2` - nulls sprinkled per column, with a narrow pair null on the
- * left only and another on the right only, no nulls, and every column null in every row - and
- * under both
- * consumers a Varka node can have: rows, the plan every direct query gets, and columns, which
- * the Arrow cache builder takes when a view over the query is cached. The hand-chosen shapes in
- * `VarkaDifferentialSuite` (extreme offsets, overflow, cache conversion) stay there; this is the
- * floor under them.
+ * The fixtures cover the table's sixteen source columns, plus the derived BOOLEAN columns `b`
+ * and `b2` - nulls sprinkled per column, with a narrow pair null on the left only and another on
+ * the right only, no nulls, and every column null in every row. Every row's answer under both
+ * consumers a Varka node can have - rows, the plan every direct query gets, and columns, which
+ * the Arrow cache builder takes when a view over the query is cached - and the partition oracle
+ * of every predicate row (VARKA-138) run below the session, in `VarkaCoverageHarnessSuite`
+ * (VARKA-509). This suite keeps the answer form for the first row of each family, the plumbing
+ * only a session has: the columnar rule's plan, the cache and the two nodes. The hand-chosen
+ * shapes in `VarkaDifferentialSuite` (extreme offsets, overflow, cache conversion) stay there;
+ * this is the floor under them.
  *
- * Two stronger forms run over the same rows (VARKA-138):
+ * Two stronger forms run here over the rows:
  *
- *  - **The partition oracle.** A predicate `p` splits a table into the rows where it is true,
- *    false and unknown. Each predicate row is run as `WHERE p`, `WHERE NOT (p)` and
- *    `WHERE (p) IS NULL` on Varka, on every fixture, under the default optimizer and with the
- *    three rules that rewrite those filters before Varka sees them excluded; each must be
- *    Spark's, and the three must share no row and leave none out. Comparing `WHERE p` alone, as
- *    the test per row does, cannot see a kernel that answers false where it should answer
- *    unknown. `WHERE (p) IS NOT NULL` must be exactly the true and the false rows, and both
- *    null tests run as the condition of a CASE, where the kernel serves the whole projection.
  *  - **The ANSI form.** A fourth fixture holds the types' extremes, and each row is run where
  *    Spark evaluates it and where Spark skips it (an untaken CASE arm, a later COALESCE
  *    argument, the right side of a false AND, of a true OR). Both engines must raise the same
@@ -246,7 +240,17 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
     assert(rows.forall(_.executable.nonEmpty))
   }
 
-  rows.foreach { row =>
+  /**
+   * The first row of each family, which this suite still runs through a session under both
+   * consumers: the end-to-end layer over the harness (VARKA-509), whose
+   * `VarkaCoverageHarnessSuite` holds every row's answers to Spark's below the session and so
+   * leaves this suite the plumbing only a session has - the columnar rule's plan, the cache, the
+   * row and the columnar nodes.
+   */
+  private lazy val sampleRows: Seq[CoverageRow] =
+    rows.filter(r => rows.find(_.family == r.family).contains(r))
+
+  sampleRows.foreach { row =>
     test(s"${row.family}: ${row.sql} matches the row engine under both consumers") {
       withFloatingPruningOff(row) {
         fixtures.foreach { case (fixture, _) =>
@@ -275,258 +279,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
     if (floatingColumn.findFirstIn(row.executable).isEmpty) body
     else withBothConf(SQLConf.IN_MEMORY_PARTITION_PRUNING.key, "false")(body)
 
-  // ---------------------------------------------------------------------------------------------
-  // The partition oracle (VARKA-138)
-  // ---------------------------------------------------------------------------------------------
-
-  /** Every column of a fixture, `rid` first, as the partition queries select them. */
-  private val allColumns =
-    "rid, d, d2, i, ymm, ymy, ym, l, l2, t, t2, dt, dt2, b, b2, y1, y2, s1, s2"
-
-  /**
-   * The optimizer rules that rewrite the partitions before Varka sees them: `BooleanSimplification`
-   * and `NullDownPropagation` turn `NOT (d < d2)` and `(d < d2) IS NULL` into tests on the
-   * columns, and `InferFiltersFromConstraints` adds `isnotnull` conjuncts beside a predicate that
-   * rejects nulls. With them excluded, `NOT (p)` reaches Varka as written.
-   */
-  private val partitionRewrites = Seq(BooleanSimplification, NullDownPropagation,
-    InferFiltersFromConstraints).map(_.ruleName).mkString(",")
-
-  /**
-   * `partitionRewrites` and `NullPropagation`, for the null-safe rows (VARKA-336). A null-safe
-   * equality is never null, so by default `NullPropagation` folds `(p) IS NULL` to false before
-   * any plan holds a filter, and the "unknown partition is empty" would be Spark folding a
-   * constant. With the rule excluded `(p) IS NULL` reaches Varka as a null test over the
-   * node, and the kernel's answer is what the partition check compares.
-   */
-  private val nullSafeRewrites = s"$partitionRewrites,${NullPropagation.ruleName}"
-
-  /** Whether `sql` is a null-safe equality or an `IS [NOT] TRUE|FALSE`, which parses to one. */
-  private def isNullSafe(sql: String): Boolean =
-    Seq("<=>", "equal_null", " IS TRUE", " IS FALSE", " IS NOT TRUE", " IS NOT FALSE",
-      " IS DISTINCT FROM")
-      .exists(sql.contains)
-
-  private def isVarkaFilter(plan: SparkPlan): Boolean = plan match {
-    case _: VarkaFilterExec | _: VarkaFilterColumnarToRowExec => true
-    case _ => false
-  }
-
-  /**
-   * What is wrong with Varka's partitions of a table under a predicate `p`, or nothing.
-   * `varkaTrue`, `varkaFalse` and `varkaUnknown` are Varka's answers to `WHERE p`,
-   * `WHERE NOT (p)` and `WHERE (p) IS NULL`, the rest Spark's: the same three and the whole
-   * table; every row starts with its `rid`. Rows are compared as rows, never counted - a count
-   * misses a wrong row standing in for a right one.
-   *
-   * With each of Varka's three equal to Spark's, the last checks hold Spark's own three filters
-   * to each other: no row in two of them, and none in neither. That is the point of them: both
-   * engines share the optimizer, so a rewrite of `NOT (p)` that both get wrong agrees with
-   * itself in a differential and still breaks the partition.
-   */
-  private def partitionFindings(
-      varkaTrue: Seq[Row],
-      varkaFalse: Seq[Row],
-      varkaUnknown: Seq[Row],
-      sparkTrue: Seq[Row],
-      sparkFalse: Seq[Row],
-      sparkUnknown: Seq[Row],
-      table: Seq[Row]): Seq[String] = {
-    def ids(rows: Seq[Row]): Set[Int] = rows.map(_.getInt(0)).toSet
-    val (t, f, u) = (ids(varkaTrue), ids(varkaFalse), ids(varkaUnknown))
-    def shared(a: Set[Int], b: Set[Int], what: String): Option[String] = {
-      val both = a.intersect(b)
-      Option.when(both.nonEmpty)(s"rows both $what: rid ${both.toSeq.sorted.mkString(", ")}")
-    }
-    val neither = ids(table) -- t -- f -- u
-    Seq(
-      QueryTest.sameRows(sparkTrue, varkaTrue).map(d => s"WHERE p differs from Spark's:\n$d"),
-      QueryTest.sameRows(sparkFalse, varkaFalse).map(d =>
-        s"WHERE NOT (p) differs from Spark's:\n$d"),
-      QueryTest.sameRows(sparkUnknown, varkaUnknown).map(d =>
-        s"WHERE (p) IS NULL differs from Spark's:\n$d"),
-      shared(t, f, "true and false"),
-      shared(t, u, "true and unknown"),
-      shared(f, u, "false and unknown"),
-      Option.when(neither.nonEmpty)(
-        s"rows neither true, false nor unknown: rid ${neither.toSeq.sorted.mkString(", ")}")
-    ).flatten
-  }
-
-  /**
-   * Whether `p` can be null on `fixture`. Where it cannot - a null test is never null - Spark's
-   * `NullPropagation` folds `(p) IS NULL` to false and `(p) IS NOT NULL` to true before any plan
-   * holds a filter or a condition over them, so there is nothing for Varka to fuse; the answers
-   * are still compared.
-   */
-  private def nullable(p: String, fixture: String): Boolean =
-    spark.sql(s"SELECT ($p) AS b FROM $fixture").schema("b").nullable
-
-  /**
-   * Whether Spark's optimized plan for `query` holds a null test over a computed value, neither
-   * a column nor a predicate: `NullDownPropagation` turns `(month(d) > i) IS NULL` into
-   * `isnull(month(d)) OR isnull(i)`. Varka declines such a test by design, since a computed
-   * value's validity word exists only during its value walk, after the conditions are lowered.
-   */
-  private def nullTestOverValue(query: String): Boolean = {
-    def overValue(child: Expression): Boolean =
-      !child.isInstanceOf[Attribute] && child.dataType != BooleanType
-    spark.sql(query).queryExecution.optimizedPlan.exists(_.expressions.exists(_.exists {
-      case IsNull(child) => overValue(child)
-      case IsNotNull(child) => overValue(child)
-      case _ => false
-    }))
-  }
-
-  /** The partition oracle for one predicate row on one fixture, under the session's optimizer. */
-  private def partitionCheck(
-      row: CoverageRow, fixture: String, mustFuse: Boolean = false): Seq[String] = {
-    val p = row.executable
-    def query(where: String): String = s"SELECT $allColumns FROM $fixture WHERE $where"
-    def onSpark(where: String): Seq[Row] = expectedRows(query(where))
-    // Varka's answer, from a Varka filter whose kernel served the batches: a filter the rule
-    // left to Spark, or one that declined, would make the comparison Spark against itself.
-    // `fused = false` is a filter the optimizer removed or turned into a null test over a
-    // computed value, whose answer is compared alone.
-    def onVarka(where: String, fused: Boolean = true): Either[String, Seq[Row]] = {
-      val df = varkaSpark.sql(query(where))
-      val plan = df.queryExecution.executedPlan
-      if (!fused) {
-        Right(df.collect().toSeq)
-      } else if (find(plan)(isVarkaFilter).isEmpty) {
-        Left(s"no Varka filter for WHERE $where:\n${plan.treeString}")
-      } else {
-        val rows = df.collect().toSeq
-        if (kernelServed(plan)) Right(rows)
-        else Left(s"no kernel served all of WHERE $where:\n${plan.treeString}")
-      }
-    }
-    val unknown = s"($p) IS NULL"
-    val known = s"($p) IS NOT NULL"
-    // A null-safe row with `NullPropagation` excluded must fuse its null tests whatever
-    // `nullable` says: the kernel, not Spark's folding, is what answers them.
-    def fuses(where: String): Boolean =
-      mustFuse || (nullable(p, fixture) && !nullTestOverValue(query(where)))
-    (onVarka(p), onVarka(s"NOT ($p)"), onVarka(unknown, fuses(unknown))) match {
-      case (Right(t), Right(f), Right(u)) =>
-        partitionFindings(t, f, u, onSpark(p), onSpark(s"NOT ($p)"), onSpark(unknown),
-          expectedRows(s"SELECT $allColumns FROM $fixture")) ++
-          // The known rows, as a filter of their own: Spark's, and exactly the true and false.
-          (onVarka(known, fuses(known)) match {
-            case Right(k) =>
-              QueryTest.sameRows(onSpark(known), k).map(d =>
-                s"WHERE (p) IS NOT NULL differs from Spark's:\n$d") ++
-                Option.when(k.map(_.getInt(0)).toSet != (t ++ f).map(_.getInt(0)).toSet)(
-                  "WHERE (p) IS NOT NULL is not the true and the false rows")
-            case Left(finding) => Seq(finding)
-          })
-      case (t, f, u) => Seq(t, f, u).flatMap(_.left.toOption)
-    }
-  }
-
-  rows.filter(_.form == "predicate").foreach { row =>
-    test(s"${row.family}: ${row.sql} splits every fixture into true, false and unknown rows") {
-      val settings =
-        Seq[(String, Option[String])]("default optimizer" -> None,
-          "rewrites excluded" -> Some(partitionRewrites)) ++
-          Option.when(isNullSafe(row.executable))(
-            "NullPropagation excluded too" -> Some(nullSafeRewrites))
-      // The in-memory scan prunes a batch its statistics rule out - an all-null batch under a
-      // predicate that rejects nulls - and a pruned batch meets no kernel, so pruning is off.
-      val findings = withBothConf(SQLConf.IN_MEMORY_PARTITION_PRUNING.key, "false") {
-        for {
-          (setting, excluded) <- settings
-          (fixture, _) <- fixtures
-          finding <- excluded match {
-            case Some(rules) => withBothConf(SQLConf.OPTIMIZER_EXCLUDED_RULES.key, rules) {
-              partitionCheck(row, fixture, mustFuse = rules == nullSafeRewrites)
-            }
-            case None => partitionCheck(row, fixture)
-          }
-        } yield s"$fixture, $setting: $finding"
-      }
-      assert(findings.isEmpty, findings.mkString("\n"))
-    }
-  }
-
-  /**
-   * Each predicate row's null tests as the condition of a CASE: `CASE WHEN (p) IS NULL THEN a
-   * ELSE b END` and the same with `IS NOT NULL`. Run with the partition rewrites excluded, since
-   * `NullDownPropagation` would otherwise turn the test into null tests on the columns, which the
-   * per-row test already runs. The arms are two dates, two bigints, two doubles or two floats
-   * (a floating condition beside integral arms waits for a mask crossing): a kernel holds its
-   * condition on the arms' lane, or lifts an int condition to meet bigint arms, and which lane a
-   * predicate's condition lands on (`i < l` compares bigints, `hour(t) = 12` ints) is the
-   * compiler's, not the SQL's, so one pair of arms must have its kernel serve the whole
-   * projection. Every answer is Spark's.
-   */
-  private def nullTestConditionCheck(row: CoverageRow, fixture: String): Seq[String] = {
-    val p = row.executable
-    Seq("IS NULL", "IS NOT NULL").flatMap { test =>
-      val outcomes = Seq(("d", "d2"), ("l", "l2"), ("x", "x2"), ("f", "f2")).map { case (a, b) =>
-        val query = s"SELECT CASE WHEN ($p) $test THEN $a ELSE $b END AS v FROM $fixture"
-        val actual = varkaSpark.sql(query)
-        val plan = actual.queryExecution.executedPlan
-        val rows = actual.collect().toSeq
-        // Read after the run: the metric counts the batches the kernel served.
-        val served = kernelServed(plan)
-        val wrong = QueryTest.sameRows(expectedRows(query, plan), rows).map(d =>
-          s"$query differs from Spark's:\n$d")
-        (served, s"$query:\n${plan.treeString}", wrong.toSeq)
-      }
-      outcomes.flatMap(_._3) ++ Option.when(nullable(p, fixture) && !outcomes.exists(_._1))(
-        "no kernel served all of either arm pair:\n" + outcomes.map(_._2).mkString("\n"))
-    }
-  }
-
-  rows.filter(_.form == "predicate").foreach { row =>
-    test(s"${row.family}: ${row.sql} under IS NULL and IS NOT NULL fuses as a CASE condition") {
-      val findings = withBothConf(SQLConf.OPTIMIZER_EXCLUDED_RULES.key, partitionRewrites) {
-        fixtures.flatMap { case (fixture, _) =>
-          nullTestConditionCheck(row, fixture).map(f => s"$fixture: $f")
-        }
-      }
-      assert(findings.isEmpty, findings.mkString("\n"))
-    }
-  }
-
-  test("a boolean column read at the int and the long lane in one query answers Spark's") {
-    // The leaf takes the lane of what it meets, so one query can hold it on both: the shapes
-    // below decline or fuse, and either way the rows are Spark's. At least one must fuse, or the
-    // test would pass with the leaf never reaching a kernel.
-    val fixture = "varka_coverage_mixed"
-    val served = Seq(
-      s"SELECT rid, IF(b, l, l2) AS x, IF(b, d, d2) AS y FROM $fixture",
-      s"SELECT rid FROM $fixture WHERE IF(b, l, l2) > 0 AND IF(b, d, d2) > DATE'2020-01-01'",
-      s"SELECT rid FROM $fixture WHERE b AND l < l2 AND d < d2",
-      s"SELECT rid, CASE WHEN b THEN l ELSE l2 END AS x, CASE WHEN b THEN d ELSE d2 END AS y " +
-        s"FROM $fixture").map { query =>
-      val expected = expectedRows(query)
-      val df = varkaSpark.sql(query)
-      val actual = df.collect().toSeq
-      QueryTest.sameRows(expected, actual).foreach(d => fail(s"$query differs from Spark's:\n$d"))
-      query -> kernelServed(df.queryExecution.executedPlan)
-    }
-    assert(served.exists(_._2), "no query reached a kernel:\n" + served.map(_._1).mkString("\n"))
-  }
-
-  test("the partition oracle fails a filter that answers unknown where it should answer false") {
-    // No kernel can be broken this way on purpose, so the fault is planted in the answers: a
-    // filter that swapped known-false and unknown would return Spark's `IS NULL` rows for
-    // `NOT (p)`. The oracle must name both the wrong false rows and the wrong rest.
-    val fixture = "varka_coverage_mixed"
-    def answer(where: String): Seq[Row] =
-      spark.sql(s"SELECT $allColumns FROM $fixture WHERE $where").collect().toSeq
-    val (t, f, u) = (answer("d < d2"), answer("NOT (d < d2)"), answer("(d < d2) IS NULL"))
-    assert(f.nonEmpty && u.nonEmpty, "the planted fault needs both partitions non-empty")
-    val table = spark.sql(s"SELECT $allColumns FROM $fixture").collect().toSeq
-    assert(partitionFindings(t, f, u, t, f, u, table).isEmpty)
-    val findings = partitionFindings(t, u, u, t, f, u, table)
-    assert(findings.exists(_.startsWith("WHERE NOT (p) differs")), findings.mkString("\n"))
-    assert(findings.exists(_.startsWith("rows both false and unknown")), findings.mkString("\n"))
-    assert(findings.exists(_.startsWith("rows neither true, false nor unknown")),
-      findings.mkString("\n"))
-  }
+  // The partition oracle (VARKA-138) and the null tests as CASE conditions run below the
+  // session, in VarkaCoverageHarnessSuite and VarkaPartitionOracle (VARKA-509).
 
   // ---------------------------------------------------------------------------------------------
   // The ANSI form (VARKA-138)
