@@ -166,6 +166,31 @@ public final class VarkaTestReachSuite {
   }
 
   @Test
+  @DisplayName("keyed set-up joins the tests that read it and no other")
+  void keyedSetUpJoinsItsReaders() {
+    var r = new VarkaTestReach.Recorder(List.of(PLANTED, INERT));
+    r.suite = ConcurrentHashMap.newKeySet();
+    r.during("view", () -> r.emitted(List.of(days(true)), 2, 0, VarkaEmitOptions.DEFAULTS));
+    assertEquals(Set.of(), r.suite, "the keyed piece's work is not the whole suite's");
+    r.current = ConcurrentHashMap.newKeySet();
+    r.reading = ConcurrentHashMap.newKeySet();
+    assertEquals("-", r.testNames(false), "a test that does not read the piece");
+    r.reading.add("view");
+    assertEquals(PLANTED, r.testNames(false), "a test that reads it");
+  }
+
+  @Test
+  @DisplayName("a test that reads set-up the recording never heard runs everywhere")
+  void unheardSetUpRunsEverywhere() {
+    var r = recording();
+    r.reading = ConcurrentHashMap.newKeySet();
+    r.reading.add("never set up");
+    assertEquals("*", r.testNames(false));
+    r.reading.clear();
+    assertEquals("*", r.testNames(true), "a cancelled test");
+  }
+
+  @Test
   @DisplayName("a paused recorder, in a suite the recording leaves out, hears nothing")
   void pausedRecorderHearsNothing() {
     var r = recording();

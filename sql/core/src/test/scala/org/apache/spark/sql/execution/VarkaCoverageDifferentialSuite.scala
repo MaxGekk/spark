@@ -28,7 +28,7 @@ import org.apache.spark.SparkArithmeticException
 import org.apache.spark.sql.{QueryTest, Row, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, IsNotNull, IsNull, NamedExpression}
 import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, VarkaExpressionCompiler}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaFallbackEvent, VarkaGuardSpec, VarkaJfrTestSupport, VarkaMatrix, VarkaTestWatchdog, VarkaTypes}
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaFallbackEvent, VarkaGuardSpec, VarkaJfrTestSupport, VarkaMatrix, VarkaTestReach, VarkaTestWatchdog, VarkaTypes}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaGuardSpec.Verdict
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType
 import org.apache.spark.sql.catalyst.optimizer.{BooleanSimplification, InferFiltersFromConstraints, NullDownPropagation, NullPropagation}
@@ -1047,12 +1047,18 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
     val started = System.nanoTime()
     session.sql(edges._2).coalesce(1).createOrReplaceTempView(edges._1)
     session.catalog.cacheTable(edges._1)
+    // A partition view is read by its own row's domain check alone (`domainCheck`), so what its
+    // filter compiles joins that check's test rather than every test of the suite: the option
+    // matrix then reruns, under a configuration that moves only some rows' partitions, just
+    // those rows' checks (VarkaTestReach.setUp, VARKA-507).
     for ((row, k) <- guardedRows; (partition, where) <- partitions) {
       val view = partitionView(k, partition)
-      session.sql(s"SELECT * FROM ${edges._1} WHERE ${where(row.domain.get)}").coalesce(1)
-        .createOrReplaceTempView(view)
-      session.catalog.cacheTable(view)
-      session.table(view).count()
+      VarkaTestReach.setUp(view, () => {
+        session.sql(s"SELECT * FROM ${edges._1} WHERE ${where(row.domain.get)}").coalesce(1)
+          .createOrReplaceTempView(view)
+        session.catalog.cacheTable(view)
+        session.table(view).count()
+      })
     }
     logInfo(s"cached the edges fixture and ${guardedRows.size * partitions.size} partition " +
       s"views in ${(System.nanoTime() - started) / 1000000} ms")
@@ -1206,6 +1212,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
    * fixture and that each has rows, the outside one unless the domain is total.
    */
   private def domainCheck(row: CoverageRow, k: Int): DomainResult = {
+    VarkaTestReach.reads(partitions.map { case (p, _) => partitionView(k, p) }: _*)
     val e = row.executable
     val forms: Seq[(String, String => String)] = row.form match {
       case "predicate" => Seq("a filter" -> (v => s"SELECT rid FROM $v WHERE $e"))

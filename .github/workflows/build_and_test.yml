@@ -1469,19 +1469,16 @@ jobs:
       if: matrix.module == 'sql' && matrix.shard == '0/3'
       continue-on-error: true
       run: rm -f target/varka-matrix-build.tar
-    # The sql suites record, as they run at the defaults, which option configurations move each
+    # The suites record, as they run at the defaults, which option configurations move each
     # test (VarkaTestReach), so that the option matrix dispatched on this commit runs a
-    # configuration only over the tests it moves (VARKA-507). The catalyst suites do not: their
-    # tree suites emit hundreds of thousands of kernels, which a record would emit again under
-    # every configuration, and they filter their own trees instead (VarkaReach).
+    # configuration only over the tests it moves (VARKA-507). Catalyst's tree suites, which emit
+    # hundreds of thousands of kernels, are left out of the record and filter their own trees
+    # instead (VarkaReach, VarkaTestReach.UNRECORDED).
     - name: Run the Varka suites of ${{ matrix.module }}, ${{ matrix.part }}
       run: |
-        if [ "${{ matrix.module }}" = sql ]; then
-          export VARKA_REACH_RECORD=$PWD/target/varka-reach.tsv
-        fi
+        export VARKA_REACH_RECORD=$PWD/target/varka-reach.tsv
         ./dev/varka_scoped_suites.sh ${{ matrix.module }} --shard ${{ matrix.shard }}
     - name: Upload the record of which configurations move each test
-      if: matrix.module == 'sql'
       continue-on-error: true
       uses: actions/upload-artifact@v4
       with:
@@ -1522,12 +1519,6 @@ jobs:
           echo "emitted bytes: changed since $base, on these lines of sql/varka/emitted_bytes.json:"
           git diff --stat "$base" HEAD -- sql/varka/emitted_bytes.json
         fi | tee -a "$GITHUB_STEP_SUMMARY"
-    # The option matrix's share of a pull request (VARKA-248.md 3.2.8): this module's suites
-    # under one emit option configuration beside the defaults - an option the diff names, or
-    # one the branch name hashes to - and, if it fails, the same on the merge base, so that a
-    # red step means this change. The weekly varka-option-matrix workflow runs all of them.
-    - name: The Varka suites of ${{ matrix.module }} under one emit option configuration
-      run: ./dev/varka_matrix_ci.sh ${{ matrix.module }}
     # The tests this change adds, rerun five times on the suites step's build, a seeded fuzz under
     # four other seeds; and for a pull request labelled `fix`, its new tests run once on the merge
     # base's main sources, where each must fail (VARKA-255.md 3.4). A run of master has no new

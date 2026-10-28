@@ -26,7 +26,7 @@ run of the commit that has the archive, waiting while a run of that commit may s
 one, or `run=` when none will: no Build of the commit, a Build whose changes ran Spark's
 module matrix instead, or a wait past --wait minutes. The matrix compiles for itself then.
 
-The same Build's varka-scoped sql jobs record, as they run the suites at the defaults, which
+The same Build's varka-scoped jobs record, as they run the suites at the defaults, which
 configurations move each test (VarkaTestReach), one `varka-matrix-reach-<job>` artifact a job.
 `reach RUN` prints `reach=1` when every such job of the run has succeeded with its artifact, so
 the matrix may skip what the record allows, and `reach=` otherwise: a configuration then runs
@@ -48,8 +48,8 @@ ARTIFACT = "varka-option-matrix-build"
 WORKFLOW = ".github/workflows/build_main.yml"
 JOB = "Varka suites: sql 1 of 3"
 UPLOAD = "Upload the test classes for the option matrix"
-# The scoped jobs that record: the sql ones (build_and_test.yml says why not the catalyst ones).
-SCOPED = "Varka suites: sql "
+# The scoped jobs, every one of which records its share of the suites.
+SCOPED = "Varka suites: "
 REACH = "varka-matrix-reach-"
 PRECONDITION = "Check changes"
 # How long a Build gets to start its sql job: a run not yet created, a precondition still
@@ -116,7 +116,7 @@ def find(repository, sha, wait_minutes, sleep=time.sleep, now=time.monotonic):
 
 
 def reach_complete(jobs, artifacts):
-    """Whether every varka-scoped sql job succeeded and each left a reach artifact."""
+    """Whether every varka-scoped job succeeded and each left a reach artifact."""
     scoped = [j for j in jobs if j["name"].split(" / ")[-1].startswith(SCOPED)]
     names = {a["name"] for a in artifacts if not a.get("expired")}
     return (
@@ -163,7 +163,9 @@ class SelfTest(unittest.TestCase):
         self.assertFalse(reach_complete(failed, both))
         self.assertFalse(reach_complete([jobs[2]], []), "a Build with no scoped job")
         catalyst = {"name": "Run / Varka suites: catalyst 1 of 3", "conclusion": "success"}
-        self.assertTrue(reach_complete(jobs + [catalyst], both), "catalyst jobs record nothing")
+        self.assertFalse(reach_complete(jobs + [catalyst], both), "catalyst's record is missing")
+        catalysts = both + [{"name": REACH + "catalyst-1of3"}]
+        self.assertTrue(reach_complete(jobs + [catalyst], catalysts))
 
     def fake_find(self, runs, jobs, wait):
         """`find` over a repository whose Build runs and jobs never change; the seconds slept."""

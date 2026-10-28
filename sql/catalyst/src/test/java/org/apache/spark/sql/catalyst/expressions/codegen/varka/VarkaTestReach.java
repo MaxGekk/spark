@@ -32,6 +32,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -98,14 +99,62 @@ public final class VarkaTestReach {
   /**
    * The suites the recording leaves out, each with its reason: their kernels are so large that
    * emitting each again under every configuration costs the pull request's job more than running
-   * the suite in full costs the matrix. A suite left out runs every test under every
-   * configuration, as a test the record has no line for does.
+   * the suite in full costs the matrix; they count the shape cache's builds, which the recording's
+   * own emissions would add to; they time themselves against a watchdog the recording outlasts;
+   * they filter their own cases under a configuration ({@link VarkaReach}); or, in catalyst, their
+   * recording costs the job more than the matrix time it saves. A suite left out
+   * runs every test under every configuration, as a test the record has no line for does.
    */
-  public static final Map<String, String> UNRECORDED = Map.of(
-      "VarkaCodegenGiveUpSuite", "kernels of thousands of nodes: 16 s plain, 225 s recorded",
-      "VarkaSeveralKernelsSuite", "plans split into large kernels: 47 s plain, 192 s recorded",
-      "VarkaSplitConditionSuite", "conditions split into many kernels: 3 s plain, 33 s recorded",
-      "VarkaSplitConditionFusionSuite", "the same over fused filters: 1 s plain, 29 s recorded");
+  public static final Map<String, String> UNRECORDED = Map.ofEntries(
+      Map.entry("VarkaCodegenGiveUpSuite",
+          "kernels of thousands of nodes: 16 s plain, 225 s recorded"),
+      Map.entry("VarkaSeveralKernelsSuite",
+          "plans split into large kernels: 47 s plain, 192 s recorded"),
+      Map.entry("VarkaSplitConditionSuite",
+          "conditions split into many kernels: 3 s plain, 33 s recorded"),
+      Map.entry("VarkaSplitConditionFusionSuite",
+          "the same over fused filters: 1 s plain, 29 s recorded"),
+      Map.entry("VarkaExpressionCompilerSuite",
+          "counts the shape cache's builds; 63 s plain, 778 s recorded"),
+      Map.entry("VarkaShapeCacheSuite", "counts the shape cache's builds and hits"),
+      Map.entry("VarkaEmitCostSuite", "prices every emission: 17 s plain, 409 s recorded"),
+      Map.entry("VarkaEmitCostAuditSuite",
+          "audits the emitter's prices under a watchdog the recording outlasts"),
+      Map.entry("VarkaSmallTreeSuite", "filters its own trees by their bytes (VarkaReach)"),
+      Map.entry("VarkaIrFuzzSuite", "filters its own draws by their options (VarkaReach)"),
+      // Catalyst suites whose recording costs a pull request's job more than a tenth of what it
+      // saves the matrix, on the laptop on 28 October 2026 (VARKA-507): plain and recorded
+      // seconds at the defaults, against the matrix's seconds over the covered configurations.
+      Map.entry("VarkaCoverageCompositionFuzzSuite",
+          "72 s plain, 247 s recorded, for 1603 s the matrix would skip"),
+      Map.entry("VarkaCoverageSuite",
+          "3 s plain, 24 s recorded, for 103 s the matrix would skip"),
+      Map.entry("VarkaEmittedBytesSuite",
+          "65 s plain, 611 s recorded, for 291 s the matrix would skip"),
+      Map.entry("VarkaEmitterBudgetSuite",
+          "6 s plain, 34 s recorded, for 137 s the matrix would skip"),
+      Map.entry("VarkaEmitterDriverTableSuite",
+          "5 s plain, 26 s recorded, for 223 s the matrix would skip"),
+      Map.entry("VarkaEmitterFramesSuite",
+          "1 s plain, 15 s recorded, for 34 s the matrix would skip"),
+      Map.entry("VarkaEmitterSplitDriverSuite",
+          "3 s plain, 29 s recorded, for 74 s the matrix would skip"),
+      Map.entry("VarkaExactGroupingSuite",
+          "3 s plain, 18 s recorded, for 63 s the matrix would skip"),
+      Map.entry("VarkaFamilySwitchSuite",
+          "1 s plain, 11 s recorded, for 34 s the matrix would skip"),
+      Map.entry("VarkaGroupingBoundSuite",
+          "57 s plain, 818 s recorded, for 1054 s the matrix would skip"),
+      Map.entry("VarkaKernelPlanSuite",
+          "11 s plain, 428 s recorded, for 127 s the matrix would skip"),
+      Map.entry("VarkaMaskOfWordSuite",
+          "4 s plain, 59 s recorded, for 190 s the matrix would skip"),
+      Map.entry("VarkaUnreadLocalsSuite",
+          "19 s plain, 508 s recorded, for 227 s the matrix would skip"),
+      Map.entry("VarkaVariantSuite",
+          "26 s plain, 135 s recorded, for 1444 s the matrix would skip"),
+      Map.entry("VarkaWarmupReachSuite",
+          "18 s plain, 237 s recorded, for 625 s the matrix would skip"));
 
   /** Whether {@code config} runs every test: it, or the one option it sets, is in {@link #FULL}. */
   public static boolean runsEveryTest(String config) {
@@ -138,8 +187,6 @@ public final class VarkaTestReach {
       // The configurations the record covers, which the planner reads (dev/varka_matrix_bins.py):
       // one not named here runs every test.
       append("#\tcovers\t" + String.join(",", configs));
-      // What the JVM compiled outside every suite, which every test may have read.
-      Runtime.getRuntime().addShutdownHook(new Thread(() -> append("*\t*\t" + names(r.outside))));
     }
   }
 
@@ -152,10 +199,41 @@ public final class VarkaTestReach {
     if (r != null) {
       r.paused = UNRECORDED.containsKey(suite);
       r.suite = ConcurrentHashMap.newKeySet();
+      r.keyed.clear();
     }
   }
 
-  /** Closes the suite's window with a {@code suite<TAB>*} line, which joins each of its tests'. */
+  /**
+   * Runs a piece of a suite's set-up whose work only some tests read, under {@code key}: what it
+   * compiles joins the tests that name the key through {@link #reads}, not every test of the
+   * suite. A test that reads the piece without naming it would be skipped where the piece moved,
+   * so a suite keys only set-up whose readers it names exactly.
+   */
+  public static void setUp(String key, Runnable body) {
+    Recorder r = recorder;
+    if (r == null) {
+      body.run();
+    } else {
+      r.during(key, body);
+    }
+  }
+
+  /** Names the keyed set-up ({@link #setUp}) the running test reads. */
+  public static void reads(String... keys) {
+    Recorder r = recorder;
+    Set<String> reading = r == null ? null : r.reading;
+    if (reading != null) {
+      reading.addAll(List.of(keys));
+    }
+  }
+
+  /**
+   * Closes the suite's window with a {@code suite<TAB>*} line, which joins each of its tests': what
+   * the suite compiled outside its tests, and what this JVM compiled outside every suite so far,
+   * which a test of this suite may have read. What the JVM compiles later cannot have changed an
+   * answer this suite gave, and another JVM's work is not this one's, so no line joins every test
+   * of every module.
+   */
   public static void suiteEnd(String suite) {
     Recorder r = recorder;
     if (r != null && r.suite != null) {
@@ -164,8 +242,14 @@ public final class VarkaTestReach {
       boolean paused = r.paused;
       r.paused = false;
       if (!paused) {
-        append(suite + "\t*\t" + names(moved));
+        var all = new TreeSet<String>(moved);
+        all.addAll(r.outside);
+        append(suite + "\t*\t" + names(all));
+        // What each keyed piece of the set-up moved, for a reader of the record; readers skip it.
+        new TreeMap<>(r.keyed).forEach((key, keyMoved) ->
+            append("#\tsetup\t" + suite + "\t" + key + "\t" + names(keyMoved)));
       }
+      r.keyed.clear();
     }
   }
 
@@ -174,6 +258,7 @@ public final class VarkaTestReach {
     Recorder r = recorder;
     if (r != null) {
       r.current = ConcurrentHashMap.newKeySet();
+      r.reading = ConcurrentHashMap.newKeySet();
     }
   }
 
@@ -187,10 +272,11 @@ public final class VarkaTestReach {
     if (r == null) {
       return;
     }
-    Set<String> moved = r.current;
+    String names = r.testNames(cancelled);
     r.current = null;
+    r.reading = null;
     if (!r.paused) {
-      append(suite + "\t" + test + "\t" + (cancelled ? EVERY : names(moved)));
+      append(suite + "\t" + test + "\t" + names);
     }
   }
 
@@ -241,7 +327,13 @@ public final class VarkaTestReach {
 
     private static void broke(Throwable t) {
       VarkaCompileObserver.set(null);
-      append("#\tbroken\t" + t.getClass().getName() + ": " + t.getMessage());
+      // The first frames say where the recording broke, which the message alone may not.
+      var frames = new StringBuilder();
+      StackTraceElement[] stack = t.getStackTrace();
+      for (int i = 0; i < Math.min(6, stack.length); i++) {
+        frames.append(" at ").append(stack[i]);
+      }
+      append("#\tbroken\t" + t.getClass().getName() + ": " + t.getMessage() + frames);
     }
   }
 
@@ -256,6 +348,11 @@ public final class VarkaTestReach {
     private final Map<List<VarkaVectorIR>, Set<String>> producedBy = new ConcurrentHashMap<>();
     volatile Set<String> current;
     volatile Set<String> suite;
+    // The keyed set-up running, each piece's moved configurations, and the pieces the running
+    // test reads (setUp and reads).
+    volatile Set<String> setUp;
+    final Map<String, Set<String>> keyed = new ConcurrentHashMap<>();
+    volatile Set<String> reading;
     volatile boolean paused;
     final Set<String> outside = ConcurrentHashMap.newKeySet();
 
@@ -301,11 +398,50 @@ public final class VarkaTestReach {
       note(producedBy.getOrDefault(outputs, Set.of()));
     }
 
-    /** Notes what moved for the test running, else the suite setting up, else the JVM. */
+    /** Runs {@code body} as the keyed set-up piece {@code key}: {@link VarkaTestReach#setUp}. */
+    void during(String key, Runnable body) {
+      if (paused) {
+        body.run();
+        return;
+      }
+      Set<String> outer = setUp;
+      setUp = keyed.computeIfAbsent(key, k -> ConcurrentHashMap.newKeySet());
+      try {
+        body.run();
+      } finally {
+        setUp = outer;
+      }
+    }
+
+    /**
+     * The running test's line's configurations: what it moved itself and what the keyed set-up it
+     * reads moved, or {@code *} for a test that cancelled or that reads a piece the recording
+     * never heard, which it cannot vouch for.
+     */
+    String testNames(boolean cancelled) {
+      Set<String> moved = current;
+      Set<String> read = reading;
+      var all = new TreeSet<String>(moved == null ? Set.of() : moved);
+      boolean every = cancelled;
+      for (String key : read == null ? Set.<String>of() : read) {
+        Set<String> keyMoved = keyed.get(key);
+        every |= keyMoved == null;
+        if (keyMoved != null) {
+          all.addAll(keyMoved);
+        }
+      }
+      return every ? EVERY : names(all);
+    }
+
+    /**
+     * Notes what moved for the keyed set-up running, else the test running, else the suite
+     * setting up, else the JVM.
+     */
     private void note(Set<String> moved) {
+      Set<String> k = setUp;
       Set<String> c = current;
       Set<String> w = suite;
-      (c != null ? c : w != null ? w : outside).addAll(moved);
+      (k != null ? k : c != null ? c : w != null ? w : outside).addAll(moved);
     }
 
     private Set<String> movedBy(VarkaEmitOptions options, Object result,
