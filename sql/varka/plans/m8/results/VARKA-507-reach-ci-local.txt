@@ -1,0 +1,82 @@
+# Row 507's record of which configurations move each test, extended (VARKA-507): the coverage
+# differential's partition views keyed, catalyst's suites recorded, and the CI tally of step 4.
+# Laptop runs on 28 and 29 October 2026, the defaults through dev/varka_matrix.sh over two JVMs
+# as a CI job runs them, one module at a time with no other heavy job on the machine.
+
+The coverage differential, its set-up keyed (VarkaTestReach.setUp): of its 1066 tests under the
+34 covered configurations, the pairs that still run
+  every set-up piece joined to every test (step 5 as built)   17247 of 36244, 48%
+  the partition views joined only to their rows' domain check   8376 of 36244, 23%
+  the shared fixtures move 6 configurations, the partition views 10 more
+
+Catalyst recorded, suite seconds at the defaults, plain against recorded, before the list of
+suites left out: 1170 s against 2677 s. Each suite's added seconds against the matrix seconds
+its record would save (its CI suite seconds times the covered configurations times its share
+skipped):
+  64 suites adding at most 10 s each      +56 s in all, about 10600 matrix seconds saved
+  15 suites adding more                   +2907 s in all, about 6200 matrix seconds saved
+  the 15, and the suites that count the shape cache's builds or filter their own cases, are
+  left out (VarkaTestReach.UNRECORDED, each with its seconds)
+
+The cost as shipped, plain against recorded:
+  catalyst   suites 1243 s against 1293 s, +4%
+  sql        suites 839 s against 973 s, +16%
+  no test failed and neither record broke; a suite's seconds move about 30 s between runs
+
+Step 4 on CI, the option matrix run 40740631919 on master's tree (the VARKA_REACH tallies of
+VarkaSmallTreeSuite and VarkaIrFuzzSuite over its 48 configurations):
+  7190928 cases, 74.1% skipped (6.3% equal options, 67.8% equal bytes), 25.9% ran
+  by configuration:
+    arrowBatchSize=1                         same-options   149811 same-bytes        0 moved        0
+    arrowBatchSize=17                        same-options   149811 same-bytes        0 moved        0
+    arrowBatchSize=3                         same-options   149811 same-bytes        0 moved        0
+    exactGrouping=false                      same-options       40 same-bytes   149771 moved        0
+    groupBudgetUnderPrediction=true          same-options       40 same-bytes   149771 moved        0
+    groupLocalSlots=false                    same-options       40 same-bytes   149771 moved        0
+    guardUnderArm=false                      same-options       40 same-bytes   149771 moved        0
+    materializeChronoPrefix=false            same-options       40 same-bytes   149771 moved        0
+    narrowLanes=false                        same-options       40 same-bytes   149771 moved        0
+    planSize=false                           same-options       40 same-bytes   149771 moved        0
+    predictGrouping=false                    same-options       40 same-bytes   149771 moved        0
+    rangeSets=false                          same-options       40 same-bytes   149771 moved        0
+    severalKernels=false                     same-options       40 same-bytes   149771 moved        0
+    shareWholeNodes=false                    same-options       40 same-bytes   149771 moved        0
+    splitConditions=false                    same-options       40 same-bytes   149771 moved        0
+    splitDriver=false                        same-options       40 same-bytes   149771 moved        0
+    groupBudget=64                           same-options        9 same-bytes   149771 moved       31
+    groupBudget=800                          same-options        9 same-bytes   149771 moved       31
+    callSiteBudget=0                         same-options        8 same-bytes   149771 moved       32
+    fusedCeiling=200                         same-options        8 same-bytes   149771 moved       32
+    fusedCeiling=800                         same-options        8 same-bytes   149771 moved       32
+    guardDayProducers=false                  same-options       40 same-bytes   149591 moved      180
+    heavyGroupOutputs=0                      same-options       10 same-bytes   148786 moved     1015
+    exactRefusalStatus=true                  same-options       40 same-bytes   144285 moved     5486
+    cse=false                                same-options       40 same-bytes   141869 moved     7902
+    narrowHalfSpecies=true                   same-options       40 same-bytes   137475 moved    12296
+    checkIntOverflow=false                   same-options       40 same-bytes   131366 moved    18405
+    shareChronoPrefix=false                  same-options       40 same-bytes   131051 moved    18720
+    truncDate=RECOMPOSE                      same-options       40 same-bytes   122804 moved    26967
+    validityByWord=true                      same-options       40 same-bytes   120798 moved    28973
+    useAVX=2                                 same-options       11 same-bytes   119873 moved    29927
+    elideChronoMonth=false                   same-options       40 same-bytes   107496 moved    42275
+    floorMod7=DIGIT_SUM                      same-options       40 same-bytes   106572 moved    43199
+    floorMod7=DIV                            same-options       40 same-bytes   106572 moved    43199
+    mulHiDivide=false                        same-options       40 same-bytes    93715 moved    56056
+    neriSchneiderMonth=false                 same-options       40 same-bytes    76965 moved    72806
+    validityByBitmap=false                   same-options       40 same-bytes    68376 moved    81395
+    division=DOUBLE_DIV                      same-options       40 same-bytes    57160 moved    92611
+    division=DOUBLE_RECIP                    same-options       40 same-bytes    57160 moved    92611
+    julianMap=false                          same-options       40 same-bytes    57160 moved    92611
+    lanesOverride=4                          same-options       10 same-bytes    32891 moved   116910
+    denseValidityOnce=false                  same-options       40 same-bytes    23199 moved   126572
+    denseValidityOnce=false,validityByBitmap=false,validityOrFirst=false same-options       40 same-bytes    23088 moved   126683
+    elideUnreadLocals=false                  same-options       40 same-bytes    20364 moved   129407
+    driverOutputTable=false                  same-options       40 same-bytes        0 moved   149771
+    validityByWidth=false                    same-options       40 same-bytes        0 moved   149771
+    lanesOverride=16                         same-options       10 same-bytes        0 moved   149801
+    methodByteBudget=0                       same-options        9 same-bytes        0 moved   149802
+
+The option matrix at three runner JVMs a bin (dispatch lanes=3), run 40727940017, against
+two: 119 bins, 1668 job-minutes, the median bin 14.5 minutes, so a bin's 1.5 times the work
+took 1.5 times as long; the peak memory in use over 107 bins 12340 MB of 15983 MB, the median
+7086 MB, the 90th percentile 11135 MB. Two JVMs stay the setting.
