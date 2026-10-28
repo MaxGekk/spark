@@ -159,7 +159,9 @@ if [ -n "$report_only" ]; then
 fi
 
 # Suites whose subject is the defaults or the machine rather than an answer, so a configuration
-# breaks them by construction. Each name with its reason.
+# breaks them by construction, and suites that do all their work in a JVM they start without the
+# configuration, so every configuration would rerun the defaults' work (VARKA-507). The pull
+# requests' varka-scoped jobs run them all. Each name with its reason.
 EXCLUDED=(
   "VarkaEmittedBytesSuite:compares the emitted bytes with the defaults' committed oracle"
   "VarkaEmitCostAuditSuite:compares the cost audit with the defaults' committed oracle"
@@ -170,6 +172,8 @@ EXCLUDED=(
   "VarkaAssemblySuite:reads the JIT's output, not an answer"
   "VarkaWarmupEndToEndSuite:times a kernel's compilation, which a loaded machine moves"
   "VarkaTierWitnessSuite:asserts which JIT tier ran a call, which a loaded machine moves"
+  "VarkaWidthAuditSuite:audits the C2 code of a probe JVM it starts without the configuration"
+  "VarkaOperatorCensusSuite:counts the C2 code of probe JVMs it starts without the configuration"
 )
 
 # The gate runs every suite; the matrix leaves out the ones above.

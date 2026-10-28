@@ -17,13 +17,14 @@
 
 # The option configuration matrix, every configuration (VARKA-248.md 3.2.8). The Varka suites
 # rerun once per configuration - the emit defaults with one option changed, carried by every kernel
-# they emit - fanned out (VARKA-507): one job builds the test classes and plans the bins, about a
-# hundred jobs of eight minutes' work each run one bin of (configuration, module, suites) runner
-# JVMs, at most 30 at a time, and one job merges their runs and reports, the declining check
-# comparing every configuration's fused batches with the defaults' (dev/varka_matrix_bins.py). A
-# bin that frees a slot hands it to the next, so a slow runner holds back only its own bin. A pull
-# request runs one configuration in its varka-scoped jobs; this runs all of them once a week and
-# on dispatch. See dev/varka_matrix.sh.
+# they emit - fanned out (VARKA-507): one job builds the test classes, or takes them from the
+# pull request's Build of the same commit, and plans the bins, about a hundred jobs of eight
+# minutes' work each run one bin of (configuration, module, suites) runner JVMs, at most 30 at a
+# time, and one job merges their runs and reports, the declining check comparing every
+# configuration's fused batches with the defaults' (dev/varka_matrix_bins.py). A bin that frees a
+# slot hands it to the next, so a slow runner holds back only its own bin. A pull request runs one
+# configuration in its varka-scoped jobs; this runs all of them once a week and on dispatch. See
+# dev/varka_matrix.sh.
 name: Varka option matrix
 
 on:
@@ -69,8 +70,44 @@ jobs:
         java-version: '25'
     - name: Install the Varka engine
       uses: ./.github/actions/install-varka-engine
+    # A push of Varka files alone runs the Build's varka-scoped jobs, the first sql one of which
+    # archives the test classes of its commit: this takes that archive, waiting for it while the
+    # Build may still upload it, and compiles them itself only when no Build of the commit will
+    # (dev/varka_matrix_reuse.py). Any failure of the lookup or the download leaves the compile.
+    - name: Find the Build's test classes
+      id: reuse
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        ./dev/varka_matrix_reuse.py "$GITHUB_REPOSITORY" "$GITHUB_SHA" >> "$GITHUB_OUTPUT" ||
+          echo "run=" >> "$GITHUB_OUTPUT"
+    - name: Download the Build's test classes
+      if: steps.reuse.outputs.run != ''
+      continue-on-error: true
+      uses: actions/download-artifact@v4
+      with:
+        name: varka-option-matrix-build
+        path: target/varka-reuse
+        run-id: ${{ steps.reuse.outputs.run }}
+        github-token: ${{ github.token }}
     - name: Build the test classes
-      run: ./dev/varka_matrix.sh --build-only --sbt-arg -Phive --out target/varka-matrix
+      run: |
+        reused=0
+        if [ -s target/varka-reuse/varka-matrix-build.tar ]; then
+          echo "== the test classes of Build run ${{ steps.reuse.outputs.run }}"
+          if ./dev/varka_matrix_archive.sh unpack target/varka-reuse/varka-matrix-build.tar \
+              target/varka-matrix &&
+            ./dev/varka_matrix.sh --skip-build --build-dir target/varka-matrix --build-only \
+              --out target/varka-matrix; then
+            reused=1
+          else
+            echo "== the Build's test classes did not unpack or list the configurations"
+          fi
+          rm -f target/varka-reuse/varka-matrix-build.tar
+        fi
+        if [ "$reused" = 0 ]; then
+          ./dev/varka_matrix.sh --build-only --sbt-arg -Phive --out target/varka-matrix
+        fi
     # The bins, from the configurations the build listed and each module's suites; one line of
     # the summary says how many and how long.
     - name: Plan the bins
@@ -91,14 +128,7 @@ jobs:
     # alike, archived at its absolute path, which is the same on every runner, with the classpath
     # and JVM options the bins read.
     - name: Archive the classpath
-      run: |
-        set -o pipefail
-        tr ':' '\n' < target/varka-matrix/classpath | grep -v '^$' \
-          | while read -r e; do [ -e "$e" ] && echo "$e"; done > target/varka-bins/entries
-        echo "$PWD/target/varka-matrix/classpath" >> target/varka-bins/entries
-        echo "$PWD/target/varka-matrix/jvm.opts" >> target/varka-bins/entries
-        tar -cPf target/varka-build.tar -T target/varka-bins/entries
-        ls -l target/varka-build.tar
+      run: ./dev/varka_matrix_archive.sh pack target/varka-matrix target/varka-build.tar
     - name: Upload the classpath
       uses: actions/upload-artifact@v4
       with:
@@ -137,7 +167,9 @@ jobs:
         name: varka-option-matrix-build
         path: target
     - name: Unpack the classpath
-      run: tar -xPf target/varka-build.tar && rm target/varka-build.tar
+      run: |
+        ./dev/varka_matrix_archive.sh unpack target/varka-build.tar target/varka-matrix
+        rm target/varka-build.tar
     # Each unit is one runner JVM, two at a time on the runner's four cores and 16 GB, each in a
     # directory of its own named by the bin, so that the report job can merge every bin's runs.
     # The small-tree series at size 4, which pull requests no longer run (VARKA-269 9): every
@@ -233,8 +265,8 @@ jobs:
           grep -h '^CPU' target/varka-bins/*-platform/platform.txt | sort | uniq -c || true
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
-    # The suites' seconds under the defaults, from this run's JUnit reports, for the next plan's
-    # weights (sql/varka/matrix/suite-seconds.tsv).
+    # Each suite's seconds, its median over the configurations, from this run's JUnit reports,
+    # for the next plan's weights (sql/varka/matrix/suite-seconds.tsv).
     - name: Suite seconds
       if: always()
       run: |
