@@ -67,8 +67,8 @@ arithmetic in Python); **[I]** means inferred. Nothing was built or run on a JVM
   low halves of the two cross products `aL * bH` and `aH * bL`, and sums the high word. It
   throws when both high words are non-zero, when either cross product has a high half (two more
   `unsignedMultiplyHigh`), or when any partial or the result high word has its top bit set
-  **[V]**. That is three `imulq` (low products), three `mulq` (`unsignedMultiplyHigh`) and six
-  tests per row.
+  **[V]**. That is three `imulq` (low products), three `mulq` (`unsignedMultiplyHigh`) and eight
+  tests per row (two high words, four signs, two cross-product highs).
 * **64 by 64 to 128.** `multiply(long, long)` takes `abs` of both, then `left * right` and
   `Math.multiplyHigh`, and negates the pair when the signs differ (`Int128Math.java:342-359`)
   **[V]**. The `abs` and negate are not needed: `Math.multiplyHigh(a, b)` is already the signed

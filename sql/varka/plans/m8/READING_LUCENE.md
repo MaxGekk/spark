@@ -20,13 +20,13 @@ JDK lines are from `/home/max/proj/openjdk-build/jdk25` (`jdk-25-ga`).
 
 ## 1. How Lucene decides per host
 
-1. **One provider per JVM, chosen once [V].** `corevec/VectorizationProvider.java` lines 137 to
-   180 pick the scalar `DefaultVectorizationProvider` or the Panama one, held in a static holder
-   (lines 242 to 246). Lucene declines in this order: not HotSpot (141 to 146); the
-   `jdk.incubator.vector` module not readable (149 to 154); outside test mode, a forced test
-   width (158 to 162) or a client VM (163 to 166); a JDK newer than the upper bound (173 to 178).
-   The Panama constructor can still refuse with an `UnsupportedOperationException`, which the
-   lookup turns into the scalar provider and one log line (191 to 194).
+1. **One provider per JVM, chosen once [V].** `corevec/VectorizationProvider.java` lines 137 to 180
+   pick the scalar `DefaultVectorizationProvider` or the Panama one, held in a static holder (lines
+   242 to 246). Lucene declines first on a JDK newer than the upper bound, the outer test (140, 173
+   to 178), then: not HotSpot (141 to 146); the `jdk.incubator.vector` module not readable (149 to
+   154); outside test mode, a forced test width (158 to 162) or a client VM (163 to 166). The Panama
+   constructor can still refuse with an `UnsupportedOperationException`, which the lookup turns into
+   the scalar provider and one log line (191 to 194).
 2. **The host facts are HotSpot flags, read through the MXBean [V].** `util/HotspotVMOptions.java`
    lines 44 to 87 read any flag through `HotSpotDiagnosticMXBean`. `util/Constants.java` reads
    `UseAVX` (`HAS_AVX2` at 2, `HAS_AVX512` at 3, lines 86 to 91), `UseSVE` (94 to 95), `UseFMA`
@@ -45,10 +45,11 @@ JDK lines are from `/home/max/proj/openjdk-build/jdk25` (`jdk-25-ga`).
    Neon". So an SSE-only machine, or an AVX2 machine under `-XX:MaxVectorSize=16`, runs scalar.
    The flag is named `ENABLE_INTEGER_VECTORS` but it gates the float kernels too (lines 49 to
    52 of the provider). Aarch64 at 128 bits (NEON) is accepted.
-   *Against Varka:* row 503's gate is the same predicate ("`HOST_USE_AVX` reads a level and the
-   long species has two lanes"), and row 503 measured that only a filter's long condition loses
-   while projections win, so Varka declines one root kind, not the engine. Lucene's broader rule
-   rests on a comment, not a measurement in the tree; Varka's evidence is the stronger.
+   *Against Varka:* row 503, on its branch `varka-503-two-lane-decline` and not yet merged, gates on
+   the same predicate ("`HOST_USE_AVX` reads a level (x86) and `LongVector.SPECIES_PREFERRED` has
+   two lanes"), and measured that only a filter's long condition loses while projections win, so
+   Varka declines one root kind, not the engine. Lucene's broader rule rests on a comment, not a
+   measurement in the tree; Varka's evidence is the stronger.
 5. **"Fast" features are separate gates, decided per CPU family [V].** `Constants.java` lines 118
    to 142: vector FMA on aarch64 except macOS ("the problem is just apple silicon"), on AMD only
    with `MaxVectorSize >= 32`, on Intel always. Scalar FMA (144 to 168) on AMD only at
@@ -63,8 +64,8 @@ JDK lines are from `/home/max/proj/openjdk-build/jdk25` (`jdk-25-ga`).
    lanes, "so the overhead of the vector approach plus counting trues on vector masks pays off",
    and on aarch64 at 4 (`PanamaVectorUtilSupport.java` lines 1305 to 1309). This agrees with
    `vector-api-and-width.md`'s AVX2 section (a mask made into or out of a word costs more than a
-   cheap kernel's work) and with row 503: on x86 the mask-to-scalar step is what a narrow lane
-   cannot amortise, and Arm does not have that problem.
+   cheap kernel's work) but not with row 503's cause, which is C2's `x86.ad` refusing masks at two
+   lanes so the Java fallback runs; Lucene's threshold is a cost, row 503's a missing rule **[I]**.
 7. **Without C2, no vectors [V].** `Constants.IS_CLIENT_VM` is `java.vm.info` containing
    `emulated-client` (`Constants.java` lines 63 to 65). HotSpot prints that exactly when the
    compilation mode is quick-only (`abstract_vm_version.cpp` lines 151 to 162), which
@@ -267,14 +268,15 @@ Few, and none for the kernels' own speed.
 Each takeaway with the row or item it serves, or the reason it is not worth taking. Nothing in
 this note edits a row.
 
-1. **x86 below 256 bits declined as a whole (1.4).** Serves row 503 and m9 items 101 and 120.
-   Lucene agrees on the predicate; keep Varka's narrower rule, which is measured.
+1. **x86 below 256 bits declined as a whole (1.4).** Serves row 503 (on its branch) and m9 items 101
+   and 120. Lucene agrees on the predicate; keep Varka's narrower rule, which is measured.
 2. **No vectors without C2 (1.7).** Serves m9 item 120 and the startup-decline candidate in
    `skills/the-jit.md` ("With the intrinsics off"). Candidate m9 item: decline fusion at session
    start when the JVM has no C2 or no intrinsics (`EnableVectorSupport` false), with the reason
    in `EXPLAIN`, instead of only skipping the warm-up.
-3. **The mask-to-word step needs 8 int lanes on x86, 4 on Arm (1.6).** Serves row 503 and m9
-   item 101 as supporting evidence; the Arm half says the 128-bit Arm runner needs no decline.
+3. **The mask-to-word step needs 8 int lanes on x86, 4 on Arm (1.6).** Serves m9 item 101 as
+   supporting evidence (not row 503, whose cause differs); the Arm half says the 128-bit Arm runner
+   needs no decline.
 4. **Feature gates per CPU family behind overridable properties (1.5).** Row 505. Not worth
    taking as heuristics: Varka measures per host class, which is stronger.
 5. **An eager first call and no API statics outside the guard (2.1).** Row 476. Agrees; the
@@ -284,9 +286,9 @@ this note edits a row.
    each kernel behind `DONT_INLINE`, so the reference arm's rate is read in both states.
 7. **A 16-bit multiply instead of a 32-bit one at 512 bits (2.4).** Row 330. Supports NATIVE
    short multiply over the widened int one [I]; worth one cell in 330's measurement.
-8. **A forbidden-API list for host-dependent operators (2.5).** Row 475's review rules and m9
-   item 123. Take: a lint that fails an emitted `fma`, `compress`, `expand` or
-   `VectorMask.cast` that is not behind a named gate.
+8. **A forbidden-API list for host-dependent operators (2.5).** m9 item 123. Take:
+   a lint that fails an emitted `fma`, `compress`, `expand` or `VectorMask.cast` that is not
+   behind a named gate.
 9. **The right-aligned overlapping tail (2.6).** No row. Not worth taking now: Varka's masked
    epilogue is measured, and the read suits only idempotent shapes.
 10. **Several byte species in one JVM with no box reported (3.1).** Row 329 and the skill
@@ -309,7 +311,7 @@ this note edits a row.
     the bound: refuse fusion on a feature version Varka has not tested, raisable by a conf.
 16. **JDK bug ids beside each workaround (2.1, 2.2).** m9 item 123. Agrees; Lucene keeps them as
     comments only, which is what 123 improves on.
-17. **FMA chosen per host (1.5).** Rows 341 and 343. Not worth taking: it changes the bits by
+17. **FMA chosen per host (1.5).** The floating rows. Not worth taking: it changes the bits by
     host, and Varka's answers follow Spark's.
 18. **The native FFM provider (`NativeVectorUtilSupport.java` lines 272 to 283).** No row. Not
     worth taking: a C library behind `invokeWithArguments`, outside the emitted-kernel model.

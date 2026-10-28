@@ -8,7 +8,7 @@ Short prefixes: `c/jit/` is `core/src/main/c/share/jit/`, `J/` is
 `core/src/main/java/io/questdb/`, `T/` is `core/src/test/java/io/questdb/test/`. **[V]** means
 the author read the code; **[I]** means inferred. Nothing was built or run. The decimal part
 was read by a helper and its load-bearing claims were re-read by the author.
-`READING_DECIMAL_ENGINES.md`, `READING_ARROW_RS.md` and `m7/READING.md` 8 are not repeated.
+`READING_DECIMAL_ENGINES.md`, `READING_ARROW_RS.md` and `m7/READING.md` section 8 are not repeated.
 
 ## 1. What QuestDB has
 
@@ -105,11 +105,12 @@ carries these answers with it.
   AsyncJitFilteredRecordCursorFactory.java` 407-437) **[V]**. There is no value-dependent
   decline: nothing like Varka's per-batch guard exists, because nothing the JIT computes can
   overflow into a different answer under QuestDB's wrap semantics **[I]**.
-* **Fail closed, written down.** Every arm that was `__builtin_unreachable` now declines with a
-  reason: an unknown opcode, a short-circuit opcode in the SIMD path, an empty value stack after
-  the body, an unharmonised operand pairing (`c/jit/avx2.h` 1012-1027, 1040-1047, 1071-1083,
-  934-939; `compiler.cpp` 519-530) **[V]**. Each comment names the wrong rows or JVM crash the
-  old arm allowed.
+* **Fail closed, written down.** Four arms that were `__builtin_unreachable` now decline with a
+  reason (many type-switch defaults still call it, `c/jit/avx2.h` 172 and 416 for two): an unknown
+  opcode, a short-circuit opcode in the SIMD path, an empty value stack after the body, an
+  unharmonised operand pairing (`c/jit/avx2.h` 1012-1027, 1040-1047, 1071-1083, 934-939;
+  `compiler.cpp` 519-530) **[V]**. Each comment names the wrong rows or JVM crash the old arm
+  allowed.
 * **Width typing is the bug source.** The rule is "compute an arithmetic subtree at its own
   width, sign-extend only at the comparison boundary"
   (`J/griffin/CLAUDE.md` 374-376) **[V]**. The serializer is 6497 lines, most of them width
@@ -230,7 +231,8 @@ native binaries, not the sources, until a release workflow rebuilds them
    run]**. `p1 = a0 * m1 + a1 * m0` sums two products unmasked (`Decimal128.java` 1628, with
    `p2` and `p3` alike at 1629-1630). For `a = 2^64 - 1` and `m = 2^34 - 1`, `p1 = 2^64 + 2^32 -
    2`, which wraps: the product comes out short by `2^96` and passes the check at 1641. The path
-   is taken when the multiplicand's high word is 0 and its low word negative (1458-1462), and
+   is taken only for a multiplier in `[0, 2^63)`, a larger one going to `multiplyBy128Bit`
+   (1458-1465), and
    `modulo` multiplies the quotient by the divisor through it (`Decimal128.java` 913-916); `%`
    takes `Decimal128` for a result precision of 19 to 38
    (`J/griffin/engine/functions/math/RemDecimalFunctionFactory.java` 67-71) **[V]**. So
@@ -239,8 +241,9 @@ native binaries, not the sources, until a release workflow rebuilds them
    `multiply_128x128` (`READING_DECIMAL_ENGINES.md` 4): a sum of two limb products near
    `2^64`. The multiply itself was replayed on 27 October 2026 in Python with Java's 64-bit
    wrapping, line for line from 1612 to 1647: for `a = 2^64 - 1`, `m = 2^34 - 1` it returns
-   `a * m - 2^96` and raises no overflow; so does `a = m = 11529215050363437055`, whose product is
-   below `2^127` **[V, by replay; the SQL path still not run]**.
+   `a * m - 2^96` and raises no overflow **[V, by replay; the SQL path still not run]**. The
+   function alone loses the carry for `a = m = 11529215050363437055` too, but that `m` is past
+   `2^63`, so the dispatch never sends it here.
 2. **`multiplyBy128Bit` does not check the top limb** **[V]**. The overflow test reads `r3` to
    `r6` (`Decimal128.java` 1561), but `p33 >>> 32` belongs to a seventh word never computed;
    `2^112 * 2^112` gives 0 with no exception. Probably unreachable from SQL **[I]**.
