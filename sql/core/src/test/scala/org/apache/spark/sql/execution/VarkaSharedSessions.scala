@@ -17,10 +17,10 @@
 
 package org.apache.spark.sql.execution
 
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaMatrix, VarkaMatrixTests}
 import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanHelper
-import org.apache.spark.sql.execution.columnar.{ArrowCachedBatchSerializer, InMemoryRelation}
+import org.apache.spark.sql.execution.columnar.{ArrowCachedBatchSerializer, InMemoryRelation, InMemoryTableScanExec}
 import org.apache.spark.sql.internal.{SQLConf, StaticSQLConf}
 import org.apache.spark.sql.test.SharedSparkSession
 import org.apache.spark.sql.util.QueryExecutionListener
@@ -94,6 +94,14 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
     disabledSpark = null
     super.afterAll()
   }
+
+  /**
+   * `spark` keeps its cache from test to test, as `varkaSpark` and `disabledSpark` do: the
+   * suites cache their fixtures on both sides once, and a comparison from the second test on
+   * would otherwise set Varka over the cached table against the row engine over the inlined,
+   * uncached plan. [[expectedSql]] and [[sameCacheReads]] check that both sides read the cache.
+   */
+  override protected def clearCacheAfterEachTest: Boolean = false
 
   private def newSession(varkaEnabled: Boolean): SparkSession = SparkSession.builder()
     .sparkContext(spark.sparkContext)
@@ -522,6 +530,64 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
   protected def assertNotFused(plan: SparkPlan): Unit = {
     assert(find(plan)(isVarkaNode).isEmpty,
       s"expected no Varka node in the plan:\n${plan.treeString}")
+  }
+
+  /** The cached tables a plan reads, by name, one entry for each scan of the cache. */
+  protected def cachedReads(plan: SparkPlan): Seq[String] = collect(plan) {
+    case scan: InMemoryTableScanExec => scan.relation.cacheBuilder.tableName.getOrElse("<unnamed>")
+  }.sorted
+
+  /**
+   * Checks that `expected`, the row engine's side of a comparison, reads the same cached tables
+   * as `actual`, Varka's side. Both are meant to answer over the same cached batches: a row
+   * engine whose cache was lost reads the inlined plan instead, which can raise or round where
+   * the cached scan does not, so a difference between the plans would go unseen. With
+   * `mustRead`, the plans must read at least one cached table as well, so that two sides that
+   * both lost the cache do not pass as agreeing - unless the optimizer folded the query to no
+   * rows, so that the plan reads nothing at all (`WHERE (d IS NULL) IS NULL`).
+   */
+  protected def sameCacheReads(
+      expected: SparkPlan, actual: SparkPlan, what: String, mustRead: Boolean = false): Unit = {
+    val reads = cachedReads(expected)
+    assert(reads == cachedReads(actual),
+      s"$what: the row engine reads the cached tables $reads, Varka " +
+        s"${cachedReads(actual)}:\n${expected.treeString}")
+    assert(!mustRead || reads.nonEmpty || readsNoRows(expected),
+      s"$what: neither side reads a cached table:\n${expected.treeString}")
+  }
+
+  /** Whether every leaf of `plan` is an empty relation, as an optimizer-folded query's are. */
+  private def readsNoRows(plan: SparkPlan): Boolean = collect(plan) {
+    case leaf if leaf.children.isEmpty => leaf
+  }.forall {
+    case l: LocalTableScanExec => l.rows.isEmpty
+    case leaf => leaf.isInstanceOf[EmptyRelationExec]
+  }
+
+  /** The row engine's answer to `query`, checked by [[sameCacheReads]] against `actual`'s. */
+  protected def expectedSql(query: String, actual: DataFrame): DataFrame =
+    expectedOf(spark.sql(query), actual, query)
+
+  /**
+   * The row engine's rows for `query`, its plan checked by [[sameCacheReads]] against
+   * `varkaPlan`, the plan Varka ran the same query with, for a comparison that holds Varka's
+   * rows rather than its frame.
+   */
+  protected def expectedRows(query: String, varkaPlan: SparkPlan): Seq[Row] = {
+    val expected = spark.sql(query)
+    sameCacheReads(expected.queryExecution.executedPlan, varkaPlan, query, mustRead = true)
+    expected.collect().toSeq
+  }
+
+  /** As the other form, with Varka's plan for `query` built here. */
+  protected def expectedRows(query: String): Seq[Row] =
+    expectedRows(query, varkaSpark.sql(query).queryExecution.executedPlan)
+
+  /** `expected`, checked by [[sameCacheReads]] against `actual`. */
+  protected def expectedOf(expected: DataFrame, actual: DataFrame, what: String): DataFrame = {
+    sameCacheReads(expected.queryExecution.executedPlan, actual.queryExecution.executedPlan, what,
+      mustRead = true)
+    expected
   }
 }
 

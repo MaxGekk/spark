@@ -641,6 +641,16 @@ runs of `VarkaSizeLadderJitSuite` on the fork CI (#473, 27 September 2026).
   use `in` and `split(MARKER, 1)`); the Scala suites had each written their own stricter loop.
   `VarkaProbeOutputSuite` is the parser test to extend when a new marker shape appears.
 
+## A log appender on a class's own logger hides that class's warnings from later suites
+
+`withLogAppender(appender, loggerNames = Seq(cls))` gives the logger of `cls` a log4j
+configuration of its own when it had none; removing the appender afterwards leaves that
+configuration in place for the rest of the JVM. A later suite in the same JVM that listens on the
+root logger, as `VarkaProjectExecSuite` and `VarkaErrorContextSuite` do for the fallback warning,
+then sees nothing from `cls`, and passes alone while failing in a combined run. Listen on the root
+with a threshold (`appender.setThreshold(Level.WARN)`) and filter the events by
+`getLoggerName`.
+
 ## `failAfter` without a signaler cannot stop a test, so a hang holds the CI slot
 
 `SparkFunSuite` wraps every test in ScalaTest's `failAfter(20 minutes)`, and it reads as a cap.

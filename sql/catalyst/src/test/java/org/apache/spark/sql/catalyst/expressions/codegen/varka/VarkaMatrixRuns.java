@@ -24,6 +24,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.NoSuchElementException;
@@ -160,6 +161,9 @@ public final class VarkaMatrixRuns {
    * that subject, {@code denseValidityOnce=false,validityByBitmap=false,validityOrFirst=false}:
    * at the defaults the value emits the defaults' bytes, and the configuration would test nothing
    * (VARKA-247).
+   *
+   * <p>An arm runs only if it emits something the defaults and the option's other arms do not, by
+   * {@link #emissionKey}: see {@link #distinctArms}.
    */
   public static List<String> configurations() {
     VarkaEmitOptions defaults = VarkaEmitOptions.DEFAULTS;
@@ -168,8 +172,7 @@ public final class VarkaMatrixRuns {
       if (!option.reason().drawn()) {
         continue;
       }
-      List<String> arms = option.arms().stream()
-          .filter(arm -> !arm.apply().apply(defaults).equals(defaults))
+      List<String> arms = distinctArms(option.arms(), defaults).stream()
           .map(VarkaEmitOption.Arm::name)
           .toList();
       if (option.name().equals("lanesOverride")) {
@@ -183,6 +186,45 @@ public final class VarkaMatrixRuns {
     }
     ARROW_BATCH_SIZES.forEach(rows -> out.add(ARROW_BATCH_SIZE + "=" + rows));
     return List.copyOf(out);
+  }
+
+  /** The {@code -XX:UseAVX} level that stands for every level whose converts fall back. */
+  static final int FALLBACK_USE_AVX = 2;
+
+  /**
+   * {@code options} as the emitter can tell them apart. {@code useAVX} reaches the emitted bytes
+   * only through {@link VarkaEmitOptions#convertsFallBack}, which asks whether the level is below
+   * AVX-512, so every level below it emits as {@link #FALLBACK_USE_AVX} does and every other
+   * level as the unstated one, the defaults'. {@code VarkaEmittedBytesSuite} holds each arm the
+   * key moves to its key's bytes over the oracle's shapes, so a new reader of the level that
+   * tells two of them apart fails there.
+   */
+  static VarkaEmitOptions emissionKey(VarkaEmitOptions options) {
+    return options.withUseAVX(
+        options.convertsFallBack() ? FALLBACK_USE_AVX : VarkaEmitOptions.USE_AVX_UNKNOWN);
+  }
+
+  /**
+   * The arms of one option that emit something new: an arm whose {@link #emissionKey} is the
+   * defaults' is left out, and of arms that share a key one runs, the one whose options are the
+   * key itself where there is one, else the first. So {@code useAVX=0}, {@code 1} and {@code 2}
+   * run once, as {@code useAVX=2}, and {@code useAVX=3} not at all.
+   */
+  static List<VarkaEmitOption.Arm> distinctArms(List<VarkaEmitOption.Arm> arms,
+      VarkaEmitOptions defaults) {
+    VarkaEmitOptions defaultsKey = emissionKey(defaults);
+    var byKey = new LinkedHashMap<VarkaEmitOptions, VarkaEmitOption.Arm>();
+    for (VarkaEmitOption.Arm arm : arms) {
+      VarkaEmitOptions options = arm.apply().apply(defaults);
+      VarkaEmitOptions key = emissionKey(options);
+      if (options.equals(defaults) || key.equals(defaultsKey)) {
+        continue;
+      }
+      if (!byKey.containsKey(key) || options.equals(key)) {
+        byKey.put(key, arm);
+      }
+    }
+    return List.copyOf(byKey.values());
   }
 
   // ---------------------------------------------------------------------------------------------
