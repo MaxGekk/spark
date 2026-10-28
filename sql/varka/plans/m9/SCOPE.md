@@ -5660,6 +5660,28 @@ test that pins it, so an upgrade of Spark or the JDK has a list to recheck. Row 
 entries its checks work around; this item is the register as a whole. **Done when** the register
 exists, each entry names its pinning test, and the JDK and Spark upgrade checklists read it.
 
+### Item 124. The compile latency of the emitted kernels, read against Umbra's two back-ends
+
+*Added 27 October 2026 on the owner's word, from the audit of the reading notes
+(`m8/READING_TRACE.md`).* Kersten, Leis and Neumann, "Tidy Tuples and Flying Start: Fast
+Compilation and Fast Execution of Relational Queries in Umbra" (VLDB Journal 2021), is the known
+case for a query engine with two back-ends: one that compiles fast so that a query starts at once,
+and an optimizing one the engine switches to adaptively when the query runs long enough to pay for
+it. The record has never cited it, and it is unread here: nothing below rests on its numbers or its
+design beyond that idea. Varka has the same split, but it is HotSpot's: a kernel is emitted in
+microseconds (item 92), and the latency is the interpreter and C1 until C2 compiles the loop. Row
+408 measured it on a real session in fresh JVMs (`m8/results/VARKA-408-first-query.txt`, merged
+with row 441 in #978): C1 refuses the large masked loop methods, so they run in the interpreter
+until C2's on-stack replacement lands, about 8 s at 64 entries; splitting the loops below the size
+C1 refuses made it worse (14 s at 64 entries, the first ten queries 13 to 19 percent slower); a
+warm-up of the loop's shape and a lower OSR threshold were not tried. Items 60, 92 and 105 are three
+answers - the warm-up's policy, a per-operation baseline tier, a code generator of our own - and
+no measurement sets them against each other. Read the paper first and record what it measured and
+how it decides to switch; then time a fresh shape's first queries split into emission, class load,
+interpreter, C1 and C2, at row 408's shapes and both widths, from one committed benchmark. **Done
+when** the paper's claims are recorded with their pages, the split is committed per shape and
+width, and the record says which of items 60, 92 and 105 the numbers favour, or that none pays.
+
 ## 5. Ordering
 
 The survey supports an order this time rather than an argument. Item 8 leads
