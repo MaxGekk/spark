@@ -46,7 +46,7 @@ import unittest
 
 ARTIFACT = "varka-option-matrix-build"
 WORKFLOW = ".github/workflows/build_main.yml"
-JOB = "Varka suites: sql 1 of 2"
+JOB = "Varka suites: sql 1 of 3"
 UPLOAD = "Upload the test classes for the option matrix"
 # The scoped jobs that record: the sql ones (build_and_test.yml says why not the catalyst ones).
 SCOPED = "Varka suites: sql "
@@ -141,7 +141,7 @@ class SelfTest(unittest.TestCase):
         self.assertEqual(verdict(self.RUN, [], [check]), "pending")
         check = dict(check, status="completed")
         self.assertEqual(verdict(self.RUN, [], [check]), "none")
-        job = {"name": "Run / Varka suites: sql 1 of 2", "status": "queued"}
+        job = {"name": "Run / Varka suites: sql 1 of 3", "status": "queued"}
         self.assertEqual(verdict(self.RUN, [], [check, job]), "pending")
         job = dict(job, status="in_progress")
         self.assertEqual(verdict(self.RUN, [], [check, job]), "started")
@@ -152,11 +152,11 @@ class SelfTest(unittest.TestCase):
 
     def test_reach_is_complete_only_with_every_scoped_job_and_its_artifact(self):
         jobs = [
-            {"name": "Run / Varka suites: sql 1 of 2", "conclusion": "success"},
-            {"name": "Run / Varka suites: sql 2 of 2", "conclusion": "success"},
+            {"name": "Run / Varka suites: sql 1 of 3", "conclusion": "success"},
+            {"name": "Run / Varka suites: sql 2 of 3", "conclusion": "success"},
             {"name": "Run / Varka docs checks", "conclusion": "failure"},
         ]
-        both = [{"name": REACH + "sql-1of2"}, {"name": REACH + "sql-2of2"}]
+        both = [{"name": REACH + "sql-1of3"}, {"name": REACH + "sql-2of3"}]
         self.assertTrue(reach_complete(jobs, both))
         self.assertFalse(reach_complete(jobs, both[:1]))
         failed = [dict(jobs[0], conclusion="failure")] + jobs[1:]
@@ -194,12 +194,12 @@ class SelfTest(unittest.TestCase):
 
     def test_a_queued_sql_job_gets_the_short_wait(self):
         run = {"id": 1, "path": WORKFLOW, "status": "in_progress"}
-        job = {"name": "Run / Varka suites: sql 1 of 2", "status": "queued", "steps": []}
+        job = {"name": "Run / Varka suites: sql 1 of 3", "status": "queued", "steps": []}
         self.assertEqual(self.fake_find([run], [job], 25), (None, START_MINUTES * 60))
 
     def test_a_started_sql_job_is_waited_for_until_the_deadline(self):
         run = {"id": 1, "path": WORKFLOW, "status": "in_progress"}
-        job = {"name": "Run / Varka suites: sql 1 of 2", "status": "in_progress", "steps": []}
+        job = {"name": "Run / Varka suites: sql 1 of 3", "status": "in_progress", "steps": []}
         self.assertEqual(self.fake_find([run], [job], 25), (None, 1500.0))
 
 

@@ -1346,8 +1346,8 @@ jobs:
   # This job needs the branch's full history: the quote check accepts a number that appears
   # in any committed version of a results file - plans quote the figure a change moved away
   # from (VARKA-106.md, section 2).
-  # The Varka suites alone, for a change confined to Varka's files (VARKA-160). Five jobs in
-  # parallel, three for catalyst and two for sql (VARKA-483), each the sbt build of its module's
+  # The Varka suites alone, for a change confined to Varka's files (VARKA-160). Six jobs in
+  # parallel, three for each module (VARKA-483, VARKA-507), each the sbt build of its module's
   # tests and its share of the module's `*Varka*` suites, split by the committed weights in
   # sql/varka/ci/suite-times.tsv so that every job computes the same split; the sql jobs add the
   # Arrow cache serializer's suite, which is Varka's without the name, to whichever share it
@@ -1381,13 +1381,17 @@ jobs:
             part: 3 of 3
             slug: 3of3
           - module: sql
-            shard: 0/2
-            part: 1 of 2
-            slug: 1of2
+            shard: 0/3
+            part: 1 of 3
+            slug: 1of3
           - module: sql
-            shard: 1/2
-            part: 2 of 2
-            slug: 2of2
+            shard: 1/3
+            part: 2 of 3
+            slug: 2of3
+          - module: sql
+            shard: 2/3
+            part: 3 of 3
+            slug: 3of3
     steps:
     - name: Bootstrap composite actions
       uses: actions/checkout@v6
@@ -1446,14 +1450,14 @@ jobs:
     # archives them before its suites run. The suites step's own build then finds nothing to do.
     # The three steps are an optimization of another workflow, so none of them fails this job.
     - name: Build the test classes for the option matrix
-      if: matrix.module == 'sql' && matrix.shard == '0/2'
+      if: matrix.module == 'sql' && matrix.shard == '0/3'
       continue-on-error: true
       run: |
         ./dev/varka_matrix.sh --defaults --module sql --build-only --sbt-arg -Phive \
           --out target/varka-scoped
         ./dev/varka_matrix_archive.sh pack target/varka-scoped target/varka-matrix-build.tar
     - name: Upload the test classes for the option matrix
-      if: matrix.module == 'sql' && matrix.shard == '0/2'
+      if: matrix.module == 'sql' && matrix.shard == '0/3'
       continue-on-error: true
       uses: actions/upload-artifact@v4
       with:
@@ -1462,7 +1466,7 @@ jobs:
         retention-days: 1
         compression-level: 1
     - name: Remove the archive of the test classes
-      if: matrix.module == 'sql' && matrix.shard == '0/2'
+      if: matrix.module == 'sql' && matrix.shard == '0/3'
       continue-on-error: true
       run: rm -f target/varka-matrix-build.tar
     # The sql suites record, as they run at the defaults, which option configurations move each
