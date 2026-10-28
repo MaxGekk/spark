@@ -39,8 +39,8 @@ import org.apache.spark.sql.execution.columnar.InMemoryTableScanExec
 import org.apache.spark.sql.execution.varka.{VarkaFallbackAccounting, VarkaKernelRunner}
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, DateType,
-  DayTimeIntervalType, IntegerType, LongType, ShortType, TimestampNTZType, TimeType,
-  YearMonthIntervalType}
+  DayTimeIntervalType, DoubleType, FloatType, IntegerType, LongType, ShortType,
+  TimestampNTZType, TimeType, YearMonthIntervalType}
 
 /**
  * Every row of the published coverage table, run through both engines (VARKA-120).
@@ -286,7 +286,10 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
     // lane, so `CASE WHEN rid < 0 THEN greatest(l, l2) ...` mixes the int and long lanes and is
     // never fused, where `CASE WHEN lrid < 0 ...` is.
     val view = VarkaCoverageDifferentialSuite.fixtureView(rows, "\nWHERE rid < 2")
-    "varka_coverage_extremes" -> s"SELECT *, CAST(rid AS BIGINT) AS lrid FROM ($view)"
+    // `xrid` and `frid` are its DOUBLE and FLOAT twins (VARKA-341): a floating kernel holds no
+    // integral value until a mask crosses between the kinds.
+    "varka_coverage_extremes" -> (s"SELECT *, CAST(rid AS BIGINT) AS lrid, " +
+      s"CAST(rid AS DOUBLE) AS xrid, CAST(rid AS FLOAT) AS frid FROM ($view)")
   }
 
   private def cacheFixtures(session: SparkSession): Unit = {
@@ -388,12 +391,32 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
 
   rows.foreach { row =>
     test(s"${row.family}: ${row.sql} matches the row engine under both consumers") {
-      fixtures.foreach { case (fixture, _) =>
-        checkRowConsumer(row, fixture)
-        checkColumnarConsumer(row, fixture)
+      withFloatingPruningOff(row) {
+        fixtures.foreach { case (fixture, _) =>
+          checkRowConsumer(row, fixture)
+          checkColumnarConsumer(row, fixture)
+        }
       }
     }
   }
+
+  /** A reference to a floating column of the fixtures: `x`, `x2`, `f`, `f2`, `xrid`, `frid`. */
+  private val floatingColumn = """\b(x|x2|f|f2|xrid|frid)\b""".r
+
+  /**
+   * Runs `body` with both sessions reading the cached fixtures without the batch pruning of
+   * their column statistics when `row` reads a floating column. The statistics leave NaN out
+   * (SPARK-58482): a batch whose only value is NaN records an empty range, so a filter a NaN
+   * row passes, `x IN (..., NaN)`, prunes that batch, and at one row a batch
+   * (`arrowBatchSize=1`) the kernel never sees the row the test is about. The expected side
+   * may also plan over the uncached rows, which prunes nothing, so the two answers would
+   * differ on a fact about the cache, not about either engine. The wrap is not a workaround
+   * for a lost cache: with both sides cached they would agree on the pruned answer and leave
+   * the NaN row untested.
+   */
+  private def withFloatingPruningOff[T](row: CoverageRow)(body: => T): T =
+    if (floatingColumn.findFirstIn(row.executable).isEmpty) body
+    else withBothConf(SQLConf.IN_MEMORY_PARTITION_PRUNING.key, "false")(body)
 
   // ---------------------------------------------------------------------------------------------
   // The partition oracle (VARKA-138)
@@ -573,7 +596,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
    * Each predicate row's null tests as the condition of a CASE: `CASE WHEN (p) IS NULL THEN a
    * ELSE b END` and the same with `IS NOT NULL`. Run with the partition rewrites excluded, since
    * `NullDownPropagation` would otherwise turn the test into null tests on the columns, which the
-   * per-row test already runs. The arms are two dates or two bigints: a kernel holds its
+   * per-row test already runs. The arms are two dates, two bigints, two doubles or two floats
+   * (a floating condition beside integral arms waits for a mask crossing): a kernel holds its
    * condition on the arms' lane, or lifts an int condition to meet bigint arms, and which lane a
    * predicate's condition lands on (`i < l` compares bigints, `hour(t) = 12` ints) is the
    * compiler's, not the SQL's, so one pair of arms must have its kernel serve the whole
@@ -582,7 +606,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
   private def nullTestConditionCheck(row: CoverageRow, fixture: String): Seq[String] = {
     val p = row.executable
     Seq("IS NULL", "IS NOT NULL").flatMap { test =>
-      val outcomes = Seq(("d", "d2"), ("l", "l2")).map { case (a, b) =>
+      val outcomes = Seq(("d", "d2"), ("l", "l2"), ("x", "x2"), ("f", "f2")).map { case (a, b) =>
         val query = s"SELECT CASE WHEN ($p) $test THEN $a ELSE $b END AS v FROM $fixture"
         val actual = varkaSpark.sql(query)
         val plan = actual.queryExecution.executedPlan
@@ -660,9 +684,17 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
   private val FalseAnd = "the right side of a false AND"
   private val TrueOr = "the right side of a true OR"
 
-  /** Whether values of `t` live on Varka's long lane: the type registry's answer. */
-  private def onLongLane(t: DataType): Boolean =
-    VarkaTypes.lane(t).toScala.contains(LaneType.LONG)
+  /**
+   * The extremes fixture's `rid` at the lane of `t`, the type registry's answer: `lrid` for the
+   * long lane, `xrid` and `frid` for the floating ones, `rid` for every other, so a guard and
+   * the expression it guards share a kernel.
+   */
+  private def guardOf(t: DataType): String = VarkaTypes.lane(t).toScala match {
+    case Some(LaneType.LONG) => "lrid"
+    case Some(LaneType.DOUBLE) => "xrid"
+    case Some(LaneType.FLOAT) => "frid"
+    case _ => "rid"
+  }
 
   /**
    * A value of the extremes fixture of `t`'s type that never raises, to stand beside an
@@ -686,6 +718,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
     case ShortType => Some("s2")
     case LongType => Some("l2")
     case TimestampNTZType => Some("ntz2")
+    case DoubleType => Some("x2")
+    case FloatType => Some("f2")
     case _: TimeType => Some("t2")
     case _: DayTimeIntervalType => Some("dt2")
     case YearMonthIntervalType(start, end) if start == end =>
@@ -715,13 +749,13 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
           case Project(list, _) => list.flatMap(_.references.toSeq)
           case other => fail(s"expected a projection, got\n$other")
         }
-        val guard = if (read.exists(a => onLongLane(a.dataType))) "lrid" else "rid"
+        val guard = read.map(a => guardOf(a.dataType)).find(_ != "rid").getOrElse("rid")
         Seq(
           FalseAnd -> Some(s"SELECT rid $from WHERE $guard < 0 AND ($e)"),
           TrueOr -> Some(s"SELECT rid $from WHERE $guard >= 0 OR ($e)"))
       case _ =>
         val t = spark.sql(s"SELECT $e AS v $from").schema.head.dataType
-        val guard = if (onLongLane(t)) "lrid" else "rid"
+        val guard = guardOf(t)
         Seq(
           Alone -> Some(s"SELECT $e AS v $from"),
           CaseArm -> standIn(t, caseArm = true).map(c =>
@@ -1114,7 +1148,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
     }
     assert(kernel.derivedInputs.isEmpty,
       "a derived input is the row engine's own map of a column, which this verdict does not model")
-    val long = kernel.lane(options) == LaneType.LONG
+    // The long harness at every 64-bit lane, DOUBLE's bits included.
+    val long = kernel.lane(options).bits() == java.lang.Long.SIZE
     val guards = new VarkaGuardSpec.Guards(kernel.outputs.asScala.toSeq,
       kernel.inputOrdinals.size, kernel.numLiterals, options, long)
     val lits: Array[Long] =
@@ -1140,6 +1175,9 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
             case ShortType => r.getShort(o).toLong
             case LongType | TimestampNTZType | _: TimeType | _: DayTimeIntervalType =>
               r.getLong(o)
+            // A floating value is its raw bits on its lane (VARKA-341).
+            case DoubleType => java.lang.Double.doubleToRawLongBits(r.getDouble(o))
+            case FloatType => java.lang.Float.floatToRawIntBits(r.getFloat(o)).toLong
             case other => fail(s"no lane reads a $other input")
           })
         }
@@ -1320,6 +1358,45 @@ private object VarkaCoverageDifferentialSuite {
   /** The last day whose midnight is a long count of microseconds: the NTZ cast's bound. */
   val lastNtzDay: Long = Long.MaxValue / DateTimeConstants.MICROS_PER_DAY
 
+  /** How many values each floating column picks from: `floatingColumns`' lists. */
+  val floatingPicks: Int = 10
+
+  /**
+   * The floating columns of a fixture (VARKA-341), `x`, `x2` (`DOUBLE`) and `f`, `f2` (`FLOAT`),
+   * as SELECT entries: Spark's special values, each column's picked by the int under `picks`, in
+   * `0 until floatingPicks`, and null where that is. Over the same pick the pairs meet NaN
+   * against NaN and against negative infinity, a NaN with its sign bit set against the
+   * canonical one, both zeros both ways round, the two infinities, an equal pair, the extremes
+   * and the smallest subnormal; `1.5`, `-2.5` and `0.0` are literals the coverage rows name.
+   * Every ordered pair of the special values, NaN against positive infinity among them, is
+   * `VarkaFloatingLaneSuite`'s, and the Spark fuzz picks each column by a different value.
+   * Other NaN payloads cannot be written in SQL: `VarkaFloatingLaneSuite` builds them from
+   * their bits, and the catalyst fuzzers draw them.
+   */
+  def floatingColumns(picks: Seq[String]): String = {
+    def dbl(v: String): String = v match {
+      case "NaN" | "Infinity" | "-Infinity" => s"CAST('$v' AS DOUBLE)"
+      case "-NaN" => "-CAST('NaN' AS DOUBLE)"
+      case _ => s"${v}D"
+    }
+    def flt(v: String): String = v match {
+      case "NaN" | "Infinity" | "-Infinity" => s"CAST('$v' AS FLOAT)"
+      case "-NaN" => "-CAST('NaN' AS FLOAT)"
+      case _ => s"CAST(${v}D AS FLOAT)"
+    }
+    val first = Seq("NaN", "-0.0", "0.0", "Infinity", "-Infinity", "1.5", "-2.5", "-NaN")
+    val second = Seq("NaN", "0.0", "-0.0", "-Infinity", "NaN", "1.5", "1.5", "NaN", "-0.0")
+    val (dMax, dMin) = ("1.7976931348623157E308", "4.9E-324")
+    val (fMax, fMin) = ("3.4028235E38", "1.4E-45")
+    val lists = Seq(
+      "x" -> (first :+ dMax :+ dMin).map(dbl), "x2" -> (second :+ s"-$dMax").map(dbl),
+      "f" -> (first :+ fMax :+ fMin).map(flt), "f2" -> (second :+ s"-$fMax").map(flt))
+    lists.zip(picks).map { case ((name, values), pick) =>
+      assert(values.size == floatingPicks)
+      s"element_at(array(${values.mkString(", ")}), ($pick) + 1) AS $name"
+    }.mkString(",\n       ")
+  }
+
   /**
    * A fixture's view over `values`, rows of the sixteen source columns in parentheses, each
    * given its position as an int `rid` that no coverage row names; `where` filters the rows.
@@ -1329,12 +1406,17 @@ private object VarkaCoverageDifferentialSuite {
    * sides read the cached view ([[sameCacheReads]]), so neither evaluates the CASE again: an
    * uncached row engine would inline it, infer no `isnotnull(ntz)`, and raise on a cast the
    * cached plans never evaluate (VARKA-498).
+   *
+   * The floating columns are derived too (VARKA-341), `floatingColumns` picked by `rid`, null
+   * where `d`, `d2`, `i` and `l2` are.
    */
   def fixtureView(values: Seq[String], where: String = ""): String = {
     val withIds = values.zipWithIndex.map { case (v, rid) => s"($rid, ${v.stripPrefix("(")}" }
     def ntz(day: String, time: String): String =
       s"CASE WHEN abs(unix_date($day)) < $lastNtzDay " +
         s"THEN CAST($day AS TIMESTAMP_NTZ) + ($time - TIME'00:00:00') END"
+    val floating = floatingColumns(Seq("d", "d2", "i", "l2").map(c =>
+      s"CASE WHEN $c IS NOT NULL THEN rid % $floatingPicks END"))
     s"""SELECT rid, d, d2, i,
        |       CAST(m AS INTERVAL MONTH) AS ymm,
        |       CAST(y AS INTERVAL YEAR) AS ymy,
@@ -1344,7 +1426,8 @@ private object VarkaCoverageDifferentialSuite {
        |       CASE WHEN rid % 4 = 3 THEN NULL ELSE rid % 2 = 0 END AS b,
        |       CASE WHEN rid % 5 = 4 THEN NULL ELSE rid % 3 = 0 END AS b2,
        |       ${ntz("d", "t")} AS ntz,
-       |       ${ntz("d2", "t2")} AS ntz2
+       |       ${ntz("d2", "t2")} AS ntz2,
+       |       $floating
        |FROM VALUES ${withIds.mkString(",\n  ")}
        |AS v(rid, d, d2, i, m, y, mm, l, l2, t, t2, dt, dt2, y1, y2, s1, s2)$where""".stripMargin
   }

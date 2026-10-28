@@ -692,6 +692,66 @@ The *Switches* column names the family switches that keep the row off Varka, eac
 | `CAST(d AS TIMESTAMP_NTZ)` | `intArithmetic` | `unix_date(d) BETWEEN -106751991 AND 106751991` | Spark multiplies with multiplyExact in every mode, so a day past the bound raises under LEGACY and ANSI and is null under TRY, on the row engine the guard sends its batch to | per-lane: compare to mask, mask logic, mask broadcast, mask test |
 | `CAST(ntz AS DATE)` | `intArithmetic` |  | cannot fail: every quotient is a day an int holds | vector |
 
+#### DOUBLE columns
+
+| Predicate | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `x < x2` | `predicate` |  |  | per-lane: compare to mask, mask cast, mask logic, mask broadcast |
+| `x <= x2` | `predicate` |  |  | per-lane: compare to mask, mask cast, mask logic |
+| `x > x2` | `predicate` |  |  | per-lane: compare to mask, mask cast, mask logic, mask broadcast |
+| `x >= x2` | `predicate` |  |  | per-lane: compare to mask, mask cast, mask logic |
+| `x = x2` | `predicate` |  | NaN equals NaN, and -0.0 equals 0.0 | per-lane: compare to mask, mask cast, mask logic |
+| `x <> x2` | `predicate` |  |  | per-lane: compare to mask, mask cast, mask logic, mask broadcast |
+| `x <=> x2` | `predicate` |  | null-safe equality under the lane's own equality | per-lane: compare to mask, mask cast, mask logic |
+| `x < 1.5D` | `predicate` |  | the literal is its bits in the table of the lane's width | per-lane: compare to mask, mask cast, mask logic, mask broadcast |
+| `x = 1.5D` | `predicate` |  |  | per-lane: compare to mask, mask cast, mask logic |
+| `x IN (1.5D, -2.5D, 0.0D, CAST('NaN' AS DOUBLE))` | `predicate` |  | an equality chain under the lane's equality | per-lane: compare to mask, mask cast, mask logic |
+| `x IN (11 literals)` | `predicate` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | per-lane: compare to mask, mask cast, mask logic |
+| `isnan(x)` | `predicate` |  | never null: false on a null row | per-lane: compare to mask, mask cast, mask logic, mask broadcast |
+| `x IS NULL` | `predicate` |  |  | per-lane: mask broadcast, mask logic, mask cast |
+| `x IS NOT NULL` | `predicate` |  |  | per-lane: mask cast, mask broadcast |
+
+#### DOUBLE columns choosing values
+
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `greatest(x, x2)` | `intArithmetic` |  | Spark's order, the first of two equal operands kept | per-lane: compare to mask, mask cast, mask logic, mask broadcast, blend |
+| `least(x, x2)` | `intArithmetic` |  |  | per-lane: compare to mask, mask cast, mask logic, mask broadcast, blend |
+| `nanvl(x, x2)` | `condition` |  | an IF over isnan, null where the first operand is | per-lane: compare to mask, mask cast, mask logic, blend, mask broadcast |
+| `CASE WHEN x < x2 THEN x ELSE x2 END` | `predicate`, `condition` |  |  | per-lane: compare to mask, mask cast, mask logic, mask broadcast, blend |
+| `if(x IS NULL, x2, x)` | `predicate`, `condition` |  |  | per-lane: mask broadcast, mask logic, blend |
+| `coalesce(x, x2)` | `condition` |  |  | per-lane: blend, mask broadcast |
+
+#### FLOAT columns
+
+| Predicate | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `f < f2` | `predicate` |  |  | vector |
+| `f <= f2` | `predicate` |  |  | vector |
+| `f > f2` | `predicate` |  |  | vector |
+| `f >= f2` | `predicate` |  |  | vector |
+| `f = f2` | `predicate` |  | NaN equals NaN, and -0.0 equals 0.0 | vector |
+| `f <> f2` | `predicate` |  |  | vector |
+| `f <=> f2` | `predicate` |  | null-safe equality under the lane's own equality | vector |
+| `f < 1.5F` | `predicate` |  | the literal is its bits in the table of the lane's width | vector |
+| `f = 1.5F` | `predicate` |  |  | vector |
+| `f IN (1.5F, -2.5F, 0.0F, CAST('NaN' AS FLOAT))` | `predicate` |  | an equality chain under the lane's equality | vector |
+| `f IN (11 literals)` | `predicate` |  | an IN list this long arrives from the optimizer as an InSet and fuses the same way | vector |
+| `isnan(f)` | `predicate` |  | never null: false on a null row | vector |
+| `f IS NULL` | `predicate` |  |  | vector |
+| `f IS NOT NULL` | `predicate` |  |  | vector |
+
+#### FLOAT columns choosing values
+
+| Expression | Switches | Domain | Notes | 128-bit lanes |
+|---|---|---|---|---|
+| `greatest(f, f2)` | `intArithmetic` |  | Spark's order, the first of two equal operands kept | vector |
+| `least(f, f2)` | `intArithmetic` |  |  | vector |
+| `nanvl(f, f2)` | `condition` |  | an IF over isnan, null where the first operand is | vector |
+| `CASE WHEN f < f2 THEN f ELSE f2 END` | `predicate`, `condition` |  |  | vector |
+| `if(f IS NULL, f2, f)` | `predicate`, `condition` |  |  | vector |
+| `coalesce(f, f2)` | `condition` |  |  | vector |
+
 #### Time arithmetic
 
 | Expression | Switches | Domain | Notes | 128-bit lanes |
@@ -731,7 +791,9 @@ operands (a row counts once for each type it reads):
 | `bool` | 19 | 0 | 0 | 10 | 0 | 9 |
 | `byte` | 25 | 0 | 0 | 0 | 8 | 17 |
 | `date` | 84 | 17 | 0 | 1 | 0 | 66 |
+| `double` | 20 | 0 | 0 | 0 | 0 | 20 |
 | `dt` | 15 | 2 | 0 | 0 | 0 | 13 |
+| `float` | 20 | 0 | 0 | 0 | 0 | 20 |
 | `int` | 72 | 14 | 2 | 0 | 1 | 55 |
 | `ntz` | 19 | 0 | 1 | 0 | 0 | 18 |
 | `short` | 25 | 0 | 0 | 0 | 8 | 17 |

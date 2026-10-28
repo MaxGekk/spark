@@ -319,10 +319,10 @@ public final class VarkaTypes {
           new Conformance.Suite("BigInt"));
       case FLOAT -> new Info(id, "float", "FLOAT", new Admission.OnLane(LaneType.FLOAT), 32,
           List.of(DataTypes.FloatType), List.of(LaneType.FLOAT),
-          new Conformance.Owed("Float", "341"));
+          new Conformance.Suite("Float"));
       case DOUBLE -> new Info(id, "double", "DOUBLE", new Admission.OnLane(LaneType.DOUBLE), 64,
           List.of(DataTypes.DoubleType), List.of(LaneType.DOUBLE),
-          new Conformance.Owed("Double", "341"));
+          new Conformance.Suite("Double"));
       // Every precision is sixteen bytes a row in Arrow (`ArrowUtils.toArrowType`); the tests
       // probe one form on each side of the 64-bit boundary at precision 18.
       case DECIMAL -> new Info(id, "dec", "DECIMAL(10, 2)", new Admission.Owed("347"), 128,

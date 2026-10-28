@@ -70,18 +70,10 @@ BENCHMARKS = [
 OWED = {
     ("fuzz grammar", "BYTE"): "row 352 (the fuzzers across types)",
     ("fuzz grammar", "SHORT"): "row 352 (the fuzzers across types)",
-    ("template warm-up", "FLOAT"): "row 341 (the floating lanes, after their split)",
     ("fuzz grammar", "FLOAT"): "row 341 (the floating lanes, after their split)",
     ("benchmark", "FLOAT"): "row 341 (the floating lanes, after their split)",
-    ("template warm-up", "DOUBLE"): "row 341 (the floating lanes, after their split)",
     ("fuzz grammar", "DOUBLE"): "row 341 (the floating lanes, after their split)",
     ("benchmark", "DOUBLE"): "row 341 (the floating lanes, after their split)",
-    ("coverage table", "FloatType"): "row 341 (the floating lanes' coverage rows)",
-    ("width audit", "FloatType"): "row 341 (the floating lanes' coverage rows)",
-    ("census", "FloatType"): "row 341 (the floating lanes' coverage rows)",
-    ("coverage table", "DoubleType"): "row 341 (the floating lanes' coverage rows)",
-    ("width audit", "DoubleType"): "row 341 (the floating lanes' coverage rows)",
-    ("census", "DoubleType"): "row 341 (the floating lanes' coverage rows)",
 }
 
 

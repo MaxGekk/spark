@@ -28,7 +28,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.{FusedO
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaCompositionCase.Entry
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.LaneType
 import org.apache.spark.sql.catalyst.util.{DateTimeConstants, DateTimeUtils}
-import org.apache.spark.sql.types.{DataType, DayTimeIntervalType, TimeType}
+import org.apache.spark.sql.types.{DataType, DayTimeIntervalType, DoubleType, FloatType, TimeType}
 
 /**
  * Random compositions of the coverage table, through the compiler to the emitter.
@@ -114,7 +114,10 @@ class VarkaCoverageCompositionFuzzSuite
    */
   private def isCompositionDecline(reason: String, laneRule: Boolean = true): Boolean =
     reason.contains("budget") || (laneRule && reason.contains("one kernel holds one lane")) ||
-      reason.contains(VarkaConjunctOrder.OUT_OF_ORDER)
+      reason.contains(VarkaConjunctOrder.OUT_OF_ORDER) ||
+      // A floating conjunct beside an integral one (VARKA-341): the filter's kernel meets on the
+      // integral lane until a mask crosses between the kinds (`floatingConjunctRefusal`).
+      reason.contains("in a filter that also reads integral columns")
 
   /**
    * A projection's entries: the one-lane rule holds only with several kernels off, since with
@@ -254,6 +257,30 @@ class VarkaCoverageCompositionFuzzSuite
     }
   }
 
+  /**
+   * The bits of a floating input (VARKA-341), sign-extended to a long, or `None` for any other
+   * type: Spark's special values - NaN, both zeros, both infinities, the smallest subnormal and
+   * the extremes - and NaNs of other payloads and of both signs, which `CAST('NaN' ...)` cannot
+   * make and on which a pick that returned the wrong one of two NaNs would show, beside an
+   * arbitrary pattern and an ordinary value. The same at every attempt: no guard reads a
+   * floating value, so there is nothing to draw nearer zero.
+   */
+  private def floatingInput(dataType: DataType, rnd: Random): Option[Long] = dataType match {
+    case DoubleType =>
+      val specials = Seq(java.lang.Double.NaN, -0.0, 0.0, Double.PositiveInfinity,
+        Double.NegativeInfinity, java.lang.Double.MIN_VALUE, Double.MaxValue, Double.MinValue,
+        1.5, -2.5).map(java.lang.Double.doubleToRawLongBits) ++
+        Seq(0x7ff8000000000001L, 0xfff8000000000000L, 0x7ff0000000000001L, rnd.nextLong())
+      Some(specials(rnd.nextInt(specials.size)))
+    case FloatType =>
+      val specials = Seq(Float.NaN, -0.0f, 0.0f, Float.PositiveInfinity,
+        Float.NegativeInfinity, java.lang.Float.MIN_VALUE, Float.MaxValue, Float.MinValue,
+        1.5f, -2.5f).map(java.lang.Float.floatToRawIntBits) ++
+        Seq(0x7fc00001, 0xffc00000, 0x7f800001, rnd.nextInt())
+      Some(specials(rnd.nextInt(specials.size)).toLong)
+    case _ => None
+  }
+
   /** Kernels compared row by row and batches drawn again after a decline, per lane. */
   private val comparedByLane = scala.collection.mutable.Map.empty[LaneType, Int]
   private val kernelsByLane = scala.collection.mutable.Map.empty[LaneType, Int]
@@ -263,11 +290,11 @@ class VarkaCoverageCompositionFuzzSuite
    * Runs one compiled kernel, at its lane, against the reference evaluator over `inputs`, the
    * attributes its input ordinals index. Each input is drawn from its own domain: a derived input
    * from its kind's codes, a bounded input across its bound, an int-lane input within thirty
-   * thousand either side of zero, a long-lane one by its type (`drawLong`). A batch a guard
-   * declines is drawn again twice, nearer zero each time and a bounded input clamped into its
-   * bound, the last within one to three, which no guard declines; each attempt keeps the length
-   * and null patterns. The test then asserts that
-   * every kernel was compared. Returns whether the kernel was.
+   * thousand either side of zero, a long-lane one by its type (`drawLong`), and a floating input
+   * at either lane from its special values (`floatingInput`). A batch a guard declines is drawn
+   * again twice, nearer zero each time and a bounded input clamped into its bound, the last
+   * within one to three, which no guard declines; each attempt keeps the length and null
+   * patterns. The test then asserts that every kernel was compared. Returns whether the kernel was.
    *
    * With `poisoned`, the batch's shape is not drawn but fixed (VARKA-138), `poisonedPatterns`,
    * and it runs through the masked body alone, at both fills: its other body would be the same
@@ -300,12 +327,15 @@ class VarkaCoverageCompositionFuzzSuite
       }
     }
     val forceMasked = !poisoned && length > 1 && rnd.nextBoolean()
-    def intValue(i: Int, scale: Int): Int = intInput(plan, i, scale, rnd)
+    def intValue(i: Int, scale: Int): Int =
+      floatingInput(inputs(plan.inputOrdinals.get(i)).dataType, rnd).map(_.toInt)
+        .getOrElse(intInput(plan, i, scale, rnd))
     val roots = plan.outputs.asScala.toSeq
-    def attempt(scale: Int): Boolean = if (plan.lane(opts) == LaneType.LONG) {
+    // The long harness at every 64-bit lane: a DOUBLE's rows and literals are its bits.
+    def attempt(scale: Int): Boolean = if (plan.lane(opts).bits() == java.lang.Long.SIZE) {
       val data = Array.tabulate(numInputs) { i =>
         val dataType = inputs(plan.inputOrdinals.get(i)).dataType
-        Array.fill(length)(drawLong(rnd, dataType, scale))
+        Array.fill(length)(floatingInput(dataType, rnd).getOrElse(drawLong(rnd, dataType, scale)))
       }
       val lits = plan.longLiterals.asScala.map(_.longValue).toArray
       // A kernel of both lanes (VARKA-28) reads the int table beside the long one.
@@ -567,14 +597,16 @@ class VarkaCoverageCompositionFuzzSuite
   private def compiledCase(sql: String, plan: CompiledVarkaProjection, opts: VarkaEmitOptions,
       rnd: Random): VarkaFuzzCase = {
     val n = plan.inputOrdinals.size
-    val isLong = plan.lane(opts) == LaneType.LONG
+    val isLong = plan.lane(opts).bits() == java.lang.Long.SIZE
     val length = Seq(64, 100, 257, 1000)(rnd.nextInt(4))
     val nulls = Array.fill(n)(Array.tabulate(length)(i => i % 5 != 4 && rnd.nextInt(3) == 0))
     val lits = if (isLong) plan.longLiterals.asScala.map(_.longValue).toArray
       else plan.literals.asScala.map(_.longValue).toArray
-    def value(i: Int, scale: Int): Long =
-      if (isLong) drawLong(rnd, columns(plan.inputOrdinals.get(i)).dataType, scale)
-      else intInput(plan, i, scale, rnd)
+    def value(i: Int, scale: Int): Long = {
+      val dataType = columns(plan.inputOrdinals.get(i)).dataType
+      floatingInput(dataType, rnd).getOrElse(
+        if (isLong) drawLong(rnd, dataType, scale) else intInput(plan, i, scale, rnd))
+    }
     // The null flags the histories run: none (the other body's run, which reads every value),
     // the batch's own, and `quiet-null`'s column 0 all-null.
     val masks = Seq(nulls.map(_.map(_ => false)), nulls, nulls.zipWithIndex.map { case (z, i) =>
@@ -715,8 +747,10 @@ class VarkaCoverageCompositionFuzzSuite
       // `shiftright(l, i ^ 5)` is an int-lane literal under a widening), whichever table is empty:
       // the int table it would index is the truncated copy of the long one, too short for the slot.
       // `VarkaEmitterMixedLaneSuite` and the IR fuzzer's mixed corpus run such kernels instead.
+      // A FLOAT kernel's literals are its bits in the int table, as an int kernel's are.
       val oneTable = rowKernels.filter { case (_, p) =>
-        p.literals.isEmpty || (p.longLiterals.isEmpty && p.lane(opts) == LaneType.INT)
+        p.literals.isEmpty ||
+          (p.longLiterals.isEmpty && p.lane(opts).bits() == java.lang.Integer.SIZE)
       }
       val kernels = coverageRow match {
         case Some(sql) =>
@@ -886,7 +920,7 @@ class VarkaCoverageCompositionFuzzSuite
       def run(code: Array[Byte], allNull: Boolean, fill: Option[VarkaKernelChecks.ValidityFill])
           : Unit = {
         val context = s"kernel of $sql at $width, ${if (allNull) "every row null" else "no nulls"}"
-        if (plan.lane(opts) == LaneType.LONG) {
+        if (plan.lane(opts).bits() == java.lang.Long.SIZE) {
           val batch = longBatch(allNull)
           fill match {
             case Some(f) => VarkaKernelCheck.runOwnBodyLong(context, className, code, roots,
@@ -908,7 +942,7 @@ class VarkaCoverageCompositionFuzzSuite
       // the rewrite's own list of writers, so a writer the rewrite misses shows here.
       def written(code: Array[Byte], allNull: Boolean, fill: VarkaKernelChecks.ValidityFill)
           : Int =
-        if (plan.lane(opts) == LaneType.LONG) {
+        if (plan.lane(opts).bits() == java.lang.Long.SIZE) {
           VarkaKernelCheck.validityBytesWrittenLong(className, code, roots, numInputs, longLits,
             longBatch(allNull), fill, intLits)
         } else {
