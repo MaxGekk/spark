@@ -233,8 +233,8 @@ jobs:
           grep -h '^CPU' target/varka-bins/*-platform/platform.txt | sort | uniq -c || true
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
-    # The suites' seconds under the defaults, from this run's JUnit reports, for the next plan's
-    # weights (sql/varka/matrix/suite-seconds.tsv).
+    # Each suite's seconds, its median over the configurations, from this run's JUnit reports,
+    # for the next plan's weights (sql/varka/matrix/suite-seconds.tsv).
     - name: Suite seconds
       if: always()
       run: |
