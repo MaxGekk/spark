@@ -40,7 +40,10 @@ public final class VarkaFloatConformanceSuite extends VarkaTypeConformance {
     }
     values[specials.length] = 0xffc00000;
     values[specials.length + 1] = 0x7fc00001;
-    // A literal is asked of an integer, one or minus one, never of a fixture's bits.
-    return new ConformanceType("float", DataTypes.FloatType, "FLOAT", v -> v + ".0F", values);
+    // The picks are the bits of one and minus one, and a literal spells the float of its bits.
+    return new ConformanceType("float", DataTypes.FloatType, "FLOAT",
+        v -> Float.intBitsToFloat((int) v) + "F",
+        values, new long[] {Float.floatToRawIntBits(1.0f), Float.floatToRawIntBits(-1.0f)},
+        new PairForm("x + y", "+"));
   }
 }

@@ -445,8 +445,10 @@ public final class VarkaReference {
       }
       case GuardedRange g -> longValue(g.child(), row, isNull, lits);
       // The narrowing is the kernel's store, not a value change: the reference answers the child
-      // in full and the suite narrows it the way the store does, so a value that does not fit an
-      // int shows as a difference rather than being truncated on both sides.
+      // in full, so a value that does not fit an int shows as a difference from the store rather
+      // than being truncated on both sides, which checks the bound the IR series narrows on. The
+      // conformance path alone truncates it, after this, to hold a LEGACY CAST(x AS INT) to
+      // Spark's answer (VarkaKernelChecks.runLoadedLong with Spark's answers).
       case NarrowLane n -> longValue(n.child(), row, isNull, lits);
       case WidenLane n -> throw new IllegalArgumentException(
           "a widening reads int rows, and is evaluated through mixedValue: " + n);

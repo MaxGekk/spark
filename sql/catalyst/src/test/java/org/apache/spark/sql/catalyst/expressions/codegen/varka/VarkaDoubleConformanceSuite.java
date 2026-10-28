@@ -49,8 +49,10 @@ public final class VarkaDoubleConformanceSuite extends VarkaTypeConformance {
     System.arraycopy(values, 0, withPayloads, 0, values.length);
     withPayloads[values.length] = 0xfff8000000000000L;
     withPayloads[values.length + 1] = 0x7ff8000000000001L;
-    // A literal is asked of an integer, one or minus one, never of a fixture's bits.
-    return new ConformanceType("double", DataTypes.DoubleType, "DOUBLE", v -> v + ".0D",
-        withPayloads);
+    // The picks are the bits of one and minus one, and a literal spells the double of its bits.
+    return new ConformanceType("double", DataTypes.DoubleType, "DOUBLE",
+        v -> Double.longBitsToDouble(v) + "D", withPayloads,
+        new long[] {Double.doubleToRawLongBits(1.0), Double.doubleToRawLongBits(-1.0)},
+        new PairForm("x + y", "+"));
   }
 }

@@ -787,7 +787,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
       "second(t)", "hour(t) + 1", "CAST(time_to_millis(t) AS INT)", "i & 255", "i | 4096",
       "i ^ 21845", "~i", "i << 3", "shiftright(i, i)", "i >>> 28", "bit_count(i)", "bit_count(l)",
       "bit_count(l) + 1", "y1 + i", "CAST(s1 AS INT)", "CAST(y1 AS INT) * CAST(y2 AS INT)",
-      "CAST(s1 AS INT) * CAST(s2 AS INT)")
+      "CAST(s1 AS INT) * CAST(s2 AS INT)", "try_add(i, 1)", "try_subtract(i, 1)")
     // `CAST(i AS INTERVAL DAY)` throws past `INTERVAL_DAY_LIMIT_DAYS`, so the compiler puts a
     // bound on `i` that the evaluator checks before the kernel runs; the bound belongs to the
     // column, not to the arm reading it, and the extremes row's `Int.MaxValue` declines the
@@ -803,7 +803,7 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
     val unqualified = "a check on the right side of an AND condemns the batch from a lane the " +
       "left side rejected (m9/SCOPE.md item 96)"
     val checkedRight = Seq("make_date(2021, i, 1)", "add_months(d, i)", "d + ym", "d - ym",
-      "ym - ymm", "i + 1", "year(d) + i")
+      "ym - ymm", "ym + ym", "i + 1", "year(d) + i")
     // The narrow arithmetic's rows (VARKA-330) decline no position of their own. CASE and
     // COALESCE are served by VARKA-329's lift - an int-lane condition takes a narrow branch
     // lifted to the int lane and stored narrow, and a bare narrow column is a value leaf - and
