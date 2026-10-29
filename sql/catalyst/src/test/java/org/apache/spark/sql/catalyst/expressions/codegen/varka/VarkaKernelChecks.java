@@ -1438,16 +1438,18 @@ public final class VarkaKernelChecks {
               agreeWithSpark(context, spark, o, i, values, isNull, want);
             }
             for (int f = 0; f < runs; f++) {
-              String at = context + fills.get(f).suffix();
               boolean bit = bit(outs[f].bits()[o], i);
               long got = lane.got(outs[f].values()[o], i, root);
+              // The fill's name is formatted only for a failure: this loop runs once a row.
               if (bit != want.isPresent()) {
+                String at = context + fills.get(f).suffix();
                 throw new IllegalStateException(at + ": validity of output " + o + " row " + i
                     + " differs (want " + shown(want) + ", got "
                     + (bit ? "Some(" + got + ")" : "None") + ")"
                     + evidence(values, isNull, nullCounts));
               }
               if (want.isPresent() && got != want.getAsLong()) {
+                String at = context + fills.get(f).suffix();
                 throw new IllegalStateException(at + ": output " + o + " row " + i
                     + " differs (want " + want.getAsLong() + ", got " + got + ")"
                     + evidence(values, isNull, nullCounts));

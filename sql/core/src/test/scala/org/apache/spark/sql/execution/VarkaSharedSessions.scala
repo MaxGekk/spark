@@ -17,6 +17,7 @@
 
 package org.apache.spark.sql.execution
 
+import org.apache.spark.internal.config.BUFFER_PAGESIZE
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaMatrix, VarkaMatrixTests}
 import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanHelper
@@ -59,6 +60,11 @@ trait VarkaSharedSessions extends SharedSparkSession with AdaptiveSparkPlanHelpe
       .set(StaticSQLConf.SPARK_CACHE_SERIALIZER.key,
         classOf[ArrowCachedBatchSerializer].getName)
       .set(SQLConf.CACHE_VECTORIZED_READER_ENABLED.key, "true")
+    // A sort's memory page, 1 MB rather than the up to 64 MB Spark sizes from the heap and the
+    // cores: every task of a sort allocates and zeroes one, and the suites sort a few rows in
+    // hundreds of queries, so the differential suite spent half its time in the allocator
+    // (147 s against 72 s on the laptop, VARKA-507). The answers do not depend on the page.
+    conf.set(BUFFER_PAGESIZE.key, "1m")
     // The batch-size axis (VARKA-301): this JVM's rows per Arrow cached batch, in every session.
     VarkaMatrix.arrowBatchSize.foreach(rows =>
       conf.set(SQLConf.ARROW_EXECUTION_MAX_RECORDS_PER_BATCH.key, rows.toString))

@@ -46,6 +46,17 @@ trait VarkaMatrixTests extends SparkFunSuite {
    * protected.
    */
   override def run(testName: Option[String], args: Args): Status = {
+    // The option matrix's reach recording takes what the suite compiles outside a test - in its
+    // set-up, between its tests - as every one of its tests' (VarkaTestReach).
+    VarkaTestReach.suiteBegin(suiteName)
+    try {
+      val status = runSanitized(testName, args)
+      status.waitUntilCompleted()
+      status
+    } finally VarkaTestReach.suiteEnd(suiteName)
+  }
+
+  private def runSanitized(testName: Option[String], args: Args): Status = {
     if (!VarkaMemorySanitizer.ENABLED) {
       return super.run(testName, args)
     }
@@ -66,6 +77,10 @@ trait VarkaMatrixTests extends SparkFunSuite {
     }
     status
   }
+
+  // The option matrix's reach recording, where the run asks for one, listens from the suite's
+  // construction on, before its set-up compiles anything (VarkaTestReach).
+  VarkaTestReach.install()
 
   override protected def test(testName: String, testTags: Tag*)(testBody: => Any)
       (implicit pos: Position): Unit = {

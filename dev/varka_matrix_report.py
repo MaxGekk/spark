@@ -23,7 +23,9 @@ A configuration fails when its runner JVM exits non-zero (a failed test or an ab
 or when a test that fused under the defaults fuses nothing under it and the skip list has no
 "declines" line for it - the row path answered alone, so the test passed without testing the
 configuration. A "declines" line whose test fuses is stale and fails too. Exit status 1 when
-anything failed.
+anything failed. The `atdef` column counts the tests a configuration left to the defaults' run
+because the Build's record says it changes nothing they compile or emit (VarkaTestReach): they
+pass unrun, record no fused count, and are not in `ok`.
 """
 
 import re
@@ -96,12 +98,12 @@ def main(runs, skips_path):
     bad = 0
     print(
         f"{'configuration':32} {'exit':>4} {'secs':>5} {'ok':>5} {'fail':>4} {'canc':>4} "
-        f"{'abort':>5} {'unfused':>7}"
+        f"{'abort':>5} {'unfused':>7} {'atdef':>5}"
     )
     details, notrun = [], []
     for d in dirs:
         name = (d / "name").read_text().strip()
-        ok = failed = canceled = aborted = status = seconds = 0
+        ok = failed = canceled = aborted = status = seconds = atdef = 0
         log = ""
         for module in modules_run(runs):
             jvms = jvm_dirs(d, module)
@@ -115,6 +117,12 @@ def main(runs, skips_path):
                     ok, failed, canceled = (
                         a + int(b) for a, b in zip((ok, failed, canceled), tests[-1])
                     )
+                # The tests the Build's record left to the defaults' run pass unrun, so they are
+                # counted apart from the ones that ran (VarkaTestReach).
+                # Every JVM prints its own line, an own-JVM suite's child into the parent's log.
+                for n in re.findall(r"VARKA_REACH_TESTS\t[^\t]*\tskipped (\d+)", text):
+                    atdef += int(n)
+                    ok -= int(n)
                 if not (jvm / "exit").exists():
                     notrun.append(f"  {name}: {jvm.name} did not finish")
                     continue
@@ -137,7 +145,7 @@ def main(runs, skips_path):
         bad += bool(failing)
         print(
             f"{name:32} {status:>4} {seconds:>5} {ok:>5} "
-            f"{failed:>4} {canceled:>4} {aborted:>5} {len(unfused):>7}"
+            f"{failed:>4} {canceled:>4} {aborted:>5} {len(unfused):>7} {atdef:>5}"
         )
         lines = log.splitlines()
         for i, line in enumerate(lines):

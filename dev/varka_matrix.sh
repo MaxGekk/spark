@@ -170,6 +170,7 @@ EXCLUDED=(
   "VarkaSuiteHarnessSuite:checks the JUnit face of the matrix's machinery, not an answer"
   "VarkaHarnessParitySuite:checks that the answer harness plans as a session does, not an answer"
   "VarkaReachSuite:checks the matrix's reach filter, not an answer"
+  "VarkaTestReachSuite:checks the matrix's record of which tests a configuration moves"
   "VarkaAssemblySuite:reads the JIT's output, not an answer"
   "VarkaWarmupEndToEndSuite:times a kernel's compilation, which a loaded machine moves"
   "VarkaTierWitnessSuite:asserts which JIT tier ran a call, which a loaded machine moves"
