@@ -264,6 +264,24 @@ jobs:
           if echo "${changed_files:-}" | grep -qE '^docs/'; then
             docs=true
           fi
+          # The API docs are built from Spark's sources, so a change that touches none of them and
+          # whose only files under docs/ are Markdown pages leaves them as they are: the job then
+          # stops after its site build without the API docs, which already proves every page
+          # builds (VARKA-515). For an edit of docs/sql-varka.md that build took 7 s, and the API
+          # docs after it 20 minutes. Such a change is one whose every file is a Markdown page
+          # under docs/, or one the Varka scope does not call a Spark change whose files under
+          # docs/ are all Markdown pages. Any other file under docs/ - the site's config, a plugin,
+          # a layout, an image - or any Spark source keeps the full job; the job reads a missing
+          # flag as true.
+          docs_api=true
+          if [ "$docs" = "true" ]; then
+            docs_other=$(echo "${changed_files:-}" | grep -E '^docs/' | grep -vE '\.md$' || true)
+            not_page=$(echo "${changed_files:-}" | grep -vE '^docs/.*\.md$' | grep -v '^$' || true)
+            if [ -z "$docs_other" ] \
+                && { [ "$varka_scope" != "spark" ] || [ -z "$not_page" ]; }; then
+              docs_api=false
+            fi
+          fi
           # The lint job's steps are gated the same way (row 225). MiMa cannot see Varka's code:
           # catalyst and execution are excluded from it and the engine has no released artifact
           # to compare against; the dependency test reads the poms, and a pom is a Spark file;
@@ -331,6 +349,7 @@ jobs:
               \"lint\" : \"true\",
               \"java25\" : \"$java25\",
               \"docs\" : \"$docs\",
+              \"docs-api\" : \"$docs_api\",
               \"yarn\" : \"$yarn\",
               \"k8s-integration-tests\" : \"$kubernetes\",
               \"oidc-e2e\" : \"$oidc_e2e\",
@@ -1651,12 +1670,19 @@ jobs:
         cd docs
         bundle install --retry=100
     - name: Run documentation build
+      env:
+        DOCS_API: ${{ fromJson(needs.precondition.outputs.required)['docs-api'] }}
       run: |
         # We need this link to make sure `python3` points to `python3.12` which contains the prerequisite packages.
         ln -s "$(which python3.12)" "/usr/local/bin/python3"
         # Build docs first with SKIP_API to ensure they are buildable without requiring any
         # language docs to be built beforehand.
         cd docs; SKIP_ERRORDOC=1 SKIP_API=1 bundle exec jekyll build; cd ..
+        # A change that cannot move the API docs stops here (the precondition's docs-api flag).
+        if [ "$DOCS_API" = "false" ]; then
+          echo "No source of the API docs changed: the site built without them is the check."
+          exit 0
+        fi
         # A run of Varka's master has its diff base at its own head, so every module would read
         # as unchanged; it has no change to measure and builds every language's docs
         # (VARKA-255.md 2.9).
