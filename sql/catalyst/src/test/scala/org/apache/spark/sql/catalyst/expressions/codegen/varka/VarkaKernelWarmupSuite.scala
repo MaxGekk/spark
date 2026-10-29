@@ -99,6 +99,8 @@ class VarkaKernelWarmupSuite extends SparkFunSuite with VarkaTestWatchdog {
       vectorFlags ++ matrixConfig ++ Seq("-cp", testClasspath,
       classOf[VarkaKernelWarmupProbe].getName, claimed.word) ++ (if (wide) Seq("wide") else Nil) ++
       (if (others) Seq("others") else Nil)
+    // The child JVM's code runs where the class-use record cannot see it (VarkaTestUse).
+    VarkaTestUse.childJvm()
     val process = new ProcessBuilder(command.asJava).redirectErrorStream(true).start()
     val reader = new BufferedReader(
       new InputStreamReader(process.getInputStream, StandardCharsets.UTF_8))
