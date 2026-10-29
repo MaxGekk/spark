@@ -16,475 +16,62 @@
 # A response recorded from the GitHub API for dev/varka_ci_ledger.py's self-test, trimmed.
 
 {
-"data": {
-"node": {
-"checkRuns": {
-"pageInfo": {
-"hasNextPage": false,
-"endCursor": "Y3Vyc29yOnYyOpHPAAAAHM14KUQ="
-},
-"nodes": [
-{
-"databaseId": 123726068998,
-"name": "Run / Varka engine (aarch64)",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123726065111,
-"name": "Run / Admit a full-matrix run",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123726056925,
-"name": "Run / Run Spark UI tests",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123726049007,
-"name": "Run / Base image build",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123726044354,
-"name": "Run / Varka bench drivers",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123726039601,
-"name": "Run / Protobuf breaking change detection and Python CodeGen check",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123726031590,
-"name": "Run / Varka assembly gate",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123725990786,
-"name": "Run / Build modules: ${{ matrix.modules }} ${{ matrix.comment }}",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123725990535,
-"name": "Run / Build modules: ${{ matrix.modules }}",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123725990486,
-"name": "Run / Run OIDC E2E integration tests (Minikube + moto)",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123725990462,
-"name": "Run / Build modules: sparkr",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123725990446,
-"name": "Run / Run Docker integration tests",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123725990082,
-"name": "Run / Run TPC-DS queries with SF=1",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123725990000,
-"name": "Run / Run Spark on Kubernetes Integration test",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123725989867,
-"name": "Run / Precompile Spark",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123725988945,
-"name": "Run / Documentation generation",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123725988239,
-"name": "Run / Varka suites: catalyst 1 of 3",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123725988091,
-"name": "Run / Linters, licenses, and dependencies",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123725988034,
-"name": "Run / Varka suites: catalyst 2 of 3",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123725987925,
-"name": "Run / Varka docs checks",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123725987887,
-"name": "Run / Java 25 build with Maven",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123725987773,
-"name": "Run / Varka suites: sql 3 of 3",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123725987643,
-"name": "Run / Varka engine (x86_64)",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123725987566,
-"name": "Run / Varka suites: sql 2 of 3",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123725986610,
-"name": "Run / Varka suites: sql 1 of 3",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123725986585,
-"name": "Run / Check changes",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123725986129,
-"name": "Run / Varka suites: catalyst 3 of 3",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123708103344,
-"name": "Run / Documentation generation",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123708102909,
-"name": "Run / Build modules: sparkr",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123708102615,
-"name": "Run / Build modules: ${{ matrix.modules }}",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123708100222,
-"name": "Run / Linters, licenses, and dependencies",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123707325767,
-"name": "Run / Run Docker integration tests",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123707325126,
-"name": "Run / Run TPC-DS queries with SF=1",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123707324898,
-"name": "Run / Run Spark on Kubernetes Integration test",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123707324557,
-"name": "Run / Build modules: ${{ matrix.modules }} ${{ matrix.comment }}",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123707324411,
-"name": "Run / Run OIDC E2E integration tests (Minikube + moto)",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123707324389,
-"name": "Run / Precompile Spark",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123707323779,
-"name": "Run / Admit a full-matrix run",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123707322606,
-"name": "Run / Java 25 build with Maven",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123707320501,
-"name": "Run / Varka suites: sql 3 of 3",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123707320446,
-"name": "Run / Varka docs checks",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123707320425,
-"name": "Run / Varka suites: sql 2 of 3",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123707320393,
-"name": "Run / Varka suites: catalyst 3 of 3",
-"conclusion": "FAILURE",
-"annotations": {
-"nodes": [
-{
-"annotationLevel": "FAILURE",
-"title": "",
-"message": "Failed to FinalizeArtifact: Unable to make request: ECONNRESET\nIf you are using self-hosted runners, please make sure your runner has access to all GitHub endpoints: https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/about-self-hosted-runners#communication-betwe",
-"path": ".github"
-}
-]
-}
-},
-{
-"databaseId": 123707320321,
-"name": "Run / Varka suites: catalyst 1 of 3",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123707320249,
-"name": "Run / Varka suites: sql 1 of 3",
-"conclusion": "FAILURE",
-"annotations": {
-"nodes": [
-{
-"annotationLevel": "FAILURE",
-"title": "",
-"message": "Failed to CreateArtifact: Unable to make request: ECONNRESET\nIf you are using self-hosted runners, please make sure your runner has access to all GitHub endpoints: https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/about-self-hosted-runners#communication-between",
-"path": ".github"
-}
-]
-}
-},
-{
-"databaseId": 123707320240,
-"name": "Run / Varka suites: catalyst 2 of 3",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123707320142,
-"name": "Run / Run Spark UI tests",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123707320001,
-"name": "Run / Varka engine (aarch64)",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123707319966,
-"name": "Run / Varka assembly gate",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": [
-{
-"annotationLevel": "NOTICE",
-"title": "",
-"message": "datapath probe: 56.4 / 112.9 / 102.6 lane-ops/ns at 128 / 256 / 512 bits; 256:128 = 2.00 (control), 512:256 = 0.91",
-"path": ".github"
-},
-{
-"annotationLevel": "NOTICE",
-"title": "",
-"message": "Runner CPU: AMD EPYC 9V74 80-Core Processor",
-"path": ".github"
-}
-]
-}
-},
-{
-"databaseId": 123707319887,
-"name": "Run / Protobuf breaking change detection and Python CodeGen check",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123707319851,
-"name": "Run / Varka bench drivers",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123707319829,
-"name": "Run / Varka engine (x86_64)",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123707319716,
-"name": "Run / Base image build",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 123706288452,
-"name": "Run / Check changes",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-}
-]
-}
-}
-}
+ "data": {
+  "node": {
+   "checkRuns": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": [
+     {
+      "databaseId": 123725986610,
+      "name": "Run / Varka suites: sql 1 of 3",
+      "conclusion": "SUCCESS",
+      "annotations": {
+       "nodes": []
+      }
+     },
+     {
+      "databaseId": 123725986129,
+      "name": "Run / Varka suites: catalyst 3 of 3",
+      "conclusion": "SUCCESS",
+      "annotations": {
+       "nodes": []
+      }
+     },
+     {
+      "databaseId": 123707320393,
+      "name": "Run / Varka suites: catalyst 3 of 3",
+      "conclusion": "FAILURE",
+      "annotations": {
+       "nodes": [
+        {
+         "annotationLevel": "FAILURE",
+         "title": "",
+         "message": "Failed to FinalizeArtifact: Unable to make request: ECONNRESET\nIf you are using self-hosted runners, please make sure your runner has access to all GitHub endpoints: https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/about-self-hosted-runners#communication-betwe",
+         "path": ".github"
+        }
+       ]
+      }
+     },
+     {
+      "databaseId": 123707320249,
+      "name": "Run / Varka suites: sql 1 of 3",
+      "conclusion": "FAILURE",
+      "annotations": {
+       "nodes": [
+        {
+         "annotationLevel": "FAILURE",
+         "title": "",
+         "message": "Failed to CreateArtifact: Unable to make request: ECONNRESET\nIf you are using self-hosted runners, please make sure your runner has access to all GitHub endpoints: https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/about-self-hosted-runners#communication-between",
+         "path": ".github"
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ }
 }

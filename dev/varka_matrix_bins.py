@@ -49,7 +49,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from xml.etree import ElementTree
 
 SUITE_TIMES = "sql/varka/ci/suite-times.tsv"
 SUITE_SECONDS = "sql/varka/matrix/suite-seconds.tsv"
@@ -236,33 +235,6 @@ def times(junit_dirs):
     return {suite: statistics.median(seconds) for suite, seconds in runs.items()}
 
 
-def failures(junit_dirs):
-    """The failed and errored tests of the JUnit reports under the same layout as `times`, as
-    sorted (configuration, suite, test) triples, the suite by its simple name. The configuration
-    is the name its directory's `name` file holds where there is one, the directory's own name
-    otherwise. The report is parsed as XML, since ScalaTest puts a tag's attributes on the line
-    after the tag and JUnit 5 on the tag's own line."""
-    found = set()
-    for d in junit_dirs:
-        for xml in Path(d).glob("**/*/*/junit/TEST-*.xml"):
-            try:
-                root = ElementTree.parse(xml).getroot()
-            except ElementTree.ParseError:
-                continue
-            config_dir = xml.parent.parent.parent
-            name_file = config_dir / "name"
-            config = (
-                name_file.read_text(encoding="utf-8").strip()
-                if name_file.exists()
-                else config_dir.name
-            )
-            for case in root.iter("testcase"):
-                if case.find("failure") is not None or case.find("error") is not None:
-                    suite = (case.get("classname") or root.get("name") or "").rsplit(".", 1)[-1]
-                    found.add((config, suite, case.get("name") or ""))
-    return sorted(found)
-
-
 class SelfTest(unittest.TestCase):
     def test_every_unit_lands_once_and_no_lane_passes_the_target(self):
         suites = [
@@ -320,28 +292,6 @@ class SelfTest(unittest.TestCase):
             report(root, "y=2", "sql-b003-0", "A", 25)
             report(root, "x=1", "sql-b001-0", "B", 4)
             self.assertEqual(times([root]), {"A": 30.0, "B": 4.0})
-
-    def test_failures_name_the_configuration_suite_and_test(self):
-        with tempfile.TemporaryDirectory() as root:
-            d = Path(root, "b001-u0", "runs", "x=1", "sql-b001-0", "junit")
-            d.mkdir(parents=True)
-            Path(root, "b001-u0", "runs", "x=1", "name").write_text("x=1\n", encoding="utf-8")
-            # ScalaTest's layout: the attributes on the line after the tag.
-            Path(d, "TEST-org.x.A.xml").write_text(
-                '<?xml version="1.0"?>\n<testsuite\n name="org.x.A" failures="1">\n'
-                '<testcase\n classname="org.x.A" name="t &amp; u"><failure message="m"/>'
-                '</testcase>\n<testcase classname="org.x.A" name="ok"/>\n</testsuite>\n',
-                encoding="utf-8",
-            )
-            # A configuration directory without a name file is named by itself.
-            e = Path(root, "runs", "defaults", "catalyst-0", "junit")
-            e.mkdir(parents=True)
-            Path(e, "TEST-org.y.B.xml").write_text(
-                '<testsuite name="org.y.B"><testcase classname="org.y.B" name="e">'
-                "<error/></testcase></testsuite>",
-                encoding="utf-8",
-            )
-            self.assertEqual(failures([root]), [("defaults", "B", "e"), ("x=1", "A", "t & u")])
 
     def test_a_configuration_drops_the_suites_its_record_leaves_to_the_defaults(self):
         with tempfile.TemporaryDirectory() as root:

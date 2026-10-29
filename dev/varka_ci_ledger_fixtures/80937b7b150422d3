@@ -16,12 +16,12 @@
 # A response recorded from the GitHub API for dev/varka_ci_ledger.py's self-test, trimmed.
 
 {
-"id": 39148626990,
-"name": "Build",
-"path": ".github/workflows/build_main.yml",
-"head_sha": "e2cb26aa3e452369d4fabe3c51498cc79391b035",
-"updated_at": "2026-10-18T17:47:13Z",
-"run_attempt": 1,
-"conclusion": "failure",
-"check_suite_node_id": "CS_kwDOB19d-c8AAAAYs1IstA"
+ "id": 39148626990,
+ "name": "Build",
+ "path": ".github/workflows/build_main.yml",
+ "head_sha": "e2cb26aa3e452369d4fabe3c51498cc79391b035",
+ "updated_at": "2026-10-18T17:47:13Z",
+ "run_attempt": 1,
+ "conclusion": "failure",
+ "check_suite_node_id": "CS_kwDOB19d-c8AAAAYs1IstA"
 }

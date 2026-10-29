@@ -52,7 +52,7 @@ Where each part of a line comes from, cheapest first: one GraphQL query per run 
 check run of the run's check suite with its annotations (the Build's "Report test results"
 check run names Spark's failed tests, the flaky retry and the setup retry are warnings on jobs
 that passed); the jobs listing gives the attempts and the failed steps; a failed matrix bin's
-artifact gives its failed tests from the JUnit reports (`varka_matrix_bins.failures`) and its
+artifact gives its failed tests from the JUnit reports (`failures`) and its
 CPU from platform.txt; a failed Varka suites job's log, at most LOG_LIMIT bytes and in practice
 about 150 KB since the suites write to files, gives the failed tests the job's report printed;
 and the first LOG_HEAD bytes of any other job with a line give the CPU that
@@ -74,9 +74,7 @@ import unittest
 import zipfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import varka_matrix_bins
+from xml.etree import ElementTree
 
 REPO = "MaxGekk/spark"
 HERE = Path(__file__).resolve().parent
@@ -333,6 +331,34 @@ def report_failures(lines):
     return found
 
 
+def failures(junit_dirs):
+    """The failed and errored tests of the JUnit reports under
+    `<dir>/<configuration>/<module>-.../junit/TEST-*.xml`, as sorted (configuration, suite, test)
+    triples, the suite by its simple name. The configuration is the name its directory's `name`
+    file holds where there is one, the directory's own name otherwise. The report is parsed as
+    XML, since ScalaTest puts a tag's attributes on the line after the tag and JUnit 5 on the
+    tag's own line."""
+    found = set()
+    for d in junit_dirs:
+        for xml in Path(d).glob("**/*/*/junit/TEST-*.xml"):
+            try:
+                root = ElementTree.parse(xml).getroot()
+            except ElementTree.ParseError:
+                continue
+            config_dir = xml.parent.parent.parent
+            name_file = config_dir / "name"
+            config = (
+                name_file.read_text(encoding="utf-8").strip()
+                if name_file.exists()
+                else config_dir.name
+            )
+            for case in root.iter("testcase"):
+                if case.find("failure") is not None or case.find("error") is not None:
+                    suite = (case.get("classname") or root.get("name") or "").rsplit(".", 1)[-1]
+                    found.add((config, suite, case.get("name") or ""))
+    return sorted(found)
+
+
 def run_log_failures(root):
     """(configuration, suite, test) of each failed test in the ScalaTest logs under a matrix
     artifact, `runs/<configuration>/<jvm>/run.log`: the layout's fallback where it kept no JUnit
@@ -537,7 +563,7 @@ class Run:
         with tempfile.TemporaryDirectory() as d:
             if not artifact_dir(self.gh, self.repo, self.run["id"], name, d):
                 return
-            found = varka_matrix_bins.failures([d]) or run_log_failures(d)
+            found = failures([d]) or run_log_failures(d)
             platform = [p.read_bytes() for p in sorted(Path(d).glob("**/platform.txt"))]
             cpu = cpu_of(log_lines(b"\n".join(platform))) or None
             for config, suite, test in found:
@@ -552,7 +578,7 @@ class Run:
         with tempfile.TemporaryDirectory() as d:
             name = f"varka-scoped-junit-{varka.group(1)}{slug}"
             if artifact_dir(self.gh, self.repo, self.run["id"], name, d):
-                for _, suite, test in varka_matrix_bins.failures([d]):
+                for _, suite, test in failures([d]):
                     suites[test] = suite
         for config, test in report_failures(lines):
             self.line(job, config, suites.get(test, "-"), test, "failed", "-", cpu or "-")
@@ -864,6 +890,28 @@ class SelfTest(unittest.TestCase):
             [("Option matrix: b021", "slow", "AMD EPYC 9V74 80-Core, 4 cores")],
         )
         self.assertIn("91 min against the attempt's median bin 8 min", got[0]["detail"])
+
+    def test_failures_name_the_configuration_suite_and_test(self):
+        with tempfile.TemporaryDirectory() as root:
+            d = Path(root, "b001-u0", "runs", "x=1", "sql-b001-0", "junit")
+            d.mkdir(parents=True)
+            Path(root, "b001-u0", "runs", "x=1", "name").write_text("x=1\n", encoding="utf-8")
+            # ScalaTest's layout: the attributes on the line after the tag.
+            Path(d, "TEST-org.x.A.xml").write_text(
+                '<?xml version="1.0"?>\n<testsuite\n name="org.x.A" failures="1">\n'
+                '<testcase\n classname="org.x.A" name="t &amp; u"><failure message="m"/>'
+                '</testcase>\n<testcase classname="org.x.A" name="ok"/>\n</testsuite>\n',
+                encoding="utf-8",
+            )
+            # A configuration directory without a name file is named by itself.
+            e = Path(root, "runs", "defaults", "catalyst-0", "junit")
+            e.mkdir(parents=True)
+            Path(e, "TEST-org.y.B.xml").write_text(
+                '<testsuite name="org.y.B"><testcase classname="org.y.B" name="e">'
+                "<error/></testcase></testsuite>",
+                encoding="utf-8",
+            )
+            self.assertEqual(failures([root]), [("defaults", "B", "e"), ("x=1", "A", "t & u")])
 
     def test_a_later_run_on_the_same_commit_turns_a_failure_into_a_flake(self):
         lines = [

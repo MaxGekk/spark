@@ -16,424 +16,61 @@
 # A response recorded from the GitHub API for dev/varka_ci_ledger.py's self-test, trimmed.
 
 {
-"data": {
-"node": {
-"checkRuns": {
-"pageInfo": {
-"hasNextPage": false,
-"endCursor": "Y3Vyc29yOnYyOpHPAAAAHBkTB0k="
-},
-"nodes": [
-{
-"databaseId": 120720519538,
-"name": "Report test results",
-"conclusion": "FAILURE",
-"annotations": {
-"nodes": [
-{
-"annotationLevel": "FAILURE",
-"title": "KafkaRealTimeModeAggregationSuite.tumbling window min",
-"message": "org.scalatest.exceptions.TestFailedDueToTimeoutException: The code passed to eventually never returned normally. Attempted 3971 times over 1.0001271374333334 minutes. Last failure message: 1 was not equal to 2.",
-"path": "org/apache/spark/sql/kafka010/KafkaRealTimeModeAggregationSuite"
-}
-]
-}
-},
-{
-"databaseId": 120686200738,
-"name": "Run / Build modules: sparkr",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120686200045,
-"name": "Run / Run Spark on Kubernetes Integration test",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120686199489,
-"name": "Run / Run OIDC E2E integration tests (Minikube + moto)",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120686198299,
-"name": "Run / Build modules: hive - slow tests",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120686198280,
-"name": "Run / Build modules: pyspark-pandas",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120686198276,
-"name": "Run / Build modules: sql - extended tests",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": [
-{
-"annotationLevel": "FAILURE",
-"title": "",
-"message": "XXKDA)",
-"path": ".github"
-}
-]
-}
-},
-{
-"databaseId": 120686198245,
-"name": "Run / Build modules: hive - other tests",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120686198232,
-"name": "Run / Build modules: sql - other tests",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120686198143,
-"name": "Run / Build modules: streaming, sql-kafka-0-10, streaming-kafka-0-10, streaming-kinesis-asl, credential-aws, kubernetes, hadoop-cloud, spark-ganglia-lgpl, protobuf, connect, avro",
-"conclusion": "FAILURE",
-"annotations": {
-"nodes": [
-{
-"annotationLevel": "FAILURE",
-"title": "",
-"message": "Process completed with exit code 1.",
-"path": ".github"
-}
-]
-}
-},
-{
-"databaseId": 120686198136,
-"name": "Run / Build modules: sql - slow tests",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": [
-{
-"annotationLevel": "FAILURE",
-"title": "",
-"message": "Process completed with exit code 124.",
-"path": ".github"
-}
-]
-}
-},
-{
-"databaseId": 120686198085,
-"name": "Run / Build modules: api, catalyst, hive-thriftserver",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120686198030,
-"name": "Run / Build modules: pyspark-pandas-slow-connect",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120686198021,
-"name": "Run / Build modules: pyspark-streaming, pyspark-structured-streaming, pyspark-structured-streaming-connect",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120686198014,
-"name": "Run / Build modules: pyspark-connect",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120686198013,
-"name": "Run / Build modules: pyspark-mllib, pyspark-ml, pyspark-ml-connect, pyspark-pipelines",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120686198006,
-"name": "Run / Build modules: yarn",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120686198000,
-"name": "Run / Build modules: pyspark-periodic",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120686197973,
-"name": "Run / Build modules: pyspark-pandas-slow",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120686197966,
-"name": "Run / Build modules: pyspark-connect-old-client",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": [
-{
-"annotationLevel": "WARNING",
-"title": "",
-"message": "No files were found with the provided path: **/target/test-reports/*.xml\n**/target/surefire-reports/*.xml. No artifacts will be uploaded.",
-"path": ".github"
-}
-]
-}
-},
-{
-"databaseId": 120686197953,
-"name": "Run / Build modules: mllib-local, mllib, graphx, profiler, pipelines, repl, examples",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120686197945,
-"name": "Run / Build modules: pyspark-pandas-connect",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120686197915,
-"name": "Run / Build modules: core, unsafe, kvstore, utils, utils-java, config, network-common, network-shuffle, sketch, variant, launcher",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120686197912,
-"name": "Run / Build modules: pyspark-sql, pyspark-resource, pyspark-testing, pyspark-core, pyspark-errors, pyspark-logger",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120686197851,
-"name": "Run / Run TPC-DS queries with SF=1",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120686197790,
-"name": "Run / Run Docker integration tests",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120683297948,
-"name": "Run / Linters, licenses, and dependencies",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120683297926,
-"name": "Run / Documentation generation",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": [
-{
-"annotationLevel": "FAILURE",
-"title": "",
-"message": "non-static class StatefulProcessor.implicits$ cannot be referenced from a static context^[[0m",
-"path": ".github"
-},
-{
-"annotationLevel": "FAILURE",
-"title": "",
-"message": "name clash: <K,V>union(Seq<JavaPairDStream<K,V>>) and <T>union(Seq<JavaDStream<T>>) have the same erasure^[[0m",
-"path": ".github"
-},
-{
-"annotationLevel": "FAILURE",
-"title": "",
-"message": "name clash: union(Seq<JavaDoubleRDD>) and <T>union(Seq<JavaRDD<T>>) have the same erasure^[[0m",
-"path": ".github"
-},
-{
-"annotationLevel": "FAILURE",
-"title": "",
-"message": "name clash: <K,V>union(Seq<JavaPairRDD<K,V>>) and <T>union(Seq<JavaRDD<T>>) have the same erasure^[[0m",
-"path": ".github"
-}
-]
-}
-},
-{
-"databaseId": 120681313441,
-"name": "Run / Precompile Spark",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120681247393,
-"name": "Run / Varka bench drivers",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120681246701,
-"name": "Run / Varka suites: ${{ matrix.module }} ${{ matrix.part }}",
-"conclusion": "SKIPPED",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120681244459,
-"name": "Run / Run Spark UI tests",
-"conclusion": "FAILURE",
-"annotations": {
-"nodes": [
-{
-"annotationLevel": "FAILURE",
-"title": "",
-"message": "Process completed with exit code 1.",
-"path": ".github"
-}
-]
-}
-},
-{
-"databaseId": 120681244443,
-"name": "Run / Admit a full-matrix run",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120681244397,
-"name": "Run / Varka assembly gate",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": [
-{
-"annotationLevel": "NOTICE",
-"title": "",
-"message": "datapath probe: 56.4 / 112.9 / 102.7 lane-ops/ns at 128 / 256 / 512 bits; 256:128 = 2.00 (control), 512:256 = 0.91",
-"path": ".github"
-},
-{
-"annotationLevel": "NOTICE",
-"title": "",
-"message": "Runner CPU: AMD EPYC 9V74 80-Core Processor",
-"path": ".github"
-}
-]
-}
-},
-{
-"databaseId": 120681244364,
-"name": "Run / Varka docs checks",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120681244361,
-"name": "Run / Varka engine (x86_64)",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120681244346,
-"name": "Run / Varka engine (aarch64)",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120681244320,
-"name": "Run / Base image build",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120681244280,
-"name": "Run / Java 25 build with Maven",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120681244268,
-"name": "Run / Protobuf breaking change detection and Python CodeGen check",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-},
-{
-"databaseId": 120679761737,
-"name": "Run / Check changes",
-"conclusion": "SUCCESS",
-"annotations": {
-"nodes": []
-}
-}
-]
-}
-}
-}
+ "data": {
+  "node": {
+   "checkRuns": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": [
+     {
+      "databaseId": 120720519538,
+      "name": "Report test results",
+      "conclusion": "FAILURE",
+      "annotations": {
+       "nodes": [
+        {
+         "annotationLevel": "FAILURE",
+         "title": "KafkaRealTimeModeAggregationSuite.tumbling window min",
+         "message": "org.scalatest.exceptions.TestFailedDueToTimeoutException: The code passed to eventually never returned normally. Attempted 3971 times over 1.0001271374333334 minutes. Last failure message: 1 was not equal to 2.",
+         "path": "org/apache/spark/sql/kafka010/KafkaRealTimeModeAggregationSuite"
+        }
+       ]
+      }
+     },
+     {
+      "databaseId": 120686198143,
+      "name": "Run / Build modules: streaming, sql-kafka-0-10, streaming-kafka-0-10, streaming-kinesis-asl, credential-aws, kubernetes, hadoop-cloud, spark-ganglia-lgpl, protobuf, connect, avro",
+      "conclusion": "FAILURE",
+      "annotations": {
+       "nodes": [
+        {
+         "annotationLevel": "FAILURE",
+         "title": "",
+         "message": "Process completed with exit code 1.",
+         "path": ".github"
+        }
+       ]
+      }
+     },
+     {
+      "databaseId": 120681244459,
+      "name": "Run / Run Spark UI tests",
+      "conclusion": "FAILURE",
+      "annotations": {
+       "nodes": [
+        {
+         "annotationLevel": "FAILURE",
+         "title": "",
+         "message": "Process completed with exit code 1.",
+         "path": ".github"
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ }
 }

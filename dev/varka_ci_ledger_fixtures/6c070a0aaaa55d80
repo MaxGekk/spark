@@ -16,12 +16,12 @@
 # A response recorded from the GitHub API for dev/varka_ci_ledger.py's self-test, trimmed.
 
 {
-"id": 40942811546,
-"name": "Varka option matrix",
-"path": ".github/workflows/varka-option-matrix.yml",
-"head_sha": "501e3bc0fe2fc3c2eb8949003b5a185379c3f269",
-"updated_at": "2026-10-29T21:29:27Z",
-"run_attempt": 2,
-"conclusion": null,
-"check_suite_node_id": "CS_kwDOB19d-c8AAAAZ11uFFQ"
+ "id": 40942811546,
+ "name": "Varka option matrix",
+ "path": ".github/workflows/varka-option-matrix.yml",
+ "head_sha": "501e3bc0fe2fc3c2eb8949003b5a185379c3f269",
+ "updated_at": "2026-10-29T21:29:27Z",
+ "run_attempt": 2,
+ "conclusion": null,
+ "check_suite_node_id": "CS_kwDOB19d-c8AAAAZ11uFFQ"
 }

@@ -16,16 +16,16 @@
 # A response recorded from the GitHub API for dev/varka_ci_ledger.py's self-test, trimmed.
 
 {
-"artifacts": [
-{
-"id": 12934912599,
-"name": "varka-option-matrix-b021",
-"expired": false
-},
-{
-"id": 12933258239,
-"name": "varka-option-matrix-b021",
-"expired": false
-}
-]
+ "artifacts": [
+  {
+   "id": 12934912599,
+   "name": "varka-option-matrix-b021",
+   "expired": false
+  },
+  {
+   "id": 12933258239,
+   "name": "varka-option-matrix-b021",
+   "expired": false
+  }
+ ]
 }
