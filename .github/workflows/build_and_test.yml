@@ -1375,6 +1375,62 @@ jobs:
   # to 49 minutes for catalyst and 29 to 40 for sql on 23 October 2026. What a full run of the matrix costs for the same change is the measurement the task
   # records: this pair is meant to finish in about a third of its wall time and a fraction of
   # its job-minutes, and the precondition's verdict is what a reader checks when it does not.
+  # The option matrix dispatched on this commit takes its test classes from here rather than
+  # compiling them again (VARKA-507, dev/varka_matrix_reuse.py): this job builds sql's test
+  # classes, whose classpath holds catalyst's too, as the matrix's build job would, and archives
+  # them. It runs beside the Varka suites rather than in one of them, where it held that job
+  # about five minutes past the others (VARKA-519). It is an optimization of another workflow, so
+  # none of its steps fails the run: without its archive the matrix compiles for itself.
+  varka-matrix-classes:
+    needs: [precondition]
+    if: fromJson(needs.precondition.outputs.required).varka-scoped == 'true'
+    name: "Varka option matrix classes"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - name: Bootstrap composite actions
+      uses: actions/checkout@v6
+    - name: Checkout and sync Spark repository
+      uses: ./.github/actions/checkout-and-sync
+      with:
+        ref: ${{ needs.precondition.outputs.head_sha }}
+    - name: Cache SBT and Maven
+      uses: actions/cache@v4
+      with:
+        path: |
+          build/apache-maven-*
+          build/*.jar
+          ~/.sbt
+        key: build-${{ hashFiles('**/pom.xml', 'project/build.properties', 'build/mvn', 'build/sbt', 'build/sbt-launch-lib.bash', 'build/spark-build-info') }}
+        restore-keys: |
+          build-
+    - name: Cache Coursier local repository
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/coursier
+        key: varka-scoped-coursier-sql-${{ hashFiles('**/pom.xml', '**/plugins.sbt') }}
+        restore-keys: |
+          varka-scoped-coursier-sql-
+    - name: Install Java ${{ inputs.java }}
+      uses: actions/setup-java@v5
+      with:
+        distribution: zulu
+        java-version: ${{ inputs.java }}
+    - name: Build the test classes for the option matrix
+      continue-on-error: true
+      run: |
+        ./dev/varka_matrix.sh --defaults --module sql --build-only --sbt-arg -Phive \
+          --out target/varka-scoped
+        ./dev/varka_matrix_archive.sh pack target/varka-scoped target/varka-matrix-build.tar
+    - name: Upload the test classes for the option matrix
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: varka-option-matrix-build
+        path: target/varka-matrix-build.tar
+        retention-days: 1
+        compression-level: 1
+
   varka-scoped:
     needs: [precondition]
     if: fromJson(needs.precondition.outputs.required).varka-scoped == 'true'
@@ -1463,31 +1519,6 @@ jobs:
     - name: Every lane and type is wired where no compiler checks
       if: matrix.module == 'catalyst' && matrix.shard == '0/3'
       run: ./dev/varka_new_lane.py --check
-    # The option matrix dispatched on this commit takes its test classes from here rather than
-    # compiling them again (VARKA-507, dev/varka_matrix_reuse.py): the first sql job builds sql's
-    # test classes, whose classpath holds catalyst's too, as the matrix's build job would, and
-    # archives them before its suites run. The suites step's own build then finds nothing to do.
-    # The three steps are an optimization of another workflow, so none of them fails this job.
-    - name: Build the test classes for the option matrix
-      if: matrix.module == 'sql' && matrix.shard == '0/3'
-      continue-on-error: true
-      run: |
-        ./dev/varka_matrix.sh --defaults --module sql --build-only --sbt-arg -Phive \
-          --out target/varka-scoped
-        ./dev/varka_matrix_archive.sh pack target/varka-scoped target/varka-matrix-build.tar
-    - name: Upload the test classes for the option matrix
-      if: matrix.module == 'sql' && matrix.shard == '0/3'
-      continue-on-error: true
-      uses: actions/upload-artifact@v4
-      with:
-        name: varka-option-matrix-build
-        path: target/varka-matrix-build.tar
-        retention-days: 1
-        compression-level: 1
-    - name: Remove the archive of the test classes
-      if: matrix.module == 'sql' && matrix.shard == '0/3'
-      continue-on-error: true
-      run: rm -f target/varka-matrix-build.tar
     # The sql suites record, as they run at the defaults, which option configurations move each
     # test (VarkaTestReach), so that the option matrix dispatched on this commit runs a
     # configuration only over the tests it moves (VARKA-507). The catalyst suites do not: their

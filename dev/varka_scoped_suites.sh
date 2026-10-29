@@ -75,13 +75,9 @@ if [ -n "$shard" ]; then
   [ ${#all[@]} -gt 0 ] || { echo "the runner listed no suite of $module" >&2; exit 1; }
   weights=sql/varka/ci/suite-times.tsv
   count=${shard#*/}
-  # sql's first job also builds and archives the option matrix's test classes, about five minutes
-  # more than the compile the other jobs do, which is about 200 seconds of suites at their pace:
-  # the split counts it against that job (VARKA-516, m8/results/VARKA-516-weights.txt).
+  # A job that does more than run its share would take a head start here (--head-start J:SECONDS,
+  # VARKA-516); none does since the option matrix's classes have a job of their own (VARKA-519).
   head=()
-  if [ "$module" = sql ]; then
-    head=(--head-start 0:200)
-  fi
   digest=$(for ((k = 0; k < count; k++)); do
       echo "== $k"
       python3 dev/varka_suite_shards.py --job "$k/$count" "$weights" "${head[@]}" "${all[@]}"
