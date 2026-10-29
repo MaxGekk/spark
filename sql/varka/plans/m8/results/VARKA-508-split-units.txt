@@ -91,3 +91,102 @@ defaults), while the planner then takes the reach share off again.
 == the check, dev/varka_matrix_bins.py check over the run's reports
 141 suites; 0 tests a configuration ran a suite without (every configuration that ran a suite
 reported the same tests, the ones the reach record skipped included)
+
+# 30 October 2026, after the merge of master's weights (#1136, `times --reach`) and its
+# session-only configurations (#1137): option matrix run 40961304094 on MaxGekk/spark (head
+# 616f918b102, branch varka-524-session-configs), its 146 bins' artifacts downloaded read-only;
+# its jobs' times from the Actions jobs API; its plan's inputs the configurations of its report,
+# that head's `--list-suites`, its committed weights and Build run 40947407586's reach record
+# (1746 tests), the record its plan read. dev/varka_matrix_bins.py at this branch's head.
+
+== the run as it ran (the jobs API)
+146 bins, every one green; a bin's job: the longest 10.8 min, the median 5.9 min, 840 job-min in
+all; the bin phase 35.3 min of a 37.3-min run, at most 30 bins at once
+units 1453, median 12.0 s, longest 540 s, 83523 s in all
+units over the 480 s lane: 3, every one a group of shared suites (540 s defaults, 53 suites;
+  497 s rangeSets=false, 21 suites; 493 s fusedCeiling=800, 18 suites)
+the longest runs of one suite under one configuration, and the share of its longest test:
+   406 s  fusedCeiling=200        VarkaIrFuzzSuite      91%
+   385 s  lanesOverride=16        VarkaSmallTreeSuite   75%
+   381 s  fusedCeiling=800        VarkaIrFuzzSuite      91%
+   367 s  methodByteBudget=0      VarkaSmallTreeSuite   74%
+   342 s  callSiteBudget=0        VarkaIrFuzzSuite      89%
+   328 s  defaults                VarkaIrFuzzSuite      94%
+  18 runs of one suite took 240 s or more; in every one the longest test held 69% to 96%
+So again no suite under one configuration outlasted the lane, and a split by its tests could
+take at most 4% to 31% off the longest ones.
+
+== test-seconds.tsv against the new weights
+Written again from this run by `tests`: the same 7 suites and the same 82 tests as from run
+40874221284; one test moved by more than a factor of 1.5 and 10 s (VarkaGroupingBoundSuite's
+greedy-grouping test, 31.8 s to 59.5 s). Each suite's tests add up to (old file, new file,
+master's suite-seconds.tsv from run 40921075226, this run's `times --reach`, this run's defaults):
+  VarkaCoverageCompositionFuzzSuite   135.8  160.7  157.1   68.9  161.1
+  VarkaGroupingBoundSuite             116.2  143.8   83.0   85.5  155.0
+  VarkaIrFuzzSuite                     45.2   43.1   51.2   53.2  328.4
+  VarkaSeveralKernelsSuite            126.5  112.6   61.0   61.3   96.8
+  VarkaSmallTreeSuite                 102.6  112.6  113.7  120.8  282.7
+  VarkaSparkFuzzSuite                 171.7  166.9  188.6  163.5  127.9
+  VarkaTimeHarnessSuite                 8.4    9.0   10.7    9.5    4.5
+The sums need not equal the weights: a test's median is over the configurations that ran that
+test, a suite's over those that ran all of it, and the planner uses the tests' seconds only as
+shares of the unit's (split_tests), so only their ratios matter. The ratios held between the two
+runs. The weights themselves are far from some configurations' runs: VarkaIrFuzzSuite weighs
+51.2 s and ran 328.4 s at the defaults and 406 s under fusedCeiling=200, since it filters its
+own draws by the emitted bytes, which the reach record does not see.
+
+== the plan on the run's inputs, without and with the split
+                                              bins  longest  in all (planned bin seconds)
+  the run's own planner and weights             146    715 s  70045 s (as its build job printed)
+  this branch, the run's weights, no split      146    715 s  70045 s
+  this branch, the run's weights, split         146    715 s  70045 s
+  this branch, master's weights, no split       104    480 s  49238 s
+  this branch, master's weights, split          104    480 s  49238 s
+  the same with test-seconds.tsv from this run  104    480 s  49238 s
+On master's weights no unit is planned past the lane, so nothing is split and the split leaves
+the plan as it is: the same bins, the same longest bin, the same total. The one split of 29 October (VarkaIrFuzzSuite under arrowBatchSize=1) is gone, since
+#1137 leaves the catalyst suites out of the batch-size configurations.
+
+== the plans replayed on the run's measured times
+Each unit's seconds the sum of its suites' JUnit seconds under its configuration in this run
+plus 1.7 s for its JVM (the median of the run's units' wall time less their suites' seconds), two
+lanes a bin, each bin's job its longer lane plus 38 s of setup (the run's median), the jobs
+started in plan order on 30 slots:
+  the run's plan          146 bins; longest 10.1 min, median 5.3, 829 job-min, bin phase 31.2 min
+  master's weights        104 bins; longest 14.4 min, median 7.4, 808 job-min, bin phase 33.0 min
+  the same, split         104 bins; the same
+The replay of the run's own plan comes out 4.1 min under the bin phase it had (35.3), the time
+the pool took to start jobs, so read the rows against each other. With about 30 bins at once
+the bin phase is bounded by the work: 808 job-min over 30 slots is 26.9 min before any tail, and
+the split, which moves no unit, changes neither the work nor the tail. The tail on master's
+weights is its ten longest bins, planned at 459 s to 480 s and replayed at 711 s to 865 s, each
+led by two units that ran 226 s to 438 s: VarkaIrFuzzSuite or VarkaSmallTreeSuite under one
+configuration, or a group of shared sql suites (the longest, b073, VarkaIrFuzzSuite under
+fusedCeiling=200 and fusedCeiling=800, 408 s and 383 s). A weight, one median over the
+configurations, understates a suite under the configurations that run it longest; the split
+acts only on a unit weighed past the lane, so it does not reach these.
+
+== the test filter on the laptop (laptop numbers, 30 October 2026)
+Each suite run once whole and once as the two parts the planner made of it, under the defaults,
+as a bin runs a unit: dev/varka_matrix_bins.py plan over the suite alone with a lane short
+enough to split it (--target 120 and 28), each unit line's fourth field handed to
+dev/varka_matrix.sh --runs-only --defaults --tests, no reach record; the JUnit reports' test
+names and outcomes compared.
+  VarkaCoverageCompositionFuzzSuite (ScalaTest, runs alone): whole 15 tests passed in 83 s;
+    parts of 1 and 14 tests passed in 47 s and 40 s; joined 15, every name once, the same names
+    and outcomes as whole
+  VarkaTimeHarnessSuite (JUnit 5, its tests a @TestFactory's): whole 9 tests passed in 11 s;
+    before the fix below each part ran all 9, 18 joined, every name twice; after it, parts of 6
+    and 3 tests passed in 8 s and 10 s, joined 9, every name once, the same names and outcomes
+    as whole, and the parts' fused.tsv 6 and 3 lines where the whole run's has 9
+The JUnit runner applied -t through a discovery filter, which sees a class's @Test methods but
+not a factory's dynamic tests, made only when the factory runs, so every part ran the whole
+suite. `check` did not see it, since it looks for a test missing from a configuration, not one
+run twice. Fixed: VarkaSuiteRunner keeps each class's filters for the JVM's run
+(`selects`), VarkaSuiteExtension.interceptDynamicTest cancels a dynamic test they leave out
+with VarkaSuiteRunner.NotSelected before the matrix sees it, and VarkaSuiteListener leaves a
+test cancelled so out of the counts and the report, as discovery leaves out an unselected
+@Test method; and `check` now also fails a run in which a configuration reported one test of a
+suite from more than one JVM (`repeated_tests`). Over run 40961304094's reports it finds 0
+missing and 0 repeated; over the JUnit parts before the fix the 9 repeated, after it 0.
+VarkaSuiteHarnessSuite and VarkaMatrixSuite pass at the defaults after the fix, 19 tests and 9.

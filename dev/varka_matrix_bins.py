@@ -43,7 +43,8 @@ its share of the whole unit's seconds. The file and the reach record are the pla
 lists of a suite's tests, so a suite the file does not list is never split, and `check` fails a
 run in which a configuration ran a suite without a test another configuration ran it with: a
 test added since the file was written, which no part names, is caught there when another
-configuration ran the suite whole.
+configuration ran the suite whole. `check` also fails a run in which a configuration reported
+one test of a suite from two JVMs, as two parts would were the runner's filter to miss a test.
 
   dev/varka_matrix_bins.py plan --configurations FILE --suites MODULE=FILE... \\
       [--target SECONDS] > bins.json          # the job matrix, {"include": [...]}
@@ -439,6 +440,25 @@ def missing_tests(junit_dirs):
     return out
 
 
+def repeated_tests(junit_dirs):
+    """The tests one configuration reported from more than one JVM of a suite: a test two parts
+    of a split both ran, as they would were the runner's filter to miss a test, which
+    `missing_tests` cannot see. Lines to print, none when each test came from one JVM."""
+    leaves = {}
+    for d in junit_dirs:
+        for xml in Path(d).glob("**/*/*/junit/TEST-*.xml"):
+            try:
+                root = ET.parse(xml).getroot()
+            except ET.ParseError:
+                continue
+            suite = root.get("name", "").rsplit(".", 1)[-1]
+            config = xml.parent.parent.parent.name
+            for case in root.iter("testcase"):
+                key = (config, suite, case.get("name", ""))
+                leaves.setdefault(key, set()).add(xml.parent.parent.name)
+    return [f"{c}\t{s}\t{t}" for (c, s, t), ls in sorted(leaves.items()) if len(ls) > 1]
+
+
 class SelfTest(unittest.TestCase):
     def test_every_unit_lands_once_and_no_lane_passes_the_target(self):
         suites = [
@@ -645,6 +665,11 @@ class SelfTest(unittest.TestCase):
             # A configuration whose parts lost t2 is named.
             report(root, "z=3", "sql-b3-0", "S", [("t1", 120)], ["t1"])
             self.assertEqual(missing_tests([root]), ["z=3\tS\tt2"])
+            self.assertEqual(repeated_tests([root]), [])
+            # A configuration whose two parts both ran t1 is named.
+            report(root, "w=4", "sql-b4-0", "S", [("t1", 120), ("t2", 50)], ["t1", "t2"])
+            report(root, "w=4", "sql-b4-1", "S", [("t1", 120)], ["t1"])
+            self.assertEqual(repeated_tests([root]), ["w=4\tS\tt1"])
 
 
 def main(argv):
@@ -683,10 +708,14 @@ def main(argv):
         return 0
     if args.cmd == "check":
         missing = missing_tests(args.dirs)
+        repeated = repeated_tests(args.dirs)
         for line in missing:
             print(f"missing\t{line}")
+        for line in repeated:
+            print(f"repeated\t{line}")
         print(f"{len(missing)} tests a configuration ran a suite without", file=sys.stderr)
-        return 1 if missing else 0
+        print(f"{len(repeated)} tests a configuration ran in more than one JVM", file=sys.stderr)
+        return 1 if missing or repeated else 0
     configurations = [
         c.strip()
         for c in Path(args.configurations).read_text(encoding="utf-8").splitlines()

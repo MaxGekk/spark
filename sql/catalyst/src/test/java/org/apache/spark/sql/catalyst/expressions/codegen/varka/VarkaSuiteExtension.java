@@ -299,6 +299,12 @@ public final class VarkaSuiteExtension
       throw new IllegalStateException(owner.getSimpleName() + " names more than one test "
           + "'" + test + "'; a Varka suite's test names are its skip-list keys and must be unique");
     }
+    // A test the run's -t filters leave out, as a part of a split suite does, is dropped before
+    // the matrix sees it, so that it writes no fused-batch line (VarkaSuiteRunner.selects).
+    if (!VarkaSuiteRunner.selects(owner.getName(), test)) {
+      invocation.skip();
+      throw new VarkaSuiteRunner.NotSelected(test);
+    }
     var invoked = new boolean[1];
     Body<Object> body = () -> {
       invoked[0] = true;

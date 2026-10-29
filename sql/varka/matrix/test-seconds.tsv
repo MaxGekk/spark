@@ -1,85 +1,85 @@
 # suite	test	seconds: its median over the configurations that ran it in option matrix run
-# 40874221284 (head 178b66a2105), for the suites a configuration ran for 120 s or more, as
+# 40961304094 (head 616f918b102), for the suites a configuration ran for 120 s or more, as
 # dev/varka_matrix_bins.py tests computes it
-VarkaCoverageCompositionFuzzSuite	a failure fails its test with the smaller case in the message	1.2
-VarkaCoverageCompositionFuzzSuite	a failure with a listed signature is reported as known, not failed	0.8
-VarkaCoverageCompositionFuzzSuite	a forced decline leaves the projection the entry was never in	1.7
+VarkaCoverageCompositionFuzzSuite	a failure fails its test with the smaller case in the message	1.4
+VarkaCoverageCompositionFuzzSuite	a failure with a listed signature is reported as known, not failed	1.0
+VarkaCoverageCompositionFuzzSuite	a forced decline leaves the projection the entry was never in	2.4
 VarkaCoverageCompositionFuzzSuite	a kernel that writes no validity fails at one fill and passes at the other (VARKA-138)	0.1
-VarkaCoverageCompositionFuzzSuite	a planted bug in a wide projection shrinks from hundreds of entries to a few	0.8
+VarkaCoverageCompositionFuzzSuite	a planted bug in a wide projection shrinks from hundreds of entries to a few	1.2
 VarkaCoverageCompositionFuzzSuite	an entry's expression shrinks to the node a failure needs	0.0
-VarkaCoverageCompositionFuzzSuite	coverage rows' kernels agree with the reference evaluator as C2 code, across a trap and on the way up the tiers (VARKA-274)	81.2
+VarkaCoverageCompositionFuzzSuite	coverage rows' kernels agree with the reference evaluator as C2 code, across a trap and on the way up the tiers (VARKA-274)	98.1
 VarkaCoverageCompositionFuzzSuite	ddmin over the entries finds the pair a failure needs	0.1
-VarkaCoverageCompositionFuzzSuite	every coverage row's kernel agrees with the reference evaluator, and the reference with Spark's eval (VARKA-276)	6.4
+VarkaCoverageCompositionFuzzSuite	every coverage row's kernel agrees with the reference evaluator, and the reference with Spark's eval (VARKA-276)	11.5
 VarkaCoverageCompositionFuzzSuite	every known composition failure still reproduces	0.0
 VarkaCoverageCompositionFuzzSuite	random conjunctions of coverage predicates are fused or declined in bytes, never thrown	0.2
-VarkaCoverageCompositionFuzzSuite	random projections of coverage rows are fused or declined in bytes, never thrown	2.3
-VarkaCoverageCompositionFuzzSuite	random projections over more columns than a kernel reads are fused or declined, and their kernels answer as the reference evaluator does	41.0
+VarkaCoverageCompositionFuzzSuite	random projections of coverage rows are fused or declined in bytes, never thrown	3.5
+VarkaCoverageCompositionFuzzSuite	random projections over more columns than a kernel reads are fused or declined, and their kernels answer as the reference evaluator does	41.2
 VarkaCoverageCompositionFuzzSuite	the forced-decline check sees a wrong rollback	0.0
 VarkaCoverageCompositionFuzzSuite	the poisoned batch puts a null beside a valid input, which a wrong kernel fails on (VARKA-138)	0.0
-VarkaGroupingBoundSuite	the exact grouping is the best partition of every shape, with the prediction and without, forms only groups the rule admits, and keeps the greedy partition wherever that is already the best	61.8
-VarkaGroupingBoundSuite	the greedy grouping is within half a percent of the best partition's ops on every family, and never below it once the prediction closes groups	31.8
-VarkaGroupingBoundSuite	under the exact grouping no shape declines, and none falls back to the greedy grouping	22.6
+VarkaGroupingBoundSuite	the exact grouping is the best partition of every shape, with the prediction and without, forms only groups the rule admits, and keeps the greedy partition wherever that is already the best	61.6
+VarkaGroupingBoundSuite	the greedy grouping is within half a percent of the best partition's ops on every family, and never below it once the prediction closes groups	59.5
+VarkaGroupingBoundSuite	under the exact grouping no shape declines, and none falls back to the greedy grouping	22.7
 VarkaIrFuzzSuite	a failure of the generated class fails its test with the smaller case in the message	0.1
 VarkaIrFuzzSuite	a planted bug in the generated class is classified and shrunk, not left to escape	0.3
 VarkaIrFuzzSuite	a planted liveness bug shrinks to one small root, the option alone and one row	0.2
 VarkaIrFuzzSuite	a variant grown past the op cap is rebuilt within it where it can be	0.4
-VarkaIrFuzzSuite	a variant grown past the op cap with no smaller form is skipped, not failed	1.9
+VarkaIrFuzzSuite	a variant grown past the op cap with no smaller form is skipped, not failed	1.7
 VarkaIrFuzzSuite	every known failure still reproduces	0.0
 VarkaIrFuzzSuite	random IR trees compiled by C2 match the reference evaluator over eight batch histories (20 draws a lane)	1.7
-VarkaIrFuzzSuite	random IR trees match the reference evaluator (seed 20260903, 300 iterations)	15.4
-VarkaIrFuzzSuite	random IR trees of both lanes match the reference evaluator (seed 20261019, 300 iterations)	1.7
-VarkaIrFuzzSuite	random long-lane IR trees match the reference evaluator (seed 20260919, 300 iterations)	9.3
+VarkaIrFuzzSuite	random IR trees match the reference evaluator (seed 20260903, 300 iterations)	14.8
+VarkaIrFuzzSuite	random IR trees of both lanes match the reference evaluator (seed 20261019, 300 iterations)	1.5
+VarkaIrFuzzSuite	random long-lane IR trees match the reference evaluator (seed 20260919, 300 iterations)	8.2
 VarkaIrFuzzSuite	steering toward unseen mechanisms against the plain draws, emission only (opt-in: -Dvarka.fuzz.steer=<n> or -Dvarka.fuzz.steerSeeds=<a,b,...>; VARKA-280)	0.0
 VarkaIrFuzzSuite	the generator reaches every IR node type	2.5
 VarkaIrFuzzSuite	the int-lane draw spreads its column values over their range	0.6
-VarkaIrFuzzSuite	the long-lane generator reaches every node type that admits 64-bit lanes	2.3
+VarkaIrFuzzSuite	the long-lane generator reaches every node type that admits 64-bit lanes	2.4
 VarkaIrFuzzSuite	the mixed-lane generator reaches both conversions, the calendar under a widening and a narrowing below another node	0.2
 VarkaIrFuzzSuite	the size control's decisions over a fixed corpus, dumped for a refactor to diff (opt-in: VARKA_SIZE_TRACE_DUMP=<file>; VARKA-290)	0.0
 VarkaIrFuzzSuite	wide compositions past the driver's ceiling match the reference evaluator, and reach every size mechanism (seed 20260903, 10 compositions)	8.2
-VarkaIrFuzzSuite	with no byte budget, a variant over the op cap is tried under the defaults' budget	0.4
-VarkaSeveralKernelsSuite	seventy date columns, past the sixty-four a kernel reads, answer from two kernels	4.3
-VarkaSeveralKernelsSuite	two hundred greatest entries, past the unrolled driver's ceiling, answer from two kernels	12.9
-VarkaSeveralKernelsSuite	under planSize eight hundred greatest entries, past the driver's ceiling with the split driver off, answer from two kernels the plan cut without a search (VARKA-236)	59.0
-VarkaSeveralKernelsSuite	under the defaults eight hundred greatest entries over one column and a date_add over each of the other sixty-nine answer from two kernels, the first with a split driver	50.3
-VarkaSmallTreeSuite	a planted liveness bug fails the series by size 3, with a tree in the message	5.3
-VarkaSmallTreeSuite	a tree and its first value child as two outputs match the reference evaluator	3.3
-VarkaSmallTreeSuite	every int tree to size 4 matches the reference evaluator (slice 0 of 1)	78.9
-VarkaSmallTreeSuite	every long tree to size 4 matches the reference evaluator (slice 0 of 1)	13.7
-VarkaSmallTreeSuite	the series reaches by size 4 every node type the grammar draws, counted by position	0.9
+VarkaIrFuzzSuite	with no byte budget, a variant over the op cap is tried under the defaults' budget	0.3
+VarkaSeveralKernelsSuite	seventy date columns, past the sixty-four a kernel reads, answer from two kernels	4.6
+VarkaSeveralKernelsSuite	two hundred greatest entries, past the unrolled driver's ceiling, answer from two kernels	7.7
+VarkaSeveralKernelsSuite	under planSize eight hundred greatest entries, past the driver's ceiling with the split driver off, answer from two kernels the plan cut without a search (VARKA-236)	45.2
+VarkaSeveralKernelsSuite	under the defaults eight hundred greatest entries over one column and a date_add over each of the other sixty-nine answer from two kernels, the first with a split driver	55.1
+VarkaSmallTreeSuite	a planted liveness bug fails the series by size 3, with a tree in the message	5.5
+VarkaSmallTreeSuite	a tree and its first value child as two outputs match the reference evaluator	3.4
+VarkaSmallTreeSuite	every int tree to size 4 matches the reference evaluator (slice 0 of 1)	88.7
+VarkaSmallTreeSuite	every long tree to size 4 matches the reference evaluator (slice 0 of 1)	13.4
+VarkaSmallTreeSuite	the series reaches by size 4 every node type the grammar draws, counted by position	1.1
 VarkaSmallTreeSuite	the trees the magnitude gates leave out are guarded or outside the contract, never refused	0.5
 VarkaSparkFuzzSuite	a case that lacks its pivot is reported, and the shrinker keeps the pivot row	0.1
-VarkaSparkFuzzSuite	a condition on no entry fails the fuzzer's check, naming the condition and the case	1.1
+VarkaSparkFuzzSuite	a condition on no entry fails the fuzzer's check, naming the condition and the case	1.0
 VarkaSparkFuzzSuite	a condition on the list passes the fuzzer's check	0.2
 VarkaSparkFuzzSuite	a difference only the two partitions show keeps which side raised and not the condition	0.0
-VarkaSparkFuzzSuite	a forced output finds a rollback that truncates one input too far	15.4
-VarkaSparkFuzzSuite	a pivot case's rectified filter selects its pivot row on the row engine	15.0
+VarkaSparkFuzzSuite	a forced output finds a rollback that truncates one input too far	15.5
+VarkaSparkFuzzSuite	a pivot case's rectified filter selects its pivot row on the row engine	16.5
 VarkaSparkFuzzSuite	a raise is expected only from the side and under the mode its entry lists	0.0
 VarkaSparkFuzzSuite	a reproducer parses back to what was rendered	0.0
 VarkaSparkFuzzSuite	a reproducer with a forced output parses back to what was rendered	0.0
 VarkaSparkFuzzSuite	a reproducer with a pivot parses back to what was rendered	0.0
 VarkaSparkFuzzSuite	a share of the grammar's trees fuse on their own	1.2
 VarkaSparkFuzzSuite	half the compositions add nested trees and keep the coverage rows they drew	0.0
-VarkaSparkFuzzSuite	random compositions agree with the row engine (seed 20261008, 200 of them)	75.3
-VarkaSparkFuzzSuite	random compositions agree with the row engine on both sides of the warm-up handover (seed 20261008, 8 of them)	16.9
+VarkaSparkFuzzSuite	random compositions agree with the row engine (seed 20261008, 200 of them)	77.3
+VarkaSparkFuzzSuite	random compositions agree with the row engine on both sides of the warm-up handover (seed 20261008, 8 of them)	16.2
 VarkaSparkFuzzSuite	the committed expected-errors list has a reason per entry and names real things	0.0
 VarkaSparkFuzzSuite	the draw includes every row of the table in every pass of the table's length	0.0
 VarkaSparkFuzzSuite	the draw reaches pivot cases and values outside the fixtures' lists	0.0
-VarkaSparkFuzzSuite	the fixture builds for every drawn case, so no composition compares fixture errors	23.0
-VarkaSparkFuzzSuite	the grammar's trees analyze under ANSI on and off, and the analyzer inserts casts	2.1
+VarkaSparkFuzzSuite	the fixture builds for every drawn case, so no composition compares fixture errors	20.2
+VarkaSparkFuzzSuite	the grammar's trees analyze under ANSI on and off, and the analyzer inserts casts	1.7
 VarkaSparkFuzzSuite	the partition check reports a raise the list does not allow, and ignores a listed one	0.0
 VarkaSparkFuzzSuite	the shrinker keeps a nested conjunct boolean and each node inside it of its type	0.0
 VarkaSparkFuzzSuite	the shrinker reduces a planted failure to the output that causes it and one row	0.0
 VarkaSparkFuzzSuite	the shrinker reduces inside a nested output to the subtree that causes it	0.0
 VarkaSparkFuzzSuite	the view is two partitions, one coalesced or a row alone, and fuses in each	0.2
-VarkaSparkFuzzSuite	the warmed arm finds a planted kernel fault after the handover, not before it	2.5
+VarkaSparkFuzzSuite	the warmed arm finds a planted kernel fault after the handover, not before it	1.4
 VarkaSparkFuzzSuite	the wider pool leaves the compositions of the main stream as they were	0.0
-VarkaSparkFuzzSuite	two partitions that raise different listed conditions compare the same on every run	18.7
+VarkaSparkFuzzSuite	two partitions that raise different listed conditions compare the same on every run	15.4
 VarkaTimeHarnessSuite	a crossing lane under a conjunction declines to the row engine, which answers what it would	0.0
 VarkaTimeHarnessSuite	a guard under a CASE arm fires only for the lanes the arm is taken for	0.0
-VarkaTimeHarnessSuite	an extract under another expression fuses beside a fused one	0.4
-VarkaTimeHarnessSuite	hour, minute and second agree with the row engine over every second of the day	1.8
-VarkaTimeHarnessSuite	t + dt agrees with the row engine where the sum stays inside the day	0.8
+VarkaTimeHarnessSuite	an extract under another expression fuses beside a fused one	0.3
+VarkaTimeHarnessSuite	hour, minute and second agree with the row engine over every second of the day	1.9
+VarkaTimeHarnessSuite	t + dt agrees with the row engine where the sum stays inside the day	1.0
 VarkaTimeHarnessSuite	t + the interval of Long.MinValue microseconds raises Spark's error, not t unchanged	0.0
-VarkaTimeHarnessSuite	t1 - t2 and time_diff at every unit agree with the row engine over every second	2.4
-VarkaTimeHarnessSuite	time_to_millis, time_to_micros and the time_from_* conversions agree with the row engine over every second of the day	1.4
-VarkaTimeHarnessSuite	time_trunc at every level agrees with the row engine over every second	1.6
+VarkaTimeHarnessSuite	t1 - t2 and time_diff at every unit agree with the row engine over every second	2.2
+VarkaTimeHarnessSuite	time_to_millis, time_to_micros and the time_from_* conversions agree with the row engine over every second of the day	1.6
+VarkaTimeHarnessSuite	time_trunc at every level agrees with the row engine over every second	2.0

@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -35,6 +36,7 @@ import org.junit.platform.launcher.PostDiscoveryFilter;
 import org.junit.platform.launcher.core.LauncherConfig;
 import org.junit.platform.launcher.core.LauncherDiscoveryRequestBuilder;
 import org.junit.platform.launcher.core.LauncherFactory;
+import org.opentest4j.TestAbortedException;
 import org.scalatest.Reporter;
 import org.scalatest.events.Event;
 import org.scalatest.events.RunAborted;
@@ -94,6 +96,33 @@ public final class VarkaSuiteRunner {
     @Override
     public boolean matches(String testName) {
       return testName.equals(name);
+    }
+  }
+
+  /**
+   * Each JUnit class's filters in this JVM's run, by class name, none for a class run whole. The
+   * discovery filter in {@link #run} sees only a class's {@code @Test} methods: a
+   * {@code @TestFactory}'s dynamic tests exist only once the factory runs, so
+   * {@link VarkaSuiteExtension#interceptDynamicTest} asks {@link #selects} for each of them.
+   */
+  private static final AtomicReference<Map<String, List<NameFilter>>> FILTERS =
+      new AtomicReference<>(Map.of());
+
+  /** Whether this JVM's run selects {@code className}'s test named {@code displayName}. */
+  static boolean selects(String className, String displayName) {
+    List<NameFilter> own = FILTERS.get().getOrDefault(className, List.of());
+    return own.isEmpty() || own.stream().anyMatch(f -> f.matches(displayName));
+  }
+
+  /**
+   * The cancel of a dynamic test the run's filters leave out. {@link VarkaSuiteListener} leaves
+   * a test cancelled with it out of the counts and the report, as discovery leaves out a
+   * {@code @Test} method the filters do not select, so a part of a split suite reports only the
+   * tests it was given.
+   */
+  static final class NotSelected extends TestAbortedException {
+    NotSelected(String test) {
+      super("not selected by -z or -t: " + test);
     }
   }
 
@@ -162,6 +191,7 @@ public final class VarkaSuiteRunner {
           .<DiscoverySelector>map(DiscoverySelectors::selectClass).toList();
       var filters = new HashMap<String, List<NameFilter>>();
       junitClasses.forEach((c, f) -> filters.put(c.getName(), f));
+      FILTERS.set(Map.copyOf(filters));
       // A test of a class with filters runs when one of them matches its display name, the
       // name ScalaTest's filters match; the Launcher drops the containers left with no test.
       PostDiscoveryFilter byName = descriptor -> {

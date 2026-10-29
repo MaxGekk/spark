@@ -158,6 +158,11 @@ public final class VarkaSuiteListener implements TestExecutionListener {
     }
     Long start = testStarts.remove(id.getUniqueId());
     double seconds = start == null ? 0.0 : (System.nanoTime() - start) / 1e9;
+    // A dynamic test the run's filters leave out goes uncounted and unreported, as discovery
+    // leaves out a @Test method they do not select.
+    if (result.getThrowable().orElse(null) instanceof VarkaSuiteRunner.NotSelected) {
+      return;
+    }
     String name = id.getDisplayName();
     String message = result.getThrowable().map(VarkaSuiteListener::messageOf).orElse("");
     Result outcome = switch (result.getStatus()) {
