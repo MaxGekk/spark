@@ -289,9 +289,10 @@ Times, seconds (JUnit's for a JUnit class, ScalaTest's "Run completed" for the S
                      before (the suite)        after (the harness suite + the session suite)
   defaults             66                         4.1 + 36.7
   arrowBatchSize=1     70                         4.6 + 36.4
-Both columns were measured in dev/varka_matrix.sh's test JVM. The profile's 147 s for the same
-suite (VARKA-509-profile-local.txt) is sbt's test JVM, whose spark.memory.debugFill=true makes
-the suite's ORDER BY page allocations the larger part of its time.
+Both columns were measured in dev/varka_matrix.sh's test JVM, with sbt's test options
+(spark.memory.debugFill=true among them). The profile's 147 s for the same suite
+(VARKA-509-profile-local.txt) was measured before VarkaSharedSessions set spark.buffer.pageSize
+to 1 MB (#1099); the profile's own run with that page size took 72 s.
 
 The matrix's skip lines: 11 move to VarkaDifferentialHarnessSuite under the same names, and
 each test still cancels where it did: checkIntOverflow=false 6 cancelled (5 harness, 1 end to
