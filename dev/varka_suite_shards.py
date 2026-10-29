@@ -18,7 +18,8 @@
 """Spread suites over N JVMs, longest first (VARKA-286.md 3.1), or over N CI jobs.
 
     dev/varka_suite_shards.py N WEIGHTS_DIR SUITE...     # one line per JVM, suites space separated
-    dev/varka_suite_shards.py --job I/N WEIGHTS_FILE SUITE...   # CI job I's suites, one a line
+    dev/varka_suite_shards.py --job I/N WEIGHTS_FILE [--head-start J:SECONDS] SUITE...
+                                                  # CI job I's suites, one a line
     dev/varka_suite_shards.py --update-weights WEIGHTS_FILE JUNIT_DIR...
     dev/varka_suite_shards.py --check-weights WEIGHTS_FILE JUNIT_DIR [SUITES_FILE]
     dev/varka_suite_shards.py --self-test
@@ -34,6 +35,8 @@ read from a committed file (`sql/varka/ci/suite-times.tsv`, a simple suite name 
 line) rather than from a run's reports. Each job computes its own share, so every job must see the
 same weights: a committed file is the same in every job of a run, where a restored cache need not
 be. A suite the file lacks takes the median, so a stale file costs balance and never coverage.
+`--head-start J:SECONDS` counts SECONDS of other work against job J before any suite is placed, for
+a job that does more than run its share (sql's first job builds the option matrix's classes).
 `--update-weights` writes the file from the JUnit reports of a run of every suite; given several
 runs, each a JUNIT_DIR, a suite takes the mean of the runs it appears in, since one run's time
 moves with the runner it drew. `--check-weights` reads one job's JUnit reports and prints a GitHub
@@ -106,12 +109,18 @@ def stale(weights_known, measured):
     return out
 
 
-def place(count, suites, times):
-    """Suites over `count` bins, heaviest first onto the lightest; a bin may be empty."""
+def place(count, suites, times, head=None):
+    """Suites over `count` bins, heaviest first onto the lightest; a bin may be empty. `head`
+    maps a bin to the seconds of other work it starts with.
+
+    >>> place(2, ["p.A", "p.B", "p.C"], {"A": 10.0, "B": 6.0, "C": 5.0}, {0: 8.0})
+    [['p.B'], ['p.A', 'p.C']]
+    """
     known = list(times.values())
     default = statistics.median(known) if known else 1.0
     weighted = sorted(suites, key=lambda s: (-times.get(s.split(".")[-1], default), s))
-    heap = [(0.0, k) for k in range(count)]
+    heap = [((head or {}).get(k, 0.0), k) for k in range(count)]
+    heapq.heapify(heap)
     placed = [[] for _ in range(count)]
     for suite in weighted:
         load, k = heapq.heappop(heap)
@@ -133,7 +142,7 @@ def shards(count, suites, times):
     return [p for p in place(count, suites, times) if p]
 
 
-def job_shard(index, count, suites, times):
+def job_shard(index, count, suites, times, head=None):
     """Job `index` of `count`: the suites the same placement gives it, empty when it has none.
 
     >>> job_shard(1, 3, ["p.A", "p.B", "p.C", "p.D"], {"A": 9.0, "B": 5.0, "C": 4.0, "D": 1.0})
@@ -143,7 +152,7 @@ def job_shard(index, count, suites, times):
     >>> job_shard(1, 2, ["p.A"], {})
     []
     """
-    return place(count, suites, times)[index]
+    return place(count, suites, times, head)[index]
 
 
 def read_weights(path):
@@ -180,7 +189,12 @@ def main(argv):
         if not 0 <= index < count:
             print(f"--job {argv[1]}: the index counts from zero, below the count", file=sys.stderr)
             return 2
-        for suite in job_shard(index, count, argv[3:], read_weights(argv[2])):
+        suites, head = argv[3:], {}
+        if suites[:1] == ["--head-start"] and len(suites) >= 2:
+            job, secs = suites[1].split(":")
+            head[int(job)] = float(secs)
+            suites = suites[2:]
+        for suite in job_shard(index, count, suites, read_weights(argv[2]), head):
             print(suite)
         return 0
     if len(argv) >= 3 and argv[0] == "--update-weights":

@@ -75,10 +75,19 @@ if [ -n "$shard" ]; then
   [ ${#all[@]} -gt 0 ] || { echo "the runner listed no suite of $module" >&2; exit 1; }
   weights=sql/varka/ci/suite-times.tsv
   count=${shard#*/}
+  # sql's first job also builds and archives the option matrix's test classes, about five minutes
+  # more than the compile the other jobs do, which is about 200 seconds of suites at their pace:
+  # the split counts it against that job (VARKA-516, m8/results/VARKA-516-weights.txt).
+  head=()
+  if [ "$module" = sql ]; then
+    head=(--head-start 0:200)
+  fi
   digest=$(for ((k = 0; k < count; k++)); do
-      echo "== $k"; python3 dev/varka_suite_shards.py --job "$k/$count" "$weights" "${all[@]}"
+      echo "== $k"
+      python3 dev/varka_suite_shards.py --job "$k/$count" "$weights" "${head[@]}" "${all[@]}"
     done | md5sum | cut -c1-12)
-  mapfile -t mine < <(python3 dev/varka_suite_shards.py --job "$shard" "$weights" "${all[@]}")
+  mapfile -t mine < <(python3 dev/varka_suite_shards.py --job "$shard" "$weights" "${head[@]}" \
+    "${all[@]}")
   printf '%s\n' "${mine[@]##*.}" > target/varka-scoped/job-suites
   echo "== job $shard of $module's Varka suites: ${#mine[@]} of ${#all[@]}," \
     "split digest $digest: $(tr '\n' ' ' < target/varka-scoped/job-suites)"
