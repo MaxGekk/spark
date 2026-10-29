@@ -1,0 +1,32 @@
+# The Build's Varka jobs against their split weights (VARKA-516), 29 October 2026: the JUnit
+# reports of Builds 40851152000 and 40862846845, both of the tests on master at b4b4afa4543 (their
+# heads 37c39097662 and 4a72cd38da0 carry the same test code), read by dev/varka_suite_shards.py.
+# A module's suites are placed over its three jobs by the weights, heaviest first onto the
+# lightest, and each job's load below is the measured seconds of the suites placed on it; a job's
+# minutes also hold its build, its option configuration and its JIT-measuring suites.
+
+run-to-run, the 38 suites over 20 s in either Build, the larger time over the smaller: median
+1.15, 90th percentile 1.86, largest 3.38
+sql, the committed weights, the suites' seconds of Build 40851152000 by job:
+  45, 557, 838
+sql, the committed weights, the suites' seconds of Build 40862846845 by job:
+  42, 540, 861
+sql, the refreshed weights, the suites' seconds of Build 40851152000 by job:
+  490, 478, 472
+sql, the refreshed weights, the suites' seconds of Build 40862846845 by job:
+  471, 483, 489
+catalyst, the committed weights, the suites' seconds of Build 40851152000 by job:
+  627, 682, 1297
+catalyst, the committed weights, the suites' seconds of Build 40862846845 by job:
+  1065, 721, 1214
+catalyst, the refreshed weights, the suites' seconds of Build 40851152000 by job:
+  760, 986, 859
+catalyst, the refreshed weights, the suites' seconds of Build 40862846845 by job:
+  1109, 882, 1009
+
+The refreshed weights are the two Builds' mean for each suite (--update-weights over both runs).
+The committed weights were off by more than a factor of two, or missing, for 17 suites, among
+them the suites row 509 moved and added, VarkaSparkFuzzSuite (88.1 s against 259.9 measured),
+VarkaFloatingLaneSuite (32.2 against 143.8) and VarkaGoldenCorpusSuite (33.6 against 116.6).
+--check-weights warns at a factor of 3.5 and 30 s together, above the largest run-to-run factor
+above, so a warning is a stale weight and not a runner's noise.

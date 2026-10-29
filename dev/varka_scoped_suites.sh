@@ -107,6 +107,12 @@ fi
 "$matrix" --defaults --module "$module" --split 2 -j 2 --sbt-arg -Phive \
   --out target/varka-scoped --skip-suites "${timing:-@none}" "${only[@]}" "${extra[@]}" \
   "${reach[@]}"
+# A suite of this job's share whose time has moved far from its weight is reported as a warning,
+# so the split by the committed weights does not drift out of balance unseen (VARKA-516).
+if [ -n "$shard" ]; then
+  python3 dev/varka_suite_shards.py --check-weights "$weights" target/varka-scoped/runs \
+    target/varka-scoped/job-suites
+fi
 
 # The suites that measure the JIT may be given a fresh JVM when they fail, since what they
 # measure is decided per JVM: a suite in this list that fails is run again, alone, in a new JVM,

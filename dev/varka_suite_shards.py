@@ -20,6 +20,7 @@
     dev/varka_suite_shards.py N WEIGHTS_DIR SUITE...     # one line per JVM, suites space separated
     dev/varka_suite_shards.py --job I/N WEIGHTS_FILE SUITE...   # CI job I's suites, one a line
     dev/varka_suite_shards.py --update-weights WEIGHTS_FILE JUNIT_DIR...
+    dev/varka_suite_shards.py --check-weights WEIGHTS_FILE JUNIT_DIR [SUITES_FILE]
     dev/varka_suite_shards.py --self-test
 
 Each suite's weight is its time in the JUnit reports under WEIGHTS_DIR (any depth, the files
@@ -33,7 +34,15 @@ read from a committed file (`sql/varka/ci/suite-times.tsv`, a simple suite name 
 line) rather than from a run's reports. Each job computes its own share, so every job must see the
 same weights: a committed file is the same in every job of a run, where a restored cache need not
 be. A suite the file lacks takes the median, so a stale file costs balance and never coverage.
-`--update-weights` writes the file from the JUnit reports of a run of every suite.
+`--update-weights` writes the file from the JUnit reports of a run of every suite; given several
+runs, each a JUNIT_DIR, a suite takes the mean of the runs it appears in, since one run's time
+moves with the runner it drew. `--check-weights` reads one job's JUnit reports and prints a GitHub
+warning for each suite whose weight is stale: missing from the file, or off its weight by more
+than STALE_FACTOR and STALE_SECONDS together; with SUITES_FILE, a simple suite name a line, only
+the suites it names, since a job's output directory can hold an earlier run's reports. Two Builds
+of the same tests saw a suite's time move by a median factor of 1.15 and at most 3.38
+(`m8/results/VARKA-516-weights.txt`), so a factor below that would warn on noise; the check warns
+and never fails a job.
 """
 
 import heapq
@@ -55,6 +64,46 @@ def weights(root):
         if name and suite.get("time"):
             times[name] = max(times.get(name, 0.0), float(suite.get("time")))
     return times
+
+
+# A suite's time against its weight beyond both of these is a stale weight, not a runner's noise.
+STALE_FACTOR = 3.5
+STALE_SECONDS = 30.0
+
+
+def mean_weights(runs):
+    """Seconds per suite over several runs' weights, each suite the mean of the runs it is in.
+
+    >>> mean_weights([{"A": 10.0, "B": 4.0}, {"A": 20.0}])
+    {'A': 15.0, 'B': 4.0}
+    """
+    seen = {}
+    for times in runs:
+        for name, secs in times.items():
+            seen.setdefault(name, []).append(secs)
+    return {name: sum(v) / len(v) for name, v in sorted(seen.items())}
+
+
+def stale(weights_known, measured):
+    """The suites whose weight is stale against one run's times, each with a reason.
+
+    >>> known = {"ASuite": 100.0, "BSuite": 10.0, "CSuite": 50.0}
+    >>> stale(known, {"ASuite": 120.0, "BSuite": 20.0, "CSuite": 200.0, "DSuite": 40.0})
+    [('CSuite', 'weight 50.0 s, measured 200.0 s'), ('DSuite', 'no weight, measured 40.0 s')]
+    """
+    out = []
+    for name, secs in sorted(measured.items()):
+        if not name.endswith("Suite") or "$" in name:
+            continue
+        known = weights_known.get(name)
+        if known is None:
+            if secs > STALE_SECONDS:
+                out.append((name, f"no weight, measured {secs:.1f} s"))
+            continue
+        hi, lo = max(secs, known), max(min(secs, known), 0.1)
+        if hi / lo > STALE_FACTOR and hi - lo > STALE_SECONDS:
+            out.append((name, f"weight {known:.1f} s, measured {secs:.1f} s"))
+    return out
 
 
 def place(count, suites, times):
@@ -136,12 +185,22 @@ def main(argv):
         return 0
     if len(argv) >= 3 and argv[0] == "--update-weights":
         times = read_weights(argv[1]) if Path(argv[1]).exists() else {}
-        for d in argv[2:]:
-            times.update(weights(d))
+        times.update(mean_weights([weights(d) for d in argv[2:]]))
         # A report names fixtures and censuses too (a nested `Suite$Fixture`, a `...Census`);
         # only the suites a job is split by belong, or they drag the median a new suite takes.
         times = {k: v for k, v in times.items() if k.endswith("Suite") and "$" not in k}
         write_weights(argv[1], times)
+        return 0
+    if len(argv) in (3, 4) and argv[0] == "--check-weights":
+        measured = weights(argv[2])
+        if len(argv) == 4:
+            mine = set(Path(argv[3]).read_text(encoding="utf-8").split())
+            measured = {k: v for k, v in measured.items() if k in mine}
+        for name, why in stale(read_weights(argv[1]), measured):
+            print(
+                f"::warning title=Stale suite weight::{name}: {why}; refresh {argv[1]} with "
+                "dev/varka_suite_shards.py --update-weights"
+            )
         return 0
     if len(argv) < 3:
         print(__doc__, file=sys.stderr)
