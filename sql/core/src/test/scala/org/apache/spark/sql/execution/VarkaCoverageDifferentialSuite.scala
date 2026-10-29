@@ -51,9 +51,10 @@ import org.apache.spark.sql.internal.SQLConf
  * Spark evaluates it and where it skips it over a fixture of the types' extremes, and the
  * domains of the rows whose kernel can decline a batch (VARKA-279). This suite keeps the answer
  * form for the first row of each family, the plumbing only a session has: the columnar rule's
- * plan, the cache and the two nodes; and two tests of the error comparison a user meets over a
- * session, [[VarkaMaybeThrows]]'s (VARKA-317). The hand-chosen
- * shapes in `VarkaDifferentialSuite` (extreme offsets, overflow, cache conversion) stay there;
+ * plan, the cache and the two nodes; and the error comparison a user meets over a session,
+ * [[VarkaMaybeThrows]]'s (VARKA-317): two tests of the comparison itself, and one row through it
+ * for each error condition the table's rows raise. The hand-chosen shapes in
+ * `VarkaDifferentialSuite` (extreme offsets, overflow, cache conversion) stay there;
  * this is the floor under them.
  */
 class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
@@ -222,8 +223,9 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
 
   // Each row's ANSI form - where Spark evaluates it and where it skips it, and the reach check
   // of the skipped positions with its declined list - runs below the session, in
-  // VarkaCoverageHarnessSuite and VarkaAnsiForm (VARKA-509). The two tests below keep the error
-  // comparison a user meets, VarkaMaybeThrows' over a session.
+  // VarkaCoverageHarnessSuite and VarkaAnsiForm (VARKA-509). The tests below keep the error
+  // comparison a user meets, VarkaMaybeThrows' over a session: two of the comparison itself, and
+  // one row a condition.
 
   test("the ANSI form fails a raise where the row engine skips, and a missing one") {
     // No kernel raises on purpose, so the fault is planted in the outcomes, which are real:
@@ -295,6 +297,31 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
           assert(e.getMessage.contains("ARITHMETIC_OVERFLOW"), e.getMessage)
         } finally {
           VarkaColumnarToRowExec.setEmitOptionsForTesting(previous)
+        }
+      }
+    }
+  }
+
+  /**
+   * One row a condition: each error condition a coverage row raises on the extremes fixture, by
+   * the first row that raises it, the list `VarkaCoverageHarnessSuite` holds to the table. Each
+   * runs through both sessions, so the error a user meets - condition, SQLSTATE, parameters,
+   * message and exception class - is Spark's for every condition, and a Varka node must be in
+   * the plan, or the row engine alone would pass it.
+   */
+  VarkaAnsiForm.RAISES.asScala.toSeq.sortBy(_._1).foreach { case (condition, sql) =>
+    test(s"$condition reaches the user as the row engine raises it, from $sql") {
+      val row = rows.find(_.sql == sql).getOrElse(fail(s"no coverage row $sql"))
+      val q = s"SELECT ${row.executable} AS v FROM $extremesTable"
+      withAnsi(enabled = true) {
+        withBothConf(SQLConf.IN_MEMORY_PARTITION_PRUNING.key, "false") {
+          val (_, plan) = runOutcome(varkaSpark, q)
+          assert(plan.exists(p => find(p)(isVarkaNode).isDefined),
+            plan.map(_.treeString).getOrElse("(no plan)"))
+          checkSparkAnswerMaybeThrows(q) match {
+            case r: Raised => assert(r.condition === condition, r)
+            case other => fail(s"expected $condition, got $other")
+          }
         }
       }
     }

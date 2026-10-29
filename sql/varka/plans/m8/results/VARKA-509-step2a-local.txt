@@ -7,8 +7,8 @@ Old tests to new, each kept under its name (VarkaCoverageDifferentialSuite to
 VarkaCoverageHarnessSuite):
   <row> matches the row engine under both consumers               337 -> 337, and 27 kept
                                                                    end to end, a row a family
-  <row> splits every fixture into true, false and unknown rows    165 -> 165
-  <row> under IS NULL and IS NOT NULL fuses as a CASE condition   165 -> 165
+  <row> splits every fixture into true, false and unknown rows    164 -> 164
+  <row> under IS NULL and IS NOT NULL fuses as a CASE condition   164 -> 164
   a boolean column read at the int and the long lane in one
   query answers Spark's                                              1 -> 1
   the partition oracle fails a filter that answers unknown where
