@@ -34,6 +34,8 @@ import org.apache.spark.sql.catalyst.expressions.InterpretedUnsafeProjection;
 import org.apache.spark.sql.catalyst.expressions.NamedExpression;
 import org.apache.spark.sql.catalyst.expressions.UnsafeProjection;
 import org.apache.spark.sql.catalyst.expressions.codegen.GenerateUnsafeProjection;
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler;
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.ResidualOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSqlResolve;
 import org.apache.spark.sql.execution.columnar.VarkaCacheBatches;
 import org.apache.spark.sql.execution.varka.VarkaBatchDeclined;
@@ -72,6 +74,19 @@ public final class VarkaExpressionHarness {
     public final List<String> findings = new ArrayList<>();
     public int answered;
     public int declined;
+    /** For a filter, the {@code rid} of every row Spark's condition is true on, batch or not. */
+    public final java.util.SortedSet<Integer> sparkTrue = new java.util.TreeSet<>();
+
+    /** For a projection, the outputs the compiler left to the row path. */
+    public int residual;
+
+    /**
+     * Whether a kernel served every batch and every output: some batch answered, none declined,
+     * and no output left residual, which the row path would answer beside the kernel's.
+     */
+    public boolean served() {
+      return answered > 0 && declined == 0 && residual == 0;
+    }
 
     public boolean ok() {
       return findings.isEmpty();
@@ -127,12 +142,28 @@ public final class VarkaExpressionHarness {
     return out;
   }
 
-  /**
-   * Varka's projection evaluator over {@code rows}, as {@code VarkaProjectExec} serves a batch,
-   * against Spark's projection of the same list.
-   */
+  /** The two consumers a Varka projection has, as the exec nodes call the evaluator. */
+  public enum Consumer {
+    /** The columnar node and the Arrow cache builder: {@code project}, every output a vector. */
+    COLUMNS,
+    /** The row node: {@code projectFused}, the fused outputs only, read row by row. */
+    ROWS
+  }
+
+  /** {@link #projection(String, Seq, VarkaHarnessPlans.Fixture, SQLConf, Consumer)} as columns. */
   public static Outcome projection(String context, Seq<NamedExpression> projectList,
       VarkaHarnessPlans.Fixture fixture, SQLConf conf) {
+    return projection(context, projectList, fixture, conf, Consumer.COLUMNS);
+  }
+
+  /**
+   * Varka's projection evaluator over {@code rows}, as {@code consumer}'s exec node serves a
+   * batch, against Spark's projection of the same list. The row node's {@code projectFused}
+   * returns the fused outputs alone, so every output must be fused for it, as every row of the
+   * coverage table is.
+   */
+  public static Outcome projection(String context, Seq<NamedExpression> projectList,
+      VarkaHarnessPlans.Fixture fixture, SQLConf conf, Consumer consumer) {
     var outcome = new Outcome();
     Seq<Attribute> columns = fixture.columns();
     List<InternalRow> all = fixture.rows();
@@ -144,6 +175,11 @@ public final class VarkaExpressionHarness {
     }
     DataType[] types = outputs.stream().map(Expression::dataType).toArray(DataType[]::new);
     List<Expected> expected = spark(context, outputs, columns, all, types, outcome);
+    // The outputs the evaluator's compile leaves to the row path, by the same compile.
+    outcome.residual = VarkaExpressionCompiler.compilePartial(projectList, columns,
+            VarkaColumnarToRowExec$.MODULE$.currentEmitOptions())
+        .map(p -> (int) p.specs().stream().filter(x -> x instanceof ResidualOutput).count())
+        .orElse(outputs.size());
     VarkaCacheBatches.inTask(() -> {
       var evaluator =
           new VarkaKernelEvaluator(projectList, columns, false, "VarkaExpressionHarness");
@@ -151,8 +187,8 @@ public final class VarkaExpressionHarness {
       VarkaCacheBatches.each(all, columns, conf, batch -> {
         int start = offset[0];
         offset[0] += batch.numRows();
-        ColumnarBatch out = serve(context, evaluator, batch, () -> evaluator.project(batch),
-            outcome);
+        ColumnarBatch out = serve(context, evaluator, batch, () -> consumer == Consumer.ROWS
+            ? evaluator.projectFused(batch) : evaluator.project(batch), outcome);
         if (out != null) {
           try {
             for (int i = 0; i < batch.numRows(); i++) {
@@ -182,6 +218,12 @@ public final class VarkaExpressionHarness {
     int ridOrdinal = fixture.ordinal("rid");
     DataType[] types = {condition.dataType()};
     List<Expected> expected = spark(context, List.of(condition), columns, all, types, outcome);
+    for (int i = 0; i < all.size(); i++) {
+      Expected e = expected.get(i);
+      if (e != null && e.error() == null && !e.row().isNullAt(0) && e.row().getBoolean(0)) {
+        outcome.sparkTrue.add(all.get(i).getInt(ridOrdinal));
+      }
+    }
     VarkaCacheBatches.inTask(() -> {
       var evaluator =
           new VarkaFilterEvaluator(condition, columns, false, "VarkaExpressionHarness");

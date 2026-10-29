@@ -128,7 +128,7 @@ class VarkaCoverageSuite extends SparkFunSuite with VarkaTestWatchdog {
    * compiles, except where `built` overrides it - the one case is `InSet`, which no SQL
    * spelling produces directly because Spark's optimizer, not its parser, creates it. Such a
    * row also gives `executable`, SQL that a query can run and that the optimizer turns into the
-   * same expression, so that `VarkaCoverageDifferentialSuite` can run every row of the table.
+   * same expression, so that `VarkaCoverageHarnessSuite` can run every row of the table.
    *
    * `domain` is the predicate inside which the row's kernel answers, for a row whose kernel can
    * decline a batch (VARKA-279 3.3): outside it the batch goes to the row engine, which answers

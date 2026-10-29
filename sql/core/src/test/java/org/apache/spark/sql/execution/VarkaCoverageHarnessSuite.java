@@ -32,6 +32,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import scala.Tuple2;
 import scala.jdk.javaapi.CollectionConverters;
 
+import org.apache.spark.sql.catalyst.expressions.Expression;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrixRuns;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSuite;
@@ -45,11 +46,13 @@ import org.junit.jupiter.api.TestFactory;
 
 /**
  * Every row of the published coverage table held to Spark's answer with no session (VARKA-509,
- * {@code m8/VARKA-509.md}): the answer form of {@code VarkaCoverageDifferentialSuite}, on its
- * three answer fixtures, through {@link VarkaExpressionHarness}. A projection row runs through
- * the projection evaluator, a predicate row through the filter evaluator, as the exec nodes run
- * them; each row is one test, so the option matrix's record of what a configuration moves keeps
- * a row's granularity.
+ * {@code m8/VARKA-509.md}), on {@code VarkaCoverageDifferentialSuite}'s three answer fixtures,
+ * through {@link VarkaExpressionHarness}: each row's answer under both consumers - a projection
+ * row through the columnar node's {@code project} and the row node's {@code projectFused}, a
+ * predicate row through the filter evaluator - and each predicate row's partition oracle
+ * ({@link VarkaPartitionOracle}) and its null tests as CASE conditions. Each row of each form is
+ * one test under the name the end-to-end suite gave it, so the option matrix's record of what a
+ * configuration moves keeps a row's granularity and the skip list's lines read alike.
  *
  * <p>The kernel must answer some batch of a row on some fixture: a row whose kernel declined
  * everything would otherwise pass on the row path's answers alone.
@@ -138,14 +141,22 @@ public final class VarkaCoverageHarnessSuite {
     for (Map.Entry<String, VarkaHarnessPlans.Fixture> f : FIXTURES.entrySet()) {
       String context = f.getKey() + ", " + row.family() + ": " + row.sql();
       VarkaHarnessPlans.Fixture fixture = f.getValue();
-      VarkaExpressionHarness.Outcome one = row.form().equals("predicate")
-          ? VarkaExpressionHarness.filter(context,
-              VarkaHarnessPlans.condition(row.executable(), fixture.columns()), fixture, conf)
-          : VarkaExpressionHarness.projection(context,
-              VarkaHarnessPlans.projection(row.executable(), fixture.columns()), fixture, conf);
-      all.findings.addAll(one.findings);
-      all.answered += one.answered;
-      all.declined += one.declined;
+      var outcomes = new ArrayList<VarkaExpressionHarness.Outcome>();
+      if (row.form().equals("predicate")) {
+        outcomes.add(VarkaExpressionHarness.filter(context,
+            VarkaHarnessPlans.condition(row.executable(), fixture.columns()), fixture, conf));
+      } else {
+        var list = VarkaHarnessPlans.projection(row.executable(), fixture.columns());
+        for (VarkaExpressionHarness.Consumer consumer : VarkaExpressionHarness.Consumer.values()) {
+          outcomes.add(VarkaExpressionHarness.projection(context + ", " + consumer, list,
+              fixture, conf, consumer));
+        }
+      }
+      for (VarkaExpressionHarness.Outcome one : outcomes) {
+        all.findings.addAll(one.findings);
+        all.answered += one.answered;
+        all.declined += one.declined;
+      }
     }
     return all;
   }
@@ -159,12 +170,146 @@ public final class VarkaCoverageHarnessSuite {
   @TestFactory
   Stream<DynamicTest> everyRow() {
     return ROWS.stream().map(row -> DynamicTest.dynamicTest(
-        row.family() + ": " + row.sql() + " matches Spark's answer below the session", () -> {
+        row.family() + ": " + row.sql() + " matches the row engine under both consumers", () -> {
           VarkaExpressionHarness.Outcome outcome = check(row);
           assertTrue(outcome.ok(), String.join("\n", outcome.findings));
           assertTrue(outcome.answered > 0, "the kernel answered no batch of " + row.sql()
               + " on any fixture (" + outcome.declined + " declined)");
         }));
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // The partition oracle (VARKA-138)
+  // ---------------------------------------------------------------------------------------------
+
+  private static List<Row> predicates() {
+    return ROWS.stream().filter(r -> r.form().equals("predicate")).toList();
+  }
+
+  /** {@code conf} with {@code rules} excluded from the optimizer. */
+  private static SQLConf excluding(SQLConf conf, String rules) {
+    SQLConf out = conf.clone();
+    out.setConfString(SQLConf.OPTIMIZER_EXCLUDED_RULES().key(), rules);
+    return out;
+  }
+
+  @TestFactory
+  Stream<DynamicTest> partitions() {
+    return predicates().stream().map(row -> DynamicTest.dynamicTest(row.family() + ": "
+        + row.sql() + " splits every fixture into true, false and unknown rows", () -> {
+          SQLConf base = conf(SQLConf.get().ansiEnabled());
+          var settings = new LinkedHashMap<String, SQLConf>();
+          settings.put("default optimizer", base);
+          settings.put("rewrites excluded", excluding(base, VarkaPartitionOracle.REWRITES));
+          boolean nullSafe = VarkaPartitionOracle.isNullSafe(row.executable());
+          if (nullSafe) {
+            settings.put("NullPropagation excluded too",
+                excluding(base, VarkaPartitionOracle.NULL_SAFE_REWRITES));
+          }
+          var findings = new ArrayList<String>();
+          for (Map.Entry<String, SQLConf> setting : settings.entrySet()) {
+            SQLConf conf = setting.getValue();
+            boolean mustFuse = setting.getKey().equals("NullPropagation excluded too");
+            for (Map.Entry<String, VarkaHarnessPlans.Fixture> f : FIXTURES.entrySet()) {
+              findings.addAll(withConf(conf, () -> VarkaPartitionOracle.check(
+                  f.getKey() + ", " + setting.getKey(), row.executable(), f.getValue(), conf,
+                  mustFuse)));
+            }
+          }
+          assertTrue(findings.isEmpty(), String.join("\n", findings));
+        }));
+  }
+
+  /**
+   * Each predicate row's null tests as the condition of a CASE, with the partition rewrites
+   * excluded, since {@code NullDownPropagation} would otherwise turn them into null tests on the
+   * columns. The arms are two dates, two bigints, two doubles or two floats: which lane a
+   * condition lands on is the compiler's, so where {@code p} can be null one pair of arms must
+   * have its kernel serve the whole projection. Every answer is Spark's.
+   */
+  @TestFactory
+  Stream<DynamicTest> nullTestConditions() {
+    String[][] arms = {{"d", "d2"}, {"l", "l2"}, {"x", "x2"}, {"f", "f2"}};
+    return predicates().stream().map(row -> DynamicTest.dynamicTest(row.family() + ": "
+        + row.sql() + " under IS NULL and IS NOT NULL fuses as a CASE condition", () -> {
+          SQLConf conf = excluding(conf(SQLConf.get().ansiEnabled()),
+              VarkaPartitionOracle.REWRITES);
+          var findings = new ArrayList<String>();
+          withConf(conf, () -> {
+            for (Map.Entry<String, VarkaHarnessPlans.Fixture> f : FIXTURES.entrySet()) {
+              VarkaHarnessPlans.Fixture fixture = f.getValue();
+              boolean canBeNull = VarkaPartitionOracle.nullable(row.executable(), fixture);
+              for (String test : List.of("IS NULL", "IS NOT NULL")) {
+                boolean served = false;
+                for (String[] pair : arms) {
+                  String sql = "CASE WHEN (" + row.executable() + ") " + test + " THEN "
+                      + pair[0] + " ELSE " + pair[1] + " END";
+                  VarkaExpressionHarness.Outcome o = VarkaExpressionHarness.projection(
+                      f.getKey() + ", " + sql, VarkaHarnessPlans.projection(sql,
+                          fixture.columns()), fixture, conf);
+                  findings.addAll(o.findings);
+                  served |= o.served();
+                }
+                if (canBeNull && !served) {
+                  findings.add(f.getKey() + ": no kernel served all of either arm pair under "
+                      + test);
+                }
+              }
+            }
+            return null;
+          });
+          assertTrue(findings.isEmpty(), String.join("\n", findings));
+        }));
+  }
+
+  @Test
+  @DisplayName("a boolean column read at the int and the long lane in one query answers Spark's")
+  void booleanAtBothLanes() {
+    // The leaf takes the lane of what it meets, so one query can hold it on both: the shapes
+    // below decline or fuse, and either way the rows are Spark's. At least one must fuse, or the
+    // test would pass with the leaf never reaching a kernel.
+    SQLConf conf = conf(SQLConf.get().ansiEnabled());
+    VarkaHarnessPlans.Fixture fixture = FIXTURES.get("varka_coverage_mixed");
+    List<String> queries = List.of(
+        "SELECT rid, IF(b, l, l2) AS x, IF(b, d, d2) AS y FROM t",
+        "SELECT rid FROM t WHERE IF(b, l, l2) > 0 AND IF(b, d, d2) > DATE'2020-01-01'",
+        "SELECT rid FROM t WHERE b AND l < l2 AND d < d2",
+        "SELECT rid, CASE WHEN b THEN l ELSE l2 END AS x, CASE WHEN b THEN d ELSE d2 END AS y "
+            + "FROM t");
+    var findings = new ArrayList<String>();
+    boolean[] served = {false};
+    withConf(conf, () -> {
+      for (String sql : queries) {
+        VarkaHarnessPlans.Query q = VarkaHarnessPlans.query(sql, fixture.columns());
+        VarkaExpressionHarness.Outcome o = q instanceof VarkaHarnessPlans.Query.Selection s
+            ? VarkaExpressionHarness.filter(sql, s.condition(), fixture, conf)
+            : VarkaExpressionHarness.projection(sql,
+                ((VarkaHarnessPlans.Query.Projection) q).list(), fixture, conf);
+        findings.addAll(o.findings);
+        served[0] |= o.served();
+      }
+      return null;
+    });
+    assertTrue(findings.isEmpty(), String.join("\n", findings));
+    assertTrue(served[0], "no query reached a kernel:\n" + String.join("\n", queries));
+  }
+
+  @Test
+  @DisplayName("the partition oracle fails a filter that answers unknown where it should answer "
+      + "false")
+  void partitionOracleFails() {
+    // No kernel can be broken this way on purpose, so the fault is planted in the answers: a
+    // filter that swapped known-false and unknown would keep Spark's IS NULL rows for NOT (p).
+    var t = java.util.Set.of(0, 1);
+    var f = java.util.Set.of(2, 3);
+    var u = java.util.Set.of(4);
+    var all = java.util.Set.of(0, 1, 2, 3, 4);
+    assertTrue(VarkaPartitionOracle.partitionFindings(t, f, u, all).isEmpty());
+    List<String> findings = VarkaPartitionOracle.partitionFindings(t, u, u, all);
+    assertTrue(findings.stream().anyMatch(x -> x.startsWith("rows both false and unknown")),
+        String.join("\n", findings));
+    assertTrue(findings.stream().anyMatch(x -> x.startsWith("rows neither true, false nor")),
+        String.join("\n", findings));
   }
 
   @Test
@@ -176,6 +321,31 @@ public final class VarkaCoverageHarnessSuite {
     SQLConf conf = conf(true);
     withConf(conf, () -> {
       plantUnder(conf);
+      return null;
+    });
+  }
+
+  @Test
+  @DisplayName("a filter kernel planted to answer an overflowing row fails the harness")
+  void plantedFilterFails() {
+    // The same plant through the filter path: WHERE i + 1 > 0 keeps the wrapped row's answer.
+    SQLConf conf = conf(true);
+    withConf(conf, () -> {
+      VarkaHarnessPlans.Fixture fixture = VarkaHarnessPlans.fixture(
+          "SELECT rid, i FROM VALUES (0, 2147483647), (1, 1) AS v(rid, i)");
+      Expression condition = VarkaHarnessPlans.condition("i + 1 > 0", fixture.columns());
+      try {
+        VarkaColumnarToRowExec$.MODULE$.setEmitOptionsForTesting(
+            VarkaMatrixRuns.BASE.withCheckIntOverflow(false));
+        VarkaExpressionHarness.Outcome planted =
+            VarkaExpressionHarness.filter("planted", condition, fixture, conf);
+        assertTrue(planted.answered > 0, "the planted filter kernel answered no batch");
+        assertTrue(planted.findings.stream().anyMatch(f -> f.contains("Spark raises on")
+            && f.contains("ARITHMETIC_OVERFLOW")), "the harness missed the planted filter: "
+            + planted.findings);
+      } finally {
+        VarkaColumnarToRowExec$.MODULE$.setEmitOptionsForTesting(VarkaMatrixRuns.BASE);
+      }
       return null;
     });
   }

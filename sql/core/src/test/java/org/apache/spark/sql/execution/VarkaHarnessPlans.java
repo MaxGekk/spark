@@ -31,6 +31,7 @@ import org.apache.spark.sql.catalyst.analysis.FakeV2SessionCatalog$;
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry$;
 import org.apache.spark.sql.catalyst.analysis.SimpleAnalyzer$;
 import org.apache.spark.sql.catalyst.analysis.TableFunctionRegistry$;
+import org.apache.spark.sql.catalyst.analysis.UnresolvedRelation;
 import org.apache.spark.sql.catalyst.catalog.InMemoryCatalog;
 import org.apache.spark.sql.catalyst.catalog.SessionCatalog;
 import org.apache.spark.sql.catalyst.expressions.Attribute;
@@ -101,6 +102,67 @@ public final class VarkaHarnessPlans {
       rows.add(row.copy());
     }
     return new Fixture(local.output(), rows);
+  }
+
+  /**
+   * What a query over a fixture asks of Varka, as the optimizer leaves it: a projection list over
+   * the scan, a filter's condition with the columns it keeps, or a constant answer where the
+   * optimizer folded the filter away - every row, for a condition it proved true, none for one
+   * it proved false.
+   */
+  public sealed interface Query {
+    /**
+     * {@code list} over the scan. A list of the scan's own columns only is what a filter the
+     * optimizer proved true leaves: {@link #forwardsOnly}.
+     */
+    record Projection(Seq<NamedExpression> list) implements Query {
+      public boolean forwardsOnly() {
+        return CollectionConverters.asJava(list).stream().allMatch(e -> e instanceof Attribute);
+      }
+    }
+
+    /** The rows {@code condition} is true on. */
+    record Selection(Expression condition) implements Query {}
+
+    /** Every row, or none, with no expression left to compile. */
+    record Constant(boolean all) implements Query {}
+  }
+
+  /**
+   * {@code sql}, a query over a table named {@code t}, with {@code t} read as a scan of
+   * {@code columns}, resolved and optimized: the plan a session builds over its cached view.
+   */
+  public static Query query(String sql, Seq<Attribute> columns) {
+    LogicalPlan parsed = CatalystSqlParser$.MODULE$.parsePlan(sql);
+    LogicalPlan scanned = parsed.transformUp(new scala.runtime.AbstractPartialFunction<>() {
+      @Override
+      public boolean isDefinedAt(LogicalPlan plan) {
+        return plan instanceof UnresolvedRelation r && r.tableName().equals("t");
+      }
+
+      @Override
+      public LogicalPlan apply(LogicalPlan plan) {
+        return isDefinedAt(plan) ? new VarkaHarnessScan(columns) : plan;
+      }
+    });
+    LogicalPlan plan = optimize(scanned);
+    // The selected columns over a filter are the scan's own, forwarded: the filter is the work.
+    LogicalPlan below = plan instanceof Project p && p.child() instanceof Filter ? p.child() : plan;
+    if (below instanceof Filter f && f.child() instanceof VarkaHarnessScan) {
+      return new Query.Selection(f.condition());
+    }
+    if (plan instanceof Project p && p.child() instanceof VarkaHarnessScan) {
+      return new Query.Projection(p.projectList());
+    }
+    LogicalPlan leaf = plan instanceof Project p ? p.child() : plan;
+    if (leaf instanceof LocalRelation local && local.data().isEmpty()) {
+      return new Query.Constant(false);
+    }
+    if (leaf instanceof VarkaHarnessScan) {
+      return new Query.Constant(true);
+    }
+    throw new IllegalArgumentException(sql + " is no projection or filter over the scan:\n"
+        + plan.treeString());
   }
 
   /**
