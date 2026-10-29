@@ -31,6 +31,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
@@ -51,13 +53,16 @@ import javax.annotation.Nullable;
 import scala.collection.immutable.Seq;
 import scala.jdk.javaapi.CollectionConverters;
 
+import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.catalyst.expressions.Attribute;
 import org.apache.spark.sql.catalyst.expressions.AttributeReference;
 import org.apache.spark.sql.catalyst.expressions.BoundReference;
 import org.apache.spark.sql.catalyst.expressions.Expression;
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow;
 import org.apache.spark.sql.catalyst.expressions.InSet;
+import org.apache.spark.sql.catalyst.expressions.InterpretedUnsafeProjection;
 import org.apache.spark.sql.catalyst.expressions.UnsafeArrayData;
+import org.apache.spark.sql.catalyst.expressions.UnsafeProjection;
 import org.apache.spark.sql.catalyst.expressions.UnsafeRow;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrixRuns;
 import org.apache.spark.sql.catalyst.trees.Origin;
@@ -68,8 +73,9 @@ import org.apache.spark.sql.internal.SQLConf;
 /**
  * What the expression harness's run at the defaults leaves for its runs under the option
  * matrix's configurations, which would otherwise do the same work again: the plans
- * {@link VarkaHarnessPlans} builds. A configuration changes Varka's kernels and nothing else the
- * harness reads, so under it a plan is the defaults' plan.
+ * {@link VarkaHarnessPlans} builds and Spark's answers {@link VarkaExpressionHarness} computes. A
+ * configuration changes Varka's kernels and nothing else the harness reads, so under it a plan is
+ * the defaults' plan and Spark's answer is the defaults' answer.
  *
  * <p>With {@code -Dvarka.harness.store=<dir>}, a JVM of the defaults ({@code
  * varka.matrix.config} unset) does everything as without it and, as it exits, writes what it
@@ -80,11 +86,12 @@ import org.apache.spark.sql.internal.SQLConf;
  *
  * <p>An entry is keyed by what its value depends on, and by nothing that differs between two JVMs:
  * a plan by its kind, its SQL text, the scan's columns by name, type, nullability, qualifier and
- * metadata, and the SQL settings the thread sets ({@link #settings}). A plan is written with its
- * columns as ordinals and read back over the reading JVM's own columns, since the expression ids of
- * a fixture's columns are made afresh in every JVM, and it is written only when it comes back from
- * its bytes printed whole as it was ({@link #storable}), so a plan that does not survive the round
- * trip is planned afresh by every JVM.
+ * metadata, and the SQL settings the thread sets ({@link #settings}); a Spark answer by its
+ * expressions as {@link #describe} prints them, the fixture's rows by content, and the settings. A
+ * plan is written with its columns as ordinals and read back over the reading JVM's own columns,
+ * since the expression ids of a fixture's columns are made afresh in every JVM, and it is written
+ * only when it comes back from its bytes printed whole as it was ({@link #storable}), so a plan
+ * that does not survive the round trip is planned afresh by every JVM.
  */
 public final class VarkaHarnessStore {
 
@@ -101,6 +108,8 @@ public final class VarkaHarnessStore {
   final AtomicLong planHits = new AtomicLong();
   final AtomicLong planMisses = new AtomicLong();
   final AtomicLong planUnstorable = new AtomicLong();
+  final AtomicLong answerHits = new AtomicLong();
+  final AtomicLong answerMisses = new AtomicLong();
 
   private VarkaHarnessStore(Mode mode, String config, Map<String, byte[]> entries) {
     this.mode = mode;
@@ -163,7 +172,8 @@ public final class VarkaHarnessStore {
     return "VARKA_HARNESS_STORE\t" + mode + "\t" + (config.isEmpty() ? "defaults" : config)
         + "\tentries " + entries.size()
         + "\tplans taken " + planHits.get() + " planned " + planMisses.get()
-        + " unstorable " + planUnstorable.get();
+        + " unstorable " + planUnstorable.get()
+        + "\tanswers taken " + answerHits.get() + " computed " + answerMisses.get();
   }
 
   Mode mode() {
@@ -512,6 +522,38 @@ public final class VarkaHarnessStore {
   }
 
   // ---------------------------------------------------------------------------------------------
+  // Spark's answers
+  // ---------------------------------------------------------------------------------------------
+
+  /** The key of Spark's answers to {@code outputs}, bound, over {@code rows}. */
+  static String answerKey(List<Expression> bound, Seq<Attribute> columns,
+      List<InternalRow> rows) {
+    return "answer\t" + describe(bound) + "\t" + fixture(columns, rows) + "\t"
+        + settings(SQLConf.get(), false);
+  }
+
+  /**
+   * The stored answer for {@code key} in a configuration's run, or null where there is none or
+   * this store writes, counting both.
+   */
+  @Nullable byte[] answer(String key) {
+    if (mode != Mode.READ) {
+      return null;
+    }
+    byte[] stored = entries.get(key);
+    (stored != null ? answerHits : answerMisses).incrementAndGet();
+    return stored;
+  }
+
+  /** Writes Spark's answer under {@code key}, in the defaults' run. */
+  void putAnswer(String key, byte[] answer) {
+    if (mode == Mode.WRITE) {
+      answerMisses.incrementAndGet();
+      entries.put(key, answer);
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
   // Keys
   // ---------------------------------------------------------------------------------------------
 
@@ -538,6 +580,46 @@ public final class VarkaHarnessStore {
           .append(a.metadata().json()).append(';');
     }
     return sb.toString();
+  }
+
+  // The last fixtures' digests, by the identity of their row lists: a check reads one fixture
+  // many times in a row.
+  private static final Map<List<InternalRow>, String> DIGESTS = new IdentityHashMap<>();
+
+  /** {@code columns} and a digest of {@code rows}' values, each as an {@code UnsafeRow}. */
+  static String fixture(Seq<Attribute> columns, List<InternalRow> rows) {
+    synchronized (DIGESTS) {
+      String digest = DIGESTS.get(rows);
+      if (digest == null) {
+        digest = digest(columns, rows);
+        if (DIGESTS.size() > 64) {
+          DIGESTS.clear();
+        }
+        DIGESTS.put(rows, digest);
+      }
+      return columns(columns) + rows.size() + "@" + digest;
+    }
+  }
+
+  private static String digest(Seq<Attribute> columns, List<InternalRow> rows) {
+    List<Attribute> cols = CollectionConverters.asJava(columns);
+    var refs = new ArrayList<Expression>();
+    for (int i = 0; i < cols.size(); i++) {
+      refs.add(new BoundReference(i, cols.get(i).dataType(), cols.get(i).nullable()));
+    }
+    UnsafeProjection unsafe =
+        InterpretedUnsafeProjection.createProjection(CollectionConverters.asScala(refs).toList());
+    try {
+      MessageDigest sha = MessageDigest.getInstance("SHA-256");
+      for (InternalRow row : rows) {
+        byte[] bytes = unsafe.apply(row).getBytes();
+        sha.update(Integer.toString(bytes.length).getBytes(StandardCharsets.US_ASCII));
+        sha.update(bytes);
+      }
+      return HexFormat.of().formatHex(sha.digest());
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException(e);
+    }
   }
 
   /**

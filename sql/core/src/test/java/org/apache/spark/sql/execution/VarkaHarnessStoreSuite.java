@@ -23,13 +23,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 
 import scala.collection.immutable.Seq;
 
 import org.apache.spark.sql.catalyst.expressions.NamedExpression;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrixRuns;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSuite;
+import org.apache.spark.sql.internal.SQLConf;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -80,6 +83,74 @@ public final class VarkaHarnessStoreSuite {
     Seq<NamedExpression> planned = VarkaHarnessPlans.projection("i + 1", again.columns());
     assertEquals(VarkaHarnessStore.describe(planned, true),
         VarkaHarnessStore.describe(taken, true));
+  }
+
+  /** The coverage harness's conf for {@code ansi}, as a check reads it. */
+  private static SQLConf conf(boolean ansi) {
+    return VarkaCoverageHarnessSuite.conf(ansi);
+  }
+
+  /** {@code expression}'s projection check on {@code fixture} under {@code conf}. */
+  private static VarkaExpressionHarness.Outcome check(String expression,
+      VarkaHarnessPlans.Fixture fixture, SQLConf conf) {
+    return VarkaCoverageHarnessSuite.withConf(conf, () -> VarkaExpressionHarness.projection(
+        expression, VarkaHarnessPlans.projection(expression, fixture.columns()), fixture, conf));
+  }
+
+  /** The keys of {@code store}'s entries that begin with {@code kind}. */
+  private static List<String> keys(VarkaHarnessStore store, String kind) {
+    return store.entries().keySet().stream().filter(k -> k.startsWith(kind + "\t")).toList();
+  }
+
+  @Test
+  @DisplayName("a configuration's run holds the kernel to Spark's stored answer and evaluates "
+      + "Spark for none it holds")
+  void configurationTakesStoredAnswers() {
+    SQLConf conf = conf(true);
+    VarkaColumnarToRowExec$.MODULE$.setEmitOptionsForTesting(VarkaEmitOptions.DEFAULTS);
+    VarkaHarnessStore defaults = VarkaHarnessStore.writing();
+    VarkaHarnessPlans.Fixture fixture = VarkaHarnessPlans.fixture(FIXTURE);
+    assertTrue(VarkaHarnessStore.with(defaults, () -> check("i + 1", fixture, conf)).ok());
+    assertEquals(1, keys(defaults, "answer").size(), defaults.line());
+
+    // Under a configuration whose options this JVM's kernels carry, over a second fixture.
+    VarkaColumnarToRowExec$.MODULE$.setEmitOptionsForTesting(VarkaMatrixRuns.parse("cse=false"));
+    VarkaHarnessStore config = defaults.readingAs("cse=false");
+    VarkaHarnessPlans.Fixture again = VarkaHarnessPlans.fixture(FIXTURE);
+    VarkaExpressionHarness.Outcome outcome =
+        VarkaHarnessStore.with(config, () -> check("i + 1", again, conf));
+    assertTrue(outcome.ok(), String.join("\n", outcome.findings));
+    assertTrue(outcome.answered > 0, "the kernel answered no batch");
+    assertEquals(1, config.answerHits.get(), config.line());
+    assertEquals(0, config.answerMisses.get(), config.line());
+    // An expression the store lacks is evaluated, once.
+    VarkaHarnessStore.with(config, () -> check("i + 2", again, conf));
+    assertEquals(1, config.answerMisses.get(), config.line());
+  }
+
+  @Test
+  @DisplayName("a wrong stored answer fails the check it is taken by")
+  void plantedAnswerFails() {
+    // The fault is planted in the store: the answers to i + 2 written under the key of i + 1's,
+    // which a kernel that answers i + 1 rightly must then disagree with on every row.
+    SQLConf conf = conf(true);
+    VarkaColumnarToRowExec$.MODULE$.setEmitOptionsForTesting(VarkaEmitOptions.DEFAULTS);
+    VarkaHarnessPlans.Fixture fixture = VarkaHarnessPlans.fixture(FIXTURE);
+    VarkaHarnessStore one = VarkaHarnessStore.writing();
+    VarkaHarnessStore.with(one, () -> check("i + 1", fixture, conf));
+    VarkaHarnessStore two = VarkaHarnessStore.writing();
+    VarkaHarnessStore.with(two, () -> check("i + 2", fixture, conf));
+    String key = keys(one, "answer").get(0);
+    byte[] wrong = two.entries().get(keys(two, "answer").get(0));
+
+    VarkaColumnarToRowExec$.MODULE$.setEmitOptionsForTesting(VarkaMatrixRuns.parse("cse=false"));
+    VarkaHarnessStore config = one.readingAs("cse=false");
+    config.plant(key, wrong);
+    VarkaExpressionHarness.Outcome planted =
+        VarkaHarnessStore.with(config, () -> check("i + 1", fixture, conf));
+    assertEquals(1, config.answerHits.get(), config.line());
+    assertTrue(planted.findings.stream().anyMatch(f -> f.contains("output 0: Spark 3, Varka 2")),
+        "the harness missed the planted answer: " + planted.findings);
   }
 
   @Test
