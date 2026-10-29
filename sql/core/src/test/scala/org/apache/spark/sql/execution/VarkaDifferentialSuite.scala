@@ -655,6 +655,7 @@ class VarkaDifferentialSuite extends QueryTest with VarkaMaybeThrows with VarkaT
     }
   }
 
+  // varka-session-lint: allow a hundred tasks of one shape through the cache is the path
   test("many distinct-literal Varka tasks are one cached shape, Metaspace bounded") {
     cacheDates(spark)
     cacheDates(varkaSpark)
