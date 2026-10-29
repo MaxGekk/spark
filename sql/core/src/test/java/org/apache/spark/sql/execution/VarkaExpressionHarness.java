@@ -141,8 +141,7 @@ public final class VarkaExpressionHarness {
       Expected a = interpreted.get(i);
       Expected b = generated.get(i);
       boolean agree = a.error() != null
-          ? b.error() != null && a.error().getClass() == b.error().getClass()
-              && Objects.equals(a.error().getMessage(), b.error().getMessage())
+          ? b.error() != null && sameError(a.error(), b.error())
           : b.error() == null && sameRow(a.row(), b.row(), types) == null;
       if (!agree) {
         outcome.findings.add(context + ", row " + i + ": Spark's interpreted and generated "
@@ -154,6 +153,18 @@ public final class VarkaExpressionHarness {
       }
     }
     return out;
+  }
+
+  /**
+   * Whether two evaluations raised the same error: the same class and message, or the same class
+   * where one has no message. Compiled code may throw a JVM's preallocated exception, whose
+   * message HotSpot clears (C2's hot throws, {@code -XX:+OmitStackTraceInFastThrow}), so a hot
+   * projection can raise the same {@code ArithmeticException} as the interpreted one without its
+   * "long overflow".
+   */
+  private static boolean sameError(Throwable a, Throwable b) {
+    return a.getClass() == b.getClass() && (Objects.equals(a.getMessage(), b.getMessage())
+        || a.getMessage() == null || b.getMessage() == null);
   }
 
   /** The two consumers a Varka projection has, as the exec nodes call the evaluator. */
