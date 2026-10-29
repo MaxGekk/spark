@@ -109,10 +109,25 @@ public final class VarkaPartitionOracle {
     return ids.stream().map(String::valueOf).collect(Collectors.joining(", "));
   }
 
-  /** Whether {@code p} can be null over the fixture's columns. */
+  /** Each predicate row of the coverage table as the value {@link #nullable} plans. */
+  static List<String> values() {
+    return Values.ALL;
+  }
+
+  /** Read from the table on first use, so the suite is set up before the oracle reads it. */
+  private static final class Values {
+    static final List<String> ALL = VarkaCoverageHarnessSuite.predicates().stream()
+        .map(r -> "(" + r.executable() + ")").toList();
+  }
+
+  /**
+   * Whether {@code p} can be null over the fixture's columns: the optimizer's nullability of the
+   * value {@code (p)}, which is remembered, every predicate row's planned together on the first
+   * ask under a conf ({@link VarkaHarnessPlans#remembered}).
+   */
   static boolean nullable(String p, VarkaHarnessPlans.Fixture fixture) {
     var list = CollectionConverters.asJava(
-        VarkaHarnessPlans.projection("(" + p + ")", fixture.columns()));
+        VarkaHarnessPlans.remembered("(" + p + ")", values(), fixture.columns()));
     return ((Expression) list.get(0)).nullable();
   }
 
@@ -139,10 +154,8 @@ public final class VarkaPartitionOracle {
   private record Filtered(SortedSet<Integer> spark, VarkaExpressionHarness.Outcome outcome,
       boolean overValue) {}
 
-  private static Filtered filter(String context, String where,
+  private static Filtered filter(String context, String where, VarkaHarnessPlans.Query q,
       VarkaHarnessPlans.Fixture fixture, SQLConf conf) {
-    VarkaHarnessPlans.Query q =
-        VarkaHarnessPlans.query("SELECT rid FROM t WHERE " + where, fixture.columns());
     var all = new TreeSet<Integer>();
     int rid = fixture.ordinal("rid");
     for (InternalRow row : fixture.rows()) {
@@ -158,21 +171,48 @@ public final class VarkaPartitionOracle {
     return new Filtered(every ? all : new TreeSet<>(), null, false);
   }
 
+  /** The oracle's four filters of {@code p}, in the order {@link #check} reads them. */
+  static List<String> wheres(String p) {
+    return List.of(p, "NOT (" + p + ")", "(" + p + ") IS NULL", "(" + p + ") IS NOT NULL");
+  }
+
+  /**
+   * {@code SELECT rid FROM t WHERE <where>} for each of {@link #wheres}, under the thread's conf,
+   * each planned alone. They are not planned together: a {@code Filter} holding them all would
+   * have the optimizer merge and reorder their conjuncts, and a {@code UNION ALL} of the four
+   * filters, which keeps each condition as it is alone, costs the optimizer as much as the four
+   * runs it replaces, since its cost is in the plan's nodes, not in the run
+   * ({@code m8/results/VARKA-510-rest-local.txt}).
+   */
+  static List<VarkaHarnessPlans.Query> plan(String p, VarkaHarnessPlans.Fixture fixture) {
+    var out = new ArrayList<VarkaHarnessPlans.Query>();
+    for (String where : wheres(p)) {
+      out.add(VarkaHarnessPlans.query("SELECT rid FROM t WHERE " + where, fixture.columns()));
+    }
+    return out;
+  }
+
   /**
    * The partition oracle for predicate {@code p} on {@code fixture} under the thread's conf -
-   * its optimizer rules included. {@code WHERE p} and {@code WHERE NOT (p)} must each be a
-   * filter a kernel serves whole; a null test may be folded away, or turned into a test over a
-   * computed value, where {@code p} cannot be null, unless {@code mustFuse}, a null-safe row with
-   * {@code NullPropagation} excluded, whose null tests the kernel must answer.
+   * its optimizer rules included - over {@code planned}, {@link #plan}'s queries under that
+   * conf. {@code WHERE p} and {@code WHERE NOT (p)} must each be a filter a kernel serves whole;
+   * a null test may be folded away, or turned into a test over a computed value, where {@code p}
+   * cannot be null, unless {@code mustFuse}, a null-safe row with {@code NullPropagation}
+   * excluded, whose null tests the kernel must answer.
    */
   public static List<String> check(String context, String p, VarkaHarnessPlans.Fixture fixture,
-      SQLConf conf, boolean mustFuse) {
+      SQLConf conf, boolean mustFuse, List<VarkaHarnessPlans.Query> planned) {
     var out = new ArrayList<String>();
     boolean canBeNull = mustFuse || nullable(p, fixture);
-    Filtered t = filter(context, p, fixture, conf);
-    Filtered f = filter(context, "NOT (" + p + ")", fixture, conf);
-    Filtered u = filter(context, "(" + p + ") IS NULL", fixture, conf);
-    Filtered k = filter(context, "(" + p + ") IS NOT NULL", fixture, conf);
+    List<String> wheres = wheres(p);
+    var filtered = new ArrayList<Filtered>();
+    for (int i = 0; i < wheres.size(); i++) {
+      filtered.add(filter(context, wheres.get(i), planned.get(i), fixture, conf));
+    }
+    Filtered t = filtered.get(0);
+    Filtered f = filtered.get(1);
+    Filtered u = filtered.get(2);
+    Filtered k = filtered.get(3);
     String[] names = {"WHERE p", "WHERE NOT (p)", "WHERE (p) IS NULL", "WHERE (p) IS NOT NULL"};
     Filtered[] all = {t, f, u, k};
     for (int i = 0; i < all.length; i++) {

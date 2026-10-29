@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import scala.Tuple2;
 import scala.collection.immutable.Seq;
@@ -115,6 +116,147 @@ public final class VarkaHarnessParitySuite {
       return n;
     });
     assertTrue(compared > 0, "nothing compared");
+    assertTrue(differences.isEmpty(), String.join("\n", differences));
+  }
+
+  /** Whether two plans of one query are the same: the same kind, with the same expressions. */
+  private static boolean same(VarkaHarnessPlans.Query a, VarkaHarnessPlans.Query b,
+      Seq<Attribute> columns) {
+    return switch (a) {
+      case VarkaHarnessPlans.Query.Selection s -> b instanceof VarkaHarnessPlans.Query.Selection t
+          && same(s.condition(), t.condition(), columns);
+      case VarkaHarnessPlans.Query.Projection p ->
+          b instanceof VarkaHarnessPlans.Query.Projection q && p.list().size() == q.list().size()
+              && sameLists(p.list(), q.list(), columns);
+      case VarkaHarnessPlans.Query.Constant c -> b.equals(c);
+    };
+  }
+
+  private static boolean sameLists(Seq<NamedExpression> a, Seq<NamedExpression> b,
+      Seq<Attribute> columns) {
+    List<NamedExpression> x = CollectionConverters.asJava(a);
+    List<NamedExpression> y = CollectionConverters.asJava(b);
+    for (int k = 0; k < x.size(); k++) {
+      if (!same(unaliased(x.get(k)), unaliased(y.get(k)), columns)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static boolean same(Expression a, Expression b, Seq<Attribute> columns) {
+    Expression ca = canonical(a, columns);
+    Expression cb = canonical(b, columns);
+    // An InSet holding NaN never equals another; the printed forms are compared too, as
+    // harnessExpressionIsTheSessions does.
+    return ca.equals(cb) || ca.toString().equals(cb.toString());
+  }
+
+  /**
+   * Where {@code texts} planned together ({@link VarkaHarnessPlans#projections}) under
+   * {@code conf} differ from each planned alone, one line each; {@code n} counts the compared.
+   */
+  private static List<String> togetherAgainstAlone(String where, List<String> texts,
+      Seq<Attribute> columns, SQLConf conf, int[] n) {
+    return VarkaCoverageHarnessSuite.withConf(conf, () -> {
+      var differences = new ArrayList<String>();
+      List<Seq<NamedExpression>> together = VarkaHarnessPlans.projections(texts, columns);
+      for (int k = 0; k < texts.size(); k++) {
+        Seq<NamedExpression> alone = VarkaHarnessPlans.projection(texts.get(k), columns);
+        n[0]++;
+        if (!sameLists(together.get(k), alone, columns)) {
+          differences.add(where + ", " + texts.get(k) + ": together " + together.get(k)
+              + ", alone " + alone);
+        }
+      }
+      return differences;
+    });
+  }
+
+  @Test
+  @DisplayName("the values the harness remembers, planned together, are each the one planned "
+      + "alone")
+  void rememberedValuesAreEachPlannedAlone() {
+    // The partition oracle's predicate values under each optimizer setting of
+    // VarkaCoverageHarnessSuite.partitions and nullTestConditions, at the thread's ANSI, and the
+    // ANSI form's row values on the extremes fixture.
+    SQLConf base = VarkaCoverageHarnessSuite.conf(SQLConf.get().ansiEnabled());
+    var settings = List.of(base,
+        VarkaCoverageHarnessSuite.excluding(base, VarkaPartitionOracle.REWRITES),
+        VarkaCoverageHarnessSuite.excluding(base, VarkaPartitionOracle.NULL_SAFE_REWRITES));
+    var differences = new ArrayList<String>();
+    int[] n = {0};
+    for (Tuple2<String, String> f :
+        CollectionConverters.asJava(VarkaCoverageDifferentialSuite$.MODULE$.fixtures())) {
+      Seq<Attribute> columns = VarkaHarnessPlans.fixture(f._2()).columns();
+      for (SQLConf conf : settings) {
+        differences.addAll(togetherAgainstAlone(f._1() + ", " + conf.getConfString(
+            SQLConf.OPTIMIZER_EXCLUDED_RULES().key(), "no rule excluded"),
+            VarkaPartitionOracle.values(), columns, conf, n));
+      }
+    }
+    differences.addAll(togetherAgainstAlone("extremes, ANSI", VarkaAnsiForm.values(),
+        extremes().columns(), VarkaCoverageHarnessSuite.conf(true), n));
+    assertTrue(n[0] > 0, "nothing compared");
+    assertTrue(differences.isEmpty(), differences.size() + " of " + n[0] + " differ:\n"
+        + String.join("\n", differences));
+  }
+
+  /** The extremes fixture the ANSI form runs on. */
+  private static VarkaHarnessPlans.Fixture extremes() {
+    return VarkaHarnessPlans.fixture(VarkaCoverageDifferentialSuite$.MODULE$.extremes()._2());
+  }
+
+  @Test
+  @DisplayName("the ANSI form's projections planned together are each the query planned alone")
+  void ansiPositionsPlannedTogetherAreEachPlannedAlone() {
+    SQLConf conf = VarkaCoverageHarnessSuite.conf(true);
+    VarkaHarnessPlans.Fixture fixture = extremes();
+    var differences = new ArrayList<String>();
+    int compared = VarkaCoverageHarnessSuite.withConf(conf, () -> {
+      int n = 0;
+      for (VarkaCoverageHarnessSuite.Row row : VarkaCoverageHarnessSuite.rows()) {
+        var queries = VarkaAnsiForm.queries(row, fixture);
+        var plans = VarkaAnsiForm.plans(queries, fixture);
+        for (var q : queries.entrySet()) {
+          if (q.getValue().isEmpty()) {
+            continue;
+          }
+          String sql = q.getValue().get().sql();
+          VarkaHarnessPlans.Query alone = VarkaHarnessPlans.query(sql, fixture.columns());
+          n++;
+          if (!same(plans.get(q.getKey()), alone, fixture.columns())) {
+            differences.add(row.sql() + ", " + q.getKey() + ", " + sql + ": together "
+                + plans.get(q.getKey()) + ", alone " + alone);
+          }
+        }
+      }
+      return n;
+    });
+    assertTrue(compared > 0, "nothing compared");
+    assertTrue(differences.isEmpty(), String.join("\n", differences));
+  }
+
+  @Test
+  @DisplayName("the conditions Spark raises on expressions planned together are each the one "
+      + "raised planned alone")
+  void sparkConditionsPlannedTogetherAreEachPlannedAlone() {
+    SQLConf conf = VarkaCoverageHarnessSuite.conf(true);
+    VarkaHarnessPlans.Fixture fixture = extremes();
+    List<String> expressions = VarkaCoverageHarnessSuite.rows().stream()
+        .map(VarkaCoverageHarnessSuite.Row::executable).toList();
+    var differences = new ArrayList<String>();
+    VarkaCoverageHarnessSuite.withConf(conf, () -> {
+      List<Optional<String>> together = VarkaAnsiForm.sparkConditions(expressions, fixture);
+      for (int i = 0; i < expressions.size(); i++) {
+        Optional<String> alone = VarkaAnsiForm.sparkCondition(expressions.get(i), fixture);
+        if (!together.get(i).equals(alone)) {
+          differences.add(expressions.get(i) + ": together " + together.get(i) + ", alone "
+              + alone);
+        }
+      }
+      return null;
+    });
     assertTrue(differences.isEmpty(), String.join("\n", differences));
   }
 

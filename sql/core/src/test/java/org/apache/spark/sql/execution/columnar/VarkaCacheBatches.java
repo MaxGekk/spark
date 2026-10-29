@@ -17,7 +17,11 @@
 
 package org.apache.spark.sql.execution.columnar;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -70,24 +74,19 @@ public final class VarkaCacheBatches {
     }
   }
 
-  /** {@code rows} with {@code schema}'s columns, batch by batch, as the cache reads them back. */
+  /**
+   * {@code rows} with {@code schema}'s columns, batch by batch, as the cache reads them back.
+   * The cache's written batches - Arrow's serialized bytes, which nothing writes to once made -
+   * are kept for the last few row lists written ({@link #written}), so a fixture that many
+   * checks read is written once; each read deserializes fresh vectors, so no batch a consumer
+   * is handed is one another consumer was handed. The rows must not change once batched.
+   */
   public static void each(List<InternalRow> rows, Seq<Attribute> schema, SQLConf conf,
       Consumer<ColumnarBatch> consumer) {
     StructType sparkSchema = DataTypeUtils.fromAttributes(schema);
-    var cached = new InternalRowToArrowCachedBatchIterator(
-        CollectionConverters.asScala(rows.iterator()),
-        schema,
-        sparkSchema,
-        conf.arrowMaxRecordsPerBatch(),
-        conf.arrowMaxBytesPerBatch(),
-        conf.sessionLocalTimeZone(),
-        conf.arrowCompressionCodec(),
-        conf.arrowZstdCompressionLevel());
-    // Scala's Iterator is covariant, which Java's generics cannot say.
-    @SuppressWarnings("unchecked")
-    var asCached = (scala.collection.Iterator<CachedBatch>) (scala.collection.Iterator<?>) cached;
+    List<CachedBatch> cached = written(rows, schema, sparkSchema, conf);
     var batches = new ArrowCachedBatchToColumnarBatchIterator(
-        asCached,
+        CollectionConverters.asScala(cached.iterator()),
         sparkSchema,
         sparkSchema,
         CachedColumnIndices$.MODULE$.apply(schema, schema),
@@ -96,5 +95,73 @@ public final class VarkaCacheBatches {
     while (batches.hasNext()) {
       consumer.accept(batches.next());
     }
+  }
+
+  /**
+   * What the cache's batches of a row list are written under: the list itself, by identity, so
+   * that a lookup reads no row, its columns, and every setting the writer reads.
+   */
+  private record Written(List<InternalRow> rows, Seq<Attribute> schema, long maxRecords,
+      long maxBytes, String timeZone, String codec, int level) {
+    @Override
+    public boolean equals(Object o) {
+      return o instanceof Written w && w.rows == rows && w.schema.equals(schema)
+          && w.maxRecords == maxRecords && w.maxBytes == maxBytes
+          && w.timeZone.equals(timeZone) && w.codec.equals(codec) && w.level == level;
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(System.identityHashCode(rows), schema, maxRecords, maxBytes,
+          timeZone, codec, level);
+    }
+  }
+
+  /**
+   * How many row lists' batches are kept: the harness reads a few fixtures over and over, one
+   * test's checks after another's, and a fixture a test makes for itself is read only by that
+   * test's checks, so the oldest is dropped.
+   */
+  private static final int WRITTEN_LIMIT = 8;
+
+  private static final Map<Written, List<CachedBatch>> WRITTEN =
+      new LinkedHashMap<>(16, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<Written, List<CachedBatch>> eldest) {
+          return size() > WRITTEN_LIMIT;
+        }
+      };
+
+  /** The cache's batches of {@code rows}, written by the cache's own iterator, or kept ones. */
+  private static List<CachedBatch> written(List<InternalRow> rows, Seq<Attribute> schema,
+      StructType sparkSchema, SQLConf conf) {
+    var key = new Written(rows, schema, conf.arrowMaxRecordsPerBatch(),
+        conf.arrowMaxBytesPerBatch(), conf.sessionLocalTimeZone(), conf.arrowCompressionCodec(),
+        conf.arrowZstdCompressionLevel());
+    synchronized (WRITTEN) {
+      List<CachedBatch> kept = WRITTEN.get(key);
+      if (kept != null) {
+        return kept;
+      }
+    }
+    var writer = new InternalRowToArrowCachedBatchIterator(
+        CollectionConverters.asScala(rows.iterator()),
+        schema,
+        sparkSchema,
+        key.maxRecords(),
+        key.maxBytes(),
+        key.timeZone(),
+        key.codec(),
+        key.level());
+    var out = new ArrayList<CachedBatch>();
+    // The writer closes its vectors and allocator once it has no row left.
+    while (writer.hasNext()) {
+      out.add(writer.next());
+    }
+    List<CachedBatch> batches = List.copyOf(out);
+    synchronized (WRITTEN) {
+      WRITTEN.put(key, batches);
+    }
+    return batches;
   }
 }
