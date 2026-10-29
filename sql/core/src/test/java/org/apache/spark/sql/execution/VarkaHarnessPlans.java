@@ -34,6 +34,7 @@ import org.apache.spark.sql.catalyst.analysis.TableFunctionRegistry$;
 import org.apache.spark.sql.catalyst.analysis.UnresolvedRelation;
 import org.apache.spark.sql.catalyst.catalog.InMemoryCatalog;
 import org.apache.spark.sql.catalyst.catalog.SessionCatalog;
+import org.apache.spark.sql.catalyst.expressions.Alias;
 import org.apache.spark.sql.catalyst.expressions.Attribute;
 import org.apache.spark.sql.catalyst.expressions.Expression;
 import org.apache.spark.sql.catalyst.expressions.NamedExpression;
@@ -179,6 +180,47 @@ public final class VarkaHarnessPlans {
     }
     throw new IllegalArgumentException(expression + " did not stay a projection over the "
         + "scan:\n" + plan.treeString());
+  }
+
+  /**
+   * {@link #projection} for each of {@code expressions}, planned together as one projection list
+   * in one run of the analyzer and the optimizer instead of one run each (VARKA-510): the
+   * optimizer rewrites each entry of a list on its own, so each comes out as it would alone. A
+   * list the optimizer does not leave as one entry an expression over the scan is planned again an
+   * expression at a time. {@code VarkaHarnessParitySuite} holds the two ways equal.
+   */
+  public static List<Seq<NamedExpression>> projections(List<String> expressions,
+      Seq<Attribute> columns) {
+    var aliases = new ArrayList<NamedExpression>();
+    for (int i = 0; i < expressions.size(); i++) {
+      aliases.add(VarkaSqlResolve.named(
+          CatalystSqlParser$.MODULE$.parseExpression(expressions.get(i)), "v" + i));
+    }
+    LogicalPlan plan = optimize(new Project(CollectionConverters.asScala(aliases).toList(),
+        new VarkaHarnessScan(columns)));
+    if (plan instanceof Project p && p.child() instanceof VarkaHarnessScan
+        && p.projectList().size() == expressions.size()) {
+      var out = new ArrayList<Seq<NamedExpression>>();
+      for (NamedExpression e : CollectionConverters.asJava(p.projectList())) {
+        if (!(e instanceof Alias a)) {
+          return alone(expressions, columns);
+        }
+        // Named as the expression alone is, so a list reads the same either way.
+        NamedExpression v = VarkaSqlResolve.named(a.child(), "v");
+        out.add(CollectionConverters.asScala(List.of(v)).toList());
+      }
+      return out;
+    }
+    return alone(expressions, columns);
+  }
+
+  private static List<Seq<NamedExpression>> alone(List<String> expressions,
+      Seq<Attribute> columns) {
+    var out = new ArrayList<Seq<NamedExpression>>();
+    for (String e : expressions) {
+      out.add(projection(e, columns));
+    }
+    return out;
   }
 
   /**
