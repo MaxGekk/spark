@@ -80,6 +80,9 @@ public final class VarkaExpressionHarness {
     /** For a projection, the outputs the compiler left to the row path. */
     public int residual;
 
+    /** Every batch the evaluator was handed, in order, with how it went. */
+    public final List<Batch> batches = new ArrayList<>();
+
     /**
      * Whether a kernel served every batch and every output: some batch answered, none declined,
      * and no output left residual, which the row path would answer beside the kernel's.
@@ -91,6 +94,17 @@ public final class VarkaExpressionHarness {
     public boolean ok() {
       return findings.isEmpty();
     }
+  }
+
+  /**
+   * One batch: its first row's position among the rows checked, its row count, and its status -
+   * {@link #ANSWERED} for a batch the kernel answered, the status a declined batch's kernel
+   * returned, or {@link #FELL_BACK} for a batch the evaluator sent to the row path without
+   * running a kernel.
+   */
+  public record Batch(int start, int rows, int status) {
+    public static final int ANSWERED = 0;
+    public static final int FELL_BACK = -1;
   }
 
   /** Spark's answer for one row: the projected row, or the error evaluating it raised. */
@@ -187,8 +201,9 @@ public final class VarkaExpressionHarness {
       VarkaCacheBatches.each(all, columns, conf, batch -> {
         int start = offset[0];
         offset[0] += batch.numRows();
-        ColumnarBatch out = serve(context, evaluator, batch, () -> consumer == Consumer.ROWS
-            ? evaluator.projectFused(batch) : evaluator.project(batch), outcome);
+        ColumnarBatch out = serve(context, evaluator, start, batch,
+            () -> consumer == Consumer.ROWS ? evaluator.projectFused(batch)
+                : evaluator.project(batch), outcome);
         if (out != null) {
           try {
             for (int i = 0; i < batch.numRows(); i++) {
@@ -231,7 +246,7 @@ public final class VarkaExpressionHarness {
       VarkaCacheBatches.each(all, columns, conf, batch -> {
         int start = offset[0];
         offset[0] += batch.numRows();
-        ColumnarBatch out = serve(context, evaluator, batch,
+        ColumnarBatch out = serve(context, evaluator, start, batch,
             () -> evaluator.filterCompact(batch), outcome);
         if (out != null) {
           try {
@@ -273,12 +288,14 @@ public final class VarkaExpressionHarness {
    * evaluator falls back on it.
    */
   private static @Nullable ColumnarBatch serve(String context, VarkaEvaluatorBase evaluator,
-      ColumnarBatch batch, Supplier<ColumnarBatch> kernel, Outcome outcome) {
+      int start, ColumnarBatch batch, Supplier<ColumnarBatch> kernel, Outcome outcome) {
     boolean[] fell = {false};
+    int[] status = {Batch.FELL_BACK};
     ColumnarBatch out = evaluator.serveBatch(batch, () -> {
       try {
         return kernel.get();
       } catch (VarkaBatchDeclined declined) {
+        status[0] = declined.status;
         throw declined;
       } catch (RuntimeException | Error e) {
         // Recorded for the message; the evaluator's guard (VARKA-275) then raises its own
@@ -293,9 +310,11 @@ public final class VarkaExpressionHarness {
     });
     if (fell[0]) {
       outcome.declined++;
+      outcome.batches.add(new Batch(start, batch.numRows(), status[0]));
       return null;
     }
     outcome.answered++;
+    outcome.batches.add(new Batch(start, batch.numRows(), Batch.ANSWERED));
     return out;
   }
 

@@ -17,27 +17,18 @@
 
 package org.apache.spark.sql.execution
 
-import scala.collection.mutable.ArrayBuffer
 import scala.jdk.CollectionConverters._
-import scala.jdk.OptionConverters._
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.scalatest.exceptions.TestFailedException
 
 import org.apache.spark.SparkArithmeticException
 import org.apache.spark.sql.{QueryTest, SparkSession}
-import org.apache.spark.sql.catalyst.expressions.NamedExpression
-import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection, VarkaExpressionCompiler}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaChrono, VarkaFallbackEvent, VarkaGuardSpec, VarkaJfrTestSupport, VarkaTestWatchdog}
-import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaGuardSpec.Verdict
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTestWatchdog
 import org.apache.spark.sql.catalyst.util.DateTimeConstants
 import org.apache.spark.sql.execution.VarkaMaybeThrows.{difference => outcomeDifference, Answered, Raised}
 import org.apache.spark.sql.execution.columnar.InMemoryTableScanExec
-import org.apache.spark.sql.execution.varka.{VarkaFallbackAccounting, VarkaKernelRunner}
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.types.{ByteType, DataType, DateType,
-  DayTimeIntervalType, DoubleType, FloatType, IntegerType, LongType, ShortType,
-  TimestampNTZType, TimeType, YearMonthIntervalType}
 
 /**
  * Every row of the published coverage table, run through both engines (VARKA-120).
@@ -54,47 +45,29 @@ import org.apache.spark.sql.types.{ByteType, DataType, DateType,
  * and `b2` - nulls sprinkled per column, with a narrow pair null on the left only and another on
  * the right only, no nulls, and every column null in every row. Every row's answer under both
  * consumers a Varka node can have - rows, the plan every direct query gets, and columns, which
- * the Arrow cache builder takes when a view over the query is cached - and the partition oracle
- * of every predicate row (VARKA-138) run below the session, in `VarkaCoverageHarnessSuite`
- * (VARKA-509). This suite keeps the answer form for the first row of each family, the plumbing
- * only a session has: the columnar rule's plan, the cache and the two nodes. The hand-chosen
+ * the Arrow cache builder takes when a view over the query is cached - runs below the session,
+ * in `VarkaCoverageHarnessSuite` (VARKA-509), with the stronger forms over the rows: the
+ * partition oracle of every predicate row (VARKA-138), the ANSI form, where each row runs where
+ * Spark evaluates it and where it skips it over a fixture of the types' extremes, and the
+ * domains of the rows whose kernel can decline a batch (VARKA-279). This suite keeps the answer
+ * form for the first row of each family, the plumbing only a session has: the columnar rule's
+ * plan, the cache and the two nodes; and two tests of the error comparison a user meets over a
+ * session, [[VarkaMaybeThrows]]'s (VARKA-317). The hand-chosen
  * shapes in `VarkaDifferentialSuite` (extreme offsets, overflow, cache conversion) stay there;
  * this is the floor under them.
- *
- * Two stronger forms run here over the rows:
- *
- *  - **The ANSI form.** A fourth fixture holds the types' extremes, and each row is run where
- *    Spark evaluates it and where Spark skips it (an untaken CASE arm, a later COALESCE
- *    argument, the right side of a false AND, of a true OR). Both engines must raise the same
- *    error - condition, SQLSTATE and message parameters, what `checkError` compares, and the
- *    message and exception class - or both answer the same rows: Varka must neither raise where
- *    Spark skips nor miss Spark's raise. The comparison is [[VarkaMaybeThrows]]'s (VARKA-317),
- *    and a kernel planted to wrap an overflowing row instead of declining fails it.
- *  - **The domains** (VARKA-279). A row whose kernel can decline a batch names in the table the
- *    predicate inside which it answers. Each such row runs over a fixture that straddles every
- *    guard's bound, cut as TLP cuts a table - the rows inside the domain, outside it and where
- *    it is unknown, each partition its own cached view - as a projection and as a filter. Inside
- *    and under IS NULL the kernel serves every batch and declines nothing; outside, every batch
- *    declines with exactly the status `VarkaGuardSpec`'s verdict calls for, read off the JFR
- *    fallback event, and the answer is Spark's, rows or the same error.
  */
 class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
   with VarkaTestWatchdog {
 
-  /**
-   * One row of the table: what it prints, what runs, which form it takes, and the domain its
-   * kernel answers inside, for a row whose kernel can decline a batch.
-   */
-  private case class CoverageRow(
-      sql: String, executable: String, family: String, form: String, domain: Option[String])
+  /** One row of the table: what it prints, what runs, and which form it takes. */
+  private case class CoverageRow(sql: String, executable: String, family: String, form: String)
 
   private lazy val rows: Seq[CoverageRow] = {
     val file = getWorkspaceFilePath("sql", "varka", "coverage.json").toFile
     val doc = new ObjectMapper().readTree(file)
     doc.get("expressions").elements().asScala.toSeq.map { e =>
       CoverageRow(e.get("sql").asText(), e.get("executable").asText(),
-        e.get("family").asText(), e.get("form").asText(),
-        Option(e.get("domain")).map(_.asText()).filter(_.nonEmpty))
+        e.get("family").asText(), e.get("form").asText())
     }
   }
 
@@ -192,8 +165,6 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
     super.beforeAll()
     cacheFixtures(spark)
     cacheFixtures(varkaSpark)
-    cacheEdges(spark)
-    cacheEdges(varkaSpark)
   }
 
   test("the coverage table has rows to run") {
@@ -253,29 +224,6 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
   // of the skipped positions with its declined list - runs below the session, in
   // VarkaCoverageHarnessSuite and VarkaAnsiForm (VARKA-509). The two tests below keep the error
   // comparison a user meets, VarkaMaybeThrows' over a session.
-
-  /**
-   * A value of the extremes fixture of `t`'s type that never raises, which the domains' filters
-   * compare an expression with (`caseArm` false): a column, non-null on both rows. Where the
-   * fixture has the type's family but not its exact fields, Spark widens the expression to the
-   * common type with a cast. `VarkaAnsiForm.standIn` is the harness's copy, for the ANSI form.
-   */
-  private def standIn(t: DataType, caseArm: Boolean): Option[String] = t match {
-    case DateType => Some("d2")
-    case IntegerType => Some(if (caseArm) "year(d2)" else "i")
-    case ByteType => Some("y2")
-    case ShortType => Some("s2")
-    case LongType => Some("l2")
-    case TimestampNTZType => Some("ntz2")
-    case DoubleType => Some("x2")
-    case FloatType => Some("f2")
-    case _: TimeType => Some("t2")
-    case _: DayTimeIntervalType => Some("dt2")
-    case YearMonthIntervalType(start, end) if start == end =>
-      Some(if (start == YearMonthIntervalType.YEAR) "ymy" else "ymm")
-    case _: YearMonthIntervalType => Some("ym")
-    case _ => None
-  }
 
   test("the ANSI form fails a raise where the row engine skips, and a missing one") {
     // No kernel raises on purpose, so the fault is planted in the outcomes, which are real:
@@ -352,400 +300,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
     }
   }
 
-  // ---------------------------------------------------------------------------------------------
-  // The domains (VARKA-279)
-  // ---------------------------------------------------------------------------------------------
-
-  /**
-   * The fixture the guarded rows' partitions are cut from: for every guard the table's rows carry,
-   * its bound and one past it on both sides, in the column the guard reads. `i` at the int
-   * extremes and one in from each, at the day-interval limit, at the month range and at the
-   * months of `make_date`; `d` of year 9999 beside the `i` that takes `year(d) + i` to the int's
-   * top and one past, and `d` at the column bound's ends and one past each (VARKA-379); `ym` at
-   * the month range on both signs, at the one count whose negation overflows and one in from
-   * it, and at the counts whose difference with `ymm` leaves the int, `ymm` at its most negative;
-   * a time at each end of the day. Then rows null in those columns, one column group at a time
-   * and all at once, which the `IS NULL` partitions select. The other columns hold the mixed
-   * fixture's first row. One partition, so a partition view's rows are one batch at the default
-   * batch size.
-   */
-  private val edges: (String, String) = {
-    // scalastyle:off argcount
-    def row(d: String = "DATE'2024-01-31'", i: String = "3", m: String = "0", y: String = "0",
-        mm: String = "0", t: String = "TIME'12:34:56.789'", t2: String = "TIME'00:00:00'",
-        y1: String = "3", y2: String = "4", s1: String = "300", s2: String = "-400"): String =
-      s"($d, DATE'2024-02-29', $i, $m, $y, $mm, CAST('5000000000' AS BIGINT), " +
-        s"CAST('1' AS BIGINT), $t, $t2, INTERVAL '1 02:03:04.5' DAY TO SECOND, " +
-        "INTERVAL '0 00:00:00' DAY TO SECOND, " +
-        s"CAST($y1 AS TINYINT), CAST($y2 AS TINYINT), " +
-        s"CAST($s1 AS SMALLINT), CAST($s2 AS SMALLINT))"
-    // scalastyle:on argcount
-    // A row whose `ym` is `months`, through the view's `make_ym_interval(y, mm)`; Java's
-    // truncating division and remainder agree in sign, so the two parts add back to the count.
-    def ymRow(months: Long, m: String = "0"): String =
-      row(m = m, y = (months / 12).toString, mm = (months % 12).toString)
-    def around(lo: Long, hi: Long): Seq[Long] = Seq(lo - 1, lo, hi, hi + 1)
-    val dayLimit = VarkaChrono.INTERVAL_DAY_LIMIT_DAYS.toLong
-    val minMonths = VarkaChrono.MONTH_ARITH_MIN_MONTHS.toLong
-    val maxMonths = VarkaChrono.MONTH_ARITH_MAX_MONTHS.toLong
-    val ints = Seq(Int.MinValue.toLong, Int.MinValue + 1L, Int.MaxValue - 1L,
-      Int.MaxValue.toLong) ++ around(-dayLimit, dayLimit) ++ around(minMonths, maxMonths) ++
-      around(1, 12)
-    val rows = ints.map(i => row(i = i.toString)) ++
-      Seq(Int.MaxValue - 9999L, Int.MaxValue - 9998L).map(i =>
-        row(d = "DATE'9999-12-31'", i = i.toString)) ++
-      around(VarkaChrono.CONTRACT_MIN_DAYS, VarkaChrono.CONTRACT_MAX_DAYS).map(v =>
-        row(d = s"date_from_unix_date($v)")) ++
-      // The days a DATE converts to TIMESTAMP_NTZ without overflow, and one past each end.
-      around(-VarkaCoverageDifferentialSuite.lastNtzDay,
-        VarkaCoverageDifferentialSuite.lastNtzDay).map(v =>
-        row(d = s"date_from_unix_date($v)")) ++
-      (around(minMonths, maxMonths) ++ around(-maxMonths, -minMonths)).map(ymRow(_)) ++
-      Seq(ymRow(Int.MinValue), ymRow(Int.MinValue, m = "1"), ymRow(Int.MinValue + 1L),
-        ymRow(Int.MaxValue), ymRow(Int.MaxValue, m = "-1"), row(m = Int.MinValue.toString),
-        row(t = "TIME'00:00:00'", t2 = "TIME'23:59:59.999999'"),
-        row(t = "TIME'23:59:59.999999'", t2 = "TIME'00:00:00.000001'"),
-        // The narrow lanes' bounds, for the arithmetic's domains: a sum and a product that
-        // leave the type, a difference that leaves it in the other direction, and the minimum
-        // that negation and `abs` refuse. The short product needs a row of its own inside the
-        // range: the other rows' `300 * -400` is out of it.
-        row(s1 = "100", s2 = "3"),
-        row(y1 = "-128", y2 = "-128", s1 = "-32768", s2 = "-32768"),
-        row(y1 = "127", y2 = "-128", s1 = "32767", s2 = "-32768"),
-        row(y1 = "NULL", y2 = "NULL", s1 = "NULL", s2 = "NULL"),
-        "(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, " +
-        "NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
-        row(i = "NULL"), row(d = "NULL"), row(m = "NULL", y = "NULL", mm = "NULL"),
-        row(t = "NULL", t2 = "NULL"))
-    "varka_coverage_edges" -> VarkaCoverageDifferentialSuite.fixtureView(rows)
-  }
-
-  /** The guarded rows, those with a domain, each with the index its partition views carry. */
-  private lazy val guardedRows: Seq[(CoverageRow, Int)] =
-    rows.filter(_.domain.isDefined).zipWithIndex
-
-  /** The three partitions of a domain `d`, as TLP cuts a table: true, false and unknown. */
-  private val partitions: Seq[(String, String => String)] = Seq(
-    "inside" -> identity[String], "outside" -> (d => s"NOT ($d)"), "null" -> (d => s"($d) IS NULL"))
-
-  private def partitionView(k: Int, partition: String): String =
-    s"varka_coverage_edges_${k}_$partition"
-
-  /**
-   * The edges fixture and, per guarded row, its three partitions as cached views of their own:
-   * the partition is Spark's, evaluated once when the view is built, and a kernel then sees
-   * batches that lie wholly inside the domain, wholly outside, or wholly unknown. Each is built
-   * here rather than on first use, because a view built lazily inside a test's JFR recording
-   * would record its own filter kernel's events beside the query's.
-   */
-  private def cacheEdges(session: SparkSession): Unit = {
-    val started = System.nanoTime()
-    session.sql(edges._2).coalesce(1).createOrReplaceTempView(edges._1)
-    session.catalog.cacheTable(edges._1)
-    for ((row, k) <- guardedRows; (partition, where) <- partitions) {
-      val view = partitionView(k, partition)
-      session.sql(s"SELECT * FROM ${edges._1} WHERE ${where(row.domain.get)}").coalesce(1)
-        .createOrReplaceTempView(view)
-      session.catalog.cacheTable(view)
-      session.table(view).count()
-    }
-    logInfo(s"cached the edges fixture and ${guardedRows.size * partitions.size} partition " +
-      s"views in ${(System.nanoTime() - started) / 1000000} ms")
-  }
-
-  /**
-   * Rows whose outside partition is empty by construction - the guard's bound is the column
-   * type's own range, or the guarded value cannot reach the bound from any value of the column -
-   * with the reason. Checked both ways: an unlisted row with no row outside fails, so the check
-   * cannot pass on a partition that selects nothing, and a listed row with rows outside fails as
-   * stale.
-   */
-  private val totalDomains: Map[String, String] = Map(
-    "extract(YEAR FROM ym) - 1" ->
-      "the quotient is within +/-178956970, so the checked subtract cannot overflow",
-    "time_from_millis(time_to_millis(t2))" ->
-      "a TIME's millisecond count is inside the day by construction",
-    "time_from_micros(time_to_micros(t))" ->
-      "a TIME's microsecond count is inside the day by construction",
-    "t + INTERVAL '0 00:00:00' DAY TO SECOND" ->
-      "a zero interval leaves the sum where the time was, inside the day",
-    "CAST(time_to_millis(t) AS INT)" ->
-      "a day's milliseconds, under 86400000, always fit an int",
-    "CAST(time_to_millis(t) AS INT) > i" ->
-      "a day's milliseconds, under 86400000, always fit an int",
-    "hour(t) + 1" -> "an hour is at most 23, so the checked add cannot overflow")
-
-  /** The statuses as the fallback accounting names them. */
-  private def describe(statuses: Seq[Int]): String =
-    if (statuses.isEmpty) "nothing"
-    else statuses.map(VarkaFallbackAccounting.describeStatus).mkString("; ")
-
-  /** A verdict in the accounting's words: the bits a batch must decline with, and may. */
-  private def render(v: Verdict): String =
-    if (v.answers) "answer"
-    else describe(Seq(v.must)) + (if (v.may != 0) s" (may ${describe(Seq(v.may))})" else "")
-
-  /**
-   * Whether `statuses`, the declined batches' statuses in the order the batches ran, are what
-   * `verdicts`, in batch order, call for: a batch that must decline takes the next status, which
-   * its verdict must admit; one that may decline takes the next status only where that status is
-   * one it admits; one that must answer takes none. Where the query raised, the task stopped in
-   * the row path of the batch whose status is the last, and the batches after it never ran. The
-   * may case is greedy: a may-only batch ahead of a must batch whose status it also admits would
-   * take that status; no coverage row produces a may-only batch, so nothing decides it yet.
-   * After a raise the check stops at the last status, so a raising batch that committed no event
-   * is not told apart from an earlier batch that raised.
-   */
-  private def statusesAgree(
-      verdicts: Seq[Verdict], statuses: Seq[Int], raised: Boolean): Boolean = {
-    var next = 0
-    var agree = true
-    val remaining = verdicts.iterator
-    while (agree && remaining.hasNext && !(raised && statuses.nonEmpty && next == statuses.size)) {
-      val v = remaining.next()
-      if (v.must != 0) {
-        if (next < statuses.size && v.admits(statuses(next))) next += 1 else agree = false
-      } else if (v.may != 0 && next < statuses.size && v.admits(statuses(next))) {
-        next += 1
-      }
-    }
-    agree && next == statuses.size
-  }
-
-  /**
-   * The verdict on each batch of `view` for the kernel `node` runs. The node's own expressions
-   * are compiled as the node compiles them - the optimized form, against the scan's pruned
-   * output, under the emit options its session bound - and the view's rows are read as the kernel
-   * reads them, epoch days, month counts and nanoseconds, in the cached order, cut into batches
-   * of the session's Arrow batch size. The evaluator's per-batch input bound is applied first, as
-   * the runner applies it: a live lane outside it declines the batch with `STATUS_INPUT_BOUND`
-   * and the kernel's guards never run.
-   */
-  private def verdictsOf(node: SparkPlan, view: String): Seq[Verdict] = {
-    val (expressions, child, sessionEmit, predicate) = node match {
-      case p: VarkaColumnarToRowExec => (p.projectList, p.child, p.sessionEmit, false)
-      case p: VarkaProjectExec => (p.projectList, p.child, p.sessionEmit, false)
-      case f: VarkaFilterColumnarToRowExec => (Seq(f.condition), f.child, f.sessionEmit, true)
-      case f: VarkaFilterExec => (Seq(f.condition), f.child, f.sessionEmit, true)
-      case other => fail(s"not a Varka node: $other")
-    }
-    val options = VarkaColumnarToRowExec.emitOptions(sessionEmit)
-    val kernel: CompiledVarkaProjection = if (predicate) {
-      VarkaExpressionCompiler.compilePredicate(expressions.head, child.output, options).toScala
-        .getOrElse(fail(s"the condition does not compile: ${expressions.head}")).fused
-    } else {
-      val list = expressions.map(_.asInstanceOf[NamedExpression])
-      val partial = VarkaExpressionCompiler.compilePartial(list, child.output, options).toScala
-        .getOrElse(fail(s"the projection does not compile: $list"))
-      assert(partial.more.isEmpty && partial.declines.isEmpty,
-        s"a verdict is per kernel, and this projection has several or a residual: $partial")
-      partial.fused
-    }
-    assert(kernel.derivedInputs.isEmpty,
-      "a derived input is the row engine's own map of a column, which this verdict does not model")
-    // The long harness at every 64-bit lane, DOUBLE's bits included.
-    val long = kernel.lane(options).bits() == java.lang.Long.SIZE
-    val guards = new VarkaGuardSpec.Guards(kernel.outputs.asScala.toSeq,
-      kernel.inputOrdinals.size, kernel.numLiterals, options, long)
-    val lits: Array[Long] =
-      if (long) kernel.longLiterals.asScala.map(_.longValue).toArray
-      else kernel.literals.asScala.map(_.longValue).toArray
-    // A kernel of both lanes (VARKA-28) reads the int table beside the long one.
-    val intLits: Array[Int] =
-      if (long) kernel.literals.asScala.map(_.intValue).toArray else Array.empty[Int]
-    val ordinals = kernel.inputOrdinals.asScala.map(_.intValue).toSeq
-    val types = child.output.map(_.dataType)
-    val names = child.output.map(a => s"`${a.name}`").mkString(", ")
-    val values = spark.sql(s"SELECT $names FROM $view").queryExecution.executedPlan
-      .executeCollect().toSeq.map { r =>
-        ordinals.map { o =>
-          if (r.isNullAt(o)) None else Some(types(o) match {
-            // A narrow type is an int in a narrower lane (VARKA-329): the kernel's check reads
-            // the sign-extended value, so the verdict does too. The bytes are read at their own
-            // width: an `UnsafeRow`'s slot for a byte is one byte, and a four-byte read of it
-            // takes the eight-bit value unsigned, so -128 would come back as 128.
-            case DateType | IntegerType | _: YearMonthIntervalType =>
-              r.getInt(o).toLong
-            case ByteType => r.getByte(o).toLong
-            case ShortType => r.getShort(o).toLong
-            case LongType | TimestampNTZType | _: TimeType | _: DayTimeIntervalType =>
-              r.getLong(o)
-            // A floating value is its raw bits on its lane (VARKA-341).
-            case DoubleType => java.lang.Double.doubleToRawLongBits(r.getDouble(o))
-            case FloatType => java.lang.Float.floatToRawIntBits(r.getFloat(o)).toLong
-            case other => fail(s"no lane reads a $other input")
-          })
-        }
-      }
-    val batchSize = varkaSpark.sessionState.conf.arrowMaxRecordsPerBatch
-    values.grouped(if (batchSize > 0) batchSize else math.max(values.size, 1)).toSeq.map { batch =>
-      val outside = kernel.inputBounds.asScala.exists(b =>
-        batch.exists(_(b.inputIndex).exists(v => v < b.lo || v > b.hi)))
-      if (outside) Verdict(VarkaKernelRunner.STATUS_INPUT_BOUND, 0)
-      else VarkaGuardSpec.verdict(guards, lits, intLits, batch, Nil)
-    }
-  }
-
-  /** What a row's domain check found, and what it saw, for the test's report. */
-  private case class DomainResult(
-      findings: Seq[String], declined: Seq[String], answered: Seq[String], mayBatches: Int)
-
-  /**
-   * The domain check for one guarded row: its three partitions, each as a projection of the
-   * expression and as a filter comparing it with a column of its type (a predicate row as the
-   * filter it is). Per query, Varka's outcome against Spark's, rows or the same error; the
-   * declined batches' statuses, off the JFR fallback events the evaluator commits before the row
-   * path runs - which a failed task's SQL metrics never report - against the verdict on each
-   * batch, exact under `exactRefusalStatus`; and, where every batch must be answered, the
-   * kernels serving the whole query. And first, on Spark, that the three partitions cut the
-   * fixture and that each has rows, the outside one unless the domain is total.
-   */
-  private def domainCheck(row: CoverageRow, k: Int): DomainResult = {
-    val e = row.executable
-    val forms: Seq[(String, String => String)] = row.form match {
-      case "predicate" => Seq("a filter" -> (v => s"SELECT rid FROM $v WHERE $e"))
-      case _ =>
-        val t = spark.sql(s"SELECT $e AS v FROM ${edges._1}").schema.head.dataType
-        val c = standIn(t, caseArm = false).getOrElse(fail(s"no column of type $t beside $e"))
-        Seq("a projection" -> (v => s"SELECT rid, $e AS v FROM $v"),
-          "a filter" -> (v => s"SELECT rid FROM $v WHERE ($e) = $c"))
-    }
-    val findings = ArrayBuffer.empty[String]
-    val declined = ArrayBuffer.empty[String]
-    val answered = ArrayBuffer.empty[String]
-    var mayBatches = 0
-    def ids(table: String): Seq[Int] =
-      spark.sql(s"SELECT rid FROM $table").collect().map(_.getInt(0)).toSeq
-    val cut = partitions.map { case (p, _) => ids(partitionView(k, p)) }
-    val all = ids(edges._1)
-    if (cut.flatten.sorted != all.sorted) {
-      findings += s"the partitions do not cut the fixture: ${cut.map(_.size)} of ${all.size} rows"
-    }
-    val Seq(inside, outside, unknown) = cut
-    if (inside.isEmpty) findings += "no row inside the domain"
-    if (unknown.isEmpty) findings += "no row where the domain is unknown"
-    (totalDomains.get(row.sql), outside.isEmpty) match {
-      case (None, true) =>
-        findings += "no row outside the domain, and the row is not listed as a total domain"
-      case (Some(reason), false) =>
-        findings += s"rows outside the domain (rid ${outside.sorted.mkString(", ")}), but the " +
-          s"row is listed as a total domain: $reason"
-      case _ =>
-    }
-    // An empty partition - a total domain's outside - has no batch for a kernel to serve or
-    // decline, so nothing runs over it; its emptiness is what the list above polices.
-    for (((partition, _), rids) <- partitions.zip(cut) if rids.nonEmpty; (form, query) <- forms) {
-      val view = partitionView(k, partition)
-      val q = query(view)
-      val where = s"$partition the domain, in $form"
-      val ((actual, plan), events) =
-        VarkaJfrTestSupport.withJfrRecording(classOf[VarkaFallbackEvent])(runOutcome(varkaSpark, q))
-      val expected = expectedOutcome(q, plan)
-      val fallbacks = events.filter(VarkaJfrTestSupport.isEvent(_, classOf[VarkaFallbackEvent]))
-      val statuses = fallbacks.filter(_.getString("cause") == VarkaFallbackEvent.RANGE_DECLINED)
-        .map(_.getInt("status"))
-      val otherCauses = fallbacks.map(_.getString("cause"))
-        .filterNot(_ == VarkaFallbackEvent.RANGE_DECLINED)
-      outcomeDifference(expected, actual).foreach(d => findings += s"$where: $q\n$d")
-      if (otherCauses.nonEmpty) findings += s"$where: fell back for ${otherCauses.mkString(", ")}"
-      plan.flatMap(p => collectFirst(p) { case v if isVarkaNode(v) => v }) match {
-        case None =>
-          findings += s"$where: no Varka node:\n${plan.map(_.treeString).getOrElse("(no plan)")}"
-        case Some(node) =>
-          val verdicts = verdictsOf(node, view)
-          val musts = verdicts.map(_.must).filter(_ != 0)
-          mayBatches += verdicts.count(_.may != 0)
-          val raised = actual.isInstanceOf[Raised]
-          // The domain itself is what is held here: no batch inside it or under IS NULL may be
-          // one the verdict condemns, and every batch outside it must be, so a domain that is
-          // too wide or too narrow disagrees with the guards' own verdict.
-          if (partition != "outside" && (musts.nonEmpty || verdicts.exists(_.may != 0))) {
-            findings += s"$where: the domain admits batches the verdict condemns: " +
-              verdicts.map(render).mkString("; ")
-          }
-          if (partition == "outside" && !verdicts.forall(_.must != 0)) {
-            findings += s"$where: the domain excludes batches the verdict answers: " +
-              verdicts.map(render).mkString("; ")
-          }
-          if (!statusesAgree(verdicts, statuses, raised)) {
-            findings += s"$where: declined with ${describe(statuses)} where the verdicts, " +
-              s"batch by batch, are ${verdicts.map(render).mkString("; ")}" +
-              (if (raised) ", and the row path raised" else "")
-          }
-          val metric = (name: String) => node.metrics.get(name).map(_.value).getOrElse(-1L)
-          (actual, musts.size) match {
-            case (Answered(_), 0) =>
-              if (!kernelServed(plan.get) || metric("numFallbackBatchesDeclined") != 0) {
-                findings += s"$where: not served by a kernel, or a batch declined:\n" +
-                  plan.get.treeString
-              }
-            case (Answered(_), d) =>
-              if (metric("numVarkaBatches") != verdicts.size - d ||
-                  metric("numFallbackBatchesDeclined") != d) {
-                findings += s"$where: ${metric("numVarkaBatches")} batches served and " +
-                  s"${metric("numFallbackBatchesDeclined")} declined, for ${verdicts.size} " +
-                  s"batches of which $d must decline"
-              }
-            case (r: Raised, 0) =>
-              findings += s"$where: raised $r where the verdict says every batch is answered"
-            case _ =>
-          }
-          if (musts.isEmpty) answered += where else declined += s"$where (${describe(musts)})"
-      }
-    }
-    DomainResult(findings.toSeq, declined.toSeq, answered.toSeq, mayBatches)
-  }
-
-  guardedRows.foreach { case (row, k) =>
-    test(s"${row.family}: ${row.sql} is answered inside its domain and where it is unknown, " +
-        "and declined outside with the verdict's status, in a projection and a filter") {
-      // The domain is ANSI's where the modes differ, and a batch's status names exactly the
-      // guards that fired only under exact refusal statuses; pruning off, since a cached view's
-      // statistics could drop a batch before any kernel saw it.
-      val result = withAnsi(enabled = true) {
-        withBothConf(SQLConf.IN_MEMORY_PARTITION_PRUNING.key, "false") {
-          withBothConf(SQLConf.VARKA_EMIT_EXACT_REFUSAL_STATUS.key, "true")(domainCheck(row, k))
-        }
-      }
-      info(s"domain: ${row.domain.get}")
-      info(s"answered: ${result.answered.mkString(", ")}")
-      info("declined: " +
-        (if (result.declined.isEmpty) "nothing" else result.declined.mkString(", ")))
-      info(s"batches whose verdict leaves a guard free to fire: ${result.mayBatches}")
-      assert(result.findings.isEmpty, result.findings.mkString("\n\n"))
-    }
-  }
-
-  test("the total domains are the guarded rows the fixture cannot take outside, and no other") {
-    // The list above is read only by guarded rows' tests, so an entry for a row the table lacks,
-    // or for an unguarded row, could never go stale.
-    val unread = totalDomains.keys.filterNot(sql => guardedRows.exists(_._1.sql == sql))
-    assert(unread.isEmpty, s"total domains no guarded row's test reads: $unread")
-  }
-
-  test("date_add(d, i) carries no guard: at the int extremes its day wraps as the row " +
-      "engine's does") {
-    // The row's note once promised "a per-batch bound on its range" that its kernel does not
-    // carry, the open question of VARKA-279's admission check: the compiler records a bound only
-    // for the day-interval cast, and Spark's DateAdd is a plain int add. So the row has no domain,
-    // and this holds it to that over the edges fixture, `i` at both int extremes and `d` of year
-    // 9999 among its rows: the kernels serve every batch, nothing falls back, and the answer -
-    // the wrapped day, outside any calendar - is the row engine's.
-    assert(rows.find(_.sql == "date_add(d, i)").exists(_.domain.isEmpty))
-    val q = s"SELECT rid, date_add(d, i) AS v FROM ${edges._1}"
-    val ((actual, plan), events) =
-      withBothConf(SQLConf.IN_MEMORY_PARTITION_PRUNING.key, "false") {
-        VarkaJfrTestSupport.withJfrRecording(classOf[VarkaFallbackEvent])(runOutcome(varkaSpark, q))
-      }
-    assert(outcomeDifference(expectedOutcome(q, plan), actual).isEmpty)
-    assert(!events.exists(VarkaJfrTestSupport.isEvent(_, classOf[VarkaFallbackEvent])))
-    assert(plan.exists(kernelServed), plan.map(_.treeString).getOrElse("(no plan)"))
-    val days = spark.sql(q).queryExecution.executedPlan.executeCollect()
-      .filterNot(_.isNullAt(1)).map(_.getInt(1))
-    val (first, last) = (java.time.LocalDate.of(1, 1, 1).toEpochDay,
-      java.time.LocalDate.of(9999, 12, 31).toEpochDay)
-    assert(days.exists(d => d < first || d > last), "no row wrapped past the calendar")
-  }
+  // The domains (VARKA-279), and date_add(d, i)'s lack of one, run below the session, in
+  // VarkaCoverageHarnessSuite and VarkaDomains (VARKA-509).
 }
 
 private object VarkaCoverageDifferentialSuite {
@@ -804,7 +360,7 @@ private object VarkaCoverageDifferentialSuite {
    * pairs stay inside their type under `+`, `-`, `*` and the negation: the form that compares
    * the two engines runs under the session's ANSI mode, where a pair that leaves the type is an
    * error on the row engine rather than an answer to compare (the narrow rows' domains are cut
-   * on the `edges` fixture, which holds the values that leave it).
+   * on `VarkaDomains`' edges fixture, which holds the values that leave it).
    */
   lazy val fixtures: Seq[(String, String)] = {
     // `i` stays in 1..12: it doubles as the month of `make_date(2021, i, 1)`, and under the
@@ -983,10 +539,10 @@ private object VarkaCoverageDifferentialSuite {
    * given its position as an int `rid` that no coverage row names; `where` filters the rows.
    * The TIMESTAMP_NTZ columns are derived: `ntz` is `d` at the time of day `t`, `ntz2` is `d2`
    * at `t2`, so they span the calendar and are null where a source is. A day the conversion
-   * cannot take, which only the edges fixture holds, gives a null rather than an error. Both
-   * sides read the cached view ([[sameCacheReads]]), so neither evaluates the CASE again: an
-   * uncached row engine would inline it, infer no `isnotnull(ntz)`, and raise on a cast the
-   * cached plans never evaluate (VARKA-498).
+   * cannot take, which only `VarkaDomains`' edges fixture holds, gives a null rather than an
+   * error. Both sides read the cached view ([[sameCacheReads]]), so neither evaluates the CASE
+   * again: an uncached row engine would inline it, infer no `isnotnull(ntz)`, and raise on a
+   * cast the cached plans never evaluate (VARKA-498).
    *
    * The floating columns are derived too (VARKA-341), `floatingColumns` picked by `rid`, null
    * where `d`, `d2`, `i` and `l2` are.
