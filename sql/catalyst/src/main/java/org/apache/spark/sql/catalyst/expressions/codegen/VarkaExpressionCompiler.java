@@ -50,6 +50,7 @@ import org.apache.spark.sql.catalyst.expressions.RuntimeReplaceable;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.ForwardedOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.FusedOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.KernelOutput;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaCompileObserver;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaErrors;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaFamily;
@@ -153,6 +154,21 @@ public final class VarkaExpressionCompiler {
   public static Optional<PartialVarkaProjection> compilePartial(
       Seq<NamedExpression> projectList, Seq<Attribute> childOutput, VarkaEmitOptions options,
       Set<VarkaFamily> familiesOff) {
+    Optional<PartialVarkaProjection> compiled =
+        compilePartialUnobserved(projectList, childOutput, options, familiesOff);
+    // The option matrix's recording run hears each compile with a way to repeat it under
+    // another configuration (VarkaCompileObserver); no one is listening otherwise.
+    if (VarkaCompileObserver.watching()) {
+      VarkaCompileObserver.compiled(List.of(projectList, childOutput, familiesOff), options,
+          compiled, o -> compilePartialUnobserved(projectList, childOutput, o, familiesOff));
+    }
+    return compiled;
+  }
+
+  /** {@link #compilePartial} itself, which the recording run repeats under its configurations. */
+  private static Optional<PartialVarkaProjection> compilePartialUnobserved(
+      Seq<NamedExpression> projectList, Seq<Attribute> childOutput, VarkaEmitOptions options,
+      Set<VarkaFamily> familiesOff) {
     return planning(
         () -> classifyKernels(entries(projectList), childOutput, options, familiesOff).partial(),
         () -> projectionIdentity(projectList, childOutput), options);
@@ -176,6 +192,21 @@ public final class VarkaExpressionCompiler {
 
   /** {@link #declines(Seq, Seq, VarkaEmitOptions)} with the families switched off. */
   public static SortedMap<Integer, VarkaDecline> declines(
+      Seq<NamedExpression> projectList, Seq<Attribute> childOutput, VarkaEmitOptions options,
+      Set<VarkaFamily> familiesOff) {
+    SortedMap<Integer, VarkaDecline> declines =
+        declinesUnobserved(projectList, childOutput, options, familiesOff);
+    // The option matrix's recording run hears each compile with a way to repeat it under
+    // another configuration (VarkaCompileObserver); no one is listening otherwise.
+    if (VarkaCompileObserver.watching()) {
+      VarkaCompileObserver.compiled(List.of("declines", projectList, childOutput, familiesOff),
+          options, declines, o -> declinesUnobserved(projectList, childOutput, o, familiesOff));
+    }
+    return declines;
+  }
+
+  /** {@link #declines} itself, which the recording run repeats. */
+  private static SortedMap<Integer, VarkaDecline> declinesUnobserved(
       Seq<NamedExpression> projectList, Seq<Attribute> childOutput, VarkaEmitOptions options,
       Set<VarkaFamily> familiesOff) {
     return planning(() -> Collections.unmodifiableSortedMap(
@@ -730,6 +761,19 @@ public final class VarkaExpressionCompiler {
   public static Explained explainAndCompilePredicate(
       Expression condition, Seq<Attribute> childOutput, VarkaEmitOptions options,
       Set<VarkaFamily> familiesOff) {
+    Explained explained = explainUnobserved(condition, childOutput, options, familiesOff);
+    // The option matrix's recording run hears each compile with a way to repeat it under
+    // another configuration (VarkaCompileObserver); no one is listening otherwise.
+    if (VarkaCompileObserver.watching()) {
+      VarkaCompileObserver.compiled(List.of(condition, childOutput, familiesOff), options,
+          explained, o -> explainUnobserved(condition, childOutput, o, familiesOff));
+    }
+    return explained;
+  }
+
+  /** {@link #explainAndCompilePredicate} itself, which the recording run repeats. */
+  private static Explained explainUnobserved(Expression condition, Seq<Attribute> childOutput,
+      VarkaEmitOptions options, Set<VarkaFamily> familiesOff) {
     return planning(() -> predicate(condition, childOutput, options, familiesOff),
         () -> "condition " + condition + " over " + childOutput.mkString("[", ", ", "]"),
         options);

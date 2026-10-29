@@ -115,7 +115,12 @@ public final class VarkaMatrixRuns {
    * only one of its constants, so a typo is refused rather than silently selecting the default.
    */
   public static VarkaEmitOptions parse(String spec) {
-    VarkaEmitOptions options = VarkaEmitOptions.DEFAULTS;
+    return parseOver(VarkaEmitOptions.DEFAULTS, spec);
+  }
+
+  /** {@link #parse}'s values applied over {@code base} rather than over the defaults. */
+  public static VarkaEmitOptions parseOver(VarkaEmitOptions base, String spec) {
+    VarkaEmitOptions options = base;
     if (spec.isEmpty()) {
       return options;
     }
@@ -371,9 +376,16 @@ public final class VarkaMatrixRuns {
   /** {@link #around} with its skip list, configuration and report named: the seam its tests use. */
   public static <T> T around(List<Skip> entries, String config, Optional<String> report,
       String suite, String test, Outcomes outcomes, Body<T> body) throws Throwable {
+    Optional<Skip> expected = expectedFailure(entries, config, suite, test);
+    // A test nothing of which this configuration changes was run by the defaults' run already
+    // (VarkaTestReach): it passes here unrun, with no fused count for the declining check.
+    if (VarkaTestReach.skips(config, suite, test, expected.isPresent())) {
+      return null;
+    }
+    VarkaTestReach.begin();
     long before = fusedBatches.getAsLong();
+    boolean cancelled = false;
     try {
-      Optional<Skip> expected = expectedFailure(entries, config, suite, test);
       if (expected.isEmpty()) {
         return body.run();
       }
@@ -393,7 +405,11 @@ public final class VarkaMatrixRuns {
       }
       throw outcomes.fail().apply("stale entry in " + SKIPS_PATH + ": '" + test + "' of " + suite
           + " passes under " + skip.config() + "; remove the line");
+    } catch (Throwable t) {
+      cancelled = outcomes.cancelled().isInstance(t);
+      throw t;
     } finally {
+      VarkaTestReach.end(suite, test, cancelled);
       if (report.isPresent()) {
         long after = fusedBatches.getAsLong();
         long fused = before < 0 || after < 0 ? -1L : after - before;

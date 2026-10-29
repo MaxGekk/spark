@@ -99,8 +99,54 @@ def suite_weight(suite_seconds, suite_times):
     return weight
 
 
-def units(configurations, suites, weight, config_weights, lane):
-    """Every (configuration, module, suites, seconds) JVM the matrix runs, the defaults first."""
+def read_reach(path):
+    """`VarkaTestReach`'s record: the configurations it covers, from its `#<TAB>covers<TAB>`
+    lines, and for each suite the configurations that move each of its tests, with the suite's
+    set-up line (`suite<TAB>*`) and the JVM's (`*<TAB>*`) joined to every test they cover. None
+    for a record its recording marked broken."""
+    covered, tests, setup, everywhere = set(), {}, {}, set()
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        parts = line.split("\t")
+        if line.startswith("#"):
+            if len(parts) >= 2 and parts[1] == "broken":
+                return None
+            if len(parts) == 3 and parts[1] == "covers":
+                covered |= {c for c in parts[2].split(",") if c}
+            continue
+        if len(parts) < 3:
+            continue
+        moved = set() if parts[-1] == "-" else set(parts[-1].split(","))
+        suite, test = parts[0], "\t".join(parts[1:-1])
+        if suite == "*":
+            everywhere |= moved
+        elif test == "*":
+            setup.setdefault(suite, set()).update(moved)
+        else:
+            tests.setdefault(suite, []).append(moved)
+    joined = {
+        suite: [m | setup.get(suite, set()) | everywhere for m in moved]
+        for suite, moved in tests.items()
+    }
+    return covered, joined
+
+
+def reach_share(reach, config, suite):
+    """The share of `suite`'s tests that `config` runs: all of them where there is no record, the
+    record does not cover the configuration, or it has no test of the suite. A test marked `*`
+    runs under every configuration."""
+    if reach is None or config == DEFAULTS:
+        return 1.0
+    covered, tests = reach
+    if config not in covered or suite not in tests:
+        return 1.0
+    moved = tests[suite]
+    return sum(config in m or "*" in m for m in moved) / len(moved)
+
+
+def units(configurations, suites, weight, config_weights, lane, reach=None):
+    """Every (configuration, module, suites, seconds) JVM the matrix runs, the defaults first. A
+    suite whose tests a configuration's record leaves all to the defaults is not run under it, and
+    one it runs some tests of weighs that share of its time, a tenth at least, for its set-up."""
     fill = statistics.median(config_weights.values()) if config_weights else 1.0
     out = []
     for config in [DEFAULTS] + list(configurations):
@@ -108,7 +154,10 @@ def units(configurations, suites, weight, config_weights, lane):
         for module, listed in suites:
             shared = []
             for name, alone in listed:
-                seconds = weight(name) * factor
+                share = reach_share(reach, config, name)
+                if share == 0.0:
+                    continue
+                seconds = weight(name) * factor * max(share, 0.1)
                 if alone:
                     out.append((config, module, [name], JVM_START + seconds))
                 else:
@@ -146,9 +195,9 @@ def pack(all_units, lane):
     return bins
 
 
-def plan(configurations, suites, suite_seconds, suite_times, config_weights, lane):
+def plan(configurations, suites, suite_seconds, suite_times, config_weights, lane, reach=None):
     weight = suite_weight(suite_seconds, suite_times)
-    bins = pack(units(configurations, suites, weight, config_weights, lane), lane)
+    bins = pack(units(configurations, suites, weight, config_weights, lane, reach), lane)
     include = []
     for k, b in enumerate(bins):
         include.append(
@@ -244,6 +293,34 @@ class SelfTest(unittest.TestCase):
             report(root, "x=1", "sql-b001-0", "B", 4)
             self.assertEqual(times([root]), {"A": 30.0, "B": 4.0})
 
+    def test_a_configuration_drops_the_suites_its_record_leaves_to_the_defaults(self):
+        with tempfile.TemporaryDirectory() as root:
+            f = Path(root, "reach.tsv")
+            f.write_text(
+                "#\tcovers\tx=1,y=2,w=4\nA\tone\tx=1\nA\ttwo\t-\nB\tone\t-\nB\t*\tw=4\n",
+                encoding="utf-8",
+            )
+            reach = read_reach(f)
+        suites = [("sql", [("A", True), ("B", True), ("C", True)])]
+        got = units(["x=1", "y=2", "z=3"], suites, lambda s: 100.0, {}, 480.0, reach)
+        ran = {(u[0], u[2][0]): u[3] for u in got}
+        # x=1 moves one of A's two tests: half of A, no B; y=2 moves nothing it covers; z=3 is
+        # not covered, so it runs everything; C has no record, so every configuration runs it.
+        self.assertEqual(ran[("x=1", "A")], JVM_START + 50.0)
+        self.assertNotIn(("x=1", "B"), ran)
+        self.assertNotIn(("y=2", "A"), ran)
+        self.assertEqual({s for c, s in ran if c == "z=3"}, {"A", "B", "C"})
+        self.assertEqual({c for c, s in ran if s == "C"}, {"defaults", "x=1", "y=2", "z=3"})
+        # B's set-up moved under w=4, so all of B runs there.
+        got = units(["w=4"], suites, lambda s: 100.0, {}, 480.0, reach)
+        self.assertIn(("w=4", "B"), {(u[0], u[2][0]) for u in got})
+
+    def test_a_broken_record_is_none(self):
+        with tempfile.TemporaryDirectory() as root:
+            f = Path(root, "reach.tsv")
+            f.write_text("A\tone\t-\n#\tbroken\tboom\n", encoding="utf-8")
+            self.assertIsNone(read_reach(f))
+
     def test_a_suite_no_file_lists_weighs_the_median(self):
         w = suite_weight({}, {"A": 10.0, "B": 30.0, "C": 50.0})
         self.assertEqual(w("New"), 30.0)
@@ -266,6 +343,7 @@ def main(argv):
         default=480.0,
         help="a lane's seconds on a fast runner (default 480)",
     )
+    p.add_argument("--reach", help="the Build's record of the tests each configuration moves")
     t = sub.add_parser("times")
     t.add_argument("dirs", nargs="+")
     args = parser.parse_args(argv)
@@ -289,6 +367,7 @@ def main(argv):
         read_tsv(SUITE_TIMES),
         read_tsv(CONFIG_WEIGHTS),
         args.target,
+        read_reach(args.reach) if args.reach else None,
     )
     json.dump(out, sys.stdout)
     print()

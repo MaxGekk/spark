@@ -98,8 +98,15 @@ if [ -n "$shard" ]; then
     exit 1; }
   only=(--suites "$rest")
 fi
+# With VARKA_REACH_RECORD naming a file, the run records which option configurations move each
+# test (VarkaTestReach), for the option matrix dispatched on the same commit.
+reach=()
+if [ -n "${VARKA_REACH_RECORD:-}" ]; then
+  reach=(--jvm-arg "-Dvarka.matrix.reachRecord=$VARKA_REACH_RECORD")
+fi
 "$matrix" --defaults --module "$module" --split 2 -j 2 --sbt-arg -Phive \
-  --out target/varka-scoped --skip-suites "${timing:-@none}" "${only[@]}" "${extra[@]}"
+  --out target/varka-scoped --skip-suites "${timing:-@none}" "${only[@]}" "${extra[@]}" \
+  "${reach[@]}"
 
 # The suites that measure the JIT may be given a fresh JVM when they fail, since what they
 # measure is decided per JVM: a suite in this list that fails is run again, alone, in a new JVM,
