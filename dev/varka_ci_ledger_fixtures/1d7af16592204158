@@ -1,0 +1,10 @@
+{
+"id": 40834493709,
+"name": "Varka option matrix",
+"path": ".github/workflows/varka-option-matrix.yml",
+"head_sha": "85156a4af2c29233d09513734f7821975f86d890",
+"updated_at": "2026-10-29T07:59:05Z",
+"run_attempt": 1,
+"conclusion": "failure",
+"check_suite_node_id": "CS_kwDOB19d-c8AAAAZxWBMbA"
+}

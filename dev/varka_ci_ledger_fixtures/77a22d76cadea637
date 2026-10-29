@@ -1,0 +1,230 @@
+{
+"data": {
+"node": {
+"checkRuns": {
+"pageInfo": {
+"hasNextPage": false,
+"endCursor": "Y3Vyc29yOnYyOpHPAAAAG2m0MyI="
+},
+"nodes": [
+{
+"databaseId": 117738347892,
+"name": "Run / Build modules: ${{ matrix.modules }}",
+"conclusion": "SKIPPED",
+"annotations": {
+"nodes": []
+}
+},
+{
+"databaseId": 117738347421,
+"name": "Run / Documentation generation",
+"conclusion": "SKIPPED",
+"annotations": {
+"nodes": []
+}
+},
+{
+"databaseId": 117738347251,
+"name": "Run / Build modules: sparkr",
+"conclusion": "SKIPPED",
+"annotations": {
+"nodes": []
+}
+},
+{
+"databaseId": 117738345897,
+"name": "Run / Linters, licenses, and dependencies",
+"conclusion": "SUCCESS",
+"annotations": {
+"nodes": []
+}
+},
+{
+"databaseId": 117737958092,
+"name": "Run / Run TPC-DS queries with SF=1",
+"conclusion": "SKIPPED",
+"annotations": {
+"nodes": []
+}
+},
+{
+"databaseId": 117737957915,
+"name": "Run / Run OIDC E2E integration tests (Minikube + moto)",
+"conclusion": "SKIPPED",
+"annotations": {
+"nodes": []
+}
+},
+{
+"databaseId": 117737957729,
+"name": "Run / Run Docker integration tests",
+"conclusion": "SKIPPED",
+"annotations": {
+"nodes": []
+}
+},
+{
+"databaseId": 117737957624,
+"name": "Run / Run Spark on Kubernetes Integration test",
+"conclusion": "SKIPPED",
+"annotations": {
+"nodes": []
+}
+},
+{
+"databaseId": 117737957421,
+"name": "Run / Build modules: ${{ matrix.modules }} ${{ matrix.comment }}",
+"conclusion": "SKIPPED",
+"annotations": {
+"nodes": []
+}
+},
+{
+"databaseId": 117737957284,
+"name": "Run / Precompile Spark",
+"conclusion": "SKIPPED",
+"annotations": {
+"nodes": []
+}
+},
+{
+"databaseId": 117737956810,
+"name": "Run / Admit a full-matrix run",
+"conclusion": "SKIPPED",
+"annotations": {
+"nodes": []
+}
+},
+{
+"databaseId": 117737956291,
+"name": "Run / Java 25 build with Maven",
+"conclusion": "SKIPPED",
+"annotations": {
+"nodes": []
+}
+},
+{
+"databaseId": 117737955495,
+"name": "Run / Run Spark UI tests",
+"conclusion": "SUCCESS",
+"annotations": {
+"nodes": []
+}
+},
+{
+"databaseId": 117737955489,
+"name": "Run / Varka suites: sql",
+"conclusion": "FAILURE",
+"annotations": {
+"nodes": [
+{
+"annotationLevel": "FAILURE",
+"title": "",
+"message": "Process completed with exit code 1.",
+"path": ".github"
+},
+{
+"annotationLevel": "WARNING",
+"title": "Flaky suite retried",
+"message": "VarkaWarmupEndToEndSuite failed in its JVM (attempt 2 of 3: \"a projection's first query takes the row path and its next one the compiled kernel\"; \"a columnar consumer's first write takes the row path and its next one the kernel\"); a fresh JVM follows",
+"path": ".github"
+},
+{
+"annotationLevel": "WARNING",
+"title": "Flaky suite retried",
+"message": "VarkaWarmupEndToEndSuite failed in its JVM (attempt 1 of 3: \"a projection's first query takes the row path and its next one the compiled kernel\"; \"a columnar consumer's first write takes the row path and its next one the kernel\"); a fresh JVM follows",
+"path": ".github"
+}
+]
+}
+},
+{
+"databaseId": 117737955482,
+"name": "Run / Varka assembly gate",
+"conclusion": "SUCCESS",
+"annotations": {
+"nodes": [
+{
+"annotationLevel": "NOTICE",
+"title": "",
+"message": "datapath probe: 47.9 / 96.5 / 88.1 lane-ops/ns at 128 / 256 / 512 bits; 256:128 = 2.01 (control), 512:256 = 0.91",
+"path": ".github"
+},
+{
+"annotationLevel": "NOTICE",
+"title": "",
+"message": "Runner CPU: AMD EPYC 9V74 80-Core Processor",
+"path": ".github"
+}
+]
+}
+},
+{
+"databaseId": 117737955469,
+"name": "Run / Varka engine (x86_64)",
+"conclusion": "SUCCESS",
+"annotations": {
+"nodes": []
+}
+},
+{
+"databaseId": 117737955463,
+"name": "Run / Varka suites: catalyst",
+"conclusion": "SUCCESS",
+"annotations": {
+"nodes": []
+}
+},
+{
+"databaseId": 117737955459,
+"name": "Run / Varka docs checks",
+"conclusion": "SUCCESS",
+"annotations": {
+"nodes": []
+}
+},
+{
+"databaseId": 117737955439,
+"name": "Run / Base image build",
+"conclusion": "SUCCESS",
+"annotations": {
+"nodes": []
+}
+},
+{
+"databaseId": 117737955413,
+"name": "Run / Varka engine (aarch64)",
+"conclusion": "SUCCESS",
+"annotations": {
+"nodes": []
+}
+},
+{
+"databaseId": 117737955396,
+"name": "Run / Varka bench drivers",
+"conclusion": "SUCCESS",
+"annotations": {
+"nodes": []
+}
+},
+{
+"databaseId": 117737955254,
+"name": "Run / Protobuf breaking change detection and Python CodeGen check",
+"conclusion": "SUCCESS",
+"annotations": {
+"nodes": []
+}
+},
+{
+"databaseId": 117737534242,
+"name": "Run / Check changes",
+"conclusion": "SUCCESS",
+"annotations": {
+"nodes": []
+}
+}
+]
+}
+}
+}
+}

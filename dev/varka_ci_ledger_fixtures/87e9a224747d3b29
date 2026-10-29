@@ -1,0 +1,3555 @@
+{
+"total_count": 225,
+"jobs": [
+{
+"id": 123743811687,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b046",
+"conclusion": "success",
+"started_at": "2026-10-29T19:55:33Z",
+"completed_at": "2026-10-29T20:02:03Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743811768,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b042",
+"conclusion": "success",
+"started_at": "2026-10-29T19:55:05Z",
+"completed_at": "2026-10-29T20:07:26Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743811969,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b044",
+"conclusion": "success",
+"started_at": "2026-10-29T19:55:16Z",
+"completed_at": "2026-10-29T20:06:20Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743812297,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b047",
+"conclusion": "success",
+"started_at": "2026-10-29T19:55:36Z",
+"completed_at": "2026-10-29T20:01:57Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743812443,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b050",
+"conclusion": "success",
+"started_at": "2026-10-29T19:56:19Z",
+"completed_at": "2026-10-29T20:07:42Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743812519,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b049",
+"conclusion": "success",
+"started_at": "2026-10-29T19:56:08Z",
+"completed_at": "2026-10-29T20:03:49Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743812601,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b052",
+"conclusion": "success",
+"started_at": "2026-10-29T19:56:51Z",
+"completed_at": "2026-10-29T20:07:23Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743812872,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b054",
+"conclusion": "success",
+"started_at": "2026-10-29T19:57:29Z",
+"completed_at": "2026-10-29T20:05:45Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743812930,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b048",
+"conclusion": "success",
+"started_at": "2026-10-29T19:56:04Z",
+"completed_at": "2026-10-29T20:02:44Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743812958,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b053",
+"conclusion": "success",
+"started_at": "2026-10-29T19:57:03Z",
+"completed_at": "2026-10-29T20:11:50Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743813543,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b055",
+"conclusion": "success",
+"started_at": "2026-10-29T19:57:41Z",
+"completed_at": "2026-10-29T20:09:40Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743813642,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b051",
+"conclusion": "success",
+"started_at": "2026-10-29T19:56:23Z",
+"completed_at": "2026-10-29T20:05:06Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743813938,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b060",
+"conclusion": "success",
+"started_at": "2026-10-29T20:00:51Z",
+"completed_at": "2026-10-29T20:11:24Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743813998,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b056",
+"conclusion": "success",
+"started_at": "2026-10-29T19:58:05Z",
+"completed_at": "2026-10-29T20:12:29Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743814303,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b058",
+"conclusion": "success",
+"started_at": "2026-10-29T19:59:47Z",
+"completed_at": "2026-10-29T20:05:53Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743814450,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b057",
+"conclusion": "success",
+"started_at": "2026-10-29T19:59:09Z",
+"completed_at": "2026-10-29T20:08:12Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743814520,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b059",
+"conclusion": "success",
+"started_at": "2026-10-29T20:00:26Z",
+"completed_at": "2026-10-29T20:07:13Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743814806,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b061",
+"conclusion": "success",
+"started_at": "2026-10-29T20:01:03Z",
+"completed_at": "2026-10-29T20:10:10Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743815089,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b063",
+"conclusion": "success",
+"started_at": "2026-10-29T20:01:59Z",
+"completed_at": "2026-10-29T20:11:06Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743815454,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b065",
+"conclusion": "success",
+"started_at": "2026-10-29T20:02:23Z",
+"completed_at": "2026-10-29T20:12:22Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743815616,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b067",
+"conclusion": "success",
+"started_at": "2026-10-29T20:02:46Z",
+"completed_at": "2026-10-29T20:10:46Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743815729,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b064",
+"conclusion": "success",
+"started_at": "2026-10-29T20:02:06Z",
+"completed_at": "2026-10-29T20:10:16Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743815744,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b068",
+"conclusion": "success",
+"started_at": "2026-10-29T20:02:57Z",
+"completed_at": "2026-10-29T20:11:01Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743815869,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b066",
+"conclusion": "success",
+"started_at": "2026-10-29T20:02:25Z",
+"completed_at": "2026-10-29T20:09:58Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743815944,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b062",
+"conclusion": "success",
+"started_at": "2026-10-29T20:01:37Z",
+"completed_at": "2026-10-29T20:09:31Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743816440,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b071",
+"conclusion": "success",
+"started_at": "2026-10-29T20:04:16Z",
+"completed_at": "2026-10-29T20:14:03Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743816569,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b069",
+"conclusion": "success",
+"started_at": "2026-10-29T20:03:51Z",
+"completed_at": "2026-10-29T20:11:35Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743816783,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b074",
+"conclusion": "success",
+"started_at": "2026-10-29T20:04:48Z",
+"completed_at": "2026-10-29T20:12:36Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743817029,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b070",
+"conclusion": "success",
+"started_at": "2026-10-29T20:03:54Z",
+"completed_at": "2026-10-29T20:09:40Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743817095,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b075",
+"conclusion": "success",
+"started_at": "2026-10-29T20:05:07Z",
+"completed_at": "2026-10-29T20:14:47Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743817143,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b072",
+"conclusion": "success",
+"started_at": "2026-10-29T20:04:39Z",
+"completed_at": "2026-10-29T20:12:00Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743817625,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b076",
+"conclusion": "success",
+"started_at": "2026-10-29T20:05:12Z",
+"completed_at": "2026-10-29T20:20:15Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743818059,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b073",
+"conclusion": "success",
+"started_at": "2026-10-29T20:04:40Z",
+"completed_at": "2026-10-29T20:13:28Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743818264,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b077",
+"conclusion": "success",
+"started_at": "2026-10-29T20:05:12Z",
+"completed_at": "2026-10-29T20:11:32Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743818418,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b078",
+"conclusion": "success",
+"started_at": "2026-10-29T20:05:47Z",
+"completed_at": "2026-10-29T20:10:41Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743819087,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b082",
+"conclusion": "success",
+"started_at": "2026-10-29T20:07:25Z",
+"completed_at": "2026-10-29T20:11:12Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743819411,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b083",
+"conclusion": "success",
+"started_at": "2026-10-29T20:07:28Z",
+"completed_at": "2026-10-29T20:13:27Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743819414,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b079",
+"conclusion": "success",
+"started_at": "2026-10-29T20:05:56Z",
+"completed_at": "2026-10-29T20:13:00Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743819514,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b084",
+"conclusion": "success",
+"started_at": "2026-10-29T20:07:43Z",
+"completed_at": "2026-10-29T20:13:27Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743819635,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b081",
+"conclusion": "success",
+"started_at": "2026-10-29T20:07:15Z",
+"completed_at": "2026-10-29T20:13:18Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743819694,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b080",
+"conclusion": "success",
+"started_at": "2026-10-29T20:06:22Z",
+"completed_at": "2026-10-29T20:11:33Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743820519,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b085",
+"conclusion": "success",
+"started_at": "2026-10-29T20:08:14Z",
+"completed_at": "2026-10-29T20:13:30Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743820692,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b089",
+"conclusion": "success",
+"started_at": "2026-10-29T20:10:00Z",
+"completed_at": "2026-10-29T20:14:20Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743821013,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b088",
+"conclusion": "success",
+"started_at": "2026-10-29T20:09:42Z",
+"completed_at": "2026-10-29T20:14:02Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743821067,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b086",
+"conclusion": "success",
+"started_at": "2026-10-29T20:09:33Z",
+"completed_at": "2026-10-29T20:13:15Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743821393,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b091",
+"conclusion": "success",
+"started_at": "2026-10-29T20:10:18Z",
+"completed_at": "2026-10-29T20:14:33Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743821407,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b094",
+"conclusion": "success",
+"started_at": "2026-10-29T20:11:03Z",
+"completed_at": "2026-10-29T20:15:15Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743821427,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b087",
+"conclusion": "success",
+"started_at": "2026-10-29T20:09:42Z",
+"completed_at": "2026-10-29T20:13:18Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743821446,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b090",
+"conclusion": "success",
+"started_at": "2026-10-29T20:10:12Z",
+"completed_at": "2026-10-29T20:14:50Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123743821753,
+"run_id": 40942811546,
+"run_attempt": 2,
+"name": "Option matrix: b092",
+"conclusion": "success",
+"started_at": "2026-10-29T20:10:43Z",
+"completed_at": "2026-10-29T20:15:13Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout",
+"conclusion": "success"
+},
+{
+"name": "Checkout, again",
+"conclusion": "skipped"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath",
+"conclusion": "success"
+},
+{
+"name": "Download the classpath, again",
+"conclusion": "skipped"
+},
+{
+"name": "Record the setup steps retried",
+"conclusion": "skipped"
+},
+{
+"name": "Unpack the classpath",
+"conclusion": "success"
+},
+{
+"name": "Run this bin's units",
+"conclusion": "success"
+},
+{
+"name": "Upload the bin's runs",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+}
+]
+}

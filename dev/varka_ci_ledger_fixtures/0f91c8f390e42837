@@ -1,0 +1,6 @@
+2026-10-18T17:34:31.4517219Z   defaults: - a projection's first query takes the row path and its next one the compiled kernel *** FAILED ***
+2026-10-18T17:34:31.4532958Z   defaults: - a columnar consumer's first write takes the row path and its next one the kernel *** FAILED ***
+2026-10-18T17:38:39.6853103Z   defaults: - a projection's first query takes the row path and its next one the compiled kernel *** FAILED ***
+2026-10-18T17:38:39.6863361Z   defaults: - a columnar consumer's first write takes the row path and its next one the kernel *** FAILED ***
+2026-10-18T17:42:48.3098205Z   defaults: - a projection's first query takes the row path and its next one the compiled kernel *** FAILED ***
+2026-10-18T17:42:48.3108505Z   defaults: - a columnar consumer's first write takes the row path and its next one the kernel *** FAILED ***

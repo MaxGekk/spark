@@ -1,0 +1,184 @@
+{
+"total_count": 54,
+"jobs": [
+{
+"id": 123726049007,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Base image build",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:35Z",
+"completed_at": "2026-10-29T20:19:04Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Login to GitHub Container Registry",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Set up QEMU",
+"conclusion": "success"
+},
+{
+"name": "Set up Docker Buildx",
+"conclusion": "success"
+},
+{
+"name": "Build and push (Documentation)",
+"conclusion": "skipped"
+},
+{
+"name": "Build and push (Linter)",
+"conclusion": "success"
+},
+{
+"name": "Build and push (SparkR)",
+"conclusion": "skipped"
+},
+{
+"name": "Build and push (PySpark with python-312)",
+"conclusion": "skipped"
+},
+{
+"name": "Post Build and push (Linter)",
+"conclusion": "success"
+},
+{
+"name": "Post Set up Docker Buildx",
+"conclusion": "success"
+},
+{
+"name": "Post Set up QEMU",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Post Login to GitHub Container Registry",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123726056925,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Run Spark UI tests",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:36Z",
+"completed_at": "2026-10-29T20:19:12Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Run actions/checkout@v7",
+"conclusion": "success"
+},
+{
+"name": "Use Node.js",
+"conclusion": "success"
+},
+{
+"name": "Run cd ui-test",
+"conclusion": "success"
+},
+{
+"name": "Post Use Node.js",
+"conclusion": "success"
+},
+{
+"name": "Post Run actions/checkout@v7",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123726065111,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Admit a full-matrix run",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:54:05Z",
+"completed_at": "2026-10-29T20:17:33Z",
+"steps": []
+},
+{
+"id": 123726068998,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Varka engine (aarch64)",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:38Z",
+"completed_at": "2026-10-29T20:19:15Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Build and test the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+}
+]
+}

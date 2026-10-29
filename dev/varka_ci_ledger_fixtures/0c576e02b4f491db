@@ -1,0 +1,2718 @@
+{
+"total_count": 54,
+"jobs": [
+{
+"id": 123706288452,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Check changes",
+"conclusion": "success",
+"started_at": "2026-10-29T20:15:37Z",
+"completed_at": "2026-10-29T20:17:33Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Check all modules",
+"conclusion": "success"
+},
+{
+"name": "Check envs",
+"conclusion": "success"
+},
+{
+"name": "Generate infra image URL (Documentation)",
+"conclusion": "success"
+},
+{
+"name": "Generate infra image URL (Linter)",
+"conclusion": "success"
+},
+{
+"name": "Generate infra image URL (SparkR)",
+"conclusion": "success"
+},
+{
+"name": "Generate infra image URL (PySpark python-312)",
+"conclusion": "success"
+},
+{
+"name": "Link the docker images",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123707319716,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Base image build",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:35Z",
+"completed_at": "2026-10-29T20:19:04Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Login to GitHub Container Registry",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Set up QEMU",
+"conclusion": "success"
+},
+{
+"name": "Set up Docker Buildx",
+"conclusion": "success"
+},
+{
+"name": "Build and push (Documentation)",
+"conclusion": "skipped"
+},
+{
+"name": "Build and push (Linter)",
+"conclusion": "success"
+},
+{
+"name": "Build and push (SparkR)",
+"conclusion": "skipped"
+},
+{
+"name": "Build and push (PySpark with python-312)",
+"conclusion": "skipped"
+},
+{
+"name": "Post Build and push (Linter)",
+"conclusion": "success"
+},
+{
+"name": "Post Set up Docker Buildx",
+"conclusion": "success"
+},
+{
+"name": "Post Set up QEMU",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Post Login to GitHub Container Registry",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123707319829,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Varka engine (x86_64)",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:35Z",
+"completed_at": "2026-10-29T20:19:30Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Build and test the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123707319851,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Varka bench drivers",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:35Z",
+"completed_at": "2026-10-29T20:19:48Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Cache Maven local repository",
+"conclusion": "success"
+},
+{
+"name": "Run the bench module's tests",
+"conclusion": "success"
+},
+{
+"name": "Post Cache Maven local repository",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123707319887,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Protobuf breaking change detection and Python CodeGen check",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:35Z",
+"completed_at": "2026-10-29T20:19:27Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Install Buf",
+"conclusion": "success"
+},
+{
+"name": "Protocol Buffers Linter",
+"conclusion": "success"
+},
+{
+"name": "Breaking change detection against branch-4.0",
+"conclusion": "success"
+},
+{
+"name": "Install Python 3.12",
+"conclusion": "success"
+},
+{
+"name": "Install dependencies for Python CodeGen check",
+"conclusion": "success"
+},
+{
+"name": "Python CodeGen check",
+"conclusion": "success"
+},
+{
+"name": "Post Install Python 3.12",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123707319966,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Varka assembly gate",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:35Z",
+"completed_at": "2026-10-29T20:24:06Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install the disassembler's build dependency",
+"conclusion": "success"
+},
+{
+"name": "Build hsdis",
+"conclusion": "success"
+},
+{
+"name": "Report the machine",
+"conclusion": "success"
+},
+{
+"name": "Assert the instructions",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123707320001,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Varka engine (aarch64)",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:38Z",
+"completed_at": "2026-10-29T20:19:15Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Build and test the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123707320142,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Run Spark UI tests",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:36Z",
+"completed_at": "2026-10-29T20:19:12Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Run actions/checkout@v7",
+"conclusion": "success"
+},
+{
+"name": "Use Node.js",
+"conclusion": "success"
+},
+{
+"name": "Run cd ui-test",
+"conclusion": "success"
+},
+{
+"name": "Post Use Node.js",
+"conclusion": "success"
+},
+{
+"name": "Post Run actions/checkout@v7",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123707320240,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Varka suites: catalyst 2 of 3",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:35Z",
+"completed_at": "2026-10-29T20:31:27Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Every lane and type is wired where no compiler checks",
+"conclusion": "skipped"
+},
+{
+"name": "Build the test classes for the option matrix",
+"conclusion": "skipped"
+},
+{
+"name": "Upload the test classes for the option matrix",
+"conclusion": "skipped"
+},
+{
+"name": "Remove the archive of the test classes",
+"conclusion": "skipped"
+},
+{
+"name": "Run the Varka suites of catalyst, 2 of 3",
+"conclusion": "success"
+},
+{
+"name": "Upload the record of which configurations move each test",
+"conclusion": "skipped"
+},
+{
+"name": "Upload the Varka suites' JUnit reports",
+"conclusion": "success"
+},
+{
+"name": "The emitted-bytes oracle's verdict",
+"conclusion": "success"
+},
+{
+"name": "The Varka suites of catalyst under one emit option configuration",
+"conclusion": "success"
+},
+{
+"name": "The new tests of catalyst, rerun five times",
+"conclusion": "success"
+},
+{
+"name": "A fix's new tests of catalyst fail on the merge base",
+"conclusion": "success"
+},
+{
+"name": "Post Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Post Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123707320249,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Varka suites: sql 1 of 3",
+"conclusion": "failure",
+"started_at": "2026-10-29T20:17:35Z",
+"completed_at": "2026-10-29T20:34:59Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Every lane and type is wired where no compiler checks",
+"conclusion": "skipped"
+},
+{
+"name": "Build the test classes for the option matrix",
+"conclusion": "success"
+},
+{
+"name": "Upload the test classes for the option matrix",
+"conclusion": "success"
+},
+{
+"name": "Remove the archive of the test classes",
+"conclusion": "success"
+},
+{
+"name": "Run the Varka suites of sql, 1 of 3",
+"conclusion": "success"
+},
+{
+"name": "Upload the record of which configurations move each test",
+"conclusion": "success"
+},
+{
+"name": "Upload the Varka suites' JUnit reports",
+"conclusion": "failure"
+},
+{
+"name": "The emitted-bytes oracle's verdict",
+"conclusion": "skipped"
+},
+{
+"name": "The Varka suites of sql under one emit option configuration",
+"conclusion": "skipped"
+},
+{
+"name": "The new tests of sql, rerun five times",
+"conclusion": "skipped"
+},
+{
+"name": "A fix's new tests of sql fail on the merge base",
+"conclusion": "skipped"
+},
+{
+"name": "Post Cache the Varka suites' times",
+"conclusion": "skipped"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Cache Coursier local repository",
+"conclusion": "skipped"
+},
+{
+"name": "Post Cache SBT and Maven",
+"conclusion": "skipped"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123707320321,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Varka suites: catalyst 1 of 3",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:36Z",
+"completed_at": "2026-10-29T20:35:09Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Every lane and type is wired where no compiler checks",
+"conclusion": "success"
+},
+{
+"name": "Build the test classes for the option matrix",
+"conclusion": "skipped"
+},
+{
+"name": "Upload the test classes for the option matrix",
+"conclusion": "skipped"
+},
+{
+"name": "Remove the archive of the test classes",
+"conclusion": "skipped"
+},
+{
+"name": "Run the Varka suites of catalyst, 1 of 3",
+"conclusion": "success"
+},
+{
+"name": "Upload the record of which configurations move each test",
+"conclusion": "skipped"
+},
+{
+"name": "Upload the Varka suites' JUnit reports",
+"conclusion": "success"
+},
+{
+"name": "The emitted-bytes oracle's verdict",
+"conclusion": "success"
+},
+{
+"name": "The Varka suites of catalyst under one emit option configuration",
+"conclusion": "success"
+},
+{
+"name": "The new tests of catalyst, rerun five times",
+"conclusion": "success"
+},
+{
+"name": "A fix's new tests of catalyst fail on the merge base",
+"conclusion": "success"
+},
+{
+"name": "Post Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Post Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123707320393,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Varka suites: catalyst 3 of 3",
+"conclusion": "failure",
+"started_at": "2026-10-29T20:17:35Z",
+"completed_at": "2026-10-29T20:34:47Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Every lane and type is wired where no compiler checks",
+"conclusion": "skipped"
+},
+{
+"name": "Build the test classes for the option matrix",
+"conclusion": "skipped"
+},
+{
+"name": "Upload the test classes for the option matrix",
+"conclusion": "skipped"
+},
+{
+"name": "Remove the archive of the test classes",
+"conclusion": "skipped"
+},
+{
+"name": "Run the Varka suites of catalyst, 3 of 3",
+"conclusion": "success"
+},
+{
+"name": "Upload the record of which configurations move each test",
+"conclusion": "skipped"
+},
+{
+"name": "Upload the Varka suites' JUnit reports",
+"conclusion": "failure"
+},
+{
+"name": "The emitted-bytes oracle's verdict",
+"conclusion": "skipped"
+},
+{
+"name": "The Varka suites of catalyst under one emit option configuration",
+"conclusion": "skipped"
+},
+{
+"name": "The new tests of catalyst, rerun five times",
+"conclusion": "skipped"
+},
+{
+"name": "A fix's new tests of catalyst fail on the merge base",
+"conclusion": "skipped"
+},
+{
+"name": "Post Cache the Varka suites' times",
+"conclusion": "skipped"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Cache Coursier local repository",
+"conclusion": "skipped"
+},
+{
+"name": "Post Cache SBT and Maven",
+"conclusion": "skipped"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123707320425,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Varka suites: sql 2 of 3",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:35Z",
+"completed_at": "2026-10-29T20:38:17Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Every lane and type is wired where no compiler checks",
+"conclusion": "skipped"
+},
+{
+"name": "Build the test classes for the option matrix",
+"conclusion": "skipped"
+},
+{
+"name": "Upload the test classes for the option matrix",
+"conclusion": "skipped"
+},
+{
+"name": "Remove the archive of the test classes",
+"conclusion": "skipped"
+},
+{
+"name": "Run the Varka suites of sql, 2 of 3",
+"conclusion": "success"
+},
+{
+"name": "Upload the record of which configurations move each test",
+"conclusion": "success"
+},
+{
+"name": "Upload the Varka suites' JUnit reports",
+"conclusion": "success"
+},
+{
+"name": "The emitted-bytes oracle's verdict",
+"conclusion": "skipped"
+},
+{
+"name": "The Varka suites of sql under one emit option configuration",
+"conclusion": "success"
+},
+{
+"name": "The new tests of sql, rerun five times",
+"conclusion": "success"
+},
+{
+"name": "A fix's new tests of sql fail on the merge base",
+"conclusion": "success"
+},
+{
+"name": "Post Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Post Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123707320446,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Varka docs checks",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:36Z",
+"completed_at": "2026-10-29T20:18:34Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout the branch with its full history",
+"conclusion": "success"
+},
+{
+"name": "Every quoted number traces to a committed results file",
+"conclusion": "success"
+},
+{
+"name": "SKILLS.md's index matches the lesson files",
+"conclusion": "success"
+},
+{
+"name": "The census and the cast matrix match their inputs",
+"conclusion": "success"
+},
+{
+"name": "Nothing cites a moved catalogue path",
+"conclusion": "success"
+},
+{
+"name": "Every lane and type is wired where no compiler checks",
+"conclusion": "success"
+},
+{
+"name": "The milestone's records match the tree",
+"conclusion": "success"
+},
+{
+"name": "The scheduled-failure reporter's issue and comment decisions",
+"conclusion": "success"
+},
+{
+"name": "The CI queue's admission decision, over recorded API responses",
+"conclusion": "success"
+},
+{
+"name": "The step-time budget's tool, over recorded API responses",
+"conclusion": "success"
+},
+{
+"name": "The house rules' checks pass their own cases",
+"conclusion": "success"
+},
+{
+"name": "The branch's commit messages and its pull request follow the house rules",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout the branch with its full history",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123707320501,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Varka suites: sql 3 of 3",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:35Z",
+"completed_at": "2026-10-29T20:36:00Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Every lane and type is wired where no compiler checks",
+"conclusion": "skipped"
+},
+{
+"name": "Build the test classes for the option matrix",
+"conclusion": "skipped"
+},
+{
+"name": "Upload the test classes for the option matrix",
+"conclusion": "skipped"
+},
+{
+"name": "Remove the archive of the test classes",
+"conclusion": "skipped"
+},
+{
+"name": "Run the Varka suites of sql, 3 of 3",
+"conclusion": "success"
+},
+{
+"name": "Upload the record of which configurations move each test",
+"conclusion": "success"
+},
+{
+"name": "Upload the Varka suites' JUnit reports",
+"conclusion": "success"
+},
+{
+"name": "The emitted-bytes oracle's verdict",
+"conclusion": "skipped"
+},
+{
+"name": "The Varka suites of sql under one emit option configuration",
+"conclusion": "success"
+},
+{
+"name": "The new tests of sql, rerun five times",
+"conclusion": "success"
+},
+{
+"name": "A fix's new tests of sql fail on the merge base",
+"conclusion": "success"
+},
+{
+"name": "Post Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Post Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123707322606,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Java 25 build with Maven",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:17:33Z",
+"completed_at": "2026-10-29T20:17:33Z",
+"steps": []
+},
+{
+"id": 123707323779,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Admit a full-matrix run",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:17:34Z",
+"completed_at": "2026-10-29T20:17:33Z",
+"steps": []
+},
+{
+"id": 123707324389,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Precompile Spark",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:17:34Z",
+"completed_at": "2026-10-29T20:17:33Z",
+"steps": []
+},
+{
+"id": 123707324411,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Run OIDC E2E integration tests (Minikube + moto)",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:17:34Z",
+"completed_at": "2026-10-29T20:17:33Z",
+"steps": []
+},
+{
+"id": 123707324557,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Build modules: ${{ matrix.modules }} ${{ matrix.comment }}",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:17:34Z",
+"completed_at": "2026-10-29T20:17:33Z",
+"steps": []
+},
+{
+"id": 123707324898,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Run Spark on Kubernetes Integration test",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:17:34Z",
+"completed_at": "2026-10-29T20:17:33Z",
+"steps": []
+},
+{
+"id": 123707325126,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Run TPC-DS queries with SF=1",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:17:34Z",
+"completed_at": "2026-10-29T20:17:33Z",
+"steps": []
+},
+{
+"id": 123707325767,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Run Docker integration tests",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:17:34Z",
+"completed_at": "2026-10-29T20:17:33Z",
+"steps": []
+},
+{
+"id": 123708100222,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Linters, licenses, and dependencies",
+"conclusion": "success",
+"started_at": "2026-10-29T20:19:06Z",
+"completed_at": "2026-10-29T20:33:48Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Initialize containers",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "License test",
+"conclusion": "success"
+},
+{
+"name": "Dependencies test",
+"conclusion": "skipped"
+},
+{
+"name": "MIMA test",
+"conclusion": "skipped"
+},
+{
+"name": "Scala linter",
+"conclusion": "success"
+},
+{
+"name": "Config binding policy exceptions check",
+"conclusion": "success"
+},
+{
+"name": "Scala structured logging check",
+"conclusion": "success"
+},
+{
+"name": "Java linter",
+"conclusion": "success"
+},
+{
+"name": "Varka proofs",
+"conclusion": "success"
+},
+{
+"name": "Error Prone and NullAway over Varka's Java",
+"conclusion": "skipped"
+},
+{
+"name": "Spark connect jvm client mima check",
+"conclusion": "skipped"
+},
+{
+"name": "List Python packages",
+"conclusion": "success"
+},
+{
+"name": "Python linter",
+"conclusion": "success"
+},
+{
+"name": "JS linter",
+"conclusion": "success"
+},
+{
+"name": "Install R linter dependencies and SparkR",
+"conclusion": "skipped"
+},
+{
+"name": "R linter",
+"conclusion": "skipped"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Stop containers",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123708102615,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Build modules: ${{ matrix.modules }}",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:19:04Z",
+"completed_at": "2026-10-29T20:19:04Z",
+"steps": []
+},
+{
+"id": 123708102909,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Build modules: sparkr",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:19:04Z",
+"completed_at": "2026-10-29T20:19:04Z",
+"steps": []
+},
+{
+"id": 123708103344,
+"run_id": 40947407586,
+"run_attempt": 1,
+"name": "Run / Documentation generation",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:19:04Z",
+"completed_at": "2026-10-29T20:19:04Z",
+"steps": []
+},
+{
+"id": 123725986129,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Varka suites: catalyst 3 of 3",
+"conclusion": "success",
+"started_at": "2026-10-29T20:53:57Z",
+"completed_at": "2026-10-29T21:14:06Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Every lane and type is wired where no compiler checks",
+"conclusion": "skipped"
+},
+{
+"name": "Build the test classes for the option matrix",
+"conclusion": "skipped"
+},
+{
+"name": "Upload the test classes for the option matrix",
+"conclusion": "skipped"
+},
+{
+"name": "Remove the archive of the test classes",
+"conclusion": "skipped"
+},
+{
+"name": "Run the Varka suites of catalyst, 3 of 3",
+"conclusion": "success"
+},
+{
+"name": "Upload the record of which configurations move each test",
+"conclusion": "skipped"
+},
+{
+"name": "Upload the Varka suites' JUnit reports",
+"conclusion": "success"
+},
+{
+"name": "The emitted-bytes oracle's verdict",
+"conclusion": "success"
+},
+{
+"name": "The Varka suites of catalyst under one emit option configuration",
+"conclusion": "success"
+},
+{
+"name": "The new tests of catalyst, rerun five times",
+"conclusion": "success"
+},
+{
+"name": "A fix's new tests of catalyst fail on the merge base",
+"conclusion": "success"
+},
+{
+"name": "Post Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Post Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123725986585,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Check changes",
+"conclusion": "success",
+"started_at": "2026-10-29T20:15:37Z",
+"completed_at": "2026-10-29T20:17:33Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Check all modules",
+"conclusion": "success"
+},
+{
+"name": "Check envs",
+"conclusion": "success"
+},
+{
+"name": "Generate infra image URL (Documentation)",
+"conclusion": "success"
+},
+{
+"name": "Generate infra image URL (Linter)",
+"conclusion": "success"
+},
+{
+"name": "Generate infra image URL (SparkR)",
+"conclusion": "success"
+},
+{
+"name": "Generate infra image URL (PySpark python-312)",
+"conclusion": "success"
+},
+{
+"name": "Link the docker images",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123725986610,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Varka suites: sql 1 of 3",
+"conclusion": "success",
+"started_at": "2026-10-29T20:53:58Z",
+"completed_at": "2026-10-29T21:14:04Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Every lane and type is wired where no compiler checks",
+"conclusion": "skipped"
+},
+{
+"name": "Build the test classes for the option matrix",
+"conclusion": "success"
+},
+{
+"name": "Upload the test classes for the option matrix",
+"conclusion": "success"
+},
+{
+"name": "Remove the archive of the test classes",
+"conclusion": "success"
+},
+{
+"name": "Run the Varka suites of sql, 1 of 3",
+"conclusion": "success"
+},
+{
+"name": "Upload the record of which configurations move each test",
+"conclusion": "success"
+},
+{
+"name": "Upload the Varka suites' JUnit reports",
+"conclusion": "success"
+},
+{
+"name": "The emitted-bytes oracle's verdict",
+"conclusion": "skipped"
+},
+{
+"name": "The Varka suites of sql under one emit option configuration",
+"conclusion": "success"
+},
+{
+"name": "The new tests of sql, rerun five times",
+"conclusion": "success"
+},
+{
+"name": "A fix's new tests of sql fail on the merge base",
+"conclusion": "success"
+},
+{
+"name": "Post Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Post Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123725987566,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Varka suites: sql 2 of 3",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:35Z",
+"completed_at": "2026-10-29T20:38:17Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Every lane and type is wired where no compiler checks",
+"conclusion": "skipped"
+},
+{
+"name": "Build the test classes for the option matrix",
+"conclusion": "skipped"
+},
+{
+"name": "Upload the test classes for the option matrix",
+"conclusion": "skipped"
+},
+{
+"name": "Remove the archive of the test classes",
+"conclusion": "skipped"
+},
+{
+"name": "Run the Varka suites of sql, 2 of 3",
+"conclusion": "success"
+},
+{
+"name": "Upload the record of which configurations move each test",
+"conclusion": "success"
+},
+{
+"name": "Upload the Varka suites' JUnit reports",
+"conclusion": "success"
+},
+{
+"name": "The emitted-bytes oracle's verdict",
+"conclusion": "skipped"
+},
+{
+"name": "The Varka suites of sql under one emit option configuration",
+"conclusion": "success"
+},
+{
+"name": "The new tests of sql, rerun five times",
+"conclusion": "success"
+},
+{
+"name": "A fix's new tests of sql fail on the merge base",
+"conclusion": "success"
+},
+{
+"name": "Post Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Post Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123725987643,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Varka engine (x86_64)",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:35Z",
+"completed_at": "2026-10-29T20:19:30Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Build and test the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123725987773,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Varka suites: sql 3 of 3",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:35Z",
+"completed_at": "2026-10-29T20:36:00Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Every lane and type is wired where no compiler checks",
+"conclusion": "skipped"
+},
+{
+"name": "Build the test classes for the option matrix",
+"conclusion": "skipped"
+},
+{
+"name": "Upload the test classes for the option matrix",
+"conclusion": "skipped"
+},
+{
+"name": "Remove the archive of the test classes",
+"conclusion": "skipped"
+},
+{
+"name": "Run the Varka suites of sql, 3 of 3",
+"conclusion": "success"
+},
+{
+"name": "Upload the record of which configurations move each test",
+"conclusion": "success"
+},
+{
+"name": "Upload the Varka suites' JUnit reports",
+"conclusion": "success"
+},
+{
+"name": "The emitted-bytes oracle's verdict",
+"conclusion": "skipped"
+},
+{
+"name": "The Varka suites of sql under one emit option configuration",
+"conclusion": "success"
+},
+{
+"name": "The new tests of sql, rerun five times",
+"conclusion": "success"
+},
+{
+"name": "A fix's new tests of sql fail on the merge base",
+"conclusion": "success"
+},
+{
+"name": "Post Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Post Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123725987887,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Java 25 build with Maven",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:53:55Z",
+"completed_at": "2026-10-29T20:17:33Z",
+"steps": []
+},
+{
+"id": 123725987925,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Varka docs checks",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:36Z",
+"completed_at": "2026-10-29T20:18:34Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout the branch with its full history",
+"conclusion": "success"
+},
+{
+"name": "Every quoted number traces to a committed results file",
+"conclusion": "success"
+},
+{
+"name": "SKILLS.md's index matches the lesson files",
+"conclusion": "success"
+},
+{
+"name": "The census and the cast matrix match their inputs",
+"conclusion": "success"
+},
+{
+"name": "Nothing cites a moved catalogue path",
+"conclusion": "success"
+},
+{
+"name": "Every lane and type is wired where no compiler checks",
+"conclusion": "success"
+},
+{
+"name": "The milestone's records match the tree",
+"conclusion": "success"
+},
+{
+"name": "The scheduled-failure reporter's issue and comment decisions",
+"conclusion": "success"
+},
+{
+"name": "The CI queue's admission decision, over recorded API responses",
+"conclusion": "success"
+},
+{
+"name": "The step-time budget's tool, over recorded API responses",
+"conclusion": "success"
+},
+{
+"name": "The house rules' checks pass their own cases",
+"conclusion": "success"
+},
+{
+"name": "The branch's commit messages and its pull request follow the house rules",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout the branch with its full history",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123725988034,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Varka suites: catalyst 2 of 3",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:35Z",
+"completed_at": "2026-10-29T20:31:27Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Every lane and type is wired where no compiler checks",
+"conclusion": "skipped"
+},
+{
+"name": "Build the test classes for the option matrix",
+"conclusion": "skipped"
+},
+{
+"name": "Upload the test classes for the option matrix",
+"conclusion": "skipped"
+},
+{
+"name": "Remove the archive of the test classes",
+"conclusion": "skipped"
+},
+{
+"name": "Run the Varka suites of catalyst, 2 of 3",
+"conclusion": "success"
+},
+{
+"name": "Upload the record of which configurations move each test",
+"conclusion": "skipped"
+},
+{
+"name": "Upload the Varka suites' JUnit reports",
+"conclusion": "success"
+},
+{
+"name": "The emitted-bytes oracle's verdict",
+"conclusion": "success"
+},
+{
+"name": "The Varka suites of catalyst under one emit option configuration",
+"conclusion": "success"
+},
+{
+"name": "The new tests of catalyst, rerun five times",
+"conclusion": "success"
+},
+{
+"name": "A fix's new tests of catalyst fail on the merge base",
+"conclusion": "success"
+},
+{
+"name": "Post Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Post Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123725988091,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Linters, licenses, and dependencies",
+"conclusion": "success",
+"started_at": "2026-10-29T20:19:06Z",
+"completed_at": "2026-10-29T20:33:48Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Initialize containers",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "License test",
+"conclusion": "success"
+},
+{
+"name": "Dependencies test",
+"conclusion": "skipped"
+},
+{
+"name": "MIMA test",
+"conclusion": "skipped"
+},
+{
+"name": "Scala linter",
+"conclusion": "success"
+},
+{
+"name": "Config binding policy exceptions check",
+"conclusion": "success"
+},
+{
+"name": "Scala structured logging check",
+"conclusion": "success"
+},
+{
+"name": "Java linter",
+"conclusion": "success"
+},
+{
+"name": "Varka proofs",
+"conclusion": "success"
+},
+{
+"name": "Error Prone and NullAway over Varka's Java",
+"conclusion": "skipped"
+},
+{
+"name": "Spark connect jvm client mima check",
+"conclusion": "skipped"
+},
+{
+"name": "List Python packages",
+"conclusion": "success"
+},
+{
+"name": "Python linter",
+"conclusion": "success"
+},
+{
+"name": "JS linter",
+"conclusion": "success"
+},
+{
+"name": "Install R linter dependencies and SparkR",
+"conclusion": "skipped"
+},
+{
+"name": "R linter",
+"conclusion": "skipped"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Stop containers",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123725988239,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Varka suites: catalyst 1 of 3",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:36Z",
+"completed_at": "2026-10-29T20:35:09Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Every lane and type is wired where no compiler checks",
+"conclusion": "success"
+},
+{
+"name": "Build the test classes for the option matrix",
+"conclusion": "skipped"
+},
+{
+"name": "Upload the test classes for the option matrix",
+"conclusion": "skipped"
+},
+{
+"name": "Remove the archive of the test classes",
+"conclusion": "skipped"
+},
+{
+"name": "Run the Varka suites of catalyst, 1 of 3",
+"conclusion": "success"
+},
+{
+"name": "Upload the record of which configurations move each test",
+"conclusion": "skipped"
+},
+{
+"name": "Upload the Varka suites' JUnit reports",
+"conclusion": "success"
+},
+{
+"name": "The emitted-bytes oracle's verdict",
+"conclusion": "success"
+},
+{
+"name": "The Varka suites of catalyst under one emit option configuration",
+"conclusion": "success"
+},
+{
+"name": "The new tests of catalyst, rerun five times",
+"conclusion": "success"
+},
+{
+"name": "A fix's new tests of catalyst fail on the merge base",
+"conclusion": "success"
+},
+{
+"name": "Post Cache the Varka suites' times",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Cache Coursier local repository",
+"conclusion": "success"
+},
+{
+"name": "Post Cache SBT and Maven",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123725988945,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Documentation generation",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:53:56Z",
+"completed_at": "2026-10-29T20:19:04Z",
+"steps": []
+},
+{
+"id": 123725989867,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Precompile Spark",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:53:56Z",
+"completed_at": "2026-10-29T20:17:33Z",
+"steps": []
+},
+{
+"id": 123725990000,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Run Spark on Kubernetes Integration test",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:53:56Z",
+"completed_at": "2026-10-29T20:17:33Z",
+"steps": []
+},
+{
+"id": 123725990082,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Run TPC-DS queries with SF=1",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:53:56Z",
+"completed_at": "2026-10-29T20:17:33Z",
+"steps": []
+},
+{
+"id": 123725990446,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Run Docker integration tests",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:53:56Z",
+"completed_at": "2026-10-29T20:17:33Z",
+"steps": []
+},
+{
+"id": 123725990462,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Build modules: sparkr",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:53:56Z",
+"completed_at": "2026-10-29T20:19:04Z",
+"steps": []
+},
+{
+"id": 123725990486,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Run OIDC E2E integration tests (Minikube + moto)",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:53:56Z",
+"completed_at": "2026-10-29T20:17:33Z",
+"steps": []
+},
+{
+"id": 123725990535,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Build modules: ${{ matrix.modules }}",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:53:56Z",
+"completed_at": "2026-10-29T20:19:04Z",
+"steps": []
+},
+{
+"id": 123725990786,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Build modules: ${{ matrix.modules }} ${{ matrix.comment }}",
+"conclusion": "skipped",
+"started_at": "2026-10-29T20:53:56Z",
+"completed_at": "2026-10-29T20:17:33Z",
+"steps": []
+},
+{
+"id": 123726031590,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Varka assembly gate",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:35Z",
+"completed_at": "2026-10-29T20:24:06Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install the disassembler's build dependency",
+"conclusion": "success"
+},
+{
+"name": "Build hsdis",
+"conclusion": "success"
+},
+{
+"name": "Report the machine",
+"conclusion": "success"
+},
+{
+"name": "Assert the instructions",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123726039601,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Protobuf breaking change detection and Python CodeGen check",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:35Z",
+"completed_at": "2026-10-29T20:19:27Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Install Buf",
+"conclusion": "success"
+},
+{
+"name": "Protocol Buffers Linter",
+"conclusion": "success"
+},
+{
+"name": "Breaking change detection against branch-4.0",
+"conclusion": "success"
+},
+{
+"name": "Install Python 3.12",
+"conclusion": "success"
+},
+{
+"name": "Install dependencies for Python CodeGen check",
+"conclusion": "success"
+},
+{
+"name": "Python CodeGen check",
+"conclusion": "success"
+},
+{
+"name": "Post Install Python 3.12",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 123726044354,
+"run_id": 40947407586,
+"run_attempt": 2,
+"name": "Run / Varka bench drivers",
+"conclusion": "success",
+"started_at": "2026-10-29T20:17:35Z",
+"completed_at": "2026-10-29T20:19:48Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Cache Maven local repository",
+"conclusion": "success"
+},
+{
+"name": "Run the bench module's tests",
+"conclusion": "success"
+},
+{
+"name": "Post Cache Maven local repository",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+}
+]
+}

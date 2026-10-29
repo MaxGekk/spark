@@ -1,0 +1,2927 @@
+{
+"total_count": 41,
+"jobs": [
+{
+"id": 120679761737,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Check changes",
+"conclusion": "success",
+"started_at": "2026-10-23T22:06:46Z",
+"completed_at": "2026-10-23T22:08:54Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Check all modules",
+"conclusion": "success"
+},
+{
+"name": "Check envs",
+"conclusion": "success"
+},
+{
+"name": "Generate infra image URL (Documentation)",
+"conclusion": "success"
+},
+{
+"name": "Generate infra image URL (Linter)",
+"conclusion": "success"
+},
+{
+"name": "Generate infra image URL (SparkR)",
+"conclusion": "success"
+},
+{
+"name": "Generate infra image URL (PySpark python-312)",
+"conclusion": "success"
+},
+{
+"name": "Link the docker images",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120681244268,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Protobuf breaking change detection and Python CodeGen check",
+"conclusion": "success",
+"started_at": "2026-10-23T22:08:57Z",
+"completed_at": "2026-10-23T22:10:48Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Install Buf",
+"conclusion": "success"
+},
+{
+"name": "Protocol Buffers Linter",
+"conclusion": "success"
+},
+{
+"name": "Breaking change detection against branch-4.0",
+"conclusion": "success"
+},
+{
+"name": "Install Python 3.12",
+"conclusion": "success"
+},
+{
+"name": "Install dependencies for Python CodeGen check",
+"conclusion": "success"
+},
+{
+"name": "Python CodeGen check",
+"conclusion": "success"
+},
+{
+"name": "Post Install Python 3.12",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120681244280,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Java 25 build with Maven",
+"conclusion": "success",
+"started_at": "2026-10-23T22:08:56Z",
+"completed_at": "2026-10-23T22:54:47Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Run actions/checkout@v7",
+"conclusion": "success"
+},
+{
+"name": "Run actions/setup-java@v6",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "Build with Maven",
+"conclusion": "success"
+},
+{
+"name": "Post Run actions/setup-java@v6",
+"conclusion": "success"
+},
+{
+"name": "Post Run actions/checkout@v7",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120681244320,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Base image build",
+"conclusion": "success",
+"started_at": "2026-10-23T22:08:56Z",
+"completed_at": "2026-10-23T22:14:30Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Login to GitHub Container Registry",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Set up QEMU",
+"conclusion": "success"
+},
+{
+"name": "Set up Docker Buildx",
+"conclusion": "success"
+},
+{
+"name": "Build and push (Documentation)",
+"conclusion": "success"
+},
+{
+"name": "Build and push (Linter)",
+"conclusion": "success"
+},
+{
+"name": "Build and push (SparkR)",
+"conclusion": "skipped"
+},
+{
+"name": "Build and push (PySpark with python-312)",
+"conclusion": "success"
+},
+{
+"name": "Post Build and push (PySpark with python-312)",
+"conclusion": "success"
+},
+{
+"name": "Post Build and push (Linter)",
+"conclusion": "success"
+},
+{
+"name": "Post Build and push (Documentation)",
+"conclusion": "success"
+},
+{
+"name": "Post Set up Docker Buildx",
+"conclusion": "success"
+},
+{
+"name": "Post Set up QEMU",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Post Login to GitHub Container Registry",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120681244346,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Varka engine (aarch64)",
+"conclusion": "success",
+"started_at": "2026-10-23T22:08:59Z",
+"completed_at": "2026-10-23T22:10:42Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Build and test the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120681244361,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Varka engine (x86_64)",
+"conclusion": "success",
+"started_at": "2026-10-23T22:08:57Z",
+"completed_at": "2026-10-23T22:10:28Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Build and test the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120681244364,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Varka docs checks",
+"conclusion": "success",
+"started_at": "2026-10-23T22:08:57Z",
+"completed_at": "2026-10-23T22:09:45Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout the branch with its full history",
+"conclusion": "success"
+},
+{
+"name": "Every quoted number traces to a committed results file",
+"conclusion": "success"
+},
+{
+"name": "SKILLS.md's index matches the lesson files",
+"conclusion": "success"
+},
+{
+"name": "The census and the cast matrix match their inputs",
+"conclusion": "success"
+},
+{
+"name": "Nothing cites a moved catalogue path",
+"conclusion": "success"
+},
+{
+"name": "Every lane and type is wired where no compiler checks",
+"conclusion": "success"
+},
+{
+"name": "The milestone's records match the tree",
+"conclusion": "success"
+},
+{
+"name": "The scheduled-failure reporter's issue and comment decisions",
+"conclusion": "success"
+},
+{
+"name": "The CI queue's admission decision, over recorded API responses",
+"conclusion": "success"
+},
+{
+"name": "The step-time budget's tool, over recorded API responses",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout the branch with its full history",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120681244397,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Varka assembly gate",
+"conclusion": "success",
+"started_at": "2026-10-23T22:08:57Z",
+"completed_at": "2026-10-23T22:15:14Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Install the disassembler's build dependency",
+"conclusion": "success"
+},
+{
+"name": "Build hsdis",
+"conclusion": "success"
+},
+{
+"name": "Report the machine",
+"conclusion": "success"
+},
+{
+"name": "Assert the instructions",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120681244443,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Admit a full-matrix run",
+"conclusion": "success",
+"started_at": "2026-10-23T22:08:57Z",
+"completed_at": "2026-10-23T22:09:05Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Checkout the admission script",
+"conclusion": "success"
+},
+{
+"name": "Wait while another full-matrix run is ahead",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout the admission script",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120681244459,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Run Spark UI tests",
+"conclusion": "failure",
+"started_at": "2026-10-23T22:08:58Z",
+"completed_at": "2026-10-23T22:10:29Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Run actions/checkout@v7",
+"conclusion": "success"
+},
+{
+"name": "Use Node.js",
+"conclusion": "success"
+},
+{
+"name": "Run cd ui-test",
+"conclusion": "failure"
+},
+{
+"name": "Post Use Node.js",
+"conclusion": "skipped"
+},
+{
+"name": "Post Run actions/checkout@v7",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120681246701,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Varka suites: ${{ matrix.module }} ${{ matrix.part }}",
+"conclusion": "skipped",
+"started_at": "2026-10-23T22:08:55Z",
+"completed_at": "2026-10-23T22:08:54Z",
+"steps": []
+},
+{
+"id": 120681247393,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Varka bench drivers",
+"conclusion": "success",
+"started_at": "2026-10-23T22:08:59Z",
+"completed_at": "2026-10-23T22:11:03Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Cache Maven local repository",
+"conclusion": "success"
+},
+{
+"name": "Run the bench module's tests",
+"conclusion": "success"
+},
+{
+"name": "Post Cache Maven local repository",
+"conclusion": "success"
+},
+{
+"name": "Post Install Java 25",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120681313441,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Precompile Spark",
+"conclusion": "success",
+"started_at": "2026-10-23T22:09:07Z",
+"completed_at": "2026-10-23T22:22:29Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "Build Spark",
+"conclusion": "success"
+},
+{
+"name": "Package compile output",
+"conclusion": "success"
+},
+{
+"name": "Upload compile artifact",
+"conclusion": "success"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120683297926,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Documentation generation",
+"conclusion": "success",
+"started_at": "2026-10-23T22:14:33Z",
+"completed_at": "2026-10-23T22:42:00Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Initialize containers",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "List Python packages",
+"conclusion": "success"
+},
+{
+"name": "Install dependencies for documentation generation",
+"conclusion": "success"
+},
+{
+"name": "Run documentation build",
+"conclusion": "success"
+},
+{
+"name": "Tar documentation",
+"conclusion": "success"
+},
+{
+"name": "Upload documentation",
+"conclusion": "success"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Stop containers",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120683297948,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Linters, licenses, and dependencies",
+"conclusion": "success",
+"started_at": "2026-10-23T22:14:33Z",
+"completed_at": "2026-10-23T22:43:39Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Initialize containers",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "License test",
+"conclusion": "success"
+},
+{
+"name": "Dependencies test",
+"conclusion": "success"
+},
+{
+"name": "MIMA test",
+"conclusion": "success"
+},
+{
+"name": "Scala linter",
+"conclusion": "success"
+},
+{
+"name": "Config binding policy exceptions check",
+"conclusion": "success"
+},
+{
+"name": "Scala structured logging check",
+"conclusion": "success"
+},
+{
+"name": "Java linter",
+"conclusion": "success"
+},
+{
+"name": "Varka proofs",
+"conclusion": "success"
+},
+{
+"name": "Error Prone and NullAway over Varka's Java",
+"conclusion": "success"
+},
+{
+"name": "Spark connect jvm client mima check",
+"conclusion": "success"
+},
+{
+"name": "List Python packages",
+"conclusion": "success"
+},
+{
+"name": "Python linter",
+"conclusion": "success"
+},
+{
+"name": "JS linter",
+"conclusion": "success"
+},
+{
+"name": "Install R linter dependencies and SparkR",
+"conclusion": "success"
+},
+{
+"name": "R linter",
+"conclusion": "success"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Stop containers",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686197790,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Run Docker integration tests",
+"conclusion": "success",
+"started_at": "2026-10-23T22:22:32Z",
+"completed_at": "2026-10-23T23:55:52Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "success"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686197851,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Run TPC-DS queries with SF=1",
+"conclusion": "success",
+"started_at": "2026-10-23T22:22:31Z",
+"completed_at": "2026-10-23T23:12:12Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Cache TPC-DS generated data",
+"conclusion": "success"
+},
+{
+"name": "Checkout tpcds-kit repository",
+"conclusion": "success"
+},
+{
+"name": "Build tpcds-kit",
+"conclusion": "success"
+},
+{
+"name": "Generate TPC-DS (SF=1) table data",
+"conclusion": "success"
+},
+{
+"name": "Run TPC-DS queries (Sort merge join)",
+"conclusion": "success"
+},
+{
+"name": "Run TPC-DS queries (Broadcast hash join)",
+"conclusion": "success"
+},
+{
+"name": "Run TPC-DS queries (Shuffled hash join)",
+"conclusion": "success"
+},
+{
+"name": "Run TPC-DS queries on collated data",
+"conclusion": "success"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Checkout tpcds-kit repository",
+"conclusion": "success"
+},
+{
+"name": "Post Cache TPC-DS generated data",
+"conclusion": "success"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686197912,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: pyspark-sql, pyspark-resource, pyspark-testing, pyspark-core, pyspark-errors, pyspark-logger",
+"conclusion": "success",
+"started_at": "2026-10-23T22:22:31Z",
+"completed_at": "2026-10-23T23:37:51Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Initialize containers",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "List Python packages (python3.12)",
+"conclusion": "success"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "success"
+},
+{
+"name": "Run tests for old client",
+"conclusion": "skipped"
+},
+{
+"name": "Upload coverage to Codecov",
+"conclusion": "skipped"
+},
+{
+"name": "Upload test results to Codecov",
+"conclusion": "skipped"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Stop containers",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686197915,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: core, unsafe, kvstore, utils, utils-java, config, network-common, network-shuffle, sketch, variant, launcher",
+"conclusion": "success",
+"started_at": "2026-10-23T22:22:31Z",
+"completed_at": "2026-10-23T23:24:10Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "Install Python 3.12",
+"conclusion": "skipped"
+},
+{
+"name": "Install Python packages (Python 3.12)",
+"conclusion": "skipped"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "success"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Upload yarn app log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686197945,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: pyspark-pandas-connect",
+"conclusion": "success",
+"started_at": "2026-10-23T23:05:03Z",
+"completed_at": "2026-10-23T23:50:06Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Initialize containers",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "List Python packages (python3.12)",
+"conclusion": "success"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "success"
+},
+{
+"name": "Run tests for old client",
+"conclusion": "skipped"
+},
+{
+"name": "Upload coverage to Codecov",
+"conclusion": "skipped"
+},
+{
+"name": "Upload test results to Codecov",
+"conclusion": "skipped"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Stop containers",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686197953,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: mllib-local, mllib, graphx, profiler, pipelines, repl, examples",
+"conclusion": "success",
+"started_at": "2026-10-23T22:22:32Z",
+"completed_at": "2026-10-23T23:16:41Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "Install Python 3.12",
+"conclusion": "skipped"
+},
+{
+"name": "Install Python packages (Python 3.12)",
+"conclusion": "skipped"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "success"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Upload yarn app log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686197966,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: pyspark-connect-old-client",
+"conclusion": "success",
+"started_at": "2026-10-23T22:22:32Z",
+"completed_at": "2026-10-23T23:03:54Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Initialize containers",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "List Python packages (python3.12)",
+"conclusion": "success"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "skipped"
+},
+{
+"name": "Run tests for old client",
+"conclusion": "success"
+},
+{
+"name": "Upload coverage to Codecov",
+"conclusion": "skipped"
+},
+{
+"name": "Upload test results to Codecov",
+"conclusion": "skipped"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Stop containers",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686197973,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: pyspark-pandas-slow",
+"conclusion": "success",
+"started_at": "2026-10-23T23:03:56Z",
+"completed_at": "2026-10-23T23:59:08Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Initialize containers",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "List Python packages (python3.12)",
+"conclusion": "success"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "success"
+},
+{
+"name": "Run tests for old client",
+"conclusion": "skipped"
+},
+{
+"name": "Upload coverage to Codecov",
+"conclusion": "skipped"
+},
+{
+"name": "Upload test results to Codecov",
+"conclusion": "skipped"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Stop containers",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686198000,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: pyspark-periodic",
+"conclusion": "success",
+"started_at": "2026-10-23T22:22:31Z",
+"completed_at": "2026-10-23T22:32:13Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Initialize containers",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "List Python packages (python3.12)",
+"conclusion": "success"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "success"
+},
+{
+"name": "Run tests for old client",
+"conclusion": "skipped"
+},
+{
+"name": "Upload coverage to Codecov",
+"conclusion": "skipped"
+},
+{
+"name": "Upload test results to Codecov",
+"conclusion": "skipped"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Stop containers",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686198006,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: yarn",
+"conclusion": "success",
+"started_at": "2026-10-23T22:22:32Z",
+"completed_at": "2026-10-23T22:44:41Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "Install Python 3.12",
+"conclusion": "success"
+},
+{
+"name": "Install Python packages (Python 3.12)",
+"conclusion": "success"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "success"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Upload yarn app log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Install Python 3.12",
+"conclusion": "success"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686198013,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: pyspark-mllib, pyspark-ml, pyspark-ml-connect, pyspark-pipelines",
+"conclusion": "success",
+"started_at": "2026-10-23T22:22:32Z",
+"completed_at": "2026-10-23T23:08:06Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Initialize containers",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "List Python packages (python3.12)",
+"conclusion": "success"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "success"
+},
+{
+"name": "Run tests for old client",
+"conclusion": "skipped"
+},
+{
+"name": "Upload coverage to Codecov",
+"conclusion": "skipped"
+},
+{
+"name": "Upload test results to Codecov",
+"conclusion": "skipped"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Stop containers",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686198014,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: pyspark-connect",
+"conclusion": "success",
+"started_at": "2026-10-23T22:22:31Z",
+"completed_at": "2026-10-23T23:08:01Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Initialize containers",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "List Python packages (python3.12)",
+"conclusion": "success"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "success"
+},
+{
+"name": "Run tests for old client",
+"conclusion": "skipped"
+},
+{
+"name": "Upload coverage to Codecov",
+"conclusion": "skipped"
+},
+{
+"name": "Upload test results to Codecov",
+"conclusion": "skipped"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Stop containers",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686198021,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: pyspark-streaming, pyspark-structured-streaming, pyspark-structured-streaming-connect",
+"conclusion": "success",
+"started_at": "2026-10-23T22:22:31Z",
+"completed_at": "2026-10-23T23:04:56Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Initialize containers",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "List Python packages (python3.12)",
+"conclusion": "success"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "success"
+},
+{
+"name": "Run tests for old client",
+"conclusion": "skipped"
+},
+{
+"name": "Upload coverage to Codecov",
+"conclusion": "skipped"
+},
+{
+"name": "Upload test results to Codecov",
+"conclusion": "skipped"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Stop containers",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686198030,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: pyspark-pandas-slow-connect",
+"conclusion": "success",
+"started_at": "2026-10-23T23:08:03Z",
+"completed_at": "2026-10-24T00:11:18Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Initialize containers",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "List Python packages (python3.12)",
+"conclusion": "success"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "success"
+},
+{
+"name": "Run tests for old client",
+"conclusion": "skipped"
+},
+{
+"name": "Upload coverage to Codecov",
+"conclusion": "skipped"
+},
+{
+"name": "Upload test results to Codecov",
+"conclusion": "skipped"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Stop containers",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686198085,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: api, catalyst, hive-thriftserver",
+"conclusion": "success",
+"started_at": "2026-10-23T22:22:32Z",
+"completed_at": "2026-10-23T23:48:29Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "Install Python 3.12",
+"conclusion": "skipped"
+},
+{
+"name": "Install Python packages (Python 3.12)",
+"conclusion": "skipped"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "success"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Upload yarn app log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686198136,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: sql - slow tests",
+"conclusion": "success",
+"started_at": "2026-10-23T22:22:32Z",
+"completed_at": "2026-10-23T23:56:18Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "Install Python 3.12",
+"conclusion": "success"
+},
+{
+"name": "Install Python packages (Python 3.12)",
+"conclusion": "success"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "success"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Upload yarn app log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Install Python 3.12",
+"conclusion": "success"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686198143,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: streaming, sql-kafka-0-10, streaming-kafka-0-10, streaming-kinesis-asl, credential-aws, kubernetes, hadoop-cloud, spark-ganglia-lgpl, protobuf, connect, avro",
+"conclusion": "failure",
+"started_at": "2026-10-23T22:31:22Z",
+"completed_at": "2026-10-23T23:32:25Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "Install Python 3.12",
+"conclusion": "success"
+},
+{
+"name": "Install Python packages (Python 3.12)",
+"conclusion": "success"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "failure"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "success"
+},
+{
+"name": "Upload yarn app log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Install Python 3.12",
+"conclusion": "skipped"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686198232,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: sql - other tests",
+"conclusion": "success",
+"started_at": "2026-10-23T22:22:31Z",
+"completed_at": "2026-10-23T23:53:18Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "Install Python 3.12",
+"conclusion": "success"
+},
+{
+"name": "Install Python packages (Python 3.12)",
+"conclusion": "success"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "success"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Upload yarn app log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Install Python 3.12",
+"conclusion": "success"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686198245,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: hive - other tests",
+"conclusion": "success",
+"started_at": "2026-10-23T22:32:53Z",
+"completed_at": "2026-10-23T23:29:33Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "Install Python 3.12",
+"conclusion": "skipped"
+},
+{
+"name": "Install Python packages (Python 3.12)",
+"conclusion": "skipped"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "success"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Upload yarn app log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686198276,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: sql - extended tests",
+"conclusion": "success",
+"started_at": "2026-10-23T22:22:31Z",
+"completed_at": "2026-10-23T23:45:33Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "Install Python 3.12",
+"conclusion": "success"
+},
+{
+"name": "Install Python packages (Python 3.12)",
+"conclusion": "success"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "success"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Upload yarn app log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Install Python 3.12",
+"conclusion": "success"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686198280,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: pyspark-pandas",
+"conclusion": "success",
+"started_at": "2026-10-23T22:40:38Z",
+"completed_at": "2026-10-23T23:42:58Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Initialize containers",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "List Python packages (python3.12)",
+"conclusion": "success"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "success"
+},
+{
+"name": "Run tests for old client",
+"conclusion": "skipped"
+},
+{
+"name": "Upload coverage to Codecov",
+"conclusion": "skipped"
+},
+{
+"name": "Upload test results to Codecov",
+"conclusion": "skipped"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Stop containers",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686198299,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: hive - slow tests",
+"conclusion": "success",
+"started_at": "2026-10-23T22:22:31Z",
+"completed_at": "2026-10-23T23:08:24Z",
+"steps": [
+{
+"name": "Set up job",
+"conclusion": "success"
+},
+{
+"name": "Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Install the Varka engine",
+"conclusion": "success"
+},
+{
+"name": "Install Python 3.12",
+"conclusion": "skipped"
+},
+{
+"name": "Install Python packages (Python 3.12)",
+"conclusion": "skipped"
+},
+{
+"name": "Download precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Extract precompiled artifact",
+"conclusion": "success"
+},
+{
+"name": "Record the CPU and the vector width",
+"conclusion": "success"
+},
+{
+"name": "Run tests",
+"conclusion": "success"
+},
+{
+"name": "Upload test results to report",
+"conclusion": "success"
+},
+{
+"name": "Test Summary",
+"conclusion": "success"
+},
+{
+"name": "Upload unit tests log files",
+"conclusion": "skipped"
+},
+{
+"name": "Upload yarn app log files",
+"conclusion": "skipped"
+},
+{
+"name": "Post Setup build environment",
+"conclusion": "success"
+},
+{
+"name": "Post Checkout and sync Spark repository",
+"conclusion": "success"
+},
+{
+"name": "Post Bootstrap composite actions",
+"conclusion": "success"
+},
+{
+"name": "Complete job",
+"conclusion": "success"
+}
+]
+},
+{
+"id": 120686199489,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Run OIDC E2E integration tests (Minikube + moto)",
+"conclusion": "skipped",
+"started_at": "2026-10-23T22:22:30Z",
+"completed_at": "2026-10-23T22:22:29Z",
+"steps": []
+},
+{
+"id": 120686200045,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Run Spark on Kubernetes Integration test",
+"conclusion": "skipped",
+"started_at": "2026-10-23T22:22:30Z",
+"completed_at": "2026-10-23T22:22:29Z",
+"steps": []
+},
+{
+"id": 120686200738,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Run / Build modules: sparkr",
+"conclusion": "skipped",
+"started_at": "2026-10-23T22:22:30Z",
+"completed_at": "2026-10-23T22:22:29Z",
+"steps": []
+},
+{
+"id": 120720519538,
+"run_id": 40031251245,
+"run_attempt": 1,
+"name": "Report test results",
+"conclusion": "failure",
+"started_at": "2026-10-24T00:11:34Z",
+"completed_at": "2026-10-24T00:11:34Z",
+"steps": []
+}
+]
+}
