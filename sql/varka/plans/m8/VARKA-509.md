@@ -93,7 +93,8 @@ sample rows and the ANSI errors:
    check, and the matrix's skip lines (`sql/varka/matrix/skips.tsv`) move with their tests.
 3. The same for `VarkaDifferentialSuite` and `VarkaTimeArithmeticSuite`, whose hand-written
    shapes become harness queries (`VarkaHarnessCases`), one test of the old suite a test under
-   its name; the time suite first, as `VarkaTimeHarnessSuite`.
+   its name; the time suite first, as `VarkaTimeHarnessSuite`, then the differential suite, as
+   `VarkaDifferentialHarnessSuite`.
 4. Measured: each suite at the defaults on the laptop before and after, and the next option
    matrix and Build against `m8/results/VARKA-507-run-40658422887.txt`.
 

@@ -1717,6 +1717,10 @@ exist.
   and run cold with C1 on through on-stack replacements at both tiers. A JFR
   stream and the code cache's method list say which JIT tier served each
   compared call (VARKA-274).
+* **sql/core harness tests** (`VarkaCoverageHarnessSuite`,
+  `VarkaDifferentialHarnessSuite`, `VarkaTimeHarnessSuite`, `VarkaHarnessParitySuite`)
+  hold the kernels' answers to Spark's own evaluation of the optimized expression with
+  no session, through the production evaluators over the Arrow cache's batches.
 * **sql/core tests** (`VarkaColumnarToRowExecSuite`, `VarkaProjectExecSuite`,
   `VarkaFilterExecSuite`, `VarkaColumnarWriteSuite`, `VarkaEndToEndSuite`,
   `VarkaDifferentialSuite`, `VarkaCoverageDifferentialSuite`,
@@ -1914,7 +1918,7 @@ The real current edges, stated with their numbers where they have one:
 
 ```bash
 ./build/mvn -f sql/varka/engine/pom.xml install
-build/sbt "sql/testOnly org.apache.spark.sql.execution.VarkaDifferentialSuite"
+build/sbt "sql/testOnly org.apache.spark.sql.execution.VarkaDifferentialHarnessSuite"
 # Engine JMH kernels (in-process, gated):
 ./build/mvn -f sql/varka/engine/pom.xml test -Dvarka.jmh=true
 # Spark benchmarks (SPARK_GENERATE_BENCHMARK_FILES=1 to regenerate the committed files):

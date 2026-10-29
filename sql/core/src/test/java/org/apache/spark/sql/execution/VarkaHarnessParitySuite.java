@@ -36,6 +36,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSuite;
 import org.apache.spark.sql.catalyst.plans.logical.Filter;
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan;
 import org.apache.spark.sql.catalyst.plans.logical.Project;
+import org.apache.spark.sql.internal.SQLConf;
 import org.apache.spark.sql.test.TestSparkSession;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -147,56 +148,67 @@ public final class VarkaHarnessParitySuite {
   void handWrittenQueriesAreTheSessions() {
     var differences = new ArrayList<String>();
     int compared = 0;
-    for (VarkaHarnessCases.Case c : VarkaTimeHarnessSuite.all()) {
-      // The cache is lazy and never read: it keeps the optimizer from folding the view's rows.
-      if (spark.catalog().tableExists("t")) {
-        spark.catalog().uncacheTable("t");
-      }
-      spark.sql(c.source().schema()).createOrReplaceTempView("t");
-      spark.catalog().cacheTable("t");
-      Seq<Attribute> columns = c.source().fixture().columns();
-      for (VarkaHarnessCases.Shape shape : c.shapes()) {
-        String where = c.name() + ", " + shape.sql();
-        LogicalPlan plan = spark.sql(shape.sql()).queryExecution().optimizedPlan();
-        LogicalPlan below = plan instanceof Project p && p.child() instanceof Filter
-            ? p.child() : plan;
-        var mine = new ArrayList<Expression>();
-        var theirs = new ArrayList<Expression>();
-        Seq<Attribute> theirColumns;
-        switch (VarkaHarnessPlans.query(shape.sql(), columns)) {
-          case VarkaHarnessPlans.Query.Selection s when below instanceof Filter f -> {
-            mine.add(s.condition());
-            theirs.add(f.condition());
-            theirColumns = f.child().output();
+    var cases = new ArrayList<VarkaHarnessCases.Case>(VarkaTimeHarnessSuite.all());
+    cases.addAll(VarkaDifferentialHarnessSuite.all());
+    String ansiKey = SQLConf.ANSI_ENABLED().key();
+    String ansiBefore = spark.conf().get(ansiKey);
+    for (VarkaHarnessCases.Case c : cases) {
+      for (VarkaHarnessCases.Part part : c.parts()) {
+        // The cache is lazy and never read: it keeps the optimizer from folding the view's rows.
+        if (spark.catalog().tableExists("t")) {
+          spark.catalog().uncacheTable("t");
+        }
+        spark.sql(part.source().schema()).createOrReplaceTempView("t");
+        spark.catalog().cacheTable("t");
+        spark.conf().set(ansiKey, part.ansi().map(String::valueOf).orElse(ansiBefore));
+        Seq<Attribute> columns = part.source().fixture().columns();
+        for (VarkaHarnessCases.Shape shape : part.shapes()) {
+          String where = c.name() + ", " + shape.sql();
+          LogicalPlan plan = spark.sql(shape.sql()).queryExecution().optimizedPlan();
+          LogicalPlan below = plan instanceof Project p && p.child() instanceof Filter
+              ? p.child() : plan;
+          var mine = new ArrayList<Expression>();
+          var theirs = new ArrayList<Expression>();
+          Seq<Attribute> theirColumns;
+          SQLConf conf = VarkaCoverageHarnessSuite.conf(
+              part.ansi().orElse(Boolean.parseBoolean(ansiBefore)));
+          switch (VarkaCoverageHarnessSuite.withConf(conf,
+              () -> VarkaHarnessPlans.query(shape.sql(), columns))) {
+            case VarkaHarnessPlans.Query.Selection s when below instanceof Filter f -> {
+              mine.add(s.condition());
+              theirs.add(f.condition());
+              theirColumns = f.child().output();
+            }
+            case VarkaHarnessPlans.Query.Projection p when plan instanceof Project q
+                && !(q.child() instanceof Filter) -> {
+              CollectionConverters.asJava(p.list()).forEach(e -> mine.add(unaliased(e)));
+              CollectionConverters.asJava(q.projectList()).forEach(e -> theirs.add(unaliased(e)));
+              theirColumns = q.child().output();
+            }
+            default -> {
+              differences.add(where + ": the session plans another shape:\n"
+                  + plan.treeString());
+              continue;
+            }
           }
-          case VarkaHarnessPlans.Query.Projection p when plan instanceof Project q
-              && !(q.child() instanceof Filter) -> {
-            CollectionConverters.asJava(p.list()).forEach(e -> mine.add(unaliased(e)));
-            CollectionConverters.asJava(q.projectList()).forEach(e -> theirs.add(unaliased(e)));
-            theirColumns = q.child().output();
-          }
-          default -> {
-            differences.add(where + ": the session plans another shape:\n"
-                + plan.treeString());
+          compared++;
+          if (mine.size() != theirs.size()) {
+            differences.add(where + ": the harness has " + mine.size() + " outputs, the session "
+                + theirs.size());
             continue;
           }
-        }
-        compared++;
-        if (mine.size() != theirs.size()) {
-          differences.add(where + ": the harness has " + mine.size() + " outputs, the session "
-              + theirs.size());
-          continue;
-        }
-        for (int k = 0; k < mine.size(); k++) {
-          Expression a = canonical(mine.get(k), columns);
-          Expression b = canonical(theirs.get(k), theirColumns);
-          if (!a.equals(b) && !a.toString().equals(b.toString())) {
-            differences.add(where + ": the harness has " + mine.get(k).sql() + ", the session "
-                + theirs.get(k).sql());
+          for (int k = 0; k < mine.size(); k++) {
+            Expression a = canonical(mine.get(k), columns);
+            Expression b = canonical(theirs.get(k), theirColumns);
+            if (!a.equals(b) && !a.toString().equals(b.toString())) {
+              differences.add(where + ": the harness has " + mine.get(k).sql() + ", the session "
+                  + theirs.get(k).sql());
+            }
           }
         }
       }
     }
+    spark.conf().set(ansiKey, ansiBefore);
     spark.catalog().uncacheTable("t");
     spark.catalog().dropTempView("t");
     assertTrue(compared > 0, "no query compared");
