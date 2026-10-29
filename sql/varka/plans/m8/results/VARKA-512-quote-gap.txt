@@ -7,11 +7,14 @@ The plans' results files: 28 under sql/varka/plans/*/results/, none of them sear
 them as sources leaves the check at 0 orphans: sources only ever add matches.
 
 Four numbers of a first draft of row 509's step 4 sentence, measured in
-m8/results/VARKA-509-step4.txt (not searched), each accepted on an unrelated file:
-  472.2  sql/core/benchmarks/VectorizedRleValuesReaderBenchmark-jdk21-results.txt
-  135.8  sql/core/benchmarks/CaseWhenCodegenBenchmark-jdk25-results.txt
-  399.3  sql/catalyst/benchmarks/VarkaEmitterParityBenchmark-jdk25-128bit-results.txt
-  989.1  sql/core/benchmarks/VarkaSizeLadderTuningBenchmark-jdk25-dontcompilehugemethods-off-results.txt
+m8/results/VARKA-509-step4.txt (not searched), each accepted on a file that has nothing to do with
+it, matched by the check's own number pattern (corrected: an earlier version of this list named
+files by a substring search, which matched 6472.2 for 472.2):
+  135.8  sql/core/benchmarks/Base64Benchmark-jdk21-results.txt, among others
+  399.3  sql/core/benchmarks/VarkaEvaluatorOverheadBenchmark-jdk25-267c-pair-results.txt
+  472.2  no current file; an earlier committed version of a results file, which the check also
+         searches
+  989.1  the same
 Two more of the same draft, found in no searched file, were reported as orphans:
   11.96, 35.30
 What the check reads as a quote: a number of at least two integer digits with a decimal part, not
