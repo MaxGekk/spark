@@ -1354,13 +1354,75 @@ public final class VarkaKernelChecks {
   private static int runOne(String context, String className, byte[] bytes,
       List<VarkaVectorIR> rootList, int numInputs, Lane lane, boolean declineAllowed,
       SparkAnswers spark, List<ValidityFill> fills) {
-    var loader = new VarkaGeneratedClassLoader(VarkaKernelChecks.class.getClassLoader());
-    var kernel = load(loader, className, bytes);
-    try {
-      return runLoaded(context, kernel, rootList, numInputs, lane, declineAllowed, spark, fills,
-          CallHook.NONE);
-    } finally {
-      loader.release();
+    if (!reuseLoaded) {
+      var loader = new VarkaGeneratedClassLoader(VarkaKernelChecks.class.getClassLoader());
+      var kernel = load(loader, className, bytes);
+      KERNELS_DEFINED.incrementAndGet();
+      try {
+        return runLoaded(context, kernel, rootList, numInputs, lane, declineAllowed, spark,
+            fills, CallHook.NONE);
+      } finally {
+        loader.release();
+      }
+    }
+    return runLoaded(context, LAST_LOADED.get().kernel(className, bytes), rootList, numInputs,
+        lane, declineAllowed, spark, fills, CallHook.NONE);
+  }
+
+  /**
+   * Whether {@link #runOne} runs a kernel whose bytes it loaded last on this thread on that class
+   * rather than defining it again. The suites check one kernel over several batches and each
+   * batch through both bodies, a run apiece; defining it once a run made a tree of the series
+   * eight classes, and the definitions, their verification and the unloading of their loaders
+   * were a large share of the series' time (`m8/results/VARKA-suite-profile.txt`). An emitted
+   * kernel holds no state between calls - its only fields are the static final range tables its
+   * initialiser fills - so a run on the loaded class is the run a fresh one would make. Kept
+   * switchable, {@code -Dvarka.checks.reuseLoaded=false}, so that the two can be timed and
+   * compared.
+   */
+  static volatile boolean reuseLoaded =
+      !"false".equals(System.getProperty("varka.checks.reuseLoaded"));
+
+  /** How many kernel classes {@link #runOne} has defined in this JVM, for the reuse's test. */
+  static final AtomicLong KERNELS_DEFINED = new AtomicLong();
+
+  /**
+   * The kernel {@link #runOne} loaded last on this thread, under its own loader: the suites that
+   * call it from several threads each keep their own. Matched on the bytes, not the name, since a
+   * planted fault rewrites a kernel's bytes and keeps its name. Its loader is released when the
+   * thread loads another kernel, so each thread holds at most one such loader.
+   */
+  private static final ThreadLocal<LastLoaded> LAST_LOADED =
+      ThreadLocal.withInitial(LastLoaded::new);
+
+  private static final class LastLoaded {
+    private String className;
+    private byte[] bytes;
+    private VarkaGeneratedClassLoader loader;
+    private VarkaFusedKernel kernel;
+
+    VarkaFusedKernel kernel(String name, byte[] code) {
+      if (kernel != null && name.equals(className) && Arrays.equals(code, bytes)) {
+        return kernel;
+      }
+      if (loader != null) {
+        loader.release();
+      }
+      loader = null;
+      kernel = null;
+      var fresh = new VarkaGeneratedClassLoader(VarkaKernelChecks.class.getClassLoader());
+      // A class that fails to load is not kept: the next run loads it again and fails the same.
+      try {
+        kernel = load(fresh, name, code);
+      } catch (RuntimeException | Error e) {
+        fresh.release();
+        throw e;
+      }
+      KERNELS_DEFINED.incrementAndGet();
+      loader = fresh;
+      className = name;
+      bytes = code.clone();
+      return kernel;
     }
   }
 
