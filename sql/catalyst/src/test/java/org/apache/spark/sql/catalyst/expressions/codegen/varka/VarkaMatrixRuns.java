@@ -30,6 +30,7 @@ import java.util.Locale;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 
@@ -97,6 +98,38 @@ public final class VarkaMatrixRuns {
   /** The message a {@code PinsDefaults} test is cancelled with under {@code config}. */
   public static String pinsDefaultsMessage(String config) {
     return "pins the defaults' structure; not run under " + config;
+  }
+
+  /**
+   * The tag of a test whose subject is the C2 code a kernel compiles to - its tiers, its traps,
+   * its answers on the way up - which checks the lowerings as the JIT runs them for users, at the
+   * defaults; every row is checked so each night. Under a configuration it runs only where the
+   * configuration changes what C2 is given beyond the bytes ({@link #C2_OPTIONS}), and is
+   * cancelled elsewhere (VARKA-517).
+   */
+  public static final String C2_CODE_TAG = "org.apache.spark.sql.varka.C2Code";
+
+  /**
+   * The options that change what C2 compiles a kernel against, not only its bytes: a second
+   * vector species in the JVM (the lane count, the half species) or the instructions C2 may use.
+   */
+  public static final Set<String> C2_OPTIONS =
+      Set.of("lanesOverride", "narrowHalfSpecies", "useAVX");
+
+  /** Whether {@code config} sets an option of {@link #C2_OPTIONS}. */
+  public static boolean changesC2(String config) {
+    for (String part : config.split("[,_]")) {
+      int eq = part.indexOf('=');
+      if (eq > 0 && C2_OPTIONS.contains(part.substring(0, eq))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** The message a {@code C2Code} test is cancelled with under {@code config}. */
+  public static String c2CodeMessage(String config) {
+    return "checks the C2 code of the defaults' kernels; " + config + " changes only their bytes";
   }
 
   private static OptionalInt arrowBatchSizeOf(String config) {

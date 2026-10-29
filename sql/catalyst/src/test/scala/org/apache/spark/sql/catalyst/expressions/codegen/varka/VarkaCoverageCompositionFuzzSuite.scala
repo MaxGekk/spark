@@ -490,13 +490,54 @@ class VarkaCoverageCompositionFuzzSuite
       assert(isProjectionDecline(d.reason, c),
         finding(s"entry $i, which fuses alone, declined for '${d.reason}'", c))
     }
+    // Under the option matrix, a kernel the defaults run compiled the same and emitted to the
+    // same bytes was checked there, over the same batches (VarkaReach, VARKA-517).
+    val atDefaults = defaultsOf(c.options).filter(_ => VarkaMatrix.config.nonEmpty)
+    val theirKernels = atDefaults.flatMap { o =>
+      VarkaExpressionCompiler.compilePartial(list, wide, o).toScala.map(_.kernels.asScala.toSeq)
+    }
     partial.foreach { p =>
       p.kernels.asScala.toSeq.zipWithIndex.foreach { case (kernel, k) =>
-        checkKernel(kernel, wide, c.options, rnd, sparkOracle(kernel, wide, outputsOf(p, k, c)))
+        val ranAtDefaults = atDefaults.exists { o =>
+          theirKernels.exists(t => t.size == p.kernels.size && t(k).outputs == kernel.outputs) &&
+            VarkaReach.ranAtDefaults(c.options, o,
+              scala.util.Try(reachBytes(kernel, c.options)).getOrElse(null),
+              opts => reachBytes(kernel, opts), reach)
+        }
+        if (!ranAtDefaults) {
+          checkKernel(kernel, wide, c.options, rnd, sparkOracle(kernel, wide, outputsOf(p, k, c)))
+        }
       }
     }
     (partial.exists(_.kernels.size > 1), partial.map(_.fused.inputOrdinals.size).getOrElse(0))
   }
+
+  /** The kernels the option matrix's reach filter took as the defaults run's (VARKA-517). */
+  private val reach = new VarkaReach.Tally
+
+  override def afterAll(): Unit = {
+    try {
+      // scalastyle:off println
+      if (VarkaMatrix.config.nonEmpty) println(reach.line(getClass.getSimpleName))
+      // scalastyle:on println
+    } finally super.afterAll()
+  }
+
+  /**
+   * The options the defaults run drew for a case drawn with `options`: the same draw, the lane
+   * override and the exact grouping, over the defaults. None where the configuration sets the
+   * lane override itself, which the draw would then hide.
+   */
+  private def defaultsOf(options: VarkaEmitOptions): Option[VarkaEmitOptions] =
+    if (VarkaMatrix.base.lanesOverride() != VarkaEmitOptions.DEFAULTS.lanesOverride()) None
+    else Some(VarkaEmitOptions.DEFAULTS.withLanesOverride(options.lanesOverride())
+      .withExactGrouping(options.exactGrouping()))
+
+  /** A kernel's class under `options`, one name for every emission compared; null if declined. */
+  private def reachBytes(kernel: CompiledVarkaProjection, options: VarkaEmitOptions)
+      : Array[Byte] =
+    VarkaLoopEmitter.emit("org.apache.spark.sql.varka.execution.VarkaCompositionReach",
+      kernel.outputs, kernel.inputOrdinals.size, kernel.numLiterals, null, null, options)
 
   // ---------------------------------------------------------------------------------------------
   // A forced decline is the entry deleted (VARKA-296).
@@ -725,9 +766,14 @@ class VarkaCoverageCompositionFuzzSuite
    * history whose tier never showed is counted and printed, and fails only under
    * `-Dvarka.fuzz.requireTiers=true`, as in `VarkaIrFuzzSuite`. The recording is stopped when the
    * test ends.
+   *
+   * Its subject is C2's code for the defaults' kernels, so under the option matrix it runs only
+   * where a configuration changes what C2 is given beyond the bytes (`VarkaMatrix.C2Code`): the
+   * nightly runs every row at the defaults, and a configuration that moves only the bytes has
+   * them checked by the other tests here.
    */
   test("coverage rows' kernels agree with the reference evaluator as C2 code, across a trap " +
-      "and on the way up the tiers (VARKA-274)") {
+      "and on the way up the tiers (VARKA-274)", VarkaMatrix.C2Code) {
     val opts = VarkaMatrix.base.withLanesOverride(0)
     val props = VarkaCompiledCheck.Settings.fromProperties()
     val settings = new VarkaCompiledCheck.Settings(props.settleMillis, props.releasedBatches,
