@@ -64,14 +64,16 @@ import org.apache.spark.sql.util.ArrowUtils;
  * <ol>
  *   <li>under a matrix configuration, a test tagged {@link VarkaSuite#PINS_DEFAULTS} is cancelled
  *       without running, with the ScalaTest form's message;</li>
+ *   <li>under a matrix configuration that sets none of {@link VarkaMatrixRuns#C2_OPTIONS}, a test
+ *       tagged {@link VarkaSuite#C2_CODE} is cancelled the same way;</li>
  *   <li>otherwise {@link VarkaMatrixRuns#around} runs it against the skip list - a test the list
  *       expects to fail is cancelled when it fails and fails as a stale entry when it passes -
  *       and records its fused batches;</li>
  *   <li>inside that, {@link VarkaWatchdog#guard} caps it;</li>
  *   <li>inside that, the test method itself.</li>
  * </ol>
- * An {@code ownJvm} class in the shared JVM skips all three: the child JVM ran the class under
- * them, and each test only takes the child's result, as it is.
+ * An {@code ownJvm} class in the shared JVM skips all four wrappers: the child JVM ran the class
+ * under them, and each test only takes the child's result, as it is.
  *
  * <p>A cancel is opentest4j's {@link TestAbortedException}, which JUnit reports as aborted and the
  * listener prints {@code !!! CANCELED !!!}. It is thrown from the interceptor rather than decided
@@ -144,10 +146,10 @@ public final class VarkaSuiteExtension
    *       test by its suite and name;</li>
    *   <li>a {@code @ParameterizedTest} or {@code @RepeatedTest} test: JUnit runs those through
    *       another interceptor method than {@link #interceptTestMethod}, so they would bypass the
-   *       skip list, {@code PinsDefaults} and the watchdog, and their invocations' names
-   *       ({@code [1] ...}) make poor skip-list keys. A {@code @TestFactory}'s dynamic tests are
-   *       held ({@link #interceptDynamicTest}), each under the name the factory gives it, except
-   *       in an {@code ownJvm} class, whose child answers by test method;</li>
+   *       skip list, {@code PinsDefaults}, {@code C2Code} and the watchdog, and their
+   *       invocations' names ({@code [1] ...}) make poor skip-list keys. A {@code @TestFactory}'s
+   *       dynamic tests are held ({@link #interceptDynamicTest}), each under the name the factory
+   *       gives it, except in an {@code ownJvm} class, whose child answers by test method;</li>
    *   <li>a {@code @Nested} class, which inherits this extension but not the annotation, and
    *       whose tests the listener and the reports would put under the outer class's name;</li>
    *   <li>{@code @VarkaSuite} inherited from a superclass only: {@code dev/varka_matrix.sh} finds
@@ -350,6 +352,10 @@ public final class VarkaSuiteExtension
     }
     if (!config.isEmpty() && tags.contains(VarkaSuite.PINS_DEFAULTS)) {
       throw new TestAbortedException(VarkaMatrixRuns.pinsDefaultsMessage(config));
+    }
+    if (!config.isEmpty() && tags.contains(VarkaSuite.C2_CODE)
+        && !VarkaMatrixRuns.changesC2(config)) {
+      throw new TestAbortedException(VarkaMatrixRuns.c2CodeMessage(config));
     }
     return VarkaMatrixRuns.around(entries, config, report, suite, test, OUTCOMES,
         () -> guard.run(suite, test, body));
