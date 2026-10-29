@@ -83,8 +83,10 @@ The one hit left is VarkaFarDaySuite: two of its tests run every coverage row ov
 through a session, over days past the column bound, with and without nulls (20 each, the rest
 22 lines), so a calendar row added to the table runs there with no change to the suite. It is
 the shape row 509 moved, and step 3 of the row decides it: moved to the harness over a far-day
-fixture, or marked with its reason. Until then `--all` exits 1 on this tree, and the hook, which
-reads only the suites a commit touches, reports it only to a commit that changes that suite.
+fixture, or marked with its reason. Until then `--all` exits 1 on this tree. The hook reads only
+the suites a commit touches, and a suite it changes fails only when the change takes it over the
+rule: a commit that edits VarkaFarDaySuite prints its count as over the rule before the change and
+passes, while a copy of it saved as a new suite is a finding.
 
 A planted suite: the time-arithmetic suite of c47ad84f744 copied to a new file,
 VarkaPlantedTimeSuite.scala, and `dev/varka_precommit.sh --working-tree` run over it: reported,

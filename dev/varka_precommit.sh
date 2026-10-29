@@ -523,10 +523,20 @@ for f in "${files[@]}"; do
   [ -f "$f" ] && [[ "$f" =~ /src/test/(scala|java)/.*/Varka[A-Za-z0-9_]*Suite\.(scala|java)$ ]] \
     && session_suites+=("$f")
 done
+# A suite the commit adds is held to the rule; a suite it changes fails only when the change
+# takes it over the rule, so that editing a suite already over it, before it moves to the
+# harness, is not blocked. The latter is printed, not counted.
 if [ "${#session_suites[@]}" -gt 0 ] && [ -x dev/varka_session_lint.py ]; then
-  while IFS= read -r hit; do
-    [ -n "$hit" ] && note "$hit"
-  done < <(dev/varka_session_lint.py "${session_suites[@]}" 2>&1)
+  for f in "${session_suites[@]}"; do
+    hit="$(dev/varka_session_lint.py "$f" 2>&1)" && continue
+    if git cat-file -e "HEAD:$f" 2>/dev/null &&
+        ! dev/varka_session_lint.py "HEAD:$f" > /dev/null 2>&1; then
+      echo "$hit" | sed 's/^/(over the rule before this change, not counted) /'
+    else
+      echo "$hit" | while IFS= read -r line; do [ -n "$line" ] && echo "$line"; done
+      findings=$((findings + $(echo "$hit" | grep -c .)))
+    fi
+  done
 fi
 
 # A row is the only record of why a change exists, and nothing else checks what it cites
