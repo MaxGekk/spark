@@ -9,7 +9,7 @@ runs with a line 71: 58 Build, 13 option matrix
 
 The summary, `dev/varka_ci_ledger.py --summary --days 15 --flaky-threshold 2`:
 
-265 lines over the last 15 days: 201 failed, 29 flaked, 30 step, 4 infra, 1 slow
+263 lines over the last 15 days: 201 failed, 27 flaked, 30 step, 4 infra, 1 slow
 
 by test (suite / test)                                             flaked failed step infra slow
 OracleIntegrationSuite / SPARK-48618: Renaming the table to the...      2      1    0     0    0
@@ -29,7 +29,7 @@ StreamRealTimeModeWithManualClockSuite / (It is not a test it i...      1      0
 - / BETWEEN- and IN-shaped roots match the reference                    0      3    0     0    0
 
 by configuration                                                   flaked failed step infra slow
--                                                                      29     16   30     4    1
+-                                                                      27     16   30     4    1
 lanesOverride=4                                                         0    132    0     0    0
 defaults                                                                0     35    0     0    0
 checkIntOverflow=false                                                  0      7    0     0    0
@@ -40,7 +40,7 @@ fusedCeiling=200                                                        0      1
 groupBudget=64                                                          0      1    0     0    0
 
 by CPU                                                             flaked failed step infra slow
--                                                                      24     31   23     1    0
+-                                                                      22     31   23     1    0
 AMD EPYC 9V74 80-Core, 4 cores                                          2     69    3     0    1
 AMD EPYC 7763 64-Core, 4 cores                                          2     20    1     2    0
 Intel(R) Xeon(R) 6973P-C, 4 cores                                       1     36    0     0    0
@@ -51,7 +51,6 @@ AMD EPYC 7763 64-Core                                                   0      0
 by job and step (no test named)                                    flaked failed step infra slow
 Run / Protobuf breaking change detection and Python CodeGen che...      2      0    1     0    0
 Option matrix: b062 | Run this bin's units                              2      0    0     0    0
-Option matrix: report | Report                                          2      0    0     0    0
 Run / Precompile Spark | Build Spark                                    2      0    0     0    0
 Run / Run Spark UI tests | Run cd ui-test                               1      0    3     0    0
 Run / Build modules: sql - other tests | Run tests                      1      0    2     0    0
@@ -64,6 +63,7 @@ Run / Run Docker integration tests | Run tests                          1      0
 Run / Linters, licenses, and dependencies | License test                0      0    3     0    0
 Run / Build modules: streaming, sql-kafka-0-10, streaming-kafka...      0      0    2     0    0
 Run / Linters, licenses, and dependencies | Error Prone and Nul...      0      0    2     0    0
+Run / Linters, licenses, and dependencies | Scala linter                0      0    2     0    0
 
 tests with at least 2 flakes in 15 days: 4
   OracleIntegrationSuite / SPARK-48618: Renaming the table to the name of an existing table: 2 flakes, runs 38995488237 39159999235
@@ -72,12 +72,13 @@ tests with at least 2 flakes in 15 days: 4
   OracleIntegrationSuite / scan with aggregate push-down: REGR_SXY without DISTINCT (true): 2 flakes, runs 38995488237 39159999235
 
 Read against it:
-- Flakes are a job rerun to green, all of them: 29 flaked lines, of which 13 name a test
+- Flakes are a job rerun to green, all of them: 27 flaked lines, of which 13 name a test
   (OracleIntegrationSuite in the Docker job, 12 lines over three runs, each failing to connect
-  to the Oracle container; StreamRealTimeModeWithManualClockSuite once, a timeout), and 16 a job
+  to the Oracle container; StreamRealTimeModeWithManualClockSuite once, a timeout), and 14 a job
   or step with no test to name (the Docker job once, the Python CodeGen check, Precompile Spark,
-  four Spark module jobs, two of them at their 2h30m limit, the UI tests' Jest step, two matrix
-  bins and their reports, two old matrix shards).
+  four Spark module jobs, two of them at their 2h30m limit, the UI tests' Jest step, which
+  leaves no JUnit report and no annotation to name its test, two matrix bins, whose artifact
+  holds the passing rerun's reports, and two old matrix shards).
 - No "Flaky suite retried" warning on a passing job in the window: the `flaky=` list's retry
   fired only in Build run 39148626990, where VarkaWarmupEndToEndSuite failed all three JVMs.
   The warm-up suite's two tests are the window's most repeated failures, 6 each, all before
@@ -107,6 +108,8 @@ a run in progress:
       run: |
         python3 dev/varka_ci_ledger.py run "$GITHUB_RUN_ID" --annotate --flaky-threshold 3 \
           | tee -a "$GITHUB_STEP_SUMMARY" || true
+
+(The warning commands then show in the summary as text too, which is harmless.)
 
 It needs `actions: read`, which the job's default token has. The post-merge routine runs
 `dev/varka_ci_ledger.py update` and commits ledger.tsv. The self-test runs nowhere in CI until

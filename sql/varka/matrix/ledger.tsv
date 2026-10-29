@@ -259,9 +259,7 @@
 2026-10-28	40672450365	1	2d635541ee9	Varka option matrix	Option matrix: b037	checkIntOverflow=false	VarkaSparkFuzzSuite	random compositions agree with the row engine (seed 20261008, 200 of them)	failed	AMD EPYC 7763 64-Core, 4 cores	-
 2026-10-28	40741051946	1	90b6e46f84a	Build	Run / Build modules: sql - slow tests	-	-	-	flaked	AMD EPYC 9V74 80-Core, 4 cores	-: The job has exceeded the maximum execution time of 2h30m0s; passed on attempt 2
 2026-10-29	40812192137	1	0d6e7e2d7c0	Varka option matrix	Option matrix: b062	-	-	-	flaked	AMD EPYC 7763 64-Core, 4 cores	Run this bin's units; passed on attempt 2
-2026-10-29	40812192137	1	0d6e7e2d7c0	Varka option matrix	Option matrix: report	-	-	-	flaked	-	Report; passed on attempt 2
 2026-10-29	40816382938	1	7b9c2578f64	Varka option matrix	Option matrix: b062	-	-	-	flaked	AMD EPYC 9V74 80-Core, 4 cores	Run this bin's units; passed on attempt 2
-2026-10-29	40816382938	1	7b9c2578f64	Varka option matrix	Option matrix: report	-	-	-	flaked	-	Report; passed on attempt 2
 2026-10-29	40834493709	1	85156a4af2c	Varka option matrix	Option matrix: b065	arrowBatchSize=1	VarkaCoverageHarnessSuite	TIMESTAMP_NTZ columns choosing values: CAST(d AS TIMESTAMP_NTZ) is answered inside its domain and where it is unknown, and declined outside with the verdict's status, in a projection and a filter	failed	AMD EPYC 7763 64-Core, 4 cores	-
 2026-10-29	40870025288	1	178b66a2105	Build	Run / Run Spark UI tests	-	-	-	flaked	-	Run cd ui-test; passed on attempt 2
 2026-10-29	40880054784	1	126ba1f45da	Build	Run / Build modules: streaming, sql-kafka-0-10, streaming-kafka-0-10, streaming-kinesis-asl, credential-aws, kubernetes, hadoop-cloud, spark-ganglia-lgpl, protobuf, connect, avro	-	-	-	step	AMD EPYC 9V74 80-Core, 4 cores	Run tests

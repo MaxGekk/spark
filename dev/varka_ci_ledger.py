@@ -178,7 +178,12 @@ class Gh:
         if self.cache:
             f = self._file(key)
             if f.exists():
-                return f.read_bytes()
+                data = f.read_bytes()
+                # A recorded text response opens with the license header the release audit
+                # asks of a committed file, up to its first blank line.
+                if self.offline and data.startswith(b"#"):
+                    data = data.split(b"\n\n", 1)[1]
+                return data
             if self.offline:
                 raise LookupError(f"no recorded response for {key}")
         for n in range(self.tries):
@@ -494,7 +499,7 @@ class Run:
         self.slow_bins(jobs, checks)
         # The matrix's report fails whenever a bin did; its own line is kept only for a failure
         # no bin shows, an unfused or stale skip line.
-        tested = {ln["attempt"] for ln in self.lines if ln["kind"] != "step"}
+        tested = {ln["attempt"] for ln in self.lines if ln["job"] != "Option matrix: report"}
         self.lines = [
             ln
             for ln in self.lines
@@ -581,7 +586,10 @@ class Run:
         for j in jobs:
             m = MATRIX_JOB.match(j["name"])
             if m and minutes(j) is not None and j.get("conclusion") in ("success", "cancelled"):
-                by_attempt.setdefault(j["run_attempt"], []).append(j)
+                annotations = checks.get(j["id"], {}).get("annotations", [])
+                # A bin a newer push cancelled stopped early and says nothing of its length.
+                if j.get("conclusion") == "success" or timed_out(j, annotations):
+                    by_attempt.setdefault(j["run_attempt"], []).append(j)
         for attempt, bins in by_attempt.items():
             # A rerun attempt holds the bins it copied too, so its median is the run's.
             took = sorted(minutes(j) for j in bins)
