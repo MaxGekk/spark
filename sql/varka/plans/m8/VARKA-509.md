@@ -47,7 +47,8 @@ A trait in sql/core's tests, `VarkaExpressionDifferential`, with no `SparkSessio
    base itself is `VarkaColumnarToRowExec`'s test hook, which the harness sets to
    `VarkaMatrix.base`, so the option matrix reaches every harness test (`sql/varka/AGENTS.md`, a
    test starts from `VarkaMatrix.base`). A declined batch is the row path's, Spark's by
-   construction; the status word, for the domains, is the JFR fallback event's (section 6).
+   construction; the status word, for the domains, is the one the kernel declined it with
+   (section 6).
 5. **The comparison.** Values compared as `VarkaSparkOracle` compares them (raw bits for the
    floating types); a batch the kernel declined must be one Spark's row path answers or raises
    on, as the row path would; a batch it answered must hold no row Spark raises on.
@@ -98,10 +99,11 @@ One `VarkaSharedSessions` suite, small, a test a path rather than a test a row:
 - **The optimizer's expression rules.** Settled in step 1: `SparkOptimizer` builds over an
   in-memory `SessionCatalog` with the builtin functions, and `VarkaHarnessParitySuite` finds
   all 1,011 of the coverage table's expressions on its three fixtures equal to a session's.
-- **The status word.** Settled in step 1: every decline goes through
-  `VarkaFallbackAccounting.declinedBatch` and its JFR fallback event, which carries the status
-  per batch, so the domains read the event in-process as the end-to-end suite does, with no
-  seam in main code.
+- **The status word.** Settled in step 2: the harness hands `serveBatch` the kernel path, so
+  the decline the kernel throws passes through the harness's own callback first, which records
+  its status beside the batch's rows. That needs no JFR recording and no seam in main code, and
+  ties each status to its batch, where the end-to-end suite matched a sequence of JFR events to
+  the batches in order and could not see the batches after a row path that raised.
 - **ANSI mode and the session's conf.** The expression's behaviour under ANSI is read from
   `SQLConf.get`; the harness sets it per test through `withSQLConf`, as catalyst's own suites do.
 - **The row consumer's residual pass.** `projectFused` leaves residual entries to the row node;

@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -49,9 +50,11 @@ import org.junit.jupiter.api.TestFactory;
  * {@code m8/VARKA-509.md}), on {@code VarkaCoverageDifferentialSuite}'s three answer fixtures,
  * through {@link VarkaExpressionHarness}: each row's answer under both consumers - a projection
  * row through the columnar node's {@code project} and the row node's {@code projectFused}, a
- * predicate row through the filter evaluator - and each predicate row's partition oracle
- * ({@link VarkaPartitionOracle}) and its null tests as CASE conditions. Each row of each form is
- * one test under the name the end-to-end suite gave it, so the option matrix's record of what a
+ * predicate row through the filter evaluator - each predicate row's partition oracle
+ * ({@link VarkaPartitionOracle}) and its null tests as CASE conditions, each row's ANSI form
+ * ({@link VarkaAnsiForm}), and the domains of the rows whose kernel can decline a batch
+ * ({@link VarkaDomains}), the last two on fixtures of their own. Each row of each form is one
+ * test under the name the end-to-end suite gave it, so the option matrix's record of what a
  * configuration moves keeps a row's granularity and the skip list's lines read alike.
  *
  * <p>The kernel must answer some batch of a row on some fixture: a row whose kernel declined
@@ -60,8 +63,12 @@ import org.junit.jupiter.api.TestFactory;
 @VarkaSuite
 public final class VarkaCoverageHarnessSuite {
 
-  /** One row of {@code sql/varka/coverage.json}. */
-  record Row(String sql, String executable, String family, String form) {}
+  /**
+   * One row of {@code sql/varka/coverage.json}: what it prints, what runs, which form it takes,
+   * and, for a row whose kernel can decline a batch, the domain its kernel answers inside.
+   */
+  record Row(String sql, String executable, String family, String form,
+      Optional<String> domain) {}
 
   private static final List<Row> ROWS = readRows();
 
@@ -82,8 +89,10 @@ public final class VarkaCoverageHarnessSuite {
           Path.of(home, "sql", "varka", "coverage.json").toFile());
       var rows = new ArrayList<Row>();
       for (JsonNode e : doc.get("expressions")) {
+        JsonNode domain = e.get("domain");
         rows.add(new Row(e.get("sql").asText(), e.get("executable").asText(),
-            e.get("family").asText(), e.get("form").asText()));
+            e.get("family").asText(), e.get("form").asText(),
+            Optional.ofNullable(domain).map(JsonNode::asText).filter(d -> !d.isEmpty())));
       }
       return rows;
     } catch (IOException e) {
@@ -414,5 +423,78 @@ public final class VarkaCoverageHarnessSuite {
     } finally {
       VarkaColumnarToRowExec$.MODULE$.setEmitOptionsForTesting(VarkaMatrixRuns.BASE);
     }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // The domains (VARKA-279)
+  // ---------------------------------------------------------------------------------------------
+
+  private static final VarkaHarnessPlans.Fixture EDGES =
+      VarkaHarnessPlans.fixture(VarkaDomains.edgesSql());
+
+  private static List<Row> guardedRows() {
+    return ROWS.stream().filter(r -> r.domain().isPresent()).toList();
+  }
+
+  @TestFactory
+  Stream<DynamicTest> domains() {
+    return guardedRows().stream().map(row -> DynamicTest.dynamicTest(row.family() + ": "
+        + row.sql() + " is answered inside its domain and where it is unknown, and declined "
+        + "outside with the verdict's status, in a projection and a filter", () -> {
+          // The domain is ANSI's where the modes differ, and a batch's status names exactly the
+          // guards that fired only under exact refusal statuses. The cache's batch pruning,
+          // which the end-to-end suite turned off, has no counterpart: no batch statistics
+          // stand between the harness and the evaluator.
+          SQLConf conf = conf(true);
+          VarkaDomains.Result result;
+          try {
+            VarkaColumnarToRowExec$.MODULE$.setEmitOptionsForTesting(
+                VarkaMatrixRuns.BASE.withExactRefusalStatus(true));
+            result = withConf(conf, () -> VarkaDomains.check(row, EDGES, conf));
+          } finally {
+            VarkaColumnarToRowExec$.MODULE$.setEmitOptionsForTesting(VarkaMatrixRuns.BASE);
+          }
+          assertTrue(result.findings().isEmpty(), result.report());
+        }));
+  }
+
+  @Test
+  @DisplayName("the total domains are the guarded rows the fixture cannot take outside, and no "
+      + "other")
+  void totalDomainsAreRead() {
+    // The list is read only by guarded rows' tests, so an entry for a row the table lacks, or for
+    // an unguarded row, could never go stale.
+    var unread = VarkaDomains.TOTAL.keySet().stream()
+        .filter(sql -> guardedRows().stream().noneMatch(r -> r.sql().equals(sql))).toList();
+    assertTrue(unread.isEmpty(), "total domains no guarded row's test reads: " + unread);
+  }
+
+  @Test
+  @DisplayName("date_add(d, i) carries no guard: at the int extremes its day wraps as the row "
+      + "engine's does")
+  void dateAddCarriesNoGuard() {
+    // The row's note once promised "a per-batch bound on its range" that its kernel does not
+    // carry, the open question of VARKA-279's admission check: the compiler records a bound only
+    // for the day-interval cast, and Spark's DateAdd is a plain int add. So the row has no domain,
+    // and this holds it to that over the edges fixture, i at both int extremes and d of year
+    // 9999 among its rows: the kernels serve every batch and the answer - the wrapped day,
+    // outside any calendar - is Spark's.
+    assertTrue(ROWS.stream().anyMatch(r -> r.sql().equals("date_add(d, i)")
+        && r.domain().isEmpty()), "date_add(d, i) is no domainless row of the table");
+    SQLConf conf = conf(SQLConf.get().ansiEnabled());
+    withConf(conf, () -> {
+      VarkaExpressionHarness.Outcome outcome = VarkaExpressionHarness.projection(
+          "date_add(d, i)", VarkaHarnessPlans.projection("date_add(d, i)", EDGES.columns()),
+          EDGES, conf);
+      assertTrue(outcome.ok(), String.join("\n", outcome.findings));
+      assertTrue(outcome.served(), outcome.answered + " batches answered, " + outcome.declined
+          + " declined, " + outcome.residual + " outputs residual");
+      long first = java.time.LocalDate.of(1, 1, 1).toEpochDay();
+      long last = java.time.LocalDate.of(9999, 12, 31).toEpochDay();
+      assertTrue(VarkaDomains.sparkValues("date_add(d, i)", EDGES).stream()
+          .anyMatch(v -> !v.isNullAt(0) && (v.getInt(0) < first || v.getInt(0) > last)),
+          "no row wrapped past the calendar");
+      return null;
+    });
   }
 }
