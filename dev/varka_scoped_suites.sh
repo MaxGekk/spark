@@ -29,8 +29,7 @@
 # The suites run through dev/varka_matrix.sh over two JVMs, the runner's four cores' worth, beside
 # a JVM of its own for each suite that runs alone (VarkaOwnJvm), two at a time, in
 # target/varka-scoped, which the job caches so the next run balances its JVMs by this run's JUnit
-# times. The run records each test's fused batches too, which the option matrix's step
-# (dev/varka_matrix_ci.sh) takes instead of running the defaults again.
+# times. The run records each test's fused batches too, as dev/varka_matrix.sh does for any run.
 #
 # The module's suites that measure the JIT rather than answers - VarkaAssemblySuite and
 # VarkaTierWitnessSuite in catalyst, VarkaWarmupEndToEndSuite in sql - run after the others, alone and without the memory sanitizer,
@@ -61,10 +60,9 @@ matrix=${VARKA_MATRIX:-dev/varka_matrix.sh}   # the runner; a test puts a stub h
 # --shard I/N: this job runs its share of the module's suites, one of N jobs that split them by
 # the committed weights in sql/varka/ci/suite-times.tsv (dev/varka_suite_shards.py --job), so
 # that every job of a run computes the same split from its own checkout. The share's simple
-# names go to target/varka-scoped/job-suites, which the job's later steps read - the option
-# configuration (dev/varka_matrix_ci.sh) and the new tests (dev/varka_new_tests.py) - so each
-# runs over the suites this job ran. The log prints a digest of the whole split: two jobs of one
-# run that print different digests saw different inputs.
+# names go to target/varka-scoped/job-suites, which the job's later step reads - the new tests
+# (dev/varka_new_tests.py) - so it runs over the suites this job ran. The log prints a digest of
+# the whole split: two jobs of one run that print different digests saw different inputs.
 only=()
 mkdir -p target/varka-scoped
 # The cache restores this directory, so a share left by an earlier sharded run goes first.

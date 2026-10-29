@@ -1436,8 +1436,8 @@ jobs:
     if: fromJson(needs.precondition.outputs.required).varka-scoped == 'true'
     name: "Varka suites: ${{ matrix.module }} ${{ matrix.part }}"
     runs-on: ubuntu-latest
-    # The suites under the defaults, then one option configuration, and on its failure the same
-    # on the merge base, which builds a second tree.
+    # The suites under the defaults; a pull request's option configurations are its dispatched
+    # option matrix's (VARKA-521). A fix's new tests also build the merge base, a second tree.
     timeout-minutes: 150
     strategy:
       fail-fast: false
@@ -1572,12 +1572,6 @@ jobs:
           echo "emitted bytes: changed since $base, on these lines of sql/varka/emitted_bytes.json:"
           git diff --stat "$base" HEAD -- sql/varka/emitted_bytes.json
         fi | tee -a "$GITHUB_STEP_SUMMARY"
-    # The option matrix's share of a pull request (VARKA-248.md 3.2.8): this module's suites
-    # under one emit option configuration beside the defaults - an option the diff names, or
-    # one the branch name hashes to - and, if it fails, the same on the merge base, so that a
-    # red step means this change. The weekly varka-option-matrix workflow runs all of them.
-    - name: The Varka suites of ${{ matrix.module }} under one emit option configuration
-      run: ./dev/varka_matrix_ci.sh ${{ matrix.module }}
     # The tests this change adds, rerun five times on the suites step's build, a seeded fuzz under
     # four other seeds; and for a pull request labelled `fix`, its new tests run once on the merge
     # base's main sources, where each must fail (VARKA-255.md 3.4). A run of master has no new
