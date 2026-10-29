@@ -56,6 +56,22 @@ CONFIG_WEIGHTS = "sql/varka/matrix/seconds.tsv"
 DEFAULTS = "defaults"
 # A runner JVM's start and its first Spark session, before any suite's own time.
 JVM_START = 20.0
+# The settings a configuration may name that change only a Spark session's configuration, not
+# an emit option: `VarkaMatrixRuns.parseOver` leaves the options as they are for them. No
+# catalyst suite builds a session, so under a configuration of these alone the catalyst suites
+# would run as the defaults run them, and the matrix leaves them out (VARKA-524).
+SESSION_ONLY = ("arrowBatchSize",)
+
+
+def reaches(config, module):
+    """Whether `config` can change anything `module`'s suites run: not catalyst's, for a
+    configuration that names only session settings."""
+    if module != "catalyst" or config == DEFAULTS:
+        return True
+    names = {part.split("=", 1)[0] for part in re.split(r"[,_]", config) if "=" in part}
+    return not names or not names <= set(SESSION_ONLY)
+
+
 LANES = 2
 
 
@@ -152,6 +168,8 @@ def units(configurations, suites, weight, config_weights, lane, reach=None):
     for config in [DEFAULTS] + list(configurations):
         factor = 1.0 if config == DEFAULTS else config_weights.get(config, fill)
         for module, listed in suites:
+            if not reaches(config, module):
+                continue
             shared = []
             for name, alone in listed:
                 share = reach_share(reach, config, name)
@@ -319,6 +337,17 @@ class SelfTest(unittest.TestCase):
             got = times([Path(root, "runs")], read_reach(f))
             self.assertEqual(got, {"A": 110.0, "B": 20.0})
             self.assertEqual(times([Path(root, "runs")]), {"A": 100.0, "B": 20.0})
+
+    def test_a_session_only_configuration_leaves_catalyst_out(self):
+        suites = [("sql", [("S", False)]), ("catalyst", [("C", False)])]
+        got = units(["arrowBatchSize=1", "cse=false"], suites, lambda s: 10.0, {}, 480.0)
+        modules = {(c, m) for c, m, _, _ in got}
+        self.assertNotIn(("arrowBatchSize=1", "catalyst"), modules)
+        self.assertIn(("arrowBatchSize=1", "sql"), modules)
+        self.assertIn(("cse=false", "catalyst"), modules)
+        self.assertIn(("defaults", "catalyst"), modules)
+        self.assertFalse(reaches("arrowBatchSize=17", "catalyst"))
+        self.assertTrue(reaches("arrowBatchSize=1,cse=false", "catalyst"))
 
     def test_a_configuration_drops_the_suites_its_record_leaves_to_the_defaults(self):
         with tempfile.TemporaryDirectory() as root:
