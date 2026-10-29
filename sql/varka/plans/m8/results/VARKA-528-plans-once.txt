@@ -1,0 +1,59 @@
+# The harness's plans written once by the defaults' run and read by a configuration's
+# (VARKA-528), 30 October 2026, laptop numbers: AMD Ryzen AI 9 HX PRO 370, the three harness
+# suites in one JVM under dev/varka_matrix.sh --config cse=false --runs-only, one JVM at a time,
+# with other agents' JVMs on the machine (1-minute load 6 to 10 throughout), so the runs scatter
+# by several seconds and only differences well past that are read. Seconds are the suites' JUnit
+# times; every run passed every test.
+
+How the two runs find the store: -Dvarka.harness.store=<dir> on the JVM (dev/varka_matrix.sh
+--jvm-arg). A JVM of the defaults writes harness-<pid>-<nanos>.bin into dir as it exits; a JVM
+under a configuration reads every harness-*.bin there. Shown working:
+  dev/varka_matrix.sh --module sql --runs-only --defaults \
+      --suites VarkaCoverageHarnessSuite,VarkaDifferentialHarnessSuite,VarkaTimeHarnessSuite \
+      --jvm-arg -Dvarka.harness.store=target/harness-store
+    VARKA_HARNESS_STORE  WRITE  defaults  entries 21856  plans taken 0 planned 6984 unstorable 0
+  dev/varka_matrix.sh --module sql --runs-only --config cse=false --suites (the same) \
+      --jvm-arg -Dvarka.harness.store=target/harness-store
+    VARKA_HARNESS_STORE  READ  cse=false  entries 21856  plans taken 6984 planned 0 unstorable 0
+The file, with rows 527's and 526's entries too, is 14.4 MB gzipped: 2883 plans, 8564 Spark
+answers and 10409 check outcomes. The plans' measurement below reads a copy of it holding the
+2883 plan entries alone (1.0 MB), which is what this row's code writes.
+
+The round trip (VarkaHarnessParitySuite, "every plan the harness stores comes back from its
+bytes as the plan planned afresh"): every plan the coverage harness's checks make - each
+coverage row's projection or condition on the three answer fixtures at both ANSI settings, the
+partition oracle's filters and nullability under its three optimizer settings, the null-test
+conditions, the ANSI form's queries and Spark conditions on the extremes fixture, the domain
+rows on the edges fixture - 17696 plans, each read back over a second making of its fixture and
+printed whole (classes, constructor arguments, origins, tags, attribute ids, floating values by
+their raw bits) as that fixture's plan planned afresh: 0 differ, 0 unwritten. The test takes
+33.7 s of the suite's 44.7 s (the suite took 9.2 s before it).
+
+What the round trip found on the way, each now carried:
+  origins     Java serialization writes an expression's constructor arguments but not
+              TreeNode's own fields, TreeNode not being Serializable: a node read back had the
+              reading thread's origin, which an ANSI error quotes the SQL by. 4644 of the 17696
+              plans differed so before the origins were written beside the tree.
+  arguments   a RuntimeReplaceable's arguments are not its children (its replacement is), so
+              the origins are walked over both.
+  tags        a node's tags are TreeNode's too: day(d) is a DayOfMonth printed as day by its
+              FUNC_ALIAS tag, and shiftleft(i, 3) printed as i << 3 by its own.
+  InSet       an InSet holding a NaN never equals another, so such a plan is held to its
+              printed forms (147 queries over x IN (..., NaN)).
+
+The harness suites' seconds under cse=false, coverage + differential + time:
+  before, the tree of 42b9f0af8ae (no store):
+    run 1   43.2 + 3.3 + 3.0
+    run 2   42.6 + 3.3 + 3.1
+    run 3   57.4 + 3.3 + 3.2
+  this row's store (plans only), the tree of row 526's commit, no file:
+    run 1   40.6 + 2.8 + 2.6
+    run 2   45.0 + 3.6 + 3.2
+  with the plans' file:
+    run 1   28.0 + 2.5 + 3.0
+    run 2   34.3 + 3.3 + 3.7
+  so the coverage harness about 11 s faster, by the means of the two runs each (42.8 s to 31.2 s).
+
+The defaults' run pays for writing: the same three suites at the defaults, coverage harness
+54.1 s writing the whole store against 37.5 s without one (single runs, the load as above); the
+plans' share of that was not measured apart.
