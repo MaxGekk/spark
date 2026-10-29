@@ -1416,6 +1416,34 @@ jobs:
       with:
         distribution: zulu
         java-version: ${{ inputs.java }}
+    # Where a recent Build saved its compile state, this job starts from it and sbt compiles only
+    # what differs from it; without one, or with one sbt cannot use, it compiles clean as before
+    # (VARKA-520, dev/varka_compile_state.py). An optimization, so none of these steps fails the
+    # job.
+    - name: Find a saved compile state
+      id: compile-state
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        ./dev/varka_compile_state.py "$GITHUB_REPOSITORY" >> "$GITHUB_OUTPUT" \
+          || echo "run=" >> "$GITHUB_OUTPUT"
+    - name: Download the compile state
+      if: steps.compile-state.outputs.run != ''
+      continue-on-error: true
+      uses: actions/download-artifact@v4
+      with:
+        name: varka-compile-state
+        path: target/varka-compile-state
+        run-id: ${{ steps.compile-state.outputs.run }}
+        github-token: ${{ github.token }}
+    - name: Unpack the compile state
+      if: steps.compile-state.outputs.run != ''
+      continue-on-error: true
+      run: |
+        tar -xzf target/varka-compile-state/varka-compile-state.tgz
+        rm -rf target/varka-compile-state
+        echo "== the compile state of Build run ${{ steps.compile-state.outputs.run }}"
     - name: Build the test classes for the option matrix
       continue-on-error: true
       run: |
@@ -1514,6 +1542,34 @@ jobs:
         restore-keys: |
           varka-scoped-times-${{ matrix.module }}-${{ matrix.slug }}-
           varka-scoped-times-${{ matrix.module }}-
+    # Where a recent Build saved its compile state, this job starts from it and sbt compiles only
+    # what differs from it; without one, or with one sbt cannot use, it compiles clean as before
+    # (VARKA-520, dev/varka_compile_state.py). An optimization, so none of these steps fails the
+    # job.
+    - name: Find a saved compile state
+      id: compile-state
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        ./dev/varka_compile_state.py "$GITHUB_REPOSITORY" >> "$GITHUB_OUTPUT" \
+          || echo "run=" >> "$GITHUB_OUTPUT"
+    - name: Download the compile state
+      if: steps.compile-state.outputs.run != ''
+      continue-on-error: true
+      uses: actions/download-artifact@v4
+      with:
+        name: varka-compile-state
+        path: target/varka-compile-state
+        run-id: ${{ steps.compile-state.outputs.run }}
+        github-token: ${{ github.token }}
+    - name: Unpack the compile state
+      if: steps.compile-state.outputs.run != ''
+      continue-on-error: true
+      run: |
+        tar -xzf target/varka-compile-state/varka-compile-state.tgz
+        rm -rf target/varka-compile-state
+        echo "== the compile state of Build run ${{ steps.compile-state.outputs.run }}"
     # The lane walk of the docs job (VARKA-474 2.3), here too: the files it reads are Varka
     # sources, whose changes run this job and not the docs one. It runs in a second.
     - name: Every lane and type is wired where no compiler checks
@@ -1530,6 +1586,25 @@ jobs:
           export VARKA_REACH_RECORD=$PWD/target/varka-reach.tsv
         fi
         ./dev/varka_scoped_suites.sh ${{ matrix.module }} --shard ${{ matrix.shard }}
+    # sql's first job saves the compile state its suites ran on, every module's target/scala-2.13,
+    # for the next Builds to start from (VARKA-520). sql's classpath holds catalyst's, so this one
+    # state serves every Varka job.
+    - name: Save the compile state
+      if: matrix.module == 'sql' && matrix.shard == '0/3'
+      continue-on-error: true
+      run: |
+        find . -path ./target -prune -o -type d -path '*/target/scala-2.13' -print \
+          | tar -czf target/varka-compile-state.tgz -T -
+        ls -l target/varka-compile-state.tgz
+    - name: Upload the compile state
+      if: matrix.module == 'sql' && matrix.shard == '0/3'
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: varka-compile-state
+        path: target/varka-compile-state.tgz
+        retention-days: 3
+        compression-level: 0
     - name: Upload the record of which configurations move each test
       if: matrix.module == 'sql'
       continue-on-error: true
