@@ -20,6 +20,8 @@ package org.apache.spark.sql.execution;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.function.Supplier;
 
 import javax.annotation.Nullable;
@@ -30,11 +32,14 @@ import scala.jdk.javaapi.CollectionConverters;
 import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.catalyst.expressions.Attribute;
 import org.apache.spark.sql.catalyst.expressions.Expression;
+import org.apache.spark.sql.catalyst.expressions.GenericInternalRow;
 import org.apache.spark.sql.catalyst.expressions.InterpretedUnsafeProjection;
 import org.apache.spark.sql.catalyst.expressions.NamedExpression;
 import org.apache.spark.sql.catalyst.expressions.UnsafeProjection;
 import org.apache.spark.sql.catalyst.expressions.codegen.GenerateUnsafeProjection;
+import org.apache.spark.sql.catalyst.expressions.codegen.PartialVarkaProjection;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaExpressionCompiler;
+import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec;
 import org.apache.spark.sql.catalyst.expressions.codegen.VarkaOutputSpec.ResidualOutput;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSqlResolve;
 import org.apache.spark.sql.execution.columnar.VarkaCacheBatches;
@@ -184,8 +189,8 @@ public final class VarkaExpressionHarness {
   /**
    * Varka's projection evaluator over {@code rows}, as {@code consumer}'s exec node serves a
    * batch, against Spark's projection of the same list. The row node's {@code projectFused}
-   * returns the fused outputs alone, so every output must be fused for it, as every row of the
-   * coverage table is.
+   * returns the fused outputs alone, in the kernels' column order, so for it those outputs are
+   * compared, each with Spark's value of its own entry; the row node computes the others.
    */
   public static Outcome projection(String context, Seq<NamedExpression> projectList,
       VarkaHarnessPlans.Fixture fixture, SQLConf conf, Consumer consumer) {
@@ -199,12 +204,29 @@ public final class VarkaExpressionHarness {
       outputs.add((Expression) e);
     }
     DataType[] types = outputs.stream().map(Expression::dataType).toArray(DataType[]::new);
-    List<Expected> expected = spark(context, outputs, columns, all, types, outcome);
+    List<Expected> answers = spark(context, outputs, columns, all, types, outcome);
     // The outputs the evaluator's compile leaves to the row path, by the same compile.
-    outcome.residual = VarkaExpressionCompiler.compilePartial(projectList, columns,
-            VarkaColumnarToRowExec$.MODULE$.currentEmitOptions())
+    Optional<PartialVarkaProjection> partial = VarkaExpressionCompiler.compilePartial(
+        projectList, columns, VarkaColumnarToRowExec$.MODULE$.currentEmitOptions());
+    outcome.residual = partial
         .map(p -> (int) p.specs().stream().filter(x -> x instanceof ResidualOutput).count())
         .orElse(outputs.size());
+    List<Expected> expected = answers;
+    DataType[] compared = types;
+    if (consumer == Consumer.ROWS && partial.isPresent()) {
+      int[] kept = kernelColumns(partial.get());
+      compared = new DataType[kept.length];
+      for (int k = 0; k < kept.length; k++) {
+        compared[k] = types[kept[k]];
+      }
+      expected = new ArrayList<>(answers.size());
+      for (Expected e : answers) {
+        expected.add(e == null || e.row() == null ? e : new Expected(pick(e.row(), kept, types),
+            null));
+      }
+    }
+    DataType[] outTypes = compared;
+    List<Expected> want = expected;
     VarkaCacheBatches.inTask(() -> {
       var evaluator =
           new VarkaKernelEvaluator(projectList, columns, false, "VarkaExpressionHarness");
@@ -218,7 +240,7 @@ public final class VarkaExpressionHarness {
         if (out != null) {
           try {
             for (int i = 0; i < batch.numRows(); i++) {
-              compare(context, start + i, expected.get(start + i), out.getRow(i), types,
+              compare(context, start + i, want.get(start + i), out.getRow(i), outTypes,
                   outcome);
             }
           } finally {
@@ -229,6 +251,28 @@ public final class VarkaExpressionHarness {
       return null;
     });
     return outcome;
+  }
+
+  /** The projection position of each column {@code projectFused} returns, in its order. */
+  private static int[] kernelColumns(PartialVarkaProjection partial) {
+    List<VarkaOutputSpec> specs = partial.specs();
+    var byColumn = new java.util.TreeMap<Integer, Integer>();
+    for (int position = 0; position < specs.size(); position++) {
+      OptionalInt column = partial.columnIndex(specs.get(position));
+      if (column.isPresent()) {
+        byColumn.put(column.getAsInt(), position);
+      }
+    }
+    return byColumn.values().stream().mapToInt(Integer::intValue).toArray();
+  }
+
+  /** {@code row}'s values at {@code positions}, as a row of their own. */
+  private static InternalRow pick(InternalRow row, int[] positions, DataType[] types) {
+    var values = new Object[positions.length];
+    for (int k = 0; k < positions.length; k++) {
+      values[k] = row.isNullAt(positions[k]) ? null : row.get(positions[k], types[positions[k]]);
+    }
+    return new GenericInternalRow(values);
   }
 
   /**
