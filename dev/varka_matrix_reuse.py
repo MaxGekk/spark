@@ -26,7 +26,14 @@ run of the commit that has the archive, waiting while a run of that commit may s
 one, or `run=` when none will: no Build of the commit, a Build whose changes ran Spark's
 module matrix instead, or a wait past --wait minutes. The matrix compiles for itself then.
 
+The same Build's varka-scoped sql jobs record, as they run the suites at the defaults, which
+configurations move each test (VarkaTestReach), one `varka-matrix-reach-<job>` artifact a job.
+`reach RUN` prints `reach=1` when every such job of the run has succeeded with its artifact, so
+the matrix may skip what the record allows, and `reach=` otherwise: a configuration then runs
+every test.
+
   dev/varka_matrix_reuse.py REPOSITORY SHA [--wait MINUTES]    # in a step, with GH_TOKEN set
+  dev/varka_matrix_reuse.py reach REPOSITORY RUN
   dev/varka_matrix_reuse.py --selftest
 """
 
@@ -39,8 +46,11 @@ import unittest
 
 ARTIFACT = "varka-option-matrix-build"
 WORKFLOW = ".github/workflows/build_main.yml"
-JOB = "Varka suites: sql 1 of 2"
+JOB = "Varka suites: sql 1 of 3"
 UPLOAD = "Upload the test classes for the option matrix"
+# The scoped jobs that record: the sql ones (build_and_test.yml says why not the catalyst ones).
+SCOPED = "Varka suites: sql "
+REACH = "varka-matrix-reach-"
 PRECONDITION = "Check changes"
 # How long a Build gets to start its sql job: a run not yet created, a precondition still
 # deciding or a job still queued behind a full fork. Only a job that has started compiling earns
@@ -105,6 +115,17 @@ def find(repository, sha, wait_minutes, sleep=time.sleep, now=time.monotonic):
         sleep(30)
 
 
+def reach_complete(jobs, artifacts):
+    """Whether every varka-scoped sql job succeeded and each left a reach artifact."""
+    scoped = [j for j in jobs if j["name"].split(" / ")[-1].startswith(SCOPED)]
+    names = {a["name"] for a in artifacts if not a.get("expired")}
+    return (
+        bool(scoped)
+        and all(j.get("conclusion") == "success" for j in scoped)
+        and (len([n for n in names if n.startswith(REACH)]) == len(scoped))
+    )
+
+
 class SelfTest(unittest.TestCase):
     RUN = {"status": "in_progress"}
 
@@ -120,7 +141,7 @@ class SelfTest(unittest.TestCase):
         self.assertEqual(verdict(self.RUN, [], [check]), "pending")
         check = dict(check, status="completed")
         self.assertEqual(verdict(self.RUN, [], [check]), "none")
-        job = {"name": "Run / Varka suites: sql 1 of 2", "status": "queued"}
+        job = {"name": "Run / Varka suites: sql 1 of 3", "status": "queued"}
         self.assertEqual(verdict(self.RUN, [], [check, job]), "pending")
         job = dict(job, status="in_progress")
         self.assertEqual(verdict(self.RUN, [], [check, job]), "started")
@@ -128,6 +149,21 @@ class SelfTest(unittest.TestCase):
         # Past its upload step without an archive, the job will not make one.
         uploaded = dict(job, steps=[{"name": UPLOAD, "status": "completed"}])
         self.assertEqual(verdict(self.RUN, [], [check, uploaded]), "none")
+
+    def test_reach_is_complete_only_with_every_scoped_job_and_its_artifact(self):
+        jobs = [
+            {"name": "Run / Varka suites: sql 1 of 3", "conclusion": "success"},
+            {"name": "Run / Varka suites: sql 2 of 3", "conclusion": "success"},
+            {"name": "Run / Varka docs checks", "conclusion": "failure"},
+        ]
+        both = [{"name": REACH + "sql-1of3"}, {"name": REACH + "sql-2of3"}]
+        self.assertTrue(reach_complete(jobs, both))
+        self.assertFalse(reach_complete(jobs, both[:1]))
+        failed = [dict(jobs[0], conclusion="failure")] + jobs[1:]
+        self.assertFalse(reach_complete(failed, both))
+        self.assertFalse(reach_complete([jobs[2]], []), "a Build with no scoped job")
+        catalyst = {"name": "Run / Varka suites: catalyst 1 of 3", "conclusion": "success"}
+        self.assertTrue(reach_complete(jobs + [catalyst], both), "catalyst jobs record nothing")
 
     def fake_find(self, runs, jobs, wait):
         """`find` over a repository whose Build runs and jobs never change; the seconds slept."""
@@ -158,16 +194,29 @@ class SelfTest(unittest.TestCase):
 
     def test_a_queued_sql_job_gets_the_short_wait(self):
         run = {"id": 1, "path": WORKFLOW, "status": "in_progress"}
-        job = {"name": "Run / Varka suites: sql 1 of 2", "status": "queued", "steps": []}
+        job = {"name": "Run / Varka suites: sql 1 of 3", "status": "queued", "steps": []}
         self.assertEqual(self.fake_find([run], [job], 25), (None, START_MINUTES * 60))
 
     def test_a_started_sql_job_is_waited_for_until_the_deadline(self):
         run = {"id": 1, "path": WORKFLOW, "status": "in_progress"}
-        job = {"name": "Run / Varka suites: sql 1 of 2", "status": "in_progress", "steps": []}
+        job = {"name": "Run / Varka suites: sql 1 of 3", "status": "in_progress", "steps": []}
         self.assertEqual(self.fake_find([run], [job], 25), (None, 1500.0))
 
 
 def main(argv):
+    if argv[:1] == ["reach"]:
+        repository, run = argv[1], argv[2]
+        try:
+            jobs = gh(f"repos/{repository}/actions/runs/{run}/jobs?per_page=100")["jobs"]
+            artifacts = gh(f"repos/{repository}/actions/runs/{run}/artifacts?per_page=100")[
+                "artifacts"
+            ]
+            done = reach_complete(jobs, artifacts)
+        except (subprocess.CalledProcessError, KeyError, ValueError) as e:
+            print(f"no reach: {e}", file=sys.stderr)
+            done = False
+        print(f"reach={'1' if done else ''}")
+        return 0
     if argv[:1] == ["--selftest"]:
         result = unittest.main(argv=[sys.argv[0]], exit=False, verbosity=0).result
         ok = result.wasSuccessful()
