@@ -352,12 +352,31 @@ public final class VarkaSuiteHarnessSuite {
         VarkaSuiteExtension.repeatedNames(VarkaSuiteExtension.displayNames(getClass())));
   }
 
-  /** A parameterized and a dynamic test: never run, only read. */
+  /** A repeated test beside a dynamic one: never run, only read. */
+  @VarkaSuite
   abstract static class TemplateTests {
     @RepeatedTest(2)
     @DisplayName("repeated")
     void repeated() {}
 
+    @TestFactory
+    Stream<DynamicTest> dynamic() {
+      return Stream.of(DynamicTest.dynamicTest("one", () -> { }));
+    }
+  }
+
+  /** Dynamic tests alone, which the harness holds: never run, only read. */
+  @VarkaSuite
+  abstract static class DynamicTests {
+    @TestFactory
+    Stream<DynamicTest> dynamic() {
+      return Stream.of(DynamicTest.dynamicTest("one", () -> { }));
+    }
+  }
+
+  /** Dynamic tests in a class whose child JVM answers by method: never run, only read. */
+  @VarkaSuite(ownJvm = true)
+  abstract static class OwnJvmDynamicTests {
     @TestFactory
     Stream<DynamicTest> dynamic() {
       return Stream.of(DynamicTest.dynamicTest("one", () -> { }));
@@ -385,13 +404,17 @@ public final class VarkaSuiteHarnessSuite {
   }
 
   @Test
-  @DisplayName("a template or dynamic test, a nested class and an inherited annotation are refused")
+  @DisplayName("a template test, an ownJvm class's dynamic test, a nested class and an inherited "
+      + "annotation are refused, and a dynamic test is held")
   void shapesRefused() {
     var template = assertThrows(IllegalStateException.class,
         () -> VarkaSuiteExtension.checkShape(TemplateTests.class));
-    assertTrue(template.getMessage().contains("must be a plain @Test")
-        && template.getMessage().contains("repeated")
-        && template.getMessage().contains("dynamic"), template.getMessage());
+    assertTrue(template.getMessage().contains("repeated")
+        && !template.getMessage().contains("dynamic"), template.getMessage());
+    VarkaSuiteExtension.checkShape(DynamicTests.class);
+    var ownJvm = assertThrows(IllegalStateException.class,
+        () -> VarkaSuiteExtension.checkShape(OwnJvmDynamicTests.class));
+    assertTrue(ownJvm.getMessage().contains("ownJvm"), ownJvm.getMessage());
     var nested = assertThrows(IllegalStateException.class,
         () -> VarkaSuiteExtension.checkShape(NestedTests.class));
     assertTrue(nested.getMessage().contains("@Nested"), nested.getMessage());
@@ -399,6 +422,13 @@ public final class VarkaSuiteHarnessSuite {
         () -> VarkaSuiteExtension.checkShape(InheritsOnly.class));
     assertTrue(inherited.getMessage().contains("on the class itself"), inherited.getMessage());
     VarkaSuiteExtension.checkShape(getClass());
+  }
+
+  @TestFactory
+  @DisplayName("dynamic tests run under the harness")
+  Stream<DynamicTest> dynamicTestsRun() {
+    return Stream.of(DynamicTest.dynamicTest("a dynamic test of the harness's own suite",
+        () -> assertTrue(true)));
   }
 
   /** One test of each outcome while planted; four passing tests when sbt runs it alone. */

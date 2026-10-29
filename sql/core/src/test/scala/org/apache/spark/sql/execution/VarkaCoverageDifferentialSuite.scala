@@ -106,151 +106,8 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
     }
   }
 
-  /**
-   * The three fixtures, each a view with the table's columns: `d`, `d2` (dates), `i` (int),
-   * `ymm`, `ymy`, `ym` (the three year-month interval units), the long lane's `l`, `l2`
-   * (bigint, across its range), `t`, `t2` (`TIME(6)`) and `dt`, `dt2` (day-time intervals of
-   * both signs), and the narrow lanes' `y1`, `y2` (`TINYINT`) and `s1`, `s2` (`SMALLINT`) -
-   * built through SQL because an interval column has no plain Scala literal. The
-   * dates are the ones the other fixtures use
-   * - leap days, a 31st, 1969-12-31, the dates the table's `IN` rows name, 2021 dates for its
-   * `year(d) = 2021` rows, a far date inside the contract - `d2` is shifted against `d` or
-   * equal to it, `i` stays in 1..12 (inside the day-offset guard, and a valid month for
-   * `make_date(2021, i, 1)`), and the month counts stay inside the emitter's guard. The narrow
-   * pairs stay inside their type under `+`, `-`, `*` and the negation: the form that compares
-   * the two engines runs under the session's ANSI mode, where a pair that leaves the type is an
-   * error on the row engine rather than an answer to compare (the narrow rows' domains are cut
-   * on the `edges` fixture, which holds the values that leave it).
-   */
-  private val fixtures: Seq[(String, String)] = {
-    // `i` stays in 1..12: it doubles as the month of `make_date(2021, i, 1)`, and under the
-    // session's default ANSI mode an invalid month is an error on the row engine rather than
-    // a null, which is `VarkaDifferentialSuite`'s `varka_date_parts` business, not a shape in
-    // the table.
-    val dense = Seq(
-      "(DATE'2024-01-31', DATE'2024-02-29',  3,   3,  1,  2, CAST('5000000000' AS BIGINT), " +
-        "CAST('1' AS BIGINT), TIME'12:34:56.789', TIME'00:00:00', " +
-        "INTERVAL '1 02:03:04.5' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND, " +
-        "CAST(3 AS TINYINT), CAST(4 AS TINYINT), " +
-        "CAST(18 AS SMALLINT), CAST(-4 AS SMALLINT))",
-      "(DATE'2024-02-29', DATE'2024-02-29',  1, -14, -2,  0, CAST('-5000000000' AS BIGINT), " +
-        "CAST('-5000000000' AS BIGINT), TIME'00:00:00', TIME'23:59:59.999999', " +
-        "INTERVAL '-3 00:00:00.000001' DAY TO SECOND, INTERVAL '0 00:00:01' DAY TO SECOND, " +
-        "CAST(-2 AS TINYINT), CAST(6 AS TINYINT), " +
-        "CAST(-300 AS SMALLINT), CAST(7 AS SMALLINT))",
-      "(DATE'2023-12-27', DATE'2024-01-02', 12,  24,  3,  1, " +
-        "CAST('9223372036854775807' AS BIGINT), CAST('-9223372036854775808' AS BIGINT), " +
-        "TIME'23:59:59.999999', TIME'12:34:56.789', INTERVAL '100000 00:00:00' DAY TO SECOND, " +
-        "INTERVAL '-100000 00:00:00' DAY TO SECOND, " +
-        "CAST(-11 AS TINYINT), CAST(11 AS TINYINT), " +
-        "CAST(-181 AS SMALLINT), CAST(181 AS SMALLINT))",
-      "(DATE'2021-01-01', DATE'2020-12-31',  4,   0,  0, 11, CAST('0' AS BIGINT), " +
-        "CAST('0' AS BIGINT), TIME'06:00:00', TIME'06:00:00', " +
-        "INTERVAL '0 00:00:00' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND, " +
-        "CAST(10 AS TINYINT), CAST(-11 AS TINYINT), " +
-        "CAST(4 AS SMALLINT), CAST(3 AS SMALLINT))",
-      "(DATE'2021-06-01', DATE'2021-06-01',  6,   7,  2,  3, CAST('2147483648' AS BIGINT), " +
-        "CAST('2147483647' AS BIGINT), TIME'12:00:00', TIME'12:00:00.000001', " +
-        "INTERVAL '7 12:00:00' DAY TO SECOND, INTERVAL '7 12:00:00' DAY TO SECOND, " +
-        "CAST(-11 AS TINYINT), CAST(9 AS TINYINT), " +
-        "CAST(-181 AS SMALLINT), CAST(3 AS SMALLINT))",
-      "(DATE'2021-03-15', DATE'2021-03-14', 11,   1,  1,  5, CAST('-1' AS BIGINT), " +
-        "CAST('1' AS BIGINT), TIME'01:02:03.456', TIME'01:02:03.457', " +
-        "INTERVAL '-0 00:00:00.5' DAY TO SECOND, INTERVAL '0 00:00:00.5' DAY TO SECOND, " +
-        "CAST(11 AS TINYINT), CAST(11 AS TINYINT), " +
-        "CAST(181 AS SMALLINT), CAST(-1 AS SMALLINT))",
-      "(DATE'1969-12-31', DATE'1970-01-01',  5,  -1,  0,  0, CAST('42' AS BIGINT), " +
-        "CAST('-42' AS BIGINT), TIME'18:00:00', TIME'06:00:00', " +
-        "INTERVAL '1 00:00:00' DAY TO SECOND, INTERVAL '-1 00:00:00' DAY TO SECOND, " +
-        "CAST(0 AS TINYINT), CAST(0 AS TINYINT), " +
-        "CAST(0 AS SMALLINT), CAST(0 AS SMALLINT))",
-      "(DATE'2000-02-29', DATE'1999-12-31',  2,  12,  4,  6, CAST('-2147483649' AS BIGINT), " +
-        "CAST('-2147483648' AS BIGINT), TIME'09:30:00', TIME'09:29:59.999', " +
-        "INTERVAL '0 00:00:00.000001' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND, " +
-        "CAST(5 AS TINYINT), CAST(-6 AS TINYINT), " +
-        "CAST(5 AS SMALLINT), CAST(-7 AS SMALLINT))",
-      "(DATE'9999-12-01', DATE'0001-01-15',  7,   5,  1,  1, CAST('12345678901234' AS BIGINT), " +
-        "CAST('12345678901234' AS BIGINT), TIME'12:34:56.789', TIME'12:34:56.789', " +
-        "INTERVAL '2 00:00:00' DAY TO SECOND, INTERVAL '2 00:00:00' DAY TO SECOND, " +
-        "CAST(-1 AS TINYINT), CAST(1 AS TINYINT), " +
-        "CAST(-1 AS SMALLINT), CAST(1 AS SMALLINT))",
-      "(DATE'2021-11-01', DATE'2021-11-01',  9, 100,  2,  4, CAST('7' AS BIGINT), " +
-        "CAST('11' AS BIGINT), TIME'00:00:00.000001', TIME'00:00:00', " +
-        "INTERVAL '0 00:01:00' DAY TO SECOND, INTERVAL '0 00:00:59' DAY TO SECOND, " +
-        "CAST(9 AS TINYINT), CAST(7 AS TINYINT), " +
-        "CAST(8191 AS SMALLINT), CAST(2 AS SMALLINT))")
-    val allNullRow =
-      "(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, " +
-        "NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)"
-    val mixed = Seq(
-      "(DATE'2024-01-31', DATE'2024-02-29',  3,   3,  1,  2, CAST('5000000000' AS BIGINT), " +
-        "CAST('1' AS BIGINT), TIME'12:34:56.789', TIME'00:00:00', " +
-        "INTERVAL '1 02:03:04.5' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND, " +
-        "CAST(3 AS TINYINT), CAST(4 AS TINYINT), " +
-        "CAST(18 AS SMALLINT), CAST(-4 AS SMALLINT))",
-      "(NULL,             DATE'2024-02-29',  1, -14, -2,  0, NULL, " +
-        "CAST('-5000000000' AS BIGINT), TIME'00:00:00', TIME'23:59:59.999999', " +
-        "INTERVAL '-3 00:00:00.000001' DAY TO SECOND, INTERVAL '0 00:00:01' DAY TO SECOND, " +
-        "NULL, CAST(-61 AS TINYINT), " +
-        "NULL, CAST(300 AS SMALLINT))",
-      "(DATE'2023-12-27', NULL,             12,  24,  3,  1, " +
-        "CAST('9223372036854775807' AS BIGINT), CAST('-9223372036854775808' AS BIGINT), " +
-        "TIME'23:59:59.999999', TIME'12:34:56.789', INTERVAL '100000 00:00:00' DAY TO SECOND, " +
-        "INTERVAL '-100000 00:00:00' DAY TO SECOND, " +
-        "CAST(-11 AS TINYINT), CAST(11 AS TINYINT), " +
-        "CAST(-181 AS SMALLINT), CAST(181 AS SMALLINT))",
-      "(DATE'2021-01-01', DATE'2020-12-31', NULL, 0,  0, 11, CAST('0' AS BIGINT), " +
-        "CAST('0' AS BIGINT), NULL, TIME'06:00:00', INTERVAL '0 00:00:00' DAY TO SECOND, " +
-        "INTERVAL '0 00:00:00' DAY TO SECOND, " +
-        "CAST(10 AS TINYINT), CAST(-11 AS TINYINT), " +
-        "CAST(4 AS SMALLINT), CAST(3 AS SMALLINT))",
-      "(DATE'2021-06-01', DATE'2021-06-01',  6, NULL, 2,  3, CAST('2147483648' AS BIGINT), " +
-        "CAST('2147483647' AS BIGINT), TIME'12:00:00', TIME'12:00:00.000001', " +
-        "INTERVAL '7 12:00:00' DAY TO SECOND, INTERVAL '7 12:00:00' DAY TO SECOND, " +
-        "CAST(-11 AS TINYINT), NULL, " +
-        "CAST(-181 AS SMALLINT), NULL)",
-      "(DATE'2021-03-15', DATE'2021-03-14', 11,   1, NULL, 5, CAST('-1' AS BIGINT), " +
-        "CAST('1' AS BIGINT), TIME'01:02:03.456', TIME'01:02:03.457', NULL, " +
-        "INTERVAL '0 00:00:00.5' DAY TO SECOND, " +
-        "CAST(11 AS TINYINT), CAST(11 AS TINYINT), " +
-        "CAST(181 AS SMALLINT), CAST(-1 AS SMALLINT))",
-      "(DATE'1969-12-31', DATE'1970-01-01',  5,  -1,  0, NULL, CAST('42' AS BIGINT), " +
-        "CAST('-42' AS BIGINT), TIME'18:00:00', TIME'06:00:00', " +
-        "INTERVAL '1 00:00:00' DAY TO SECOND, INTERVAL '-1 00:00:00' DAY TO SECOND, " +
-        "CAST(0 AS TINYINT), CAST(0 AS TINYINT), " +
-        "CAST(0 AS SMALLINT), CAST(0 AS SMALLINT))",
-      allNullRow,
-      "(DATE'9999-12-01', DATE'0001-01-15',  7,   5,  1,  1, CAST('-2147483649' AS BIGINT), " +
-        "NULL, TIME'09:30:00', TIME'09:29:59.999', INTERVAL '0 00:00:00.000001' DAY TO SECOND, " +
-        "INTERVAL '0 00:00:00' DAY TO SECOND, " +
-        "CAST(5 AS TINYINT), CAST(-6 AS TINYINT), " +
-        "CAST(5 AS SMALLINT), CAST(-7 AS SMALLINT))",
-      "(DATE'2021-11-01', DATE'2021-11-01',  9, 100,  2,  4, CAST('12345678901234' AS BIGINT), " +
-        "CAST('12345678901234' AS BIGINT), TIME'12:34:56.789', TIME'12:34:56.789', " +
-        "INTERVAL '2 00:00:00' DAY TO SECOND, INTERVAL '2 00:00:00' DAY TO SECOND, " +
-        "CAST(-1 AS TINYINT), CAST(1 AS TINYINT), " +
-        "CAST(-1 AS SMALLINT), CAST(1 AS SMALLINT))")
-    val allNull = Seq.fill(8)(
-      "(CAST(NULL AS DATE), CAST(NULL AS DATE), CAST(NULL AS INT), CAST(NULL AS INT), " +
-        "CAST(NULL AS INT), CAST(NULL AS INT), CAST(NULL AS BIGINT), CAST(NULL AS BIGINT), " +
-        "CAST(NULL AS TIME(6)), CAST(NULL AS TIME(6)), " +
-        "CAST(NULL AS INTERVAL DAY TO SECOND), CAST(NULL AS INTERVAL DAY TO SECOND), " +
-        "CAST(NULL AS TINYINT), CAST(NULL AS TINYINT), " +
-        "CAST(NULL AS SMALLINT), CAST(NULL AS SMALLINT))")
-    // Each row gets its position as `rid`, so the partition test can tell rows apart by id -
-    // the all-null fixture's rows are otherwise identical.
-    def view(values: Seq[String], where: String = ""): String =
-      VarkaCoverageDifferentialSuite.fixtureView(values, where)
-    // The dense fixture carries the all-null row in its VALUES and filters it out again, so
-    // its columns stay nullable: over a column Spark knows to be non-nullable, `d IS NULL`
-    // folds to false, `coalesce(d, d2)` to `d`, and the optimizer leaves nothing for Varka to
-    // fuse - a fact about the optimizer, not about the table.
-    Seq("varka_coverage_mixed" -> view(mixed), "varka_coverage_dense" -> view(dense :+ allNullRow,
-      "\nWHERE d IS NOT NULL AND d2 IS NOT NULL AND i IS NOT NULL AND m IS NOT NULL AND " +
-        "y IS NOT NULL AND mm IS NOT NULL AND l IS NOT NULL AND l2 IS NOT NULL AND " +
-        "t IS NOT NULL AND t2 IS NOT NULL AND dt IS NOT NULL AND dt2 IS NOT NULL"),
-      "varka_coverage_nulls" -> view(allNull))
-  }
+  /** The three answer fixtures, shared with the harness's suite (VARKA-509). */
+  private val fixtures: Seq[(String, String)] = VarkaCoverageDifferentialSuite.fixtures
 
   /**
    * The ANSI form's fixture: one row at the extremes of every column's type beside a second row
@@ -1354,6 +1211,152 @@ class VarkaCoverageDifferentialSuite extends QueryTest with VarkaMaybeThrows
 }
 
 private object VarkaCoverageDifferentialSuite {
+
+  /**
+   * The three fixtures, each a view with the table's columns: `d`, `d2` (dates), `i` (int),
+   * `ymm`, `ymy`, `ym` (the three year-month interval units), the long lane's `l`, `l2`
+   * (bigint, across its range), `t`, `t2` (`TIME(6)`) and `dt`, `dt2` (day-time intervals of
+   * both signs), and the narrow lanes' `y1`, `y2` (`TINYINT`) and `s1`, `s2` (`SMALLINT`) -
+   * built through SQL because an interval column has no plain Scala literal. The
+   * dates are the ones the other fixtures use
+   * - leap days, a 31st, 1969-12-31, the dates the table's `IN` rows name, 2021 dates for its
+   * `year(d) = 2021` rows, a far date inside the contract - `d2` is shifted against `d` or
+   * equal to it, `i` stays in 1..12 (inside the day-offset guard, and a valid month for
+   * `make_date(2021, i, 1)`), and the month counts stay inside the emitter's guard. The narrow
+   * pairs stay inside their type under `+`, `-`, `*` and the negation: the form that compares
+   * the two engines runs under the session's ANSI mode, where a pair that leaves the type is an
+   * error on the row engine rather than an answer to compare (the narrow rows' domains are cut
+   * on the `edges` fixture, which holds the values that leave it).
+   */
+  lazy val fixtures: Seq[(String, String)] = {
+    // `i` stays in 1..12: it doubles as the month of `make_date(2021, i, 1)`, and under the
+    // session's default ANSI mode an invalid month is an error on the row engine rather than
+    // a null, which is `VarkaDifferentialSuite`'s `varka_date_parts` business, not a shape in
+    // the table.
+    val dense = Seq(
+      "(DATE'2024-01-31', DATE'2024-02-29',  3,   3,  1,  2, CAST('5000000000' AS BIGINT), " +
+        "CAST('1' AS BIGINT), TIME'12:34:56.789', TIME'00:00:00', " +
+        "INTERVAL '1 02:03:04.5' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND, " +
+        "CAST(3 AS TINYINT), CAST(4 AS TINYINT), " +
+        "CAST(18 AS SMALLINT), CAST(-4 AS SMALLINT))",
+      "(DATE'2024-02-29', DATE'2024-02-29',  1, -14, -2,  0, CAST('-5000000000' AS BIGINT), " +
+        "CAST('-5000000000' AS BIGINT), TIME'00:00:00', TIME'23:59:59.999999', " +
+        "INTERVAL '-3 00:00:00.000001' DAY TO SECOND, INTERVAL '0 00:00:01' DAY TO SECOND, " +
+        "CAST(-2 AS TINYINT), CAST(6 AS TINYINT), " +
+        "CAST(-300 AS SMALLINT), CAST(7 AS SMALLINT))",
+      "(DATE'2023-12-27', DATE'2024-01-02', 12,  24,  3,  1, " +
+        "CAST('9223372036854775807' AS BIGINT), CAST('-9223372036854775808' AS BIGINT), " +
+        "TIME'23:59:59.999999', TIME'12:34:56.789', INTERVAL '100000 00:00:00' DAY TO SECOND, " +
+        "INTERVAL '-100000 00:00:00' DAY TO SECOND, " +
+        "CAST(-11 AS TINYINT), CAST(11 AS TINYINT), " +
+        "CAST(-181 AS SMALLINT), CAST(181 AS SMALLINT))",
+      "(DATE'2021-01-01', DATE'2020-12-31',  4,   0,  0, 11, CAST('0' AS BIGINT), " +
+        "CAST('0' AS BIGINT), TIME'06:00:00', TIME'06:00:00', " +
+        "INTERVAL '0 00:00:00' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND, " +
+        "CAST(10 AS TINYINT), CAST(-11 AS TINYINT), " +
+        "CAST(4 AS SMALLINT), CAST(3 AS SMALLINT))",
+      "(DATE'2021-06-01', DATE'2021-06-01',  6,   7,  2,  3, CAST('2147483648' AS BIGINT), " +
+        "CAST('2147483647' AS BIGINT), TIME'12:00:00', TIME'12:00:00.000001', " +
+        "INTERVAL '7 12:00:00' DAY TO SECOND, INTERVAL '7 12:00:00' DAY TO SECOND, " +
+        "CAST(-11 AS TINYINT), CAST(9 AS TINYINT), " +
+        "CAST(-181 AS SMALLINT), CAST(3 AS SMALLINT))",
+      "(DATE'2021-03-15', DATE'2021-03-14', 11,   1,  1,  5, CAST('-1' AS BIGINT), " +
+        "CAST('1' AS BIGINT), TIME'01:02:03.456', TIME'01:02:03.457', " +
+        "INTERVAL '-0 00:00:00.5' DAY TO SECOND, INTERVAL '0 00:00:00.5' DAY TO SECOND, " +
+        "CAST(11 AS TINYINT), CAST(11 AS TINYINT), " +
+        "CAST(181 AS SMALLINT), CAST(-1 AS SMALLINT))",
+      "(DATE'1969-12-31', DATE'1970-01-01',  5,  -1,  0,  0, CAST('42' AS BIGINT), " +
+        "CAST('-42' AS BIGINT), TIME'18:00:00', TIME'06:00:00', " +
+        "INTERVAL '1 00:00:00' DAY TO SECOND, INTERVAL '-1 00:00:00' DAY TO SECOND, " +
+        "CAST(0 AS TINYINT), CAST(0 AS TINYINT), " +
+        "CAST(0 AS SMALLINT), CAST(0 AS SMALLINT))",
+      "(DATE'2000-02-29', DATE'1999-12-31',  2,  12,  4,  6, CAST('-2147483649' AS BIGINT), " +
+        "CAST('-2147483648' AS BIGINT), TIME'09:30:00', TIME'09:29:59.999', " +
+        "INTERVAL '0 00:00:00.000001' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND, " +
+        "CAST(5 AS TINYINT), CAST(-6 AS TINYINT), " +
+        "CAST(5 AS SMALLINT), CAST(-7 AS SMALLINT))",
+      "(DATE'9999-12-01', DATE'0001-01-15',  7,   5,  1,  1, CAST('12345678901234' AS BIGINT), " +
+        "CAST('12345678901234' AS BIGINT), TIME'12:34:56.789', TIME'12:34:56.789', " +
+        "INTERVAL '2 00:00:00' DAY TO SECOND, INTERVAL '2 00:00:00' DAY TO SECOND, " +
+        "CAST(-1 AS TINYINT), CAST(1 AS TINYINT), " +
+        "CAST(-1 AS SMALLINT), CAST(1 AS SMALLINT))",
+      "(DATE'2021-11-01', DATE'2021-11-01',  9, 100,  2,  4, CAST('7' AS BIGINT), " +
+        "CAST('11' AS BIGINT), TIME'00:00:00.000001', TIME'00:00:00', " +
+        "INTERVAL '0 00:01:00' DAY TO SECOND, INTERVAL '0 00:00:59' DAY TO SECOND, " +
+        "CAST(9 AS TINYINT), CAST(7 AS TINYINT), " +
+        "CAST(8191 AS SMALLINT), CAST(2 AS SMALLINT))")
+    val allNullRow =
+      "(NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, " +
+        "NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)"
+    val mixed = Seq(
+      "(DATE'2024-01-31', DATE'2024-02-29',  3,   3,  1,  2, CAST('5000000000' AS BIGINT), " +
+        "CAST('1' AS BIGINT), TIME'12:34:56.789', TIME'00:00:00', " +
+        "INTERVAL '1 02:03:04.5' DAY TO SECOND, INTERVAL '0 00:00:00' DAY TO SECOND, " +
+        "CAST(3 AS TINYINT), CAST(4 AS TINYINT), " +
+        "CAST(18 AS SMALLINT), CAST(-4 AS SMALLINT))",
+      "(NULL,             DATE'2024-02-29',  1, -14, -2,  0, NULL, " +
+        "CAST('-5000000000' AS BIGINT), TIME'00:00:00', TIME'23:59:59.999999', " +
+        "INTERVAL '-3 00:00:00.000001' DAY TO SECOND, INTERVAL '0 00:00:01' DAY TO SECOND, " +
+        "NULL, CAST(-61 AS TINYINT), " +
+        "NULL, CAST(300 AS SMALLINT))",
+      "(DATE'2023-12-27', NULL,             12,  24,  3,  1, " +
+        "CAST('9223372036854775807' AS BIGINT), CAST('-9223372036854775808' AS BIGINT), " +
+        "TIME'23:59:59.999999', TIME'12:34:56.789', INTERVAL '100000 00:00:00' DAY TO SECOND, " +
+        "INTERVAL '-100000 00:00:00' DAY TO SECOND, " +
+        "CAST(-11 AS TINYINT), CAST(11 AS TINYINT), " +
+        "CAST(-181 AS SMALLINT), CAST(181 AS SMALLINT))",
+      "(DATE'2021-01-01', DATE'2020-12-31', NULL, 0,  0, 11, CAST('0' AS BIGINT), " +
+        "CAST('0' AS BIGINT), NULL, TIME'06:00:00', INTERVAL '0 00:00:00' DAY TO SECOND, " +
+        "INTERVAL '0 00:00:00' DAY TO SECOND, " +
+        "CAST(10 AS TINYINT), CAST(-11 AS TINYINT), " +
+        "CAST(4 AS SMALLINT), CAST(3 AS SMALLINT))",
+      "(DATE'2021-06-01', DATE'2021-06-01',  6, NULL, 2,  3, CAST('2147483648' AS BIGINT), " +
+        "CAST('2147483647' AS BIGINT), TIME'12:00:00', TIME'12:00:00.000001', " +
+        "INTERVAL '7 12:00:00' DAY TO SECOND, INTERVAL '7 12:00:00' DAY TO SECOND, " +
+        "CAST(-11 AS TINYINT), NULL, " +
+        "CAST(-181 AS SMALLINT), NULL)",
+      "(DATE'2021-03-15', DATE'2021-03-14', 11,   1, NULL, 5, CAST('-1' AS BIGINT), " +
+        "CAST('1' AS BIGINT), TIME'01:02:03.456', TIME'01:02:03.457', NULL, " +
+        "INTERVAL '0 00:00:00.5' DAY TO SECOND, " +
+        "CAST(11 AS TINYINT), CAST(11 AS TINYINT), " +
+        "CAST(181 AS SMALLINT), CAST(-1 AS SMALLINT))",
+      "(DATE'1969-12-31', DATE'1970-01-01',  5,  -1,  0, NULL, CAST('42' AS BIGINT), " +
+        "CAST('-42' AS BIGINT), TIME'18:00:00', TIME'06:00:00', " +
+        "INTERVAL '1 00:00:00' DAY TO SECOND, INTERVAL '-1 00:00:00' DAY TO SECOND, " +
+        "CAST(0 AS TINYINT), CAST(0 AS TINYINT), " +
+        "CAST(0 AS SMALLINT), CAST(0 AS SMALLINT))",
+      allNullRow,
+      "(DATE'9999-12-01', DATE'0001-01-15',  7,   5,  1,  1, CAST('-2147483649' AS BIGINT), " +
+        "NULL, TIME'09:30:00', TIME'09:29:59.999', INTERVAL '0 00:00:00.000001' DAY TO SECOND, " +
+        "INTERVAL '0 00:00:00' DAY TO SECOND, " +
+        "CAST(5 AS TINYINT), CAST(-6 AS TINYINT), " +
+        "CAST(5 AS SMALLINT), CAST(-7 AS SMALLINT))",
+      "(DATE'2021-11-01', DATE'2021-11-01',  9, 100,  2,  4, CAST('12345678901234' AS BIGINT), " +
+        "CAST('12345678901234' AS BIGINT), TIME'12:34:56.789', TIME'12:34:56.789', " +
+        "INTERVAL '2 00:00:00' DAY TO SECOND, INTERVAL '2 00:00:00' DAY TO SECOND, " +
+        "CAST(-1 AS TINYINT), CAST(1 AS TINYINT), " +
+        "CAST(-1 AS SMALLINT), CAST(1 AS SMALLINT))")
+    val allNull = Seq.fill(8)(
+      "(CAST(NULL AS DATE), CAST(NULL AS DATE), CAST(NULL AS INT), CAST(NULL AS INT), " +
+        "CAST(NULL AS INT), CAST(NULL AS INT), CAST(NULL AS BIGINT), CAST(NULL AS BIGINT), " +
+        "CAST(NULL AS TIME(6)), CAST(NULL AS TIME(6)), " +
+        "CAST(NULL AS INTERVAL DAY TO SECOND), CAST(NULL AS INTERVAL DAY TO SECOND), " +
+        "CAST(NULL AS TINYINT), CAST(NULL AS TINYINT), " +
+        "CAST(NULL AS SMALLINT), CAST(NULL AS SMALLINT))")
+    // Each row gets its position as `rid`, so the partition test can tell rows apart by id -
+    // the all-null fixture's rows are otherwise identical.
+    def view(values: Seq[String], where: String = ""): String =
+      fixtureView(values, where)
+    // The dense fixture carries the all-null row in its VALUES and filters it out again, so
+    // its columns stay nullable: over a column Spark knows to be non-nullable, `d IS NULL`
+    // folds to false, `coalesce(d, d2)` to `d`, and the optimizer leaves nothing for Varka to
+    // fuse - a fact about the optimizer, not about the table.
+    Seq("varka_coverage_mixed" -> view(mixed), "varka_coverage_dense" -> view(dense :+ allNullRow,
+      "\nWHERE d IS NOT NULL AND d2 IS NOT NULL AND i IS NOT NULL AND m IS NOT NULL AND " +
+        "y IS NOT NULL AND mm IS NOT NULL AND l IS NOT NULL AND l2 IS NOT NULL AND " +
+        "t IS NOT NULL AND t2 IS NOT NULL AND dt IS NOT NULL AND dt2 IS NOT NULL"),
+      "varka_coverage_nulls" -> view(allNull))
+  }
 
   /** The last day whose midnight is a long count of microseconds: the NTZ cast's bound. */
   val lastNtzDay: Long = Long.MaxValue / DateTimeConstants.MICROS_PER_DAY
