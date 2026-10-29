@@ -59,7 +59,9 @@ projection, and a few batches.
 
 ## 3. The end-to-end layer that stays
 
-One `VarkaSharedSessions` suite, small, a test a path rather than a test a row:
+A test a path rather than a test a row, in the session suites that already hold the path, each
+named in `m8/results/VARKA-509-step2e-local.txt`; `VarkaCoverageDifferentialSuite` keeps the
+sample rows and the ANSI errors:
 
 - each consumer (rows, Arrow cache, filter) over a fixed sample of coverage rows, one per family;
 - `VarkaColumnarRule` fusing a row and declining one it must decline;

@@ -220,6 +220,10 @@ public final class VarkaCoverageHarnessSuite {
             SQLConf conf = setting.getValue();
             boolean mustFuse = setting.getKey().equals("NullPropagation excluded too");
             for (Map.Entry<String, VarkaHarnessPlans.Fixture> f : FIXTURES.entrySet()) {
+              if (!setting.getKey().equals("default optimizer")) {
+                findings.addAll(withConf(conf, () -> notAsWritten(
+                    f.getKey() + ", " + setting.getKey(), row.executable(), f.getValue())));
+              }
               findings.addAll(withConf(conf, () -> VarkaPartitionOracle.check(
                   f.getKey() + ", " + setting.getKey(), row.executable(), f.getValue(), conf,
                   mustFuse)));
@@ -227,6 +231,22 @@ public final class VarkaCoverageHarnessSuite {
           }
           assertTrue(findings.isEmpty(), String.join("\n", findings));
         }));
+  }
+
+  /**
+   * What is wrong with {@code WHERE NOT (p)} under the thread's conf, the partition rewrites
+   * excluded: the condition must reach Varka as the {@code Not} it was written as, or the
+   * exclusion did not take and the oracle would check the rewrite it means to bypass.
+   */
+  private static List<String> notAsWritten(String context, String p,
+      VarkaHarnessPlans.Fixture fixture) {
+    VarkaHarnessPlans.Query q =
+        VarkaHarnessPlans.query("SELECT rid FROM t WHERE NOT (" + p + ")", fixture.columns());
+    if (q instanceof VarkaHarnessPlans.Query.Selection s
+        && s.condition() instanceof org.apache.spark.sql.catalyst.expressions.Not) {
+      return List.of();
+    }
+    return List.of(context + ": WHERE NOT (" + p + ") did not reach Varka as a Not: " + q);
   }
 
   /**
@@ -360,6 +380,28 @@ public final class VarkaCoverageHarnessSuite {
       return null;
     });
     assertTrue(unread.isEmpty(), "declined entries no reach check reads: " + unread);
+  }
+
+  @Test
+  @DisplayName("the ANSI form's raising rows name each condition a coverage row raises, by its "
+      + "first row")
+  void raisesListIsCurrent() {
+    // The end-to-end suite runs these rows through a session, one an error condition; a
+    // condition no entry names would never reach a user's test, and an entry whose row no longer
+    // raises it would test nothing.
+    SQLConf conf = conf(true);
+    var actual = new java.util.TreeMap<String, String>();
+    withConf(conf, () -> {
+      for (Row row : ROWS) {
+        VarkaAnsiForm.sparkCondition(row.executable(), EXTREMES)
+            .ifPresent(c -> actual.putIfAbsent(c, row.sql()));
+      }
+      return null;
+    });
+    assertTrue(actual.equals(new java.util.TreeMap<>(VarkaAnsiForm.RAISES)),
+        "the rows that raise each condition first:\n" + actual.entrySet().stream()
+            .map(e -> "Map.entry(\"" + e.getKey() + "\", \"" + e.getValue() + "\")")
+            .collect(java.util.stream.Collectors.joining(",\n")));
   }
 
   @Test

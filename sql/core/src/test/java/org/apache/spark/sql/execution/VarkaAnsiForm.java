@@ -26,6 +26,7 @@ import java.util.Optional;
 
 import scala.jdk.javaapi.CollectionConverters;
 
+import org.apache.spark.SparkThrowable;
 import org.apache.spark.sql.catalyst.expressions.Attribute;
 import org.apache.spark.sql.catalyst.expressions.Expression;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes;
@@ -207,6 +208,35 @@ public final class VarkaAnsiForm {
       out.put(sql + "\t" + FALSE_AND, unqualified);
     }
     return Map.copyOf(out);
+  }
+
+  /**
+   * The error conditions the coverage rows raise alone on the extremes fixture under ANSI, each
+   * with the first row of the table that raises it: the rows the end-to-end suite runs through a
+   * session, one a condition, so that each error reaches a user as Spark raises it.
+   * {@code VarkaCoverageHarnessSuite} holds the list to the table both ways.
+   */
+  public static final Map<String, String> RAISES = Map.ofEntries(
+      Map.entry("ARITHMETIC_OVERFLOW", "add_months(d, i)"),
+      Map.entry("BINARY_ARITHMETIC_OVERFLOW", "y1 + y2"),
+      Map.entry("CAST_OVERFLOW", "d + CAST(i AS INTERVAL DAY)"),
+      Map.entry("DATETIME_FIELD_OUT_OF_BOUNDS.WITHOUT_SUGGESTION", "make_date(2021, i, 1)"),
+      Map.entry("INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION", "ym - ymm"));
+
+  /**
+   * The condition Spark's interpreter raises evaluating {@code expression} over the fixture's
+   * rows under the thread's conf, or empty where it raises none.
+   */
+  static Optional<String> sparkCondition(String expression, VarkaHarnessPlans.Fixture fixture) {
+    try {
+      VarkaDomains.sparkValues(expression, fixture);
+      return Optional.empty();
+    } catch (RuntimeException e) {
+      if (e instanceof SparkThrowable t && t.getCondition() != null) {
+        return Optional.of(t.getCondition());
+      }
+      throw e;
+    }
   }
 
   /**
