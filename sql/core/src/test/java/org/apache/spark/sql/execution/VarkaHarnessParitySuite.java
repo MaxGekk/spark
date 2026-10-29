@@ -49,7 +49,8 @@ import org.junit.jupiter.api.Test;
  * columns and canonicalized, the one in a session's optimized plan over the cached fixture.
  * The session plans and executes nothing - the fixtures are cached lazily and never read - so
  * this costs the analyzer and the optimizer only, and it fails the day the harness's optimizer
- * and a session's part.
+ * and a session's part. The hand-written queries of {@link VarkaHarnessCases} are held to a
+ * session's plan the same way, over a view with their fixture's columns.
  */
 @VarkaSuite
 public final class VarkaHarnessParitySuite {
@@ -133,5 +134,73 @@ public final class VarkaHarnessParitySuite {
     assertTrue(compared > 0, "no row compared");
     assertTrue(differences.isEmpty(), differences.size() + " of " + compared
         + " expressions differ:\n" + String.join("\n", differences));
+  }
+
+  /** {@code e} itself, or an alias's child: the alias's id is the plan's own. */
+  private static Expression unaliased(NamedExpression e) {
+    return e instanceof Alias a ? a.child() : (Expression) e;
+  }
+
+  @Test
+  @DisplayName("every hand-written harness query's expressions are the ones a session's "
+      + "optimizer plans")
+  void handWrittenQueriesAreTheSessions() {
+    var differences = new ArrayList<String>();
+    int compared = 0;
+    for (VarkaHarnessCases.Case c : VarkaTimeHarnessSuite.all()) {
+      // The cache is lazy and never read: it keeps the optimizer from folding the view's rows.
+      if (spark.catalog().tableExists("t")) {
+        spark.catalog().uncacheTable("t");
+      }
+      spark.sql(c.source().schema()).createOrReplaceTempView("t");
+      spark.catalog().cacheTable("t");
+      Seq<Attribute> columns = c.source().fixture().columns();
+      for (VarkaHarnessCases.Shape shape : c.shapes()) {
+        String where = c.name() + ", " + shape.sql();
+        LogicalPlan plan = spark.sql(shape.sql()).queryExecution().optimizedPlan();
+        LogicalPlan below = plan instanceof Project p && p.child() instanceof Filter
+            ? p.child() : plan;
+        var mine = new ArrayList<Expression>();
+        var theirs = new ArrayList<Expression>();
+        Seq<Attribute> theirColumns;
+        switch (VarkaHarnessPlans.query(shape.sql(), columns)) {
+          case VarkaHarnessPlans.Query.Selection s when below instanceof Filter f -> {
+            mine.add(s.condition());
+            theirs.add(f.condition());
+            theirColumns = f.child().output();
+          }
+          case VarkaHarnessPlans.Query.Projection p when plan instanceof Project q
+              && !(q.child() instanceof Filter) -> {
+            CollectionConverters.asJava(p.list()).forEach(e -> mine.add(unaliased(e)));
+            CollectionConverters.asJava(q.projectList()).forEach(e -> theirs.add(unaliased(e)));
+            theirColumns = q.child().output();
+          }
+          default -> {
+            differences.add(where + ": the session plans another shape:\n"
+                + plan.treeString());
+            continue;
+          }
+        }
+        compared++;
+        if (mine.size() != theirs.size()) {
+          differences.add(where + ": the harness has " + mine.size() + " outputs, the session "
+              + theirs.size());
+          continue;
+        }
+        for (int k = 0; k < mine.size(); k++) {
+          Expression a = canonical(mine.get(k), columns);
+          Expression b = canonical(theirs.get(k), theirColumns);
+          if (!a.equals(b) && !a.toString().equals(b.toString())) {
+            differences.add(where + ": the harness has " + mine.get(k).sql() + ", the session "
+                + theirs.get(k).sql());
+          }
+        }
+      }
+    }
+    spark.catalog().uncacheTable("t");
+    spark.catalog().dropTempView("t");
+    assertTrue(compared > 0, "no query compared");
+    assertTrue(differences.isEmpty(), differences.size() + " of " + compared
+        + " queries differ:\n" + String.join("\n", differences));
   }
 }
