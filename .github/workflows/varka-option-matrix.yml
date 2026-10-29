@@ -174,10 +174,31 @@ jobs:
       max-parallel: 30
       matrix: ${{ fromJSON(needs.build.outputs.bins) }}
     steps:
+    # The run's wall time is its slowest bin's, so a setup step that stalls holds back the whole
+    # run: in run 40855387471 one bin spent 16.3 minutes installing Java, where the median bin took
+    # 8 seconds (VARKA-513). Each setup step of a bin has a timeout a few times its usual length
+    # and, when it times out or fails, one retry, which leaves a line the report job prints.
     - name: Checkout
+      id: checkout
       uses: actions/checkout@v6
+      timeout-minutes: 3
+      continue-on-error: true
+    - name: Checkout, again
+      if: steps.checkout.outcome != 'success'
+      uses: actions/checkout@v6
+      timeout-minutes: 5
     - name: Install Java 25
+      id: java
       uses: actions/setup-java@v5
+      timeout-minutes: 3
+      continue-on-error: true
+      with:
+        distribution: zulu
+        java-version: '25'
+    - name: Install Java 25, again
+      if: steps.java.outcome != 'success'
+      uses: actions/setup-java@v5
+      timeout-minutes: 5
       with:
         distribution: zulu
         java-version: '25'
@@ -189,10 +210,38 @@ jobs:
       with:
         dir: target/varka-units/${{ matrix.bin }}/${{ matrix.bin }}-platform
     - name: Download the classpath
+      id: classpath
       uses: actions/download-artifact@v4
+      timeout-minutes: 8
+      continue-on-error: true
       with:
         name: varka-option-matrix-build
         path: target
+    - name: Download the classpath, again
+      if: steps.classpath.outcome != 'success'
+      uses: actions/download-artifact@v4
+      timeout-minutes: 10
+      with:
+        name: varka-option-matrix-build
+        path: target
+    - name: Record the setup steps retried
+      if: >-
+        steps.checkout.outcome != 'success' || steps.java.outcome != 'success'
+        || steps.classpath.outcome != 'success'
+      env:
+        BIN: ${{ matrix.bin }}
+        CHECKOUT: ${{ steps.checkout.outcome }}
+        JAVA: ${{ steps.java.outcome }}
+        CLASSPATH: ${{ steps.classpath.outcome }}
+      run: |
+        dir=target/varka-units/$BIN/$BIN-setup
+        mkdir -p "$dir"
+        for step in "checkout:$CHECKOUT" "java:$JAVA" "classpath:$CLASSPATH"; do
+          if [ "${step#*:}" != success ]; then
+            echo "$BIN ${step%%:*} ${step#*:}, retried" | tee -a "$dir/retries.txt"
+          fi
+        done
+        echo "::warning title=Setup step retried::$(paste -sd ';' "$dir/retries.txt")"
     - name: Unpack the classpath
       run: |
         ./dev/varka_matrix_archive.sh unpack target/varka-build.tar target/varka-matrix
@@ -244,6 +293,7 @@ jobs:
         name: varka-option-matrix-${{ matrix.bin }}
         path: |
           target/varka-units/${{ matrix.bin }}/*-platform/platform.txt
+          target/varka-units/${{ matrix.bin }}/*-setup/retries.txt
           target/varka-units/${{ matrix.bin }}/*-u*.log
           target/varka-units/${{ matrix.bin }}/*-u*/runs/*/name
           target/varka-units/${{ matrix.bin }}/*-u*/runs/*/*/exit
@@ -294,6 +344,11 @@ jobs:
           echo "Bins by CPU:"
           echo '```'
           grep -h '^CPU' target/varka-bins/*-platform/platform.txt | sort | uniq -c || true
+          echo '```'
+          # The bins a setup step held back, each retried once (VARKA-513).
+          echo "Setup steps retried:"
+          echo '```'
+          cat target/varka-bins/*-setup/retries.txt 2>/dev/null || echo "none"
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
     # Each suite's seconds, its median over the configurations, from this run's JUnit reports,
