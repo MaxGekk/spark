@@ -90,6 +90,26 @@ jobs:
         path: target/varka-reuse
         run-id: ${{ steps.reuse.outputs.run }}
         github-token: ${{ github.token }}
+    # The same Build's record of which configurations move each test (VarkaTestReach), taken
+    # only when every one of its varka-scoped jobs succeeded and left its part: a configuration
+    # then runs only the tests it moves, and without the record it runs every test.
+    - name: Find the Build's reach
+      id: reach
+      if: steps.reuse.outputs.run != ''
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        ./dev/varka_matrix_reuse.py reach "$GITHUB_REPOSITORY" "${{ steps.reuse.outputs.run }}" \
+          >> "$GITHUB_OUTPUT" || echo "reach=" >> "$GITHUB_OUTPUT"
+    - name: Download the Build's reach
+      if: steps.reach.outputs.reach == '1'
+      continue-on-error: true
+      uses: actions/download-artifact@v4
+      with:
+        pattern: varka-matrix-reach-*
+        path: target/varka-reach
+        run-id: ${{ steps.reuse.outputs.run }}
+        github-token: ${{ github.token }}
     - name: Build the test classes
       run: |
         reused=0
@@ -107,6 +127,11 @@ jobs:
         fi
         if [ "$reused" = 0 ]; then
           ./dev/varka_matrix.sh --build-only --sbt-arg -Phive --out target/varka-matrix
+        elif ls target/varka-reach/*/varka-reach.tsv > /dev/null 2>&1; then
+          # The record holds for the commit it was made on, which is this one.
+          cat target/varka-reach/*/varka-reach.tsv > target/varka-matrix/reach.tsv
+          echo "== the reach of Build run ${{ steps.reuse.outputs.run }}:" \
+            "$(grep -vc '^#' target/varka-matrix/reach.tsv) tests"
         fi
     # The bins, from the configurations the build listed and each module's suites; one line of
     # the summary says how many and how long.
@@ -118,10 +143,12 @@ jobs:
         for module in sql catalyst; do
           ./dev/varka_matrix.sh --list-suites --module "$module" > "target/varka-bins/$module"
         done
+        reach=()
+        [ -s target/varka-matrix/reach.tsv ] && reach=(--reach target/varka-matrix/reach.tsv)
         python3 dev/varka_matrix_bins.py plan \
           --configurations target/varka-matrix/configurations \
           --suites sql=target/varka-bins/sql --suites catalyst=target/varka-bins/catalyst \
-          > target/varka-bins/bins.json 2> target/varka-bins/plan.txt
+          "${reach[@]}" > target/varka-bins/bins.json 2> target/varka-bins/plan.txt
         cat target/varka-bins/plan.txt | tee -a "$GITHUB_STEP_SUMMARY"
         echo "bins=$(cat target/varka-bins/bins.json)" >> "$GITHUB_OUTPUT"
     # Every entry of the test classpath, the build's class directories and the dependencies' jars
@@ -186,6 +213,10 @@ jobs:
         run_unit() {
           local k=$1 config=$2 module=$3 suites=$4 mode status=0
           if [ "$config" = defaults ]; then mode=(--defaults); else mode=(--config "$config"); fi
+          # A configuration runs only the tests the Build's record says it moves.
+          if [ "$config" != defaults ] && [ -s target/varka-matrix/reach.tsv ]; then
+            mode+=(--jvm-arg "-Dvarka.matrix.reachFile=$PWD/target/varka-matrix/reach.tsv")
+          fi
           ./dev/varka_matrix.sh --skip-build --build-dir target/varka-matrix --runs-only \
             --out "$out/$BIN-u$k" --leaf-suffix "$BIN-$k" --module "$module" --suites "$suites" \
             "${mode[@]}" --jvm-arg -Dvarka.series.size=4 > "$out/$BIN-u$k.log" 2>&1 || status=$?

@@ -24,7 +24,8 @@
 # The archive holds every entry of the test classpath - the build's class directories and the
 # dependencies' jars alike - at its absolute path, which is the same on every GitHub runner, and
 # the build directory's classpath and jvm.opts under the names `varka-classpath` and
-# `varka-jvm.opts` at the archive's root. Unpacking restores the entries where they were and
+# `varka-jvm.opts` at the archive's root, and its reach.tsv as `varka-reach.tsv` where it has one:
+# the tests each configuration moves, which a configuration's bin reads (VarkaTestReach). Unpacking restores the entries where they were and
 # writes those two files into the build directory a bin reads with --skip-build --build-dir, so
 # the pull request's Build, which builds into target/varka-scoped, and the matrix's own build,
 # into target/varka-matrix, give the bins the same thing.
@@ -39,17 +40,22 @@ case "${1:-}" in
     trap 'rm -rf "$work"' EXIT
     cp "$build/classpath" "$work/varka-classpath"
     cp "$build/jvm.opts" "$work/varka-jvm.opts"
+    named=(varka-classpath varka-jvm.opts)
+    if [ -s "$build/reach.tsv" ]; then
+      cp "$build/reach.tsv" "$work/varka-reach.tsv"
+      named+=(varka-reach.tsv)
+    fi
     tr ':' '\n' < "$build/classpath" | grep -v '^$' \
       | while read -r e; do if [ -e "$e" ]; then echo "$e"; fi; done > "$work/entries"
     mkdir -p "$(dirname "$tar")"
-    tar -cPf "$tar" -T "$work/entries" -C "$work" varka-classpath varka-jvm.opts
+    tar -cPf "$tar" -T "$work/entries" -C "$work" "${named[@]}"
     ls -l "$tar"
     ;;
   unpack)
     tar=${2:?usage: unpack TAR BUILD_DIR} build=${3:?usage: unpack TAR BUILD_DIR}
     mkdir -p "$build"
     tar -xPf "$tar" -C "$build" --transform 's#^varka-classpath$#classpath#' \
-      --transform 's#^varka-jvm\.opts$#jvm.opts#'
+      --transform 's#^varka-jvm\.opts$#jvm.opts#' --transform 's#^varka-reach\.tsv$#reach.tsv#'
     [ -s "$build/classpath" ] && [ -s "$build/jvm.opts" ] || {
       echo "$tar holds no classpath or jvm.opts" >&2; exit 1; }
     ;;
