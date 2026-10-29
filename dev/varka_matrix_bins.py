@@ -32,13 +32,30 @@ otherwise, times the configuration's weight over the defaults (`sql/varka/matrix
 plus a JVM's start. A suite neither file lists weighs the median, so a new suite is placed as
 an ordinary one.
 
+A suite whose unit would outlast a lane under a configuration is split by its tests into parts,
+each a unit of its own, run through the runner's test filter (`dev/varka_matrix.sh --tests`).
+The parts are balanced by the tests' seconds in `sql/varka/matrix/test-seconds.tsv` (written by
+`tests` from the same JUnit reports, each test's median over the configurations that ran it),
+with a test the reach record says the configuration does not move weighing nothing, since the
+runner skips it there (it still goes to one part, whose JVM then skips it), and a test the
+reach record lists but the file does not weighing the median of the suite's tests. A part takes
+its share of the whole unit's seconds. The file and the reach record are the planner's only
+lists of a suite's tests, so a suite the file does not list is never split, and `check` fails a
+run in which a configuration ran a suite without a test another configuration ran it with: a
+test added since the file was written, which no part names, is caught there when another
+configuration ran the suite whole.
+
   dev/varka_matrix_bins.py plan --configurations FILE --suites MODULE=FILE... \\
       [--target SECONDS] > bins.json          # the job matrix, {"include": [...]}
   dev/varka_matrix_bins.py times JUNIT_DIR... > suite-seconds.tsv
+  dev/varka_matrix_bins.py tests JUNIT_DIR... > test-seconds.tsv
+  dev/varka_matrix_bins.py check JUNIT_DIR...
   dev/varka_matrix_bins.py --selftest
 
 Each bin's `units` is one line a JVM, `configuration|module|suite,suite,...`, the suites as
-simple names, which the bin's job hands to `dev/varka_matrix.sh --suites`.
+simple names, which the bin's job hands to `dev/varka_matrix.sh --suites`. A part of a split
+suite adds its tests as a fourth field, `configuration|module|suite|test<TAB>test...`, last
+because a test's name may hold a `|`, which the job hands to `--tests`.
 """
 
 import argparse
@@ -48,15 +65,20 @@ import statistics
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 SUITE_TIMES = "sql/varka/ci/suite-times.tsv"
 SUITE_SECONDS = "sql/varka/matrix/suite-seconds.tsv"
+TEST_SECONDS = "sql/varka/matrix/test-seconds.tsv"
 CONFIG_WEIGHTS = "sql/varka/matrix/seconds.tsv"
 DEFAULTS = "defaults"
 # A runner JVM's start and its first Spark session, before any suite's own time.
 JVM_START = 20.0
 LANES = 2
+# `tests` lists the tests of the suites whose run under some configuration took this long, a
+# quarter of the default lane: a suite no configuration ran for that long is far from a lane.
+SPLIT_CANDIDATE = 120.0
 
 
 def read_tsv(path):
@@ -70,6 +92,20 @@ def read_tsv(path):
             continue
         name, value = line.split("\t")[:2]
         out[name] = float(value)
+    return out
+
+
+def read_test_seconds(path):
+    """`suite<TAB>test<TAB>seconds` lines, as `tests` writes them: {suite: {test: seconds}}."""
+    out = {}
+    p = Path(path)
+    if not p.exists():
+        return out
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        suite, test, seconds = line.rsplit("\t", 2)
+        out.setdefault(suite, {})[test] = float(seconds)
     return out
 
 
@@ -101,7 +137,7 @@ def suite_weight(suite_seconds, suite_times):
 
 def read_reach(path):
     """`VarkaTestReach`'s record: the configurations it covers, from its `#<TAB>covers<TAB>`
-    lines, and for each suite the configurations that move each of its tests, with the suite's
+    lines, and for each suite each test's name with the configurations that move it, the suite's
     set-up line (`suite<TAB>*`) and the JVM's (`*<TAB>*`) joined to every test they cover. None
     for a record its recording marked broken."""
     covered, tests, setup, everywhere = set(), {}, {}, set()
@@ -122,9 +158,9 @@ def read_reach(path):
         elif test == "*":
             setup.setdefault(suite, set()).update(moved)
         else:
-            tests.setdefault(suite, []).append(moved)
+            tests.setdefault(suite, {})[test] = moved
     joined = {
-        suite: [m | setup.get(suite, set()) | everywhere for m in moved]
+        suite: {test: m | setup.get(suite, set()) | everywhere for test, m in moved.items()}
         for suite, moved in tests.items()
     }
     return covered, joined
@@ -139,14 +175,50 @@ def reach_share(reach, config, suite):
     covered, tests = reach
     if config not in covered or suite not in tests:
         return 1.0
-    moved = tests[suite]
+    moved = tests[suite].values()
     return sum(config in m or "*" in m for m in moved) / len(moved)
 
 
-def units(configurations, suites, weight, config_weights, lane, reach=None):
-    """Every (configuration, module, suites, seconds) JVM the matrix runs, the defaults first. A
-    suite whose tests a configuration's record leaves all to the defaults is not run under it, and
-    one it runs some tests of weighs that share of its time, a tenth at least, for its set-up."""
+def runs_test(reach, config, suite, test):
+    """Whether `config`'s run of `suite` runs `test` rather than skipping it, by the record."""
+    if reach is None or config == DEFAULTS:
+        return True
+    covered, tests = reach
+    moved = tests.get(suite, {}).get(test)
+    return config not in covered or moved is None or config in moved or "*" in moved
+
+
+def split_tests(config, suite, seconds, lane, test_seconds, reach):
+    """The parts of a suite whose unit outlasts a lane: lists of its tests, longest first onto the
+    lightest part, as many parts as the unit's seconds fill lanes, each with its share of the
+    seconds. A test longer than a lane takes a part alone, which then outlasts the lane. Every
+    test the file or the record lists lands in exactly one part; one part when the suite has no
+    test the file lists."""
+    recorded = test_seconds.get(suite, {})
+    if not recorded:
+        return [(None, seconds)]
+    fill = statistics.median(recorded.values())
+    listed = set(recorded) | set(reach[1].get(suite, {}) if reach else ())
+    weights = {
+        t: recorded.get(t, fill) if runs_test(reach, config, suite, t) else 0.0 for t in listed
+    }
+    count = min(len(listed), int(-(-seconds // max(lane - JVM_START, 1.0))))
+    parts = [[0.0, []] for _ in range(count)]
+    for test in sorted(listed, key=lambda t: (-weights[t], t)):
+        p = min(parts, key=lambda x: x[0])
+        p[0] += weights[test]
+        p[1].append(test)
+    total = sum(weights.values()) or 1.0
+    return [(sorted(names), seconds * load / total) for load, names in parts if names]
+
+
+def units(configurations, suites, weight, config_weights, lane, reach=None, test_seconds=None):
+    """Every (configuration, module, suites, seconds, tests) JVM the matrix runs, the defaults
+    first, `tests` empty but for a part of a split suite. A suite whose tests a configuration's
+    record leaves all to the defaults is not run under it, and one it runs some tests of weighs
+    that share of its time, a tenth at least, for its set-up. A suite heavier than a lane is split
+    by its tests (split_tests), each part in a JVM of its own, whether or not the suite runs
+    alone: a suite that runs alone keeps its JVM to itself, and one that shares can run alone."""
     fill = statistics.median(config_weights.values()) if config_weights else 1.0
     out = []
     for config in [DEFAULTS] + list(configurations):
@@ -158,8 +230,15 @@ def units(configurations, suites, weight, config_weights, lane, reach=None):
                 if share == 0.0:
                     continue
                 seconds = weight(name) * factor * max(share, 0.1)
-                if alone:
-                    out.append((config, module, [name], JVM_START + seconds))
+                if JVM_START + seconds > lane and test_seconds:
+                    parts = split_tests(config, name, seconds, lane, test_seconds, reach)
+                else:
+                    parts = [(None, seconds)]
+                if len(parts) > 1:
+                    for tests, part in parts:
+                        out.append((config, module, [name], JVM_START + part, tuple(tests)))
+                elif alone:
+                    out.append((config, module, [name], JVM_START + seconds, ()))
                 else:
                     shared.append((name, seconds))
             # The shared suites in groups no heavier than a lane, longest first into the lightest.
@@ -172,7 +251,7 @@ def units(configurations, suites, weight, config_weights, lane, reach=None):
                 g[1].append(name)
             for load, names in loads:
                 if names:
-                    out.append((config, module, sorted(names), JVM_START + load))
+                    out.append((config, module, sorted(names), JVM_START + load, ()))
     return out
 
 
@@ -195,16 +274,51 @@ def pack(all_units, lane):
     return bins
 
 
-def plan(configurations, suites, suite_seconds, suite_times, config_weights, lane, reach=None):
+def unit_line(unit):
+    """A unit as the bin's job reads it, `configuration|module|suites[|tests]`."""
+    config, module, names, _, tests = unit
+    line = f"{config}|{module}|{','.join(names)}"
+    return line + "|" + "\t".join(tests) if tests else line
+
+
+def splits(all_units, lane):
+    """One line for each split suite under a configuration, its parts' seconds, and one for each
+    suite whose whole unit still outlasts the lane, its tests not in the test file or only one."""
+    parts, unsplit = {}, []
+    for config, _, names, seconds, tests in all_units:
+        if tests:
+            parts.setdefault((config, names[0]), []).append(round(seconds))
+        elif len(names) == 1 and seconds > lane:
+            unsplit.append(f"not split {names[0]} under {config}: {round(seconds)} s")
+    return [
+        f"split {suite} under {config}: {len(s)} parts, {', '.join(map(str, sorted(s)))} s"
+        for (config, suite), s in sorted(parts.items())
+    ] + sorted(unsplit)
+
+
+def plan(
+    configurations,
+    suites,
+    suite_seconds,
+    suite_times,
+    config_weights,
+    lane,
+    reach=None,
+    test_seconds=None,
+    log=None,
+):
     weight = suite_weight(suite_seconds, suite_times)
-    bins = pack(units(configurations, suites, weight, config_weights, lane, reach), lane)
+    all_units = units(configurations, suites, weight, config_weights, lane, reach, test_seconds)
+    for line in splits(all_units, lane) if log else ():
+        print(line, file=log)
+    bins = pack(all_units, lane)
     include = []
     for k, b in enumerate(bins):
         include.append(
             {
                 "bin": f"b{k:03d}",
                 "seconds": round(max(b["lanes"])),
-                "units": "\n".join(f"{c}|{m}|{','.join(s)}" for c, m, s, _ in b["units"]),
+                "units": "\n".join(unit_line(u) for u in b["units"]),
             }
         )
     return {"include": include}
@@ -235,6 +349,73 @@ def times(junit_dirs):
     return {suite: statistics.median(seconds) for suite, seconds in runs.items()}
 
 
+def junit_tests(junit_dirs):
+    """Each (configuration, suite)'s tests, {test: [seconds, ran]}, from the same JUnit reports,
+    the leaves of one configuration joined. `ran` is whether the leaf's `fused.tsv` names the
+    test: a test the reach record skipped passes unrun, with a report but no fused line."""
+    out, fused_by_leaf = {}, {}
+    for d in junit_dirs:
+        for xml in Path(d).glob("**/*/*/junit/TEST-*.xml"):
+            try:
+                root = ET.parse(xml).getroot()
+            except ET.ParseError:
+                continue
+            suite = root.get("name", "").rsplit(".", 1)[-1]
+            leaf = xml.parent.parent
+            if leaf not in fused_by_leaf:
+                fused_by_leaf[leaf] = set()
+                if (leaf / "fused.tsv").exists():
+                    for line in (leaf / "fused.tsv").read_text(encoding="utf-8").splitlines():
+                        s, t, _ = line.rsplit("\t", 2)
+                        fused_by_leaf[leaf].add((s.rsplit(".", 1)[-1], t))
+            fused = fused_by_leaf[leaf]
+            tests = out.setdefault((leaf.parent.name, suite), {})
+            for case in root.iter("testcase"):
+                name = case.get("name", "")
+                t = tests.setdefault(name, [0.0, False])
+                t[0] += float(case.get("time") or 0.0)
+                t[1] = t[1] or (suite, name) in fused
+    return out
+
+
+def per_test_seconds(junit_dirs, candidate=SPLIT_CANDIDATE):
+    """Each test's seconds, {suite: {test: seconds}}, for the suites a configuration ran for
+    `candidate` seconds or more: the median over the configurations that ran the test, or over all
+    that reported it when none has a fused line for it (a test outside the matrix's hook)."""
+    runs = junit_tests(junit_dirs)
+    longest = {}
+    for (_, suite), ts in runs.items():
+        longest[suite] = max(longest.get(suite, 0.0), sum(t[0] for t in ts.values()))
+    samples = {}
+    for (_, suite), ts in runs.items():
+        if longest[suite] >= candidate:
+            for name, (seconds, ran) in ts.items():
+                samples.setdefault(suite, {}).setdefault(name, []).append((seconds, ran))
+    out = {}
+    for suite, by_test in samples.items():
+        for name, ss in by_test.items():
+            kept = [x for x, ran in ss if ran] or [x for x, _ in ss]
+            out.setdefault(suite, {})[name] = statistics.median(kept)
+    return out
+
+
+def missing_tests(junit_dirs):
+    """The tests some configuration ran a suite without, where another ran them: a test a split
+    left out of every part, or one the run lost otherwise. A configuration that ran nothing of a
+    suite is not counted, since the reach record drops whole suites. Lines to print, none when
+    every configuration that ran a suite ran all of its tests."""
+    by_suite = {}
+    for (config, suite), ts in junit_tests(junit_dirs).items():
+        by_suite.setdefault(suite, {})[config] = set(ts)
+    out = []
+    for suite, by_config in sorted(by_suite.items()):
+        every = set().union(*by_config.values())
+        for config, ran in sorted(by_config.items()):
+            for name in sorted(every - ran):
+                out.append(f"{config}\t{suite}\t{name}")
+    return out
+
+
 class SelfTest(unittest.TestCase):
     def test_every_unit_lands_once_and_no_lane_passes_the_target(self):
         suites = [
@@ -256,9 +437,9 @@ class SelfTest(unittest.TestCase):
     def test_a_unit_longer_than_a_lane_takes_a_lane_of_its_own(self):
         bins = pack(
             [
-                ("defaults", "sql", ["Big"], 920.0),
-                ("defaults", "sql", ["S"], 25.0),
-                ("x=1", "sql", ["S"], 25.0),
+                ("defaults", "sql", ["Big"], 920.0, ()),
+                ("defaults", "sql", ["S"], 25.0, ()),
+                ("x=1", "sql", ["S"], 25.0, ()),
             ],
             300.0,
         )
@@ -325,6 +506,90 @@ class SelfTest(unittest.TestCase):
         w = suite_weight({}, {"A": 10.0, "B": 30.0, "C": 50.0})
         self.assertEqual(w("New"), 30.0)
 
+    def test_a_suite_past_the_lane_splits_and_every_test_runs_once_per_configuration(self):
+        # A runs alone, B shares a JVM with C; both outlast a 300 s lane under every
+        # configuration, C does not, and D, which the file does not list, is never split.
+        suites = [("sql", [("A", True), ("B", False), ("C", False), ("D", True)])]
+        weights = {"A": 600.0, "B": 500.0, "C": 50.0, "D": 900.0}
+        per_test = {
+            "A": {"a|pipe": 250.0, "a2": 200.0, "a3": 100.0, "a4": 30.0, "a5": 20.0},
+            "B": {f"b{i}": 50.0 for i in range(10)},
+            "C": {"c1": 50.0},
+        }
+        configs = ["x=1", "y=2"]
+        got = units(configs, suites, suite_weight(weights, {}), {}, 300.0, None, per_test)
+        for config in ["defaults"] + configs:
+            mine = [u for u in got if u[0] == config]
+            for suite in "AB":
+                parts = [u for u in mine if suite in u[2]]
+                self.assertGreater(len(parts), 1, parts)
+                # A part runs its suite alone, and its tests are each in exactly one part.
+                self.assertTrue(all(u[2] == [suite] for u in parts), parts)
+                ran = sorted(t for u in parts for t in u[4])
+                self.assertEqual(ran, sorted(per_test[suite]))
+                self.assertAlmostEqual(
+                    sum(u[3] - JVM_START for u in parts), weights[suite], places=6
+                )
+                self.assertTrue(all(u[3] <= 300.0 for u in parts), parts)
+            self.assertEqual([u[4] for u in mine if "C" in u[2]], [()])
+            self.assertEqual([u[4] for u in mine if "D" in u[2]], [()])
+        # The bin's job reads a part's line with IFS='|' into four fields, the last the rest.
+        line = unit_line(next(u for u in got if "a|pipe" in u[4]))
+        config, module, suite, rest = line.split("|", 3)
+        self.assertEqual((module, suite), ("sql", "A"))
+        self.assertIn("a|pipe", rest.split("\t"))
+
+    def test_a_split_weighs_unknown_tests_at_the_median_and_skipped_ones_at_nothing(self):
+        with tempfile.TemporaryDirectory() as root:
+            f = Path(root, "reach.tsv")
+            # t1 and t2 move under x=1; t3 moves under nothing; new is in no time file.
+            f.write_text(
+                "#\tcovers\tx=1\nS\tt1\tx=1\nS\tt2\tx=1\nS\tt3\t-\nS\tnew\tx=1\n",
+                encoding="utf-8",
+            )
+            reach = read_reach(f)
+        per_test = {"S": {"t1": 300.0, "t2": 100.0, "t3": 200.0}}
+        parts = split_tests("x=1", "S", 600.0, 320.0, per_test, reach)
+        # Two parts: t1 alone, and t2 with new at the median (200 s); t3 is skipped under x=1,
+        # so it weighs nothing, yet still runs in one part so the JVM's own skip covers it.
+        self.assertEqual(sorted(t for names, _ in parts for t in names), ["new", "t1", "t2", "t3"])
+        loads = sorted(round(s) for _, s in parts)
+        self.assertEqual(loads, [300, 300])
+        # Under the defaults every test runs, t3 at its 200 s.
+        parts = split_tests("defaults", "S", 800.0, 320.0, per_test, reach)
+        self.assertEqual(len(parts), 3)
+        self.assertEqual(sorted(t for names, _ in parts for t in names), ["new", "t1", "t2", "t3"])
+
+    def test_a_test_longer_than_the_lane_takes_a_part_alone(self):
+        parts = split_tests("defaults", "S", 500.0, 300.0, {"S": {"big": 450, "s": 50}}, None)
+        self.assertEqual(sorted(names for names, _ in parts), [["big"], ["s"]])
+        self.assertEqual(split_tests("defaults", "S", 500.0, 300.0, {}, None), [(None, 500.0)])
+
+    def test_per_test_seconds_and_the_check_read_the_bins_reports(self):
+        def report(root, config, leaf, suite, cases, fused=()):
+            d = Path(root, "runs", config, leaf, "junit")
+            d.mkdir(parents=True, exist_ok=True)
+            body = "".join(f'<testcase name="{n}" time="{t}"/>' for n, t in cases)
+            Path(d, f"TEST-org.x.{suite}.xml").write_text(
+                f'<testsuite name="org.x.{suite}" time="1">{body}</testsuite>', encoding="utf-8"
+            )
+            with open(Path(d.parent, "fused.tsv"), "a", encoding="utf-8") as f:
+                f.write("".join(f"{suite}\t{n}\t1\n" for n in fused))
+
+        with tempfile.TemporaryDirectory() as root:
+            report(root, "defaults", "sql-b0-0", "S", [("t1", 100), ("t2", 30)], ["t1", "t2"])
+            # Under x=1 the reach record skipped t2: its near-zero time is not a sample.
+            report(root, "x=1", "sql-b1-0", "S", [("t1", 140), ("t2", 0.01)], ["t1"])
+            # Two parts of one split under y=2 join; the small suite is not listed.
+            report(root, "y=2", "sql-b2-0", "S", [("t1", 120)], ["t1"])
+            report(root, "y=2", "sql-b2-1", "S", [("t2", 50)], ["t2"])
+            report(root, "y=2", "sql-b2-1", "Small", [("s", 5)], ["s"])
+            self.assertEqual(per_test_seconds([root]), {"S": {"t1": 120.0, "t2": 40.0}})
+            self.assertEqual(missing_tests([root]), [])
+            # A configuration whose parts lost t2 is named.
+            report(root, "z=3", "sql-b3-0", "S", [("t1", 120)], ["t1"])
+            self.assertEqual(missing_tests([root]), ["z=3\tS\tt2"])
+
 
 def main(argv):
     if argv[:1] == ["--selftest"]:
@@ -344,13 +609,24 @@ def main(argv):
         help="a lane's seconds on a fast runner (default 480)",
     )
     p.add_argument("--reach", help="the Build's record of the tests each configuration moves")
-    t = sub.add_parser("times")
-    t.add_argument("dirs", nargs="+")
+    for cmd in ("times", "tests", "check"):
+        sub.add_parser(cmd).add_argument("dirs", nargs="+")
     args = parser.parse_args(argv)
     if args.cmd == "times":
         for name, seconds in sorted(times(args.dirs).items()):
             print(f"{name}\t{seconds:.1f}")
         return 0
+    if args.cmd == "tests":
+        for suite, by_test in sorted(per_test_seconds(args.dirs).items()):
+            for name, seconds in sorted(by_test.items()):
+                print(f"{suite}\t{name}\t{seconds:.1f}")
+        return 0
+    if args.cmd == "check":
+        missing = missing_tests(args.dirs)
+        for line in missing:
+            print(f"missing\t{line}")
+        print(f"{len(missing)} tests a configuration ran a suite without", file=sys.stderr)
+        return 1 if missing else 0
     configurations = [
         c.strip()
         for c in Path(args.configurations).read_text(encoding="utf-8").splitlines()
@@ -368,6 +644,8 @@ def main(argv):
         read_tsv(CONFIG_WEIGHTS),
         args.target,
         read_reach(args.reach) if args.reach else None,
+        read_test_seconds(TEST_SECONDS),
+        sys.stderr,
     )
     json.dump(out, sys.stdout)
     print()

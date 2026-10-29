@@ -49,7 +49,9 @@
 # neither runs the defaults beside them nor reports, so that many jobs can each run a share and
 # one job report on them all; --leaf-suffix S names this run's JVM directories <module>-S, so the
 # shares of one configuration land side by side when their runs/ directories are merged; and
-# --report-only DIR reports on the merged DIR/runs and runs nothing.
+# --report-only DIR reports on the merged DIR/runs and runs nothing; --tests NAMES, the names
+# tab-separated, runs only those tests of the one suite --suites names, as a part of a suite the
+# planner split by its tests (dev/varka_matrix_bins.py).
 #
 # sbt builds once and exports the test classpath and JVM options; each configuration then runs
 # as its own runner JVM (VarkaSuiteRunner: ScalaTest's Runner, then the JUnit suites) in its own
@@ -98,6 +100,7 @@ build_only=0
 runs_only=0
 leaf_suffix=""
 report_only=""
+only_tests=""
 
 # The report over a run's runs/ directory: one line per configuration and what failed
 # (dev/varka_matrix_report.py), then the proof that the sanitizer was on - its own suite cancels
@@ -149,6 +152,7 @@ while [ $# -gt 0 ]; do
     --runs-only) runs_only=1; shift ;;
     --leaf-suffix) leaf_suffix="$2"; shift 2 ;;
     --report-only) report_only=$(realpath -m "$2"); shift 2 ;;
+    --tests) only_tests="$2"; shift 2 ;;
     -h|--help) usage 0 ;;
     *) echo "unknown argument: $1" >&2; usage ;;
   esac
@@ -321,6 +325,10 @@ for module in "${modules[@]}"; do
     fi
   } > "$OUT/shards/$module"
 done
+# A test filter names tests of one suite: with several, a name could select a test of another.
+if [ -n "$only_tests" ] && [ "$total" != 1 ]; then
+  echo "--tests needs exactly one suite, found $total" >&2; exit 2
+fi
 echo "== ${#configs[@]} configuration(s) and the defaults, $total suites," \
   "$split JVM(s) a module and one for each suite that runs alone, $jobs JVMs at a time"
 
@@ -353,6 +361,16 @@ run_one() {
     own+=(-Dvarka.ownJvm=true)
   fi
   for suite in $line; do suites+=(-s "$suite"); done
+  # Each test of --tests as a -t after the suite's -s, which VarkaSuiteRunner hands to ScalaTest
+  # or matches against a JUnit test's display name. A suite that runs alone runs its tests in
+  # this JVM (-Dvarka.ownJvm=true above), so the filter shortens its run; without that flag
+  # VarkaOwnJvm's child would run the whole suite whatever the filter.
+  if [ -n "$only_tests" ]; then
+    local -a names=()
+    local test
+    IFS=$'\t' read -r -a names <<< "$only_tests"
+    for test in "${names[@]}"; do suites+=(-t "$test"); done
+  fi
   rm -rf "$dir"; mkdir -p "$dir/tmp"
   local start; start=$(date +%s)
   (cd "$dir" && SPARK_TESTING=1 SPARK_SCALA_VERSION=2.13 java "${OPTS[@]}" "${own[@]}" \

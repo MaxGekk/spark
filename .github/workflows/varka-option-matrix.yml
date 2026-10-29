@@ -133,8 +133,8 @@ jobs:
           echo "== the reach of Build run ${{ steps.reuse.outputs.run }}:" \
             "$(grep -vc '^#' target/varka-matrix/reach.tsv) tests"
         fi
-    # The bins, from the configurations the build listed and each module's suites; one line of
-    # the summary says how many and how long.
+    # The bins, from the configurations the build listed and each module's suites; the summary
+    # says how many and how long, and names each suite split by its tests to fit a lane.
     - name: Plan the bins
       id: plan
       run: |
@@ -259,9 +259,12 @@ jobs:
         mkdir -p "$out"
         # The step's shell is bash -e: a unit's status is captured, so that a failing unit
         # neither ends the step before the others run nor goes unrecorded.
+        # A part of a suite the planner split carries its tests, tab-separated, as the unit's
+        # last field, which read keeps whole although a test's name may hold a '|'.
         run_unit() {
-          local k=$1 config=$2 module=$3 suites=$4 mode status=0
+          local k=$1 config=$2 module=$3 suites=$4 tests=$5 mode status=0
           if [ "$config" = defaults ]; then mode=(--defaults); else mode=(--config "$config"); fi
+          [ -n "$tests" ] && mode+=(--tests "$tests")
           # A configuration runs only the tests the Build's record says it moves.
           if [ "$config" != defaults ] && [ -s target/varka-matrix/reach.tsv ]; then
             mode+=(--jvm-arg "-Dvarka.matrix.reachFile=$PWD/target/varka-matrix/reach.tsv")
@@ -272,9 +275,9 @@ jobs:
           echo "$status" > "$out/$BIN-u$k.exit"
         }
         k=0 running=0
-        while IFS='|' read -r config module suites; do
+        while IFS='|' read -r config module suites tests; do
           [ -n "$config" ] || continue
-          run_unit "$k" "$config" "$module" "$suites" &
+          run_unit "$k" "$config" "$module" "$suites" "$tests" &
           k=$((k + 1)) running=$((running + 1))
           if [ "$running" -ge 2 ]; then wait -n || true; running=$((running - 1)); fi
         done <<< "$UNITS"
@@ -351,13 +354,21 @@ jobs:
           cat target/varka-bins/*-setup/retries.txt 2>/dev/null || echo "none"
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
-    # Each suite's seconds, its median over the configurations, from this run's JUnit reports,
-    # for the next plan's weights (sql/varka/matrix/suite-seconds.tsv).
+    # Every configuration that ran a suite ran each of its tests: a test missing from one, as a
+    # test a split's parts all left out would be, is named here and fails the run.
+    - name: Check every test ran
+      if: always()
+      run: python3 dev/varka_matrix_bins.py check target/varka-merged/runs
+    # Each suite's seconds, its median over the configurations, and each test's of the long
+    # suites, from this run's JUnit reports, for the next plan's weights and splits
+    # (sql/varka/matrix/suite-seconds.tsv and test-seconds.tsv).
     - name: Suite seconds
       if: always()
       run: |
         python3 dev/varka_matrix_bins.py times target/varka-merged/runs \
           > target/suite-seconds.tsv
+        python3 dev/varka_matrix_bins.py tests target/varka-merged/runs \
+          > target/test-seconds.tsv
     - name: Upload the report
       if: always()
       uses: actions/upload-artifact@v4
@@ -366,6 +377,7 @@ jobs:
         path: |
           target/varka-matrix-report.txt
           target/suite-seconds.tsv
+          target/test-seconds.tsv
         if-no-files-found: ignore
         retention-days: 30
 
