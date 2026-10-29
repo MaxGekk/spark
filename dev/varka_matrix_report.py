@@ -32,6 +32,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from varka_matrix_bins import reaches
+
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -106,6 +109,9 @@ def main(runs, skips_path):
         ok = failed = canceled = aborted = status = seconds = atdef = 0
         log = ""
         for module in modules_run(runs):
+            # A module the plan leaves out under this configuration did not run, by design.
+            if not reaches(name, module):
+                continue
             jvms = jvm_dirs(d, module)
             if not jvms:
                 notrun.append(f"  {name}: the {module} suites did not run")

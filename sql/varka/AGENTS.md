@@ -161,8 +161,10 @@ The same entry gives it its configurations in the option matrix
 (`dev/varka_matrix.sh`, `m7/VARKA-248.md` 3.2), which reruns the Varka suites
 with one option changed at a time. A test starts from `VarkaMatrix.base`, not
 `VarkaEmitOptions.DEFAULTS`, so the matrix reaches its kernels; a test whose
-subject is the defaults' emitted structure takes the tag `PinsDefaults`; and an
-answer test a configuration breaks by design gets a line in
+subject is the defaults' emitted structure takes the tag `PinsDefaults`; a test
+whose subject is what C2 makes of a kernel takes `C2Code`, which runs it only
+under a configuration that changes what C2 is given (`VarkaMatrixRuns.C2_OPTIONS`);
+and an answer test a configuration breaks by design gets a line in
 `sql/varka/matrix/skips.tsv` with its reason. A pull request's CI runs one
 configuration - an option its diff names, or one its branch name hashes to - and
 blames the pull request only for failures its merge base does not share; the

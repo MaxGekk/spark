@@ -87,6 +87,9 @@ trait VarkaMatrixTests extends SparkFunSuite {
     if (VarkaMatrix.config.nonEmpty && testTags.contains(VarkaMatrix.PinsDefaults)) {
       super.test(testName, testTags: _*)(
         cancel(s"pins the defaults' structure; not run under ${VarkaMatrix.config}"))
+    } else if (VarkaMatrix.config.nonEmpty && testTags.contains(VarkaMatrix.C2Code) &&
+        !VarkaMatrixRuns.changesC2(VarkaMatrix.config)) {
+      super.test(testName, testTags: _*)(cancel(VarkaMatrixRuns.c2CodeMessage(VarkaMatrix.config)))
     } else {
       super.test(testName, testTags: _*)(VarkaMatrix.around(suiteName, testName)(testBody))
     }

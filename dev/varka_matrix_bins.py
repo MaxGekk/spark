@@ -47,7 +47,7 @@ configuration ran the suite whole.
 
   dev/varka_matrix_bins.py plan --configurations FILE --suites MODULE=FILE... \\
       [--target SECONDS] > bins.json          # the job matrix, {"include": [...]}
-  dev/varka_matrix_bins.py times JUNIT_DIR... > suite-seconds.tsv
+  dev/varka_matrix_bins.py times [--reach FILE] JUNIT_DIR... > suite-seconds.tsv
   dev/varka_matrix_bins.py tests JUNIT_DIR... > test-seconds.tsv
   dev/varka_matrix_bins.py check JUNIT_DIR...
   dev/varka_matrix_bins.py --selftest
@@ -75,6 +75,22 @@ CONFIG_WEIGHTS = "sql/varka/matrix/seconds.tsv"
 DEFAULTS = "defaults"
 # A runner JVM's start and its first Spark session, before any suite's own time.
 JVM_START = 20.0
+# The settings a configuration may name that change only a Spark session's configuration, not
+# an emit option: `VarkaMatrixRuns.parseOver` leaves the options as they are for them. No
+# catalyst suite builds a session, so under a configuration of these alone the catalyst suites
+# would run as the defaults run them, and the matrix leaves them out (VARKA-524).
+SESSION_ONLY = ("arrowBatchSize",)
+
+
+def reaches(config, module):
+    """Whether `config` can change anything `module`'s suites run: not catalyst's, for a
+    configuration that names only session settings."""
+    if module != "catalyst" or config == DEFAULTS:
+        return True
+    names = {part.split("=", 1)[0] for part in re.split(r"[,_]", config) if "=" in part}
+    return not names or not names <= set(SESSION_ONLY)
+
+
 LANES = 2
 # `tests` lists the tests of the suites whose run under some configuration took this long, a
 # quarter of the default lane: a suite no configuration ran for that long is far from a lane.
@@ -224,6 +240,8 @@ def units(configurations, suites, weight, config_weights, lane, reach=None, test
     for config in [DEFAULTS] + list(configurations):
         factor = 1.0 if config == DEFAULTS else config_weights.get(config, fill)
         for module, listed in suites:
+            if not reaches(config, module):
+                continue
             shared = []
             for name, alone in listed:
                 share = reach_share(reach, config, name)
@@ -324,11 +342,15 @@ def plan(
     return {"include": include}
 
 
-def times(junit_dirs):
-    """Each suite's seconds, the median over the configurations that ran it, the defaults among
-    them, from JUnit reports under `<dir>/<configuration>/<module>-.../junit`. The configurations'
-    runs land on the pool's mix of runners, so the median is a run's typical cost of the suite
-    rather than the cost on the fastest or the slowest machine."""
+def times(junit_dirs, reach=None):
+    """Each suite's seconds run whole, the median over the configurations that ran every test of it,
+    the defaults among them, from JUnit reports under
+    `<dir>/<configuration>/<module>-.../junit`. With the run's reach record, a configuration
+    that ran only the tests the record let through is left out: its time is a share of the
+    suite's, and the planner applies that share to the weight itself (`units`), so counting it
+    here too would shrink the weight twice (VARKA-508). The configurations' runs land on the
+    pool's mix of runners, so the median is a run's typical cost of the suite rather than the
+    cost on the fastest or the slowest machine."""
     per_config = {}
     for d in junit_dirs:
         for xml in Path(d).glob("**/*/*/junit/TEST-*.xml"):
@@ -344,8 +366,9 @@ def times(junit_dirs):
             key = (name.group(1).rsplit(".", 1)[-1], config)
             per_config[key] = per_config.get(key, 0.0) + float(seconds.group(1))
     runs = {}
-    for (suite, _), seconds in per_config.items():
-        runs.setdefault(suite, []).append(seconds)
+    for (suite, config), seconds in per_config.items():
+        if reach_share(reach, config, suite) == 1.0:
+            runs.setdefault(suite, []).append(seconds)
     return {suite: statistics.median(seconds) for suite, seconds in runs.items()}
 
 
@@ -473,6 +496,39 @@ class SelfTest(unittest.TestCase):
             report(root, "y=2", "sql-b003-0", "A", 25)
             report(root, "x=1", "sql-b001-0", "B", 4)
             self.assertEqual(times([root]), {"A": 30.0, "B": 4.0})
+
+    def test_times_count_only_whole_runs_of_a_recorded_suite(self):
+        with tempfile.TemporaryDirectory() as root:
+            for config, suite, secs in [
+                ("defaults", "A", 100),
+                ("x=1", "A", 20),
+                ("w=4", "A", 120),
+                ("defaults", "B", 10),
+                ("x=1", "B", 30),
+            ]:
+                d = Path(root, "runs", config, "sql-0", "junit")
+                d.mkdir(parents=True, exist_ok=True)
+                Path(d, f"TEST-p.{suite}.xml").write_text(
+                    f'<testsuite name="p.{suite}" time="{secs}" tests="2"/>'
+                )
+            # x=1 is covered and runs one of A's two tests; w=4 is not covered, so runs A whole;
+            # B has no record, so every configuration ran it whole.
+            f = Path(root, "reach.tsv")
+            f.write_text("#\tcovers\tx=1\nA\tone\tx=1\nA\ttwo\t-\n")
+            got = times([Path(root, "runs")], read_reach(f))
+            self.assertEqual(got, {"A": 110.0, "B": 20.0})
+            self.assertEqual(times([Path(root, "runs")]), {"A": 100.0, "B": 20.0})
+
+    def test_a_session_only_configuration_leaves_catalyst_out(self):
+        suites = [("sql", [("S", False)]), ("catalyst", [("C", False)])]
+        got = units(["arrowBatchSize=1", "cse=false"], suites, lambda s: 10.0, {}, 480.0)
+        modules = {(c, m) for c, m, *_ in got}
+        self.assertNotIn(("arrowBatchSize=1", "catalyst"), modules)
+        self.assertIn(("arrowBatchSize=1", "sql"), modules)
+        self.assertIn(("cse=false", "catalyst"), modules)
+        self.assertIn(("defaults", "catalyst"), modules)
+        self.assertFalse(reaches("arrowBatchSize=17", "catalyst"))
+        self.assertTrue(reaches("arrowBatchSize=1,cse=false", "catalyst"))
 
     def test_a_configuration_drops_the_suites_its_record_leaves_to_the_defaults(self):
         with tempfile.TemporaryDirectory() as root:
@@ -609,11 +665,15 @@ def main(argv):
         help="a lane's seconds on a fast runner (default 480)",
     )
     p.add_argument("--reach", help="the Build's record of the tests each configuration moves")
-    for cmd in ("times", "tests", "check"):
+    t = sub.add_parser("times")
+    t.add_argument("dirs", nargs="+")
+    t.add_argument("--reach", help="the run's record: only whole runs of a suite count")
+    for cmd in ("tests", "check"):
         sub.add_parser(cmd).add_argument("dirs", nargs="+")
     args = parser.parse_args(argv)
     if args.cmd == "times":
-        for name, seconds in sorted(times(args.dirs).items()):
+        reach = read_reach(args.reach) if args.reach and Path(args.reach).is_file() else None
+        for name, seconds in sorted(times(args.dirs, reach).items()):
             print(f"{name}\t{seconds:.1f}")
         return 0
     if args.cmd == "tests":

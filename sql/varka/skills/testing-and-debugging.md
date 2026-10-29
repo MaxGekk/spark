@@ -1336,9 +1336,10 @@ Java is one (`sql/varka/AGENTS.md`). What to know when writing and running one:
 - **The class takes `@VarkaSuite`, each test a `@DisplayName` sentence.** The annotation registers
   `VarkaSuiteExtension`, the JUnit face of what `VarkaTestWatchdog` gives a ScalaTest suite: the
   matrix's skip list around each test, the watchdog inside it, the Arrow allocator check around
-  the class. `@Tag(VarkaSuite.PINS_DEFAULTS)` is `PinsDefaults`; `@VarkaSuite(watchdogMinutes = 0)`
-  runs with no watchdog and `@VarkaSuite(ownJvm = true)` is `VarkaOwnJvm`. The sentence is the
-  test's name in the printed lines, the JUnit XML, `skips.tsv` and `fused.tsv`, and the suite is
+  the class. `@Tag(VarkaSuite.PINS_DEFAULTS)` is `PinsDefaults` and `@Tag(VarkaSuite.C2_CODE)` is
+  `C2Code`; `@VarkaSuite(watchdogMinutes = 0)` runs with no watchdog and
+  `@VarkaSuite(ownJvm = true)` is `VarkaOwnJvm`. The sentence is the test's name in the printed
+  lines, the JUnit XML, `skips.tsv` and `fused.tsv`, and the suite is
   the class's simple name, so a skip-list line is written as for a ScalaTest test. The extension
   fails the class before its tests run (an aborted suite) when two tests share one name, as
   ScalaTest refuses them; when a test is not a plain `@Test` (`@ParameterizedTest`,

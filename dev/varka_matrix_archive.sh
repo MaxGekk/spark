@@ -21,8 +21,9 @@
 #   dev/varka_matrix_archive.sh pack BUILD_DIR TAR      # BUILD_DIR as dev/varka_matrix.sh left it
 #   dev/varka_matrix_archive.sh unpack TAR BUILD_DIR
 #
-# The archive holds every entry of the test classpath - the build's class directories and the
-# dependencies' jars alike - at its absolute path, which is the same on every GitHub runner, and
+# The archive holds the entries of the test classpath - the build's class directories and the
+# dependencies' jars alike, but for the jars no Varka suite loads (the list in `pack`) - at its
+# absolute path, which is the same on every GitHub runner, and
 # the build directory's classpath and jvm.opts under the names `varka-classpath` and
 # `varka-jvm.opts` at the archive's root, and its reach.tsv as `varka-reach.tsv` where it has one:
 # the tests each configuration moves, which a configuration's bin reads (VarkaTestReach). Unpacking restores the entries where they were and
@@ -38,18 +39,33 @@ case "${1:-}" in
       echo "no classpath or jvm.opts in $build" >&2; exit 1; }
     work=$(mktemp -d)
     trap 'rm -rf "$work"' EXIT
-    cp "$build/classpath" "$work/varka-classpath"
     cp "$build/jvm.opts" "$work/varka-jvm.opts"
     named=(varka-classpath varka-jvm.opts)
     if [ -s "$build/reach.tsv" ]; then
       cp "$build/reach.tsv" "$work/varka-reach.tsv"
       named+=(varka-reach.tsv)
     fi
-    tr ':' '\n' < "$build/classpath" | grep -v '^$' \
+    # The jars no Varka suite loads, left out of the archive and of its classpath: sql's test
+    # classpath carries them for Spark's own cloud, JDBC, UI and state-store tests, and they were
+    # 849 of the archive's 1,440 MB, the AWS SDK bundle alone 686, which every bin downloaded
+    # (VARKA-514, m8/results/VARKA-514-archive.txt). A suite that needs one fails in the matrix
+    # with the class it could not find.
+    unused='/software/amazon/awssdk/|/org/seleniumhq/|/org/rocksdb/|/databricks-jdbc/'
+    unused+='|/oracle/database/jdbc/|/net/snowflake/|/com/ibm/db2/|/mssql-jdbc/|/mariadb/'
+    unused+='|/org/postgresql/'
+    tr ':' '\n' < "$build/classpath" | grep -v '^$' | grep -vE "$unused" \
       | while read -r e; do if [ -e "$e" ]; then echo "$e"; fi; done > "$work/entries"
+    tr ':' '\n' < "$build/classpath" | grep -v '^$' | grep -vE "$unused" | paste -sd: \
+      > "$work/varka-classpath"
     mkdir -p "$(dirname "$tar")"
     tar -cPf "$tar" -T "$work/entries" -C "$work" "${named[@]}"
     ls -l "$tar"
+    # What the bins download, by kind, for the run's log.
+    tar -tvPf "$tar" | awk '{ k = "other" }
+      $6 ~ /\.jar$/ { k = ($6 ~ /coursier/) ? "dependency jars" : "jars built" }
+      $6 ~ /test-classes/ { k = "test classes" }
+      { sz[k] += $3; n[k]++ }
+      END { for (k in sz) printf "%9.1f MB %7d files  %s\n", sz[k] / 1e6, n[k], k }' | sort -rn
     ;;
   unpack)
     tar=${2:?usage: unpack TAR BUILD_DIR} build=${3:?usage: unpack TAR BUILD_DIR}

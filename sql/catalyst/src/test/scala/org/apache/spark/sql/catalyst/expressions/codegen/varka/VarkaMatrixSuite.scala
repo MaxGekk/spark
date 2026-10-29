@@ -125,4 +125,18 @@ class VarkaMatrixSuite extends SparkFunSuite with VarkaTestWatchdog {
       Files.delete(report)
     }
   }
+
+  test("a C2-code test runs only under configurations that change what C2 is given") {
+    assert(VarkaMatrixRuns.changesC2("lanesOverride=4"))
+    assert(VarkaMatrixRuns.changesC2("useAVX=2"))
+    assert(VarkaMatrixRuns.changesC2("narrowHalfSpecies=true"))
+    assert(VarkaMatrixRuns.changesC2("cse=false,lanesOverride=16"))
+    assert(!VarkaMatrixRuns.changesC2("cse=false"))
+    assert(!VarkaMatrixRuns.changesC2(
+      "denseValidityOnce=false_validityByBitmap=false_validityOrFirst=false"))
+    // Every option the rule names is one the matrix's configurations set.
+    VarkaMatrixRuns.C2_OPTIONS.asScala.foreach { option =>
+      assert(VarkaMatrix.configurations.exists(_.startsWith(option + "=")), option)
+    }
+  }
 }

@@ -163,6 +163,16 @@ jobs:
         path: target/varka-build.tar
         retention-days: 1
         compression-level: 1
+    # The record the configurations ran by, for the report job's suite weights: a suite's weight
+    # is its time run whole, and a configuration that ran only the tests the record let through
+    # ran part of it (dev/varka_matrix_bins.py times --reach, VARKA-508).
+    - name: Upload the reach the configurations ran by
+      uses: actions/upload-artifact@v4
+      with:
+        name: varka-option-matrix-reach
+        path: target/varka-matrix/reach.tsv
+        if-no-files-found: ignore
+        retention-days: 30
 
   bins:
     name: "Option matrix: ${{ matrix.bin }}"
@@ -354,19 +364,26 @@ jobs:
           cat target/varka-bins/*-setup/retries.txt 2>/dev/null || echo "none"
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
+    - name: Download the reach the configurations ran by
+      if: always()
+      continue-on-error: true
+      uses: actions/download-artifact@v4
+      with:
+        name: varka-option-matrix-reach
+        path: target/varka-run-reach
     # Every configuration that ran a suite ran each of its tests: a test missing from one, as a
     # test a split's parts all left out would be, is named here and fails the run.
     - name: Check every test ran
       if: always()
       run: python3 dev/varka_matrix_bins.py check target/varka-merged/runs
-    # Each suite's seconds, its median over the configurations, and each test's of the long
-    # suites, from this run's JUnit reports, for the next plan's weights and splits
-    # (sql/varka/matrix/suite-seconds.tsv and test-seconds.tsv).
+    # Each suite's seconds run whole, its median over the configurations that ran all of it, and
+    # each test's of the long suites, from this run's JUnit reports, for the next plan's weights
+    # and splits (sql/varka/matrix/suite-seconds.tsv and test-seconds.tsv).
     - name: Suite seconds
       if: always()
       run: |
-        python3 dev/varka_matrix_bins.py times target/varka-merged/runs \
-          > target/suite-seconds.tsv
+        python3 dev/varka_matrix_bins.py times --reach target/varka-run-reach/reach.tsv \
+          target/varka-merged/runs > target/suite-seconds.tsv
         python3 dev/varka_matrix_bins.py tests target/varka-merged/runs \
           > target/test-seconds.tsv
     - name: Upload the report

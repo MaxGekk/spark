@@ -81,6 +81,44 @@ public final class VarkaHarnessParitySuite {
   }
 
   @Test
+  @DisplayName("expressions planned together are each the one planned alone")
+  void projectionsPlannedTogetherAreEachPlannedAlone() {
+    // The null-test conditions plan a fixture's eight conditions in one run of the optimizer
+    // (VARKA-510), under the partition rewrites' exclusion they run under.
+    SQLConf conf = VarkaCoverageHarnessSuite.excluding(VarkaCoverageHarnessSuite.conf(false),
+        VarkaPartitionOracle.REWRITES);
+    var differences = new ArrayList<String>();
+    int compared = VarkaCoverageHarnessSuite.withConf(conf, () -> {
+      int n = 0;
+      for (Tuple2<String, String> f :
+          CollectionConverters.asJava(VarkaCoverageDifferentialSuite$.MODULE$.fixtures())) {
+        Seq<Attribute> columns = VarkaHarnessPlans.fixture(f._2()).columns();
+        for (VarkaCoverageHarnessSuite.Row row : VarkaCoverageHarnessSuite.predicates()) {
+          List<String> sqls = VarkaCoverageHarnessSuite.nullTestSqls(row.executable());
+          List<Seq<NamedExpression>> together = VarkaHarnessPlans.projections(sqls, columns);
+          for (int k = 0; k < sqls.size(); k++) {
+            Expression a = ((Alias) CollectionConverters.asJava(together.get(k)).get(0)).child();
+            Expression b = ((Alias) CollectionConverters.asJava(
+                VarkaHarnessPlans.projection(sqls.get(k), columns)).get(0)).child();
+            n++;
+            Expression ca = canonical(a, columns);
+            Expression cb = canonical(b, columns);
+            // An InSet holding NaN never equals another; the printed forms are compared too, as
+            // harnessExpressionIsTheSessions does.
+            if (!ca.equals(cb) && !ca.toString().equals(cb.toString())) {
+              differences.add(f._1() + ", " + sqls.get(k) + ": together " + a.sql()
+                  + ", alone " + b.sql());
+            }
+          }
+        }
+      }
+      return n;
+    });
+    assertTrue(compared > 0, "nothing compared");
+    assertTrue(differences.isEmpty(), String.join("\n", differences));
+  }
+
+  @Test
   @DisplayName("every coverage row's harness expression is the one a session's optimizer plans")
   void harnessExpressionIsTheSessions() {
     var differences = new ArrayList<String>();

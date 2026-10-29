@@ -93,7 +93,7 @@ public final class VarkaSuiteHarnessSuite {
   }
 
   // ---------------------------------------------------------------------------------------------
-  // The matrix's skip list and PinsDefaults, through the seam
+  // The matrix's skip list, PinsDefaults and C2Code, through the seam
   // ---------------------------------------------------------------------------------------------
 
   @Test
@@ -139,6 +139,20 @@ public final class VarkaSuiteHarnessSuite {
     assertEquals(0, ran.get());
     assertEquals(1, run("", List.of(), pins, ran::incrementAndGet));
     assertEquals(2, run("cse=false", List.of(), Set.of("another.tag"), ran::incrementAndGet));
+  }
+
+  @Test
+  @DisplayName("a C2Code test is cancelled under a configuration that changes only the bytes, "
+      + "and runs where C2 is given something else and at the defaults")
+  void c2Code() throws Throwable {
+    var ran = new AtomicInteger();
+    var c2 = Set.of(VarkaSuite.C2_CODE);
+    var cancel = assertThrows(TestAbortedException.class,
+        () -> run("cse=false", List.of(), c2, ran::incrementAndGet));
+    assertEquals(VarkaMatrixRuns.c2CodeMessage("cse=false"), cancel.getMessage());
+    assertEquals(0, ran.get());
+    assertEquals(1, run("lanesOverride=4", List.of(), c2, ran::incrementAndGet));
+    assertEquals(2, run("", List.of(), c2, ran::incrementAndGet));
   }
 
   @Test

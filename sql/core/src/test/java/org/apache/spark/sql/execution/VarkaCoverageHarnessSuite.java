@@ -31,9 +31,11 @@ import java.util.stream.Stream;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import scala.Tuple2;
+import scala.collection.immutable.Seq;
 import scala.jdk.javaapi.CollectionConverters;
 
 import org.apache.spark.sql.catalyst.expressions.Expression;
+import org.apache.spark.sql.catalyst.expressions.NamedExpression;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrixRuns;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaSuite;
@@ -191,12 +193,12 @@ public final class VarkaCoverageHarnessSuite {
   // The partition oracle (VARKA-138)
   // ---------------------------------------------------------------------------------------------
 
-  private static List<Row> predicates() {
+  static List<Row> predicates() {
     return ROWS.stream().filter(r -> r.form().equals("predicate")).toList();
   }
 
   /** {@code conf} with {@code rules} excluded from the optimizer. */
-  private static SQLConf excluding(SQLConf conf, String rules) {
+  static SQLConf excluding(SQLConf conf, String rules) {
     SQLConf out = conf.clone();
     out.setConfString(SQLConf.OPTIMIZER_EXCLUDED_RULES().key(), rules);
     return out;
@@ -249,6 +251,22 @@ public final class VarkaCoverageHarnessSuite {
     return List.of(context + ": WHERE NOT (" + p + ") did not reach Varka as a Not: " + q);
   }
 
+  /** The arm pairs of {@link #nullTestConditions}: two dates, bigints, doubles and floats. */
+  private static final String[][] NULL_TEST_ARMS = {{"d", "d2"}, {"l", "l2"}, {"x", "x2"},
+      {"f", "f2"}};
+
+  /** A predicate's null tests as CASE conditions, in {@link #nullTestConditions}' order. */
+  static List<String> nullTestSqls(String predicate) {
+    var sqls = new ArrayList<String>();
+    for (String test : List.of("IS NULL", "IS NOT NULL")) {
+      for (String[] pair : NULL_TEST_ARMS) {
+        sqls.add("CASE WHEN (" + predicate + ") " + test + " THEN " + pair[0] + " ELSE "
+            + pair[1] + " END");
+      }
+    }
+    return sqls;
+  }
+
   /**
    * Each predicate row's null tests as the condition of a CASE, with the partition rewrites
    * excluded, since {@code NullDownPropagation} would otherwise turn them into null tests on the
@@ -258,7 +276,7 @@ public final class VarkaCoverageHarnessSuite {
    */
   @TestFactory
   Stream<DynamicTest> nullTestConditions() {
-    String[][] arms = {{"d", "d2"}, {"l", "l2"}, {"x", "x2"}, {"f", "f2"}};
+    String[][] arms = NULL_TEST_ARMS;
     return predicates().stream().map(row -> DynamicTest.dynamicTest(row.family() + ": "
         + row.sql() + " under IS NULL and IS NOT NULL fuses as a CASE condition", () -> {
           SQLConf conf = excluding(conf(SQLConf.get().ansiEnabled()),
@@ -268,14 +286,18 @@ public final class VarkaCoverageHarnessSuite {
             for (Map.Entry<String, VarkaHarnessPlans.Fixture> f : FIXTURES.entrySet()) {
               VarkaHarnessPlans.Fixture fixture = f.getValue();
               boolean canBeNull = VarkaPartitionOracle.nullable(row.executable(), fixture);
+              // The eight conditions of a fixture planned in one run of the optimizer, each as
+              // it would be alone (VarkaHarnessPlans.projections, VARKA-510).
+              List<String> sqls = nullTestSqls(row.executable());
+              List<Seq<NamedExpression>> planned =
+                  VarkaHarnessPlans.projections(sqls, fixture.columns());
+              int k = 0;
               for (String test : List.of("IS NULL", "IS NOT NULL")) {
                 boolean served = false;
                 for (String[] pair : arms) {
-                  String sql = "CASE WHEN (" + row.executable() + ") " + test + " THEN "
-                      + pair[0] + " ELSE " + pair[1] + " END";
+                  String sql = sqls.get(k);
                   VarkaExpressionHarness.Outcome o = VarkaExpressionHarness.projection(
-                      f.getKey() + ", " + sql, VarkaHarnessPlans.projection(sql,
-                          fixture.columns()), fixture, conf);
+                      f.getKey() + ", " + sql, planned.get(k++), fixture, conf);
                   findings.addAll(o.findings);
                   served |= o.served();
                 }
