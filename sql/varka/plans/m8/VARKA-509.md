@@ -97,6 +97,8 @@ sample rows and the ANSI errors:
    `VarkaDifferentialHarnessSuite`.
 4. Measured: each suite at the defaults on the laptop before and after, and the next option
    matrix and Build against `m8/results/VARKA-507-run-40658422887.txt`.
+   Done in `m8/results/VARKA-509-step4.txt`, with the profile after the move in
+   `m8/results/VARKA-510-planning-local.txt`.
 
 ## 6. Open questions
 
