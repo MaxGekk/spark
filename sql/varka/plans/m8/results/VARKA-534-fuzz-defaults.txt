@@ -1,0 +1,165 @@
+# The fuzz suites' defaults bytes read from the defaults' run instead of emitted again under every
+# configuration (VARKA-534), 30 October 2026, LAPTOP NUMBERS: AMD Ryzen AI 9 HX PRO 370 (24 cores),
+# JDK 25.0.4.1, commit 45eafb33cde on branch varka-534-fuzz-defaults (off master 56294ef7edb).
+# Each run is one runner JVM as the matrix's bins start it, under the shared heavy lock, one at a
+# time, other agents' JVMs on the machine:
+#   dev/varka_matrix.sh --runs-only --skip-build --module catalyst --suites <S>
+#       --jvm-arg -Dvarka.series.size=4 (--defaults | --config <c>)
+#       [--jvm-arg -Dvarka.fuzz.defaultsStore=<dir>]
+# Locally there is no Build record (reach.tsv), as in the suite profile. Seconds are the suite's
+# JUnit time; every run passed every test.
+
+## 1. Where the finding comes from
+
+The option matrix's suite profile (fix 3; sql/varka/plans/m8/results/VARKA-suite-profile.txt on
+branch varka-suite-profile, row 532's, not yet on master), laptop numbers of 29 October 2026:
+under cse=false VarkaSmallTreeSuite's reach filter (VarkaReach.ranAtDefaults) emits every tree
+under the configuration and again under the defaults and runs it only where the bytes differ:
+141869 trees emitted the same bytes and 7902 moved, and half of the 44.1 s of emission and IR
+sampled was the defaults' copy, which every configuration's JVM emits again.
+
+What the code on master does, read before building:
+  VarkaSmallTreeSuite         emits each filtered tree under the configuration, then again under
+                              the defaults to the same class name, and compares the bytes.
+  VarkaIrFuzzSuite            its one reach site, the compiled test, compares options alone
+                              (bytes and emitter null); the random draws (runOne, runOneLong,
+                              runOneMixed) are not filtered. It emits nothing at the defaults
+                              for the filter, so there is nothing for a store to replace.
+  VarkaCoverageCompositionFuzzSuite
+                              compiles each case at the defaults (compilePartial) and emits each
+                              kernel there again (reachBytes) - the same double work in a third
+                              suite, not built here (section 6).
+
+## 2. What was built
+
+VarkaFuzzDefaultsStore (sql/catalyst test sources), named by -Dvarka.fuzz.defaultsStore=<dir>:
+  a JVM of the defaults (varka.matrix.config unset) keeps, for each tree VarkaSmallTreeSuite
+  filters, the SHA-256 of the class it emitted to at VarkaEmitOptions.DEFAULTS, or a mark that
+  the emitter declined it, and writes fuzz-defaults-<pid>-<nanos>.bin into dir as it exits
+  (gzip, written to a .tmp and moved, as row 528's harness store does). It never reads.
+  A JVM under a configuration reads every fuzz-defaults-*.bin there as it starts. For a tree it
+  finds, VarkaReach compares the SHA-256 of the JVM's own bytes with the stored one; a tree the
+  store lacks is emitted at the defaults as before.
+  The hash is of the whole class file, constant pool included: a per-method hash of the Code
+  bytes would miss two classes whose methods name different constants by the same pool index.
+  The key is SHA-256 of the suite, the class name, the inputs, the literals, the canonical roots
+  and the host: the UseAVX level, the preferred vector lengths per element size and the JDK
+  version, which the emitter and the class-file library read from the JVM.
+  The header holds the commit (the revision in spark-version-info.properties, the build's) and a
+  hash of the options table (each option's kind, name, reason and default text, the choices'
+  constants, and the defaults' canonical text). A file of another commit or table, a file that
+  cannot be read whole and a tree two files disagree on are ignored, with a VARKA_FUZZ_STORE
+  warning line on stderr; a JVM that cannot read a 40-hex commit neither writes nor reads.
+  Each JVM prints one line as it exits:
+    VARKA_FUZZ_STORE  WRITE|READ  <config>  entries N  taken N  emitted at the defaults N
+        files ignored N
+
+VarkaSmallTreeSuite names each kernel by the test, the lane and the tree's index
+(VarkaSmallTree[Long][Pair]<index>) instead of a per-JVM counter, so a tree is the same class in
+every JVM whatever tests a reach file skips before it. Under a configuration it prints, beside the
+VARKA_REACH line, a VARKA_REACH_SET line: the count of trees skipped and of trees run, each with
+an order-free digest (the sum of each tree's key hash's first 8 bytes), so two runs print the
+same line exactly when they skipped and ran the same trees.
+
+VarkaFuzzDefaultsStoreSuite (JUnit, 0.8 s): over the int and long series to size 2 and three
+configurations (cse=false, misdescribeAdd=true, validityByBitmap=false), the store's verdict
+equals the second emission's tree by tree, with no tree emitted again and the tallies equal; a
+tree the store lacks is emitted at the defaults; a file of another commit and one of another
+options table are ignored with a warning and the filter emits again; a missing directory reads
+as empty; a truncated and a garbage file are ignored whole beside a good one that is read whole;
+a tree two files disagree on is left out; a writing store answers nothing and keeps only
+emissions under the defaults' options; a tree the defaults declined moves.
+
+## 3. The defaults' run writes the store (size 4)
+
+run                         suite s   lock wall   load 1/5/15 at start, at end
+defaults, no store            126.7      128 s    2.59 4.89 3.98   2.58 3.98 3.76
+defaults, writing             132.7      134 s    2.76 3.81 3.71   2.47 3.44 3.59
+defaults, writing 2         131.5      133 s    4.45 3.32 3.24   2.15 2.93 3.11
+defaults, no store 2        240.5      243 s    4.86 3.89 3.45   13.73 9.33 5.81  (disturbed)
+
+The second run without the store met another agent's load (the 1-minute load rose from 4.86 to
+13.73) and is not read. Of the three undisturbed runs, writing cost 131.5 and 132.7 s against
+126.7 s without: some 5 s, inside what one pair can tell; the keys (the canonical text of 149771
+trees) and the hashes are the work, and the file is written at exit. Two writing JVMs wrote the
+same entries: the two files, decompressed, are byte for byte equal, so the defaults' emission of
+every tree is the same in two JVMs, as the store assumes.
+
+The store: 149771 trees (113721 int, 32891 long, 3159 pairs: the trees the defaults checked, 0
+declined), one file of 9714900 bytes gzipped (32-byte key and 32-byte hash a tree, which gzip
+cannot shrink). The defaults' counts are the profile's: 113721, 32891 and 3159 shapes checked.
+
+## 4. A configuration's run with and without the store (size 4)
+
+run                           suite s   lock wall   load 1/5/15 at start, at end
+cse=false, no store       1     38.7       40 s    2.34 3.27 3.53   2.02 3.08 3.45
+cse=false, store          1     26.1       27 s    2.38 3.05 3.41   2.05 2.91 3.36
+cse=false, store          2     26.4       27 s    2.62 3.19 3.37   3.22 3.27 3.39
+cse=false, no store       2     40.8       42 s    2.34 2.99 3.28   2.45 2.95 3.26
+validityByBitmap=false, no 1    93.7       94 s    2.39 2.87 3.31   4.25 3.45 3.48
+validityByBitmap=false, st 1    85.1       86 s    3.28 3.31 3.43   3.56 3.42 3.45
+validityByBitmap=false, st 2    78.6       80 s    3.70 3.08 3.27   1.96 2.67 3.11
+validityByBitmap=false, no 2    96.4       98 s    2.27 2.64 3.07   3.68 2.92 3.12
+
+Means of two: cse=false 39.7 s without the store, 26.3 s with it (12.6 and 14.4 s off, a third);
+validityByBitmap=false 95.0 s without, 81.9 s with (8.6 and 17.8 s off). validityByBitmap=false
+moves more than half the trees (81395 of 149771), so its run is bound by checking them; the store
+removes the same defaults emission from both, about 13 s on the means.
+
+The lines each run printed (identical within each configuration, with and without the store):
+  cse=false
+    VARKA_REACH      same options 0  same bytes 141869  moved 7902
+    VARKA_REACH_SET  skipped 141869 f13627d3ba334390  moved 7902 0d57e4aab0d12650
+    int trees: 3076 checked, 110645 as the defaults run's; long: 1752 and 31139; pairs: 3074 and
+    85; 0 past the cap, 0 failed
+  validityByBitmap=false
+    VARKA_REACH      same options 0  same bytes 68376  moved 81395
+    VARKA_REACH_SET  skipped 68376 2eebdc1c0b8745bb  moved 81395 cfa230625f7d2425
+  the store's runs, every one:
+    VARKA_FUZZ_STORE  READ  <config>  entries 149771  taken 149771  emitted at the defaults 0
+        files ignored 0
+So with the store each configuration checked and skipped the same trees, by count and by digest
+of the set, as without it, and emitted no tree at the defaults.
+
+## 5. VarkaIrFuzzSuite under cse=false, with and without the property
+
+run                     suite s   lock wall   load 1/5/15 at start, at end
+cse=false, no store       15.1       17 s    3.27 2.91 3.10   4.87 3.31 3.23
+cse=false, store          15.2       16 s    4.87 3.31 3.23   4.84 3.38 3.26
+
+Both printed VARKA_REACH  VarkaIrFuzzSuite  cse=false  same options 40  same bytes 0  moved 0: the
+compiled test's 40 draws are skipped by options alone, and no draw is emitted at the defaults, so
+the suite never asks the store (it prints no VARKA_FUZZ_STORE line) and its time does not move.
+At the suite's defaults on the laptop (300 iterations a lane) it is 15 s; the matrix's 298.4 s
+median (sql/varka/ci/suite-times.tsv) is a 4-core runner's.
+
+## 6. Not built, and the CI wiring
+
+The CI wiring, described and not added (this change edits no workflow and not
+dev/varka_matrix_bins.py):
+  (a) A defaults JVM of VarkaSmallTreeSuite at the matrix's size, 4, runs with
+      -Dvarka.fuzz.defaultsStore=target/varka-fuzz-store and uploads the directory as an
+      artifact, varka-fuzz-defaults-store; the option matrix's bins download it from the same
+      run that gave them the test classes (dev/varka_matrix_reuse.py's run) and pass
+      --jvm-arg -Dvarka.fuzz.defaultsStore=<dir> on the SmallTree units.
+  (b) Where it is written matters. The Build's catalyst Varka jobs run the series at size 3, the
+      pull request's size; a store of theirs holds the trees to size 3 only, a few thousand of
+      the 149771 at size 4, so the bins would emit most trees at the defaults again. Either a
+      catalyst job runs the two series tests at size 4 at the defaults with the store (the cost
+      of section 3, some two minutes on the laptop, more on a 4-core runner), or the matrix
+      writes it in its own defaults unit of SmallTree and runs SmallTree's configuration units
+      after that unit, which puts a dependency inside the bins' plan.
+  (c) The commit: the header's commit is the revision in the build's
+      spark-version-info.properties, which travels in the classpath archive the bins unpack, so
+      a store written by the Build whose classes the matrix reuses always matches, and one from
+      any other build does not and is ignored with a warning.
+  (d) The host: the runner pool mixes 256-bit and 512-bit machines (VARKA-399), and the vector
+      lengths are in the key, so a bin on the other kind finds no tree and emits them all at the
+      defaults, as today. One store per kind (two writers) would serve both.
+
+Outside this row's scope, found on the way:
+  VarkaCoverageCompositionFuzzSuite emits and compiles each case at the defaults again for its
+  filter (section 1); the same store would serve it, keyed by its case.
+  VarkaIrFuzzSuite's random draws are not reach-filtered at all; whether to filter them by bytes,
+  as SmallTree is, is a choice about what a configuration checks, not a speed fix, and is left
+  to the owner.
