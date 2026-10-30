@@ -76,8 +76,11 @@ not restate it.
    only a checked multiply off the narrow lanes (`:768`); the compiler's arithmetic arms are the int
    and narrow ones (`VarkaNodeCompiler.java:482-498`), row 104's long arms being planned. A decimal
    reaches none of them, since `isInt` and `isNarrow` read the lane of a non-decimal type.
-   `GuardedRange` (`varka/VarkaVectorIR.java:587`) declines a batch; row 343's plan gives it a
-   `NULL` disposal that clears a live lane's validity (`VARKA-343.md` 2.4), planned, not built.
+   `GuardedRange` (`varka/VarkaVectorIR.java:587`) declines a batch. Its `NULL` mode, which
+   clears a live lane's validity, is row 481's: its plan (branch `varka-481`, section 3.1) gives
+   the node a mode, `FAIL` or `NULL`, rendered in the shape key, with the reference evaluator's
+   arm and the fuzz grammar's draw. Not built yet. Row 343's plan describes the same disposal for
+   its floating guard (`VARKA-343.md` 2.4); the two should be one mode.
 9. **The JDK's long multiply.** `vpmullq` with AVX-512DQ; below it the seven-instruction
    emulation (`cpu/x86/x86.ad:6071-6093`), unless C2 sees both inputs fit 32 bits, in which case
    one `vpmuldq` (`vmuldq_reg`, `:6108-6117`): an input is seen to fit when it is an `I2L`
@@ -158,12 +161,12 @@ AVX-512DQ the arm can only lose two shifts, and stays off there.
   node; above 18 it declines naming 359 (Spark itself never builds one there, item 0.7).
 - **`MakeDecimal(c, p, s, nullOnOverflow)`** over a `BIGINT` value `c`: for `p <= 18`,
   `GuardedRange(c, -(10^p - 1), 10^p - 1, d)` typed `(p, s)`, with the disposal `d` `NULL` where
-  `nullOnOverflow` and `FAIL` where not, 343's disposal; for `p >= 19`, `c` itself typed `(p, s)`,
+  `nullOnOverflow` and `FAIL` where not, row 481's mode; for `p >= 19`, `c` itself typed `(p, s)`,
   no guard (item 0.5). The second writes the bytes of row 157's `WidenDecimal` store, a long and its
   sign extension, but 157's plan declines a decimal output above precision 18, naming 359; so it
   declines naming 359 unless 157 admits an output above 18 whose value is a long. As an operand of a
-  wider operator it is 359's sign extension (`VARKA-359.md` 2.2). If this row lands before 343's
-  disposal, the `NULL` disposal is built here and 343 takes it, the way 343 offers its own to 332.
+  wider operator it is 359's sign extension (`VARKA-359.md` 2.2). This row does not build the
+  `NULL` mode; 349b waits for 481.
 
 ### 2.5 `CheckOverflow`
 
@@ -203,7 +206,7 @@ At two long lanes on x86 the rule is 348's (`VARKA-348.md` 2.8). The decimal arm
 `VarkaDecimalCompiler`, reached from `VarkaNodeCompiler`'s `Add`, `Subtract` and `Multiply` ahead
 of the int arms, beside which row 104 adds the `BIGINT` arms (adjacent switch arms; whichever merges
 second rebases), and from new arms for the three internals. The reference evaluator has `IntArith`
-and `GuardedRange`, and gains the `NULL` disposal with 343 or here. The cost model and the budget
+and `GuardedRange`, and gets the `NULL` mode with 481. The cost model and the budget
 need nothing new; the warm-up's long block gains the multiply's forms if `VarkaWarmupReachSuite`
 finds them missing.
 
@@ -293,14 +296,14 @@ Predictions, registered before the build:
 2. **The baseline addition** (4), with 348's.
 3. **349a, the arithmetic:** the arms of 2.2 and 2.3, the type rule and its sweep, the edges, the
    one-kernel test, the `+`, `-` and `*` lemmas and refinement rows, the predicate coverage rows.
-4. **349b, the internals**, after 343's disposal or with it, as section 8 answers.
+4. **349b, the internals**, after row 481's `NULL` mode, as section 8 answers.
 5. **349c, after 157:** the projections' rows, the `decimalMulIntInputs` reading and measurement,
    the measurement against the baseline at both widths and 512 bits on the laptop, scored.
 
 | file | what |
 |---|---|
 | `VarkaDecimalCompiler.java`, `VarkaNodeCompiler.java` | the arms of 2.2 to 2.5 |
-| `varka/VarkaVectorIR.java`, `varka/VarkaVectorWalk.java` | the disposal if built here; the arm |
+| `varka/VarkaVectorWalk.java` | the `decimalMulIntInputs` arm's shifts |
 | `varka/VarkaEmitOption.java`, `varka/VarkaEmitOptions.java` | `decimalMulIntInputs` |
 | `sql/varka/proofs/decimal64.smt2`, `VarkaProofFiles.java` | section 3 item 5's lemmas |
 | `VarkaRefinementFile`, `spec/STANDARD.md`, `spec/EXTENSIONS.md` | the refinement rows |
@@ -310,11 +313,11 @@ Predictions, registered before the build:
 | generated | `census.tsv`, `census_curated.txt`, `sql/varka/proofs` |
 
 **Size: medium, in three pull requests after the reading.** The reading an hour; 349a about three
-days, the proofs the larger part; 349b one or two, depending on 343; 349c one after 157. Test time:
+days, the proofs the larger part; 349b one or two, after 481; 349c one after 157. Test time:
 the type sweep is a pure function over about thirty thousand pairs, under a second; the lemmas add
 some sixty linear checks to `decimal64.smt2`, priced at VARKA-245's observed ratio in the
 calibration table. It rests on 347, on 348 (its `value()` and `decimal64.smt2`), 157 for 349c and
-343 for the `NULL` disposal.
+481 for the `NULL` mode.
 
 ## 6. Census unlock
 
@@ -326,18 +329,30 @@ row could count alone; `make_decimal`'s output reaches precision 38, past what 1
 so it counts with 359's store or with 157 admitting a long-valued output above 18. Whether either
 counts is section 8's question. The census's `make_decimal` note, "a relabel of an unscaled long",
 is corrected to name its guard. Seven more entries name 349 in their `rows` column - `%`, `mod`,
-`pmod` and the four interval products and quotients by a decimal - and are not this row's work
-(section 7).
+`pmod` and the four interval products and quotients by a decimal - and are not this row's work;
+349a marks them unclaimed with a suggested home (section 7).
 
 ## 7. Out of this row, and declines that stay
 
-Out: the shapes of 2.6's table; decimal `%`, `mod`, `pmod` and `try_mod`, a remainder by a
-variable divisor, which the long lane has no vector division for; `MultiplyYMInterval`,
-`MultiplyDTInterval`, `DivideYMInterval` and `DivideDTInterval` by a decimal, whose answer is the
-interval's count times or over the decimal, rounded `HALF_UP` to an integer
-(`expressions/intervalExpressions.scala:651-652`, `:700-702`, `:791-793`): a product past 64 bits
-and a rounding division by `10^s`, or a division by a variable, none of them this row's arithmetic;
-`TryEval` over a decimal subtree; the casts (350); the store (157).
+Out: the shapes of 2.6's table; the casts (350); the store (157). The row is built to its text,
+`+`, `-` and `*` with the three internals; the census entries that name 349 beyond it are not
+this row's work, and 349a marks each unclaimed in the census register (`census_curated.txt`'s
+`rows` column loses 349 and the note names the suggested home), for the owner to place:
+
+- decimal `%`, `mod`, `pmod` and `try_mod`: a remainder by a variable divisor, for which the long
+  lane has no vector division; suggested home row 30.
+- `MultiplyYMInterval` and `MultiplyDTInterval` by a decimal: the count times `u`, then `HALF_UP` by
+  `10^s` (`expressions/intervalExpressions.scala:651-652`, `:700-702`), a product past 64 bits and a
+  rounding division; suggested home rows 361 and 363.
+- `DivideYMInterval` and `DivideDTInterval` by a decimal: the count over the decimal, rounded
+  `HALF_UP` (`:791-793`), a division by a variable; suggested home rows 361 and 363.
+- `try_eval` over a decimal subtree: it catches what the subtree raises, and 349's own nodes raise
+  only in `MakeDecimal` and `CheckOverflow`; suggested home the rows whose decimal nodes raise
+  (350).
+
+An integral operand (`d9 + i`) declines naming 350. Rows 350 and 360 both claim the
+integral-to-decimal casts at 64 bits in their text; that overlap is the owner's row text and is
+flagged here, as in `VARKA-348.md` 7, not resolved.
 
 Declines that stay, each naming its row: the table of 2.6; the internals as section 8 answers.
 
@@ -354,7 +369,12 @@ Declines that stay, each naming its row: the table of 2.6; the internals as sect
    Build them and leave them out of the count. *Recommended: (b)*: a census pair should stand for a
    query that runs faster, and none would; (a) moves the count with no user-visible change, and the
    work stays cheap to do when a later milestone fuses aggregates. If step 1 finds a plan that does
-   reach a fused node, the question is withdrawn and section 2 is built as written.
+   reach a fused node, the question is withdrawn and section 2 is built as written. If the owner
+   wants them built anyway, (c) is testable as it stands: the coverage suite and the harness compile
+   an expression wherever Spark would place it (the `built` rows, as `InSet`'s are), so the choice
+   is whether they count, not whether they can be tested. 2. **`MakeDecimal` above precision 18**
+   (2.4) depends on question 1: if the internals are not built, it does not arise; if they are, it
+   declines naming 359 unless row 157 admits a long-valued output above 18.
 
 ## 9. Done when
 
