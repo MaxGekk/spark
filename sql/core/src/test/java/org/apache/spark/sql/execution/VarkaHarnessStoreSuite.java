@@ -186,4 +186,50 @@ public final class VarkaHarnessStoreSuite {
       Files.delete(dir);
     }
   }
+
+  @Test
+  @DisplayName("a file written on another commit or options table is ignored, and the rest read")
+  void staleFilesIgnored() throws IOException {
+    Path dir = Files.createTempDirectory("varka-harness-store");
+    try {
+      VarkaHarnessStore.Stamp mine = VarkaHarnessStore.stamp();
+      VarkaHarnessStore.write(dir, Map.of("this commit", new byte[] {1}), mine);
+      VarkaHarnessStore.write(dir, Map.of("another commit", new byte[] {2}),
+          new VarkaHarnessStore.Stamp(mine.commit() + "-other", mine.options()));
+      VarkaHarnessStore.write(dir, Map.of("another table", new byte[] {3}),
+          new VarkaHarnessStore.Stamp(mine.commit(), mine.options() + "-other"));
+      // A file cut short, as a download that stopped would leave it: none of it is read.
+      Path whole = dir.resolve("whole");
+      VarkaHarnessStore.write(whole, Map.of("cut short", new byte[64]), mine);
+      try (var files = Files.list(whole)) {
+        Path file = files.toList().get(0);
+        byte[] bytes = Files.readAllBytes(file);
+        Files.write(dir.resolve("harness-cut.bin"),
+            java.util.Arrays.copyOf(bytes, bytes.length / 2));
+        Files.delete(file);
+      }
+      Files.delete(whole);
+
+      VarkaHarnessStore.Read read = VarkaHarnessStore.read(dir, mine);
+      assertEquals(Map.of("this commit", 1), Map.copyOf(
+          read.entries().entrySet().stream().collect(java.util.stream.Collectors.toMap(
+              Map.Entry::getKey, e -> (int) e.getValue()[0]))));
+      assertEquals(3, read.ignored().size(), String.join("\n", read.ignored()));
+      assertTrue(read.ignored().stream().anyMatch(l -> l.contains("commit " + mine.commit()
+          + "-other")), String.join("\n", read.ignored()));
+      assertTrue(read.ignored().stream().anyMatch(l -> l.contains("options table")),
+          String.join("\n", read.ignored()));
+      assertTrue(read.ignored().stream().anyMatch(l -> l.contains("harness-cut.bin")),
+          String.join("\n", read.ignored()));
+      // A directory the defaults' run never wrote reads as an empty store.
+      assertTrue(VarkaHarnessStore.read(dir.resolve("missing"), mine).entries().isEmpty());
+    } finally {
+      try (var files = Files.list(dir)) {
+        for (Path f : files.toList()) {
+          Files.delete(f);
+        }
+      }
+      Files.delete(dir);
+    }
+  }
 }

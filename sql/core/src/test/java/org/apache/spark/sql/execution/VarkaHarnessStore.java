@@ -64,6 +64,8 @@ import org.apache.spark.sql.catalyst.expressions.InterpretedUnsafeProjection;
 import org.apache.spark.sql.catalyst.expressions.UnsafeArrayData;
 import org.apache.spark.sql.catalyst.expressions.UnsafeProjection;
 import org.apache.spark.sql.catalyst.expressions.UnsafeRow;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOption;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaMatrixRuns;
 import org.apache.spark.sql.catalyst.trees.Origin;
 import org.apache.spark.sql.catalyst.util.ArrayBasedMapData;
@@ -92,6 +94,10 @@ import org.apache.spark.sql.internal.SQLConf;
  * since the expression ids of a fixture's columns are made afresh in every JVM, and it is written
  * only when it comes back from its bytes printed whole as it was ({@link #storable}), so a plan
  * that does not survive the round trip is planned afresh by every JVM.
+ *
+ * <p>A file's header stamps it with the commit and the emit options' table it was written on
+ * ({@link Stamp}), and a reader ignores, with a printed line, a file stamped otherwise than it
+ * is: what the file held is then planned and computed as without a store.
  */
 public final class VarkaHarnessStore {
 
@@ -790,38 +796,167 @@ public final class VarkaHarnessStore {
   }
 
   private static final int MAGIC = 0x56484153;
-  private static final int VERSION = 1;
+  private static final int VERSION = 2;
 
-  /** Every {@code harness-*.bin} in {@code dir}, the first file's entry where two share a key. */
-  static Map<String, byte[]> read(Path dir) {
-    var out = new ConcurrentHashMap<String, byte[]>();
-    if (!Files.isDirectory(dir)) {
-      return out;
+  /** The system property naming the commit this JVM's classes were built from. */
+  public static final String COMMIT_PROPERTY = "varka.harness.commit";
+
+  /**
+   * What a file's entries hold for, written in its header: the commit the writing JVM's classes
+   * were built from and a digest of the emit options' table. A plan or an answer is the same
+   * under every configuration of one build, but not across builds: a change to the analyzer, to
+   * Spark's projections, to the harness's fixtures or to the options a configuration names can
+   * move it, and a key that names the expression does not see that. So a reader takes a file only
+   * where both are its own, and ignores any other with a printed line, planning and computing
+   * what that file held as it would with no store.
+   *
+   * <p>The commit is {@value #COMMIT_PROPERTY}, which {@code dev/varka_matrix.sh} sets on every
+   * test JVM from {@code git rev-parse HEAD}, or else the revision the build recorded in
+   * {@code spark-version-info.properties}. The table's digest catches what one commit does not:
+   * a laptop's run of an uncommitted change to the options.
+   */
+  record Stamp(String commit, String options) {
+
+    /** This JVM's stamp. */
+    static Stamp ofThisJvm() {
+      return new Stamp(thisCommit(), optionsDigest());
     }
-    try (var files = Files.list(dir)) {
-      for (Path file : files.filter(f -> f.getFileName().toString().startsWith("harness-")
-          && f.getFileName().toString().endsWith(".bin")).sorted().toList()) {
-        try (var in = new DataInputStream(new GZIPInputStream(Files.newInputStream(file),
-            1 << 16))) {
-          if (in.readInt() != MAGIC || in.readInt() != VERSION) {
-            continue;
-          }
-          int n = in.readInt();
-          for (int i = 0; i < n; i++) {
-            String key = new String(in.readNBytes(in.readInt()), StandardCharsets.UTF_8);
-            byte[] value = in.readNBytes(in.readInt());
-            out.putIfAbsent(key, value);
-          }
-        }
+
+    private static String thisCommit() {
+      String commit = System.getProperty(COMMIT_PROPERTY, "").trim();
+      if (!commit.isEmpty()) {
+        return commit;
       }
+      try {
+        return "build " + org.apache.spark.SparkBuildInfo$.MODULE$.spark_revision();
+      } catch (RuntimeException | LinkageError e) {
+        return "unknown";
+      }
+    }
+
+    /**
+     * A digest of every option of {@link VarkaEmitOption#TABLE}, in order: its name, reason,
+     * rendering, default and each arm by its label and the options it makes, as
+     * {@code canonical()} prints them. Rendered by hand, since a record's {@code toString} has no
+     * promised form and an option's accessors print as their identity.
+     */
+    static String optionsDigest() {
+      var sb = new StringBuilder();
+      for (VarkaEmitOption option : VarkaEmitOption.TABLE) {
+        sb.append(option.name()).append('|').append(option.reason().name()).append('|')
+            .append(switch (option.rendering()) {
+              case VarkaEmitOption.Positional _ -> "positional";
+              case VarkaEmitOption.FlagTag t -> "flag " + t.token() + " " + t.when();
+              case VarkaEmitOption.CountTag t -> "count " + t.prefix();
+            })
+            .append('|').append(option.text(VarkaEmitOptions.DEFAULTS));
+        for (VarkaEmitOption.Arm arm : option.arms()) {
+          sb.append('|').append(arm.name()).append('=')
+              .append(arm.apply().apply(VarkaEmitOptions.DEFAULTS).canonical());
+        }
+        sb.append('\n');
+      }
+      try {
+        byte[] sha = MessageDigest.getInstance("SHA-256")
+            .digest(sb.toString().getBytes(StandardCharsets.UTF_8));
+        return HexFormat.of().formatHex(sha, 0, 12);
+      } catch (NoSuchAlgorithmException e) {
+        throw new IllegalStateException(e);
+      }
+    }
+  }
+
+  // This JVM's stamp, made on first use: the store is made as the class initialises, and the
+  // table's digest links every option's accessors, which only a JVM with a store need pay.
+  private static final class ThisJvm {
+    static final Stamp STAMP = Stamp.ofThisJvm();
+  }
+
+  static Stamp stamp() {
+    return ThisJvm.STAMP;
+  }
+
+  /**
+   * The entries of the files a read took, and a line for each file it ignored: one written on
+   * another commit or options table, one of another format, or one that does not read whole.
+   */
+  record Read(Map<String, byte[]> entries, List<String> ignored) {}
+
+  /**
+   * Every {@code harness-*.bin} in {@code dir} stamped as this JVM is, the first file's entry
+   * where two share a key; each file ignored is printed. A missing or empty directory reads as
+   * no entries, so a run without the defaults' files plans and computes everything itself.
+   */
+  static Map<String, byte[]> read(Path dir) {
+    Read read = read(dir, stamp());
+    for (String line : read.ignored()) {
+      System.out.println(line);
+    }
+    return read.entries();
+  }
+
+  /** {@link #read(Path)} for a reader stamped {@code mine}, the ignored files listed. */
+  static Read read(Path dir, Stamp mine) {
+    var out = new ConcurrentHashMap<String, byte[]>();
+    var ignored = new ArrayList<String>();
+    if (!Files.isDirectory(dir)) {
+      return new Read(out, ignored);
+    }
+    List<Path> files;
+    try (var list = Files.list(dir)) {
+      files = list.filter(f -> f.getFileName().toString().startsWith("harness-")
+          && f.getFileName().toString().endsWith(".bin")).sorted().toList();
     } catch (IOException e) {
       throw new UncheckedIOException(e);
     }
-    return out;
+    for (Path file : files) {
+      // A file's entries join only once the whole file has read, so a truncated one adds none.
+      var ofFile = new TreeMap<String, byte[]>();
+      String why = null;
+      try (var in = new DataInputStream(new GZIPInputStream(Files.newInputStream(file),
+          1 << 16))) {
+        if (in.readInt() != MAGIC || in.readInt() != VERSION) {
+          why = "another format";
+        } else {
+          var theirs = new Stamp(in.readUTF(), in.readUTF());
+          if (!theirs.commit().equals(mine.commit())) {
+            why = "commit " + theirs.commit() + ", this run's " + mine.commit();
+          } else if (!theirs.options().equals(mine.options())) {
+            why = "options table " + theirs.options() + ", this run's " + mine.options();
+          } else {
+            int n = in.readInt();
+            for (int i = 0; i < n; i++) {
+              String key = new String(exactly(in), StandardCharsets.UTF_8);
+              ofFile.put(key, exactly(in));
+            }
+          }
+        }
+      } catch (IOException e) {
+        why = "unreadable: " + e;
+      }
+      if (why != null) {
+        ignored.add("VARKA_HARNESS_STORE\tIGNORED\t" + file.getFileName() + "\t" + why);
+      } else {
+        ofFile.forEach(out::putIfAbsent);
+      }
+    }
+    return new Read(out, ignored);
+  }
+
+  /** The bytes of a length-prefixed field, all of them or an {@code EOFException}. */
+  private static byte[] exactly(DataInputStream in) throws IOException {
+    byte[] bytes = new byte[in.readInt()];
+    in.readFully(bytes);
+    return bytes;
+  }
+
+  /** {@code entries} as a file of this JVM's own in {@code dir}, stamped as this JVM is. */
+  static void write(Path dir, Map<String, byte[]> entries) {
+    write(dir, entries, stamp());
   }
 
   /** {@code entries} as a file of this JVM's own in {@code dir}, written whole or not at all. */
-  static void write(Path dir, Map<String, byte[]> entries) {
+  static void write(Path dir, Map<String, byte[]> entries, Stamp stamp) {
     try {
       Files.createDirectories(dir);
       String name = "harness-" + ProcessHandle.current().pid() + "-" + System.nanoTime();
@@ -830,6 +965,8 @@ public final class VarkaHarnessStore {
           1 << 16))) {
         out.writeInt(MAGIC);
         out.writeInt(VERSION);
+        out.writeUTF(stamp.commit());
+        out.writeUTF(stamp.options());
         var copy = new TreeMap<>(entries);
         out.writeInt(copy.size());
         for (Map.Entry<String, byte[]> e : copy.entrySet()) {
