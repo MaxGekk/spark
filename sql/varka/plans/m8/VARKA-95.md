@@ -324,7 +324,8 @@ for a checked int `MUL` under `HALVES`; the cost model's features `IntArith/MUL/
    of a vector); the `NULL` arm disposing nothing (test 1's `try_multiply` rows); the sign tail of
    `emitMulHiDivide` dropped (`VarkaDivisionLowering.java:336-337`, test 1's `i % 7` on negative
    dividends); the bias's `>>>` as `>>` in the shift form (test 3); and the proof file's check
-   changed to the logical shift, which must come back `sat`.
+   changed to the logical shift, which must come back `sat`, or `unknown` past the gate's
+   per-check limit; either fails the run, so the fault is caught.
 6. **The fuzzers.** No new node, so no new production: the IR grammar's `MUL` draws `FAIL` and
    `NULL` beside `WRAP` (`VarkaIrGrammar.java:701-704`), its comment going, in a sequence of its
    own seed as 481's nulling draw does (`VARKA-352.md`), with operand bounds that overflow on some
@@ -384,7 +385,9 @@ Predictions, registered before the build:
    Built under the name row 104 adopts, and row 104 extends it. Needs nothing unmerged.
 4. **95c, `LONG_TREE` and the verdict**: the option's `LONG_TREE` arm, the tree, the pair on
    the runners, the default picked by the measurement. After row 481's `NULL` mode and marked
-   guard merge.
+   guard merge. *Settled, the lead, 30 October 2026:* 95c is row 104's extension, since the tree
+   is 104's own 3.3 mechanism; 95b adds the option with its `HALVES` arm only, and the `proofs/
+   slow/` folder for the by-hand statement is kept as the plan proposes.
 
 | file | what |
 |---|---|
