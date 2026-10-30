@@ -44,11 +44,11 @@ close-wave note ("352 grows beside each lane from wave 0").
    `NULLING_FUZZ_SEED` and `drawNullingShape`/`drawNullingLongShape`, the committed draws behind a
    flag that is off for them, and a test that the nulling draw reaches the `NULL` guard at both
    lanes and that the committed draws "hold none"; "the corpora `emitted_bytes.json` and the cost
-   tables pin do not move" (`cbfc59ce01c`, its message and its `VarkaIrGrammar.java` diff). Its
-   section 8 regenerates the generated files once at step 4; neither the plan nor the commit says
-   when the nulling draw joins the committed corpora. Every type plan since 341 writes the same
-   rule: "a sequence of its own seed, so no existing hash moves" (341 3.4, 347 3.5, 348 3.6, 157
-   3.6, 359 2.2, 361 2.2, 362 2.2, 332 3.7, 30 3.6).
+   tables pin do not move" (`cbfc59ce01c`, its message and its `VarkaIrGrammar.java` diff, the
+   step-1 pull request #1176). The nulling draw joins the committed corpora at 481's step 3, the
+   general form, which moves every checked narrow multiply's bytes anyway (`VARKA-481.md` 8). Every
+   type plan since 341 writes the same rule: "a sequence of its own seed, so no existing hash moves"
+   (341 3.4, 347 3.5, 348 3.6, 157 3.6, 359 2.2, 361 2.2, 362 2.2, 332 3.7, 30 3.6).
 5. **The reference evaluator is one Java class, a switch per lane.** `VarkaReference`
    (830 lines): `value`/`cond` for the int lane (`:82`, `:354`), `longValue`/`longCond` (`:423`,
    `:556`), `mixedValue`/`mixedCond` (`:620`, `:632`); a floating lane's rows are raw bits ordered
@@ -109,9 +109,8 @@ close-wave note ("352 grows beside each lane from wave 0").
 13. **The open grammar rows.** 431 (`NullSafeEqual`) and 432 (mixed-lane `BitOp` over a widened
     count, a narrowed popcount) are grammar gaps "taken with 352's refit". 433 is the composition
     fuzzer's compiled check carrying one literal table, which excludes the long kernels with an
-    int slot (`VarkaCoverageCompositionFuzzSuite.scala:790-799`). 434 (the 128-bit epilogue's long
-    mask) and 435 (the mixed-lane mask count's prefix case) are emitter and test rows, not grammar
-    gaps.
+    int slot (`VarkaCoverageCompositionFuzzSuite.scala:790-799`), a row of its own that the
+    composition fuzzer's mixed kernels wait on.
 14. **Row 499(c)** plans a `draws` skip kind, legal only on a test that draws from a seed, a set
     `VarkaMatrixRuns` names (`VARKA-499.md` 2.3); row 497 lands after or with it, since its
     coverage rows move the seeded draws again.
@@ -124,13 +123,16 @@ close-wave note ("352 grows beside each lane from wave 0").
 - **Closing the ANSI gap also changes a stated design**: the partition check takes the full pool
   too (item 8). It moves no draw, since `partitions` is not drawn from the case's stream.
 - **"Both fuzzers at every nightly" needs a CI job** that does not exist (item 10).
-- **Rows 434 and 435 are not this row's**, nor fuzz-grammar gaps (item 13); 433 is a prerequisite
-  of the composition fuzzer drawing mixed kernels and is taken in 352a.
+- **433 stays its own row** (item 13): 352's composition-fuzzer draws of mixed kernels depend on
+  it (section 5).
 - **The floating IR sequence is 341's** (its 3.4 and the owed map), and each new node's draw is its
   row's; this row builds the shared parts they plug into and the value sources.
-- **The tie windows do not agree across the plans.** 2.10 (e) says `s <= 4` and `s <= 17`;
-  `VARKA-350.md` 3 item 5 and `VARKA-366.md` 0 item 3 say scales 0 to 2 for `DOUBLE` and 0 to 15
-  for `FLOAT`, from 366's admission file. Question 4.
+- **The tie windows are 2.10 (e)'s, the region where a tie is possible.** Lemire's section 6
+  bounds it (`q` in `[-4, 23]` for binary64, `[-17, 10]` for binary32, p. 9; the transcription
+  `sql/varka/papers/lemire-2021-number-parsing-gigabyte-per-second.md`, on `varka-350-366-plan`,
+  pull request #1180), which gives `s <= 4` and `s <= 17`. `VARKA-350.md` 3 item 5 and
+  `VARKA-366.md` 0 item 3 name scales 0 to 2 and 0 to 15: where ties occurred over 366's admission
+  inputs, an observation inside the bound. The fuzzer probes the whole possible region.
 - **"The try_ arithmetic"** is read as `try_add`, `try_subtract`, `try_multiply`, `try_mod` and
   `try_divide` (item 9); `try_make_timestamp_ntz` is a constructor and is left to its row.
 - **"The sampled regions of 2.2, 2.7 and the matrix"** is read as the cast matrix's regions (2.2)
@@ -146,7 +148,7 @@ shapes on both pools and holds the three parts to raising alike; the two cross-m
 checked over every legal pair and the `try_` arithmetic; and the Spark-level fuzzer runs in CI
 every night. Not this row: each type's nodes, their reference semantics and their productions
 (the type rows, through the parts below), the exhaustive sweeps and the sampled suites (343, 344,
-346, 350, 366), Spark's own suites (368), the count arm (369), rows 434 and 435.
+346, 350, 366), Spark's own suites (368), the count arm (369), row 433.
 
 ## 2. Design
 
@@ -176,8 +178,9 @@ and `Conformance` (item 0.11) and of row 489's node descriptor. The parts:
   grammar's long leaf already covers the lane"); the others a sequence of their own.
 - **`ValueSource`**: how a column of the type is drawn, as lane bits. A mix per value: an edge or
   special one draw in four, uniform inside the bound the grammar sets otherwise, null by the null
-  pattern. Its edges are the type's conformance values (question 1), its specials and sweeps are
-  2.5's.
+  pattern. Its edges are the one list of the type's values: the conformance suites' lists move into
+  the descriptor and `ConformanceType` reads them (row 495's "one home"), and its specials and
+  sweeps are 2.5's.
 - **`SparkColumns`**: the fixture columns (names, SQL type, whether derived), a cell drawer each
   for the safe, hostile and wide pools, and the `VarkaCatalystGrammar.Type` they are read as.
 - **`tlpShapes`**: predicate templates over the type's columns for the partition check (2.4).
@@ -205,13 +208,13 @@ So:
    the existing nodes, and a type's own test runs it against the reference.
 3. **A new node on an existing lane draws in a side sequence** of its row's seed, behind a flag the
    committed draws leave off, with a test that the committed draws reach none of it: 481's pattern
-   (item 0.4). It joins the committed sequences at the next refit.
+   (item 0.4). It joins the committed sequences at the next refit, or at its own row's
+   regeneration where that row moves the bytes anyway (481's step 3).
 4. **What a new sequence pins.** Its blocks are added to `emitted_bytes.json` under a new key
    (`lanes.*.fuzz_<type>`), two thousand shapes as twenty blocks, so a refactor of the emitter is
-   proven over the new lane too and no existing digest moves (question 2). A side sequence is
-   unpinned, as 481's and `NARROW_FUZZ_SEED`'s are. Five such sequences add ten thousand
-   emissions to the thirty thousand fuzz shapes the bytes suite emits today; the time is priced in
-   352a step 2's pull request from the suite's CI time.
+   proven over the new lane too and no existing digest moves. A side sequence is unpinned, as
+   481's and `NARROW_FUZZ_SEED`'s are. Five such sequences add ten thousand emissions to the
+   thirty thousand fuzz shapes the bytes suite emits today: prediction 7.
 5. **Values after the shape are free, and new value kinds take a stream of their own.** A
    committed sequence's lane values are not pinned (the bytes and the cost model read shapes only),
    but `known_failures.tsv` and the op-cap scans replay them; a new value kind (2.5) is drawn from
@@ -239,13 +242,13 @@ price change regroups shapes; a refit here does the same, on the runners, before
 (`VarkaSharedPrefixBenchmark` and `VarkaEmissionBenchmark`, alternated rounds at each width as
 335's 9.2a did, with the corrections row 409 made to its first table).
 
-The schedule is the owner's (335a's refit needed his word; question 3). Proposed: **refit A** in
-352a's last step, taking 431, 432, the boolean nodes and `CondValue`, 481's `NULL` guard if 481
-step 1 has merged, and the narrow leaves (the narrow lanes join `PRICED_LANES`); **refit B** at the
-close, taking every node the type rows put on the list and the floating and decimal lanes into
-`PRICED_LANES`. Between them a type's nodes stay unpriced and weight-bounded, which every type plan
-already assumes. What A can price depends on merge order: the floating lanes only after 341's
-kernels merge.
+The schedule is the owner's (335a's refit needed his word; question 1). Proposed: **refit A** in
+352a's last step, taking 431, 432, the boolean nodes and `CondValue`, and the narrow leaves (the
+narrow lanes join `PRICED_LANES`); **refit B** at the close, taking every node the type rows put on
+the list and the floating and decimal lanes into `PRICED_LANES`. Between them a type's nodes stay
+unpriced and weight-bounded, which every type plan already assumes. What A can price depends on
+merge order: the floating lanes only after 341's kernels merge. 481's nulling draw is not a refit's:
+it joins at 481's step 3 (item 0.4).
 
 ### 2.4 The TLP oracle over the milestone's shapes, with its ANSI gap closed
 
@@ -312,7 +315,7 @@ queries instead of eight.
   (which drive 2.4's rewrites).
 - **Tie windows.** The decimal source draws exact midpoints inside the windows and one unit either
   side, and the sequence asserts on every draw that a midpoint test outside the windows is false
-  (question 4 decides which windows).
+  (`s <= 4` for `DOUBLE`, `s <= 17` for `FLOAT`, the bound of Lemire's section 6).
 - **Casts from `casts.tsv`.** `VarkaCatalystGrammar` gains a production family `CAST(<from> AS
   <to>)` and `try_cast(...)`, one per legal pair of the case's mode (98 under ANSI, 106 under
   LEGACY), drawn when both types have a `Present` Spark site, so a type's pairs turn on with its
@@ -341,10 +344,10 @@ marks fused at that nightly, and the test prints that count.
 
 ### 2.7 The nightly and the matrix
 
-A job of its own in `varka-fuzz.yml`, `spark-fuzz`, beside 368's: `VarkaSparkFuzzSuite`'s three
-seeded tests at the date's seed, sized to the job's cap (measured on its first run; the laptop's
-nightly runs 50000 compositions in one JVM), one JVM. It counts against the fork's 40-job budget
-as one job. The option matrix already runs the three catalyst fuzz suites and the sql suites by
+A step of the one scheduled run in `varka-fuzz.yml` whose workflow change row 537 owns (section 5):
+`VarkaSparkFuzzSuite`'s three seeded tests at the date's seed, sized to the step's cap (measured on
+its first run; the laptop's nightly runs 50000 compositions in one JVM), one JVM, within the fork's
+40-job budget. The option matrix already runs the three catalyst fuzz suites and the sql suites by
 `VarkaTestReach`; the new tests join 499(c)'s seeded set, so a by-design disagreement under a
 configuration is a `draws` line, never a stale `fails` line.
 
@@ -387,7 +390,10 @@ first (`dev/varka_calibration.py`), and stated at its observed ratio in the step
    time is priced in step 3's pull request from the calibration table.
 5. **Refit A** moves every fuzz block and no coverage row, and the 64-tail ladder is within its
    band at all three widths.
-6. **No existing digest moves** in any step before refit A or between A and B.
+6. **No existing digest moves** in any step before refit A or between A and B, but 481's step 3.
+7. **The bytes suite's time** grows by at most a third with the five pinned sequences (ten
+   thousand emissions beside thirty thousand fuzz shapes and the coverage rows at two widths),
+   scored against the suite's CI time in each sequence's pull request.
 
 ## 5. Order, files and size
 
@@ -399,9 +405,10 @@ The up-front part, 352a, in five pull requests:
    IR fuzzer's three column draws taking `ValueSource`s from a stream of their own; no draw moves.
 2. **The landed types**: the narrow sequence (`fuzz_byte`, `fuzz_short`, pinned under new keys),
    the boolean columns, narrow columns and their pools at the Spark level and in the composition
-   fuzzer, the catalyst grammar's new types, the TLP shapes for them, and 433's two literal tables.
+   fuzzer, the catalyst grammar's new types and the TLP shapes for them; the composition fuzzer's
+   mixed kernels with an int slot wait on row 433.
 3. **The TLP oracle** (2.4): the pools, the raise rule, the drawn shapes.
-4. **The cross-mode arm** (2.6), the cast productions (2.5), and the `spark-fuzz` nightly job
+4. **The cross-mode arm** (2.6), the cast productions (2.5), and the Spark-level nightly step
    (2.7).
 5. **Refit A** (2.3), on the owner's word, with its pair.
 
@@ -434,7 +441,7 @@ And **352b, the close**: refit B, the done-when read type by type against the de
 |---|---|
 | `VarkaFuzzTypes.java`, `VarkaFuzzTypesSuite.java` (new) | 2.1 |
 | `VarkaIrGrammar.java`, `VarkaIrFuzzSuite.scala` | the sequences, value sources, reach tests |
-| `VarkaKernelChecks.java`, `VarkaFuzzCase.java` | the narrow sequence's harness, 433's tables |
+| `VarkaKernelChecks.java` | the narrow sequence's harness |
 | `VarkaSparkFuzz.scala`, `VarkaSparkFuzzSuite.scala` | columns, pools, 2.4, 2.6 |
 | `VarkaSparkDifferential.scala` | 2.4's seven queries |
 | `VarkaCatalystGrammar.java` | the new types, the cast family, decimal result types |
@@ -444,10 +451,15 @@ And **352b, the close**: refit B, the done-when read type by type against the de
 | `sql/varka/emit_cost_audit.json` | refit A |
 | `dev/varka_new_lane.py`, `dev/varka_bytes_moved.py` (new) | 2.1, 2.2 |
 | `sql/varka/fuzz/types.tsv` (new) | 2.1 |
-| `.github/workflows/varka-fuzz.yml`, `dev/varka_nightly.sh` | the `spark-fuzz` job |
+| `.github/workflows/varka-fuzz.yml`, `dev/varka_nightly.sh` | the Spark-level step |
 | `sql/varka/ADDING_A_TYPE.md` | steps 8, 9 and 13 say how a type takes the parts |
 | `sql/varka/fuzz/expected_errors.tsv` | new conditions |
 | `sql/varka/matrix/skips.tsv` | `draws` lines |
+
+**One scheduled run.** Three plans add scheduled work to `varka-fuzz.yml`: row 537 (the sweeps on
+CI, pull request #1183), row 368 (the random-literal checks, #1182) and this row (the Spark-level
+fuzzer). They are steps of one scheduled run: 537 owns the workflow change, and 368 and 352 add
+steps to it, within the fork's 40-job budget.
 
 **Size: medium as the row says for 352a's steps 1 to 4, about five days; refit A about two (the
 regeneration is mechanical, the pair is not); each type's share half a day to a day inside its own
@@ -466,35 +478,25 @@ fuzzers.
 
 Out: each type's nodes, reference semantics and productions (the type rows, through 2.1 to 2.5);
 the exhaustive sweeps and sampled suites (343, 344, 346, 350, 366); 368's suites and its nightly
-job; 369's count arm; rows 434 and 435. Stays as it is: the steering A/B (opt-in, `VARKA-280.md`
+job; 369's count arm; row 433. Stays as it is: the steering A/B (opt-in, `VARKA-280.md`
 9); a NaN payload at the Spark level, which has no spelling.
 
 ## 8. Questions for the owner
 
-1. **The descriptor's edge values.** (a) The conformance suites' value lists move into the
-   descriptor and `ConformanceType` reads them, so a type has one list. (b) The descriptor keeps
-   its own. *Recommended: (a)*: two lists drift, and the conformance values are the reviewed edges
-   (`VARKA-329.md` 9.8).
-2. **A new sequence's pin.** (a) Pinned under a new key, two thousand shapes. (b) Unpinned, as
-   481's and the narrow conversions' are. *Recommended: (a)*: a lane is permanent, a refactor's
-   proof should cover it, and a new key moves no existing digest.
-3. **The refit schedule.** (a) Two refits, A in 352a and B at the close, each paired. (b) One at the
+1. **The refit schedule.** (a) Two refits, A in 352a and B at the close, each paired. (b) One at the
    close. (c) A refit with each type row. *Recommended: (a)*: seven nodes and two lanes wait
    unpriced today, 431 and 432 are blocked on it, and a refit per type would move every pin at
-   every lane's landing, which 2.10 forbids.
-4. **The tie windows.** (a) 366's: scales 0 to 2 for `DOUBLE` and 0 to 15 for `FLOAT`, the
-   midpoint scales its admission file derives, with 2.10 (e) corrected. (b) 2.10 (e)'s `s <= 4`
-   and `s <= 17`. *Recommended: (a)*, if the lead's reading of the admission file confirms it:
-   350 and 366 both cite it, and no file this row read derives 2.10's numbers.
+   every lane's landing, which 2.10 forbids. The caveat: refit A prices the floating lanes only
+   after 341's kernels merge.
 
 ## 9. Done when
 
-Row 352's text holds, with the corrections above: every type's descriptor has no `Owed` site; the
-IR fuzzer draws every type in its sequence and the Spark-level fuzzer every type in its columns at
+Row 352's text holds, with the corrections above: every type's descriptor has no `Owed` site; the IR
+fuzzer draws every type in its sequence and the Spark-level fuzzer every type in its columns at
 every nightly, the Spark one in CI; the TLP check runs on both pools with the raise rule and the
-milestone's shapes; the cross-mode properties hold over the 98 pairs and the `try_` arithmetic,
-with the fused count stated; the generators carry 2.5's specials and sweeps; every existing digest
-is unchanged between refits and each refit's moves are listed; rows 431, 432 and 433 are closed by
-it; and a cross-type disagreement found is fixed or a named row.
+milestone's shapes; the cross-mode properties hold over the 98 pairs and the `try_` arithmetic, with
+the fused count stated; the generators carry 2.5's specials and sweeps; every existing digest is
+unchanged between refits and each refit's moves are listed; rows 431 and 432 are closed by it; and a
+cross-type disagreement found is fixed or a named row.
 
 ## 10. Outcome
