@@ -87,8 +87,10 @@ in `/home/max/proj/openjdk-build/jdk25`.
     (`sql/core/benchmarks/VarkaDecimalBaselineBenchmark-jdk25-runner-epyc7763-results.txt`). It has
     no unequal scales, `IN`, `<=>`, negation or `abs`, and no comparison as a projected value.
 11. **Related rows.** Row 333 (planned) owns `NullValue`, the typed null leaf `CASE` without `ELSE`,
-    `nullif` and `nullifzero` need, and the long-lane `IN` widening; row 497 (open) folds the
-    `IN` arms into one keyed on the lane; row 503 (open, on branch `varka-503-two-lane-decline`)
+    `nullif` and `nullifzero` need, and the long-lane `IN` widening; row 497 (planned on branch
+    `varka-497-499-plan`) folds the four `IN` arm pairs - date and interval, narrow, floating and
+    `TIMESTAMP_NTZ` - into one keyed on the lane, reading each literal through the registry's
+    lane bits; row 503 (open, on branch `varka-503-two-lane-decline`)
     declines a long-lane condition root at two lanes on x86; 347's answered question 4 applies
     row 27's rule there instead, unless 347's step 6 reading shows a loss.
 
@@ -174,12 +176,11 @@ is read by `dev/varka_emit.sh --asm` on both and recorded.
   answer, the rescale sitting inside whichever operand was cast. `<>` stays the `NOT` of the
   equality, as 347's reader builds it. `operands()` keeps its hand-built-tree guard: two
   different types after `value()` decline.
-- **`IN` and `InSet`** of a decimal value: a decimal arm beside the `TIMESTAMP_NTZ` one, calling
-  `compileLongInList` with the value's `unscaled` and each element's unscaled long at the `In`'s
-  type (`setScale` exact, as 347's literal reader does, an inexact or wider one declining), so the
-  dedup, sort, cap of 16 and balanced fold are the existing ones. A null element declines, as for
-  every lane. If row 497 lands first, the arm is that row's single arm keyed on the lane, given a
-  decimal literal reader; if after, 497 folds this arm with the others.
+- **`IN` and `InSet`** of a decimal value: no arm of its own. Row 497's single arm keyed on the
+  lane gains one reader case, a decimal element's unscaled long at the `In`'s type (`setScale`
+  exact, as 347's literal reader does, an inexact or wider one declining), and the value is
+  `value()`'s `unscaled`; the dedup, sort, cap of 16 and balanced fold are 497's. A null element
+  declines, as for every lane. So the `IN` forms land after 497, and no fifth arm is written.
 - **`IS [NOT] NULL`** over any `Scaled` value is `IsNotNull(unscaled)`, widening 347's column-only
   arm: a negation, a choice or a rescale of a column is null exactly where Spark's is, and every
   decimal leaf beneath still arms its slot check, the rule 347's step 5 settled for the column
@@ -342,17 +343,19 @@ Predictions, registered before the build:
    `VarkaOperatorCensusCatalog`, the laptop's column, then a `varka-width-audit.yml` dispatch for
    the EPYC and Neoverse columns.
 2. **The baseline addition** (4), its own pull request.
-3. **348a, the conditions:** `Scaled`, `value()` and `rescale`, the unequal-scale comparisons,
+3. **Row 497**, the single `IN` arm, before 348a's `IN` forms; if 497 is late, 348a lands without
+   `IN` and `InSet` and a small follow-up adds the reader case.
+4. **348a, the conditions:** `Scaled`, `value()` and `rescale`, the unequal-scale comparisons,
    `IN` and `InSet`, the null tests over values, negation, `abs` and the choices under a
    condition, `decimal64.smt2` and the refinement sections, the slot table and edges, the
    predicate coverage rows, the IR fuzzer's sequence.
-4. **348b, the values, after 157:** the projections' coverage rows, the `abs` arm's measurement,
+5. **348b, the values, after 157:** the projections' coverage rows, the `abs` arm's measurement,
    the measurement against the baseline at both widths and 512 bits on the laptop, scored.
 
 | file | what |
 |---|---|
 | `VarkaDecimalCompiler.java` | `Scaled`, `value()`, `rescale`, the forms of 2.3 to 2.6 |
-| `VarkaConditionCompiler.java`, `VarkaTimeCompiler.java` | the decimal `IN` arm; the hand-off |
+| `VarkaConditionCompiler.java`, `VarkaTimeCompiler.java` | 497's arm's decimal reader; hand-off |
 | `varka/VarkaVectorIR.java`, `varka/VarkaVectorWalk.java` | `IntNeg`'s javadoc; the `abs` arm |
 | `varka/VarkaEmitOption.java`, `varka/VarkaEmitOptions.java` | `decimalAbsLanewise` |
 | `sql/varka/proofs/decimal64.smt2`, `VarkaProofFiles.java` | section 3 item 3's lemmas |
@@ -362,12 +365,12 @@ Predictions, registered before the build:
 | generated | `coverage.json`, `docs/sql-varka.md`, `width_audit.json`, `emitted_bytes.json` |
 | generated | `census.tsv`, `census_curated.txt`, `sql/varka/proofs` |
 
-**Size: medium, in three pull requests after the census cells.** The baseline addition half a
-day; 348a about three days (the proof file and the refinement rows the larger part); 348b one day
-once 157 has merged. Test time: the slot table's new cases are of the size of 347's, seconds; the
-proof file is priced from its spiked form at VARKA-245's observed ratio in the calibration table,
-under ten seconds per solver. It rests on 347 (its steps 4 and 6 open, its branches unmerged), 157
-for 348b, and 333 for the three null-branch choices.
+**Size: medium, in three pull requests after the census cells.** The baseline addition half a day;
+348a about three days (the proof file and the refinement rows the larger part); 348b one day once
+157 has merged. Test time: the slot table's new cases are of the size of 347's, seconds; the proof
+file is priced from its spiked form at VARKA-245's observed ratio in the calibration table, under
+ten seconds per solver. It rests on 347 (its steps 4 and 6 open, its branches unmerged), 497 for
+`IN`, 157 for 348b, and 333 for the three null-branch choices.
 
 ## 6. Census unlock
 
@@ -391,8 +394,14 @@ today although the row's "choice" covers them.
 Out: decimal arithmetic, `MakeDecimal`, `UnscaledValue` and `CheckOverflow` (349); the casts,
 integral operands among them (350); the rounding functions (351); every common type above 18
 (359, 360, 363); the store (157); `hash` and `xxhash64` (337); a NEON host with no SVE; a
-big-endian host. The decimal conformance suite is 359's by its answered question 4 (a), so the
-registry's `Owed("Decimal", "348")` is renamed to 359 in 348a, or by 359a if it lands first.
+big-endian host. The decimal conformance suite is 359's by its answered question 4 (a), which
+governs; 348a, which lands first in F3, renames the registry's `Owed("Decimal", "348")` to name 359,
+a one-line change citing that answer.
+
+An integral operand (`i < d9`, `CAST(i AS DECIMAL(10, 0))`) declines naming 350. Rows 350 and 360
+both claim the integral-to-decimal casts at 64 bits in their text (350 "to and from integral
+types", 360 the widening casts to `(3, 0)`, `(5, 0)`, `(10, 0)` and `(20, 0)`); that overlap is in
+the owner's row text and is flagged here, not resolved.
 
 Declines that stay, each naming its row: the table of 2.7; `CASE` without `ELSE`, `nullif` and
 `nullifzero` (333); a decimal output root until 157; an `IN` list past 16 literals or with a null
