@@ -26,7 +26,7 @@ import org.apache.spark.SparkFunSuite
  * The sanitizer's window, driven directly so that the suite does not need the system property
  * that turns the sanitizer on. Each test names the mistake in the sanitizer it would catch.
  */
-class VarkaMemorySanitizerSuite extends SparkFunSuite {
+class VarkaMemorySanitizerSuite extends SparkFunSuite with VarkaReachWindow {
 
   private val Base = 0x10000L
 

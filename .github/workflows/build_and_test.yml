@@ -1585,6 +1585,13 @@ jobs:
         if [ "${{ matrix.module }}" = sql ]; then
           export VARKA_REACH_RECORD=$PWD/target/varka-reach.tsv
         fi
+        # The catalyst suites record too (VARKA-518), but for those VarkaTestReach.UNRECORDED
+        # leaves out: catalyst's tree suites, whose kernels a record would emit again under every
+        # configuration, filter their own trees instead (VarkaReach), and the suites whose
+        # recording costs this job more than it saves the matrix are named there with the reason.
+        if [ "${{ matrix.module }}" = catalyst ]; then
+          export VARKA_REACH_RECORD=$PWD/target/varka-reach.tsv
+        fi
         ./dev/varka_scoped_suites.sh ${{ matrix.module }} --shard ${{ matrix.shard }}
     # sql's first job saves the compile state its suites ran on, every module's target/scala-2.13,
     # for the next Builds to start from (VARKA-520). sql's classpath holds catalyst's, so this one
@@ -1606,7 +1613,6 @@ jobs:
         retention-days: 3
         compression-level: 0
     - name: Upload the record of which configurations move each test
-      if: matrix.module == 'sql'
       continue-on-error: true
       uses: actions/upload-artifact@v4
       with:

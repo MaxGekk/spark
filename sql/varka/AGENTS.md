@@ -169,9 +169,12 @@ and an answer test a configuration breaks by design gets a line in
 the suites at the defaults only: its option configurations are checked by the
 `varka-option-matrix` workflow dispatched on its branch, which runs all of them,
 as the weekly run does. There a configuration
-runs a SQL test only where the Build of the same commit recorded that it moves
+runs a test only where the Build of the same commit recorded that it moves
 something the test compiled or emitted (`VarkaTestReach`); a test the record
-lacks, or one `skips.tsv` names under the configuration, still runs. An option
+lacks, or one `skips.tsv` names under the configuration, still runs. A suite
+that emits kernels runs its tests through `VarkaMatrixTests`, or at least opens
+the record's window with `VarkaReachWindow`: a kernel emitted outside every
+suite's window counts as read by every test of the JVM. An option
 read anywhere but the compiler and the emitter - by an evaluator as it runs, say -
 changes answers no record sees, so its configuration goes in
 `VarkaTestReach.FULL`, with the reason, and runs every test.

@@ -27,7 +27,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
  * The shrinker over synthetic failures (VARKA-277): a predicate on the case stands in for the
  * kernel, so nothing is emitted and the suite checks the reduction alone.
  */
-class VarkaShrinkerSuite extends SparkFunSuite {
+class VarkaShrinkerSuite extends SparkFunSuite with VarkaReachWindow {
 
   private val sigA =
     new VarkaFailureSignature("output mismatch", "output # row # differs (want #)")

@@ -336,7 +336,6 @@ public final class VarkaLoopEmitter {
     if (outputs.isEmpty()) {
       throw VarkaErrors.illegalArgument("no output chains to emit");
     }
-    VarkaCompileObserver.emitted(outputs, numInputs, numLiterals, options);
     // The planner and the body emitters index the outputs per method, so a caller's list that is
     // not random access - a Scala List seen through asJava, as the tools pass it - would make every
     // lookup a walk and the emission quadratic in the width for that reason alone. The shape
@@ -351,6 +350,9 @@ public final class VarkaLoopEmitter {
       // VarkaShapeKey rejects a null the same way, so this closes the other door in.
       throw VarkaErrors.illegalArgument("emit options must not be null");
     }
+    // Reported once the arguments hold, since no option changes how a bad argument is refused:
+    // the option matrix's reach recording keys an emission by its options (VarkaCompileObserver).
+    VarkaCompileObserver.emitted(outputs, numInputs, numLiterals, options);
     Analysis analysis = analyze(outputs, numInputs, numLiterals, options);
 
     // Method layout, all sharing the seven-parameter shape so slots line up everywhere: `run`

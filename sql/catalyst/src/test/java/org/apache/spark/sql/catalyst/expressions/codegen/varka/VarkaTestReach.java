@@ -96,16 +96,44 @@ public final class VarkaTestReach {
   }
 
   /**
-   * The suites the recording leaves out, each with its reason: their kernels are so large that
-   * emitting each again under every configuration costs the pull request's job more than running
-   * the suite in full costs the matrix. A suite left out runs every test under every
-   * configuration, as a test the record has no line for does.
+   * The suites the recording leaves out, each with its reason: emitting their kernels again under
+   * every configuration costs the pull request's job more than running the suite in full costs
+   * the matrix, or takes a test past the watchdog's cap, or moves what the suite counts; and the
+   * tree suites, which already skip each case a configuration does not move ({@link VarkaReach}).
+   * A suite left out runs every test under every configuration, as a test the record has no line
+   * for does. The times are the JUnit seconds of a run at the defaults without and with the
+   * recording; the catalyst suites' are the laptop's (VARKA-518).
    */
-  public static final Map<String, String> UNRECORDED = Map.of(
-      "VarkaCodegenGiveUpSuite", "kernels of thousands of nodes: 16 s plain, 225 s recorded",
-      "VarkaSeveralKernelsSuite", "plans split into large kernels: 47 s plain, 192 s recorded",
-      "VarkaSplitConditionSuite", "conditions split into many kernels: 3 s plain, 33 s recorded",
-      "VarkaSplitConditionFusionSuite", "the same over fused filters: 1 s plain, 29 s recorded");
+  public static final Map<String, String> UNRECORDED = unrecorded();
+
+  private static Map<String, String> unrecorded() {
+    var out = new LinkedHashMap<String, String>();
+    // sql
+    out.put("VarkaCodegenGiveUpSuite", "kernels of thousands of nodes: 16 s plain, 225 s recorded");
+    out.put("VarkaSeveralKernelsSuite",
+        "plans split into large kernels: 47 s plain, 192 s recorded");
+    out.put("VarkaSplitConditionSuite",
+        "conditions split into many kernels: 3 s plain, 33 s recorded");
+    out.put("VarkaSplitConditionFusionSuite",
+        "the same over fused filters: 1 s plain, 29 s recorded");
+    // catalyst
+    String trees = "skips the trees a configuration does not move itself (VarkaReach)";
+    out.put("VarkaSmallTreeSuite", trees);
+    out.put("VarkaIrFuzzSuite", trees);
+    out.put("VarkaCoverageCompositionFuzzSuite", trees);
+    out.put("VarkaExpressionCompilerSuite", "a test passes the watchdog's ten minutes recorded, "
+        + "and the recompiles move the shape cache's build count two tests read");
+    out.put("VarkaEmitCostAuditSuite", "a test passes the watchdog's ten minutes recorded");
+    out.put("VarkaEmittedBytesSuite", "a test passes the watchdog's ten minutes recorded, and "
+        + "its tests pin the defaults' bytes, which no configuration runs");
+    out.put("VarkaKernelPlanSuite", "a test passes the watchdog's ten minutes recorded");
+    out.put("VarkaWarmupReachSuite", "a test passes the watchdog's ten minutes recorded");
+    out.put("VarkaUnreadLocalsSuite",
+        "35 s plain, 473 s recorded, against about 250 s a matrix run would skip");
+    out.put("VarkaEmitCostSuite",
+        "33 s plain, 672 s recorded, against about 460 s a matrix run would skip");
+    return Map.copyOf(out);
+  }
 
   /** Whether {@code config} runs every test: it, or the one option it sets, is in {@link #FULL}. */
   public static boolean runsEveryTest(String config) {
