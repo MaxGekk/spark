@@ -1037,10 +1037,10 @@ final class Analysis {
    * destination with no scratch. A tree that mixes the two - {@code datediff(greatest(d, d2),
    * greatest(d3, d4))} - needs a second live intermediate, and is declined rather than
    * served: it keeps its per-group write and its word, which is today's path and always
-   * right. {@code Cond} roots are not values and are never served. Nor is a {@code BoolOutput}
-   * root, which the skip below does not reach: its validity is its condition's known word
-   * {@code kt | kf}, a function of the operands' values, so {@link #pureOf} answers null for it
-   * and no boolean root has a pure word (`VARKA-27.md` 2.1).
+   * right. A root that writes bitmaps ({@link VarkaVectorIR#writesBitmaps}) is never served: a
+   * {@code Cond} root is not a value, and a {@code BoolOutput} root's validity is its condition's
+   * known word {@code kt | kf}, a function of the operands' values, so no boolean root has a pure
+   * word (`VARKA-27.md` 2.1).
    */
   void planBitmapPass(List<VarkaVectorIR> outputs) {
     served = new BitmapPass[outputs.size()];
@@ -1049,7 +1049,7 @@ final class Analysis {
     }
     for (int o = 0; o < outputs.size(); o++) {
       VarkaVectorIR root = outputs.get(o);
-      if (root instanceof Cond) {
+      if (VarkaVectorIR.writesBitmaps(root)) {
         continue;
       }
       WordExpr pure = pureWord.get(root);
@@ -1163,8 +1163,7 @@ final class Analysis {
       // The condition's known words, kt | kf: a function of the condition's operands' values,
       // not of their bitmaps alone.
       case CondValue n -> null;
-      // A boolean output's validity is the same kt | kf, so it has no pure word either, and the
-      // bitmap pass never serves it although planBitmapPass's Cond skip does not reach it
+      // A boolean output's validity is the same kt | kf, so it has no pure word either
       // (`VARKA-27.md` 2.1): no boolean root has a pure word.
       case BoolOutput n -> null;
       case MakeDate n -> null;

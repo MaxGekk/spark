@@ -17,12 +17,15 @@
 package org.apache.spark.sql.catalyst.expressions.codegen.varka
 
 import java.lang.foreign.{Arena, ValueLayout}
+import java.util.{Collections, List => JList}
 
 import org.apache.spark.sql.catalyst.expressions
 import org.apache.spark.sql.catalyst.expressions.{Expression, Literal}
+import org.apache.spark.sql.catalyst.expressions.codegen.{CompiledVarkaProjection,
+  PartialVarkaProjection, VarkaOutputSpec}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaReference.{Truth => Tri}
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR._
-import org.apache.spark.sql.types.{BooleanType, IntegerType, LongType}
+import org.apache.spark.sql.types.{BooleanType, ByteType, DataType, IntegerType, LongType}
 
 /**
  * A BOOLEAN column as a condition (the boolean leaf, constants, comparisons, choice and null-safe
@@ -534,5 +537,46 @@ class VarkaEmitterBoolSuite extends VarkaEmitterTestBase with VarkaOwnJvm {
     val below = intercept[IllegalArgumentException](emitMulti(Seq(
       new IntArith(IntOp.ADD, Overflow.WRAP, out(b0), new CondValue(b1, LaneType.INT))), 2, 0))
     assert(below.getMessage.contains("a boolean output below a root"), below.getMessage)
+  }
+
+  test("a root writes bitmaps exactly when its output is BOOLEAN, and a projection's is a " +
+      "BoolOutput") {
+    // Each shape is built directly, as no compiler arm builds it, and each is one the evaluator
+    // would serve wrongly with no throw: a value root typed BOOLEAN gets a BitVector and stores
+    // a value a row past its bitmap (a TINYINT root's one byte a row matches BOOLEAN's default
+    // size, so the width compare alone passes it); a BoolOutput typed as a number writes bitmaps
+    // into a value vector; and a filter's Cond root as a projection's boolean output writes only
+    // the validity, so every true row reads false.
+    def kernel(root: VarkaVectorIR, dataType: DataType): CompiledVarkaProjection =
+      new CompiledVarkaProjection(JList.of(root), JList.of(dataType), JList.of(0), JList.of(),
+        JList.of(), JList.of(), JList.of(), JList.of())
+    def projection(k: CompiledVarkaProjection): PartialVarkaProjection =
+      new PartialVarkaProjection(JList.of(new VarkaOutputSpec.FusedOutput(0)), k,
+        Collections.emptyMap(), JList.of())
+    def refused(what: String, build: => Any, message: String): Unit = {
+      val e = intercept[IllegalArgumentException](build)
+      assert(e.getMessage.contains(message), s"$what: ${e.getMessage}")
+    }
+    val byteValue = new ColumnRef(0, LaneType.BYTE)
+    refused("a TINYINT value typed BOOLEAN", kernel(byteValue, BooleanType),
+      "output 0 is a value but its type is boolean")
+    refused("an int value typed BOOLEAN", kernel(new ColumnRef(0), BooleanType),
+      "output 0 is a value but its type is boolean")
+    refused("a boolean output typed INT", kernel(out(b0), IntegerType),
+      "output 0 is a bitmap root, BoolOutput, but its type is int")
+    refused("a condition typed TINYINT", kernel(b0, ByteType),
+      "output 0 is a bitmap root, BoolColumn, but its type is tinyint")
+    refused("a filter's condition as a projection's output", projection(kernel(b0, BooleanType)),
+      "a projection's boolean output is a BoolOutput root, not a filter's condition root")
+    // Each in a further kernel too, which a projection over several kernels holds in `more`.
+    refused("a filter's condition in a further kernel", new PartialVarkaProjection(
+      JList.of(new VarkaOutputSpec.FusedOutput(0)), kernel(out(b0), BooleanType),
+      Collections.emptyMap(), JList.of(kernel(new Not(b1), BooleanType))),
+      "not a filter's condition root")
+    // The shapes that are right: a TINYINT value typed TINYINT, a filter's kernel of condition
+    // roots typed BOOLEAN, and a boolean output typed BOOLEAN in a projection.
+    kernel(byteValue, ByteType)
+    kernel(b0, BooleanType)
+    projection(kernel(out(b0), BooleanType))
   }
 }

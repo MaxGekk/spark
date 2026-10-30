@@ -287,8 +287,9 @@ final class Slots {
   /**
    * The data bitmap's accumulator of each {@link BoolOutput} root this body writes a word at a
    * time, beside its {@link #validityAcc}, or {@code -1} for every other output. Null in every
-   * body with no such root, so an emission without a boolean output numbers its slots, and so
-   * emits its bytes, as before the node existed (`VARKA-27.md` 2.2).
+   * body with no such root, and numbered after every validity accumulator, so a body without a
+   * boolean output takes no slot for it and keeps the numbering, and so the bytes, its other
+   * locals give it (`VARKA-27.md` 2.2).
    */
   int[] dataAcc;
 
@@ -1252,9 +1253,9 @@ final class Slots {
     }
     for (int o : outputIdx) {
       VarkaVectorIR root = outputs.get(o);
-      // A boolean output writes bitmaps, which the lane count truncates, as a Cond root does.
-      if (!(root instanceof Cond) && !(root instanceof NarrowLane)
-          && !(root instanceof BoolOutput) && analysis.laneOf(root) == analysis.lane) {
+      // A root that writes bitmaps stores nothing under the mask: the lane count truncates them.
+      if (!VarkaVectorIR.writesBitmaps(root) && !(root instanceof NarrowLane)
+          && analysis.laneOf(root) == analysis.lane) {
         return true;
       }
     }

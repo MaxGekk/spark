@@ -303,8 +303,8 @@ public final class VarkaTypes {
   // One case per id, with no default, so a new id does not compile until its facts are written.
   private static Info entry(VarkaTypeId id) {
     return switch (id) {
-      // A boolean expression is written as an output by row 27 (a BitVector); reading one as a
-      // value, the cast to a number, is row 332's.
+      // A boolean expression is written as an output (a BitVector, VARKA-27); reading one as a
+      // value, the cast to a number, is VARKA-332's.
       case BOOLEAN -> new Info(id, "bool", "BOOLEAN", new Admission.AsCondition("332"), 1,
           List.of(DataTypes.BooleanType), List.of(), new Conformance.Suite("Boolean"));
       case BYTE -> new Info(id, "byte", "TINYINT", new Admission.OnLane(LaneType.BYTE), 8,

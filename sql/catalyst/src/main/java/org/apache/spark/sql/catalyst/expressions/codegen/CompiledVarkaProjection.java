@@ -77,20 +77,28 @@ public record CompiledVarkaProjection(
     // the root's lane, and the evaluator allocates the Arrow vector from the Spark type. They
     // agree because every compiler arm builds matching roots, and nothing downstream checks it:
     // a mismatch writes past a narrower vector or stores a byte a row into a wider one, with no
-    // throw. So it is checked once here, where both are known (VARKA-329). A condition root is
-    // stored as a bitmap whatever its lane and is not a value width.
+    // throw. So it is checked once here, where both are known (VARKA-329).
+    //
+    // A root that writes bitmaps (VarkaVectorIR.writesBitmaps) has no value width, and its type is
+    // BOOLEAN, the only type whose vector is bitmaps: a filter's condition root, whose selection
+    // bitmap is the predicate's, or a boolean output, which a BOOLEAN column's BitVector holds.
+    // The rule holds both ways. A value root typed BOOLEAN would be handed a BitVector, and the
+    // evaluator's bit-output width with it, and store a value a row past the bitmap, where a
+    // narrow root's one byte a row matches BOOLEAN's default size; so it is refused here before
+    // the width compare. That a projection's bitmap root is a BoolOutput rather than a filter's
+    // Cond, which writes one bitmap where the column needs two, is a projection's own rule,
+    // checked in PartialVarkaProjection, since a filter's kernel is this record too.
     if (outputs.size() == outputTypes.size()) {
       for (int i = 0; i < outputs.size(); i++) {
         VarkaVectorIR root = outputs.get(i);
-        if (root instanceof VarkaVectorIR.Cond) {
-          continue;
+        boolean bitmaps = VarkaVectorIR.writesBitmaps(root);
+        if (bitmaps != outputTypes.get(i) instanceof BooleanType) {
+          throw VarkaErrors.illegalArgument("output " + i + " is "
+              + (bitmaps ? "a bitmap root, " + root.getClass().getSimpleName() + "," : "a value")
+              + " but its type is " + outputTypes.get(i).simpleString()
+              + ": a root writes bitmaps exactly when its type is boolean");
         }
-        // A boolean output is two bitmaps, which only a BOOLEAN column's BitVector holds.
-        if (root instanceof VarkaVectorIR.BoolOutput) {
-          if (!(outputTypes.get(i) instanceof BooleanType)) {
-            throw VarkaErrors.illegalArgument("output " + i + " is a boolean output, but its "
-                + "type is " + outputTypes.get(i).simpleString());
-          }
+        if (bitmaps) {
           continue;
         }
         int stored = switch (root.laneType()) {

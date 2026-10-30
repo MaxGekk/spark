@@ -57,8 +57,8 @@ import org.apache.spark.sql.util.ArrowUtils;
  * <p>Two vectors the evaluator admits belong to no lane, and stay named in {@code isArrowBacked}:
  * a boolean column's {@code BitVector}, read as two bitmaps rather than lane values, and the
  * {@code VarCharVector} a derived input arrives in. The {@code BitVector} is in the table as
- * well, as BOOLEAN's output vector, but {@link #reads} leaves it out, so its admission stays the
- * evaluator's own.
+ * well, as BOOLEAN's output vector; the evaluator's admission matches a {@code BitVector} before
+ * it asks {@link #reads}, so a boolean column is still admitted by its own rule.
  */
 final class VarkaLaneArrow {
 
@@ -80,9 +80,9 @@ final class VarkaLaneArrow {
 
   /**
    * The vector a type's columns are read from and its outputs written to, or null for a type no
-   * kernel stores: each is a fixed-width vector the kernels address directly. BOOLEAN's is an
-   * output vector only, a bitmap of whole words, so {@link #reads} leaves it out: its columns are
-   * read as conditions, admitted by name in {@code isArrowBacked}.
+   * kernel stores: each is a fixed-width vector the kernels address directly. BOOLEAN's is a
+   * bitmap of whole words, the vector its outputs are written to; its columns are read as
+   * conditions, admitted by name in {@code isArrowBacked}.
    */
   static @Nullable Vector of(VarkaTypeId id) {
     return switch (id) {
@@ -129,20 +129,14 @@ final class VarkaLaneArrow {
         .createVector(allocator);
   }
 
-  /** Every type's vector, in the id's order, built once: an output's allocation reads it. */
-  private static final Vector[] ALL = all(false);
+  /** Every type's vector, in the id's order, built once: the admission reads it on every batch. */
+  private static final Vector[] ALL = all();
 
-  /**
-   * The vectors of the types a lane reads, which the admission reads on every batch: every entry
-   * but an output-only one, BOOLEAN's, as the type registry says.
-   */
-  private static final Vector[] LANES = all(true);
-
-  private static Vector[] all(boolean lanesOnly) {
+  private static Vector[] all() {
     List<Vector> out = new ArrayList<>();
     for (VarkaTypeId id : VarkaTypeId.values()) {
       Vector v = of(id);
-      if (v != null && (!lanesOnly || VarkaTypes.info(id).lane().isPresent())) {
+      if (v != null) {
         out.add(v);
       }
     }
@@ -150,12 +144,13 @@ final class VarkaLaneArrow {
   }
 
   /**
-   * Whether a lane reads {@code vector}: an instance of one of the lane types' classes, as the type
-   * patterns this replaced matched. A {@code BitVector} is not one, being BOOLEAN's output vector.
-   * A loop over a few entries, so a batch's admission allocates nothing.
+   * Whether {@code vector} is an instance of one of the table's classes, as the type patterns
+   * this replaced matched. That includes BOOLEAN's {@code BitVector}: the admission matches a
+   * {@code BitVector} first by its own rule and asks this only of the other vectors. A loop over a
+   * few entries, so a batch's admission allocates nothing.
    */
   static boolean reads(ValueVector vector) {
-    for (Vector v : LANES) {
+    for (Vector v : ALL) {
       if (v.vectorClass().isInstance(vector)) {
         return true;
       }

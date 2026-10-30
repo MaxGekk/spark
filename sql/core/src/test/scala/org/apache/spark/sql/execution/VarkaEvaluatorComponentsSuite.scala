@@ -312,9 +312,11 @@ class VarkaEvaluatorComponentsSuite extends SparkFunSuite {
       val known = (r: Int) => r % 3 == 0
       def check(otherData: MemorySegment): Unit = {
         VarkaKernelRunner.compareBodies("shape", len, true, Array(0L), Array(0),
-          Array(bitmap(known).address()), Array(bitmap(valid).address()),
-          Array(VarkaReproduction.KernelCall.BIT_OUTPUT), Array(otherData.address()),
-          Array(bitmap(valid).address()))
+          Array(VarkaReproduction.KernelCall.BIT_OUTPUT),
+          new VarkaKernelRunner.BodyOutputs(
+            Array(bitmap(known).address()), Array(bitmap(valid).address())),
+          new VarkaKernelRunner.BodyOutputs(
+            Array(otherData.address()), Array(bitmap(valid).address())))
       }
       check(bitmap(known))
       // Row 64 is valid and its data bit clear in the served body: the first bit of the second,

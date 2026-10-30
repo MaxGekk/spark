@@ -287,7 +287,10 @@ form.
 Boolean casts and `CAST(p AS INT)` as an output (332), `bit_count(bool)` (335b), the floating
 conditions (341), the fuzzers' boolean reach (352), the per-word default at four lanes
 (VARKA-92, `m9/SCOPE.md` item 39), and lifting an int condition onto a long kernel's lane instead
-of a kernel of its own.
+of a kernel of its own. Also out: the cost model's price of a `BoolOutput` root's store.
+`VarkaEmitCost.Tally.output` prices it as a value root's store at its lane, not as a selection
+bitmap's or as two bitmaps, and stays so until the model's refit reprices it with the node's own
+price, which the price table lists as awaiting that refit (11); no number of the model moves here.
 
 ## 7. Declines that stay
 
@@ -422,6 +425,21 @@ catalyst`, sanitizer on) passes, 911 tests with none failed; `VarkaLaneArrowSuit
 `emitted_bytes.json` is unchanged, so no existing shape's bytes moved (3.7; prediction 4.1's
 first half), and `coverage.json` and `width_audit.json` are untouched, as nothing compiles to the
 node yet.
+
+**The review of step 3 (30 October 2026).** It corrects departure 4: the width check held one way
+only, so a `TINYINT` value root typed `BOOLEAN` passed the width compare, was handed a `BitVector`
+with the bit-output width and stored a byte a row past the data bitmap, and a filter's `Cond` root
+typed `BOOLEAN` in a projection would write only the validity. `CompiledVarkaProjection` now
+refuses a root that writes bitmaps (`VarkaVectorIR.writesBitmaps`: a `Cond` or a `BoolOutput`)
+unless its type is `BOOLEAN`, and a value root typed `BOOLEAN`; the filter's kernel is the same
+record with `Cond` roots typed `BOOLEAN`, so `PartialVarkaProjection` refuses a bare `Cond` root
+in any of a projection's kernels. `VarkaEmitterBoolSuite` builds each wrong shape and shows it
+refused. The same predicate replaces the copies of the rule in the all-null shortcut, the
+epilogue's bounds-mask count, the output segment mapping and `planBitmapPass`, which skips a
+`BoolOutput` root by it rather than through its null pure word. `zeroBitOutputData` refuses an
+ordinal past the destinations by name; the cross-body compare takes each body's buffers as a
+record; `VarkaLaneArrow` keeps one table. The cost model's price of the root's store stays out of
+the row (6). `emitted_bytes.json` is unchanged.
 
 ## 12. Step 4 as built (27 October 2026)
 
