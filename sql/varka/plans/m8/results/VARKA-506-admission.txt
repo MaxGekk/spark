@@ -16,10 +16,12 @@ identity and the range, 4b the carry network over the free products. Two renderi
 
 The planted fault is VARKA-361.md 3.1's, QuestDB's a0 * m1 + a1 * m0: the middle column's two
 products summed in one word. Its witness with one negative operand, (818970913745787777,
--37375742756067484), is results/VARKA-361-planted-carry.txt's (on branch varka-360-361-plan).
+-37375742756067484), is results/VARKA-361-planted-carry.txt's (on branch varka-360-361-plan,
+being opened as a pull request; the citation resolves once it merges).
 
-Solvers: the pinned Z3 5.1.0 and cvc5 1.4.1 of dev/varka_prove.sh, from another worktree's
-target/varka-solvers/ (none is on the laptop's PATH; this worktree has none installed).
+Solvers: the pinned Z3 5.1.0 and cvc5 1.4.1, run from another worktree's target/varka-solvers/,
+the pinned download dev/varka_prove.sh --install both makes and checks, not from a laptop install
+(neither is on the laptop's PATH; this worktree has none installed).
 Commands, from the scratchpad, java.smt2 inserted as the README says:
 
   sed '/^(set-logic/r sql/varka/proofs/java.smt2' a.smt2 > full.smt2
