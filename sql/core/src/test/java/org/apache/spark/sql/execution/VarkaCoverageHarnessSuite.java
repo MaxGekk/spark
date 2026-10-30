@@ -222,13 +222,15 @@ public final class VarkaCoverageHarnessSuite {
             SQLConf conf = setting.getValue();
             boolean mustFuse = setting.getKey().equals("NullPropagation excluded too");
             for (Map.Entry<String, VarkaHarnessPlans.Fixture> f : FIXTURES.entrySet()) {
+              String context = f.getKey() + ", " + setting.getKey();
+              // The four filters, planned once for the oracle and the Not check both.
+              List<VarkaHarnessPlans.Query> planned =
+                  withConf(conf, () -> VarkaPartitionOracle.plan(row.executable(), f.getValue()));
               if (!setting.getKey().equals("default optimizer")) {
-                findings.addAll(withConf(conf, () -> notAsWritten(
-                    f.getKey() + ", " + setting.getKey(), row.executable(), f.getValue())));
+                findings.addAll(notAsWritten(context, row.executable(), planned.get(1)));
               }
-              findings.addAll(withConf(conf, () -> VarkaPartitionOracle.check(
-                  f.getKey() + ", " + setting.getKey(), row.executable(), f.getValue(), conf,
-                  mustFuse)));
+              findings.addAll(withConf(conf, () -> VarkaPartitionOracle.check(context,
+                  row.executable(), f.getValue(), conf, mustFuse, planned)));
             }
           }
           assertTrue(findings.isEmpty(), String.join("\n", findings));
@@ -236,14 +238,11 @@ public final class VarkaCoverageHarnessSuite {
   }
 
   /**
-   * What is wrong with {@code WHERE NOT (p)} under the thread's conf, the partition rewrites
+   * What is wrong with {@code q}, {@code WHERE NOT (p)} as planned with the partition rewrites
    * excluded: the condition must reach Varka as the {@code Not} it was written as, or the
    * exclusion did not take and the oracle would check the rewrite it means to bypass.
    */
-  private static List<String> notAsWritten(String context, String p,
-      VarkaHarnessPlans.Fixture fixture) {
-    VarkaHarnessPlans.Query q =
-        VarkaHarnessPlans.query("SELECT rid FROM t WHERE NOT (" + p + ")", fixture.columns());
+  private static List<String> notAsWritten(String context, String p, VarkaHarnessPlans.Query q) {
     if (q instanceof VarkaHarnessPlans.Query.Selection s
         && s.condition() instanceof org.apache.spark.sql.catalyst.expressions.Not) {
       return List.of();
@@ -413,13 +412,12 @@ public final class VarkaCoverageHarnessSuite {
     // raises it would test nothing.
     SQLConf conf = conf(true);
     var actual = new java.util.TreeMap<String, String>();
-    withConf(conf, () -> {
-      for (Row row : ROWS) {
-        VarkaAnsiForm.sparkCondition(row.executable(), EXTREMES)
-            .ifPresent(c -> actual.putIfAbsent(c, row.sql()));
-      }
-      return null;
-    });
+    List<Optional<String>> raised = withConf(conf, () -> VarkaAnsiForm.sparkConditions(
+        ROWS.stream().map(Row::executable).toList(), EXTREMES));
+    for (int i = 0; i < ROWS.size(); i++) {
+      String sql = ROWS.get(i).sql();
+      raised.get(i).ifPresent(c -> actual.putIfAbsent(c, sql));
+    }
     assertTrue(actual.equals(new java.util.TreeMap<>(VarkaAnsiForm.RAISES)),
         "the rows that raise each condition first:\n" + actual.entrySet().stream()
             .map(e -> "Map.entry(\"" + e.getKey() + "\", \"" + e.getValue() + "\")")

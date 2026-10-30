@@ -18,7 +18,10 @@
 package org.apache.spark.sql.execution;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.hadoop.conf.Configuration;
 import scala.collection.immutable.Seq;
@@ -45,6 +48,7 @@ import org.apache.spark.sql.catalyst.plans.logical.LocalRelation;
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan;
 import org.apache.spark.sql.catalyst.plans.logical.Project;
 import org.apache.spark.sql.connector.catalog.DefaultCatalogManager;
+import org.apache.spark.sql.internal.SQLConf;
 
 /**
  * The plans a session would build for a Varka differential check, built with no session
@@ -184,43 +188,115 @@ public final class VarkaHarnessPlans {
 
   /**
    * {@link #projection} for each of {@code expressions}, planned together as one projection list
-   * in one run of the analyzer and the optimizer instead of one run each (VARKA-510): the
-   * optimizer rewrites each entry of a list on its own, so each comes out as it would alone. A
-   * list the optimizer does not leave as one entry an expression over the scan is planned again an
-   * expression at a time. {@code VarkaHarnessParitySuite} holds the two ways equal.
+   * in one run of the analyzer and the optimizer instead of one run each: the optimizer rewrites
+   * each entry of a list on its own, so each comes out as it would alone. A list the optimizer
+   * does not leave as one entry an expression over the scan - a {@code BETWEEN}'s operand, say,
+   * pulled into a projection of its own below - is halved and each half planned again, down to
+   * the expressions that must be planned alone. {@code VarkaHarnessParitySuite} holds the two
+   * ways equal.
    */
   public static List<Seq<NamedExpression>> projections(List<String> expressions,
       Seq<Attribute> columns) {
+    List<Seq<NamedExpression>> out = together(expressions, columns);
+    for (int i = 0; i < out.size(); i++) {
+      if (out.get(i) == null) {
+        out.set(i, projection(expressions.get(i), columns));
+      }
+    }
+    return out;
+  }
+
+  /**
+   * What {@link #projections} plans together: each expression's projection list, or null for one
+   * that only planning alone gives - one whose plan is no single projection over the scan, or
+   * whose planning raises.
+   */
+  static List<Seq<NamedExpression>> together(List<String> expressions, Seq<Attribute> columns) {
+    var out = new ArrayList<Seq<NamedExpression>>(
+        Collections.nCopies(expressions.size(), null));
+    together(expressions, 0, expressions.size(), columns, out);
+    return out;
+  }
+
+  private static void together(List<String> expressions, int from, int to,
+      Seq<Attribute> columns, List<Seq<NamedExpression>> out) {
+    if (to - from < 2) {
+      return;
+    }
     var aliases = new ArrayList<NamedExpression>();
-    for (int i = 0; i < expressions.size(); i++) {
+    for (int i = from; i < to; i++) {
       aliases.add(VarkaSqlResolve.named(
           CatalystSqlParser$.MODULE$.parseExpression(expressions.get(i)), "v" + i));
     }
-    LogicalPlan plan = optimize(new Project(CollectionConverters.asScala(aliases).toList(),
-        new VarkaHarnessScan(columns)));
+    LogicalPlan plan;
+    try {
+      plan = optimize(new Project(CollectionConverters.asScala(aliases).toList(),
+          new VarkaHarnessScan(columns)));
+    } catch (RuntimeException e) {
+      plan = null;
+    }
+    var planned = new ArrayList<Seq<NamedExpression>>();
     if (plan instanceof Project p && p.child() instanceof VarkaHarnessScan
-        && p.projectList().size() == expressions.size()) {
-      var out = new ArrayList<Seq<NamedExpression>>();
+        && p.projectList().size() == to - from) {
       for (NamedExpression e : CollectionConverters.asJava(p.projectList())) {
         if (!(e instanceof Alias a)) {
-          return alone(expressions, columns);
+          break;
         }
         // Named as the expression alone is, so a list reads the same either way.
         NamedExpression v = VarkaSqlResolve.named(a.child(), "v");
-        out.add(CollectionConverters.asScala(List.of(v)).toList());
+        planned.add(CollectionConverters.asScala(List.of(v)).toList());
       }
-      return out;
     }
-    return alone(expressions, columns);
+    if (planned.size() == to - from) {
+      for (int i = from; i < to; i++) {
+        out.set(i, planned.get(i - from));
+      }
+      return;
+    }
+    int mid = (from + to) >>> 1;
+    together(expressions, from, mid, columns, out);
+    together(expressions, mid, to, columns, out);
   }
 
-  private static List<Seq<NamedExpression>> alone(List<String> expressions,
+  /** What {@link #remembered} keeps a projection under: its text, columns and conf. */
+  private record Remembered(String expression, Seq<Attribute> columns,
+      scala.collection.immutable.Map<String, String> conf) {}
+
+  /**
+   * How many projections {@link #remembered} keeps: a few thousand small trees, the coverage
+   * table's rows on each fixture under each optimizer setting the harness runs.
+   */
+  private static final int REMEMBERED_LIMIT = 8192;
+
+  private static final Map<Remembered, Seq<NamedExpression>> REMEMBERED =
+      new ConcurrentHashMap<>();
+
+  /**
+   * {@link #projection}, remembered for its text, its columns and every SQL configuration the
+   * thread sets, which is all the analyzer and the optimizer read. On a miss every text of
+   * {@code among} is planned with it, together ({@link #projections}), and remembered, so a
+   * caller that asks for one text of a list after another pays about one run of the optimizer
+   * for the list. For a caller that reads only what was planned - a type, a nullability, the
+   * columns referenced - and compiles nothing from it: the partition oracle asks a predicate's
+   * nullability under each optimizer setting of every test that reads the predicate, and the
+   * ANSI form a row's type.
+   */
+  public static Seq<NamedExpression> remembered(String expression, List<String> among,
       Seq<Attribute> columns) {
-    var out = new ArrayList<Seq<NamedExpression>>();
-    for (String e : expressions) {
-      out.add(projection(e, columns));
+    scala.collection.immutable.Map<String, String> conf = SQLConf.get().getAllConfs();
+    Seq<NamedExpression> planned = REMEMBERED.get(new Remembered(expression, columns, conf));
+    if (planned != null) {
+      return planned;
     }
-    return out;
+    List<String> texts = among.contains(expression) ? among : List.of(expression);
+    List<Seq<NamedExpression>> lists = projections(texts, columns);
+    if (REMEMBERED.size() + texts.size() > REMEMBERED_LIMIT) {
+      REMEMBERED.clear();
+    }
+    for (int i = 0; i < texts.size(); i++) {
+      REMEMBERED.put(new Remembered(texts.get(i), columns, conf), lists.get(i));
+    }
+    return lists.get(texts.indexOf(expression));
   }
 
   /**

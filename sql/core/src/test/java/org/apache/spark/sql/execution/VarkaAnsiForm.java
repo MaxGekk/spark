@@ -23,10 +23,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 import scala.jdk.javaapi.CollectionConverters;
 
 import org.apache.spark.SparkThrowable;
+import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.catalyst.expressions.Attribute;
 import org.apache.spark.sql.catalyst.expressions.Expression;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaTypes;
@@ -126,6 +128,31 @@ public final class VarkaAnsiForm {
   }
 
   /**
+   * A position's query over {@code t}, and for a projection {@code SELECT <x> AS v FROM t} its
+   * {@code x}, which {@link #check} plans beside the row's other projections.
+   */
+  record Written(String sql, Optional<String> projected) {
+    static Written projection(String x) {
+      return new Written("SELECT " + x + " AS v FROM t", Optional.of(x));
+    }
+
+    static Written filter(String where) {
+      return new Written("SELECT rid FROM t WHERE " + where, Optional.empty());
+    }
+  }
+
+  /** Each row of the coverage table as the value {@link #queries} plans for its type. */
+  static List<String> values() {
+    return Values.ALL;
+  }
+
+  /** Read from the table on first use, so the suite is set up before the form reads it. */
+  private static final class Values {
+    static final List<String> ALL = VarkaCoverageHarnessSuite.rows().stream()
+        .map(r -> "(" + r.executable() + ")").toList();
+  }
+
+  /**
    * A row's positions and their queries over {@code t}, empty where a position cannot be written
    * for the row. A projection {@code e} runs alone, in the untaken arm of
    * {@code CASE WHEN rid < 0}, after a column in a COALESCE, and compared with a column behind
@@ -134,12 +161,14 @@ public final class VarkaAnsiForm {
    * side. Where the guard and the guarded side form one Varka expression, the guard is at the
    * expression's lane.
    */
-  static Map<String, Optional<String>> queries(VarkaCoverageHarnessSuite.Row row,
+  static Map<String, Optional<Written>> queries(VarkaCoverageHarnessSuite.Row row,
       VarkaHarnessPlans.Fixture fixture) {
     String e = row.executable();
-    var out = new LinkedHashMap<String, Optional<String>>();
+    var out = new LinkedHashMap<String, Optional<Written>>();
+    // Only the type and the columns are read, so the plan is remembered across the tests, with
+    // every row's planned together on the first ask.
     Expression value = (Expression) CollectionConverters.asJava(
-        VarkaHarnessPlans.projection("(" + e + ")", fixture.columns())).get(0);
+        VarkaHarnessPlans.remembered("(" + e + ")", values(), fixture.columns())).get(0);
     if (row.form().equals("predicate")) {
       // The predicate's own columns: the first one off the int lane picks the guard.
       String guard = "rid";
@@ -150,19 +179,48 @@ public final class VarkaAnsiForm {
           break;
         }
       }
-      out.put(FALSE_AND, Optional.of("SELECT rid FROM t WHERE " + guard + " < 0 AND (" + e + ")"));
-      out.put(TRUE_OR, Optional.of("SELECT rid FROM t WHERE " + guard + " >= 0 OR (" + e + ")"));
+      out.put(FALSE_AND, Optional.of(Written.filter(guard + " < 0 AND (" + e + ")")));
+      out.put(TRUE_OR, Optional.of(Written.filter(guard + " >= 0 OR (" + e + ")")));
     } else {
       DataType t = value.dataType();
       String guard = guardOf(t);
-      out.put(ALONE, Optional.of("SELECT " + e + " AS v FROM t"));
+      out.put(ALONE, Optional.of(Written.projection(e)));
       out.put(CASE_ARM, standIn(t, true).map(c ->
-          "SELECT CASE WHEN " + guard + " < 0 THEN " + e + " ELSE " + c + " END AS v FROM t"));
+          Written.projection("CASE WHEN " + guard + " < 0 THEN " + e + " ELSE " + c + " END")));
       out.put(COALESCE_TAIL, standIn(t, false).map(c ->
-          "SELECT coalesce(" + c + ", " + e + ") AS v FROM t"));
+          Written.projection("coalesce(" + c + ", " + e + ")")));
       // e = <column>, not e IS NOT NULL: Varka fuses no IS NOT NULL over a computed value.
       out.put(FALSE_AND, standIn(t, false).map(c ->
-          "SELECT rid FROM t WHERE " + guard + " < 0 AND (" + e + ") = " + c));
+          Written.filter(guard + " < 0 AND (" + e + ") = " + c)));
+    }
+    return out;
+  }
+
+  /**
+   * {@code queries}' plans under the thread's conf, by position: the projections planned
+   * together in one run of the optimizer ({@link VarkaHarnessPlans#projections}), each filter
+   * alone, and none for a position that cannot be written.
+   */
+  static Map<String, VarkaHarnessPlans.Query> plans(Map<String, Optional<Written>> queries,
+      VarkaHarnessPlans.Fixture fixture) {
+    var positions = new ArrayList<String>();
+    var texts = new ArrayList<String>();
+    for (Map.Entry<String, Optional<Written>> q : queries.entrySet()) {
+      Optional<String> x = q.getValue().flatMap(Written::projected);
+      if (x.isPresent()) {
+        positions.add(q.getKey());
+        texts.add(x.get());
+      }
+    }
+    var lists = VarkaHarnessPlans.projections(texts, fixture.columns());
+    var out = new LinkedHashMap<String, VarkaHarnessPlans.Query>();
+    for (Map.Entry<String, Optional<Written>> q : queries.entrySet()) {
+      int at = positions.indexOf(q.getKey());
+      if (at >= 0) {
+        out.put(q.getKey(), new VarkaHarnessPlans.Query.Projection(lists.get(at)));
+      } else if (q.getValue().isPresent()) {
+        out.put(q.getKey(), VarkaHarnessPlans.query(q.getValue().get().sql(), fixture.columns()));
+      }
     }
     return out;
   }
@@ -228,8 +286,27 @@ public final class VarkaAnsiForm {
    * rows under the thread's conf, or empty where it raises none.
    */
   static Optional<String> sparkCondition(String expression, VarkaHarnessPlans.Fixture fixture) {
+    return condition(() -> VarkaDomains.sparkValues(expression, fixture));
+  }
+
+  /**
+   * {@link #sparkCondition} of each of {@code expressions}, the expressions planned together
+   * ({@link VarkaDomains#sparkValues(List, VarkaHarnessPlans.Fixture)}) and each evaluated alone,
+   * so a condition is still the one its own expression raises.
+   */
+  static List<Optional<String>> sparkConditions(List<String> expressions,
+      VarkaHarnessPlans.Fixture fixture) {
+    var out = new ArrayList<Optional<String>>();
+    for (Supplier<List<InternalRow>> values :
+        VarkaDomains.sparkValues(expressions, fixture)) {
+      out.add(condition(values));
+    }
+    return out;
+  }
+
+  private static Optional<String> condition(Supplier<List<InternalRow>> values) {
     try {
-      VarkaDomains.sparkValues(expression, fixture);
+      values.get();
       return Optional.empty();
     } catch (RuntimeException e) {
       if (e instanceof SparkThrowable t && t.getCondition() != null) {
@@ -246,7 +323,9 @@ public final class VarkaAnsiForm {
   public static List<String> check(VarkaCoverageHarnessSuite.Row row,
       VarkaHarnessPlans.Fixture fixture, SQLConf conf, boolean strict) {
     var out = new ArrayList<String>();
-    for (Map.Entry<String, Optional<String>> q : queries(row, fixture).entrySet()) {
+    Map<String, Optional<Written>> queries = queries(row, fixture);
+    Map<String, VarkaHarnessPlans.Query> plans = plans(queries, fixture);
+    for (Map.Entry<String, Optional<Written>> q : queries.entrySet()) {
       String position = q.getKey();
       String declined = DECLINED.get(row.sql() + "\t" + position);
       if (q.getValue().isEmpty()) {
@@ -256,8 +335,8 @@ public final class VarkaAnsiForm {
         }
         continue;
       }
-      String sql = q.getValue().get();
-      VarkaHarnessPlans.Query plan = VarkaHarnessPlans.query(sql, fixture.columns());
+      String sql = q.getValue().get().sql();
+      VarkaHarnessPlans.Query plan = plans.get(position);
       VarkaExpressionHarness.Outcome outcome = switch (plan) {
         case VarkaHarnessPlans.Query.Projection p ->
             VarkaExpressionHarness.projection(position + ": " + sql, p.list(), fixture, conf);

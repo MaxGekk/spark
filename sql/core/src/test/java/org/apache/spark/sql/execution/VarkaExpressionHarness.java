@@ -26,6 +26,7 @@ import java.util.function.Supplier;
 
 import javax.annotation.Nullable;
 
+import org.apache.arrow.memory.ArrowBuf;
 import scala.collection.immutable.Seq;
 import scala.jdk.javaapi.CollectionConverters;
 
@@ -54,6 +55,7 @@ import org.apache.spark.sql.types.TimeType;
 import org.apache.spark.sql.types.TimestampNTZType;
 import org.apache.spark.sql.types.TimestampType;
 import org.apache.spark.sql.types.YearMonthIntervalType;
+import org.apache.spark.sql.vectorized.ArrowColumnVector;
 import org.apache.spark.sql.vectorized.ColumnarBatch;
 
 /**
@@ -343,6 +345,35 @@ public final class VarkaExpressionHarness {
    * evaluator falls back on it.
    */
   private static @Nullable ColumnarBatch serve(String context, VarkaEvaluatorBase evaluator,
+      int start, ColumnarBatch batch, Supplier<ColumnarBatch> kernel, Outcome outcome) {
+    long before = checksum(batch);
+    try {
+      return serveOnce(context, evaluator, start, batch, kernel, outcome);
+    } finally {
+      if (checksum(batch) != before) {
+        outcome.findings.add(context + ": serving the batch of rows " + start + " to "
+            + (start + batch.numRows() - 1) + " wrote to its input vectors");
+      }
+    }
+  }
+
+  /**
+   * A CRC of every buffer of {@code batch}'s vectors, validity and values: a kernel reads its
+   * input and writes only its own output, so serving a batch leaves this unchanged.
+   */
+  private static long checksum(ColumnarBatch batch) {
+    var crc = new java.util.zip.CRC32();
+    for (int c = 0; c < batch.numCols(); c++) {
+      if (batch.column(c) instanceof ArrowColumnVector v) {
+        for (ArrowBuf buf : v.getValueVector().getBuffers(false)) {
+          crc.update(buf.nioBuffer(0, (int) buf.capacity()));
+        }
+      }
+    }
+    return crc.getValue();
+  }
+
+  private static @Nullable ColumnarBatch serveOnce(String context, VarkaEvaluatorBase evaluator,
       int start, ColumnarBatch batch, Supplier<ColumnarBatch> kernel, Outcome outcome) {
     boolean[] fell = {false};
     int[] status = {Batch.FELL_BACK};
