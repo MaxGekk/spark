@@ -401,6 +401,8 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite with VarkaTestWatchdog {
       asked += ((n, kind))
       n match {
         case c: ColumnRef => role(c.ordinal(), if (kind == Kind.DAY) Role.Day else Role.Int)
+        // A long-lane leaf, which no range rule reads.
+        case _: DecimalColumn =>
         case _: LiteralSlot =>
         case x: AddDays => value(x.days(), Kind.DAY); leafRole(x.offset(), Role.Offset)
         case x: SubDays => value(x.days(), Kind.DAY); leafRole(x.offset(), Role.Offset)
@@ -535,7 +537,7 @@ class VarkaRangeAnalysisSuite extends SparkFunSuite with VarkaTestWatchdog {
       case x: BoundedDivide => go(x.child(), armed)
       case x: BitOp => go(x.left(), armed) && go(x.right(), armed)
       case x: BitCount => go(x.child(), armed)
-      case _: ColumnRef | _: LiteralSlot => true
+      case _: ColumnRef | _: DecimalColumn | _: LiteralSlot => true
       case c: Cond => goCond(c, armed)
     }
     def goCond(c: Cond, armed: Boolean): Boolean = c match {

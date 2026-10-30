@@ -910,9 +910,11 @@ public final class VarkaExpressionCompiler {
     List<VarkaConjunctSpec> specs = new ArrayList<>();
     UnaryOperator<Expression> bind = binder(childOutput);
     List<Expression> conjuncts = conjuncts(condition);
-    // Whether any conjunct reads a column that an integral lane reads, which decides whether a
-    // floating conjunct can share the kernel (VarkaKernelPlan.floatingConjunctRefusal). A column
-    // no lane reads, a string say, puts its conjunct on the row path and so does not count.
+    // Whether any conjunct reads a column a kernel reads on an integral lane, which decides
+    // whether a floating conjunct can share the kernel (VarkaKernelPlan.floatingConjunctRefusal).
+    // The registry's `lane(DataType)` is the one answer: a column no kernel reads today - a
+    // string, or a type whose lane exists before any operator over it compiles - puts its
+    // conjunct on the row path and so does not count.
     boolean readsIntegral = false;
     for (Attribute a : CollectionConverters.asJava(condition.references().toSeq())) {
       readsIntegral |= VarkaTypes.lane(a.dataType()).filter(l -> !l.isFloating()).isPresent();

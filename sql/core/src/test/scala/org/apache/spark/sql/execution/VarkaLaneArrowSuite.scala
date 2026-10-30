@@ -20,10 +20,12 @@ package org.apache.spark.sql.execution
 import scala.jdk.CollectionConverters._
 
 import org.apache.arrow.memory.RootAllocator
-import org.apache.arrow.vector.BaseFixedWidthVector
+import org.apache.arrow.vector.{BaseFixedWidthVector, BigIntVector, Decimal256Vector, DecimalVector}
+import org.apache.arrow.vector.types.pojo.{ArrowType, Field, FieldType}
 
 import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.{VarkaTypeId, VarkaTypes}
+import org.apache.spark.sql.types.DecimalType
 
 /**
  * The evaluator's Arrow table held to the type registry (VARKA-494): a type has a vector exactly
@@ -51,10 +53,11 @@ class VarkaLaneArrowSuite extends SparkFunSuite {
     }
   }
 
-  test("every form of a type a lane reads allocates its vector at the registry's width") {
+  test("every form of a type a lane writes allocates its vector at the registry's width") {
     val allocator = new RootAllocator(Long.MaxValue)
     try {
-      for (id <- VarkaTypeId.values(); v = VarkaLaneArrow.of(id) if v != null) {
+      for (id <- VarkaTypeId.values(); v = VarkaLaneArrow.of(id)
+          if v != null && v.allocate() != null) {
         val info = VarkaTypes.info(id)
         for (form <- info.forms().asScala) {
           val vector = VarkaLaneArrow.allocate("x", form, allocator)
@@ -72,6 +75,39 @@ class VarkaLaneArrowSuite extends SparkFunSuite {
             vector.close()
           }
         }
+      }
+    } finally {
+      allocator.close()
+    }
+  }
+
+  test("a decimal column is read and not written, and its field must say 128 bits and the scale") {
+    val allocator = new RootAllocator(Long.MaxValue)
+    try {
+      assert(VarkaLaneArrow.allocate("x", DecimalType(10, 2), allocator) === null)
+      def vector(bitWidth: Int, scale: Int): DecimalVector = new DecimalVector(
+        new Field("d", FieldType.nullable(new ArrowType.Decimal(10, scale, bitWidth)), null),
+        allocator)
+      val ok = vector(128, 2)
+      val narrow = vector(64, 2)
+      val otherScale = vector(128, 3)
+      val wide = new Decimal256Vector("w", allocator, 10, 2)
+      val long = new BigIntVector("l", allocator)
+      try {
+        assert(VarkaLaneArrow.reads(ok))
+        assert(VarkaLaneArrow.decimalFieldMatches(ok, 2))
+        // Arrow Java reads a 64-bit decimal field at sixteen bytes a row: the class admits it,
+        // and only the field check refuses it.
+        assert(VarkaLaneArrow.reads(narrow))
+        assert(!VarkaLaneArrow.decimalFieldMatches(narrow, 2))
+        assert(!VarkaLaneArrow.decimalFieldMatches(otherScale, 2))
+        assert(!VarkaLaneArrow.reads(wide))
+        // A column that is no decimal: any vector but a decimal one, as before.
+        assert(!VarkaLaneArrow.decimalFieldMatches(ok, -1))
+        assert(VarkaLaneArrow.decimalFieldMatches(long, -1))
+        assert(!VarkaLaneArrow.decimalFieldMatches(long, 2))
+      } finally {
+        Seq(ok, narrow, otherScale, wide, long).foreach(_.close())
       }
     } finally {
       allocator.close()

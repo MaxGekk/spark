@@ -195,7 +195,8 @@ class VarkaEvaluatorComponentsSuite extends SparkFunSuite {
     // naming several reasons, which a method of two reasons returns by default.
     val kernelBits = Seq(VarkaFusedKernel.STATUS_DAY_PRODUCER, VarkaFusedKernel.STATUS_MONTH_COUNT,
       VarkaFusedKernel.STATUS_MAKE_DATE, VarkaFusedKernel.STATUS_INT_OVERFLOW,
-      VarkaFusedKernel.STATUS_DAY_RANGE, VarkaFusedKernel.STATUS_VALUE_RANGE)
+      VarkaFusedKernel.STATUS_DAY_RANGE, VarkaFusedKernel.STATUS_VALUE_RANGE,
+      VarkaFusedKernel.STATUS_DECIMAL_SLOT)
     val evaluatorBits = Seq(VarkaKernelRunner.STATUS_INPUT_BOUND,
       VarkaKernelRunner.STATUS_DERIVED_INPUT, VarkaKernelRunner.STATUS_FORCED)
     val bits = kernelBits ++ evaluatorBits

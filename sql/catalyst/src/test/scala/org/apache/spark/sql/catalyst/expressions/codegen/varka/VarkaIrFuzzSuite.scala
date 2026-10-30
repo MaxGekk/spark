@@ -986,9 +986,13 @@ class VarkaIrFuzzSuite extends SparkFunSuite with VarkaMatrixTests with VarkaOwn
     // boolean output (VARKA-27) are out for the same reason: they are covered by
     // `VarkaEmitterBoolSuite` and the coverage rows, and a grammar production is a row of the
     // refit that reprices the model (VARKA-352).
+    // The decimal column (VARKA-347) is out for the same reason, and because a row of lane values
+    // carries no high word for its check: its slot table is `VarkaDecimalLoadSuite`'s, and its
+    // fuzz sequence, on a seed of its own so that no shape here moves, is a later step of the row
+    // (`VARKA-347.md` 3 item 5).
     val missing = permitted -- seen - "NarrowLane" - "WidenLane" - "NullSafeEqual" -
       "BoolColumn" - "CondConst" - "BoolCompare" - "CondIf" - "BoolNullSafeEq" - "CondValue" -
-      "BoolOutput"
+      "BoolOutput" - "DecimalColumn"
     assert(missing.isEmpty,
       s"the generator never built: ${missing.toSeq.sorted.mkString(", ")} - add an arm, or " +
         "state here why the node type is deliberately out of the fuzzer's reach")

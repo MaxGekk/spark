@@ -61,6 +61,7 @@ import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Day
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfWeek;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfWeekIso;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DayOfYear;
+import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.DecimalColumn;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.Greatest;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedDay;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaVectorIR.GuardedRange;
@@ -302,6 +303,20 @@ final class Slots {
    * and so parked before the node's own value exists at all.
    */
   final Map<VarkaVectorIR, Integer> guardTmp = new HashMap<>();
+
+  /**
+   * Per {@link DecimalColumn}: the two vectors of sixteen-byte slots a lane group loads, each
+   * holding half the group's rows as low and high words, parked because both shuffles read both.
+   * The low words the shuffle takes are parked in {@link #guardTmp}.
+   */
+  final Map<VarkaVectorIR, int[]> decimalTmp = new HashMap<>();
+
+  /**
+   * In a body that loads a {@link DecimalColumn}, the two shuffles built once in its prologue: the
+   * even lanes of two vectors, which are the slots' low words, and the odd lanes, their high
+   * words. Null in every other body, which keeps its locals numbered as they were.
+   */
+  int[] decimalShuffle;
 
   /**
    * {@link InRanges}' three locals: the value it tests (a vector), the loop's range index (an
@@ -726,6 +741,9 @@ final class Slots {
         e.setValue(slot);
         slot += 2;
       }
+      if (reasons.contains(Analysis.Refusal.DECIMAL_SLOT)) {
+        s.decimalShuffle = new int[] {slot++, slot++};
+      }
     }
     var families = EnumSet.noneOf(Analysis.Refusal.Family.class);
     for (Analysis.Refusal reason : reasons) {
@@ -860,6 +878,9 @@ final class Slots {
           if (guardScratch(analysis, node, families, mode == BodyMode.LOOP)) {
             s.guardTmp.put(node, slot++);
           }
+          if (node instanceof DecimalColumn) {
+            s.decimalTmp.put(node, new int[] {slot++, slot++});
+          }
           if (node instanceof MakeDate) {
             int[] tmp = new int[MAKE_DATE_TMP_COUNT];
             for (int k = 0; k < MAKE_DATE_TMP_COUNT; k++) {
@@ -948,6 +969,7 @@ final class Slots {
   private static int planWordRef(VarkaVectorIR node, Slots s) {
     return switch (node) {
       case ColumnRef c -> s.word[c.ordinal()];
+      case DecimalColumn c -> s.word[c.ordinal()];
       case LiteralSlot l -> WORD_ALL_TRUE;
       case AddDays n -> andRef(s.wordRef.get(n.days()), s.wordRef.get(n.offset()));
       case SubDays n -> andRef(s.wordRef.get(n.days()), s.wordRef.get(n.offset()));
@@ -1450,6 +1472,7 @@ final class Slots {
         // owns no word at all; and `IfElse`'s blend reads its branches' words through the
         // propagation loop, which is where the demand for its own word arrives.
         case ColumnRef c -> { }
+        case DecimalColumn c -> { }
         case LiteralSlot l -> { }
         case AddDays x -> { }
         case SubDays x -> { }
@@ -1537,6 +1560,7 @@ final class Slots {
         // child's and the child, not the alias, is what the queue holds; a `Cond` has no
         // entry in `wordOwner` at all.
         case ColumnRef x -> { }
+        case DecimalColumn x -> { }
         case LiteralSlot x -> { }
         case DayOfWeek x -> { }
         case WeekDay x -> { }

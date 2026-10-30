@@ -25,6 +25,8 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.function.ToIntFunction;
 
+import org.apache.spark.sql.types.Decimal;
+
 /**
  * The vector IR a fused Varka loop is emitted from. A node is a value over
  * int32 lanes; {@link VarkaLoopEmitter} walks a tree of them post-order, leaving intermediates on
@@ -55,7 +57,7 @@ import java.util.function.ToIntFunction;
  * and means a selection bitmap - see {@link Cond} for the null rule there.
  */
 public sealed interface VarkaVectorIR
-    permits VarkaVectorIR.ColumnRef, VarkaVectorIR.LiteralSlot,
+    permits VarkaVectorIR.ColumnRef, VarkaVectorIR.DecimalColumn, VarkaVectorIR.LiteralSlot,
             VarkaVectorIR.AddDays, VarkaVectorIR.SubDays, VarkaVectorIR.DateDiff,
             VarkaVectorIR.IfElse, VarkaVectorIR.CondValue, VarkaVectorIR.BoolOutput,
             VarkaVectorIR.Greatest, VarkaVectorIR.Least, VarkaVectorIR.DayOfWeek,
@@ -139,6 +141,7 @@ public sealed interface VarkaVectorIR
   default LaneType laneType() {
     return switch (this) {
       case ColumnRef n -> n.lane();
+      case DecimalColumn n -> n.lane();
       case LiteralSlot n -> n.lane();
       case IntArith n -> n.left().laneType();
       case IntNeg n -> n.child().laneType();
@@ -194,13 +197,15 @@ public sealed interface VarkaVectorIR
   }
 
   /**
-   * The input ordinal a leaf reads, or -1 for a node that is not an input leaf: a {@link ColumnRef}
-   * or a {@link BoolColumn}. Every place that asks "which column does this node read" goes through
-   * here, so a third kind of input leaf is added in one place.
+   * The input ordinal a leaf reads, or -1 for a node that is not an input leaf: a
+   * {@link ColumnRef}, a {@link DecimalColumn} or a {@link BoolColumn}. Every place that asks
+   * "which column does this node read" goes through here, so a new kind of input leaf is added in
+   * one place.
    */
   static int inputOrdinal(VarkaVectorIR node) {
     return switch (node) {
       case ColumnRef c -> c.ordinal();
+      case DecimalColumn c -> c.ordinal();
       case BoolColumn b -> b.ordinal();
       case LiteralSlot _, IntArith _, IntNeg _, ConstDivide _, BoundedDivide _, BitOp _,
           BitCount _, Greatest _, Least _, IfElse _, CondValue _, BoolOutput _, Compare _,
@@ -279,7 +284,7 @@ public sealed interface VarkaVectorIR
           lanes.add(c.laneType());
         }
       }
-      case LiteralSlot _, BoolColumn _, CondConst _ -> { }
+      case LiteralSlot _, BoolColumn _, CondConst _, DecimalColumn _ -> { }
       case WidenLane _, NarrowLane _, AddDays _, SubDays _, AddMonths _, MakeDate _,
           IntArith _, IntNeg _, GuardedDay _, GuardedRange _, NextDay _, TruncDateDynamic _,
           DateDiff _, Greatest _, Least _, IfElse _, CondValue _, BoolOutput _, DayOfWeek _,
@@ -322,7 +327,7 @@ public sealed interface VarkaVectorIR
           && needsNarrowSpecies(c, seen);
       case ColumnRef c -> c.laneType().isNarrow();
       case LiteralSlot l -> l.laneType().isNarrow();
-      case BoolColumn _, CondConst _ -> false;
+      case BoolColumn _, CondConst _, DecimalColumn _ -> false;
       case NarrowLane n -> n.target().isNarrow() || needsNarrowSpecies(n.child(), seen);
       case WidenLane _, AddDays _, SubDays _, AddMonths _, MakeDate _, IntArith _, IntNeg _,
           GuardedDay _, GuardedRange _, NextDay _, TruncDateDynamic _, DateDiff _, Greatest _,
@@ -464,6 +469,54 @@ public sealed interface VarkaVectorIR
 
     public ColumnRef(int ordinal) {
       this(ordinal, LaneType.INT);
+    }
+  }
+
+  /**
+   * A {@code DECIMAL(p, s)} column with {@code p <= 18}, read as its unscaled values on the long
+   * lane (VARKA-347). Arrow holds every decimal in a sixteen-byte slot, the low word first and its
+   * sign extension next, so the leaf loads two vectors of slots per lane group and keeps the low
+   * words. The scale is not here: the values are unscaled, and the nodes above carry the scale.
+   *
+   * <p>The leaf also checks every valid slot, because Spark's column reader
+   * ({@code ArrowColumnVector}'s decimal accessor) raises on one that does not hold a value of the
+   * type: a high word that is not the low word's sign (the value is then at least 2^63 in
+   * magnitude), or a low word with more than {@code precision} digits. A batch with such a slot
+   * declines with {@code STATUS_DECIMAL_SLOT}, and the row engine raises the same error on the
+   * same row. A null slot is never read by Spark, so whatever it holds never declines. The check
+   * is part of the leaf rather than a node above it because without it the leaf would compute
+   * where Spark raises, and it is unconditional, as {@link GuardedRange}'s is.
+   *
+   * <p>It renders as {@code dec:} with the ordinal, the lane and the precision, so it shares no
+   * kernel with a {@code BIGINT} {@link ColumnRef} of the same ordinal, and two precisions, whose
+   * bounds are constants in the code, take two classes.
+   */
+  record DecimalColumn(int ordinal, LaneType lane, int precision) implements VarkaVectorIR {
+    /**
+     * The widest precision whose unscaled values fit a long, {@code 10^18 - 1 < 2^63}: Spark's own
+     * {@code Decimal.MAX_LONG_DIGITS}, the precision up to which its readers and writers keep an
+     * unscaled long.
+     */
+    public static final int MAX_LONG_PRECISION = Decimal.MAX_LONG_DIGITS();
+
+    public DecimalColumn {
+      Objects.requireNonNull(lane, "lane");
+      if (lane != LaneType.LONG) {
+        throw VarkaErrors.illegalArgument("a decimal column is read on the long lane, not "
+            + lane);
+      }
+      if (precision < 1 || precision > MAX_LONG_PRECISION) {
+        throw VarkaErrors.illegalArgument("a decimal column on the long lane has a precision "
+            + "from 1 to " + MAX_LONG_PRECISION + ", not " + precision);
+      }
+    }
+
+    /**
+     * The largest unscaled value of the precision, {@code 10^precision - 1}, from Spark's own
+     * table of powers; its negation is the smallest.
+     */
+    public long bound() {
+      return Decimal.POW_10()[precision] - 1L;
     }
   }
 
@@ -1522,6 +1575,7 @@ public sealed interface VarkaVectorIR
   static String canonical(VarkaVectorIR node) {
     return switch (node) {
       case ColumnRef n -> "col:" + n.ordinal() + laneTag(n.lane());
+      case DecimalColumn n -> "dec:" + n.ordinal() + laneTag(n.lane()) + ":p" + n.precision();
       case LiteralSlot n -> "lit:" + n.index() + laneTag(n.lane());
       case AddDays n -> "(addDays " + canonical(n.days()) + " " + canonical(n.offset()) + ")";
       case SubDays n -> "(subDays " + canonical(n.days()) + " " + canonical(n.offset()) + ")";
@@ -1612,6 +1666,7 @@ public sealed interface VarkaVectorIR
   static String canonicalShallow(VarkaVectorIR node, ToIntFunction<VarkaVectorIR> lineOf) {
     return switch (node) {
       case ColumnRef n -> "col:" + n.ordinal() + laneTag(n.lane());
+      case DecimalColumn n -> "dec:" + n.ordinal() + laneTag(n.lane()) + ":p" + n.precision();
       case LiteralSlot n -> "lit:" + n.index() + laneTag(n.lane());
       case AddDays n -> "(addDays " + lineOf.applyAsInt(n.days()) + " "
           + lineOf.applyAsInt(n.offset()) + ")";
@@ -1707,6 +1762,7 @@ public sealed interface VarkaVectorIR
   static VarkaVectorIR[] childrenOf(VarkaVectorIR node) {
     return switch (node) {
       case ColumnRef c -> new VarkaVectorIR[0];
+      case DecimalColumn c -> new VarkaVectorIR[0];
       case LiteralSlot l -> new VarkaVectorIR[0];
       case AddDays n -> new VarkaVectorIR[] {n.days(), n.offset()};
       case SubDays n -> new VarkaVectorIR[] {n.days(), n.offset()};
@@ -1778,6 +1834,7 @@ public sealed interface VarkaVectorIR
     }
     return switch (node) {
       case ColumnRef n -> n;
+      case DecimalColumn n -> n;
       case LiteralSlot n -> n;
       case AddDays n -> new AddDays(children[0], children[1]);
       case SubDays n -> new SubDays(children[0], children[1]);

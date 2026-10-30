@@ -229,6 +229,14 @@ final class VarkaDescriptors {
       MethodTypeDesc.of(INT_VECTOR, VECTOR, VECTOR_MASK);
   /** {@code VectorMask VectorMask.and/or(VectorMask)} and {@code VectorMask.not()}. */
   static final MethodTypeDesc MASK_BINARY = MethodTypeDesc.of(VECTOR_MASK, VECTOR_MASK);
+  /** The Vector API's lane permutation, which the decimal load builds two of (VARKA-347). */
+  static final ClassDesc VECTOR_SHUFFLE = ClassDesc.of("jdk.incubator.vector.VectorShuffle");
+  /** {@code VectorShuffle VectorShuffle.iota(VectorSpecies, int start, int step, boolean wrap)}. */
+  static final MethodTypeDesc SHUFFLE_IOTA = MethodTypeDesc.of(VECTOR_SHUFFLE, VECTOR_SPECIES,
+      ConstantDescs.CD_int, ConstantDescs.CD_int, ConstantDescs.CD_boolean);
+  /** {@code LongVector LongVector.rearrange(VectorShuffle, Vector)}: two vectors' lanes in one. */
+  static final MethodTypeDesc REARRANGE_TWO =
+      MethodTypeDesc.of(LONG_VECTOR, VECTOR_SHUFFLE, VECTOR);
   static final MethodTypeDesc ANY_TRUE = MethodTypeDesc.of(ConstantDescs.CD_boolean);
   static final MethodTypeDesc MASK_UNARY = MethodTypeDesc.of(VECTOR_MASK);
 

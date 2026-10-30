@@ -241,6 +241,7 @@ final class VarkaBodyEmitter {
           cb.astore(e.getValue() + k);
         }
       }
+      emitDecimalShuffles(cb, s);
     }
     switch (mode) {
       case LOOP -> emitVectorLoop(cb, dense, outputs, bodyOutputs, analysis, s);
@@ -253,6 +254,26 @@ final class VarkaBodyEmitter {
     if (!s.deadRefs.isEmpty()) {
       // The input words this masked body allocated and, by the liveness pass, never read.
       analysis.reach(VarkaEmitMechanism.DEAD_INPUT_WORD);
+    }
+  }
+
+  /**
+   * The decimal load's two shuffles, once a body: lanes {@code 0, 2, 4, ...} and
+   * {@code 1, 3, 5, ...} of two vectors, by {@code VectorShuffle.iota} with no wrap, so an index
+   * past the first vector selects from the second ({@code VarkaVectorWalk.emitDecimalLoad}).
+   * Nothing is emitted in a body with no decimal column.
+   */
+  private static void emitDecimalShuffles(CodeBuilder cb, Slots s) {
+    if (s.decimalShuffle == null) {
+      return;
+    }
+    for (int start = 0; start < 2; start++) {
+      cb.aload(s.species);
+      cb.loadConstant(start);
+      cb.iconst_2();
+      cb.iconst_0();
+      cb.invokestatic(VECTOR_SHUFFLE, "iota", SHUFFLE_IOTA);
+      cb.astore(s.decimalShuffle[start]);
     }
   }
 
@@ -1645,9 +1666,13 @@ final class VarkaBodyEmitter {
   /**
    * Input {@code i}'s data segment: {@code dataBytes}, the driving lane's stride a row, or for an
    * int column of a kernel driven at the long lane four bytes a row, which is all its buffer has.
+   * A decimal column's is sixteen bytes a row, Arrow's slot, tested first because its lane is
+   * the long one whatever drives the kernel.
    */
   private static void loadInputSegment(CodeBuilder cb, Analysis analysis, Slots s, int i) {
-    if ((analysis.boolInputs >>> i & 1L) != 0) {
+    if ((analysis.decimalInputs >>> i & 1L) != 0) {
+      loadDecimalSegment(cb, analysis, i, s.srcSeg[i]);
+    } else if ((analysis.boolInputs >>> i & 1L) != 0) {
       // A boolean column's data is a bitmap, the size of its validity bitmap, whatever the lane.
       loadSegment(cb, P_SRC_DATA, i, s.validityBytes, s.srcSeg[i]);
     } else if (analysis.inputLane(i) != analysis.lane) {
@@ -1655,6 +1680,30 @@ final class VarkaBodyEmitter {
     } else {
       loadSegment(cb, P_SRC_DATA, i, s.dataBytes, s.srcSeg[i]);
     }
+  }
+
+  /**
+   * A decimal column's data segment, {@code length * 16} bytes: one Arrow slot a row. The fault
+   * injector of a wrong mapping (VARKA-315) moves it as {@link #emitSizes} moves
+   * {@code dataBytes}, so a wrong decimal mapping is caught as any other one is.
+   */
+  private static void loadDecimalSegment(
+      CodeBuilder cb, Analysis analysis, int index, int destSlot) {
+    cb.aload(P_SRC_DATA);
+    cb.loadConstant(index);
+    cb.laload();
+    cb.iload(analysis.lane.pLength);
+    cb.i2l();
+    cb.loadConstant(VarkaVectorWalk.DECIMAL_SLOT_BYTES);
+    cb.lmul();
+    // At zero, the default, nothing is emitted.
+    int misdescribed = analysis.options.misdescribeDataBytes();
+    if (misdescribed != 0) {
+      cb.loadConstant((long) misdescribed);
+      cb.ladd();
+    }
+    cb.invokestatic(SUPPORT, "ofAddress", OF_ADDRESS);
+    cb.astore(destSlot);
   }
 
   /** {@code local = VarkaVectorSupport.ofAddress(param[index], lload(bytes))}. */
