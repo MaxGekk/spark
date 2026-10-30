@@ -70,7 +70,13 @@ The type counts below are every ordered pair of the 779 decimal types with `1 <=
    `Remainder` and `Pmod` call `adjustPrecisionScale` too (`expressions/arithmetic.scala:
    1070-1076`, `:1159-1166`), but their raw precision `min(p1 - s1, p2 - s2) + max(s1, s2)` never
    passes 38, so they never cut; `VARKA-359.md` 6's listing of `%`, `mod`, `pmod` and `try_mod`
-   under this row does not hold, and row 349's plan marked them unclaimed (open point 4).
+   under this row does not hold, and row 349's plan suggested row 30 for them (section 8).
+   - **The interval quotients by a decimal**, `DivideYMInterval` and `DivideDTInterval`: the count
+     over the decimal through `Decimal./`, then `setScale(0, HALF_UP)` and `intValueExact` or
+     `longValueExact` (`expressions/intervalExpressions.scala:791-793`, `:870-872`; a zero divisor
+     raises at `:747-766`). Row 349's plan, section 7 (branch `varka-348-349-plan`), sent them here
+     and the interval products to 361; this row claims them. Their divisor is the decimal column,
+     a variable, so they are `HALF_UP` of `count * 10^s / u` and not a division by `10^k`.
 6. **The dividends are wider than the row text has them.** A cut product's exact value reaches 253
    bits (`(10^38 - 1)^2`), and is at most 128 bits only where `p1 + p2 <= 38`, 9616 pairs. A class C
    sum is not a 129-bit value either: the coarser operand is rescaled up to the finer scale first,
@@ -124,21 +130,33 @@ The type counts below are every ordered pair of the 779 decimal types with `1 <=
   sum and for every product with `s1 + s2 <= 38`, whose kept shapes are row 362's.
 - **The division is exact everywhere with no decline band** (2.3): the magic constant exists and is
   checked for every `k` from 1 to 39 at both dividend widths, so the arithmetic needs no band;
-  a shape declines only with a measured loss (owner's decision A2). `k = 39` needs no special case
-  in this form, against the row's "declined or folded" (open point 1).
-- **The coercion's rescale down is infallible** (item 0.7) and `%`, `mod` and `pmod` never cut
-  (item 0.5).
+  a shape declines only with a measured loss (owner's decision A2).
+- **`k = 39` is built like every other `k`, a departure from the row's "declined or folded"**
+  (decided by the lead on 30 October 2026): in the pre-shift form its constant is 211 bits over a
+  215-bit `N`, 49 limb products, exact like the rest (`results/VARKA-363-magic.txt`). It occurs at
+  528 product pairs under the default, both operands of precision 38 and `s1 + s2 >= 45`, with the
+  check dead.
+- **The coercion's cast is 364's; the division under it is this row's** (decided by the lead on
+  30 October 2026). Wave G3's row: "363's division is what 364's decimal-to-decimal casts and
+  351's 128-bit rounding round through, so 363 leads both". The comparisons and choices at unequal
+  scales coerce through a decimal-to-decimal `Cast`, so 364 builds that expression, and this row
+  builds and proves the division it calls, the exemption of item 0.7 included.
+- **`%`, `mod` and `pmod` never cut** (item 0.5) and decline here naming no row, a gap flagged in
+  section 8; the interval quotients by a decimal are claimed (item 0.5) and wait on the same
+  gap.
 
 ## 1. Goal and non-goal
 
 The `HALF_UP` division of a 128-bit or 256-bit decimal value by `10^k`, exact over the value's
-proven bound, as one helper, and its three arithmetic and coercion callers: a product whose scale
-is cut, under either setting; a class C sum or difference; and the rescale down of a comparison's or
-a choice's operand to the wider type. The result checked against `10^38` at full width where the
+proven bound, as one helper for every caller, 364's coercion and decimal casts and 351's rounding
+among them, and this row's two arithmetic callers: a product whose scale is cut, under either
+setting, and a class C sum or difference. The result checked against `10^38` at full width where the
 type does not prove it, nulling or declining by mode. Built and measured against the row engine,
-declined with its reason only if it loses (owner's decision A2). Not this row: the casts (364) and
-the rounding functions (351), which call the helper in their own rows; the product itself (361,
-362); `%`, `mod` and `pmod`; decimal division (out of the milestone).
+declined with its reason only if it loses (owner's decision A2); and the interval quotients by a
+decimal, claimed here and built once a division by a variable exists (section 8). Not this row: the
+casts, the coercion's included (364), and the rounding functions (351), which call the helper in
+their own rows; the product itself (361, 362); `%`, `mod` and `pmod`; decimal division (out of the
+milestone).
 
 ## 2. Design
 
@@ -149,7 +167,7 @@ the rounding functions (351), which call the helper in their own rows; the produ
   64 for a 256-bit one (`results/VARKA-363-magic.txt`).
 - **The magnitude, two ways**, row 362's `decimalWideSign`: from `MAGNITUDE`, whose product is
   already unsigned and needs no 256-bit `abs`, or from `TWOS` with a four-word negation before the
-  division. For a sum and a coercion operand the magnitude is 359's `abs` on a pair, or a four-word
+  division. For a sum and a cast operand the magnitude is 359's `abs` on a pair, or a four-word
   one after a wide sum.
 - **Class C, two ways** (option `decimalScaleDownAdd`, `WIDE` or `SPLIT`, `Reason.MACHINE`), 2.5.
 - **S, the scalar loop**: the same pre-shift and constants on `unsignedMultiplyHigh`, the reference
@@ -242,7 +260,7 @@ rapids' compatibility triples as named vectors whose expected values come from t
 | cut product, `p1 + p2 >= 39` | 4 words, 362's C | M, 49 to 64 products | dead or full width |
 | class C sum, equal scales | 2 words, below `2 * 10^38` | M, 16 products | dead or full width |
 | class C sum, unequal scales | `WIDE` or `SPLIT` below | | dead or full width |
-| coercion operand | 2 words | M, 16 products or fewer | none, infallible |
+| 364's coercion cast | 2 words | M, 16 products or fewer | none, infallible |
 
 **Class C at unequal scales, two forms.** `WIDE`: the coarser operand rescaled up by `10^j` into
 256 bits (row 362's 128 by 64 for `j <= 19`, its 128 by 128 for `j >= 20`), the four-word sum with
@@ -258,11 +276,21 @@ fraction rounded down by `10^k`, and the whole sum scaled to the result scale an
 leading zeros, is a gate in front of either, like row 362's.
 
 **The comparison and the choice.** `CAST(x AS widerDecimalType)` with the scale cut is the
-coercion cast of item 0.5; the compiler admits it only where the exemption `p_in - k < p_out` holds
-on the resolved types, which it always does under the default coercion (item 0.7, a type lemma the
-sweep of test 4 checks), and declines it naming 364 under `retainFractionDigitsOnTruncate`, where it
-can overflow. With 360b's rescale up of the other operand, the 22 pairs of `VARKA-359.md` 6 fuse at
-unequal scales. Whether these casts are this row's or 364's is open point 2.
+coercion cast of item 0.5, a decimal-to-decimal `Cast` that 364 builds through this helper. What
+this row gives it is the division and the proof of the exemption `p_in - k < p_out` on the resolved
+types, which holds at every pair under the default coercion (item 0.7, a type lemma the sweep of
+test 4 checks) and not under `retainFractionDigitsOnTruncate`, where the cast can overflow. With
+360b's rescale up of the other operand and 364's cast, the 22 pairs of `VARKA-359.md` 6 fuse at
+unequal scales.
+
+**The interval quotients.** `count / d` is `HALF_UP(count * 10^s / u)` with `u` the column's
+unscaled value; `Decimal./` divides to 39 fractional digits `DOWN` before the `HALF_UP` to scale 0,
+and the argument of 2.4 makes that one rounding of the exact quotient. The dividend is
+`count * 10^s`, up to 158 bits for a month count and 190 for a microsecond count **[I]**, and the
+divisor a variable of up to 127 bits: a general division, which no row plans and which this row's
+constant division does not serve. The quotients decline naming the gap of section 8 until a
+variable 128-bit division is planned; the overflow (`intValueExact`, `longValueExact`), the zero
+divisor and `checkDivideOverflow`'s minimum by -1 follow Spark's raise in every mode.
 
 ### 2.6 The check at full width, and its disposal
 
@@ -293,8 +321,8 @@ M is lanewise arithmetic and `abs`, its compares in the sign and the check; at t
 x86 those are the Java fallback, a condition root declines by row 503's rule, and a projection is
 measured there and declines with its measured reason if it loses (`VARKA-359.md` 2.6).
 `VarkaDecimalCompiler`'s `Multiply`, `Add` and `Subtract` arms gain the cut shapes ahead of their
-declines naming 363, and its comparison and choice arms the coercion operand. The budget weighs the
-node by its lane calls, written down by `dev/varka_emit.sh` when built; the cost model gets a
+declines naming 363; 364's cast arm calls the same node. The budget weighs the node by its lane
+calls, written down by `dev/varka_emit.sh` when built; the cost model gets a
 feature on row 352's awaiting-refit list; the warm-up's long block gains M at one `k` per band,
 held by `VarkaWarmupReachSuite`.
 
@@ -312,8 +340,8 @@ held by `VarkaWarmupReachSuite`.
    compatibility triples, its 38-nines edge and `5e37 * 2` (`READING_RAPIDS.md` 3, item 1), the
    expected values from the fork; `DECIMAL(38, 10) + DECIMAL(38, 10)` at `10^38 - 1` under the
    default setting, the case row 360's plan leaves here; Trino's two capped-add vectors and
-   `10 + 10^-37` (`READING_TRINO_DECIMAL.md` 10, item 3); the coercion at `(38, 10) < (38, 2)`
-   with operands at each tie.
+   `10 + 10^-37` (`READING_TRINO_DECIMAL.md` 10, item 3); the helper at the coercion's
+   `(38, 10)` to `(38, 2)` with operands at each tie, for 364's cast.
 3. **SPARK-45786's random test, ported**: the generator of `ArithmeticExpressionSuite.scala:238`
    for `Multiply` under both settings, run through the kernel against the fork's `Decimal`, at a
    thousand draws, which Gluten excludes (the milestone plan's 2.8).
@@ -332,9 +360,8 @@ held by `VarkaWarmupReachSuite`.
    the lemma of 2.4 per `(D, k)`; and the planted carry order as a `sat` witness. The file's times
    stated before and after, against the milestone plan's risk on proof time.
 7. **Coverage rows**, a "DECIMAL rescale down" family: `d19s8 * d19s8b` (128-bit dividend),
-   `d38s10 * d38s10b` (256-bit, live check), `d38s38 * d38s38b` (`k = 39`, after open point 1),
-   `d38s10 + d38s10b`, `d38 + d38s38` (class C at unequal scales), `d38s10 < d38s2` and
-   `coalesce(d38s10, d38s2)` (the coercion), `try_multiply(d38s10, d38s10b)`, as filters now and
+   `d38s10 * d38s10b` (256-bit, live check), `d38s38 * d38s38b` (`k = 39`), `d38s10 + d38s10b`,
+   `d38 + d38s38` (class C at unequal scales), `try_multiply(d38s10, d38s10b)`, as filters now and
    projections after 359b's store, each naming its verification for row 490's check; the
    differential, the matrix and both fuzzers; the generated files in `ADDING_A_TYPE.md`'s order,
    no existing shape's bytes moving.
@@ -349,8 +376,9 @@ fixed tables and the proof file run where the existing ones do.
 **The baseline first, on the unchanged code**, with rows 360 to 362's additions:
 `VarkaDecimalBaselineBenchmark` gains `DECIMAL(19, 8)` and `DECIMAL(38, 2)` columns and the
 sections `x19s8 * y19s8` (a 128-bit dividend), `x38 * y38` at `(38, 10)` (256-bit, live check) and
-`x38 + y38` at `(38, 10)` (class C) as projections, and `x38s10 < y38s2` as a filter, on the EPYC
-7763 at 256 and 128 bits. The existing chain and cast down are this row's other readings.
+`x38 + y38` at `(38, 10)` (class C) as projections, on the EPYC 7763 at 256 and 128 bits. The
+existing chain is this row's other reading; the cast down and a comparison at two scales are 364's
+readings of the helper.
 
 Predictions, registered before the spike and the build:
 
@@ -361,8 +389,8 @@ Predictions, registered before the spike and the build:
    four-word negation saved.
 3. **`SPLIT` against `WIDE`** for class C at unequal scales: `SPLIT` ahead by 1.3 to 2 times;
    `WIDE` ahead at equal scales, where it needs no rescale up.
-4. **The build against the baseline** at 256 bits: the coercion filter 10 to 40 times faster than
-   the row path, the 128-bit dividend shapes 10 to 30 times, the 256-bit ones 3 to 15 times; the
+4. **The build against the baseline** at 256 bits: the 128-bit dividend shapes 10 to 30 times
+   faster than the row path, the 256-bit ones 3 to 15 times; the
    `(38, 10)` chain, all three nodes cut, 3 to 10 times faster than its 1188.8 ns a row.
 5. **At 128 bits on x86** the projections still beat the row path, by 2 to 5 times for a 128-bit
    dividend; the 256-bit ones are measured and may decline.
@@ -374,9 +402,9 @@ Predictions, registered before the spike and the build:
 2. **The spike loops** (2.1), with 359's spike and rows 360 to 362's loops; the verdict in
    section 10.
 3. **363a, the helper and its 128-bit callers**: the node, the constant table and its proof file,
-   the lemma, the coercion operand and the 22 pairs, the class C sums at equal scales, the cut
-   products with `p1 + p2 <= 38`, tests 1, 4, 5 and 6, the filter coverage rows. Needs 359a, 360b
-   and 362a.
+   the lemma, the exemption's proof for 364's coercion cast, the class C sums at equal scales, the
+   cut products with `p1 + p2 <= 38`, tests 1, 4, 5 and 6, the filter coverage rows. Needs 359a,
+   360b and 362a.
 4. **363b, the 256-bit callers**: the cut products with `p1 + p2 >= 39`, the live check through
    row 481's mode (after 481 and 360c), the SPARK-45786 port, tests 2 and 3. Needs 362b.
 5. **363c, class C at unequal scales**: `WIDE` and `SPLIT` behind `decimalScaleDownAdd`.
@@ -407,52 +435,56 @@ joins the gate. It rests on 347 to 349, 359, 360b and 360c, 361, 362, 481 and 50
 
 The arithmetic pairs count with the last of their rows: `+`, `-`, `try_add` and `try_subtract`
 with 360 and this row, `*` and `try_multiply` with 361, 362 and this row (`VARKA-362.md` 6). The 22
-comparison and choice pairs of `VARKA-359.md` 6 count with 360b's rescale up and this row's
-coercion operand. `check_overflow` counts with 359, 360 and this row. The casts count with 364 and
-the rounding functions with 351, each of which calls the helper. `%`, `mod`, `pmod` and `try_mod`
-are not this row's (item 0.5), and 363a's pull request corrects `VARKA-359.md` 6's census note on
-them in `census_curated.txt`, naming the row 349's plan suggests.
+comparison and choice pairs of `VARKA-359.md` 6 count with 360b's rescale up and 364's coercion
+cast through this row's division. `check_overflow` counts with 359, 360 and this row. The casts
+count with 364 and the rounding functions with 351, each of which calls the helper. The interval
+quotients by a decimal count when the division by a variable exists. `%`, `mod`, `pmod` and
+`try_mod` are not this row's (item 0.5); `VARKA-359.md` 6's census note on them is 359a's to
+correct when it lands.
 
 ## 7. Out of this row, and declines that stay
 
 Out: the decimal casts (364) and the rounding functions over either form (351), including
 `bround`'s `HALF_EVEN`, whose tie needs a remainder or an exactness test that `HALF_UP`'s pre-shift
-form does not give; the products themselves (361, 362); `%`, `mod`, `pmod`; the interval products
-and quotients by a decimal (open point 3); decimal division (out of the milestone); a truncated
-magic product.
+form does not give; the coercion's cast (364); the products themselves (361, 362) and the interval
+products by a decimal (361, by row 349's plan); `%`, `mod`, `pmod`; decimal division (out of the
+milestone); a truncated magic product.
 
-Declines that stay, each naming its row: a fallible coercion cast under
-`retainFractionDigitsOnTruncate` (364), a decimal in an int-driven kernel, a negative scale (2.8),
-at two long lanes on x86 a condition root (503), and any shape whose measurement loses to the row
-engine, with that reason.
+Declines that stay, each naming its row: `%`, `mod`, `pmod` and `try_mod` naming no row (section
+8), the interval quotients by a decimal naming the same gap, a decimal in an int-driven kernel, a
+negative scale (2.8), at two long lanes on x86 a condition root (503), and any shape whose
+measurement loses to the row engine, with that reason.
 
 ## 8. Open points for the lead
 
-1. **`k = 39`.** It occurs at 528 product pairs under the default, both operands of precision 38
-   and `s1 + s2 >= 45`, with the check dead. (a) Build it like every other `k`: in the pre-shift
-   form its constant is 211 bits over a 215-bit `N`, 49 limb products, checked like the rest
-   (`results/VARKA-363-magic.txt`). (b) Decline it with a scope item, as the row allows. (c) Fold
-   it into two stages, a `DOWN` division by `10^19` and a `HALF_UP` one by `10^20`, Trino's
-   last-stage rounding (`READING_TRINO_DECIMAL.md` 4). The plan does (a); the row text says
-   "declined or folded", which predates the pre-shift form's table.
-2. **The coercion cast's owner.** The rescale down of a comparison's operand is a `Cast` node. (a)
-   This row, since `VARKA-359.md`'s answered question 1 names 360 and 363 for the unequal scales
-   and the cast is always infallible under the default coercion. (b) Row 364, the cast row, with
-   this row's helper. The plan does (a) for the infallible casts only.
-3. **The interval products and quotients by a decimal.** Row 349's plan marked them unclaimed with
-   "rows 361 and 363" as the suggested home: the count times the unscaled value, then `HALF_UP` by
-   `10^s` (`expressions/intervalExpressions.scala:632`, `:685`). (a) Add them to 363b as callers of
-   the helper. (b) Leave them unclaimed for the owner. Not in the row's text, so not in this plan.
-4. **`%`, `mod`, `pmod` and `try_mod`.** They never cut a scale (item 0.5), so `VARKA-359.md` 6's
-   attribution to this row does not hold; row 349's plan already marked them unclaimed, suggesting
-   row 30. The plan corrects the census note only.
+Answered by the lead on 30 October 2026 and folded in above: `k = 39` is built (0, "What
+differs"); 364 owns the coercion's cast expression and this row the division under it, by wave
+G3's row; the interval quotients by a decimal are claimed here, as row 349's plan sends them; and
+`%`, `mod` and `pmod` decline naming no row. What stays, for the owner:
+
+1. **Decimal `%`, `mod`, `pmod` and `try_mod` have no home.** Three plans disagree:
+   `VARKA-359.md` 6 lists them under 363; row 349's plan (section 7, branch `varka-348-349-plan`)
+   suggests row 30; this plan finds they never cut a scale (item 0.5), so this row's division does
+   not serve them. A decimal remainder by a column needs a general 128-bit division by a variable,
+   which no plan builds; the interval quotients by a decimal (2.5) need the same. Is that division
+   a milestone 8 row, or `m9/SCOPE.md` scope?
+2. **The setting false also cuts the scale** (item 0.5): the row's "with the setting false, the
+   exact type and its overflow" misses the 101270 product pairs with `s1 + s2 > 38` that `bounded`
+   rounds to scale 38 (`results/VARKA-363-shapes.txt`). The row text is the owner's; this plan
+   builds them as cut shapes.
+3. **Class C dividends reach 253 bits** (item 0.6): wave F3's row has 360's capped shapes landing
+   with 363 by "the 129th bit feeding its unsigned division", which holds for an equal-scale sum
+   only; at two scales the rescaled sum passes 129 bits at 198704 of the 234832 class C pairs. The
+   row text is the owner's; this plan builds both forms of 2.5.
+4. **`VARKA-359.md` 6's census note on `%`, `mod`, `pmod` and `try_mod`** names this row; 359a
+   corrects its census notes when it lands.
 
 ## 9. Done when
 
 Row 363's text holds, with the corrections above: the spike's verdict is committed per width
 before the build; the helper divides a 128-bit or 256-bit magnitude by `10^k` `HALF_UP` for every
 `k` the callers meet, its constants proven by the proof files' rule over integers at full width;
-the cut products under both settings, the class C sums and the coercion operands fuse in the
+the cut products under both settings and the class C sums fuse in the
 three modes with the full-width check nulling through row 481's mode and declining under ANSI
 where it is live, or carry their measured reason; the precision-loss lemma stated and proven;
 the rounding fixtures, the divisor table, rapids' triples and 38-nines edge and Trino's rescale
