@@ -111,6 +111,23 @@ public final class VarkaFuzzDefaultsStore {
         read(dir, commit, table, warnings), warnings);
   }
 
+  /**
+   * What the emitter reads from the JVM it runs on, besides its options: the {@code UseAVX}
+   * level, the preferred vector lengths per element size, and the JDK, whose class-file library
+   * writes the bytes. Declared before {@code CURRENT}, which builds the store as the class
+   * initializes.
+   */
+  static final String HOST = host();
+
+  private static String host() {
+    return "useAVX=" + VarkaEmitOptions.HOST_USE_AVX
+        + " lanes=" + jdk.incubator.vector.ByteVector.SPECIES_PREFERRED.length()
+        + "/" + jdk.incubator.vector.ShortVector.SPECIES_PREFERRED.length()
+        + "/" + jdk.incubator.vector.IntVector.SPECIES_PREFERRED.length()
+        + "/" + jdk.incubator.vector.LongVector.SPECIES_PREFERRED.length()
+        + " jdk=" + Runtime.version();
+  }
+
   private static final VarkaFuzzDefaultsStore CURRENT = fromProperty();
 
   /** This JVM's store, or null where none is named or this JVM cannot tell its commit. */
@@ -206,22 +223,6 @@ public final class VarkaFuzzDefaultsStore {
   /** The key a tree is stored under: its description and the host's facts, hashed. */
   static String key(String tree) {
     return HexFormat.of().formatHex(sha256((tree + "\t" + HOST).getBytes(StandardCharsets.UTF_8)));
-  }
-
-  /**
-   * What the emitter reads from the JVM it runs on, besides its options: the {@code UseAVX}
-   * level, the preferred vector lengths per element size, and the JDK, whose class-file library
-   * writes the bytes.
-   */
-  static final String HOST = host();
-
-  private static String host() {
-    return "useAVX=" + VarkaEmitOptions.HOST_USE_AVX
-        + " lanes=" + jdk.incubator.vector.ByteVector.SPECIES_PREFERRED.length()
-        + "/" + jdk.incubator.vector.ShortVector.SPECIES_PREFERRED.length()
-        + "/" + jdk.incubator.vector.IntVector.SPECIES_PREFERRED.length()
-        + "/" + jdk.incubator.vector.LongVector.SPECIES_PREFERRED.length()
-        + " jdk=" + Runtime.version();
   }
 
   // ---------------------------------------------------------------------------------------------
