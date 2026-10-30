@@ -377,8 +377,8 @@ ratios of 1.3 to 2.9, beside Spark's own 52.8 s. All checks, as the nightly runs
 0. **The Build's wall time grows by at most 2 minutes** over the 18 it takes since row 520's
    compile restore (Build run 41017862239, the first with a restored compile state), the 3.4 to 4.3
    job-minutes above being split over three jobs that run side by side. Measured on 368a's pull
-   request against the
-   Build of its base commit, from the Actions API, as row 509 step 4 measured its own.
+   request against the Build of its base commit, from the Actions API, as row 509 step 4 measured
+   its own.
 
 1. The four subclasses pass with no Varka finding today; any finding is a bug of a fused form
    (`TIME` to `TIME`, the year-month, day-time and `TIMESTAMP_NTZ` casts, `bigint` to `int`).
