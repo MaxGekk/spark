@@ -21,11 +21,6 @@ import java.util.List;
 
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.VarkaBenchmark;
-import org.apache.spark.sql.execution.SparkPlan;
-import org.apache.spark.sql.execution.VarkaColumnarToRowExec;
-import org.apache.spark.sql.execution.VarkaFilterColumnarToRowExec;
-import org.apache.spark.sql.execution.VarkaFilterExec;
-import org.apache.spark.sql.execution.VarkaProjectExec;
 
 /**
  * The baseline for {@code DOUBLE} and {@code FLOAT} before Varka has a lane for them (VARKA-377):
@@ -43,7 +38,10 @@ import org.apache.spark.sql.execution.VarkaProjectExec;
  *
  * <p>A baseline is only one while nothing fuses: each section checks, before it is timed, that the
  * Varka session's plan for it holds no Varka node, and fails the run when a lane row has started to
- * fuse it. The results file is then the record of the code before that row.
+ * fuse it. The results file is then the record of the code before that row. The comparison and
+ * choice sections fuse once the floating lanes order their values, so a run on later code sets
+ * {@link VarkaSqlBenchmarkBase#FUSE_CHECK_PROPERTY} to {@code false}, which measures the row
+ * against this file.
  *
  * <p>To run this benchmark, on a GitHub runner (the results come back as an artifact):
  * <pre>
@@ -106,14 +104,6 @@ public class VarkaFloatingBaselineBenchmark extends VarkaSqlBenchmarkBase {
     return out;
   }
 
-  /** Whether the session's plan for {@code query} holds a Varka node. */
-  static boolean fuses(SparkSession session, String query) {
-    return session.sql(query).queryExecution().executedPlan().find(
-        p -> p instanceof VarkaColumnarToRowExec || p instanceof VarkaProjectExec
-            || p instanceof VarkaFilterExec || p instanceof VarkaFilterColumnarToRowExec)
-        .isDefined();
-  }
-
   @Override
   public void runBenchmarkSuite(String[] mainArgs) {
     stopLeftoverSessions();
@@ -129,11 +119,7 @@ public class VarkaFloatingBaselineBenchmark extends VarkaSqlBenchmarkBase {
         VarkaArrowSessions.cache(session, "varka_floating");
       }
       for (Section s : sections()) {
-        if (fuses(varka, s.query())) {
-          SparkPlan plan = varka.sql(s.query()).queryExecution().executedPlan();
-          throw new IllegalStateException(s.title() + " fuses, so it is no longer a baseline: "
-              + s.query() + "\n" + plan.treeString());
-        }
+        requireBaseline(varka, s.title(), s.query());
       }
       for (Section s : sections()) {
         section(s.title(), () -> {

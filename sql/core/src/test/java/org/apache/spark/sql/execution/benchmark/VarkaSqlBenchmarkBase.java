@@ -37,6 +37,11 @@ import org.apache.spark.sql.SaveMode;
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.VarkaBenchmarkBase;
 import org.apache.spark.sql.catalyst.expressions.codegen.varka.VarkaEmitOptions;
+import org.apache.spark.sql.execution.SparkPlan;
+import org.apache.spark.sql.execution.VarkaColumnarToRowExec;
+import org.apache.spark.sql.execution.VarkaFilterColumnarToRowExec;
+import org.apache.spark.sql.execution.VarkaFilterExec;
+import org.apache.spark.sql.execution.VarkaProjectExec;
 import org.apache.spark.sql.internal.SQLConf;
 
 /**
@@ -54,6 +59,7 @@ import org.apache.spark.sql.internal.SQLConf;
  *       not set before, so no case leaks a setting into the next.</li>
  *   <li>{@link #noop}, the trait's {@code noop()}: a query run to the end, its rows dropped.</li>
  *   <li>{@link #note}, a line of the results file outside a table, such as a rung's facts.</li>
+ *   <li>{@link #requireBaseline}, a baseline benchmark's check that a section does not fuse.</li>
  *   <li>{@link #stopLeftoverSessions} and {@link #clearSessions}, for a benchmark that makes its
  *       own sessions, and {@link #withEmitOptions} for one that compares emitter designs.</li>
  * </ul>
@@ -198,6 +204,42 @@ public abstract class VarkaSqlBenchmarkBase extends VarkaBenchmarkBase {
       body.run();
       return BoxedUnit.UNIT;
     });
+  }
+
+  // ---------------------------------------------------------------------------------------
+  // Baselines
+  // ---------------------------------------------------------------------------------------
+
+  /**
+   * The system property that lifts {@link #requireBaseline}'s check: {@code
+   * -Dvarka.baseline.fuseCheck=false} runs a baseline class after a row has started to fuse its
+   * sections, so that the same class measures that row against its committed results.
+   */
+  public static final String FUSE_CHECK_PROPERTY = "varka.baseline.fuseCheck";
+
+  /** Whether the session's plan for {@code query} holds a Varka node. */
+  private static boolean fuses(SparkSession session, String query) {
+    return session.sql(query).queryExecution().executedPlan().find(
+        p -> p instanceof VarkaColumnarToRowExec || p instanceof VarkaProjectExec
+            || p instanceof VarkaFilterExec || p instanceof VarkaFilterColumnarToRowExec)
+        .isDefined();
+  }
+
+  /**
+   * Fails the run when {@code varka}'s plan for {@code query} holds a Varka node: a baseline is
+   * only one while nothing fuses, and its results file is the record of the code before the row
+   * that fuses it. {@link #FUSE_CHECK_PROPERTY} set to {@code false} lifts the check.
+   */
+  protected static void requireBaseline(SparkSession varka, String title, String query) {
+    if (!Boolean.parseBoolean(System.getProperty(FUSE_CHECK_PROPERTY, "true"))) {
+      return;
+    }
+    if (fuses(varka, query)) {
+      SparkPlan plan = varka.sql(query).queryExecution().executedPlan();
+      throw new IllegalStateException(title + " fuses, so it is no longer a baseline (-D"
+          + FUSE_CHECK_PROPERTY + "=false measures it as one): " + query + "\n"
+          + plan.treeString());
+    }
   }
 
   /**
