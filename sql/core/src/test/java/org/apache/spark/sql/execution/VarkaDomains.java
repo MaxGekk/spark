@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.TreeSet;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import javax.annotation.Nullable;
@@ -260,6 +261,33 @@ public final class VarkaDomains {
       throw new IllegalArgumentException(expression + " is no projection over the scan:\n"
           + plan.treeString());
     }
+    return evaluate(projects, fixture);
+  }
+
+  /**
+   * {@link #sparkValues(String, VarkaHarnessPlans.Fixture)} of each of {@code expressions}, each
+   * to be evaluated when asked, so an error is its own expression's. The expressions are planned
+   * together ({@link VarkaHarnessPlans#together}), where the list comes out as one projection of
+   * one entry an expression over the scan, each the entry it would be alone; an expression whose
+   * plan is a stack of projections, or whose planning raises, is planned alone when asked.
+   */
+  static List<Supplier<List<InternalRow>>> sparkValues(List<String> expressions,
+      VarkaHarnessPlans.Fixture fixture) {
+    List<Seq<NamedExpression>> planned = VarkaHarnessPlans.together(expressions, fixture.columns());
+    var out = new ArrayList<Supplier<List<InternalRow>>>();
+    for (int i = 0; i < expressions.size(); i++) {
+      Seq<NamedExpression> list = planned.get(i);
+      String expression = expressions.get(i);
+      out.add(list == null ? () -> sparkValues(expression, fixture)
+          : () -> evaluate(List.of(new Project(list, new VarkaHarnessScan(fixture.columns()))),
+              fixture));
+    }
+    return out;
+  }
+
+  /** The fixture's rows through {@code projects}, the lowest first, by Spark's interpreter. */
+  private static List<InternalRow> evaluate(List<Project> projects,
+      VarkaHarnessPlans.Fixture fixture) {
     List<InternalRow> rows = fixture.rows();
     for (Project p : projects) {
       var bound = new ArrayList<Expression>();
