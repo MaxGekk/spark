@@ -1645,3 +1645,32 @@ cut order. Question 4 of section 7 puts the two orders to the owner.
 *Answered 16 October 2026 (section 7 question 4): foundations first, the order in 4.1. The decimal
 lanes, the 128-bit lane pair (359) among them, land in wave F3, before any function row, and the
 cut order is written in 4.1, falling on function rows only.*
+
+## 11. Debt register
+
+One bullet per debt: what it is, why it is a debt, and what closing it would take. Opened on 30
+October 2026, from the review of row 339's baseline class: milestone 8 had no register until then.
+Per `sql/varka/AGENTS.md`, a swept entry is rewritten in the past tense with what the sweep found,
+never deleted.
+
+**In code and tests**
+
+* **Not every baseline class can time its sections fused.** `VarkaSqlBenchmarkBase.requireBaseline`
+  refuses a section that fuses, and under `-Dvarka.baseline.fuseCheck=false` requires it to run
+  fused instead, so a baseline class's after-run reruns the same class under the same labels.
+  Two gaps stay. `VarkaBooleanOutputBenchmark` keeps a check of its own, since its filter controls
+  must fuse in both runs, and has no such property, so it fails outright once its row lands. And
+  the reversed check is `VarkaSizeLadder.varkaFused`, which finds only a projection's Varka node:
+  a section whose kernel is a filter, such as `VarkaTimestampNtzBaselineBenchmark`'s comparison,
+  fails the after-run although it fused. Closing it: a reversed check that reads a filter node's
+  kernel batches and fallbacks as `varkaFused` reads a projection's, and the Boolean class's
+  sections routed through `requireBaseline` with its controls kept apart; then a dispatch of each
+  class with the property set, on code where its sections fuse, to show the check passes.
+* **Two baseline classes title a section alike.** `VarkaTimestampNtzBaselineBenchmark` and
+  `VarkaTimestampNtzArithmeticBaselineBenchmark` both hold "TIMESTAMP_NTZ arithmetic chain, no
+  nulls" and its null twin, over the same query on different tables. The results files are per
+  class, so nothing collides today, but a diff across the two classes, or a reader searching the
+  results directory for the title, finds two sections that are not the same measurement. Closing
+  it: rename the arithmetic class's two, which costs nothing while its results files are still to
+  come from the runner; after that, a rename means regenerating them at both widths in one run,
+  since a title is the key the diff tools match on.

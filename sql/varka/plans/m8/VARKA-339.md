@@ -313,8 +313,12 @@ Cost: medium, as the row says. About four days after the baseline; `time_bucket`
 1. **The baseline**, its own pull request on the unchanged code:
    `VarkaTimestampNtzArithmeticBaselineBenchmark`, the chain again, `ntz + dt` over the interval
    column, `ntz + INTERVAL '1' MONTH`, `timestampadd(HOUR, q, ntz)`, `time_bucket` at 15 minutes
-   and at a day, each with and without nulls; its fuse check lifted by
-   `-Dvarka.baseline.allowFused=true` so the after-run reuses it. The fixture's timestamps stay
+   and at a day, each with and without nulls; its fuse check, the shared
+   `VarkaSqlBenchmarkBase.requireBaseline`, turned around by `-Dvarka.baseline.fuseCheck=false`
+   so the after-run reuses it, requiring then that every section run fused over every batch
+   (`VarkaSizeLadder.varkaFused`). `VarkaTimestampNtzArithmeticBaselineQueriesSuite` asserts at
+   pull-request time that no section fuses; CI never sets the property, so each of steps 2 to 4
+   turns that assertion around for the sections it makes fuse. The fixture's timestamps stay
    inside 2.4's `GuardedDay` range, the bound that matters: every int passes the HOUR guard.
 2. **The mixed-lane `AddMonths` test** (3.1), then 2.1 with the conformance hook and its rows.
 3. **`timestampadd` up to a week** (2.2), then **the month forms** (2.3, 2.4) and their sweep.

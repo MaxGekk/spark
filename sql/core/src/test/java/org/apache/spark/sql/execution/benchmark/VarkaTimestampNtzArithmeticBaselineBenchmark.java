@@ -21,11 +21,6 @@ import java.util.List;
 
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.VarkaBenchmark;
-import org.apache.spark.sql.execution.SparkPlan;
-import org.apache.spark.sql.execution.VarkaColumnarToRowExec;
-import org.apache.spark.sql.execution.VarkaFilterColumnarToRowExec;
-import org.apache.spark.sql.execution.VarkaFilterExec;
-import org.apache.spark.sql.execution.VarkaProjectExec;
 
 /**
  * The baseline for {@code TIMESTAMP_NTZ} arithmetic before Varka fuses it (VARKA-339 5, step 1):
@@ -48,7 +43,7 @@ import org.apache.spark.sql.execution.VarkaProjectExec;
  *   <li>{@code time_bucket} at 15 minutes, a width that divides a day (step 4, 2.5);</li>
  *   <li>{@code time_bucket} at one day, a whole number of days (step 4, 2.5).</li>
  * </ul>
- * Step 5 is the measurement itself: this class rerun with the fuse check lifted (below), its
+ * Step 5 is the measurement itself: this class rerun with the fuse check reversed (below), its
  * results diffed against the files committed with step 1.
  *
  * <p>Each section has two arms, named so the labels survive the kernels landing:
@@ -57,9 +52,12 @@ import org.apache.spark.sql.execution.VarkaProjectExec;
  * should tie.
  *
  * <p>A baseline is only one while nothing fuses: before anything is timed, the run checks that
- * the Varka session's plan for every section holds no Varka node, and fails when one does. The
- * after-run of step 5 sets the system property {@value #ALLOW_FUSED_PROPERTY} to {@code true},
- * which lifts that check, so the same class and the same labels time the fused code.
+ * the Varka session's plan for every section holds no Varka node, and fails when one does
+ * ({@link VarkaSqlBenchmarkBase#requireBaseline}). The after-run of step 5 sets the system property
+ * {@value VarkaSqlBenchmarkBase#FUSE_CHECK_PROPERTY} to {@code false}, which turns that check
+ * around, so the same class and the same labels time the fused code: then every section must run
+ * as a kernel over every batch, none handed back to the row path, or the run fails rather than
+ * time the row path under the {@code varka on} label.
  *
  * <p>No value raises or overflows. Every timestamp lies within 3,000,000 days of the epoch (about
  * 8,200 years either way), well inside the days the month form's day guard admits
@@ -75,15 +73,12 @@ import org.apache.spark.sql.execution.VarkaProjectExec;
  *   gh workflow run benchmark.yml -f class=VarkaTimestampNtzArithmeticBaselineBenchmark \
  *     -f jdk=25 -f expected-cpu="AMD EPYC 7763"
  *   (and again with -f extra-java-options=-XX:MaxVectorSize=16 for the 128-bit companion;
- *   the after-run adds -Dvarka.baseline.allowFused=true to extra-java-options at both widths)
+ *   the after-run adds -Dvarka.baseline.fuseCheck=false to extra-java-options at both widths)
  * </pre>
  */
 public class VarkaTimestampNtzArithmeticBaselineBenchmark extends VarkaSqlBenchmarkBase {
 
   static final int NUM_ROWS = 2_000_000;
-
-  /** The system property that, set to {@code true}, lets a section be timed though it fuses. */
-  static final String ALLOW_FUSED_PROPERTY = "varka.baseline.allowFused";
 
   /** The farthest a timestamp lies from the epoch, in days. */
   static final long MAX_TIMESTAMP_DAYS = 3_000_000L;
@@ -99,12 +94,15 @@ public class VarkaTimestampNtzArithmeticBaselineBenchmark extends VarkaSqlBenchm
 
   /**
    * A day-time value of {@code days} whole days spread evenly over {@code -maxDays} to
-   * {@code maxDays}, plus a time of day at a microsecond's grain, both from a hash of the row id
-   * with their own seeds, so that each column's values are independent of the others'.
+   * {@code maxDays}, plus a time of day at a microsecond's grain. Each comes from
+   * {@code xxhash64(id, tag)}, which hashes the row id and a per-column tag together under the
+   * function's one fixed seed, 42: the whole days from {@code tag} and the time of day from
+   * {@code tag + 100}. Every column passes a different tag, 0 to 4, so each column's values are
+   * independent of the others'.
    */
-  static String dayTimeSql(long maxDays, int seed) {
-    return "make_dt_interval(cast(pmod(xxhash64(id, " + seed + "), " + (2 * maxDays + 1) + ") - "
-        + maxDays + " as int), 0, 0, cast(cast(pmod(xxhash64(id, " + (seed + 100)
+  static String dayTimeSql(long maxDays, int tag) {
+    return "make_dt_interval(cast(pmod(xxhash64(id, " + tag + "), " + (2 * maxDays + 1) + ") - "
+        + maxDays + " as int), 0, 0, cast(cast(pmod(xxhash64(id, " + (tag + 100)
         + "), 86400000000) as decimal(18, 0)) * 0.000001 as decimal(18, 6)))";
   }
 
@@ -160,14 +158,6 @@ public class VarkaTimestampNtzArithmeticBaselineBenchmark extends VarkaSqlBenchm
     return out;
   }
 
-  /** Whether the session's plan for {@code query} holds a Varka node. */
-  static boolean fuses(SparkSession session, String query) {
-    return session.sql(query).queryExecution().executedPlan().find(
-        p -> p instanceof VarkaColumnarToRowExec || p instanceof VarkaProjectExec
-            || p instanceof VarkaFilterExec || p instanceof VarkaFilterColumnarToRowExec)
-        .isDefined();
-  }
-
   @Override
   public void runBenchmarkSuite(String[] mainArgs) {
     stopLeftoverSessions();
@@ -182,16 +172,9 @@ public class VarkaTimestampNtzArithmeticBaselineBenchmark extends VarkaSqlBenchm
         session.sql(tableSql(NUM_ROWS)).createOrReplaceTempView("varka_ntz_arith");
         VarkaArrowSessions.cache(session, "varka_ntz_arith");
       }
-      // The baseline run refuses a section that fuses; the after-run lifts the check.
-      if (!Boolean.getBoolean(ALLOW_FUSED_PROPERTY)) {
-        for (Section s : sections()) {
-          if (fuses(varka, s.query())) {
-            SparkPlan plan = varka.sql(s.query()).queryExecution().executedPlan();
-            throw new IllegalStateException(s.title() + " fuses, so it is no longer a baseline"
-                + " (set -D" + ALLOW_FUSED_PROPERTY + "=true to time it anyway): " + s.query()
-                + "\n" + plan.treeString());
-          }
-        }
+      // The baseline run refuses a section that fuses; the after-run requires every one to.
+      for (Section s : sections()) {
+        requireBaseline(varka, s.title(), s.query());
       }
       for (Section s : sections()) {
         section(s.title(), () -> {
