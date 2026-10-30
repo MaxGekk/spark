@@ -25,16 +25,21 @@ group outweighs a lane. A bin is one CI job with two lanes, two JVMs at a time o
 four cores, and takes units longest first onto its lighter lane until both lanes reach the
 target. The defaults are a configuration like any other, named `defaults`.
 
-A unit's weight is its suites' seconds, from `sql/varka/matrix/suite-seconds.tsv` where a
-suite is listed there (written by `times` from a fanned-out run's JUnit reports, each suite's
-median over the configurations) and from the pull-request jobs' `sql/varka/ci/suite-times.tsv`
-otherwise, times the configuration's weight over the defaults (`sql/varka/matrix/seconds.tsv`),
-plus a JVM's start. A suite neither file lists weighs the median, so a new suite is placed as
-an ordinary one.
+A unit's weight is its suites' seconds plus a JVM's start. A suite's seconds under one
+configuration are its measured seconds under that configuration where
+`sql/varka/matrix/config-suite-seconds.tsv` lists the pair, since a suite can run several times
+longer under one configuration than under most (a fuzz suite that draws until it has emitted
+enough bytes, say). Otherwise they are the suite's seconds under the defaults times the
+configuration's weight over the defaults (`sql/varka/matrix/seconds.tsv`): the suite's seconds
+from `sql/varka/matrix/suite-seconds.tsv` where a suite is listed there (each suite's median over
+the configurations), from the pull-request jobs' `sql/varka/ci/suite-times.tsv` otherwise, and
+for a suite neither file lists the median, so a new suite is placed as an ordinary one. `times`
+writes both measured files from a fanned-out run's JUnit reports.
 
   dev/varka_matrix_bins.py plan --configurations FILE --suites MODULE=FILE... \\
       [--target SECONDS] > bins.json          # the job matrix, {"include": [...]}
-  dev/varka_matrix_bins.py times [--reach FILE] JUNIT_DIR... > suite-seconds.tsv
+  dev/varka_matrix_bins.py times [--reach FILE] [--per-configuration FILE] JUNIT_DIR... \\
+      > suite-seconds.tsv
   dev/varka_matrix_bins.py --selftest
 
 Each bin's `units` is one line a JVM, `configuration|module|suite,suite,...`, the suites as
@@ -52,6 +57,7 @@ from pathlib import Path
 
 SUITE_TIMES = "sql/varka/ci/suite-times.tsv"
 SUITE_SECONDS = "sql/varka/matrix/suite-seconds.tsv"
+CONFIG_SUITE_SECONDS = "sql/varka/matrix/config-suite-seconds.tsv"
 CONFIG_WEIGHTS = "sql/varka/matrix/seconds.tsv"
 DEFAULTS = "defaults"
 # A runner JVM's start and its first Spark session, before any suite's own time.
@@ -86,6 +92,28 @@ def read_tsv(path):
             continue
         name, value = line.split("\t")[:2]
         out[name] = float(value)
+    return out
+
+
+def run_dir(config):
+    """The directory `dev/varka_matrix.sh` runs a configuration in, under `runs/`: every character
+    but letters, digits and `=_.-` made `_`, so the commas of a combined configuration are `_`
+    too. The JUnit reports name a configuration only this way."""
+    return re.sub(r"[^A-Za-z0-9=_.-]", "_", config)
+
+
+def read_config_seconds(path):
+    """`configuration<TAB>suite<TAB>seconds<TAB>runs` lines as {(run directory, suite): seconds},
+    `#` comments and blank lines aside; empty for a missing file."""
+    out = {}
+    p = Path(path)
+    if not p.exists():
+        return out
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        config, suite, seconds = line.split("\t")[:3]
+        out[(run_dir(config), suite)] = float(seconds)
     return out
 
 
@@ -159,14 +187,19 @@ def reach_share(reach, config, suite):
     return sum(config in m or "*" in m for m in moved) / len(moved)
 
 
-def units(configurations, suites, weight, config_weights, lane, reach=None):
+def units(configurations, suites, weight, config_weights, lane, reach=None, config_seconds=None):
     """Every (configuration, module, suites, seconds) JVM the matrix runs, the defaults first. A
-    suite whose tests a configuration's record leaves all to the defaults is not run under it, and
-    one it runs some tests of weighs that share of its time, a tenth at least, for its set-up."""
+    suite's whole run under a configuration takes its measured seconds there (`config_seconds`,
+    keyed by the configuration's run directory) or else its weight times the configuration's
+    factor. A suite whose tests a configuration's record leaves all to the defaults is not run
+    under it, and one it runs some tests of weighs that share of its whole run, a tenth at least,
+    for its set-up."""
     fill = statistics.median(config_weights.values()) if config_weights else 1.0
+    config_seconds = config_seconds or {}
     out = []
     for config in [DEFAULTS] + list(configurations):
         factor = 1.0 if config == DEFAULTS else config_weights.get(config, fill)
+        directory = run_dir(config)
         for module, listed in suites:
             if not reaches(config, module):
                 continue
@@ -175,7 +208,10 @@ def units(configurations, suites, weight, config_weights, lane, reach=None):
                 share = reach_share(reach, config, name)
                 if share == 0.0:
                     continue
-                seconds = weight(name) * factor * max(share, 0.1)
+                whole = config_seconds.get((directory, name))
+                if whole is None:
+                    whole = weight(name) * factor
+                seconds = whole * max(share, 0.1)
                 if alone:
                     out.append((config, module, [name], JVM_START + seconds))
                 else:
@@ -213,9 +249,19 @@ def pack(all_units, lane):
     return bins
 
 
-def plan(configurations, suites, suite_seconds, suite_times, config_weights, lane, reach=None):
+def plan(
+    configurations,
+    suites,
+    suite_seconds,
+    suite_times,
+    config_weights,
+    lane,
+    reach=None,
+    config_seconds=None,
+):
     weight = suite_weight(suite_seconds, suite_times)
-    bins = pack(units(configurations, suites, weight, config_weights, lane, reach), lane)
+    all_units = units(configurations, suites, weight, config_weights, lane, reach, config_seconds)
+    bins = pack(all_units, lane)
     include = []
     for k, b in enumerate(bins):
         include.append(
@@ -228,15 +274,14 @@ def plan(configurations, suites, suite_seconds, suite_times, config_weights, lan
     return {"include": include}
 
 
-def times(junit_dirs, reach=None):
-    """Each suite's seconds run whole, the median over the configurations that ran every test of it,
-    the defaults among them, from JUnit reports under
+def whole_runs(junit_dirs, reach=None):
+    """Each suite's seconds under each configuration that ran every test of it, the defaults
+    among them, as {(run directory, suite): seconds}, from JUnit reports under
     `<dir>/<configuration>/<module>-.../junit`. With the run's reach record, a configuration
     that ran only the tests the record let through is left out: its time is a share of the
     suite's, and the planner applies that share to the weight itself (`units`), so counting it
-    here too would shrink the weight twice (VARKA-508). The configurations' runs land on the
-    pool's mix of runners, so the median is a run's typical cost of the suite rather than the
-    cost on the fastest or the slowest machine."""
+    here too would shrink the weight twice (VARKA-508). The directories are one run's: a suite's
+    seconds under a configuration add up over them."""
     per_config = {}
     for d in junit_dirs:
         for xml in Path(d).glob("**/*/*/junit/TEST-*.xml"):
@@ -251,11 +296,35 @@ def times(junit_dirs, reach=None):
             config = xml.parent.parent.parent.name
             key = (name.group(1).rsplit(".", 1)[-1], config)
             per_config[key] = per_config.get(key, 0.0) + float(seconds.group(1))
+    return {
+        (config, suite): seconds
+        for (suite, config), seconds in per_config.items()
+        if reach_share(reach, config, suite) == 1.0
+    }
+
+
+def times(junit_dirs, reach=None):
+    """Each suite's seconds run whole, the median over the configurations that ran every test of
+    it (`whole_runs`). The configurations' runs land on the pool's mix of runners, so the median
+    is a run's typical cost of the suite rather than the cost on the fastest or the slowest
+    machine."""
     runs = {}
-    for (suite, config), seconds in per_config.items():
-        if reach_share(reach, config, suite) == 1.0:
-            runs.setdefault(suite, []).append(seconds)
+    for (_, suite), seconds in whole_runs(junit_dirs, reach).items():
+        runs.setdefault(suite, []).append(seconds)
     return {suite: statistics.median(seconds) for suite, seconds in runs.items()}
+
+
+def write_config_seconds(path, seconds, runs=None, header=None):
+    """The file `read_config_seconds` reads, one line a (configuration, suite), the configuration
+    as its run directory names it; `runs` the number of matrix runs each value is from, one for
+    every pair where it is not given."""
+    lines = header or [
+        "# configuration\tsuite\tseconds\truns: a suite's seconds under a configuration that",
+        "# ran all of it, as dev/varka_matrix_bins.py times --per-configuration computes them",
+    ]
+    for (config, suite), value in sorted(seconds.items()):
+        lines.append(f"{config}\t{suite}\t{value:.1f}\t{(runs or {}).get((config, suite), 1)}")
+    Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 class SelfTest(unittest.TestCase):
@@ -338,6 +407,64 @@ class SelfTest(unittest.TestCase):
             self.assertEqual(got, {"A": 110.0, "B": 20.0})
             self.assertEqual(times([Path(root, "runs")]), {"A": 100.0, "B": 20.0})
 
+    def test_times_per_configuration_write_only_whole_runs(self):
+        with tempfile.TemporaryDirectory() as root:
+            for config, suite, secs in [
+                ("defaults", "A", 100),
+                ("x=1", "A", 20),
+                ("w=4", "A", 120),
+                ("w=4_v=5", "B", 30),
+            ]:
+                d = Path(root, "runs", config, "sql-0", "junit")
+                d.mkdir(parents=True, exist_ok=True)
+                Path(d, f"TEST-p.{suite}.xml").write_text(
+                    f'<testsuite name="p.{suite}" time="{secs}" tests="2"/>'
+                )
+            f = Path(root, "reach.tsv")
+            f.write_text("#\tcovers\tx=1\nA\tone\tx=1\nA\ttwo\t-\n")
+            got = whole_runs([Path(root, "runs")], read_reach(f))
+            # x=1 ran one of A's two tests, so it has no whole run of A to record.
+            self.assertEqual(
+                got, {("defaults", "A"): 100.0, ("w=4", "A"): 120.0, ("w=4_v=5", "B"): 30.0}
+            )
+            out = Path(root, "config-suite-seconds.tsv")
+            write_config_seconds(out, got)
+            # The planner reads the comma configuration back by its run directory.
+            self.assertEqual(read_config_seconds(out)[(run_dir("w=4,v=5"), "B")], 30.0)
+            self.assertEqual(read_config_seconds(out), got)
+
+    def test_a_measured_configuration_weighs_its_own_seconds(self):
+        suites = [("sql", [("A", True), ("B", True)])]
+        measured = {("defaults", "A"): 300.0, ("x=1", "A"): 400.0, ("x=1_y=2", "B"): 90.0}
+        got = units(
+            ["x=1", "x=1,y=2", "z=3"],
+            suites,
+            lambda s: 100.0,
+            {"x=1": 2.0, "x=1,y=2": 1.5, "z=3": 3.0},
+            480.0,
+            config_seconds=measured,
+        )
+        ran = {(u[0], u[2][0]): u[3] - JVM_START for u in got}
+        # A measured pair takes its seconds, the factor aside, the defaults included.
+        self.assertEqual(ran[("defaults", "A")], 300.0)
+        self.assertEqual(ran[("x=1", "A")], 400.0)
+        self.assertEqual(ran[("x=1,y=2", "B")], 90.0)
+        # A pair the file does not list falls back to the weight times the factor.
+        self.assertEqual(ran[("defaults", "B")], 100.0)
+        self.assertEqual(ran[("x=1", "B")], 200.0)
+        self.assertEqual(ran[("x=1,y=2", "A")], 150.0)
+        self.assertEqual(ran[("z=3", "A")], 300.0)
+
+    def test_a_measured_configuration_still_runs_only_its_share(self):
+        with tempfile.TemporaryDirectory() as root:
+            f = Path(root, "reach.tsv")
+            f.write_text("#\tcovers\tx=1\nA\tone\tx=1\nA\ttwo\t-\n", encoding="utf-8")
+            reach = read_reach(f)
+        suites = [("sql", [("A", True)])]
+        got = units(["x=1"], suites, lambda s: 100.0, {}, 480.0, reach, {("x=1", "A"): 400.0})
+        # The record lets one of A's two tests through: half of A's measured whole run.
+        self.assertEqual({(u[0], u[2][0]): u[3] for u in got}[("x=1", "A")], JVM_START + 200.0)
+
     def test_a_session_only_configuration_leaves_catalyst_out(self):
         suites = [("sql", [("S", False)]), ("catalyst", [("C", False)])]
         got = units(["arrowBatchSize=1", "cse=false"], suites, lambda s: 10.0, {}, 480.0)
@@ -403,11 +530,18 @@ def main(argv):
     t = sub.add_parser("times")
     t.add_argument("dirs", nargs="+")
     t.add_argument("--reach", help="the run's record: only whole runs of a suite count")
+    t.add_argument(
+        "--per-configuration",
+        metavar="FILE",
+        help="also write each suite's whole runs under each configuration to FILE",
+    )
     args = parser.parse_args(argv)
     if args.cmd == "times":
         reach = read_reach(args.reach) if args.reach and Path(args.reach).is_file() else None
         for name, seconds in sorted(times(args.dirs, reach).items()):
             print(f"{name}\t{seconds:.1f}")
+        if args.per_configuration:
+            write_config_seconds(args.per_configuration, whole_runs(args.dirs, reach))
         return 0
     configurations = [
         c.strip()
@@ -426,6 +560,7 @@ def main(argv):
         read_tsv(CONFIG_WEIGHTS),
         args.target,
         read_reach(args.reach) if args.reach else None,
+        read_config_seconds(CONFIG_SUITE_SECONDS),
     )
     json.dump(out, sys.stdout)
     print()
