@@ -306,8 +306,15 @@ feature per step kind, on row 352's awaiting-refit list, and the budget a weight
    `Murmur3HashFunction` and `XxHash64Function` at seed 42: every `INT` (which covers `DATE`, the
    year-month interval and, by widening, every `TINYINT` and `SMALLINT`), every `FLOAT` pattern,
    and `BOOLEAN`'s two values and null; and every `FLOAT` pattern through `CanonicalFloat` against
-   `FLOAT_NORMALIZER`, applied once and twice. In the nightly, as row 330's sweeps are, each a
-   2^32 run with the reference computed in parallel.
+   `FLOAT_NORMALIZER`, applied once and twice. Each is a 2^32 run with the reference computed in
+   parallel, run by hand in the gate (`dev/varka_nightly.sh` on the laptop), not by a CI workflow.
+   **What holds the `DOUBLE` node**, which 2^64 patterns put past exhaustion: the add half is IEEE
+   754's rule for a sum with `+0.0` (an exact zero of opposite-signed operands is `+0.0` under
+   round-to-nearest, a non-zero operand is returned exactly), and the `FLOAT` sweep is that same
+   rule at the reduced width, the reduced-width cross-check `VARKA-343.md` makes through
+   `binary16`; the blend half is a test of the bits (exponent all ones, fraction non-zero) and a
+   select, stated as a bit-vector claim in `hash.smt2` (3.4); the sampled regions of 3.2 test
+   the two together.
 2. **Sampled 64-bit regions**, bit for bit: the `DOUBLE` patterns of item 5 (the four NaN range
    endpoints, payload NaNs of both signs, both zeros, both infinities, the subnormal edges, the
    extremes) and drawn longs at the powers of two and their negatives, at seed 42 and at drawn
@@ -402,7 +409,16 @@ leaves before 337b; rows 28 and 460, done. Not row 342: the node emits its own a
 **Size: medium, as the row says, plus 337b.** The baseline about half a day, the spike about a
 day, 337a about four days, 337b about three after 359a.
 
-## 6. Ownership
+## 6. What it unlocks in the census, and ownership
+
+Of the 26 pairs of `hash` and `xxhash64` (13 types each, none fused, 0 item 12), 24 count when 337a
+lands, if open point 1 is answered (a): every type but `dec`, each read by a coverage row through
+a fixture column that exists today (`b`, `y1`, `s1`, `i`, `l`, `x`, `f`, `d`, `ntz`, `t`, `ym`,
+`dt`). The two `dec` pairs count only when the hash fuses at every precision up to 38 (2.8's rule,
+`VARKA-359.md` 6), so at 337b; and a decimal coverage row needs a decimal column in the
+differential fixtures, which `coverage.json`'s column list does not hold and row 347 adds. The two
+normalisation entries move nothing (open point 5).
+
 
 | what | owner |
 |---|---|
