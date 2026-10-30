@@ -27,3 +27,10 @@ a step of its own; every other job compiles inside its suites step.
 The option matrix runs its bins at max-parallel 30 (.github/workflows/varka-option-matrix.yml),
 ten of the fork's 40 job slots left for pull requests' Builds, on every run, the weekly
 scheduled one included.
+
+The compile state a Varka job would restore (row 520): every module's target/scala-2.13 on sql's
+test classpath, from a laptop worktree built at 9e1ecf1edf6, 565 MB on disk, 194 MB as the
+gzipped tar the save step writes, packed in 7.5 s. The fork's master ran no Build since August
+(its last, on 21 August, were skipped), and its Actions cache held 9779371843 bytes in 53
+entries against the 10 GB quota, among them a Coursier cache of about 1.1 GB for sql and 1.0 GB
+for catalyst saved by each pull request's branch.

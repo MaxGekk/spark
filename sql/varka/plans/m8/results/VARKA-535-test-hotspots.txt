@@ -1,7 +1,7 @@
 # Two test hot spots (VARKA-535), 30 October 2026, laptop numbers
 
-Two CPU hot spots that the suite profile (`m8/results/VARKA-suite-profile.txt` on the
-`varka-suite-profile` branch, section 5, fixes 2 and 4) found in two catalyst suites, each
+Two CPU hot spots that the suite profile (`m8/results/VARKA-suite-profile.txt`,
+section 5, fixes 2 and 4) found in two catalyst suites, each
 removed without changing an assertion or a test's coverage.
 
 ## 1. VarkaGroupingBoundSuite: one plan per call

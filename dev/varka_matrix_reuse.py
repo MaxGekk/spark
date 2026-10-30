@@ -19,9 +19,10 @@
 Finds the pull request Build's archive of the test classes for the option matrix's build job
 (VARKA-507), so the matrix need not compile them again.
 
-A push of Varka files alone runs the Build's varka-scoped jobs, and the first sql job archives
-sql's test classes, whose classpath holds catalyst's too, as `varka-option-matrix-build`
-(dev/varka_matrix_archive.sh) right after building them. This prints `run=<id>` of the Build
+A push of Varka files alone runs the Build's varka-scoped jobs, and a job of their own beside
+them ("Varka option matrix classes", VARKA-519) archives sql's test classes, whose classpath holds
+catalyst's too, as `varka-option-matrix-build` (dev/varka_matrix_archive.sh) right after building
+them. This prints `run=<id>` of the Build
 run of the commit that has the archive, waiting while a run of that commit may still upload
 one, or `run=` when none will: no Build of the commit, a Build whose changes ran Spark's
 module matrix instead, or a wait past --wait minutes. The matrix compiles for itself then.
@@ -46,15 +47,16 @@ import unittest
 
 ARTIFACT = "varka-option-matrix-build"
 WORKFLOW = ".github/workflows/build_main.yml"
-JOB = "Varka suites: sql 1 of 3"
+JOB = "Varka option matrix classes"
 UPLOAD = "Upload the test classes for the option matrix"
 # The scoped jobs that record: the sql ones (build_and_test.yml says why not the catalyst ones).
 SCOPED = "Varka suites: sql "
 REACH = "varka-matrix-reach-"
 PRECONDITION = "Check changes"
-# How long a Build gets to start its sql job: a run not yet created, a precondition still
-# deciding or a job still queued behind a full fork. Only a job that has started compiling earns
-# the whole wait, since a queued one may hold the matrix past the time it takes to compile.
+# How long a Build gets to start the job that builds the classes: a run not yet created, a
+# precondition still deciding or a job still queued behind a full fork. Only a job that has
+# started compiling earns the whole wait, since a queued one may hold the matrix past the time it
+# takes to compile.
 START_MINUTES = 5.0
 
 
@@ -108,7 +110,7 @@ def find(repository, sha, wait_minutes, sleep=time.sleep, now=time.monotonic):
         if runs and all(s == "none" for s in states.values()):
             return None, f"no Build of this commit archives the test classes{waited()}"
         if "started" not in states.values() and now() >= start + START_MINUTES * 60:
-            what = "has started its sql job" if runs else "has started"
+            what = "has started its job" if runs else "has started"
             return None, f"no Build of this commit {what}{waited()}"
         if now() >= deadline:
             return None, f"no archive within {wait_minutes:g} minutes"
@@ -141,7 +143,7 @@ class SelfTest(unittest.TestCase):
         self.assertEqual(verdict(self.RUN, [], [check]), "pending")
         check = dict(check, status="completed")
         self.assertEqual(verdict(self.RUN, [], [check]), "none")
-        job = {"name": "Run / Varka suites: sql 1 of 3", "status": "queued"}
+        job = {"name": "Run / " + JOB, "status": "queued"}
         self.assertEqual(verdict(self.RUN, [], [check, job]), "pending")
         job = dict(job, status="in_progress")
         self.assertEqual(verdict(self.RUN, [], [check, job]), "started")
@@ -194,12 +196,12 @@ class SelfTest(unittest.TestCase):
 
     def test_a_queued_sql_job_gets_the_short_wait(self):
         run = {"id": 1, "path": WORKFLOW, "status": "in_progress"}
-        job = {"name": "Run / Varka suites: sql 1 of 3", "status": "queued", "steps": []}
+        job = {"name": "Run / " + JOB, "status": "queued", "steps": []}
         self.assertEqual(self.fake_find([run], [job], 25), (None, START_MINUTES * 60))
 
     def test_a_started_sql_job_is_waited_for_until_the_deadline(self):
         run = {"id": 1, "path": WORKFLOW, "status": "in_progress"}
-        job = {"name": "Run / Varka suites: sql 1 of 3", "status": "in_progress", "steps": []}
+        job = {"name": "Run / " + JOB, "status": "in_progress", "steps": []}
         self.assertEqual(self.fake_find([run], [job], 25), (None, 1500.0))
 
 

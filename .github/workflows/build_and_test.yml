@@ -1375,13 +1375,97 @@ jobs:
   # to 49 minutes for catalyst and 29 to 40 for sql on 23 October 2026. What a full run of the matrix costs for the same change is the measurement the task
   # records: this pair is meant to finish in about a third of its wall time and a fraction of
   # its job-minutes, and the precondition's verdict is what a reader checks when it does not.
+  # The option matrix dispatched on this commit takes its test classes from here rather than
+  # compiling them again (VARKA-507, dev/varka_matrix_reuse.py): this job builds sql's test
+  # classes, whose classpath holds catalyst's too, as the matrix's build job would, and archives
+  # them. It runs beside the Varka suites rather than in one of them, where it held that job
+  # about five minutes past the others (VARKA-519). It is an optimization of another workflow, so
+  # none of its steps fails the run: without its archive the matrix compiles for itself.
+  varka-matrix-classes:
+    needs: [precondition]
+    if: fromJson(needs.precondition.outputs.required).varka-scoped == 'true'
+    name: "Varka option matrix classes"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - name: Bootstrap composite actions
+      uses: actions/checkout@v6
+    - name: Checkout and sync Spark repository
+      uses: ./.github/actions/checkout-and-sync
+      with:
+        ref: ${{ needs.precondition.outputs.head_sha }}
+    - name: Cache SBT and Maven
+      uses: actions/cache@v4
+      with:
+        path: |
+          build/apache-maven-*
+          build/*.jar
+          ~/.sbt
+        key: build-${{ hashFiles('**/pom.xml', 'project/build.properties', 'build/mvn', 'build/sbt', 'build/sbt-launch-lib.bash', 'build/spark-build-info') }}
+        restore-keys: |
+          build-
+    - name: Cache Coursier local repository
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/coursier
+        key: varka-scoped-coursier-sql-${{ hashFiles('**/pom.xml', '**/plugins.sbt') }}
+        restore-keys: |
+          varka-scoped-coursier-sql-
+    - name: Install Java ${{ inputs.java }}
+      uses: actions/setup-java@v5
+      with:
+        distribution: zulu
+        java-version: ${{ inputs.java }}
+    # Where a recent Build saved its compile state, this job starts from it and sbt compiles only
+    # what differs from it; without one, or with one sbt cannot use, it compiles clean as before
+    # (VARKA-520, dev/varka_compile_state.py). An optimization, so none of these steps fails the
+    # job.
+    - name: Find a saved compile state
+      id: compile-state
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        ./dev/varka_compile_state.py "$GITHUB_REPOSITORY" >> "$GITHUB_OUTPUT" \
+          || echo "run=" >> "$GITHUB_OUTPUT"
+    - name: Download the compile state
+      if: steps.compile-state.outputs.run != ''
+      continue-on-error: true
+      uses: actions/download-artifact@v4
+      with:
+        name: varka-compile-state
+        path: target/varka-compile-state
+        run-id: ${{ steps.compile-state.outputs.run }}
+        github-token: ${{ github.token }}
+    - name: Unpack the compile state
+      if: steps.compile-state.outputs.run != ''
+      continue-on-error: true
+      run: |
+        tar -xzf target/varka-compile-state/varka-compile-state.tgz
+        rm -rf target/varka-compile-state
+        echo "== the compile state of Build run ${{ steps.compile-state.outputs.run }}"
+    - name: Build the test classes for the option matrix
+      continue-on-error: true
+      run: |
+        ./dev/varka_matrix.sh --defaults --module sql --build-only --sbt-arg -Phive \
+          --out target/varka-scoped
+        ./dev/varka_matrix_archive.sh pack target/varka-scoped target/varka-matrix-build.tar
+    - name: Upload the test classes for the option matrix
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: varka-option-matrix-build
+        path: target/varka-matrix-build.tar
+        retention-days: 1
+        compression-level: 1
+
   varka-scoped:
     needs: [precondition]
     if: fromJson(needs.precondition.outputs.required).varka-scoped == 'true'
     name: "Varka suites: ${{ matrix.module }} ${{ matrix.part }}"
     runs-on: ubuntu-latest
-    # The suites under the defaults, then one option configuration, and on its failure the same
-    # on the merge base, which builds a second tree.
+    # The suites under the defaults; a pull request's option configurations are its dispatched
+    # option matrix's (VARKA-521). A fix's new tests also build the merge base, a second tree.
     timeout-minutes: 150
     strategy:
       fail-fast: false
@@ -1458,36 +1542,39 @@ jobs:
         restore-keys: |
           varka-scoped-times-${{ matrix.module }}-${{ matrix.slug }}-
           varka-scoped-times-${{ matrix.module }}-
+    # Where a recent Build saved its compile state, this job starts from it and sbt compiles only
+    # what differs from it; without one, or with one sbt cannot use, it compiles clean as before
+    # (VARKA-520, dev/varka_compile_state.py). An optimization, so none of these steps fails the
+    # job.
+    - name: Find a saved compile state
+      id: compile-state
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        ./dev/varka_compile_state.py "$GITHUB_REPOSITORY" >> "$GITHUB_OUTPUT" \
+          || echo "run=" >> "$GITHUB_OUTPUT"
+    - name: Download the compile state
+      if: steps.compile-state.outputs.run != ''
+      continue-on-error: true
+      uses: actions/download-artifact@v4
+      with:
+        name: varka-compile-state
+        path: target/varka-compile-state
+        run-id: ${{ steps.compile-state.outputs.run }}
+        github-token: ${{ github.token }}
+    - name: Unpack the compile state
+      if: steps.compile-state.outputs.run != ''
+      continue-on-error: true
+      run: |
+        tar -xzf target/varka-compile-state/varka-compile-state.tgz
+        rm -rf target/varka-compile-state
+        echo "== the compile state of Build run ${{ steps.compile-state.outputs.run }}"
     # The lane walk of the docs job (VARKA-474 2.3), here too: the files it reads are Varka
     # sources, whose changes run this job and not the docs one. It runs in a second.
     - name: Every lane and type is wired where no compiler checks
       if: matrix.module == 'catalyst' && matrix.shard == '0/3'
       run: ./dev/varka_new_lane.py --check
-    # The option matrix dispatched on this commit takes its test classes from here rather than
-    # compiling them again (VARKA-507, dev/varka_matrix_reuse.py): the first sql job builds sql's
-    # test classes, whose classpath holds catalyst's too, as the matrix's build job would, and
-    # archives them before its suites run. The suites step's own build then finds nothing to do.
-    # The three steps are an optimization of another workflow, so none of them fails this job.
-    - name: Build the test classes for the option matrix
-      if: matrix.module == 'sql' && matrix.shard == '0/3'
-      continue-on-error: true
-      run: |
-        ./dev/varka_matrix.sh --defaults --module sql --build-only --sbt-arg -Phive \
-          --out target/varka-scoped
-        ./dev/varka_matrix_archive.sh pack target/varka-scoped target/varka-matrix-build.tar
-    - name: Upload the test classes for the option matrix
-      if: matrix.module == 'sql' && matrix.shard == '0/3'
-      continue-on-error: true
-      uses: actions/upload-artifact@v4
-      with:
-        name: varka-option-matrix-build
-        path: target/varka-matrix-build.tar
-        retention-days: 1
-        compression-level: 1
-    - name: Remove the archive of the test classes
-      if: matrix.module == 'sql' && matrix.shard == '0/3'
-      continue-on-error: true
-      run: rm -f target/varka-matrix-build.tar
     # The sql suites record, as they run at the defaults, which option configurations move each
     # test (VarkaTestReach), so that the option matrix dispatched on this commit runs a
     # configuration only over the tests it moves (VARKA-507). The catalyst suites do not: their
@@ -1499,6 +1586,25 @@ jobs:
           export VARKA_REACH_RECORD=$PWD/target/varka-reach.tsv
         fi
         ./dev/varka_scoped_suites.sh ${{ matrix.module }} --shard ${{ matrix.shard }}
+    # sql's first job saves the compile state its suites ran on, every module's target/scala-2.13,
+    # for the next Builds to start from (VARKA-520). sql's classpath holds catalyst's, so this one
+    # state serves every Varka job.
+    - name: Save the compile state
+      if: matrix.module == 'sql' && matrix.shard == '0/3'
+      continue-on-error: true
+      run: |
+        find . -path ./target -prune -o -type d -path '*/target/scala-2.13' -print \
+          | tar -czf target/varka-compile-state.tgz -T -
+        ls -l target/varka-compile-state.tgz
+    - name: Upload the compile state
+      if: matrix.module == 'sql' && matrix.shard == '0/3'
+      continue-on-error: true
+      uses: actions/upload-artifact@v4
+      with:
+        name: varka-compile-state
+        path: target/varka-compile-state.tgz
+        retention-days: 3
+        compression-level: 0
     - name: Upload the record of which configurations move each test
       if: matrix.module == 'sql'
       continue-on-error: true
@@ -1541,12 +1647,6 @@ jobs:
           echo "emitted bytes: changed since $base, on these lines of sql/varka/emitted_bytes.json:"
           git diff --stat "$base" HEAD -- sql/varka/emitted_bytes.json
         fi | tee -a "$GITHUB_STEP_SUMMARY"
-    # The option matrix's share of a pull request (VARKA-248.md 3.2.8): this module's suites
-    # under one emit option configuration beside the defaults - an option the diff names, or
-    # one the branch name hashes to - and, if it fails, the same on the merge base, so that a
-    # red step means this change. The weekly varka-option-matrix workflow runs all of them.
-    - name: The Varka suites of ${{ matrix.module }} under one emit option configuration
-      run: ./dev/varka_matrix_ci.sh ${{ matrix.module }}
     # The tests this change adds, rerun five times on the suites step's build, a seeded fuzz under
     # four other seeds; and for a pull request labelled `fix`, its new tests run once on the merge
     # base's main sources, where each must fail (VARKA-255.md 3.4). A run of master has no new
