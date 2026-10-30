@@ -158,8 +158,9 @@ load's `10^p` check. A primitive gets a template (2.2). A composite gets none: i
 
 **The lowering function.** Each composite has one pure function from the node to a graph of
 primitive nodes, `VarkaDecimalLowering.lower(node, faults)`, over one new leaf, `WordConst(long
-value, LaneType lane)`, a constant the emitter materialises with `loadConstant` as `emitBitCount` does, so a
-mask or a shift count stays a constant in C2's graph and `vpmuludq` is kept (361's item 0.7). The
+value, LaneType lane)`, a constant the emitter materialises with `loadConstant` as
+`emitBitCount` does, so a mask or a shift count stays a constant in C2's graph and `vpmuludq` is
+kept (361's item 0.7). The
 emitter emits a composite by lowering it and walking the result with its ordinary per-node
 emission, the shared limb products parked once by the walk's shared-node rule; the printer
 renders the same result. A `BitOp` shift whose right operand is a `WordConst` is emitted as
@@ -449,9 +450,10 @@ The order is the lead's (point 6): 506a and 506b after 359a, 506c after 360b.
 2. **`WordConst`, the leaf the lowerings build on**, in 506b, the first pull request that writes a
    lowering function (*settled, the lead, 30 October 2026*: 359a emits its load check from the
    walk as its plan says, and 506b moves the check into a lowering, the emitted-bytes oracle
-   holding the move, so a planned row grows no new step). A new IR record reaches every switch over the node types (row 489's section
-   0 lists 43), and rows 431 to 433 found nodes that reached the compiler but not the fuzzer or
-   the cost model; so the step carries all of these, not the record alone:
+   holding the move, so a planned row grows no new step). A new IR record reaches every switch
+   over the node types (row 489's section 0 lists 43), and rows 431 to 433 found nodes that
+   reached the compiler but not the fuzzer or the cost model; so the step carries all of these,
+   not the record alone:
    - **the record** in `VarkaVectorIR`, `WordConst(long value, LaneType lane)`, its arms in
      `childrenOf`, `withChildren`, `canonical` and `laneType`, and its `props()` if 489 has landed
      (validity all-true, ring `Never`, weight that of `LiteralSlot`);
