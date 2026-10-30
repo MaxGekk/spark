@@ -118,17 +118,20 @@ The sources of each cell:
     source, naming this row; 349's guarded `CheckOverflow` - `GuardedRange(x, -(10^(p - k) - 1),
     10^(p - k) - 1, d)` before `rescale(x, k)` - is the rescale up with an overflow, and its
     question 1 recommends building it only for 350 and 360.
-14. **The double rule equals the exact rule below precision 17 [A].** Under (iii) the three ANSI
-    and TRY casts follow the double rule at every precision. For `x = u / 10^s` with `abs(u) <
-    10^p` and `s >= 1`, `RN(x)` can only change `trunc(x)` or the range decision by crossing an
-    integer `n` with `0 < n - abs(x)`, and that distance is at least `10^-s` while half an ulp of
-    `x` is at most `2^(e - 53)` with `2^e <= abs(x) < 10^(p - s)`; a crossing needs an integer `e`
-    with `2^53 <= 2^e * 10^s < 10^p`, and none exists for `p <= 16` (`s = 0` is an integer, exact
-    below `2^53` and out of every narrow target's range above it). At `p = 17` there are 57 such
-    `(s, e)` pairs and at 18, 120. A draw around every integer boundary agrees: the two rules differ
-    only at precision 17 and 18, first at unscaled `20643709109999999` at scale 7 to `INT` (exact
-    2064370910, double 2064370911), `16887999999999999` at scale 12 to `SMALLINT` and
-    `-12899999999999999` at scale 14 to `TINYINT` (exact -128, double overflow).
+14. **The double rule equals the exact rule below precision 17 [A].** Under (iii) the three ANSI and
+    TRY casts follow the double rule at every precision. **The reason is an argument:** for `x = u /
+    10^s` with `abs(u) < 10^p` and `s >= 1`, `RN(x)` can only change `trunc(x)` or the range
+    decision by crossing an integer `n` with `0 < n - abs(x)`; that distance is at least `10^-s`,
+    while half an ulp of `x` is at most `2^(e - 53)` with `2^e <= abs(x) < 10^(p - s)`; so a
+    crossing needs an integer `e` with `2^e * 10^s` in `[2^53, 10^p)`, and none exists for `p <= 16`
+    (`s = 0` is an integer, exact below `2^53` and out of every narrow target's range above it). At
+    `p = 17` there are 57 such `(s, e)` pairs and at 18, 120. **A draw confirms it and is not
+    exhaustive:** sampled around every integer boundary, the two rules differ only at precision 17
+    and 18, first at unscaled `20643709109999999` at scale 7 to `INT` (exact 2064370910, double
+    2064370911), `16887999999999999` at scale 12 to `SMALLINT` and `-12899999999999999` at scale 14
+    to `TINYINT` (exact -128, double overflow). **The layers:** SMT proves the integer rule; the
+    argument, with the draw as confirmation, shows that the two rules agree below 17; and the
+    sampled checks against Spark's own `Cast` run at every precision regardless.
 15. **The constant division's gap, as a table [A].** `trunc(u / 10^k)` is `sign(u) *
     floor((abs(u) >> k) / 5^k)`, and `abs(u) >> k` reaches `2^52` only at `(p, k)` = (16, 1),
     (17, 1 to 4) and (18, 1 to 7); the `HALF_UP` dividend with the half added first reaches it at
@@ -148,41 +151,46 @@ The sources of each cell:
     covers decimal with integral, decimal, `BOOLEAN`, `DOUBLE` and `FLOAT`: 13 pairs (8 from a
     decimal and 5 to one, counting `BIGINT` to decimal, whose `(20, 0)` coercion type is 360's). The
     file also gives 350 the two floating sources (346's construction), the four interval pairs and
-    `TIME` to decimal (a rescale or a unit division), and `DATE` to decimal (LEGACY's null). Open
-    point 4.
+    `TIME` to decimal (a rescale or a unit division), and `DATE` to decimal (LEGACY's null). The
+    six are not this row's (settled by the lead): 350a marks them unclaimed (section 7).
 
 ### What differs from the row text and the milestone plan
 
-- **The double rule is computed as the exact rule below precision 17** (item 14). The semantics are
-  the owner's answer - the double rule at every precision - and the kernel's answer is that rule's
-  at every input; what changes is the lowering and the proof: below 17 the three casts are integer
-  arithmetic proven by SMT, the equivalence proven by item 14's argument and its table, and the
-  sampled arm still runs at every precision. Only `DECIMAL(17, s)` and `DECIMAL(18, s)` take the
-  double through 366's arm. Open point 1.
+- **The double rule is computed as the exact rule below precision 17** (item 14), a refinement put
+  to the owner as question 1 of section 8, not a departure: the semantics are the owner's answer -
+  the double rule at every precision - and the kernel's answer is that rule's on every input; what
+  changes is the lowering and what proves it. Two thresholds follow, for two different casts:
+  **decimal to an integral type** needs the double only at `p >= 17`, and **decimal to a floating
+  type** needs 366's arm at `p >= 16`.
 - **The double rule is the composition of two casts.** `roundToNumeric`'s accepted interval and
   value are 343's `DOUBLE` to `INT`, `SMALLINT` and `TINYINT` bounds and truncation
   (`VARKA-343.md` 2.4), so the three casts at precision 17 and 18 are this row's `DOUBLE` cast
   followed by 343's ANSI or TRY floating-to-integral tree, with no node of their own (2.3).
 - **The `DOUBLE` and `FLOAT` guards become precision rules** (item 16): at `p <= 15` the double
   quotient is always correctly rounded, at `p <= 7` the float quotient; `FLOAT` between 8 and 15 is
-  round-to-odd over the double quotient on every lane, with no guard. A lane-wise guard remains only
-  at `p >= 16`, and there it is `abs(u) <= 2^53`, Trino's form (`READING_TRINO_DECIMAL.md` 7), not
-  2.2's `(long) (double) u == u`, which costs an `L2D` and a `D2L` - both the Java fallback on the
-  EPYC 7763 (`results/VARKA-376-census-epyc-7763.json`) - to admit the few large values with
-  trailing binary zeros. `Long.MAX_VALUE`, which 2.2 excludes, is outside every precision up to 18.
-  Open point 7.
-- **The `k = 1..7` guard declines most of a `DECIMAL(18, s)`** (item 15), so whether the guard or
-  the 64-bit limb magic is the default arm is a measurement, and the limb magic is also row 30's
-  option. Open point 5.
-- **The `DOUBLE` quotient needs 342's floating division, and the `FLOAT` round-to-odd an FMA node**
-  that no row has built (item 11). The F3 row names 365, 341 and 343 as this row's predecessors;
-  342 is one too, and the FMA node is this row's (2.4). Open point 8.
+  round-to-odd over the double quotient on every lane, and at 16 to 18 both targets take 366's arm
+  on every lane, so the default kernel has no lane guard at all. Wherever a guard is used (366's
+  possible per-batch option, `VARKA-366.md` 7) it is `abs(u) <= 2^53`, Trino's form
+  (`READING_TRINO_DECIMAL.md` 7), the cheaper one, settled by the lead; 2.2's `(long) (double) u ==
+  u` costs an `L2D` and a `D2L`, both the Java fallback on the EPYC 7763
+  (`results/VARKA-376-census-epyc-7763.json`). 2.2's wording is the owner's text and is flagged in
+  section 8, not edited; `casts.tsv`'s semantics column for the two floating pairs changes in 350a's
+  pull request. `Long.MAX_VALUE`, which 2.2 excludes, is outside every precision up to 18.
+- **The `k = 1..7` guard declines most of a uniform `DECIMAL(18, s)`** (item 15). Both division
+  arms are built and measured, the default taken from the runner; the limb arm's product is row
+  360b's `WideMul`, so the guard ships first and the limb arm after 360b (2.2).
+- **The `DOUBLE` quotient needs row 342's floating division** (`IntOp.DIV`, F2, planned), and the
+  F3 wave row names only 365, 341 and 343 as this row's predecessors; that is the owner's text,
+  flagged in section 8. **The `FLOAT` round-to-odd at 8 to 15 needs an FMA node that no row
+  builds**: `VARKA-342.md` mentions FMA only to say C2 contracts none (its 0). Row 342 is the
+  natural owner (floating arithmetic, the earliest wave); this row does not build one, and until one
+  exists `FLOAT` at 8 to 15 takes 366's arm, whose `FLOAT` form needs no FMA (`VARKA-366.md` 2.2).
 - **Every integral source into precision 18 is this row's**, coercion's `(3, 0)`, `(5, 0)` and `(10,
   0)` included (settled by the lead, 30 October 2026: row 360's plan declines them naming 350, and
   348's and 349's plans decline `i < d9` naming 350); `(20, 0)` stays 360's. The owner's row texts
   still both claim them (section 7).
 - **No product of this row's own.** The rescales multiply by `10^k` within 64 bits; the one multiply
-  wider than 64 bits, the high word of `LIMB_MAGIC`'s product (2.2), is row 360's `WideMul` over a
+  wider than 64 bits, the high word of `LIMB_MAGIC`'s product (2.2), is row 360b's `WideMul` over a
   constant multiplier, which this row calls and does not build.
 
 ## 1. Goal and non-goal
@@ -193,7 +201,7 @@ read through `ArrowColumnVector`: integer rules by integer arithmetic proven by 
 targets correctly rounded, the three narrow ANSI and TRY casts by the double rule. An ANSI batch
 Spark raises on declines and the row engine raises; TRY's nulls are the kernel's. Not this row: the
 exact arm itself (366), precision above 18 (359, 360, 363, 364), floating to decimal (346), the
-interval, `TIME` and `DATE` pairs (open point 4), a `BOOLEAN` output value (27), a decimal output
+interval, `TIME` and `DATE` pairs (section 7), a `BOOLEAN` output value (27), a decimal output
 store (157), a negative scale.
 
 ## 2. Design
@@ -205,7 +213,10 @@ boolean and floating targets, both keyed by (source, target) on 332's pattern, i
 `VarkaDecimalCastCompiler` under a family `DECIMAL_CAST` (`varka/VarkaFamily.java`) with its switch,
 as 332 has `INTEGRAL_CAST` and 343 `FLOATING_CAST`. Coercion's widening rescale stays 348's, so
 switching the family off leaves 348's comparisons fused. Every arm takes a column and a
-`LiteralSlot` child alike, the rule 332 (its 2.6) states for row 368's harness.
+`LiteralSlot` child alike, the rule 332 (its 2.6) states for row 368's harness. Two precision
+thresholds appear below and must not be confused: the narrow ANSI and TRY casts to an integral type
+take the double only at `p >= 17` (2.3), and the casts to a floating type take 366's arm at `p >=
+16` (2.4).
 
 | kind | tree, over `x = value(child)` and its `(p, s)` | pairs |
 |---|---|---|
@@ -227,9 +238,9 @@ where LEGACY has no guard. An integral `v` is first widened to the long lane: `W
 are the target's, from 332's table in `VarkaTypes`. Each guard is dropped where the compiler proves
 it dead, the compile-time exemption 364's text and `READING_ARROW_RS.md` 1 and 3.6 name: a rescale
 up with `p1 <= p2 - k`, a rescale down with `p1 - k < p2`, a precision change with `p1 <= p2`, an
-integral source whose `forType` digits are at most `p - s`, a narrow target whose range holds `10^(p
-- s) - 1` (`p - s <= 9` for `INT`, 4 for `SMALLINT`, 2 for `TINYINT`), and a boolean source into `p
-> s`. Every guarded rescale names its overflow defence as the 28 October rule asks:
+integral source whose `forType` digits are at most `p - s`, a narrow target whose range holds
+`10^(p - s) - 1` (`p - s <= 9` for `INT`, 4 for `SMALLINT`, 2 for `TINYINT`), and a boolean source
+into `p > s`. Every guarded rescale names its overflow defence as the 28 October rule asks:
 **guard-the-inputs** for the rescale up and the scale up, whose guard is the target's precision
 check moved before the multiply, exact by 349's lemma (`abs(x * 10^k) <= 10^p - 1` exactly when
 `abs(x) <= 10^(p - k) - 1`); **check-after with no wrap possible** for the rescale down, whose
@@ -255,20 +266,23 @@ unchanged, and as an output root it is 157's `WidenDecimal` over the unscaled lo
   `decimalDivisionForm` (`Reason.MACHINE`) picks: `GUARD`, a `GuardedRange(m, 0, 2^(52 + k) - 1,
   FAIL)` before the shift, whose declined batch the row engine computes; or `LIMB_MAGIC`, the 64-bit
   magic multiply for `10^k` with Lemire, Bartlett and Kaser's exact bound (2.8), its high word row
-  360's `WideMul` by the constant (four `vpmuludq`), exact over every `m < 2^63` and with no guard,
-  so this arm lands after 360's `WideMul`. The default is a
-  measurement (section 4), open point 5.
+  360b's `WideMul` by the constant (four `vpmuludq`), exact over every `m < 2^63` and with no guard.
+  Both are built and measured, and the default comes from the runner (section 4). **The order is a
+  sequence, not a defect:** `GUARD` ships first, and `LIMB_MAGIC` lands after 360b. Until then a
+  cast at one of the twelve pairs - precision 16 to 18 at the small `k` of item 0.15 - declines most
+  batches of a uniform column to the row engine, which computes them: at `p = 18`, `k = 1` the guard
+  admits 0.0090 of the lanes.
 
 ### 2.3 The three narrow casts under ANSI and TRY
 
 - **`p <= 16`: the exact rule.** `NarrowLane(GuardedRange(tdiv(u, s), MIN, MAX, d), target)`, 332's
   narrow shape over the truncated long, `d` `FAIL` for ANSI and `NULL` for TRY. By item 0.14 its
   answer is the double rule's on every input.
-- **`p` 17 and 18: the double rule.** `NarrowLane(ConvertLane(GuardedRange(toDouble(x), lo, hi,
-  d), INT), target)` for `SMALLINT` and `TINYINT`, without the `NarrowLane` for `INT`, where `lo`
-  and `hi` are 343's floating bounds for a `DOUBLE` source (`VARKA-343.md` 2.4: `[nextUp(-2^31 -
-  1), nextDown(2^31)]` and the narrow targets' kin) and `toDouble` is 2.4's, taking 366's exact arm
-  where its guard fails. The kernel is long-driven with a double node beside the long ones, 343's
+- **`p` 17 and 18: the double rule.** `NarrowLane(ConvertLane(GuardedRange(toDouble(x), lo, hi, d),
+  INT), target)` for `SMALLINT` and `TINYINT`, without the `NarrowLane` for `INT`, where `lo` and
+  `hi` are 343's floating bounds for a `DOUBLE` source (`VARKA-343.md` 2.4: `[nextUp(-2^31 - 1),
+  nextDown(2^31)]` and the narrow targets' kin) and `toDouble` is 2.4's, 366's exact arm on every
+  lane at these precisions. The kernel is long-driven with a double node beside the long ones, 343's
   width rule (`VARKA-343.md` 2.2).
 - **LEGACY** at every precision is `NarrowLane(tdiv(u, s), target)`: Java's narrowing of the
   truncated long, `L2I` and 332's narrow wrap. **`BIGINT`** in every mode is `tdiv(u, s)`, one
@@ -283,15 +297,15 @@ by construction (item 0.3).
 |---|---|---|
 | either | `s = 0`, any `p` | `ConvertLane(u, DOUBLE)` or `ConvertLane(u, FLOAT)`: one rounding of the exact value, 343's `L2D` and `L2F` |
 | `DOUBLE` | `p <= 15` | `IntOp.DIV(ConvertLane(u, DOUBLE), 10^s)`, one rounding of exact operands |
-| `DOUBLE` | 16 to 18 | 366's arm, by its `decimalToFloatingArm` (the row's per-batch form behind the guard `abs(u) <= 2^53`, or the arm on every lane) |
+| `DOUBLE` | 16 to 18 | 366's arm on every lane, one body, no guard |
 | `FLOAT` | `p <= 7` | `IntOp.DIV(ConvertLane(NarrowLane(u, INT), FLOAT), 10^s)` in float, `s <= 7 <= 10` |
-| `FLOAT` | 8 to 15 | round-to-odd: `q = IntOp.DIV(ConvertLane(u, DOUBLE), 10^s)`, `r = Fma(-q, 10^s, u_d)`, `q` moved to its odd neighbour toward `r`'s sign where `r != 0` and `q`'s last bit is 0, then `ConvertLane(q, FLOAT)` |
-| `FLOAT` | 16 to 18 | 366's binary32 arm, as for `DOUBLE` (`s >= 1` in both rows, the first row taking `s = 0`) |
+| `FLOAT` | 8 to 15 | round-to-odd: `q = IntOp.DIV(ConvertLane(u, DOUBLE), 10^s)`, `r = fma(-q, 10^s, u_d)` by an FMA node (owner to be settled, below), `q` moved to its odd neighbour toward `r`'s sign where `r != 0` and `q`'s last bit is 0, then `ConvertLane(q, FLOAT)`; 366's arm until an FMA node exists |
+| `FLOAT` | 16 to 18 | 366's arm, its binary64 sequence with a round-to-odd output and one narrowing (`s >= 1` in both 366 rows, the first row taking `s = 0`) |
 
 The float quotient converts through the int lane because `I2F` is intrinsic on every host and `L2F`
 is the fallback on the EPYC 7763 (item 0.11's census file); at `p <= 7` the value fits an int. At
 `p <= 15` `abs(u) < 2^51`, so 343's bounded magic `L2D` is exact there with no guard on AVX2, and
-the compiler states that bound (open point 7 records the choice). Round-to-odd is 2.2's
+the compiler states that bound. Round-to-odd is 2.2's
 construction: `q = RN(u / 10^s)` with both operands exact, `r = fma(-q, 10^s, u)` the exact
 remainder, the odd neighbour chosen by `r`'s sign, then one `D2F` (Boldo and Melquiond's Theorem 3,
 53 bits against 24 + 2; the theorem is quoted from the paper's transcription that 343 step 4 adds,
@@ -299,12 +313,13 @@ not from memory). **Never the double quotient narrowed**: 2.2's `DECIMAL(16, 14)
 64.00001907348633 is a named test, and Trino's `391462049447` at scale 14
 (`READING_TRINO_DECIMAL.md` 10 item 5) another.
 
-**The FMA node.** `Fma(a, b, c)` at the floating lanes, `a * b + c` rounded once, lowered to
-`lanewise(FMA)`, evaluated by the reference with `Math.fma`, drawn by the IR fuzzer in a sequence of
-its own seed; no SQL expression maps to it. The census reads `double.FMA` intrinsic at 512, 256 and
-128 bits on the laptop and at 256 and 128 on the EPYC 7763. 342's plan holds that C2 makes `FmaVD`
-only from an explicit FMA (`VARKA-342.md` 0), so the node is the only place one appears. Row 346's
-one-FMA remainder reuses it.
+**The FMA node, which this row does not build.** The round-to-odd remainder needs `fma(a, b, c)` at
+the double lane, `lanewise(FMA)`, intrinsic at 512, 256 and 128 bits on the laptop and at 256 and
+128 on the EPYC 7763 by the census. No row's plan builds one: `VARKA-342.md` mentions FMA only to
+say C2 makes `FmaVD` from an explicit FMA alone (its 0), so a node is the only place one would
+appear. Row 342 is its natural owner, floating arithmetic in the earliest wave; row 346's one-FMA
+remainder would reuse it. Until it exists, `FLOAT` at 8 to 15 takes 366's arm, correct there too, so
+no pair waits on it; the gap is flagged in section 8.
 
 **The bit step.** "`q`'s last bit" and its odd neighbour are a reinterpretation of the double's bits
 and a `+-1` on them; 343's AVX2 forms (`VARKA-343.md` 2.3) already reinterpret both ways, and this
@@ -324,10 +339,11 @@ row uses the same operators.
 At two long lanes on x86 every long compare and blend is the Java fallback (`m7` row 374); the rule
 is 347's answered question 4 as 348's 2.8 applies it: the casts fuse there as the long projections
 do, a condition root under row 503's decline if it lands, and the measurement reports them. The
-reference evaluator needs `Fma`; `GuardedRange`'s `NULL` arm is 481's and its floating arm 343's.
-The cost model gains a feature for each division form and for `Fma`, on row 352's awaiting-refit
-list; the budget weighs them by operation count until the fit. The warm-up's long block gains the
-pre-shift and `vpmuludq` forms and its double block `FMA`, held by `VarkaWarmupReachSuite`.
+reference evaluator needs nothing new; `GuardedRange`'s `NULL` arm is 481's and its floating arm
+343's.
+The cost model gains a feature for each division form, on row 352's awaiting-refit list; the
+budget weighs them by operation count until the fit. The warm-up's long block gains the pre-shift
+form, held by `VarkaWarmupReachSuite`.
 
 ## 3. Tests and proofs
 
@@ -431,28 +447,35 @@ Predictions, registered before the build:
 
 ## 5. Order, files and size
 
-1. **The census cells**: `long.MUL` by a broadcast masked constant (the limb magic's `vpmuludq`),
-   the pre-shift, and `double.FMA` beside the existing cell, on the laptop and through
+1. **The census cells**: the pre-shift and the masked-constant `long.MUL` (the limb arm's, read
+   through 360b's `WideMul` cells if 360b has them), on the laptop and through
    `varka-width-audit.yml` on both runners.
 2. **The baseline addition** (4), its own pull request, with 366's sections.
 3. **350a, the integer casts**, after 347's load, 348's `value()`, 481's `NULL` mode and 332a's
-   narrow table: truncation to every integral target in the three modes with the exact rule at `p <=
-   16`, the rescales, the integral and boolean sources, the test to `BOOLEAN`, both division arms,
-   `decimal_casts.smt2`, the table test, the named cases, the planted fault, the coverage rows.
-4. **350b, the floating targets**, after 343's `ConvertLane` and 342's `IntOp.DIV`: `DOUBLE` at `p
-   <= 15`, `FLOAT` at `p <= 15` with the FMA node, and at `p >= 16` the guard declining its batch to
-   the row engine until 366 lands; their sampled arm.
+   narrow table and narrow load: truncation to every integral target in the three modes with the
+   exact rule at `p <= 16`, the rescales, the integral and boolean sources, the test to `BOOLEAN`,
+   the `GUARD` division arm, `decimal_casts.smt2`, the table test, the named cases, the planted
+   fault, the coverage rows; the six `casts.tsv` pairs of item 0.18 marked unclaimed with their
+   homes; and `casts.tsv`'s semantics column for the floating pairs rewritten to the precision
+   rules.
+4. **350b, the floating targets**, after 343's `ConvertLane` and row 342's `IntOp.DIV`: `DOUBLE` and
+   `FLOAT` at `p <= 15` (`FLOAT` at 8 to 15 by round-to-odd if an FMA node exists by then, else
+   declined there until 366), and at `p >= 16` declined naming 366 until it lands; their sampled
+   arm.
 5. **Row 366**, the exact arm.
-6. **350c, after 366 and 343b**: `DOUBLE` and `FLOAT` at `p >= 16` through 366's arm, the three
-   narrow casts' double rule at precision 17 and 18, their sampled arm, the measurement against the
-   baseline at both widths and 512 bits on the laptop, scored.
+6. **350c, after 366 and 343b**: `DOUBLE` and `FLOAT` at `p >= 16` (and `FLOAT` at 8 to 15 if no FMA
+   node exists) through 366's arm, the three narrow casts' double rule at precision 17 and 18, their
+   sampled arm, the measurement against the baseline at both widths and 512 bits on the laptop,
+   scored.
+7. **350d, after 360b**: the `LIMB_MAGIC` arm over 360b's `WideMul`, measured against `GUARD` on the
+   runner, the default set from that measurement.
 
 | file | what |
 |---|---|
 | `VarkaDecimalCastCompiler.java` (new), `VarkaDecimalCompiler.java` | the table of 2.1, `tdiv`, `hdiv` |
 | `varka/VarkaFamily.java` | `DECIMAL_CAST` |
-| `varka/VarkaVectorIR.java`, `varka/VarkaVectorWalk.java` | `Fma`; `CondValue`'s scaled use |
-| `varka/VarkaDivisionLowering.java` | the limb-magic arm |
+| `varka/VarkaVectorIR.java`, `varka/VarkaVectorWalk.java` | `CondValue`'s scaled use |
+| `varka/VarkaDivisionLowering.java` | the limb-magic arm over 360b's `WideMul` |
 | `varka/VarkaEmitOption.java`, `varka/VarkaEmitOptions.java` | `decimalDivisionForm` |
 | `VarkaNodeCompiler.java` | `floatingDecline` admits the decimal-floating pairs |
 | `varka/VarkaEmitBudget.java`, the cost register, the warm-up | weights, features, reach |
@@ -462,15 +485,16 @@ Predictions, registered before the build:
 | generated | `coverage.json`, `docs/sql-varka.md`, `width_audit.json`, `emitted_bytes.json` |
 | generated | `casts_fused.tsv`, `casts.tsv`, `census.tsv`, `census_curated.txt` |
 
-**Size: medium as the row says, in three pull requests after the baseline**, and the largest of the
+**Size: medium as the row says, in four pull requests after the baseline**, and the largest of the
 F3 decimal rows below 19: 350a about four days (the proof file and the table test the larger part),
-350b about three (the FMA node and round-to-odd), 350c about two once 366 is in. Test time: the
+350b about two (round-to-odd), 350c about two once 366 is in, 350d one after 360b. Test time: the
 table test is a pure function, the named cases and slot tables of the size of 347's, seconds; the
 sampled suite is a few million `Cast.eval` calls, of the order of a minute, opt-in in full and a
 slice in PR CI; the proof file is priced from its spiked form at VARKA-245's observed ratio in the
 calibration table, under twenty seconds per solver. It rests on 347, 348 (`value()`), 481 (the
-`NULL` mode, which this row does not build), 332a (the narrow load in a bigint kernel), 342, 343 and
-366, on 360's `WideMul` for the `LIMB_MAGIC` arm only, and on 157 for the decimal outputs.
+`NULL` mode, which this row does not build), 332a (the narrow load in a bigint kernel), 342 (the
+floating division), 343 and 366, on 360b's `WideMul` for the `LIMB_MAGIC` arm only, on an FMA node
+for the `FLOAT` round-to-odd only, and on 157 for the decimal outputs.
 
 ## 6. What it unlocks in the census
 
@@ -480,15 +504,16 @@ the ten casts and `try_cast` entries count with 364 (`VARKA-359.md` 6). What it 
 half of `cast` and `try_cast` for the decimal pairs of section 1, and `casts_fused.tsv`'s
 `DECIMAL(10, 2)` forms of those pairs fused in every mode, the `DECIMAL(30, 4)` forms staying
 declined naming 364. The census notes and `casts.tsv`'s semantics column for the three narrow pairs
-say the double rule computed as the exact rule below 17, if open point 1 keeps that lowering.
+say the double rule computed as the exact rule below 17, if the owner accepts question 1.
 
 ## 7. Out of this row, and declines that stay
 
 Out: the exact arm (366); every precision above 18 (359, 360, 363, 364), including the `(20, 0)`
-coercion type of a `BIGINT`; any product wider than 64 bits (360's `WideMul`, 361's general
+coercion type of a `BIGINT`; any product wider than 64 bits (360b's `WideMul`, 361's general
 product); the narrow column load in a bigint kernel (332's, which this row uses); `GuardedRange`'s
 `NULL` mode (481's, from which every TRY null here comes); `DOUBLE` and `FLOAT` to decimal (346);
-the interval, `TIME` and `DATE` pairs of item 0.18 (open point 4); `try_eval` over a decimal
+the six interval, `TIME` and `DATE` pairs of item 0.18; a general FMA node (row 342's by nature,
+section 8); `try_eval` over a decimal
 subtree; a `BOOLEAN` output (27); a negative scale. Trino's `FLOAT` midpoint-margin test
 (`READING_TRINO_DECIMAL.md` 7, step 2) would keep more lanes off 366's arm at `p >= 16` but needs
 its own error bound proven; it is not built here. An integer form of the double rule at precision 17
@@ -496,81 +521,82 @@ and 18 - the truncated quotient moved by one where the remainder lies within hal
 integer - would avoid the floating lane there; it needs a per-lane leading-zero count and a tie
 rule, costs about what 366's arm does, and is not built.
 
+**The six pairs outside the row's text, unclaimed** (settled by the lead): 350a marks them so in
+`census_curated.txt`, each with a home - decimal to and from the year-month and day-time intervals
+to row 103 (or 332's interval work), `TIME` to decimal to `m9/SCOPE.md` (no `TIME`-cast row exists),
+`DATE` to decimal (LEGACY's null) to row 333's typed null leaf. Their Spark rules: decimal to
+year-month is `IntervalUtils.decimalToYearMonthInterval`, `HALF_UP` to months and `toIntExact`
+(`util/IntervalUtils.scala:841-845`), to day-time `decimalToDayTimeInterval` (`Cast.scala:
+1116-1118`); an interval to decimal is the interval as a decimal of its end unit, then
+`changePrecision` with `nullOnOverflow` false, so every mode raises (`Cast.scala:1411-1423`); `TIME`
+to decimal is `Decimal(t, 14, 9)` then `changePrecision` (`:1395-1399`).
+
 **Flagged, not resolved:** the owner's row texts have rows 350 and 360 both claiming the integral
 casts to `(3, 0)`, `(5, 0)` and `(10, 0)` ("to and from integral types" here, "the widening casts"
 there). The plans settle them as this row's; aligning the row texts is the owner's.
 
 Declines that stay, each naming its row: an ANSI batch holding a value Spark raises on (the row
 engine raises it); under `decimalDivisionForm=GUARD`, a batch past `2^(52 + k)` at the twelve `(p,
-k)` of item 0.15; until 366, a `DOUBLE` or `FLOAT` batch at `p >= 16` with a lane past `2^53`; a
+k)` of item 0.15 until 350d (a uniform column's batches there mostly, 2.2); until 366, every
+`DOUBLE` or `FLOAT` cast at `p >= 16`; a
 decimal in an int-driven kernel (347's leaf rule); at two long lanes on x86, what 347's question 4
 reading and row 503 decline.
 
 ## 8. Questions for the owner
 
-None of the owner's yet. The points below are the lead's to settle or to put to the owner.
+1. **A refinement of the answer to question 3, not a departure: the double rule computed as the
+   exact rule below precision 17.** The owner's answer of 16 October 2026 (milestone plan section 7,
+   question 3): "**(iii), no reader change.** ... Under (iii) the kernel reproduces vanilla Spark's
+   column-path rule (the double rule over a `BigDecimal`-backed value) for the ANSI and TRY casts of
+   a decimal to `INT`, `SMALLINT` and `TINYINT`, which is what Varka's fallback reads through
+   `ArrowColumnVector`." And what follows from it: "350 builds the double rule below precision 19 as
+   364 does above it, on 366's exact arm outside 350's guard, proven by the sampled arm and not
+   SMT". This plan keeps the rule and refines how it is computed and proven. By item 0.14's
+   argument, the double rule and the exact integer rule give the same answer on every input below
+   precision 17, so (a) the kernel computes the three casts by the integer rule at `p <= 16`, proven
+   by SMT, and takes the double through 366's arm only at 17 and 18; (b) it computes the double at
+   every precision, as the answer's wording has it. **The answers are identical either way.** The
+   first input where the rules differ is at precision 17: unscaled `20643709109999999` at scale 7 to
+   `INT`, 2064370910 by the exact rule and 2064370911 by the double rule, and there this plan uses
+   the double. The sampled checks against Spark's `Cast` run at every precision under both.
+   **Recommended: (a)**: integer arithmetic below 17 costs a truncating division where (b) costs an
+   `L2D`, a divide, two floating compares and a `D2I` - the conversions being the EPYC 7763's
+   fallbacks or 343's AVX2 forms - and it adds an SMT proof without removing the sampled one.
+2. **2.2's guard wording, flagged as the owner's text.** The milestone plan's 2.2 states the
+   `DOUBLE` guard as `(long) (double) u == u`; this plan builds the cheaper form the lead settled
+   (precision rules, and `abs(u) <= 2^53` wherever a guard is used), equally correct. The text is
+   the owner's and is not edited here; `casts.tsv`'s semantics column changes in 350a.
+3. **Flagged: row 342 is a predecessor the F3 wave row does not name.** The F3 row has "350, after
+   365, 341 and 343"; this row also needs 342's floating division. The owner's text.
+4. **Flagged: no row builds an FMA node.** 350's `FLOAT` round-to-odd at 8 to 15 needs one, 346's
+   one-FMA remainder and 366's working-precision option would reuse one; `VARKA-342.md` has none.
+   Row 342 is the natural owner. Until a row takes it, `FLOAT` at 8 to 15 runs on 366's arm.
+5. **Flagged: rows 350 and 360 both claim coercion's integral casts** in the owner's row texts
+   (section 7); the plans settle them as this row's.
 
 ### Open points for the lead
 
-1. **The lowering of the double rule below precision 17.** (a) The exact integer rule at `p <= 16`,
-   justified by item 0.14's lemma, proven by SMT and still sampled; the double through 366's arm at
-   17 and 18 only. (b) The double at every precision, as section 7's answer words it: one code path,
-   the sampled arm only, and an `L2D`, a divide, two floating compares and a `D2I` at every
-   precision - `L2D` and `D2L` the EPYC 7763's fallbacks or 343's AVX2 forms. Evidence: the lemma's
-   argument and table in item 0.14, the draw in `results/VARKA-350-admission.txt` finding no
-   difference below 17. (a) changes no answer; it changes what proves the three pairs below 17 and
-   what `casts.tsv`'s proof column says, which the owner's answer fixed as "the sampled arm and not
-   SMT". The plan is written under (a), with the sampled arm kept at every precision.
-2. **The per-batch taking of 366's arm.** The row's text says the arm is "taken per batch when the
-   guard mask of 350 is not all true". It is `VARKA-366.md`'s open point 1, recorded there with its
-   options, since the mechanism is 366's.
-3. **Integral to decimal at 64 bits: settled by the lead** (30 October 2026): this row's, coercion's
-   `(3, 0)`, `(5, 0)` and `(10, 0)` included, `(20, 0)` 360's. What stays open is the owner's row
-   text, which section 7 flags.
-4. **The interval, `TIME` and `DATE` decimal pairs.** `casts.tsv` gives 350 and 364 six pairs the
-   row's text omits: decimal to year-month (`IntervalUtils.decimalToYearMonthInterval`, `HALF_UP`
-   to months, `toIntExact`, `util/IntervalUtils.scala:841-845`) and to day-time
-   (`decimalToDayTimeInterval`, `Cast.scala:1116-1118`), year-month and day-time to decimal (the
-   interval as a decimal of its end unit, then `changePrecision` with `nullOnOverflow` false, so
-   every mode raises, `Cast.scala:1411-1423`), `TIME` to decimal (`Decimal(t, 14, 9)` then
-   `changePrecision`, `:1395-1399`), and `DATE` to decimal (null under LEGACY, illegal otherwise).
-   The done-when's "every decimal pair of `m8/casts.tsv`" includes them. (a) This row takes them,
-   adding about two days and a second rescale family over interval units. (b) They are marked
-   unclaimed in `census_curated.txt` with suggested homes - row 103 for the day-time pairs, 338's
-   successors for `TIME`, 333's typed null for `DATE` - and the done-when reads "every pair of the
-   row's text". (c) A new row. The plan is written under (b).
-5. **The division form at the twelve `(p, k)`.** (a) `GUARD` as the default, the limb magic an
-   option arm. (b) `LIMB_MAGIC` as the default. (c) The default chosen per host by the
-   measurement. Evidence: item 0.15 (the guard admits 0.0090 to 0.5765 of a uniform draw), row
-   30's text, which plans "the four-`vpmuludq` long-lane magic as a measured option for a literal
-   divisor": the same lowering, so whichever of 30 and 350 lands first builds it in
-   `VarkaDivisionLowering` and the other reuses it. Who builds it is the question as much as the
-   default.
-6. **No question about the baseline**: it comes first, as the house rule settles.
-7. **The guards of 2.2 as precision rules and a magnitude test.** (a) As this plan has them: dead
-   below `p = 16` for `DOUBLE` and `p = 8` for the float quotient, `abs(u) <= 2^53` above, and 343's
-   bounded `L2D` stated exact at `p <= 15`. (b) 2.2's equality test `(long) (double) u == u` as
-   written, lane by lane at every precision. Evidence: item 0.16, the EPYC census file (`L2D`,
-   `L2F` fallbacks), `READING_TRINO_DECIMAL.md` 7 (Trino's guard is the magnitude test, and the
-   equality "the wider test"). Both are correct, the guard being sufficient either way; (a) is
-   cheaper and changes 2.2's text and `casts.tsv`'s semantics column for the two floating pairs.
-8. **The FMA node and the floating division.** This row needs 342's `IntOp.DIV` (so 342 joins the
-   F3 row's "after 365, 341 and 343") and builds `Fma`, which 346 reuses. (a) As written. (b) 342
-   builds `Fma` with its arithmetic. Evidence: `VARKA-342.md` 2 has no FMA node and holds that C2
-   contracts none; the census has `double.FMA` intrinsic on both hosts.
+Settled by the lead on 30 October 2026, kept as the record: (1) the exact integer rule at `p <= 16`,
+put to the owner as question 1; (2) one body for 366's arm, `VARKA-366.md` 2.4; (3) every integral
+source into precision 18 is this row's, the row-text overlap flagged; (4) the six interval, `TIME`
+and `DATE` pairs unclaimed with homes (section 7); (5) both division arms measured, the default
+from the runner, the limb arm after 360b's `WideMul`; (6) the baseline first; (7) the cheaper guard
+form, 2.2's wording flagged; (8) the floating division is 342's, the FMA gap flagged with 342 its
+natural owner. None is open.
 
 ## 9. Done when
 
-Row 350's text holds, with the corrections above and open points 1, 3, 4, 5 and 7 as the lead or the
-owner settles them: every pair of section 1 fuses in the three modes at every `(p, s)` with `p <=
-18`, the three narrow ANSI and TRY casts by the double rule, the `DOUBLE` and `FLOAT` targets at `p
->= 16` handing the batch to 366's exact arm; the integer rules proven in `decimal_casts.smt2` under
-cvc5 and Z3 with `5^k` for `k = 1..18`, item 0.14's lemma re-checked by its unit test, and the
-double rule's and the floating targets' sampled arm passing at every precision; the table test, the
-named cases and the planted fault (failing with its flag) pass; each rescale site names its defence
-with a test at the first value its guard rejects; `casts_fused.tsv`, `casts.tsv` and the census
-agree with the compiler; no existing shape's bytes move; the measurement against the baseline is
-committed at both widths with its predictions scored; and the PR build and the option matrix pass.
+Row 350's text holds, with the corrections above and question 1 as the owner answers it: every pair
+of section 1 fuses in the three modes at every `(p, s)` with `p <= 18`, the three narrow ANSI and
+TRY casts by the double rule, the `DOUBLE` and `FLOAT` targets at `p >= 16` through 366's exact arm;
+the six pairs of item 0.18 marked unclaimed with their homes; both division arms measured and the
+default set from the runner; the integer rules proven in `decimal_casts.smt2` under cvc5 and Z3 with
+`5^k` for `k = 1..18`, item 0.14's lemma re-checked by its unit test, and the double rule's and the
+floating targets' sampled arm passing at every precision; the table test, the named cases and the
+planted fault (failing with its flag) pass; each rescale site names its defence with a test at the
+first value its guard rejects; `casts_fused.tsv`, `casts.tsv` and the census agree with the
+compiler; no existing shape's bytes move; the measurement against the baseline is committed at both
+widths with its predictions scored; and the PR build and the option matrix pass.
 
 ## 10. Outcome
 
