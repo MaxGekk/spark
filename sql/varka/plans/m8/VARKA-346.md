@@ -125,26 +125,35 @@ against the calls Spark makes:
   rounded integer below the guard, ties included, and the same `HALF_UP` integer is the cast's
   unscaled value (2.3, 2.4). So the cast uses the tie test, not the row's rounding-interval guard,
   which declines exactly the ties - `9.95` at scale 1 and `0.125` at scale 2 among them. The guard
-  is not built (open point 2).
+  is not built. Ties are about one lane in a hundred (1014822 of the 101438400 checks of item 0.14,
+  and decimal-entered data has more), so a guard that declines its batch on any tie declines nearly
+  every real batch; it is not a competing arm with a machine-dependent winner, and the tie test
+  accepts every lane the guard does below `L_s`, past which the guard reaches only a sliver below
+  `2^49` at some scales, under one binade.
 - **Scale 0 has no declined band** (2.3): there every boundary is a multiple of the ulp up to
   `2^52`, which the admission program confirms (item 14), and the keep bound is `2^52`. The band of
   `s >= 1` is the non-integral values of `[2^E, 10^(16 - s))`, three and a half to four and a half
   binades: an integral value there is its own shortest decimal and answers itself (2.2).
 - **The exact shortest-digits path is the row engine**, through the declined batch: no kernel can
-  select the shortest decimal in a lane today, which is `m9/SCOPE.md` item 97 (open point 3).
-- **The FMA node is built here** (open point 1), for the remainder and the `FLOAT` result's
-  round-to-odd; the `DOUBLE` rounding and the cast need none.
+  select the shortest decimal in a lane today, which is `m9/SCOPE.md` item 97; an in-kernel scalar
+  escape would be a new emission mode, a row of its own. The band is a decline that stays (7).
+- **The FMA node is row 342's**, the earliest wave owning a shared node as every plan of the
+  milestone has it (`VARKA-350.md` 8, question 4, names 342 its natural owner); this row uses it for
+  the remainder and the `FLOAT` result's round-to-odd, and the `DOUBLE` rounding and the cast need
+  none. 342's plan has no FMA today, so its plan gains it before 346a starts (8, flag 1).
+- **This row owns the floating remainder node.** Row 30's `IntDivide` is integral only; the
+  floating `%` and `pmod` are a node of this row's.
 - **Only `FLOOR` is added to `RoundToIntegral`'s double modes.** The constructions work on
   magnitudes, where `TRUNC` is `FLOOR`; `CEIL` and `TRUNC` to `DOUBLE` have no reader and stay out,
   by 344's own rule.
 - **The proof cites `Double.toString`'s specification, not Schubfach's R5.** Spark calls the JDK,
   whose specification (item 0.1) is the definition the proof needs; the Schubfach paper is not in
-  the repository, so its R5 was not checked here (open point 6).
+  the repository, so its R5 was not checked here (8, flag 3).
 - **The cast is within precision 18.** Above it the unscaled value needs 359's pair, which is
   364's composition over this row's integer.
 - **The order inside the row.** Only the cast needs 350; the remainder and the rounding functions
   need 342, 343a and 344a (section 5).
-- **Large, in three pull requests after the baseline**, against the row's medium.
+- **Large, in three pull requests after the baseline**, against the row's medium (8, question 1).
 
 ## 1. Goal and non-goal
 
@@ -308,7 +317,7 @@ If `q = qt + 1`, `r0` is negative and `r0 + ay = ax - qt * ay` is again a double
 exact. `r` is then Java's `ax % ay`, and Java's `x % y` is it with the dividend's sign, a zero
 result included (item 0.5). An infinite `x` gives NaN through the FMA, and a NaN operand
 propagates, as Java's `%` does; both are computed NaNs, compared by NaN-ness. A zero divisor never
-reaches the value: `IntDivide`'s zero test nulls or condemns the lane first.
+reaches the value: `FloatRemainder`'s zero test nulls or condemns the lane first.
 
 **`pmod`** is `IfElse(r < 0, REM(RN(r + n), n), r)`. The second remainder's band guard is dead,
 since `|r| < |n|` gives `|RN(r + n)| <= 2 |n|`, and the compiler drops it. `try_mod` is `%` under
@@ -333,19 +342,22 @@ condition **[I]**, checked in 3.6).
   The lowering lives in `VarkaScaleRoundingLowering`, beside 344's `VarkaRoundingLowering`.
 - **`RoundToIntegral` gains `FLOOR` to `DOUBLE`**, 344's `RINT` and its correction without the
   conversion.
-- **The remainder is row 30's `IntDivide`** with kinds `REM` and `PMOD` and its `ZeroDivisor`,
-  admitted at the `FLOAT` and `DOUBLE` lanes (no `checkMinOverMinusOne`), as 342 admits `IntOp.DIV`
-  there; whichever of 30 and 346 lands first adds the node, and the floating lowering is
-  `VarkaFloatRemainderLowering`. The reference evaluates it by Java's `%` and `MathUtils.pmod`.
-- **`Fma(a, b, c)`** at the floating lanes, `lanewise(FMA)`, evaluated by `Math.fma`; never made by
-  rewriting a multiply and an add (342's no-contraction rule stands).
+- **`FloatRemainder(Kind kind, VarkaVectorIR dividend, VarkaVectorIR divisor, ZeroDivisor zero)`**,
+  this row's node at the `FLOAT` and `DOUBLE` lanes, `Kind` being `REM` and `PMOD` and
+  `ZeroDivisor` `NULL` (LEGACY, `try_mod`) or `FAIL` (ANSI), the same meanings as row 30's integral
+  `IntDivide`, which has no floating kind. One node, since 2.5's proof is one sequence; the lowering
+  is `VarkaFloatRemainderLowering`, and the reference evaluates it by Java's `%` and
+  `MathUtils.pmod`.
+- **Row 342's `Fma(a, b, c)`** at the floating lanes, `lanewise(FMA)`, evaluated by `Math.fma`,
+  which this row uses and does not build; never made by rewriting a multiply and an add (342's
+  no-contraction rule stands).
 
 ### 2.7 Modes and declines
 
 Two new refusals, collected by `emitGuardCollect` as 347's slot check is, each with a status bit:
 `ROUNDING_BAND` (a live non-integral lane in 2.2's band, or a lane in 2.4's) and `REMAINDER_BAND`
 (2.5's window). Neither is narrowed by a choice arm unless `guardUnderArm` qualifies it. The zero
-divisor is `IntDivide`'s, null under LEGACY and TRY and `FAIL` under ANSI; a literal non-zero
+divisor is `FloatRemainder`'s, null under LEGACY and TRY and `FAIL` under ANSI; a literal non-zero
 divisor drops it, as Spark does. No form of `round` has a mode. The cast's three modes differ only
 in the overflow's disposal.
 
@@ -424,7 +436,7 @@ exactly when one of its live lanes is in a band or Spark raises on it.
    selection of the shortest decimal, has no SMT form here and rests on the twins.
 7. **The remainder's sweeps**: every exponent pair with `ex - ey` from -3 to 60, seeded mantissas,
    exact multiples and the special values, against Java's `%`, `BigDecimal`'s exact remainder and
-   SLEEF's `xfmod` ported to the test tree as the row's second oracle (open point 5); `pmod`
+   SLEEF's `xfmod` ported to the test tree as the row's second oracle; `pmod`
    against `MathUtils.pmod`; the `FLOAT` forms over every float exponent pair. A tenth in the PR
    build.
 8. **Coverage rows**, a family "shortest decimal": `round(x, 0)`, `round(x, 2)`, `bround(x, 2)`,
@@ -463,8 +475,8 @@ Predictions, registered before the build:
 ## 5. Order, files and size
 
 1. **The baseline** (4), its own pull request.
-2. **346a, the remainder**, after 342 and 344a: `Fma`, `FLOOR` to `DOUBLE`, `IntDivide`'s floating
-   kinds (or the node, if 30 has not landed), `%`, `mod`, `try_mod`, `pmod`, `REMAINDER_BAND`, tests
+2. **346a, the remainder**, after 342 (its division and its `Fma`) and 344a: `FLOOR` to `DOUBLE`,
+   `FloatRemainder`, `%`, `mod`, `try_mod`, `pmod`, `REMAINDER_BAND`, the `xfmod` port, tests
    3.6 and 3.7, their coverage rows; the `FLOAT` forms after 343a's conversions.
 3. **346b, the rounding functions**, after 344a and 343a: `RoundToScale` with `DOUBLE` and `FLOAT`
    outputs, `ROUNDING_BAND`, tests 3.1 to 3.5.
@@ -474,7 +486,7 @@ Predictions, registered before the build:
 
 | file | what |
 |---|---|
-| `varka/VarkaVectorIR.java` | `RoundToScale`, `Fma`, `IntDivide`'s floating kinds, double `FLOOR` |
+| `varka/VarkaVectorIR.java` | `RoundToScale`, `FloatRemainder`, double `FLOOR` |
 | `varka/VarkaScaleRoundingLowering.java`, `varka/VarkaFloatRemainderLowering.java` | 2.3 to 2.5 |
 | `varka/VarkaVectorWalk.java`, `varka/Slots.java`, `varka/Analysis.java` | emission, refusals |
 | `VarkaRoundingCompiler.java`, `VarkaFloatingCompiler.java`, 350's cast table | the arms |
@@ -487,9 +499,10 @@ Predictions, registered before the build:
 | generated | `coverage.json`, `docs/sql-varka.md`, `width_audit.json`, `emitted_bytes.json` |
 | generated | `census.tsv`, `casts.tsv`, `casts_fused.tsv` |
 
-**Size: large, against the row's medium.** The baseline half a day; 346a about three days (the
-nodes, the lowering, the SMT file, the port); 346b about four (the node and its three outputs, the
-twins and the sweep); 346c about two. About ten days, in three pull requests after the baseline.
+**Size: large, against the row's medium** (8, question 1). The baseline half a day; 346a about three
+days (the node, the lowering, the SMT file, the port); 346b about four (the node and its three
+outputs, the twins and the sweep); 346c about two. About ten days, in three pull requests after the
+baseline.
 
 ## 6. What it unlocks in the census
 
@@ -498,7 +511,9 @@ twins and the sweep); 346c about two. About ten days, in three pull requests aft
 - **`float` and `double` to `dec`** in 346c: 2 of the cast matrix's pairs, within precision 18;
   above it they wait for 364.
 
-Each carries its band, and whether a pair with a band counts as fused is open point 4.
+**This row moves no pair.** Every form here has a declined band, and the milestone plan's 1.1
+item 2 counts a pair with one as unfused, its band the reason in the census - the rule 359 and
+348 and 349 apply. The census's reason column carries each band (3.11).
 
 ## 7. Out of this row, and declines that stay
 
@@ -508,51 +523,52 @@ Out: Schubfach's selection in lanes, which would fuse the band (`m9/SCOPE.md` 97
 `2^24`; a scale above 22, where `10^s` is not exact, though values from `K_s` up could keep `d`
 there with no division; `CEIL` and `TRUNC` to `DOUBLE`, which nothing reads.
 
-Declines that stay: a batch with a live lane in its band - for the rounding functions a non-integral
-value in `[L_s, K_s)` at `s >= 1`, for the cast a non-integral value in `[L_s, 2^52)` or any value
-in `[2^53, 10^(p - s))`, for the remainder `|x / y| >= 2^53` with `x` finite; a negative,
+Declines that stay: a batch with a live lane in its band, which the row engine computes - a gap,
+each with its scope item:
+
+- the rounding functions, a non-integral value in `[L_s, K_s)` at `s >= 1`, and the cast, a
+  non-integral value in `[L_s, 2^52)` or any value in `[2^53, 10^(p - s))`: `m9/SCOPE.md` item 97,
+  Schubfach's selection half in lanes;
+- the remainder, `|x / y| >= 2^53` with `x` finite: no scope item names it yet (8, flag 4).
+
+The other declines that stay: a negative,
 non-literal or null scale or one above 22; an ANSI batch with a zero divisor or a cast overflow,
 which the row engine raises; at two lanes on x86, the conditions 503's rule declines.
 
 ## 8. Open points for the lead
 
-1. **The FMA node.** (a) This row builds `Fma`, its first user in the order; 350's `FLOAT` at
-   precision 8 to 15 can then leave 366's arm, in its own change. (b) Row 342 builds it, as
-   `VARKA-350.md` 8 question 4 names it the natural owner; 342 is planned and not started. Evidence:
-   342's plan has no FMA, and the remainder cannot be written without one; the `DOUBLE` rounding and
-   the cast need none. *Recommended: (a).*
-2. **The rounding-interval guard in the row's text.** (a) Not built: the tie test accepts every lane
-   below `L_s`, ties included, where the guard declines the ties; past `L_s` the guard accepts only
-   a sliver below `2^49` at some scales, under one binade. (b) Built as the reference arm of an
-   option, by the rule to keep competing designs: it needs no division, so it may be cheaper per
-   lane while declining every batch with a tie at the shortest digits, which decimal-entered data is
-   full of. *Recommended: (a)*, the guard being dominated on coverage; (b) if the lead reads the
-   house rule as asking for it.
-3. **"The exact shortest-digits path for the rest".** (a) Read as the row engine, through the
-   declined batch, with item 97 the route to fusing it; (b) a scalar escape inside the kernel for
-   the band's lanes, a new emission mode no row has. *Recommended: (a).*
-4. **A pair fused with a declined band, in the census.** The milestone plan's 1.1 item 2 says every
-   pair left unfused carries its reason, "either a construction's declined band (346, recorded with
-   its bounds) or a named row", which reads as (b): the pair stays unfused with its band as the
-   reason, and this row moves no pair, since every form here has a band. (a) The pair counts as
-   fused, its band in the reason column, and this row moves 16. An owner's call; the census code
-   follows either.
-5. **The remainder's second oracle.** (a) Port SLEEF's scalar `xfmod` to the test tree as the row
-   names (Boost Software License, with its notice), beside `BigDecimal`'s exact remainder; (b) the
-   exact remainder alone, which checks every answer against the true value. *Recommended: (a)*: it
-   is the owner's text and costs a day at most.
-6. **The row's text, flagged, as context.** (i) The milestone plan's 2.7 cites Schubfach's R5 for
-   "the shortest decimal is `T` when `ulp(d) < 10^-(s + 1)`"; the paper is not in the repository and
-   R5 was not checked. The proof here (2.3, step 2) rests on `Double.toString`'s specification,
-   which is what Spark calls. (ii) The row's done-when calls the rapids vectors "float-to-decimal
-   vectors" with "`9.95` at scale 1 gives `10.0`": that holds for a `DOUBLE` 9.95; a `FLOAT`
-   `9.95f` widens to 9.949999809265137 and gives 9.9 (item 0.3), so the named tests take the
-   vectors as doubles and add the `FLOAT` answer as its own cell. (iii) 2.7's keep bound
-   `10^(16 - s)` is `2^52` at scale 0 here (2.2). The text is the owner's and is left as written.
+Settled by the lead on 30 October 2026, kept as the record: the FMA node is row 342's, the earliest
+wave owning a shared node; the rounding-interval guard is not built (What differs); the band
+declines to the row engine, a decline that stays with its scope item (7); the census follows the
+milestone plan's 1.1 item 2 as it reads, so this row moves no pair (6) - the other reading, a pair
+counting as fused with its band in the reason column, would count 16; the remainder's second oracle
+is SLEEF's `xfmod`, ported to the test tree as the row says (`READING_SLEEF.md` 2), with its Boost
+Software License notice, beside `BigDecimal`'s exact remainder; and this row owns the floating
+remainder node, row 30's plan naming none.
 
-Settled without a question: the baseline first, in the families' classes (the house rule); the
-remainder reuses row 30's node, whichever lands first; `FLOAT` widens for the remainder and the
-rounding functions.
+**A question for the owner:**
+
+1. **The size.** (a) Three pull requests as section 5 has them, after the baseline, each landing
+   what its dependencies allow and the row **Done in part** between them, as 342 and 343 land; (b)
+   one pull request after 350, 157 and 343b. *Recommended: (a)*: the remainder and the rounding
+   functions need nothing of 350's. Either way the row is large, about ten days, against its medium.
+
+**Flags, the owner's text left as written:**
+
+1. **342's plan has no FMA node.** `VARKA-342.md` mentions FMA only to say C2 contracts none; this
+   row's 346a needs `Fma` from it, so 342's plan gains the node before 346a starts.
+2. **The `9.95f` vector.** The row's done-when calls the rapids vectors "float-to-decimal vectors"
+   with "`9.95` at scale 1 gives `10.0`": that holds for a `DOUBLE` 9.95; a `FLOAT` `9.95f` widens
+   to 9.949999809265137 and gives 9.9 (item 0.3), so the named tests take the vectors as doubles and
+   add the `FLOAT` answer as its own cell.
+3. **Schubfach's R5.** The milestone plan's 2.7 cites it for "the shortest decimal is `T` when
+   `ulp(d) < 10^-(s + 1)`"; the paper is not in the repository and R5 was not checked. The citation
+   here is the JDK's specification of `Double.toString` (`Double.java:513-530`), which is what Spark
+   calls (2.3, step 2).
+4. **2.7's keep bound, and the remainder's band.** 2.7's keep bound `10^(16 - s)` is `2^52` at scale
+   0 here (2.2), where no band remains. And the remainder's band, `|x / y| >= 2^53`, has no scope
+   item in `m9/SCOPE.md`: SLEEF's multi-pass loop (`READING_SLEEF.md` 4) is the route a scope item
+   would name; the item is the owner's to add.
 
 ## 9. Done when
 
@@ -561,9 +577,9 @@ the three modes, or declines its recorded band, and the census carries the band;
 the rapids vectors among them, pass; the subnormal probe passes; the binary16 twin is exhausted in
 the PR build and the binary32 twin in the sweep step; the binary64 sampling passes on every host
 form; `fp_remainder.smt2` and `FLOOR`'s claim are proven at binary16 and binary32 (binary64 if it
-decides); the remainder agrees with Java's `%`, the exact remainder and `xfmod` under open point 5's
-answer; no existing shape's bytes move; the PR build and the option matrix pass; the measurement is
-committed against the baseline at both widths with its predictions scored.
+decides); the remainder agrees with Java's `%`, the exact remainder and the ported `xfmod`; no
+existing shape's bytes move; the PR build and the option matrix pass; the measurement is committed
+against the baseline at both widths with its predictions scored.
 
 ## 10. Outcome
 
