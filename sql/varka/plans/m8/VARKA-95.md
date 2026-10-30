@@ -85,8 +85,10 @@ table (`m9/SCOPE.md`) and `m5/PLAN.md` 2.30. The JDK was read in
     `NarrowLane(GuardedRange(IntArith(MUL, WRAP, WidenLane(x, LONG), WidenLane(y, LONG)), INT_MIN,
     INT_MAX, mode))`. `VARKA-30.md` 2.4 builds `%` by a literal at the int lane as `a - q * c`
     over `ConstDivide`, and its section 7 calls row 95's `i % k` "the constant-divisor
-    specialisation that this row's kernel takes for a literal". Section 2.1 proposes the split and
-    section 8 asks it.
+    specialisation that this row's kernel takes for a literal". Row 104 is in wave 0 and row 30
+    and row 95 in G1 (`PLAN.md` 4.1's wave table, "104 under 30, 95 and 361"). The lead settled
+    both owners as the record has them (section 8), and 2.1 says what row 95 builds if it lands
+    first.
 
 **The JDK.**
 
@@ -110,15 +112,18 @@ table (`m9/SCOPE.md`) and `m5/PLAN.md` 2.30. The JDK was read in
 
 - **The gap is not "a right operand that is a column".** A checked multiply of a bare int column
   declines with a literal factor too (item 7); the row's multiply half is every ANSI and TRY int
-  `*` whose bounds do not clear it, and `m5/PLAN.md` 2.30 gets a dated note.
+  `*` whose bounds do not clear it. `m5/PLAN.md` 2.30's "multiplying by a literal is fine" is
+  wrong for an unbounded operand; the correction is dated in row 95's line of `m8/PLAN.md`, and
+  `m5/PLAN.md`, being history, is not edited.
 - **`i % k` has no modes and no zero test** (item 6); the row's "checked-multiply rule" does not
   apply to it, and what it needs is the exactness of `ConstDivide` (item 10) and one identity.
-- **Both halves are claimed elsewhere** (item 12). The plan is written under the split of 2.1,
-  marked as proposed; section 8 asks the lead and the owner.
+- **Both halves are owned elsewhere** (item 12), and stay there: the int32 checked multiply is
+  row 104's and `%` by a literal row 30's (section 8). Row 95 builds them under those rows' names
+  when it lands first, and the owner row extends or takes over what it built (2.1).
 
 ## 1. Goal and non-goal
 
-Under the proposed split of 2.1: an `INT` multiply in ANSI and TRY fuses whatever its operands, a
+Under the settled split of 2.1: an `INT` multiply in ANSI and TRY fuses whatever its operands, a
 column or a literal, raising nothing in a kernel (an overflowing lane declines its batch under ANSI,
 and is null under TRY, as Spark's row is); LEGACY keeps today's wrapping multiply. And `i % k`,
 `mod(i, k)` and `try_mod(i, k)` for an `INT` dividend and a non-zero `INT` literal `k` fuse in every
@@ -127,24 +132,38 @@ mode. Not this row: a column divisor and every other type's `%` (30), `pmod` (30
 
 ## 2. Design
 
-### 2.1 Ownership, as proposed
+### 2.1 Ownership, as settled
 
-- **The int32 checked multiply moves to this row.** `VARKA-104.md` 8 step 5 and 3.3's first
-  paragraph become pointers here; 104 keeps the `BIGINT` multiply and its options A to C. Row 95
-  is the row whose text names the shape, and its two forms (2.2) need nothing of 104's lattice.
-- **`i % k` by an `INT` literal moves to this row**, from `VARKA-30.md` 2.4's first bullet; 30
-  keeps a column divisor, `pmod`, the narrow and `BIGINT` dividends, and its `IntDivide` node, and
-  its 30a builds `%` by a column over the int lane, where the literal form is this row's tree.
-  The literal form needs no node, no refusal and none of 342's floating division, so it can land
-  before 30a, which waits on 104, 28, 329, 341 and 342 (`VARKA-30.md` 5).
-
-Section 8 questions 1 and 2 hold the other options. If the lead keeps the record as it is, this
-plan's 2.2 is handed to 104 and 2.4 to 30, and row 95 closes on "the record says why not".
+- **The int32 checked multiply is row 104's.** `VARKA-104.md` 3.3 and its step 5 plan it, and
+  `VARKA-481.md` 3.3 says "that row builds it". If row 95 lands first, row 95 builds `HALVES`
+  (2.2) and row 104 extends it later: one owner and nothing blocked, the settlement row 103 has
+  with row 332 over the truncation helper (`VARKA-103.md` 8 item 1). 104's plan names no option
+  and no API for the int32 form: its 3.3 names the mechanism, the widened product range-checked,
+  which is `LONG_TREE` here, and its options A to C are the `BIGINT` multiply's. So this plan
+  proposes the option `checkedIntMultiply`, a record component of `VarkaEmitOptions` with the
+  enum `CheckedIntMultiply { HALVES, LONG_TREE }` in the shape of `Division` and `FloorMod7`, as
+  the name row 104 adopts; the emitter arm is the existing `IntArith(MUL, FAIL | NULL)` node, so
+  there is no new IR API to agree. `LONG_TREE` stays the measured arm it is in 2.2.
+- **`i % k` is row 30's.** `VARKA-30.md` 7 says row 30 owns `%` as an operator, over a column
+  divisor and a literal one alike, and that row 95's `i % k` is the constant-divisor
+  specialisation 30's kernel takes for a literal (its 2.4). If row 95 lands first, row 95 builds
+  the `INT` literal form under 30's naming and row 30 takes it over: the quotient is `ConstDivide`
+  and `%` is `a - q * c` wrapping (30's 2.4 first bullet), `% 1` and `% -1` are 0 (30's 2.4
+  edges), and a literal zero declines at compile time with 30's reason, "all null or all raising,
+  a shape not worth a kernel" (30's 2.4 and 2.5). A non-zero literal never raises and never nulls
+  past its dividend (item 6), so the literal form needs none of 30's run-time refusal
+  `Refusal.DIVIDE` (`Family.SELF`, 30's 2.5) and does not create it; that refusal is 30a's, for a
+  column divisor. The power-of-two shift form (2.4) is a form 30's 2.4 does not list for `%`;
+  row 95 builds it as one more constant form of 30's family, and 30 keeps or drops it on the
+  measurement.
 
 ### 2.2 The checked multiply: two forms, both built
 
 The overflow test needs the 64-bit product (item 13). Two lowerings, built and measured against
-each other, under an option `checkedIntMultiply` (`HALVES`, `LONG_TREE`), the losing arm kept:
+each other, under the option `checkedIntMultiply` (`HALVES`, `LONG_TREE`, 2.1), the losing arm
+kept. Which is the default is not an owner's decision: both arms are built and the default is
+picked by measurement on the EPYC 7763 runners, under the repository's rule that option winners
+are measured (section 4, section 8 item 3).
 
 **`HALVES`: an int-lane lowering of `IntArith(MUL, FAIL | NULL)`.** No new IR node. The emitter
 gains the arm `emitIntArith` refuses today (item 8), in the shape of `emitMulHiDivide`:
@@ -171,12 +190,14 @@ change but 481's `NULL` mode for TRY and its marked guard (`VARKA-481.md` 3.2) f
 rows an iteration for every node in it, an int root beside it splits into its own kernel, and at
 128 bits on x86 the guard's mask is the Java fallback.
 
-**Considered, not built: the double-lane test**, `(double) a * (double) b` against
+**Not built now: the double-lane test**, `(double) a * (double) b` against
 `[-2^31, 2^31 - 1]`. It is exact as a test (admission check 3: rounding is monotonic and both ends
 are representable, so a product inside is exact and one outside rounds to outside), but its mask
-is formed in double lanes of half the int count, and a mask crossing between the floating and
-integral kinds is not built (`VARKA-341.md` 2.4); it would also convert with `I2D` where `HALVES`
-converts with `I2L`, for no fewer operations. Recorded in section 7.
+is formed in double lanes of half the int count and would have to cross from double lanes to int
+lanes, which is not built: `VARKA-341.md` 2.4 gives a root of the other width a kernel of its own
+and declines it in a filter, and the crossing is row 343a's (`VARKA-343.md` 2.2). It would also
+convert with `I2D` where `HALVES` converts with `I2L`, for no fewer operations. It is a possible
+third arm of `checkedIntMultiply` after row 343a's mixed-lane rule lands, recorded in section 7.
 
 The compiler builds the form the option names: `arithOver` (`VarkaNodeCompiler.java:1101-1129`)
 keeps its bound rule, so a multiply the bounds clear still emits `WRAP` with no check, and the
@@ -221,9 +242,9 @@ and the high half of a 64 by 32-bit product, two general long multiplies a part 
 form has one `MulVL` by a 32-bit constant, a `vpmulld` and a subtraction. Recorded in section 7.
 
 The shift form against the multiply-high form for a power of two is a performance fork, so both
-trees are timed (section 4) and the owner picks the default; if the winner differs by host, the
-choice becomes an option arm, otherwise the losing tree stays as the benchmark's and the
-differential's reference.
+trees are timed (section 4) and the measurement on the EPYC 7763 runners picks the default; if
+the winner differs by host, the choice becomes an option arm, otherwise the losing tree stays as
+the benchmark's and the differential's reference.
 
 The range analysis sees the composed tree, not a remainder, so `(i % 7) * 1000` under ANSI keeps
 its multiply's check: correct, and a bound a remainder node of row 30's would give.
@@ -262,18 +283,40 @@ for a checked int `MUL` under `HALVES`; the cost model's features `IntArith/MUL/
 3. **The power-of-two form over every int**, an opt-in 2^32 sweep a `j` as the existing
    `ConstDivide` sweeps are, run by hand in the gate's sweep step (no workflow sets `varka.sweep`,
    `VARKA-30.md` 3.2), the scalar form of it already in the admission (check 5b).
-4. **SMT, `sql/varka/proofs/int_checked_multiply.smt2`**, over bit-vectors (`QF_BV`, as
-   `leap_hash.smt2` is): the 64-bit product of two sign-extended ints never overflows; its low
-   word is the int `bvmul`; `hi != lo >>a 31` holds exactly where the product leaves the int range;
-   that last over any 64-bit value with no multiply at all; and the planted `>>>` refuted with a
-   witness. The spike decides each under Z3 5.1.0 in 0 to 17 s (admission check 7). The statement
-   that the range test is Z3's `bvsmulo` at 32 bits also holds, but took about 488 s, too slow
-   for the linters' job, and is not needed there: `Math.multiplyExact` throws exactly when the
-   exact product leaves the range, by its specification; it goes to the nightly's both-solver run
-   or is dropped, and cvc5's times are taken before the file lands. The power-of-two form per `j`
-   over bit-vectors in the same file. The quotient
-   form's exactness is `int_mulhi_divide.smt2` and Theorem 5.1 (item 10); nothing new is proved
-   there.
+4. **SMT, in two files, by what the gate's time allows.** The gate's file,
+   `sql/varka/proofs/int_checked_multiply.smt2`, over bit-vectors (`QF_BV`, as `leap_hash.smt2`
+   is), run per pull request by the linters' `dev/varka_prove.sh --lint`: the low word is the int
+   `bvmul`; `hi != lo >>a 31` holds exactly where the 64-bit product leaves the int range; that
+   last over any 64-bit value with no multiply at all; the 64-bit product of two sign-extended ints
+   never overflows, if its time allows (below); the planted `>>>` refuted by a sampled witness, a
+   fixed pair whose product fits with a negative low word, decided on constants; and the
+   power-of-two form per `j`. The spike decided the symbolic checks under Z3 5.1.0 in 0 to 17 s
+   on the laptop (admission check 7, `results/VARKA-95-admission.txt`): the low word, the range
+   test and the lemma in at most 0.03 s each, the product's exactness in 9.29 s, and the planted
+   fault, symbolic, in 16.95 s. The gate's limits are tighter than those times:
+   `dev/varka_prove.sh` gives each check `VARKA_PROVE_LIMIT_MS`, 10000 ms by default, and a check
+   past it answers `unknown`, a failure; the linters' job allows a minute for every proof file
+   together, `long_divide.smt2` among them; and the runner takes about twice the laptop's time
+   (the proofs README, "Adding a proof" 3). So the symbolic planted fault leaves the gate for its
+   sampled witness, and the exactness check stays only if its runner time under one solver is
+   inside the per-check limit, read under both solvers before the file lands (cvc5 through
+   `CVC5_IN_LINT` if it is the faster); otherwise it moves to the second file. The file's lint
+   time is read against the job's minute before the pull request says so.
+
+   The second file, `sql/varka/proofs/slow/int_checked_multiply_exact.smt2`, is run by hand. It
+   holds the `multiplyExact` equivalence, that the range test is the negation of `bvsmulo` at 32
+   bits, which is where `Math.multiplyExact` throws (about 488 s under Z3 on the laptop,
+   admission check 7), the symbolic planted fault, and the exactness check if it left the gate.
+   The nightly cannot take it: it calls `dev/varka_prove.sh --solver both` with the same defaults,
+   10 s a check and 300 s a file, over the folder's own `.smt2` files, a glob that does not reach
+   `slow/`. The by-hand run raises both limits, `VARKA_PROVE_LIMIT_MS=900000
+   VARKA_PROVE_RUN_LIMIT=1200 dev/varka_prove.sh --solver both
+   sql/varka/proofs/slow/int_checked_multiply_exact.smt2`, its output and times committed in row
+   95's results file; the proofs README gains both files' rows and that command. The gate does not
+   rest on the slow statement: `Math.multiplyExact` throws exactly when the exact product leaves
+   the int range, by its specification, which the gate's range test states over the 64-bit
+   product. The quotient form's exactness is `int_mulhi_divide.smt2` and Theorem 5.1 (item 10);
+   nothing new is proved there.
 5. **Planted faults** (row 504), each planted on the branch, seen failing, reverted, and listed
    in the pull request with the test that caught it: the halves compare with `>>>` for `>>` (the
    admission's check 4 finds 8382 of the 34969 edge pairs wrong, so test 2 must fail); part 1
@@ -292,8 +335,9 @@ for a checked int `MUL` under `HALVES`; the cost model's features `IntArith/MUL/
 
 **Test time**, at the calibration table's ratios: the twelve coverage rows in three modes about
 20 s in the differential (VARKA-336's 0.75 to 1.25 over the same kind of rows); the edge-pair
-tests a few seconds (VARKA-460's 0.07 for short emitter tests); the proof file under 30 s under
-Z3, its spike's sum; the opt-in sweeps outside the build. The step budget
+tests a few seconds (VARKA-460's 0.07 for short emitter tests); the gate's proof file seconds
+without the exactness check and about twice its laptop time more with it (3.4); the by-hand proof
+and the opt-in sweeps outside the build. The step budget
 (`sql/varka/ci/step-budget.tsv`) is read before the pull request says so.
 
 ## 4. The baseline, and predictions
@@ -303,13 +347,17 @@ path, as 377's are, `VarkaIntArithmeticBaselineBenchmark`, over `i * j` and `i *
 `try_multiply(i, j)`, `datediff(d2, d) * i` under ANSI, `i * j` under LEGACY (fused today, the
 control), `i % 7` and `i % 16`, as projections and as filters (`i * j > 0`, `i % 7 = 0`), over
 data where no product overflows; run on the EPYC 7763 through `benchmark.yml` at 256 and 128 bits
-and committed beside the class. Under the record's split (8.1 (b), 8.2 (b)) the `%` shapes go to
-30's baseline class, which already lists `a % 7`.
+and committed beside the class. The `%` shapes, `i % 7` and `i % 16` as a projection and as a
+filter, go to row 30's baseline class, `VarkaIntegralDivisionBaselineBenchmark`, which already
+lists `a % 7` (`VARKA-30.md` 4): row 30 owns `%` (2.1). If row 95's baseline lands first, it
+creates that class under 30's name with the `%` shapes only, and 30's baseline adds its own.
 
 **The kernel benchmark:** `VarkaArithmeticBenchmark` (catalyst) gains a section "the checked
 multiply": LEGACY `WRAP`, ANSI `HALVES`, ANSI `LONG_TREE`, ANSI with `checkIntOverflow` off, TRY
-under each arm, and a mixed-null case; and a section "remainder by a literal": `i % 7`, `i % 16`
-by the shift tree and by the multiply-high tree, `i % -16`. Its javadoc's "there is no third arm
+under each arm, and a mixed-null case. The remainder by a literal goes to row 30's kernel class,
+`VarkaIntegralDivisionBenchmark` (catalyst, Java on `VarkaBenchmarkBase`, `VARKA-30.md` 4), as its
+constant-divisor arms: `i % 7`, `i % 16` by the shift tree and by the multiply-high tree,
+`i % -16`, created under that name by 95a if it lands first. Its javadoc's "there is no third arm
 with the multiply checked, because there is no such kernel" is rewritten. Laptop runs label
 themselves as such; the numbers the default rests on come from the EPYC 7763 at 256 and 128 bits.
 
@@ -328,12 +376,14 @@ Predictions, registered before the build:
 
 1. **The baseline** (4), its own pull request.
 2. **95a, `i % k`** (2.4): the `Remainder` arm, the coverage rows, the census lines, tests 1 to 3
-   and 5 for it, the remainder section of the kernel benchmark. Needs nothing unmerged.
+   and 5 for it, the remainder arms of 30's kernel benchmark class. Built under row 30's names
+   (2.1), and row 30 takes it over. Needs nothing unmerged.
 3. **95b, `HALVES`** (2.2, 2.3): the emitter arm, the `Analysis` exclusion lifted, the compiler's
-   form, the budget weight, the proof file, the grammar, the remaining tests, the multiply section
-   of the kernel benchmark. Needs nothing unmerged.
-4. **95c, `LONG_TREE` and the verdict**: the option `checkedIntMultiply`, the tree, the pair on
-   the runners, the default by the owner from the numbers. After row 481's `NULL` mode and marked
+   form, the option `checkedIntMultiply` with its `HALVES` arm (2.1), the budget weight, the two
+   proof files, the grammar, the remaining tests, the multiply section of the kernel benchmark.
+   Built under the name row 104 adopts, and row 104 extends it. Needs nothing unmerged.
+4. **95c, `LONG_TREE` and the verdict**: the option's `LONG_TREE` arm, the tree, the pair on
+   the runners, the default picked by the measurement. After row 481's `NULL` mode and marked
    guard merge.
 
 | file | what |
@@ -344,12 +394,13 @@ Predictions, registered before the build:
 | `varka/VarkaEmitOptions.java`, `VarkaEmitOption` table | `checkedIntMultiply` |
 | `varka/VarkaEmitBudget.java`, the warm-up, the cost register | weight, reach, features |
 | `VarkaIrGrammar.java` (test) | the checked `MUL` draw |
-| `sql/varka/proofs/int_checked_multiply.smt2`, `VarkaProofFiles.java` | test 4 |
+| `sql/varka/proofs/int_checked_multiply.smt2`, `proofs/slow/`, `VarkaProofFiles.java` | test 4 |
 | tests | `VarkaEmitterArithmeticSuite`, coverage rows, the sweep |
-| benchmarks | the baseline class, `VarkaArithmeticBenchmark`'s sections, their results |
+| benchmarks | the baseline classes, `VarkaArithmeticBenchmark`'s and 30's sections, results |
 | generated | `coverage.json`, `docs/sql-varka.md`, `census.tsv`, `emitted_bytes.json` |
 
-**Size: medium, against the row's small**, in four pull requests: the baseline half a day, 95a a
+**Size: medium, against the row's small**, the split with rows 104 and 30 (2.1) not shrinking
+it while row 95 lands first, in four pull requests: the baseline half a day, 95a a
 day, 95b two to three days, 95c a day after 481.
 
 ## 6. What it unlocks in the census
@@ -357,7 +408,8 @@ day, 95b two to three days, 95c a day after 481.
 `*` and `try_multiply` gain `int` in every mode (`m8/census.tsv`: `*` is fused for `int` under
 LEGACY only, `try_multiply` for `byte` and `short`), and `%`, `mod` and `try_mod` gain `int` for a
 literal divisor, which the census counts as a form of the pair, not the pair, until row 30's
-column divisor lands. The `rows` column of `try_multiply` gains 95, and of `try_mod` too under 2.1.
+column divisor lands. The `rows` column needs no change: `try_multiply` already names 104 and
+`try_mod` 30, the owners (2.1), and `*` and `%` name 95 beside them.
 
 ## 7. Out of this row, and declines that stay
 
@@ -365,40 +417,51 @@ Out: a column divisor and `%` over other types (30), `pmod` (30), `BIGINT` multi
 narrow multiply (481), decimal (349), floating `%` (346).
 
 Kept for later, not built: the double-lane overflow test (2.2), which needs a mask crossing from
-double to int lanes; the magic-number remainder (2.4), more multiplies than the quotient form at
+double to int lanes (`VARKA-341.md` 2.4), a possible third arm of `checkedIntMultiply` after row
+343a's mixed-lane rule; the magic-number remainder (2.4), more multiplies than the quotient form at
 vector width; a remainder node that ranges its result (2.4's last paragraph), which row 30's
 `IntDivide` can carry.
 
 Declines that stay: `i % 0`; a checked multiply at a width with no long species; under ANSI a
 batch with an overflowing lane, by design.
 
-## 8. Questions for the owner
+## 8. Settlements
 
-1. **Who builds the int32 checked multiply** (item 0.12). (a) Row 95, as 2.1 proposes; `VARKA-
-   104.md` 3.3 and 8 step 5 and `VARKA-481.md` 3.3 and 8 get pointers. (b) Row 104, as the record
-   says, with 2.2's two forms handed to it; row 95's multiply half closes by pointer. *Recommended:
-   (a)*: the row's text names the shape, both forms need nothing of 104's lattice or its long
-   multiply options, and 95b is unblocked today where 104's step 5 waits on its own steps 2 to 4.
-2. **Who builds `i % k`** (item 0.12). (a) Row 95, 2.4's trees, landing first; row 30's 2.4 keeps
-   the column divisor, `pmod` and the other types, and 30a reuses this arm for an `INT` literal.
-   (b) Row 30, as its 2.4 and 7 say; row 95's `%` half closes on "the record says why not", naming
-   30, and its baseline's `%` shapes go to 30's class. *Recommended: (a)*: a literal divisor needs
-   none of 30's node, refusal or floating division, and 30a waits on five rows.
-3. **The default form of the checked multiply** (2.2), after 95c's measurement: `HALVES` or
-   `LONG_TREE`, the other kept behind `checkedIntMultiply`. Not answerable before the numbers;
-   prediction 2 leans to `HALVES`.
+None of the owner's. The lead settled the admission check's four points on 30 October 2026:
+
+1. **The int32 checked multiply is row 104's.** `VARKA-104.md` 3.3 and its step 5 plan it, and
+   `VARKA-481.md` 3.3 says "that row builds it"; the recorded owner decides. The earliest-wave
+   rule agrees: row 104 is in wave 0 and row 95 in G1 (`PLAN.md` 4.1). If row 95 lands first, it
+   builds `HALVES` under the option name and API row 104 adopts, and 104 extends it later: one
+   owner and nothing blocked, as row 332's truncation helper is with row 103 (`VARKA-103.md` 8
+   item 1). Row 104's plan names no option or API for the int32 form, so this plan proposes
+   `checkedIntMultiply` (`HALVES`, `LONG_TREE`) as that name (2.1). `LONG_TREE` stays the measured
+   arm it is.
+2. **`i % k` is row 30's.** `VARKA-30.md` 7 owns `%` as an operator, over a column divisor and a
+   literal one alike, and calls row 95's `i % k` the constant-divisor specialisation its kernel
+   takes for a literal (its 2.4). If row 95 lands first, it builds the `INT` literal form under
+   30's naming, `ConstDivide`, 30's edges and its compile-time reason for a literal zero, and row
+   30 takes it over; the `%` baseline and kernel shapes go in 30's benchmark classes, which 30's
+   section 4 names (section 4).
+3. **The default form of the checked multiply is not an owner decision.** Both arms are built and
+   the default is picked by measurement on the EPYC 7763 runners, under the repository's rule that
+   option winners are measured; prediction 2 leans to `HALVES`.
+4. **The double-lane test is not built now.** Its mask would have to cross from double lanes to
+   int lanes, which `VARKA-341.md` 2.4 says is not built; it is recorded as a possible third arm
+   of `checkedIntMultiply` after row 343a's mixed-lane rule (`VARKA-343.md` 2.2).
 
 ## 9. Done when
 
-Row 95's text holds, with section 0's corrections: under the owner's answers to 8.1 and 8.2, an
+Row 95's text holds, with section 0's corrections and section 8's settlements: an
 `INT` multiply fuses under ANSI and TRY over a column and a literal alike, with overflow declining
 the batch under ANSI and nulling the lane under TRY, and `i % k` fuses in the three modes for every
-non-zero `INT` literal; tests 1 to 3 pass at every width under both arms,
-`int_checked_multiply.smt2` proves 3.4's claims under both solvers, every planted fault of 3.5 is
+non-zero `INT` literal, each built under its owner's names (2.1); tests 1 to 3 pass at every
+width under both arms, `int_checked_multiply.smt2` holds under both solvers inside the gate's
+limits and the by-hand file's run is committed (3.4), every planted fault of 3.5 is
 caught, the measurement is committed at both widths on the EPYC 7763 with its predictions scored and
 the default chosen, the bytes oracle is unchanged for every existing shape, and the PR build and the
-option matrix pass. Or, for a half the owner gives to another row, the record names that row and
-why.
+option matrix pass. Or, for a half its owner row lands first, the record names that row's pull
+request and row 95 builds no second copy.
 
 ## 10. Outcome
 
